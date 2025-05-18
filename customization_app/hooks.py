@@ -242,3 +242,21 @@ app_license = "mit"
 # 	"Logging DocType Name": 30  # days to retain logs
 # }
 
+# Load my JS globally in the Desk (ERPNext admin interface)
+app_include_js = ["/assets/customization_app/js/customer_quick_entry.js",
+                  "/assets/customization_app/js/custom_calendar.js"]
+# doctype_calendar_js = {
+#     "Tache de travail": "/assets/customization_app/js/custom_calendar.js"
+# }
+override_doctype_class = {
+	"Customer": "customization_app.customization.SynchroCustomer"
+}
+# override_whitelisted_methods = {
+#     "frappe.desk.calendar.get_events": "customization_app.api.get_custom_tache_events"
+# }
+# doctype_js = {
+#     "Tache de travail": "assets/customization_app/js/custom_calendar.js"
+# }
+# doctype_js = {
+#     "Customer": "public/js/customer_quick_entry.js"
+# }
