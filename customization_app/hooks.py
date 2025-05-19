@@ -251,6 +251,9 @@ app_include_js = ["/assets/customization_app/js/customer_quick_entry.js",
 override_doctype_class = {
 	"Customer": "customization_app.customization.SynchroCustomer"
 }
+override_doctype_dashboards = {
+    "Customer": "customization_app.api.get_data"
+}
 # override_whitelisted_methods = {
 #     "frappe.desk.calendar.get_events": "customization_app.api.get_custom_tache_events"
 # }
