@@ -305,8 +305,8 @@ frappe.ui.form.CustomerQuickEntryForm = class CustomerQuickEntryForm extends (
 
 		// Add event handlers
 		    // Initially hide the two fields
-		this.dialog.fields_dict.custom_generation_facture_mensuelle.df.hidden = 1;
-		this.dialog.fields_dict.custom_envois_automatique_de_la_bl.df.hidden = 1;
+		this.dialog.set_df_property('custom_generation_facture_mensuelle', 'hidden', 1);
+		this.dialog.set_df_property('custom_envois_automatique_de_la_bl', 'hidden', 1);
 	
 		this.dialog.refresh();
 		this.dialog.fields_dict.country.df.onchange = () => {
@@ -585,6 +585,7 @@ frappe.ui.form.CustomerQuickEntryForm = class CustomerQuickEntryForm extends (
 
         if (country === 'Tunisia') {
             const states = Object.keys(this.villes_par_gouvernorat);
+			console.log(states);
             this.dialog.set_df_property('custom_state_s', 'options', states);
 			this.dialog.set_df_property('custom_state_s', 'reqd', 1);
 			this.dialog.set_df_property('custom_villes_s', 'reqd', 1);
