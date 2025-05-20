@@ -305,8 +305,12 @@ frappe.ui.form.CustomerQuickEntryForm = class CustomerQuickEntryForm extends (
 
 		// Add event handlers
 		    // Initially hide the two fields
-		this.dialog.set_df_property('custom_generation_facture_mensuelle', 'hidden', 1);
-		this.dialog.set_df_property('custom_envois_automatique_de_la_bl', 'hidden', 1);
+		setTimeout(() => {
+			this.dialog.set_df_property('custom_envois_automatique_de_la_bl', 'hidden', 1);
+			this.dialog.set_df_property('custom_generation_facture_mensuelle', 'hidden', 1);
+			// this.dialog.get_field('custom_generation_facture_mensuelle').set_df_property('hidden', 1);
+			// this.dialog.get_field('custom_envois_automatique_de_la_bl').set_df_property('hidden', 1);
+		}, 200);
 	
 		this.dialog.refresh();
 		this.dialog.fields_dict.country.df.onchange = () => {
