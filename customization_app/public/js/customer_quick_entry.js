@@ -301,17 +301,25 @@ frappe.ui.form.CustomerQuickEntryForm = class CustomerQuickEntryForm extends (
 	async render_dialog() {
 		this.mandatory = this.mandatory.concat(await this.get_variant_fields());
 
-		super.render_dialog();
+		await super.render_dialog();
 
 		// Add event handlers
 		    // Initially hide the two fields
-		setTimeout(() => {
-			this.dialog.set_df_property('custom_envois_automatique_de_la_bl', 'hidden', 1);
-			this.dialog.set_df_property('custom_generation_facture_mensuelle', 'hidden', 1);
-			// this.dialog.get_field('custom_generation_facture_mensuelle').set_df_property('hidden', 1);
-			// this.dialog.get_field('custom_envois_automatique_de_la_bl').set_df_property('hidden', 1);
-		}, 200);
-	
+		// setTimeout(() => {
+			// this.dialog.set_df_property('custom_envois_automatique_de_la_bl', 'hidden', 1);
+			// this.dialog.set_df_property('custom_generation_facture_mensuelle', 'hidden', 1);
+		this.dialog.set_value('facturation_mensuelle', 'Non');
+		this.dialog.set_value('envois_bl', 'Non');
+
+// Met à jour la visibilité selon le groupe client actuel
+		this.set_fields_based_on_customer_group();
+
+		// 	// this.dialog.get_field('custom_generation_facture_mensuelle').set_df_property('hidden', 1);
+		// 	// this.dialog.get_field('custom_envois_automatique_de_la_bl').set_df_property('hidden', 1);
+		// }, 200);
+		// 		// Initialiser les valeurs par défaut des selects cachés
+		// this.dialog.set_value('facturation_mensuelle', 'Non');
+		// this.dialog.set_value('envois_bl', 'Non');
 		this.dialog.refresh();
 		this.dialog.fields_dict.country.df.onchange = () => {
 			this.on_country_change();
@@ -487,6 +495,22 @@ frappe.ui.form.CustomerQuickEntryForm = class CustomerQuickEntryForm extends (
 			['address_line1', 'address_line2', 'city', 'state', 'pincode', 'country'].includes(f.fieldname)
 		);
 		let variant_fields = [
+			{
+				label: __("Generation facture mensuelle"),
+				fieldname: "facturation_mensuelle",
+				fieldtype: "Select",
+				options: ["Oui", "Non"].join("\n"),
+				default: "Non",
+				hidden: 0,  // caché par défaut
+			},
+			{
+				label: __("Envois automatique de la BL"),
+				fieldname: "envois_bl",
+				fieldtype: "Select",
+				options: ["Oui", "Non"].join("\n"),
+				default: "Non",
+				hidden: 0,  // caché par défaut
+			},
             {
                 fieldtype: "Section Break",
                 label: __("Primary Contact Details"),
@@ -589,7 +613,6 @@ frappe.ui.form.CustomerQuickEntryForm = class CustomerQuickEntryForm extends (
 
         if (country === 'Tunisia') {
             const states = Object.keys(this.villes_par_gouvernorat);
-			console.log(states);
             this.dialog.set_df_property('custom_state_s', 'options', states);
 			this.dialog.set_df_property('custom_state_s', 'reqd', 1);
 			this.dialog.set_df_property('custom_villes_s', 'reqd', 1);
@@ -634,47 +657,56 @@ frappe.ui.form.CustomerQuickEntryForm = class CustomerQuickEntryForm extends (
         this.dialog.refresh();
     }
 	set_fields_based_on_customer_group() {
-		const customer_group = this.dialog.get_value('customer_group');
-		const allowed_groups = ["Technicien", "Quincaillerie", "Compte Pro"];
-		const facturration_mensuelle = ["Quincaillerie", "Compte Pro"];
-		if (facturration_mensuelle.includes(customer_group)){
-			this.dialog.set_df_property('custom_generation_facture_mensuelle', 'hidden', 0);
-			this.dialog.set_df_property('custom_generation_facture_mensuelle', 'read_only', 0);
-			this.dialog.set_df_property('custom_envois_automatique_de_la_bl', 'read_only', 0);
-		} else {	
+		    const customer_group = this.dialog.get_value('customer_group');
+			const allowed_groups = ["Technicien", "Quincaillerie", "Compte Pro"];
+			// const facturation_mensuelle = ["Quincaillerie", "Compte Pro"];
+
+			// Champs concernés
+			const fields = [
+				'facturation_mensuelle',
+				'envois_bl'
+			];
 			this.dialog.set_df_property('custom_generation_facture_mensuelle', 'hidden', 1);
-			this.dialog.set_df_property('custom_generation_facture_mensuelle', 'read_only', 1);
-			this.dialog.set_df_property('custom_envois_automatique_de_la_bl', 'read_only', 1);
-		}
-		if (allowed_groups.includes(customer_group)) {
-
-	
-			// Set values
-			this.dialog.set_value('custom_intéressé_par_le_service_entretien', "Non");
-			this.dialog.set_value('custom_envoi_sms', "Oui");
-			this.dialog.set_df_property('custom_envois_automatique_de_la_bl', 'hidden', 0);
-			this.dialog.set_df_property('custom_envois_automatique_de_la_bl', 'read_only', 0);
-			this.dialog.set_df_property('custom_generation_facture_mensuelle', 'read_only', 0);
-	
-			// Make fields read-only and visible
-			this.dialog.set_df_property('custom_intéressé_par_le_service_entretien', 'read_only', 1);
-			this.dialog.set_df_property('email_address', 'reqd', 1);
-			// this.dialog.set_df_property('sms_sending', 'read_only', 1);
-			// this.dialog.set_df_property('interested_in_service', 'hidden', 0);
-			// this.dialog.set_df_property('sms_sending', 'hidden', 0);
-	
-		} else {
-			// For other groups, hide fields
 			this.dialog.set_df_property('custom_envois_automatique_de_la_bl', 'hidden', 1);
-			this.dialog.set_df_property('custom_envois_automatique_de_la_bl', 'read_only', 1);
-			this.dialog.set_df_property('custom_generation_facture_mensuelle', 'read_only', 1);
-			this.dialog.set_df_property('email_address', 'reqd', 0);
-			this.dialog.set_value('custom_intéressé_par_le_service_entretien', "Oui");
+			// const show_facturation = facturation_mensuelle.includes(customer_group);
+			const show_allowed = allowed_groups.includes(customer_group);
 			this.dialog.set_value('custom_envoi_sms', "Oui");
-			this.dialog.set_df_property('custom_intéressé_par_le_service_entretien', 'read_only', 0);
-			// this.dialog.set_df_property('sms_sending', 'hidden', 1);
-		}
+			// Gérer visibilité et readonly des champs facturation/envois BL
+			fields.forEach(field => {
+				this.dialog.set_df_property(field, 'hidden', allowed_groups ? 0 : 1);
+				this.dialog.set_df_property(field, 'read_only', allowed_groups ? 0 : 1);
+			});
 
-		this.dialog.refresh();
+			if (show_allowed) {
+				// Valeurs par défaut pour groupes autorisés
+				this.dialog.set_value('custom_intéressé_par_le_service_entretien', "Non");
+
+				// Propriétés spécifiques
+				this.dialog.set_df_property('custom_intéressé_par_le_service_entretien', 'read_only', 1);
+				this.dialog.set_df_property('email_address', 'reqd', 1);
+                if (customer_group === "Technicien") {
+					this.dialog.set_value('facturation_mensuelle', "Non");
+					this.dialog.set_df_property('facturation_mensuelle', 'hidden', 0);
+					this.dialog.set_df_property('facturation_mensuelle', 'read_only', 1);
+				}
+
+			} else {
+				// Pour les autres groupes
+				this.dialog.set_value('custom_intéressé_par_le_service_entretien', "Oui");
+
+
+				this.dialog.set_df_property('custom_intéressé_par_le_service_entretien', 'read_only', 0);
+				this.dialog.set_df_property('email_address', 'reqd', 0);
+
+				// Cacher et mettre readonly sur facturation/envois BL si hors facturation_mensuelle
+				fields.forEach(field => {
+					this.dialog.set_df_property(field, 'hidden', 1);
+					this.dialog.set_df_property(field, 'read_only', 1);
+					this.dialog.set_value(field, "Non");
+				});
+			}
+
+
+			this.dialog.refresh();
 	}
 };

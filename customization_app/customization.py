@@ -1,5 +1,6 @@
 import frappe
 from erpnext.selling.doctype.customer.customer import Customer as ErpnextCustomer
+# import time
 
 @frappe.whitelist()
 def check_duplicate_phone(mobile1, mobile2=None, exclude_customer=None):
@@ -49,7 +50,8 @@ class SynchroCustomer(ErpnextCustomer):
         self.address_line1 = self.get("address_line1") or ""
         self.pincode = self.get("pincode") or ""
         self.country = self.get("country") or ""
-
+        self.custom_generation_facture_mensuelle = self.get("facturation_mensuelle") or "Non"
+        self.custom_envois_automatique_de_la_bl = self.get("envois_bl") or "Non"
         # Set state and city for both Tunisia and non-Tunisia cases
         if self.get("country") == "Tunisia":
             self.state = self.get("custom_state_s") or ""
@@ -106,15 +108,60 @@ class SynchroCustomer(ErpnextCustomer):
 
     def create_primary_address_from_quick_entry(self):
         # Only create if we have enough info
+        # time.sleep(0.5)  # Optional: add a small delay to ensure the address is created after the contact
         address_line1 = self.address_line1
         pincode = self.pincode
         country = self.country
         state = self.state
         city = self.city
         custom_secteur = self.get("custom_secteur") or ""
+            # Étape 1 : trouver les adresses liées au client
+        linked_address_names = frappe.get_all("Dynamic Link",
+            filters={
+                "link_doctype": "Customer",
+                "link_name": self.name,
+                "parenttype": "Address"
+            },
+            fields=["parent"]
+        )
+        print("linked:", linked_address_names)
+        address_names = [link.parent for link in linked_address_names]
 
-        # Avoid creating an Address with missing required fields
-        if address_line1 and city:
+        # Étape 2 : vérifier si une adresse correspondante existe déjà
+        existing_addresses = frappe.get_all("Address",
+            filters={
+                "name": ["in", address_names],
+                "address_line1": address_line1,
+                "city": city
+            }
+        )
+        print("existing_addresses:", existing_addresses)
+
+        # Vérifier si une adresse existe déjà pour ce client
+        # existing_addresses = frappe.get_all("Address", 
+        #     filters={
+        #         "link_name": self.name,
+        #         "address_line1": address_line1,
+        #         "city": city
+        #     }
+        # )
+        if existing_addresses:
+            print("exist")
+            address = frappe.get_doc("Address", existing_addresses[0].name)
+            if self.get("country") == "Tunisia":
+                address.custom_state_s = self.custom_state_s
+                address.custom_villes_s = self.custom_villes_s
+            else:
+                address.custom_state_d = self.custom_state_d
+                address.custom_villes_d = self.custom_villes_d
+            # If you have a custom_secteur custom field in Address:
+            if hasattr(address, "custom_secteur"):
+                address.custom_secteur = custom_secteur
+    # ... autres updates ...
+            address.save()
+            self.db_set("customer_primary_address", address.name)
+
+        elif address_line1 and city:
             address = frappe.new_doc("Address")
             address.address_title = self.customer_name or self.name
             address.address_type = "Billing"
@@ -123,6 +170,12 @@ class SynchroCustomer(ErpnextCustomer):
             address.country = country
             address.state = state
             address.city = city
+            if self.get("country") == "Tunisia":
+                address.custom_state_s = self.custom_state_s
+                address.custom_villes_s = self.custom_villes_s
+            else:
+                address.custom_state_d = self.custom_state_d
+                address.custom_villes_d = self.custom_villes_d
             # If you have a custom_secteur custom field in Address:
             if hasattr(address, "custom_secteur"):
                 address.custom_secteur = custom_secteur
@@ -131,3 +184,4 @@ class SynchroCustomer(ErpnextCustomer):
                 "link_name": self.name
             })
             address.insert(ignore_permissions=True)
+            self.db_set("customer_primary_address", address.name)

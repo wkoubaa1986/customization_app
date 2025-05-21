@@ -19,8 +19,9 @@ def get_custom_tache_events(start, end, filters=None):
     # List of fields to be retrieved from the "Tache de travail" doctype
     fields = [
         field_map.start, field_map.end, field_map.title, "name", field_map.color,
-        "custom_choix_du_staff", "custom_employé", "custom_client", "nom_client",
-        "status", "toute_la_journée", "custom_reservation_app"
+        "custom_choix_du_staff", "custom_employé", "custom_client", "nom_client","custom_type_dintervention",
+        "status", "toute_la_journée", "custom_reservation_app","secteur","tel","details_adresse","info_secteur","google_map",
+        "subject","raison_annulation","rapport_visite"
     ]
 
     # If filters are passed, use them; otherwise, default to an empty list
@@ -61,7 +62,6 @@ def get_custom_tache_events(start, end, filters=None):
 
 @frappe.whitelist()
 def get_data(data=None):
-    print("get_data")
     return {
 		"heatmap": True,
 		"heatmap_message": _(
@@ -74,6 +74,8 @@ def get_data(data=None):
 			"Opportunity": "party_name",
 			"Bank Account": "party",
 			"Subscription": "party",
+            "Appelle Client": "client",
+            "Tache de travail":"custom_client",
 		},
 		"dynamic_links": {"party_name": ["Customer", "quotation_to"]},
 		"transactions": [
@@ -82,10 +84,18 @@ def get_data(data=None):
 			{"label": _("Payments"), "items": ["Payment Entry", "Bank Account", "Dunning"]},
 			{
 				"label": _("Support"),
-				"items": ["Issue", "Maintenance Visit", "Installation Note", "Warranty Claim"],
+				"items": ["Maintenance Schedule","Issue", "Maintenance Visit", "Installation Note", "Warranty Claim"],
 			},
 			{"label": _("Projects"), "items": ["Project"]},
 			{"label": _("Pricing"), "items": ["Pricing Rule"]},
 			{"label": _("Subscriptions"), "items": ["Subscription"]},
+            {
+                "label": _("Tache de travail"),
+                "items": ["Tache de travail"]
+            },
+            # {
+            #     "label": _("Liste Appelle Entretien"),
+            #     "items": ["Appelle Client"]
+            # },
 		],
 	}

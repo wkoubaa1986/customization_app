@@ -98,11 +98,15 @@ frappe.views.CalendarViewList = class CalendarViewList extends frappe.views.Cale
                         });
                     if (event.color) {
                         // console.log("Applying custom background color with opacity for event:", event.id);
-
+                        const status_opaque = ["Completed","Cancelled"];
+                        let opacity = 0.6; // Set the desired opacity level (0.0 to 1.0)
+                        if (status_opaque.includes(event.status)) {
+                            opacity = 0.8;
+                        }
                         // If color is in hex format, convert it to RGBA with opacity
                         if (event.color.charAt(0) === '#') {
                             // Convert hex to rgba (set alpha/opacity to 0.3)
-                            originalColor = hexToRgba(originalColor, 0.5); // Convert to RGBA with 30% opacity
+                            originalColor = hexToRgba(originalColor, opacity); // Convert to RGBA with 30% opacity
                             // element.css({
                             //     "background-color": rgbaColor,
                             // });
@@ -111,7 +115,7 @@ frappe.views.CalendarViewList = class CalendarViewList extends frappe.views.Cale
                             let rgbaValues = originalColor.match(/^rgba\((\d+), (\d+), (\d+), (\d(\.\d+)?)\)$/);
                             if (rgbaValues) {
                                 // Get the original rgba values and set new opacity
-                                let newOpacity = 0.5; // Change opacity here
+                                let newOpacity = opacity; // Change opacity here
                                 originalColor = `rgba(${rgbaValues[1]}, ${rgbaValues[2]}, ${rgbaValues[3]}, ${newOpacity})`;
                             
                             }
@@ -130,16 +134,31 @@ frappe.views.CalendarViewList = class CalendarViewList extends frappe.views.Cale
                             "background-image": `linear-gradient(45deg, rgba(128, 128, 128, 0.2) 25%, transparent 25%, transparent 50%, rgba(128, 128, 128, 0.2) 50%, rgba(128, 128, 128, 0.2) 75%, transparent 75%, transparent)`,
                             "background-size": "6px 6px",  // Adjust the size of the dashes
                             "background-color": originalColor, 
-                            // "background-color": "transparent",  // Make the background transparent
-                            // Keep the original background color with transparency
-                            // "color": "#ffffff",  // Text color (white) for visibility
-                            // "border-color": "#28a745",  // Green border color
-                            // "border-width": "3px",  // Thicker border (3px)
-                            // "border-style": "solid",  // Solid border style
-                            // "border-radius": "5px",  // Optional: Set rounded corners for the border
                         });
                     }
-                    element.attr("title", event.title);
+                    let tooltipParts = [];
+                    const defaultRapport = "Indiquez vos remarques sur l'intervention et le client:";
+                    if (event.title) tooltipParts.push(`${event.title}`);
+                    if (event.custom_type_dintervention) tooltipParts.push(`**Type intervention:** \n ${event.custom_type_dintervention}`);
+                    if (event.custom_employé) tooltipParts.push(`**Employé(e):** \n ${event.custom_employé}`);
+                    if (event.nom_client) tooltipParts.push(`**Client:** \n ${event.nom_client}`);
+                    if (event.tel) tooltipParts.push(`**Liste Téléphones:**\n ${event.tel}`);
+                    if (event.info_secteur) tooltipParts.push(`**Info Secteur:**\n ${event.secteur}\n ${event.info_secteur}`);
+                    if (event.details_adresse) {
+                        let adresseText = `**Adresse:**\n${event.details_adresse}`;
+                        if (event.google_map) {
+                            adresseText += `\n${event.google_map}`;
+                        }
+                        tooltipParts.push(adresseText);
+                    }
+                    if (event.subject) tooltipParts.push(`**Sujet:** \n ${event.subject}`);
+                    if (event.raison_annulation) tooltipParts.push(`**Raison annulation:** \n ${event.raison_annulation}`);
+                    if (event.rapport_visite && event.rapport_visite.trim() !== defaultRapport) {
+                        tooltipParts.push(`**Rapport visite:**\n${event.rapport_visite}`);
+                    }
+
+                    let tooltipText = tooltipParts.join('\n\n');
+                    element.attr("title", tooltipText);
                     if (event.all_day===1) {
                         const title = element.find('.fc-title');
 
