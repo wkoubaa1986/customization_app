@@ -56,6 +56,7 @@ class SynchroCustomer(ErpnextCustomer):
         if self.get("country") == "Tunisia":
             self.state = self.get("custom_state_s") or ""
             self.city = self.get("custom_villes_s") or ""
+            self.county = self.get("custom_state_s") or ""
         else:
             self.state = self.get("custom_state_d") or ""
             self.city = self.get("custom_villes_d") or ""
@@ -116,26 +117,26 @@ class SynchroCustomer(ErpnextCustomer):
         city = self.city
         custom_secteur = self.get("custom_secteur") or ""
             # Étape 1 : trouver les adresses liées au client
-        linked_address_names = frappe.get_all("Dynamic Link",
-            filters={
-                "link_doctype": "Customer",
-                "link_name": self.name,
-                "parenttype": "Address"
-            },
-            fields=["parent"]
-        )
-        print("linked:", linked_address_names)
-        address_names = [link.parent for link in linked_address_names]
+        # linked_address_names = frappe.get_all("Dynamic Link",
+        #     filters={
+        #         "link_doctype": "Customer",
+        #         "link_name": self.name,
+        #         "parenttype": "Address"
+        #     },
+        #     fields=["parent"]
+        # )
+        # print("linked:", linked_address_names)
+        # address_names = [link.parent for link in linked_address_names]
 
-        # Étape 2 : vérifier si une adresse correspondante existe déjà
-        existing_addresses = frappe.get_all("Address",
-            filters={
-                "name": ["in", address_names],
-                "address_line1": address_line1,
-                "city": city
-            }
-        )
-        print("existing_addresses:", existing_addresses)
+        # # Étape 2 : vérifier si une adresse correspondante existe déjà
+        # existing_addresses = frappe.get_all("Address",
+        #     filters={
+        #         "name": ["in", address_names],
+        #         "address_line1": address_line1,
+        #         "city": city
+        #     }
+        # )
+        # print("existing_addresses:", existing_addresses)
 
         # Vérifier si une adresse existe déjà pour ce client
         # existing_addresses = frappe.get_all("Address", 
