@@ -99,7 +99,7 @@ frappe.views.CalendarViewList = class CalendarViewList extends frappe.views.Cale
                     if (event.color) {
                         // console.log("Applying custom background color with opacity for event:", event.id);
                         const status_opaque = ["Completed","Cancelled"];
-                        let opacity = 0.6; // Set the desired opacity level (0.0 to 1.0)
+                        let opacity = 0.55; // Set the desired opacity level (0.0 to 1.0)
                         if (status_opaque.includes(event.status)) {
                             opacity = 0.8;
                         }

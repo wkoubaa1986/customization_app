@@ -666,8 +666,8 @@ frappe.ui.form.CustomerQuickEntryForm = class CustomerQuickEntryForm extends (
 				'facturation_mensuelle',
 				'envois_bl'
 			];
-			this.dialog.set_df_property('custom_generation_facture_mensuelle', 'hidden', 1);
-			this.dialog.set_df_property('custom_envois_automatique_de_la_bl', 'hidden', 1);
+			// this.dialog.set_df_property('custom_generation_facture_mensuelle', 'hidden', 1);
+			// this.dialog.set_df_property('custom_envois_automatique_de_la_bl', 'hidden', 1);
 			// const show_facturation = facturation_mensuelle.includes(customer_group);
 			const show_allowed = allowed_groups.includes(customer_group);
 			this.dialog.set_value('custom_envoi_sms', "Oui");
