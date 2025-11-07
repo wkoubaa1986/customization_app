@@ -1,6 +1,8 @@
 import frappe
 from erpnext.selling.doctype.customer.customer import Customer as ErpnextCustomer
 # import time
+from erpnext.stock.doctype.item.item import Item as ErpnextItem
+from erpnext.stock.doctype.stock_ledger_entry.stock_ledger_entry import StockLedgerEntry
 
 @frappe.whitelist()
 def check_duplicate_phone(mobile1, mobile2=None, exclude_customer=None):
@@ -139,13 +141,13 @@ class SynchroCustomer(ErpnextCustomer):
         # print("existing_addresses:", existing_addresses)
 
         # Vérifier si une adresse existe déjà pour ce client
-        # existing_addresses = frappe.get_all("Address", 
-        #     filters={
-        #         "link_name": self.name,
-        #         "address_line1": address_line1,
-        #         "city": city
-        #     }
-        # )
+        existing_addresses = frappe.get_all("Address", 
+            filters={
+                "link_name": self.name,
+                "address_line1": address_line1,
+                "city": city
+            }
+        )
         if existing_addresses:
             print("exist")
             address = frappe.get_doc("Address", existing_addresses[0].name)
@@ -186,3 +188,44 @@ class SynchroCustomer(ErpnextCustomer):
             })
             address.insert(ignore_permissions=True)
             self.db_set("customer_primary_address", address.name)
+
+class CustomItem(ErpnextItem):
+
+    def validate_has_variants(self):
+        return
+
+class CustomStockLedgerEntry(StockLedgerEntry):
+    def validate_serial_batch_no_bundle(self):
+        # copy core logic EXCEPT the "has_variants" blocking part
+        if self.is_cancelled == 1:
+            return
+
+        item_detail = frappe.get_cached_value(
+            "Item",
+            self.item_code,
+            ["has_serial_no", "has_batch_no", "is_stock_item", "has_variants", "stock_uom"],
+            as_dict=1,
+        )
+
+        values_to_be_change = {}
+        if self.has_batch_no != item_detail.has_batch_no:
+            values_to_be_change["has_batch_no"] = item_detail.has_batch_no
+        if self.has_serial_no != item_detail.has_serial_no:
+            values_to_be_change["has_serial_no"] = item_detail.has_serial_no
+        if values_to_be_change:
+            self.db_set(values_to_be_change)
+
+        if not item_detail:
+            self.throw_error_message(f"Item {self.item_code} not found")
+
+        # >>> removed the block that throws when has_variants is True <<<
+
+        if item_detail.is_stock_item != 1:
+            self.throw_error_message(f"Item {self.item_code} must be a stock Item")
+
+        if item_detail.has_serial_no or item_detail.has_batch_no:
+            if not self.serial_and_batch_bundle:
+                self.throw_error_message(f"Serial No / Batch No are mandatory for Item {self.item_code}")
+
+        if self.serial_and_batch_bundle and not (item_detail.has_serial_no or item_detail.has_batch_no):
+            self.throw_error_message(f"Serial No and Batch No are not allowed for Item {self.item_code}")

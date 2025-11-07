@@ -248,9 +248,13 @@ app_include_js = ["/assets/customization_app/js/customer_quick_entry.js",
 # doctype_calendar_js = {
 #     "Tache de travail": "/assets/customization_app/js/custom_calendar.js"
 # }
+
 override_doctype_class = {
-	"Customer": "customization_app.customization.SynchroCustomer"
+	"Customer": "customization_app.customization.SynchroCustomer",
+    "Item": "customization_app.customization.CustomItem",
+    "Stock Ledger Entry": "customization_app.customization.CustomStockLedgerEntry"
 }
+
 override_doctype_dashboards = {
     "Customer": "customization_app.api.get_data"
 }
