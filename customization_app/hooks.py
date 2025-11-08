@@ -252,7 +252,8 @@ app_include_js = ["/assets/customization_app/js/customer_quick_entry.js",
 override_doctype_class = {
 	"Customer": "customization_app.customization.SynchroCustomer",
     "Item": "customization_app.customization.CustomItem",
-    "Stock Ledger Entry": "customization_app.customization.CustomStockLedgerEntry"
+    "Stock Ledger Entry": "customization_app.customization.CustomStockLedgerEntry",
+    "Item Price": "customization_app.customization.ItemPrice"
 }
 
 override_doctype_dashboards = {

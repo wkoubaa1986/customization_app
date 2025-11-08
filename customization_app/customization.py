@@ -3,6 +3,8 @@ from erpnext.selling.doctype.customer.customer import Customer as ErpnextCustome
 # import time
 from erpnext.stock.doctype.item.item import Item as ErpnextItem
 from erpnext.stock.doctype.stock_ledger_entry.stock_ledger_entry import StockLedgerEntry
+from erpnext.stock.doctype.item_price.item_price import ItemPrice as CoreItemPrice
+
 
 @frappe.whitelist()
 def check_duplicate_phone(mobile1, mobile2=None, exclude_customer=None):
@@ -193,7 +195,11 @@ class CustomItem(ErpnextItem):
 
     def validate_has_variants(self):
         return
-
+class ItemPrice(CoreItemPrice):
+    # Variante A : on neutralise uniquement le check template
+    def validate_item_template(self):
+        # Autoriser le template : on passe
+        return
 class CustomStockLedgerEntry(StockLedgerEntry):
     def validate_serial_batch_no_bundle(self):
         # copy core logic EXCEPT the "has_variants" blocking part
