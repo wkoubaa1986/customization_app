@@ -244,7 +244,10 @@ app_license = "mit"
 
 # Load my JS globally in the Desk (ERPNext admin interface)
 app_include_js = ["/assets/customization_app/js/customer_quick_entry.js",
-                  "/assets/customization_app/js/custom_calendar.js"]
+                  "/assets/customization_app/js/custom_calendar.js",
+                  "/assets/customization_app/js/buying_item_query_override.js"]
+# Hide filter message shown in the awesomplete dropdown
+app_include_css = ["/assets/customization_app/css/hide_filter_message.css"]
 # doctype_calendar_js = {
 #     "Tache de travail": "/assets/customization_app/js/custom_calendar.js"
 # }
@@ -259,9 +262,9 @@ override_doctype_class = {
 override_doctype_dashboards = {
     "Customer": "customization_app.api.get_data"
 }
-# override_whitelisted_methods = {
-#     "frappe.desk.calendar.get_events": "customization_app.api.get_custom_tache_events"
-# }
+override_whitelisted_methods = {
+    "erpnext.stock.get_item_details.get_item_details": "customization_app.get_item_details.get_item_details"
+}
 # doctype_js = {
 #     "Tache de travail": "assets/customization_app/js/custom_calendar.js"
 # }
