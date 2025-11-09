@@ -1,8 +1,12 @@
-try:
-    import erpnext.stock.get_item_details
-    import customization_app.get_item_details
-    erpnext.stock.get_item_details.get_item_details = customization_app.get_item_details.get_item_details
-    print("Monkey patch applied: get_item_details overridden")
-except ImportError as e:
-    print(f"Monkey patch failed: {e}")
-__version__ = "develop"
+__version__ = "V2.0.0"
+def _apply_get_item_details_override():
+    try:
+        # idempotent: safe to run multiple times
+        from customization_app.patches.override_get_item_details import execute
+        execute()
+    except Exception as e:
+        # don't crash app startup; log if you want
+        import sys
+        print(f"[customization_app] get_item_details override failed: {e}", file=sys.stderr)
+
+_apply_get_item_details_override()

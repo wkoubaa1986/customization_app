@@ -262,9 +262,11 @@ override_doctype_class = {
 override_doctype_dashboards = {
     "Customer": "customization_app.api.get_data"
 }
+app_ready = "customization_app.patches.override_get_item_details.apply"
 override_whitelisted_methods = {
     "erpnext.stock.get_item_details.get_item_details": "customization_app.get_item_details.get_item_details"
 }
+# after_migrate = ["customization_app.patches.override_get_item_details.execute"]
 # doctype_js = {
 #     "Tache de travail": "assets/customization_app/js/custom_calendar.js"
 # }
