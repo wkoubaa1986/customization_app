@@ -252,6 +252,7 @@ app_include_css = ["/assets/customization_app/css/hide_filter_message.css"]
 #     "Tache de travail": "/assets/customization_app/js/custom_calendar.js"
 # }
 
+
 override_doctype_class = {
 	"Customer": "customization_app.customization.SynchroCustomer",
     "Item": "customization_app.customization.CustomItem",
@@ -266,6 +267,56 @@ app_ready = "customization_app.patches.override_get_item_details.apply"
 override_whitelisted_methods = {
     "erpnext.stock.get_item_details.get_item_details": "customization_app.get_item_details.get_item_details"
 }
+fixtures = [
+    # Custom Field de ton module
+    {
+        "doctype": "Custom Field",
+        "filters": [
+            ["module", "=", "Customize erpnext"],
+        ],
+    },
+    # Property Setter de ton module
+    {
+        "doctype": "Property Setter",
+        "filters": [
+            ["module", "=", "Customize erpnext"],
+        ],
+    },
+    # Client Script pour tes doctypes
+    {
+        "doctype": "Client Script",
+        "filters": [
+            ["dt", "in", ["Compagne SMS", "Customer"]],
+        ],
+    },
+    # ✅ Server Script
+    {
+        "doctype": "Server Script",
+        "filters": [
+            # si tes server scripts sont attachés à un DocType
+            ["reference_doctype", "in", ["Compagne SMS"]],
+        ],
+    },
+]
+scheduler_events = {
+    # Tâche lourde exécutée une fois par jour (heure gérée par Frappe)
+    "daily_long": [
+        "customization_app.Maintenance.update_schedule.run_cron",
+    ],
+
+    "cron": {
+        # Lundi–samedi à 07:00 : création liste d'appels
+        "0 7 * * 1-6": [
+            "customization_app.Maintenance.creation_liste_appelle.run_cron",
+        ],
+
+        # Lundi–samedi à 10:00 : relance SMS maintenance
+        "0 10 * * 1-6": [
+            "customization_app.Maintenance.relance_maintenance_sms.run_cron",
+        ],
+    },
+}
+
 # after_migrate = ["customization_app.patches.override_get_item_details.execute"]
 # doctype_js = {
 #     "Tache de travail": "assets/customization_app/js/custom_calendar.js"

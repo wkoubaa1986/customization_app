@@ -1,0 +1,56 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2025-11-24 10:00:45.103645",
+ "custom": 1,
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "client",
+  "nom_client",
+  "group_client",
+  "liste_tel"
+ ],
+ "fields": [
+  {
+   "fieldname": "client",
+   "fieldtype": "Link",
+   "label": "Client",
+   "options": "Customer"
+  },
+  {
+   "fetch_from": "client.customer_name",
+   "fieldname": "nom_client",
+   "fieldtype": "Data",
+   "label": "Nom Client"
+  },
+  {
+   "fetch_from": "client.customer_group",
+   "fieldname": "group_client",
+   "fieldtype": "Data",
+   "label": "Group Client"
+  },
+  {
+   "fetch_from": "client.custom_liste_telephone",
+   "fieldname": "liste_tel",
+   "fieldtype": "Small Text",
+   "label": "Liste tel"
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "istable": 1,
+ "links": [],
+ "modified": "2025-11-24 10:41:37.574631",
+ "modified_by": "koubaawassim@gmail.com",
+ "module": "Customize erpnext",
+ "name": "SMS client",
+ "owner": "koubaawassim@gmail.com",
+ "permissions": [],
+ "row_format": "Dynamic",
+ "rows_threshold_for_grid_search": 20,
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

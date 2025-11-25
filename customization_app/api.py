@@ -99,3 +99,20 @@ def get_data(data=None):
             # },
 		],
 	}
+@frappe.whitelist()
+def get_customer_ristourne_dashboard(customer):
+    APP_NAME = "booking_ristourne"
+    is_installed = frappe.db.exists(
+        "Installed Application",
+        {"app_name": APP_NAME}
+    )
+    if not is_installed:
+        return {}
+    from booking_ristourne.ristourne import generate_ristourne_report
+    from booking_ristourne.sales_order import get_available_for_sales_order
+    current_ristourne = generate_ristourne_report(customer)
+    ristourne_situation = get_available_for_sales_order(customer=customer)
+    return {
+        "current_ristourne": current_ristourne,
+        "ristourne_situation": ristourne_situation
+    }

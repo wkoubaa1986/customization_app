@@ -1,0 +1,35 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2025-11-23 21:45:21.718754",
+ "custom": 1,
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "group_client"
+ ],
+ "fields": [
+  {
+   "fieldname": "group_client",
+   "fieldtype": "Link",
+   "label": "Group client",
+   "options": "Customer Group"
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "istable": 1,
+ "links": [],
+ "modified": "2025-11-23 21:45:49.757991",
+ "modified_by": "koubaawassim@gmail.com",
+ "module": "Customize erpnext",
+ "name": "Group Client SMS",
+ "owner": "koubaawassim@gmail.com",
+ "permissions": [],
+ "row_format": "Dynamic",
+ "rows_threshold_for_grid_search": 20,
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

@@ -1,0 +1,129 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "autoname": "format:Compagne-{YYYY}-{MM}-{DD}-{#####}",
+ "creation": "2025-11-23 21:40:56.883842",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "section_break_q44l",
+  "amended_from",
+  "groupes_des_clients",
+  "g\u00e9n\u00e9rer_liste_des_clients",
+  "liste_des_clients",
+  "g\u00e9n\u00e9rer_liste_des_distinataires",
+  "column_break_olfn",
+  "liste_des_destinataires",
+  "message",
+  "total_des_charact\u00e8res",
+  "total_message_s",
+  "envoyer_sms",
+  "nombre_total_compagne"
+ ],
+ "fields": [
+  {
+   "fieldname": "section_break_q44l",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "amended_from",
+   "fieldtype": "Link",
+   "label": "Amended From",
+   "no_copy": 1,
+   "options": "Compagne SMS",
+   "print_hide": 1,
+   "read_only": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "groupes_des_clients",
+   "fieldtype": "Table",
+   "label": "Groupes des clients",
+   "options": "Group Client SMS"
+  },
+  {
+   "fieldname": "g\u00e9n\u00e9rer_liste_des_clients",
+   "fieldtype": "Button",
+   "label": "G\u00e9n\u00e9rer liste des clients"
+  },
+  {
+   "fieldname": "liste_des_clients",
+   "fieldtype": "Table",
+   "label": "Liste des clients",
+   "options": "SMS client",
+   "reqd": 1
+  },
+  {
+   "fieldname": "g\u00e9n\u00e9rer_liste_des_distinataires",
+   "fieldtype": "Button",
+   "label": "G\u00e9n\u00e9rer liste des distinataires"
+  },
+  {
+   "fieldname": "column_break_olfn",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "liste_des_destinataires",
+   "fieldtype": "Code",
+   "label": "Liste des destinataires"
+  },
+  {
+   "description": "Vous pouvez personnaliser votre SMS avec ces variables :<br>\n<code>{{ nom_client }}</code> : nom du client<br>\n<code>{{ group_client }}</code> : groupe de client<br>\n<code>{{ ristourne_acc }}</code> : montant total de ristourne<br>\n<code>{{ ristourne_uti }}</code> : ristourne disponible \u00e0 ce jour<br>\n",
+   "fieldname": "message",
+   "fieldtype": "Text",
+   "label": "Message"
+  },
+  {
+   "fieldname": "total_des_charact\u00e8res",
+   "fieldtype": "Int",
+   "label": "Total des charact\u00e8res"
+  },
+  {
+   "fieldname": "total_message_s",
+   "fieldtype": "Int",
+   "label": "Total Message (s)"
+  },
+  {
+   "fieldname": "envoyer_sms",
+   "fieldtype": "Button",
+   "label": "Envoyer SMS"
+  },
+  {
+   "fieldname": "nombre_total_compagne",
+   "fieldtype": "Int",
+   "label": "Nombre total Compagne",
+   "read_only": 1
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "is_submittable": 1,
+ "links": [],
+ "modified": "2025-11-24 16:21:18.661781",
+ "modified_by": "koubaawassim@gmail.com",
+ "module": "Customize erpnext",
+ "name": "Compagne SMS",
+ "naming_rule": "Expression",
+ "owner": "koubaawassim@gmail.com",
+ "permissions": [
+  {
+   "cancel": 1,
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "submit": 1,
+   "write": 1
+  }
+ ],
+ "row_format": "Dynamic",
+ "rows_threshold_for_grid_search": 20,
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

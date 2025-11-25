@@ -1,4 +1,4 @@
-__version__ = "V2.0.0"
+__version__ = "3.0.0"
 def _apply_get_item_details_override():
     try:
         # idempotent: safe to run multiple times
