@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 from __future__ import unicode_literals
 
-from customization_app.Maintenance.relance_maintenance_sms import envoyer_relances_maintenance
 import frappe
 import json
 import pdb
@@ -1070,3 +1069,4 @@ def run_maintenance_planning():
     }
 def run_cron():
     run_safely("Cron - Mise à jour échéancier maintenance", run_maintenance_planning)
+    
