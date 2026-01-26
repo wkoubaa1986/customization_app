@@ -1,4 +1,7 @@
-__version__ = "3.0.1"
+__version__ = "4.0.0"
+# ------------------------------------------------------------------
+# Apply ONE-TIME patches (migrations / idempotent overrides)
+# ------------------------------------------------------------------
 def _apply_get_item_details_override():
     try:
         # idempotent: safe to run multiple times
@@ -10,3 +13,4 @@ def _apply_get_item_details_override():
         print(f"[customization_app] get_item_details override failed: {e}", file=sys.stderr)
 
 _apply_get_item_details_override()
+from customization_app.monkey_patches import item_variant

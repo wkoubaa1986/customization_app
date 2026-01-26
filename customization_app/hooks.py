@@ -297,6 +297,7 @@ fixtures = [
             ["reference_doctype", "in", ["Compagne SMS"]],
         ],
     },
+    {"doctype": "Responsable Relance", "filters": [["name", "=", "Default"]]},
 ]
 scheduler_events = {
     # Tâche lourde exécutée une fois par jour (heure gérée par Frappe)

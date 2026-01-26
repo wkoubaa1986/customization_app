@@ -4,7 +4,7 @@ from __future__ import unicode_literals
 import frappe
 from frappe.utils import nowdate, add_days, getdate
 from urllib.parse import quote_plus
-
+import requests
 # On réutilise la config machine & extension depuis update_schedule
 from customization_app.Maintenance.update_schedule import (
     MACHINE_FAMILY_BY_GROUP,
@@ -438,7 +438,7 @@ def is_mobile_tunisien(num):
     """Mobiles tunisiens classiques : 2,4,5,9."""
     return len(num) == 8 and num[0] in ("2", "4", "5", "9")
 
-
+@frappe.whitelist()
 def traiter_numero_tel(champ_tel):
     """
     Prend custom_liste_telephone (multi-ligne),
@@ -464,7 +464,7 @@ def traiter_numero_tel(champ_tel):
 
     return unique
 
-
+@frappe.whitelist()
 def envoyer_sms_winsms(numero, message):
     """
     Envoi via WinSMSPro. `numero` = 8 chiffres (sans +216).
@@ -476,7 +476,7 @@ def envoyer_sms_winsms(numero, message):
     )
     params = f"&to=216{numero}&from=Aqua World&sms={quote_plus(message)}"
     url = base_url + params
-    return frappe.make_get_request(url)
+    return requests.get(url)
 
 
 # ---------------------------------------------------------------------------
@@ -525,7 +525,8 @@ def envoyer_et_marquer_sms(list_sms, secteurs_autorises, today, dry_run: bool = 
     corp = ""
     if "2024-03-10" <= today <= "2024-03-16":
         corp = "\nInchallah Ramdhanek Mabrouk."
-
+    website_url, phones_emp = get_relance_config()
+    phones_txt = _format_phones_for_message(phones_emp)
     for sms_dict in list_sms:
         familles = set()
         secteur = None
@@ -606,18 +607,15 @@ def envoyer_et_marquer_sms(list_sms, secteurs_autorises, today, dry_run: bool = 
                     f"Cout main-d'oeuvre: {cout} DT. Ce tarif exclut les filtres de remplacement, "
                     f"facturés séparément selon entretien.\n"
                 )
-            message += (
-                "Pour planifier votre entretien, contactez-nous au 98 511 119 ou au 51 511 918."
-            )
+            message += f"Pour planifier votre entretien, contactez-nous au {phones_txt}."
 
         else:
             message = (
                 f"Bonjour {client.customer_name},{corp}\n"
                 f"Rappel: La maintenance de {desc}{suff} à échéance."
                 f"{promo}\n"
-                "Commandez vos filtres directement sur notre site :\n"
-                "www.aquaworldservicing.com/nosproduits/rechange-osmoseurs-domestiques\n"
-                "Ou contactez-nous au 98 511 119 ou 51 511 918 pour passer votre commande"
+                f"Commandez vos filtres directement sur notre site :\n{website_url}\n"
+                f"Ou contactez-nous au {phones_txt} pour passer votre commande"
             )
 
         # Numéros de téléphone
@@ -651,7 +649,8 @@ def envoyer_et_marquer_sms(list_sms, secteurs_autorises, today, dry_run: bool = 
         for tel in list_tel:
             try:
                 resp = envoyer_sms_winsms(tel, message)
-                if resp.get("message") == "Successfully Send":
+                txt = resp.text
+                if txt.get("message") == "Successfully Send":
                     status_sms = "Success"
             except Exception:
                 _logger().error(
@@ -701,7 +700,36 @@ def envoyer_et_marquer_sms(list_sms, secteurs_autorises, today, dry_run: bool = 
     frappe.db.commit()
     return [], stats
 
+def _format_phones_for_message(phones):
+    phones = [p.strip() for p in phones if p and p.strip()]
+    if not phones:
+        return ""
+    if len(phones) == 1:
+        return phones[0]
+    if len(phones) == 2:
+        return f"{phones[0]} ou {phones[1]}"
+    return f"{', '.join(phones[:-1])} ou {phones[-1]}"
 
+@frappe.whitelist()
+def get_relance_config():
+    cfg = frappe.get_single("Responsable Relance")
+
+    # lien
+    website_url = (cfg.lien_website or "").strip()
+
+    # numéros depuis la table d'employés
+    phones = []
+    for row in (cfg.responsable_relance_employee or []):
+   
+
+        emp = frappe.get_doc("Employee", row.employee)
+
+        # adapte selon tes champs Employee
+       
+        phones.append(emp.cell_number)
+
+
+    return website_url, phones
 # ---------------------------------------------------------------------------
 #  Fonction de prévisualisation (pour tests)
 # ---------------------------------------------------------------------------

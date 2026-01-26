@@ -1,0 +1,32 @@
+[
+ {
+  "docstatus": 0,
+  "doctype": "Responsable Relance",
+  "lien_website": "www.aquaworldservicing.com/nosproduits/rechange-osmoseurs-domestiques",
+  "modified": "2026-01-26 01:46:03.312911",
+  "name": "Responsable Relance",
+  "responsable_relance_employee": [
+   {
+    "employee": "HR-EMP-00003",
+    "parent": "Responsable Relance",
+    "parentfield": "responsable_relance_employee",
+    "parenttype": "Responsable Relance",
+    "téléphone": null
+   },
+   {
+    "employee": "HR-EMP-00002",
+    "parent": "Responsable Relance",
+    "parentfield": "responsable_relance_employee",
+    "parenttype": "Responsable Relance",
+    "téléphone": null
+   },
+   {
+    "employee": "HR-EMP-00001",
+    "parent": "Responsable Relance",
+    "parentfield": "responsable_relance_employee",
+    "parenttype": "Responsable Relance",
+    "téléphone": null
+   }
+  ]
+ }
+]
