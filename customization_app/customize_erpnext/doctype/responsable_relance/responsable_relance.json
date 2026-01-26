@@ -1,0 +1,51 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-01-26 01:36:05.407892",
+ "custom": 1,
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "responsable_relance_employee",
+  "lien_website"
+ ],
+ "fields": [
+  {
+   "fieldname": "responsable_relance_employee",
+   "fieldtype": "Table",
+   "label": "Responsable Relance Employee",
+   "options": "Responsable Relance Employee"
+  },
+  {
+   "fieldname": "lien_website",
+   "fieldtype": "Small Text",
+   "label": "Lien Website"
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "issingle": 1,
+ "links": [],
+ "modified": "2026-01-26 01:44:12.237666",
+ "modified_by": "koubaawassim@gmail.com",
+ "module": "Customize erpnext",
+ "name": "Responsable Relance",
+ "owner": "koubaawassim@gmail.com",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "row_format": "Dynamic",
+ "rows_threshold_for_grid_search": 20,
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}
