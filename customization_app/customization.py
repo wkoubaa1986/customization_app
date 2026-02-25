@@ -54,8 +54,13 @@ class SynchroCustomer(ErpnextCustomer):
         self.address_line1 = self.get("address_line1") or ""
         self.pincode = self.get("pincode") or ""
         self.country = self.get("country") or ""
-        self.custom_generation_facture_mensuelle = self.get("facturation_mensuelle") or "Non"
-        self.custom_envois_automatique_de_la_bl = self.get("envois_bl") or "Non"
+        if self.get("facturation_mensuelle") is not None:
+            self.custom_generation_facture_mensuelle = self.get("facturation_mensuelle")
+        
+        if self.get("envois_bl") is not None:
+            self.custom_envois_automatique_de_la_bl = self.get("envois_bl")
+        # self.custom_generation_facture_mensuelle = self.get("facturation_mensuelle") or "Non"
+        # self.custom_envois_automatique_de_la_bl = self.get("envois_bl") or "Non"
         # Set state and city for both Tunisia and non-Tunisia cases
         if self.get("country") == "Tunisia":
             self.state = self.get("custom_state_s") or ""
