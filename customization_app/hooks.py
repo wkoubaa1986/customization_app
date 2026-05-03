@@ -40,10 +40,14 @@ app_license = "mit"
 # webform_include_css = {"doctype": "public/css/doctype.css"}
 
 # include js in page
-# page_js = {"page" : "public/js/file.js"}
+# pos_auto_customer is now loaded via app_include_js above
+# page_js = {"point-of-sale": "public/js/pos_auto_customer.js"}
 
 # include js in doctype views
-# doctype_js = {"doctype" : "public/js/doctype.js"}
+# doctype_js does not work for Custom DocTypes stored in DB — use app_include_js instead
+# app_include_js = [
+
+# ]
 # doctype_list_js = {"doctype" : "public/js/doctype_list.js"}
 # doctype_tree_js = {"doctype" : "public/js/doctype_tree.js"}
 # doctype_calendar_js = {"doctype" : "public/js/doctype_calendar.js"}
@@ -137,13 +141,14 @@ app_license = "mit"
 # ---------------
 # Hook on document methods and events
 
-# doc_events = {
-# 	"*": {
-# 		"on_update": "method",
-# 		"on_cancel": "method",
-# 		"on_trash": "method"
-# 	}
-# }
+doc_events = {
+    "Mes Interventions Employe": {
+        "before_submit": "customization_app.api.before_submit_mes_interventions",
+    },
+    "Tache de travail": {
+        "before_save": "customization_app.api.before_save_tache_de_travail",
+    },
+}
 
 # Scheduled Tasks
 # ---------------
@@ -245,6 +250,8 @@ app_license = "mit"
 # Load my JS globally in the Desk (ERPNext admin interface)
 app_include_js = ["/assets/customization_app/js/customer_quick_entry.js",
                   "/assets/customization_app/js/custom_calendar.js",
+                  "/assets/customization_app/js/mes_interventions_employe.js",
+                "/assets/customization_app/js/pos_auto_customer.js",
                   "/assets/customization_app/js/buying_item_query_override.js"]
 # Hide filter message shown in the awesomplete dropdown
 app_include_css = ["/assets/customization_app/css/hide_filter_message.css"]
@@ -265,7 +272,8 @@ override_doctype_dashboards = {
 }
 app_ready = "customization_app.patches.override_get_item_details.apply"
 override_whitelisted_methods = {
-    "erpnext.stock.get_item_details.get_item_details": "customization_app.get_item_details.get_item_details"
+    "erpnext.stock.get_item_details.get_item_details": "customization_app.get_item_details.get_item_details",
+    "erpnext.selling.page.point_of_sale.point_of_sale.get_items": "customization_app.pos_items.get_items",
 }
 fixtures = [
     # Custom Field de ton module
@@ -298,6 +306,13 @@ fixtures = [
         ],
     },
     {"doctype": "Responsable Relance", "filters": [["name", "=", "Default"]]},
+    # Custom DocTypes — Mes Interventions Employe and its child table
+    {
+        "doctype": "DocType",
+        "filters": [
+            ["name", "in", ["Mes Interventions Employe", "Intervention"]],
+        ],
+    },
 ]
 scheduler_events = {
     # Tâche lourde exécutée une fois par jour (heure gérée par Frappe)
@@ -314,6 +329,11 @@ scheduler_events = {
         # Lundi–samedi à 10:00 : relance SMS maintenance
         "0 10 * * 1-6": [
             "customization_app.Maintenance.relance_maintenance_sms.run_cron",
+        ],
+
+        # Tous les jours à 07:30 : création/MAJ liste interventions Nizar
+        "30 7 * * *": [
+            "customization_app.api.tache_journalier_nizar",
         ],
     },
 }
