@@ -147,6 +147,7 @@ doc_events = {
     },
     "Tache de travail": {
         "before_save": "customization_app.api.before_save_tache_de_travail",
+        "after_save":  "customization_app.api.after_save_tache_de_travail",
     },
 }
 

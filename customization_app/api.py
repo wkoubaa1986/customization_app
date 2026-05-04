@@ -1,7 +1,6 @@
+import hashlib
 import json
 
-import frappe
-import json
 import frappe
 from frappe import _
 
@@ -100,222 +99,489 @@ def get_data(data=None):
 		],
 	}
 
-@frappe.whitelist()
-def sync_interventions(doc_name):
-    """
-    Synchronise les tâches du jour pour un document Mes Interventions Employe.
-    Equivalent au Server Script, mais stocke aussi commande_client et subject.
-    """
-    today = frappe.utils.today()
-    yesterday = frappe.utils.add_days(today, -1)
 
+def _compute_ar_hash(client, adresse, remarque, sujet=""):
+    """SHA-256 court des 4 valeurs source pour détecter un changement."""
+    raw = f"{client}|{adresse}|{remarque}|{sujet}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def _translate_ar_fields(client, adresse, remarque, changed_fields, sujet=""):
+    """
+    Appelle OpenAI pour traduire en arabe tunisien uniquement les champs
+    listés dans changed_fields ({'client', 'adresse', 'remarque', 'sujet'}).
+    Retourne un dict avec seulement les clés des champs traduits.
+    """
+    if not changed_fields:
+        return {}
+
+    try:
+        ai = frappe.get_single("AI Settings")
+        api_key = ai.openai_api_key
+        model   = ai.open_ai_model or "gpt-4o-mini"
+    except Exception:
+        return {}
+
+    if not api_key:
+        return {}
+
+    # Construire la liste des items à traduire
+    items_to_translate = []
+    if "client" in changed_fields and client:
+        items_to_translate.append(f'client: "{client}"')
+    if "adresse" in changed_fields and adresse:
+        items_to_translate.append(f'adresse: "{adresse}"')
+    if "remarque" in changed_fields and remarque:
+        items_to_translate.append(f'remarque: "{remarque}"')
+    if "sujet" in changed_fields and sujet:
+        items_to_translate.append(f'sujet: "{sujet}"')
+
+    if not items_to_translate:
+        return {}
+
+    prompt = (
+        "أنت مترجم محترف متخصص في الدارجة التونسية المكتوبة بالحروف العربية. "
+        "ترجم القيم التالية إلى الدارجة التونسية بالحروف العربية فقط (لا روماني). "
+        "أجب فقط بـ JSON صحيح يحتوي على نفس المفاتيح. "
+        "ترجم أسماء الأشخاص إلى العربية كما تُنطق (مثال: Amal Hammouda → أمل حمودة). "
+        "ترجم العناوين بشكل طبيعي (المدينة، الشارع، إلخ) بالحروف العربية. "
+        "ترجم الرسائل والملاحظات للدارجة التونسية. "
+        "IMPORTANT: garde tous les chiffres en numerals occidentaux (0-9), ne les convertis JAMAIS en chiffres arabes-indiens (٠١٢٣٤٥٦٧٨٩).\n\n"
+        "القيم:\n" + "\n".join(items_to_translate)
+    )
+
+    try:
+        import urllib.request
+        payload = json.dumps({
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.1,
+            "response_format": {"type": "json_object"},
+        }).encode("utf-8")
+
+        req = urllib.request.Request(
+            "https://api.openai.com/v1/chat/completions",
+            data=payload,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+
+        content = data["choices"][0]["message"]["content"]
+        translated = json.loads(content)
+
+        result = {}
+        if "client" in translated:
+            result["ar_client"]  = translated["client"]
+        if "adresse" in translated:
+            result["ar_adresse"] = translated["adresse"]
+        if "remarque" in translated:
+            result["ar_remarque"] = translated["remarque"]
+        if "sujet" in translated:
+            result["ar_sujet"] = translated["sujet"]
+        return result
+
+    except Exception as e:
+        frappe.log_error(f"OpenAI translation error: {str(e)}", "translate_ar_fields")
+        return {}
+
+
+@frappe.whitelist()
+def sync_interventions(doc_name, is_initial=False):
+    lock_key = frappe.cache().make_key(f"sync_lock:{doc_name}")
+    acquired = frappe.cache().set(lock_key, 1, nx=True, ex=60)
+    if not acquired:
+        rows_db = frappe.db.sql(
+            "SELECT name, ar_client, ar_adresse, ar_remarque, ar_sujet "
+            "FROM `tabIntervention` WHERE parent = %s",
+            doc_name, as_dict=True
+        )
+        return {
+            "added": 0, "removed": 0, "doc": doc_name, "locked": True,
+            "ar_translations": {r.name: {
+                "ar_client":   r.ar_client   or "",
+                "ar_adresse":  r.ar_adresse  or "",
+                "ar_remarque": r.ar_remarque or "",
+                "ar_sujet":    r.ar_sujet    or "",
+            } for r in rows_db}
+        }
+    try:
+        return _sync_interventions_inner(doc_name, is_initial)
+    finally:
+        frappe.cache().delete(lock_key)
+
+
+def _get_or_translate_task_ar(task_name, client, adresse, sujet):
+    """
+    Lit ar_* depuis Tache de travail.
+    Si absents ou hash différent → traduit via OpenAI et stocke sur la tâche.
+    Retourne (dict {ar_client, ar_adresse, ar_sujet}, new_hash).
+    """
+    new_hash = _compute_ar_hash(client, adresse, "", sujet)
+    stored = frappe.db.get_value(
+        "Tache de travail", task_name,
+        ["ar_hash", "ar_client", "ar_adresse", "ar_sujet"], as_dict=True
+    ) or {}
+
+    if stored.get("ar_hash") == new_hash and stored.get("ar_client"):
+        return stored, new_hash
+
+    if not (client or adresse or sujet):
+        return {}, new_hash
+
+    changed = set()
+    if client:  changed.add("client")
+    if adresse: changed.add("adresse")
+    if sujet:   changed.add("sujet")
+
+    tr = _translate_ar_fields(client, adresse, "", changed, sujet)
+    if tr:
+        frappe.db.set_value("Tache de travail", task_name, {
+            "ar_client":  tr.get("ar_client",  ""),
+            "ar_adresse": tr.get("ar_adresse", ""),
+            "ar_sujet":   tr.get("ar_sujet",   ""),
+            "ar_hash":    new_hash,
+        }, update_modified=False)
+        return tr, new_hash
+
+    return stored, new_hash
+
+
+def _sync_interventions_inner(doc_name, is_initial=False):
     doc = frappe.get_doc("Mes Interventions Employe", doc_name)
     employee_daily = doc.get("employé") or doc.get("employee")
+    doc_date = str(doc.date) if doc.date else frappe.utils.today()
 
-    tasks_today = frappe.get_all(
+    tasks = frappe.get_all(
         "Tache de travail",
         filters={
             "custom_choix_du_staff": employee_daily,
-            "starts_on": ["between", [today + " 00:00:00", today + " 23:59:59"]],
+            "starts_on": ["between", [doc_date + " 00:00:00", doc_date + " 23:59:59"]],
             "status": ["!=", "Cancelled"]
         },
         fields=[
-            "name",
-            "custom_type_dintervention",
-            "starts_on",
-            "custom_client",
-            "nom_client",
-            "tel",
-            "select_address",
-            "details_adresse",
-            "google_map",
-            "rapport_visite",
-            "subject",
-            "commande_client",
+            "name", "custom_type_dintervention", "starts_on",
+            "custom_client", "nom_client", "tel",
+            "select_address", "details_adresse", "google_map",
+            "rapport_visite", "subject", "commande_client",
         ],
         order_by="starts_on asc"
     )
 
-    existing_tasks = []
-    for row in doc.tache:
-        if row.tache_de_travail:
-            existing_tasks.append(row.tache_de_travail)
-        if row.source_task:
-            existing_tasks.append(row.source_task)
+    active_task_names = {t.name for t in tasks}
+    task_map = {t.name: t for t in tasks}
 
-    # Update mutable fields on existing rows
-    task_map = {t.name: t for t in tasks_today}
-    for row in doc.tache:
-        task = task_map.get(row.tache_de_travail) or task_map.get(row.source_task)
-        if task:
-            if task.get("commande_client") and not row.commande:
-                row.commande = task.commande_client
-            if task.get("google_map") and not row.google_maps:
-                row.google_maps = task.google_map
+    existing_rows = frappe.db.sql(
+        "SELECT name, tache_de_travail, source_task, client, adresse, tel, heure, "
+        "ar_client, ar_adresse, ar_sujet, ar_hash "
+        "FROM `tabIntervention` WHERE parent = %s ORDER BY idx",
+        doc_name, as_dict=True
+    )
+    source_to_row = {}
+    for row in existing_rows:
+        src = row.tache_de_travail or row.source_task
+        if src:
+            source_to_row[src] = row
 
     added = 0
-    for task in tasks_today:
-        if task.name in existing_tasks:
+    removed = 0
+    updated = 0
+
+    # ── 1. Supprimer les rows dont la tâche est annulée / supprimée ───────────
+    for src in list(source_to_row.keys()):
+        if src not in active_task_names:
+            frappe.db.delete("Intervention", {"name": source_to_row[src].name})
+            del source_to_row[src]
+            removed += 1
+
+    # ── 2. Rows existantes : détecter changement via hash ─────────────────────
+    for src, row in source_to_row.items():
+        task = task_map.get(src)
+        if not task:
             continue
 
-        adresse = task.details_adresse or task.select_address or ""
-        client = task.custom_client or task.nom_client or ""
+        client  = task.custom_client or task.nom_client or row.client or ""
+        adresse = task.details_adresse or task.select_address or row.adresse or ""
+        tel     = task.tel or ""
+        heure   = str(task.starts_on) if task.starts_on else ""
+        sujet   = task.subject or ""
+        new_hash = _compute_ar_hash(client, adresse, "", sujet)
 
-        doc.append("tache", {
-            "source_task":       task.name,
-            "tache_de_travail":  task.name,
-            "intervention":      task.custom_type_dintervention,
-            "heure":             task.starts_on,
-            "client":            client,
-            "tel":               task.tel,
-            "adresse":           adresse,
-            "google_maps":       task.google_map,
-            "remarque":          task.rapport_visite,
-            "commande":          task.commande_client or "",
-            "nouvelle_tache":    1,
-        })
+        # Détecter si les données de base ou les ar_* ont changé
+        base_changed = (client != (row.client or "") or adresse != (row.adresse or "")
+                        or tel != (row.tel or "") or heure != (row.heure or ""))
 
-        existing_tasks.append(task.name)
+        if row.ar_hash == new_hash and row.ar_client and not base_changed:
+            continue  # rien n'a changé
+
+        # Distinguer "jamais traduit" (ar_hash vide) de "contenu modifié" (hash différent)
+        is_content_changed = bool(row.ar_hash) and row.ar_hash != new_hash
+        client_changed = client != (row.client or "")
+
+        # Changement ou première traduction → (re)traduire sur la tâche + MAJ row
+        task_ar, new_hash = _get_or_translate_task_ar(src, client, adresse, sujet)
+
+        if client_changed:
+            # Le client a changé → reset complet aux valeurs de la tâche
+            frappe.db.set_value("Intervention", row.name, {
+                "client":           client,
+                "adresse":          adresse,
+                "tel":              tel,
+                "heure":            heure,
+                "google_maps":      task.google_map or "",
+                "remarque":         task.rapport_visite or "",
+                "commande":         task.commande_client or "",
+                "vente":            "",
+                "photo1":           "",
+                "photo2":           "",
+                "photo3":           "",
+                "nb_appels":        0,
+                "nb_appels_detail": "",
+                "annule":           0,
+                "ar_client":        task_ar.get("ar_client",  ""),
+                "ar_adresse":       task_ar.get("ar_adresse", ""),
+                "ar_sujet":         task_ar.get("ar_sujet",   ""),
+                "ar_hash":          new_hash if task_ar.get("ar_client") else "",
+                "nouvelle_tache":   0 if is_initial else 1,
+            }, update_modified=False)
+        else:
+            frappe.db.set_value("Intervention", row.name, {
+                "client":         client,
+                "adresse":        adresse,
+                "tel":            tel,
+                "heure":          heure,
+                "ar_client":      task_ar.get("ar_client",  ""),
+                "ar_adresse":     task_ar.get("ar_adresse", ""),
+                "ar_sujet":       task_ar.get("ar_sujet",   ""),
+                "ar_hash":        new_hash if task_ar.get("ar_client") else "",
+                "nouvelle_tache": 0 if (is_initial or not is_content_changed) else 1,
+            }, update_modified=False)
+        updated += 1
+
+    # ── 3. Nouvelles tâches → INSERT ──────────────────────────────────────────
+    max_idx = frappe.db.sql(
+        "SELECT COALESCE(MAX(idx), 0) FROM `tabIntervention` WHERE parent = %s",
+        doc_name
+    )[0][0] or 0
+
+    now_dt = frappe.utils.now_datetime()
+    user   = frappe.session.user or "Administrator"
+
+    for task in tasks:
+        if task.name in source_to_row:
+            continue
+
+        client   = task.custom_client or task.nom_client or ""
+        adresse  = task.details_adresse or task.select_address or ""
+        remarque = task.rapport_visite or ""
+        sujet    = task.subject or ""
+
+        task_ar, new_hash = _get_or_translate_task_ar(task.name, client, adresse, sujet)
+
+        max_idx += 1
+        frappe.db.sql("""
+            INSERT INTO `tabIntervention`
+                (name, parent, parenttype, parentfield, idx,
+                 source_task, tache_de_travail, intervention, heure,
+                 client, tel, adresse, google_maps, remarque, commande,
+                 nouvelle_tache, ar_client, ar_adresse, ar_remarque, ar_sujet, ar_hash,
+                 owner, creation, modified, modified_by, docstatus)
+            VALUES
+                (%s, %s, 'Mes Interventions Employe', 'tache', %s,
+                 %s, %s, %s, %s,
+                 %s, %s, %s, %s, %s, %s,
+                 %s, %s, %s, %s, %s, %s,
+                 %s, %s, %s, %s, 0)
+        """, (
+            frappe.generate_hash("", 10), doc_name, max_idx,
+            task.name, task.name,
+            task.custom_type_dintervention or "",
+            task.starts_on or "",
+            client, task.tel or "",
+            adresse, task.google_map or "",
+            remarque, task.commande_client or "",
+            0 if is_initial else 1,
+            task_ar.get("ar_client",  ""),
+            task_ar.get("ar_adresse", ""),
+            "",
+            task_ar.get("ar_sujet",   ""),
+            new_hash if task_ar.get("ar_client") else "",
+            user, now_dt, now_dt, user,
+        ))
         added += 1
 
-    if added > 0:
-        doc.save(ignore_permissions=True)
+    if added or removed or updated:
         frappe.db.commit()
 
-    # Also create stock verification task if yesterday had interventions
-    employee_stock = "HR-EMP-00001"
-    taches_hier = frappe.get_all(
-        "Tache de travail",
-        filters={
-            "custom_choix_du_staff": employee_daily,
-            "starts_on": ["between", [yesterday + " 00:00:00", yesterday + " 23:59:59"]],
-            "status": ["!=", "Cancelled"]
-        },
-        fields=["name"],
-        limit_page_length=1
+    # Cron du matin → forcer nouvelle_tache=0 sur toutes les lignes
+    if is_initial:
+        frappe.db.sql(
+            "UPDATE `tabIntervention` SET nouvelle_tache=0 WHERE parent=%s AND nouvelle_tache=1",
+            doc_name
+        )
+        frappe.db.commit()
+
+    db_rows = frappe.db.sql(
+        "SELECT name, ar_client, ar_adresse, ar_remarque, ar_sujet "
+        "FROM `tabIntervention` WHERE parent = %s",
+        doc_name, as_dict=True
     )
+    return {
+        "added": added, "removed": removed, "doc": doc_name,
+        "ar_translations": {r.name: {
+            "ar_client":   r.ar_client   or "",
+            "ar_adresse":  r.ar_adresse  or "",
+            "ar_remarque": r.ar_remarque or "",
+            "ar_sujet":    r.ar_sujet    or "",
+        } for r in db_rows}
+    }
 
-    if taches_hier:
-        stock_task_exists = frappe.db.exists("Tache de travail", {
-            "custom_choix_du_staff": employee_stock,
-            "starts_on": today + " 08:45:00",
-            "titre": "Vérification Stock nizar"
-        })
-        if not stock_task_exists:
-            frappe.get_doc({
-                "doctype":                  "Tache de travail",
-                "custom_choix_du_staff":    employee_stock,
-                "custom_type_dintervention": "Autre",
-                "titre":                    "Vérification Stock nizar",
-                "starts_on":                today + " 08:45:00",
-                "ends_on":                  today + " 09:30:00",
-                "subject":                  "Vérification Stock nizar",
-            }).insert(ignore_permissions=True)
-            frappe.db.commit()
 
-    return {"added": added, "doc": doc.name}
+@frappe.whitelist()
+def test_cron_yesterday():
+    """Lance tache_journalier_nizar sur hier pour tester."""
+    import customization_app.api as api
+    original_today = frappe.utils.today
+
+    yesterday = frappe.utils.add_days(frappe.utils.today(), -1)
+    frappe.utils.today = lambda: yesterday
+    try:
+        tache_journalier_nizar()
+        return {"ran_for": yesterday}
+    finally:
+        frappe.utils.today = original_today
+
+
+def sync_all_taches_to_interventions():
+    """
+    Cron (every minute) : pour toutes les Tache de travail actives du jour assignées à HR-EMP-00009,
+    propager client, tel, adresse, heure + ar_* vers les rows tabIntervention correspondantes.
+    """
+    today = frappe.utils.today()
+    EMPLOYEE = "HR-EMP-00009"
+
+    tasks = frappe.db.sql("""
+        SELECT name, custom_client, nom_client, tel, details_adresse, select_address,
+               starts_on, subject, ar_client, ar_adresse, ar_sujet, ar_hash
+        FROM `tabTache de travail`
+        WHERE custom_choix_du_staff = %s
+        AND DATE(starts_on) = %s
+        AND status != 'Cancelled'
+    """, (EMPLOYEE, today), as_dict=True)
+
+    if not tasks:
+        return
+
+    updated = 0
+    for task in tasks:
+        client  = task.custom_client or task.nom_client or ""
+        adresse = task.details_adresse or task.select_address or ""
+        tel     = task.tel or ""
+        heure   = str(task.starts_on) if task.starts_on else ""
+
+        # Mettre à jour les données de base (client, tel, adresse, heure)
+        frappe.db.sql("""
+            UPDATE `tabIntervention`
+            SET client  = %s,
+                adresse = %s,
+                tel     = %s,
+                heure   = %s
+            WHERE (tache_de_travail = %s OR source_task = %s)
+        """, (client, adresse, tel, heure, task.name, task.name))
+
+        # Mettre à jour les ar_* si la tâche a des traductions
+        if task.ar_client and task.ar_hash:
+            frappe.db.sql("""
+                UPDATE `tabIntervention`
+                SET ar_client  = %s,
+                    ar_adresse = %s,
+                    ar_sujet   = %s,
+                    ar_hash    = %s
+                WHERE (tache_de_travail = %s OR source_task = %s)
+                AND (ar_hash != %s OR ar_hash IS NULL OR ar_hash = '')
+            """, (
+                task.ar_client, task.ar_adresse or "", task.ar_sujet or "", task.ar_hash,
+                task.name, task.name, task.ar_hash,
+            ))
+
+        updated += 1
+
+    if updated:
+        frappe.db.commit()
 
 
 def tache_journalier_nizar():
     """
-    Scheduled job (30 7 * * *): creates/updates Mes Interventions Employe for
-    HR-EMP-00009 and creates the stock verification task if needed.
+    Scheduled job (30 7 * * *) — uniquement pour HR-EMP-00009 :
+    1. Récupère toutes les Tache de travail actives du jour
+    2. Traduit en arabe celles qui ne le sont pas encore (stockage sur la tâche)
+    3. Crée le doc Mes Interventions Employe du jour si inexistant
+    4. Sync des rows (is_initial=True → nouvelle_tache=0 sur tout)
+    5. Crée la tâche vérification stock si besoin
     """
-    today = frappe.utils.today()
+    today     = frappe.utils.today()
     yesterday = frappe.utils.add_days(today, -1)
 
-    employee_daily = "HR-EMP-00009"
-    employee_stock = "HR-EMP-00001"
+    EMPLOYEE_DAILY = "HR-EMP-00009"
+    EMPLOYEE_STOCK = "HR-EMP-00001"
 
-    doc_name = frappe.db.exists("Mes Interventions Employe", {
-        "employé": employee_daily,
-        "date": today
-    })
-
-    if doc_name:
-        doc = frappe.get_doc("Mes Interventions Employe", doc_name)
-    else:
-        doc = frappe.get_doc({
-            "doctype": "Mes Interventions Employe",
-            "employé": employee_daily,
-            "date": today
-        })
-        doc.insert(ignore_permissions=True)
-
+    # ── 1. Récupérer les tâches du jour pour cet employé ──────────────────────
     tasks_today = frappe.get_all(
         "Tache de travail",
         filters={
-            "custom_choix_du_staff": employee_daily,
+            "custom_choix_du_staff": EMPLOYEE_DAILY,
             "starts_on": ["between", [today + " 00:00:00", today + " 23:59:59"]],
             "status": ["!=", "Cancelled"]
         },
         fields=[
-            "name",
-            "custom_type_dintervention",
-            "starts_on",
-            "custom_client",
-            "nom_client",
-            "tel",
-            "select_address",
-            "details_adresse",
-            "google_map",
-            "rapport_visite",
-            "subject",
-            "commande_client",
-        ],
-        order_by="starts_on asc"
+            "name", "custom_client", "nom_client",
+            "select_address", "details_adresse", "subject",
+        ]
     )
 
-    existing_tasks = []
-    for row in doc.tache:
-        if row.tache_de_travail:
-            existing_tasks.append(row.tache_de_travail)
-        if row.source_task:
-            existing_tasks.append(row.source_task)
+    if not tasks_today:
+        return
 
-    # Update mutable fields on existing rows
-    task_map = {t.name: t for t in tasks_today}
-    for row in doc.tache:
-        task = task_map.get(row.tache_de_travail) or task_map.get(row.source_task)
-        if task:
-            if task.get("commande_client") and not row.commande:
-                row.commande = task.commande_client
-            if task.get("google_map") and not row.google_maps:
-                row.google_maps = task.google_map
-
-    added = 0
+    # ── 2. Traduire toutes les tâches AVANT de créer le doc ───────────────────
+    # Logique de traduction centralisée sur Tache de travail :
+    # si ar_* manquants ou hash différent → OpenAI + stockage sur la tâche
     for task in tasks_today:
-        if task.name in existing_tasks:
-            continue
-
+        client  = task.custom_client or task.nom_client or ""
         adresse = task.details_adresse or task.select_address or ""
-        client = task.custom_client or task.nom_client or ""
+        sujet   = task.subject or ""
+        _get_or_translate_task_ar(task.name, client, adresse, sujet)
 
-        doc.append("tache", {
-            "source_task":      task.name,
-            "tache_de_travail": task.name,
-            "intervention":     task.custom_type_dintervention,
-            "heure":            task.starts_on,
-            "client":           client,
-            "tel":              task.tel,
-            "adresse":          adresse,
-            "google_maps":      task.google_map,
-            "remarque":         task.rapport_visite,
-            "commande":         task.commande_client or "",
-            "nouvelle_tache":   1,
-        })
-        existing_tasks.append(task.name)
-        added += 1
+    frappe.db.commit()
 
-    if added > 0:
-        doc.save(ignore_permissions=True)
+    # ── 3. Créer le doc du jour si inexistant ─────────────────────────────────
+    doc_name = frappe.db.exists("Mes Interventions Employe", {
+        "employé": EMPLOYEE_DAILY,
+        "date": today
+    })
+
+    if not doc_name:
+        employee_full_name = frappe.db.get_value("Employee", EMPLOYEE_DAILY, "employee_name") or EMPLOYEE_DAILY
+        doc_name = f"{employee_full_name} - {frappe.utils.formatdate(today, 'dd-MM-yyyy')}"
+        frappe.get_doc({
+            "doctype": "Mes Interventions Employe",
+            "name": doc_name,
+            "employé": EMPLOYEE_DAILY,
+            "date": today
+        }).insert(ignore_permissions=True)
         frappe.db.commit()
 
-    # Create stock verification task if there were interventions yesterday
+    # ── 4. Sync des rows — is_initial=True → pas de badge جديد le matin ───────
+    sync_interventions(doc_name, is_initial=True)
+
+    # ── 5. Créer tâche vérification stock si interventions hier ───────────────
     taches_hier = frappe.get_all(
         "Tache de travail",
         filters={
-            "custom_choix_du_staff": employee_daily,
+            "custom_choix_du_staff": EMPLOYEE_DAILY,
             "starts_on": ["between", [yesterday + " 00:00:00", yesterday + " 23:59:59"]],
             "status": ["!=", "Cancelled"]
         },
@@ -325,14 +591,14 @@ def tache_journalier_nizar():
 
     if taches_hier:
         stock_task_exists = frappe.db.exists("Tache de travail", {
-            "custom_choix_du_staff": employee_stock,
+            "custom_choix_du_staff": EMPLOYEE_STOCK,
             "starts_on": today + " 08:45:00",
             "titre": "Vérification Stock nizar"
         })
         if not stock_task_exists:
             frappe.get_doc({
                 "doctype":                   "Tache de travail",
-                "custom_choix_du_staff":     employee_stock,
+                "custom_choix_du_staff":     EMPLOYEE_STOCK,
                 "custom_type_dintervention": "Autre",
                 "titre":                     "Vérification Stock nizar",
                 "starts_on":                 today + " 08:45:00",
@@ -490,15 +756,150 @@ def _create_so_from_pos(pos_name, extra_items=None):
 
 
 def before_save_tache_de_travail(doc, method=None):
-    """Set color to light green when status is Completed."""
+    """Set color + traduire en arabe si client/adresse/sujet ont changé."""
     if doc.status == "Completed":
         doc.color = "#bbf7d0"
+
+    EMPLOYEE = "HR-EMP-00009"
+    if doc.custom_choix_du_staff != EMPLOYEE:
+        return
+
+    client  = doc.custom_client or doc.nom_client or ""
+    adresse = doc.details_adresse or doc.select_address or ""
+    sujet   = doc.subject or ""
+
+    if not (client or adresse or sujet):
+        return
+
+    new_hash = _compute_ar_hash(client, adresse, "", sujet)
+
+    # Lire le hash stocké en DB (doc.ar_hash est None lors de la création)
+    stored_hash = frappe.db.get_value("Tache de travail", doc.name, "ar_hash") or ""
+
+    if stored_hash == new_hash and doc.get("ar_client"):
+        return  # rien n'a changé
+
+    changed = set()
+    hash_changed = stored_hash != new_hash
+    if client  and (hash_changed or not doc.get("ar_client")):  changed.add("client")
+    if adresse and (hash_changed or not doc.get("ar_adresse")): changed.add("adresse")
+    if sujet   and (hash_changed or not doc.get("ar_sujet")):   changed.add("sujet")
+
+    if not changed:
+        return
+
+    try:
+        translations = _translate_ar_fields(client, adresse, "", changed, sujet)
+    except Exception as e:
+        frappe.log_error(frappe.get_traceback(), "before_save_tache_de_travail")
+        frappe.throw(f"Erreur traduction arabe : {e}")
+
+    if translations:
+        # Écrire directement sur doc — sauvegardé avec le reste du document
+        doc.ar_client  = translations.get("ar_client",  "")
+        doc.ar_adresse = translations.get("ar_adresse", "")
+        doc.ar_sujet   = translations.get("ar_sujet",   "")
+        doc.ar_hash    = new_hash
+        # Mémoriser pour propager après save
+        doc._ar_translations_to_propagate = (translations, new_hash)
+    else:
+        frappe.msgprint(
+            "⚠️ Traduction arabe échouée — vérifiez les paramètres OpenAI (AI Settings).",
+            alert=True, indicator="orange"
+        )
+
+
+def after_save_tache_de_travail(doc, method=None):
+    """Propager toutes les données (ar_* + client/adresse/tel) aux lignes Intervention après save."""
+    try:
+        client  = doc.custom_client or doc.nom_client or ""
+        adresse = doc.details_adresse or doc.select_address or ""
+        tel     = doc.tel or ""
+        heure   = str(doc.starts_on) if doc.starts_on else ""
+
+        # Toujours mettre à jour client/adresse/tel/heure (changements sans traduction)
+        frappe.db.sql("""
+            UPDATE `tabIntervention`
+            SET client  = %s,
+                adresse = %s,
+                tel     = %s,
+                heure   = %s
+            WHERE (tache_de_travail = %s OR source_task = %s)
+        """, (client, adresse, tel, heure, doc.name, doc.name))
+
+        # Propager les traductions ar_* si elles ont été recalculées
+        data = getattr(doc, "_ar_translations_to_propagate", None)
+        if data:
+            translations, new_hash = data
+            frappe.db.sql("""
+                UPDATE `tabIntervention`
+                SET ar_client      = %s,
+                    ar_adresse     = %s,
+                    ar_sujet       = %s,
+                    ar_hash        = %s,
+                    nouvelle_tache = 1
+                WHERE (tache_de_travail = %s OR source_task = %s)
+                AND   ar_hash != %s
+            """, (
+                translations.get("ar_client",  ""),
+                translations.get("ar_adresse", ""),
+                translations.get("ar_sujet",   ""),
+                new_hash,
+                doc.name, doc.name,
+                new_hash,
+            ))
+
+        frappe.db.commit()
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "after_save_tache_de_travail")
+
+
+def _annuler_tache_et_commande(tache_name, so_name):
+    """
+    Annule la Tache de travail, sa commande (Sales Order) et le bon de livraison
+    lié, en ignorant les contraintes de liens.
+    """
+    # 1. Annuler le bon de livraison lié à la commande
+    if so_name and frappe.db.exists("Sales Order", so_name):
+        dn_names = frappe.get_all(
+            "Delivery Note Item",
+            filters={"against_sales_order": so_name, "docstatus": ["!=", 2]},
+            fields=["distinct parent"],
+            as_list=True,
+        )
+        for (dn_name,) in dn_names:
+            try:
+                dn = frappe.get_doc("Delivery Note", dn_name)
+                if dn.docstatus == 1:
+                    dn.flags.ignore_permissions = True
+                    dn.flags.ignore_links = True
+                    dn.cancel()
+            except Exception as e:
+                frappe.log_error(f"Annulation BL {dn_name}: {str(e)}", "annuler_tache")
+
+        # 2. Annuler la commande
+        try:
+            so = frappe.get_doc("Sales Order", so_name)
+            if so.docstatus == 1:
+                so.flags.ignore_permissions = True
+                so.flags.ignore_links = True
+                so.cancel()
+        except Exception as e:
+            frappe.log_error(f"Annulation SO {so_name}: {str(e)}", "annuler_tache")
+
+    # 3. Annuler la Tache de travail
+    if tache_name and frappe.db.exists("Tache de travail", tache_name):
+        try:
+            frappe.db.set_value("Tache de travail", tache_name, "status", "Cancelled")
+        except Exception as e:
+            frappe.log_error(f"Annulation tache {tache_name}: {str(e)}", "annuler_tache")
 
 
 def before_submit_mes_interventions(doc, method=None):
     """
     Triggered automatically on submit of Mes Interventions Employe.
     For each intervention row:
+      0. Si annule=1 → annule tache + commande + BL, skip le reste.
       1. Attaches photo1/photo2/photo3 to the Tache de travail.
       2. Updates google_map on the Tache de travail if not already set.
       3. Sales Order logic:
@@ -517,6 +918,12 @@ def before_submit_mes_interventions(doc, method=None):
             task = frappe.get_doc("Tache de travail", row.tache_de_travail)
         except Exception as e:
             results["errors"].append(f"Tâche introuvable {row.tache_de_travail}: {str(e)}")
+            continue
+
+        # 0. Si la ligne est annulée → annule tache + commande + BL et passe à la suivante
+        if row.annule:
+            so_to_cancel = row.commande or task.get("commande_client") or ""
+            _annuler_tache_et_commande(row.tache_de_travail, so_to_cancel)
             continue
 
         task_changed = False
@@ -617,6 +1024,146 @@ def before_submit_mes_interventions(doc, method=None):
             "before_submit_mes_interventions errors"
         )
     return results
+
+
+@frappe.whitelist()
+def delete_doc_nizar_today():
+    """Supprime le doc Nizar du jour pour pouvoir le recréer proprement."""
+    today = frappe.utils.today()
+    rows = frappe.db.sql(
+        "SELECT name FROM `tabMes Interventions Employe` WHERE `employé`='HR-EMP-00009' AND date=%s",
+        (today,), as_dict=True
+    )
+    deleted = []
+    for r in rows:
+        frappe.delete_doc("Mes Interventions Employe", r.name, force=True, ignore_permissions=True)
+        deleted.append(r.name)
+    frappe.db.commit()
+    return {"deleted": deleted}
+
+
+@frappe.whitelist()
+def count_tasks_today():
+    """Compte les tâches de Nizar pour aujourd'hui."""
+    today = frappe.utils.today()
+    count = frappe.db.sql(
+        "SELECT COUNT(*) as nb FROM `tabTache de travail` WHERE custom_choix_du_staff='HR-EMP-00009' AND starts_on BETWEEN %(a)s AND %(b)s AND status != 'Cancelled'",
+        {"a": today + " 00:00:00", "b": today + " 23:59:59"},
+        as_dict=True
+    )
+    return {"today": today, "count": count[0]["nb"] if count else 0}
+
+
+@frappe.whitelist()
+def check_first_ar():
+    """Vérifie les 3 premières lignes traduites en DB."""
+    rows = frappe.db.sql(
+        "SELECT name, client, ar_client, ar_adresse, ar_hash FROM `tabIntervention` WHERE ar_hash IS NOT NULL LIMIT 3",
+        as_dict=True
+    )
+    return rows
+
+
+@frappe.whitelist()
+def list_docs_nizar():
+    """Liste les docs Mes Interventions Employe pour Nizar."""
+    rows = frappe.db.sql(
+        "SELECT name, date FROM `tabMes Interventions Employe` WHERE `employé`='HR-EMP-00009' ORDER BY date DESC LIMIT 5",
+        as_dict=True
+    )
+    return rows
+
+
+@frappe.whitelist()
+def debug_sync(doc_name):
+    """Appelle sync_interventions et retourne un aperçu des ar_translations."""
+    result = sync_interventions(doc_name)
+    ar = result.get("ar_translations", {})
+    # Retourner seulement les 3 premières entrées pour lisibilité
+    sample = dict(list(ar.items())[:3])
+    return {"total_rows": len(ar), "sample": sample, "added": result.get("added"), "removed": result.get("removed")}
+
+
+@frappe.whitelist()
+def reset_ar_cache():
+    """Réinitialise le cache de traduction arabe pour forcer une re-traduction."""
+    frappe.db.sql("UPDATE `tabIntervention` SET ar_hash=NULL, ar_client=NULL, ar_adresse=NULL, ar_remarque=NULL, ar_sujet=NULL")
+    frappe.db.commit()
+    return {"reset": True}
+
+
+@frappe.whitelist()
+def test_translation():
+    """Test direct de la traduction OpenAI — retourne le résultat ou l'erreur."""
+    try:
+        result = _translate_ar_fields(
+            client="Amal Hammouda",
+            adresse="El Nasr 2, Ariana, Tunisia",
+            remarque="test",
+            changed_fields={"client", "adresse", "remarque"},
+            sujet="صيانة"
+        )
+        return {"ok": True, "result": result}
+    except Exception as e:
+        import traceback
+        return {"ok": False, "error": str(e), "traceback": traceback.format_exc()}
+
+
+@frappe.whitelist()
+def force_translate_nizar():
+    """Force la traduction de toutes les lignes des docs récents de Nizar."""
+    docs = frappe.db.sql(
+        "SELECT name FROM `tabMes Interventions Employe` WHERE `employé`='HR-EMP-00009' ORDER BY date DESC LIMIT 3",
+        as_dict=True
+    )
+    total = 0
+    for d in docs:
+        result = force_translate_doc(d.name)
+        total += result.get("translated", 0)
+    return {"docs_processed": len(docs), "total_translated": total}
+
+
+@frappe.whitelist()
+def force_translate_doc(doc_name):
+    """Force la traduction de toutes les lignes d'un doc (bench execute)."""
+    doc = frappe.get_doc("Mes Interventions Employe", doc_name)
+    translated_count = 0
+    errors = []
+    for row in doc.tache:
+        source = row.tache_de_travail or row.source_task
+        if not source:
+            continue
+        task = frappe.db.get_value("Tache de travail", source, [
+            "custom_client", "nom_client", "details_adresse", "select_address",
+            "rapport_visite", "subject"
+        ], as_dict=True) or {}
+        client   = task.get("custom_client") or task.get("nom_client") or row.client or ""
+        adresse  = task.get("details_adresse") or task.get("select_address") or row.adresse or ""
+        remarque = task.get("rapport_visite") or row.remarque or ""
+        sujet    = task.get("subject") or ""
+        if not client and not adresse:
+            continue
+        changed = set()
+        if client:   changed.add("client")
+        if adresse:  changed.add("adresse")
+        if remarque: changed.add("remarque")
+        if sujet:    changed.add("sujet")
+        try:
+            translations = _translate_ar_fields(client, adresse, remarque, changed, sujet)
+            if translations and row.name:
+                new_hash = _compute_ar_hash(client, adresse, remarque, sujet)
+                frappe.db.set_value("Intervention", row.name, {
+                    "ar_client":   translations.get("ar_client", ""),
+                    "ar_adresse":  translations.get("ar_adresse", ""),
+                    "ar_remarque": translations.get("ar_remarque", ""),
+                    "ar_sujet":    translations.get("ar_sujet", ""),
+                    "ar_hash":     new_hash,
+                }, update_modified=False)
+                translated_count += 1
+                frappe.db.commit()
+        except Exception as e:
+            errors.append(f"{row.name}: {str(e)}")
+    return {"translated": translated_count, "errors": errors}
 
 
 @frappe.whitelist()

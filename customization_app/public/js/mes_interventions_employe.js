@@ -13,6 +13,7 @@ frappe.ui.form.on('Mes Interventions Employe', {
 
         frm._sync_interventions_interval = setInterval(() => {
             if (frm._pos_iframe_open) return;
+            if (frm._sync_in_progress) return;  // bloquer si traduction en cours
             if (!frm.is_dirty()) {
                 sync_et_afficher(frm);
             }
@@ -31,12 +32,49 @@ frappe.ui.form.on('Intervention', {
 });
 
 function sync_et_afficher(frm) {
+    if (frm._sync_in_progress) return;  // éviter les appels parallèles
+    frm._sync_in_progress = true;
+
+    // Afficher un bandeau arabe discret pendant la traduction
+    if (!frm._translation_banner) {
+        frm._translation_banner = $(`
+            <div id="translation-banner" style="
+                position:fixed;bottom:16px;left:50%;transform:translateX(-50%);
+                background:#1e293b;color:#f8fafc;
+                padding:8px 18px;border-radius:20px;
+                font-size:13px;z-index:9999;
+                display:flex;align-items:center;gap:8px;
+                box-shadow:0 4px 12px rgba(0,0,0,0.25);
+            ">
+                <span style="animation:spin 1s linear infinite;display:inline-block;">⏳</span>
+                جاري تحديث المعلومات...
+            </div>
+        `).appendTo('body');
+    }
+
     frappe.call({
         method: "customization_app.api.sync_interventions",
         args: { doc_name: frm.doc.name },
         freeze: false,
+        error: function() {
+            // Débloquer même si le serveur renvoie une erreur
+            frm._sync_in_progress = false;
+            if (frm._translation_banner) {
+                frm._translation_banner.remove();
+                frm._translation_banner = null;
+            }
+        },
         callback: function(r) {
-            const added = (r.message && r.message.added) || 0;
+            frm._sync_in_progress = false;
+            if (frm._translation_banner) {
+                frm._translation_banner.remove();
+                frm._translation_banner = null;
+            }
+
+            const added   = (r.message && r.message.added)   || 0;
+            const removed = (r.message && r.message.removed) || 0;
+            // ar_* translations retournées directement par sync_interventions
+            const ar_translations = (r.message && r.message.ar_translations) || {};
 
             if (added > 0) {
                 frappe.show_alert({
@@ -44,10 +82,14 @@ function sync_et_afficher(frm) {
                     indicator: "orange"
                 });
             }
+            if (removed > 0) {
+                frappe.show_alert({
+                    message: removed + " tâche(s) supprimée(s)",
+                    indicator: "red"
+                });
+            }
 
-            // Toujours comparer avec le serveur pour détecter toute nouvelle ligne
-            // (que ce soit ajoutée par sync_interventions ou un autre processus)
-            // Les modifications locales sur les lignes existantes sont préservées
+            // Recharger le document depuis le serveur pour avoir l'état exact
             frappe.call({
                 method: "frappe.client.get",
                 args: { doctype: "Mes Interventions Employe", name: frm.doc.name },
@@ -55,33 +97,82 @@ function sync_et_afficher(frm) {
                 callback: function(res) {
                     if (res.message) {
                         const server_tache = res.message.tache || [];
-                        // Comparer sur tache_de_travail (la vraie clé métier)
-                        // Build a map of server rows by name for fast lookup
+
+                        // Map des lignes serveur par name (row id)
                         const server_map = {};
                         server_tache.forEach(r => { server_map[r.name] = r; });
 
-                        // Update mutable fields on existing local rows from server
-                        const existing_tasks = new Set();
+                        // Map des lignes serveur par tache_de_travail (clé métier)
+                        const server_sources = new Set(
+                            server_tache.map(r => r.tache_de_travail || r.source_task).filter(Boolean)
+                        );
+
+                        // ── 1. Supprimer localement les lignes absentes du serveur ──
+                        frm.doc.tache = (frm.doc.tache || []).filter(row => {
+                            const source = row.tache_de_travail || row.source_task;
+                            // Garder si la ligne est sur le serveur
+                            if (server_map[row.name]) return true;
+                            // Garder si c'est une ligne sans source (saisie manuelle)
+                            if (!source) return true;
+                            // Supprimer si la source n'est plus sur le serveur
+                            return server_sources.has(source);
+                        });
+
+                        // ── 2. Mettre à jour les champs externes sur les lignes existantes ──
+                        const existing_sources = new Set();
                         (frm.doc.tache || []).forEach(row => {
                             const srv = server_map[row.name];
                             if (srv) {
-                                // Sync fields that can be updated externally (POS, etc.)
-                                if (srv.commande)    row.commande    = srv.commande;
-                                if (srv.vente)       row.vente       = srv.vente;
-                                if (srv.google_maps) row.google_maps = srv.google_maps;
-                                if (srv.photo1)      row.photo1      = srv.photo1;
-                                if (srv.photo2)      row.photo2      = srv.photo2;
-                                if (srv.photo3)      row.photo3      = srv.photo3;
+                                const client_changed = srv.client && srv.client !== row.client;
+                                if (client_changed) {
+                                    // Reset complet : le serveur a remplacé le client
+                                    if (frm._row_snapshots) delete frm._row_snapshots[row.name];
+                                    if (frm._totals_cache) {
+                                        delete frm._totals_cache["v:" + row.vente];
+                                        delete frm._totals_cache["c:" + row.commande];
+                                    }
+                                    Object.assign(row, srv);
+                                } else {
+                                    // Champs éditables utilisateur
+                                    if (srv.commande)          row.commande          = srv.commande;
+                                    if (srv.vente)             row.vente             = srv.vente;
+                                    if (srv.google_maps)       row.google_maps       = srv.google_maps;
+                                    if (srv.photo1)            row.photo1            = srv.photo1;
+                                    if (srv.photo2)            row.photo2            = srv.photo2;
+                                    if (srv.photo3)            row.photo3            = srv.photo3;
+                                    if (srv.nb_appels)         row.nb_appels         = srv.nb_appels;
+                                    if (srv.nb_appels_detail)  row.nb_appels_detail  = srv.nb_appels_detail;
+                                    if (srv.annule != null)    row.annule            = srv.annule;
+                                    // Données source
+                                    row.client  = srv.client  || row.client  || "";
+                                    row.adresse = srv.adresse || row.adresse || "";
+                                    row.tel     = srv.tel     || row.tel     || "";
+                                    row.heure   = srv.heure   || row.heure   || "";
+                                    // Badge جديد
+                                    row.nouvelle_tache = srv.nouvelle_tache || 0;
+                                }
                             }
-                            existing_tasks.add(row.tache_de_travail || row.source_task);
+                            // Traductions arabes : priorité ar_translations du sync (source directe DB)
+                            const ar = ar_translations[row.name] || {};
+                            row.ar_client   = ar.ar_client   || (srv && srv.ar_client)   || row.ar_client   || "";
+                            row.ar_adresse  = ar.ar_adresse  || (srv && srv.ar_adresse)  || row.ar_adresse  || "";
+                            row.ar_remarque = ar.ar_remarque || (srv && srv.ar_remarque) || row.ar_remarque || "";
+                            row.ar_sujet    = ar.ar_sujet    || (srv && srv.ar_sujet)    || row.ar_sujet    || "";
+                            existing_sources.add(row.tache_de_travail || row.source_task);
                         });
 
-                        const new_rows = server_tache.filter(row =>
-                            !existing_tasks.has(row.tache_de_travail) &&
-                            !existing_tasks.has(row.source_task)
-                        );
+                        // ── 3. Ajouter les nouvelles lignes du serveur ──
                         if (!frm.doc.tache) frm.doc.tache = [];
-                        new_rows.forEach(row => {
+                        server_tache.filter(row =>
+                            !existing_sources.has(row.tache_de_travail) &&
+                            !existing_sources.has(row.source_task)
+                        ).forEach(row => {
+                            // Injecter ar_* depuis sync si disponible
+                            const ar = ar_translations[row.name] || {};
+                            row.ar_client   = ar.ar_client   || row.ar_client   || "";
+                            row.ar_adresse  = ar.ar_adresse  || row.ar_adresse  || "";
+                            row.ar_remarque = ar.ar_remarque || row.ar_remarque || "";
+                            row.ar_sujet    = ar.ar_sujet    || row.ar_sujet    || "";
                             frm.doc.tache.push(row);
                             if (frm._row_snapshots) delete frm._row_snapshots[row.name];
                         });
@@ -224,20 +315,49 @@ function afficher_cartes_taches(frm) {
         const commande_total = has_commande ? (frm._totals_cache["c:" + commande_client] || null) : null;
         const fmt_amount = (v) => v != null ? format_currency(v, frappe.boot.sysdefaults.currency) : "";
 
-        const client = row.client || "Client non défini";
-        const adresse = row.adresse || "Adresse non définie";
-        const remarque = row.remarque || "";
-        const sujet = (frm._row_snapshots[row.name] && frm._row_snapshots[row.name].sujet) || "";
+        const client  = row.ar_client  || row.client  || "العميل غير محدد";
+        const adresse = row.ar_adresse || row.adresse || "العنوان غير محدد";
+        const remarque = row.ar_remarque || row.remarque || "";
+        const sujet_raw = (frm._row_snapshots[row.name] && frm._row_snapshots[row.name].sujet) || "";
+        const sujet = row.ar_sujet || sujet_raw;
         const heure_raw = row.heure || "";
         // Extract HH:MM from datetime string "2026-05-03 09:30:00" → "09:30"
         const heure = heure_raw.includes(" ") ? heure_raw.split(" ")[1].slice(0, 5) : heure_raw.slice(0, 5);
-        const intervention_label = row.intervention || "";
+        const intervention_translations = {
+            "entretien":    "صيانة",
+            "installation": "تركيب",
+            "réparation":   "تصليح",
+            "reparation":   "تصليح",
+            "livraison":    "توصيل",
+            "visite":       "زيارة",
+            "autre":        "حاجة أخرى",
+        };
+        const intervention_label = intervention_translations[(row.intervention || "").toLowerCase()] || row.intervention || "";
 
-        const bg_style = is_finished
-            ? "background:#dcfce7;border:1px solid #86efac;"
-            : row.nouvelle_tache
-                ? "background:#fff7ed;border:1px solid #fed7aa;"
-                : "background:#fff;border:1px solid #e5e7eb;";
+        // Vérifier si tous les numéros ont été appelés au moins une fois
+        let appels_map_check = {};
+        try { appels_map_check = JSON.parse(row.nb_appels_detail || "{}"); } catch(e) {}
+        const phones_list = row.tel ? row.tel.split(/\r?\n/).map(p => p.trim().replace(/\s+/g,'')).filter(p => p !== '') : [];
+        const all_called = phones_list.length > 0 && phones_list.every(p => (appels_map_check[p] || 0) >= 1);
+        const is_annule = !!(row.annule);
+
+        const bg_style = is_annule
+            ? "background:#e5e7eb;border:1px solid #9ca3af;opacity:0.75;"
+            : is_finished
+                ? "background:#dcfce7;border:1px solid #86efac;"
+                : row.nouvelle_tache
+                    ? "background:#fff7ed;border:1px solid #fed7aa;"
+                    : "background:#fff;border:1px solid #e5e7eb;";
+
+        const annule_badge = is_annule ? `
+            <span style="
+                background:#6b7280;
+                color:white;
+                padding:2px 6px;
+                border-radius:6px;
+                font-size:10px;
+                margin-left:6px;
+            ">ملغي</span>` : "";
 
         const new_badge = row.nouvelle_tache ? `
             <span style="
@@ -247,10 +367,13 @@ function afficher_cartes_taches(frm) {
                 border-radius:6px;
                 font-size:10px;
                 margin-left:6px;
-            ">NEW</span>
+            ">جديد</span>
         ` : "";
 
         let phone_buttons = "";
+        // Compteur par numéro : {"0612345678": 2, "0698765432": 1}
+        let appels_map = {};
+        try { appels_map = JSON.parse(row.nb_appels_detail || "{}"); } catch(e) {}
 
         if (row.tel) {
             const phones = row.tel
@@ -258,13 +381,21 @@ function afficher_cartes_taches(frm) {
                 .map(p => p.trim())
                 .filter(p => p !== "");
 
-            phones.forEach(tel => {
+            phones.forEach((tel) => {
                 const clean_tel = tel.replace(/\s+/g, "");
+                const count = appels_map[clean_tel] || 0;
+                const btn_color = count > 0
+                    ? "background:#22c55e;color:#fff;border-color:#16a34a;"
+                    : "background:#0ea5e9;color:#fff;border-color:#0284c7;";
+                const badge = count > 0
+                    ? `<span style="background:rgba(0,0,0,0.2);border-radius:10px;padding:0 5px;margin-left:4px;font-size:10px;">${count}</span>`
+                    : "";
 
                 phone_buttons += `
-                    <a href="tel:${clean_tel}" class="btn btn-xs btn-info" style="font-weight:600;">
-                        📞 ${tel}
-                    </a>
+                    <button class="btn btn-xs btn-tel" data-tel="${clean_tel}"
+                        style="${btn_color}font-weight:600;">
+                        📞 ${tel}${badge}
+                    </button>
                 `;
             });
         }
@@ -282,8 +413,9 @@ function afficher_cartes_taches(frm) {
                 <div>
                     <div style="margin-bottom:6px;">
                         <strong>
-                            ${is_finished ? "👏 " : ""}${intervention_label ? intervention_label + " - " : ""}${heure ? heure + " - " : ""}${client}
+                            ${is_finished ? "👏 " : ""}${intervention_label ? intervention_label + " - " : ""}${heure ? "🕐 " + heure + " - " : ""}${client}
                             ${new_badge}
+                            ${annule_badge}
                         </strong>
                     </div>
 
@@ -305,8 +437,8 @@ function afficher_cartes_taches(frm) {
 
                     ${(vente_total != null || commande_total != null) ? `
                         <div style="margin-top:6px;display:flex;gap:10px;flex-wrap:wrap;">
-                            ${vente_total   != null ? `<span style="background:#dcfce7;color:#166534;padding:2px 8px;border-radius:6px;font-size:13px;font-weight:600;">🧾 Vente: ${fmt_amount(vente_total)}</span>` : ""}
-                            ${commande_total != null ? `<span style="background:#e0e7ff;color:#3730a3;padding:2px 8px;border-radius:6px;font-size:13px;font-weight:600;">📦 Commande: ${fmt_amount(commande_total)}</span>` : ""}
+                            ${vente_total   != null ? `<span style="background:#dcfce7;color:#166534;padding:2px 8px;border-radius:6px;font-size:13px;font-weight:600;">🧾 بيعة: ${fmt_amount(vente_total)}</span>` : ""}
+                            ${commande_total != null ? `<span style="background:#e0e7ff;color:#3730a3;padding:2px 8px;border-radius:6px;font-size:13px;font-weight:600;">📦 كوموند: ${fmt_amount(commande_total)}</span>` : ""}
                         </div>
                     ` : ``}
                 </div>
@@ -315,13 +447,13 @@ function afficher_cartes_taches(frm) {
                     <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;">
                         ${phone_buttons}
 
-                        ${has_maps ? `<button class="btn btn-xs btn-primary btn-nav">📍 Maps</button>` : ``}
-                        ${!has_maps ? `<button class="btn btn-xs btn-gps" style="background:#7c3aed;color:#fff;border-color:#7c3aed;">🛰️ GPS</button>` : ``}
+                        ${has_maps ? `<button class="btn btn-xs btn-primary btn-nav">📍 ڨوڨل مابس</button>` : ``}
+                        ${!has_maps ? `<button class="btn btn-xs btn-gps" style="background:#7c3aed;color:#fff;border-color:#7c3aed;">🛰️ جي بي إس</button>` : ``}
 
                         ${!has_vente ? `
-                            <button class="btn btn-xs btn-warning btn-cmd">🛒 Vente</button>
+                            <button class="btn btn-xs btn-warning btn-cmd">🛒 بيعة</button>
                         ` : `
-                            <button class="btn btn-xs btn-success btn-open-sale">✅ Vendu</button>
+                            <button class="btn btn-xs btn-success btn-open-sale">✅ مباع</button>
                         `}
 
                         ${has_commande ? `
@@ -338,13 +470,57 @@ function afficher_cartes_taches(frm) {
                         <button class="btn btn-xs ${row.photo2 ? 'btn-success' : 'btn-default'} btn-photo2">📷 2</button>
                         <button class="btn btn-xs ${row.photo3 ? 'btn-success' : 'btn-default'} btn-photo3">📷 3</button>
 
-                        <button class="btn btn-xs btn-danger btn-reset" title="Réinitialiser cette carte">🗑️ Reset</button>
+                        ${all_called && !is_annule && vente_total == null ? `<button class="btn btn-xs btn-battel" style="background:#9ca3af;color:#fff;border-color:#6b7280;font-weight:600;">بطّل</button>` : ''}
+                        ${is_annule ? `<button class="btn btn-xs btn-ma-battel" style="background:#22c55e;color:#fff;border-color:#16a34a;font-weight:600;">ما بطلش</button>` : ''}
+
+                        <button class="btn btn-xs btn-danger btn-reset" title="Réinitialiser cette carte">🗑️ ريسات</button>
                     </div>
                 </div>
             </div>
         `);
 
         container.append(card);
+
+        // ── Boutons téléphone : compteur d'appels par numéro ──────────────────
+        card.find(".btn-tel").on("click", function(e) {
+            e.preventDefault();
+            const tel = $(this).data("tel");
+
+            // Lire le map actuel et incrémenter ce numéro
+            let map = {};
+            try { map = JSON.parse(row.nb_appels_detail || "{}"); } catch(e) {}
+            map[tel] = (map[tel] || 0) + 1;
+            const detail_json = JSON.stringify(map);
+
+            // Sauvegarder nb_appels_detail et nb_appels (total)
+            const total = Object.values(map).reduce((a, b) => a + b, 0);
+            frappe.model.set_value(row.doctype, row.name, "nb_appels_detail", detail_json);
+            frappe.model.set_value(row.doctype, row.name, "nb_appels", total);
+            frm.dirty();
+            autosave(frm);
+
+            // Ouvrir l'appel
+            window.location.href = "tel:" + tel;
+
+            // Re-rendre pour mettre à jour couleur et badge
+            setTimeout(() => afficher_cartes_taches(frm), 600);
+        });
+
+        card.find(".btn-battel").on("click", function(e) {
+            e.preventDefault();
+            frappe.model.set_value(row.doctype, row.name, "annule", 1);
+            frm.dirty();
+            autosave(frm);
+            setTimeout(() => afficher_cartes_taches(frm), 400);
+        });
+
+        card.find(".btn-ma-battel").on("click", function(e) {
+            e.preventDefault();
+            frappe.model.set_value(row.doctype, row.name, "annule", 0);
+            frm.dirty();
+            autosave(frm);
+            setTimeout(() => afficher_cartes_taches(frm), 400);
+        });
 
         card.find(".btn-nav").on("click", function(e) {
             e.preventDefault();
@@ -356,7 +532,7 @@ function afficher_cartes_taches(frm) {
             e.preventDefault();
 
             if (!navigator.geolocation) {
-                frappe.msgprint("GPS non supporté.");
+                frappe.msgprint("جي بي إس غير مدعوم.");
                 return;
             }
 
@@ -370,7 +546,7 @@ function afficher_cartes_taches(frm) {
 
                 autosave(frm);
 
-                frappe.msgprint("GPS enregistré.");
+                frappe.msgprint("تم حفظ جي بي إس.");
                 setTimeout(() => afficher_cartes_taches(frm), 400);
             });
         });
