@@ -188,40 +188,11 @@ frappe.views.CalendarViewList = class CalendarViewList extends frappe.views.Cale
 			eventResize: function (event, delta, revertFunc) {
 				me.update_event(event, revertFunc);
 			},
-            // Add custom CSS for "All Day" section, but only in agendaDay or agendaWeek views
-            // viewRender: function(view, element) {
-            //     console.log("Rendering view:", view.name); // Log the current view type
-
-            //     // Apply the styles only for the agendaWeek or agendaDay views
-            //     if (view.name === "agendaWeek" || view.name === "agendaDay") {
-            //         console.log("Customizing 'All Day' Section for Weekly and Daily Views");
-            //                  // Find the "All Day" section
-            //         const allDaySection = element.find('.fc-day-grid');
-
-            //         // Check if the element is found
-            //         if (allDaySection.length) {
-            //             // Increase the height and font size of the 'All Day' section
-            //             allDaySection.css({
-            //                 // "font-size": "18px",  // Increase font size for the header
-            //                 // "padding": "20px 0",  // Increase padding to make the area taller
-            //                 "height": "100px",  // Set the height of the 'All Day' section
-            //                 // "background-color": "#f2f2f2",  // Optional: Add a background color
-            //             });
-            //         } else {
-            //             console.log("Could not find the All Day section.");
-            //         }
-            //                         // Find and modify the widget content width
-            //         const widgetContent = element.find('.fc-widget-content');
-            //         if (widgetContent.length) {
-            //             widgetContent.css({
-            //                 "height": "100px",  // Set the height for the widget content
-            //                 "margin": "0 auto",  // Center the content
-            //             });
-            //         } else {
-            //             console.log("Could not find the widget content section.");
-            //         }
-            // }
-            // },
+            viewRender: function(view, element) {
+                if (me.list_view && me.list_view.calendar_name === 'Calendrier de travail') {
+                    setTimeout(() => _inject_generer_bl_btn(), 150);
+                }
+            },
 			select: function (startDate, endDate, jsEvent, view) {
 				if (view.name === "month" && endDate - startDate === 86400000) {
 					// detect single day click in month view
@@ -294,15 +265,8 @@ function hexToRgba(hex, opacity) {
 frappe.views.Calendar = frappe.views.CalendarViewList;
 
 // ── Bouton "Générer BL" dans le calendrier Tache de travail ──────────────────
-frappe.listview_settings["Tache de travail"] = frappe.listview_settings["Tache de travail"] || {};
-frappe.listview_settings["Tache de travail"].onload = function(listview) {
-    // Attendre que la toolbar de la vue calendrier soit prête
-    setTimeout(function() {
-        _inject_generer_bl_btn(listview);
-    }, 800);
-};
 
-function _inject_generer_bl_btn(listview) {
+function _inject_generer_bl_btn() {
     // Ne pas injecter deux fois
     if (document.getElementById("btn-generer-bl")) return;
 
@@ -311,7 +275,7 @@ function _inject_generer_bl_btn(listview) {
     const target = calHeader || document.querySelector(".fc-toolbar");
     if (!target) {
         // Réessayer si le calendrier n'est pas encore rendu
-        setTimeout(() => _inject_generer_bl_btn(listview), 600);
+        setTimeout(() => _inject_generer_bl_btn(), 600);
         return;
     }
 
@@ -346,12 +310,15 @@ function _open_generer_bl_dialog() {
                 label: "Date des interventions",
                 reqd: 1,
                 default: today,
+                onchange: function() {
+                    _load_employees(d);
+                },
             },
             { fieldtype: "Section Break", fieldname: "sb_emp", label: "Employés avec tâches ouvertes" },
             {
                 fieldname: "employees_html",
                 fieldtype: "HTML",
-                options: "<div id='genbl-employees-container'><i>Sélectionnez une date...</i></div>",
+                options: "<div class=\"genbl-emp-wrap\"></div>",
             },
         ],
         primary_action_label: "Générer & Imprimer",
@@ -362,20 +329,21 @@ function _open_generer_bl_dialog() {
 
     d.show();
 
-    // Charger les employés dès l'ouverture
-    d.fields_dict.date.df.onchange = function() {
+    // Charger les employés après que le dialog est rendu avec la valeur par défaut
+    setTimeout(() => {
+        if (!d.get_value("date")) {
+            d.set_value("date", today);
+        }
         _load_employees(d);
-    };
-    setTimeout(() => _load_employees(d), 200);
+    }, 800);
 }
 
 function _load_employees(dialog) {
     const date = dialog.get_value("date");
     if (!date) return;
 
-    const container = document.getElementById("genbl-employees-container");
-    if (!container) return;
-    container.innerHTML = "<i>Chargement...</i>";
+    const $wrap = dialog.fields_dict.employees_html.$wrapper;
+    $wrap.html("<i>Chargement...</i>");
 
     frappe.call({
         method: "customization_app.generer_bl.get_taches_par_date",
@@ -383,7 +351,7 @@ function _load_employees(dialog) {
         callback: function(r) {
             const employees = (r.message || []);
             if (!employees.length) {
-                container.innerHTML = `<div style="color:#888;padding:8px">Aucune tâche ouverte trouvée pour le ${date}</div>`;
+                $wrap.html(`<div style="color:#888;padding:8px">Aucune tâche ouverte trouvée pour le ${date}</div>`);
                 return;
             }
 
@@ -409,18 +377,18 @@ function _load_employees(dialog) {
                     </td>
                     <td style="padding:6px 8px;text-align:center">${nbTaches}</td>
                     <td style="padding:6px 8px">
-                        <select id="vehicle-${idx}" style="width:100%;padding:4px;border:1px solid #d1d5db;border-radius:4px">
+                        <select data-idx="${idx}" class="genbl-vehicle-sel" style="width:100%;padding:4px;border:1px solid #d1d5db;border-radius:4px">
                             <option value="">-- Véhicule --</option>
                         </select>
                     </td>
                     <td style="padding:6px 8px;text-align:center">
-                        <input type="checkbox" id="chk-${idx}" checked style="width:16px;height:16px">
+                        <input type="checkbox" data-idx="${idx}" class="genbl-chk" checked style="width:16px;height:16px">
                     </td>
                 </tr>`;
             });
 
             html += "</tbody></table>";
-            container.innerHTML = html;
+            $wrap.html(html);
 
             // Charger les options véhicule pour chaque employé
             frappe.db.get_list("Vehicle", {
@@ -428,7 +396,7 @@ function _load_employees(dialog) {
                 limit: 50,
             }).then(vehicles => {
                 employees.forEach((emp, idx) => {
-                    const sel = document.getElementById(`vehicle-${idx}`);
+                    const sel = $wrap.find(`.genbl-vehicle-sel[data-idx="${idx}"]`)[0];
                     if (!sel) return;
                     vehicles.forEach(v => {
                         const opt = document.createElement("option");
@@ -452,12 +420,14 @@ function _do_generer_bl(dialog) {
         return;
     }
 
-    // Collecter les sélections
+    const $wrap = dialog.fields_dict.employees_html.$wrapper;
+
+    // Collecter les sélections via data-idx attributes
     const selected = [];
     employees.forEach((emp, idx) => {
-        const chk = document.getElementById(`chk-${idx}`);
+        const chk = $wrap.find(`.genbl-chk[data-idx="${idx}"]`)[0];
         if (!chk || !chk.checked) return;
-        const sel = document.getElementById(`vehicle-${idx}`);
+        const sel = $wrap.find(`.genbl-vehicle-sel[data-idx="${idx}"]`)[0];
         const vehicle = sel ? sel.value : (emp.default_vehicle || "");
         selected.push({ employee: emp.employee, vehicle });
     });
@@ -478,7 +448,8 @@ function _do_generer_bl(dialog) {
         if (done >= selected.length) {
             frappe.hide_progress();
             if (allDns.length) {
-                _print_all_dns(allDns);
+                const virtuels = allDns.filter(d => d.virtual);
+                _print_all_dns(allDns, virtuels);
             } else {
                 frappe.msgprint("Aucun BL généré.");
             }
@@ -493,7 +464,7 @@ function _do_generer_bl(dialog) {
                 done++;
                 frappe.show_progress("Génération des BL...", done, selected.length);
 
-                if (r.message) {
+        if (r.message) {
                     const { dns_reels, dns_virtuels, employee_name } = r.message;
                     (dns_reels || []).forEach(dn => allDns.push({ name: dn, virtual: false, employee_name }));
                     (dns_virtuels || []).forEach(dn => allDns.push({ name: dn, virtual: true, employee_name }));
@@ -511,25 +482,49 @@ function _do_generer_bl(dialog) {
     processNext();
 }
 
-function _print_all_dns(dns) {
+function _delete_virtuels(virtuels) {
+    if (!virtuels.length) return;
+    let i = 0;
+    function deleteNext() {
+        if (i >= virtuels.length) return;
+        frappe.call({
+            method: "customization_app.generer_bl.delete_virtual_dn",
+            args: { name: virtuels[i].name },
+            callback: function() { i++; deleteNext(); },
+            error:    function() { i++; deleteNext(); },
+        });
+    }
+    deleteNext();
+}
+
+function _print_all_dns(dns, virtuels) {
     if (!dns.length) return;
 
-    // Ouvrir chaque DN dans un nouvel onglet pour impression (format Aqua World BL)
+    // Frappe's download_multi_pdf merges all docs into a single PDF
+    const names = JSON.stringify(dns.map(d => d.name));
+    const params = new URLSearchParams({
+        doctype: "Delivery Note",
+        name: names,
+        format: "Aqua World BL",
+        no_letterhead: 0,
+        letterhead: "",
+        lang: "fr",
+    });
+    const url = `/api/method/frappe.utils.print_format.download_multi_pdf?${params.toString()}`;
+
     frappe.msgprint({
         title: "BLs générés",
-        message: `${dns.length} bon(s) de livraison prêts. Ouverture en cours...`,
+        message: `${dns.length} bon(s) de livraison — téléchargement PDF en cours...`,
         indicator: "green",
     });
 
-    // Petit délai pour que le message soit visible
     setTimeout(() => {
-        dns.forEach((dn, i) => {
-            setTimeout(() => {
-                const url = `/printview?doctype=Delivery%20Note&name=${encodeURIComponent(dn.name)}&format=Aqua%20World%20BL&lang=fr&trigger_print=1`;
-                window.open(url, `_bl_${i}`);
-            }, i * 400);
-        });
-    }, 600);
+        window.open(url, "_bl_print");
+        // Supprimer les BL virtuels (brouillons) après l'impression
+        if (virtuels && virtuels.length) {
+            setTimeout(() => _delete_virtuels(virtuels), 2000);
+        }
+    }, 500);
 }
 
 
