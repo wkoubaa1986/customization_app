@@ -16,9 +16,12 @@ from erpnext.selling.page.point_of_sale.point_of_sale import (
 def get_items(start, page_length, price_list, item_group, pos_profile, search_term=""):
     """
     Override of erpnext get_items.
+    For "Vente Nizar" POS profile:
     - Stock items with actual_qty > 0 in the POS warehouse → shown
     - Non-stock items (services, bundles) → hidden by default
-    - EXCEPT items with show_in_pos_intervention = 1 → always shown
+    For all other POS profiles (fiche client, etc.):
+    - Standard ERPNext behavior: respects hide_unavailable_items setting
+    - All items regardless of stock/bundle status are shown
     """
     warehouse, hide_unavailable_items = frappe.db.get_value(
         "POS Profile", pos_profile, ["warehouse", "hide_unavailable_items"]
@@ -40,10 +43,31 @@ def get_items(start, page_length, price_list, item_group, pos_profile, search_te
 
     lft, rgt = frappe.db.get_value("Item Group", item_group, ["lft", "rgt"])
 
-    bin_join_selection = "LEFT JOIN `tabBin` bin ON bin.item_code = item.name AND bin.warehouse = %(warehouse)s"
+    # Strict stock filter only for Vente Nizar
+    STRICT_STOCK_PROFILES = {"Vente Nizar"}
 
-    # Whitelisted items bypass item_group and stock restrictions.
-    # Non-whitelisted items: must be in item_group tree + item_group_condition + stock > 0.
+    if pos_profile in STRICT_STOCK_PROFILES:
+        bin_join_selection = "LEFT JOIN `tabBin` bin ON bin.item_code = item.name AND bin.warehouse = %(warehouse)s"
+        stock_condition = """
+            AND (
+                item.name IN (
+                    SELECT item_code FROM `tabPOS Profile Item Whitelist`
+                    WHERE parent = %(pos_profile)s AND parenttype = 'POS Profile'
+                )
+                OR (
+                    item.is_stock_item = 1
+                    AND COALESCE(bin.actual_qty, 0) > 0
+                )
+            )"""
+    else:
+        # Standard ERPNext behavior: respect hide_unavailable_items setting
+        if hide_unavailable_items:
+            bin_join_selection = "LEFT JOIN `tabBin` bin ON bin.item_code = item.name"
+            stock_condition = "AND (item.is_stock_item = 0 OR (item.is_stock_item = 1 AND bin.warehouse = %(warehouse)s AND bin.actual_qty > 0))"
+        else:
+            bin_join_selection = ""
+            stock_condition = ""
+
     items_data = frappe.db.sql(
         """
         SELECT
@@ -61,19 +85,10 @@ def get_items(start, page_length, price_list, item_group, pos_profile, search_te
             AND item.has_variants = 0
             AND item.is_sales_item = 1
             AND item.is_fixed_asset = 0
+            AND item.item_group in (SELECT name FROM `tabItem Group` WHERE lft >= {lft} AND rgt <= {rgt})
+            {item_group_condition}
             AND {search_condition}
-            AND (
-                item.name IN (
-                    SELECT item_code FROM `tabPOS Profile Item Whitelist`
-                    WHERE parent = %(pos_profile)s AND parenttype = 'POS Profile'
-                )
-                OR (
-                    item.item_group in (SELECT name FROM `tabItem Group` WHERE lft >= {lft} AND rgt <= {rgt})
-                    {item_group_condition}
-                    AND item.is_stock_item = 1
-                    AND COALESCE(bin.actual_qty, 0) > 0
-                )
-            )
+            {stock_condition}
         ORDER BY
             item.name asc
         LIMIT
@@ -85,6 +100,7 @@ def get_items(start, page_length, price_list, item_group, pos_profile, search_te
             search_condition=search_condition,
             item_group_condition=item_group_condition,
             bin_join_selection=bin_join_selection,
+            stock_condition=stock_condition,
         ),
         {"warehouse": warehouse, "pos_profile": pos_profile},
         as_dict=1,

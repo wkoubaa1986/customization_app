@@ -1200,3 +1200,22 @@ def get_customer_ristourne_dashboard(customer):
         "current_ristourne": current_ristourne,
         "ristourne_situation": ristourne_situation
     }
+
+@frappe.whitelist()
+def get_user_pos_profile():
+    """Retourne le POS Profile assigné à l'utilisateur courant, ou Vente Nizar par défaut."""
+    DEFAULT_POS_PROFILE = "Vente Nizar"
+    user = frappe.session.user
+    if not user or user == "Guest":
+        return DEFAULT_POS_PROFILE
+    # Chercher un profil assigné directement à cet utilisateur
+    profile = frappe.db.get_value(
+        "POS Profile User",
+        {"user": user},
+        "parent"
+    )
+    if not profile:
+        # Fallback : vérifier si le profil par défaut existe
+        if frappe.db.exists("POS Profile", DEFAULT_POS_PROFILE):
+            return DEFAULT_POS_PROFILE
+    return profile or DEFAULT_POS_PROFILE

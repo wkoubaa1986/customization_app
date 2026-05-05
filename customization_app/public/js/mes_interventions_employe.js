@@ -595,30 +595,63 @@ function afficher_cartes_taches(frm) {
             $(".tache-card").not(card[0]).hide();
             frm._pos_iframe_open = true;
 
-            let iframe_el = $(`<iframe src="/app/point-of-sale" style="width:100%; height:680px; border:none; display:block;"></iframe>`);
-
-            let pos_container = $(`
-                <div id="${container_id}" style="margin-top:10px; border:2px solid #cbd5e0; border-radius:8px; overflow:hidden;">
-                    <div style="display:flex; align-items:center; background:#2d3748; padding:8px 16px;">
-                        <span style="color:white; font-weight:bold; flex:1;">Point de vente — ${row.client}</span>
-                        <button class="pos-inline-close" style="background:#e74c3c; color:white; border:none; padding:4px 14px; border-radius:4px; cursor:pointer; font-size:13px;">✕ Fermer</button>
-                    </div>
-                </div>
-            `);
-
-            pos_container.append(iframe_el);
-            card.after(pos_container);
-
-            pos_container.find(".pos-inline-close").on("click", function () {
-                pos_container.remove();
-                // Réafficher toutes les cartes et reprendre le refresh
-                $(".tache-card").show();
-                frm._pos_iframe_open = false;
-                // Recharger pour récupérer le n° de vente créé
-                setTimeout(() => sync_et_afficher(frm), 500);
+            // Récupérer le POS profile de l'utilisateur via ristourne.py (a accès admin)
+            frappe.call({
+                method: "booking_ristourne.ristourne.get_user_pos_profile",
+                freeze: false,
+                error: function() { open_pos_iframe("Vente Nizar"); },
+                callback: function(r) {
+                    open_pos_iframe(r.message || "Vente Nizar");
+                }
             });
 
-            pos_container[0].scrollIntoView({ behavior: "smooth", block: "start" });
+            function open_pos_iframe(posProfile) {
+                // S'assurer qu'une POS Opening Entry ouverte existe pour ce profil
+                frappe.call({
+                    method: "booking_ristourne.ristourne.ensure_pos_opening_entry",
+                    args: { pos_profile: posProfile },
+                    freeze: false,
+                    error: function() { render_pos_iframe(posProfile); },
+                    callback: function() { render_pos_iframe(posProfile); }
+                });
+            }
+
+            function render_pos_iframe(posProfile) {
+                const posUrl = `/app/point-of-sale?pos_profile=${encodeURIComponent(posProfile)}`;
+                let iframe_el = $(`<iframe src="${posUrl}" style="width:100%; height:680px; border:none; display:block;"></iframe>`);
+
+                iframe_el[0].addEventListener('load', function() {
+                    try {
+                        const doc = this.contentDocument || this.contentWindow.document;
+                        if (doc && doc.head) {
+                            const style = doc.createElement('style');
+                            style.textContent = '.net-total-container { display: none !important; } .taxes-container { display: none !important; }';
+                            doc.head.appendChild(style);
+                        }
+                    } catch(e) {}
+                });
+
+                let pos_container = $(`
+                    <div id="${container_id}" style="margin-top:10px; border:2px solid #cbd5e0; border-radius:8px; overflow:hidden;">
+                        <div style="display:flex; align-items:center; background:#2d3748; padding:8px 16px;">
+                            <span style="color:white; font-weight:bold; flex:1;">Point de vente — ${row.client}</span>
+                            <button class="pos-inline-close" style="background:#e74c3c; color:white; border:none; padding:4px 14px; border-radius:4px; cursor:pointer; font-size:13px;">✕ Fermer</button>
+                        </div>
+                    </div>
+                `);
+
+                pos_container.append(iframe_el);
+                card.after(pos_container);
+
+                pos_container.find(".pos-inline-close").on("click", function () {
+                    pos_container.remove();
+                    $(".tache-card").show();
+                    frm._pos_iframe_open = false;
+                    setTimeout(() => sync_et_afficher(frm), 500);
+                });
+
+                pos_container[0].scrollIntoView({ behavior: "smooth", block: "start" });
+            }
         });
 
         card.find(".btn-open-sale").on("click", function(e) {
