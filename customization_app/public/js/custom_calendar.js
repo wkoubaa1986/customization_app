@@ -293,3 +293,243 @@ function hexToRgba(hex, opacity) {
 // Replace the original Calendar with the custom version
 frappe.views.Calendar = frappe.views.CalendarViewList;
 
+// ── Bouton "Générer BL" dans le calendrier Tache de travail ──────────────────
+frappe.listview_settings["Tache de travail"] = frappe.listview_settings["Tache de travail"] || {};
+frappe.listview_settings["Tache de travail"].onload = function(listview) {
+    // Attendre que la toolbar de la vue calendrier soit prête
+    setTimeout(function() {
+        _inject_generer_bl_btn(listview);
+    }, 800);
+};
+
+function _inject_generer_bl_btn(listview) {
+    // Ne pas injecter deux fois
+    if (document.getElementById("btn-generer-bl")) return;
+
+    // Trouver le conteneur de la date dans le calendrier
+    const calHeader = document.querySelector(".fc-header-toolbar .fc-left, .fc-toolbar .fc-left, .fc-toolbar-chunk");
+    const target = calHeader || document.querySelector(".fc-toolbar");
+    if (!target) {
+        // Réessayer si le calendrier n'est pas encore rendu
+        setTimeout(() => _inject_generer_bl_btn(listview), 600);
+        return;
+    }
+
+    const btn = document.createElement("button");
+    btn.id = "btn-generer-bl";
+    btn.innerHTML = "🚚 Générer BL";
+    btn.style.cssText = `
+        background: #dc2626; color: #fff; border: none; border-radius: 6px;
+        padding: 6px 14px; font-weight: 700; font-size: 13px; cursor: pointer;
+        margin-left: 10px; box-shadow: 0 1px 3px rgba(0,0,0,.2);
+    `;
+    btn.onclick = function() { _open_generer_bl_dialog(); };
+
+    // Insérer après le bouton "Aujourd'hui"
+    const todayBtn = document.querySelector(".fc-today-button");
+    if (todayBtn && todayBtn.parentNode) {
+        todayBtn.parentNode.insertBefore(btn, todayBtn.nextSibling);
+    } else {
+        target.appendChild(btn);
+    }
+}
+
+function _open_generer_bl_dialog() {
+    const today = frappe.datetime.get_today();
+
+    const d = new frappe.ui.Dialog({
+        title: "🚚 Générer les Bons de Livraison",
+        fields: [
+            {
+                fieldname: "date",
+                fieldtype: "Date",
+                label: "Date des interventions",
+                reqd: 1,
+                default: today,
+            },
+            { fieldtype: "Section Break", fieldname: "sb_emp", label: "Employés avec tâches ouvertes" },
+            {
+                fieldname: "employees_html",
+                fieldtype: "HTML",
+                options: "<div id='genbl-employees-container'><i>Sélectionnez une date...</i></div>",
+            },
+        ],
+        primary_action_label: "Générer & Imprimer",
+        primary_action: function() {
+            _do_generer_bl(d);
+        },
+    });
+
+    d.show();
+
+    // Charger les employés dès l'ouverture
+    d.fields_dict.date.df.onchange = function() {
+        _load_employees(d);
+    };
+    setTimeout(() => _load_employees(d), 200);
+}
+
+function _load_employees(dialog) {
+    const date = dialog.get_value("date");
+    if (!date) return;
+
+    const container = document.getElementById("genbl-employees-container");
+    if (!container) return;
+    container.innerHTML = "<i>Chargement...</i>";
+
+    frappe.call({
+        method: "customization_app.generer_bl.get_taches_par_date",
+        args: { date },
+        callback: function(r) {
+            const employees = (r.message || []);
+            if (!employees.length) {
+                container.innerHTML = `<div style="color:#888;padding:8px">Aucune tâche ouverte trouvée pour le ${date}</div>`;
+                return;
+            }
+
+            // Stocker pour utilisation lors de la génération
+            dialog._bl_employees = employees;
+
+            let html = `<table style="width:100%;border-collapse:collapse;font-size:13px">
+                <thead><tr style="background:#f3f4f6">
+                    <th style="padding:6px 8px;text-align:left">Employé</th>
+                    <th style="padding:6px 8px;text-align:center">Tâches</th>
+                    <th style="padding:6px 8px;text-align:left">Véhicule</th>
+                    <th style="padding:6px 8px;text-align:center">Générer</th>
+                </tr></thead><tbody>`;
+
+            employees.forEach((emp, idx) => {
+                const nbTaches = emp.taches.length;
+                const types = [...new Set(emp.taches.map(t => t.type || "?"))].join(", ");
+
+                html += `<tr style="border-bottom:1px solid #e5e7eb">
+                    <td style="padding:6px 8px">
+                        <strong>${emp.employee_name}</strong><br>
+                        <small style="color:#888">${types}</small>
+                    </td>
+                    <td style="padding:6px 8px;text-align:center">${nbTaches}</td>
+                    <td style="padding:6px 8px">
+                        <select id="vehicle-${idx}" style="width:100%;padding:4px;border:1px solid #d1d5db;border-radius:4px">
+                            <option value="">-- Véhicule --</option>
+                        </select>
+                    </td>
+                    <td style="padding:6px 8px;text-align:center">
+                        <input type="checkbox" id="chk-${idx}" checked style="width:16px;height:16px">
+                    </td>
+                </tr>`;
+            });
+
+            html += "</tbody></table>";
+            container.innerHTML = html;
+
+            // Charger les options véhicule pour chaque employé
+            frappe.db.get_list("Vehicle", {
+                fields: ["name", "license_plate", "model"],
+                limit: 50,
+            }).then(vehicles => {
+                employees.forEach((emp, idx) => {
+                    const sel = document.getElementById(`vehicle-${idx}`);
+                    if (!sel) return;
+                    vehicles.forEach(v => {
+                        const opt = document.createElement("option");
+                        opt.value = v.name;
+                        opt.textContent = `${v.name} - ${v.model || ""}`;
+                        if (v.name === emp.default_vehicle) opt.selected = true;
+                        sel.appendChild(opt);
+                    });
+                });
+            });
+        },
+    });
+}
+
+function _do_generer_bl(dialog) {
+    const date = dialog.get_value("date");
+    const employees = dialog._bl_employees || [];
+
+    if (!employees.length) {
+        frappe.msgprint("Aucun employé à traiter.");
+        return;
+    }
+
+    // Collecter les sélections
+    const selected = [];
+    employees.forEach((emp, idx) => {
+        const chk = document.getElementById(`chk-${idx}`);
+        if (!chk || !chk.checked) return;
+        const sel = document.getElementById(`vehicle-${idx}`);
+        const vehicle = sel ? sel.value : (emp.default_vehicle || "");
+        selected.push({ employee: emp.employee, vehicle });
+    });
+
+    if (!selected.length) {
+        frappe.msgprint("Cochez au moins un employé.");
+        return;
+    }
+
+    dialog.hide();
+
+    frappe.show_progress("Génération des BL...", 0, selected.length);
+
+    let done = 0;
+    const allDns = [];
+
+    function processNext() {
+        if (done >= selected.length) {
+            frappe.hide_progress();
+            if (allDns.length) {
+                _print_all_dns(allDns);
+            } else {
+                frappe.msgprint("Aucun BL généré.");
+            }
+            return;
+        }
+
+        const { employee, vehicle } = selected[done];
+        frappe.call({
+            method: "customization_app.generer_bl.generer_bl_employe",
+            args: { date, employee, vehicle },
+            callback: function(r) {
+                done++;
+                frappe.show_progress("Génération des BL...", done, selected.length);
+
+                if (r.message) {
+                    const { dns_reels, dns_virtuels, employee_name } = r.message;
+                    (dns_reels || []).forEach(dn => allDns.push({ name: dn, virtual: false, employee_name }));
+                    (dns_virtuels || []).forEach(dn => allDns.push({ name: dn, virtual: true, employee_name }));
+                }
+                processNext();
+            },
+            error: function() {
+                done++;
+                frappe.show_progress("Génération des BL...", done, selected.length);
+                processNext();
+            },
+        });
+    }
+
+    processNext();
+}
+
+function _print_all_dns(dns) {
+    if (!dns.length) return;
+
+    // Ouvrir chaque DN dans un nouvel onglet pour impression (format Aqua World BL)
+    frappe.msgprint({
+        title: "BLs générés",
+        message: `${dns.length} bon(s) de livraison prêts. Ouverture en cours...`,
+        indicator: "green",
+    });
+
+    // Petit délai pour que le message soit visible
+    setTimeout(() => {
+        dns.forEach((dn, i) => {
+            setTimeout(() => {
+                const url = `/printview?doctype=Delivery%20Note&name=${encodeURIComponent(dn.name)}&format=Aqua%20World%20BL&lang=fr&trigger_print=1`;
+                window.open(url, `_bl_${i}`);
+            }, i * 400);
+        });
+    }, 600);
+}
+
+
