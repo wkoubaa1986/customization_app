@@ -1,0 +1,30 @@
+[
+ {
+  "color": "#4CAF50",
+  "currency": "",
+  "decimals": 0,
+  "doctype": "Number Card",
+  "is_public": 1,
+  "label": "Solde WINSMS",
+  "name": "Solde WINSMS",
+  "report_field": "available_units",
+  "report_name": "Abonnement Win SMS",
+  "show_percentage_stats": 0,
+  "stats_time_interval": "Daily",
+  "type": "Report"
+ },
+ {
+  "color": "#2196F3",
+  "currency": "",
+  "decimals": 0,
+  "doctype": "Number Card",
+  "is_public": 1,
+  "label": "Expiration WINSMS (jours)",
+  "name": "Expiration WINSMS (jours)",
+  "report_field": "days_remaining",
+  "report_name": "Abonnement Win SMS",
+  "show_percentage_stats": 0,
+  "stats_time_interval": "Daily",
+  "type": "Report"
+ }
+]

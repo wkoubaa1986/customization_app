@@ -314,6 +314,12 @@ fixtures = [
             ["name", "in", ["Mes Interventions Employe", "Intervention"]],
         ],
     },
+    {
+        "doctype": "Number Card",
+        "filters": [
+            ["name", "in", ["Solde WINSMS", "Expiration WINSMS (jours)"]],
+        ],
+    },
 ]
 scheduler_events = {
     # Tâche lourde exécutée une fois par jour (heure gérée par Frappe)

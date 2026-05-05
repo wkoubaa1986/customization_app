@@ -8,6 +8,37 @@ from frappe.model.document import Document
 from frappe.utils import cstr
 from frappe.core.doctype.sms_settings.sms_settings import send_sms
 
+
+def _send_sms_with_fallback(phones: list, message: str) -> None:
+    """Envoie un SMS via Frappe SMS Settings. Fallback urllib direct si erreur (ex: 429)."""
+    import urllib.request
+    import urllib.error
+    from urllib.parse import urlencode
+
+    for phone in phones:
+        # Tentative 1 : via couche Frappe
+        try:
+            send_sms([phone], message)
+            continue
+        except Exception as e1:
+            frappe.log_error(f"phone={phone} err={str(e1)[:80]}", "SMS: fallback urllib")
+
+        # Tentative 2 : appel direct WinSMSPro via urllib
+        try:
+            ss = frappe.get_doc("SMS Settings", "SMS Settings")
+            params = {p.parameter: p.value for p in ss.get("parameters") if not p.header}
+            params[ss.receiver_parameter] = phone
+            params[ss.message_parameter] = message
+            url = ss.sms_gateway_url + "?" + urlencode(params)
+            try:
+                resp = urllib.request.urlopen(url, timeout=15)
+                resp.read()
+            except urllib.error.HTTPError as http_err:
+                body = http_err.read().decode() if http_err else ""
+                frappe.log_error(f"phone={phone} status={http_err.code} body={body}", "SMS: fallback HTTP error")
+        except Exception as e2:
+            frappe.log_error(frappe.get_traceback(), "SMS: échec fallback urllib")
+
 # -------------------------------------------------------------------
 #  Constantes
 # -------------------------------------------------------------------
@@ -451,7 +482,7 @@ class CompagneSMS(Document):
                 )
             else:
                 # Envoi réel
-                send_sms(nums_to_send, cstr(msg_text))
+                _send_sms_with_fallback(nums_to_send, cstr(msg_text))
 
         # 👉 On met le total des SMS segments dans le champ nombre_total_compagne
         self.nombre_total_compagne = total_segments

@@ -198,7 +198,14 @@ function afficher_cartes_taches(frm) {
 
     wrapper.find(".custom-tache-cards").remove();
 
-    const rows = frm.doc.tache || [];
+    const rows = [...(frm.doc.tache || [])].sort((a, b) => {
+        const ta = (a.heure || "").trim();
+        const tb = (b.heure || "").trim();
+        if (!ta && !tb) return 0;
+        if (!ta) return 1;
+        if (!tb) return -1;
+        return ta.localeCompare(tb);
+    });
 
     // Initialiser le store de snapshots (état tel que construit par le script serveur)
     if (!frm._row_snapshots) frm._row_snapshots = {};

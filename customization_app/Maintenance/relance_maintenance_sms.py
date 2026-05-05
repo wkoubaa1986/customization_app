@@ -468,15 +468,47 @@ def traiter_numero_tel(champ_tel):
 def envoyer_sms_winsms(numero, message):
     """
     Envoi via WinSMSPro. `numero` = 8 chiffres (sans +216).
+    Lit la config depuis SMS Settings. Fallback urllib si requests échoue (ex: 429).
+    Retourne un objet avec .json() -> dict ou lève une exception.
     """
-    base_url = (
-        "https://www.winsmspro.com/sms/sms/api?"
-        "action=send-sms&"
-        "api_key=YXF1YXdvcmxkLnNlcnZpY2luZ0BnbWFpbC5jb206WXNyKGwoaShGODE2SiM8Tk96JHhWQD5XRw=="
-    )
-    params = f"&to=216{numero}&from=Aqua World&sms={quote_plus(message)}"
-    url = base_url + params
-    return requests.get(url)
+    import urllib.request
+    import urllib.error
+    from urllib.parse import urlencode
+
+    phone = f"216{numero}"
+
+    # Lire config depuis SMS Settings
+    ss = frappe.get_doc("SMS Settings", "SMS Settings")
+    params = {p.parameter: p.value for p in ss.get("parameters") if not p.header}
+    params[ss.receiver_parameter] = phone
+    params[ss.message_parameter] = message
+    url = ss.sms_gateway_url + "?" + urlencode(params)
+
+    # Tentative 1 : requests
+    try:
+        resp = requests.get(url, timeout=15)
+        resp.raise_for_status()
+        return resp
+    except Exception as e1:
+        _logger().warning(f"[SMS] requests échoué ({e1}), fallback urllib → {phone}")
+
+    # Tentative 2 : urllib (contourne les problèmes de scope et de rate-limit transitoire)
+    try:
+        req = urllib.request.urlopen(url, timeout=15)
+        body = req.read().decode()
+        # Simuler un objet compatible .json()
+        import json
+        class _FakeResp:
+            def __init__(self, text): self.text = text
+            def json(self): return json.loads(self.text)
+        return _FakeResp(body)
+    except urllib.error.HTTPError as http_err:
+        body = http_err.read().decode() if http_err else ""
+        frappe.log_error(f"phone={phone} status={http_err.code} body={body}", "SMS Maintenance: fallback HTTP error")
+        raise
+    except Exception as e2:
+        frappe.log_error(frappe.get_traceback(), "SMS Maintenance: échec fallback urllib")
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -649,8 +681,8 @@ def envoyer_et_marquer_sms(list_sms, secteurs_autorises, today, dry_run: bool = 
         for tel in list_tel:
             try:
                 resp = envoyer_sms_winsms(tel, message)
-                txt = resp.text
-                if txt.get("message") == "Successfully Send":
+                data = resp.json()
+                if data.get("message") == "Successfully Send":
                     status_sms = "Success"
             except Exception:
                 _logger().error(
