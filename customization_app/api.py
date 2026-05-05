@@ -1167,6 +1167,26 @@ def force_translate_doc(doc_name):
 
 
 @frappe.whitelist()
+def get_pos_invoice_totals(names):
+    """Retourne les totaux (grand_total) pour une liste de POS Invoice.
+    Utilise ignore_permissions pour éviter les erreurs d'accès sur les utilisateurs
+    n'ayant pas le rôle POS Invoice.
+    """
+    import json
+    if isinstance(names, str):
+        names = json.loads(names)
+    if not names:
+        return []
+    rows = frappe.db.get_all(
+        "POS Invoice",
+        filters=[["name", "in", names]],
+        fields=["name", "grand_total"],
+        ignore_permissions=True,
+    )
+    return rows
+
+
+@frappe.whitelist()
 def delete_pos_invoice(name):
     """Annule et supprime une POS Invoice (draft ou soumise)."""
     if not frappe.db.exists("POS Invoice", name):

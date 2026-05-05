@@ -266,8 +266,8 @@ function afficher_cartes_taches(frm) {
         if (ventes_to_fetch.length > 0) {
             pending++;
             frappe.call({
-                method: "frappe.client.get_list",
-                args: { doctype: "POS Invoice", filters: [["name","in", ventes_to_fetch]], fields: ["name","grand_total"], limit: ventes_to_fetch.length },
+                method: "customization_app.api.get_pos_invoice_totals",
+                args: { names: ventes_to_fetch },
                 freeze: false,
                 callback(r) {
                     (r.message || []).forEach(d => { frm._totals_cache["v:" + d.name] = d.grand_total; });
