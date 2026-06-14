@@ -1248,3 +1248,22 @@ def on_delivery_note_cancel(doc, method=None):
 	"""
 	if doc.workflow_state != "Annulé":
 		frappe.db.set_value("Delivery Note", doc.name, "workflow_state", "Annulé")
+
+
+def on_sales_order_cancel(doc, method=None):
+	"""
+	When a Sales Order is cancelled, ERPNext cascade-cancels linked Delivery Notes
+	using a bulk method that bypasses the DN's own on_cancel/after_cancel hooks.
+	This hook fires on the SO itself and fixes all linked DN workflow_states.
+	"""
+	linked_dns = frappe.db.sql("""
+		SELECT DISTINCT dn.name
+		FROM `tabDelivery Note` dn
+		INNER JOIN `tabDelivery Note Item` dni ON dni.parent = dn.name
+		WHERE dni.against_sales_order = %s
+		  AND dn.docstatus = 2
+		  AND dn.workflow_state != 'Annulé'
+	""", doc.name, as_dict=True)
+
+	for row in linked_dns:
+		frappe.db.set_value("Delivery Note", row.name, "workflow_state", "Annulé")

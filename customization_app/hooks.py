@@ -153,6 +153,9 @@ doc_events = {
         "on_cancel": "customization_app.api.on_delivery_note_cancel",
         "after_cancel": "customization_app.api.on_delivery_note_cancel",
     },
+    "Sales Order": {
+        "on_cancel": "customization_app.api.on_sales_order_cancel",
+    },
 }
 
 # Scheduled Tasks
