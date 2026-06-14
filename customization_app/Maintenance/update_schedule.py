@@ -351,12 +351,22 @@ def create_maintenance_for_machines(i_sal):
 
     for i_item in raw_items:
         # Résolution du code article
+        item = None
         try:
             item = frappe.get_doc("Item", i_item.replace(" ", ""))
         except Exception:
-            i_item2 = i_item.replace(" ", "")
-            i_item2 = i_item2.replace("GPD", " GPD")
-            item = frappe.get_doc("Item", i_item2)
+            try:
+                i_item2 = i_item.replace(" ", "").replace("GPD", " GPD")
+                item = frappe.get_doc("Item", i_item2)
+            except Exception:
+                frappe.log_error(
+                    f"Maintenance planning: item '{i_item}' not found in ERPNext, skipped.",
+                    "Maintenance Item Not Found"
+                )
+                continue
+
+        if item is None:
+            continue
 
         group = (item.item_group or "").strip()
         if group not in MACHINE_ITEM_GROUPS:
