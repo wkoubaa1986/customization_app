@@ -151,6 +151,7 @@ doc_events = {
     },
     "Delivery Note": {
         "on_cancel": "customization_app.api.on_delivery_note_cancel",
+        "after_cancel": "customization_app.api.on_delivery_note_cancel",
     },
 }
 
