@@ -1239,3 +1239,12 @@ def get_user_pos_profile():
         if frappe.db.exists("POS Profile", DEFAULT_POS_PROFILE):
             return DEFAULT_POS_PROFILE
     return profile or DEFAULT_POS_PROFILE
+
+
+def on_delivery_note_cancel(doc, method=None):
+	"""
+	When a Delivery Note is cancelled via ERPNext standard cancel button,
+	reset the workflow_state to 'Annulé' so the list view shows the correct status.
+	"""
+	if doc.workflow_state != "Annulé":
+		frappe.db.set_value("Delivery Note", doc.name, "workflow_state", "Annulé")

@@ -149,6 +149,9 @@ doc_events = {
         "before_save": "customization_app.api.before_save_tache_de_travail",
         "after_save":  "customization_app.api.after_save_tache_de_travail",
     },
+    "Delivery Note": {
+        "on_cancel": "customization_app.api.on_delivery_note_cancel",
+    },
 }
 
 # Scheduled Tasks
