@@ -1,0 +1,120 @@
+<div class="caisse-page" style="padding: 20px;">
+
+  <!-- Header -->
+  <div class="caisse-header" style="display:flex; align-items:center; justify-content:space-between; margin-bottom:16px; flex-wrap:wrap; gap:10px;">
+    <h3 style="margin:0;">État de la Caisse Espèces</h3>
+    <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+      <label style="margin:0;">De :</label>
+      <input id="caisse-d1" type="date" class="form-control" style="width:150px;" />
+      <label style="margin:0;">À :</label>
+      <input id="caisse-d2" type="date" class="form-control" style="width:150px;" />
+      <label style="margin:0;">Solde initial (DT) :</label>
+      <input id="caisse-solde-initial" type="number" step="0.001" class="form-control" style="width:130px;" value="0" />
+      <button id="caisse-refresh-btn" class="btn btn-primary btn-sm">Actualiser</button>
+      <button id="caisse-chart-btn" class="btn btn-default btn-sm" style="border-color:#7e57c2; color:#7e57c2;">📈 Évolution</button>
+      <button id="caisse-save-btn" class="btn btn-success btn-sm">Enregistrer & Retour</button>
+    </div>
+  </div>
+
+  <!-- Evolution Chart (hidden by default) -->
+  <div id="caisse-chart-section" style="display:none; margin-bottom:20px; border:1px solid #e0e0e0; border-radius:8px; padding:16px; background:#fafafa;">
+    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
+      <div style="font-weight:600; color:#7e57c2;">📈 Évolution journalière du Solde Caisse</div>
+      <button id="caisse-chart-close" class="btn btn-xs btn-default">✕ Fermer</button>
+    </div>
+    <div id="caisse-chart-container"></div>
+  </div>
+
+  <!-- Summary Cards -->
+  <div id="caisse-summary-cards" style="display:grid; grid-template-columns:repeat(4,1fr); gap:14px; margin-bottom:20px;">
+    <div class="caisse-card caisse-entrees" style="background:#c8e6c9; border-radius:8px; padding:16px; text-align:center;">
+      <div style="font-size:12px; color:#2e7d32; font-weight:600;">▲ Entrées ventes espèces</div>
+      <div id="card-entrees" style="font-size:20px; font-weight:700; margin-top:6px;">—</div>
+    </div>
+    <div class="caisse-card caisse-sorties" style="background:#ffcdd2; border-radius:8px; padding:16px; text-align:center;">
+      <div style="font-size:12px; color:#c62828; font-weight:600;">▼ Sorties achats + dépenses</div>
+      <div id="card-sorties" style="font-size:20px; font-weight:700; margin-top:6px;">—</div>
+    </div>
+    <div class="caisse-card caisse-versements" style="background:#e1bee7; border-radius:8px; padding:16px; text-align:center;">
+      <div style="font-size:12px; color:#6a1b9a; font-weight:600;">↓ Versements banque (non exclus)</div>
+      <div id="card-versements" style="font-size:20px; font-weight:700; margin-top:6px;">—</div>
+    </div>
+    <div class="caisse-card caisse-solde" style="background:#bbdefb; border-radius:8px; padding:16px; text-align:center;">
+      <div style="font-size:12px; color:#1565c0; font-weight:600;">= Solde Caisse</div>
+      <div id="card-solde" style="font-size:20px; font-weight:700; margin-top:6px;">—</div>
+    </div>
+  </div>
+
+  <!-- Main tables -->
+  <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:14px;">
+
+    <!-- Entrées -->
+    <div>
+      <div style="font-weight:600; margin-bottom:6px; color:#2e7d32;">▲ Entrées — Ventes payées en espèces</div>
+      <div style="overflow-x:auto; border:1px solid #ddd; border-radius:6px;">
+        <table class="table table-condensed" style="margin:0; font-size:12px;">
+          <thead style="background:#e8f5e9;">
+            <tr>
+              <th>Date</th>
+              <th>Client</th>
+              <th style="text-align:right;">Montant</th>
+            </tr>
+          </thead>
+          <tbody id="table-entrees-body">
+            <tr><td colspan="3" style="text-align:center; color:#999;">—</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Sorties -->
+    <div>
+      <div style="font-weight:600; margin-bottom:6px; color:#c62828;">▼ Sorties — Achats &amp; Dépenses en espèces</div>
+      <div style="overflow-x:auto; border:1px solid #ddd; border-radius:6px;">
+        <table class="table table-condensed" style="margin:0; font-size:12px;">
+          <thead style="background:#ffebee;">
+            <tr>
+              <th>Date</th>
+              <th>Réf / Écriture</th>
+              <th>Fournisseur / Libellé</th>
+              <th style="text-align:right;">Montant</th>
+            </tr>
+          </thead>
+          <tbody id="table-sorties-body">
+            <tr><td colspan="4" style="text-align:center; color:#999;">—</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Versements -->
+    <div>
+      <div style="font-weight:600; margin-bottom:6px; color:#6a1b9a;">↓ Versements Caisse → Banque</div>
+      <div style="font-size:11px; color:#888; margin-bottom:4px;">Décochez pour exclure du calcul</div>
+      <div style="overflow-x:auto; border:1px solid #ddd; border-radius:6px;">
+        <table class="table table-condensed" style="margin:0; font-size:12px;">
+          <thead style="background:#f3e5f5;">
+            <tr>
+              <th style="width:30px;"></th>
+              <th>Date</th>
+              <th>Réf Écriture</th>
+              <th>Libellé</th>
+              <th style="text-align:right;">Montant</th>
+            </tr>
+          </thead>
+          <tbody id="table-versements-body">
+            <tr><td colspan="5" style="text-align:center; color:#999;">—</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Loading overlay -->
+  <div id="caisse-loading" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0;
+       background:rgba(255,255,255,0.7); z-index:9999; align-items:center; justify-content:center;">
+    <div class="text-muted" style="font-size:16px;">Chargement…</div>
+  </div>
+
+</div>

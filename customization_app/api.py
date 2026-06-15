@@ -1267,3 +1267,174 @@ def on_sales_order_cancel(doc, method=None):
 
 	for row in linked_dns:
 		frappe.db.set_value("Delivery Note", row.name, "workflow_state", "Annulé")
+
+
+# ---------------------------------------------------------------------------
+# CAISSE ESPECES -- Dashboard API
+# ---------------------------------------------------------------------------
+
+@frappe.whitelist()
+def get_caisse_dashboard(d1, d2):
+    """
+    Calls get_caisse_situation_api Server Script and returns structured caisse data.
+    """
+    frappe.has_permission("Caisse Especes Config", throw=True)
+
+    # Server Scripts of type "API" must be executed via execute_method().
+    # The script uses start_date / end_date as parameter names (visible in its code).
+    # The document name has spaces: "get caisse situation api"
+    frappe.form_dict["start_date"] = d1
+    frappe.form_dict["end_date"]   = d2
+    script_doc = frappe.get_doc("Server Script", "get caisse situation api")
+    script_doc.execute_method()
+
+    # API Server Scripts set frappe.response["message"] directly
+    message = frappe.response.get("message") or []
+
+    if isinstance(message, list):
+        ventes_raw   = message[0] if len(message) > 0 else []
+        achats_raw   = message[1] if len(message) > 1 else []
+        depenses_raw = message[2] if len(message) > 2 else []
+        versems_raw  = message[3] if len(message) > 3 else []
+    else:
+        ventes_raw   = message.get("ventes", [])
+        achats_raw   = message.get("achats", [])
+        depenses_raw = message.get("depenses", [])
+        versems_raw  = message.get("versements", [])
+
+    def flt(v):
+        try:
+            return float(v or 0)
+        except Exception:
+            return 0.0
+
+    entrees_detail = []
+    for fac in (ventes_raw or []):
+        especes = flt(fac.get("especes", 0))
+        if especes > 0:
+            entrees_detail.append({
+                "date":           str(fac.get("invoice_date", "")),
+                "invoice_number": fac.get("invoice_number", ""),
+                "erp_name":       fac.get("erp_name", ""),
+                "client":         fac.get("client", ""),
+                "montant":        especes,
+            })
+
+    sorties_achat = []
+    for ach in (achats_raw or []):
+        especes = flt(ach.get("especes", 0))
+        if especes > 0:
+            sorties_achat.append({
+                "date":           str(ach.get("invoice_date", "")),
+                "invoice_number": ach.get("invoice_number", ""),
+                "supplier":       ach.get("supplier", ""),
+                "montant":        especes,
+            })
+
+    sorties_dep = []
+    for dep in (depenses_raw or []):
+        especes = flt(dep.get("especes", 0))
+        if especes > 0:
+            sorties_dep.append({
+                "date":                 str(dep.get("entry_date", "")),
+                "journal_entry_number": dep.get("journal_entry_number", ""),
+                "description":          dep.get("description", ""),
+                "montant":              especes,
+            })
+
+    versements = []
+    for ver in (versems_raw or []):
+        montant = flt(ver.get("montant", 0))
+        if montant > 0:
+            versements.append({
+                "date":                 str(ver.get("entry_date", "")),
+                "journal_entry_number": ver.get("journal_entry_number", ""),
+                "description":          ver.get("description", ""),
+                "montant":              montant,
+            })
+
+    return {
+        "entrees_detail": entrees_detail,
+        "sorties_achat":  sorties_achat,
+        "sorties_dep":    sorties_dep,
+        "versements":     versements,
+    }
+
+
+@frappe.whitelist()
+def get_caisse_config():
+    """Returns saved Caisse Especes Config (dates + solde_initial + excluded_versements)."""
+    frappe.has_permission("Caisse Especes Config", throw=True)
+    try:
+        doc = frappe.get_single("Caisse Especes Config")
+        return {
+            "date_debut": str(doc.date_debut) if doc.date_debut else None,
+            "date_fin":   str(doc.date_fin)   if doc.date_fin   else None,
+            "solde_initial": doc.solde_initial or 0,
+            "excluded_versements": [
+                {
+                    "versement_ref": row.versement_ref,
+                    "description":   row.description,
+                    "montant":       row.montant,
+                }
+                for row in (doc.excluded_versements or [])
+            ],
+        }
+    except Exception:
+        return {"date_debut": None, "date_fin": None, "solde_initial": 0, "excluded_versements": []}
+
+
+@frappe.whitelist()
+def save_caisse_config(solde_initial, excluded_versements, date_debut=None, date_fin=None):
+    """Saves dates + solde_initial + excluded_versements to Caisse Especes Config (Single)."""
+    frappe.has_permission("Caisse Especes Config", ptype="write", throw=True)
+    if isinstance(excluded_versements, str):
+        excluded_versements = json.loads(excluded_versements)
+    doc = frappe.get_single("Caisse Especes Config")
+    if date_debut:
+        doc.date_debut = date_debut
+    if date_fin:
+        doc.date_fin = date_fin
+    doc.solde_initial = float(solde_initial or 0)
+    doc.set("excluded_versements", [])
+    for v in (excluded_versements or []):
+        doc.append("excluded_versements", {
+            "versement_ref": v.get("versement_ref", ""),
+            "description":   v.get("description", ""),
+            "montant":       float(v.get("montant", 0)),
+        })
+    doc.save(ignore_permissions=False)
+    frappe.db.commit()
+    return {"status": "ok"}
+
+
+@frappe.whitelist()
+def get_caisse_solde():
+    """
+    Number Card -- returns Solde Caisse.
+    d1: from saved config (or 1st of current month if not set).
+    d2: always last day of current month (dynamic).
+    """
+    frappe.has_permission("Caisse Especes Config", throw=True)
+    import datetime
+    import calendar
+    try:
+        config  = get_caisse_config()
+        today   = datetime.date.today()
+        last_day = calendar.monthrange(today.year, today.month)[1]
+        d1 = config.get("date_debut") or today.replace(day=1).isoformat()
+        d2 = today.replace(day=last_day).isoformat()   # always current month end
+        data        = get_caisse_dashboard(d1, d2)
+        initial     = float(config.get("solde_initial") or 0)
+        excluded_refs = {v["versement_ref"] for v in config.get("excluded_versements", [])}
+        entrees    = sum(float(r["montant"]) for r in data["entrees_detail"])
+        sorties    = sum(float(r["montant"]) for r in data["sorties_achat"]) \
+                   + sum(float(r["montant"]) for r in data["sorties_dep"])
+        versements = sum(
+            float(r["montant"]) for r in data["versements"]
+            if (r.get("journal_entry_number") or r.get("ref", "")) not in excluded_refs
+        )
+        solde = round(initial + entrees - sorties - versements, 3)
+        return {"value": solde, "route": "caisse-especes"}
+    except Exception:
+        return {"value": 0, "route": "caisse-especes"}

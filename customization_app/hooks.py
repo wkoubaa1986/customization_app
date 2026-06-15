@@ -324,7 +324,7 @@ fixtures = [
     {
         "doctype": "Number Card",
         "filters": [
-            ["name", "in", ["Solde WINSMS", "Expiration WINSMS (jours)"]],
+            ["name", "in", ["Solde WINSMS", "Expiration WINSMS (jours)", "Solde Caisse"]],
         ],
     },
 ]

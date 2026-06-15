@@ -1,0 +1,80 @@
+{
+ "actions": [],
+ "creation": "2026-06-15 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "date_debut",
+  "date_fin",
+  "solde_initial",
+  "section_break_versements",
+  "excluded_versements"
+ ],
+ "fields": [
+  {
+   "fieldname": "date_debut",
+   "fieldtype": "Date",
+   "label": "Date début"
+  },
+  {
+   "fieldname": "date_fin",
+   "fieldtype": "Date",
+   "label": "Date fin"
+  },
+  {
+   "fieldname": "solde_initial",
+   "fieldtype": "Currency",
+   "label": "Solde Initial (DT)",
+   "options": "DT",
+   "default": "0"
+  },
+  {
+   "fieldname": "section_break_versements",
+   "fieldtype": "Section Break",
+   "label": "Versements exclus du calcul"
+  },
+  {
+   "fieldname": "excluded_versements",
+   "fieldtype": "Table",
+   "label": "Versements à exclure",
+   "options": "Caisse Especes Versement Exclu"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "issingle": 1,
+ "links": [],
+ "modified": "2026-06-15 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "Caisse Especes Config",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Accounts User",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Accounts Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": []
+}

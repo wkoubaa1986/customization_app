@@ -54,5 +54,30 @@
   "show_percentage_stats": 0,
   "stats_time_interval": "Daily",
   "type": "Report"
+ },
+ {
+  "aggregate_function_based_on": null,
+  "background_color": null,
+  "color": "#1565c0",
+  "currency": "TND",
+  "document_type": null,
+  "doctype": "Number Card",
+  "dynamic_filters_json": null,
+  "filters_config": null,
+  "filters_json": null,
+  "function": "Count",
+  "is_public": 1,
+  "is_standard": 0,
+  "label": "Solde Caisse",
+  "method": "customization_app.api.get_caisse_solde",
+  "module": null,
+  "name": "Solde Caisse",
+  "report_field": null,
+  "report_function": "Sum",
+  "report_name": null,
+  "show_full_number": 0,
+  "show_percentage_stats": 0,
+  "stats_time_interval": "Monthly",
+  "type": "Custom"
  }
 ]
