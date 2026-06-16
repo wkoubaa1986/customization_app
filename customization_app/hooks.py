@@ -340,6 +340,12 @@ fixtures = [
             ["name", "=", "Liste Appels Rattrapage"],
         ],
     },
+    {
+        "doctype": "Workspace",
+        "filters": [
+            ["name", "=", "Accounting"],
+        ],
+    },
 ]
 scheduler_events = {
     # Tâche lourde exécutée une fois par jour (heure gérée par Frappe)
