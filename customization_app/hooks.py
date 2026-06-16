@@ -259,8 +259,9 @@ doc_events = {
 app_include_js = ["/assets/customization_app/js/customer_quick_entry.js",
                   "/assets/customization_app/js/custom_calendar.js",
                   "/assets/customization_app/js/mes_interventions_employe.js",
-                "/assets/customization_app/js/pos_auto_customer.js",
-                  "/assets/customization_app/js/buying_item_query_override.js"]
+                  "/assets/customization_app/js/pos_auto_customer.js",
+                  "/assets/customization_app/js/buying_item_query_override.js",
+                  "/assets/customization_app/js/calendrier_rdv_button.js"]
 # Hide filter message shown in the awesomplete dropdown
 app_include_css = ["/assets/customization_app/css/hide_filter_message.css"]
 # doctype_calendar_js = {
@@ -302,15 +303,14 @@ fixtures = [
     {
         "doctype": "Client Script",
         "filters": [
-            ["dt", "in", ["Compagne SMS", "Customer"]],
+            ["dt", "in", ["Compagne SMS", "Customer", "Liste Appelle Entretien", "Tache de travail"]],
         ],
     },
     # ✅ Server Script
     {
         "doctype": "Server Script",
         "filters": [
-            # si tes server scripts sont attachés à un DocType
-            ["reference_doctype", "in", ["Compagne SMS"]],
+            ["name", "in", ["ajuster rendez vous pris par partenaire"]],
         ],
     },
     {"doctype": "Responsable Relance", "filters": [["name", "=", "Default"]]},

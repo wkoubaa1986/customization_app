@@ -757,6 +757,10 @@ def _create_so_from_pos(pos_name, extra_items=None):
 
 def before_save_tache_de_travail(doc, method=None):
     """Set color + traduire en arabe si client/adresse/sujet ont changé."""
+    # Couleur spécifique pour l'utilisateur partenaire (sauf si terminé/annulé)
+    if doc.owner == 'economiqaquasolutions23@gmail.com' and doc.status not in ('Completed', 'Cancelled'):
+        doc.color = '#29def2'
+
     if doc.status == "Completed":
         doc.color = "#bbf7d0"
 
@@ -1438,3 +1442,100 @@ def get_caisse_solde():
         return {"value": solde, "route": "caisse-especes"}
     except Exception:
         return {"value": 0, "route": "caisse-especes"}
+
+
+# =============================================================================
+# RDV Libre — Calendrier workspace button (bypasses sharing for allowed users)
+# =============================================================================
+
+_RDV_LIBRE_ALLOWED = {"economiqaquasolutions23@gmail.com", "Administrator"}
+
+
+@frappe.whitelist()
+def search_customer_all(doctype, txt, searchfield, start, page_len, filters):
+    """
+    Search ALL customers ignoring share/permission restrictions.
+    Called by Frappe's search_widget when used as a link query.
+    """
+    rows = frappe.db.sql(
+        """
+        SELECT name, customer_name
+        FROM `tabCustomer`
+        WHERE (name LIKE %(txt)s OR customer_name LIKE %(txt)s OR custom_liste_telephone LIKE %(txt)s)
+        ORDER BY name
+        LIMIT %(page_len)s OFFSET %(start)s
+        """,
+        {"txt": f"%{txt}%", "page_len": int(page_len), "start": int(start)},
+    )
+    return rows
+
+
+@frappe.whitelist()
+def get_customer_info_all(customer):
+    """
+    Return addresses, secteur and telephone for a customer, ignoring permissions.
+    """
+    addresses = frappe.db.sql(
+        """
+        SELECT a.name, a.address_line1, a.address_line2, a.city,
+               a.pincode, a.state, a.country
+        FROM `tabAddress` a
+        JOIN `tabDynamic Link` dl ON dl.parent = a.name
+        WHERE dl.link_doctype = 'Customer' AND dl.link_name = %s
+        """,
+        (customer,),
+        as_dict=True,
+    )
+
+    cust = frappe.db.get_value(
+        "Customer",
+        customer,
+        ["customer_name", "custom_liste_telephone"],
+        as_dict=True,
+    ) or {}
+
+    # Secteur from first linked address (via Dynamic Link child table)
+    secteur_row = frappe.db.sql(
+        """
+        SELECT a.custom_secteur
+        FROM `tabAddress` a
+        JOIN `tabDynamic Link` dl ON dl.parent = a.name
+        WHERE dl.link_doctype = 'Customer' AND dl.link_name = %s
+        AND a.custom_secteur IS NOT NULL AND a.custom_secteur != ''
+        LIMIT 1
+        """,
+        (customer,),
+    )
+    secteur = secteur_row[0][0] if secteur_row else ""
+
+    return {
+        "addresses": addresses,
+        "secteur": secteur,
+        "telephone": cust.get("custom_liste_telephone") or "",
+        "customer_name": cust.get("customer_name") or customer,
+    }
+
+
+@frappe.whitelist()
+def save_investigation_note(tache, note):
+    """
+    Save an investigation note on a Tache de travail and mark it as investigated.
+    """
+    doc = frappe.get_doc("Tache de travail", tache)
+    doc.rapport_visite = note
+    doc.recontacte = "Investigué"
+    doc.save(ignore_permissions=True)
+    frappe.db.commit()
+    return True
+
+
+@frappe.whitelist()
+def marquer_tache_rattrapee(tache, raison="planifié"):
+    """
+    Mark a Tache de travail as handled (planifié, contacté, etc.)
+    so it disappears from the Rattrapage report.
+    """
+    frappe.db.set_value("Tache de travail", tache, "recontacte", raison,
+                        update_modified=False)
+    frappe.db.commit()
+    return True

@@ -267,6 +267,9 @@ frappe.views.Calendar = frappe.views.CalendarViewList;
 // ── Bouton "Générer BL" dans le calendrier Tache de travail ──────────────────
 
 function _inject_generer_bl_btn() {
+    // Masquer pour l'utilisateur partenaire
+    if (frappe.session.user === 'economiqaquasolutions23@gmail.com') return;
+
     // Ne pas injecter deux fois
     if (document.getElementById("btn-generer-bl")) return;
 
