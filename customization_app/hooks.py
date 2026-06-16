@@ -368,6 +368,11 @@ scheduler_events = {
         "30 7 * * *": [
             "customization_app.api.tache_journalier_nizar",
         ],
+
+        # Tous les jours à 03:00 : contrôle/réparation des images (articles & groupes)
+        "0 3 * * *": [
+            "customization_app.Maintenance.image_monitor.run_cron",
+        ],
     },
 }
 
