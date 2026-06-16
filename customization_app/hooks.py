@@ -334,6 +334,12 @@ fixtures = [
             ["name", "=", "Selling"],
         ],
     },
+    {
+        "doctype": "Report",
+        "filters": [
+            ["name", "=", "Liste Appels Rattrapage"],
+        ],
+    },
 ]
 scheduler_events = {
     # Tâche lourde exécutée une fois par jour (heure gérée par Frappe)
