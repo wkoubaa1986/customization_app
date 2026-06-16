@@ -1,0 +1,18 @@
+{
+ "content": null,
+ "creation": "2026-06-16 00:00:00.000000",
+ "docstatus": 0,
+ "doctype": "Page",
+ "icon": "fa fa-money",
+ "idx": 0,
+ "modified": "2026-06-16 00:00:00.000000",
+ "module": "Customize erpnext",
+ "name": "relance-paiements",
+ "owner": "Administrator",
+ "page_name": "relance-paiements",
+ "roles": [],
+ "script": null,
+ "standard": "Yes",
+ "style": null,
+ "title": "Relance Paiements Clients"
+}

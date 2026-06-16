@@ -327,6 +327,13 @@ fixtures = [
             ["name", "in", ["Solde WINSMS", "Expiration WINSMS (jours)", "Solde Caisse"]],
         ],
     },
+    # Workspace Selling — contient le raccourci "Suivi dettes client" vers la page Relance Paiements
+    {
+        "doctype": "Workspace",
+        "filters": [
+            ["name", "=", "Selling"],
+        ],
+    },
 ]
 scheduler_events = {
     # Tâche lourde exécutée une fois par jour (heure gérée par Frappe)

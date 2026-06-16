@@ -1539,3 +1539,651 @@ def marquer_tache_rattrapee(tache, raison="planifié"):
                         update_modified=False)
     frappe.db.commit()
     return True
+
+
+# =====================================================================
+#  RELANCE PAIEMENTS CLIENTS (Dettes / Chèques / Traites sans provision)
+#  Source de vérité : écritures de paiement (Payment Entry) uniquement.
+#  Lecture seule — aucune écriture comptable n'est modifiée.
+# =====================================================================
+
+# Comptes ciblés et leur clé logique + libellé court pour les messages.
+RELANCE_ACCOUNTS = {
+    "Dettes - A&S": {"key": "dettes", "label": "Dettes"},
+    "Chèques sans provision - A&S": {"key": "cheques", "label": "Chèques sans provision"},
+    "Traite Bancaire sans provision - A&S": {"key": "traites", "label": "Traites sans provision"},
+}
+
+
+def _relance_account_list():
+    return list(RELANCE_ACCOUNTS.keys())
+
+
+# Marqueur permettant de retrouver uniquement les commentaires créés par cette UI.
+RELANCE_MARKER = "[RELANCE-PAIEMENT]"
+
+
+def _log_relance_comment(customer, type_relance, note=""):
+    """
+    Enregistre une trace de relance sous forme de commentaire sur la fiche client.
+    Le contenu commence par RELANCE_MARKER pour pouvoir l'extraire ensuite.
+    Format : [RELANCE-PAIEMENT] | <type> | <note>
+    """
+    if not customer or not frappe.db.exists("Customer", customer):
+        return
+    note = (note or "").strip()
+    content = f"{RELANCE_MARKER} | {type_relance} | {note}"
+    cmt = frappe.get_doc({
+        "doctype": "Comment",
+        "comment_type": "Comment",
+        "reference_doctype": "Customer",
+        "reference_name": customer,
+        "content": content,
+    })
+    cmt.insert(ignore_permissions=True)
+    return cmt.name
+
+
+@frappe.whitelist()
+def enregistrer_relance_telephone(customer, commentaire=""):
+    """
+    Enregistre une relance téléphonique : ajoute un commentaire tracé
+    sur la fiche client avec la date courante.
+    """
+    if not customer:
+        frappe.throw(_("Client manquant."))
+    name = _log_relance_comment(customer, "Téléphone", commentaire)
+    frappe.db.commit()
+    return {"ok": True, "comment": name}
+
+
+@frappe.whitelist()
+def get_historique_relances(customer):
+    """
+    Retourne l'historique des relances de ce client (uniquement celles
+    créées par cette interface), trié du plus récent au plus ancien.
+    """
+    if not customer:
+        return []
+    rows = frappe.db.sql(
+        """
+        SELECT name, content, creation, owner
+        FROM `tabComment`
+        WHERE reference_doctype = 'Customer'
+          AND reference_name = %(cust)s
+          AND comment_type = 'Comment'
+          AND content LIKE %(marker)s
+        ORDER BY creation DESC
+        """,
+        {"cust": customer, "marker": "%" + RELANCE_MARKER + "%"},
+        as_dict=True,
+    )
+    out = []
+    for r in rows:
+        # Format attendu : [RELANCE-PAIEMENT] | <type> | <note>
+        parts = (r.content or "").split("|", 2)
+        type_relance = parts[1].strip() if len(parts) > 1 else "—"
+        note = parts[2].strip() if len(parts) > 2 else ""
+        out.append({
+            "name": r.name,
+            "date": frappe.utils.format_datetime(r.creation, "dd/MM/yyyy HH:mm"),
+            "type": type_relance,
+            "note": note,
+            "user": r.owner,
+        })
+    return out
+
+
+@frappe.whitelist()
+def envoyer_relance_test(telephone=None, email=None, message=None, channel="both"):
+    """
+    Envoi de TEST : envoie un message vers un numéro et/ou un email arbitraire,
+    sans toucher à un client ni créer de trace. Sert à valider SMS / Email.
+    """
+    message = (message or "Ceci est un test de relance — AquaWorld & Servicing.").strip()
+    channels = ["sms", "email"] if channel == "both" else [channel]
+    sent, failed = [], []
+
+    for ch in channels:
+        try:
+            if ch == "sms":
+                phone = (telephone or "").strip()
+                if not phone:
+                    failed.append({"channel": "sms", "reason": "Téléphone manquant"})
+                    continue
+                from customization_app.customize_erpnext.doctype.compagne_sms.compagne_sms import (
+                    _send_sms_with_fallback,
+                )
+                _send_sms_with_fallback([phone], message)
+                sent.append({"channel": "sms", "to": phone})
+            elif ch == "email":
+                mail = (email or "").strip()
+                if not mail:
+                    failed.append({"channel": "email", "reason": "Email manquant"})
+                    continue
+                frappe.sendmail(
+                    recipients=[mail],
+                    subject="[TEST] Relance Paiements - AquaWorld & Servicing",
+                    message=message.replace("\n", "<br>"),
+                )
+                sent.append({"channel": "email", "to": mail})
+        except Exception as e:
+            frappe.log_error(frappe.get_traceback(), "Relance Paiements: échec test")
+            failed.append({"channel": ch, "reason": str(e)[:120]})
+
+    return {"sent": sent, "failed": failed}
+
+
+
+@frappe.whitelist()
+def get_relance_clients(search=None, customer_group=None, debt_type=None):
+    """
+    Agrège, par client, les montants en attente sur les 3 comptes ciblés,
+    en se basant UNIQUEMENT sur les écritures de paiement (Payment Entry).
+
+    Le montant net par compte = SUM(debit) - SUM(credit) de la GL Entry,
+    en récupérant le client via le Payment Entry (party_type = 'Customer').
+
+    Retourne {"clients": [...], "kpi": {...}}.
+    """
+    accounts = _relance_account_list()
+
+    rows = frappe.db.sql(
+        """
+        SELECT
+            pe.party                         AS customer,
+            cust.customer_name               AS customer_name,
+            cust.customer_group              AS customer_group,
+            cust.custom_liste_telephone      AS telephone,
+            cust.email_id                    AS email,
+            gle.account                      AS account,
+            SUM(gle.debit - gle.credit)      AS montant
+        FROM `tabGL Entry` gle
+        INNER JOIN `tabPayment Entry` pe
+            ON pe.name = gle.voucher_no
+        LEFT JOIN `tabCustomer` cust
+            ON cust.name = pe.party
+        WHERE gle.voucher_type = 'Payment Entry'
+          AND gle.is_cancelled = 0
+          AND gle.account IN %(accounts)s
+          AND pe.party_type = 'Customer'
+          AND pe.party IS NOT NULL
+        GROUP BY pe.party, gle.account
+        """,
+        {"accounts": accounts},
+        as_dict=True,
+    )
+
+    # Regroupement par client
+    clients = {}
+    for r in rows:
+        cust = r.customer
+        if cust not in clients:
+            clients[cust] = {
+                "customer": cust,
+                "customer_name": r.customer_name or cust,
+                "customer_group": r.customer_group or "",
+                "telephone": r.telephone or "",
+                "email": r.email or "",
+                "dettes": 0.0,
+                "cheques": 0.0,
+                "traites": 0.0,
+                "total": 0.0,
+            }
+        key = RELANCE_ACCOUNTS.get(r.account, {}).get("key")
+        if key:
+            clients[cust][key] += float(r.montant or 0)
+
+    # Total + arrondis + filtrage des soldes nuls/négatifs
+    result = []
+    for c in clients.values():
+        c["total"] = round(c["dettes"] + c["cheques"] + c["traites"], 3)
+        c["dettes"] = round(c["dettes"], 3)
+        c["cheques"] = round(c["cheques"], 3)
+        c["traites"] = round(c["traites"], 3)
+        if c["total"] <= 0.009:
+            continue  # rien à relancer
+
+        # Filtre type de dette
+        if debt_type == "dettes" and c["dettes"] <= 0.009:
+            continue
+        if debt_type == "cheques" and c["cheques"] <= 0.009:
+            continue
+        if debt_type == "traites" and c["traites"] <= 0.009:
+            continue
+
+        # Filtre groupe client
+        if customer_group and c["customer_group"] != customer_group:
+            continue
+
+        # Recherche texte (nom ou téléphone)
+        if search:
+            s = search.strip().lower()
+            hay = f"{c['customer_name']} {c['customer']} {c['telephone']}".lower()
+            if s not in hay:
+                continue
+
+        result.append(c)
+
+    # Tri par total décroissant
+    result.sort(key=lambda x: x["total"], reverse=True)
+
+    kpi = {
+        "total_a_relancer": round(sum(c["total"] for c in result), 3),
+        "nb_clients": len(result),
+        "total_dettes": round(sum(c["dettes"] for c in result), 3),
+        "total_cheques": round(sum(c["cheques"] for c in result), 3),
+        "total_traites": round(sum(c["traites"] for c in result), 3),
+    }
+
+    return {"clients": result, "kpi": kpi}
+
+
+@frappe.whitelist()
+def get_relance_detail(customer):
+    """
+    Détail de toutes les écritures de paiement (Payment Entry) d'un client
+    sur les 3 comptes ciblés : date, compte, n° de pièce, débit/crédit,
+    statut, remarque, et les pièces liées (Sales Order / Sales Invoice)
+    via Payment Entry Reference.
+    """
+    accounts = _relance_account_list()
+
+    rows = frappe.db.sql(
+        """
+        SELECT
+            gle.posting_date                 AS posting_date,
+            gle.account                      AS account,
+            gle.voucher_type                 AS voucher_type,
+            gle.voucher_no                   AS voucher_no,
+            gle.debit                        AS debit,
+            gle.credit                       AS credit,
+            gle.remarks                      AS remarks,
+            pe.docstatus                     AS docstatus,
+            pe.reference_no                  AS reference_no,
+            pe.reference_date                AS reference_date,
+            pe.remarks                       AS pe_remarks
+        FROM `tabGL Entry` gle
+        INNER JOIN `tabPayment Entry` pe
+            ON pe.name = gle.voucher_no
+        WHERE gle.voucher_type = 'Payment Entry'
+          AND gle.is_cancelled = 0
+          AND gle.account IN %(accounts)s
+          AND pe.party_type = 'Customer'
+          AND pe.party = %(customer)s
+        ORDER BY gle.posting_date DESC, gle.voucher_no
+        """,
+        {"accounts": accounts, "customer": customer},
+        as_dict=True,
+    )
+
+    # Pièces liées par Payment Entry
+    voucher_nos = list({r.voucher_no for r in rows})
+    refs_map = {}
+    # Mapping voucher -> ensemble des Sales Orders concernées (pour les tâches)
+    voucher_orders = {}
+    all_orders = set()
+    si_names = set()
+    if voucher_nos:
+        refs = frappe.db.sql(
+            """
+            SELECT parent, reference_doctype, reference_name, allocated_amount
+            FROM `tabPayment Entry Reference`
+            WHERE parent IN %(vouchers)s
+            """,
+            {"vouchers": voucher_nos},
+            as_dict=True,
+        )
+        for ref in refs:
+            refs_map.setdefault(ref.parent, []).append({
+                "reference_doctype": ref.reference_doctype,
+                "reference_name": ref.reference_name,
+                "allocated_amount": float(ref.allocated_amount or 0),
+            })
+            if ref.reference_doctype == "Sales Order":
+                voucher_orders.setdefault(ref.parent, set()).add(ref.reference_name)
+                all_orders.add(ref.reference_name)
+            elif ref.reference_doctype == "Sales Invoice":
+                si_names.add((ref.parent, ref.reference_name))
+
+    # Résoudre les Sales Orders à partir des Sales Invoice (via Sales Invoice Item)
+    if si_names:
+        si_list = list({s[1] for s in si_names})
+        si_so = frappe.db.sql(
+            """
+            SELECT DISTINCT parent AS sales_invoice, sales_order
+            FROM `tabSales Invoice Item`
+            WHERE parent IN %(si)s AND sales_order IS NOT NULL AND sales_order != ''
+            """,
+            {"si": si_list},
+            as_dict=True,
+        )
+        si_to_so = {}
+        for row in si_so:
+            si_to_so.setdefault(row.sales_invoice, set()).add(row.sales_order)
+            all_orders.add(row.sales_order)
+        for voucher, si_name in si_names:
+            for so in si_to_so.get(si_name, []):
+                voucher_orders.setdefault(voucher, set()).add(so)
+
+    # Charger les Tâches de travail liées à ces Sales Orders
+    orders_tasks = {}
+    if all_orders:
+        taches = frappe.db.sql(
+            """
+            SELECT name, commande_client, status, custom_type_dintervention,
+                   starts_on, ends_on
+            FROM `tabTache de travail`
+            WHERE commande_client IN %(orders)s
+            """,
+            {"orders": list(all_orders)},
+            as_dict=True,
+        )
+        for t in taches:
+            orders_tasks.setdefault(t.commande_client, []).append({
+                "name": t.name,
+                "status": t.status,
+                "type": t.custom_type_dintervention or "",
+                "starts_on": str(t.starts_on) if t.starts_on else "",
+                "ends_on": str(t.ends_on) if t.ends_on else "",
+            })
+
+    status_label = {0: "Brouillon", 1: "Validé", 2: "Annulé"}
+    detail = []
+    running = 0.0
+    # Calcul du solde cumulé chronologique (du plus ancien au plus récent)
+    for r in reversed(rows):
+        running += float(r.debit or 0) - float(r.credit or 0)
+        r["_balance"] = round(running, 3)
+
+    for r in rows:
+        # Tâches de travail liées à cette ligne (via les Sales Orders de la pièce)
+        line_orders = voucher_orders.get(r.voucher_no, set())
+        line_tasks = []
+        seen_tasks = set()
+        for so in line_orders:
+            for t in orders_tasks.get(so, []):
+                if t["name"] in seen_tasks:
+                    continue
+                seen_tasks.add(t["name"])
+                line_tasks.append({**t, "sales_order": so})
+
+        detail.append({
+            "posting_date": str(r.posting_date) if r.posting_date else "",
+            "account": r.account,
+            "account_label": RELANCE_ACCOUNTS.get(r.account, {}).get("label", r.account),
+            "voucher_type": r.voucher_type,
+            "voucher_no": r.voucher_no,
+            "debit": float(r.debit or 0),
+            "credit": float(r.credit or 0),
+            "balance": r.get("_balance", 0),
+            "docstatus": status_label.get(r.docstatus, "?"),
+            "reference_no": r.reference_no or "",
+            "remarks": (r.pe_remarks or r.remarks or "").strip(),
+            "references": refs_map.get(r.voucher_no, []),
+            "tasks": line_tasks,
+        })
+
+    return detail
+
+
+def _build_relance_message(client):
+    """Construit le message de relance personnalisé à partir d'une ligne client."""
+    parts = []
+    if float(client.get("dettes") or 0) > 0.009:
+        parts.append(f"Dettes: {_fmt_tnd(client['dettes'])} TND")
+    if float(client.get("cheques") or 0) > 0.009:
+        parts.append(f"Chèques sans provision: {_fmt_tnd(client['cheques'])} TND")
+    if float(client.get("traites") or 0) > 0.009:
+        parts.append(f"Traites sans provision: {_fmt_tnd(client['traites'])} TND")
+    repartition = ", ".join(parts)
+    nom = client.get("customer_name") or client.get("customer") or "Client"
+    total = _fmt_tnd(client.get("total") or 0)
+
+    # Détail par paiement (montant + facture/commande liée + total de la pièce)
+    detail_txt = ""
+    details = _get_payment_details_for_message(client.get("customer"))
+    if details:
+        lignes = []
+        for d in details:
+            piece = d["fac_name"] or d["doc_ref"] or "—"
+            date_txt = f"{_fmt_date(d['posting_date'])} " if d.get("posting_date") else ""
+            if d["doc_total"]:
+                lignes.append(
+                    f"- {date_txt}{_fmt_tnd(d['montant'])} TND ({piece}, "
+                    f"total {_fmt_tnd(d['doc_total'])} TND)"
+                )
+            else:
+                lignes.append(f"- {date_txt}{_fmt_tnd(d['montant'])} TND ({piece})")
+        detail_txt = "\nDétail des paiements :\n" + "\n".join(lignes) + "\n"
+
+    return (
+        f"Bonjour {nom}, sauf erreur de notre part, votre situation présente "
+        f"un montant en attente de règlement de {total} TND, réparti comme suit : "
+        f"{repartition}.\n{detail_txt}"
+        f"Merci de bien vouloir régulariser votre situation. "
+        f"AquaWorld & Servicing."
+    )
+
+
+def _fac_display_name(numero, posting_date):
+    """Construit le nom de facture FAC-{mois}-{année}-{numéro sur 5 chiffres}
+    à partir de custom_numero_facture et posting_date."""
+    try:
+        dt = frappe.utils.getdate(posting_date)
+        num = str(int(numero)).zfill(5) if numero else ""
+        if not num:
+            return ""
+        return f"FAC-{dt.month:02d}-{dt.year}-{num}"
+    except Exception:
+        return str(numero or "")
+
+
+def _get_payment_details_for_message(customer):
+    """Pour chaque écriture de paiement ciblée du client, retourne le montant,
+    la facture/commande liée et le total de cette pièce."""
+    if not customer:
+        return []
+    accounts = _relance_account_list()
+    rows = frappe.db.sql(
+        """
+        SELECT gle.voucher_no               AS voucher_no,
+               gle.posting_date             AS posting_date,
+               SUM(gle.debit - gle.credit)  AS montant
+        FROM `tabGL Entry` gle
+        INNER JOIN `tabPayment Entry` pe ON pe.name = gle.voucher_no
+        WHERE gle.voucher_type = 'Payment Entry'
+          AND gle.is_cancelled = 0
+          AND gle.account IN %(accounts)s
+          AND pe.party_type = 'Customer'
+          AND pe.party = %(customer)s
+        GROUP BY gle.voucher_no
+        HAVING montant > 0.009
+        ORDER BY gle.posting_date
+        """,
+        {"accounts": accounts, "customer": customer},
+        as_dict=True,
+    )
+    if not rows:
+        return []
+
+    vouchers = [r.voucher_no for r in rows]
+    refs = frappe.db.sql(
+        """SELECT parent, reference_doctype, reference_name
+           FROM `tabPayment Entry Reference` WHERE parent IN %(v)s""",
+        {"v": vouchers},
+        as_dict=True,
+    )
+    ref_by_voucher = {}
+    si_names, so_names = set(), set()
+    for ref in refs:
+        ref_by_voucher.setdefault(ref.parent, []).append(ref)
+        if ref.reference_doctype == "Sales Invoice":
+            si_names.add(ref.reference_name)
+        elif ref.reference_doctype == "Sales Order":
+            so_names.add(ref.reference_name)
+
+    # Commandes -> factures liées (via Sales Invoice Item)
+    so_info, so_to_si = {}, {}
+    if so_names:
+        for s in frappe.db.sql(
+            "SELECT name, grand_total FROM `tabSales Order` WHERE name IN %(n)s",
+            {"n": list(so_names)}, as_dict=True,
+        ):
+            so_info[s.name] = s
+        for row in frappe.db.sql(
+            """SELECT sales_order, parent AS si FROM `tabSales Invoice Item`
+               WHERE sales_order IN %(n)s AND sales_order != ''""",
+            {"n": list(so_names)}, as_dict=True,
+        ):
+            so_to_si.setdefault(row.sales_order, row.si)
+            si_names.add(row.si)
+
+    si_info = {}
+    if si_names:
+        for s in frappe.db.sql(
+            """SELECT name, custom_numero_facture, posting_date, grand_total
+               FROM `tabSales Invoice` WHERE name IN %(n)s""",
+            {"n": list(si_names)}, as_dict=True,
+        ):
+            si_info[s.name] = s
+
+    details = []
+    for r in rows:
+        refs_v = ref_by_voucher.get(r.voucher_no, [])
+        si_ref = next((x for x in refs_v if x.reference_doctype == "Sales Invoice"), None)
+        so_ref = next((x for x in refs_v if x.reference_doctype == "Sales Order"), None)
+
+        fac_name, doc_ref, doc_total = "", "", 0.0
+        if si_ref and si_ref.reference_name in si_info:
+            s = si_info[si_ref.reference_name]
+            fac_name = _fac_display_name(s.custom_numero_facture, s.posting_date)
+            doc_total = float(s.grand_total or 0)
+        elif so_ref:
+            so = so_info.get(so_ref.reference_name)
+            doc_total = float(so.grand_total or 0) if so else 0.0
+            doc_ref = f"Commande {so_ref.reference_name}"
+            si_name = so_to_si.get(so_ref.reference_name)
+            if si_name and si_name in si_info:
+                s = si_info[si_name]
+                fac_name = _fac_display_name(s.custom_numero_facture, s.posting_date)
+
+        details.append({
+            "montant": round(float(r.montant or 0), 3),
+            "posting_date": str(r.posting_date) if r.posting_date else "",
+            "fac_name": fac_name,
+            "doc_ref": doc_ref,
+            "doc_total": round(doc_total, 3),
+        })
+    return details
+
+
+def _fmt_tnd(val):
+    try:
+        return f"{float(val):,.3f}".replace(",", " ").replace(".", ",")
+    except Exception:
+        return str(val)
+
+
+def _fmt_date(val):
+    """Formate une date en JJ/MM/AAAA pour les messages."""
+    try:
+        return frappe.utils.getdate(val).strftime("%d/%m/%Y")
+    except Exception:
+        return str(val or "")
+
+
+@frappe.whitelist()
+def preparer_messages_relance(customers):
+    """
+    Prépare les messages de relance personnalisés pour une liste de clients.
+    `customers` : JSON list de noms de clients (Customer.name).
+    Retourne une liste {customer, customer_name, telephone, email, message, total}.
+    """
+    if isinstance(customers, str):
+        customers = json.loads(customers)
+
+    data = get_relance_clients()
+    by_name = {c["customer"]: c for c in data["clients"]}
+
+    out = []
+    for cust in customers:
+        c = by_name.get(cust)
+        if not c:
+            continue
+        out.append({
+            "customer": c["customer"],
+            "customer_name": c["customer_name"],
+            "telephone": c["telephone"],
+            "email": c["email"],
+            "total": c["total"],
+            "message": _build_relance_message(c),
+        })
+    return out
+
+
+@frappe.whitelist()
+def envoyer_relance(payload, channel="sms"):
+    """
+    Envoie les relances.
+    `payload` : JSON list de {customer, telephone, email, message}.
+    `channel` : 'sms', 'email' ou 'both' (SMS + Email).
+    Retourne {sent: [...], failed: [...]}.
+    """
+    if isinstance(payload, str):
+        payload = json.loads(payload)
+
+    # Canaux à utiliser
+    channels = ["sms", "email"] if channel == "both" else [channel]
+
+    sent, failed = [], []
+
+    def _send_sms(item):
+        phone = (item.get("telephone") or "").strip()
+        if not phone:
+            failed.append({"customer": item.get("customer"), "reason": "Téléphone manquant (SMS)"})
+            return
+        from customization_app.customize_erpnext.doctype.compagne_sms.compagne_sms import (
+            _send_sms_with_fallback,
+        )
+        _send_sms_with_fallback([phone], item["_message"])
+        sent.append({"customer": item.get("customer"), "channel": "sms", "to": phone})
+        _log_relance_comment(item.get("customer"), "SMS", f"Envoyé au {phone}")
+
+    def _send_email(item):
+        email = (item.get("email") or "").strip()
+        if not email:
+            failed.append({"customer": item.get("customer"), "reason": "Email manquant (Email)"})
+            return
+        frappe.sendmail(
+            recipients=[email],
+            subject="Régularisation de votre situation - AquaWorld & Servicing",
+            message=item["_message"].replace("\n", "<br>"),
+            reference_doctype="Customer",
+            reference_name=item.get("customer"),
+        )
+        sent.append({"customer": item.get("customer"), "channel": "email", "to": email})
+        _log_relance_comment(item.get("customer"), "Email", f"Envoyé à {email}")
+
+    for item in payload:
+        cust = item.get("customer")
+        message = (item.get("message") or "").strip()
+        if not message:
+            failed.append({"customer": cust, "reason": "Message vide"})
+            continue
+        item["_message"] = message
+
+        for ch in channels:
+            try:
+                if ch == "sms":
+                    _send_sms(item)
+                elif ch == "email":
+                    _send_email(item)
+                else:
+                    failed.append({"customer": cust, "reason": f"Canal inconnu: {ch}"})
+            except Exception as e:
+                frappe.log_error(frappe.get_traceback(), "Relance Paiements: échec envoi")
+                failed.append({"customer": cust, "reason": f"{ch}: {str(e)[:100]}"})
+
+    frappe.db.commit()
+    return {"sent": sent, "failed": failed}
