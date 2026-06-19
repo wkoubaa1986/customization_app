@@ -318,7 +318,7 @@ fixtures = [
     {
         "doctype": "DocType",
         "filters": [
-            ["name", "in", ["Mes Interventions Employe", "Intervention"]],
+            ["name", "in", ["Mes Interventions Employe", "Intervention", "Tache de travail"]],
         ],
     },
     {
@@ -383,3 +383,13 @@ scheduler_events = {
 # doctype_js = {
 #     "Customer": "public/js/customer_quick_entry.js"
 # }
+
+# Item : verrou sync WooCommerce sans image + popup saisie groupée des prix de vente
+doctype_js = {
+    "Item": "public/js/item.js",
+}
+
+# Item (vue liste) : bouton "Vérification base article"
+doctype_list_js = {
+    "Item": "public/js/item_list.js",
+}

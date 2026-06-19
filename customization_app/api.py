@@ -3,6 +3,7 @@ import json
 
 import frappe
 from frappe import _
+from frappe.utils import flt
 
 
 @frappe.whitelist()
@@ -2187,3 +2188,324 @@ def envoyer_relance(payload, channel="sms"):
 
     frappe.db.commit()
     return {"sent": sent, "failed": failed}
+
+
+# ---------------------------------------------------------------------------
+#  Saisie groupée des prix de vente (popup sur la fiche Item)
+# ---------------------------------------------------------------------------
+
+#: Marge sous laquelle l'enregistrement est BLOQUÉ (taux de marge sur prix de vente), en %.
+MARGE_BLOCK_PCT = 5.0
+#: Marge minimale "rouge" (avertissement, non bloquant), en %.
+MARGE_MIN_PCT = 15.0
+#: Marge préférée, en % — avertissement (non bloquant) sous ce seuil.
+MARGE_PREF_PCT = 25.0
+#: TVA par défaut si l'article n'a pas d'Item Tax Template.
+TVA_DEFAUT_PCT = 19.0
+
+
+def _get_item_vat_rate(item_code, default=19.0):
+    """Taux de TVA de l'article (via son Item Tax Template), sinon `default`."""
+    tpl = frappe.db.get_value(
+        "Item Tax", {"parenttype": "Item", "parent": item_code}, "item_tax_template"
+    )
+    if tpl:
+        rate = frappe.db.get_value(
+            "Item Tax Template Detail", {"parent": tpl}, "tax_rate"
+        )
+        if rate is not None:
+            return flt(rate)
+    return flt(default)
+
+
+def _get_item_valuation_rate(item_code, fallback=0.0):
+    """
+    Dernière valorisation "réelle" de l'article :
+      1) moyenne pondérée par la quantité en stock (Bin, actual_qty > 0)
+      2) repli : dernière Stock Ledger Entry non annulée
+      3) repli : champ Item.valuation_rate (souvent 0 / non maintenu)
+    """
+    bins = frappe.get_all(
+        "Bin",
+        filters={"item_code": item_code, "actual_qty": [">", 0]},
+        fields=["actual_qty", "valuation_rate"],
+    )
+    total_qty = sum(flt(b.actual_qty) for b in bins)
+    if total_qty:
+        total_val = sum(flt(b.actual_qty) * flt(b.valuation_rate) for b in bins)
+        return total_val / total_qty
+
+    last_sle = frappe.get_all(
+        "Stock Ledger Entry",
+        filters={"item_code": item_code, "is_cancelled": 0},
+        fields=["valuation_rate"],
+        order_by="posting_date desc, posting_time desc, creation desc",
+        limit=1,
+    )
+    if last_sle and flt(last_sle[0].valuation_rate):
+        return flt(last_sle[0].valuation_rate)
+
+    return flt(fallback)
+
+
+@frappe.whitelist()
+def get_item_selling_prices(item_code):
+    """
+    Retourne, pour un article, toutes les listes de prix de VENTE (selling=1, enabled=1)
+    avec le prix actuel s'il existe, plus la dernière valorisation et le dernier prix d'achat.
+    Sert à alimenter le popup "Prix de vente" de la fiche Item.
+    """
+    if not item_code:
+        frappe.throw(_("Article manquant."))
+
+    item = frappe.db.get_value(
+        "Item", item_code,
+        ["valuation_rate", "last_purchase_rate", "stock_uom", "sales_uom"],
+        as_dict=True,
+    )
+    if not item:
+        frappe.throw(_("Article introuvable : {0}").format(item_code))
+
+    uom = item.sales_uom or item.stock_uom
+
+    valuation = _get_item_valuation_rate(item_code, fallback=item.valuation_rate)
+    # Coût de revient HT pour le calcul de marge : valorisation, sinon dernier prix d'achat
+    cost = valuation if valuation > 0 else flt(item.last_purchase_rate)
+    tva = _get_item_vat_rate(item_code, default=TVA_DEFAUT_PCT)
+
+    price_lists = frappe.get_all(
+        "Price List",
+        filters={"selling": 1, "enabled": 1},
+        fields=["name", "currency"],
+        order_by="name asc",
+    )
+
+    rows = []
+    for pl in price_lists:
+        existing = frappe.db.get_value(
+            "Item Price",
+            {"item_code": item_code, "price_list": pl.name, "selling": 1},
+            ["name", "price_list_rate", "currency"],
+            as_dict=True,
+        )
+        rate = existing.price_list_rate if existing else None
+
+        # Marge (taux sur PV) calculée côté serveur si un prix existe et un coût est connu
+        marge = None
+        if rate and cost > 0:
+            pv_ht = flt(rate) / (1 + tva / 100.0)
+            if pv_ht > 0:
+                marge = round((pv_ht - cost) / pv_ht * 100.0, 1)
+
+        rows.append({
+            "price_list": pl.name,
+            "currency": (existing.currency if existing else None) or pl.currency,
+            "rate": rate,
+            "marge": marge,
+            "item_price": existing.name if existing else None,
+        })
+
+    return {
+        "item_code": item_code,
+        "uom": uom,
+        "valuation_rate": valuation,
+        "last_purchase_rate": item.last_purchase_rate,
+        "tva": _get_item_vat_rate(item_code, default=TVA_DEFAUT_PCT),
+        "cost": cost,
+        "marge_block": MARGE_BLOCK_PCT,
+        "marge_min": MARGE_MIN_PCT,
+        "marge_pref": MARGE_PREF_PCT,
+        "price_lists": rows,
+    }
+
+
+@frappe.whitelist()
+def save_item_selling_prices(item_code, prices):
+    """
+    Upsert des prix de vente d'un article.
+    `prices` : JSON list de {price_list, rate}.
+    Règle : si un Item Price (article, liste, selling) existe -> mise à jour du taux ;
+            sinon -> création. Tous les prix de vente sont obligatoires (vérif serveur).
+    Retourne {updated: [...], created: [...]}.
+    """
+    if isinstance(prices, str):
+        prices = json.loads(prices)
+    if not item_code:
+        frappe.throw(_("Article manquant."))
+
+    item = frappe.db.get_value(
+        "Item", item_code, ["stock_uom", "sales_uom"], as_dict=True
+    )
+    if not item:
+        frappe.throw(_("Article introuvable : {0}").format(item_code))
+    uom = item.sales_uom or item.stock_uom
+
+    # Listes de prix de vente attendues -> {nom: devise}
+    selling_lists = {
+        pl.name: pl.currency
+        for pl in frappe.get_all(
+            "Price List",
+            filters={"selling": 1, "enabled": 1},
+            fields=["name", "currency"],
+        )
+    }
+
+    # Valeurs saisies indexées par liste de prix
+    provided = {}
+    for row in (prices or []):
+        pl = (row.get("price_list") or "").strip()
+        if pl:
+            provided[pl] = row.get("rate")
+
+    # Vérification : tous les prix de vente doivent être renseignés
+    missing = [
+        pl for pl in selling_lists
+        if provided.get(pl) is None or str(provided.get(pl)).strip() == ""
+    ]
+    if missing:
+        frappe.throw(
+            _("Tous les prix de vente sont obligatoires. Manquant(s) : {0}").format(
+                ", ".join(missing)
+            )
+        )
+
+    updated, created = [], []
+    for pl, currency in selling_lists.items():
+        rate = flt(provided[pl])
+        existing = frappe.db.get_value(
+            "Item Price",
+            {"item_code": item_code, "price_list": pl, "selling": 1},
+            "name",
+        )
+        if existing:
+            doc = frappe.get_doc("Item Price", existing)
+            doc.price_list_rate = rate
+            doc.save(ignore_permissions=True)
+            updated.append(pl)
+        else:
+            doc = frappe.get_doc({
+                "doctype": "Item Price",
+                "item_code": item_code,
+                "price_list": pl,
+                "selling": 1,
+                "currency": currency,
+                "uom": uom,
+                "price_list_rate": rate,
+            })
+            doc.insert(ignore_permissions=True)
+            created.append(pl)
+
+    frappe.db.commit()
+    return {"updated": updated, "created": created}
+
+
+@frappe.whitelist()
+def scan_item_database():
+    """
+    Scanne tous les articles actifs et retourne ceux qui ont un problème :
+      - synchronisés avec le site (custom_sync_avec_woocommerce=1) mais SANS image
+      - vendables (is_sales_item=1) avec un prix de liste de VENTE manquant
+      - taux de marge (sur prix de vente) < MARGE_MIN_PCT sur une liste de vente
+        marge = (PV_HT - coût_HT) / PV_HT * 100
+        PV_HT = price_list_rate (TTC) / (1 + TVA_article/100)
+        coût_HT = valorisation pondérée du stock (repli : dernier prix d'achat)
+    Retourne {count, problems:[{item_code, item_name, image, reasons:[...]}]}.
+    Alimente le popup "Vérification base article" de la vue liste Item.
+    """
+    selling_lists = set(
+        frappe.get_all("Price List", filters={"selling": 1, "enabled": 1}, pluck="name")
+    )
+
+    items = frappe.get_all(
+        "Item",
+        filters={"disabled": 0},
+        fields=[
+            "name", "item_name", "image", "last_purchase_rate",
+            "custom_sync_avec_woocommerce", "is_sales_item",
+        ],
+        order_by="item_name asc",
+    )
+
+    # Prix de vente existants {article: {liste: taux_TTC}} (bulk)
+    prices_by_item = {}
+    if selling_lists:
+        for p in frappe.get_all(
+            "Item Price",
+            filters={"selling": 1, "price_list": ["in", list(selling_lists)]},
+            fields=["item_code", "price_list", "price_list_rate"],
+        ):
+            prices_by_item.setdefault(p.item_code, {})[p.price_list] = flt(p.price_list_rate)
+
+    # Valorisation HT pondérée par le stock {article: coût_HT} (bulk Bin)
+    val_acc = {}  # item -> [valeur_totale, qty_totale]
+    for b in frappe.get_all(
+        "Bin",
+        filters={"actual_qty": [">", 0]},
+        fields=["item_code", "actual_qty", "valuation_rate"],
+    ):
+        acc = val_acc.setdefault(b.item_code, [0.0, 0.0])
+        acc[0] += flt(b.actual_qty) * flt(b.valuation_rate)
+        acc[1] += flt(b.actual_qty)
+    cost_by_item = {it: (v[0] / v[1]) for it, v in val_acc.items() if v[1]}
+
+    # Taux de TVA par article via Item Tax Template (bulk)
+    tpl_rate = {
+        r.parent: flt(r.tax_rate)
+        for r in frappe.get_all(
+            "Item Tax Template Detail",
+            fields=["parent", "tax_rate"],
+        )
+    }
+    vat_by_item = {}
+    for r in frappe.get_all(
+        "Item Tax",
+        filters={"parenttype": "Item"},
+        fields=["parent", "item_tax_template"],
+    ):
+        vat_by_item.setdefault(r.parent, tpl_rate.get(r.item_tax_template, TVA_DEFAUT_PCT))
+
+    problems = []
+    for it in items:
+        reasons = []
+
+        if it.custom_sync_avec_woocommerce and not it.image:
+            reasons.append(_("Synchronisé avec le site mais sans image"))
+
+        if it.is_sales_item and selling_lists:
+            item_prices = prices_by_item.get(it.name, {})
+
+            missing = selling_lists - set(item_prices)
+            if missing:
+                reasons.append(
+                    _("Prix de vente manquant : {0}").format(", ".join(sorted(missing)))
+                )
+
+            # Marge : coût HT (stock, sinon dernier prix d'achat)
+            cost_ht = cost_by_item.get(it.name) or flt(it.last_purchase_rate)
+            if cost_ht > 0:
+                vat = vat_by_item.get(it.name, TVA_DEFAUT_PCT)
+                faibles = []
+                for pl, ttc in sorted(item_prices.items()):
+                    pv_ht = flt(ttc) / (1 + vat / 100.0)
+                    if pv_ht <= 0:
+                        continue
+                    # Taux de marge sur prix de vente : (PV_HT - coût_HT) / PV_HT * 100
+                    marge = (pv_ht - cost_ht) / pv_ht * 100.0
+                    if marge < MARGE_MIN_PCT:
+                        faibles.append(f"{pl} ({marge:.0f}%)")
+                if faibles:
+                    reasons.append(
+                        _("Marge < {0}% : {1}").format(
+                            int(MARGE_MIN_PCT), ", ".join(faibles)
+                        )
+                    )
+
+        if reasons:
+            problems.append({
+                "item_code": it.name,
+                "item_name": it.item_name,
+                "image": it.image,
+                "reasons": reasons,
+            })
+
+    return {"count": len(problems), "problems": problems}
