@@ -1,0 +1,17 @@
+name: Trigger frappe_docker Build
+
+on:
+  push:
+    branches:
+      - develop
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.FRAPPE_DOCKER_PAT }}
+          repository: wkoubaa1986/frappe_docker
+          event-type: customization_app_updated
+          client-payload: '{"ref": "${{ github.ref }}", "sha": "${{ github.sha }}"}'
