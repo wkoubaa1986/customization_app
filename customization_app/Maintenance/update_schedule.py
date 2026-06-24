@@ -791,12 +791,18 @@ def update_maintenance_schedule(i_sal):
     single_families = set()
 
     for i_item in raw_items:
-        try:
-            item = frappe.get_doc("Item", i_item.replace(" ", ""))
-        except Exception:
-            i_item2 = i_item.replace(" ", "")
-            i_item2 = i_item2.replace("GPD", " GPD")
-            item = frappe.get_doc("Item", i_item2)
+        item = None
+        candidates = []
+        c1 = i_item.replace(" ", "")
+        candidates.append(c1)
+        candidates.append(c1.replace("GPD", " GPD"))
+        for code in candidates:
+            if frappe.db.exists("Item", code):
+                item = frappe.get_doc("Item", code)
+                break
+        if item is None:
+            log(f"[WARN-CONSO] Item introuvable pour '{i_item}' (essais: {candidates}) — ignoré")
+            continue
 
         group = (item.item_group or "").strip()
         name = (item.item_name or "").lower()
