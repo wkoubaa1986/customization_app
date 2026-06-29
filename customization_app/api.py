@@ -6,6 +6,57 @@ from frappe import _
 from frappe.utils import flt
 
 
+# ---------------------------------------------------------------------------
+# Tache de travail — couleur (SOURCE DE VÉRITÉ UNIQUE)
+# Tout calcul de couleur passe par compute_tache_color(). Le serveur tranche
+# (before_save) ; le JS ne fait que l'aperçu. Ordre de priorité :
+#   statut (Completed/Cancelled) > partenaire > staff > défaut
+# ---------------------------------------------------------------------------
+PARTNER_USER = "economiqaquasolutions23@gmail.com"
+
+STAFF_COLORS = {
+    "HR-EMP-00001": "#449CF0",
+    "HR-EMP-00002": "#ECAD4B",
+    "HR-EMP-00003": "#AA00AA",
+    "HR-EMP-00004": "#761ACB",
+    "HR-EMP-00005": "#CB2929",
+    "HR-EMP-00006": "#ED6396",
+    "HR-EMP-00007": "#888c89",
+    "HR-EMP-00008": "#37fab2",
+    "HR-EMP-00009": "#e6f542",
+}
+STAFF_COLOR_DEFAULT = "#888c89"
+STATUS_COLORS = {"Completed": "#32CD32", "Cancelled": "#DCDCDC"}
+PARTNER_COLOR = "#29def2"
+
+
+def _client_created_by_partner(customer):
+    """Vrai si le Customer a été créé par le compte partenaire."""
+    if not customer:
+        return False
+    return frappe.db.get_value("Customer", customer, "owner") == PARTNER_USER
+
+
+def _address_google_map(address):
+    """Lien Google Map de l'adresse (champ custom_lien_google_map), ou None."""
+    if not address:
+        return None
+    return (frappe.db.get_value("Address", address, "custom_lien_google_map") or "").strip() or None
+
+
+def compute_tache_color(doc):
+    """Couleur unique d'une Tache de travail.
+    Priorité : statut (Completed/Cancelled) > client créé par le partenaire (cyan)
+    > couleur par employé > défaut.
+    NB : le marqueur cyan dépend du créateur du CLIENT, pas de celui de la tâche."""
+    status = doc.get("status") or ""
+    if status in STATUS_COLORS:
+        return STATUS_COLORS[status]
+    if _client_created_by_partner(doc.get("custom_client")):
+        return PARTNER_COLOR
+    return STAFF_COLORS.get(doc.get("custom_choix_du_staff"), STAFF_COLOR_DEFAULT)
+
+
 @frappe.whitelist()
 def get_custom_tache_events(start, end, filters=None):
     # Define the field mapping for your custom "Tache de travail" doctype
@@ -757,13 +808,16 @@ def _create_so_from_pos(pos_name, extra_items=None):
 
 
 def before_save_tache_de_travail(doc, method=None):
-    """Set color + traduire en arabe si client/adresse/sujet ont changé."""
-    # Couleur spécifique pour l'utilisateur partenaire (sauf si terminé/annulé)
-    if doc.owner == 'economiqaquasolutions23@gmail.com' and doc.status not in ('Completed', 'Cancelled'):
-        doc.color = '#29def2'
+    """Set color (source unique) + traduire en arabe si client/adresse/sujet ont changé."""
+    # Couleur : seule autorité. Priorité statut > partenaire > staff > défaut.
+    doc.color = compute_tache_color(doc)
 
-    if doc.status == "Completed":
-        doc.color = "#bbf7d0"
+    # Lien Google Map : toujours synchronisé depuis l'adresse affectée,
+    # indépendamment de l'utilisateur et du chemin de création (bouton RDV,
+    # liste d'appel, rattrapage, formulaire...). N'écrase pas si l'adresse n'a pas de lien.
+    gmap = _address_google_map(doc.get("select_address"))
+    if gmap:
+        doc.google_map = gmap
 
     EMPLOYEE = "HR-EMP-00009"
     if doc.custom_choix_du_staff != EMPLOYEE:
@@ -1479,7 +1533,7 @@ def get_customer_info_all(customer):
     addresses = frappe.db.sql(
         """
         SELECT a.name, a.address_line1, a.address_line2, a.city,
-               a.pincode, a.state, a.country
+               a.pincode, a.state, a.country, a.custom_lien_google_map
         FROM `tabAddress` a
         JOIN `tabDynamic Link` dl ON dl.parent = a.name
         WHERE dl.link_doctype = 'Customer' AND dl.link_name = %s

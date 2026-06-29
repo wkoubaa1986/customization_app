@@ -13,13 +13,7 @@
     const TARGET_WORKSPACE = 'Calendrier';
     const BTN_ID           = 'rdv-libre-fab';
 
-    const STAFF_COLORS = {
-        'HR-EMP-00001': '#449CF0', 'HR-EMP-00002': '#ECAD4B',
-        'HR-EMP-00003': '#AA00AA', 'HR-EMP-00004': '#761ACB',
-        'HR-EMP-00005': '#CB2929', 'HR-EMP-00006': '#ED6396',
-        'HR-EMP-00007': '#888c89', 'HR-EMP-00008': '#37fab2',
-        'HR-EMP-00009': '#e6f542',
-    };
+    // Couleur décidée côté serveur (compute_tache_color) — plus de mapping ici.
     const INTERVENTION_ICONS = {
         'Entretien': '🔧 ', 'Installation': '🔨 ', 'Réparation': '🧰 ',
         'Livraison': '🚐 ', 'Visite': '🚗 ', 'Autre': '☕ ',
@@ -311,6 +305,7 @@
     function openRdvDialog(d, onDismiss, prefill) {
         var _addresses = (prefill && prefill._addresses) || [];
         var _secteur   = (prefill && prefill.secteur)    || '';
+        var _googleMap = '';
         var _saved     = false;
 
         var dlg = new frappe.ui.Dialog({
@@ -337,6 +332,7 @@
                                 var af = dlg.get_field('select_address');
                                 af.df.options = [''].concat(_addresses.map(function(a){ return a.name; })).join('\n');
                                 af.refresh();
+                                _googleMap = '';
                                 dlg.set_value('select_address', '');
                                 dlg.set_value('details_adresse', '');
                             },
@@ -359,8 +355,9 @@
                     options: '',
                     onchange: function () {
                         var addrName = dlg.get_value('select_address');
-                        if (!addrName) { dlg.set_value('details_adresse', ''); return; }
+                        if (!addrName) { _googleMap = ''; dlg.set_value('details_adresse', ''); return; }
                         var a = _addresses.find(function (x) { return x.name === addrName; }) || {};
+                        _googleMap = a.custom_lien_google_map || '';
                         var lines = [a.address_line1, a.address_line2, a.city].filter(Boolean);
                         var reg   = [a.pincode, a.state, a.country].filter(Boolean).join(', ');
                         if (reg) lines.push(reg);
@@ -378,7 +375,6 @@
                 var cli      = vals.custom_client             || '';
                 var type_int = vals.custom_type_dintervention || '';
                 var staffId  = vals.custom_choix_du_staff    || '';
-                var color    = STAFF_COLORS[staffId]         || '#888c89';
                 var icon     = INTERVENTION_ICONS[type_int]  || '☕ ';
                 var starts   = vals.starts_on                || '';
                 var ends     = d.ends_on                     || '';
@@ -397,8 +393,6 @@
                     var titre = (sec ? sec + '\n' : '')
                               + icon + type_int + ': Client: ' + cli
                               + '\n' + (employeeName || '');
-                    // Partner user always gets their specific color
-                    var finalColor = (frappe.session.user === ALLOWED_USER) ? '#29def2' : color;
                     var doc = {
                         doctype:                   'Tache de travail',
                         custom_client:             cli,
@@ -409,9 +403,9 @@
                         ends_on:                   ends,
                         select_address:            vals.select_address || '',
                         details_adresse:           vals.details_adresse || '',
+                        google_map:                _googleMap,
                         secteur:                   sec,
                         subject:                   vals.note || '',
-                        color:                     finalColor,
                         titre:                     titre,
                     };
                     dlg.hide();
