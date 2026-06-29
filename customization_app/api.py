@@ -44,6 +44,126 @@ def _address_google_map(address):
     return (frappe.db.get_value("Address", address, "custom_lien_google_map") or "").strip() or None
 
 
+def _customer_phone(customer):
+    """Téléphone du client (champ custom_liste_telephone), ou None."""
+    if not customer:
+        return None
+    return (frappe.db.get_value("Customer", customer, "custom_liste_telephone") or "").strip() or None
+
+
+MAIN_OEUVRE_GROUP = "Main d’œuvre"  # apostrophe typographique (comme en base)
+
+
+@frappe.whitelist()
+def partner_finalize_order(task):
+    """Finalisation d'une Tache de travail partenaire (HR-EMP-00007), exécutée
+    EN ARRIÈRE-PLAN en tant qu'Administrator (le partenaire n'a pas les
+    permissions Payment Entry / Delivery Note). Étapes :
+      1. valide (submit) la commande si elle est en brouillon → déclenche la
+         génération des paiements via les Server Scripts de la Sales Order ;
+      2. consolide tous les BL de la commande en UN seul BL « Main d'œuvre »
+         au total HT (sinon ligne M-I-OD non liée).
+    Enqueuée par le Server Script « Autorisation Sales order partenaire » à la
+    fermeture de la tâche (enqueue_after_commit)."""
+    frappe.set_user("Administrator")
+
+    doc = frappe.get_doc("Tache de travail", task)
+    # Garde : uniquement les tâches partenaire fermées avec une commande.
+    if doc.custom_choix_du_staff != "HR-EMP-00007":
+        return
+    if doc.status != "Completed":
+        return
+    so_name = doc.commande_client
+    if not so_name:
+        return
+
+    so = frappe.get_doc("Sales Order", so_name)
+
+    # 1) Valider la commande AVANT de créer le BL.
+    if so.docstatus == 0:
+        so.submit()
+        so.reload()
+
+    # 2) Article Main d'œuvre de la commande (sinon fallback M-I-OD).
+    mo_code = mo_row = None
+    for it in so.items:
+        if frappe.db.get_value("Item", it.item_code, "item_group") == MAIN_OEUVRE_GROUP:
+            mo_code, mo_row = it.item_code, it.name
+            break
+    total = so.total
+
+    # Sécurité : la commande doit avoir un article Main d'œuvre (garanti par le
+    # contrôle bloquant à la fermeture). Sinon, on ne crée pas de BL.
+    if not mo_code:
+        frappe.log_error(
+            "Commande " + so_name + " sans article Main d'œuvre — BL non créé",
+            "partner_finalize_order",
+        )
+        return
+
+    # 3) BL existants de la commande → annuler puis supprimer.
+    bls = frappe.db.sql(
+        """
+        SELECT DISTINCT dn.name
+        FROM `tabDelivery Note` dn
+        LEFT JOIN `tabDelivery Note Item` dni ON dni.parent = dn.name
+        WHERE (dni.against_sales_order = %(so)s OR dn.custom_commande = %(so)s)
+          AND dn.docstatus IN (0, 1)
+        """,
+        {"so": so_name},
+        as_dict=True,
+    )
+    last_bl = None
+    to_delete = []
+    for row in bls:
+        bl = frappe.get_doc("Delivery Note", row.name)
+        last_bl = bl
+        if bl.docstatus == 1:
+            bl.cancel()
+        to_delete.append(bl.name)
+
+    # 4) BL consolidé : une ligne au total HT.
+    dn = frappe.new_doc("Delivery Note")
+    if last_bl is not None:
+        dn.customer = last_bl.customer
+        dn.set_posting_time = 1
+        dn.posting_date = last_bl.posting_date
+        dn.posting_time = last_bl.posting_time
+        dn.selling_price_list = last_bl.selling_price_list
+    else:
+        dn.customer = so.customer
+    dn.ignore_pricing_rule = 1
+    # Lien vers la commande (champ custom) : ERPNext interdit against_sales_order
+    # sans so_detail correspondant ; on relie donc via ce champ, visible et filtrable.
+    dn.custom_commande = so_name
+    # La commande a forcément un article Main d'œuvre (contrôle bloquant à la
+    # fermeture) → BL lié nativement (against_sales_order + so_detail) → visible
+    # dans l'onglet Connexions de la commande.
+    item = {
+        "qty": 1,
+        "rate": total / 1.19,
+        "item_code": mo_code,
+        "against_sales_order": so_name,
+        "so_detail": mo_row,
+    }
+    dn.append("items", item)
+    dn.flags.ignore_mandatory = True
+    dn.insert()
+    dn.submit()
+
+    # Trace côté commande (timeline) pour voir le BL depuis le Sales Order.
+    try:
+        so.add_comment("Comment", "BL consolidé créé : " + dn.name)
+    except Exception:
+        pass
+
+    # 5) Supprimer les anciens BL.
+    for name in to_delete:
+        frappe.delete_doc("Delivery Note", name, force=True)
+
+    frappe.db.commit()
+
+
 def compute_tache_color(doc):
     """Couleur unique d'une Tache de travail.
     Priorité : statut (Completed/Cancelled) > client créé par le partenaire (cyan)
@@ -818,6 +938,12 @@ def before_save_tache_de_travail(doc, method=None):
     gmap = _address_google_map(doc.get("select_address"))
     if gmap:
         doc.google_map = gmap
+
+    # Téléphone : toujours synchronisé depuis le client (custom_liste_telephone),
+    # quelle que soit la source de création. N'écrase pas si le client n'a pas de numéro.
+    phone = _customer_phone(doc.get("custom_client"))
+    if phone:
+        doc.tel = phone
 
     EMPLOYEE = "HR-EMP-00009"
     if doc.custom_choix_du_staff != EMPLOYEE:

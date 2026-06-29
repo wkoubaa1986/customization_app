@@ -310,7 +310,16 @@ fixtures = [
     {
         "doctype": "Server Script",
         "filters": [
-            ["name", "in", ["ajuster rendez vous pris par partenaire"]],
+            [
+                "name",
+                "in",
+                [
+                    "ajuster rendez vous pris par partenaire",
+                    "Autorisation Sales order partenaire",
+                    "Generation payement",
+                    "re-generate payment after sales order",
+                ],
+            ],
         ],
     },
     {"doctype": "Responsable Relance", "filters": [["name", "=", "Default"]]},
