@@ -156,6 +156,10 @@ doc_events = {
     "Sales Order": {
         "on_cancel": "customization_app.api.on_sales_order_cancel",
     },
+    # Numérotation auto de la facture (remplace le Server Script « Generation N Facture »).
+    "Sales Invoice": {
+        "before_insert": "customization_app.facturation_numbering.set_numero_facture",
+    },
 }
 
 # Scheduled Tasks
@@ -322,6 +326,8 @@ fixtures = [
                     "cancel sales order payment",
                     "Traitement des encaissement",
                     "generer un echeancier de maintenace",
+                    "Facturation Auto",
+                    "Generation N Facture",
                 ],
             ],
         ],
@@ -337,26 +343,22 @@ fixtures = [
     {
         "doctype": "Number Card",
         "filters": [
-            ["name", "in", ["Solde WINSMS", "Expiration WINSMS (jours)", "Solde Caisse"]],
+            ["name", "in", ["Solde WINSMS", "Expiration WINSMS (jours)", "Solde Caisse", "Espèce à verser"]],
         ],
     },
-    # Workspace Selling — contient le raccourci "Suivi dettes client" vers la page Relance Paiements
+    # Workspaces personnalisés (Selling + Accounting) — UNE seule entrée : deux entrées
+    # Workspace distinctes écriraient toutes deux workspace.json et la seconde écraserait
+    # la première (seule la dernière survivait). Le filtre "in" les exporte ensemble.
     {
         "doctype": "Workspace",
         "filters": [
-            ["name", "=", "Selling"],
+            ["name", "in", ["Selling", "Accounting"]],
         ],
     },
     {
         "doctype": "Report",
         "filters": [
-            ["name", "=", "Liste Appels Rattrapage"],
-        ],
-    },
-    {
-        "doctype": "Workspace",
-        "filters": [
-            ["name", "=", "Accounting"],
+            ["name", "in", ["Liste Appels Rattrapage", "Rapport Espece"]],
         ],
     },
 ]

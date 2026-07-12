@@ -1,0 +1,141 @@
+<div class="rcj-page">
+  <style>
+    .rcj-page { padding: 14px 18px; }
+    .rcj-toolbar {
+      display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+      padding: 12px 14px; background: var(--card-bg, #fff); border: 1px solid var(--border-color, #e4e8ee);
+      border-radius: 10px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,.04);
+    }
+    .rcj-toolbar label { margin: 0; font-size: 12px; color: var(--text-muted, #7a8291); font-weight: 600; }
+    .rcj-toolbar .form-control { width: 150px; }
+    .rcj-spacer { flex: 1; }
+
+    .rcj-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 18px; }
+    .rcj-kpi { border-radius: 12px; padding: 14px 16px; color: #fff; position: relative; overflow: hidden;
+               box-shadow: 0 2px 6px rgba(0,0,0,.08); }
+    .rcj-kpi .lbl { font-size: 11px; font-weight: 600; opacity: .95; text-transform: uppercase; letter-spacing: .3px; }
+    .rcj-kpi .val { font-size: 21px; font-weight: 800; margin-top: 6px; line-height: 1.1; }
+    .rcj-kpi .sub { font-size: 10.5px; opacity: .9; margin-top: 2px; }
+
+    .rcj-emp { border: 1px solid var(--border-color, #e4e8ee); border-radius: 12px; margin-bottom: 16px;
+               overflow: hidden; background: var(--card-bg, #fff); box-shadow: 0 1px 4px rgba(0,0,0,.05); }
+    .rcj-emp-head { display: flex; align-items: center; gap: 12px; padding: 11px 16px; cursor: pointer;
+                    background: linear-gradient(90deg, #2b4c7e, #3a6ea5); color: #fff; }
+    .rcj-emp-head .name { font-weight: 700; font-size: 14px; }
+    .rcj-emp-head .count { font-size: 11px; background: rgba(255,255,255,.2); padding: 2px 8px; border-radius: 10px; }
+    .rcj-emp-head .modes { margin-left: auto; display: flex; gap: 6px; flex-wrap: wrap; }
+    .rcj-emp-head .mtag { font-size: 10.5px; background: rgba(255,255,255,.18); padding: 2px 8px; border-radius: 8px; }
+    .rcj-emp-head .caret { transition: transform .15s; font-size: 12px; opacity: .85; }
+    .rcj-emp.collapsed .rcj-emp-head .caret { transform: rotate(-90deg); }
+    .rcj-emp.collapsed .rcj-emp-body { display: none; }
+    .rcj-emp-body { padding: 0; overflow-x: auto; }
+
+    table.rcj-tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+    table.rcj-tbl th { text-align: left; padding: 8px 10px; background: var(--bg-light-gray, #f6f8fa);
+                       color: var(--text-muted, #6b7280); font-weight: 600; font-size: 11px; text-transform: uppercase;
+                       letter-spacing: .3px; border-bottom: 1px solid var(--border-color, #e4e8ee); white-space: nowrap; }
+    table.rcj-tbl td { padding: 8px 10px; border-bottom: 1px solid var(--border-color, #eef1f5); vertical-align: middle; }
+    table.rcj-tbl th.num, table.rcj-tbl td.num { text-align: right; white-space: nowrap; }
+    tr.rcj-order { transition: background .1s; }
+    tr.rcj-order:hover { background: rgba(0,0,0,.02); }
+    tr.rcj-order.open-task { background: #fdeaea; }
+    tr.rcj-order.open-task:hover { background: #fbe0e0; }
+    tr.rcj-order.alert-underpaid td:first-child { box-shadow: inset 3px 0 0 #e05b6a; }
+    tr.rcj-order.alert-overpaid  td:first-child { box-shadow: inset 3px 0 0 #7e57c2; }
+    tr.rcj-order.alert-unbilled  td:first-child { box-shadow: inset 3px 0 0 #e0b34a; }
+
+    .rcj-badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; white-space: nowrap; }
+    .rcj-chip { display: inline-block; padding: 1px 7px; border-radius: 9px; font-size: 10.5px; font-weight: 600; margin: 1px 2px 1px 0; white-space: nowrap; }
+    .rcj-more { cursor: pointer; color: #3a6ea5; font-weight: 600; font-size: 11px; white-space: nowrap; user-select: none; }
+    .rcj-more:hover { text-decoration: underline; }
+
+    tr.rcj-detail > td { background: #f9fbfd; padding: 0; }
+    .rcj-detail-inner { padding: 10px 14px; display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: 14px; }
+    .rcj-detail-inner h6 { margin: 0 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .3px; color: #6b7280; }
+    table.rcj-sub { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+    table.rcj-sub th { text-align: left; padding: 4px 6px; color: #8a93a0; font-weight: 600; border-bottom: 1px solid #e8edf2; }
+    table.rcj-sub td { padding: 4px 6px; border-bottom: 1px solid #f0f3f7; }
+    table.rcj-sub td.num { text-align: right; }
+    .rcj-empty { color: #aab1bd; font-size: 11px; font-style: italic; }
+
+    .rcj-recap { border: 1px solid var(--border-color, #e4e8ee); border-radius: 12px; overflow: hidden;
+                 margin-top: 8px; box-shadow: 0 1px 4px rgba(0,0,0,.05); }
+    .rcj-recap-head { padding: 11px 16px; background: linear-gradient(90deg,#8a6d1f,#b8901f); color: #fff; font-weight: 700; font-size: 14px; }
+    table.rcj-recap-tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+    table.rcj-recap-tbl th, table.rcj-recap-tbl td { padding: 8px 12px; border-bottom: 1px solid #eef1f5; }
+    table.rcj-recap-tbl th { background: #fffbe9; color: #7a5d10; font-weight: 700; text-align: right; font-size: 11px; text-transform: uppercase; }
+    table.rcj-recap-tbl th:first-child, table.rcj-recap-tbl td:first-child { text-align: left; }
+    table.rcj-recap-tbl td { text-align: right; }
+    table.rcj-recap-tbl tr.total-row td { font-weight: 800; background: #fff4d6; border-top: 2px solid #e6c766; }
+    table.rcj-recap-tbl tr:hover td { background: rgba(0,0,0,.015); }
+
+    details.rcj-note { background: #eef5ff; border: 1px solid #cfe0f5; border-left: 4px solid #3a6ea5;
+                       border-radius: 8px; padding: 10px 14px; margin-bottom: 14px; font-size: 12.5px; color: #2b4c7e; }
+    details.rcj-note summary { cursor: pointer; font-weight: 700; color: #1f3a5f; outline: none; }
+    details.rcj-note ul { margin: 8px 0 0; padding-left: 20px; }
+    details.rcj-note li { margin: 3px 0; }
+    .rcj-warn-banner { background: #fff3cd; border: 1px solid #f0d59a; border-radius: 8px; padding: 8px 14px;
+                       margin-bottom: 14px; font-size: 12.5px; color: #7a4d00; font-weight: 600; }
+    .rcj-warn { cursor: help; margin-right: 4px; }
+    tr.rcj-order.has-warning td:first-child { box-shadow: inset 3px 0 0 #e0912a !important; }
+    .rcj-warn-box { grid-column: 1 / -1; background: #fff6e5; border: 1px solid #f0d59a; border-radius: 8px;
+                    padding: 8px 12px; margin-bottom: 6px; color: #7a4d00; font-size: 12px; }
+    .rcj-warn-box ul { margin: 4px 0 0; padding-left: 18px; }
+    tr.rcj-order-warn td { padding: 0 !important; border-bottom: 1px solid var(--border-color, #eef1f5); }
+    .rcj-warn-line { background: #fff6e5; color: #8a4d00; padding: 5px 12px 5px 14px; font-size: 11.5px;
+                     font-weight: 600; border-left: 3px solid #e0912a; line-height: 1.55; }
+    .rcj-section-title { font-size: 13px; font-weight: 700; color: var(--text-color,#36414c); margin: 20px 0 8px; display: flex; align-items: center; gap: 8px; }
+    .rcj-muted { color: #9aa2ad; }
+    #rcj-loading { display:none; position: fixed; inset: 0; background: rgba(255,255,255,.6);
+                   z-index: 9999; align-items: center; justify-content: center; }
+  </style>
+
+  <!-- Toolbar -->
+  <div class="rcj-toolbar">
+    <label>De</label>
+    <input id="rcj-d1" type="date" class="form-control input-sm" />
+    <label>À</label>
+    <input id="rcj-d2" type="date" class="form-control input-sm" />
+    <button id="rcj-refresh" class="btn btn-primary btn-sm">Actualiser</button>
+    <div class="rcj-spacer"></div>
+    <button id="rcj-toggle-all" class="btn btn-default btn-sm">Tout replier</button>
+    <button id="rcj-chart-btn" class="btn btn-default btn-sm">📊 Graphique</button>
+  </div>
+
+  <!-- Note d’utilisation -->
+  <details class="rcj-note" open>
+    <summary>ℹ️ Comment utiliser ce rapport</summary>
+    <ul>
+      <li>Choisissez la période avec <b>De / À</b> (aujourd’hui par défaut) puis cliquez <b>Actualiser</b>.</li>
+      <li>Les encaissements sont groupés <b>par employé</b>. Cliquez sur un en-tête pour replier/déplier ; <b>▸ détail</b> montre paiements, bons de livraison, factures et tâche.</li>
+      <li>Cliquez sur une <b>commande</b>, un <b>paiement</b>, un <b>BL</b> ou une <b>facture</b> pour l’ouvrir dans une fenêtre. À l’enregistrement, la fenêtre se ferme et le rapport se met à jour. Le bouton <b>« Fermer &amp; actualiser »</b> reste inactif tant que le document n’est pas enregistré.</li>
+      <li><b>Ligne rouge</b> = tâche non terminée (<i>Open</i>). Le <b>statut</b> et le <b>mode de paiement</b> sont colorés.</li>
+      <li><b>⚠️</b> = incohérence sur une commande validée : total des paiements ≠ Total TTC, ou total des BL validés ≠ total des factures. Le détail liste les avertissements.</li>
+    </ul>
+  </details>
+
+  <!-- Bandeau d’avertissements (dynamique) -->
+  <div id="rcj-warn-banner"></div>
+
+  <!-- KPI cards -->
+  <div id="rcj-kpis" class="rcj-kpis"></div>
+
+  <!-- Chart (hidden) -->
+  <div id="rcj-chart-section" style="display:none; border:1px solid var(--border-color,#e4e8ee); border-radius:12px; padding:14px; margin-bottom:18px; background:var(--card-bg,#fff);">
+    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+      <div style="font-weight:700; font-size:13px;">📊 Encaissements par mode et par employé</div>
+      <button id="rcj-chart-close" class="btn btn-xs btn-default">✕</button>
+    </div>
+    <div id="rcj-chart"></div>
+  </div>
+
+  <!-- Employees -->
+  <div class="rcj-section-title">👥 Détail par employé</div>
+  <div id="rcj-employees"></div>
+
+  <!-- Recap -->
+  <div class="rcj-section-title">🧾 Récapitulatif des encaissements</div>
+  <div id="rcj-recap"></div>
+
+  <div id="rcj-loading"><div class="text-muted" style="font-size:15px;">Chargement…</div></div>
+</div>

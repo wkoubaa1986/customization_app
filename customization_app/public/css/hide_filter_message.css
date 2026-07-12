@@ -1,2 +1,24 @@
 .awesomplete [data-filter], .awesomplete .filter-info, .awesomplete .result-filter { display: none !important; }
 
+
+/* Raccourci "Rapport Caisse Journalière" (Accès rapide) affiché en bouton vert */
+.widget.shortcut-widget-box[data-widget-name="Rapport Caisse Journalière"] {
+  background: #2e9e5b !important;
+  border: 1px solid #2e9e5b !important;
+  border-radius: 8px !important;
+  box-shadow: 0 1px 3px rgba(46, 158, 91, 0.25) !important;
+  padding: 6px 10px !important;
+}
+.widget.shortcut-widget-box[data-widget-name="Rapport Caisse Journalière"]:hover {
+  background: #268049 !important;
+  border-color: #268049 !important;
+}
+.widget.shortcut-widget-box[data-widget-name="Rapport Caisse Journalière"],
+.widget.shortcut-widget-box[data-widget-name="Rapport Caisse Journalière"] * {
+  color: #ffffff !important;
+}
+.widget.shortcut-widget-box[data-widget-name="Rapport Caisse Journalière"] svg,
+.widget.shortcut-widget-box[data-widget-name="Rapport Caisse Journalière"] use {
+  stroke: #ffffff !important;
+  fill: #ffffff !important;
+}
