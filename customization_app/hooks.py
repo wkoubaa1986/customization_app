@@ -265,7 +265,8 @@ app_include_js = ["/assets/customization_app/js/customer_quick_entry.js",
                   "/assets/customization_app/js/mes_interventions_employe.js",
                   "/assets/customization_app/js/pos_auto_customer.js",
                   "/assets/customization_app/js/buying_item_query_override.js",
-                  "/assets/customization_app/js/calendrier_rdv_button.js"]
+                  "/assets/customization_app/js/calendrier_rdv_button.js",
+                  "/assets/customization_app/js/sales_order_avoir.js"]
 # Hide filter message shown in the awesomplete dropdown
 app_include_css = ["/assets/customization_app/css/hide_filter_message.css"]
 # doctype_calendar_js = {
