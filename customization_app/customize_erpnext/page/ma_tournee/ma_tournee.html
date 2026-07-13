@@ -1,0 +1,119 @@
+<div class="mt-page">
+  <style>
+    .mt-page {
+      padding: 10px 12px 90px;
+      max-width: 640px;
+      margin: 0 auto;
+      --mt-accent: #1d6fb8;
+      --mt-accent-soft: #e5f0fa;
+      --mt-gain: #0f7d3c;  --mt-gain-bg: #e2f4e8;
+      --mt-warn: #b8501f;  --mt-warn-bg: #fbe9df;
+      --mt-loss: #c22f2f;  --mt-loss-bg: #fdeaea;
+    }
+    [data-theme="dark"] .mt-page {
+      --mt-accent: #5aa2e0;
+      --mt-accent-soft: #16283a;
+      --mt-gain: #3fc36a;  --mt-gain-bg: #16311c;
+      --mt-warn: #eb8a55;  --mt-warn-bg: #3a2415;
+      --mt-loss: #ef6d6d;  --mt-loss-bg: #3a1c1c;
+    }
+
+    .mt-card {
+      background: var(--card-bg, #fff); border: 1px solid var(--border-color, #e4e8ee);
+      border-radius: 12px; padding: 14px; margin-bottom: 10px;
+    }
+    .mt-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .mt-head h2 { margin: 0; font-size: 17px; }
+    .mt-head .meta { color: var(--text-muted, #7a8291); font-size: 12.5px; width: 100%; }
+    .mt-progress-track { height: 8px; border-radius: 999px; background: var(--bg-light-gray, #eef1f4); margin-top: 10px; overflow: hidden; }
+    .mt-progress-fill { height: 100%; border-radius: 999px; background: var(--mt-accent); transition: width .3s ease; }
+
+    .mt-badge { display: inline-flex; align-items: center; font-size: 11.5px; font-weight: 700; padding: 3px 10px; border-radius: 999px; white-space: nowrap; }
+    .mt-badge.st-green  { color: var(--mt-gain); background: var(--mt-gain-bg); }
+    .mt-badge.st-blue   { color: var(--mt-accent); background: var(--mt-accent-soft); }
+    .mt-badge.st-orange { color: var(--mt-warn); background: var(--mt-warn-bg); }
+    .mt-badge.st-gray   { color: var(--text-muted, #6b7280); background: var(--bg-light-gray, #f0f2f4); }
+
+    .mt-visite { overflow: hidden; }
+    .mt-visite-head {
+      display: flex; align-items: center; gap: 10px; width: 100%;
+      background: none; border: 0; font: inherit; color: inherit;
+      text-align: left; padding: 0; cursor: pointer;
+    }
+    .mt-visite-head .who { font-weight: 700; font-size: 15px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+    .mt-visite-head .icons { color: var(--text-muted); font-size: 13px; letter-spacing: 2px; }
+    .mt-caret { color: var(--text-muted, #98a1ad); transition: transform .15s ease; font-size: 11px; }
+    .mt-visite.open .mt-caret { transform: rotate(90deg); }
+    .mt-visite-body { display: none; margin-top: 12px; }
+    .mt-visite.open .mt-visite-body { display: block; }
+
+    .mt-step { border-top: 1px solid var(--border-color, #eef1f5); padding: 12px 0; }
+    .mt-step-title { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 13px; margin-bottom: 8px; }
+    .mt-step-title .num {
+      width: 22px; height: 22px; border-radius: 50%; display: inline-flex;
+      align-items: center; justify-content: center; font-size: 12px;
+      background: var(--mt-accent-soft); color: var(--mt-accent); flex: none;
+    }
+    .mt-step-title .done { color: var(--mt-gain); margin-left: auto; }
+
+    .mt-btn {
+      display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+      font: inherit; font-weight: 600; font-size: 14px;
+      padding: 11px 14px; border-radius: 10px; cursor: pointer;
+      border: 1px solid var(--border-color, #dfe4ea);
+      background: var(--card-bg, #fff); color: var(--text-color, #1f272e);
+      width: 100%; margin-bottom: 6px;
+    }
+    .mt-btn:active { transform: scale(.99); }
+    .mt-btn.primary { background: var(--mt-accent); border-color: var(--mt-accent); color: #fff; }
+    .mt-btn.success { background: var(--mt-gain); border-color: var(--mt-gain); color: #fff; }
+    .mt-btn.ghost { border-style: dashed; color: var(--text-muted, #6b7280); }
+    .mt-btn:disabled { opacity: .5; cursor: not-allowed; }
+    .mt-btn-row { display: flex; gap: 8px; }
+    .mt-btn-row .mt-btn { flex: 1; }
+
+    .mt-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+    .mt-chip {
+      font: inherit; font-size: 12.5px; font-weight: 600; padding: 7px 12px;
+      border-radius: 999px; border: 1px solid var(--border-color, #dfe4ea);
+      background: var(--card-bg, #fff); color: var(--text-color); cursor: pointer;
+      max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .mt-chip.selected { background: var(--mt-accent); border-color: var(--mt-accent); color: #fff; }
+
+    .mt-field { margin-bottom: 10px; }
+    .mt-field label { display: block; font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: var(--text-muted, #7a8291); margin-bottom: 4px; }
+    .mt-field input, .mt-field textarea, .mt-field select {
+      width: 100%; font: inherit; font-size: 15px; padding: 10px 12px;
+      border: 1px solid var(--border-color, #dfe4ea); border-radius: 10px;
+      background: var(--control-bg, #f8f9fa); color: var(--text-color, #1f272e);
+    }
+    .mt-field textarea { min-height: 84px; }
+    .mt-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+    .mt-proof { display: flex; align-items: center; gap: 10px; font-size: 12.5px; color: var(--text-muted); margin-top: 4px; flex-wrap: wrap; }
+    .mt-proof img { width: 84px; height: 84px; object-fit: cover; border-radius: 10px; border: 1px solid var(--border-color); }
+    .mt-proof a { font-weight: 600; }
+
+    .mt-footer {
+      position: fixed; bottom: 0; left: 0; right: 0; z-index: 5;
+      padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+      background: var(--card-bg, #fff); border-top: 1px solid var(--border-color, #e4e8ee);
+    }
+    .mt-footer-inner { max-width: 640px; margin: 0 auto; display: flex; gap: 8px; }
+    .mt-footer .mt-btn { margin-bottom: 0; }
+    .mt-missing { font-size: 12px; color: var(--mt-warn); margin-top: 4px; text-align: center; }
+
+    .mt-empty { text-align: center; color: var(--text-muted); padding: 30px 10px; }
+    .mt-select-list .mt-btn { justify-content: space-between; }
+  </style>
+
+  <div data-role="content"></div>
+  <div class="mt-footer" data-role="footer" style="display:none">
+    <div class="mt-footer-inner">
+      <button class="mt-btn ghost" data-action="add-visite" style="flex:1">＋ Ajouter une visite</button>
+      <button class="mt-btn success" data-action="terminer" style="flex:1">🏁 Terminer la tournée</button>
+    </div>
+    <div class="mt-missing" data-role="missing"></div>
+  </div>
+</div>

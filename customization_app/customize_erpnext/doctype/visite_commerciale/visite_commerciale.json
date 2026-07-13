@@ -1,0 +1,280 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "format:VIS-{YYYY}-{#####}",
+ "creation": "2026-07-14 09:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "tournee",
+  "commercial",
+  "statut",
+  "column_break_head",
+  "client",
+  "nouveau_prospect",
+  "contact",
+  "contact_ajoute",
+  "section_localisation",
+  "adresse",
+  "gps_lat",
+  "gps_lng",
+  "column_break_loc",
+  "gps_horodatage",
+  "lien_google_maps",
+  "section_preuve",
+  "photo_visite",
+  "column_break_preuve",
+  "photo_horodatage",
+  "arrivee",
+  "depart",
+  "section_cr",
+  "personne_rencontree",
+  "niveau_interet",
+  "resultat",
+  "column_break_cr",
+  "besoin_client",
+  "montant_potentiel",
+  "resume_discussion",
+  "section_suite",
+  "prochaine_action",
+  "date_relance",
+  "column_break_suite",
+  "tache_relance",
+  "opportunite"
+ ],
+ "fields": [
+  {
+   "fieldname": "tournee",
+   "fieldtype": "Link",
+   "label": "Tournée",
+   "options": "Tournee Commerciale",
+   "reqd": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "search_index": 1
+  },
+  {
+   "fetch_from": "tournee.commercial",
+   "fieldname": "commercial",
+   "fieldtype": "Link",
+   "label": "Commercial",
+   "options": "Employee",
+   "read_only": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "default": "Planifiée",
+   "fieldname": "statut",
+   "fieldtype": "Select",
+   "label": "Statut",
+   "options": "Planifiée\nEn cours\nRéalisée\nAnnulée",
+   "in_list_view": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "column_break_head",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "client",
+   "fieldtype": "Link",
+   "label": "Client / Prospect",
+   "options": "Customer",
+   "reqd": 1,
+   "in_list_view": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "nouveau_prospect",
+   "fieldtype": "Check",
+   "label": "Nouveau prospect (créé pendant la tournée)"
+  },
+  {
+   "fieldname": "contact",
+   "fieldtype": "Link",
+   "label": "Contact rencontré",
+   "options": "Contact"
+  },
+  {
+   "default": "0",
+   "fieldname": "contact_ajoute",
+   "fieldtype": "Check",
+   "label": "Contact ajouté pendant la visite"
+  },
+  {
+   "fieldname": "section_localisation",
+   "fieldtype": "Section Break",
+   "label": "Adresse et localisation"
+  },
+  {
+   "fieldname": "adresse",
+   "fieldtype": "Link",
+   "label": "Adresse visitée",
+   "options": "Address"
+  },
+  {
+   "fieldname": "gps_lat",
+   "fieldtype": "Float",
+   "label": "Latitude GPS",
+   "precision": "6"
+  },
+  {
+   "fieldname": "gps_lng",
+   "fieldtype": "Float",
+   "label": "Longitude GPS",
+   "precision": "6"
+  },
+  {
+   "fieldname": "column_break_loc",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "gps_horodatage",
+   "fieldtype": "Datetime",
+   "label": "Position enregistrée le",
+   "read_only": 1
+  },
+  {
+   "fieldname": "lien_google_maps",
+   "fieldtype": "Data",
+   "label": "Lien Google Maps"
+  },
+  {
+   "fieldname": "section_preuve",
+   "fieldtype": "Section Break",
+   "label": "Preuve de visite"
+  },
+  {
+   "fieldname": "photo_visite",
+   "fieldtype": "Attach Image",
+   "label": "Photo de la visite"
+  },
+  {
+   "fieldname": "column_break_preuve",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "photo_horodatage",
+   "fieldtype": "Datetime",
+   "label": "Photo prise le",
+   "read_only": 1
+  },
+  {
+   "fieldname": "arrivee",
+   "fieldtype": "Datetime",
+   "label": "Arrivée sur place"
+  },
+  {
+   "fieldname": "depart",
+   "fieldtype": "Datetime",
+   "label": "Départ"
+  },
+  {
+   "fieldname": "section_cr",
+   "fieldtype": "Section Break",
+   "label": "Compte rendu"
+  },
+  {
+   "fieldname": "personne_rencontree",
+   "fieldtype": "Data",
+   "label": "Personne rencontrée"
+  },
+  {
+   "fieldname": "niveau_interet",
+   "fieldtype": "Select",
+   "label": "Niveau d'intérêt",
+   "options": "\nFaible\nMoyen\nÉlevé"
+  },
+  {
+   "fieldname": "resultat",
+   "fieldtype": "Select",
+   "label": "Résultat de la visite",
+   "options": "\nVisite réalisée\nClient absent\nDemande de devis\nNouveau besoin\nCommande possible\nRelance nécessaire\nAucun intérêt",
+   "in_list_view": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "column_break_cr",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "besoin_client",
+   "fieldtype": "Small Text",
+   "label": "Besoin du client"
+  },
+  {
+   "fieldname": "montant_potentiel",
+   "fieldtype": "Currency",
+   "label": "Montant potentiel"
+  },
+  {
+   "fieldname": "resume_discussion",
+   "fieldtype": "Text",
+   "label": "Résumé de la discussion"
+  },
+  {
+   "fieldname": "section_suite",
+   "fieldtype": "Section Break",
+   "label": "Prochaine action"
+  },
+  {
+   "fieldname": "prochaine_action",
+   "fieldtype": "Small Text",
+   "label": "Prochaine action"
+  },
+  {
+   "fieldname": "date_relance",
+   "fieldtype": "Date",
+   "label": "Date de relance"
+  },
+  {
+   "fieldname": "column_break_suite",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "tache_relance",
+   "fieldtype": "Link",
+   "label": "Tâche de relance créée",
+   "options": "Tache de travail",
+   "read_only": 1,
+   "no_copy": 1
+  },
+  {
+   "fieldname": "opportunite",
+   "fieldtype": "Link",
+   "label": "Opportunité créée",
+   "options": "Opportunity",
+   "read_only": 1,
+   "no_copy": 1
+  }
+ ],
+ "grid_page_length": 50,
+ "image_field": "photo_visite",
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-07-14 09:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "Visite Commerciale",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1, "delete": 1, "email": 1, "export": 1, "print": 1,
+   "read": 1, "report": 1, "role": "System Manager", "share": 1, "write": 1
+  },
+  {
+   "create": 1, "delete": 1, "email": 1, "export": 1, "print": 1,
+   "read": 1, "report": 1, "role": "Sales Manager", "share": 1, "write": 1
+  },
+  {
+   "create": 1, "email": 1, "export": 1, "print": 1,
+   "read": 1, "report": 1, "role": "Sales User", "share": 1, "write": 1
+  }
+ ],
+ "row_format": "Dynamic",
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

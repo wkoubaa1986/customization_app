@@ -927,8 +927,36 @@ def _create_so_from_pos(pos_name, extra_items=None):
     return so
 
 
+@frappe.whitelist()
+def get_historique_taches_client(client, exclude=None, limit=25):
+    """Historique des Tâches de travail d'un client (date, type d'intervention,
+    statut, rapport d'intervention) — affiché sur le formulaire Tâche de travail
+    dès la sélection du client, avant même l'insertion.
+    Volontairement SANS restriction de permissions (comme search_customer_all) :
+    tout utilisateur qui crée une tâche voit l'historique complet du client,
+    y compris les tâches non partagées avec lui."""
+    if not client:
+        return []
+    filters = {"custom_client": client}
+    if exclude:
+        filters["name"] = ("!=", exclude)
+    return frappe.get_all(
+        "Tache de travail",
+        filters=filters,
+        fields=["name", "starts_on", "custom_type_dintervention", "status",
+                "rapport_visite", "custom_employé", "subject"],
+        order_by="starts_on desc",
+        limit_page_length=int(limit or 25),
+    )
+
+
 def before_save_tache_de_travail(doc, method=None):
     """Set color (source unique) + traduire en arabe si client/adresse/sujet ont changé."""
+    # Tournée commerciale : la clôture exige une tournée complète (visites avec
+    # photo + GPS + compte rendu). Bloque le passage à Completed sinon.
+    from customization_app.tournee import check_cloture_tournee
+    check_cloture_tournee(doc)
+
     # Couleur : seule autorité. Priorité statut > partenaire > staff > défaut.
     doc.color = compute_tache_color(doc)
 

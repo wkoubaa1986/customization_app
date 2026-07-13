@@ -338,7 +338,8 @@ fixtures = [
     {
         "doctype": "DocType",
         "filters": [
-            ["name", "in", ["Mes Interventions Employe", "Intervention", "Tache de travail"]],
+            ["name", "in", ["Mes Interventions Employe", "Intervention", "Tache de travail",
+                            "Tournee Commerciale", "Visite Commerciale"]],
         ],
     },
     {

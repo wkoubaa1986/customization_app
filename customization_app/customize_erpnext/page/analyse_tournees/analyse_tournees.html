@@ -1,0 +1,129 @@
+<div class="at-page">
+  <style>
+    .at-page {
+      padding: 14px 18px;
+      --at-accent: #1d6fb8;  --at-accent-soft: #e5f0fa;
+      --at-gain: #0f7d3c;    --at-gain-bg: #e2f4e8;
+      --at-teal: #0f7d6c;    --at-teal-bg: #def0ed;
+      --at-warn: #b8501f;    --at-warn-bg: #fbe9df;
+      --at-loss: #c22f2f;    --at-loss-bg: #fdeaea;
+      --at-violet: #6d4bb0;  --at-violet-bg: #efe9fa;
+      --at-gray: #6b7280;    --at-gray-bg: #f0f2f4;
+    }
+    [data-theme="dark"] .at-page {
+      --at-accent: #5aa2e0;  --at-accent-soft: #16283a;
+      --at-gain: #3fc36a;    --at-gain-bg: #16311c;
+      --at-teal: #3fc3ab;    --at-teal-bg: #123129;
+      --at-warn: #eb8a55;    --at-warn-bg: #3a2415;
+      --at-loss: #ef6d6d;    --at-loss-bg: #3a1c1c;
+      --at-violet: #a289e0;  --at-violet-bg: #2a2140;
+      --at-gray: #98a1ad;    --at-gray-bg: #262b30;
+    }
+
+    .at-toolbar {
+      display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+      padding: 12px 14px; background: var(--card-bg, #fff);
+      border: 1px solid var(--border-color, #e4e8ee); border-radius: 10px; margin-bottom: 16px;
+    }
+    .at-toolbar label { margin: 0; font-size: 12px; color: var(--text-muted, #7a8291); font-weight: 600; }
+    .at-toolbar input.form-control { width: 150px; }
+    .at-toolbar select.form-control { width: 190px; }
+    .at-spacer { flex: 1; }
+
+    .at-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(155px, 1fr)); gap: 10px; margin-bottom: 14px; }
+    .at-kpi {
+      background: var(--card-bg, #fff); border: 1px solid var(--border-color, #e4e8ee);
+      border-radius: 10px; padding: 11px 13px; border-top: 3px solid var(--at-accent);
+    }
+    .at-kpi .lbl { font-size: 10.5px; text-transform: uppercase; letter-spacing: .4px; color: var(--text-muted, #7a8291); font-weight: 600; }
+    .at-kpi .val { font-size: 19px; font-weight: 700; margin-top: 3px; font-variant-numeric: tabular-nums; }
+    .at-kpi .sub { font-size: 11px; color: var(--text-muted); }
+    .at-kpi.gain { border-top-color: var(--at-gain); }
+    .at-kpi.warn { border-top-color: var(--at-warn); }
+    .at-kpi.warn .val { color: var(--at-warn); }
+    .at-kpi.loss { border-top-color: var(--at-loss); }
+    .at-kpi.loss .val { color: var(--at-loss); }
+
+    .at-card {
+      background: var(--card-bg, #fff); border: 1px solid var(--border-color, #e4e8ee);
+      border-radius: 10px; padding: 13px 15px; margin-bottom: 14px;
+    }
+    .at-card h5 { margin: 0 0 10px; font-size: 12px; text-transform: uppercase; letter-spacing: .5px; color: var(--text-muted, #6b7280); font-weight: 700; }
+    .at-bar { display: flex; height: 20px; border-radius: 6px; overflow: hidden; gap: 2px; background: var(--bg-light-gray, #f4f5f6); }
+    .at-bar .seg { min-width: 4px; }
+    .at-legend { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 9px; font-size: 12.5px; color: var(--text-muted, #6b7280); }
+    .at-legend b { color: var(--text-color, #1f272e); }
+    .at-dot { display: inline-block; width: 9px; height: 9px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+
+    .at-scroll { overflow-x: auto; }
+    table.at-tbl { border-collapse: collapse; width: 100%; font-size: 13px; }
+    table.at-tbl th { text-align: left; color: var(--text-muted, #8a93a0); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .3px; padding: 5px 9px; border-bottom: 1px solid var(--border-color, #e4e8ee); white-space: nowrap; }
+    table.at-tbl th.num { text-align: right; }
+    table.at-tbl td { padding: 6px 9px; border-bottom: 1px solid var(--border-color, #eef1f5); }
+    table.at-tbl tbody tr:last-child td { border-bottom: 0; }
+    td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    tr.at-late td { background: var(--at-loss-bg); }
+
+    .at-badge { display: inline-flex; align-items: center; font-size: 11.5px; font-weight: 700; padding: 2px 9px; border-radius: 999px; white-space: nowrap; }
+    .at-badge.res-green  { color: var(--at-gain);   background: var(--at-gain-bg); }
+    .at-badge.res-blue   { color: var(--at-accent); background: var(--at-accent-soft); }
+    .at-badge.res-teal   { color: var(--at-teal);   background: var(--at-teal-bg); }
+    .at-badge.res-violet { color: var(--at-violet); background: var(--at-violet-bg); }
+    .at-badge.res-orange { color: var(--at-warn);   background: var(--at-warn-bg); }
+    .at-badge.res-red    { color: var(--at-loss);   background: var(--at-loss-bg); }
+    .at-badge.res-gray   { color: var(--at-gray);   background: var(--at-gray-bg); }
+
+    .at-tournee { background: var(--card-bg, #fff); border: 1px solid var(--border-color, #e4e8ee); border-radius: 10px; margin-bottom: 8px; overflow: hidden; }
+    .at-tournee-head {
+      display: flex; align-items: center; gap: 12px; padding: 10px 14px; cursor: pointer;
+      border: 0; width: 100%; background: none; font: inherit; color: inherit; text-align: left;
+    }
+    .at-tournee-head:hover { background: var(--bg-light-gray, #f6f8fa); }
+    .at-caret { color: var(--text-muted, #98a1ad); transition: transform .15s ease; font-size: 10px; }
+    .at-tournee.open .at-caret { transform: rotate(90deg); }
+    .at-tournee-head .tc { font-weight: 700; color: var(--at-accent); }
+    .at-tournee-head .meta { color: var(--text-muted); font-size: 12.5px; flex: 1; }
+    .at-tournee-body { display: none; border-top: 1px solid var(--border-color, #e4e8ee); padding: 10px 14px; }
+    .at-tournee.open .at-tournee-body { display: block; }
+
+    .at-proofthumb { width: 34px; height: 34px; object-fit: cover; border-radius: 6px; border: 1px solid var(--border-color); cursor: pointer; vertical-align: middle; }
+    .at-file-img { max-width: 100%; max-height: 78vh; display: block; margin: 0 auto; border-radius: 6px; }
+    .at-empty { color: var(--text-muted, #aab1bd); font-style: italic; font-size: 12.5px; padding: 8px 0; }
+
+    @media print { .at-toolbar { display: none; } .at-tournee-body { display: block; } }
+  </style>
+
+  <div class="at-toolbar">
+    <label for="at-from">Du</label>
+    <input type="date" id="at-from" class="form-control">
+    <label for="at-to">au</label>
+    <input type="date" id="at-to" class="form-control">
+    <label for="at-commercial">Commercial</label>
+    <select id="at-commercial" class="form-control"><option value="">Tous</option></select>
+    <button class="btn btn-default btn-sm" data-action="refresh">Actualiser</button>
+    <span class="at-spacer"></span>
+    <button class="btn btn-default btn-sm" data-action="excel">Exporter Excel</button>
+    <button class="btn btn-default btn-sm" data-action="print">Imprimer</button>
+  </div>
+
+  <div class="at-kpis" data-role="kpis"></div>
+
+  <div class="at-card">
+    <h5>Répartition des résultats de visites</h5>
+    <div class="at-bar" data-role="resultbar"></div>
+    <div class="at-legend" data-role="resultlegend"></div>
+  </div>
+
+  <div class="at-card">
+    <h5>Performance par commercial</h5>
+    <div class="at-scroll" data-role="commerciaux"></div>
+  </div>
+
+  <div class="at-card">
+    <h5>Actions à venir & relances <span data-role="late-count"></span></h5>
+    <div class="at-scroll" data-role="relances"></div>
+  </div>
+
+  <h5 style="font-size:12px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-muted);font-weight:700;margin:18px 0 8px">Tournées de la période</h5>
+  <div data-role="tournees"></div>
+</div>

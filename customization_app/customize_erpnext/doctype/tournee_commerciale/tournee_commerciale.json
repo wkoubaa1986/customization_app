@@ -1,0 +1,119 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "format:TC-{YYYY}-{#####}",
+ "creation": "2026-07-14 09:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "tache_de_travail",
+  "commercial",
+  "column_break_main",
+  "date_tournee",
+  "statut",
+  "section_objectif",
+  "nb_visites_prevues",
+  "nb_visites_realisees",
+  "column_break_obj",
+  "objectif"
+ ],
+ "fields": [
+  {
+   "fieldname": "tache_de_travail",
+   "fieldtype": "Link",
+   "label": "Tâche de travail",
+   "options": "Tache de travail",
+   "reqd": 1,
+   "unique": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "commercial",
+   "fieldtype": "Link",
+   "label": "Commercial",
+   "options": "Employee",
+   "in_list_view": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "column_break_main",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "date_tournee",
+   "fieldtype": "Date",
+   "label": "Date de la tournée",
+   "in_list_view": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "default": "En cours",
+   "fieldname": "statut",
+   "fieldtype": "Select",
+   "label": "Statut",
+   "options": "En cours\nTerminée\nAnnulée",
+   "in_list_view": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "section_objectif",
+   "fieldtype": "Section Break",
+   "label": "Objectif et suivi"
+  },
+  {
+   "fieldname": "nb_visites_prevues",
+   "fieldtype": "Int",
+   "label": "Visites prévues"
+  },
+  {
+   "fieldname": "nb_visites_realisees",
+   "fieldtype": "Int",
+   "label": "Visites réalisées",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_obj",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "objectif",
+   "fieldtype": "Small Text",
+   "label": "Objectif de la tournée"
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "links": [
+  {
+   "group": "Visites",
+   "link_doctype": "Visite Commerciale",
+   "link_fieldname": "tournee"
+  }
+ ],
+ "modified": "2026-07-14 09:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "Tournee Commerciale",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1, "delete": 1, "email": 1, "export": 1, "print": 1,
+   "read": 1, "report": 1, "role": "System Manager", "share": 1, "write": 1
+  },
+  {
+   "create": 1, "delete": 1, "email": 1, "export": 1, "print": 1,
+   "read": 1, "report": 1, "role": "Sales Manager", "share": 1, "write": 1
+  },
+  {
+   "create": 1, "email": 1, "export": 1, "print": 1,
+   "read": 1, "report": 1, "role": "Sales User", "share": 1, "write": 1
+  }
+ ],
+ "row_format": "Dynamic",
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "",
+ "track_changes": 1
+}
