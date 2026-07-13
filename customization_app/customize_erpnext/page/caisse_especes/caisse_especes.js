@@ -58,6 +58,7 @@ class CaisseEspacesPage {
 		$("#caisse-save-btn").on("click", () => this._save_and_back());
 		$("#caisse-solde-initial").on("input", () => this._recalc());
 		$("#caisse-chart-btn").on("click", () => this._toggle_chart());
+		$("#caisse-excel-btn").on("click", () => this._export_excel());
 		$("#caisse-chart-close").on("click", () => {
 			$("#caisse-chart-section").hide();
 		});
@@ -285,6 +286,24 @@ class CaisseEspacesPage {
 				formatTooltipY: v => this._fmt(v) + " DT",
 			},
 		});
+	}
+
+	// ── Export Excel (données + courbe d'évolution intégrée) ─────────────────
+	// Reflète l'état courant de l'écran : solde initial saisi + exclusions
+	// cochées, même non enregistrés. Tout le calcul est fait côté serveur.
+	_export_excel() {
+		const d1 = $("#caisse-d1").val();
+		const d2 = $("#caisse-d2").val();
+		if (!d1 || !d2) {
+			frappe.msgprint("Veuillez renseigner les deux dates.");
+			return;
+		}
+		const initial  = parseFloat($("#caisse-solde-initial").val()) || 0;
+		const excluded = encodeURIComponent(JSON.stringify([...this._excluded]));
+		window.open(
+			`/api/method/customization_app.api.download_caisse_excel` +
+			`?d1=${d1}&d2=${d2}&solde_initial=${initial}&excluded=${excluded}`
+		);
 	}
 
 	// ── Save config and go back ───────────────────────────────────────────────

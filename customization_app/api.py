@@ -1625,6 +1625,191 @@ def get_caisse_solde():
         return {"value": 0, "route": "caisse-especes"}
 
 
+@frappe.whitelist()
+def download_caisse_excel(d1, d2, solde_initial=0, excluded=None):
+    """
+    Export Excel de la Caisse Espèces : feuilles Entrées / Sorties / Versements
+    + feuille Évolution avec le solde cumulé jour par jour et la courbe
+    (graphique intégré au classeur). Reproduit exactement le calcul de la page :
+    solde = solde_initial + cumul(entrées − sorties − versements non exclus).
+    `solde_initial` et `excluded` (JSON list de refs) reflètent l'état courant
+    de l'écran, même non enregistré.
+    """
+    frappe.has_permission("Caisse Especes Config", throw=True)
+
+    import datetime
+    from io import BytesIO
+
+    from openpyxl import Workbook
+    from openpyxl.chart import LineChart, Reference
+    from openpyxl.styles import Font
+
+    if isinstance(excluded, str):
+        excluded = json.loads(excluded) if excluded.strip() else []
+    excluded = set(excluded or [])
+    solde_initial = float(solde_initial or 0)
+
+    data = get_caisse_dashboard(d1, d2)
+    bold = Font(bold=True)
+
+    def fill_sheet(ws, headers, rows, widths, total_col=None):
+        ws.append(headers)
+        for cell in ws[1]:
+            cell.font = bold
+        for row in rows:
+            ws.append(row)
+        if rows and total_col is not None:
+            total = round(sum(r[total_col] for r in rows), 3)
+            total_row = [""] * len(headers)
+            total_row[0] = "Total"
+            total_row[total_col] = total
+            ws.append(total_row)
+            for cell in ws[ws.max_row]:
+                cell.font = bold
+        for i, width in enumerate(widths, start=1):
+            ws.column_dimensions[chr(64 + i)].width = width
+
+    # ---- Évolution (première feuille, avec la courbe)
+    daily = {}
+    for r in data["entrees_detail"]:
+        daily.setdefault(r["date"], [0.0, 0.0, 0.0])[0] += float(r["montant"])
+    for r in data["sorties_achat"] + data["sorties_dep"]:
+        daily.setdefault(r["date"], [0.0, 0.0, 0.0])[1] += float(r["montant"])
+    for r in data["versements"]:
+        if (r.get("journal_entry_number") or "") not in excluded:
+            daily.setdefault(r["date"], [0.0, 0.0, 0.0])[2] += float(r["montant"])
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Évolution"
+    ws.append(["Caisse Espèces — évolution du solde", f"du {d1} au {d2}"])
+    ws["A1"].font = bold
+    ws.append(["Solde initial", solde_initial])
+    ws.append([])
+    header_row = ws.max_row + 1
+    ws.append(["Date", "Entrées", "Sorties", "Versements", "Solde"])
+    for cell in ws[header_row]:
+        cell.font = bold
+
+    running = solde_initial
+    day = frappe.utils.getdate(d1)
+    end = frappe.utils.getdate(d2)
+    while day <= end:
+        e, s, v = daily.get(str(day), (0.0, 0.0, 0.0))
+        running = round(running + e - s - v, 3)
+        ws.append([str(day), round(e, 3), round(s, 3), round(v, 3), running])
+        day += datetime.timedelta(days=1)
+    last_row = ws.max_row
+    ws.append([])
+    ws.append(["Solde final", running])
+    ws[ws.max_row][0].font = bold
+    ws[ws.max_row][1].font = bold
+    for col, width in zip("ABCDE", (14, 12, 12, 12, 12)):
+        ws.column_dimensions[col].width = width
+
+    chart = LineChart()
+    chart.title = f"Solde Caisse — {d1} → {d2}"
+    chart.y_axis.title = "Solde (DT)"
+    chart.height = 9
+    chart.width = 24
+    chart.add_data(
+        Reference(ws, min_col=5, min_row=header_row, max_row=last_row),
+        titles_from_data=True,
+    )
+    chart.set_categories(Reference(ws, min_col=1, min_row=header_row + 1, max_row=last_row))
+    ws.add_chart(chart, "G4")
+
+    # ---- Journal : une ligne par transaction (client + libellé + solde cumulé)
+    transactions = []
+    for r in data["entrees_detail"]:
+        transactions.append({
+            "date": r["date"], "type": "Entrée", "tiers": r["client"],
+            "libelle": r["invoice_number"] or r["erp_name"],
+            "montant": float(r["montant"]), "sens": 1,
+        })
+    for r in data["sorties_achat"]:
+        transactions.append({
+            "date": r["date"], "type": "Sortie — Achat", "tiers": r["supplier"],
+            "libelle": r["invoice_number"],
+            "montant": float(r["montant"]), "sens": -1,
+        })
+    for r in data["sorties_dep"]:
+        transactions.append({
+            "date": r["date"], "type": "Sortie — Dépense", "tiers": "",
+            "libelle": (r["description"] or r["journal_entry_number"] or "").replace("\n", " — "),
+            "montant": float(r["montant"]), "sens": -1,
+        })
+    for r in data["versements"]:
+        exclu = (r.get("journal_entry_number") or "") in excluded
+        transactions.append({
+            "date": r["date"],
+            "type": "Versement (exclu)" if exclu else "Versement",
+            "tiers": "",
+            "libelle": (r["description"] or r["journal_entry_number"] or "").replace("\n", " — "),
+            "montant": float(r["montant"]), "sens": 0 if exclu else -1,
+        })
+    transactions.sort(key=lambda t: t["date"])
+
+    ws_j = wb.create_sheet("Journal", 1)
+    ws_j.append(["Date", "Type", "Client / Fournisseur", "Libellé", "Montant", "Impact", "Solde"])
+    for cell in ws_j[1]:
+        cell.font = bold
+    ws_j.append(["", "Solde initial", "", "", "", "", solde_initial])
+    ws_j[2][1].font = bold
+    ws_j[2][6].font = bold
+    running_j = solde_initial
+    for t in transactions:
+        impact = round(t["sens"] * t["montant"], 3)
+        running_j = round(running_j + impact, 3)
+        ws_j.append([t["date"], t["type"], t["tiers"], t["libelle"],
+                     round(t["montant"], 3), impact, running_j])
+    ws_j.append(["", "Solde final", "", "", "", "", running_j])
+    for cell in ws_j[ws_j.max_row]:
+        cell.font = bold
+    for col, width in zip("ABCDEFG", (12, 18, 34, 44, 12, 12, 12)):
+        ws_j.column_dimensions[col].width = width
+
+    # ---- Détails
+    fill_sheet(
+        wb.create_sheet("Entrées"),
+        ["Date", "N° facture", "Pièce ERP", "Client", "Montant"],
+        [[r["date"], r["invoice_number"], r["erp_name"], r["client"], round(float(r["montant"]), 3)]
+         for r in data["entrees_detail"]],
+        (12, 16, 20, 32, 12), total_col=4,
+    )
+    fill_sheet(
+        wb.create_sheet("Sorties"),
+        ["Type", "Date", "N° pièce", "Fournisseur / Description", "Montant"],
+        [["Achat", r["date"], r["invoice_number"], r["supplier"], round(float(r["montant"]), 3)]
+         for r in data["sorties_achat"]]
+        + [["Dépense", r["date"], r["journal_entry_number"], r["description"], round(float(r["montant"]), 3)]
+           for r in data["sorties_dep"]],
+        (10, 12, 18, 40, 12), total_col=4,
+    )
+    ws_vers = wb.create_sheet("Versements")
+    fill_sheet(
+        ws_vers,
+        ["Date", "N° pièce", "Description", "Montant", "Exclu du calcul"],
+        [[r["date"], r["journal_entry_number"], r["description"], round(float(r["montant"]), 3),
+          "Oui" if (r.get("journal_entry_number") or "") in excluded else "Non"]
+         for r in data["versements"]],
+        (12, 18, 40, 12, 14), total_col=3,
+    )
+    non_exclus = round(sum(
+        float(r["montant"]) for r in data["versements"]
+        if (r.get("journal_entry_number") or "") not in excluded
+    ), 3)
+    ws_vers.append(["dont non exclus (comptés dans le solde)", "", "", non_exclus])
+    for cell in ws_vers[ws_vers.max_row]:
+        cell.font = bold
+
+    out = BytesIO()
+    wb.save(out)
+    frappe.response["filename"] = f"caisse-especes-{d1}-{d2}.xlsx"
+    frappe.response["filecontent"] = out.getvalue()
+    frappe.response["type"] = "binary"
+
+
 # =============================================================================
 # RDV Libre — Calendrier workspace button (bypasses sharing for allowed users)
 # =============================================================================
