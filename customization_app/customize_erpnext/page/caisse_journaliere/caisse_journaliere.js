@@ -351,9 +351,11 @@ class RapportCaisseJournaliere {
       return;
     }
 
+    const has_anciens = ((this._data.anciens || {}).paiements || []).length > 0;
     const head = `<tr><th>Employé</th>${modes.map(m => `<th>${frappe.utils.escape_html(m)}</th>`).join("")}<th>Total</th></tr>`;
     const body = list.map(e => `<tr>
-      <td>${frappe.utils.escape_html(e.employe)}</td>
+      <td>${frappe.utils.escape_html(e.employe)}
+        ${e.anciens ? `<div style="font-size:10.5px;color:#8a4b1f;">dont anciennes cmd : ${this._fmt(e.anciens)}</div>` : ""}</td>
       ${modes.map(m => `<td>${this._recap_cell(e.par_mode[m], m)}</td>`).join("")}
       <td style="font-weight:700;">${this._fmt(e.total)}</td>
     </tr>`).join("");
@@ -364,7 +366,7 @@ class RapportCaisseJournaliere {
     </tr>`;
 
     $c.html(`<div class="rcj-recap">
-      <div class="rcj-recap-head">🧾 Encaissements par employé et par mode</div>
+      <div class="rcj-recap-head">🧾 Encaissements par employé et par mode${has_anciens ? " — paiements sur anciennes commandes inclus" : ""}</div>
       <div style="overflow-x:auto;">
         <table class="rcj-recap-tbl">
           <thead>${head}</thead>

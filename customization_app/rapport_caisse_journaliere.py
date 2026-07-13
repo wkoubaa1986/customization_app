@@ -398,23 +398,6 @@ def get_data(d1, d2):
         processed_users.add(u.name)
         process(u.full_name, None, u.name)
 
-    # récap : modes réellement utilisés
-    used_modes = [m for m in modes if flt(grand_par_mode.get(m, 0)) != 0]
-    # inclure d'éventuels modes hors liste standard
-    for m in grand_par_mode:
-        if m and m not in used_modes and flt(grand_par_mode[m]) != 0:
-            used_modes.append(m)
-
-    recap_par_employe = []
-    for e in result_employees:
-        if flt(e["total"]) != 0:
-            recap_par_employe.append({
-                "employe": e["employe"],
-                "total": e["total"],
-                "par_mode": {m: flt(e["totaux_par_mode"].get(m, 0)) for m in used_modes},
-            })
-    recap_par_employe.sort(key=lambda x: x["total"], reverse=True)
-
     # paiements encaissés sur la période mais hors commandes du rapport
     # (= règlements d'anciennes commandes à tracer dans la caisse du jour)
     seen_pes = set()
@@ -423,6 +406,52 @@ def get_data(d1, d2):
             for p in o["payments"]:
                 seen_pes.add(p["name"])
     anciens = _paiements_anciennes_commandes(start_date, end_date, seen_pes)
+
+    # Ces encaissements comptent dans le récap : chaque paiement est attribué
+    # à l'employé qui l'a SAISI, sous son mode de paiement (et entre donc dans
+    # les totaux par mode / total encaissé).
+    anciens_par_emp = {}
+    for p in anciens["paiements"]:
+        emp = p["saisi_par"] or "—"
+        mode = p["mode"] or "—"
+        anciens_par_emp.setdefault(emp, {})
+        anciens_par_emp[emp][mode] = flt(anciens_par_emp[emp].get(mode, 0)) + flt(p["amount"])
+        grand_par_mode[mode] = flt(grand_par_mode.get(mode, 0)) + flt(p["amount"])
+
+    # récap : modes réellement utilisés
+    used_modes = [m for m in modes if flt(grand_par_mode.get(m, 0)) != 0]
+    # inclure d'éventuels modes hors liste standard
+    for m in grand_par_mode:
+        if m and m not in used_modes and flt(grand_par_mode[m]) != 0:
+            used_modes.append(m)
+
+    recap_par_employe = []
+    seen_emp = set()
+    for e in result_employees:
+        extra = anciens_par_emp.get(e["employe"], {})
+        par_mode = {m: flt(e["totaux_par_mode"].get(m, 0)) + flt(extra.get(m, 0))
+                    for m in used_modes}
+        total = flt(sum(par_mode.values()))
+        seen_emp.add(e["employe"])
+        if total != 0:
+            recap_par_employe.append({
+                "employe": e["employe"],
+                "total": total,
+                "par_mode": par_mode,
+                "anciens": flt(sum(extra.values())),
+            })
+    # employés qui n'ont QUE des encaissements d'anciennes commandes
+    for emp, modes_emp in anciens_par_emp.items():
+        if emp in seen_emp:
+            continue
+        par_mode = {m: flt(modes_emp.get(m, 0)) for m in used_modes}
+        recap_par_employe.append({
+            "employe": emp,
+            "total": flt(sum(par_mode.values())),
+            "par_mode": par_mode,
+            "anciens": flt(sum(par_mode.values())),
+        })
+    recap_par_employe.sort(key=lambda x: x["total"], reverse=True)
 
     return {
         "periode": {"d1": start_date, "d2": end_date},
