@@ -347,13 +347,13 @@ fixtures = [
             ["name", "in", ["Solde WINSMS", "Expiration WINSMS (jours)", "Solde Caisse", "Espèce à verser"]],
         ],
     },
-    # Workspaces personnalisés (Selling + Accounting) — UNE seule entrée : deux entrées
-    # Workspace distinctes écriraient toutes deux workspace.json et la seconde écraserait
+    # Workspaces personnalisés — UNE seule entrée : deux entrées Workspace
+    # distinctes écriraient toutes deux workspace.json et la seconde écraserait
     # la première (seule la dernière survivait). Le filtre "in" les exporte ensemble.
     {
         "doctype": "Workspace",
         "filters": [
-            ["name", "in", ["Selling", "Accounting"]],
+            ["name", "in", ["Selling", "Accounting", "Partenaire"]],
         ],
     },
     {
