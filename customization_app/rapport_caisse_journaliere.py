@@ -231,6 +231,93 @@ def _build_order(so_name, task, so_meta):
     }
 
 
+# Comptes de caisse surveillés pour les paiements « hors périmètre »
+# (règlements d'anciennes commandes saisis pendant la période de vérification).
+# « Chèques - % » exclut volontairement « Chèques sans provision - … » (impayés).
+CAISSE_ACCOUNTS_LIKE = ("Espèces%", "Chèques - %", "Traite Bancaire%")
+
+
+def _paiements_anciennes_commandes(d1, d2, exclude_names):
+    """Payment Entries validés encaissés sur un compte de caisse pendant la
+    période (date comptable OU date de création — attrape les saisies
+    antidatées), et qui n'appartiennent à aucune commande du rapport :
+    ce sont des règlements d'anciennes commandes à tracer dans la caisse."""
+    like_conds = " OR ".join(["pe.paid_to LIKE %s"] * len(CAISSE_ACCOUNTS_LIKE))
+    vals = [d1, d2, d1, d2, *CAISSE_ACCOUNTS_LIKE]
+    exclude_sql = ""
+    if exclude_names:
+        exclude_sql = "AND pe.name NOT IN ({})".format(",".join(["%s"] * len(exclude_names)))
+        vals += list(exclude_names)
+
+    pes = frappe.db.sql(
+        f"""SELECT pe.name, pe.posting_date, DATE(pe.creation) AS creation_date,
+                   pe.owner, pe.party, pe.party_name, pe.mode_of_payment,
+                   pe.paid_to, pe.paid_amount, pe.reference_no
+            FROM `tabPayment Entry` pe
+            WHERE pe.docstatus = 1
+              AND pe.payment_type = 'Receive'
+              AND (pe.posting_date BETWEEN %s AND %s OR DATE(pe.creation) BETWEEN %s AND %s)
+              AND ({like_conds})
+              {exclude_sql}
+            ORDER BY pe.posting_date, pe.name""",
+        tuple(vals), as_dict=True,
+    )
+    if not pes:
+        return {"paiements": [], "par_mode": {}, "total": 0.0}
+
+    # pièces référencées (commandes / factures) avec leur date d'origine
+    names = [p.name for p in pes]
+    ph = ",".join(["%s"] * len(names))
+    refs = frappe.db.sql(
+        f"""SELECT per.parent, per.reference_doctype, per.reference_name,
+                   so.transaction_date AS so_date, si.posting_date AS si_date
+            FROM `tabPayment Entry Reference` per
+            LEFT JOIN `tabSales Order` so
+                   ON per.reference_doctype = 'Sales Order' AND so.name = per.reference_name
+            LEFT JOIN `tabSales Invoice` si
+                   ON per.reference_doctype = 'Sales Invoice' AND si.name = per.reference_name
+            WHERE per.parent IN ({ph})""",
+        tuple(names), as_dict=True,
+    )
+    refs_by_pe = {}
+    for r in refs:
+        refs_by_pe.setdefault(r.parent, []).append({
+            "doctype": r.reference_doctype,
+            "name": r.reference_name,
+            "date": str(r.so_date or r.si_date or ""),
+        })
+
+    # qui a saisi le paiement (nom lisible)
+    owners = {p.owner for p in pes}
+    owner_names = {u.name: u.full_name for u in frappe.get_all(
+        "User", filters={"name": ("in", list(owners))}, fields=["name", "full_name"])}
+
+    paiements, par_mode = [], {}
+    for p in pes:
+        par_mode[p.mode_of_payment or "—"] = flt(par_mode.get(p.mode_of_payment or "—", 0)) \
+            + flt(p.paid_amount)
+        paiements.append({
+            "name": p.name,
+            "date": str(p.posting_date or ""),
+            "creation_date": str(p.creation_date or ""),
+            "antidate": bool(p.posting_date and p.creation_date
+                             and str(p.posting_date) != str(p.creation_date)),
+            "saisi_par": owner_names.get(p.owner) or p.owner,
+            "customer": p.party,
+            "customer_name": p.party_name or p.party,
+            "mode": p.mode_of_payment or "",
+            "compte": p.paid_to,
+            "amount": flt(p.paid_amount),
+            "reference_no": p.reference_no or "",
+            "pieces": refs_by_pe.get(p.name, []),
+        })
+    return {
+        "paiements": paiements,
+        "par_mode": {m: flt(v) for m, v in par_mode.items()},
+        "total": flt(sum(x["amount"] for x in paiements)),
+    }
+
+
 @frappe.whitelist()
 def get_data(d1, d2):
     """Renvoie le rapport de caisse journalière groupé par employé, pour [d1, d2]."""
@@ -328,8 +415,18 @@ def get_data(d1, d2):
             })
     recap_par_employe.sort(key=lambda x: x["total"], reverse=True)
 
+    # paiements encaissés sur la période mais hors commandes du rapport
+    # (= règlements d'anciennes commandes à tracer dans la caisse du jour)
+    seen_pes = set()
+    for e in result_employees:
+        for o in e["orders"]:
+            for p in o["payments"]:
+                seen_pes.add(p["name"])
+    anciens = _paiements_anciennes_commandes(start_date, end_date, seen_pes)
+
     return {
         "periode": {"d1": start_date, "d2": end_date},
+        "anciens": anciens,
         "modes": used_modes,
         "employees": result_employees,
         "recap": {

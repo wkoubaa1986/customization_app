@@ -173,6 +173,7 @@ class RapportCaisseJournaliere {
     this._render_kpis();
     this._render_employees();
     this._render_recap();
+    this._render_anciens();
     if ($("#rcj-chart-section").is(":visible")) this._render_chart();
   }
 
@@ -368,6 +369,64 @@ class RapportCaisseJournaliere {
         <table class="rcj-recap-tbl">
           <thead>${head}</thead>
           <tbody>${body}${totals}</tbody>
+        </table>
+      </div>
+    </div>`);
+  }
+
+  // ── Paiements encaissés sur la période mais hors commandes du rapport
+  //    (= règlements d'anciennes commandes) — données de get_data().anciens
+  _render_anciens() {
+    const esc = frappe.utils.escape_html;
+    const anciens = this._data.anciens || {};
+    const rows = anciens.paiements || [];
+    const $c = $("#rcj-anciens").empty();
+    if (!rows.length) return;
+
+    const par_mode = Object.entries(anciens.par_mode || {})
+      .map(([m, v]) => `${esc(m)} : <b>${this._fmt(v)}</b>`).join(" · ");
+
+    const body = rows.map(p => {
+      const mode_style = RCJ_MODE[p.mode] || { bg: "#eee", fg: "#333" };
+      const pieces = (p.pieces || []).length
+        ? p.pieces.map(x =>
+            `<a href="/app/${frappe.router.slug(x.doctype)}/${encodeURIComponent(x.name)}" target="_blank">${esc(x.name)}</a>` +
+            (x.date ? ` <span class="rcj-muted">(${frappe.datetime.str_to_user(x.date)})</span>` : "")
+          ).join("<br>")
+        : '<span class="rcj-empty">aucune pièce liée</span>';
+      return `<tr>
+        <td style="white-space:nowrap">${p.date ? frappe.datetime.str_to_user(p.date) : "—"}
+          ${p.antidate ? `<br><span style="color:#c0392b;font-size:11px">⚠ saisi le ${frappe.datetime.str_to_user(p.creation_date)}</span>` : ""}</td>
+        <td>${esc(p.saisi_par || "")}</td>
+        <td>${esc(p.customer_name || "")}</td>
+        <td><span class="rcj-badge" style="background:${mode_style.bg};color:${mode_style.fg}">${esc(p.mode)}</span></td>
+        <td>${esc(p.compte || "")}</td>
+        <td style="text-align:right;font-weight:700">${this._fmt(p.amount)}</td>
+        <td>${esc(p.reference_no || "")}</td>
+        <td><a href="/app/payment-entry/${encodeURIComponent(p.name)}" target="_blank">${esc(p.name)}</a></td>
+        <td>${pieces}</td>
+      </tr>`;
+    }).join("");
+
+    $c.html(`<div class="rcj-recap" style="border-color:#c98a2b;">
+      <div class="rcj-recap-head" style="background:linear-gradient(90deg,#8a4b1f,#c96f2b);">
+        💰 Paiements sur anciennes commandes — encaissés sur la période (${rows.length})
+        <span style="float:right">Total : ${this._fmt(anciens.total || 0)}</span>
+      </div>
+      <div style="padding:8px 16px;font-size:12.5px;background:#fff6ec;color:#7a4b10;">
+        Paiements entrés en caisse (Espèces / Chèques / Traite bancaire) pendant la période,
+        mais liés à aucune commande du rapport — à compter dans la vérification. ${par_mode}
+      </div>
+      <div style="overflow-x:auto;">
+        <table class="rcj-recap-tbl">
+          <thead><tr>
+            <th style="text-align:left">Date</th><th style="text-align:left">Saisi par</th>
+            <th style="text-align:left">Client</th><th style="text-align:left">Mode</th>
+            <th style="text-align:left">Compte</th><th>Montant</th>
+            <th style="text-align:left">Référence</th><th style="text-align:left">Paiement</th>
+            <th style="text-align:left">Ancienne(s) pièce(s)</th>
+          </tr></thead>
+          <tbody>${body}</tbody>
         </table>
       </div>
     </div>`);
