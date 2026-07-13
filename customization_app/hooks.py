@@ -334,14 +334,11 @@ fixtures = [
         ],
     },
     {"doctype": "Responsable Relance", "filters": [["name", "=", "Default"]]},
-    # Custom DocTypes — Mes Interventions Employe and its child table
-    {
-        "doctype": "DocType",
-        "filters": [
-            ["name", "in", ["Mes Interventions Employe", "Intervention", "Tache de travail",
-                            "Tournee Commerciale", "Visite Commerciale"]],
-        ],
-    },
+    # NOTE : plus AUCUN DocType en fixtures. L'import de fixtures fait
+    # delete+insert avec validation → interdit en prod sans developer_mode
+    # (CannotCreateStandardDoctypeError). Les DocTypes standards vivent en
+    # fichiers de module (customize_erpnext/doctype/…), synchronisés par
+    # migrate sans contrainte de developer_mode.
     {
         "doctype": "Number Card",
         "filters": [

@@ -1,0 +1,357 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "autoname": "Tache-.#####",
+ "creation": "2026-07-13 17:58:00.740098",
+ "custom": 1,
+ "default_view": "List",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "details",
+  "custom_type_dintervention",
+  "titre",
+  "custom_choix_du_staff",
+  "custom_employ\u00e9",
+  "custom_client",
+  "nom_client",
+  "historique_client",
+  "starts_on",
+  "ends_on",
+  "subject",
+  "toute_la_journ\u00e9e",
+  "recontacte",
+  "column_break_gpovc",
+  "dans_local",
+  "select_address",
+  "tel",
+  "details_adresse",
+  "secteur",
+  "info_secteur",
+  "google_map",
+  "color",
+  "status",
+  "temps",
+  "afficher_commande",
+  "commande_client",
+  "raison_annulation",
+  "rapport_visite",
+  "custom_reservation_app",
+  "section_photos_tab",
+  "upload_photos",
+  "liste_photos_avant",
+  "column_break_c831h",
+  "upload_after",
+  "liste_photos_apres",
+  "section_ar_translations",
+  "ar_client",
+  "ar_adresse",
+  "ar_sujet",
+  "ar_hash"
+ ],
+ "fields": [
+  {
+   "fieldname": "details",
+   "fieldtype": "Section Break",
+   "label": "Details"
+  },
+  {
+   "allow_in_quick_entry": 1,
+   "fieldname": "custom_type_dintervention",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Type d'Intervention",
+   "options": "Entretien\nInstallation\nR\u00e9paration\nLivraison\nVisite\nAutre\nTourn\u00e9e commerciale",
+   "reqd": 1
+  },
+  {
+   "fieldname": "titre",
+   "fieldtype": "Small Text",
+   "hidden": 1,
+   "label": "Titre"
+  },
+  {
+   "allow_in_quick_entry": 1,
+   "fieldname": "custom_choix_du_staff",
+   "fieldtype": "Link",
+   "label": "Choix du Staff",
+   "options": "Employee",
+   "reqd": 1
+  },
+  {
+   "fieldname": "custom_employ\u00e9",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Employ\u00e9",
+   "read_only": 1
+  },
+  {
+   "fieldname": "custom_client",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Client",
+   "options": "Customer"
+  },
+  {
+   "fetch_from": "custom_client.customer_name",
+   "fieldname": "nom_client",
+   "fieldtype": "Data",
+   "label": "Nom client",
+   "read_only": 1
+  },
+  {
+   "fieldname": "historique_client",
+   "fieldtype": "HTML",
+   "label": "Historique des t\u00e2ches du client",
+   "read_only": 1
+  },
+  {
+   "fieldname": "starts_on",
+   "fieldtype": "Datetime",
+   "label": "Starts on",
+   "reqd": 1
+  },
+  {
+   "fieldname": "ends_on",
+   "fieldtype": "Datetime",
+   "label": "Ends on"
+  },
+  {
+   "allow_in_quick_entry": 1,
+   "fieldname": "subject",
+   "fieldtype": "Small Text",
+   "label": "Subject",
+   "read_only_depends_on": "eval:(doc.status != \"Open\")"
+  },
+  {
+   "default": "0",
+   "fieldname": "toute_la_journ\u00e9e",
+   "fieldtype": "Check",
+   "label": " Toute la journ\u00e9e"
+  },
+  {
+   "fieldname": "recontacte",
+   "fieldtype": "Select",
+   "hidden": 1,
+   "label": "recontacte",
+   "options": "\ncontact\u00e9\nInvestigu\u00e9\nplanifi\u00e9\ncouvert\nvendu"
+  },
+  {
+   "fieldname": "column_break_gpovc",
+   "fieldtype": "Column Break"
+  },
+  {
+   "depends_on": "eval:(doc.custom_type_dintervention ==\"R\u00e9paration\")",
+   "fieldname": "dans_local",
+   "fieldtype": "Select",
+   "label": "Intervention dans les locaux de Aquaworld",
+   "mandatory_depends_on": "eval:(doc.custom_type_dintervention ==\"R\u00e9paration\")",
+   "options": "\nNon\nOui"
+  },
+  {
+   "fieldname": "select_address",
+   "fieldtype": "Link",
+   "label": "Select address",
+   "mandatory_depends_on": "eval:(doc.custom_client) ",
+   "options": "Address"
+  },
+  {
+   "fieldname": "tel",
+   "fieldtype": "Data",
+   "label": "T\u00e9l\u00e9phones",
+   "read_only": 1
+  },
+  {
+   "fieldname": "details_adresse",
+   "fieldtype": "Data",
+   "in_standard_filter": 1,
+   "label": "Detail Adresse",
+   "read_only": 1
+  },
+  {
+   "fetch_from": "select_address.custom_secteur",
+   "fieldname": "secteur",
+   "fieldtype": "Link",
+   "label": "Secteur",
+   "options": "Secteur geographique",
+   "read_only": 1
+  },
+  {
+   "fetch_from": "secteur.description",
+   "fieldname": "info_secteur",
+   "fieldtype": "Data",
+   "label": "Info Secteur",
+   "read_only": 1
+  },
+  {
+   "fieldname": "google_map",
+   "fieldtype": "Data",
+   "label": "Lien Google Map",
+   "mandatory_depends_on": "eval:(doc.status == \"Completed\" & (doc.custom_type_dintervention !=\"Livraison\" & doc.custom_type_dintervention !=\"Autre\"))",
+   "read_only_depends_on": "eval:(doc.status != \"Completed\")"
+  },
+  {
+   "fieldname": "color",
+   "fieldtype": "Color",
+   "hidden": 1,
+   "label": "Color"
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_standard_filter": 1,
+   "label": "Status",
+   "options": "Open\nCompleted\nCancelled",
+   "translatable": 1
+  },
+  {
+   "depends_on": "eval:(doc.status == \"Completed\" & doc.custom_type_dintervention !=\"Autre\" )",
+   "fieldname": "temps",
+   "fieldtype": "Select",
+   "label": "Temps d'intervention",
+   "mandatory_depends_on": "eval:(doc.status == \"Completed\" & doc.custom_type_dintervention !=\"Autre\" )",
+   "options": "15 min\n30 min\n45 min\n1 heure\n1 heure, 15 min\n1 heure, 30 min\n1 heure, 45 min\n>=2 heures"
+  },
+  {
+   "default": "0",
+   "fieldname": "afficher_commande",
+   "fieldtype": "Check",
+   "label": "Afficher Commande"
+  },
+  {
+   "depends_on": "eval:(\r\n    (doc.status === \"Completed\" && (doc.custom_type_dintervention === \"Entretien\" || doc.custom_type_dintervention === \"R\u00e9paration\"))\r\n    || doc.afficher_commande === 1\r\n    || doc.custom_type_dintervention === \"Installation\"\r\n    || doc.custom_type_dintervention === \"Livraison\"\r\n)",
+   "fieldname": "commande_client",
+   "fieldtype": "Link",
+   "label": "Commande client",
+   "mandatory_depends_on": "eval:doc.status !== \"Cancelled\" && (\r\n    (doc.status === \"Completed\" && (doc.custom_type_dintervention === \"Entretien\" || doc.custom_type_dintervention === \"R\u00e9paration\"))\r\n    || doc.afficher_commande === 1\r\n    || doc.custom_type_dintervention === \"Installation\"\r\n    || doc.custom_type_dintervention === \"Livraison\"\r\n)",
+   "options": "Sales Order"
+  },
+  {
+   "depends_on": "eval:(doc.status == \"Cancelled\" & (doc.custom_type_dintervention ==\"Entretien\" | doc.custom_type_dintervention ==\"R\u00e9paration\" |  doc.custom_type_dintervention == \"Installation\" |  doc.custom_type_dintervention == \"Visite\"))",
+   "fieldname": "raison_annulation",
+   "fieldtype": "Select",
+   "label": "Raison Annulation",
+   "mandatory_depends_on": "eval:(doc.status == \"Cancelled\" & (doc.custom_type_dintervention ==\"Entretien\" | doc.custom_type_dintervention ==\"R\u00e9paration\" |  doc.custom_type_dintervention == \"Installation\" |  doc.custom_type_dintervention == \"Visite\"))",
+   "options": "\nClient non joignable\nClient a oubli\u00e9 son rendez vous\nRetard Aqua World\nL'intervention est ch\u00e8re\nAutre"
+  },
+  {
+   "depends_on": "eval:((doc.status == \"Completed\" & (doc.custom_type_dintervention ==\"Entretien\" | doc.custom_type_dintervention ==\"R\u00e9paration\" |  doc.custom_type_dintervention == \"Installation\" |  doc.custom_type_dintervention == \"Visite\")) | (doc.status == \"Cancelled\" & doc.raison_annulation == \"Autre\" ))",
+   "fieldname": "rapport_visite",
+   "fieldtype": "Small Text",
+   "label": "Rapport Intervention",
+   "mandatory_depends_on": "eval:((doc.status == \"Completed\" & (doc.custom_type_dintervention ==\"Entretien\" | doc.custom_type_dintervention ==\"R\u00e9paration\" |  doc.custom_type_dintervention == \"Installation\" |  doc.custom_type_dintervention == \"Visite\")) | (doc.status == \"Cancelled\" & doc.raison_annulation == \"Autre\" ))"
+  },
+  {
+   "default": "0",
+   "fieldname": "custom_reservation_app",
+   "fieldtype": "Check",
+   "hidden": 1,
+   "label": "Reservation App",
+   "options": "0"
+  },
+  {
+   "fieldname": "section_photos_tab",
+   "fieldtype": "Tab Break",
+   "label": "Prendre des Photos"
+  },
+  {
+   "fieldname": "upload_photos",
+   "fieldtype": "Button",
+   "label": "Ajouter photos (avant intervention)"
+  },
+  {
+   "fieldname": "liste_photos_avant",
+   "fieldtype": "Small Text",
+   "label": "Photos avant intervention",
+   "mandatory_depends_on": "eval:doc.status==\"Completed\" && [\"Entretien\",\"R\u00e9paration\",\"Reparation\"].includes(doc.custom_type_dintervention)\r\n",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_c831h",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "upload_after",
+   "fieldtype": "Button",
+   "label": "Ajouter photos (apr\u00e8s intervention)"
+  },
+  {
+   "fieldname": "liste_photos_apres",
+   "fieldtype": "Small Text",
+   "label": "Photos apr\u00e8s intervention",
+   "mandatory_depends_on": "eval:doc.status==\"Completed\" && doc.custom_type_dintervention!=\"Autre\"",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_ar_translations",
+   "fieldtype": "Section Break",
+   "hidden": 1,
+   "label": "Traductions Arabes"
+  },
+  {
+   "fieldname": "ar_client",
+   "fieldtype": "Small Text",
+   "hidden": 1,
+   "label": "Nom client AR",
+   "read_only": 1
+  },
+  {
+   "fieldname": "ar_adresse",
+   "fieldtype": "Small Text",
+   "hidden": 1,
+   "label": "Adresse AR",
+   "read_only": 1
+  },
+  {
+   "fieldname": "ar_sujet",
+   "fieldtype": "Small Text",
+   "hidden": 1,
+   "label": "Sujet AR",
+   "read_only": 1
+  },
+  {
+   "fieldname": "ar_hash",
+   "fieldtype": "Data",
+   "hidden": 1,
+   "label": "AR Hash",
+   "read_only": 1
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "is_calendar_and_gantt": 1,
+ "links": [],
+ "modified": "2026-07-13 20:11:04.294428",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "Tache de travail",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "quick_entry": 1,
+ "row_format": "Dynamic",
+ "rows_threshold_for_grid_search": 20,
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "titre",
+ "track_seen": 1,
+ "track_views": 1
+}

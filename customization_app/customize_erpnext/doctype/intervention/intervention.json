@@ -1,0 +1,201 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-07-13 17:57:57.836818",
+ "custom": 1,
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "annule",
+  "nb_appels",
+  "nb_appels_detail",
+  "tache_de_travail",
+  "intervention",
+  "heure",
+  "client",
+  "tel",
+  "adresse",
+  "google_maps",
+  "remarque",
+  "photo1",
+  "photo2",
+  "photo3",
+  "commande",
+  "vente",
+  "source_task",
+  "nouvelle_tache",
+  "ar_client",
+  "ar_adresse",
+  "ar_remarque",
+  "ar_hash",
+  "ar_sujet"
+ ],
+ "fields": [
+  {
+   "default": "0",
+   "fieldname": "annule",
+   "fieldtype": "Check",
+   "label": "Annul\u00e9"
+  },
+  {
+   "default": "0",
+   "fieldname": "nb_appels",
+   "fieldtype": "Int",
+   "label": "Nb Appels"
+  },
+  {
+   "fieldname": "nb_appels_detail",
+   "fieldtype": "Small Text",
+   "label": "Nb Appels Detail"
+  },
+  {
+   "fieldname": "tache_de_travail",
+   "fieldtype": "Link",
+   "label": "Tache de travail",
+   "options": "Tache de travail"
+  },
+  {
+   "fetch_from": "tache_de_travail.custom_type_dintervention",
+   "fieldname": "intervention",
+   "fieldtype": "Data",
+   "label": "Intervention"
+  },
+  {
+   "fetch_from": "tache_de_travail.starts_on",
+   "fieldname": "heure",
+   "fieldtype": "Data",
+   "label": "Heure"
+  },
+  {
+   "fetch_from": "tache_de_travail.custom_client",
+   "fieldname": "client",
+   "fieldtype": "Link",
+   "label": "Client",
+   "options": "Customer"
+  },
+  {
+   "fetch_from": "tache_de_travail.tel",
+   "fieldname": "tel",
+   "fieldtype": "Small Text",
+   "label": "Tel"
+  },
+  {
+   "fetch_from": "tache_de_travail.details_adresse",
+   "fieldname": "adresse",
+   "fieldtype": "Data",
+   "label": "Adresse"
+  },
+  {
+   "fieldname": "google_maps",
+   "fieldtype": "Data",
+   "label": "Google Maps"
+  },
+  {
+   "fieldname": "remarque",
+   "fieldtype": "Small Text",
+   "label": "Remarque"
+  },
+  {
+   "fieldname": "photo1",
+   "fieldtype": "Attach Image",
+   "label": "Photo1"
+  },
+  {
+   "fieldname": "photo2",
+   "fieldtype": "Attach Image",
+   "label": "Photo2"
+  },
+  {
+   "fieldname": "photo3",
+   "fieldtype": "Attach Image",
+   "label": "Photo3"
+  },
+  {
+   "fieldname": "commande",
+   "fieldtype": "Link",
+   "label": "Commande",
+   "options": "Sales Order"
+  },
+  {
+   "fieldname": "vente",
+   "fieldtype": "Link",
+   "label": "Vente",
+   "options": "POS Invoice"
+  },
+  {
+   "fieldname": "source_task",
+   "fieldtype": "Link",
+   "hidden": 1,
+   "label": "Source Task",
+   "options": "Tache de travail"
+  },
+  {
+   "default": "0",
+   "fieldname": "nouvelle_tache",
+   "fieldtype": "Check",
+   "hidden": 1,
+   "label": "Nouvelle Tache"
+  },
+  {
+   "fieldname": "ar_client",
+   "fieldtype": "Data",
+   "hidden": 1,
+   "label": "AR Client",
+   "no_copy": 1,
+   "print_hide": 1,
+   "report_hide": 1
+  },
+  {
+   "fieldname": "ar_adresse",
+   "fieldtype": "Small Text",
+   "hidden": 1,
+   "label": "AR Adresse",
+   "no_copy": 1,
+   "print_hide": 1,
+   "report_hide": 1
+  },
+  {
+   "fieldname": "ar_remarque",
+   "fieldtype": "Small Text",
+   "hidden": 1,
+   "label": "AR Remarque",
+   "no_copy": 1,
+   "print_hide": 1,
+   "report_hide": 1
+  },
+  {
+   "fieldname": "ar_hash",
+   "fieldtype": "Data",
+   "hidden": 1,
+   "label": "AR Hash",
+   "no_copy": 1,
+   "print_hide": 1,
+   "report_hide": 1
+  },
+  {
+   "fieldname": "ar_sujet",
+   "fieldtype": "Small Text",
+   "hidden": 1,
+   "label": "AR Sujet",
+   "no_copy": 1,
+   "print_hide": 1,
+   "report_hide": 1
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-07-13 17:57:57.886592",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "Intervention",
+ "owner": "Administrator",
+ "permissions": [],
+ "row_format": "Dynamic",
+ "rows_threshold_for_grid_search": 20,
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}
