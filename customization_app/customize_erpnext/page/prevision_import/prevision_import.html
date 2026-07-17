@@ -1,0 +1,130 @@
+<div class="pi-page">
+  <style>
+    .pi-page { padding: 14px 18px; }
+    .pi-card { background: var(--card-bg,#fff); border: 1px solid var(--border-color,#e4e8ee);
+               border-radius: 12px; padding: 14px 16px; margin-bottom: 14px; box-shadow: 0 1px 3px rgba(0,0,0,.05); }
+    .pi-filters { display: flex; flex-wrap: wrap; gap: 12px 18px; align-items: flex-end; }
+    .pi-field { display: flex; flex-direction: column; gap: 4px; }
+    .pi-field label { margin: 0; font-size: 11.5px; font-weight: 600; color: var(--text-muted,#6b7280);
+                      text-transform: uppercase; letter-spacing: .3px; }
+    .pi-field .form-control { width: 180px; }
+    .pi-field .form-control.pi-num { width: 90px; }
+    .pi-pager { margin-left: auto; display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text-muted,#6b7280); }
+
+    .pi-chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+    .pi-chip { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; border-radius: 14px;
+               border: 1px solid var(--border-color,#d5dae1); background: var(--card-bg,#fff);
+               font-size: 12px; cursor: pointer; user-select: none; }
+    .pi-chip.active { background: #e6f4ff; border-color: #91caff; font-weight: 700; color: #0958d9; }
+    .pi-chip-check input { margin: 0 2px 0 0; }
+
+    .pi-kpis { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 14px; }
+    .pi-kpi { flex: 1 1 150px; border-radius: 10px; padding: 10px 14px; border: 1px solid var(--border-color,#e4e8ee); }
+    .pi-kpi .lbl { font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-muted,#6b7280); }
+    .pi-kpi .val { font-size: 20px; font-weight: 800; margin-top: 2px; }
+    .pi-kpi.rouge { background: #fff1f0; border-color: #ffa39e; } .pi-kpi.rouge .val { color: #a8071a; }
+    .pi-kpi.orange { background: #fff7e6; border-color: #ffd591; } .pi-kpi.orange .val { color: #ad6800; }
+    .pi-kpi.bleu { background: #e6f4ff; border-color: #91caff; } .pi-kpi.bleu .val { color: #0958d9; }
+
+    .pi-table-wrap { overflow-x: auto; }
+    table.pi-tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+    table.pi-tbl th { text-align: left; padding: 8px 10px; background: var(--bg-light-gray,#f6f8fa); color: #6b7280;
+                      font-weight: 600; font-size: 11px; text-transform: uppercase; white-space: normal;
+                      line-height: 1.25; vertical-align: bottom; max-width: 110px;
+                      border-bottom: 1px solid var(--border-color,#e4e8ee); }
+    table.pi-tbl th.sortable { cursor: pointer; }
+    table.pi-tbl td { padding: 7px 10px; border-bottom: 1px solid var(--border-color,#eef1f5); vertical-align: middle; }
+    table.pi-tbl th.num, table.pi-tbl td.num { text-align: right; white-space: nowrap; }
+    table.pi-tbl tr.pi-row { cursor: pointer; }
+    table.pi-tbl tr:hover > td { background: rgba(0,0,0,.02); }
+
+    .pi-code { font-weight: 700; white-space: nowrap; }
+    .pi-name { color: var(--text-muted,#6b7280); font-size: 11.5px; max-width: 240px; overflow: hidden;
+               text-overflow: ellipsis; white-space: nowrap; }
+    .pi-imp { font-weight: 800; color: #0958d9; }
+    .pi-imp2 { font-weight: 800; color: #531dab; }
+    .pi-up { color: #2e9e5b; font-weight: 700; }
+    .pi-down { color: #b02a37; font-weight: 700; }
+    .pi-muted { color: #9aa2ad; }
+    .pi-badge { display: inline-block; font-size: 10px; font-weight: 800; padding: 2px 8px; border-radius: 8px; letter-spacing: .3px; }
+    .pi-badge.rupture { background: #fff1f0; color: #a8071a; border: 1px solid #ffa39e; }
+    .pi-badge.attention { background: #fff7e6; color: #ad6800; border: 1px solid #ffd591; }
+    .pi-badge.ok { background: #f6ffed; color: #135200; border: 1px solid #b7eb8f; }
+    .pi-badge.aucun { background: #f5f5f5; color: #8c8c8c; border: 1px solid #d9d9d9; }
+
+    tr.pi-chart-row > td { background: var(--bg-light-gray,#f9fafb); padding: 12px 16px; }
+    .pi-chart-title { font-size: 11.5px; font-weight: 700; color: var(--text-color,#36414c); margin-bottom: 4px; }
+
+    .pi-loading, .pi-empty { padding: 30px; text-align: center; color: #9aa2ad; font-size: 13px; }
+    #pi-denied { display: none; margin: 40px auto; max-width: 520px; background: #f8d7da; border: 1px solid #f0b6bd;
+                 border-radius: 10px; padding: 22px 26px; color: #721c24; font-size: 14px; font-weight: 600; text-align: center; }
+  </style>
+
+  <div id="pi-denied">⛔ Accès réservé. Cette page n’est pas disponible pour votre compte.</div>
+
+  <div id="pi-main">
+    <div class="pi-card">
+      <div class="pi-filters">
+        <div class="pi-field">
+          <label>Recherche</label>
+          <input type="text" id="pi-search" class="form-control" placeholder="Code, désignation…">
+        </div>
+        <div class="pi-field">
+          <label>Groupe d’article</label>
+          <select id="pi-group" class="form-control"><option value="">Tous</option></select>
+        </div>
+        <div class="pi-field">
+          <label>Entrepôt</label>
+          <select id="pi-warehouse" class="form-control"><option value="">Tous</option></select>
+        </div>
+        <div class="pi-field">
+          <label>Période import (mois)</label>
+          <input type="number" id="pi-periode" class="form-control pi-num" min="1" max="24" value="3">
+        </div>
+        <div class="pi-field">
+          <label>Moyenne (mois)</label>
+          <input type="number" id="pi-moyenne" class="form-control pi-num" min="1" max="12" value="3">
+        </div>
+        <div class="pi-field">
+          <label>Historique (mois)</label>
+          <input type="number" id="pi-historique" class="form-control pi-num" min="2" max="36" value="12">
+        </div>
+        <div class="pi-field">
+          <label>Croissance % (vide = auto)</label>
+          <input type="number" id="pi-croissance" class="form-control pi-num" step="1" placeholder="auto">
+        </div>
+        <div class="pi-field">
+          <label>Risque (multi) &amp; quantité</label>
+          <div class="pi-chips">
+            <span class="pi-chip" data-state="rupture">🔴 Rupture</span>
+            <span class="pi-chip" data-state="attention">🟠 À surveiller</span>
+            <span class="pi-chip" data-state="ok">🟢 OK</span>
+            <span class="pi-chip" data-state="aucun">⚪ Sans rotation</span>
+            <label class="pi-chip pi-chip-check"><input type="checkbox" id="pi-only-imp"> 📦 À importer &gt; 0</label>
+          </div>
+        </div>
+        <button class="btn btn-primary btn-sm" id="pi-refresh">🔄 Calculer</button>
+        <button class="btn btn-default btn-sm" id="pi-excel">📥 Excel</button>
+        <button class="btn btn-warning btn-sm" id="pi-commande" style="display:none;">🛒 Liste de commande (<span id="pi-sel-count">0</span>)</button>
+        <div class="pi-pager">
+          <button class="btn btn-default btn-xs" id="pi-prev">‹</button>
+          <span id="pi-page-info">—</span>
+          <button class="btn btn-default btn-xs" id="pi-next">›</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="pi-kpis" id="pi-kpis" style="display:none;">
+      <div class="pi-kpi bleu" data-risque="a_importer" style="cursor:pointer;" title="Filtrer : à importer > 0">
+        <div class="lbl">Articles à importer</div><div class="val" id="pi-kpi-imp">—</div></div>
+      <div class="pi-kpi rouge" data-risque="rupture" style="cursor:pointer;" title="Filtrer : risque rupture">
+        <div class="lbl">Risque rupture</div><div class="val" id="pi-kpi-rupture">—</div></div>
+      <div class="pi-kpi orange" data-risque="attention" style="cursor:pointer;" title="Filtrer : à surveiller">
+        <div class="lbl">À surveiller</div><div class="val" id="pi-kpi-attention">—</div></div>
+    </div>
+
+    <div class="pi-card pi-table-wrap">
+      <div id="pi-table"><div class="pi-loading">⏳ Chargement…</div></div>
+    </div>
+  </div>
+</div>

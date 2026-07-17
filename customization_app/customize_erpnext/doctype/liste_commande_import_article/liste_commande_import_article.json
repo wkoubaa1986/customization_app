@@ -1,0 +1,111 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-07-17 15:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "image",
+  "item_code",
+  "item_name",
+  "item_group",
+  "qty",
+  "uom",
+  "volume_unitaire_m3",
+  "volume_ligne_m3",
+  "description",
+  "item_name_traduit",
+  "description_traduite"
+ ],
+ "fields": [
+  {
+   "fieldname": "item_code",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Article (vide = article libre)",
+   "options": "Item",
+   "columns": 2
+  },
+  {
+   "fieldname": "item_name",
+   "fieldtype": "Data",
+   "label": "Désignation",
+   "fetch_from": "item_code.item_name",
+   "fetch_if_empty": 1,
+   "in_list_view": 1,
+   "columns": 2
+  },
+  {
+   "fieldname": "item_group",
+   "fieldtype": "Link",
+   "label": "Groupe d'article",
+   "options": "Item Group",
+   "fetch_from": "item_code.item_group",
+   "fetch_if_empty": 1
+  },
+  {
+   "fieldname": "qty",
+   "fieldtype": "Float",
+   "in_list_view": 1,
+   "label": "Quantité",
+   "columns": 1
+  },
+  {
+   "fieldname": "uom",
+   "fieldtype": "Data",
+   "label": "UDM",
+   "in_list_view": 1,
+   "columns": 1
+  },
+  {
+   "fieldname": "volume_unitaire_m3",
+   "fieldtype": "Float",
+   "in_list_view": 1,
+   "label": "Volume unitaire (m³)",
+   "precision": "4",
+   "columns": 2
+  },
+  {
+   "fieldname": "volume_ligne_m3",
+   "fieldtype": "Float",
+   "in_list_view": 1,
+   "label": "Volume ligne (m³)",
+   "precision": "4",
+   "read_only": 1,
+   "columns": 2
+  },
+  {
+   "fieldname": "image",
+   "fieldtype": "Attach Image",
+   "label": "Image"
+  },
+  {
+   "fieldname": "description",
+   "fieldtype": "Text Editor",
+   "label": "Description technique"
+  },
+  {
+   "fieldname": "item_name_traduit",
+   "fieldtype": "Data",
+   "label": "Désignation traduite"
+  },
+  {
+   "fieldname": "description_traduite",
+   "fieldtype": "Long Text",
+   "label": "Description traduite"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-07-17 15:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "Liste Commande Import Article",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

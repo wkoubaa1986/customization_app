@@ -1,0 +1,139 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "autoname": "format:LCI-{YYYY}-{#####}",
+ "creation": "2026-07-17 15:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "titre",
+  "statut",
+  "date_commande",
+  "column_break_head",
+  "fournisseur",
+  "langue_cible",
+  "section_articles",
+  "articles",
+  "section_totaux",
+  "nb_articles",
+  "column_break_tot",
+  "volume_total_m3",
+  "section_notes",
+  "notes"
+ ],
+ "fields": [
+  {
+   "fieldname": "titre",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Titre",
+   "reqd": 1
+  },
+  {
+   "default": "Brouillon",
+   "fieldname": "statut",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Statut",
+   "options": "Brouillon\nEnvoyée\nClôturée"
+  },
+  {
+   "default": "Today",
+   "fieldname": "date_commande",
+   "fieldtype": "Date",
+   "label": "Date"
+  },
+  {
+   "fieldname": "column_break_head",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "fournisseur",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Fournisseur",
+   "options": "Supplier"
+  },
+  {
+   "default": "English",
+   "fieldname": "langue_cible",
+   "fieldtype": "Select",
+   "label": "Langue cible",
+   "options": "Français\nEnglish\nDeutsch\nالعربية\nEspañol"
+  },
+  {
+   "fieldname": "section_articles",
+   "fieldtype": "Section Break",
+   "label": "Articles"
+  },
+  {
+   "fieldname": "articles",
+   "fieldtype": "Table",
+   "label": "Articles",
+   "options": "Liste Commande Import Article"
+  },
+  {
+   "fieldname": "section_totaux",
+   "fieldtype": "Section Break",
+   "label": "Totaux"
+  },
+  {
+   "fieldname": "nb_articles",
+   "fieldtype": "Int",
+   "label": "Nombre d'articles",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_tot",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "volume_total_m3",
+   "fieldtype": "Float",
+   "label": "Volume total (m³)",
+   "precision": "4",
+   "read_only": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "section_notes",
+   "fieldtype": "Section Break",
+   "label": "Notes",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "notes",
+   "fieldtype": "Small Text",
+   "label": "Notes"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-07-17 15:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "Liste Commande Import",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "titre",
+ "track_changes": 1
+}

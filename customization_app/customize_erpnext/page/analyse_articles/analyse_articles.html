@@ -1,0 +1,80 @@
+<div class="aa-page">
+  <style>
+    .aa-page { padding: 14px 18px; }
+    .aa-card { background: var(--card-bg,#fff); border: 1px solid var(--border-color,#e4e8ee);
+               border-radius: 12px; padding: 14px 16px; margin-bottom: 14px; box-shadow: 0 1px 3px rgba(0,0,0,.05); }
+    .aa-filters { display: flex; flex-wrap: wrap; gap: 12px 18px; align-items: flex-end; }
+    .aa-field { display: flex; flex-direction: column; gap: 4px; }
+    .aa-field label { margin: 0; font-size: 11.5px; font-weight: 600; color: var(--text-muted,#6b7280);
+                      text-transform: uppercase; letter-spacing: .3px; }
+    .aa-field .form-control { width: 220px; }
+    .aa-pager { margin-left: auto; display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text-muted,#6b7280); }
+
+    .aa-table-wrap { overflow-x: auto; }
+    table.aa-tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+    table.aa-tbl th { text-align: left; padding: 8px 10px; background: var(--bg-light-gray,#f6f8fa); color: #6b7280;
+                      font-weight: 600; font-size: 11px; text-transform: uppercase; white-space: nowrap;
+                      border-bottom: 1px solid var(--border-color,#e4e8ee); }
+    table.aa-tbl th.sortable { cursor: pointer; }
+    table.aa-tbl th.pl-head { text-align: center; border-left: 2px solid var(--border-color,#e4e8ee); }
+    table.aa-tbl td { padding: 7px 10px; border-bottom: 1px solid var(--border-color,#eef1f5); vertical-align: middle; }
+    table.aa-tbl th.num, table.aa-tbl td.num { text-align: right; white-space: nowrap; }
+    table.aa-tbl td.pl-first { border-left: 2px solid var(--border-color,#eef1f5); }
+    table.aa-tbl tr:hover > td { background: rgba(0,0,0,.02); }
+
+    .aa-img { width: 38px; height: 38px; object-fit: cover; border-radius: 6px; background: #f2f4f7;
+              border: 1px solid var(--border-color,#e4e8ee); }
+    .aa-img-empty { display: inline-flex; width: 38px; height: 38px; border-radius: 6px; background: #f2f4f7;
+                    align-items: center; justify-content: center; color: #c3cad4; font-size: 16px; }
+    .aa-code { font-weight: 700; white-space: nowrap; }
+    .aa-desc { color: var(--text-muted,#6b7280); font-size: 11.5px; max-width: 260px; overflow: hidden;
+               text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+    .aa-badge { display: inline-block; font-size: 10px; font-weight: 800; padding: 2px 8px; border-radius: 8px;
+                background: #e1ecff; color: #1f3a5f; letter-spacing: .4px; }
+    .aa-toggle { cursor: pointer; user-select: none; color: #2b6cb0; font-weight: 700; margin-right: 6px; }
+
+    .aa-marge-pos { color: #2e9e5b; font-weight: 700; }
+    .aa-marge-bad { color: #b02a37; font-weight: 700; }
+    .aa-muted { color: #9aa2ad; }
+    .aa-incomplet { color: #b8860b; font-size: 11px; font-weight: 600; }
+
+    tr.aa-bundle-detail > td { background: var(--bg-light-gray,#f9fafb); padding: 10px 14px 14px; }
+    table.aa-sub { width: 100%; border-collapse: collapse; font-size: 12px; }
+    table.aa-sub th { font-size: 10.5px; text-transform: uppercase; color: #8a93a0; text-align: left;
+                      padding: 4px 8px; border-bottom: 1px solid var(--border-color,#e4e8ee); }
+    table.aa-sub td { padding: 4px 8px; border-bottom: 1px solid var(--border-color,#eef1f5); }
+    table.aa-sub th.num, table.aa-sub td.num { text-align: right; }
+    .aa-sub-title { font-size: 11.5px; font-weight: 700; color: var(--text-color,#36414c); margin-bottom: 6px; }
+
+    .aa-loading, .aa-empty { padding: 30px; text-align: center; color: #9aa2ad; font-size: 13px; }
+    #aa-denied { display: none; margin: 40px auto; max-width: 520px; background: #f8d7da; border: 1px solid #f0b6bd;
+                 border-radius: 10px; padding: 22px 26px; color: #721c24; font-size: 14px; font-weight: 600; text-align: center; }
+  </style>
+
+  <div id="aa-denied">⛔ Accès réservé. Cette page n’est pas disponible pour votre compte.</div>
+
+  <div id="aa-main">
+    <div class="aa-card">
+      <div class="aa-filters">
+        <div class="aa-field">
+          <label>Recherche</label>
+          <input type="text" id="aa-search" class="form-control" placeholder="Code, désignation, description…">
+        </div>
+        <div class="aa-field">
+          <label>Groupe d’article</label>
+          <select id="aa-group" class="form-control"><option value="">Tous</option></select>
+        </div>
+        <button class="btn btn-default btn-sm" id="aa-excel">📥 Exporter Excel</button>
+        <div class="aa-pager">
+          <button class="btn btn-default btn-xs" id="aa-prev">‹</button>
+          <span id="aa-page-info">—</span>
+          <button class="btn btn-default btn-xs" id="aa-next">›</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="aa-card aa-table-wrap">
+      <div id="aa-table"><div class="aa-loading">⏳ Chargement…</div></div>
+    </div>
+  </div>
+</div>
