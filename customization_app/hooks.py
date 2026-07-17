@@ -329,6 +329,7 @@ fixtures = [
                     "generer un echeancier de maintenace",
                     "Facturation Auto",
                     "Generation N Facture",
+                    "get customer information",
                 ],
             ],
         ],
@@ -351,7 +352,7 @@ fixtures = [
     {
         "doctype": "Workspace",
         "filters": [
-            ["name", "in", ["Selling", "Accounting", "Partenaire"]],
+            ["name", "in", ["Selling", "Accounting", "Partenaire", "Analyse des Articles"]],
         ],
     },
     {
