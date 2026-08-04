@@ -97,7 +97,14 @@ def get_taches_par_date(date):
                 "taches": [],
             }
 
-        aramex = t.payment_terms_template == PAYMENT_TERMS_ARAMEX
+        # Une livraison Aramex = tâche de type « Livraison » dont la commande porte
+        # le modèle de termes de paiement Aramex. Un entretien ou une installation
+        # rattachés à une commande Aramex restent des interventions sur site : leur
+        # BL doit être imprimé normalement.
+        aramex = (
+            t.type_intervention == "Livraison"
+            and t.payment_terms_template == PAYMENT_TERMS_ARAMEX
+        )
 
         if t.commande_client and aramex:
             prevu, motif = "reel", f"Commande {t.commande_client} — livraison Aramex"
