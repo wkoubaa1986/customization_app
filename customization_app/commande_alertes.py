@@ -221,28 +221,52 @@ def recalculer_tout():
 @frappe.whitelist()
 def get_alertes(noms):
     """
-    Retourne {nom: {"couleur": ..., "libelle": ...}} pour les commandes en
-    anomalie. Lit le champ stocké : la couleur affichée et le filtre portent
-    ainsi toujours la même valeur.
+    Décore les lignes de la liste des commandes, en un seul appel :
+
+      couleur / libelle   l'anomalie, lue depuis le champ stocké — la couleur
+                          affichée et le filtre portent ainsi toujours la même
+                          valeur
+      appels              nombre d'appels de confirmation sans réponse, pour
+                          les commandes WEB
+
+    Une commande sans anomalie mais déjà rappelée est donc retournée elle
+    aussi. Les commandes sans rien à afficher sont absentes du résultat.
     """
+    from customization_app.suivi_appels import CHAMPS as CHAMPS_APPELS, nb_appels
+
     if isinstance(noms, str):
         noms = json.loads(noms)
     noms = [n for n in (noms or []) if n][:MAX_NOMS]
     if not noms or not frappe.db.has_column("Sales Order", CHAMP):
         return {}
 
+    suivi_appels = frappe.db.has_column("Sales Order", CHAMPS_APPELS[1])
+    colonnes = [f"`{CHAMP}` AS motif"]
+    if suivi_appels:
+        colonnes += [f"`{c}` AS `{c}`" for c in CHAMPS_APPELS.values()]
+
     lignes = frappe.db.sql(
         f"""
-        SELECT name, `{CHAMP}` AS motif FROM `tabSales Order`
-        WHERE name IN %(noms)s AND COALESCE(`{CHAMP}`, '') <> ''
+        SELECT name, {', '.join(colonnes)} FROM `tabSales Order`
+        WHERE name IN %(noms)s
     """,
         {"noms": tuple(noms)},
         as_dict=True,
     )
-    return {
-        r.name: {"couleur": COULEURS.get(r.motif, "orange"), "libelle": r.motif}
-        for r in lignes
-    }
+
+    resultat = {}
+    for r in lignes:
+        entree = {}
+        if r.motif:
+            entree["couleur"] = COULEURS.get(r.motif, "orange")
+            entree["libelle"] = r.motif
+        if suivi_appels:
+            n = nb_appels(r)
+            if n:
+                entree["appels"] = n
+        if entree:
+            resultat[r.name] = entree
+    return resultat
 
 
 # ── Hooks ────────────────────────────────────────────────────────────────────

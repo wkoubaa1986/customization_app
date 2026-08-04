@@ -324,7 +324,9 @@ app_include_js = [_js("customer_quick_entry.js"),
                   # Volontairement en app_include_js et non en doctype_list_js :
                   # woocommerce_fusion réassigne listview_settings["Sales Order"]
                   # et son fichier est concaténé après le nôtre.
-                  _js("sales_order_list_alertes.js")]
+                  _js("sales_order_list_alertes.js"),
+                  # Boutons de suivi des appels sur les commandes WEB.
+                  _js("sales_order_appels.js")]
 # Hide filter message shown in the awesomplete dropdown
 app_include_css = ["/assets/customization_app/css/hide_filter_message.css"]
 # doctype_calendar_js = {

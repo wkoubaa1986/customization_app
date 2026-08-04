@@ -42,6 +42,14 @@ frappe.provide("frappe.views");
             .so-alerte-pastille.orange { background: #ffe3bf; color: #9a5b09; }
             .so-alerte-pastille.violet { background: #e9d5ff; color: #6b21a8; }
             .so-alerte-pastille.jaune  { background: #f5ec7a; color: #6b5900; }
+            /* Compteur d'appels : volontairement neutre, il coexiste avec une
+               pastille d'anomalie sur la même ligne sans lui disputer l'œil. */
+            .so-appels-pastille {
+                display: inline-block; margin-left: 8px; padding: 1px 7px;
+                border-radius: 10px; font-size: 11px; white-space: nowrap;
+                background: #e2e8f0; color: #334155;
+            }
+            .so-appels-pastille.deux { background: #cbd5e1; color: #1e293b; font-weight: 600; }
         `;
         document.head.appendChild(style);
     }
@@ -65,20 +73,34 @@ frappe.provide("frappe.views");
         // sans nettoyage, les pastilles s'empileraient et la couleur
         // précédente resterait.
         $ligne.removeClass(TOUTES_CLASSES);
-        $ligne.find(".so-alerte-pastille").remove();
+        $ligne.find(".so-alerte-pastille, .so-appels-pastille").remove();
     }
 
     function _peindre(lignes) {
         lignes.forEach(({ $ligne, nom }) => {
             _nettoyer($ligne);
-            const alerte = cache[nom];
-            if (!alerte) return;
-            $ligne.addClass(CLASSES[alerte.couleur]);
-            $ligne.find(".level-left").first().append(
-                `<span class="so-alerte-pastille ${alerte.couleur}"
-                       title="${frappe.utils.escape_html(alerte.libelle)}">${
-                    frappe.utils.escape_html(alerte.libelle)}</span>`
-            );
+            const info = cache[nom];
+            if (!info) return;
+            const $cible = $ligne.find(".level-left").first();
+
+            if (info.libelle) {
+                $ligne.addClass(CLASSES[info.couleur]);
+                $cible.append(
+                    `<span class="so-alerte-pastille ${info.couleur}"
+                           title="${frappe.utils.escape_html(info.libelle)}">${
+                        frappe.utils.escape_html(info.libelle)}</span>`
+                );
+            }
+
+            if (info.appels) {
+                const texte = info.appels > 1
+                    ? __("{0} appels sans réponse", [info.appels])
+                    : __("1 appel sans réponse");
+                $cible.append(
+                    `<span class="so-appels-pastille ${info.appels > 1 ? "deux" : ""}"
+                           title="${frappe.utils.escape_html(texte)}">📞 ${info.appels}</span>`
+                );
+            }
         });
     }
 
