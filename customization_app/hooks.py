@@ -305,6 +305,13 @@ override_doctype_dashboards = {
     "Customer": "customization_app.api.get_data"
 }
 app_ready = "customization_app.patches.override_get_item_details.apply"
+
+# Méthodes appelables depuis le Jinja des print formats.
+# bl_sous_garantie : utilisée par « Aqua World BL » pour décider d'imprimer la
+# mention de garantie. Un helper plutôt que du Jinja inline, pour résoudre la
+# descendance des groupes d'articles en une seule requête.
+jinja = {"methods": ["customization_app.jinja_methods.bl_sous_garantie"]}
+
 override_whitelisted_methods = {
     "erpnext.stock.get_item_details.get_item_details": "customization_app.get_item_details.get_item_details",
     "erpnext.selling.page.point_of_sale.point_of_sale.get_items": "customization_app.pos_items.get_items",

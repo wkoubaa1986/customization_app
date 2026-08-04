@@ -8,3 +8,4 @@ customization_app.patches.override_get_item_details
 customization_app.patches.fix_accounting_workspace
 customization_app.patches.ensure_delivery_note_custom_fields
 customization_app.patches.seed_modele_bl_virtuel
+customization_app.patches.ensure_item_group_garantie_field
