@@ -306,6 +306,7 @@ function _open_generer_bl_dialog() {
 
     const d = new frappe.ui.Dialog({
         title: "🚚 Générer les Bons de Livraison",
+        size: "large",
         fields: [
             {
                 fieldname: "date",
@@ -317,7 +318,7 @@ function _open_generer_bl_dialog() {
                     _load_employees(d);
                 },
             },
-            { fieldtype: "Section Break", fieldname: "sb_emp", label: "Employés avec tâches ouvertes" },
+            { fieldtype: "Section Break", fieldname: "sb_emp", label: "Tâches ouvertes" },
             {
                 fieldname: "employees_html",
                 fieldtype: "HTML",
@@ -341,6 +342,18 @@ function _open_generer_bl_dialog() {
     }, 800);
 }
 
+// Pastille indiquant ce qui sera produit pour une tâche
+function _genbl_badge(prevu) {
+    const styles = {
+        reel:    ["#dcfce7", "#166534", "BL commande"],
+        virtuel: ["#dbeafe", "#1e40af", "Bon de chargement"],
+        ignore:  ["#f3f4f6", "#6b7280", "Ignorée"],
+    };
+    const [bg, fg, label] = styles[prevu] || styles.ignore;
+    return `<span style="background:${bg};color:${fg};padding:1px 6px;border-radius:10px;
+            font-size:11px;white-space:nowrap">${label}</span>`;
+}
+
 function _load_employees(dialog) {
     const date = dialog.get_value("date");
     if (!date) return;
@@ -358,40 +371,58 @@ function _load_employees(dialog) {
                 return;
             }
 
-            // Stocker pour utilisation lors de la génération
             dialog._bl_employees = employees;
 
-            let html = `<table style="width:100%;border-collapse:collapse;font-size:13px">
-                <thead><tr style="background:#f3f4f6">
-                    <th style="padding:6px 8px;text-align:left">Employé</th>
-                    <th style="padding:6px 8px;text-align:center">Tâches</th>
-                    <th style="padding:6px 8px;text-align:left">Véhicule</th>
-                    <th style="padding:6px 8px;text-align:center">Générer</th>
-                </tr></thead><tbody>`;
+            let html = `<div style="max-height:420px;overflow:auto">`;
 
             employees.forEach((emp, idx) => {
-                const nbTaches = emp.taches.length;
-                const types = [...new Set(emp.taches.map(t => t.type || "?"))].join(", ");
+                const nbImprimables = emp.taches.filter(t => t.prevu !== "ignore").length;
 
-                html += `<tr style="border-bottom:1px solid #e5e7eb">
-                    <td style="padding:6px 8px">
-                        <strong>${emp.employee_name}</strong><br>
-                        <small style="color:#888">${types}</small>
-                    </td>
-                    <td style="padding:6px 8px;text-align:center">${nbTaches}</td>
-                    <td style="padding:6px 8px">
-                        <select data-idx="${idx}" class="genbl-vehicle-sel" style="width:100%;padding:4px;border:1px solid #d1d5db;border-radius:4px">
+                html += `<div style="border:1px solid #e5e7eb;border-radius:6px;margin-bottom:10px">
+                    <div style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:#f9fafb;
+                                border-bottom:1px solid #e5e7eb">
+                        <input type="checkbox" class="genbl-emp-chk" data-emp="${idx}" checked
+                               style="width:16px;height:16px">
+                        <div style="flex:1">
+                            <strong>${frappe.utils.escape_html(emp.employee_name)}</strong>
+                            <small style="color:#888"> — ${nbImprimables}/${emp.taches.length} tâche(s) imprimable(s)</small>
+                        </div>
+                        <select data-emp="${idx}" class="genbl-vehicle-sel"
+                                style="width:190px;padding:4px;border:1px solid #d1d5db;border-radius:4px">
                             <option value="">-- Véhicule --</option>
                         </select>
-                    </td>
-                    <td style="padding:6px 8px;text-align:center">
-                        <input type="checkbox" data-idx="${idx}" class="genbl-chk" checked style="width:16px;height:16px">
-                    </td>
-                </tr>`;
+                    </div>
+                    <table style="width:100%;border-collapse:collapse;font-size:12.5px">`;
+
+                emp.taches.forEach((t, tidx) => {
+                    const ignore = t.prevu === "ignore";
+                    html += `<tr style="border-bottom:1px solid #f3f4f6;${ignore ? "opacity:.55" : ""}">
+                        <td style="padding:5px 10px;width:28px">
+                            <input type="checkbox" class="genbl-tache-chk" data-emp="${idx}" data-tache="${tidx}"
+                                   value="${t.name}" ${ignore ? "" : "checked"} ${ignore ? "disabled" : ""}
+                                   style="width:14px;height:14px">
+                        </td>
+                        <td style="padding:5px 6px;width:48px;color:#666">${t.heure || ""}</td>
+                        <td style="padding:5px 6px">${frappe.utils.escape_html(t.client || "—")}</td>
+                        <td style="padding:5px 6px;color:#666">${frappe.utils.escape_html(t.type || "")}</td>
+                        <td style="padding:5px 10px;text-align:right">${_genbl_badge(t.prevu)}</td>
+                    </tr>`;
+                });
+
+                html += `</table></div>`;
             });
 
-            html += "</tbody></table>";
+            html += `</div>`;
             $wrap.html(html);
+
+            // Cocher/décocher un employé bascule toutes ses tâches imprimables
+            $wrap.find(".genbl-emp-chk").on("change", function() {
+                const idx = this.getAttribute("data-emp");
+                const etat = this.checked;
+                $wrap.find(`.genbl-tache-chk[data-emp="${idx}"]`).each(function() {
+                    if (!this.disabled) this.checked = etat;
+                });
+            });
 
             // Charger les options véhicule pour chaque employé
             frappe.db.get_list("Vehicle", {
@@ -399,7 +430,7 @@ function _load_employees(dialog) {
                 limit: 50,
             }).then(vehicles => {
                 employees.forEach((emp, idx) => {
-                    const sel = $wrap.find(`.genbl-vehicle-sel[data-idx="${idx}"]`)[0];
+                    const sel = $wrap.find(`.genbl-vehicle-sel[data-emp="${idx}"]`)[0];
                     if (!sel) return;
                     vehicles.forEach(v => {
                         const opt = document.createElement("option");
@@ -425,109 +456,92 @@ function _do_generer_bl(dialog) {
 
     const $wrap = dialog.fields_dict.employees_html.$wrapper;
 
-    // Collecter les sélections via data-idx attributes
-    const selected = [];
+    // Une entrée par employé, avec la liste des tâches réellement cochées
+    const selections = [];
     employees.forEach((emp, idx) => {
-        const chk = $wrap.find(`.genbl-chk[data-idx="${idx}"]`)[0];
-        if (!chk || !chk.checked) return;
-        const sel = $wrap.find(`.genbl-vehicle-sel[data-idx="${idx}"]`)[0];
-        const vehicle = sel ? sel.value : (emp.default_vehicle || "");
-        selected.push({ employee: emp.employee, vehicle });
+        const taches = [];
+        $wrap.find(`.genbl-tache-chk[data-emp="${idx}"]`).each(function() {
+            if (this.checked && !this.disabled) taches.push(this.value);
+        });
+        if (!taches.length) return;
+        const sel = $wrap.find(`.genbl-vehicle-sel[data-emp="${idx}"]`)[0];
+        selections.push({
+            employee: emp.employee,
+            vehicle: sel ? sel.value : (emp.default_vehicle || ""),
+            taches: taches,
+        });
     });
 
-    if (!selected.length) {
-        frappe.msgprint("Cochez au moins un employé.");
+    if (!selections.length) {
+        frappe.msgprint("Cochez au moins une tâche.");
         return;
     }
 
     dialog.hide();
+    frappe.dom.freeze("Génération des bons de livraison...");
 
-    frappe.show_progress("Génération des BL...", 0, selected.length);
-
-    let done = 0;
-    const allDns = [];
-
-    function processNext() {
-        if (done >= selected.length) {
-            frappe.hide_progress();
-            if (allDns.length) {
-                const virtuels = allDns.filter(d => d.virtual);
-                _print_all_dns(allDns, virtuels);
-            } else {
-                frappe.msgprint("Aucun BL généré.");
+    frappe.call({
+        method: "customization_app.generer_bl.generer_et_imprimer",
+        args: { date, selections: JSON.stringify(selections) },
+        callback: function(r) {
+            frappe.dom.unfreeze();
+            const res = r.message;
+            if (!res) {
+                frappe.msgprint({ title: "Générer BL", message: "Aucune réponse du serveur.", indicator: "red" });
+                return;
             }
-            return;
-        }
-
-        const { employee, vehicle } = selected[done];
-        frappe.call({
-            method: "customization_app.generer_bl.generer_bl_employe",
-            args: { date, employee, vehicle },
-            callback: function(r) {
-                done++;
-                frappe.show_progress("Génération des BL...", done, selected.length);
-
-        if (r.message) {
-                    const { dns_reels, dns_virtuels, employee_name } = r.message;
-                    (dns_reels || []).forEach(dn => allDns.push({ name: dn, virtual: false, employee_name }));
-                    (dns_virtuels || []).forEach(dn => allDns.push({ name: dn, virtual: true, employee_name }));
-                }
-                processNext();
-            },
-            error: function() {
-                done++;
-                frappe.show_progress("Génération des BL...", done, selected.length);
-                processNext();
-            },
-        });
-    }
-
-    processNext();
-}
-
-function _delete_virtuels(virtuels) {
-    if (!virtuels.length) return;
-    let i = 0;
-    function deleteNext() {
-        if (i >= virtuels.length) return;
-        frappe.call({
-            method: "customization_app.generer_bl.delete_virtual_dn",
-            args: { name: virtuels[i].name },
-            callback: function() { i++; deleteNext(); },
-            error:    function() { i++; deleteNext(); },
-        });
-    }
-    deleteNext();
-}
-
-function _print_all_dns(dns, virtuels) {
-    if (!dns.length) return;
-
-    // Frappe's download_multi_pdf merges all docs into a single PDF
-    const names = JSON.stringify(dns.map(d => d.name));
-    const params = new URLSearchParams({
-        doctype: "Delivery Note",
-        name: names,
-        format: "Aqua World BL",
-        no_letterhead: 0,
-        letterhead: "",
-        lang: "fr",
+            if (res.file_url) window.open(res.file_url, "_bl_print");
+            _afficher_rapport(res);
+        },
+        error: function() {
+            frappe.dom.unfreeze();
+            frappe.msgprint({
+                title: "Générer BL",
+                message: "La génération a échoué. Aucun bon de livraison n'a été supprimé.",
+                indicator: "red",
+            });
+        },
     });
-    const url = `/api/method/frappe.utils.print_format.download_multi_pdf?${params.toString()}`;
+}
+
+function _afficher_rapport(res) {
+    const rapport = res.rapport || [];
+
+    const lignes = rapport.map(e => {
+        const couleurs = { genere: "#166534", ignore: "#b45309", erreur: "#b91c1c" };
+        const libelles = { genere: "Généré", ignore: "Ignoré", erreur: "Erreur" };
+        return `<tr style="border-bottom:1px solid #f3f4f6">
+            <td style="padding:4px 8px;white-space:nowrap">${frappe.utils.escape_html(e.employee_name || "")}</td>
+            <td style="padding:4px 8px">${frappe.utils.escape_html(e.client || "—")}</td>
+            <td style="padding:4px 8px;color:#666">${frappe.utils.escape_html(e.type || "")}</td>
+            <td style="padding:4px 8px;font-weight:600;color:${couleurs[e.statut] || "#374151"}">${libelles[e.statut] || e.statut}</td>
+            <td style="padding:4px 8px;color:#555">${frappe.utils.escape_html(e.message || "")}</td>
+        </tr>`;
+    }).join("");
+
+    let entete = `<p><strong>${res.nb_generes}</strong> généré(s) · `
+        + `<strong>${res.nb_ignores}</strong> ignoré(s) · `
+        + `<strong>${res.nb_erreurs}</strong> en erreur.</p>`;
+
+    if (res.erreur_pdf) {
+        entete += `<p style="color:#b91c1c"><strong>${frappe.utils.escape_html(res.erreur_pdf)}</strong></p>`;
+    } else if (!res.file_url) {
+        entete += `<p style="color:#b45309">Aucun document à imprimer.</p>`;
+    }
 
     frappe.msgprint({
-        title: "BLs générés",
-        message: `${dns.length} bon(s) de livraison — téléchargement PDF en cours...`,
-        indicator: "green",
+        title: "Générer BL — compte-rendu",
+        indicator: res.nb_erreurs || res.erreur_pdf ? "red" : (res.nb_ignores ? "orange" : "green"),
+        message: entete + `<div style="max-height:340px;overflow:auto">
+            <table style="width:100%;border-collapse:collapse;font-size:12.5px">
+                <thead><tr style="background:#f3f4f6">
+                    <th style="padding:5px 8px;text-align:left">Employé</th>
+                    <th style="padding:5px 8px;text-align:left">Client</th>
+                    <th style="padding:5px 8px;text-align:left">Type</th>
+                    <th style="padding:5px 8px;text-align:left">Statut</th>
+                    <th style="padding:5px 8px;text-align:left">Détail</th>
+                </tr></thead>
+                <tbody>${lignes}</tbody>
+            </table></div>`,
     });
-
-    setTimeout(() => {
-        window.open(url, "_bl_print");
-        // Supprimer les BL virtuels (brouillons) après l'impression
-        if (virtuels && virtuels.length) {
-            setTimeout(() => _delete_virtuels(virtuels), 2000);
-        }
-    }, 500);
 }
-
-

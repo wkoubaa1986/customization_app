@@ -1,42 +1,67 @@
 """
-generer_bl.py — API pour la génération des BL depuis le calendrier Tache de travail.
+generer_bl.py — API de génération des bons de livraison depuis le calendrier
+« Tache de travail ».
 
-Règles métier :
-  - N'afficher que les employés avec au moins une tâche Entretien/Réparation/Installation/Livraison
-  - Tâches AVEC commande_client :
-      * Soumettre SO si brouillon (jamais changer le posting_date du SO)
-      * Créer/récupérer DN réel, posting_date = date sélectionnée
-      * custom_livré_par + custom_véhicle → Entretien / Réparation / Installation uniquement
-      * Livraison → posting_date seulement, sans livré_par/véhicle
-  - Tâches Entretien/Réparation SANS commande_client :
-      * Un seul DN virtuel par employé (brouillon, pour impression)
-      * Pas de custom_livré_par / custom_véhicle
-      * Articles pris aléatoirement depuis le stock de l'employé (ou défaut)
+Règles métier
+-------------
+Tâche AVEC commande client :
+  - la commande est soumise si elle est en brouillon (make_delivery_note l'exige)
+  - le BL existant est réutilisé, sinon il est créé depuis la commande
+  - posting_date = date choisie ; custom_livré_par + custom_véhicle renseignés,
+    sauf pour le type « Livraison » où ils sont au contraire vidés
+
+Tâche SANS commande client :
+  - un BL « virtuel » (brouillon) est créé PAR TÂCHE
+  - son contenu vient du « Modele BL Virtuel » du type d'intervention :
+    articles et quantités fixes, aucun repli sur le stock
+  - pas de modèle actif pour ce type → aucun BL, la tâche est signalée « ignoré »
+
+Les BL virtuels ne servent qu'à l'impression : ils sont supprimés APRÈS que le PDF
+fusionné a été produit et enregistré, jamais avant.
 """
 
-import random
-import math
+import json
+
 import frappe
+from frappe.utils import flt
 
 DEFAULT_WAREHOUSE = "Stock Nizar Maddouri - A&S"
-TYPES_BL = {"Entretien", "Réparation", "Installation", "Livraison"}
-TYPES_VIRTUEL = {"Entretien", "Réparation"}
+DEFAULT_TAX_TEMPLATE = "Vente Standard Sans Timbre Fiscale - A&S"
+PRINT_FORMAT = "Aqua World BL"
+
+# Types de tâche qui donnent lieu à un bon de livraison réel (via commande client).
+TYPES_BL = ("Entretien", "Réparation", "Installation", "Livraison")
+
+
+# ── Lecture des tâches ───────────────────────────────────────────────────────
+
+
+def _types_avec_modele():
+    """Types d'intervention disposant d'un modèle de BL virtuel actif."""
+    if not frappe.db.exists("DocType", "Modele BL Virtuel"):
+        return []
+    return frappe.get_all("Modele BL Virtuel", filters={"actif": 1}, pluck="name")
 
 
 @frappe.whitelist()
 def get_taches_par_date(date):
     """
-    Retourne les employés ayant au moins une tâche de type TYPES_BL à cette date.
+    Retourne les employés ayant au moins une tâche imprimable à cette date, avec
+    le détail de chaque tâche et ce qui en sera fait (BL réel, BL virtuel, ignoré).
     """
-    taches = frappe.db.sql("""
+    types = list(dict.fromkeys(list(TYPES_BL) + _types_avec_modele()))
+    modeles = set(_types_avec_modele())
+
+    taches = frappe.db.sql(
+        """
         SELECT
             t.name,
             t.custom_choix_du_staff AS employee,
             t.custom_type_dintervention AS type_intervention,
             t.commande_client,
-            t.afficher_commande,
             t.nom_client,
             t.custom_client,
+            t.starts_on,
             e.employee_name,
             e.custom_warehouse
         FROM `tabTache de travail` t
@@ -46,9 +71,12 @@ def get_taches_par_date(date):
             AND DATE(t.starts_on) = %(date)s
             AND t.custom_choix_du_staff IS NOT NULL
             AND t.custom_choix_du_staff != ''
-            AND t.custom_type_dintervention IN ('Entretien', 'Réparation', 'Installation', 'Livraison')
+            AND t.custom_type_dintervention IN %(types)s
         ORDER BY t.custom_choix_du_staff, t.starts_on
-    """, {"date": date}, as_dict=True)
+    """,
+        {"date": date, "types": types},
+        as_dict=True,
+    )
 
     employees = {}
     for t in taches:
@@ -62,151 +90,212 @@ def get_taches_par_date(date):
                 "warehouse": t.custom_warehouse or DEFAULT_WAREHOUSE,
                 "taches": [],
             }
-        employees[emp]["taches"].append({
-            "name": t.name,
-            "type": t.type_intervention,
-            "commande_client": t.commande_client,
-            "afficher_commande": t.afficher_commande,
-            "client": t.custom_client,
-            "nom_client": t.nom_client,
-        })
+
+        if t.commande_client:
+            prevu, motif = "reel", f"Commande {t.commande_client}"
+        elif t.type_intervention in modeles:
+            prevu, motif = "virtuel", f"Modèle « {t.type_intervention} »"
+        else:
+            prevu, motif = "ignore", f"Aucun modèle actif pour « {t.type_intervention} »"
+
+        employees[emp]["taches"].append(
+            {
+                "name": t.name,
+                "type": t.type_intervention,
+                "commande_client": t.commande_client,
+                "client": t.custom_client or t.nom_client or "",
+                "heure": frappe.utils.format_datetime(t.starts_on, "HH:mm") if t.starts_on else "",
+                "prevu": prevu,
+                "motif": motif,
+            }
+        )
 
     return list(employees.values())
 
 
+# ── Orchestration ────────────────────────────────────────────────────────────
+
+
 @frappe.whitelist()
-def generer_bl_employe(date, employee, vehicle):
+def generer_et_imprimer(date, selections):
     """
-    Pour un employé donné à une date donnée :
-    1. Tâches avec commande_client → DN réel, posting_date = date sélectionnée
-       - Entretien / Réparation / Installation → custom_livré_par + custom_véhicle
-       - Livraison → posting_date seulement, PAS de livré_par/véhicle
-    2. Tâches Entretien/Réparation SANS commande_client → DN virtuel par employé
-       - Articles depuis stock employé (priorisé membrane/pack/filtre/T)
-       - Pas de livré_par/véhicle sur ces DNs
+    Génère les bons de livraison des tâches sélectionnées, produit le PDF fusionné
+    puis — et seulement alors — supprime les BL virtuels.
+
+    selections : [{"employee": ..., "vehicle": ..., "taches": [noms de tâches]}]
+
+    Retourne {file_url, erreur_pdf, rapport, nb_generes, nb_ignores, nb_erreurs}.
+    Aucune exception n'est propagée par tâche : chacune produit une ligne de
+    compte-rendu, y compris en cas d'échec.
     """
-    taches = frappe.db.sql("""
-        SELECT
-            t.name,
-            t.custom_type_dintervention AS type_intervention,
-            t.commande_client,
-            t.afficher_commande,
-            t.custom_client AS client,
-            t.nom_client,
-            e.custom_warehouse
-        FROM `tabTache de travail` t
-        LEFT JOIN `tabEmployee` e ON e.name = t.custom_choix_du_staff
-        WHERE
-            t.status = 'Open'
-            AND DATE(t.starts_on) = %(date)s
-            AND t.custom_choix_du_staff = %(employee)s
-            AND t.custom_type_dintervention IN ('Entretien', 'Réparation', 'Installation', 'Livraison')
-        ORDER BY t.starts_on
-    """, {"date": date, "employee": employee}, as_dict=True)
+    if isinstance(selections, str):
+        selections = json.loads(selections)
 
-    emp_doc = frappe.get_doc("Employee", employee)
-    warehouse = emp_doc.custom_warehouse or DEFAULT_WAREHOUSE
-    emp_name = emp_doc.employee_name
+    rapport = []
+    dns_a_imprimer = []
+    virtuels = []
 
-    dns_reels = []
-    dns_virtuels = []
-
-    # ── 1. Tâches AVEC commande client ──────────────────────────────────────
-    for t in taches:
-        if not t.commande_client:
+    for sel in selections or []:
+        employee = sel.get("employee")
+        vehicle = sel.get("vehicle") or None
+        noms_taches = sel.get("taches") or []
+        if not employee or not noms_taches:
             continue
 
-        so_name = t.commande_client
-        so = frappe.get_doc("Sales Order", so_name)
+        emp = frappe.db.get_value(
+            "Employee", employee, ["employee_name", "custom_warehouse"], as_dict=True
+        ) or frappe._dict()
+        warehouse = emp.custom_warehouse or DEFAULT_WAREHOUSE
+        employee_name = emp.employee_name or employee
 
-        # Soumettre le SO si brouillon — ne jamais modifier son posting_date
-        if so.docstatus == 0:
-            so.submit()
-            frappe.db.commit()
+        for nom_tache in noms_taches:
+            entree = _traiter_tache(nom_tache, date, employee, employee_name, vehicle, warehouse)
+            rapport.append(entree)
 
-        dn_name = _get_dn_for_so(so_name)
-        is_livraison = (t.type_intervention == "Livraison")
+            if entree["statut"] == "genere" and entree["dn"]:
+                if entree["dn"] not in dns_a_imprimer:
+                    dns_a_imprimer.append(entree["dn"])
+                if entree["virtuel"] and entree["dn"] not in virtuels:
+                    virtuels.append(entree["dn"])
 
-        if not dn_name:
-            dn_name = _create_dn_from_so(
-                so_name=so_name,
-                date=date,
-                employee=None if is_livraison else employee,
-                vehicle=None if is_livraison else vehicle,
-            )
-        else:
-            # Mettre à jour posting_date (jamais du SO) + livré_par/véhicle sauf Livraison
-            # Pour Livraison : vider explicitement ces champs s'ils étaient déjà renseignés
-            if is_livraison:
-                updates = {
-                    "posting_date": date,
-                    "custom_livré_par": None,
-                    "custom_véhicle": None,
-                }
-            else:
-                updates = {
-                    "posting_date": date,
-                    "custom_livré_par": employee,
-                    "custom_véhicle": vehicle,
-                }
-            frappe.db.set_value("Delivery Note", dn_name, updates)
-            frappe.db.commit()
+    file_url = None
+    erreur_pdf = None
 
-        if dn_name and dn_name not in dns_reels:
-            dns_reels.append(dn_name)
+    if dns_a_imprimer:
+        try:
+            contenu = _construire_pdf(dns_a_imprimer)
+            file_url = _sauver_pdf(contenu, date)
+        except Exception:
+            erreur_pdf = "Le PDF n'a pas pu être produit. Les bons de livraison sont conservés."
+            frappe.log_error(title="Générer BL — échec du rendu PDF", message=frappe.get_traceback())
 
-    # ── 2. Tâches Entretien/Réparation SANS commande → DN virtuel ───────────
-    taches_sans_commande = [
-        t for t in taches
-        if not t.commande_client and t.type_intervention in TYPES_VIRTUEL
-    ]
-
-    if taches_sans_commande:
-        client = next(
-            (t.client for t in taches_sans_commande if t.client),
-            taches_sans_commande[0].nom_client if taches_sans_commande else None,
-        )
-        if client:
-            dn_virtuel = _create_virtual_dn(
-                client=client,
-                warehouse=warehouse,
-                date=date,
-                taches=taches_sans_commande,
-                employee=employee,
-                vehicle=vehicle,
-            )
-            if dn_virtuel:
-                dns_virtuels.append(dn_virtuel)
+    # Les BL virtuels ne disparaissent qu'une fois le PDF réellement enregistré.
+    if file_url and virtuels:
+        _supprimer_virtuels(virtuels, rapport)
 
     return {
-        "dns_reels": dns_reels,
-        "dns_virtuels": dns_virtuels,
-        "employee_name": emp_name,
+        "file_url": file_url,
+        "erreur_pdf": erreur_pdf,
+        "rapport": rapport,
+        "nb_generes": len([r for r in rapport if r["statut"] == "genere"]),
+        "nb_ignores": len([r for r in rapport if r["statut"] == "ignore"]),
+        "nb_erreurs": len([r for r in rapport if r["statut"] == "erreur"]),
     }
 
 
-# ── Helpers ──────────────────────────────────────────────────────────────────
+def _traiter_tache(nom_tache, date, employee, employee_name, vehicle, warehouse):
+    """Traite une tâche et retourne sa ligne de compte-rendu."""
+    entree = {
+        "tache": nom_tache,
+        "employee": employee,
+        "employee_name": employee_name,
+        "type": None,
+        "client": None,
+        "dn": None,
+        "virtuel": False,
+        "statut": "ignore",
+        "message": "",
+    }
+
+    t = frappe.db.get_value(
+        "Tache de travail",
+        nom_tache,
+        ["name", "custom_type_dintervention", "commande_client", "custom_client", "nom_client"],
+        as_dict=True,
+    )
+    if not t:
+        entree["message"] = "Tâche introuvable."
+        return entree
+
+    entree["type"] = t.custom_type_dintervention
+    entree["client"] = t.custom_client or t.nom_client or ""
+
+    try:
+        if t.commande_client:
+            dn = _traiter_avec_commande(t, date, employee, vehicle)
+            entree.update(
+                dn=dn,
+                statut="genere",
+                message=f"Bon de livraison de la commande {t.commande_client}.",
+            )
+        else:
+            dn, motif = _creer_bl_virtuel(t, warehouse, date, employee, vehicle)
+            if not dn:
+                entree["message"] = motif
+                return entree
+            entree.update(
+                dn=dn,
+                virtuel=True,
+                statut="genere",
+                message=f"Bon de chargement depuis le modèle « {t.custom_type_dintervention} ».",
+            )
+    except Exception as e:
+        entree["statut"] = "erreur"
+        entree["message"] = str(e)[:200]
+        frappe.log_error(
+            title=f"Générer BL — tâche {nom_tache}", message=frappe.get_traceback()
+        )
+
+    return entree
+
+
+# ── BL réel, depuis la commande client ───────────────────────────────────────
+
+
+def _traiter_avec_commande(t, date, employee, vehicle):
+    """
+    Soumet la commande si nécessaire puis crée ou met à jour son bon de livraison.
+    Pour le type « Livraison », livré_par et véhicule sont explicitement vidés.
+    """
+    so_name = t.commande_client
+    so = frappe.get_doc("Sales Order", so_name)
+
+    # make_delivery_note() refuse une commande en brouillon.
+    if so.docstatus == 0:
+        so.submit()
+        frappe.db.commit()
+
+    is_livraison = t.custom_type_dintervention == "Livraison"
+    dn_name = _get_dn_for_so(so_name)
+
+    if not dn_name:
+        return _create_dn_from_so(
+            so_name=so_name,
+            date=date,
+            employee=None if is_livraison else employee,
+            vehicle=None if is_livraison else vehicle,
+        )
+
+    updates = {
+        "posting_date": date,
+        "custom_livré_par": None if is_livraison else employee,
+        "custom_véhicle": None if is_livraison else vehicle,
+    }
+    frappe.db.set_value("Delivery Note", dn_name, updates)
+    frappe.db.commit()
+    return dn_name
+
 
 def _get_dn_for_so(so_name):
-    """Retourne le nom du premier DN non annulé lié à ce SO."""
-    row = frappe.db.sql("""
+    """Retourne le nom du premier BL non annulé lié à cette commande."""
+    row = frappe.db.sql(
+        """
         SELECT DISTINCT dni.parent
         FROM `tabDelivery Note Item` dni
         JOIN `tabDelivery Note` dn ON dn.name = dni.parent
         WHERE dni.against_sales_order = %s
           AND dn.docstatus != 2
         LIMIT 1
-    """, so_name)
+    """,
+        so_name,
+    )
     return row[0][0] if row else None
 
 
 def _create_dn_from_so(so_name, date, employee=None, vehicle=None):
-    """
-    Crée un DN depuis un SO.
-    - posting_date = date sélectionnée (le SO garde son propre posting_date)
-    - livré_par + véhicle renseignés uniquement si fournis (pas pour Livraison)
-    """
+    """Crée un BL depuis une commande. La commande garde son propre posting_date."""
     from erpnext.stock.doctype.delivery_note.delivery_note import make_delivery_note
+
     dn = make_delivery_note(so_name)
     dn.posting_date = date
     if employee:
@@ -218,36 +307,35 @@ def _create_dn_from_so(so_name, date, employee=None, vehicle=None):
     return dn.name
 
 
-def _create_virtual_dn(client, warehouse, date, taches, employee=None, vehicle=None):
-    """
-    Crée un DN brouillon pour tâches Entretien/Réparation sans commande.
-    - Nom client = client de la tâche
-    - livré_par + véhicle renseignés si fournis
-    - Articles depuis stock employé, priorisé membrane/pack/filtre/T, qty variées
-    """
-    company = frappe.defaults.get_global_default("company")
+# ── BL virtuel, depuis le modèle du type d'intervention ──────────────────────
 
-    # Résoudre le customer
-    if frappe.db.exists("Customer", client):
-        customer_name = client
-    else:
-        rows = frappe.db.get_all("Customer",
-            filters={"customer_name": ["like", f"%{client}%"]},
-            pluck="name", limit=1)
-        customer_name = rows[0] if rows else None
 
-    if not customer_name:
-        return None
+def _creer_bl_virtuel(t, warehouse, date, employee, vehicle):
+    """
+    Crée un BL brouillon pour UNE tâche sans commande, à partir du modèle de son
+    type d'intervention. Retourne (nom_du_bl, "") ou (None, motif du refus).
+    """
+    from customization_app.customize_erpnext.doctype.modele_bl_virtuel.modele_bl_virtuel import (
+        get_modele_actif,
+    )
+
+    type_intervention = t.custom_type_dintervention
+    modele = get_modele_actif(type_intervention)
+    if not modele:
+        return None, f"Aucun modèle de BL actif pour le type « {type_intervention or '?'} »."
+
+    client = _resoudre_client(t)
+    if not client:
+        libelle = t.custom_client or t.nom_client or "non renseigné"
+        return None, f"Client introuvable ({libelle})."
 
     dn = frappe.new_doc("Delivery Note")
-    dn.customer = customer_name
-    dn.company = company
+    dn.customer = client
+    dn.company = frappe.defaults.get_global_default("company")
     dn.posting_date = date
     dn.set_warehouse = warehouse
     dn.run_method("set_missing_values")
 
-    # Appliquer le modèle de taxes (Sans Timbre Fiscal par défaut)
-    DEFAULT_TAX_TEMPLATE = "Vente Standard Sans Timbre Fiscale - A&S"
     dn.taxes_and_charges = DEFAULT_TAX_TEMPLATE
     dn.run_method("set_taxes")
 
@@ -256,33 +344,12 @@ def _create_virtual_dn(client, warehouse, date, taches, employee=None, vehicle=N
     if vehicle:
         dn.custom_véhicle = vehicle
 
-    # Articles depuis le stock de l'employé, fallback sur stock défaut
-    used_warehouse = warehouse
-    items = _get_stock_items_for_virtual(warehouse, ratio=0.80)
-    if not items and warehouse != DEFAULT_WAREHOUSE:
-        items = _get_stock_items_for_virtual(DEFAULT_WAREHOUSE, ratio=0.50)
-        used_warehouse = DEFAULT_WAREHOUSE
+    for row in modele.articles:
+        dn.append("items", _ligne_article(row, warehouse))
 
-    description_base = "Entretien / Réparation — " + ", ".join(
-        filter(None, [t.nom_client or t.client for t in taches])
-    )
-
-    for idx, item in enumerate(items):
-        dn.append("items", {
-            "item_code": item["item_code"],
-            "item_name": item["item_name"],
-            "description": description_base if idx == 0 else item["item_name"],
-            "qty": item["qty"],
-            "uom": item["uom"],
-            "stock_uom": item["uom"],
-            "conversion_factor": 1,
-            "warehouse": used_warehouse,
-            "rate": item["rate"],
-            "amount": item["rate"] * item["qty"],
-        })
-
-    original_so_required = frappe.db.get_single_value("Selling Settings", "so_required")
-    if original_so_required == "Yes":
+    # Les BL virtuels n'ont pas de commande : neutraliser temporairement l'exigence.
+    so_required = frappe.db.get_single_value("Selling Settings", "so_required")
+    if so_required == "Yes":
         frappe.db.set_single_value("Selling Settings", "so_required", "No")
 
     try:
@@ -291,68 +358,164 @@ def _create_virtual_dn(client, warehouse, date, taches, employee=None, vehicle=N
         dn.insert(ignore_permissions=True)
         frappe.db.commit()
     finally:
-        if original_so_required == "Yes":
+        if so_required == "Yes":
             frappe.db.set_single_value("Selling Settings", "so_required", "Yes")
 
-    return dn.name
+    return dn.name, ""
+
+
+def _resoudre_client(t):
+    """custom_client (lien Customer) en priorité, repli sur nom_client en texte."""
+    if t.custom_client and frappe.db.exists("Customer", t.custom_client):
+        return t.custom_client
+
+    libelle = t.nom_client
+    if not libelle:
+        return None
+    if frappe.db.exists("Customer", libelle):
+        return libelle
+
+    rows = frappe.db.get_all(
+        "Customer", filters={"customer_name": ["like", f"%{libelle}%"]}, pluck="name", limit=1
+    )
+    return rows[0] if rows else None
+
+
+def _ligne_article(row, warehouse):
+    """Construit une ligne de BL à partir d'une ligne de modèle (quantité fixe)."""
+    item = frappe.db.get_value(
+        "Item", row.item_code, ["item_name", "stock_uom", "description", "brand"], as_dict=True
+    ) or frappe._dict()
+    qty = flt(row.qty) or 1
+    rate = _prix_article(row.item_code)
+
+    # « Delivery Note Item » ne porte aucun fetch_from : marque et description
+    # doivent être posées ici, sinon le print format perd la sous-ligne
+    # descriptive et la marque affichée à côté de la désignation.
+    return {
+        "item_code": row.item_code,
+        "item_name": row.item_name or item.item_name,
+        "description": row.description or item.description or row.item_name or item.item_name,
+        "brand": item.brand,
+        "qty": qty,
+        "uom": row.uom or item.stock_uom,
+        "stock_uom": item.stock_uom,
+        "conversion_factor": 1,
+        "warehouse": warehouse,
+        "rate": rate,
+        "amount": rate * qty,
+    }
+
+
+def _prix_article(item_code):
+    price_list = (
+        frappe.db.get_single_value("Selling Settings", "selling_price_list") or "Vente standard"
+    )
+    return flt(
+        frappe.db.get_value(
+            "Item Price",
+            {"item_code": item_code, "selling": 1, "price_list": price_list},
+            "price_list_rate",
+        )
+    )
+
+
+# ── Impression ───────────────────────────────────────────────────────────────
+
+
+def _construire_pdf(noms_dn):
+    """Fusionne les BL en un seul PDF et retourne son contenu binaire."""
+    from pypdf import PdfWriter
+
+    from frappe.utils.print_format import read_multi_pdf
+
+    writer = PdfWriter()
+    for nom in noms_dn:
+        writer = frappe.get_print(
+            "Delivery Note", nom, PRINT_FORMAT, as_pdf=True, output=writer
+        )
+    return read_multi_pdf(writer)
+
+
+def _sauver_pdf(contenu, date):
+    """Enregistre le PDF fusionné en fichier privé et retourne son URL."""
+    fichier = frappe.get_doc(
+        {
+            "doctype": "File",
+            "file_name": f"BL-{date}-{frappe.generate_hash(length=6)}.pdf",
+            "is_private": 1,
+            "content": contenu,
+        }
+    ).insert(ignore_permissions=True)
+    frappe.db.commit()
+    return fichier.file_url
+
+
+def _supprimer_virtuels(noms_dn, rapport):
+    """Supprime les BL virtuels une fois le PDF produit, et l'indique au rapport."""
+    supprimes = set()
+    for nom in noms_dn:
+        try:
+            frappe.delete_doc("Delivery Note", nom, ignore_permissions=True, force=True)
+            supprimes.add(nom)
+        except Exception:
+            frappe.log_error(
+                title=f"Générer BL — suppression de {nom}", message=frappe.get_traceback()
+            )
+    frappe.db.commit()
+
+    for entree in rapport:
+        if entree["dn"] in supprimes:
+            entree["message"] += " Brouillon supprimé après impression."
+
+
+# ── Compatibilité (ancien flux, conservé le temps d'une version) ─────────────
+
+
+@frappe.whitelist()
+def generer_bl_employe(date, employee, vehicle):
+    """
+    Obsolète — remplacé par generer_et_imprimer(). Conservé pour ne rien casser si
+    un appel subsiste ailleurs. Traite toutes les tâches ouvertes de l'employé.
+    """
+    types = list(dict.fromkeys(list(TYPES_BL) + _types_avec_modele()))
+    noms = frappe.db.sql_list(
+        """
+        SELECT name FROM `tabTache de travail`
+        WHERE status = 'Open' AND DATE(starts_on) = %(date)s
+          AND custom_choix_du_staff = %(employee)s
+          AND custom_type_dintervention IN %(types)s
+        ORDER BY starts_on
+    """,
+        {"date": date, "employee": employee, "types": types},
+    )
+
+    emp = frappe.db.get_value(
+        "Employee", employee, ["employee_name", "custom_warehouse"], as_dict=True
+    ) or frappe._dict()
+    warehouse = emp.custom_warehouse or DEFAULT_WAREHOUSE
+
+    dns_reels, dns_virtuels = [], []
+    for nom in noms:
+        entree = _traiter_tache(
+            nom, date, employee, emp.employee_name or employee, vehicle, warehouse
+        )
+        if entree["statut"] != "genere" or not entree["dn"]:
+            continue
+        cible = dns_virtuels if entree["virtuel"] else dns_reels
+        if entree["dn"] not in cible:
+            cible.append(entree["dn"])
+
+    return {
+        "dns_reels": dns_reels,
+        "dns_virtuels": dns_virtuels,
+        "employee_name": emp.employee_name or employee,
+    }
 
 
 @frappe.whitelist()
 def delete_virtual_dn(name):
-    """Supprime un DN virtuel (brouillon). Toujours en docstatus=0."""
+    """Obsolète — la suppression est désormais faite par generer_et_imprimer()."""
     frappe.delete_doc("Delivery Note", name, ignore_permissions=True, force=True)
     frappe.db.commit()
     return {"deleted": name}
-
-
-def _get_stock_items_for_virtual(warehouse, ratio=0.80):
-    """
-    Retourne tous les articles en stock dans le warehouse avec qty = ratio * actual_qty.
-    - ratio=0.80 : stock employé → 80 % de la quantité disponible de chaque article
-    - ratio=0.50 : stock par défaut (fallback) → 50 % de la quantité disponible
-    Les articles prioritaires (membrane/pack/filtre/T) apparaissent en premier.
-    """
-    selling_price_list = frappe.db.get_single_value("Selling Settings", "selling_price_list") or "Vente standard"
-
-    rows = frappe.db.sql("""
-        SELECT
-            b.item_code,
-            i.item_name,
-            i.stock_uom AS uom,
-            b.actual_qty,
-            COALESCE(ip.price_list_rate, 0) AS rate,
-            CASE
-                WHEN LOWER(i.item_name) REGEXP 'membrane|pack|filtre|\\bT\\b'
-                  OR LOWER(i.item_code) REGEXP 'membrane|pack|filtre|\\bT\\b'
-                THEN 1 ELSE 0
-            END AS is_priority
-        FROM `tabBin` b
-        JOIN `tabItem` i ON i.name = b.item_code
-        LEFT JOIN `tabItem Price` ip
-            ON ip.item_code = b.item_code
-            AND ip.selling = 1
-            AND ip.price_list = %(pricelist)s
-        WHERE
-            b.warehouse = %(warehouse)s
-            AND b.actual_qty > 0
-            AND i.disabled = 0
-            AND i.is_sales_item = 1
-        ORDER BY is_priority DESC, b.item_code
-    """, {"warehouse": warehouse, "pricelist": selling_price_list}, as_dict=True)
-
-    if not rows:
-        return []
-
-    result = []
-    for item in rows:
-        # qty = ratio * stock disponible, arrondi au sup, minimum 1
-        qty = max(1, math.ceil(float(item.actual_qty) * ratio))
-        result.append({
-            "item_code": item.item_code,
-            "item_name": item.item_name,
-            "uom": item.uom,
-            "rate": item.rate,
-            "qty": qty,
-        })
-
-    return result
