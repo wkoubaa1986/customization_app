@@ -12,13 +12,7 @@ charger un seul document.
 import frappe
 from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 
-from customization_app.commande_alertes import (
-    CHAMP,
-    MOTIF_LIVRAISON,
-    MOTIF_MAIN_OEUVRE,
-    MOTIF_NON_SOLDEE,
-    recalculer_tout,
-)
+from customization_app.commande_alertes import CHAMP, MOTIFS, recalculer_tout
 
 
 def execute():
@@ -30,9 +24,7 @@ def execute():
                     "label": "Anomalie",
                     "fieldtype": "Select",
                     # Première option vide : commande saine.
-                    "options": "\n".join(
-                        ["", MOTIF_MAIN_OEUVRE, MOTIF_LIVRAISON, MOTIF_NON_SOLDEE]
-                    ),
+                    "options": "\n".join([""] + MOTIFS),
                     "insert_after": "status",
                     "read_only": 1,
                     "no_copy": 1,

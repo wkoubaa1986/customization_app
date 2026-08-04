@@ -1,8 +1,10 @@
 """
 Anomalies des commandes client : détection, stockage et restitution.
 
-Trois situations se noient dans une liste de près de 10 000 commandes :
+Quatre situations se noient dans une liste de près de 10 000 commandes :
 
+  Tâche annulée, commande active        la dernière tâche a été annulée, donc
+                                        plus rien n'est prévu
   Main d'œuvre sans tâche               une ligne de main d'œuvre, mais aucune
                                         intervention planifiée
   Livraison sans tâche                  une ligne de livraison, mais aucune
@@ -10,8 +12,10 @@ Trois situations se noient dans une liste de près de 10 000 commandes :
   Tâche terminée, commande non soldée   une tâche terminée, alors que la
                                         commande n'est ni validée ni soldée
 
-Les règles sont mutuellement exclusives : les deux premières exigent l'absence
-de toute tâche non annulée, la troisième exige une tâche terminée.
+Le premier motif l'emporte sur les deux suivants : il dit pourquoi la commande
+n'a plus de tâche. Les trois premiers exigent l'absence de toute tâche non
+annulée, le dernier exige une tâche terminée — ils ne peuvent donc pas se
+cumuler.
 
 Le motif est stocké dans le champ `custom_anomalie` de la commande, pour être
 filtrable et triable dans la liste et exploitable en rapport. Il est maintenu
@@ -34,15 +38,20 @@ CHAMP = "custom_anomalie"
 GROUPE_MAIN_OEUVRE = "Main d’œuvre"  # apostrophe typographique U+2019
 GROUPE_LIVRAISON = "Livraison"
 
+MOTIF_TACHE_ANNULEE = "Tâche annulée, commande active"
 MOTIF_MAIN_OEUVRE = "Main d'œuvre sans tâche"
 MOTIF_LIVRAISON = "Livraison sans tâche"
 MOTIF_NON_SOLDEE = "Tâche terminée, commande non soldée"
 
 COULEURS = {
+    MOTIF_TACHE_ANNULEE: "violet",
     MOTIF_MAIN_OEUVRE: "rouge",
     MOTIF_LIVRAISON: "rouge",
     MOTIF_NON_SOLDEE: "orange",
 }
+
+# Ordre d'affichage du champ Select, et donc du filtre de la liste.
+MOTIFS = [MOTIF_TACHE_ANNULEE, MOTIF_MAIN_OEUVRE, MOTIF_LIVRAISON, MOTIF_NON_SOLDEE]
 
 # Une page de liste Frappe affiche au plus 100 lignes.
 MAX_NOMS = 100
@@ -52,6 +61,16 @@ MAX_NOMS = 100
 _SQL_MOTIF = """
     SELECT so.name,
         CASE
+            -- C'est la DERNIÈRE tâche qui décide : si elle est annulée, plus
+            -- rien n'est prévu pour cette commande. Une tâche annulée puis
+            -- replanifiée ne ressort donc pas, la dernière étant alors active.
+            -- Placé en tête : ce motif dit pourquoi la commande n'a plus de
+            -- tâche, il l'emporte sur « sans tâche ».
+            WHEN (SELECT t.status FROM `tabTache de travail` t
+                  WHERE t.commande_client = so.name
+                  ORDER BY t.starts_on DESC, t.creation DESC LIMIT 1) = 'Cancelled'
+            THEN %(motif_tache_annulee)s
+
             WHEN NOT EXISTS (
                     SELECT 1 FROM `tabTache de travail` t
                     WHERE t.commande_client = so.name AND t.status <> 'Cancelled')
@@ -92,6 +111,7 @@ def _params(extra=None):
     p = {
         "main_oeuvre": GROUPE_MAIN_OEUVRE,
         "livraison": GROUPE_LIVRAISON,
+        "motif_tache_annulee": MOTIF_TACHE_ANNULEE,
         "motif_main_oeuvre": MOTIF_MAIN_OEUVRE,
         "motif_livraison": MOTIF_LIVRAISON,
         "motif_non_soldee": MOTIF_NON_SOLDEE,

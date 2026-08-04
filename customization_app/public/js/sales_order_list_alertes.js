@@ -12,7 +12,11 @@
 frappe.provide("frappe.views");
 
 (function () {
-    const CLASSES = { rouge: "so-alerte-rouge", orange: "so-alerte-orange" };
+    const CLASSES = {
+        rouge: "so-alerte-rouge",
+        orange: "so-alerte-orange",
+        violet: "so-alerte-violet",
+    };
     const cache = {};        // nom de commande -> {couleur, libelle} ou null
     let css_pose = false;
 
@@ -23,14 +27,17 @@ frappe.provide("frappe.views");
         style.textContent = `
             .list-row-container.so-alerte-rouge  { background-color: #fdecea; }
             .list-row-container.so-alerte-orange { background-color: #fff4e5; }
+            .list-row-container.so-alerte-violet { background-color: #f3e8fd; }
             .list-row-container.so-alerte-rouge:hover,
-            .list-row-container.so-alerte-orange:hover { filter: brightness(0.97); }
+            .list-row-container.so-alerte-orange:hover,
+            .list-row-container.so-alerte-violet:hover { filter: brightness(0.97); }
             .so-alerte-pastille {
                 display: inline-block; margin-left: 8px; padding: 1px 7px;
                 border-radius: 10px; font-size: 11px; white-space: nowrap;
             }
             .so-alerte-pastille.rouge  { background: #fbd5d0; color: #922b21; }
             .so-alerte-pastille.orange { background: #ffe3bf; color: #9a5b09; }
+            .so-alerte-pastille.violet { background: #e9d5ff; color: #6b21a8; }
         `;
         document.head.appendChild(style);
     }
