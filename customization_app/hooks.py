@@ -170,7 +170,14 @@ doc_events = {
         "after_save":  "customization_app.api.after_save_tache_de_travail",
     },
     "Delivery Note": {
-        "on_cancel": "customization_app.api.on_delivery_note_cancel",
+        # Après update_prevdoc_status d'ERPNext : la commande passe à 100 %
+        # livré si ses BL validés couvrent son TTC, ce que le calcul standard
+        # sur les quantités rate en cas d'échange d'article.
+        "on_submit": "customization_app.per_delivered_montant.on_delivery_note_change",
+        "on_cancel": [
+            "customization_app.api.on_delivery_note_cancel",
+            "customization_app.per_delivered_montant.on_delivery_note_change",
+        ],
         "after_cancel": "customization_app.api.on_delivery_note_cancel",
     },
     "Sales Order": {
