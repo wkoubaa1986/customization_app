@@ -1,5 +1,25 @@
+import os as _os
+
 app_name = "customization_app"
 app_title = "Customize erpnext"
+
+
+def _js(nom):
+    """
+    Chemin d'un JS du Desk suffixé de la date de modification du fichier.
+
+    Frappe ne versionne que les fichiers `.bundle.js` (via assets.json) ; les
+    chemins simples déclarés dans app_include_js sont servis tels quels, avec
+    un Cache-Control de 12 h. Sans ce suffixe, toute correction JS reste
+    invisible pour les navigateurs jusqu'à expiration du cache — y compris
+    après un déploiement en production.
+    """
+    chemin = f"/assets/customization_app/js/{nom}"
+    try:
+        mtime = int(_os.path.getmtime(_os.path.join(_os.path.dirname(__file__), "public", "js", nom)))
+    except OSError:
+        return chemin
+    return f"{chemin}?v={mtime}"
 app_publisher = "Wassim"
 app_description = "This app aloow to change same functionalities in erpnext"
 app_email = "koubaawassim@gmail.com"
@@ -260,13 +280,13 @@ doc_events = {
 # }
 
 # Load my JS globally in the Desk (ERPNext admin interface)
-app_include_js = ["/assets/customization_app/js/customer_quick_entry.js",
-                  "/assets/customization_app/js/custom_calendar.js",
-                  "/assets/customization_app/js/mes_interventions_employe.js",
-                  "/assets/customization_app/js/pos_auto_customer.js",
-                  "/assets/customization_app/js/buying_item_query_override.js",
-                  "/assets/customization_app/js/calendrier_rdv_button.js",
-                  "/assets/customization_app/js/sales_order_avoir.js"]
+app_include_js = [_js("customer_quick_entry.js"),
+                  _js("custom_calendar.js"),
+                  _js("mes_interventions_employe.js"),
+                  _js("pos_auto_customer.js"),
+                  _js("buying_item_query_override.js"),
+                  _js("calendrier_rdv_button.js"),
+                  _js("sales_order_avoir.js")]
 # Hide filter message shown in the awesomplete dropdown
 app_include_css = ["/assets/customization_app/css/hide_filter_message.css"]
 # doctype_calendar_js = {
