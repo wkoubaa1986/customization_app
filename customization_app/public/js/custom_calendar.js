@@ -503,8 +503,14 @@ function _do_generer_bl(dialog) {
                 frappe.msgprint({ title: "Générer BL", message: "Aucune réponse du serveur.", indicator: "red" });
                 return;
             }
-            if (res.file_url) window.open(res.file_url, "_bl_print");
-            _afficher_rapport(res);
+            // window.open() hors geste utilisateur : Chrome bloque la popup.
+            // On note l'échec pour proposer un lien cliquable dans le compte-rendu.
+            let bloque = false;
+            if (res.file_url) {
+                const onglet = window.open(res.file_url, "_bl_print");
+                bloque = !onglet || onglet.closed || typeof onglet.closed === "undefined";
+            }
+            _afficher_rapport(res, bloque);
         },
         error: function() {
             frappe.dom.unfreeze();
@@ -517,7 +523,7 @@ function _do_generer_bl(dialog) {
     });
 }
 
-function _afficher_rapport(res) {
+function _afficher_rapport(res, popup_bloquee) {
     const rapport = res.rapport || [];
 
     const lignes = rapport.map(e => {
@@ -540,6 +546,19 @@ function _afficher_rapport(res) {
         entete += `<p style="color:#b91c1c"><strong>${frappe.utils.escape_html(res.erreur_pdf)}</strong></p>`;
     } else if (!res.file_url) {
         entete += `<p style="color:#b45309">Aucun document à imprimer.</p>`;
+    } else {
+        // Lien de repli : indispensable quand le navigateur bloque la popup,
+        // et pratique pour rouvrir le PDF sans tout régénérer.
+        entete += `<p style="margin:10px 0">
+            <a href="${res.file_url}" target="_blank" rel="noopener"
+               style="display:inline-block;background:#dc2626;color:#fff;padding:8px 16px;
+                      border-radius:6px;text-decoration:none;font-weight:600">
+               📄 Ouvrir le PDF à imprimer</a>
+            ${popup_bloquee
+                ? `<span style="margin-left:10px;color:#b45309">Le navigateur a bloqué l'ouverture
+                   automatique — utilisez ce bouton.</span>`
+                : ""}
+        </p>`;
     }
 
     frappe.msgprint({
