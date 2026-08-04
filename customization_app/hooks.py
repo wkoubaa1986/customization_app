@@ -167,21 +167,42 @@ doc_events = {
     },
     "Tache de travail": {
         "before_save": "customization_app.api.before_save_tache_de_travail",
-        "after_save":  "customization_app.api.after_save_tache_de_travail",
+        # ATTENTION : « after_save » n'est pas un événement Frappe — le
+        # framework ne l'appelle jamais. Ce hook est donc inactif depuis sa
+        # mise en place. Laissé en l'état : l'activer ferait tourner pour la
+        # première fois un code qui écrit dans tabIntervention.
+        "after_save": "customization_app.api.after_save_tache_de_travail",
+        # on_update couvre la création et la modification. after_delete, et non
+        # on_trash, car on_trash se déclenche AVANT la suppression de la ligne :
+        # le recalcul verrait encore la tâche.
+        "on_update": "customization_app.commande_alertes.on_tache_change",
+        "after_delete": "customization_app.commande_alertes.on_tache_change",
     },
     "Delivery Note": {
         # Après update_prevdoc_status d'ERPNext : la commande passe à 100 %
         # livré si ses BL validés couvrent son TTC, ce que le calcul standard
         # sur les quantités rate en cas d'échange d'article.
-        "on_submit": "customization_app.per_delivered_montant.on_delivery_note_change",
+        "on_submit": [
+            "customization_app.per_delivered_montant.on_delivery_note_change",
+            "customization_app.commande_alertes.on_delivery_note_change",
+        ],
         "on_cancel": [
             "customization_app.api.on_delivery_note_cancel",
             "customization_app.per_delivered_montant.on_delivery_note_change",
+            "customization_app.commande_alertes.on_delivery_note_change",
         ],
         "after_cancel": "customization_app.api.on_delivery_note_cancel",
     },
     "Sales Order": {
-        "on_cancel": "customization_app.api.on_sales_order_cancel",
+        # on_update se déclenche à l'enregistrement d'un brouillon ET à la
+        # validation : ajouter une ligne de main d'œuvre à un devis non validé
+        # met donc aussitôt l'anomalie à jour. on_submit seul l'aurait raté.
+        "on_update": "customization_app.commande_alertes.on_sales_order_change",
+        "on_update_after_submit": "customization_app.commande_alertes.on_sales_order_change",
+        "on_cancel": [
+            "customization_app.api.on_sales_order_cancel",
+            "customization_app.commande_alertes.on_sales_order_change",
+        ],
     },
     # Numérotation auto de la facture (remplace le Server Script « Generation N Facture »).
     "Sales Invoice": {
@@ -426,6 +447,13 @@ scheduler_events = {
         # Tous les jours à 03:00 : contrôle/réparation des images (articles & groupes)
         "0 3 * * *": [
             "customization_app.Maintenance.image_monitor.run_cron",
+        ],
+
+        # Tous les jours à 04:00 : resynchronisation du champ Anomalie des
+        # commandes. Filet de sécurité si un événement a été manqué — import en
+        # masse, correction directe en base, suppression non hookée.
+        "0 4 * * *": [
+            "customization_app.commande_alertes.recalculer_tout",
         ],
     },
 }

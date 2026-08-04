@@ -1,17 +1,26 @@
 """
-Anomalies signalées dans la liste des commandes client.
+Anomalies des commandes client : détection, stockage et restitution.
 
-Trois situations invisibles à l'œil nu sur une liste de près de 10 000
-commandes, remontées ici pour colorer la ligne :
+Trois situations se noient dans une liste de près de 10 000 commandes :
 
-  rouge   une ligne de main d'œuvre, mais aucune intervention planifiée
-  rouge   une ligne de livraison, mais aucune intervention planifiée
-  orange  une tâche terminée, alors que la commande n'est ni validée ni soldée
+  Main d'œuvre sans tâche               une ligne de main d'œuvre, mais aucune
+                                        intervention planifiée
+  Livraison sans tâche                  une ligne de livraison, mais aucune
+                                        intervention planifiée
+  Tâche terminée, commande non soldée   une tâche terminée, alors que la
+                                        commande n'est ni validée ni soldée
 
 Les règles sont mutuellement exclusives : les deux premières exigent l'absence
 de toute tâche non annulée, la troisième exige une tâche terminée.
 
-Consommé par public/js/sales_order_list_alertes.js.
+Le motif est stocké dans le champ `custom_anomalie` de la commande, pour être
+filtrable et triable dans la liste et exploitable en rapport. Il est maintenu
+par les hooks de Tache de travail, Delivery Note et Sales Order, avec une
+resynchronisation complète chaque nuit en filet de sécurité.
+
+La règle n'est écrite qu'à un seul endroit — _SQL_MOTIF — utilisé aussi bien
+pour une commande que pour l'ensemble de la base, afin que le calcul unitaire
+et le recalcul en masse ne puissent pas diverger.
 """
 
 import json
@@ -20,81 +29,209 @@ import frappe
 
 from customization_app.per_delivered_montant import MARGE
 
+CHAMP = "custom_anomalie"
+
 GROUPE_MAIN_OEUVRE = "Main d’œuvre"  # apostrophe typographique U+2019
 GROUPE_LIVRAISON = "Livraison"
+
+MOTIF_MAIN_OEUVRE = "Main d'œuvre sans tâche"
+MOTIF_LIVRAISON = "Livraison sans tâche"
+MOTIF_NON_SOLDEE = "Tâche terminée, commande non soldée"
+
+COULEURS = {
+    MOTIF_MAIN_OEUVRE: "rouge",
+    MOTIF_LIVRAISON: "rouge",
+    MOTIF_NON_SOLDEE: "orange",
+}
 
 # Une page de liste Frappe affiche au plus 100 lignes.
 MAX_NOMS = 100
 
-ROUGE_MAIN_OEUVRE = ("rouge", "Main d'œuvre sans tâche")
-ROUGE_LIVRAISON = ("rouge", "Livraison sans tâche")
-ORANGE_NON_SOLDEE = ("orange", "Tâche terminée, commande non soldée")
+# Source unique de la règle. %(clause)s restreint le périmètre : une commande,
+# une poignée, ou toute la base.
+_SQL_MOTIF = """
+    SELECT so.name,
+        CASE
+            WHEN NOT EXISTS (
+                    SELECT 1 FROM `tabTache de travail` t
+                    WHERE t.commande_client = so.name AND t.status <> 'Cancelled')
+                 AND EXISTS (
+                    SELECT 1 FROM `tabSales Order Item` si
+                    JOIN `tabItem` i ON i.name = si.item_code
+                    WHERE si.parent = so.name AND i.item_group = %(main_oeuvre)s)
+            THEN %(motif_main_oeuvre)s
+
+            WHEN NOT EXISTS (
+                    SELECT 1 FROM `tabTache de travail` t
+                    WHERE t.commande_client = so.name AND t.status <> 'Cancelled')
+                 AND EXISTS (
+                    SELECT 1 FROM `tabSales Order Item` si
+                    JOIN `tabItem` i ON i.name = si.item_code
+                    WHERE si.parent = so.name AND i.item_group = %(livraison)s)
+            THEN %(motif_livraison)s
+
+            WHEN EXISTS (
+                    SELECT 1 FROM `tabTache de travail` t
+                    WHERE t.commande_client = so.name AND t.status = 'Completed')
+                 AND (so.docstatus = 0 OR COALESCE((
+                        SELECT SUM(dn.grand_total) FROM `tabDelivery Note` dn
+                        WHERE dn.docstatus = 1 AND EXISTS (
+                            SELECT 1 FROM `tabDelivery Note Item` dni
+                            WHERE dni.parent = dn.name AND dni.against_sales_order = so.name)
+                     ), 0) < so.grand_total - %(marge)s)
+            THEN %(motif_non_soldee)s
+
+            ELSE ''
+        END AS motif
+    FROM `tabSales Order` so
+    WHERE {clause}
+"""
+
+
+def _params(extra=None):
+    p = {
+        "main_oeuvre": GROUPE_MAIN_OEUVRE,
+        "livraison": GROUPE_LIVRAISON,
+        "motif_main_oeuvre": MOTIF_MAIN_OEUVRE,
+        "motif_livraison": MOTIF_LIVRAISON,
+        "motif_non_soldee": MOTIF_NON_SOLDEE,
+        "marge": MARGE,
+    }
+    p.update(extra or {})
+    return p
+
+
+def _calculer(clause, extra=None):
+    """Retourne {nom: motif} pour le périmètre décrit par `clause`."""
+    lignes = frappe.db.sql(
+        _SQL_MOTIF.format(clause=clause), _params(extra), as_dict=True
+    )
+    return {r.name: r.motif or "" for r in lignes}
+
+
+def _stocker(motifs):
+    """Écrit les motifs qui ont changé. Retourne le nombre de mises à jour."""
+    if not motifs:
+        return 0
+
+    actuels = dict(
+        frappe.db.sql(
+            f"SELECT name, COALESCE(`{CHAMP}`, '') FROM `tabSales Order` WHERE name IN %(noms)s",
+            {"noms": tuple(motifs)},
+        )
+    )
+
+    # Regrouper par motif : une seule requête par valeur distincte plutôt
+    # qu'une par commande, indispensable pour la resynchronisation complète.
+    par_motif = {}
+    for nom, motif in motifs.items():
+        if actuels.get(nom, "") != motif:
+            par_motif.setdefault(motif, []).append(nom)
+
+    for motif, noms in par_motif.items():
+        frappe.db.sql(
+            f"UPDATE `tabSales Order` SET `{CHAMP}` = %(motif)s WHERE name IN %(noms)s",
+            {"motif": motif, "noms": tuple(noms)},
+        )
+
+    return sum(len(v) for v in par_motif.values())
+
+
+def recalculer(noms):
+    """Recalcule et stocke le motif de quelques commandes."""
+    noms = [n for n in (noms or []) if n]
+    if not noms:
+        return 0
+    if not frappe.db.has_column("Sales Order", CHAMP):
+        return 0
+    return _stocker(_calculer("so.name IN %(noms)s", {"noms": tuple(noms)}))
+
+
+def recalculer_tout():
+    """
+    Recalcule toutes les commandes non annulées.
+
+    Sert au patch de reprise et à la resynchronisation nocturne : un filet de
+    sécurité si un événement a été manqué (import en masse, correction directe
+    en base, suppression non hookée).
+    """
+    if not frappe.db.has_column("Sales Order", CHAMP):
+        return 0
+    modifiees = _stocker(_calculer("so.docstatus < 2"))
+    frappe.db.commit()
+    return modifiees
+
+
+# ── Restitution pour la liste ────────────────────────────────────────────────
 
 
 @frappe.whitelist()
 def get_alertes(noms):
     """
-    Retourne {nom_commande: {"couleur": ..., "libelle": ...}} pour les seules
-    commandes en anomalie. Les commandes saines sont absentes du résultat.
+    Retourne {nom: {"couleur": ..., "libelle": ...}} pour les commandes en
+    anomalie. Lit le champ stocké : la couleur affichée et le filtre portent
+    ainsi toujours la même valeur.
     """
     if isinstance(noms, str):
         noms = json.loads(noms)
     noms = [n for n in (noms or []) if n][:MAX_NOMS]
-    if not noms:
+    if not noms or not frappe.db.has_column("Sales Order", CHAMP):
         return {}
 
     lignes = frappe.db.sql(
-        """
-        SELECT
-            so.name,
-            (SELECT COUNT(*) FROM `tabTache de travail` t
-             WHERE t.commande_client = so.name AND t.status <> 'Cancelled') AS taches_actives,
-            (SELECT COUNT(*) FROM `tabTache de travail` t
-             WHERE t.commande_client = so.name AND t.status = 'Completed') AS taches_terminees,
-            EXISTS (SELECT 1 FROM `tabSales Order Item` si
-                    JOIN `tabItem` i ON i.name = si.item_code
-                    WHERE si.parent = so.name AND i.item_group = %(main_oeuvre)s) AS a_main_oeuvre,
-            EXISTS (SELECT 1 FROM `tabSales Order Item` si
-                    JOIN `tabItem` i ON i.name = si.item_code
-                    WHERE si.parent = so.name AND i.item_group = %(livraison)s) AS a_livraison,
-            so.docstatus,
-            so.grand_total,
-            COALESCE((SELECT SUM(dn.grand_total) FROM `tabDelivery Note` dn
-                      WHERE dn.docstatus = 1 AND EXISTS (
-                        SELECT 1 FROM `tabDelivery Note Item` dni
-                        WHERE dni.parent = dn.name AND dni.against_sales_order = so.name)), 0) AS total_bl
-        FROM `tabSales Order` so
-        WHERE so.name IN %(noms)s AND so.docstatus < 2
+        f"""
+        SELECT name, `{CHAMP}` AS motif FROM `tabSales Order`
+        WHERE name IN %(noms)s AND COALESCE(`{CHAMP}`, '') <> ''
     """,
-        {
-            "noms": tuple(noms),
-            "main_oeuvre": GROUPE_MAIN_OEUVRE,
-            "livraison": GROUPE_LIVRAISON,
-        },
+        {"noms": tuple(noms)},
         as_dict=True,
     )
-
-    alertes = {}
-    for r in lignes:
-        motif = _motif(r)
-        if motif:
-            alertes[r.name] = {"couleur": motif[0], "libelle": motif[1]}
-    return alertes
+    return {
+        r.name: {"couleur": COULEURS.get(r.motif, "orange"), "libelle": r.motif}
+        for r in lignes
+    }
 
 
-def _motif(r):
-    """Premier motif d'anomalie d'une commande, ou None si elle est saine."""
-    if not r.taches_actives:
-        if r.a_main_oeuvre:
-            return ROUGE_MAIN_OEUVRE
-        if r.a_livraison:
-            return ROUGE_LIVRAISON
-        return None
+# ── Hooks ────────────────────────────────────────────────────────────────────
 
-    # Même définition de « soldé » que per_delivered_montant.aligner_commande :
-    # les deux ne doivent pas diverger, sans quoi une commande pourrait être à
-    # 100 % livré et signalée orange en même temps.
-    if r.taches_terminees and (r.docstatus == 0 or r.total_bl < r.grand_total - MARGE):
-        return ORANGE_NON_SOLDEE
 
-    return None
+def _sur_erreur(nom):
+    frappe.log_error(title=f"Anomalie commande — {nom}", message=frappe.get_traceback())
+
+
+def on_tache_change(doc, method=None):
+    """Une tâche créée, modifiée ou supprimée change l'anomalie de sa commande."""
+    noms = {doc.get("commande_client")}
+    # Si la tâche a été rattachée à une autre commande, l'ancienne doit aussi
+    # être réévaluée.
+    avant = doc.get_doc_before_save() if hasattr(doc, "get_doc_before_save") else None
+    if avant and avant.get("commande_client"):
+        noms.add(avant.commande_client)
+    noms = {n for n in noms if n}
+    if not noms:
+        return
+    try:
+        recalculer(list(noms))
+    except Exception:
+        _sur_erreur(", ".join(noms))
+
+
+def on_delivery_note_change(doc, method=None):
+    """Un BL validé ou annulé change le solde de ses commandes."""
+    from customization_app.per_delivered_montant import _commandes_liees
+
+    noms = _commandes_liees(doc)
+    if not noms:
+        return
+    try:
+        recalculer(list(noms))
+    except Exception:
+        _sur_erreur(", ".join(noms))
+
+
+def on_sales_order_change(doc, method=None):
+    """La validation d'une commande la fait sortir du motif « non validée »."""
+    try:
+        recalculer([doc.name])
+    except Exception:
+        _sur_erreur(doc.name)

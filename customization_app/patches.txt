@@ -11,3 +11,4 @@ customization_app.patches.seed_modele_bl_virtuel
 customization_app.patches.ensure_item_group_garantie_field
 customization_app.patches.seed_garantie_appareils_ro
 customization_app.patches.fix_per_delivered_echange
+customization_app.patches.ensure_commande_anomalie_field
