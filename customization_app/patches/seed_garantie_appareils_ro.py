@@ -24,10 +24,10 @@ GROUPES = (
     "RO domestique avec pompe",
     "RO domestique sans pompe",
     "RO flux direct",
-    # Complète la famille Pompes, dont doseuses, multicellulaires et
-    # surface & puits étaient déjà couvertes.
-    "Pompes booster pour osmoseurs",
-    "Pompes Volumétriques",
+    # Volontairement absents : « Pompes booster pour osmoseurs » et « Pompes
+    # Volumétriques ». Ce sont des composants d'installation et non l'appareil
+    # garanti ; les couvrir ajoutait la mention à 128 BL qui ne portent aucun
+    # autre article sous garantie.
 )
 
 

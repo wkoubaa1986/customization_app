@@ -32,14 +32,12 @@ GROUPES_INITIAUX = (
     "Adoucisseurs Domestiques",
     "Vannes adoucisseurs automatiques",
     "Contrôleurs",
-    # Osmoseurs domestiques et pompes : ajoutés après coup, d'où le patch
+    # Osmoseurs domestiques : ajoutés après coup, d'où le patch
     # seed_garantie_appareils_ro pour les sites déjà amorcés. Repris ici pour
     # qu'une installation neuve soit complète dès le premier passage.
     "RO domestique avec pompe",
     "RO domestique sans pompe",
     "RO flux direct",
-    "Pompes booster pour osmoseurs",
-    "Pompes Volumétriques",
 )
 
 
