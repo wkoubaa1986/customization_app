@@ -32,6 +32,10 @@ PRINT_FORMAT = "Aqua World BL"
 # Types de tâche qui donnent lieu à un bon de livraison réel (via commande client).
 TYPES_BL = ("Entretien", "Réparation", "Installation", "Livraison")
 
+# Les livraisons Aramex partent par transporteur : leur BL n'est pas à imprimer
+# avec la tournée. Elles restent proposées, mais décochées par défaut.
+PAYMENT_TERMS_ARAMEX = "Livraison Aramex"
+
 
 # ── Lecture des tâches ───────────────────────────────────────────────────────
 
@@ -63,9 +67,11 @@ def get_taches_par_date(date):
             t.custom_client,
             t.starts_on,
             e.employee_name,
-            e.custom_warehouse
+            e.custom_warehouse,
+            so.payment_terms_template
         FROM `tabTache de travail` t
         LEFT JOIN `tabEmployee` e ON e.name = t.custom_choix_du_staff
+        LEFT JOIN `tabSales Order` so ON so.name = t.commande_client
         WHERE
             t.status = 'Open'
             AND DATE(t.starts_on) = %(date)s
@@ -91,7 +97,11 @@ def get_taches_par_date(date):
                 "taches": [],
             }
 
-        if t.commande_client:
+        aramex = t.payment_terms_template == PAYMENT_TERMS_ARAMEX
+
+        if t.commande_client and aramex:
+            prevu, motif = "reel", f"Commande {t.commande_client} — livraison Aramex"
+        elif t.commande_client:
             prevu, motif = "reel", f"Commande {t.commande_client}"
         elif t.type_intervention in modeles:
             prevu, motif = "virtuel", f"Modèle « {t.type_intervention} »"
@@ -107,6 +117,7 @@ def get_taches_par_date(date):
                 "heure": frappe.utils.format_datetime(t.starts_on, "HH:mm") if t.starts_on else "",
                 "prevu": prevu,
                 "motif": motif,
+                "aramex": aramex,
             }
         )
 

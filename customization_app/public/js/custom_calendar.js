@@ -354,6 +354,12 @@ function _genbl_badge(prevu) {
             font-size:11px;white-space:nowrap">${label}</span>`;
 }
 
+// Pastille des livraisons Aramex : parties par transporteur, décochées par défaut.
+function _genbl_badge_aramex() {
+    return `<span style="background:#ffedd5;color:#9a3412;padding:1px 6px;border-radius:10px;
+            font-size:11px;white-space:nowrap;margin-right:4px">Aramex</span>`;
+}
+
 function _load_employees(dialog) {
     const date = dialog.get_value("date");
     if (!date) return;
@@ -377,15 +383,19 @@ function _load_employees(dialog) {
 
             employees.forEach((emp, idx) => {
                 const nbImprimables = emp.taches.filter(t => t.prevu !== "ignore").length;
+                const nbAramex = emp.taches.filter(t => t.aramex).length;
+                // Coché par défaut : imprimable ET pas une livraison Aramex.
+                const nbCoches = emp.taches.filter(t => t.prevu !== "ignore" && !t.aramex).length;
 
                 html += `<div style="border:1px solid #e5e7eb;border-radius:6px;margin-bottom:10px">
                     <div style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:#f9fafb;
                                 border-bottom:1px solid #e5e7eb">
-                        <input type="checkbox" class="genbl-emp-chk" data-emp="${idx}" checked
-                               style="width:16px;height:16px">
+                        <input type="checkbox" class="genbl-emp-chk" data-emp="${idx}"
+                               ${nbCoches ? "checked" : ""} style="width:16px;height:16px">
                         <div style="flex:1">
                             <strong>${frappe.utils.escape_html(emp.employee_name)}</strong>
                             <small style="color:#888"> — ${nbImprimables}/${emp.taches.length} tâche(s) imprimable(s)</small>
+                            ${nbAramex ? `<small style="color:#9a3412"> · ${nbAramex} Aramex décochée(s)</small>` : ""}
                         </div>
                         <select data-emp="${idx}" class="genbl-vehicle-sel"
                                 style="width:190px;padding:4px;border:1px solid #d1d5db;border-radius:4px">
@@ -396,16 +406,19 @@ function _load_employees(dialog) {
 
                 emp.taches.forEach((t, tidx) => {
                     const ignore = t.prevu === "ignore";
+                    // Aramex : proposée mais décochée — l'utilisateur peut la cocher.
+                    const coche = !ignore && !t.aramex;
                     html += `<tr style="border-bottom:1px solid #f3f4f6;${ignore ? "opacity:.55" : ""}">
                         <td style="padding:5px 10px;width:28px">
                             <input type="checkbox" class="genbl-tache-chk" data-emp="${idx}" data-tache="${tidx}"
-                                   value="${t.name}" ${ignore ? "" : "checked"} ${ignore ? "disabled" : ""}
+                                   value="${t.name}" ${coche ? "checked" : ""} ${ignore ? "disabled" : ""}
                                    style="width:14px;height:14px">
                         </td>
                         <td style="padding:5px 6px;width:48px;color:#666">${t.heure || ""}</td>
                         <td style="padding:5px 6px">${frappe.utils.escape_html(t.client || "—")}</td>
                         <td style="padding:5px 6px;color:#666">${frappe.utils.escape_html(t.type || "")}</td>
-                        <td style="padding:5px 10px;text-align:right">${_genbl_badge(t.prevu)}</td>
+                        <td style="padding:5px 10px;text-align:right;white-space:nowrap">${
+                            t.aramex ? _genbl_badge_aramex() : ""}${_genbl_badge(t.prevu)}</td>
                     </tr>`;
                 });
 
