@@ -547,8 +547,7 @@ function _afficher_rapport(res, popup_bloquee) {
     } else if (!res.file_url) {
         entete += `<p style="color:#b45309">Aucun document à imprimer.</p>`;
     } else {
-        // Lien de repli : indispensable quand le navigateur bloque la popup,
-        // et pratique pour rouvrir le PDF sans tout régénérer.
+        // Lien de repli, en plus du bouton principal du dialogue.
         entete += `<p style="margin:10px 0">
             <a href="${res.file_url}" target="_blank" rel="noopener"
                style="display:inline-block;background:#dc2626;color:#fff;padding:8px 16px;
@@ -561,10 +560,20 @@ function _afficher_rapport(res, popup_bloquee) {
         </p>`;
     }
 
-    frappe.msgprint({
+    // Dialogue dédié, et NON frappe.msgprint : ce dernier réutilise un unique
+    // msg_dialog partagé et empile les messages avec un <hr>. Les « BL … en
+    // attente de validation magasin » émis par le Server Script arrivent avant
+    // le callback, ce qui reléguait le compte-rendu et le bouton PDF sous la
+    // zone visible. Le bouton principal ouvre en plus le PDF sur un vrai clic,
+    // donc sans blocage de popup.
+    const dlg = new frappe.ui.Dialog({
         title: "Générer BL — compte-rendu",
-        indicator: res.nb_erreurs || res.erreur_pdf ? "red" : (res.nb_ignores ? "orange" : "green"),
-        message: entete + `<div style="max-height:340px;overflow:auto">
+        size: "large",
+        fields: [{ fieldtype: "HTML", fieldname: "corps" }],
+    });
+
+    dlg.fields_dict.corps.$wrapper.html(
+        entete + `<div style="max-height:340px;overflow:auto">
             <table style="width:100%;border-collapse:collapse;font-size:12.5px">
                 <thead><tr style="background:#f3f4f6">
                     <th style="padding:5px 8px;text-align:left">Employé</th>
@@ -574,6 +583,14 @@ function _afficher_rapport(res, popup_bloquee) {
                     <th style="padding:5px 8px;text-align:left">Détail</th>
                 </tr></thead>
                 <tbody>${lignes}</tbody>
-            </table></div>`,
-    });
+            </table></div>`
+    );
+
+    if (res.file_url) {
+        dlg.set_primary_action("📄 Ouvrir le PDF à imprimer", function() {
+            window.open(res.file_url, "_bl_print");
+        });
+    }
+
+    dlg.show();
 }
