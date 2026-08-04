@@ -16,6 +16,7 @@ frappe.provide("frappe.views");
         rouge: "so-alerte-rouge",
         orange: "so-alerte-orange",
         violet: "so-alerte-violet",
+        jaune: "so-alerte-jaune",
     };
     const cache = {};        // nom de commande -> {couleur, libelle} ou null
     let css_pose = false;
@@ -28,9 +29,11 @@ frappe.provide("frappe.views");
             .list-row-container.so-alerte-rouge  { background-color: #fdecea; }
             .list-row-container.so-alerte-orange { background-color: #fff4e5; }
             .list-row-container.so-alerte-violet { background-color: #f3e8fd; }
+            .list-row-container.so-alerte-jaune  { background-color: #fbf8c4; }
             .list-row-container.so-alerte-rouge:hover,
             .list-row-container.so-alerte-orange:hover,
-            .list-row-container.so-alerte-violet:hover { filter: brightness(0.97); }
+            .list-row-container.so-alerte-violet:hover,
+            .list-row-container.so-alerte-jaune:hover { filter: brightness(0.97); }
             .so-alerte-pastille {
                 display: inline-block; margin-left: 8px; padding: 1px 7px;
                 border-radius: 10px; font-size: 11px; white-space: nowrap;
@@ -38,6 +41,7 @@ frappe.provide("frappe.views");
             .so-alerte-pastille.rouge  { background: #fbd5d0; color: #922b21; }
             .so-alerte-pastille.orange { background: #ffe3bf; color: #9a5b09; }
             .so-alerte-pastille.violet { background: #e9d5ff; color: #6b21a8; }
+            .so-alerte-pastille.jaune  { background: #f5ec7a; color: #6b5900; }
         `;
         document.head.appendChild(style);
     }
@@ -51,10 +55,16 @@ frappe.provide("frappe.views");
         }).get().filter(Boolean);
     }
 
+    // Toutes les classes de couleur, pour un nettoyage exhaustif : lister les
+    // couleurs à la main laisserait une ligne teintée après un tri dès qu'une
+    // nouvelle couleur est ajoutée.
+    const TOUTES_CLASSES = Object.values(CLASSES).join(" ");
+
     function _nettoyer($ligne) {
         // Le rendu est rejoué au tri, au filtrage et au changement de page :
-        // sans nettoyage, les pastilles s'empileraient.
-        $ligne.removeClass(`${CLASSES.rouge} ${CLASSES.orange}`);
+        // sans nettoyage, les pastilles s'empileraient et la couleur
+        // précédente resterait.
+        $ligne.removeClass(TOUTES_CLASSES);
         $ligne.find(".so-alerte-pastille").remove();
     }
 

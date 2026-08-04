@@ -15,3 +15,4 @@ customization_app.patches.add_index_tache_commande_client
 customization_app.patches.ensure_commande_anomalie_field
 customization_app.patches.fix_delivery_status_echange
 customization_app.patches.update_anomalie_tache_annulee
+customization_app.patches.update_anomalie_retard_et_dette
