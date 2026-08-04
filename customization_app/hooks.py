@@ -175,7 +175,12 @@ doc_events = {
         # on_update couvre la création et la modification. after_delete, et non
         # on_trash, car on_trash se déclenche AVANT la suppression de la ligne :
         # le recalcul verrait encore la tâche.
-        "on_update": "customization_app.commande_alertes.on_tache_change",
+        "on_update": [
+            # L'alignement d'abord : il peut faire passer la commande à 100 %
+            # livré, ce que le calcul d'anomalie doit voir.
+            "customization_app.per_delivered_montant.on_tache_change",
+            "customization_app.commande_alertes.on_tache_change",
+        ],
         "after_delete": "customization_app.commande_alertes.on_tache_change",
     },
     "Delivery Note": {

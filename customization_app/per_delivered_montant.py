@@ -26,18 +26,19 @@ plusieurs BL, d'où la somme sur l'ensemble des BL.
 import frappe
 from frappe.utils import flt
 
-# Tolérance d'arrondi entre le TTC d'une commande et celui de ses BL.
+# Tolérance entre le TTC d'une commande et celui de ses BL, en deçà de laquelle
+# la commande est considérée intégralement livrée.
 #
 # Distribution mesurée sur les commandes validées ayant au moins un BL validé :
 #   <= 0,01 DT   9484   écart d'arrondi pur (ex. 39.999 contre 40.000)
 #   0,01 à 0,10     4   arrondi de TVA (ex. 625.922 contre 625.992)
-#   0,10 à 1,00    11   \
-#   1 à 10 DT      11    > écarts réels, à signaler
+#   0,10 à 1,00    11   écarts au dinar près
+#   1 à 10 DT      11   \ manques réels
 #   > 10 DT        29   /
 #
-# La coupure naturelle est à 0,10 : en deçà il n'existe que des artefacts
-# d'arrondi, au-delà les manques sont réels.
-MARGE = 0.10
+# Fixée à 1 DT sur décision métier : un reliquat d'au plus un dinar ne justifie
+# pas de laisser une commande en livraison partielle.
+MARGE = 1.0
 
 
 def _commandes_liees(doc):
@@ -82,7 +83,7 @@ def aligner_commande(nom_commande):
     commande = frappe.db.get_value(
         "Sales Order",
         nom_commande,
-        ["name", "docstatus", "status", "grand_total", "per_delivered"],
+        ["name", "docstatus", "status", "grand_total", "per_delivered", "delivery_status"],
         as_dict=True,
     )
     if not commande or commande.docstatus != 1:
@@ -94,7 +95,12 @@ def aligner_commande(nom_commande):
     # BL nulle « couvrirait » son total et la passerait à 100 %.
     if flt(commande.grand_total) <= 0:
         return False
-    if flt(commande.per_delivered) >= 100:
+
+    deja_alignee = (
+        flt(commande.per_delivered) >= 100
+        and commande.delivery_status == "Fully Delivered"
+    )
+    if deja_alignee:
         return False
 
     if total_bl_valides(nom_commande) < flt(commande.grand_total) - MARGE:
@@ -102,6 +108,10 @@ def aligner_commande(nom_commande):
 
     doc = frappe.get_doc("Sales Order", nom_commande)
     doc.db_set("per_delivered", 100, update_modified=False)
+    # delivery_status est un champ distinct de per_delivered, lui aussi calculé
+    # sur les quantités par le status updater : sans cette ligne la commande
+    # reste affichée « Livrée en partie » alors qu'elle est à 100 %.
+    doc.db_set("delivery_status", "Fully Delivered", update_modified=False)
     doc.set_status(update=True, update_modified=False)
     return True
 
@@ -120,3 +130,23 @@ def on_delivery_note_change(doc, method=None):
             frappe.log_error(
                 title=f"per_delivered montant — {nom}", message=frappe.get_traceback()
             )
+
+
+def on_tache_change(doc, method=None):
+    """
+    Réévalue la commande liée à une tâche de travail enregistrée.
+
+    Le statut de livraison ne dépend pas de la tâche elle-même, mais une tâche
+    est souvent enregistrée au moment où l'intervention se termine : c'est
+    l'occasion de rattraper une commande dont le BL avait été validé sans que
+    l'alignement ait pu se faire.
+    """
+    nom = doc.get("commande_client")
+    if not nom:
+        return
+    try:
+        aligner_commande(nom)
+    except Exception:
+        frappe.log_error(
+            title=f"per_delivered montant — tâche {doc.name}", message=frappe.get_traceback()
+        )
