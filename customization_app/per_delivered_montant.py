@@ -26,9 +26,18 @@ plusieurs BL, d'où la somme sur l'ensemble des BL.
 import frappe
 from frappe.utils import flt
 
-# Tolérance d'arrondi. Observé en base : des écarts jusqu'à 0.001 DT entre le
-# total d'une commande et celui de son BL (ex. 39.999 contre 40.000).
-MARGE = 0.01
+# Tolérance d'arrondi entre le TTC d'une commande et celui de ses BL.
+#
+# Distribution mesurée sur les commandes validées ayant au moins un BL validé :
+#   <= 0,01 DT   9484   écart d'arrondi pur (ex. 39.999 contre 40.000)
+#   0,01 à 0,10     4   arrondi de TVA (ex. 625.922 contre 625.992)
+#   0,10 à 1,00    11   \
+#   1 à 10 DT      11    > écarts réels, à signaler
+#   > 10 DT        29   /
+#
+# La coupure naturelle est à 0,10 : en deçà il n'existe que des artefacts
+# d'arrondi, au-delà les manques sont réels.
+MARGE = 0.10
 
 
 def _commandes_liees(doc):

@@ -293,7 +293,12 @@ app_include_js = [_js("customer_quick_entry.js"),
                   _js("pos_auto_customer.js"),
                   _js("buying_item_query_override.js"),
                   _js("calendrier_rdv_button.js"),
-                  _js("sales_order_avoir.js")]
+                  _js("sales_order_avoir.js"),
+                  # Coloration des anomalies dans la liste des commandes.
+                  # Volontairement en app_include_js et non en doctype_list_js :
+                  # woocommerce_fusion réassigne listview_settings["Sales Order"]
+                  # et son fichier est concaténé après le nôtre.
+                  _js("sales_order_list_alertes.js")]
 # Hide filter message shown in the awesomplete dropdown
 app_include_css = ["/assets/customization_app/css/hide_filter_message.css"]
 # doctype_calendar_js = {
