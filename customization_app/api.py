@@ -24,6 +24,9 @@ STAFF_COLORS = {
     "HR-EMP-00007": "#888c89",
     "HR-EMP-00008": "#37fab2",
     "HR-EMP-00009": "#e6f542",
+    # Akram. Sans entrée ici, il tombait sur STAFF_COLOR_DEFAULT et se
+    # confondait donc avec HR-EMP-00007, qui porte exactement ce gris.
+    "HR-EMP-00010": "#FFD400",
 }
 STAFF_COLOR_DEFAULT = "#888c89"
 STATUS_COLORS = {"Completed": "#32CD32", "Cancelled": "#DCDCDC"}
