@@ -207,6 +207,10 @@ doc_events = {
         "on_cancel": [
             "customization_app.api.on_sales_order_cancel",
             "customization_app.commande_alertes.on_sales_order_change",
+            # SMS d'annulation aux numéros du client, commandes WEB uniquement.
+            # Mis en file d'attente : la passerelle attend jusqu'à 15 s par
+            # numéro, l'annulation ne doit pas patienter.
+            "customization_app.sms_annulation.on_sales_order_cancel",
         ],
     },
     # Numérotation auto de la facture (remplace le Server Script « Generation N Facture »).
