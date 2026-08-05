@@ -11,6 +11,8 @@ d'attente de 15 s par numéro, et l'annulation d'une commande ne doit pas
 attendre l'aboutissement des SMS.
 """
 
+import unicodedata
+
 import frappe
 from frappe.utils import cstr, flt
 
@@ -34,11 +36,30 @@ def telephone_contact():
     n = numeros[0]
     return f"{n[:2]} {n[2:5]} {n[5:]}"
 
+
 MESSAGE = (
     "Bonjour {nom_client},\n"
-    "Votre commande {ref} d'un montant de {total} DT a été annulée.\n"
+    "Votre commande {ref} d'un montant de {total} DT a ete annulee.\n"
     "Pour toute question, contactez-nous au {telephone}."
 )
+
+
+def sans_accents(texte):
+    """
+    Retire les diacritiques latins d'un texte.
+
+    Un seul caractère hors GSM-7 fait basculer tout le SMS en UCS-2, plafonné à
+    70 caractères par segment au lieu de 160 : un message de 143 caractères
+    passerait de 1 à 3 SMS. Appliqué au message rendu, car le nom du client
+    peut lui aussi porter des accents.
+
+    Sans effet sur les noms en écriture arabe, présents en base : ces SMS
+    resteront en UCS-2, la translittération n'étant ni fiable ni souhaitable.
+    """
+    if not texte:
+        return ""
+    decompose = unicodedata.normalize("NFKD", texte)
+    return "".join(c for c in decompose if not unicodedata.combining(c))
 
 
 def _numeros_du_client(nom_client):
@@ -48,12 +69,12 @@ def _numeros_du_client(nom_client):
 
 
 def construire_message(doc, nom_affiche=None):
-    return MESSAGE.format(
+    return sans_accents(MESSAGE.format(
         nom_client=nom_affiche or doc.get("customer_name") or doc.get("customer") or "",
         ref=doc.get("name") or "",
         total=f"{flt(doc.get('grand_total')):.3f}",
         telephone=telephone_contact(),
-    )
+    ))
 
 
 def envoyer_pour_commande(nom_commande):
