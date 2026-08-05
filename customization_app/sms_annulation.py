@@ -19,8 +19,20 @@ from customization_app.customize_erpnext.doctype.compagne_sms.compagne_sms impor
     traiter_numero_tel,
 )
 
-# Pas de téléphone sur la fiche Company : repris du print format « Aqua World BL ».
-TELEPHONE_CONTACT = "31 248 723"
+# Numéro de contact affiché dans le SMS : celui de l'employé référent, lu sur sa
+# fiche. Un changement de numéro ne demande donc aucun redéploiement.
+EMPLOYE_CONTACT = "HR-EMP-00001"  # Sadok Bouziri
+TELEPHONE_SECOURS = "98 511 119"  # utilisé si la fiche employé n'a pas de mobile
+
+
+def telephone_contact():
+    """Numéro à afficher dans le message, formaté par groupes lisibles."""
+    brut = frappe.db.get_value("Employee", EMPLOYE_CONTACT, "cell_number") or ""
+    numeros = traiter_numero_tel(brut)
+    if not numeros:
+        return TELEPHONE_SECOURS
+    n = numeros[0]
+    return f"{n[:2]} {n[2:5]} {n[5:]}"
 
 MESSAGE = (
     "Bonjour {nom_client},\n"
@@ -40,7 +52,7 @@ def construire_message(doc, nom_affiche=None):
         nom_client=nom_affiche or doc.get("customer_name") or doc.get("customer") or "",
         ref=doc.get("name") or "",
         total=f"{flt(doc.get('grand_total')):.3f}",
-        telephone=TELEPHONE_CONTACT,
+        telephone=telephone_contact(),
     )
 
 
