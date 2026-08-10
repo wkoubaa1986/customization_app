@@ -397,6 +397,11 @@ fixtures = [
                     "fill payment schedule row uid",
                     "cancel sales order payment",
                     "Traitement des encaissement",
+                    # Régénère `dettes_a_encaisser` en FIFO à l'enregistrement. Absent de cette
+                    # liste jusqu'ici : toute correction restait locale et le prochain migrate
+                    # la réécrasait. Il décide seul des lignes de dette encaissées — il doit
+                    # suivre le même chemin que « Traitement des encaissement », qui les exécute.
+                    "generartion_list dette",
                     "generer un echeancier de maintenace",
                     "Facturation Auto",
                     "Generation N Facture",
