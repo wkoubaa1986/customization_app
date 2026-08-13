@@ -131,8 +131,8 @@ class LivraisonAramex {
           ${c.telephone ? `📱 ${esc(c.telephone)}<br>` : ""}
           ${c.email ? `✉️ ${esc(c.email)}<br>` : ""}
           ${c.piece ? `${lien(c.piece_doctype, c.piece)} · ${esc(c.piece_statut || "")}<br>` : ""}
-          ${lien("Payment Entry", c.payment_entry)} · ${dt(c.montant)} ·
-          ${frappe.datetime.str_to_user(c.posting_date)}
+          ${this._data.peut_voir_paiement ? lien("Payment Entry", c.payment_entry) : __("encaissement")} ·
+          ${dt(c.montant)} · ${frappe.datetime.str_to_user(c.posting_date)}
         </div>
       </div>
       <div class="ala-adresse">${esc(c.adresse || __("adresse non renseignée"))}</div>

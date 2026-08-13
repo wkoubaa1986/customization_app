@@ -147,6 +147,27 @@ def interroger(reference, timeout=60):
         return {"erreur": str(e)[:160], "reference": reference}
 
 
+def _lecture():
+    """⚠️ LE DROIT SE LIT SUR LA COMMANDE, PAS SUR LE PAIEMENT.
+
+    Un chargé de vente ne lit pas les Payment Entry — seuls « Accounts User » et « Accounts
+    Manager » le peuvent. Exiger ce droit ici fermait l'écran à ceux dont c'est justement le
+    travail : suivre les colis de leurs propres commandes. Le droit demandé est donc celui de la
+    COMMANDE, qui est le sujet de la page.
+
+    L'ecriture de paiement reste lue en SQL pour construire la liste — c'est assume : le montant
+    affiche est la contre-valeur du colis, l'argent de la commande du vendeur, pas une donnee
+    comptable qui lui serait etrangere. Le LIEN vers l'ecriture, lui, n'est propose qu'a ceux qui
+    peuvent l'ouvrir (`peut_voir_paiement`), pour ne pas offrir une porte qui se refermera.
+    """
+    if not frappe.has_permission("Sales Order", "read"):
+        frappe.throw(_("Accès non autorisé"), frappe.PermissionError)
+
+
+def peut_voir_paiement():
+    return bool(frappe.has_permission("Payment Entry", "read"))
+
+
 # ------------------------------------------------------------------ donnees
 
 
@@ -200,8 +221,7 @@ def get_data(from_date=None, to_date=None):
 
     L'ecran doit s'ouvrir tout de suite ; le suivi frais se demande ensuite, explicitement.
     """
-    if not frappe.has_permission("Payment Entry", "read"):
-        frappe.throw(_("Accès non autorisé"), frappe.PermissionError)
+    _lecture()
 
     jusqu_a = getdate(to_date) if to_date else getdate(nowdate())
     depuis = getdate(from_date) if from_date else getdate(add_days(jusqu_a, -90))
@@ -239,7 +259,8 @@ def get_data(from_date=None, to_date=None):
         })
 
     return {"periode": {"from": str(depuis), "to": str(jusqu_a)},
-            "compte": COMPTE_ARAMEX, "colis": colis, "kpis": kpis(colis)}
+            "compte": COMPTE_ARAMEX, "colis": colis, "kpis": kpis(colis),
+            "peut_voir_paiement": peut_voir_paiement()}
 
 
 def kpis(colis):
@@ -270,8 +291,7 @@ def rafraichir(references=None, limite=None, tout=0):
     Sans `tout`, les colis DEJA LIVRES sont sautes : leur suivi ne changera plus, et chaque appel
     epargne coute 1,9 seconde a l'utilisateur qui attend devant son ecran.
     """
-    if not frappe.has_permission("Payment Entry", "read"):
-        frappe.throw(_("Accès non autorisé"), frappe.PermissionError)
+    _lecture()
     if isinstance(references, str):
         references = frappe.parse_json(references)
     references = [r for r in (references or []) if r]
