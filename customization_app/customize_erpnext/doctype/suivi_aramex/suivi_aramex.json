@@ -1,0 +1,52 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "field:reference",
+ "creation": "2026-08-13 00:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "reference", "statut", "livre", "column_break_etat", "etapes_franchies", "etapes_total",
+  "consulte_le", "section_maj", "derniere_description", "derniere_date", "column_break_maj",
+  "destination", "url", "section_brut", "payload"
+ ],
+ "fields": [
+  {"fieldname": "reference", "fieldtype": "Data", "label": "Bordereau", "reqd": 1, "unique": 1,
+   "in_list_view": 1, "description": "Numero de bordereau Aramex, extrait du libelle du paiement."},
+  {"fieldname": "statut", "fieldtype": "Data", "label": "Statut", "in_list_view": 1},
+  {"fieldname": "livre", "fieldtype": "Check", "label": "Livre", "in_list_view": 1,
+   "description": "Un colis livre ne bouge plus : son suivi n'est plus interroge."},
+  {"fieldname": "column_break_etat", "fieldtype": "Column Break"},
+  {"fieldname": "etapes_franchies", "fieldtype": "Int", "label": "Etapes franchies"},
+  {"fieldname": "etapes_total", "fieldtype": "Int", "label": "Etapes au total"},
+  {"fieldname": "consulte_le", "fieldtype": "Datetime", "label": "Consulte le", "in_list_view": 1},
+  {"fieldname": "section_maj", "fieldtype": "Section Break", "label": "Derniere mise a jour"},
+  {"fieldname": "derniere_description", "fieldtype": "Small Text", "label": "Description"},
+  {"fieldname": "derniere_date", "fieldtype": "Data", "label": "Date annoncee par Aramex",
+   "description": "Telle qu'Aramex la publie (« 12 aout 26 17:40 »), non normalisee."},
+  {"fieldname": "column_break_maj", "fieldtype": "Column Break"},
+  {"fieldname": "destination", "fieldtype": "Data", "label": "Destination"},
+  {"fieldname": "url", "fieldtype": "Data", "label": "Suivi public", "options": "URL"},
+  {"fieldname": "section_brut", "fieldtype": "Section Break", "label": "Technique"},
+  {"fieldname": "payload", "fieldtype": "Code", "label": "Reponse du service", "options": "JSON",
+   "read_only": 1}
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-08-13 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "Suivi Aramex",
+ "owner": "Administrator",
+ "permissions": [
+  {"create": 1, "delete": 1, "email": 1, "export": 1, "print": 1, "read": 1, "report": 1,
+   "role": "System Manager", "share": 1, "write": 1},
+  {"read": 1, "report": 1, "role": "Sales User"},
+  {"read": 1, "report": 1, "role": "Accounts User"}
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}
