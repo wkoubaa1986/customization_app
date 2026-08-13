@@ -38,9 +38,9 @@
     .ala-etapes { display: flex; gap: 3px; margin-top: 6px; }
     .ala-etape { height: 5px; flex: 1; border-radius: 3px; background: var(--border-color, #e4e8ee); }
     .ala-etape.franchie { background: var(--ala-gain); }
-    /* ⚠️ « courante » ne colore que ce qui n'est PAS encore franchi. Le service marque la
-       dernière étape d'un colis livré comme franchie ET courante : sans cette précision, un
-       colis arrivé à bon port affichait un dernier segment orange, comme s'il coinçait. */
+    /* ⚠️ « courante » ne colore que ce qui n’est PAS encore franchi. Le service marque la
+       dernière étape d’un colis livré comme franchie ET courante : sans cette précision, un
+       colis arrivé à bon port affichait un dernier segment orange, comme s’il coinçait. */
     .ala-etape.courante:not(.franchie) { background: var(--ala-warn); }
     .ala-maj { font-size: 12px; margin-top: 6px; }
     .ala-vide { padding: 26px; text-align: center; color: var(--text-muted, #7a8291); }
