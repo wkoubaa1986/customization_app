@@ -162,3 +162,101 @@ class TestAlerteBilingue(unittest.TestCase):
         s = {"statut": "Returned", "livre": False, "etapes_franchies": 4,
              "derniere_maj": {"description": "Colis renvoyé à l'expéditeur"}}
         self.assertFalse(A.doit_prevenir(s, False, "98366053"))
+
+
+class TestReponseOuEchec(unittest.TestCase):
+    """⚠️ CE QUI SE REESSAYE ET CE QUI NE SE REESSAYE PAS. Les appels partent desormais par quatre,
+    et le service en laisse tomber un de temps a autre quand ils arrivent ensemble. Sans second
+    essai, un colis en parfait etat ressortirait « suivi indisponible » et gagnerait une tentative
+    au compteur — trois de ces faux echecs et la tache quotidienne abandonne un bordereau qui allait
+    tres bien. Mais tout reessayer serait aussi mauvais : un 404 coute 21 secondes pour reobtenir le
+    meme 404."""
+
+    def test_une_reponse_sans_erreur_repond(self):
+        self.assertTrue(A.repond_vraiment({"statut": "Livré", "livre": True}))
+
+    def test_un_404_est_une_reponse_pas_un_echec(self):
+        """« Aucune expedition Aramex pour cette reference » est un constat definitif : le
+        bordereau est faux ou l'expedition n'a jamais ete creee."""
+        self.assertTrue(A.repond_vraiment(
+            {"erreur": "404 — Aucune expedition Aramex pour la reference 51330108583."}))
+
+    def test_un_500_est_un_echec_a_reprendre(self):
+        """Observe en parallele : revient en 30 millisecondes, corps vide. Le service se marche
+        dessus, il n'a rien appris sur le colis."""
+        self.assertFalse(A.repond_vraiment({"erreur": "500 — Internal Server Error"}))
+
+    def test_une_panne_de_transport_est_un_echec_a_reprendre(self):
+        self.assertFalse(A.repond_vraiment({"erreur": "HTTPConnectionPool : timed out"}))
+
+
+class TestPiecesDuColis(unittest.TestCase):
+    """Le paiement ne pointe qu'une piece — une commande dans 30 cas sur 35, une facture dans 5.
+    Le BON DE LIVRAISON n'est jamais pointe, et c'est pourtant lui qui dit ce qui est REELLEMENT
+    parti chez le client : la seule piece a confronter au suivi du transporteur. Les 35 colis en ont
+    un."""
+
+    FICHES = {
+        ("Sales Order", "SAL-ORD-2026-02584"): {
+            "doctype": "Sales Order", "name": "SAL-ORD-2026-02584", "statut": "Completed",
+            "date": "2026-07-27", "montant": 687.885, "docstatus": 1},
+        ("Sales Invoice", "ACC-SINV-2026-01016"): {
+            "doctype": "Sales Invoice", "name": "ACC-SINV-2026-01016", "statut": "Partly Paid",
+            "date": "2026-07-27", "montant": 693.885, "docstatus": 1},
+        ("Delivery Note", "MAT-DN-2026-02952"): {
+            "doctype": "Delivery Note", "name": "MAT-DN-2026-02952", "statut": "Completed",
+            "date": "2026-07-28", "montant": 693.885, "docstatus": 1},
+    }
+    RESEAU = {("Sales Invoice", "ACC-SINV-2026-01016"): set(FICHES)}
+
+    def _pieces(self, fiches=None):
+        return A._pieces_du_colis(self.RESEAU, fiches if fiches is not None else self.FICHES,
+                                  "Sales Invoice", "ACC-SINV-2026-01016")
+
+    def test_les_trois_pieces_sortent_dans_l_ordre_du_cycle_de_vente(self):
+        """Commande, facture, bon de livraison : l'ordre du cycle, pas celui de l'alphabet ni du
+        hasard d'un ensemble Python."""
+        self.assertEqual([p["doctype"] for p in self._pieces()],
+                         ["Sales Order", "Sales Invoice", "Delivery Note"])
+
+    def test_la_piece_du_paiement_est_marquee(self):
+        """C'est par elle que le colis est entre dans ce tableau : l'ecran doit pouvoir le dire."""
+        marquees = [p["name"] for p in self._pieces() if p["principale"]]
+        self.assertEqual(marquees, ["ACC-SINV-2026-01016"])
+
+    def test_une_piece_interdite_de_lecture_disparait_sans_faire_de_trou(self):
+        """⚠️ PAS DE PORTE FERMEE A L'ECRAN. Un charge de vente peut ne pas avoir les bons de
+        livraison : mieux vaut ne rien proposer que proposer un lien qui repondra « acces refuse »."""
+        sans_bl = {k: v for k, v in self.FICHES.items() if k[0] != "Delivery Note"}
+        self.assertEqual([p["doctype"] for p in self._pieces(sans_bl)],
+                         ["Sales Order", "Sales Invoice"])
+
+    def test_un_colis_sans_piece_rend_une_liste_vide(self):
+        self.assertEqual(A._pieces_du_colis({}, {}, "Sales Order", "SAL-ORD-0000"), [])
+
+
+class TestGabaritSansApostropheDroite(unittest.TestCase):
+    """⚠️ LE PIEGE QUI A DEJA TUE CETTE PAGE DEUX FOIS, ET QUI NE PREVIENT PAS.
+
+    Frappe expedie le gabarit d'une Page Desk au navigateur dans une chaine JS delimitee par des
+    guillemets SIMPLES (`frappe.templates["..."] = '...'`, cf. `frappe.build.html_to_js_template`),
+    et son echappement vaut `content.replace("'", "'")` : un no-op. Une seule apostrophe droite,
+    fut-elle enfouie dans un commentaire CSS, ferme la chaine et emporte TOUT le script de la page —
+    le gabarit et le JS qui le suit. La page se charge vide, sans erreur parlante, et rien dans le
+    fichier fautif ne ressemble a un bug.
+
+    Les commentaires CSS ne protegent de rien : seuls les commentaires HTML sont retires avant
+    l'envoi. Ce test lit le gabarit sur le disque, la ou le probleme se cree.
+    """
+
+    def test_le_gabarit_ne_contient_aucune_apostrophe_droite(self):
+        import os
+
+        chemin = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(A.__file__))),
+                              "customization_app", "customize_erpnext", "page", "livraison_aramex",
+                              "livraison_aramex.html")
+        with open(chemin, encoding="utf-8") as f:
+            contenu = f.read()
+        fautives = [(n, l.strip()) for n, l in enumerate(contenu.splitlines(), 1) if "'" in l]
+        self.assertEqual(fautives, [],
+                         "apostrophe droite dans le gabarit — ecrire l'apostrophe typographique")

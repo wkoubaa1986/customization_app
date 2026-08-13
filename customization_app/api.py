@@ -2043,33 +2043,71 @@ def envoyer_relance_test(telephone=None, email=None, message=None, channel="both
 
     for ch in channels:
         try:
+            # Même découpage que l'envoi réel : un test qui n'emprunte pas le même chemin ne
+            # prouve rien de ce chemin-là.
+            from customization_app.retenue_source import separer
+
             if ch == "sms":
-                phone = (telephone or "").strip()
-                if not phone:
+                numeros = separer(telephone)
+                if not numeros:
                     failed.append({"channel": "sms", "reason": "Téléphone manquant"})
                     continue
                 from customization_app.customize_erpnext.doctype.compagne_sms.compagne_sms import (
                     _send_sms_with_fallback,
                 )
-                _send_sms_with_fallback([phone], message)
-                sent.append({"channel": "sms", "to": phone})
+                _send_sms_with_fallback(numeros, message)
+                sent.append({"channel": "sms", "to": ", ".join(numeros)})
             elif ch == "email":
-                mail = (email or "").strip()
-                if not mail:
+                adresses = separer(email)
+                if not adresses:
                     failed.append({"channel": "email", "reason": "Email manquant"})
                     continue
                 frappe.sendmail(
-                    recipients=[mail],
+                    recipients=adresses,
                     subject="[TEST] Relance Paiements - AquaWorld & Servicing",
                     message=message.replace("\n", "<br>"),
                 )
-                sent.append({"channel": "email", "to": mail})
+                sent.append({"channel": "email", "to": ", ".join(adresses)})
         except Exception as e:
             frappe.log_error(frappe.get_traceback(), "Relance Paiements: échec test")
             failed.append({"channel": ch, "reason": str(e)[:120]})
 
     return {"sent": sent, "failed": failed}
 
+
+
+def _completer_coordonnees(clients):
+    """Complète l'email et le téléphone depuis les CONTACTS liés. Modifie la liste sur place.
+
+    ⚠️ `Customer.email_id` NE SUFFIT PAS, ET IL NE PEUT PAS SUFFIRE. C'est un champ en lecture
+    seule, alimenté par `fetch_from = customer_primary_contact.email_id` : il reste vide tant
+    qu'aucun CONTACT PRINCIPAL n'est désigné sur la fiche client — ce qui n'est presque jamais
+    fait. Sur les 37 clients à relancer, 31 s'affichaient sans email ; 18 en avaient pourtant un
+    sur un contact lié. « itkan sa » en portait DEUX (com-itkan@gnet.tn, khaledsg@itkan.com.tn)
+    et l'écran annonçait « email manquant » devant les deux. Restaient 13 clients réellement sans
+    aucune adresse nulle part — ceux-là, et eux seuls, méritent l'avertissement rouge.
+
+    ⚠️ ON COMPLÈTE, ON N'ÉCRASE PAS. Une adresse posée sur la fiche client a été choisie par
+    quelqu'un ; les contacts ne servent qu'à combler ce qui manque. Même règle pour le téléphone,
+    qui vient déjà de `custom_liste_telephone` et fonctionne — il n'est complété que s'il est vide.
+
+    Le relevé se fait en DEUX requêtes pour toute la liste, pas deux par client :
+    cf. `retenue_source._coordonnees_des_contacts`, qui lit les tables d'adresses directement au
+    lieu de suivre le chaînage des champs « principaux ».
+    """
+    from customization_app.retenue_source import _coordonnees_des_contacts
+
+    manquants = [c["customer"] for c in clients
+                 if not (c.get("email") or "").strip() or not (c.get("telephone") or "").strip()]
+    if not manquants:
+        return
+    coord = _coordonnees_des_contacts(manquants)
+    for c in clients:
+        trouve = coord.get(c["customer"]) or {}
+        if not (c.get("email") or "").strip():
+            c["email"] = ", ".join(trouve.get("emails", []))
+        if not (c.get("telephone") or "").strip():
+            c["telephone"] = ", ".join(trouve.get("telephones", []))
 
 
 @frappe.whitelist()
@@ -2130,6 +2168,10 @@ def get_relance_clients(search=None, customer_group=None, debt_type=None):
         key = RELANCE_ACCOUNTS.get(r.account, {}).get("key")
         if key:
             clients[cust][key] += float(r.montant or 0)
+
+    # ⚠️ AVANT LE FILTRE, PAS APRÈS. La recherche texte compare aussi le TÉLÉPHONE : complété
+    # ensuite, un client trouvé par un numéro venu de son contact resterait introuvable.
+    _completer_coordonnees(list(clients.values()))
 
     # Total + arrondis + filtrage des soldes nuls/négatifs
     result = []
@@ -2324,8 +2366,49 @@ def get_relance_detail(customer):
     return detail
 
 
-def _build_relance_message(client):
-    """Construit le message de relance personnalisé à partir d'une ligne client."""
+def _repartition_par_compte(customer, vouchers=None):
+    """Les montants dus par nature, éventuellement restreints à certaines pièces.
+    -> {dettes, cheques, traites, total}.
+
+    Sert la relance SUR UNE SÉLECTION : un client qui doit 3 379 TND répartis sur cinq pièces peut
+    n'être relancé que sur celle qui pose problème, et le message doit alors annoncer le montant de
+    cette pièce-là — pas l'ardoise entière, qui rendrait la relance incompréhensible.
+    """
+    montants = {"dettes": 0.0, "cheques": 0.0, "traites": 0.0}
+    if vouchers is not None and not vouchers:
+        return {**montants, "total": 0.0}
+    accounts = _relance_account_list()
+    rows = frappe.db.sql(
+        """
+        SELECT gle.account AS account, SUM(gle.debit - gle.credit) AS montant
+        FROM `tabGL Entry` gle
+        INNER JOIN `tabPayment Entry` pe ON pe.name = gle.voucher_no
+        WHERE gle.voucher_type = 'Payment Entry'
+          AND gle.is_cancelled = 0
+          AND gle.account IN %(accounts)s
+          AND pe.party_type = 'Customer'
+          AND pe.party = %(customer)s
+          {filtre_pieces}
+        GROUP BY gle.account
+        """.format(filtre_pieces="AND gle.voucher_no IN %(vouchers)s" if vouchers else ""),
+        {"accounts": accounts, "customer": customer, "vouchers": vouchers},
+        as_dict=True,
+    )
+    for r in rows:
+        cle = RELANCE_ACCOUNTS.get(r.account, {}).get("key")
+        if cle:
+            montants[cle] = round(float(r.montant or 0), 3)
+    montants["total"] = round(sum(montants.values()), 3)
+    return montants
+
+
+def _build_relance_message(client, vouchers=None):
+    """Construit le message de relance personnalisé à partir d'une ligne client.
+
+    `vouchers` restreint le détail aux pièces retenues ; les montants du `client` doivent déjà
+    correspondre à cette même sélection (cf. `_repartition_par_compte`), sinon le message
+    annoncerait un total qui ne cadre pas avec les lignes qu'il énumère.
+    """
     parts = []
     if float(client.get("dettes") or 0) > 0.009:
         parts.append(f"Dettes: {_fmt_tnd(client['dettes'])} TND")
@@ -2339,7 +2422,7 @@ def _build_relance_message(client):
 
     # Détail par paiement (montant + facture/commande liée + total de la pièce)
     detail_txt = ""
-    details = _get_payment_details_for_message(client.get("customer"))
+    details = _get_payment_details_for_message(client.get("customer"), vouchers)
     if details:
         lignes = []
         for d in details:
@@ -2376,10 +2459,17 @@ def _fac_display_name(numero, posting_date):
         return str(numero or "")
 
 
-def _get_payment_details_for_message(customer):
+def _get_payment_details_for_message(customer, vouchers=None):
     """Pour chaque écriture de paiement ciblée du client, retourne le montant,
-    la facture/commande liée et le total de cette pièce."""
+    la facture/commande liée et le total de cette pièce.
+
+    `vouchers` restreint le relevé à certaines pièces : c'est ce qui permet de relancer sur UNE
+    dette plutôt que sur toutes. Une liste vide n'est pas « toutes » mais « aucune » — confondre
+    les deux ferait relancer sur l'ardoise entière un client dont on n'a rien coché.
+    """
     if not customer:
+        return []
+    if vouchers is not None and not vouchers:
         return []
     accounts = _relance_account_list()
     rows = frappe.db.sql(
@@ -2394,11 +2484,12 @@ def _get_payment_details_for_message(customer):
           AND gle.account IN %(accounts)s
           AND pe.party_type = 'Customer'
           AND pe.party = %(customer)s
+          {filtre_pieces}
         GROUP BY gle.voucher_no
         HAVING montant > 0.009
         ORDER BY gle.posting_date
-        """,
-        {"accounts": accounts, "customer": customer},
+        """.format(filtre_pieces="AND gle.voucher_no IN %(vouchers)s" if vouchers else ""),
+        {"accounts": accounts, "customer": customer, "vouchers": vouchers},
         as_dict=True,
     )
     if not rows:
@@ -2491,14 +2582,23 @@ def _fmt_date(val):
 
 
 @frappe.whitelist()
-def preparer_messages_relance(customers):
+def preparer_messages_relance(customers, selections=None):
     """
     Prépare les messages de relance personnalisés pour une liste de clients.
-    `customers` : JSON list de noms de clients (Customer.name).
-    Retourne une liste {customer, customer_name, telephone, email, message, total}.
+    `customers`  : JSON list de noms de clients (Customer.name).
+    `selections` : JSON dict {client: [n° de pièce, ...]} — les dettes RETENUES pour ce client.
+                   Absent ou client absent du dict = toutes ses dettes.
+    Retourne une liste {customer, customer_name, telephone, email, message, total, pieces}.
+
+    ⚠️ UNE SÉLECTION VIDE N'EST PAS « TOUTES ». Le client qui décoche tout ne veut relancer sur
+    rien : lui envoyer l'ardoise entière serait l'inverse de ce qu'il a demandé. Le client est
+    donc écarté, et l'écran le dit.
     """
     if isinstance(customers, str):
         customers = json.loads(customers)
+    if isinstance(selections, str):
+        selections = json.loads(selections or "null")
+    selections = selections or {}
 
     data = get_relance_clients()
     by_name = {c["customer"]: c for c in data["clients"]}
@@ -2508,13 +2608,23 @@ def preparer_messages_relance(customers):
         c = by_name.get(cust)
         if not c:
             continue
+        pieces = selections.get(cust)
+        if pieces is None:
+            montants, retenues = c, None
+        else:
+            pieces = [p for p in pieces if p]
+            if not pieces:
+                continue  # rien de coché : ce client n'est pas relancé
+            montants = {**c, **_repartition_par_compte(cust, pieces)}
+            retenues = pieces
         out.append({
             "customer": c["customer"],
             "customer_name": c["customer_name"],
             "telephone": c["telephone"],
             "email": c["email"],
-            "total": c["total"],
-            "message": _build_relance_message(c),
+            "total": montants["total"],
+            "pieces": retenues or [],
+            "message": _build_relance_message(montants, retenues),
         })
     return out
 
@@ -2535,32 +2645,41 @@ def envoyer_relance(payload, channel="sms"):
 
     sent, failed = [], []
 
+    # ⚠️ UN CHAMP DE COORDONNÉES CONTIENT PLUSIEURS DESTINATAIRES, ET LES PASSER EN BLOC N'ATTEINT
+    # PERSONNE. `custom_liste_telephone` porte « 98366053\n71854009 » : envoyé tel quel, le SMS
+    # visait un numéro qui n'existe pas — le défaut est nommé dans `retenue_source.separer`, et
+    # cette page-ci ne l'avait jamais corrigé. L'email a désormais le même profil, puisque les
+    # adresses viennent des contacts liés et qu'un client peut en avoir deux (« itkan sa »).
+    from customization_app.retenue_source import separer
+
     def _send_sms(item):
-        phone = (item.get("telephone") or "").strip()
-        if not phone:
+        numeros = separer(item.get("telephone"))
+        if not numeros:
             failed.append({"customer": item.get("customer"), "reason": "Téléphone manquant (SMS)"})
             return
         from customization_app.customize_erpnext.doctype.compagne_sms.compagne_sms import (
             _send_sms_with_fallback,
         )
-        _send_sms_with_fallback([phone], item["_message"])
-        sent.append({"customer": item.get("customer"), "channel": "sms", "to": phone})
-        _log_relance_comment(item.get("customer"), "SMS", f"Envoyé au {phone}")
+        _send_sms_with_fallback(numeros, item["_message"])
+        a = ", ".join(numeros)
+        sent.append({"customer": item.get("customer"), "channel": "sms", "to": a})
+        _log_relance_comment(item.get("customer"), "SMS", f"Envoyé au {a}")
 
     def _send_email(item):
-        email = (item.get("email") or "").strip()
-        if not email:
+        adresses = separer(item.get("email"))
+        if not adresses:
             failed.append({"customer": item.get("customer"), "reason": "Email manquant (Email)"})
             return
         frappe.sendmail(
-            recipients=[email],
+            recipients=adresses,
             subject="Régularisation de votre situation - AquaWorld & Servicing",
             message=item["_message"].replace("\n", "<br>"),
             reference_doctype="Customer",
             reference_name=item.get("customer"),
         )
-        sent.append({"customer": item.get("customer"), "channel": "email", "to": email})
-        _log_relance_comment(item.get("customer"), "Email", f"Envoyé à {email}")
+        a = ", ".join(adresses)
+        sent.append({"customer": item.get("customer"), "channel": "email", "to": a})
+        _log_relance_comment(item.get("customer"), "Email", f"Envoyé à {a}")
 
     for item in payload:
         cust = item.get("customer")

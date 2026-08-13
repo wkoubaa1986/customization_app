@@ -17,6 +17,13 @@ class RelancePaiements {
 		this.selected = new Set();
 		this.kpi = {};
 		this.sort_desc = true;
+		// Le détail vit SOUS le client, plié par défaut. `details` garde ce qui a été chargé —
+		// replier puis rouvrir ne doit pas relancer une requête — et `debt_sel` retient les dettes
+		// cochées, client par client, pour survivre à un tri ou à un changement de filtre.
+		this.expanded = new Set();
+		this.details = {};
+		this.debt_sel = {};
+		this.histo = {};
 
 		this.inject_styles();
 		this.setup_filters();
@@ -99,6 +106,25 @@ class RelancePaiements {
 		.rp-note-open { background:#fffbeb; color:#92400e; border:1px solid #fde68a; }
 		.rp-note-done { background:#fef2f2; color:#b91c1c; border:1px solid #fecaca; font-weight:600; }
 		.rp-note-neutral { background:#f1f5f9; color:#475569; border:1px solid #e2e8f0; }
+
+		/* Le détail déplié sous son client : encadré et décalé, pour qu'on voie d'un coup d'œil
+		   où il commence et à quelle ligne il appartient. */
+		.rp-open > td { background:#f8fafc; }
+		.rp-detail-row > td { background:#f8fafc !important; padding:0 8px 10px !important; }
+		.rp-panneau { border:1px solid #e2e8f0; border-radius:8px; background:#fff; overflow:hidden; }
+		.rp-panneau-barre { display:flex; align-items:center; gap:12px; padding:8px 10px;
+		                    background:#f8fafc; border-bottom:1px solid #e2e8f0; font-size:12px; }
+		.rp-panneau-barre label { margin:0; font-weight:600; cursor:pointer; }
+		.rp-panneau-total { color:#475569; }
+		/* Une dette décochée reste LISIBLE mais visiblement hors de la relance : la masquer
+		   ferait croire qu'elle n'existe pas, alors qu'elle reste due. */
+		.rp-ecartee > td { opacity:.45; }
+		.rp-detail-table .rp-ref { cursor:pointer; }
+		.rp-detail-table .rp-ref:hover { background:#e2e8f0; text-decoration:underline; }
+		.rp-btn-mini[disabled] { opacity:.5; cursor:not-allowed; }
+		/* Le nombre de dettes visées par un message, dans la fenêtre d'envoi. */
+		.rp-msg-cible { font-size:11px; color:#0369a1; background:#e0f2fe; border-radius:4px;
+		                padding:1px 6px; }
 		.rp-msg-card { border:1px solid #e2e8f0; border-radius:8px; padding:10px; margin-bottom:10px; background:#fff; }
 		.rp-msg-card .hdr { font-weight:600; margin-bottom:6px; display:flex; justify-content:space-between; }
 		.rp-msg-card textarea { width:100%; font-size:12px; border:1px solid #cbd5e1; border-radius:6px; padding:6px; }
@@ -259,7 +285,9 @@ class RelancePaiements {
 		this.$tbody = this.$body.find('.rp-table tbody');
 
 		this.$body.on('click', '.rp-clear-sel', () => this.clear_selection());
-		this.$body.on('click', '.rp-relance-sel', () => this.open_relance_dialog([...this.selected]));
+		this.$body.on('click', '.rp-relance-sel', () =>
+			this.open_relance_dialog([...this.selected], this.selections_courantes([...this.selected]))
+		);
 	}
 
 	// ---------------------------------------------------------------
@@ -356,8 +384,9 @@ class RelancePaiements {
 					const phone = c.telephone
 						? this.esc(c.telephone)
 						: `<span class="rp-no-phone">— manquant —</span>`;
+					const ouvert = this.expanded.has(c.customer);
 					return `
-					<tr data-cust="${this.esc(c.customer)}">
+					<tr data-cust="${this.esc(c.customer)}" class="${ouvert ? 'rp-open' : ''}">
 						<td><input type="checkbox" class="rp-row-check" ${checked}></td>
 						<td><b>${this.esc(c.customer_name)}</b></td>
 						<td>${c.customer_group ? `<span class="rp-grp">${this.esc(c.customer_group)}</span>` : ''}</td>
@@ -367,14 +396,20 @@ class RelancePaiements {
 						<td class="num rp-amt-traites">${c.traites > 0.009 ? this.fmt(c.traites) : '—'}</td>
 						<td class="num rp-amt-total">${this.fmt(c.total)}</td>
 						<td>
-							<button class="rp-btn-mini rp-detail">👁 Détails</button>
+							<button class="rp-btn-mini rp-detail">${ouvert ? '▾' : '▸'} Détails</button>
 							<button class="rp-btn-mini rp-relance-one">📣 Relancer</button>
 							<button class="rp-btn-mini rp-relance-tel">📞 Tél.</button>
 						</td>
-					</tr>`;
+					</tr>
+					${ouvert ? this.detail_row_html(c.customer) : ''}`;
 				})
 				.join('');
 			this.$tbody.html(rows);
+			// Un panneau déplié mais pas encore chargé demande ses lignes maintenant.
+			this.expanded.forEach((cust) => {
+				if (!this.details[cust]) this.load_detail(cust);
+				this.load_historique(cust);
+			});
 		}
 
 		this.bind_table_events();
@@ -410,12 +445,45 @@ class RelancePaiements {
 
 		this.$tbody.on('click.rp', '.rp-detail', (e) => {
 			const cust = $(e.target).closest('tr').data('cust');
-			this.open_detail(cust);
+			this.toggle_detail(cust);
 		});
 
 		this.$tbody.on('click.rp', '.rp-relance-one', (e) => {
 			const cust = $(e.target).closest('tr').data('cust');
 			this.open_relance_dialog([cust]);
+		});
+
+		// --- à l'intérieur d'un panneau déplié -------------------------------------------
+		this.$tbody.on('change.rp', '.rp-debt-check', (e) => {
+			const cust = $(e.target).closest('tr.rp-detail-row').attr('data-cust');
+			const piece = $(e.target).data('piece');
+			const sel = this.debt_sel[cust] || (this.debt_sel[cust] = new Set());
+			if (e.target.checked) sel.add(piece);
+			else sel.delete(piece);
+			this.refresh_detail(cust);
+		});
+
+		this.$tbody.on('change.rp', '.rp-debt-all', (e) => {
+			const cust = $(e.target).closest('tr.rp-detail-row').attr('data-cust');
+			const dettes = this.dettes_de(this.details[cust]).map((x) => x.voucher_no);
+			this.debt_sel[cust] = new Set(e.target.checked ? dettes : []);
+			this.refresh_detail(cust);
+		});
+
+		this.$tbody.on('click.rp', '.rp-relance-dettes', (e) => {
+			const cust = $(e.target).closest('tr.rp-detail-row').attr('data-cust');
+			const sel = Array.from(this.debt_sel[cust] || []);
+			if (!sel.length) {
+				frappe.msgprint(__('Aucune dette sélectionnée pour ce client.'));
+				return;
+			}
+			this.open_relance_dialog([cust], { [cust]: sel });
+		});
+
+		this.$tbody.on('click.rp', '[data-act="ouvrir"]', (e) => {
+			e.preventDefault();
+			const $a = $(e.currentTarget);
+			this.ouvrir_piece($a.data('doctype'), $a.data('name'));
 		});
 
 		this.$tbody.on('click.rp', '.rp-relance-tel', (e) => {
@@ -437,78 +505,173 @@ class RelancePaiements {
 	}
 
 	// ---------------------------------------------------------------
-	//  Modal détail
+	//  Détail dépliable SOUS le client
+	//
+	//  ⚠️ IL ÉTAIT DANS UNE FENÊTRE, ET LA FENÊTRE CACHAIT LA LISTE. Comparer deux clients
+	//  demandait d'ouvrir, lire, fermer, rouvrir. Déplié sous sa ligne, le détail se lit à côté
+	//  des autres, plusieurs à la fois, et l'écran garde son tri et ses filtres.
 	// ---------------------------------------------------------------
-	open_detail(customer) {
-		const client = this.clients.find((c) => c.customer === customer);
-		const title = client ? client.customer_name : customer;
-		const d = new frappe.ui.Dialog({
-			title: __('Détail — {0}', [title]),
-			size: 'extra-large',
-		});
-		d.$body.html(`<div class="rp-empty">${__('Chargement…')}</div>`);
-		d.show();
+	/** Le détail, la sélection de dettes et l'historique se vident ENSEMBLE : ils décrivent tous
+	 *  le même jeu de lignes, et n'en périmer qu'une partie est ce qui fabrique les incohérences. */
+	oublier_detail() {
+		this.details = {};
+		this.debt_sel = {};
+		this.histo = {};
+	}
 
+	toggle_detail(customer) {
+		if (this.expanded.has(customer)) this.expanded.delete(customer);
+		else this.expanded.add(customer);
+		this.render_table();
+	}
+
+	load_detail(customer) {
 		frappe.call({
 			method: 'customization_app.api.get_relance_detail',
 			args: { customer },
 			callback: (r) => {
 				const rows = r.message || [];
-				if (!rows.length) {
-					d.$body.html(`<div class="rp-empty">${__('Aucune écriture.')}</div>`);
-					return;
+				this.details[customer] = rows;
+				// Tout est coché à l'ouverture : relancer sur TOUT est le geste courant, décocher
+				// est l'exception. L'inverse obligerait à cocher six cases pour le cas normal.
+				if (!this.debt_sel[customer]) {
+					this.debt_sel[customer] = new Set(this.dettes_de(rows).map((x) => x.voucher_no));
 				}
-				const body = rows
-					.map((x) => {
-						const refs = (x.references || [])
-							.map(
-								(ref) =>
-									`<a class="rp-ref" href="/app/${frappe.router.slug(
-										ref.reference_doctype
-									)}/${encodeURIComponent(ref.reference_name)}" target="_blank">${this.esc(
-										ref.reference_doctype
-									)}: ${this.esc(ref.reference_name)}</a>`
-							)
-							.join(' ') || '<span class="rp-no-phone">—</span>';
-						const notes = this.render_task_notes(x.tasks || []);
-						const noteRow = notes
-							? `<tr class="rp-note-row"><td></td><td colspan="8">${notes}</td></tr>`
-							: '';
-						return `
-						<tr>
-							<td>${this.esc(x.posting_date)}</td>
-							<td>${this.esc(x.account_label)}</td>
-							<td><a href="/app/payment-entry/${encodeURIComponent(x.voucher_no)}" target="_blank">${this.esc(x.voucher_no)}</a></td>
-							<td class="num">${x.debit ? this.fmt(x.debit) : '—'}</td>
-							<td class="num">${x.credit ? this.fmt(x.credit) : '—'}</td>
-							<td class="num">${this.fmt(x.balance)}</td>
-							<td>${this.esc(x.docstatus)}</td>
-							<td>${refs}</td>
-							<td style="max-width:220px;font-size:11px;color:#64748b">${this.esc(x.remarks)}</td>
-						</tr>${noteRow}`;
-					})
-					.join('');
-				d.$body.html(`
-					<div style="overflow:auto;max-height:60vh">
-					<table class="rp-detail-table">
-						<thead><tr>
-							<th>Date</th><th>Compte</th><th>Pièce</th>
-							<th class="num">Débit</th><th class="num">Crédit</th><th class="num">Solde</th>
-							<th>Statut</th><th>Pièces liées</th><th>Remarque</th>
-						</tr></thead>
-						<tbody>${body}</tbody>
-					</table></div>
-					<div class="rp-detail-histo"></div>
-				`);
-				this.load_historique(customer, d.$body.find('.rp-detail-histo'));
+				this.refresh_detail(customer);
 			},
 		});
+	}
 
-		d.set_secondary_action_label(__('Relancer ce client'));
-		d.set_secondary_action(() => {
-			d.hide();
-			this.open_relance_dialog([customer]);
-		});
+	/** Les lignes qui constituent une DETTE : débit net positif. Un crédit est un règlement déjà
+	 *  reçu — il se lit dans le détail, mais on ne relance personne dessus. */
+	dettes_de(rows) {
+		return (rows || []).filter((x) => (x.debit || 0) - (x.credit || 0) > 0.009);
+	}
+
+	detail_row_html(customer) {
+		return `<tr class="rp-detail-row" data-cust="${this.esc(customer)}">
+			<td></td><td colspan="8"><div class="rp-panneau">${this.detail_html(customer)}</div></td>
+		</tr>`;
+	}
+
+	/** ⚠️ PAS DE SÉLECTEUR CONSTRUIT AVEC LE NOM DU CLIENT. Les identifiants réels contiennent des
+	 *  apostrophes (« LIMPID'EAU ») et rien n'interdit un guillemet : un `[data-cust="…"]` bricolé
+	 *  à la main casse ou, pire, désigne la mauvaise ligne. On compare la valeur, on ne l'injecte
+	 *  pas. `attr` et non `data` : jQuery convertirait un identifiant numérique en nombre, et la
+	 *  comparaison stricte échouerait sans rien dire. */
+	refresh_detail(customer) {
+		const $cell = this.$tbody
+			.find('tr.rp-detail-row')
+			.filter((i, el) => $(el).attr('data-cust') === customer)
+			.find('.rp-panneau');
+		if ($cell.length) $cell.html(this.detail_html(customer));
+	}
+
+	// ⚠️ LE BOUTON DU PANNEAU NE PORTE PAS LA CLASSE `rp-relance-sel`. C'est celle du bouton de la
+	// barre groupée, dont l'écouteur est délégué sur TOUT le corps de la page : le même nom ici
+	// déclenchait les deux relances d'un seul clic, et deux fenêtres se superposaient.
+	//
+	// ⚠️ ET AUCUN BACKTICK DANS CE QUI SUIT — commentaires compris. Le gabarit est un template
+	// literal : un accent grave le referme et casse le fichier, exactement comme une apostrophe
+	// droite casse un gabarit de Page Desk.
+	detail_html(customer) {
+		const rows = this.details[customer];
+		if (!rows) return `<div class="rp-empty">${__('Chargement…')}</div>`;
+		if (!rows.length) return `<div class="rp-empty">${__('Aucune écriture.')}</div>`;
+
+		const sel = this.debt_sel[customer] || new Set();
+		const dettes = this.dettes_de(rows);
+		const total = dettes
+			.filter((x) => sel.has(x.voucher_no))
+			.reduce((s, x) => s + (x.debit || 0) - (x.credit || 0), 0);
+		const toutes = dettes.length > 0 && dettes.every((x) => sel.has(x.voucher_no));
+
+		const body = rows
+			.map((x) => {
+				const net = (x.debit || 0) - (x.credit || 0);
+				const relancable = net > 0.009;
+				// Une ligne de crédit n'est pas une dette : pas de case, et on dit pourquoi.
+				const case_ = relancable
+					? `<input type="checkbox" class="rp-debt-check" data-piece="${this.esc(x.voucher_no)}"
+					          ${sel.has(x.voucher_no) ? 'checked' : ''}>`
+					: `<span class="rp-menu" title="${__('Règlement reçu — rien à relancer')}">·</span>`;
+				const refs =
+					(x.references || [])
+						.map((ref) => this.puce_piece(ref.reference_doctype, ref.reference_name))
+						.join(' ') || '<span class="rp-no-phone">—</span>';
+				// ⚠️ LES ALERTES RESTENT ACCROCHÉES À LEUR DETTE. Remontées en tête du panneau,
+				// elles ne disaient plus DE QUELLE pièce elles parlaient — et c'est justement ce
+				// qu'il faut savoir avant de décider si on relance sur celle-là.
+				const notes = this.render_task_notes(x.tasks || []);
+				const noteRow = notes
+					? `<tr class="rp-note-row"><td></td><td colspan="8">${notes}</td></tr>`
+					: '';
+				return `
+				<tr class="${relancable && !sel.has(x.voucher_no) ? 'rp-ecartee' : ''}">
+					<td style="width:28px">${case_}</td>
+					<td>${this.esc(x.posting_date)}</td>
+					<td>${this.esc(x.account_label)}</td>
+					<td>${this.puce_piece('Payment Entry', x.voucher_no)}</td>
+					<td class="num">${x.debit ? this.fmt(x.debit) : '—'}</td>
+					<td class="num">${x.credit ? this.fmt(x.credit) : '—'}</td>
+					<td class="num">${this.fmt(x.balance)}</td>
+					<td>${this.esc(x.docstatus)}</td>
+					<td style="max-width:260px;font-size:11px;color:#64748b">
+						${refs}${x.remarks ? `<div>${this.esc(x.remarks)}</div>` : ''}
+					</td>
+				</tr>${noteRow}`;
+			})
+			.join('');
+
+		return `
+			<div class="rp-panneau-barre">
+				<label><input type="checkbox" class="rp-debt-all" ${toutes ? 'checked' : ''}>
+					${__('Toutes les dettes')}</label>
+				<span class="rp-panneau-total">${sel.size}/${dettes.length} ${__('dette(s)')}
+					· <b>${this.tnd(total)}</b></span>
+				<span style="flex:1"></span>
+				<button class="rp-btn-mini rp-relance-dettes" ${sel.size ? '' : 'disabled'}>
+					📣 ${__('Relancer la sélection')}</button>
+			</div>
+			<table class="rp-detail-table">
+				<thead><tr>
+					<th></th><th>Date</th><th>Compte</th><th>Pièce</th>
+					<th class="num">Débit</th><th class="num">Crédit</th><th class="num">Solde</th>
+					<th>Statut</th><th>Pièces liées & remarque</th>
+				</tr></thead>
+				<tbody>${body}</tbody>
+			</table>
+			<div class="rp-detail-histo">${
+				this.histo[customer] === undefined
+					? `<div class="rp-empty" style="padding:10px">${__('Chargement de l\'historique…')}</div>`
+					: this.render_historique(this.histo[customer])
+			}</div>`;
+	}
+
+	/** Une pièce cliquable : ouvre le document dans une fenêtre, sans quitter le tableau. */
+	puce_piece(doctype, nom) {
+		if (!nom) return '';
+		return `<a class="rp-ref" data-act="ouvrir" data-doctype="${this.esc(doctype)}"
+		           data-name="${this.esc(nom)}">${this.esc(nom)}</a>`;
+	}
+
+	ouvrir_piece(doctype, nom) {
+		frappe
+			.require('/assets/customization_app/js/ouvrir_document.js')
+			.then(() =>
+				customization_app.ouvrir_document(doctype, nom, {
+					// Corriger un paiement change les montants du tableau : on relit tout, et on
+					// oublie le détail en cache pour qu'il se recharge sur les nouvelles valeurs.
+					//
+					// ⚠️ LA SÉLECTION DE DETTES S'OUBLIE AVEC LE DÉTAIL. Garder l'ancienne devant
+					// des lignes rechargées laisserait une dette NOUVELLE décochée en silence :
+					// elle n'était pas dans le jeu d'avant, donc pas dans la sélection d'avant.
+					a_la_fermeture: () => {
+						this.oublier_detail();
+						this.load();
+					},
+				})
+			);
 	}
 
 	// ---------------------------------------------------------------
@@ -600,13 +763,17 @@ class RelancePaiements {
 		this.load_historique(customer, d.fields_dict.histo.$wrapper);
 	}
 
-	load_historique(customer, $target) {
-		$target.html(`<div class="rp-empty" style="padding:10px">${__('Chargement de l\'historique…')}</div>`);
+	/** ⚠️ MIS EN CACHE, PARCE QUE LE PANNEAU SE REDESSINE À CHAQUE CASE COCHÉE. Sans ce cache,
+	 *  chaque clic sur une dette rappelait l'historique du client — une requête par clic, et le
+	 *  bloc repassait par « Chargement… » sous les yeux de l'utilisateur. */
+	load_historique(customer) {
+		if (this.histo[customer] !== undefined) return;
 		frappe.call({
 			method: 'customization_app.api.get_historique_relances',
 			args: { customer },
 			callback: (r) => {
-				$target.html(this.render_historique(r.message || []));
+				this.histo[customer] = r.message || [];
+				this.refresh_detail(customer);
 			},
 		});
 	}
@@ -635,14 +802,33 @@ class RelancePaiements {
 	// ---------------------------------------------------------------
 	//  Dialog relance (préparation + envoi)
 	// ---------------------------------------------------------------
-	open_relance_dialog(customers) {
+	/** Les dettes décochées doivent compter aussi dans une relance GROUPÉE.
+	 *
+	 *  ⚠️ ON NE DÉCLARE UNE SÉLECTION QUE POUR LES CLIENTS DONT LE PANNEAU A ÉTÉ OUVERT. Pour les
+	 *  autres, `debt_sel` n'existe pas — envoyer une liste vide reviendrait à les exclure, alors
+	 *  qu'ils n'ont simplement rien décoché. Absent veut dire « toutes ses dettes ».
+	 */
+	selections_courantes(customers) {
+		const out = {};
+		customers.forEach((cust) => {
+			if (this.debt_sel[cust]) out[cust] = Array.from(this.debt_sel[cust]);
+		});
+		return Object.keys(out).length ? out : null;
+	}
+
+	/** `selections` : {client: [n° de pièce, …]} pour ne relancer que sur certaines dettes.
+	 *  Absent = toutes les dettes du client, ce qui reste le geste courant. */
+	open_relance_dialog(customers, selections) {
 		if (!customers.length) {
 			frappe.msgprint(__('Aucun client sélectionné.'));
 			return;
 		}
 		frappe.call({
 			method: 'customization_app.api.preparer_messages_relance',
-			args: { customers: JSON.stringify(customers) },
+			args: {
+				customers: JSON.stringify(customers),
+				selections: selections ? JSON.stringify(selections) : null,
+			},
 			freeze: true,
 			freeze_message: __('Préparation des messages…'),
 			callback: (r) => {
@@ -696,9 +882,16 @@ class RelancePaiements {
 			const cards = msgs
 				.map((m, i) => {
 					const contact = contactBadge(m, channel);
+					// Le montant affiché est celui des dettes RETENUES, pas l'ardoise entière :
+					// le dire évite de croire à une erreur de calcul devant un total plus petit.
+					const cible = (m.pieces || []).length
+						? `<span class="rp-msg-cible">${__('{0} dette(s) ciblée(s)', [
+								m.pieces.length,
+						  ])}</span>`
+						: '';
 					return `
 					<div class="rp-msg-card" data-i="${i}">
-						<div class="hdr"><span>${this.esc(m.customer_name)}</span><span>${this.tnd(m.total)}</span></div>
+						<div class="hdr"><span>${this.esc(m.customer_name)} ${cible}</span><span>${this.tnd(m.total)}</span></div>
 						<textarea rows="3" data-i="${i}">${this.esc(m.message)}</textarea>
 						<div class="meta">${contact}</div>
 					</div>`;

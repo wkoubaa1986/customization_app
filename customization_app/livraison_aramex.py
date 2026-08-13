@@ -53,6 +53,22 @@ _MOTS_ALERTE = ("tentative", "report", "retour", "renvoy", "expediteur", "echec"
 
 LIMITE_RAFRAICHISSEMENT = 25
 
+# ⚠️ QUATRE APPELS DE FRONT, ET C'EST UNE MESURE, PAS UN CHOIX DE CONFORT. Sur 8 bordereaux reels :
+#
+#     1 appel a la fois : 16,39 s par tour, 0 echec sur 24
+#     2 en parallele    :  8,59 s,           0 echec sur 24
+#     3 en parallele    :  7,23 s,           0 echec sur 24
+#     4 en parallele    :  5,90 s,           0 echec sur 24
+#     6 et 8            :  ~3 s, MAIS jusqu'a 3 « 500 Internal Server Error » sur 8
+#
+# Les echecs au-dela de 4 reviennent en 30 millisecondes, avec un corps vide : ce n'est pas une
+# lenteur, c'est le service qui se marche dessus — une ressource partagee cote transporteur. Ils
+# sont INTERMITTENTS (un tour sur deux passe indemne), donc invisibles a l'essai et bien reels en
+# production. Et leur cout n'est pas l'attente : un colis parfaitement suivi ressort « suivi
+# indisponible » a l'ecran, avec une tentative de plus au compteur — trois de ces faux echecs et la
+# tache quotidienne abandonne pour de bon un bordereau qui allait tres bien.
+PARALLELE = 4
+
 # Au-dela, la tache quotidienne cesse d'interroger un bordereau muet : 21 secondes par appel sans
 # reponse, tous les jours, pour une reference qu'Aramex ne connaitra jamais. Le bouton « Interroger »
 # passe outre : c'est un geste humain, il a le droit de reessayer.
@@ -208,17 +224,19 @@ def _tentatives(reference):
     return frappe.db.get_value(DOCTYPE_SUIVI, reference, "tentatives") or 0
 
 
-def interroger(reference, timeout=60):
-    """Demande le suivi d'UN bordereau au service. -> dict, jamais d'exception.
+def _appel(base, entetes, reference, timeout):
+    """L'appel HTTP NU. -> dict, jamais d'exception. Tourne dans un thread de travail.
 
-    Une erreur de transport n'est pas une absence de colis : elle est rendue telle quelle pour que
-    l'ecran distingue « je ne sais pas » de « rien a signaler ».
+    ⚠️ AUCUN ACCES A FRAPPE ICI, ET CE N'EST PAS UNE PRECAUTION DE STYLE. `frappe.local` est
+    thread-local et la connexion MariaDB n'est pas partageable : un `frappe.db.get_single_value`
+    appele depuis un thread lit un contexte vide dans le meilleur des cas, et abime la connexion du
+    thread principal dans le pire. L'URL, l'en-tete d'autorisation et le rangement en base restent
+    donc dehors ; le thread ne fait que du `requests`.
     """
     import requests
 
-    _base_url, _headers = _client_service()
     try:
-        r = requests.get(_base_url() + ROUTE_SUIVI % reference, headers=_headers(), timeout=timeout)
+        r = requests.get(base + ROUTE_SUIVI % reference, headers=entetes, timeout=timeout)
         if r.status_code == 200:
             return r.json()
         detail = ""
@@ -229,6 +247,60 @@ def interroger(reference, timeout=60):
         return {"erreur": "%s — %s" % (r.status_code, detail), "reference": reference}
     except Exception as e:
         return {"erreur": str(e)[:160], "reference": reference}
+
+
+def repond_vraiment(suivi) -> bool:
+    """Le service a-t-il REPONDU, meme pour dire non ? -> bool. Fonction pure.
+
+    Un 404 est une reponse : « Aramex ne connait pas ce bordereau ». Le redemander coute 21 secondes
+    pour reobtenir le meme 404. Un 500, un timeout, une connexion refusee n'apprennent rien sur le
+    colis — eux valent un second essai.
+    """
+    erreur = (suivi or {}).get("erreur")
+    return not erreur or "404" in erreur
+
+
+def interroger(reference, timeout=60):
+    """Demande le suivi d'UN bordereau au service. -> dict, jamais d'exception.
+
+    Une erreur de transport n'est pas une absence de colis : elle est rendue telle quelle pour que
+    l'ecran distingue « je ne sais pas » de « rien a signaler ».
+    """
+    _base_url, _headers = _client_service()
+    return _appel(_base_url(), _headers(), reference, timeout)
+
+
+def interroger_plusieurs(references, timeout=60, parallele=None) -> dict:
+    """Interroge plusieurs bordereaux de front. -> {reference: suivi}. Ne range rien, ne leve pas.
+
+    Trois fois plus rapide que la boucle : 8 colis en 5,9 s au lieu de 16,4 s (cf. `PARALLELE`).
+    Le gain n'est pas qu'un confort d'ecran — la boucle sequentielle sur 25 colis frolait la minute,
+    donc le delai au bout duquel gunicorn coupe la requete.
+
+    ⚠️ UN ECHEC EST REESSAYE SEUL, ET SANS CETTE REPRISE LE PARALLELISME SERAIT UNE REGRESSION. Le
+    service laisse tomber un appel de temps a autre quand plusieurs arrivent ensemble ; sans second
+    essai, un colis en parfait etat ressortirait « suivi indisponible » et gagnerait une tentative
+    au compteur. La reprise se fait UN PAR UN, puisque c'est la simultaneite qui a fait tomber le
+    premier essai. Les 404, eux, ne sont pas repris : ce sont des reponses, pas des echecs.
+    """
+    references = [r for r in dict.fromkeys(references or []) if r]
+    if not references:
+        return {}
+    _base_url, _headers = _client_service()
+    base, entetes = _base_url(), _headers()
+    largeur = max(1, int(parallele or PARALLELE))
+    if len(references) == 1 or largeur == 1:
+        return {r: _appel(base, entetes, r, timeout) for r in references}
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=min(largeur, len(references))) as executeur:
+        out = dict(zip(references,
+                       executeur.map(lambda r: _appel(base, entetes, r, timeout), references)))
+    for reference, suivi in list(out.items()):
+        if not repond_vraiment(suivi):
+            out[reference] = _appel(base, entetes, reference, timeout)
+    return out
 
 
 def _lecture():
@@ -298,9 +370,130 @@ def _pieces(lignes):
     return out
 
 
+# Les trois pieces qui racontent la vie d'un colis, et le champ ou chacune porte sa date.
+CHAMPS_PIECE = {
+    "Sales Order": ("status", "transaction_date", "grand_total"),
+    "Sales Invoice": ("status", "posting_date", "grand_total"),
+    "Delivery Note": ("status", "posting_date", "grand_total"),
+}
+ORDRE_PIECE = ("Sales Order", "Sales Invoice", "Delivery Note")
+
+
+def _reseau(seeds):
+    """Les pieces qui parlent du meme colis que celle portee par le paiement.
+    -> {(doctype, nom): [(doctype, nom), ...]}.
+
+    LE PAIEMENT NE POINTE QU'UNE PIECE, ET CE N'EST PAS TOUJOURS CELLE QU'ON CHERCHE
+    --------------------------------------------------------------------------------
+    Sur les 35 colis, 30 paiements pointent une commande et 5 une facture. Le BON DE LIVRAISON, lui,
+    n'est jamais pointe — c'est pourtant la piece qui dit ce qui est REELLEMENT parti chez le client,
+    et donc la seule a confronter au suivi du transporteur. Il se rejoint par deux chemins :
+    `Delivery Note Item.against_sales_order` depuis la commande, `Sales Invoice Item.delivery_note`
+    depuis la facture. Les deux existent dans les donnees, aucun ne couvre l'autre.
+
+    ⚠️ EN REQUETES D'ENSEMBLE, PAS UNE PAR COLIS. Remonter le voisinage colis par colis coutait
+    quatre requetes chacun, soit plus de cent trente a l'ouverture d'un ecran qui doit s'afficher
+    tout de suite. Ici le nombre de requetes ne depend pas du nombre de colis.
+
+    ⚠️ LES PIECES ANNULEES SONT ECARTEES (`docstatus < 2`). Une commande annulee et sa remplaçante
+    porteraient le meme colis : afficher les deux ferait douter de laquelle fait foi.
+    """
+    commandes = {n for d, n in seeds if d == "Sales Order"}
+    factures = {n for d, n in seeds if d == "Sales Invoice"}
+    so_si, si_so, si_dn, so_dn = {}, {}, {}, {}
+
+    def _lier(table, parent, filtres, champs):
+        """⚠️ LE PARENT SE NOMME, ET LE DROIT SE LIT SUR LUI. Une table enfant interrogee sans son
+        `parent_doctype` fait chercher a Frappe une permission sur « Sales Invoice Item », qui n'en
+        a pas : la requete passe pour l'Administrateur et echoue pour tout le monde d'autre. Le
+        droit demande est celui de la piece — pas de facture visible, pas de lien vers elle."""
+        if not frappe.has_permission(parent, "read"):
+            return []
+        return frappe.get_all(table, filters=dict(filtres, docstatus=("<", 2)), fields=champs,
+                              parent_doctype=parent, limit_page_length=0)
+
+    if commandes:
+        for r in _lier("Sales Invoice Item", "Sales Invoice",
+                       {"sales_order": ("in", list(commandes))},
+                       ["parent", "sales_order", "delivery_note"]):
+            so_si.setdefault(r.sales_order, set()).add(r.parent)
+            if r.delivery_note:
+                si_dn.setdefault(r.parent, set()).add(r.delivery_note)
+    if factures:
+        for r in _lier("Sales Invoice Item", "Sales Invoice", {"parent": ("in", list(factures))},
+                       ["parent", "sales_order", "delivery_note"]):
+            if r.sales_order:
+                si_so.setdefault(r.parent, set()).add(r.sales_order)
+            if r.delivery_note:
+                si_dn.setdefault(r.parent, set()).add(r.delivery_note)
+
+    # Toutes les commandes du tour, y compris celles atteintes DEPUIS une facture : le bon de
+    # livraison d'une commande web se rattache a la commande, pas a la facture qui l'a suivie.
+    toutes_commandes = commandes | {n for s in si_so.values() for n in s}
+    if toutes_commandes:
+        for r in _lier("Delivery Note Item", "Delivery Note",
+                       {"against_sales_order": ("in", list(toutes_commandes))},
+                       ["parent", "against_sales_order"]):
+            so_dn.setdefault(r.against_sales_order, set()).add(r.parent)
+    if factures:
+        for r in _lier("Delivery Note Item", "Delivery Note",
+                       {"against_sales_invoice": ("in", list(factures))},
+                       ["parent", "against_sales_invoice"]):
+            si_dn.setdefault(r.against_sales_invoice, set()).add(r.parent)
+
+    out = {}
+    for doctype, nom in seeds:
+        voisins = set()
+        if doctype == "Sales Order":
+            commandes_liees = {nom}
+            factures_liees = so_si.get(nom, set())
+        else:
+            factures_liees = {nom}
+            commandes_liees = si_so.get(nom, set())
+        for c in commandes_liees:
+            voisins.add(("Sales Order", c))
+            voisins |= {("Delivery Note", d) for d in so_dn.get(c, set())}
+        for f in factures_liees:
+            voisins.add(("Sales Invoice", f))
+            voisins |= {("Delivery Note", d) for d in si_dn.get(f, set())}
+        out[(doctype, nom)] = voisins
+    return out
+
+
+def _fiches(couples):
+    """Le statut, la date et le total de chaque piece. -> {(doctype, nom): dict}.
+
+    Une requete par doctype, jamais par piece — et seulement pour les doctypes que l'utilisateur a
+    le droit de lire : proposer une piece qu'il ne peut pas ouvrir, c'est offrir une porte fermee.
+    """
+    out = {}
+    for doctype in ORDRE_PIECE:
+        noms = [n for d, n in couples if d == doctype]
+        if not noms or not frappe.has_permission(doctype, "read"):
+            continue
+        statut, date, total = CHAMPS_PIECE[doctype]
+        for r in frappe.get_all(doctype, filters={"name": ("in", noms)},
+                                fields=["name", statut, date, total, "docstatus"],
+                                limit_page_length=0):
+            out[(doctype, r.name)] = {"doctype": doctype, "name": r.name,
+                                      "statut": r.get(statut), "date": str(r.get(date) or ""),
+                                      "montant": flt(r.get(total), PRECISION),
+                                      "docstatus": r.docstatus}
+    return out
+
+
 def _texte(html):
     """L'adresse de livraison est stockee en HTML : on la rend lisible sans balises."""
     return re.sub(r"\s*\n\s*", "\n", re.sub(r"<br\s*/?>", "\n", html or "")).strip()
+
+
+def _pieces_du_colis(reseau, fiches, doctype, nom) -> list:
+    """Les pieces d'un colis, rangees dans l'ordre du cycle de vente. -> [dict]."""
+    voisins = reseau.get((doctype, nom)) or set()
+    out = [dict(fiches[c], principale=(c == (doctype, nom)))
+           for c in sorted(voisins, key=lambda c: (ORDRE_PIECE.index(c[0]), c[1]))
+           if c in fiches]
+    return out
 
 
 @frappe.whitelist()
@@ -319,6 +512,10 @@ def get_data(from_date=None, to_date=None):
 
     lignes = _paiements(depuis, jusqu_a)
     pieces = _pieces(lignes)
+    seeds = {(l.reference_doctype, l.reference_name) for l in lignes
+             if l.get("reference_doctype") in CHAMPS_PIECE and l.get("reference_name")}
+    reseau = _reseau(seeds)
+    fiches = _fiches({c for voisins in reseau.values() for c in voisins})
     from customization_app.retenue_source import _coordonnees_des_contacts
 
     coord = _coordonnees_des_contacts(list({l.party for l in lignes if l.party}))
@@ -353,6 +550,9 @@ def get_data(from_date=None, to_date=None):
                               or (piece.address_display if piece else None)),
             "adresse_de_facturation": bool(piece and not piece.shipping_address
                                            and piece.address_display),
+            # Toutes les pieces du colis, commande / facture / bon de livraison, dans cet ordre :
+            # celui du cycle de vente. `principale` marque celle que le paiement pointe.
+            "pieces": _pieces_du_colis(reseau, fiches, l.reference_doctype, l.reference_name),
             "suivi": suivi,
             "alerte": alerte(suivi),
         })
@@ -396,19 +596,26 @@ def rafraichir(references=None, limite=None, tout=0):
     references = [r for r in (references or []) if r]
     limite = frappe.utils.cint(limite) or LIMITE_RAFRAICHISSEMENT
 
+    # Le tri d'abord, les appels ensuite : on ne peut pas paralleliser une boucle qui decide au fur
+    # et a mesure de qui elle appelle.
     out = {"interroges": 0, "erreurs": 0, "ignores": 0, "suivis": {}}
+    a_interroger = []
     for reference in references:
-        if out["interroges"] >= limite:
-            out["ignores"] += 1
-            continue
         connu = _lire_suivi(reference)
         if connu and connu.get("livre") and not frappe.utils.cint(tout):
             out["suivis"][reference] = connu
             continue
-        suivi = interroger(reference)
+        if len(a_interroger) >= limite:
+            out["ignores"] += 1
+            continue
+        a_interroger.append(reference)
+
+    for reference, suivi in interroger_plusieurs(a_interroger).items():
         out["interroges"] += 1
         if suivi.get("erreur"):
             out["erreurs"] += 1
+        # ⚠️ LE RANGEMENT RESTE DANS LE THREAD PRINCIPAL. Les appels partent ensemble, les ecritures
+        # se font a la file : c'est la seule facon de toucher la base sans casser la connexion.
         _ranger_suivi(reference, suivi)
         out["suivis"][reference] = suivi
     return out
@@ -556,12 +763,8 @@ def rafraichir_tout(limite=200, annee=None):
     a_faire = [r for r in references if r not in livres and r not in muets]
 
     out = {"colis": len(references), "deja_livres": len(livres), "abandonnes": len(muets),
-           "interroges": 0, "erreurs": 0, "restants": 0}
-    for reference in a_faire:
-        if out["interroges"] >= limite:
-            out["restants"] += 1
-            continue
-        suivi = interroger(reference)
+           "interroges": 0, "erreurs": 0, "restants": max(0, len(a_faire) - limite)}
+    for reference, suivi in interroger_plusieurs(a_faire[:limite]).items():
         out["interroges"] += 1
         if suivi.get("erreur"):
             out["erreurs"] += 1

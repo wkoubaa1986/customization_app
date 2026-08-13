@@ -33,6 +33,10 @@ class LivraisonAramex {
     this.$root.on("click", "[data-act='un-suivi']", (e) =>
       this._suivre([$(e.currentTarget).data("ref")], true)
     );
+    this.$root.on("click", "[data-act='ouvrir']", (e) => {
+      const $p = $(e.currentTarget);
+      this._ouvrir($p.data("doctype"), $p.data("name"));
+    });
   }
 
   refresh() {
@@ -167,7 +171,7 @@ class LivraisonAramex {
         <div class="ala-menu">
           ${c.telephone ? `📱 ${esc(c.telephone)}<br>` : ""}
           ${c.email ? `✉️ ${esc(c.email)}<br>` : ""}
-          ${c.piece ? `${lien(c.piece_doctype, c.piece)} · ${esc(c.piece_statut || "")}<br>` : ""}
+          ${this._pieces(c)}
           ${this._data.peut_voir_paiement ? lien("Payment Entry", c.payment_entry) : __("encaissement")} ·
           ${dt(c.montant)} · ${frappe.datetime.str_to_user(c.posting_date)}
         </div>
@@ -177,6 +181,48 @@ class LivraisonAramex {
       </div>
       <div>${this._suivi(c)}</div>
     </div>`;
+  }
+
+  // Les trois pièces du colis : la commande, la facture et le BON DE LIVRAISON. C'est ce dernier
+  // qui dit ce qui est réellement parti chez le client — la seule pièce à confronter au suivi du
+  // transporteur — et il n'était nulle part sur cet écran.
+  _pieces(c) {
+    const esc = frappe.utils.escape_html;
+    const pieces = c.pieces || [];
+    if (!pieces.length) return "";
+    const court = { "Sales Order": __("Cde"), "Sales Invoice": __("Fac"), "Delivery Note": __("BL") };
+    return (
+      pieces
+        .map(
+          (p) =>
+            `<span class="ala-piece ${p.principale ? "payee" : ""}" data-act="ouvrir"
+                   data-doctype="${esc(p.doctype)}" data-name="${esc(p.name)}"
+                   title="${esc(`${p.doctype} ${p.name} · ${p.statut || ""} · ${p.date || ""}`)}">
+               <b>${court[p.doctype] || esc(p.doctype)}</b> ${esc(p.name)}
+               <span class="etat">${esc(p.statut || "")}</span>
+             </span>`
+        )
+        .join("") + "<br>"
+    );
+  }
+
+  // ⚠️ UNE FENÊTRE, PAS UNE NAVIGATION. Ouvrir la pièce dans l'onglet ferait quitter l'écran :
+  // l'utilisateur perd sa période, son filtre et sa place dans la liste, et doit tout refaire au
+  // retour. Le formulaire complet vit donc dans un cadre, avec le droit d'enregistrer et de valider
+  // comme partout ailleurs — c'est le desk, pas une copie appauvrie.
+  //
+  // La fenêtre elle-même est PARTAGÉE avec les autres tableaux de bord : sa mise au point a déjà
+  // coûté deux corrections (la barre qui porte Enregistrer, puis le bandeau Raven), et deux copies
+  // du même code, c'est la garantie de n'en corriger qu'une la prochaine fois.
+  _ouvrir(doctype, nom) {
+    frappe
+      .require("/assets/customization_app/js/ouvrir_document.js")
+      .then(() =>
+        customization_app.ouvrir_document(doctype, nom, {
+          // La relecture ne coûte aucun appel au transporteur : le suivi vient de la base.
+          a_la_fermeture: () => this.refresh(),
+        })
+      );
   }
 
   // Le suivi dit trois choses distinctes, et l'écran ne doit pas les confondre : ce qu'on sait,
