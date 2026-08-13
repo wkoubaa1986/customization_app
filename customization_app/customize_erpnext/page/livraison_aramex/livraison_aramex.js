@@ -19,16 +19,17 @@ class LivraisonAramex {
   }
 
   _dates_par_defaut() {
-    // Trois mois : au-delà, un colis n'est plus un suivi mais une archive.
-    const today = frappe.datetime.get_today();
-    this.$root.find("#ala-to").val(today);
-    this.$root.find("#ala-from").val(frappe.datetime.add_days(today, -90));
+    // L'année civile entière : un colis de janvier doit rester visible en décembre.
+    const annee = frappe.datetime.str_to_obj(frappe.datetime.get_today()).getFullYear();
+    this.$root.find("#ala-from").val(`${annee}-01-01`);
+    this.$root.find("#ala-to").val(`${annee}-12-31`);
   }
 
   _bind() {
     this.$root.on("click", "[data-action='refresh']", () => this.refresh());
     this.$root.on("click", "[data-action='suivre']", () => this._suivre());
     this.$root.on("change", "[data-role='alertes-seules']", () => this._render());
+    this.$root.on("change", "[data-role='sms-auto']", (e) => this._basculer_sms(e.currentTarget));
     this.$root.on("click", "[data-act='un-suivi']", (e) =>
       this._suivre([$(e.currentTarget).data("ref")], true)
     );
@@ -83,6 +84,40 @@ class LivraisonAramex {
       });
   }
 
+  // Activer cet interrupteur fait partir de vrais SMS à de vrais clients, chaque soir, sans que
+  // personne ne relise. On le confirme donc — et on le décoche visuellement si l'utilisateur
+  // renonce, pour que la case ne mente jamais sur l'état réel du réglage.
+  _basculer_sms(cible) {
+    const actif = $(cible).is(":checked");
+    const appliquer = () =>
+      frappe
+        .call({
+          method: "customization_app.livraison_aramex.basculer_sms",
+          args: { actif: actif ? 1 : 0 },
+        })
+        .then((r) => {
+          const etat = (r.message || {}).sms_auto;
+          $(cible).prop("checked", !!etat);
+          frappe.show_alert(
+            {
+              message: etat
+                ? __("Envoi automatique activé : un SMS par bordereau, après la synchro de 16h")
+                : __("Envoi automatique désactivé"),
+              indicator: etat ? "green" : "orange",
+            },
+            6
+          );
+        });
+    if (!actif) return appliquer();
+    frappe.confirm(
+      __(
+        "Chaque soir après la synchronisation de 16h, un SMS partira vers le client de chaque colis <b>non livré</b> — une seule fois par bordereau. Activer ?"
+      ),
+      appliquer,
+      () => $(cible).prop("checked", false)
+    );
+  }
+
   _render() {
     const d = this._data || {};
     const k = d.kpis || {};
@@ -103,6 +138,8 @@ class LivraisonAramex {
         tuile(__("Suivi jamais demandé"), k.suivi_inconnu || 0),
       ].join("")
     );
+
+    this.$root.find("[data-role='sms-auto']").prop("checked", !!d.sms_auto);
 
     let colis = d.colis || [];
     if (this.$root.find("[data-role='alertes-seules']").is(":checked")) {

@@ -1,0 +1,34 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "creation": "2026-08-13 02:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": ["sms_auto", "section_modele", "modele_sms"],
+ "fields": [
+  {"fieldname": "sms_auto", "fieldtype": "Check", "label": "Prevenir le client par SMS apres la synchronisation de 16h",
+   "description": "Un seul SMS par bordereau, jamais pour un colis deja livre. Se coche aussi depuis l'ecran « Livraisons Aramex »."},
+  {"fieldname": "section_modele", "fieldtype": "Section Break", "label": "Message"},
+  {"fieldname": "modele_sms", "fieldtype": "Small Text", "label": "Modele du SMS",
+   "description": "Champs disponibles : {client} {reference} {statut} {montant} {destination}."}
+ ],
+ "index_web_pages_for_search": 0,
+ "issingle": 1,
+ "links": [],
+ "modified": "2026-08-13 02:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "Config Livraison Aramex",
+ "owner": "Administrator",
+ "permissions": [
+  {"create": 1, "delete": 1, "email": 1, "print": 1, "read": 1, "role": "System Manager",
+   "share": 1, "write": 1},
+  {"read": 1, "role": "Sales Manager", "write": 1},
+  {"read": 1, "role": "Sales User"}
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

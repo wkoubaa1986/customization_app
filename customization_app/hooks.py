@@ -471,6 +471,13 @@ scheduler_events = {
         "0 4 * * *": [
             "customization_app.commande_alertes.recalculer_tout",
         ],
+
+        # Tous les jours à 16:00 : actualisation du suivi des colis Aramex.
+        # En fin de journée, quand les tournées du transporteur sont faites — et jamais sur les
+        # colis déjà livrés, dont l'état ne bougera plus.
+        "0 16 * * *": [
+            "customization_app.livraison_aramex.run_cron",
+        ],
     },
 }
 

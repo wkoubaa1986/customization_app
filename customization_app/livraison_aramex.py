@@ -46,6 +46,28 @@ _MOTS_ALERTE = ("tentative", "report", "retour", "refus", "annul", "incident", "
 
 LIMITE_RAFRAICHISSEMENT = 25
 
+# Au-dela, la tache quotidienne cesse d'interroger un bordereau muet : 21 secondes par appel sans
+# reponse, tous les jours, pour une reference qu'Aramex ne connaitra jamais. Le bouton « Interroger »
+# passe outre : c'est un geste humain, il a le droit de reessayer.
+TENTATIVES_MAX = 3
+
+STATUT_INTROUVABLE = "Introuvable chez Aramex"
+STATUT_INDISPONIBLE = "Suivi indisponible"
+
+DOCTYPE_CONFIG = "Config Livraison Aramex"
+# ⚠️ LE LIBELLE NE PREJUGE PAS DU STATUT. Premiere version : « est en cours d'acheminement :
+# {statut} ». Deux colis reels sont revenus avec le statut « Returned » — le message aurait annonce
+# un acheminement a des clients dont le colis revenait vers nous. Le modele se contente donc de
+# rapporter ce que dit Aramex, quel que soit ce qu'il dit.
+MODELE_SMS_DEFAUT = ("Bonjour {client}, suivi de votre colis {reference} (montant {montant} TND) "
+                     "chez Aramex : {statut}. AquaWorld & Servicing.")
+
+# ⚠️ « CREE » N'EST PAS UNE NOUVELLE POUR LE CLIENT. C'est l'etape 1 : le bordereau existe, le
+# colis est encore chez nous et Aramex ne l'a pas ramasse. Prevenir a ce stade, c'est annoncer un
+# depart qui n'a pas eu lieu — et le client appelle le lendemain. Le SMS part a partir de la
+# deuxieme etape (« Collectee »), donc quand le colis a reellement bouge.
+ETAPE_MINIMALE_SMS = 2
+
 
 def reference_aramex(reference_no):
     """« Aramex N: 51330112234 » -> « 51330112234 ». None si aucun bordereau lisible.
@@ -66,6 +88,10 @@ def alerte(suivi):
     """
     if not suivi or suivi.get("livre"):
         return None
+    if suivi.get("erreur") or suivi.get("statut") == STATUT_INTROUVABLE:
+        # Aramex ne connait pas le bordereau saisi chez nous : le client attend un colis dont le
+        # transporteur n'a pas trace. C'est l'alerte la plus serieuse de cet ecran.
+        return suivi.get("erreur") or STATUT_INTROUVABLE
     description = ((suivi.get("derniere_maj") or {}).get("description") or "").lower()
     return ((suivi.get("derniere_maj") or {}).get("description")
             if any(mot in description for mot in _MOTS_ALERTE) else None)
@@ -86,14 +112,24 @@ def _client_service():
 
 
 def _lire_suivi(reference):
-    """Le dernier suivi connu, tel qu'il a ete range. -> dict ou None."""
-    brut = frappe.db.get_value(DOCTYPE_SUIVI, reference, "payload")
-    if not brut:
+    """Le dernier etat connu du colis. -> dict ou None.
+
+    Un echec est un etat, pas une absence : le rendre permet a l'ecran de distinguer « Aramex ne
+    connait pas ce bordereau » — qui appelle une correction — de « on n'a jamais demande ».
+    """
+    doc = frappe.db.get_value(DOCTYPE_SUIVI, reference,
+                              ["payload", "statut", "derniere_erreur", "tentatives"], as_dict=1)
+    if not doc:
         return None
-    try:
-        return frappe.parse_json(brut)
-    except Exception:
-        return None
+    if doc.payload:
+        try:
+            return frappe.parse_json(doc.payload)
+        except Exception:
+            pass
+    if doc.derniere_erreur:
+        return {"erreur": doc.derniere_erreur, "statut": doc.statut, "livre": False,
+                "tentatives": doc.tentatives or 0, "reference": reference}
+    return None
 
 
 def _ranger_suivi(reference, suivi):
@@ -101,7 +137,15 @@ def _ranger_suivi(reference, suivi):
 
     Les champs deplies (statut, livre, derniere mise a jour) servent aux listes et aux rapports ;
     `payload` garde la reponse entiere, y compris les etapes que l'ecran dessine.
+
+    ⚠️ LES ECHECS SE RANGENT AUSSI, ET C'EST LE PLUS UTILE. Huit colis rendent « 404 — aucune
+    expedition pour cette reference » : Aramex ne connait pas le bordereau saisi chez nous. Ce
+    n'est pas une panne, c'est une anomalie a corriger — bordereau mal saisi, ou expedition jamais
+    creee — et le client, lui, attend. Chaque appel sans reponse coutant 21 secondes, on compte les
+    tentatives pour cesser d'insister (`TENTATIVES_MAX`) tout en gardant le constat a l'ecran.
     """
+    if (suivi or {}).get("erreur"):
+        return _ranger_echec(reference, suivi["erreur"])
     maj = (suivi or {}).get("derniere_maj") or {}
     valeurs = {
         "statut": (suivi or {}).get("statut"),
@@ -113,6 +157,8 @@ def _ranger_suivi(reference, suivi):
         "destination": ((suivi or {}).get("destination") or {}).get("ville"),
         "url": (suivi or {}).get("url"),
         "consulte_le": now_datetime(),
+        "tentatives": 0,                 # une reponse efface l'ardoise
+        "derniere_erreur": None,
         "payload": frappe.as_json(suivi),
     }
     if frappe.db.exists(DOCTYPE_SUIVI, reference):
@@ -122,6 +168,24 @@ def _ranger_suivi(reference, suivi):
     else:
         frappe.get_doc(dict(doctype=DOCTYPE_SUIVI, reference=reference,
                             **valeurs)).insert(ignore_permissions=True)
+
+
+def _ranger_echec(reference, erreur):
+    """Garde le constat d'echec et compte les tentatives."""
+    valeurs = {"statut": STATUT_INTROUVABLE if "404" in (erreur or "") else STATUT_INDISPONIBLE,
+               "livre": 0, "derniere_erreur": erreur, "consulte_le": now_datetime()}
+    if frappe.db.exists(DOCTYPE_SUIVI, reference):
+        doc = frappe.get_doc(DOCTYPE_SUIVI, reference)
+        doc.update(valeurs)
+        doc.tentatives = (doc.tentatives or 0) + 1
+        doc.save(ignore_permissions=True)
+    else:
+        frappe.get_doc(dict(doctype=DOCTYPE_SUIVI, reference=reference, tentatives=1,
+                            **valeurs)).insert(ignore_permissions=True)
+
+
+def _tentatives(reference):
+    return frappe.db.get_value(DOCTYPE_SUIVI, reference, "tentatives") or 0
 
 
 def interroger(reference, timeout=60):
@@ -180,7 +244,9 @@ def _paiements(depuis, jusqu_a):
                   ON per.parent = pe.name AND per.allocated_amount != 0
            WHERE pe.docstatus = 1 AND pe.paid_to = %(compte)s
              AND pe.posting_date BETWEEN %(depuis)s AND %(jusqu_a)s
-           ORDER BY pe.posting_date DESC, pe.name""",
+           -- Du plus ancien au plus recent : un colis parti il y a trois semaines passe avant
+           -- celui d'hier, c'est lui qui risque de s'etre perdu.
+           ORDER BY pe.posting_date ASC, pe.name""",
         {"compte": COMPTE_ARAMEX, "depuis": depuis, "jusqu_a": jusqu_a}, as_dict=True)
 
 
@@ -225,8 +291,11 @@ def get_data(from_date=None, to_date=None):
     """
     _lecture()
 
-    jusqu_a = getdate(to_date) if to_date else getdate(nowdate())
-    depuis = getdate(from_date) if from_date else getdate(add_days(jusqu_a, -90))
+    # L'annee civile entiere, du 1er janvier au 31 decembre : un suivi de livraison se lit sur
+    # l'exercice, pas sur une fenetre glissante ou un colis de janvier disparaitrait en avril.
+    annee = getdate(nowdate()).year
+    depuis = getdate(from_date) if from_date else getdate("%s-01-01" % annee)
+    jusqu_a = getdate(to_date) if to_date else getdate("%s-12-31" % annee)
 
     lignes = _paiements(depuis, jusqu_a)
     pieces = _pieces(lignes)
@@ -270,7 +339,7 @@ def get_data(from_date=None, to_date=None):
 
     return {"periode": {"from": str(depuis), "to": str(jusqu_a)},
             "compte": COMPTE_ARAMEX, "colis": colis, "kpis": kpis(colis),
-            "peut_voir_paiement": peut_voir_paiement()}
+            "peut_voir_paiement": peut_voir_paiement(), "sms_auto": sms_actif()}
 
 
 def kpis(colis):
@@ -320,7 +389,178 @@ def rafraichir(references=None, limite=None, tout=0):
         out["interroges"] += 1
         if suivi.get("erreur"):
             out["erreurs"] += 1
-        else:
-            _ranger_suivi(reference, suivi)
+        _ranger_suivi(reference, suivi)
         out["suivis"][reference] = suivi
     return out
+
+
+# ------------------------------------------------------------------ information du client
+
+
+def sms_actif():
+    return bool(frappe.db.get_single_value(DOCTYPE_CONFIG, "sms_auto"))
+
+
+def modele_sms():
+    return (frappe.db.get_single_value(DOCTYPE_CONFIG, "modele_sms") or "").strip() \
+        or MODELE_SMS_DEFAUT
+
+
+def doit_prevenir(suivi, deja_envoye, telephone):
+    """Faut-il prevenir ce client ? Fonction pure : c'est elle qu'on teste.
+
+    QUATRE CONDITIONS, ET CHACUNE REPOND A UNE FACON DE SE TROMPER
+    --------------------------------------------------------------
+    - `deja_envoye` : UN SEUL SMS PAR BORDEREAU. Le colis peut rester quinze jours dans le tableau
+      et la synchronisation passe chaque soir : sans cette date posee une fois pour toutes, le
+      client recevrait quinze messages pour un seul colis.
+    - `livre` : demande explicitement. On ne derange pas quelqu'un pour lui annoncer ce qu'il sait
+      deja — il a le colis en main.
+    - `erreur` : un bordereau qu'Aramex ne connait pas n'a AUCUN statut a annoncer. Ecrire au
+      client que son colis est introuvable, c'est lui transmettre notre probleme de saisie.
+    - `telephone` : sans numero, il n'y a rien a envoyer, et l'echec doit se voir comme tel.
+    - l'etape : entre la 2e et la derniere. Voir `ETAPE_MINIMALE_SMS` — un colis simplement
+      « Cree » n'a pas quitte nos locaux, l'annoncer serait faux. La borne haute est deja tenue
+      par `livre`, qui ecarte la 7e.
+    """
+    if deja_envoye or not telephone:
+        return False
+    if not suivi or suivi.get("livre") or suivi.get("erreur"):
+        return False
+    if int(suivi.get("etapes_franchies") or 0) < ETAPE_MINIMALE_SMS:
+        return False
+    return bool(suivi.get("statut"))
+
+
+def message_sms(colis, modele=None):
+    """Le texte envoye. Pure, donc relisible sans rien lancer."""
+    suivi = colis.get("suivi") or {}
+    return (modele or MODELE_SMS_DEFAUT).format(
+        client=colis.get("customer_name") or colis.get("customer") or "",
+        reference=colis.get("reference") or "",
+        statut=suivi.get("statut") or "",
+        montant=flt(colis.get("montant"), 3),
+        destination=(suivi.get("destination") or {}).get("ville") or "")
+
+
+def prevenir(colis, modele=None):
+    """Envoie le SMS et pose la trace. -> dict. Ne leve pas : un SMS rate n'annule pas un suivi."""
+    from customization_app.customize_erpnext.doctype.compagne_sms.compagne_sms import (
+        _send_sms_with_fallback,
+    )
+    from customization_app.retenue_source import separer
+
+    numeros = separer(colis.get("telephone"))
+    texte = message_sms(colis, modele)
+    try:
+        _send_sms_with_fallback(numeros, texte)
+    except Exception as e:
+        return {"reference": colis["reference"], "statut": "echec", "erreur": str(e)[:160]}
+    frappe.db.set_value(DOCTYPE_SUIVI, colis["reference"], {
+        "sms_envoye_le": now_datetime(),
+        "sms_statut": (colis.get("suivi") or {}).get("statut"),
+        "sms_destinataires": ", ".join(numeros)}, update_modified=False)
+    return {"reference": colis["reference"], "statut": "envoye",
+            "a": ", ".join(numeros), "message": texte}
+
+
+def prevenir_les_clients(annee=None):
+    """Previent une fois chaque client dont le colis a bouge et n'est pas arrive.
+
+    Appelee juste apres la synchronisation de 16h, et seulement si le reglage est coche.
+    """
+    if not sms_actif():
+        return {"actif": False, "envoyes": 0, "detail": []}
+    annee = annee or getdate(nowdate()).year
+    data = get_data("%s-01-01" % annee, "%s-12-31" % annee)
+    envoyes = {r.name for r in frappe.get_all(DOCTYPE_SUIVI,
+                                              filters={"sms_envoye_le": ["is", "set"]},
+                                              fields=["name"], limit_page_length=0)}
+    modele = modele_sms()
+    out = {"actif": True, "envoyes": 0, "echecs": 0, "detail": []}
+    for colis in data["colis"]:
+        if not colis.get("reference"):
+            continue
+        if not doit_prevenir(colis.get("suivi"), colis["reference"] in envoyes,
+                             colis.get("telephone")):
+            continue
+        res = prevenir(colis, modele)
+        out["detail"].append(res)
+        out["envoyes" if res["statut"] == "envoye" else "echecs"] += 1
+    frappe.db.commit()
+    return out
+
+
+@frappe.whitelist()
+def basculer_sms(actif):
+    """Coche ou decoche l'envoi automatique depuis l'ecran."""
+    frappe.only_for(["System Manager", "Sales Manager"])
+    frappe.db.set_single_value(DOCTYPE_CONFIG, "sms_auto", 1 if frappe.utils.cint(actif) else 0)
+    frappe.db.commit()
+    return {"sms_auto": sms_actif()}
+
+
+# ------------------------------------------------------------------ tache quotidienne
+
+
+def rafraichir_tout(limite=200, annee=None):
+    """Actualise le suivi de tous les colis de l'annee qui ne sont pas encore livres.
+
+    Appelee par le planificateur, sans utilisateur devant l'ecran : elle ne demande donc aucun
+    droit et se contente de journaliser. Un colis LIVRE n'est jamais re-interroge — son etat est
+    definitif — si bien qu'en regime etabli seuls les colis en circulation coutent un appel.
+    """
+    annee = annee or getdate(nowdate()).year
+    lignes = _paiements(getdate("%s-01-01" % annee), getdate("%s-12-31" % annee))
+    references, vus = [], set()
+    for l in lignes:
+        reference = reference_aramex(l.reference_no)
+        if reference and reference not in vus:
+            vus.add(reference)
+            references.append(reference)
+
+    connus = {r.name: r for r in frappe.get_all(DOCTYPE_SUIVI,
+                                               fields=["name", "livre", "tentatives"],
+                                               limit_page_length=0)}
+    livres = [r for r in references if (connus.get(r) or {}).get("livre")]
+    # Un bordereau qu'Aramex ignore depuis trois passages ne se reveillera pas : on garde le
+    # constat a l'ecran, on cesse d'y consacrer 21 secondes par jour.
+    muets = [r for r in references if r not in livres
+             and ((connus.get(r) or {}).get("tentatives") or 0) >= TENTATIVES_MAX]
+    a_faire = [r for r in references if r not in livres and r not in muets]
+
+    out = {"colis": len(references), "deja_livres": len(livres), "abandonnes": len(muets),
+           "interroges": 0, "erreurs": 0, "restants": 0}
+    for reference in a_faire:
+        if out["interroges"] >= limite:
+            out["restants"] += 1
+            continue
+        suivi = interroger(reference)
+        out["interroges"] += 1
+        if suivi.get("erreur"):
+            out["erreurs"] += 1
+        _ranger_suivi(reference, suivi)
+    frappe.db.commit()
+    return out
+
+
+def run_cron():
+    """Point d'entree du planificateur (tous les jours a 16h00).
+
+    ⚠️ NE LEVE JAMAIS. Une panne du service de suivi ne doit pas faire echouer la file des taches
+    planifiees ni polluer le journal d'erreurs d'une trace par colis : elle est resumee une fois.
+    """
+    try:
+        res = rafraichir_tout()
+        # L'ordre compte : on ne previent qu'apres avoir su, sinon on annoncerait le statut de la
+        # veille.
+        res["sms"] = prevenir_les_clients()
+        if res["erreurs"] or res["restants"]:
+            frappe.log_error(
+                title="Suivi Aramex : %s erreur(s), %s restant(s)" % (res["erreurs"],
+                                                                      res["restants"]),
+                message=frappe.as_json(res))
+        return res
+    except Exception:
+        frappe.log_error(title="Suivi Aramex : tache quotidienne",
+                         message=frappe.get_traceback())
