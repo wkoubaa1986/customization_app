@@ -368,6 +368,14 @@
                 { fieldname: 'details_adresse', fieldtype: 'Small Text',
                   label: 'Détails adresse', read_only: 1 },
                 { fieldtype: 'Section Break' },
+                // Affichée seulement quand le rendez-vous vient d'une commande. En lecture seule :
+                // c'est un constat, pas un choix — on ne rattache pas un RDV à une autre commande
+                // que celle d'où l'on vient de cliquer.
+                { fieldname: 'commande_client', fieldtype: 'Data', label: 'Commande rattachée',
+                  read_only: 1,
+                  hidden: !(prefill && prefill.sales_order),
+                  default: (prefill && prefill.sales_order) || '' },
+                { fieldtype: 'Section Break' },
                 { fieldname: 'note', fieldtype: 'Small Text', label: 'Note' },
             ],
             primary_action_label: 'Enregistrer le RDV',
@@ -408,6 +416,14 @@
                         subject:                   vals.note || '',
                         titre:                     titre,
                     };
+                    // ⚠️ LE RATTACHEMENT A LA COMMANDE, QUAND LE RDV EN VIENT. `commande_client`
+                    // est le lien que lisent les anomalies de la liste des commandes et le detail
+                    // de la relance : sans lui, la commande reste marquee « Livraison sans tache »
+                    // alors que l'intervention est planifiee, et la tache ne dit pas ce qu'il faut
+                    // livrer. 5 433 taches sur 7 283 le portent deja — une de plus n'invente rien.
+                    if (prefill && prefill.sales_order) {
+                        doc.commande_client = prefill.sales_order;
+                    }
                     dlg.hide();
                     _saved = true;
                     if (onDismiss) { onDismiss(true); onDismiss = null; }
@@ -440,7 +456,14 @@
             },
         });
 
-        dlg.set_value('custom_type_dintervention', d.custom_type_dintervention || 'Entretien');
+        // Le préremplissage a le dernier mot sur le type : quand l'appel vient d'une commande, il
+        // est DÉDUIT de ses lignes (livraison ou main d'œuvre), alors que `d` porte l'« Entretien »
+        // que le calendrier met par défaut sur tout créneau. Sans cette priorité, la déduction
+        // serait calculée puis jetée.
+        if (prefill && prefill.sales_order) dlg.set_value('commande_client', prefill.sales_order);
+        dlg.set_value('custom_type_dintervention',
+            (prefill && prefill.custom_type_dintervention)
+            || d.custom_type_dintervention || 'Entretien');
         if (d.starts_on) dlg.set_value('starts_on', d.starts_on);
         // Secteur + addresses set before show (Data fields render fine before show)
         if (prefill && prefill.custom_client) {

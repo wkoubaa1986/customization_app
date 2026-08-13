@@ -1868,6 +1868,65 @@ def search_customer_all(doctype, txt, searchfield, start, page_len, filters):
 
 
 @frappe.whitelist()
+def rdv_depuis_commande(sales_order):
+    """Ce qu'il faut savoir d'une commande pour lui prendre un rendez-vous. -> dict.
+
+    Le client, ses adresses, son secteur — et surtout LE TYPE D'INTERVENTION que ses lignes
+    appellent, pour que la prise de rendez-vous n'oblige pas à relire la commande.
+
+    ⚠️ LA RÈGLE N'EST PAS RÉÉCRITE ICI. Livraison et main d'œuvre se reconnaissent au GROUPE
+    D'ARTICLE, et ces deux groupes sont déjà nommés dans `commande_alertes` — c'est la même
+    lecture qui produit les anomalies « Livraison sans tâche » et « Main d'œuvre sans tâche »
+    de la liste. Les recopier ici, c'est se garantir qu'un jour l'écran proposera Livraison
+    pendant que la liste réclamera une installation.
+
+    ⚠️ ET LA MAIN D'ŒUVRE PASSE AVANT, comme dans `_SQL_MOTIF`. Une commande qui porte les deux
+    lignes est d'abord une pose : la livraison en fait partie, l'inverse n'est pas vrai.
+    """
+    from customization_app.commande_alertes import GROUPE_LIVRAISON, GROUPE_MAIN_OEUVRE
+
+    # ⚠️ LE DROIT SE VÉRIFIE, MÊME SI LE BOUTON EST SUR UNE FICHE DÉJÀ OUVERTE. `get_customer_info_all`
+    # rend les adresses SANS contrôle de permission — c'est voulu pour le parcours partenaire, mais
+    # greffé sur une méthode qui accepte n'importe quel n° de commande, cela ouvrirait le carnet
+    # d'adresses clients à tout utilisateur connecté qui devine un numéro.
+    if not frappe.has_permission("Sales Order", "read", doc=sales_order):
+        frappe.throw(_("Accès non autorisé à la commande {0}").format(sales_order),
+                     frappe.PermissionError)
+
+    commande = frappe.db.get_value("Sales Order", sales_order,
+                                   ["name", "customer", "customer_name", "delivery_date"],
+                                   as_dict=True)
+    if not commande:
+        frappe.throw(_("Commande introuvable : {0}").format(sales_order))
+
+    groupes = set(frappe.db.sql_list(
+        """SELECT DISTINCT i.item_group
+           FROM `tabSales Order Item` si JOIN `tabItem` i ON i.name = si.item_code
+           WHERE si.parent = %s""", sales_order))
+
+    if GROUPE_MAIN_OEUVRE in groupes:
+        type_intervention, motif = "Installation", GROUPE_MAIN_OEUVRE
+    elif GROUPE_LIVRAISON in groupes:
+        type_intervention, motif = "Livraison", GROUPE_LIVRAISON
+    else:
+        # Aucun des deux : on ne devine pas. L'écran laissera le choix par défaut, et
+        # l'utilisateur tranchera — c'est plus honnête que de proposer au hasard.
+        type_intervention, motif = None, None
+
+    infos = get_customer_info_all(commande.customer) or {}
+    return {
+        "sales_order": commande.name,
+        "customer": commande.customer,
+        "customer_name": commande.customer_name,
+        "delivery_date": str(commande.delivery_date or ""),
+        "type_intervention": type_intervention,
+        "motif": motif,
+        "secteur": infos.get("secteur") or "",
+        "addresses": infos.get("addresses") or [],
+    }
+
+
+@frappe.whitelist()
 def get_customer_info_all(customer):
     """
     Return addresses, secteur and telephone for a customer, ignoring permissions.
