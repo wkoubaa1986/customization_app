@@ -135,7 +135,9 @@ class LivraisonAramex {
           ${dt(c.montant)} · ${frappe.datetime.str_to_user(c.posting_date)}
         </div>
       </div>
-      <div class="ala-adresse">${esc(c.adresse || __("adresse non renseignée"))}</div>
+      <div class="ala-adresse">${esc(c.adresse || __("adresse non renseignée"))}
+        ${c.adresse_de_facturation ? `<div style="color:var(--ala-warn)">${__("adresse de facturation — pas d'adresse de livraison sur la pièce")}</div>` : ""}
+      </div>
       <div>${this._suivi(c)}</div>
     </div>`;
   }

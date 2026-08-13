@@ -197,9 +197,11 @@ def _pieces(lignes):
     out = {}
     champs = {
         "Sales Order": ["name", "customer_name", "contact_mobile", "contact_email",
-                        "shipping_address", "status", "grand_total", "transaction_date"],
+                        "shipping_address", "address_display", "status", "grand_total",
+                        "transaction_date"],
         "Sales Invoice": ["name", "customer_name", "contact_mobile", "contact_email",
-                          "shipping_address", "status", "grand_total", "posting_date"],
+                          "shipping_address", "address_display", "status", "grand_total",
+                          "posting_date"],
     }
     for doctype, noms in par_doctype.items():
         if doctype not in champs:
@@ -253,7 +255,15 @@ def get_data(from_date=None, to_date=None):
                          or ", ".join(contact.get("telephones", [])),
             "email": (piece.contact_email if piece else None)
                      or ", ".join(contact.get("emails", [])),
-            "adresse": _texte(piece.shipping_address if piece else None),
+            # ⚠️ A DEFAUT D'ADRESSE DE LIVRAISON, CELLE DE FACTURATION. Quatre colis sur
+            # trente-trois affichaient « adresse non renseignee » alors que le client en avait
+            # une : la piece ne portait pas de `shipping_address_name`, mais bien une adresse.
+            # On le DIT (`adresse_de_facturation`) : livrer a l'adresse de facturation est un
+            # choix, pas une evidence.
+            "adresse": _texte((piece.shipping_address if piece else None)
+                              or (piece.address_display if piece else None)),
+            "adresse_de_facturation": bool(piece and not piece.shipping_address
+                                           and piece.address_display),
             "suivi": suivi,
             "alerte": alerte(suivi),
         })
