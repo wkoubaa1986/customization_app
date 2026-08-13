@@ -40,9 +40,16 @@ DOCTYPE_SUIVI = "Suivi Aramex"
 # Le service impose 8 a 20 chiffres : la meme regle ici evite un aller-retour pour un 400.
 _RE_REFERENCE = re.compile(r"(\d{8,20})")
 
-# Ce qui, dans la derniere mise a jour, appelle une action humaine plutot qu'une attente.
-_MOTS_ALERTE = ("tentative", "report", "retour", "refus", "annul", "incident", "absent",
-                "injoignable", "non disponible")
+# Ce qui, dans le statut ou la derniere mise a jour, appelle une action humaine plutot qu'une
+# attente.
+# ⚠️ ARAMEX MELANGE LES DEUX LANGUES, ET LA PREMIERE LISTE PASSAIT A COTE DE L'ESSENTIEL.
+# Deux colis portaient le statut « Returned » et la description « Colis renvoye a l'expediteur » :
+# ni « retour » ni « refus » n'y figurent, et ils passaient pour des colis en route. Un troisieme
+# annoncait « echec de livraison » sous un statut « Statut en transit » rassurant. D'ou les formes
+# anglaises, les radicaux courts (« renvoy », « echec ») et la comparaison SANS ACCENTS.
+_MOTS_ALERTE = ("tentative", "report", "retour", "renvoy", "expediteur", "echec", "refus",
+                "annul", "incident", "absent", "injoignable", "non disponible",
+                "return", "undeliver", "exception", "hold", "refused", "failed")
 
 LIMITE_RAFRAICHISSEMENT = 25
 
@@ -79,12 +86,23 @@ def reference_aramex(reference_no):
     return m.group(1) if m else None
 
 
-def alerte(suivi):
-    """La derniere mise a jour demande-t-elle une action ? -> texte ou None.
+def _sans_accent(texte):
+    """« échec » et « echec » doivent se rencontrer : Aramex accentue, pas nos mots-cles."""
+    import unicodedata
 
-    Un colis « en transit » se laisse attendre. Un colis dont le client etait absent, qui a ete
-    refuse ou qui repart en retour ne se resoudra pas tout seul : c'est le seul cas ou ce tableau
-    doit reclamer quelqu'un.
+    return "".join(c for c in unicodedata.normalize("NFD", (texte or "").lower())
+                   if not unicodedata.combining(c))
+
+
+def alerte(suivi):
+    """Le colis demande-t-il une action ? -> texte ou None.
+
+    Un colis « en transit » se laisse attendre. Un colis renvoye, refuse, ou dont la livraison a
+    echoue ne se resoudra pas tout seul : c'est le seul cas ou ce tableau doit reclamer quelqu'un.
+
+    ⚠️ ON REGARDE LE STATUT AUTANT QUE LA DESCRIPTION. « Colis renvoye a l'expediteur » se lisait
+    sous un statut « Returned », et « echec de livraison » sous un statut « Statut en transit »
+    parfaitement rassurant : ne lire qu'un des deux laisse passer la moitie des cas.
     """
     if not suivi or suivi.get("livre"):
         return None
@@ -92,9 +110,11 @@ def alerte(suivi):
         # Aramex ne connait pas le bordereau saisi chez nous : le client attend un colis dont le
         # transporteur n'a pas trace. C'est l'alerte la plus serieuse de cet ecran.
         return suivi.get("erreur") or STATUT_INTROUVABLE
-    description = ((suivi.get("derniere_maj") or {}).get("description") or "").lower()
-    return ((suivi.get("derniere_maj") or {}).get("description")
-            if any(mot in description for mot in _MOTS_ALERTE) else None)
+    description = (suivi.get("derniere_maj") or {}).get("description") or ""
+    statut = suivi.get("statut") or ""
+    if any(mot in _sans_accent("%s %s" % (statut, description)) for mot in _MOTS_ALERTE):
+        return description or statut
+    return None
 
 
 # ------------------------------------------------------------------ service
@@ -428,6 +448,12 @@ def doit_prevenir(suivi, deja_envoye, telephone):
     if not suivi or suivi.get("livre") or suivi.get("erreur"):
         return False
     if int(suivi.get("etapes_franchies") or 0) < ETAPE_MINIMALE_SMS:
+        return False
+    if alerte(suivi):
+        # ⚠️ UN COLIS EN DIFFICULTE NE SE TRAITE PAS PAR MESSAGE AUTOMATIQUE. Renvoi a
+        # l'expediteur, echec de livraison, client absent : il faut appeler, convenir d'une
+        # nouvelle date, parfois rembourser. Un SMS qui recite le statut ne fait qu'inquieter sans
+        # rien proposer — et ces colis sont deja en tete de l'ecran, sous « A traiter ».
         return False
     return bool(suivi.get("statut"))
 

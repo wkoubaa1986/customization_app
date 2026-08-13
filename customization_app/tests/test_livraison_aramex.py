@@ -128,3 +128,37 @@ class TestInformationDuClient(unittest.TestCase):
         texte = A.message_sms(colis)
         for attendu in ("Haifa Zaghouani", "51330108583", "106.0", "Statut en transit"):
             self.assertIn(attendu, texte)
+
+
+class TestAlerteBilingue(unittest.TestCase):
+    """⚠️ ARAMEX MÉLANGE LES DEUX LANGUES. La première liste de mots-clés laissait passer les
+    deux cas les plus graves, constatés en réel."""
+
+    def test_le_statut_anglais_returned_est_une_alerte(self):
+        """« Returned » + « Colis renvoyé à l'expéditeur » : ni « retour » ni « refus » n'y
+        figurent, et ces colis passaient pour être en route."""
+        s = {"statut": "Returned", "livre": False,
+             "derniere_maj": {"description": "Colis renvoyé à l'expéditeur"}}
+        self.assertIsNotNone(A.alerte(s))
+
+    def test_un_echec_sous_un_statut_rassurant_est_une_alerte(self):
+        """« échec de livraison » se lisait sous « Statut en transit » : ne regarder que le statut
+        laisse passer la moitié des cas."""
+        s = {"statut": "Statut en transit", "livre": False,
+             "derniere_maj": {"description": "échec de livraison"}}
+        self.assertIsNotNone(A.alerte(s))
+
+    def test_les_accents_ne_font_pas_rater_un_mot(self):
+        self.assertIsNotNone(A.alerte({"statut": "En cours", "livre": False,
+                                       "derniere_maj": {"description": "ÉCHEC DE LIVRAISON"}}))
+
+    def test_un_transit_sain_reste_sain(self):
+        s = {"statut": "Statut en transit", "livre": False,
+             "derniere_maj": {"description": "Colis arrivé au centre Aramex de destination"}}
+        self.assertIsNone(A.alerte(s))
+
+    def test_aucun_sms_automatique_sur_un_colis_en_difficulte(self):
+        """Renvoi, échec, client absent : il faut appeler, pas réciter un statut."""
+        s = {"statut": "Returned", "livre": False, "etapes_franchies": 4,
+             "derniere_maj": {"description": "Colis renvoyé à l'expéditeur"}}
+        self.assertFalse(A.doit_prevenir(s, False, "98366053"))
