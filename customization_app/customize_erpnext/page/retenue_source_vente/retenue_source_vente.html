@@ -26,6 +26,13 @@
     .rsv-toolbar input.form-control { width: 150px; }
     .rsv-spacer { flex: 1; }
 
+    .rsv-tabs { display: flex; gap: 4px; margin-bottom: 14px; border-bottom: 1px solid var(--border-color, #e4e8ee); }
+    .rsv-tab {
+      border: 0; background: none; font: inherit; color: var(--text-muted, #7a8291);
+      padding: 8px 16px; font-weight: 600; font-size: 13px; cursor: pointer;
+      border-bottom: 2px solid transparent; margin-bottom: -1px;
+    }
+    .rsv-tab.active { color: var(--rsv-accent); border-bottom-color: var(--rsv-accent); }
     .rsv-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; margin-bottom: 20px; }
     .rsv-kpi {
       background: var(--card-bg, #fff); border: 1px solid var(--border-color, #e4e8ee);
@@ -145,6 +152,16 @@
     <button class="btn btn-default btn-sm" data-action="print">Imprimer</button>
   </div>
 
-  <div class="rsv-kpis" data-role="kpis"></div>
-  <div data-role="invoices"></div>
+  <!-- Deux lectures du meme sujet : nos factures d'un cote, ce que les clients ont declare au
+       portail TEJ de l'autre. Le second onglet est servi par l'app bank_retenue_sync. -->
+  <div class="rsv-tabs">
+    <button class="rsv-tab active" data-tab="factures">Factures</button>
+    <button class="rsv-tab" data-tab="certificats">Certificats TEJ</button>
+  </div>
+
+  <div data-pane="factures">
+    <div class="rsv-kpis" data-role="kpis"></div>
+    <div data-role="invoices"></div>
+  </div>
+  <div data-pane="certificats" style="display:none"></div>
 </div>

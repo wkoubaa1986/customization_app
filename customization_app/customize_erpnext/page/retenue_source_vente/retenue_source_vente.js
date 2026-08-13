@@ -82,6 +82,39 @@ class RetenueSourceVente {
     };
   }
 
+  _switch_tab(tab) {
+    this.$root.find(".rsv-tab").removeClass("active");
+    this.$root.find(`.rsv-tab[data-tab="${tab}"]`).addClass("active");
+    this.$root.find("[data-pane]").hide();
+    const $pane = this.$root.find(`[data-pane="${tab}"]`).show();
+    // La barre de relance ne concerne que les factures : l'afficher au-dessus des certificats
+    // laisserait croire qu'elle relance les declarants.
+    this.$root.find("[data-action='relance'], [data-action='toggle-all'], [data-action='excel']")
+      .toggle(tab === "factures");
+    if (tab !== "certificats") return;
+    if (this._certs) return this._certs.refresh();
+    // ⚠️ PAS `frappe.require` AVEC UN « ?v= ». Son `assets.extn()` prend ce qui suit le « ? » :
+    // « …certificats_ras.js?v=123 » lui donne l'extension « v=123 », `_handlers[...]` vaut alors
+    // undefined et l'exception tue le callback — la classe n'est jamais définie et l'onglet reste
+    // figé, sans message. Constaté en réel.
+    //
+    // `$.getScript` ajoute lui-même un paramètre anti-cache : ce fichier est servi par symlink,
+    // sans passer par `bench build`, donc sans version dans l'URL — le navigateur gardait sa copie
+    // et l'onglet affichait un ancien écran des heures après la correction.
+    $.getScript("/assets/bank_retenue_sync/js/certificats_ras.js")
+      .done(() => {
+        this._certs = new window.CertificatsRAS($pane);
+      })
+      .fail(() => {
+        // Un onglet qui ne se charge pas doit le DIRE : c'est le silence qui a coûté le plus cher.
+        $pane.html(
+          `<div class="rsv-inv" style="padding:18px;text-align:center;color:var(--rsv-loss)">${__(
+            "Impossible de charger l'onglet Certificats TEJ. Rechargez la page (Ctrl+Maj+R)."
+          )}</div>`
+        );
+      });
+  }
+
   _bind() {
     this.$root.find("[data-action='refresh']").on("click", () => this._fetch());
     this.$root.find("#rsv-from, #rsv-to").on("change", () => this._fetch());
@@ -113,6 +146,9 @@ class RetenueSourceVente {
       this._open_attachment($el.attr("data-url"), $el.attr("data-fname"), $el.attr("data-ext"));
     });
     this.$root.find("[data-action='relance']").on("click", () => this._open_relance_dialog(null));
+    // Onglet « Certificats TEJ » : servi par bank_retenue_sync, charge a la premiere ouverture
+    // seulement — il interroge le portail, inutile de le payer quand on vient lire les factures.
+    this.$root.on("click", ".rsv-tab", (e) => this._switch_tab($(e.currentTarget).data("tab")));
     this.$root.on("click", ".rsv-relance-one", (e) =>
       this._open_relance_dialog([$(e.currentTarget).attr("data-customer")]));
     this.$root.on("click", ".rsv-tel", (e) =>

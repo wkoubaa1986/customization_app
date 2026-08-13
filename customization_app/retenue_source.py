@@ -192,6 +192,51 @@ def _fmt_date(val):
         return str(val or "")
 
 
+def _coordonnees_des_contacts(customers):
+    """{client: {emails: [...], telephones: [...]}} lus sur les CONTACTS liés au client.
+
+    ⚠️ NE PAS PASSER PAR LES CHAMPS « PRINCIPAUX ». `Customer.email_id` est alimenté depuis le
+    contact principal, lui-même alimenté depuis la ligne d'email marquée `is_primary`. Chez
+    « itkkan sa », le contact porte DEUX adresses valides et aucune n'est marquée principale : tout
+    le chaînage rend vide, et l'écran affichait « email manquant » devant deux adresses présentes.
+    On lit donc les tables d'adresses et de téléphones directement, la ligne principale d'abord.
+    """
+    if not customers:
+        return {}
+    requetes = (
+        ("emails", """select dl.link_name as client, t.email_id as valeur
+                      from `tabDynamic Link` dl
+                      join `tabContact Email` t on t.parent = dl.parent
+                      where dl.parenttype = 'Contact' and dl.link_doctype = 'Customer'
+                        and dl.link_name in %(clients)s and ifnull(t.email_id, '') != ''
+                      order by t.is_primary desc, t.idx"""),
+        ("telephones", """select dl.link_name as client, t.phone as valeur
+                          from `tabDynamic Link` dl
+                          join `tabContact Phone` t on t.parent = dl.parent
+                          where dl.parenttype = 'Contact' and dl.link_doctype = 'Customer'
+                            and dl.link_name in %(clients)s and ifnull(t.phone, '') != ''
+                          order by t.is_primary_phone desc, t.idx"""),
+    )
+    out = {}
+    for cle, sql in requetes:
+        for r in frappe.db.sql(sql, {"clients": customers}, as_dict=1):
+            valeurs = out.setdefault(r.client, {}).setdefault(cle, [])
+            if r.valeur not in valeurs:
+                valeurs.append(r.valeur)
+    return out
+
+
+def separer(valeur):
+    """« 98366053\\n71854009 » ou « a@b.tn, c@d.tn » -> liste. Fonction pure.
+
+    ⚠️ Sans elle, `custom_liste_telephone` partait EN ENTIER comme numero unique : le SMS visait
+    « 98366053\\n71854009 », un destinataire qui n'existe pas.
+    """
+    import re as _re
+
+    return [v.strip() for v in _re.split(r"[\s,;]+", valeur or "") if v.strip()]
+
+
 def _build_ras_message(customer_name, invoices):
     """Message de relance : certificats de retenue manquants pour ces factures."""
     from customization_app.api import _fac_display_name
@@ -237,13 +282,15 @@ def preparer_relances(from_date=None, to_date=None, customers=None):
     )
     numero_map = {r.name: r.custom_numero_facture for r in numeros}
 
+    noms_clients = list({i["customer"] for i in missing})
     contacts = {
         r.name: r for r in frappe.get_all(
             "Customer",
-            filters={"name": ("in", list({i["customer"] for i in missing}))},
+            filters={"name": ("in", noms_clients)},
             fields=["name", "customer_name", "custom_liste_telephone", "email_id"],
         )
     }
+    coordonnees = _coordonnees_des_contacts(noms_clients)
 
     by_customer = {}
     for inv in missing:
@@ -258,11 +305,14 @@ def preparer_relances(from_date=None, to_date=None, customers=None):
     for customer, invs in by_customer.items():
         c = contacts.get(customer)
         customer_name = (c.customer_name if c else None) or customer
+        coord = coordonnees.get(customer, {})
         out.append({
             "customer": customer,
             "customer_name": customer_name,
-            "telephone": (c.custom_liste_telephone if c else "") or "",
-            "email": (c.email_id if c else "") or "",
+            "telephone": ((c.custom_liste_telephone if c else "") or "").strip()
+                         or ", ".join(coord.get("telephones", [])),
+            "email": ((c.email_id if c else "") or "").strip()
+                     or ", ".join(coord.get("emails", [])),
             "invoices": [i["name"] for i in invs],
             "total_ras": flt(sum(i["ras_total"] for i in invs), PRECISION),
             "message": _build_ras_message(customer_name, invs),
@@ -292,30 +342,35 @@ def envoyer_relance(payload, channel="both"):
         for ch in channels:
             try:
                 if ch == "sms":
-                    phone = (item.get("telephone") or "").strip()
-                    if not phone:
+                    # ⚠️ UN DESTINATAIRE PAR NUMERO. `custom_liste_telephone` en porte souvent
+                    # plusieurs, separes par un retour a la ligne : envoye en bloc, le SMS visait
+                    # « 98366053\n71854009 », un numero qui n'existe pas.
+                    numeros = separer(item.get("telephone"))
+                    if not numeros:
                         failed.append({"customer": cust, "reason": "Téléphone manquant (SMS)"})
                         continue
                     from customization_app.customize_erpnext.doctype.compagne_sms.compagne_sms import (
                         _send_sms_with_fallback,
                     )
-                    _send_sms_with_fallback([phone], message)
-                    sent.append({"customer": cust, "channel": "sms", "to": phone})
-                    _log_ras_comment(cust, "SMS", f"Envoyé au {phone} — {invoices}")
+                    _send_sms_with_fallback(numeros, message)
+                    envoye = ", ".join(numeros)
+                    sent.append({"customer": cust, "channel": "sms", "to": envoye})
+                    _log_ras_comment(cust, "SMS", f"Envoyé au {envoye} — {invoices}")
                 elif ch == "email":
-                    email = (item.get("email") or "").strip()
-                    if not email:
+                    adresses = separer(item.get("email"))
+                    if not adresses:
                         failed.append({"customer": cust, "reason": "Email manquant (Email)"})
                         continue
                     frappe.sendmail(
-                        recipients=[email],
+                        recipients=adresses,
                         subject="Certificat de retenue à la source - AquaWorld & Servicing",
                         message=message.replace("\n", "<br>"),
                         reference_doctype="Customer",
                         reference_name=cust,
                     )
-                    sent.append({"customer": cust, "channel": "email", "to": email})
-                    _log_ras_comment(cust, "Email", f"Envoyé à {email} — {invoices}")
+                    envoye = ", ".join(adresses)
+                    sent.append({"customer": cust, "channel": "email", "to": envoye})
+                    _log_ras_comment(cust, "Email", f"Envoyé à {envoye} — {invoices}")
                 else:
                     failed.append({"customer": cust, "reason": f"Canal inconnu: {ch}"})
             except Exception as e:
