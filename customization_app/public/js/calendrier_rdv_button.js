@@ -18,9 +18,13 @@
         'Entretien': '🔧 ', 'Installation': '🔨 ', 'Réparation': '🧰 ',
         'Livraison': '🚐 ', 'Visite': '🚗 ', 'Autre': '☕ ',
     };
+    // Durée en MINUTES, comptée depuis l'heure de début : `ends_on = starts_on + durée`.
+    // Valeurs du terrain, pas des estimations — ce sont elles qui décident de la place que
+    // le rendez-vous occupe au calendrier, donc du nombre d'interventions tenables dans une
+    // journée. Les surestimer coûte des créneaux qui n'existent pas.
     const INTERVENTION_DURATIONS = {
-        'Entretien': 45, 'Installation': 105,
-        'Réparation': 120, 'Livraison': 30,
+        'Entretien': 30, 'Installation': 75,
+        'Réparation': 120, 'Livraison': 15,
         'Visite': 120, 'Autre': 120,
     };
 
@@ -269,10 +273,34 @@
                     if (!calList) return false;
                     if (calList._rdv_patched) return true;
 
+                    // Pas de la grille du calendrier, en millisecondes. FullCalendar rend
+                    // `slotDuration` tantôt en objet ({minutes: 30}), tantôt en chaîne
+                    // ('00:30:00') : les deux formes sont lues, et 30 min sert de repli.
+                    var slotMs = 30 * 60000;
+                    try {
+                        var sd = calList.calendar.getOption('slotDuration');
+                        if (sd && typeof sd === 'object') {
+                            slotMs = ((sd.hours || 0) * 60 + (sd.minutes || 0)) * 60000
+                                   + (sd.milliseconds || 0);
+                        } else if (typeof sd === 'string' && sd.indexOf(':') > -1) {
+                            var p = sd.split(':');
+                            slotMs = ((+p[0] || 0) * 60 + (+p[1] || 0)) * 60000;
+                        }
+                    } catch (e) {}
+                    if (!slotMs) slotMs = 30 * 60000;
+
                     try {
                         calList.calendar.setOption('selectable', true);
                         calList.calendar.setOption('select', function (info) {
-                            sendSlot(info.start, info.end);
+                            // ⚠️ UN CLIC SUR UNE CASE N'EST PAS UNE DURÉE VOULUE. FullCalendar
+                            // rend quand même un `end` — celui du créneau cliqué, soit le pas de
+                            // la grille. Le transmettre remplissait `ends_on`, et le calcul par
+                            // type d'intervention était alors SAUTÉ : toutes les interventions
+                            // prises au calendrier duraient 30 minutes, installation comprise.
+                            // On ne retient la sélection que si elle couvre PLUSIEURS créneaux,
+                            // ce qui est le seul geste où l'utilisateur a voulu une durée.
+                            var voulue = (info.end - info.start) > slotMs;
+                            sendSlot(info.start, voulue ? info.end : null);
                         });
                     } catch (e) {}
 

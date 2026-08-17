@@ -953,12 +953,49 @@ def get_historique_taches_client(client, exclude=None, limit=25):
     )
 
 
+# Durée d'une intervention, en MINUTES. C'est LA référence : les tables JavaScript
+# (`calendrier_rdv_button.js` et le Client Script « Calender View Tache de travail ») ne servent
+# qu'à pré-remplir l'écran, celle-ci tranche.
+DUREE_INTERVENTION = {
+    "Entretien": 30,
+    "Installation": 75,
+    "Réparation": 120,
+    "Livraison": 15,
+    "Visite": 120,
+    "Autre": 120,
+}
+DUREE_DEFAUT = 120
+
+
+def _fixer_duree_a_la_creation(doc):
+    """À la CRÉATION, c'est le type d'intervention qui fixe la fin — jamais le calendrier.
+
+    ⚠️ POURQUOI CÔTÉ SERVEUR. La durée était calculée en JavaScript, et elle ne s'appliquait
+    jamais : le calendrier renvoie l'heure de fin du créneau CLIQUÉ (le pas de la grille,
+    30 min), `ends_on` arrivait donc déjà rempli et le calcul par type était sauté. Toutes les
+    interventions duraient 30 minutes, installation comprise. Corriger le JavaScript ne suffit
+    pas — le fichier reste dans le cache du navigateur jusqu'à 12 h, et le suffixe de version
+    n'est recalculé qu'au redémarrage du worker. Une règle métier ne peut pas dépendre de l'âge
+    d'un onglet ouvert.
+
+    ⚠️ SEULEMENT À LA CRÉATION. Redimensionner un rendez-vous au calendrier, ou corriger sa fin
+    à la main, sont des gestes délibérés : ils passent par une mise à jour, et on n'y touche pas.
+    """
+    if not doc.get("__islocal") or not doc.get("starts_on"):
+        return
+    minutes = DUREE_INTERVENTION.get(doc.get("custom_type_dintervention"), DUREE_DEFAUT)
+    doc.ends_on = frappe.utils.add_to_date(frappe.utils.get_datetime(doc.starts_on),
+                                           minutes=minutes)
+
+
 def before_save_tache_de_travail(doc, method=None):
     """Set color (source unique) + traduire en arabe si client/adresse/sujet ont changé."""
     # Tournée commerciale : la clôture exige une tournée complète (visites avec
     # photo + GPS + compte rendu). Bloque le passage à Completed sinon.
     from customization_app.tournee import check_cloture_tournee
     check_cloture_tournee(doc)
+
+    _fixer_duree_a_la_creation(doc)
 
     # Couleur : seule autorité. Priorité statut > partenaire > staff > défaut.
     doc.color = compute_tache_color(doc)
