@@ -500,9 +500,21 @@ def get_data(month=None):
 
     # Section Aqua World : commandes du partenaire + partagées "pour lui",
     # hors clients "Liste Appelle Entretien", sans doublon.
+    #
+    # ⚠️ LE DÉDOUBLONNAGE DOIT AUSSI REGARDER L'AUTRE SECTION. `seen` ne dédoublonnait
+    # qu'à l'intérieur de `owned + done_for_partner` : une commande CRÉÉE par le partenaire et
+    # EXÉCUTÉE par lui est dans `owned` ET dans `done_by_partner`, donc comptée des deux côtés.
+    # Sur juillet 2026, trois commandes dans ce cas gonflaient les ventes de 118 DT sur 1 048,
+    # et faussaient le solde net du bilan — donc l'ajustement Economiq et sa première échéance.
+    #
+    # C'est l'EXÉCUTANT qui décide de la section, jamais le créateur : `_split_shared` est là
+    # pour ça. Une commande faite par le partenaire est son travail, elle est à lui.
+    faites_par_le_partenaire = {o.name for o in done_by_partner}
     aw_orders, seen = [], set()
     for order in sorted(owned + done_for_partner, key=lambda o: (o.delivery_date, o.name)):
-        if order.name in seen or order.customer in clients_partage:
+        if (order.name in seen
+                or order.name in faites_par_le_partenaire
+                or order.customer in clients_partage):
             continue
         seen.add(order.name)
         aw_orders.append(order)
