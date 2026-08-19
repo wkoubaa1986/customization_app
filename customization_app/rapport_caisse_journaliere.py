@@ -452,9 +452,13 @@ def get_data(d1, d2, employe=None):
         employe = _ma_caisse(employees, users) or ""
 
     # La liste déroulante du filtre montre TOUT le monde, même quand on filtre.
+    # Déduplication par COMPTE et non par nom : Economiq a deux fiches aux orthographes
+    # différentes (« Economic … » côté Employé, « Economiq … » côté User) — un User déjà
+    # porté par une fiche Employé n'entre pas une seconde fois.
+    emails_employes = {e.user_email for e in employees if e.user_email}
     noms_disponibles = sorted(
         {e.employee_name for e in employees if e.employee_name}
-        | {u.full_name for u in users if u.full_name}
+        | {u.full_name for u in users if u.full_name and u.name not in emails_employes}
     )
 
     for emp in employees:
