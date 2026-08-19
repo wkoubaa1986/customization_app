@@ -40,14 +40,17 @@ frappe.provide("frappe.views");
                écraser en « T… ». Deuxième ligne : la cellule passe en flex-wrap, la
                pastille occupe toute la largeur (flex-basis 100 %), et SEULES les lignes
                à anomalie prennent une hauteur auto — les autres gardent la leur. */
+            /* La ligne 2 est positionnée par rapport à la LIGNE, pas à la cellule sujet :
+               confinée à la cellule, la pastille se tronquait (« dette non pa… ») alors
+               que tout l'espace sous les autres colonnes est vide à cette hauteur. La
+               hauteur supplémentaire vient du padding-bottom de la ligne. */
             .list-row-container.so-avec-alerte .list-row { height: auto; min-height: 40px;
-                padding-top: 4px; padding-bottom: 4px; }
-            .list-row-container.so-avec-alerte .list-subject { flex-wrap: wrap; }
-            .list-subject .so-alerte-ligne2 { flex: 0 0 100%; margin-left: 24px;
-                margin-top: 2px; line-height: 1.2; min-width: 0; }
+                position: relative; padding-top: 4px; padding-bottom: 24px; }
+            .list-subject .so-alerte-ligne2 { position: absolute; left: 41px; right: 15px;
+                bottom: 4px; line-height: 1; min-width: 0; }
             .so-alerte-pastille {
                 display: inline-block; padding: 1px 7px;
-                border-radius: 10px; font-size: 11px; white-space: nowrap;
+                border-radius: 10px; font-size: 10.5px; white-space: nowrap;
                 max-width: 100%; overflow: hidden; text-overflow: ellipsis;
                 vertical-align: middle;
             }
