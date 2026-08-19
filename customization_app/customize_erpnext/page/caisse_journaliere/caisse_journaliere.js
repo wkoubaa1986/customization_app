@@ -775,7 +775,7 @@ function rcj_encaissement_dettes(rapport) {
 function rcj_depense(rapport) {
   const API = "customization_app.caisse_depenses";
   let etat = { facture: null, facture_nom: null, cheque: null, cheque_nom: null,
-               numero: null, date_facture: null };
+               numero: null, date_facture: null, analyse_faite: false };
 
   const d = new frappe.ui.Dialog({
     title: __("Dépense de caisse"),
@@ -829,9 +829,17 @@ function rcj_depense(rapport) {
     ],
     primary_action_label: __("Enregistrer la dépense"),
     primary_action(v) {
-      if (v.type_depense !== "Dépense non facturée" && !etat.facture) {
-        frappe.msgprint(__("Prenez la photo de la facture avant d'enregistrer."));
-        return;
+      if (v.type_depense !== "Dépense non facturée") {
+        if (!etat.facture) {
+          frappe.msgprint(__("Prenez la photo de la facture avant d'enregistrer."));
+          return;
+        }
+        // L'analyse est OBLIGATOIRE (décision 19/08) : c'est elle qui garantit
+        // montant, TVA, fournisseur et compte cohérents avec la pièce.
+        if (!etat.analyse_faite) {
+          frappe.msgprint(__("Analysez la facture (bouton 🤖) avant d'enregistrer."));
+          return;
+        }
       }
       if (v.mode === "Chèque") {
         if (!/^\d{7}$/.test((v.n_cheque || "").trim())) {
@@ -893,7 +901,10 @@ function rcj_depense(rapport) {
 
   // Facture : photo + bouton d'analyse OpenAI (préremplit, l'employé confirme).
   const $zf = zone_photo("zone_facture", "facture", "facture_nom", __("Photo de la facture"),
-    () => $zf.find(".rcj-analyser").prop("disabled", false));
+    () => {
+      etat.analyse_faite = false;   // nouvelle photo -> nouvelle analyse exigée
+      $zf.find(".rcj-analyser").prop("disabled", false);
+    });
   $zf.children().first().append(
     `<button type="button" class="btn btn-default btn-sm rcj-analyser"
              style="margin-left:8px" disabled>🤖 ${__("Analyser la facture")}</button>`);
@@ -911,6 +922,7 @@ function rcj_depense(rapport) {
         if (m.fournisseur) d.set_value("fournisseur", m.fournisseur);
         etat.numero = m.numero || null;
         etat.date_facture = m.date || null;
+        etat.analyse_faite = true;
         if (m.numero && !d.get_value("description")) {
           d.set_value("description", __("Facture {0} — {1}", [m.numero, m.fournisseur || ""]));
         }
