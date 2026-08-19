@@ -35,13 +35,19 @@ frappe.provide("frappe.views");
             .list-row-container.so-alerte-violet:hover,
             .list-row-container.so-alerte-jaune:hover { filter: brightness(0.97); }
             /* Les pastilles vivent DANS la cellule « Nom du client » : une cellule de la
-               grille absorbe son contenu (ellipsis) sans toucher aux largeurs des autres
-               colonnes. En sœur des colonnes (.level-left), elles devenaient un item flex
-               de plus et décalaient toute la ligne. */
+               grille absorbe son contenu sans toucher aux largeurs des autres colonnes.
+               En sœur des colonnes (.level-left), elles devenaient un item flex de plus
+               et décalaient toute la ligne.
+               La cellule sujet est un flex : SANS flex-shrink:0, la pastille rétrécissait
+               avant le nom (il ne restait que « T… »). Ici c'est l'inverse : la pastille
+               garde sa largeur (plafonnée à 60 % de la cellule) et c'est le NOM, déjà en
+               ellipsis chez Frappe, qui se tronque si la place manque. */
+            .list-subject .so-alerte-pastille,
+            .list-subject .so-appels-pastille { flex: 0 0 auto; }
             .so-alerte-pastille {
                 display: inline-block; margin-left: 8px; padding: 1px 7px;
                 border-radius: 10px; font-size: 11px; white-space: nowrap;
-                max-width: 45%; overflow: hidden; text-overflow: ellipsis;
+                max-width: 60%; overflow: hidden; text-overflow: ellipsis;
                 vertical-align: middle;
             }
             .so-alerte-pastille.rouge  { background: #fbd5d0; color: #922b21; }
