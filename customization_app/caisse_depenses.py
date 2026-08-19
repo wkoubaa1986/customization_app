@@ -298,6 +298,36 @@ def _ecriture(lignes, description, remarques):
     return je
 
 
+def _rogner_document(img):
+    """Rogne la photo au CONTOUR du document : la feuille (claire) se détache du
+    fond (plus sombre) — seuillage sur miniature floutée, boîte englobante de la
+    zone claire, remontée à l'échelle avec une marge.
+
+    Sans OpenCV, donc sans correction de PERSPECTIVE : on coupe les bords, on ne
+    redresse pas. Détection douteuse (zone trop petite, ou rien à couper) ->
+    image d'origine, jamais un justificatif amputé."""
+    from PIL import ImageFilter, ImageStat
+
+    g = img.convert("L")
+    petit = g.copy()
+    petit.thumbnail((400, 400))
+    flou = petit.filter(ImageFilter.GaussianBlur(3))
+    seuil = ImageStat.Stat(flou).mean[0]
+    boite = flou.point(lambda p: 255 if p > seuil else 0).getbbox()
+    if not boite:
+        return img
+    sx, sy = img.width / petit.width, img.height / petit.height
+    marge = 12
+    l = max(0, int(boite[0] * sx) - marge)
+    t = max(0, int(boite[1] * sy) - marge)
+    r = min(img.width, int(boite[2] * sx) + marge)
+    b = min(img.height, int(boite[3] * sy) + marge)
+    aire = (r - l) * (b - t)
+    if aire < 0.25 * img.width * img.height or aire > 0.96 * img.width * img.height:
+        return img
+    return img.crop((l, t, r, b))
+
+
 def _scan_pdf(image_bytes):
     """La photo du justificatif devient un PDF façon SCANNER : niveaux de gris,
     contraste étiré, netteté, taille bornée — lisible et léger, sans dépendance
@@ -311,6 +341,7 @@ def _scan_pdf(image_bytes):
         from PIL import Image, ImageFilter, ImageOps
         img = Image.open(io.BytesIO(image_bytes))
         img = ImageOps.exif_transpose(img)          # la photo de téléphone arrive tournée
+        img = _rogner_document(img)                 # ne garder que le document
         if max(img.size) > 2200:
             img.thumbnail((2200, 2200))
         img = ImageOps.autocontrast(img.convert("L"), cutoff=1)
