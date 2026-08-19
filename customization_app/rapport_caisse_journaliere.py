@@ -10,6 +10,14 @@ from frappe.utils import flt, getdate
 
 COMPANY = "AquaWorld & Servicing"
 
+# Le PARTENAIRE Economiq a un compte utilisateur ET une fiche employé (héritage), mais ce
+# n'est pas un employé de la caisse : il a son propre tableau de bord (page
+# partenaire-economiq). Exclu de « Tous les employés » et de la liste des caisses —
+# par IDENTIFIANTS (l'orthographe du nom diffère entre les deux fiches : « Economiq Aqua
+# Solutions » côté User, « Economic Aqua Solution » côté Employee).
+EXCLUS_UTILISATEURS = {"economiqaquasolutions23@gmail.com"}
+EXCLUS_EMPLOYES = {"HR-EMP-00007"}
+
 SO_STATUS_FR = {
     "Draft": "Brouillon",
     "To Bill": "À facturer",
@@ -392,6 +400,12 @@ def get_data(d1, d2, employe=None):
             "total": flt(sum(totaux.values())),
             "nb_commandes": len(orders),
         })
+
+    # Le partenaire sort des deux listes, quelle que soit la fiche qui le porte.
+    employees = [e for e in employees
+                 if e.employee_id not in EXCLUS_EMPLOYES
+                 and (e.user_email or "") not in EXCLUS_UTILISATEURS]
+    users = [u for u in users if u.name not in EXCLUS_UTILISATEURS]
 
     # La liste déroulante du filtre montre TOUT le monde, même quand on filtre.
     noms_disponibles = sorted(
