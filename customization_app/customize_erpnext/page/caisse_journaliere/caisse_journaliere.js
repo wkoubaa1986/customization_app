@@ -605,6 +605,16 @@ function rcj_encaissement_dettes() {
     });
   }
 
+  // La liste des banques est disponible dès l'ouverture (avant même le choix du
+  // client) : c'est la même que l'outil d'encaissement, servie par le serveur.
+  frappe.call({
+    method: API + ".banques",
+    callback: (r) => {
+      etat.banques = r.message || [];
+      d.set_df_property("banque", "options", [""].concat(etat.banques).join("\n"));
+    },
+  });
+
   function confirmer(res, v) {
     d.hide();
     const lignes = (res.allocation || []).map((a) => `

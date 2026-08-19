@@ -92,6 +92,16 @@ def recherche_client(doctype, txt, searchfield, start, page_len, filters):
 
 
 @frappe.whitelist()
+def banques():
+    """La MÊME liste déroulante de banques que l'outil d'encaissement (les options du
+    champ banque de « Liste des Dettes client ») — une seule source, jamais deux listes."""
+    frappe.only_for(ROLES)
+    options = (frappe.get_meta("Liste des Dettes client")
+               .get_field("banque").options or "").split("\n")
+    return [b for b in options if b.strip()]
+
+
+@frappe.whitelist()
 def dettes_client(client):
     """Les dettes du client et leur commande, pour l'affichage du dialogue."""
     frappe.only_for(ROLES)
