@@ -29,7 +29,12 @@ factures) :
     réglée sans dette = rien à planifier ;
   - « Livraison sans tâche » exige qu'un paiement lié soit encore sur un
     compte d'ATTENTE (Livraison Aramex ou Dettes) : tout encaissé = la
-    livraison a eu lieu, l'alerte n'apprend rien.
+    livraison a eu lieu, l'alerte n'apprend rien ;
+  - « Tâche ouverte en retard » d'une commande SOLDÉE (aucun paiement lié en
+    attente) : la tâche est FERMÉE automatiquement (Completed) — l'intervention
+    a eu lieu, elle n'avait simplement pas été clôturée. Voir
+    fermer_taches_soldees(), appelée par la resynchronisation nocturne et par
+    le hook Payment Entry.
 
 Le motif est stocké dans le champ `custom_anomalie` de la commande, pour être
 filtrable et triable dans la liste et exploitable en rapport. Il est maintenu
@@ -264,6 +269,57 @@ def recalculer(noms):
     return _stocker(_calculer("so.name IN %(noms)s", {"noms": tuple(noms)}))
 
 
+def fermer_taches_soldees(noms=None):
+    """
+    Ferme (Completed) les tâches ouvertes EN RETARD des commandes SOLDÉES.
+
+    Décision utilisateur (19/08/2026) : si aucun paiement lié à la commande ou
+    à ses factures n'attend sur Dettes / Livraison Aramex, tout est encaissé —
+    l'intervention a manifestement eu lieu, la tâche n'a simplement jamais été
+    clôturée. On la ferme, et la commande sort du motif « Tâche ouverte en
+    retard » par le recalcul que la clôture déclenche (on_tache_change).
+
+    Même plancher que les anomalies : les commandes antérieures au 01/07/2026
+    ne sont pas touchées. `noms` restreint à quelques commandes (hook paiement)
+    ; sans lui, toute la base (resynchronisation nocturne, patch).
+    """
+    clause = "so.name = t.commande_client"
+    params = _params()
+    if noms:
+        noms = [n for n in noms if n]
+        if not noms:
+            return 0
+        clause += " AND so.name IN %(noms)s"
+        params["noms"] = tuple(noms)
+
+    taches = frappe.db.sql(
+        f"""
+        SELECT t.name FROM `tabTache de travail` t
+        WHERE t.status = 'Open' AND t.starts_on < CURDATE()
+          AND EXISTS (
+            SELECT 1 FROM `tabSales Order` so
+            WHERE {clause}
+              AND so.docstatus < 2
+              AND so.transaction_date >= %(date_debut)s
+              AND NOT {_PAIEMENT_ATTENTE})
+        """,
+        params,
+    )
+
+    fermees = 0
+    for (nom,) in taches:
+        try:
+            tache = frappe.get_doc("Tache de travail", nom)
+            tache.status = "Completed"
+            # save() déclenche on_tache_change -> recalcul de l'anomalie de la commande.
+            tache.flags.ignore_permissions = True
+            tache.save()
+            fermees += 1
+        except Exception:
+            _sur_erreur(nom)
+    return fermees
+
+
 def recalculer_tout():
     """
     Recalcule toutes les commandes non annulées.
@@ -274,6 +330,8 @@ def recalculer_tout():
     """
     if not frappe.db.has_column("Sales Order", CHAMP):
         return 0
+    # D'abord les clôtures automatiques : elles changent le motif des commandes.
+    fermer_taches_soldees()
     modifiees = _stocker(_calculer("so.docstatus < 2"))
     frappe.db.commit()
     return modifiees
@@ -406,6 +464,8 @@ def on_payment_entry_change(doc, method=None):
     if not noms:
         return
     try:
+        # L'encaissement qui solde la commande peut aussi clôturer ses tâches en retard.
+        fermer_taches_soldees(list(noms))
         recalculer(list(noms))
     except Exception:
         _sur_erreur(", ".join(noms))
