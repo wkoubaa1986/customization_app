@@ -178,6 +178,11 @@ def etat(caisse, date):
     theorique = flt(ouverture + m["encaissements_especes"] - m["depenses_especes"], 3)
     deja = frappe.db.get_value("Cloture Caisse",
                                {"caisse": caisse, "date_cloture": date, "docstatus": 1})
+    pdf_url = None
+    if deja:
+        pdf_url = frappe.db.get_value(
+            "File", {"attached_to_doctype": "Cloture Caisse", "attached_to_name": deja,
+                     "file_name": ["like", "%.pdf"]}, "file_url")
     return {
         "caisse": caisse, "date": str(date),
         "controles": _controles(m["data"]),
@@ -188,6 +193,7 @@ def etat(caisse, date):
         "total_cheques": m["total_cheques"],
         "total_autres_modes": m["total_autres_modes"],
         "deja_validee": deja,
+        "pdf_url": pdf_url,
     }
 
 

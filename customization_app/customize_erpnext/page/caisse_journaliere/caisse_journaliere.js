@@ -1080,9 +1080,16 @@ function rcj_cloture(rapport) {
     callback: (r) => {
       const e = r.message || {};
       if (e.deja_validee) {
-        frappe.msgprint(__("La caisse « {0} » du {1} est déjà validée : {2}",
-          [caisse, frappe.datetime.str_to_user(d1),
-           `<a href="/app/cloture-caisse/${encodeURIComponent(e.deja_validee)}">${e.deja_validee}</a>`]));
+        frappe.msgprint({
+          title: __("Caisse déjà validée"),
+          indicator: "green",
+          message: __("La caisse « {0} » du {1} est validée : {2}{3}",
+            [caisse, frappe.datetime.str_to_user(d1),
+             `<a href="/app/cloture-caisse/${encodeURIComponent(e.deja_validee)}">${e.deja_validee}</a>`,
+             e.pdf_url
+               ? ` — <a href="${e.pdf_url}" target="_blank"><b>📄 ${__("Ouvrir le PDF")}</b></a>`
+               : ""]),
+        });
         return;
       }
       const fmt = (v) => format_currency(v || 0, "TND");
