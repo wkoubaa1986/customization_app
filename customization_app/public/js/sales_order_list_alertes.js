@@ -34,20 +34,21 @@ frappe.provide("frappe.views");
             .list-row-container.so-alerte-orange:hover,
             .list-row-container.so-alerte-violet:hover,
             .list-row-container.so-alerte-jaune:hover { filter: brightness(0.97); }
-            /* Les pastilles vivent DANS la cellule « Nom du client » : une cellule de la
-               grille absorbe son contenu sans toucher aux largeurs des autres colonnes.
-               En sœur des colonnes (.level-left), elles devenaient un item flex de plus
-               et décalaient toute la ligne.
-               La cellule sujet est un flex : SANS flex-shrink:0, la pastille rétrécissait
-               avant le nom (il ne restait que « T… »). Ici c'est l'inverse : la pastille
-               garde sa largeur (plafonnée à 60 % de la cellule) et c'est le NOM, déjà en
-               ellipsis chez Frappe, qui se tronque si la place manque. */
-            .list-subject .so-alerte-pastille,
-            .list-subject .so-appels-pastille { flex: 0 0 auto; }
+            /* La pastille d'anomalie s'affiche SOUS le nom du client (décision 19/08) :
+               la cellule sujet est trop étroite pour porter nom + libellé sur une ligne —
+               en sœur des colonnes elle décalait la grille, inline elle se faisait
+               écraser en « T… ». Deuxième ligne : la cellule passe en flex-wrap, la
+               pastille occupe toute la largeur (flex-basis 100 %), et SEULES les lignes
+               à anomalie prennent une hauteur auto — les autres gardent la leur. */
+            .list-row-container.so-avec-alerte .list-row { height: auto; min-height: 40px;
+                padding-top: 4px; padding-bottom: 4px; }
+            .list-row-container.so-avec-alerte .list-subject { flex-wrap: wrap; }
+            .list-subject .so-alerte-ligne2 { flex: 0 0 100%; margin-left: 24px;
+                margin-top: 2px; line-height: 1.2; min-width: 0; }
             .so-alerte-pastille {
-                display: inline-block; margin-left: 8px; padding: 1px 7px;
+                display: inline-block; padding: 1px 7px;
                 border-radius: 10px; font-size: 11px; white-space: nowrap;
-                max-width: 60%; overflow: hidden; text-overflow: ellipsis;
+                max-width: 100%; overflow: hidden; text-overflow: ellipsis;
                 vertical-align: middle;
             }
             .so-alerte-pastille.rouge  { background: #fbd5d0; color: #922b21; }
@@ -60,6 +61,7 @@ frappe.provide("frappe.views");
                 display: inline-block; margin-left: 8px; padding: 1px 7px;
                 border-radius: 10px; font-size: 11px; white-space: nowrap;
                 background: #e2e8f0; color: #334155; vertical-align: middle;
+                flex: 0 0 auto;
             }
             .so-appels-pastille.deux { background: #cbd5e1; color: #1e293b; font-weight: 600; }
         `;
@@ -84,8 +86,8 @@ frappe.provide("frappe.views");
         // Le rendu est rejoué au tri, au filtrage et au changement de page :
         // sans nettoyage, les pastilles s'empileraient et la couleur
         // précédente resterait.
-        $ligne.removeClass(TOUTES_CLASSES);
-        $ligne.find(".so-alerte-pastille, .so-appels-pastille").remove();
+        $ligne.removeClass(TOUTES_CLASSES + " so-avec-alerte");
+        $ligne.find(".so-alerte-ligne2, .so-alerte-pastille, .so-appels-pastille").remove();
     }
 
     function _peindre(lignes) {
@@ -100,11 +102,11 @@ frappe.provide("frappe.views");
                 : $ligne.find(".level-left").first());
 
             if (info.libelle) {
-                $ligne.addClass(CLASSES[info.couleur]);
+                $ligne.addClass(CLASSES[info.couleur] + " so-avec-alerte");
                 $cible.append(
-                    `<span class="so-alerte-pastille ${info.couleur}"
+                    `<div class="so-alerte-ligne2"><span class="so-alerte-pastille ${info.couleur}"
                            title="${frappe.utils.escape_html(info.libelle)}">${
-                        frappe.utils.escape_html(info.libelle)}</span>`
+                        frappe.utils.escape_html(info.libelle)}</span></div>`
                 );
             }
 
