@@ -202,6 +202,7 @@ class RapportCaisseJournaliere {
     this._render_employees();
     this._render_recap();
     this._render_anciens();
+    this._render_depenses();
     if ($("#rcj-chart-section").is(":visible")) this._render_chart();
   }
 
@@ -228,6 +229,19 @@ class RapportCaisseJournaliere {
     modes.forEach(m => {
       $k.append(this._kpi_card(m, (recap.par_mode || {})[m] || 0, RCJ_KPI_BG[m] || "#5b6472"));
     });
+    // La caisse dépense aussi : total des dépenses saisies, et solde espèces NET
+    // (espèces encaissées − dépenses en espèces) — le liquide réellement en caisse.
+    const dep = this._data.depenses || { total: 0, par_mode: {}, lignes: [] };
+    if (dep.lignes.length) {
+      $k.append(this._kpi_card("Dépenses caisse", dep.total, "#7b241c",
+        dep.lignes.length + " dépense(s)"));
+    }
+    const esp_in = (recap.par_mode || {})["Espèces"] || 0;
+    const esp_out = (dep.par_mode || {})["Espèces"] || 0;
+    if (esp_in || esp_out) {
+      $k.append(this._kpi_card("Solde espèces (net)", esp_in - esp_out, "#1d6f42",
+        this._fmt(esp_in) + " reçus − " + this._fmt(esp_out) + " dépensés"));
+    }
   }
 
   _kpi_card(label, value, bg, sub) {
@@ -976,3 +990,41 @@ function rcj_depense(rapport) {
   basculer_facture();
   basculer_cheque();
 }
+
+
+RapportCaisseJournaliere.prototype._render_depenses = function () {
+  const esc = frappe.utils.escape_html;
+  const dep = this._data.depenses || {};
+  const rows = dep.lignes || [];
+  const $c = $("#rcj-depenses").empty();
+  if (!rows.length) return;
+
+  const par_mode = Object.entries(dep.par_mode || {})
+    .map(([m, v]) => `${esc(m)} : <b>${this._fmt(v)}</b>`).join(" · ");
+  const body = rows.map((l) => {
+    const style = RCJ_MODE[l.mode] || { bg: "#eee", fg: "#333" };
+    return `<tr>
+      <td style="white-space:nowrap">${frappe.datetime.str_to_user(l.date)}</td>
+      <td>${esc(l.saisi_par || "")}</td>
+      <td>${esc(l.type || "")}</td>
+      <td>${esc(l.description || "")}</td>
+      <td><span class="rcj-badge" style="background:${style.bg};color:${style.fg}">${esc(l.mode)}</span></td>
+      <td style="text-align:right;font-weight:700">${this._fmt(l.montant)}</td>
+      <td><a href="/app/journal-entry/${encodeURIComponent(l.name)}" target="_blank">${esc(l.name)}</a></td>
+    </tr>`;
+  }).join("");
+
+  $c.html(`
+    <div class="rcj-recap">
+      <div class="rcj-recap-head" style="background:linear-gradient(90deg,#7b241c,#a93226)">
+        🧾 Dépenses de la caisse — ${this._fmt(dep.total)} DT
+        <span style="font-weight:400;font-size:12px;margin-left:10px">${par_mode}</span>
+      </div>
+      <div style="overflow-x:auto"><table class="rcj-recap-tbl" style="min-width:760px">
+        <thead><tr><th style="text-align:left">Date</th><th style="text-align:left">Saisie par</th>
+          <th style="text-align:left">Type</th><th style="text-align:left">Description</th>
+          <th style="text-align:left">Mode</th><th>Montant</th><th style="text-align:left">Écriture</th></tr></thead>
+        <tbody>${body}</tbody>
+      </table></div>
+    </div>`);
+};

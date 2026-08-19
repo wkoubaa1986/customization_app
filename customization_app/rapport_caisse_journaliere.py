@@ -5,6 +5,8 @@ Porte la logique de l'ancien Script Report vers une API whitelisted qui renvoie
 du JSON structuré, rendu par une Page Desk (customize_erpnext/page/rapport_caisse_journaliere).
 """
 
+import re
+
 import frappe
 from frappe.utils import flt, getdate
 
@@ -364,6 +366,43 @@ def _paiements_anciennes_commandes(d1, d2, exclude_names):
 
 
 @frappe.whitelist()
+def _depenses_caisse(d1, d2, noms_par_user):
+    """Les dépenses saisies en caisse (écritures « Dépense caisse — … ») sur la
+    période, attribuées à leur AUTEUR. Le mode se lit sur l'écriture elle-même :
+    crédit Espèces -> Espèces ; « Chq N° » en remarque -> Chèque ; sinon carte."""
+    rows = frappe.db.sql(
+        """SELECT je.name, je.posting_date, je.owner, je.cheque_no, je.user_remark,
+                  je.total_debit,
+                  (SELECT jea.account FROM `tabJournal Entry Account` jea
+                   WHERE jea.parent = je.name AND jea.credit_in_account_currency > 0
+                   ORDER BY jea.idx LIMIT 1) AS compte_credit
+           FROM `tabJournal Entry` je
+           WHERE je.docstatus = 1 AND je.posting_date BETWEEN %s AND %s
+             AND je.cheque_no LIKE 'Dépense caisse —%%'
+           ORDER BY je.posting_date DESC, je.creation DESC""",
+        (d1, d2), as_dict=True)
+    lignes = []
+    for r in rows:
+        remark = r.user_remark or ""
+        if r.compte_credit == "Espèces - A&S":
+            mode = "Espèces"
+        elif "Chq N°" in remark:
+            mode = "Chèque"
+        else:
+            mode = "Carte de crédit"
+        m = re.search(r"Type : (.+)", remark)
+        lignes.append({
+            "name": r.name,
+            "date": str(r.posting_date),
+            "saisi_par": noms_par_user.get(r.owner, r.owner),
+            "type": (m.group(1).strip() if m else ""),
+            "description": (r.cheque_no or "").replace("Dépense caisse — ", ""),
+            "mode": mode,
+            "montant": flt(r.total_debit, 3),
+        })
+    return lignes
+
+
 def get_data(d1, d2, employe=None):
     """Renvoie le rapport de caisse journalière groupé par employé, pour [d1, d2].
 
@@ -540,11 +579,25 @@ def get_data(d1, d2, employe=None):
         })
     recap_par_employe.sort(key=lambda x: x["total"], reverse=True)
 
+    # Les DÉPENSES de la caisse : attribuées à leur auteur, filtrées comme le reste.
+    noms_par_user = {e.user_email: e.employee_name for e in employees if e.user_email}
+    for u in users:
+        noms_par_user.setdefault(u.name, u.full_name)
+    depenses = _depenses_caisse(start_date, end_date, noms_par_user)
+    if employe:
+        depenses = [l for l in depenses if l["saisi_par"] == employe]
+    depenses_par_mode = {}
+    for l in depenses:
+        depenses_par_mode[l["mode"]] = flt(depenses_par_mode.get(l["mode"], 0)) + l["montant"]
+
     return {
         "periode": {"d1": start_date, "d2": end_date},
         "employe": employe or None,
         "employes": noms_disponibles,
         "anciens": anciens,
+        "depenses": {"lignes": depenses,
+                     "total": flt(sum(l["montant"] for l in depenses)),
+                     "par_mode": depenses_par_mode},
         "modes": used_modes,
         "employees": result_employees,
         "recap": {
