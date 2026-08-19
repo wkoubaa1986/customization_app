@@ -329,3 +329,22 @@ def _html_instantane(doc, data):
         "controles": ("<h3>Points de contrôle justifiés</h3><pre style='font-size:11px'>%s</pre>"
                       % esc(doc.controles) if doc.get("controles") else ""),
     }
+
+
+@frappe.whitelist()
+def cloture_info(caisse, date):
+    """La clôture validée de cette caisse à cette date, pour la BANNIÈRE de la
+    page (lecture seule) : nom, PDF, qui, écart. None si pas encore validée."""
+    frappe.only_for(ROLES)
+    caisse = (caisse or "").strip() or CAISSE_GLOBALE
+    row = frappe.db.get_value(
+        "Cloture Caisse",
+        {"caisse": caisse, "date_cloture": getdate(date), "docstatus": 1},
+        ["name", "valide_par", "solde_theorique", "especes_comptees", "ecart"],
+        as_dict=True)
+    if not row:
+        return None
+    row["pdf_url"] = frappe.db.get_value(
+        "File", {"attached_to_doctype": "Cloture Caisse", "attached_to_name": row.name,
+                 "file_name": ["like", "%.pdf"]}, "file_url")
+    return row

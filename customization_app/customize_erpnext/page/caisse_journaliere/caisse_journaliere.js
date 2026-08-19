@@ -184,11 +184,36 @@ class RapportCaisseJournaliere {
       this._data = r.message || {};
       this._peupler_filtre_employe();
       this._render();
+      this._afficher_cloture();
     } catch (e) {
       frappe.msgprint({ title: "Erreur", message: String(e), indicator: "red" });
     } finally {
       this._loading(false);
     }
+  }
+
+  _afficher_cloture() {
+    // Bannière « caisse validée » : visible dès l'ouverture, sans passer par le bouton.
+    const $b = $("#rcj-cloture-banner").hide().empty();
+    const d1 = $("#rcj-d1").val(), d2 = $("#rcj-d2").val();
+    if (!d1 || d1 !== d2) return;   // la clôture porte sur une journée
+    const caisse = $("#rcj-employe").val() || "Tous les employés";
+    frappe.call({
+      method: "customization_app.caisse_cloture.cloture_info",
+      args: { caisse, date: d1 },
+      callback: (r) => {
+        const c = r.message;
+        if (!c) return;
+        const ecart = c.ecart || 0;
+        $b.html(
+          `✅ ${__("Caisse validée")} — <a href="/app/cloture-caisse/${
+            encodeURIComponent(c.name)}">${c.name}</a> · ${__("par")} ${
+            frappe.utils.escape_html(c.valide_par)} · ${__("écart")} ${
+            format_currency(ecart, "TND")}${c.pdf_url
+              ? ` · <a href="${c.pdf_url}" target="_blank"><b>📄 ${__("Ouvrir le PDF")}</b></a>`
+              : ""}`).show();
+      },
+    });
   }
 
   _peupler_filtre_employe() {
