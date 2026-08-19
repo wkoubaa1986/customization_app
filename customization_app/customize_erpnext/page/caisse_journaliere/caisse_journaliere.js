@@ -48,6 +48,10 @@ const RCJ_MODE_ORDER = [
 class RapportCaisseJournaliere {
   constructor(wrapper) {
     this.wrapper = wrapper;
+    // Encaissement des anciennes dettes : le dialogue fabrique un « Encaissement
+    // Paiement » et laisse les scripts maison faire (allocation FIFO, échéanciers,
+    // reliquat de dette, création du paiement).
+    wrapper.page.add_inner_button(__("Encaissement dettes"), () => rcj_encaissement_dettes());
     this._data = null;
     this._all_collapsed = false;
     this._init_defaults();
@@ -510,4 +514,125 @@ class RapportCaisseJournaliere {
   _loading(show) {
     $("#rcj-loading").css("display", show ? "flex" : "none");
   }
+}
+
+// ── Encaissement des anciennes dettes ────────────────────────────────────────
+// Le serveur (customization_app.caisse_encaissement_dettes) plafonne le montant à
+// la somme des dettes et passe par l'Outil d'encaissement : on ne montre ici que
+// la recherche client (nom ou téléphone), les dettes avec leur commande, et
+// l'allocation à confirmer avant soumission.
+function rcj_encaissement_dettes() {
+  const API = "customization_app.caisse_encaissement_dettes";
+  let etat = { total: 0, banques: [] };
+
+  const d = new frappe.ui.Dialog({
+    title: __("Encaissement de dettes"),
+    size: "large",
+    fields: [
+      {
+        fieldtype: "Link", fieldname: "client", options: "Customer",
+        label: __("Client (nom ou n° de téléphone)"), reqd: 1,
+        get_query: () => ({ query: API + ".recherche_client" }),
+        onchange: () => charger(),
+      },
+      { fieldtype: "HTML", fieldname: "liste" },
+      { fieldtype: "Section Break" },
+      { fieldtype: "Currency", fieldname: "montant", label: __("Montant reçu"), reqd: 1 },
+      {
+        fieldtype: "Select", fieldname: "mode", label: __("Mode d'encaissement"),
+        options: "Espèces\nChèque", default: "Espèces", reqd: 1,
+      },
+      { fieldtype: "Column Break" },
+      {
+        fieldtype: "Data", fieldname: "n_cheque", label: __("N° de chèque"),
+        depends_on: 'eval:doc.mode=="Chèque"',
+        mandatory_depends_on: 'eval:doc.mode=="Chèque"',
+      },
+      {
+        fieldtype: "Select", fieldname: "banque", label: __("Banque"),
+        depends_on: 'eval:doc.mode=="Chèque"',
+        mandatory_depends_on: 'eval:doc.mode=="Chèque"',
+      },
+    ],
+    primary_action_label: __("Encaisser"),
+    primary_action(v) {
+      if (!etat.total) {
+        frappe.msgprint(__("Ce client n'a aucune dette encaissable."));
+        return;
+      }
+      if (v.montant > etat.total + 0.001) {
+        frappe.msgprint(__("Le montant dépasse la somme des dettes ({0}).",
+          [format_currency(etat.total, "TND")]));
+        return;
+      }
+      frappe.call({
+        method: API + ".encaisser",
+        args: { client: v.client, montant: v.montant, mode: v.mode,
+                n_cheque: v.n_cheque, banque: v.banque },
+        freeze: true, freeze_message: __("Calcul de l'allocation…"),
+        callback: (r) => confirmer(r.message, v),
+      });
+    },
+  });
+
+  function charger() {
+    const client = d.get_value("client");
+    d.fields_dict.liste.$wrapper.empty();
+    etat = { total: 0, banques: etat.banques };
+    if (!client) return;
+    frappe.call({
+      method: API + ".dettes_client", args: { client },
+      callback: (r) => {
+        const m = r.message || { dettes: [], total: 0, banques: [] };
+        etat = m;
+        d.set_df_property("banque", "options", [""].concat(m.banques).join("\n"));
+        const lignes = (m.dettes || []).map((x) => `
+          <tr><td>${frappe.utils.escape_html(x.paiement)}</td>
+              <td>${x.commande ? frappe.utils.escape_html(x.commande) : "—"}</td>
+              <td>${frappe.datetime.str_to_user(x.date)}</td>
+              <td style="text-align:right">${format_currency(x.montant, "TND")}</td></tr>`).join("");
+        d.fields_dict.liste.$wrapper.html(m.dettes.length ? `
+          <table class="table table-bordered" style="margin-top:8px;font-size:12px">
+            <thead><tr><th>${__("Dette")}</th><th>${__("Commande")}</th>
+                       <th>${__("Date")}</th><th style="text-align:right">${__("Montant")}</th></tr></thead>
+            <tbody>${lignes}</tbody>
+            <tfoot><tr><th colspan="3">${__("Total des dettes")}</th>
+                       <th style="text-align:right">${format_currency(m.total, "TND")}</th></tr></tfoot>
+          </table>` : `<div class="text-muted" style="margin-top:8px">${
+            __("Aucune dette encaissable pour ce client.")}</div>`);
+        d.set_value("montant", m.total);
+      },
+    });
+  }
+
+  function confirmer(res, v) {
+    d.hide();
+    const lignes = (res.allocation || []).map((a) => `
+      <tr><td>${frappe.utils.escape_html(a.paiement)}</td>
+          <td>${a.commande ? frappe.utils.escape_html(a.commande) : "—"}</td>
+          <td style="text-align:right">${format_currency(a.montant, "TND")}</td></tr>`).join("");
+    const corps = `
+      <p>${__("Paiement {0} de {1} — répartition sur les dettes :",
+        [v.mode, format_currency(v.montant, "TND")])}</p>
+      <table class="table table-bordered" style="font-size:12px">
+        <thead><tr><th>${__("Dette consommée")}</th><th>${__("Commande")}</th>
+                   <th style="text-align:right">${__("Montant")}</th></tr></thead>
+        <tbody>${lignes}</tbody></table>
+      ${res.restant > 0.001 ? `<p class="text-muted">${
+        __("Reliquat non couvert : {0} — une dette sera recréée sur la commande concernée.",
+          [format_currency(res.restant, "TND")])}</p>` : ""}`;
+    frappe.confirm(corps, () => {
+      frappe.call({
+        method: API + ".valider", args: { name: res.name },
+        freeze: true, freeze_message: __("Encaissement…"),
+        callback: () => frappe.show_alert(
+          { message: __("Dettes encaissées ({0}).", [res.name]), indicator: "green" }),
+      });
+    }, () => {
+      // Refus : le brouillon ne doit pas rester, il fausserait le prochain calcul.
+      frappe.call({ method: API + ".abandonner", args: { name: res.name } });
+    });
+  }
+
+  d.show();
 }
