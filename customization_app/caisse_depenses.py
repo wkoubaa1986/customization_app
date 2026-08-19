@@ -298,6 +298,58 @@ def _ecriture(lignes, description, remarques):
     return je
 
 
+def _redresser_document(image_bytes):
+    """Le VRAI scan : OpenCV détecte le quadrilatère de la feuille (Canny +
+    contours) et REDRESSE la perspective (warpPerspective) — rendu CamScanner,
+    même sur une photo prise de biais.
+
+    Rend les octets JPEG de l'image redressée, ou None quand aucun quadrilatère
+    franc ne se détache (l'appelant retombe alors sur le rognage Pillow —
+    jamais de justificatif perdu). Dépendance : opencv-python-headless,
+    déclarée dans le pyproject de l'app (entre dans l'image de prod au build)."""
+    try:
+        import cv2
+        import numpy as np
+    except ImportError:
+        return None
+    img = cv2.imdecode(np.frombuffer(image_bytes, np.uint8), cv2.IMREAD_COLOR)
+    if img is None:
+        return None
+    h, w = img.shape[:2]
+    echelle = min(1.0, 700.0 / max(h, w))
+    petit = cv2.resize(img, None, fx=echelle, fy=echelle) if echelle < 1 else img
+    gris = cv2.cvtColor(petit, cv2.COLOR_BGR2GRAY)
+    bords = cv2.Canny(cv2.GaussianBlur(gris, (5, 5), 0), 50, 150)
+    bords = cv2.dilate(bords, np.ones((3, 3), np.uint8))
+    contours, _rien = cv2.findContours(bords, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    quad = None
+    aire_min = 0.25 * petit.shape[0] * petit.shape[1]
+    for c in sorted(contours, key=cv2.contourArea, reverse=True)[:5]:
+        if cv2.contourArea(c) < aire_min:
+            break
+        approx = cv2.approxPolyDP(c, 0.02 * cv2.arcLength(c, True), True)
+        if len(approx) == 4:
+            quad = approx.reshape(4, 2).astype("float32") / echelle
+            break
+    if quad is None:
+        return None
+    somme = quad.sum(axis=1)
+    diff = np.diff(quad, axis=1).ravel()
+    tl, br = quad[np.argmin(somme)], quad[np.argmax(somme)]
+    tr, bl = quad[np.argmin(diff)], quad[np.argmax(diff)]
+    largeur = int(max(np.linalg.norm(br - bl), np.linalg.norm(tr - tl)))
+    hauteur = int(max(np.linalg.norm(tr - br), np.linalg.norm(tl - bl)))
+    if largeur < 200 or hauteur < 200:
+        return None
+    src = np.array([tl, tr, br, bl], dtype="float32")
+    dst = np.array([[0, 0], [largeur - 1, 0], [largeur - 1, hauteur - 1],
+                    [0, hauteur - 1]], dtype="float32")
+    redresse = cv2.warpPerspective(img, cv2.getPerspectiveTransform(src, dst),
+                                   (largeur, hauteur))
+    ok, buf = cv2.imencode(".jpg", redresse, [int(cv2.IMWRITE_JPEG_QUALITY), 92])
+    return buf.tobytes() if ok else None
+
+
 def _rogner_document(img):
     """Rogne la photo au CONTOUR du document : la feuille (claire) se détache du
     fond (plus sombre) — seuillage sur miniature floutée, boîte englobante de la
@@ -339,9 +391,13 @@ def _scan_pdf(image_bytes):
 
     try:
         from PIL import Image, ImageFilter, ImageOps
-        img = Image.open(io.BytesIO(image_bytes))
-        img = ImageOps.exif_transpose(img)          # la photo de téléphone arrive tournée
-        img = _rogner_document(img)                 # ne garder que le document
+        # D'abord le redressement OpenCV (perspective corrigée) ; à défaut, le
+        # rognage Pillow (bords coupés, pas de redressement).
+        redresse = _redresser_document(image_bytes)
+        img = Image.open(io.BytesIO(redresse or image_bytes))
+        if not redresse:
+            img = ImageOps.exif_transpose(img)      # la photo de téléphone arrive tournée
+            img = _rogner_document(img)             # ne garder que le document
         if max(img.size) > 2200:
             img.thumbnail((2200, 2200))
         img = ImageOps.autocontrast(img.convert("L"), cutoff=1)
