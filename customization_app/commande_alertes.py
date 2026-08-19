@@ -19,6 +19,18 @@ construction : « en retard » exige une tâche ouverte, les deux motifs « sans
 tâche » exigent qu'aucune ne soit active, et « annulée » que la dernière le
 soit. Mesuré : aucun chevauchement entre « en retard » et « annulée ».
 
+PLANCHER (décision utilisateur, 19/08/2026) : la surveillance ne s'applique
+qu'aux commandes À PARTIR DU 01/07/2026. L'historique antérieur n'est pas tenu
+à ce régime — son motif se vide au recalcul. Et deux affinages par les
+PAIEMENTS liés (Payment Entry validées allouées à la commande ou à ses
+factures) :
+  - « Main d'œuvre sans tâche » ne se lève pas si la commande (ou une facture)
+    est VALIDÉE et qu'aucun paiement lié n'est parqué en dette : commande
+    réglée sans dette = rien à planifier ;
+  - « Livraison sans tâche » exige qu'un paiement lié soit encore sur un
+    compte d'ATTENTE (Livraison Aramex ou Dettes) : tout encaissé = la
+    livraison a eu lieu, l'alerte n'apprend rien.
+
 Le motif est stocké dans le champ `custom_anomalie` de la commande, pour être
 filtrable et triable dans la liste et exploitable en rapport. Il est maintenu
 par les hooks de Tache de travail, Delivery Note et Sales Order, avec une
@@ -41,6 +53,13 @@ GROUPE_MAIN_OEUVRE = "Main d’œuvre"  # apostrophe typographique U+2019
 GROUPE_LIVRAISON = "Livraison"
 
 MODE_DETTE = "Dette non payée"
+
+# Plancher de surveillance : les commandes antérieures ne portent jamais d'anomalie.
+DATE_DEBUT = "2026-07-01"
+
+# Comptes d'attente des paiements (mêmes conventions que bank_retenue_sync).
+COMPTE_DETTES = "Dettes - A&S"
+COMPTE_ARAMEX = "Livraison Aramex - A&S"
 
 MOTIF_TACHE_RETARD = "Tâche ouverte en retard"
 MOTIF_TACHE_ANNULEE = "Tâche annulée, dette non payée"
@@ -68,11 +87,33 @@ MOTIFS = [
 # Une page de liste Frappe affiche au plus 100 lignes.
 MAX_NOMS = 100
 
+# Paiement validé alloué à la commande OU à l'une de ses factures, sur un compte donné.
+# Le fragment est injecté dans _SQL_MOTIF avec sa condition de compte ({compte}) : la même
+# jointure sert au motif « main d'œuvre » (dette) et au motif « livraison » (attente).
+_SQL_PAIEMENT_LIE = """EXISTS (
+                    SELECT 1 FROM `tabPayment Entry Reference` per
+                    JOIN `tabPayment Entry` pe ON pe.name = per.parent
+                    WHERE pe.docstatus = 1 AND {compte}
+                      AND ((per.reference_doctype = 'Sales Order'
+                            AND per.reference_name = so.name)
+                           OR (per.reference_doctype = 'Sales Invoice'
+                               AND per.reference_name IN (
+                                   SELECT sii2.parent FROM `tabSales Invoice Item` sii2
+                                   WHERE sii2.sales_order = so.name))))"""
+
+_PAIEMENT_DETTE = _SQL_PAIEMENT_LIE.format(compte="pe.paid_to = %(compte_dettes)s")
+_PAIEMENT_ATTENTE = _SQL_PAIEMENT_LIE.format(compte="pe.paid_to IN %(comptes_attente)s")
+
 # Source unique de la règle. %(clause)s restreint le périmètre : une commande,
 # une poignée, ou toute la base.
 _SQL_MOTIF = """
     SELECT so.name,
         CASE
+            -- PLANCHER : la surveillance ne commence qu'au 01/07/2026. Le motif de
+            -- l'historique antérieur se VIDE au recalcul (le plancher doit vivre dans le
+            -- CASE, pas dans le WHERE, sinon les anciens motifs stockés resteraient).
+            WHEN so.transaction_date < %(date_debut)s THEN ''
+
             -- Une intervention dont la date est passée et qui n'a pas été
             -- clôturée. Exclusif des motifs « sans tâche », qui exigent
             -- justement qu'aucune tâche ne soit active.
@@ -102,6 +143,10 @@ _SQL_MOTIF = """
                           AND ps.mode_of_payment = %(mode_dette)s))
             THEN %(motif_tache_annulee)s
 
+            -- Affinage (19/08/2026) : une commande VALIDÉE (elle-même ou par une facture)
+            -- dont aucun paiement lié n'est parqué en dette est réglée — la main d'œuvre
+            -- a été traitée autrement, l'alerte n'apprend rien. On ne garde le motif que
+            -- si la commande n'est pas validée, OU si une dette liée subsiste.
             WHEN NOT EXISTS (
                     SELECT 1 FROM `tabTache de travail` t
                     WHERE t.commande_client = so.name AND t.status <> 'Cancelled')
@@ -109,8 +154,18 @@ _SQL_MOTIF = """
                     SELECT 1 FROM `tabSales Order Item` si
                     JOIN `tabItem` i ON i.name = si.item_code
                     WHERE si.parent = so.name AND i.item_group = %(main_oeuvre)s)
+                 AND NOT (
+                    (so.docstatus = 1
+                     OR EXISTS (
+                        SELECT 1 FROM `tabSales Invoice Item` sii
+                        JOIN `tabSales Invoice` fac ON fac.name = sii.parent
+                        WHERE sii.sales_order = so.name AND fac.docstatus = 1))
+                    AND NOT {paiement_dette})
             THEN %(motif_main_oeuvre)s
 
+            -- Affinage (19/08/2026) : le motif n'a de sens que si un paiement lié attend
+            -- encore sur Livraison Aramex ou Dettes — tout encaissé, la livraison a eu
+            -- lieu, il n'y a rien à planifier.
             WHEN NOT EXISTS (
                     SELECT 1 FROM `tabTache de travail` t
                     WHERE t.commande_client = so.name AND t.status <> 'Cancelled')
@@ -118,6 +173,7 @@ _SQL_MOTIF = """
                     SELECT 1 FROM `tabSales Order Item` si
                     JOIN `tabItem` i ON i.name = si.item_code
                     WHERE si.parent = so.name AND i.item_group = %(livraison)s)
+                 AND {paiement_attente}
             THEN %(motif_livraison)s
 
             WHEN EXISTS (
@@ -137,9 +193,17 @@ _SQL_MOTIF = """
     WHERE {clause}
 """
 
+# Injection des fragments de paiement ; {clause} reste un trou, rempli par _calculer.
+_SQL_MOTIF = _SQL_MOTIF.format(paiement_dette=_PAIEMENT_DETTE,
+                               paiement_attente=_PAIEMENT_ATTENTE,
+                               clause="{clause}")
+
 
 def _params(extra=None):
     p = {
+        "date_debut": DATE_DEBUT,
+        "compte_dettes": COMPTE_DETTES,
+        "comptes_attente": (COMPTE_ARAMEX, COMPTE_DETTES),
         "main_oeuvre": GROUPE_MAIN_OEUVRE,
         "livraison": GROUPE_LIVRAISON,
         "motif_tache_retard": MOTIF_TACHE_RETARD,
@@ -312,3 +376,36 @@ def on_sales_order_change(doc, method=None):
         recalculer([doc.name])
     except Exception:
         _sur_erreur(doc.name)
+
+
+def on_payment_entry_change(doc, method=None):
+    """Un paiement soumis ou annulé change les motifs « sans tâche » de ses commandes.
+
+    Depuis le 19/08/2026, ces deux motifs regardent OÙ sont parqués les paiements liés
+    (dette, comptes d'attente Aramex/Dettes) : l'encaissement d'une dette — qui remplace la
+    Payment Entry — doit requalifier la commande tout de suite, pas à la resynchronisation
+    de 04h00.
+    """
+    noms = set()
+    factures = []
+    for r in doc.get("references") or []:
+        if r.reference_doctype == "Sales Order":
+            noms.add(r.reference_name)
+        elif r.reference_doctype == "Sales Invoice":
+            factures.append(r.reference_name)
+    if factures:
+        noms.update(
+            r[0]
+            for r in frappe.db.sql(
+                """SELECT DISTINCT sii.sales_order FROM `tabSales Invoice Item` sii
+                   WHERE sii.parent IN %(factures)s AND sii.sales_order IS NOT NULL""",
+                {"factures": tuple(factures)},
+            )
+        )
+    noms = {n for n in noms if n}
+    if not noms:
+        return
+    try:
+        recalculer(list(noms))
+    except Exception:
+        _sur_erreur(", ".join(noms))

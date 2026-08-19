@@ -217,6 +217,12 @@ doc_events = {
     "Sales Invoice": {
         "before_insert": "customization_app.facturation_numbering.set_numero_facture",
     },
+    # Les motifs « sans tâche » regardent OÙ sont parqués les paiements liés (19/08/2026) :
+    # un encaissement de dette doit requalifier la commande tout de suite, pas à 04h00.
+    "Payment Entry": {
+        "on_submit": "customization_app.commande_alertes.on_payment_entry_change",
+        "on_cancel": "customization_app.commande_alertes.on_payment_entry_change",
+    },
 }
 
 # Scheduled Tasks
