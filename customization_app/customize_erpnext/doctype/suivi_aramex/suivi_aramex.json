@@ -28,7 +28,15 @@
   "sms_envoye_le",
   "sms_statut",
   "column_break_sms",
-  "sms_destinataires"
+  "sms_destinataires",
+  "section_retour",
+  "retour_recu_le",
+  "retour_par",
+  "retour_montant",
+  "column_break_retour",
+  "retour_bl",
+  "retour_pe",
+  "retour_note"
  ],
  "fields": [
   {
@@ -153,6 +161,54 @@
    "fieldname": "sms_destinataires",
    "fieldtype": "Data",
    "label": "Numero(s) prevenu(s)",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_retour",
+   "fieldtype": "Section Break",
+   "label": "Retour du colis",
+   "description": "Constaté depuis l'écran Livraisons Aramex : photo attachée, BL de retour, paiement dette supprimé."
+  },
+  {
+   "fieldname": "retour_recu_le",
+   "fieldtype": "Datetime",
+   "label": "Retour reçu le",
+   "read_only": 1
+  },
+  {
+   "fieldname": "retour_par",
+   "fieldtype": "Link",
+   "options": "User",
+   "label": "Constaté par",
+   "read_only": 1
+  },
+  {
+   "fieldname": "retour_montant",
+   "fieldtype": "Currency",
+   "precision": "3",
+   "label": "Montant du paiement dette supprimé",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_retour",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "retour_bl",
+   "fieldtype": "Data",
+   "label": "BL de retour",
+   "read_only": 1
+  },
+  {
+   "fieldname": "retour_pe",
+   "fieldtype": "Data",
+   "label": "Paiement dette supprimé",
+   "read_only": 1
+  },
+  {
+   "fieldname": "retour_note",
+   "fieldtype": "Small Text",
+   "label": "Note",
    "read_only": 1
   }
  ],

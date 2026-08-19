@@ -37,6 +37,9 @@ class LivraisonAramex {
       const $p = $(e.currentTarget);
       this._ouvrir($p.data("doctype"), $p.data("name"));
     });
+    this.$root.on("click", "[data-act='retour']", (e) =>
+      this._retour($(e.currentTarget).data("pe"))
+    );
   }
 
   refresh() {
@@ -272,6 +275,93 @@ class LivraisonAramex {
       <div class="ala-menu">
         ${s.url ? `<a href="${esc(s.url)}" target="_blank">${esc(c.reference)} ↗</a>` : esc(c.reference)}
         · ${bouton}
-      </div>`;
+      </div>
+      ${this._retour_chip(c)}`;
+  }
+
+  // Le retour physique : un colis « Returned » porte le bouton tant que le
+  // retour n'est pas constaté ; ensuite, la trace remplace le bouton.
+  _retour_chip(c) {
+    const esc = frappe.utils.escape_html;
+    const r = c.retour || {};
+    if (r.constate) {
+      return `<div class="ala-menu" style="color:var(--ala-gain);font-weight:600">
+        📦 ${__("Retour constaté le {0}", [frappe.datetime.str_to_user(r.constate.split(" ")[0])])}
+        ${r.bl ? ` · ${esc(r.bl)}` : ""}</div>`;
+    }
+    if (r.possible) {
+      return `<button class="btn btn-xs btn-danger" style="margin-top:4px"
+        data-act="retour" data-pe="${esc(c.payment_entry)}">📦 ${__("Retour reçu")}</button>`;
+    }
+    return "";
+  }
+
+  // Photo obligatoire -> BL de retour (stock rentre) + suppression du paiement
+  // dette + commande fermée et marquée « Retour colis ». Une facture validée
+  // BLOQUE : l'avoir se traite à la main.
+  _retour(pe) {
+    const c = (this._data.colis || []).find((x) => x.payment_entry === pe) || {};
+    const esc = frappe.utils.escape_html;
+    let photo = null, photo_nom = null;
+    const d = new frappe.ui.Dialog({
+      title: __("Retour reçu — {0} ({1})", [
+        esc(c.customer_name || ""), format_currency(c.montant || 0, "TND")]),
+      fields: [
+        { fieldtype: "HTML", fieldname: "info" },
+        { fieldtype: "HTML", fieldname: "photo_zone" },
+        { fieldtype: "Small Text", fieldname: "note", label: __("Note (facultatif)") },
+      ],
+      primary_action_label: __("Constater le retour"),
+      primary_action: (v) => {
+        if (!photo) {
+          frappe.msgprint(__("Prenez la photo du colis retourné : c'est la preuve du retour."));
+          return;
+        }
+        frappe.call({
+          method: "customization_app.retour_aramex.constater_retour",
+          args: { payment_entry: pe, photo, photo_nom, note: v.note },
+          freeze: true, freeze_message: __("BL de retour, paiement dette, commande…"),
+          callback: (r) => {
+            d.hide();
+            const m = r.message || {};
+            frappe.msgprint({
+              title: __("Retour constaté"), indicator: "green",
+              message: __("Stock ré-entré ({0}), paiement dette {1} supprimé ({2}), commande {3} fermée et marquée « Retour colis ».",
+                [(m.bls_retour || []).join(", "), esc(m.pe_supprimee || ""),
+                 format_currency(m.montant || 0, "TND"),
+                 `<a href="/app/sales-order/${encodeURIComponent(m.commande)}">${esc(m.commande)}</a>`]),
+            });
+            this.refresh();
+          },
+        });
+      },
+    });
+    d.fields_dict.info.$wrapper.html(`
+      <div style="font-size:12px;margin-bottom:6px">
+        ${__("Bordereau")} <b>${esc(c.reference || "")}</b> ·
+        ${(c.pieces || []).map((p) => esc(`${p.doctype === "Sales Order" ? "Cde" : p.doctype === "Delivery Note" ? "BL" : "Fac"} ${p.name}`)).join(" · ")}
+      </div>
+      <div class="text-muted" style="font-size:11.5px;margin-bottom:8px">
+        ${__("Le stock rentre par un BL de retour, le paiement dette Aramex est supprimé (avec trace sur la commande), la commande est fermée. Une facture validée bloque : avoir à traiter à la main.")}
+      </div>`);
+    const $z = d.fields_dict.photo_zone.$wrapper;
+    $z.html(`
+      <button type="button" class="btn btn-default btn-sm ala-photo-btn">📷 ${__("Photo du colis retourné")}</button>
+      <span class="ala-photo-nom text-muted" style="margin-left:8px"></span>
+      <input type="file" accept="image/*" capture="environment" style="display:none">`);
+    const $input = $z.find("input[type=file]");
+    $z.find(".ala-photo-btn").on("click", () => $input.trigger("click"));
+    $input.on("change", function () {
+      const f = this.files && this.files[0];
+      if (!f) return;
+      const lecteur = new FileReader();
+      lecteur.onload = () => {
+        photo = lecteur.result;
+        photo_nom = f.name;
+        $z.find(".ala-photo-nom").text("✓ " + f.name);
+      };
+      lecteur.readAsDataURL(f);
+    });
+    d.show();
   }
 }

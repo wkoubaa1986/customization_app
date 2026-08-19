@@ -557,6 +557,27 @@ def get_data(from_date=None, to_date=None):
             "alerte": alerte(suivi),
         })
 
+    # Le retour physique du colis : le bouton « 📦 Retour reçu » ne se montre
+    # que sur un suivi qui annonce un retour, et se tait une fois constaté.
+    from customization_app.retour_aramex import _MOTS_RETOUR
+    retours = {r.name: r for r in frappe.get_all(
+        DOCTYPE_SUIVI,
+        filters={"name": ("in", [c["reference"] for c in colis if c["reference"]])},
+        fields=["name", "retour_recu_le", "retour_bl", "retour_montant"])} \
+        if any(c["reference"] for c in colis) else {}
+    for c in colis:
+        s = c.get("suivi") or {}
+        texte = _sans_accent("%s %s" % (
+            s.get("statut") or "",
+            ((s.get("derniere_maj") or {}).get("description")) or ""))
+        r = retours.get(c["reference"])
+        c["retour"] = {
+            "possible": bool(s) and not s.get("livre")
+                        and any(m in texte for m in _MOTS_RETOUR),
+            "constate": str(r.retour_recu_le) if (r and r.retour_recu_le) else None,
+            "bl": (r.retour_bl if r else None),
+        }
+
     return {"periode": {"from": str(depuis), "to": str(jusqu_a)},
             "compte": COMPTE_ARAMEX, "colis": colis, "kpis": kpis(colis),
             "peut_voir_paiement": peut_voir_paiement(), "sms_auto": sms_actif()}

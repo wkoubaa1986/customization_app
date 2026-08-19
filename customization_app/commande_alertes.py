@@ -382,6 +382,11 @@ def get_alertes(noms):
     colonnes = [f"`{CHAMP}` AS motif"]
     if suivi_appels:
         colonnes += [f"`{c}` AS `{c}`" for c in CHAMPS_APPELS.values()]
+    # « Retour colis » (Aramex) : un FAIT constaté, indépendant de l'anomalie
+    # recalculée — il porte sa propre pastille.
+    retour_colis = frappe.db.has_column("Sales Order", "custom_retour_colis")
+    if retour_colis:
+        colonnes += ["`custom_retour_colis` AS retour"]
 
     lignes = frappe.db.sql(
         f"""
@@ -402,6 +407,8 @@ def get_alertes(noms):
             n = nb_appels(r)
             if n:
                 entree["appels"] = n
+        if retour_colis and r.get("retour"):
+            entree["retour"] = 1
         if entree:
             resultat[r.name] = entree
     return resultat

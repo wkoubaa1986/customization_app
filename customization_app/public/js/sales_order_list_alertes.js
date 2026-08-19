@@ -17,7 +17,11 @@ frappe.provide("frappe.views");
         orange: "so-alerte-orange",
         violet: "so-alerte-violet",
         jaune: "so-alerte-jaune",
+        bleu: "so-alerte-bleu",
     };
+    // « Retour colis » (Aramex) : un fait constaté, pastille bleue distincte —
+    // il coexiste avec une éventuelle anomalie sans la remplacer.
+    const LIBELLE_RETOUR = "📦 Retour colis";
     const cache = {};        // nom de commande -> {couleur, libelle} ou null
     let css_pose = false;
 
@@ -30,6 +34,7 @@ frappe.provide("frappe.views");
             .list-row-container.so-alerte-orange { background-color: #fff4e5; }
             .list-row-container.so-alerte-violet { background-color: #f3e8fd; }
             .list-row-container.so-alerte-jaune  { background-color: #fbf8c4; }
+            .list-row-container.so-alerte-bleu   { background-color: #e8f1fd; }
             .list-row-container.so-alerte-rouge:hover,
             .list-row-container.so-alerte-orange:hover,
             .list-row-container.so-alerte-violet:hover,
@@ -58,6 +63,8 @@ frappe.provide("frappe.views");
             .so-alerte-pastille.orange { background: #ffe3bf; color: #9a5b09; }
             .so-alerte-pastille.violet { background: #e9d5ff; color: #6b21a8; }
             .so-alerte-pastille.jaune  { background: #f5ec7a; color: #6b5900; }
+            .so-alerte-pastille.bleu   { background: #cfe3fb; color: #1e5aa8; }
+            .so-alerte-pastille + .so-alerte-pastille { margin-left: 6px; }
             /* Compteur d'appels : volontairement neutre, il coexiste avec une
                pastille d'anomalie sur la même ligne sans lui disputer l'œil. */
             .so-appels-pastille {
@@ -73,6 +80,7 @@ frappe.provide("frappe.views");
             .page-head.so-alerte-orange { background-color: #fff4e5; }
             .page-head.so-alerte-violet { background-color: #f3e8fd; }
             .page-head.so-alerte-jaune  { background-color: #fbf8c4; }
+            .page-head.so-alerte-bleu   { background-color: #e8f1fd; }
             .so-alerte-pastille-fiche { margin-left: 8px; font-size: 11px; }
         `;
         document.head.appendChild(style);
@@ -111,13 +119,20 @@ frappe.provide("frappe.views");
                 ? $ligne.find(".list-subject").first()
                 : $ligne.find(".level-left").first());
 
+            const pastilles = [];
             if (info.libelle) {
-                $ligne.addClass(CLASSES[info.couleur] + " so-avec-alerte");
-                $cible.append(
-                    `<div class="so-alerte-ligne2"><span class="so-alerte-pastille ${info.couleur}"
-                           title="${frappe.utils.escape_html(info.libelle)}">${
-                        frappe.utils.escape_html(info.libelle)}</span></div>`
-                );
+                pastilles.push(`<span class="so-alerte-pastille ${info.couleur}"
+                       title="${frappe.utils.escape_html(info.libelle)}">${
+                    frappe.utils.escape_html(info.libelle)}</span>`);
+            }
+            if (info.retour) {
+                pastilles.push(`<span class="so-alerte-pastille bleu"
+                       title="${LIBELLE_RETOUR}">${LIBELLE_RETOUR}</span>`);
+            }
+            if (pastilles.length) {
+                // La couleur de fond : l'anomalie d'abord, le retour sinon.
+                $ligne.addClass(CLASSES[info.libelle ? info.couleur : "bleu"] + " so-avec-alerte");
+                $cible.append(`<div class="so-alerte-ligne2">${pastilles.join("")}</div>`);
             }
 
             if (info.appels) {
@@ -214,17 +229,28 @@ frappe.provide("frappe.views");
             $wrapper.find(".so-alerte-pastille-fiche").remove();
 
             const motif = frm.doc.custom_anomalie;
-            if (!motif) return;
-            const couleur = LIBELLE_COULEUR[motif] || "orange";
+            const retour = !!frm.doc.custom_retour_colis;
+            if (!motif && !retour) return;
+            // Le bandeau prend la couleur de l'anomalie ; à défaut, le bleu du
+            // retour de colis (« en haut : retour de colis », décision 19/08).
+            const couleur = motif ? (LIBELLE_COULEUR[motif] || "orange") : "bleu";
             $head.addClass(CLASSES[couleur]);
 
-            const pastille = `<span class="so-alerte-pastille so-alerte-pastille-fiche ${couleur}"
-                title="${frappe.utils.escape_html(motif)}">${frappe.utils.escape_html(motif)}</span>`;
+            let pastilles = "";
+            if (motif) {
+                pastilles += `<span class="so-alerte-pastille so-alerte-pastille-fiche ${
+                    LIBELLE_COULEUR[motif] || "orange"}"
+                    title="${frappe.utils.escape_html(motif)}">${frappe.utils.escape_html(motif)}</span>`;
+            }
+            if (retour) {
+                pastilles += `<span class="so-alerte-pastille so-alerte-pastille-fiche bleu"
+                    title="${LIBELLE_RETOUR}">${LIBELLE_RETOUR}</span>`;
+            }
             const $statut = $wrapper.find(".title-area .indicator-pill").first();
             if ($statut.length) {
-                $statut.after(pastille);
+                $statut.after(pastilles);
             } else {
-                $wrapper.find(".title-area").first().append(pastille);
+                $wrapper.find(".title-area").first().append(pastilles);
             }
         },
     });

@@ -23,3 +23,4 @@ customization_app.patches.anomalies_plancher_juillet_et_paiements
 customization_app.patches.ensure_allocation_manuelle_field
 customization_app.patches.ensure_exclu_caisse_field
 customization_app.patches.ensure_remise_banque_field
+customization_app.patches.ensure_retour_colis_field
