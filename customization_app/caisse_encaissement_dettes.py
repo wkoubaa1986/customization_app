@@ -66,12 +66,16 @@ def _dettes(client):
         r.commande = r.commande or (r.reference_no or "").strip()
         r.commande_doctype = ""
         r.commande_ttc = 0.0
+        r.commande_date = ""
         if r.commande:
-            for dt in ("Sales Order", "Sales Invoice"):
-                ttc = frappe.db.get_value(dt, r.commande, "grand_total")
-                if ttc is not None:
+            for dt, champ_date in (("Sales Order", "transaction_date"),
+                                   ("Sales Invoice", "posting_date")):
+                meta = frappe.db.get_value(dt, r.commande, ["grand_total", champ_date],
+                                           as_dict=True)
+                if meta:
                     r.commande_doctype = dt
-                    r.commande_ttc = flt(ttc, 3)
+                    r.commande_ttc = flt(meta.grand_total, 3)
+                    r.commande_date = str(meta.get(champ_date) or "")
                     break
     return rows
 
@@ -123,6 +127,7 @@ def dettes_client(client):
     return {
         "dettes": [{"paiement": r.name, "commande": r.commande,
                     "commande_doctype": r.commande_doctype, "commande_ttc": r.commande_ttc,
+                    "commande_date": r.commande_date,
                     "date": str(r.posting_date), "montant": r.montant, "compte": r.paid_to}
                    for r in rows],
         "total": round(sum(r.montant for r in rows), 3),

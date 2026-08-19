@@ -658,20 +658,22 @@ function rcj_encaissement_dettes(rapport) {
               <td>${lien_commande(x)}</td>
               <td style="text-align:right">${x.commande_ttc
                 ? format_currency(x.commande_ttc, "TND") : "—"}</td>
+              <td>${x.commande_date ? frappe.datetime.str_to_user(x.commande_date) : "—"}</td>
               <td>${frappe.datetime.str_to_user(x.date)}</td>
               <td style="text-align:right">${format_currency(x.montant, "TND")}</td></tr>`).join("");
         d.fields_dict.liste.$wrapper.html(etat.dettes.length ? `
           <div style="overflow-x:auto">
-          <table class="table table-bordered" style="margin-top:8px;font-size:12px;min-width:560px">
+          <table class="table table-bordered" style="margin-top:8px;font-size:12px;min-width:640px">
             <thead><tr><th></th><th>${__("Dette")}</th><th>${__("Commande")}</th>
                        <th style="text-align:right">${__("TTC commande")}</th>
-                       <th>${__("Date")}</th>
+                       <th>${__("Date commande")}</th>
+                       <th>${__("Date dette")}</th>
                        <th style="text-align:right">${__("Montant dû")}</th></tr></thead>
             <tbody>${lignes}</tbody>
             <tfoot>
-              <tr><th colspan="5">${__("Total des dettes")}</th>
+              <tr><th colspan="6">${__("Total des dettes")}</th>
                   <th style="text-align:right">${format_currency(m.total, "TND")}</th></tr>
-              <tr><th colspan="5">${__("Total sélectionné")}</th>
+              <tr><th colspan="6">${__("Total sélectionné")}</th>
                   <th style="text-align:right" class="rcj-total-sel">${
                     format_currency(m.total, "TND")}</th></tr>
             </tfoot>
