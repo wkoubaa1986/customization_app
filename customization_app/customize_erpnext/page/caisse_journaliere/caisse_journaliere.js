@@ -48,10 +48,6 @@ const RCJ_MODE_ORDER = [
 class RapportCaisseJournaliere {
   constructor(wrapper) {
     this.wrapper = wrapper;
-    // Encaissement des anciennes dettes : le dialogue fabrique un « Encaissement
-    // Paiement » et laisse les scripts maison faire (allocation FIFO, échéanciers,
-    // reliquat de dette, création du paiement).
-    wrapper.page.add_inner_button(__("Encaissement dettes"), () => rcj_encaissement_dettes());
     this._data = null;
     this._all_collapsed = false;
     this._init_defaults();
@@ -68,6 +64,11 @@ class RapportCaisseJournaliere {
 
   _bind() {
     $("#rcj-refresh").on("click", () => this._fetch());
+    $("#rcj-employe").on("change", () => this._fetch());
+    // Encaissement des anciennes dettes : le dialogue fabrique un « Encaissement
+    // Paiement » et laisse les scripts maison faire (allocation FIFO, échéanciers,
+    // reliquat de dette, création du paiement).
+    $("#rcj-btn-dettes").on("click", () => rcj_encaissement_dettes());
     $("#rcj-toggle-all").on("click", () => this._toggle_all());
     $("#rcj-chart-btn").on("click", () => this._toggle_chart());
     $("#rcj-chart-close").on("click", () => $("#rcj-chart-section").hide());
@@ -161,15 +162,31 @@ class RapportCaisseJournaliere {
     try {
       const r = await frappe.call({
         method: "customization_app.rapport_caisse_journaliere.get_data",
-        args: { d1, d2 },
+        args: { d1, d2, employe: $("#rcj-employe").val() || "" },
       });
       this._data = r.message || {};
+      this._peupler_filtre_employe();
       this._render();
     } catch (e) {
       frappe.msgprint({ title: "Erreur", message: String(e), indicator: "red" });
     } finally {
       this._loading(false);
     }
+  }
+
+  _peupler_filtre_employe() {
+    // La liste vient du serveur (tous les noms, même quand on filtre) ; la sélection
+    // courante est conservée d'un rafraîchissement à l'autre.
+    const $sel = $("#rcj-employe");
+    const courant = this._data.employe || $sel.val() || "";
+    const noms = this._data.employes || [];
+    if ($sel.data("peuple") !== noms.join("|")) {
+      $sel.data("peuple", noms.join("|"));
+      $sel.empty().append(`<option value="">${__("Tous les employés")}</option>`);
+      noms.forEach((n) => $sel.append(
+        `<option value="${frappe.utils.escape_html(n)}">${frappe.utils.escape_html(n)}</option>`));
+    }
+    $sel.val(courant);
   }
 
   _render() {

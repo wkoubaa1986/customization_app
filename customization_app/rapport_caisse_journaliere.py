@@ -319,9 +319,15 @@ def _paiements_anciennes_commandes(d1, d2, exclude_names):
 
 
 @frappe.whitelist()
-def get_data(d1, d2):
-    """Renvoie le rapport de caisse journalière groupé par employé, pour [d1, d2]."""
+def get_data(d1, d2, employe=None):
+    """Renvoie le rapport de caisse journalière groupé par employé, pour [d1, d2].
+
+    `employe` (nom affiché) restreint le rapport à UNE caisse : chaque employé peut
+    traiter la sienne, la supervision garde « Tous ». La liste complète des noms est
+    toujours retournée (`employes`) pour alimenter la liste déroulante du filtre.
+    """
     start_date, end_date = d1, d2
+    employe = (employe or "").strip()
 
     employees = frappe.db.sql(
         """SELECT e.name AS employee_id, e.employee_name, e.user_id AS user_email
@@ -387,8 +393,15 @@ def get_data(d1, d2):
             "nb_commandes": len(orders),
         })
 
+    # La liste déroulante du filtre montre TOUT le monde, même quand on filtre.
+    noms_disponibles = sorted(
+        {e.employee_name for e in employees if e.employee_name}
+        | {u.full_name for u in users if u.full_name}
+    )
+
     for emp in employees:
-        process(emp.employee_name, emp.employee_id, emp.user_email)
+        if not employe or emp.employee_name == employe:
+            process(emp.employee_name, emp.employee_id, emp.user_email)
         if emp.user_email:
             processed_users.add(emp.user_email)
 
@@ -396,7 +409,8 @@ def get_data(d1, d2):
         if u.name in processed_users:
             continue
         processed_users.add(u.name)
-        process(u.full_name, None, u.name)
+        if not employe or u.full_name == employe:
+            process(u.full_name, None, u.name)
 
     # paiements encaissés sur la période mais hors commandes du rapport
     # (= règlements d'anciennes commandes à tracer dans la caisse du jour)
@@ -406,6 +420,17 @@ def get_data(d1, d2):
             for p in o["payments"]:
                 seen_pes.add(p["name"])
     anciens = _paiements_anciennes_commandes(start_date, end_date, seen_pes)
+    # Le filtre par caisse s'applique aussi aux encaissements d'anciennes commandes :
+    # chacun est attribué à l'employé qui l'a SAISI.
+    if employe:
+        anciens["paiements"] = [p for p in anciens["paiements"]
+                                if (p.get("saisi_par") or "—") == employe]
+        par_mode_filtre = {}
+        for p in anciens["paiements"]:
+            m = p["mode"] or "—"
+            par_mode_filtre[m] = flt(par_mode_filtre.get(m, 0)) + flt(p["amount"])
+        anciens["par_mode"] = par_mode_filtre
+        anciens["total"] = flt(sum(par_mode_filtre.values()))
 
     # Ces encaissements comptent dans le récap : chaque paiement est attribué
     # à l'employé qui l'a SAISI, sous son mode de paiement (et entre donc dans
@@ -455,6 +480,8 @@ def get_data(d1, d2):
 
     return {
         "periode": {"d1": start_date, "d2": end_date},
+        "employe": employe or None,
+        "employes": noms_disponibles,
         "anciens": anciens,
         "modes": used_modes,
         "employees": result_employees,
