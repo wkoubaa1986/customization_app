@@ -243,11 +243,11 @@ def creer(type_depense, montant, mode, compte=None, description=None, fournisseu
             "description": description,
         })
         fiche.insert(ignore_permissions=True)
-        _attacher(photo_facture, photo_facture_nom or "facture.jpg",
-                  "Facture Achat a Saisir", fiche.name)
+        _attacher_scan(photo_facture, "facture-%s" % fiche.name,
+                       "Facture Achat a Saisir", fiche.name)
         if je:
-            _attacher(photo_facture, photo_facture_nom or "facture.jpg",
-                      "Journal Entry", je.name)
+            _attacher_scan(photo_facture, "facture-%s" % fiche.name,
+                           "Journal Entry", je.name)
         resultat = {"name": je.name if je else None, "fiche": fiche.name}
     else:
         compte = (compte or "").strip() or COMPTE_DEPENSE_DEFAUT
@@ -272,8 +272,8 @@ def creer(type_depense, montant, mode, compte=None, description=None, fournisseu
                            "cost_center": CC})
         je = _ecriture(lignes, description, remarques)
         if photo_facture:
-            _attacher(photo_facture, photo_facture_nom or "facture.jpg",
-                      "Journal Entry", je.name)
+            _attacher_scan(photo_facture, "facture-%s" % je.name,
+                           "Journal Entry", je.name)
         resultat = {"name": je.name, "fiche": None}
 
     if photo_cheque and je:
@@ -296,6 +296,43 @@ def _ecriture(lignes, description, remarques):
     je.insert(ignore_permissions=True)
     je.submit()
     return je
+
+
+def _scan_pdf(image_bytes):
+    """La photo du justificatif devient un PDF façon SCANNER : niveaux de gris,
+    contraste étiré, netteté, taille bornée — lisible et léger, sans dépendance
+    nouvelle (Pillow est déjà dans Frappe ; le recadrage de perspective exigerait
+    OpenCV, écarté pour ne pas reconstruire l'image de prod).
+    Rend les octets du PDF, ou None si l'image est illisible (on garde alors la
+    photo brute)."""
+    import io
+
+    try:
+        from PIL import Image, ImageFilter, ImageOps
+        img = Image.open(io.BytesIO(image_bytes))
+        img = ImageOps.exif_transpose(img)          # la photo de téléphone arrive tournée
+        if max(img.size) > 2200:
+            img.thumbnail((2200, 2200))
+        img = ImageOps.autocontrast(img.convert("L"), cutoff=1)
+        img = img.filter(ImageFilter.SHARPEN)
+        sortie = io.BytesIO()
+        img.save(sortie, format="PDF", resolution=150.0)
+        return sortie.getvalue()
+    except Exception:
+        return None
+
+
+def _attacher_scan(photo, nom_base, doctype, name):
+    """Attache le justificatif en PDF scanné ; repli sur la photo brute si la
+    conversion échoue."""
+    from frappe.utils.file_manager import save_file
+
+    contenu, _mt = _decoder(photo)
+    pdf = _scan_pdf(contenu)
+    if pdf:
+        save_file("%s.pdf" % nom_base, pdf, doctype, name, is_private=1)
+    else:
+        save_file("%s.jpg" % nom_base, contenu, doctype, name, is_private=1)
 
 
 def _attacher(photo, nom, doctype, name):
