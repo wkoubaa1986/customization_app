@@ -320,6 +320,22 @@ def fermer_taches_soldees(noms=None):
     return fermees
 
 
+@frappe.whitelist()
+def resynchroniser():
+    """
+    Bouton « Mettre à jour les anomalies » de la vue liste des commandes.
+
+    Rejoue TOUTE la logique, actions comprises — pas un simple recalcul de
+    libellé : les tâches en retard des commandes soldées sont FERMÉES (ce qui
+    modifie les commandes), puis chaque commande est requalifiée.
+    """
+    frappe.only_for(("System Manager", "Accounts Manager", "Sales Manager"))
+    fermees = fermer_taches_soldees()
+    modifiees = _stocker(_calculer("so.docstatus < 2"))
+    frappe.db.commit()
+    return {"fermees": fermees, "modifiees": modifiees}
+
+
 def recalculer_tout():
     """
     Recalcule toutes les commandes non annulées.

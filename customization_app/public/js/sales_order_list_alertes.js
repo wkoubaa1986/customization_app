@@ -67,6 +67,13 @@ frappe.provide("frappe.views");
                 flex: 0 0 auto;
             }
             .so-appels-pastille.deux { background: #cbd5e1; color: #1e293b; font-weight: 600; }
+            /* Fiche : le bandeau de titre prend la couleur de l'anomalie, la pastille
+               s'affiche à côté du statut (Brouillon, À facturer…). */
+            .page-head.so-alerte-rouge  { background-color: #fdecea; }
+            .page-head.so-alerte-orange { background-color: #fff4e5; }
+            .page-head.so-alerte-violet { background-color: #f3e8fd; }
+            .page-head.so-alerte-jaune  { background-color: #fbf8c4; }
+            .so-alerte-pastille-fiche { margin-left: 8px; font-size: 11px; }
         `;
         document.head.appendChild(style);
     }
@@ -151,14 +158,74 @@ frappe.provide("frappe.views");
         });
     }
 
+    function _poser_bouton(listview) {
+        // « Mettre à jour les anomalies » : rejoue TOUTE la logique côté serveur, actions
+        // comprises (clôture des tâches des commandes soldées), puis requalifie tout.
+        if (listview.__so_bouton_anomalies) return;
+        listview.__so_bouton_anomalies = true;
+        listview.page.add_inner_button(__("Mettre à jour les anomalies"), () => {
+            frappe.call({
+                method: "customization_app.commande_alertes.resynchroniser",
+                freeze: true,
+                freeze_message: __("Recalcul des anomalies…"),
+                callback: (r) => {
+                    const m = r.message || {};
+                    frappe.show_alert({
+                        message: __("{0} tâche(s) clôturée(s), {1} commande(s) requalifiée(s)",
+                            [m.fermees || 0, m.modifiees || 0]),
+                        indicator: "green",
+                    });
+                    // Le cache par commande est périmé : tout re-demander au re-rendu.
+                    Object.keys(cache).forEach((k) => delete cache[k]);
+                    listview.refresh();
+                },
+            });
+        });
+    }
+
     const _after_render = frappe.views.ListView.prototype.after_render;
     frappe.views.ListView.prototype.after_render = function () {
         _after_render.apply(this, arguments);
         if (this.doctype !== "Sales Order") return;
         try {
+            _poser_bouton(this);
             appliquer_alertes(this);
         } catch (e) {
             console.error("Alertes commandes client :", e);
         }
     };
+
+    // ── Fiche : bandeau coloré + pastille à côté du statut ──────────────────
+    // ⚠️ Miroir de commande_alertes.COULEURS côté serveur — garder les deux en phase.
+    const LIBELLE_COULEUR = {
+        "Tâche ouverte en retard": "jaune",
+        "Tâche annulée, dette non payée": "violet",
+        "Main d'œuvre sans tâche": "rouge",
+        "Livraison sans tâche": "rouge",
+        "Tâche terminée, commande non soldée": "orange",
+    };
+
+    frappe.ui.form.on("Sales Order", {
+        refresh(frm) {
+            _poser_css();
+            const $wrapper = $(frm.page.wrapper);
+            const $head = $wrapper.find(".page-head").first();
+            $head.removeClass(TOUTES_CLASSES);
+            $wrapper.find(".so-alerte-pastille-fiche").remove();
+
+            const motif = frm.doc.custom_anomalie;
+            if (!motif) return;
+            const couleur = LIBELLE_COULEUR[motif] || "orange";
+            $head.addClass(CLASSES[couleur]);
+
+            const pastille = `<span class="so-alerte-pastille so-alerte-pastille-fiche ${couleur}"
+                title="${frappe.utils.escape_html(motif)}">${frappe.utils.escape_html(motif)}</span>`;
+            const $statut = $wrapper.find(".title-area .indicator-pill").first();
+            if ($statut.length) {
+                $statut.after(pastille);
+            } else {
+                $wrapper.find(".title-area").first().append(pastille);
+            }
+        },
+    });
 })();
