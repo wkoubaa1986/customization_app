@@ -12,19 +12,48 @@ COMPANY = "AquaWorld & Servicing"
 
 # Hors caisse (décision utilisateur 19/08) — exclus par IDENTIFIANTS, jamais par nom
 # (Economiq a deux fiches aux orthographes différentes) :
-#   - Economiq Aqua Solutions : PARTENAIRE, il a son tableau de bord (partenaire-economiq) ;
-#   - Ayman Tekfa : parti / hors équipe ;
-#   - Nizar Maddouri : parti / hors équipe ;
+#   - Ayman Tekfa, Nizar Maddouri : hors équipe ;
 #   - Catalogue POS : compte TECHNIQUE, pas une personne.
 # L'équipe de caisse : Akram, Jamel Aloui, Sadok Bouziri, Mohamed Hedi Chouchane,
 # Nejib Koubaa, Wassim Koubaa.
 EXCLUS_UTILISATEURS = {
-    "economiqaquasolutions23@gmail.com",
     "aymen.tekfa96@gmail.com",
     "aquaworld.commercial@gmail.com",
     "catalogue.pos@aquaworld.com",
 }
-EXCLUS_EMPLOYES = {"HR-EMP-00007", "HR-EMP-00008", "HR-EMP-00009"}
+EXCLUS_EMPLOYES = {"HR-EMP-00008", "HR-EMP-00009"}
+
+# Le PARTENAIRE Economiq : sa caisse n'est visible que de la direction (décision 19/08).
+ECONOMIQ_UTILISATEUR = "economiqaquasolutions23@gmail.com"
+ECONOMIQ_EMPLOYE = "HR-EMP-00007"
+PEUVENT_VOIR_ECONOMIQ = {
+    "koubaawassim@gmail.com",        # Wassim Koubaa
+    "jimmyks007@gmail.com",          # Jamel Aloui
+    "aquaworld.servicing@gmail.com", # Nejib Koubaa
+}
+
+
+def _exclusions():
+    """Exclusions effectives pour l'utilisateur CONNECTÉ : Economiq ne se montre
+    qu'à la direction, les comptes techniques/hors équipe jamais."""
+    exclus_u = set(EXCLUS_UTILISATEURS)
+    exclus_e = set(EXCLUS_EMPLOYES)
+    if frappe.session.user not in PEUVENT_VOIR_ECONOMIQ:
+        exclus_u.add(ECONOMIQ_UTILISATEUR)
+        exclus_e.add(ECONOMIQ_EMPLOYE)
+    return exclus_u, exclus_e
+
+
+def _ma_caisse(employees, users):
+    """Le nom affiché de la caisse de l'utilisateur connecté, s'il en a une."""
+    moi = frappe.session.user
+    for e in employees:
+        if (e.user_email or "") == moi:
+            return e.employee_name
+    for u in users:
+        if u.name == moi:
+            return u.full_name
+    return None
 
 SO_STATUS_FR = {
     "Draft": "Brouillon",
@@ -343,6 +372,9 @@ def get_data(d1, d2, employe=None):
     toujours retournée (`employes`) pour alimenter la liste déroulante du filtre.
     """
     start_date, end_date = d1, d2
+    # `employe` absent (premier chargement) -> la caisse de l'utilisateur CONNECTÉ ;
+    # chaîne vide -> « Tous les employés » choisi explicitement.
+    defaut_demande = employe is None
     employe = (employe or "").strip()
 
     employees = frappe.db.sql(
@@ -409,11 +441,15 @@ def get_data(d1, d2, employe=None):
             "nb_commandes": len(orders),
         })
 
-    # Le partenaire sort des deux listes, quelle que soit la fiche qui le porte.
+    # Exclusions effectives (Economiq n'est visible que de la direction).
+    exclus_u, exclus_e = _exclusions()
     employees = [e for e in employees
-                 if e.employee_id not in EXCLUS_EMPLOYES
-                 and (e.user_email or "") not in EXCLUS_UTILISATEURS]
-    users = [u for u in users if u.name not in EXCLUS_UTILISATEURS]
+                 if e.employee_id not in exclus_e
+                 and (e.user_email or "") not in exclus_u]
+    users = [u for u in users if u.name not in exclus_u]
+
+    if defaut_demande:
+        employe = _ma_caisse(employees, users) or ""
 
     # La liste déroulante du filtre montre TOUT le monde, même quand on filtre.
     noms_disponibles = sorted(

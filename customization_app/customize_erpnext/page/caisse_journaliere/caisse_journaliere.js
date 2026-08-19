@@ -160,10 +160,15 @@ class RapportCaisseJournaliere {
     if (!d1 || !d2) { frappe.msgprint("Veuillez saisir les dates."); return; }
     this._loading(true);
     try {
+      const args = { d1, d2 };
+      if (this._charge_une_fois) {
+        args.employe = $("#rcj-employe").val() || "";
+      }
       const r = await frappe.call({
         method: "customization_app.rapport_caisse_journaliere.get_data",
-        args: { d1, d2, employe: $("#rcj-employe").val() || "" },
+        args,
       });
+      this._charge_une_fois = true;
       this._data = r.message || {};
       this._peupler_filtre_employe();
       this._render();
@@ -187,6 +192,7 @@ class RapportCaisseJournaliere {
         `<option value="${frappe.utils.escape_html(n)}">${frappe.utils.escape_html(n)}</option>`));
     }
     $sel.val(courant);
+    $("#rcj-caisse-nom").text(courant || __("Tous les employés"));
   }
 
   _render() {

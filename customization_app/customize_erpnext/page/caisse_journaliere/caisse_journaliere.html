@@ -88,6 +88,10 @@
     .rcj-muted { color: #9aa2ad; }
     #rcj-loading { display:none; position: fixed; inset: 0; background: rgba(255,255,255,.6);
                    z-index: 9999; align-items: center; justify-content: center; }
+    .rcj-titre-caisse { font-size: 17px; font-weight: 700; margin: 14px 0 10px 2px;
+                        color: var(--text-color, #1f272e); }
+    .rcj-titre-caisse span { color: #c0392b; }
+
     /* ── Mobile : la caisse se manipule au téléphone (photo du chèque, tournées) ── */
     @media (max-width: 768px) {
       .rcj-toolbar { padding: 10px; gap: 8px; }
@@ -131,6 +135,9 @@
       <li><b>⚠️</b> = incohérence sur une commande validée : total des paiements ≠ Total TTC, ou total des BL validés ≠ total des factures. Le détail liste les avertissements.</li>
     </ul>
   </details>
+
+  <!-- La caisse affichée : la sélection saute aux yeux, en rouge -->
+  <div class="rcj-titre-caisse">Caisse : <span id="rcj-caisse-nom">—</span></div>
 
   <!-- Bandeau d’avertissements (dynamique) -->
   <div id="rcj-warn-banner"></div>
