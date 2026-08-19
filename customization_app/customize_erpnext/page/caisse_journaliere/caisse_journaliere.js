@@ -534,13 +534,13 @@ class RapportCaisseJournaliere {
 }
 
 // ── Encaissement des anciennes dettes ────────────────────────────────────────
-// Le serveur (customization_app.caisse_encaissement_dettes) plafonne le montant à
-// la somme des dettes et passe par l'Outil d'encaissement : on ne montre ici que
-// la recherche client (nom ou téléphone), les dettes avec leur commande, et
-// l'allocation à confirmer avant soumission.
+// Le serveur (customization_app.caisse_encaissement_dettes) construit l'allocation
+// sur la SÉLECTION de l'employé (FIFO par date), plafonne le montant à la somme
+// sélectionnée, exige la photo et un numéro à 7 chiffres pour un chèque, puis passe
+// par l'Outil d'encaissement (échéanciers, reliquat, paiement).
 function rcj_encaissement_dettes() {
   const API = "customization_app.caisse_encaissement_dettes";
-  let etat = { total: 0, banques: [] };
+  let etat = { total: 0, banques: [], dettes: [], photo: null, photo_nom: null };
 
   const d = new frappe.ui.Dialog({
     title: __("Encaissement de dettes"),
@@ -561,7 +561,7 @@ function rcj_encaissement_dettes() {
       },
       { fieldtype: "Column Break" },
       {
-        fieldtype: "Data", fieldname: "n_cheque", label: __("N° de chèque"),
+        fieldtype: "Data", fieldname: "n_cheque", label: __("N° de chèque (7 chiffres)"),
         depends_on: 'eval:doc.mode=="Chèque"',
         mandatory_depends_on: 'eval:doc.mode=="Chèque"',
       },
@@ -570,60 +570,146 @@ function rcj_encaissement_dettes() {
         depends_on: 'eval:doc.mode=="Chèque"',
         mandatory_depends_on: 'eval:doc.mode=="Chèque"',
       },
+      { fieldtype: "HTML", fieldname: "photo_zone" },
     ],
     primary_action_label: __("Encaisser"),
     primary_action(v) {
-      if (!etat.total) {
-        frappe.msgprint(__("Ce client n'a aucune dette encaissable."));
+      const choisies = selection();
+      const total_sel = choisies.reduce((s, x) => s + x.montant, 0);
+      if (!choisies.length) {
+        frappe.msgprint(__("Sélectionnez au moins une dette."));
         return;
       }
-      if (v.montant > etat.total + 0.001) {
-        frappe.msgprint(__("Le montant dépasse la somme des dettes ({0}).",
-          [format_currency(etat.total, "TND")]));
+      if (v.montant > total_sel + 0.001) {
+        frappe.msgprint(__("Le montant dépasse la somme des dettes sélectionnées ({0}).",
+          [format_currency(total_sel, "TND")]));
         return;
+      }
+      if (v.mode === "Chèque") {
+        if (!/^\d{7}$/.test((v.n_cheque || "").trim())) {
+          frappe.msgprint(__("Le numéro de chèque doit comporter exactement 7 chiffres."));
+          return;
+        }
+        if (!etat.photo) {
+          frappe.msgprint(__("Prenez la photo du chèque avant d'encaisser."));
+          return;
+        }
       }
       frappe.call({
         method: API + ".encaisser",
         args: { client: v.client, montant: v.montant, mode: v.mode,
-                n_cheque: v.n_cheque, banque: v.banque },
+                n_cheque: v.n_cheque, banque: v.banque,
+                dettes: JSON.stringify(choisies.map((x) => x.paiement)),
+                photo: v.mode === "Chèque" ? etat.photo : null,
+                photo_nom: etat.photo_nom },
         freeze: true, freeze_message: __("Calcul de l'allocation…"),
         callback: (r) => confirmer(r.message, v),
       });
     },
   });
 
+  function selection() {
+    const cochees = [];
+    d.fields_dict.liste.$wrapper.find("input.rcj-dette:checked").each(function () {
+      const nom = $(this).attr("data-pe");
+      const x = etat.dettes.find((dd) => dd.paiement === nom);
+      if (x) cochees.push(x);
+    });
+    return cochees;
+  }
+
+  function maj_total_selection() {
+    const t = selection().reduce((s, x) => s + x.montant, 0);
+    d.fields_dict.liste.$wrapper.find(".rcj-total-sel")
+      .text(format_currency(t, "TND"));
+  }
+
+  function lien_commande(x) {
+    if (!x.commande) return "—";
+    if (!x.commande_doctype) return frappe.utils.escape_html(x.commande);
+    const slug = frappe.router.slug(x.commande_doctype);
+    return `<a href="/app/${slug}/${encodeURIComponent(x.commande)}" target="_blank">${
+      frappe.utils.escape_html(x.commande)}</a>`;
+  }
+
   function charger() {
     const client = d.get_value("client");
     d.fields_dict.liste.$wrapper.empty();
-    etat = { total: 0, banques: etat.banques };
+    etat.dettes = []; etat.total = 0;
     if (!client) return;
     frappe.call({
       method: API + ".dettes_client", args: { client },
       callback: (r) => {
         const m = r.message || { dettes: [], total: 0, banques: [] };
-        etat = m;
-        d.set_df_property("banque", "options", [""].concat(m.banques).join("\n"));
-        const lignes = (m.dettes || []).map((x) => `
-          <tr><td>${frappe.utils.escape_html(x.paiement)}</td>
-              <td>${x.commande ? frappe.utils.escape_html(x.commande) : "—"}</td>
+        etat.dettes = m.dettes || []; etat.total = m.total || 0;
+        if (m.banques && m.banques.length) {
+          d.set_df_property("banque", "options", [""].concat(m.banques).join("\n"));
+        }
+        const lignes = etat.dettes.map((x) => `
+          <tr><td style="text-align:center"><input type="checkbox" class="rcj-dette" checked
+                     data-pe="${frappe.utils.escape_html(x.paiement)}"></td>
+              <td>${frappe.utils.escape_html(x.paiement)}</td>
+              <td>${lien_commande(x)}</td>
+              <td style="text-align:right">${x.commande_ttc
+                ? format_currency(x.commande_ttc, "TND") : "—"}</td>
               <td>${frappe.datetime.str_to_user(x.date)}</td>
               <td style="text-align:right">${format_currency(x.montant, "TND")}</td></tr>`).join("");
-        d.fields_dict.liste.$wrapper.html(m.dettes.length ? `
-          <table class="table table-bordered" style="margin-top:8px;font-size:12px">
-            <thead><tr><th>${__("Dette")}</th><th>${__("Commande")}</th>
-                       <th>${__("Date")}</th><th style="text-align:right">${__("Montant")}</th></tr></thead>
+        d.fields_dict.liste.$wrapper.html(etat.dettes.length ? `
+          <div style="overflow-x:auto">
+          <table class="table table-bordered" style="margin-top:8px;font-size:12px;min-width:560px">
+            <thead><tr><th></th><th>${__("Dette")}</th><th>${__("Commande")}</th>
+                       <th style="text-align:right">${__("TTC commande")}</th>
+                       <th>${__("Date")}</th>
+                       <th style="text-align:right">${__("Montant dû")}</th></tr></thead>
             <tbody>${lignes}</tbody>
-            <tfoot><tr><th colspan="3">${__("Total des dettes")}</th>
-                       <th style="text-align:right">${format_currency(m.total, "TND")}</th></tr></tfoot>
-          </table>` : `<div class="text-muted" style="margin-top:8px">${
+            <tfoot>
+              <tr><th colspan="5">${__("Total des dettes")}</th>
+                  <th style="text-align:right">${format_currency(m.total, "TND")}</th></tr>
+              <tr><th colspan="5">${__("Total sélectionné")}</th>
+                  <th style="text-align:right" class="rcj-total-sel">${
+                    format_currency(m.total, "TND")}</th></tr>
+            </tfoot>
+          </table></div>
+          <div class="text-muted" style="font-size:11px">${
+            __("Décochez une dette pour l'écarter — l'allocation suit la sélection (FIFO par date).")}</div>`
+          : `<div class="text-muted" style="margin-top:8px">${
             __("Aucune dette encaissable pour ce client.")}</div>`);
+        d.fields_dict.liste.$wrapper.find("input.rcj-dette")
+          .on("change", () => maj_total_selection());
         d.set_value("montant", m.total);
       },
     });
   }
 
-  // La liste des banques est disponible dès l'ouverture (avant même le choix du
-  // client) : c'est la même que l'outil d'encaissement, servie par le serveur.
+  // Photo du chèque : caméra du téléphone (capture) ou fichier. Obligatoire pour un chèque.
+  function poser_zone_photo() {
+    const $z = d.fields_dict.photo_zone.$wrapper;
+    $z.html(`
+      <div class="rcj-photo" style="display:none;margin-top:4px">
+        <button type="button" class="btn btn-default btn-sm rcj-photo-btn">📷 ${
+          __("Photo du chèque")}</button>
+        <span class="rcj-photo-nom text-muted" style="margin-left:8px"></span>
+        <input type="file" accept="image/*" capture="environment" style="display:none">
+      </div>`);
+    const $bloc = $z.find(".rcj-photo");
+    const $input = $z.find("input[type=file]");
+    $z.find(".rcj-photo-btn").on("click", () => $input.trigger("click"));
+    $input.on("change", function () {
+      const f = this.files && this.files[0];
+      if (!f) return;
+      const lecteur = new FileReader();
+      lecteur.onload = () => {
+        etat.photo = lecteur.result;
+        etat.photo_nom = f.name;
+        $z.find(".rcj-photo-nom").text("✓ " + f.name);
+      };
+      lecteur.readAsDataURL(f);
+    });
+    const basculer = () => $bloc.toggle(d.get_value("mode") === "Chèque");
+    d.fields_dict.mode.$input.on("change", basculer);
+    basculer();
+  }
+
   frappe.call({
     method: API + ".banques",
     callback: (r) => {
@@ -637,14 +723,16 @@ function rcj_encaissement_dettes() {
     const lignes = (res.allocation || []).map((a) => `
       <tr><td>${frappe.utils.escape_html(a.paiement)}</td>
           <td>${a.commande ? frappe.utils.escape_html(a.commande) : "—"}</td>
-          <td style="text-align:right">${format_currency(a.montant, "TND")}</td></tr>`).join("");
+          <td style="text-align:right">${format_currency(a.montant, "TND")}</td>
+          <td style="text-align:right">${format_currency(a.dette_totale, "TND")}</td></tr>`).join("");
     const corps = `
-      <p>${__("Paiement {0} de {1} — répartition sur les dettes :",
+      <p>${__("Paiement {0} de {1} — répartition sur les dettes sélectionnées :",
         [v.mode, format_currency(v.montant, "TND")])}</p>
-      <table class="table table-bordered" style="font-size:12px">
+      <div style="overflow-x:auto"><table class="table table-bordered" style="font-size:12px">
         <thead><tr><th>${__("Dette consommée")}</th><th>${__("Commande")}</th>
-                   <th style="text-align:right">${__("Montant")}</th></tr></thead>
-        <tbody>${lignes}</tbody></table>
+                   <th style="text-align:right">${__("Encaissé")}</th>
+                   <th style="text-align:right">${__("Dette totale")}</th></tr></thead>
+        <tbody>${lignes}</tbody></table></div>
       ${res.restant > 0.001 ? `<p class="text-muted">${
         __("Reliquat non couvert : {0} — une dette sera recréée sur la commande concernée.",
           [format_currency(res.restant, "TND")])}</p>` : ""}`;
@@ -662,4 +750,5 @@ function rcj_encaissement_dettes() {
   }
 
   d.show();
+  poser_zone_photo();
 }

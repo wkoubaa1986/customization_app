@@ -22,6 +22,8 @@ l'employé pour confirmation, puis soumet. Le montant est plafonné à la somme
 des dettes du client — un trop-perçu n'a pas de sens ici.
 """
 
+import base64
+import json
 import re
 
 import frappe
@@ -44,6 +46,7 @@ def _dettes(client):
     rows = frappe.db.sql(
         """
         SELECT pe.name, pe.paid_amount, pe.posting_date, pe.reference_no, pe.paid_to,
+               pe.party_name,
                (SELECT per.reference_name FROM `tabPayment Entry Reference` per
                 WHERE per.parent = pe.name ORDER BY per.idx LIMIT 1) AS commande
         FROM `tabPayment Entry` pe
@@ -61,6 +64,15 @@ def _dettes(client):
         # La commande vit dans les references ; à défaut, `reference_no` la porte
         # (patron du script « Traitement des encaissement »).
         r.commande = r.commande or (r.reference_no or "").strip()
+        r.commande_doctype = ""
+        r.commande_ttc = 0.0
+        if r.commande:
+            for dt in ("Sales Order", "Sales Invoice"):
+                ttc = frappe.db.get_value(dt, r.commande, "grand_total")
+                if ttc is not None:
+                    r.commande_doctype = dt
+                    r.commande_ttc = flt(ttc, 3)
+                    break
     return rows
 
 
@@ -109,54 +121,98 @@ def dettes_client(client):
     banques = (frappe.get_meta("Liste des Dettes client")
                .get_field("banque").options or "").split("\n")
     return {
-        "dettes": [{"paiement": r.name, "commande": r.commande, "date": str(r.posting_date),
-                    "montant": r.montant, "compte": r.paid_to} for r in rows],
+        "dettes": [{"paiement": r.name, "commande": r.commande,
+                    "commande_doctype": r.commande_doctype, "commande_ttc": r.commande_ttc,
+                    "date": str(r.posting_date), "montant": r.montant, "compte": r.paid_to}
+                   for r in rows],
         "total": round(sum(r.montant for r in rows), 3),
         "banques": [b for b in banques if b.strip()],
     }
 
 
 @frappe.whitelist()
-def encaisser(client, montant, mode, n_cheque=None, banque=None):
-    """Crée le BROUILLON d'encaissement et retourne l'allocation calculée par le
-    script d'enregistrement, pour confirmation par l'employé. Rien n'est soumis ici."""
+def encaisser(client, montant, mode, n_cheque=None, banque=None, dettes=None,
+              photo=None, photo_nom=None):
+    """Crée le BROUILLON d'encaissement et retourne l'allocation, pour confirmation.
+
+    `dettes` : les PE de dette SÉLECTIONNÉES par l'employé (JSON) — le FIFO par
+    défaut du dialogue les coche toutes, mais il peut en écarter. L'allocation est
+    construite ICI, en FIFO par date sur la sélection, et le drapeau
+    `custom_allocation_manuelle` empêche le Server Script de la régénérer.
+    `photo` : la photo du chèque (dataURL), OBLIGATOIRE pour un chèque — attachée
+    au document. Rien n'est soumis ici.
+    """
     frappe.only_for(ROLES)
     montant = flt(montant, 3)
     if montant <= 0:
         frappe.throw(_("Le montant doit être positif."))
     if mode not in ("Espèces", "Chèque"):
         frappe.throw(_("Mode d'encaissement inconnu : {0}.").format(mode))
-    if mode == "Chèque" and not ((n_cheque or "").strip() and (banque or "").strip()):
-        frappe.throw(_("Pour un chèque, le numéro et la banque sont obligatoires."))
+    n_cheque = (n_cheque or "").strip()
+    if mode == "Chèque":
+        # Convention tunisienne : un numéro de chèque porte 7 chiffres.
+        if not re.fullmatch(r"\d{7}", n_cheque):
+            frappe.throw(_("Le numéro de chèque doit comporter exactement 7 chiffres "
+                           "(reçu : « {0} »).").format(n_cheque or "vide"))
+        if not (banque or "").strip():
+            frappe.throw(_("Pour un chèque, la banque est obligatoire."))
+        if not photo:
+            frappe.throw(_("Pour un chèque, la photo du chèque est obligatoire."))
 
-    total = round(sum(r.montant for r in _dettes(client)), 3)
-    if not total:
+    toutes = _dettes(client)
+    if not toutes:
         frappe.throw(_("Le client {0} n'a aucune dette encaissable.").format(client))
-    if montant > total + 0.001:
-        frappe.throw(_("Le montant ({0}) dépasse la somme des dettes du client ({1}).")
-                     .format(montant, total))
+    selection = json.loads(dettes) if isinstance(dettes, str) else (dettes or [])
+    par_nom = {r.name: r for r in toutes}
+    choisies = [par_nom[n] for n in selection if n in par_nom] or toutes
+    total_selection = round(sum(r.montant for r in choisies), 3)
+    if montant > total_selection + 0.001:
+        frappe.throw(_("Le montant ({0}) dépasse la somme des dettes sélectionnées ({1}) : "
+                       "sélectionnez plus de dettes ou réduisez le montant.")
+                     .format(montant, total_selection))
 
     doc = frappe.new_doc("Encaissement Paiement")
-    ligne = {"client": client, "type": mode, "date": nowdate(), "valeur_total": total}
+    doc.custom_allocation_manuelle = 1
+    ligne = {"client": client, "type": mode, "date": nowdate(), "valeur_total": total_selection}
     if mode == "Espèces":
         ligne["espece"] = montant
     else:
-        ligne.update({"valeur_du_cheque": montant, "n_chèque": (n_cheque or "").strip(),
+        ligne.update({"valeur_du_cheque": montant, "n_chèque": n_cheque,
                       "banque": (banque or "").strip()})
     doc.append("dette_client", ligne)
-    # L'insert déclenche « generartion_list dette » (After Save), qui remplit
-    # dettes_a_encaisser en FIFO. On relit le document pour rendre l'allocation.
-    doc.insert()
-    doc.reload()
 
-    allocation = [{
-        "paiement": r.ref_paiement, "commande": r.bl or "",
-        "montant": flt(r.espece if mode == "Espèces" else r.valeur_du_cheque, 3)
-                   or flt(r.get("valeur"), 3),
-    } for r in (doc.dettes_a_encaisser or [])]
+    # Allocation FIFO (par date) sur la SÉLECTION — mêmes champs que les lignes du
+    # Server Script : `valeur` = dette totale, `espece`/`valeur_du_cheque` = portion.
+    reste = montant
+    allocation = []
+    for r in sorted(choisies, key=lambda x: (str(x.posting_date), x.name)):
+        if reste <= 0.0005:
+            break
+        portion = round(min(reste, r.montant), 3)
+        reste = round(reste - portion, 3)
+        bl = r.reference_no if r.reference_no and frappe.db.exists(
+            "Sales Order", r.reference_no) else None
+        row = {"ref_paiement": r.name, "emmeteur": r.party_name, "valeur": r.montant,
+               "bl": bl, "date": nowdate(), "type": mode}
+        if mode == "Espèces":
+            row["espece"] = portion
+        else:
+            row.update({"n_chèque": n_cheque, "banque": (banque or "").strip(),
+                        "valeur_du_cheque": portion})
+        doc.append("dettes_a_encaisser", row)
+        allocation.append({"paiement": r.name, "commande": r.commande or "",
+                           "montant": portion, "dette_totale": r.montant})
+    doc.insert()
+
+    if photo:
+        contenu = photo.split(",", 1)[-1]
+        from frappe.utils.file_manager import save_file
+        save_file(photo_nom or f"cheque-{n_cheque}.jpg", base64.b64decode(contenu),
+                  "Encaissement Paiement", doc.name, is_private=1)
+
     frappe.db.commit()
-    return {"name": doc.name, "allocation": allocation, "total_dettes": total,
-            "restant": round(total - montant, 3)}
+    return {"name": doc.name, "allocation": allocation, "total_dettes": total_selection,
+            "restant": round(total_selection - montant, 3)}
 
 
 @frappe.whitelist()
