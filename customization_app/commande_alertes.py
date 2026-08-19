@@ -108,6 +108,7 @@ _SQL_PAIEMENT_LIE = """EXISTS (
 
 _PAIEMENT_DETTE = _SQL_PAIEMENT_LIE.format(compte="pe.paid_to = %(compte_dettes)s")
 _PAIEMENT_ATTENTE = _SQL_PAIEMENT_LIE.format(compte="pe.paid_to IN %(comptes_attente)s")
+_PAIEMENT_QUELCONQUE = _SQL_PAIEMENT_LIE.format(compte="1 = 1")
 
 # Source unique de la règle. %(clause)s restreint le périmètre : une commande,
 # une poignée, ou toute la base.
@@ -168,9 +169,11 @@ _SQL_MOTIF = """
                     AND NOT {paiement_dette})
             THEN %(motif_main_oeuvre)s
 
-            -- Affinage (19/08/2026) : le motif n'a de sens que si un paiement lié attend
-            -- encore sur Livraison Aramex ou Dettes — tout encaissé, la livraison a eu
-            -- lieu, il n'y a rien à planifier.
+            -- Affinage (19/08/2026, corrigé le soir même) : le motif se tait quand la
+            -- livraison a manifestement eu lieu — des paiements liés existent et AUCUN
+            -- n'attend sur Livraison Aramex ou Dettes. Une commande SANS AUCUN paiement
+            -- (le brouillon WEB fraîchement arrivé) n'est pas « tout encaissé » : elle
+            -- alerte comme avant — c'est précisément elle qu'il faut planifier.
             WHEN NOT EXISTS (
                     SELECT 1 FROM `tabTache de travail` t
                     WHERE t.commande_client = so.name AND t.status <> 'Cancelled')
@@ -178,7 +181,7 @@ _SQL_MOTIF = """
                     SELECT 1 FROM `tabSales Order Item` si
                     JOIN `tabItem` i ON i.name = si.item_code
                     WHERE si.parent = so.name AND i.item_group = %(livraison)s)
-                 AND {paiement_attente}
+                 AND ({paiement_attente} OR NOT {paiement_quelconque})
             THEN %(motif_livraison)s
 
             WHEN EXISTS (
@@ -201,6 +204,7 @@ _SQL_MOTIF = """
 # Injection des fragments de paiement ; {clause} reste un trou, rempli par _calculer.
 _SQL_MOTIF = _SQL_MOTIF.format(paiement_dette=_PAIEMENT_DETTE,
                                paiement_attente=_PAIEMENT_ATTENTE,
+                               paiement_quelconque=_PAIEMENT_QUELCONQUE,
                                clause="{clause}")
 
 
