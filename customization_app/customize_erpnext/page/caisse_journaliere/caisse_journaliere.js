@@ -69,6 +69,7 @@ class RapportCaisseJournaliere {
     // Paiement » et laisse les scripts maison faire (allocation FIFO, échéanciers,
     // reliquat de dette, création du paiement).
     $("#rcj-btn-dettes").on("click", () => rcj_encaissement_dettes(this));
+    $("#rcj-btn-depense").on("click", () => rcj_depense(this));
     $("#rcj-toggle-all").on("click", () => this._toggle_all());
     $("#rcj-chart-btn").on("click", () => this._toggle_chart());
     $("#rcj-chart-close").on("click", () => $("#rcj-chart-section").hide());
@@ -763,4 +764,163 @@ function rcj_encaissement_dettes(rapport) {
 
   d.show();
   poser_zone_photo();
+}
+
+
+// ── Dépenses de caisse ───────────────────────────────────────────────────────
+// Trois types (non facturée / avec facture / facture d'achat), photo de la
+// facture obligatoire dès qu'il y a facture, analyse OpenAI pour préremplir,
+// mode Espèces / Chèque (7 chiffres + photo) / Carte. Le serveur
+// (customization_app.caisse_depenses) fait foi sur toutes les règles.
+function rcj_depense(rapport) {
+  const API = "customization_app.caisse_depenses";
+  let etat = { facture: null, facture_nom: null, cheque: null, cheque_nom: null };
+
+  const d = new frappe.ui.Dialog({
+    title: __("Dépense de caisse"),
+    size: "large",
+    fields: [
+      {
+        fieldtype: "Select", fieldname: "type_depense", label: __("Type de dépense"),
+        options: "Dépense non facturée\nDépense avec facture\nFacture d'achat",
+        default: "Dépense non facturée", reqd: 1,
+      },
+      { fieldtype: "Data", fieldname: "description", label: __("Description"), reqd: 1 },
+      { fieldtype: "Column Break" },
+      { fieldtype: "Currency", fieldname: "montant", label: __("Montant"), reqd: 1 },
+      {
+        fieldtype: "Link", fieldname: "compte", options: "Account",
+        label: __("Compte de charge"), default: "Dépenses non déclarées - A&S", reqd: 1,
+        get_query: () => ({ query: API + ".comptes_depense" }),
+      },
+      {
+        fieldtype: "Data", fieldname: "fournisseur", label: __("Fournisseur"),
+        depends_on: 'eval:doc.type_depense!="Dépense non facturée"',
+      },
+      { fieldtype: "Section Break", label: __("Facture") },
+      { fieldtype: "HTML", fieldname: "zone_facture" },
+      { fieldtype: "Section Break", label: __("Paiement") },
+      {
+        fieldtype: "Select", fieldname: "mode", label: __("Mode de paiement"),
+        options: "Espèces\nChèque\nCarte de crédit", default: "Espèces", reqd: 1,
+      },
+      { fieldtype: "Column Break" },
+      {
+        fieldtype: "Data", fieldname: "n_cheque", label: __("N° de chèque (7 chiffres)"),
+        depends_on: 'eval:doc.mode=="Chèque"',
+        mandatory_depends_on: 'eval:doc.mode=="Chèque"',
+      },
+      {
+        fieldtype: "Select", fieldname: "banque", label: __("Banque"),
+        depends_on: 'eval:doc.mode=="Chèque"',
+        mandatory_depends_on: 'eval:doc.mode=="Chèque"',
+      },
+      { fieldtype: "HTML", fieldname: "zone_cheque" },
+    ],
+    primary_action_label: __("Enregistrer la dépense"),
+    primary_action(v) {
+      if (v.type_depense !== "Dépense non facturée" && !etat.facture) {
+        frappe.msgprint(__("Prenez la photo de la facture avant d'enregistrer."));
+        return;
+      }
+      if (v.mode === "Chèque") {
+        if (!/^\d{7}$/.test((v.n_cheque || "").trim())) {
+          frappe.msgprint(__("Le numéro de chèque doit comporter exactement 7 chiffres."));
+          return;
+        }
+        if (!etat.cheque) {
+          frappe.msgprint(__("Prenez la photo du chèque avant d'enregistrer."));
+          return;
+        }
+      }
+      frappe.call({
+        method: API + ".creer",
+        args: {
+          type_depense: v.type_depense, montant: v.montant, mode: v.mode,
+          compte: v.compte, description: v.description, fournisseur: v.fournisseur,
+          n_cheque: v.n_cheque, banque: v.banque,
+          photo_facture: etat.facture, photo_facture_nom: etat.facture_nom,
+          photo_cheque: v.mode === "Chèque" ? etat.cheque : null,
+          photo_cheque_nom: etat.cheque_nom,
+        },
+        freeze: true, freeze_message: __("Enregistrement de la dépense…"),
+        callback: (r) => {
+          d.hide();
+          frappe.show_alert({ message: __("Dépense enregistrée ({0}).", [r.message.name]),
+                              indicator: "green" });
+          if (rapport && rapport._fetch) rapport._fetch();
+        },
+      });
+    },
+  });
+
+  function zone_photo(champ, cle, cle_nom, libelle, apres) {
+    const $z = d.fields_dict[champ].$wrapper;
+    $z.html(`
+      <div style="margin:4px 0">
+        <button type="button" class="btn btn-default btn-sm rcj-ph-btn">📷 ${libelle}</button>
+        <span class="rcj-ph-nom text-muted" style="margin-left:8px"></span>
+        <input type="file" accept="image/*" capture="environment" style="display:none">
+      </div>`);
+    const $input = $z.find("input[type=file]");
+    $z.find(".rcj-ph-btn").on("click", () => $input.trigger("click"));
+    $input.on("change", function () {
+      const f = this.files && this.files[0];
+      if (!f) return;
+      const lecteur = new FileReader();
+      lecteur.onload = () => {
+        etat[cle] = lecteur.result;
+        etat[cle_nom] = f.name;
+        $z.find(".rcj-ph-nom").text("✓ " + f.name);
+        if (apres) apres();
+      };
+      lecteur.readAsDataURL(f);
+    });
+    return $z;
+  }
+
+  // Facture : photo + bouton d'analyse OpenAI (préremplit, l'employé confirme).
+  const $zf = zone_photo("zone_facture", "facture", "facture_nom", __("Photo de la facture"),
+    () => $zf.find(".rcj-analyser").prop("disabled", false));
+  $zf.children().first().append(
+    `<button type="button" class="btn btn-default btn-sm rcj-analyser"
+             style="margin-left:8px" disabled>🤖 ${__("Analyser la facture")}</button>`);
+  $zf.find(".rcj-analyser").on("click", () => {
+    frappe.call({
+      method: API + ".analyser", args: { photo: etat.facture },
+      freeze: true, freeze_message: __("Lecture de la facture…"),
+      callback: (r) => {
+        const m = r.message || {};
+        if (m.montant) d.set_value("montant", m.montant);
+        if (m.fournisseur) d.set_value("fournisseur", m.fournisseur);
+        if (m.numero && !d.get_value("description")) {
+          d.set_value("description", __("Facture {0} — {1}", [m.numero, m.fournisseur || ""]));
+        }
+        frappe.show_alert({
+          message: m.coherent
+            ? __("Lecture cohérente (HT + TVA + timbre = TTC).")
+            : __("Lecture à VÉRIFIER : les totaux ne tombent pas juste."),
+          indicator: m.coherent ? "green" : "orange",
+        });
+      },
+    });
+  });
+  const basculer_facture = () =>
+    $zf.toggle(d.get_value("type_depense") !== "Dépense non facturée");
+  d.fields_dict.type_depense.$input.on("change", basculer_facture);
+
+  // Chèque : photo obligatoire, même patron que l'encaissement.
+  const $zc = zone_photo("zone_cheque", "cheque", "cheque_nom", __("Photo du chèque"));
+  const basculer_cheque = () => $zc.toggle(d.get_value("mode") === "Chèque");
+  d.fields_dict.mode.$input.on("change", basculer_cheque);
+
+  frappe.call({
+    method: "customization_app.caisse_encaissement_dettes.banques",
+    callback: (r) => d.set_df_property("banque", "options",
+      [""].concat(r.message || []).join("\n")),
+  });
+
+  d.show();
+  basculer_facture();
+  basculer_cheque();
 }
