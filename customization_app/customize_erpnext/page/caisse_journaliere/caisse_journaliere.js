@@ -774,7 +774,8 @@ function rcj_encaissement_dettes(rapport) {
 // (customization_app.caisse_depenses) fait foi sur toutes les règles.
 function rcj_depense(rapport) {
   const API = "customization_app.caisse_depenses";
-  let etat = { facture: null, facture_nom: null, cheque: null, cheque_nom: null };
+  let etat = { facture: null, facture_nom: null, cheque: null, cheque_nom: null,
+               numero: null, date_facture: null };
 
   const d = new frappe.ui.Dialog({
     title: __("Dépense de caisse"),
@@ -790,12 +791,21 @@ function rcj_depense(rapport) {
       { fieldtype: "Currency", fieldname: "montant", label: __("Montant"), reqd: 1 },
       {
         fieldtype: "Link", fieldname: "compte", options: "Account",
-        label: __("Compte de charge"), default: "Dépenses non déclarées - A&S", reqd: 1,
+        label: __("Compte de charge"), default: "Dépenses non déclarées - A&S",
+        depends_on: 'eval:doc.type_depense!="Facture d\'achat"',
+        mandatory_depends_on: 'eval:doc.type_depense!="Facture d\'achat"',
         get_query: () => ({ query: API + ".comptes_depense" }),
       },
       {
+        fieldtype: "Currency", fieldname: "tva", label: __("dont TVA"),
+        depends_on: 'eval:doc.type_depense=="Dépense avec facture"',
+        description: __("Renseignée par l'analyse — l'écriture fera Cr paiement / Dr TVA / Dr compte classé."),
+      },
+      { fieldtype: "Float", fieldname: "taux_tva", hidden: 1 },
+      {
         fieldtype: "Data", fieldname: "fournisseur", label: __("Fournisseur"),
         depends_on: 'eval:doc.type_depense!="Dépense non facturée"',
+        mandatory_depends_on: 'eval:doc.type_depense=="Facture d\'achat"',
       },
       { fieldtype: "Section Break", label: __("Facture") },
       { fieldtype: "HTML", fieldname: "zone_facture" },
@@ -838,6 +848,8 @@ function rcj_depense(rapport) {
         args: {
           type_depense: v.type_depense, montant: v.montant, mode: v.mode,
           compte: v.compte, description: v.description, fournisseur: v.fournisseur,
+          tva: v.tva || 0, taux_tva: v.taux_tva || 0,
+          numero_facture: etat.numero, date_facture: etat.date_facture,
           n_cheque: v.n_cheque, banque: v.banque,
           photo_facture: etat.facture, photo_facture_nom: etat.facture_nom,
           photo_cheque: v.mode === "Chèque" ? etat.cheque : null,
@@ -887,12 +899,18 @@ function rcj_depense(rapport) {
              style="margin-left:8px" disabled>🤖 ${__("Analyser la facture")}</button>`);
   $zf.find(".rcj-analyser").on("click", () => {
     frappe.call({
-      method: API + ".analyser", args: { photo: etat.facture },
+      method: API + ".analyser",
+      args: { photo: etat.facture, type_depense: d.get_value("type_depense") },
       freeze: true, freeze_message: __("Lecture de la facture…"),
       callback: (r) => {
         const m = r.message || {};
         if (m.montant) d.set_value("montant", m.montant);
+        if (m.tva) d.set_value("tva", m.tva);
+        if (m.taux_tva) d.set_value("taux_tva", m.taux_tva);
+        if (m.compte_suggere) d.set_value("compte", m.compte_suggere);
         if (m.fournisseur) d.set_value("fournisseur", m.fournisseur);
+        etat.numero = m.numero || null;
+        etat.date_facture = m.date || null;
         if (m.numero && !d.get_value("description")) {
           d.set_value("description", __("Facture {0} — {1}", [m.numero, m.fournisseur || ""]));
         }
@@ -905,8 +923,19 @@ function rcj_depense(rapport) {
       },
     });
   });
-  const basculer_facture = () =>
-    $zf.toggle(d.get_value("type_depense") !== "Dépense non facturée");
+  const basculer_facture = () => {
+    const type = d.get_value("type_depense");
+    $zf.toggle(type !== "Dépense non facturée");
+    // « Pas payé » n'existe que pour une facture d'achat (aucune écriture :
+    // la dette naîtra avec la facture saisie).
+    const modes = type === "Facture d'achat"
+      ? "Espèces\nChèque\nCarte de crédit\nPas payé"
+      : "Espèces\nChèque\nCarte de crédit";
+    d.set_df_property("mode", "options", modes);
+    if (type !== "Facture d'achat" && d.get_value("mode") === "Pas payé") {
+      d.set_value("mode", "Espèces");
+    }
+  };
   d.fields_dict.type_depense.$input.on("change", basculer_facture);
 
   // Chèque : photo obligatoire, même patron que l'encaissement.
