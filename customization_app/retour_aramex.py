@@ -152,13 +152,15 @@ def constater_retour(payment_entry, photo, photo_nom=None, note=None):
         _valider_bl_retour(rd)
         bls_retour.append(rd.name)
 
-    # ── 2. La photo, preuve du retour, attachée au Suivi et au 1er BL retour ─
+    # ── 2. La photo, preuve du retour : sur le Suivi, le 1er BL de retour ET
+    #       la commande (demande utilisateur 19/08 — la preuve doit se voir
+    #       depuis la pièce que tout le monde ouvre en premier) ─────────────
     from frappe.utils.file_manager import save_file
     contenu = base64.b64decode(photo.split(",", 1)[-1])
-    fichier = save_file(photo_nom or "retour-%s.jpg" % reference, contenu,
-                        DOCTYPE_SUIVI, reference, is_private=1)
-    save_file(photo_nom or "retour-%s.jpg" % reference, contenu,
-              "Delivery Note", bls_retour[0], is_private=1)
+    nom_fichier = photo_nom or "retour-%s.jpg" % reference
+    fichier = save_file(nom_fichier, contenu, DOCTYPE_SUIVI, reference, is_private=1)
+    save_file(nom_fichier, contenu, "Delivery Note", bls_retour[0], is_private=1)
+    save_file(nom_fichier, contenu, "Sales Order", so, is_private=1)
 
     # ── 3. Le paiement dette disparaît (convention maison), trace d'abord ────
     trace = ("📦 Retour de colis Aramex constaté le %s par %s — bordereau %s. "
