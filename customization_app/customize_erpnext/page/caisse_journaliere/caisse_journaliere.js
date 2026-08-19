@@ -68,7 +68,7 @@ class RapportCaisseJournaliere {
     // Encaissement des anciennes dettes : le dialogue fabrique un « Encaissement
     // Paiement » et laisse les scripts maison faire (allocation FIFO, échéanciers,
     // reliquat de dette, création du paiement).
-    $("#rcj-btn-dettes").on("click", () => rcj_encaissement_dettes());
+    $("#rcj-btn-dettes").on("click", () => rcj_encaissement_dettes(this));
     $("#rcj-toggle-all").on("click", () => this._toggle_all());
     $("#rcj-chart-btn").on("click", () => this._toggle_chart());
     $("#rcj-chart-close").on("click", () => $("#rcj-chart-section").hide());
@@ -538,7 +538,7 @@ class RapportCaisseJournaliere {
 // sur la SÉLECTION de l'employé (FIFO par date), plafonne le montant à la somme
 // sélectionnée, exige la photo et un numéro à 7 chiffres pour un chèque, puis passe
 // par l'Outil d'encaissement (échéanciers, reliquat, paiement).
-function rcj_encaissement_dettes() {
+function rcj_encaissement_dettes(rapport) {
   const API = "customization_app.caisse_encaissement_dettes";
   let etat = { total: 0, banques: [], dettes: [], photo: null, photo_nom: null };
 
@@ -740,8 +740,12 @@ function rcj_encaissement_dettes() {
       frappe.call({
         method: API + ".valider", args: { name: res.name },
         freeze: true, freeze_message: __("Encaissement…"),
-        callback: () => frappe.show_alert(
-          { message: __("Dettes encaissées ({0}).", [res.name]), indicator: "green" }),
+        callback: () => {
+          frappe.show_alert(
+            { message: __("Dettes encaissées ({0}).", [res.name]), indicator: "green" });
+          // La caisse reflète l'encaissement sans geste supplémentaire.
+          if (rapport && rapport._fetch) rapport._fetch();
+        },
       });
     }, () => {
       // Refus : le brouillon ne doit pas rester, il fausserait le prochain calcul.
