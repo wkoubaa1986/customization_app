@@ -1089,6 +1089,7 @@ function rcj_cloture(rapport) {
       const d = new frappe.ui.Dialog({
         title: __("Valider la caisse — {0} ({1})", [caisse, frappe.datetime.str_to_user(d1)]),
         fields: [
+          { fieldtype: "HTML", fieldname: "controles" },
           { fieldtype: "HTML", fieldname: "etat" },
           {
             fieldtype: "Currency", fieldname: "comptees",
@@ -1104,9 +1105,26 @@ function rcj_cloture(rapport) {
         ],
         primary_action_label: __("Valider et figer"),
         primary_action(v) {
+          // Un BL en brouillon bloque ; chaque autre point exige sa justification.
+          if ((e.controles || []).some((c) => c.bloquant)) {
+            frappe.msgprint(__("Validez d'abord le(s) bon(s) de livraison signalés en rouge."));
+            return;
+          }
+          const justifications = {};
+          let manque = false;
+          d.fields_dict.controles.$wrapper.find("input.rcj-just").each(function () {
+            const val = ($(this).val() || "").trim();
+            if (!val) manque = true;
+            justifications[$(this).attr("data-cle")] = val;
+          });
+          if (manque) {
+            frappe.msgprint(__("Chaque point de contrôle doit être justifié."));
+            return;
+          }
           frappe.call({
             method: API + ".valider",
-            args: { caisse, date: d1, especes_comptees: v.comptees, note: v.note },
+            args: { caisse, date: d1, especes_comptees: v.comptees, note: v.note,
+                    justifications: JSON.stringify(justifications) },
             freeze: true, freeze_message: __("Clôture et génération du PDF…"),
             callback: (rr) => {
               d.hide();
@@ -1117,6 +1135,37 @@ function rcj_cloture(rapport) {
           });
         },
       });
+      const pts = e.controles || [];
+      if (pts.length) {
+        const lignes = pts.map((c) => c.bloquant
+          ? `<div style="border:1px solid #e0b4b4;background:#fdecea;border-radius:6px;
+                padding:8px 10px;margin-bottom:6px">
+               <b style="color:#a93226">⛔ ${frappe.utils.escape_html(c.libelle)}</b>
+               <button class="btn btn-xs btn-danger rcj-valider-bl" style="margin-left:8px"
+                       data-bl="${frappe.utils.escape_html(c.bl)}">${__("Valider le BL")}</button>
+             </div>`
+          : `<div style="border:1px solid #e6d9a8;background:#fffbe9;border-radius:6px;
+                padding:8px 10px;margin-bottom:6px">
+               <div style="color:#7a5d10;font-weight:600">⚠️ ${frappe.utils.escape_html(c.libelle)}</div>
+               <input class="form-control input-sm rcj-just" style="margin-top:4px"
+                      data-cle="${frappe.utils.escape_html(c.cle)}"
+                      placeholder="${__("Justification (obligatoire)")}">
+             </div>`).join("");
+        d.fields_dict.controles.$wrapper.html(
+          `<div style="margin-bottom:6px;font-weight:700">${__("Points de contrôle")}</div>${lignes}`);
+        d.fields_dict.controles.$wrapper.find(".rcj-valider-bl").on("click", function () {
+          const bl = $(this).attr("data-bl");
+          frappe.call({
+            method: API + ".valider_bl", args: { bl },
+            freeze: true, freeze_message: __("Validation du BL…"),
+            callback: () => {
+              frappe.show_alert({ message: __("BL {0} validé.", [bl]), indicator: "green" });
+              d.hide();
+              rcj_cloture(rapport);   // recharger l'état et les contrôles
+            },
+          });
+        });
+      }
       d.fields_dict.etat.$wrapper.html(`
         <table class="table table-bordered" style="font-size:12.5px">
           <tr><td>${__("Solde d'ouverture (avant)")}</td>

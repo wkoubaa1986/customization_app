@@ -89,6 +89,83 @@ def _ouverture(caisse, date):
     return flt(r.especes_comptees if r.especes_comptees is not None else r.solde_theorique, 3)
 
 
+def _controles(data):
+    """Les points de contrôle de la clôture (décisions utilisateur 19/08) :
+
+      tache_ouverte    : une intervention du jour reste ouverte -> JUSTIFIER ;
+      bl_non_valide    : tâche terminée mais bon de livraison en brouillon ->
+                         BLOQUANT, le BL doit être validé (bouton dédié) ;
+      dette_hors_aramex: commande validée, tâche terminée, un paiement en
+                         « Dette non payée » hors flux Aramex -> JUSTIFIER ;
+      ancien_exclu     : un paiement d'ancienne commande a été EXCLU de la
+                         caisse -> JUSTIFIER l'exclusion.
+    """
+    points = []
+    for e in data.get("employees") or []:
+        for o in e.get("orders") or []:
+            if o.get("task_open"):
+                points.append({
+                    "cle": "tache_ouverte:%s" % o["sales_order"],
+                    "type": "tache_ouverte", "bloquant": 0,
+                    "commande": o["sales_order"], "client": o.get("customer"),
+                    "libelle": "Tâche ouverte sur %s (%s)" % (
+                        o["sales_order"], o.get("customer") or "?"),
+                })
+            if o.get("tache_status") == "Completed":
+                for dn in o.get("delivery_notes") or []:
+                    if dn.get("docstatus") == 0:
+                        points.append({
+                            "cle": "bl_non_valide:%s" % dn["name"],
+                            "type": "bl_non_valide", "bloquant": 1,
+                            "commande": o["sales_order"], "bl": dn["name"],
+                            "libelle": "Tâche terminée mais BL %s non validé (%s)" % (
+                                dn["name"], o["sales_order"]),
+                        })
+                if (o.get("is_validated") and not o.get("is_aramex")
+                        and any((p.get("mode") == "Dette non payée")
+                                for p in o.get("payments") or [])):
+                    points.append({
+                        "cle": "dette_hors_aramex:%s" % o["sales_order"],
+                        "type": "dette_hors_aramex", "bloquant": 0,
+                        "commande": o["sales_order"], "client": o.get("customer"),
+                        "libelle": "Commande validée, tâche terminée, mais paiement "
+                                   "en dette (hors Aramex) sur %s" % o["sales_order"],
+                    })
+    for pmt in (data.get("anciens") or {}).get("paiements") or []:
+        if pmt.get("exclu"):
+            points.append({
+                "cle": "ancien_exclu:%s" % pmt["name"],
+                "type": "ancien_exclu", "bloquant": 0,
+                "paiement": pmt["name"], "client": pmt.get("customer_name"),
+                "libelle": "Paiement %s (%s, %s DT) exclu de la caisse" % (
+                    pmt["name"], pmt.get("customer_name") or "?", pmt.get("amount")),
+            })
+    return points
+
+
+@frappe.whitelist()
+def valider_bl(bl):
+    """Valide un bon de livraison en brouillon depuis le contrôle de clôture —
+    le droit demandé : même geste que le magasin (workflow « Validation
+    Magasin » : Approved puis soumission)."""
+    frappe.only_for(ROLES)
+    doc = frappe.get_doc("Delivery Note", bl)
+    if doc.docstatus == 1:
+        return {"bl": bl, "deja": True}
+    if doc.docstatus != 0:
+        frappe.throw(_("Le BL {0} est annulé — rien à valider.").format(bl))
+    if doc.get("workflow_state") is not None:
+        doc.db_set("workflow_state", "Approved", update_modified=False)
+        doc.reload()
+    frappe.flags.in_import = True
+    try:
+        doc.submit()
+    finally:
+        frappe.flags.in_import = False
+    frappe.db.commit()
+    return {"bl": bl, "valide": True}
+
+
 @frappe.whitelist()
 def etat(caisse, date):
     """L'état de la caisse pour le dialogue : avant, mouvements, après."""
@@ -103,6 +180,7 @@ def etat(caisse, date):
                                {"caisse": caisse, "date_cloture": date, "docstatus": 1})
     return {
         "caisse": caisse, "date": str(date),
+        "controles": _controles(m["data"]),
         "solde_ouverture": ouverture,
         "encaissements_especes": m["encaissements_especes"],
         "depenses_especes": m["depenses_especes"],
@@ -114,7 +192,7 @@ def etat(caisse, date):
 
 
 @frappe.whitelist()
-def valider(caisse, date, especes_comptees=None, note=None):
+def valider(caisse, date, especes_comptees=None, note=None, justifications=None):
     """Fige la caisse : document soumis + PDF instantané attaché."""
     frappe.only_for(ROLES)
     caisse = (caisse or "").strip() or CAISSE_GLOBALE
@@ -125,6 +203,30 @@ def valider(caisse, date, especes_comptees=None, note=None):
         frappe.throw(_("La caisse « {0} » du {1} est déjà validée.").format(caisse, date))
 
     m = _mesures(caisse, date)
+
+    # Les contrôles sont REJOUÉS côté serveur : un BL encore en brouillon bloque,
+    # chaque autre point exige sa justification écrite.
+    import json as _json
+    justifs = (_json.loads(justifications) if isinstance(justifications, str)
+               else (justifications or {}))
+    points = _controles(m["data"])
+    bloquants = [p for p in points if p["bloquant"]]
+    if bloquants:
+        frappe.throw(_("Validation refusée — bon(s) de livraison à valider d'abord : {0}")
+                     .format(", ".join(p["bl"] for p in bloquants)))
+    manquantes = []
+    for p in points:
+        if not (justifs.get(p["cle"]) or "").strip():
+            manquantes.append(p["libelle"])
+    if manquantes:
+        frappe.throw(_("Justification manquante :<br>• {0}")
+                     .format("<br>• ".join(frappe.utils.escape_html(x)
+                                           for x in manquantes)))
+    lignes_controles = []
+    for p in points:
+        lignes_controles.append("%s\n  → %s" % (p["libelle"], justifs.get(p["cle"]).strip()))
+    controles_txt = "\n".join(lignes_controles)
+
     ouverture = _ouverture(caisse, date)
     theorique = flt(ouverture + m["encaissements_especes"] - m["depenses_especes"], 3)
     comptees = flt(especes_comptees, 3) if especes_comptees not in (None, "") else None
@@ -143,6 +245,7 @@ def valider(caisse, date, especes_comptees=None, note=None):
         "total_cheques": m["total_cheques"],
         "total_autres_modes": m["total_autres_modes"],
         "note": (note or "").strip(),
+        "controles": controles_txt,
     })
     doc.insert(ignore_permissions=True)
     doc.submit()
@@ -199,6 +302,7 @@ def _html_instantane(doc, data):
     <table><tr><th>Mode</th><th>Montant</th></tr>%(modes)s</table>
     %(bloc_emp)s
     %(bloc_dep)s
+    %(controles)s
     %(note)s
     """ % {
         "caisse": esc(doc.caisse), "date": esc(str(doc.date_cloture)),
@@ -216,4 +320,6 @@ def _html_instantane(doc, data):
                      "<th>Type</th><th>Description</th><th>Montant</th></tr>%s</table>"
                      % lignes_dep if lignes_dep else ""),
         "note": ("<h3>Note</h3><p>%s</p>" % esc(doc.note) if doc.note else ""),
+        "controles": ("<h3>Points de contrôle justifiés</h3><pre style='font-size:11px'>%s</pre>"
+                      % esc(doc.controles) if doc.get("controles") else ""),
     }

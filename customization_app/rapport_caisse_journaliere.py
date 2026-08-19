@@ -311,7 +311,9 @@ def _build_order(so_name, task, so_meta, d1=None, d2=None):
             "modes": sorted({(p.get("mode_of_payment") or "?") for p in pes
                              if _hors_periode(p, d1, d2)}),
         },
-        "delivery_notes": [{"name": d.name, "grand_total": flt(d.grand_total)} for d in dns],
+        "is_aramex": is_aramex,
+        "delivery_notes": [{"name": d.name, "grand_total": flt(d.grand_total),
+                            "docstatus": d.docstatus} for d in dns],
         "sales_invoices": [{"name": s.name, "grand_total": flt(s.grand_total)} for s in sis],
     }
 
