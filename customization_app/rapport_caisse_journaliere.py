@@ -542,9 +542,11 @@ def get_data(d1, d2, employe=None):
         | {u.full_name for u in users if u.full_name and u.name not in emails_employes}
     )
 
+    # ⚠️ ANTI-DOUBLE-COMPTAGE : on traite TOUTES les caisses, même filtré — la
+    # liste d'exclusion des « anciennes commandes » doit connaître les paiements
+    # des commandes de TOUS les employés. Le filtre ne joue qu'à la restitution.
     for emp in employees:
-        if not employe or emp.employee_name == employe:
-            process(emp.employee_name, emp.employee_id, emp.user_email)
+        process(emp.employee_name, emp.employee_id, emp.user_email)
         if emp.user_email:
             processed_users.add(emp.user_email)
 
@@ -552,8 +554,7 @@ def get_data(d1, d2, employe=None):
         if u.name in processed_users:
             continue
         processed_users.add(u.name)
-        if not employe or u.full_name == employe:
-            process(u.full_name, None, u.name)
+        process(u.full_name, None, u.name)
 
     # paiements encaissés sur la période mais hors commandes du rapport
     # (= règlements d'anciennes commandes à tracer dans la caisse du jour)
@@ -563,6 +564,15 @@ def get_data(d1, d2, employe=None):
             for p in o["payments"]:
                 seen_pes.add(p["name"])
     anciens = _paiements_anciennes_commandes(start_date, end_date, seen_pes)
+
+    # La restitution suit le filtre ; les totaux globaux sont recalculés sur le
+    # sous-ensemble (grand_par_mode a accumulé TOUTES les caisses ci-dessus).
+    if employe:
+        result_employees = [e for e in result_employees if e["employe"] == employe]
+        grand_par_mode = {}
+        for e in result_employees:
+            for m_, v_ in e["totaux_par_mode"].items():
+                grand_par_mode[m_] = flt(grand_par_mode.get(m_, 0)) + flt(v_)
     # Le filtre par caisse s'applique aussi aux encaissements d'anciennes commandes :
     # chacun est attribué à l'employé qui l'a SAISI.
     if employe:
