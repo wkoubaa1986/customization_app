@@ -71,6 +71,16 @@ class RapportCaisseJournaliere {
     $("#rcj-btn-dettes").on("click", () => rcj_encaissement_dettes(this));
     $("#rcj-btn-depense").on("click", () => rcj_depense(this));
     $("#rcj-btn-cloture").on("click", () => rcj_cloture(this));
+    // Exclure / réintégrer un paiement d'ancienne commande (correction de saisie).
+    $(this.wrapper).on("click", ".rcj-exclure", (e) => {
+      const $b = $(e.currentTarget);
+      frappe.call({
+        method: "customization_app.rapport_caisse_journaliere.exclure_ancien_paiement",
+        args: { pe: $b.attr("data-pe"), exclure: $b.attr("data-exclure") },
+        freeze: true,
+        callback: () => this._fetch(),
+      });
+    });
     $("#rcj-toggle-all").on("click", () => this._toggle_all());
     $("#rcj-chart-btn").on("click", () => this._toggle_chart());
     $("#rcj-chart-close").on("click", () => $("#rcj-chart-section").hide());
@@ -445,13 +455,14 @@ class RapportCaisseJournaliere {
 
     const body = rows.map(p => {
       const mode_style = RCJ_MODE[p.mode] || { bg: "#eee", fg: "#333" };
+      const exclu = !!p.exclu;
       const pieces = (p.pieces || []).length
         ? p.pieces.map(x =>
             `<a href="/app/${frappe.router.slug(x.doctype)}/${encodeURIComponent(x.name)}" target="_blank">${esc(x.name)}</a>` +
             (x.date ? ` <span class="rcj-muted">(${frappe.datetime.str_to_user(x.date)})</span>` : "")
           ).join("<br>")
         : '<span class="rcj-empty">aucune pièce liée</span>';
-      return `<tr>
+      return `<tr${exclu ? ' style="opacity:.5"' : ""}>
         <td style="white-space:nowrap">${p.date ? frappe.datetime.str_to_user(p.date) : "—"}
           ${p.antidate ? `<br><span style="color:#c0392b;font-size:11px">⚠ saisi le ${frappe.datetime.str_to_user(p.creation_date)}</span>` : ""}</td>
         <td>${esc(p.saisi_par || "")}</td>
@@ -460,8 +471,14 @@ class RapportCaisseJournaliere {
         <td>${esc(p.compte || "")}</td>
         <td style="text-align:right;font-weight:700">${this._fmt(p.amount)}</td>
         <td>${esc(p.reference_no || "")}</td>
-        <td><a href="/app/payment-entry/${encodeURIComponent(p.name)}" target="_blank">${esc(p.name)}</a></td>
+        <td><a href="/app/payment-entry/${encodeURIComponent(p.name)}" target="_blank">${esc(p.name)}</a>${
+          exclu ? '<br><span class="rcj-chip" style="background:#e2e3e5;color:#41464b">exclu de la caisse</span>' : ""}</td>
         <td>${pieces}</td>
+        <td><button class="btn btn-xs ${exclu ? "btn-default" : "btn-warning"} rcj-exclure"
+              data-pe="${esc(p.name)}" data-exclure="${exclu ? 0 : 1}"
+              title="${exclu ? __("Réintégrer dans les totaux de la caisse")
+                             : __("Écarter des totaux (correction de saisie)")}">${
+              exclu ? __("Réintégrer") : __("Exclure")}</button></td>
       </tr>`;
     }).join("");
 
@@ -481,7 +498,7 @@ class RapportCaisseJournaliere {
             <th style="text-align:left">Client</th><th style="text-align:left">Mode</th>
             <th style="text-align:left">Compte</th><th>Montant</th>
             <th style="text-align:left">Référence</th><th style="text-align:left">Paiement</th>
-            <th style="text-align:left">Ancienne(s) pièce(s)</th>
+            <th style="text-align:left">Ancienne(s) pièce(s)</th><th></th>
           </tr></thead>
           <tbody>${body}</tbody>
         </table>

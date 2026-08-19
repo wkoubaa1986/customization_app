@@ -21,3 +21,4 @@ customization_app.patches.rename_attribut_vonton_vontron
 customization_app.patches.recolorer_taches_akram
 customization_app.patches.anomalies_plancher_juillet_et_paiements
 customization_app.patches.ensure_allocation_manuelle_field
+customization_app.patches.ensure_exclu_caisse_field

@@ -337,7 +337,8 @@ def _paiements_anciennes_commandes(d1, d2, exclude_names):
     pes = frappe.db.sql(
         f"""SELECT pe.name, pe.posting_date, DATE(pe.creation) AS creation_date,
                    pe.owner, pe.party, pe.party_name, pe.mode_of_payment,
-                   pe.paid_to, pe.paid_amount, pe.reference_no
+                   pe.paid_to, pe.paid_amount, pe.reference_no,
+                   IFNULL(pe.custom_exclu_caisse, 0) AS exclu
             FROM `tabPayment Entry` pe
             WHERE pe.docstatus = 1
               AND pe.payment_type = 'Receive'
@@ -379,9 +380,13 @@ def _paiements_anciennes_commandes(d1, d2, exclude_names):
 
     paiements, par_mode = [], {}
     for p in pes:
-        par_mode[p.mode_of_payment or "—"] = flt(par_mode.get(p.mode_of_payment or "—", 0)) \
-            + flt(p.paid_amount)
+        # Une CORRECTION DE SAISIE exclue par l'utilisateur reste visible (et
+        # réintégrable) mais ne pèse dans aucun total.
+        if not p.exclu:
+            par_mode[p.mode_of_payment or "—"] = flt(par_mode.get(p.mode_of_payment or "—", 0)) \
+                + flt(p.paid_amount)
         paiements.append({
+            "exclu": bool(p.exclu),
             "name": p.name,
             "date": str(p.posting_date or ""),
             "creation_date": str(p.creation_date or ""),
@@ -399,11 +404,10 @@ def _paiements_anciennes_commandes(d1, d2, exclude_names):
     return {
         "paiements": paiements,
         "par_mode": {m: flt(v) for m, v in par_mode.items()},
-        "total": flt(sum(x["amount"] for x in paiements)),
+        "total": flt(sum(x["amount"] for x in paiements if not x["exclu"])),
     }
 
 
-@frappe.whitelist()
 def _depenses_caisse(d1, d2, noms_par_user):
     """Les dépenses saisies en caisse (écritures « Dépense caisse — … ») sur la
     période, attribuées à leur AUTEUR. Le mode se lit sur l'écriture elle-même :
@@ -441,6 +445,7 @@ def _depenses_caisse(d1, d2, noms_par_user):
     return lignes
 
 
+@frappe.whitelist()
 def get_data(d1, d2, employe=None):
     """Renvoie le rapport de caisse journalière groupé par employé, pour [d1, d2].
 
@@ -580,6 +585,8 @@ def get_data(d1, d2, employe=None):
                                 if (p.get("saisi_par") or "—") == employe]
         par_mode_filtre = {}
         for p in anciens["paiements"]:
+            if p.get("exclu"):
+                continue
             m = p["mode"] or "—"
             par_mode_filtre[m] = flt(par_mode_filtre.get(m, 0)) + flt(p["amount"])
         anciens["par_mode"] = par_mode_filtre
@@ -590,6 +597,8 @@ def get_data(d1, d2, employe=None):
     # les totaux par mode / total encaissé).
     anciens_par_emp = {}
     for p in anciens["paiements"]:
+        if p.get("exclu"):
+            continue
         emp = p["saisi_par"] or "—"
         mode = p["mode"] or "—"
         anciens_par_emp.setdefault(emp, {})
@@ -659,3 +668,25 @@ def get_data(d1, d2, employe=None):
             "grand_total": flt(sum(grand_par_mode.values())),
         },
     }
+
+
+@frappe.whitelist()
+def exclure_ancien_paiement(pe, exclure):
+    """Exclut (ou réintègre) un paiement d'ancienne commande de la caisse —
+    typiquement une CORRECTION DE SAISIE qui n'est pas de l'argent entré ce
+    jour. Le drapeau vit sur la Payment Entry (custom_exclu_caisse), la
+    décision est tracée en commentaire sur la pièce."""
+    frappe.only_for(("System Manager", "Accounts Manager", "Accounts User",
+                     "Sales Manager", "Sales User"))
+    exclure = 1 if frappe.utils.cint(exclure) else 0
+    frappe.db.set_value("Payment Entry", pe, "custom_exclu_caisse", exclure,
+                        update_modified=False)
+    frappe.get_doc({
+        "doctype": "Comment", "comment_type": "Info",
+        "reference_doctype": "Payment Entry", "reference_name": pe,
+        "content": ("Exclu de la caisse journalière par {0}"
+                    if exclure else "Réintégré à la caisse journalière par {0}")
+                   .format(frappe.session.user),
+    }).insert(ignore_permissions=True)
+    frappe.db.commit()
+    return {"pe": pe, "exclu": exclure}
