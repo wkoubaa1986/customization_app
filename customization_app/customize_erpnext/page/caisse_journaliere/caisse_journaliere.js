@@ -70,6 +70,7 @@ class RapportCaisseJournaliere {
     // reliquat de dette, création du paiement).
     $("#rcj-btn-dettes").on("click", () => rcj_encaissement_dettes(this));
     $("#rcj-btn-depense").on("click", () => rcj_depense(this));
+    $("#rcj-btn-cloture").on("click", () => rcj_cloture(this));
     $("#rcj-toggle-all").on("click", () => this._toggle_all());
     $("#rcj-chart-btn").on("click", () => this._toggle_chart());
     $("#rcj-chart-close").on("click", () => $("#rcj-chart-section").hide());
@@ -293,8 +294,15 @@ class RapportCaisseJournaliere {
   }
 
   _order_rows(o) {
-    const modes = [...new Set((o.payments || []).map(p => p.mode).filter(Boolean))];
-    const modeChips = modes.map(m => this._chip(m, RCJ_MODE[m])).join(" ") || '<span class="rcj-empty">—</span>';
+    const du_jour = (o.payments || []).filter(p => !p.hors_periode);
+    const modes = [...new Set(du_jour.map(p => p.mode).filter(Boolean))];
+    let modeChips = modes.map(m => this._chip(m, RCJ_MODE[m])).join(" ") || '<span class="rcj-empty">—</span>';
+    const av = o.avance_anterieure || {};
+    if (av.total) {
+      modeChips += ` <span class="rcj-chip" style="background:#fff3cd;color:#8a6d1f"
+        title="${__("Avance reçue avant la période — n'entre pas dans la caisse du jour")}">⏪ ${
+        __("Avance")} ${this._fmt(av.total)} (${frappe.utils.escape_html((av.modes || []).join(", "))})</span>`;
+    }
     const infos = [...new Set((o.payments || []).map(p => p.reference_no).filter(Boolean))];
     const infoTxt = infos.length ? frappe.utils.escape_html(infos.join(" · ")) : '<span class="rcj-empty">—</span>';
 
@@ -352,9 +360,14 @@ class RapportCaisseJournaliere {
 
   _payments_table(pays) {
     if (!pays || !pays.length) return '<div class="rcj-empty">Aucun paiement</div>';
-    const rows = pays.map(p => `<tr>
+    // Une AVANCE reçue hors période reste visible (elle explique le solde de la
+    // commande) mais grisée et marquée : elle ne compte pas dans la caisse du jour.
+    const rows = pays.map(p => `<tr${p.hors_periode ? ' style="opacity:.55"' : ""}>
       <td>${this._link("Payment Entry", p.name, true)}</td>
-      <td class="rcj-muted">${p.date || ""}</td>
+      <td class="rcj-muted">${p.date || ""}${p.hors_periode
+        ? ' <span style="color:#b9770e;font-size:10px;font-weight:700">hors période</span>' : ""}${p.antidate
+        ? ` <span style="color:#c0392b;font-size:10px;font-weight:700">⚠ saisi le ${
+            frappe.datetime.str_to_user(p.creation_date)}</span>` : ""}</td>
       <td>${this._chip(p.mode || "?", RCJ_MODE[p.mode])}</td>
       <td class="num">${this._fmt(p.amount)}</td>
       <td style="font-size:10.5px;">${frappe.utils.escape_html(p.reference_no || "")}</td>
@@ -1028,3 +1041,83 @@ RapportCaisseJournaliere.prototype._render_depenses = function () {
       </table></div>
     </div>`);
 };
+
+
+// ── Validation (clôture) de la caisse ────────────────────────────────────────
+// État AVANT (report de la clôture précédente) -> mouvements du jour -> APRÈS
+// (théorique), espèces comptées et écart — figé dans un document soumis avec
+// son PDF instantané. Chaque employé valide SA caisse ; la direction valide
+// n'importe laquelle et la globale « Tous les employés ».
+function rcj_cloture(rapport) {
+  const API = "customization_app.caisse_cloture";
+  const d1 = $("#rcj-d1").val(), d2 = $("#rcj-d2").val();
+  if (d1 !== d2) {
+    frappe.msgprint(__("La clôture porte sur UNE journée : mettez « De » = « À »."));
+    return;
+  }
+  const caisse = $("#rcj-employe").val() || "Tous les employés";
+
+  frappe.call({
+    method: API + ".etat", args: { caisse, date: d1 },
+    freeze: true,
+    callback: (r) => {
+      const e = r.message || {};
+      if (e.deja_validee) {
+        frappe.msgprint(__("La caisse « {0} » du {1} est déjà validée : {2}",
+          [caisse, frappe.datetime.str_to_user(d1),
+           `<a href="/app/cloture-caisse/${encodeURIComponent(e.deja_validee)}">${e.deja_validee}</a>`]));
+        return;
+      }
+      const fmt = (v) => format_currency(v || 0, "TND");
+      const d = new frappe.ui.Dialog({
+        title: __("Valider la caisse — {0} ({1})", [caisse, frappe.datetime.str_to_user(d1)]),
+        fields: [
+          { fieldtype: "HTML", fieldname: "etat" },
+          {
+            fieldtype: "Currency", fieldname: "comptees",
+            label: __("Espèces comptées (physique)"), default: e.solde_theorique,
+            onchange: () => {
+              const ecart = (d.get_value("comptees") || 0) - e.solde_theorique;
+              d.fields_dict.etat.$wrapper.find(".rcj-clo-ecart")
+                .text(fmt(ecart))
+                .css("color", Math.abs(ecart) < 0.005 ? "#1d6f42" : "#c0392b");
+            },
+          },
+          { fieldtype: "Small Text", fieldname: "note", label: __("Note") },
+        ],
+        primary_action_label: __("Valider et figer"),
+        primary_action(v) {
+          frappe.call({
+            method: API + ".valider",
+            args: { caisse, date: d1, especes_comptees: v.comptees, note: v.note },
+            freeze: true, freeze_message: __("Clôture et génération du PDF…"),
+            callback: (rr) => {
+              d.hide();
+              frappe.msgprint(__("Caisse validée : {0} — le PDF instantané est attaché.",
+                [`<a href="/app/cloture-caisse/${encodeURIComponent(rr.message.name)}">${rr.message.name}</a>`]));
+              if (rapport && rapport._fetch) rapport._fetch();
+            },
+          });
+        },
+      });
+      d.fields_dict.etat.$wrapper.html(`
+        <table class="table table-bordered" style="font-size:12.5px">
+          <tr><td>${__("Solde d'ouverture (avant)")}</td>
+              <td style="text-align:right;font-weight:700">${fmt(e.solde_ouverture)}</td></tr>
+          <tr><td>${__("Encaissements espèces du jour")}</td>
+              <td style="text-align:right">+ ${fmt(e.encaissements_especes)}</td></tr>
+          <tr><td>${__("Dépenses espèces du jour")}</td>
+              <td style="text-align:right">− ${fmt(e.depenses_especes)}</td></tr>
+          <tr><td><b>${__("Solde théorique (après)")}</b></td>
+              <td style="text-align:right;font-weight:800">${fmt(e.solde_theorique)}</td></tr>
+          <tr><td>${__("Écart (compté − théorique)")}</td>
+              <td style="text-align:right;font-weight:700" ><span class="rcj-clo-ecart"
+                  style="color:#1d6f42">${fmt(0)}</span></td></tr>
+          <tr><td class="text-muted">${__("Chèques du jour")} · ${__("Autres modes")}</td>
+              <td style="text-align:right" class="text-muted">${fmt(e.total_cheques)} · ${
+                fmt(e.total_autres_modes)}</td></tr>
+        </table>`);
+      d.show();
+    },
+  });
+}

@@ -124,7 +124,8 @@ def _links(sales_order):
     if si_names:
         ph = ",".join(["%s"] * len(si_names))
         inv_pes = frappe.db.sql(
-            f"""SELECT DISTINCT pe.name, pe.posting_date, pe.paid_amount, pe.mode_of_payment, pe.reference_no
+            f"""SELECT DISTINCT pe.name, pe.posting_date, DATE(pe.creation) AS creation_date,
+                pe.paid_amount, pe.mode_of_payment, pe.reference_no
                 FROM `tabPayment Entry` pe
                 INNER JOIN `tabPayment Entry Reference` per ON per.parent = pe.name
                 WHERE per.reference_doctype = 'Sales Invoice' AND per.reference_name IN ({ph})
@@ -135,7 +136,8 @@ def _links(sales_order):
             pe["link_type"] = "Invoice"
             pes.append(pe)
         direct = frappe.db.sql(
-            f"""SELECT DISTINCT pe.name, pe.posting_date, pe.paid_amount, pe.mode_of_payment, pe.reference_no
+            f"""SELECT DISTINCT pe.name, pe.posting_date, DATE(pe.creation) AS creation_date,
+                pe.paid_amount, pe.mode_of_payment, pe.reference_no
                 FROM `tabPayment Entry` pe
                 INNER JOIN `tabPayment Entry Reference` per ON per.parent = pe.name
                 WHERE per.reference_doctype = 'Sales Order' AND per.reference_name = %s
@@ -147,7 +149,8 @@ def _links(sales_order):
         )
     else:
         direct = frappe.db.sql(
-            """SELECT DISTINCT pe.name, pe.posting_date, pe.paid_amount, pe.mode_of_payment, pe.reference_no
+            """SELECT DISTINCT pe.name, pe.posting_date, DATE(pe.creation) AS creation_date,
+                pe.paid_amount, pe.mode_of_payment, pe.reference_no
                FROM `tabPayment Entry` pe
                INNER JOIN `tabPayment Entry Reference` per ON per.parent = pe.name
                WHERE per.reference_doctype = 'Sales Order' AND per.reference_name = %s
@@ -161,8 +164,34 @@ def _links(sales_order):
     return sis, dns, pes
 
 
-def _build_order(so_name, task, so_meta):
-    """Assemble un dict commande prêt pour le front."""
+def _dans_periode(valeur, d1, d2):
+    return bool(valeur) and getdate(d1) <= getdate(valeur) <= getdate(d2)
+
+
+def _hors_periode(p, d1, d2):
+    """VRAIE avance antérieure : ni la date comptable ni la date de SAISIE ne
+    tombent dans la période — exclue des totaux du jour. Un paiement saisi
+    aujourd'hui mais antidaté (mauvaise date entrée par l'employé) COMPTE :
+    l'argent est entré aujourd'hui (même règle que les anciennes commandes)."""
+    if not (d1 and d2):
+        return False
+    return not (_dans_periode(p.get("posting_date"), d1, d2)
+                or _dans_periode(p.get("creation_date"), d1, d2))
+
+
+def _antidate(p, d1, d2):
+    """Saisi dans la période mais daté hors : compté, signalé ⚠."""
+    if not (d1 and d2):
+        return False
+    return (_dans_periode(p.get("creation_date"), d1, d2)
+            and not _dans_periode(p.get("posting_date"), d1, d2))
+
+
+def _build_order(so_name, task, so_meta, d1=None, d2=None):
+    """Assemble un dict commande prêt pour le front. `d1`/`d2` bornent la CAISSE :
+    un paiement daté hors période (l'AVANCE d'une commande finalisée aujourd'hui)
+    reste visible dans le détail mais est marqué `hors_periode` — il ne doit
+    jamais entrer dans les totaux du jour."""
     sis, dns, pes = _links(so_name)
 
     ptt = so_meta.get("payment_terms_template")
@@ -270,9 +299,18 @@ def _build_order(so_name, task, so_meta):
                 "amount": flt(p.get("paid_amount")),
                 "reference_no": p.get("reference_no") or "",
                 "link_type": p.get("link_type"),
+                "creation_date": str(p.get("creation_date") or ""),
+                "hors_periode": _hors_periode(p, d1, d2),
+                "antidate": _antidate(p, d1, d2),
             }
             for p in pes
         ],
+        "avance_anterieure": {
+            "total": flt(sum(flt(p.get("paid_amount")) for p in pes
+                             if _hors_periode(p, d1, d2)), 3),
+            "modes": sorted({(p.get("mode_of_payment") or "?") for p in pes
+                             if _hors_periode(p, d1, d2)}),
+        },
         "delivery_notes": [{"name": d.name, "grand_total": flt(d.grand_total)} for d in dns],
         "sales_invoices": [{"name": s.name, "grand_total": flt(s.grand_total)} for s in sis],
     }
@@ -458,9 +496,13 @@ def get_data(d1, d2, employe=None):
             )
             if not meta:
                 continue
-            order = _build_order(so_name, tasks_by_so.get(so_name), meta)
+            order = _build_order(so_name, tasks_by_so.get(so_name), meta,
+                                 d1=start_date, d2=end_date)
             orders.append(order)
             for p in order["payments"]:
+                # L'avance reçue AVANT la période ne compte pas dans la caisse du jour.
+                if p.get("hors_periode"):
+                    continue
                 totaux[p["mode"]] = flt(totaux.get(p["mode"], 0)) + flt(p["amount"])
 
         if not orders:
