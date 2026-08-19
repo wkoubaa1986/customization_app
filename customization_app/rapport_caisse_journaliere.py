@@ -10,13 +10,21 @@ from frappe.utils import flt, getdate
 
 COMPANY = "AquaWorld & Servicing"
 
-# Le PARTENAIRE Economiq a un compte utilisateur ET une fiche employé (héritage), mais ce
-# n'est pas un employé de la caisse : il a son propre tableau de bord (page
-# partenaire-economiq). Exclu de « Tous les employés » et de la liste des caisses —
-# par IDENTIFIANTS (l'orthographe du nom diffère entre les deux fiches : « Economiq Aqua
-# Solutions » côté User, « Economic Aqua Solution » côté Employee).
-EXCLUS_UTILISATEURS = {"economiqaquasolutions23@gmail.com"}
-EXCLUS_EMPLOYES = {"HR-EMP-00007"}
+# Hors caisse (décision utilisateur 19/08) — exclus par IDENTIFIANTS, jamais par nom
+# (Economiq a deux fiches aux orthographes différentes) :
+#   - Economiq Aqua Solutions : PARTENAIRE, il a son tableau de bord (partenaire-economiq) ;
+#   - Ayman Tekfa : parti / hors équipe ;
+#   - Nizar Maddouri : parti / hors équipe ;
+#   - Catalogue POS : compte TECHNIQUE, pas une personne.
+# L'équipe de caisse : Akram, Jamel Aloui, Sadok Bouziri, Mohamed Hedi Chouchane,
+# Nejib Koubaa, Wassim Koubaa.
+EXCLUS_UTILISATEURS = {
+    "economiqaquasolutions23@gmail.com",
+    "aymen.tekfa96@gmail.com",
+    "aquaworld.commercial@gmail.com",
+    "catalogue.pos@aquaworld.com",
+}
+EXCLUS_EMPLOYES = {"HR-EMP-00007", "HR-EMP-00008", "HR-EMP-00009"}
 
 SO_STATUS_FR = {
     "Draft": "Brouillon",
