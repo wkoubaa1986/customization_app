@@ -250,7 +250,14 @@ def creer(type_depense, montant, mode, compte=None, description=None, fournisseu
                            "Journal Entry", je.name)
         resultat = {"name": je.name if je else None, "fiche": fiche.name}
     else:
-        compte = (compte or "").strip() or COMPTE_DEPENSE_DEFAUT
+        compte = (compte or "").strip()
+        if not compte:
+            if type_depense == "Dépense avec facture":
+                # Jamais de repli silencieux ici : le compte vient de la
+                # classification (ou d'un choix explicite de l'employé).
+                frappe.throw(_("Choisissez le compte de charge — le bouton "
+                               "« Analyser la facture » le propose."))
+            compte = COMPTE_DEPENSE_DEFAUT
         meta = frappe.db.get_value("Account", compte, ["root_type", "is_group"], as_dict=True)
         if not meta or meta.is_group or meta.root_type != "Expense":
             frappe.throw(_("{0} n'est pas un compte de charge utilisable.").format(compte))

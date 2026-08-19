@@ -931,9 +931,20 @@ function rcj_depense(rapport) {
     const modes = type === "Facture d'achat"
       ? "Espèces\nChèque\nCarte de crédit\nPas payé"
       : "Espèces\nChèque\nCarte de crédit";
+    const mode_courant = d.get_value("mode");
     d.set_df_property("mode", "options", modes);
-    if (type !== "Facture d'achat" && d.get_value("mode") === "Pas payé") {
-      d.set_value("mode", "Espèces");
+    // set_df_property vide la valeur : on la repose (repli Espèces).
+    d.set_value("mode",
+      modes.split("\n").includes(mode_courant) ? mode_courant : "Espèces");
+    // Le compte par défaut (Dépenses non déclarées) n'a de sens que pour une
+    // dépense NON facturée ; avec facture, c'est la CLASSIFICATION (ou un choix
+    // manuel) qui le donne — un pré-remplissage tromperait l'employé.
+    if (type === "Dépense avec facture"
+        && d.get_value("compte") === "Dépenses non déclarées - A&S") {
+      d.set_value("compte", "");
+    }
+    if (type === "Dépense non facturée" && !d.get_value("compte")) {
+      d.set_value("compte", "Dépenses non déclarées - A&S");
     }
   };
   d.fields_dict.type_depense.$input.on("change", basculer_facture);
