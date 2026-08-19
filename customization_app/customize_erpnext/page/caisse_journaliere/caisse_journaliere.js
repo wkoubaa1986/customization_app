@@ -71,6 +71,7 @@ class RapportCaisseJournaliere {
     $("#rcj-btn-dettes").on("click", () => rcj_encaissement_dettes(this));
     $("#rcj-btn-depense").on("click", () => rcj_depense(this));
     $("#rcj-btn-cloture").on("click", () => rcj_cloture(this));
+    $("#rcj-btn-remise").on("click", () => rcj_remise(this));
     // Exclure / réintégrer un paiement d'ancienne commande (correction de saisie).
     $(this.wrapper).on("click", ".rcj-exclure", (e) => {
       const $b = $(e.currentTarget);
@@ -1214,7 +1215,124 @@ function rcj_cloture(rapport) {
           <tr><td class="text-muted">${__("Chèques du jour")} · ${__("Autres modes")}</td>
               <td style="text-align:right" class="text-muted">${fmt(e.total_cheques)} · ${
                 fmt(e.total_autres_modes)}</td></tr>
-        </table>`);
+        </table>${rcj_html_rapprochement(e.rapprochement, fmt)}`);
+      d.show();
+    },
+  });
+}
+
+
+// ── Rapprochement chèques / traites / dettes (caisse globale) ────────────────
+// Rendu dans le dialogue de clôture : portefeuille avant + reçus − remis =
+// après, et l'encours des dettes (comptable, rien à compter).
+function rcj_html_rapprochement(rap, fmt) {
+  if (!rap) return "";
+  const l = (nom, r) => `
+    <tr><td>${nom}</td>
+      <td style="text-align:right">${fmt(r.avant)}</td>
+      <td style="text-align:right">+ ${fmt(r.recus)}</td>
+      <td style="text-align:right">− ${fmt(r.remis)}</td>
+      <td style="text-align:right;font-weight:700">${fmt(r.apres)}</td></tr>`;
+  return `
+    <div style="margin:6px 0 4px;font-weight:700">${__("Rapprochement — chèques, traites, dettes")}</div>
+    <table class="table table-bordered" style="font-size:12px">
+      <tr style="background:#f6f6f6;font-weight:600"><td></td>
+        <td style="text-align:right">${__("Avant")}</td>
+        <td style="text-align:right">${__("Entrées")}</td>
+        <td style="text-align:right">${__("Sorties")}</td>
+        <td style="text-align:right">${__("Après")}</td></tr>
+      ${l(__("Chèques en portefeuille"), rap.cheques)}
+      ${l(__("Traites en portefeuille"), rap.traites)}
+      <tr><td>${__("Encours dettes (comptable)")}</td>
+        <td style="text-align:right">${fmt(rap.dettes.avant)}</td>
+        <td style="text-align:right" colspan="2">${__("variation")} ${fmt(rap.dettes.variation)}</td>
+        <td style="text-align:right;font-weight:700">${fmt(rap.dettes.apres)}</td></tr>
+    </table>
+    <div class="text-muted" style="font-size:11px;margin-bottom:6px">
+      ${__("Les pièces encore en portefeuille sont listées nominativement dans le PDF — à compter physiquement. La sortie se trace avec « 🏦 Remise en banque ».")}
+    </div>`;
+}
+
+
+// ── Remise en banque (direction) : la SORTIE du portefeuille ─────────────────
+// Liste les chèques / traites encore en caisse, on coche ce qu'on dépose, la
+// date de remise se fige sur chaque paiement (custom_remise_en_banque).
+function rcj_remise(rapport) {
+  const API = "customization_app.caisse_cloture";
+  const date = $("#rcj-d2").val() || frappe.datetime.get_today();
+  frappe.call({
+    method: API + ".portefeuille", args: { date },
+    freeze: true,
+    callback: (r) => {
+      const pf = r.message || {};
+      const pieces = pf.pieces || [];
+      if (!pieces.length) {
+        frappe.msgprint(__("Aucun chèque ni traite en portefeuille au {0}.",
+          [frappe.datetime.str_to_user(date)]));
+        return;
+      }
+      const esc = frappe.utils.escape_html;
+      const fmt = (v) => format_currency(v || 0, "TND");
+      const lignes = pieces.map((p) => `
+        <tr>
+          <td><input type="checkbox" class="rcj-remise-cb" data-pe="${esc(p.name)}"></td>
+          <td>${esc(p.mode)}</td>
+          <td style="white-space:nowrap">${frappe.datetime.str_to_user(p.date)}</td>
+          <td>${esc(p.client)}</td>
+          <td>${esc(p.reference_no)}</td>
+          <td style="text-align:right;font-weight:600">${fmt(p.montant)}</td>
+        </tr>`).join("");
+      const d = new frappe.ui.Dialog({
+        title: __("Remise en banque — portefeuille au {0} ({1})",
+          [frappe.datetime.str_to_user(date), fmt(pf.total)]),
+        size: "large",
+        fields: [
+          { fieldtype: "HTML", fieldname: "liste" },
+          { fieldtype: "Date", fieldname: "date_remise",
+            label: __("Date de la remise"), default: date, reqd: 1 },
+        ],
+        primary_action_label: __("Marquer remis en banque"),
+        primary_action(v) {
+          const noms = [];
+          d.fields_dict.liste.$wrapper.find("input.rcj-remise-cb:checked")
+            .each(function () { noms.push($(this).attr("data-pe")); });
+          if (!noms.length) {
+            frappe.msgprint(__("Cochez au moins un chèque ou une traite."));
+            return;
+          }
+          frappe.call({
+            method: API + ".remettre_en_banque",
+            args: { paiements: JSON.stringify(noms), date: v.date_remise },
+            freeze: true, freeze_message: __("Marquage de la remise…"),
+            callback: (rr) => {
+              d.hide();
+              frappe.show_alert({
+                message: __("{0} pièce(s) marquée(s) remise(s) en banque.",
+                  [(rr.message.remis || []).length]),
+                indicator: "green",
+              });
+              if (rapport && rapport._fetch) rapport._fetch();
+            },
+          });
+        },
+      });
+      d.fields_dict.liste.$wrapper.html(`
+        <div style="margin-bottom:6px">
+          <label style="font-weight:600;font-size:12px">
+            <input type="checkbox" class="rcj-remise-tout"> ${__("Tout cocher")}
+          </label>
+        </div>
+        <div style="max-height:320px;overflow:auto">
+        <table class="table table-bordered" style="font-size:12px">
+          <tr style="background:#f6f6f6;font-weight:600"><td></td><td>${__("Mode")}</td>
+            <td>${__("Reçu le")}</td><td>${__("Client")}</td>
+            <td>${__("N° / Référence")}</td><td style="text-align:right">${__("Montant")}</td></tr>
+          ${lignes}
+        </table></div>`);
+      d.fields_dict.liste.$wrapper.find(".rcj-remise-tout").on("change", function () {
+        d.fields_dict.liste.$wrapper.find("input.rcj-remise-cb")
+          .prop("checked", $(this).is(":checked"));
+      });
       d.show();
     },
   });

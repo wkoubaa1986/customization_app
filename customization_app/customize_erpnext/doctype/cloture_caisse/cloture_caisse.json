@@ -20,6 +20,19 @@
   "column_break_2",
   "total_cheques",
   "total_autres_modes",
+  "section_rapprochement",
+  "cheques_avant",
+  "cheques_recus",
+  "cheques_remis",
+  "cheques_apres",
+  "column_break_3",
+  "traites_avant",
+  "traites_recues",
+  "traites_remises",
+  "traites_apres",
+  "column_break_4",
+  "dettes_avant",
+  "dettes_apres",
   "note",
   "controles"
  ],
@@ -119,6 +132,90 @@
    "fieldname": "total_autres_modes",
    "fieldtype": "Currency",
    "label": "Autres modes du jour",
+   "precision": "3",
+   "read_only": 1
+  },
+  {
+   "description": "Rapprochement figé de la caisse globale : portefeuille chèques/traites (avant + reçus − remis = après) et encours des dettes.",
+   "fieldname": "section_rapprochement",
+   "fieldtype": "Section Break",
+   "label": "Rapprochement (caisse globale)"
+  },
+  {
+   "fieldname": "cheques_avant",
+   "fieldtype": "Currency",
+   "label": "Chèques en portefeuille (avant)",
+   "precision": "3",
+   "read_only": 1
+  },
+  {
+   "fieldname": "cheques_recus",
+   "fieldtype": "Currency",
+   "label": "Chèques reçus du jour",
+   "precision": "3",
+   "read_only": 1
+  },
+  {
+   "fieldname": "cheques_remis",
+   "fieldtype": "Currency",
+   "label": "Chèques remis en banque du jour",
+   "precision": "3",
+   "read_only": 1
+  },
+  {
+   "fieldname": "cheques_apres",
+   "fieldtype": "Currency",
+   "label": "Chèques en portefeuille (après)",
+   "precision": "3",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_3",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "traites_avant",
+   "fieldtype": "Currency",
+   "label": "Traites en portefeuille (avant)",
+   "precision": "3",
+   "read_only": 1
+  },
+  {
+   "fieldname": "traites_recues",
+   "fieldtype": "Currency",
+   "label": "Traites reçues du jour",
+   "precision": "3",
+   "read_only": 1
+  },
+  {
+   "fieldname": "traites_remises",
+   "fieldtype": "Currency",
+   "label": "Traites remises en banque du jour",
+   "precision": "3",
+   "read_only": 1
+  },
+  {
+   "fieldname": "traites_apres",
+   "fieldtype": "Currency",
+   "label": "Traites en portefeuille (après)",
+   "precision": "3",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_4",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "dettes_avant",
+   "fieldtype": "Currency",
+   "label": "Encours dettes (avant)",
+   "precision": "3",
+   "read_only": 1
+  },
+  {
+   "fieldname": "dettes_apres",
+   "fieldtype": "Currency",
+   "label": "Encours dettes (après)",
    "precision": "3",
    "read_only": 1
   },
