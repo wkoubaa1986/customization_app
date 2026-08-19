@@ -257,6 +257,10 @@ def creer(type_depense, montant, mode, compte=None, description=None, fournisseu
         lignes = [{"account": COMPTE_ESPECES if mode == "Espèces" else COMPTE_BANQUE,
                    "credit_in_account_currency": montant, "cost_center": CC}]
         if type_depense == "Dépense avec facture" and tva > 0:
+            # Règle utilisateur (19/08) : la TVA va sur le compte de son taux — 7 % sur
+            # « TVA 7% », TOUT AUTRE taux (19, 13, inconnu, mixte) sur « TVA 19% ».
+            # Le TIMBRE FISCAL et toute autre charge hors TVA restent dans le compte de
+            # charges indirectes classé : Dr charge = TTC − TVA, jamais TTC − TVA − timbre.
             compte_tva = COMPTE_TVA_7 if flt(taux_tva) == 7 else COMPTE_TVA_19
             lignes.append({"account": compte_tva, "debit_in_account_currency": tva,
                            "cost_center": CC})
