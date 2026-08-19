@@ -34,9 +34,15 @@ frappe.provide("frappe.views");
             .list-row-container.so-alerte-orange:hover,
             .list-row-container.so-alerte-violet:hover,
             .list-row-container.so-alerte-jaune:hover { filter: brightness(0.97); }
+            /* Les pastilles vivent DANS la cellule « Nom du client » : une cellule de la
+               grille absorbe son contenu (ellipsis) sans toucher aux largeurs des autres
+               colonnes. En sœur des colonnes (.level-left), elles devenaient un item flex
+               de plus et décalaient toute la ligne. */
             .so-alerte-pastille {
                 display: inline-block; margin-left: 8px; padding: 1px 7px;
                 border-radius: 10px; font-size: 11px; white-space: nowrap;
+                max-width: 45%; overflow: hidden; text-overflow: ellipsis;
+                vertical-align: middle;
             }
             .so-alerte-pastille.rouge  { background: #fbd5d0; color: #922b21; }
             .so-alerte-pastille.orange { background: #ffe3bf; color: #9a5b09; }
@@ -47,7 +53,7 @@ frappe.provide("frappe.views");
             .so-appels-pastille {
                 display: inline-block; margin-left: 8px; padding: 1px 7px;
                 border-radius: 10px; font-size: 11px; white-space: nowrap;
-                background: #e2e8f0; color: #334155;
+                background: #e2e8f0; color: #334155; vertical-align: middle;
             }
             .so-appels-pastille.deux { background: #cbd5e1; color: #1e293b; font-weight: 600; }
         `;
@@ -81,7 +87,11 @@ frappe.provide("frappe.views");
             _nettoyer($ligne);
             const info = cache[nom];
             if (!info) return;
-            const $cible = $ligne.find(".level-left").first();
+            // La cellule sujet (« Nom du client ») et non .level-left : une pastille en
+            // sœur des colonnes décalait Total TTC / % / ID sur les lignes à anomalie.
+            const $cible = ($ligne.find(".list-subject").first().length
+                ? $ligne.find(".list-subject").first()
+                : $ligne.find(".level-left").first());
 
             if (info.libelle) {
                 $ligne.addClass(CLASSES[info.couleur]);
