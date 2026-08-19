@@ -679,7 +679,7 @@ function rcj_encaissement_dettes(rapport) {
             </tfoot>
           </table></div>
           <div class="text-muted" style="font-size:11px">${
-            __("Décochez une dette pour l'écarter — l'allocation suit la sélection (FIFO par date).")}</div>`
+            __("Décochez une dette pour l'écarter — l'allocation suit la sélection (FIFO par date de commande).")}</div>`
           : `<div class="text-muted" style="margin-top:8px">${
             __("Aucune dette encaissable pour ce client.")}</div>`);
         d.fields_dict.liste.$wrapper.find("input.rcj-dette")

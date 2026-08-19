@@ -77,6 +77,10 @@ def _dettes(client):
                     r.commande_ttc = flt(meta.grand_total, 3)
                     r.commande_date = str(meta.get(champ_date) or "")
                     break
+    # L'ordre des dettes suit la DATE DE LA COMMANDE (décision utilisateur 19/08) :
+    # c'est elle qui dit l'ancienneté réelle — la dette n'est que son enregistrement.
+    # Repli sur la date de la dette quand la commande n'en a pas.
+    rows.sort(key=lambda r: (r.commande_date or str(r.posting_date), str(r.posting_date), r.name))
     return rows
 
 
@@ -186,11 +190,14 @@ def encaisser(client, montant, mode, n_cheque=None, banque=None, dettes=None,
                       "banque": (banque or "").strip()})
     doc.append("dette_client", ligne)
 
-    # Allocation FIFO (par date) sur la SÉLECTION — mêmes champs que les lignes du
-    # Server Script : `valeur` = dette totale, `espece`/`valeur_du_cheque` = portion.
+    # Allocation FIFO sur la SÉLECTION, par DATE DE COMMANDE (repli : date de dette) —
+    # mêmes champs que les lignes du Server Script : `valeur` = dette totale,
+    # `espece`/`valeur_du_cheque` = portion.
     reste = montant
     allocation = []
-    for r in sorted(choisies, key=lambda x: (str(x.posting_date), x.name)):
+    for r in sorted(choisies,
+                    key=lambda x: (x.commande_date or str(x.posting_date),
+                                   str(x.posting_date), x.name)):
         if reste <= 0.0005:
             break
         portion = round(min(reste, r.montant), 3)
