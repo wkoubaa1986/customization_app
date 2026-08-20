@@ -1114,8 +1114,18 @@ function rcj_depense(rapport) {
         depends_on: 'eval:doc.type_depense!="Dépense non facturée"',
         mandatory_depends_on: 'eval:doc.type_depense=="Facture d\'achat"',
       },
-      { fieldtype: "Section Break", label: __("Facture") },
-      { fieldtype: "HTML", fieldname: "zone_facture" },
+      // ⚠️ `depends_on` ET NON un toggle jQuery : Frappe réaffiche les champs à
+      // chaque rafraîchissement du dialogue (set_df_property, set_value…), et la
+      // section « Facture » revenait sur une dépense NON facturée, qui n'a pas
+      // de justificatif à joindre.
+      {
+        fieldtype: "Section Break", label: __("Facture"),
+        depends_on: 'eval:doc.type_depense!="Dépense non facturée"',
+      },
+      {
+        fieldtype: "HTML", fieldname: "zone_facture",
+        depends_on: 'eval:doc.type_depense!="Dépense non facturée"',
+      },
       { fieldtype: "Section Break", label: __("Paiement") },
       {
         fieldtype: "Select", fieldname: "mode", label: __("Mode de paiement"),
@@ -1272,6 +1282,8 @@ function rcj_depense(rapport) {
   });
   const basculer_facture = () => {
     const type = d.get_value("type_depense");
+    // Le masquage est porté par `depends_on` (cf. la définition des champs) ;
+    // ce toggle ne fait que suivre immédiatement, sans attendre un refresh.
     $zf.toggle(type !== "Dépense non facturée");
     // « Pas payé » n'existe que pour une facture d'achat (aucune écriture :
     // la dette naîtra avec la facture saisie).
