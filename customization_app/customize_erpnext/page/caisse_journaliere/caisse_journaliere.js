@@ -1331,7 +1331,8 @@ RapportCaisseJournaliere.prototype._render_depenses = function () {
       <td>${esc(l.description || "")}</td>
       <td><span class="rcj-badge" style="background:${style.bg};color:${style.fg}">${esc(l.mode)}</span></td>
       <td style="text-align:right;font-weight:700">${this._fmt(l.montant)}</td>
-      <td><a href="/app/journal-entry/${encodeURIComponent(l.name)}" target="_blank">${esc(l.name)}</a></td>
+      <td><a href="/app/${frappe.router.slug(l.doctype || "Journal Entry")}/${
+        encodeURIComponent(l.name)}" target="_blank">${esc(l.name)}</a></td>
     </tr>`;
   }).join("");
 

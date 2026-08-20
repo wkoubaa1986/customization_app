@@ -437,6 +437,7 @@ def _depenses_caisse(d1, d2, noms_par_user):
         m = re.search(r"Type : (.+)", remark)
         lignes.append({
             "name": r.name,
+            "doctype": "Journal Entry",
             "date": str(r.posting_date),
             "saisi_par": noms_par_user.get(r.owner, r.owner),
             "type": (m.group(1).strip() if m else ""),
@@ -444,6 +445,45 @@ def _depenses_caisse(d1, d2, noms_par_user):
             "mode": mode,
             "montant": flt(r.total_debit, 3),
         })
+
+    # ⚠️ ET LES PAIEMENTS QUI ONT REMPLACÉ UNE ÉCRITURE DE CAISSE. Quand le
+    # comptable valide une facture d'achat capturée en caisse, l'écriture
+    # « Dépense caisse — … » est détruite au profit d'un Payment Entry qui porte
+    # la référence de la facture (cf. `caisse_depenses`). Sans cette seconde
+    # lecture, la dépense DISPARAISSAIT du rapport du jour où elle a été payée,
+    # et le solde théorique remontait de son montant. On ne prend que les
+    # paiements NÉS DE LA CAISSE — ceux qu'une fiche « Facture Achat a Saisir »
+    # désigne — jamais les règlements fournisseurs saisis ailleurs, qui
+    # réécriraient des années d'historique.
+    paiements = frappe.db.sql(
+        """SELECT pe.name, pe.posting_date, pe.owner, pe.paid_amount, pe.paid_from,
+                  pe.mode_of_payment, pe.remarks, pe.reference_no, pe.party,
+                  f.description AS fiche_description
+           FROM `tabPayment Entry` pe
+           INNER JOIN `tabFacture Achat a Saisir` f ON f.payment_entry = pe.name
+           WHERE pe.docstatus = 1 AND pe.payment_type = 'Pay'
+             AND pe.posting_date BETWEEN %s AND %s
+           ORDER BY pe.posting_date DESC, pe.creation DESC""",
+        (d1, d2), as_dict=True)
+    for r in paiements:
+        if r.paid_from == "Espèces - A&S":
+            mode = "Espèces"
+        elif (r.mode_of_payment or "") in ("Chèque", "Carte de crédit"):
+            mode = r.mode_of_payment
+        else:
+            mode = r.mode_of_payment or "Virement"
+        lignes.append({
+            "name": r.name,
+            "doctype": "Payment Entry",
+            "date": str(r.posting_date),
+            "saisi_par": noms_par_user.get(r.owner, r.owner),
+            "type": "Facture d'achat",
+            "description": (r.fiche_description or r.remarks or r.reference_no
+                            or r.party or ""),
+            "mode": mode,
+            "montant": flt(r.paid_amount, 3),
+        })
+    lignes.sort(key=lambda l: (l["date"], l["name"]), reverse=True)
     return lignes
 
 
