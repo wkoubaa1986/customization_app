@@ -17,6 +17,7 @@
   "mode_paiement",
   "journal_entry",
   "purchase_invoice",
+  "payment_entry",
   "column_break_2",
   "saisi_par",
   "description"
@@ -94,6 +95,13 @@
    "read_only": 1,
    "in_list_view": 1,
    "in_standard_filter": 1
+  },
+  {
+   "fieldname": "payment_entry",
+   "fieldtype": "Link",
+   "label": "Écriture de paiement",
+   "options": "Payment Entry",
+   "read_only": 1
   },
   {
    "fieldname": "column_break_2",

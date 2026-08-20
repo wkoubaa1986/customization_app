@@ -755,6 +755,25 @@ def comptes_depense(doctype, txt, searchfield, start, page_len, filters):
 # ------------------------------------------------------------------ rattachement des
 # vraies Purchase Invoice aux fiches de caisse (hooks Purchase Invoice)
 
+def _copier_justificatifs(fiche_nom, doctype, name):
+    """Fait suivre le justificatif scanné en caisse sur une pièce comptable.
+
+    Idempotent : un fichier déjà présent (même URL) n'est pas recopié — sinon
+    chaque enregistrement de la facture empilerait une pièce jointe de plus."""
+    for f in frappe.get_all("File",
+                            filters={"attached_to_doctype": "Facture Achat a Saisir",
+                                     "attached_to_name": fiche_nom},
+                            fields=["file_url", "file_name", "is_private"]):
+        if not f.file_url or frappe.db.exists("File", {
+                "attached_to_doctype": doctype, "attached_to_name": name,
+                "file_url": f.file_url}):
+            continue
+        frappe.get_doc({"doctype": "File", "file_url": f.file_url,
+                        "file_name": f.file_name, "is_private": f.is_private,
+                        "attached_to_doctype": doctype,
+                        "attached_to_name": name}).insert(ignore_permissions=True)
+
+
 def _fiche_de(doc):
     """La fiche de caisse de cette facture d'achat, ou None.
 
@@ -790,36 +809,127 @@ def pi_lier_fiche_caisse(doc, method=None):
         return
     frappe.db.set_value("Facture Achat a Saisir", nom, "purchase_invoice", doc.name,
                         update_modified=False)
-    for f in frappe.get_all("File",
-                            filters={"attached_to_doctype": "Facture Achat a Saisir",
-                                     "attached_to_name": nom},
-                            fields=["file_url", "file_name", "is_private"]):
-        if not f.file_url or frappe.db.exists("File", {
-                "attached_to_doctype": "Purchase Invoice", "attached_to_name": doc.name,
-                "file_url": f.file_url}):
-            continue
-        frappe.get_doc({"doctype": "File", "file_url": f.file_url,
-                        "file_name": f.file_name, "is_private": f.is_private,
-                        "attached_to_doctype": "Purchase Invoice",
-                        "attached_to_name": doc.name}).insert(ignore_permissions=True)
+    _copier_justificatifs(nom, "Purchase Invoice", doc.name)
+
+
+def _remplacer_avance_par_paiement(doc, fiche_nom):
+    """L'écriture d'avance de la caisse devient un VRAI paiement de la facture.
+
+    ⚠️ POURQUOI REMPLACER PLUTÔT QU'AJOUTER (décision utilisateur 2026-08-20).
+    L'écriture posée en caisse (Cr Espèces ou banque / Dr Créditeurs) constate la
+    sortie d'argent mais ne se rattache à rien : la facture d'achat saisie plus
+    tard restait « impayée » et l'avance « non allouée », les deux se regardant
+    au solde du fournisseur sans jamais se solder. Un Payment Entry, lui, PORTE
+    la référence de la facture : il l'éteint. On détruit donc l'écriture — même
+    montant, même date, même compte, même mode — et on crée le paiement.
+
+    ⚠️ ATOMIQUE PAR CONSTRUCTION : aucun commit ici. Tout se joue dans la
+    transaction de soumission de la facture — si la création du paiement échoue,
+    la destruction de l'écriture est annulée avec la soumission elle-même.
+    """
+    je_nom = frappe.db.get_value("Facture Achat a Saisir", fiche_nom, "journal_entry")
+    if not je_nom or not frappe.db.exists("Journal Entry", je_nom):
+        return None
+    je = frappe.get_doc("Journal Entry", je_nom)
+    if je.docstatus == 2:
+        return None
+
+    # Le compte d'où l'argent est sorti : la ligne CRÉDITÉE de l'écriture.
+    compte_paiement = next((l.account for l in je.accounts
+                            if flt(l.credit_in_account_currency) > 0), None)
+    montant = flt(je.total_debit, 3)
+    supplier = frappe.db.get_value("Facture Achat a Saisir", fiche_nom, "supplier")
+    if not (compte_paiement and montant > 0 and supplier):
+        return None
+
+    date = je.posting_date
+    mode = je.get("mode_of_payment") or frappe.db.get_value(
+        "Facture Achat a Saisir", fiche_nom, "mode_paiement")
+    reference = je.get("cheque_no") or ""
+    remarque = je.get("user_remark") or ""
+
+    je.flags.ignore_permissions = True
+    je.flags.ignore_links = True
+    je.cancel()
+    frappe.delete_doc("Journal Entry", je_nom, ignore_permissions=True, force=True)
+
+    # ⚠️ CE QUE LA FACTURE DOIT ENCORE, CALCULÉ, PAS RELU. À la soumission
+    # `outstanding_amount` n'est pas encore posé (il l'est avec les écritures) :
+    # s'y fier donnait 0, et ERPNext refusait le paiement en criant que la
+    # facture était déjà réglée. On additionne donc ce que les paiements soumis
+    # lui ont déjà alloué et on retranche.
+    total = flt(doc.get("rounded_total") or doc.grand_total, 3)
+    deja = flt(frappe.db.sql("""
+        select sum(allocated_amount) from `tabPayment Entry Reference`
+        where reference_doctype = 'Purchase Invoice' and reference_name = %s
+          and docstatus = 1""", doc.name)[0][0], 3)
+    alloue = min(montant, max(0.0, flt(total - deja, 3)))
+
+    pe = frappe.new_doc("Payment Entry")
+    pe.payment_type = "Pay"
+    pe.party_type = "Supplier"
+    pe.party = supplier
+    pe.company = doc.company or COMPANY
+    pe.posting_date = date
+    pe.mode_of_payment = mode or None
+    pe.paid_from = compte_paiement
+    pe.paid_to = COMPTE_CREDITEURS
+    pe.paid_amount = montant
+    pe.received_amount = montant
+    pe.source_exchange_rate = 1
+    pe.target_exchange_rate = 1
+    pe.reference_no = reference or doc.name
+    pe.reference_date = date
+    pe.remarks = remarque or reference
+    # Une facture déjà soldée par ailleurs ne peut rien recevoir : le paiement
+    # existe quand même (l'argent est sorti), mais il reste non alloué sur le
+    # compte du fournisseur au lieu de faire échouer la soumission.
+    if alloue > 0.001:
+        pe.append("references", {"reference_doctype": "Purchase Invoice",
+                                 "reference_name": doc.name,
+                                 "allocated_amount": alloue})
+    pe.flags.ignore_permissions = True
+    pe.insert()
+    pe.submit()
+
+    frappe.db.set_value("Facture Achat a Saisir", fiche_nom,
+                        {"payment_entry": pe.name, "journal_entry": ""},
+                        update_modified=False)
+    _copier_justificatifs(fiche_nom, "Payment Entry", pe.name)
+    return pe.name
 
 
 def pi_marquer_fiche_saisie(doc, method=None):
-    """Purchase Invoice on_submit : la fiche de caisse est comptabilisée.
+    """Purchase Invoice on_submit : la fiche de caisse est comptabilisée, et
+    l'écriture d'avance de la caisse devient le paiement de CETTE facture.
 
     Le rattachement est refait ici : une facture créée ET soumise d'un trait ne
     passe pas par `on_update`."""
     pi_lier_fiche_caisse(doc)
     nom = frappe.db.get_value("Facture Achat a Saisir", {"purchase_invoice": doc.name}, "name")
-    if nom:
-        frappe.db.set_value("Facture Achat a Saisir", nom, "statut", "Saisie",
-                            update_modified=False)
+    if not nom:
+        return
+    frappe.db.set_value("Facture Achat a Saisir", nom, "statut", "Saisie",
+                        update_modified=False)
+    _remplacer_avance_par_paiement(doc, nom)
 
 
 def pi_rouvrir_fiche(doc, method=None):
-    """Purchase Invoice on_cancel : la fiche repart dans la file « À saisir »."""
+    """Purchase Invoice on_cancel : la fiche repart dans la file « À saisir ».
+
+    ⚠️ LE PAIEMENT CRÉÉ À LA SOUMISSION EST ANNULÉ AVEC ELLE. Il ne référence
+    qu'elle : le laisser vivant laisserait un règlement rattaché à une facture
+    annulée, et l'argent sorti sans contrepartie. La fiche garde sa trace (le
+    paiement annulé reste consultable) et repart dans la file."""
     nom = frappe.db.get_value("Facture Achat a Saisir", {"purchase_invoice": doc.name}, "name")
-    if nom:
-        frappe.db.set_value("Facture Achat a Saisir", nom,
-                            {"statut": "À saisir", "purchase_invoice": ""},
-                            update_modified=False)
+    if not nom:
+        return
+    pe_nom = frappe.db.get_value("Facture Achat a Saisir", nom, "payment_entry")
+    if pe_nom and frappe.db.exists("Payment Entry", pe_nom):
+        pe = frappe.get_doc("Payment Entry", pe_nom)
+        if pe.docstatus == 1:
+            pe.flags.ignore_permissions = True
+            pe.cancel()
+    frappe.db.set_value("Facture Achat a Saisir", nom,
+                        {"statut": "À saisir", "purchase_invoice": ""},
+                        update_modified=False)
