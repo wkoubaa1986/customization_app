@@ -71,7 +71,6 @@ class RapportCaisseJournaliere {
     $("#rcj-btn-dettes").on("click", () => rcj_encaissement_dettes(this));
     $("#rcj-btn-depense").on("click", () => rcj_depense(this));
     $("#rcj-btn-cloture").on("click", () => rcj_cloture(this));
-    $("#rcj-btn-remise").on("click", () => rcj_remise(this));
     // Exclure / réintégrer un paiement d'ancienne commande (correction de saisie).
     $(this.wrapper).on("click", ".rcj-exclure", (e) => {
       const $b = $(e.currentTarget);
@@ -928,6 +927,111 @@ function rcj_encaissement_dettes(rapport) {
 }
 
 
+// ── Cadrage du scan : les 4 coins détectés, ajustables à la main ─────────────
+// Le serveur (detecter_contour) propose le quadrilatère ; l'employé déplace les
+// poignées sur la photo (souris ou doigt) puis valide — ces coins font foi pour
+// le redressement (warpPerspective côté serveur). « Photo entière » = pas de
+// recadrage imposé, le serveur garde son comportement automatique.
+function rcj_cadrage(photo, onDone) {
+  frappe.call({
+    method: "customization_app.caisse_depenses.detecter_contour",
+    args: { photo },
+    freeze: true, freeze_message: __("Détection du document…"),
+    callback: (r) => {
+      const m = r.message || {};
+      const img = new Image();
+      img.onload = () => ouvrir(img, m);
+      img.src = photo;
+    },
+  });
+
+  function ouvrir(img, m) {
+    const maxW = Math.min(700, window.innerWidth - 80);
+    const maxH = 480;
+    const k = Math.min(maxW / img.width, maxH / img.height, 1);
+    const W = Math.round(img.width * k), H = Math.round(img.height * k);
+    let coins = (m.coins || []).map((c) => [c[0] * k, c[1] * k]);
+    if (coins.length !== 4) {
+      coins = [[10, 10], [W - 10, 10], [W - 10, H - 10], [10, H - 10]];
+    }
+    const d = new frappe.ui.Dialog({
+      title: __("Cadrage du document — ajuste les 4 coins"),
+      size: "large",
+      fields: [{ fieldtype: "HTML", fieldname: "zone" }],
+      primary_action_label: __("Valider ce cadrage"),
+      primary_action() {
+        d.hide();
+        onDone(coins.map((c) => [c[0] / k, c[1] / k]));
+      },
+      secondary_action_label: __("Photo entière"),
+      secondary_action() { d.hide(); onDone(null); },
+    });
+    d.fields_dict.zone.$wrapper.html(`
+      <div class="text-muted" style="font-size:11px;margin-bottom:4px">${m.detecte
+        ? __("Contour détecté automatiquement — déplace les coins si besoin.")
+        : __("Aucun contour net détecté — place les coins toi-même.")}</div>
+      <canvas class="rcj-cadre" width="${W}" height="${H}"
+              style="max-width:100%;touch-action:none;cursor:crosshair;border:1px solid #ddd"></canvas>`);
+    const canvas = d.fields_dict.zone.$wrapper.find("canvas.rcj-cadre")[0];
+    const ctx = canvas.getContext("2d");
+    function dessiner() {
+      ctx.drawImage(img, 0, 0, W, H);
+      // Voile sombre HORS de la zone retenue : on voit ce qui sera coupé.
+      ctx.save();
+      ctx.fillStyle = "rgba(0,0,0,0.45)";
+      ctx.beginPath();
+      ctx.rect(0, 0, W, H);
+      ctx.moveTo(coins[0][0], coins[0][1]);
+      for (let i = 3; i >= 0; i--) ctx.lineTo(coins[i][0], coins[i][1]);
+      ctx.closePath();
+      ctx.fill("evenodd");
+      ctx.restore();
+      ctx.strokeStyle = "#2e7d32"; ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(coins[0][0], coins[0][1]);
+      for (let i = 1; i < 4; i++) ctx.lineTo(coins[i][0], coins[i][1]);
+      ctx.closePath(); ctx.stroke();
+      coins.forEach((c) => {
+        ctx.beginPath(); ctx.arc(c[0], c[1], 7, 0, 2 * Math.PI);
+        ctx.fillStyle = "#fff"; ctx.fill(); ctx.stroke();
+      });
+    }
+    let actif = -1;
+    const pos = (ev) => {
+      const r = canvas.getBoundingClientRect();
+      const p = ev.touches ? ev.touches[0] : ev;
+      // max-width:100% peut réduire l'affichage : reconvertir en pixels canvas.
+      return [(p.clientX - r.left) * (W / r.width), (p.clientY - r.top) * (H / r.height)];
+    };
+    const debut = (ev) => {
+      const [x, y] = pos(ev);
+      let best = -1, bd = 1e9;
+      coins.forEach((c, i) => {
+        const dd = Math.hypot(c[0] - x, c[1] - y);
+        if (dd < bd) { bd = dd; best = i; }
+      });
+      if (bd <= 28) { actif = best; ev.preventDefault(); }
+    };
+    const bouge = (ev) => {
+      if (actif < 0) return;
+      const [x, y] = pos(ev);
+      coins[actif] = [Math.max(0, Math.min(W, x)), Math.max(0, Math.min(H, y))];
+      dessiner();
+      ev.preventDefault();
+    };
+    const fin = () => { actif = -1; };
+    canvas.addEventListener("mousedown", debut);
+    canvas.addEventListener("mousemove", bouge);
+    window.addEventListener("mouseup", fin);
+    canvas.addEventListener("touchstart", debut, { passive: false });
+    canvas.addEventListener("touchmove", bouge, { passive: false });
+    canvas.addEventListener("touchend", fin);
+    d.show();
+    dessiner();
+  }
+}
+
+
 // ── Dépenses de caisse ───────────────────────────────────────────────────────
 // Trois types (non facturée / avec facture / facture d'achat), photo de la
 // facture obligatoire dès qu'il y a facture, analyse OpenAI pour préremplir,
@@ -935,7 +1039,8 @@ function rcj_encaissement_dettes(rapport) {
 // (customization_app.caisse_depenses) fait foi sur toutes les règles.
 function rcj_depense(rapport) {
   const API = "customization_app.caisse_depenses";
-  let etat = { facture: null, facture_nom: null, cheque: null, cheque_nom: null,
+  let etat = { facture: null, facture_nom: null, facture_coins: null,
+               cheque: null, cheque_nom: null,
                numero: null, date_facture: null, analyse_faite: false };
 
   const d = new frappe.ui.Dialog({
@@ -1021,6 +1126,7 @@ function rcj_depense(rapport) {
           numero_facture: etat.numero, date_facture: etat.date_facture,
           n_cheque: v.n_cheque, banque: v.banque,
           photo_facture: etat.facture, photo_facture_nom: etat.facture_nom,
+          coins_facture: etat.facture_coins ? JSON.stringify(etat.facture_coins) : null,
           photo_cheque: v.mode === "Chèque" ? etat.cheque : null,
           photo_cheque_nom: etat.cheque_nom,
         },
@@ -1064,7 +1170,10 @@ function rcj_depense(rapport) {
   const $zf = zone_photo("zone_facture", "facture", "facture_nom", __("Photo de la facture"),
     () => {
       etat.analyse_faite = false;   // nouvelle photo -> nouvelle analyse exigée
+      etat.facture_coins = null;
       $zf.find(".rcj-analyser").prop("disabled", false);
+      // Cadrage à valider AVANT tout : les coins retenus font foi pour le scan.
+      rcj_cadrage(etat.facture, (coins) => { etat.facture_coins = coins; });
     });
   $zf.children().first().append(
     `<button type="button" class="btn btn-default btn-sm rcj-analyser"
@@ -1084,8 +1193,14 @@ function rcj_depense(rapport) {
         etat.numero = m.numero || null;
         etat.date_facture = m.date || null;
         etat.analyse_faite = true;
-        if (m.numero && !d.get_value("description")) {
-          d.set_value("description", __("Facture {0} — {1}", [m.numero, m.fournisseur || ""]));
+        // La description LUE sur la photo d'abord ; à défaut, le gabarit
+        // « Facture n° — fournisseur ». On ne touche jamais une saisie déjà faite.
+        if (!d.get_value("description")) {
+          if (m.description) {
+            d.set_value("description", m.description);
+          } else if (m.numero) {
+            d.set_value("description", __("Facture {0} — {1}", [m.numero, m.fournisseur || ""]));
+          }
         }
         frappe.show_alert({
           message: m.coherent
@@ -1340,91 +1455,6 @@ function rcj_html_rapprochement(rap, fmt) {
         <td style="text-align:right;font-weight:700">${fmt(rap.dettes.apres)}</td></tr>
     </table>
     <div class="text-muted" style="font-size:11px;margin-bottom:6px">
-      ${__("Les pièces encore en portefeuille sont listées nominativement dans le PDF — à compter physiquement. La sortie se trace avec « 🏦 Remise en banque ».")}
+      ${__("Les pièces encore en portefeuille sont listées nominativement dans le PDF — à compter physiquement.")}
     </div>`;
-}
-
-
-// ── Remise en banque (direction) : la SORTIE du portefeuille ─────────────────
-// Liste les chèques / traites encore en caisse, on coche ce qu'on dépose, la
-// date de remise se fige sur chaque paiement (custom_remise_en_banque).
-function rcj_remise(rapport) {
-  const API = "customization_app.caisse_cloture";
-  const date = $("#rcj-d2").val() || frappe.datetime.get_today();
-  frappe.call({
-    method: API + ".portefeuille", args: { date },
-    freeze: true,
-    callback: (r) => {
-      const pf = r.message || {};
-      const pieces = pf.pieces || [];
-      if (!pieces.length) {
-        frappe.msgprint(__("Aucun chèque ni traite en portefeuille au {0}.",
-          [frappe.datetime.str_to_user(date)]));
-        return;
-      }
-      const esc = frappe.utils.escape_html;
-      const fmt = (v) => format_currency(v || 0, "TND");
-      const lignes = pieces.map((p) => `
-        <tr>
-          <td><input type="checkbox" class="rcj-remise-cb" data-pe="${esc(p.name)}"></td>
-          <td>${esc(p.mode)}</td>
-          <td style="white-space:nowrap">${frappe.datetime.str_to_user(p.date)}</td>
-          <td>${esc(p.client)}</td>
-          <td>${esc(p.reference_no)}</td>
-          <td style="text-align:right;font-weight:600">${fmt(p.montant)}</td>
-        </tr>`).join("");
-      const d = new frappe.ui.Dialog({
-        title: __("Remise en banque — portefeuille au {0} ({1})",
-          [frappe.datetime.str_to_user(date), fmt(pf.total)]),
-        size: "large",
-        fields: [
-          { fieldtype: "HTML", fieldname: "liste" },
-          { fieldtype: "Date", fieldname: "date_remise",
-            label: __("Date de la remise"), default: date, reqd: 1 },
-        ],
-        primary_action_label: __("Marquer remis en banque"),
-        primary_action(v) {
-          const noms = [];
-          d.fields_dict.liste.$wrapper.find("input.rcj-remise-cb:checked")
-            .each(function () { noms.push($(this).attr("data-pe")); });
-          if (!noms.length) {
-            frappe.msgprint(__("Cochez au moins un chèque ou une traite."));
-            return;
-          }
-          frappe.call({
-            method: API + ".remettre_en_banque",
-            args: { paiements: JSON.stringify(noms), date: v.date_remise },
-            freeze: true, freeze_message: __("Marquage de la remise…"),
-            callback: (rr) => {
-              d.hide();
-              frappe.show_alert({
-                message: __("{0} pièce(s) marquée(s) remise(s) en banque.",
-                  [(rr.message.remis || []).length]),
-                indicator: "green",
-              });
-              if (rapport && rapport._fetch) rapport._fetch();
-            },
-          });
-        },
-      });
-      d.fields_dict.liste.$wrapper.html(`
-        <div style="margin-bottom:6px">
-          <label style="font-weight:600;font-size:12px">
-            <input type="checkbox" class="rcj-remise-tout"> ${__("Tout cocher")}
-          </label>
-        </div>
-        <div style="max-height:320px;overflow:auto">
-        <table class="table table-bordered" style="font-size:12px">
-          <tr style="background:#f6f6f6;font-weight:600"><td></td><td>${__("Mode")}</td>
-            <td>${__("Reçu le")}</td><td>${__("Client")}</td>
-            <td>${__("N° / Référence")}</td><td style="text-align:right">${__("Montant")}</td></tr>
-          ${lignes}
-        </table></div>`);
-      d.fields_dict.liste.$wrapper.find(".rcj-remise-tout").on("change", function () {
-        d.fields_dict.liste.$wrapper.find("input.rcj-remise-cb")
-          .prop("checked", $(this).is(":checked"));
-      });
-      d.show();
-    },
-  });
 }

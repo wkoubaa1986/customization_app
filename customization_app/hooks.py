@@ -165,6 +165,16 @@ doc_events = {
     "Mes Interventions Employe": {
         "before_submit": "customization_app.api.before_submit_mes_interventions",
     },
+    # La file « Facture Achat a Saisir » (captures de la caisse) se rattache toute
+    # seule aux vraies factures d'achat : appariement (fournisseur, n°), copie du
+    # justificatif scanné, statut « Saisie » à la soumission.
+    "Purchase Invoice": {
+        # on_update, pas validate : au validate la facture n'existe pas encore et
+        # une insertion qui échoue ensuite laisserait un lien vers un fantôme.
+        "on_update": "customization_app.caisse_depenses.pi_lier_fiche_caisse",
+        "on_submit": "customization_app.caisse_depenses.pi_marquer_fiche_saisie",
+        "on_cancel": "customization_app.caisse_depenses.pi_rouvrir_fiche",
+    },
     "Tache de travail": {
         "before_save": "customization_app.api.before_save_tache_de_travail",
         # ATTENTION : « after_save » n'est pas un événement Frappe — le

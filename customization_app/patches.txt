@@ -26,3 +26,4 @@ customization_app.patches.ensure_remise_banque_field
 customization_app.patches.ensure_retour_colis_field
 customization_app.patches.recalc_anomalies_brouillons
 customization_app.patches.ensure_traite_bancaire_option
+customization_app.patches.ajouter_factures_caisse_workspace_achats

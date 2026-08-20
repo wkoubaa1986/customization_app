@@ -89,8 +89,9 @@ def comptes_classifiables():
 
 
 def _classifier(image_bytes, mimetype, extraction):
-    """Demande au modèle LE compte de charge de la dépense, parmi la liste fermée.
-    Rend le nom du compte, ou None si la réponse sort de la liste."""
+    """Demande au modèle LE compte de charge de la dépense ET sa description lue
+    sur la photo (même appel : pas de latence en plus). -> (compte, description)
+    — compte None si la réponse sort de la liste, description '' si muette."""
     from bank_retenue_sync.ai.invoice_extract import _get_client_model_temp
 
     comptes = comptes_classifiables()
@@ -99,8 +100,11 @@ def _classifier(image_bytes, mimetype, extraction):
     res = client.responses.create(
         model=model,
         instructions=(
-            "Tu classes une dépense d'entreprise tunisienne dans un plan comptable. "
-            "Réponds STRICTEMENT en JSON : {\"compte\": <un nom EXACT de la liste>}. "
+            "Tu classes une dépense d'entreprise tunisienne dans un plan comptable et tu la "
+            "résumes. Réponds STRICTEMENT en JSON : "
+            "{\"compte\": <un nom EXACT de la liste>, "
+            "\"description\": <ce qui a été acheté, lu sur le document, en français, "
+            "3 à 10 mots, sans montant ni date>}. "
             "Liste des comptes autorisés : " + json.dumps(comptes, ensure_ascii=False)),
         input=[{"role": "user", "content": [
             {"type": "input_image", "image_url": f"data:{mimetype};base64,{b64}"},
@@ -112,10 +116,38 @@ def _classifier(image_bytes, mimetype, extraction):
     if texte.lower().startswith("json"):
         texte = texte.split("\n", 1)[1]
     try:
-        compte = (json.loads(texte).get("compte") or "").strip()
+        lu = json.loads(texte)
+        compte = (lu.get("compte") or "").strip()
+        description = (lu.get("description") or "").strip()
     except Exception:
-        return None
-    return compte if compte in comptes else None
+        return None, ""
+    return (compte if compte in comptes else None), description
+
+
+def _decrire(image_bytes, mimetype):
+    """La description de la dépense lue sur la photo, pour les types qui ne passent
+    pas par la classification (facture d'achat). -> '' si le modèle est muet."""
+    from bank_retenue_sync.ai.invoice_extract import _get_client_model_temp
+
+    client, model, _t = _get_client_model_temp()
+    b64 = base64.b64encode(image_bytes).decode()
+    res = client.responses.create(
+        model=model,
+        instructions=(
+            "Tu lis la facture ou le reçu photographié d'une dépense d'entreprise "
+            "tunisienne. Réponds STRICTEMENT en JSON : "
+            "{\"description\": <ce qui a été acheté, en français, 3 à 10 mots, "
+            "sans montant ni date>}"),
+        input=[{"role": "user", "content": [
+            {"type": "input_image", "image_url": f"data:{mimetype};base64,{b64}"},
+            {"type": "input_text", "text": "Décris la dépense."}]}])
+    texte = (res.output_text or "").strip().strip("`")
+    if texte.lower().startswith("json"):
+        texte = texte.split("\n", 1)[1]
+    try:
+        return (json.loads(texte).get("description") or "").strip()
+    except Exception:
+        return ""
 
 
 @frappe.whitelist()
@@ -142,12 +174,27 @@ def analyser(photo, type_depense=None):
         "date": d.get("invoice_date") or "",
         "coherent": bool(d.get("_balanced")),
         "compte_suggere": None,
+        "description": "",
     }
     if type_depense == "Dépense avec facture":
         try:
-            out["compte_suggere"] = _classifier(contenu, mimetype, d)
+            out["compte_suggere"], out["description"] = _classifier(contenu, mimetype, d)
         except Exception:
             out["compte_suggere"] = None   # la classification est une aide, jamais un blocage
+    else:
+        # Pas de classification pour une facture d'achat, mais la description lue
+        # sur la photo sert autant (décision utilisateur 2026-08-20).
+        try:
+            out["description"] = _decrire(contenu, mimetype)
+        except Exception:
+            pass
+    # ⚠️ FOURNISSEUR ET N° DE FACTURE TOUJOURS DANS LA DESCRIPTION (décision
+    # utilisateur 2026-08-20) : elle devient le « N° de référence » de l'écriture
+    # de journal (« Dépense caisse — … ») — c'est par elle qu'on retrouve la pièce.
+    morceaux = [m for m in (out["description"], out["fournisseur"]) if m]
+    if out["numero"]:
+        morceaux.append(_("Fact. n°{0}").format(out["numero"]))
+    out["description"] = " — ".join(morceaux)
     return out
 
 
@@ -171,13 +218,19 @@ def _supplier(nom):
 def creer(type_depense, montant, mode, compte=None, description=None, fournisseur=None,
           tva=0, taux_tva=0, numero_facture=None, date_facture=None,
           n_cheque=None, banque=None, photo_facture=None, photo_facture_nom=None,
-          photo_cheque=None, photo_cheque_nom=None):
+          photo_cheque=None, photo_cheque_nom=None, coins_facture=None):
     """Crée la dépense selon son type (voir l'en-tête du module). Retourne les noms
     des pièces créées (écriture et/ou fiche de la file des factures d'achat)."""
     frappe.only_for(ROLES)
     montant = flt(montant, 3)
     tva = flt(tva, 3)
     description = (description or "").strip()
+    # Le cadrage validé à l'écran (4 coins, pixels pleine taille) — voir
+    # `detecter_contour` : quand il est là, il fait foi sur la détection.
+    if isinstance(coins_facture, str) and coins_facture.strip():
+        coins_facture = json.loads(coins_facture)
+    if not coins_facture:
+        coins_facture = None
     if type_depense not in TYPES:
         frappe.throw(_("Type de dépense inconnu : {0}.").format(type_depense))
     if mode == MODE_PAS_PAYE and type_depense != "Facture d'achat":
@@ -244,10 +297,10 @@ def creer(type_depense, montant, mode, compte=None, description=None, fournisseu
         })
         fiche.insert(ignore_permissions=True)
         _attacher_scan(photo_facture, "facture-%s" % fiche.name,
-                       "Facture Achat a Saisir", fiche.name)
+                       "Facture Achat a Saisir", fiche.name, coins=coins_facture)
         if je:
             _attacher_scan(photo_facture, "facture-%s" % fiche.name,
-                           "Journal Entry", je.name)
+                           "Journal Entry", je.name, coins=coins_facture)
         resultat = {"name": je.name if je else None, "fiche": fiche.name}
     else:
         compte = (compte or "").strip()
@@ -280,7 +333,7 @@ def creer(type_depense, montant, mode, compte=None, description=None, fournisseu
         je = _ecriture(lignes, description, remarques)
         if photo_facture:
             _attacher_scan(photo_facture, "facture-%s" % je.name,
-                           "Journal Entry", je.name)
+                           "Journal Entry", je.name, coins=coins_facture)
         resultat = {"name": je.name, "fiche": None}
 
     if photo_cheque and je:
@@ -305,10 +358,40 @@ def _ecriture(lignes, description, remarques):
     return je
 
 
-def _redresser_document(image_bytes):
+def _detecter_quad(img):
+    """Les 4 coins du document sur l'image OpenCV, en pixels PLEINE TAILLE, ou None.
+
+    Détection Canny + contours sur une miniature (700 px) : le plus grand
+    quadrilatère franc couvrant au moins un quart de l'image."""
+    import cv2
+    import numpy as np
+
+    h, w = img.shape[:2]
+    echelle = min(1.0, 700.0 / max(h, w))
+    petit = cv2.resize(img, None, fx=echelle, fy=echelle) if echelle < 1 else img
+    gris = cv2.cvtColor(petit, cv2.COLOR_BGR2GRAY)
+    bords = cv2.Canny(cv2.GaussianBlur(gris, (5, 5), 0), 50, 150)
+    bords = cv2.dilate(bords, np.ones((3, 3), np.uint8))
+    contours, _rien = cv2.findContours(bords, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    aire_min = 0.25 * petit.shape[0] * petit.shape[1]
+    for c in sorted(contours, key=cv2.contourArea, reverse=True)[:5]:
+        if cv2.contourArea(c) < aire_min:
+            break
+        approx = cv2.approxPolyDP(c, 0.02 * cv2.arcLength(c, True), True)
+        if len(approx) == 4:
+            return approx.reshape(4, 2).astype("float32") / echelle
+    return None
+
+
+def _redresser_document(image_bytes, coins=None):
     """Le VRAI scan : OpenCV détecte le quadrilatère de la feuille (Canny +
     contours) et REDRESSE la perspective (warpPerspective) — rendu CamScanner,
     même sur une photo prise de biais.
+
+    `coins` : les 4 coins VALIDÉS À L'ÉCRAN (pixels pleine taille, ordre
+    quelconque) — quand l'employé a ajusté le cadrage, ils font foi et la
+    détection est sautée : c'est tout l'intérêt de l'aperçu (décision
+    utilisateur 2026-08-20, la détection seule délimitait mal).
 
     Rend les octets JPEG de l'image redressée, ou None quand aucun quadrilatère
     franc ne se détache (l'appelant retombe alors sur le rognage Pillow —
@@ -322,22 +405,12 @@ def _redresser_document(image_bytes):
     img = cv2.imdecode(np.frombuffer(image_bytes, np.uint8), cv2.IMREAD_COLOR)
     if img is None:
         return None
-    h, w = img.shape[:2]
-    echelle = min(1.0, 700.0 / max(h, w))
-    petit = cv2.resize(img, None, fx=echelle, fy=echelle) if echelle < 1 else img
-    gris = cv2.cvtColor(petit, cv2.COLOR_BGR2GRAY)
-    bords = cv2.Canny(cv2.GaussianBlur(gris, (5, 5), 0), 50, 150)
-    bords = cv2.dilate(bords, np.ones((3, 3), np.uint8))
-    contours, _rien = cv2.findContours(bords, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    quad = None
-    aire_min = 0.25 * petit.shape[0] * petit.shape[1]
-    for c in sorted(contours, key=cv2.contourArea, reverse=True)[:5]:
-        if cv2.contourArea(c) < aire_min:
-            break
-        approx = cv2.approxPolyDP(c, 0.02 * cv2.arcLength(c, True), True)
-        if len(approx) == 4:
-            quad = approx.reshape(4, 2).astype("float32") / echelle
-            break
+    if coins is not None:
+        quad = np.array(coins, dtype="float32")
+        if quad.shape != (4, 2):
+            return None
+    else:
+        quad = _detecter_quad(img)
     if quad is None:
         return None
     somme = quad.sum(axis=1)
@@ -346,7 +419,10 @@ def _redresser_document(image_bytes):
     tr, bl = quad[np.argmin(diff)], quad[np.argmax(diff)]
     largeur = int(max(np.linalg.norm(br - bl), np.linalg.norm(tr - tl)))
     hauteur = int(max(np.linalg.norm(tr - br), np.linalg.norm(tl - bl)))
-    if largeur < 200 or hauteur < 200:
+    # Des coins choisis par l'employé font foi même sur un petit document
+    # (ticket, reçu) ; seule la détection automatique garde le garde-fou large.
+    minimum = 80 if coins is not None else 200
+    if largeur < minimum or hauteur < minimum:
         return None
     src = np.array([tl, tr, br, bl], dtype="float32")
     dst = np.array([[0, 0], [largeur - 1, 0], [largeur - 1, hauteur - 1],
@@ -355,6 +431,45 @@ def _redresser_document(image_bytes):
                                    (largeur, hauteur))
     ok, buf = cv2.imencode(".jpg", redresse, [int(cv2.IMWRITE_JPEG_QUALITY), 92])
     return buf.tobytes() if ok else None
+
+
+@frappe.whitelist()
+def detecter_contour(photo):
+    """Les 4 coins proposés pour le cadrage, à afficher sur la photo. -> dict.
+
+    L'écran les montre en poignées déplaçables ; l'employé ajuste puis valide,
+    et `creer` reçoit les coins retenus. Sans détection possible, on propose le
+    plein cadre (léger retrait) : l'employé recadre lui-même."""
+    frappe.only_for(ROLES)
+    contenu, _mt = _decoder(photo)
+    largeur = hauteur = 0
+    quad = None
+    try:
+        import cv2
+        import numpy as np
+
+        img = cv2.imdecode(np.frombuffer(contenu, np.uint8), cv2.IMREAD_COLOR)
+        if img is not None:
+            hauteur, largeur = img.shape[:2]
+            quad = _detecter_quad(img)
+    except ImportError:
+        pass
+    if not largeur:
+        # Sans OpenCV, Pillow donne au moins les dimensions.
+        import io
+
+        from PIL import Image
+        im = Image.open(io.BytesIO(contenu))
+        largeur, hauteur = im.size
+    if quad is not None:
+        coins = [[float(x), float(y)] for x, y in quad.tolist()]
+        detecte = True
+    else:
+        rx, ry = largeur * 0.03, hauteur * 0.03
+        coins = [[rx, ry], [largeur - rx, ry], [largeur - rx, hauteur - ry],
+                 [rx, hauteur - ry]]
+        detecte = False
+    return {"largeur": largeur, "hauteur": hauteur, "coins": coins, "detecte": detecte}
 
 
 def _rogner_document(img):
@@ -387,7 +502,7 @@ def _rogner_document(img):
     return img.crop((l, t, r, b))
 
 
-def _scan_pdf(image_bytes):
+def _scan_pdf(image_bytes, coins=None):
     """La photo du justificatif devient un PDF façon SCANNER : niveaux de gris,
     contraste étiré, netteté, taille bornée — lisible et léger, sans dépendance
     nouvelle (Pillow est déjà dans Frappe ; le recadrage de perspective exigerait
@@ -400,7 +515,7 @@ def _scan_pdf(image_bytes):
         from PIL import Image, ImageFilter, ImageOps
         # D'abord le redressement OpenCV (perspective corrigée) ; à défaut, le
         # rognage Pillow (bords coupés, pas de redressement).
-        redresse = _redresser_document(image_bytes)
+        redresse = _redresser_document(image_bytes, coins=coins)
         img = Image.open(io.BytesIO(redresse or image_bytes))
         if not redresse:
             img = ImageOps.exif_transpose(img)      # la photo de téléphone arrive tournée
@@ -416,13 +531,13 @@ def _scan_pdf(image_bytes):
         return None
 
 
-def _attacher_scan(photo, nom_base, doctype, name):
+def _attacher_scan(photo, nom_base, doctype, name, coins=None):
     """Attache le justificatif en PDF scanné ; repli sur la photo brute si la
-    conversion échoue."""
+    conversion échoue. `coins` : le cadrage validé à l'écran, prioritaire."""
     from frappe.utils.file_manager import save_file
 
     contenu, _mt = _decoder(photo)
-    pdf = _scan_pdf(contenu)
+    pdf = _scan_pdf(contenu, coins=coins)
     if pdf:
         save_file("%s.pdf" % nom_base, pdf, doctype, name, is_private=1)
     else:
@@ -448,3 +563,76 @@ def comptes_depense(doctype, txt, searchfield, start, page_len, filters):
         """,
         {"company": COMPANY, "txt": f"%{txt}%", "start": start, "page_len": page_len},
     )
+
+
+# ------------------------------------------------------------------ rattachement des
+# vraies Purchase Invoice aux fiches de caisse (hooks Purchase Invoice)
+
+def _fiche_de(doc):
+    """La fiche de caisse de cette facture d'achat, ou None.
+
+    D'abord le lien déjà posé, sinon l'appariement (fournisseur, n° de facture)
+    sur une fiche encore « À saisir » — c'est le n° que le comptable recopie du
+    justificatif, la clé naturelle des deux côtés."""
+    nom = frappe.db.get_value("Facture Achat a Saisir", {"purchase_invoice": doc.name}, "name")
+    if nom:
+        return nom
+    numero = (doc.get("bill_no") or "").strip()
+    if not (doc.get("supplier") and numero):
+        return None
+    return frappe.db.get_value(
+        "Facture Achat a Saisir",
+        {"supplier": doc.supplier, "numero_facture": numero, "statut": "À saisir",
+         "purchase_invoice": ["is", "not set"]}, "name")
+
+
+def pi_lier_fiche_caisse(doc, method=None):
+    """Purchase Invoice on_update / on_submit : rattache la facture à sa fiche de
+    caisse et fait SUIVRE LE JUSTIFICATIF capturé (le scan de la caisse est la
+    preuve de la facture — décision utilisateur 2026-08-20). Une facture sans
+    fiche passe sans bruit : toutes les factures d'achat ne viennent pas de la
+    caisse.
+
+    ⚠️ APRÈS L'ENREGISTREMENT, JAMAIS AU `validate`. Au validate la facture
+    n'existe pas encore : une insertion qui échoue plus loin (un champ
+    obligatoire manquant, par exemple) laissait la fiche pointer vers un numéro
+    de facture qui n'a jamais été créé — le même piège que les justificatifs
+    fantômes vus le 20/08/2026."""
+    nom = _fiche_de(doc)
+    if not nom:
+        return
+    frappe.db.set_value("Facture Achat a Saisir", nom, "purchase_invoice", doc.name,
+                        update_modified=False)
+    for f in frappe.get_all("File",
+                            filters={"attached_to_doctype": "Facture Achat a Saisir",
+                                     "attached_to_name": nom},
+                            fields=["file_url", "file_name", "is_private"]):
+        if not f.file_url or frappe.db.exists("File", {
+                "attached_to_doctype": "Purchase Invoice", "attached_to_name": doc.name,
+                "file_url": f.file_url}):
+            continue
+        frappe.get_doc({"doctype": "File", "file_url": f.file_url,
+                        "file_name": f.file_name, "is_private": f.is_private,
+                        "attached_to_doctype": "Purchase Invoice",
+                        "attached_to_name": doc.name}).insert(ignore_permissions=True)
+
+
+def pi_marquer_fiche_saisie(doc, method=None):
+    """Purchase Invoice on_submit : la fiche de caisse est comptabilisée.
+
+    Le rattachement est refait ici : une facture créée ET soumise d'un trait ne
+    passe pas par `on_update`."""
+    pi_lier_fiche_caisse(doc)
+    nom = frappe.db.get_value("Facture Achat a Saisir", {"purchase_invoice": doc.name}, "name")
+    if nom:
+        frappe.db.set_value("Facture Achat a Saisir", nom, "statut", "Saisie",
+                            update_modified=False)
+
+
+def pi_rouvrir_fiche(doc, method=None):
+    """Purchase Invoice on_cancel : la fiche repart dans la file « À saisir »."""
+    nom = frappe.db.get_value("Facture Achat a Saisir", {"purchase_invoice": doc.name}, "name")
+    if nom:
+        frappe.db.set_value("Facture Achat a Saisir", nom,
+                            {"statut": "À saisir", "purchase_invoice": ""},
+                            update_modified=False)
