@@ -24,7 +24,7 @@
     // journée. Les surestimer coûte des créneaux qui n'existent pas.
     const INTERVENTION_DURATIONS = {
         'Entretien': 30, 'Installation': 75,
-        'Réparation': 120, 'Livraison': 15,
+        'Réparation': 120, 'Livraison': 30,
         'Visite': 120, 'Autre': 120,
     };
 

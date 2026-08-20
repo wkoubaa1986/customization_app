@@ -159,13 +159,15 @@ frappe.views.CalendarViewList = class CalendarViewList extends frappe.views.Cale
 
                     let tooltipText = tooltipParts.join('\n\n');
                     element.attr("title", tooltipText);
+                    // Écriture réduite sur tout le calendrier (titre + heure)
+                    element.find('.fc-title, .fc-time').css("font-size", "10px");
                     if (event.all_day===1) {
                         const title = element.find('.fc-title');
 
-                    
+
                         // If the title overflows, reduce the font size
                         title.css({
-                            "font-size": "9 px",  // Decrease the font size
+                            "font-size": "9px",  // Decrease the font size
                             "white-space": "nowrap",  // Prevent text wrapping
                             "overflow": "hidden",  // Hide overflow text
                             "text-overflow": "ellipsis",  // Add ellipsis if text overflows

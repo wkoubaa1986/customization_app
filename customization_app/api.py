@@ -960,7 +960,7 @@ DUREE_INTERVENTION = {
     "Entretien": 30,
     "Installation": 75,
     "Réparation": 120,
-    "Livraison": 15,
+    "Livraison": 30,
     "Visite": 120,
     "Autre": 120,
 }
