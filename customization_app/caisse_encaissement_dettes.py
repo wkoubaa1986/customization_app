@@ -205,6 +205,12 @@ def _verifier_photo(p):
     """
     libelle = _("chèque") if p["mode"] == "Chèque" else _("traite")
     etiquette = "%s n°%s" % (libelle, p["numero"])
+    # Un PDF ou tout autre non-image est accepté comme pièce jointe, mais le modèle
+    # vision ne lit que des images — vu en prod le 20/08/2026 (400 « unsupported
+    # MIME type application/pdf » maquillé en « service indisponible »).
+    if not (p.get("photo") or "").startswith("data:image/"):
+        return [_("{0} : la pièce jointe n'est pas une photo (PDF ?) — vérification "
+                  "automatique impossible, contrôle à l'œil.").format(etiquette)]
     try:
         from bank_retenue_sync.ai.invoice_extract import _get_client_model_temp
 
