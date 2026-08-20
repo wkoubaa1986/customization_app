@@ -802,7 +802,9 @@ function rcj_encaissement_dettes(rapport) {
         <td style="white-space:nowrap">${piece ? `
           <button type="button" class="btn btn-default btn-xs rcj-p-photo">📷</button>
           <span class="text-muted" style="font-size:11px">${p.photo
-            ? "✓ " + frappe.utils.escape_html(p.photo_nom || "photo") : __("requise")}</span>
+            ? `<a href="#" class="rcj-p-voir">✓ ${
+                frappe.utils.escape_html(p.photo_nom || "photo")}</a>`
+            : __("requise")}</span>
           <input type="file" accept="image/*,application/pdf" style="display:none">` : "—"}</td>
         <td><button type="button" class="btn btn-default btn-xs rcj-p-suppr">✕</button></td>
       </tr>`;
@@ -834,6 +836,11 @@ function rcj_encaissement_dettes(rapport) {
     $z.find(".rcj-p-banque").on("change", function () { ligne_de(this).banque = $(this).val(); });
     $z.find(".rcj-p-photo").on("click", function () {
       $(this).closest("td").find("input[type=file]").trigger("click");
+    });
+    $z.find(".rcj-p-voir").on("click", function (e) {
+      e.preventDefault();
+      const p = ligne_de(this);
+      rcj_apercu_fichier(p.photo, p.photo_nom);
     });
     $z.find("input[type=file]").on("change", function () {
       const f = this.files && this.files[0];
@@ -924,6 +931,43 @@ function rcj_encaissement_dettes(rapport) {
 
   d.show();
   render_paiements();
+}
+
+
+// ── Aperçu d'un justificatif encore en mémoire (avant enregistrement) ────────
+// La pièce n'est pas encore sur le serveur : on la relit depuis son dataURL.
+// ⚠️ PAR UN BLOB, PAS PAR LE dataURL DIRECT : Chrome refuse d'ouvrir un
+// « data:application/pdf » dans un onglet ou une iframe (protection anti-
+// phishing) — le justificatif resterait invisible au moment où on veut le
+// vérifier.
+function rcj_apercu_fichier(dataUrl, nom) {
+  const virgule = (dataUrl || "").indexOf(",");
+  if (virgule < 0) return;
+  const entete = dataUrl.slice(0, virgule);
+  const b64 = dataUrl.slice(virgule + 1);
+  const mt = (entete.match(/data:([^;]+)/) || [])[1] || "application/octet-stream";
+  let url;
+  try {
+    const bin = atob(b64);
+    const buf = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+    url = URL.createObjectURL(new Blob([buf], { type: mt }));
+  } catch (e) {
+    frappe.msgprint(__("Ce fichier ne peut pas être affiché."));
+    return;
+  }
+  const d = new frappe.ui.Dialog({
+    title: nom || __("Justificatif"),
+    size: "large",
+    fields: [{ fieldtype: "HTML", fieldname: "zone" }],
+    primary_action_label: __("Ouvrir dans un onglet"),
+    primary_action: () => window.open(url, "_blank"),
+    onhide: () => setTimeout(() => URL.revokeObjectURL(url), 60000),
+  });
+  d.fields_dict.zone.$wrapper.html(mt === "application/pdf"
+    ? `<iframe src="${url}" style="width:100%;height:70vh;border:1px solid #ddd"></iframe>`
+    : `<img src="${url}" style="max-width:100%;max-height:70vh;display:block;margin:0 auto">`);
+  d.show();
 }
 
 
@@ -1203,6 +1247,12 @@ function rcj_depense(rapport) {
       </div>`);
     const $input = $z.find("input[type=file]");
     $z.find(".rcj-ph-btn").on("click", () => $input.trigger("click"));
+    // Le nom du fichier ouvre son aperçu : on vérifie ce qu'on joint avant
+    // d'enregistrer, sans quitter la saisie.
+    $z.on("click", ".rcj-ph-voir", (e) => {
+      e.preventDefault();
+      rcj_apercu_fichier(etat[cle], etat[cle_nom]);
+    });
     $input.on("change", function () {
       const f = this.files && this.files[0];
       if (!f) return;
@@ -1210,7 +1260,8 @@ function rcj_depense(rapport) {
       lecteur.onload = () => {
         etat[cle] = lecteur.result;
         etat[cle_nom] = f.name;
-        $z.find(".rcj-ph-nom").text("✓ " + f.name);
+        $z.find(".rcj-ph-nom").html(
+          `<a href="#" class="rcj-ph-voir">✓ ${frappe.utils.escape_html(f.name)}</a>`);
         if (apres) apres();
       };
       lecteur.readAsDataURL(f);
