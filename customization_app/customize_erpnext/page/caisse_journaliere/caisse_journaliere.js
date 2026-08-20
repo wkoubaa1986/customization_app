@@ -803,7 +803,7 @@ function rcj_encaissement_dettes(rapport) {
           <button type="button" class="btn btn-default btn-xs rcj-p-photo">📷</button>
           <span class="text-muted" style="font-size:11px">${p.photo
             ? "✓ " + frappe.utils.escape_html(p.photo_nom || "photo") : __("requise")}</span>
-          <input type="file" accept="image/*" capture="environment" style="display:none">` : "—"}</td>
+          <input type="file" accept="image/*,application/pdf" style="display:none">` : "—"}</td>
         <td><button type="button" class="btn btn-default btn-xs rcj-p-suppr">✕</button></td>
       </tr>`;
     }).join("");
@@ -939,8 +939,12 @@ function rcj_cadrage(photo, onDone) {
     freeze: true, freeze_message: __("Détection du document…"),
     callback: (r) => {
       const m = r.message || {};
+      // Un PDF est déjà un document cadré : pas d'étape de cadrage (et un
+      // <img> ne saurait pas l'afficher — il resterait bloqué sur onload).
+      if (m.pdf) { onDone(null); return; }
       const img = new Image();
       img.onload = () => ouvrir(img, m);
+      img.onerror = () => onDone(null);   // fichier illisible : on n'impose rien
       img.src = photo;
     },
   });
@@ -1032,6 +1036,42 @@ function rcj_cadrage(photo, onDone) {
 }
 
 
+// ── Fournisseur douteux : on demande, on ne crée jamais un doublon en silence ─
+// Le serveur rapproche par MATRICULE FISCAL d'abord (il identifie le
+// contribuable), puis par nom normalisé. Quand rien n'est certain mais que des
+// fiches ressemblent, c'est l'utilisateur qui tranche.
+function rcj_choisir_fournisseur(m, onChoix) {
+  const esc = frappe.utils.escape_html;
+  const lu = m.fournisseur || "";
+  const options = (m.fournisseur_candidats || []).map((c, i) => `
+    <label style="display:block;padding:6px 8px;border:1px solid #eee;border-radius:6px;margin-bottom:4px">
+      <input type="radio" name="rcj-four" value="${esc(c.name)}" ${i === 0 ? "checked" : ""}>
+      <strong>${esc(c.supplier_name)}</strong>
+      ${c.tax_id ? `<span class="text-muted"> — ${__("MF")} ${esc(c.tax_id)}</span>` : ""}
+      <span class="text-muted" style="font-size:11px"> (${Math.round(c.score * 100)} %)</span>
+    </label>`).join("");
+  const d = new frappe.ui.Dialog({
+    title: __("Quel fournisseur ?"),
+    fields: [{ fieldtype: "HTML", fieldname: "zone" }],
+    primary_action_label: __("Utiliser cette fiche"),
+    primary_action() {
+      const choix = d.$wrapper.find("input[name=rcj-four]:checked").val();
+      d.hide();
+      onChoix(choix || null);
+    },
+    secondary_action_label: __("➕ Nouveau fournisseur"),
+    secondary_action() { d.hide(); onChoix(null); },
+  });
+  d.fields_dict.zone.$wrapper.html(`
+    <p>${__("Lu sur la facture : <strong>{0}</strong>{1}.", [esc(lu),
+      m.matricule ? __(" (MF {0})", [esc(m.matricule)]) : ""])}</p>
+    <p class="text-muted" style="font-size:12px">${
+      __("Des fiches existantes ressemblent — choisis la bonne pour éviter un doublon, ou crée un nouveau fournisseur.")}</p>
+    ${options}`);
+  d.show();
+}
+
+
 // ── Dépenses de caisse ───────────────────────────────────────────────────────
 // Trois types (non facturée / avec facture / facture d'achat), photo de la
 // facture obligatoire dès qu'il y a facture, analyse OpenAI pour préremplir,
@@ -1040,6 +1080,7 @@ function rcj_cadrage(photo, onDone) {
 function rcj_depense(rapport) {
   const API = "customization_app.caisse_depenses";
   let etat = { facture: null, facture_nom: null, facture_coins: null,
+               supplier: null, matricule: null,
                cheque: null, cheque_nom: null,
                numero: null, date_facture: null, analyse_faite: false };
 
@@ -1127,6 +1168,7 @@ function rcj_depense(rapport) {
           n_cheque: v.n_cheque, banque: v.banque,
           photo_facture: etat.facture, photo_facture_nom: etat.facture_nom,
           coins_facture: etat.facture_coins ? JSON.stringify(etat.facture_coins) : null,
+          supplier: etat.supplier || null, matricule: etat.matricule || null,
           photo_cheque: v.mode === "Chèque" ? etat.cheque : null,
           photo_cheque_nom: etat.cheque_nom,
         },
@@ -1147,7 +1189,7 @@ function rcj_depense(rapport) {
       <div style="margin:4px 0">
         <button type="button" class="btn btn-default btn-sm rcj-ph-btn">📷 ${libelle}</button>
         <span class="rcj-ph-nom text-muted" style="margin-left:8px"></span>
-        <input type="file" accept="image/*" capture="environment" style="display:none">
+        <input type="file" accept="image/*,application/pdf" style="display:none">
       </div>`);
     const $input = $z.find("input[type=file]");
     $z.find(".rcj-ph-btn").on("click", () => $input.trigger("click"));
@@ -1167,7 +1209,8 @@ function rcj_depense(rapport) {
   }
 
   // Facture : photo + bouton d'analyse OpenAI (préremplit, l'employé confirme).
-  const $zf = zone_photo("zone_facture", "facture", "facture_nom", __("Photo de la facture"),
+  const $zf = zone_photo("zone_facture", "facture", "facture_nom",
+    __("Photo ou PDF de la facture"),
     () => {
       etat.analyse_faite = false;   // nouvelle photo -> nouvelle analyse exigée
       etat.facture_coins = null;
@@ -1208,6 +1251,22 @@ function rcj_depense(rapport) {
             : __("Lecture à VÉRIFIER : les totaux ne tombent pas juste."),
           indicator: m.coherent ? "green" : "orange",
         });
+        // Rapprochement fournisseur : uniquement pour la FACTURE D'ACHAT — c'est
+        // le seul type qui rattache ou crée une fiche fournisseur.
+        etat.matricule = m.matricule || null;
+        etat.supplier = m.fournisseur_certain || null;
+        if (d.get_value("type_depense") === "Facture d'achat") {
+          if (m.fournisseur_certain) {
+            frappe.show_alert({
+              message: __("Fournisseur reconnu par le {0} : {1}",
+                [m.fournisseur_motif === "matricule" ? __("matricule fiscal") : __("nom"),
+                 m.fournisseur_certain]),
+              indicator: "green",
+            });
+          } else if ((m.fournisseur_candidats || []).length) {
+            rcj_choisir_fournisseur(m, (choix) => { etat.supplier = choix; });
+          }
+        }
       },
     });
   });

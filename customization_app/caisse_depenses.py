@@ -80,6 +80,39 @@ def _decoder(photo):
     return base64.b64decode(contenu or entete), mimetype
 
 
+def _est_pdf(contenu, mimetype=None):
+    """Le justificatif est-il DÉJÀ un PDF ? (fournisseurs qui envoient des PDF)
+
+    ⚠️ UN PDF N'EST PAS UNE PHOTO. Pillow ne sait pas l'ouvrir (« cannot identify
+    image file », vu le 20/08/2026 sur « Fac N° 2026-0312 -TELE TRACK.pdf ») :
+    pas de cadrage, pas de redressement, et l'analyse passe par la voie PDF du
+    modèle. Un PDF est déjà un document propre — il s'attache tel quel."""
+    return (contenu or b"").startswith(b"%PDF") or (mimetype or "") == "application/pdf"
+
+
+def _bloc_document(contenu, mimetype):
+    """Le bloc d'entrée du modèle pour ce justificatif : image ou PDF.
+
+    L'API Responses refuse un PDF en `input_image` et une image en `input_file` —
+    c'est le contenu qui décide, jamais l'appelant."""
+    b64 = base64.b64encode(contenu).decode()
+    if _est_pdf(contenu, mimetype):
+        return {"type": "input_file", "filename": "justificatif.pdf",
+                "file_data": "data:application/pdf;base64,%s" % b64}
+    return {"type": "input_image",
+            "image_url": "data:%s;base64,%s" % (mimetype or "image/jpeg", b64)}
+
+
+def _consigne_matricule():
+    """La phrase qui empêche le modèle de rendre NOTRE matricule au lieu de celui
+    du fournisseur."""
+    notre = (frappe.db.get_value("Company", COMPANY, "tax_id") or "").strip()
+    if not notre:
+        return ""
+    return (" Le matricule %s est celui du CLIENT (%s) : ne le rends jamais comme "
+            "matricule du fournisseur." % (notre, COMPANY))
+
+
 def comptes_classifiables():
     return [r[0] for r in frappe.db.sql(
         """SELECT name FROM `tabAccount`
@@ -96,7 +129,6 @@ def _classifier(image_bytes, mimetype, extraction):
 
     comptes = comptes_classifiables()
     client, model, _t = _get_client_model_temp()
-    b64 = base64.b64encode(image_bytes).decode()
     res = client.responses.create(
         model=model,
         instructions=(
@@ -104,10 +136,13 @@ def _classifier(image_bytes, mimetype, extraction):
             "résumes. Réponds STRICTEMENT en JSON : "
             "{\"compte\": <un nom EXACT de la liste>, "
             "\"description\": <ce qui a été acheté, lu sur le document, en français, "
-            "3 à 10 mots, sans montant ni date>}. "
-            "Liste des comptes autorisés : " + json.dumps(comptes, ensure_ascii=False)),
+            "3 à 10 mots, sans montant ni date>, "
+            "\"matricule\": <le matricule fiscal de l'ÉMETTEUR de la facture "
+            "(le fournisseur), tel qu'écrit ; null si absent>}. "
+            + _consigne_matricule()
+            + " Liste des comptes autorisés : " + json.dumps(comptes, ensure_ascii=False)),
         input=[{"role": "user", "content": [
-            {"type": "input_image", "image_url": f"data:{mimetype};base64,{b64}"},
+            _bloc_document(image_bytes, mimetype),
             {"type": "input_text",
              "text": "Facture : %s" % json.dumps(
                  {k: extraction.get(k) for k in ("supplier_name", "invoice_no", "total_ttc")},
@@ -119,35 +154,44 @@ def _classifier(image_bytes, mimetype, extraction):
         lu = json.loads(texte)
         compte = (lu.get("compte") or "").strip()
         description = (lu.get("description") or "").strip()
+        matricule = (lu.get("matricule") or "").strip()
     except Exception:
-        return None, ""
-    return (compte if compte in comptes else None), description
+        return None, "", ""
+    return (compte if compte in comptes else None), description, matricule
 
 
 def _decrire(image_bytes, mimetype):
-    """La description de la dépense lue sur la photo, pour les types qui ne passent
-    pas par la classification (facture d'achat). -> '' si le modèle est muet."""
+    """La description de la dépense ET le matricule fiscal du FOURNISSEUR, lus sur
+    le document. -> (description, matricule) — chaînes vides si le modèle est muet.
+
+    ⚠️ LE MATRICULE DU FOURNISSEUR, JAMAIS CELUI DU CLIENT. Une facture porte les
+    deux : celui de l'émetteur et le nôtre. Confondre les deux rapprocherait
+    toutes les factures sur une seule fiche."""
     from bank_retenue_sync.ai.invoice_extract import _get_client_model_temp
 
     client, model, _t = _get_client_model_temp()
-    b64 = base64.b64encode(image_bytes).decode()
     res = client.responses.create(
         model=model,
         instructions=(
             "Tu lis la facture ou le reçu photographié d'une dépense d'entreprise "
             "tunisienne. Réponds STRICTEMENT en JSON : "
             "{\"description\": <ce qui a été acheté, en français, 3 à 10 mots, "
-            "sans montant ni date>}"),
+            "sans montant ni date>, "
+            "\"matricule\": <le matricule fiscal de l'ÉMETTEUR de la facture "
+            "(le fournisseur), tel qu'écrit ; null si absent>}. "
+            + _consigne_matricule()),
         input=[{"role": "user", "content": [
-            {"type": "input_image", "image_url": f"data:{mimetype};base64,{b64}"},
-            {"type": "input_text", "text": "Décris la dépense."}]}])
+            _bloc_document(image_bytes, mimetype),
+            {"type": "input_text", "text": "Décris la dépense et lis le matricule."}]}])
     texte = (res.output_text or "").strip().strip("`")
     if texte.lower().startswith("json"):
         texte = texte.split("\n", 1)[1]
     try:
-        return (json.loads(texte).get("description") or "").strip()
+        lu = json.loads(texte)
+        return ((lu.get("description") or "").strip(),
+                (lu.get("matricule") or "").strip())
     except Exception:
-        return ""
+        return "", ""
 
 
 @frappe.whitelist()
@@ -159,12 +203,18 @@ def analyser(photo, type_depense=None):
     if not photo:
         frappe.throw(_("Aucune photo à analyser."))
     try:
-        from bank_retenue_sync.ai.invoice_extract import extract_invoice_image
+        from bank_retenue_sync.ai.invoice_extract import (extract_invoice_image,
+                                                          extract_invoice_scan)
     except ImportError:
         frappe.throw(_("Le module d'extraction (bank_retenue_sync) n'est pas installé."))
     contenu, mimetype = _decoder(photo)
-    d = extract_invoice_image(contenu, mimetype=mimetype,
-                              extra_hint="Facture d'achat locale, TND.")
+    # Un PDF part TEL QUEL au modèle (voie « scan ») : l'API refuse un PDF en
+    # image, et rien n'est installé ici pour le rasteriser.
+    if _est_pdf(contenu, mimetype):
+        d = extract_invoice_scan(contenu, extra_hint="Facture d'achat locale, TND.")
+    else:
+        d = extract_invoice_image(contenu, mimetype=mimetype,
+                                  extra_hint="Facture d'achat locale, TND.")
     out = {
         "fournisseur": d.get("supplier_name") or "",
         "montant": flt(d.get("total_ttc"), 3),
@@ -175,17 +225,25 @@ def analyser(photo, type_depense=None):
         "coherent": bool(d.get("_balanced")),
         "compte_suggere": None,
         "description": "",
+        "matricule": "",
+        # Rapprochement fournisseur : rempli pour la FACTURE D'ACHAT seulement —
+        # c'est le seul type qui crée ou rattache une fiche fournisseur
+        # (décision utilisateur 2026-08-20).
+        "fournisseur_certain": None,
+        "fournisseur_motif": "",
+        "fournisseur_candidats": [],
     }
     if type_depense == "Dépense avec facture":
         try:
-            out["compte_suggere"], out["description"] = _classifier(contenu, mimetype, d)
+            out["compte_suggere"], out["description"], out["matricule"] = _classifier(
+                contenu, mimetype, d)
         except Exception:
             out["compte_suggere"] = None   # la classification est une aide, jamais un blocage
     else:
         # Pas de classification pour une facture d'achat, mais la description lue
         # sur la photo sert autant (décision utilisateur 2026-08-20).
         try:
-            out["description"] = _decrire(contenu, mimetype)
+            out["description"], out["matricule"] = _decrire(contenu, mimetype)
         except Exception:
             pass
     # ⚠️ FOURNISSEUR ET N° DE FACTURE TOUJOURS DANS LA DESCRIPTION (décision
@@ -195,21 +253,143 @@ def analyser(photo, type_depense=None):
     if out["numero"]:
         morceaux.append(_("Fact. n°{0}").format(out["numero"]))
     out["description"] = " — ".join(morceaux)
+
+    if type_depense == "Facture d'achat" and out["fournisseur"]:
+        r = _rapprocher_fournisseur(out["fournisseur"], out["matricule"])
+        out["fournisseur_certain"] = r["certain"]
+        out["fournisseur_motif"] = r["motif"]
+        out["fournisseur_candidats"] = r["candidats"]
     return out
 
 
-def _supplier(nom):
-    """La fiche fournisseur correspondant au nom lu — retrouvée, sinon CRÉÉE (le
-    comptable la complétera en saisissant la facture)."""
+#: Les formes juridiques et abréviations qui ne distinguent pas deux fournisseurs :
+#: « STE TOTAL TUNISIE SARL » et « Total Tunisie » sont le même.
+_FORMES_JURIDIQUES = ("STE", "SOCIETE", "SARL", "SUARL", "SA", "SNC", "ETS",
+                      "ETABLISSEMENT", "ETABLISSEMENTS", "EURL", "SPA", "SASU", "SAS")
+
+
+def _sans_accents(txt):
+    import unicodedata
+
+    return "".join(c for c in unicodedata.normalize("NFD", txt or "")
+                   if unicodedata.category(c) != "Mn")
+
+
+def cle_matricule(valeur):
+    """La partie DISCRIMINANTE d'un matricule fiscal tunisien. Fonction pure.
+
+    « 1137847 D/B/M 000 », « 1137847D/B/M/000 » et « 1137847 » désignent le même
+    contribuable : ce sont les 7 premiers chiffres qui identifient, le reste est
+    la clé, le code catégorie et le numéro d'établissement. Comparer les chaînes
+    brutes ferait passer le même fournisseur pour deux."""
+    chiffres = re.sub(r"\D", "", str(valeur or ""))
+    return chiffres[:7] if len(chiffres) >= 7 else ""
+
+
+def cle_nom(nom):
+    """Le nom d'un fournisseur réduit à ce qui le distingue. Fonction pure."""
+    txt = _sans_accents(str(nom or "")).upper()
+    txt = re.sub(r"[^A-Z0-9 ]+", " ", txt)
+    mots = [m for m in txt.split() if m and m not in _FORMES_JURIDIQUES]
+    return " ".join(mots)
+
+
+def _rapprocher_fournisseur(nom, matricule=None):
+    """Le fournisseur de cette facture, parmi ceux qui existent. -> dict.
+
+    ⚠️ LE MATRICULE FISCAL TRANCHE, LE NOM SUGGÈRE. Deux fiches pour le même
+    fournisseur, c'est un solde éclaté sur deux comptes auxiliaires et une TVA
+    déductible qu'on ne sait plus rattacher. Le matricule identifie le
+    contribuable : quand il concorde, c'est certain. Le nom, lui, s'écrit de dix
+    façons — il ne donne qu'une CERTITUDE quand il est identique une fois
+    normalisé, et sinon des CANDIDATS que l'utilisateur tranche.
+
+    -> {certain: nom de la fiche ou None, motif, candidats: [...], matricule}
+    """
+    from difflib import SequenceMatcher
+
     nom = (nom or "").strip()
+    cle_m = cle_matricule(matricule)
+    fiches = frappe.get_all("Supplier", fields=["name", "supplier_name", "tax_id"],
+                            filters={"disabled": 0}, limit_page_length=0)
+
+    if cle_m:
+        for f in fiches:
+            if cle_matricule(f.tax_id) == cle_m:
+                return {"certain": f.name, "motif": "matricule", "candidats": [],
+                        "matricule": matricule}
+
+    cible = cle_nom(nom)
+    if not cible:
+        return {"certain": None, "motif": "", "candidats": [], "matricule": matricule}
+
+    candidats = []
+    for f in fiches:
+        cle_f = cle_nom(f.supplier_name or f.name)
+        if not cle_f:
+            continue
+        if cle_f == cible:
+            return {"certain": f.name, "motif": "nom", "candidats": [],
+                    "matricule": matricule}
+        score = SequenceMatcher(None, cible, cle_f).ratio()
+        if cle_f in cible or cible in cle_f:
+            score = max(score, 0.9)
+        if score >= 0.7:
+            candidats.append({"name": f.name, "supplier_name": f.supplier_name or f.name,
+                              "tax_id": f.tax_id or "", "score": round(score, 3)})
+    candidats.sort(key=lambda c: c["score"], reverse=True)
+    return {"certain": None, "motif": "", "candidats": candidats[:5],
+            "matricule": matricule}
+
+
+@frappe.whitelist()
+def fournisseurs_candidats(nom, matricule=None):
+    """Le rapprochement, pour que l'écran demande à l'utilisateur en cas de doute."""
+    frappe.only_for(ROLES)
+    return _rapprocher_fournisseur(nom, matricule)
+
+
+def _poser_matricule(supplier, matricule):
+    """Complète le matricule fiscal d'une fiche qui n'en a pas. N'écrase jamais."""
+    cle_m = cle_matricule(matricule)
+    if not (supplier and cle_m):
+        return
+    actuel = frappe.db.get_value("Supplier", supplier, "tax_id")
+    if not (actuel or "").strip():
+        frappe.db.set_value("Supplier", supplier, "tax_id", (matricule or "").strip(),
+                            update_modified=False)
+
+
+def _supplier(nom, matricule=None, supplier=None):
+    """La fiche fournisseur de cette facture : celle choisie, celle rapprochée avec
+    certitude, ou une NOUVELLE — jamais un doublon créé en silence.
+
+    ⚠️ EN CAS DE DOUTE ON REFUSE, ON NE CRÉE PAS (décision utilisateur
+    2026-08-20). Des fiches proches existent : c'est à l'utilisateur de dire si
+    c'est l'une d'elles ou un fournisseur nouveau. L'écran le lui demande ; ce
+    garde-fou est là pour les appels qui ne passeraient pas par lui."""
+    nom = (nom or "").strip()
+    if supplier:
+        if not frappe.db.exists("Supplier", supplier):
+            frappe.throw(_("Le fournisseur {0} n'existe pas.").format(supplier))
+        _poser_matricule(supplier, matricule)
+        return supplier
     if not nom:
         return None
-    existant = (frappe.db.get_value("Supplier", {"supplier_name": nom})
-                or frappe.db.get_value("Supplier",
-                                       {"supplier_name": ["like", f"%{nom}%"]}))
-    if existant:
-        return existant
+
+    r = _rapprocher_fournisseur(nom, matricule)
+    if r["certain"]:
+        _poser_matricule(r["certain"], matricule)
+        return r["certain"]
+    if r["candidats"]:
+        frappe.throw(_("Fournisseur à confirmer : « {0} » ressemble à {1}. "
+                       "Choisissez la fiche existante ou confirmez la création "
+                       "d'un nouveau fournisseur.")
+                     .format(nom, ", ".join(c["supplier_name"] for c in r["candidats"])))
+
     doc = frappe.get_doc({"doctype": "Supplier", "supplier_name": nom})
+    if cle_matricule(matricule):
+        doc.tax_id = (matricule or "").strip()
     doc.insert(ignore_permissions=True)
     return doc.name
 
@@ -218,7 +398,8 @@ def _supplier(nom):
 def creer(type_depense, montant, mode, compte=None, description=None, fournisseur=None,
           tva=0, taux_tva=0, numero_facture=None, date_facture=None,
           n_cheque=None, banque=None, photo_facture=None, photo_facture_nom=None,
-          photo_cheque=None, photo_cheque_nom=None, coins_facture=None):
+          photo_cheque=None, photo_cheque_nom=None, coins_facture=None,
+          supplier=None, matricule=None):
     """Crée la dépense selon son type (voir l'en-tête du module). Retourne les noms
     des pièces créées (écriture et/ou fiche de la file des factures d'achat)."""
     frappe.only_for(ROLES)
@@ -272,7 +453,7 @@ def creer(type_depense, montant, mode, compte=None, description=None, fournisseu
 
     je = None
     if type_depense == "Facture d'achat":
-        supplier = _supplier(fournisseur)
+        supplier = _supplier(fournisseur, matricule=matricule, supplier=supplier)
         if mode != MODE_PAS_PAYE:
             # Le paiement va au FOURNISSEUR (Créditeurs) : la facture saisie plus
             # tard le soldera — jamais de charge ici, elle naîtra avec la facture.
@@ -441,7 +622,10 @@ def detecter_contour(photo):
     et `creer` reçoit les coins retenus. Sans détection possible, on propose le
     plein cadre (léger retrait) : l'employé recadre lui-même."""
     frappe.only_for(ROLES)
-    contenu, _mt = _decoder(photo)
+    contenu, mimetype = _decoder(photo)
+    if _est_pdf(contenu, mimetype):
+        # Un PDF est déjà un document cadré : l'écran saute l'étape.
+        return {"pdf": True, "largeur": 0, "hauteur": 0, "coins": [], "detecte": False}
     largeur = hauteur = 0
     quad = None
     try:
@@ -511,6 +695,9 @@ def _scan_pdf(image_bytes, coins=None):
     photo brute)."""
     import io
 
+    # Déjà un PDF : rien à convertir, il part tel quel.
+    if _est_pdf(image_bytes):
+        return image_bytes
     try:
         from PIL import Image, ImageFilter, ImageOps
         # D'abord le redressement OpenCV (perspective corrigée) ; à défaut, le
