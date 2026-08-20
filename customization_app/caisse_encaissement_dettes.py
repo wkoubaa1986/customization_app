@@ -139,34 +139,143 @@ def dettes_client(client):
     }
 
 
+#: Les modes offerts par la caisse. « Traite bancaire » suit le circuit du chèque
+#: (n° + banque + photo, compte d'attente « Traite Bancaire - A&S », remise ensuite).
+MODES = ("Espèces", "Chèque", "Traite bancaire")
+
+#: Un numéro de chèque tunisien porte 7 chiffres ; une traite n'a pas de format
+#: unique — on exige des chiffres, de 4 à 20.
+_RX_NUMERO = {"Chèque": r"\d{7}", "Traite bancaire": r"\d{4,20}"}
+
+
+def _valider_paiements(paiements):
+    """Contrôle chaque ligne de paiement et rend la liste normalisée.
+
+    ⚠️ (N°, BANQUE) EST LA CLÉ D'APPARIEMENT DU SERVER SCRIPT « Traitement des
+    encaissement » : deux chèques (ou deux traites) qui la partageraient seraient
+    FUSIONNÉS par lui — un seul paiement créé pour deux papiers reçus. On refuse
+    donc le doublon ici, avant que rien n'existe.
+    """
+    vus = set()
+    normalises = []
+    for i, p in enumerate(paiements, start=1):
+        mode = (p.get("mode") or "").strip()
+        montant = flt(p.get("montant"), 3)
+        numero = (p.get("n_piece") or p.get("n_cheque") or "").strip()
+        banque = (p.get("banque") or "").strip()
+        if mode not in MODES:
+            frappe.throw(_("Ligne {0} : mode d'encaissement inconnu ({1}).").format(i, mode))
+        if montant <= 0:
+            frappe.throw(_("Ligne {0} : le montant doit être positif.").format(i))
+        if mode != "Espèces":
+            libelle = _("chèque") if mode == "Chèque" else _("traite")
+            if not re.fullmatch(_RX_NUMERO[mode], numero):
+                attendu = (_("exactement 7 chiffres") if mode == "Chèque"
+                           else _("4 à 20 chiffres"))
+                frappe.throw(_("Ligne {0} : le numéro de {1} doit comporter {2} "
+                               "(reçu : « {3} »).").format(i, libelle, attendu,
+                                                           numero or _("vide")))
+            # Décision utilisateur 2026-08-20 : la banque n'est obligatoire QUE pour
+            # un chèque — une traite peut se saisir sans (le papier ne la porte pas
+            # toujours lisiblement).
+            if mode == "Chèque" and not banque:
+                frappe.throw(_("Ligne {0} : pour un chèque, la banque est obligatoire.")
+                             .format(i))
+            if not p.get("photo"):
+                frappe.throw(_("Ligne {0} : la photo du/de la {1} est obligatoire.")
+                             .format(i, libelle))
+            cle = (mode, numero, banque)
+            if cle in vus:
+                frappe.throw(_("Ligne {0} : le numéro {1} ({2}) est saisi deux fois pour "
+                               "le même mode.").format(i, numero, banque))
+            vus.add(cle)
+        normalises.append({"mode": mode, "montant": montant, "numero": numero,
+                           "banque": banque, "photo": p.get("photo"),
+                           "photo_nom": p.get("photo_nom")})
+    return normalises
+
+
+def _verifier_photo(p):
+    """Lit la photo du chèque / de la traite avec OpenAI et la confronte au saisi.
+
+    -> liste d'avertissements (vide si tout concorde). ⚠️ JAMAIS BLOQUANT, décision
+    utilisateur 2026-08-20 : une panne OpenAI, une photo illisible ou un désaccord
+    n'empêchent pas l'encaissement — l'employé est averti, il tranche. Même
+    plomberie que la classification des dépenses (`caisse_depenses._classifier`).
+    """
+    libelle = _("chèque") if p["mode"] == "Chèque" else _("traite")
+    etiquette = "%s n°%s" % (libelle, p["numero"])
+    try:
+        from bank_retenue_sync.ai.invoice_extract import _get_client_model_temp
+
+        client_ia, model, _t = _get_client_model_temp()
+        res = client_ia.responses.create(
+            model=model,
+            instructions=(
+                "Tu lis la photo d'un chèque ou d'une traite (lettre de change) "
+                "bancaire tunisien(ne). Réponds STRICTEMENT en JSON : "
+                '{"montant": <montant en dinars lu en chiffres sur le document, '
+                'null si illisible>, "numero": "<numéro du document, chiffres '
+                'uniquement, null si illisible>", "lisible": <true si la photo '
+                "montre bien un chèque ou une traite exploitable, false sinon>}."),
+            input=[{"role": "user", "content": [
+                {"type": "input_image", "image_url": p["photo"]},
+                {"type": "input_text",
+                 "text": "Lis le montant et le numéro de ce document (%s)." % libelle}]}])
+        texte = (res.output_text or "").strip().strip("`")
+        if texte.lower().startswith("json"):
+            texte = texte.split("\n", 1)[1]
+        lu = json.loads(texte)
+    except Exception:
+        frappe.log_error(title="Caisse : vérification photo indisponible",
+                         message=frappe.get_traceback())
+        return [_("{0} : la vérification automatique de la photo n'a pas pu être "
+                  "faite (service indisponible).").format(etiquette)]
+
+    avert = []
+    if not lu.get("lisible", True):
+        avert.append(_("{0} : la photo semble illisible ou ne montre pas un {1}.")
+                     .format(etiquette, libelle))
+    montant_lu = lu.get("montant")
+    if montant_lu is not None:
+        try:
+            montant_lu = flt(montant_lu, 3)
+        except Exception:
+            montant_lu = None
+    if montant_lu and abs(montant_lu - p["montant"]) > 0.001:
+        avert.append(_("{0} : montant saisi {1} ≠ montant lu sur la photo {2}.")
+                     .format(etiquette, p["montant"], montant_lu))
+    numero_lu = re.sub(r"\D", "", str(lu.get("numero") or ""))
+    if numero_lu and p["numero"] and p["numero"] != numero_lu \
+            and p["numero"] not in numero_lu and numero_lu not in p["numero"]:
+        avert.append(_("{0} : numéro saisi {1} ≠ numéro lu sur la photo {2}.")
+                     .format(etiquette, p["numero"], numero_lu))
+    return avert
+
+
 @frappe.whitelist()
-def encaisser(client, montant, mode, n_cheque=None, banque=None, dettes=None,
-              photo=None, photo_nom=None):
+def encaisser(client, montant=None, mode=None, n_cheque=None, banque=None, dettes=None,
+              photo=None, photo_nom=None, paiements=None):
     """Crée le BROUILLON d'encaissement et retourne l'allocation, pour confirmation.
 
+    `paiements` : la liste des paiements reçus (JSON) — PLUSIEURS chèques et/ou
+    traites et/ou espèces pour la même sélection de dettes, chacun avec son
+    montant, son numéro, sa banque et sa photo. Les anciens arguments (`montant`,
+    `mode`, `n_cheque`…) restent acceptés et valent une liste d'une seule ligne.
     `dettes` : les PE de dette SÉLECTIONNÉES par l'employé (JSON) — le FIFO par
     défaut du dialogue les coche toutes, mais il peut en écarter. L'allocation est
-    construite ICI, en FIFO par date sur la sélection, et le drapeau
-    `custom_allocation_manuelle` empêche le Server Script de la régénérer.
-    `photo` : la photo du chèque (dataURL), OBLIGATOIRE pour un chèque — attachée
-    au document. Rien n'est soumis ici.
+    construite ICI — dettes en FIFO par date de commande, paiements dans l'ordre
+    de saisie — et le drapeau `custom_allocation_manuelle` empêche le Server
+    Script de la régénérer. Rien n'est soumis ici.
     """
     frappe.only_for(ROLES)
-    montant = flt(montant, 3)
-    if montant <= 0:
-        frappe.throw(_("Le montant doit être positif."))
-    if mode not in ("Espèces", "Chèque"):
-        frappe.throw(_("Mode d'encaissement inconnu : {0}.").format(mode))
-    n_cheque = (n_cheque or "").strip()
-    if mode == "Chèque":
-        # Convention tunisienne : un numéro de chèque porte 7 chiffres.
-        if not re.fullmatch(r"\d{7}", n_cheque):
-            frappe.throw(_("Le numéro de chèque doit comporter exactement 7 chiffres "
-                           "(reçu : « {0} »).").format(n_cheque or "vide"))
-        if not (banque or "").strip():
-            frappe.throw(_("Pour un chèque, la banque est obligatoire."))
-        if not photo:
-            frappe.throw(_("Pour un chèque, la photo du chèque est obligatoire."))
+    if isinstance(paiements, str):
+        paiements = json.loads(paiements)
+    if not paiements:
+        paiements = [{"mode": mode, "montant": montant, "n_piece": n_cheque,
+                      "banque": banque, "photo": photo, "photo_nom": photo_nom}]
+    lignes_paiement = _valider_paiements(paiements)
+    total = round(sum(p["montant"] for p in lignes_paiement), 3)
 
     toutes = _dettes(client)
     if not toutes:
@@ -175,56 +284,84 @@ def encaisser(client, montant, mode, n_cheque=None, banque=None, dettes=None,
     par_nom = {r.name: r for r in toutes}
     choisies = [par_nom[n] for n in selection if n in par_nom] or toutes
     total_selection = round(sum(r.montant for r in choisies), 3)
-    if montant > total_selection + 0.001:
-        frappe.throw(_("Le montant ({0}) dépasse la somme des dettes sélectionnées ({1}) : "
-                       "sélectionnez plus de dettes ou réduisez le montant.")
-                     .format(montant, total_selection))
+    if total > total_selection + 0.001:
+        frappe.throw(_("Le total des paiements ({0}) dépasse la somme des dettes "
+                       "sélectionnées ({1}) : sélectionnez plus de dettes ou réduisez "
+                       "les montants.").format(total, total_selection))
 
     doc = frappe.new_doc("Encaissement Paiement")
     doc.custom_allocation_manuelle = 1
-    ligne = {"client": client, "type": mode, "date": nowdate(), "valeur_total": total_selection}
-    if mode == "Espèces":
-        ligne["espece"] = montant
-    else:
-        ligne.update({"valeur_du_cheque": montant, "n_chèque": n_cheque,
-                      "banque": (banque or "").strip()})
-    doc.append("dette_client", ligne)
+    for p in lignes_paiement:
+        ligne = {"client": client, "type": p["mode"], "date": nowdate(),
+                 "valeur_total": total_selection}
+        if p["mode"] == "Espèces":
+            ligne["espece"] = p["montant"]
+        else:
+            ligne.update({"valeur_du_cheque": p["montant"], "n_chèque": p["numero"],
+                          "banque": p["banque"]})
+        doc.append("dette_client", ligne)
 
-    # Allocation FIFO sur la SÉLECTION, par DATE DE COMMANDE (repli : date de dette) —
-    # mêmes champs que les lignes du Server Script : `valeur` = dette totale,
-    # `espece`/`valeur_du_cheque` = portion.
-    reste = montant
+    # Allocation en DOUBLE FIFO : les dettes par DATE DE COMMANDE (repli : date de
+    # dette), les paiements dans l'ordre de saisie. Une dette couverte par deux
+    # pièces donne DEUX lignes d'allocation — le Server Script rattache chaque
+    # ligne à sa pièce par (n°, banque). Mêmes champs que ses lignes générées :
+    # `valeur` = dette totale, `espece`/`valeur_du_cheque` = portion.
+    file_paiements = [dict(p, reste=p["montant"]) for p in lignes_paiement]
+    i_paiement = 0
     allocation = []
     for r in sorted(choisies,
                     key=lambda x: (x.commande_date or str(x.posting_date),
                                    str(x.posting_date), x.name)):
-        if reste <= 0.0005:
-            break
-        portion = round(min(reste, r.montant), 3)
-        reste = round(reste - portion, 3)
+        reste_dette = r.montant
         bl = r.reference_no if r.reference_no and frappe.db.exists(
             "Sales Order", r.reference_no) else None
-        row = {"ref_paiement": r.name, "emmeteur": r.party_name, "valeur": r.montant,
-               "bl": bl, "date": nowdate(), "type": mode}
-        if mode == "Espèces":
-            row["espece"] = portion
-        else:
-            row.update({"n_chèque": n_cheque, "banque": (banque or "").strip(),
-                        "valeur_du_cheque": portion})
-        doc.append("dettes_a_encaisser", row)
-        allocation.append({"paiement": r.name, "commande": r.commande or "",
-                           "montant": portion, "dette_totale": r.montant})
+        while reste_dette > 0.0005 and i_paiement < len(file_paiements):
+            p = file_paiements[i_paiement]
+            if p["reste"] <= 0.0005:
+                i_paiement += 1
+                continue
+            portion = round(min(p["reste"], reste_dette), 3)
+            p["reste"] = round(p["reste"] - portion, 3)
+            reste_dette = round(reste_dette - portion, 3)
+            row = {"ref_paiement": r.name, "emmeteur": r.party_name, "valeur": r.montant,
+                   "bl": bl, "date": nowdate(), "type": p["mode"]}
+            if p["mode"] == "Espèces":
+                row["espece"] = portion
+            else:
+                row.update({"n_chèque": p["numero"], "banque": p["banque"],
+                            "valeur_du_cheque": portion})
+            doc.append("dettes_a_encaisser", row)
+            allocation.append({"paiement": r.name, "commande": r.commande or "",
+                               "montant": portion, "dette_totale": r.montant,
+                               "mode": p["mode"],
+                               "piece": ("%s - %s" % (p["numero"], p["banque"])
+                                         if p["mode"] != "Espèces" else "")})
+        if i_paiement >= len(file_paiements):
+            break
     doc.insert()
 
-    if photo:
-        contenu = photo.split(",", 1)[-1]
-        from frappe.utils.file_manager import save_file
-        save_file(photo_nom or f"cheque-{n_cheque}.jpg", base64.b64decode(contenu),
-                  "Encaissement Paiement", doc.name, is_private=1)
+    from frappe.utils.file_manager import save_file
+    for p in lignes_paiement:
+        if not p.get("photo"):
+            continue
+        contenu = p["photo"].split(",", 1)[-1]
+        prefixe = "cheque" if p["mode"] == "Chèque" else "traite"
+        save_file(p.get("photo_nom") or f"{prefixe}-{p['numero']}.jpg",
+                  base64.b64decode(contenu), "Encaissement Paiement", doc.name,
+                  is_private=1)
 
     frappe.db.commit()
+
+    # Vérification OpenAI des photos (chèques et traites), APRÈS le commit : le
+    # brouillon existe déjà, une panne du modèle ne peut plus rien lui faire.
+    avertissements = []
+    for p in lignes_paiement:
+        if p["mode"] != "Espèces" and p.get("photo"):
+            avertissements += _verifier_photo(p)
+
     return {"name": doc.name, "allocation": allocation, "total_dettes": total_selection,
-            "restant": round(total_selection - montant, 3)}
+            "total_paiements": total, "restant": round(total_selection - total, 3),
+            "avertissements": avertissements}
 
 
 @frappe.whitelist()
