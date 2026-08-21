@@ -225,6 +225,11 @@ def _ouverture(caisse, date):
     return flt(r.especes_comptees if r.especes_comptees is not None else r.solde_theorique, 3)
 
 
+def _fmt_montant(v):
+    """« 1 315,500 » — le format des écrans de caisse, pas le point décimal machine."""
+    return "{:,.3f}".format(flt(v)).replace(",", " ").replace(".", ",")
+
+
 def _controles(data):
     """Les points de contrôle de la clôture (décisions utilisateur 19/08) :
 
@@ -236,6 +241,19 @@ def _controles(data):
       ancien_exclu     : un paiement d'ancienne commande a été EXCLU de la
                          caisse -> JUSTIFIER l'exclusion.
     """
+    def _qui(o):
+        """« SAL-ORD-… · Client · tâche TASK-… (Entretien, Akram) » — le lecteur du point de
+        contrôle décide en une ligne, sans aller ouvrir la commande (demande utilisateur
+        21/08 : « donne plus de détails, la tâche, le nom du client »)."""
+        bouts = [o["sales_order"], o.get("customer") or "client ?"]
+        if o.get("tache_reference"):
+            tache = o["tache_reference"]
+            precisions = [x for x in (o.get("intervention"), o.get("tache_employee")) if x]
+            if precisions:
+                tache += " (%s)" % ", ".join(precisions)
+            bouts.append("tâche " + tache)
+        return " · ".join(bouts)
+
     points = []
     for e in data.get("employees") or []:
         for o in e.get("orders") or []:
@@ -244,8 +262,7 @@ def _controles(data):
                     "cle": "tache_ouverte:%s" % o["sales_order"],
                     "type": "tache_ouverte", "bloquant": 0,
                     "commande": o["sales_order"], "client": o.get("customer"),
-                    "libelle": "Tâche ouverte sur %s (%s)" % (
-                        o["sales_order"], o.get("customer") or "?"),
+                    "libelle": "Tâche ouverte — %s" % _qui(o),
                 })
             if o.get("tache_status") == "Completed":
                 for dn in o.get("delivery_notes") or []:
@@ -254,18 +271,19 @@ def _controles(data):
                             "cle": "bl_non_valide:%s" % dn["name"],
                             "type": "bl_non_valide", "bloquant": 1,
                             "commande": o["sales_order"], "bl": dn["name"],
-                            "libelle": "Tâche terminée mais BL %s non validé (%s)" % (
-                                dn["name"], o["sales_order"]),
+                            "libelle": "Tâche terminée mais BL %s (%s DT) non validé — %s" % (
+                                dn["name"], _fmt_montant(dn.get("grand_total")), _qui(o)),
                         })
-                if (o.get("is_validated") and not o.get("is_aramex")
-                        and any((p.get("mode") == "Dette non payée")
-                                for p in o.get("payments") or [])):
+                dette = sum(flt(p.get("amount")) for p in o.get("payments") or []
+                            if p.get("mode") == "Dette non payée")
+                if o.get("is_validated") and not o.get("is_aramex") and dette:
                     points.append({
                         "cle": "dette_hors_aramex:%s" % o["sales_order"],
                         "type": "dette_hors_aramex", "bloquant": 0,
                         "commande": o["sales_order"], "client": o.get("customer"),
-                        "libelle": "Commande validée, tâche terminée, mais paiement "
-                                   "en dette (hors Aramex) sur %s" % o["sales_order"],
+                        "montant": flt(dette, 3),
+                        "libelle": "Commande validée, tâche terminée, mais %s DT en dette "
+                                   "(hors Aramex) — %s" % (_fmt_montant(dette), _qui(o)),
                     })
     for pmt in (data.get("anciens") or {}).get("paiements") or []:
         if pmt.get("exclu"):
