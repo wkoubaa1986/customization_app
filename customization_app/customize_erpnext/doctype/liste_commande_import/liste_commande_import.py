@@ -5,9 +5,19 @@ unitaire saisi vers la fiche Article (Item.custom_volume_m3) pour qu'il soit
 réutilisé dans les listes futures.
 """
 
+import json
+
 import frappe
 from frappe.model.document import Document
 from frappe.utils import flt
+
+
+def _adds(row):
+    """Articles additionnels embarqués sur une ligne pack (champ JSON)."""
+    try:
+        return json.loads(row.articles_additionnels or "[]") or []
+    except Exception:
+        return []
 
 
 class ListeCommandeImport(Document):
@@ -30,7 +40,10 @@ class ListeCommandeImport(Document):
 
         total = 0.0
         for row in self.articles:
-            row.volume_ligne_m3 = flt(row.qty) * flt(row.volume_unitaire_m3)
+            vol = flt(row.qty) * flt(row.volume_unitaire_m3)
+            for a in _adds(row):  # volume des additionnels embarqués
+                vol += flt(row.qty) * flt(a.get("qty_par_pack")) * flt(a.get("volume_unitaire_m3"))
+            row.volume_ligne_m3 = vol
             total += row.volume_ligne_m3
             # capitaliser le volume unitaire vers la fiche Article
             if row.item_code and flt(row.volume_unitaire_m3) > 0:
