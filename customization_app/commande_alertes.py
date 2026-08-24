@@ -72,6 +72,18 @@ MOTIF_MAIN_OEUVRE = "Main d'œuvre sans tâche"
 MOTIF_LIVRAISON = "Livraison sans tâche"
 MOTIF_NON_SOLDEE = "Tâche terminée, commande non soldée"
 
+# Motif posé par annulation_tache.py quand la cascade annule la commande avec sa tâche.
+# Il porte le NOM de la tâche (« Commande annulée avec tâche Tache-08055 ») : c'est donc
+# un PRÉFIXE, pas un libellé fermé — la règle SQL le PRÉSERVE au lieu de le recalculer,
+# et la couleur se résout par préfixe des deux côtés (cf. couleur_du_motif et le JS).
+MOTIF_COMMANDE_ANNULEE = "Commande annulée avec tâche"
+
+
+def couleur_du_motif(motif: str) -> str:
+    if motif and motif.startswith(MOTIF_COMMANDE_ANNULEE):
+        return "violet"
+    return COULEURS.get(motif, "orange")
+
 COULEURS = {
     MOTIF_TACHE_RETARD: "jaune",
     MOTIF_TACHE_ANNULEE: "violet",
@@ -115,6 +127,13 @@ _PAIEMENT_QUELCONQUE = _SQL_PAIEMENT_LIE.format(compte="1 = 1")
 _SQL_MOTIF = """
     SELECT so.name,
         CASE
+            -- Une commande annulée PAR l'annulation de sa tâche (annulation_tache.py)
+            -- garde le motif posé par la cascade : il porte le nom de la tâche, la règle
+            -- ne peut pas le recalculer. AVANT le plancher — il doit survivre aussi sur
+            -- une commande antérieure au 01/07/2026.
+            WHEN so.docstatus = 2 AND so.custom_anomalie LIKE %(motif_annulee_like)s
+            THEN so.custom_anomalie
+
             -- PLANCHER : la surveillance ne commence qu'au 01/07/2026. Le motif de
             -- l'historique antérieur se VIDE au recalcul (le plancher doit vivre dans le
             -- CASE, pas dans le WHERE, sinon les anciens motifs stockés resteraient).
@@ -217,6 +236,7 @@ def _params(extra=None):
         "livraison": GROUPE_LIVRAISON,
         "motif_tache_retard": MOTIF_TACHE_RETARD,
         "motif_tache_annulee": MOTIF_TACHE_ANNULEE,
+        "motif_annulee_like": MOTIF_COMMANDE_ANNULEE + "%",
         "mode_dette": MODE_DETTE,
         "motif_main_oeuvre": MOTIF_MAIN_OEUVRE,
         "motif_livraison": MOTIF_LIVRAISON,
@@ -405,7 +425,7 @@ def get_alertes(noms):
     for r in lignes:
         entree = {}
         if r.motif:
-            entree["couleur"] = COULEURS.get(r.motif, "orange")
+            entree["couleur"] = couleur_du_motif(r.motif)
             entree["libelle"] = r.motif
         if suivi_appels:
             n = nb_appels(r)

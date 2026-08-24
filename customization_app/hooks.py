@@ -365,7 +365,11 @@ app_include_js = [_js("customer_quick_entry.js"),
                   # Prise de rendez-vous depuis une commande : bouton rouge au bout de la barre
                   # d'onglets de la fiche, et calendrier des tâches depuis la liste.
                   # ⚠️ APRÈS calendrier_rdv_button.js, dont il appelle `rdvLibre_openOverlay`.
-                  _js("sales_order_rdv.js")]
+                  _js("sales_order_rdv.js"),
+                  # Annulation d'une tâche de travail liée à une commande : confirmation
+                  # puis cascade (BL/paiements/facture supprimés, commande annulée + tag).
+                  # Global car « Tache de travail » est un DocType custom (doctype_js ignoré).
+                  _js("tache_annulation.js")]
 # Hide filter message shown in the awesomplete dropdown
 app_include_css = ["/assets/customization_app/css/hide_filter_message.css"]
 # doctype_calendar_js = {

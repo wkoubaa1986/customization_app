@@ -219,6 +219,11 @@ frappe.provide("frappe.views");
         "Livraison sans tâche": "rouge",
         "Tâche terminée, commande non soldée": "orange",
     };
+    // « Commande annulée avec tâche Tache-XXXXX » porte le nom de la tâche : la couleur
+    // se résout par PRÉFIXE (miroir de commande_alertes.couleur_du_motif).
+    const couleur_du_motif = (motif) =>
+        LIBELLE_COULEUR[motif] ||
+        (motif && motif.startsWith("Commande annulée avec tâche") ? "violet" : "orange");
 
     frappe.ui.form.on("Sales Order", {
         refresh(frm) {
@@ -233,13 +238,13 @@ frappe.provide("frappe.views");
             if (!motif && !retour) return;
             // Le bandeau prend la couleur de l'anomalie ; à défaut, le bleu du
             // retour de colis (« en haut : retour de colis », décision 19/08).
-            const couleur = motif ? (LIBELLE_COULEUR[motif] || "orange") : "bleu";
+            const couleur = motif ? couleur_du_motif(motif) : "bleu";
             $head.addClass(CLASSES[couleur]);
 
             let pastilles = "";
             if (motif) {
                 pastilles += `<span class="so-alerte-pastille so-alerte-pastille-fiche ${
-                    LIBELLE_COULEUR[motif] || "orange"}"
+                    couleur_du_motif(motif)}"
                     title="${frappe.utils.escape_html(motif)}">${frappe.utils.escape_html(motif)}</span>`;
             }
             if (retour) {
