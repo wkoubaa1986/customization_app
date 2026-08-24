@@ -98,7 +98,7 @@
       .rcj-toolbar .form-control { width: calc(50% - 34px); min-width: 110px; }
       #rcj-employe { width: 100%; max-width: none !important; }
       .rcj-toolbar .btn { flex: 1 1 auto; }
-      #rcj-btn-dettes, #rcj-btn-depense, #rcj-btn-cloture { width: 100%; padding: 10px; font-size: 14px;
+      #rcj-btn-dettes, #rcj-btn-depense, #rcj-btn-a-payer, #rcj-btn-bl, #rcj-btn-cloture { width: 100%; padding: 10px; font-size: 14px;
         margin: 0 0 6px 0 !important; }
       .rcj-kpis { grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; }
       .rcj-kpi { padding: 10px 12px; }
@@ -136,6 +136,30 @@
       <li><b>⚠️</b> = incohérence sur une commande validée : total des paiements ≠ Total TTC, ou total des BL validés ≠ total des factures. Le détail liste les avertissements.</li>
     </ul>
   </details>
+
+  <!-- Suivi des dépenses (dettes + BL) : carré dédié, AU-DESSUS de la caisse -->
+  <div id="rcj-suivi-depenses" style="border:1px solid #ffa39e;background:#fff7f6;border-radius:12px;
+       padding:12px 14px;margin-bottom:14px;">
+    <div style="font-weight:700;font-size:13px;margin-bottom:8px;color:#a8071a">
+      📋 Suivi des dépenses facturées</div>
+    <button id="rcj-btn-a-payer" class="btn btn-danger btn-sm">💸 Dépenses à payer</button>
+    <button id="rcj-btn-bl" class="btn btn-warning btn-sm" style="margin-left:8px">📦 Dépenses BL</button>
+    <span class="text-muted" style="font-size:11.5px;margin-left:10px">
+      Dettes à régler · bons de livraison en attente de facture (toutes périodes)</span>
+  </div>
+
+  <!-- Suivi des achats fournisseurs (factures d’achat capturées) -->
+  <div id="rcj-suivi-achats" style="border:1px solid #91caff;background:#f0f8ff;border-radius:12px;
+       padding:12px 14px;margin-bottom:14px;">
+    <div style="font-weight:700;font-size:13px;margin-bottom:8px;color:#0958d9">
+      🧾 Suivi des achats fournisseurs</div>
+    <button id="rcj-btn-fa-payer" class="btn btn-danger btn-sm">💸 Factures à payer</button>
+    <button id="rcj-btn-fa-bl" class="btn btn-warning btn-sm" style="margin-left:8px">📦 Achats BL → Commandes</button>
+    <button id="rcj-btn-fa-sans-justif" class="btn btn-default btn-sm" style="margin-left:8px">🗂 Factures sans justificatifs</button>
+    <button id="rcj-btn-fa-saisir" class="btn btn-info btn-sm" style="margin-left:8px">📋 Factures à comptabiliser</button>
+    <span class="text-muted" style="font-size:11.5px;margin-left:10px">
+      Achats non payés · BL à transformer en commandes, puis en facture (toutes périodes)</span>
+  </div>
 
   <!-- La caisse affichée : la sélection saute aux yeux, en rouge -->
   <div class="rcj-titre-caisse">Caisse : <span id="rcj-caisse-nom">—</span></div>

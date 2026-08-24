@@ -70,6 +70,13 @@ class RapportCaisseJournaliere {
     // reliquat de dette, création du paiement).
     $("#rcj-btn-dettes").on("click", () => rcj_encaissement_dettes(this));
     $("#rcj-btn-depense").on("click", () => rcj_depense(this));
+    $("#rcj-btn-a-payer").on("click", () => rcj_depenses_a_payer(this));
+    $("#rcj-btn-bl").on("click", () => rcj_depenses_bl(this));
+    $("#rcj-btn-fa-payer").on("click", () => rcj_factures_a_payer(this));
+    $("#rcj-btn-fa-bl").on("click", () => rcj_factures_bl(this));
+    $("#rcj-btn-fa-sans-justif").on("click", () => rcj_factures_sans_justif());
+    $("#rcj-btn-fa-saisir").on("click", () =>
+      frappe.set_route("List", "Facture Achat a Saisir", { statut: "À saisir" }));
     $("#rcj-btn-cloture").on("click", () => rcj_cloture(this));
     // Exclure / réintégrer un paiement d'ancienne commande (correction de saisie).
     $(this.wrapper).on("click", ".rcj-exclure", (e) => {
@@ -1126,7 +1133,9 @@ function rcj_depense(rapport) {
   let etat = { facture: null, facture_nom: null, facture_coins: null,
                supplier: null, matricule: null,
                cheque: null, cheque_nom: null,
-               numero: null, date_facture: null, analyse_faite: false };
+               numero: null, date_facture: null, analyse_faite: false,
+               est_bl: false, numero_bl: null,
+               paiements: [], banques: [] };
 
   const d = new frappe.ui.Dialog({
     title: __("Dépense de caisse"),
@@ -1172,21 +1181,28 @@ function rcj_depense(rapport) {
       },
       { fieldtype: "Section Break", label: __("Paiement") },
       {
+        fieldtype: "Check", fieldname: "fractionne",
+        label: __("Paiement fractionné (plusieurs chèques, ou espèces + chèque…)"),
+        depends_on: 'eval:doc.type_depense!="Dépense non facturée" && doc.mode!="Pas payé"',
+      },
+      {
         fieldtype: "Select", fieldname: "mode", label: __("Mode de paiement"),
         options: "Espèces\nChèque\nCarte de crédit", default: "Espèces", reqd: 1,
+        depends_on: "eval:!doc.fractionne",
       },
       { fieldtype: "Column Break" },
       {
         fieldtype: "Data", fieldname: "n_cheque", label: __("N° de chèque (7 chiffres)"),
-        depends_on: 'eval:doc.mode=="Chèque"',
-        mandatory_depends_on: 'eval:doc.mode=="Chèque"',
+        depends_on: 'eval:doc.mode=="Chèque" && !doc.fractionne',
+        mandatory_depends_on: 'eval:doc.mode=="Chèque" && !doc.fractionne',
       },
       {
         fieldtype: "Select", fieldname: "banque", label: __("Banque"),
-        depends_on: 'eval:doc.mode=="Chèque"',
-        mandatory_depends_on: 'eval:doc.mode=="Chèque"',
+        depends_on: 'eval:doc.mode=="Chèque" && !doc.fractionne',
+        mandatory_depends_on: 'eval:doc.mode=="Chèque" && !doc.fractionne',
       },
       { fieldtype: "HTML", fieldname: "zone_cheque" },
+      { fieldtype: "HTML", fieldname: "zone_paiements" },
     ],
     primary_action_label: __("Enregistrer la dépense"),
     primary_action(v) {
@@ -1202,7 +1218,11 @@ function rcj_depense(rapport) {
           return;
         }
       }
-      if (v.mode === "Chèque") {
+      let paiements = null;
+      if (v.fractionne && v.mode !== "Pas payé") {
+        paiements = rcj_collecter_paiements(etat, v.montant);
+        if (!paiements) return;   // message déjà affiché
+      } else if (v.mode === "Chèque") {
         if (!/^\d{7}$/.test((v.n_cheque || "").trim())) {
           frappe.msgprint(__("Le numéro de chèque doit comporter exactement 7 chiffres."));
           return;
@@ -1223,14 +1243,25 @@ function rcj_depense(rapport) {
           photo_facture: etat.facture, photo_facture_nom: etat.facture_nom,
           coins_facture: etat.facture_coins ? JSON.stringify(etat.facture_coins) : null,
           supplier: etat.supplier || null, matricule: etat.matricule || null,
-          photo_cheque: v.mode === "Chèque" ? etat.cheque : null,
+          photo_cheque: !paiements && v.mode === "Chèque" ? etat.cheque : null,
           photo_cheque_nom: etat.cheque_nom,
+          paiements: paiements ? JSON.stringify(paiements) : null,
+          est_bl: v.type_depense !== "Dépense non facturée" && etat.est_bl ? 1 : 0,
+          numero_bl: etat.numero_bl || null,
         },
         freeze: true, freeze_message: __("Enregistrement de la dépense…"),
         callback: (r) => {
           d.hide();
-          frappe.show_alert({ message: __("Dépense enregistrée ({0}).", [r.message.name]),
-                              indicator: "green" });
+          if (r.message.a_payer) {
+            frappe.show_alert({
+              message: __("Dépense enregistrée EN DETTE ({0}) — à régler via « 💸 Dépenses à payer ».",
+                [r.message.fiche]),
+              indicator: "orange",
+            }, 8);
+          } else {
+            frappe.show_alert({ message: __("Dépense enregistrée ({0}).", [r.message.name || r.message.fiche]),
+                                indicator: "green" });
+          }
           if (rapport && rapport._fetch) rapport._fetch();
         },
       });
@@ -1269,6 +1300,15 @@ function rcj_depense(rapport) {
     return $z;
   }
 
+  // ⚠️ ENREGISTRER VERROUILLÉ TANT QUE L'ANALYSE N'EST PAS FAITE pour les
+  // types facturés (décision utilisateur 24/08) — le msgprint ne suffisait pas.
+  const maj_bouton = () => {
+    const bloque = d.get_value("type_depense") !== "Dépense non facturée"
+      && !etat.analyse_faite;
+    d.get_primary_btn().prop("disabled", bloque)
+      .attr("title", bloque ? __("Analysez d'abord la facture (bouton 🤖).") : "");
+  };
+
   // Facture : photo + bouton d'analyse OpenAI (préremplit, l'employé confirme).
   const $zf = zone_photo("zone_facture", "facture", "facture_nom",
     __("Photo ou PDF de la facture"),
@@ -1276,6 +1316,7 @@ function rcj_depense(rapport) {
       etat.analyse_faite = false;   // nouvelle photo -> nouvelle analyse exigée
       etat.facture_coins = null;
       $zf.find(".rcj-analyser").prop("disabled", false);
+      maj_bouton();
       // Cadrage à valider AVANT tout : les coins retenus font foi pour le scan.
       rcj_cadrage(etat.facture, (coins) => { etat.facture_coins = coins; });
     });
@@ -1297,6 +1338,19 @@ function rcj_depense(rapport) {
         etat.numero = m.numero || null;
         etat.date_facture = m.date || null;
         etat.analyse_faite = true;
+        // Détection BL : la fiche sera marquée « Bon de livraison » et la
+        // facture qui la couvre sera rattachée plus tard (bouton sur la
+        // facture d'achat), éventuellement avec d'autres BL du fournisseur.
+        etat.est_bl = !!m.est_bl;
+        etat.numero_bl = m.numero_bl || null;
+        if (m.est_bl && d.get_value("type_depense") !== "Dépense non facturée") {
+          frappe.show_alert({
+            message: __("📦 BON DE LIVRAISON détecté{0} — la facture sera rattachée plus tard.",
+              [m.numero_bl ? " (n° " + m.numero_bl + ")" : ""]),
+            indicator: "orange",
+          }, 8);
+        }
+        maj_bouton();
         // La description LUE sur la photo d'abord ; à défaut, le gabarit
         // « Facture n° — fournisseur ». On ne touche jamais une saisie déjà faite.
         if (!d.get_value("description")) {
@@ -1336,9 +1390,10 @@ function rcj_depense(rapport) {
     // Le masquage est porté par `depends_on` (cf. la définition des champs) ;
     // ce toggle ne fait que suivre immédiatement, sans attendre un refresh.
     $zf.toggle(type !== "Dépense non facturée");
-    // « Pas payé » n'existe que pour une facture d'achat (aucune écriture :
-    // la dette naîtra avec la facture saisie).
-    const modes = type === "Facture d'achat"
+    // « Pas payé » : facture d'achat (aucune écriture, dette avec la facture)
+    // ET dépense avec facture (charge immédiate contre le découvert, réglée
+    // plus tard via « 💸 Dépenses à payer » — décision utilisateur 24/08).
+    const modes = type !== "Dépense non facturée"
       ? "Espèces\nChèque\nCarte de crédit\nPas payé"
       : "Espèces\nChèque\nCarte de crédit";
     const mode_courant = d.get_value("mode");
@@ -1356,18 +1411,31 @@ function rcj_depense(rapport) {
     if (type === "Dépense non facturée" && !d.get_value("compte")) {
       d.set_value("compte", "Dépenses non déclarées - A&S");
     }
+    maj_bouton();
   };
   d.fields_dict.type_depense.$input.on("change", basculer_facture);
 
   // Chèque : photo obligatoire, même patron que l'encaissement.
   const $zc = zone_photo("zone_cheque", "cheque", "cheque_nom", __("Photo du chèque"));
-  const basculer_cheque = () => $zc.toggle(d.get_value("mode") === "Chèque");
+  const basculer_cheque = () =>
+    $zc.toggle(d.get_value("mode") === "Chèque" && !d.get_value("fractionne"));
   d.fields_dict.mode.$input.on("change", basculer_cheque);
+
+  // Paiement fractionné : lignes de règlement rendues dans zone_paiements.
+  // « Pas payé » possible par ligne pour les DEUX types facturés (paiement
+  // partiel — la part non payée part en dette).
+  const rendre_paiements = rcj_zone_paiements(d, etat, () => flt(d.get_value("montant")),
+    ["Espèces", "Chèque", "Carte de crédit", "Pas payé"]);
+  d.fields_dict.fractionne.$input.on("change", () => { basculer_cheque(); rendre_paiements(); });
+  d.fields_dict.montant.$input.on("change", rendre_paiements);
 
   frappe.call({
     method: "customization_app.caisse_encaissement_dettes.banques",
-    callback: (r) => d.set_df_property("banque", "options",
-      [""].concat(r.message || []).join("\n")),
+    callback: (r) => {
+      etat.banques = r.message || [];
+      d.set_df_property("banque", "options",
+        [""].concat(etat.banques).join("\n"));
+    },
   });
 
   d.show();
@@ -1379,9 +1447,15 @@ function rcj_depense(rapport) {
 RapportCaisseJournaliere.prototype._render_depenses = function () {
   const esc = frappe.utils.escape_html;
   const dep = this._data.depenses || {};
-  const rows = dep.lignes || [];
+  let rows = dep.lignes || [];
   const $c = $("#rcj-depenses").empty();
   if (!rows.length) return;
+
+  // Filtre « BL seulement » : la description porte « BL n°X » (posé par
+  // l'analyse) pour toute dépense dont le justificatif est un bon de livraison.
+  const est_bl = (l) => /BL n°/i.test(l.description || "");
+  const nb_bl = rows.filter(est_bl).length;
+  if (this._depenses_bl_seulement) rows = rows.filter(est_bl);
 
   const par_mode = Object.entries(dep.par_mode || {})
     .map(([m, v]) => `${esc(m)} : <b>${this._fmt(v)}</b>`).join(" · ");
@@ -1391,9 +1465,12 @@ RapportCaisseJournaliere.prototype._render_depenses = function () {
       <td style="white-space:nowrap">${frappe.datetime.str_to_user(l.date)}</td>
       <td>${esc(l.saisi_par || "")}</td>
       <td>${esc(l.type || "")}</td>
-      <td>${esc(l.description || "")}</td>
+      <td>${est_bl(l) ? '<span class="rcj-badge" style="background:#fff7e6;color:#ad6800;border:1px solid #ffd591">📦 BL</span> ' : ""}${esc(l.description || "")}</td>
       <td><span class="rcj-badge" style="background:${style.bg};color:${style.fg}">${esc(l.mode)}</span></td>
       <td style="text-align:right;font-weight:700">${this._fmt(l.montant)}</td>
+      <td style="text-align:center">${l.piece
+        ? `<a href="#" class="rcj-piece" data-url="${esc(l.piece)}" title="${__("Voir le justificatif")}">📎</a>`
+        : '<span style="opacity:.25">📎</span>'}</td>
       <td><a href="/app/${frappe.router.slug(l.doctype || "Journal Entry")}/${
         encodeURIComponent(l.name)}" target="_blank">${esc(l.name)}</a></td>
     </tr>`;
@@ -1404,14 +1481,26 @@ RapportCaisseJournaliere.prototype._render_depenses = function () {
       <div class="rcj-recap-head" style="background:linear-gradient(90deg,#7b241c,#a93226)">
         🧾 Dépenses de la caisse — ${this._fmt(dep.total)} DT
         <span style="font-weight:400;font-size:12px;margin-left:10px">${par_mode}</span>
+        ${nb_bl ? `<button type="button" class="btn btn-xs rcj-filtre-bl"
+          style="float:right;background:${this._depenses_bl_seulement ? "#ffd591" : "#fff"};font-weight:700">
+          📦 BL seulement (${nb_bl})</button>` : ""}
       </div>
       <div style="overflow-x:auto"><table class="rcj-recap-tbl" style="min-width:760px">
         <thead><tr><th style="text-align:left">Date</th><th style="text-align:left">Saisie par</th>
           <th style="text-align:left">Type</th><th style="text-align:left">Description</th>
-          <th style="text-align:left">Mode</th><th>Montant</th><th style="text-align:left">Écriture</th></tr></thead>
+          <th style="text-align:left">Mode</th><th>Montant</th><th>Pièce</th>
+          <th style="text-align:left">Écriture</th></tr></thead>
         <tbody>${body}</tbody>
       </table></div>
     </div>`);
+  $c.find(".rcj-filtre-bl").on("click", () => {
+    this._depenses_bl_seulement = !this._depenses_bl_seulement;
+    this._render_depenses();
+  });
+  $c.find(".rcj-piece").on("click", (e) => {
+    e.preventDefault();
+    rcj_apercu_url($(e.currentTarget).data("url"));
+  });
 };
 
 
@@ -1580,4 +1669,714 @@ function rcj_html_rapprochement(rap, fmt) {
     <div class="text-muted" style="font-size:11px;margin-bottom:6px">
       ${__("Les pièces encore en portefeuille sont listées nominativement dans le PDF — à compter physiquement.")}
     </div>`;
+}
+
+
+// ------------------------------------------------- paiement fractionné (UI)
+
+// Rend les lignes de règlement dans `zone_paiements` du dialogue. `etat` porte
+// `paiements` (les lignes) et `banques` ; `get_cible` rend le montant TTC visé.
+// Retourne la fonction de rendu (à appeler après show / au changement du Check).
+function rcj_zone_paiements(d, etat, get_cible, modes_lignes) {
+  const esc = frappe.utils.escape_html;
+  const $w = () => d.fields_dict.zone_paiements.$wrapper;
+  // « Pas payé » comme LIGNE = paiement partiel (la part payée sort de la
+  // caisse, le reste part en dette) — offert à la saisie, pas au règlement.
+  const MODES_L = modes_lignes || ["Espèces", "Chèque", "Carte de crédit"];
+
+  function rendre() {
+    const actif = !!d.get_value("fractionne");
+    $w().toggle(actif);
+    if (!actif) return;
+    if (!etat.paiements.length) {
+      etat.paiements = [{ mode: "Espèces", montant: get_cible() || 0 },
+                        { mode: "Chèque", montant: 0 }];
+    }
+    const cible = flt(get_cible());
+    const somme = etat.paiements.reduce((s, p) => s + flt(p.montant), 0);
+    const ok = Math.abs(somme - cible) <= 0.001;
+    const banques = etat.banques || [];
+    const lignes = etat.paiements.map((p, i) => `
+      <div class="rcj-pay-l" data-i="${i}"
+           style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:6px;
+                  border:1px solid var(--border-color,#e4e8ee);border-radius:8px;padding:6px 8px;">
+        <select class="form-control input-sm rcj-pay-mode" style="width:130px">
+          ${MODES_L.map((m) =>
+            `<option ${p.mode === m ? "selected" : ""}>${m}</option>`).join("")}
+        </select>
+        <input type="number" step="any" min="0" class="form-control input-sm rcj-pay-montant"
+               style="width:110px;text-align:right" value="${p.montant || ""}" placeholder="${__("Montant")}">
+        ${p.mode === "Chèque" ? `
+          <input type="text" maxlength="7" class="form-control input-sm rcj-pay-cheque"
+                 style="width:110px" value="${esc(p.n_cheque || "")}" placeholder="${__("N° chèque")}">
+          <select class="form-control input-sm rcj-pay-banque" style="width:130px">
+            <option value=""></option>
+            ${banques.map((b) => `<option ${p.banque === b ? "selected" : ""}>${esc(b)}</option>`).join("")}
+          </select>
+          <button type="button" class="btn btn-default btn-xs rcj-pay-photo">📷</button>
+          <span class="text-muted" style="font-size:11px">${p.photo ? "✓ " + esc(p.photo_nom || __("photo")) : __("photo du chèque")}</span>
+        ` : ""}
+        <button type="button" class="btn btn-default btn-xs rcj-pay-suppr" title="${__("Retirer")}">🗑</button>
+      </div>`).join("");
+    $w().html(`
+      <div style="margin:4px 0">
+        ${lignes}
+        <button type="button" class="btn btn-default btn-xs rcj-pay-ajout">➕ ${__("Ajouter un règlement")}</button>
+        <span style="margin-left:10px;font-weight:700;color:${ok ? "#135200" : "#a8071a"}">
+          ${__("Somme")} : ${format_currency(somme, "TND")} / ${format_currency(cible, "TND")}
+        </span>
+      </div>`);
+
+    const ligne_de = (e) => cint($(e.currentTarget).closest(".rcj-pay-l").data("i"));
+    $w().find(".rcj-pay-mode").on("change", (e) => {
+      etat.paiements[ligne_de(e)].mode = $(e.currentTarget).val(); rendre();
+    });
+    $w().find(".rcj-pay-montant").on("change", (e) => {
+      etat.paiements[ligne_de(e)].montant = flt($(e.currentTarget).val()); rendre();
+    });
+    $w().find(".rcj-pay-cheque").on("change", (e) => {
+      etat.paiements[ligne_de(e)].n_cheque = $(e.currentTarget).val().trim();
+    });
+    $w().find(".rcj-pay-banque").on("change", (e) => {
+      etat.paiements[ligne_de(e)].banque = $(e.currentTarget).val();
+    });
+    $w().find(".rcj-pay-photo").on("click", (e) => {
+      const i = ligne_de(e);
+      const input = document.createElement("input");
+      input.type = "file"; input.accept = "image/*";
+      input.onchange = () => {
+        const f = input.files && input.files[0];
+        if (!f) return;
+        const lecteur = new FileReader();
+        lecteur.onload = () => {
+          etat.paiements[i].photo = lecteur.result;
+          etat.paiements[i].photo_nom = f.name;
+          rendre();
+        };
+        lecteur.readAsDataURL(f);
+      };
+      input.click();
+    });
+    $w().find(".rcj-pay-suppr").on("click", (e) => {
+      etat.paiements.splice(ligne_de(e), 1); rendre();
+    });
+    $w().find(".rcj-pay-ajout").on("click", () => {
+      etat.paiements.push({ mode: "Chèque", montant: Math.max(0, cible - somme) });
+      rendre();
+    });
+  }
+  return rendre;
+}
+
+// Valide et retourne les lignes prêtes pour le serveur, ou null (message montré).
+function rcj_collecter_paiements(etat, montant) {
+  const lignes = (etat.paiements || []).filter((p) => flt(p.montant) > 0);
+  if (!lignes.length) {
+    frappe.msgprint(__("Ajoutez au moins un règlement avec un montant."));
+    return null;
+  }
+  const somme = lignes.reduce((s, p) => s + flt(p.montant), 0);
+  if (Math.abs(somme - flt(montant)) > 0.001) {
+    frappe.msgprint(__("La somme des règlements ({0}) doit égaler le montant ({1}).",
+      [format_currency(somme, "TND"), format_currency(flt(montant), "TND")]));
+    return null;
+  }
+  for (const p of lignes) {
+    if (p.mode === "Chèque") {
+      if (!/^\d{7}$/.test((p.n_cheque || "").trim())) {
+        frappe.msgprint(__("Chaque chèque doit avoir un numéro de 7 chiffres."));
+        return null;
+      }
+      if (!p.banque) {
+        frappe.msgprint(__("Choisissez la banque de chaque chèque."));
+        return null;
+      }
+      if (!p.photo) {
+        frappe.msgprint(__("Prenez la photo de chaque chèque."));
+        return null;
+      }
+    }
+  }
+  return lignes.map((p) => ({
+    mode: p.mode, montant: flt(p.montant), n_cheque: p.n_cheque || null,
+    banque: p.banque || null, photo_cheque: p.photo || null,
+    photo_cheque_nom: p.photo_nom || null,
+  }));
+}
+
+// --------------------------------------------- dépenses à payer (découvert)
+
+function rcj_depenses_a_payer(rapport) {
+  const API = "customization_app.caisse_depenses";
+  const esc = frappe.utils.escape_html;
+  frappe.call({ method: API + ".depenses_a_payer" }).then((r) => {
+    const rows = r.message || [];
+    if (!rows.length) {
+      frappe.msgprint(__("Aucune dépense en attente de paiement — tout est réglé. ✅"));
+      return;
+    }
+    const d = new frappe.ui.Dialog({
+      title: __("💸 Dépenses à payer ({0})", [rows.length]),
+      size: "extra-large",
+      fields: [{ fieldtype: "HTML", fieldname: "liste" }],
+    });
+    d.fields_dict.liste.$wrapper.html(`
+      <table class="table table-bordered" style="font-size:12.5px">
+        <thead><tr>
+          <th>${__("Date facture")}</th><th>${__("Description")}</th>
+          <th>${__("Fournisseur")}</th><th>${__("N° facture")}</th>
+          <th style="text-align:right">${__("Montant")}</th>
+          <th>${__("Pièce")}</th><th></th>
+        </tr></thead>
+        <tbody>
+          ${rows.map((f) => `
+            <tr>
+              <td>${esc(f.date_facture || "")}</td>
+              <td>${f.est_bl ? '<span class="rcj-badge" style="background:#fff7e6;color:#ad6800;border:1px solid #ffd591">📦 BL' + (f.numero_bl ? " n°" + esc(f.numero_bl) : "") + "</span> " : ""}${esc(f.description || "")}
+                <div class="text-muted" style="font-size:11px">
+                  <a href="/app/depense-a-payer/${encodeURIComponent(f.name)}" target="_blank">${esc(f.name)}</a>
+                  ${f.journal_entry ? ` · <a href="/app/journal-entry/${encodeURIComponent(f.journal_entry)}" target="_blank">${esc(f.journal_entry)}</a>` : ""}
+                </div></td>
+              <td>${esc(f.fournisseur || "")}</td>
+              <td>${esc(f.numero_facture || "")}</td>
+              <td style="text-align:right;font-weight:700">${format_currency(f.montant, "TND")}</td>
+              <td style="text-align:center">${f.piece
+                ? `<a href="#" class="rcj-piece" data-url="${esc(f.piece)}" title="${__("Voir le justificatif")}">📎</a>`
+                : '<span style="opacity:.25">📎</span>'}</td>
+              <td><button class="btn btn-danger btn-xs rcj-payer" data-fiche="${esc(f.name)}">💸 ${__("Payer")}</button></td>
+            </tr>`).join("")}
+        </tbody>
+      </table>
+      <div class="text-muted" style="font-size:11px">
+        ${__("La charge est déjà comptabilisée contre le compte de découvert — le paiement génère l'écriture de règlement au jour choisi, et la dépense entre au rapport de caisse ce jour-là.")}
+      </div>`);
+    d.fields_dict.liste.$wrapper.find(".rcj-payer").on("click", (e) => {
+      const fiche = rows.find((f) => f.name === $(e.currentTarget).data("fiche"));
+      if (!fiche) return;
+      d.hide();
+      rcj_payer_depense(fiche, rapport);
+    });
+    d.fields_dict.liste.$wrapper.find(".rcj-piece").on("click", (e) => {
+      e.preventDefault();
+      rcj_apercu_url($(e.currentTarget).data("url"));
+    });
+    d.show();
+  });
+}
+
+function rcj_payer_depense(fiche, rapport) {
+  const API = "customization_app.caisse_depenses";
+  const etat = { cheque: null, cheque_nom: null, paiements: [], banques: [] };
+  const d = new frappe.ui.Dialog({
+    title: __("💸 Payer — {0}", [fiche.description || fiche.name]),
+    size: "large",
+    fields: [
+      { fieldtype: "Date", fieldname: "date_reglement", label: __("Date du paiement"),
+        default: frappe.datetime.get_today(), reqd: 1 },
+      { fieldtype: "Column Break" },
+      { fieldtype: "Currency", fieldname: "montant", label: __("Montant"),
+        default: fiche.montant, read_only: 1 },
+      { fieldtype: "Section Break", label: __("Règlement") },
+      { fieldtype: "Check", fieldname: "fractionne",
+        label: __("Paiement fractionné (plusieurs chèques, ou espèces + chèque…)") },
+      { fieldtype: "Select", fieldname: "mode", label: __("Mode de paiement"),
+        options: "Espèces\nChèque\nCarte de crédit", default: "Espèces", reqd: 1,
+        depends_on: "eval:!doc.fractionne" },
+      { fieldtype: "Column Break" },
+      { fieldtype: "Data", fieldname: "n_cheque", label: __("N° de chèque (7 chiffres)"),
+        depends_on: 'eval:doc.mode=="Chèque" && !doc.fractionne' },
+      { fieldtype: "Select", fieldname: "banque", label: __("Banque"),
+        depends_on: 'eval:doc.mode=="Chèque" && !doc.fractionne' },
+      { fieldtype: "HTML", fieldname: "zone_cheque" },
+      { fieldtype: "HTML", fieldname: "zone_paiements" },
+    ],
+    primary_action_label: __("💸 Enregistrer le paiement"),
+    primary_action(v) {
+      let paiements = null;
+      if (v.fractionne) {
+        paiements = rcj_collecter_paiements(etat, fiche.montant);
+        if (!paiements) return;
+      } else if (v.mode === "Chèque") {
+        if (!/^\d{7}$/.test((v.n_cheque || "").trim())) {
+          frappe.msgprint(__("Le numéro de chèque doit comporter exactement 7 chiffres."));
+          return;
+        }
+        if (!v.banque) {
+          frappe.msgprint(__("Pour un chèque, la banque est obligatoire."));
+          return;
+        }
+        if (!etat.cheque) {
+          frappe.msgprint(__("Prenez la photo du chèque avant d'enregistrer."));
+          return;
+        }
+      }
+      frappe.call({
+        method: API + ".solder_depense",
+        args: {
+          fiche: fiche.name, date_reglement: v.date_reglement,
+          mode: v.mode, n_cheque: v.n_cheque, banque: v.banque,
+          photo_cheque: !paiements && v.mode === "Chèque" ? etat.cheque : null,
+          photo_cheque_nom: etat.cheque_nom,
+          paiements: paiements ? JSON.stringify(paiements) : null,
+        },
+        freeze: true, freeze_message: __("Enregistrement du paiement…"),
+        callback: (r) => {
+          d.hide();
+          frappe.show_alert({
+            message: __("Dépense payée — écriture {0}.", [r.message.name]),
+            indicator: "green",
+          });
+          if (rapport && rapport._fetch) rapport._fetch();
+        },
+      });
+    },
+  });
+
+  // photo du chèque (mode simple)
+  const $zc = d.fields_dict.zone_cheque.$wrapper;
+  $zc.html(`
+    <div style="margin:4px 0">
+      <button type="button" class="btn btn-default btn-sm rcj-ph-btn">📷 ${__("Photo du chèque")}</button>
+      <span class="rcj-ph-nom text-muted" style="margin-left:8px"></span>
+      <input type="file" accept="image/*" style="display:none">
+    </div>`);
+  const $input = $zc.find("input[type=file]");
+  $zc.find(".rcj-ph-btn").on("click", () => $input.trigger("click"));
+  $input.on("change", function () {
+    const f = this.files && this.files[0];
+    if (!f) return;
+    const lecteur = new FileReader();
+    lecteur.onload = () => {
+      etat.cheque = lecteur.result;
+      etat.cheque_nom = f.name;
+      $zc.find(".rcj-ph-nom").text("✓ " + f.name);
+    };
+    lecteur.readAsDataURL(f);
+  });
+  const basculer_cheque = () =>
+    $zc.toggle(d.get_value("mode") === "Chèque" && !d.get_value("fractionne"));
+
+  const rendre_paiements = rcj_zone_paiements(d, etat, () => flt(fiche.montant));
+  d.fields_dict.mode.$input.on("change", basculer_cheque);
+  d.fields_dict.fractionne.$input.on("change", () => { basculer_cheque(); rendre_paiements(); });
+
+  frappe.call({
+    method: "customization_app.caisse_encaissement_dettes.banques",
+    callback: (r) => {
+      etat.banques = r.message || [];
+      d.set_df_property("banque", "options", [""].concat(etat.banques).join("\n"));
+    },
+  });
+
+  d.show();
+  basculer_cheque();
+  rendre_paiements();
+}
+
+
+// ------------------------------------------------ aperçu pièce jointe (popup)
+
+function rcj_apercu_url(url, titre) {
+  if (!url) return;
+  const esc = frappe.utils.escape_html;
+  const d = new frappe.ui.Dialog({
+    title: titre || __("📎 Justificatif"),
+    size: "extra-large",
+    fields: [{ fieldtype: "HTML", fieldname: "zone" }],
+  });
+  const est_pdf = /\.pdf($|\?)/i.test(url);
+  d.fields_dict.zone.$wrapper.html(`
+    ${est_pdf
+      ? `<iframe src="${esc(url)}" style="width:100%;height:72vh;border:1px solid var(--border-color,#e4e8ee);border-radius:8px"></iframe>`
+      : `<div style="text-align:center"><img src="${esc(url)}"
+           style="max-width:100%;max-height:72vh;border:1px solid var(--border-color,#e4e8ee);border-radius:8px"></div>`}
+    <div style="margin-top:6px;text-align:right">
+      <a href="${esc(url)}" target="_blank">${__("Ouvrir dans un onglet")} ↗</a>
+    </div>`);
+  d.show();
+}
+
+// ------------------------------------ dépenses BL (toutes périodes, facture)
+
+function rcj_depenses_bl(rapport) {
+  const API = "customization_app.caisse_depenses";
+  const esc = frappe.utils.escape_html;
+  frappe.call({ method: API + ".depenses_bl" }).then((r) => {
+    const rows = r.message || [];
+    if (!rows.length) {
+      frappe.msgprint(__("Aucune dépense sur bon de livraison."));
+      return;
+    }
+    const etat = { facture: null, facture_nom: null };
+    const sans_facture = rows.filter((f) => !f.numero_facture).length;
+    const d = new frappe.ui.Dialog({
+      title: __("📦 Dépenses sur BL ({0} — dont {1} sans facture)", [rows.length, sans_facture]),
+      size: "extra-large",
+      fields: [
+        { fieldtype: "HTML", fieldname: "liste" },
+        { fieldtype: "Section Break", label: __("🧾 Facture reçue (couvre les BL cochés)") },
+        { fieldtype: "Data", fieldname: "numero_facture", label: __("N° de la facture"), reqd: 1 },
+        { fieldtype: "Column Break" },
+        { fieldtype: "Date", fieldname: "date_facture", label: __("Date de la facture") },
+        { fieldtype: "Column Break" },
+        { fieldtype: "HTML", fieldname: "zone_photo" },
+      ],
+      primary_action_label: __("🧾 Attacher la facture aux BL cochés"),
+      primary_action(v) {
+        const choisis = d.fields_dict.liste.$wrapper
+          .find(".rcj-bl-choix:checked").map((_, el) => $(el).val()).get();
+        if (!choisis.length) {
+          frappe.msgprint(__("Cochez au moins un BL."));
+          return;
+        }
+        if (!(v.numero_facture || "").trim()) {
+          frappe.msgprint(__("Saisissez le numéro de la facture reçue."));
+          return;
+        }
+        frappe.call({
+          method: API + ".attacher_facture_bl",
+          args: {
+            fiches: JSON.stringify(choisis),
+            numero_facture: v.numero_facture,
+            date_facture: v.date_facture || null,
+            photo_facture: etat.facture,
+            photo_facture_nom: etat.facture_nom,
+          },
+          freeze: true, freeze_message: __("Rattachement de la facture…"),
+          callback: (res) => {
+            d.hide();
+            frappe.show_alert({
+              message: __("Facture n° {0} attachée à {1} BL. ✅",
+                [v.numero_facture, (res.message.factures || []).length]),
+              indicator: "green",
+            }, 7);
+            rcj_depenses_bl(rapport);   // rouvrir la liste mise à jour
+          },
+        });
+      },
+    });
+
+    const maj_total = () => {
+      let total = 0;
+      d.fields_dict.liste.$wrapper.find(".rcj-bl-choix:checked").each((_, el) => {
+        total += flt($(el).data("montant"));
+      });
+      d.fields_dict.liste.$wrapper.find(".rcj-bl-total").text(format_currency(total, "TND"));
+    };
+
+    d.fields_dict.liste.$wrapper.html(`
+      <div style="max-height:46vh;overflow-y:auto">
+      <table class="table table-bordered" style="font-size:12.5px">
+        <thead><tr>
+          <th style="width:30px"><input type="checkbox" class="rcj-bl-tout" title="${__("Cocher les BL sans facture")}"></th>
+          <th>${__("Date")}</th><th>${__("Description")}</th>
+          <th>${__("Statut")}</th><th>${__("N° BL")}</th>
+          <th>${__("Facture")}</th>
+          <th style="text-align:right">${__("Montant")}</th><th>${__("Pièce")}</th>
+        </tr></thead>
+        <tbody>
+          ${rows.map((f) => `
+            <tr>
+              <td><input type="checkbox" class="rcj-bl-choix" value="${esc(f.name)}"
+                         data-montant="${f.montant}" data-sf="${f.numero_facture ? 0 : 1}"></td>
+              <td style="white-space:nowrap">${esc(f.date || "")}</td>
+              <td>${esc(f.description || "")}
+                <div class="text-muted" style="font-size:11px">
+                  <a href="/app/depense-a-payer/${encodeURIComponent(f.name)}" target="_blank">${esc(f.name)}</a>
+                  ${f.journal_entry ? ` · <a href="/app/journal-entry/${encodeURIComponent(f.journal_entry)}" target="_blank">${esc(f.journal_entry)}</a>` : ""}
+                </div></td>
+              <td><span class="rcj-badge" style="${f.statut === "Payée"
+                    ? "background:#f6ffed;color:#135200;border:1px solid #b7eb8f"
+                    : "background:#fff1f0;color:#a8071a;border:1px solid #ffa39e"}">${esc(f.statut)}</span></td>
+              <td>${esc(f.numero_bl || "")}</td>
+              <td>${f.numero_facture
+                    ? `<span class="rcj-badge" style="background:#e6f4ff;color:#0958d9;border:1px solid #91caff">🧾 ${esc(f.numero_facture)}</span>`
+                    : `<span class="rcj-badge" style="background:#fff7e6;color:#ad6800;border:1px solid #ffd591">${__("sans facture")}</span>`}</td>
+              <td style="text-align:right;font-weight:700">${format_currency(f.montant, "TND")}</td>
+              <td style="text-align:center">${f.piece
+                    ? `<a href="#" class="rcj-piece" data-url="${esc(f.piece)}" title="${__("Voir le justificatif")}">📎</a>`
+                    : '<span style="opacity:.25">📎</span>'}</td>
+            </tr>`).join("")}
+        </tbody>
+      </table></div>
+      <div style="font-weight:700;margin-top:4px">${__("Total sélectionné")} :
+        <span class="rcj-bl-total">0</span></div>
+      <div class="text-muted" style="font-size:11px">
+        ${__("Cochez le ou les BL couverts par la facture reçue : un seul = le BL devient la facture ; plusieurs = facture globale. Rien n'est modifié en comptabilité — la facture s'attache aux fiches et aux écritures comme preuve.")}
+      </div>`);
+    const $w = d.fields_dict.liste.$wrapper;
+    $w.find(".rcj-bl-choix").on("change", maj_total);
+    $w.find(".rcj-bl-tout").on("change", function () {
+      $w.find('.rcj-bl-choix[data-sf="1"]').prop("checked", this.checked);
+      maj_total();
+    });
+    $w.find(".rcj-piece").on("click", (e) => {
+      e.preventDefault();
+      rcj_apercu_url($(e.currentTarget).data("url"));
+    });
+
+    // photo / PDF de la facture reçue
+    const $zp = d.fields_dict.zone_photo.$wrapper;
+    $zp.html(`
+      <div style="margin:4px 0">
+        <button type="button" class="btn btn-default btn-sm rcj-ph-btn">📷 ${__("Photo ou PDF de la facture")}</button>
+        <span class="rcj-ph-nom text-muted" style="margin-left:8px"></span>
+        <input type="file" accept="image/*,application/pdf" style="display:none">
+      </div>`);
+    const $input = $zp.find("input[type=file]");
+    $zp.find(".rcj-ph-btn").on("click", () => $input.trigger("click"));
+    $input.on("change", function () {
+      const f = this.files && this.files[0];
+      if (!f) return;
+      const lecteur = new FileReader();
+      lecteur.onload = () => {
+        etat.facture = lecteur.result;
+        etat.facture_nom = f.name;
+        $zp.find(".rcj-ph-nom").text("✓ " + f.name);
+      };
+      lecteur.readAsDataURL(f);
+    });
+
+    d.show();
+  });
+}
+
+
+// ---------------------------------------- achats fournisseurs (fiches FAS)
+
+function rcj_factures_a_payer() {
+  const API = "customization_app.caisse_depenses";
+  const esc = frappe.utils.escape_html;
+  frappe.call({ method: API + ".factures_a_payer" }).then((r) => {
+    const m = r.message || {};
+    const factures = m.factures || [];
+    const fiches = m.fiches || [];
+    if (!factures.length && !fiches.length) {
+      frappe.msgprint(__("Rien à payer côté fournisseurs. ✅"));
+      return;
+    }
+    const d = new frappe.ui.Dialog({
+      title: __("💸 Factures à payer ({0} factures · {1} captures)", [factures.length, fiches.length]),
+      size: "extra-large",
+      fields: [{ fieldtype: "HTML", fieldname: "liste" }],
+    });
+    const total_encours = factures.reduce((s2, f) => s2 + flt(f.outstanding_amount), 0);
+    d.fields_dict.liste.$wrapper.html(`
+      <div style="max-height:60vh;overflow-y:auto">
+      ${factures.length ? `
+      <div style="font-weight:700;margin-bottom:4px;color:#a8071a">
+        🧾 ${__("Factures d’achat non soldées")} — ${__("encours")} : ${format_currency(total_encours, "TND")}</div>
+      <table class="table table-bordered" style="font-size:12.5px">
+        <thead><tr>
+          <th>${__("Date")}</th><th>${__("Fournisseur")}</th><th>${__("N° facture")}</th>
+          <th>${__("Échéance")}</th>
+          <th style="text-align:right">${__("Total")}</th>
+          <th style="text-align:right">${__("Reste à payer")}</th>
+          <th>${__("Pièce")}</th>
+        </tr></thead>
+        <tbody>
+          ${factures.map((f) => `
+            <tr>
+              <td style="white-space:nowrap">${esc(f.posting_date || "")}
+                <div class="text-muted" style="font-size:11px">
+                  <a href="/app/purchase-invoice/${encodeURIComponent(f.name)}" target="_blank">${esc(f.name)}</a></div></td>
+              <td>${esc(f.supplier || "")}</td>
+              <td>${esc(f.bill_no || "")}</td>
+              <td>${esc(f.due_date || "")}</td>
+              <td style="text-align:right">${format_currency(f.montant, "TND")}</td>
+              <td style="text-align:right;font-weight:700;color:#a8071a">${format_currency(f.outstanding_amount, "TND")}</td>
+              <td style="text-align:center">${f.piece
+                ? `<a href="#" class="rcj-piece" data-url="${esc(f.piece)}" title="${__("Voir le justificatif")}">📎</a>`
+                : '<span style="opacity:.25">📎</span>'}</td>
+            </tr>`).join("")}
+        </tbody>
+      </table>` : ""}
+      ${fiches.length ? `
+      <div style="font-weight:700;margin:8px 0 4px;color:#ad6800">
+        📷 ${__("Captures caisse non payées (à comptabiliser)")}</div>
+      <table class="table table-bordered" style="font-size:12.5px">
+        <thead><tr>
+          <th>${__("Date")}</th><th>${__("Fournisseur")}</th>
+          <th>${__("N° facture / BL")}</th><th>${__("Mode")}</th>
+          <th style="text-align:right">${__("Montant")}</th><th>${__("Pièce")}</th>
+        </tr></thead>
+        <tbody>
+          ${fiches.map((f) => `
+            <tr>
+              <td style="white-space:nowrap">${esc(f.date || "")}
+                <div class="text-muted" style="font-size:11px">
+                  <a href="/app/facture-achat-a-saisir/${encodeURIComponent(f.name)}" target="_blank">${esc(f.name)}</a>
+                  ${f.est_bl ? ' <span class="rcj-badge" style="background:#fff7e6;color:#ad6800;border:1px solid #ffd591">📦 BL</span>' : ""}</div></td>
+              <td>${esc(f.fournisseur || f.supplier || "")}</td>
+              <td>${esc(f.numero_facture || f.numero_bl || "")}</td>
+              <td><span class="rcj-badge" style="background:#fff1f0;color:#a8071a;border:1px solid #ffa39e">${esc(f.mode_paiement || "")}</span></td>
+              <td style="text-align:right;font-weight:700">${format_currency(f.montant, "TND")}</td>
+              <td style="text-align:center">${f.piece
+                ? `<a href="#" class="rcj-piece" data-url="${esc(f.piece)}">📎</a>`
+                : '<span style="opacity:.25">📎</span>'}</td>
+            </tr>`).join("")}
+        </tbody>
+      </table>` : ""}
+      </div>`);
+    d.fields_dict.liste.$wrapper.find(".rcj-piece").on("click", (e) => {
+      e.preventDefault();
+      rcj_apercu_url($(e.currentTarget).data("url"));
+    });
+    d.show();
+  });
+}
+
+function rcj_factures_sans_justif() {
+  const API = "customization_app.caisse_depenses";
+  const esc = frappe.utils.escape_html;
+  frappe.call({ method: API + ".factures_sans_justificatif" }).then((r) => {
+    const rows = r.message || [];
+    if (!rows.length) {
+      frappe.msgprint(__("Toutes les factures d’achat depuis le 01-01-2026 ont un justificatif. ✅"));
+      return;
+    }
+    const d = new frappe.ui.Dialog({
+      title: __("🗂 Factures sans justificatifs ({0})", [rows.length]),
+      size: "extra-large",
+      fields: [{ fieldtype: "HTML", fieldname: "liste" }],
+    });
+    d.fields_dict.liste.$wrapper.html(`
+      <div style="max-height:60vh;overflow-y:auto">
+      <table class="table table-bordered" style="font-size:12.5px">
+        <thead><tr>
+          <th>${__("Date")}</th><th>${__("Facture")}</th><th>${__("Fournisseur")}</th>
+          <th>${__("N° fournisseur")}</th>
+          <th style="text-align:right">${__("Total")}</th>
+          <th style="text-align:right">${__("Reste à payer")}</th>
+        </tr></thead>
+        <tbody>
+          ${rows.map((f) => `
+            <tr>
+              <td style="white-space:nowrap">${esc(f.posting_date || "")}</td>
+              <td><a href="/app/purchase-invoice/${encodeURIComponent(f.name)}" target="_blank">${esc(f.name)}</a></td>
+              <td>${esc(f.supplier || "")}</td>
+              <td>${esc(f.bill_no || "")}</td>
+              <td style="text-align:right">${format_currency(f.rounded_total || f.grand_total, "TND")}</td>
+              <td style="text-align:right">${format_currency(f.outstanding_amount, "TND")}</td>
+            </tr>`).join("")}
+        </tbody>
+      </table></div>
+      <div class="text-muted" style="font-size:11px">
+        ${__("Ouvre la facture et joins le scan (ou capture-la en caisse : l’appariement par n° copiera le justificatif automatiquement).")}
+      </div>`);
+    d.show();
+  });
+}
+
+function rcj_factures_bl(rapport) {
+  const API = "customization_app.caisse_depenses";
+  const esc = frappe.utils.escape_html;
+  frappe.call({ method: API + ".factures_bl" }).then((r) => {
+    const rows = r.message || [];
+    if (!rows.length) {
+      frappe.msgprint(__("Aucun achat sur bon de livraison."));
+      return;
+    }
+    const sans_cmd = rows.filter((f) => !f.purchase_order && f.statut === "À saisir").length;
+    const d = new frappe.ui.Dialog({
+      title: __("📦 Achats sur BL ({0} — dont {1} sans commande)", [rows.length, sans_cmd]),
+      size: "extra-large",
+      fields: [{ fieldtype: "HTML", fieldname: "liste" }],
+      primary_action_label: __("🧾 Créer la facture depuis les commandes cochées"),
+      primary_action() {
+        const choisis = d.fields_dict.liste.$wrapper
+          .find(".rcj-fbl-choix:checked").map((_, el) => $(el).val()).get();
+        if (!choisis.length) {
+          frappe.msgprint(__("Cochez au moins un BL dont la commande est soumise."));
+          return;
+        }
+        frappe.call({
+          method: API + ".creer_facture_depuis_commandes",
+          args: { fiches: JSON.stringify(choisis) },
+          freeze: true, freeze_message: __("Création de la facture depuis les commandes…"),
+          callback: (res) => {
+            d.hide();
+            frappe.show_alert({
+              message: __("Facture {0} créée depuis {1} commande(s) — complétez le n° fournisseur puis soumettez.",
+                [res.message.purchase_invoice, (res.message.commandes || []).length]),
+              indicator: "green",
+            }, 8);
+            frappe.set_route("Form", "Purchase Invoice", res.message.purchase_invoice);
+          },
+        });
+      },
+    });
+    const maj_total = () => {
+      let total = 0;
+      d.fields_dict.liste.$wrapper.find(".rcj-fbl-choix:checked").each((_, el) => {
+        total += flt($(el).data("montant"));
+      });
+      d.fields_dict.liste.$wrapper.find(".rcj-fbl-total").text(format_currency(total, "TND"));
+    };
+    d.fields_dict.liste.$wrapper.html(`
+      <div style="max-height:52vh;overflow-y:auto">
+      <table class="table table-bordered" style="font-size:12.5px">
+        <thead><tr>
+          <th style="width:30px" title="${__("Cochables : BL avec commande soumise, sans facture")}"></th>
+          <th>${__("Date")}</th><th>${__("Fournisseur")}</th><th>${__("N° BL")}</th>
+          <th>${__("Statut")}</th><th>${__("Payé")}</th>
+          <th style="text-align:right">${__("Montant")}</th>
+          <th>${__("Commande")}</th><th>${__("Facture")}</th><th>${__("Pièce")}</th>
+        </tr></thead>
+        <tbody>
+          ${rows.map((f) => `
+            <tr>
+              <td>${f.purchase_order && f.po_docstatus === 1 && !f.purchase_invoice && f.statut === "À saisir"
+                    ? `<input type="checkbox" class="rcj-fbl-choix" value="${esc(f.name)}" data-montant="${f.montant}">`
+                    : ""}</td>
+              <td style="white-space:nowrap">${esc(f.date || "")}
+                <div class="text-muted" style="font-size:11px">
+                  <a href="/app/facture-achat-a-saisir/${encodeURIComponent(f.name)}" target="_blank">${esc(f.name)}</a></div></td>
+              <td>${esc(f.fournisseur || f.supplier || "")}</td>
+              <td>${esc(f.numero_bl || "")}</td>
+              <td><span class="rcj-badge" style="${f.statut === "Saisie"
+                    ? "background:#f6ffed;color:#135200;border:1px solid #b7eb8f"
+                    : "background:#fff7e6;color:#ad6800;border:1px solid #ffd591"}">${esc(f.statut)}</span></td>
+              <td>${f.mode_paiement === "Pas payé" ? "—" : esc(f.mode_paiement || "")}</td>
+              <td style="text-align:right;font-weight:700">${format_currency(f.montant, "TND")}</td>
+              <td>${f.purchase_order
+                    ? `<a href="/app/purchase-order/${encodeURIComponent(f.purchase_order)}" target="_blank">${esc(f.purchase_order)}</a>
+                       ${f.po_docstatus !== 1 ? ` <span class="rcj-badge" style="background:#fff7e6;color:#ad6800;border:1px solid #ffd591">${__("brouillon — à soumettre")}</span>` : ""}`
+                    : (f.statut === "À saisir"
+                        ? `<button class="btn btn-warning btn-xs rcj-creer-cmd"
+                                   data-fiche="${esc(f.name)}" data-supplier="${esc(f.supplier || "")}">➕ ${__("Commande")}</button>`
+                        : "—")}</td>
+              <td>${f.purchase_invoice
+                    ? `<a href="/app/purchase-invoice/${encodeURIComponent(f.purchase_invoice)}" target="_blank">${esc(f.purchase_invoice)}</a>`
+                    : `<span class="rcj-badge" style="background:#fff7e6;color:#ad6800;border:1px solid #ffd591">${__("sans facture")}</span>`}</td>
+              <td style="text-align:center">${f.piece
+                    ? `<a href="#" class="rcj-piece" data-url="${esc(f.piece)}">📎</a>`
+                    : '<span style="opacity:.25">📎</span>'}</td>
+            </tr>`).join("")}
+        </tbody>
+      </table></div>
+      <div style="font-weight:700;margin-top:4px">${__("Total sélectionné")} :
+        <span class="rcj-fbl-total">0</span></div>
+      <div class="text-muted" style="font-size:11px">
+        ${__("Chaîne : BL capturé → « ➕ Commande » (le comptable saisit les articles ; à la SOUMISSION de la commande, l’avance de caisse devient un paiement lié) → cochez une ou plusieurs commandes du même fournisseur → « Créer la facture » : les avances suivent et s’allouent à la facture.")}
+      </div>`);
+    const $w = d.fields_dict.liste.$wrapper;
+    $w.find(".rcj-fbl-choix").on("change", maj_total);
+    $w.find(".rcj-piece").on("click", (e) => {
+      e.preventDefault();
+      rcj_apercu_url($(e.currentTarget).data("url"));
+    });
+    $w.find(".rcj-creer-cmd").on("click", (e) => {
+      const fiche = $(e.currentTarget).data("fiche");
+      const supplier = $(e.currentTarget).data("supplier");
+      d.hide();
+      // la commande s ouvre pré-remplie ; à l enregistrement le hook serveur lie
+      // la fiche, et à la SOUMISSION l avance devient un paiement de la commande.
+      frappe.new_doc("Purchase Order", {
+        supplier: supplier,
+        custom_fiche_caisse: fiche,
+      });
+    });
+    d.show();
+  });
 }

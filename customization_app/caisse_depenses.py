@@ -33,7 +33,7 @@ import re
 
 import frappe
 from frappe import _
-from frappe.utils import flt, nowdate
+from frappe.utils import cint, flt, nowdate
 
 COMPTE_ESPECES = "Espèces - A&S"
 COMPTE_BANQUE = "STE430127B - Zitouna - A&S"
@@ -49,6 +49,16 @@ COMPTE_TVA_7 = "TVA 7% - A&S"
 TYPES = ("Dépense non facturée", "Dépense avec facture", "Facture d'achat")
 MODES = ("Espèces", "Chèque", "Carte de crédit")
 MODE_PAS_PAYE = "Pas payé"
+
+# Dépense avec facture NON PAYÉE : la charge est comptabilisée tout de suite
+# CONTRE LE DÉCOUVERT (décision utilisateur 24/08) — la dette reste visible
+# jusqu'au règlement, généré par `solder_depense`.
+COMPTE_DECOUVERT = "Compte de découvert bancaire - A&S"
+
+# Préfixes des écritures de caisse. Le rapport de caisse ne lit QUE le premier :
+# une dépense « à payer » n'y entre qu'au jour de son règlement.
+PREFIXE_CAISSE = "Dépense caisse — "
+PREFIXE_A_PAYER = "Dépense à payer — "
 
 ROLES = ("System Manager", "Accounts Manager", "Accounts User",
          "Sales Manager", "Sales User")
@@ -138,7 +148,12 @@ def _classifier(image_bytes, mimetype, extraction):
             "\"description\": <ce qui a été acheté, lu sur le document, en français, "
             "3 à 10 mots, sans montant ni date>, "
             "\"matricule\": <le matricule fiscal de l'ÉMETTEUR de la facture "
-            "(le fournisseur), tel qu'écrit ; null si absent>}. "
+            "(le fournisseur), tel qu'écrit ; null si absent>, "
+            "\"type_document\": <\"facture\" ou \"bon_de_livraison\" — un bon "
+            "de livraison porte la mention BL / Bon de livraison / Delivery "
+            "note et n'a pas de numéro de facture ni de mention TVA à payer>, "
+            "\"numero_bl\": <le numéro du bon de livraison s'il s'agit d'un "
+            "BL, tel qu'écrit ; null sinon>}. "
             + _consigne_matricule()
             + " Liste des comptes autorisés : " + json.dumps(comptes, ensure_ascii=False)),
         input=[{"role": "user", "content": [
@@ -155,9 +170,12 @@ def _classifier(image_bytes, mimetype, extraction):
         compte = (lu.get("compte") or "").strip()
         description = (lu.get("description") or "").strip()
         matricule = (lu.get("matricule") or "").strip()
+        type_doc = (lu.get("type_document") or "").strip()
+        numero_bl = (lu.get("numero_bl") or "").strip()
     except Exception:
-        return None, "", ""
-    return (compte if compte in comptes else None), description, matricule
+        return None, "", "", "", ""
+    return ((compte if compte in comptes else None), description, matricule,
+            type_doc, numero_bl)
 
 
 def _decrire(image_bytes, mimetype):
@@ -173,25 +191,35 @@ def _decrire(image_bytes, mimetype):
     res = client.responses.create(
         model=model,
         instructions=(
-            "Tu lis la facture ou le reçu photographié d'une dépense d'entreprise "
-            "tunisienne. Réponds STRICTEMENT en JSON : "
+            "Tu lis le document photographié d'une dépense d'entreprise "
+            "tunisienne : facture, reçu, ou BON DE LIVRAISON. Réponds "
+            "STRICTEMENT en JSON : "
             "{\"description\": <ce qui a été acheté, en français, 3 à 10 mots, "
             "sans montant ni date>, "
-            "\"matricule\": <le matricule fiscal de l'ÉMETTEUR de la facture "
-            "(le fournisseur), tel qu'écrit ; null si absent>}. "
+            "\"matricule\": <le matricule fiscal de l'ÉMETTEUR du document "
+            "(le fournisseur), tel qu'écrit ; null si absent>, "
+            "\"type_document\": <\"facture\" ou \"bon_de_livraison\" — un bon "
+            "de livraison porte la mention BL / Bon de livraison / Delivery "
+            "note et N'A PAS de numéro de facture ni de mention TVA à payer>, "
+            "\"numero_bl\": <le numéro du bon de livraison s'il s'agit d'un "
+            "BL, tel qu'écrit ; null sinon>}. "
             + _consigne_matricule()),
         input=[{"role": "user", "content": [
             _bloc_document(image_bytes, mimetype),
-            {"type": "input_text", "text": "Décris la dépense et lis le matricule."}]}])
+            {"type": "input_text",
+             "text": "Décris la dépense, lis le matricule, et dis si c'est "
+                     "une facture ou un bon de livraison."}]}])
     texte = (res.output_text or "").strip().strip("`")
     if texte.lower().startswith("json"):
         texte = texte.split("\n", 1)[1]
     try:
         lu = json.loads(texte)
         return ((lu.get("description") or "").strip(),
-                (lu.get("matricule") or "").strip())
+                (lu.get("matricule") or "").strip(),
+                (lu.get("type_document") or "").strip(),
+                (lu.get("numero_bl") or "").strip())
     except Exception:
-        return "", ""
+        return "", "", "", ""
 
 
 @frappe.whitelist()
@@ -232,25 +260,41 @@ def analyser(photo, type_depense=None):
         "fournisseur_certain": None,
         "fournisseur_motif": "",
         "fournisseur_candidats": [],
+        # Détection BL (décision utilisateur 24/08) : c'est l'ANALYSE qui dit si
+        # le document est une facture ou un bon de livraison — la fiche est
+        # marquée BL et la facture qui le couvre sera rattachée plus tard.
+        "est_bl": False,
+        "numero_bl": "",
     }
     if type_depense == "Dépense avec facture":
         try:
-            out["compte_suggere"], out["description"], out["matricule"] = _classifier(
-                contenu, mimetype, d)
+            (out["compte_suggere"], out["description"], out["matricule"],
+             type_doc, numero_bl) = _classifier(contenu, mimetype, d)
+            # BL aussi pour les dépenses facturées (décision utilisateur 24/08) :
+            # la trace « BL n°X » suit la dépense dans description et remarques.
+            if type_doc == "bon_de_livraison":
+                out["est_bl"] = True
+                out["numero_bl"] = numero_bl
         except Exception:
             out["compte_suggere"] = None   # la classification est une aide, jamais un blocage
     else:
         # Pas de classification pour une facture d'achat, mais la description lue
         # sur la photo sert autant (décision utilisateur 2026-08-20).
         try:
-            out["description"], out["matricule"] = _decrire(contenu, mimetype)
+            desc, matricule, type_doc, numero_bl = _decrire(contenu, mimetype)
+            out["description"], out["matricule"] = desc, matricule
+            if type_depense == "Facture d'achat" and type_doc == "bon_de_livraison":
+                out["est_bl"] = True
+                out["numero_bl"] = numero_bl
         except Exception:
             pass
     # ⚠️ FOURNISSEUR ET N° DE FACTURE TOUJOURS DANS LA DESCRIPTION (décision
     # utilisateur 2026-08-20) : elle devient le « N° de référence » de l'écriture
     # de journal (« Dépense caisse — … ») — c'est par elle qu'on retrouve la pièce.
     morceaux = [m for m in (out["description"], out["fournisseur"]) if m]
-    if out["numero"]:
+    if out["est_bl"] and out["numero_bl"]:
+        morceaux.append(_("BL n°{0}").format(out["numero_bl"]))
+    elif out["numero"]:
         morceaux.append(_("Fact. n°{0}").format(out["numero"]))
     out["description"] = " — ".join(morceaux)
 
@@ -394,12 +438,98 @@ def _supplier(nom, matricule=None, supplier=None):
     return doc.name
 
 
+def _paiements_normalises(montant, mode, n_cheque=None, banque=None,
+                          photo_cheque=None, photo_cheque_nom=None, paiements=None):
+    """La liste normalisée des règlements d'une dépense.
+
+    `paiements` (JSON) permet le PAIEMENT FRACTIONNÉ (plusieurs chèques, ou
+    espèces + chèque — décision utilisateur 24/08) ; sans lui, l'ancien chemin
+    mono-mode est reconstruit à l'identique. Valide : somme = montant, et
+    chaque chèque complet (7 chiffres, banque, photo)."""
+    if isinstance(paiements, str) and paiements.strip():
+        paiements = json.loads(paiements)
+    if not paiements:
+        paiements = [{"mode": mode, "montant": montant, "n_cheque": n_cheque,
+                      "banque": banque, "photo_cheque": photo_cheque,
+                      "photo_cheque_nom": photo_cheque_nom}]
+    lignes = []
+    total = 0.0
+    for p in paiements:
+        m = p.get("mode")
+        # « Pas payé » accepté COMME LIGNE (paiement partiel, décision 24/08) :
+        # la part payée sort de la caisse, le reste part en dette.
+        if m not in MODES and m != MODE_PAS_PAYE:
+            frappe.throw(_("Mode de paiement inconnu : {0}.").format(m))
+        mt = flt(p.get("montant"), 3)
+        if mt <= 0:
+            frappe.throw(_("Chaque règlement doit avoir un montant positif."))
+        nc = (p.get("n_cheque") or "").strip()
+        if m == "Chèque":
+            if not re.fullmatch(r"\d{7}", nc):
+                frappe.throw(_("Le numéro de chèque doit comporter exactement 7 chiffres."))
+            if not (p.get("banque") or "").strip():
+                frappe.throw(_("Pour un chèque, la banque est obligatoire."))
+            if not p.get("photo_cheque"):
+                frappe.throw(_("Pour un chèque, la photo du chèque est obligatoire."))
+        total += mt
+        lignes.append({"mode": m, "montant": mt, "n_cheque": nc,
+                       "banque": (p.get("banque") or "").strip(),
+                       "photo_cheque": p.get("photo_cheque"),
+                       "photo_cheque_nom": p.get("photo_cheque_nom")})
+    if abs(total - flt(montant, 3)) > 0.001:
+        frappe.throw(_("La somme des règlements ({0}) doit égaler le montant TTC ({1}).")
+                     .format(flt(total, 3), flt(montant, 3)))
+    return lignes
+
+
+def _lignes_credit(regs):
+    """Les lignes CRÉDITÉES de l'écriture : une par règlement PAYÉ."""
+    return [{"account": COMPTE_ESPECES if p["mode"] == "Espèces" else COMPTE_BANQUE,
+             "credit_in_account_currency": p["montant"], "cost_center": CC}
+            for p in regs if p["mode"] != MODE_PAS_PAYE]
+
+
+def _partage_paiements(regs):
+    """(lignes payées, total non payé) d'une liste de règlements."""
+    paid = [p for p in regs if p["mode"] != MODE_PAS_PAYE]
+    unpaid = flt(sum(p["montant"] for p in regs if p["mode"] == MODE_PAS_PAYE), 3)
+    return paid, unpaid
+
+
+def _remarques_paiements(remarques, regs):
+    """Complète les remarques avec chaque chèque (convention « Chq N° » lue par
+    l'identification bancaire) et la mention carte."""
+    for p in regs:
+        if p["mode"] == "Chèque":
+            remarques.append("Chq N° %s - Bq %s" % (p["n_cheque"], p["banque"]))
+        elif p["mode"] == "Carte de crédit":
+            remarques.append(_("Réglé par carte bancaire"))
+    return remarques
+
+
+def _attacher_cheques(regs, je_nom):
+    """Attache la photo de chaque chèque à l'écriture."""
+    for p in regs:
+        if p.get("photo_cheque"):
+            _attacher(p["photo_cheque"],
+                      p.get("photo_cheque_nom") or f"cheque-{p['n_cheque']}.jpg",
+                      "Journal Entry", je_nom)
+
+
+def _mode_global(regs):
+    """Le mode affiché sur la fiche : le mode unique, sinon « Mixte »."""
+    modes = {p["mode"] for p in regs}
+    if not modes:
+        return MODE_PAS_PAYE
+    return regs[0]["mode"] if len(modes) == 1 else "Mixte"
+
+
 @frappe.whitelist()
 def creer(type_depense, montant, mode, compte=None, description=None, fournisseur=None,
           tva=0, taux_tva=0, numero_facture=None, date_facture=None,
           n_cheque=None, banque=None, photo_facture=None, photo_facture_nom=None,
           photo_cheque=None, photo_cheque_nom=None, coins_facture=None,
-          supplier=None, matricule=None):
+          supplier=None, matricule=None, paiements=None, est_bl=0, numero_bl=None):
     """Crée la dépense selon son type (voir l'en-tête du module). Retourne les noms
     des pièces créées (écriture et/ou fiche de la file des factures d'achat)."""
     frappe.only_for(ROLES)
@@ -414,8 +544,8 @@ def creer(type_depense, montant, mode, compte=None, description=None, fournisseu
         coins_facture = None
     if type_depense not in TYPES:
         frappe.throw(_("Type de dépense inconnu : {0}.").format(type_depense))
-    if mode == MODE_PAS_PAYE and type_depense != "Facture d'achat":
-        frappe.throw(_("« Pas payé » est réservé aux factures d'achat."))
+    if mode == MODE_PAS_PAYE and type_depense == "Dépense non facturée":
+        frappe.throw(_("« Pas payé » est réservé aux dépenses facturées."))
     if mode not in MODES and mode != MODE_PAS_PAYE:
         frappe.throw(_("Mode de paiement inconnu : {0}.").format(mode))
     if montant <= 0:
@@ -430,38 +560,43 @@ def creer(type_depense, montant, mode, compte=None, description=None, fournisseu
     if tva < 0 or tva >= montant:
         frappe.throw(_("La TVA ({0}) doit rester inférieure au montant TTC ({1}).")
                      .format(tva, montant))
-    n_cheque = (n_cheque or "").strip()
-    if mode == "Chèque":
-        if not re.fullmatch(r"\d{7}", n_cheque):
-            frappe.throw(_("Le numéro de chèque doit comporter exactement 7 chiffres."))
-        if not (banque or "").strip():
-            frappe.throw(_("Pour un chèque, la banque est obligatoire."))
-        if not photo_cheque:
-            frappe.throw(_("Pour un chèque, la photo du chèque est obligatoire."))
+    # Les règlements (mono-mode ou fractionnés). Une ligne « Pas payé » dans le
+    # fractionné = paiement PARTIEL : la part payée sort de la caisse, le reste
+    # part en dette (découvert pour une dépense, Créditeurs différés pour une
+    # facture d'achat).
+    if mode == MODE_PAS_PAYE:
+        regs, paid, unpaid = [], [], flt(montant, 3)
+    else:
+        regs = _paiements_normalises(montant, mode, n_cheque, banque,
+                                     photo_cheque, photo_cheque_nom, paiements)
+        paid, unpaid = _partage_paiements(regs)
+    if unpaid > 0 and type_depense == "Dépense non facturée":
+        frappe.throw(_("« Pas payé » est réservé aux dépenses facturées."))
 
     remarques = [description, _("Type : {0}").format(type_depense)]
     if fournisseur:
         remarques.append(_("Fournisseur : {0}").format(fournisseur.strip()))
     if numero_facture:
         remarques.append(_("Facture n° {0}").format(numero_facture))
-    if mode == "Chèque":
-        # La convention que lit l'identification bancaire (« Chq N° nnnnnnn »).
-        remarques.append("Chq N° %s - Bq %s" % (n_cheque, (banque or "").strip()))
-    elif mode == "Carte de crédit":
-        remarques.append(_("Réglé par carte bancaire"))
+    if cint(est_bl) and (numero_bl or "").strip():
+        remarques.append(_("BL n° {0}").format((numero_bl or "").strip()))
+    _remarques_paiements(remarques, paid)
+    if unpaid > 0 and paid:
+        remarques.append(_("Reste à payer : {0}").format(unpaid))
     remarques.append(_("Saisie caisse par {0}").format(frappe.session.user))
 
     je = None
     if type_depense == "Facture d'achat":
         supplier = _supplier(fournisseur, matricule=matricule, supplier=supplier)
-        if mode != MODE_PAS_PAYE:
+        paid_total = flt(sum(p["montant"] for p in paid), 3)
+        if paid:
             # Le paiement va au FOURNISSEUR (Créditeurs) : la facture saisie plus
             # tard le soldera — jamais de charge ici, elle naîtra avec la facture.
-            je = _ecriture([
-                {"account": COMPTE_ESPECES if mode == "Espèces" else COMPTE_BANQUE,
-                 "credit_in_account_currency": montant, "cost_center": CC},
+            # Avec une part « Pas payé », l'avance ne couvre QUE la part payée :
+            # le reste de la dette naîtra avec la facture.
+            je = _ecriture(_lignes_credit(paid) + [
                 {"account": COMPTE_CREDITEURS, "party_type": "Supplier",
-                 "party": supplier, "debit_in_account_currency": montant,
+                 "party": supplier, "debit_in_account_currency": paid_total,
                  "cost_center": CC},
             ], description, remarques)
         fiche = frappe.get_doc({
@@ -471,7 +606,10 @@ def creer(type_depense, montant, mode, compte=None, description=None, fournisseu
             "montant": montant,
             "numero_facture": (numero_facture or "").strip(),
             "date_facture": date_facture or None,
-            "mode_paiement": mode,
+            "est_bl": cint(est_bl),
+            "numero_bl": (numero_bl or "").strip(),
+            "mode_paiement": _mode_global(regs) if unpaid == 0 else
+                             ("Pas payé" if not paid else "Mixte"),
             "journal_entry": je.name if je else None,
             "saisi_par": frappe.session.user,
             "description": description,
@@ -495,8 +633,13 @@ def creer(type_depense, montant, mode, compte=None, description=None, fournisseu
         meta = frappe.db.get_value("Account", compte, ["root_type", "is_group"], as_dict=True)
         if not meta or meta.is_group or meta.root_type != "Expense":
             frappe.throw(_("{0} n'est pas un compte de charge utilisable.").format(compte))
-        lignes = [{"account": COMPTE_ESPECES if mode == "Espèces" else COMPTE_BANQUE,
-                   "credit_in_account_currency": montant, "cost_center": CC}]
+        # Crédits : la part payée sort de la caisse/banque ; la part « pas
+        # payé » est portée par le DÉCOUVERT (la dette reste visible jusqu'au
+        # règlement par `solder_depense`).
+        lignes = _lignes_credit(paid)
+        if unpaid > 0:
+            lignes.append({"account": COMPTE_DECOUVERT,
+                           "credit_in_account_currency": unpaid, "cost_center": CC})
         if type_depense == "Dépense avec facture" and tva > 0:
             # Règle utilisateur (19/08) : la TVA va sur le compte de son taux — 7 % sur
             # « TVA 7% », TOUT AUTRE taux (19, 13, inconnu, mixte) sur « TVA 19% ».
@@ -511,32 +654,232 @@ def creer(type_depense, montant, mode, compte=None, description=None, fournisseu
         else:
             lignes.append({"account": compte, "debit_in_account_currency": montant,
                            "cost_center": CC})
-        je = _ecriture(lignes, description, remarques)
+        # Sans aucune part payée, l'écriture ne touche pas la caisse : préfixe
+        # « à payer » → invisible du rapport jusqu'au règlement.
+        je = _ecriture(lignes, description, remarques,
+                       prefixe=PREFIXE_A_PAYER if not paid else None)
         if photo_facture:
             _attacher_scan(photo_facture, "facture-%s" % je.name,
                            "Journal Entry", je.name, coins=coins_facture)
         resultat = {"name": je.name, "fiche": None}
+        # Une fiche naît s'il reste à payer OU si le justificatif est un BL —
+        # même payée intégralement (décision utilisateur 24/08) : c'est elle qui
+        # rend les dépenses sur BL LISTABLES (la dépense payée cash n'a sinon
+        # qu'une écriture, invisible des listes).
+        if unpaid > 0 or (cint(est_bl) and type_depense == "Dépense avec facture"):
+            paye = unpaid <= 0
+            fiche = frappe.get_doc({
+                "doctype": "Depense A Payer",
+                "statut": "Payée" if paye else "À payer",
+                "description": description,
+                "montant": montant if paye else unpaid,
+                "tva": tva if not paid else 0,
+                "taux_tva": flt(taux_tva),
+                "compte_charge": compte,
+                "fournisseur": (fournisseur or "").strip(),
+                "numero_facture": (numero_facture or "").strip(),
+                "date_facture": date_facture or None,
+                "est_bl": cint(est_bl),
+                "numero_bl": (numero_bl or "").strip(),
+                "journal_entry": je.name,
+                "reglement_journal_entry": je.name if paye else None,
+                "date_reglement": nowdate() if paye else None,
+                "saisi_par": frappe.session.user,
+            })
+            fiche.insert(ignore_permissions=True)
+            _attacher_scan(photo_facture, "facture-%s" % fiche.name,
+                           "Depense A Payer", fiche.name, coins=coins_facture)
+            resultat = {"name": je.name, "fiche": fiche.name,
+                        "a_payer": not paye, "reste": unpaid if not paye else 0}
 
-    if photo_cheque and je:
-        _attacher(photo_cheque, photo_cheque_nom or f"cheque-{n_cheque}.jpg",
-                  "Journal Entry", je.name)
+    if je:
+        _attacher_cheques(regs, je.name)
     frappe.db.commit()
     return resultat
 
 
-def _ecriture(lignes, description, remarques):
+def _ecriture(lignes, description, remarques, prefixe=None, date=None):
     je = frappe.new_doc("Journal Entry")
     je.voucher_type = "Journal Entry"
     je.company = COMPANY
-    je.posting_date = nowdate()
-    je.cheque_no = (_("Dépense caisse — {0}").format(description))[:140]
-    je.cheque_date = nowdate()
+    je.posting_date = date or nowdate()
+    je.cheque_no = ((prefixe or PREFIXE_CAISSE) + description)[:140]
+    je.cheque_date = je.posting_date
     je.user_remark = "\n".join(remarques)
     for ligne in lignes:
         je.append("accounts", ligne)
     je.insert(ignore_permissions=True)
     je.submit()
     return je
+
+
+@frappe.whitelist()
+def depenses_a_payer():
+    """La file des dépenses avec facture pas encore payées (bouton « Payer »),
+    chacune avec sa pièce jointe (aperçu du justificatif)."""
+    frappe.only_for(ROLES)
+    rows = frappe.get_all(
+        "Depense A Payer",
+        filters={"statut": "À payer"},
+        fields=["name", "description", "montant", "tva", "fournisseur",
+                "numero_facture", "date_facture", "compte_charge",
+                "journal_entry", "est_bl", "numero_bl", "creation"],
+        order_by="creation desc")
+    if rows:
+        piece = {}
+        for f in frappe.get_all(
+                "File",
+                filters={"attached_to_doctype": "Depense A Payer",
+                         "attached_to_name": ["in", [r.name for r in rows]]},
+                fields=["attached_to_name", "file_url"], order_by="creation"):
+            piece.setdefault(f.attached_to_name, f.file_url)
+        for r in rows:
+            r["piece"] = piece.get(r.name)
+    return rows
+
+
+@frappe.whitelist()
+def depenses_bl():
+    """TOUTES les dépenses facturées dont le justificatif est un BL — même
+    anciennes, payées ou non. Un BL avec `numero_facture` rempli est déjà
+    « facturé » (la facture reçue lui a été attachée)."""
+    frappe.only_for(ROLES)
+    rows = frappe.get_all(
+        "Depense A Payer",
+        filters={"est_bl": 1},
+        fields=["name", "statut", "description", "montant", "fournisseur",
+                "numero_bl", "numero_facture", "date_facture", "journal_entry",
+                "reglement_journal_entry", "creation"],
+        order_by="creation desc")
+    if rows:
+        piece = {}
+        for f in frappe.get_all(
+                "File",
+                filters={"attached_to_doctype": "Depense A Payer",
+                         "attached_to_name": ["in", [r.name for r in rows]]},
+                fields=["attached_to_name", "file_url"], order_by="creation"):
+            piece.setdefault(f.attached_to_name, f.file_url)
+        for r in rows:
+            r["piece"] = piece.get(r.name)
+            r["date"] = str(r.creation)[:10]
+    return rows
+
+
+@frappe.whitelist()
+def attacher_facture_bl(fiches, numero_facture, date_facture=None,
+                        photo_facture=None, photo_facture_nom=None,
+                        coins_facture=None):
+    """La FACTURE reçue couvre un ou plusieurs BL de dépenses : elle s'attache
+    à chaque fiche (et à son écriture), et le n° de facture est posé — le BL
+    devient « facturé ». AUCUNE écriture n'est modifiée (la charge est déjà
+    comptabilisée par chaque dépense)."""
+    frappe.only_for(ROLES)
+    fiches = json.loads(fiches) if isinstance(fiches, str) else (fiches or [])
+    numero_facture = (numero_facture or "").strip()
+    if not fiches:
+        frappe.throw(_("Cochez au moins un BL."))
+    if not numero_facture:
+        frappe.throw(_("Le numéro de la facture est obligatoire."))
+    if isinstance(coins_facture, str) and coins_facture.strip():
+        coins_facture = json.loads(coins_facture)
+    if not coins_facture:
+        coins_facture = None
+
+    faits = []
+    for nom in fiches:
+        f = frappe.db.get_value("Depense A Payer", nom,
+                                ["est_bl", "journal_entry"], as_dict=True)
+        if not f or not f.est_bl:
+            continue
+        frappe.db.set_value("Depense A Payer", nom,
+                            {"numero_facture": numero_facture,
+                             "date_facture": date_facture or None},
+                            update_modified=False)
+        if photo_facture:
+            _attacher_scan(photo_facture, "facture-%s-%s" % (numero_facture, nom),
+                           "Depense A Payer", nom, coins=coins_facture)
+            if f.journal_entry and frappe.db.exists("Journal Entry", f.journal_entry):
+                _attacher_scan(photo_facture, "facture-%s-%s" % (numero_facture, nom),
+                               "Journal Entry", f.journal_entry, coins=coins_facture)
+        frappe.get_doc("Depense A Payer", nom).add_comment(
+            "Comment",
+            _("🧾 Facture n° {0} reçue{1} — couvre ce BL.").format(
+                numero_facture,
+                _(" (du {0})").format(date_facture) if date_facture else ""))
+        faits.append(nom)
+    frappe.db.commit()
+    return {"factures": faits}
+
+
+@frappe.whitelist()
+def solder_depense(fiche, date_reglement=None, mode=None, n_cheque=None,
+                   banque=None, photo_cheque=None, photo_cheque_nom=None,
+                   paiements=None):
+    """Règle une dépense « à payer » : NOUVELLE écriture découvert → caisse/banque
+    au jour du paiement — c'est ce jour-là qu'elle entre au rapport de caisse.
+    Accepte le paiement fractionné (`paiements`)."""
+    frappe.only_for(ROLES)
+    f = frappe.get_doc("Depense A Payer", fiche)
+    if f.statut != "À payer":
+        frappe.throw(_("La fiche {0} est déjà payée.").format(fiche))
+    regs = _paiements_normalises(f.montant, mode, n_cheque, banque,
+                                 photo_cheque, photo_cheque_nom, paiements)
+    if any(p["mode"] == MODE_PAS_PAYE for p in regs):
+        frappe.throw(_("Le règlement d'une dette ne peut pas contenir « Pas payé »."))
+    date = date_reglement or nowdate()
+
+    # ⚠️ DEUX ÉCRITURES, JAMAIS DE MODIFICATION RÉTROACTIVE (décision
+    # utilisateur 24/08 — « cela créerait des problèmes de caisse ») :
+    # l'écriture de dette reste à SA date, le règlement est une écriture
+    # distincte au jour du paiement (découvert → caisse/banque). Le compte de
+    # découvert revient à zéro une fois la dette réglée.
+    remarques = [f.description,
+                 _("Type : {0}").format("Dépense avec facture (règlement)")]
+    if f.fournisseur:
+        remarques.append(_("Fournisseur : {0}").format(f.fournisseur))
+    if f.numero_facture:
+        remarques.append(_("Facture n° {0}").format(f.numero_facture))
+    if f.date_facture:
+        remarques.append(_("Facture du {0}, payée le {1}").format(f.date_facture, date))
+    _remarques_paiements(remarques, regs)
+    remarques.append(_("Règlement de la dette {0} ({1})").format(
+        f.name, f.journal_entry or ""))
+    remarques.append(_("Saisie caisse par {0}").format(frappe.session.user))
+
+    # TRAÇABILITÉ : la ligne découvert du règlement RÉFÉRENCE l'écriture de
+    # dette (champs standard reference_type/name — lien cliquable et
+    # requêtable), et la dette reçoit un commentaire « réglée par … ».
+    ligne_decouvert = {"account": COMPTE_DECOUVERT,
+                       "debit_in_account_currency": flt(f.montant, 3),
+                       "cost_center": CC}
+    if f.journal_entry and frappe.db.exists("Journal Entry", f.journal_entry):
+        ligne_decouvert["reference_type"] = "Journal Entry"
+        ligne_decouvert["reference_name"] = f.journal_entry
+
+    try:
+        je = _ecriture(_lignes_credit(regs) + [ligne_decouvert],
+                       f.description, remarques, date=date)
+    except Exception:
+        # la référence JE→JE peut être refusée selon les validations ERPNext —
+        # la remarque et la fiche portent déjà le lien, on ne bloque jamais.
+        ligne_decouvert.pop("reference_type", None)
+        ligne_decouvert.pop("reference_name", None)
+        je = _ecriture(_lignes_credit(regs) + [ligne_decouvert],
+                       f.description, remarques, date=date)
+    _attacher_cheques(regs, je.name)
+    _copier_justificatifs(f.name, "Journal Entry", je.name,
+                          source_doctype="Depense A Payer")
+    if f.journal_entry and frappe.db.exists("Journal Entry", f.journal_entry):
+        frappe.get_doc("Journal Entry", f.journal_entry).add_comment(
+            "Comment",
+            _("💸 Dette réglée le {0} par l'écriture {1} (fiche {2}).").format(
+                date, frappe.utils.get_link_to_form("Journal Entry", je.name),
+                frappe.utils.get_link_to_form("Depense A Payer", f.name)))
+    f.db_set({"statut": "Payée", "reglement_journal_entry": je.name,
+              "date_reglement": date},
+             update_modified=False)
+    frappe.db.commit()
+    return {"name": je.name}
 
 
 def _detecter_quad(img):
@@ -755,13 +1098,14 @@ def comptes_depense(doctype, txt, searchfield, start, page_len, filters):
 # ------------------------------------------------------------------ rattachement des
 # vraies Purchase Invoice aux fiches de caisse (hooks Purchase Invoice)
 
-def _copier_justificatifs(fiche_nom, doctype, name):
+def _copier_justificatifs(fiche_nom, doctype, name,
+                          source_doctype="Facture Achat a Saisir"):
     """Fait suivre le justificatif scanné en caisse sur une pièce comptable.
 
     Idempotent : un fichier déjà présent (même URL) n'est pas recopié — sinon
     chaque enregistrement de la facture empilerait une pièce jointe de plus."""
     for f in frappe.get_all("File",
-                            filters={"attached_to_doctype": "Facture Achat a Saisir",
+                            filters={"attached_to_doctype": source_doctype,
                                      "attached_to_name": fiche_nom},
                             fields=["file_url", "file_name", "is_private"]):
         if not f.file_url or frappe.db.exists("File", {
@@ -780,7 +1124,11 @@ def _fiche_de(doc):
     D'abord le lien déjà posé, sinon l'appariement (fournisseur, n° de facture)
     sur une fiche encore « À saisir » — c'est le n° que le comptable recopie du
     justificatif, la clé naturelle des deux côtés."""
-    nom = frappe.db.get_value("Facture Achat a Saisir", {"purchase_invoice": doc.name}, "name")
+    # est_bl=0 : ne jamais confondre la fiche « facture » avec un BL déjà
+    # rattaché à la main — les deux peuvent pointer la même facture.
+    nom = frappe.db.get_value(
+        "Facture Achat a Saisir",
+        {"purchase_invoice": doc.name, "est_bl": 0}, "name")
     if nom:
         return nom
     numero = (doc.get("bill_no") or "").strip()
@@ -789,7 +1137,318 @@ def _fiche_de(doc):
     return frappe.db.get_value(
         "Facture Achat a Saisir",
         {"supplier": doc.supplier, "numero_facture": numero, "statut": "À saisir",
-         "purchase_invoice": ["is", "not set"]}, "name")
+         "est_bl": 0, "purchase_invoice": ["is", "not set"]}, "name")
+
+
+def _fiches_de(doc):
+    """TOUTES les fiches de caisse rattachées à cette facture — la fiche
+    « facture » appariée par n°, plus les BL rattachés à la main."""
+    return frappe.get_all("Facture Achat a Saisir",
+                          filters={"purchase_invoice": doc.name}, pluck="name")
+
+
+def _pieces_fas(rows):
+    """Complète chaque fiche FAS d'une liste avec sa 1re pièce jointe."""
+    if not rows:
+        return rows
+    piece = {}
+    for f in frappe.get_all(
+            "File",
+            filters={"attached_to_doctype": "Facture Achat a Saisir",
+                     "attached_to_name": ["in", [r.name for r in rows]]},
+            fields=["attached_to_name", "file_url"], order_by="creation"):
+        piece.setdefault(f.attached_to_name, f.file_url)
+    for r in rows:
+        r["piece"] = piece.get(r.name)
+        r["date"] = str(r.creation)[:10]
+    return rows
+
+
+#: Période de suivi des achats (décision utilisateur 24/08) : rien d'antérieur.
+DATE_SUIVI_ACHATS = "2026-01-01"
+
+
+@frappe.whitelist()
+def factures_a_payer():
+    """Deux groupes (décision utilisateur 24/08) :
+    - TOUTES les factures d'achat soumises pas totalement payées (encours > 0),
+      sans plancher de date, chacune avec sa pièce jointe ;
+    - les CAPTURES de caisse « Pas payé » / « Mixte » encore à saisir."""
+    frappe.only_for(ROLES)
+    factures = frappe.db.sql("""
+        SELECT name, supplier, posting_date, bill_no, due_date,
+               grand_total, rounded_total, outstanding_amount
+        FROM `tabPurchase Invoice`
+        WHERE docstatus = 1 AND outstanding_amount > 0.001
+        ORDER BY posting_date DESC""", as_dict=True)
+    piece = {}
+    if factures:
+        for f in frappe.get_all(
+                "File",
+                filters={"attached_to_doctype": "Purchase Invoice",
+                         "attached_to_name": ["in", [x.name for x in factures]]},
+                fields=["attached_to_name", "file_url"], order_by="creation"):
+            piece.setdefault(f.attached_to_name, f.file_url)
+    for f in factures:
+        f["montant"] = flt(f.rounded_total or f.grand_total, 3)
+        f["piece"] = piece.get(f.name)
+    fiches = _pieces_fas(frappe.get_all(
+        "Facture Achat a Saisir",
+        filters={"statut": "À saisir",
+                 "mode_paiement": ["in", ["Pas payé", "Mixte"]]},
+        fields=["name", "statut", "fournisseur", "supplier", "montant",
+                "numero_facture", "date_facture", "mode_paiement", "est_bl",
+                "numero_bl", "journal_entry", "purchase_invoice", "creation"],
+        order_by="creation desc"))
+    return {"factures": factures, "fiches": fiches}
+
+
+@frappe.whitelist()
+def factures_sans_justificatif():
+    """Les factures d'achat soumises depuis le 01-01-2026 SANS AUCUNE pièce
+    jointe — la preuve scannée manque, à compléter."""
+    frappe.only_for(ROLES)
+    return frappe.db.sql("""
+        SELECT pi.name, pi.supplier, pi.posting_date, pi.bill_no,
+               pi.grand_total, pi.rounded_total, pi.outstanding_amount
+        FROM `tabPurchase Invoice` pi
+        WHERE pi.docstatus = 1 AND pi.posting_date >= %s
+          AND NOT EXISTS (SELECT 1 FROM `tabFile` f
+                          WHERE f.attached_to_doctype = 'Purchase Invoice'
+                            AND f.attached_to_name = pi.name)
+        ORDER BY pi.posting_date DESC""", DATE_SUIVI_ACHATS, as_dict=True)
+
+
+@frappe.whitelist()
+def factures_bl():
+    """TOUS les achats capturés sur bon de livraison (fiches est_bl), quel que
+    soit leur statut — pour la fusion en facture globale."""
+    frappe.only_for(ROLES)
+    rows = _pieces_fas(frappe.get_all(
+        "Facture Achat a Saisir",
+        filters={"est_bl": 1},
+        fields=["name", "statut", "fournisseur", "supplier", "montant",
+                "numero_facture", "date_facture", "mode_paiement",
+                "numero_bl", "journal_entry", "journal_entries",
+                "purchase_order", "purchase_receipt", "purchase_invoice",
+                "creation"],
+        order_by="creation desc"))
+    # la facture ne peut naître que de commandes SOUMISES : le dialogue ne
+    # rend cochables que celles-là (brouillon = badge distinct).
+    pos = [r.purchase_order for r in rows if r.purchase_order]
+    docstatus = {}
+    if pos:
+        docstatus = {p.name: p.docstatus for p in frappe.get_all(
+            "Purchase Order", filters={"name": ["in", pos]},
+            fields=["name", "docstatus"])}
+    for r in rows:
+        r["po_docstatus"] = docstatus.get(r.purchase_order)
+    return rows
+
+
+# --------------------------------------------- BL -> reçu d'achat -> facture
+#
+# Décision utilisateur 24/08 : un achat SANS facture (BL) devient un REÇU
+# D'ACHAT ERPNext (le comptable y saisit les articles depuis la photo — le
+# stock entre à la réception), et la facture d'achat se crée nativement depuis
+# UN OU PLUSIEURS reçus (« Obtenir les articles depuis > Reçu d'achat »).
+# Un paiement ne peut PAS référencer un reçu (pas d'encours) : l'avance de
+# caisse reste sur la fiche BL, et devient un paiement DE LA FACTURE à sa
+# soumission (mécanisme _remplacer_avance_par_paiement).
+
+
+def pr_lier_fiche_caisse(doc, method=None):
+    """Purchase Receipt on_update/on_submit : le reçu créé depuis une fiche BL
+    (champ custom_fiche_caisse, posé par la page Caisse) se lie à sa fiche et
+    reçoit son justificatif."""
+    nom = doc.get("custom_fiche_caisse")
+    if not nom or not frappe.db.exists("Facture Achat a Saisir", nom):
+        return
+    frappe.db.set_value("Facture Achat a Saisir", nom,
+                        "purchase_receipt", doc.name, update_modified=False)
+    _copier_justificatifs(nom, "Purchase Receipt", doc.name)
+
+
+def pr_detacher_fiche_caisse(doc, method=None):
+    """Purchase Receipt on_cancel : la fiche BL redevient sans reçu."""
+    nom = frappe.db.get_value("Facture Achat a Saisir",
+                              {"purchase_receipt": doc.name}, "name")
+    if nom:
+        frappe.db.set_value("Facture Achat a Saisir", nom,
+                            "purchase_receipt", "", update_modified=False)
+
+
+def po_lier_fiche_caisse(doc, method=None):
+    """Purchase Order on_update : la commande créée depuis une fiche BL
+    (custom_fiche_caisse) se lie à sa fiche et reçoit son justificatif."""
+    nom = doc.get("custom_fiche_caisse")
+    if not nom or not frappe.db.exists("Facture Achat a Saisir", nom):
+        return
+    frappe.db.set_value("Facture Achat a Saisir", nom,
+                        "purchase_order", doc.name, update_modified=False)
+    _copier_justificatifs(nom, "Purchase Order", doc.name)
+
+
+def po_convertir_avances(doc, method=None):
+    """Purchase Order on_submit : l'avance de caisse du BL devient un PAIEMENT
+    LIÉ À LA COMMANDE (avance fournisseur native) — « comme pour la facture
+    d'achat », décision utilisateur 24/08. À la facture (créée depuis une ou
+    plusieurs commandes), ces avances s'allouent automatiquement. Le REÇU
+    d'achat est généré dans la foulée (la marchandise du BL est déjà livrée)."""
+    po_lier_fiche_caisse(doc)
+    total = flt(doc.get("rounded_total") or doc.grand_total, 3)
+    for nom in frappe.get_all("Facture Achat a Saisir",
+                              filters={"purchase_order": doc.name}, pluck="name"):
+        deja = flt(frappe.db.sql("""
+            select sum(allocated_amount) from `tabPayment Entry Reference`
+            where reference_doctype = 'Purchase Order' and reference_name = %s
+              and docstatus = 1""", doc.name)[0][0], 3)
+        _avances_en_paiements(nom, "Purchase Order", doc.name,
+                              total, deja, doc.company or COMPANY)
+    _po_recu_auto(doc)
+
+
+def _po_recu_auto(doc):
+    """Génère et soumet le reçu d'achat d'une commande née du pipeline caisse
+    (décision utilisateur 24/08) : le BL prouve que la marchandise est LIVRÉE —
+    le stock entre à la soumission de la commande, pas à la facture. Un échec
+    ne bloque jamais la commande (avertissement + journal)."""
+    nom = doc.get("custom_fiche_caisse")
+    if not nom or not frappe.db.exists("Facture Achat a Saisir", nom):
+        return
+    if frappe.db.get_value("Facture Achat a Saisir", nom, "purchase_receipt"):
+        return
+    try:
+        from erpnext.buying.doctype.purchase_order.purchase_order import (
+            make_purchase_receipt)
+        pr = make_purchase_receipt(doc.name)
+        pr.custom_fiche_caisse = nom
+        pr.flags.ignore_permissions = True
+        pr.insert()
+        pr.submit()   # les hooks PR lient la fiche + copient le justificatif
+        frappe.msgprint(_("📦 Reçu d'achat {0} généré et soumis — le stock est "
+                          "entré.").format(pr.name), alert=True, indicator="green")
+    except Exception:
+        frappe.log_error(title="Caisse: échec reçu auto",
+                         message=frappe.get_traceback())
+        frappe.msgprint(_("⚠️ Le reçu d'achat n'a pas pu être généré "
+                          "automatiquement — créez-le depuis la commande "
+                          "(Créer > Reçu d'achat)."), indicator="orange")
+
+
+def po_detacher_fiche_caisse(doc, method=None):
+    """Purchase Order on_cancel : la fiche encore « À saisir » se détache.
+    Les paiements d'avance déjà créés restent (l'argent est sorti) — ils
+    redeviennent des avances fournisseur non allouées."""
+    for nom in frappe.get_all("Facture Achat a Saisir",
+                              filters={"purchase_order": doc.name,
+                                       "statut": "À saisir"}, pluck="name"):
+        frappe.db.set_value("Facture Achat a Saisir", nom,
+                            "purchase_order", "", update_modified=False)
+
+
+@frappe.whitelist()
+def creer_facture_depuis_commandes(fiches):
+    """UNE facture d'achat (brouillon) née de PLUSIEURS commandes BL du même
+    fournisseur — sélection faite dans « 📦 Achats BL » de la page Caisse. Les
+    avances liées aux commandes sont tirées dans la facture (allocation à la
+    soumission). Le comptable complète (n° facture fournisseur…) puis soumet."""
+    frappe.only_for(ROLES)
+    fiches = json.loads(fiches) if isinstance(fiches, str) else (fiches or [])
+    pos = []
+    for nom in fiches:
+        po = frappe.db.get_value("Facture Achat a Saisir", nom, "purchase_order")
+        if not po:
+            frappe.throw(_("La fiche {0} n'a pas encore de commande d'achat.").format(nom))
+        if frappe.db.get_value("Purchase Order", po, "docstatus") != 1:
+            frappe.throw(_("La commande {0} doit être soumise d'abord.").format(po))
+        if po not in pos:
+            pos.append(po)
+    if not pos:
+        frappe.throw(_("Cochez au moins un BL avec commande."))
+    suppliers = {frappe.db.get_value("Purchase Order", po, "supplier") for po in pos}
+    if len(suppliers) > 1:
+        frappe.throw(_("Toutes les commandes doivent être du même fournisseur."))
+
+    from erpnext.buying.doctype.purchase_order.purchase_order import (
+        make_purchase_invoice as pi_depuis_commande)
+    from erpnext.stock.doctype.purchase_receipt.purchase_receipt import (
+        make_purchase_invoice as pi_depuis_recu)
+    # Quand le reçu d'achat existe (généré automatiquement à la soumission de
+    # la commande), la facture se construit DEPUIS LE REÇU : le stock est déjà
+    # entré, la garde BRS laissera update_stock décoché. Sinon, depuis la
+    # commande (le stock entrera à la facture).
+    pi = None
+    for po in pos:
+        pr = frappe.db.get_value(
+            "Facture Achat a Saisir",
+            {"purchase_order": po, "purchase_receipt": ["is", "set"]},
+            "purchase_receipt")
+        if pr and frappe.db.get_value("Purchase Receipt", pr, "docstatus") == 1:
+            pi = pi_depuis_recu(pr, target_doc=pi)
+        else:
+            pi = pi_depuis_commande(po, target_doc=pi)
+    # update_stock : la politique BRS (corriger_stock) tranche — coché quand la
+    # facture entre la marchandise (pas de reçu), décoché si des reçus existent.
+    pi.run_method("set_missing_values")
+    pi.calculate_taxes_and_totals()
+    # échéancier obligatoire sur ce site (Payment Schedule.mode_of_payment reqd)
+    pi.set("payment_schedule", [])
+    pi.append("payment_schedule", {
+        "due_date": pi.due_date or nowdate(), "invoice_portion": 100,
+        "payment_amount": flt(pi.rounded_total or pi.grand_total, 3),
+        "mode_of_payment": "Espèces"})
+    try:
+        pi.set_advances()   # tire les avances liées aux commandes
+    except Exception:
+        pass
+    pi.flags.ignore_permissions = True
+    pi.insert()
+    frappe.db.commit()
+    return {"purchase_invoice": pi.name, "commandes": pos}
+
+
+@frappe.whitelist()
+def bls_en_attente(supplier):
+    """Les BL de ce fournisseur encore en attente d'une facture — pour le bouton
+    « Rattacher des BL » du formulaire Purchase Invoice."""
+    frappe.only_for(ROLES)
+    if not supplier:
+        return []
+    return frappe.get_all(
+        "Facture Achat a Saisir",
+        filters={"supplier": supplier, "est_bl": 1, "statut": "À saisir",
+                 "purchase_invoice": ["is", "not set"]},
+        fields=["name", "numero_bl", "montant", "date_facture", "description",
+                "mode_paiement", "creation"],
+        order_by="creation asc")
+
+
+@frappe.whitelist()
+def rattacher_bls(purchase_invoice, fiches):
+    """Rattache des fiches BL (sélection manuelle) à une facture d'achat en
+    BROUILLON. À la soumission de la facture, chaque fiche passera « Saisie » et
+    chaque avance deviendra un paiement référençant la facture."""
+    frappe.only_for(ROLES)
+    fiches = json.loads(fiches) if isinstance(fiches, str) else (fiches or [])
+    doc = frappe.get_doc("Purchase Invoice", purchase_invoice)
+    if doc.docstatus != 0:
+        frappe.throw(_("Le rattachement de BL se fait sur une facture en brouillon."))
+    lies = []
+    for nom in fiches:
+        f = frappe.db.get_value(
+            "Facture Achat a Saisir", nom,
+            ["supplier", "statut", "purchase_invoice", "est_bl"], as_dict=True)
+        if not f or not f.est_bl or f.statut != "À saisir" or f.purchase_invoice:
+            continue
+        if f.supplier != doc.supplier:
+            frappe.throw(_("Le BL {0} appartient à un autre fournisseur.").format(nom))
+        frappe.db.set_value("Facture Achat a Saisir", nom,
+                            "purchase_invoice", doc.name, update_modified=False)
+        _copier_justificatifs(nom, "Purchase Invoice", doc.name)
+        lies.append(nom)
+    frappe.db.commit()
+    return {"rattaches": lies}
 
 
 def pi_lier_fiche_caisse(doc, method=None):
@@ -805,15 +1464,46 @@ def pi_lier_fiche_caisse(doc, method=None):
     de facture qui n'a jamais été créé — le même piège que les justificatifs
     fantômes vus le 20/08/2026."""
     nom = _fiche_de(doc)
-    if not nom:
-        return
-    frappe.db.set_value("Facture Achat a Saisir", nom, "purchase_invoice", doc.name,
-                        update_modified=False)
-    _copier_justificatifs(nom, "Purchase Invoice", doc.name)
+    if nom:
+        frappe.db.set_value("Facture Achat a Saisir", nom, "purchase_invoice", doc.name,
+                            update_modified=False)
+        _copier_justificatifs(nom, "Purchase Invoice", doc.name)
+    # les fiches BL dont le REÇU D'ACHAT alimente cette facture (« Obtenir les
+    # articles depuis > Reçu d'achat ») se rattachent aussi : leur avance
+    # deviendra un paiement de la facture à la soumission.
+    prs = {it.purchase_receipt for it in (doc.get("items") or [])
+           if it.get("purchase_receipt")}
+    pos = {it.purchase_order for it in (doc.get("items") or [])
+           if it.get("purchase_order")}
+    for champ, refs in (("purchase_receipt", prs), ("purchase_order", pos)):
+        if not refs:
+            continue
+        for fr in frappe.get_all(
+                "Facture Achat a Saisir",
+                filters={champ: ["in", list(refs)],
+                         "statut": "À saisir",
+                         "purchase_invoice": ["is", "not set"]},
+                pluck="name"):
+            frappe.db.set_value("Facture Achat a Saisir", fr,
+                                "purchase_invoice", doc.name, update_modified=False)
+            _copier_justificatifs(fr, "Purchase Invoice", doc.name)
 
 
 def _remplacer_avance_par_paiement(doc, fiche_nom):
-    """L'écriture d'avance de la caisse devient un VRAI paiement de la facture.
+    """L'avance de la fiche devient le(s) paiement(s) de CETTE facture."""
+    total = flt(doc.get("rounded_total") or doc.grand_total, 3)
+    deja = flt(frappe.db.sql("""
+        select sum(allocated_amount) from `tabPayment Entry Reference`
+        where reference_doctype = 'Purchase Invoice' and reference_name = %s
+          and docstatus = 1""", doc.name)[0][0], 3)
+    return _avances_en_paiements(fiche_nom, "Purchase Invoice", doc.name,
+                                 total, deja, doc.company or COMPANY)
+
+
+def _avances_en_paiements(fiche_nom, ref_dt, ref_name, total, deja, company):
+    """Les écritures d'avance de la fiche deviennent de VRAIS paiements
+    référençant `ref_name` — une FACTURE d'achat, ou une COMMANDE d'achat
+    (avance fournisseur native, décision utilisateur 24/08).
 
     ⚠️ POURQUOI REMPLACER PLUTÔT QU'AJOUTER (décision utilisateur 2026-08-20).
     L'écriture posée en caisse (Cr Espèces ou banque / Dr Créditeurs) constate la
@@ -827,76 +1517,102 @@ def _remplacer_avance_par_paiement(doc, fiche_nom):
     transaction de soumission de la facture — si la création du paiement échoue,
     la destruction de l'écriture est annulée avec la soumission elle-même.
     """
-    je_nom = frappe.db.get_value("Facture Achat a Saisir", fiche_nom, "journal_entry")
-    if not je_nom or not frappe.db.exists("Journal Entry", je_nom):
+    f = frappe.db.get_value("Facture Achat a Saisir", fiche_nom,
+                            ["journal_entry", "journal_entries", "supplier",
+                             "mode_paiement"], as_dict=True)
+    jes = []
+    if f.journal_entry:
+        jes.append(f.journal_entry)
+    try:
+        jes += [x for x in (json.loads(f.journal_entries or "[]") or [])
+                if x not in jes]
+    except Exception:
+        pass
+    jes = [j for j in jes if frappe.db.exists("Journal Entry", j)]
+    supplier = f.supplier
+    if not (jes and supplier):
         return None
-    je = frappe.get_doc("Journal Entry", je_nom)
-    if je.docstatus == 2:
+
+    # ⚠️ CE QUE LA PIÈCE DOIT ENCORE, CALCULÉ, PAS RELU (`total` − `deja`
+    # fournis par l'appelant) : à la soumission `outstanding_amount` n'est pas
+    # encore posé — s'y fier donnait 0 et ERPNext refusait le paiement.
+    restant = max(0.0, flt(total - deja, 3))
+
+    pes = []
+    # PLUSIEURS écritures d'avance possibles (fiche née de plusieurs BL) ; dans
+    # chaque écriture, PLUSIEURS lignes créditées possibles (paiement
+    # fractionné) : un Payment Entry par ligne, chacun sur son compte.
+    a_traiter = []
+    for je_nom in jes:
+        je = frappe.get_doc("Journal Entry", je_nom)
+        if je.docstatus == 2:
+            continue
+        credits = [(l.account, flt(l.credit_in_account_currency, 3))
+                   for l in je.accounts if flt(l.credit_in_account_currency) > 0]
+        if not credits:
+            continue
+        date = je.posting_date
+        mode = je.get("mode_of_payment") or f.mode_paiement
+        reference = je.get("cheque_no") or ""
+        remarque = je.get("user_remark") or ""
+        je.flags.ignore_permissions = True
+        je.flags.ignore_links = True
+        je.cancel()
+        frappe.delete_doc("Journal Entry", je_nom, ignore_permissions=True, force=True)
+        a_traiter += [(compte, montant, date, mode, reference, remarque)
+                      for compte, montant in credits]
+
+    for compte_paiement, montant, date, mode, reference, remarque in a_traiter:
+        if montant <= 0:
+            continue
+        alloue = min(montant, restant)
+        restant = flt(restant - alloue, 3)
+        pe = frappe.new_doc("Payment Entry")
+        pe.payment_type = "Pay"
+        pe.party_type = "Supplier"
+        pe.party = supplier
+        pe.company = company or COMPANY
+        pe.posting_date = date
+        # ⚠️ Payment Entry.mode_of_payment est OBLIGATOIRE sur ce site (property
+        # setter). Ligne espèces → Espèces ; ligne banque → le mode de la fiche
+        # s'il est bancaire, sinon Chèque si l'écriture en portait un, sinon carte.
+        if compte_paiement == COMPTE_ESPECES:
+            pe.mode_of_payment = "Espèces"
+        elif mode in ("Chèque", "Carte de crédit"):
+            pe.mode_of_payment = mode
+        else:
+            pe.mode_of_payment = "Chèque" if "Chq N°" in (remarque or "") else "Carte de crédit"
+        pe.paid_from = compte_paiement
+        pe.paid_to = COMPTE_CREDITEURS
+        pe.paid_amount = montant
+        pe.received_amount = montant
+        pe.source_exchange_rate = 1
+        pe.target_exchange_rate = 1
+        pe.reference_no = reference or ref_name
+        pe.reference_date = date
+        pe.remarks = remarque or reference
+        # Une pièce déjà soldée par ailleurs ne peut rien recevoir : le paiement
+        # existe quand même (l'argent est sorti), mais il reste non alloué sur le
+        # compte du fournisseur au lieu de faire échouer la soumission.
+        if alloue > 0.001:
+            pe.append("references", {"reference_doctype": ref_dt,
+                                     "reference_name": ref_name,
+                                     "allocated_amount": alloue})
+        pe.flags.ignore_permissions = True
+        pe.insert()
+        pe.submit()
+        pes.append(pe.name)
+
+    if not pes:
         return None
-
-    # Le compte d'où l'argent est sorti : la ligne CRÉDITÉE de l'écriture.
-    compte_paiement = next((l.account for l in je.accounts
-                            if flt(l.credit_in_account_currency) > 0), None)
-    montant = flt(je.total_debit, 3)
-    supplier = frappe.db.get_value("Facture Achat a Saisir", fiche_nom, "supplier")
-    if not (compte_paiement and montant > 0 and supplier):
-        return None
-
-    date = je.posting_date
-    mode = je.get("mode_of_payment") or frappe.db.get_value(
-        "Facture Achat a Saisir", fiche_nom, "mode_paiement")
-    reference = je.get("cheque_no") or ""
-    remarque = je.get("user_remark") or ""
-
-    je.flags.ignore_permissions = True
-    je.flags.ignore_links = True
-    je.cancel()
-    frappe.delete_doc("Journal Entry", je_nom, ignore_permissions=True, force=True)
-
-    # ⚠️ CE QUE LA FACTURE DOIT ENCORE, CALCULÉ, PAS RELU. À la soumission
-    # `outstanding_amount` n'est pas encore posé (il l'est avec les écritures) :
-    # s'y fier donnait 0, et ERPNext refusait le paiement en criant que la
-    # facture était déjà réglée. On additionne donc ce que les paiements soumis
-    # lui ont déjà alloué et on retranche.
-    total = flt(doc.get("rounded_total") or doc.grand_total, 3)
-    deja = flt(frappe.db.sql("""
-        select sum(allocated_amount) from `tabPayment Entry Reference`
-        where reference_doctype = 'Purchase Invoice' and reference_name = %s
-          and docstatus = 1""", doc.name)[0][0], 3)
-    alloue = min(montant, max(0.0, flt(total - deja, 3)))
-
-    pe = frappe.new_doc("Payment Entry")
-    pe.payment_type = "Pay"
-    pe.party_type = "Supplier"
-    pe.party = supplier
-    pe.company = doc.company or COMPANY
-    pe.posting_date = date
-    pe.mode_of_payment = mode or None
-    pe.paid_from = compte_paiement
-    pe.paid_to = COMPTE_CREDITEURS
-    pe.paid_amount = montant
-    pe.received_amount = montant
-    pe.source_exchange_rate = 1
-    pe.target_exchange_rate = 1
-    pe.reference_no = reference or doc.name
-    pe.reference_date = date
-    pe.remarks = remarque or reference
-    # Une facture déjà soldée par ailleurs ne peut rien recevoir : le paiement
-    # existe quand même (l'argent est sorti), mais il reste non alloué sur le
-    # compte du fournisseur au lieu de faire échouer la soumission.
-    if alloue > 0.001:
-        pe.append("references", {"reference_doctype": "Purchase Invoice",
-                                 "reference_name": doc.name,
-                                 "allocated_amount": alloue})
-    pe.flags.ignore_permissions = True
-    pe.insert()
-    pe.submit()
-
     frappe.db.set_value("Facture Achat a Saisir", fiche_nom,
-                        {"payment_entry": pe.name, "journal_entry": ""},
+                        {"payment_entry": pes[0],
+                         "payment_entries": json.dumps(pes),
+                         "journal_entry": "", "journal_entries": ""},
                         update_modified=False)
-    _copier_justificatifs(fiche_nom, "Payment Entry", pe.name)
-    return pe.name
+    for pe_nom in pes:
+        _copier_justificatifs(fiche_nom, "Payment Entry", pe_nom)
+    return pes[0]
 
 
 def pi_marquer_fiche_saisie(doc, method=None):
@@ -906,12 +1622,12 @@ def pi_marquer_fiche_saisie(doc, method=None):
     Le rattachement est refait ici : une facture créée ET soumise d'un trait ne
     passe pas par `on_update`."""
     pi_lier_fiche_caisse(doc)
-    nom = frappe.db.get_value("Facture Achat a Saisir", {"purchase_invoice": doc.name}, "name")
-    if not nom:
-        return
-    frappe.db.set_value("Facture Achat a Saisir", nom, "statut", "Saisie",
-                        update_modified=False)
-    _remplacer_avance_par_paiement(doc, nom)
+    # TOUTES les fiches rattachées — la fiche « facture » ET les BL couverts par
+    # cette facture : chacune passe « Saisie », chaque avance devient un paiement.
+    for nom in _fiches_de(doc):
+        frappe.db.set_value("Facture Achat a Saisir", nom, "statut", "Saisie",
+                            update_modified=False)
+        _remplacer_avance_par_paiement(doc, nom)
 
 
 def pi_rouvrir_fiche(doc, method=None):
@@ -921,15 +1637,22 @@ def pi_rouvrir_fiche(doc, method=None):
     qu'elle : le laisser vivant laisserait un règlement rattaché à une facture
     annulée, et l'argent sorti sans contrepartie. La fiche garde sa trace (le
     paiement annulé reste consultable) et repart dans la file."""
-    nom = frappe.db.get_value("Facture Achat a Saisir", {"purchase_invoice": doc.name}, "name")
-    if not nom:
-        return
-    pe_nom = frappe.db.get_value("Facture Achat a Saisir", nom, "payment_entry")
-    if pe_nom and frappe.db.exists("Payment Entry", pe_nom):
-        pe = frappe.get_doc("Payment Entry", pe_nom)
-        if pe.docstatus == 1:
-            pe.flags.ignore_permissions = True
-            pe.cancel()
-    frappe.db.set_value("Facture Achat a Saisir", nom,
-                        {"statut": "À saisir", "purchase_invoice": ""},
-                        update_modified=False)
+    for nom in _fiches_de(doc):
+        f = frappe.db.get_value("Facture Achat a Saisir", nom,
+                                ["payment_entry", "payment_entries"], as_dict=True)
+        pes = []
+        try:
+            pes = json.loads(f.payment_entries or "[]") or []
+        except Exception:
+            pass
+        if f.payment_entry and f.payment_entry not in pes:
+            pes.append(f.payment_entry)
+        for pe_nom in pes:
+            if pe_nom and frappe.db.exists("Payment Entry", pe_nom):
+                pe = frappe.get_doc("Payment Entry", pe_nom)
+                if pe.docstatus == 1:
+                    pe.flags.ignore_permissions = True
+                    pe.cancel()
+        frappe.db.set_value("Facture Achat a Saisir", nom,
+                            {"statut": "À saisir", "purchase_invoice": ""},
+                            update_modified=False)

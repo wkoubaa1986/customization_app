@@ -1,0 +1,184 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "autoname": "format:DAP-{####}",
+ "creation": "2026-08-24 15:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "statut",
+  "description",
+  "montant",
+  "column_break_1",
+  "tva",
+  "taux_tva",
+  "compte_charge",
+  "section_facture",
+  "fournisseur",
+  "numero_facture",
+  "column_break_2",
+  "date_facture",
+  "est_bl",
+  "numero_bl",
+  "section_reglement",
+  "journal_entry",
+  "reglement_journal_entry",
+  "column_break_3",
+  "date_reglement",
+  "saisi_par"
+ ],
+ "fields": [
+  {
+   "fieldname": "statut",
+   "fieldtype": "Select",
+   "label": "Statut",
+   "options": "À payer\nPayée",
+   "default": "À payer",
+   "in_list_view": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "description",
+   "fieldtype": "Small Text",
+   "label": "Description",
+   "reqd": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "montant",
+   "fieldtype": "Currency",
+   "label": "Montant TTC",
+   "precision": "3",
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "column_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "tva",
+   "fieldtype": "Currency",
+   "label": "TVA",
+   "precision": "3"
+  },
+  {
+   "fieldname": "taux_tva",
+   "fieldtype": "Float",
+   "label": "Taux TVA (%)"
+  },
+  {
+   "fieldname": "compte_charge",
+   "fieldtype": "Link",
+   "label": "Compte de charge",
+   "options": "Account"
+  },
+  {
+   "fieldname": "section_facture",
+   "fieldtype": "Section Break",
+   "label": "Facture"
+  },
+  {
+   "fieldname": "fournisseur",
+   "fieldtype": "Data",
+   "label": "Fournisseur (lu sur la facture)"
+  },
+  {
+   "fieldname": "numero_facture",
+   "fieldtype": "Data",
+   "label": "N° de facture"
+  },
+  {
+   "fieldname": "column_break_2",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "date_facture",
+   "fieldtype": "Date",
+   "label": "Date de la facture"
+  },
+  {
+   "default": "0",
+   "description": "Le justificatif capturé est un bon de livraison (détecté à l'analyse).",
+   "fieldname": "est_bl",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Bon de livraison"
+  },
+  {
+   "depends_on": "est_bl",
+   "fieldname": "numero_bl",
+   "fieldtype": "Data",
+   "label": "N° de BL"
+  },
+  {
+   "fieldname": "section_reglement",
+   "fieldtype": "Section Break",
+   "label": "Règlement"
+  },
+  {
+   "fieldname": "journal_entry",
+   "fieldtype": "Link",
+   "label": "Écriture de charge (dette)",
+   "options": "Journal Entry",
+   "read_only": 1
+  },
+  {
+   "fieldname": "reglement_journal_entry",
+   "fieldtype": "Link",
+   "label": "Écriture de règlement",
+   "options": "Journal Entry",
+   "read_only": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "column_break_3",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "date_reglement",
+   "fieldtype": "Date",
+   "label": "Date du règlement",
+   "read_only": 1
+  },
+  {
+   "fieldname": "saisi_par",
+   "fieldtype": "Link",
+   "label": "Saisi par",
+   "options": "User",
+   "read_only": 1
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-08-24 17:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "Depense A Payer",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1, "write": 1, "create": 1, "delete": 1,
+   "print": 1, "email": 1, "export": 1, "report": 1, "share": 1
+  },
+  {
+   "role": "Accounts Manager",
+   "read": 1, "write": 1, "create": 1, "delete": 1,
+   "print": 1, "email": 1, "export": 1, "report": 1, "share": 1
+  },
+  {
+   "role": "Accounts User",
+   "read": 1, "write": 1, "create": 1,
+   "print": 1, "email": 1, "export": 1, "report": 1, "share": 1
+  },
+  {
+   "role": "Sales User",
+   "read": 1, "create": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "description"
+}

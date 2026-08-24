@@ -175,6 +175,21 @@ doc_events = {
         "on_submit": "customization_app.caisse_depenses.pi_marquer_fiche_saisie",
         "on_cancel": "customization_app.caisse_depenses.pi_rouvrir_fiche",
     },
+    # BL de caisse -> reçu d'achat : le reçu créé depuis une fiche BL
+    # (custom_fiche_caisse) se lie à sa fiche et reçoit le justificatif.
+    "Purchase Receipt": {
+        "on_update": "customization_app.caisse_depenses.pr_lier_fiche_caisse",
+        "on_submit": "customization_app.caisse_depenses.pr_lier_fiche_caisse",
+        "on_cancel": "customization_app.caisse_depenses.pr_detacher_fiche_caisse",
+    },
+    # BL de caisse -> COMMANDE d'achat : à la soumission, l'avance de caisse
+    # devient un paiement lié à la commande (avance fournisseur native) ; la
+    # facture se crée ensuite depuis une ou plusieurs commandes.
+    "Purchase Order": {
+        "on_update": "customization_app.caisse_depenses.po_lier_fiche_caisse",
+        "on_submit": "customization_app.caisse_depenses.po_convertir_avances",
+        "on_cancel": "customization_app.caisse_depenses.po_detacher_fiche_caisse",
+    },
     "Tache de travail": {
         "before_save": "customization_app.api.before_save_tache_de_travail",
         # ATTENTION : « after_save » n'est pas un événement Frappe — le
@@ -502,6 +517,13 @@ scheduler_events = {
 }
 
 # after_migrate = ["customization_app.patches.override_get_item_details.execute"]
+
+# Facture d'achat : bouton « 📦 Rattacher des BL » (bons de livraison capturés
+# en caisse, en attente de leur facture — voir caisse_depenses.bls_en_attente).
+doctype_js = {
+    "Purchase Invoice": "public/js/purchase_invoice_caisse.js",
+}
+
 # doctype_js = {
 #     "Tache de travail": "assets/customization_app/js/custom_calendar.js"
 # }

@@ -414,18 +414,24 @@ def _depenses_caisse(d1, d2, noms_par_user):
     """Les dépenses saisies en caisse (écritures « Dépense caisse — … ») sur la
     période, attribuées à leur AUTEUR. Le mode se lit sur l'écriture elle-même :
     crédit Espèces -> Espèces ; « Chq N° » en remarque -> Chèque ; sinon carte."""
+    # UNE LIGNE PAR CRÉDIT de l'écriture — un paiement fractionné (espèces +
+    # chèque) doit compter sa part espèces dans le solde théorique, pas le TTC.
     rows = frappe.db.sql(
         """SELECT je.name, je.posting_date, je.owner, je.cheque_no, je.user_remark,
-                  je.total_debit,
-                  (SELECT jea.account FROM `tabJournal Entry Account` jea
-                   WHERE jea.parent = je.name AND jea.credit_in_account_currency > 0
-                   ORDER BY jea.idx LIMIT 1) AS compte_credit
+                  jea.account AS compte_credit,
+                  jea.credit_in_account_currency AS credit
            FROM `tabJournal Entry` je
+           INNER JOIN `tabJournal Entry Account` jea
+                   ON jea.parent = je.name AND jea.credit_in_account_currency > 0
+                  AND jea.account != 'Compte de découvert bancaire - A&S'
            WHERE je.docstatus = 1 AND je.posting_date BETWEEN %s AND %s
              AND je.cheque_no LIKE 'Dépense caisse —%%'
-           ORDER BY je.posting_date DESC, je.creation DESC""",
+           ORDER BY je.posting_date DESC, je.creation DESC, jea.idx""",
         (d1, d2), as_dict=True)
     lignes = []
+    nb_credits = {}
+    for r in rows:
+        nb_credits[r.name] = nb_credits.get(r.name, 0) + 1
     for r in rows:
         remark = r.user_remark or ""
         if r.compte_credit == "Espèces - A&S":
@@ -435,15 +441,18 @@ def _depenses_caisse(d1, d2, noms_par_user):
         else:
             mode = "Carte de crédit"
         m = re.search(r"Type : (.+)", remark)
+        description = (r.cheque_no or "").replace("Dépense caisse — ", "")
+        if nb_credits.get(r.name, 1) > 1:
+            description += " (part %s)" % mode.lower()
         lignes.append({
             "name": r.name,
             "doctype": "Journal Entry",
             "date": str(r.posting_date),
             "saisi_par": noms_par_user.get(r.owner, r.owner),
             "type": (m.group(1).strip() if m else ""),
-            "description": (r.cheque_no or "").replace("Dépense caisse — ", ""),
+            "description": description,
             "mode": mode,
-            "montant": flt(r.total_debit, 3),
+            "montant": flt(r.credit, 3),
         })
 
     # ⚠️ ET LES PAIEMENTS QUI ONT REMPLACÉ UNE ÉCRITURE DE CAISSE. Quand le
@@ -460,9 +469,13 @@ def _depenses_caisse(d1, d2, noms_par_user):
                   pe.mode_of_payment, pe.remarks, pe.reference_no, pe.party,
                   f.description AS fiche_description
            FROM `tabPayment Entry` pe
-           INNER JOIN `tabFacture Achat a Saisir` f ON f.payment_entry = pe.name
+           INNER JOIN `tabFacture Achat a Saisir` f
+                   ON f.payment_entry = pe.name
+                   OR (f.payment_entries IS NOT NULL
+                       AND f.payment_entries LIKE CONCAT('%%"', pe.name, '"%%'))
            WHERE pe.docstatus = 1 AND pe.payment_type = 'Pay'
              AND pe.posting_date BETWEEN %s AND %s
+           GROUP BY pe.name
            ORDER BY pe.posting_date DESC, pe.creation DESC""",
         (d1, d2), as_dict=True)
     for r in paiements:
@@ -483,6 +496,21 @@ def _depenses_caisse(d1, d2, noms_par_user):
             "mode": mode,
             "montant": flt(r.paid_amount, 3),
         })
+    # la PIÈCE JOINTE de chaque écriture/paiement (le scan de la caisse) — une
+    # colonne d'aperçu dans le tableau, cliquable sans ouvrir le document.
+    noms = list({l["name"] for l in lignes})
+    piece = {}
+    if noms:
+        for f in frappe.get_all(
+                "File",
+                filters={"attached_to_doctype": ["in", ["Journal Entry", "Payment Entry"]],
+                         "attached_to_name": ["in", noms]},
+                fields=["attached_to_name", "file_url"],
+                order_by="creation"):
+            piece.setdefault(f.attached_to_name, f.file_url)
+    for l in lignes:
+        l["piece"] = piece.get(l["name"])
+
     lignes.sort(key=lambda l: (l["date"], l["name"]), reverse=True)
     return lignes
 

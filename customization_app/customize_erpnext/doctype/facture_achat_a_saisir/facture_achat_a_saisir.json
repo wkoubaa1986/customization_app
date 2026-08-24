@@ -13,11 +13,17 @@
   "montant",
   "numero_facture",
   "date_facture",
+  "est_bl",
+  "numero_bl",
   "section_paiement",
   "mode_paiement",
   "journal_entry",
+  "journal_entries",
+  "purchase_order",
+  "purchase_receipt",
   "purchase_invoice",
   "payment_entry",
+  "payment_entries",
   "column_break_2",
   "saisi_par",
   "description"
@@ -68,6 +74,21 @@
    "label": "Date de la facture"
   },
   {
+   "default": "0",
+   "description": "Document capturé = bon de livraison (détecté à l'analyse) : la facture qui le couvre sera rattachée plus tard, éventuellement avec d'autres BL du même fournisseur.",
+   "fieldname": "est_bl",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Bon de livraison"
+  },
+  {
+   "depends_on": "est_bl",
+   "fieldname": "numero_bl",
+   "fieldtype": "Data",
+   "label": "N° de BL"
+  },
+  {
    "fieldname": "section_paiement",
    "fieldtype": "Section Break",
    "label": "Paiement"
@@ -78,7 +99,7 @@
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "Mode de paiement",
-   "options": "Espèces\nChèque\nCarte de crédit\nPas payé"
+   "options": "Espèces\nChèque\nCarte de crédit\nMixte\nPas payé"
   },
   {
    "fieldname": "journal_entry",
@@ -86,6 +107,32 @@
    "label": "Écriture de règlement",
    "options": "Journal Entry",
    "read_only": 1
+  },
+  {
+   "description": "Toutes les écritures d'avance portées par cette fiche (JSON) — plusieurs quand la fiche est une facture globale née de la fusion de BL payés séparément.",
+   "fieldname": "journal_entries",
+   "fieldtype": "Small Text",
+   "hidden": 1,
+   "label": "Écritures d'avance (JSON)",
+   "read_only": 1
+  },
+  {
+   "description": "Commande d'achat créée depuis ce BL — à sa soumission, l'avance de caisse devient un paiement lié à la commande ; la facture se crée ensuite depuis une ou plusieurs commandes.",
+   "fieldname": "purchase_order",
+   "fieldtype": "Link",
+   "label": "Commande d'achat",
+   "options": "Purchase Order",
+   "read_only": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "description": "Reçu d'achat créé depuis ce BL (le comptable y saisit les articles) — la facture se crée ensuite depuis un ou plusieurs reçus.",
+   "fieldname": "purchase_receipt",
+   "fieldtype": "Link",
+   "label": "Reçu d'achat",
+   "options": "Purchase Receipt",
+   "read_only": 1,
+   "in_standard_filter": 1
   },
   {
    "fieldname": "purchase_invoice",
@@ -101,6 +148,14 @@
    "fieldtype": "Link",
    "label": "Écriture de paiement",
    "options": "Payment Entry",
+   "read_only": 1
+  },
+  {
+   "description": "Tous les paiements nés de la caisse pour cette fiche (JSON) — plusieurs en cas de paiement fractionné (espèces + chèque…).",
+   "fieldname": "payment_entries",
+   "fieldtype": "Small Text",
+   "hidden": 1,
+   "label": "Paiements (JSON)",
    "read_only": 1
   },
   {
@@ -122,7 +177,7 @@
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-08-19 21:00:00.000000",
+ "modified": "2026-08-24 21:00:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Facture Achat a Saisir",
