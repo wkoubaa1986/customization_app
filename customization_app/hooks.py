@@ -377,7 +377,10 @@ app_include_js = [_js("customer_quick_entry.js"),
                   # Annuler une commande sans le dialogue « Annuler tous les
                   # documents » : la cascade serveur (annulation_commande.py)
                   # gère déjà BL, échéancier, calendrier, paiements.
-                  _js("sales_order_annulation.js")]
+                  _js("sales_order_annulation.js"),
+                  # Bandeau des tâches de travail liées sur la fiche commande :
+                  # type d'intervention, employé, statut, durée, date planifiée.
+                  _js("sales_order_tache_details.js")]
 # Hide filter message shown in the awesomplete dropdown
 app_include_css = ["/assets/customization_app/css/hide_filter_message.css"]
 # doctype_calendar_js = {
