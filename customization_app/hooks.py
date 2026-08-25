@@ -229,6 +229,14 @@ doc_events = {
         # met donc aussitôt l'anomalie à jour. on_submit seul l'aurait raté.
         "on_update": "customization_app.commande_alertes.on_sales_order_change",
         "on_update_after_submit": "customization_app.commande_alertes.on_sales_order_change",
+        # Cascade AVANT le Server Script « cancel sales order payment » (les hooks
+        # Python passent d'abord) : BL annulés PUIS SUPPRIMÉS (magasin désactivé
+        # réactivé le temps du reposting, stock repris transféré au magasin par
+        # défaut), échéanciers supprimés, lignes de calendrier remises en attente.
+        "before_cancel": "customization_app.annulation_commande.before_cancel_sales_order",
+        # Une commande ANNULÉE se supprime même encore liée ailleurs : les
+        # références bloquantes sont retirées avant le contrôle des liens.
+        "on_trash": "customization_app.annulation_commande.on_trash_sales_order",
         "on_cancel": [
             "customization_app.api.on_sales_order_cancel",
             "customization_app.commande_alertes.on_sales_order_change",
@@ -366,10 +374,10 @@ app_include_js = [_js("customer_quick_entry.js"),
                   # d'onglets de la fiche, et calendrier des tâches depuis la liste.
                   # ⚠️ APRÈS calendrier_rdv_button.js, dont il appelle `rdvLibre_openOverlay`.
                   _js("sales_order_rdv.js"),
-                  # Annulation d'une tâche de travail liée à une commande : confirmation
-                  # puis cascade (BL/paiements/facture supprimés, commande annulée + tag).
-                  # Global car « Tache de travail » est un DocType custom (doctype_js ignoré).
-                  _js("tache_annulation.js")]
+                  # Annuler une commande sans le dialogue « Annuler tous les
+                  # documents » : la cascade serveur (annulation_commande.py)
+                  # gère déjà BL, échéancier, calendrier, paiements.
+                  _js("sales_order_annulation.js")]
 # Hide filter message shown in the awesomplete dropdown
 app_include_css = ["/assets/customization_app/css/hide_filter_message.css"]
 # doctype_calendar_js = {

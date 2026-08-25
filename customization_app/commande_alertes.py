@@ -72,7 +72,9 @@ MOTIF_MAIN_OEUVRE = "Main d'œuvre sans tâche"
 MOTIF_LIVRAISON = "Livraison sans tâche"
 MOTIF_NON_SOLDEE = "Tâche terminée, commande non soldée"
 
-# Motif posé par annulation_tache.py quand la cascade annule la commande avec sa tâche.
+# Motif posé JADIS par le flux « annuler la commande avec sa tâche » (annulation_tache.py,
+# retiré le 25/08/2026 — l'annulation passe désormais par la cascade d'annulation_commande.py).
+# Les commandes annulées par l'ancien flux portent encore ce motif : on le préserve.
 # Il porte le NOM de la tâche (« Commande annulée avec tâche Tache-08055 ») : c'est donc
 # un PRÉFIXE, pas un libellé fermé — la règle SQL le PRÉSERVE au lieu de le recalculer,
 # et la couleur se résout par préfixe des deux côtés (cf. couleur_du_motif et le JS).
@@ -127,7 +129,7 @@ _PAIEMENT_QUELCONQUE = _SQL_PAIEMENT_LIE.format(compte="1 = 1")
 _SQL_MOTIF = """
     SELECT so.name,
         CASE
-            -- Une commande annulée PAR l'annulation de sa tâche (annulation_tache.py)
+            -- Une commande annulée PAR l'annulation de sa tâche (ancien flux, retiré 25/08/2026)
             -- garde le motif posé par la cascade : il porte le nom de la tâche, la règle
             -- ne peut pas le recalculer. AVANT le plancher — il doit survivre aussi sur
             -- une commande antérieure au 01/07/2026.

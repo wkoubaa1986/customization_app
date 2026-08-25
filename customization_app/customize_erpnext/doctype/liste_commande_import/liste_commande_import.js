@@ -361,7 +361,7 @@ function lci_render_table(frm) {
     const tr_txt = [tr_name, tr_desc].filter(Boolean).join(" — ");
     body += `
     <tr data-name="${esc(r.name)}" data-idx="${i}">
-      <td class="lci-c lci-drag" title="${__("Glisser pour déplacer")}">
+      <td class="lci-c lci-drag" title="${__("Glisser pour déplacer · double-clic : envoyer à la ligne…")}">
         <div class="lci-dragnum">⠿ ${i + 1}</div>
         <div class="lci-updown"><span data-act="up" title="${__("Monter")}">▲</span><span data-act="down" title="${__("Descendre")}">▼</span></div>
       </td>
@@ -455,6 +455,9 @@ function lci_render_table(frm) {
       .lci-drag { cursor: grab; user-select: none; white-space: nowrap; }
       .lci-drag:active { cursor: grabbing; }
       .lci-dragnum { font-weight: 700; color: #8a93a0; font-size: 11px; }
+      .lci-posinp { width: 46px; font-size: 11px; font-weight: 700; text-align: center;
+                    border: 1px solid #91caff; border-radius: 6px; padding: 1px 2px;
+                    background: var(--card-bg,#fff); outline: none; }
       .lci-updown { line-height: 1; margin-top: 2px; }
       .lci-updown span { cursor: pointer; font-size: 9px; color: #b6bec9; padding: 0 2px; }
       .lci-updown span:hover { color: #0958d9; }
@@ -528,6 +531,39 @@ function lci_render_table(frm) {
   $t.find('[data-act="up"]').on("click", (e) => { e.stopPropagation(); const r = row_of(e); r && lci_move(frm, r, -1); });
   $t.find('[data-act="down"]').on("click", (e) => { e.stopPropagation(); const r = row_of(e); r && lci_move(frm, r, +1); });
 
+  // double-clic sur le n° de ligne → saisie directe de la position cible
+  $t.find(".lci-drag").on("dblclick", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const row = row_of(e);
+    if (!row) return;
+    const $cell = $(e.currentTarget);
+    if ($cell.find(".lci-posinp").length) return; // déjà en édition
+    const total = lci_rows(frm).length;
+    const cur = lci_rows(frm).findIndex((r) => r.name === row.name) + 1;
+    const $num = $cell.find(".lci-dragnum");
+    const $inp = $(`<input type="number" class="lci-posinp" min="1" max="${total}"
+                    value="${cur}" title="${__("Ligne cible (1–{0})", [total])}">`);
+    $num.hide();
+    $inp.insertAfter($num).focus().select();
+    let closed = false;
+    const done = (apply) => {
+      if (closed) return;
+      closed = true;
+      const v = cint($inp.val());
+      $inp.remove();
+      $num.show();
+      if (apply && v >= 1 && v !== cur) lci_move_to(frm, row, v - 1);
+    };
+    $inp.on("keydown", (ev) => {
+      if (ev.key === "Enter") { ev.preventDefault(); done(true); }
+      else if (ev.key === "Escape") done(false);
+      ev.stopPropagation();
+    });
+    $inp.on("blur", () => done(true));
+    $inp.on("mousedown dblclick", (ev) => ev.stopPropagation());
+  });
+
   lci_bind_sortable(frm, $t);
 }
 
@@ -542,6 +578,20 @@ function lci_move(frm, row, delta) {
   lci_reindex(frm);
   frm.dirty();
   lci_render_table(frm);
+}
+
+// déplace la ligne à une position absolue (index 0-based), bornée aux limites
+function lci_move_to(frm, row, target) {
+  const arr = frm.doc.articles;
+  const pos = arr.findIndex((r) => r.name === row.name);
+  if (pos < 0) return;
+  target = Math.max(0, Math.min(arr.length - 1, cint(target)));
+  if (target === pos) return;
+  arr.splice(target, 0, arr.splice(pos, 1)[0]);
+  lci_reindex(frm);
+  frm.dirty();
+  lci_render_table(frm);
+  frappe.show_alert({ message: __("Ligne déplacée en position {0}.", [target + 1]), indicator: "green" });
 }
 
 function lci_bind_sortable(frm, $t) {
