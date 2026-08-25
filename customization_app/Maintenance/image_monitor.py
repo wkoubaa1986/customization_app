@@ -74,7 +74,46 @@ def _find_candidate(filename: str, pool: set) -> str:
             best, best_len = f, len(fb)
         elif fb.startswith(base) and len(base) > best_len and len(base) >= 8:
             best, best_len = f, len(base)
-    return best
+    if best:
+        return best
+
+    # Noms courts (JS-80-F = 7 car. : sous le seuil de 8) : l'UNICITÉ remplace
+    # la longueur comme garde-fou — un seul candidat possible, on le prend.
+    courts = [
+        f for f in pool
+        if os.path.splitext(f)[1].lower() == ext.lower()
+        and os.path.splitext(f)[0].startswith(base)
+        and len(base) >= 5
+    ]
+    return courts[0] if len(courts) == 1 else None
+
+
+def _candidat_via_file_doc(doctype: str, name: str, filename: str, pub_files: set) -> str:
+    """Le document File sait où le fichier est parti : un re-téléversement
+    renomme le fichier sur disque (suffixe aléatoire) et met à jour
+    File.file_url, mais PAS les champs image qui pointaient sur l'ancien nom
+    (cas réels du 25/08/2026 : L-UV.jpg → L-UV914f7e.jpg). Déterministe, donc
+    prioritaire sur l'appariement par préfixe.
+
+    Deux recherches, dans l'ordre de fiabilité :
+      1. le File ATTACHÉ à CE document avec attached_to_field = image — c'est
+         l'image officielle de la fiche, même si son nom a complètement changé
+         (P-F-20'-34.jpg → P-F-20'.jpg : un préfixe aurait choisi la photo
+         d'un AUTRE produit) ;
+      2. un File portant le nom d'origine, où qu'il soit attaché.
+    """
+    attaches = frappe.get_all(
+        "File",
+        filters={"attached_to_doctype": doctype, "attached_to_name": name,
+                 "attached_to_field": "image"},
+        fields=["file_url"], limit=5)
+    portant_le_nom = frappe.get_all(
+        "File", filters={"file_name": filename}, fields=["file_url"], limit=5)
+    for fdoc in attaches + portant_le_nom:
+        kind, disk_name = _split_url(fdoc.file_url)
+        if kind == "public" and disk_name in pub_files:
+            return disk_name
+    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -156,8 +195,12 @@ def scan_and_fix() -> dict:
                     fixed.append((doctype, row.name, row.image, new_url))
 
                 elif not exists:
-                    # Public URL but file missing -> try a same-prefix candidate.
-                    cand = _find_candidate(filename, pub_files)
+                    # Public URL but file missing -> le File doc d'abord (il
+                    # connaît le nom réel après re-téléversement), sinon un
+                    # candidat par préfixe.
+                    cand = _candidat_via_file_doc(
+                        doctype, row.name, filename, pub_files
+                    ) or _find_candidate(filename, pub_files)
                     if cand:
                         new_url = "/files/" + cand
                         _repoint(doctype, row.name, new_url)
