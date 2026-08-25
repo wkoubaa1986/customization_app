@@ -198,12 +198,74 @@ frappe.provide("frappe.views");
         });
     }
 
+    function _poser_filtre_anomalie_multi(listview) {
+        // Le filtre standard « Anomalie » (Select) ne prend qu'une valeur : on
+        // le remplace par une multisélection qui filtre en « in ». Le Select
+        // natif est masqué, pas supprimé — frappe le régénère à chaque vue.
+        if (listview.__so_filtre_anomalie_multi) return;
+        listview.__so_filtre_anomalie_multi = true;
+
+        const natif = listview.page.fields_dict && listview.page.fields_dict.custom_anomalie;
+        if (natif && natif.$wrapper) natif.$wrapper.hide();
+
+        const OPTIONS = Object.keys(LIBELLE_COULEUR);
+        // Le champ porte le NOM RÉEL de la colonne (custom_anomalie) avec
+        // condition "in" : get_standard_filters() de frappe construit alors
+        // lui-même [doctype, custom_anomalie, in, [valeurs]] — un fieldname
+        // inventé partait tel quel dans la requête (« Champ non autorisé »).
+        // ⚠️ le 2e argument (parent) est indispensable : sans lui le contrôle
+        // atterrit dans la zone d'actions en haut à droite, pas dans la barre
+        // des filtres standard (c'est ainsi que frappe pose les siens).
+        const champ = listview.page.add_field({
+            fieldname: "custom_anomalie",
+            label: __("Anomalie"),
+            fieldtype: "MultiSelectList",
+            condition: "in",
+            get_data(txt) {
+                return OPTIONS
+                    .filter((o) => !txt || o.toLowerCase().includes(txt.toLowerCase()))
+                    .map((o) => ({ value: o, description: "" }));
+            },
+            change: () => listview.filter_area.debounced_refresh_list_view(),
+        }, listview.filter_area.standard_filters_wrapper);
+
+        // Un tableau VIDE est truthy : sans ce garde, « in [] » partirait dans
+        // la requête dès que tout est décoché.
+        const _get_value = champ.get_value.bind(champ);
+        champ.get_value = () => {
+            const v = _get_value();
+            return v && v.length ? v : null;
+        };
+
+        // Ordre voulu : … Statut de la Livraison, Statut de la Facturation,
+        // Anomalie (multi), Retour colis.
+        const dict = listview.page.fields_dict || {};
+        const facturation = dict.billing_status || dict.delivery_status;
+        if (facturation && facturation.$wrapper && champ && champ.$wrapper) {
+            champ.$wrapper.insertAfter(facturation.$wrapper);
+            const retour = dict.custom_retour_colis;
+            if (retour && retour.$wrapper) {
+                retour.$wrapper.insertAfter(champ.$wrapper);
+            }
+        }
+
+        // Une valeur déjà posée dans l'URL (ancien Select, lien partagé) est
+        // reprise dans la multisélection pour rester cohérente à l'écran.
+        const existant = (listview.filter_area.get() || []).find(
+            (f) => f[1] === "custom_anomalie");
+        if (existant && champ && champ.set_value) {
+            const vals = Array.isArray(existant[3]) ? existant[3] : [existant[3]];
+            champ.set_value(vals.filter(Boolean));
+        }
+    }
+
     const _after_render = frappe.views.ListView.prototype.after_render;
     frappe.views.ListView.prototype.after_render = function () {
         _after_render.apply(this, arguments);
         if (this.doctype !== "Sales Order") return;
         try {
             _poser_bouton(this);
+            _poser_filtre_anomalie_multi(this);
             appliquer_alertes(this);
         } catch (e) {
             console.error("Alertes commandes client :", e);
