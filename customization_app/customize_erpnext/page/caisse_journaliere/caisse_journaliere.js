@@ -1300,10 +1300,17 @@ function rcj_depense(rapport) {
     return $z;
   }
 
+  // ⚠️ À l'ouverture du dialogue, la valeur par défaut du Select n'est posée
+  // qu'APRÈS le premier basculer_facture() : get_value renvoie undefined et le
+  // verrou croyait être sur un type facturé — bouton mort sur une dépense non
+  // facturée. Le repli sur le défaut du champ corrige la course.
+  const type_depense_courant = () =>
+    d.get_value("type_depense") || "Dépense non facturée";
+
   // ⚠️ ENREGISTRER VERROUILLÉ TANT QUE L'ANALYSE N'EST PAS FAITE pour les
   // types facturés (décision utilisateur 24/08) — le msgprint ne suffisait pas.
   const maj_bouton = () => {
-    const bloque = d.get_value("type_depense") !== "Dépense non facturée"
+    const bloque = type_depense_courant() !== "Dépense non facturée"
       && !etat.analyse_faite;
     d.get_primary_btn().prop("disabled", bloque)
       .attr("title", bloque ? __("Analysez d'abord la facture (bouton 🤖).") : "");
@@ -1386,7 +1393,7 @@ function rcj_depense(rapport) {
     });
   });
   const basculer_facture = () => {
-    const type = d.get_value("type_depense");
+    const type = type_depense_courant();
     // Le masquage est porté par `depends_on` (cf. la définition des champs) ;
     // ce toggle ne fait que suivre immédiatement, sans attendre un refresh.
     $zf.toggle(type !== "Dépense non facturée");
