@@ -478,7 +478,7 @@ fixtures = [
     {
         "doctype": "Workspace",
         "filters": [
-            ["name", "in", ["Selling", "Accounting", "Partenaire", "Analyse des Articles"]],
+            ["name", "in", ["Selling", "Accounting", "Partenaire", "Analyse des Articles", "Buying"]],
         ],
     },
     {
