@@ -181,6 +181,40 @@ def compute_tache_color(doc):
 
 
 @frappe.whitelist()
+def recolorer_taches_partenaire(days=7):
+    """Réaligne la couleur des tâches OUVERTES créées par le partenaire ces
+    `days` derniers jours sur compute_tache_color.
+
+    Appelée par le Server Script planifié « ajuster rendez vous pris par
+    partenaire » via frappe.call : le barème de couleurs vit ici et nulle part
+    ailleurs. L'ancienne copie locale du barème dans ce script avait dérivé
+    (HR-EMP-00010 absent) et re-grisait chaque nuit les tâches d'Akram.
+    """
+    frappe.only_for("System Manager")
+
+    depuis = frappe.utils.add_to_date(frappe.utils.now_datetime(), days=-int(days))
+    taches = frappe.get_all(
+        "Tache de travail",
+        filters={
+            "owner": PARTNER_USER,
+            "creation": [">=", depuis],
+            "status": ["not in", ["Completed", "Cancelled"]],
+        },
+        fields=["name", "color", "status", "custom_choix_du_staff", "custom_client"],
+    )
+
+    recolorees = []
+    for t in taches:
+        voulu = compute_tache_color(t)
+        if (t.color or "") != voulu:
+            frappe.db.set_value(
+                "Tache de travail", t.name, "color", voulu, update_modified=False
+            )
+            recolorees.append(f"{t.name} -> {voulu}")
+    return recolorees
+
+
+@frappe.whitelist()
 def get_custom_tache_events(start, end, filters=None):
     # Define the field mapping for your custom "Tache de travail" doctype
     field_map = frappe._dict({
