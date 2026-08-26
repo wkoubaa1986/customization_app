@@ -236,6 +236,43 @@ frappe.provide("frappe.views");
             const v = _get_value();
             return v && v.length ? v : null;
         };
+        // filter_area.remove() rappelle set_value("") : une MultiSelectList
+        // attend un tableau — on normalise toute valeur falsy ou scalaire.
+        const _set_value = champ.set_value.bind(champ);
+        champ.set_value = (v) =>
+            _set_value(Array.isArray(v) ? v : v ? [v] : []);
+
+        // « Effacer les anomalies » : bouton À CÔTÉ du filtre (demande 26/08),
+        // visible dès qu'au moins une anomalie est cochée — un clic vide tout.
+        // Positionné en fin de fonction, APRÈS le réordonnancement des filtres.
+        const $effacer = $(
+            `<button type="button" class="btn btn-xs btn-default so-anomalie-effacer"
+                title="${__("Effacer les anomalies sélectionnées")}"
+                style="display:none;align-self:center;white-space:nowrap;
+                       margin-left:2px;">✕ ${__("Effacer")}</button>`
+        );
+        const _maj_effacer = () => {
+            const v = champ.get_value();
+            $effacer.toggle(!!(v && v.length));
+        };
+        $effacer.on("click", (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            champ.set_value([]);
+            // Retire AUSSI le filtre matérialisé « custom_anomalie in [...] » :
+            // en condition "in" il vit dans la liste de filtres (badge
+            // « Filters »), pas dans le champ standard — vider le champ seul
+            // laisserait le badge et la requête en place.
+            listview.filter_area.remove("custom_anomalie");
+            _maj_effacer();
+            listview.filter_area.debounced_refresh_list_view();
+        });
+        // df.change est relu à chaque sélection : on y greffe la visibilité du ✕.
+        const _change = champ.df.change;
+        champ.df.change = () => {
+            if (_change) _change();
+            _maj_effacer();
+        };
 
         // Ordre voulu : … Statut de la Livraison, Statut de la Facturation,
         // Anomalie (multi), Retour colis.
@@ -257,6 +294,10 @@ frappe.provide("frappe.views");
             const vals = Array.isArray(existant[3]) ? existant[3] : [existant[3]];
             champ.set_value(vals.filter(Boolean));
         }
+        // Insertion en dernier : le bouton suit le filtre Anomalie, même après
+        // le réordonnancement ci-dessus (… Anomalie | ✕ Effacer | Retour colis).
+        $effacer.insertAfter(champ.$wrapper);
+        _maj_effacer();
     }
 
     const _after_render = frappe.views.ListView.prototype.after_render;
