@@ -1,0 +1,51 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "creation": "2026-08-27 12:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "actif",
+  "code_deverrouillage"
+ ],
+ "fields": [
+  {
+   "default": "1",
+   "description": "Décoché = plus aucune photo exigée à la clôture des tâches (Entretien, Installation, Réparation, Livraison).",
+   "fieldname": "actif",
+   "fieldtype": "Check",
+   "label": "Photos obligatoires à la clôture"
+  },
+  {
+   "description": "Le code superviseur qui permet de clôturer une tâche SANS photos. Chaque utilisation laisse une trace nominative sur la tâche.",
+   "fieldname": "code_deverrouillage",
+   "fieldtype": "Password",
+   "label": "Code de déverrouillage"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "issingle": 1,
+ "links": [],
+ "modified": "2026-08-27 12:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "Config Cloture Tache",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

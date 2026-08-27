@@ -370,6 +370,8 @@ app_include_js = [_js("customer_quick_entry.js"),
                   _js("sales_order_list_alertes.js"),
                   # Boutons de suivi des appels sur les commandes WEB.
                   _js("sales_order_appels.js"),
+                  # Clôture guidée des tâches : photos obligatoires + code superviseur.
+                  _js("tache_photos_cloture.js"),
                   # Prise de rendez-vous depuis une commande : bouton rouge au bout de la barre
                   # d'onglets de la fiche, et calendrier des tâches depuis la liste.
                   # ⚠️ APRÈS calendrier_rdv_button.js, dont il appelle `rdvLibre_openOverlay`.

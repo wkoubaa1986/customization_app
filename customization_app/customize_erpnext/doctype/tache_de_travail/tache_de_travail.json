@@ -13,14 +13,14 @@
   "custom_type_dintervention",
   "titre",
   "custom_choix_du_staff",
-  "custom_employ\u00e9",
+  "custom_employé",
   "custom_client",
   "nom_client",
   "historique_client",
   "starts_on",
   "ends_on",
   "subject",
-  "toute_la_journ\u00e9e",
+  "toute_la_journée",
   "recontacte",
   "column_break_gpovc",
   "dans_local",
@@ -44,6 +44,7 @@
   "column_break_c831h",
   "upload_after",
   "liste_photos_apres",
+  "dispense_photos",
   "section_ar_translations",
   "ar_client",
   "ar_adresse",
@@ -63,7 +64,7 @@
    "in_list_view": 1,
    "in_standard_filter": 1,
    "label": "Type d'Intervention",
-   "options": "Entretien\nInstallation\nR\u00e9paration\nLivraison\nVisite\nAutre\nTourn\u00e9e commerciale",
+   "options": "Entretien\nInstallation\nRéparation\nLivraison\nVisite\nAutre\nTournée commerciale",
    "reqd": 1
   },
   {
@@ -81,11 +82,11 @@
    "reqd": 1
   },
   {
-   "fieldname": "custom_employ\u00e9",
+   "fieldname": "custom_employé",
    "fieldtype": "Data",
    "in_list_view": 1,
    "in_standard_filter": 1,
-   "label": "Employ\u00e9",
+   "label": "Employé",
    "read_only": 1
   },
   {
@@ -106,7 +107,7 @@
   {
    "fieldname": "historique_client",
    "fieldtype": "HTML",
-   "label": "Historique des t\u00e2ches du client",
+   "label": "Historique des tâches du client",
    "read_only": 1
   },
   {
@@ -129,27 +130,27 @@
   },
   {
    "default": "0",
-   "fieldname": "toute_la_journ\u00e9e",
+   "fieldname": "toute_la_journée",
    "fieldtype": "Check",
-   "label": " Toute la journ\u00e9e"
+   "label": " Toute la journée"
   },
   {
    "fieldname": "recontacte",
    "fieldtype": "Select",
    "hidden": 1,
    "label": "recontacte",
-   "options": "\ncontact\u00e9\nInvestigu\u00e9\nplanifi\u00e9\ncouvert\nvendu"
+   "options": "\ncontacté\nInvestigué\nplanifié\ncouvert\nvendu"
   },
   {
    "fieldname": "column_break_gpovc",
    "fieldtype": "Column Break"
   },
   {
-   "depends_on": "eval:(doc.custom_type_dintervention ==\"R\u00e9paration\")",
+   "depends_on": "eval:(doc.custom_type_dintervention ==\"Réparation\")",
    "fieldname": "dans_local",
    "fieldtype": "Select",
    "label": "Intervention dans les locaux de Aquaworld",
-   "mandatory_depends_on": "eval:(doc.custom_type_dintervention ==\"R\u00e9paration\")",
+   "mandatory_depends_on": "eval:(doc.custom_type_dintervention ==\"Réparation\")",
    "options": "\nNon\nOui"
   },
   {
@@ -162,7 +163,7 @@
   {
    "fieldname": "tel",
    "fieldtype": "Data",
-   "label": "T\u00e9l\u00e9phones",
+   "label": "Téléphones",
    "read_only": 1
   },
   {
@@ -223,27 +224,27 @@
    "label": "Afficher Commande"
   },
   {
-   "depends_on": "eval:(\r\n    (doc.status === \"Completed\" && (doc.custom_type_dintervention === \"Entretien\" || doc.custom_type_dintervention === \"R\u00e9paration\"))\r\n    || doc.afficher_commande === 1\r\n    || doc.custom_type_dintervention === \"Installation\"\r\n    || doc.custom_type_dintervention === \"Livraison\"\r\n)",
+   "depends_on": "eval:(\r\n    (doc.status === \"Completed\" && (doc.custom_type_dintervention === \"Entretien\" || doc.custom_type_dintervention === \"Réparation\"))\r\n    || doc.afficher_commande === 1\r\n    || doc.custom_type_dintervention === \"Installation\"\r\n    || doc.custom_type_dintervention === \"Livraison\"\r\n)",
    "fieldname": "commande_client",
    "fieldtype": "Link",
    "label": "Commande client",
-   "mandatory_depends_on": "eval:doc.status !== \"Cancelled\" && (\r\n    (doc.status === \"Completed\" && (doc.custom_type_dintervention === \"Entretien\" || doc.custom_type_dintervention === \"R\u00e9paration\"))\r\n    || doc.afficher_commande === 1\r\n    || doc.custom_type_dintervention === \"Installation\"\r\n    || doc.custom_type_dintervention === \"Livraison\"\r\n)",
+   "mandatory_depends_on": "eval:doc.status !== \"Cancelled\" && (\r\n    (doc.status === \"Completed\" && (doc.custom_type_dintervention === \"Entretien\" || doc.custom_type_dintervention === \"Réparation\"))\r\n    || doc.afficher_commande === 1\r\n    || doc.custom_type_dintervention === \"Installation\"\r\n    || doc.custom_type_dintervention === \"Livraison\"\r\n)",
    "options": "Sales Order"
   },
   {
-   "depends_on": "eval:(doc.status == \"Cancelled\" & (doc.custom_type_dintervention ==\"Entretien\" | doc.custom_type_dintervention ==\"R\u00e9paration\" |  doc.custom_type_dintervention == \"Installation\" |  doc.custom_type_dintervention == \"Visite\"))",
+   "depends_on": "eval:(doc.status == \"Cancelled\" & (doc.custom_type_dintervention ==\"Entretien\" | doc.custom_type_dintervention ==\"Réparation\" |  doc.custom_type_dintervention == \"Installation\" |  doc.custom_type_dintervention == \"Visite\"))",
    "fieldname": "raison_annulation",
    "fieldtype": "Select",
    "label": "Raison Annulation",
-   "mandatory_depends_on": "eval:(doc.status == \"Cancelled\" & (doc.custom_type_dintervention ==\"Entretien\" | doc.custom_type_dintervention ==\"R\u00e9paration\" |  doc.custom_type_dintervention == \"Installation\" |  doc.custom_type_dintervention == \"Visite\"))",
-   "options": "\nClient non joignable\nClient a oubli\u00e9 son rendez vous\nRetard Aqua World\nL'intervention est ch\u00e8re\nAutre"
+   "mandatory_depends_on": "eval:(doc.status == \"Cancelled\" & (doc.custom_type_dintervention ==\"Entretien\" | doc.custom_type_dintervention ==\"Réparation\" |  doc.custom_type_dintervention == \"Installation\" |  doc.custom_type_dintervention == \"Visite\"))",
+   "options": "\nClient non joignable\nClient a oublié son rendez vous\nRetard Aqua World\nL'intervention est chère\nAutre"
   },
   {
-   "depends_on": "eval:((doc.status == \"Completed\" & (doc.custom_type_dintervention ==\"Entretien\" | doc.custom_type_dintervention ==\"R\u00e9paration\" |  doc.custom_type_dintervention == \"Installation\" |  doc.custom_type_dintervention == \"Visite\")) | (doc.status == \"Cancelled\" & doc.raison_annulation == \"Autre\" ))",
+   "depends_on": "eval:((doc.status == \"Completed\" & (doc.custom_type_dintervention ==\"Entretien\" | doc.custom_type_dintervention ==\"Réparation\" |  doc.custom_type_dintervention == \"Installation\" |  doc.custom_type_dintervention == \"Visite\")) | (doc.status == \"Cancelled\" & doc.raison_annulation == \"Autre\" ))",
    "fieldname": "rapport_visite",
    "fieldtype": "Small Text",
    "label": "Rapport Intervention",
-   "mandatory_depends_on": "eval:((doc.status == \"Completed\" & (doc.custom_type_dintervention ==\"Entretien\" | doc.custom_type_dintervention ==\"R\u00e9paration\" |  doc.custom_type_dintervention == \"Installation\" |  doc.custom_type_dintervention == \"Visite\")) | (doc.status == \"Cancelled\" & doc.raison_annulation == \"Autre\" ))"
+   "mandatory_depends_on": "eval:((doc.status == \"Completed\" & (doc.custom_type_dintervention ==\"Entretien\" | doc.custom_type_dintervention ==\"Réparation\" |  doc.custom_type_dintervention == \"Installation\" |  doc.custom_type_dintervention == \"Visite\")) | (doc.status == \"Cancelled\" & doc.raison_annulation == \"Autre\" ))"
   },
   {
    "default": "0",
@@ -256,34 +257,50 @@
   {
    "fieldname": "section_photos_tab",
    "fieldtype": "Tab Break",
-   "label": "Prendre des Photos"
+   "label": "Prendre des Photos",
+   "hidden": 1
   },
   {
    "fieldname": "upload_photos",
    "fieldtype": "Button",
-   "label": "Ajouter photos (avant intervention)"
+   "label": "Ajouter photos (avant intervention)",
+   "hidden": 1
   },
   {
    "fieldname": "liste_photos_avant",
    "fieldtype": "Small Text",
    "label": "Photos avant intervention",
-   "mandatory_depends_on": "eval:doc.status==\"Completed\" && [\"Entretien\",\"R\u00e9paration\",\"Reparation\"].includes(doc.custom_type_dintervention)\r\n",
-   "read_only": 1
+   "mandatory_depends_on": "eval:doc.status==\"Completed\" && [\"Entretien\",\"Réparation\",\"Reparation\"].includes(doc.custom_type_dintervention)\r\n",
+   "read_only": 1,
+   "hidden": 1
   },
   {
    "fieldname": "column_break_c831h",
-   "fieldtype": "Column Break"
+   "fieldtype": "Column Break",
+   "hidden": 1
   },
   {
    "fieldname": "upload_after",
    "fieldtype": "Button",
-   "label": "Ajouter photos (apr\u00e8s intervention)"
+   "label": "Ajouter photos (après intervention)",
+   "hidden": 1
   },
   {
    "fieldname": "liste_photos_apres",
    "fieldtype": "Small Text",
-   "label": "Photos apr\u00e8s intervention",
+   "label": "Photos après intervention",
    "mandatory_depends_on": "eval:doc.status==\"Completed\" && doc.custom_type_dintervention!=\"Autre\"",
+   "read_only": 1,
+   "hidden": 1
+  },
+  {
+   "default": "0",
+   "description": "Clôture sans photos autorisée par code superviseur — posé par cloture_tache.deverrouiller, avec trace au fil du document.",
+   "fieldname": "dispense_photos",
+   "fieldtype": "Check",
+   "hidden": 1,
+   "label": "Dispense de photos (code superviseur)",
+   "no_copy": 1,
    "read_only": 1
   },
   {
@@ -331,7 +348,7 @@
    "link_fieldname": "tache_de_travail"
   }
  ],
- "modified": "2026-07-14 10:00:00.000000",
+ "modified": "2026-08-27 13:50:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Tache de travail",

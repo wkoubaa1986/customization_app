@@ -1,7 +1,7 @@
 """
 Anomalies des commandes client : détection, stockage et restitution.
 
-Cinq situations se noient dans une liste de près de 10 000 commandes :
+Six situations se noient dans une liste de près de 10 000 commandes :
 
   Tâche ouverte en retard               une intervention dont la date est
                                         passée sans avoir été clôturée
@@ -13,6 +13,9 @@ Cinq situations se noient dans une liste de près de 10 000 commandes :
                                         intervention planifiée
   Tâche terminée, commande non soldée   une tâche terminée, alors que la
                                         commande n'est ni validée ni soldée
+  Livraison Aramex sans bordereau       le colis est parti (BL validé) sur une
+                                        commande Aramex non encore encaissée,
+                                        et aucun bordereau n'est enregistré
 
 L'ordre du CASE fixe la priorité. Les recoupements sont marginaux par
 construction : « en retard » exige une tâche ouverte, les deux motifs « sans
@@ -71,6 +74,18 @@ MOTIF_TACHE_ANNULEE = "Tâche annulée, dette non payée"
 MOTIF_MAIN_OEUVRE = "Main d'œuvre sans tâche"
 MOTIF_LIVRAISON = "Livraison sans tâche"
 MOTIF_NON_SOLDEE = "Tâche terminée, commande non soldée"
+# Colis PARTI (bon de livraison validé, OU tâche Livraison terminée) sur une
+# commande Livraison Aramex, mais AUCUN bordereau nulle part — ni saisi sur la
+# commande (custom_bordereau_aramex), ni lisible dans un paiement du compte
+# Aramex : le colis voyage sans suivi possible. (Demande 27/08/2026.)
+# ⚠️ UN FAIT INDÉPENDANT, PAS UN MOTIF DU CASE : il COEXISTE avec l'anomalie
+# classique (« laisser le choix à deux anomalies », décision 27/08) — même
+# modèle que « Retour colis ». Il vit dans son propre champ Check.
+MOTIF_ARAMEX_SANS_BORDEREAU = "Livraison Aramex sans bordereau"
+CHAMP_ARAMEX_SB = "custom_aramex_sans_bordereau"
+
+# L'échéancier qui marque une commande Aramex (même clé que generer_bl.py).
+PAYMENT_TERMS_ARAMEX = "Livraison Aramex"
 
 # Motif posé JADIS par le flux « annuler la commande avec sa tâche » (annulation_tache.py,
 # retiré le 25/08/2026 — l'annulation passe désormais par la cascade d'annulation_commande.py).
@@ -140,6 +155,11 @@ _SQL_MOTIF = """
             -- l'historique antérieur se VIDE au recalcul (le plancher doit vivre dans le
             -- CASE, pas dans le WHERE, sinon les anciens motifs stockés resteraient).
             WHEN so.transaction_date < %(date_debut)s THEN ''
+
+            -- Une commande FERMÉE (Closed) est sortie du circuit à la main :
+            -- son traitement est fini, plus aucune anomalie ne s'y applique —
+            -- le motif stocké se vide au recalcul. (Demande 27/08/2026.)
+            WHEN so.status = 'Closed' THEN ''
 
             -- Une intervention dont la date est passée et qui n'a pas été
             -- clôturée. Exclusif des motifs « sans tâche », qui exigent
@@ -228,6 +248,79 @@ _SQL_MOTIF = _SQL_MOTIF.format(paiement_dette=_PAIEMENT_DETTE,
                                paiement_quelconque=_PAIEMENT_QUELCONQUE,
                                clause="{clause}")
 
+# Le fait « Livraison Aramex sans bordereau », calculé À CÔTÉ du motif (il
+# coexiste, ne remplace pas). Conditions :
+#   - échéancier « Livraison Aramex », commande non annulée, plancher du 01/07 ;
+#   - le colis est PARTI : bon de livraison validé OU tâche de type Livraison
+#     terminée (le flux WEB clôture la tâche sans toujours passer par un BL) ;
+#   - pas déjà encaissé : un paiement lié attend encore sur Livraison Aramex /
+#     Dettes, ou aucun paiement n'existe (garde-fou utilisateur du 27/08) ;
+#   - AUCUN bordereau : ni sur la commande, ni dans un paiement du compte
+#     Aramex — via la commande OU ses factures (leçon du 27/08 : le paiement
+#     pointe souvent la facture).
+_SQL_ARAMEX_SB = """
+    SELECT so.name,
+        CASE WHEN so.docstatus < 2
+              -- Une commande fermée est sortie du circuit — comme pour le motif.
+              AND so.status != 'Closed'
+              AND so.transaction_date >= %(date_debut)s
+              AND so.payment_terms_template = %(terms_aramex)s
+              AND (EXISTS (
+                      SELECT 1 FROM `tabDelivery Note` dn
+                      WHERE dn.docstatus = 1 AND EXISTS (
+                          SELECT 1 FROM `tabDelivery Note Item` dni
+                          WHERE dni.parent = dn.name AND dni.against_sales_order = so.name))
+                   OR EXISTS (
+                      SELECT 1 FROM `tabTache de travail` t
+                      WHERE t.commande_client = so.name
+                        AND t.custom_type_dintervention = 'Livraison'
+                        AND t.status = 'Completed'))
+              AND ({paiement_attente} OR NOT {paiement_quelconque})
+              AND COALESCE(so.custom_bordereau_aramex, '') = ''
+              AND NOT EXISTS (
+                  SELECT 1 FROM `tabPayment Entry Reference` pera
+                  JOIN `tabPayment Entry` pea ON pea.name = pera.parent
+                  WHERE pea.docstatus = 1 AND pea.paid_to = %(compte_aramex)s
+                    -- {{{{8,}}}} : accolades QUADRUPLÉES — la chaîne passe par DEUX
+                    -- .format() (à la définition, puis clause= dans _calculer_aramex_sb).
+                    AND pea.reference_no REGEXP '[0-9]{{{{8,}}}}'
+                    AND ((pera.reference_doctype = 'Sales Order'
+                          AND pera.reference_name = so.name)
+                         OR (pera.reference_doctype = 'Sales Invoice'
+                             AND pera.reference_name IN (
+                                 SELECT siia.parent FROM `tabSales Invoice Item` siia
+                                 WHERE siia.sales_order = so.name))))
+        THEN 1 ELSE 0 END AS flag
+    FROM `tabSales Order` so
+    WHERE {clause}
+""".format(paiement_attente=_PAIEMENT_ATTENTE,
+           paiement_quelconque=_PAIEMENT_QUELCONQUE,
+           clause="{clause}")
+
+
+def _calculer_aramex_sb(clause, extra=None):
+    lignes = frappe.db.sql(
+        _SQL_ARAMEX_SB.format(clause=clause), _params(extra), as_dict=True)
+    return {r.name: int(r.flag or 0) for r in lignes}
+
+
+def _stocker_aramex_sb(flags):
+    """Écrit les faits qui ont changé — même mécanique groupée que _stocker."""
+    if not flags or not frappe.db.has_column("Sales Order", CHAMP_ARAMEX_SB):
+        return 0
+    actuels = dict(frappe.db.sql(
+        f"SELECT name, COALESCE(`{CHAMP_ARAMEX_SB}`, 0) FROM `tabSales Order` "
+        "WHERE name IN %(noms)s", {"noms": tuple(flags)}))
+    par_valeur = {}
+    for nom, flag in flags.items():
+        if int(actuels.get(nom, 0)) != flag:
+            par_valeur.setdefault(flag, []).append(nom)
+    for flag, noms in par_valeur.items():
+        frappe.db.sql(
+            f"UPDATE `tabSales Order` SET `{CHAMP_ARAMEX_SB}` = %(flag)s "
+            "WHERE name IN %(noms)s", {"flag": flag, "noms": tuple(noms)})
+    return sum(len(v) for v in par_valeur.values())
+
 
 def _params(extra=None):
     p = {
@@ -243,6 +336,9 @@ def _params(extra=None):
         "motif_main_oeuvre": MOTIF_MAIN_OEUVRE,
         "motif_livraison": MOTIF_LIVRAISON,
         "motif_non_soldee": MOTIF_NON_SOLDEE,
+        "motif_aramex_sans_bordereau": MOTIF_ARAMEX_SANS_BORDEREAU,
+        "terms_aramex": PAYMENT_TERMS_ARAMEX,
+        "compte_aramex": COMPTE_ARAMEX,
         "marge": MARGE,
     }
     p.update(extra or {})
@@ -292,7 +388,9 @@ def recalculer(noms):
         return 0
     if not frappe.db.has_column("Sales Order", CHAMP):
         return 0
-    return _stocker(_calculer("so.name IN %(noms)s", {"noms": tuple(noms)}))
+    extra = {"noms": tuple(noms)}
+    _stocker_aramex_sb(_calculer_aramex_sb("so.name IN %(noms)s", extra))
+    return _stocker(_calculer("so.name IN %(noms)s", extra))
 
 
 def fermer_taches_soldees(noms=None):
@@ -357,6 +455,7 @@ def resynchroniser():
     """
     frappe.only_for(("System Manager", "Accounts Manager", "Sales Manager"))
     fermees = fermer_taches_soldees()
+    _stocker_aramex_sb(_calculer_aramex_sb("so.docstatus < 2"))
     modifiees = _stocker(_calculer("so.docstatus < 2"))
     frappe.db.commit()
     return {"fermees": fermees, "modifiees": modifiees}
@@ -374,6 +473,7 @@ def recalculer_tout():
         return 0
     # D'abord les clôtures automatiques : elles changent le motif des commandes.
     fermer_taches_soldees()
+    _stocker_aramex_sb(_calculer_aramex_sb("so.docstatus < 2"))
     modifiees = _stocker(_calculer("so.docstatus < 2"))
     frappe.db.commit()
     return modifiees
@@ -413,7 +513,13 @@ def get_alertes(noms):
     retour_colis = frappe.db.has_column("Sales Order", "custom_retour_colis")
     if retour_colis:
         colonnes += ["`custom_retour_colis` AS retour"]
+    # « Livraison Aramex sans bordereau » : un FAIT lui aussi, calculé à côté du
+    # motif — les deux pastilles coexistent (décision 27/08).
+    aramex_sb = frappe.db.has_column("Sales Order", CHAMP_ARAMEX_SB)
+    if aramex_sb:
+        colonnes += [f"`{CHAMP_ARAMEX_SB}` AS aramex_sb"]
 
+    colonnes += ["`status` AS statut_so"]
     lignes = frappe.db.sql(
         f"""
         SELECT name, {', '.join(colonnes)} FROM `tabSales Order`
@@ -426,6 +532,13 @@ def get_alertes(noms):
     resultat = {}
     for r in lignes:
         entree = {}
+        # Une commande FERMÉE est sortie du circuit : ni motif ni fait Aramex —
+        # défense d'affichage immédiate, sans attendre que le recalcul (nocturne
+        # ou bouton) vide les champs stockés.
+        fermee = r.get("statut_so") == "Closed"
+        if fermee:
+            r.motif = ""
+            r["aramex_sb"] = 0
         if r.motif:
             entree["couleur"] = couleur_du_motif(r.motif)
             entree["libelle"] = r.motif
@@ -435,6 +548,8 @@ def get_alertes(noms):
                 entree["appels"] = n
         if retour_colis and r.get("retour"):
             entree["retour"] = 1
+        if aramex_sb and r.get("aramex_sb"):
+            entree["aramex_sb"] = 1
         if entree:
             resultat[r.name] = entree
     return resultat

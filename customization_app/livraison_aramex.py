@@ -805,6 +805,16 @@ def run_cron():
         # L'ordre compte : on ne previent qu'apres avoir su, sinon on annoncerait le statut de la
         # veille.
         res["sms"] = prevenir_les_clients()
+        # Statut materialise sur les commandes (filtre de la vue liste) : la meme
+        # passe que le bouton « Actualiser Aramex », colis livres/revenus sautes.
+        # Couvre AUSSI les bordereaux saisis sur la commande sans paiement — que
+        # rafraichir_tout, parti des paiements, ne voit pas.
+        try:
+            from customization_app.traitement_commandes import actualiser_statuts_aramex
+            res["statuts_commandes"] = actualiser_statuts_aramex()
+        except Exception:
+            frappe.log_error(title="Suivi Aramex : statuts commandes",
+                             message=frappe.get_traceback())
         if res["erreurs"] or res["restants"]:
             frappe.log_error(
                 title="Suivi Aramex : %s erreur(s), %s restant(s)" % (res["erreurs"],

@@ -1029,6 +1029,11 @@ def before_save_tache_de_travail(doc, method=None):
     from customization_app.tournee import check_cloture_tournee
     check_cloture_tournee(doc)
 
+    # Photos obligatoires à la clôture (Entretien/Installation/Réparation/Livraison),
+    # dispense par code superviseur — règle serveur, voir cloture_tache.py.
+    from customization_app.cloture_tache import verifier_photos_cloture
+    verifier_photos_cloture(doc)
+
     _fixer_duree_a_la_creation(doc)
 
     # Couleur : seule autorité. Priorité statut > partenaire > staff > défaut.
@@ -1037,8 +1042,13 @@ def before_save_tache_de_travail(doc, method=None):
     # Lien Google Map : toujours synchronisé depuis l'adresse affectée,
     # indépendamment de l'utilisateur et du chemin de création (bouton RDV,
     # liste d'appel, rattrapage, formulaire...). N'écrase pas si l'adresse n'a pas de lien.
+    # ⚠️ SEULEMENT SI LE CHAMP EST VIDE. Le bouton « 📍 Ma position » de la fiche
+    # écrit la position GPS réelle du technicien dans google_map ; écraser
+    # systématiquement depuis l'adresse effaçait cette valeur à chaque save.
+    # Changer d'adresse vide d'abord le champ (clear_address_fields côté client),
+    # la synchro le re-remplit donc bien dans ce cas.
     gmap = _address_google_map(doc.get("select_address"))
-    if gmap:
+    if gmap and not doc.get("google_map"):
         doc.google_map = gmap
 
     # Téléphone : toujours synchronisé depuis le client (custom_liste_telephone),
