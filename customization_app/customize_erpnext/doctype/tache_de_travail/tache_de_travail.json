@@ -270,7 +270,6 @@
    "fieldname": "liste_photos_avant",
    "fieldtype": "Small Text",
    "label": "Photos avant intervention",
-   "mandatory_depends_on": "eval:doc.status==\"Completed\" && [\"Entretien\",\"Réparation\",\"Reparation\"].includes(doc.custom_type_dintervention)\r\n",
    "read_only": 1,
    "hidden": 1
   },
@@ -289,7 +288,6 @@
    "fieldname": "liste_photos_apres",
    "fieldtype": "Small Text",
    "label": "Photos après intervention",
-   "mandatory_depends_on": "eval:doc.status==\"Completed\" && doc.custom_type_dintervention!=\"Autre\"",
    "read_only": 1,
    "hidden": 1
   },
@@ -348,7 +346,7 @@
    "link_fieldname": "tache_de_travail"
   }
  ],
- "modified": "2026-08-27 13:50:00.000000",
+ "modified": "2026-08-27 16:20:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Tache de travail",
