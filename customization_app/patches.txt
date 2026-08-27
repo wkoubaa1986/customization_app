@@ -32,3 +32,4 @@ customization_app.patches.ensure_commande_traitee_field
 customization_app.patches.ensure_bordereau_aramex_field
 customization_app.patches.ensure_statut_aramex_field
 customization_app.patches.update_anomalie_aramex_sans_bordereau
+customization_app.patches.workflow_bl_approve_tous

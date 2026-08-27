@@ -24,6 +24,10 @@ const TCT_LABEL_PHOTOS = "📷 Photos de clôture";
 // la commande ni le rapport, qui sont des données, pas des preuves.
 function tache_exigences_completes(ex) {
     if (ex.commande_requise && !ex.commande) return false;
+    // Commande en brouillon/annulée ou BL en brouillon : la clôture est
+    // refusée côté serveur QUEL QUE SOIT le code superviseur.
+    if (ex.commande_brouillon || ex.commande_annulee) return false;
+    if (((ex.commande_infos || {}).bls || []).some((b) => b.brouillon)) return false;
     if (ex.rapport_requis && !ex.rapport) return false;
     if (ex.dispense) return true;
     if (ex.gmap_requis && !ex.gmap) return false;
@@ -149,6 +153,8 @@ function tache_dialogue_cloture(frm, exigences) {
             default: ex.rapport_texte || "",
         });
     }
+    // Sous le rapport : paiements reçus de la commande + bons de livraison.
+    champs.push({ fieldtype: "HTML", fieldname: "zone_infos" });
     champs.push(
         { fieldtype: "Section Break", label: __("Clôture sans photos") },
         {
@@ -168,6 +174,17 @@ function tache_dialogue_cloture(frm, exigences) {
                 || !!(v.rapport || "").trim();
             if (!commande_ok || !rapport_ok) {
                 frappe.msgprint(__("La commande liée et le rapport d'intervention sont obligatoires pour ce type de tâche — le code superviseur ne les remplace pas."));
+                return;
+            }
+            if (ex.commande_brouillon || ex.commande_annulee) {
+                frappe.msgprint(__("La commande liée {0} est {1} — validez-la (bouton « Ouvrir ») avant de clôturer. Le code superviseur ne couvre pas l'état des pièces.",
+                    [ex.commande, ex.commande_annulee ? __("annulée") : __("en brouillon")]));
+                return;
+            }
+            const bls_brouillon = ((ex.commande_infos || {}).bls || []).filter((b) => b.brouillon);
+            if (bls_brouillon.length) {
+                frappe.msgprint(__("Bon(s) de livraison en brouillon : {0} — validez-le(s) (« Ouvrir pour valider ») avant de clôturer.",
+                    [bls_brouillon.map((b) => b.bl).join(", ")]));
                 return;
             }
             const complet = tache_exigences_completes({
@@ -245,11 +262,128 @@ function tache_dialogue_cloture(frm, exigences) {
                     data-gps="1">${__("📍 Ma position")}</button>
             </div>`
             : "";
+        // Commande DÉJÀ liée : affichée avec un bouton « Ouvrir » — la fiche
+        // s'ouvre en popup (fenêtre partagée) pour ajuster les articles,
+        // saisir un paiement, valider… sans quitter la clôture.
+        const etat_commande = ex.commande_annulee
+            ? ` · <span style="color:#dc2626;font-weight:600">${__("Annulée !")}</span>`
+            : ex.commande_brouillon
+                ? ` · <span style="color:#b45309;font-weight:600">${__("Brouillon — à valider")}</span>`
+                : ` · <span style="color:#16a34a">${__("Validée")}</span>`;
+        const ligne_commande = ex.commande
+            ? `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;
+                    border-bottom:1px solid var(--border-color,#eee)">
+                <span style="font-size:16px">${ex.commande_brouillon || ex.commande_annulee ? "📋" : "✅"}</span>
+                <span style="flex:1">${__("Commande liée")} :
+                    <b>${esc(ex.commande)}</b>${etat_commande}</span>
+                <button class="btn btn-xs ${ex.commande_brouillon ? "btn-primary" : "btn-default"}"
+                    data-ouvrir-commande="1">
+                    ${ex.commande_brouillon ? __("Ouvrir pour valider") : __("Ouvrir")}</button>
+            </div>`
+            : "";
         const etat = `<div style="margin-top:8px;font-size:12px;color:var(--text-muted)">
             ${__("Photos avant : {0} / {1} — après : {2} / {3}", [
                 ex.photos.avant, ex.minima.avant, ex.photos.apres, ex.minima.apres,
             ])}${ex.dispense ? " · 🔓 " + __("dispense active") : ""}</div>`;
-        d.fields_dict.zone.$wrapper.html(lignes + ligne_gmap + etat);
+        d.fields_dict.zone.$wrapper.html(lignes + ligne_gmap + ligne_commande + etat);
+
+        d.fields_dict.zone.$wrapper.find("[data-ouvrir-commande]").on("click", function () {
+            frappe
+                .require("/assets/customization_app/js/ouvrir_document.js")
+                .then(() =>
+                    customization_app.ouvrir_document("Sales Order", ex.commande, {
+                        a_la_fermeture: rafraichir,
+                    })
+                );
+        });
+
+        rendre_infos();
+    }
+
+    // Relire les exigences et repeindre tout le dialogue — après chaque popup
+    // (commande, BL) : paiements, BL validé, bordereau… tout peut avoir bougé.
+    function rafraichir() {
+        return frappe
+            .call({
+                method: "customization_app.cloture_tache.exigences",
+                args: { tache: frm.docname },
+            })
+            .then((r) => {
+                ex = r.message || ex;
+                rendre();
+                tache_maj_bouton_photos(frm);
+            });
+    }
+
+    // 💰 Paiements reçus + 🚛 bons de livraison de la commande liée, sous le
+    // rapport. Un BL en BROUILLON s'ouvre en popup pour être validé avant la
+    // clôture — c'est la pièce qui dit ce qui est réellement parti.
+    function rendre_infos() {
+        const zi = d.fields_dict.zone_infos;
+        if (!zi) return;
+        const ci = ex.commande_infos;
+        if (!ci) {
+            zi.$wrapper.html("");
+            return;
+        }
+        const dt = (v) => format_currency(v, "TND");
+        let html = "";
+        if ((ci.paiements || []).length) {
+            const solde = ci.total_paye >= ci.total - 0.005;
+            // ⚠️ Un paiement encore sur DETTES est de l'argent que le client
+            // doit toujours : il se signale en avertissement. L'attente sur
+            // Livraison Aramex, elle, est NORMALE — c'est le transporteur qui
+            // versera, pas le client.
+            const est_dette = (p) => (p.compte || "").includes("Dettes");
+            const est_aramex = (p) => (p.compte || "").includes("Livraison Aramex");
+            const total_dettes = ci.paiements
+                .filter(est_dette)
+                .reduce((s, p) => s + (p.montant || 0), 0);
+            html += `<div style="font-weight:600;margin-top:6px">💰 ${__("Paiements reçus")} —
+                ${dt(ci.total_paye)} / ${dt(ci.total)} ${solde ? "✅" : `<span style="color:#b45309">(${__("reste")} ${dt(ci.total - ci.total_paye)})</span>`}</div>`;
+            if (total_dettes > 0.005) {
+                html += `<div style="margin:2px 0;padding:4px 8px;border-radius:6px;
+                        background:#fef3c7;color:#92400e;font-weight:600">
+                    ⚠️ ${__("{0} encore en dette — à encaisser auprès du client", [dt(total_dettes)])}</div>`;
+            }
+            html += ci.paiements
+                .map((p) => {
+                    const dette = est_dette(p);
+                    return `<div style="font-size:12px;padding:2px 0 2px 18px;${
+                        dette ? "color:#92400e;font-weight:600" : "color:var(--text-muted)"}">
+                    ${esc(p.paiement)} · ${frappe.datetime.str_to_user(p.date)} · ${esc(p.mode || "")}
+                    · <b>${dt(p.montant)}</b>${
+                        est_aramex(p) ? " · 🚚 " + __("en attente Aramex")
+                        : dette ? " · ⚠️ " + __("DETTE non encaissée") : ""}</div>`;
+                })
+                .join("");
+        } else {
+            html += `<div style="margin-top:6px;color:#b45309">💰 ${__("Aucun paiement reçu")} —
+                ${__("total commande")} ${dt(ci.total)}</div>`;
+        }
+        (ci.bls || []).forEach((b) => {
+            html += `<div style="display:flex;align-items:center;gap:8px;padding:4px 0;
+                    border-top:1px solid var(--border-color,#eee);margin-top:4px">
+                <span style="font-size:16px">🚛</span>
+                <span style="flex:1">${esc(b.bl)} · ${dt(b.total)} ·
+                    ${b.brouillon
+                        ? `<span style="color:#b45309;font-weight:600">${__("Brouillon — à valider")}</span>`
+                        : `<span style="color:#16a34a">${__("Validé")}</span>`}</span>
+                <button class="btn btn-xs ${b.brouillon ? "btn-primary" : "btn-default"}"
+                    data-ouvrir-bl="${esc(b.bl)}">${b.brouillon ? __("Ouvrir pour valider") : __("Ouvrir")}</button>
+            </div>`;
+        });
+        zi.$wrapper.html(html);
+        zi.$wrapper.find("[data-ouvrir-bl]").on("click", function () {
+            const bl = $(this).attr("data-ouvrir-bl");
+            frappe
+                .require("/assets/customization_app/js/ouvrir_document.js")
+                .then(() =>
+                    customization_app.ouvrir_document("Delivery Note", bl, {
+                        a_la_fermeture: rafraichir,
+                    })
+                );
+        });
 
         d.fields_dict.zone.$wrapper.find("[data-gps]").on("click", function () {
             const $b = $(this);

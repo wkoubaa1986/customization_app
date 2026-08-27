@@ -154,6 +154,37 @@ def verifier_photos_cloture(doc, method=None):
     avant_save = doc.get_doc_before_save()
     if avant_save and avant_save.get("status") == "Completed":
         return
+
+    # États de la commande liée (demande 27/08) : une tâche ne se clôture pas
+    # sur une commande en BROUILLON ni avec un BL en brouillon — la vente doit
+    # être actée et la sortie de stock constatée. AVANT la dispense et hors
+    # du réglage « actif » : le code superviseur couvre les preuves (photos,
+    # position), jamais l'état des pièces.
+    commande = doc.get("commande_client")
+    if commande:
+        etat = frappe.db.get_value("Sales Order", commande, "docstatus")
+        if etat == 0:
+            frappe.throw(
+                _("La commande liée {0} est en BROUILLON : validez-la avant de "
+                  "clôturer la tâche (bouton « Ouvrir » du dialogue de clôture).")
+                .format(commande), title=_("Commande non validée"))
+        if etat == 2:
+            frappe.throw(
+                _("La commande liée {0} est ANNULÉE : rattachez la bonne commande "
+                  "ou annulez la tâche.").format(commande),
+                title=_("Commande annulée"))
+        bls_brouillon = [b[0] for b in frappe.db.sql(
+            """SELECT DISTINCT dn.name FROM `tabDelivery Note` dn
+               JOIN `tabDelivery Note Item` dni ON dni.parent = dn.name
+               WHERE dni.against_sales_order = %(c)s AND dn.docstatus = 0""",
+            {"c": commande})]
+        if bls_brouillon:
+            frappe.throw(
+                _("Bon(s) de livraison en BROUILLON : {0} — validez-le(s) avant "
+                  "de clôturer (bouton « Ouvrir pour valider » du dialogue).")
+                .format(", ".join(bls_brouillon)),
+                title=_("BL non validé"))
+
     if cint(doc.get("dispense_photos")):
         return
     if not regle_active():
@@ -209,6 +240,48 @@ def exigences(tache):
         or cint(doc.get("afficher_commande")))
     rapport_requis = type_i in ("Entretien", "Réparation", "Installation", "Visite")
 
+    # Résumé financier et logistique de la commande liée, pour le dialogue :
+    # les paiements reçus (alloués à la commande OU à ses factures — le flux
+    # réel encaisse souvent sur la facture) et les bons de livraison, avec leur
+    # état — un BL en brouillon se valide depuis le popup avant de clôturer.
+    commande_infos = None
+    if doc.get("commande_client"):
+        commande = doc.get("commande_client")
+        paiements = frappe.db.sql(
+            """SELECT pe.name, pe.posting_date, pe.mode_of_payment,
+                      per.allocated_amount, pe.paid_to
+               FROM `tabPayment Entry` pe
+               JOIN `tabPayment Entry Reference` per ON per.parent = pe.name
+               WHERE pe.docstatus = 1
+                 AND ((per.reference_doctype = 'Sales Order'
+                       AND per.reference_name = %(c)s)
+                      OR (per.reference_doctype = 'Sales Invoice'
+                          AND per.reference_name IN (
+                              SELECT sii.parent FROM `tabSales Invoice Item` sii
+                              WHERE sii.sales_order = %(c)s)))
+               ORDER BY pe.posting_date""", {"c": commande}, as_dict=True)
+        bls = frappe.db.sql(
+            """SELECT DISTINCT dn.name, dn.docstatus, dn.grand_total
+               FROM `tabDelivery Note` dn
+               JOIN `tabDelivery Note Item` dni ON dni.parent = dn.name
+               WHERE dni.against_sales_order = %(c)s AND dn.docstatus < 2
+               ORDER BY dn.creation""", {"c": commande}, as_dict=True)
+        commande_infos = {
+            "total": frappe.utils.flt(
+                frappe.db.get_value("Sales Order", commande, "grand_total"), 3),
+            "paiements": [{
+                "paiement": p.name,
+                "date": str(p.posting_date),
+                "mode": p.mode_of_payment,
+                "montant": frappe.utils.flt(p.allocated_amount, 3),
+                "compte": p.paid_to,
+            } for p in paiements],
+            "total_paye": round(sum(frappe.utils.flt(p.allocated_amount)
+                                    for p in paiements), 3),
+            "bls": [{"bl": b.name, "brouillon": b.docstatus == 0,
+                     "total": frappe.utils.flt(b.grand_total, 3)} for b in bls],
+        }
+
     # Pré-remplissage d'une NOUVELLE commande depuis le dialogue : client de la
     # tâche + magasin de l'EMPLOYÉ affecté, et les mêmes règles que le flux
     # historique du formulaire (hors Installation/Livraison : vente directe
@@ -229,9 +302,14 @@ def exigences(tache):
 
     return {
         "nouvelle_commande": nouvelle_commande,
+        "commande_infos": commande_infos,
         "client": doc.get("custom_client"),
         "commande_requise": commande_requise,
         "commande": doc.get("commande_client"),
+        "commande_brouillon": bool(doc.get("commande_client")) and frappe.db.get_value(
+            "Sales Order", doc.get("commande_client"), "docstatus") == 0,
+        "commande_annulee": bool(doc.get("commande_client")) and frappe.db.get_value(
+            "Sales Order", doc.get("commande_client"), "docstatus") == 2,
         "rapport_requis": rapport_requis,
         "rapport": bool((doc.get("rapport_visite") or "").strip()),
         "rapport_texte": doc.get("rapport_visite") or "",
