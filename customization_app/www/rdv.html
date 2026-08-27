@@ -1,0 +1,829 @@
+{% extends "templates/base.html" %}
+
+{% block title %}Rendez-vous — Aqua World & Servicing{% endblock %}
+
+{% block content %}
+<style>
+  body { background: #f1f5f9; }
+  .rdv-page { max-width: 440px; margin: 24px auto 60px; padding: 0 14px;
+              font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .rdv-carte { background: #fff; border-radius: 14px; padding: 22px 18px;
+               box-shadow: 0 4px 18px rgba(15, 23, 42, .08); }
+  .rdv-logo { text-align: center; margin-bottom: 6px; }
+  .rdv-coordonnees { display: flex; flex-wrap: wrap; justify-content: center;
+      gap: 4px 14px; font-size: 12.5px; color: #475569; margin-bottom: 6px;
+      text-align: center; }
+  .rdv-coordonnees a { color: #0e7490; text-decoration: none; font-weight: 600; }
+  .rdv-sous { text-align: center; color: #64748b; font-size: 13px; margin-bottom: 18px; }
+  .rdv-page h2 { font-size: 16px; font-weight: 700; margin: 0 0 12px; color: #0f172a; }
+  .rdv-page label { display: block; font-size: 13px; font-weight: 600;
+                    color: #334155; margin: 12px 0 4px; }
+  .rdv-page input, .rdv-page select, .rdv-page textarea {
+      width: 100%; box-sizing: border-box; padding: 11px 12px; font-size: 16px;
+      border: 1px solid #cbd5e1; border-radius: 9px; background: #f8fafc; }
+  .rdv-page input:focus { outline: 2px solid #0e7490; background: #fff; }
+  .rdv-btn { display: block; width: 100%; max-width: 320px; margin: 16px auto 0;
+             padding: 12px; font-size: 16px;
+             font-weight: 700; color: #fff; background: #0e7490; border: 0;
+             border-radius: 9px; cursor: pointer; }
+  .rdv-btn:disabled { opacity: .55; cursor: wait; }
+  .rdv-btn.secondaire { background: #fff; color: #0e7490; border: 1px solid #0e7490;
+                        margin-top: 8px; }
+  .rdv-btn.danger { background: #fff; color: #b91c1c; border: 1px solid #fca5a5;
+                    margin-top: 8px; font-weight: 600; }
+  .rdv-choix { display: flex; gap: 8px; flex-wrap: wrap; }
+  .rdv-choix button { flex: 1 1 45%; padding: 12px 6px; font-size: 15px; font-weight: 600;
+      border: 1.5px solid #cbd5e1; border-radius: 10px; background: #fff; cursor: pointer; }
+  .rdv-choix button.actif { border-color: #0e7490; background: #ecfeff; color: #0e7490; }
+  .rdv-erreur { margin-top: 12px; padding: 10px 12px; border-radius: 9px;
+                background: #fee2e2; color: #991b1b; font-size: 13.5px; display: none; }
+  .rdv-info { margin-top: 12px; padding: 10px 12px; border-radius: 9px;
+              background: #e0f2fe; color: #075985; font-size: 13.5px; display: none; }
+  .rdv-succes { text-align: center; padding: 8px 0; }
+  .rdv-succes .coche { font-size: 52px; }
+  .rdv-succes .quoi { font-size: 17px; font-weight: 700; margin-top: 8px; }
+  .rdv-succes .quand { color: #334155; margin-top: 4px; }
+  .rdv-etape { display: none; }
+  .rdv-etape.courante { display: block; }
+  .rdv-otp { letter-spacing: 8px; text-align: center; font-size: 22px !important; }
+  .rdv-onglets { display: flex; gap: 6px; margin: 4px 0 14px; }
+  .rdv-onglets button { flex: 1; padding: 9px 4px; font-size: 13px; font-weight: 600;
+      border: 1.5px solid #cbd5e1; border-radius: 9px; background: #fff; cursor: pointer;
+      color: #475569; }
+  .rdv-onglets button.actif { border-color: #0e7490; background: #ecfeff; color: #0e7490; }
+  .rdv-ligne { display: flex; justify-content: space-between; align-items: center;
+      gap: 8px; padding: 10px 2px; border-bottom: 1px solid #e2e8f0; font-size: 14px; }
+  .rdv-ligne .quoi { font-weight: 600; color: #0f172a; }
+  .rdv-ligne .sous { font-size: 12px; color: #64748b; }
+  .rdv-etat { font-size: 11.5px; font-weight: 700; padding: 2px 8px; border-radius: 10px;
+      white-space: nowrap; background: #e2e8f0; color: #334155; }
+  .rdv-etat.vert { background: #dcfce7; color: #15803d; }
+  .rdv-etat.bleu { background: #e0f2fe; color: #075985; }
+  .rdv-etat.gris { background: #f1f5f9; color: #64748b; }
+  .rdv-vide { text-align: center; color: #94a3b8; padding: 18px 0; font-size: 13.5px; }
+  .rdv-jour { display: flex; align-items: center; gap: 8px; padding: 6px 2px;
+      border-bottom: 1px solid #e2e8f0; font-size: 13px; }
+  .rdv-jour .j-date { flex: 1; color: #0f172a; font-weight: 600; }
+  .rdv-jour .j-date .j-sem { color: #64748b; font-weight: 500; font-size: 11.5px; }
+  .rdv-jour button { padding: 6px 10px; font-size: 12.5px; font-weight: 600;
+      border: 1.5px solid #cbd5e1; border-radius: 8px; background: #fff; cursor: pointer;
+      line-height: 1.25; text-align: center; }
+  .rdv-jour .j-heures { display: block; font-size: 10.5px; font-weight: 500;
+      color: #64748b; }
+  .rdv-jour button.actif .j-heures { color: #0e7490; }
+  .rdv-jour button:disabled { opacity: .35; cursor: not-allowed; text-decoration: line-through; }
+  /* Le créneau actuel : visible et identifiable, mais pas re-sélectionnable. */
+  .rdv-jour button.actuel { opacity: 1; text-decoration: none; cursor: default;
+      border-color: #94a3b8; background: #f1f5f9; color: #475569; }
+  .rdv-jour button.actuel .j-heures { color: #64748b; font-style: italic; }
+  .rdv-jour button.actif { border-color: #0e7490; background: #ecfeff; color: #0e7490; }
+  .rdv-choix button:disabled { opacity: .4; cursor: not-allowed; }
+  .rdv-adr { display: flex; align-items: center; gap: 9px; padding: 9px 10px;
+      border: 1.5px solid #cbd5e1; border-radius: 10px; margin-top: 6px;
+      cursor: pointer; font-size: 13.5px; background: #fff; }
+  .rdv-adr.choisie { border-color: #0e7490; background: #ecfeff; }
+  .rdv-adr .a-texte { flex: 1; }
+  .rdv-adr .a-sous { font-size: 11.5px; color: #64748b; }
+  .rdv-adr .a-modif { border: 0; background: none; cursor: pointer; font-size: 14px; }
+  .rdv-fleche { border: 0; background: none; font-size: 15px; color: #64748b;
+      cursor: pointer; padding: 4px 6px; transition: transform .18s; }
+  .rdv-fleche.ouverte { transform: rotate(180deg); }
+  .rdv-detail { display: none; background: #f8fafc; border-radius: 9px;
+      padding: 6px 10px; margin: 0 0 8px; }
+  .rdv-detail.ouvert { display: block; }
+  .rdv-art { display: flex; align-items: center; gap: 10px; padding: 7px 0;
+      border-bottom: 1px solid #e2e8f0; font-size: 13px; }
+  .rdv-art:last-child { border-bottom: 0; }
+  .rdv-art img, .rdv-art .sans-img { width: 44px; height: 44px; border-radius: 8px;
+      object-fit: contain; background: #fff; border: 1px solid #e2e8f0;
+      flex: 0 0 44px; display: flex; align-items: center; justify-content: center;
+      font-size: 20px; }
+  .rdv-art .a-nom { flex: 1; color: #0f172a; }
+  .rdv-art .a-qte { color: #64748b; font-size: 12px; }
+  .rdv-art .a-prix { font-weight: 700; white-space: nowrap; }
+</style>
+
+<div class="rdv-page">
+  <div class="rdv-logo">
+    <img src="/files/Logo-AquaWorld-2.png" alt="Aqua World &amp; Servicing"
+         style="max-width:320px;width:88%;height:auto">
+  </div>
+  <div class="rdv-coordonnees">
+    {% if adresse %}<a href="{{ lien_maps }}" target="_blank" rel="noopener">📍 {{ adresse }}</a>{% endif %}
+    {% if site_web %}<a href="{{ site_web if site_web.startswith('http') else 'https://' + site_web }}"
+        target="_blank" rel="noopener">🌐 {{ site_web.replace('https://','').replace('http://','') }}</a>{% endif %}
+    {% if whatsapp %}<a href="https://wa.me/216{{ whatsapp }}" target="_blank" rel="noopener">
+        💬 WhatsApp {{ whatsapp }}</a>{% endif %}
+    {% if tel_commercial %}<a href="tel:{{ tel_commercial | replace(' ', '') }}">📞 Commercial {{ tel_commercial }}</a>{% endif %}
+    {% if tel_support %}<a href="tel:{{ tel_support | replace(' ', '') }}">🛠️ Support {{ tel_support }}</a>{% endif %}
+  </div>
+  <div class="rdv-sous">Prise de rendez-vous en ligne</div>
+
+  <div class="rdv-carte">
+    <!-- Étape 1 : téléphone -->
+    <div class="rdv-etape courante" id="etape-tel">
+      <h2>Votre numéro de téléphone</h2>
+      <label>Numéro (8 chiffres)</label>
+      <input type="tel" id="rdv-tel" inputmode="numeric" placeholder="98 000 000" maxlength="15">
+      <button class="rdv-btn" id="btn-otp">Recevoir mon code par SMS</button>
+    </div>
+
+    <!-- Étape 2 : code -->
+    <div class="rdv-etape" id="etape-code">
+      <h2>Code reçu par SMS</h2>
+      <label>Code à 6 chiffres</label>
+      <input type="tel" id="rdv-code" class="rdv-otp" inputmode="numeric" maxlength="6" placeholder="••••••">
+      <button class="rdv-btn" id="btn-verifier">Vérifier</button>
+      <button class="rdv-btn secondaire" id="btn-renvoyer">Renvoyer un code</button>
+    </div>
+
+    <!-- Étape 3 : réservation + historique -->
+    <div class="rdv-etape" id="etape-rdv">
+      <h2>Bonjour <span id="rdv-nom"></span> 👋</h2>
+      <div class="rdv-onglets">
+        <button type="button" class="actif" data-onglet="panneau-reserver">📅 Réserver</button>
+        <button type="button" data-onglet="panneau-commandes">🧾 Commandes</button>
+        <button type="button" data-onglet="panneau-historique">🗓️ Mes RDV</button>
+      </div>
+
+      <div id="panneau-commandes" class="rdv-panneau" style="display:none"></div>
+      <div id="panneau-historique" class="rdv-panneau" style="display:none"></div>
+
+      <div id="panneau-reserver" class="rdv-panneau">
+      <div id="rappel-rdv" style="display:none;margin-bottom:10px;padding:10px 12px;
+           border-radius:10px;background:#e0f2fe;color:#075985;font-size:13px">
+      </div>
+      <label>Adresse d'intervention</label>
+      <div id="rdv-adresses"></div>
+      <button type="button" class="rdv-btn secondaire" id="btn-ajouter-adresse"
+        style="max-width:100%;margin-top:8px">➕ Ajouter une adresse</button>
+
+      <div id="form-adresse" style="display:none;background:#f8fafc;border-radius:10px;
+            padding:4px 12px 12px;margin-top:10px">
+        <label>Gouvernorat</label>
+        <select id="adr-gouvernorat"><option value="">—</option></select>
+        <label>Ville</label>
+        <select id="adr-ville"><option value="">—</option></select>
+        <div id="adr-secteur" style="margin-top:6px;font-size:12.5px;color:#0e7490;
+             font-weight:600"></div>
+        <label>Adresse (rue, résidence…)</label>
+        <input type="text" id="adr-ligne" maxlength="140" placeholder="Ex. : 12 rue des Jasmins, Rés. Yasmine">
+        <label>Code postal (facultatif)</label>
+        <input type="tel" id="adr-pincode" inputmode="numeric" maxlength="4" placeholder="2036">
+        <label>Lien Google Maps (facultatif)</label>
+        <input type="url" id="adr-maps" placeholder="https://maps.app.goo.gl/…">
+        <button class="rdv-btn" id="btn-enregistrer-adresse" style="max-width:100%">Enregistrer l'adresse</button>
+        <button type="button" class="rdv-btn secondaire" id="btn-annuler-adresse"
+          style="max-width:100%">Annuler</button>
+      </div>
+
+      <label>Type de rendez-vous</label>
+      <div id="hors-secteur" style="display:none;margin:6px 0;padding:9px 12px;
+           border-radius:9px;background:#fef3c7;color:#92400e;font-size:13px;font-weight:600">
+        📍 Cette adresse est hors secteur — la réservation en ligne n'est pas
+        disponible, appelez-nous pour organiser l'intervention.
+      </div>
+      <div class="rdv-choix" id="rdv-types"></div>
+      <a href="#" id="voir-tarifs" style="display:none;font-size:12.5px;color:#0e7490;
+         font-weight:600;margin-top:6px;display:none">Voir tous les tarifs ▾</a>
+      <div id="liste-tarifs" style="display:none;background:#f8fafc;border-radius:9px;
+           padding:4px 12px;margin-top:6px;font-size:13px"></div>
+      <div id="bloc-commande" style="display:none">
+        <label>Commande à installer</label>
+        <div id="rdv-commandes-instal"></div>
+      </div>
+      <label>Créneaux disponibles</label>
+      <div id="rdv-grille"><div class="rdv-vide">Choisissez votre adresse et le type de rendez-vous.</div></div>
+      <label>Personne à contacter à l'arrivée</label>
+      <input type="text" id="rdv-contact-nom" maxlength="80"
+             placeholder="Ex. : Mme Ben Salah (ou « moi-même »)">
+      <input type="tel" id="rdv-contact-tel" inputmode="numeric" maxlength="15"
+             style="margin-top:6px" placeholder="Son téléphone (si différent du vôtre)">
+      <label>Précision (facultatif)</label>
+      <textarea id="rdv-note" rows="2" maxlength="200"
+        placeholder="Ex. : fuite sous l'évier, appareil qui siffle…"></textarea>
+      <button class="rdv-btn" id="btn-reserver">Confirmer le rendez-vous</button>
+      </div>
+    </div>
+
+    <!-- Étape 4 : confirmation -->
+    <div class="rdv-etape" id="etape-fin">
+      <div class="rdv-succes">
+        <div class="coche">✅</div>
+        <div class="quoi" id="fin-quoi"></div>
+        <div class="quand" id="fin-quand"></div>
+        <p style="color:#64748b;font-size:13.5px;margin-top:14px">
+          Un SMS de confirmation vous a été envoyé.<br>
+          Notre équipe vous confirmera l'heure exacte.</p>
+        <button class="rdv-btn secondaire" onclick="location.reload()">Prendre un autre rendez-vous</button>
+      </div>
+    </div>
+
+    <div class="rdv-erreur" id="rdv-erreur"></div>
+    <div class="rdv-info" id="rdv-info"></div>
+  </div>
+</div>
+
+<script>
+(function () {
+  const API = "/api/method/customization_app.portail_rdv.";
+  let jeton = null, seance = null, type_choisi = null, creneau_choisi = null;
+
+  const $ = (id) => document.getElementById(id);
+  const montrer = (etape) => {
+    document.querySelectorAll(".rdv-etape").forEach((e) => e.classList.remove("courante"));
+    $(etape).classList.add("courante");
+    message(null); info(null);
+  };
+  const message = (t) => { const e = $("rdv-erreur"); e.textContent = t || ""; e.style.display = t ? "block" : "none"; };
+  const info = (t) => { const e = $("rdv-info"); e.textContent = t || ""; e.style.display = t ? "block" : "none"; };
+
+  async function appeler(methode, corps, bouton) {
+    message(null);
+    if (bouton) bouton.disabled = true;
+    try {
+      // Jeton CSRF : indispensable quand l'utilisateur est AUSSI connecté au
+      // Desk dans ce navigateur (session non-invité → frappe l'exige, sinon
+      // « Requête Invalide »). Un vrai client anonyme n'en a pas besoin.
+      const entetes = { "Content-Type": "application/json", "Accept": "application/json" };
+      if (window.frappe && frappe.csrf_token && frappe.csrf_token !== "None") {
+        entetes["X-Frappe-CSRF-Token"] = frappe.csrf_token;
+      }
+      const r = await fetch(API + methode, {
+        method: "POST",
+        headers: entetes,
+        body: JSON.stringify(corps),
+      });
+      const donnees = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        let texte = "Une erreur est survenue — réessayez.";
+        try {
+          const brut = JSON.parse(donnees._server_messages || "[]");
+          if (brut.length) texte = JSON.parse(brut[0]).message.replace(/<[^>]+>/g, "");
+        } catch (e) { /* message générique */ }
+        throw new Error(texte);
+      }
+      return donnees.message;
+    } finally {
+      if (bouton) bouton.disabled = false;
+    }
+  }
+
+  $("btn-otp").addEventListener("click", async () => {
+    try {
+      const res = await appeler("envoyer_otp", { telephone: $("rdv-tel").value }, $("btn-otp"));
+      montrer("etape-code");
+      info(res.code_test ? "🧪 MODE TEST — votre code : " + res.code_test : res.message);
+      if (res.code_test) $("rdv-code").value = res.code_test;
+      $("rdv-code").focus();
+    } catch (e) { message(e.message); }
+  });
+
+  $("btn-renvoyer").addEventListener("click", async () => {
+    try {
+      const res = await appeler("envoyer_otp", { telephone: $("rdv-tel").value }, $("btn-renvoyer"));
+      info(res.message);
+    } catch (e) { message(e.message); }
+  });
+
+  $("btn-verifier").addEventListener("click", async () => {
+    try {
+      seance = await appeler("verifier_otp",
+        { telephone: $("rdv-tel").value, code: $("rdv-code").value }, $("btn-verifier"));
+      jeton = seance.jeton;
+      $("rdv-nom").textContent = seance.nom || "";
+      rendre_types();
+      rendre_commandes_installables();
+      rendre_adresses();
+      rendre_historique();
+      montrer("etape-rdv");
+    } catch (e) { message(e.message); }
+  });
+
+  // ── Adresses : choisir, modifier, ajouter (sectorisation du quick entry) ──
+  let adresse_choisie = null, referentiel = null, adresse_en_edition = null;
+
+  function rendre_adresses() {
+    const zone = $("rdv-adresses");
+    const liste = seance.adresses || [];
+    zone.innerHTML = liste.length
+      ? liste.map((a) => `<div class="rdv-adr ${a.adresse === adresse_choisie ? "choisie" : ""}"
+            data-adr="${echapper(a.adresse)}">
+          <span>${a.adresse === adresse_choisie ? "🔘" : "⚪"}</span>
+          <span class="a-texte">${echapper(a.ligne || a.ville)}
+            <div class="a-sous">${echapper(a.ville)}${a.gouvernorat ? " · " + echapper(a.gouvernorat) : ""}${a.secteur ? " · " + echapper(a.secteur) : ""}</div>
+            ${a.rdv_en_cours ? `<div class="a-sous" style="color:#075985;font-weight:600">
+              📅 ${echapper(a.rdv_en_cours.type || "RDV")} prévu le ${echapper(a.rdv_en_cours.date)}</div>` : ""}</span>
+          <button type="button" class="a-modif" data-modif="${echapper(a.adresse)}" title="Modifier">✏️</button>
+        </div>`).join("")
+      : `<div class="rdv-vide">Aucune adresse — ajoutez-en une.</div>`;
+
+    zone.querySelectorAll(".rdv-adr").forEach((el) =>
+      el.addEventListener("click", (ev) => {
+        if (ev.target.closest(".a-modif")) return;
+        adresse_choisie = el.getAttribute("data-adr");
+        rendre_adresses();
+        apres_choix_adresse();
+      }));
+    zone.querySelectorAll(".a-modif").forEach((b) =>
+      b.addEventListener("click", () => ouvrir_form_adresse(
+        (seance.adresses || []).find((a) => a.adresse === b.getAttribute("data-modif")))));
+  }
+
+  async function charger_referentiel() {
+    if (!referentiel) {
+      referentiel = await appeler("referentiel_adresses", { jeton }, null);
+      $("adr-gouvernorat").innerHTML = `<option value="">—</option>` +
+        Object.keys(referentiel).map((g) => `<option>${echapper(g)}</option>`).join("");
+    }
+  }
+
+  function maj_villes(gouvernorat, ville_choisie) {
+    const villes = Object.keys((referentiel || {})[gouvernorat] || {});
+    $("adr-ville").innerHTML = `<option value="">—</option>` +
+      villes.map((v) => `<option ${v === ville_choisie ? "selected" : ""}>${echapper(v)}</option>`).join("");
+    maj_secteur();
+  }
+
+  function maj_secteur() {
+    const g = $("adr-gouvernorat").value, v = $("adr-ville").value;
+    const s = ((referentiel || {})[g] || {})[v];
+    $("adr-secteur").textContent = s ? "📍 Secteur affecté : " + s : "";
+  }
+
+  async function ouvrir_form_adresse(existante) {
+    try { await charger_referentiel(); } catch (e) { return message(e.message); }
+    adresse_en_edition = existante ? existante.adresse : null;
+    $("adr-gouvernorat").value = existante ? existante.gouvernorat : "";
+    maj_villes(existante ? existante.gouvernorat : "", existante ? existante.ville : "");
+    $("adr-ligne").value = existante ? existante.ligne : "";
+    $("adr-pincode").value = existante ? existante.code_postal : "";
+    $("adr-maps").value = existante ? existante.lien_maps : "";
+    maj_secteur();
+    $("form-adresse").style.display = "block";
+  }
+
+  $("btn-ajouter-adresse").addEventListener("click", () => ouvrir_form_adresse(null));
+  $("btn-annuler-adresse").addEventListener("click", () => {
+    $("form-adresse").style.display = "none";
+  });
+  $("adr-gouvernorat").addEventListener("change", () => maj_villes($("adr-gouvernorat").value));
+  $("adr-ville").addEventListener("change", maj_secteur);
+
+  $("btn-enregistrer-adresse").addEventListener("click", async () => {
+    try {
+      const res = await appeler("enregistrer_adresse", {
+        jeton,
+        adresse: adresse_en_edition,
+        ligne: $("adr-ligne").value,
+        gouvernorat: $("adr-gouvernorat").value,
+        ville: $("adr-ville").value,
+        code_postal: $("adr-pincode").value,
+        lien_maps: $("adr-maps").value,
+      }, $("btn-enregistrer-adresse"));
+      seance.adresses = res.adresses;
+      adresse_choisie = res.adresse;
+      $("form-adresse").style.display = "none";
+      rendre_adresses();
+      apres_choix_adresse();
+      info("Adresse enregistrée — secteur " + res.secteur + ".");
+    } catch (e) { message(e.message); }
+  });
+
+  // ── Commandes installables (Installation) ────────────────────────────────
+  // Seules les commandes SANS tâche déjà planifiée, avec total et détail
+  // dépliable (photos d'articles) — même rendu que l'onglet Commandes.
+  let commande_choisie = null;
+  const dinars = (v) => (Number(v) || 0).toLocaleString("fr-FR",
+    { minimumFractionDigits: 3 }) + " DT";
+
+  function html_articles(d) {
+    return (d.articles || []).map((a) => `<div class="rdv-art">
+        ${a.image ? `<img src="${echapper(a.image)}" alt="" loading="lazy">`
+                  : `<span class="sans-img">📦</span>`}
+        <span class="a-nom">${echapper(a.article)}
+          <span class="a-qte">— ${a.qte} × ${dinars(a.prix)}</span></span>
+        <span class="a-prix">${dinars(a.montant)}</span>
+      </div>`).join("")
+      + `<div class="rdv-art"><span class="a-nom" style="font-weight:700">Total</span>
+         <span class="a-prix">${dinars(d.total)}</span></div>`;
+  }
+
+  const details_instal = {};
+  function rendre_commandes_installables() {
+    const zone = $("rdv-commandes-instal");
+    const liste = (seance.commandes || []).filter((c) => c.sans_tache);
+    commande_choisie = null;
+    zone.innerHTML = liste.length
+      ? liste.map((c) => `<div class="rdv-adr" data-cmd-inst="${echapper(c.name)}">
+            <span class="coche-cmd">⚪</span>
+            <span class="a-texte">${echapper(c.name)}
+              <div class="a-sous">${echapper(c.transaction_date)} · <b>${dinars(c.grand_total)}</b></div></span>
+            <button type="button" class="rdv-fleche" data-detail-inst="${echapper(c.name)}">▼</button>
+          </div>
+          <div class="rdv-detail" id="detail-inst-${echapper(c.name)}"></div>`).join("")
+      : `<div class="rdv-vide">Toutes vos commandes ont déjà leur intervention planifiée.</div>`;
+
+    zone.querySelectorAll("[data-cmd-inst]").forEach((el) =>
+      el.addEventListener("click", (ev) => {
+        if (ev.target.closest(".rdv-fleche")) return;
+        commande_choisie = el.getAttribute("data-cmd-inst");
+        zone.querySelectorAll("[data-cmd-inst]").forEach((x) => {
+          const moi = x.getAttribute("data-cmd-inst") === commande_choisie;
+          x.classList.toggle("choisie", moi);
+          x.querySelector(".coche-cmd").textContent = moi ? "🔘" : "⚪";
+        });
+      }));
+    zone.querySelectorAll("[data-detail-inst]").forEach((b) =>
+      b.addEventListener("click", async () => {
+        const cmd = b.getAttribute("data-detail-inst");
+        const panneau = $("detail-inst-" + cmd);
+        b.classList.toggle("ouverte");
+        panneau.classList.toggle("ouvert");
+        if (!panneau.classList.contains("ouvert") || details_instal[cmd]) return;
+        panneau.innerHTML = `<div class="rdv-vide">Chargement…</div>`;
+        try {
+          const d = await appeler("commande_details", { jeton, commande: cmd }, null);
+          details_instal[cmd] = true;
+          panneau.innerHTML = html_articles(d);
+        } catch (e) {
+          panneau.innerHTML = `<div class="rdv-vide">${echapper(e.message)}</div>`;
+        }
+      }));
+  }
+
+  // ── Secteur, tarifs et grille de créneaux ────────────────────────────────
+
+  // Les types de rendez-vous. Un type DÉJÀ prévu à l'adresse choisie se grise
+  // (règle 28/08 : un seul RDV par type, par client et par adresse) — les
+  // autres types restent réservables au même endroit.
+  const ICONES_TYPE = { "Entretien": "🔧 Entretien", "Réparation": "🧰 Réparation",
+                        "Installation": "🔨 Installation" };
+
+  function rendre_types() {
+    const zone = $("rdv-types");
+    const a = (seance.adresses || []).find((x) => x.adresse === adresse_choisie);
+    const occupes = (a && a.rdv_en_cours) || {};
+    const hors = !!adresse_choisie
+      && (!secteur_choisi() || secteur_choisi() === "Hors Secteur");
+    zone.innerHTML = "";
+    (seance.types || []).forEach((t) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      const prix = ((seance.tarifs || {})[t] || {}).principal;
+      const pris = occupes[t];
+      b.innerHTML = (ICONES_TYPE[t] || t)
+        + (pris
+            ? `<div style="font-size:11px;font-weight:600;color:#075985">📅 déjà prévu le ${echapper(pris.date)}</div>`
+            : prix
+              ? `<div style="font-size:11.5px;font-weight:500;color:#64748b">à partir de ${prix} DT</div>`
+              : "");
+      b.setAttribute("data-type", t);
+      b.disabled = hors || !!pris;
+      if (pris) b.title = "Déplacez ou annulez ce rendez-vous depuis « Mes RDV »";
+      if (b.disabled && type_choisi === t) {
+        type_choisi = null;
+        $("bloc-commande").style.display = "none";
+      }
+      if (type_choisi === t) b.classList.add("actif");
+      b.addEventListener("click", () => {
+        if (b.disabled) return;
+        type_choisi = t;
+        zone.querySelectorAll("button").forEach((x) => x.classList.remove("actif"));
+        b.classList.add("actif");
+        $("bloc-commande").style.display = t === "Installation" ? "block" : "none";
+        rendre_tarifs();
+        charger_grille();
+      });
+      zone.appendChild(b);
+    });
+  }
+
+  function secteur_choisi() {
+    const a = (seance.adresses || []).find((x) => x.adresse === adresse_choisie);
+    return a ? a.secteur : "";
+  }
+
+  // Adresse hors secteur, ou adresse qui a DÉJÀ un rendez-vous en cours :
+  // dans les deux cas les types se grisent, pas de nouvelle réservation.
+  function apres_choix_adresse() {
+    const a = (seance.adresses || []).find((x) => x.adresse === adresse_choisie);
+    const hors = !secteur_choisi() || secteur_choisi() === "Hors Secteur";
+    const occupes = (a && a.rdv_en_cours) || {};
+    // Bandeau : le hors-secteur (bloquant), ou le rappel quand TOUS les types
+    // possibles sont déjà pris à cette adresse. Sinon, l'info vit sur le
+    // bouton du type concerné, et les autres restent réservables.
+    const tous_pris = (seance.types || []).length > 0
+      && (seance.types || []).every((t) => occupes[t]);
+    const zone = $("hors-secteur");
+    zone.style.display = adresse_choisie && (hors || tous_pris) ? "block" : "none";
+    if (hors) {
+      zone.style.background = "#fef3c7";
+      zone.style.color = "#92400e";
+      zone.innerHTML = `📍 Cette adresse est hors secteur — la réservation en ligne
+        n'est pas disponible, appelez-nous pour organiser l'intervention.`;
+    } else if (tous_pris) {
+      zone.style.background = "#e0f2fe";
+      zone.style.color = "#075985";
+      zone.innerHTML = `📅 Vous avez déjà un rendez-vous prévu à cette adresse pour
+        chaque type d'intervention.
+        <a href="#" id="occupee-voir" style="color:#0e7490;font-weight:700">Les déplacer ou les annuler →</a>`;
+      $("occupee-voir").addEventListener("click", (e) => {
+        e.preventDefault();
+        document.querySelector('[data-onglet="panneau-historique"]').click();
+      });
+    }
+    rendre_types();
+    charger_grille();
+  }
+
+  function rendre_tarifs() {
+    const t = (seance.tarifs || {})[type_choisi];
+    const lien = $("voir-tarifs");
+    if (!t || !(t.liste || []).length) { lien.style.display = "none"; return; }
+    lien.style.display = "inline-block";
+    $("liste-tarifs").innerHTML = t.liste.map((l) =>
+      `<div style="display:flex;justify-content:space-between;padding:5px 0;
+           border-bottom:1px solid #e2e8f0">
+         <span>${echapper(l.nom)}</span><b>${l.prix} DT</b></div>`).join("");
+  }
+
+  $("voir-tarifs").addEventListener("click", (e) => {
+    e.preventDefault();
+    const ouvert = $("liste-tarifs").style.display === "block";
+    $("liste-tarifs").style.display = ouvert ? "none" : "block";
+    $("voir-tarifs").textContent = ouvert ? "Voir tous les tarifs ▾" : "Masquer les tarifs ▴";
+  });
+
+  // La grille des demi-journées FAISABLES (moteur serveur : secteurs, capacité,
+  // battements, journées 8/9, quota lointain, remplaçants, dimanche).
+  const JOURS_FR = ["Dim", "Lun", "Mar", "Mer", "Jeu", "Ven", "Sam"];
+  let jeton_grille = 0;
+
+  // Une longue liste de jours noie les boutons d'action : on n'en montre que
+  // quelques-uns, le reste se déplie à la demande.
+  function appliquer_voir_plus(zone, visibles) {
+    const lignes = Array.from(zone.querySelectorAll(".rdv-jour"));
+    if (lignes.length <= visibles) return;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "rdv-btn secondaire";
+    btn.style.maxWidth = "100%";
+    let montres = visibles;
+    const maj = () => {
+      lignes.forEach((l, i) => (l.style.display = i < montres ? "" : "none"));
+      const reste = lignes.length - montres;
+      btn.textContent = "▾ Voir plus de créneaux (" + reste + " jour"
+        + (reste > 1 ? "s" : "") + ")";
+      btn.style.display = reste > 0 ? "block" : "none";
+    };
+    btn.addEventListener("click", () => { montres += 4; maj(); });
+    lignes[lignes.length - 1].after(btn);
+    maj();
+  }
+
+  async function charger_grille() {
+    creneau_choisi = null;
+    const zone = $("rdv-grille");
+    if (!adresse_choisie || !type_choisi) {
+      zone.innerHTML = `<div class="rdv-vide">Choisissez votre adresse et le type de rendez-vous.</div>`;
+      return;
+    }
+    const mien = ++jeton_grille;
+    zone.innerHTML = `<div class="rdv-vide">Recherche des créneaux…</div>`;
+    try {
+      const res = await appeler("disponibilites",
+        { jeton, adresse: adresse_choisie, type_intervention: type_choisi }, null);
+      if (mien !== jeton_grille) return;
+      if (res.hors_secteur) { apres_choix_adresse(); return; }
+      const jours = (res.jours || []).filter((j) => j.matin || j.apres_midi);
+      zone.innerHTML = jours.length
+        ? jours.map((j) => {
+            const d = new Date(j.date + "T00:00:00");
+            return `<div class="rdv-jour">
+              <span class="j-date">${d.getDate()}/${String(d.getMonth() + 1).padStart(2, "0")}
+                <span class="j-sem">${JOURS_FR[d.getDay()]}</span></span>
+              <button type="button" data-cren="${j.date}|matin" ${j.matin ? "" : "disabled"}>
+                ☀️ Matin<span class="j-heures">09:30 – 12:30</span></button>
+              <button type="button" data-cren="${j.date}|apres_midi" ${j.apres_midi ? "" : "disabled"}>
+                🌙 Après-midi<span class="j-heures">13:30 – 17:30</span></button>
+            </div>`;
+          }).join("")
+        : `<div class="rdv-vide">Aucun créneau disponible sur les 3 prochaines semaines — appelez-nous.</div>`;
+      zone.querySelectorAll("[data-cren]").forEach((b) =>
+        b.addEventListener("click", () => {
+          zone.querySelectorAll("[data-cren]").forEach((x) => x.classList.remove("actif"));
+          b.classList.add("actif");
+          const [date, demi] = b.getAttribute("data-cren").split("|");
+          creneau_choisi = { date, demi };
+        }));
+      appliquer_voir_plus(zone, 4);
+    } catch (e) {
+      if (mien === jeton_grille) zone.innerHTML = `<div class="rdv-vide">${echapper(e.message)}</div>`;
+    }
+  }
+
+  // Onglets : Réserver / Mes commandes / Mes rendez-vous.
+  document.querySelectorAll(".rdv-onglets button").forEach((b) =>
+    b.addEventListener("click", () => {
+      document.querySelectorAll(".rdv-onglets button").forEach((x) => x.classList.remove("actif"));
+      b.classList.add("actif");
+      document.querySelectorAll(".rdv-panneau").forEach((p) => (p.style.display = "none"));
+      $(b.getAttribute("data-onglet")).style.display = "block";
+    }));
+
+  function echapper(t) {
+    const e = document.createElement("span");
+    e.textContent = t == null ? "" : String(t);
+    return e.innerHTML;
+  }
+
+  // Rappel dans l'onglet Réserver : le client qui a DÉJÀ un rendez-vous à
+  // venir le voit avant d'en reprendre un — avec le raccourci pour le modifier.
+  function rendre_rappel() {
+    const zone = $("rappel-rdv");
+    const a_venir = (seance.rendez_vous || []).filter((r) => r.a_venir)
+      .sort((a, b) => (a.date > b.date ? 1 : -1));
+    if (!a_venir.length) { zone.style.display = "none"; return; }
+    const r = a_venir[0];
+    zone.style.display = "block";
+    zone.innerHTML = `📅 <b>Rappel :</b> vous avez déjà un rendez-vous
+      <b>${echapper(r.type || "")}</b> prévu le <b>${echapper((r.date || "").replace("T", " "))}</b>${
+      a_venir.length > 1 ? ` (+ ${a_venir.length - 1} autre${a_venir.length > 2 ? "s" : ""})` : ""}.
+      <a href="#" id="rappel-voir" style="color:#0e7490;font-weight:700">Voir / Modifier →</a>`;
+    $("rappel-voir").addEventListener("click", (e) => {
+      e.preventDefault();
+      document.querySelector('[data-onglet="panneau-historique"]').click();
+    });
+  }
+
+  function rendre_historique() {
+    const dinars = (v) => (Number(v) || 0).toLocaleString("fr-FR",
+      { minimumFractionDigits: 3 }) + " DT";
+    const cmds = seance.commandes || [];
+    $("panneau-commandes").innerHTML = cmds.length
+      ? cmds.map((c) => `<div class="rdv-ligne">
+          <div><div class="quoi">${echapper(c.name)}</div>
+            <div class="sous">${echapper(c.transaction_date)}</div></div>
+          <div style="text-align:right">
+            <div class="quoi">${dinars(c.grand_total)}</div>
+            <span class="rdv-etat ${c.status === "Completed" ? "vert" : c.docstatus === 0 ? "gris" : "bleu"}">
+              ${c.status === "Completed" ? "Terminée" : c.docstatus === 0 ? "En préparation" : "En cours"}</span>
+          </div>
+          <button type="button" class="rdv-fleche" data-cmd="${echapper(c.name)}">▼</button></div>
+          <div class="rdv-detail" id="detail-${echapper(c.name)}"></div>`).join("")
+      : `<div class="rdv-vide">Aucune commande.</div>`;
+
+    // Flèche ▼ : déplie le détail de la commande — articles, images, prix —
+    // chargé UNE fois puis gardé en mémoire.
+    const details_charges = {};
+    document.querySelectorAll(".rdv-fleche").forEach((b) =>
+      b.addEventListener("click", async () => {
+        const cmd = b.getAttribute("data-cmd");
+        const panneau = $("detail-" + cmd);
+        b.classList.toggle("ouverte");
+        panneau.classList.toggle("ouvert");
+        if (!panneau.classList.contains("ouvert") || details_charges[cmd]) return;
+        panneau.innerHTML = `<div class="rdv-vide">Chargement…</div>`;
+        try {
+          const d = await appeler("commande_details", { jeton, commande: cmd }, null);
+          details_charges[cmd] = true;
+          panneau.innerHTML = html_articles(d);
+        } catch (e) {
+          panneau.innerHTML = `<div class="rdv-vide">${echapper(e.message)}</div>`;
+        }
+      }));
+
+    rendre_rappel();
+    const rdvs = seance.rendez_vous || [];
+    $("panneau-historique").innerHTML = rdvs.length
+      ? rdvs.map((r) => `<div class="rdv-ligne">
+          <div><div class="quoi">${echapper(r.type || "Rendez-vous")}${r.en_ligne ? " 📲" : ""}</div>
+            <div class="sous">${echapper((r.date || "").replace("T", " "))}</div></div>
+          <span class="rdv-etat ${r.etat === "Terminé" ? "vert" : r.etat === "Prévu" ? "bleu" : "gris"}">
+            ${echapper(r.etat)}</span>
+          ${r.modifiable ? `<button type="button" class="rdv-fleche" style="font-size:12.5px;
+              font-weight:600;color:#0e7490" data-move="${echapper(r.tache)}">🔁 Modifier</button>` : ""}
+        </div>
+        ${r.modifiable ? `<div class="rdv-detail" id="move-${echapper(r.tache)}"></div>` : ""}`).join("")
+      : `<div class="rdv-vide">Aucun rendez-vous pour l'instant.</div>`;
+
+    // 🔁 Déplacement : la MÊME grille de créneaux (moteur complet, le RDV ne
+    // compte pas contre lui-même), dépliée sous la ligne.
+    $("panneau-historique").querySelectorAll("[data-move]").forEach((b) =>
+      b.addEventListener("click", async () => {
+        const tache = b.getAttribute("data-move");
+        const panneau = $("move-" + tache);
+        panneau.classList.toggle("ouvert");
+        // Le bouton fait aller-retour : il ouvre les créneaux, puis referme
+        // sans rien changer — « Fermer » plutôt qu'« Annuler la modification »,
+        // qu'on confondrait avec l'annulation du rendez-vous lui-même.
+        const ouvert = panneau.classList.contains("ouvert");
+        b.textContent = ouvert ? "✕ Fermer" : "🔁 Modifier";
+        if (!ouvert) { panneau.innerHTML = ""; return; }
+        panneau.innerHTML = `<div class="rdv-vide">Recherche des créneaux…</div>`;
+        try {
+          const res = await appeler("disponibilites", { jeton, tache }, null);
+          const jours = (res.jours || []).filter((j) => j.matin || j.apres_midi);
+          if (!jours.length) {
+            panneau.innerHTML = `<div class="rdv-vide">Aucun créneau libre — appelez-nous.</div>`;
+            return;
+          }
+          let choix = null;
+          // Le créneau ACTUEL du rendez-vous se voit, grisé et non cliquable :
+          // le client comprend d'où il part, et ne « déplace » pas sur place.
+          const rdv = (seance.rendez_vous || []).find((x) => x.tache === tache) || {};
+          const actuel_date = (rdv.date || "").slice(0, 10);
+          const actuel_demi = (rdv.date || "").slice(11, 13) < "13" ? "matin" : "apres_midi";
+          const bouton = (j, demi, libelle, heures) => {
+            const actuel = j.date === actuel_date && demi === actuel_demi;
+            const libre = demi === "matin" ? j.matin : j.apres_midi;
+            return `<button type="button" data-mcren="${j.date}|${demi}"
+                class="${actuel ? "actuel" : ""}" ${actuel || !libre ? "disabled" : ""}
+                title="${actuel ? "Créneau actuel de votre rendez-vous" : ""}">
+              ${actuel ? "📌 " : ""}${libelle}<span class="j-heures">${
+                actuel ? "créneau actuel" : heures}</span></button>`;
+          };
+          panneau.innerHTML = jours.map((j) => {
+            const d = new Date(j.date + "T00:00:00");
+            return `<div class="rdv-jour">
+              <span class="j-date">${d.getDate()}/${String(d.getMonth() + 1).padStart(2, "0")}
+                <span class="j-sem">${JOURS_FR[d.getDay()]}</span></span>
+              ${bouton(j, "matin", "☀️ Matin", "09:30 – 12:30")}
+              ${bouton(j, "apres_midi", "🌙 Après-midi", "13:30 – 17:30")}
+            </div>`;
+          }).join("")
+          + `<button type="button" class="rdv-btn" id="confirmer-move-${echapper(tache)}"
+               style="max-width:100%;display:none">✅ Confirmer le déplacement</button>
+             <button type="button" class="rdv-btn danger" id="annuler-rdv-${echapper(tache)}"
+               style="max-width:100%">🗑️ Annuler ce rendez-vous</button>`;
+
+          // Annulation : la tâche est SUPPRIMÉE du calendrier — on confirme.
+          $("annuler-rdv-" + tache).addEventListener("click", async (ev) => {
+            if (!confirm("Annuler définitivement ce rendez-vous ?\n\n"
+                + "Le créneau sera libéré. Vous pourrez en reprendre un autre quand vous voudrez."))
+              return;
+            try {
+              const ok = await appeler("annuler_rdv", { jeton, tache }, ev.currentTarget);
+              seance.rendez_vous = ok.rendez_vous;
+              rendre_historique();
+              info("Rendez-vous annulé — un SMS de confirmation vous a été envoyé.");
+            } catch (e) { message(e.message); }
+          });
+          panneau.querySelectorAll("[data-mcren]").forEach((x) =>
+            x.addEventListener("click", () => {
+              panneau.querySelectorAll("[data-mcren]").forEach((y) => y.classList.remove("actif"));
+              x.classList.add("actif");
+              const [date, demi] = x.getAttribute("data-mcren").split("|");
+              choix = { date, demi };
+              // Le bouton n'apparaît qu'une fois un créneau choisi.
+              $("confirmer-move-" + tache).style.display = "block";
+            }));
+          // On s'arrête au JOUR DU RENDEZ-VOUS ACTUEL : le client voit d'où il
+          // part, et les boutons Annuler/Confirmer restent à portée de pouce.
+          const idx = jours.findIndex((j) => j.date === actuel_date);
+          appliquer_voir_plus(panneau, idx >= 0 ? idx + 1 : 4);
+          $("confirmer-move-" + tache).addEventListener("click", async (ev) => {
+            if (!choix) return message("Choisissez le nouveau créneau.");
+            try {
+              const ok = await appeler("deplacer_rdv",
+                { jeton, tache, date: choix.date, demi_journee: choix.demi }, ev.currentTarget);
+              const r = (seance.rendez_vous || []).find((x) => x.tache === tache);
+              if (r) r.date = ok.date + " (" + ok.demi_journee + ")";
+              panneau.classList.remove("ouvert");
+              rendre_historique();
+              info("Rendez-vous déplacé au " + ok.date + " (" + ok.demi_journee + ") — SMS de confirmation envoyé.");
+            } catch (e) { message(e.message); }
+          });
+        } catch (e) {
+          panneau.innerHTML = `<div class="rdv-vide">${echapper(e.message)}</div>`;
+        }
+      }));
+  }
+
+  $("btn-reserver").addEventListener("click", async () => {
+    if (!adresse_choisie) return message("Choisissez votre adresse d'intervention (ou ajoutez-en une).");
+    if (!type_choisi) return message("Choisissez le type de rendez-vous.");
+    if (type_choisi === "Installation" && !commande_choisie)
+      return message("Choisissez la commande à installer.");
+    if (!creneau_choisi) return message("Choisissez un créneau dans la liste.");
+    try {
+      const res = await appeler("reserver", {
+        jeton,
+        type_intervention: type_choisi,
+        adresse: adresse_choisie,
+        date: creneau_choisi.date,
+        demi_journee: creneau_choisi.demi,
+        commande: type_choisi === "Installation" ? commande_choisie : null,
+        note: $("rdv-note").value,
+        contact_nom: $("rdv-contact-nom").value,
+        contact_tel: $("rdv-contact-tel").value,
+      }, $("btn-reserver"));
+      $("fin-quoi").textContent = "Rendez-vous " + res.type + " enregistré";
+      $("fin-quand").textContent = "Le " + res.date + " — " + res.demi_journee;
+      montrer("etape-fin");
+    } catch (e) { message(e.message); }
+  });
+})();
+</script>
+{% endblock %}

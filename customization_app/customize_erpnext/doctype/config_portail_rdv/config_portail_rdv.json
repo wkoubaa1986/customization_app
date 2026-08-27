@@ -1,0 +1,167 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "creation": "2026-08-27 19:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "actif",
+  "mode_test",
+  "nb_employes",
+  "column_break_h1",
+  "autoriser_dimanche",
+  "employe_dimanche",
+  "employe_defaut",
+  "section_affichage",
+  "adresse",
+  "site_web",
+  "column_break_a1",
+  "whatsapp",
+  "lien_google_maps",
+  "tel_commercial",
+  "tel_support",
+  "section_employes",
+  "employes_disponibles",
+  "section_secteurs",
+  "groupes_secteurs"
+ ],
+ "fields": [
+  {
+   "default": "1",
+   "description": "Décoché = le portail /rdv répond « momentanément fermé ».",
+   "fieldname": "actif",
+   "fieldtype": "Check",
+   "label": "Portail de rendez-vous actif"
+  },
+  {
+   "description": "Repli si la liste des employés disponibles est vide.",
+   "fieldname": "employe_defaut",
+   "fieldtype": "Link",
+   "label": "Employé par défaut",
+   "options": "Employee"
+  },
+  {
+   "fieldname": "column_break_h1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "section_employes",
+   "fieldtype": "Section Break",
+   "label": "Employés disponibles pour les rendez-vous en ligne"
+  },
+  {
+   "description": "À la réservation, le portail choisit l'employé de cette liste le MOINS chargé sur la demi-journée demandée. Liste vide = tout va à l'employé par défaut.",
+   "fieldname": "employes_disponibles",
+   "fieldtype": "Table",
+   "label": "Employés disponibles",
+   "options": "Portail RDV Employe"
+  },
+  {
+   "fieldname": "section_affichage",
+   "fieldtype": "Section Break",
+   "label": "Affichage du portail (sous le logo)"
+  },
+  {
+   "fieldname": "adresse",
+   "fieldtype": "Data",
+   "label": "Adresse affichée"
+  },
+  {
+   "fieldname": "site_web",
+   "fieldtype": "Data",
+   "label": "Site web"
+  },
+  {
+   "fieldname": "column_break_a1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "8 chiffres — le lien WhatsApp wa.me est construit avec +216.",
+   "fieldname": "whatsapp",
+   "fieldtype": "Data",
+   "label": "Numéro WhatsApp"
+  },
+  {
+   "description": "Vide = lien Google Maps construit automatiquement depuis l'adresse.",
+   "fieldname": "lien_google_maps",
+   "fieldtype": "Data",
+   "label": "Lien Google Maps"
+  },
+  {
+   "fieldname": "tel_commercial",
+   "fieldtype": "Data",
+   "label": "Téléphone service commercial"
+  },
+  {
+   "fieldname": "tel_support",
+   "fieldtype": "Data",
+   "label": "Téléphone support / SAV"
+  },
+  {
+   "default": "0",
+   "description": "DEV UNIQUEMENT : le code OTP s'affiche à l'écran au lieu de partir par SMS. Sans effet si le site n'est pas en developer_mode — impossible à activer en production.",
+   "fieldname": "mode_test",
+   "fieldtype": "Check",
+   "label": "Mode test (code affiché, pas de SMS)"
+  },
+  {
+   "description": "Les N PREMIERS de la liste travaillent les RDV en ligne ; un employé bloqué toute la journée est remplacé par le suivant. Vide = toute la liste.",
+   "fieldname": "nb_employes",
+   "fieldtype": "Int",
+   "label": "Nombre d'employés pris en compte"
+  },
+  {
+   "description": "Ponctuel : ouvre les dimanches à la réservation, uniquement avec l'employé dédié ci-dessous.",
+   "fieldname": "autoriser_dimanche",
+   "fieldtype": "Check",
+   "label": "Autoriser les dimanches"
+  },
+  {
+   "fieldname": "employe_dimanche",
+   "fieldtype": "Link",
+   "label": "Employé du dimanche",
+   "options": "Employee"
+  },
+  {
+   "fieldname": "section_secteurs",
+   "fieldtype": "Section Break",
+   "label": "Secteurs combinables dans une même demi-journée"
+  },
+  {
+   "description": "Par défaut un technicien ne fait QU'UN secteur par demi-journée. Ici, un GROUPE par ligne : les secteurs d'une même ligne peuvent se combiner sur la même demi-journée. Ex. « Secteur 1, Secteur 2 » puis « Secteur 3, Secteur 4 ». Laisser vide = règle stricte.",
+   "fieldname": "groupes_secteurs",
+   "fieldtype": "Small Text",
+   "label": "Groupes de secteurs combinables"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "issingle": 1,
+ "links": [],
+ "modified": "2026-08-28 10:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "Config Portail RDV",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "read": 1,
+   "role": "Sales Manager",
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}
