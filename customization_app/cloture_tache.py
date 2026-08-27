@@ -200,7 +200,41 @@ def exigences(tache):
     doc = frappe.get_doc(DOCTYPE_TACHE, tache)
     exigence = exigence_du_doc(doc)
     requis_gmap = gmap_requis(doc)
+    type_i = doc.get("custom_type_dintervention")
+    # ⚠️ MIROIR des mandatory_depends_on du doctype (tache_de_travail.json) :
+    # c'est LUI qui bloque au save — le dialogue ne fait que permettre de
+    # remplir sur place, et le code superviseur ne dispense PAS de ces deux-là.
+    commande_requise = (
+        type_i in ("Installation", "Livraison", "Entretien", "Réparation")
+        or cint(doc.get("afficher_commande")))
+    rapport_requis = type_i in ("Entretien", "Réparation", "Installation", "Visite")
+
+    # Pré-remplissage d'une NOUVELLE commande depuis le dialogue : client de la
+    # tâche + magasin de l'EMPLOYÉ affecté, et les mêmes règles que le flux
+    # historique du formulaire (hors Installation/Livraison : vente directe
+    # sans BL/facture, taxes sans timbre fiscal).
+    nouvelle_commande = {}
+    if doc.get("custom_client"):
+        nouvelle_commande["customer"] = doc.get("custom_client")
+    if doc.get("starts_on"):
+        nouvelle_commande["delivery_date"] = str(doc.get("starts_on"))[:10]
+    entrepot = frappe.db.get_value(
+        "Employee", doc.get("custom_choix_du_staff"), "custom_warehouse") \
+        if doc.get("custom_choix_du_staff") else None
+    if entrepot:
+        nouvelle_commande["set_warehouse"] = entrepot
+    if type_i not in ("Installation", "Livraison"):
+        nouvelle_commande["custom_type_de_transaction"] = "Vente directe sans BL et Facture"
+        nouvelle_commande["taxes_and_charges"] = "Vente Standard Sans Timbre Fiscale - A&S"
+
     return {
+        "nouvelle_commande": nouvelle_commande,
+        "client": doc.get("custom_client"),
+        "commande_requise": commande_requise,
+        "commande": doc.get("commande_client"),
+        "rapport_requis": rapport_requis,
+        "rapport": bool((doc.get("rapport_visite") or "").strip()),
+        "rapport_texte": doc.get("rapport_visite") or "",
         "actif": regle_active(),
         "type": doc.get("custom_type_dintervention"),
         # Une Visite n'exige aucune photo mais bien une position : elle est
@@ -246,6 +280,35 @@ def enregistrer_photo(tache, champ, file_url):
     frappe.db.set_value(DOCTYPE_TACHE, tache, nom_champ, valeur, update_modified=False)
     frappe.db.commit()
     return {"photos": _nb_photos(valeur), "deja": False}
+
+
+@frappe.whitelist()
+def completer_champs(tache, commande=None, rapport=None):
+    """Renseigne la commande liée et/ou le rapport d'intervention depuis le
+    dialogue de clôture — db_set (le save final rejouera les hooks), même
+    mécanique que enregistrer_photo. La commande doit exister et appartenir au
+    client de la tâche quand celui-ci est renseigné : lier la commande d'un
+    autre client serait pire qu'un champ vide."""
+    frappe.has_permission(DOCTYPE_TACHE, "write", doc=tache, throw=True)
+    doc = frappe.db.get_value(DOCTYPE_TACHE, tache, ["custom_client"], as_dict=True)
+    if not doc:
+        frappe.throw(_("Tâche introuvable."))
+
+    maj = {}
+    if commande:
+        client_commande = frappe.db.get_value("Sales Order", commande, "customer")
+        if not client_commande:
+            frappe.throw(_("Commande introuvable."))
+        if doc.custom_client and client_commande != doc.custom_client:
+            frappe.throw(_("La commande {0} appartient à {1}, pas au client de la tâche.")
+                         .format(commande, client_commande))
+        maj["commande_client"] = commande
+    if rapport is not None and str(rapport).strip():
+        maj["rapport_visite"] = str(rapport).strip()
+    if maj:
+        frappe.db.set_value(DOCTYPE_TACHE, tache, maj, update_modified=False)
+        frappe.db.commit()
+    return {"maj": list(maj)}
 
 
 @frappe.whitelist()

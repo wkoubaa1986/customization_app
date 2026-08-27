@@ -18,9 +18,13 @@
 
 const TCT_LABEL_PHOTOS = "📷 Photos de clôture";
 
-// Tout ce que la clôture exige est-il là ? Photos par champ ET position
-// Google Map (Installation / Visite / Entretien / Livraison hors Aramex).
+// Tout ce que la clôture exige est-il là ? Photos par champ, position Google
+// Map, commande liée et rapport d'intervention (règles du doctype). Le code
+// superviseur (dispense) ne couvre QUE les preuves — photos et position — pas
+// la commande ni le rapport, qui sont des données, pas des preuves.
 function tache_exigences_completes(ex) {
+    if (ex.commande_requise && !ex.commande) return false;
+    if (ex.rapport_requis && !ex.rapport) return false;
     if (ex.dispense) return true;
     if (ex.gmap_requis && !ex.gmap) return false;
     return ex.photos.avant >= ex.minima.avant && ex.photos.apres >= ex.minima.apres;
@@ -120,30 +124,75 @@ function tache_dialogue_cloture(frm, exigences) {
     const esc = frappe.utils.escape_html;
     let ex = exigences;
 
+    // Commande liée et rapport d'intervention : les règles du DOCTYPE les
+    // exigent au save — le dialogue les rend remplissables SUR PLACE plutôt
+    // que de laisser le save échouer sur « champ obligatoire ».
+    const champs = [{ fieldtype: "HTML", fieldname: "zone" }];
+    if (ex.commande_requise && !ex.commande) {
+        champs.push({
+            fieldtype: "Link", fieldname: "commande", options: "Sales Order",
+            label: __("Commande client liée"), reqd: 1,
+            // only_select : le « Créer une nouvelle commande » NATIF du champ
+            // naviguerait hors de la tâche — notre bouton ➕ ouvre en popup.
+            only_select: 1,
+            get_query: () => ({
+                filters: ex.client
+                    ? { status: ["!=", "Cancelled"], customer: ex.client }
+                    : { status: ["!=", "Cancelled"] },
+            }),
+        });
+    }
+    if (ex.rapport_requis) {
+        champs.push({
+            fieldtype: "Small Text", fieldname: "rapport",
+            label: __("Rapport d'intervention"), reqd: ex.rapport ? 0 : 1,
+            default: ex.rapport_texte || "",
+        });
+    }
+    champs.push(
+        { fieldtype: "Section Break", label: __("Clôture sans photos") },
+        {
+            fieldtype: "Password", fieldname: "code",
+            label: __("Code superviseur"),
+            description: __("Dispense des photos et de la position — jamais de la commande ni du rapport."),
+        }
+    );
+
     const d = new frappe.ui.Dialog({
-        title: __("Photos de clôture — {0}", [ex.type || ""]),
-        fields: [
-            { fieldtype: "HTML", fieldname: "zone" },
-            { fieldtype: "Section Break", label: __("Clôture sans photos") },
-            {
-                fieldtype: "Password", fieldname: "code",
-                label: __("Code superviseur"),
-                description: __("Chaque utilisation laisse une trace nominative sur la tâche."),
-            },
-        ],
+        title: __("Clôture — {0}", [ex.type || ""]),
+        fields: champs,
         primary_action_label: __("✅ Clôturer la tâche"),
-        primary_action: () => {
-            const complet = tache_exigences_completes(ex);
+        primary_action: (v) => {
+            const commande_ok = !ex.commande_requise || ex.commande || v.commande;
+            const rapport_ok = !ex.rapport_requis || ex.rapport
+                || !!(v.rapport || "").trim();
+            if (!commande_ok || !rapport_ok) {
+                frappe.msgprint(__("La commande liée et le rapport d'intervention sont obligatoires pour ce type de tâche — le code superviseur ne les remplace pas."));
+                return;
+            }
+            const complet = tache_exigences_completes({
+                ...ex,
+                commande: ex.commande || v.commande,
+                rapport: ex.rapport || !!(v.rapport || "").trim(),
+            });
             const code = d.get_value("code");
-            // ⚠️ RELIRE AVANT DE SAUVER. Les photos sont posées en base par
-            // enregistrer_photo (db_set) : le formulaire, lui, garde les champs
-            // chargés à l'ouverture — sauver tel quel renverrait les listes
-            // périmées, écraserait les photos ET ferait rejeter la clôture.
+            // ⚠️ RELIRE AVANT DE SAUVER. Photos, commande et rapport sont posés
+            // en base par db_set : le formulaire, lui, garde les champs chargés
+            // à l'ouverture — sauver tel quel renverrait les valeurs périmées.
             const cloturer = () => {
-                d.hide();
-                frm.reload_doc().then(() => {
-                    frm.set_value("status", "Completed");
-                    frm.save();
+                const enregistrer =
+                    v.commande || (v.rapport || "").trim()
+                        ? frappe.call({
+                              method: "customization_app.cloture_tache.completer_champs",
+                              args: { tache: frm.docname, commande: v.commande, rapport: v.rapport },
+                          })
+                        : Promise.resolve();
+                enregistrer.then(() => {
+                    d.hide();
+                    frm.reload_doc().then(() => {
+                        frm.set_value("status", "Completed");
+                        frm.save();
+                    });
                 });
             };
             if (complet) return cloturer();
@@ -281,4 +330,78 @@ function tache_dialogue_cloture(frm, exigences) {
 
     rendre();
     d.show();
+    tache_bouton_nouvelle_commande(d, ex);
+}
+
+// « ➕ Créer une nouvelle commande » sous le champ Commande du dialogue :
+// la commande s'ouvre en POPUP (fenêtre partagée ouvrir_document, la tâche
+// reste derrière), pré-remplie avec le client de la tâche et le MAGASIN de
+// l'employé affecté. À la fermeture, la commande créée est reprise dans le
+// champ automatiquement.
+function tache_bouton_nouvelle_commande(d, ex) {
+    const ctrl = d.fields_dict && d.fields_dict.commande;
+    if (!ctrl || !ctrl.$wrapper) return;
+
+    const derniere_commande = () =>
+        frappe.db
+            .get_list("Sales Order", {
+                filters: ex.client ? { customer: ex.client } : {},
+                order_by: "creation desc",
+                limit: 1,
+            })
+            .then((r) => (r && r.length ? r[0].name : null));
+
+    const $btn = $(
+        `<button type="button" class="btn btn-xs btn-default" style="margin-top:4px">
+            ➕ ${__("Créer une nouvelle commande")}</button>`
+    ).appendTo(ctrl.$wrapper);
+
+    $btn.on("click", (e) => {
+        e.preventDefault();
+        derniere_commande().then((avant) => {
+            const qs = new URLSearchParams(ex.nouvelle_commande || {}).toString();
+            frappe
+                .require("/assets/customization_app/js/ouvrir_document.js")
+                .then(() => {
+                    const dlg = customization_app.ouvrir_document("Sales Order", "new", {
+                        url: `/app/sales-order/new${qs ? "?" + qs : ""}`,
+                        titre: __("Nouvelle commande — {0}", [ex.client || ""]),
+                        a_la_fermeture: () =>
+                            derniere_commande().then((apres) => {
+                                if (apres && apres !== avant) {
+                                    d.set_value("commande", apres);
+                                    frappe.show_alert({
+                                        message: __("Commande {0} liée à la clôture", [apres]),
+                                        indicator: "green",
+                                    });
+                                }
+                            }),
+                    });
+                    // Date de livraison : la cascade client du formulaire la
+                    // VIDE après les paramètres d'URL. On s'accroche à l'iframe
+                    // ICI (fichier versionné — ouvrir_document.js part en
+                    // frappe.require SANS suffixe, donc cache navigateur 12 h)
+                    // et on REPOSE la date tant qu'elle est vide : la cascade
+                    // peut finir après nous, la boucle a le dernier mot.
+                    const date = (ex.nouvelle_commande || {}).delivery_date;
+                    if (date && dlg && dlg.$body) {
+                        dlg.$body.find("iframe").on("load", function () {
+                            const win = this.contentWindow;
+                            let tics = 0;
+                            const minuteur = setInterval(() => {
+                                try {
+                                    const f = win.cur_frm;
+                                    if (f && f.doc && f.is_new() && !f.doc.delivery_date) {
+                                        f.set_value("delivery_date", date);
+                                    }
+                                } catch (e) {
+                                    clearInterval(minuteur);
+                                }
+                                if (++tics > 20) clearInterval(minuteur);
+                            }, 600);
+                        });
+                    }
+                });
+        });
+    });
 }

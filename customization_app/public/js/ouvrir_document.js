@@ -18,9 +18,12 @@ customization_app.ouvrir_document = function (doctype, nom, options) {
   const titre = opts.titre || `${doctype} · ${nom}`;
   const d = new frappe.ui.Dialog({ title: titre, size: "extra-large" });
 
+  // opts.url : ouvrir un NOUVEAU document pré-rempli — /app/<slug>/new?champ=valeur
+  // (frappe verse les paramètres de l'URL dans route_options du formulaire neuf).
+  const src = opts.url || `/app/${frappe.router.slug(doctype)}/${encodeURIComponent(nom)}`;
   d.$body.html(
     `<iframe class="ca-cadre-document"
-             src="/app/${frappe.router.slug(doctype)}/${encodeURIComponent(nom)}"
+             src="${frappe.utils.escape_html(src)}"
              title="${frappe.utils.escape_html(titre)}"
              style="width:100%;height:72vh;border:0"></iframe>`
   );
@@ -47,6 +50,14 @@ customization_app.ouvrir_document = function (doctype, nom, options) {
       doc.head.appendChild(style);
     } catch (e) {
       // Rien à faire : le formulaire s'affiche simplement avec toutes ses barres.
+    }
+    // opts.au_chargement(fenêtre) : agir DANS le formulaire ouvert (ex. poser
+    // une valeur qu'une cascade de remplissage a écrasée après les paramètres
+    // d'URL — cas de delivery_date sur une nouvelle commande).
+    try {
+      opts.au_chargement && opts.au_chargement(this.contentWindow);
+    } catch (e) {
+      // Fenêtre inaccessible : tant pis, le champ restera à remplir à la main.
     }
   });
 
