@@ -27,6 +27,7 @@ frappe.provide("frappe.views");
         ["{code}", "Code du 1er article"],
         ["{articles}", "Tous les noms d'articles"],
         ["{codes}", "Tous les codes articles"],
+        ["{lien_rdv}", "Lien de prise de rendez-vous en ligne"],
     ];
 
     function _ouvrir(listview) {
@@ -35,9 +36,20 @@ frappe.provide("frappe.views");
             frappe.msgprint(__("Cochez d'abord une ou plusieurs commandes dans la liste."));
             return;
         }
+        _dialogue(coches, {
+            apres: () => listview.clear_checked_items && listview.clear_checked_items(),
+        });
+    }
+
+    // Le dialogue, partagé par la LISTE (plusieurs commandes cochées) et par la
+    // FICHE (la commande ouverte) — un seul endroit à corriger.
+    function _dialogue(coches, options) {
+        const opts = options || {};
 
         const d = new frappe.ui.Dialog({
-            title: __("Envoi groupé — {0} commande(s)", [coches.length]),
+            title: coches.length > 1
+                ? __("Envoi groupé — {0} commandes", [coches.length])
+                : __("Message au client — {0}", [coches[0]]),
             size: "large",
             fields: [
                 { fieldtype: "HTML", fieldname: "totaux" },
@@ -65,7 +77,7 @@ frappe.provide("frappe.views");
                 { fieldtype: "HTML", fieldname: "apercu" },
             ],
             primary_action_label: __("Envoyer"),
-            primary_action: (v) => _envoyer(d, listview, coches, v),
+            primary_action: (v) => _envoyer(d, opts, coches, v),
         });
 
         // Les balises : un clic les insère à la position du curseur.
@@ -128,7 +140,7 @@ frappe.provide("frappe.views");
         });
     }
 
-    function _envoyer(d, listview, coches, v) {
+    function _envoyer(d, opts, coches, v) {
         if (!(v.message || "").trim()) {
             frappe.msgprint(__("Écrivez le message à envoyer."));
             return;
@@ -138,8 +150,10 @@ frappe.provide("frappe.views");
             return;
         }
         frappe.confirm(
-            __("Envoyer ce message pour {0} commande(s) ?<br>Les SMS partent vers de VRAIS clients.",
-               [coches.length]),
+            coches.length > 1
+                ? __("Envoyer ce message pour {0} commandes ?<br>Les SMS partent vers de VRAIS clients.",
+                     [coches.length])
+                : __("Envoyer ce message au client ?<br>Le SMS part vers un VRAI numéro."),
             () => frappe.call({
                 method: "customization_app.sms_commandes.envoyer",
                 args: {
@@ -159,7 +173,7 @@ frappe.provide("frappe.views");
                                         [m.commandes]),
                             indicator: "blue",
                         }, 10);
-                        listview.clear_checked_items && listview.clear_checked_items();
+                        opts.apres && opts.apres();
                         return;
                     }
                     frappe.msgprint({
@@ -173,7 +187,7 @@ frappe.provide("frappe.views");
                                   📱 ${frappe.utils.escape_html(x.sms || "—")} ·
                                   ✉️ ${frappe.utils.escape_html(x.email || "—")}</div>`).join("")}</div>`,
                     });
-                    listview.clear_checked_items && listview.clear_checked_items();
+                    opts.apres && opts.apres();
                 },
             })
         );
@@ -201,6 +215,14 @@ frappe.provide("frappe.views");
             });
         });
     }
+
+    // Sur la FICHE : le même envoi, pour cette commande seule.
+    frappe.ui.form.on("Sales Order", {
+        refresh(frm) {
+            if (frm.is_new()) return;
+            frm.add_custom_button(__(LIBELLE), () => _dialogue([frm.doc.name], {}));
+        },
+    });
 
     const _after_render = frappe.views.ListView.prototype.after_render;
     frappe.views.ListView.prototype.after_render = function () {

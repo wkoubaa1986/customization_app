@@ -12,6 +12,7 @@ BALISES (rendues par commande) :
   {article}    le nom du PREMIER article (le cas courant : une commande, un appareil)
   {code}       le code du premier article
   {statut}     statut de la commande
+  {lien_rdv}   le lien du portail de prise de rendez-vous (cliquable dans le SMS)
 
 Les numéros passent par les mêmes règles que les campagnes SMS
 (compagne_sms.traiter_numero_tel : mobiles tunisiens 8 chiffres, dédoublonnés)
@@ -107,6 +108,9 @@ def rendre(modele, ligne):
             return "{%s}" % cle
 
     return (modele or "").format_map(_Tolerant({
+        # Le lien du portail : le client tape dessus depuis son SMS et arrive
+        # sur /rdv, où son numéro le fait entrer.
+        "lien_rdv": frappe.utils.get_url("/rdv"),
         "nom_client": ligne["nom_client"],
         "commande": ligne["commande"],
         "date": ligne["date"],
