@@ -186,7 +186,17 @@ def _executer(noms, modele, sujet, sms, email, utilisateur, differe=False):
         _send_sms_with_fallback,
     )
 
-    resultat = {"sms_envoyes": 0, "emails_envoyes": 0, "echecs": 0, "detail": []}
+    # ⛔ GARDE-FOU DEV. Le site de développement porte les VRAIS numéros des
+    # clients (base restaurée de la prod) et partage la VRAIE passerelle SMS :
+    # un envoi groupé lancé en dev part donc pour de bon. Le 28/08/2026, un
+    # test de 25 commandes a expédié 27 SMS « Test … » à de vrais clients.
+    # En developer_mode, on SIMULE — sauf `sms_groupe_reel_en_dev` posé
+    # explicitement dans site_config.json par quelqu'un qui sait ce qu'il fait.
+    simulation = bool(frappe.utils.cint(frappe.conf.get("developer_mode"))) \
+        and not frappe.utils.cint(frappe.conf.get("sms_groupe_reel_en_dev"))
+
+    resultat = {"sms_envoyes": 0, "emails_envoyes": 0, "echecs": 0,
+                "simulation": simulation, "detail": []}
     lignes = _destinataires(noms)
     total = len(lignes)
     for index, ligne in enumerate(lignes, start=1):
@@ -194,7 +204,10 @@ def _executer(noms, modele, sujet, sms, email, utilisateur, differe=False):
         verdict = {"commande": ligne["commande"], "client": ligne["nom_client"],
                    "sms": None, "email": None}
 
-        if sms and ligne["numeros"]:
+        if sms and ligne["numeros"] and simulation:
+            verdict["sms"] = "SIMULÉ (dev) → %s" % ", ".join(ligne["numeros"])
+            resultat["sms_envoyes"] += 0
+        elif sms and ligne["numeros"]:
             try:
                 _send_sms_with_fallback(ligne["numeros"], texte)
                 verdict["sms"] = "envoyé → %s" % ", ".join(ligne["numeros"])
@@ -205,7 +218,9 @@ def _executer(noms, modele, sujet, sms, email, utilisateur, differe=False):
         elif sms:
             verdict["sms"] = "aucun numéro"
 
-        if email and ligne["emails"]:
+        if email and ligne["emails"] and simulation:
+            verdict["email"] = "SIMULÉ (dev) → %s" % ", ".join(ligne["emails"])
+        elif email and ligne["emails"]:
             try:
                 frappe.sendmail(
                     recipients=ligne["emails"],
