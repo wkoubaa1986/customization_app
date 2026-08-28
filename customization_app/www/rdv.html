@@ -623,6 +623,34 @@
     }
   }
 
+  // ── Fraîcheur des créneaux ───────────────────────────────────────────────
+  // Plusieurs clients réservent en même temps : une grille affichée depuis dix
+  // minutes ment. On la relit périodiquement TANT QUE l'onglet est visible, et
+  // le serveur a de toute façon le dernier mot au moment de confirmer.
+  const RAFRAICHIR_MS = 60000;
+  setInterval(() => {
+    if (document.hidden) return;
+    if (!adresse_choisie || !type_choisi) return;
+    if ($("etape-rdv") && !$("etape-rdv").classList.contains("courante")) return;
+    const garde = creneau_choisi;   // ne pas perdre la sélection en cours
+    charger_grille().then(() => {
+      if (!garde) return;
+      const bouton = $("rdv-grille").querySelector(
+        `[data-cren="${garde.date}|${garde.demi}"]`);
+      if (bouton && !bouton.disabled) {
+        bouton.classList.add("actif");
+        creneau_choisi = garde;
+      } else {
+        info("Le créneau que vous aviez choisi vient d'être pris — choisissez-en un autre.");
+      }
+    });
+  }, RAFRAICHIR_MS);
+
+  // Au retour sur l'onglet (téléphone rangé puis repris), on relit tout de suite.
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && adresse_choisie && type_choisi) charger_grille();
+  });
+
   // Onglets : Réserver / Mes commandes / Mes rendez-vous.
   document.querySelectorAll(".rdv-onglets button").forEach((b) =>
     b.addEventListener("click", () => {

@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import random
 import re
+from contextlib import contextmanager
 
 import frappe
 from frappe import _
@@ -195,6 +196,27 @@ def _adresse_du_client(client, adresse):
                              "link_doctype": "Customer", "link_name": client}):
         frappe.throw(_("Choisissez une de vos adresses."))
     return frappe.get_doc("Address", adresse)
+
+
+@contextmanager
+def _verrou_placement():
+    """Sérialise les placements du portail — le calcul du créneau et l'écriture
+    de la tâche doivent être indivisibles quand plusieurs clients réservent en
+    même temps. Court (quelques ms) : un seul verrou pour tout le portail
+    suffit, et évite d'avoir à raisonner sur des verrous par jour ou par
+    employé (le remplaçant peut changer en cours de calcul).
+
+    ⚠️ ET UNE VUE FRAÎCHE DE LA BASE. MariaDB lit en REPEATABLE READ : la
+    transaction a figé son instantané AU PREMIER SELECT, donc AVANT le verrou.
+    Sans ce commit, celui qui entre en second calcule sans voir le rendez-vous
+    que le premier vient de confirmer — et les deux tombent sur la même minute
+    chez le même technicien (constaté en test de concurrence, 28/08).
+    """
+    from frappe.utils.synchronization import filelock
+
+    with filelock("portail_rdv_placement", timeout=20):
+        frappe.db.commit()
+        yield
 
 
 def _envoyer_sms(numero, texte):
@@ -383,22 +405,26 @@ def deplacer_rdv(jeton, tache, date, demi_journee):
 
     ancien = str(doc.starts_on)[:16]
     type_i = doc.get("custom_type_dintervention")
-    employe, starts_on, duree = planning.placer(
-        config, jour, demi_journee, doc.get("secteur"), type_i, exclure=doc.name)
+    # Sous verrou comme la réservation : deux clients peuvent viser le même
+    # créneau au même instant (l'un en réservant, l'autre en déplaçant).
+    with _verrou_placement():
+        employe, starts_on, duree = planning.placer(
+            config, jour, demi_journee, doc.get("secteur"), type_i, exclure=doc.name)
 
-    import datetime as _dt
-    nom_employe = frappe.db.get_value("Employee", employe, "employee_name") or employe
-    icones = {"Entretien": "🔧 ", "Installation": "🔨 ", "Réparation": "🧰 "}
-    doc.custom_choix_du_staff = employe
-    doc.starts_on = starts_on
-    doc.ends_on = starts_on + _dt.timedelta(minutes=duree)
-    doc.temps = planning.TEMPS_LIBELLE.get(type_i) or doc.temps
-    doc.titre = "%s\n%s%s: Client: %s\n%s" % (
-        doc.get("secteur") or "", icones.get(type_i, "☕ "), type_i,
-        session["client"], nom_employe)
-    setattr(doc, "custom_employé", nom_employe)
-    doc.flags.ignore_permissions = True
-    doc.save()
+        import datetime as _dt
+        nom_employe = frappe.db.get_value("Employee", employe, "employee_name") or employe
+        icones = {"Entretien": "🔧 ", "Installation": "🔨 ", "Réparation": "🧰 "}
+        doc.custom_choix_du_staff = employe
+        doc.starts_on = starts_on
+        doc.ends_on = starts_on + _dt.timedelta(minutes=duree)
+        doc.temps = planning.TEMPS_LIBELLE.get(type_i) or doc.temps
+        doc.titre = "%s\n%s%s: Client: %s\n%s" % (
+            doc.get("secteur") or "", icones.get(type_i, "☕ "), type_i,
+            session["client"], nom_employe)
+        setattr(doc, "custom_employé", nom_employe)
+        doc.flags.ignore_permissions = True
+        doc.save()
+        frappe.db.commit()
 
     libelle_demi = _("matin") if demi_journee == "matin" else _("après-midi")
     frappe.get_doc({
@@ -598,62 +624,68 @@ def reserver(jeton, type_intervention, date, demi_journee, adresse=None,
     # Le moteur applique TOUTES les règles (secteur de l'adresse, capacité avec
     # battements, journées 8/9, quota lointain, remplaçants, dimanche) et rend
     # l'employé + l'heure de début empilée.
+    #
+    # ⚠️ SOUS VERROU. Plusieurs clients réservent en même temps : entre le
+    # calcul du créneau et l'insertion de la tâche, un autre pourrait prendre
+    # la même place — deux techniciens promis à la même minute. Le verrou
+    # sérialise les placements du portail ; ils durent quelques millisecondes.
     from customization_app import portail_rdv_planning as planning
-    employe, starts_on, duree = planning.placer(
-        config, jour, demi_journee,
-        doc_adresse.get("custom_secteur"), type_intervention)
+    with _verrou_placement():
+        employe, starts_on, duree = planning.placer(
+            config, jour, demi_journee,
+            doc_adresse.get("custom_secteur"), type_intervention)
 
-    libelle_demi = _("matin") if demi_journee == "matin" else _("après-midi")
-    # Le TITRE du calendrier est composé côté FICHE par le Client Script
-    # (update_title_and_color) — une tâche insérée par API resterait « null »
-    # au calendrier. On le compose donc ici, même gabarit que la fiche.
-    nom_employe = frappe.db.get_value("Employee", employe, "employee_name") or employe
-    icones = {"Entretien": "🔧 ", "Installation": "🔨 ", "Réparation": "🧰 "}
-    secteur_tache = doc_adresse.get("custom_secteur") or ""
-    titre = "%s\n%s%s: Client: %s\n%s" % (
-        secteur_tache, icones.get(type_intervention, "☕ "), type_intervention,
-        session["client"], nom_employe)
-    tache = frappe.get_doc({
-        "titre": titre,
-        "custom_employé": nom_employe,
-        "doctype": DOCTYPE_TACHE,
-        "custom_type_dintervention": type_intervention,
-        "custom_choix_du_staff": employe,
-        "starts_on": starts_on,
-        "status": "Open",
-        "custom_client": session["client"],
-        "nom_client": session["nom"],
-        "tel": session["telephone"],
-        "custom_reservation_app": 1,
-        "commande_client": commande or None,
-        "afficher_commande": 1 if commande else 0,
-        # L'adresse choisie irrigue la tâche : sélection, texte, secteur et
-        # lien Maps — le calendrier et la tournée s'en servent tels quels.
-        # Qui demander sur place — souvent quelqu'un d'autre que le titulaire
-        # du compte (gardien, conjoint, responsable de site).
-        "custom_contact_arrivee": " · ".join(filter(None, [
-            (contact_nom or "").strip()[:80],
-            _normaliser(contact_tel) or (contact_tel or "").strip()[:20]])) or None,
-        "select_address": doc_adresse.name,
-        "details_adresse": ", ".join(filter(None, [
-            doc_adresse.address_line1, doc_adresse.city, doc_adresse.state])),
-        "secteur": doc_adresse.get("custom_secteur"),
-        "google_map": doc_adresse.get("custom_lien_google_map"),
-        # La demi-journée choisie DOIT se lire sur la tâche : l'heure posée
-        # n'est qu'un point d'ancrage au calendrier, pas une promesse.
-        "subject": _("RDV portail — {0} ({1}){2}").format(
-            type_intervention, libelle_demi,
-            (" — " + str(note).strip()[:200]) if note and str(note).strip() else ""),
-    })
-    tache.temps = planning.TEMPS_LIBELLE.get(type_intervention)
-    tache.flags.ignore_permissions = True
-    tache.insert()
-    # Le hook de création fixe ends_on par SA table de durées (Réparation 120') —
-    # le portail impose LES SIENNES (décision 27/08 : Réparation 60').
-    import datetime as _dt
-    tache.db_set("ends_on", starts_on + _dt.timedelta(minutes=duree),
-                 update_modified=False)
-    frappe.db.commit()
+        libelle_demi = _("matin") if demi_journee == "matin" else _("après-midi")
+        # Le TITRE du calendrier est composé côté FICHE par le Client Script
+        # (update_title_and_color) — une tâche insérée par API resterait « null »
+        # au calendrier. On le compose donc ici, même gabarit que la fiche.
+        nom_employe = frappe.db.get_value("Employee", employe, "employee_name") or employe
+        icones = {"Entretien": "🔧 ", "Installation": "🔨 ", "Réparation": "🧰 "}
+        secteur_tache = doc_adresse.get("custom_secteur") or ""
+        titre = "%s\n%s%s: Client: %s\n%s" % (
+            secteur_tache, icones.get(type_intervention, "☕ "), type_intervention,
+            session["client"], nom_employe)
+        tache = frappe.get_doc({
+            "titre": titre,
+            "custom_employé": nom_employe,
+            "doctype": DOCTYPE_TACHE,
+            "custom_type_dintervention": type_intervention,
+            "custom_choix_du_staff": employe,
+            "starts_on": starts_on,
+            "status": "Open",
+            "custom_client": session["client"],
+            "nom_client": session["nom"],
+            "tel": session["telephone"],
+            "custom_reservation_app": 1,
+            "commande_client": commande or None,
+            "afficher_commande": 1 if commande else 0,
+            # L'adresse choisie irrigue la tâche : sélection, texte, secteur et
+            # lien Maps — le calendrier et la tournée s'en servent tels quels.
+            # Qui demander sur place — souvent quelqu'un d'autre que le titulaire
+            # du compte (gardien, conjoint, responsable de site).
+            "custom_contact_arrivee": " · ".join(filter(None, [
+                (contact_nom or "").strip()[:80],
+                _normaliser(contact_tel) or (contact_tel or "").strip()[:20]])) or None,
+            "select_address": doc_adresse.name,
+            "details_adresse": ", ".join(filter(None, [
+                doc_adresse.address_line1, doc_adresse.city, doc_adresse.state])),
+            "secteur": doc_adresse.get("custom_secteur"),
+            "google_map": doc_adresse.get("custom_lien_google_map"),
+            # La demi-journée choisie DOIT se lire sur la tâche : l'heure posée
+            # n'est qu'un point d'ancrage au calendrier, pas une promesse.
+            "subject": _("RDV portail — {0} ({1}){2}").format(
+                type_intervention, libelle_demi,
+                (" — " + str(note).strip()[:200]) if note and str(note).strip() else ""),
+        })
+        tache.temps = planning.TEMPS_LIBELLE.get(type_intervention)
+        tache.flags.ignore_permissions = True
+        tache.insert()
+        # Le hook de création fixe ends_on par SA table de durées (Réparation 120') —
+        # le portail impose LES SIENNES (décision 27/08 : Réparation 60').
+        import datetime as _dt
+        tache.db_set("ends_on", starts_on + _dt.timedelta(minutes=duree),
+                     update_modified=False)
+        frappe.db.commit()
 
     try:
         _envoyer_sms(session["telephone"],
