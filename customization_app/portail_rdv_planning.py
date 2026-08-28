@@ -83,7 +83,12 @@ def contexte_partenaire(config, gouvernorat):
     déplacement se prépare), et le dimanche seulement s'il le travaille.
     -> dict ou None si l'adresse n'est pas dans la zone / aucun partenaire.
     """
-    cible = (gouvernorat or "").strip().casefold()
+    # Comparaison TOLÉRANTE aux fautes de frappe des deux côtés : accents,
+    # casse, tirets et mots parasites (« Le Kef ») sont neutralisés, et un
+    # écart minime (« Monastire ») retrouve son gouvernorat.
+    from customization_app.sectorisation import gouvernorat_proche
+
+    cible = gouvernorat_proche(gouvernorat) or (gouvernorat or "").strip()
     if not cible or not frappe.db.table_exists("Portail RDV Partenaire"):
         return None
     for ligne in frappe.get_all(
@@ -92,7 +97,7 @@ def contexte_partenaire(config, gouvernorat):
                      "parenttype": "Config Portail RDV"},
             fields=["employe", "gouvernorats", "delai_jours", "dimanche"],
             order_by="idx"):
-        couverts = {g.strip().casefold()
+        couverts = {gouvernorat_proche(g) or g.strip()
                     for g in (ligne.gouvernorats or "").split(",") if g.strip()}
         if ligne.employe and cible in couverts:
             return {

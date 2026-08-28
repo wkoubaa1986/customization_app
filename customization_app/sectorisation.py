@@ -347,3 +347,53 @@ VILLES_PAR_GOUVERNORAT = {
 def secteur_de(gouvernorat, ville):
     """Le secteur d'une ville, ou None si le couple est inconnu."""
     return (VILLES_PAR_GOUVERNORAT.get(gouvernorat) or {}).get(ville)
+
+
+# ------------------------------------------------------------------ noms
+
+
+GOUVERNORATS = sorted(VILLES_PAR_GOUVERNORAT)
+
+
+def normaliser_nom(nom):
+    """« Gabés  », « GABES », « gabès » -> « gabes ». Accents, casse, ponctuation
+    et espaces multiples effacés : deux graphies d'un même gouvernorat doivent
+    se rencontrer."""
+    import re
+    import unicodedata
+
+    sans_accent = "".join(
+        c for c in unicodedata.normalize("NFD", (nom or "").strip().casefold())
+        if not unicodedata.combining(c))
+    return re.sub(r"[^a-z0-9]+", " ", sans_accent).strip()
+
+
+def gouvernorat_proche(nom, seuil=0.8):
+    """Le gouvernorat officiel correspondant à `nom`, même mal orthographié.
+
+    « Monastire », « sousse », « Ben-Arous », « Gabes » retrouvent leur nom
+    exact ; un mot sans rapport rend None plutôt qu'un voisin hasardeux — une
+    zone attribuée au mauvais partenaire serait pire qu'une zone fermée.
+    """
+    from difflib import SequenceMatcher
+
+    cible = normaliser_nom(nom)
+    if not cible:
+        return None
+    par_norme = {normaliser_nom(g): g for g in GOUVERNORATS}
+    if cible in par_norme:
+        return par_norme[cible]
+    # « Le Kef », « gouvernorat de Sousse » : le nom officiel est là, entouré
+    # de mots de remplissage. On le reconnaît comme MOT ENTIER — « ben arous »
+    # ne doit pas répondre à une recherche de « arous » seul, mais l'inverse
+    # (nom officiel contenu dans la saisie) est sans ambiguïté.
+    mots = set(cible.split())
+    for norme, officiel in par_norme.items():
+        if set(norme.split()) <= mots:
+            return officiel
+    meilleur, score = None, 0.0
+    for norme, officiel in par_norme.items():
+        r = SequenceMatcher(None, cible, norme).ratio()
+        if r > score:
+            meilleur, score = officiel, r
+    return meilleur if score >= seuil else None
