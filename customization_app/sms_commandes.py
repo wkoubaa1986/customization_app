@@ -24,7 +24,11 @@ from frappe import _
 from frappe.utils import flt
 
 CHAMP_TEL_CLIENT = "custom_liste_telephone"
-MAX_COMMANDES = 200      # garde-fou : un envoi groupé reste un geste maîtrisé
+# Pas de plafond au nombre de commandes (demande 28/08) : c'est la FILE
+# D'ATTENTE qui encaisse les gros envois, pas la requête HTTP — chaque SMS est
+# un appel réseau, et une requête web ne tient pas la distance
+# (« La requête a expiré » sur 151 commandes).
+SEUIL_DIRECT = 10
 
 
 def _lecture():
@@ -121,7 +125,7 @@ def apercu(noms, modele=None):
     """Qui recevra quoi — AVANT d'envoyer. Rendu du message pour chaque commande."""
     _lecture()
     noms = frappe.parse_json(noms) if isinstance(noms, str) else (noms or [])
-    noms = [n for n in noms if n][:MAX_COMMANDES]
+    noms = [n for n in noms if n]
     if not noms:
         return {"lignes": [], "totaux": {}}
 
@@ -143,19 +147,17 @@ def apercu(noms, modele=None):
 
 @frappe.whitelist()
 def envoyer(noms, modele, sujet=None, sms=1, email=1):
-    """Envoie le message rendu : SMS aux numéros, e-mail aux adresses des contacts.
+    """Lance l'envoi. Petit lot : tout de suite. Gros lot : EN TÂCHE DE FOND.
 
-    Un échec n'interrompt pas la tournée — chaque commande a son verdict, et le
-    détail revient à l'écran. Une trace est posée sur CHAQUE commande touchée :
-    six mois plus tard, on doit pouvoir dire ce qui a été envoyé, à qui.
+    ⚠️ Chaque SMS est un appel réseau (~1 s) : 151 commandes en direct dans la
+    requête HTTP, c'est « La requête a expiré » et un envoi à moitié fait sans
+    que personne ne sache où il s'est arrêté. Au-delà de SEUIL_DIRECT, on
+    confie donc la tournée à la file d'attente, et l'écran suit la progression.
     """
     frappe.has_permission("Sales Order", "write", throw=True)
-    from customization_app.customize_erpnext.doctype.compagne_sms.compagne_sms import (
-        _send_sms_with_fallback,
-    )
 
     noms = frappe.parse_json(noms) if isinstance(noms, str) else (noms or [])
-    noms = [n for n in noms if n][:MAX_COMMANDES]
+    noms = [n for n in noms if n]
     if not noms:
         frappe.throw(_("Sélectionnez au moins une commande."))
     if not (modele or "").strip():
@@ -164,8 +166,30 @@ def envoyer(noms, modele, sujet=None, sms=1, email=1):
     if not (sms or email):
         frappe.throw(_("Choisissez au moins un canal : SMS ou e-mail."))
 
+    if len(noms) <= SEUIL_DIRECT:
+        return _executer(noms, modele, sujet, sms, email, frappe.session.user)
+
+    frappe.enqueue(
+        "customization_app.sms_commandes._executer",
+        queue="long", timeout=3600,
+        noms=noms, modele=modele, sujet=sujet, sms=sms, email=email,
+        utilisateur=frappe.session.user, differe=True,
+        job_name="envoi_groupe_%s" % frappe.generate_hash(length=8))
+    return {"differe": True, "commandes": len(noms)}
+
+
+def _executer(noms, modele, sujet, sms, email, utilisateur, differe=False):
+    """La tournée elle-même. Un échec n'interrompt pas les suivants — chaque
+    commande a son verdict, et une trace est posée sur CHAQUE commande touchée :
+    six mois plus tard, on doit pouvoir dire ce qui a été envoyé, à qui."""
+    from customization_app.customize_erpnext.doctype.compagne_sms.compagne_sms import (
+        _send_sms_with_fallback,
+    )
+
     resultat = {"sms_envoyes": 0, "emails_envoyes": 0, "echecs": 0, "detail": []}
-    for ligne in _destinataires(noms):
+    lignes = _destinataires(noms)
+    total = len(lignes)
+    for index, ligne in enumerate(lignes, start=1):
         texte = rendre(modele, ligne)
         verdict = {"commande": ligne["commande"], "client": ligne["nom_client"],
                    "sms": None, "email": None}
@@ -211,5 +235,28 @@ def envoyer(noms, modele, sujet=None, sms=1, email=1):
             }).insert(ignore_permissions=True)
         resultat["detail"].append(verdict)
 
-    frappe.db.commit()
+        # La progression se voit à l'écran, et le travail déjà fait est ACQUIS :
+        # on commit au fil de l'eau plutôt qu'en bloc à la fin.
+        frappe.db.commit()
+        frappe.publish_realtime(
+            "envoi_groupe_progres",
+            {"fait": index, "total": total, "commande": ligne["commande"],
+             "client": ligne["nom_client"]},
+            user=utilisateur)
+
+    if differe:
+        frappe.publish_realtime("envoi_groupe_termine", resultat, user=utilisateur)
+        try:
+            frappe.get_doc({
+                "doctype": "Notification Log",
+                "for_user": utilisateur,
+                "type": "Alert",
+                "subject": _("Envoi groupé terminé — {0} SMS, {1} e-mail(s), {2} échec(s)")
+                           .format(resultat["sms_envoyes"], resultat["emails_envoyes"],
+                                   resultat["echecs"]),
+                "email_content": _("{0} commande(s) traitée(s).").format(total),
+            }).insert(ignore_permissions=True)
+            frappe.db.commit()
+        except Exception:
+            frappe.log_error(frappe.get_traceback(), "sms_commandes notification")
     return resultat

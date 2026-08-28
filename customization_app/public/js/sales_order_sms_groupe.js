@@ -151,6 +151,17 @@ frappe.provide("frappe.views");
                 callback: (r) => {
                     const m = r.message || {};
                     d.hide();
+                    // Gros lot : la tournée part en file d'attente, l'écran la
+                    // suit (progression + résumé) au lieu d'expirer.
+                    if (m.differe) {
+                        frappe.show_alert({
+                            message: __("Envoi lancé pour {0} commande(s) — la progression s'affiche ici, vous pouvez continuer à travailler.",
+                                        [m.commandes]),
+                            indicator: "blue",
+                        }, 10);
+                        listview.clear_checked_items && listview.clear_checked_items();
+                        return;
+                    }
                     frappe.msgprint({
                         title: __("Envoi terminé"),
                         indicator: m.echecs ? "orange" : "green",
@@ -166,6 +177,29 @@ frappe.provide("frappe.views");
                 },
             })
         );
+    }
+
+    // Suivi des envois différés : la file d'attente parle, l'écran écoute.
+    // Posé UNE fois pour la session, pas à chaque rendu de liste.
+    if (!window.__so_sms_realtime) {
+        window.__so_sms_realtime = true;
+        frappe.realtime.on("envoi_groupe_progres", (d) =>
+            frappe.show_progress(__("Envoi groupé"), d.fait, d.total,
+                __("{0} / {1} — {2}", [d.fait, d.total, d.client || d.commande])));
+        frappe.realtime.on("envoi_groupe_termine", (m) => {
+            frappe.hide_progress();
+            frappe.msgprint({
+                title: __("Envoi groupé terminé"),
+                indicator: m.echecs ? "orange" : "green",
+                message: __("📱 {0} SMS · ✉️ {1} e-mail(s) · {2} échec(s)",
+                            [m.sms_envoyes || 0, m.emails_envoyes || 0, m.echecs || 0])
+                    + `<div style="margin-top:8px;max-height:260px;overflow:auto;font-size:12px">${
+                        (m.detail || []).map((x) => `<div>
+                          <b>${frappe.utils.escape_html(x.client)}</b> (${x.commande}) —
+                          📱 ${frappe.utils.escape_html(x.sms || "—")} ·
+                          ✉️ ${frappe.utils.escape_html(x.email || "—")}</div>`).join("")}</div>`,
+            });
+        });
     }
 
     const _after_render = frappe.views.ListView.prototype.after_render;
