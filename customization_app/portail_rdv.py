@@ -376,15 +376,24 @@ def disponibilites(jeton, adresse=None, type_intervention=None, tache=None):
         type_intervention = doc.get("custom_type_dintervention")
         secteur = doc.get("secteur")
         exclure = doc.name
+        contexte = planning.contexte_partenaire(
+            config, frappe.db.get_value("Address", doc.get("select_address"),
+                                        "custom_state_s")
+            if doc.get("select_address") else None)
     else:
         doc_adresse = _adresse_du_client(session["client"], adresse)
         secteur = doc_adresse.get("custom_secteur")
-    hors = not secteur or secteur == planning.HORS_SECTEUR
+        contexte = planning.contexte_partenaire(
+            config, doc_adresse.get("custom_state_s") or doc_adresse.get("state"))
+    hors = (not secteur or secteur == planning.HORS_SECTEUR) and not contexte
     return {
         "secteur": secteur or "",
         "hors_secteur": hors,
+        # Zone partenaire : le délai minimum est plus long, l'écran le dit.
+        "partenaire": bool(contexte),
+        "delai_jours": (contexte or {}).get("delai_jours"),
         "jours": [] if hors else planning.disponibilites(
-            config, secteur, type_intervention, exclure=exclure),
+            config, secteur, type_intervention, exclure=exclure, contexte=contexte),
     }
 
 
@@ -399,9 +408,14 @@ def deplacer_rdv(jeton, tache, date, demi_journee):
     session = _session(jeton)
     doc = _rdv_deplacable(session, tache)
 
-    jour = getdate(date)
-    if not (getdate(nowdate()) < jour <= add_days(getdate(nowdate()), HORIZON_JOURS)):
-        frappe.throw(_("Choisissez une date entre demain et dans deux mois."))
+    contexte = planning.contexte_partenaire(
+        config, frappe.db.get_value("Address", doc.get("select_address"),
+                                    "custom_state_s")
+        if doc.get("select_address") else None)
+    delai = (contexte or {}).get("delai_jours") or planning.delai_standard(config)
+    if getdate(date) <= add_days(getdate(nowdate()), delai - 1):
+        frappe.throw(_("Choisissez une date à partir de {0}.").format(
+            _("demain") if delai <= 1 else _("dans {0} jours").format(delai)))
 
     ancien = str(doc.starts_on)[:16]
     type_i = doc.get("custom_type_dintervention")
@@ -409,7 +423,8 @@ def deplacer_rdv(jeton, tache, date, demi_journee):
     # créneau au même instant (l'un en réservant, l'autre en déplaçant).
     with _verrou_placement():
         employe, starts_on, duree = planning.placer(
-            config, jour, demi_journee, doc.get("secteur"), type_i, exclure=doc.name)
+            config, jour, demi_journee, doc.get("secteur"), type_i,
+            exclure=doc.name, contexte=contexte)
 
         import datetime as _dt
         nom_employe = frappe.db.get_value("Employee", employe, "employee_name") or employe
@@ -605,9 +620,15 @@ def reserver(jeton, type_intervention, date, demi_journee, adresse=None,
         frappe.throw(_("Type de rendez-vous inconnu."))
     if demi_journee not in ("matin", "apres_midi"):
         frappe.throw(_("Choisissez matin ou après-midi."))
+    from customization_app import portail_rdv_planning as planning
+    contexte = planning.contexte_partenaire(
+        config, doc_adresse.get("custom_state_s") or doc_adresse.get("state"))
+    delai = (contexte or {}).get("delai_jours") or planning.delai_standard(config)
     jour = getdate(date)
-    if not (getdate(nowdate()) < jour <= add_days(getdate(nowdate()), HORIZON_JOURS)):
-        frappe.throw(_("Choisissez une date entre demain et dans deux mois."))
+    if not (add_days(getdate(nowdate()), delai - 1) < jour
+            <= add_days(getdate(nowdate()), HORIZON_JOURS)):
+        frappe.throw(_("Choisissez une date entre {0} et dans deux mois.").format(
+            _("demain") if delai <= 1 else _("dans {0} jours").format(delai)))
 
     if type_intervention == TYPE_AVEC_COMMANDE:
         if not commande:
@@ -629,11 +650,10 @@ def reserver(jeton, type_intervention, date, demi_journee, adresse=None,
     # calcul du créneau et l'insertion de la tâche, un autre pourrait prendre
     # la même place — deux techniciens promis à la même minute. Le verrou
     # sérialise les placements du portail ; ils durent quelques millisecondes.
-    from customization_app import portail_rdv_planning as planning
     with _verrou_placement():
         employe, starts_on, duree = planning.placer(
             config, jour, demi_journee,
-            doc_adresse.get("custom_secteur"), type_intervention)
+            doc_adresse.get("custom_secteur"), type_intervention, contexte=contexte)
 
         libelle_demi = _("matin") if demi_journee == "matin" else _("après-midi")
         # Le TITRE du calendrier est composé côté FICHE par le Client Script

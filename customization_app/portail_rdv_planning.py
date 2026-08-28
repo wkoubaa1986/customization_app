@@ -68,6 +68,41 @@ def _liste_employes(config):
     return liste
 
 
+def delai_standard(config):
+    """Le délai minimum avant un rendez-vous, en jours (config, 1 par défaut :
+    réservable dès demain)."""
+    return cint(config.get("delai_jours")) or 1
+
+
+def contexte_partenaire(config, gouvernorat):
+    """La ZONE PARTENAIRE (Sousse, Monastir… — décision 28/08/2026).
+
+    Ces gouvernorats sont « Hors Secteur » pour l'équipe de Tunis, mais un
+    employé PARTENAIRE les couvre : leurs clients peuvent donc réserver en
+    ligne, avec ses propres règles — lui seul, un délai plus long (le
+    déplacement se prépare), et le dimanche seulement s'il le travaille.
+    -> dict ou None si l'adresse n'est pas dans la zone / aucun partenaire.
+    """
+    cible = (gouvernorat or "").strip().casefold()
+    if not cible or not frappe.db.table_exists("Portail RDV Partenaire"):
+        return None
+    for ligne in frappe.get_all(
+            "Portail RDV Partenaire",
+            filters={"parent": "Config Portail RDV",
+                     "parenttype": "Config Portail RDV"},
+            fields=["employe", "gouvernorats", "delai_jours", "dimanche"],
+            order_by="idx"):
+        couverts = {g.strip().casefold()
+                    for g in (ligne.gouvernorats or "").split(",") if g.strip()}
+        if ligne.employe and cible in couverts:
+            return {
+                "employes": [ligne.employe],
+                "delai_jours": cint(ligne.delai_jours) or 3,
+                "dimanche": bool(cint(ligne.dimanche)),
+            }
+    return None
+
+
 def _nb_actifs(config, liste):
     nb = cint(config.get("nb_employes"))
     return min(nb, len(liste)) if nb else len(liste)
@@ -263,10 +298,19 @@ def _employe_bloque_jour(entree, jour):
                for d in FENETRES)
 
 
-def _pool_du_jour(config, liste, taches, jour, conges=frozenset()):
+def _pool_du_jour(config, liste, taches, jour, conges=frozenset(), contexte=None):
     """Les N premiers employés NON bloqués ce jour-là — le suivant de la liste
     remplace un employé dont la journée est pleine OU qui est en congé /
-    récupération (Leave Application approuvée)."""
+    récupération (Leave Application approuvée).
+
+    En ZONE PARTENAIRE, pas de remplaçant : il n'y a que lui, et le dimanche
+    dépend de son propre réglage."""
+    if contexte:
+        if jour.weekday() == 6 and not contexte["dimanche"]:
+            return []
+        return [e for e in contexte["employes"]
+                if (e, jour) not in conges
+                and not _employe_bloque_jour(taches.get((e, jour)), jour)]
     if jour.weekday() == 6:  # dimanche
         if not cint(config.get("autoriser_dimanche")):
             return []
@@ -301,19 +345,25 @@ def _quota_lointain_ok(lointains, jour, secteur):
 
 
 def disponibilites(config, secteur, type_intervention, horizon=HORIZON_PLANNING,
-                   exclure=None):
-    """La grille des demi-journées faisables. -> [{date, matin, apres_midi}]."""
+                   exclure=None, contexte=None):
+    """La grille des demi-journées faisables. -> [{date, matin, apres_midi}].
+
+    `contexte` : zone partenaire (employé dédié, délai propre, dimanche) — la
+    zone est « Hors Secteur » pour Tunis, mais couverte par le partenaire."""
     duree = DUREES.get(type_intervention)
-    if not duree or not secteur or secteur == HORS_SECTEUR:
+    if not duree:
+        return []
+    if not contexte and (not secteur or secteur == HORS_SECTEUR):
         return []
 
-    liste = _liste_employes(config)
+    liste = contexte["employes"] if contexte else _liste_employes(config)
     if not liste:
         return []
-    debut = add_days(getdate(), 1)
+    debut = add_days(getdate(), contexte["delai_jours"] if contexte
+                     else delai_standard(config))
     fin = add_days(getdate(), horizon)
-    dimanche_inclus = [config.get("employe_dimanche")] \
-        if config.get("employe_dimanche") else []
+    dimanche_inclus = [] if contexte else ([config.get("employe_dimanche")]
+                                           if config.get("employe_dimanche") else [])
     tout_le_monde = list(dict.fromkeys(liste + dimanche_inclus))
     taches = _taches_periode(tout_le_monde, debut, fin, exclure=exclure)
     conges = _jours_conges(tout_le_monde, debut, fin)
@@ -323,8 +373,10 @@ def disponibilites(config, secteur, type_intervention, horizon=HORIZON_PLANNING,
     jour = debut
     while jour <= fin:
         matin = apres_midi = False
-        if _quota_lointain_ok(lointains, jour, secteur):
-            for employe in _pool_du_jour(config, liste, taches, jour, conges):
+        # Le quota « une journée par semaine » ne concerne QUE les secteurs
+        # lointains de Tunis : la zone partenaire a son propre employé.
+        if contexte or _quota_lointain_ok(lointains, jour, secteur):
+            for employe in _pool_du_jour(config, liste, taches, jour, conges, contexte):
                 entree = taches.get((employe, jour))
                 if not matin and _demi_faisable(entree, jour, "matin", secteur,
                                                 duree, config) is not None:
@@ -339,31 +391,32 @@ def disponibilites(config, secteur, type_intervention, horizon=HORIZON_PLANNING,
     return jours
 
 
-def placer(config, jour, demi, secteur, type_intervention, exclure=None):
+def placer(config, jour, demi, secteur, type_intervention, exclure=None,
+           contexte=None):
     """Choisit l'employé (ordre de la liste = priorité) et l'heure de début.
     -> (employe, starts_on, duree_minutes) ou lève."""
     duree = DUREES.get(type_intervention)
     if not duree:
         frappe.throw(_("Type de rendez-vous inconnu."))
-    if not secteur or secteur == HORS_SECTEUR:
+    if not contexte and (not secteur or secteur == HORS_SECTEUR):
         frappe.throw(_("Cette adresse est hors secteur — appelez-nous pour "
                        "organiser l'intervention."))
     if demi not in FENETRES:
         frappe.throw(_("Choisissez matin ou après-midi."))
 
-    liste = _liste_employes(config)
-    tout_le_monde = liste + ([config.get("employe_dimanche")]
-                             if config.get("employe_dimanche") else [])
+    liste = contexte["employes"] if contexte else _liste_employes(config)
+    tout_le_monde = liste + ([] if contexte else ([config.get("employe_dimanche")]
+                                                 if config.get("employe_dimanche") else []))
     taches = _taches_periode(tout_le_monde, jour, jour, exclure=exclure)
     conges = _jours_conges(tout_le_monde, jour, jour)
-    lointains = _jours_secteurs_lointains(jour, jour)
-    if not _quota_lointain_ok(lointains, jour, secteur):
+    lointains = {} if contexte else _jours_secteurs_lointains(jour, jour)
+    if not contexte and not _quota_lointain_ok(lointains, jour, secteur):
         frappe.throw(_("Ce secteur a déjà sa journée cette semaine-là — "
                        "choisissez un autre créneau proposé."))
 
     # L'ordre de la liste est la PRIORITÉ : le premier employé éligible prend,
     # et pour lui, le premier trou réel de la demi-journée.
-    for employe in _pool_du_jour(config, liste, taches, jour, conges):
+    for employe in _pool_du_jour(config, liste, taches, jour, conges, contexte):
         starts_on = _demi_faisable(taches.get((employe, jour)), jour, demi,
                                    secteur, duree, config)
         if starts_on is not None:

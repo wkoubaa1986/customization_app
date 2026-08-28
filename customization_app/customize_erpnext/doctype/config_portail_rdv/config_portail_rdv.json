@@ -9,6 +9,7 @@
   "actif",
   "mode_test",
   "nb_employes",
+  "delai_jours",
   "column_break_h1",
   "autoriser_dimanche",
   "employe_dimanche",
@@ -24,7 +25,9 @@
   "section_employes",
   "employes_disponibles",
   "section_secteurs",
-  "groupes_secteurs"
+  "groupes_secteurs",
+  "section_partenaire",
+  "partenaires"
  ],
  "fields": [
   {
@@ -133,12 +136,31 @@
    "fieldname": "groupes_secteurs",
    "fieldtype": "Small Text",
    "label": "Groupes de secteurs combinables"
+  },
+  {
+   "fieldname": "section_partenaire",
+   "fieldtype": "Section Break",
+   "label": "Zone partenaire (Sousse, Monastir…)"
+  },
+  {
+   "description": "Un partenaire par ligne : ses gouvernorats, son délai minimum et s'il travaille le dimanche. Une adresse dans ses gouvernorats devient réservable et lui est affectée.",
+   "fieldname": "partenaires",
+   "fieldtype": "Table",
+   "label": "Partenaires par région",
+   "options": "Portail RDV Partenaire"
+  },
+  {
+   "default": "1",
+   "description": "Délai minimum entre aujourd'hui et le rendez-vous, en jours. 1 = réservable dès demain.",
+   "fieldname": "delai_jours",
+   "fieldtype": "Int",
+   "label": "Délai minimum de réservation (jours)"
   }
  ],
  "index_web_pages_for_search": 0,
  "issingle": 1,
  "links": [],
- "modified": "2026-08-28 10:00:00.000000",
+ "modified": "2026-08-28 12:40:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Config Portail RDV",

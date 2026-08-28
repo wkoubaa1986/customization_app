@@ -596,9 +596,18 @@
         { jeton, adresse: adresse_choisie, type_intervention: type_choisi }, null);
       if (mien !== jeton_grille) return;
       if (res.hors_secteur) { apres_choix_adresse(); return; }
+      // Zone partenaire (Sousse, Monastir…) : le délai est plus long, on le dit
+      // plutôt que de laisser le client chercher pourquoi les 2 premiers jours
+      // manquent.
+      const prefixe = res.partenaire
+        ? `<div style="margin:4px 0 8px;padding:8px 10px;border-radius:9px;
+               background:#e0f2fe;color:#075985;font-size:12.5px">
+             🚚 Votre région est desservie par notre partenaire : les rendez-vous
+             se prennent à partir de ${res.delai_jours} jours.
+           </div>` : "";
       const jours = (res.jours || []).filter((j) => j.matin || j.apres_midi);
       zone.innerHTML = jours.length
-        ? jours.map((j) => {
+        ? prefixe + jours.map((j) => {
             const d = new Date(j.date + "T00:00:00");
             return `<div class="rdv-jour">
               <span class="j-date">${d.getDate()}/${String(d.getMonth() + 1).padStart(2, "0")}

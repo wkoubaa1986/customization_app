@@ -1,0 +1,71 @@
+{
+ "actions": [],
+ "creation": "2026-08-28 12:30:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "employe",
+  "nom_employe",
+  "gouvernorats",
+  "delai_jours",
+  "dimanche"
+ ],
+ "fields": [
+  {
+   "columns": 2,
+   "fieldname": "employe",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Employé partenaire",
+   "options": "Employee",
+   "reqd": 1
+  },
+  {
+   "fetch_from": "employe.employee_name",
+   "fieldname": "nom_employe",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Nom",
+   "read_only": 1
+  },
+  {
+   "columns": 3,
+   "description": "Gouvernorats couverts, séparés par des virgules (ex. « Sousse, Monastir »). Une adresse dans l'un d'eux devient réservable même « Hors Secteur ».",
+   "fieldname": "gouvernorats",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Gouvernorats",
+   "reqd": 1
+  },
+  {
+   "columns": 1,
+   "default": "3",
+   "description": "Le client de cette zone ne réserve qu'à partir de N jours.",
+   "fieldname": "delai_jours",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Délai (jours)"
+  },
+  {
+   "columns": 1,
+   "default": "0",
+   "fieldname": "dimanche",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Dimanche"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-08-28 12:30:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "Portail RDV Partenaire",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}
