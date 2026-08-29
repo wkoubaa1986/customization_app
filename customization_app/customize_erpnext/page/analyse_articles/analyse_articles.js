@@ -60,6 +60,13 @@ class AnalyseArticles {
       }
       this.start = 0; this._load();
     });
+    // ✏️ prix : clic sur une cellule PV TTC → modification de CE prix
+    $(this.wrapper).on("click", ".aa-pv", (e) => {
+      const $c = $(e.currentTarget);
+      this._dialog_prix_article($c.data("item"), String($c.data("pl")), $c.data("pv"));
+    });
+    $("#aa-excel").after('<button class="btn btn-sm btn-primary" id="aa-bulk-price" style="margin-left:6px">✏️ Modifier les prix</button>');
+    $("#aa-bulk-price").on("click", () => this._dialog_prix_bloc());
     $(this.wrapper).on("click", ".aa-toggle", (e) => {
       e.stopPropagation();
       const $row = $(e.currentTarget).closest("tr");
@@ -178,7 +185,9 @@ class AnalyseArticles {
       <td class="num">${this._money(b ? b.cout_ttc : r.val_ttc)}</td>`;
     pls.forEach((pl) => {
       const p = r.prices[pl] || {};
-      cells += `<td class="num pl-first">${this._money(p.pv_ttc)}</td>
+      cells += `<td class="num pl-first aa-pv" style="cursor:pointer" title="Cliquer pour modifier ce prix"
+                    data-item="${this._esc(r.item_code)}" data-pl="${this._esc(pl)}"
+                    data-pv="${p.pv_ttc == null ? "" : p.pv_ttc}">${this._money(p.pv_ttc)} <span class="aa-muted">✏️</span></td>
                 <td class="num">${this._marge(p.marge)}</td>`;
     });
     let html = `<tr>${cells}</tr>`;
@@ -233,5 +242,139 @@ class AnalyseArticles {
         <tbody>${compRows}</tbody>
       </table>
     </td></tr>`;
+  }
+
+  // ---------------------------------------------------------------- prix
+
+  _dialog_prix_article(item_code, price_list, pv_actuel) {
+    const d = new frappe.ui.Dialog({
+      title: __("Modifier le prix — {0}", [item_code]),
+      fields: [
+        { fieldtype: "HTML", fieldname: "info" },
+        { fieldtype: "Currency", fieldname: "nouveau", reqd: 1,
+          label: __("Nouveau prix TTC ({0})", [price_list]),
+          default: pv_actuel || 0 },
+        { fieldtype: "Check", fieldname: "maj_bundles", default: 1,
+          label: __("Mettre à jour les bundles contenant cet article (prix recalculé)") },
+      ],
+      primary_action_label: __("Aperçu"),
+      primary_action: (v) => {
+        d.hide();
+        this._apercu_et_appliquer(
+          { mode: "liste", changements: [{ item_code, price_list, nouveau: v.nouveau }] },
+          v.maj_bundles ? 1 : 0);
+      },
+    });
+    d.fields_dict.info.$wrapper.html(
+      `<div style="font-size:12.5px;color:var(--text-muted);margin-bottom:6px">
+        Prix actuel : <b>${pv_actuel == null || pv_actuel === "" ? "—" : format_number(pv_actuel, null, 3)}</b>.
+        L'ancien prix est clos à hier et un nouveau prend effet aujourd'hui :
+        les commandes antérieures, brouillons compris, gardent leur tarif.</div>`);
+    d.show();
+  }
+
+  _dialog_prix_bloc() {
+    const total = this.data ? this.data.total : 0;
+    const pls = (this.data ? this.data.price_lists : []).map((p) => p.name);
+    const d = new frappe.ui.Dialog({
+      title: __("Modifier les prix en bloc"),
+      fields: [
+        { fieldtype: "HTML", fieldname: "info" },
+        { fieldtype: "Select", fieldname: "price_list", reqd: 1,
+          label: __("Liste de prix"), options: pls.join("\n"), default: pls[0] },
+        { fieldtype: "Select", fieldname: "operation", reqd: 1, label: __("Opération"),
+          options: [
+            { value: "pct", label: __("Variation en % (ex. 5 ou -10)") },
+            { value: "montant", label: __("Variation en montant (ex. 2.5 ou -1)") },
+            { value: "fixe", label: __("Prix fixe pour tous") },
+          ], default: "pct" },
+        { fieldtype: "Float", fieldname: "valeur", reqd: 1, label: __("Valeur") },
+        { fieldtype: "Check", fieldname: "maj_bundles", default: 1,
+          label: __("Mettre à jour les bundles contenant ces articles") },
+      ],
+      primary_action_label: __("Aperçu"),
+      primary_action: (v) => {
+        d.hide();
+        this._apercu_et_appliquer({
+          mode: "bloc",
+          search: $("#aa-search").val() || "",
+          item_group: $("#aa-group").val() || "",
+          price_list: v.price_list, operation: v.operation, valeur: v.valeur,
+        }, v.maj_bundles ? 1 : 0);
+      },
+    });
+    d.fields_dict.info.$wrapper.html(
+      `<div style="font-size:12.5px;color:var(--text-muted);margin-bottom:6px">
+        S'applique aux <b>${total}</b> article(s) du filtre actuel
+        (recherche + groupe). Les articles sans prix sur la liste choisie sont
+        ignorés (sauf « Prix fixe »).</div>`);
+    d.show();
+  }
+
+  async _apercu_et_appliquer(cible, maj_bundles) {
+    const r = await frappe.call({
+      method: "customization_app.analyse_articles.apercu_prix",
+      args: { cible: JSON.stringify(cible), maj_bundles },
+      freeze: true, freeze_message: __("Calcul de l'aperçu…"),
+    });
+    const m = r.message || { changements: [], bundles: [] };
+    if (!m.changements.length) {
+      frappe.msgprint(__("Aucun changement de prix (mêmes valeurs ou aucun prix existant)."));
+      return;
+    }
+    const esc = frappe.utils.escape_html;
+    const fmt = (v) => (v == null ? "—" : format_number(v, null, 3));
+    const lignes = m.changements.slice(0, 400).map((c) =>
+      `<tr><td>${esc(c.item_code)}</td><td>${esc(c.item_name)}</td>
+       <td>${esc(c.price_list)}</td><td class="num">${fmt(c.ancien)}</td>
+       <td class="num"><b>${fmt(c.nouveau)}</b></td></tr>`).join("");
+    const bundles = m.bundles.map((b, i) =>
+      `<tr><td><input type="checkbox" class="aa-b-chk" data-b="${esc(b.bundle)}"
+            ${b.incomplet ? "disabled" : "checked"}></td>
+       <td>${esc(b.bundle)}</td><td>${esc(b.item_name)}</td>
+       <td>${esc(b.price_list)}</td><td class="num">${fmt(b.ancien)}</td>
+       <td class="num">${b.incomplet ? '<span style="color:#b45309">incomplet — non touché</span>' : "<b>" + fmt(b.nouveau) + "</b>"}</td></tr>`).join("");
+
+    const d = new frappe.ui.Dialog({
+      title: __("Aperçu — {0} article(s), {1} bundle(s)", [m.changements.length, m.bundles.length]),
+      size: "extra-large",
+      fields: [{ fieldtype: "HTML", fieldname: "zone" }],
+      primary_action_label: __("✅ Appliquer les prix"),
+      primary_action: async () => {
+        const exclus = [];
+        d.$wrapper.find(".aa-b-chk").each(function () {
+          if (!this.checked) exclus.push($(this).data("b"));
+        });
+        d.hide();
+        const res = await frappe.call({
+          method: "customization_app.analyse_articles.appliquer_prix",
+          args: { cible: JSON.stringify(cible), maj_bundles,
+                  bundles_exclus: JSON.stringify(exclus) },
+          freeze: true, freeze_message: __("Application des prix…"),
+        });
+        const out = res.message || {};
+        frappe.show_alert({
+          message: __("✅ {0} prix d'article(s) et {1} bundle(s) mis à jour", [out.articles, out.bundles]),
+          indicator: "green",
+        }, 8);
+        this._load();
+      },
+    });
+    d.fields_dict.zone.$wrapper.html(`
+      <div class="aa-sub-title">Articles (${m.changements.length}${m.changements.length > 400 ? ", 400 affichés" : ""})</div>
+      <div style="max-height:260px;overflow:auto"><table class="aa-sub">
+        <thead><tr><th>Code</th><th>Désignation</th><th>Liste</th>
+        <th class="num">Ancien TTC</th><th class="num">Nouveau TTC</th></tr></thead>
+        <tbody>${lignes}</tbody></table></div>
+      ${m.bundles.length ? `
+      <div class="aa-sub-title" style="margin-top:10px">Bundles impactés (réalignés sur le prix calculé — décochez pour ne pas toucher)</div>
+      <div style="max-height:220px;overflow:auto"><table class="aa-sub">
+        <thead><tr><th></th><th>Bundle</th><th>Désignation</th><th>Liste</th>
+        <th class="num">Prix propre actuel</th><th class="num">Nouveau prix</th></tr></thead>
+        <tbody>${bundles}</tbody></table></div>` : ""}
+      <div style="margin-top:8px;font-size:12px;color:var(--text-muted)">
+        🛡️ Mécanisme : l'ancien prix est clos à hier, le nouveau prend effet aujourd'hui —
+        les commandes déjà passées (même en brouillon) conservent leur tarif.</div>`);
+    d.show();
   }
 }

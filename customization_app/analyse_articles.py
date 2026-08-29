@@ -425,3 +425,208 @@ def download_excel(search=None, item_group=None):
     frappe.response["filename"] = f"analyse-articles-{nowdate()}.xlsx"
     frappe.response["filecontent"] = xlsx.getvalue()
     frappe.response["type"] = "binary"
+
+
+# ---------------------------------------------------------------- changement de prix
+#
+# Décisions (29/08/2026) :
+# - On ne MODIFIE jamais un Item Price existant : on le CLÔT (valid_upto = hier)
+#   et on en CRÉE un nouveau (valid_from = aujourd'hui). La résolution de prix
+#   d'ERPNext filtrant par date de transaction, toute commande datée d'avant —
+#   soumise OU brouillon — retombe sur l'ancien tarif même si elle recharge ses
+#   prix. Les commandes soumises gardent de toute façon leurs taux enregistrés.
+# - Exception : une ligne de prix créée AUJOURD'HUI ne peut pas être close hier ;
+#   son taux est alors modifié sur place (changement du jour même, assumé).
+# - Cascade bundles : tout Product Bundle ACTIF contenant un article modifié
+#   voit son prix propre remplacé par le PRIX CALCULÉ (somme des composants au
+#   nouveau tarif) — sauf si un composant n'a pas de prix (bundle signalé
+#   « incomplet », non touché).
+
+def _bundles_contenant(item_codes):
+    """{code_bundle: [{item_code, qty}, …] (composition COMPLÈTE)} pour les
+    bundles actifs dont au moins un composant figure dans item_codes."""
+    if not item_codes:
+        return {}
+    parents = frappe.get_all("Product Bundle Item",
+                             filters={"item_code": ["in", item_codes]},
+                             pluck="parent", distinct=True)
+    if not parents:
+        return {}
+    bundles = frappe.get_all("Product Bundle",
+                             filters={"name": ["in", parents], "disabled": 0},
+                             fields=["name", "new_item_code"])
+    if not bundles:
+        return {}
+    parent_of = {b.name: b.new_item_code for b in bundles}
+    rows = frappe.get_all("Product Bundle Item",
+                          filters={"parent": ["in", list(parent_of)]},
+                          fields=["parent", "item_code", "qty"],
+                          order_by="parent, idx")
+    out = {}
+    for r in rows:
+        out.setdefault(parent_of[r.parent], []).append(
+            {"item_code": r.item_code, "qty": flt(r.qty)})
+    return out
+
+
+def _resoudre_changements(cible):
+    """-> [{item_code, item_name, price_list, ancien, nouveau}] depuis la cible :
+    - mode « liste »  : changements explicites [{item_code, price_list, nouveau}] ;
+    - mode « bloc »   : tous les articles du filtre courant (search/groupe), une
+      liste de prix, une opération (« pct » ±x %, « montant » ±x, « fixe » = x)."""
+    cible = frappe.parse_json(cible) if isinstance(cible, str) else cible
+    noms_dict = {}
+
+    if cible.get("mode") == "bloc":
+        pl = cible.get("price_list")
+        operation, valeur = cible.get("operation"), flt(cible.get("valeur"))
+        if not pl or operation not in ("pct", "montant", "fixe"):
+            frappe.throw(_("Liste de prix et opération requises."))
+        items, _total = _fetch_items(search=cible.get("search") or None,
+                                     item_group=cible.get("item_group") or None,
+                                     page_length=0)
+        codes = [i.name for i in items]
+        noms_dict = {i.name: i.item_name for i in items}
+        prix = _price_map(codes, [pl])
+        changements = []
+        for code in codes:
+            ancien = prix.get((code, pl))
+            if operation == "fixe":
+                nouveau = valeur
+            elif ancien is None:
+                continue        # pas de prix à faire varier
+            elif operation == "pct":
+                nouveau = round(flt(ancien) * (1 + valeur / 100), 3)
+            else:
+                nouveau = round(flt(ancien) + valeur, 3)
+            if nouveau < 0:
+                nouveau = 0.0
+            changements.append({"item_code": code, "price_list": pl,
+                                "ancien": ancien, "nouveau": nouveau})
+    else:
+        changements = []
+        bruts = cible.get("changements") or []
+        codes = [c.get("item_code") for c in bruts]
+        listes = list({c.get("price_list") for c in bruts})
+        prix = _price_map(codes, listes)
+        for c in bruts:
+            changements.append({
+                "item_code": c["item_code"], "price_list": c["price_list"],
+                "ancien": prix.get((c["item_code"], c["price_list"])),
+                "nouveau": flt(c["nouveau"]),
+            })
+        noms_dict = dict(frappe.get_all("Item", filters={"name": ["in", codes]},
+                                        fields=["name", "item_name"], as_list=True))
+
+    for c in changements:
+        c["item_name"] = noms_dict.get(c["item_code"]) or c["item_code"]
+    # Ne garder que les vrais changements
+    return [c for c in changements
+            if c["ancien"] is None or round(flt(c["ancien"]), 3) != round(c["nouveau"], 3)]
+
+
+def _cascade_bundles(changements):
+    """-> [{bundle, item_name, price_list, ancien, nouveau, incomplet}] : le
+    nouveau prix propre (= prix calculé) des bundles actifs touchés."""
+    par_liste = {}
+    for c in changements:
+        par_liste.setdefault(c["price_list"], {})[c["item_code"]] = c["nouveau"]
+
+    resultat = []
+    codes_changes = list({c["item_code"] for c in changements})
+    bundles = _bundles_contenant(codes_changes)
+    if not bundles:
+        return resultat
+    tous_composants = list({comp["item_code"] for comps in bundles.values() for comp in comps})
+    noms = dict(frappe.get_all("Item", filters={"name": ["in", list(bundles)]},
+                               fields=["name", "item_name"], as_list=True))
+    directs = {(c["item_code"], c["price_list"]) for c in changements}
+
+    for pl, nouveaux in par_liste.items():
+        prix = _price_map(tous_composants + list(bundles), [pl])
+        for bundle_code, comps in bundles.items():
+            if (bundle_code, pl) in directs:
+                continue        # prix du bundle changé explicitement : il prime
+            total, incomplet = 0.0, False
+            for comp in comps:
+                p = nouveaux.get(comp["item_code"], prix.get((comp["item_code"], pl)))
+                if p is None:
+                    incomplet = True
+                    break
+                total += flt(p) * comp["qty"]
+            resultat.append({
+                "bundle": bundle_code,
+                "item_name": noms.get(bundle_code) or bundle_code,
+                "price_list": pl,
+                "ancien": prix.get((bundle_code, pl)),
+                "nouveau": None if incomplet else round(total, 3),
+                "incomplet": incomplet,
+            })
+    return resultat
+
+
+def _poser_prix(item_code, price_list, nouveau):
+    """Clôt les lignes de prix valides aujourd'hui et crée la nouvelle."""
+    today = getdate(nowdate())
+    lignes = frappe.get_all(
+        "Item Price",
+        filters={"selling": 1, "item_code": item_code, "price_list": price_list},
+        fields=["name", "valid_from", "valid_upto"])
+    hier = frappe.utils.add_days(today, -1)
+    for l in lignes:
+        vf = getdate(l.valid_from) if l.valid_from else None
+        vu = getdate(l.valid_upto) if l.valid_upto else None
+        if (vf and vf > today) or (vu and vu < today):
+            continue            # pas valide aujourd'hui : on n'y touche pas
+        if vf and vf >= today:
+            # créée aujourd'hui : impossible de la clore hier → maj sur place
+            frappe.db.set_value("Item Price", l.name, "price_list_rate", nouveau)
+            return l.name
+        frappe.db.set_value("Item Price", l.name, "valid_upto", hier)
+
+    doc = frappe.get_doc({
+        "doctype": "Item Price", "selling": 1,
+        "item_code": item_code, "price_list": price_list,
+        "price_list_rate": nouveau, "valid_from": today,
+    })
+    doc.insert(ignore_permissions=True)
+    return doc.name
+
+
+@frappe.whitelist()
+def apercu_prix(cible, maj_bundles=1):
+    """Ce qui VA changer — avant d'appliquer. Rendu article par article, plus
+    la cascade sur les bundles actifs concernés."""
+    _guard()
+    changements = _resoudre_changements(cible)
+    bundles = _cascade_bundles(changements) if frappe.utils.cint(maj_bundles) else []
+    return {"changements": changements, "bundles": bundles}
+
+
+@frappe.whitelist()
+def appliquer_prix(cible, maj_bundles=1, bundles_exclus=None):
+    """Applique les changements (articles puis bundles), à la manière ERPNext :
+    nouvelle ligne de prix datée d'aujourd'hui, l'ancienne close à hier — les
+    commandes antérieures, brouillons compris, ne sont jamais affectées.
+    `bundles_exclus` : codes de bundles décochés dans l'aperçu (non réalignés)."""
+    _guard()
+    changements = _resoudre_changements(cible)
+    if not changements:
+        frappe.throw(_("Aucun changement de prix à appliquer."))
+    bundles = _cascade_bundles(changements) if frappe.utils.cint(maj_bundles) else []
+    exclus = set(frappe.parse_json(bundles_exclus) if isinstance(bundles_exclus, str)
+                 else (bundles_exclus or []))
+    bundles = [b for b in bundles if b["bundle"] not in exclus]
+
+    for c in changements:
+        _poser_prix(c["item_code"], c["price_list"], c["nouveau"])
+    faits_bundles = 0
+    for b in bundles:
+        if b["nouveau"] is None:
+            continue
+        _poser_prix(b["bundle"], b["price_list"], b["nouveau"])
+        faits_bundles += 1
+    frappe.db.commit()
+    return {"articles": len(changements), "bundles": faits_bundles,
+            "bundles_incomplets": [b["bundle"] for b in bundles if b["incomplet"]],
+            "changements": changements, "detail_bundles": bundles}
