@@ -137,6 +137,15 @@
       <button class="rdv-btn secondaire" id="btn-renvoyer">Renvoyer un code</button>
     </div>
 
+    <!-- Étape 2 bis : plusieurs comptes partagent ce numéro -->
+    <div class="rdv-etape" id="etape-choix">
+      <h2>Qui êtes-vous ? 👥</h2>
+      <p style="font-size:13px;color:#64748b;margin:4px 0 10px">
+        Ce numéro de téléphone est associé à plusieurs comptes — choisissez le vôtre.
+      </p>
+      <div id="rdv-choix-clients"></div>
+    </div>
+
     <!-- Étape 3 : réservation + historique -->
     <div class="rdv-etape" id="etape-rdv">
       <h2>Bonjour <span id="rdv-nom"></span> 👋</h2>
@@ -288,17 +297,46 @@
     } catch (e) { message(e.message); }
   });
 
+  function ouvrir_seance(res) {
+    seance = res;
+    jeton = seance.jeton;
+    $("rdv-nom").textContent = seance.nom || "";
+    rendre_types();
+    rendre_commandes_installables();
+    rendre_adresses();
+    rendre_historique();
+    montrer("etape-rdv");
+  }
+
+  // Un numéro peut porter PLUSIEURS comptes clients : après le code, on fait
+  // choisir la fiche — seuls les comptes liés au numéro vérifié sont acceptés
+  // par le serveur (choisir_client).
+  function rendre_choix_client(res) {
+    const zone = $("rdv-choix-clients");
+    zone.innerHTML = "";
+    (res.choix || []).forEach((c) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "rdv-btn secondaire";
+      b.style.cssText = "display:block;width:100%;max-width:none;margin:6px 0;text-align:left";
+      b.textContent = "👤 " + (c.nom || c.client);
+      b.addEventListener("click", async () => {
+        try {
+          ouvrir_seance(await appeler("choisir_client",
+            { jeton_choix: res.jeton_choix, client: c.client }, b));
+        } catch (e) { message(e.message); }
+      });
+      zone.appendChild(b);
+    });
+    montrer("etape-choix");
+  }
+
   $("btn-verifier").addEventListener("click", async () => {
     try {
-      seance = await appeler("verifier_otp",
+      const res = await appeler("verifier_otp",
         { telephone: $("rdv-tel").value, code: $("rdv-code").value }, $("btn-verifier"));
-      jeton = seance.jeton;
-      $("rdv-nom").textContent = seance.nom || "";
-      rendre_types();
-      rendre_commandes_installables();
-      rendre_adresses();
-      rendre_historique();
-      montrer("etape-rdv");
+      if (res.choix) { rendre_choix_client(res); return; }
+      ouvrir_seance(res);
     } catch (e) { message(e.message); }
   });
 

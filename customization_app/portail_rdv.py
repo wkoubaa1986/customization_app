@@ -76,8 +76,11 @@ def _compteur_depasse(cle, maximum, fenetre):
     return valeur > maximum
 
 
-def _client_du_numero(numero):
-    """La fiche client qui porte ce numéro — celle qui a des commandes d'abord."""
+def _clients_du_numero(numero):
+    """TOUTES les fiches client qui portent ce numéro — un même téléphone sert
+    parfois à plusieurs clients (famille, entreprise) : quand il y en a plus
+    d'une, l'écran fait CHOISIR après l'OTP (demande 29/08, ex. 98985900).
+    Celles qui ont des commandes sortent en premier."""
     lignes = frappe.db.sql(
         """SELECT name, customer_name FROM tabCustomer
            WHERE COALESCE(disabled, 0) = 0
@@ -85,14 +88,12 @@ def _client_du_numero(numero):
                           '+216', '') LIKE %(motif)s
                   OR REPLACE(COALESCE(mobile_no, ''), ' ', '') LIKE %(motif)s)""",
         {"motif": "%%%s%%" % numero}, as_dict=True)
-    if not lignes:
-        return None
     if len(lignes) > 1:
-        avec_commande = [l for l in lignes if frappe.db.exists(
-            "Sales Order", {"customer": l.name, "docstatus": ["<", 2]})]
-        if avec_commande:
-            return avec_commande[0]
-    return lignes[0]
+        avec_commande = {l.name for l in lignes if frappe.db.exists(
+            "Sales Order", {"customer": l.name, "docstatus": ["<", 2]})}
+        lignes.sort(key=lambda l: (l.name not in avec_commande,
+                                   (l.customer_name or l.name).lower()))
+    return [{"client": l.name, "nom": l.customer_name or l.name} for l in lignes]
 
 
 def _config():
@@ -356,13 +357,12 @@ def envoyer_otp(telephone):
         _journal_otp(numero, "limite d'envois atteinte (ip %s)" % ip)
         frappe.throw(_("Trop de demandes — réessayez dans quelques minutes."))
 
-    client = _client_du_numero(numero)
+    clients = _clients_du_numero(numero)
     code_test = None
-    if client:
+    if clients:
         code = "%06d" % random.SystemRandom().randint(0, 999999)
         _cache().set_value("rdv_otp:%s" % numero,
-                           {"code": code, "client": client.name,
-                            "nom": client.customer_name},
+                           {"code": code, "clients": clients},
                            expires_in_sec=OTP_TTL)
         _cache().delete_value("rdv_essais:%s" % numero)
         if mode_test:
@@ -401,22 +401,54 @@ def verifier_otp(telephone, code):
         frappe.throw(_("Code incorrect ou expiré."))
 
     _cache().delete_value("rdv_otp:%s" % numero)
+    clients = attendu.get("clients") or []
+    # UN téléphone peut porter PLUSIEURS fiches client (famille, entreprise —
+    # demande 29/08) : le code prouve la possession du numéro, l'écran fait
+    # ensuite choisir la fiche. Un seul compte -> session directe, comme avant.
+    if len(clients) > 1:
+        jeton_choix = frappe.generate_hash(length=32)
+        _cache().set_value("rdv_choix:%s" % jeton_choix,
+                           {"clients": clients, "telephone": numero},
+                           expires_in_sec=OTP_TTL)
+        return {"choix": clients, "jeton_choix": jeton_choix}
+    return _ouvrir_session(numero, clients[0])
+
+
+@frappe.whitelist(allow_guest=True, methods=["POST"])
+def choisir_client(jeton_choix, client):
+    """Étape 2 bis : le numéro porte plusieurs fiches — le client choisit la
+    sienne. Seuls les comptes attachés au numéro VÉRIFIÉ sont acceptés."""
+    _config()
+    donnees = _cache().get_value("rdv_choix:%s" % (jeton_choix or ""))
+    if not donnees:
+        frappe.throw(_("Session expirée — recommencez avec votre numéro."),
+                     frappe.AuthenticationError)
+    entree = next((c for c in donnees["clients"] if c["client"] == client), None)
+    if not entree:
+        frappe.throw(_("Choisissez un des comptes proposés."))
+    _cache().delete_value("rdv_choix:%s" % jeton_choix)
+    return _ouvrir_session(donnees["telephone"], entree)
+
+
+def _ouvrir_session(numero, entree):
+    """Ouvre la session du portail pour UNE fiche client et rend tout ce que
+    l'écran doit savoir (types, commandes, adresses, historique, tarifs)."""
     jeton = frappe.generate_hash(length=32)
     _cache().set_value("rdv_session:%s" % jeton,
-                       {"client": attendu["client"], "nom": attendu["nom"],
+                       {"client": entree["client"], "nom": entree["nom"],
                         "telephone": numero},
                        expires_in_sec=SESSION_TTL)
 
-    commandes = _commandes_du_client(attendu["client"])
+    commandes = _commandes_du_client(entree["client"])
     return {
         "jeton": jeton,
-        "nom": attendu["nom"],
+        "nom": entree["nom"],
         "types": list(TYPES_TOUT_CLIENT)
                  + ([TYPE_AVEC_COMMANDE]
                     if any(c.sans_tache for c in commandes) else []),
         "commandes": commandes,
-        "adresses": _adresses_du_client(attendu["client"]),
-        "rendez_vous": _rendez_vous_du_client(attendu["client"]),
+        "adresses": _adresses_du_client(entree["client"]),
+        "rendez_vous": _rendez_vous_du_client(entree["client"]),
         "tarifs": _tarifs(),
         "date_min": str(add_days(getdate(nowdate()), 1)),
         "date_max": str(add_days(getdate(nowdate()), HORIZON_JOURS)),
