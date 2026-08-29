@@ -318,8 +318,35 @@ def build_item_row(item, ctx):
     return row
 
 
+def _filtre_marge(rows, marge):
+    """Filtre les lignes d'analyse : « lt:X » = au moins une liste de prix avec
+    une marge sous X % ; « sans_prix » = aucun prix de vente nulle part."""
+    if not marge:
+        return rows
+    if marge == "sans_prix":
+        return [r for r in rows
+                if all(p.get("pv_ttc") is None for p in r["prices"].values())]
+    if marge.startswith("lt:"):
+        seuil = flt(marge.split(":", 1)[1])
+        return [r for r in rows
+                if any(p.get("marge") is not None and flt(p["marge"]) < seuil
+                       for p in r["prices"].values())]
+    return rows
+
+
 def compute_analysis(search=None, item_group=None, start=None, page_length=None,
-                     order_by="item_code", order_dir="asc"):
+                     order_by="item_code", order_dir="asc", marge=None):
+    if marge:
+        # la marge est une valeur calculée : on construit tout, on filtre,
+        # puis on pagine en mémoire
+        complet = compute_analysis(search, item_group, None, None,
+                                   order_by, order_dir)
+        rows = _filtre_marge(complet["rows"], marge)
+        debut = int(start or 0)
+        fin = debut + page_length if page_length else None
+        return {"total": len(rows), "start": debut, "page_length": page_length,
+                "price_lists": complet["price_lists"], "rows": rows[debut:fin]}
+
     items, total = _fetch_items(search, item_group, start or 0, page_length,
                                 order_by, order_dir)
     price_lists = _selling_price_lists()
@@ -378,20 +405,22 @@ def get_filters():
 
 @frappe.whitelist()
 def get_analysis(search=None, item_group=None, start=0, page_length=PAGE_LENGTH,
-                 order_by="item_code", order_dir="asc"):
+                 order_by="item_code", order_dir="asc", marge=None):
     _guard()
     return compute_analysis(search=search or None, item_group=item_group or None,
                             start=frappe.utils.cint(start),
                             page_length=frappe.utils.cint(page_length) or PAGE_LENGTH,
-                            order_by=order_by, order_dir=order_dir)
+                            order_by=order_by, order_dir=order_dir,
+                            marge=marge or None)
 
 
 @frappe.whitelist()
-def download_excel(search=None, item_group=None):
+def download_excel(search=None, item_group=None, marge=None):
     from frappe.utils.xlsxutils import make_xlsx
 
     _guard()
-    data = compute_analysis(search=search or None, item_group=item_group or None)
+    data = compute_analysis(search=search or None, item_group=item_group or None,
+                            marge=marge or None)
     pls = [pl["name"] for pl in data["price_lists"]]
 
     header = ["Code article", "Désignation", "Groupe", "Bundle",
@@ -472,37 +501,52 @@ def _bundles_contenant(item_codes):
 def _resoudre_changements(cible):
     """-> [{item_code, item_name, price_list, ancien, nouveau}] depuis la cible :
     - mode « liste »  : changements explicites [{item_code, price_list, nouveau}] ;
-    - mode « bloc »   : tous les articles du filtre courant (search/groupe), une
-      liste de prix, une opération (« pct » ±x %, « montant » ±x, « fixe » = x)."""
+    - mode « bloc »   : les articles COCHÉS (item_codes) ou, sans sélection,
+      tout le filtre courant (search/groupe) ; une ou plusieurs listes de prix
+      (price_lists, ou price_list seule), une opération (« pct » ±x %,
+      « montant » ±x, « fixe » = x)."""
     cible = frappe.parse_json(cible) if isinstance(cible, str) else cible
     noms_dict = {}
 
     if cible.get("mode") == "bloc":
-        pl = cible.get("price_list")
+        pls = cible.get("price_lists") or (
+            [cible["price_list"]] if cible.get("price_list") else [])
         operation, valeur = cible.get("operation"), flt(cible.get("valeur"))
-        if not pl or operation not in ("pct", "montant", "fixe"):
+        if not pls or operation not in ("pct", "montant", "fixe"):
             frappe.throw(_("Liste de prix et opération requises."))
-        items, _total = _fetch_items(search=cible.get("search") or None,
-                                     item_group=cible.get("item_group") or None,
-                                     page_length=0)
+        selection = cible.get("item_codes") or []
+        if selection:
+            items = frappe.get_all("Item", filters={"name": ["in", selection]},
+                                   fields=["name", "item_name"])
+        elif cible.get("marge"):
+            # même périmètre que l'affichage : le filtre marge est calculé
+            complet = compute_analysis(search=cible.get("search") or None,
+                                       item_group=cible.get("item_group") or None)
+            items = [frappe._dict(name=r["item_code"], item_name=r["item_name"])
+                     for r in _filtre_marge(complet["rows"], cible["marge"])]
+        else:
+            items, _total = _fetch_items(search=cible.get("search") or None,
+                                         item_group=cible.get("item_group") or None,
+                                         page_length=0)
         codes = [i.name for i in items]
         noms_dict = {i.name: i.item_name for i in items}
-        prix = _price_map(codes, [pl])
+        prix = _price_map(codes, pls)
         changements = []
-        for code in codes:
-            ancien = prix.get((code, pl))
-            if operation == "fixe":
-                nouveau = valeur
-            elif ancien is None:
-                continue        # pas de prix à faire varier
-            elif operation == "pct":
-                nouveau = round(flt(ancien) * (1 + valeur / 100), 3)
-            else:
-                nouveau = round(flt(ancien) + valeur, 3)
-            if nouveau < 0:
-                nouveau = 0.0
-            changements.append({"item_code": code, "price_list": pl,
-                                "ancien": ancien, "nouveau": nouveau})
+        for pl in pls:
+            for code in codes:
+                ancien = prix.get((code, pl))
+                if operation == "fixe":
+                    nouveau = valeur
+                elif ancien is None:
+                    continue        # pas de prix à faire varier
+                elif operation == "pct":
+                    nouveau = round(flt(ancien) * (1 + valeur / 100), 3)
+                else:
+                    nouveau = round(flt(ancien) + valeur, 3)
+                if nouveau < 0:
+                    nouveau = 0.0
+                changements.append({"item_code": code, "price_list": pl,
+                                    "ancien": ancien, "nouveau": nouveau})
     else:
         changements = []
         bruts = cible.get("changements") or []

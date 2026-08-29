@@ -64,6 +64,18 @@
           <label>Groupe d’article</label>
           <select id="aa-group" class="form-control"><option value="">Tous</option></select>
         </div>
+        <div class="aa-field">
+          <label>Marge</label>
+          <select id="aa-marge" class="form-control" style="width:180px">
+            <option value="">Toutes</option>
+            <option value="lt:0">⚠️ Marge négative</option>
+            <option value="lt:10">Marge &lt; 10 %</option>
+            <option value="lt:20">Marge &lt; 20 %</option>
+            <option value="lt:30">Marge &lt; 30 %</option>
+            <option value="lt:50">Marge &lt; 50 %</option>
+            <option value="sans_prix">Sans prix de vente</option>
+          </select>
+        </div>
         <button class="btn btn-default btn-sm" id="aa-excel">📥 Exporter Excel</button>
         <div class="aa-pager">
           <button class="btn btn-default btn-xs" id="aa-prev">‹</button>

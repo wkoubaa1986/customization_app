@@ -25,6 +25,7 @@ class AnalyseArticles {
     this.order_by = "item_code";
     this.order_dir = "asc";
     this.data = null;
+    this.selection = new Set();
     this._bind();
     this._load_filters().then(() => this._load());
   }
@@ -36,6 +37,7 @@ class AnalyseArticles {
       timer = setTimeout(() => { this.start = 0; this._load(); }, 400);
     });
     $("#aa-group").on("change", () => { this.start = 0; this._load(); });
+    $("#aa-marge").on("change", () => { this.start = 0; this._load(); });
     $("#aa-prev").on("click", () => {
       if (this.start > 0) { this.start = Math.max(0, this.start - AA_PAGE_LENGTH); this._load(); }
     });
@@ -48,6 +50,7 @@ class AnalyseArticles {
       const params = new URLSearchParams({
         search: $("#aa-search").val() || "",
         item_group: $("#aa-group").val() || "",
+        marge: $("#aa-marge").val() || "",
       });
       window.open(`/api/method/customization_app.analyse_articles.download_excel?${params}`);
     });
@@ -67,6 +70,23 @@ class AnalyseArticles {
     });
     $("#aa-excel").after('<button class="btn btn-sm btn-primary" id="aa-bulk-price" style="margin-left:6px">✏️ Modifier les prix</button>');
     $("#aa-bulk-price").on("click", () => this._dialog_prix_bloc());
+    // ☑️ sélection d'articles (persiste entre pages et filtres)
+    $(this.wrapper).on("change", ".aa-sel", (e) => {
+      const code = $(e.currentTarget).data("item");
+      if (e.currentTarget.checked) this.selection.add(code);
+      else this.selection.delete(code);
+      this._maj_libelle_bloc();
+    });
+    $(this.wrapper).on("change", "#aa-chk-all", (e) => {
+      const on = e.currentTarget.checked;
+      $(this.wrapper).find(".aa-sel").each((_, el) => {
+        el.checked = on;
+        const code = $(el).data("item");
+        if (on) this.selection.add(code);
+        else this.selection.delete(code);
+      });
+      this._maj_libelle_bloc();
+    });
     $(this.wrapper).on("click", ".aa-toggle", (e) => {
       e.stopPropagation();
       const $row = $(e.currentTarget).closest("tr");
@@ -95,6 +115,7 @@ class AnalyseArticles {
         args: {
           search: $("#aa-search").val() || "",
           item_group: $("#aa-group").val() || "",
+          marge: $("#aa-marge").val() || "",
           start: this.start,
           page_length: AA_PAGE_LENGTH,
           order_by: this.order_by,
@@ -145,6 +166,7 @@ class AnalyseArticles {
 
     const pls = d.price_lists.map((p) => p.name);
     let head = `<tr>
+      <th style="width:26px"><input type="checkbox" id="aa-chk-all" title="Tout cocher (page)"></th>
       <th></th>
       <th class="sortable" data-field="item_code">Code article${this._sort_icon("item_code")}</th>
       <th class="sortable" data-field="item_name">Désignation${this._sort_icon("item_name")}</th>
@@ -155,7 +177,7 @@ class AnalyseArticles {
     pls.forEach((pl) => {
       head += `<th class="num pl-head" colspan="2">${this._esc(pl)}</th>`;
     });
-    head += "</tr><tr><th colspan='7'></th>";
+    head += "</tr><tr><th colspan='8'></th>";
     pls.forEach(() => {
       head += `<th class="num pl-head">PV TTC</th><th class="num">Marge</th>`;
     });
@@ -163,6 +185,12 @@ class AnalyseArticles {
 
     const body = d.rows.map((r) => this._render_row(r, pls)).join("");
     $("#aa-table").html(`<table class="aa-tbl"><thead>${head}</thead><tbody>${body}</tbody></table>`);
+    this._maj_libelle_bloc();
+  }
+
+  _maj_libelle_bloc() {
+    const n = this.selection.size;
+    $("#aa-bulk-price").text(n ? `✏️ Modifier les prix (${n} ☑)` : "✏️ Modifier les prix");
   }
 
   _render_row(r, pls) {
@@ -176,6 +204,8 @@ class AnalyseArticles {
       ? `<div class="aa-desc">${this._esc(strip_html(r.description))}</div>` : "";
 
     let cells = `
+      <td><input type="checkbox" class="aa-sel" data-item="${this._esc(r.item_code)}"
+           ${this.selection.has(r.item_code) ? "checked" : ""}></td>
       <td>${img}</td>
       <td>${toggle}<span class="aa-code">${this._esc(r.item_code)}</span>${badge}</td>
       <td>${this._esc(r.item_name)}${desc}</td>
@@ -197,7 +227,7 @@ class AnalyseArticles {
 
   _render_bundle_detail(r, pls) {
     const b = r.bundle;
-    const colspan = 7 + pls.length * 2;
+    const colspan = 8 + pls.length * 2;
 
     // prix propre vs prix calculé par liste
     let plRows = pls.map((pl) => {
@@ -276,12 +306,14 @@ class AnalyseArticles {
   _dialog_prix_bloc() {
     const total = this.data ? this.data.total : 0;
     const pls = (this.data ? this.data.price_lists : []).map((p) => p.name);
+    const nsel = this.selection.size;
     const d = new frappe.ui.Dialog({
       title: __("Modifier les prix en bloc"),
       fields: [
         { fieldtype: "HTML", fieldname: "info" },
-        { fieldtype: "Select", fieldname: "price_list", reqd: 1,
-          label: __("Liste de prix"), options: pls.join("\n"), default: pls[0] },
+        { fieldtype: "MultiCheck", fieldname: "price_lists", columns: 2,
+          label: __("Listes de prix"), select_all: pls.length > 1,
+          options: pls.map((p, i) => ({ label: p, value: p, checked: i === 0 })) },
         { fieldtype: "Select", fieldname: "operation", reqd: 1, label: __("Opération"),
           options: [
             { value: "pct", label: __("Variation en % (ex. 5 ou -10)") },
@@ -294,20 +326,33 @@ class AnalyseArticles {
       ],
       primary_action_label: __("Aperçu"),
       primary_action: (v) => {
+        const listes = v.price_lists || [];
+        if (!listes.length) {
+          frappe.msgprint(__("Cochez au moins une liste de prix."));
+          return;
+        }
         d.hide();
-        this._apercu_et_appliquer({
+        const cible = {
           mode: "bloc",
-          search: $("#aa-search").val() || "",
-          item_group: $("#aa-group").val() || "",
-          price_list: v.price_list, operation: v.operation, valeur: v.valeur,
-        }, v.maj_bundles ? 1 : 0);
+          price_lists: listes, operation: v.operation, valeur: v.valeur,
+        };
+        if (nsel) {
+          cible.item_codes = Array.from(this.selection);
+        } else {
+          cible.search = $("#aa-search").val() || "";
+          cible.item_group = $("#aa-group").val() || "";
+          cible.marge = $("#aa-marge").val() || "";
+        }
+        this._apercu_et_appliquer(cible, v.maj_bundles ? 1 : 0);
       },
     });
     d.fields_dict.info.$wrapper.html(
       `<div style="font-size:12.5px;color:var(--text-muted);margin-bottom:6px">
-        S'applique aux <b>${total}</b> article(s) du filtre actuel
-        (recherche + groupe). Les articles sans prix sur la liste choisie sont
-        ignorés (sauf « Prix fixe »).</div>`);
+        ${nsel
+          ? `S'applique aux <b>${nsel}</b> article(s) <b>cochés</b> dans le tableau.`
+          : `Aucun article coché : s'applique aux <b>${total}</b> article(s) du
+             filtre actuel (recherche + groupe + marge).`}
+        Les articles sans prix sur une liste y sont ignorés (sauf « Prix fixe »).</div>`);
     d.show();
   }
 
@@ -357,6 +402,7 @@ class AnalyseArticles {
           message: __("✅ {0} prix d'article(s) et {1} bundle(s) mis à jour", [out.articles, out.bundles]),
           indicator: "green",
         }, 8);
+        this.selection.clear();
         this._load();
       },
     });
