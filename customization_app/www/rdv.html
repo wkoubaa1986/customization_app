@@ -146,6 +146,41 @@
       <div id="rdv-choix-clients"></div>
     </div>
 
+    <!-- Étape 2 ter : numéro vérifié mais inconnu -> auto-inscription -->
+    <div class="rdv-etape" id="etape-inscription">
+      <h2>Créez votre compte ✨</h2>
+      <p style="font-size:13px;color:#64748b;margin:4px 0 10px">
+        Votre numéro est vérifié mais nous ne le connaissons pas encore —
+        renseignez vos informations, votre compte est créé immédiatement.
+      </p>
+      <label>Vous êtes</label>
+      <div class="rdv-choix" id="ins-types">
+        <button type="button" data-type="Individuel" class="actif">👤 Individuel</button>
+        <button type="button" data-type="Société">🏢 Société</button>
+      </div>
+      <label id="ins-nom-label">Nom et prénom</label>
+      <input type="text" id="ins-nom" maxlength="120" placeholder="Ex. : Mohamed Ben Salah">
+      <div id="ins-mf-bloc" style="display:none">
+        <label>Matricule fiscal <span style="color:#b02a37">*</span></label>
+        <input type="text" id="ins-mf" maxlength="30" placeholder="Ex. : 1234567/A/M/000">
+      </div>
+      <div style="background:#f8fafc;border-radius:10px;padding:4px 12px 12px;margin-top:10px">
+        <div style="font-size:12.5px;font-weight:700;color:#334155;margin-top:8px">📍 Votre adresse</div>
+        <label>Pays</label>
+        <input type="text" value="🇹🇳 Tunisie" disabled style="background:#eef2f7;color:#475569">
+        <label>Gouvernorat</label>
+        <select id="ins-gouvernorat"><option value="">—</option></select>
+        <label>Ville</label>
+        <select id="ins-ville"><option value="">—</option></select>
+        <div id="ins-secteur" style="margin-top:6px;font-size:12.5px;color:#0e7490;font-weight:600"></div>
+        <label>Adresse (rue, résidence…)</label>
+        <input type="text" id="ins-ligne" maxlength="140" placeholder="Ex. : 12 rue des Jasmins, Rés. Yasmine">
+        <label>Code postal (facultatif)</label>
+        <input type="tel" id="ins-pincode" inputmode="numeric" maxlength="4" placeholder="2036">
+      </div>
+      <button class="rdv-btn" id="btn-inscrire" style="max-width:100%">Créer mon compte et continuer</button>
+    </div>
+
     <!-- Étape 3 : réservation + historique -->
     <div class="rdv-etape" id="etape-rdv">
       <h2>Bonjour <span id="rdv-nom"></span> 👋</h2>
@@ -335,8 +370,71 @@
     try {
       const res = await appeler("verifier_otp",
         { telephone: $("rdv-tel").value, code: $("rdv-code").value }, $("btn-verifier"));
+      if (res.inscription) { await ouvrir_inscription(res.jeton_inscription); return; }
       if (res.choix) { rendre_choix_client(res); return; }
       ouvrir_seance(res);
+    } catch (e) { message(e.message); }
+  });
+
+  // ── Auto-inscription : numéro vérifié par OTP mais inconnu de la base ─────
+  let jeton_inscription = null, ins_type = "Individuel";
+
+  async function ouvrir_inscription(jeton_ins) {
+    jeton_inscription = jeton_ins;
+    try {
+      referentiel = referentiel
+        || await appeler("referentiel_adresses", { jeton: jeton_ins }, null);
+    } catch (e) { return message(e.message); }
+    $("ins-gouvernorat").innerHTML = `<option value="">—</option>` +
+      Object.keys(referentiel).map((g) => `<option>${echapper(g)}</option>`).join("");
+    montrer("etape-inscription");
+  }
+
+  function ins_maj_villes() {
+    const villes = Object.keys((referentiel || {})[$("ins-gouvernorat").value] || {});
+    $("ins-ville").innerHTML = `<option value="">—</option>` +
+      villes.map((v) => `<option>${echapper(v)}</option>`).join("");
+    ins_maj_secteur();
+  }
+
+  function ins_maj_secteur() {
+    const s = (((referentiel || {})[$("ins-gouvernorat").value]) || {})[$("ins-ville").value];
+    $("ins-secteur").textContent = s ? "📍 Secteur affecté : " + s : "";
+  }
+
+  $("ins-gouvernorat").addEventListener("change", ins_maj_villes);
+  $("ins-ville").addEventListener("change", ins_maj_secteur);
+
+  document.querySelectorAll("#ins-types button").forEach((b) =>
+    b.addEventListener("click", () => {
+      document.querySelectorAll("#ins-types button").forEach((x) => x.classList.remove("actif"));
+      b.classList.add("actif");
+      ins_type = b.getAttribute("data-type");
+      const societe = ins_type === "Société";
+      $("ins-mf-bloc").style.display = societe ? "block" : "none";
+      $("ins-nom-label").textContent = societe ? "Raison sociale" : "Nom et prénom";
+      $("ins-nom").placeholder = societe ? "Ex. : STE AquaPlus SARL" : "Ex. : Mohamed Ben Salah";
+    }));
+
+  $("btn-inscrire").addEventListener("click", async () => {
+    if (!($("ins-nom").value || "").trim()) return message("Écrivez votre nom.");
+    if (ins_type === "Société" && !($("ins-mf").value || "").trim())
+      return message("Le matricule fiscal est obligatoire pour une société.");
+    if (!$("ins-gouvernorat").value || !$("ins-ville").value)
+      return message("Choisissez le gouvernorat et la ville.");
+    if (!($("ins-ligne").value || "").trim()) return message("Écrivez votre adresse.");
+    try {
+      ouvrir_seance(await appeler("inscrire_client", {
+        jeton_inscription,
+        nom: $("ins-nom").value,
+        type_client: ins_type,
+        matricule_fiscale: $("ins-mf").value,
+        ligne: $("ins-ligne").value,
+        gouvernorat: $("ins-gouvernorat").value,
+        ville: $("ins-ville").value,
+        code_postal: $("ins-pincode").value,
+      }, $("btn-inscrire")));
+      info("Bienvenue ! Votre compte a été créé. 🎉");
     } catch (e) { message(e.message); }
   });
 

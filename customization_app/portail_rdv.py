@@ -38,6 +38,7 @@ TYPE_AVEC_COMMANDE = "Installation"
 
 OTP_TTL = 300           # 5 minutes
 SESSION_TTL = 1800      # 30 minutes
+INSCRIPTION_TTL = 900   # 15 minutes pour remplir le formulaire d'inscription
 ENVOIS_MAX = 3          # par numéro, sur 15 min
 # Par IP : bien plus large. Les opérateurs mobiles tunisiens font du NAT de
 # groupe (CGNAT) : des dizaines de clients LÉGITIMES partagent la même adresse
@@ -359,26 +360,24 @@ def envoyer_otp(telephone):
 
     clients = _clients_du_numero(numero)
     code_test = None
-    if clients:
-        code = "%06d" % random.SystemRandom().randint(0, 999999)
-        _cache().set_value("rdv_otp:%s" % numero,
-                           {"code": code, "clients": clients},
-                           expires_in_sec=OTP_TTL)
-        _cache().delete_value("rdv_essais:%s" % numero)
-        if mode_test:
-            code_test = code
-        else:
-            try:
-                _envoyer_otp_sms(numero, "Code Aqua World : %s (valable 5 minutes)." % code)
-            except Exception:
-                frappe.log_error(frappe.get_traceback(), "portail_rdv envoi OTP")
-                frappe.throw(_("Envoi du SMS impossible pour le moment — réessayez."))
+    # Depuis le 29/08 un numéro INCONNU reçoit aussi son code : après l'OTP, le
+    # portail lui propose de créer sa fiche client (auto-inscription). L'OTP
+    # continue de prouver la possession du numéro avant toute création.
+    if not clients:
+        _journal_otp(numero, "numéro inconnu — parcours d'auto-inscription")
+    code = "%06d" % random.SystemRandom().randint(0, 999999)
+    _cache().set_value("rdv_otp:%s" % numero,
+                       {"code": code, "clients": clients},
+                       expires_in_sec=OTP_TTL)
+    _cache().delete_value("rdv_essais:%s" % numero)
+    if mode_test:
+        code_test = code
     else:
-        # Le client ne voit rien (anti-énumération) mais le SUPPORT doit savoir :
-        # « je ne reçois pas le code » vient le plus souvent d'un numéro absent
-        # de la fiche client — la trace permet de le dire et de corriger la fiche.
-        _journal_otp(numero, "numéro inconnu — aucun SMS envoyé")
-    # Numéro inconnu : même réponse, aucune fuite.
+        try:
+            _envoyer_otp_sms(numero, "Code Aqua World : %s (valable 5 minutes)." % code)
+        except Exception:
+            frappe.log_error(frappe.get_traceback(), "portail_rdv envoi OTP")
+            frappe.throw(_("Envoi du SMS impossible pour le moment — réessayez."))
     reponse = {"message": MESSAGE_GENERIQUE}
     if code_test:
         reponse["code_test"] = code_test
@@ -402,6 +401,14 @@ def verifier_otp(telephone, code):
 
     _cache().delete_value("rdv_otp:%s" % numero)
     clients = attendu.get("clients") or []
+    # Numéro vérifié mais inconnu de la base : parcours d'auto-inscription —
+    # un jeton dédié couvre le temps de remplir le formulaire (nom, type,
+    # adresse), puis inscrire_client() crée la fiche et ouvre la session.
+    if not clients:
+        jeton_inscription = frappe.generate_hash(length=32)
+        _cache().set_value("rdv_inscription:%s" % jeton_inscription,
+                           {"telephone": numero}, expires_in_sec=INSCRIPTION_TTL)
+        return {"inscription": 1, "jeton_inscription": jeton_inscription}
     # UN téléphone peut porter PLUSIEURS fiches client (famille, entreprise —
     # demande 29/08) : le code prouve la possession du numéro, l'écran fait
     # ensuite choisir la fiche. Un seul compte -> session directe, comme avant.
@@ -624,10 +631,96 @@ def annuler_rdv(jeton, tache):
 @frappe.whitelist(allow_guest=True, methods=["POST"])
 def referentiel_adresses(jeton):
     """Gouvernorats et villes de la sectorisation — pour le formulaire d'adresse.
-    Derrière le jeton : le référentiel ne sort pas pour les anonymes."""
-    _session(jeton)
+    Derrière le jeton : le référentiel ne sort pas pour les anonymes. Accepte le
+    jeton de SESSION ou celui d'INSCRIPTION (le nouveau client saisit son
+    adresse avant d'avoir une session)."""
+    if not _cache().get_value("rdv_inscription:%s" % (jeton or "")):
+        _session(jeton)
     from customization_app.sectorisation import VILLES_PAR_GOUVERNORAT
     return VILLES_PAR_GOUVERNORAT
+
+
+@frappe.whitelist(allow_guest=True, methods=["POST"])
+def inscrire_client(jeton_inscription, nom, type_client, matricule_fiscale=None,
+                    ligne=None, gouvernorat=None, ville=None, code_postal=None,
+                    lien_maps=None):
+    """Auto-inscription (29/08) : le numéro est VÉRIFIÉ par OTP mais inconnu —
+    le client crée sa fiche lui-même, façon quick entry : nom, type
+    (Individuel / Société — matricule fiscale obligatoire pour une société) et
+    son adresse (pays : Tunisie, sectorisation imposée comme partout). La fiche
+    est créée directement puis la session s'ouvre."""
+    from customization_app.sectorisation import secteur_de
+
+    _config()
+    donnees = _cache().get_value("rdv_inscription:%s" % (jeton_inscription or ""))
+    if not donnees:
+        frappe.throw(_("Session expirée — recommencez avec votre numéro."),
+                     frappe.AuthenticationError)
+    numero = donnees["telephone"]
+
+    nom = (nom or "").strip()
+    if len(nom) < 3:
+        frappe.throw(_("Écrivez votre nom complet (ou la raison sociale)."))
+    types = {"Individuel": "Individual", "Société": "Company"}
+    if type_client not in types:
+        frappe.throw(_("Choisissez le type : Individuel ou Société."))
+    matricule = (matricule_fiscale or "").strip()
+    if type_client == "Société" and not matricule:
+        frappe.throw(_("Le matricule fiscal est obligatoire pour une société."))
+    ligne = (ligne or "").strip()
+    if not ligne:
+        frappe.throw(_("Écrivez l'adresse (rue, résidence…)."))
+    secteur = secteur_de(gouvernorat, ville)
+    if not secteur:
+        frappe.throw(_("Choisissez un gouvernorat et une ville de la liste."))
+    if _clients_du_numero(numero):
+        # créé entre-temps (double clic, second onglet) : on ne duplique pas
+        frappe.throw(_("Ce numéro est déjà associé à un compte — reconnectez-vous."))
+
+    client = frappe.get_doc({
+        "doctype": "Customer",
+        "customer_name": nom,
+        "customer_type": types[type_client],
+        # groupe FEUILLE obligatoire — « Individuel » porte l'essentiel des
+        # fiches (même les sociétés) ; territoire aligné sur l'existant
+        "customer_group": (
+            frappe.db.exists("Customer Group", {"name": "Individuel", "is_group": 0})
+            and "Individuel"
+            or frappe.db.get_value("Customer Group", {"is_group": 0}, "name")),
+        "territory": (frappe.db.exists("Territory", "Tunisia") and "Tunisia"
+                      or frappe.db.get_single_value("Selling Settings", "territory")),
+        "mobile_no": numero,
+        "tax_id": matricule or None,
+    })
+    client.flags.ignore_permissions = True
+    client.flags.ignore_mandatory = True
+    client.insert()
+
+    adresse = frappe.get_doc({
+        "doctype": "Address",
+        "address_title": "%s-%s" % (nom, ville),
+        "address_type": "Shipping",
+        "address_line1": ligne,
+        "city": ville,
+        "state": gouvernorat,
+        "country": "Tunisia",
+        "pincode": (code_postal or "").strip() or None,
+        "custom_state_s": gouvernorat,
+        "custom_villes_s": ville,
+        "custom_secteur": secteur,
+        "custom_lien_google_map": (lien_maps or "").strip() or None,
+        "phone": numero,
+        "custom_reservation_app": 1,
+        "links": [{"link_doctype": "Customer", "link_name": client.name}],
+    })
+    adresse.flags.ignore_permissions = True
+    adresse.insert()
+    frappe.db.commit()
+
+    _cache().delete_value("rdv_inscription:%s" % jeton_inscription)
+    _journal_otp(numero, "auto-inscription : client %s (%s) créé" % (client.name, type_client))
+    return _ouvrir_session(numero, {"client": client.name,
+                                    "nom": client.customer_name or client.name})
 
 
 @frappe.whitelist(allow_guest=True, methods=["POST"])
