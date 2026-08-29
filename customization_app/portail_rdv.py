@@ -642,8 +642,8 @@ def referentiel_adresses(jeton):
 
 @frappe.whitelist(allow_guest=True, methods=["POST"])
 def inscrire_client(jeton_inscription, nom, type_client, matricule_fiscale=None,
-                    ligne=None, gouvernorat=None, ville=None, code_postal=None,
-                    lien_maps=None):
+                    email=None, ligne=None, gouvernorat=None, ville=None,
+                    code_postal=None, lien_maps=None):
     """Auto-inscription (29/08) : le numéro est VÉRIFIÉ par OTP mais inconnu —
     le client crée sa fiche lui-même, façon quick entry : nom, type
     (Individuel / Société — matricule fiscale obligatoire pour une société) et
@@ -667,6 +667,10 @@ def inscrire_client(jeton_inscription, nom, type_client, matricule_fiscale=None,
     matricule = (matricule_fiscale or "").strip()
     if type_client == "Société" and not matricule:
         frappe.throw(_("Le matricule fiscal est obligatoire pour une société."))
+    from frappe.utils import validate_email_address
+    email = (email or "").strip()
+    if not email or not validate_email_address(email):
+        frappe.throw(_("Écrivez une adresse e-mail valide."))
     ligne = (ligne or "").strip()
     if not ligne:
         frappe.throw(_("Écrivez l'adresse (rue, résidence…)."))
@@ -690,6 +694,8 @@ def inscrire_client(jeton_inscription, nom, type_client, matricule_fiscale=None,
         "territory": (frappe.db.exists("Territory", "Tunisia") and "Tunisia"
                       or frappe.db.get_single_value("Selling Settings", "territory")),
         "mobile_no": numero,
+        # email_id + mobile_no → ERPNext crée le Contact principal (create_primary_contact)
+        "email_id": email,
         "tax_id": matricule or None,
     })
     client.flags.ignore_permissions = True

@@ -164,6 +164,9 @@
         <label>Matricule fiscal <span style="color:#b02a37">*</span></label>
         <input type="text" id="ins-mf" maxlength="30" placeholder="Ex. : 1234567/A/M/000">
       </div>
+      <label>Adresse e-mail <span style="color:#b02a37">*</span></label>
+      <input type="email" id="ins-email" maxlength="120" inputmode="email"
+             autocomplete="email" placeholder="Ex. : mohamed.bensalah@gmail.com">
       <div style="background:#f8fafc;border-radius:10px;padding:4px 12px 12px;margin-top:10px">
         <div style="font-size:12.5px;font-weight:700;color:#334155;margin-top:8px">📍 Votre adresse</div>
         <label>Pays</label>
@@ -420,6 +423,9 @@
     if (!($("ins-nom").value || "").trim()) return message("Écrivez votre nom.");
     if (ins_type === "Société" && !($("ins-mf").value || "").trim())
       return message("Le matricule fiscal est obligatoire pour une société.");
+    const ins_email = ($("ins-email").value || "").trim();
+    if (!ins_email || !/^\S+@\S+\.\S+$/.test(ins_email))
+      return message("Écrivez une adresse e-mail valide.");
     if (!$("ins-gouvernorat").value || !$("ins-ville").value)
       return message("Choisissez le gouvernorat et la ville.");
     if (!($("ins-ligne").value || "").trim()) return message("Écrivez votre adresse.");
@@ -429,6 +435,7 @@
         nom: $("ins-nom").value,
         type_client: ins_type,
         matricule_fiscale: $("ins-mf").value,
+        email: ins_email,
         ligne: $("ins-ligne").value,
         gouvernorat: $("ins-gouvernorat").value,
         ville: $("ins-ville").value,
