@@ -297,6 +297,14 @@ function tache_dialogue_cloture(frm, exigences) {
                 );
         });
 
+        // ⚠️ Les boutons « Ajouter » (photos) et « 📍 Ma position » se branchent
+        // ICI, dans rendre() : ils vivent dans `zone`, pas dans `zone_infos`.
+        // Les brancher dans rendre_infos() les tuait dès qu'aucune commande
+        // n'était liée — son `return` anticipé (pas de commande_infos) sortait
+        // AVANT les .on("click"), et tout le dialogue restait inerte
+        // (régression v5.18.3, constatée sur les Entretiens en prod).
+        brancher_boutons_zone();
+
         rendre_infos();
     }
 
@@ -384,7 +392,9 @@ function tache_dialogue_cloture(frm, exigences) {
                     })
                 );
         });
+    }
 
+    function brancher_boutons_zone() {
         d.fields_dict.zone.$wrapper.find("[data-gps]").on("click", function () {
             const $b = $(this);
             if (!navigator.geolocation) {
