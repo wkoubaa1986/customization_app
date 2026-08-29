@@ -473,6 +473,9 @@ def disponibilites(jeton, adresse=None, type_intervention=None, tache=None):
         # Zone partenaire : le délai minimum est plus long, l'écran le dit.
         "partenaire": bool(contexte),
         "delai_jours": (contexte or {}).get("delai_jours"),
+        # Les horaires affichés sur les boutons suivent la config (fenêtres
+        # réglables) — plus de « 09:30 – 12:30 » en dur à l'écran.
+        "horaires": planning.fenetres_libellees(),
         "jours": [] if hors else planning.disponibilites(
             config, secteur, type_intervention, exclure=exclure, contexte=contexte),
     }

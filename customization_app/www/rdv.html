@@ -606,6 +606,7 @@
              se prennent à partir de ${res.delai_jours} jours.
            </div>` : "";
       const jours = (res.jours || []).filter((j) => j.matin || j.apres_midi);
+      const horaires = res.horaires || { matin: "09:30 – 12:30", apres_midi: "13:30 – 17:30" };
       zone.innerHTML = jours.length
         ? prefixe + jours.map((j) => {
             const d = new Date(j.date + "T00:00:00");
@@ -613,9 +614,9 @@
               <span class="j-date">${d.getDate()}/${String(d.getMonth() + 1).padStart(2, "0")}
                 <span class="j-sem">${JOURS_FR[d.getDay()]}</span></span>
               <button type="button" data-cren="${j.date}|matin" ${j.matin ? "" : "disabled"}>
-                ☀️ Matin<span class="j-heures">09:30 – 12:30</span></button>
+                ☀️ Matin<span class="j-heures">${horaires.matin}</span></button>
               <button type="button" data-cren="${j.date}|apres_midi" ${j.apres_midi ? "" : "disabled"}>
-                🌙 Après-midi<span class="j-heures">13:30 – 17:30</span></button>
+                🌙 Après-midi<span class="j-heures">${horaires.apres_midi}</span></button>
             </div>`;
           }).join("")
         : `<div class="rdv-vide">Aucun créneau disponible sur les 3 prochaines semaines —
@@ -775,8 +776,12 @@
           // Le créneau ACTUEL du rendez-vous se voit, grisé et non cliquable :
           // le client comprend d'où il part, et ne « déplace » pas sur place.
           const rdv = (seance.rendez_vous || []).find((x) => x.tache === tache) || {};
+          const horaires = res.horaires || { matin: "09:30 – 12:30", apres_midi: "13:30 – 17:30" };
+          // Le seuil matin/après-midi suit la config : l'heure de début de
+          // l'après-midi, pas un « 13 » en dur.
+          const seuil_am = horaires.apres_midi.slice(0, 2);
           const actuel_date = (rdv.date || "").slice(0, 10);
-          const actuel_demi = (rdv.date || "").slice(11, 13) < "13" ? "matin" : "apres_midi";
+          const actuel_demi = (rdv.date || "").slice(11, 13) < seuil_am ? "matin" : "apres_midi";
           const bouton = (j, demi, libelle, heures) => {
             const actuel = j.date === actuel_date && demi === actuel_demi;
             const libre = demi === "matin" ? j.matin : j.apres_midi;
@@ -791,8 +796,8 @@
             return `<div class="rdv-jour">
               <span class="j-date">${d.getDate()}/${String(d.getMonth() + 1).padStart(2, "0")}
                 <span class="j-sem">${JOURS_FR[d.getDay()]}</span></span>
-              ${bouton(j, "matin", "☀️ Matin", "09:30 – 12:30")}
-              ${bouton(j, "apres_midi", "🌙 Après-midi", "13:30 – 17:30")}
+              ${bouton(j, "matin", "☀️ Matin", horaires.matin)}
+              ${bouton(j, "apres_midi", "🌙 Après-midi", horaires.apres_midi)}
             </div>`;
           }).join("")
           + `<button type="button" class="rdv-btn" id="confirmer-move-${echapper(tache)}"

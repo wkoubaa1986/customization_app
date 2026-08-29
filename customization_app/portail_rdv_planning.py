@@ -36,10 +36,54 @@ from frappe.utils import add_days, cint, get_datetime, getdate
 
 DOCTYPE_TACHE = "Tache de travail"
 
-FENETRES = {
+DEMIS = ("matin", "apres_midi")
+FENETRES_DEFAUT = {
     "matin": ("09:30:00", "12:30:00"),
     "apres_midi": ("13:30:00", "17:30:00"),
 }
+
+
+def _heure(valeur, defaut):
+    """« 9:30 » / « 09:30:00 » / timedelta -> « HH:MM:SS ». Repli sur le défaut."""
+    brut = str(valeur or "").strip()
+    if not brut:
+        return defaut
+    morceaux = brut.split(":")
+    if not morceaux[0].isdigit():
+        return defaut
+    h = int(morceaux[0])
+    m = int(morceaux[1]) if len(morceaux) > 1 and morceaux[1].isdigit() else 0
+    if not (0 <= h <= 23 and 0 <= m <= 59):
+        return defaut
+    return "%02d:%02d:00" % (h, m)
+
+
+def fenetres():
+    """Fenêtres horaires des demi-journées — réglables dans la config
+    (« Horaires des demi-journées »), repli sur les valeurs historiques
+    09:30-12:30 / 13:30-17:30. Une fenêtre incohérente (fin ≤ début) retombe
+    sur le défaut : une faute de frappe dans la config ne doit pas fermer le
+    portail. Lu UNE fois par requête (les recherches de trous bouclent)."""
+    memo = getattr(frappe.local, "rdv_fenetres", None)
+    if memo:
+        return memo
+    v = frappe.db.get_singles_dict("Config Portail RDV") or {}
+    out = {}
+    for demi, (champ_d, champ_f) in (("matin", ("matin_debut", "matin_fin")),
+                                     ("apres_midi", ("apres_midi_debut",
+                                                     "apres_midi_fin"))):
+        debut = _heure(v.get(champ_d), FENETRES_DEFAUT[demi][0])
+        fin = _heure(v.get(champ_f), FENETRES_DEFAUT[demi][1])
+        out[demi] = (debut, fin) if debut < fin else FENETRES_DEFAUT[demi]
+    frappe.local.rdv_fenetres = out
+    return out
+
+
+def fenetres_libellees():
+    """« 09:30 – 12:30 » par demi-journée, pour l'affichage des boutons."""
+    return {demi: "%s – %s" % (d[:5], f[:5]) for demi, (d, f) in fenetres().items()}
+
+
 BATTEMENT = 30
 DUREES = {"Entretien": 30, "Réparation": 60, "Installation": 75}
 TEMPS_LIBELLE = {"Entretien": "30 min", "Réparation": "1 heure",
@@ -150,7 +194,7 @@ def _taches_periode(employes, debut, fin, exclure=None):
             minutes=DUREES.get(l.type_i, 60)))
         # Une intervention à cheval compte dans LES DEUX demi-journées : celle
         # de 12:30 à 13:45 mange aussi le début de l'après-midi.
-        for demi, (h_debut, h_fin) in FENETRES.items():
+        for demi, (h_debut, h_fin) in fenetres().items():
             ws = get_datetime("%s %s" % (jour, h_debut))
             we = get_datetime("%s %s" % (jour, h_fin))
             if l.starts_on < we and fin_reelle > ws:
@@ -215,7 +259,7 @@ def _premier_creneau(intervalles, jour, demi, duree):
     -> datetime de début, ou None. Les heures RÉELLES des tâches font foi —
     l'empilement estimé posait des RDV en fin de fenêtre alors que le début
     était libre."""
-    debut_f, fin_f = FENETRES[demi]
+    debut_f, fin_f = fenetres()[demi]
     ws = get_datetime("%s %s" % (jour, debut_f))
     we = get_datetime("%s %s" % (jour, fin_f))
     pas = datetime.timedelta(minutes=duree)
@@ -300,7 +344,7 @@ def _employe_bloque_jour(entree, jour):
     if entree.get("jour_entier"):
         return True
     return all(_premier_creneau(entree.get(d) or [], jour, d, min(DUREES.values())) is None
-               for d in FENETRES)
+               for d in DEMIS)
 
 
 def _pool_du_jour(config, liste, taches, jour, conges=frozenset(), contexte=None):
@@ -406,7 +450,7 @@ def placer(config, jour, demi, secteur, type_intervention, exclure=None,
     if not contexte and (not secteur or secteur == HORS_SECTEUR):
         frappe.throw(_("Cette adresse est hors secteur — appelez-nous pour "
                        "organiser l'intervention."))
-    if demi not in FENETRES:
+    if demi not in DEMIS:
         frappe.throw(_("Choisissez matin ou après-midi."))
 
     liste = contexte["employes"] if contexte else _liste_employes(config)
