@@ -58,6 +58,7 @@ MODELES = [
         "libelle": "Modification du rendez-vous",
         "texte": (
             "Bonjour {nom_client},\n\n"
+            "Nous vous prions de nous excuser pour ce changement de programme.\n\n"
             "Votre intervention ({type}) a été reprogrammée au {date} à {heure}.\n"
             "Elle sera assurée par notre technicien {technicien} "
             "(tél. {tel_technicien}).\n"
@@ -131,12 +132,18 @@ def _destinataires(noms):
             client.get(CHAMP_TEL_CLIENT) or "",
             " , ".join(contact.get("telephones") or [])])))
         quand = t.starts_on
+        # « en plus de la date, dites aujourd'hui » (demande 29/08) : quand
+        # l'intervention tombe le jour même, la balise {date} le dit — dans
+        # tous les modèles, un client lit mieux « aujourd'hui » qu'une date.
+        date_txt = frappe.utils.formatdate(quand) if quand else ""
+        if quand and frappe.utils.getdate(quand) == frappe.utils.getdate():
+            date_txt += " (aujourd'hui)"
         out.append({
             "tache": t.name,
             "client": t.custom_client or "",
             "nom_client": client.get("customer_name") or t.custom_client or "",
             "type": t.custom_type_dintervention or "",
-            "date": frappe.utils.formatdate(quand) if quand else "",
+            "date": date_txt,
             "heure": str(quand)[11:16] if quand else "",
             "technicien": emp.get("employee_name") or "",
             "tel_technicien": emp.get("cell_number") or "",

@@ -689,7 +689,8 @@ def commande_details(jeton, commande):
 
 @frappe.whitelist(allow_guest=True, methods=["POST"])
 def reserver(jeton, type_intervention, date, demi_journee, adresse=None,
-             commande=None, note=None, contact_nom=None, contact_tel=None):
+             commande=None, note=None, contact_nom=None, contact_tel=None,
+             confirmer_second=0):
     """Étape 3 : la réservation. Crée la tâche FERME au calendrier — SUR une
     adresse choisie du client (décision 27/08 : l'adresse d'abord, la
     sectorisation suit sur la tâche)."""
@@ -697,8 +698,10 @@ def reserver(jeton, type_intervention, date, demi_journee, adresse=None,
     session = _session(jeton)
     doc_adresse = _adresse_du_client(session["client"], adresse)
 
-    # Un seul rendez-vous vivant par TYPE et par adresse : le second du même
-    # type se déplace, il ne se reprend pas (décision 28/08).
+    # Un second rendez-vous du MÊME type à la même adresse ne passe qu'avec une
+    # CONFIRMATION EXPLICITE (décision 29/08, assouplit le refus du 28/08) :
+    # l'écran demande d'abord « modifier l'existant, ou en prendre un autre ? »
+    # et n'envoie confirmer_second=1 que si le client a choisi le second.
     deja = frappe.db.sql(
         """SELECT name, starts_on FROM `tabTache de travail`
            WHERE custom_client = %(c)s AND select_address = %(a)s
@@ -707,11 +710,11 @@ def reserver(jeton, type_intervention, date, demi_journee, adresse=None,
            ORDER BY starts_on LIMIT 1""",
         {"c": session["client"], "a": doc_adresse.name, "t": type_intervention},
         as_dict=True)
-    if deja:
+    if deja and not cint(confirmer_second):
         frappe.throw(_("Vous avez déjà un rendez-vous {0} prévu à cette adresse "
-                       "(le {1}) — vous pouvez le déplacer ou l'annuler depuis "
-                       "« Mes RDV »).").format(type_intervention,
-                                               str(deja[0].starts_on)[:16]))
+                       "(le {1}) — vous pouvez le déplacer depuis « Mes RDV », "
+                       "ou confirmer que vous en voulez un autre en plus.")
+                     .format(type_intervention, str(deja[0].starts_on)[:16]))
 
     if type_intervention not in TYPES_TOUT_CLIENT + (TYPE_AVEC_COMMANDE,):
         frappe.throw(_("Type de rendez-vous inconnu."))

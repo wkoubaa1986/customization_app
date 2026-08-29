@@ -184,6 +184,8 @@
         disponible, appelez-nous pour organiser l'intervention.
       </div>
       <div class="rdv-choix" id="rdv-types"></div>
+      <div id="choix-second" style="display:none;margin:6px 0;padding:9px 12px;
+           border-radius:9px;background:#e0f2fe;color:#075985;font-size:13px"></div>
       <a href="#" id="voir-tarifs" style="display:none;font-size:12.5px;color:#0e7490;
          font-weight:600;margin-top:6px;display:none">Voir tous les tarifs ▾</a>
       <div id="liste-tarifs" style="display:none;background:#f8fafc;border-radius:9px;
@@ -479,8 +481,10 @@
               ? `<div style="font-size:11.5px;font-weight:500;color:#64748b">à partir de ${prix} DT</div>`
               : "");
       b.setAttribute("data-type", t);
-      b.disabled = hors || !!pris;
-      if (pris) b.title = "Déplacez ou annulez ce rendez-vous depuis « Mes RDV »";
+      // Un type DÉJÀ réservé reste cliquable (décision 29/08) : le clic ouvre
+      // le choix « modifier l'existant ou en prendre un autre », il ne grise plus.
+      b.disabled = hors;
+      if (pris) b.title = "Vous avez déjà un rendez-vous " + t + " à cette adresse";
       if (b.disabled && type_choisi === t) {
         type_choisi = null;
         $("bloc-commande").style.display = "none";
@@ -488,14 +492,59 @@
       if (type_choisi === t) b.classList.add("actif");
       b.addEventListener("click", () => {
         if (b.disabled) return;
-        type_choisi = t;
-        zone.querySelectorAll("button").forEach((x) => x.classList.remove("actif"));
-        b.classList.add("actif");
-        $("bloc-commande").style.display = t === "Installation" ? "block" : "none";
-        rendre_tarifs();
-        charger_grille();
+        // Pas d'adresse choisie : le dire clairement plutôt que de laisser la
+        // grille afficher un texte générique (demande 29/08).
+        if (!adresse_choisie) {
+          message("Merci de sélectionner d'abord votre adresse d'intervention (ou d'en ajouter une).");
+          $("rdv-adresses").scrollIntoView({ behavior: "smooth", block: "center" });
+          return;
+        }
+        if (pris && !seconds_confirmes[adresse_choisie + "|" + t]) {
+          proposer_choix_second(t, pris);
+          return;
+        }
+        choisir_type(t);
       });
       zone.appendChild(b);
+    });
+  }
+
+  // Le second RDV du même type doit être un choix CONSCIENT : le client a pu
+  // oublier le premier. Sa confirmation est retenue par adresse+type, et
+  // envoyée au serveur (confirmer_second) qui refuse le doublon sans elle.
+  let seconds_confirmes = {};
+
+  function choisir_type(t) {
+    message(null);
+    $("choix-second").style.display = "none";
+    type_choisi = t;
+    $("rdv-types").querySelectorAll("button").forEach((x) =>
+      x.classList.toggle("actif", x.getAttribute("data-type") === t));
+    $("bloc-commande").style.display = t === "Installation" ? "block" : "none";
+    rendre_tarifs();
+    charger_grille();
+  }
+
+  function proposer_choix_second(t, pris) {
+    const zone = $("choix-second");
+    zone.style.display = "block";
+    zone.innerHTML = `📅 Vous avez déjà un rendez-vous <b>${echapper(t)}</b> prévu le
+        <b>${echapper(pris.date)}</b> à cette adresse. Que souhaitez-vous faire ?
+      <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+        <button type="button" class="rdv-btn secondaire" id="second-modifier"
+          style="max-width:none;flex:1;min-width:180px">🔁 Modifier ce rendez-vous</button>
+        <button type="button" class="rdv-btn" id="second-nouveau"
+          style="max-width:none;flex:1;min-width:180px">➕ Prendre un autre rendez-vous</button>
+      </div>`;
+    $("second-modifier").addEventListener("click", () => {
+      zone.style.display = "none";
+      document.querySelector('[data-onglet="panneau-historique"]').click();
+      const btn = document.querySelector(`[data-move="${pris.tache}"]`);
+      if (btn) btn.click();
+    });
+    $("second-nouveau").addEventListener("click", () => {
+      seconds_confirmes[adresse_choisie + "|" + t] = true;
+      choisir_type(t);
     });
   }
 
@@ -865,6 +914,7 @@
         note: $("rdv-note").value,
         contact_nom: $("rdv-contact-nom").value,
         contact_tel: $("rdv-contact-tel").value,
+        confirmer_second: seconds_confirmes[adresse_choisie + "|" + type_choisi] ? 1 : 0,
       }, $("btn-reserver"));
       $("fin-quoi").textContent = "Rendez-vous " + res.type + " enregistré";
       $("fin-quand").textContent = "Le " + res.date + " — " + res.demi_journee;

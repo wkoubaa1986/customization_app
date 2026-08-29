@@ -184,7 +184,16 @@
     frappe.ui.form.on("Tache de travail", {
         refresh(frm) {
             if (frm.is_new()) return;
-            frm.add_custom_button(__(LIBELLE), () => _dialogue([frm.doc.name]));
+            frm.add_custom_button(__(LIBELLE), () => {
+                // Le message se compose depuis la BASE (employé, commande,
+                // dates) : une tâche modifiée non enregistrée enverrait des
+                // informations périmées — on exige la sauvegarde d'abord.
+                if (frm.is_dirty()) {
+                    frappe.msgprint(__("Enregistrez d'abord la tâche : le message est composé à partir des données enregistrées."));
+                    return;
+                }
+                _dialogue([frm.doc.name]);
+            });
         },
     });
 })();
