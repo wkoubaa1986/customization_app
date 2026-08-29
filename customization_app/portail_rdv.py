@@ -148,10 +148,11 @@ def _rendez_vous_du_client(client):
         # de l'onglet Réserver affiche, même le jour J.
         "a_venir": l.status == "Open" and bool(l.starts_on)
                    and l.starts_on >= frappe.utils.now_datetime(),
-        # Modifiable : encore ouvert et PAS ENCORE COMMENCÉ — même le jour J
-        # (assoupli 28/08) ; c'est la NOUVELLE date qui doit être ≥ demain.
+        # Modifiable : encore ouvert et non verrouillé. Le verrou ne couvre que
+        # la JOURNÉE EN COURS (décision 29/08) : un RDV passé resté Open — raté,
+        # non honoré — se replanifie en ligne ; la NOUVELLE date reste ≥ demain.
         "modifiable": l.status == "Open" and bool(l.starts_on)
-                      and l.starts_on >= frappe.utils.now_datetime(),
+                      and not _rdv_verrouille(l.starts_on),
     } for l in lignes]
 
 
@@ -430,15 +431,26 @@ def verifier_otp(telephone, code):
     }
 
 
+def _rdv_verrouille(starts_on):
+    """Le verrou ne vaut QUE pour la journée en cours (décision 29/08) : un RDV
+    d'aujourd'hui dont l'heure est passée ne se touche plus (le technicien est
+    peut-être en route), mais un RDV resté Open d'un jour PASSÉ — raté, non
+    honoré — redevient modifiable/annulable : le client le replanifie lui-même
+    au lieu de rester coincé avec un rendez-vous fantôme."""
+    debut = frappe.utils.get_datetime(starts_on)
+    return getdate(debut) == getdate(nowdate()) \
+        and debut < frappe.utils.now_datetime()
+
+
 def _rdv_deplacable(session, tache):
-    """La tâche du client, encore ouverte et pas encore commencée — sinon refus.
-    Un RDV du jour J se déplace tant qu'il n'a pas démarré ; la nouvelle date,
-    elle, ne peut être qu'à partir de demain (contrôle dans deplacer_rdv)."""
+    """La tâche du client, encore ouverte et non verrouillée — sinon refus.
+    La nouvelle date, elle, ne peut être qu'à partir de demain (contrôle dans
+    deplacer_rdv)."""
     doc = frappe.get_doc(DOCTYPE_TACHE, tache)
     if doc.get("custom_client") != session["client"]:
         frappe.throw(_("Ce rendez-vous n'est pas le vôtre."))
     if doc.get("status") != "Open" or not doc.get("starts_on") \
-            or frappe.utils.get_datetime(doc.starts_on) < frappe.utils.now_datetime():
+            or _rdv_verrouille(doc.starts_on):
         frappe.throw(_("Ce rendez-vous ne peut plus être modifié en ligne — "
                        "appelez-nous."))
     return doc
