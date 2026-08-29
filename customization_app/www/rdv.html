@@ -618,7 +618,12 @@
                 🌙 Après-midi<span class="j-heures">13:30 – 17:30</span></button>
             </div>`;
           }).join("")
-        : `<div class="rdv-vide">Aucun créneau disponible sur les 3 prochaines semaines — appelez-nous.</div>`;
+        : `<div class="rdv-vide">Aucun créneau disponible sur les 3 prochaines semaines —
+             {% if tel_commercial %}appelez-nous au <a href="tel:{{ tel_commercial | replace(' ', '') }}"
+               style="font-weight:600">{{ tel_commercial }}</a>{% else %}appelez-nous{% endif %}
+             {% if whatsapp %} ou écrivez-nous sur <a href="https://wa.me/216{{ whatsapp }}"
+               target="_blank" rel="noopener" style="font-weight:600">WhatsApp</a>{% endif %},
+             nous vous trouverons une solution.</div>`;
       zone.querySelectorAll("[data-cren]").forEach((b) =>
         b.addEventListener("click", () => {
           zone.querySelectorAll("[data-cren]").forEach((x) => x.classList.remove("actif"));

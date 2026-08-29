@@ -38,7 +38,12 @@ TYPE_AVEC_COMMANDE = "Installation"
 
 OTP_TTL = 300           # 5 minutes
 SESSION_TTL = 1800      # 30 minutes
-ENVOIS_MAX = 3          # par numéro et par IP, sur 15 min
+ENVOIS_MAX = 3          # par numéro, sur 15 min
+# Par IP : bien plus large. Les opérateurs mobiles tunisiens font du NAT de
+# groupe (CGNAT) : des dizaines de clients LÉGITIMES partagent la même adresse
+# publique — un plafond serré (9) bloquait des clients innocents « Trop de
+# demandes » alors qu'ils n'avaient rien demandé (constaté : OTP jamais reçus).
+ENVOIS_MAX_IP = 30
 ENVOIS_FENETRE = 900
 ESSAIS_MAX = 5
 
@@ -189,6 +194,17 @@ def _adresses_du_client(client):
     } for l in lignes]
 
 
+def _gouvernorat_adresse(adresse):
+    """Le gouvernorat d'une adresse, custom_state_s OU state — la moitié des
+    adresses Sousse/Monastir n'ont QUE state : sans ce repli, le déplacement
+    d'un RDV en zone partenaire se déclarait « hors secteur »."""
+    if not adresse:
+        return None
+    v = frappe.db.get_value("Address", adresse, ["custom_state_s", "state"],
+                            as_dict=True)
+    return (v.custom_state_s or v.state) if v else None
+
+
 def _adresse_du_client(client, adresse):
     """L'adresse N'EST au client que si un Dynamic Link le dit — sinon refus."""
     if not adresse or not frappe.db.exists(
@@ -220,10 +236,71 @@ def _verrou_placement():
 
 
 def _envoyer_sms(numero, texte):
+    """SMS de service du portail (confirmation, déplacement, annulation).
+
+    ⛔ GARDE-FOU DEV — même règle que sms_commandes._executer : la base dev
+    porte les VRAIS numéros des clients et la VRAIE passerelle ; sans cette
+    garde, un test de réservation en dev envoie un vrai SMS de confirmation
+    (constaté le 29/08/2026). En developer_mode on SIMULE, sauf
+    `sms_groupe_reel_en_dev` posé dans site_config.json.
+    """
+    if cint(frappe.conf.get("developer_mode")) \
+            and not cint(frappe.conf.get("sms_groupe_reel_en_dev")):
+        _journal_otp(numero, "SIMULÉ (dev) — %s" % texte[:100])
+        return
     from customization_app.customize_erpnext.doctype.compagne_sms.compagne_sms import (
         _send_sms_with_fallback,
     )
     _send_sms_with_fallback([numero], texte)
+
+
+def _journal_otp(numero, evenement):
+    """Trace consultable par le support (Error Log, titre « RDV OTP ») : quand
+    un client dit « je ne reçois pas le code », on doit pouvoir répondre —
+    numéro inconnu ? passerelle en erreur ? limite atteinte ? Le titre reste
+    COURT et FIXE : log_error prend le TITRE en premier, et un titre de plus
+    de 140 caractères le fait échouer lui-même (piège connu)."""
+    try:
+        frappe.log_error(title="RDV OTP", message="%s — %s" % (numero, evenement))
+    except Exception:
+        pass
+
+
+MARQUEURS_ERREUR_SMS = ("error", "invalid", "insufficient", "failed", "\"ko\"",
+                        "not enough", "expired", "unauthorized")
+
+
+def _envoyer_otp_sms(numero, texte):
+    """Envoi de l'OTP en direct sur la passerelle, avec VÉRIFICATION.
+
+    La chaîne habituelle (_send_sms_with_fallback) ne remonte JAMAIS un échec :
+    son repli avale les erreurs HTTP et ne lit pas le corps de la réponse — or
+    la passerelle répond 200 même quand elle refuse (crédit épuisé, numéro
+    rejeté). Pour l'OTP c'est inacceptable : le client verrait « code envoyé »
+    et attendrait un SMS perdu. Ici : appel direct, réponse JSON exigée, corps
+    journalisé, et EXCEPTION dès que la réponse sent l'erreur — l'écran dit
+    alors « réessayez » au lieu de mentir.
+    """
+    import urllib.request
+    from urllib.parse import urlencode
+
+    if cint(frappe.conf.get("developer_mode")) \
+            and not cint(frappe.conf.get("sms_groupe_reel_en_dev")):
+        _journal_otp(numero, "SIMULÉ (dev) — OTP non envoyé")
+        return
+
+    ss = frappe.get_doc("SMS Settings", "SMS Settings")
+    params = {p.parameter: p.value for p in ss.get("parameters") if not p.header}
+    params[ss.receiver_parameter] = numero
+    params[ss.message_parameter] = texte
+    params.setdefault("response", "json")
+    url = ss.sms_gateway_url + "?" + urlencode(params)
+
+    reponse = urllib.request.urlopen(url, timeout=15)
+    corps = (reponse.read() or b"").decode("utf-8", "replace")[:300]
+    _journal_otp(numero, "passerelle → HTTP %s : %s" % (reponse.status, corps))
+    if reponse.status != 200 or any(m in corps.lower() for m in MARQUEURS_ERREUR_SMS):
+        raise Exception("réponse passerelle en erreur : %s" % corps)
 
 
 # Prix main d'œuvre affichés au choix du type : l'osmoseur DOMESTIQUE en
@@ -282,7 +359,8 @@ def envoyer_otp(telephone):
     ip = getattr(frappe.local, "request_ip", None) or "?"
     if not mode_test and (
             _compteur_depasse("rdv_envois_num:%s" % numero, ENVOIS_MAX, ENVOIS_FENETRE)
-            or _compteur_depasse("rdv_envois_ip:%s" % ip, ENVOIS_MAX * 3, ENVOIS_FENETRE)):
+            or _compteur_depasse("rdv_envois_ip:%s" % ip, ENVOIS_MAX_IP, ENVOIS_FENETRE)):
+        _journal_otp(numero, "limite d'envois atteinte (ip %s)" % ip)
         frappe.throw(_("Trop de demandes — réessayez dans quelques minutes."))
 
     client = _client_du_numero(numero)
@@ -298,10 +376,15 @@ def envoyer_otp(telephone):
             code_test = code
         else:
             try:
-                _envoyer_sms(numero, "Code Aqua World : %s (valable 5 minutes)." % code)
+                _envoyer_otp_sms(numero, "Code Aqua World : %s (valable 5 minutes)." % code)
             except Exception:
                 frappe.log_error(frappe.get_traceback(), "portail_rdv envoi OTP")
                 frappe.throw(_("Envoi du SMS impossible pour le moment — réessayez."))
+    else:
+        # Le client ne voit rien (anti-énumération) mais le SUPPORT doit savoir :
+        # « je ne reçois pas le code » vient le plus souvent d'un numéro absent
+        # de la fiche client — la trace permet de le dire et de corriger la fiche.
+        _journal_otp(numero, "numéro inconnu — aucun SMS envoyé")
     # Numéro inconnu : même réponse, aucune fuite.
     reponse = {"message": MESSAGE_GENERIQUE}
     if code_test:
@@ -377,9 +460,7 @@ def disponibilites(jeton, adresse=None, type_intervention=None, tache=None):
         secteur = doc.get("secteur")
         exclure = doc.name
         contexte = planning.contexte_partenaire(
-            config, frappe.db.get_value("Address", doc.get("select_address"),
-                                        "custom_state_s")
-            if doc.get("select_address") else None)
+            config, _gouvernorat_adresse(doc.get("select_address")))
     else:
         doc_adresse = _adresse_du_client(session["client"], adresse)
         secteur = doc_adresse.get("custom_secteur")
@@ -409,11 +490,12 @@ def deplacer_rdv(jeton, tache, date, demi_journee):
     doc = _rdv_deplacable(session, tache)
 
     contexte = planning.contexte_partenaire(
-        config, frappe.db.get_value("Address", doc.get("select_address"),
-                                    "custom_state_s")
-        if doc.get("select_address") else None)
+        config, _gouvernorat_adresse(doc.get("select_address")))
     delai = (contexte or {}).get("delai_jours") or planning.delai_standard(config)
-    if getdate(date) <= add_days(getdate(nowdate()), delai - 1):
+    # ⚠️ `jour` sert plus bas (placer, SMS, retour) : le refactor délai de
+    # v5.21 avait perdu cette affectation — NameError sur TOUT déplacement.
+    jour = getdate(date)
+    if jour <= add_days(getdate(nowdate()), delai - 1):
         frappe.throw(_("Choisissez une date à partir de {0}.").format(
             _("demain") if delai <= 1 else _("dans {0} jours").format(delai)))
 
