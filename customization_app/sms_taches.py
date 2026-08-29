@@ -27,6 +27,10 @@ SEUIL_DIRECT = 10
 
 # Les modèles proposés dans le dialogue. Le texte reste MODIFIABLE après
 # sélection : le modèle est un point de départ, pas une camisole.
+# Tous se terminent par la SIGNATURE (demande 29/08) — via {signature}, pour
+# la changer un jour à UN seul endroit.
+SIGNATURE = "Aqua World & Servicing"
+
 MODELES = [
     {
         "cle": "injoignable",
@@ -36,7 +40,7 @@ MODELES = [
             "Notre technicien a essayé de vous joindre concernant l'installation "
             "de votre commande {commande}, d'un montant total de {total_ttc} {devise}.\n\n"
             "Merci de rappeler {technicien} au {tel_technicien} dans les plus "
-            "brefs délais."
+            "brefs délais.\n\n{signature}"
         ),
     },
     {
@@ -46,7 +50,30 @@ MODELES = [
             "Bonjour {nom_client},\n\n"
             "Notre technicien {technicien} passera chez vous le {date} à {heure} "
             "pour votre intervention ({type}).\n\n"
-            "Pour toute question, appelez le {tel_technicien}."
+            "Pour toute question, appelez le {tel_technicien}.\n\n{signature}"
+        ),
+    },
+    {
+        "cle": "modification",
+        "libelle": "Modification du rendez-vous",
+        "texte": (
+            "Bonjour {nom_client},\n\n"
+            "Votre intervention ({type}) a été reprogrammée au {date} à {heure}.\n"
+            "Elle sera assurée par notre technicien {technicien} "
+            "(tél. {tel_technicien}).\n"
+            "Commande concernée : {commande} — {total_ttc} {devise}.\n\n"
+            "{signature}"
+        ),
+    },
+    {
+        "cle": "annulation",
+        "libelle": "Annulation — reprendre un rendez-vous",
+        "texte": (
+            "Bonjour {nom_client},\n\n"
+            "Nous sommes au regret de vous informer que votre intervention "
+            "({type}) prévue le {date} a été annulée.\n\n"
+            "Vous pouvez reprendre un rendez-vous en ligne ici : {lien_rdv}\n\n"
+            "Veuillez nous excuser pour ce désagrément.\n\n{signature}"
         ),
     },
     {
@@ -55,7 +82,7 @@ MODELES = [
         "texte": (
             "Bonjour {nom_client},\n\n"
             "Votre intervention ({type}) a été réalisée ce jour par {technicien}.\n\n"
-            "Merci de votre confiance — Aqua World & Servicing."
+            "Merci de votre confiance.\n\n{signature}"
         ),
     },
 ]
@@ -131,6 +158,7 @@ def rendre(modele, ligne):
 
     return (modele or "").format_map(_Tolerant({
         "lien_rdv": frappe.utils.get_url("/rdv"),
+        "signature": SIGNATURE,
         **{cle: ligne.get(cle, "") for cle in (
             "nom_client", "date", "heure", "type", "technicien",
             "tel_technicien", "commande", "total_ttc", "devise")},

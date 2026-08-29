@@ -22,6 +22,7 @@
         ["{heure}", "Heure de la tâche"],
         ["{type}", "Type d'intervention"],
         ["{lien_rdv}", "Lien de prise de rendez-vous en ligne"],
+        ["{signature}", "Signature Aqua World & Servicing"],
     ];
 
     function _dialogue(taches) {
