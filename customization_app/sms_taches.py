@@ -23,7 +23,6 @@ from frappe.utils import flt
 
 DOCTYPE_TACHE = "Tache de travail"
 CHAMP_TEL_CLIENT = "custom_liste_telephone"
-SEUIL_DIRECT = 10
 
 # Les modèles proposés dans le dialogue. Le texte reste MODIFIABLE après
 # sélection : le modèle est un point de départ, pas une camisole.
@@ -209,12 +208,13 @@ def envoyer(taches, modele, sujet=None, sms=1, email=1):
     if not (sms or email):
         frappe.throw(_("Choisissez au moins un canal : SMS ou e-mail."))
 
-    if len(taches) <= SEUIL_DIRECT:
-        return _executer(taches, modele, sujet, sms, email, frappe.session.user)
-
+    # TOUJOURS en arrière-plan (demande 29/08) : chaque SMS est un appel réseau
+    # qui peut traîner 15 s — l'écran ne doit pas geler dessus. Le verdict
+    # (✅/❌ par canal) est posé en COMMENTAIRE sur la tâche, et l'écran est
+    # prévenu en temps réel quand la tournée se termine.
     frappe.enqueue(
         "customization_app.sms_taches._executer",
-        queue="long", timeout=3600,
+        queue="short", timeout=1800,
         taches=taches, modele=modele, sujet=sujet, sms=sms, email=email,
         utilisateur=frappe.session.user, differe=True,
         job_name="envoi_taches_%s" % frappe.generate_hash(length=8))
@@ -223,9 +223,11 @@ def envoyer(taches, modele, sujet=None, sms=1, email=1):
 
 def _executer(taches, modele, sujet, sms, email, utilisateur, differe=False):
     """La tournée. Un échec n'interrompt pas les suivants ; chaque tâche touchée
-    garde une trace au fil du document."""
+    garde une trace au fil du document, avec un VERDICT HONNÊTE : l'envoi passe
+    par envoyer_sms_verifie (réponse de la passerelle contrôlée), pas par le
+    fallback qui avale les refus."""
     from customization_app.customize_erpnext.doctype.compagne_sms.compagne_sms import (
-        _send_sms_with_fallback,
+        envoyer_sms_verifie,
     )
 
     # ⛔ GARDE-FOU DEV — même règle que sms_commandes._executer : la base dev
@@ -244,20 +246,30 @@ def _executer(taches, modele, sujet, sms, email, utilisateur, differe=False):
                    "sms": None, "email": None}
 
         if sms and ligne["numeros"] and simulation:
-            verdict["sms"] = "SIMULÉ (dev) → %s" % ", ".join(ligne["numeros"])
+            verdict["sms"] = "🧪 SIMULÉ (dev) → %s" % ", ".join(ligne["numeros"])
         elif sms and ligne["numeros"]:
-            try:
-                _send_sms_with_fallback(ligne["numeros"], texte)
-                verdict["sms"] = "envoyé → %s" % ", ".join(ligne["numeros"])
-                resultat["sms_envoyes"] += len(ligne["numeros"])
-            except Exception as e:
-                verdict["sms"] = "échec : %s" % str(e)[:120]
+            # Verdict PAR NUMÉRO : un client a souvent plusieurs lignes, et un
+            # numéro refusé ne doit pas masquer celui qui a reçu.
+            recus, refuses = [], []
+            for numero in ligne["numeros"]:
+                try:
+                    envoyer_sms_verifie(numero, texte)
+                    recus.append(numero)
+                except Exception as e:
+                    refuses.append("%s (%s)" % (numero, str(e)[:80]))
+            morceaux = []
+            if recus:
+                morceaux.append("✅ envoyé → %s" % ", ".join(recus))
+                resultat["sms_envoyes"] += len(recus)
+            if refuses:
+                morceaux.append("❌ échec → %s" % " ; ".join(refuses))
                 resultat["echecs"] += 1
+            verdict["sms"] = " · ".join(morceaux)
         elif sms:
-            verdict["sms"] = "aucun numéro"
+            verdict["sms"] = "⚠️ aucun numéro"
 
         if email and ligne["emails"] and simulation:
-            verdict["email"] = "SIMULÉ (dev) → %s" % ", ".join(ligne["emails"])
+            verdict["email"] = "🧪 SIMULÉ (dev) → %s" % ", ".join(ligne["emails"])
         elif email and ligne["emails"]:
             try:
                 frappe.sendmail(
@@ -268,20 +280,20 @@ def _executer(taches, modele, sujet, sms, email, utilisateur, differe=False):
                     reference_doctype=DOCTYPE_TACHE,
                     reference_name=ligne["tache"],
                     now=True)
-                verdict["email"] = "envoyé → %s" % ", ".join(ligne["emails"])
+                verdict["email"] = "✅ envoyé → %s" % ", ".join(ligne["emails"])
                 resultat["emails_envoyes"] += len(ligne["emails"])
             except Exception as e:
-                verdict["email"] = "échec : %s" % str(e)[:120]
+                verdict["email"] = "❌ échec : %s" % str(e)[:120]
                 resultat["echecs"] += 1
         elif email:
-            verdict["email"] = "aucun e-mail"
+            verdict["email"] = "⚠️ aucun e-mail"
 
         if verdict["sms"] or verdict["email"]:
             frappe.get_doc({
                 "doctype": "Comment", "comment_type": "Info",
                 "reference_doctype": DOCTYPE_TACHE,
                 "reference_name": ligne["tache"],
-                "content": _("📨 Message client par {0} — SMS : {1} · E-mail : {2}<br>{3}")
+                "content": _("📨 Message client par {0}<br>SMS : {1}<br>E-mail : {2}<br>{3}")
                            .format(frappe.session.user, verdict["sms"] or "—",
                                    verdict["email"] or "—",
                                    frappe.utils.escape_html(texte)[:500]),

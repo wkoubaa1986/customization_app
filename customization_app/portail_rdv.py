@@ -267,10 +267,6 @@ def _journal_otp(numero, evenement):
         pass
 
 
-MARQUEURS_ERREUR_SMS = ("error", "invalid", "insufficient", "failed", "\"ko\"",
-                        "not enough", "expired", "unauthorized")
-
-
 def _envoyer_otp_sms(numero, texte):
     """Envoi de l'OTP en direct sur la passerelle, avec VÉRIFICATION.
 
@@ -282,26 +278,22 @@ def _envoyer_otp_sms(numero, texte):
     journalisé, et EXCEPTION dès que la réponse sent l'erreur — l'écran dit
     alors « réessayez » au lieu de mentir.
     """
-    import urllib.request
-    from urllib.parse import urlencode
-
     if cint(frappe.conf.get("developer_mode")) \
             and not cint(frappe.conf.get("sms_groupe_reel_en_dev")):
         _journal_otp(numero, "SIMULÉ (dev) — OTP non envoyé")
         return
 
-    ss = frappe.get_doc("SMS Settings", "SMS Settings")
-    params = {p.parameter: p.value for p in ss.get("parameters") if not p.header}
-    params[ss.receiver_parameter] = numero
-    params[ss.message_parameter] = texte
-    params.setdefault("response", "json")
-    url = ss.sms_gateway_url + "?" + urlencode(params)
-
-    reponse = urllib.request.urlopen(url, timeout=15)
-    corps = (reponse.read() or b"").decode("utf-8", "replace")[:300]
-    _journal_otp(numero, "passerelle → HTTP %s : %s" % (reponse.status, corps))
-    if reponse.status != 200 or any(m in corps.lower() for m in MARQUEURS_ERREUR_SMS):
-        raise Exception("réponse passerelle en erreur : %s" % corps)
+    from customization_app.customize_erpnext.doctype.compagne_sms.compagne_sms import (
+        envoyer_sms_verifie,
+    )
+    try:
+        # 2 tentatives seulement : le client attend derrière la requête HTTP —
+        # au-delà, mieux vaut lui dire « réessayez » que le faire patienter.
+        corps = envoyer_sms_verifie(numero, texte, tentatives=2)
+        _journal_otp(numero, "passerelle → %s" % corps)
+    except Exception as e:
+        _journal_otp(numero, "ÉCHEC passerelle → %s" % str(e)[:200])
+        raise
 
 
 # Prix main d'œuvre affichés au choix du type : l'osmoseur DOMESTIQUE en

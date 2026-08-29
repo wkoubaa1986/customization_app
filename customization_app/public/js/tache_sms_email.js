@@ -160,25 +160,44 @@
                 freeze: true,
                 freeze_message: __("Envoi en cours…"),
                 callback: (r) => {
-                    const m = r.message || {};
                     d.hide();
-                    frappe.msgprint({
-                        title: __("Envoi terminé"),
-                        indicator: m.echecs ? "orange" : "green",
-                        message: __("📱 {0} SMS · ✉️ {1} e-mail(s) · {2} échec(s)",
-                                    [m.sms_envoyes || 0, m.emails_envoyes || 0, m.echecs || 0])
-                            + (m.simulation
-                                ? `<div style="margin-top:6px;color:#b45309">${__("Mode développement : envois SIMULÉS, rien n'est parti.")}</div>`
-                                : "")
-                            + `<div style="margin-top:8px;max-height:220px;overflow:auto;font-size:12px">${
-                                (m.detail || []).map((x) => `<div>
-                                  <b>${frappe.utils.escape_html(x.client)}</b> (${x.tache}) —
-                                  📱 ${frappe.utils.escape_html(x.sms || "—")} ·
-                                  ✉️ ${frappe.utils.escape_html(x.email || "—")}</div>`).join("")}</div>`,
-                    });
+                    // L'envoi part TOUJOURS en arrière-plan : le verdict par
+                    // canal (✅/❌) arrive en commentaire sur la tâche, et le
+                    // résumé s'affiche ici dès que la tournée se termine.
+                    frappe.show_alert({
+                        message: __("Envoi lancé en arrière-plan — le résultat sera ajouté en commentaire de la tâche."),
+                        indicator: "blue",
+                    }, 8);
                 },
             })
         );
+    }
+
+    // La file d'attente parle, l'écran écoute : résumé à la fin de la tournée,
+    // et la fiche se recharge pour montrer le commentaire de verdict.
+    if (!window.__tache_sms_realtime) {
+        window.__tache_sms_realtime = true;
+        frappe.realtime.on("envoi_taches_termine", (m) => {
+            frappe.msgprint({
+                title: __("Envoi terminé"),
+                indicator: m.echecs ? "orange" : "green",
+                message: __("📱 {0} SMS · ✉️ {1} e-mail(s) · {2} échec(s)",
+                            [m.sms_envoyes || 0, m.emails_envoyes || 0, m.echecs || 0])
+                    + (m.simulation
+                        ? `<div style="margin-top:6px;color:#b45309">${__("Mode développement : envois SIMULÉS, rien n'est parti.")}</div>`
+                        : "")
+                    + `<div style="margin-top:8px;max-height:220px;overflow:auto;font-size:12px">${
+                        (m.detail || []).map((x) => `<div>
+                          <b>${frappe.utils.escape_html(x.client)}</b> (${x.tache}) —
+                          📱 ${frappe.utils.escape_html(x.sms || "—")} ·
+                          ✉️ ${frappe.utils.escape_html(x.email || "—")}</div>`).join("")}</div>`,
+            });
+            const taches = (m.detail || []).map((x) => x.tache);
+            if (window.cur_frm && cur_frm.doctype === "Tache de travail"
+                    && taches.includes(cur_frm.docname)) {
+                cur_frm.reload_doc();
+            }
+        });
     }
 
     frappe.ui.form.on("Tache de travail", {

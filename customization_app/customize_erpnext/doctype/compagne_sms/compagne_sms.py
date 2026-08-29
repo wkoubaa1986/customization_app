@@ -9,8 +9,85 @@ from frappe.utils import cstr
 from frappe.core.doctype.sms_settings.sms_settings import send_sms
 
 
+# ------------------------------------------------------------------ GSM-7
+# UN SEUL caractère hors alphabet GSM 03.38 bascule TOUT le SMS en unicode :
+# 67 caractères par segment au lieu de 153 — un message de 320 caractères passe
+# de 3 à 5 segments (constaté au réel le 29/08/2026 : « — » dans un modèle →
+# 4 segments unicode facturés). On translittère les coupables usuels ; é è à ù
+# ì ò font PARTIE de l'alphabet GSM et restent intacts.
+_TRANSLIT_SMS = str.maketrans({
+    "—": "-", "–": "-", "−": "-",
+    "’": "'", "‘": "'", "´": "'", "`": "'",
+    "“": '"', "”": '"', "«": '"', "»": '"',
+    "…": "...",
+    "œ": "oe", "Œ": "OE",
+    "â": "a", "ê": "e", "î": "i", "ô": "o", "û": "u",
+    "ë": "e", "ï": "i", "ç": "c", "Ç": "C",
+    # fmt_money sépare les milliers par des espaces INSÉCABLES : hors GSM.
+    "\u00a0": " ", "\u202f": " ",
+})
+
+
+def normaliser_sms(texte: str) -> str:
+    return (texte or "").translate(_TRANSLIT_SMS)
+
+
+# La passerelle répond HTTP 200 même quand elle refuse (crédit, numéro…) :
+# le refus est DANS le corps. Marqueurs relevés sur les réponses WinSMS.
+MARQUEURS_ERREUR_SMS = ("error", "invalid", "insufficient", "failed", "\"ko\"",
+                        "not enough", "expired", "unauthorized")
+
+
+def envoyer_sms_verifie(numero: str, message: str, tentatives: int = 3) -> str:
+    """Envoi direct sur la passerelle avec réponse JSON exigée et VÉRIFIÉE,
+    et RELANCE sur panne réseau.
+
+    Contrairement à _send_sms_with_fallback (qui avale les échecs — assumé
+    pour les campagnes de masse), ici un refus de la passerelle LÈVE : c'est
+    le chemin des messages dont on veut un verdict honnête (OTP du portail,
+    messages client des tâches). -> le corps de la réponse (tronqué).
+
+    Retry : UNIQUEMENT sur les pannes réseau (timeout, connexion) — la
+    passerelle n'a probablement rien reçu, on retente après 2 s puis 5 s.
+    Un REFUS FERME (HTTP d'erreur, marqueur dans le corps) ne se retente
+    JAMAIS : le SMS a pu partir malgré le marqueur, et un crédit épuisé ne
+    se répare pas en insistant — relancer doublerait les messages.
+    """
+    import time
+    import urllib.error
+    import urllib.request
+    from urllib.parse import urlencode
+
+    ss = frappe.get_doc("SMS Settings", "SMS Settings")
+    params = {p.parameter: p.value for p in ss.get("parameters") if not p.header}
+    params[ss.receiver_parameter] = numero
+    params[ss.message_parameter] = normaliser_sms(message)
+    params.setdefault("response", "json")
+    url = ss.sms_gateway_url + "?" + urlencode(params)
+
+    derniere = None
+    for essai in range(max(1, tentatives)):
+        if essai:
+            time.sleep((2, 5)[min(essai - 1, 1)])
+        try:
+            reponse = urllib.request.urlopen(url, timeout=15)
+        except urllib.error.HTTPError as e:
+            corps = (e.read() or b"").decode("utf-8", "replace")[:300]
+            raise Exception("passerelle HTTP %s : %s" % (e.code, corps))
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
+            derniere = e
+            continue
+        corps = (reponse.read() or b"").decode("utf-8", "replace")[:300]
+        if any(m in corps.lower() for m in MARQUEURS_ERREUR_SMS):
+            raise Exception("passerelle en erreur : %s" % corps)
+        return corps
+    raise Exception("passerelle injoignable après %d tentatives : %s"
+                    % (max(1, tentatives), str(derniere)[:120]))
+
+
 def _send_sms_with_fallback(phones: list, message: str) -> None:
     """Envoie un SMS via Frappe SMS Settings. Fallback urllib direct si erreur (ex: 429)."""
+    message = normaliser_sms(message)
     import urllib.request
     import urllib.error
     from urllib.parse import urlencode
