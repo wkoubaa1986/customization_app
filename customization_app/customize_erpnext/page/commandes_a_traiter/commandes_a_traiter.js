@@ -314,9 +314,10 @@ class CommandesATraiter {
         {
           fieldtype: "Small Text", fieldname: "message", reqd: 1,
           label: __("Message (SMS et corps de l'e-mail)"),
-          description: __("Balises : {nom_client} {commande} {article} {articles} {total_ttc} {lien_rdv} {signature}"),
+          description: __("Balises : {nom_client} {commande} {article} {articles} {total_ttc} {lien_rdv} {remplacements} {signature}"),
         },
-        { fieldtype: "Section Break", label: __("Articles de remplacement à proposer") },
+        { fieldtype: "Section Break",
+          label: __("Articles de remplacement — ✏️ pour choisir commande par commande") },
         {
           fieldtype: "MultiSelectPills", fieldname: "remplacements",
           label: __("Article de remplacement"),
@@ -402,6 +403,9 @@ class CommandesATraiter {
     d.__rafraichir = () => this._apercu(d, noms);
 
     d.show();
+    // Visible D'EMBLÉE : tant que la table n'apparaissait qu'après « Appliquer
+    // à toutes », personne ne pouvait deviner qu'un choix par commande existait.
+    this._rendre_par_commande(d, noms);
     this._apercu(d, noms, (m) => {
       modeles = m.modeles || [];
       this.modeles = modeles;
@@ -436,7 +440,10 @@ class CommandesATraiter {
     const connus = this._articles_connus || {};
     const nom_lisible = (code) => (connus[code] || {}).article || code;
     d.fields_dict.par_commande.$wrapper.html(
-      `<div style="max-height:190px;overflow:auto;font-size:12px;border:1px solid
+      `<div style="font-size:11.5px;color:var(--text-muted,#6b7280);margin-bottom:4px">
+         ${__("Cliquez ✏️ sur une ligne pour proposer un article différent à ce client.")}
+       </div>
+       <div style="max-height:190px;overflow:auto;font-size:12px;border:1px solid
             var(--border-color,#e4e8ee);border-radius:8px">
          <table style="width:100%">${noms.map((n) => {
            const choisis = this._remplacements[n] || [];
