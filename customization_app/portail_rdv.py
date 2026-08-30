@@ -469,6 +469,9 @@ def _ouvrir_session(numero, entree):
         "adresses": _adresses_du_client(entree["client"]),
         "rendez_vous": _rendez_vous_du_client(entree["client"]),
         "tarifs": _tarifs(),
+        # Bulle d'aide : proposée seulement si le magasin l'a activée.
+        "assistant": bool(cint((frappe.db.get_singles_dict(DOCTYPE_CONFIG)
+                                or {}).get("assistant_actif"))),
         "ouvertures": _ouvertures_par_type(_config()),
         "date_min": str(add_days(getdate(nowdate()), 1)),
         "date_max": str(add_days(getdate(nowdate()), HORIZON_JOURS)),
@@ -524,6 +527,16 @@ def _ouvertures_par_type(config):
         if ouverture and ouverture > minimum:
             out[type_i] = str(ouverture)
     return out
+
+
+@frappe.whitelist(allow_guest=True, methods=["POST"])
+def assistant(jeton, question, historique=None):
+    """L'assistant du portail — la logique vit dans `portail_rdv_assistant`.
+    Ce relais garde UNE seule adresse d'API pour tout l'écran client.
+    (import local : l'assistant importe ce module.)"""
+    from customization_app.portail_rdv_assistant import demander
+
+    return demander(jeton, question, historique)
 
 
 @frappe.whitelist(allow_guest=True, methods=["POST"])

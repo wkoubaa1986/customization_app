@@ -186,6 +186,24 @@
 
     <!-- Étape 3 : réservation + historique -->
     <div class="rdv-etape" id="etape-rdv">
+      <!-- Assistant : visible seulement une fois le client identifié -->
+      <div id="ia-bloc" style="display:none;margin:-4px 0 10px">
+        <button type="button" id="ia-ouvrir" class="rdv-btn secondaire"
+                style="max-width:100%;margin:0">💬 Une question ? Je vous aide</button>
+        <div id="ia-panneau" style="display:none;border:1px solid #e2e8f0;border-radius:12px;
+             padding:10px;margin-top:8px;background:#f8fafc">
+          <div id="ia-fil" style="max-height:230px;overflow:auto;font-size:13.5px"></div>
+          <div style="display:flex;gap:6px;margin-top:8px">
+            <input type="text" id="ia-question" maxlength="500" style="flex:1;margin:0"
+                   placeholder="Ex. : c'est quoi la différence entre entretien et réparation ?">
+            <button type="button" class="rdv-btn" id="ia-envoyer"
+                    style="max-width:96px;margin:0">Envoyer</button>
+          </div>
+          <div style="font-size:11px;color:#94a3b8;margin-top:6px">
+            Assistant automatique. Pour les créneaux, fiez-vous à la grille ci-dessous.
+          </div>
+        </div>
+      </div>
       <h2>Bonjour <span id="rdv-nom"></span> 👋</h2>
       <div class="rdv-onglets">
         <button type="button" class="actif" data-onglet="panneau-reserver">📅 Réserver</button>
@@ -343,6 +361,7 @@
     rendre_commandes_installables();
     rendre_adresses();
     rendre_historique();
+    if (seance.assistant) $("ia-bloc").style.display = "block";
     montrer("etape-rdv");
   }
 
@@ -443,6 +462,90 @@
       }, $("btn-inscrire")));
       info("Bienvenue ! Votre compte a été créé. 🎉");
     } catch (e) { message(e.message); }
+  });
+
+  // ── Assistant (OpenAI) ───────────────────────────────────────────────────
+  // Il EXPLIQUE et PRÉ-REMPLIT, il ne réserve jamais : le serveur revérifie
+  // chaque suggestion, et les créneaux restent ceux du moteur.
+  let ia_historique = [];
+
+  function ia_ligne(role, texte) {
+    const mien = role === "user";
+    return `<div style="margin:6px 0;text-align:${mien ? "right" : "left"}">
+        <span style="display:inline-block;max-width:85%;padding:7px 10px;border-radius:12px;
+              background:${mien ? "#0ea5e9" : "#fff"};color:${mien ? "#fff" : "#0f172a"};
+              border:1px solid ${mien ? "#0ea5e9" : "#e2e8f0"};white-space:pre-wrap"
+          >${echapper(texte)}</span></div>`;
+  }
+
+  async function ia_demander() {
+    const champ = $("ia-question");
+    const question = (champ.value || "").trim();
+    if (!question) return;
+    champ.value = "";
+    ia_historique.push({ role: "user", content: question });
+    const fil = $("ia-fil");
+    fil.innerHTML += ia_ligne("user", question);
+    fil.innerHTML += `<div id="ia-attente" style="color:#94a3b8;font-size:12px">…</div>`;
+    fil.scrollTop = fil.scrollHeight;
+    try {
+      const res = await appeler("assistant", {
+        jeton, question, historique: JSON.stringify(ia_historique.slice(-6)),
+      }, $("ia-envoyer"));
+      $("ia-attente") && $("ia-attente").remove();
+      ia_historique.push({ role: "assistant", content: res.reponse });
+      fil.innerHTML += ia_ligne("assistant", res.reponse);
+      if (res.action) ia_appliquer(res.action);
+    } catch (e) {
+      $("ia-attente") && $("ia-attente").remove();
+      fil.innerHTML += ia_ligne("assistant", e.message);
+    }
+    fil.scrollTop = fil.scrollHeight;
+  }
+
+  // Pré-remplissage : on rejoue les MÊMES gestes que le client, donc toutes les
+  // règles de l'écran (adresse obligatoire, type déjà pris, grille) s'appliquent.
+  function ia_appliquer(action) {
+    let fait = [];
+    if (action.adresse) {
+      const a = (seance.adresses || []).find((x) => x.adresse === action.adresse);
+      if (a) { adresse_choisie = action.adresse; rendre_adresses(); apres_choix_adresse();
+               fait.push("votre adresse"); }
+    }
+    if (action.commande) { commande_choisie = action.commande; }
+    if (action.type && (seance.types || []).includes(action.type)) {
+      choisir_type(action.type);
+      if (action.commande) {
+        rendre_commandes_installables();
+        commande_choisie = action.commande;
+        const el = $("rdv-commandes-instal");
+        el && el.querySelectorAll("[data-cmd-inst]").forEach((x) =>
+          x.classList.toggle("choisie", x.getAttribute("data-cmd-inst") === action.commande));
+        fait.push("votre commande");
+      }
+      fait.push("le type d'intervention");
+    }
+    if (fait.length) {
+      $("ia-fil").innerHTML += `<div style="font-size:12px;color:#0e7490;margin:4px 0">
+          ✅ J'ai rempli ${echapper(fait.join(" et "))} — choisissez votre créneau ci-dessous.</div>`;
+      $("rdv-types") && $("rdv-types").scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }
+
+  $("ia-ouvrir").addEventListener("click", () => {
+    const p = $("ia-panneau");
+    const ouvert = p.style.display !== "none";
+    p.style.display = ouvert ? "none" : "block";
+    $("ia-ouvrir").textContent = ouvert ? "💬 Une question ? Je vous aide" : "✕ Fermer l'assistant";
+    if (!ouvert && !$("ia-fil").innerHTML) {
+      $("ia-fil").innerHTML = ia_ligne("assistant",
+        "Bonjour ! Posez-moi votre question : type d'intervention, tarifs, délais, "
+        + "ou comment déplacer un rendez-vous. Je peux aussi remplir l'écran pour vous.");
+    }
+  });
+  $("ia-envoyer").addEventListener("click", ia_demander);
+  $("ia-question").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); ia_demander(); }
   });
 
   // ── Adresses : choisir, modifier, ajouter (sectorisation du quick entry) ──

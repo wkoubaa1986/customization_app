@@ -34,7 +34,10 @@
   "section_partenaire",
   "partenaires",
   "section_ouvertures",
-  "ouvertures"
+  "ouvertures",
+  "section_assistant",
+  "assistant_actif",
+  "assistant_modele"
  ],
  "fields": [
   {
@@ -208,11 +211,29 @@
    "fieldtype": "Table",
    "label": "Dates d'ouverture",
    "options": "Portail RDV Ouverture"
+  },
+  {
+   "fieldname": "section_assistant",
+   "fieldtype": "Section Break",
+   "label": "Assistant de prise de rendez-vous"
+  },
+  {
+   "default": "0",
+   "description": "Bulle d'aide en langage naturel, visible APR\u00c8S le code SMS. Utilise la cl\u00e9 OpenAI d'AI Settings.",
+   "fieldname": "assistant_actif",
+   "fieldtype": "Check",
+   "label": "Activer l'assistant"
+  },
+  {
+   "description": "Laisser vide pour gpt-4o-mini. R\u00e9glage PROPRE au portail : inutile d'y mettre le mod\u00e8le co\u00fbteux d'AI Settings.",
+   "fieldname": "assistant_modele",
+   "fieldtype": "Data",
+   "label": "Mod\u00e8le OpenAI de l'assistant"
   }
  ],
  "issingle": 1,
  "links": [],
- "modified": "2026-08-30 09:26:19.048137",
+ "modified": "2026-08-30 17:53:58.911239",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Config Portail RDV",
