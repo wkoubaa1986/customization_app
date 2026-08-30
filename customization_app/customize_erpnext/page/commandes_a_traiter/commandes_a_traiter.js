@@ -60,6 +60,7 @@ class CommandesATraiter {
       dispo: $("#ct-dispo").val() || "",
       anomalie: $("#ct-anomalie").val() || "",
       tache: $("#ct-tache").val() || "",
+      tri: $("#ct-tri").val() || "date_asc",
     };
   }
 
@@ -70,7 +71,7 @@ class CommandesATraiter {
       timer = setTimeout(() => { this.start = 0; this._load(); }, 400);
     });
     ["#ct-depuis", "#ct-jusqua", "#ct-statut", "#ct-origine", "#ct-dispo",
-     "#ct-anomalie", "#ct-tache"].forEach((sel) =>
+     "#ct-anomalie", "#ct-tache", "#ct-tri"].forEach((sel) =>
       $(sel).on("change", () => { this.start = 0; this._load(); }));
 
     $("#ct-clear").on("click", () => {

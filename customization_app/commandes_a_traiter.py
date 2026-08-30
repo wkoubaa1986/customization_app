@@ -34,6 +34,18 @@ PAGE_LENGTH = 50
 # Statuts qui ne consomment plus de stock : la commande est finie ou morte.
 STATUTS_CLOS = ("Completed", "Closed", "Cancelled")
 
+# Ordres de tri proposés : par date, par valeur, ou les deux combinés.
+# [(champ, décroissant), …] — le 2e critère départage le 1er.
+TRIS = {
+    "date_asc": [("date", False)],
+    "date_desc": [("date", True)],
+    "ttc_desc": [("ttc", True)],
+    "ttc_asc": [("ttc", False)],
+    "date_ttc": [("date", False), ("ttc", True)],
+    "ttc_date": [("ttc", True), ("date", False)],
+}
+TRI_DEFAUT = "date_asc"
+
 
 def _lecture():
     frappe.has_permission("Sales Order", "read", throw=True)
@@ -150,7 +162,7 @@ def get_filtres():
 @frappe.whitelist()
 def get_commandes(depuis=None, jusqu_a=None, recherche=None, statut=None,
                   origine=None, dispo=None, anomalie=None, tache=None,
-                  start=0, page_length=PAGE_LENGTH):
+                  tri=None, start=0, page_length=PAGE_LENGTH):
     """L'arriéré filtré. Tout est calculé sur l'ENSEMBLE puis découpé en pages :
     un filtre « article manquant » doit porter sur toutes les commandes, pas
     seulement sur celles de la page affichée."""
@@ -201,7 +213,8 @@ def get_commandes(depuis=None, jusqu_a=None, recherche=None, statut=None,
             "web": bool(l.woocommerce_id),
         })
 
-    out = _filtrer(out, recherche, statut, origine, dispo, anomalie, tache)
+    out = _trier(_filtrer(out, recherche, statut, origine, dispo, anomalie, tache),
+                 tri)
     total = len(out)
     page = out[start:start + page_length] if page_length else out
     return {
@@ -216,6 +229,16 @@ def get_commandes(depuis=None, jusqu_a=None, recherche=None, statut=None,
             "ttc": round(sum(c["ttc"] for c in out), 3),
         },
     }
+
+
+def _trier(lignes, tri):
+    """Tri stable à plusieurs critères : on trie par le critère le MOINS
+    important d'abord, le tri suivant préserve l'ordre obtenu (Python garantit
+    la stabilité). C'est ce qui permet « date puis valeur » en deux passes."""
+    for champ, decroissant in reversed(TRIS.get(tri or TRI_DEFAUT,
+                                                TRIS[TRI_DEFAUT])):
+        lignes.sort(key=lambda c: c[champ], reverse=decroissant)
+    return lignes
 
 
 def _filtrer(lignes, recherche, statut, origine, dispo, anomalie, tache):
