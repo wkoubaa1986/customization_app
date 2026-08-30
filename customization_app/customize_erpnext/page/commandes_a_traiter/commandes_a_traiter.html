@@ -48,6 +48,15 @@
     .b-warn { background: #fef3c7; color: #92400e; }
     .b-web  { background: #ede9fe; color: #5b21b6; }
 
+    .ct-groupes { display: flex; flex-wrap: wrap; gap: 4px 10px; max-width: 430px;
+                  padding: 5px 8px; border: 1px solid var(--border-color,#e4e8ee);
+                  border-radius: 6px; background: var(--card-bg,#fff); }
+    .ct-groupes label { margin: 0; font-size: 12px; font-weight: 500; cursor: pointer;
+                        display: inline-flex; align-items: center; gap: 4px; }
+    .ct-groupes .n { color: var(--text-muted,#6b7280); font-size: 11px; }
+    .ct-groupes-actions { display: flex; gap: 8px; margin-top: 3px; font-size: 11px; }
+    .ct-groupes-actions a { cursor: pointer; }
+
     .ct-vide { padding: 26px; text-align: center; color: var(--text-muted,#6b7280); }
     .ct-pager { display: flex; align-items: center; gap: 8px; font-size: 12.5px;
                 color: var(--text-muted,#6b7280); margin-left: auto; }
@@ -84,6 +93,13 @@
           <option value="">Tous</option>
           <option value="__vide__">— sans secteur</option>
         </select></div>
+      <div class="ct-field"><label>Type de client</label>
+        <div class="ct-groupes" id="ct-groupes"></div>
+        <div class="ct-groupes-actions">
+          <a id="ct-groupes-tous">tout cocher</a>
+          <a id="ct-groupes-aucun">tout décocher</a>
+        </div>
+      </div>
       <div class="ct-field"><label>Client</label>
         <select class="form-control" id="ct-client">
           <option value="">Tous</option>

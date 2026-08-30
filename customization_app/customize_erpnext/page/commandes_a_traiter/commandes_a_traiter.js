@@ -45,6 +45,11 @@ class CommandesATraiter {
           (m.statuts || []).map((s) => `<option value="${s}">${s}</option>`).join(""));
         $("#ct-secteur").append(
           (m.secteurs || []).map((s) => `<option value="${s}">${s}</option>`).join(""));
+        // Tous cochés au départ : le filtre n'enlève rien tant qu'on n'a
+        // pas décidé de retirer un type.
+        $("#ct-groupes").html((m.groupes || []).map((g) =>
+          `<label><input type="checkbox" class="ct-grp" value="${frappe.utils.escape_html(g.valeur)}" checked>
+             ${frappe.utils.escape_html(g.libelle)} <span class="n">(${g.n})</span></label>`).join(""));
         $("#ct-depuis").val(m.depuis_defaut || "2026-07-01");
         $("#ct-jusqua").val(frappe.datetime.get_today());
         this._load();
@@ -66,6 +71,11 @@ class CommandesATraiter {
       livraison: $("#ct-livraison").val() || "",
       prestation: $("#ct-prestation").val() || "",
       client: $("#ct-client").val() || "",
+      // Aucune case affichée (types pas encore chargés) => on n'envoie RIEN,
+      // donc aucun filtre : un écran vide par accident serait pire que tout.
+      groupes: $("#ct-groupes .ct-grp").length
+        ? JSON.stringify($("#ct-groupes .ct-grp:checked").map((i, e) => e.value).get())
+        : "",
       tri: $("#ct-tri").val() || "date_asc",
     };
   }
@@ -86,6 +96,7 @@ class CommandesATraiter {
       ["#ct-statut", "#ct-origine", "#ct-dispo", "#ct-anomalie", "#ct-tache",
        "#ct-secteur", "#ct-livraison", "#ct-prestation", "#ct-client"]
         .forEach((s) => $(s).val(""));
+      $("#ct-groupes .ct-grp").prop("checked", true);
       this.start = 0;
       this._load();
     });
@@ -116,6 +127,14 @@ class CommandesATraiter {
 
     // Un clic sur « N commandes » isole ce client : c'est le geste naturel
     // quand on repère un doublon ou un client qui commande en plusieurs fois.
+    $(this.wrapper).on("change", ".ct-grp", () => { this.start = 0; this._load(); });
+    $("#ct-groupes-tous").on("click", () => {
+      $("#ct-groupes .ct-grp").prop("checked", true); this.start = 0; this._load();
+    });
+    $("#ct-groupes-aucun").on("click", () => {
+      $("#ct-groupes .ct-grp").prop("checked", false); this.start = 0; this._load();
+    });
+
     $(this.wrapper).on("click", ".ct-multi", (e) => {
       $("#ct-search").val($(e.currentTarget).data("client"));
       this.start = 0;
@@ -200,7 +219,8 @@ class CommandesATraiter {
         <td><a href="/app/customer/${encodeURIComponent(c.client)}" target="_blank">${esc(c.client_nom)}</a>
             <div class="ct-sub">${c.telephone
               ? `📞 <a href="tel:${esc(c.telephone)}">${esc(c.telephone)}</a>`
-              : "sans numéro"}</div>
+              : "sans numéro"}${c.groupe_client
+                 ? ` · ${esc(c.groupe_client)}` : ""}</div>
             ${c.commandes_client > 1
               ? `<div><span class="ct-badge b-warn ct-multi" data-client="${esc(c.client)}"
                      style="cursor:pointer" title="Voir les ${c.commandes_client} commandes de ce client sur la période"

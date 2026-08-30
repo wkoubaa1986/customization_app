@@ -34,6 +34,10 @@ PAGE_LENGTH = 50
 # Statuts qui ne consomment plus de stock : la commande est finie ou morte.
 STATUTS_CLOS = ("Completed", "Closed", "Cancelled")
 
+# Valeur d'échange pour « fiche client sans groupe » — 353 commandes sur la
+# période : elles ne doivent pas disparaître silencieusement d'un filtre.
+SANS_GROUPE = "__sans_groupe__"
+
 # Ordres de tri proposés : par date, par valeur, ou les deux combinés.
 # [(champ, décroissant), …] — le 2e critère départage le 1er.
 TRIS = {
@@ -117,6 +121,17 @@ def _secteurs(noms):
         adresse = c.shipping_address_name or c.customer_address
         out[c.name] = (secteurs.get(adresse) or "", adresse or "")
     return out
+
+
+def _groupes_clients(clients):
+    """{client: groupe} — le « type de client » (Individuel, Compte Pro,
+    Technicien, Quincaillerie…). Vide pour les fiches sans groupe, qui sont
+    nombreuses et doivent rester choisissables telles quelles."""
+    if not clients:
+        return {}
+    return {c.name: (c.customer_group or "") for c in frappe.get_all(
+        "Customer", filters={"name": ["in", list(clients)]},
+        fields=["name", "customer_group"], limit_page_length=0)}
 
 
 def _livraison_equipe(noms):
@@ -250,7 +265,19 @@ def get_filtres():
              ON a.name = COALESCE(so.shipping_address_name, so.customer_address)
            WHERE so.transaction_date >= %s AND IFNULL(a.custom_secteur, '') != ''
            ORDER BY a.custom_secteur""", (DEPUIS_DEFAUT,))
-    return {"statuts": statuts, "secteurs": secteurs,
+    # Les types de clients réellement présents, avec leur volume : on coche
+    # en connaissance de cause, et « sans groupe » reste visible.
+    groupes = [{"valeur": (l.customer_group or SANS_GROUPE),
+                "libelle": l.customer_group or "— sans type",
+                "n": l.n}
+               for l in frappe.db.sql(
+                   """SELECT c.customer_group, COUNT(*) AS n
+                      FROM `tabSales Order` so
+                      JOIN `tabCustomer` c ON c.name = so.customer
+                      WHERE so.transaction_date >= %s
+                      GROUP BY c.customer_group ORDER BY n DESC""",
+                   (DEPUIS_DEFAUT,), as_dict=True)]
+    return {"statuts": statuts, "secteurs": secteurs, "groupes": groupes,
             "depuis_defaut": DEPUIS_DEFAUT}
 
 
@@ -258,13 +285,21 @@ def get_filtres():
 def get_commandes(depuis=None, jusqu_a=None, recherche=None, statut=None,
                   origine=None, dispo=None, anomalie=None, tache=None,
                   secteur=None, livraison=None, prestation=None, client=None,
-                  tri=None, start=0,
+                  groupes=None, tri=None, start=0,
                   page_length=PAGE_LENGTH):
     """L'arriéré filtré. Tout est calculé sur l'ENSEMBLE puis découpé en pages :
     un filtre « article manquant » doit porter sur toutes les commandes, pas
     seulement sur celles de la page affichée."""
     _lecture()
     start, page_length = frappe.utils.cint(start), frappe.utils.cint(page_length)
+
+    # `groupes` arrive en JSON depuis l'écran. Aucune valeur = AUCUN filtre
+    # (tout est affiché) ; une liste vide reste une liste vide, c'est-à-dire
+    # « rien coché, donc rien à montrer » — les deux cas sont distincts.
+    if isinstance(groupes, str):
+        groupes = frappe.parse_json(groupes) if groupes.strip() else None
+    if groupes is not None:
+        groupes = set(groupes)
 
     lignes = _commandes(getdate(depuis or DEPUIS_DEFAUT),
                         getdate(jusqu_a or nowdate()))
@@ -276,6 +311,7 @@ def get_commandes(depuis=None, jusqu_a=None, recherche=None, statut=None,
     secteurs = _secteurs(noms)
     livraisons = _livraison_equipe(noms)
     prestations = _prestations(noms)
+    groupes_cl = _groupes_clients({l.customer for l in lignes if l.customer})
     codes = {a["code"] for lot in articles.values() for a in lot}
     contexte = (_stock(codes), _engage(codes), _articles_stockes(codes),
                 _reste_a_livrer(noms))
@@ -296,6 +332,7 @@ def get_commandes(depuis=None, jusqu_a=None, recherche=None, statut=None,
             "docstatus": l.docstatus,
             "client": l.customer,
             "client_nom": l.customer_name or l.customer,
+            "groupe_client": groupes_cl.get(l.customer, ""),
             "telephone": (l.contact_mobile or l.contact_phone
                           or (tel_client.get(l.customer) or "").split("\n")[0].strip()),
             "adresse": (l.shipping_address or l.address_display or "").replace("<br>", ", "),
@@ -327,7 +364,8 @@ def get_commandes(depuis=None, jusqu_a=None, recherche=None, statut=None,
         c["commandes_client"] = par_client.get(c["client"], 1)
 
     out = _trier(_filtrer(out, recherche, statut, origine, dispo, anomalie,
-                          tache, secteur, livraison, prestation, client), tri)
+                          tache, secteur, livraison, prestation, client,
+                          groupes), tri)
     total = len(out)
     page = out[start:start + page_length] if page_length else out
     return {
@@ -358,7 +396,8 @@ def _trier(lignes, tri):
 
 
 def _filtrer(lignes, recherche, statut, origine, dispo, anomalie, tache,
-             secteur=None, livraison=None, prestation=None, client=None):
+             secteur=None, livraison=None, prestation=None, client=None,
+             groupes=None):
     def garde(c):
         if statut and c["statut"] != statut:
             return False
@@ -398,13 +437,16 @@ def _filtrer(lignes, recherche, statut, origine, dispo, anomalie, tache,
             return False
         if prestation == "sans" and (c["a_livraison"] or c["a_main_oeuvre"]):
             return False
+        if groupes is not None and (c["groupe_client"] or SANS_GROUPE) not in groupes:
+            return False
         if client == "multi" and c["commandes_client"] < 2:
             return False
         if client == "unique" and c["commandes_client"] > 1:
             return False
         if recherche:
             aiguille = recherche.lower().strip()
-            foin = " ".join([c["name"], c["client"], c["client_nom"], c["telephone"],
+            foin = " ".join([c["name"], c["client"], c["client_nom"],
+                             c["groupe_client"], c["telephone"],
                              c["adresse"], c["anomalie"]]
                             + [a["code"] + " " + a["article"] for a in c["articles"]])
             if aiguille not in foin.lower():
