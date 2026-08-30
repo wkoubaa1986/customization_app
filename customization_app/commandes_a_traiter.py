@@ -257,8 +257,8 @@ def get_filtres():
 @frappe.whitelist()
 def get_commandes(depuis=None, jusqu_a=None, recherche=None, statut=None,
                   origine=None, dispo=None, anomalie=None, tache=None,
-                  secteur=None, livraison=None, prestation=None, tri=None,
-                  start=0,
+                  secteur=None, livraison=None, prestation=None, client=None,
+                  tri=None, start=0,
                   page_length=PAGE_LENGTH):
     """L'arriéré filtré. Tout est calculé sur l'ENSEMBLE puis découpé en pages :
     un filtre « article manquant » doit porter sur toutes les commandes, pas
@@ -317,8 +317,17 @@ def get_commandes(depuis=None, jusqu_a=None, recherche=None, statut=None,
             "web": bool(l.woocommerce_id),
         })
 
+    # Combien de commandes ce client a-t-il sur la période ? Compté sur
+    # l'ENSEMBLE, avant filtrage : le badge doit dire la même chose que je
+    # regarde les ruptures, un secteur, ou tout.
+    par_client = {}
+    for c in out:
+        par_client[c["client"]] = par_client.get(c["client"], 0) + 1
+    for c in out:
+        c["commandes_client"] = par_client.get(c["client"], 1)
+
     out = _trier(_filtrer(out, recherche, statut, origine, dispo, anomalie,
-                          tache, secteur, livraison, prestation), tri)
+                          tache, secteur, livraison, prestation, client), tri)
     total = len(out)
     page = out[start:start + page_length] if page_length else out
     return {
@@ -330,6 +339,8 @@ def get_commandes(depuis=None, jusqu_a=None, recherche=None, statut=None,
             "stock_negatif": len([c for c in out if c["stock_negatif"]]),
             "sans_tache": len([c for c in out if not c["taches"]]),
             "livraison_equipe": len([c for c in out if c["livraison_equipe"]]),
+            "clients_multi": len({c["client"] for c in out
+                                  if c["commandes_client"] > 1}),
             "anomalies": len([c for c in out if c["anomalie"]]),
             "ttc": round(sum(c["ttc"] for c in out), 3),
         },
@@ -347,7 +358,7 @@ def _trier(lignes, tri):
 
 
 def _filtrer(lignes, recherche, statut, origine, dispo, anomalie, tache,
-             secteur=None, livraison=None, prestation=None):
+             secteur=None, livraison=None, prestation=None, client=None):
     def garde(c):
         if statut and c["statut"] != statut:
             return False
@@ -387,9 +398,13 @@ def _filtrer(lignes, recherche, statut, origine, dispo, anomalie, tache,
             return False
         if prestation == "sans" and (c["a_livraison"] or c["a_main_oeuvre"]):
             return False
+        if client == "multi" and c["commandes_client"] < 2:
+            return False
+        if client == "unique" and c["commandes_client"] > 1:
+            return False
         if recherche:
             aiguille = recherche.lower().strip()
-            foin = " ".join([c["name"], c["client_nom"], c["telephone"],
+            foin = " ".join([c["name"], c["client"], c["client_nom"], c["telephone"],
                              c["adresse"], c["anomalie"]]
                             + [a["code"] + " " + a["article"] for a in c["articles"]])
             if aiguille not in foin.lower():

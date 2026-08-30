@@ -65,6 +65,7 @@ class CommandesATraiter {
       secteur: $("#ct-secteur").val() || "",
       livraison: $("#ct-livraison").val() || "",
       prestation: $("#ct-prestation").val() || "",
+      client: $("#ct-client").val() || "",
       tri: $("#ct-tri").val() || "date_asc",
     };
   }
@@ -77,13 +78,13 @@ class CommandesATraiter {
     });
     ["#ct-depuis", "#ct-jusqua", "#ct-statut", "#ct-origine", "#ct-dispo",
      "#ct-anomalie", "#ct-tache", "#ct-secteur", "#ct-livraison",
-     "#ct-prestation", "#ct-tri"].forEach((sel) =>
+     "#ct-prestation", "#ct-client", "#ct-tri"].forEach((sel) =>
       $(sel).on("change", () => { this.start = 0; this._load(); }));
 
     $("#ct-clear").on("click", () => {
       $("#ct-search").val("");
       ["#ct-statut", "#ct-origine", "#ct-dispo", "#ct-anomalie", "#ct-tache",
-       "#ct-secteur", "#ct-livraison", "#ct-prestation"]
+       "#ct-secteur", "#ct-livraison", "#ct-prestation", "#ct-client"]
         .forEach((s) => $(s).val(""));
       this.start = 0;
       this._load();
@@ -111,6 +112,14 @@ class CommandesATraiter {
       });
       $(this.wrapper).find(".ct-sel").prop("checked", coche);
       this._maj_compte();
+    });
+
+    // Un clic sur « N commandes » isole ce client : c'est le geste naturel
+    // quand on repère un doublon ou un client qui commande en plusieurs fois.
+    $(this.wrapper).on("click", ".ct-multi", (e) => {
+      $("#ct-search").val($(e.currentTarget).data("client"));
+      this.start = 0;
+      this._load();
     });
 
     $("#ct-msg").on("click", () => this._dialogue_message());
@@ -143,6 +152,7 @@ class CommandesATraiter {
       ["Stock négatif à corriger", k.stock_negatif || 0, ""],
       ["Sans tâche", k.sans_tache || 0, ""],
       ["Livraison équipe", k.livraison_equipe || 0, ""],
+      ["Clients à plusieurs commandes", k.clients_multi || 0, ""],
       ["Anomalies", k.anomalies || 0, k.anomalies ? "alerte" : ""],
       ["Total TTC", format_currency(k.ttc || 0, "TND"), ""],
     ].map(([l, v, cls]) =>
@@ -190,7 +200,11 @@ class CommandesATraiter {
         <td><a href="/app/customer/${encodeURIComponent(c.client)}" target="_blank">${esc(c.client_nom)}</a>
             <div class="ct-sub">${c.telephone
               ? `📞 <a href="tel:${esc(c.telephone)}">${esc(c.telephone)}</a>`
-              : "sans numéro"}</div></td>
+              : "sans numéro"}</div>
+            ${c.commandes_client > 1
+              ? `<div><span class="ct-badge b-warn ct-multi" data-client="${esc(c.client)}"
+                     style="cursor:pointer" title="Voir les ${c.commandes_client} commandes de ce client sur la période"
+                     >🧾 ${c.commandes_client} commandes</span></div>` : ""}</td>
         <td class="ct-adr">${esc(c.adresse || "—")}
             <div>${c.secteur
               ? `<span class="ct-badge b-info">📍 ${esc(c.secteur)}</span>`
