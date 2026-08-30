@@ -1,0 +1,46 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-08-30 09:26:18.601622",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "type_intervention",
+  "date_ouverture"
+ ],
+ "fields": [
+  {
+   "columns": 4,
+   "fieldname": "type_intervention",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Type d'intervention",
+   "options": "Entretien\nR\u00e9paration\nInstallation",
+   "reqd": 1
+  },
+  {
+   "columns": 4,
+   "fieldname": "date_ouverture",
+   "fieldtype": "Date",
+   "in_list_view": 1,
+   "label": "Rendez-vous accept\u00e9s \u00e0 partir du",
+   "reqd": 1
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-08-30 09:26:18.601622",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "Portail RDV Ouverture",
+ "owner": "Administrator",
+ "permissions": [],
+ "row_format": "Dynamic",
+ "rows_threshold_for_grid_search": 20,
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

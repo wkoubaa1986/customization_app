@@ -118,6 +118,40 @@ def delai_standard(config):
     return cint(config.get("delai_jours")) or 1
 
 
+def ouverture_type(config, type_intervention):
+    """La date d'OUVERTURE de ce type de rendez-vous (config), ou None.
+
+    Demande 30/08/2026 : on lance un type d'intervention à une date choisie
+    (un service qui démarre, une équipe qui se forme) — avant elle, aucun
+    créneau n'est proposé, quel que soit le délai standard. Un type absent de
+    la table reste ouvert normalement.
+    """
+    if not type_intervention or not frappe.db.table_exists("Portail RDV Ouverture"):
+        return None
+    for ligne in frappe.get_all(
+            "Portail RDV Ouverture",
+            filters={"parent": "Config Portail RDV",
+                     "parenttype": "Config Portail RDV",
+                     "type_intervention": type_intervention},
+            fields=["date_ouverture"], order_by="idx"):
+        if ligne.date_ouverture:
+            return getdate(ligne.date_ouverture)
+    return None
+
+
+def premier_jour(config, contexte, type_intervention):
+    """Le premier jour réservable : le délai standard (ou celui du partenaire),
+    repoussé à la date d'ouverture du type si elle est plus tardive.
+
+    Un SEUL endroit décide — la grille, la réservation et le déplacement s'y
+    réfèrent, sans quoi l'écran proposerait un créneau que le serveur refuse.
+    """
+    delai = (contexte or {}).get("delai_jours") or delai_standard(config)
+    debut = add_days(getdate(), delai)
+    ouverture = ouverture_type(config, type_intervention)
+    return max(debut, ouverture) if ouverture else debut
+
+
 def contexte_partenaire(config, gouvernorat):
     """La ZONE PARTENAIRE (Sousse, Monastir… — décision 28/08/2026).
 
@@ -408,9 +442,11 @@ def disponibilites(config, secteur, type_intervention, horizon=HORIZON_PLANNING,
     liste = contexte["employes"] if contexte else _liste_employes(config)
     if not liste:
         return []
-    debut = add_days(getdate(), contexte["delai_jours"] if contexte
-                     else delai_standard(config))
+    debut = premier_jour(config, contexte, type_intervention)
     fin = add_days(getdate(), horizon)
+    if debut > fin:
+        # Type ouvert au-delà de l'horizon : rien à proposer pour l'instant.
+        return []
     dimanche_inclus = [] if contexte else ([config.get("employe_dimanche")]
                                            if config.get("employe_dimanche") else [])
     tout_le_monde = list(dict.fromkeys(liste + dimanche_inclus))

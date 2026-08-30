@@ -28,7 +28,8 @@ from contextlib import contextmanager
 
 import frappe
 from frappe import _
-from frappe.utils import add_days, cint, get_datetime, getdate, nowdate
+from frappe.utils import (add_days, cint, formatdate, get_datetime, getdate,
+                          nowdate)
 
 DOCTYPE_CONFIG = "Config Portail RDV"
 DOCTYPE_TACHE = "Tache de travail"
@@ -457,6 +458,7 @@ def _ouvrir_session(numero, entree):
         "adresses": _adresses_du_client(entree["client"]),
         "rendez_vous": _rendez_vous_du_client(entree["client"]),
         "tarifs": _tarifs(),
+        "ouvertures": _ouvertures_par_type(_config()),
         "date_min": str(add_days(getdate(nowdate()), 1)),
         "date_max": str(add_days(getdate(nowdate()), HORIZON_JOURS)),
     }
@@ -485,6 +487,32 @@ def _rdv_deplacable(session, tache):
         frappe.throw(_("Ce rendez-vous ne peut plus être modifié en ligne — "
                        "appelez-nous."))
     return doc
+
+
+def _ouverture_a_annoncer(config, contexte, type_intervention):
+    """La date d'ouverture du type SI elle repousse vraiment le premier créneau
+    au-delà du délai habituel — sinon rien à dire au client."""
+    from customization_app import portail_rdv_planning as planning
+
+    ouverture = planning.ouverture_type(config, type_intervention)
+    if not ouverture:
+        return None
+    delai = (contexte or {}).get("delai_jours") or planning.delai_standard(config)
+    return str(ouverture) if ouverture > add_days(getdate(nowdate()), delai) else None
+
+
+def _ouvertures_par_type(config):
+    """{type: date d'ouverture} — seulement les types qui ouvrent plus tard que
+    le délai standard, pour que l'écran l'affiche sur le bouton du type."""
+    from customization_app import portail_rdv_planning as planning
+
+    minimum = add_days(getdate(nowdate()), planning.delai_standard(config))
+    out = {}
+    for type_i in TYPES_TOUT_CLIENT + (TYPE_AVEC_COMMANDE,):
+        ouverture = planning.ouverture_type(config, type_i)
+        if ouverture and ouverture > minimum:
+            out[type_i] = str(ouverture)
+    return out
 
 
 @frappe.whitelist(allow_guest=True, methods=["POST"])
@@ -519,6 +547,9 @@ def disponibilites(jeton, adresse=None, type_intervention=None, tache=None):
         # Les horaires affichés sur les boutons suivent la config (fenêtres
         # réglables) — plus de « 09:30 – 12:30 » en dur à l'écran.
         "horaires": planning.fenetres_libellees(),
+        # Type pas encore ouvert : l'écran l'annonce au lieu de laisser une
+        # grille vide sans explication.
+        "ouvert_le": _ouverture_a_annoncer(config, contexte, type_intervention),
         "jours": [] if hors else planning.disponibilites(
             config, secteur, type_intervention, exclure=exclure, contexte=contexte),
     }
@@ -537,13 +568,14 @@ def deplacer_rdv(jeton, tache, date, demi_journee):
 
     contexte = planning.contexte_partenaire(
         config, _gouvernorat_adresse(doc.get("select_address")))
-    delai = (contexte or {}).get("delai_jours") or planning.delai_standard(config)
     # ⚠️ `jour` sert plus bas (placer, SMS, retour) : le refactor délai de
     # v5.21 avait perdu cette affectation — NameError sur TOUT déplacement.
     jour = getdate(date)
-    if jour <= add_days(getdate(nowdate()), delai - 1):
-        frappe.throw(_("Choisissez une date à partir de {0}.").format(
-            _("demain") if delai <= 1 else _("dans {0} jours").format(delai)))
+    ouvert_le = planning.premier_jour(
+        config, contexte, doc.get("custom_type_dintervention"))
+    if jour < ouvert_le:
+        frappe.throw(_("Choisissez une date à partir du {0}.").format(
+            formatdate(ouvert_le, "dd/MM/yyyy")))
 
     ancien = str(doc.starts_on)[:16]
     type_i = doc.get("custom_type_dintervention")
@@ -848,10 +880,11 @@ def reserver(jeton, type_intervention, date, demi_journee, adresse=None,
         config, doc_adresse.get("custom_state_s") or doc_adresse.get("state"))
     delai = (contexte or {}).get("delai_jours") or planning.delai_standard(config)
     jour = getdate(date)
-    if not (add_days(getdate(nowdate()), delai - 1) < jour
-            <= add_days(getdate(nowdate()), HORIZON_JOURS)):
-        frappe.throw(_("Choisissez une date entre {0} et dans deux mois.").format(
-            _("demain") if delai <= 1 else _("dans {0} jours").format(delai)))
+    ouvert_le = planning.premier_jour(config, contexte, type_intervention)
+    if jour < ouvert_le or jour > add_days(getdate(nowdate()), HORIZON_JOURS):
+        frappe.throw(_("Les rendez-vous « {0} » sont acceptés à partir du {1}, "
+                       "et jusqu'à deux mois.").format(
+            type_intervention, formatdate(ouvert_le, "dd/MM/yyyy")))
 
     if type_intervention == TYPE_AVEC_COMMANDE:
         if not commande:

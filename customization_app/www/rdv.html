@@ -617,12 +617,17 @@
       b.type = "button";
       const prix = ((seance.tarifs || {})[t] || {}).principal;
       const pris = occupes[t];
+      // Type ouvert à une date décidée par le magasin : on l'annonce sur le
+      // bouton plutôt que de laisser le client buter sur une grille vide.
+      const ouvre = (seance.ouvertures || {})[t];
       b.innerHTML = (ICONES_TYPE[t] || t)
         + (pris
             ? `<div style="font-size:11px;font-weight:600;color:#075985">📅 déjà prévu le ${echapper(pris.date)}</div>`
-            : prix
-              ? `<div style="font-size:11.5px;font-weight:500;color:#64748b">à partir de ${prix} DT</div>`
-              : "");
+            : ouvre
+              ? `<div style="font-size:11px;font-weight:600;color:#b45309">📅 à partir du ${jolie_date(ouvre)}</div>`
+              : prix
+                ? `<div style="font-size:11.5px;font-weight:500;color:#64748b">à partir de ${prix} DT</div>`
+                : "");
       b.setAttribute("data-type", t);
       // Un type DÉJÀ réservé reste cliquable (décision 29/08) : le clic ouvre
       // le choix « modifier l'existant ou en prendre un autre », il ne grise plus.
@@ -750,6 +755,13 @@
   // La grille des demi-journées FAISABLES (moteur serveur : secteurs, capacité,
   // battements, journées 8/9, quota lointain, remplaçants, dimanche).
   const JOURS_FR = ["Dim", "Lun", "Mar", "Mer", "Jeu", "Ven", "Sam"];
+
+  // « 2026-09-15 » -> « 15/09/2026 » (les dates du serveur sont en ISO).
+  function jolie_date(iso) {
+    const d = new Date(String(iso) + "T00:00:00");
+    return isNaN(d) ? String(iso) : `${String(d.getDate()).padStart(2, "0")}/${
+      String(d.getMonth() + 1).padStart(2, "0")}/${d.getFullYear()}`;
+  }
   let jeton_grille = 0;
 
   // Une longue liste de jours noie les boutons d'action : on n'en montre que
@@ -797,10 +809,18 @@
              🚚 Votre région est desservie par notre partenaire : les rendez-vous
              se prennent à partir de ${res.delai_jours} jours.
            </div>` : "";
+      // Type ouvert à une date décidée par le magasin : le dire AVANT la
+      // grille, sinon les premiers jours manquants restent inexpliqués.
+      const bandeau_ouverture = res.ouvert_le
+        ? `<div style="margin:4px 0 8px;padding:8px 10px;border-radius:9px;
+               background:#fef3c7;color:#92400e;font-size:12.5px">
+             📅 Les rendez-vous « ${echapper(type_choisi || "")} » sont acceptés
+             à partir du <b>${jolie_date(res.ouvert_le)}</b>.
+           </div>` : "";
       const jours = (res.jours || []).filter((j) => j.matin || j.apres_midi);
       const horaires = res.horaires || { matin: "09:30 – 12:30", apres_midi: "13:30 – 17:30" };
       zone.innerHTML = jours.length
-        ? prefixe + jours.map((j) => {
+        ? bandeau_ouverture + prefixe + jours.map((j) => {
             const d = new Date(j.date + "T00:00:00");
             return `<div class="rdv-jour">
               <span class="j-date">${d.getDate()}/${String(d.getMonth() + 1).padStart(2, "0")}
@@ -811,7 +831,7 @@
                 🌙 Après-midi<span class="j-heures">${horaires.apres_midi}</span></button>
             </div>`;
           }).join("")
-        : `<div class="rdv-vide">Aucun créneau disponible sur les 3 prochaines semaines —
+        : bandeau_ouverture + `<div class="rdv-vide">Aucun créneau disponible sur les 3 prochaines semaines —
              {% if tel_commercial %}appelez-nous au <a href="tel:{{ tel_commercial | replace(' ', '') }}"
                style="font-weight:600">{{ tel_commercial }}</a>{% else %}appelez-nous{% endif %}
              {% if whatsapp %} ou écrivez-nous sur <a href="https://wa.me/216{{ whatsapp }}"

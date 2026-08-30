@@ -32,7 +32,9 @@
   "section_secteurs",
   "groupes_secteurs",
   "section_partenaire",
-  "partenaires"
+  "partenaires",
+  "section_ouvertures",
+  "ouvertures"
  ],
  "fields": [
   {
@@ -194,11 +196,23 @@
    "fieldname": "apres_midi_fin",
    "fieldtype": "Time",
    "label": "Fin apr\u00e8s-midi"
+  },
+  {
+   "fieldname": "section_ouvertures",
+   "fieldtype": "Section Break",
+   "label": "Ouverture des rendez-vous par type"
+  },
+  {
+   "description": "Aucun rendez-vous de ce type ne sera propos\u00e9 avant la date indiqu\u00e9e. Un type absent de cette table reste ouvert normalement (d\u00e9lai standard).",
+   "fieldname": "ouvertures",
+   "fieldtype": "Table",
+   "label": "Dates d'ouverture",
+   "options": "Portail RDV Ouverture"
   }
  ],
  "issingle": 1,
  "links": [],
- "modified": "2026-08-29 12:53:07.678955",
+ "modified": "2026-08-30 09:26:19.048137",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Config Portail RDV",
