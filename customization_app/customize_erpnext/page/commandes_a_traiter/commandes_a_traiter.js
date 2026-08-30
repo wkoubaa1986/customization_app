@@ -46,10 +46,14 @@ class CommandesATraiter {
         $("#ct-secteur").append(
           (m.secteurs || []).map((s) => `<option value="${s}">${s}</option>`).join(""));
         // Tous cochés au départ : le filtre n'enlève rien tant qu'on n'a
-        // pas décidé de retirer un type.
-        $("#ct-groupes").html((m.groupes || []).map((g) =>
-          `<label><input type="checkbox" class="ct-grp" value="${frappe.utils.escape_html(g.valeur)}" checked>
-             ${frappe.utils.escape_html(g.libelle)} <span class="n">(${g.n})</span></label>`).join(""));
+        // pas décidé de retirer un type. Plusieurs cases peuvent être cochées
+        // en même temps — c'est une multi-sélection.
+        $("#ct-groupes").html((m.groupes || []).length
+          ? (m.groupes || []).map((g) =>
+              `<label><input type="checkbox" class="ct-grp" value="${frappe.utils.escape_html(g.valeur)}" checked>
+                 ${frappe.utils.escape_html(g.libelle)} <span class="n">(${g.n})</span></label>`).join("")
+          // Un bloc vide sans explication laisserait croire à un bug d'affichage.
+          : `<span class="n">Types de clients indisponibles — rechargez la page (Ctrl+Maj+R).</span>`);
         $("#ct-depuis").val(m.depuis_defaut || "2026-07-01");
         $("#ct-jusqua").val(frappe.datetime.get_today());
         this._load();
