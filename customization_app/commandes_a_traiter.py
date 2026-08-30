@@ -130,6 +130,54 @@ def _livraison_equipe(noms):
         fields=["name"], limit_page_length=0)}
 
 
+def _groupe_et_descendants(motif):
+    """Le groupe d'articles correspondant au motif, ET toute sa descendance.
+
+    ⚠️ « Main d’œuvre » s'écrit avec une apostrophe TYPOGRAPHIQUE en base : un
+    nom écrit en dur avec une apostrophe droite ne matcherait jamais (piège déjà
+    payé sur un filtre de cette app). On le retrouve donc par motif, et on prend
+    les sous-groupes par lft/rgt pour qu'un futur découpage n'échappe pas au
+    filtre.
+    """
+    parent = frappe.db.sql_list(
+        "SELECT name FROM `tabItem Group` WHERE name LIKE %s ORDER BY lft LIMIT 1",
+        (motif,))
+    if not parent:
+        return []
+    lft, rgt = frappe.db.get_value("Item Group", parent[0], ["lft", "rgt"])
+    return frappe.db.sql_list(
+        "SELECT name FROM `tabItem Group` WHERE lft >= %s AND rgt <= %s", (lft, rgt))
+
+
+def _prestations(noms):
+    """{commande: {"livraison": bool, "main_oeuvre": bool}} — ce que la commande
+    contient comme PRESTATION, par groupe d'articles.
+
+    Sert à répondre « qu'est-ce qu'il y a à faire sur cette commande ? » :
+    une livraison à assurer, une intervention de main d'œuvre, ou rien du tout
+    (une simple vente de pièces, que le client vient chercher).
+    """
+    out = {}
+    if not noms:
+        return out
+    familles = {"livraison": _groupe_et_descendants("Livraison"),
+                "main_oeuvre": _groupe_et_descendants("Main d%uvre")}
+    groupes = {g: cle for cle, liste in familles.items() for g in liste}
+    if not groupes:
+        return out
+    for l in frappe.db.sql(
+            """SELECT DISTINCT soi.parent AS commande, i.item_group AS groupe
+               FROM `tabSales Order Item` soi
+               JOIN `tabItem` i ON i.name = soi.item_code
+               WHERE soi.parenttype = 'Sales Order'
+                 AND soi.parent IN %(noms)s AND i.item_group IN %(groupes)s""",
+            {"noms": tuple(noms), "groupes": tuple(groupes)}, as_dict=True):
+        cle = groupes.get(l.groupe)
+        if cle:
+            out.setdefault(l.commande, {})[cle] = True
+    return out
+
+
 def _reste_a_livrer(noms):
     """{commande: {article: reste à livrer}} — une commande soldée ne manque de rien."""
     out = {}
@@ -209,7 +257,8 @@ def get_filtres():
 @frappe.whitelist()
 def get_commandes(depuis=None, jusqu_a=None, recherche=None, statut=None,
                   origine=None, dispo=None, anomalie=None, tache=None,
-                  secteur=None, livraison=None, tri=None, start=0,
+                  secteur=None, livraison=None, prestation=None, tri=None,
+                  start=0,
                   page_length=PAGE_LENGTH):
     """L'arriéré filtré. Tout est calculé sur l'ENSEMBLE puis découpé en pages :
     un filtre « article manquant » doit porter sur toutes les commandes, pas
@@ -226,6 +275,7 @@ def get_commandes(depuis=None, jusqu_a=None, recherche=None, statut=None,
 
     secteurs = _secteurs(noms)
     livraisons = _livraison_equipe(noms)
+    prestations = _prestations(noms)
     codes = {a["code"] for lot in articles.values() for a in lot}
     contexte = (_stock(codes), _engage(codes), _articles_stockes(codes),
                 _reste_a_livrer(noms))
@@ -251,6 +301,8 @@ def get_commandes(depuis=None, jusqu_a=None, recherche=None, statut=None,
             "adresse": (l.shipping_address or l.address_display or "").replace("<br>", ", "),
             "secteur": secteurs.get(l.name, ("", ""))[0],
             "livraison_equipe": l.name in livraisons,
+            "a_livraison": bool(prestations.get(l.name, {}).get("livraison")),
+            "a_main_oeuvre": bool(prestations.get(l.name, {}).get("main_oeuvre")),
             "ttc": flt(l.grand_total, 3),
             "devise": l.currency or "TND",
             "articles": lot,
@@ -266,7 +318,7 @@ def get_commandes(depuis=None, jusqu_a=None, recherche=None, statut=None,
         })
 
     out = _trier(_filtrer(out, recherche, statut, origine, dispo, anomalie,
-                          tache, secteur, livraison), tri)
+                          tache, secteur, livraison, prestation), tri)
     total = len(out)
     page = out[start:start + page_length] if page_length else out
     return {
@@ -295,7 +347,7 @@ def _trier(lignes, tri):
 
 
 def _filtrer(lignes, recherche, statut, origine, dispo, anomalie, tache,
-             secteur=None, livraison=None):
+             secteur=None, livraison=None, prestation=None):
     def garde(c):
         if statut and c["statut"] != statut:
             return False
@@ -326,6 +378,14 @@ def _filtrer(lignes, recherche, statut, origine, dispo, anomalie, tache,
         if livraison == "avec" and not c["livraison_equipe"]:
             return False
         if livraison == "sans" and c["livraison_equipe"]:
+            return False
+        # Ce que la commande contient à FAIRE : une livraison, une main d'œuvre,
+        # ou rien (vente de pièces à emporter).
+        if prestation == "livraison" and not c["a_livraison"]:
+            return False
+        if prestation == "installation" and not c["a_main_oeuvre"]:
+            return False
+        if prestation == "sans" and (c["a_livraison"] or c["a_main_oeuvre"]):
             return False
         if recherche:
             aiguille = recherche.lower().strip()

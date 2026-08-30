@@ -64,6 +64,7 @@ class CommandesATraiter {
       tache: $("#ct-tache").val() || "",
       secteur: $("#ct-secteur").val() || "",
       livraison: $("#ct-livraison").val() || "",
+      prestation: $("#ct-prestation").val() || "",
       tri: $("#ct-tri").val() || "date_asc",
     };
   }
@@ -76,13 +77,14 @@ class CommandesATraiter {
     });
     ["#ct-depuis", "#ct-jusqua", "#ct-statut", "#ct-origine", "#ct-dispo",
      "#ct-anomalie", "#ct-tache", "#ct-secteur", "#ct-livraison",
-     "#ct-tri"].forEach((sel) =>
+     "#ct-prestation", "#ct-tri"].forEach((sel) =>
       $(sel).on("change", () => { this.start = 0; this._load(); }));
 
     $("#ct-clear").on("click", () => {
       $("#ct-search").val("");
       ["#ct-statut", "#ct-origine", "#ct-dispo", "#ct-anomalie", "#ct-tache",
-       "#ct-secteur", "#ct-livraison"].forEach((s) => $(s).val(""));
+       "#ct-secteur", "#ct-livraison", "#ct-prestation"]
+        .forEach((s) => $(s).val(""));
       this.start = 0;
       this._load();
     });
@@ -165,6 +167,12 @@ class CommandesATraiter {
             ${badge}</div>`;
       }).join("") || `<span class="ct-sub">—</span>`;
 
+      // Ce qu'il y a À FAIRE sur la commande, lu des groupes d'articles.
+      const prestation = c.a_livraison || c.a_main_oeuvre
+        ? `<div style="margin-top:3px">${c.a_livraison ? `<span class="ct-badge b-info">🚚 livraison</span> ` : ""}${
+             c.a_main_oeuvre ? `<span class="ct-badge b-info">🔧 main d’œuvre</span>` : ""}</div>`
+        : `<div style="margin-top:3px"><span class="ct-badge b-svc">📦 sans intervention</span></div>`;
+
       const taches = (c.taches || []).map((t) =>
         `<div><a href="/app/tache-de-travail/${encodeURIComponent(t.tache)}"
              class="ct-badge b-info" target="_blank">🛠️ ${esc(t.type || "?")} · ${esc(t.statut || "")}</a>
@@ -187,7 +195,7 @@ class CommandesATraiter {
             <div>${c.secteur
               ? `<span class="ct-badge b-info">📍 ${esc(c.secteur)}</span>`
               : `<span class="ct-badge b-warn">📍 sans secteur</span>`}</div></td>
-        <td>${articles}</td>
+        <td>${articles}${prestation}</td>
         <td>${taches}</td>
         <td>${c.anomalie ? `<span class="ct-badge b-ko">${esc(c.anomalie)}</span>` : ""}
             ${c.bordereau ? `<div class="ct-sub">🚚 ${esc(c.bordereau)}</div>` : ""}</td>
