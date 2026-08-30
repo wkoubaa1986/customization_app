@@ -256,9 +256,13 @@
       <div id="liste-tarifs" style="display:none;background:#f8fafc;border-radius:9px;
            padding:4px 12px;margin-top:6px;font-size:13px"></div>
       <div id="bloc-commande" style="display:none">
-        <label>Commande à installer</label>
+        <label id="label-commande">Commande à installer</label>
         <div id="rdv-commandes-instal"></div>
       </div>
+      <!-- Le client doit savoir AVANT de réserver que la main d'œuvre est
+           facturée : la découvrir à l'arrivée du technicien, c'est un litige. -->
+      <div id="avis-cout" style="display:none;margin-top:8px;padding:9px 11px;
+           border-radius:9px;background:#fef3c7;color:#92400e;font-size:12.5px"></div>
       <label>Créneaux disponibles</label>
       <div id="rdv-grille"><div class="rdv-vide">Choisissez votre adresse et le type de rendez-vous.</div></div>
       <label>Personne à contacter à l'arrivée</label>
@@ -770,6 +774,18 @@
   // envoyée au serveur (confirmer_second) qui refuse le doublon sans elle.
   let seconds_confirmes = {};
 
+  // Prévenir du COÛT avant la réservation, pas après. Le tarif affiché est
+  // celui de la main d'œuvre (liste de prix réelle) ; les pièces s'ajoutent.
+  function rendre_avis_cout(t) {
+    const zone = $("avis-cout");
+    const prix = ((seance.tarifs || {})[t] || {}).principal;
+    if (!prix) { zone.style.display = "none"; zone.innerHTML = ""; return; }
+    zone.style.display = "block";
+    zone.innerHTML = `💰 <b>${echapper(t)} : prestation payante</b> — à partir de
+        <b>${prix} DT</b> de main d'œuvre, à régler au technicien.
+        Les pièces éventuellement remplacées sont facturées en plus.`;
+  }
+
   function choisir_type(t) {
     message(null);
     $("choix-second").style.display = "none";
@@ -778,6 +794,9 @@
       x.classList.toggle("actif", x.getAttribute("data-type") === t));
     $("bloc-commande").style.display = TYPES_COMMANDE.includes(t) ? "block" : "none";
     if (TYPES_COMMANDE.includes(t)) rendre_commandes_installables();
+    $("label-commande").textContent = t === "Livraison"
+      ? "Commande à livrer" : "Commande à installer";
+    rendre_avis_cout(t);
     rendre_tarifs();
     charger_grille();
   }
