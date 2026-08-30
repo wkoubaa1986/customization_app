@@ -15,6 +15,8 @@ BALISES (rendues par commande) :
   {lien_rdv}   le lien du portail de prise de rendez-vous (cliquable dans le SMS)
   {remplacements} les articles de remplacement choisis POUR CETTE commande,
                   avec leur lien sur la boutique
+  {article_remplace} l'article que l'on remplace (choisi par commande ; à défaut,
+                  le premier article de la commande)
   {signature}  la signature de la société
 
 Les numéros passent par les mêmes règles que les campagnes SMS
@@ -66,9 +68,12 @@ MODELES = [
         "libelle": "Article indisponible — proposer un remplacement",
         "texte": (
             "Bonjour {nom_client},\n\n"
-            "L'article {article} de votre commande {commande} n'est "
+            "L'article {article_remplace} de votre commande {commande} n'est "
             "malheureusement plus disponible.\n"
             "Nous pouvons vous proposer une alternative equivalente :\n\n"
+            # La balise fait partie du MODÈLE : sans elle, le message promet une
+            # proposition puis n'en fait aucune.
+            "{remplacements}\n\n"
             "{signature}"
         ),
     },
@@ -77,10 +82,11 @@ MODELES = [
         "libelle": "Commande annulée — proposer un remplacement",
         "texte": (
             "Bonjour {nom_client},\n\n"
-            "Votre commande {commande} a ete annulee : l'article {article} "
+            "Votre commande {commande} a ete annulee : l'article {article_remplace} "
             "n'est plus disponible et nous ne pouvons pas le reapprovisionner "
             "dans un delai raisonnable.\n"
             "Voici ce que nous pouvons vous proposer a la place :\n\n"
+            "{remplacements}\n\n"
             "{signature}"
         ),
     },
@@ -159,19 +165,30 @@ def _destinataires(noms):
             "codes": ", ".join(l["code"] for l in lignes),
             "article": lignes[0]["nom"] if lignes else "",
             "code": lignes[0]["code"] if lignes else "",
+            # Le détail, pour que l'écran propose de choisir QUEL article est
+            # remplacé — le premier de la commande n'est pas toujours le bon.
+            "lignes_articles": lignes,
             "numeros": numeros,
             "emails": emails,
         })
     return out
 
 
-def bloc_remplacements(codes):
+def _codes_et_remplace(valeur):
+    """Accepte `[codes]` (choix simple) ou `{"remplace": code, "par": [codes]}`
+    (on dit AUSSI quel article est remplacé). -> (codes proposés, code remplacé)"""
+    if isinstance(valeur, dict):
+        return [c for c in (valeur.get("par") or []) if c], valeur.get("remplace") or ""
+    return [c for c in (valeur or []) if c], ""
+
+
+def bloc_remplacements(valeur):
     """Le bloc « articles proposés » d'UNE commande : nom lisible + lien boutique.
 
     Composé ici, côté serveur, pour que le SMS, l'e-mail et l'aperçu disent
     exactement la même chose.
     """
-    codes = [c for c in (codes or []) if c]
+    codes, _remplace = _codes_et_remplace(valeur)
     if not codes:
         return ""
     from customization_app.commandes_a_traiter import _liens_boutique
@@ -196,8 +213,16 @@ def rendre(modele, ligne, remplacements=None):
             return "{%s}" % cle
 
     propres = (remplacements or {}).get(ligne["commande"])
+    _codes, remplace = _codes_et_remplace(propres)
+    nom_remplace = ""
+    if remplace:
+        nom_remplace = next((a["nom"] for a in (ligne.get("lignes_articles") or [])
+                             if a["code"] == remplace), remplace)
     return (modele or "").format_map(_Tolerant({
         "remplacements": bloc_remplacements(propres),
+        # L'article VRAIMENT remplacé — {article} n'est que le premier de la
+        # commande, ce n'est pas forcément celui qui manque.
+        "article_remplace": nom_remplace or ligne["article"],
         # Le lien du portail : le client tape dessus depuis son SMS et arrive
         # sur /rdv, où son numéro le fait entrer.
         "lien_rdv": frappe.utils.get_url("/rdv"),

@@ -164,6 +164,13 @@ class CommandesATraiter {
       }),
       callback: (r) => {
         this.data = r.message || { lignes: [], total: 0, kpis: {} };
+        // On garde les articles de chaque commande VUE : la sélection survit
+        // aux pages, le dialogue doit pouvoir les proposer même après un
+        // changement de filtre.
+        this._infos_commandes = this._infos_commandes || {};
+        (this.data.lignes || []).forEach((c) => {
+          this._infos_commandes[c.name] = c.articles || [];
+        });
         this._rendre();
       },
     });
@@ -386,7 +393,15 @@ class CommandesATraiter {
         frappe.msgprint(__("Choisissez d'abord un ou plusieurs articles."));
         return;
       }
-      noms.forEach((n) => { this._remplacements[n] = choisis.slice(); });
+      noms.forEach((n) => {
+        const dedans = (this._infos_commandes || {})[n] || [];
+        const souci = dedans.find((a) => a.manque || a.stock_negatif);
+        this._remplacements[n] = {
+          remplace: (this._remplacements[n] || {}).remplace
+                    || (souci ? souci.code : ""),
+          par: choisis.slice(),
+        };
+      });
       this._poser_balise(d);
       this._rendre_par_commande(d, noms);
       this._apercu(d, noms);
@@ -446,13 +461,25 @@ class CommandesATraiter {
        <div style="max-height:190px;overflow:auto;font-size:12px;border:1px solid
             var(--border-color,#e4e8ee);border-radius:8px">
          <table style="width:100%">${noms.map((n) => {
-           const choisis = this._remplacements[n] || [];
+           const choix = this._remplacements[n] || {};
+           const par = choix.par || [];
+           const dedans = (this._infos_commandes || {})[n] || [];
+           const nom_origine = (code) =>
+             (dedans.find((a) => a.code === code) || {}).article || code;
            return `<tr style="border-bottom:1px solid var(--border-color,#eef1f5)">
-             <td style="padding:5px 8px;white-space:nowrap"><b>${esc(n)}</b></td>
-             <td style="padding:5px 8px">${choisis.length
-                ? choisis.map((c) => esc(nom_lisible(c))).join(", ")
-                : `<span style="color:#b45309">aucun article</span>`}</td>
-             <td style="padding:5px 8px;text-align:right">
+             <td style="padding:5px 8px;vertical-align:top;white-space:nowrap">
+               <b>${esc(n)}</b></td>
+             <td style="padding:5px 8px;vertical-align:top;color:var(--text-muted,#6b7280)">
+               ${dedans.length
+                  ? dedans.map((a) => `${a.manque || a.stock_negatif ? "⚠️ " : ""}${
+                      esc(a.article)}`).join("<br>")
+                  : "—"}</td>
+             <td style="padding:5px 8px;vertical-align:top">${par.length
+                ? `${choix.remplace
+                     ? `<span style="color:#b02a37">${esc(nom_origine(choix.remplace))}</span> → ` : ""}
+                   <b>${par.map((c) => esc(nom_lisible(c))).join(", ")}</b>`
+                : `<span style="color:#b45309">aucun remplacement</span>`}</td>
+             <td style="padding:5px 8px;text-align:right;vertical-align:top">
                <button type="button" class="btn btn-xs btn-default ct-modif-rempl"
                  data-cde="${esc(n)}">✏️ modifier</button></td></tr>`;
          }).join("")}</table></div>`);
@@ -465,8 +492,14 @@ class CommandesATraiter {
     const p = new frappe.ui.Dialog({
       title: __("Articles de remplacement — {0}", [commande]),
       fields: [{
+        fieldtype: "Select", fieldname: "remplace",
+        label: __("Article à remplacer (dans la commande)"),
+        options: [""].concat(((this._infos_commandes || {})[commande] || [])
+          .map((a) => a.code)).join("\n"),
+        description: __("⚠️ signale un article en rupture ou à stock négatif."),
+      }, {
         fieldtype: "MultiSelectPills", fieldname: "articles",
-        label: __("Articles proposés à ce client"),
+        label: __("Remplacé par"),
         get_data: (txt) => frappe.call({
           method: "customization_app.commandes_a_traiter.chercher_articles",
           args: { recherche: txt },
@@ -481,7 +514,9 @@ class CommandesATraiter {
       }],
       primary_action_label: __("Valider"),
       primary_action: (v) => {
-        this._remplacements[commande] = v.articles || [];
+        this._remplacements[commande] = {
+          remplace: v.remplace || "", par: v.articles || [],
+        };
         p.hide();
         this._poser_balise(parent);
         this._rendre_par_commande(parent, noms);
@@ -489,7 +524,13 @@ class CommandesATraiter {
       },
     });
     p.show();
-    p.set_value("articles", (this._remplacements[commande] || []).slice());
+    const actuel = this._remplacements[commande] || {};
+    p.set_value("articles", (actuel.par || []).slice());
+    // Par défaut, l'article qui pose problème : c'est celui qu'on remplace
+    // neuf fois sur dix.
+    const dedans = (this._infos_commandes || {})[commande] || [];
+    const souci = dedans.find((a) => a.manque || a.stock_negatif);
+    p.set_value("remplace", actuel.remplace || (souci ? souci.code : ""));
   }
 
   _apercu(d, noms, apres) {
