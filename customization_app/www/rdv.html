@@ -557,7 +557,8 @@
   const details_instal = {};
   function rendre_commandes_installables() {
     const zone = $("rdv-commandes-instal");
-    const liste = (seance.commandes || []).filter((c) => c.sans_tache);
+    const liste = (seance.commandes || []).filter((c) => c.sans_tache
+      && (type_choisi !== "Livraison" || c.livraison_equipe));
     commande_choisie = null;
     zone.innerHTML = liste.length
       ? liste.map((c) => `<div class="rdv-adr" data-cmd-inst="${echapper(c.name)}">
@@ -567,7 +568,9 @@
             <button type="button" class="rdv-fleche" data-detail-inst="${echapper(c.name)}">▼</button>
           </div>
           <div class="rdv-detail" id="detail-inst-${echapper(c.name)}"></div>`).join("")
-      : `<div class="rdv-vide">Toutes vos commandes ont déjà leur intervention planifiée.</div>`;
+      : `<div class="rdv-vide">${type_choisi === "Livraison"
+            ? "Aucune de vos commandes n’est livrée par notre équipe."
+            : "Toutes vos commandes ont déjà leur intervention planifiée."}</div>`;
 
     zone.querySelectorAll("[data-cmd-inst]").forEach((el) =>
       el.addEventListener("click", (ev) => {
@@ -602,8 +605,10 @@
   // Les types de rendez-vous. Un type DÉJÀ prévu à l'adresse choisie se grise
   // (règle 28/08 : un seul RDV par type, par client et par adresse) — les
   // autres types restent réservables au même endroit.
+  const TYPES_COMMANDE = ["Installation", "Livraison"];
   const ICONES_TYPE = { "Entretien": "🔧 Entretien", "Réparation": "🧰 Réparation",
-                        "Installation": "🔨 Installation" };
+                        "Installation": "🔨 Installation",
+                        "Livraison": "🚚 Livraison" };
 
   function rendre_types() {
     const zone = $("rdv-types");
@@ -668,7 +673,8 @@
     type_choisi = t;
     $("rdv-types").querySelectorAll("button").forEach((x) =>
       x.classList.toggle("actif", x.getAttribute("data-type") === t));
-    $("bloc-commande").style.display = t === "Installation" ? "block" : "none";
+    $("bloc-commande").style.display = TYPES_COMMANDE.includes(t) ? "block" : "none";
+    if (TYPES_COMMANDE.includes(t)) rendre_commandes_installables();
     rendre_tarifs();
     charger_grille();
   }
@@ -1063,7 +1069,7 @@
   $("btn-reserver").addEventListener("click", async () => {
     if (!adresse_choisie) return message("Choisissez votre adresse d'intervention (ou ajoutez-en une).");
     if (!type_choisi) return message("Choisissez le type de rendez-vous.");
-    if (type_choisi === "Installation" && !commande_choisie)
+    if (TYPES_COMMANDE.includes(type_choisi) && !commande_choisie)
       return message("Choisissez la commande à installer.");
     if (!creneau_choisi) return message("Choisissez un créneau dans la liste.");
     try {
@@ -1073,7 +1079,7 @@
         adresse: adresse_choisie,
         date: creneau_choisi.date,
         demi_journee: creneau_choisi.demi,
-        commande: type_choisi === "Installation" ? commande_choisie : null,
+        commande: TYPES_COMMANDE.includes(type_choisi) ? commande_choisie : null,
         note: $("rdv-note").value,
         contact_nom: $("rdv-contact-nom").value,
         contact_tel: $("rdv-contact-tel").value,

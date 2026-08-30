@@ -85,9 +85,13 @@ def fenetres_libellees():
 
 
 BATTEMENT = 30
-DUREES = {"Entretien": 30, "Réparation": 60, "Installation": 75}
+DUREES = {"Entretien": 30, "Réparation": 60, "Installation": 75,
+          # Livraison par notre équipe : on dépose, on vérifie, on repart.
+          # 30 min et non 20 (décision 30/08) — c'est aussi le seul palier
+          # existant du champ « Temps d'intervention » de la tâche.
+          "Livraison": 30}
 TEMPS_LIBELLE = {"Entretien": "30 min", "Réparation": "1 heure",
-                 "Installation": "1 heure, 15 min"}
+                 "Installation": "1 heure, 15 min", "Livraison": "30 min"}
 
 SECTEURS_JOURNEE_COMPLETE = {"Secteur 8", "Secteur 9"}
 SECTEUR_COMBINABLE = "Secteur 7"

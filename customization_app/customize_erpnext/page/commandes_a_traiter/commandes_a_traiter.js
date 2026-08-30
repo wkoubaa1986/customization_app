@@ -63,6 +63,7 @@ class CommandesATraiter {
       anomalie: $("#ct-anomalie").val() || "",
       tache: $("#ct-tache").val() || "",
       secteur: $("#ct-secteur").val() || "",
+      livraison: $("#ct-livraison").val() || "",
       tri: $("#ct-tri").val() || "date_asc",
     };
   }
@@ -74,13 +75,14 @@ class CommandesATraiter {
       timer = setTimeout(() => { this.start = 0; this._load(); }, 400);
     });
     ["#ct-depuis", "#ct-jusqua", "#ct-statut", "#ct-origine", "#ct-dispo",
-     "#ct-anomalie", "#ct-tache", "#ct-secteur", "#ct-tri"].forEach((sel) =>
+     "#ct-anomalie", "#ct-tache", "#ct-secteur", "#ct-livraison",
+     "#ct-tri"].forEach((sel) =>
       $(sel).on("change", () => { this.start = 0; this._load(); }));
 
     $("#ct-clear").on("click", () => {
       $("#ct-search").val("");
       ["#ct-statut", "#ct-origine", "#ct-dispo", "#ct-anomalie", "#ct-tache",
-       "#ct-secteur"].forEach((s) => $(s).val(""));
+       "#ct-secteur", "#ct-livraison"].forEach((s) => $(s).val(""));
       this.start = 0;
       this._load();
     });
@@ -111,6 +113,7 @@ class CommandesATraiter {
 
     $("#ct-msg").on("click", () => this._dialogue_message());
     $("#ct-rdv").on("click", () => this._dialogue_message("rdv"));
+    $("#ct-livr").on("click", () => this._dialogue_livraison());
     $("#ct-annuler").on("click", () => this._dialogue_annuler());
   }
 
@@ -137,6 +140,7 @@ class CommandesATraiter {
       ["Rupture réelle", k.manque_reel || 0, k.manque_reel ? "alerte" : ""],
       ["Stock négatif à corriger", k.stock_negatif || 0, ""],
       ["Sans tâche", k.sans_tache || 0, ""],
+      ["Livraison équipe", k.livraison_equipe || 0, ""],
       ["Anomalies", k.anomalies || 0, k.anomalies ? "alerte" : ""],
       ["Total TTC", format_currency(k.ttc || 0, "TND"), ""],
     ].map(([l, v, cls]) =>
@@ -173,7 +177,8 @@ class CommandesATraiter {
         <td><a href="/app/sales-order/${encodeURIComponent(c.name)}" target="_blank"
               class="ct-cde">${esc(c.name)}</a>
             <div class="ct-sub">${esc(c.date)} · ${esc(c.statut)}
-              ${c.web ? `<span class="ct-badge b-web">🌐 web</span>` : ""}</div></td>
+              ${c.web ? `<span class="ct-badge b-web">🌐 web</span>` : ""}
+              ${c.livraison_equipe ? `<span class="ct-badge b-ok" title="Le client peut réserver un créneau de livraison en ligne">🚚 livraison équipe</span>` : ""}</div></td>
         <td><a href="/app/customer/${encodeURIComponent(c.client)}" target="_blank">${esc(c.client_nom)}</a>
             <div class="ct-sub">${c.telephone
               ? `📞 <a href="tel:${esc(c.telephone)}">${esc(c.telephone)}</a>`
@@ -242,13 +247,30 @@ class CommandesATraiter {
           get_data: (txt) => frappe.call({
             method: "customization_app.commandes_a_traiter.chercher_articles",
             args: { recherche: txt, en_stock: 1 },
-          }).then((r) => (r.message || []).map((a) => ({
-            value: a.code, description: `${a.article} — stock ${a.stock}`,
-          }))),
+          }).then((r) => {
+            // On garde le détail (nom, lien boutique) de côté : la pastille ne
+            // porte que le code, mais le message doit contenir le vrai nom et
+            // le lien vers la fiche du site.
+            this._articles_connus = this._articles_connus || {};
+            (r.message || []).forEach((a) => { this._articles_connus[a.code] = a; });
+            return (r.message || []).map((a) => ({
+              value: a.code,
+              description: `${a.article} — stock ${a.stock}${a.lien ? " · 🔗 site" : ""}`,
+            }));
+          }),
         },
         {
           fieldtype: "Button", fieldname: "inserer",
           label: __("➕ Insérer les articles dans le message"),
+        },
+        {
+          fieldtype: "Check", fieldname: "annuler", default: 0,
+          label: __("❌ Annuler aussi ces commandes"),
+          description: __("L'annulation a lieu D'ABORD ; seuls les clients dont la commande a bien été annulée reçoivent le message."),
+        },
+        {
+          fieldtype: "Small Text", fieldname: "motif", depends_on: "annuler",
+          label: __("Motif de l'annulation (tracé sur chaque commande)"),
         },
         { fieldtype: "Column Break" },
         {
@@ -278,8 +300,13 @@ class CommandesATraiter {
         frappe.msgprint(__("Choisissez d'abord un ou plusieurs articles."));
         return;
       }
+      const connus = this._articles_connus || {};
+      const lignes = choisis.map((code) => {
+        const a = connus[code] || {};
+        return "- " + (a.article || code) + (a.lien ? "\n  " + a.lien : "");
+      });
       const texte = (d.get_value("message") || "").replace(/\s*$/, "")
-        + "\n\nNous vous proposons en remplacement : " + choisis.join(", ") + ".";
+        + "\n\nNous vous proposons en remplacement :\n" + lignes.join("\n");
       Promise.resolve(d.fields_dict.message.set_value(texte))
         .then(() => this._apercu(d, noms));
     });
@@ -353,20 +380,43 @@ class CommandesATraiter {
       frappe.msgprint(__("Choisissez au moins un canal : SMS ou e-mail."));
       return;
     }
+    const annule = !!v.annuler;
+    if (annule && !(v.motif || "").trim()) {
+      frappe.msgprint(__("Écrivez le motif de l'annulation."));
+      return;
+    }
     frappe.confirm(
-      __("Envoyer ce message pour {0} commande(s) ?<br>Les SMS partent vers de VRAIS clients.",
-         [noms.length]),
+      (annule
+        ? __("ANNULER {0} commande(s) puis prévenir les clients ?<br>L'annulation est difficile à défaire.",
+             [noms.length])
+        : __("Envoyer ce message pour {0} commande(s) ?", [noms.length]))
+      + __("<br>Les SMS partent vers de VRAIS clients."),
       () => frappe.call({
-        method: "customization_app.sms_commandes.envoyer",
-        args: {
-          noms: JSON.stringify(noms), modele: v.message, sujet: v.sujet,
-          sms: v.sms ? 1 : 0, email: v.email ? 1 : 0,
-        },
+        method: annule
+          ? "customization_app.commandes_a_traiter.annuler_et_informer"
+          : "customization_app.sms_commandes.envoyer",
+        args: annule
+          ? { noms: JSON.stringify(noms), motif: v.motif, modele: v.message,
+              sujet: v.sujet, sms: v.sms ? 1 : 0, email: v.email ? 1 : 0 }
+          : { noms: JSON.stringify(noms), modele: v.message, sujet: v.sujet,
+              sms: v.sms ? 1 : 0, email: v.email ? 1 : 0 },
         freeze: true,
-        freeze_message: __("Envoi en cours…"),
+        freeze_message: annule ? __("Annulation puis envoi…") : __("Envoi en cours…"),
         callback: (r) => {
           const m = r.message || {};
           d.hide();
+          if (annule) {
+            const esc = frappe.utils.escape_html;
+            frappe.msgprint({
+              title: __("Annulation et information"),
+              message: (m.annulations || []).map((x) =>
+                `<div><b>${esc(x.commande)}</b> — ${esc(x.etat)}</div>`).join("")
+                + `<div style="margin-top:8px">✉️ ${(m.informes || []).length} client(s) prévenu(s).</div>`,
+            });
+            this.selection.clear();
+            this._load();
+            return;
+          }
           if (m.differe) {
             frappe.show_alert({
               message: __("Envoi lancé pour {0} commande(s) — la progression s'affiche ici.",
@@ -382,6 +432,49 @@ class CommandesATraiter {
         },
       })
     );
+  }
+
+  _dialogue_livraison() {
+    const noms = this._selection();
+    if (!noms) return;
+    const d = new frappe.ui.Dialog({
+      title: __("Livraison par notre équipe — {0} commande(s)", [noms.length]),
+      fields: [
+        {
+          fieldtype: "HTML", fieldname: "aide",
+          options: `<div style="padding:10px 12px;border-radius:9px;background:#e0f2fe;
+                      color:#075985;font-size:12.5px">
+                      🚚 Autorisée, la commande ouvre au client le créneau
+                      <b>« Livraison » (20 min)</b> sur le portail de rendez-vous.
+                      Sans cette autorisation, le type ne lui est pas proposé —
+                      et le serveur refuse la réservation même si on la force.
+                    </div>`,
+        },
+        {
+          fieldtype: "Select", fieldname: "action", reqd: 1,
+          label: __("Action"), default: "Autoriser",
+          options: ["Autoriser", "Retirer l’autorisation"].join("\n"),
+        },
+      ],
+      primary_action_label: __("Appliquer"),
+      primary_action: (v) => frappe.call({
+        method: "customization_app.commandes_a_traiter.autoriser_livraison",
+        args: { noms: JSON.stringify(noms), autoriser: v.action === "Autoriser" ? 1 : 0 },
+        freeze: true,
+        callback: (r) => {
+          const m = r.message || {};
+          d.hide();
+          frappe.show_alert({
+            message: __("{0} commande(s) — livraison par notre équipe {1}.",
+                        [(m.commandes || []).length,
+                         m.autorise ? __("autorisée") : __("retirée")]),
+            indicator: "green",
+          }, 7);
+          this._load();
+        },
+      }),
+    });
+    d.show();
   }
 
   _dialogue_annuler() {

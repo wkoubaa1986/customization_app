@@ -119,6 +119,17 @@ def _secteurs(noms):
     return out
 
 
+def _livraison_equipe(noms):
+    """Les commandes que NOTRE équipe livre — celles dont le client peut
+    réserver un créneau de livraison sur le portail."""
+    if not noms:
+        return set()
+    return {c.name for c in frappe.get_all(
+        "Sales Order",
+        filters={"name": ["in", noms], "custom_livraison_equipe": 1},
+        fields=["name"], limit_page_length=0)}
+
+
 def _reste_a_livrer(noms):
     """{commande: {article: reste à livrer}} — une commande soldée ne manque de rien."""
     out = {}
@@ -198,7 +209,8 @@ def get_filtres():
 @frappe.whitelist()
 def get_commandes(depuis=None, jusqu_a=None, recherche=None, statut=None,
                   origine=None, dispo=None, anomalie=None, tache=None,
-                  secteur=None, tri=None, start=0, page_length=PAGE_LENGTH):
+                  secteur=None, livraison=None, tri=None, start=0,
+                  page_length=PAGE_LENGTH):
     """L'arriéré filtré. Tout est calculé sur l'ENSEMBLE puis découpé en pages :
     un filtre « article manquant » doit porter sur toutes les commandes, pas
     seulement sur celles de la page affichée."""
@@ -213,6 +225,7 @@ def get_commandes(depuis=None, jusqu_a=None, recherche=None, statut=None,
     bordereaux = _bordereaux(noms)
 
     secteurs = _secteurs(noms)
+    livraisons = _livraison_equipe(noms)
     codes = {a["code"] for lot in articles.values() for a in lot}
     contexte = (_stock(codes), _engage(codes), _articles_stockes(codes),
                 _reste_a_livrer(noms))
@@ -237,6 +250,7 @@ def get_commandes(depuis=None, jusqu_a=None, recherche=None, statut=None,
                           or (tel_client.get(l.customer) or "").split("\n")[0].strip()),
             "adresse": (l.shipping_address or l.address_display or "").replace("<br>", ", "),
             "secteur": secteurs.get(l.name, ("", ""))[0],
+            "livraison_equipe": l.name in livraisons,
             "ttc": flt(l.grand_total, 3),
             "devise": l.currency or "TND",
             "articles": lot,
@@ -252,7 +266,7 @@ def get_commandes(depuis=None, jusqu_a=None, recherche=None, statut=None,
         })
 
     out = _trier(_filtrer(out, recherche, statut, origine, dispo, anomalie,
-                          tache, secteur), tri)
+                          tache, secteur, livraison), tri)
     total = len(out)
     page = out[start:start + page_length] if page_length else out
     return {
@@ -263,6 +277,7 @@ def get_commandes(depuis=None, jusqu_a=None, recherche=None, statut=None,
             "manque_reel": len([c for c in out if c["manques_reels"]]),
             "stock_negatif": len([c for c in out if c["stock_negatif"]]),
             "sans_tache": len([c for c in out if not c["taches"]]),
+            "livraison_equipe": len([c for c in out if c["livraison_equipe"]]),
             "anomalies": len([c for c in out if c["anomalie"]]),
             "ttc": round(sum(c["ttc"] for c in out), 3),
         },
@@ -280,7 +295,7 @@ def _trier(lignes, tri):
 
 
 def _filtrer(lignes, recherche, statut, origine, dispo, anomalie, tache,
-             secteur=None):
+             secteur=None, livraison=None):
     def garde(c):
         if statut and c["statut"] != statut:
             return False
@@ -308,6 +323,10 @@ def _filtrer(lignes, recherche, statut, origine, dispo, anomalie, tache,
             return False
         if tache == "avec" and not c["taches"]:
             return False
+        if livraison == "avec" and not c["livraison_equipe"]:
+            return False
+        if livraison == "sans" and c["livraison_equipe"]:
+            return False
         if recherche:
             aiguille = recherche.lower().strip()
             foin = " ".join([c["name"], c["client_nom"], c["telephone"],
@@ -323,12 +342,44 @@ def _filtrer(lignes, recherche, statut, origine, dispo, anomalie, tache,
 # ------------------------------------------------------------------ actions
 
 
+def _base_boutique():
+    """L'adresse de la boutique en ligne, lue de la config WooCommerce.
+
+    ⚠️ Ne PAS filtrer sur `enable_sync` : le restore de prod le met à 0 en dev
+    (la boutique ne doit jamais être touchée depuis le dev) — or l'URL reste
+    parfaitement valide pour fabriquer un lien de lecture.
+    """
+    return (frappe.db.get_value("WooCommerce Server", {},
+                                "woocommerce_server_url") or "").rstrip("/")
+
+
+def _liens_boutique(codes):
+    """{article: lien vers sa fiche sur le site} pour les articles synchronisés.
+
+    On construit le lien depuis l'ID WooCommerce (`?post_type=product&p=ID`) :
+    WordPress redirige vers le vrai permalien, donc pas besoin de stocker ni de
+    deviner le slug — un article renommé garde un lien valide.
+    """
+    base = _base_boutique()
+    if not base or not codes:
+        return {}
+    lignes = frappe.get_all(
+        "Item WooCommerce Server",
+        filters={"parent": ["in", list(codes)], "parenttype": "Item",
+                 "woocommerce_id": ["!=", ""]},
+        fields=["parent", "woocommerce_id"], limit_page_length=0)
+    return {l.parent: "%s/?post_type=product&p=%s" % (base, l.woocommerce_id)
+            for l in lignes if l.woocommerce_id}
+
+
 @frappe.whitelist()
 def chercher_articles(recherche=None, en_stock=1):
     """Le sélecteur d'articles de remplacement — on ne propose que ce qu'on a.
 
     Choix manuel assumé (décision 30/08) : pas de suggestion automatique, c'est
-    le magasin qui sait ce qui remplace quoi.
+    le magasin qui sait ce qui remplace quoi. Chaque article part avec son LIEN
+    BOUTIQUE : le client doit pouvoir voir la photo et le prix de ce qu'on lui
+    propose, pas seulement un code article.
     """
     _lecture()
     conditions = ["i.disabled = 0"]
@@ -338,7 +389,7 @@ def chercher_articles(recherche=None, en_stock=1):
         params["r"] = "%" + recherche.strip() + "%"
     if frappe.utils.cint(en_stock):
         conditions.append("b.qte > 0")
-    return frappe.db.sql(
+    lignes = frappe.db.sql(
         """SELECT i.name AS code, i.item_name AS article, i.stock_uom AS unite,
                   IFNULL(b.qte, 0) AS stock
            FROM `tabItem` i
@@ -347,6 +398,10 @@ def chercher_articles(recherche=None, en_stock=1):
            WHERE {conditions}
            ORDER BY b.qte DESC, i.name LIMIT 50""".format(
             conditions=" AND ".join(conditions)), params, as_dict=True)
+    liens = _liens_boutique({l.code for l in lignes})
+    for l in lignes:
+        l["lien"] = liens.get(l.code, "")
+    return lignes
 
 
 @frappe.whitelist()
@@ -384,3 +439,47 @@ def annuler(noms, motif=None):
             frappe.db.rollback()
             resultat.append({"commande": nom, "etat": "échec : %s" % str(e)[:150]})
     return resultat
+
+
+@frappe.whitelist()
+def autoriser_livraison(noms, autoriser=1):
+    """Ouvre (ou retire) la LIVRAISON PAR NOTRE ÉQUIPE sur des commandes.
+
+    C'est cette autorisation qui fait apparaître le type « Livraison » (20 min)
+    dans le portail de rendez-vous, pour ce client et sur cette commande. Le
+    champ est `allow_on_submit` : une commande déjà soumise s'autorise sans
+    l'annuler.
+    """
+    frappe.has_permission("Sales Order", "write", throw=True)
+    noms = frappe.parse_json(noms) if isinstance(noms, str) else (noms or [])
+    valeur = 1 if frappe.utils.cint(autoriser) else 0
+    faites = []
+    for nom in [n for n in noms if n]:
+        if frappe.db.get_value("Sales Order", nom, "docstatus") == 2:
+            continue
+        frappe.db.set_value("Sales Order", nom, "custom_livraison_equipe", valeur)
+        faites.append(nom)
+    frappe.db.commit()
+    return {"commandes": faites, "autorise": bool(valeur)}
+
+
+@frappe.whitelist()
+def annuler_et_informer(noms, motif, modele, sujet=None, sms=1, email=1):
+    """Annule les commandes PUIS prévient les clients — dans cet ordre, et
+    seulement ceux dont l'annulation a réellement abouti.
+
+    L'ordre n'est pas un détail : annoncer « votre commande est annulée » à un
+    client dont l'annulation a échoué (brouillon, document verrouillé) serait
+    un mensonge que personne ne rattrape. On envoie donc APRÈS, et uniquement
+    aux commandes effectivement annulées ; les autres sont rendues à l'écran
+    avec leur motif d'échec.
+    """
+    from customization_app import sms_commandes
+
+    annulations = annuler(noms, motif)
+    faites = [a["commande"] for a in annulations if a["etat"] == "annulée"]
+    envoi = None
+    if faites:
+        envoi = sms_commandes.envoyer(faites, modele, sujet=sujet,
+                                      sms=sms, email=email)
+    return {"annulations": annulations, "informes": faites, "envoi": envoi}

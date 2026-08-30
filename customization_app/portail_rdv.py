@@ -36,6 +36,11 @@ DOCTYPE_TACHE = "Tache de travail"
 
 TYPES_TOUT_CLIENT = ("Entretien", "Réparation")
 TYPE_AVEC_COMMANDE = "Installation"
+# La LIVRAISON par notre équipe (30/08/2026) : comme l'installation, elle se
+# réserve sur UNE commande — mais seulement si le magasin l'a autorisée sur
+# cette commande (`custom_livraison_equipe`). Aramex livre tout le reste.
+TYPE_LIVRAISON = "Livraison"
+TYPES_AVEC_COMMANDE = (TYPE_AVEC_COMMANDE, TYPE_LIVRAISON)
 
 OTP_TTL = 300           # 5 minutes
 SESSION_TTL = 1800      # 30 minutes
@@ -120,6 +125,7 @@ def _commandes_du_client(client):
     return frappe.db.sql(
         """SELECT so.name, so.transaction_date, so.grand_total, so.status,
                   so.docstatus,
+                  IFNULL(so.custom_livraison_equipe, 0) AS livraison_equipe,
                   NOT EXISTS (
                       SELECT 1 FROM `tabTache de travail` t
                       WHERE t.commande_client = so.name
@@ -451,9 +457,14 @@ def _ouvrir_session(numero, entree):
     return {
         "jeton": jeton,
         "nom": entree["nom"],
+        # L'installation s'offre dès qu'une commande est encore sans tâche ; la
+        # livraison exige EN PLUS l'autorisation posée sur cette commande.
         "types": list(TYPES_TOUT_CLIENT)
                  + ([TYPE_AVEC_COMMANDE]
-                    if any(c.sans_tache for c in commandes) else []),
+                    if any(c.sans_tache for c in commandes) else [])
+                 + ([TYPE_LIVRAISON]
+                    if any(c.sans_tache and c.livraison_equipe for c in commandes)
+                    else []),
         "commandes": commandes,
         "adresses": _adresses_du_client(entree["client"]),
         "rendez_vous": _rendez_vous_du_client(entree["client"]),
@@ -508,7 +519,7 @@ def _ouvertures_par_type(config):
 
     minimum = add_days(getdate(nowdate()), planning.delai_standard(config))
     out = {}
-    for type_i in TYPES_TOUT_CLIENT + (TYPE_AVEC_COMMANDE,):
+    for type_i in TYPES_TOUT_CLIENT + TYPES_AVEC_COMMANDE:
         ouverture = planning.ouverture_type(config, type_i)
         if ouverture and ouverture > minimum:
             out[type_i] = str(ouverture)
@@ -871,7 +882,7 @@ def reserver(jeton, type_intervention, date, demi_journee, adresse=None,
                        "ou confirmer que vous en voulez un autre en plus.")
                      .format(type_intervention, str(deja[0].starts_on)[:16]))
 
-    if type_intervention not in TYPES_TOUT_CLIENT + (TYPE_AVEC_COMMANDE,):
+    if type_intervention not in TYPES_TOUT_CLIENT + TYPES_AVEC_COMMANDE:
         frappe.throw(_("Type de rendez-vous inconnu."))
     if demi_journee not in ("matin", "apres_midi"):
         frappe.throw(_("Choisissez matin ou après-midi."))
@@ -886,9 +897,11 @@ def reserver(jeton, type_intervention, date, demi_journee, adresse=None,
                        "et jusqu'à deux mois.").format(
             type_intervention, formatdate(ouvert_le, "dd/MM/yyyy")))
 
-    if type_intervention == TYPE_AVEC_COMMANDE:
+    if type_intervention in TYPES_AVEC_COMMANDE:
         if not commande:
-            frappe.throw(_("Choisissez la commande concernée par l'installation."))
+            frappe.throw(_("Choisissez la commande concernée par {0}.").format(
+                _("la livraison") if type_intervention == TYPE_LIVRAISON
+                else _("l'installation")))
         if not frappe.db.exists("Sales Order",
                                 {"name": commande, "customer": session["client"]}):
             frappe.throw(_("Cette commande n'est pas la vôtre."))
@@ -897,6 +910,12 @@ def reserver(jeton, type_intervention, date, demi_journee, adresse=None,
                              "status": ["!=", "Cancelled"]}):
             frappe.throw(_("Cette commande a déjà une intervention planifiée — "
                            "choisissez-en une autre."))
+        # L'autorisation se vérifie AU MOMENT DE RÉSERVER, pas seulement à
+        # l'affichage : le type est envoyé par le navigateur, il ne fait pas foi.
+        if type_intervention == TYPE_LIVRAISON and not frappe.db.get_value(
+                "Sales Order", commande, "custom_livraison_equipe"):
+            frappe.throw(_("Cette commande n'est pas livrée par notre équipe — "
+                           "appelez-nous pour organiser la livraison."))
 
     # Le moteur applique TOUTES les règles (secteur de l'adresse, capacité avec
     # battements, journées 8/9, quota lointain, remplaçants, dimanche) et rend
