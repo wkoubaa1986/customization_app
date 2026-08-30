@@ -20,6 +20,8 @@ et ne sont JAMAIS comptés manquants : les afficher en rouge noierait le signal.
 """
 from __future__ import annotations
 
+import json
+
 import frappe
 from frappe import _
 from frappe.utils import flt, getdate, nowdate
@@ -43,6 +45,8 @@ SANS_GROUPE = "__sans_groupe__"
 # « Hors Secteur » n'est pas desservi : y ouvrir la réservation en ligne
 # promettrait au client un créneau qu'on ne peut pas tenir.
 SECTEURS_LIVRAISON = {"Secteur %d" % n for n in range(1, 8)}
+
+MODE_PAIEMENT_DEFAUT = "Espèces"
 
 # Ordres de tri proposés : par date, par valeur, ou les deux combinés.
 # [(champ, décroissant), …] — le 2e critère départage le 1er.
@@ -535,21 +539,95 @@ def chercher_articles(recherche=None, en_stock=0):
 
 
 @frappe.whitelist()
+def _sauvegarder(doc, motif):
+    """Archive la commande AVANT sa disparition : un fichier JSON rouvrable et
+    une trace lisible, tous deux attachés à la FICHE CLIENT.
+
+    Pourquoi le client et pas la commande : le document va être supprimé, et
+    tout ce qui y était rattaché partirait avec lui. Une suppression sans trace
+    est irrattrapable — six mois plus tard, personne ne peut plus dire ce que
+    contenait la commande ni pourquoi elle a disparu.
+    """
+    contenu = json.dumps(doc.as_dict(), indent=1, ensure_ascii=False, default=str)
+    fichier = frappe.get_doc({
+        "doctype": "File",
+        "file_name": "%s-supprimee.json" % doc.name,
+        "attached_to_doctype": "Customer",
+        "attached_to_name": doc.customer,
+        "is_private": 1,
+        "content": contenu,
+    })
+    fichier.flags.ignore_permissions = True
+    fichier.insert()
+
+    articles = ", ".join("%s ×%s" % (l.item_code, flt(l.qty)) for l in doc.items)
+    frappe.get_doc({
+        "doctype": "Comment", "comment_type": "Info",
+        "reference_doctype": "Customer", "reference_name": doc.customer,
+        "content": _("🗑️ Commande <b>{0}</b> du {1} SUPPRIMÉE par {2} — {3}<br>"
+                     "Total : {4} {5} · Articles : {6}<br>"
+                     "Sauvegarde complète : <a href=\"{7}\">{8}</a>").format(
+            doc.name, doc.transaction_date, frappe.session.user,
+            frappe.utils.escape_html(motif or "sans motif"),
+            flt(doc.grand_total, 3), doc.currency or "TND",
+            frappe.utils.escape_html(articles)[:300],
+            fichier.file_url, fichier.file_name),
+    }).insert(ignore_permissions=True)
+    return fichier.file_url
+
+
 def annuler(noms, motif=None):
     """Annule les commandes sélectionnées — la cascade maison (BL, échéancier,
     tâches) se déclenche par les hooks d'`annulation_commande`.
 
-    Un BROUILLON ne s'annule pas dans ERPNext (docstatus 0) : il est laissé tel
-    quel et signalé, plutôt que supprimé dans le dos de l'utilisateur.
+    Un BROUILLON (commande web jamais validée) suit la chaîne COMPLÈTE demandée
+    le 30/08 : valider → annuler → supprimer, après sauvegarde. ERPNext ne sait
+    pas « annuler » un brouillon ; le valider d'abord fait passer la commande
+    par la vraie cascade d'annulation (BL, échéancier, tâches) au lieu de la
+    faire disparaître en silence.
     """
     frappe.has_permission("Sales Order", "cancel", throw=True)
+    frappe.has_permission("Sales Order", "delete", throw=True)
     noms = frappe.parse_json(noms) if isinstance(noms, str) else (noms or [])
     resultat = []
     for nom in [n for n in noms if n]:
         doc = frappe.get_doc("Sales Order", nom)
         if doc.docstatus == 0:
-            resultat.append({"commande": nom, "etat": "brouillon — non annulé "
-                             "(un brouillon se supprime, il ne s'annule pas)"})
+            try:
+                sauvegarde = _sauvegarder(doc, motif)
+                doc.flags.ignore_permissions = True
+                # Le mode de paiement est obligatoire sur les lignes
+                # d'échéancier de ce site ; un brouillon incomplet bloquerait
+                # la validation. Les commandes web l'ont, pas toutes les autres.
+                for ligne in doc.payment_schedule or []:
+                    if not ligne.mode_of_payment:
+                        ligne.mode_of_payment = MODE_PAIEMENT_DEFAUT
+                chemin = "validé, annulé puis supprimé"
+                try:
+                    doc.submit()
+                    doc.reload()
+                    doc.cancel()
+                    doc.reload()
+                except Exception as e:
+                    # La validation est impossible (données incomplètes) : on
+                    # honore quand même l'intention. Un brouillon n'a JAMAIS
+                    # touché la comptabilité ni le stock — le supprimer
+                    # directement ne laisse rien derrière, et la sauvegarde est
+                    # déjà faite. On le DIT, au lieu de le masquer.
+                    frappe.db.rollback()
+                    doc = frappe.get_doc("Sales Order", nom)
+                    chemin = ("supprimé sans validation possible (%s)"
+                              % str(e).strip()[:60])
+                frappe.delete_doc("Sales Order", nom, force=1,
+                                  ignore_permissions=True, delete_permanently=True)
+                frappe.db.commit()
+                resultat.append({"commande": nom,
+                                 "etat": "brouillon %s — sauvegarde %s"
+                                         % (chemin, sauvegarde)})
+            except Exception as e:
+                frappe.db.rollback()
+                resultat.append({"commande": nom,
+                                 "etat": "échec sur le brouillon : %s" % str(e)[:150]})
             continue
         if doc.docstatus == 2:
             resultat.append({"commande": nom, "etat": "déjà annulée"})
@@ -612,7 +690,8 @@ def autoriser_livraison(noms, autoriser=1):
 
 
 @frappe.whitelist()
-def annuler_et_informer(noms, motif, modele, sujet=None, sms=1, email=1):
+def annuler_et_informer(noms, motif, modele, sujet=None, sms=1, email=1,
+                        remplacements=None):
     """Annule les commandes PUIS prévient les clients — dans cet ordre, et
     seulement ceux dont l'annulation a réellement abouti.
 
@@ -629,5 +708,6 @@ def annuler_et_informer(noms, motif, modele, sujet=None, sms=1, email=1):
     envoi = None
     if faites:
         envoi = sms_commandes.envoyer(faites, modele, sujet=sujet,
-                                      sms=sms, email=email)
+                                      sms=sms, email=email,
+                                      remplacements=remplacements)
     return {"annulations": annulations, "informes": faites, "envoi": envoi}

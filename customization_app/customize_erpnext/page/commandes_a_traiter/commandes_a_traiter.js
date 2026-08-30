@@ -320,7 +320,7 @@ class CommandesATraiter {
         {
           fieldtype: "MultiSelectPills", fieldname: "remplacements",
           label: __("Article de remplacement"),
-          description: __("Tout article actif non marqué « rupture de stock site web ». La quantité en magasin est indiquée."),
+          description: __("Choix commun, ajustable ensuite commande par commande. Tout article actif non marqué « rupture de stock site web »."),
           get_data: (txt) => frappe.call({
             method: "customization_app.commandes_a_traiter.chercher_articles",
             args: { recherche: txt },
@@ -339,8 +339,9 @@ class CommandesATraiter {
         },
         {
           fieldtype: "Button", fieldname: "inserer",
-          label: __("➕ Insérer les articles dans le message"),
+          label: __("➕ Appliquer à toutes les commandes"),
         },
+        { fieldtype: "HTML", fieldname: "par_commande" },
         {
           fieldtype: "Check", fieldname: "annuler", default: 0,
           label: __("❌ Annuler aussi ces commandes"),
@@ -372,26 +373,22 @@ class CommandesATraiter {
 
     // Les articles choisis s'écrivent DANS le message : pas de balise cachée,
     // l'utilisateur voit exactement ce que le client recevra.
+    // Chaque commande a SES articles : proposer le même remplacement à tout le
+    // monde n'a pas de sens dès que les commandes portent des articles
+    // différents (demande 30/08). Le sélecteur du haut sert de choix COMMUN,
+    // qu'on ajuste ensuite ligne par ligne.
+    this._remplacements = {};
+
     d.fields_dict.inserer.$input.on("click", () => {
       const choisis = d.get_value("remplacements") || [];
       if (!choisis.length) {
         frappe.msgprint(__("Choisissez d'abord un ou plusieurs articles."));
         return;
       }
-      const connus = this._articles_connus || {};
-      const lignes = choisis.map((code) => {
-        const a = connus[code] || {};
-        return "- " + (a.article || code) + (a.lien ? "\n  " + a.lien : "");
-      });
-      const bloc = lignes.join("\n");
-      const actuel = d.get_value("message") || "";
-      // La liste se glisse AVANT la signature quand il y en a une : sans ça,
-      // les articles proposés tomberaient après « Aqua World & Servicing ».
-      const texte = actuel.includes("{signature}")
-        ? actuel.replace("{signature}", bloc + "\n\n{signature}")
-        : actuel.replace(/\s*$/, "") + "\n\n" + bloc;
-      Promise.resolve(d.fields_dict.message.set_value(texte))
-        .then(() => this._apercu(d, noms));
+      noms.forEach((n) => { this._remplacements[n] = choisis.slice(); });
+      this._poser_balise(d);
+      this._rendre_par_commande(d, noms);
+      this._apercu(d, noms);
     });
 
     d.fields_dict.choix_modele.$input.on("change", function () {
@@ -423,10 +420,76 @@ class CommandesATraiter {
     });
   }
 
+  // La balise {remplacements} est rendue PAR COMMANDE côté serveur : on la
+  // pose une fois dans le message, chaque client reçoit ses propres articles.
+  _poser_balise(d) {
+    const actuel = d.get_value("message") || "";
+    if (actuel.includes("{remplacements}")) return;
+    const texte = actuel.includes("{signature}")
+      ? actuel.replace("{signature}", "{remplacements}\n\n{signature}")
+      : actuel.replace(/\s*$/, "") + "\n\n{remplacements}";
+    d.fields_dict.message.set_value(texte);
+  }
+
+  _rendre_par_commande(d, noms) {
+    const esc = frappe.utils.escape_html;
+    const connus = this._articles_connus || {};
+    const nom_lisible = (code) => (connus[code] || {}).article || code;
+    d.fields_dict.par_commande.$wrapper.html(
+      `<div style="max-height:190px;overflow:auto;font-size:12px;border:1px solid
+            var(--border-color,#e4e8ee);border-radius:8px">
+         <table style="width:100%">${noms.map((n) => {
+           const choisis = this._remplacements[n] || [];
+           return `<tr style="border-bottom:1px solid var(--border-color,#eef1f5)">
+             <td style="padding:5px 8px;white-space:nowrap"><b>${esc(n)}</b></td>
+             <td style="padding:5px 8px">${choisis.length
+                ? choisis.map((c) => esc(nom_lisible(c))).join(", ")
+                : `<span style="color:#b45309">aucun article</span>`}</td>
+             <td style="padding:5px 8px;text-align:right">
+               <button type="button" class="btn btn-xs btn-default ct-modif-rempl"
+                 data-cde="${esc(n)}">✏️ modifier</button></td></tr>`;
+         }).join("")}</table></div>`);
+    d.fields_dict.par_commande.$wrapper.find(".ct-modif-rempl").on("click", (e) =>
+      this._dialogue_articles_commande(d, noms, $(e.currentTarget).data("cde")));
+  }
+
+  // Choix des articles pour UNE commande, dans une petite fenêtre dédiée.
+  _dialogue_articles_commande(parent, noms, commande) {
+    const p = new frappe.ui.Dialog({
+      title: __("Articles de remplacement — {0}", [commande]),
+      fields: [{
+        fieldtype: "MultiSelectPills", fieldname: "articles",
+        label: __("Articles proposés à ce client"),
+        get_data: (txt) => frappe.call({
+          method: "customization_app.commandes_a_traiter.chercher_articles",
+          args: { recherche: txt },
+        }).then((r) => {
+          this._articles_connus = this._articles_connus || {};
+          (r.message || []).forEach((a) => { this._articles_connus[a.code] = a; });
+          return (r.message || []).map((a) => ({
+            value: a.code,
+            description: `${a.article} — stock ${a.stock}${a.lien ? " · 🔗 site" : ""}`,
+          }));
+        }),
+      }],
+      primary_action_label: __("Valider"),
+      primary_action: (v) => {
+        this._remplacements[commande] = v.articles || [];
+        p.hide();
+        this._poser_balise(parent);
+        this._rendre_par_commande(parent, noms);
+        this._apercu(parent, noms);
+      },
+    });
+    p.show();
+    p.set_value("articles", (this._remplacements[commande] || []).slice());
+  }
+
   _apercu(d, noms, apres) {
     frappe.call({
       method: "customization_app.sms_commandes.apercu",
-      args: { noms: JSON.stringify(noms), modele: d.get_value("message") || "" },
+      args: { noms: JSON.stringify(noms), modele: d.get_value("message") || "",
+              remplacements: JSON.stringify(this._remplacements || {}) },
       callback: (r) => {
         const m = r.message || {};
         const t = m.totaux || {};
@@ -480,9 +543,11 @@ class CommandesATraiter {
           : "customization_app.sms_commandes.envoyer",
         args: annule
           ? { noms: JSON.stringify(noms), motif: v.motif, modele: v.message,
-              sujet: v.sujet, sms: v.sms ? 1 : 0, email: v.email ? 1 : 0 }
+              sujet: v.sujet, sms: v.sms ? 1 : 0, email: v.email ? 1 : 0,
+              remplacements: JSON.stringify(this._remplacements || {}) }
           : { noms: JSON.stringify(noms), modele: v.message, sujet: v.sujet,
-              sms: v.sms ? 1 : 0, email: v.email ? 1 : 0 },
+              sms: v.sms ? 1 : 0, email: v.email ? 1 : 0,
+              remplacements: JSON.stringify(this._remplacements || {}) },
         freeze: true,
         freeze_message: annule ? __("Annulation puis envoi…") : __("Envoi en cours…"),
         callback: (r) => {

@@ -13,6 +13,8 @@ BALISES (rendues par commande) :
   {code}       le code du premier article
   {statut}     statut de la commande
   {lien_rdv}   le lien du portail de prise de rendez-vous (cliquable dans le SMS)
+  {remplacements} les articles de remplacement choisis POUR CETTE commande,
+                  avec leur lien sur la boutique
   {signature}  la signature de la société
 
 Les numéros passent par les mêmes règles que les campagnes SMS
@@ -163,14 +165,39 @@ def _destinataires(noms):
     return out
 
 
-def rendre(modele, ligne):
+def bloc_remplacements(codes):
+    """Le bloc « articles proposés » d'UNE commande : nom lisible + lien boutique.
+
+    Composé ici, côté serveur, pour que le SMS, l'e-mail et l'aperçu disent
+    exactement la même chose.
+    """
+    codes = [c for c in (codes or []) if c]
+    if not codes:
+        return ""
+    from customization_app.commandes_a_traiter import _liens_boutique
+
+    liens = _liens_boutique(set(codes))
+    noms = {i.name: (i.item_name or i.name) for i in frappe.get_all(
+        "Item", filters={"name": ["in", codes]}, fields=["name", "item_name"])}
+    return "\n".join(
+        "- %s%s" % (noms.get(c, c), ("\n  " + liens[c]) if liens.get(c) else "")
+        for c in codes)
+
+
+def rendre(modele, ligne, remplacements=None):
     """Remplace les balises. Une balise inconnue est laissée telle quelle plutôt
-    que de faire échouer tout l'envoi (message tapé à la main)."""
+    que de faire échouer tout l'envoi (message tapé à la main).
+
+    `remplacements` : {commande: [codes]} — chaque client reçoit SES articles de
+    remplacement, pas ceux du voisin (demande 30/08).
+    """
     class _Tolerant(dict):
         def __missing__(self, cle):
             return "{%s}" % cle
 
+    propres = (remplacements or {}).get(ligne["commande"])
     return (modele or "").format_map(_Tolerant({
+        "remplacements": bloc_remplacements(propres),
         # Le lien du portail : le client tape dessus depuis son SMS et arrive
         # sur /rdv, où son numéro le fait entrer.
         "lien_rdv": frappe.utils.get_url("/rdv"),
@@ -189,7 +216,7 @@ def rendre(modele, ligne):
 
 
 @frappe.whitelist()
-def apercu(noms, modele=None):
+def apercu(noms, modele=None, remplacements=None):
     """Qui recevra quoi — AVANT d'envoyer. Rendu du message pour chaque commande."""
     _lecture()
     noms = frappe.parse_json(noms) if isinstance(noms, str) else (noms or [])
@@ -197,9 +224,13 @@ def apercu(noms, modele=None):
     if not noms:
         return {"modeles": MODELES, "lignes": [], "totaux": {}}
 
+    remplacements = (frappe.parse_json(remplacements)
+                     if isinstance(remplacements, str) and remplacements.strip()
+                     else (remplacements or {}))
     lignes = _destinataires(noms)
     for l in lignes:
-        l["message"] = rendre(modele, l) if modele else ""
+        l["message"] = rendre(modele, l, remplacements) if modele else ""
+        l["remplacements"] = remplacements.get(l["commande"]) or []
     return {
         "modeles": MODELES,
         "lignes": lignes,
@@ -215,7 +246,7 @@ def apercu(noms, modele=None):
 
 
 @frappe.whitelist()
-def envoyer(noms, modele, sujet=None, sms=1, email=1):
+def envoyer(noms, modele, sujet=None, sms=1, email=1, remplacements=None):
     """Lance l'envoi. Petit lot : tout de suite. Gros lot : EN TÂCHE DE FOND.
 
     ⚠️ Chaque SMS est un appel réseau (~1 s) : 151 commandes en direct dans la
@@ -235,19 +266,25 @@ def envoyer(noms, modele, sujet=None, sms=1, email=1):
     if not (sms or email):
         frappe.throw(_("Choisissez au moins un canal : SMS ou e-mail."))
 
+    remplacements = (frappe.parse_json(remplacements)
+                     if isinstance(remplacements, str) and remplacements.strip()
+                     else (remplacements or {}))
+
     if len(noms) <= SEUIL_DIRECT:
-        return _executer(noms, modele, sujet, sms, email, frappe.session.user)
+        return _executer(noms, modele, sujet, sms, email, frappe.session.user,
+                         remplacements=remplacements)
 
     frappe.enqueue(
         "customization_app.sms_commandes._executer",
         queue="long", timeout=3600,
         noms=noms, modele=modele, sujet=sujet, sms=sms, email=email,
-        utilisateur=frappe.session.user, differe=True,
+        utilisateur=frappe.session.user, differe=True, remplacements=remplacements,
         job_name="envoi_groupe_%s" % frappe.generate_hash(length=8))
     return {"differe": True, "commandes": len(noms)}
 
 
-def _executer(noms, modele, sujet, sms, email, utilisateur, differe=False):
+def _executer(noms, modele, sujet, sms, email, utilisateur, differe=False,
+              remplacements=None):
     """La tournée elle-même. Un échec n'interrompt pas les suivants — chaque
     commande a son verdict, et une trace est posée sur CHAQUE commande touchée :
     six mois plus tard, on doit pouvoir dire ce qui a été envoyé, à qui."""
@@ -269,7 +306,7 @@ def _executer(noms, modele, sujet, sms, email, utilisateur, differe=False):
     lignes = _destinataires(noms)
     total = len(lignes)
     for index, ligne in enumerate(lignes, start=1):
-        texte = rendre(modele, ligne)
+        texte = rendre(modele, ligne, remplacements)
         verdict = {"commande": ligne["commande"], "client": ligne["nom_client"],
                    "sms": None, "email": None}
 
