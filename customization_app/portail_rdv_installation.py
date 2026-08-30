@@ -112,6 +112,12 @@ def apercu(session, commande):
     # 619 appliqués) — annoncer un prix puis en appliquer un autre est le plus
     # sûr moyen de perdre la confiance du client.
     simule = frappe.get_doc(doc.as_dict())
+    # Le client du portail est un INVITÉ : sans ce drapeau, `set_missing_values`
+    # lit la fiche Client et Frappe refuse (« Guest n'a pas d'accès au document
+    # Client », HTTP 403). ERPNext le prévoit — `_get_party_details` reçoit
+    # `ignore_permissions=self.flags.ignore_permissions`. L'appartenance de la
+    # commande au client de la session est vérifiée juste au-dessus.
+    simule.flags.ignore_permissions = True
     _echanger_lignes(simule, code, prix)
     # set_missing_values AVANT le calcul, comme le fait validate() : sans lui la
     # nouvelle ligne n'a pas son modèle de taxe et le total simulé sortait HORS
