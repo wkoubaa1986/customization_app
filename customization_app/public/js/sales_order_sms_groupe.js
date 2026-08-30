@@ -28,6 +28,7 @@ frappe.provide("frappe.views");
         ["{articles}", "Tous les noms d'articles"],
         ["{codes}", "Tous les codes articles"],
         ["{lien_rdv}", "Lien de prise de rendez-vous en ligne"],
+        ["{signature}", "Signature Aqua World & Servicing"],
     ];
 
     function _ouvrir(listview) {
@@ -45,6 +46,7 @@ frappe.provide("frappe.views");
     // FICHE (la commande ouverte) — un seul endroit à corriger.
     function _dialogue(coches, options) {
         const opts = options || {};
+        let modeles = [];
 
         const d = new frappe.ui.Dialog({
             title: coches.length > 1
@@ -53,6 +55,11 @@ frappe.provide("frappe.views");
             size: "large",
             fields: [
                 { fieldtype: "HTML", fieldname: "totaux" },
+                {
+                    fieldtype: "Select", fieldname: "choix_modele",
+                    label: __("Modèle prédéfini"),
+                    description: __("Choisir un modèle remplit le message — il reste modifiable."),
+                },
                 {
                     fieldtype: "Small Text", fieldname: "message", reqd: 1,
                     label: __("Message (SMS et corps de l'e-mail)"),
@@ -100,15 +107,30 @@ frappe.provide("frappe.views");
             _rafraichir(d, coches);
         });
 
+        // Choisir un modèle remplit le message et rafraîchit l'aperçu.
+        // ⚠️ set_value est ASYNCHRONE : rafraîchir avant sa résolution rendrait
+        // l'aperçu avec l'ancien message.
+        d.fields_dict.choix_modele.$input.on("change", function () {
+            const m = modeles.find((x) => x.libelle === $(this).val());
+            if (!m) return;
+            Promise.resolve(d.fields_dict.message.set_value(m.texte))
+                .then(() => _rafraichir(d, coches));
+        });
+
         d.fields_dict.message.$input.on("input", frappe.utils.debounce(
             () => _rafraichir(d, coches), 400));
 
         d.show();
-        _rafraichir(d, coches);
+        _rafraichir(d, coches, (m) => {
+            modeles = m.modeles || [];
+            d.fields_dict.choix_modele.df.options =
+                [""].concat(modeles.map((x) => x.libelle)).join("\n");
+            d.fields_dict.choix_modele.refresh();
+        });
     }
 
     // Qui recevra quoi, message rendu — AVANT d'envoyer.
-    function _rafraichir(d, coches) {
+    function _rafraichir(d, coches, apres) {
         frappe.call({
             method: "customization_app.sms_commandes.apercu",
             args: { noms: JSON.stringify(coches), modele: d.get_value("message") || "" },
@@ -136,6 +158,7 @@ frappe.provide("frappe.views");
                            ${l.message ? `<div style="margin-top:3px;white-space:pre-wrap">${esc(l.message)}</div>` : ""}
                          </div>`).join("")
                     }</div>`);
+                apres && apres(m);
             },
         });
     }

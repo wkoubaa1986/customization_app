@@ -13,6 +13,7 @@ BALISES (rendues par commande) :
   {code}       le code du premier article
   {statut}     statut de la commande
   {lien_rdv}   le lien du portail de prise de rendez-vous (cliquable dans le SMS)
+  {signature}  la signature de la société
 
 Les numéros passent par les mêmes règles que les campagnes SMS
 (compagne_sms.traiter_numero_tel : mobiles tunisiens 8 chiffres, dédoublonnés)
@@ -30,6 +31,45 @@ CHAMP_TEL_CLIENT = "custom_liste_telephone"
 # un appel réseau, et une requête web ne tient pas la distance
 # (« La requête a expiré » sur 151 commandes).
 SEUIL_DIRECT = 10
+
+SIGNATURE = "Aqua World & Servicing"
+
+# Modèles proposés dans le dialogue — le message reste modifiable ensuite.
+# Ils servent surtout à POUSSER LE PORTAIL : plus le client réserve en ligne,
+# moins le magasin passe de temps au téléphone (demande 30/08/2026).
+MODELES = [
+    {
+        "cle": "invitation_rdv",
+        "libelle": "Prendre rendez-vous en ligne",
+        "texte": (
+            "Bonjour {nom_client},\n\n"
+            "Prenez desormais votre rendez-vous en ligne, 24h/24, en quelques "
+            "secondes : {lien_rdv}\n"
+            "Votre numero de telephone suffit pour vous connecter.\n\n"
+            "{signature}"
+        ),
+    },
+    {
+        "cle": "entretien_rdv",
+        "libelle": "Entretien à échéance — réserver en ligne",
+        "texte": (
+            "Bonjour {nom_client},\n\n"
+            "L'entretien de votre {article} arrive a echeance.\n"
+            "Reservez le creneau qui vous arrange en ligne : {lien_rdv}\n\n"
+            "{signature}"
+        ),
+    },
+    {
+        "cle": "installation_rdv",
+        "libelle": "Installation à programmer — choisir un créneau",
+        "texte": (
+            "Bonjour {nom_client},\n\n"
+            "Votre commande {commande} est prete a etre installee.\n"
+            "Choisissez la date qui vous convient ici : {lien_rdv}\n\n"
+            "{signature}"
+        ),
+    },
+]
 
 
 def _lecture():
@@ -111,6 +151,7 @@ def rendre(modele, ligne):
         # Le lien du portail : le client tape dessus depuis son SMS et arrive
         # sur /rdv, où son numéro le fait entrer.
         "lien_rdv": frappe.utils.get_url("/rdv"),
+        "signature": SIGNATURE,
         "nom_client": ligne["nom_client"],
         "commande": ligne["commande"],
         "date": ligne["date"],
@@ -131,12 +172,13 @@ def apercu(noms, modele=None):
     noms = frappe.parse_json(noms) if isinstance(noms, str) else (noms or [])
     noms = [n for n in noms if n]
     if not noms:
-        return {"lignes": [], "totaux": {}}
+        return {"modeles": MODELES, "lignes": [], "totaux": {}}
 
     lignes = _destinataires(noms)
     for l in lignes:
         l["message"] = rendre(modele, l) if modele else ""
     return {
+        "modeles": MODELES,
         "lignes": lignes,
         "totaux": {
             "commandes": len(lignes),

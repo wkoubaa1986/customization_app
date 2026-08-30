@@ -60,6 +60,100 @@ FAMILY_SMS_LABEL = {
 #  Helpers prix
 # ---------------------------------------------------------------------------
 
+def simulation_envois():
+    """⛔ GARDE-FOU DEV — même règle que sms_commandes / portail_rdv.
+
+    Le site de développement porte les VRAIS numéros et e-mails des clients
+    (base restaurée de la prod) et partage la VRAIE passerelle SMS : une
+    relance lancée à la main en dev part pour de bon (incident du 29/08/2026,
+    2 SMS réels partis pendant des tests). En developer_mode on SIMULE — sauf
+    `sms_groupe_reel_en_dev` posé exprès dans site_config.json.
+    """
+    return bool(frappe.utils.cint(frappe.conf.get("developer_mode"))) \
+        and not frappe.utils.cint(frappe.conf.get("sms_groupe_reel_en_dev"))
+
+
+# ---------------------------------------------------------------------------
+#  Prise de rendez-vous en ligne : à qui peut-on proposer le portail ?
+# ---------------------------------------------------------------------------
+
+def _config_portail():
+    """La config du portail RDV, ou None s'il est éteint / absent."""
+    try:
+        cfg = frappe.get_single("Config Portail RDV")
+    except Exception:
+        return None
+    return cfg if cfg and frappe.utils.cint(cfg.actif) else None
+
+
+def gouvernorats_du_client(customer):
+    """Les gouvernorats des adresses du client — `custom_state_s` OU `state`,
+    car la moitié des adresses Sousse/Monastir n'ont que `state` (piège déjà
+    payé sur le déplacement de RDV, cf. `_gouvernorat_adresse`)."""
+    lignes = frappe.db.sql(
+        """
+        SELECT DISTINCT COALESCE(NULLIF(a.custom_state_s, ''), a.state) AS gouvernorat
+        FROM `tabAddress` a
+        JOIN `tabDynamic Link` dl
+          ON dl.parent = a.name AND dl.parenttype = 'Address'
+         AND dl.link_doctype = 'Customer' AND dl.link_name = %s
+        """,
+        (customer,), as_dict=True)
+    return [r["gouvernorat"] for r in lignes if r["gouvernorat"]]
+
+
+def lien_rdv_pour_client(customer, secteur, config=None):
+    """Le lien du portail SI ce client peut réellement réserver en ligne, sinon "".
+
+    Deux cas ouvrent la réservation (demande 30/08/2026) :
+      1. il est dans NOS secteurs (l'équipe de Tunis passe déjà chez lui) ;
+      2. il est « Hors Secteur » mais son gouvernorat est couvert par un
+         PARTENAIRE déclaré dans Config Portail RDV (Sousse, Monastir…).
+    Proposer le lien à un client hors zone serait cruel : le portail lui
+    répondrait « aucun créneau ». On ne le met donc que si ça marche.
+    """
+    config = config or _config_portail()
+    if not config:
+        return ""
+
+    # `secteurs` vient d'un GROUP_CONCAT : un client peut avoir plusieurs
+    # adresses, donc plusieurs secteurs — un seul vrai secteur suffit.
+    secteurs = [s.strip() for s in (secteur or "").split(",") if s.strip()]
+    if any(s and s != "Hors Secteur" for s in secteurs):
+        return frappe.utils.get_url("/rdv")
+
+    from customization_app.portail_rdv_planning import contexte_partenaire
+    for gouvernorat in gouvernorats_du_client(customer):
+        if contexte_partenaire(config, gouvernorat):
+            return frappe.utils.get_url("/rdv")
+    return ""
+
+
+def emails_du_client(customer):
+    """Les e-mails des contacts du client — jamais `Customer.email_id`, vide dès
+    qu'aucune ligne n'est marquée « principale » (cf. _coordonnees_des_contacts)."""
+    from customization_app.retenue_source import _coordonnees_des_contacts
+
+    return list((_coordonnees_des_contacts([customer]).get(customer) or {})
+                .get("emails") or [])
+
+
+def corps_email_relance(message, lien_rdv):
+    """Le même texte que le SMS, mis en page pour l'e-mail : le lien devient un
+    bouton cliquable (dans un SMS il reste en clair, on ne le duplique pas)."""
+    texte = message.replace(lien_rdv, "").rstrip() if lien_rdv else message
+    corps = "<p>%s</p>" % frappe.utils.escape_html(texte).replace("\n", "<br>")
+    if lien_rdv:
+        corps += (
+            '<p style="margin:18px 0"><a href="{0}" '
+            'style="background:#0ea5e9;color:#fff;text-decoration:none;'
+            'padding:10px 18px;border-radius:8px;display:inline-block;'
+            'font-weight:600">📅 Prendre rendez-vous en ligne</a></p>'
+            '<p style="font-size:12px;color:#64748b">Ou copiez ce lien : {0}</p>'
+        ).format(lien_rdv)
+    return corps
+
+
 def get_price_for_item(item_code, price_list):
     """Retourne le price_list_rate pour un item + price list, ou None."""
     price = frappe.db.get_value(
@@ -110,6 +204,8 @@ def envoyer_relances_maintenance(dry_run: bool = False):
         "sms_sent_success": 0,
         "sms_invalid_number": 0,
         "sms_failed": 0,
+        "emails_sent": 0,
+        "emails_failed": 0,
         "maintenances_extended": 0,
     }
 
@@ -245,6 +341,8 @@ def envoyer_relances_maintenance(dry_run: bool = False):
     summary["sms_sent_success"] = stats.get("sms_sent_success", 0)
     summary["sms_invalid_number"] = stats.get("sms_invalid_number", 0)
     summary["sms_failed"] = stats.get("sms_failed", 0)
+    summary["emails_sent"] = stats.get("emails_sent", 0)
+    summary["emails_failed"] = stats.get("emails_failed", 0)
     summary["maintenances_extended"] = stats.get("maintenances_extended", 0)
 
     # Logs finaux
@@ -260,6 +358,8 @@ def envoyer_relances_maintenance(dry_run: bool = False):
         f"sms_envoyes={summary['sms_sent_success']}, "
         f"sms_invalid={summary['sms_invalid_number']}, "
         f"sms_failed={summary['sms_failed']}, "
+        f"emails_envoyes={summary['emails_sent']}, "
+        f"emails_failed={summary['emails_failed']}, "
         f"ms_extendues={summary['maintenances_extended']}"
     )
     end_line = "========== [CRON] Fin envoyer_relances_maintenance =========="
@@ -475,13 +575,19 @@ def envoyer_sms_winsms(numero, message):
     import urllib.error
     from urllib.parse import urlencode
 
+    from customization_app.customize_erpnext.doctype.compagne_sms.compagne_sms import (
+        normaliser_sms,
+    )
+
     phone = f"216{numero}"
 
     # Lire config depuis SMS Settings
     ss = frappe.get_doc("SMS Settings", "SMS Settings")
     params = {p.parameter: p.value for p in ss.get("parameters") if not p.header}
     params[ss.receiver_parameter] = phone
-    params[ss.message_parameter] = message
+    # GSM-7 : un seul « — » ou une espace insécable ferait basculer TOUT le SMS
+    # en unicode (67 caractères par segment au lieu de 153).
+    params[ss.message_parameter] = normaliser_sms(message)
     url = ss.sms_gateway_url + "?" + urlencode(params)
 
     # Tentative 1 : requests
@@ -546,8 +652,13 @@ def envoyer_et_marquer_sms(list_sms, secteurs_autorises, today, dry_run: bool = 
         "sms_sent_success": 0,
         "sms_invalid_number": 0,
         "sms_failed": 0,
+        "emails_sent": 0,
+        "emails_failed": 0,
         "maintenances_extended": 0,
     }
+
+    simulation = simulation_envois()
+    config_portail = _config_portail()
 
     # Gestion promo Ramadhan
     promo_ramdhan = ""
@@ -628,6 +739,10 @@ def envoyer_et_marquer_sms(list_sms, secteurs_autorises, today, dry_run: bool = 
 
         promo = promo_ramdhan  # copie locale
 
+        # Le portail n'est proposé qu'aux clients qui peuvent VRAIMENT y
+        # réserver : nos secteurs, ou un gouvernorat couvert par un partenaire.
+        lien_rdv = lien_rdv_pour_client(customer_name, secteur, config_portail)
+
         if secteur != "Hors Secteur":
             message = (
                 f"Bonjour {client.customer_name},{corp}\n"
@@ -639,16 +754,29 @@ def envoyer_et_marquer_sms(list_sms, secteurs_autorises, today, dry_run: bool = 
                     f"Cout main-d'oeuvre: {cout} DT. Ce tarif exclut les filtres de remplacement, "
                     f"facturés séparément selon entretien.\n"
                 )
-            message += f"Pour planifier votre entretien, contactez-nous au {phones_txt}."
+            if lien_rdv:
+                message += f"Prenez RDV en ligne: {lien_rdv}\nOu appelez le {phones_txt}."
+            else:
+                message += f"Pour planifier votre entretien, contactez-nous au {phones_txt}."
 
         else:
             message = (
                 f"Bonjour {client.customer_name},{corp}\n"
                 f"Rappel: La maintenance de {desc}{suff} à échéance."
                 f"{promo}\n"
-                f"Commandez vos filtres directement sur notre site :\n{website_url}\n"
-                f"Ou contactez-nous au {phones_txt} pour passer votre commande"
             )
+            if lien_rdv:
+                # Zone partenaire : il se déplace, donc on propose le RDV
+                # AVANT la vente de filtres à distance.
+                message += (
+                    f"Prenez RDV en ligne: {lien_rdv}\n"
+                    f"Ou contactez-nous au {phones_txt}."
+                )
+            else:
+                message += (
+                    f"Commandez vos filtres directement sur notre site :\n{website_url}\n"
+                    f"Ou contactez-nous au {phones_txt} pour passer votre commande"
+                )
 
         # Numéros de téléphone
         try:
@@ -657,7 +785,16 @@ def envoyer_et_marquer_sms(list_sms, secteurs_autorises, today, dry_run: bool = 
             _logger().error(f"Erreur numéros client : {client.customer_name}")
             list_tel = []
 
-        # Si DRY RUN : on n'envoie pas de SMS, on marque juste la preview
+        # E-mails des contacts : la relance part AUSSI par e-mail quand le
+        # client en a un (demande 30/08/2026) — c'est le seul canal qui reste
+        # pour ceux dont le numéro est invalide.
+        try:
+            list_email = emails_du_client(customer_name)
+        except Exception:
+            _logger().error(f"Erreur e-mails client : {client.customer_name}")
+            list_email = []
+
+        # Si DRY RUN : on n'envoie rien, on marque juste la preview
         if dry_run:
             preview.append({
                 "maintenance": maint_name,
@@ -669,6 +806,8 @@ def envoyer_et_marquer_sms(list_sms, secteurs_autorises, today, dry_run: bool = 
                 "cout": float(cout) if cout is not None else None,
                 "message": message,
                 "phones": list_tel,
+                "emails": list_email,
+                "lien_rdv": lien_rdv,
                 "sms_type": sms_type,
                 "scheduled_date": str(scheduled_date_for_sms) if scheduled_date_for_sms else None,
             })
@@ -679,6 +818,10 @@ def envoyer_et_marquer_sms(list_sms, secteurs_autorises, today, dry_run: bool = 
         status_sms = "Invalid Number" if not list_tel else "Failed"
 
         for tel in list_tel:
+            if simulation:
+                status_sms = "Success"
+                log(f"[SIMULÉ dev] SMS -> {tel}")
+                continue
             try:
                 resp = envoyer_sms_winsms(tel, message)
                 data = resp.json()
@@ -688,6 +831,23 @@ def envoyer_et_marquer_sms(list_sms, secteurs_autorises, today, dry_run: bool = 
                 _logger().error(
                     f"Echec SMS vers {tel} pour client {client.customer_name}"
                 )
+
+        if list_email:
+            if simulation:
+                log(f"[SIMULÉ dev] e-mail -> {', '.join(list_email)}")
+            else:
+                try:
+                    frappe.sendmail(
+                        recipients=list_email,
+                        subject="Aqua World & Servicing — l'entretien de votre équipement est à échéance",
+                        message=corps_email_relance(message, lien_rdv),
+                        reference_doctype="Maintenance Schedule",
+                        reference_name=maint_name)
+                    stats["emails_sent"] += len(list_email)
+                except Exception:
+                    stats["emails_failed"] += 1
+                    _logger().error(
+                        f"Echec e-mail pour client {client.customer_name}")
 
         log(status_sms)
         log(message)
