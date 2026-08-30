@@ -497,9 +497,13 @@ class CommandesATraiter {
           options: `<div style="padding:10px 12px;border-radius:9px;background:#e0f2fe;
                       color:#075985;font-size:12.5px">
                       🚚 Autorisée, la commande ouvre au client le créneau
-                      <b>« Livraison » (20 min)</b> sur le portail de rendez-vous.
+                      <b>« Livraison » (30 min)</b> sur le portail de rendez-vous.
                       Sans cette autorisation, le type ne lui est pas proposé —
                       et le serveur refuse la réservation même si on la force.
+                      <div style="margin-top:6px">⚠️ Seules les adresses en
+                      <b>secteurs 1 à 7</b> peuvent être autorisées : les
+                      secteurs 8 et 9 mobilisent la journée entière d’un
+                      technicien, et « Hors Secteur » n’est pas desservi.</div>
                     </div>`,
         },
         {
@@ -515,13 +519,28 @@ class CommandesATraiter {
         freeze: true,
         callback: (r) => {
           const m = r.message || {};
+          const esc = frappe.utils.escape_html;
           d.hide();
-          frappe.show_alert({
-            message: __("{0} commande(s) — livraison par notre équipe {1}.",
-                        [(m.commandes || []).length,
-                         m.autorise ? __("autorisée") : __("retirée")]),
-            indicator: "green",
-          }, 7);
+          // On montre le détail dès qu'une commande a été refusée : sinon le
+          // garde-fou agirait en silence et on croirait la sélection traitée.
+          if (m.refuses) {
+            frappe.msgprint({
+              title: __("Livraison par notre équipe"),
+              indicator: "orange",
+              message: __("{0} appliquée(s), {1} refusée(s).",
+                          [(m.commandes || []).length, m.refuses])
+                + `<div style="margin-top:8px;max-height:240px;overflow:auto;font-size:12px">${
+                    (m.resultats || []).map((x) =>
+                      `<div><b>${esc(x.commande)}</b> — ${esc(x.etat)}</div>`).join("")}</div>`,
+            });
+          } else {
+            frappe.show_alert({
+              message: __("{0} commande(s) — livraison par notre équipe {1}.",
+                          [(m.commandes || []).length,
+                           m.autorise ? __("autorisée") : __("retirée")]),
+              indicator: "green",
+            }, 7);
+          }
           this._load();
         },
       }),

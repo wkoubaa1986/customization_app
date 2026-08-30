@@ -38,6 +38,12 @@ STATUTS_CLOS = ("Completed", "Closed", "Cancelled")
 # période : elles ne doivent pas disparaître silencieusement d'un filtre.
 SANS_GROUPE = "__sans_groupe__"
 
+# Notre équipe ne livre que les secteurs 1 à 7. Les secteurs 8 et 9 mobilisent
+# la journée entière d'un technicien (règle du moteur de planification) et
+# « Hors Secteur » n'est pas desservi : y ouvrir la réservation en ligne
+# promettrait au client un créneau qu'on ne peut pas tenir.
+SECTEURS_LIVRAISON = {"Secteur %d" % n for n in range(1, 8)}
+
 # Ordres de tri proposés : par date, par valeur, ou les deux combinés.
 # [(champ, décroissant), …] — le 2e critère départage le 1er.
 TRIS = {
@@ -576,15 +582,33 @@ def autoriser_livraison(noms, autoriser=1):
     """
     frappe.has_permission("Sales Order", "write", throw=True)
     noms = frappe.parse_json(noms) if isinstance(noms, str) else (noms or [])
+    noms = [n for n in noms if n]
     valeur = 1 if frappe.utils.cint(autoriser) else 0
-    faites = []
-    for nom in [n for n in noms if n]:
+    # GARDE-FOU (demande 30/08) : on n'autorise que les secteurs 1 à 7. Un clic
+    # de trop sur une commande Hors Secteur ouvrirait au client un créneau que
+    # personne ne peut honorer — et c'est le client qui le découvrirait.
+    # Le RETRAIT, lui, n'est jamais bloqué : on doit toujours pouvoir revenir.
+    secteurs = _secteurs(noms) if valeur else {}
+    faites, resultats = [], []
+    for nom in noms:
         if frappe.db.get_value("Sales Order", nom, "docstatus") == 2:
+            resultats.append({"commande": nom, "etat": "commande annulée — ignorée"})
+            continue
+        secteur = secteurs.get(nom, ("", ""))[0]
+        if valeur and secteur not in SECTEURS_LIVRAISON:
+            resultats.append({"commande": nom, "etat": "refusé — %s (nous livrons "
+                              "les secteurs 1 à 7)"
+                              % (("adresse en « %s »" % secteur) if secteur
+                                 else "adresse sans secteur")})
             continue
         frappe.db.set_value("Sales Order", nom, "custom_livraison_equipe", valeur)
         faites.append(nom)
+        resultats.append({"commande": nom,
+                          "etat": ("autorisée — %s" % secteur) if valeur
+                                  else "autorisation retirée"})
     frappe.db.commit()
-    return {"commandes": faites, "autorise": bool(valeur)}
+    return {"commandes": faites, "resultats": resultats, "autorise": bool(valeur),
+            "refuses": len(resultats) - len(faites)}
 
 
 @frappe.whitelist()
