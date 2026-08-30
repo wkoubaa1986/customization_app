@@ -515,6 +515,29 @@
   // Il EXPLIQUE et PRÉ-REMPLIT, il ne réserve jamais : le serveur revérifie
   // chaque suggestion, et les créneaux restent ceux du moteur.
   let ia_historique = [];
+  let ia_action_courante = null;
+
+  async function ia_reserver(date, demi) {
+    const a = ia_action_courante || {};
+    try {
+      const res = await appeler("reserver", {
+        jeton,
+        type_intervention: a.type,
+        adresse: a.adresse,
+        date, demi_journee: demi,
+        commande: TYPES_COMMANDE.includes(a.type) ? (a.commande || null) : null,
+        note: "", contact_nom: "", contact_tel: "",
+        confirmer_second: 0,
+      }, null);
+      $("fin-quoi").textContent = "Rendez-vous " + res.type + " enregistré";
+      $("fin-quand").textContent = "Le " + res.date + " — " + res.demi_journee;
+      ia_basculer(false);
+      montrer("etape-fin");
+    } catch (e) {
+      $("ia-fil").innerHTML += ia_ligne("assistant", e.message);
+      $("ia-fil").scrollTop = $("ia-fil").scrollHeight;
+    }
+  }
 
   function ia_ligne(role, texte) {
     const mien = role === "user";
@@ -554,7 +577,7 @@
       $("ia-attente") && $("ia-attente").remove();
       ia_historique.push({ role: "assistant", content: res.reponse });
       fil.innerHTML += ia_ligne("assistant", res.reponse);
-      if (res.action) ia_appliquer(res.action);
+      if (res.action) ia_appliquer(res.action, res.creneaux || []);
     } catch (e) {
       $("ia-attente") && $("ia-attente").remove();
       fil.innerHTML += ia_ligne("assistant", e.message);
@@ -564,7 +587,7 @@
 
   // Pré-remplissage : on rejoue les MÊMES gestes que le client, donc toutes les
   // règles de l'écran (adresse obligatoire, type déjà pris, grille) s'appliquent.
-  function ia_appliquer(action) {
+  function ia_appliquer(action, creneaux) {
     let fait = [];
     if (action.adresse) {
       const a = (seance.adresses || []).find((x) => x.adresse === action.adresse);
@@ -596,6 +619,23 @@
         ia_basculer(false);
         $("rdv-grille") && $("rdv-grille").scrollIntoView({ behavior: "smooth", block: "center" });
       });
+      // Réserver DEPUIS le chat : les créneaux viennent du moteur, le client
+      // confirme d'un geste. On ne réserve jamais sans ce geste — une tâche
+      // envoie un technicien chez quelqu'un.
+      if (!(creneaux || []).length && action.type) {
+        $("ia-fil").innerHTML += ia_ligne("assistant",
+          "Je ne trouve aucun créneau libre sur les trois prochaines semaines "
+          + "pour ce type d'intervention. Appelez-nous, nous vous trouverons une solution.");
+      }
+      if ((creneaux || []).length) {
+        $("ia-fil").innerHTML += `<div style="font-size:12.5px;color:#334155;margin:8px 0 2px">
+            Premiers créneaux libres :</div>
+          <div class="ia-suggestions">${creneaux.map((c) =>
+            `<button type="button" class="ia-creneau" data-date="${echapper(c.date)}"
+                data-demi="${echapper(c.demi)}" title="${echapper(c.horaire)}"
+              >${echapper(c.libelle)}</button>`).join("")}</div>`;
+        ia_action_courante = action;
+      }
       $("ia-fil").scrollTop = $("ia-fil").scrollHeight;
     }
   }
@@ -616,6 +656,14 @@
   $("ia-ouvrir").addEventListener("click", () => ia_basculer(true));
   $("ia-fermer").addEventListener("click", () => ia_basculer(false));
   $("ia-fil").addEventListener("click", (e) => {
+    const cren = e.target.closest(".ia-creneau");
+    if (cren) {
+      const quoi = cren.textContent.trim();
+      if (confirm("Confirmer le rendez-vous : " + quoi + " ?")) {
+        ia_reserver(cren.getAttribute("data-date"), cren.getAttribute("data-demi"));
+      }
+      return;
+    }
     const b = e.target.closest("[data-sugg]");
     if (!b) return;
     $("ia-question").value = b.getAttribute("data-sugg");

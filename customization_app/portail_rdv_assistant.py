@@ -30,6 +30,7 @@ coûteux alors qu'ici un « mini » suffit.
 from __future__ import annotations
 
 import json
+import re
 
 import frappe
 from frappe import _
@@ -40,6 +41,17 @@ from customization_app.portail_rdv import (
     _commandes_du_client, _compteur_depasse, _config, _rendez_vous_du_client,
     _session, _tarifs,
 )
+
+# Le vocabulaire ERPNext ne veut rien dire pour un client : on traduit.
+ETATS_COMMANDE = {
+    "Draft": "en préparation",
+    "To Deliver and Bill": "prête, en attente de livraison",
+    "To Deliver": "prête, en attente de livraison",
+    "To Bill": "livrée",
+    "Completed": "terminée",
+    "Closed": "clôturée",
+}
+JOURS_FR = ("lun", "mar", "mer", "jeu", "ven", "sam", "dim")
 
 MODELE_DEFAUT = "gpt-4o-mini"     # bon marché : c'est de l'explication, pas du raisonnement
 MAX_TOKENS = 400
@@ -54,7 +66,23 @@ société tunisienne de traitement de l'eau (osmoseurs, adoucisseurs, filtres).
 
 TON RÔLE : aider le client à comprendre et à prendre son rendez-vous en ligne.
 Réponds en français simple et chaleureux, TRÈS court (3 phrases maximum), sans
-jargon. Le client est au téléphone ou sur mobile.
+jargon. VOUVOIE toujours le client. Il est au téléphone ou sur mobile.
+
+LANGUE : réponds TOUJOURS dans la langue du dernier message du client —
+français, arabe tunisien (derja, en écriture arabe si le client écrit en arabe,
+en lettres latines s'il écrit en arabizi) ou anglais. S'il mélange, prends la
+langue dominante. Ne traduis jamais les numéros de commande ni les identifiants
+d'adresse : recopie-les tels quels.
+
+BLOCAGES : la liste « blocages_actuels » ci-dessous dit ce qui empêche CE client
+d'avancer et quoi faire. Quand il dit que ça ne marche pas, ou qu'il n'y arrive
+pas, va y chercher la cause au lieu de deviner, et donne-lui la marche à suivre.
+
+SOIS PROACTIF : tu connais ses adresses, ses commandes et leur état, et ses
+rendez-vous. Ne lui pose pas une question dont tu as déjà la réponse. S'il n'a
+qu'une adresse, prends-la. S'il demande de l'aide pour réserver et qu'une seule
+option est possible, propose-la directement au lieu de demander « entretien ou
+réparation ? ».
 
 INTERDITS ABSOLUS :
 - Ne dis JAMAIS qu'une date ou un créneau est disponible ou indisponible : tu ne
@@ -84,6 +112,38 @@ que des valeurs EXACTEMENT présentes dans les données du client ci-dessous ;
 "commande" n'est utile que pour une Installation ou une Livraison."""
 
 
+MOTS_FR = {"je", "ne", "pas", "le", "la", "les", "un", "une", "mon", "ma", "mes",
+           "vous", "est", "ça", "ca", "bonjour", "merci", "comment", "pour",
+           "rendez", "vous", "quand", "combien", "veux", "peux", "avec", "chez"}
+MOTS_EN = {"i", "you", "the", "my", "can", "cannot", "how", "what", "is", "are",
+           "appointment", "book", "booking", "hello", "hi", "thanks", "please",
+           "want", "need", "when", "much", "price", "your", "with", "problem"}
+# Derja écrite en lettres latines : les chiffres-lettres (3=ع, 7=ح, 9=ق, 5=خ) et
+# quelques mots ultra-fréquents. C'est le seul marqueur fiable en arabizi.
+MOTS_DERJA = {"chnowa", "chnia", "chneya", "barcha", "famma", "fama", "mala",
+              "yaatik", "aychek", "3andi", "3andek", "n7eb", "nheb", "najem",
+              "manajamch", "na7jez", "nahjez", "wa9tech", "waktech", "kifech",
+              "kifach", "chkoun", "behi", "sahbi", "rani", "taw", "chwaya"}
+
+
+def _langue(texte):
+    """La langue de RÉPONSE, décidée ici et imposée au modèle.
+
+    Laisser le modèle « deviner » ne marche pas : tout le reste de l'invite et
+    du contexte est en français, et un mini répond en français même à une
+    question en anglais (constaté au test du 30/08). On tranche donc nous-mêmes.
+    """
+    brut = (texte or "").strip()
+    if any("\u0600" <= c <= "\u06ff" for c in brut):
+        return "arabe tunisien (derja), en écriture arabe"
+    mots = set(re.findall(r"[a-z0-9']+", brut.lower()))
+    if mots & MOTS_DERJA or re.search(r"[a-z][2357953]+[a-z]", brut.lower()):
+        return "arabe tunisien (derja) en lettres latines (arabizi), comme le client"
+    if len(mots & MOTS_EN) > len(mots & MOTS_FR):
+        return "anglais"
+    return "français"
+
+
 def _reglages():
     """Modèle et activation — propres au portail, clé partagée avec le reste."""
     config = frappe.db.get_singles_dict("Config Portail RDV") or {}
@@ -93,6 +153,58 @@ def _reglages():
         "modele": (config.get("assistant_modele") or "").strip() or MODELE_DEFAUT,
         "cle": (ai.get("openai_api_key") or frappe.conf.get("openai_api_key") or "").strip(),
     }
+
+
+def _blocages(adresses, commandes, types, config):
+    """Ce qui EMPÊCHE ce client d'avancer, et quoi faire pour chacun.
+
+    Sans cette liste, l'assistant répond à côté : le client dit « ça ne marche
+    pas », le modèle ne voit qu'un écran abstrait. Ici il a la cause exacte et
+    la sortie — c'est la moitié du travail du magasin au téléphone.
+    """
+    from customization_app import portail_rdv_planning as planning
+
+    out = []
+    if not adresses:
+        out.append({"probleme": "Aucune adresse enregistrée",
+                    "que_faire": "Ajoutez votre adresse avec le bouton "
+                                 "« ➕ Ajouter une adresse » avant de réserver."})
+        return out
+
+    reservables = []
+    for a in adresses:
+        secteur = a.get("secteur") or ""
+        partenaire = planning.contexte_partenaire(config, a.get("gouvernorat"))
+        if (secteur and secteur != planning.HORS_SECTEUR) or partenaire:
+            reservables.append(a)
+    if not reservables:
+        out.append({"probleme": "Vos adresses sont hors de nos secteurs desservis",
+                    "que_faire": "La réservation en ligne n'est pas possible pour "
+                                 "cette zone : appelez-nous, nous trouverons une "
+                                 "solution."})
+
+    for a in reservables:
+        for type_i, deja in (a.get("rdv_en_cours") or {}).items():
+            out.append({
+                "probleme": "Un rendez-vous %s est déjà prévu le %s à l'adresse %s"
+                            % (type_i, deja.get("date"), a.get("adresse")),
+                "que_faire": "Dans l'onglet « Mes RDV », bouton « 🔁 Modifier » pour "
+                             "le déplacer, ou « 🗑️ Annuler ». Il peut aussi en "
+                             "prendre un SECOND du même type s'il le confirme."})
+
+    planifiees = [c.name for c in commandes if not c.sans_tache]
+    if planifiees:
+        out.append({"probleme": "Ces commandes ont déjà une intervention prévue : %s"
+                                % ", ".join(planifiees),
+                    "que_faire": "On ne peut pas en planifier une seconde dessus ; "
+                                 "le rendez-vous existant se déplace depuis « Mes RDV »."})
+
+    if commandes and not any(c.sans_tache and c.livraison_equipe for c in commandes):
+        out.append({"probleme": "La livraison par notre équipe n'est ouverte sur "
+                                "aucune de ses commandes",
+                    "que_faire": "C'est le magasin qui l'autorise commande par "
+                                 "commande : proposez-lui de nous appeler."})
+    return out
 
 
 def _contexte(session):
@@ -132,6 +244,15 @@ def _contexte(session):
              "resume": ", ".join(filter(None, [a.get("ligne"), a.get("ville"),
                                                a.get("gouvernorat")])),
              "secteur": a.get("secteur")} for a in adresses],
+        # TOUTES ses commandes avec leur état en clair : « où en est ma
+        # commande ? » est la question la plus fréquente, et l'assistant doit
+        # savoir laquelle est encore en préparation.
+        "ses_commandes": [
+            {"numero": c.name, "date": str(c.transaction_date),
+             "total": c.grand_total, "etat": ETATS_COMMANDE.get(c.status, c.status),
+             "intervention_deja_planifiee": not bool(c.sans_tache),
+             "livraison_par_notre_equipe": bool(c.get("livraison_equipe"))}
+            for c in commandes],
         "commandes_sans_intervention": [
             {"numero": c.name, "date": str(c.transaction_date),
              "total": c.grand_total,
@@ -142,6 +263,8 @@ def _contexte(session):
             for r in _rendez_vous_du_client(session["client"]) if r["a_venir"]],
         "comment_modifier": "Dans l'onglet « Mes RDV », bouton « 🔁 Modifier » "
                             "pour déplacer, ou « 🗑️ Annuler ce rendez-vous ».",
+        # Ce qui le bloque MAINTENANT, avec la sortie de secours pour chaque cas.
+        "blocages_actuels": _blocages(adresses, commandes, types, config),
     }
 
 
@@ -168,6 +291,44 @@ def _valider_action(action, session, contexte):
     if "commande" in out and out.get("type") not in TYPES_AVEC_COMMANDE:
         out.pop("commande")
     return out or None
+
+
+def _creneaux_pour(session, action, limite=4):
+    """Les PREMIERS créneaux réellement libres pour l'action proposée.
+
+    C'est ici que la règle « il ne promet jamais un créneau » tient : le modèle
+    ne choisit pas la date, il dit seulement CE QUE le client veut faire. Les
+    disponibilités sont calculées par le moteur, comme pour la grille — le chat
+    ne fait que les présenter.
+    """
+    if not action or not action.get("type") or not action.get("adresse"):
+        return []
+    from customization_app import portail_rdv as p
+    from customization_app import portail_rdv_planning as planning
+
+    config = _config()
+    doc = p._adresse_du_client(session["client"], action["adresse"])
+    contexte = planning.contexte_partenaire(
+        config, doc.get("custom_state_s") or doc.get("state"))
+    jours = planning.disponibilites(
+        config, doc.get("custom_secteur"), action["type"], contexte=contexte)
+
+    libelles = planning.fenetres_libellees()
+    out = []
+    for j in jours:
+        for demi, mot in (("matin", "matin"), ("apres_midi", "après-midi")):
+            if not j.get(demi):
+                continue
+            jour = frappe.utils.getdate(j["date"])
+            out.append({
+                "date": j["date"], "demi": demi,
+                "libelle": "%s %s %s" % (JOURS_FR[jour.weekday()],
+                                         jour.strftime("%d/%m"), mot),
+                "horaire": libelles.get(demi, ""),
+            })
+            if len(out) >= limite:
+                return out
+    return out
 
 
 def _appeler_openai(cle, modele, messages):
@@ -222,6 +383,12 @@ def demander(jeton, question, historique=None):
         if isinstance(m, dict) and m.get("role") in ("user", "assistant"):
             messages.append({"role": m["role"],
                              "content": str(m.get("content") or "")[:QUESTION_MAX]})
+    # Directive de langue EXPLICITE, juste avant la question : une consigne
+    # noyée en tête de l'invite ne tient pas face à un contexte tout en français.
+    messages.append({"role": "system",
+                     "content": "LANGUE DE RÉPONSE OBLIGATOIRE pour ce message : %s. "
+                                "Le champ \"reponse\" doit être écrit dans cette "
+                                "langue et aucune autre." % _langue(question)})
     messages.append({"role": "user", "content": question})
 
     try:
@@ -240,5 +407,11 @@ def demander(jeton, question, historique=None):
     texte = str(charge.get("reponse") or "").strip()
     if not texte:
         texte = _("Je n'ai pas bien compris — pouvez-vous reformuler ?")
-    return {"reponse": texte,
-            "action": _valider_action(charge.get("action"), session, contexte)}
+    action = _valider_action(charge.get("action"), session, contexte)
+    # Les créneaux viennent du MOTEUR, jamais du modèle : le chat peut donc
+    # proposer de réserver sans jamais promettre une date qui n'existe pas.
+    try:
+        creneaux = _creneaux_pour(session, action)
+    except Exception:
+        creneaux = []
+    return {"reponse": texte, "action": action, "creneaux": creneaux}
