@@ -101,6 +101,46 @@
   .rdv-art .a-nom { flex: 1; color: #0f172a; }
   .rdv-art .a-qte { color: #64748b; font-size: 12px; }
   .rdv-art .a-prix { font-weight: 700; white-space: nowrap; }
+
+  /* ── Assistant : widget de chat flottant ─────────────────────────────── */
+  .ia-fab { position: fixed; right: 16px; bottom: 16px; z-index: 60;
+            width: 58px; height: 58px; border-radius: 50%; border: none;
+            background: #0ea5e9; color: #fff; font-size: 25px; cursor: pointer;
+            box-shadow: 0 6px 18px rgba(2,132,199,.38); }
+  .ia-fab:hover { background: #0284c7; }
+  .ia-fab .pastille { position: absolute; top: -3px; right: -3px; width: 13px;
+                      height: 13px; border-radius: 50%; background: #22c55e;
+                      border: 2px solid #fff; }
+  .ia-fenetre { position: fixed; right: 16px; bottom: 84px; z-index: 60;
+                width: min(370px, calc(100vw - 24px));
+                height: min(72vh, 540px); display: flex; flex-direction: column;
+                background: #fff; border-radius: 16px; overflow: hidden;
+                box-shadow: 0 18px 45px rgba(15,23,42,.28); }
+  .ia-entete { display: flex; align-items: center; gap: 8px; padding: 11px 14px;
+               background: #0ea5e9; color: #fff; font-weight: 700; font-size: 14.5px; }
+  .ia-entete .sous { font-weight: 500; font-size: 11.5px; opacity: .9; display: block; }
+  .ia-entete button { margin-left: auto; background: transparent; border: none;
+                      color: #fff; font-size: 19px; cursor: pointer; line-height: 1; }
+  #ia-fil { flex: 1; overflow-y: auto; padding: 12px; background: #f8fafc; }
+  .ia-bulle { display: inline-block; max-width: 84%; padding: 8px 11px;
+              border-radius: 14px; white-space: pre-wrap; font-size: 13.5px;
+              line-height: 1.45; }
+  .ia-moi { background: #0ea5e9; color: #fff; border-bottom-right-radius: 4px; }
+  .ia-lui { background: #fff; color: #0f172a; border: 1px solid #e2e8f0;
+            border-bottom-left-radius: 4px; }
+  .ia-suggestions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  .ia-suggestions button { border: 1px solid #bae6fd; background: #f0f9ff;
+                           color: #0369a1; border-radius: 999px; padding: 5px 11px;
+                           font-size: 12px; cursor: pointer; }
+  .ia-saisie { display: flex; gap: 6px; padding: 9px; border-top: 1px solid #e2e8f0; }
+  .ia-saisie input { flex: 1; margin: 0; height: 38px; }
+  .ia-saisie button { width: 44px; height: 38px; border: none; border-radius: 9px;
+                      background: #0ea5e9; color: #fff; font-size: 16px; cursor: pointer; }
+  .ia-note { padding: 0 12px 9px; font-size: 10.5px; color: #94a3b8; }
+  @media (max-width: 480px) {
+    .ia-fenetre { right: 8px; left: 8px; width: auto; bottom: 78px; height: 68vh; }
+    .ia-fab { right: 12px; bottom: 12px; }
+  }
 </style>
 
 <div class="rdv-page">
@@ -187,18 +227,21 @@
     <!-- Étape 3 : réservation + historique -->
     <div class="rdv-etape" id="etape-rdv">
       <!-- Assistant : visible seulement une fois le client identifié -->
-      <div id="ia-bloc" style="display:none;margin:-4px 0 10px">
-        <button type="button" id="ia-ouvrir" class="rdv-btn secondaire"
-                style="max-width:100%;margin:0">💬 Une question ? Je vous aide</button>
-        <div id="ia-panneau" style="display:none;border:1px solid #e2e8f0;border-radius:12px;
-             padding:10px;margin-top:8px;background:#f8fafc">
-          <div id="ia-fil" style="max-height:230px;overflow:auto;font-size:13.5px"></div>
-          <div style="display:flex;gap:6px;margin-top:8px">
-            <input type="text" id="ia-question" maxlength="500" style="flex:1;margin:0"
-                   placeholder="Ex. : c'est quoi la différence entre entretien et réparation ?">
-            <button type="button" class="rdv-btn" id="ia-envoyer"
-                    style="max-width:96px;margin:0">Envoyer</button>
+      <div id="ia-bloc" style="display:none">
+        <button type="button" id="ia-ouvrir" class="ia-fab" title="Assistant">💬<span class="pastille"></span></button>
+        <div id="ia-panneau" class="ia-fenetre" style="display:none">
+          <div class="ia-entete">🤖 <span>Assistant Aqua World
+              <span class="sous">Répond en quelques secondes</span></span>
+            <button type="button" id="ia-fermer" title="Fermer">✕</button></div>
+          <div id="ia-fil"></div>
+          <div class="ia-saisie">
+            <input type="text" id="ia-question" maxlength="500"
+                   placeholder="Écrivez votre question…">
+            <button type="button" id="ia-envoyer" title="Envoyer">➤</button>
           </div>
+          <div class="ia-note">Assistant automatique. Pour les créneaux, fiez-vous à la grille.</div>
+        </div>
+      </div>
           <div style="font-size:11px;color:#94a3b8;margin-top:6px">
             Assistant automatique. Pour les créneaux, fiez-vous à la grille ci-dessous.
           </div>
@@ -475,11 +518,21 @@
 
   function ia_ligne(role, texte) {
     const mien = role === "user";
-    return `<div style="margin:6px 0;text-align:${mien ? "right" : "left"}">
-        <span style="display:inline-block;max-width:85%;padding:7px 10px;border-radius:12px;
-              background:${mien ? "#0ea5e9" : "#fff"};color:${mien ? "#fff" : "#0f172a"};
-              border:1px solid ${mien ? "#0ea5e9" : "#e2e8f0"};white-space:pre-wrap"
-          >${echapper(texte)}</span></div>`;
+    return `<div style="margin:7px 0;text-align:${mien ? "right" : "left"}">
+        <span class="ia-bulle ${mien ? "ia-moi" : "ia-lui"}">${echapper(texte)}</span></div>`;
+  }
+
+  // Trois questions posées d'un clic : un champ vide n'inspire rien, et ce sont
+  // les trois blocages qui font décrocher le téléphone au magasin.
+  const IA_SUGGESTIONS = [
+    "Entretien ou réparation, quelle différence ?",
+    "Combien ça coûte ?",
+    "Comment décaler mon rendez-vous ?",
+  ];
+
+  function ia_suggestions() {
+    return `<div class="ia-suggestions">${IA_SUGGESTIONS.map((q) =>
+      `<button type="button" data-sugg="${echapper(q)}">${echapper(q)}</button>`).join("")}</div>`;
   }
 
   async function ia_demander() {
@@ -489,6 +542,8 @@
     champ.value = "";
     ia_historique.push({ role: "user", content: question });
     const fil = $("ia-fil");
+    const sugg = fil.querySelector(".ia-suggestions");
+    if (sugg) sugg.remove();           // une fois lancé, on laisse la place au fil
     fil.innerHTML += ia_ligne("user", question);
     fil.innerHTML += `<div id="ia-attente" style="color:#94a3b8;font-size:12px">…</div>`;
     fil.scrollTop = fil.scrollHeight;
@@ -530,22 +585,41 @@
       fait.push("le type d'intervention");
     }
     if (fait.length) {
-      $("ia-fil").innerHTML += `<div style="font-size:12px;color:#0e7490;margin:4px 0">
-          ✅ J'ai rempli ${echapper(fait.join(" et "))} — choisissez votre créneau ci-dessous.</div>`;
-      $("rdv-types") && $("rdv-types").scrollIntoView({ behavior: "smooth", block: "center" });
+      // Sur mobile la fenêtre de chat couvre l'écran : on ne referme pas dans
+      // le dos du client, on lui donne le bouton pour aller voir.
+      $("ia-fil").innerHTML += `<div style="font-size:12.5px;color:#0e7490;margin:6px 0">
+          ✅ J'ai rempli ${echapper(fait.join(" et "))}.
+          <div class="ia-suggestions"><button type="button" id="ia-voir">👉 Voir les créneaux</button></div>
+        </div>`;
+      const voir = $("ia-voir");
+      voir && voir.addEventListener("click", () => {
+        ia_basculer(false);
+        $("rdv-grille") && $("rdv-grille").scrollIntoView({ behavior: "smooth", block: "center" });
+      });
+      $("ia-fil").scrollTop = $("ia-fil").scrollHeight;
     }
   }
 
-  $("ia-ouvrir").addEventListener("click", () => {
-    const p = $("ia-panneau");
-    const ouvert = p.style.display !== "none";
-    p.style.display = ouvert ? "none" : "block";
-    $("ia-ouvrir").textContent = ouvert ? "💬 Une question ? Je vous aide" : "✕ Fermer l'assistant";
-    if (!ouvert && !$("ia-fil").innerHTML) {
+  function ia_basculer(ouvrir) {
+    $("ia-panneau").style.display = ouvrir ? "flex" : "none";
+    $("ia-ouvrir").style.display = ouvrir ? "none" : "block";
+    if (!ouvrir) return;
+    if (!$("ia-fil").innerHTML) {
       $("ia-fil").innerHTML = ia_ligne("assistant",
-        "Bonjour ! Posez-moi votre question : type d'intervention, tarifs, délais, "
-        + "ou comment déplacer un rendez-vous. Je peux aussi remplir l'écran pour vous.");
+        "Bonjour " + (seance.nom || "") + " ! Posez-moi votre question : type "
+        + "d'intervention, tarifs, délais, ou comment déplacer un rendez-vous. "
+        + "Je peux aussi remplir l'écran pour vous.") + ia_suggestions();
     }
+    $("ia-question").focus();
+  }
+
+  $("ia-ouvrir").addEventListener("click", () => ia_basculer(true));
+  $("ia-fermer").addEventListener("click", () => ia_basculer(false));
+  $("ia-fil").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-sugg]");
+    if (!b) return;
+    $("ia-question").value = b.getAttribute("data-sugg");
+    ia_demander();
   });
   $("ia-envoyer").addEventListener("click", ia_demander);
   $("ia-question").addEventListener("keydown", (e) => {
