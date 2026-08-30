@@ -309,7 +309,7 @@ class CommandesATraiter {
 
     const d = new frappe.ui.Dialog({
       title: __("Message aux clients — {0} commande(s)", [noms.length]),
-      size: "large",
+      size: "extra-large",
       fields: [
         { fieldtype: "HTML", fieldname: "visees", options: this._rappel_selection(noms) },
         { fieldtype: "HTML", fieldname: "totaux" },
@@ -324,7 +324,7 @@ class CommandesATraiter {
           description: __("Balises : {nom_client} {commande} {article} {articles} {total_ttc} {lien_rdv} {remplacements} {signature}"),
         },
         { fieldtype: "Section Break",
-          label: __("Articles de remplacement — ✏️ pour choisir commande par commande") },
+          label: __("Article de remplacement commun (applicable à toute la sélection)") },
         {
           fieldtype: "MultiSelectPills", fieldname: "remplacements",
           label: __("Article de remplacement"),
@@ -349,7 +349,6 @@ class CommandesATraiter {
           fieldtype: "Button", fieldname: "inserer",
           label: __("➕ Appliquer à toutes les commandes"),
         },
-        { fieldtype: "HTML", fieldname: "par_commande" },
         {
           fieldtype: "Check", fieldname: "annuler", default: 0,
           label: __("❌ Annuler aussi ces commandes"),
@@ -372,6 +371,11 @@ class CommandesATraiter {
           fieldtype: "Data", fieldname: "sujet", label: __("Objet de l'e-mail"),
           depends_on: "email",
         },
+        // Pleine largeur : dans la colonne de gauche, les articles de chaque
+        // commande se repliaient sur six lignes et devenaient illisibles.
+        { fieldtype: "Section Break",
+          label: __("Choix par commande — ✏️ pour changer un article") },
+        { fieldtype: "HTML", fieldname: "par_commande" },
         { fieldtype: "Section Break", label: __("Aperçu") },
         { fieldtype: "HTML", fieldname: "apercu" },
       ],
@@ -458,9 +462,15 @@ class CommandesATraiter {
       `<div style="font-size:11.5px;color:var(--text-muted,#6b7280);margin-bottom:4px">
          ${__("Cliquez ✏️ sur une ligne pour proposer un article différent à ce client.")}
        </div>
-       <div style="max-height:190px;overflow:auto;font-size:12px;border:1px solid
+       <div style="max-height:280px;overflow:auto;font-size:12px;border:1px solid
             var(--border-color,#e4e8ee);border-radius:8px">
-         <table style="width:100%">${noms.map((n) => {
+         <table style="width:100%;table-layout:fixed">
+           <thead><tr style="background:var(--bg-light-gray,#f6f8fa);
+                 font-size:10.5px;text-transform:uppercase;color:#6b7280">
+             <th style="padding:5px 8px;width:150px;text-align:left">Commande</th>
+             <th style="padding:5px 8px;text-align:left">Articles commandés</th>
+             <th style="padding:5px 8px;text-align:left">Remplacement</th>
+             <th style="padding:5px 8px;width:110px"></th></tr></thead>${noms.map((n) => {
            const choix = this._remplacements[n] || {};
            const par = choix.par || [];
            const dedans = (this._infos_commandes || {})[n] || [];
@@ -469,12 +479,13 @@ class CommandesATraiter {
            return `<tr style="border-bottom:1px solid var(--border-color,#eef1f5)">
              <td style="padding:5px 8px;vertical-align:top;white-space:nowrap">
                <b>${esc(n)}</b></td>
-             <td style="padding:5px 8px;vertical-align:top;color:var(--text-muted,#6b7280)">
+             <td style="padding:5px 8px;vertical-align:top;overflow-wrap:anywhere;
+                        color:var(--text-muted,#6b7280)">
                ${dedans.length
                   ? dedans.map((a) => `${a.manque || a.stock_negatif ? "⚠️ " : ""}${
                       esc(a.article)}`).join("<br>")
                   : "—"}</td>
-             <td style="padding:5px 8px;vertical-align:top">${par.length
+             <td style="padding:5px 8px;vertical-align:top;overflow-wrap:anywhere">${par.length
                 ? `${choix.remplace
                      ? `<span style="color:#b02a37">${esc(nom_origine(choix.remplace))}</span> → ` : ""}
                    <b>${par.map((c) => esc(nom_lisible(c))).join(", ")}</b>`
