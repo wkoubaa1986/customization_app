@@ -145,6 +145,8 @@ class CommandesATraiter {
       this._load();
     });
 
+    $(this.wrapper).on("click", ".ct-vider", () => this._vider_selection());
+
     $("#ct-msg").on("click", () => this._dialogue_message());
     $("#ct-rdv").on("click", () => this._dialogue_message("rdv"));
     $("#ct-livr").on("click", () => this._dialogue_livraison());
@@ -250,9 +252,26 @@ class CommandesATraiter {
 
   _maj_compte() {
     const n = this.selection.size;
-    $("#ct-compte").text(n
-      ? `${n} commande(s) sélectionnée(s)`
-      : "Aucune commande sélectionnée");
+    if (!n) {
+      $("#ct-compte").html("Aucune commande sélectionnée");
+      return;
+    }
+    // ⚠️ La sélection SURVIT aux pages et aux filtres. Une commande cochée puis
+    // sortie de l'écran reste retenue : si on ne le dit pas, l'action porte sur
+    // des commandes qu'on ne voit plus (« j'en ai coché une, il en traite 3 »).
+    const visibles = new Set((this.data ? this.data.lignes : []).map((c) => c.name));
+    const caches = Array.from(this.selection).filter((x) => !visibles.has(x)).length;
+    $("#ct-compte").html(
+      `<b>${n}</b> commande(s) sélectionnée(s)`
+      + (caches ? ` <span style="color:#b45309">(dont ${caches} hors de l’écran)</span>` : "")
+      + ` <a class="ct-vider" style="cursor:pointer;margin-left:6px">✕ vider</a>`);
+  }
+
+  _vider_selection() {
+    this.selection.clear();
+    $(this.wrapper).find(".ct-sel").prop("checked", false);
+    $("#ct-all").prop("checked", false);
+    this._maj_compte();
   }
 
   _selection() {
@@ -261,6 +280,17 @@ class CommandesATraiter {
       return null;
     }
     return Array.from(this.selection);
+  }
+
+  // Le rappel de CE QUI EST VISÉ, en tête de chaque dialogue : la sélection
+  // peut contenir des commandes qui ne sont plus affichées.
+  _rappel_selection(noms) {
+    const esc = frappe.utils.escape_html;
+    return `<div style="padding:8px 10px;border-radius:9px;background:var(--bg-light-gray,#f6f7f9);
+              font-size:12.5px">
+              Concerne <b>${noms.length}</b> commande(s) :
+              <span style="color:var(--text-muted)">${noms.map(esc).join(", ")}</span>
+            </div>`;
   }
 
   // ---------------------------------------------------------------- actions
@@ -274,6 +304,7 @@ class CommandesATraiter {
       title: __("Message aux clients — {0} commande(s)", [noms.length]),
       size: "large",
       fields: [
+        { fieldtype: "HTML", fieldname: "visees", options: this._rappel_selection(noms) },
         { fieldtype: "HTML", fieldname: "totaux" },
         {
           fieldtype: "Select", fieldname: "choix_modele",
@@ -465,7 +496,7 @@ class CommandesATraiter {
                 `<div><b>${esc(x.commande)}</b> — ${esc(x.etat)}</div>`).join("")
                 + `<div style="margin-top:8px">✉️ ${(m.informes || []).length} client(s) prévenu(s).</div>`,
             });
-            this.selection.clear();
+            this._vider_selection();
             this._load();
             return;
           }
@@ -492,6 +523,7 @@ class CommandesATraiter {
     const d = new frappe.ui.Dialog({
       title: __("Livraison par notre équipe — {0} commande(s)", [noms.length]),
       fields: [
+        { fieldtype: "HTML", fieldname: "visees", options: this._rappel_selection(noms) },
         {
           fieldtype: "HTML", fieldname: "aide",
           options: `<div style="padding:10px 12px;border-radius:9px;background:#e0f2fe;
@@ -533,6 +565,7 @@ class CommandesATraiter {
                     (m.resultats || []).map((x) =>
                       `<div><b>${esc(x.commande)}</b> — ${esc(x.etat)}</div>`).join("")}</div>`,
             });
+            this._vider_selection();
           } else {
             frappe.show_alert({
               message: __("{0} commande(s) — livraison par notre équipe {1}.",
@@ -540,6 +573,7 @@ class CommandesATraiter {
                            m.autorise ? __("autorisée") : __("retirée")]),
               indicator: "green",
             }, 7);
+            this._vider_selection();
           }
           this._load();
         },
@@ -554,6 +588,7 @@ class CommandesATraiter {
     const d = new frappe.ui.Dialog({
       title: __("Annuler {0} commande(s)", [noms.length]),
       fields: [
+        { fieldtype: "HTML", fieldname: "visees", options: this._rappel_selection(noms) },
         {
           fieldtype: "HTML", fieldname: "avert",
           options: `<div style="padding:10px 12px;border-radius:9px;background:#fef3c7;
@@ -585,7 +620,7 @@ class CommandesATraiter {
                 message: (r.message || []).map((x) =>
                   `<div><b>${esc(x.commande)}</b> — ${esc(x.etat)}</div>`).join(""),
               });
-              this.selection.clear();
+              this._vider_selection();
               this._load();
             },
           })
