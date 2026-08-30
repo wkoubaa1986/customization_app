@@ -93,6 +93,32 @@ def _engage(codes):
     return {l.item_code: flt(l.reste) for l in lignes}
 
 
+def _secteurs(noms):
+    """{commande: (secteur, adresse)} — le secteur vient de l'ADRESSE DE
+    LIVRAISON (celle où le technicien se déplace), la facturation en repli.
+
+    C'est la même sectorisation que le portail de rendez-vous
+    (`Address.custom_secteur`) : une commande à traiter et un RDV parlent donc
+    du même découpage, sinon on trierait la tournée sur deux cartes.
+    """
+    out = {}
+    if not noms:
+        return out
+    commandes = frappe.get_all(
+        "Sales Order", filters={"name": ["in", noms]},
+        fields=["name", "shipping_address_name", "customer_address"],
+        limit_page_length=0)
+    adresses = {c.shipping_address_name or c.customer_address for c in commandes}
+    adresses.discard(None)
+    secteurs = {a.name: a.custom_secteur for a in frappe.get_all(
+        "Address", filters={"name": ["in", list(adresses)]},
+        fields=["name", "custom_secteur"], limit_page_length=0)} if adresses else {}
+    for c in commandes:
+        adresse = c.shipping_address_name or c.customer_address
+        out[c.name] = (secteurs.get(adresse) or "", adresse or "")
+    return out
+
+
 def _reste_a_livrer(noms):
     """{commande: {article: reste à livrer}} — une commande soldée ne manque de rien."""
     out = {}
@@ -156,13 +182,23 @@ def get_filtres():
     statuts = frappe.db.sql_list(
         """SELECT DISTINCT status FROM `tabSales Order`
            WHERE transaction_date >= %s ORDER BY status""", (DEPUIS_DEFAUT,))
-    return {"statuts": statuts, "depuis_defaut": DEPUIS_DEFAUT}
+    # Les secteurs réellement portés par les adresses des commandes de la
+    # période — pas la table théorique : on ne propose pas un filtre vide.
+    secteurs = frappe.db.sql_list(
+        """SELECT DISTINCT a.custom_secteur
+           FROM `tabSales Order` so
+           JOIN `tabAddress` a
+             ON a.name = COALESCE(so.shipping_address_name, so.customer_address)
+           WHERE so.transaction_date >= %s AND IFNULL(a.custom_secteur, '') != ''
+           ORDER BY a.custom_secteur""", (DEPUIS_DEFAUT,))
+    return {"statuts": statuts, "secteurs": secteurs,
+            "depuis_defaut": DEPUIS_DEFAUT}
 
 
 @frappe.whitelist()
 def get_commandes(depuis=None, jusqu_a=None, recherche=None, statut=None,
                   origine=None, dispo=None, anomalie=None, tache=None,
-                  tri=None, start=0, page_length=PAGE_LENGTH):
+                  secteur=None, tri=None, start=0, page_length=PAGE_LENGTH):
     """L'arriéré filtré. Tout est calculé sur l'ENSEMBLE puis découpé en pages :
     un filtre « article manquant » doit porter sur toutes les commandes, pas
     seulement sur celles de la page affichée."""
@@ -176,6 +212,7 @@ def get_commandes(depuis=None, jusqu_a=None, recherche=None, statut=None,
     taches = _taches(noms)
     bordereaux = _bordereaux(noms)
 
+    secteurs = _secteurs(noms)
     codes = {a["code"] for lot in articles.values() for a in lot}
     contexte = (_stock(codes), _engage(codes), _articles_stockes(codes),
                 _reste_a_livrer(noms))
@@ -199,6 +236,7 @@ def get_commandes(depuis=None, jusqu_a=None, recherche=None, statut=None,
             "telephone": (l.contact_mobile or l.contact_phone
                           or (tel_client.get(l.customer) or "").split("\n")[0].strip()),
             "adresse": (l.shipping_address or l.address_display or "").replace("<br>", ", "),
+            "secteur": secteurs.get(l.name, ("", ""))[0],
             "ttc": flt(l.grand_total, 3),
             "devise": l.currency or "TND",
             "articles": lot,
@@ -213,8 +251,8 @@ def get_commandes(depuis=None, jusqu_a=None, recherche=None, statut=None,
             "web": bool(l.woocommerce_id),
         })
 
-    out = _trier(_filtrer(out, recherche, statut, origine, dispo, anomalie, tache),
-                 tri)
+    out = _trier(_filtrer(out, recherche, statut, origine, dispo, anomalie,
+                          tache, secteur), tri)
     total = len(out)
     page = out[start:start + page_length] if page_length else out
     return {
@@ -241,9 +279,16 @@ def _trier(lignes, tri):
     return lignes
 
 
-def _filtrer(lignes, recherche, statut, origine, dispo, anomalie, tache):
+def _filtrer(lignes, recherche, statut, origine, dispo, anomalie, tache,
+             secteur=None):
     def garde(c):
         if statut and c["statut"] != statut:
+            return False
+        # « — sans secteur » : les adresses jamais sectorisées, qu'on veut
+        # pouvoir isoler pour les corriger.
+        if secteur == "__vide__" and c["secteur"]:
+            return False
+        if secteur and secteur != "__vide__" and c["secteur"] != secteur:
             return False
         if origine == "web" and not c["web"]:
             return False

@@ -43,6 +43,8 @@ class CommandesATraiter {
         const m = r.message || {};
         $("#ct-statut").append(
           (m.statuts || []).map((s) => `<option value="${s}">${s}</option>`).join(""));
+        $("#ct-secteur").append(
+          (m.secteurs || []).map((s) => `<option value="${s}">${s}</option>`).join(""));
         $("#ct-depuis").val(m.depuis_defaut || "2026-07-01");
         $("#ct-jusqua").val(frappe.datetime.get_today());
         this._load();
@@ -60,6 +62,7 @@ class CommandesATraiter {
       dispo: $("#ct-dispo").val() || "",
       anomalie: $("#ct-anomalie").val() || "",
       tache: $("#ct-tache").val() || "",
+      secteur: $("#ct-secteur").val() || "",
       tri: $("#ct-tri").val() || "date_asc",
     };
   }
@@ -71,13 +74,13 @@ class CommandesATraiter {
       timer = setTimeout(() => { this.start = 0; this._load(); }, 400);
     });
     ["#ct-depuis", "#ct-jusqua", "#ct-statut", "#ct-origine", "#ct-dispo",
-     "#ct-anomalie", "#ct-tache", "#ct-tri"].forEach((sel) =>
+     "#ct-anomalie", "#ct-tache", "#ct-secteur", "#ct-tri"].forEach((sel) =>
       $(sel).on("change", () => { this.start = 0; this._load(); }));
 
     $("#ct-clear").on("click", () => {
       $("#ct-search").val("");
-      ["#ct-statut", "#ct-origine", "#ct-dispo", "#ct-anomalie", "#ct-tache"]
-        .forEach((s) => $(s).val(""));
+      ["#ct-statut", "#ct-origine", "#ct-dispo", "#ct-anomalie", "#ct-tache",
+       "#ct-secteur"].forEach((s) => $(s).val(""));
       this.start = 0;
       this._load();
     });
@@ -175,7 +178,10 @@ class CommandesATraiter {
             <div class="ct-sub">${c.telephone
               ? `📞 <a href="tel:${esc(c.telephone)}">${esc(c.telephone)}</a>`
               : "sans numéro"}</div></td>
-        <td class="ct-adr">${esc(c.adresse || "—")}</td>
+        <td class="ct-adr">${esc(c.adresse || "—")}
+            <div>${c.secteur
+              ? `<span class="ct-badge b-info">📍 ${esc(c.secteur)}</span>`
+              : `<span class="ct-badge b-warn">📍 sans secteur</span>`}</div></td>
         <td>${articles}</td>
         <td>${taches}</td>
         <td>${c.anomalie ? `<span class="ct-badge b-ko">${esc(c.anomalie)}</span>` : ""}
