@@ -512,6 +512,50 @@
   let ia_historique = [];
   let ia_action_courante = null;
 
+  // Passer de la livraison à l'installation : on MONTRE le nouveau montant,
+  // puis on attend un « oui » explicite. Le prix change, ça ne se fait pas
+  // dans le dos du client.
+  async function ia_proposer_conversion(commande) {
+    let a;
+    try {
+      a = await appeler("installation_apercu", { jeton, commande }, null);
+    } catch (e) { $("ia-fil").innerHTML += ia_ligne("assistant", e.message); return; }
+    $("ia-fil").innerHTML += `<div class="ia-bulle ia-lui" style="display:block;margin:7px 0">
+        <b>Installation au lieu de la livraison</b><br>
+        Commande ${echapper(a.commande)}<br>
+        − Livraison : ${a.livraison_retiree} ${echapper(a.devise)}<br>
+        + ${echapper(a.libelle_installation)} : ${a.prix_installation} ${echapper(a.devise)}<br>
+        <b>Nouveau total : ${a.nouveau_total} ${echapper(a.devise)}</b>
+        <span style="color:#64748b">(au lieu de ${a.ancien_total})</span><br>
+        Règlement : ${echapper(a.termes_apres)}
+        <div class="ia-suggestions">
+          <button type="button" class="ia-confirmer-conv" data-cmd="${echapper(a.commande)}">✅ Je confirme</button>
+        </div></div>`;
+    $("ia-fil").scrollTop = $("ia-fil").scrollHeight;
+  }
+
+  async function ia_confirmer_conversion(commande) {
+    try {
+      const r = await appeler("installation_confirmer", { jeton, commande }, null);
+      $("ia-fil").innerHTML += ia_ligne("assistant",
+        "C'est fait : votre commande " + r.commande + " passe en installation, "
+        + "nouveau total " + r.nouveau_total + " " + r.devise + " (règlement : "
+        + (r.termes || "—") + "). Un e-mail de confirmation vous a été envoyé. "
+        + "Choisissons maintenant votre créneau.");
+      // La commande a changé : on rafraîchit la liste des commandes affichée.
+      const cible = (seance.commandes || []).find((c) => c.name === commande);
+      if (cible) cible.grand_total = r.nouveau_total;
+      rendre_commandes_installables();
+      ia_demander_texte("Je veux planifier l'installation de ma commande " + commande);
+    } catch (e) { $("ia-fil").innerHTML += ia_ligne("assistant", e.message); }
+    $("ia-fil").scrollTop = $("ia-fil").scrollHeight;
+  }
+
+  function ia_demander_texte(texte) {
+    $("ia-question").value = texte;
+    ia_demander();
+  }
+
   async function ia_reserver(date, demi) {
     const a = ia_action_courante || {};
     try {
@@ -573,6 +617,7 @@
       ia_historique.push({ role: "assistant", content: res.reponse });
       fil.innerHTML += ia_ligne("assistant", res.reponse);
       if (res.action) ia_appliquer(res.action, res.creneaux || []);
+      if (res.conversion) await ia_proposer_conversion(res.conversion);
     } catch (e) {
       $("ia-attente") && $("ia-attente").remove();
       fil.innerHTML += ia_ligne("assistant", e.message);
@@ -640,10 +685,27 @@
     $("ia-ouvrir").style.display = ouvrir ? "none" : "block";
     if (!ouvrir) return;
     if (!$("ia-fil").innerHTML) {
-      $("ia-fil").innerHTML = ia_ligne("assistant",
-        "Bonjour " + (seance.nom || "") + " ! Posez-moi votre question : type "
-        + "d'intervention, tarifs, délais, ou comment déplacer un rendez-vous. "
-        + "Je peux aussi remplir l'écran pour vous.") + ia_suggestions();
+      // L'assistant ouvre sur CE QUI CONCERNE ce client : une commande en
+      // préparation sans intervention prévue est la première chose à traiter.
+      const enpreparation = (seance.commandes || []).filter((c) => c.sans_tache);
+      let accueil = "Bonjour " + (seance.nom || "") + " ! ";
+      let sugg = ia_suggestions();
+      if (enpreparation.length) {
+        const c = enpreparation[0];
+        accueil += "Je vois que votre commande " + c.name + " est en préparation"
+          + (enpreparation.length > 1
+              ? " (et " + (enpreparation.length - 1) + " autre(s))" : "")
+          + ". Souhaitez-vous planifier son installation ou sa livraison ?";
+        sugg = `<div class="ia-suggestions">
+            <button type="button" data-sugg="Je veux planifier l'installation de ma commande ${echapper(c.name)}">🔨 Installation</button>
+            <button type="button" data-sugg="Je veux planifier la livraison de ma commande ${echapper(c.name)}">🚚 Livraison</button>
+            <button type="button" data-sugg="Combien ça coûte ?">💰 Les tarifs</button>
+          </div>`;
+      } else {
+        accueil += "Posez-moi votre question : type d'intervention, tarifs, "
+          + "délais, ou comment déplacer un rendez-vous.";
+      }
+      $("ia-fil").innerHTML = ia_ligne("assistant", accueil) + sugg;
     }
     $("ia-question").focus();
   }
@@ -651,6 +713,13 @@
   $("ia-ouvrir").addEventListener("click", () => ia_basculer(true));
   $("ia-fermer").addEventListener("click", () => ia_basculer(false));
   $("ia-fil").addEventListener("click", (e) => {
+    const conv = e.target.closest(".ia-confirmer-conv");
+    if (conv) {
+      if (confirm("Confirmer le nouveau montant et passer en installation ?")) {
+        ia_confirmer_conversion(conv.getAttribute("data-cmd"));
+      }
+      return;
+    }
     const cren = e.target.closest(".ia-creneau");
     if (cren) {
       const quoi = cren.textContent.trim();

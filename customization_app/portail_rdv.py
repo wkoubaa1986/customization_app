@@ -530,6 +530,23 @@ def _ouvertures_par_type(config):
 
 
 @frappe.whitelist(allow_guest=True, methods=["POST"])
+def installation_apercu(jeton, commande):
+    """Ce que deviendrait la commande si la livraison devenait une installation
+    — MONTANT COMPRIS, et sans rien modifier."""
+    from customization_app.portail_rdv_installation import apercu
+
+    return apercu(_session(jeton), commande)
+
+
+@frappe.whitelist(allow_guest=True, methods=["POST"])
+def installation_confirmer(jeton, commande):
+    """Le client a vu le nouveau montant et l'accepte : on modifie la commande."""
+    from customization_app.portail_rdv_installation import appliquer
+
+    return appliquer(_session(jeton), commande)
+
+
+@frappe.whitelist(allow_guest=True, methods=["POST"])
 def assistant(jeton, question, historique=None):
     """L'assistant du portail — la logique vit dans `portail_rdv_assistant`.
     Ce relais garde UNE seule adresse d'API pour tout l'écran client.

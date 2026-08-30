@@ -109,7 +109,14 @@ EXCLUSIVEMENT en JSON, sans texte autour :
             "commande": "<numéro exact d'une de ses commandes>"}}
 Mets "action": null si la demande n'est pas claire. Dans une action, n'utilise
 que des valeurs EXACTEMENT présentes dans les données du client ci-dessous ;
-"commande" n'est utile que pour une Installation ou une Livraison."""
+"commande" n'est utile que pour une Installation ou une Livraison.
+
+REMPLACER UNE LIVRAISON PAR UNE INSTALLATION : si le client veut que nos
+techniciens installent au lieu de se faire livrer, et que sa commande figure
+dans « commandes_convertibles_en_installation », réponds avec
+"conversion": "<numéro de commande>" en plus de "action". L'écran lui montrera
+alors le NOUVEAU MONTANT et lui demandera de confirmer — ne annonce jamais le
+nouveau prix toi-même, tu ne le calcules pas."""
 
 
 MOTS_FR = {"je", "ne", "pas", "le", "la", "les", "un", "une", "mon", "ma", "mes",
@@ -253,6 +260,12 @@ def _contexte(session):
              "intervention_deja_planifiee": not bool(c.sans_tache),
              "livraison_par_notre_equipe": bool(c.get("livraison_equipe"))}
             for c in commandes],
+        # Commandes encore en brouillon PORTANT une livraison : le client peut
+        # demander une installation à la place (le montant change).
+        "commandes_convertibles_en_installation": [
+            c.name for c in commandes if c.docstatus == 0
+            and frappe.db.exists("Sales Order Item",
+                                 {"parent": c.name, "item_code": "Liv"})],
         "commandes_sans_intervention": [
             {"numero": c.name, "date": str(c.transaction_date),
              "total": c.grand_total,
@@ -414,4 +427,10 @@ def demander(jeton, question, historique=None):
         creneaux = _creneaux_pour(session, action)
     except Exception:
         creneaux = []
-    return {"reponse": texte, "action": action, "creneaux": creneaux}
+    # Conversion livraison -> installation : on ne renvoie le numéro que s'il
+    # est RÉELLEMENT convertible ; le calcul du montant se fait à l'écran.
+    conversion = charge.get("conversion")
+    if conversion not in (contexte.get("commandes_convertibles_en_installation") or []):
+        conversion = None
+    return {"reponse": texte, "action": action, "creneaux": creneaux,
+            "conversion": conversion}
