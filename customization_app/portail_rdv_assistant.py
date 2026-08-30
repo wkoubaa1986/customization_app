@@ -47,7 +47,10 @@ ETATS_COMMANDE = {
     "Draft": "en préparation",
     "To Deliver and Bill": "prête, en attente de livraison",
     "To Deliver": "prête, en attente de livraison",
-    "To Bill": "livrée",
+    # « À facturer » = déjà livrée, il ne reste que la facture : pour le client
+    # c'est TERMINÉ (décision 30/08). Dire « en cours » l'inquiéterait pour
+    # rien — et c'est le cas de la très grande majorité des commandes.
+    "To Bill": "terminée",
     "Completed": "terminée",
     "Closed": "clôturée",
 }

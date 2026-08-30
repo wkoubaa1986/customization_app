@@ -1226,6 +1226,17 @@
     });
   }
 
+  // « À facturer » veut dire LIVRÉE : il ne reste que la facture à établir
+  // (décision 30/08). L'afficher « En cours » laissait croire au client qu'on
+  // s'en occupait encore, alors que 1 015 commandes sur 1 052 étaient dans ce
+  // cas — donc déjà honorées.
+  function etat_commande(c) {
+    if (c.status === "Completed" || c.status === "To Bill")
+      return { libelle: "Terminée", classe: "vert" };
+    if (c.docstatus === 0) return { libelle: "En préparation", classe: "gris" };
+    return { libelle: "En attente de livraison", classe: "bleu" };
+  }
+
   function rendre_historique() {
     const dinars = (v) => (Number(v) || 0).toLocaleString("fr-FR",
       { minimumFractionDigits: 3 }) + " DT";
@@ -1236,8 +1247,7 @@
             <div class="sous">${echapper(c.transaction_date)}</div></div>
           <div style="text-align:right">
             <div class="quoi">${dinars(c.grand_total)}</div>
-            <span class="rdv-etat ${c.status === "Completed" ? "vert" : c.docstatus === 0 ? "gris" : "bleu"}">
-              ${c.status === "Completed" ? "Terminée" : c.docstatus === 0 ? "En préparation" : "En cours"}</span>
+            <span class="rdv-etat ${etat_commande(c).classe}">${etat_commande(c).libelle}</span>
           </div>
           <button type="button" class="rdv-fleche" data-cmd="${echapper(c.name)}">▼</button></div>
           <div class="rdv-detail" id="detail-${echapper(c.name)}"></div>`).join("")
