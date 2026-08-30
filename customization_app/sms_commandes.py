@@ -60,6 +60,29 @@ MODELES = [
         ),
     },
     {
+        "cle": "remplacement",
+        "libelle": "Article indisponible — proposer un remplacement",
+        "texte": (
+            "Bonjour {nom_client},\n\n"
+            "L'article {article} de votre commande {commande} n'est "
+            "malheureusement plus disponible.\n"
+            "Nous pouvons vous proposer une alternative equivalente :\n\n"
+            "{signature}"
+        ),
+    },
+    {
+        "cle": "annulation_remplacement",
+        "libelle": "Commande annulée — proposer un remplacement",
+        "texte": (
+            "Bonjour {nom_client},\n\n"
+            "Votre commande {commande} a ete annulee : l'article {article} "
+            "n'est plus disponible et nous ne pouvons pas le reapprovisionner "
+            "dans un delai raisonnable.\n"
+            "Voici ce que nous pouvons vous proposer a la place :\n\n"
+            "{signature}"
+        ),
+    },
+    {
         "cle": "installation_rdv",
         "libelle": "Installation à programmer — choisir un créneau",
         "texte": (

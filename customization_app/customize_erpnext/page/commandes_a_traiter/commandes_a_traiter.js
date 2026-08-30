@@ -305,8 +305,13 @@ class CommandesATraiter {
         const a = connus[code] || {};
         return "- " + (a.article || code) + (a.lien ? "\n  " + a.lien : "");
       });
-      const texte = (d.get_value("message") || "").replace(/\s*$/, "")
-        + "\n\nNous vous proposons en remplacement :\n" + lignes.join("\n");
+      const bloc = lignes.join("\n");
+      const actuel = d.get_value("message") || "";
+      // La liste se glisse AVANT la signature quand il y en a une : sans ça,
+      // les articles proposés tomberaient après « Aqua World & Servicing ».
+      const texte = actuel.includes("{signature}")
+        ? actuel.replace("{signature}", bloc + "\n\n{signature}")
+        : actuel.replace(/\s*$/, "") + "\n\n" + bloc;
       Promise.resolve(d.fields_dict.message.set_value(texte))
         .then(() => this._apercu(d, noms));
     });
