@@ -490,16 +490,23 @@ def _liens_boutique(codes):
 
 
 @frappe.whitelist()
-def chercher_articles(recherche=None, en_stock=1):
-    """Le sélecteur d'articles de remplacement — on ne propose que ce qu'on a.
+def chercher_articles(recherche=None, en_stock=0):
+    """Le sélecteur d'articles de remplacement.
 
     Choix manuel assumé (décision 30/08) : pas de suggestion automatique, c'est
     le magasin qui sait ce qui remplace quoi. Chaque article part avec son LIEN
     BOUTIQUE : le client doit pouvoir voir la photo et le prix de ce qu'on lui
     propose, pas seulement un code article.
+
+    CE QU'ON PEUT PROPOSER (règle 30/08) : n'importe quel article ACTIF qui
+    n'est pas marqué « rupture de stock site web ». C'est ce drapeau qui fait
+    foi, pas la quantité en magasin — c'est lui qui décide de la présence au
+    catalogue en ligne, et proposer un lien vers une fiche retirée du site
+    serait une impasse pour le client. La quantité reste AFFICHÉE, pour
+    décider en connaissance de cause.
     """
     _lecture()
-    conditions = ["i.disabled = 0"]
+    conditions = ["i.disabled = 0", "IFNULL(i.custom_rupture_site_web, 0) = 0"]
     params = {}
     if recherche:
         conditions.append("(i.name LIKE %(r)s OR i.item_name LIKE %(r)s)")

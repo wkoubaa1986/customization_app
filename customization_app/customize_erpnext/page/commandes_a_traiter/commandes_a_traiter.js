@@ -288,11 +288,11 @@ class CommandesATraiter {
         { fieldtype: "Section Break", label: __("Articles de remplacement à proposer") },
         {
           fieldtype: "MultiSelectPills", fieldname: "remplacements",
-          label: __("Articles en stock"),
-          description: __("Choix manuel — seuls les articles ayant du stock sont proposés."),
+          label: __("Article de remplacement"),
+          description: __("Tout article actif non marqué « rupture de stock site web ». La quantité en magasin est indiquée."),
           get_data: (txt) => frappe.call({
             method: "customization_app.commandes_a_traiter.chercher_articles",
-            args: { recherche: txt, en_stock: 1 },
+            args: { recherche: txt },
           }).then((r) => {
             // On garde le détail (nom, lien boutique) de côté : la pastille ne
             // porte que le code, mais le message doit contenir le vrai nom et
@@ -301,7 +301,8 @@ class CommandesATraiter {
             (r.message || []).forEach((a) => { this._articles_connus[a.code] = a; });
             return (r.message || []).map((a) => ({
               value: a.code,
-              description: `${a.article} — stock ${a.stock}${a.lien ? " · 🔗 site" : ""}`,
+              description: `${a.article} — stock ${a.stock}${a.lien ? " · 🔗 site" : ""}`
+                + (a.stock <= 0 ? " · ⚠️ rien en magasin" : ""),
             }));
           }),
         },
