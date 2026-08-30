@@ -1,0 +1,27 @@
+{
+ "content": null,
+ "creation": "2026-08-30 10:00:00.000000",
+ "docstatus": 0,
+ "doctype": "Page",
+ "icon": "list",
+ "idx": 0,
+ "modified": "2026-08-30 10:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "commandes-a-traiter",
+ "owner": "Administrator",
+ "page_name": "commandes-a-traiter",
+ "roles": [
+  {
+   "role": "System Manager"
+  },
+  {
+   "role": "Sales User"
+  }
+ ],
+ "script": null,
+ "standard": "Yes",
+ "style": null,
+ "system_page": 0,
+ "title": "Commandes à traiter"
+}

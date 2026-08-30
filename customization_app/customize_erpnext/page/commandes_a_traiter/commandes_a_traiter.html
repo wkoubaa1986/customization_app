@@ -1,0 +1,135 @@
+<div class="ct-page">
+  <style>
+    .ct-page { padding: 12px 16px; }
+    .ct-card { background: var(--card-bg,#fff); border: 1px solid var(--border-color,#e4e8ee);
+               border-radius: 12px; padding: 12px 14px; margin-bottom: 12px;
+               box-shadow: 0 1px 3px rgba(0,0,0,.05); }
+    .ct-filters { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: flex-end; }
+    .ct-field { display: flex; flex-direction: column; gap: 3px; }
+    .ct-field label { margin: 0; font-size: 11px; font-weight: 600; color: var(--text-muted,#6b7280);
+                      text-transform: uppercase; letter-spacing: .3px; }
+    .ct-field .form-control { width: 170px; height: 30px; font-size: 12.5px; }
+    .ct-field.large .form-control { width: 260px; }
+
+    .ct-kpis { display: flex; flex-wrap: wrap; gap: 10px; }
+    .ct-kpi { flex: 1 1 130px; border: 1px solid var(--border-color,#e4e8ee); border-radius: 10px;
+              padding: 8px 12px; background: var(--bg-light-gray,#f8fafc); }
+    .ct-kpi .v { font-size: 19px; font-weight: 700; line-height: 1.1; }
+    .ct-kpi .l { font-size: 11px; color: var(--text-muted,#6b7280); text-transform: uppercase;
+                 letter-spacing: .3px; font-weight: 600; }
+    .ct-kpi.alerte .v { color: #b02a37; }
+
+    .ct-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .ct-actions .compte { font-size: 12.5px; font-weight: 600; margin-right: 4px; }
+
+    .ct-table-wrap { overflow-x: auto; }
+    table.ct-tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+    table.ct-tbl th { text-align: left; padding: 7px 9px; background: var(--bg-light-gray,#f6f8fa);
+                      color: #6b7280; font-weight: 600; font-size: 10.5px; text-transform: uppercase;
+                      white-space: nowrap; border-bottom: 1px solid var(--border-color,#e4e8ee); }
+    table.ct-tbl td { padding: 8px 9px; border-bottom: 1px solid var(--border-color,#eef1f5);
+                      vertical-align: top; }
+    table.ct-tbl tr:hover > td { background: rgba(0,0,0,.02); }
+    table.ct-tbl tr.manque > td { background: rgba(220,53,69,.045); }
+    table.ct-tbl td.num { text-align: right; white-space: nowrap; }
+
+    .ct-cde { font-weight: 700; white-space: nowrap; }
+    .ct-sub { color: var(--text-muted,#6b7280); font-size: 11px; }
+    .ct-adr { max-width: 220px; font-size: 11.5px; color: #475569; }
+
+    .ct-art { display: flex; align-items: baseline; gap: 6px; padding: 1px 0; white-space: nowrap; }
+    .ct-art .nom { max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
+    .ct-badge { display: inline-block; padding: 1px 6px; border-radius: 999px; font-size: 10.5px;
+                font-weight: 700; white-space: nowrap; }
+    .b-ok   { background: #dcfce7; color: #166534; }
+    .b-ko   { background: #fee2e2; color: #b02a37; }
+    .b-svc  { background: #eef2f7; color: #64748b; }
+    .b-info { background: #e0f2fe; color: #075985; }
+    .b-warn { background: #fef3c7; color: #92400e; }
+    .b-web  { background: #ede9fe; color: #5b21b6; }
+
+    .ct-vide { padding: 26px; text-align: center; color: var(--text-muted,#6b7280); }
+    .ct-pager { display: flex; align-items: center; gap: 8px; font-size: 12.5px;
+                color: var(--text-muted,#6b7280); margin-left: auto; }
+  </style>
+
+  <div class="ct-card">
+    <div class="ct-filters">
+      <div class="ct-field large">
+        <label>Recherche</label>
+        <input type="text" class="form-control" id="ct-search"
+               placeholder="commande, client, téléphone, article…">
+      </div>
+      <div class="ct-field"><label>Du</label>
+        <input type="date" class="form-control" id="ct-depuis"></div>
+      <div class="ct-field"><label>Au</label>
+        <input type="date" class="form-control" id="ct-jusqua"></div>
+      <div class="ct-field"><label>Statut</label>
+        <select class="form-control" id="ct-statut"><option value="">Tous</option></select></div>
+      <div class="ct-field"><label>Origine</label>
+        <select class="form-control" id="ct-origine">
+          <option value="">Toutes</option>
+          <option value="web">🌐 Web</option>
+          <option value="magasin">🏪 Magasin</option>
+        </select></div>
+      <div class="ct-field"><label>Disponibilité</label>
+        <select class="form-control" id="ct-dispo">
+          <option value="">Toutes</option>
+          <option value="manquant">❌ Rupture réelle</option>
+          <option value="negatif">🩺 Stock négatif (à corriger)</option>
+          <option value="complet">✅ Tout en stock</option>
+        </select></div>
+      <div class="ct-field"><label>Anomalie</label>
+        <select class="form-control" id="ct-anomalie">
+          <option value="">Toutes</option>
+          <option value="avec">Avec anomalie</option>
+          <option value="sans">Sans anomalie</option>
+        </select></div>
+      <div class="ct-field"><label>Tâche</label>
+        <select class="form-control" id="ct-tache">
+          <option value="">Toutes</option>
+          <option value="sans">Sans tâche</option>
+          <option value="avec">Avec tâche</option>
+        </select></div>
+      <button class="btn btn-sm btn-default" id="ct-clear">✕ Effacer</button>
+    </div>
+  </div>
+
+  <div class="ct-card ct-kpis" id="ct-kpis"></div>
+
+  <div class="ct-card">
+    <div class="ct-actions">
+      <span class="compte" id="ct-compte">Aucune commande sélectionnée</span>
+      <button class="btn btn-sm btn-primary" id="ct-msg">📨 Message / remplacement</button>
+      <button class="btn btn-sm btn-default" id="ct-rdv">📅 Lien de rendez-vous</button>
+      <button class="btn btn-sm btn-danger" id="ct-annuler">❌ Annuler</button>
+      <span class="ct-pager">
+        <button class="btn btn-xs btn-default" id="ct-prev">◀</button>
+        <span id="ct-range">—</span>
+        <button class="btn btn-xs btn-default" id="ct-next">▶</button>
+      </span>
+    </div>
+  </div>
+
+  <div class="ct-card">
+    <div class="ct-table-wrap">
+      <table class="ct-tbl">
+        <thead>
+          <tr>
+            <th style="width:28px"><input type="checkbox" id="ct-all"></th>
+            <th>Commande</th>
+            <th>Client</th>
+            <th>Adresse</th>
+            <th>Articles &amp; stock</th>
+            <th>Tâches</th>
+            <th>Anomalie</th>
+            <th class="num">TTC</th>
+          </tr>
+        </thead>
+        <tbody id="ct-body">
+          <tr><td colspan="8" class="ct-vide">Chargement…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
