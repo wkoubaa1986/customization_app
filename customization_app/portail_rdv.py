@@ -254,6 +254,11 @@ def _envoyer_sms(numero, texte):
     (constaté le 29/08/2026). En developer_mode on SIMULE, sauf
     `sms_groupe_reel_en_dev` posé dans site_config.json.
     """
+    # Une séance ouverte par le magasin (portail_rdv_agent) peut porter un
+    # client SANS téléphone : il ne reçoit alors pas de SMS, et c'est tout —
+    # la passerelle, elle, refuserait un destinataire vide.
+    if not numero:
+        return
     if cint(frappe.conf.get("developer_mode")) \
             and not cint(frappe.conf.get("sms_groupe_reel_en_dev")):
         _journal_otp(numero, "SIMULÉ (dev) — %s" % texte[:100])
@@ -262,6 +267,54 @@ def _envoyer_sms(numero, texte):
         _send_sms_with_fallback,
     )
     _send_sms_with_fallback([numero], texte)
+
+
+def _envoyer_email(client, sujet, corps_html):
+    """Le même message que le SMS, en e-mail — quand le client a une adresse.
+
+    POURQUOI LES DEUX. Le SMS est court et se perd dans un fil ; l'e-mail garde
+    le détail et se retrouve. Depuis que l'inscription exige une adresse
+    (30/08), la plupart des clients en ont une : ne pas s'en servir pour une
+    confirmation de rendez-vous serait un oubli.
+
+    ⛔ MÊME GARDE-FOU DEV QUE LE SMS : la base dev porte les VRAIES adresses des
+    clients et la VRAIE configuration SMTP.
+    """
+    try:
+        from customization_app.Maintenance.relance_maintenance_sms import emails_du_client
+
+        adresses = emails_du_client(client)
+        if not adresses:
+            return
+        if cint(frappe.conf.get("developer_mode")) \
+                and not cint(frappe.conf.get("sms_groupe_reel_en_dev")):
+            _journal_otp(", ".join(adresses), "E-MAIL SIMULÉ (dev) — %s" % sujet[:80])
+            return
+        frappe.sendmail(recipients=adresses, subject=sujet, message=corps_html,
+                        now=False, reference_doctype="Customer", reference_name=client)
+    except Exception:
+        # Un e-mail de confirmation qui échoue ne doit JAMAIS faire échouer la
+        # réservation : le rendez-vous est déjà au calendrier.
+        frappe.log_error(frappe.get_traceback(), "portail_rdv e-mail confirmation")
+
+
+def _prevenir(session, sms, sujet, corps_html):
+    """Confirme au client par SMS ET par e-mail — jamais au détriment de l'acte."""
+    try:
+        _envoyer_sms(session.get("telephone"), sms)
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "portail_rdv SMS")
+    _envoyer_email(session.get("client"), sujet, corps_html)
+
+
+def _corps_email(titre, lignes):
+    """Un e-mail de service sobre : un titre, des lignes, la signature."""
+    corps = "<p style='font-size:15px'><b>%s</b></p>" % frappe.utils.escape_html(titre)
+    corps += "".join("<p style='margin:4px 0'>%s</p>" % l for l in lignes)
+    corps += ("<p style='margin-top:16px;font-size:12px;color:#64748b'>"
+              "Aqua World &amp; Servicing — ce message vous est envoyé "
+              "automatiquement après votre rendez-vous en ligne.</p>")
+    return corps
 
 
 def _journal_otp(numero, evenement):
@@ -444,13 +497,19 @@ def choisir_client(jeton_choix, client):
     return _ouvrir_session(donnees["telephone"], entree)
 
 
-def _ouvrir_session(numero, entree):
+def _ouvrir_session(numero, entree, agent=None):
     """Ouvre la session du portail pour UNE fiche client et rend tout ce que
-    l'écran doit savoir (types, commandes, adresses, historique, tarifs)."""
+    l'écran doit savoir (types, commandes, adresses, historique, tarifs).
+
+    `agent` : nom de l'employé du magasin qui réserve À LA PLACE du client
+    (portail_rdv_agent). Il ne change AUCUNE règle — il est seulement inscrit
+    sur la tâche, pour qu'on sache six mois plus tard que ce rendez-vous a été
+    pris au téléphone et par qui.
+    """
     jeton = frappe.generate_hash(length=32)
     _cache().set_value("rdv_session:%s" % jeton,
                        {"client": entree["client"], "nom": entree["nom"],
-                        "telephone": numero},
+                        "telephone": numero, "agent": agent},
                        expires_in_sec=SESSION_TTL)
 
     commandes = _commandes_du_client(entree["client"])
@@ -652,13 +711,17 @@ def deplacer_rdv(jeton, tache, date, demi_journee):
     }).insert(ignore_permissions=True)
     frappe.db.commit()
 
-    try:
-        _envoyer_sms(session["telephone"],
-                     "Aqua World : votre rendez-vous %s est déplacé au %s (%s). "
-                     "Nous vous confirmerons l'heure exacte." % (
-                         type_i, jour.strftime("%d/%m/%Y"), libelle_demi))
-    except Exception:
-        frappe.log_error(frappe.get_traceback(), "portail_rdv SMS déplacement")
+    _prevenir(
+        session,
+        "Aqua World : votre rendez-vous %s est déplacé au %s (%s). "
+        "Nous vous confirmerons l'heure exacte." % (
+            type_i, jour.strftime("%d/%m/%Y"), libelle_demi),
+        "Votre rendez-vous %s est déplacé" % type_i,
+        _corps_email("Votre rendez-vous a été déplacé 🔁", [
+            "Intervention : <b>%s</b>" % frappe.utils.escape_html(type_i),
+            "Ancienne date : %s" % frappe.utils.escape_html(str(ancien)),
+            "Nouvelle date : <b>%s</b> — %s" % (jour.strftime("%d/%m/%Y"), libelle_demi),
+        ]))
 
     return {"tache": doc.name, "date": str(jour), "demi_journee": libelle_demi,
             "type": type_i}
@@ -690,12 +753,15 @@ def annuler_rdv(jeton, tache):
     }).insert(ignore_permissions=True)
     frappe.db.commit()
 
-    try:
-        _envoyer_sms(session["telephone"],
-                     "Aqua World : votre rendez-vous %s est bien annulé. "
-                     "Vous pouvez en reprendre un quand vous le souhaitez." % resume)
-    except Exception:
-        frappe.log_error(frappe.get_traceback(), "portail_rdv SMS annulation")
+    _prevenir(
+        session,
+        "Aqua World : votre rendez-vous %s est bien annulé. "
+        "Vous pouvez en reprendre un quand vous le souhaitez." % resume,
+        "Votre rendez-vous est annulé",
+        _corps_email("Votre rendez-vous est annulé ❌", [
+            frappe.utils.escape_html(resume),
+            "Vous pouvez en reprendre un quand vous le souhaitez.",
+        ]))
 
     return {"annule": tache,
             "rendez_vous": _rendez_vous_du_client(session["client"])}
@@ -998,7 +1064,12 @@ def reserver(jeton, type_intervention, date, demi_journee, adresse=None,
             "google_map": doc_adresse.get("custom_lien_google_map"),
             # La demi-journée choisie DOIT se lire sur la tâche : l'heure posée
             # n'est qu'un point d'ancrage au calendrier, pas une promesse.
-            "subject": _("RDV portail — {0} ({1}){2}").format(
+            # Qui a pris le rendez-vous se lit sur la tâche : « portail » quand
+            # c'est le client lui-même, le nom de l'employé quand c'est le
+            # magasin qui a réservé pour lui au téléphone.
+            "subject": _("RDV {0} — {1} ({2}){3}").format(
+                ("magasin (%s)" % session["agent"]) if session.get("agent")
+                else "portail",
                 type_intervention, libelle_demi,
                 (" — " + str(note).strip()[:200]) if note and str(note).strip() else ""),
         })
@@ -1012,13 +1083,19 @@ def reserver(jeton, type_intervention, date, demi_journee, adresse=None,
                      update_modified=False)
         frappe.db.commit()
 
-    try:
-        _envoyer_sms(session["telephone"],
-                     "Aqua World : votre rendez-vous %s du %s (%s) est enregistré. "
-                     "Nous vous confirmerons l'heure exacte." % (
-                         type_intervention, jour.strftime("%d/%m/%Y"), libelle_demi))
-    except Exception:
-        frappe.log_error(frappe.get_traceback(), "portail_rdv SMS confirmation")
+    _prevenir(
+        session,
+        "Aqua World : votre rendez-vous %s du %s (%s) est enregistré. "
+        "Nous vous confirmerons l'heure exacte." % (
+            type_intervention, jour.strftime("%d/%m/%Y"), libelle_demi),
+        "Votre rendez-vous %s du %s" % (type_intervention, jour.strftime("%d/%m/%Y")),
+        _corps_email("Votre rendez-vous est enregistré ✅", [
+            "Intervention : <b>%s</b>" % frappe.utils.escape_html(type_intervention),
+            "Date : <b>%s</b> — %s" % (jour.strftime("%d/%m/%Y"), libelle_demi),
+            "Adresse : %s" % frappe.utils.escape_html(", ".join(filter(None, [
+                doc_adresse.address_line1, doc_adresse.city]))),
+            "Nous vous confirmerons l'heure exacte la veille.",
+        ]))
 
     return {"tache": tache.name, "date": str(jour), "demi_journee": libelle_demi,
             "type": type_intervention}

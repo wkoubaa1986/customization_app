@@ -160,6 +160,31 @@
   <div class="rdv-sous">Prise de rendez-vous en ligne</div>
 
   <div class="rdv-carte">
+    <!-- Mode magasin : le rendez-vous est pris PAR un employé POUR un client.
+         Le bandeau reste visible partout — on ne doit jamais croire qu'on
+         regarde l'écran d'un client. -->
+    <div id="agent-bandeau" style="display:none;margin-bottom:12px;padding:10px 12px;
+         border-radius:10px;background:#fef3c7;color:#92400e;font-size:12.5px;
+         border:1px solid #fcd34d">
+      <div id="agent-texte"></div>
+      <button type="button" class="rdv-btn secondaire" id="agent-changer"
+              style="max-width:none;margin-top:8px;display:none">🔎 Changer de client</button>
+    </div>
+
+    <!-- Étape magasin : quel client ? (nom ou téléphone) -->
+    <div class="rdv-etape" id="etape-agent">
+      <h2>Pour quel client ? 🔎</h2>
+      <p style="font-size:13px;color:#64748b;margin:4px 0 10px">
+        Cherchez par nom ou par numéro de téléphone, puis prenez le rendez-vous
+        comme le ferait le client lui-même.
+      </p>
+      <label>Nom ou téléphone</label>
+      <input type="text" id="agent-recherche" maxlength="60"
+             placeholder="Ex. : Ben Salah, ou 98000000">
+      <button class="rdv-btn" id="agent-chercher">Chercher</button>
+      <div id="agent-resultats" style="margin-top:10px"></div>
+    </div>
+
     <!-- Étape 1 : téléphone -->
     <div class="rdv-etape courante" id="etape-tel">
       <h2>Votre numéro de téléphone</h2>
@@ -336,7 +361,10 @@
 <script>
 (function () {
   const API = "/api/method/customization_app.portail_rdv.";
+  const API_AGENT = "/api/method/customization_app.portail_rdv_agent.";
   let jeton = null, seance = null, type_choisi = null, creneau_choisi = null;
+  // Mode magasin : jeton d'agent lu dans l'URL. Nul pour un vrai client.
+  let jeton_agent = null, agent_commande = null;
 
   const $ = (id) => document.getElementById(id);
   const montrer = (etape) => {
@@ -347,7 +375,7 @@
   const message = (t) => { const e = $("rdv-erreur"); e.textContent = t || ""; e.style.display = t ? "block" : "none"; };
   const info = (t) => { const e = $("rdv-info"); e.textContent = t || ""; e.style.display = t ? "block" : "none"; };
 
-  async function appeler(methode, corps, bouton) {
+  async function appeler(methode, corps, bouton, base) {
     message(null);
     if (bouton) bouton.disabled = true;
     try {
@@ -358,7 +386,7 @@
       if (window.frappe && frappe.csrf_token && frappe.csrf_token !== "None") {
         entetes["X-Frappe-CSRF-Token"] = frappe.csrf_token;
       }
-      const r = await fetch(API + methode, {
+      const r = await fetch((base || API) + methode, {
         method: "POST",
         headers: entetes,
         body: JSON.stringify(corps),
@@ -404,7 +432,102 @@
     rendre_adresses();
     rendre_historique();
     if (seance.assistant) $("ia-bloc").style.display = "block";
+    rendre_bandeau_agent();
     montrer("etape-rdv");
+  }
+
+  // ── Mode magasin : l'employé réserve à la place du client, sans OTP ───────
+  //
+  // ⚠️ AUCUNE RÈGLE N'EST ALLÉGÉE ICI. Le seul écart avec le parcours client
+  // est l'entrée : la preuve d'identité n'est plus le code SMS mais la session
+  // Desk de l'employé, vérifiée à CHAQUE appel côté serveur. Tout le reste —
+  // types offerts, capacité, secteurs, délais, confirmation SMS et e-mail au
+  // client — est exactement le parcours public.
+
+  function rendre_bandeau_agent() {
+    if (!jeton_agent) return;
+    const a = (seance && seance.agent) || bandeau_agent_entete || {};
+    const bloc = $("agent-bandeau");
+    bloc.style.display = "block";
+    const qui = seance
+      ? `Vous réservez pour <b>${echapper(seance.nom || "")}</b>`
+        + (seance.telephone ? ` — ☎ ${echapper(seance.telephone)}` : " — <i>sans téléphone au dossier</i>")
+      : "Choisissez le client pour lequel vous réservez";
+    const cmd = a.commande
+      ? `<div style="margin-top:4px">🧾 Commande <b>${echapper(a.commande)}</b>${
+           a.type ? ` — intervention attendue : <b>${echapper(a.type)}</b>` : ""}</div>`
+      : "";
+    $("agent-texte").innerHTML = `🏪 <b>Mode magasin</b> — ${qui}.${cmd}
+      <div style="margin-top:4px;font-size:11.5px">Le client recevra le SMS et
+      l'e-mail de confirmation comme s'il avait réservé lui-même.</div>`;
+    $("agent-changer").style.display = seance ? "block" : "none";
+  }
+
+  let bandeau_agent_entete = null;
+
+  function rendre_agent_resultats(liste) {
+    const zone = $("agent-resultats");
+    zone.innerHTML = "";
+    if (!liste.length) {
+      zone.innerHTML = `<div class="rdv-vide">Aucun client trouvé.</div>`;
+      return;
+    }
+    liste.forEach((c) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "rdv-btn secondaire";
+      b.style.cssText = "display:block;width:100%;max-width:none;margin:6px 0;text-align:left";
+      b.innerHTML = `👤 ${echapper(c.nom)}${
+        c.telephone ? `<div style="font-size:11.5px;color:#64748b">☎ ${echapper(c.telephone)}</div>` : ""}`;
+      b.addEventListener("click", async () => {
+        try {
+          ouvrir_seance(await appeler("session",
+            { jeton: jeton_agent, client: c.client }, b, API_AGENT));
+        } catch (e) { message(e.message); }
+      });
+      zone.appendChild(b);
+    });
+  }
+
+  async function agent_chercher(bouton) {
+    try {
+      rendre_agent_resultats(await appeler("chercher",
+        { jeton: jeton_agent, recherche: $("agent-recherche").value }, bouton, API_AGENT));
+    } catch (e) { message(e.message); }
+  }
+
+  $("agent-chercher").addEventListener("click", (ev) => agent_chercher(ev.currentTarget));
+  $("agent-recherche").addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") agent_chercher($("agent-chercher"));
+  });
+  $("agent-changer").addEventListener("click", () => {
+    seance = null; jeton = null;
+    $("agent-resultats").innerHTML = "";
+    rendre_bandeau_agent();
+    montrer("etape-agent");
+    $("agent-recherche").focus();
+  });
+
+  async function demarrer_agent(jeton_url) {
+    jeton_agent = jeton_url;
+    try {
+      const res = await appeler("contexte", { jeton: jeton_agent }, null, API_AGENT);
+      bandeau_agent_entete = res.agent || {};
+      agent_commande = bandeau_agent_entete.commande || null;
+      if (res.choisir) {
+        rendre_bandeau_agent();
+        montrer("etape-agent");
+        $("agent-recherche").focus();
+        return;
+      }
+      ouvrir_seance(res);
+    } catch (e) {
+      // Jeton périmé, ou personne n'est connecté au Desk dans ce navigateur :
+      // on retombe sur le parcours client normal plutôt que sur une page morte.
+      jeton_agent = null;
+      montrer("etape-tel");
+      message(e.message);
+    }
   }
 
   // Un numéro peut porter PLUSIEURS comptes clients : après le code, on fait
@@ -865,16 +988,24 @@
             ? "Aucune de vos commandes n’est livrée par notre équipe."
             : "Toutes vos commandes ont déjà leur intervention planifiée."}</div>`;
 
+    const marquer = () => zone.querySelectorAll("[data-cmd-inst]").forEach((x) => {
+      const moi = x.getAttribute("data-cmd-inst") === commande_choisie;
+      x.classList.toggle("choisie", moi);
+      x.querySelector(".coche-cmd").textContent = moi ? "🔘" : "⚪";
+    });
     zone.querySelectorAll("[data-cmd-inst]").forEach((el) =>
       el.addEventListener("click", (ev) => {
         if (ev.target.closest(".rdv-fleche")) return;
         commande_choisie = el.getAttribute("data-cmd-inst");
-        zone.querySelectorAll("[data-cmd-inst]").forEach((x) => {
-          const moi = x.getAttribute("data-cmd-inst") === commande_choisie;
-          x.classList.toggle("choisie", moi);
-          x.querySelector(".coche-cmd").textContent = moi ? "🔘" : "⚪";
-        });
+        marquer();
       }));
+    // Mode magasin ouvert DEPUIS une commande : c'est elle qu'on vient
+    // planifier — la présélectionner évite de la chercher dans la liste, et
+    // surtout de se tromper de commande sur un client qui en a plusieurs.
+    if (agent_commande && liste.some((c) => c.name === agent_commande)) {
+      commande_choisie = agent_commande;
+      marquer();
+    }
     zone.querySelectorAll("[data-detail-inst]").forEach((b) =>
       b.addEventListener("click", async () => {
         const cmd = b.getAttribute("data-detail-inst");
@@ -1408,6 +1539,24 @@
       montrer("etape-fin");
     } catch (e) { message(e.message); }
   });
+
+  // ── Amorçage ─────────────────────────────────────────────────────────────
+  // Un `?agent=…` dans l'URL ouvre le mode magasin ; sans lui, le parcours
+  // client habituel (téléphone puis code) reste seul offert.
+  //
+  // ⚠️ APRÈS LE CHARGEMENT DU DOCUMENT, PAS ICI. Frappe injecte
+  // `frappe.csrf_token` dans un <script> placé TOUT À LA FIN du <body> — donc
+  // après celui-ci. Amorcer tout de suite, c'est appeler le serveur avant que
+  // le jeton n'existe : la requête part sans en-tête CSRF et, l'utilisateur
+  // étant connecté au Desk, Frappe la rejette en « Requête Invalide ».
+  const _agent_url = new URLSearchParams(location.search).get("agent");
+  if (_agent_url) {
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", () => demarrer_agent(_agent_url));
+    } else {
+      demarrer_agent(_agent_url);
+    }
+  }
 })();
 </script>
 {% endblock %}

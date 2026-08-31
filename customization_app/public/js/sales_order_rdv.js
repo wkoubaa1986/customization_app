@@ -35,7 +35,9 @@ frappe.provide("frappe.views");
         // suit si un onglet est ajouté demain.
         style.textContent = `
             .${CLASSE_ITEM} { margin-left: auto; display: flex; align-items: center;
-                              padding-right: 8px; }
+                              gap: 6px; padding-right: 8px; }
+            .so-rdv-app { background: #0ea5e9; }
+            .so-rdv-app:hover { background: #0284c7; }
             .so-rdv-btn { background: #dc2626; color: #fff; border: none; border-radius: 6px;
                           padding: 4px 12px; font-size: 12px; font-weight: 600; cursor: pointer;
                           white-space: nowrap; }
@@ -107,6 +109,42 @@ frappe.provide("frappe.views");
         });
     }
 
+    /* ── Ouvrir l'app de prise de rendez-vous À LA PLACE du client ───────────── */
+    //
+    // POURQUOI UN SECOND BOUTON, ET NON UN REMPLACEMENT. Les deux ne font pas le même
+    // travail. Le calendrier (« 📅 Prendre RDV ») pose une tâche où l'on veut, à l'heure que
+    // l'on veut : c'est l'outil du magasin quand il DÉCIDE. L'app, elle, applique les règles
+    // d'organisation du portail — secteur de l'adresse, capacité de la demi-journée,
+    // battements, quota lointain, date d'ouverture du type. Prendre le rendez-vous au
+    // téléphone « comme le ferait le client » est le seul moyen qu'un créneau promis à
+    // l'oral vaille exactement un créneau pris en ligne.
+    //
+    // ⚠️ L'ONGLET S'OUVRE AU CLIC, PAS DANS LA RÉPONSE. Un `window.open` déclenché depuis un
+    // rappel asynchrone n'est plus rattaché au geste de l'utilisateur : les navigateurs le
+    // bloquent comme une pop-up. On ouvre donc l'onglet tout de suite, et on l'aiguille
+    // quand le serveur a rendu le lien.
+    // Le serveur refuse de toute façon, mais un bouton qui ne peut qu'échouer n'a rien à faire
+    // sous les yeux de qui n'a pas le droit : le magasin pose des rendez-vous, la caisse non.
+    const peut_poser_rdv = () =>
+        frappe.model.can_create("Tache de travail") && frappe.model.can_read("Customer");
+
+    function ouvrir_app(commande, $btn) {
+        const onglet = window.open("about:blank", "_blank");
+        if ($btn) $btn.prop("disabled", true);
+        frappe.call({
+            method: "customization_app.portail_rdv_agent.ouvrir",
+            args: { commande: commande || null },
+            callback: (r) => {
+                const url = (r.message || {}).url;
+                if (!url) return;
+                if (onglet && !onglet.closed) onglet.location = url;
+                else window.location.href = url;
+            },
+            error: () => onglet && onglet.close(),
+            always: () => $btn && $btn.prop("disabled", false),
+        });
+    }
+
     /* ── Bouton de la fiche, au bout de la barre d'onglets ───────────────────── */
     function poser_bouton(frm) {
         // Une commande jamais enregistrée n'a pas de nom : il n'y a rien à interroger côté
@@ -120,13 +158,28 @@ frappe.provide("frappe.views");
             // dise, et la fonction serait réputée cassée alors qu'elle marche. Il reprend alors
             // sa place ordinaire dans la barre d'actions.
             frm.add_custom_button(__("📅 Prendre RDV"), () => ouvrir_calendrier(frm.doc.name));
+            if (peut_poser_rdv()) {
+                frm.add_custom_button(__("📱 RDV avec l'app"), () => ouvrir_app(frm.doc.name));
+            }
             return;
         }
         $tabs.find("." + CLASSE_ITEM).remove(); // un seul, même après plusieurs rendus
         const $btn = $(
             `<button type="button" class="so-rdv-btn">📅 ${__("Prendre RDV")}</button>`
         ).on("click", () => ouvrir_calendrier(frm.doc.name, $btn));
-        $(`<li class="nav-item ${CLASSE_ITEM}"></li>`).append($btn).appendTo($tabs);
+        // Le client est déjà connu : l'app s'ouvre directement sur SA fiche, sans code SMS,
+        // et présélectionne cette commande dès qu'une installation ou une livraison est
+        // choisie.
+        const $item = $(`<li class="nav-item ${CLASSE_ITEM}"></li>`).append($btn);
+        if (peut_poser_rdv()) {
+            const $app = $(
+                `<button type="button" class="so-rdv-btn so-rdv-app"
+                         title="${__("Ouvrir l'application de rendez-vous pour ce client, sans code SMS")}"
+                 >📱 ${__("RDV avec l'app")}</button>`
+            ).on("click", () => ouvrir_app(frm.doc.name, $app));
+            $item.append($app);
+        }
+        $item.appendTo($tabs);
     }
 
     frappe.ui.form.on("Sales Order", {
@@ -149,6 +202,11 @@ frappe.provide("frappe.views");
             this.page.add_inner_button(__("📅 Calendrier des tâches"), () =>
                 ouvrir_calendrier(null)
             );
+            // Sans commande de départ : l'app s'ouvre sur une recherche de client (nom ou
+            // téléphone), puis déroule le parcours normal.
+            if (peut_poser_rdv()) {
+                this.page.add_inner_button(__("📱 RDV avec l'app"), () => ouvrir_app(null));
+            }
         } catch (e) {
             this._so_rdv_bouton = false;
             console.error("Bouton calendrier des commandes :", e);
