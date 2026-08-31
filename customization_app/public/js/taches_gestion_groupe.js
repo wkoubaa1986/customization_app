@@ -60,6 +60,9 @@ customization_app.gestion_taches = (function () {
                 { fieldtype: "Check", fieldname: "email", default: 1, label: __("E-mail") },
                 { fieldtype: "Data", fieldname: "sujet", label: __("Objet de l'e-mail"),
                   depends_on: "email" },
+                { fieldtype: "Section Break",
+                  label: __("Aperçu du message, client par client") },
+                { fieldtype: "HTML", fieldname: "apercu" },
             ],
             primary_action_label: __("Appliquer aux tâches cochées"),
             primary_action: (v) => _appliquer(d, v),
@@ -70,28 +73,36 @@ customization_app.gestion_taches = (function () {
 
         d.fields_dict.choix_modele.$input.on("change", function () {
             const m = (d.__modeles || []).find((x) => x.libelle === $(this).val());
-            if (m) d.fields_dict.message.set_value(m.texte);
+            if (!m) return;
+            Promise.resolve(d.fields_dict.message.set_value(m.texte))
+                .then(() => _apercu(d));
         });
+        d.fields_dict.message.$input.on("input",
+            frappe.utils.debounce(() => _apercu(d), 400));
 
         d.$wrapper.on("change", ".gt-sel", function () {
             const n = $(this).data("tache");
             if (this.checked) selection.add(n); else selection.delete(n);
             _compter(d);
+            _apercu(d);
         });
         d.$wrapper.on("click", ".gt-tout", () => {
             lignes.forEach((l) => selection.add(l.tache));
             d.$wrapper.find(".gt-sel").prop("checked", true);
             _compter(d);
+            _apercu(d);
         });
         d.$wrapper.on("click", ".gt-aucun", () => {
             selection.clear();
             d.$wrapper.find(".gt-sel").prop("checked", false);
             _compter(d);
+            _apercu(d);
         });
 
         d.show();
         _charger_filtres(d).then(() => _chercher(d));
         _charger_modeles(d);
+        _apercu(d);
     }
 
     function _charger_filtres(d) {
@@ -169,6 +180,51 @@ customization_app.gestion_taches = (function () {
                         Aucune tâche pour ces filtres.</td></tr>`}
                </table></div>`);
         _compter(d);
+    }
+
+    // L'aperçu porte sur les tâches COCHÉES : c'est à elles que le message
+    // partira, et les balises {date}/{heure} valent celles de chaque tâche.
+    function _apercu(d) {
+        const zone = d.fields_dict.apercu.$wrapper;
+        const taches = Array.from(selection);
+        const modele = d.get_value("message") || "";
+        if (!taches.length) {
+            zone.html(`<div style="color:var(--text-muted,#6b7280);font-size:12.5px">
+                ${__("Cochez des tâches pour voir le message qu'elles recevront.")}</div>`);
+            return;
+        }
+        if (!modele.trim()) {
+            zone.html(`<div style="color:#b45309;font-size:12.5px">
+                ${__("Message vide : aucun envoi ne sera fait.")}</div>`);
+            return;
+        }
+        frappe.call({
+            method: "customization_app.taches_groupe.apercu",
+            args: { taches: JSON.stringify(taches), modele: modele },
+            callback: (r) => {
+                const m = r.message || {};
+                const t = m.totaux || {};
+                const esc = frappe.utils.escape_html;
+                zone.html(
+                    `<div style="padding:7px 10px;border-radius:8px;margin-bottom:6px;
+                          background:var(--bg-light-gray,#f6f7f9);font-size:12.5px">
+                       📱 <b>${t.numeros || 0}</b> numéro(s) · ✉️ <b>${t.emails || 0}</b> e-mail(s)
+                       ${t.sans_numero ? ` · <span style="color:#b45309">${t.sans_numero} sans numéro</span>` : ""}
+                       ${t.sans_email ? ` · <span style="color:#b45309">${t.sans_email} sans e-mail</span>` : ""}
+                     </div>
+                     <div style="max-height:240px;overflow:auto;font-size:12px">${
+                       (m.lignes || []).map((l) => `<div style="padding:6px 0;
+                            border-bottom:1px solid var(--border-color,#eee)">
+                          <b>${esc(l.nom_client || "")}</b> · ${esc(l.tache)} ·
+                          ${esc(l.type || "")} · ${esc(l.quand || "sans date")}<br>
+                          <span style="color:var(--text-muted)">
+                            📱 ${l.numeros.length ? esc(l.numeros.join(", ")) : "—"} ·
+                            ✉️ ${l.emails.length ? esc(l.emails.join(", ")) : "—"}</span>
+                          ${l.message ? `<div style="margin-top:3px;white-space:pre-wrap">${
+                              esc(l.message)}</div>` : ""}
+                        </div>`).join("")}</div>`);
+            },
+        });
     }
 
     function _compter(d) {
