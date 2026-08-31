@@ -161,9 +161,15 @@ def _verifier_photos_et_position(doc):
 
 @frappe.whitelist()
 def peut_cloturer(tache) -> dict:
-    """Ce que l'écran a besoin de savoir pour afficher le bouton, sans agir."""
-    employe = _employe_de_l_utilisateur()
+    """Ce que l'écran a besoin de savoir pour afficher le bouton, sans agir.
+
+    Le point d'entrée est ouvert : sans ce contrôle de lecture, n'importe qui
+    pourrait énumérer les tâches et apprendre quelle commande est liée à
+    laquelle. La fonction ne modifie rien, mais elle RENSEIGNE.
+    """
     doc = frappe.get_doc(DOCTYPE_TACHE, tache)
+    frappe.has_permission(DOCTYPE_TACHE, "read", doc=doc, throw=True)
+    employe = _employe_de_l_utilisateur()
     mienne = bool(employe) and doc.custom_choix_du_staff == employe
     commande = doc.commande_client
     return {
