@@ -16,17 +16,18 @@ customization_app.gestion_taches = (function () {
     let selection = new Set();
     let lignes = [];
 
-    function ouvrir(preselection) {
+    function ouvrir(preselection, periode) {
         selection = new Set(preselection || []);
         const d = new frappe.ui.Dialog({
             title: __("Gérer les interventions"),
             size: "extra-large",
             fields: [
                 { fieldtype: "Date", fieldname: "date_from", label: __("Du"),
-                  default: frappe.datetime.get_today() },
+                  default: (periode && periode.from) || frappe.datetime.get_today() },
                 { fieldtype: "Column Break" },
                 { fieldtype: "Date", fieldname: "date_to", label: __("Au"),
-                  default: frappe.datetime.add_days(frappe.datetime.get_today(), 14) },
+                  default: (periode && periode.to)
+                           || frappe.datetime.add_days(frappe.datetime.get_today(), 14) },
                 { fieldtype: "Column Break" },
                 { fieldtype: "Select", fieldname: "type_intervention", label: __("Type") },
                 { fieldtype: "Column Break" },
@@ -34,7 +35,7 @@ customization_app.gestion_taches = (function () {
                 { fieldtype: "Column Break" },
                 { fieldtype: "Select", fieldname: "statut", label: __("Statut"),
                   options: ["Open", "Completed", "Cancelled", ""].join("\n"),
-                  default: "Open" },
+                  default: (preselection && preselection.length) ? "" : "Open" },
                 { fieldtype: "Section Break" },
                 { fieldtype: "HTML", fieldname: "resultats" },
                 { fieldtype: "Section Break", label: __("Action") },

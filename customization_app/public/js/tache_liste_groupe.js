@@ -16,15 +16,37 @@ frappe.provide("frappe.views");
     const LIBELLE = "🗓️ Décaler / annuler";
 
     function _ouvrir(listview) {
-        const coches = (listview.get_checked_items() || []).map((d) => d.name);
-        if (!coches.length) {
-            frappe.msgprint(__("Cochez d'abord une ou plusieurs tâches dans la liste."));
-            return;
-        }
+        // ⚠️ La VUE CALENDRIER n'a pas de cases à cocher : exiger une sélection
+        // y rendait le bouton inutilisable (« cochez d'abord » sans rien à
+        // cocher). Sans sélection, on ouvre l'écran avec ses propres filtres.
+        let coches = [];
+        try {
+            coches = (listview.get_checked_items() || []).map((d) => d.name);
+        } catch (e) { coches = []; }
+
+        // Depuis le calendrier, on ouvre sur la PÉRIODE AFFICHÉE : proposer
+        // « les deux prochaines semaines » à quelqu'un qui regarde août serait
+        // lui montrer autre chose que ce qu'il a sous les yeux.
+        let periode = null;
+        try {
+            const vue = listview.calendar && listview.calendar.$cal
+                && listview.calendar.$cal.fullCalendar("getView");
+            if (vue && vue.start) {
+                periode = {
+                    from: vue.start.clone().format("YYYY-MM-DD"),
+                    to: vue.end.clone().subtract(1, "day").format("YYYY-MM-DD"),
+                };
+            }
+        } catch (e) { periode = null; }
+
         // Le même écran que depuis le calendrier, avec la sélection déjà faite :
         // deux dialogues concurrents pour la même action, c'est deux bugs.
         if (window.customization_app && customization_app.gestion_taches) {
-            customization_app.gestion_taches.ouvrir(coches);
+            customization_app.gestion_taches.ouvrir(coches, periode);
+            return;
+        }
+        if (!coches.length) {
+            frappe.msgprint(__("Cochez d'abord une ou plusieurs tâches dans la liste."));
             return;
         }
         _dialogue(coches, listview);
