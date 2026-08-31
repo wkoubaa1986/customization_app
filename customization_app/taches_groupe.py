@@ -43,6 +43,72 @@ def _modifiable(doc):
 
 
 @frappe.whitelist()
+def get_filtres() -> dict:
+    """Les valeurs proposées à l'écran — lues du réel, pas écrites en dur."""
+    frappe.has_permission(DOCTYPE, "read", throw=True)
+    types = frappe.db.sql_list(
+        "SELECT DISTINCT custom_type_dintervention FROM `tab%s` "
+        "WHERE IFNULL(custom_type_dintervention,'') != '' "
+        "ORDER BY custom_type_dintervention" % DOCTYPE)
+    employes = frappe.db.sql(
+        """SELECT DISTINCT t.custom_choix_du_staff, e.employee_name
+           FROM `tab%s` t JOIN tabEmployee e ON e.name = t.custom_choix_du_staff
+           WHERE IFNULL(t.custom_choix_du_staff,'') != ''
+           ORDER BY e.employee_name""" % DOCTYPE, as_dict=True)
+    return {"types": types,
+            "employes": [{"valeur": e.custom_choix_du_staff,
+                          "libelle": e.employee_name or e.custom_choix_du_staff}
+                         for e in employes]}
+
+
+@frappe.whitelist()
+def rechercher(date_from=None, date_to=None, employe=None, type_intervention=None,
+               statut="Open", client=None, limite=200) -> dict:
+    """Les tâches d'une période, filtrées — c'est la matière des actions groupées.
+
+    Par défaut on ne montre QUE les tâches ouvertes : décaler ou annuler une
+    intervention déjà faite n'a pas de sens, et les noyer dans la liste ferait
+    cocher des lignes intraitables.
+    """
+    frappe.has_permission(DOCTYPE, "read", throw=True)
+    filtres = {}
+    if date_from and date_to:
+        filtres["starts_on"] = ["between", [date_from + " 00:00:00",
+                                            date_to + " 23:59:59"]]
+    elif date_from:
+        filtres["starts_on"] = [">=", date_from + " 00:00:00"]
+    elif date_to:
+        filtres["starts_on"] = ["<=", date_to + " 23:59:59"]
+    if employe:
+        filtres["custom_choix_du_staff"] = employe
+    if type_intervention:
+        filtres["custom_type_dintervention"] = type_intervention
+    if statut:
+        filtres["status"] = statut
+    if client:
+        filtres["custom_client"] = ["like", "%" + client + "%"]
+
+    lignes = frappe.get_all(
+        DOCTYPE, filters=filtres,
+        fields=["name", "custom_client", "custom_type_dintervention", "status",
+                "starts_on", "custom_choix_du_staff", "secteur"],
+        order_by="starts_on asc", limit_page_length=cint(limite) or 200)
+    matricules = {l.custom_choix_du_staff for l in lignes if l.custom_choix_du_staff}
+    noms_rh = dict(frappe.get_all(
+        "Employee", filters={"name": ["in", list(matricules)]},
+        fields=["name", "employee_name"], as_list=True)) if matricules else {}
+    return {"lignes": [{
+        "tache": l.name,
+        "client": l.custom_client or "",
+        "type": l.custom_type_dintervention or "",
+        "statut": l.status,
+        "quand": str(l.starts_on)[:16] if l.starts_on else "",
+        "employe": noms_rh.get(l.custom_choix_du_staff) or l.custom_choix_du_staff or "",
+        "secteur": l.secteur or "",
+    } for l in lignes], "total": len(lignes)}
+
+
+@frappe.whitelist()
 def apercu(taches, modele=None):
     """Qui recevra quoi, et l'état de chaque tâche — AVANT d'agir."""
     from customization_app import sms_taches

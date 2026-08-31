@@ -21,6 +21,12 @@ frappe.provide("frappe.views");
             frappe.msgprint(__("Cochez d'abord une ou plusieurs tâches dans la liste."));
             return;
         }
+        // Le même écran que depuis le calendrier, avec la sélection déjà faite :
+        // deux dialogues concurrents pour la même action, c'est deux bugs.
+        if (window.customization_app && customization_app.gestion_taches) {
+            customization_app.gestion_taches.ouvrir(coches);
+            return;
+        }
         _dialogue(coches, listview);
     }
 

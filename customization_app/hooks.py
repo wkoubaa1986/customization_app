@@ -364,6 +364,7 @@ app_include_js = [_js("customer_quick_entry.js"),
                   _js("calendrier_rdv_button.js"),
                   _js("sales_order_avoir.js"),
                   _js("tache_liste_groupe.js"),
+                  _js("taches_gestion_groupe.js"),
                   # Coloration des anomalies dans la liste des commandes.
                   # Volontairement en app_include_js et non en doctype_list_js :
                   # woocommerce_fusion réassigne listview_settings["Sales Order"]
