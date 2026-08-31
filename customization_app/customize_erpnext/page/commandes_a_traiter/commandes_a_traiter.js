@@ -21,6 +21,16 @@ frappe.pages["commandes-a-traiter"].on_page_load = function (wrapper) {
 
 const CT_PAGE_LENGTH = 50;
 
+/** Ce qui est réellement parti sur une commande — infobulle de la pastille de relance.
+ *  Un envoi peut n'avoir touché personne (ni numéro ni e-mail au dossier) : le dire
+ *  vaut mieux que laisser croire que le client a été prévenu. */
+function canaux(e) {
+  const l = [];
+  if (e.sms) l.push("SMS");
+  if (e.email) l.push("e-mail");
+  return l.length ? l.join(" et ") : "envoi tenté sans destinataire";
+}
+
 class CommandesATraiter {
   constructor(wrapper) {
     this.wrapper = wrapper;
@@ -85,6 +95,7 @@ class CommandesATraiter {
         ? JSON.stringify($("#ct-secteurs .ct-sect:checked").map((i, e) => e.value).get())
         : "",
       livraison: $("#ct-livraison").val() || "",
+      envoi: $("#ct-envoi").val() || "",
       prestation: $("#ct-prestation").val() || "",
       client: $("#ct-client").val() || "",
       // Aucune case affichée (types pas encore chargés) => on n'envoie RIEN,
@@ -103,7 +114,7 @@ class CommandesATraiter {
       timer = setTimeout(() => { this.start = 0; this._load(); }, 400);
     });
     ["#ct-depuis", "#ct-jusqua", "#ct-statut", "#ct-origine", "#ct-dispo",
-     "#ct-anomalie", "#ct-tache", "#ct-livraison",
+     "#ct-anomalie", "#ct-tache", "#ct-livraison", "#ct-envoi",
      "#ct-prestation", "#ct-client", "#ct-tri"].forEach((sel) =>
       $(sel).on("change", () => { this.start = 0; this._load(); }));
     // Les cases de secteur sont créées APRÈS ce branchement (elles attendent la
@@ -113,7 +124,7 @@ class CommandesATraiter {
     $("#ct-clear").on("click", () => {
       $("#ct-search").val("");
       ["#ct-statut", "#ct-origine", "#ct-dispo", "#ct-anomalie", "#ct-tache",
-       "#ct-livraison", "#ct-prestation", "#ct-client"]
+       "#ct-livraison", "#ct-envoi", "#ct-prestation", "#ct-client"]
         .forEach((s) => $(s).val(""));
       $("#ct-groupes .ct-grp, #ct-secteurs .ct-sect").prop("checked", true);
       this.start = 0;
@@ -249,7 +260,11 @@ class CommandesATraiter {
               class="ct-cde">${esc(c.name)}</a>
             <div class="ct-sub">${esc(c.date)} · ${esc(c.statut)}
               ${c.web ? `<span class="ct-badge b-web">🌐 web</span>` : ""}
-              ${c.livraison_equipe ? `<span class="ct-badge b-ok" title="Le client peut réserver un créneau de livraison en ligne">🚚 livraison équipe</span>` : ""}</div></td>
+              ${c.livraison_equipe ? `<span class="ct-badge b-ok" title="Le client peut réserver un créneau de livraison en ligne">🚚 livraison équipe</span>` : ""}</div>
+            ${c.envoi ? `<div><span class="ct-badge b-svc"
+                 title="${esc(canaux(c.envoi))} — dernier envoi le ${esc(c.envoi.dernier)} par ${esc(c.envoi.par)}"
+                 >📨 relancé${c.envoi.n > 1 ? ` ×${c.envoi.n}` : ""} · ${esc(String(c.envoi.dernier).slice(0, 10))}</span></div>`
+              : ""}</td>
         <td><a href="/app/customer/${encodeURIComponent(c.client)}" target="_blank">${esc(c.client_nom)}</a>
             <div class="ct-sub">${c.telephone
               ? `📞 <a href="tel:${esc(c.telephone)}">${esc(c.telephone)}</a>`

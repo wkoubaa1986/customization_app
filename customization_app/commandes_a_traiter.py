@@ -291,6 +291,46 @@ def get_filtres():
             "depuis_defaut": DEPUIS_DEFAUT}
 
 
+def _envois(noms):
+    """{commande: {n, dernier, par, canal}} — les relances déjà parties.
+
+    POURQUOI RELIRE LES COMMENTAIRES plutôt que de tenir un champ. `sms_commandes`
+    pose une trace sur CHAQUE commande touchée, avec le canal, l'auteur et le
+    texte : c'est déjà la mémoire de l'envoi, et elle vaut pour tous les chemins
+    (envoi groupé depuis la liste des commandes comme depuis cet écran). Un
+    champ en plus se désynchroniserait du jour où quelqu'un enverrait par
+    l'autre porte.
+
+    ⚠️ LE MOTIF NE PORTE NI ACCENT NI EMOJI. La trace commence par « 📨 Envoi
+    groupé » ; chercher cette chaîne telle quelle expose aux surprises de
+    collation (déjà rencontré sur « Commandes à traiter » comparé en SQL).
+    « Envoi group » suffit à l'identifier et ne peut rien attraper d'autre.
+    """
+    if not noms:
+        return {}
+    out = {}
+    for c in frappe.db.sql(
+            """SELECT reference_name, content, creation, owner
+               FROM tabComment
+               WHERE comment_type = 'Info' AND reference_doctype = 'Sales Order'
+                 AND reference_name IN %(noms)s AND content LIKE '%%Envoi group%%'
+               ORDER BY creation""",
+            {"noms": tuple(noms)}, as_dict=True):
+        texte = c.content or ""
+        # Le canal se lit dans la trace elle-même : « SMS : envoyé … · E-mail : — ».
+        bloc = texte.split("<br>")[0]
+        sms = "SMS : envoy" in bloc or "SMS : SIMUL" in bloc
+        mail = "E-mail : envoy" in bloc or "E-mail : SIMUL" in bloc
+        e = out.setdefault(c.reference_name, {"n": 0, "dernier": None, "par": "",
+                                              "sms": False, "email": False})
+        e["n"] += 1
+        e["dernier"] = str(c.creation)[:16]
+        e["par"] = c.owner
+        e["sms"] = e["sms"] or sms
+        e["email"] = e["email"] or mail
+    return out
+
+
 def _liste_cochee(valeur):
     """Un filtre à cases à cocher : JSON de l'écran -> set, ou None.
 
@@ -308,7 +348,7 @@ def _liste_cochee(valeur):
 def get_commandes(depuis=None, jusqu_a=None, recherche=None, statut=None,
                   origine=None, dispo=None, anomalie=None, tache=None,
                   secteur=None, livraison=None, prestation=None, client=None,
-                  groupes=None, tri=None, start=0,
+                  groupes=None, envoi=None, tri=None, start=0,
                   page_length=PAGE_LENGTH):
     """L'arriéré filtré. Tout est calculé sur l'ENSEMBLE puis découpé en pages :
     un filtre « article manquant » doit porter sur toutes les commandes, pas
@@ -331,6 +371,7 @@ def get_commandes(depuis=None, jusqu_a=None, recherche=None, statut=None,
     bordereaux = _bordereaux(noms)
 
     secteurs = _secteurs(noms)
+    envois = _envois(noms)
     livraisons = _livraison_equipe(noms)
     prestations = _prestations(noms)
     groupes_cl = _groupes_clients({l.customer for l in lignes if l.customer})
@@ -359,6 +400,9 @@ def get_commandes(depuis=None, jusqu_a=None, recherche=None, statut=None,
                           or (tel_client.get(l.customer) or "").split("\n")[0].strip()),
             "adresse": (l.shipping_address or l.address_display or "").replace("<br>", ", "),
             "secteur": secteurs.get(l.name, ("", ""))[0],
+            # Ce qui a DÉJÀ été envoyé sur cette commande : sans ça, on relance
+            # deux fois le même client sans le savoir.
+            "envoi": envois.get(l.name),
             "livraison_equipe": l.name in livraisons,
             "a_livraison": bool(prestations.get(l.name, {}).get("livraison")),
             "a_main_oeuvre": bool(prestations.get(l.name, {}).get("main_oeuvre")),
@@ -387,7 +431,7 @@ def get_commandes(depuis=None, jusqu_a=None, recherche=None, statut=None,
 
     out = _trier(_filtrer(out, recherche, statut, origine, dispo, anomalie,
                           tache, secteur, livraison, prestation, client,
-                          groupes), tri)
+                          groupes, envoi), tri)
     total = len(out)
     page = out[start:start + page_length] if page_length else out
     return {
@@ -419,13 +463,19 @@ def _trier(lignes, tri):
 
 def _filtrer(lignes, recherche, statut, origine, dispo, anomalie, tache,
              secteur=None, livraison=None, prestation=None, client=None,
-             groupes=None):
+             groupes=None, envoi=None):
     def garde(c):
         if statut and c["statut"] != statut:
             return False
         # Secteurs cochés (multi-sélection). « __vide__ » désigne les adresses
         # jamais sectorisées, qu'on veut pouvoir isoler pour les corriger.
         if secteur is not None and (c["secteur"] or "__vide__") not in secteur:
+            return False
+        # Relances déjà parties : le tri le plus utile de cet écran est
+        # « qui n'a pas encore été prévenu ».
+        if envoi == "oui" and not c["envoi"]:
+            return False
+        if envoi == "non" and c["envoi"]:
             return False
         if origine == "web" and not c["web"]:
             return False
