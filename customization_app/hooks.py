@@ -365,6 +365,7 @@ app_include_js = [_js("customer_quick_entry.js"),
                   _js("sales_order_avoir.js"),
                   _js("tache_liste_groupe.js"),
                   _js("taches_gestion_groupe.js"),
+                  _js("tache_cloture_partenaire.js"),
                   # Coloration des anomalies dans la liste des commandes.
                   # Volontairement en app_include_js et non en doctype_list_js :
                   # woocommerce_fusion réassigne listview_settings["Sales Order"]
@@ -539,6 +540,17 @@ scheduler_events = {
         ],
     },
 }
+
+# ⚠️ APRÈS CHAQUE MIGRATION, et pas seulement une fois par patch.
+# `bench migrate` REIMPORTE les espaces de travail depuis les fichiers JSON des
+# apps : tout raccourci ajouté en base à un espace d'ERPNext (ici « Selling »)
+# est effacé au déploiement suivant. Constaté le 31/08/2026 — le raccourci
+# « Commandes à traiter », posé par un patch, avait disparu et sa date de
+# modification était retombée à celle du fichier. Un patch ne se rejoue pas :
+# il faut donc le reposer à chaque migration. La fonction est idempotente.
+after_migrate = [
+    "customization_app.patches.ensure_raccourci_commandes_a_traiter.execute",
+]
 
 # after_migrate = ["customization_app.patches.override_get_item_details.execute"]
 
