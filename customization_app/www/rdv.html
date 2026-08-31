@@ -111,6 +111,25 @@
   .ia-fab .pastille { position: absolute; top: -3px; right: -3px; width: 13px;
                       height: 13px; border-radius: 50%; background: #22c55e;
                       border: 2px solid #fff; }
+  /* Bulle d'accueil au-dessus de l'icône : elle NOMME l'assistant et dit ce
+     qu'il sait faire. Une pastille muette se remarque, mais ne se comprend
+     pas — le client doit savoir à quoi il s'adresse avant de cliquer. */
+  .ia-invite { position: fixed; right: 16px; bottom: 84px; z-index: 59;
+               width: min(250px, calc(100vw - 32px)); padding: 11px 30px 11px 13px;
+               background: #0ea5e9; color: #fff; border-radius: 14px;
+               font-size: 12.8px; line-height: 1.45; cursor: pointer;
+               box-shadow: 0 10px 26px rgba(2,132,199,.34);
+               animation: ia-monte .35s ease-out; }
+  .ia-invite:after { content: ""; position: absolute; right: 21px; bottom: -7px;
+                     border: 8px solid transparent; border-top-color: #0ea5e9;
+                     border-bottom: 0; }
+  .ia-invite b { font-weight: 700; }
+  .ia-invite .fermer { position: absolute; top: 5px; right: 7px; background: transparent;
+                       border: none; color: #fff; opacity: .75; font-size: 15px;
+                       line-height: 1; cursor: pointer; padding: 2px 4px; }
+  .ia-invite .fermer:hover { opacity: 1; }
+  @keyframes ia-monte { from { opacity: 0; transform: translateY(10px); }
+                        to   { opacity: 1; transform: translateY(0); } }
   .ia-fenetre { position: fixed; right: 16px; bottom: 84px; z-index: 60;
                 width: min(370px, calc(100vw - 24px));
                 height: min(72vh, 540px); display: flex; flex-direction: column;
@@ -140,6 +159,8 @@
   @media (max-width: 480px) {
     .ia-fenetre { right: 8px; left: 8px; width: auto; bottom: 78px; height: 68vh; }
     .ia-fab { right: 12px; bottom: 12px; }
+    .ia-invite { right: 12px; bottom: 78px; }
+    .ia-invite:after { right: 20px; }
   }
 </style>
 
@@ -253,10 +274,16 @@
     <div class="rdv-etape" id="etape-rdv">
       <!-- Assistant : visible seulement une fois le client identifié -->
       <div id="ia-bloc" style="display:none">
-        <button type="button" id="ia-ouvrir" class="ia-fab" title="Assistant">💬<span class="pastille"></span></button>
+        <div id="ia-invite" class="ia-invite" style="display:none">
+          <button type="button" class="fermer" id="ia-invite-fermer"
+                  title="Masquer">✕</button>
+          Bonjour 👋 Je suis <b>Tawa RDV</b>. Posez-moi vos questions sur votre
+          rendez-vous, je réponds 24/24 ✋
+        </div>
+        <button type="button" id="ia-ouvrir" class="ia-fab" title="Tawa RDV — assistant rendez-vous">💬<span class="pastille"></span></button>
         <div id="ia-panneau" class="ia-fenetre" style="display:none">
-          <div class="ia-entete">🤖 <span>Assistant Aqua World
-              <span class="sous">Répond en quelques secondes</span></span>
+          <div class="ia-entete">🤖 <span>Tawa RDV
+              <span class="sous">Assistant Aqua World · répond en quelques secondes</span></span>
             <button type="button" id="ia-fermer" title="Fermer">✕</button></div>
           <div id="ia-fil"></div>
           <div class="ia-saisie">
@@ -431,7 +458,7 @@
     rendre_commandes_installables();
     rendre_adresses();
     rendre_historique();
-    if (seance.assistant) $("ia-bloc").style.display = "block";
+    if (seance.assistant) { $("ia-bloc").style.display = "block"; ia_inviter(); }
     rendre_bandeau_agent();
     montrer("etape-rdv");
   }
@@ -803,7 +830,38 @@
     }
   }
 
+  // ── Bulle d'accueil de Tawa RDV ──────────────────────────────────────────
+  // Elle se montre APRÈS un court délai : surgir en même temps que l'écran la
+  // ferait lire comme un élément de la page, et le client la chasserait sans
+  // la voir. Une fois écartée, elle ne revient pas de la visite.
+  let ia_invite_timer = null;
+
+  function ia_masquer_invite(definitif) {
+    clearTimeout(ia_invite_timer);
+    $("ia-invite").style.display = "none";
+    if (!definitif) return;
+    try { sessionStorage.setItem("rdv_invite_ia", "1"); } catch (e) { /* mode privé */ }
+  }
+
+  function ia_inviter() {
+    let deja = false;
+    try { deja = sessionStorage.getItem("rdv_invite_ia") === "1"; } catch (e) { /* mode privé */ }
+    if (deja) return;
+    ia_invite_timer = setTimeout(() => {
+      if ($("ia-panneau").style.display === "flex") return;   // chat déjà ouvert
+      $("ia-invite").style.display = "block";
+    }, 1800);
+  }
+
+  $("ia-invite").addEventListener("click", (ev) => {
+    if (ev.target.closest("#ia-invite-fermer")) return;   // la croix ne l'ouvre pas
+    ia_masquer_invite(true);
+    ia_basculer(true);
+  });
+  $("ia-invite-fermer").addEventListener("click", () => ia_masquer_invite(true));
+
   function ia_basculer(ouvrir) {
+    if (ouvrir) ia_masquer_invite(true);
     $("ia-panneau").style.display = ouvrir ? "flex" : "none";
     $("ia-ouvrir").style.display = ouvrir ? "none" : "block";
     if (!ouvrir) return;
