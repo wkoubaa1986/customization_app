@@ -13,6 +13,12 @@ L'ORDRE compte, et il n'est pas le même dans les deux cas :
 
 Les envois repassent par `sms_taches` : mêmes modèles, mêmes balises, mêmes
 traces en commentaire sur la tâche, même garde-fou de développement.
+
+⚠️ On passe par `doc.save()`, jamais par `db_set` : le doctype porte des hooks
+`on_update` qui réalignent le pourcentage livré de la commande et recalculent
+son anomalie. Écrire directement en base laisserait la commande avec une
+anomalie périmée — une commande dont la seule tâche vient d'être annulée doit
+redevenir « sans tâche ».
 """
 from __future__ import annotations
 
@@ -165,9 +171,15 @@ def decaler(taches, jours=None, nouvelle_date=None, modele=None, sujet=None,
             else:
                 nouveau = add_days(ancien, jours)
             duree = (get_datetime(doc.ends_on) - ancien) if doc.ends_on else None
-            doc.db_set("starts_on", nouveau, update_modified=True)
+            doc.starts_on = nouveau
             if duree is not None:
-                doc.db_set("ends_on", nouveau + duree, update_modified=True)
+                doc.ends_on = nouveau + duree
+            # save() et NON db_set : le doctype porte des hooks `on_update`
+            # (alignement du % livré, recalcul d'anomalie de la commande liée).
+            # db_set écrit en base sans les déclencher — la commande resterait
+            # avec une anomalie périmée.
+            doc.flags.ignore_permissions = True
+            doc.save()
             frappe.get_doc({
                 "doctype": "Comment", "comment_type": "Info",
                 "reference_doctype": DOCTYPE, "reference_name": nom,
@@ -203,7 +215,12 @@ def annuler(taches, motif=None, modele=None, sujet=None, sms=1, email=1):
             resultats.append({"tache": nom, "etat": refus})
             continue
         try:
-            doc.db_set("status", "Cancelled", update_modified=True)
+            doc.status = "Cancelled"
+            # save() : l'annulation doit REDESCENDRE sur la commande liée —
+            # une commande dont la seule tâche est annulée redevient « sans
+            # tâche », et son anomalie doit le dire.
+            doc.flags.ignore_permissions = True
+            doc.save()
             frappe.get_doc({
                 "doctype": "Comment", "comment_type": "Info",
                 "reference_doctype": DOCTYPE, "reference_name": nom,
