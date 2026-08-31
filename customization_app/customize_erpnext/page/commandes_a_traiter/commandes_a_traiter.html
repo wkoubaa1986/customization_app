@@ -89,10 +89,12 @@
           <option value="complet">✅ Tout en stock</option>
         </select></div>
       <div class="ct-field"><label>Secteur</label>
-        <select class="form-control" id="ct-secteur">
-          <option value="">Tous</option>
-          <option value="__vide__">— sans secteur</option>
-        </select></div>
+        <div class="ct-groupes" id="ct-secteurs"></div>
+        <div class="ct-groupes-actions">
+          <a id="ct-secteurs-tous">tout cocher</a>
+          <a id="ct-secteurs-aucun">tout décocher</a>
+        </div>
+      </div>
       <div class="ct-field"><label>Type de client</label>
         <div class="ct-groupes" id="ct-groupes"></div>
         <div class="ct-groupes-actions">

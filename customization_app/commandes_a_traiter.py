@@ -291,6 +291,19 @@ def get_filtres():
             "depuis_defaut": DEPUIS_DEFAUT}
 
 
+def _liste_cochee(valeur):
+    """Un filtre à cases à cocher : JSON de l'écran -> set, ou None.
+
+    None et l'ensemble vide ne veulent PAS dire la même chose : None = le
+    filtre n'a rien envoyé, donc on n'écarte rien ; set() = l'utilisateur a
+    tout décoché, donc il ne doit rien voir. Confondre les deux ferait
+    réapparaître toute la liste au moment où il vient de la vider.
+    """
+    if isinstance(valeur, str):
+        valeur = frappe.parse_json(valeur) if valeur.strip() else None
+    return set(valeur) if valeur is not None else None
+
+
 @frappe.whitelist()
 def get_commandes(depuis=None, jusqu_a=None, recherche=None, statut=None,
                   origine=None, dispo=None, anomalie=None, tache=None,
@@ -303,13 +316,12 @@ def get_commandes(depuis=None, jusqu_a=None, recherche=None, statut=None,
     _lecture()
     start, page_length = frappe.utils.cint(start), frappe.utils.cint(page_length)
 
-    # `groupes` arrive en JSON depuis l'écran. Aucune valeur = AUCUN filtre
-    # (tout est affiché) ; une liste vide reste une liste vide, c'est-à-dire
-    # « rien coché, donc rien à montrer » — les deux cas sont distincts.
-    if isinstance(groupes, str):
-        groupes = frappe.parse_json(groupes) if groupes.strip() else None
-    if groupes is not None:
-        groupes = set(groupes)
+    # `groupes` et `secteur` arrivent en JSON depuis l'écran. Aucune valeur =
+    # AUCUN filtre (tout est affiché) ; une liste vide reste une liste vide,
+    # c'est-à-dire « rien coché, donc rien à montrer » — les deux cas sont
+    # distincts.
+    groupes = _liste_cochee(groupes)
+    secteur = _liste_cochee(secteur)
 
     lignes = _commandes(getdate(depuis or DEPUIS_DEFAUT),
                         getdate(jusqu_a or nowdate()))
@@ -411,11 +423,9 @@ def _filtrer(lignes, recherche, statut, origine, dispo, anomalie, tache,
     def garde(c):
         if statut and c["statut"] != statut:
             return False
-        # « — sans secteur » : les adresses jamais sectorisées, qu'on veut
-        # pouvoir isoler pour les corriger.
-        if secteur == "__vide__" and c["secteur"]:
-            return False
-        if secteur and secteur != "__vide__" and c["secteur"] != secteur:
+        # Secteurs cochés (multi-sélection). « __vide__ » désigne les adresses
+        # jamais sectorisées, qu'on veut pouvoir isoler pour les corriger.
+        if secteur is not None and (c["secteur"] or "__vide__") not in secteur:
             return False
         if origine == "web" and not c["web"]:
             return False

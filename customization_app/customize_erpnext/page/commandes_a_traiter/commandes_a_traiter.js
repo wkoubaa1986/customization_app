@@ -43,8 +43,18 @@ class CommandesATraiter {
         const m = r.message || {};
         $("#ct-statut").append(
           (m.statuts || []).map((s) => `<option value="${s}">${s}</option>`).join(""));
-        $("#ct-secteur").append(
-          (m.secteurs || []).map((s) => `<option value="${s}">${s}</option>`).join(""));
+        // Secteurs en CASES À COCHER : on travaille souvent sur deux ou trois
+        // secteurs voisins à la fois (une tournée), et une liste déroulante
+        // obligeait à repasser l'écran secteur par secteur.
+        // « — sans secteur » reste dans le lot : ces adresses sont justement
+        // celles qu'on veut pouvoir isoler pour les corriger.
+        $("#ct-secteurs").html(
+          [{ v: "__vide__", t: "— sans secteur" }]
+            .concat((m.secteurs || []).map((s) => ({ v: s, t: s })))
+            .map((s) =>
+              `<label><input type="checkbox" class="ct-sect"
+                 value="${frappe.utils.escape_html(s.v)}" checked>
+                 ${frappe.utils.escape_html(s.t)}</label>`).join(""));
         // Tous cochés au départ : le filtre n'enlève rien tant qu'on n'a
         // pas décidé de retirer un type. Plusieurs cases peuvent être cochées
         // en même temps — c'est une multi-sélection.
@@ -71,7 +81,9 @@ class CommandesATraiter {
       dispo: $("#ct-dispo").val() || "",
       anomalie: $("#ct-anomalie").val() || "",
       tache: $("#ct-tache").val() || "",
-      secteur: $("#ct-secteur").val() || "",
+      secteur: $("#ct-secteurs .ct-sect").length
+        ? JSON.stringify($("#ct-secteurs .ct-sect:checked").map((i, e) => e.value).get())
+        : "",
       livraison: $("#ct-livraison").val() || "",
       prestation: $("#ct-prestation").val() || "",
       client: $("#ct-client").val() || "",
@@ -91,16 +103,19 @@ class CommandesATraiter {
       timer = setTimeout(() => { this.start = 0; this._load(); }, 400);
     });
     ["#ct-depuis", "#ct-jusqua", "#ct-statut", "#ct-origine", "#ct-dispo",
-     "#ct-anomalie", "#ct-tache", "#ct-secteur", "#ct-livraison",
+     "#ct-anomalie", "#ct-tache", "#ct-livraison",
      "#ct-prestation", "#ct-client", "#ct-tri"].forEach((sel) =>
       $(sel).on("change", () => { this.start = 0; this._load(); }));
+    // Les cases de secteur sont créées APRÈS ce branchement (elles attendent la
+    // liste du serveur) : on écoute donc le conteneur, pas les cases.
+    $("#ct-secteurs").on("change", ".ct-sect", () => { this.start = 0; this._load(); });
 
     $("#ct-clear").on("click", () => {
       $("#ct-search").val("");
       ["#ct-statut", "#ct-origine", "#ct-dispo", "#ct-anomalie", "#ct-tache",
-       "#ct-secteur", "#ct-livraison", "#ct-prestation", "#ct-client"]
+       "#ct-livraison", "#ct-prestation", "#ct-client"]
         .forEach((s) => $(s).val(""));
-      $("#ct-groupes .ct-grp").prop("checked", true);
+      $("#ct-groupes .ct-grp, #ct-secteurs .ct-sect").prop("checked", true);
       this.start = 0;
       this._load();
     });
@@ -134,6 +149,12 @@ class CommandesATraiter {
     $(this.wrapper).on("change", ".ct-grp", () => { this.start = 0; this._load(); });
     $("#ct-groupes-tous").on("click", () => {
       $("#ct-groupes .ct-grp").prop("checked", true); this.start = 0; this._load();
+    });
+    $("#ct-secteurs-tous").on("click", () => {
+      $("#ct-secteurs .ct-sect").prop("checked", true); this.start = 0; this._load();
+    });
+    $("#ct-secteurs-aucun").on("click", () => {
+      $("#ct-secteurs .ct-sect").prop("checked", false); this.start = 0; this._load();
     });
     $("#ct-groupes-aucun").on("click", () => {
       $("#ct-groupes .ct-grp").prop("checked", false); this.start = 0; this._load();
