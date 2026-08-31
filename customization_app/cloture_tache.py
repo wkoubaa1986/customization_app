@@ -300,7 +300,24 @@ def exigences(tache):
         nouvelle_commande["custom_type_de_transaction"] = "Vente directe sans BL et Facture"
         nouvelle_commande["taxes_and_charges"] = "Vente Standard Sans Timbre Fiscale - A&S"
 
+    # Peut-on OUVRIR les pièces liées ? `boot.user.can_read` répond « oui » là où
+    # le contrôle de rôle refuse (constaté 31/08 sur le partenaire) : l'écran
+    # doit demander au serveur, sinon il affiche un bouton qui ne fait
+    # qu'ouvrir une erreur.
+    # ⚠️ Sur le DOCUMENT, pas sur le type : `has_permission("Delivery Note",
+    # "read")` sans document répond « oui » au partenaire, alors que l'ouverture
+    # d'un BL précis est refusée par l'autorisation de rôle.
+    commande = doc.get("commande_client")
+    premier_bl = ((commande_infos or {}).get("bls") or [{}])[0].get("bl")
+    peut_lire = {
+        "Sales Order": (not commande) or bool(frappe.has_permission(
+            "Sales Order", "read", doc=commande)),
+        "Delivery Note": (not premier_bl) or bool(frappe.has_permission(
+            "Delivery Note", "read", doc=premier_bl)),
+    }
+
     return {
+        "peut_lire": peut_lire,
         "nouvelle_commande": nouvelle_commande,
         "commande_infos": commande_infos,
         "client": doc.get("custom_client"),

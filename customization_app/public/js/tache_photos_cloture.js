@@ -125,6 +125,14 @@ function tache_bouton_gps(frm) {
 }
 
 function tache_dialogue_cloture(frm, exigences) {
+    // Un bouton « Ouvrir » vers un document qu'on n'a pas le droit de LIRE est
+    // un piège : il n'affiche qu'une erreur, encore et encore. Le partenaire
+    // n'a pas le rôle qui donne accès aux commandes ni aux bons de livraison
+    // (constaté 31/08 : « Pas d'autorisation pour Bon de livraison »).
+    // ⚠️ `boot.user.can_read` répond « oui » là où le contrôle de RÔLE refuse :
+    // la réponse vient donc du SERVEUR (`exigences().peut_lire`).
+    // `ex` et non `exigences` : le dialogue se rafraîchit, la valeur doit suivre.
+    const peut_lire = (dt) => !!((ex || {}).peut_lire || {})[dt];
     const esc = frappe.utils.escape_html;
     let ex = exigences;
 
@@ -288,9 +296,13 @@ function tache_dialogue_cloture(frm, exigences) {
                 <span style="font-size:16px">${ex.commande_brouillon || ex.commande_annulee ? "📋" : "✅"}</span>
                 <span style="flex:1">${__("Commande liée")} :
                     <b>${esc(ex.commande)}</b>${etat_commande}</span>
-                <button class="btn btn-xs ${ex.commande_brouillon ? "btn-primary" : "btn-default"}"
+                ${peut_lire("Sales Order") ? `<button class="btn btn-xs ${
+                      ex.commande_brouillon ? "btn-primary" : "btn-default"}"
                     data-ouvrir-commande="1">
-                    ${ex.commande_brouillon ? __("Ouvrir pour valider") : __("Ouvrir")}</button>
+                    ${ex.commande_brouillon ? __("Ouvrir pour valider") : __("Ouvrir")}</button>` : ""}
+                ${(!peut_lire("Sales Order") && ex.commande_brouillon)
+                    ? `<button class="btn btn-xs btn-primary" data-valider-docs="1"
+                        >${__("✅ Valider")}</button>` : ""}
             </div>`
             : "";
         const etat = `<div style="margin-top:8px;font-size:12px;color:var(--text-muted)">
@@ -390,7 +402,9 @@ function tache_dialogue_cloture(frm, exigences) {
                         ? `<span style="color:#b45309;font-weight:600">${__("Brouillon — à valider")}</span>`
                         : `<span style="color:#16a34a">${__("Validé")}</span>`}</span>
                 <button class="btn btn-xs ${b.brouillon ? "btn-primary" : "btn-default"}"
-                    data-ouvrir-bl="${esc(b.bl)}">${b.brouillon ? __("Ouvrir pour valider") : __("Ouvrir")}</button>
+                    data-ouvrir-bl="${esc(b.bl)}"
+                    ${peut_lire("Delivery Note") ? "" : "style=\"display:none\""}
+                    >${b.brouillon ? __("Ouvrir pour valider") : __("Ouvrir")}</button>
                   ${b.brouillon ? `<button type="button" class="btn btn-xs btn-primary"
                       style="margin-left:4px" data-valider-docs="1"
                       title="${__("Valide la commande et le bon de livraison sans les ouvrir")}"
