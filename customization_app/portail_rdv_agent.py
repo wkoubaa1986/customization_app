@@ -135,9 +135,15 @@ def ouvrir(commande=None, client=None):
     # `frappe.csrf_token = "None"` dans la page — et le premier POST du portail
     # part sans en-tête, donc en « Requête Invalide » (constaté 31/08). On le
     # force ici : cet appel précède forcément l'ouverture de la page.
-    from frappe.sessions import get_csrf_token
+    # Hors requête HTTP (console, tâche de fond, test), il n'y a pas de session
+    # à compléter et `session_obj` n'existe pas : l'absence de jeton n'est alors
+    # un problème pour personne — c'est le navigateur qui en a besoin.
+    try:
+        from frappe.sessions import get_csrf_token
 
-    get_csrf_token()
+        get_csrf_token()
+    except Exception:
+        pass
 
     jeton = frappe.generate_hash(length=32)
     frappe.cache().set_value("rdv_agent:%s" % jeton,

@@ -104,30 +104,41 @@
 
   /* ── Assistant : widget de chat flottant ─────────────────────────────── */
   .ia-fab { position: fixed; right: 16px; bottom: 16px; z-index: 60;
-            width: 58px; height: 58px; border-radius: 50%; border: none;
-            background: #0ea5e9; color: #fff; font-size: 25px; cursor: pointer;
-            box-shadow: 0 6px 18px rgba(2,132,199,.38); }
-  .ia-fab:hover { background: #0284c7; }
-  .ia-fab .pastille { position: absolute; top: -3px; right: -3px; width: 13px;
-                      height: 13px; border-radius: 50%; background: #22c55e;
-                      border: 2px solid #fff; }
+            width: 64px; height: 64px; border-radius: 50%; border: none; padding: 0;
+            background: linear-gradient(155deg, #38bdf8 0%, #2563eb 100%);
+            cursor: pointer; box-shadow: 0 10px 26px rgba(37,99,235,.42);
+            display: flex; align-items: center; justify-content: center;
+            transition: transform .15s ease, box-shadow .15s ease; }
+  .ia-fab:hover { transform: translateY(-2px);
+                  box-shadow: 0 14px 30px rgba(37,99,235,.5); }
+  .ia-fab svg { width: 40px; height: 40px; display: block; }
+  /* Pastille verte EN BAS À DROITE, comme une présence en ligne — en haut, elle
+     se lit comme une notification non lue et promet un message qui n'existe pas. */
+  .ia-fab .pastille { position: absolute; right: 1px; bottom: 1px; width: 16px;
+                      height: 16px; border-radius: 50%; background: #22c55e;
+                      border: 3px solid #fff; }
   /* Bulle d'accueil au-dessus de l'icône : elle NOMME l'assistant et dit ce
      qu'il sait faire. Une pastille muette se remarque, mais ne se comprend
      pas — le client doit savoir à quoi il s'adresse avant de cliquer. */
-  .ia-invite { position: fixed; right: 16px; bottom: 84px; z-index: 59;
-               width: min(250px, calc(100vw - 32px)); padding: 11px 30px 11px 13px;
-               background: #0ea5e9; color: #fff; border-radius: 14px;
-               font-size: 12.8px; line-height: 1.45; cursor: pointer;
-               box-shadow: 0 10px 26px rgba(2,132,199,.34);
+  .ia-invite { position: fixed; right: 16px; bottom: 92px; z-index: 59;
+               width: min(238px, calc(100vw - 32px)); padding: 12px 30px 13px 15px;
+               background: #fff; color: #0f172a; border-radius: 16px;
+               border: 1px solid #eef2f7; line-height: 1.4; cursor: pointer;
+               box-shadow: 0 14px 34px rgba(15,23,42,.17);
                animation: ia-monte .35s ease-out; }
-  .ia-invite:after { content: ""; position: absolute; right: 21px; bottom: -7px;
-                     border: 8px solid transparent; border-top-color: #0ea5e9;
-                     border-bottom: 0; }
-  .ia-invite b { font-weight: 700; }
-  .ia-invite .fermer { position: absolute; top: 5px; right: 7px; background: transparent;
-                       border: none; color: #fff; opacity: .75; font-size: 15px;
-                       line-height: 1; cursor: pointer; padding: 2px 4px; }
-  .ia-invite .fermer:hover { opacity: 1; }
+  /* Le petit carré pivoté fait une pointe qui garde la bordure et l'ombre du
+     cadre : un triangle plein en `border` laisserait un liseré coupé. */
+  .ia-invite:after { content: ""; position: absolute; right: 25px; bottom: -7px;
+                     width: 13px; height: 13px; background: #fff;
+                     border-right: 1px solid #eef2f7; border-bottom: 1px solid #eef2f7;
+                     border-bottom-right-radius: 3px; transform: rotate(45deg); }
+  .ia-invite .titre { display: block; font-weight: 700; font-size: 14.5px;
+                      margin-bottom: 2px; }
+  .ia-invite .sous { color: #64748b; font-size: 12.5px; }
+  .ia-invite .fermer { position: absolute; top: 4px; right: 6px; background: transparent;
+                       border: none; color: #cbd5e1; font-size: 15px;
+                       line-height: 1; cursor: pointer; padding: 2px 5px; }
+  .ia-invite .fermer:hover { color: #64748b; }
   @keyframes ia-monte { from { opacity: 0; transform: translateY(10px); }
                         to   { opacity: 1; transform: translateY(0); } }
   .ia-fenetre { position: fixed; right: 16px; bottom: 84px; z-index: 60;
@@ -159,8 +170,8 @@
   @media (max-width: 480px) {
     .ia-fenetre { right: 8px; left: 8px; width: auto; bottom: 78px; height: 68vh; }
     .ia-fab { right: 12px; bottom: 12px; }
-    .ia-invite { right: 12px; bottom: 78px; }
-    .ia-invite:after { right: 20px; }
+    .ia-invite { right: 12px; bottom: 86px; }
+    .ia-invite:after { right: 22px; }
   }
 </style>
 
@@ -277,10 +288,24 @@
         <div id="ia-invite" class="ia-invite" style="display:none">
           <button type="button" class="fermer" id="ia-invite-fermer"
                   title="Masquer">✕</button>
-          Bonjour 👋 Je suis <b>Tawa RDV</b>. Posez-moi vos questions sur votre
-          rendez-vous, je réponds 24/24 ✋
+          <span class="titre">Besoin d’aide ? 👋</span>
+          <span class="sous">Je suis <b>Tawa RDV</b>, je vous guide pour votre
+            rendez-vous — 24h/24.</span>
         </div>
-        <button type="button" id="ia-ouvrir" class="ia-fab" title="Tawa RDV — assistant rendez-vous">💬<span class="pastille"></span></button>
+        <button type="button" id="ia-ouvrir" class="ia-fab"
+                title="Tawa RDV — assistant rendez-vous">
+          <svg viewBox="0 0 48 48" aria-hidden="true">
+            <circle cx="24" cy="6.5" r="3" fill="#fff"></circle>
+            <rect x="22.6" y="8.5" width="2.8" height="5" fill="#fff"></rect>
+            <rect x="1.5" y="22" width="5.5" height="11" rx="2.75" fill="#fff"
+                  opacity=".8"></rect>
+            <rect x="41" y="22" width="5.5" height="11" rx="2.75" fill="#fff"
+                  opacity=".8"></rect>
+            <rect x="7" y="13" width="34" height="28" rx="11" fill="#fff"></rect>
+            <circle cx="17.5" cy="26.5" r="4.3" fill="#22d3ee"></circle>
+            <circle cx="30.5" cy="26.5" r="4.3" fill="#22d3ee"></circle>
+          </svg>
+          <span class="pastille"></span></button>
         <div id="ia-panneau" class="ia-fenetre" style="display:none">
           <div class="ia-entete">🤖 <span>Tawa RDV
               <span class="sous">Assistant Aqua World · répond en quelques secondes</span></span>
@@ -863,7 +888,9 @@
   function ia_basculer(ouvrir) {
     if (ouvrir) ia_masquer_invite(true);
     $("ia-panneau").style.display = ouvrir ? "flex" : "none";
-    $("ia-ouvrir").style.display = ouvrir ? "none" : "block";
+    // `flex` et non `block` : le bouton centre son robot par flexbox — le
+    // remettre en `block` le décalerait dans son cercle après une fermeture.
+    $("ia-ouvrir").style.display = ouvrir ? "none" : "flex";
     if (!ouvrir) return;
     if (!$("ia-fil").innerHTML) {
       // L'assistant ouvre sur CE QUI CONCERNE ce client : une commande en
