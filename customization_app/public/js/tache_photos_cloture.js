@@ -300,8 +300,9 @@ function tache_dialogue_cloture(frm, exigences) {
                       ex.commande_brouillon ? "btn-primary" : "btn-default"}"
                     data-ouvrir-commande="1">
                     ${ex.commande_brouillon ? __("Ouvrir pour valider") : __("Ouvrir")}</button>` : ""}
-                ${(!peut_lire("Sales Order") && ex.commande_brouillon)
+                ${ex.commande_brouillon
                     ? `<button class="btn btn-xs btn-primary" data-valider-docs="1"
+                        title="${__("Valide la commande et le bon de livraison sans ouvrir les fiches")}"
                         >${__("✅ Valider")}</button>` : ""}
             </div>`
             : "";

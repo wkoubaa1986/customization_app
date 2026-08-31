@@ -42,7 +42,12 @@ def _ma_tache(nom):
     """
     doc = frappe.get_doc(DOCTYPE_TACHE, nom)
     employe = _employe_de_l_utilisateur()
-    if not employe or doc.custom_choix_du_staff != employe:
+    mienne = bool(employe) and doc.custom_choix_du_staff == employe
+    # Le magasin, lui, a le droit de valider une commande : il doit pouvoir
+    # utiliser le même bouton sur la tâche d'un technicien, sans quoi l'écran
+    # aurait deux comportements selon qui regarde.
+    autorise = mienne or bool(frappe.has_permission("Sales Order", "submit"))
+    if not autorise:
         frappe.throw(_("Cette intervention ne vous est pas affectée."),
                      frappe.PermissionError)
     if doc.status == "Completed":
