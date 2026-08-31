@@ -260,6 +260,18 @@ function tache_dialogue_cloture(frm, exigences) {
                 <span style="flex:1">${__("Position Google Map")}</span>
                 <button class="btn btn-xs ${ex.gmap ? "btn-default" : "btn-primary"}"
                     data-gps="1">${__("📍 Ma position")}</button>
+            </div>
+            <!-- Saisie MANUELLE : le bouton exige la géolocalisation du
+                 navigateur, refusée ou indisponible sur certains téléphones.
+                 Coller un lien Maps doit toujours rester possible. -->
+            <div style="display:flex;align-items:center;gap:8px;padding:0 0 8px 26px;
+                    border-bottom:1px solid var(--border-color,#eee)">
+                <input type="text" class="form-control input-xs" data-gmap-champ="1"
+                    style="flex:1;height:28px;font-size:12px"
+                    placeholder="${__("…ou collez le lien Google Maps ici")}"
+                    value="${esc(ex.gmap || "")}">
+                <button class="btn btn-xs btn-default" data-gmap-valider="1"
+                    >${__("Enregistrer")}</button>
             </div>`
             : "";
         // Commande DÉJÀ liée : affichée avec un bouton « Ouvrir » — la fiche
@@ -379,9 +391,36 @@ function tache_dialogue_cloture(frm, exigences) {
                         : `<span style="color:#16a34a">${__("Validé")}</span>`}</span>
                 <button class="btn btn-xs ${b.brouillon ? "btn-primary" : "btn-default"}"
                     data-ouvrir-bl="${esc(b.bl)}">${b.brouillon ? __("Ouvrir pour valider") : __("Ouvrir")}</button>
+                  ${b.brouillon ? `<button type="button" class="btn btn-xs btn-primary"
+                      style="margin-left:4px" data-valider-docs="1"
+                      title="${__("Valide la commande et le bon de livraison sans les ouvrir")}"
+                      >${__("✅ Valider")}</button>` : ""}
             </div>`;
         });
         zi.$wrapper.html(html);
+        // Validation CÔTÉ SERVEUR : « Ouvrir pour valider » suppose le droit de
+        // lire le document, que le partenaire n'a pas. Ce bouton fait le même
+        // travail sans l'ouvrir, et le serveur revérifie que la tâche est bien
+        // la sienne.
+        zi.$wrapper.find("[data-valider-docs]").on("click", function () {
+            frappe.call({
+                method: "customization_app.cloture_partenaire.valider_documents",
+                args: { tache: frm.doc.name },
+                freeze: true,
+                freeze_message: __("Validation en cours…"),
+                callback: (r) => {
+                    const esc2 = frappe.utils.escape_html;
+                    frappe.msgprint({
+                        title: __("Documents validés"), indicator: "green",
+                        message: ((r.message || {}).etapes || []).map((x) =>
+                            `<div><b>${esc2(x.quoi)}</b> : ${esc2(x.doc)} — ${esc2(x.etat)}</div>`
+                        ).join(""),
+                    });
+                    rafraichir();
+                },
+            });
+        });
+
         zi.$wrapper.find("[data-ouvrir-bl]").on("click", function () {
             const bl = $(this).attr("data-ouvrir-bl");
             frappe
@@ -395,6 +434,27 @@ function tache_dialogue_cloture(frm, exigences) {
     }
 
     function brancher_boutons_zone() {
+        // Enregistrement du lien saisi à la main.
+        const enregistrer_gmap = () => {
+            const champ = d.fields_dict.zone.$wrapper.find("[data-gmap-champ]");
+            const lien = (champ.val() || "").trim();
+            if (!lien) {
+                frappe.msgprint(__("Collez d'abord un lien Google Maps."));
+                return;
+            }
+            frappe.db.set_value(frm.doctype, frm.docname, "google_map", lien)
+                .then(() => {
+                    frm.reload_doc && frm.reload_doc();
+                    frappe.show_alert({ message: __("Position enregistrée."),
+                                        indicator: "green" }, 5);
+                    rafraichir();
+                });
+        };
+        d.fields_dict.zone.$wrapper.find("[data-gmap-valider]").on("click", enregistrer_gmap);
+        d.fields_dict.zone.$wrapper.find("[data-gmap-champ]").on("keydown", (e) => {
+            if (e.key === "Enter") { e.preventDefault(); enregistrer_gmap(); }
+        });
+
         d.fields_dict.zone.$wrapper.find("[data-gps]").on("click", function () {
             const $b = $(this);
             if (!navigator.geolocation) {

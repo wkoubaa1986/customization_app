@@ -186,6 +186,27 @@ def peut_cloturer(tache) -> dict:
 
 
 @frappe.whitelist()
+def valider_documents(tache) -> dict:
+    """Valide la commande et le bon de livraison de SA tâche, SANS la clôturer.
+
+    L'écran de clôture proposait « Ouvrir pour valider » — un lien vers le
+    document, donc inutilisable pour qui n'a pas le droit de le lire : le
+    partenaire n'avait aucun moyen d'avancer (constaté 31/08). Ce point d'entrée
+    fait le même travail côté serveur, sur sa seule tâche.
+    """
+    doc = _ma_tache(tache)
+    if not doc.commande_client:
+        frappe.throw(_("Cette intervention n'a pas de commande liée."))
+    etapes = []
+    with _en_systeme():
+        nom, etat = _valider_commande(doc.commande_client)
+        etapes.append({"quoi": "Commande", "doc": nom, "etat": etat})
+        nom, etat = _bon_de_livraison(doc, doc.commande_client)
+        etapes.append({"quoi": "Bon de livraison", "doc": nom, "etat": etat})
+    return {"etapes": etapes}
+
+
+@frappe.whitelist()
 def cloturer(tache, rapport_visite=None) -> dict:
     """Valide la commande, valide son bon de livraison, puis ferme la tâche."""
     doc = _ma_tache(tache)
