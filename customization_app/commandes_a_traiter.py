@@ -26,6 +26,7 @@ import frappe
 from frappe import _
 from frappe.utils import flt, getdate, nowdate
 
+from customization_app.suivi_appels import CHAMPS as CHAMPS_APPELS, LIBELLES as LIBELLES_APPELS
 from customization_app.traitement_commandes import (
     _articles, _bordereaux, _commandes, _taches,
 )
@@ -403,6 +404,12 @@ def get_commandes(depuis=None, jusqu_a=None, recherche=None, statut=None,
             # Ce qui a DÉJÀ été envoyé sur cette commande : sans ça, on relance
             # deux fois le même client sans le savoir.
             "envoi": envois.get(l.name),
+            # Les appels de confirmation restés SANS RÉPONSE (commandes web) :
+            # « on a écrit » et « on a essayé de joindre » ne se remplacent pas,
+            # et c'est le second qui justifie d'annuler.
+            "appels": [{"rang": rang, "libelle": LIBELLES_APPELS.get(rang, ""),
+                        "date": str(l.get(champ))[:16]}
+                       for rang, champ in sorted(CHAMPS_APPELS.items()) if l.get(champ)],
             "livraison_equipe": l.name in livraisons,
             "a_livraison": bool(prestations.get(l.name, {}).get("livraison")),
             "a_main_oeuvre": bool(prestations.get(l.name, {}).get("main_oeuvre")),

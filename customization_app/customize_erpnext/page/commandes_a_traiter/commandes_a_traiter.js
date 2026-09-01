@@ -53,6 +53,20 @@ function rendre_articles(articles) {
   }).join("") || `<span class="ct-sub">—</span>`;
 }
 
+/** Les appels de confirmation restés SANS RÉPONSE, sous la pastille de relance.
+ *
+ *  « On a écrit » et « on a essayé de joindre » ne disent pas la même chose, et
+ *  c'est le second qui justifie d'annuler une commande web : sans lui à l'écran,
+ *  on annule sans savoir si quelqu'un a seulement décroché son téléphone.
+ *  Ces appels n'existent que sur les commandes web (suivi_appels). */
+function rendre_appels(appels) {
+  if (!appels || !appels.length) return "";
+  const esc = frappe.utils.escape_html;
+  const titre = appels.map((a) => `${a.libelle} — ${a.date}`).join("\n");
+  return `<div><span class="ct-badge b-warn" title="${esc(titre)}"
+      >📞 ${appels.length} appel${appels.length > 1 ? "s" : ""} sans réponse</span></div>`;
+}
+
 class CommandesATraiter {
   constructor(wrapper) {
     this.wrapper = wrapper;
@@ -200,6 +214,14 @@ class CommandesATraiter {
     $("#ct-rdv").on("click", () => this._dialogue_message("rdv"));
     $("#ct-livr").on("click", () => this._dialogue_livraison());
     $("#ct-annuler").on("click", () => this._dialogue_annuler());
+
+    // ⚠️ RECHARGE SANS VIDER LA SÉLECTION. On actualise justement pour VOIR
+    // l'effet de ce qu'on vient de faire sur les commandes cochées : les vider
+    // au passage obligerait à tout recocher pour l'action suivante.
+    $("#ct-refresh").on("click", () => {
+      this._load();
+      frappe.show_alert({ message: __("Liste actualisée"), indicator: "blue" }, 3);
+    });
   }
 
   // ---------------------------------------------------------------- données
@@ -268,7 +290,8 @@ class CommandesATraiter {
             ${c.envoi ? `<div><span class="ct-badge b-svc"
                  title="${esc(canaux(c.envoi))} — dernier envoi le ${esc(c.envoi.dernier)} par ${esc(c.envoi.par)}"
                  >📨 relancé${c.envoi.n > 1 ? ` ×${c.envoi.n}` : ""} · ${esc(String(c.envoi.dernier).slice(0, 10))}</span></div>`
-              : ""}</td>
+              : ""}
+            ${rendre_appels(c.appels)}</td>
         <td><a href="/app/customer/${encodeURIComponent(c.client)}" target="_blank">${esc(c.client_nom)}</a>
             <div class="ct-sub">${c.telephone
               ? `📞 <a href="tel:${esc(c.telephone)}">${esc(c.telephone)}</a>`
@@ -370,7 +393,8 @@ class CommandesATraiter {
                   ${c.web ? `<span class="ct-badge b-web">🌐 web</span>` : ""}</div>
                 ${c.envoi ? `<div><span class="ct-badge b-svc"
                      title="${esc(canaux(c.envoi))} — le ${esc(c.envoi.dernier)}"
-                     >📨 relancé</span></div>` : ""}</td>
+                     >📨 relancé</span></div>` : ""}
+                ${rendre_appels(c.appels)}</td>
             <td class="ct-adr">${esc(c.adresse || "—")}
                 <div>${c.secteur
                   ? `<span class="ct-badge b-info">📍 ${esc(c.secteur)}</span>`
