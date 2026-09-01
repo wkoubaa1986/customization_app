@@ -329,6 +329,31 @@ def _journal_otp(numero, evenement):
         pass
 
 
+def _texte_otp(code):
+    """Le SMS du code — avec la ligne que le NAVIGATEUR sait lire tout seul.
+
+    Chrome sur Android remplit le champ sans que le client ait à recopier quoi
+    que ce soit (API WebOTP), à UNE condition de forme : la dernière ligne du
+    SMS doit être « @domaine #code », et le domaine doit être EXACTEMENT celui
+    de la page ouverte. D'où la lecture de l'URL du site plutôt qu'un domaine
+    écrit en dur : le jour où le portail déménage, un domaine figé ferait
+    échouer le remplissage en silence — le client ne verrait rien d'anormal,
+    il taperait son code, et personne ne saurait que la fonction est morte.
+
+    Le reste du monde (iPhone notamment) ignore cette ligne et lit le code par
+    heuristique, grâce au mot « Code » en tête et à `autocomplete=one-time-code`
+    sur le champ.
+
+    ⚠️ LONGUEUR. 84 caractères, tout en alphabet GSM : le SMS reste UN seul
+    segment (160). Allonger ce texte le ferait facturer double.
+    """
+    from urllib.parse import urlparse
+
+    texte = "Code Aqua World : %s (valable 5 minutes)." % code
+    hote = (urlparse(frappe.utils.get_url() or "").hostname or "").strip()
+    return ("%s\n@%s #%s" % (texte, hote, code)) if hote else texte
+
+
 def _envoyer_otp_sms(numero, texte):
     """Envoi de l'OTP en direct sur la passerelle, avec VÉRIFICATION.
 
@@ -434,7 +459,7 @@ def envoyer_otp(telephone):
         code_test = code
     else:
         try:
-            _envoyer_otp_sms(numero, "Code Aqua World : %s (valable 5 minutes)." % code)
+            _envoyer_otp_sms(numero, _texte_otp(code))
         except Exception:
             frappe.log_error(frappe.get_traceback(), "portail_rdv envoi OTP")
             frappe.throw(_("Envoi du SMS impossible pour le moment — réessayez."))

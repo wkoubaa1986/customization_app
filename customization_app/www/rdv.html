@@ -229,7 +229,8 @@
     <div class="rdv-etape" id="etape-code">
       <h2>Code reçu par SMS</h2>
       <label>Code à 6 chiffres</label>
-      <input type="tel" id="rdv-code" class="rdv-otp" inputmode="numeric" maxlength="6" placeholder="••••••">
+      <input type="tel" id="rdv-code" class="rdv-otp" inputmode="numeric" maxlength="6"
+             autocomplete="one-time-code" placeholder="••••••">
       <button class="rdv-btn" id="btn-verifier">Vérifier</button>
       <button class="rdv-btn secondaire" id="btn-renvoyer">Renvoyer un code</button>
     </div>
@@ -458,10 +459,46 @@
     }
   }
 
+  // ── Lecture automatique du code reçu par SMS ─────────────────────────────
+  //
+  // DEUX MÉCANISMES, ET ILS NE SE REMPLACENT PAS.
+  //  1. `autocomplete="one-time-code"` sur le champ : iPhone (et les claviers
+  //     Android) proposent le code au-dessus du clavier, en le devinant du SMS.
+  //     Rien à faire de plus, c'est l'attribut qui travaille.
+  //  2. WebOTP ci-dessous : Chrome sur Android REMPLIT le champ et valide tout
+  //     seul, sans que le client touche à rien. Il exige que la dernière ligne
+  //     du SMS soit « @domaine #code » (posée par portail_rdv._texte_otp) et
+  //     que la page soit en HTTPS.
+  // Là où rien de tout ça n'existe, le client tape ses 6 chiffres comme avant :
+  // aucune de ces aides n'est sur le chemin critique.
+  let otp_ecoute = null;
+
+  function ecouter_sms() {
+    arreter_ecoute_sms();
+    if (!("OTPCredential" in window)) return;
+    otp_ecoute = new AbortController();
+    navigator.credentials
+      .get({ otp: { transport: ["sms"] }, signal: otp_ecoute.signal })
+      .then((cred) => {
+        if (!cred || !cred.code) return;
+        $("rdv-code").value = cred.code;
+        // On enchaîne la vérification : faire lire le code au téléphone puis
+        // demander au client d'appuyer serait s'arrêter au milieu du geste.
+        $("btn-verifier").click();
+      })
+      .catch(() => { /* refus, expiration, ou changement d'écran : sans effet */ });
+  }
+
+  function arreter_ecoute_sms() {
+    try { otp_ecoute && otp_ecoute.abort(); } catch (e) { /* déjà fini */ }
+    otp_ecoute = null;
+  }
+
   $("btn-otp").addEventListener("click", async () => {
     try {
       const res = await appeler("envoyer_otp", { telephone: $("rdv-tel").value }, $("btn-otp"));
       montrer("etape-code");
+      ecouter_sms();
       info(res.code_test ? "🧪 MODE TEST — votre code : " + res.code_test : res.message);
       if (res.code_test) $("rdv-code").value = res.code_test;
       $("rdv-code").focus();
@@ -471,6 +508,7 @@
   $("btn-renvoyer").addEventListener("click", async () => {
     try {
       const res = await appeler("envoyer_otp", { telephone: $("rdv-tel").value }, $("btn-renvoyer"));
+      ecouter_sms();
       info(res.message);
     } catch (e) { message(e.message); }
   });
@@ -609,6 +647,7 @@
     try {
       const res = await appeler("verifier_otp",
         { telephone: $("rdv-tel").value, code: $("rdv-code").value }, $("btn-verifier"));
+      arreter_ecoute_sms();
       if (res.inscription) { await ouvrir_inscription(res.jeton_inscription); return; }
       if (res.choix) { rendre_choix_client(res); return; }
       ouvrir_seance(res);
