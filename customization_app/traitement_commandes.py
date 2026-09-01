@@ -525,3 +525,35 @@ def envoyer_sms_suivi(commande):
         frappe.throw(_("Échec de l'envoi : {0}").format(res.get("erreur") or ""))
     frappe.db.commit()
     return res
+
+
+def aramex_des_commandes(noms):
+    """{commande: {"aramex": bool, "bordereau": str}} — pour un lot de commandes.
+
+    MÊME RÈGLE QUE L'ÉCRAN TRAITEMENT, et volontairement au même endroit : une
+    commande est « Aramex » par son ÉCHÉANCIER ou par un paiement déjà posé sur
+    le compte Aramex, et son bordereau vit d'abord dans ce paiement, à défaut
+    dans le champ saisi sur la commande. Recopier ce raisonnement ailleurs, c'est
+    se garantir qu'un jour le calendrier annoncera un bordereau que la liste des
+    commandes ne connaît pas.
+    """
+    if not noms:
+        return {}
+    noms = list({n for n in noms if n})
+    if not noms:
+        return {}
+    bordereaux = _bordereaux(noms)
+    out = {}
+    for l in frappe.get_all(
+            "Sales Order", filters={"name": ["in", noms]},
+            fields=["name", "payment_terms_template", "custom_bordereau_aramex"],
+            limit_page_length=0):
+        paiement = bordereaux.get(l.name)
+        bordereau = (paiement or {}).get("bordereau") \
+            or reference_aramex(l.custom_bordereau_aramex)
+        out[l.name] = {
+            "aramex": l.payment_terms_template == PAYMENT_TERMS_ARAMEX
+                      or bool(paiement) or bool(bordereau),
+            "bordereau": bordereau or "",
+        }
+    return out

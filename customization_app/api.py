@@ -229,7 +229,7 @@ def get_custom_tache_events(start, end, filters=None):
         field_map.start, field_map.end, field_map.title, "name", field_map.color,
         "custom_choix_du_staff", "custom_employé", "custom_client", "nom_client","custom_type_dintervention",
         "status", "toute_la_journée", "custom_reservation_app","secteur","tel","details_adresse","info_secteur","google_map",
-        "subject","raison_annulation","rapport_visite"
+        "subject","raison_annulation","rapport_visite","commande_client"
     ]
 
     # If filters are passed, use them; otherwise, default to an empty list
@@ -265,8 +265,49 @@ def get_custom_tache_events(start, end, filters=None):
             else:
                 event['all_day'] = 0
 
+    _annoter_aramex(events)
     # print(events)
     return events
+
+
+# Le colis Aramex se lit SUR LA TÂCHE (demande 01/09/2026) : quand la commande
+# part par Aramex, la vignette du calendrier annonce le bordereau et le client,
+# pour qu'on sache d'un coup d'œil ce qu'on doit remettre au transporteur.
+ARAMEX_SANS_BORDEREAU = "//"
+
+
+def _annoter_aramex(events):
+    """Ajoute au titre des tâches Aramex la ligne « 📦 Aramex <code> · <client> ».
+
+    ⚠️ ICI ET NON DANS LE TITRE ENREGISTRÉ. Le titre est composé à la sauvegarde
+    par le Client Script de la fiche : y mettre le bordereau n'aurait rien changé
+    aux 724 tâches déjà créées, et aurait figé une donnée qui bouge — le
+    bordereau arrive APRÈS la tâche, avec le paiement. Calculé à l'affichage, il
+    est juste au moment où on le lit.
+
+    ⚠️ ET SANS TOUCHER À LA COULEUR : elle reste celle de l'employé
+    (`compute_tache_color`), c'est elle qui fait lire le planning.
+
+    Le bordereau manquant s'écrit « // » plutôt que de disparaître : une ligne
+    Aramex sans numéro est une ANOMALIE à traiter, pas une tâche ordinaire.
+    """
+    from customization_app.traitement_commandes import aramex_des_commandes
+
+    infos = aramex_des_commandes([e.get("commande_client") for e in events])
+    if not infos:
+        return
+    for e in events:
+        info = infos.get(e.get("commande_client"))
+        if not info or not info["aramex"]:
+            continue
+        client = e.get("nom_client") or e.get("custom_client") or ""
+        ligne = "📦 Aramex %s%s" % (info["bordereau"] or ARAMEX_SANS_BORDEREAU,
+                                   (" · " + client) if client else "")
+        # En DEUXIÈME ligne : la première porte le secteur ou « Annulé!!! » /
+        # « terminé!!! », qui doit rester le premier mot lu.
+        lignes = (e.get("titre") or "").split("\n")
+        lignes.insert(1 if len(lignes) > 1 else len(lignes), ligne)
+        e["titre"] = "\n".join(lignes)
 
 @frappe.whitelist()
 def get_data(data=None):
