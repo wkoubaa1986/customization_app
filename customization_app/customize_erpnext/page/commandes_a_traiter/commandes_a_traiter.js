@@ -31,6 +31,28 @@ function canaux(e) {
   return l.length ? l.join(" et ") : "envoi tenté sans destinataire";
 }
 
+/** Les articles d'une commande avec leur verdict de stock.
+ *  Partagé par la ligne du tableau et la fenêtre « commandes du client » : deux
+ *  rendus séparés finiraient par annoncer des verdicts différents pour la même
+ *  commande, à quelques centimètres l'un de l'autre. */
+function rendre_articles(articles) {
+  const esc = frappe.utils.escape_html;
+  return (articles || []).map((a) => {
+    // Un stock NÉGATIF n'est pas une rupture : c'est un inventaire faux.
+    // Le dire autrement évite d'annuler une commande dont on a l'article.
+    const badge = !a.stocke
+      ? `<span class="ct-badge b-svc">service</span>`
+      : a.stock_negatif
+        ? `<span class="ct-badge b-warn" title="Le stock enregistré est négatif : l'inventaire de cet article est faux, à corriger avant de décider">🩺 stock négatif (${a.stock})</span>`
+        : a.manque
+          ? `<span class="ct-badge b-ko">manque · dispo ${a.dispo}</span>`
+          : `<span class="ct-badge b-ok">stock ${a.dispo}</span>`;
+    return `<div class="ct-art"><b>${a.qte}×</b>
+        <span class="nom" title="${esc(a.code)} — ${esc(a.article)}">${esc(a.article)}</span>
+        ${badge}</div>`;
+  }).join("") || `<span class="ct-sub">—</span>`;
+}
+
 class CommandesATraiter {
   constructor(wrapper) {
     this.wrapper = wrapper;
@@ -155,8 +177,6 @@ class CommandesATraiter {
       this._maj_compte();
     });
 
-    // Un clic sur « N commandes » isole ce client : c'est le geste naturel
-    // quand on repère un doublon ou un client qui commande en plusieurs fois.
     $(this.wrapper).on("change", ".ct-grp", () => { this.start = 0; this._load(); });
     $("#ct-groupes-tous").on("click", () => {
       $("#ct-groupes .ct-grp").prop("checked", true); this.start = 0; this._load();
@@ -171,11 +191,8 @@ class CommandesATraiter {
       $("#ct-groupes .ct-grp").prop("checked", false); this.start = 0; this._load();
     });
 
-    $(this.wrapper).on("click", ".ct-multi", (e) => {
-      $("#ct-search").val($(e.currentTarget).data("client"));
-      this.start = 0;
-      this._load();
-    });
+    $(this.wrapper).on("click", ".ct-multi", (e) =>
+      this._dialogue_client($(e.currentTarget).data("client")));
 
     $(this.wrapper).on("click", ".ct-vider", () => this._vider_selection());
 
@@ -226,20 +243,7 @@ class CommandesATraiter {
     const lignes = this.data.lignes || [];
     const esc = frappe.utils.escape_html;
     $("#ct-body").html(lignes.length ? lignes.map((c) => {
-      const articles = (c.articles || []).map((a) => {
-        // Un stock NÉGATIF n'est pas une rupture : c'est un inventaire faux.
-        // Le dire autrement évite d'annuler une commande dont on a l'article.
-        const badge = !a.stocke
-          ? `<span class="ct-badge b-svc">service</span>`
-          : a.stock_negatif
-            ? `<span class="ct-badge b-warn" title="Le stock enregistré est négatif : l'inventaire de cet article est faux, à corriger avant de décider">🩺 stock négatif (${a.stock})</span>`
-            : a.manque
-              ? `<span class="ct-badge b-ko">manque · dispo ${a.dispo}</span>`
-              : `<span class="ct-badge b-ok">stock ${a.dispo}</span>`;
-        return `<div class="ct-art"><b>${a.qte}×</b>
-            <span class="nom" title="${esc(a.code)} — ${esc(a.article)}">${esc(a.article)}</span>
-            ${badge}</div>`;
-      }).join("") || `<span class="ct-sub">—</span>`;
+      const articles = rendre_articles(c.articles);
 
       // Ce qu'il y a À FAIRE sur la commande, lu des groupes d'articles.
       const prestation = c.a_livraison || c.a_main_oeuvre
@@ -272,7 +276,7 @@ class CommandesATraiter {
                  ? ` · ${esc(c.groupe_client)}` : ""}</div>
             ${c.commandes_client > 1
               ? `<div><span class="ct-badge b-warn ct-multi" data-client="${esc(c.client)}"
-                     style="cursor:pointer" title="Voir les ${c.commandes_client} commandes de ce client sur la période"
+                     style="cursor:pointer" title="Ouvrir les ${c.commandes_client} commandes de ce client sur la période"
                      >🧾 ${c.commandes_client} commandes</span></div>` : ""}</td>
         <td class="ct-adr">${esc(c.adresse || "—")}
             <div>${c.secteur
@@ -315,6 +319,97 @@ class CommandesATraiter {
     $(this.wrapper).find(".ct-sel").prop("checked", false);
     $("#ct-all").prop("checked", false);
     this._maj_compte();
+  }
+
+  // ------------------------------------------- les commandes d'un même client
+
+  /** Le badge « N commandes » ouvre la LISTE de ces commandes, au lieu de
+   *  filtrer l'écran (demande 01/09/2026).
+   *
+   *  Pourquoi c'est mieux qu'un filtre : on regarde un client parce qu'on
+   *  soupçonne un doublon ou une commande en plusieurs fois — on veut COMPARER,
+   *  pas naviguer. Filtrer effaçait la recherche en cours et faisait perdre la
+   *  place dans l'arriéré ; il fallait ensuite tout remonter pour reprendre.
+   *
+   *  Les lignes viennent du serveur, calculées comme celles de la liste : une
+   *  fenêtre qui recomposerait le stock à sa façon finirait par contredire la
+   *  ligne juste derrière elle.
+   */
+  _dialogue_client(client) {
+    const esc = frappe.utils.escape_html;
+    const d = new frappe.ui.Dialog({
+      title: __("Commandes du client"),
+      size: "extra-large",
+      fields: [{ fieldtype: "HTML", fieldname: "corps" }],
+    });
+    d.fields_dict.corps.$wrapper.html(
+      `<div class="ct-vide">${__("Chargement…")}</div>`);
+    d.show();
+
+    frappe.call({
+      method: "customization_app.commandes_a_traiter.get_commandes_client",
+      args: { client, depuis: $("#ct-depuis").val(), jusqu_a: $("#ct-jusqua").val() },
+      callback: (r) => {
+        const m = r.message || {};
+        const lignes = m.lignes || [];
+        d.set_title(__("{0} — {1} commande(s)", [m.client_nom || client, lignes.length]));
+        if (!lignes.length) {
+          d.fields_dict.corps.$wrapper.html(
+            `<div class="ct-vide">${__("Aucune commande sur la période affichée.")}</div>`);
+          return;
+        }
+        const corps = lignes.map((c) => {
+          const articles = rendre_articles(c.articles);
+          const taches = (c.taches || []).map((t) =>
+            `<span class="ct-badge b-info">🛠️ ${esc(t.type || "?")} · ${esc(t.statut || "")}</span>`
+          ).join(" ") || `<span class="ct-badge b-warn">aucune tâche</span>`;
+          return `<tr>
+            <td><a href="/app/sales-order/${encodeURIComponent(c.name)}" target="_blank"
+                  class="ct-cde">${esc(c.name)}</a>
+                <div class="ct-sub">${esc(c.date)} · ${esc(c.statut)}
+                  ${c.web ? `<span class="ct-badge b-web">🌐 web</span>` : ""}</div>
+                ${c.envoi ? `<div><span class="ct-badge b-svc"
+                     title="${esc(canaux(c.envoi))} — le ${esc(c.envoi.dernier)}"
+                     >📨 relancé</span></div>` : ""}</td>
+            <td class="ct-adr">${esc(c.adresse || "—")}
+                <div>${c.secteur
+                  ? `<span class="ct-badge b-info">📍 ${esc(c.secteur)}</span>`
+                  : `<span class="ct-badge b-warn">📍 sans secteur</span>`}</div></td>
+            <td>${articles}</td>
+            <td>${taches}</td>
+            <td>${c.anomalie ? `<span class="ct-badge b-ko">${esc(c.anomalie)}</span>` : ""}</td>
+            <td class="num">${format_currency(c.ttc, c.devise)}</td>
+          </tr>`;
+        }).join("");
+
+        d.fields_dict.corps.$wrapper.html(`
+          <div style="max-height:60vh;overflow:auto">
+            <table class="ct-tbl" style="margin:0">
+              <thead><tr>
+                <th>${__("Commande")}</th><th>${__("Adresse")}</th>
+                <th>${__("Articles & stock")}</th><th>${__("Tâches")}</th>
+                <th>${__("Anomalie")}</th><th class="num">${__("TTC")}</th>
+              </tr></thead>
+              <tbody>${corps}</tbody>
+            </table>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;margin-top:10px">
+            <b>${__("Total")} : ${format_currency(m.total_ttc, m.devise)}</b>
+            <button class="btn btn-xs btn-default" id="ct-cli-isoler"
+              style="margin-left:auto">🔍 ${__("Isoler dans la liste")}</button>
+          </div>`);
+
+        // Le filtrage reste accessible d'un clic pour qui veut ENSUITE agir sur
+        // ces commandes : la sélection, les envois et l'annulation vivent dans
+        // l'écran, pas dans la fenêtre.
+        d.fields_dict.corps.$wrapper.find("#ct-cli-isoler").on("click", () => {
+          d.hide();
+          $("#ct-search").val(client);
+          this.start = 0;
+          this._load();
+        });
+      },
+    });
   }
 
   _selection() {

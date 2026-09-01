@@ -771,3 +771,25 @@ def annuler_et_informer(noms, motif, modele, sujet=None, sms=1, email=1,
                                       sms=sms, email=email,
                                       remplacements=remplacements)
     return {"annulations": annulations, "informes": faites, "envoi": envoi}
+
+
+@frappe.whitelist()
+def get_commandes_client(client, depuis=None, jusqu_a=None):
+    """Toutes les commandes de CE client sur la période — pour la fenêtre
+    « N commandes » de l'écran.
+
+    On repasse par `get_commandes` au lieu de refaire une requête : le stock,
+    les manques, les tâches et les anomalies doivent être calculés EXACTEMENT
+    comme dans la liste, sinon la fenêtre annoncerait un manque que la ligne
+    juste derrière ne montre pas.
+    """
+    _lecture()
+    res = get_commandes(depuis=depuis, jusqu_a=jusqu_a, page_length=0)
+    lignes = [l for l in res["lignes"] if l["client"] == client]
+    return {
+        "client": client,
+        "client_nom": (lignes[0]["client_nom"] if lignes else client),
+        "lignes": lignes,
+        "total_ttc": round(sum(flt(l["ttc"]) for l in lignes), 3),
+        "devise": (lignes[0]["devise"] if lignes else "TND"),
+    }
