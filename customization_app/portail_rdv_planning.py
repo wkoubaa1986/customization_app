@@ -418,6 +418,27 @@ def _pool_du_jour(config, liste, taches, jour, conges=frozenset(), contexte=None
     return pool
 
 
+MODE_REPARTITION = "Répartition sur les disponibles"
+
+
+def _repartir(config):
+    """Le portail répartit-il la charge, ou remplit-il le premier de la liste ?"""
+    return (config or {}).get("mode_affectation") == MODE_REPARTITION
+
+
+def _charge_demi(entree, demi):
+    """Ce que l'employé a DÉJÀ sur cette demi-journée, en minutes.
+
+    On compte la demi-journée et non la journée : c'est l'unité que le client
+    réserve, et un technicien chargé le matin peut très bien être le plus libre
+    de l'après-midi.
+    """
+    total = 0
+    for debut, fin in (entree or {}).get(demi) or []:
+        total += max(0, int((fin - debut).total_seconds() // 60))
+    return total
+
+
 def _quota_lointain_ok(lointains, jour, secteur):
     """1 journée/semaine PAR secteur lointain : si la semaine a déjà sa journée,
     seule CETTE journée reste proposable."""
@@ -503,9 +524,21 @@ def placer(config, jour, demi, secteur, type_intervention, exclure=None,
         frappe.throw(_("Ce secteur a déjà sa journée cette semaine-là — "
                        "choisissez un autre créneau proposé."))
 
-    # L'ordre de la liste est la PRIORITÉ : le premier employé éligible prend,
-    # et pour lui, le premier trou réel de la demi-journée.
-    for employe in _pool_du_jour(config, liste, taches, jour, conges, contexte):
+    # QUI PREND LE RENDEZ-VOUS : réglage « Affectation des rendez-vous »
+    # (Config Portail RDV), demande du 02/09/2026.
+    #   - « Priorité à l'ordre de la liste » (historique) : le premier employé
+    #     éligible prend, et on ne descend qu'une fois sa journée pleine. C'est
+    #     un EMPILEMENT — le 14/09, Akram en avait 7 quand Sadok en avait 2.
+    #   - « Répartition sur les disponibles » : le MOINS CHARGÉ de la
+    #     demi-journée prend ; l'ordre de la liste ne départage plus qu'à
+    #     égalité. C'est ce que veut dire « dispatcher aux 3 disponibles ».
+    pool = _pool_du_jour(config, liste, taches, jour, conges, contexte)
+    if _repartir(config):
+        # Le tri est STABLE : à charge égale, l'ordre de la liste reprend la
+        # main, donc le réglage historique reste le comportement par défaut de
+        # départage — on ne perd pas la priorité, on ne l'applique qu'ensuite.
+        pool = sorted(pool, key=lambda e: _charge_demi(taches.get((e, jour)), demi))
+    for employe in pool:
         starts_on = _demi_faisable(taches.get((employe, jour)), jour, demi,
                                    secteur, duree, config)
         if starts_on is not None:

@@ -8,6 +8,7 @@
   "actif",
   "mode_test",
   "nb_employes",
+  "mode_affectation",
   "delai_jours",
   "column_break_h1",
   "autoriser_dimanche",
@@ -42,16 +43,16 @@
  "fields": [
   {
    "default": "1",
-   "description": "D\u00e9coch\u00e9 = le portail /rdv r\u00e9pond \u00ab momentan\u00e9ment ferm\u00e9 \u00bb.",
+   "description": "Décoché = le portail /rdv répond « momentanément fermé ».",
    "fieldname": "actif",
    "fieldtype": "Check",
    "label": "Portail de rendez-vous actif"
   },
   {
-   "description": "Repli si la liste des employ\u00e9s disponibles est vide.",
+   "description": "Repli si la liste des employés disponibles est vide.",
    "fieldname": "employe_defaut",
    "fieldtype": "Link",
-   "label": "Employ\u00e9 par d\u00e9faut",
+   "label": "Employé par défaut",
    "options": "Employee"
   },
   {
@@ -61,13 +62,13 @@
   {
    "fieldname": "section_employes",
    "fieldtype": "Section Break",
-   "label": "Employ\u00e9s disponibles pour les rendez-vous en ligne"
+   "label": "Employés disponibles pour les rendez-vous en ligne"
   },
   {
-   "description": "\u00c0 la r\u00e9servation, le portail choisit l'employ\u00e9 de cette liste le MOINS charg\u00e9 sur la demi-journ\u00e9e demand\u00e9e. Liste vide = tout va \u00e0 l'employ\u00e9 par d\u00e9faut.",
+   "description": "À la réservation, le portail choisit l'employé de cette liste le MOINS chargé sur la demi-journée demandée. Liste vide = tout va à l'employé par défaut.",
    "fieldname": "employes_disponibles",
    "fieldtype": "Table",
-   "label": "Employ\u00e9s disponibles",
+   "label": "Employés disponibles",
    "options": "Portail RDV Employe"
   },
   {
@@ -78,7 +79,7 @@
   {
    "fieldname": "adresse",
    "fieldtype": "Data",
-   "label": "Adresse affich\u00e9e"
+   "label": "Adresse affichée"
   },
   {
    "fieldname": "site_web",
@@ -90,10 +91,10 @@
    "fieldtype": "Column Break"
   },
   {
-   "description": "8 chiffres \u2014 le lien WhatsApp wa.me est construit avec +216.",
+   "description": "8 chiffres — le lien WhatsApp wa.me est construit avec +216.",
    "fieldname": "whatsapp",
    "fieldtype": "Data",
-   "label": "Num\u00e9ro WhatsApp"
+   "label": "Numéro WhatsApp"
   },
   {
    "description": "Vide = lien Google Maps construit automatiquement depuis l'adresse.",
@@ -104,29 +105,37 @@
   {
    "fieldname": "tel_commercial",
    "fieldtype": "Data",
-   "label": "T\u00e9l\u00e9phone service commercial"
+   "label": "Téléphone service commercial"
   },
   {
    "fieldname": "tel_support",
    "fieldtype": "Data",
-   "label": "T\u00e9l\u00e9phone support / SAV"
+   "label": "Téléphone support / SAV"
   },
   {
    "default": "0",
-   "description": "DEV UNIQUEMENT : le code OTP s'affiche \u00e0 l'\u00e9cran au lieu de partir par SMS. Sans effet si le site n'est pas en developer_mode \u2014 impossible \u00e0 activer en production.",
+   "description": "DEV UNIQUEMENT : le code OTP s'affiche à l'écran au lieu de partir par SMS. Sans effet si le site n'est pas en developer_mode — impossible à activer en production.",
    "fieldname": "mode_test",
    "fieldtype": "Check",
-   "label": "Mode test (code affich\u00e9, pas de SMS)"
+   "label": "Mode test (code affiché, pas de SMS)"
   },
   {
-   "description": "Les N PREMIERS de la liste travaillent les RDV en ligne ; un employ\u00e9 bloqu\u00e9 toute la journ\u00e9e est remplac\u00e9 par le suivant. Vide = toute la liste.",
+   "description": "Les N PREMIERS de la liste travaillent les RDV en ligne ; un employé bloqué toute la journée est remplacé par le suivant. Vide = toute la liste.",
    "fieldname": "nb_employes",
    "fieldtype": "Int",
-   "label": "Nombre d'employ\u00e9s pris en compte"
+   "label": "Nombre d'employés pris en compte"
+  },
+  {
+   "fieldname": "mode_affectation",
+   "fieldtype": "Select",
+   "label": "Affectation des rendez-vous",
+   "options": "Priorité à l'ordre de la liste\nRépartition sur les disponibles",
+   "default": "Priorité à l'ordre de la liste",
+   "description": "Comment le portail choisit l'employé parmi ceux qui ont encore de la place. « Priorité » remplit le premier de la liste avant de passer au suivant ; « Répartition » donne le rendez-vous au MOINS CHARGÉ de la demi-journée, l'ordre de la liste ne servant plus qu'en cas d'égalité."
   },
   {
    "default": "0",
-   "description": "Ponctuel : ouvre les dimanches \u00e0 la r\u00e9servation, uniquement avec l'employ\u00e9 d\u00e9di\u00e9 ci-dessous.",
+   "description": "Ponctuel : ouvre les dimanches à la réservation, uniquement avec l'employé dédié ci-dessous.",
    "fieldname": "autoriser_dimanche",
    "fieldtype": "Check",
    "label": "Autoriser les dimanches"
@@ -134,16 +143,16 @@
   {
    "fieldname": "employe_dimanche",
    "fieldtype": "Link",
-   "label": "Employ\u00e9 du dimanche",
+   "label": "Employé du dimanche",
    "options": "Employee"
   },
   {
    "fieldname": "section_secteurs",
    "fieldtype": "Section Break",
-   "label": "Secteurs combinables dans une m\u00eame demi-journ\u00e9e"
+   "label": "Secteurs combinables dans une même demi-journée"
   },
   {
-   "description": "Par d\u00e9faut un technicien ne fait QU'UN secteur par demi-journ\u00e9e. Ici, un GROUPE par ligne : les secteurs d'une m\u00eame ligne peuvent se combiner sur la m\u00eame demi-journ\u00e9e. Ex. \u00ab Secteur 1, Secteur 2 \u00bb puis \u00ab Secteur 3, Secteur 4 \u00bb. Laisser vide = r\u00e8gle stricte.",
+   "description": "Par défaut un technicien ne fait QU'UN secteur par demi-journée. Ici, un GROUPE par ligne : les secteurs d'une même ligne peuvent se combiner sur la même demi-journée. Ex. « Secteur 1, Secteur 2 » puis « Secteur 3, Secteur 4 ». Laisser vide = règle stricte.",
    "fieldname": "groupes_secteurs",
    "fieldtype": "Small Text",
    "label": "Groupes de secteurs combinables"
@@ -151,38 +160,38 @@
   {
    "fieldname": "section_partenaire",
    "fieldtype": "Section Break",
-   "label": "Zone partenaire (Sousse, Monastir\u2026)"
+   "label": "Zone partenaire (Sousse, Monastir…)"
   },
   {
-   "description": "Un partenaire par ligne : ses gouvernorats, son d\u00e9lai minimum et s'il travaille le dimanche. Une adresse dans ses gouvernorats devient r\u00e9servable et lui est affect\u00e9e.",
+   "description": "Un partenaire par ligne : ses gouvernorats, son délai minimum et s'il travaille le dimanche. Une adresse dans ses gouvernorats devient réservable et lui est affectée.",
    "fieldname": "partenaires",
    "fieldtype": "Table",
-   "label": "Partenaires par r\u00e9gion",
+   "label": "Partenaires par région",
    "options": "Portail RDV Partenaire"
   },
   {
    "default": "1",
-   "description": "D\u00e9lai minimum entre aujourd'hui et le rendez-vous, en jours. 1 = r\u00e9servable d\u00e8s demain.",
+   "description": "Délai minimum entre aujourd'hui et le rendez-vous, en jours. 1 = réservable dès demain.",
    "fieldname": "delai_jours",
    "fieldtype": "Int",
-   "label": "D\u00e9lai minimum de r\u00e9servation (jours)"
+   "label": "Délai minimum de réservation (jours)"
   },
   {
    "fieldname": "section_horaires",
    "fieldtype": "Section Break",
-   "label": "Horaires des demi-journ\u00e9es"
+   "label": "Horaires des demi-journées"
   },
   {
-   "description": "Vide = 09:30. \u26a0\ufe0f Pas de valeur par d\u00e9faut sur un champ Time : frappe la remplacerait par l'heure courante.",
+   "description": "Vide = 09:30. ⚠️ Pas de valeur par défaut sur un champ Time : frappe la remplacerait par l'heure courante.",
    "fieldname": "matin_debut",
    "fieldtype": "Time",
-   "label": "D\u00e9but matin\u00e9e"
+   "label": "Début matinée"
   },
   {
    "description": "Vide = 12:30.",
    "fieldname": "matin_fin",
    "fieldtype": "Time",
-   "label": "Fin matin\u00e9e"
+   "label": "Fin matinée"
   },
   {
    "fieldname": "column_break_horaires",
@@ -192,13 +201,13 @@
    "description": "Vide = 13:30.",
    "fieldname": "apres_midi_debut",
    "fieldtype": "Time",
-   "label": "D\u00e9but apr\u00e8s-midi"
+   "label": "Début après-midi"
   },
   {
    "description": "Vide = 17:30.",
    "fieldname": "apres_midi_fin",
    "fieldtype": "Time",
-   "label": "Fin apr\u00e8s-midi"
+   "label": "Fin après-midi"
   },
   {
    "fieldname": "section_ouvertures",
@@ -206,7 +215,7 @@
    "label": "Ouverture des rendez-vous par type"
   },
   {
-   "description": "Aucun rendez-vous de ce type ne sera propos\u00e9 avant la date indiqu\u00e9e. Un type absent de cette table reste ouvert normalement (d\u00e9lai standard).",
+   "description": "Aucun rendez-vous de ce type ne sera proposé avant la date indiquée. Un type absent de cette table reste ouvert normalement (délai standard).",
    "fieldname": "ouvertures",
    "fieldtype": "Table",
    "label": "Dates d'ouverture",
@@ -219,16 +228,16 @@
   },
   {
    "default": "0",
-   "description": "Bulle d'aide en langage naturel, visible APR\u00c8S le code SMS. Utilise la cl\u00e9 OpenAI d'AI Settings.",
+   "description": "Bulle d'aide en langage naturel, visible APRÈS le code SMS. Utilise la clé OpenAI d'AI Settings.",
    "fieldname": "assistant_actif",
    "fieldtype": "Check",
    "label": "Activer l'assistant"
   },
   {
-   "description": "Laisser vide pour gpt-4o-mini. R\u00e9glage PROPRE au portail : inutile d'y mettre le mod\u00e8le co\u00fbteux d'AI Settings.",
+   "description": "Laisser vide pour gpt-4o-mini. Réglage PROPRE au portail : inutile d'y mettre le modèle coûteux d'AI Settings.",
    "fieldname": "assistant_modele",
    "fieldtype": "Data",
-   "label": "Mod\u00e8le OpenAI de l'assistant"
+   "label": "Modèle OpenAI de l'assistant"
   }
  ],
  "issingle": 1,
