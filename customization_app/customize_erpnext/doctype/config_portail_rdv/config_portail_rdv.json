@@ -120,10 +120,10 @@
    "label": "Mode test (code affiché, pas de SMS)"
   },
   {
-   "description": "Les N PREMIERS de la liste travaillent les RDV en ligne ; un employé bloqué toute la journée est remplacé par le suivant. Vide = toute la liste.",
+   "description": "PLAFOND de personnes différentes engagées dans une même journée. Un employé qui a déjà une tâche ce jour-là occupe une place, MÊME si sa journée est pleine : on ne fait pas sortir un technicien de plus pour tenir un rendez-vous. Quand les N mobilisés sont pleins, le portail propose le jour suivant. Vide = pas de plafond, toute la liste peut être mobilisée.",
    "fieldname": "nb_employes",
    "fieldtype": "Int",
-   "label": "Nombre d'employés pris en compte"
+   "label": "Nombre d'employés mobilisables par jour"
   },
   {
    "fieldname": "mode_affectation",

@@ -94,3 +94,63 @@ class TestOrdreDeChoix(unittest.TestCase):
         """Cas réel du 07/09/2026 : la priorité donnait le rendez-vous à Sadok
         (75 min déjà posées), la répartition le donne à Jamel (0)."""
         self.assertEqual(self._ordonner({"Sadok": 75, "Jamel": 0})[0], "Jamel")
+
+
+class TestPlafondDuJour(unittest.TestCase):
+    """`nb_employes` est un PLAFOND de personnes mobilisées, pas « les N
+    premiers qui ont de la place » (décision utilisateur 02/09/2026).
+
+    La nuance : un employé DÉJÀ engagé ce jour-là occupe une place même s'il
+    est plein. Sans elle, il était sauté et le suivant de la liste le
+    remplaçait — quatre techniciens sortis pour un réglage à trois.
+    """
+
+    JOUR = datetime(2026, 11, 2).date()          # un lundi
+
+    def _pool(self, config, liste, taches):
+        return PL._pool_du_jour(config, liste, taches, self.JOUR)
+
+    def _occupe(self, plein=False):
+        """Une journée entamée — pleine ou non."""
+        return {"matin": [], "apres_midi": [],
+                "secteurs": {"matin": set(), "apres_midi": set()},
+                "jour_entier": plein}
+
+    def test_sans_plafond_toute_la_liste_est_mobilisable(self):
+        liste = ["A", "B", "C", "D"]
+        self.assertEqual(len(self._pool({}, liste, {})), 4)
+
+    def test_le_plafond_limite_le_nombre_de_personnes(self):
+        liste = ["A", "B", "C", "D"]
+        self.assertEqual(self._pool({"nb_employes": 3}, liste, {}), ["A", "B", "C"])
+
+    def test_un_mobilise_PLEIN_garde_sa_place(self):
+        """Le cœur de la demande : B est sorti et saturé — il ne prend plus de
+        rendez-vous, mais il ne libère pas sa place pour autant."""
+        taches = {("A", self.JOUR): self._occupe(),
+                  ("B", self.JOUR): self._occupe(plein=True),
+                  ("C", self.JOUR): self._occupe()}
+        pool = self._pool({"nb_employes": 3}, ["A", "B", "C", "D"], taches)
+        self.assertNotIn("D", pool)          # D n'est PAS appelé en renfort
+        self.assertNotIn("B", pool)          # B est plein : il ne prend rien
+        self.assertEqual(pool, ["A", "C"])
+
+    def test_tous_les_mobilises_pleins_ferment_la_journee(self):
+        """Conséquence assumée : plus aucun créneau ce jour-là, et le client se
+        voit proposer le lendemain."""
+        taches = {e: self._occupe(plein=True)
+                  for e in [("A", self.JOUR), ("B", self.JOUR), ("C", self.JOUR)]}
+        self.assertEqual(self._pool({"nb_employes": 3}, ["A", "B", "C", "D"], taches), [])
+
+    def test_tant_que_le_plafond_n_est_pas_atteint_on_complete(self):
+        """Deux mobilisés seulement : le troisième peut encore être appelé."""
+        taches = {("A", self.JOUR): self._occupe(),
+                  ("B", self.JOUR): self._occupe()}
+        self.assertEqual(self._pool({"nb_employes": 3}, ["A", "B", "C", "D"], taches),
+                         ["A", "B", "C"])
+
+    def test_un_conge_ne_consomme_pas_une_place(self):
+        """Il n'est pas sorti : sa place revient à quelqu'un d'autre."""
+        pool = PL._pool_du_jour({"nb_employes": 3}, ["A", "B", "C", "D"], {},
+                                self.JOUR, conges={("A", self.JOUR)})
+        self.assertEqual(pool, ["B", "C", "D"])

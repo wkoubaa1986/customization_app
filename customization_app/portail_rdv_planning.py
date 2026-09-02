@@ -406,16 +406,35 @@ def _pool_du_jour(config, liste, taches, jour, conges=frozenset(), contexte=None
             return []
         return [dimanche]
     nb = _nb_actifs(config, liste)
+
+    # ⚠️ LE NOMBRE EST UN PLAFOND DE PERSONNES MOBILISÉES SUR LA JOURNÉE
+    # (décision utilisateur 02/09/2026), pas « les N premiers qui ont encore de
+    # la place ». La nuance change tout : un employé DÉJÀ ENGAGÉ ce jour-là
+    # occupe une des N places même s'il est plein. Sans cela, il était
+    # simplement sauté et le suivant de la liste le remplaçait — on finissait à
+    # quatre techniciens sortis pour un réglage à trois (constaté le 02/09, et
+    # reproduit en simulation dès 20 rendez-vous).
+    #
+    # Conséquence assumée : quand les N mobilisés sont pleins, le portail
+    # n'offre plus de créneau CE JOUR-LÀ, même si un collègue est libre. C'est
+    # le sens d'un plafond ; le client se voit proposer le jour suivant.
+    #
+    # « Mobilisé » = porte au moins une tâche non annulée ce jour-là, qu'elle
+    # vienne du portail ou du magasin : ce qui compte est qu'il soit sorti.
+    mobilises = [e for e in liste if taches.get((e, jour))]
     pool = []
-    for employe in liste:
+    for employe in mobilises + [e for e in liste if e not in mobilises]:
         if len(pool) >= nb:
             break
         if (employe, jour) in conges:
             continue
-        if _employe_bloque_jour(taches.get((employe, jour)), jour):
+        # Un mobilisé PLEIN consomme sa place sans pouvoir prendre le rendez-vous.
+        plein = _employe_bloque_jour(taches.get((employe, jour)), jour)
+        if plein and employe not in mobilises:
             continue
         pool.append(employe)
-    return pool
+    return [e for e in pool
+            if not _employe_bloque_jour(taches.get((e, jour)), jour)]
 
 
 MODE_REPARTITION = "Répartition sur les disponibles"
