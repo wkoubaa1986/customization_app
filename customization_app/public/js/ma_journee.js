@@ -35,7 +35,11 @@ frappe.provide("frappe.views");
         .mj-compte { width:100%; font-size:12.5px; color:var(--text-muted,#6b7280); }
         .mj-carte { border:1px solid var(--border-color,#e4e8ee); border-radius:12px;
                     background:var(--card-bg,#fff); margin-bottom:10px; overflow:hidden; }
-        .mj-carte.faite { opacity:.6; }
+        /* Terminée = VERT (demande 02/09/2026). Le gris pâle d'avant se lisait
+           comme « désactivée » : on ne voyait pas ce qui était FAIT. */
+        .mj-carte.faite { border-color:#86efac; background:#f0fdf4; }
+        .mj-carte.faite .mj-tete { border-bottom-color:#bbf7d0; }
+        .mj-carte.faite .mj-heure { color:#166534; }
         .mj-tete { display:flex; align-items:center; gap:7px; padding:9px 11px;
                    border-bottom:1px solid var(--border-color,#eef1f5); flex-wrap:wrap; }
         .mj-heure { font-weight:700; font-size:15px; }
@@ -161,8 +165,8 @@ frappe.provide("frappe.views");
 
         _carte(l, esc) {
             const faite = l.statut !== "Open";
-            const st = { "Open": ["att", __("à faire")], "Completed": ["ok", __("terminée")],
-                         "Cancelled": ["ko", __("annulée")] }[l.statut] || ["gris", l.statut];
+            const st = { "Open": ["att", __("à faire")],
+                         "Completed": ["ok", __("terminée")] }[l.statut] || ["gris", l.statut];
             return `<div class="mj-carte ${faite ? "faite" : ""}">
               <div class="mj-tete">
                 <span class="mj-heure">${esc(l.debut)}</span>

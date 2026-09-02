@@ -130,7 +130,11 @@ def ma_journee(date=None, employe=None):
     jour = getdate(date or nowdate())
     taches = [] if not cible else frappe.get_all(
         DOCTYPE_TACHE,
+        # Les tâches ANNULÉES ne remontent pas (demande 02/09/2026) : elles
+        # n'appellent aucune action et allongent une liste qu'on parcourt au
+        # pouce, entre deux interventions.
         filters={"custom_choix_du_staff": cible,
+                 "status": ["!=", "Cancelled"],
                  "starts_on": ["between", ["%s 00:00:00" % jour, "%s 23:59:59" % jour]]},
         fields=["name", "status", "custom_type_dintervention", "starts_on", "ends_on",
                 "custom_client", "nom_client", "tel", "details_adresse", "google_map",
