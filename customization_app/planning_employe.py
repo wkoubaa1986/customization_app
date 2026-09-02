@@ -105,9 +105,13 @@ def _appels(tache):
                      "comment_type": "Info", "content": ["like", "%" + PREFIXE_APPEL + "%"]},
             fields=["content", "creation", "owner"],
             order_by="creation desc", limit_page_length=20):
-        texte = re.sub(r"<[^>]+>", " ", c.content or "")
-        out.append({"quand": str(c.creation)[:16], "par": c.owner,
-                    "texte": " ".join(texte.split())})
+        texte = " ".join(re.sub(r"<[^>]+>", " ", c.content or "").split())
+        # Le numéro est extrait pour être COMPTÉ par numéro : « appelé 3 fois »
+        # devant un téléphone dit en un coup d'œil ce qu'un historique déroulé
+        # oblige à reconstituer.
+        numero = re.search(r"\bau\s+(\d[\d ]{5,})", texte)
+        out.append({"quand": str(c.creation)[:16], "par": c.owner, "texte": texte,
+                    "numero": re.sub(r"\D", "", numero.group(1)) if numero else ""})
     return out
 
 

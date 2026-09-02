@@ -106,9 +106,7 @@ frappe.provide("frappe.views");
             });
             w.on("click", "[data-recharger]", () => this.charger());
             w.on("click", "[data-appel]", (e) => this._appeler(e.currentTarget));
-            w.on("click", "[data-photo]", (e) => this._photo(e.currentTarget));
             w.on("click", "[data-aramex]", (e) => this._aramex(e.currentTarget));
-            w.on("click", "[data-rapport]", (e) => this._rapport(e.currentTarget));
             w.on("click", "[data-terminer]", (e) => this._terminer(e.currentTarget));
         }
 
@@ -190,9 +188,19 @@ frappe.provide("frappe.views");
                 return `<div class="mj-l"><span class="k">${__("Client")}</span>
                     <span class="mj-manque">${__("aucun numéro au dossier")}</span></div>`;
             }
-            const liens = (l.telephones || []).map((t) =>
-                `<a class="mj-tel" href="tel:${esc(t)}" data-appel="${esc(t)}"
-                   data-tache="${esc(l.tache)}">📞 ${esc(t)}</a>`).join("");
+            // Combien de fois CE numéro a déjà été composé, affiché devant lui :
+            // c'est ce qui distingue « on n'a pas encore essayé » de « on a
+            // essayé trois fois », et donc décide d'annuler ou de rappeler.
+            const compte = {};
+            (l.appels || []).forEach((a) => {
+                if (a.numero) compte[a.numero] = (compte[a.numero] || 0) + 1;
+            });
+            const liens = (l.telephones || []).map((t) => {
+                const n = compte[t] || 0;
+                return `<a class="mj-tel" href="tel:${esc(t)}" data-appel="${esc(t)}"
+                   data-tache="${esc(l.tache)}">${n ? `<span class="mj-badge ${
+                     n >= 2 ? "att" : "gris"}">${n}×</span> ` : ""}📞 ${esc(t)}</a>`;
+            }).join("");
             const hist = (l.appels || []).length
                 ? `<div class="mj-hist">${(l.appels || []).slice(0, 3).map((a) =>
                      `${esc(a.quand)} — ${esc(a.texte.replace("📞 Appel ", ""))}`).join("<br>")}</div>`
@@ -243,6 +251,13 @@ frappe.provide("frappe.views");
         _cloture(l, esc) {
             if (l.statut !== "Open") return "";
             const e = l.exigences || {};
+            // Le VERDICT vient de la fiche (`tache_exigences_completes`) : deux
+            // juges pour une même clôture finiraient par se contredire.
+            if (typeof tache_exigences_completes === "function"
+                    && tache_exigences_completes(e)) {
+                return `<div class="mj-l"><span class="k">${__("Clôture")}</span>
+                    <span class="mj-badge ok">${__("prête")}</span></div>`;
+            }
             const manque = [];
             if (!e.dispense && e.concerne) {
                 const min = e.minima || {}, ph = e.photos || {};
@@ -260,17 +275,25 @@ frappe.provide("frappe.views");
                     : `<span class="mj-badge ok">${__("prête")}</span>`}</span></div>`;
         }
 
+        /** ⚠️ UN SEUL CHEMIN DE CLÔTURE, celui de la fiche.
+         *
+         *  J'avais posé ici des boutons « Avant / Après » de mon cru : c'est
+         *  faux. Les photos ne se rangent pas en deux tas — chaque type
+         *  d'intervention a ses CRÉNEAUX (le compteur d'eau, l'appareil posé,
+         *  le bordereau…), et le dialogue de `tache_photos_cloture` les guide
+         *  un par un, avec la position GPS, le compte rendu, le code
+         *  superviseur et l'état de la commande et du BL.
+         *
+         *  Refaire ce dialogue en plus petit, c'était garantir qu'un jour
+         *  « Ma journée » accepterait une clôture que la fiche refuse.
+         */
         _actions(l, esc) {
-            const e = l.exigences || {};
             return `<div class="mj-actions">
-              <button class="btn btn-sm btn-default" data-photo="avant"
-                data-tache="${esc(l.tache)}">📷 ${__("Avant")}</button>
-              <button class="btn btn-sm btn-default" data-photo="apres"
-                data-tache="${esc(l.tache)}">📷 ${__("Après")}</button>
-              ${e.rapport_requis ? `<button class="btn btn-sm btn-default"
-                 data-rapport="${esc(l.tache)}">📝 ${__("Compte rendu")}</button>` : ""}
+              <a class="btn btn-sm btn-default" target="_blank"
+                 href="/app/tache-de-travail/${encodeURIComponent(l.tache)}"
+                >${__("Ouvrir la fiche")}</a>
               <button class="btn btn-sm btn-primary" data-terminer="${esc(l.tache)}"
-                >✅ ${__("Terminer")}</button>
+                >✅ ${__("Clôturer")}</button>
             </div>`;
         }
 
@@ -301,42 +324,6 @@ frappe.provide("frappe.views");
             }, 800);
         }
 
-        _photo(el) {
-            const tache = $(el).data("tache");
-            const champ = $(el).data("photo") === "avant"
-                ? "liste_photos_avant" : "liste_photos_apres";
-            new frappe.ui.FileUploader({
-                doctype: "Tache de travail", docname: tache, folder: "Home/Attachments",
-                allow_multiple: true, restrictions: { allowed_file_types: ["image/*"] },
-                on_success: (file) => frappe.call({
-                    method: "customization_app.cloture_tache.enregistrer_photo",
-                    args: { tache, champ, file_url: file.file_url },
-                    callback: () => {
-                        frappe.show_alert({ message: __("Photo enregistrée"),
-                                            indicator: "green" }, 3);
-                        this.charger();
-                    },
-                }),
-            });
-        }
-
-        _rapport(el) {
-            const tache = $(el).data("rapport");
-            const d = new frappe.ui.Dialog({
-                title: __("Compte rendu"),
-                fields: [{ fieldtype: "Small Text", fieldname: "rapport", reqd: 1,
-                           label: __("Ce qui a été fait"),
-                           default: this._ligne(tache).rapport || "" }],
-                primary_action_label: __("Enregistrer"),
-                primary_action: (v) => frappe.call({
-                    method: "customization_app.cloture_tache.completer_champs",
-                    args: { tache, rapport: v.rapport },
-                    callback: () => { d.hide(); this.charger(); },
-                }),
-            });
-            d.show();
-        }
-
         _aramex(el) {
             const tache = $(el).data("aramex");
             const numero = this.dialog.$wrapper.find(`[data-champ="${tache}"]`).val();
@@ -361,34 +348,44 @@ frappe.provide("frappe.views");
 
         _terminer(el) {
             const tache = $(el).data("terminer");
-            const l = this._ligne(tache);
-            const e = l.exigences || {};
-            const d = new frappe.ui.Dialog({
-                title: __("Terminer l intervention"),
-                fields: [
-                    { fieldtype: "HTML", fieldname: "quoi",
-                      options: `<div style="padding:9px 11px;border-radius:9px;
-                        background:#e0f2fe;color:#075985;font-size:12.5px">${
-                        frappe.utils.escape_html(l.client || "")} — ${
-                        frappe.utils.escape_html(l.type || "")}</div>` },
-                    { fieldtype: "Small Text", fieldname: "rapport_visite",
-                      label: __("Compte rendu"), default: l.rapport || "",
-                      reqd: e.rapport_requis ? 1 : 0 },
-                ],
-                primary_action_label: __("Terminer"),
-                primary_action: (v) => frappe.call({
+            if (typeof tache_dialogue_cloture !== "function") {
+                frappe.msgprint(__("Le guide de clôture n est pas chargé — rechargez la page."));
+                return;
+            }
+            frappe.call({
+                method: "customization_app.cloture_tache.exigences",
+                args: { tache },
+                callback: (r) => tache_dialogue_cloture(this._facade(tache), r.message || {}),
+            });
+        }
+
+        /** Ce que le dialogue de la fiche attend d un formulaire — rien de plus.
+         *
+         *  Il n utilise que `docname`, `doctype`, `doc.name`, `reload_doc`, et
+         *  le couple `set_value("status","Completed")` + `save()`. La façade
+         *  redirige ce couple vers `planning_employe.cloturer`, qui fait le
+         *  MÊME enregistrement : les contrôles serveur s appliquent donc à
+         *  l identique, sans que la fenêtre ait à charger le formulaire. */
+        _facade(tache) {
+            const moi = this;
+            const attente = {};
+            return {
+                doctype: "Tache de travail",
+                docname: tache,
+                doc: { name: tache },
+                reload_doc: () => moi.charger(),
+                set_value: (champ, valeur) => { attente[champ] = valeur; },
+                save: () => frappe.call({
                     method: "customization_app.planning_employe.cloturer",
-                    args: { tache, rapport_visite: v.rapport_visite },
+                    args: { tache, rapport_visite: attente.rapport_visite || null },
                     freeze: true,
                     callback: () => {
-                        d.hide();
                         frappe.show_alert({ message: __("Intervention terminée"),
                                             indicator: "green" }, 4);
-                        this.charger();
+                        moi.charger();
                     },
                 }),
-            });
-            d.show();
+            };
         }
     }
 
