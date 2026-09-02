@@ -421,8 +421,11 @@ def verifier_bordereau(tache, numero):
 
     photos = _photos_de(doc)
     if not photos:
-        frappe.throw(_("Photographiez d'abord le bordereau : sans la photo, le "
-                       "numéro ne peut pas être vérifié."))
+        # Le message DIT OÙ EST LE BOUTON : « photographiez d'abord » laissait
+        # chercher où le faire, alors que l'appareil est à deux centimètres.
+        frappe.throw(_("Aucune photo sur cette intervention : appuyez sur "
+                       "« 📷 Photo » juste à côté pour photographier le "
+                       "bordereau, le numéro sera vérifié dessus."))
 
     lus, panne = [], None
     for url in photos:

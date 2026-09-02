@@ -120,6 +120,8 @@ frappe.provide("frappe.views");
             w.on("click", "[data-recharger]", () => this.charger());
             w.on("click", "[data-appel]", (e) => this._appeler(e.currentTarget));
             w.on("click", "[data-aramex]", (e) => this._aramex(e.currentTarget));
+            w.on("click", "[data-bordereau-photo]", (e) =>
+                this._photo_bordereau($(e.currentTarget).data("bordereau-photo")));
             w.on("click", "[data-terminer]", (e) => this._terminer(e.currentTarget));
             w.on("click", "[data-fiche]", (e) => {
                 e.preventDefault();
@@ -286,15 +288,19 @@ frappe.provide("frappe.views");
             return `<div class="mj-l"><span class="k">Aramex</span><span>
                 ${manque ? `<span class="mj-badge ko">⚠️ ${__("bordereau manquant")}</span>`
                          : `<span class="mj-badge ok">📦 ${esc(l.bordereau)}</span>`}
-                ${l.statut === "Open" ? `<div style="display:flex;gap:5px;margin-top:5px">
+                ${l.statut === "Open" ? `<div style="display:flex;gap:5px;margin-top:5px;
+                      flex-wrap:wrap">
                     <input type="text" class="form-control" inputmode="numeric"
                       placeholder="${__("N° de bordereau")}" data-champ="${esc(l.tache)}"
                       value="${esc(l.bordereau || "")}">
+                    <button class="btn btn-sm btn-default"
+                      data-bordereau-photo="${esc(l.tache)}"
+                      >📷 ${__("Photo")}</button>
                     <button class="btn btn-sm ${manque ? "btn-danger" : "btn-default"}"
                       data-aramex="${esc(l.tache)}"
                       >${manque ? __("Enregistrer") : __("Vérifier")}</button></div>
                     <div class="mj-conf">${
-                      __("Vérifié sur la photo du bordereau, puis inscrit sur la commande.")
+                      __("Photographiez le bordereau, puis enregistrez : le numéro est lu sur la photo avant d être inscrit sur la commande.")
                     }</div>` : ""}
               </span></div>`;
         }
@@ -466,9 +472,48 @@ frappe.provide("frappe.views");
             });
         }
 
+        /** La photo du bordereau, prise DEPUIS le bloc Aramex.
+         *
+         *  Le numéro ne peut être enregistré qu'une fois la photo prise — c'est
+         *  la règle voulue. Mais obliger à passer par le guide de clôture pour
+         *  la prendre, puis revenir ici, coupait le geste en deux : le
+         *  technicien tient le colis, il photographie et il saisit, dans le
+         *  même mouvement.
+         *
+         *  Elle va dans « photos après », le créneau que la clôture réserve au
+         *  bordereau — la même photo sert donc aux deux, et la clôture avance.
+         *  Et si un numéro est déjà tapé, la vérification s'enchaîne toute
+         *  seule : c'est la suite évidente.
+         */
+        _photo_bordereau(tache) {
+            new frappe.ui.FileUploader({
+                doctype: "Tache de travail", docname: tache, folder: "Home/Attachments",
+                allow_multiple: false,
+                restrictions: { allowed_file_types: ["image/*"] },
+                on_success: (file) => frappe.call({
+                    method: "customization_app.cloture_tache.enregistrer_photo",
+                    args: { tache, champ: "liste_photos_apres", file_url: file.file_url },
+                    callback: () => {
+                        const $champ = this.dialog.$wrapper.find(`[data-champ="${tache}"]`);
+                        const numero = ($champ.val() || "").trim();
+                        frappe.show_alert({ message: __("Photo du bordereau enregistrée"),
+                                            indicator: "green" }, 3);
+                        if (numero) {
+                            this._verifier(tache, numero);
+                        } else {
+                            this.charger();
+                        }
+                    },
+                }),
+            });
+        }
+
         _aramex(el) {
             const tache = $(el).data("aramex");
-            const numero = this.dialog.$wrapper.find(`[data-champ="${tache}"]`).val();
+            this._verifier(tache, this.dialog.$wrapper.find(`[data-champ="${tache}"]`).val());
+        }
+
+        _verifier(tache, numero) {
             frappe.call({
                 method: "customization_app.planning_employe.verifier_bordereau",
                 args: { tache, numero },
