@@ -443,12 +443,23 @@ frappe.provide("frappe.views");
             const tache = $(el).data("tache");
             const numero = String($(el).data("appel"));
             const ligne = this._ligne(tache);
-            // Compté tout de suite à l'écran : le composeur prend la main dans
-            // l'instant, la réponse du serveur arriverait derrière lui.
             (ligne.appels = ligne.appels || []).unshift(
                 { numero, quand: frappe.datetime.now_datetime().slice(0, 16),
                   texte: __("Appel au {0}", [numero]) });
-            this._rendre();
+
+            // ⚠️ ON NE REDESSINE PAS LA LISTE ICI. Redessiner pendant le clic
+            // remplace le <a> qu'on vient de toucher ; un lien retiré du DOM au
+            // milieu de son propre événement empêche le navigateur de suivre le
+            // `tel:` — le composeur ne s'ouvrirait pas. On incrémente donc la
+            // pastille SUR PLACE, et l'action par défaut suit son cours intacte.
+            const n = (ligne.appels || []).filter((a) => a.numero === numero).length;
+            const $lien = $(el);
+            let $p = $lien.find(".mj-badge").first();
+            if (!$p.length) {
+                $p = $(`<span class="mj-badge gris"></span> `).prependTo($lien);
+            }
+            $p.text(n + "×").attr("class", "mj-badge " + (n >= 2 ? "att" : "gris"));
+
             frappe.call({
                 method: "customization_app.planning_employe.tracer_appel",
                 args: { tache, numero },
