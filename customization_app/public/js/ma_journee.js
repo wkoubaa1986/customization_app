@@ -118,6 +118,7 @@ frappe.provide("frappe.views");
                 this.charger();
             });
             w.on("click", "[data-recharger]", () => this.charger());
+            w.on("click", "[data-caisse]", () => this._caisse());
             w.on("click", "[data-appel]", (e) => this._appeler(e.currentTarget));
             w.on("click", "[data-aramex]", (e) => this._aramex(e.currentTarget));
             w.on("click", "[data-bordereau-photo]", (e) =>
@@ -173,6 +174,7 @@ frappe.provide("frappe.views");
                 <button class="btn btn-sm btn-default" data-decaler="-1">◀</button>
                 <button class="btn btn-sm btn-default" data-decaler="1">▶</button>
                 <button class="btn btn-sm btn-primary" data-recharger>🔄 ${__("Actualiser")}</button>
+                <button class="btn btn-sm btn-default" data-caisse>💰 ${__("Ma caisse")}</button>
                 <span class="mj-compte">${m.sans_employe ? ""
                     : `<b>${esc(m.employe_nom || "")}</b> · ${lignes.length} ${
                         __("intervention(s)")}, ${restant} ${__("à faire")}`}</span>
@@ -413,6 +415,48 @@ frappe.provide("frappe.views");
         }
 
         // ------------------------------------------------------------ actions
+
+        /** La caisse journalière de l'employé affiché, en fenêtre.
+         *
+         *  Le technicien finit sa tournée et veut voir ce qu'il a encaissé :
+         *  l'envoyer sur une autre page lui ferait perdre sa journée. Le
+         *  rapport gère déjà ses propres droits — il s'ouvre sur la caisse de
+         *  l'utilisateur CONNECTÉ, et seuls ceux qui supervisent peuvent en
+         *  choisir une autre. On ne lui ajoute donc aucun pouvoir.
+         *
+         *  On présélectionne quand même l'employé regardé, pour le superviseur
+         *  qui consulte la journée d'un autre : sans cela il ouvrirait la
+         *  caisse de tout le monde et devrait re-choisir. La liste du filtre
+         *  arrive après un aller-retour serveur, d'où la petite attente — et si
+         *  elle n'arrive pas, la page reste simplement sur son défaut.
+         */
+        _caisse() {
+            const nom = (this.data || {}).employe_nom || "";
+            frappe.require("/assets/customization_app/js/ouvrir_document.js", () => {
+                customization_app.ouvrir_document("Page", "caisse-journaliere", {
+                    titre: __("Caisse journalière — {0}", [nom || __("moi")]),
+                    url: "/app/caisse-journaliere",
+                    au_chargement: (fenetre) => this._preselectionner_caisse(fenetre, nom),
+                });
+            });
+        }
+
+        _preselectionner_caisse(fenetre, nom) {
+            if (!nom) return;
+            let restant = 20;
+            const essayer = () => {
+                try {
+                    const sel = fenetre.document.getElementById("rcj-employe");
+                    if (sel && Array.from(sel.options).some((o) => o.value === nom)) {
+                        sel.value = nom;
+                        sel.dispatchEvent(new fenetre.Event("change", { bubbles: true }));
+                        return;
+                    }
+                } catch (e) { return; }        // page pas encore prête, ou refusée
+                if (--restant > 0) setTimeout(essayer, 300);
+            };
+            setTimeout(essayer, 500);
+        }
 
         /** La fiche de la tâche, en fenêtre par-dessus la journée.
          *
