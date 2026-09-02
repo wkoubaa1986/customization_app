@@ -85,15 +85,48 @@ def _numeros(brut):
 
 
 def _articles(commande):
-    """Ce qu'il y a à poser ou à livrer. Vide si la tâche n'a pas de commande."""
+    """Ce qu'il y a à poser ou à livrer — avec la PHOTO et, pour une variante,
+    sa configuration.
+
+    Le technicien reconnaît un osmoseur à sa photo, pas à son code. Et quand
+    l'article est une VARIANTE (335 en catalogue), c'est sa configuration qui
+    dit ce qu'il doit poser : marque de membrane, nombre d'étages, mixage. Sans
+    elle, deux variantes du même modèle sont indiscernables sur l'écran.
+
+    Tout est chargé en DEUX requêtes pour la commande entière : une par ligne
+    ferait vingt allers-retours sur un téléphone en 4G.
+    """
     if not commande:
         return []
-    return [{"code": l.item_code, "article": l.item_name or l.item_code,
-             "qte": l.qty}
-            for l in frappe.get_all(
-                "Sales Order Item", filters={"parent": commande},
-                fields=["item_code", "item_name", "qty", "idx"],
-                order_by="idx", limit_page_length=0)]
+    lignes = frappe.get_all(
+        "Sales Order Item", filters={"parent": commande},
+        fields=["item_code", "item_name", "qty", "idx"],
+        order_by="idx", limit_page_length=0)
+    codes = [l.item_code for l in lignes if l.item_code]
+    if not codes:
+        return []
+    articles = {i.name: i for i in frappe.get_all(
+        "Item", filters={"name": ["in", codes]},
+        fields=["name", "image", "variant_of"], limit_page_length=0)}
+    attributs = {}
+    for a in frappe.get_all(
+            "Item Variant Attribute", filters={"parent": ["in", codes]},
+            fields=["parent", "attribute", "attribute_value", "idx"],
+            order_by="idx", limit_page_length=0):
+        attributs.setdefault(a.parent, []).append(
+            {"attribut": a.attribute, "valeur": a.attribute_value})
+    out = []
+    for l in lignes:
+        i = articles.get(l.item_code) or {}
+        out.append({
+            "code": l.item_code,
+            "article": l.item_name or l.item_code,
+            "qte": l.qty,
+            "image": i.get("image") or "",
+            "variante": bool(i.get("variant_of")),
+            "configuration": attributs.get(l.item_code, []),
+        })
+    return out
 
 
 def _appels(tache):

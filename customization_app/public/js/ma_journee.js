@@ -59,6 +59,15 @@ frappe.provide("frappe.views");
         .mj-tel { display:inline-block; margin:0 8px 4px 0; font-size:14px;
                   font-weight:600; }
         .mj-hist { font-size:11px; color:var(--text-muted,#6b7280); margin-top:3px; }
+        .mj-art { display:flex; gap:8px; align-items:flex-start; padding:3px 0; }
+        .mj-art img { width:44px; height:44px; object-fit:cover; border-radius:8px;
+                      border:1px solid var(--border-color,#e4e8ee); background:#fff; }
+        .mj-art .mj-art-vide { width:44px; height:44px; display:inline-flex;
+                      align-items:center; justify-content:center; border-radius:8px;
+                      background:var(--bg-light-gray,#f1f5f9); font-size:19px; }
+        .mj-conf { font-size:11.5px; color:var(--text-muted,#6b7280); margin-top:1px; }
+        .mj-liens { display:flex; gap:12px; flex-wrap:wrap; margin-top:5px;
+                    font-size:12px; }
         .mj-manque { color:#b02a37; }
         .mj-actions { display:flex; flex-wrap:wrap; gap:6px; padding:9px 11px;
                       border-top:1px solid var(--border-color,#eef1f5);
@@ -225,12 +234,29 @@ frappe.provide("frappe.views");
 
         _articles(l, esc) {
             if (!(l.articles || []).length) return "";
-            return `<div class="mj-l"><span class="k">${__("À poser")}</span><span>
-                ${(l.articles || []).map((a) =>
-                    `<div><b>${a.qte}×</b> ${esc(a.article)}</div>`).join("")}
-                ${l.commande ? `<a href="/app/sales-order/${encodeURIComponent(l.commande)}"
-                    target="_blank" style="font-size:11px">${esc(l.commande)} ↗</a>` : ""}
-              </span></div>`;
+            // La PHOTO d'abord : un osmoseur se reconnaît à son image, pas à son
+            // code. Et sous une VARIANTE, sa configuration — sans elle, deux
+            // variantes du même modèle sont indiscernables sur l'écran.
+            const arts = (l.articles || []).map((a) => `
+              <div class="mj-art">
+                ${a.image ? `<img src="${esc(a.image)}" alt="" loading="lazy">`
+                          : `<span class="mj-art-vide">📦</span>`}
+                <div>
+                  <div><b>${a.qte}×</b> ${esc(a.article)}</div>
+                  ${(a.configuration || []).length
+                    ? `<div class="mj-conf">${(a.configuration || []).map((c) =>
+                        `${esc(c.attribut)} : <b>${esc(c.valeur)}</b>`).join("<br>")}</div>`
+                    : ""}
+                </div>
+              </div>`).join("");
+            const liens = l.commande ? `<div class="mj-liens">
+                <a href="/app/sales-order/${encodeURIComponent(l.commande)}"
+                   target="_blank">${esc(l.commande)} ↗</a>
+                <a href="/api/method/frappe.utils.print_format.download_pdf?doctype=Sales%20Order&name=${
+                   encodeURIComponent(l.commande)}" target="_blank" rel="noopener"
+                  >📄 ${__("Commande en PDF")}</a></div>` : "";
+            return `<div class="mj-l"><span class="k">${__("À poser")}</span>
+                <span>${arts}${liens}</span></div>`;
         }
 
         _aramex_bloc(l, esc) {
