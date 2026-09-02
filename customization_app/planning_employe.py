@@ -232,7 +232,8 @@ def ma_journee(date=None, employe=None):
         fields=["name", "status", "custom_type_dintervention", "starts_on", "ends_on",
                 "custom_client", "nom_client", "tel", "details_adresse", "google_map",
                 "secteur", "commande_client", "subject", "rapport_visite",
-                "dispense_photos", "dans_local"],
+                "dispense_photos", "dans_local",
+                "liste_photos_avant", "liste_photos_apres"],
         order_by="starts_on asc", limit_page_length=0)
 
     lignes = []
@@ -270,6 +271,10 @@ def ma_journee(date=None, employe=None):
             "aramex": aramex,
             "bordereau": bordereau,
             "appels": _appels(t.name),
+            # Les photos prises pendant l'intervention : une fois la tâche
+            # terminée, elles sont la seule preuve visible de ce qui a été fait
+            # — les afficher sur la carte évite d'ouvrir la fiche pour vérifier.
+            "photos": _photos_de(t),
             "reglement": _reglement((exig or {}).get("commande_infos"), bordereau),
             "exigences": exig,
         })
@@ -301,21 +306,27 @@ def _ma_tache(tache):
 
 
 @frappe.whitelist()
-def tracer_appel(tache, numero, resultat):
-    """Note qu'un appel a été passé, et ce qu'il a donné.
+def tracer_appel(tache, numero, resultat=None):
+    """Note qu'un appel a été passé.
 
-    Le RÉSULTAT fait tout l'intérêt de la trace : « on a composé le numéro » ne
-    dit pas si le client a décroché, et c'est cela qui décide de rappeler,
-    d'attendre, ou d'annuler.
+    ⚠️ LE RÉSULTAT EST FACULTATIF (décision 02/09/2026, après usage). Demander
+    « alors, ça a répondu ? » au retour d'appel s'interposait entre le
+    technicien et son geste : le clic doit APPELER, un point. Ce qui reste, et
+    qui suffit à décider, c'est le NOMBRE d'appels passés à ce numéro — « pas
+    encore essayé » contre « essayé trois fois ».
+
+    Le résultat reste accepté pour qui voudrait le renseigner ailleurs ; il est
+    alors validé, parce qu'une valeur libre rendrait l'historique illisible.
     """
     doc = _ma_tache(tache)
-    if resultat not in RESULTATS_APPEL:
+    if resultat and resultat not in RESULTATS_APPEL:
         frappe.throw(_("Résultat d'appel inconnu."))
     numero = (numero or "").strip()[:20]
     frappe.get_doc({
         "doctype": "Comment", "comment_type": "Info",
         "reference_doctype": DOCTYPE_TACHE, "reference_name": doc.name,
-        "content": _("{0} au {1} — {2}").format(PREFIXE_APPEL, numero, resultat),
+        "content": (_("{0} au {1} — {2}").format(PREFIXE_APPEL, numero, resultat)
+                    if resultat else _("{0} au {1}").format(PREFIXE_APPEL, numero)),
     }).insert(ignore_permissions=True)
     frappe.db.commit()
     return {"appels": _appels(doc.name)}
@@ -325,12 +336,17 @@ def tracer_appel(tache, numero, resultat):
 
 
 def _photos_de(doc):
-    """Les URL des photos de clôture de la tâche (avant + après)."""
+    """Les URL des photos de clôture de la tâche (avant + après).
+
+    `doc` peut être un document Frappe comme une ligne de `get_all` : l'écran
+    lit les mêmes photos que la vérification du bordereau, il n'y a aucune
+    raison d'en avoir deux lectures.
+    """
     from customization_app import cloture_tache as C
 
     urls = []
     for champ in C.CHAMPS.values():
-        for ligne in (doc.get(champ) or "").split("\n"):
+        for ligne in ((doc.get(champ) if hasattr(doc, "get") else None) or "").split("\n"):
             # Le format posé par `enregistrer_photo` est « 📁 "url" » ; le repli
             # couvre une URL nue, PRIVÉE comprise — les photos de clôture le sont.
             trouve = (re.search(r'"([^"]+)"', ligne)

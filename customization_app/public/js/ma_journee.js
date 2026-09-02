@@ -68,6 +68,10 @@ frappe.provide("frappe.views");
         .mj-conf { font-size:11.5px; color:var(--text-muted,#6b7280); margin-top:1px; }
         .mj-liens { display:flex; gap:12px; flex-wrap:wrap; margin-top:5px;
                     font-size:12px; }
+        .mj-ref { font-size:11px; font-family:monospace; opacity:.75; }
+        .mj-photos { display:flex; gap:6px; flex-wrap:wrap; }
+        .mj-photos img { width:66px; height:66px; object-fit:cover; border-radius:8px;
+                         border:1px solid var(--border-color,#e4e8ee); }
         .mj-manque { color:#b02a37; }
         .mj-actions { display:flex; flex-wrap:wrap; gap:6px; padding:9px 11px;
                       border-top:1px solid var(--border-color,#eef1f5);
@@ -117,6 +121,10 @@ frappe.provide("frappe.views");
             w.on("click", "[data-appel]", (e) => this._appeler(e.currentTarget));
             w.on("click", "[data-aramex]", (e) => this._aramex(e.currentTarget));
             w.on("click", "[data-terminer]", (e) => this._terminer(e.currentTarget));
+            w.on("click", "[data-fiche]", (e) => {
+                e.preventDefault();
+                this._fiche($(e.currentTarget).data("fiche"));
+            });
         }
 
         charger() {
@@ -180,6 +188,8 @@ frappe.provide("frappe.views");
                 <span class="mj-badge inf">${ICONES[l.type] || "📌"} ${esc(l.type || "?")}</span>
                 <span class="mj-client">${esc(l.client || "")}</span>
                 ${l.secteur ? `<span class="mj-badge gris">📍 ${esc(l.secteur)}</span>` : ""}
+                <a href="#" class="mj-ref" data-fiche="${esc(l.tache)}"
+                   title="${__("Ouvrir la fiche sans quitter cet écran")}">${esc(l.tache)}</a>
                 <span class="mj-badge ${st[0]}" style="margin-left:auto">${esc(st[1])}</span>
               </div>
               <div class="mj-corps">
@@ -187,6 +197,7 @@ frappe.provide("frappe.views");
                 ${l.note ? `<div class="mj-l"><span class="k">${__("Note")}</span>
                     <span>${esc(l.note)}</span></div>` : ""}
                 ${this._aramex_bloc(l, esc)}${this._cloture(l, esc)}${this._reglement(l, esc)}
+                ${this._photos(l, esc)}
               </div>
               ${faite ? "" : this._actions(l, esc)}
             </div>`;
@@ -369,6 +380,22 @@ frappe.provide("frappe.views");
                 ${verdict}${detail}</span></div>`;
         }
 
+        /** Les photos prises pendant l'intervention, une fois celle-ci terminée.
+         *
+         *  C'est la seule preuve visible de ce qui a été fait : les montrer sur
+         *  la carte évite d'ouvrir la fiche pour vérifier qu'on a bien
+         *  photographié — et de découvrir le lendemain qu'on ne l'avait pas
+         *  fait. Un clic agrandit.
+         */
+        _photos(l, esc) {
+            if (l.statut !== "Completed" || !(l.photos || []).length) return "";
+            return `<div class="mj-l"><span class="k">${__("Photos")}</span><span>
+                <div class="mj-photos">${(l.photos || []).map((u) =>
+                  `<a href="${esc(u)}" target="_blank" rel="noopener">
+                     <img src="${esc(u)}" alt="" loading="lazy"></a>`).join("")}</div>
+              </span></div>`;
+        }
+
         _actions(l, esc) {
             return `<div class="mj-actions">
               <a class="btn btn-sm btn-default" target="_blank"
@@ -381,29 +408,51 @@ frappe.provide("frappe.views");
 
         // ------------------------------------------------------------ actions
 
+        /** La fiche de la tâche, en fenêtre par-dessus la journée.
+         *
+         *  On réutilise `customization_app.ouvrir_document` — déjà partagé par
+         *  les autres tableaux de bord, et déjà corrigé deux fois (la barre
+         *  ENREGISTRER, le bandeau Raven). Une copie ici serait une occasion de
+         *  n'en corriger qu'une la prochaine fois.
+         */
+        _fiche(tache) {
+            frappe.require("/assets/customization_app/js/ouvrir_document.js", () => {
+                customization_app.ouvrir_document("Tache de travail", tache, {
+                    titre: __("Intervention {0}", [tache]),
+                    a_la_fermeture: () => this.charger(),
+                });
+            });
+        }
+
         _ligne(tache) {
             return (this.data.lignes || []).find((x) => x.tache === tache) || {};
         }
 
+        /** Le clic APPELLE, et rien d'autre.
+         *
+         *  Le lien `tel:` part vers le composeur du téléphone ; on ne
+         *  l'intercepte pas. La trace est posée en arrière-plan — demander
+         *  « alors, ça a répondu ? » au retour d'appel s'interposait entre le
+         *  technicien et son geste (constaté à l'usage 02/09/2026).
+         *
+         *  Le compteur devant le numéro compte donc les APPELS PASSÉS, pas les
+         *  résultats : c'est déjà ce qui distingue « pas encore essayé » de
+         *  « essayé trois fois ».
+         */
         _appeler(el) {
             const tache = $(el).data("tache");
             const numero = String($(el).data("appel"));
-            // Le lien `tel:` suit son cours ; on demande le résultat au retour.
-            setTimeout(() => {
-                const d = new frappe.ui.Dialog({
-                    title: __("Appel au {0}", [numero]),
-                    fields: [{ fieldtype: "Select", fieldname: "resultat", reqd: 1,
-                               label: __("Résultat"), default: "Répondu",
-                               options: (this.data.resultats_appel || []).join("\n") }],
-                    primary_action_label: __("Enregistrer"),
-                    primary_action: (v) => frappe.call({
-                        method: "customization_app.planning_employe.tracer_appel",
-                        args: { tache, numero, resultat: v.resultat },
-                        callback: () => { d.hide(); this.charger(); },
-                    }),
-                });
-                d.show();
-            }, 800);
+            const ligne = this._ligne(tache);
+            // Compté tout de suite à l'écran : le composeur prend la main dans
+            // l'instant, la réponse du serveur arriverait derrière lui.
+            (ligne.appels = ligne.appels || []).unshift(
+                { numero, quand: frappe.datetime.now_datetime().slice(0, 16),
+                  texte: __("Appel au {0}", [numero]) });
+            this._rendre();
+            frappe.call({
+                method: "customization_app.planning_employe.tracer_appel",
+                args: { tache, numero },
+            });
         }
 
         _aramex(el) {
