@@ -524,6 +524,15 @@ scheduler_events = {
             "customization_app.Maintenance.relance_maintenance_sms.run_cron",
         ],
 
+        # Tous les soirs à 20:00 : rappel des rendez-vous du lendemain et avis
+        # de remise Aramex du jour. Remplace le Server Script « Rappelle Rendez
+        # vous », éteint par patch — il tombait 7 soirs sur 30 et, envoyant au
+        # fil de la boucle, privait de rappel tous les clients qui suivaient le
+        # rendez-vous fautif.
+        "0 20 * * *": [
+            "customization_app.rappel_rdv.cron_du_soir",
+        ],
+
         # Tous les jours à 07:30 : création/MAJ liste interventions Nizar
         "30 7 * * *": [
             "customization_app.api.tache_journalier_nizar",
