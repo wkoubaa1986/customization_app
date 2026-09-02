@@ -249,6 +249,15 @@ doc_events = {
     # Numérotation auto de la facture (remplace le Server Script « Generation N Facture »).
     "Sales Invoice": {
         "before_insert": "customization_app.facturation_numbering.set_numero_facture",
+        # Annuler une facture rend le paiement à la ou aux commandes qui l'ont
+        # générée, au prorata de leurs lignes. Le plan se calcule AVANT
+        # l'annulation (les affectations existent encore) et s'applique APRÈS
+        # (ERPNext a détaché la facture). Remplace les Server Scripts « cancel
+        # Invoice order Payment » et « traitement paiement après annulation
+        # facture », qui ignoraient les commandes WEB1 et supprimaient le
+        # paiement au lieu de l'amender.
+        "before_cancel": "customization_app.annulation_facture.before_cancel_sales_invoice",
+        "on_cancel": "customization_app.annulation_facture.on_cancel_sales_invoice",
     },
     # Les motifs « sans tâche » regardent OÙ sont parqués les paiements liés (19/08/2026) :
     # un encaissement de dette doit requalifier la commande tout de suite, pas à 04h00.
