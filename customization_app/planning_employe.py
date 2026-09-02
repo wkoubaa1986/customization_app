@@ -43,6 +43,8 @@ DOCTYPE_TACHE = "Tache de travail"
 # personne d'autre ne l'a. Élargir cette liste, c'est rouvrir la brèche.
 ROLES_SUPERVISION = ("System Manager",)
 
+TYPE_LIVRAISON = "Livraison"
+
 RESULTATS_APPEL = ("Répondu", "Sans réponse", "À rappeler")
 PREFIXE_APPEL = "📞 Appel"
 
@@ -236,6 +238,14 @@ def ma_journee(date=None, employe=None):
     lignes = []
     for t in taches:
         aramex, bordereau = _aramex(t.commande_client)
+        # ⚠️ LA RÈGLE ARAMEX NE VAUT QUE POUR UNE LIVRAISON (décision
+        # utilisateur 02/09/2026). L'échéancier « Livraison Aramex » est posé
+        # AUTOMATIQUEMENT à la création d'une commande web ; quand celle-ci
+        # devient finalement une Installation, il ne décrit plus rien — notre
+        # technicien se déplace, aucun colis ne part, et l'argent est à
+        # encaisser sur place comme n'importe quelle dette.
+        if t.custom_type_dintervention != TYPE_LIVRAISON:
+            aramex, bordereau = False, ""
         try:
             exig = C.exigences(t.name)
         except Exception:

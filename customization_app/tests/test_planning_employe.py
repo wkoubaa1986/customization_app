@@ -141,3 +141,30 @@ class TestReglement(unittest.TestCase):
 
     def test_sans_commande_il_n_y_a_rien_a_dire(self):
         self.assertIsNone(P._reglement(None))
+
+
+class TestPerimetreAramex(unittest.TestCase):
+    """La règle Aramex ne vaut que pour une LIVRAISON.
+
+    L'échéancier « Livraison Aramex » est posé AUTOMATIQUEMENT à la création
+    d'une commande web. Quand celle-ci devient finalement une Installation, il
+    ne décrit plus rien : notre technicien se déplace, aucun colis ne part, et
+    l'argent est à encaisser sur place (décision utilisateur 02/09/2026, cas
+    Tache-08235 / WEB1-008367, 406 DT).
+    """
+
+    def test_le_type_livraison_est_celui_du_moteur(self):
+        """Le libellé doit rester celui des tâches, sinon la règle ne
+        s'appliquerait jamais — ou s'appliquerait partout."""
+        self.assertEqual(P.TYPE_LIVRAISON, "Livraison")
+
+    def test_une_dette_aramex_sans_bordereau_est_a_encaisser(self):
+        """C'est ce que voit le technicien d'une Installation : le serveur a
+        neutralisé le bordereau, la dette redevient ordinaire."""
+        infos = {"total": 406.0, "total_paye": 406.0,
+                 "paiements": [{"montant": 406.0, "mode": P.MODE_DETTE,
+                                "compte": "Livraison Aramex - A&S",
+                                "date": "2026-08-29"}]}
+        r = P._reglement(infos, bordereau="")
+        self.assertEqual(r["dette"], 406.0)
+        self.assertEqual(r["dette_aramex"], 0.0)

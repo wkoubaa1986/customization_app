@@ -259,17 +259,32 @@ frappe.provide("frappe.views");
                 <span>${arts}${liens}</span></div>`;
         }
 
+        /** Le bordereau d une LIVRAISON Aramex — et son absence, en ROUGE.
+         *
+         *  Un colis parti sans bordereau ne se suit plus : ni nous, ni le
+         *  client, ni la réclamation. C est la seule chose de cette carte qui
+         *  DOIT être faite avant de partir, d où le rouge et non l orange.
+         *
+         *  Le bloc n apparaît que sur une Livraison : sur une Installation,
+         *  l échéancier Aramex est un reste de la création web et ne décrit
+         *  rien — le serveur l a déjà neutralisé.
+         */
         _aramex_bloc(l, esc) {
             if (!l.aramex) return "";
+            const manque = !l.bordereau;
             return `<div class="mj-l"><span class="k">Aramex</span><span>
-                ${l.bordereau ? `<span class="mj-badge ok">📦 ${esc(l.bordereau)}</span>`
-                              : `<span class="mj-badge att">📦 ${__("non saisi")}</span>`}
+                ${manque ? `<span class="mj-badge ko">⚠️ ${__("bordereau manquant")}</span>`
+                         : `<span class="mj-badge ok">📦 ${esc(l.bordereau)}</span>`}
                 ${l.statut === "Open" ? `<div style="display:flex;gap:5px;margin-top:5px">
                     <input type="text" class="form-control" inputmode="numeric"
                       placeholder="${__("N° de bordereau")}" data-champ="${esc(l.tache)}"
                       value="${esc(l.bordereau || "")}">
-                    <button class="btn btn-sm btn-default" data-aramex="${esc(l.tache)}"
-                      >${__("Vérifier")}</button></div>` : ""}
+                    <button class="btn btn-sm ${manque ? "btn-danger" : "btn-default"}"
+                      data-aramex="${esc(l.tache)}"
+                      >${manque ? __("Enregistrer") : __("Vérifier")}</button></div>
+                    <div class="mj-conf">${
+                      __("Vérifié sur la photo du bordereau, puis inscrit sur la commande.")
+                    }</div>` : ""}
               </span></div>`;
         }
 
