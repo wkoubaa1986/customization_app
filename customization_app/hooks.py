@@ -373,6 +373,9 @@ app_include_js = [_js("customer_quick_entry.js"),
                   _js("calendrier_rdv_button.js"),
                   _js("sales_order_avoir.js"),
                   _js("tache_liste_groupe.js"),
+                  # Le bouton « Ma journée » sur la liste et le calendrier des
+                  # tâches : chacun y termine ses interventions du jour.
+                  _js("ma_journee_bouton.js"),
                   _js("taches_gestion_groupe.js"),
                   _js("tache_cloture_partenaire.js"),
                   # Coloration des anomalies dans la liste des commandes.
