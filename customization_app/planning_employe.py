@@ -154,7 +154,7 @@ def _appels(tache):
 MODE_DETTE = "Dette non payée"
 
 
-def _reglement(commande_infos):
+def _reglement(commande_infos, bordereau=""):
     """Ce qui a VRAIMENT été encaissé, et ce qui n'est qu'une dette.
 
     ⚠️ « PAYÉ » NE VEUT PAS DIRE « ENCAISSÉ ». Une commande peut porter un
@@ -162,9 +162,20 @@ def _reglement(commande_infos):
     carte annonçait « soldée » en vert sur 651 DT que personne n'avait touchés
     (constaté 02/09/2026).
 
-    LA LIVRAISON ARAMEX EST L'EXCEPTION (décision utilisateur) : la dette y est
-    normale — c'est le transporteur qui encaisse à la remise. On la distingue
-    par son COMPTE, pas par le mode, qui est le même.
+    LA DETTE ARAMEX EST L'EXCEPTION (décision utilisateur) : le transporteur
+    encaisse à la remise, il n'y a rien à réclamer sur place.
+
+    ⚠️ MAIS SEULEMENT SI LE COLIS EST RÉELLEMENT PARTI. Une commande peut porter
+    l'échéancier « Livraison Aramex » sans qu'aucun bordereau n'existe : le
+    colis n'a pas voyagé, personne n'a rien encaissé, et c'est souvent NOTRE
+    technicien qui se déplace — la tâche est alors une Installation. Le
+    BORDEREAU est donc le discriminant, pas le compte seul (question posée le
+    02/09/2026 ; le cas existe : Tache-08235, Installation sur WEB1-008367,
+    406 DT sur le compte Aramex et aucun bordereau — l'écran annonçait
+    « encaissé par Aramex » sur de l'argent que personne n'avait pris).
+
+    Sur 120 jours : 29 livraisons avec bordereau (vraiment chez Aramex),
+    5 livraisons sans, et 1 installation sans.
     """
     from customization_app.livraison_aramex import COMPTE_ARAMEX
 
@@ -174,7 +185,7 @@ def _reglement(commande_infos):
     for p in commande_infos.get("paiements") or []:
         if (p.get("mode") or "") != MODE_DETTE:
             continue
-        if (p.get("compte") or "") == COMPTE_ARAMEX:
+        if (p.get("compte") or "") == COMPTE_ARAMEX and bordereau:
             dette_aramex += frappe.utils.flt(p.get("montant"))
         else:
             dette += frappe.utils.flt(p.get("montant"))
@@ -249,7 +260,7 @@ def ma_journee(date=None, employe=None):
             "aramex": aramex,
             "bordereau": bordereau,
             "appels": _appels(t.name),
-            "reglement": _reglement((exig or {}).get("commande_infos")),
+            "reglement": _reglement((exig or {}).get("commande_infos"), bordereau),
             "exigences": exig,
         })
 

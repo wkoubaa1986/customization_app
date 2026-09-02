@@ -107,19 +107,32 @@ class TestReglement(unittest.TestCase):
         self.assertEqual(r["reste"], 0.0)
         self.assertEqual(r["dette"], 651.0)
 
-    def test_la_dette_aramex_n_est_pas_une_alerte(self):
+    def test_la_dette_aramex_n_est_pas_une_alerte_SI_le_colis_est_parti(self):
         """Exception voulue : le transporteur encaisse à la remise, il n'y a
-        rien à réclamer sur place."""
+        rien à réclamer sur place — encore faut-il qu'il ait le colis."""
         r = P._reglement(self._infos(
-            [self._p(406.0, P.MODE_DETTE, "Livraison Aramex - A&S")], total=406.0))
+            [self._p(406.0, P.MODE_DETTE, "Livraison Aramex - A&S")], total=406.0),
+            bordereau="51330112912")
         self.assertEqual(r["dette"], 0.0)
         self.assertEqual(r["dette_aramex"], 406.0)
 
-    def test_le_compte_tranche_et_non_le_mode(self):
-        """Les deux dettes portent le MÊME mode : seul le compte les sépare."""
+    def test_une_dette_aramex_SANS_bordereau_reste_a_encaisser(self):
+        """Le colis n'a pas voyagé : personne n'a rien pris, et c'est souvent
+        NOTRE technicien qui se déplace (Tache-08235, Installation sur
+        WEB1-008367, 406 DT). L'écran annonçait « encaissé par Aramex »."""
+        r = P._reglement(self._infos(
+            [self._p(406.0, P.MODE_DETTE, "Livraison Aramex - A&S")], total=406.0),
+            bordereau="")
+        self.assertEqual(r["dette"], 406.0)
+        self.assertEqual(r["dette_aramex"], 0.0)
+
+    def test_le_compte_ET_le_bordereau_tranchent(self):
+        """Les deux dettes portent le MÊME mode : le compte les sépare, et le
+        bordereau décide si celle d'Aramex est vraiment partie."""
         r = P._reglement(self._infos([
             self._p(100.0, P.MODE_DETTE, "Dettes - A&S"),
-            self._p(306.0, P.MODE_DETTE, "Livraison Aramex - A&S")], total=406.0))
+            self._p(306.0, P.MODE_DETTE, "Livraison Aramex - A&S")], total=406.0),
+            bordereau="51330112912")
         self.assertEqual((r["dette"], r["dette_aramex"]), (100.0, 306.0))
 
     def test_un_reste_impaye_prime_sur_tout(self):
