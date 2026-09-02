@@ -186,7 +186,7 @@ frappe.provide("frappe.views");
                 ${this._tel(l, esc)}${this._adresse(l, esc)}${this._articles(l, esc)}
                 ${l.note ? `<div class="mj-l"><span class="k">${__("Note")}</span>
                     <span>${esc(l.note)}</span></div>` : ""}
-                ${this._aramex_bloc(l, esc)}${this._cloture(l, esc)}
+                ${this._aramex_bloc(l, esc)}${this._cloture(l, esc)}${this._reglement(l, esc)}
               </div>
               ${faite ? "" : this._actions(l, esc)}
             </div>`;
@@ -313,6 +313,34 @@ frappe.provide("frappe.views");
          *  Refaire ce dialogue en plus petit, c'était garantir qu'un jour
          *  « Ma journée » accepterait une clôture que la fiche refuse.
          */
+        /** Le total de la commande et ce qui a DÉJÀ été encaissé, sous la ligne
+         *  de clôture (demande 02/09/2026).
+         *
+         *  C'est la question qui vient juste après « c'est fini » : reste-t-il
+         *  quelque chose à encaisser chez ce client ? La poser à l'écran évite
+         *  de repartir sans avoir demandé, et de devoir revenir.
+         *
+         *  Les chiffres viennent de `cloture_tache.exigences` — la même lecture
+         *  que le dialogue de la fiche, paiements alloués à la commande OU à
+         *  ses factures.
+         */
+        _reglement(l, esc) {
+            const c = (l.exigences || {}).commande_infos;
+            if (!c) return "";
+            const reste = Math.round(((c.total || 0) - (c.total_paye || 0)) * 1000) / 1000;
+            const detail = (c.paiements || []).map((p) =>
+                `<div class="mj-conf">${esc(p.date)} · ${esc(p.mode || "—")} · <b>${
+                    format_currency(p.montant, "TND")}</b></div>`).join("");
+            return `<div class="mj-l"><span class="k">${__("Règlement")}</span><span>
+                ${__("Total")} <b>${format_currency(c.total || 0, "TND")}</b> ·
+                ${__("payé")} <b>${format_currency(c.total_paye || 0, "TND")}</b>
+                ${reste > 0.005
+                    ? `<span class="mj-badge ko">${__("reste")} ${
+                        format_currency(reste, "TND")}</span>`
+                    : `<span class="mj-badge ok">${__("soldée")}</span>`}
+                ${detail}</span></div>`;
+        }
+
         _actions(l, esc) {
             return `<div class="mj-actions">
               <a class="btn btn-sm btn-default" target="_blank"
