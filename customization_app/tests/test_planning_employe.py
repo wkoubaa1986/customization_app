@@ -79,3 +79,52 @@ class TestResultatsAppel(unittest.TestCase):
         des appels devient irretrouvable."""
         self.assertTrue(P.PREFIXE_APPEL.strip())
         self.assertIn("Appel", P.PREFIXE_APPEL)
+
+
+class TestReglement(unittest.TestCase):
+    """« Payé » ne veut pas dire « encaissé ».
+
+    Une commande peut porter un paiement de mode « Dette non payée » : la pièce
+    existe, l'argent non. La carte annonçait « soldée » en vert sur 651 DT que
+    personne n'avait touchés (02/09/2026).
+    """
+
+    def _infos(self, paiements, total=651.0):
+        return {"total": total, "total_paye": sum(p["montant"] for p in paiements),
+                "paiements": paiements}
+
+    def _p(self, montant, mode, compte):
+        return {"montant": montant, "mode": mode, "compte": compte,
+                "date": "2026-08-29", "paiement": "ACC-PAY-1"}
+
+    def test_un_vrai_encaissement_ne_leve_aucune_alerte(self):
+        r = P._reglement(self._infos([self._p(651.0, "Espèces", "Espèces - A&S")]))
+        self.assertEqual((r["reste"], r["dette"], r["dette_aramex"]), (0.0, 0.0, 0.0))
+
+    def test_une_dette_non_payee_est_signalee(self):
+        """C'est le cas de la capture : soldée en vert, argent jamais touché."""
+        r = P._reglement(self._infos([self._p(651.0, P.MODE_DETTE, "Dettes - A&S")]))
+        self.assertEqual(r["reste"], 0.0)
+        self.assertEqual(r["dette"], 651.0)
+
+    def test_la_dette_aramex_n_est_pas_une_alerte(self):
+        """Exception voulue : le transporteur encaisse à la remise, il n'y a
+        rien à réclamer sur place."""
+        r = P._reglement(self._infos(
+            [self._p(406.0, P.MODE_DETTE, "Livraison Aramex - A&S")], total=406.0))
+        self.assertEqual(r["dette"], 0.0)
+        self.assertEqual(r["dette_aramex"], 406.0)
+
+    def test_le_compte_tranche_et_non_le_mode(self):
+        """Les deux dettes portent le MÊME mode : seul le compte les sépare."""
+        r = P._reglement(self._infos([
+            self._p(100.0, P.MODE_DETTE, "Dettes - A&S"),
+            self._p(306.0, P.MODE_DETTE, "Livraison Aramex - A&S")], total=406.0))
+        self.assertEqual((r["dette"], r["dette_aramex"]), (100.0, 306.0))
+
+    def test_un_reste_impaye_prime_sur_tout(self):
+        r = P._reglement(self._infos([self._p(200.0, "Espèces", "Espèces - A&S")]))
+        self.assertEqual(r["reste"], 451.0)
+
+    def test_sans_commande_il_n_y_a_rien_a_dire(self):
+        self.assertIsNone(P._reglement(None))

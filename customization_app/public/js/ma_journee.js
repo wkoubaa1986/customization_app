@@ -325,20 +325,33 @@ frappe.provide("frappe.views");
          *  ses factures.
          */
         _reglement(l, esc) {
-            const c = (l.exigences || {}).commande_infos;
-            if (!c) return "";
-            const reste = Math.round(((c.total || 0) - (c.total_paye || 0)) * 1000) / 1000;
-            const detail = (c.paiements || []).map((p) =>
+            const r = l.reglement;
+            if (!r) return "";
+            const detail = (r.paiements || []).map((p) =>
                 `<div class="mj-conf">${esc(p.date)} · ${esc(p.mode || "—")} · <b>${
                     format_currency(p.montant, "TND")}</b></div>`).join("");
+            // ⚠️ « PAYÉ » N'EST PAS « ENCAISSÉ ». Une commande peut porter un
+            // paiement de mode « Dette non payée » : la pièce existe, l'argent
+            // non. Annoncer « soldée » en vert sur 651 DT que personne n'a
+            // touchés envoyait le technicien repartir les mains vides.
+            // La dette ARAMEX est l'exception : le transporteur encaisse à la
+            // remise, il n'y a rien à réclamer sur place.
+            let verdict;
+            if (r.reste > 0.005) {
+                verdict = `<span class="mj-badge ko">${__("reste")} ${
+                    format_currency(r.reste, "TND")}</span>`;
+            } else if (r.dette > 0.005) {
+                verdict = `<span class="mj-badge att">⚠️ ${__("dette non payée")} — ${
+                    __("à encaisser")} ${format_currency(r.dette, "TND")}</span>`;
+            } else if (r.dette_aramex > 0.005) {
+                verdict = `<span class="mj-badge inf">📦 ${
+                    __("encaissé par Aramex à la remise")}</span>`;
+            } else {
+                verdict = `<span class="mj-badge ok">${__("soldée")}</span>`;
+            }
             return `<div class="mj-l"><span class="k">${__("Règlement")}</span><span>
-                ${__("Total")} <b>${format_currency(c.total || 0, "TND")}</b> ·
-                ${__("payé")} <b>${format_currency(c.total_paye || 0, "TND")}</b>
-                ${reste > 0.005
-                    ? `<span class="mj-badge ko">${__("reste")} ${
-                        format_currency(reste, "TND")}</span>`
-                    : `<span class="mj-badge ok">${__("soldée")}</span>`}
-                ${detail}</span></div>`;
+                ${__("Total")} <b>${format_currency(r.total, "TND")}</b>
+                ${verdict}${detail}</span></div>`;
         }
 
         _actions(l, esc) {

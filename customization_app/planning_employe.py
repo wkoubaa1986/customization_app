@@ -148,6 +148,49 @@ def _appels(tache):
     return out
 
 
+# Le mode de paiement qui signifie « rien n'a été encaissé ». Il porte 68 % des
+# lignes de dette du trimestre : le confondre avec un règlement fait annoncer
+# « soldée » une commande dont l'argent est encore chez le client.
+MODE_DETTE = "Dette non payée"
+
+
+def _reglement(commande_infos):
+    """Ce qui a VRAIMENT été encaissé, et ce qui n'est qu'une dette.
+
+    ⚠️ « PAYÉ » NE VEUT PAS DIRE « ENCAISSÉ ». Une commande peut porter un
+    paiement de mode « Dette non payée » : la pièce existe, l'argent non. La
+    carte annonçait « soldée » en vert sur 651 DT que personne n'avait touchés
+    (constaté 02/09/2026).
+
+    LA LIVRAISON ARAMEX EST L'EXCEPTION (décision utilisateur) : la dette y est
+    normale — c'est le transporteur qui encaisse à la remise. On la distingue
+    par son COMPTE, pas par le mode, qui est le même.
+    """
+    from customization_app.livraison_aramex import COMPTE_ARAMEX
+
+    if not commande_infos:
+        return None
+    dette = dette_aramex = 0.0
+    for p in commande_infos.get("paiements") or []:
+        if (p.get("mode") or "") != MODE_DETTE:
+            continue
+        if (p.get("compte") or "") == COMPTE_ARAMEX:
+            dette_aramex += frappe.utils.flt(p.get("montant"))
+        else:
+            dette += frappe.utils.flt(p.get("montant"))
+    total = frappe.utils.flt(commande_infos.get("total"))
+    paye = frappe.utils.flt(commande_infos.get("total_paye"))
+    return {
+        "total": round(total, 3),
+        "paye": round(paye, 3),
+        "reste": round(total - paye, 3),
+        # À encaisser sur place : la dette qui n'est pas celle d'Aramex.
+        "dette": round(dette, 3),
+        "dette_aramex": round(dette_aramex, 3),
+        "paiements": commande_infos.get("paiements") or [],
+    }
+
+
 def _aramex(commande):
     """(concerné, bordereau connu) — la règle de l'écran Traitement, pas une copie."""
     if not commande:
@@ -206,6 +249,7 @@ def ma_journee(date=None, employe=None):
             "aramex": aramex,
             "bordereau": bordereau,
             "appels": _appels(t.name),
+            "reglement": _reglement((exig or {}).get("commande_infos")),
             "exigences": exig,
         })
 
