@@ -302,7 +302,7 @@ frappe.provide("frappe.views");
                       data-aramex="${esc(l.tache)}"
                       >${manque ? __("Enregistrer") : __("Vérifier")}</button></div>
                     <div class="mj-conf">${
-                      __("Photographiez le bordereau, puis enregistrez : le numéro est lu sur la photo avant d être inscrit sur la commande.")
+                      __("Enregistré aussitôt sur la commande. S il y a une photo du bordereau, le numéro y est relu et tout écart est signalé.")
                     }</div>` : ""}
               </span></div>`;
         }
@@ -582,15 +582,18 @@ frappe.provide("frappe.views");
                 method: "customization_app.planning_employe.verifier_bordereau",
                 args: { tache, numero },
                 freeze: true,
-                freeze_message: __("Lecture de la photo du bordereau…"),
+                freeze_message: __("Enregistrement du bordereau…"),
                 callback: (r) => {
                     const m = r.message || {};
+                    // Le numéro est enregistré dans TOUS les cas : l'avertissement
+                    // porte sur la vérification, jamais sur l'enregistrement.
                     if (m.avertissement) {
-                        frappe.msgprint({ title: __("Bordereau enregistré"),
+                        frappe.msgprint({ title: __("Bordereau {0} enregistré", [m.bordereau]),
                                           indicator: "orange", message: m.avertissement });
                     } else {
                         frappe.show_alert({ indicator: "green",
-                            message: __("Bordereau {0} vérifié sur la photo", [m.bordereau]) }, 5);
+                            message: __("Bordereau {0} enregistré et vérifié sur la photo",
+                                        [m.bordereau]) }, 5);
                     }
                     this.charger();
                 },
@@ -661,17 +664,54 @@ frappe.provide("frappe.views");
         }
     };
 
+    /* ⚠️ SUR LE CALENDRIER, UN VRAI BOUTON DANS LA BARRE — PAS UN BOUTON FRAPPE.
+     *
+     * `add_inner_button` replie ses boutons dans un menu dès que l'écran est
+     * étroit : sur téléphone, « Ma journée » était simplement INVISIBLE (essai
+     * du 02/09/2026). Or c'est là qu'il sert le plus.
+     *
+     * « 🚚 Générer BL » règle le problème depuis longtemps en s'injectant dans
+     * la barre d'outils du calendrier, à côté d'« Aujourd'hui ». On se place au
+     * même endroit, par le même moyen — le calendrier est le seul écran dont la
+     * barre reste entière sur un petit écran.
+     *
+     * Pas d'exclusion d'utilisateur ici, contrairement à Générer BL : chacun
+     * ouvre SA journée, y compris le partenaire. */
+    function poser_bouton_calendrier(essais) {
+        if (document.getElementById("btn-ma-journee")) return;
+        const barre = document.querySelector(
+            ".fc-header-toolbar .fc-left, .fc-toolbar .fc-left, .fc-toolbar-chunk")
+            || document.querySelector(".fc-toolbar");
+        if (!barre) {
+            if ((essais || 0) < 12) setTimeout(() => poser_bouton_calendrier((essais || 0) + 1), 600);
+            return;
+        }
+        const btn = document.createElement("button");
+        btn.id = "btn-ma-journee";
+        btn.innerHTML = LIBELLE;
+        btn.style.cssText = "background:#2490ef;color:#fff;border:none;border-radius:6px;"
+            + "padding:6px 14px;font-weight:700;font-size:13px;cursor:pointer;"
+            + "margin-left:10px;box-shadow:0 1px 3px rgba(0,0,0,.2)";
+        btn.onclick = window.maJournee_ouvrir;
+        const bl = document.getElementById("btn-generer-bl");
+        const aujourdhui = document.querySelector(".fc-today-button");
+        // Juste après « Générer BL » quand il est là, sinon après « Aujourd'hui ».
+        const ancre = bl || aujourdhui;
+        if (ancre && ancre.parentNode) ancre.parentNode.insertBefore(btn, ancre.nextSibling);
+        else barre.appendChild(btn);
+    }
+
     const _cal = frappe.views.CalendarView && frappe.views.CalendarView.prototype;
     if (_cal && _cal.render) {
         const _render = _cal.render;
         _cal.render = function () {
             const out = _render.apply(this, arguments);
             try {
-                if (this.doctype === "Tache de travail" && !this._mj_bouton) {
-                    this._mj_bouton = true;
-                    this.page.add_inner_button(__(LIBELLE), window.maJournee_ouvrir);
+                if (this.doctype === "Tache de travail") {
+                    // Un peu après « Générer BL » (150 ms) pour se ranger à sa droite.
+                    setTimeout(() => poser_bouton_calendrier(0), 300);
                 }
-            } catch (e) { this._mj_bouton = false; }
+            } catch (e) { /* le calendrier n'est pas encore là */ }
             return out;
         };
     }

@@ -399,18 +399,19 @@ def _lire_numero_sur_photo(url):
 
 @frappe.whitelist()
 def verifier_bordereau(tache, numero):
-    """Confronte le numéro saisi à la photo du bordereau, puis l'enregistre.
+    """Écrit le bordereau SUR LA COMMANDE, puis le confronte à la photo.
 
-    L'UTILISATEUR A CHOISI DE BLOQUER (02/09/2026) : un numéro qui ne concorde
-    pas n'est pas enregistré. Deux situations ne sont pourtant PAS un désaccord,
-    et les traiter comme tel enfermerait le technicien :
-      - AUCUNE PHOTO, ou aucun numéro lisible dessus : il n'y a rien à comparer.
-        On refuse, mais en disant quoi faire — reprendre la photo — parce que la
-        clôture d'une livraison Aramex exige de toute façon ce cliché.
-      - SERVICE DE LECTURE INDISPONIBLE (clé absente, panne réseau) : ce n'est
-        pas un écart, c'est une panne de notre côté. Bloquer là-dessus
-        immobiliserait des colis réels pour une raison qui n'a rien à voir avec
-        eux. On enregistre, en le SIGNALANT et en le traçant.
+    ⚠️ ON ENREGISTRE D'ABORD (décision utilisateur 02/09/2026, après essai sur
+    le terrain). La première version REFUSAIT le numéro tant qu'aucune photo ne
+    le confirmait : le technicien tenait son colis, tapait le numéro, et se
+    voyait renvoyer un message au lieu d'un enregistrement. Le geste principal
+    — inscrire le bordereau sur la commande — ne doit dépendre de rien.
+
+    LA VÉRIFICATION RESTE, MAIS EN SECOND. S'il y a une photo, le numéro y est
+    relu et tout désaccord est SIGNALÉ — le numéro reste enregistré, c'est
+    l'humain qui tranche. Sans photo, ou si la lecture échoue, on le dit
+    simplement : un service d'analyse indisponible ne doit pas empêcher un colis
+    de partir.
     """
     doc = _ma_tache(tache)
     saisi = re.sub(r"\D", "", numero or "")
@@ -421,36 +422,39 @@ def verifier_bordereau(tache, numero):
 
     photos = _photos_de(doc)
     if not photos:
-        # Le message DIT OÙ EST LE BOUTON : « photographiez d'abord » laissait
-        # chercher où le faire, alors que l'appareil est à deux centimètres.
-        frappe.throw(_("Aucune photo sur cette intervention : appuyez sur "
-                       "« 📷 Photo » juste à côté pour photographier le "
-                       "bordereau, le numéro sera vérifié dessus."))
+        return _enregistrer_bordereau(
+            doc, saisi, "saisi à la main, aucune photo à confronter",
+            avertissement=_("Numéro enregistré. Aucune photo sur l'intervention : "
+                            "il n'a pas pu être vérifié — pensez à photographier "
+                            "le bordereau avant de clôturer."))
 
-    lus, panne = [], None
+    lus = []
     for url in photos:
         try:
             lu = _lire_numero_sur_photo(url)
         except Exception as e:
-            panne = str(e)[:160]
             frappe.log_error(frappe.get_traceback(), "Lecture bordereau %s" % doc.name[:50])
-            break
+            return _enregistrer_bordereau(
+                doc, saisi, "NON VÉRIFIÉ — lecture de la photo indisponible (%s)"
+                            % str(e)[:100],
+                avertissement=_("Numéro enregistré SANS vérification : la lecture "
+                                "de la photo est indisponible."))
         if lu:
             lus.append(lu)
             if lu == saisi:
                 return _enregistrer_bordereau(doc, saisi, "lu sur la photo")
 
-    if panne:
-        return _enregistrer_bordereau(
-            doc, saisi, "NON VÉRIFIÉ — lecture de la photo indisponible (%s)" % panne,
-            avertissement=_("Le numéro a été enregistré SANS vérification : la "
-                            "lecture de la photo est indisponible."))
     if not lus:
-        frappe.throw(_("Aucun numéro n'a pu être lu sur la ou les photos. "
-                       "Reprenez la photo du bordereau, bien à plat et nette."))
-    frappe.throw(_("Le numéro saisi ({0}) ne correspond pas à la photo : "
-                   "on y lit {1}. Corrigez la saisie, ou reprenez la photo.")
-                 .format(saisi, ", ".join(lus)))
+        return _enregistrer_bordereau(
+            doc, saisi, "aucun numéro lisible sur les photos",
+            avertissement=_("Numéro enregistré, mais aucun numéro n'a pu être lu "
+                            "sur les photos — vérifiez qu'elles montrent bien le "
+                            "bordereau, à plat et net."))
+    return _enregistrer_bordereau(
+        doc, saisi, "DÉSACCORD avec la photo (%s)" % ", ".join(lus),
+        avertissement=_("⚠️ Numéro enregistré, mais il ne correspond pas à la "
+                        "photo : on y lit {0}. Corrigez la saisie si c'est une "
+                        "erreur.").format(", ".join(lus)))
 
 
 def _enregistrer_bordereau(doc, numero, comment, avertissement=None):
