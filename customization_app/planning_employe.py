@@ -66,9 +66,14 @@ def _employe_demande(employe):
         frappe.throw(_("Vous ne pouvez consulter que votre propre journée."),
                      frappe.PermissionError)
     cible = employe or mien
-    if not cible:
+    if not cible and not _supervise():
         frappe.throw(_("Aucune fiche employé n'est rattachée à votre compte — "
                        "demandez au magasin de la lier."))
+    # ⚠️ UN SUPERVISEUR SANS FICHE EMPLOYÉ N'EST PAS UNE ERREUR. Administrator et
+    # la direction n'ont pas de journée à eux : lever ici affichait « journée
+    # indisponible » sur un écran parfaitement sain (constaté 02/09/2026). On
+    # rend None, l'écran propose la liste, et le System Manager choisit — il
+    # peut voir et agir pour n'importe qui.
     return cible
 
 
@@ -123,7 +128,7 @@ def ma_journee(date=None, employe=None):
 
     cible = _employe_demande(employe)
     jour = getdate(date or nowdate())
-    taches = frappe.get_all(
+    taches = [] if not cible else frappe.get_all(
         DOCTYPE_TACHE,
         filters={"custom_choix_du_staff": cible,
                  "starts_on": ["between", ["%s 00:00:00" % jour, "%s 23:59:59" % jour]]},
@@ -166,7 +171,9 @@ def ma_journee(date=None, employe=None):
     return {
         "jour": str(jour),
         "employe": cible,
-        "employe_nom": frappe.db.get_value("Employee", cible, "employee_name") or cible,
+        "employe_nom": (frappe.db.get_value("Employee", cible, "employee_name") or cible)
+                       if cible else "",
+        "sans_employe": not cible,
         "supervise": _supervise(),
         "employes": ([{"nom": e.name, "libelle": e.employee_name}
                       for e in frappe.get_all("Employee", filters={"status": "Active"},

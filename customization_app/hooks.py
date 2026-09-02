@@ -373,9 +373,11 @@ app_include_js = [_js("customer_quick_entry.js"),
                   _js("calendrier_rdv_button.js"),
                   _js("sales_order_avoir.js"),
                   _js("tache_liste_groupe.js"),
-                  # Le bouton « Ma journée » sur la liste et le calendrier des
-                  # tâches : chacun y termine ses interventions du jour.
-                  _js("ma_journee_bouton.js"),
+                  # « Ma journée » : la fenêtre où chacun termine ses
+                  # interventions du jour, depuis la liste ou le calendrier des
+                  # tâches. Une FENÊTRE et non une page — elle sert sur le
+                  # téléphone, entre deux interventions.
+                  _js("ma_journee.js"),
                   _js("taches_gestion_groupe.js"),
                   _js("tache_cloture_partenaire.js"),
                   # Coloration des anomalies dans la liste des commandes.
