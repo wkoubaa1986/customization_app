@@ -457,10 +457,53 @@ def verifier_bordereau(tache, numero):
                         "erreur.").format(", ".join(lus)))
 
 
+# Ce que la création d'une commande web laisse dans la case du numéro : des
+# bouchons, pas des numéros. On a le droit de les remplacer ; un vrai numéro,
+# jamais.
+BOUCHONS = ("", "x", "xx", "xxx", "xxxx", "xxxxx", "0", "00", "000", "0000", "00000")
+
+
+def _bouchon(valeur):
+    v = (valeur or "").strip().lower()
+    return v in BOUCHONS
+
+
+def _poser_sur_echeancier(commande, numero):
+    """Écrit aussi le bordereau dans l'ÉCHÉANCIER de la commande. -> nb de lignes.
+
+    ⚠️ C'EST LÀ QUE LE RESTE DE L'APP LE LIT. Le champ
+    `Payment Schedule.custom__n_chèque__transaction` est celui que l'ancien
+    rappel du soir consultait pour annoncer le numéro de suivi au client, et
+    celui qu'on voit sur la fiche commande. Ne remplir que
+    `custom_bordereau_aramex` laissait « xxxxx » sur l'échéancier —
+    le colis paraissait sans numéro là où l'utilisateur regarde (constaté
+    02/09/2026 sur WEB1-008369).
+
+    ⚠️ ON N'ÉCRASE QUE LES BOUCHONS. « xxxxx », « 0000 », vide : ce sont les
+    marques laissées à la création de la commande web. Un numéro déjà saisi —
+    par le magasin ou par un encaissement Aramex — est une donnée, et on ne la
+    remplace pas en silence.
+    """
+    poses = 0
+    for ligne in frappe.get_all(
+            "Payment Schedule", filters={"parent": commande, "parenttype": "Sales Order"},
+            fields=["name", "custom__n_chèque__transaction"], limit_page_length=0):
+        if not _bouchon(ligne.get("custom__n_chèque__transaction")):
+            continue
+        frappe.db.set_value("Payment Schedule", ligne["name"],
+                            "custom__n_chèque__transaction", numero,
+                            update_modified=False)
+        poses += 1
+    return poses
+
+
 def _enregistrer_bordereau(doc, numero, comment, avertissement=None):
     """Pose le bordereau SUR LA COMMANDE — là où toute l'app le lit."""
     frappe.db.set_value("Sales Order", doc.commande_client,
                         "custom_bordereau_aramex", numero)
+    poses = _poser_sur_echeancier(doc.commande_client, numero)
+    if poses:
+        comment += " · %d ligne(s) d'échéancier renseignée(s)" % poses
     frappe.get_doc({
         "doctype": "Comment", "comment_type": "Info",
         "reference_doctype": DOCTYPE_TACHE, "reference_name": doc.name,

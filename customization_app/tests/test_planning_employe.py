@@ -168,3 +168,32 @@ class TestPerimetreAramex(unittest.TestCase):
         r = P._reglement(infos, bordereau="")
         self.assertEqual(r["dette"], 406.0)
         self.assertEqual(r["dette_aramex"], 0.0)
+
+
+class TestBordereauSurEcheancier(unittest.TestCase):
+    """Le bordereau doit atterrir DANS L'ÉCHÉANCIER, pas seulement sur la
+    commande.
+
+    Constaté le 02/09/2026 : après « Enregistrer » dans Ma journée, la colonne
+    « N: Chèque » de la commande affichait toujours « xxxxx ». C'est ce champ-là
+    (`Payment Schedule.custom__n_chèque__transaction`) que l'utilisateur
+    regarde, et que l'ancien rappel du soir lisait pour annoncer le numéro de
+    suivi au client.
+    """
+
+    def test_les_bouchons_de_la_commande_web_sont_remplacables(self):
+        """Ce que la création d'une commande web laisse dans la case."""
+        for bouchon in ("xxxxx", "XXXXX", "0000", "000", "", "  ", None):
+            self.assertTrue(P._bouchon(bouchon), repr(bouchon))
+
+    def test_un_vrai_numero_n_est_jamais_un_bouchon(self):
+        """⚠️ Un numéro déjà saisi — par le magasin ou par un encaissement
+        Aramex — est une donnée. L'écraser en silence ferait perdre le suivi
+        d'un colis déjà parti."""
+        for vrai in ("51330112891", "48812239851",
+                     "Aramex N: 47070786151 Virement recu N: FT24096QB9SS"):
+            self.assertFalse(P._bouchon(vrai), vrai)
+
+    def test_un_zero_isole_reste_un_bouchon(self):
+        """« 0 » n'est pas un numéro de bordereau : c'est une case pas remplie."""
+        self.assertTrue(P._bouchon("0"))
