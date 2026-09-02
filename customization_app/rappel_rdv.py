@@ -31,6 +31,15 @@ n'est qu'un point d'ancrage au calendrier, jamais une promesse. Le message le
 dit en une ligne, au lieu du paragraphe d'excuses de l'ancien script — qui
 coûtait un troisième segment de SMS sur chaque envoi.
 
+LE CONSENTEMENT SMS NE S'APPLIQUE PAS ICI (décision utilisateur 02/09/2026).
+`Customer.custom_envoi_sms = Non` couvre les RELANCES et les messages
+commerciaux. Un rappel de rendez-vous est un message de SERVICE : le client a
+pris ce rendez-vous, un technicien se déplace, et le prévenir n'est pas de la
+prospection. Deux clients étaient écartés ce soir à ce titre — Lycée Pierre
+Mendès France et Ben Ghorbel Fouzi — alors qu'ils attendent une intervention
+demain. L'avis de remise Aramex n'a lui non plus jamais filtré le
+consentement : les deux listes suivent maintenant la même règle.
+
 LE NOM ET LE NUMÉRO DU TECHNICIEN VIENNENT DE LA MÊME SOURCE : la fiche
 employé liée à la tâche. Le champ texte `custom_employé` de la tâche peut la
 contredire — 29 tâches l'ont vide, et Tache-07413 affiche « Mohamed Hedi
@@ -163,19 +172,6 @@ def message_aramex(tache, bordereau):
 # ------------------------------------------------------------------ collecte
 
 
-def _clients_consentants():
-    """Le consentement SMS du client, lu une fois pour toutes.
-
-    ⚠️ L'ANCIEN SCRIPT NE LE VÉRIFIAIT QUE SUR UNE DES DEUX LISTES : l'avis de
-    remise Aramex partait même chez ceux qui ont refusé les SMS — 5 clients en
-    60 jours. Un avis de livraison reste un message commercial : même règle
-    pour tout le monde.
-    """
-    return {c.name for c in frappe.get_all(
-        "Customer", filters={"custom_envoi_sms": "Oui"}, fields=["name"],
-        limit_page_length=0)}
-
-
 def _taches(filtres):
     return frappe.get_all(
         DOCTYPE_TACHE, filters=filtres,
@@ -282,7 +278,7 @@ def _envoyer(numero, texte):
     envoyer_sms_verifie(numero, texte, tentatives=2)
 
 
-def _traiter(tache, consentants, jour, aramex, envoyer, resultat):
+def _traiter(tache, jour, aramex, envoyer, resultat):
     """UN rendez-vous, de bout en bout. Ne lève jamais.
 
     C'est ici que se joue la solidité : chaque motif d'abandon est nommé et
@@ -292,8 +288,6 @@ def _traiter(tache, consentants, jour, aramex, envoyer, resultat):
         resultat["sautes"].append({"tache": tache["name"], "motif": motif})
 
     try:
-        if tache["custom_client"] not in consentants:
-            return sauter("client sans consentement SMS")
         if _deja_envoye(tache, jour):
             return sauter("rappel déjà envoyé aujourd'hui")
 
@@ -337,14 +331,13 @@ def executer(envoyer: bool = True) -> dict:
     c'est l'aperçu, pour vérifier une liste avant 20 h.
     """
     jour = str(getdate(nowdate()))
-    consentants = _clients_consentants()
     resultat = {"jour": jour, "envoyes": [], "sautes": [], "echecs": [],
                 "simulation": simulation()}
 
     for tache in rendez_vous_de_demain():
-        _traiter(tache, consentants, jour, False, envoyer, resultat)
+        _traiter(tache, jour, False, envoyer, resultat)
     for tache in remises_aramex_du_jour():
-        _traiter(tache, consentants, jour, True, envoyer, resultat)
+        _traiter(tache, jour, True, envoyer, resultat)
 
     resultat["resume"] = "%d envoyé(s), %d sauté(s), %d échec(s)" % (
         len(resultat["envoyes"]), len(resultat["sautes"]), len(resultat["echecs"]))
