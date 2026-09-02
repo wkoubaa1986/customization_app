@@ -434,25 +434,45 @@ frappe.provide("frappe.views");
             const nom = (this.data || {}).employe_nom || "";
             frappe.require("/assets/customization_app/js/ouvrir_document.js", () => {
                 customization_app.ouvrir_document("Page", "caisse-journaliere", {
-                    titre: __("Caisse journalière — {0}", [nom || __("moi")]),
+                    // ⚠️ LE JOUR DANS LE TITRE. « Aucun encaissement » sans date
+                    // se lit comme une panne : on a cherché un bug là où le
+                    // technicien n'avait simplement rien encaissé CE jour-là
+                    // (02/09/2026 — Jamel Aloui avait 3 101 DT la veille).
+                    titre: __("Caisse journalière — {0} · {1}",
+                              [nom || __("moi"), frappe.datetime.str_to_user(this.jour)]),
                     url: "/app/caisse-journaliere",
-                    au_chargement: (fenetre) => this._preselectionner_caisse(fenetre, nom),
+                    au_chargement: (fenetre) =>
+                        this._preselectionner_caisse(fenetre, nom, this.jour),
                 });
             });
         }
 
-        _preselectionner_caisse(fenetre, nom) {
-            if (!nom) return;
+        /** Cale la caisse sur l'employé ET LE JOUR affichés.
+         *
+         *  ⚠️ LE JOUR COMPTE AUTANT QUE LE NOM. Le rapport s'ouvre sur
+         *  aujourd'hui ; en consultant la journée d'hier, on tombait sur
+         *  « Aucun encaissement » alors que l'employé avait encaissé 6 029 DT
+         *  la veille (constaté 02/09/2026). Ce n'était pas une erreur du
+         *  rapport — c'était la mauvaise date, et rien ne le disait.
+         */
+        _preselectionner_caisse(fenetre, nom, jour) {
+            if (!nom && !jour) return;
             let restant = 20;
             const essayer = () => {
-                try {
-                    const sel = fenetre.document.getElementById("rcj-employe");
-                    if (sel && Array.from(sel.options).some((o) => o.value === nom)) {
-                        sel.value = nom;
-                        sel.dispatchEvent(new fenetre.Event("change", { bubbles: true }));
-                        return;
-                    }
-                } catch (e) { return; }        // page pas encore prête, ou refusée
+                let doc;
+                try { doc = fenetre.document; } catch (e) { return; }   // refusé
+                const sel = doc.getElementById("rcj-employe");
+                const d1 = doc.getElementById("rcj-d1");
+                const d2 = doc.getElementById("rcj-d2");
+                const pret = sel && (!nom || Array.from(sel.options)
+                                              .some((o) => o.value === nom));
+                if (pret && d1 && d2) {
+                    if (jour) { d1.value = jour; d2.value = jour; }
+                    if (nom) { sel.value = nom; }
+                    // Un seul `change` : chaque événement relance une requête.
+                    sel.dispatchEvent(new fenetre.Event("change", { bubbles: true }));
+                    return;
+                }
                 if (--restant > 0) setTimeout(essayer, 300);
             };
             setTimeout(essayer, 500);
