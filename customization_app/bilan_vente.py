@@ -331,6 +331,54 @@ def _tasks_by_order(so_names):
     return out
 
 
+def etat_bon(status, docstatus):
+    """L'état affiché d'un bon de livraison.
+
+    ⚠️ UNE PIÈCE ANNULÉE GARDE LE STATUT QU'ELLE AVAIT AVANT. Lire `status` seul affichait
+    « Completed » sur un bon annulé — exactement le cas qu'on veut voir, puisqu'il explique
+    qu'une commande paraisse livrée sans l'être.
+    """
+    if cint(docstatus) == 2:
+        return "Cancelled"
+    if cint(docstatus) == 0:
+        return "Draft"
+    return status or ""
+
+
+def _delivery_notes_by_order(so_names):
+    """Bons de livraison liés aux commandes -> {commande: [{...}]}.
+
+    ⚠️ ON LES PREND TOUS, ANNULÉS COMPRIS. C'est l'ÉTAT du bon qui est demandé : un bon annulé
+    explique pourquoi une commande paraît livrée sans l'être, et le taire ferait chercher
+    ailleurs. Le lien passe par `against_sales_order`, la même clé que la condition
+    d'éligibilité de `_owned_orders` — les deux parlent donc des mêmes pièces.
+    """
+    if not so_names:
+        return {}
+    ph = ",".join(["%s"] * len(so_names))
+    rows = frappe.db.sql(
+        f"""SELECT DISTINCT dni.against_sales_order AS commande, dn.name, dn.status,
+                   dn.docstatus, dn.posting_date, dn.grand_total,
+                   dn.custom_reconciliation_stock AS reconciliation
+            FROM `tabDelivery Note Item` dni
+            INNER JOIN `tabDelivery Note` dn ON dn.name = dni.parent
+            WHERE dni.against_sales_order IN ({ph})
+            ORDER BY dn.posting_date, dn.name""",
+        tuple(so_names), as_dict=True,
+    )
+    out = {}
+    for r in rows:
+        out.setdefault(r.commande, []).append({
+            "name": r.name,
+            "status": etat_bon(r.status, r.docstatus),
+            "docstatus": cint(r.docstatus),
+            "posting_date": str(r.posting_date) if r.posting_date else None,
+            "total": flt(r.grand_total, PRECISION),
+            "reconciliation": r.reconciliation or None,
+        })
+    return out
+
+
 def _payments_by_order(so_names):
     """Paiements validés par commande : via factures + directs (dédupliqués)."""
     if not so_names:
@@ -398,7 +446,7 @@ def _classify(mode):
     return "autre"
 
 
-def _build_order(so, items, payments, tasks, resolve_price, margin):
+def _build_order(so, items, payments, tasks, resolve_price, margin, bons=None):
     order_items = []
     vente = achat = benefice = 0.0
     for it in items:
@@ -455,6 +503,7 @@ def _build_order(so, items, payments, tasks, resolve_price, margin):
         "items": order_items,
         "payments": order_payments,
         "tasks": tasks,
+        "bons": bons or [],
         "totals": {
             "vente": flt(vente, PRECISION),
             "achat": flt(achat, PRECISION),
@@ -647,6 +696,7 @@ def get_data(month=None, base=None, exclure_ouvertes=None):
     so_names = [o.name for o in all_orders]
     items_map = _items_by_order(so_names)
     payments_map = _payments_by_order(so_names)
+    bons_map = _delivery_notes_by_order(so_names)
     resolve_price = _purchase_price_resolver(
         it.item_code for rows in items_map.values() for it in rows
     )
@@ -654,7 +704,8 @@ def get_data(month=None, base=None, exclure_ouvertes=None):
     def build(orders, margin):
         return [
             _build_order(o, items_map.get(o.name, []), payments_map.get(o.name, []),
-                         tasks_map.get(o.name, []), resolve_price, margin)
+                         tasks_map.get(o.name, []), resolve_price, margin,
+                         bons_map.get(o.name, []))
             for o in orders
         ]
 

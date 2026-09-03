@@ -146,3 +146,42 @@ class TestRegleEnregistree(unittest.TestCase):
         params = inspect.signature(BV.download_excel).parameters
         self.assertIsNone(params["base"].default)
         self.assertIsNone(params["exclure_ouvertes"].default)
+
+
+class TestEtatDesBonsDeLivraison(unittest.TestCase):
+    """L'état de chaque bon de livraison, affiché au dépliage de la commande.
+
+    L'éligibilité au bilan repose sur la livraison — « Fully Delivered », ou un bon validé avec
+    réconciliation de stock — sans jamais montrer QUELLE pièce la porte. On lisait donc une
+    commande au bilan sans pouvoir vérifier ce qui l'y avait fait entrer (demande utilisateur
+    03/09/2026).
+    """
+
+    def test_un_bon_valide_garde_son_statut(self):
+        self.assertEqual(BV.etat_bon("To Bill", 1), "To Bill")
+        self.assertEqual(BV.etat_bon("Completed", 1), "Completed")
+
+    def test_un_bon_annule_le_dit(self):
+        """⚠️ Une pièce annulée CONSERVE le statut qu'elle avait avant. Lire `status` seul
+        affichait « Completed » sur un bon annulé — or c'est précisément le cas qui explique
+        qu'une commande paraisse livrée sans l'être."""
+        self.assertEqual(BV.etat_bon("Completed", 2), "Cancelled")
+        self.assertEqual(BV.etat_bon("To Bill", 2), "Cancelled")
+
+    def test_un_brouillon_le_dit_aussi(self):
+        self.assertEqual(BV.etat_bon("", 0), "Draft")
+        self.assertEqual(BV.etat_bon("To Bill", 0), "Draft")
+
+    def test_un_statut_absent_ne_leve_pas(self):
+        self.assertEqual(BV.etat_bon(None, 1), "")
+
+    def test_le_docstatus_en_chaine_est_accepte(self):
+        """Il arrive du SQL, et une comparaison stricte à 2 raterait « 2 »."""
+        self.assertEqual(BV.etat_bon("Completed", "2"), "Cancelled")
+
+    def test_la_commande_porte_toujours_la_cle_bons(self):
+        """Le rendu itère dessus : une clé absente casserait le dépliage."""
+        import inspect
+
+        source = inspect.getsource(BV._build_order)
+        self.assertIn('"bons"', source)

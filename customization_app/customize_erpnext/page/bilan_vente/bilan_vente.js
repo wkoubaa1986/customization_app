@@ -17,6 +17,7 @@ const BV_DOCTYPE_LABELS = {
   "Sales Order": "Commande client",
   "Payment Entry": "Écriture de paiement",
   "Tache de travail": "Tâche de travail",
+  "Delivery Note": "Bon de livraison",
 };
 
 // Champs affichés dans l'aperçu pop-up, par doctype (affichage uniquement).
@@ -40,6 +41,15 @@ const BV_PREVIEW_FIELDS = {
     ["reference_no", "Référence"],
     ["reference_date", "Date référence", "date"],
   ],
+  "Delivery Note": [
+    ["status", "Statut", "badge"],
+    ["customer_name", "Client"],
+    ["posting_date", "Date", "date"],
+    ["grand_total", "Total TTC", "currency"],
+    ["custom_reconciliation_stock", "Réconciliation stock"],
+    ["set_warehouse", "Magasin"],
+    ["owner", "Créé par"],
+  ],
   "Tache de travail": [
     ["status", "Statut", "badge"],
     ["custom_type_dintervention", "Type d'intervention"],
@@ -49,6 +59,17 @@ const BV_PREVIEW_FIELDS = {
     ["ends_on", "Fin", "datetime"],
     ["commande_client", "Commande client"],
   ],
+};
+
+// Les statuts d'un bon de livraison. « Cancelled » est posé par le backend depuis le docstatus :
+// une pièce annulée conserve sinon le statut qu'elle avait avant, et s'afficherait « Completed ».
+const BV_DN_STATUS_CLASS = {
+  Completed: "st-green",
+  Closed: "st-green",
+  "To Bill": "st-orange",
+  Draft: "st-orange",
+  "Return Issued": "st-red",
+  Cancelled: "st-gray",
 };
 
 const BV_TASK_STATUS_CLASS = {
@@ -362,6 +383,32 @@ class BilanVente {
     return `<div><div class="k">${k}</div><div class="v">${this._fmt(v)}</div></div>`;
   }
 
+  /** Les bons de livraison de la commande, avec leur état et un lien en pop-up.
+   *
+   * L'éligibilité au bilan repose sur la livraison (« Fully Delivered », ou un bon validé avec
+   * réconciliation de stock) sans jamais montrer QUELLE pièce la porte : on lisait une commande
+   * au bilan sans pouvoir vérifier ce qui l'y avait fait entrer.
+   */
+  _bons(o) {
+    const esc = frappe.utils.escape_html;
+    if (!o.bons || !o.bons.length) {
+      return `<div class="bv-tasks"><h6>Bons de livraison</h6>
+        <div class="bv-task"><span class="meta">Aucun bon de livraison rattaché.</span></div></div>`;
+    }
+    return `
+    <div class="bv-tasks">
+      <h6>Bons de livraison</h6>
+      ${o.bons.map((b) => `
+        <div class="bv-task">
+          ${this._doclink("Delivery Note", b.name, b.name, "bv-task-link")}
+          <span class="bv-badge ${BV_DN_STATUS_CLASS[b.status] || "st-orange"}">${esc(b.status || "—")}</span>
+          ${b.posting_date ? `<span class="meta">${frappe.datetime.str_to_user(b.posting_date)}</span>` : ""}
+          <span class="meta">${this._fmt(b.total)}</span>
+          ${b.reconciliation ? `<span class="meta">réconc. ${esc(b.reconciliation)}</span>` : ""}
+        </div>`).join("")}
+    </div>`;
+  }
+
   _tasks(o) {
     const esc = frappe.utils.escape_html;
     if (!o.tasks || !o.tasks.length) return "";
@@ -443,6 +490,7 @@ class BilanVente {
             </div>
           </div>
         </div>
+        ${this._bons(o)}
         ${this._tasks(o)}
       </div>
     </div>`;
