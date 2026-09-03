@@ -185,3 +185,40 @@ class TestEtatDesBonsDeLivraison(unittest.TestCase):
 
         source = inspect.getsource(BV._build_order)
         self.assertIn('"bons"', source)
+
+
+class TestArticlesDesBons(unittest.TestCase):
+    """Les articles réellement livrés, sous chaque bon.
+
+    ⚠️ CE SONT LES QUANTITÉS DU BON, PAS CELLES DE LA COMMANDE. Une livraison peut être
+    partielle, ou porter un article que la commande ne prévoyait pas — c'est précisément ce
+    qu'on veut lire. Les rapprocher des lignes de commande les rendrait invisibles.
+    """
+
+    def source(self, fn):
+        import inspect
+
+        return inspect.getsource(fn)
+
+    def test_les_lignes_sont_lues_sur_le_bon_et_non_sur_la_commande(self):
+        src = self.source(BV._delivery_note_items)
+        self.assertIn("tabDelivery Note Item", src)
+        self.assertIn("dni.parent IN", src)
+
+    def test_chaque_ligne_porte_sa_commande_d_origine(self):
+        """Un bon peut regrouper PLUSIEURS commandes : sans cette clé, on attribuerait tout le
+        bon à celle qu'on est en train de déplier."""
+        self.assertIn('"commande": r.against_sales_order', self.source(BV._delivery_note_items))
+
+    def test_l_ordre_de_saisie_est_conserve(self):
+        """`idx` : l'ordre du bon papier. Un tri par article rendrait la comparaison pénible."""
+        self.assertIn("ORDER BY dni.parent, dni.idx", self.source(BV._delivery_note_items))
+
+    def test_les_bons_portent_leurs_lignes(self):
+        self.assertIn('"items": lignes.get(r.name, [])',
+                      self.source(BV._delivery_notes_by_order))
+
+    def test_sans_bon_aucune_requete_de_lignes(self):
+        """Le garde-fou des requêtes IN vides, comme partout ailleurs dans ce module."""
+        self.assertEqual(BV._delivery_note_items(set()), {})
+        self.assertEqual(BV._delivery_note_items([]), {})

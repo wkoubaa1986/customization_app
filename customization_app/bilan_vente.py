@@ -345,6 +345,41 @@ def etat_bon(status, docstatus):
     return status or ""
 
 
+def _delivery_note_items(dn_names):
+    """Les lignes livrées, bon par bon -> {bon: [{...}]}.
+
+    ⚠️ CE SONT LES QUANTITÉS DU BON, PAS CELLES DE LA COMMANDE. Une livraison peut être
+    partielle, ou porter un article que la commande ne prévoyait pas : c'est justement ce qu'on
+    veut lire ici. Les rapprocher des lignes de commande les rendrait invisibles.
+    """
+    if not dn_names:
+        return {}
+    noms = list(dn_names)
+    ph = ",".join(["%s"] * len(noms))
+    rows = frappe.db.sql(
+        f"""SELECT dni.parent, dni.item_code, dni.item_name, dni.qty, dni.uom,
+                   dni.rate, dni.amount, dni.against_sales_order
+            FROM `tabDelivery Note Item` dni
+            WHERE dni.parent IN ({ph})
+            ORDER BY dni.parent, dni.idx""",
+        tuple(noms), as_dict=True,
+    )
+    out = {}
+    for r in rows:
+        out.setdefault(r.parent, []).append({
+            "item_code": r.item_code,
+            "item_name": r.item_name or r.item_code,
+            "qty": flt(r.qty, PRECISION),
+            "uom": r.uom or "",
+            "rate": flt(r.rate, PRECISION),
+            "amount": flt(r.amount, PRECISION),
+            # Un bon peut regrouper PLUSIEURS commandes : la ligne dit à laquelle elle appartient,
+            # sinon on croirait tout le bon rattaché à la commande qu'on est en train de lire.
+            "commande": r.against_sales_order or None,
+        })
+    return out
+
+
 def _delivery_notes_by_order(so_names):
     """Bons de livraison liés aux commandes -> {commande: [{...}]}.
 
@@ -366,10 +401,12 @@ def _delivery_notes_by_order(so_names):
             ORDER BY dn.posting_date, dn.name""",
         tuple(so_names), as_dict=True,
     )
+    lignes = _delivery_note_items({r.name for r in rows})
     out = {}
     for r in rows:
         out.setdefault(r.commande, []).append({
             "name": r.name,
+            "items": lignes.get(r.name, []),
             "status": etat_bon(r.status, r.docstatus),
             "docstatus": cint(r.docstatus),
             "posting_date": str(r.posting_date) if r.posting_date else None,

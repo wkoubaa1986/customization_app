@@ -405,8 +405,31 @@ class BilanVente {
           ${b.posting_date ? `<span class="meta">${frappe.datetime.str_to_user(b.posting_date)}</span>` : ""}
           <span class="meta">${this._fmt(b.total)}</span>
           ${b.reconciliation ? `<span class="meta">réconc. ${esc(b.reconciliation)}</span>` : ""}
-        </div>`).join("")}
+        </div>
+        ${this._bon_items(b, o)}`).join("")}
     </div>`;
+  }
+
+  /** Les articles réellement livrés par un bon.
+   *
+   * ⚠️ CE SONT LES QUANTITÉS DU BON, PAS CELLES DE LA COMMANDE : une livraison peut être
+   * partielle, et c'est précisément ce qu'on veut lire. Un bon qui regroupe plusieurs commandes
+   * signale les lignes qui appartiennent à une AUTRE que celle qu'on déplie — sans quoi on lui
+   * attribuerait tout le bon.
+   */
+  _bon_items(b, o) {
+    const esc = frappe.utils.escape_html;
+    if (!b.items || !b.items.length) return "";
+    return `<div class="bv-dn-items">${b.items.map((it) => {
+      const ailleurs = it.commande && o && it.commande !== o.name;
+      return `<div class="bv-dn-item${ailleurs ? " bv-dn-autre" : ""}">
+        <span class="q">${it.qty}${it.uom ? ` ${esc(it.uom)}` : ""}</span>
+        <span class="n">${esc(it.item_name)}</span>
+        <span class="meta">${esc(it.item_code)}</span>
+        ${ailleurs ? `<span class="meta">— ${esc(it.commande)}</span>` : ""}
+        <span class="a">${this._fmt(it.amount)}</span>
+      </div>`;
+    }).join("")}</div>`;
   }
 
   _tasks(o) {
