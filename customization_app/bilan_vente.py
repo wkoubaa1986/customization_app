@@ -62,6 +62,53 @@ _JOIN_TACHE = """
 """
 
 
+# ---------------------------------------------------------------- la règle
+
+# ⚠️ LA RÈGLE EST ENREGISTRÉE, PAS PROPRE À L'ÉCRAN. L'onglet « Partenaire Economiq »
+# (bank_retenue_sync.partenaire.economiq) appelle `get_data(month=...)` sans paramètre et bâtit
+# sur ce résultat l'ÉCRITURE DE BILAN qui règle les comptes avec le partenaire. Un réglage
+# seulement visuel aurait fait afficher 654,86 de bénéfice d'un côté et 1 321,01 de l'autre sur
+# le même mois d'août 2026 — et l'ajustement se serait fait sur le mauvais chiffre.
+# Les mois déjà VALIDÉS gardent leur bilan figé côté Economiq : changer la règle ne peut pas
+# rouvrir un mois réglé.
+CONFIG_DOCTYPE = "Config Bilan Vente"
+_LIBELLES_BASE = {
+    "Date de livraison": BASE_LIVRAISON,
+    "Date de la tâche": BASE_TACHE,
+}
+LIBELLE_DE_BASE = {v: k for k, v in _LIBELLES_BASE.items()}
+
+
+def regle():
+    """La règle enregistrée -> {"base", "exclure_ouvertes"}.
+
+    Tolère l'absence du DocType (bench où la migration n'est pas passée) : on retombe alors sur
+    le comportement historique, jamais sur une erreur — le bilan doit rester consultable.
+    """
+    base, exclure = BASE_LIVRAISON, 0
+    try:
+        conf = frappe.get_cached_doc(CONFIG_DOCTYPE)
+        base = _LIBELLES_BASE.get((conf.get("base_comptage") or "").strip(), BASE_LIVRAISON)
+        exclure = cint(conf.get("exclure_taches_ouvertes"))
+    except Exception:
+        pass
+    return {"base": base, "exclure_ouvertes": exclure}
+
+
+@frappe.whitelist()
+def set_regle(base=None, exclure_ouvertes=0):
+    """Écrit la règle. Réservé à ceux qui peuvent régler avec le partenaire."""
+    frappe.only_for(["System Manager", "Accounts Manager"])
+    base = _base_valide(base)
+    conf = frappe.get_single(CONFIG_DOCTYPE)
+    conf.base_comptage = LIBELLE_DE_BASE[base]
+    conf.exclure_taches_ouvertes = cint(exclure_ouvertes)
+    conf.flags.ignore_permissions = True
+    conf.save()
+    frappe.db.commit()
+    return regle()
+
+
 def _base_valide(base):
     base = (base or BASE_LIVRAISON).strip().lower()
     return base if base in BASES else BASE_LIVRAISON
@@ -522,7 +569,7 @@ def _excel_rows(data):
 
 
 @frappe.whitelist()
-def download_excel(month=None, base=None, exclure_ouvertes=0):
+def download_excel(month=None, base=None, exclure_ouvertes=None):
     from frappe.utils.xlsxutils import make_xlsx
 
     data = get_data(month, base=base, exclure_ouvertes=exclure_ouvertes)
@@ -535,15 +582,22 @@ def download_excel(month=None, base=None, exclure_ouvertes=0):
 # ---------------------------------------------------------------- API
 
 @frappe.whitelist()
-def get_data(month=None, base=None, exclure_ouvertes=0):
-    """`base` : "livraison" (défaut, historique) ou "tache".
-    `exclure_ouvertes` : écarte les commandes dont une tâche est encore ouverte."""
+def get_data(month=None, base=None, exclure_ouvertes=None):
+    """`base` : "livraison" (historique) ou "tache". `exclure_ouvertes` : 0/1.
+
+    ⚠️ NON RENSEIGNÉ N'EST PAS ZÉRO. Laisser un paramètre à None applique la RÈGLE ENREGISTRÉE
+    (cf. `regle()`) : c'est ainsi que l'onglet « Partenaire Economiq », qui appelle
+    `get_data(month=...)` tout court, suit le même périmètre que cet écran. Un défaut à 0 aurait
+    fait diverger les deux écrans en silence.
+    """
     if not frappe.has_permission("Sales Order", "read"):
         frappe.throw(_("Accès non autorisé"), frappe.PermissionError)
 
     year, mon, start, end = _period(month)
-    base = _base_valide(base)
-    exclure_ouvertes = cint(exclure_ouvertes)
+    en_vigueur = regle()
+    base = _base_valide(base if base is not None else en_vigueur["base"])
+    exclure_ouvertes = cint(exclure_ouvertes if exclure_ouvertes is not None
+                            else en_vigueur["exclure_ouvertes"])
 
     clients_partage = _clients_partage()
     owned = _owned_orders(start, end, base)
@@ -629,6 +683,8 @@ def get_data(month=None, base=None, exclure_ouvertes=0):
         "base": base,
         "exclure_ouvertes": exclure_ouvertes,
         "ecartees": sorted(ecartees),
+        "peut_regler": bool(set(frappe.get_roles())
+                            & {"System Manager", "Accounts Manager"}),
         "months": _month_options(),
         "currency": frappe.defaults.get_global_default("currency") or "TND",
         "kpis": kpis,

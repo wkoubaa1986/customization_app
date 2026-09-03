@@ -77,10 +77,24 @@ class BilanVente {
     };
   }
 
+  // Les deux cases sont une RÈGLE ENREGISTRÉE, pas une vue : l'onglet « Partenaire Economiq »
+  // la lit aussi pour bâtir l'écriture de bilan. On l'écrit donc avant de relire, sinon les
+  // deux écrans annonceraient deux bénéfices différents sur le même mois.
+  async _enregistrer_regle() {
+    const f = this._filtres();
+    await frappe.call({
+      method: "customization_app.bilan_vente.set_regle",
+      args: { base: f.base, exclure_ouvertes: f.exclure_ouvertes },
+    });
+  }
+
   _bind() {
     const relire = () => this._fetch();
-    this.$root.find("#bv-month, #bv-base").on("change", relire);
-    this.$root.find("#bv-ouvertes").on("change", relire);
+    this.$root.find("#bv-month").on("change", relire);
+    this.$root.find("#bv-base, #bv-ouvertes").on("change", async () => {
+      await this._enregistrer_regle();
+      this._fetch();
+    });
     this.$root.find("[data-action='refresh']").on("click", relire);
     this.$root.find("[data-action='print']").on("click", () => window.print());
     this.$root.find("[data-action='excel']").on("click", () => {
@@ -88,6 +102,8 @@ class BilanVente {
       const q = $.param({ month: f.month, base: f.base,
                           exclure_ouvertes: f.exclure_ouvertes });
       window.open(`/api/method/customization_app.bilan_vente.download_excel?${q}`);
+      // L'export part des cases AFFICHÉES, qui sont déjà la règle : ce que tu vois est
+      // exactement ce que tu télécharges.
     });
     this.$root.find("[data-action='toggle-all']").on("click", (e) => {
       const $orders = this.$root.find(".bv-order");
@@ -210,6 +226,13 @@ class BilanVente {
     // Le serveur a le dernier mot sur les filtres retenus : il normalise une base inconnue.
     this.$root.find("#bv-base").val(d.base || "livraison");
     this.$root.find("#bv-ouvertes").prop("checked", !!d.exclure_ouvertes);
+    // Qui ne peut pas régler avec le partenaire ne change pas la règle du règlement.
+    const fige = !d.peut_regler;
+    this.$root.find("#bv-base, #bv-ouvertes").prop("disabled", fige).attr(
+      "title",
+      fige ? "Reserve aux profils comptables : cette regle sert aussi a l onglet Partenaire Economiq"
+           : "Regle partagee avec l onglet Partenaire Economiq"
+    );
     const ecartees = d.ecartees || [];
     this.$root.find("[data-role='ecartees']").text(
       ecartees.length

@@ -1,0 +1,73 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "creation": "2026-09-03 12:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "section_regle",
+  "base_comptage",
+  "exclure_taches_ouvertes",
+  "note_html"
+ ],
+ "fields": [
+  {
+   "fieldname": "section_regle",
+   "fieldtype": "Section Break",
+   "label": "Règle de comptage du bilan"
+  },
+  {
+   "default": "Date de livraison",
+   "description": "« Date de livraison » rattache la commande au mois où la marchandise est sortie (comportement historique). « Date de la tâche » la rattache au mois où le travail a eu lieu — une commande sans tâche garde sa date de livraison.",
+   "fieldname": "base_comptage",
+   "fieldtype": "Select",
+   "label": "Compter la commande sur",
+   "options": "Date de livraison\nDate de la tâche"
+  },
+  {
+   "default": "0",
+   "description": "Écarte du bilan les commandes dont une tâche est encore ouverte : le travail n'est pas rendu, la vente ne compte pas encore.",
+   "fieldname": "exclure_taches_ouvertes",
+   "fieldtype": "Check",
+   "label": "Exclure les commandes à tâche ouverte"
+  },
+  {
+   "fieldname": "note_html",
+   "fieldtype": "HTML",
+   "options": "<div class=\"alert alert-warning\" style=\"margin-bottom:0\">Cette règle vaut pour <b>les deux écrans</b> : « Bilan Vente » et l'onglet « Partenaire Economiq ». Les mois <b>déjà validés</b> gardent leur bilan figé — la changer ne peut pas rouvrir un mois réglé.</div>"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "issingle": 1,
+ "links": [],
+ "modified": "2026-09-03 12:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "Config Bilan Vente",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "Accounts Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

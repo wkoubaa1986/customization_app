@@ -102,3 +102,47 @@ class TestTacheOuverte(unittest.TestCase):
 
     def test_une_ligne_vide_ne_leve_pas(self):
         self.assertFalse(BV._a_une_tache_ouverte([None, {}]))
+
+
+class TestRegleEnregistree(unittest.TestCase):
+    """La règle est PARTAGÉE avec l'onglet « Partenaire Economiq ».
+
+    Cet onglet appelle `get_data(month=...)` sans paramètre et bâtit sur le résultat l'écriture
+    qui règle les comptes avec le partenaire. Un réglage seulement visuel aurait fait afficher
+    654,86 de bénéfice d'un côté et 1 321,01 de l'autre sur le même mois d'août 2026 — et
+    l'ajustement se serait calculé sur le mauvais chiffre.
+    """
+
+    def test_les_libelles_font_l_aller_retour(self):
+        """Le DocType stocke un libellé lisible ; le moteur travaille sur un jeton. Si la
+        correspondance se casse, la règle retombe silencieusement sur la livraison."""
+        for jeton, libelle in BV.LIBELLE_DE_BASE.items():
+            self.assertEqual(BV._LIBELLES_BASE[libelle], jeton)
+
+    def test_les_deux_bases_ont_un_libelle(self):
+        self.assertEqual(set(BV.LIBELLE_DE_BASE), set(BV.BASES))
+
+    def test_un_libelle_inconnu_en_base_retombe_sur_la_livraison(self):
+        """Quelqu'un renomme l'option dans le DocType : on veut le comportement
+        historique, pas une erreur ni un périmètre au hasard."""
+        self.assertEqual(BV._LIBELLES_BASE.get("Date du paiement", BV.BASE_LIVRAISON),
+                         BV.BASE_LIVRAISON)
+
+    def test_non_renseigne_n_est_pas_zero(self):
+        """⚠️ Le cœur du mécanisme : `exclure_ouvertes=None` veut dire « applique la règle »,
+        `0` veut dire « n'exclus rien ». Un défaut à 0 dans la signature aurait fait diverger
+        les deux écrans en silence, puisque l'onglet Economiq ne passe rien."""
+        import inspect
+
+        params = inspect.signature(BV.get_data).parameters
+        self.assertIsNone(params["base"].default)
+        self.assertIsNone(params["exclure_ouvertes"].default)
+        self.assertIsNone(params["month"].default)
+
+    def test_l_export_excel_suit_la_meme_convention(self):
+        """Sinon un export lancé par un script sortirait sur un autre périmètre que l'écran."""
+        import inspect
+
+        params = inspect.signature(BV.download_excel).parameters
+        self.assertIsNone(params["base"].default)
+        self.assertIsNone(params["exclure_ouvertes"].default)
