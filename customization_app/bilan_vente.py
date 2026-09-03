@@ -39,6 +39,39 @@ PASSTHROUGH_ITEM_GROUPS = ("Livraison", "Main d’œuvre")
 PRECISION = 3
 FIRST_MONTH = (2024, 10)  # premier mois proposé dans le filtre
 
+# BASE DE COMPTAGE (demande utilisateur 03/09/2026). « livraison » est l'historique.
+# « tache » rattache la commande au mois où le TRAVAIL a eu lieu — ce n'est pas le même mois
+# quand une vente de fin de mois porte une tâche posée pour le mois suivant.
+BASE_LIVRAISON = "livraison"
+BASE_TACHE = "tache"
+BASES = (BASE_LIVRAISON, BASE_TACHE)
+STATUT_TACHE_OUVERTE = "Open"
+
+# Date qui sert de repère selon la base. En base « tache », une commande SANS tâche garde sa date
+# de livraison : c'est alors le seul événement daté qu'elle porte, et la faire disparaître du bilan
+# ferait perdre du chiffre d'affaires sans que personne le remarque (cas SAL-ORD-2026-02930,
+# 60 DT en août 2026).
+_DATE_REPERE = {
+    BASE_LIVRAISON: "so.delivery_date",
+    BASE_TACHE: "COALESCE(DATE(t.debut_tache), so.delivery_date)",
+}
+_JOIN_TACHE = """
+    LEFT JOIN (SELECT commande_client, MIN(starts_on) AS debut_tache
+               FROM `tabTache de travail` WHERE docstatus < 2
+               GROUP BY commande_client) t ON t.commande_client = so.name
+"""
+
+
+def _base_valide(base):
+    base = (base or BASE_LIVRAISON).strip().lower()
+    return base if base in BASES else BASE_LIVRAISON
+
+
+def _repere(base):
+    """(fragment SQL de la date de période, jointure nécessaire)."""
+    base = _base_valide(base)
+    return _DATE_REPERE[base], (_JOIN_TACHE if base == BASE_TACHE else "")
+
 FR_MONTHS = [
     "janvier", "février", "mars", "avril", "mai", "juin",
     "juillet", "août", "septembre", "octobre", "novembre", "décembre",
@@ -87,13 +120,15 @@ def _clients_partage():
     ))
 
 
-def _owned_orders(start, end):
+def _owned_orders(start, end, base=None):
+    date_reference, jointure = _repere(base)
     return frappe.db.sql(
-        """SELECT so.name, so.customer, so.delivery_date, so.grand_total
+        f"""SELECT so.name, so.customer, so.delivery_date, so.grand_total
            FROM `tabSales Order` so
+           {jointure}
            WHERE so.docstatus = 1
              AND so.owner = %s
-             AND so.delivery_date BETWEEN %s AND %s
+             AND {date_reference} BETWEEN %s AND %s
              AND (
                  so.delivery_status = 'Fully Delivered'
                  OR EXISTS (
@@ -111,18 +146,30 @@ def _owned_orders(start, end):
     )
 
 
-def _shared_orders(start, end):
+def _shared_orders(start, end, base=None):
+    date_reference, jointure = _repere(base)
     return frappe.db.sql(
-        """SELECT DISTINCT so.name, so.customer, so.delivery_date, so.grand_total
+        f"""SELECT DISTINCT so.name, so.customer, so.delivery_date, so.grand_total
            FROM `tabDocShare` ds
            INNER JOIN `tabSales Order` so ON so.name = ds.share_name
+           {jointure}
            WHERE ds.share_doctype = 'Sales Order'
              AND ds.user = %s
              AND so.docstatus = 1
-             AND so.delivery_date BETWEEN %s AND %s
+             AND {date_reference} BETWEEN %s AND %s
            ORDER BY so.delivery_date, so.name""",
         (PARTNER_USER, start, end), as_dict=True,
     )
+
+
+def _a_une_tache_ouverte(taches) -> bool:
+    """Une tâche encore à faire = le travail n'est pas rendu.
+
+    Le bilan comptait la vente dès la livraison ; sur août 2026, quatre commandes livrées fin
+    août portaient une tâche datée de septembre et toujours ouverte — 3 001 DT de vente et
+    668,65 DT de bénéfice annoncés sur du travail qui n'avait pas eu lieu.
+    """
+    return any((t or {}).get("status") == STATUT_TACHE_OUVERTE for t in (taches or []))
 
 
 def _split_shared(shared):
@@ -475,10 +522,10 @@ def _excel_rows(data):
 
 
 @frappe.whitelist()
-def download_excel(month=None):
+def download_excel(month=None, base=None, exclure_ouvertes=0):
     from frappe.utils.xlsxutils import make_xlsx
 
-    data = get_data(month)
+    data = get_data(month, base=base, exclure_ouvertes=exclure_ouvertes)
     xlsx = make_xlsx(_excel_rows(data), "Bilan Vente")
     frappe.response["filename"] = f"bilan-vente-{data['month']}.xlsx"
     frappe.response["filecontent"] = xlsx.getvalue()
@@ -488,15 +535,19 @@ def download_excel(month=None):
 # ---------------------------------------------------------------- API
 
 @frappe.whitelist()
-def get_data(month=None):
+def get_data(month=None, base=None, exclure_ouvertes=0):
+    """`base` : "livraison" (défaut, historique) ou "tache".
+    `exclure_ouvertes` : écarte les commandes dont une tâche est encore ouverte."""
     if not frappe.has_permission("Sales Order", "read"):
         frappe.throw(_("Accès non autorisé"), frappe.PermissionError)
 
     year, mon, start, end = _period(month)
+    base = _base_valide(base)
+    exclure_ouvertes = cint(exclure_ouvertes)
 
     clients_partage = _clients_partage()
-    owned = _owned_orders(start, end)
-    done_by_partner, done_for_partner = _split_shared(_shared_orders(start, end))
+    owned = _owned_orders(start, end, base)
+    done_by_partner, done_for_partner = _split_shared(_shared_orders(start, end, base))
 
     # Section Aqua World : commandes du partenaire + partagées "pour lui",
     # hors clients "Liste Appelle Entretien", sans doublon.
@@ -520,10 +571,28 @@ def get_data(month=None):
         aw_orders.append(order)
 
     all_orders = aw_orders + done_by_partner
+    tasks_map = _tasks_by_order([o.name for o in all_orders])
+
+    # ⚠️ L'EXCLUSION SE FAIT AVANT TOUT CALCUL. Filtrer les lignes après coup laisserait les
+    # totaux de section et les KPI construits sur le périmètre complet — un bilan dont les
+    # lignes et les totaux ne se répondent plus.
+    ecartees = []
+    if exclure_ouvertes:
+        def garder(liste):
+            gardees = []
+            for o in liste:
+                if _a_une_tache_ouverte(tasks_map.get(o.name)):
+                    ecartees.append(o.name)
+                else:
+                    gardees.append(o)
+            return gardees
+
+        aw_orders, done_by_partner = garder(aw_orders), garder(done_by_partner)
+        all_orders = aw_orders + done_by_partner
+
     so_names = [o.name for o in all_orders]
     items_map = _items_by_order(so_names)
     payments_map = _payments_by_order(so_names)
-    tasks_map = _tasks_by_order(so_names)
     resolve_price = _purchase_price_resolver(
         it.item_code for rows in items_map.values() for it in rows
     )
@@ -557,6 +626,9 @@ def get_data(month=None):
         "month": f"{year:04d}-{mon:02d}",
         "label": f"{FR_MONTHS[mon - 1]} {year}",
         "period": {"from": str(start), "to": str(end)},
+        "base": base,
+        "exclure_ouvertes": exclure_ouvertes,
+        "ecartees": sorted(ecartees),
         "months": _month_options(),
         "currency": frappe.defaults.get_global_default("currency") or "TND",
         "kpis": kpis,

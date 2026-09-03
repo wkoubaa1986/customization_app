@@ -190,6 +190,10 @@
       .bv-order-head .bv-cust, .bv-order-head .bv-paystate-cell, .bv-order-head .bv-chip-cell { display: none; }
       .bv-paycols { grid-template-columns: 1fr; }
     }
+    .bv-check { display: inline-flex; align-items: center; gap: 6px; margin: 0;
+                font-weight: 400; white-space: nowrap; cursor: pointer; }
+    .bv-check input { margin: 0; }
+    .bv-note { color: #b45309; font-size: 12px; }
     @media print {
       .bv-toolbar { display: none; }
       .bv-order-body { display: block; }
@@ -199,8 +203,17 @@
   <div class="bv-toolbar">
     <label for="bv-month">Mois</label>
     <select id="bv-month" class="form-control"></select>
+    <label for="bv-base">Compter sur</label>
+    <select id="bv-base" class="form-control">
+      <option value="livraison">Date de livraison</option>
+      <option value="tache">Date de la tache</option>
+    </select>
+    <label class="bv-check" for="bv-ouvertes">
+      <input type="checkbox" id="bv-ouvertes"> Exclure les taches ouvertes
+    </label>
     <button class="btn btn-default btn-sm" data-action="refresh">Actualiser</button>
     <span class="bv-period" data-role="period"></span>
+    <span class="bv-note" data-role="ecartees"></span>
     <span class="bv-spacer"></span>
     <button class="btn btn-default btn-sm" data-action="toggle-all">Tout déplier</button>
     <button class="btn btn-default btn-sm" data-action="excel">Exporter Excel</button>

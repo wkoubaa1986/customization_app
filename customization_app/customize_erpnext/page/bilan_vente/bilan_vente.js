@@ -66,13 +66,28 @@ class BilanVente {
     this._fetch();
   }
 
+  // Les trois filtres partent ensemble : le mois, la base de comptage et l'exclusion des
+  // tâches ouvertes. Les lire au moment du fetch (et non les mémoriser) évite qu'un export
+  // Excel reparte sur un périmètre différent de celui affiché.
+  _filtres() {
+    return {
+      month: this.$root.find("#bv-month").val() || (this._data && this._data.month) || "",
+      base: this.$root.find("#bv-base").val() || "livraison",
+      exclure_ouvertes: this.$root.find("#bv-ouvertes").is(":checked") ? 1 : 0,
+    };
+  }
+
   _bind() {
-    this.$root.find("#bv-month").on("change", () => this._fetch(this.$root.find("#bv-month").val()));
-    this.$root.find("[data-action='refresh']").on("click", () => this._fetch(this.$root.find("#bv-month").val()));
+    const relire = () => this._fetch();
+    this.$root.find("#bv-month, #bv-base").on("change", relire);
+    this.$root.find("#bv-ouvertes").on("change", relire);
+    this.$root.find("[data-action='refresh']").on("click", relire);
     this.$root.find("[data-action='print']").on("click", () => window.print());
     this.$root.find("[data-action='excel']").on("click", () => {
-      const month = this.$root.find("#bv-month").val() || (this._data && this._data.month) || "";
-      window.open(`/api/method/customization_app.bilan_vente.download_excel?month=${encodeURIComponent(month)}`);
+      const f = this._filtres();
+      const q = $.param({ month: f.month, base: f.base,
+                          exclure_ouvertes: f.exclure_ouvertes });
+      window.open(`/api/method/customization_app.bilan_vente.download_excel?${q}`);
     });
     this.$root.find("[data-action='toggle-all']").on("click", (e) => {
       const $orders = this.$root.find(".bv-order");
@@ -93,10 +108,12 @@ class BilanVente {
     });
   }
 
-  async _fetch(month) {
+  async _fetch() {
+    const f = this._filtres();
     const r = await frappe.call({
       method: "customization_app.bilan_vente.get_data",
-      args: { month: month || null },
+      args: { month: f.month || null, base: f.base,
+              exclure_ouvertes: f.exclure_ouvertes },
       freeze: true,
       freeze_message: __("Chargement du bilan…"),
     });
@@ -190,6 +207,15 @@ class BilanVente {
       $month.append(`<option value="${esc(m.value)}">${esc(m.label)}</option>`);
     });
     $month.val(d.month);
+    // Le serveur a le dernier mot sur les filtres retenus : il normalise une base inconnue.
+    this.$root.find("#bv-base").val(d.base || "livraison");
+    this.$root.find("#bv-ouvertes").prop("checked", !!d.exclure_ouvertes);
+    const ecartees = d.ecartees || [];
+    this.$root.find("[data-role='ecartees']").text(
+      ecartees.length
+        ? `${ecartees.length} commande(s) écartée(s) : tâche encore ouverte`
+        : ""
+    ).attr("title", ecartees.join(", "));
     this.$root.find("[data-role='period']").text(
       `du ${frappe.datetime.str_to_user(d.period.from)} au ${frappe.datetime.str_to_user(d.period.to)}`
     );
