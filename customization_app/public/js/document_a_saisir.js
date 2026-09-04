@@ -11,7 +11,8 @@
 const API_SCANS = "customization_app.caisse_depenses.scans_a_saisir";
 const ID_PANNEAU = "cad-panneau";
 
-["Purchase Invoice", "Purchase Order", "Purchase Receipt"].forEach((dt) => {
+["Purchase Invoice", "Purchase Order", "Purchase Receipt",
+ "Facture Achat a Saisir"].forEach((dt) => {
   frappe.ui.form.on(dt, {
     refresh(frm) {
       if (frm.doc.docstatus === 2) return;
@@ -30,12 +31,16 @@ function poser_css() {
   const st = document.createElement("style");
   st.id = "cad-css";
   st.textContent = `
-    #${ID_PANNEAU} { position: fixed; top: 0; right: 0; bottom: 0; width: 42vw;
-        min-width: 340px; background: var(--card-bg, #fff); z-index: 1010;
+    /* ⚠️ LE PANNEAU COMMENCE SOUS LA BARRE DE NAVIGATION. A top:0, ses 40 premiers pixels
+       passaient DERRIERE la navbar de Frappe : l-en-tete et son bouton de fermeture etaient
+       invisibles, et le panneau ne pouvait plus se fermer (constate le 04/09/2026). */
+    #${ID_PANNEAU} { position: fixed; top: var(--navbar-height, 60px); right: 0; bottom: 0;
+        width: 42vw; min-width: 340px; background: var(--card-bg, #fff); z-index: 1010;
         border-left: 1px solid var(--border-color, #d5dae1);
         box-shadow: -8px 0 24px rgba(0,0,0,.12); display: flex; flex-direction: column; }
     #${ID_PANNEAU} .cad-tete { display: flex; align-items: center; gap: 8px; padding: 8px 10px;
-        border-bottom: 1px solid var(--border-color, #e6e9ee); font-size: 12.5px; }
+        border-bottom: 1px solid var(--border-color, #e6e9ee); font-size: 12.5px;
+        background: var(--subtle-fg, #fafbfc); flex: 0 0 auto; }
     #${ID_PANNEAU} .cad-tete select { flex: 1; height: 28px; font-size: 12px; }
     #${ID_PANNEAU} .cad-corps { flex: 1; overflow: auto; background: #f4f5f7; }
     #${ID_PANNEAU} .cad-corps iframe { width: 100%; height: 100%; border: 0; }
@@ -44,8 +49,8 @@ function poser_css() {
         border-radius: 6px; padding: 2px 9px; font-size: 12px; cursor: pointer; }
     /* Le formulaire se retrecit d-autant : sans cela le panneau recouvre les champs de droite,
        et on saisit a l-aveugle. */
-    body.cad-ouvert .layout-main, body.cad-ouvert .page-head > .container {
-        padding-right: 43vw !important; }
+    body.cad-ouvert .layout-main, body.cad-ouvert .page-head > .container,
+    body.cad-ouvert .page-title { padding-right: 43vw !important; }
     @media (max-width: 900px) {
       #${ID_PANNEAU} { width: 100vw; }
       body.cad-ouvert .layout-main, body.cad-ouvert .page-head > .container {
@@ -58,6 +63,13 @@ function fermer() {
   const p = document.getElementById(ID_PANNEAU);
   if (p) p.remove();
   document.body.classList.remove("cad-ouvert");
+  document.removeEventListener("keydown", sur_echap);
+}
+
+// ⚠️ UNE SORTIE AU CLAVIER, TOUJOURS. Le jour ou l-en-tete est masque — par la navbar, par un
+// theme, par une fenetre etroite — Echap reste le seul moyen de fermer sans recharger la page.
+function sur_echap(e) {
+  if (e.key === "Escape") fermer();
 }
 
 async function basculer(frm) {
@@ -69,7 +81,8 @@ async function basculer(frm) {
       args: {
         doctype: frm.doc.doctype,
         name: frm.is_new() ? null : frm.doc.name,
-        fiche: frm.doc.custom_fiche_caisse || null,
+        fiche: frm.doc.doctype === "Facture Achat a Saisir"
+          ? frm.doc.name : (frm.doc.custom_fiche_caisse || null),
         bill_no: frm.doc.bill_no || null,
         supplier: frm.doc.supplier || null,
       },
@@ -98,11 +111,13 @@ function ouvrir(scans) {
       <select>${scans.map((s, i) =>
         `<option value="${i}">${esc(s.nom)} — ${esc(s.origine)}</option>`).join("")}</select>
       <button class="cad-btn" data-onglet>${__("Onglet")}</button>
-      <button class="cad-btn" data-fermer>✕</button>
+      <button class="cad-btn" data-fermer title="${__("Fermer (Échap)")}"
+              style="font-weight:700">✕ ${__("Fermer")}</button>
     </div>
     <div class="cad-corps"></div>`;
   document.body.appendChild(el);
   document.body.classList.add("cad-ouvert");
+  document.addEventListener("keydown", sur_echap);
 
   const $corps = el.querySelector(".cad-corps");
   const montrer = (i) => {

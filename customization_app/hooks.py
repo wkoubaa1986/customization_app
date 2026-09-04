@@ -593,6 +593,9 @@ doctype_js = {
     # saisit (demande utilisateur 04/09/2026).
     "Purchase Order": "public/js/document_a_saisir.js",
     "Purchase Receipt": "public/js/document_a_saisir.js",
+    # Et sur la fiche de la file elle-meme : c'est la qu'on relit la facture avant de creer la
+    # piece, et l'apercu natif de Frappe y est MODAL — il recouvre le formulaire.
+    "Facture Achat a Saisir": "public/js/document_a_saisir.js",
     # Item : verrou sync WooCommerce sans image + popup saisie groupée des prix de vente.
     "Item": "public/js/item.js",
 }

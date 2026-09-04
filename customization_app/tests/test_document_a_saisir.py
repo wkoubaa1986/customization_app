@@ -67,11 +67,51 @@ class TestUneSeuleAffectationDeDoctypeJs(unittest.TestCase):
         actives = [l for l in src.splitlines() if l.startswith("doctype_js")]
         self.assertEqual(len(actives), 1, actives)
 
-    def test_les_quatre_doctypes_y_sont(self):
+    def test_les_cinq_doctypes_y_sont(self):
         from customization_app import hooks
 
-        for dt in ("Purchase Invoice", "Purchase Order", "Purchase Receipt", "Item"):
+        for dt in ("Purchase Invoice", "Purchase Order", "Purchase Receipt",
+                   "Facture Achat a Saisir", "Item"):
             self.assertIn(dt, hooks.doctype_js, dt)
+
+
+class TestFermetureDuPanneau(unittest.TestCase):
+    """⚠️ UN PANNEAU QU'ON NE PEUT PAS FERMER EST UN PANNEAU CASSÉ.
+
+    Posé à `top: 0`, ses quarante premiers pixels passaient DERRIÈRE la barre de navigation de
+    Frappe : l'en-tête et son bouton de fermeture étaient invisibles, et il ne restait qu'à
+    recharger la page (constaté le 04/09/2026).
+    """
+
+    def js(self):
+        import os
+
+        chemin = os.path.join(os.path.dirname(inspect.getfile(C)), "public", "js",
+                              "document_a_saisir.js")
+        with open(chemin, encoding="utf-8") as fh:
+            return fh.read()
+
+    def test_le_panneau_commence_sous_la_barre_de_navigation(self):
+        self.assertIn("top: var(--navbar-height, 60px)", self.js())
+
+    def test_echap_ferme_aussi(self):
+        """Le jour où l'en-tête est masqué — par un thème, une fenêtre étroite — Échap reste le
+        seul moyen de fermer sans recharger."""
+        js = self.js()
+        self.assertIn('e.key === "Escape"', js)
+        self.assertIn('document.addEventListener("keydown", sur_echap)', js)
+        self.assertIn('document.removeEventListener("keydown", sur_echap)', js)
+
+    def test_le_bouton_de_fermeture_porte_un_mot(self):
+        """Un ✕ seul se cherche ; « ✕ Fermer » se voit."""
+        self.assertIn('✕ ${__("Fermer")}', self.js())
+
+    def test_aucun_backtick_dans_le_bloc_de_style(self):
+        """⚠️ Un backtick dans un commentaire CSS ferme le template literal qui porte TOUT le
+        style — le fichier ne compile plus. C'est arrivé en écrivant ce correctif."""
+        js = self.js()
+        style = js.split("st.textContent = `")[1].split("`;")[0]
+        self.assertNotIn("`", style)
 
     def test_la_facture_d_achat_garde_ses_DEUX_scripts(self):
         from customization_app import hooks
