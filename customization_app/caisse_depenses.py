@@ -47,6 +47,30 @@ COMPTE_TVA_19 = "TVA 19% - A&S"
 COMPTE_TVA_7 = "TVA 7% - A&S"
 
 TYPES = ("Dépense non facturée", "Dépense avec facture", "Facture d'achat")
+
+# Retenue à la source achat : la règle, le seuil et le taux vivent dans bank_retenue_sync
+# (`achat/retenue_depense`), avec ceux des factures d'achat. Ici on ne fait que les appliquer.
+COMPTE_RETENUE_ACHAT = "Retenue a la source achat - A&S"
+
+
+def _retenue_proposee(type_depense, montant, timbre=0):
+    """Le montant que la règle propose, ou 0. Ne lève jamais : l'app doit rester utilisable
+    même si bank_retenue_sync n'est pas installée sur ce bench."""
+    try:
+        from bank_retenue_sync.achat import retenue_depense as R
+
+        return flt(R.retenue_due(montant, timbre, type_depense), 3)
+    except Exception:
+        return 0.0
+
+
+def _compte_retenue():
+    try:
+        from bank_retenue_sync.achat import retenue_depense as R
+
+        return R.compte()
+    except Exception:
+        return COMPTE_RETENUE_ACHAT
 MODES = ("Espèces", "Chèque", "Carte de crédit")
 MODE_PAS_PAYE = "Pas payé"
 
@@ -525,11 +549,52 @@ def _mode_global(regs):
 
 
 @frappe.whitelist()
+def proposition_retenue(type_depense=None, montant=0, timbre=0, fournisseur=None,
+                        supplier=None):
+    """Ce que la fenêtre doit pré-remplir : la retenue, le net, et ce qui manque pour le
+    certificat. N'écrit rien.
+
+    ⚠️ ON POSE LA RETENUE MÊME SANS MATRICULE, ET ON LE DIT (décision utilisateur 04/09/2026).
+    Bloquer la saisie sur une fiche fournisseur incomplète arrêterait la caisse pour une raison
+    administrative ; taire le problème laisserait une retenue qu'on ne pourrait jamais déclarer.
+    Le certificat part par la file, une fois la fiche complétée.
+    """
+    frappe.only_for(ROLES)
+    montant = flt(montant, 3)
+    retenue = _retenue_proposee(type_depense, montant, flt(timbre, 3))
+    out = {"retenue": retenue, "net": flt(montant - retenue, 3),
+           "compte": _compte_retenue(), "avertissements": [], "supplier": supplier or None}
+    if retenue <= 0:
+        return out
+
+    if not out["supplier"] and (fournisseur or "").strip():
+        r = _rapprocher_fournisseur(fournisseur, None)
+        out["supplier"] = r.get("certain")
+        out["fournisseur_candidats"] = r.get("candidats") or []
+    if not out["supplier"]:
+        out["avertissements"].append(
+            _("Aucune fiche fournisseur ne correspond à « {0} » : la retenue sera bien posée, "
+              "mais le certificat ne pourra pas être émis tant que le fournisseur n'existe pas.")
+            .format((fournisseur or "").strip() or "?"))
+        return out
+
+    mat = frappe.db.get_value("Supplier", out["supplier"], "tax_id")
+    out["matricule"] = mat or ""
+    if not (mat or "").strip():
+        out["avertissements"].append(
+            _("Le fournisseur {0} n'a pas de matricule fiscal : la retenue sera posée, mais le "
+              "certificat TEJ ne pourra pas être émis avant que sa fiche soit complétée.")
+            .format(out["supplier"]))
+    return out
+
+
+@frappe.whitelist()
 def creer(type_depense, montant, mode, compte=None, description=None, fournisseur=None,
           tva=0, taux_tva=0, numero_facture=None, date_facture=None,
           n_cheque=None, banque=None, photo_facture=None, photo_facture_nom=None,
           photo_cheque=None, photo_cheque_nom=None, coins_facture=None,
-          supplier=None, matricule=None, paiements=None, est_bl=0, numero_bl=None):
+          supplier=None, matricule=None, paiements=None, est_bl=0, numero_bl=None,
+          retenue=None):
     """Crée la dépense selon son type (voir l'en-tête du module). Retourne les noms
     des pièces créées (écriture et/ou fiche de la file des factures d'achat)."""
     frappe.only_for(ROLES)
@@ -560,14 +625,28 @@ def creer(type_depense, montant, mode, compte=None, description=None, fournisseu
     if tva < 0 or tva >= montant:
         frappe.throw(_("La TVA ({0}) doit rester inférieure au montant TTC ({1}).")
                      .format(tva, montant))
+
+    # RETENUE À LA SOURCE ACHAT (décision utilisateur 04/09/2026). Elle n'est pas un moyen de
+    # paiement : c'est la part que l'on NE verse PAS au fournisseur et qui reste due au Trésor.
+    # Les règlements doivent donc couvrir le TTC MOINS la retenue, pas le TTC.
+    #
+    # ⚠️ LE MONTANT SEUL NE DÉCLENCHE RIEN. Trois des quatre écritures de plus de 1 000 DT
+    # passées en caisse depuis le 01/09 sont des primes de salariés : y retenir 1 % serait faux.
+    # C'est `retenue_depense.assujettie` qui tranche, sur le TYPE autant que sur le montant.
+    retenue = flt(retenue, 3) if retenue not in (None, "") else _retenue_proposee(type_depense,
+                                                                                 montant)
+    if retenue < 0 or retenue >= montant:
+        frappe.throw(_("La retenue ({0}) doit rester inférieure au montant TTC ({1}).")
+                     .format(retenue, montant))
+    a_regler = flt(montant - retenue, 3)
     # Les règlements (mono-mode ou fractionnés). Une ligne « Pas payé » dans le
     # fractionné = paiement PARTIEL : la part payée sort de la caisse, le reste
     # part en dette (découvert pour une dépense, Créditeurs différés pour une
     # facture d'achat).
     if mode == MODE_PAS_PAYE:
-        regs, paid, unpaid = [], [], flt(montant, 3)
+        regs, paid, unpaid = [], [], a_regler
     else:
-        regs = _paiements_normalises(montant, mode, n_cheque, banque,
+        regs = _paiements_normalises(a_regler, mode, n_cheque, banque,
                                      photo_cheque, photo_cheque_nom, paiements)
         paid, unpaid = _partage_paiements(regs)
     if unpaid > 0 and type_depense == "Dépense non facturée":
@@ -580,6 +659,12 @@ def creer(type_depense, montant, mode, compte=None, description=None, fournisseu
         remarques.append(_("Facture n° {0}").format(numero_facture))
     if cint(est_bl) and (numero_bl or "").strip():
         remarques.append(_("BL n° {0}").format((numero_bl or "").strip()))
+    if retenue > 0:
+        # ⚠️ C'EST CETTE MENTION QUE LA FILE DES CERTIFICATS LIT. Sans champ dédié sur l'écriture,
+        # la remarque est la seule mémoire de la retenue et de sa base — comme la convention
+        # « Chq N° » que l'identification bancaire lit déjà.
+        remarques.append(_("Retenue à la source achat : {0} sur {1} TTC")
+                         .format(retenue, montant))
     _remarques_paiements(remarques, paid)
     if unpaid > 0 and paid:
         remarques.append(_("Reste à payer : {0}").format(unpaid))
@@ -594,9 +679,14 @@ def creer(type_depense, montant, mode, compte=None, description=None, fournisseu
             # tard le soldera — jamais de charge ici, elle naîtra avec la facture.
             # Avec une part « Pas payé », l'avance ne couvre QUE la part payée :
             # le reste de la dette naîtra avec la facture.
-            je = _ecriture(_lignes_credit(paid) + [
+            credits = _lignes_credit(paid)
+            if retenue > 0:
+                credits.append({"account": _compte_retenue(),
+                                "credit_in_account_currency": retenue, "cost_center": CC})
+            je = _ecriture(credits + [
                 {"account": COMPTE_CREDITEURS, "party_type": "Supplier",
-                 "party": supplier, "debit_in_account_currency": paid_total,
+                 "party": supplier,
+                 "debit_in_account_currency": flt(paid_total + retenue, 3),
                  "cost_center": CC},
             ], description, remarques)
         fiche = frappe.get_doc({
@@ -637,6 +727,11 @@ def creer(type_depense, montant, mode, compte=None, description=None, fournisseu
         # payé » est portée par le DÉCOUVERT (la dette reste visible jusqu'au
         # règlement par `solder_depense`).
         lignes = _lignes_credit(paid)
+        if retenue > 0:
+            # La retenue n'est versée à personne : elle reste due au Trésor, et c'est nous qui
+            # la déclarerons. Elle vient donc en CRÉDIT à côté du paiement, jamais en charge.
+            lignes.append({"account": _compte_retenue(),
+                           "credit_in_account_currency": retenue, "cost_center": CC})
         if unpaid > 0:
             lignes.append({"account": COMPTE_DECOUVERT,
                            "credit_in_account_currency": unpaid, "cost_center": CC})
