@@ -1751,3 +1751,67 @@ def pi_rouvrir_fiche(doc, method=None):
         frappe.db.set_value("Facture Achat a Saisir", nom,
                             {"statut": "À saisir", "purchase_invoice": ""},
                             update_modified=False)
+
+
+# ---------------------------------------------------------------- voir le document à saisir
+
+#: Les pièces qu'on sait afficher côté navigateur. Un .docx ne s'ouvre pas dans un onglet.
+_AFFICHABLES = (".pdf", ".png", ".jpg", ".jpeg", ".webp", ".gif")
+
+#: Où la fiche de la file range le document, selon la pièce que le comptable est en train de
+#: saisir. C'est le seul chemin de retour : la fiche pointe la pièce, jamais l'inverse.
+_CHAMP_FICHE = {
+    "Purchase Invoice": "purchase_invoice",
+    "Purchase Order": "purchase_order",
+    "Purchase Receipt": "purchase_receipt",
+}
+
+
+@frappe.whitelist()
+def scans_a_saisir(doctype, name=None, fiche=None, bill_no=None, supplier=None):
+    """Les scans à consulter pendant la saisie d'une facture ou d'une commande d'achat.
+
+    ⚠️ LE SCAN N'EST PAS SUR LA PIÈCE QU'ON SAISIT. Il a été pris en caisse et attaché à la
+    fiche de la file (« Facture Achat a Saisir ») ; la facture d'achat, elle, naît vide. Sans ce
+    détour, le bouton n'aurait rien à montrer au moment précis où on en a besoin — la fiche
+    pointe la pièce, jamais l'inverse, d'où la recherche à l'envers.
+    """
+    frappe.only_for(ROLES)
+    vus, out = set(), []
+
+    def ajouter(dt, dn, origine):
+        for f in frappe.get_all("File",
+                                filters={"attached_to_doctype": dt, "attached_to_name": dn},
+                                fields=["name", "file_name", "file_url"], order_by="creation"):
+            nom = (f.file_name or "").lower()
+            if not nom.endswith(_AFFICHABLES) or f.file_url in vus:
+                continue
+            vus.add(f.file_url)
+            out.append({"nom": f.file_name, "url": f.file_url, "origine": origine,
+                        "pdf": nom.endswith(".pdf")})
+
+    if name:
+        ajouter(doctype, name, _("pièce en cours"))
+
+    fiches = []
+    # 1. La fiche que la pièce désigne (le bouton « Créer la commande d'achat » la pose dans
+    #    `custom_fiche_caisse`, et elle vaut même avant enregistrement).
+    if fiche and frappe.db.exists("Facture Achat a Saisir", fiche):
+        fiches.append(fiche)
+    # 2. La fiche qui désigne la pièce, une fois celle-ci enregistrée et appariée.
+    champ = _CHAMP_FICHE.get(doctype)
+    if champ and name:
+        fiches += frappe.get_all("Facture Achat a Saisir", filters={champ: name}, pluck="name")
+    # 3. ⚠️ ET LE CAS QUI COMPTE VRAIMENT : LA FACTURE PAS ENCORE ENREGISTRÉE. Le bouton
+    #    « Créer la facture d'achat » ne transmet que fournisseur, n° et date — aucun lien. Or
+    #    c'est PENDANT la frappe qu'on a besoin de voir le scan, pas après. On retrouve donc la
+    #    fiche par son n° de facture, celui-là même que le bouton vient de préremplir.
+    if not fiches and (bill_no or "").strip():
+        filtres = {"numero_facture": (bill_no or "").strip(), "statut": "À saisir"}
+        if supplier:
+            filtres["supplier"] = supplier
+        fiches += frappe.get_all("Facture Achat a Saisir", filters=filtres, pluck="name")
+
+    for nom in dict.fromkeys(fiches):
+        ajouter("Facture Achat a Saisir", nom, _("file d'attente {0}").format(nom))
+    return {"scans": out}

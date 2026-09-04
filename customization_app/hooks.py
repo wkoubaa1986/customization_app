@@ -577,10 +577,24 @@ after_migrate = [
 
 # after_migrate = ["customization_app.patches.override_get_item_details.execute"]
 
-# Facture d'achat : bouton « 📦 Rattacher des BL » (bons de livraison capturés
-# en caisse, en attente de leur facture — voir caisse_depenses.bls_en_attente).
+# ⚠️ UNE SEULE AFFECTATION DE `doctype_js` DANS TOUT LE FICHIER. Il y en avait deux — l'une
+# pour la facture d'achat, l'autre pour l'article — et Python garde la DERNIÈRE : le bouton
+# « 📦 Rattacher des BL » n'a jamais été chargé depuis que la seconde existe. Vérifié le
+# 04/09/2026 sur le script réellement injecté dans le formulaire : 51 237 caractères, et pas une
+# ligne de `purchase_invoice_caisse`. Tout tient donc ici, et les ajouts se font DANS ce
+# dictionnaire, jamais dans un second.
 doctype_js = {
-    "Purchase Invoice": "public/js/purchase_invoice_caisse.js",
+    # Facture d'achat : bouton « 📦 Rattacher des BL » (bons de livraison capturés en caisse,
+    # en attente de leur facture — voir caisse_depenses.bls_en_attente) ; et le panneau qui
+    # montre le scan pendant la saisie.
+    "Purchase Invoice": ["public/js/purchase_invoice_caisse.js",
+                         "public/js/document_a_saisir.js"],
+    # Le scan a été pris en caisse et attaché à la fiche de la file, jamais à la pièce qu'on
+    # saisit (demande utilisateur 04/09/2026).
+    "Purchase Order": "public/js/document_a_saisir.js",
+    "Purchase Receipt": "public/js/document_a_saisir.js",
+    # Item : verrou sync WooCommerce sans image + popup saisie groupée des prix de vente.
+    "Item": "public/js/item.js",
 }
 
 # doctype_js = {
@@ -589,11 +603,6 @@ doctype_js = {
 # doctype_js = {
 #     "Customer": "public/js/customer_quick_entry.js"
 # }
-
-# Item : verrou sync WooCommerce sans image + popup saisie groupée des prix de vente
-doctype_js = {
-    "Item": "public/js/item.js",
-}
 
 # Item (vue liste) : bouton "Vérification base article"
 doctype_list_js = {
