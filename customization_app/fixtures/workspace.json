@@ -1202,7 +1202,7 @@
  },
  {
   "charts": [],
-  "content": "[{\"id\": \"ow595dYDrI\", \"type\": \"onboarding\", \"data\": {\"onboarding_name\": \"Selling\", \"col\": 12}}, {\"id\": \"aW2i5R5GRP\", \"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"id\": \"1it3dCOnm6\", \"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\"><b>Accès rapide</b></span>\", \"col\": 12}}, {\"id\": \"x7pLl-spS4\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Article\", \"col\": 3}}, {\"id\": \"SSGrXWmY-H\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Sales Order\", \"col\": 3}}, {\"id\": \"-5J_yLxDaS\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Sales Analytics\", \"col\": 3}}, {\"id\": \"c_GjZuZ2oN\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Dashboard\", \"col\": 3}}, {\"id\": \"nOwm5Oj0Ur\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Compagne SMS\", \"col\": 3}}, {\"id\": \"extMXRTkma\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Suivi dettes client\", \"col\": 3}}, {\"id\": \"AfeYp-FBQa\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Rapport Client\", \"col\": 3}}, {\"id\": \"S2NQFIAm_B\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Rapport activités Nizar\", \"col\": 3}}, {\"id\": \"dff20d109f\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Rapport Caisse Journalière\", \"col\": 3}}, {\"id\": \"rsvShortcut01\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Retenue à la source Ventes\", \"col\": 3}}, {\"id\": \"livraisonAramexShortcut\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Livraisons Aramex\", \"col\": 3}}, {\"id\": \"tourneeScma-tou\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Ma Tournée\", \"col\": 3}}, {\"id\": \"tourneeScanalys\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Analyse Tournées\", \"col\": 3}}, {\"id\": \"oNjjNbnUHp\", \"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"id\": \"0BcePLg0g1\", \"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\"><b>Rapports et Pages principales</b></span>\", \"col\": 12}}, {\"id\": \"uze5dJ1ipL\", \"type\": \"card\", \"data\": {\"card_name\": \"Vente\", \"col\": 4}}, {\"id\": \"3j2fYwMAkq\", \"type\": \"card\", \"data\": {\"card_name\": \"Point of Sale\", \"col\": 4}}, {\"id\": \"xImm8NepFt\", \"type\": \"card\", \"data\": {\"card_name\": \"Items and Pricing\", \"col\": 4}}, {\"id\": \"6MjIe7KCQo\", \"type\": \"card\", \"data\": {\"card_name\": \"Settings\", \"col\": 4}}, {\"id\": \"lBu2EKgmJF\", \"type\": \"card\", \"data\": {\"card_name\": \"Key Reports\", \"col\": 4}}, {\"id\": \"1ARHrjg4kI\", \"type\": \"card\", \"data\": {\"card_name\": \"Other Reports\", \"col\": 4}}]",
+  "content": "[{\"id\": \"ow595dYDrI\", \"type\": \"onboarding\", \"data\": {\"onboarding_name\": \"Selling\", \"col\": 12}}, {\"id\": \"aW2i5R5GRP\", \"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"id\": \"1it3dCOnm6\", \"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\"><b>Acc\\u00e8s rapide</b></span>\", \"col\": 12}}, {\"id\": \"x7pLl-spS4\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Article\", \"col\": 3}}, {\"id\": \"SSGrXWmY-H\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Sales Order\", \"col\": 3}}, {\"id\": \"-5J_yLxDaS\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Sales Analytics\", \"col\": 3}}, {\"id\": \"c_GjZuZ2oN\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Dashboard\", \"col\": 3}}, {\"id\": \"nOwm5Oj0Ur\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Compagne SMS\", \"col\": 3}}, {\"id\": \"extMXRTkma\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Suivi dettes client\", \"col\": 3}}, {\"id\": \"AfeYp-FBQa\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Rapport Client\", \"col\": 3}}, {\"id\": \"dff20d109f\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Rapport Caisse Journali\\u00e8re\", \"col\": 3}}, {\"id\": \"rsvShortcut01\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Retenue \\u00e0 la source Ventes\", \"col\": 3}}, {\"id\": \"livraisonAramexShortcut\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Livraisons Aramex\", \"col\": 3}}, {\"id\": \"tourneeScma-tou\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Ma Tourn\\u00e9e\", \"col\": 3}}, {\"id\": \"tourneeScanalys\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Analyse Tourn\\u00e9es\", \"col\": 3}}, {\"id\": \"oNjjNbnUHp\", \"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"id\": \"0BcePLg0g1\", \"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\"><b>Rapports et Pages principales</b></span>\", \"col\": 12}}, {\"id\": \"uze5dJ1ipL\", \"type\": \"card\", \"data\": {\"card_name\": \"Vente\", \"col\": 4}}, {\"id\": \"3j2fYwMAkq\", \"type\": \"card\", \"data\": {\"card_name\": \"Point of Sale\", \"col\": 4}}, {\"id\": \"xImm8NepFt\", \"type\": \"card\", \"data\": {\"card_name\": \"Items and Pricing\", \"col\": 4}}, {\"id\": \"6MjIe7KCQo\", \"type\": \"card\", \"data\": {\"card_name\": \"Settings\", \"col\": 4}}, {\"id\": \"lBu2EKgmJF\", \"type\": \"card\", \"data\": {\"card_name\": \"Key Reports\", \"col\": 4}}, {\"id\": \"1ARHrjg4kI\", \"type\": \"card\", \"data\": {\"card_name\": \"Other Reports\", \"col\": 4}}]",
   "custom_blocks": [],
   "docstatus": 0,
   "doctype": "Workspace",
@@ -2402,23 +2402,6 @@
   ],
   "sequence_id": 3.0,
   "shortcuts": [
-   {
-    "color": "Grey",
-    "doc_view": "List",
-    "format": null,
-    "icon": null,
-    "kanban_board": null,
-    "label": "Rapport activités Nizar",
-    "link_to": "Rapport activités Nizar",
-    "parent": "Selling",
-    "parentfield": "shortcuts",
-    "parenttype": "Workspace",
-    "report_ref_doctype": "Tache de travail",
-    "restrict_to_domain": null,
-    "stats_filter": null,
-    "type": "Report",
-    "url": null
-   },
    {
     "color": "Blue",
     "doc_view": "",
