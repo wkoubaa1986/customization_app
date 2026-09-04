@@ -1181,6 +1181,16 @@ function rcj_depense(rapport) {
       },
       { fieldtype: "Section Break", label: __("Paiement") },
       {
+        // La retenue n-est PAS un moyen de paiement : c-est la part qu-on ne verse pas au
+        // fournisseur et qui reste due au Tresor. Elle se pose donc AVANT les reglements, et
+        // ceux-ci ne couvrent que le net.
+        fieldtype: "Currency", fieldname: "retenue",
+        label: __("Retenue à la source achat"),
+        depends_on: 'eval:doc.type_depense!="Dépense non facturée"',
+        description: __("Proposée dès le seuil. Corrigez-la si la facture porte un timbre, ou mettez 0 si le fournisseur n-est pas assujetti."),
+      },
+      { fieldtype: "HTML", fieldname: "zone_retenue" },
+      {
         fieldtype: "Check", fieldname: "fractionne",
         label: __("Paiement fractionné (plusieurs chèques, ou espèces + chèque…)"),
         depends_on: 'eval:doc.type_depense!="Dépense non facturée" && doc.mode!="Pas payé"',
@@ -1218,9 +1228,11 @@ function rcj_depense(rapport) {
           return;
         }
       }
+      // Les reglements couvrent le TTC MOINS la retenue — c-est ce que le serveur validera.
+      const a_regler = flt(v.montant) - flt(v.retenue || 0);
       let paiements = null;
       if (v.fractionne && v.mode !== "Pas payé") {
-        paiements = rcj_collecter_paiements(etat, v.montant);
+        paiements = rcj_collecter_paiements(etat, a_regler);
         if (!paiements) return;   // message déjà affiché
       } else if (v.mode === "Chèque") {
         if (!/^\d{7}$/.test((v.n_cheque || "").trim())) {
@@ -1246,6 +1258,7 @@ function rcj_depense(rapport) {
           photo_cheque: !paiements && v.mode === "Chèque" ? etat.cheque : null,
           photo_cheque_nom: etat.cheque_nom,
           paiements: paiements ? JSON.stringify(paiements) : null,
+          retenue: flt(v.retenue || 0),
           est_bl: v.type_depense !== "Dépense non facturée" && etat.est_bl ? 1 : 0,
           numero_bl: etat.numero_bl || null,
         },
@@ -1306,6 +1319,45 @@ function rcj_depense(rapport) {
   // facturée. Le repli sur le défaut du champ corrige la course.
   const type_depense_courant = () =>
     d.get_value("type_depense") || "Dépense non facturée";
+
+  // La retenue à la source achat : le SERVEUR décide, l-écran ne fait qu-afficher. Elle se
+  // recalcule quand le montant, le type ou le fournisseur bougent — et elle DIT ce qui
+  // manquerait pour émettre le certificat, sans jamais bloquer la saisie (décision
+  // utilisateur 04/09/2026 : on pose la retenue et on signale).
+  let retenue_touchee = false;
+  const maj_retenue = frappe.utils.debounce(async () => {
+    const $z = d.fields_dict.zone_retenue.$wrapper;
+    const type = type_depense_courant();
+    const montant = flt(d.get_value("montant"));
+    if (type === "Dépense non facturée" || !montant) {
+      $z.empty();
+      return;
+    }
+    let r;
+    try {
+      r = (await frappe.call({
+        method: `${API}.proposition_retenue`,
+        args: { type_depense: type, montant,
+                fournisseur: d.get_value("fournisseur") || "",
+                supplier: etat.supplier || null },
+      })).message;
+    } catch (e) {
+      return;
+    }
+    // On ne réécrit JAMAIS une valeur que l-opérateur a corrigée à la main : la proposition
+    // sert de point de départ, pas de verdict.
+    if (!retenue_touchee) d.set_value("retenue", r.retenue || 0);
+    if (!r.retenue) {
+      $z.empty();
+      return;
+    }
+    const avert = (r.avertissements || []).map(
+      (a) => `<div class="rcj-warn-banner" style="margin-top:6px">⚠️ ${frappe.utils.escape_html(a)}</div>`
+    ).join("");
+    $z.html(`<div style="font-size:12.5px;color:var(--text-muted)">
+        Net à régler : <b>${format_currency(r.net, "TND")}</b>
+        — la retenue reste due au Trésor et fera l-objet dun certificat.</div>${avert}`);
+  }, 350);
 
   // ⚠️ ENREGISTRER VERROUILLÉ TANT QUE L'ANALYSE N'EST PAS FAITE pour les
   // types facturés (décision utilisateur 24/08) — le msgprint ne suffisait pas.
@@ -1419,8 +1471,14 @@ function rcj_depense(rapport) {
       d.set_value("compte", "Dépenses non déclarées - A&S");
     }
     maj_bouton();
+    maj_retenue();
   };
   d.fields_dict.type_depense.$input.on("change", basculer_facture);
+  // Le montant et le fournisseur decident aussi de la retenue : l-analyse de la facture les
+  // remplit toute seule, d-ou l-ecoute sur `change` en plus de la frappe.
+  d.fields_dict.montant.$input.on("change input", () => maj_retenue());
+  d.fields_dict.fournisseur.$input.on("change input", () => maj_retenue());
+  d.fields_dict.retenue.$input.on("input", () => { retenue_touchee = true; });
 
   // Chèque : photo obligatoire, même patron que l'encaissement.
   const $zc = zone_photo("zone_cheque", "cheque", "cheque_nom", __("Photo du chèque"));
