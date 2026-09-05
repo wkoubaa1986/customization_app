@@ -73,11 +73,22 @@ def _en_systeme():
     réelle, pour que la trace dise qui a clôturé.
     """
     reel = frappe.session.user
+    # ⚠️ `frappe.set_user` VIDE `local.session.data` et remplace `local.session.sid` par le
+    # nom d'utilisateur — et `frappe.local.session` EST l'objet que frappe/app.py réécrit
+    # dans le cache Redis en fin de requête (session_obj.update). Sans remise à l'identique,
+    # la session de l'utilisateur réel était persistée SANS `user` : sa requête suivante,
+    # quelle qu'elle soit, tombait sur « User None is disabled » (statut 417) jusqu'à
+    # l'expiration de la session. Constaté en prod le 05/09/2026 : un partenaire clôture
+    # une tâche à 16h34, puis ne peut plus ouvrir un bon de livraison.
+    session = frappe.local.session
+    donnees, sid, formulaire = session.data, session.sid, frappe.local.form_dict
     frappe.set_user("Administrator")
     try:
         yield
     finally:
         frappe.set_user(reel)
+        session.data, session.sid = donnees, sid
+        frappe.local.form_dict = formulaire
 
 
 def _valider_commande(nom):
