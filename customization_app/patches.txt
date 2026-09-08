@@ -42,3 +42,5 @@ customization_app.patches.desactiver_server_script_rappel_rdv
 
 customization_app.patches.ensure_ristourne_facture_field
 customization_app.patches.versionner_cron_facturation_mensuelle
+
+customization_app.patches.update_monthly_credits_notifications

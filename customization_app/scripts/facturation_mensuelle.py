@@ -1,5 +1,6 @@
 today = frappe.form_dict.get("facturation_month_end") or frappe.utils.nowdate()
 SEND_EMAILS = frappe.form_dict.get("facturation_send_emails", "1") == "1"
+SEND_SMS = SEND_EMAILS and frappe.form_dict.get("facturation_send_sms", "1") == "1"
 created_invoices = []
 ADMIN_EMAIL = "koubaawassim@gmail.com"
 
@@ -179,8 +180,6 @@ for icus in CP_SL:
                 <strong>Date :</strong> {{ context.date }},
                 <strong>Numéro BL :</strong> {{ context.name }} ,
                 <strong>Total BL TTC :</strong> {{ context.BL_TL }} ,
-                <strong>Type paiement :</strong> {{ context.pay_type }} ,
-                <strong>Valeur paiement allouée :</strong> {{ context.pay_all }}
             </p>
             """
 
@@ -225,21 +224,6 @@ for icus in CP_SL:
         # ------------------------------------------------------------------
         # 5.2 Message dette, si nécessaire
         # ------------------------------------------------------------------
-        if Total_NP:
-            template_BL = """
-            <p>
-                Merci de bien vouloir régler le montant dû de :
-                <strong>{{ context.Dette }} TND</strong> dans les plus brefs délais.
-            </p>
-            """
-
-            context_dette = {
-                "Dette": str(Total_NP)
-            }
-
-            html_message_i = frappe.render_template(template_BL, {"context": context_dette})
-            template_total_BL = template_total_BL + html_message_i
-
         # ------------------------------------------------------------------
         # 5.3 Création de la facture
         # ------------------------------------------------------------------
@@ -294,6 +278,11 @@ for icus in CP_SL:
         # Recalcul final après allocation des avances
         new_invoice.calculate_taxes_and_totals()
         new_invoice.save()
+        prior_credit = frappe.call(
+            "customization_app.facturation_credits.apply_available_credits",
+            invoice=new_invoice.name,
+        )
+        new_invoice.reload()
         # Facture validée automatiquement : plus de brouillon à soumettre à la main, plus de doublon possible.
         new_invoice.submit()
         total_discount_amount = new_invoice.discount_amount
@@ -394,6 +383,8 @@ for icus in CP_SL:
                 avec la même excellence à l'avenir.
             </p>
 
+            {{ context.payment_summary }}
+
             <p>Cordialement,<br>AquaWorld & Servicing</p>
         """
 
@@ -407,6 +398,10 @@ for icus in CP_SL:
             "discount_summary": html_discount_summary,
             "total_ttc": str(frappe.utils.flt(new_invoice.grand_total, 3)),
             "nomFac": Nom_fac,
+            "payment_summary": frappe.call(
+                "customization_app.facturation_paiements.invoice_payment_summary",
+                invoice=new_invoice.name, prior_credit=prior_credit,
+            ),
         }
 
         html_message = frappe.render_template(template_email, {"context": context_mail})
@@ -426,6 +421,9 @@ for icus in CP_SL:
             Nom_fac,
             html_message,
         )
+
+        if SEND_SMS:
+            frappe.call("customization_app.facturation_sms.enqueue_invoice_ready", invoice=new_invoice.name)
 
         created_invoices.append({"name": new_invoice.name, "customer": customer,
             "grand_total": new_invoice.grand_total, "discount_amount": new_invoice.discount_amount,

@@ -71,6 +71,9 @@ def apply_order_discounts(doc, method=None):
         doc.discount_amount = amount
         if amount > 0:
             doc.set(STATE_FIELD, json.dumps({"amount": amount, "orders": [x[0] for x in eligible]}))
+        # Les anciennes avances peuvent dépasser le nouveau total après remise.
+        if doc.get("allocate_advances_automatically"):
+            doc.set("advances", [])
         doc.calculate_taxes_and_totals()
         # Le contrôleur a calculé les avances avant ce hook validate.
         if doc.get("allocate_advances_automatically"):

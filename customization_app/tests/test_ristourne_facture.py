@@ -47,6 +47,20 @@ class TestOrderDiscounts(unittest.TestCase):
         self.doc.get_doc_before_save.return_value = frappe._dict(
             custom_ristourne_commandes=json.dumps({"amount": amount, "orders": ["A", "B"]}))
 
+    def test_reallocates_advances_after_discount_without_exceeding_total(self):
+        self.doc.allocate_advances_automatically = 1
+        self.doc.advances = [frappe._dict(allocated_amount=100)]
+        def calculate():
+            allocated = sum(row.allocated_amount for row in self.doc.advances)
+            self.assertLessEqual(allocated, 34.2)
+        def allocate():
+            self.doc.advances = [frappe._dict(allocated_amount=34.2)]
+        self.doc.calculate_taxes_and_totals.side_effect = calculate
+        self.doc.set_advances.side_effect = allocate
+        rf.apply_order_discounts(self.doc)
+        self.assertEqual(self.doc.advances[0].allocated_amount, 34.2)
+        self.doc.set_advances.assert_called_once()
+
     def test_sums_distinct_orders(self):
         rf.apply_order_discounts(self.doc)
         self.assertEqual(self.doc.discount_amount, 65.8)

@@ -12,7 +12,7 @@ def script_source():
     return (Path(__file__).parent / "scripts" / "facturation_mensuelle.py").read_text()
 
 
-def run(month, dry_run=1, send_emails=0):
+def run(month, dry_run=1, send_emails=0, send_sms=0):
     """Console/bench uniquement. month=YYYY-MM, prévisualisation par défaut."""
     import re
     if not re.fullmatch(r"\d{4}-\d{2}", month):
@@ -22,6 +22,7 @@ def run(month, dry_run=1, send_emails=0):
     frappe.local.form_dict = frappe._dict(old_form or {})
     frappe.local.form_dict.update({
         "facturation_month_end": str(date),
+        "facturation_send_sms": "1" if cint(send_sms) and not cint(dry_run) else "0",
         "facturation_send_emails": "1" if cint(send_emails) and not cint(dry_run) else "0",
     })
     frappe.db.savepoint("monthly_run")
