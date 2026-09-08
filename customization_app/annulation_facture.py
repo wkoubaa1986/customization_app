@@ -261,6 +261,7 @@ def _rejouer(entree):
         _realigner_avance(l["commande"])
 
     neuf = frappe.copy_doc(ancien)
+    neuf.docstatus = 0
     neuf.amended_from = ancien.name
     neuf.set("references", [])
     for r in gardees:

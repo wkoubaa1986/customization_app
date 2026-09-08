@@ -249,6 +249,7 @@ doc_events = {
     # Numérotation auto de la facture (remplace le Server Script « Generation N Facture »).
     "Sales Invoice": {
         "before_insert": "customization_app.facturation_numbering.set_numero_facture",
+        "validate": "customization_app.ristourne_facture.apply_order_discounts",
         # Annuler une facture rend le paiement à la ou aux commandes qui l'ont
         # générée, au prorata de leurs lignes. Le plan se calcule AVANT
         # l'annulation (les affectations existent encore) et s'applique APRÈS
