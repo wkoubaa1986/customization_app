@@ -28,7 +28,7 @@ import re
 
 import frappe
 from frappe import _
-from frappe.utils import flt, nowdate
+from frappe.utils import cint, flt, nowdate
 
 COMPTE_DETTES = "Dettes - A&S"
 COMPTE_ARAMEX = "Livraison Aramex - A&S"
@@ -40,9 +40,39 @@ ROLES = ("System Manager", "Accounts Manager", "Accounts User",
 # sa remise Aramex et ne se traite pas ici.
 _RX_SUIVI = re.compile(r"Aramex\s*N[^0-9]*[0-9]{6,}")
 
+#: Les motifs qui interdisent d'encaisser une dette. Libellés en clair (pas de
+#: `_()`) : ils traversent l'API vers le dialogue ET se testent hors site.
+MOTIF_COMMANDE_ANNULEE = "commande annulée"
+MOTIF_FACTURE_ANNULEE = "facture annulée"
+
+
+def _motif_non_encaissable(commande, commande_doctype, commande_docstatus):
+    """Le motif qui interdit d'encaisser cette dette, ou "" si elle est encaissable.
+
+    ⚠️ FONCTION PURE (aucune base) : c'est LA règle, et elle se teste telle quelle.
+
+    Une dette dont la commande — ou la facture d'ouverture — est ANNULÉE ne peut
+    plus être encaissée : le paiement créé par « Traitement des encaissement »
+    porterait un lien vers ce document annulé, et Frappe le refuse
+    (`CancelledLinkError`, « Impossible de lier le document annulé ») APRÈS avoir
+    supprimé des dettes et réécrit des échéanciers.
+
+    Une dette sans commande identifiée reste encaissable : rien ne dit qu'elle est
+    annulée, et le script sait la traiter par la référence de son paiement. Une
+    commande encore en brouillon n'est pas annulée non plus — elle est seulement
+    impropre au champ `bl`, ce dont `encaisser` se charge.
+    """
+    if not commande or not commande_doctype:
+        return ""
+    if cint(commande_docstatus) == 2:
+        return (MOTIF_FACTURE_ANNULEE if commande_doctype == "Sales Invoice"
+                else MOTIF_COMMANDE_ANNULEE)
+    return ""
+
 
 def _dettes(client):
-    """Les dettes encaissables du client, plus anciennes d'abord."""
+    """Les dettes du client, plus anciennes d'abord, chacune avec son `motif` —
+    vide si elle est encaissable (voir `_motif_non_encaissable`)."""
     rows = frappe.db.sql(
         """
         SELECT pe.name, pe.paid_amount, pe.posting_date, pe.reference_no, pe.paid_to,
@@ -67,16 +97,21 @@ def _dettes(client):
         r.commande_doctype = ""
         r.commande_ttc = 0.0
         r.commande_date = ""
+        r.commande_docstatus = None
         if r.commande:
             for dt, champ_date in (("Sales Order", "transaction_date"),
                                    ("Sales Invoice", "posting_date")):
-                meta = frappe.db.get_value(dt, r.commande, ["grand_total", champ_date],
+                meta = frappe.db.get_value(dt, r.commande,
+                                           ["grand_total", champ_date, "docstatus"],
                                            as_dict=True)
                 if meta:
                     r.commande_doctype = dt
                     r.commande_ttc = flt(meta.grand_total, 3)
                     r.commande_date = str(meta.get(champ_date) or "")
+                    r.commande_docstatus = cint(meta.docstatus)
                     break
+        r.motif = _motif_non_encaissable(r.commande, r.commande_doctype,
+                                         r.commande_docstatus)
     # L'ordre des dettes suit la DATE DE LA COMMANDE (décision utilisateur 19/08) :
     # c'est elle qui dit l'ancienneté réelle — la dette n'est que son enregistrement.
     # Repli sur la date de la dette quand la commande n'en a pas.
@@ -129,10 +164,13 @@ def dettes_client(client):
     banques = (frappe.get_meta("Liste des Dettes client")
                .get_field("banque").options or "").split("\n")
     return {
+        # `encaissable`/`motif` : le dialogue grise la dette dont le document est
+        # annulé plutôt que de laisser l'employé la cocher et échouer à la validation.
         "dettes": [{"paiement": r.name, "commande": r.commande,
                     "commande_doctype": r.commande_doctype, "commande_ttc": r.commande_ttc,
                     "commande_date": r.commande_date,
-                    "date": str(r.posting_date), "montant": r.montant, "compte": r.paid_to}
+                    "date": str(r.posting_date), "montant": r.montant, "compte": r.paid_to,
+                    "encaissable": not r.motif, "motif": r.motif}
                    for r in rows],
         "total": round(sum(r.montant for r in rows), 3),
         "banques": [b for b in banques if b.strip()],
@@ -284,11 +322,21 @@ def encaisser(client, montant=None, mode=None, n_cheque=None, banque=None, dette
     total = round(sum(p["montant"] for p in lignes_paiement), 3)
 
     toutes = _dettes(client)
-    if not toutes:
+    encaissables = [r for r in toutes if not r.motif]
+    if not encaissables:
         frappe.throw(_("Le client {0} n'a aucune dette encaissable.").format(client))
     selection = json.loads(dettes) if isinstance(dettes, str) else (dettes or [])
+    # `par_nom` porte TOUTES les dettes, y compris bloquées : une dette annulée
+    # sélectionnée doit être REFUSÉE avec son motif, pas ignorée en silence.
     par_nom = {r.name: r for r in toutes}
-    choisies = [par_nom[n] for n in selection if n in par_nom] or toutes
+    choisies = [par_nom[n] for n in selection if n in par_nom] or encaissables
+    bloquees = [r for r in choisies if r.motif]
+    if bloquees:
+        details = ", ".join("{0} ({1} : {2})".format(r.name, r.motif, r.commande)
+                            for r in bloquees)
+        frappe.throw(_("Ces dettes ne peuvent pas être encaissées : {0}. Décochez-les — "
+                       "un document annulé ne peut plus recevoir de paiement.")
+                     .format(details))
     total_selection = round(sum(r.montant for r in choisies), 3)
     if total > total_selection + 0.001:
         frappe.throw(_("Le total des paiements ({0}) dépasse la somme des dettes "
@@ -319,8 +367,14 @@ def encaisser(client, montant=None, mode=None, n_cheque=None, banque=None, dette
                     key=lambda x: (x.commande_date or str(x.posting_date),
                                    str(x.posting_date), x.name)):
         reste_dette = r.montant
-        bl = r.reference_no if r.reference_no and frappe.db.exists(
-            "Sales Order", r.reference_no) else None
+        # ⚠️ NE POSER `bl` QUE SUR UNE COMMANDE SOUMISE. Le champ est un lien : une
+        # commande annulée le fait refuser à l'insert (« Impossible de lier le
+        # document annulé »), et le script sait de toute façon retrouver la cible
+        # par la référence du paiement quand `bl` est vide.
+        bl = None
+        if r.reference_no and cint(frappe.db.get_value(
+                "Sales Order", r.reference_no, "docstatus")) == 1:
+            bl = r.reference_no
         while reste_dette > 0.0005 and i_paiement < len(file_paiements):
             p = file_paiements[i_paiement]
             if p["reste"] <= 0.0005:
@@ -378,7 +432,18 @@ def valider(name):
     doc = frappe.get_doc("Encaissement Paiement", name)
     if doc.docstatus != 0:
         frappe.throw(_("{0} n'est plus un brouillon.").format(name))
-    doc.submit()
+    try:
+        doc.submit()
+    except frappe.CancelledLinkError as e:
+        # Frappe dit « Impossible de lier le document annulé : <DocType> <nom> » et
+        # rien d'autre : ni l'encaissement en cause, ni quoi faire. On rembobine —
+        # le script a pu supprimer des dettes et réécrire des échéanciers avant
+        # d'échouer, RIEN ne doit rester à moitié écrit — et on nomme les deux.
+        frappe.db.rollback()
+        frappe.throw(_("Encaissement {0} refusé : il faudrait relier un document annulé "
+                       "({1}). Rien n'a été enregistré — retirez de la sélection la dette "
+                       "qui porte ce document, ou faites-le rétablir.")
+                     .format(name, re.sub(r"<[^>]+>", " ", str(e)).strip()))
     frappe.db.commit()
     return {"name": doc.name}
 

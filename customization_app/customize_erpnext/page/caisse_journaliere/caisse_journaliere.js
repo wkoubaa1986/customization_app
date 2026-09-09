@@ -745,16 +745,29 @@ function rcj_encaissement_dettes(rapport) {
         // Les banques alimentent les selects des lignes de paiement (plus de champ
         // « banque » au niveau du dialogue depuis le multi-pièces).
         if (m.banques && m.banques.length) etat.banques = m.banques;
-        const lignes = etat.dettes.map((x) => `
-          <tr><td style="text-align:center"><input type="checkbox" class="rcj-dette" checked
+        // Une dette dont la commande (ou la facture) est ANNULÉE n'est pas encaissable :
+        // le paiement porterait un lien vers un document annulé et Frappe le refuse
+        // (« Impossible de lier le document annulé »), après coup. On la montre grisée
+        // avec son motif — décocher ne suffirait pas, il ne faut pas pouvoir la cocher.
+        const encaissable = (x) => x.encaissable !== false;
+        const total_encaissable = etat.dettes.filter(encaissable)
+          .reduce((s, x) => s + x.montant, 0);
+        const lignes = etat.dettes.map((x) => {
+          const bloquee = !encaissable(x);
+          return `
+          <tr style="${bloquee ? "opacity:.6" : ""}">
+              <td style="text-align:center"><input type="checkbox" class="rcj-dette"
+                     ${bloquee ? "disabled" : "checked"}
                      data-pe="${frappe.utils.escape_html(x.paiement)}"></td>
               <td>${frappe.utils.escape_html(x.paiement)}</td>
-              <td>${lien_commande(x)}</td>
+              <td>${lien_commande(x)}${bloquee ? `<br><span class="text-danger"
+                    style="font-size:11px">${frappe.utils.escape_html(x.motif || "")}</span>` : ""}</td>
               <td style="text-align:right">${x.commande_ttc
                 ? format_currency(x.commande_ttc, "TND") : "—"}</td>
               <td>${x.commande_date ? frappe.datetime.str_to_user(x.commande_date) : "—"}</td>
               <td>${frappe.datetime.str_to_user(x.date)}</td>
-              <td style="text-align:right">${format_currency(x.montant, "TND")}</td></tr>`).join("");
+              <td style="text-align:right">${format_currency(x.montant, "TND")}</td></tr>`;
+        }).join("");
         d.fields_dict.liste.$wrapper.html(etat.dettes.length ? `
           <div style="overflow-x:auto">
           <table class="table table-bordered" style="margin-top:8px;font-size:12px;min-width:640px">
@@ -769,18 +782,21 @@ function rcj_encaissement_dettes(rapport) {
                   <th style="text-align:right">${format_currency(m.total, "TND")}</th></tr>
               <tr><th colspan="6">${__("Total sélectionné")}</th>
                   <th style="text-align:right" class="rcj-total-sel">${
-                    format_currency(m.total, "TND")}</th></tr>
+                    format_currency(total_encaissable, "TND")}</th></tr>
             </tfoot>
           </table></div>
           <div class="text-muted" style="font-size:11px">${
-            __("Décochez une dette pour l'écarter — l'allocation suit la sélection (FIFO par date de commande).")}</div>`
+            __("Décochez une dette pour l'écarter — l'allocation suit la sélection (FIFO par date de commande).")}</div>
+          ${etat.dettes.some((x) => !encaissable(x)) ? `<div class="text-danger" style="font-size:11px">${
+            __("Les dettes grisées ne sont pas encaissables : leur document est annulé et ne peut plus recevoir de paiement.")}</div>` : ""}`
           : `<div class="text-muted" style="margin-top:8px">${
             __("Aucune dette encaissable pour ce client.")}</div>`);
         d.fields_dict.liste.$wrapper.find("input.rcj-dette")
           .on("change", () => { maj_total_selection(); maj_total_paiements(); });
-        // Une seule ligne Espèces préremplie au total : le cas le plus fréquent
-        // reste à un clic, les pièces multiples s'ajoutent par le bouton.
-        etat.paiements = [{ mode: "Espèces", montant: m.total, n_piece: "",
+        // Une seule ligne Espèces préremplie au total ENCAISSABLE (les dettes grisées
+        // ne sont pas cochées) : le cas le plus fréquent reste à un clic, les pièces
+        // multiples s'ajoutent par le bouton.
+        etat.paiements = [{ mode: "Espèces", montant: total_encaissable, n_piece: "",
                             banque: "", photo: null, photo_nom: null }];
         render_paiements();
       },
@@ -928,6 +944,13 @@ function rcj_encaissement_dettes(rapport) {
             { message: __("Dettes encaissées ({0}).", [res.name]), indicator: "green" });
           // La caisse reflète l'encaissement sans geste supplémentaire.
           if (rapport && rapport._fetch) rapport._fetch();
+        },
+        error: () => {
+          // Échec de la validation : le serveur a tout rembobiné, mais le BROUILLON
+          // subsiste (il a été commité par `encaisser`) et fausserait le prochain
+          // calcul de dettes. On le supprime comme sur un refus ; les photos jointes
+          // partent avec lui et seront reprises au nouvel essai.
+          frappe.call({ method: API + ".abandonner", args: { name: res.name } });
         },
       });
     }, () => {
