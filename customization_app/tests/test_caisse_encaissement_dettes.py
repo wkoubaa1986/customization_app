@@ -170,6 +170,47 @@ def _dette(nom, montant=100.0, motif="", commande="SAL-ORD-2026-03325"):
     return {"name": nom, "montant": montant, "motif": motif, "commande": commande}
 
 
+class TestSelectionPerimee(unittest.TestCase):
+    """LE GARDE-FOU DU DOUBLE ENCAISSEMENT. La validation étant immédiate, rejouer
+    une requête dont la réponse s'est perdue (réseau, double clic, retour arrière)
+    ne doit RIEN pouvoir encaisser une seconde fois."""
+
+    def test_rejouer_une_requete_deja_encaissee_est_refuse(self):
+        """100 versés sur une dette de 200 : la dette d'origine a disparu, un
+        reliquat de 100 l'a remplacée. La même requête rejouée retombait sur ce
+        reliquat et encaissait 100 de plus, sans confirmation."""
+        reliquat = _dette("PE-RELIQUAT", montant=100.0)
+        choisies, refus = CED._trier_selection([reliquat], ["PE-1"])
+        self.assertEqual(choisies, [])
+        self.assertEqual(refus, (CED.REFUS_DISPARUES, ["PE-1"]))
+
+    def test_une_seule_dette_disparue_refuse_toute_l_operation(self):
+        """La liste a bougé : on ne devine pas ce que l'employé voulait vraiment."""
+        restante = _dette("PE-2")
+        choisies, refus = CED._trier_selection([restante], ["PE-1", "PE-2"])
+        self.assertEqual(choisies, [])
+        self.assertEqual(refus, (CED.REFUS_DISPARUES, ["PE-1"]))
+
+    def test_le_refus_de_liste_perimee_passe_avant_les_autres(self):
+        """Même si ce qui reste est par ailleurs bloqué, c'est le rechargement
+        qu'il faut demander en premier."""
+        bloquee = _dette("PE-2", motif=CED.MOTIF_COMMANDE_ANNULEE)
+        _, refus = CED._trier_selection([bloquee], ["PE-1", "PE-2"])
+        self.assertEqual(refus[0], CED.REFUS_DISPARUES)
+
+    def test_sans_selection_le_repli_reste_permis(self):
+        """L'appelant qui ne coche rien demande explicitement tout l'encaissable."""
+        a = _dette("PE-1")
+        choisies, refus = CED._trier_selection([a], [])
+        self.assertEqual(choisies, [a])
+        self.assertIsNone(refus)
+
+    def test_un_client_vide_avec_selection_demande_un_rechargement(self):
+        choisies, refus = CED._trier_selection([], ["PE-1"])
+        self.assertEqual(choisies, [])
+        self.assertEqual(refus, (CED.REFUS_DISPARUES, ["PE-1"]))
+
+
 class TestTriDeLaSelection(unittest.TestCase):
     """L'ORDRE des refus : le motif détaillé passe avant « aucune dette encaissable »."""
 

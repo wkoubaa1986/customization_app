@@ -83,8 +83,9 @@ def _motif_non_encaissable(documents):
     return "", ""
 
 
-#: Les deux refus opposables à une sélection de dettes, dans l'ordre où ils
-#: s'appliquent : le détaillé d'abord, le générique ensuite.
+#: Les refus opposables à une sélection de dettes, dans l'ordre où ils
+#: s'appliquent : la liste périmée d'abord, le motif détaillé, puis le générique.
+REFUS_DISPARUES = "disparues"
 REFUS_BLOQUEES = "bloquees"
 REFUS_AUCUNE = "aucune"
 
@@ -99,13 +100,27 @@ def _trier_selection(toutes, selection):
 
     `toutes` : les dettes du client (`_dettes`), chacune avec son `motif`.
     `selection` : les dettes cochées ; vide, l'employé prend tout l'encaissable.
-    → `(choisies, refus)`, `refus` valant `None` ou `(code, dettes_en_cause)`.
+    → `(choisies, refus)`, `refus` valant `None` ou `(code, en_cause)` — les dettes
+    fautives, ou leurs seuls noms pour `REFUS_DISPARUES` (elles n'existent plus).
     """
     par_nom = {r["name"]: r for r in toutes}
     encaissables = [r for r in toutes if not r["motif"]]
-    # `par_nom` porte TOUTES les dettes, bloquées comprises : une dette annulée
-    # explicitement cochée doit être REFUSÉE avec son motif, pas ignorée en silence.
-    choisies = [par_nom[n] for n in selection if n in par_nom] or encaissables
+    if not selection:
+        # Aucune sélection : l'employé prend tout ce qui est encaissable.
+        choisies = encaissables
+    else:
+        # ⚠️ JAMAIS DE REPLI SUR UNE SÉLECTION EXPLICITE. Une dette cochée qui n'est
+        # plus dans la liste veut dire que celle-ci a bougé — typiquement parce que
+        # l'encaissement a DÉJÀ eu lieu : la dette de 200 a disparu, remplacée par
+        # son reliquat de 100. Retomber sur « tout l'encaissable » ferait alors
+        # payer le reliquat une seconde fois, sans confirmation, la validation
+        # étant immédiate. On refuse tout et on redemande une liste à jour.
+        disparues = [n for n in selection if n not in par_nom]
+        if disparues:
+            return [], (REFUS_DISPARUES, disparues)
+        # `par_nom` porte TOUTES les dettes, bloquées comprises : une dette annulée
+        # explicitement cochée doit être REFUSÉE avec son motif, pas ignorée.
+        choisies = [par_nom[n] for n in selection]
     bloquees = [r for r in choisies if r["motif"]]
     if bloquees:
         return [], (REFUS_BLOQUEES, bloquees)
@@ -467,6 +482,12 @@ def encaisser(client, montant=None, mode=None, n_cheque=None, banque=None, dette
 
     selection = json.loads(dettes) if isinstance(dettes, str) else (dettes or [])
     choisies, refus = _trier_selection(_dettes(client), selection)
+    if refus and refus[0] == REFUS_DISPARUES:
+        frappe.throw(_("Ces dettes ne sont plus dans la liste du client : {0}. La liste "
+                       "a changé depuis son affichage — elles viennent peut-être d'être "
+                       "encaissées. RIEN n'a été enregistré : rouvrez le client pour "
+                       "recharger ses dettes avant de recommencer.")
+                     .format(", ".join(str(n) for n in refus[1])))
     if refus and refus[0] == REFUS_BLOQUEES:
         # Le document nommé est CELUI QUI BLOQUE : pour une dette facturée, c'est
         # la commande d'origine, pas la facture affichée en face de la dette.
