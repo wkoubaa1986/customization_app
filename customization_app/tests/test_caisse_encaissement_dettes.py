@@ -78,6 +78,28 @@ class _FrappeFactice:
         raise Refus(message)
 
 
+def _boucle_des_avances(arbre):
+    """La purge des avances mortes : le `for avance in …` de la recréation de facture."""
+    for noeud in ast.walk(arbre):
+        if (isinstance(noeud, ast.For) and isinstance(noeud.target, ast.Name)
+                and noeud.target.id == "avance"):
+            return ast.unparse(noeud)
+    raise AssertionError("La purge des avances est introuvable dans le script.")
+
+
+def _purger_avances(avances, documents):
+    """Joue la purge de la fixture sur une table d'avances donnée → celles gardées."""
+    boucle = _boucle_des_avances(ast.parse(_script(), NOM_SCRIPT))
+    espace = {"frappe": _FrappeFactice(documents), "avances_vivantes": [],
+              "new_invoice": types.SimpleNamespace(get=lambda champ: avances)}
+    exec(compile(boucle, "purge des avances", "exec"), espace)  # noqa: S102
+    return espace["avances_vivantes"]
+
+
+def _avance(paiement, doctype="Payment Entry"):
+    return types.SimpleNamespace(reference_type=doctype, reference_name=paiement)
+
+
 def _executer_controle(documents, cible, dette="ACC-PAY-2026-00123",
                        enc="ENC-2026-00042"):
     """Joue le contrôle préalable du script de la fixture sur une dette donnée."""
@@ -317,6 +339,48 @@ class TestControlePrealableDuScript(unittest.TestCase):
         _executer_controle({}, "VIEUX-REF-42")
 
 
+class TestPurgeDesAvancesMortes(unittest.TestCase):
+    """LA cause du refus vu sur ENC-09-09-2026-00001 : « Impossible de lier le
+    document annulé – Ligne #2 : Nom de référence : ACC-PAY-2026-03539 ».
+
+    `copy_doc` recopie la table des paiements anticipés de la facture ; ses lignes
+    pointent des Payment Entry, et un paiement annulé (ou supprimé) y reste inscrit
+    — l'annulation avec `ignore_links` ne nettoie pas la facture. La facture
+    recréée ne doit garder que les avances dont le paiement est ENCORE soumis.
+    """
+
+    VIVANT = "ACC-PAY-2026-04000"
+    ANNULE = "ACC-PAY-2026-03539"
+    SUPPRIME = "ACC-PAY-2026-03540"
+
+    def setUp(self):
+        self.documents = {
+            ("Payment Entry", self.VIVANT): {"docstatus": 1},
+            ("Payment Entry", self.ANNULE): {"docstatus": 2},
+        }
+
+    def test_une_avance_dont_le_paiement_est_soumis_est_gardee(self):
+        gardees = _purger_avances([_avance(self.VIVANT)], self.documents)
+        self.assertEqual([a.reference_name for a in gardees], [self.VIVANT])
+
+    def test_l_avance_du_paiement_annule_est_ecartee(self):
+        gardees = _purger_avances(
+            [_avance(self.VIVANT), _avance(self.ANNULE)], self.documents)
+        self.assertEqual([a.reference_name for a in gardees], [self.VIVANT])
+
+    def test_l_avance_d_un_paiement_supprime_est_ecartee(self):
+        """Le script supprime les anciennes dettes : le lien ne pointe plus rien."""
+        gardees = _purger_avances([_avance(self.SUPPRIME)], self.documents)
+        self.assertEqual(gardees, [])
+
+    def test_une_ligne_sans_reference_est_ecartee(self):
+        gardees = _purger_avances([_avance("", doctype="")], self.documents)
+        self.assertEqual(gardees, [])
+
+    def test_une_table_vide_ne_casse_pas(self):
+        self.assertEqual(_purger_avances([], self.documents), [])
+
+
 class TestFixtureTraitementDesEncaissements(unittest.TestCase):
     """Le Server Script de la fixture — le code qui a levé « Impossible de lier le
     document annulé » en production."""
@@ -362,6 +426,18 @@ class TestFixtureTraitementDesEncaissements(unittest.TestCase):
         controle = self.script.index("statut_cible")
         self.assertLess(controle, self.script.index("Payement_left={}"),
                         "Le contrôle doit précéder la réécriture des échéanciers.")
+
+    def test_les_avances_sont_purgees_avant_de_recreer_la_facture(self):
+        """Purger après l'insert ne servirait à rien : c'est l'insert qui refuse le
+        lien vers le paiement annulé. (Sur les lignes, pas sur le texte : les
+        commentaires du script citent `new_invoice.insert()`.)"""
+        purge = min(n.lineno for n in ast.walk(self.arbre)
+                    if isinstance(n, ast.Assign)
+                    and ast.unparse(n.targets[0]) == "new_invoice.advances")
+        insert = min(n.lineno for n in ast.walk(self.arbre)
+                     if isinstance(n, ast.Call)
+                     and ast.unparse(n.func) == "new_invoice.insert")
+        self.assertLess(purge, insert)
 
 
 if __name__ == "__main__":
