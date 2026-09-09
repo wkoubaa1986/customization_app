@@ -70,6 +70,37 @@ def _motif_non_encaissable(commande, commande_doctype, commande_docstatus):
     return ""
 
 
+#: Les deux refus opposables à une sélection de dettes, dans l'ordre où ils
+#: s'appliquent : le détaillé d'abord, le générique ensuite.
+REFUS_BLOQUEES = "bloquees"
+REFUS_AUCUNE = "aucune"
+
+
+def _trier_selection(toutes, selection):
+    """Les dettes retenues pour l'encaissement, ou le refus à opposer à l'employé.
+
+    ⚠️ FONCTION PURE (aucune base) : elle porte l'ORDRE des refus, et c'est lui
+    qui se teste. Un client dont l'UNIQUE dette est annulée doit lire pourquoi —
+    quelle dette, quel document — et non « aucune dette encaissable », qui ne
+    nomme rien et laisse l'employé sans prise.
+
+    `toutes` : les dettes du client (`_dettes`), chacune avec son `motif`.
+    `selection` : les dettes cochées ; vide, l'employé prend tout l'encaissable.
+    → `(choisies, refus)`, `refus` valant `None` ou `(code, dettes_en_cause)`.
+    """
+    par_nom = {r["name"]: r for r in toutes}
+    encaissables = [r for r in toutes if not r["motif"]]
+    # `par_nom` porte TOUTES les dettes, bloquées comprises : une dette annulée
+    # explicitement cochée doit être REFUSÉE avec son motif, pas ignorée en silence.
+    choisies = [par_nom[n] for n in selection if n in par_nom] or encaissables
+    bloquees = [r for r in choisies if r["motif"]]
+    if bloquees:
+        return [], (REFUS_BLOQUEES, bloquees)
+    if not choisies:
+        return [], (REFUS_AUCUNE, [])
+    return choisies, None
+
+
 def _dettes(client):
     """Les dettes du client, plus anciennes d'abord, chacune avec son `motif` —
     vide si elle est encaissable (voir `_motif_non_encaissable`)."""
@@ -321,22 +352,16 @@ def encaisser(client, montant=None, mode=None, n_cheque=None, banque=None, dette
     lignes_paiement = _valider_paiements(paiements)
     total = round(sum(p["montant"] for p in lignes_paiement), 3)
 
-    toutes = _dettes(client)
-    encaissables = [r for r in toutes if not r.motif]
-    if not encaissables:
-        frappe.throw(_("Le client {0} n'a aucune dette encaissable.").format(client))
     selection = json.loads(dettes) if isinstance(dettes, str) else (dettes or [])
-    # `par_nom` porte TOUTES les dettes, y compris bloquées : une dette annulée
-    # sélectionnée doit être REFUSÉE avec son motif, pas ignorée en silence.
-    par_nom = {r.name: r for r in toutes}
-    choisies = [par_nom[n] for n in selection if n in par_nom] or encaissables
-    bloquees = [r for r in choisies if r.motif]
-    if bloquees:
+    choisies, refus = _trier_selection(_dettes(client), selection)
+    if refus and refus[0] == REFUS_BLOQUEES:
         details = ", ".join("{0} ({1} : {2})".format(r.name, r.motif, r.commande)
-                            for r in bloquees)
+                            for r in refus[1])
         frappe.throw(_("Ces dettes ne peuvent pas être encaissées : {0}. Décochez-les — "
                        "un document annulé ne peut plus recevoir de paiement.")
                      .format(details))
+    if refus:
+        frappe.throw(_("Le client {0} n'a aucune dette encaissable.").format(client))
     total_selection = round(sum(r.montant for r in choisies), 3)
     if total > total_selection + 0.001:
         frappe.throw(_("Le total des paiements ({0}) dépasse la somme des dettes "

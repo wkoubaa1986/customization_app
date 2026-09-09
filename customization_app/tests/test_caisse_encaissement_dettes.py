@@ -1,11 +1,15 @@
 """Tests de l'encaissement des dettes depuis la caisse journalière (ticket #8).
 
 Convention : `unittest.TestCase` pur, aucune base — comme `test_annulation_facture`.
-Deux choses se testent ici, et ce sont les deux endroits où le bug vivait :
+Trois choses se testent ici, et ce sont les endroits où le bug vivait :
 
-  - la RÈGLE qui écarte une dette dont la commande (ou la facture) est annulée ;
+  - la RÈGLE qui écarte une dette dont la commande (ou la facture) est annulée,
+    et l'ORDRE des refus opposés à la sélection ;
   - le Server Script « Traitement des encaissement » lu dans la fixture : il doit
-    compiler, et ne plus recopier un lien BL/commande sans regarder le docstatus.
+    compiler, et ne plus recopier un lien BL/commande sans regarder le docstatus ;
+  - le CONTRÔLE PRÉALABLE de ce même script, extrait de la fixture et EXÉCUTÉ sur
+    un `frappe` factice — c'est le seul moyen de vérifier son comportement (une
+    facture soumise que le traitement annulerait doit être refusée) sans site.
 
 Le reste (échéanciers, paiements, recréation de facture) touche la comptabilité et
 se vérifie en recette sur des cas réels.
@@ -15,6 +19,7 @@ from __future__ import annotations
 import ast
 import json
 import os
+import types
 import unittest
 
 from customization_app import caisse_encaissement_dettes as CED
@@ -40,6 +45,45 @@ def _lignes_de_facture(arbre):
                 isinstance(c, ast.Constant) and c.value == "dn_detail" for c in noeud.keys):
             return {c.value: v for c, v in zip(noeud.keys, noeud.values)}
     raise AssertionError("Le bloc de recopie des lignes de facture est introuvable.")
+
+
+def _bloc_controle(arbre):
+    """Le contrôle préalable du script : le `if name:` qui refuse la dette dont le
+    document est annulé — ou le sera par le traitement lui-même."""
+    for noeud in ast.walk(arbre):
+        if (isinstance(noeud, ast.If) and isinstance(noeud.test, ast.Name)
+                and noeud.test.id == "name" and "statut_cible" in ast.unparse(noeud)):
+            return ast.unparse(noeud)
+    raise AssertionError("Le contrôle préalable est introuvable dans le script.")
+
+
+class Refus(Exception):
+    """Ce que `frappe.throw` lève dans le script."""
+
+
+class _FrappeFactice:
+    """Le strict nécessaire au contrôle préalable : `frappe.db.get_value` et
+    `frappe.throw`. Les documents sont donnés en dur — aucune base n'est ouverte."""
+
+    def __init__(self, documents):
+        self.documents = documents          # {(doctype, nom): {champ: valeur}}
+        self.db = self                      # `frappe.db.get_value` retombe ici
+
+    def get_value(self, doctype, nom, champ):
+        return (self.documents.get((doctype, nom)) or {}).get(champ)
+
+    def throw(self, message):
+        raise Refus(message)
+
+
+def _executer_controle(documents, cible, dette="ACC-PAY-2026-00123",
+                       enc="ENC-2026-00042"):
+    """Joue le contrôle préalable du script de la fixture sur une dette donnée."""
+    bloc = _bloc_controle(ast.parse(_script(), NOM_SCRIPT))
+    espace = {"frappe": _FrappeFactice(documents), "name": cible,
+              "ipay": types.SimpleNamespace(ref_paiement=dette),
+              "doc": types.SimpleNamespace(name=enc)}
+    exec(compile(bloc, "controle prealable", "exec"), espace)  # noqa: S102
 
 
 class TestMotifNonEncaissable(unittest.TestCase):
@@ -78,6 +122,99 @@ class TestMotifNonEncaissable(unittest.TestCase):
         """Aucun doctype reconnu : rien ne prouve qu'elle soit annulée, on ne
         bloque pas l'employé sur une supposition."""
         self.assertEqual(CED._motif_non_encaissable("VIEUX-REF-42", "", None), "")
+
+
+def _dette(nom, montant=100.0, motif="", commande="SAL-ORD-2026-03325"):
+    return {"name": nom, "montant": montant, "motif": motif, "commande": commande}
+
+
+class TestTriDeLaSelection(unittest.TestCase):
+    """L'ORDRE des refus : le motif détaillé passe avant « aucune dette encaissable »."""
+
+    def test_la_selection_de_l_employe_est_respectee(self):
+        a, b = _dette("PE-1"), _dette("PE-2")
+        choisies, refus = CED._trier_selection([a, b], ["PE-2"])
+        self.assertEqual(choisies, [b])
+        self.assertIsNone(refus)
+
+    def test_sans_selection_tout_l_encaissable_est_pris(self):
+        a, b = _dette("PE-1"), _dette("PE-2", motif=CED.MOTIF_COMMANDE_ANNULEE)
+        choisies, refus = CED._trier_selection([a, b], [])
+        self.assertEqual(choisies, [a])
+        self.assertIsNone(refus)
+
+    def test_une_dette_annulee_cochee_est_refusee_avec_son_motif(self):
+        bloquee = _dette("PE-2", motif=CED.MOTIF_COMMANDE_ANNULEE)
+        choisies, refus = CED._trier_selection([_dette("PE-1"), bloquee], ["PE-1", "PE-2"])
+        self.assertEqual(choisies, [])
+        self.assertEqual(refus, (CED.REFUS_BLOQUEES, [bloquee]))
+
+    def test_l_unique_dette_annulee_d_un_client_est_nommee(self):
+        """Le défaut d'origine : le refus générique « aucune dette encaissable »
+        partait le premier et l'employé n'apprenait ni laquelle ni pourquoi."""
+        bloquee = _dette("PE-1", motif=CED.MOTIF_FACTURE_ANNULEE,
+                         commande="ACC-SINV-2026-01068")
+        choisies, refus = CED._trier_selection([bloquee], ["PE-1"])
+        self.assertEqual(choisies, [])
+        self.assertEqual(refus[0], CED.REFUS_BLOQUEES)
+        self.assertEqual(refus[1], [bloquee])
+
+    def test_un_client_sans_dette_recoit_le_refus_generique(self):
+        self.assertEqual(CED._trier_selection([], []), ([], (CED.REFUS_AUCUNE, [])))
+
+    def test_toutes_bloquees_sans_selection_donne_le_refus_generique(self):
+        """Rien n'a été coché : aucune dette à nommer, le message générique suffit."""
+        _, refus = CED._trier_selection(
+            [_dette("PE-1", motif=CED.MOTIF_COMMANDE_ANNULEE)], [])
+        self.assertEqual(refus, (CED.REFUS_AUCUNE, []))
+
+
+class TestControlePrealableDuScript(unittest.TestCase):
+    """Le contrôle préalable de la fixture, EXÉCUTÉ : ce qu'il laisse passer et ce
+    qu'il refuse, avec le message rendu à l'employé."""
+
+    def test_une_commande_soumise_passe(self):
+        _executer_controle({("Sales Order", "SAL-ORD-2026-03325"): {"docstatus": 1}},
+                           "SAL-ORD-2026-03325")
+
+    def test_une_commande_annulee_est_refusee(self):
+        with self.assertRaises(Refus) as levee:
+            _executer_controle({("Sales Order", "SAL-ORD-2026-03325"): {"docstatus": 2}},
+                               "SAL-ORD-2026-03325")
+        self.assertIn("SAL-ORD-2026-03325", str(levee.exception))
+        self.assertIn("ACC-PAY-2026-00123", str(levee.exception))
+        self.assertIn("annule", str(levee.exception))
+
+    def test_une_facture_d_ouverture_soumise_passe(self):
+        """Le cas nominal d'une dette sans commande : le traitement n'y touche pas."""
+        _executer_controle({("Sales Invoice", "ACC-SINV-2026-00007"):
+                            {"docstatus": 1, "is_opening": "Yes"}},
+                           "ACC-SINV-2026-00007")
+
+    def test_une_facture_soumise_que_le_traitement_annulerait_est_refusee(self):
+        """LE cas resté ouvert : la facture est encore soumise à l'entrée, mais le
+        bloc « Cancel invoices » l'annule et la recrée avant la création des
+        paiements — qui la référenceraient annulée. On refuse avant toute écriture,
+        en nommant la dette, la facture et l'encaissement."""
+        with self.assertRaises(Refus) as levee:
+            _executer_controle({("Sales Invoice", "ACC-SINV-2026-01068"):
+                                {"docstatus": 1, "is_opening": "No"}},
+                               "ACC-SINV-2026-01068")
+        message = str(levee.exception)
+        self.assertIn("ACC-PAY-2026-00123", message)      # la dette
+        self.assertIn("ACC-SINV-2026-01068", message)     # la facture
+        self.assertIn("ENC-2026-00042", message)          # l'encaissement
+
+    def test_une_facture_deja_annulee_est_refusee(self):
+        with self.assertRaises(Refus) as levee:
+            _executer_controle({("Sales Invoice", "ACC-SINV-2026-01068"):
+                                {"docstatus": 2, "is_opening": "No"}},
+                               "ACC-SINV-2026-01068")
+        self.assertIn("ACC-SINV-2026-01068", str(levee.exception))
+
+    def test_une_cible_inconnue_ne_bloque_pas(self):
+        """Ni commande ni facture retrouvée : rien ne prouve qu'il y ait un problème."""
+        _executer_controle({}, "VIEUX-REF-42")
 
 
 class TestFixtureTraitementDesEncaissements(unittest.TestCase):
