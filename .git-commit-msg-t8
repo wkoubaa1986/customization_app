@@ -1,0 +1,23 @@
+fix(encaissement): ne plus lier un document annulé à l'encaissement de dettes (#8)
+
+Encaisser une dette par chèque depuis « Rapport caisse journalière » échouait sur
+« Impossible de lier le document annulé » (CancelledLinkError), après que le Server
+Script eut déjà supprimé la facture d'origine. Trois portes d'entrée, toutes fermées :
+
+- « Traitement des encaissement » (fixture) : la recopie des liens BL/commande dans
+  la facture recréée (v5.80.1) ne garde le lien que si le document est ENCORE soumis ;
+  so_detail/dn_detail suivent leur parent. Un contrôle préalable refuse, AVANT toute
+  écriture, une dette dont la commande ou la facture est annulée, en nommant la dette
+  et le document.
+- caisse_encaissement_dettes : `_motif_non_encaissable` (fonction pure) marque ces
+  dettes, `dettes_client` les renvoie non encaissables avec leur motif, `encaisser`
+  les refuse en français et ne pose `bl` que sur une commande soumise, `valider`
+  traduit CancelledLinkError en message nommant l'ENC et le document, après rollback.
+- Dialogue de la caisse : dette non encaissable grisée, non cochable, motif affiché ;
+  en cas d'échec de `valider`, `abandonner` supprime le brouillon.
+
+Tests unitaires purs : la règle de filtrage, et la fixture du Server Script
+(compilation, liens conditionnés au docstatus, contrôle avant écriture).
+Version 5.80.3.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>

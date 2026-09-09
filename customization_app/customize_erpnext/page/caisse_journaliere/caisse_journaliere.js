@@ -695,15 +695,20 @@ function rcj_encaissement_dettes(rapport) {
           [format_currency(total_sel, "TND")]));
         return;
       }
+      // UN SEUL GESTE (décision utilisateur 09/09/2026) : le serveur crée ET valide
+      // l'encaissement dans la même transaction. Plus de confirmation intermédiaire,
+      // donc plus jamais de brouillon abandonné — en cas d'échec, il ne reste rien.
+      // ⚠️ `soumettre` est passé EXPLICITEMENT : le défaut du serveur reste l'ancien
+      // enchaînement en deux temps, pour les dialogues restés ouverts au déploiement.
       frappe.call({
         method: API + ".encaisser",
-        args: { client: v.client,
+        args: { client: v.client, soumettre: 1,
                 paiements: JSON.stringify(etat.paiements.map((p) => ({
                   mode: p.mode, montant: p.montant, n_piece: p.n_piece,
                   banque: p.banque, photo: p.photo, photo_nom: p.photo_nom }))),
                 dettes: JSON.stringify(choisies.map((x) => x.paiement)) },
-        freeze: true, freeze_message: __("Calcul de l'allocation…"),
-        callback: (r) => confirmer(r.message),
+        freeze: true, freeze_message: __("Encaissement…"),
+        callback: (r) => resultat(r.message),
       });
     },
   });
@@ -745,16 +750,34 @@ function rcj_encaissement_dettes(rapport) {
         // Les banques alimentent les selects des lignes de paiement (plus de champ
         // « banque » au niveau du dialogue depuis le multi-pièces).
         if (m.banques && m.banques.length) etat.banques = m.banques;
-        const lignes = etat.dettes.map((x) => `
-          <tr><td style="text-align:center"><input type="checkbox" class="rcj-dette" checked
+        // Une dette dont la commande (ou la facture) est ANNULÉE n'est pas encaissable :
+        // le paiement porterait un lien vers un document annulé et Frappe le refuse
+        // (« Impossible de lier le document annulé »), après coup. On la montre grisée
+        // avec son motif — décocher ne suffirait pas, il ne faut pas pouvoir la cocher.
+        const encaissable = (x) => x.encaissable !== false;
+        // Le document qui bloque n'est pas toujours celui affiché en face de la dette :
+        // une dette facturée montre sa FACTURE, alors que c'est sa COMMANDE d'origine
+        // qui est annulée. On le nomme dès qu'il diffère.
+        const motif = (x) => (x.motif || "") + (x.document_bloquant
+          && x.document_bloquant !== x.commande ? ` (${x.document_bloquant})` : "");
+        const total_encaissable = etat.dettes.filter(encaissable)
+          .reduce((s, x) => s + x.montant, 0);
+        const lignes = etat.dettes.map((x) => {
+          const bloquee = !encaissable(x);
+          return `
+          <tr style="${bloquee ? "opacity:.6" : ""}">
+              <td style="text-align:center"><input type="checkbox" class="rcj-dette"
+                     ${bloquee ? "disabled" : "checked"}
                      data-pe="${frappe.utils.escape_html(x.paiement)}"></td>
               <td>${frappe.utils.escape_html(x.paiement)}</td>
-              <td>${lien_commande(x)}</td>
+              <td>${lien_commande(x)}${bloquee ? `<br><span class="text-danger"
+                    style="font-size:11px">${frappe.utils.escape_html(motif(x))}</span>` : ""}</td>
               <td style="text-align:right">${x.commande_ttc
                 ? format_currency(x.commande_ttc, "TND") : "—"}</td>
               <td>${x.commande_date ? frappe.datetime.str_to_user(x.commande_date) : "—"}</td>
               <td>${frappe.datetime.str_to_user(x.date)}</td>
-              <td style="text-align:right">${format_currency(x.montant, "TND")}</td></tr>`).join("");
+              <td style="text-align:right">${format_currency(x.montant, "TND")}</td></tr>`;
+        }).join("");
         d.fields_dict.liste.$wrapper.html(etat.dettes.length ? `
           <div style="overflow-x:auto">
           <table class="table table-bordered" style="margin-top:8px;font-size:12px;min-width:640px">
@@ -769,18 +792,21 @@ function rcj_encaissement_dettes(rapport) {
                   <th style="text-align:right">${format_currency(m.total, "TND")}</th></tr>
               <tr><th colspan="6">${__("Total sélectionné")}</th>
                   <th style="text-align:right" class="rcj-total-sel">${
-                    format_currency(m.total, "TND")}</th></tr>
+                    format_currency(total_encaissable, "TND")}</th></tr>
             </tfoot>
           </table></div>
           <div class="text-muted" style="font-size:11px">${
-            __("Décochez une dette pour l'écarter — l'allocation suit la sélection (FIFO par date de commande).")}</div>`
+            __("Décochez une dette pour l'écarter — l'allocation suit la sélection (FIFO par date de commande).")}</div>
+          ${etat.dettes.some((x) => !encaissable(x)) ? `<div class="text-danger" style="font-size:11px">${
+            __("Les dettes grisées ne sont pas encaissables : leur document est annulé et ne peut plus recevoir de paiement.")}</div>` : ""}`
           : `<div class="text-muted" style="margin-top:8px">${
             __("Aucune dette encaissable pour ce client.")}</div>`);
         d.fields_dict.liste.$wrapper.find("input.rcj-dette")
           .on("change", () => { maj_total_selection(); maj_total_paiements(); });
-        // Une seule ligne Espèces préremplie au total : le cas le plus fréquent
-        // reste à un clic, les pièces multiples s'ajoutent par le bouton.
-        etat.paiements = [{ mode: "Espèces", montant: m.total, n_piece: "",
+        // Une seule ligne Espèces préremplie au total ENCAISSABLE (les dettes grisées
+        // ne sont pas cochées) : le cas le plus fréquent reste à un clic, les pièces
+        // multiples s'ajoutent par le bouton.
+        etat.paiements = [{ mode: "Espèces", montant: total_encaissable, n_piece: "",
                             banque: "", photo: null, photo_nom: null }];
         render_paiements();
       },
@@ -887,7 +913,9 @@ function rcj_encaissement_dettes(rapport) {
     },
   });
 
-  function confirmer(res) {
+  // L'encaissement est FAIT quand on arrive ici : on rend compte de ce qui a été
+  // enregistré (répartition, reliquat) et des avertissements sur les photos.
+  function resultat(res) {
     d.hide();
     const lignes = (res.allocation || []).map((a) => `
       <tr><td>${frappe.utils.escape_html(a.paiement)}</td>
@@ -904,7 +932,7 @@ function rcj_encaissement_dettes(rapport) {
         <ul style="margin:6px 0 0 18px">${res.avertissements.map((a) =>
           `<li>${frappe.utils.escape_html(a)}</li>`).join("")}</ul>
         <div class="text-muted" style="font-size:11px">${
-          __("Simple avertissement : vérifie la pièce, puis confirme ou annule.")}</div>
+          __("Simple avertissement : contrôle la pièce — l'encaissement est déjà enregistré.")}</div>
       </div>` : "";
     const corps = `
       ${avert}
@@ -917,23 +945,14 @@ function rcj_encaissement_dettes(rapport) {
                    <th style="text-align:right">${__("Dette totale")}</th></tr></thead>
         <tbody>${lignes}</tbody></table></div>
       ${res.restant > 0.001 ? `<p class="text-muted">${
-        __("Reliquat non couvert : {0} — une dette sera recréée sur la commande concernée.",
+        __("Reliquat non couvert : {0} — une dette a été recréée sur la commande concernée.",
           [format_currency(res.restant, "TND")])}</p>` : ""}`;
-    frappe.confirm(corps, () => {
-      frappe.call({
-        method: API + ".valider", args: { name: res.name },
-        freeze: true, freeze_message: __("Encaissement…"),
-        callback: () => {
-          frappe.show_alert(
-            { message: __("Dettes encaissées ({0}).", [res.name]), indicator: "green" });
-          // La caisse reflète l'encaissement sans geste supplémentaire.
-          if (rapport && rapport._fetch) rapport._fetch();
-        },
-      });
-    }, () => {
-      // Refus : le brouillon ne doit pas rester, il fausserait le prochain calcul.
-      frappe.call({ method: API + ".abandonner", args: { name: res.name } });
-    });
+    frappe.msgprint({ title: __("Dettes encaissées ({0})", [res.name]),
+                      message: corps, indicator: "green" });
+    frappe.show_alert(
+      { message: __("Dettes encaissées ({0}).", [res.name]), indicator: "green" });
+    // La caisse reflète l'encaissement sans geste supplémentaire.
+    if (rapport && rapport._fetch) rapport._fetch();
   }
 
   d.show();

@@ -16,10 +16,15 @@ d'encaissement) et ses deux Server Scripts :
     pas tout), supprime les anciennes PE de dette et crée LE paiement
     (Espèces - A&S, ou Chèques - A&S en attente de remise pour un chèque).
 
-Ce module est donc un simple FRONT : il fabrique le document avec UNE ligne de
-paiement, laisse le script d'enregistrement calculer l'allocation, la montre à
-l'employé pour confirmation, puis soumet. Le montant est plafonné à la somme
-des dettes du client — un trop-perçu n'a pas de sens ici.
+Ce module est donc un simple FRONT : il fabrique le document, construit
+l'allocation, LE VALIDE dans la foulée et rend le compte rendu à l'employé. Le
+montant est plafonné à la somme des dettes du client — un trop-perçu n'a pas de
+sens ici.
+
+⚠️ EN UN SEUL GESTE, SANS BROUILLON (décision utilisateur 09/09/2026) : création
+et validation partagent la même transaction. Un échec du Server Script rembobine
+l'ensemble et ne laisse RIEN derrière — l'ancien enchaînement (créer, confirmer,
+valider) semait un ENC en brouillon à chaque tentative ratée.
 """
 
 import base64
@@ -28,7 +33,7 @@ import re
 
 import frappe
 from frappe import _
-from frappe.utils import flt, nowdate
+from frappe.utils import cint, flt, nowdate
 
 COMPTE_DETTES = "Dettes - A&S"
 COMPTE_ARAMEX = "Livraison Aramex - A&S"
@@ -40,9 +45,146 @@ ROLES = ("System Manager", "Accounts Manager", "Accounts User",
 # sa remise Aramex et ne se traite pas ici.
 _RX_SUIVI = re.compile(r"Aramex\s*N[^0-9]*[0-9]{6,}")
 
+#: Les motifs qui interdisent d'encaisser une dette. Libellés en clair (pas de
+#: `_()`) : ils traversent l'API vers le dialogue ET se testent hors site.
+MOTIF_COMMANDE_ANNULEE = "commande annulée"
+MOTIF_FACTURE_ANNULEE = "facture annulée"
+
+
+def _motif_non_encaissable(documents):
+    """Le motif qui interdit d'encaisser cette dette, et le document responsable.
+
+    ⚠️ FONCTION PURE (aucune base) : c'est LA règle, et elle se teste telle quelle.
+
+    `documents` : les pièces auxquelles la dette est attachée, dans l'ordre où on
+    les nomme — `(doctype, nom, docstatus)`. Il y en a DEUX quand « Facturation
+    Auto » est passé par là : la dette porte alors la FACTURE dans ses références
+    tout en gardant la COMMANDE dans `reference_no`. L'une comme l'autre suffit à
+    bloquer l'encaissement.
+    → `(motif, nom du document en cause)` ; `("", "")` si la dette est encaissable.
+
+    Une dette dont la commande — ou la facture — est ANNULÉE ne peut plus être
+    encaissée : le paiement créé par « Traitement des encaissement » porterait un
+    lien vers ce document annulé, et Frappe le refuse (`CancelledLinkError`,
+    « Impossible de lier le document annulé ») APRÈS avoir supprimé des dettes et
+    réécrit des échéanciers.
+
+    Une dette sans document identifié reste encaissable : rien ne dit qu'elle est
+    annulée, et le script sait la traiter par la référence de son paiement. Une
+    commande encore en brouillon n'est pas annulée non plus — elle est seulement
+    impropre au champ `bl`, ce dont `encaisser` se charge.
+    """
+    for doctype, nom, docstatus in documents:
+        if not nom or not doctype:
+            continue
+        if cint(docstatus) == 2:
+            return ((MOTIF_FACTURE_ANNULEE if doctype == "Sales Invoice"
+                     else MOTIF_COMMANDE_ANNULEE), nom)
+    return "", ""
+
+
+#: Les refus opposables à une sélection de dettes, dans l'ordre où ils
+#: s'appliquent : la liste périmée d'abord, le motif détaillé, puis le générique.
+REFUS_DISPARUES = "disparues"
+REFUS_BLOQUEES = "bloquees"
+REFUS_AUCUNE = "aucune"
+
+
+def _trier_selection(toutes, selection):
+    """Les dettes retenues pour l'encaissement, ou le refus à opposer à l'employé.
+
+    ⚠️ FONCTION PURE (aucune base) : elle porte l'ORDRE des refus, et c'est lui
+    qui se teste. Un client dont l'UNIQUE dette est annulée doit lire pourquoi —
+    quelle dette, quel document — et non « aucune dette encaissable », qui ne
+    nomme rien et laisse l'employé sans prise.
+
+    `toutes` : les dettes du client (`_dettes`), chacune avec son `motif`.
+    `selection` : les dettes cochées ; vide, l'employé prend tout l'encaissable.
+    → `(choisies, refus)`, `refus` valant `None` ou `(code, en_cause)` — les dettes
+    fautives, ou leurs seuls noms pour `REFUS_DISPARUES` (elles n'existent plus).
+    """
+    par_nom = {r["name"]: r for r in toutes}
+    encaissables = [r for r in toutes if not r["motif"]]
+    if not selection:
+        # Aucune sélection : l'employé prend tout ce qui est encaissable.
+        choisies = encaissables
+    else:
+        # ⚠️ JAMAIS DE REPLI SUR UNE SÉLECTION EXPLICITE. Une dette cochée qui n'est
+        # plus dans la liste veut dire que celle-ci a bougé — typiquement parce que
+        # l'encaissement a DÉJÀ eu lieu : la dette de 200 a disparu, remplacée par
+        # son reliquat de 100. Retomber sur « tout l'encaissable » ferait alors
+        # payer le reliquat une seconde fois, sans confirmation, la validation
+        # étant immédiate. On refuse tout et on redemande une liste à jour.
+        disparues = [n for n in selection if n not in par_nom]
+        if disparues:
+            return [], (REFUS_DISPARUES, disparues)
+        # `par_nom` porte TOUTES les dettes, bloquées comprises : une dette annulée
+        # explicitement cochée doit être REFUSÉE avec son motif, pas ignorée.
+        choisies = [par_nom[n] for n in selection]
+    bloquees = [r for r in choisies if r["motif"]]
+    if bloquees:
+        return [], (REFUS_BLOQUEES, bloquees)
+    if not choisies:
+        return [], (REFUS_AUCUNE, [])
+    return choisies, None
+
+
+#: Les documents auxquels une dette peut être attachée, et le champ qui porte
+#: leur date. L'ordre est celui de la recherche : une commande d'abord.
+_DOCUMENTS = (("Sales Order", "transaction_date"), ("Sales Invoice", "posting_date"))
+
+
+def _document(doctype, nom, champ_date):
+    """La fiche minimale d'un document lié (`None` s'il n'existe pas).
+
+    ⚠️ SEUL POINT DE LECTURE de `_qualifier` : les tests le remplacent pour jouer
+    la qualification d'une dette sans ouvrir de base."""
+    return frappe.db.get_value(doctype, nom, ["grand_total", champ_date, "docstatus"],
+                               as_dict=True)
+
+
+def _qualifier(r):
+    """Attache à UNE dette sa commande (ou sa facture), puis son motif de blocage.
+
+    Deux pièces sont interrogées, pas une : celle des références du paiement ET
+    celle de `reference_no`. « Facturation Auto » recopie le paiement en gardant
+    `reference_no` (la COMMANDE) mais remplace ses références par la FACTURE — la
+    commande annulée d'une dette facturée passait alors inaperçue jusqu'à l'échec
+    de la validation, la dette restant cochable dans le dialogue.
+    """
+    r.montant = flt(r.paid_amount, 3)
+    # La commande vit dans les references ; à défaut, `reference_no` la porte
+    # (patron du script « Traitement des encaissement »).
+    r.commande = r.commande or (r.reference_no or "").strip()
+    r.commande_doctype = ""
+    r.commande_ttc = 0.0
+    r.commande_date = ""
+    r.commande_docstatus = None
+    candidats = []
+    if r.commande:
+        for dt, champ_date in _DOCUMENTS:
+            meta = _document(dt, r.commande, champ_date)
+            if meta:
+                r.commande_doctype = dt
+                r.commande_ttc = flt(meta.grand_total, 3)
+                r.commande_date = str(meta.get(champ_date) or "")
+                r.commande_docstatus = cint(meta.docstatus)
+                candidats.append((dt, r.commande, meta.docstatus))
+                break
+    # La commande d'origine, quand la dette a été facturée depuis (`reference_no`
+    # reste la commande alors que les références portent la facture).
+    origine = (r.reference_no or "").strip()
+    if origine and origine != r.commande:
+        meta = _document("Sales Order", origine, "transaction_date")
+        if meta:
+            candidats.append(("Sales Order", origine, meta.docstatus))
+    r.motif, r.document_bloquant = _motif_non_encaissable(candidats)
+    return r
+
 
 def _dettes(client):
-    """Les dettes encaissables du client, plus anciennes d'abord."""
+    """Les dettes du client, plus anciennes d'abord, chacune avec son `motif` —
+    vide si elle est encaissable (voir `_motif_non_encaissable`)."""
     rows = frappe.db.sql(
         """
         SELECT pe.name, pe.paid_amount, pe.posting_date, pe.reference_no, pe.paid_to,
@@ -60,23 +202,7 @@ def _dettes(client):
         as_dict=True,
     )
     for r in rows:
-        r.montant = flt(r.paid_amount, 3)
-        # La commande vit dans les references ; à défaut, `reference_no` la porte
-        # (patron du script « Traitement des encaissement »).
-        r.commande = r.commande or (r.reference_no or "").strip()
-        r.commande_doctype = ""
-        r.commande_ttc = 0.0
-        r.commande_date = ""
-        if r.commande:
-            for dt, champ_date in (("Sales Order", "transaction_date"),
-                                   ("Sales Invoice", "posting_date")):
-                meta = frappe.db.get_value(dt, r.commande, ["grand_total", champ_date],
-                                           as_dict=True)
-                if meta:
-                    r.commande_doctype = dt
-                    r.commande_ttc = flt(meta.grand_total, 3)
-                    r.commande_date = str(meta.get(champ_date) or "")
-                    break
+        _qualifier(r)
     # L'ordre des dettes suit la DATE DE LA COMMANDE (décision utilisateur 19/08) :
     # c'est elle qui dit l'ancienneté réelle — la dette n'est que son enregistrement.
     # Repli sur la date de la dette quand la commande n'en a pas.
@@ -129,10 +255,14 @@ def dettes_client(client):
     banques = (frappe.get_meta("Liste des Dettes client")
                .get_field("banque").options or "").split("\n")
     return {
+        # `encaissable`/`motif` : le dialogue grise la dette dont le document est
+        # annulé plutôt que de laisser l'employé la cocher et échouer à la validation.
         "dettes": [{"paiement": r.name, "commande": r.commande,
                     "commande_doctype": r.commande_doctype, "commande_ttc": r.commande_ttc,
                     "commande_date": r.commande_date,
-                    "date": str(r.posting_date), "montant": r.montant, "compte": r.paid_to}
+                    "date": str(r.posting_date), "montant": r.montant, "compte": r.paid_to,
+                    "encaissable": not r.motif, "motif": r.motif,
+                    "document_bloquant": r.document_bloquant}
                    for r in rows],
         "total": round(sum(r.montant for r in rows), 3),
         "banques": [b for b in banques if b.strip()],
@@ -238,6 +368,21 @@ def _verifier_photo(p):
         return [_("{0} : la vérification automatique de la photo n'a pas pu être "
                   "faite (service indisponible).").format(etiquette)]
 
+    return _comparer_photo(lu, p, etiquette, libelle)
+
+
+def _comparer_photo(lu, p, etiquette, libelle):
+    """Confronte la lecture du modèle au saisi → liste d'avertissements.
+
+    ⚠️ FONCTION PURE ET TOLÉRANTE. Le modèle est censé rendre un objet JSON, mais
+    rien ne l'y oblige : « null », « [] » ou un nombre passent `json.loads` sans
+    broncher, et lire `.get` dessus lèverait une AttributeError — APRÈS que
+    l'encaissement est enregistré. On n'exploite donc que ce qui est exploitable,
+    et on le dit à l'employé plutôt que de casser.
+    """
+    if not isinstance(lu, dict):
+        return [_("{0} : la lecture automatique n'a rien rendu d'exploitable — "
+                  "contrôle à l'œil.").format(etiquette)]
     avert = []
     if not lu.get("lisible", True):
         avert.append(_("{0} : la photo semble illisible ou ne montre pas un {1}.")
@@ -259,10 +404,56 @@ def _verifier_photo(p):
     return avert
 
 
+def _avertissements_photos(lignes_paiement):
+    """Les avertissements de lecture des photos — JAMAIS une exception.
+
+    ⚠️ APPELÉ APRÈS LE COMMIT : l'encaissement est enregistré, définitivement. Une
+    panne ici (modèle, réseau, réponse inattendue) ne doit surtout pas ressembler à
+    un échec : l'employé recommencerait, et le client paierait deux fois. Tout ce
+    qui casse devient un avertissement.
+    """
+    avertissements = []
+    for p in lignes_paiement:
+        if p["mode"] == "Espèces" or not p.get("photo"):
+            continue
+        try:
+            avertissements += _verifier_photo(p)
+        except Exception:
+            avertissements.append(
+                _("La vérification automatique des photos n'a pas abouti — "
+                  "l'encaissement est bien enregistré, contrôlez les pièces à l'œil."))
+            try:
+                frappe.log_error(title="Caisse : vérification photo en échec",
+                                 message=frappe.get_traceback())
+            except Exception:
+                pass    # journaliser ne doit pas non plus faire échouer l'après-coup
+    return avertissements
+
+
+def _soumettre(doc):
+    """Soumet l'encaissement — le script « Traitement des encaissement » consomme les
+    dettes, réécrit les échéanciers (reliquat recréé si partiel) et crée le paiement.
+
+    Un lien vers un document annulé fait tout échouer, et Frappe dit « Impossible de
+    lier le document annulé » sans nommer l'encaissement ni dire quoi faire. On
+    rembobine — le script a pu supprimer des dettes et réécrire des échéanciers avant
+    de buter, RIEN ne doit rester à moitié écrit — et on nomme les deux.
+    """
+    try:
+        doc.submit()
+    except frappe.CancelledLinkError as e:
+        frappe.db.rollback()
+        frappe.throw(_("Encaissement {0} refusé : il faudrait relier un document annulé "
+                       "({1}). Rien n'a été enregistré — retirez de la sélection la dette "
+                       "qui porte ce document, ou faites-le rétablir.")
+                     .format(doc.name, re.sub(r"<[^>]+>", " ", str(e)).strip()))
+
+
 @frappe.whitelist()
 def encaisser(client, montant=None, mode=None, n_cheque=None, banque=None, dettes=None,
-              photo=None, photo_nom=None, paiements=None):
-    """Crée le BROUILLON d'encaissement et retourne l'allocation, pour confirmation.
+              photo=None, photo_nom=None, paiements=None, soumettre=0):
+    """Encaisse les dettes sélectionnées : construit le document, l'attache aux
+    photos et LE VALIDE dans la foulée (`soumettre`), puis rend l'allocation obtenue.
 
     `paiements` : la liste des paiements reçus (JSON) — PLUSIEURS chèques et/ou
     traites et/ou espèces pour la même sélection de dettes, chacun avec son
@@ -272,7 +463,13 @@ def encaisser(client, montant=None, mode=None, n_cheque=None, banque=None, dette
     défaut du dialogue les coche toutes, mais il peut en écarter. L'allocation est
     construite ICI — dettes en FIFO par date de commande, paiements dans l'ordre
     de saisie — et le drapeau `custom_allocation_manuelle` empêche le Server
-    Script de la régénérer. Rien n'est soumis ici.
+    Script de la régénérer.
+    `soumettre` : validation immédiate, ce que demande le dialogue de la caisse.
+    ⚠️ LE DÉFAUT RESTE 0 — un dialogue déjà ouvert au moment du déploiement appelle
+    cette méthode SANS le paramètre, puis propose de confirmer ou d'annuler : s'il
+    recevait un document déjà soumis, l'employé pourrait croire annuler une
+    opération pourtant enregistrée (et `valider`/`abandonner` la refuseraient).
+    L'ancien enchaînement en deux temps reste donc le contrat par défaut.
     """
     frappe.only_for(ROLES)
     if isinstance(paiements, str):
@@ -283,12 +480,24 @@ def encaisser(client, montant=None, mode=None, n_cheque=None, banque=None, dette
     lignes_paiement = _valider_paiements(paiements)
     total = round(sum(p["montant"] for p in lignes_paiement), 3)
 
-    toutes = _dettes(client)
-    if not toutes:
-        frappe.throw(_("Le client {0} n'a aucune dette encaissable.").format(client))
     selection = json.loads(dettes) if isinstance(dettes, str) else (dettes or [])
-    par_nom = {r.name: r for r in toutes}
-    choisies = [par_nom[n] for n in selection if n in par_nom] or toutes
+    choisies, refus = _trier_selection(_dettes(client), selection)
+    if refus and refus[0] == REFUS_DISPARUES:
+        frappe.throw(_("Ces dettes ne sont plus dans la liste du client : {0}. La liste "
+                       "a changé depuis son affichage — elles viennent peut-être d'être "
+                       "encaissées. RIEN n'a été enregistré : rouvrez le client pour "
+                       "recharger ses dettes avant de recommencer.")
+                     .format(", ".join(str(n) for n in refus[1])))
+    if refus and refus[0] == REFUS_BLOQUEES:
+        # Le document nommé est CELUI QUI BLOQUE : pour une dette facturée, c'est
+        # la commande d'origine, pas la facture affichée en face de la dette.
+        details = ", ".join("{0} ({1} : {2})".format(
+            r.name, r.motif, r.document_bloquant or r.commande) for r in refus[1])
+        frappe.throw(_("Ces dettes ne peuvent pas être encaissées : {0}. Décochez-les — "
+                       "un document annulé ne peut plus recevoir de paiement.")
+                     .format(details))
+    if refus:
+        frappe.throw(_("Le client {0} n'a aucune dette encaissable.").format(client))
     total_selection = round(sum(r.montant for r in choisies), 3)
     if total > total_selection + 0.001:
         frappe.throw(_("Le total des paiements ({0}) dépasse la somme des dettes "
@@ -319,8 +528,14 @@ def encaisser(client, montant=None, mode=None, n_cheque=None, banque=None, dette
                     key=lambda x: (x.commande_date or str(x.posting_date),
                                    str(x.posting_date), x.name)):
         reste_dette = r.montant
-        bl = r.reference_no if r.reference_no and frappe.db.exists(
-            "Sales Order", r.reference_no) else None
+        # ⚠️ NE POSER `bl` QUE SUR UNE COMMANDE SOUMISE. Le champ est un lien : une
+        # commande annulée le fait refuser à l'insert (« Impossible de lier le
+        # document annulé »), et le script sait de toute façon retrouver la cible
+        # par la référence du paiement quand `bl` est vide.
+        bl = None
+        if r.reference_no and cint(frappe.db.get_value(
+                "Sales Order", r.reference_no, "docstatus")) == 1:
+            bl = r.reference_no
         while reste_dette > 0.0005 and i_paiement < len(file_paiements):
             p = file_paiements[i_paiement]
             if p["reste"] <= 0.0005:
@@ -356,37 +571,46 @@ def encaisser(client, montant=None, mode=None, n_cheque=None, banque=None, dette
                   base64.b64decode(contenu), "Encaissement Paiement", doc.name,
                   is_private=1)
 
+    # ⚠️ PAS DE BROUILLON (décision utilisateur 09/09/2026). L'encaissement se valide
+    # d'un seul geste : le commit n'intervient qu'APRÈS la soumission. Si le
+    # « Traitement des encaissement » échoue, Frappe rembobine tout et il ne reste
+    # RIEN — ni brouillon à reprendre, ni photo, ni paiement à moitié créé. C'est
+    # l'inverse de l'ancien enchaînement (insert + commit, puis validation séparée),
+    # qui laissait un ENC en brouillon à chaque échec.
+    if cint(soumettre):
+        _soumettre(doc)
+
     frappe.db.commit()
 
     # Vérification OpenAI des photos (chèques et traites), APRÈS le commit : le
-    # brouillon existe déjà, une panne du modèle ne peut plus rien lui faire.
-    avertissements = []
-    for p in lignes_paiement:
-        if p["mode"] != "Espèces" and p.get("photo"):
-            avertissements += _verifier_photo(p)
+    # document existe déjà, une panne du modèle ne peut plus rien lui faire. Ce sont
+    # des AVERTISSEMENTS, jamais un blocage — ils sont rendus à l'employé, qui
+    # contrôle la pièce et annule l'encaissement lui-même s'il y a lieu.
+    avertissements = _avertissements_photos(lignes_paiement)
 
     return {"name": doc.name, "allocation": allocation, "total_dettes": total_selection,
             "total_paiements": total, "restant": round(total_selection - total, 3),
-            "avertissements": avertissements}
+            "avertissements": avertissements, "valide": bool(cint(soumettre))}
 
 
 @frappe.whitelist()
 def valider(name):
-    """Soumet le brouillon : le script « Traitement des encaissement » consomme les
-    dettes, réécrit les échéanciers (reliquat recréé si partiel) et crée le paiement."""
+    """Soumet un brouillon resté en attente : encaissement créé avec `soumettre=0`,
+    ou repris d'avant la validation immédiate (l'ENC en brouillon de la prod)."""
     frappe.only_for(ROLES)
     doc = frappe.get_doc("Encaissement Paiement", name)
     if doc.docstatus != 0:
         frappe.throw(_("{0} n'est plus un brouillon.").format(name))
-    doc.submit()
+    _soumettre(doc)
     frappe.db.commit()
     return {"name": doc.name}
 
 
 @frappe.whitelist()
 def abandonner(name):
-    """L'employé a refermé le dialogue sans confirmer : le brouillon ne doit pas
-    rester (sa clé consommerait les dettes aux yeux du prochain calcul)."""
+    """Supprime un brouillon d'encaissement resté en plan — ceux d'avant la
+    validation immédiate, ou créés avec `soumettre=0`. Un brouillon qui traîne
+    fausse le prochain calcul de dettes."""
     frappe.only_for(ROLES)
     doc = frappe.get_doc("Encaissement Paiement", name)
     if doc.docstatus != 0:
