@@ -22,6 +22,7 @@ import unittest
 import frappe
 
 from customization_app import caisse_depenses as CD
+from customization_app.patches import ensure_reglement_caisse_field as PATCH
 
 DIALOGUE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                         "customize_erpnext", "page", "caisse_journaliere",
@@ -346,6 +347,71 @@ class TestChampReglementAbsent(_SansSite, unittest.TestCase):
         self.champ = types.SimpleNamespace(fieldname=CD.CHAMP_REGLEMENT)
         self.colonne = True
         CD._controler_champ_reglement()          # ne lève pas
+
+
+def _copier_comme_frappe(doc, champs, from_amend=False):
+    """La règle de Frappe rejouée telle quelle sur un document donné.
+
+    `frappe.model.copy_doc(doc, from_amend)` — apps/frappe/frappe/public/js/
+    frappe/model/create_new.js:281 — écarte les champs `no_copy` d'une
+    DUPLICATION (`is_no_copy = !from_amend && cint(df.no_copy) == 1`, l.291) et
+    les GARDE en amendement (« Amend » appelle `copy_doc(fn, 1)`, form.js:1035).
+    `name` et `amended_from` ne suivent jamais.
+
+    Le `no_copy` du champ vient de la VRAIE déclaration du patch : si quelqu'un
+    l'y retire, ces tests tombent.
+    """
+    jamais = {"name", "amended_from", "amendment_date", "cancel_reason"}
+    return {cle: valeur for cle, valeur in doc.items()
+            if cle not in jamais
+            and not (not from_amend and champs.get(cle, {}).get("no_copy"))}
+
+
+class TestDrapeauNonTransmisALaCopie(unittest.TestCase):
+    """Le drapeau désigne un paiement SORTI DU TIROIR. Dupliquer dans ERPNext un
+    règlement de caisse ne doit pas en fabriquer un second : le champ est en
+    lecture seule, personne ne pourrait le décocher sur la copie, et le rapport
+    compterait comme dépense de caisse un paiement saisi ailleurs — en espèces,
+    le solde théorique de la clôture baisserait sans qu'un billet ne bouge.
+    """
+
+    def setUp(self):
+        self.champs = {c["fieldname"]: c for c in [PATCH.CHAMP]}
+        self.paiement = {
+            "name": "ACC-PAY-2026-04001",
+            "payment_type": "Pay",
+            "party": "AQUA FROID",
+            "paid_amount": 300.0,
+            CD.CHAMP_REGLEMENT: 1,
+        }
+
+    def test_le_patch_declare_le_champ_no_copy(self):
+        self.assertEqual(PATCH.CHAMP["fieldname"], CD.CHAMP_REGLEMENT)
+        self.assertEqual(PATCH.CHAMP["no_copy"], 1)
+
+    def test_le_champ_reste_en_lecture_seule_et_decoche_par_defaut(self):
+        """Personne ne le pose à la main : seul `payer_factures` le coche."""
+        self.assertEqual(PATCH.CHAMP["read_only"], 1)
+        self.assertEqual(PATCH.CHAMP["default"], "0")
+        self.assertEqual(PATCH.CHAMP["fieldtype"], "Check")
+
+    def test_une_duplication_ordinaire_perd_le_drapeau(self):
+        copie = _copier_comme_frappe(self.paiement, self.champs)
+        self.assertNotIn(CD.CHAMP_REGLEMENT, copie)
+        self.assertEqual(copie["paid_amount"], 300.0)   # le reste suit bien
+
+    def test_un_amendement_garde_le_drapeau(self):
+        """Corriger un règlement RÉELLEMENT issu de la caisse doit donner un
+        paiement qui en reste un — sinon la dépense disparaîtrait du rapport."""
+        amende = _copier_comme_frappe(self.paiement, self.champs, from_amend=True)
+        self.assertEqual(amende[CD.CHAMP_REGLEMENT], 1)
+        self.assertNotIn("name", amende)
+
+    def test_un_paiement_ordinaire_ne_gagne_jamais_le_drapeau(self):
+        ordinaire = {"name": "ACC-PAY-2026-04002", "paid_amount": 50.0}
+        for from_amend in (False, True):
+            copie = _copier_comme_frappe(ordinaire, self.champs, from_amend)
+            self.assertNotIn(CD.CHAMP_REGLEMENT, copie)
 
 
 class TestDialogueDeReglement(unittest.TestCase):
