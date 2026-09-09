@@ -504,16 +504,22 @@ def _depenses_caisse(d1, d2, noms_par_user):
     # `custom_reglement_caisse` posé à la création qui les désigne — jamais les
     # règlements saisis ailleurs. Leur part ESPÈCES sort du tiroir et doit peser
     # sur le solde théorique de la clôture.
+    #
+    # ⚠️ La colonne naît d'un patch (`ensure_reglement_caisse_field`) : entre le
+    # déploiement du code et le `bench migrate`, elle n'existe pas encore et la
+    # requête ferait tomber TOUT le rapport de caisse. On regarde avant de lire.
     deja = {l["name"] for l in lignes}
-    reglements = frappe.db.sql(
-        """SELECT pe.name, pe.posting_date, pe.owner, pe.paid_amount, pe.paid_from,
-                  pe.mode_of_payment, pe.remarks, pe.reference_no, pe.party
-           FROM `tabPayment Entry` pe
-           WHERE pe.docstatus = 1 AND pe.payment_type = 'Pay'
-             AND IFNULL(pe.custom_reglement_caisse, 0) = 1
-             AND pe.posting_date BETWEEN %s AND %s
-           ORDER BY pe.posting_date DESC, pe.creation DESC""",
-        (d1, d2), as_dict=True)
+    reglements = []
+    if frappe.db.has_column("Payment Entry", "custom_reglement_caisse"):
+        reglements = frappe.db.sql(
+            """SELECT pe.name, pe.posting_date, pe.owner, pe.paid_amount, pe.paid_from,
+                      pe.mode_of_payment, pe.remarks, pe.reference_no, pe.party
+               FROM `tabPayment Entry` pe
+               WHERE pe.docstatus = 1 AND pe.payment_type = 'Pay'
+                 AND IFNULL(pe.custom_reglement_caisse, 0) = 1
+                 AND pe.posting_date BETWEEN %s AND %s
+               ORDER BY pe.posting_date DESC, pe.creation DESC""",
+            (d1, d2), as_dict=True)
     for r in reglements:
         if r.name in deja:
             continue
