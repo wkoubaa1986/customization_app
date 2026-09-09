@@ -17,6 +17,7 @@ se vérifie en recette sur des cas réels.
 from __future__ import annotations
 
 import ast
+import inspect
 import json
 import os
 import types
@@ -28,6 +29,9 @@ from customization_app import caisse_encaissement_dettes as CED
 
 FIXTURE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                        "fixtures", "server_script.json")
+DIALOGUE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "customize_erpnext", "page", "caisse_journaliere",
+                        "caisse_journaliere.js")
 NOM_SCRIPT = "Traitement des encaissement"
 
 
@@ -337,6 +341,119 @@ class TestControlePrealableDuScript(unittest.TestCase):
     def test_une_cible_inconnue_ne_bloque_pas(self):
         """Ni commande ni facture retrouvée : rien ne prouve qu'il y ait un problème."""
         _executer_controle({}, "VIEUX-REF-42")
+
+
+class TestContratDeValidation(unittest.TestCase):
+    """Les DEUX contrats d'`encaisser` : l'ancien (brouillon puis `valider`) reste
+    le défaut, le nouveau dialogue demande explicitement la validation immédiate.
+
+    Sans cela, un dialogue resté ouvert au moment du déploiement recevrait un
+    document DÉJÀ soumis et proposerait quand même de l'annuler : l'employé
+    croirait avoir renoncé à une opération pourtant enregistrée.
+    """
+
+    def test_le_defaut_laisse_un_brouillon(self):
+        self.assertEqual(
+            inspect.signature(CED.encaisser).parameters["soumettre"].default, 0)
+
+    def test_le_dialogue_demande_la_validation_immediate(self):
+        with open(DIALOGUE, encoding="utf-8") as f:
+            js = f.read()
+        appel = js[js.index('method: API + ".encaisser"'):][:600]
+        self.assertIn("soumettre: 1", appel)
+
+
+class TestLectureDePhotoTolerante(unittest.TestCase):
+    """`_comparer_photo` tourne APRÈS le commit : elle ne doit jamais lever.
+
+    Le modèle est censé rendre un objet JSON ; « null », « [] » ou un nombre
+    passent pourtant `json.loads`, et un `.get` dessus casserait alors que
+    l'encaissement est définitivement enregistré.
+    """
+
+    def setUp(self):
+        # `_()` et `flt(x, 3)` ont besoin d'un site : on les neutralise, seule la
+        # LOGIQUE se teste ici (même parti pris que les autres tests du dépôt).
+        self._vrais = (CED._, CED.flt)
+        CED._ = lambda message: message
+        CED.flt = lambda valeur, precision=None: float(valeur)
+        self.piece = {"mode": "Chèque", "montant": 161.0, "numero": "1234567"}
+
+    def tearDown(self):
+        CED._, CED.flt = self._vrais
+
+    def _comparer(self, lu):
+        return CED._comparer_photo(lu, self.piece, "chèque n°1234567", "chèque")
+
+    def test_une_reponse_qui_n_est_pas_un_objet_donne_un_avertissement(self):
+        for lu in (None, [], "illisible", 12, True):
+            avert = self._comparer(lu)
+            self.assertEqual(len(avert), 1, "réponse %r" % (lu,))
+            self.assertIn("exploitable", avert[0])
+
+    def test_un_objet_vide_ne_reproche_rien(self):
+        self.assertEqual(self._comparer({}), [])
+
+    def test_une_photo_declaree_illisible_est_signalee(self):
+        self.assertEqual(len(self._comparer({"lisible": False})), 1)
+
+    def test_un_numero_different_est_signale(self):
+        avert = self._comparer({"numero": "9999999"})
+        self.assertEqual(len(avert), 1)
+        self.assertIn("9999999", avert[0])
+
+    def test_un_montant_different_est_signale(self):
+        avert = self._comparer({"montant": 200})
+        self.assertEqual(len(avert), 1)
+        self.assertIn("200", avert[0])
+
+    def test_un_montant_illisible_ne_reproche_rien(self):
+        self.assertEqual(self._comparer({"montant": None, "numero": None}), [])
+
+
+class TestAvertissementsApresSoumission(unittest.TestCase):
+    """Une panne de la lecture des photos ne doit PAS ressembler à un échec
+    d'encaissement : le paiement est déjà enregistré, l'employé recommencerait."""
+
+    def setUp(self):
+        self._vrais = (CED._, CED._verifier_photo, frappe.log_error)
+        CED._ = lambda message: message
+        frappe.log_error = lambda **kwargs: None
+        self.pieces = [{"mode": "Chèque", "montant": 161.0, "numero": "1234567",
+                        "photo": "data:image/jpeg;base64,xxx"}]
+
+    def tearDown(self):
+        CED._, CED._verifier_photo, frappe.log_error = self._vrais
+
+    def test_une_exception_devient_un_avertissement(self):
+        def casse(piece):
+            raise AttributeError("'NoneType' object has no attribute 'get'")
+
+        CED._verifier_photo = casse
+        avert = CED._avertissements_photos(self.pieces)
+        self.assertEqual(len(avert), 1)
+        self.assertIn("l'encaissement est bien enregistré", avert[0])
+
+    def test_une_panne_du_journal_ne_casse_pas_non_plus(self):
+        """Journaliser touche la base : après le commit, elle peut aussi refuser."""
+        def casse(piece):
+            raise RuntimeError("modèle indisponible")
+
+        CED._verifier_photo = casse
+        frappe.log_error = lambda **kwargs: (_ for _ in ()).throw(RuntimeError("db"))
+        self.assertEqual(len(CED._avertissements_photos(self.pieces)), 1)
+
+    def test_les_especes_et_les_pieces_sans_photo_sont_ignorees(self):
+        CED._verifier_photo = lambda piece: ["jamais"]
+        self.assertEqual(CED._avertissements_photos([
+            {"mode": "Espèces", "montant": 50.0, "numero": "", "photo": None},
+            {"mode": "Chèque", "montant": 50.0, "numero": "1234567", "photo": None},
+        ]), [])
+
+    def test_les_avertissements_normaux_remontent(self):
+        CED._verifier_photo = lambda piece: ["chèque n°1234567 : photo illisible."]
+        self.assertEqual(CED._avertissements_photos(self.pieces),
+                         ["chèque n°1234567 : photo illisible."])
 
 
 class TestPurgeDesAvancesMortes(unittest.TestCase):

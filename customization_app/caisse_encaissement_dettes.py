@@ -353,6 +353,21 @@ def _verifier_photo(p):
         return [_("{0} : la vérification automatique de la photo n'a pas pu être "
                   "faite (service indisponible).").format(etiquette)]
 
+    return _comparer_photo(lu, p, etiquette, libelle)
+
+
+def _comparer_photo(lu, p, etiquette, libelle):
+    """Confronte la lecture du modèle au saisi → liste d'avertissements.
+
+    ⚠️ FONCTION PURE ET TOLÉRANTE. Le modèle est censé rendre un objet JSON, mais
+    rien ne l'y oblige : « null », « [] » ou un nombre passent `json.loads` sans
+    broncher, et lire `.get` dessus lèverait une AttributeError — APRÈS que
+    l'encaissement est enregistré. On n'exploite donc que ce qui est exploitable,
+    et on le dit à l'employé plutôt que de casser.
+    """
+    if not isinstance(lu, dict):
+        return [_("{0} : la lecture automatique n'a rien rendu d'exploitable — "
+                  "contrôle à l'œil.").format(etiquette)]
     avert = []
     if not lu.get("lisible", True):
         avert.append(_("{0} : la photo semble illisible ou ne montre pas un {1}.")
@@ -372,6 +387,32 @@ def _verifier_photo(p):
         avert.append(_("{0} : numéro saisi {1} ≠ numéro lu sur la photo {2}.")
                      .format(etiquette, p["numero"], numero_lu))
     return avert
+
+
+def _avertissements_photos(lignes_paiement):
+    """Les avertissements de lecture des photos — JAMAIS une exception.
+
+    ⚠️ APPELÉ APRÈS LE COMMIT : l'encaissement est enregistré, définitivement. Une
+    panne ici (modèle, réseau, réponse inattendue) ne doit surtout pas ressembler à
+    un échec : l'employé recommencerait, et le client paierait deux fois. Tout ce
+    qui casse devient un avertissement.
+    """
+    avertissements = []
+    for p in lignes_paiement:
+        if p["mode"] == "Espèces" or not p.get("photo"):
+            continue
+        try:
+            avertissements += _verifier_photo(p)
+        except Exception:
+            avertissements.append(
+                _("La vérification automatique des photos n'a pas abouti — "
+                  "l'encaissement est bien enregistré, contrôlez les pièces à l'œil."))
+            try:
+                frappe.log_error(title="Caisse : vérification photo en échec",
+                                 message=frappe.get_traceback())
+            except Exception:
+                pass    # journaliser ne doit pas non plus faire échouer l'après-coup
+    return avertissements
 
 
 def _soumettre(doc):
@@ -395,7 +436,7 @@ def _soumettre(doc):
 
 @frappe.whitelist()
 def encaisser(client, montant=None, mode=None, n_cheque=None, banque=None, dettes=None,
-              photo=None, photo_nom=None, paiements=None, soumettre=1):
+              photo=None, photo_nom=None, paiements=None, soumettre=0):
     """Encaisse les dettes sélectionnées : construit le document, l'attache aux
     photos et LE VALIDE dans la foulée (`soumettre`), puis rend l'allocation obtenue.
 
@@ -408,8 +449,12 @@ def encaisser(client, montant=None, mode=None, n_cheque=None, banque=None, dette
     construite ICI — dettes en FIFO par date de commande, paiements dans l'ordre
     de saisie — et le drapeau `custom_allocation_manuelle` empêche le Server
     Script de la régénérer.
-    `soumettre` : validation immédiate (le défaut). À 0, le document reste en
-    brouillon et attend `valider` — l'ancien enchaînement en deux temps.
+    `soumettre` : validation immédiate, ce que demande le dialogue de la caisse.
+    ⚠️ LE DÉFAUT RESTE 0 — un dialogue déjà ouvert au moment du déploiement appelle
+    cette méthode SANS le paramètre, puis propose de confirmer ou d'annuler : s'il
+    recevait un document déjà soumis, l'employé pourrait croire annuler une
+    opération pourtant enregistrée (et `valider`/`abandonner` la refuseraient).
+    L'ancien enchaînement en deux temps reste donc le contrat par défaut.
     """
     frappe.only_for(ROLES)
     if isinstance(paiements, str):
@@ -520,10 +565,7 @@ def encaisser(client, montant=None, mode=None, n_cheque=None, banque=None, dette
     # document existe déjà, une panne du modèle ne peut plus rien lui faire. Ce sont
     # des AVERTISSEMENTS, jamais un blocage — ils sont rendus à l'employé, qui
     # contrôle la pièce et annule l'encaissement lui-même s'il y a lieu.
-    avertissements = []
-    for p in lignes_paiement:
-        if p["mode"] != "Espèces" and p.get("photo"):
-            avertissements += _verifier_photo(p)
+    avertissements = _avertissements_photos(lignes_paiement)
 
     return {"name": doc.name, "allocation": allocation, "total_dettes": total_selection,
             "total_paiements": total, "restant": round(total_selection - total, 3),

@@ -698,9 +698,11 @@ function rcj_encaissement_dettes(rapport) {
       // UN SEUL GESTE (décision utilisateur 09/09/2026) : le serveur crée ET valide
       // l'encaissement dans la même transaction. Plus de confirmation intermédiaire,
       // donc plus jamais de brouillon abandonné — en cas d'échec, il ne reste rien.
+      // ⚠️ `soumettre` est passé EXPLICITEMENT : le défaut du serveur reste l'ancien
+      // enchaînement en deux temps, pour les dialogues restés ouverts au déploiement.
       frappe.call({
         method: API + ".encaisser",
-        args: { client: v.client,
+        args: { client: v.client, soumettre: 1,
                 paiements: JSON.stringify(etat.paiements.map((p) => ({
                   mode: p.mode, montant: p.montant, n_piece: p.n_piece,
                   banque: p.banque, photo: p.photo, photo_nom: p.photo_nom }))),
