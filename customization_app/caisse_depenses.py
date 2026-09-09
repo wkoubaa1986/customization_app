@@ -1298,6 +1298,296 @@ def factures_a_payer():
     return {"factures": factures, "fiches": fiches}
 
 
+# ------------------------------------------------------ règlement des factures
+# d'achat depuis la caisse (« 💸 Factures à payer » -> bouton « Payer »)
+#
+# ⚠️ UNE PIÈCE = UN SEUL PAYMENT ENTRY (décision utilisateur, ticket #10). Un
+# chèque de 500 qui couvre deux factures donne UN paiement de 500 portant DEUX
+# lignes de référence (une par facture, avec son `allocated_amount`), JAMAIS un
+# paiement par facture : c'est ce qu'attend l'identification bancaire de
+# bank_retenue_sync (un débit = un paiement, montant du débit = `paid_amount`,
+# n° du chèque en `reference_no`). À l'inverse, une facture couverte par deux
+# pièces apparaît dans DEUX paiements.
+#
+# L'affectation est FIFO : les factures de la sélection de la PLUS ANCIENNE à la
+# plus récente, les pièces dans l'ordre de saisie. Un règlement partiel est
+# accepté — la facture la plus récente reste partiellement due.
+#
+# Le règlement est TOUJOURS daté d'aujourd'hui (décision utilisateur 24/08 : pas
+# de rétroactivité en caisse).
+
+MODES_REGLEMENT = ("Espèces", "Chèque", "Virement")
+
+#: Le type affiché dans les dépenses du rapport de caisse pour ces paiements.
+TYPE_REGLEMENT = "Règlement fournisseur"
+
+#: Le drapeau qui désigne un paiement SORTI DE LA CAISSE — sans lui, le rapport
+#: ne saurait pas distinguer ces règlements de ceux saisis ailleurs.
+CHAMP_REGLEMENT = "custom_reglement_caisse"
+
+#: Les refus opposés à une sélection de factures (mêmes conventions que
+#: `caisse_encaissement_dettes._trier_selection`).
+REFUS_AUCUNE = "aucune"
+REFUS_PERIMEE = "perimee"
+REFUS_MULTI = "multi"
+
+
+def _valider_reglements(paiements):
+    """Contrôle chaque ligne de règlement du dialogue et rend la liste normalisée.
+
+    Chèque : n° à 7 chiffres + banque + photo (mêmes règles que
+    `_paiements_normalises`, et (n°, banque) jamais saisi deux fois).
+    Virement : la RÉFÉRENCE est obligatoire — le paiement sort d'un compte
+    bancaire et ERPNext exige `reference_no` ; la photo, elle, est facultative.
+    """
+    if isinstance(paiements, str):
+        paiements = json.loads(paiements or "[]")
+    lignes = []
+    vus = set()
+    for i, p in enumerate(paiements or [], start=1):
+        mode = (p.get("mode") or "").strip()
+        if mode not in MODES_REGLEMENT:
+            frappe.throw(_("Ligne {0} : mode de règlement inconnu ({1}).")
+                         .format(i, mode or _("vide")))
+        montant = flt(p.get("montant"), 3)
+        if montant <= 0:
+            frappe.throw(_("Ligne {0} : le montant doit être positif.").format(i))
+        numero = (p.get("n_piece") or p.get("n_cheque") or p.get("reference") or "").strip()
+        banque = (p.get("banque") or "").strip()
+        if mode == "Chèque":
+            if not re.fullmatch(r"\d{7}", numero):
+                frappe.throw(_("Ligne {0} : le numéro de chèque doit comporter exactement "
+                               "7 chiffres (reçu : « {1} »).")
+                             .format(i, numero or _("vide")))
+            if not banque:
+                frappe.throw(_("Ligne {0} : pour un chèque, la banque est obligatoire.")
+                             .format(i))
+            if not p.get("photo"):
+                frappe.throw(_("Ligne {0} : la photo du chèque est obligatoire.").format(i))
+            if (numero, banque) in vus:
+                frappe.throw(_("Ligne {0} : le chèque {1} ({2}) est saisi deux fois.")
+                             .format(i, numero, banque))
+            vus.add((numero, banque))
+        elif mode == "Virement" and not numero:
+            frappe.throw(_("Ligne {0} : la référence du virement est obligatoire.").format(i))
+        lignes.append({"mode": mode, "montant": montant, "numero": numero,
+                       "banque": banque, "photo": p.get("photo"),
+                       "photo_nom": p.get("photo_nom")})
+    if not lignes:
+        frappe.throw(_("Ajoutez au moins un règlement."))
+    return lignes
+
+
+def _trier_factures(lues, selection, supplier):
+    """(factures retenues, refus) pour une sélection de factures à payer.
+
+    `lues` : ce que la BASE dit maintenant — factures SOUMISES dont l'encours est
+    encore positif. Une facture cochée qui n'y est plus a été soldée entre-temps :
+    la liste affichée est PÉRIMÉE et on refuse tout, comme pour les dettes
+    (ticket #8) — on ne devine pas ce que l'employé voulait payer.
+
+    Le paiement étant par fournisseur, une sélection qui en mélange plusieurs est
+    refusée elle aussi (le dialogue l'empêche déjà, un appel direct non).
+    """
+    if not selection:
+        return [], (REFUS_AUCUNE, [])
+    par_nom = {f["name"]: f for f in lues}
+    manquantes = [n for n in selection if n not in par_nom]
+    if manquantes:
+        return [], (REFUS_PERIMEE, manquantes)
+    retenues = [par_nom[n] for n in selection]
+    if not supplier:
+        return [], (REFUS_MULTI, sorted({f["supplier"] for f in retenues}))
+    autres = sorted({f["supplier"] for f in retenues if f["supplier"] != supplier})
+    if autres:
+        return [], (REFUS_MULTI, autres)
+    return retenues, None
+
+
+def _controler_champ_reglement():
+    """Refuse TOUT règlement tant que `custom_reglement_caisse` n'existe pas.
+
+    ⚠️ SANS CE GARDE-FOU, LA CAISSE SE FAUSSE EN SILENCE. Frappe n'enregistre que
+    les champs connus du DocType : avant le patch `ensure_reglement_caisse_field`,
+    poser le drapeau sur le Payment Entry ne le persiste pas. Le paiement partirait
+    quand même — argent réellement sorti du tiroir — mais sans marqueur, et le
+    rapport de caisse ne le compterait JAMAIS, même après le `bench migrate` (la
+    colonne naît à 0). Le solde théorique de la clôture serait surévalué d'autant,
+    sans rien pour le rattraper. On préfère refuser l'opération : elle se
+    recommencera après la migration, aucune écriture n'a été faite.
+    """
+    champ = frappe.get_meta("Payment Entry").get_field(CHAMP_REGLEMENT)
+    if champ and frappe.db.has_column("Payment Entry", CHAMP_REGLEMENT):
+        return
+    frappe.throw(_("Le règlement des factures depuis la caisse n'est pas encore actif "
+                   "sur ce site : le champ « {0} » du paiement manque (la mise à jour "
+                   "n'a pas été terminée — bench migrate). RIEN n'a été enregistré ; "
+                   "prévenez l'administrateur avant de régler quoi que ce soit.")
+                 .format(CHAMP_REGLEMENT))
+
+
+def _controler_total(total, total_selection):
+    """Refuse un règlement qui dépasse le reste à payer de la sélection.
+
+    On ne crée JAMAIS d'avance ici : l'excédent resterait non alloué sur le compte
+    du fournisseur, invisible en caisse. L'employé coche une facture de plus ou
+    réduit le montant."""
+    if total > total_selection + 0.001:
+        frappe.throw(_("Le total des règlements ({0}) dépasse le reste à payer des "
+                       "factures sélectionnées ({1}) : cochez plus de factures ou "
+                       "réduisez les montants.").format(total, total_selection))
+
+
+def _repartir_fifo(factures, reglements):
+    """Affecte les règlements aux factures : « un paiement -> plusieurs (facture,
+    montant) ».
+
+    Les factures sont servies de la PLUS ANCIENNE à la plus récente (date de
+    comptabilisation, puis nom pour départager), les règlements pris dans l'ordre
+    de saisie. Fonction PURE — aucun accès à la base, c'est elle qui se teste.
+
+    ⚠️ ARRONDI LIGNE PAR LIGNE (3 décimales) : ERPNext vérifie chaque
+    `allocated_amount` contre l'encours de sa facture et leur somme contre
+    `paid_amount` — un arrondi global ferait échouer la soumission sur des millimes.
+    """
+    file_factures = [{"name": f["name"], "reste": round(float(f["reste"]), 3)}
+                     for f in sorted(factures,
+                                     key=lambda f: (str(f.get("posting_date") or ""),
+                                                    f["name"]))]
+    i = 0
+    repartition = []
+    for p in reglements:
+        reste_piece = round(float(p["montant"]), 3)
+        references = []
+        while reste_piece > 0.0005 and i < len(file_factures):
+            f = file_factures[i]
+            if f["reste"] <= 0.0005:
+                i += 1
+                continue
+            portion = round(min(f["reste"], reste_piece), 3)
+            f["reste"] = round(f["reste"] - portion, 3)
+            reste_piece = round(reste_piece - portion, 3)
+            references.append({"facture": f["name"], "montant": portion})
+        repartition.append({"paiement": p, "references": references,
+                            "alloue": round(float(p["montant"]) - reste_piece, 3),
+                            "non_alloue": reste_piece})
+    return repartition
+
+
+@frappe.whitelist()
+def payer_factures(supplier, factures, paiements):
+    """Règle en caisse les factures d'achat cochées d'UN fournisseur.
+
+    Crée UN Payment Entry PAR PIÈCE (voir l'en-tête de section), soumis, avec la
+    photo du chèque attachée. Rend le compte rendu de l'affectation.
+    """
+    frappe.only_for(ROLES)
+    # AVANT TOUT : sans le drapeau, un paiement créé ici échapperait pour toujours
+    # au rapport de caisse (voir `_controler_champ_reglement`).
+    _controler_champ_reglement()
+    selection = json.loads(factures) if isinstance(factures, str) else (factures or [])
+    selection = [str(n) for n in selection if n]
+    lignes = _valider_reglements(paiements)
+
+    # ⚠️ ON RELIT LA BASE, on ne fait pas confiance à ce que l'écran a envoyé :
+    # l'encours a pu bouger depuis l'affichage (autre caissier, règlement saisi
+    # ailleurs). `FOR UPDATE` verrouille les factures jusqu'au commit — deux
+    # caissiers ne peuvent pas payer la même facture en même temps.
+    lues = []
+    if selection:
+        lues = frappe.db.sql("""
+            SELECT name, supplier, posting_date, company, outstanding_amount
+            FROM `tabPurchase Invoice`
+            WHERE docstatus = 1 AND outstanding_amount > 0.001
+              AND name IN %(noms)s
+            FOR UPDATE""", {"noms": tuple(selection)}, as_dict=True)
+        for f in lues:
+            f["reste"] = flt(f.outstanding_amount, 3)
+    retenues, refus = _trier_factures(lues, selection, (supplier or "").strip())
+    if refus and refus[0] == REFUS_PERIMEE:
+        frappe.throw(_("Ces factures ne sont plus à payer : {0}. La liste a changé "
+                       "depuis son affichage — elles viennent peut-être d'être réglées. "
+                       "RIEN n'a été enregistré : rouvrez « Factures à payer » pour "
+                       "recharger la liste.").format(", ".join(refus[1])))
+    if refus and refus[0] == REFUS_MULTI:
+        frappe.throw(_("Un règlement porte sur UN SEUL fournisseur : la sélection "
+                       "contient aussi {0}.").format(", ".join(refus[1]) or _("un autre")))
+    if refus:
+        frappe.throw(_("Cochez au moins une facture à payer."))
+
+    total_selection = round(sum(f["reste"] for f in retenues), 3)
+    total = round(sum(p["montant"] for p in lignes), 3)
+    _controler_total(total, total_selection)
+
+    repartition = _repartir_fifo(retenues, lignes)
+    # Impossible après le contrôle du total — mais on ne crée JAMAIS un paiement
+    # qui ne solderait rien : l'argent sortirait de la caisse sans se rattacher à
+    # aucune facture, et resterait en avance invisible sur le fournisseur.
+    if any(r["non_alloue"] > 0.0005 for r in repartition):
+        frappe.throw(_("Ces règlements ne peuvent pas être affectés en totalité aux "
+                       "factures sélectionnées — rien n'a été enregistré."))
+
+    date = nowdate()
+    company = retenues[0].get("company") or COMPANY
+    pieces = []
+    for r in repartition:
+        p = r["paiement"]
+        pe = frappe.new_doc("Payment Entry")
+        pe.payment_type = "Pay"
+        pe.party_type = "Supplier"
+        pe.party = supplier
+        pe.company = company
+        pe.posting_date = date
+        pe.mode_of_payment = p["mode"]
+        pe.paid_from = COMPTE_ESPECES if p["mode"] == "Espèces" else COMPTE_BANQUE
+        pe.paid_to = COMPTE_CREDITEURS
+        # `paid_amount` = la SOMME DES ALLOCATIONS de la pièce : le contrôle du
+        # total garantit qu'elle vaut le montant saisi.
+        pe.paid_amount = r["alloue"]
+        pe.received_amount = r["alloue"]
+        pe.source_exchange_rate = 1
+        pe.target_exchange_rate = 1
+        if p["mode"] != "Espèces":
+            # Compte bancaire : ERPNext exige référence + date. Le n° de chèque à
+            # 7 chiffres doit s'y trouver — l'identification bancaire l'y cherche.
+            pe.reference_no = p["numero"]
+            pe.reference_date = date
+        pe.remarks = _("Règlement fournisseur depuis la caisse ({0}{1}) — {2}").format(
+            p["mode"], " n° %s" % p["numero"] if p["numero"] else "",
+            ", ".join(x["facture"] for x in r["references"]))
+        pe.set(CHAMP_REGLEMENT, 1)     # champ garanti présent (contrôle en entrée)
+        for ref in r["references"]:
+            pe.append("references", {"reference_doctype": "Purchase Invoice",
+                                     "reference_name": ref["facture"],
+                                     "allocated_amount": ref["montant"]})
+        pe.flags.ignore_permissions = True
+        pe.insert()
+        if p.get("photo"):
+            _attacher(p["photo"],
+                      p.get("photo_nom") or "cheque-%s.jpg" % (p["numero"] or pe.name),
+                      "Payment Entry", pe.name)
+        pe.submit()
+        pieces.append({"payment_entry": pe.name, "mode": p["mode"],
+                       "piece": p["numero"], "banque": p["banque"],
+                       "montant": r["alloue"], "references": r["references"]})
+
+    alloue_par_facture = {}
+    for r in repartition:
+        for ref in r["references"]:
+            alloue_par_facture[ref["facture"]] = round(
+                alloue_par_facture.get(ref["facture"], 0) + ref["montant"], 3)
+    detail_factures = [{"facture": f["name"], "reste_avant": f["reste"],
+                        "alloue": alloue_par_facture.get(f["name"], 0),
+                        "reste_apres": round(
+                            f["reste"] - alloue_par_facture.get(f["name"], 0), 3)}
+                       for f in retenues]
+
+    frappe.db.commit()
+    return {"supplier": supplier, "pieces": pieces, "factures": detail_factures,
+            "total_paiements": total, "total_selection": total_selection,
+            "restant": round(total_selection - total, 3), "date": date}
+
+
 @frappe.whitelist()
 def factures_sans_justificatif():
     """Les factures d'achat soumises depuis le 01-01-2026 SANS AUCUNE pièce

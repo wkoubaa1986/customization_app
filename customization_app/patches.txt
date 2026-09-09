@@ -44,3 +44,5 @@ customization_app.patches.ensure_ristourne_facture_field
 customization_app.patches.versionner_cron_facturation_mensuelle
 
 customization_app.patches.update_monthly_credits_notifications
+
+customization_app.patches.ensure_reglement_caisse_field
