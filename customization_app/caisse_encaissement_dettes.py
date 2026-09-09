@@ -46,28 +46,36 @@ MOTIF_COMMANDE_ANNULEE = "commande annulée"
 MOTIF_FACTURE_ANNULEE = "facture annulée"
 
 
-def _motif_non_encaissable(commande, commande_doctype, commande_docstatus):
-    """Le motif qui interdit d'encaisser cette dette, ou "" si elle est encaissable.
+def _motif_non_encaissable(documents):
+    """Le motif qui interdit d'encaisser cette dette, et le document responsable.
 
     ⚠️ FONCTION PURE (aucune base) : c'est LA règle, et elle se teste telle quelle.
 
-    Une dette dont la commande — ou la facture d'ouverture — est ANNULÉE ne peut
-    plus être encaissée : le paiement créé par « Traitement des encaissement »
-    porterait un lien vers ce document annulé, et Frappe le refuse
-    (`CancelledLinkError`, « Impossible de lier le document annulé ») APRÈS avoir
-    supprimé des dettes et réécrit des échéanciers.
+    `documents` : les pièces auxquelles la dette est attachée, dans l'ordre où on
+    les nomme — `(doctype, nom, docstatus)`. Il y en a DEUX quand « Facturation
+    Auto » est passé par là : la dette porte alors la FACTURE dans ses références
+    tout en gardant la COMMANDE dans `reference_no`. L'une comme l'autre suffit à
+    bloquer l'encaissement.
+    → `(motif, nom du document en cause)` ; `("", "")` si la dette est encaissable.
 
-    Une dette sans commande identifiée reste encaissable : rien ne dit qu'elle est
+    Une dette dont la commande — ou la facture — est ANNULÉE ne peut plus être
+    encaissée : le paiement créé par « Traitement des encaissement » porterait un
+    lien vers ce document annulé, et Frappe le refuse (`CancelledLinkError`,
+    « Impossible de lier le document annulé ») APRÈS avoir supprimé des dettes et
+    réécrit des échéanciers.
+
+    Une dette sans document identifié reste encaissable : rien ne dit qu'elle est
     annulée, et le script sait la traiter par la référence de son paiement. Une
     commande encore en brouillon n'est pas annulée non plus — elle est seulement
     impropre au champ `bl`, ce dont `encaisser` se charge.
     """
-    if not commande or not commande_doctype:
-        return ""
-    if cint(commande_docstatus) == 2:
-        return (MOTIF_FACTURE_ANNULEE if commande_doctype == "Sales Invoice"
-                else MOTIF_COMMANDE_ANNULEE)
-    return ""
+    for doctype, nom, docstatus in documents:
+        if not nom or not doctype:
+            continue
+        if cint(docstatus) == 2:
+            return ((MOTIF_FACTURE_ANNULEE if doctype == "Sales Invoice"
+                     else MOTIF_COMMANDE_ANNULEE), nom)
+    return "", ""
 
 
 #: Les deux refus opposables à une sélection de dettes, dans l'ordre où ils
@@ -101,6 +109,59 @@ def _trier_selection(toutes, selection):
     return choisies, None
 
 
+#: Les documents auxquels une dette peut être attachée, et le champ qui porte
+#: leur date. L'ordre est celui de la recherche : une commande d'abord.
+_DOCUMENTS = (("Sales Order", "transaction_date"), ("Sales Invoice", "posting_date"))
+
+
+def _document(doctype, nom, champ_date):
+    """La fiche minimale d'un document lié (`None` s'il n'existe pas).
+
+    ⚠️ SEUL POINT DE LECTURE de `_qualifier` : les tests le remplacent pour jouer
+    la qualification d'une dette sans ouvrir de base."""
+    return frappe.db.get_value(doctype, nom, ["grand_total", champ_date, "docstatus"],
+                               as_dict=True)
+
+
+def _qualifier(r):
+    """Attache à UNE dette sa commande (ou sa facture), puis son motif de blocage.
+
+    Deux pièces sont interrogées, pas une : celle des références du paiement ET
+    celle de `reference_no`. « Facturation Auto » recopie le paiement en gardant
+    `reference_no` (la COMMANDE) mais remplace ses références par la FACTURE — la
+    commande annulée d'une dette facturée passait alors inaperçue jusqu'à l'échec
+    de la validation, la dette restant cochable dans le dialogue.
+    """
+    r.montant = flt(r.paid_amount, 3)
+    # La commande vit dans les references ; à défaut, `reference_no` la porte
+    # (patron du script « Traitement des encaissement »).
+    r.commande = r.commande or (r.reference_no or "").strip()
+    r.commande_doctype = ""
+    r.commande_ttc = 0.0
+    r.commande_date = ""
+    r.commande_docstatus = None
+    candidats = []
+    if r.commande:
+        for dt, champ_date in _DOCUMENTS:
+            meta = _document(dt, r.commande, champ_date)
+            if meta:
+                r.commande_doctype = dt
+                r.commande_ttc = flt(meta.grand_total, 3)
+                r.commande_date = str(meta.get(champ_date) or "")
+                r.commande_docstatus = cint(meta.docstatus)
+                candidats.append((dt, r.commande, meta.docstatus))
+                break
+    # La commande d'origine, quand la dette a été facturée depuis (`reference_no`
+    # reste la commande alors que les références portent la facture).
+    origine = (r.reference_no or "").strip()
+    if origine and origine != r.commande:
+        meta = _document("Sales Order", origine, "transaction_date")
+        if meta:
+            candidats.append(("Sales Order", origine, meta.docstatus))
+    r.motif, r.document_bloquant = _motif_non_encaissable(candidats)
+    return r
+
+
 def _dettes(client):
     """Les dettes du client, plus anciennes d'abord, chacune avec son `motif` —
     vide si elle est encaissable (voir `_motif_non_encaissable`)."""
@@ -121,28 +182,7 @@ def _dettes(client):
         as_dict=True,
     )
     for r in rows:
-        r.montant = flt(r.paid_amount, 3)
-        # La commande vit dans les references ; à défaut, `reference_no` la porte
-        # (patron du script « Traitement des encaissement »).
-        r.commande = r.commande or (r.reference_no or "").strip()
-        r.commande_doctype = ""
-        r.commande_ttc = 0.0
-        r.commande_date = ""
-        r.commande_docstatus = None
-        if r.commande:
-            for dt, champ_date in (("Sales Order", "transaction_date"),
-                                   ("Sales Invoice", "posting_date")):
-                meta = frappe.db.get_value(dt, r.commande,
-                                           ["grand_total", champ_date, "docstatus"],
-                                           as_dict=True)
-                if meta:
-                    r.commande_doctype = dt
-                    r.commande_ttc = flt(meta.grand_total, 3)
-                    r.commande_date = str(meta.get(champ_date) or "")
-                    r.commande_docstatus = cint(meta.docstatus)
-                    break
-        r.motif = _motif_non_encaissable(r.commande, r.commande_doctype,
-                                         r.commande_docstatus)
+        _qualifier(r)
     # L'ordre des dettes suit la DATE DE LA COMMANDE (décision utilisateur 19/08) :
     # c'est elle qui dit l'ancienneté réelle — la dette n'est que son enregistrement.
     # Repli sur la date de la dette quand la commande n'en a pas.
@@ -201,7 +241,8 @@ def dettes_client(client):
                     "commande_doctype": r.commande_doctype, "commande_ttc": r.commande_ttc,
                     "commande_date": r.commande_date,
                     "date": str(r.posting_date), "montant": r.montant, "compte": r.paid_to,
-                    "encaissable": not r.motif, "motif": r.motif}
+                    "encaissable": not r.motif, "motif": r.motif,
+                    "document_bloquant": r.document_bloquant}
                    for r in rows],
         "total": round(sum(r.montant for r in rows), 3),
         "banques": [b for b in banques if b.strip()],
@@ -355,8 +396,10 @@ def encaisser(client, montant=None, mode=None, n_cheque=None, banque=None, dette
     selection = json.loads(dettes) if isinstance(dettes, str) else (dettes or [])
     choisies, refus = _trier_selection(_dettes(client), selection)
     if refus and refus[0] == REFUS_BLOQUEES:
-        details = ", ".join("{0} ({1} : {2})".format(r.name, r.motif, r.commande)
-                            for r in refus[1])
+        # Le document nommé est CELUI QUI BLOQUE : pour une dette facturée, c'est
+        # la commande d'origine, pas la facture affichée en face de la dette.
+        details = ", ".join("{0} ({1} : {2})".format(
+            r.name, r.motif, r.document_bloquant or r.commande) for r in refus[1])
         frappe.throw(_("Ces dettes ne peuvent pas être encaissées : {0}. Décochez-les — "
                        "un document annulé ne peut plus recevoir de paiement.")
                      .format(details))

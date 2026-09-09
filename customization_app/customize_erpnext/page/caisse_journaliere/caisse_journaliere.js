@@ -750,6 +750,11 @@ function rcj_encaissement_dettes(rapport) {
         // (« Impossible de lier le document annulé »), après coup. On la montre grisée
         // avec son motif — décocher ne suffirait pas, il ne faut pas pouvoir la cocher.
         const encaissable = (x) => x.encaissable !== false;
+        // Le document qui bloque n'est pas toujours celui affiché en face de la dette :
+        // une dette facturée montre sa FACTURE, alors que c'est sa COMMANDE d'origine
+        // qui est annulée. On le nomme dès qu'il diffère.
+        const motif = (x) => (x.motif || "") + (x.document_bloquant
+          && x.document_bloquant !== x.commande ? ` (${x.document_bloquant})` : "");
         const total_encaissable = etat.dettes.filter(encaissable)
           .reduce((s, x) => s + x.montant, 0);
         const lignes = etat.dettes.map((x) => {
@@ -761,7 +766,7 @@ function rcj_encaissement_dettes(rapport) {
                      data-pe="${frappe.utils.escape_html(x.paiement)}"></td>
               <td>${frappe.utils.escape_html(x.paiement)}</td>
               <td>${lien_commande(x)}${bloquee ? `<br><span class="text-danger"
-                    style="font-size:11px">${frappe.utils.escape_html(x.motif || "")}</span>` : ""}</td>
+                    style="font-size:11px">${frappe.utils.escape_html(motif(x))}</span>` : ""}</td>
               <td style="text-align:right">${x.commande_ttc
                 ? format_currency(x.commande_ttc, "TND") : "—"}</td>
               <td>${x.commande_date ? frappe.datetime.str_to_user(x.commande_date) : "—"}</td>

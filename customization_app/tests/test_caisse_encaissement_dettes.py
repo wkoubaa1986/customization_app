@@ -22,6 +22,8 @@ import os
 import types
 import unittest
 
+import frappe
+
 from customization_app import caisse_encaissement_dettes as CED
 
 FIXTURE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -91,37 +93,51 @@ class TestMotifNonEncaissable(unittest.TestCase):
     paiement porterait un lien vers lui et Frappe le refuse."""
 
     def test_une_commande_soumise_est_encaissable(self):
-        self.assertEqual(CED._motif_non_encaissable("SAL-ORD-2026-03325", "Sales Order", 1), "")
+        self.assertEqual(
+            CED._motif_non_encaissable([("Sales Order", "SAL-ORD-2026-03325", 1)]), ("", ""))
 
-    def test_une_commande_annulee_donne_un_motif(self):
-        self.assertEqual(CED._motif_non_encaissable("SAL-ORD-2026-03325", "Sales Order", 2),
-                         CED.MOTIF_COMMANDE_ANNULEE)
+    def test_une_commande_annulee_donne_un_motif_et_son_nom(self):
+        self.assertEqual(
+            CED._motif_non_encaissable([("Sales Order", "SAL-ORD-2026-03325", 2)]),
+            (CED.MOTIF_COMMANDE_ANNULEE, "SAL-ORD-2026-03325"))
 
     def test_une_facture_annulee_donne_son_propre_motif(self):
         """Une dette d'ouverture pointe une facture, pas une commande : le motif
         affiché doit parler de la facture."""
-        self.assertEqual(CED._motif_non_encaissable("ACC-SINV-2026-01068", "Sales Invoice", 2),
-                         CED.MOTIF_FACTURE_ANNULEE)
+        self.assertEqual(
+            CED._motif_non_encaissable([("Sales Invoice", "ACC-SINV-2026-01068", 2)]),
+            (CED.MOTIF_FACTURE_ANNULEE, "ACC-SINV-2026-01068"))
 
     def test_le_docstatus_en_chaine_est_compris(self):
         """`frappe.db.get_value` peut rendre le docstatus en chaîne."""
-        self.assertEqual(CED._motif_non_encaissable("WEB1-007819", "Sales Order", "2"),
-                         CED.MOTIF_COMMANDE_ANNULEE)
+        self.assertEqual(CED._motif_non_encaissable([("Sales Order", "WEB1-007819", "2")]),
+                         (CED.MOTIF_COMMANDE_ANNULEE, "WEB1-007819"))
 
     def test_une_commande_brouillon_n_est_pas_bloquee(self):
         """Un brouillon n'est pas annulé : il ne sert pas de lien `bl` (c'est
         `encaisser` qui s'en charge), mais il n'interdit pas l'encaissement."""
-        self.assertEqual(CED._motif_non_encaissable("WEB1-007819", "Sales Order", 0), "")
+        self.assertEqual(CED._motif_non_encaissable([("Sales Order", "WEB1-007819", 0)]),
+                         ("", ""))
 
-    def test_une_dette_sans_commande_reste_encaissable(self):
+    def test_une_dette_sans_document_reste_encaissable(self):
         """Le script sait la traiter par la référence de son paiement."""
-        self.assertEqual(CED._motif_non_encaissable("", "", None), "")
-        self.assertEqual(CED._motif_non_encaissable(None, None, None), "")
+        self.assertEqual(CED._motif_non_encaissable([]), ("", ""))
+        self.assertEqual(CED._motif_non_encaissable([("", "", None), (None, None, None)]),
+                         ("", ""))
 
-    def test_une_commande_introuvable_reste_encaissable(self):
-        """Aucun doctype reconnu : rien ne prouve qu'elle soit annulée, on ne
-        bloque pas l'employé sur une supposition."""
-        self.assertEqual(CED._motif_non_encaissable("VIEUX-REF-42", "", None), "")
+    def test_la_facture_soumise_n_empeche_pas_de_voir_la_commande_annulee(self):
+        """Le cas « Facturation Auto » : la dette porte la facture (soumise) ET la
+        commande d'origine (annulée). C'est la commande qu'il faut nommer."""
+        self.assertEqual(CED._motif_non_encaissable([
+            ("Sales Invoice", "ACC-SINV-2026-01068", 1),
+            ("Sales Order", "SAL-ORD-2026-03325", 2)]),
+            (CED.MOTIF_COMMANDE_ANNULEE, "SAL-ORD-2026-03325"))
+
+    def test_le_premier_document_annule_est_celui_qui_est_nomme(self):
+        self.assertEqual(CED._motif_non_encaissable([
+            ("Sales Invoice", "ACC-SINV-2026-01068", 2),
+            ("Sales Order", "SAL-ORD-2026-03325", 2)]),
+            (CED.MOTIF_FACTURE_ANNULEE, "ACC-SINV-2026-01068"))
 
 
 def _dette(nom, montant=100.0, motif="", commande="SAL-ORD-2026-03325"):
@@ -167,6 +183,90 @@ class TestTriDeLaSelection(unittest.TestCase):
         _, refus = CED._trier_selection(
             [_dette("PE-1", motif=CED.MOTIF_COMMANDE_ANNULEE)], [])
         self.assertEqual(refus, (CED.REFUS_AUCUNE, []))
+
+
+class TestDetteFactureeAvecCommandeAnnulee(unittest.TestCase):
+    """« Facturation Auto » recopie le paiement de dette en gardant `reference_no`
+    (la COMMANDE) et en remplaçant ses références par la FACTURE. Commande annulée
+    depuis, facture toujours soumise : la dette passait pour encaissable, était
+    cochée, et la validation échouait plus tard sur la commande annulée.
+
+    Les documents sont donnés en dur — `_document` est remplacé, aucune base n'est
+    ouverte (même patron que `test_annulation_facture` avec `_capacite`).
+    """
+
+    COMMANDE = "SAL-ORD-2026-03325"
+    FACTURE = "ACC-SINV-2026-01068"
+
+    def setUp(self):
+        self.documents = {
+            ("Sales Invoice", self.FACTURE): frappe._dict(
+                grand_total=161.0, posting_date="2026-06-30", docstatus=1),
+            ("Sales Order", self.COMMANDE): frappe._dict(
+                grand_total=161.0, transaction_date="2026-05-18", docstatus=2),
+        }
+        self._vrai = CED._document
+        CED._document = lambda doctype, nom, champ: self.documents.get((doctype, nom))
+
+    def tearDown(self):
+        CED._document = self._vrai
+
+    def _dette_facturee(self):
+        """La dette telle que la rend la requête : la facture dans les références,
+        la commande dans `reference_no`."""
+        return CED._qualifier(frappe._dict(
+            name="ACC-PAY-2026-00123", paid_amount=161.0, posting_date="2026-06-30",
+            reference_no=self.COMMANDE, paid_to=CED.COMPTE_DETTES,
+            party_name="AQUA SERVICE", commande=self.FACTURE))
+
+    def test_la_commande_annulee_bloque_la_dette_et_est_nommee(self):
+        dette = self._dette_facturee()
+        # La dette reste rattachée à sa facture pour l'affichage…
+        self.assertEqual(dette.commande, self.FACTURE)
+        self.assertEqual(dette.commande_doctype, "Sales Invoice")
+        # … mais c'est la commande annulée qui la bloque.
+        self.assertEqual(dette.motif, CED.MOTIF_COMMANDE_ANNULEE)
+        self.assertEqual(dette.document_bloquant, self.COMMANDE)
+
+    def test_une_commande_soumise_laisse_la_dette_encaissable(self):
+        self.documents[("Sales Order", self.COMMANDE)].docstatus = 1
+        dette = self._dette_facturee()
+        self.assertEqual(dette.motif, "")
+        self.assertEqual(dette.document_bloquant, "")
+
+    def test_le_dialogue_recoit_la_dette_comme_non_encaissable(self):
+        """La réponse de `dettes_client` : la case sera grisée, motif et document
+        à l'appui."""
+        dette = self._dette_facturee()
+        vrais = (frappe.only_for, frappe.get_meta, CED._dettes)
+        frappe.only_for = lambda *a, **k: None
+        frappe.get_meta = lambda doctype: types.SimpleNamespace(
+            get_field=lambda champ: types.SimpleNamespace(options="Zitouna\nBIAT"))
+        CED._dettes = lambda client: [dette]
+        # `@frappe.whitelist()` enveloppe la méthode dans un contrôle de typage qui
+        # lit `frappe.local.flags` : hors site, ce drapeau n'existe pas.
+        sans_flags = not hasattr(frappe.local, "flags")
+        if sans_flags:
+            frappe.local.flags = frappe._dict(in_test=False)
+        try:
+            reponse = CED.dettes_client("AQUA SERVICE")
+        finally:
+            frappe.only_for, frappe.get_meta, CED._dettes = vrais
+            if sans_flags:
+                del frappe.local.flags
+        ligne = reponse["dettes"][0]
+        self.assertFalse(ligne["encaissable"])
+        self.assertEqual(ligne["motif"], CED.MOTIF_COMMANDE_ANNULEE)
+        self.assertEqual(ligne["document_bloquant"], self.COMMANDE)
+        self.assertEqual(ligne["commande"], self.FACTURE)
+
+    def test_l_encaissement_la_refuse(self):
+        """Cochée malgré tout (ancien dialogue en cache, appel direct), elle est
+        refusée avec son motif — pas encaissée puis mise en échec."""
+        dette = self._dette_facturee()
+        choisies, refus = CED._trier_selection([dette], [dette.name])
+        self.assertEqual(choisies, [])
+        self.assertEqual(refus, (CED.REFUS_BLOQUEES, [dette]))
 
 
 class TestControlePrealableDuScript(unittest.TestCase):
