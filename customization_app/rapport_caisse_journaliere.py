@@ -10,6 +10,8 @@ import re
 import frappe
 from frappe.utils import flt, getdate
 
+from customization_app.caisse_depenses import TYPE_REGLEMENT as TYPE_REGLEMENT_FOURNISSEUR
+
 COMPANY = "AquaWorld & Servicing"
 
 # Hors caisse (décision utilisateur 19/08) — exclus par IDENTIFIANTS, jamais par nom
@@ -496,6 +498,41 @@ def _depenses_caisse(d1, d2, noms_par_user):
             "mode": mode,
             "montant": flt(r.paid_amount, 3),
         })
+    # ⚠️ ET LES RÈGLEMENTS DE FACTURES FOURNISSEURS FAITS DEPUIS LA CAISSE
+    # (« 💸 Factures à payer » -> « Payer », cf. `caisse_depenses.payer_factures`).
+    # Ils ne naissent d'aucune fiche de caisse : c'est le drapeau
+    # `custom_reglement_caisse` posé à la création qui les désigne — jamais les
+    # règlements saisis ailleurs. Leur part ESPÈCES sort du tiroir et doit peser
+    # sur le solde théorique de la clôture.
+    deja = {l["name"] for l in lignes}
+    reglements = frappe.db.sql(
+        """SELECT pe.name, pe.posting_date, pe.owner, pe.paid_amount, pe.paid_from,
+                  pe.mode_of_payment, pe.remarks, pe.reference_no, pe.party
+           FROM `tabPayment Entry` pe
+           WHERE pe.docstatus = 1 AND pe.payment_type = 'Pay'
+             AND IFNULL(pe.custom_reglement_caisse, 0) = 1
+             AND pe.posting_date BETWEEN %s AND %s
+           ORDER BY pe.posting_date DESC, pe.creation DESC""",
+        (d1, d2), as_dict=True)
+    for r in reglements:
+        if r.name in deja:
+            continue
+        if r.paid_from == "Espèces - A&S":
+            mode = "Espèces"
+        else:
+            mode = r.mode_of_payment or "Virement"
+        lignes.append({
+            "name": r.name,
+            "doctype": "Payment Entry",
+            "date": str(r.posting_date),
+            "saisi_par": noms_par_user.get(r.owner, r.owner),
+            "type": TYPE_REGLEMENT_FOURNISSEUR,
+            "description": (r.party or "") + (
+                " — %s" % r.reference_no if r.reference_no else ""),
+            "mode": mode,
+            "montant": flt(r.paid_amount, 3),
+        })
+
     # la PIÈCE JOINTE de chaque écriture/paiement (le scan de la caisse) — une
     # colonne d'aperçu dans le tableau, cliquable sans ouvrir le document.
     noms = list({l["name"] for l in lignes})
