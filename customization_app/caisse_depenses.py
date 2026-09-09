@@ -1321,6 +1321,10 @@ MODES_REGLEMENT = ("Espèces", "Chèque", "Virement")
 #: Le type affiché dans les dépenses du rapport de caisse pour ces paiements.
 TYPE_REGLEMENT = "Règlement fournisseur"
 
+#: Le drapeau qui désigne un paiement SORTI DE LA CAISSE — sans lui, le rapport
+#: ne saurait pas distinguer ces règlements de ceux saisis ailleurs.
+CHAMP_REGLEMENT = "custom_reglement_caisse"
+
 #: Les refus opposés à une sélection de factures (mêmes conventions que
 #: `caisse_encaissement_dettes._trier_selection`).
 REFUS_AUCUNE = "aucune"
@@ -1400,6 +1404,28 @@ def _trier_factures(lues, selection, supplier):
     return retenues, None
 
 
+def _controler_champ_reglement():
+    """Refuse TOUT règlement tant que `custom_reglement_caisse` n'existe pas.
+
+    ⚠️ SANS CE GARDE-FOU, LA CAISSE SE FAUSSE EN SILENCE. Frappe n'enregistre que
+    les champs connus du DocType : avant le patch `ensure_reglement_caisse_field`,
+    poser le drapeau sur le Payment Entry ne le persiste pas. Le paiement partirait
+    quand même — argent réellement sorti du tiroir — mais sans marqueur, et le
+    rapport de caisse ne le compterait JAMAIS, même après le `bench migrate` (la
+    colonne naît à 0). Le solde théorique de la clôture serait surévalué d'autant,
+    sans rien pour le rattraper. On préfère refuser l'opération : elle se
+    recommencera après la migration, aucune écriture n'a été faite.
+    """
+    champ = frappe.get_meta("Payment Entry").get_field(CHAMP_REGLEMENT)
+    if champ and frappe.db.has_column("Payment Entry", CHAMP_REGLEMENT):
+        return
+    frappe.throw(_("Le règlement des factures depuis la caisse n'est pas encore actif "
+                   "sur ce site : le champ « {0} » du paiement manque (la mise à jour "
+                   "n'a pas été terminée — bench migrate). RIEN n'a été enregistré ; "
+                   "prévenez l'administrateur avant de régler quoi que ce soit.")
+                 .format(CHAMP_REGLEMENT))
+
+
 def _controler_total(total, total_selection):
     """Refuse un règlement qui dépasse le reste à payer de la sélection.
 
@@ -1456,6 +1482,9 @@ def payer_factures(supplier, factures, paiements):
     photo du chèque attachée. Rend le compte rendu de l'affectation.
     """
     frappe.only_for(ROLES)
+    # AVANT TOUT : sans le drapeau, un paiement créé ici échapperait pour toujours
+    # au rapport de caisse (voir `_controler_champ_reglement`).
+    _controler_champ_reglement()
     selection = json.loads(factures) if isinstance(factures, str) else (factures or [])
     selection = [str(n) for n in selection if n]
     lignes = _valider_reglements(paiements)
@@ -1526,7 +1555,7 @@ def payer_factures(supplier, factures, paiements):
         pe.remarks = _("Règlement fournisseur depuis la caisse ({0}{1}) — {2}").format(
             p["mode"], " n° %s" % p["numero"] if p["numero"] else "",
             ", ".join(x["facture"] for x in r["references"]))
-        pe.custom_reglement_caisse = 1
+        pe.set(CHAMP_REGLEMENT, 1)     # champ garanti présent (contrôle en entrée)
         for ref in r["references"]:
             pe.append("references", {"reference_doctype": "Purchase Invoice",
                                      "reference_name": ref["facture"],

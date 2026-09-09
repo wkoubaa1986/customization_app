@@ -16,6 +16,7 @@ recette (chèque couvrant deux factures + espèces, cf. les risques du ticket).
 from __future__ import annotations
 
 import os
+import types
 import unittest
 
 import frappe
@@ -275,6 +276,76 @@ class TestControleDuTotal(_SansSite, unittest.TestCase):
 
     def test_les_millimes_ne_bloquent_pas(self):
         CD._controler_total(800.0005, 800.0)
+
+
+class TestChampReglementAbsent(_SansSite, unittest.TestCase):
+    """LE PIÈGE SILENCIEUX. Frappe n'enregistre que les champs connus du DocType :
+    avant le patch `ensure_reglement_caisse_field`, poser `custom_reglement_caisse`
+    sur le paiement ne le persiste pas. Le règlement partirait quand même — argent
+    sorti du tiroir — mais le rapport de caisse ne le compterait jamais, même après
+    la migration (la colonne naît à 0), et le solde théorique de clôture serait
+    surévalué sans rien pour le rattraper. On refuse AVANT toute écriture.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.champ = None            # le patch n'a pas tourné
+        self.colonne = True
+        self.crees = []              # les Payment Entry qu'on aurait créés
+        self.requetes = []
+        self._vrais_frappe = (frappe.only_for, frappe.get_meta, frappe.db,
+                              frappe.new_doc)
+        frappe.only_for = lambda *a, **k: None
+        frappe.get_meta = lambda doctype: types.SimpleNamespace(
+            get_field=lambda champ: self.champ)
+        frappe.db = types.SimpleNamespace(
+            has_column=lambda doctype, colonne: self.colonne,
+            sql=lambda *a, **k: self.requetes.append(a) or [],
+            commit=lambda: None)
+        frappe.new_doc = lambda doctype: self.crees.append(doctype) or None
+        # `@frappe.whitelist()` enveloppe la méthode dans un contrôle de typage qui
+        # lit `frappe.local.flags` : hors site, ce drapeau n'existe pas.
+        self._sans_flags = not hasattr(frappe.local, "flags")
+        if self._sans_flags:
+            frappe.local.flags = frappe._dict(in_test=False)
+
+    def tearDown(self):
+        (frappe.only_for, frappe.get_meta, frappe.db,
+         frappe.new_doc) = self._vrais_frappe
+        if self._sans_flags:
+            del frappe.local.flags
+        super().tearDown()
+
+    def _payer(self):
+        return CD.payer_factures(
+            "AQUA FROID", '["PINV-01"]',
+            '[{"mode": "Espèces", "montant": 300}]')
+
+    def test_sans_le_champ_le_reglement_est_refuse(self):
+        with self.assertRaises(Refus) as levee:
+            self._payer()
+        self.assertIn("custom_reglement_caisse", str(levee.exception))
+
+    def test_sans_le_champ_aucun_paiement_n_est_cree(self):
+        """Et rien n'est même lu : le refus vient avant toute écriture."""
+        with self.assertRaises(Refus):
+            self._payer()
+        self.assertEqual(self.crees, [])
+        self.assertEqual(self.requetes, [])
+
+    def test_le_champ_declare_mais_sans_colonne_est_refuse_aussi(self):
+        """DocType à jour, base pas encore migrée : le paiement ne garderait pas
+        davantage son drapeau."""
+        self.champ = types.SimpleNamespace(fieldname=CD.CHAMP_REGLEMENT)
+        self.colonne = False
+        with self.assertRaises(Refus):
+            self._payer()
+        self.assertEqual(self.crees, [])
+
+    def test_avec_le_champ_le_controle_laisse_passer(self):
+        self.champ = types.SimpleNamespace(fieldname=CD.CHAMP_REGLEMENT)
+        self.colonne = True
+        CD._controler_champ_reglement()          # ne lève pas
 
 
 class TestDialogueDeReglement(unittest.TestCase):
