@@ -16,10 +16,15 @@ d'encaissement) et ses deux Server Scripts :
     pas tout), supprime les anciennes PE de dette et crée LE paiement
     (Espèces - A&S, ou Chèques - A&S en attente de remise pour un chèque).
 
-Ce module est donc un simple FRONT : il fabrique le document avec UNE ligne de
-paiement, laisse le script d'enregistrement calculer l'allocation, la montre à
-l'employé pour confirmation, puis soumet. Le montant est plafonné à la somme
-des dettes du client — un trop-perçu n'a pas de sens ici.
+Ce module est donc un simple FRONT : il fabrique le document, construit
+l'allocation, LE VALIDE dans la foulée et rend le compte rendu à l'employé. Le
+montant est plafonné à la somme des dettes du client — un trop-perçu n'a pas de
+sens ici.
+
+⚠️ EN UN SEUL GESTE, SANS BROUILLON (décision utilisateur 09/09/2026) : création
+et validation partagent la même transaction. Un échec du Server Script rembobine
+l'ensemble et ne laisse RIEN derrière — l'ancien enchaînement (créer, confirmer,
+valider) semait un ENC en brouillon à chaque tentative ratée.
 """
 
 import base64
@@ -369,10 +374,30 @@ def _verifier_photo(p):
     return avert
 
 
+def _soumettre(doc):
+    """Soumet l'encaissement — le script « Traitement des encaissement » consomme les
+    dettes, réécrit les échéanciers (reliquat recréé si partiel) et crée le paiement.
+
+    Un lien vers un document annulé fait tout échouer, et Frappe dit « Impossible de
+    lier le document annulé » sans nommer l'encaissement ni dire quoi faire. On
+    rembobine — le script a pu supprimer des dettes et réécrire des échéanciers avant
+    de buter, RIEN ne doit rester à moitié écrit — et on nomme les deux.
+    """
+    try:
+        doc.submit()
+    except frappe.CancelledLinkError as e:
+        frappe.db.rollback()
+        frappe.throw(_("Encaissement {0} refusé : il faudrait relier un document annulé "
+                       "({1}). Rien n'a été enregistré — retirez de la sélection la dette "
+                       "qui porte ce document, ou faites-le rétablir.")
+                     .format(doc.name, re.sub(r"<[^>]+>", " ", str(e)).strip()))
+
+
 @frappe.whitelist()
 def encaisser(client, montant=None, mode=None, n_cheque=None, banque=None, dettes=None,
-              photo=None, photo_nom=None, paiements=None):
-    """Crée le BROUILLON d'encaissement et retourne l'allocation, pour confirmation.
+              photo=None, photo_nom=None, paiements=None, soumettre=1):
+    """Encaisse les dettes sélectionnées : construit le document, l'attache aux
+    photos et LE VALIDE dans la foulée (`soumettre`), puis rend l'allocation obtenue.
 
     `paiements` : la liste des paiements reçus (JSON) — PLUSIEURS chèques et/ou
     traites et/ou espèces pour la même sélection de dettes, chacun avec son
@@ -382,7 +407,9 @@ def encaisser(client, montant=None, mode=None, n_cheque=None, banque=None, dette
     défaut du dialogue les coche toutes, mais il peut en écarter. L'allocation est
     construite ICI — dettes en FIFO par date de commande, paiements dans l'ordre
     de saisie — et le drapeau `custom_allocation_manuelle` empêche le Server
-    Script de la régénérer. Rien n'est soumis ici.
+    Script de la régénérer.
+    `soumettre` : validation immédiate (le défaut). À 0, le document reste en
+    brouillon et attend `valider` — l'ancien enchaînement en deux temps.
     """
     frappe.only_for(ROLES)
     if isinstance(paiements, str):
@@ -478,10 +505,21 @@ def encaisser(client, montant=None, mode=None, n_cheque=None, banque=None, dette
                   base64.b64decode(contenu), "Encaissement Paiement", doc.name,
                   is_private=1)
 
+    # ⚠️ PAS DE BROUILLON (décision utilisateur 09/09/2026). L'encaissement se valide
+    # d'un seul geste : le commit n'intervient qu'APRÈS la soumission. Si le
+    # « Traitement des encaissement » échoue, Frappe rembobine tout et il ne reste
+    # RIEN — ni brouillon à reprendre, ni photo, ni paiement à moitié créé. C'est
+    # l'inverse de l'ancien enchaînement (insert + commit, puis validation séparée),
+    # qui laissait un ENC en brouillon à chaque échec.
+    if cint(soumettre):
+        _soumettre(doc)
+
     frappe.db.commit()
 
     # Vérification OpenAI des photos (chèques et traites), APRÈS le commit : le
-    # brouillon existe déjà, une panne du modèle ne peut plus rien lui faire.
+    # document existe déjà, une panne du modèle ne peut plus rien lui faire. Ce sont
+    # des AVERTISSEMENTS, jamais un blocage — ils sont rendus à l'employé, qui
+    # contrôle la pièce et annule l'encaissement lui-même s'il y a lieu.
     avertissements = []
     for p in lignes_paiement:
         if p["mode"] != "Espèces" and p.get("photo"):
@@ -489,37 +527,27 @@ def encaisser(client, montant=None, mode=None, n_cheque=None, banque=None, dette
 
     return {"name": doc.name, "allocation": allocation, "total_dettes": total_selection,
             "total_paiements": total, "restant": round(total_selection - total, 3),
-            "avertissements": avertissements}
+            "avertissements": avertissements, "valide": bool(cint(soumettre))}
 
 
 @frappe.whitelist()
 def valider(name):
-    """Soumet le brouillon : le script « Traitement des encaissement » consomme les
-    dettes, réécrit les échéanciers (reliquat recréé si partiel) et crée le paiement."""
+    """Soumet un brouillon resté en attente : encaissement créé avec `soumettre=0`,
+    ou repris d'avant la validation immédiate (l'ENC en brouillon de la prod)."""
     frappe.only_for(ROLES)
     doc = frappe.get_doc("Encaissement Paiement", name)
     if doc.docstatus != 0:
         frappe.throw(_("{0} n'est plus un brouillon.").format(name))
-    try:
-        doc.submit()
-    except frappe.CancelledLinkError as e:
-        # Frappe dit « Impossible de lier le document annulé : <DocType> <nom> » et
-        # rien d'autre : ni l'encaissement en cause, ni quoi faire. On rembobine —
-        # le script a pu supprimer des dettes et réécrire des échéanciers avant
-        # d'échouer, RIEN ne doit rester à moitié écrit — et on nomme les deux.
-        frappe.db.rollback()
-        frappe.throw(_("Encaissement {0} refusé : il faudrait relier un document annulé "
-                       "({1}). Rien n'a été enregistré — retirez de la sélection la dette "
-                       "qui porte ce document, ou faites-le rétablir.")
-                     .format(name, re.sub(r"<[^>]+>", " ", str(e)).strip()))
+    _soumettre(doc)
     frappe.db.commit()
     return {"name": doc.name}
 
 
 @frappe.whitelist()
 def abandonner(name):
-    """L'employé a refermé le dialogue sans confirmer : le brouillon ne doit pas
-    rester (sa clé consommerait les dettes aux yeux du prochain calcul)."""
+    """Supprime un brouillon d'encaissement resté en plan — ceux d'avant la
+    validation immédiate, ou créés avec `soumettre=0`. Un brouillon qui traîne
+    fausse le prochain calcul de dettes."""
     frappe.only_for(ROLES)
     doc = frappe.get_doc("Encaissement Paiement", name)
     if doc.docstatus != 0:

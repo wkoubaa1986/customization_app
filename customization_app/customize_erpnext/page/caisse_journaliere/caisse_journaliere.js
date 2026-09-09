@@ -695,6 +695,9 @@ function rcj_encaissement_dettes(rapport) {
           [format_currency(total_sel, "TND")]));
         return;
       }
+      // UN SEUL GESTE (décision utilisateur 09/09/2026) : le serveur crée ET valide
+      // l'encaissement dans la même transaction. Plus de confirmation intermédiaire,
+      // donc plus jamais de brouillon abandonné — en cas d'échec, il ne reste rien.
       frappe.call({
         method: API + ".encaisser",
         args: { client: v.client,
@@ -702,8 +705,8 @@ function rcj_encaissement_dettes(rapport) {
                   mode: p.mode, montant: p.montant, n_piece: p.n_piece,
                   banque: p.banque, photo: p.photo, photo_nom: p.photo_nom }))),
                 dettes: JSON.stringify(choisies.map((x) => x.paiement)) },
-        freeze: true, freeze_message: __("Calcul de l'allocation…"),
-        callback: (r) => confirmer(r.message),
+        freeze: true, freeze_message: __("Encaissement…"),
+        callback: (r) => resultat(r.message),
       });
     },
   });
@@ -908,7 +911,9 @@ function rcj_encaissement_dettes(rapport) {
     },
   });
 
-  function confirmer(res) {
+  // L'encaissement est FAIT quand on arrive ici : on rend compte de ce qui a été
+  // enregistré (répartition, reliquat) et des avertissements sur les photos.
+  function resultat(res) {
     d.hide();
     const lignes = (res.allocation || []).map((a) => `
       <tr><td>${frappe.utils.escape_html(a.paiement)}</td>
@@ -925,7 +930,7 @@ function rcj_encaissement_dettes(rapport) {
         <ul style="margin:6px 0 0 18px">${res.avertissements.map((a) =>
           `<li>${frappe.utils.escape_html(a)}</li>`).join("")}</ul>
         <div class="text-muted" style="font-size:11px">${
-          __("Simple avertissement : vérifie la pièce, puis confirme ou annule.")}</div>
+          __("Simple avertissement : contrôle la pièce — l'encaissement est déjà enregistré.")}</div>
       </div>` : "";
     const corps = `
       ${avert}
@@ -938,30 +943,14 @@ function rcj_encaissement_dettes(rapport) {
                    <th style="text-align:right">${__("Dette totale")}</th></tr></thead>
         <tbody>${lignes}</tbody></table></div>
       ${res.restant > 0.001 ? `<p class="text-muted">${
-        __("Reliquat non couvert : {0} — une dette sera recréée sur la commande concernée.",
+        __("Reliquat non couvert : {0} — une dette a été recréée sur la commande concernée.",
           [format_currency(res.restant, "TND")])}</p>` : ""}`;
-    frappe.confirm(corps, () => {
-      frappe.call({
-        method: API + ".valider", args: { name: res.name },
-        freeze: true, freeze_message: __("Encaissement…"),
-        callback: () => {
-          frappe.show_alert(
-            { message: __("Dettes encaissées ({0}).", [res.name]), indicator: "green" });
-          // La caisse reflète l'encaissement sans geste supplémentaire.
-          if (rapport && rapport._fetch) rapport._fetch();
-        },
-        error: () => {
-          // Échec de la validation : le serveur a tout rembobiné, mais le BROUILLON
-          // subsiste (il a été commité par `encaisser`) et fausserait le prochain
-          // calcul de dettes. On le supprime comme sur un refus ; les photos jointes
-          // partent avec lui et seront reprises au nouvel essai.
-          frappe.call({ method: API + ".abandonner", args: { name: res.name } });
-        },
-      });
-    }, () => {
-      // Refus : le brouillon ne doit pas rester, il fausserait le prochain calcul.
-      frappe.call({ method: API + ".abandonner", args: { name: res.name } });
-    });
+    frappe.msgprint({ title: __("Dettes encaissées ({0})", [res.name]),
+                      message: corps, indicator: "green" });
+    frappe.show_alert(
+      { message: __("Dettes encaissées ({0}).", [res.name]), indicator: "green" });
+    // La caisse reflète l'encaissement sans geste supplémentaire.
+    if (rapport && rapport._fetch) rapport._fetch();
   }
 
   d.show();
