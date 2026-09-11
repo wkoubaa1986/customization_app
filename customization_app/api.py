@@ -40,6 +40,29 @@ def _client_created_by_partner(customer):
     return frappe.db.get_value("Customer", customer, "owner") == PARTNER_USER
 
 
+# `details_adresse` est un champ Data : MariaDB refuse au-delà de 140 caractères
+# (« Valeur trop grande pour le champ »). Les dialogues et Client Scripts y
+# composaient une adresse sur plusieurs lignes, ce qui faisait échouer
+# l'enregistrement du rendez-vous dès que l'adresse était un peu bavarde.
+DETAILS_ADRESSE_MAX = 140
+
+
+def compacter_details_adresse(texte, limite=DETAILS_ADRESSE_MAX):
+    """Ramène un détail d'adresse à UNE ligne d'au plus `limite` caractères.
+
+    Les sauts de ligne deviennent des virgules ; ce qui dépasse est coupé.
+    Une valeur vide ou déjà courte est rendue telle quelle — ce garde-fou ne
+    doit rien réécrire quand il n'y a rien à corriger.
+    """
+    if not texte:
+        return texte
+    morceaux = [m.strip() for m in str(texte).replace("\r\n", "\n").replace("\r", "\n").split("\n")]
+    compact = ", ".join(m for m in morceaux if m)
+    if len(compact) <= limite:
+        return compact
+    return compact[:limite].rstrip(" ,")
+
+
 def _address_google_map(address):
     """Lien Google Map de l'adresse (champ custom_lien_google_map), ou None."""
     if not address:
@@ -1079,6 +1102,13 @@ def before_save_tache_de_travail(doc, method=None):
 
     # Couleur : seule autorité. Priorité statut > partenaire > staff > défaut.
     doc.color = compute_tache_color(doc)
+
+    # Détail adresse : garde-fou de dernier recours. Le champ est un Data (140),
+    # et plusieurs composeurs d'adresse vivent hors de ce dépôt (Client Scripts en
+    # base). Plutôt que de laisser l'enregistrement échouer sur « Valeur trop
+    # grande » — et de perdre le rendez-vous que l'on vient de prendre — on
+    # compacte ici, quel que soit le chemin de création.
+    doc.details_adresse = compacter_details_adresse(doc.get("details_adresse"))
 
     # Lien Google Map : toujours synchronisé depuis l'adresse affectée,
     # indépendamment de l'utilisateur et du chemin de création (bouton RDV,
