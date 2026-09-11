@@ -1,5 +1,6 @@
 import hashlib
 import json
+from datetime import datetime
 
 import frappe
 from frappe import _
@@ -33,11 +34,27 @@ STATUS_COLORS = {"Completed": "#32CD32", "Cancelled": "#DCDCDC"}
 PARTNER_COLOR = "#29def2"
 
 
-def _client_created_by_partner(customer):
-    """Vrai si le Customer a été créé par le compte partenaire."""
-    if not customer:
-        return False
-    return frappe.db.get_value("Customer", customer, "owner") == PARTNER_USER
+# `details_adresse` est un champ Data : MariaDB refuse au-delà de 140 caractères
+# (« Valeur trop grande pour le champ »). Les dialogues et Client Scripts y
+# composaient une adresse sur plusieurs lignes, ce qui faisait échouer
+# l'enregistrement du rendez-vous dès que l'adresse était un peu bavarde.
+DETAILS_ADRESSE_MAX = 140
+
+
+def compacter_details_adresse(texte, limite=DETAILS_ADRESSE_MAX):
+    """Ramène un détail d'adresse à UNE ligne d'au plus `limite` caractères.
+
+    Les sauts de ligne deviennent des virgules ; ce qui dépasse est coupé.
+    Une valeur vide ou déjà courte est rendue telle quelle — ce garde-fou ne
+    doit rien réécrire quand il n'y a rien à corriger.
+    """
+    if not texte:
+        return texte
+    morceaux = [m.strip() for m in str(texte).replace("\r\n", "\n").replace("\r", "\n").split("\n")]
+    compact = ", ".join(m for m in morceaux if m)
+    if len(compact) <= limite:
+        return compact
+    return compact[:limite].rstrip(" ,")
 
 
 def _address_google_map(address):
@@ -169,13 +186,19 @@ def partner_finalize_order(task):
 
 def compute_tache_color(doc):
     """Couleur unique d'une Tache de travail.
-    Priorité : statut (Completed/Cancelled) > client créé par le partenaire (cyan)
+    Priorité : statut (Completed/Cancelled) > tâche créée par le partenaire (cyan)
     > couleur par employé > défaut.
-    NB : le marqueur cyan dépend du créateur du CLIENT, pas de celui de la tâche."""
+
+    ⚠️ LE CYAN MARQUE QUI A PRIS LE RENDEZ-VOUS, PAS QUI A CRÉÉ LE CLIENT.
+    La règle précédente regardait l'`owner` du CLIENT : dès qu'un client avait été
+    saisi un jour par le compte partenaire, TOUS ses rendez-vous viraient au cyan,
+    y compris ceux que le magasin prenait depuis la commande. Le planning ne disait
+    donc plus à quel technicien la tâche revenait — le seul usage de la couleur.
+    On regarde désormais l'`owner` de la TÂCHE."""
     status = doc.get("status") or ""
     if status in STATUS_COLORS:
         return STATUS_COLORS[status]
-    if _client_created_by_partner(doc.get("custom_client")):
+    if doc.get("owner") == PARTNER_USER:
         return PARTNER_COLOR
     return STAFF_COLORS.get(doc.get("custom_choix_du_staff"), STAFF_COLOR_DEFAULT)
 
@@ -200,7 +223,10 @@ def recolorer_taches_partenaire(days=7):
             "creation": [">=", depuis],
             "status": ["not in", ["Completed", "Cancelled"]],
         },
-        fields=["name", "color", "status", "custom_choix_du_staff", "custom_client"],
+        # « owner » est indispensable : sans lui compute_tache_color ne voit pas
+        # le partenaire et repeindrait chaque nuit ses tâches en couleur staff.
+        fields=["name", "color", "status", "custom_choix_du_staff", "custom_client",
+                "owner"],
     )
 
     recolorees = []
@@ -229,7 +255,9 @@ def get_custom_tache_events(start, end, filters=None):
         field_map.start, field_map.end, field_map.title, "name", field_map.color,
         "custom_choix_du_staff", "custom_employé", "custom_client", "nom_client","custom_type_dintervention",
         "status", "toute_la_journée", "custom_reservation_app","secteur","tel","details_adresse","info_secteur","google_map",
-        "subject","raison_annulation","rapport_visite","commande_client"
+        "subject","raison_annulation","rapport_visite","commande_client",
+        # « owner » sert au calcul de repli de la couleur (cf. plus bas).
+        "owner"
     ]
 
     # If filters are passed, use them; otherwise, default to an empty list
@@ -264,6 +292,13 @@ def get_custom_tache_events(start, end, filters=None):
                 event['all_day'] = 1
             else:
                 event['all_day'] = 0
+
+        # Couleur de repli : une tâche dont la colonne `color` est vide (créée
+        # avant la règle serveur, ou par un chemin qui ne passe pas par
+        # before_save) s'affichait dans le bleu par défaut de Frappe, identique
+        # pour tout le monde. On recalcule alors la couleur à l'affichage.
+        if not event.get(field_map.color):
+            event[field_map.color] = compute_tache_color(event)
 
     _annoter_aramex(events)
     # print(events)
@@ -308,6 +343,134 @@ def _annoter_aramex(events):
         lignes = (e.get("titre") or "").split("\n")
         lignes.insert(1 if len(lignes) > 1 else len(lignes), ligne)
         e["titre"] = "\n".join(lignes)
+
+
+# ---------------------------------------------------------------------------
+# Bandeaux de la fiche Tache de travail — autres rendez-vous du client
+# ---------------------------------------------------------------------------
+def _datetime_rdv(valeur):
+    """Datetime d'un champ de rendez-vous, ou None s'il est vide ou illisible."""
+    if not valeur:
+        return None
+    if isinstance(valeur, datetime):
+        return valeur
+    try:
+        return frappe.utils.get_datetime(valeur)
+    except Exception:
+        return None
+
+
+def _libelle_rdv(rdv):
+    """« Entretien avec Jamel le 03/09/2026 09:30 à 10:00 ».
+
+    Chaque morceau manquant est simplement omis : un rendez-vous sans employé ou
+    sans date reste ANNONCÉ, sinon on cache au technicien l'existence même du
+    rendez-vous en conflit. C'est la concaténation naïve de ces champs facultatifs
+    qui levait « can only concatenate str (not "NoneType") » à l'ouverture."""
+    morceaux = [(rdv.get("custom_type_dintervention") or "").strip() or "Rendez-vous"]
+
+    employe = (rdv.get("custom_employé") or "").strip()
+    if employe:
+        morceaux.append("avec " + employe)
+
+    debut = _datetime_rdv(rdv.get("starts_on"))
+    if debut:
+        quand = "le " + debut.strftime("%d/%m/%Y %H:%M")
+        fin = _datetime_rdv(rdv.get("ends_on"))
+        if fin:
+            quand += " à " + fin.strftime("%H:%M")
+        morceaux.append(quand)
+
+    return " ".join(morceaux)
+
+
+def _creneaux_se_chevauchent(debut_a, fin_a, debut_b, fin_b):
+    """Vrai si les deux créneaux se recouvrent. Deux créneaux qui se touchent
+    (9h-10h puis 10h-11h) ne se chevauchent pas : c'est une journée normale.
+    Un créneau sans fin est réduit à son instant de début — on ne crie pas au
+    conflit sur une donnée qu'on n'a pas."""
+    if not debut_a or not debut_b:
+        return False
+    fin_a = fin_a or debut_a
+    fin_b = fin_b or debut_b
+    return debut_a < fin_b and debut_b < fin_a
+
+
+@frappe.whitelist()
+def get_customer_booking_info(customer_name=None, task_name=None):
+    """Les deux bandeaux affichés à l'ouverture d'une Tache de travail :
+      - liste 0 (jaune) : les autres rendez-vous ouverts du client, à venir ;
+      - liste 1 (rouge) : ceux qui chevauchent le créneau de la tâche ouverte.
+
+    ⚠️ REMPLACE UN SERVER SCRIPT API DU MÊME NOM (en base). Celui-ci concaténait
+    les champs du rendez-vous sans les protéger et levait « can only concatenate
+    str (not "NoneType") » dès qu'un rendez-vous du client n'avait pas d'employé,
+    de type ou de date — l'erreur s'affichait à chaque ouverture de la fiche.
+    Le hook `override_whitelisted_methods` est consulté AVANT les Server Scripts
+    (frappe/handler.py, execute_cmd) : le script en base est donc court-circuité
+    sans qu'on touche aux fixtures.
+
+    Le contrat du Client Script est conservé : `frappe.response["result"]` porte
+    les deux listes de libellés."""
+    ouverts = []
+    conflits = []
+    frappe.response["result"] = [ouverts, conflits]
+
+    if not customer_name:
+        return
+
+    # ⚠️ LE DROIT SE VÉRIFIE AVANT TOUTE LECTURE, ET HORS DU FILET try/except.
+    # La méthode est whitelistée : elle accepte n'importe quel n° de client venu
+    # du navigateur. Sans ce contrôle, tout utilisateur connecté — même sans
+    # accès aux tâches — obtiendrait les interventions, les techniciens et les
+    # horaires d'un client en devinant son identifiant. Et le contrôle doit
+    # rester hors du try : un refus de droit ne se transforme pas en bandeau vide.
+    if not frappe.has_permission("Tache de travail", "read"):
+        frappe.throw(_("Accès non autorisé aux rendez-vous"), frappe.PermissionError)
+    if task_name and not frappe.has_permission("Tache de travail", "read", doc=task_name):
+        frappe.throw(_("Accès non autorisé à la tâche {0}").format(task_name),
+                     frappe.PermissionError)
+
+    try:
+        courante = {}
+        if task_name:
+            courante = frappe.db.get_value(
+                "Tache de travail", task_name, ["starts_on", "ends_on"], as_dict=True
+            ) or {}
+        debut_courant = _datetime_rdv(courante.get("starts_on"))
+        fin_courante = _datetime_rdv(courante.get("ends_on"))
+
+        maintenant = frappe.utils.now_datetime()
+        # `get_list` et NON `get_all` : la liste respecte les permissions de
+        # l'appelant (rôles, permissions utilisateur, partages), comme le fait
+        # déjà le calendrier (`get_custom_tache_events`). Le bandeau annonce donc
+        # exactement les rendez-vous que cet utilisateur peut voir par ailleurs.
+        rdvs = frappe.get_list(
+            "Tache de travail",
+            filters={
+                "custom_client": customer_name,
+                "status": ["not in", ["Completed", "Cancelled"]],
+            },
+            fields=["name", "custom_type_dintervention", "custom_employé",
+                    "starts_on", "ends_on"],
+            order_by="starts_on asc",
+        )
+
+        for rdv in rdvs:
+            if task_name and rdv.get("name") == task_name:
+                continue
+            debut = _datetime_rdv(rdv.get("starts_on"))
+            fin = _datetime_rdv(rdv.get("ends_on"))
+            if _creneaux_se_chevauchent(debut_courant, fin_courante, debut, fin):
+                conflits.append(_libelle_rdv(rdv))
+            elif debut and debut >= maintenant:
+                ouverts.append(_libelle_rdv(rdv))
+    except frappe.PermissionError:
+        raise
+    except Exception:
+        # Un bandeau d'information ne doit JAMAIS empêcher d'ouvrir la fiche.
+        frappe.log_error(frappe.get_traceback(), "get_customer_booking_info")
+
 
 @frappe.whitelist()
 def get_data(data=None):
@@ -1079,6 +1242,13 @@ def before_save_tache_de_travail(doc, method=None):
 
     # Couleur : seule autorité. Priorité statut > partenaire > staff > défaut.
     doc.color = compute_tache_color(doc)
+
+    # Détail adresse : garde-fou de dernier recours. Le champ est un Data (140),
+    # et plusieurs composeurs d'adresse vivent hors de ce dépôt (Client Scripts en
+    # base). Plutôt que de laisser l'enregistrement échouer sur « Valeur trop
+    # grande » — et de perdre le rendez-vous que l'on vient de prendre — on
+    # compacte ici, quel que soit le chemin de création.
+    doc.details_adresse = compacter_details_adresse(doc.get("details_adresse"))
 
     # Lien Google Map : toujours synchronisé depuis l'adresse affectée,
     # indépendamment de l'utilisateur et du chemin de création (bouton RDV,

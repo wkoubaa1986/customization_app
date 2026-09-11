@@ -28,6 +28,25 @@
         'Visite': 120, 'Autre': 120,
     };
 
+    // `details_adresse` est un champ Data de 140 caractères sur la Tache de travail.
+    // L'adresse composée sur plusieurs lignes (ligne 1 + ligne 2 + ville + région,
+    // précédée du secteur) dépassait dès qu'une ligne 1 était un peu détaillée, et
+    // l'enregistrement du rendez-vous échouait sur « Valeur trop grande ». On écrit
+    // donc une ligne unique, comme le fait déjà le portail (portail_rdv.py).
+    const DETAILS_ADRESSE_MAX = 140;
+
+    // Le secteur n'est PAS repris ici : il a son propre champ sur la tâche, et le
+    // répéter mangeait la place des informations qui permettent de trouver la porte.
+    function adresse_compacte(a) {
+        const txt = [a.address_line1, a.address_line2, a.city, a.state]
+            .map(p => (p || '').trim())
+            .filter(Boolean)
+            .join(', ');
+        return txt.length > DETAILS_ADRESSE_MAX
+            ? txt.slice(0, DETAILS_ADRESSE_MAX).replace(/[\s,]+$/, '')
+            : txt;
+    }
+
     /* ── Inject floating button ───────────────────────────────────────────── */
     function inject_button() {
         if (frappe.session.user !== ALLOWED_USER) return;
@@ -386,14 +405,10 @@
                         if (!addrName) { _googleMap = ''; dlg.set_value('details_adresse', ''); return; }
                         var a = _addresses.find(function (x) { return x.name === addrName; }) || {};
                         _googleMap = a.custom_lien_google_map || '';
-                        var lines = [a.address_line1, a.address_line2, a.city].filter(Boolean);
-                        var reg   = [a.pincode, a.state, a.country].filter(Boolean).join(', ');
-                        if (reg) lines.push(reg);
-                        dlg.set_value('details_adresse',
-                            (_secteur ? 'Secteur: ' + _secteur + '\n' : '') + lines.join('\n'));
+                        dlg.set_value('details_adresse', adresse_compacte(a));
                     },
                 },
-                { fieldname: 'details_adresse', fieldtype: 'Small Text',
+                { fieldname: 'details_adresse', fieldtype: 'Data',
                   label: 'Détails adresse', read_only: 1 },
                 { fieldtype: 'Section Break' },
                 // Affichée seulement quand le rendez-vous vient d'une commande. En lecture seule :

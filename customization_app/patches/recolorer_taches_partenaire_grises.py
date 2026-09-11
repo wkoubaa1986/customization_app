@@ -29,7 +29,8 @@ def execute():
             "owner": PARTNER_USER,
             "status": ["not in", ["Completed", "Cancelled"]],
         },
-        fields=["name", "color", "status", "custom_choix_du_staff", "custom_client"],
+        fields=["name", "color", "status", "custom_choix_du_staff", "custom_client",
+                "owner"],
     )
     if not taches:
         print("[recolorer_taches_partenaire_grises] aucune tâche ouverte du partenaire.")

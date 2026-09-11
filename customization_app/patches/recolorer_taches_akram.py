@@ -14,8 +14,8 @@ les recolorer changerait l'aspect de centaines de tâches sans que ce soit
 demandé.
 
 compute_tache_color est appliqué plutôt qu'une couleur en dur, afin que les
-priorités soient respectées : une tâche terminée reste verte, une tâche dont
-le client vient du partenaire reste cyan.
+priorités soient respectées : une tâche terminée reste verte, une tâche prise
+par le partenaire reste cyan.
 """
 
 import frappe
@@ -27,7 +27,7 @@ EMPLOYE = "HR-EMP-00010"
 
 def execute():
     taches = frappe.db.sql(
-        """SELECT name, color, status, custom_choix_du_staff, custom_client
+        """SELECT name, color, status, custom_choix_du_staff, custom_client, owner
            FROM `tabTache de travail` WHERE custom_choix_du_staff = %(emp)s""",
         {"emp": EMPLOYE},
         as_dict=True,
