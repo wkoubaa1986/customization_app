@@ -1321,6 +1321,11 @@ MODES_REGLEMENT = ("Espèces", "Chèque", "Virement")
 #: Le type affiché dans les dépenses du rapport de caisse pour ces paiements.
 TYPE_REGLEMENT = "Règlement fournisseur"
 
+#: Le type affiché pour un paiement fait sur une COMMANDE d'achat (avance
+#: fournisseur). Ceux-là ne portent ni fiche ni drapeau — c'est leur référence
+#: « Purchase Order » qui les fait entrer dans les dépenses (ticket #16).
+TYPE_AVANCE_COMMANDE = "Avance commande d'achat"
+
 #: Le drapeau qui désigne un paiement SORTI DE LA CAISSE — sans lui, le rapport
 #: ne saurait pas distinguer ces règlements de ceux saisis ailleurs.
 CHAMP_REGLEMENT = "custom_reglement_caisse"
