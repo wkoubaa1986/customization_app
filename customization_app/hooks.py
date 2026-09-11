@@ -434,6 +434,12 @@ jinja = {"methods": ["customization_app.jinja_methods.bl_sous_garantie"]}
 override_whitelisted_methods = {
     "erpnext.stock.get_item_details.get_item_details": "customization_app.get_item_details.get_item_details",
     "erpnext.selling.page.point_of_sale.point_of_sale.get_items": "customization_app.pos_items.get_items",
+    # Le Client Script de la Tache de travail appelle « get_customer_booking_info »
+    # au chargement de la fiche. Ce nom nu désignait un Server Script API en base,
+    # qui plantait sur un rendez-vous incomplet (« can only concatenate str (not
+    # "NoneType") »). Frappe consulte ce hook AVANT les Server Scripts, l'appel
+    # arrive donc sur la version versionnée et protégée, sans toucher aux fixtures.
+    "get_customer_booking_info": "customization_app.api.get_customer_booking_info",
 }
 fixtures = [
     # Custom Field de ton module
