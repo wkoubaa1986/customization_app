@@ -33,13 +33,6 @@ STATUS_COLORS = {"Completed": "#32CD32", "Cancelled": "#DCDCDC"}
 PARTNER_COLOR = "#29def2"
 
 
-def _client_created_by_partner(customer):
-    """Vrai si le Customer a été créé par le compte partenaire."""
-    if not customer:
-        return False
-    return frappe.db.get_value("Customer", customer, "owner") == PARTNER_USER
-
-
 # `details_adresse` est un champ Data : MariaDB refuse au-delà de 140 caractères
 # (« Valeur trop grande pour le champ »). Les dialogues et Client Scripts y
 # composaient une adresse sur plusieurs lignes, ce qui faisait échouer
@@ -192,13 +185,19 @@ def partner_finalize_order(task):
 
 def compute_tache_color(doc):
     """Couleur unique d'une Tache de travail.
-    Priorité : statut (Completed/Cancelled) > client créé par le partenaire (cyan)
+    Priorité : statut (Completed/Cancelled) > tâche créée par le partenaire (cyan)
     > couleur par employé > défaut.
-    NB : le marqueur cyan dépend du créateur du CLIENT, pas de celui de la tâche."""
+
+    ⚠️ LE CYAN MARQUE QUI A PRIS LE RENDEZ-VOUS, PAS QUI A CRÉÉ LE CLIENT.
+    La règle précédente regardait l'`owner` du CLIENT : dès qu'un client avait été
+    saisi un jour par le compte partenaire, TOUS ses rendez-vous viraient au cyan,
+    y compris ceux que le magasin prenait depuis la commande. Le planning ne disait
+    donc plus à quel technicien la tâche revenait — le seul usage de la couleur.
+    On regarde désormais l'`owner` de la TÂCHE."""
     status = doc.get("status") or ""
     if status in STATUS_COLORS:
         return STATUS_COLORS[status]
-    if _client_created_by_partner(doc.get("custom_client")):
+    if doc.get("owner") == PARTNER_USER:
         return PARTNER_COLOR
     return STAFF_COLORS.get(doc.get("custom_choix_du_staff"), STAFF_COLOR_DEFAULT)
 
@@ -223,7 +222,10 @@ def recolorer_taches_partenaire(days=7):
             "creation": [">=", depuis],
             "status": ["not in", ["Completed", "Cancelled"]],
         },
-        fields=["name", "color", "status", "custom_choix_du_staff", "custom_client"],
+        # « owner » est indispensable : sans lui compute_tache_color ne voit pas
+        # le partenaire et repeindrait chaque nuit ses tâches en couleur staff.
+        fields=["name", "color", "status", "custom_choix_du_staff", "custom_client",
+                "owner"],
     )
 
     recolorees = []
@@ -252,7 +254,9 @@ def get_custom_tache_events(start, end, filters=None):
         field_map.start, field_map.end, field_map.title, "name", field_map.color,
         "custom_choix_du_staff", "custom_employé", "custom_client", "nom_client","custom_type_dintervention",
         "status", "toute_la_journée", "custom_reservation_app","secteur","tel","details_adresse","info_secteur","google_map",
-        "subject","raison_annulation","rapport_visite","commande_client"
+        "subject","raison_annulation","rapport_visite","commande_client",
+        # « owner » sert au calcul de repli de la couleur (cf. plus bas).
+        "owner"
     ]
 
     # If filters are passed, use them; otherwise, default to an empty list
@@ -287,6 +291,13 @@ def get_custom_tache_events(start, end, filters=None):
                 event['all_day'] = 1
             else:
                 event['all_day'] = 0
+
+        # Couleur de repli : une tâche dont la colonne `color` est vide (créée
+        # avant la règle serveur, ou par un chemin qui ne passe pas par
+        # before_save) s'affichait dans le bleu par défaut de Frappe, identique
+        # pour tout le monde. On recalcule alors la couleur à l'affichage.
+        if not event.get(field_map.color):
+            event[field_map.color] = compute_tache_color(event)
 
     _annoter_aramex(events)
     # print(events)
