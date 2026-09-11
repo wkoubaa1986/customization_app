@@ -10,6 +10,7 @@ import re
 import frappe
 from frappe.utils import flt, getdate
 
+from customization_app.caisse_depenses import TYPE_AVANCE_COMMANDE
 from customization_app.caisse_depenses import TYPE_REGLEMENT as TYPE_REGLEMENT_FOURNISSEUR
 
 COMPANY = "AquaWorld & Servicing"
@@ -535,6 +536,50 @@ def _depenses_caisse(d1, d2, noms_par_user):
             "type": TYPE_REGLEMENT_FOURNISSEUR,
             "description": (r.party or "") + (
                 " — %s" % r.reference_no if r.reference_no else ""),
+            "mode": mode,
+            "montant": flt(r.paid_amount, 3),
+        })
+
+    # ⚠️ ET LES PAIEMENTS FAITS SUR UNE COMMANDE D'ACHAT (ticket #16). Depuis le
+    # formulaire d'une commande fournisseur (« Créer > Paiement »), l'employé
+    # sort l'argent du tiroir sans passer par la caisse : le paiement n'a ni
+    # fiche « Facture Achat a Saisir » ni drapeau `custom_reglement_caisse`, et
+    # la dépense manquait au rapport comme au solde théorique de la clôture.
+    # C'est sa RÉFÉRENCE à une commande d'achat qui le désigne. Les avances nées
+    # de la caisse (`caisse_depenses.po_convertir_avances`) portent déjà une
+    # fiche : `deja` les garde à UNE seule ligne.
+    deja = {l["name"] for l in lignes}
+    avances = frappe.db.sql(
+        """SELECT pe.name, pe.posting_date, pe.owner, pe.paid_amount, pe.paid_from,
+                  pe.mode_of_payment, pe.reference_no, pe.party, pe.party_name,
+                  GROUP_CONCAT(DISTINCT per.reference_name
+                               ORDER BY per.reference_name SEPARATOR ', ') AS commandes
+           FROM `tabPayment Entry` pe
+           INNER JOIN `tabPayment Entry Reference` per
+                   ON per.parent = pe.name
+                  AND per.reference_doctype = 'Purchase Order'
+           WHERE pe.docstatus = 1 AND pe.payment_type = 'Pay'
+             AND pe.posting_date BETWEEN %s AND %s
+           GROUP BY pe.name
+           ORDER BY pe.posting_date DESC, pe.creation DESC""",
+        (d1, d2), as_dict=True)
+    for r in avances:
+        if r.name in deja:
+            continue
+        deja.add(r.name)
+        if r.paid_from == "Espèces - A&S":
+            mode = "Espèces"
+        else:
+            mode = r.mode_of_payment or "Virement"
+        description = " — ".join(x for x in (r.party_name or r.party,
+                                             r.commandes, r.reference_no) if x)
+        lignes.append({
+            "name": r.name,
+            "doctype": "Payment Entry",
+            "date": str(r.posting_date),
+            "saisi_par": noms_par_user.get(r.owner, r.owner),
+            "type": TYPE_AVANCE_COMMANDE,
+            "description": description,
             "mode": mode,
             "montant": flt(r.paid_amount, 3),
         })
