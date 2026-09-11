@@ -419,6 +419,18 @@ def get_customer_booking_info(customer_name=None, task_name=None):
     if not customer_name:
         return
 
+    # ⚠️ LE DROIT SE VÉRIFIE AVANT TOUTE LECTURE, ET HORS DU FILET try/except.
+    # La méthode est whitelistée : elle accepte n'importe quel n° de client venu
+    # du navigateur. Sans ce contrôle, tout utilisateur connecté — même sans
+    # accès aux tâches — obtiendrait les interventions, les techniciens et les
+    # horaires d'un client en devinant son identifiant. Et le contrôle doit
+    # rester hors du try : un refus de droit ne se transforme pas en bandeau vide.
+    if not frappe.has_permission("Tache de travail", "read"):
+        frappe.throw(_("Accès non autorisé aux rendez-vous"), frappe.PermissionError)
+    if task_name and not frappe.has_permission("Tache de travail", "read", doc=task_name):
+        frappe.throw(_("Accès non autorisé à la tâche {0}").format(task_name),
+                     frappe.PermissionError)
+
     try:
         courante = {}
         if task_name:
@@ -429,7 +441,11 @@ def get_customer_booking_info(customer_name=None, task_name=None):
         fin_courante = _datetime_rdv(courante.get("ends_on"))
 
         maintenant = frappe.utils.now_datetime()
-        rdvs = frappe.get_all(
+        # `get_list` et NON `get_all` : la liste respecte les permissions de
+        # l'appelant (rôles, permissions utilisateur, partages), comme le fait
+        # déjà le calendrier (`get_custom_tache_events`). Le bandeau annonce donc
+        # exactement les rendez-vous que cet utilisateur peut voir par ailleurs.
+        rdvs = frappe.get_list(
             "Tache de travail",
             filters={
                 "custom_client": customer_name,
@@ -449,6 +465,8 @@ def get_customer_booking_info(customer_name=None, task_name=None):
                 conflits.append(_libelle_rdv(rdv))
             elif debut and debut >= maintenant:
                 ouverts.append(_libelle_rdv(rdv))
+    except frappe.PermissionError:
+        raise
     except Exception:
         # Un bandeau d'information ne doit JAMAIS empêcher d'ouvrir la fiche.
         frappe.log_error(frappe.get_traceback(), "get_customer_booking_info")
