@@ -1262,6 +1262,15 @@ def before_save_tache_de_travail(doc, method=None):
     if gmap and not doc.get("google_map"):
         doc.google_map = gmap
 
+    # ... et le RETOUR : la position relevée à la clôture est reportée sur
+    # l'adresse quand celle-ci n'a pas encore de lien, pour que la PROCHAINE
+    # intervention à la même adresse naisse déjà localisée (voir cloture_tache).
+    # Ici plutôt que dans le dialogue de clôture : tous les chemins de clôture
+    # (fiche, dialogue, partenaire, Mes Interventions Employe) finissent par un
+    # save de la tâche.
+    from customization_app.cloture_tache import propager_google_map_vers_adresse
+    propager_google_map_vers_adresse(doc)
+
     # Téléphone : toujours synchronisé depuis le client (custom_liste_telephone),
     # quelle que soit la source de création. N'écrase pas si le client n'a pas de numéro.
     phone = _customer_phone(doc.get("custom_client"))
