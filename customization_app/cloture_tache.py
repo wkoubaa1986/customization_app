@@ -128,6 +128,65 @@ def gmap_requis(doc):
     return True
 
 
+# Le lien Google Map de l'ADRESSE (champ custom personnalisé, fixture
+# custom_field.json) : c'est lui que lisent le portail RDV, la tournée et la
+# synchro adresse → tâche de api.before_save_tache_de_travail.
+CHAMP_GMAP_ADRESSE = "custom_lien_google_map"
+
+
+def lien_a_propager(lien_tache, lien_adresse):
+    """Le lien à écrire sur l'adresse, ou None s'il n'y a rien à faire.
+
+    On ne remplit QUE les adresses sans lien : un lien déjà présent a pu être
+    corrigé à la main sur la fiche Address, et la position relevée par le
+    technicien n'est pas toujours celle du client (il peut être garé en bas de
+    la rue). Le premier lien fait foi, on ne l'écrase jamais.
+    """
+    lien = (lien_tache or "").strip()
+    if not lien:
+        return None
+    if (lien_adresse or "").strip():
+        return None
+    return lien
+
+
+def propager_google_map_vers_adresse(doc):
+    """Reporte le lien Google Map de la tâche sur l'adresse sélectionnée.
+
+    Sans ça, la position relevée à la clôture (bouton « 📍 Ma position » du
+    dialogue) restait prisonnière de la tâche : à l'intervention suivante sur la
+    même adresse, la nouvelle tâche naissait sans lien et le technicien devait
+    se relocaliser. api.before_save_tache_de_travail ne faisait que le sens
+    inverse (adresse → tâche) ; ceci ferme la boucle.
+
+    Écriture directe (pas de hooks, pas de `modified`) : remplir un champ
+    d'appoint ne doit ni rejouer la validation d'une Address ni la faire
+    remonter en tête des « modifiés récemment ». Et RIEN ici ne doit empêcher
+    une clôture : toute erreur est journalisée, jamais levée.
+
+    Rend le lien écrit, ou None.
+    """
+    try:
+        adresse = doc.get("select_address")
+        lien_tache = (doc.get("google_map") or "").strip()
+        if not adresse or not lien_tache:
+            return None
+        # Site neuf / fixtures pas encore synchronisées : le champ custom peut
+        # ne pas exister (les patches passent AVANT les fixtures au migrate).
+        if not frappe.db.has_column("Address", CHAMP_GMAP_ADRESSE):
+            return None
+        lien = lien_a_propager(
+            lien_tache, frappe.db.get_value("Address", adresse, CHAMP_GMAP_ADRESSE))
+        if not lien:
+            return None
+        frappe.db.set_value("Address", adresse, CHAMP_GMAP_ADRESSE, lien,
+                            update_modified=False)
+        return lien
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "propager_google_map_vers_adresse")
+        return None
+
+
 def regle_active():
     """La règle est ACTIVE PAR DÉFAUT : la config (single) n'a pas de ligne tant
     que personne ne l'a enregistrée, et l'absence de réglage ne doit pas ouvrir
