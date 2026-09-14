@@ -482,6 +482,10 @@ def get_data(data=None):
 		"fieldname": "customer",
 		"non_standard_fieldnames": {
 			"Payment Entry": "party",
+			# Le client est porté par la table enfant « Journal Entry Account » :
+			# Frappe sait compter et filtrer dessus (comme pour le tableau de bord
+			# Article). C'est là que vivent les avoirs — créés comme utilisés.
+			"Journal Entry": "party",
 			"Quotation": "party_name",
 			"Opportunity": "party_name",
 			"Bank Account": "party",
@@ -493,7 +497,7 @@ def get_data(data=None):
 		"transactions": [
 			{"label": _("Pre Sales"), "items": ["Opportunity", "Quotation"]},
 			{"label": _("Orders"), "items": ["Sales Order", "Delivery Note", "Sales Invoice"]},
-			{"label": _("Payments"), "items": ["Payment Entry", "Bank Account", "Dunning"]},
+			{"label": _("Payments"), "items": ["Payment Entry", "Journal Entry", "Bank Account", "Dunning"]},
 			{
 				"label": _("Support"),
 				"items": ["Maintenance Schedule","Issue", "Maintenance Visit", "Installation Note", "Warranty Claim"],
