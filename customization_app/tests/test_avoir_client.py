@@ -27,8 +27,13 @@ from customization_app.avoir_client import (
     index_ligne_a_reduire,
     index_lignes_reductibles,
     montant_imputable,
+    paiement_verrouille,
     plan_application_avoir,
 )
+
+MODE_CHEQUE = "Chèque"
+COMPTE_CHEQUES = "Chèques - A&S"          # chèque reçu, pas encore encaissé
+COMPTE_BANQUE = "STE430127B - Zitouna - A&S"   # encaissé
 
 COMMANDE_OK = {
     "docstatus": 1,
@@ -38,7 +43,7 @@ COMMANDE_OK = {
 }
 
 
-def _ligne(montant, mode=MODE_DETTE, jour=1, portion=0):
+def _ligne(montant, mode=MODE_DETTE, jour=1, portion=0, verrouillee=False, paid_to=None):
     return {
         "nom": "PS-%s-%s" % (mode, jour),
         "idx": jour,
@@ -46,7 +51,46 @@ def _ligne(montant, mode=MODE_DETTE, jour=1, portion=0):
         "payment_amount": montant,
         "invoice_portion": portion,
         "due_date": date(2026, 9, jour),
+        "paid_to": paid_to,
+        "verrouillee": verrouillee,
     }
+
+
+class TestPaiementVerrouille(unittest.TestCase):
+    """L'argent est-il déjà arrivé ? Copie de `pe_is_locked` du Server Script :
+    si les deux divergent, la régénération restaurerait la ligne derrière nous
+    et l'échéancier dépasserait le TTC."""
+
+    def test_un_cheque_en_portefeuille_n_est_pas_verrouille(self):
+        self.assertFalse(paiement_verrouille(COMPTE_CHEQUES, MODE_CHEQUE))
+
+    def test_un_cheque_encaisse_est_verrouille(self):
+        self.assertTrue(paiement_verrouille(COMPTE_BANQUE, MODE_CHEQUE))
+
+    def test_un_cheque_sans_provision_est_verrouille(self):
+        self.assertTrue(paiement_verrouille("Chèques sans provision - A&S", MODE_CHEQUE))
+
+    def test_une_traite_en_portefeuille_n_est_pas_verrouillee(self):
+        self.assertFalse(paiement_verrouille("Traite Bancaire - A&S", "Traite bancaire LC"))
+
+    def test_une_traite_sans_provision_est_verrouillee(self):
+        self.assertTrue(
+            paiement_verrouille("Traite Bancaire sans provision - A&S", "Traite bancaire LC"))
+
+    def test_une_dette_n_est_jamais_verrouillee(self):
+        """Quel que soit le compte porteur : il change avec le modèle de termes
+        (Livraison Aramex), et aucun argent n'est entré."""
+        self.assertFalse(paiement_verrouille("Dettes - A&S", MODE_DETTE))
+        self.assertFalse(paiement_verrouille("Livraison Aramex - A&S", MODE_DETTE))
+
+    def test_un_compte_partenaire_n_est_pas_verrouille(self):
+        self.assertFalse(paiement_verrouille("Economiq Aqua Solution - A&S", "Espèces"))
+
+    def test_des_especes_en_caisse_ne_sont_pas_verrouillees(self):
+        """Pas verrouillées au sens du script — mais les espèces ne sont pas
+        remplaçables par un avoir pour autant (MODES_REDUCTIBLES)."""
+        self.assertFalse(paiement_verrouille("Espèces - A&S", "Espèces"))
+        self.assertEqual(montant_imputable(500, _ligne(600, "Espèces")), 0)
 
 
 class TestMontantImputable(unittest.TestCase):
@@ -62,10 +106,14 @@ class TestMontantImputable(unittest.TestCase):
     def test_sans_ligne_a_diminuer_rien_n_est_imputable(self):
         self.assertEqual(montant_imputable(500, None), 0)
 
+    def test_un_cheque_en_portefeuille_est_remplacable(self):
+        """Le papier est là, la banque n'a rien crédité."""
+        self.assertEqual(montant_imputable(500, _ligne(600, MODE_CHEQUE)), 500)
+
     def test_un_encaissement_n_est_pas_remplacable(self):
-        """Espèces, Chèque, Virement : de l'argent déjà reçu (MODES_REDUCTIBLES)."""
+        """Espèces (argent en caisse), chèque déjà encaissé, avoir déjà imputé."""
         self.assertEqual(montant_imputable(500, _ligne(600, "Espèces")), 0)
-        self.assertEqual(montant_imputable(500, _ligne(600, "Chèque")), 0)
+        self.assertEqual(montant_imputable(500, _ligne(600, MODE_CHEQUE, verrouillee=True)), 0)
         self.assertEqual(montant_imputable(500, _ligne(600, MODE_AVOIR)), 0)
 
     def test_le_plafond_ignore_advance_paid(self):
@@ -92,11 +140,23 @@ class TestLigneAReduire(unittest.TestCase):
         self.assertEqual(index_ligne_a_reduire(lignes), 1)
 
     def test_une_commande_entierement_encaissee_ne_propose_rien(self):
-        """Espèces et Chèque sont de l'argent reçu : un avoir ne les remplace
-        pas, ça se rend par la caisse (MODES_REDUCTIBLES)."""
-        lignes = [_ligne(500, "Espèces", 1), _ligne(300, "Chèque", 2), _ligne(200, MODE_AVOIR, 3)]
+        """Espèces en caisse, chèque déjà à la banque, avoir déjà imputé : rien
+        qu'un avoir puisse remplacer."""
+        lignes = [_ligne(500, "Espèces", 1),
+                  _ligne(300, MODE_CHEQUE, 2, verrouillee=True, paid_to=COMPTE_BANQUE),
+                  _ligne(200, MODE_AVOIR, 3)]
         self.assertIsNone(index_ligne_a_reduire(lignes))
         self.assertEqual(index_lignes_reductibles(lignes), [])
+
+    def test_un_cheque_en_portefeuille_est_proposable(self):
+        lignes = [_ligne(500, "Espèces", 1), _ligne(300, MODE_CHEQUE, 2, paid_to=COMPTE_CHEQUES)]
+        self.assertEqual(index_lignes_reductibles(lignes), [1])
+        self.assertEqual(index_ligne_a_reduire(lignes), 1)
+
+    def test_la_dette_passe_avant_le_cheque(self):
+        """Diminuer une dette ne touche aucun papier ; c'est le défaut."""
+        lignes = [_ligne(300, MODE_CHEQUE, 1, paid_to=COMPTE_CHEQUES), _ligne(200, MODE_DETTE, 2)]
+        self.assertEqual(index_ligne_a_reduire(lignes), 1)
 
     def test_les_lignes_reductibles_excluent_les_avoirs_et_les_zeros(self):
         """Un avoir déjà imputé ne se diminue pas, une ligne vide non plus."""
@@ -223,13 +283,25 @@ class TestErreurApplication(unittest.TestCase):
         message = erreur_application(COMMANDE_OK, 500, 100, _ligne(300, MODE_AVOIR, 2))
         self.assertIn("déjà un avoir", message)
 
-    def test_diminuer_un_encaissement_est_refuse(self):
-        """Rendre de l'argent déjà reçu est une décision de caisse, pas un
+    def test_diminuer_des_especes_est_refuse(self):
+        """Rendre de l'argent déjà en caisse est une décision de caisse, pas un
         rééquilibrage d'échéancier."""
         message = erreur_application(COMMANDE_OK, 500, 100, _ligne(300, "Espèces", 1))
         self.assertIn("Espèces", message)
         self.assertIn("ne peut pas être remplacée par un avoir", message)
         self.assertIn("Dette non payée", message)
+
+    def test_diminuer_un_cheque_deja_encaisse_est_refuse(self):
+        """Le mode reste « Chèque » après encaissement : seul le compte porteur
+        dit que l'argent est arrivé."""
+        ligne = _ligne(300, MODE_CHEQUE, 1, verrouillee=True, paid_to=COMPTE_BANQUE)
+        message = erreur_application(COMMANDE_OK, 500, 100, ligne)
+        self.assertIn("déjà encaissée", message)
+        self.assertIn(COMPTE_BANQUE, message)
+
+    def test_un_cheque_en_portefeuille_passe(self):
+        ligne = _ligne(300, MODE_CHEQUE, 1, paid_to=COMPTE_CHEQUES)
+        self.assertIsNone(erreur_application(COMMANDE_OK, 500, 300, ligne))
 
     def test_une_ligne_trop_petite_est_refusee(self):
         message = erreur_application(COMMANDE_OK, 500, 300, _ligne(200))
@@ -252,6 +324,9 @@ class _FausseLigne:
         self.payment_amount = donnees.get("payment_amount")
         self.invoice_portion = donnees.get("invoice_portion") or 0
         self.due_date = donnees.get("due_date")
+        # Rempli par le Server Script « fill payment schedule row uid » : c'est
+        # lui qui relie la ligne à son Payment Entry.
+        self.custom_row_uid = donnees.get("uid") or donnees.get("nom")
 
 
 class _FausseCommande:
@@ -295,8 +370,13 @@ def _throw(message, exc=None, **kwargs):
 
 
 @contextmanager
-def _serveur(commande, disponible=500.0):
-    """Isole les seuls accès au site : le document et le solde d'avoir."""
+def _serveur(commande, disponible=500.0, reglements=()):
+    """Isole les seuls accès au site : le document, les règlements de ses
+    échéances (Payment Entry) et le solde d'avoir.
+
+    `reglements` : (uid de ligne, compte porteur, mode) — ce que le Server
+    Script a créé pour chaque ligne.
+    """
     # Hors site, `frappe.local.flags` n'existe pas ; le décorateur
     # `@frappe.whitelist()` le consulte pour valider les types des arguments.
     flags_absents = not hasattr(frappe.local, "flags")
@@ -305,9 +385,14 @@ def _serveur(commande, disponible=500.0):
 
     avoirs = {"cree": disponible, "utilise": 0.0,
               "disponible": disponible, "ecritures": []}
+    paiements = [frappe._dict(custom_source_row_uid=uid, paid_to=compte,
+                              mode_of_payment=mode)
+                 for uid, compte, mode in reglements]
     lectures = []
     try:
         with patch.object(avoir_client.frappe, "get_doc", lambda dt, dn: commande), \
+                patch.object(avoir_client.frappe, "get_all",
+                             lambda doctype, **kwargs: paiements), \
                 patch.object(avoir_client.frappe, "throw", _throw), \
                 patch.object(avoir_client, "_", lambda texte: texte), \
                 patch.object(avoir_client, "avoirs_disponibles",
@@ -325,6 +410,12 @@ ECHEANCIER = [
      "payment_amount": 600.0, "invoice_portion": 60, "due_date": date(2026, 9, 2)},
 ]
 
+# Ce que « Generation payement » a créé pour cet échéancier.
+REGLEMENTS = (
+    ("PS-ESPECES", "Espèces - A&S", "Espèces"),
+    ("PS-DETTE", "Dettes - A&S", MODE_DETTE),
+)
+
 
 class TestPermissions(unittest.TestCase):
     """Ces méthodes sont appelables depuis le navigateur : connaître le nom
@@ -332,14 +423,14 @@ class TestPermissions(unittest.TestCase):
 
     def test_sans_droit_de_lecture_le_contexte_est_refuse(self):
         commande = _FausseCommande(ECHEANCIER, droits=())
-        with _serveur(commande) as lectures:
+        with _serveur(commande, reglements=REGLEMENTS) as lectures:
             with self.assertRaises(frappe.PermissionError):
                 avoir_client.contexte_avoir(commande.name)
         self.assertEqual(lectures, [], "le solde d'avoir a fuité malgré le refus")
 
     def test_sans_droit_d_ecriture_l_imputation_est_refusee(self):
         commande = _FausseCommande(ECHEANCIER, droits=("read",))
-        with _serveur(commande):
+        with _serveur(commande, reglements=REGLEMENTS):
             with self.assertRaises(frappe.PermissionError):
                 avoir_client.appliquer_avoir(commande.name, 200, "PS-DETTE")
         self.assertFalse(commande.enregistree)
@@ -347,7 +438,7 @@ class TestPermissions(unittest.TestCase):
 
     def test_avec_les_droits_l_imputation_passe(self):
         commande = _FausseCommande(ECHEANCIER)
-        with _serveur(commande):
+        with _serveur(commande, reglements=REGLEMENTS):
             avoir_client.appliquer_avoir(commande.name, 200, "PS-DETTE")
         self.assertTrue(commande.enregistree)
 
@@ -359,7 +450,7 @@ class TestImputationSurLeServeur(unittest.TestCase):
         """400 DT encaissés + 600 DT de dette, `advance_paid` = TTC : c'est
         justement la commande que le plafond « TTC − avance payée » interdisait."""
         commande = _FausseCommande(ECHEANCIER)
-        with _serveur(commande, disponible=200.0):
+        with _serveur(commande, disponible=200.0, reglements=REGLEMENTS):
             resultat = avoir_client.appliquer_avoir(commande.name, 200, "PS-DETTE")
 
         montants = {l.mode_of_payment: l.payment_amount for l in commande.payment_schedule}
@@ -377,7 +468,7 @@ class TestImputationSurLeServeur(unittest.TestCase):
              "payment_amount": 300.0, "invoice_portion": 30, "due_date": date(2026, 9, 3)},
         ]
         commande = _FausseCommande(echeancier)
-        with _serveur(commande):
+        with _serveur(commande, reglements=REGLEMENTS):
             with self.assertRaises(frappe.ValidationError) as refus:
                 avoir_client.appliquer_avoir(commande.name, 100, "PS-AVOIR")
         self.assertIn("déjà un avoir", str(refus.exception))
@@ -390,12 +481,49 @@ class TestImputationSurLeServeur(unittest.TestCase):
         Entry verrouillé, en restaurant la ligne — l'échéancier se retrouverait
         avec une ligne d'avoir en trop et un total supérieur au TTC."""
         commande = _FausseCommande(ECHEANCIER)
-        with _serveur(commande):
+        with _serveur(commande, reglements=REGLEMENTS):
             with self.assertRaises(frappe.ValidationError) as refus:
                 avoir_client.appliquer_avoir(commande.name, 100, "PS-ESPECES")
         self.assertIn("ne peut pas être remplacée par un avoir", str(refus.exception))
         self.assertFalse(commande.enregistree)
         self.assertEqual(len(commande.payment_schedule), 2)
+
+    def test_un_cheque_encore_en_portefeuille_est_remplacable(self):
+        """Le verrou se lit sur le compte porteur du Payment Entry, pas sur le
+        mode : « Chèques - A&S » = le papier est encore chez nous."""
+        echeancier = [
+            {"nom": "PS-CHEQUE", "idx": 1, "mode_of_payment": MODE_CHEQUE,
+             "payment_amount": 1000.0, "invoice_portion": 100, "due_date": date(2026, 9, 1)},
+        ]
+        commande = _FausseCommande(echeancier)
+        reglements = (("PS-CHEQUE", COMPTE_CHEQUES, MODE_CHEQUE),)
+        with _serveur(commande, disponible=300.0, reglements=reglements):
+            ctx = avoir_client.contexte_avoir(commande.name)
+            avoir_client.appliquer_avoir(commande.name, 300, "PS-CHEQUE")
+
+        self.assertEqual([l["nom"] for l in ctx["lignes"]], ["PS-CHEQUE"])
+        montants = {l.mode_of_payment: l.payment_amount for l in commande.payment_schedule}
+        self.assertEqual(montants[MODE_CHEQUE], 700.0)
+        self.assertEqual(montants[MODE_AVOIR], 300.0)
+        self.assertEqual(sum(l.payment_amount for l in commande.payment_schedule), 1000.0)
+
+    def test_un_cheque_deja_encaisse_ne_l_est_plus(self):
+        """Même ligne, même mode — mais le chèque est passé en banque."""
+        echeancier = [
+            {"nom": "PS-CHEQUE", "idx": 1, "mode_of_payment": MODE_CHEQUE,
+             "payment_amount": 1000.0, "invoice_portion": 100, "due_date": date(2026, 9, 1)},
+        ]
+        commande = _FausseCommande(echeancier)
+        reglements = (("PS-CHEQUE", COMPTE_BANQUE, MODE_CHEQUE),)
+        with _serveur(commande, disponible=300.0, reglements=reglements):
+            ctx = avoir_client.contexte_avoir(commande.name)
+            with self.assertRaises(frappe.ValidationError) as refus:
+                avoir_client.appliquer_avoir(commande.name, 300, "PS-CHEQUE")
+
+        self.assertEqual(ctx["lignes"], [])
+        self.assertFalse(ctx["imputable"])
+        self.assertIn("déjà encaissée", str(refus.exception))
+        self.assertFalse(commande.enregistree)
 
     def test_une_commande_entierement_encaissee_n_est_pas_imputable(self):
         echeancier = [
@@ -403,7 +531,7 @@ class TestImputationSurLeServeur(unittest.TestCase):
              "payment_amount": 1000.0, "invoice_portion": 100, "due_date": date(2026, 9, 1)},
         ]
         commande = _FausseCommande(echeancier)
-        with _serveur(commande):
+        with _serveur(commande, reglements=REGLEMENTS):
             ctx = avoir_client.contexte_avoir(commande.name)
 
         self.assertFalse(ctx["imputable"])
@@ -417,7 +545,7 @@ class TestImputationSurLeServeur(unittest.TestCase):
              "payment_amount": 300.0, "invoice_portion": 30, "due_date": date(2026, 9, 3)},
         ]
         commande = _FausseCommande(echeancier)
-        with _serveur(commande, disponible=200.0):
+        with _serveur(commande, disponible=200.0, reglements=REGLEMENTS):
             ctx = avoir_client.contexte_avoir(commande.name)
 
         self.assertEqual([l["nom"] for l in ctx["lignes"]], ["PS-DETTE"])
@@ -431,11 +559,11 @@ class TestImputationSurLeServeur(unittest.TestCase):
              "payment_amount": 1000.0, "invoice_portion": 100, "due_date": date(2026, 9, 1)},
         ]
         commande = _FausseCommande(echeancier)
-        with _serveur(commande):
+        with _serveur(commande, reglements=REGLEMENTS):
             ctx = avoir_client.contexte_avoir(commande.name)
 
         self.assertFalse(ctx["imputable"])
-        self.assertIn("Aucune échéance", ctx["empechement"])
+        self.assertIn("Rien à diminuer", ctx["empechement"])
         self.assertEqual(ctx["montant_propose"], 0)
 
 

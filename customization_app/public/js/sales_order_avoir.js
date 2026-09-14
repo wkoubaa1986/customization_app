@@ -127,7 +127,7 @@ function open_utiliser_avoir_dialog(frm, ctx) {
           ${__(
             "L'avoir est ajouté à l'échéancier au mode « Avoir client » ; la ligne choisie est diminuée d'autant, le total reste égal au TTC."
           )}<br>
-          ${__("Seules les échéances {0} peuvent être remplacées : un encaissement déjà reçu se rend par la caisse.", [
+          ${__("Seules les échéances {0} non encore encaissées peuvent être remplacées : un règlement déjà reçu se rend par la caisse.", [
             `<b>« ${(ctx.modes_reductibles || []).join(" » / « ")} »</b>`,
           ])}</div>`,
       },
@@ -139,8 +139,8 @@ function open_utiliser_avoir_dialog(frm, ctx) {
         default: ctx.montant_propose,
       },
       {
-        // La liste ne contient que les échéances remplaçables (par défaut les
-        // « Dette non payée ») : le serveur refuse les autres.
+        // La liste ne contient que les échéances remplaçables (dette, chèque ou
+        // traite non encaissés) : le serveur refuse les autres.
         fieldname: "ligne",
         label: __("Ligne d'échéancier à diminuer"),
         fieldtype: "Select",

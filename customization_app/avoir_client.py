@@ -11,7 +11,8 @@ Le process complet, en trois temps :
      Aucun lien avec une commande : c'est un crédit client réutilisable.
   3. « Avoir > Utiliser un avoir » sur une AUTRE commande : on ajoute à son
      échéancier une ligne au mode « Avoir client » et on diminue d'autant une
-     autre ligne (le total doit rester égal au TTC). Les Server Scripts
+     échéance encore due (cf. `MODES_REDUCTIBLES` : dette, chèque ou traite non
+     encaissés — le total reste égal au TTC). Les Server Scripts
      « Generation payement » / « re-generate payment after sales order » créent
      alors l'écriture « Credit Note » mode « Avoir client » référencée sur la
      commande — elle REMPLACE le Payment Entry de la part diminuée. Le total
@@ -39,26 +40,38 @@ DEFAULT_DEBIT_ACCOUNT = "Compte temporaire - compte  d'overture - A&S"
 MODE_AVOIR = "Avoir client"
 MODE_DETTE = "Dette non payée"
 
-# Quelles échéances un avoir a le droit de remplacer.
+# Quelles échéances un avoir a le droit de remplacer (arbitrage du gérant,
+# ticket #23) : ce qui n'est pas encore de l'argent reçu.
+#   - « Dette non payée » : le client doit encore la somme ;
+#   - « Chèque » et « Traite bancaire LC » : le papier est là, la banque n'a
+#     rien crédité.
+# Les espèces restent hors liste : elles sont physiquement en caisse, les
+# rendre est une décision de caisse et non un rééquilibrage d'échéancier.
 #
-# EN ATTENTE DE VALIDATION MÉTIER (ticket #23) : par défaut, la seule « Dette
-# non payée ». C'est le choix prudent, et le seul qui soit défendable sans
-# arbitrage du gérant :
-#   - c'est le seul mode qui ne correspond à AUCUN encaissement réel ; le
-#     Server Script « re-generate payment after sales order » le dit lui-même
-#     (`pe_is_locked` : « Une "Dette non payée" n'est jamais un encaissement
-#     reel : elle reste toujours regenerable ») ;
-#   - diminuer une ligne Espèces / Chèque / Virement déjà encaissée serait de
-#     toute façon refusée en aval : le script détecte le Payment Entry
-#     verrouillé, RESTAURE les anciennes valeurs de la ligne en base et se
-#     contente d'un message — l'échéancier se retrouverait alors avec une ligne
-#     d'avoir en trop et un total supérieur au TTC ;
-#   - rembourser un encaissement réel par un avoir, c'est une décision de
-#     caisse (rendre l'argent ou porter un crédit), pas un rééquilibrage.
-#
-# Pour élargir, ajouter les modes ici : le serveur, le dialogue et le montant
-# proposé s'y alignent automatiquement.
-MODES_REDUCTIBLES = (MODE_DETTE,)
+# Ce filtre par mode ne suffit pas : un chèque ENCAISSÉ garde le mode
+# « Chèque ». Il faut aussi que le paiement ne soit pas verrouillé — cf.
+# `paiement_verrouille`.
+MODES_REDUCTIBLES = (MODE_DETTE, "Chèque", "Traite bancaire LC")
+
+# ── Verrouillage d'un règlement, à l'identique du Server Script
+# « re-generate payment after sales order » (fonction `pe_is_locked`).
+# Toucher à une échéance verrouillée ne marcherait pas : le script RESTAURE la
+# ligne en base et se contente d'un message — mais notre ligne d'avoir, elle,
+# resterait, et le total de l'échéancier dépasserait le TTC.
+COMPTES_VERROUILLES = (
+    "STE430127B - Zitouna - A&S",              # encaissé en banque
+    "Chèques sans provision - A&S",
+    "Traite Bancaire sans provision - A&S",
+)
+COMPTES_PARTENAIRE = ("Economiq Aqua Solution - A&S", "Ayman Fourati - A&S")
+COMPTE_ATTENDU = {
+    "Espèces": "Espèces - A&S",
+    "Chèque": "Chèques - A&S",
+    "Traite bancaire LC": "Traite Bancaire - A&S",
+    "Retenue a la source vente": "Avance  impôt société - A&S",
+    "Perte de paiement": "Perte de non paiement - A&S",
+}
+COMPTE_PAR_DEFAUT = "STE430127B - Zitouna - A&S"
 
 # Millime : la précision monétaire du site. Sert de marge aux comparaisons.
 TOLERANCE = 0.001
@@ -192,6 +205,34 @@ def avoirs_disponibles(customer):
     }
 
 
+def paiement_verrouille(paid_to, mode):
+    """L'argent est-il déjà arrivé ? Copie fidèle de `pe_is_locked` (Server
+    Script « re-generate payment after sales order »).
+
+    Un règlement est verrouillé s'il porte un compte de banque (ou d'impayé),
+    ou s'il a quitté le compte d'attente de son mode — le signe qu'un
+    encaissement l'a déplacé.
+    """
+    if paid_to in COMPTES_VERROUILLES:
+        return True
+    if paid_to in COMPTES_PARTENAIRE:
+        return False
+    # Une « Dette non payée » n'est jamais un encaissement réel, quel que soit
+    # le compte porteur (il change avec le modèle de termes, ex. Aramex).
+    if mode == MODE_DETTE:
+        return False
+    return paid_to != COMPTE_ATTENDU.get(mode, COMPTE_PAR_DEFAUT)
+
+
+def ligne_reductible(ligne):
+    """Cette échéance peut-elle céder une part à un avoir ?"""
+    if not ligne or _millimes(ligne.get("payment_amount")) <= 0:
+        return False
+    if (ligne.get("mode_of_payment") or "") not in MODES_REDUCTIBLES:
+        return False
+    return not ligne.get("verrouillee")
+
+
 def montant_imputable(disponible, ligne):
     """Ce qu'on peut imputer : ni plus que l'avoir disponible du client, ni plus
     que ce que porte la dette qu'on va diminuer.
@@ -205,9 +246,9 @@ def montant_imputable(disponible, ligne):
     C'est aussi pourquoi imputer un avoir ne fait PAS monter `advance_paid` : on
     remplace une allocation par une autre, le total alloué ne bouge pas.
 
-    Quelles échéances sont remplaçables : cf. `MODES_REDUCTIBLES`.
+    Quelles échéances sont remplaçables : cf. `ligne_reductible`.
     """
-    if not ligne or (ligne.get("mode_of_payment") or "") not in MODES_REDUCTIBLES:
+    if not ligne_reductible(ligne):
         return 0.0
     porte = _millimes(ligne.get("payment_amount"))
     return max(_millimes(min(flt(disponible), porte)), 0.0)
@@ -259,12 +300,17 @@ def erreur_application(commande, disponible, montant=None, ligne=None):
         return ("L'échéance choisie est déjà un avoir : choisissez une ligne d'un "
                 "autre mode de paiement.")
 
-    # Un encaissement réel ne se remplace pas par un avoir (cf. MODES_REDUCTIBLES).
+    # De l'argent déjà reçu ne se remplace pas par un avoir : ça se rend.
     if mode not in MODES_REDUCTIBLES:
         return ("Une échéance « %s » ne peut pas être remplacée par un avoir : "
-                "seules les lignes « %s » le peuvent. Pour rendre un encaissement "
+                "seules les lignes « %s » le peuvent. Pour rendre un règlement "
                 "déjà reçu, passez par la caisse."
                 % (mode or "sans mode de paiement", " » / « ".join(MODES_REDUCTIBLES)))
+
+    if ligne.get("verrouillee"):
+        return ("L'échéance choisie est déjà encaissée (%s) : elle ne peut plus "
+                "être remplacée par un avoir. Passez par la caisse."
+                % (ligne.get("paid_to") or "compte bancaire"))
 
     if _millimes(ligne.get("payment_amount")) + TOLERANCE < montant:
         return ("L'échéance choisie (%s) ne couvre pas le montant de l'avoir (%s) : "
@@ -284,11 +330,8 @@ def montant_lisible(valeur):
 
 
 def index_lignes_reductibles(lignes):
-    """Les échéances qu'on a le droit de diminuer, par index : celles dont le
-    mode figure dans `MODES_REDUCTIBLES`, et qui portent un montant."""
-    return [i for i, l in enumerate(lignes)
-            if _millimes(l.get("payment_amount")) > 0
-            and (l.get("mode_of_payment") or "") in MODES_REDUCTIBLES]
+    """Les échéances qu'on a le droit de diminuer, par index."""
+    return [i for i, l in enumerate(lignes) if ligne_reductible(l)]
 
 
 def index_ligne_a_reduire(lignes):
@@ -359,16 +402,43 @@ def plan_application_avoir(lignes, index, montant, date_commande=None):
     }
 
 
+def _comptes_des_reglements(so):
+    """Le compte porteur du règlement de chaque échéance, par uid de ligne.
+
+    C'est `custom_source_row_uid` qui relie un Payment Entry à sa ligne
+    d'échéancier (posé par les Server Scripts et le backfill). Sans règlement,
+    pas de verrou : la ligne n'a encore rien encaissé.
+    """
+    comptes = {}
+    for pe in frappe.get_all(
+            "Payment Entry",
+            filters={"custom_source_sales_order": so.name, "docstatus": 1},
+            fields=["custom_source_row_uid", "paid_to", "mode_of_payment"]):
+        if pe.custom_source_row_uid:
+            comptes[pe.custom_source_row_uid] = pe
+    return comptes
+
+
 def _lignes_echeancier(so):
-    """L'échéancier réduit à ce dont les fonctions pures ont besoin."""
-    return [{
-        "nom": r.name,
-        "idx": r.idx,
-        "mode_of_payment": r.mode_of_payment,
-        "payment_amount": _millimes(r.payment_amount),
-        "invoice_portion": flt(r.invoice_portion),
-        "due_date": r.due_date,
-    } for r in so.payment_schedule]
+    """L'échéancier réduit à ce dont les fonctions pures ont besoin, verrou du
+    règlement compris."""
+    comptes = _comptes_des_reglements(so)
+    lignes = []
+    for r in so.payment_schedule:
+        reglement = comptes.get(getattr(r, "custom_row_uid", None))
+        paid_to = reglement.paid_to if reglement else None
+        lignes.append({
+            "nom": r.name,
+            "idx": r.idx,
+            "mode_of_payment": r.mode_of_payment,
+            "payment_amount": _millimes(r.payment_amount),
+            "invoice_portion": flt(r.invoice_portion),
+            "due_date": r.due_date,
+            "paid_to": paid_to,
+            "verrouillee": bool(reglement) and paiement_verrouille(
+                paid_to, reglement.mode_of_payment or r.mode_of_payment),
+        })
+    return lignes
 
 
 def _resume_commande(so):
@@ -406,8 +476,8 @@ def contexte_avoir(sales_order):
     index = index_ligne_a_reduire(lignes)
     empechement = erreur_application(commande, avoirs["disponible"])
     if not empechement and index is None:
-        empechement = ("Aucune échéance « %s » à diminuer sur cette commande : "
-                       "il n'y a rien qu'un avoir puisse remplacer."
+        empechement = ("Rien à diminuer sur cette commande : seules les échéances "
+                       "« %s » non encore encaissées peuvent céder la place à un avoir."
                        % " » / « ".join(MODES_REDUCTIBLES))
 
     return {
