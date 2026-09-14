@@ -124,8 +124,6 @@ function open_utiliser_avoir_dialog(frm, ctx) {
           ${__("Avoirs créés")} : <b>${format_currency(ctx.cree, devise)}</b> &nbsp;·&nbsp;
           ${__("utilisés")} : <b>${format_currency(ctx.utilise, devise)}</b> &nbsp;·&nbsp;
           ${__("disponible")} : <b>${format_currency(ctx.disponible, devise)}</b><br>
-          ${__("Reste à payer sur cette commande")} :
-          <b>${format_currency(ctx.reste_a_payer, devise)}</b><br>
           ${__(
             "L'avoir est ajouté à l'échéancier au mode « Avoir client » ; la ligne choisie est diminuée d'autant, le total reste égal au TTC."
           )}</div>`,
@@ -138,12 +136,20 @@ function open_utiliser_avoir_dialog(frm, ctx) {
         default: ctx.montant_propose,
       },
       {
+        // Les lignes « Avoir client » ne sont pas dans la liste : le serveur
+        // refuse de diminuer un avoir déjà imputé.
         fieldname: "ligne",
         label: __("Ligne d'échéancier à diminuer"),
         fieldtype: "Select",
         reqd: 1,
         options: options_lignes,
         default: ctx.ligne_par_defaut,
+        change() {
+          // On ne peut pas imputer plus que ce que porte la ligne choisie.
+          const choisie = (ctx.lignes || []).find((l) => l.nom === d.get_value("ligne"));
+          if (!choisie) return;
+          d.set_value("montant", Math.min(flt(ctx.disponible), flt(choisie.payment_amount)));
+        },
       },
     ],
     primary_action_label: __("Imputer l'avoir"),

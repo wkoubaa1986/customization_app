@@ -14,7 +14,9 @@ Le process complet, en trois temps :
      autre ligne (le total doit rester égal au TTC). Les Server Scripts
      « Generation payement » / « re-generate payment after sales order » créent
      alors l'écriture « Credit Note » mode « Avoir client » référencée sur la
-     commande — c'est elle qui augmente `advance_paid`.
+     commande — elle REMPLACE le Payment Entry de la part diminuée. Le total
+     alloué à la commande ne bouge donc pas : `advance_paid` reste le même,
+     seule la nature du règlement change (une dette devient un avoir).
 
 L'étape 3 était purement manuelle et invisible : d'où `avoirs_disponibles()`
 (le solde, affiché en bandeau sur la commande) et `appliquer_avoir()` (le
@@ -125,9 +127,12 @@ def avoirs_disponibles(customer):
     référence dont la contrepartie est le compte temporaire d'ouverture ; un
     avoir UTILISÉ est le crédit référencé d'une écriture mode « Avoir client ».
     """
-    vide = {"cree": 0.0, "utilise": 0.0, "disponible": 0.0, "ecritures": []}
     if not customer:
-        return vide
+        return {"cree": 0.0, "utilise": 0.0, "disponible": 0.0, "ecritures": []}
+
+    # Le solde d'avoir est une donnée du client : on ne le livre qu'à qui a le
+    # droit de lire sa fiche.
+    frappe.has_permission("Customer", "read", doc=customer, throw=True)
 
     flottants = frappe.db.sql("""
         SELECT je.name AS journal_entry, je.posting_date AS date,
@@ -166,17 +171,27 @@ def avoirs_disponibles(customer):
     }
 
 
-def montant_imputable(disponible, grand_total, advance_paid):
-    """Ce qu'on peut raisonnablement imputer : ni plus que l'avoir disponible,
-    ni plus que ce qui reste à payer sur la commande."""
-    reste = _millimes(flt(grand_total) - flt(advance_paid))
-    return max(_millimes(min(flt(disponible), reste)), 0.0)
+def montant_imputable(disponible, ligne):
+    """Ce qu'on peut imputer : ni plus que l'avoir disponible du client, ni plus
+    que ce que porte l'échéance qu'on va diminuer.
+
+    Ce n'est SURTOUT PAS « TTC − avance payée ». Sur ce site, chaque ligne de
+    l'échéancier engendre un Payment Entry alloué à la commande — y compris les
+    « Dette non payée », qui ne sont encaissées nulle part : `advance_paid` vaut
+    donc le TTC dès la validation, même quand le client doit encore tout. S'en
+    servir de plafond fermerait la porte à toutes les commandes.
+
+    C'est aussi pourquoi imputer un avoir ne fait PAS monter `advance_paid` : on
+    remplace une allocation par une autre, le total alloué ne bouge pas.
+    """
+    porte = _millimes((ligne or {}).get("payment_amount"))
+    return max(_millimes(min(flt(disponible), porte)), 0.0)
 
 
 def erreur_application(commande, disponible, montant=None, ligne=None):
     """Pourquoi l'imputation est refusée, en français — ou None si elle passe.
 
-    `commande` : dict (docstatus, status, grand_total, advance_paid, per_billed).
+    `commande` : dict (docstatus, status, per_billed).
     `montant` et `ligne` sont facultatifs : sans eux on ne juge que l'éligibilité
     de la commande (c'est ce qui décide d'afficher ou non le bouton).
     """
@@ -196,10 +211,6 @@ def erreur_application(commande, disponible, montant=None, ligne=None):
     if disponible <= 0:
         return "Ce client n'a aucun avoir disponible."
 
-    reste = _millimes(flt(commande.get("grand_total")) - flt(commande.get("advance_paid")))
-    if reste <= 0:
-        return "La commande est déjà entièrement réglée : il n'y a rien à imputer."
-
     if montant is None:
         return None
 
@@ -209,11 +220,19 @@ def erreur_application(commande, disponible, montant=None, ligne=None):
     if montant > disponible + TOLERANCE:
         return ("Le montant à imputer (%s) dépasse l'avoir disponible du client (%s)."
                 % (montant_lisible(montant), montant_lisible(disponible)))
-    if montant > reste + TOLERANCE:
-        return ("Le montant à imputer (%s) dépasse le reste à payer de la commande (%s)."
-                % (montant_lisible(montant), montant_lisible(reste)))
 
-    if ligne is not None and _millimes(ligne.get("payment_amount")) + TOLERANCE < montant:
+    if ligne is None:
+        return None
+
+    # Diminuer une ligne « Avoir client » déjà imputée ferait diverger
+    # l'échéancier et la comptabilité : à la régénération, le script conserve
+    # l'écriture existante (même uid de ligne) sans corriger son montant, PUIS
+    # crée celle de la nouvelle ligne.
+    if (ligne.get("mode_of_payment") or "") == MODE_AVOIR:
+        return ("L'échéance choisie est déjà un avoir : choisissez une ligne d'un "
+                "autre mode de paiement.")
+
+    if _millimes(ligne.get("payment_amount")) + TOLERANCE < montant:
         return ("L'échéance choisie (%s) ne couvre pas le montant de l'avoir (%s) : "
                 "choisissez une autre ligne de l'échéancier."
                 % (montant_lisible(ligne.get("payment_amount")), montant_lisible(montant)))
@@ -230,20 +249,31 @@ def montant_lisible(valeur):
 # ─────────────────────── Imputation sur une commande ───────────────────────
 
 
+def index_lignes_reductibles(lignes):
+    """Les échéances qu'on a le droit de diminuer, par index.
+
+    Ni les lignes vides, ni les lignes « Avoir client » : réduire un avoir déjà
+    imputé désynchroniserait l'échéancier et les écritures (cf.
+    `erreur_application`).
+    """
+    return [i for i, l in enumerate(lignes)
+            if _millimes(l.get("payment_amount")) > 0
+            and (l.get("mode_of_payment") or "") != MODE_AVOIR]
+
+
 def index_ligne_a_reduire(lignes):
     """Quelle échéance diminuer par défaut pour faire place à l'avoir.
 
     Une « Dette non payée » d'abord — la plus grosse : c'est la seule ligne qui
     ne correspond à aucun encaissement réel, la diminuer ne touche à aucune
-    caisse. À défaut, la dernière ligne qui n'est pas déjà un avoir.
+    caisse. À défaut, la dernière ligne réductible.
     """
-    payantes = [i for i, l in enumerate(lignes) if _millimes(l.get("payment_amount")) > 0]
-    dettes = [i for i in payantes if (lignes[i].get("mode_of_payment") or "") == MODE_DETTE]
+    reductibles = index_lignes_reductibles(lignes)
+    dettes = [i for i in reductibles if (lignes[i].get("mode_of_payment") or "") == MODE_DETTE]
     if dettes:
         return max(dettes, key=lambda i: _millimes(lignes[i].get("payment_amount")))
-    autres = [i for i in payantes if (lignes[i].get("mode_of_payment") or "") != MODE_AVOIR]
-    if autres:
-        return autres[-1]
+    if reductibles:
+        return reductibles[-1]
     return None
 
 
@@ -316,20 +346,37 @@ def _resume_commande(so):
         "status": so.status,
         "per_billed": flt(so.per_billed),
         "grand_total": _millimes(so.grand_total),
-        "advance_paid": _millimes(so.advance_paid),
     }
+
+
+def _commande(sales_order, permission):
+    """La commande, une fois le droit `permission` vérifié pour l'utilisateur.
+
+    `check_permission` lève une PermissionError explicite : ces méthodes sont
+    appelables depuis le client, elles ne peuvent pas se contenter du fait que
+    l'appelant connaît le nom d'une commande.
+    """
+    if not sales_order:
+        frappe.throw(_("Commande manquante."))
+    so = frappe.get_doc("Sales Order", sales_order)
+    so.check_permission(permission)
+    return so
 
 
 @frappe.whitelist()
 def contexte_avoir(sales_order):
     """Tout ce que la fiche commande affiche : le solde d'avoir du client, le
-    montant imputable, l'échéancier et la ligne à réduire proposée."""
-    so = frappe.get_doc("Sales Order", sales_order)
+    montant imputable, les échéances diminuables et celle proposée."""
+    so = _commande(sales_order, "read")
     avoirs = avoirs_disponibles(so.customer)
     commande = _resume_commande(so)
     lignes = _lignes_echeancier(so)
+    reductibles = [lignes[i] for i in index_lignes_reductibles(lignes)]
     index = index_ligne_a_reduire(lignes)
     empechement = erreur_application(commande, avoirs["disponible"])
+    if not empechement and index is None:
+        empechement = ("Aucune échéance de cette commande ne peut être diminuée "
+                       "pour laisser la place à un avoir.")
 
     return {
         "customer": so.customer,
@@ -339,12 +386,12 @@ def contexte_avoir(sales_order):
         "disponible": avoirs["disponible"],
         "ecritures": avoirs["ecritures"],
         "grand_total": commande["grand_total"],
-        "advance_paid": commande["advance_paid"],
-        "reste_a_payer": _millimes(commande["grand_total"] - commande["advance_paid"]),
-        "montant_propose": montant_imputable(
-            avoirs["disponible"], commande["grand_total"], commande["advance_paid"]),
-        "lignes": lignes,
+        # Les lignes « Avoir client » ne sont pas proposées : on ne diminue pas
+        # un avoir déjà imputé.
+        "lignes": reductibles,
         "ligne_par_defaut": lignes[index]["nom"] if index is not None else None,
+        "montant_propose": montant_imputable(
+            avoirs["disponible"], lignes[index] if index is not None else None),
         "imputable": not empechement,
         "empechement": empechement,
     }
@@ -359,10 +406,7 @@ def appliquer_avoir(sales_order, montant, ligne=None):
     l'écriture « Credit Note » référencée sur la commande. Créer nous-mêmes une
     écriture ici la compterait deux fois.
     """
-    if not sales_order:
-        frappe.throw(_("Commande manquante."))
-
-    so = frappe.get_doc("Sales Order", sales_order)
+    so = _commande(sales_order, "write")
     avoirs = avoirs_disponibles(so.customer)
     lignes = _lignes_echeancier(so)
 
@@ -396,7 +440,6 @@ def appliquer_avoir(sales_order, montant, ligne=None):
     for position, r in enumerate(so.payment_schedule, start=1):
         r.idx = position
 
-    so.flags.ignore_permissions = True
     so.save()
 
     return {
