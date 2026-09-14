@@ -348,6 +348,34 @@ function tache_dialogue_cloture(frm, exigences) {
             });
     }
 
+    // Validation CÔTÉ SERVEUR de la commande PUIS du bon de livraison.
+    // « Ouvrir pour valider » suppose le droit de LIRE le document, que le
+    // partenaire n'a pas : ce bouton fait le même travail sans l'ouvrir, et le
+    // serveur revérifie que la tâche est bien la sienne.
+    // ⚠️ UNE SEULE FONCTION POUR LES DEUX ZONES. Le bouton « ✅ Valider » existe
+    // sur la ligne COMMANDE (`zone`) et sur la ligne BL (`zone_infos`) ; il n'a
+    // longtemps été branché que dans rendre_infos(), donc uniquement sur les
+    // BL. Or tant que la commande est en brouillon il n'y a PAS de BL (c'est la
+    // validation qui le crée) : le partenaire ne voyait qu'un bouton inerte
+    // (régression v5.51.2, constatée en prod).
+    function valider_documents() {
+        frappe.call({
+            method: "customization_app.cloture_partenaire.valider_documents",
+            args: { tache: frm.docname },
+            freeze: true,
+            freeze_message: __("Validation en cours…"),
+            callback: (r) => {
+                frappe.msgprint({
+                    title: __("Documents validés"), indicator: "green",
+                    message: ((r.message || {}).etapes || []).map((x) =>
+                        `<div><b>${esc(x.quoi)}</b> : ${esc(x.doc)} — ${esc(x.etat)}</div>`
+                    ).join(""),
+                });
+                rafraichir();
+            },
+        });
+    }
+
     // 💰 Paiements reçus + 🚛 bons de livraison de la commande liée, sous le
     // rapport. Un BL en BROUILLON s'ouvre en popup pour être validé avant la
     // clôture — c'est la pièce qui dit ce qui est réellement parti.
@@ -413,28 +441,11 @@ function tache_dialogue_cloture(frm, exigences) {
             </div>`;
         });
         zi.$wrapper.html(html);
-        // Validation CÔTÉ SERVEUR : « Ouvrir pour valider » suppose le droit de
-        // lire le document, que le partenaire n'a pas. Ce bouton fait le même
-        // travail sans l'ouvrir, et le serveur revérifie que la tâche est bien
-        // la sienne.
-        zi.$wrapper.find("[data-valider-docs]").on("click", function () {
-            frappe.call({
-                method: "customization_app.cloture_partenaire.valider_documents",
-                args: { tache: frm.doc.name },
-                freeze: true,
-                freeze_message: __("Validation en cours…"),
-                callback: (r) => {
-                    const esc2 = frappe.utils.escape_html;
-                    frappe.msgprint({
-                        title: __("Documents validés"), indicator: "green",
-                        message: ((r.message || {}).etapes || []).map((x) =>
-                            `<div><b>${esc2(x.quoi)}</b> : ${esc2(x.doc)} — ${esc2(x.etat)}</div>`
-                        ).join(""),
-                    });
-                    rafraichir();
-                },
-            });
-        });
+        // Le « ✅ Valider » de la ligne BL — même geste que celui de la ligne
+        // commande, branché sur la MÊME fonction (une zone, un branchement :
+        // les deux boutons vivent dans deux wrappers distincts, un clic ne
+        // déclenche donc qu'un seul appel serveur).
+        zi.$wrapper.find("[data-valider-docs]").on("click", valider_documents);
 
         zi.$wrapper.find("[data-ouvrir-bl]").on("click", function () {
             const bl = $(this).attr("data-ouvrir-bl");
@@ -449,6 +460,11 @@ function tache_dialogue_cloture(frm, exigences) {
     }
 
     function brancher_boutons_zone() {
+        // Le « ✅ Valider » de la ligne COMMANDE : sans ce branchement, il ne
+        // se passait rien au clic tant qu'aucun BL n'existait (voir
+        // valider_documents).
+        d.fields_dict.zone.$wrapper.find("[data-valider-docs]").on("click", valider_documents);
+
         // Enregistrement du lien saisi à la main.
         const enregistrer_gmap = () => {
             const champ = d.fields_dict.zone.$wrapper.find("[data-gmap-champ]");
