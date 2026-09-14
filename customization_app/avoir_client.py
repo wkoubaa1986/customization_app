@@ -1,24 +1,87 @@
 """
-Création d'un avoir client à partir d'un Sales Order.
+Avoir client : création, solde disponible et imputation sur une commande.
 
-Reproduit exactement l'écriture d'avoir saisie manuellement :
-  - CRÉDIT  « Débiteurs - A&S » (party = client)  → le client gagne un crédit (avoir).
-  - DÉBIT   « Compte temporaire - compte  d'overture - A&S »
-  - Journal Entry simple (voucher_type "Journal Entry"), référence « Avoir <client> ».
+Le process complet, en trois temps :
+  1. BL de retour (Delivery Note négatif) — la marchandise revient.
+  2. « Avoir > Créer un avoir » sur la commande d'origine : une écriture de
+     journal FLOTTANTE crédite le client.
+       - CRÉDIT  « Débiteurs - A&S » (party = client) → le client gagne un avoir.
+       - DÉBIT   « Compte temporaire - compte  d'overture - A&S »
+       - Journal Entry simple (voucher_type "Journal Entry"), réf. « Avoir <client> ».
+     Aucun lien avec une commande : c'est un crédit client réutilisable.
+  3. « Avoir > Utiliser un avoir » sur une AUTRE commande : on ajoute à son
+     échéancier une ligne au mode « Avoir client » et on diminue d'autant une
+     échéance encore due (cf. `MODES_REDUCTIBLES` : dette, chèque ou traite non
+     encaissés — le total reste égal au TTC). Les Server Scripts
+     « Generation payement » / « re-generate payment after sales order » créent
+     alors l'écriture « Credit Note » mode « Avoir client » référencée sur la
+     commande — elle REMPLACE le Payment Entry de la part diminuée. Le total
+     alloué à la commande ne bouge donc pas : `advance_paid` reste le même,
+     seule la nature du règlement change (une dette devient un avoir).
 
-C'est un CRÉDIT CLIENT FLOTTANT (aucun lien commande) : il est ensuite appliqué comme
-paiement par la logique existante lorsqu'on ajoute une ligne d'échéancier au mode
-« Avoir client » du même montant (détection par montant dans
-`backfill_selective_payment.py` et le script « re-generate payment after sales order »).
+L'étape 3 était purement manuelle et invisible : d'où `avoirs_disponibles()`
+(le solde, affiché en bandeau sur la commande) et `appliquer_avoir()` (le
+rééquilibrage de l'échéancier). Rien ici n'écrit de comptabilité : on ne touche
+QUE l'échéancier, les Server Scripts existants font l'écriture.
+
+Attention : rien ne relie une utilisation à l'avoir d'origine. Le solde se lit
+en MONTANTS (créés − utilisés), exactement comme les indicateurs « Avoirs
+créés / utilisés / disponibles » de la fiche Client.
 """
 
 import frappe
 from frappe import _
-from frappe.utils import flt, nowdate
+from frappe.utils import add_days, flt, getdate, nowdate
 
 RECEIVABLE_ACCOUNT = "Débiteurs - A&S"
 # Nom exact tel qu'en base (double espace volontaire dans « compte  d'overture »).
 DEFAULT_DEBIT_ACCOUNT = "Compte temporaire - compte  d'overture - A&S"
+
+MODE_AVOIR = "Avoir client"
+MODE_DETTE = "Dette non payée"
+
+# Quelles échéances un avoir a le droit de remplacer (arbitrage du gérant,
+# ticket #23) : ce qui n'est pas encore de l'argent reçu.
+#   - « Dette non payée » : le client doit encore la somme ;
+#   - « Chèque » et « Traite bancaire LC » : le papier est là, la banque n'a
+#     rien crédité.
+# Les espèces restent hors liste : elles sont physiquement en caisse, les
+# rendre est une décision de caisse et non un rééquilibrage d'échéancier.
+#
+# Ce filtre par mode ne suffit pas : un chèque ENCAISSÉ garde le mode
+# « Chèque ». Il faut aussi que le paiement ne soit pas verrouillé — cf.
+# `paiement_verrouille`.
+MODES_REDUCTIBLES = (MODE_DETTE, "Chèque", "Traite bancaire LC")
+
+# ── Verrouillage d'un règlement, à l'identique du Server Script
+# « re-generate payment after sales order » (fonction `pe_is_locked`).
+# Toucher à une échéance verrouillée ne marcherait pas : le script RESTAURE la
+# ligne en base et se contente d'un message — mais notre ligne d'avoir, elle,
+# resterait, et le total de l'échéancier dépasserait le TTC.
+COMPTES_VERROUILLES = (
+    "STE430127B - Zitouna - A&S",              # encaissé en banque
+    "Chèques sans provision - A&S",
+    "Traite Bancaire sans provision - A&S",
+)
+COMPTES_PARTENAIRE = ("Economiq Aqua Solution - A&S", "Ayman Fourati - A&S")
+COMPTE_ATTENDU = {
+    "Espèces": "Espèces - A&S",
+    "Chèque": "Chèques - A&S",
+    "Traite bancaire LC": "Traite Bancaire - A&S",
+    "Retenue a la source vente": "Avance  impôt société - A&S",
+    "Perte de paiement": "Perte de non paiement - A&S",
+}
+COMPTE_PAR_DEFAUT = "STE430127B - Zitouna - A&S"
+
+# Millime : la précision monétaire du site. Sert de marge aux comparaisons.
+TOLERANCE = 0.001
+
+# Statuts sur lesquels on ne peut plus rien imputer par l'échéancier.
+STATUTS_BLOQUANTS = {
+    "Closed": "fermée",
+    "Cancelled": "annulée",
+    "On Hold": "en attente",
+}
 
 
 @frappe.whitelist()
@@ -75,4 +138,417 @@ def create_avoir_from_sales_order(sales_order, amount, debit_account=None,
         "amount": amount,
         "advance_paid": flt(so.advance_paid, 3),
         "over_paid": amount > flt(so.advance_paid, 3),
+    }
+
+
+# ───────────────────────── Solde d'avoir du client ─────────────────────────
+# Les fonctions ci-dessous doivent rester appelables sans site (tests unitaires
+# purs) : messages en français sans `_()`, et arrondis via `_millimes` — `flt(x, 3)`
+# lit le format de nombre du site et renvoie 0 en dehors.
+
+
+def _millimes(valeur):
+    """Un montant arrondi au millime, la précision monétaire du site."""
+    return round(flt(valeur), 3)
+
+
+@frappe.whitelist()
+def avoirs_disponibles(customer):
+    """Avoirs d'un client : créés (flottants), utilisés (imputés), disponible.
+
+    Même lecture que les indicateurs de la fiche Client (Server Script « get
+    customer information ») : un avoir CRÉÉ est un crédit « Débiteurs » sans
+    référence dont la contrepartie est le compte temporaire d'ouverture ; un
+    avoir UTILISÉ est le crédit référencé d'une écriture mode « Avoir client ».
+    """
+    if not customer:
+        return {"cree": 0.0, "utilise": 0.0, "disponible": 0.0, "ecritures": []}
+
+    # Le solde d'avoir est une donnée du client : on ne le livre qu'à qui a le
+    # droit de lire sa fiche.
+    frappe.has_permission("Customer", "read", doc=customer, throw=True)
+
+    flottants = frappe.db.sql("""
+        SELECT je.name AS journal_entry, je.posting_date AS date,
+               jea.credit_in_account_currency AS montant
+        FROM `tabJournal Entry` je
+        JOIN `tabJournal Entry Account` jea ON jea.parent = je.name
+        WHERE je.docstatus = 1 AND jea.party_type = 'Customer' AND jea.party = %s
+          AND jea.account = %s AND jea.credit_in_account_currency > 0
+          AND (jea.reference_name IS NULL OR jea.reference_name = '')
+          AND EXISTS (SELECT 1 FROM `tabJournal Entry Account` j2
+                      WHERE j2.parent = je.name AND j2.account = %s)
+        ORDER BY je.posting_date DESC, je.name DESC
+    """, (customer, RECEIVABLE_ACCOUNT, DEFAULT_DEBIT_ACCOUNT), as_dict=True)
+
+    utilises = frappe.db.sql("""
+        SELECT SUM(jea.credit_in_account_currency) AS montant
+        FROM `tabJournal Entry` je
+        JOIN `tabJournal Entry Account` jea ON jea.parent = je.name
+        WHERE je.docstatus = 1 AND jea.party_type = 'Customer' AND jea.party = %s
+          AND jea.account = %s AND je.mode_of_payment = %s
+          AND jea.credit_in_account_currency > 0
+          AND jea.reference_name IS NOT NULL AND jea.reference_name != ''
+    """, (customer, RECEIVABLE_ACCOUNT, MODE_AVOIR), as_dict=True)
+
+    cree = _millimes(sum(flt(f.get("montant")) for f in flottants))
+    utilise = _millimes(utilises[0].get("montant") if utilises else 0)
+    return {
+        "cree": cree,
+        "utilise": utilise,
+        "disponible": _millimes(cree - utilise),
+        "ecritures": [{
+            "journal_entry": f.get("journal_entry"),
+            "date": str(f.get("date") or ""),
+            "montant": _millimes(f.get("montant")),
+        } for f in flottants],
+    }
+
+
+def paiement_verrouille(paid_to, mode):
+    """L'argent est-il déjà arrivé ? Copie fidèle de `pe_is_locked` (Server
+    Script « re-generate payment after sales order »).
+
+    Un règlement est verrouillé s'il porte un compte de banque (ou d'impayé),
+    ou s'il a quitté le compte d'attente de son mode — le signe qu'un
+    encaissement l'a déplacé.
+    """
+    if paid_to in COMPTES_VERROUILLES:
+        return True
+    if paid_to in COMPTES_PARTENAIRE:
+        return False
+    # Une « Dette non payée » n'est jamais un encaissement réel, quel que soit
+    # le compte porteur (il change avec le modèle de termes, ex. Aramex).
+    if mode == MODE_DETTE:
+        return False
+    return paid_to != COMPTE_ATTENDU.get(mode, COMPTE_PAR_DEFAUT)
+
+
+def ligne_reductible(ligne):
+    """Cette échéance peut-elle céder une part à un avoir ?"""
+    if not ligne or _millimes(ligne.get("payment_amount")) <= 0:
+        return False
+    if (ligne.get("mode_of_payment") or "") not in MODES_REDUCTIBLES:
+        return False
+    return not ligne.get("verrouillee")
+
+
+def montant_imputable(disponible, ligne):
+    """Ce qu'on peut imputer : ni plus que l'avoir disponible du client, ni plus
+    que ce que porte la dette qu'on va diminuer.
+
+    Ce n'est SURTOUT PAS « TTC − avance payée ». Sur ce site, chaque ligne de
+    l'échéancier engendre un Payment Entry alloué à la commande — y compris les
+    « Dette non payée », qui ne sont encaissées nulle part : `advance_paid` vaut
+    donc le TTC dès la validation, même quand le client doit encore tout. S'en
+    servir de plafond fermerait la porte à toutes les commandes.
+
+    C'est aussi pourquoi imputer un avoir ne fait PAS monter `advance_paid` : on
+    remplace une allocation par une autre, le total alloué ne bouge pas.
+
+    Quelles échéances sont remplaçables : cf. `ligne_reductible`.
+    """
+    if not ligne_reductible(ligne):
+        return 0.0
+    porte = _millimes(ligne.get("payment_amount"))
+    return max(_millimes(min(flt(disponible), porte)), 0.0)
+
+
+def erreur_application(commande, disponible, montant=None, ligne=None):
+    """Pourquoi l'imputation est refusée, en français — ou None si elle passe.
+
+    `commande` : dict (docstatus, status, per_billed).
+    `montant` et `ligne` sont facultatifs : sans eux on ne juge que l'éligibilité
+    de la commande (c'est ce qui décide d'afficher ou non le bouton).
+    """
+    if flt(commande.get("docstatus")) != 1:
+        return "La commande doit être validée pour y imputer un avoir."
+
+    statut = commande.get("status") or ""
+    if statut in STATUTS_BLOQUANTS:
+        return ("La commande est %s : imputez l'avoir sur la facture, via "
+                "Rapprochement de paiement." % STATUTS_BLOQUANTS[statut])
+
+    if flt(commande.get("per_billed")) > 0:
+        return ("La commande est déjà facturée : imputez l'avoir sur la facture, "
+                "via Rapprochement de paiement.")
+
+    disponible = _millimes(disponible)
+    if disponible <= 0:
+        return "Ce client n'a aucun avoir disponible."
+
+    if montant is None:
+        return None
+
+    montant = _millimes(montant)
+    if montant <= 0:
+        return "Le montant à imputer doit être supérieur à 0."
+    if montant > disponible + TOLERANCE:
+        return ("Le montant à imputer (%s) dépasse l'avoir disponible du client (%s)."
+                % (montant_lisible(montant), montant_lisible(disponible)))
+
+    if ligne is None:
+        return None
+
+    mode = ligne.get("mode_of_payment") or ""
+
+    # Diminuer une ligne « Avoir client » déjà imputée ferait diverger
+    # l'échéancier et la comptabilité : à la régénération, le script conserve
+    # l'écriture existante (même uid de ligne) sans corriger son montant, PUIS
+    # crée celle de la nouvelle ligne.
+    if mode == MODE_AVOIR:
+        return ("L'échéance choisie est déjà un avoir : choisissez une ligne d'un "
+                "autre mode de paiement.")
+
+    # De l'argent déjà reçu ne se remplace pas par un avoir : ça se rend.
+    if mode not in MODES_REDUCTIBLES:
+        return ("Une échéance « %s » ne peut pas être remplacée par un avoir : "
+                "seules les lignes « %s » le peuvent. Pour rendre un règlement "
+                "déjà reçu, passez par la caisse."
+                % (mode or "sans mode de paiement", " » / « ".join(MODES_REDUCTIBLES)))
+
+    if ligne.get("verrouillee"):
+        return ("L'échéance choisie est déjà encaissée (%s) : elle ne peut plus "
+                "être remplacée par un avoir. Passez par la caisse."
+                % (ligne.get("paid_to") or "compte bancaire"))
+
+    if _millimes(ligne.get("payment_amount")) + TOLERANCE < montant:
+        return ("L'échéance choisie (%s) ne couvre pas le montant de l'avoir (%s) : "
+                "choisissez une autre ligne de l'échéancier."
+                % (montant_lisible(ligne.get("payment_amount")), montant_lisible(montant)))
+
+    return None
+
+
+def montant_lisible(valeur):
+    """« 1 234,500 DT » — pour les messages, sans dépendre du format du site."""
+    texte = "{:,.3f}".format(_millimes(valeur))
+    return texte.replace(",", " ").replace(".", ",") + " DT"
+
+
+# ─────────────────────── Imputation sur une commande ───────────────────────
+
+
+def index_lignes_reductibles(lignes):
+    """Les échéances qu'on a le droit de diminuer, par index."""
+    return [i for i, l in enumerate(lignes) if ligne_reductible(l)]
+
+
+def index_ligne_a_reduire(lignes):
+    """Quelle échéance diminuer par défaut pour faire place à l'avoir.
+
+    Une « Dette non payée » d'abord — la plus grosse : c'est la seule ligne qui
+    ne correspond à aucun encaissement réel, la diminuer ne touche à aucune
+    caisse. À défaut (si `MODES_REDUCTIBLES` est élargi), la dernière ligne
+    réductible.
+    """
+    reductibles = index_lignes_reductibles(lignes)
+    dettes = [i for i in reductibles if (lignes[i].get("mode_of_payment") or "") == MODE_DETTE]
+    if dettes:
+        return max(dettes, key=lambda i: _millimes(lignes[i].get("payment_amount")))
+    if reductibles:
+        return reductibles[-1]
+    return None
+
+
+def date_echeance_libre(dates_prises, depart):
+    """ERPNext refuse deux échéances à la même date : on décale d'un jour
+    jusqu'à en trouver une de libre."""
+    prises = {getdate(d) for d in dates_prises if d}
+    jour = getdate(depart)
+    while jour in prises:
+        jour = getdate(add_days(jour, 1))
+    return jour
+
+
+def plan_application_avoir(lignes, index, montant, date_commande=None):
+    """La modification à appliquer à l'échéancier, sans rien enregistrer.
+
+    Le total ne bouge pas : la ligne choisie perd exactement ce que gagne la
+    nouvelle ligne « Avoir client ». Si elle tombe à zéro elle disparaît — une
+    échéance à 0 ferait échouer la génération du paiement.
+
+    `invoice_portion` est répartie au prorata des montants : ERPNext recalcule
+    `payment_amount` à partir d'elle à chaque enregistrement (set_payment_schedule),
+    la laisser inchangée annulerait la réduction au premier save.
+    """
+    montant = _millimes(montant)
+    ligne = lignes[index]
+    initial = _millimes(ligne.get("payment_amount"))
+    reste = _millimes(initial - montant)
+    supprimer = reste < TOLERANCE
+
+    portion = flt(ligne.get("invoice_portion"))
+    portion_avoir = round(portion * montant / initial, 6) if portion and initial else 0
+
+    # La date de la ligne supprimée redevient libre pour la ligne d'avoir.
+    dates = [l.get("due_date") for i, l in enumerate(lignes) if not (supprimer and i == index)]
+    echeance = date_echeance_libre(
+        dates, ligne.get("due_date") or date_commande or nowdate())
+
+    return {
+        "index": index,
+        "montant": montant,
+        "supprimer_ligne": supprimer,
+        "nouveau_montant_ligne": 0.0 if supprimer else reste,
+        "nouvelle_portion_ligne": 0 if supprimer else round(portion - portion_avoir, 6),
+        "ligne_avoir": {
+            "due_date": echeance,
+            "payment_amount": montant,
+            "invoice_portion": portion_avoir,
+            "mode_of_payment": MODE_AVOIR,
+            "description": "Avoir client imputé sur cette commande",
+        },
+    }
+
+
+def _comptes_des_reglements(so):
+    """Le compte porteur du règlement de chaque échéance, par uid de ligne.
+
+    C'est `custom_source_row_uid` qui relie un Payment Entry à sa ligne
+    d'échéancier (posé par les Server Scripts et le backfill). Sans règlement,
+    pas de verrou : la ligne n'a encore rien encaissé.
+    """
+    comptes = {}
+    for pe in frappe.get_all(
+            "Payment Entry",
+            filters={"custom_source_sales_order": so.name, "docstatus": 1},
+            fields=["custom_source_row_uid", "paid_to", "mode_of_payment"]):
+        if pe.custom_source_row_uid:
+            comptes[pe.custom_source_row_uid] = pe
+    return comptes
+
+
+def _lignes_echeancier(so):
+    """L'échéancier réduit à ce dont les fonctions pures ont besoin, verrou du
+    règlement compris."""
+    comptes = _comptes_des_reglements(so)
+    lignes = []
+    for r in so.payment_schedule:
+        reglement = comptes.get(getattr(r, "custom_row_uid", None))
+        paid_to = reglement.paid_to if reglement else None
+        lignes.append({
+            "nom": r.name,
+            "idx": r.idx,
+            "mode_of_payment": r.mode_of_payment,
+            "payment_amount": _millimes(r.payment_amount),
+            "invoice_portion": flt(r.invoice_portion),
+            "due_date": r.due_date,
+            "paid_to": paid_to,
+            "verrouillee": bool(reglement) and paiement_verrouille(
+                paid_to, reglement.mode_of_payment or r.mode_of_payment),
+        })
+    return lignes
+
+
+def _resume_commande(so):
+    return {
+        "docstatus": so.docstatus,
+        "status": so.status,
+        "per_billed": flt(so.per_billed),
+        "grand_total": _millimes(so.grand_total),
+    }
+
+
+def _commande(sales_order, permission):
+    """La commande, une fois le droit `permission` vérifié pour l'utilisateur.
+
+    `check_permission` lève une PermissionError explicite : ces méthodes sont
+    appelables depuis le client, elles ne peuvent pas se contenter du fait que
+    l'appelant connaît le nom d'une commande.
+    """
+    if not sales_order:
+        frappe.throw(_("Commande manquante."))
+    so = frappe.get_doc("Sales Order", sales_order)
+    so.check_permission(permission)
+    return so
+
+
+@frappe.whitelist()
+def contexte_avoir(sales_order):
+    """Tout ce que la fiche commande affiche : le solde d'avoir du client, le
+    montant imputable, les échéances diminuables et celle proposée."""
+    so = _commande(sales_order, "read")
+    avoirs = avoirs_disponibles(so.customer)
+    commande = _resume_commande(so)
+    lignes = _lignes_echeancier(so)
+    reductibles = [lignes[i] for i in index_lignes_reductibles(lignes)]
+    index = index_ligne_a_reduire(lignes)
+    empechement = erreur_application(commande, avoirs["disponible"])
+    if not empechement and index is None:
+        empechement = ("Rien à diminuer sur cette commande : seules les échéances "
+                       "« %s » non encore encaissées peuvent céder la place à un avoir."
+                       % " » / « ".join(MODES_REDUCTIBLES))
+
+    return {
+        "customer": so.customer,
+        "devise": so.currency,
+        "cree": avoirs["cree"],
+        "utilise": avoirs["utilise"],
+        "disponible": avoirs["disponible"],
+        "ecritures": avoirs["ecritures"],
+        "grand_total": commande["grand_total"],
+        # Seules les échéances remplaçables sont proposées (MODES_REDUCTIBLES) :
+        # ni un avoir déjà imputé, ni un encaissement réel.
+        "lignes": reductibles,
+        "modes_reductibles": list(MODES_REDUCTIBLES),
+        "ligne_par_defaut": lignes[index]["nom"] if index is not None else None,
+        "montant_propose": montant_imputable(
+            avoirs["disponible"], lignes[index] if index is not None else None),
+        "imputable": not empechement,
+        "empechement": empechement,
+    }
+
+
+@frappe.whitelist()
+def appliquer_avoir(sales_order, montant, ligne=None):
+    """Impute un avoir disponible sur une commande, via son échéancier.
+
+    On ne touche QUE l'échéancier : la ligne « Avoir client » ajoutée déclenche
+    le Server Script « re-generate payment after sales order », qui crée
+    l'écriture « Credit Note » référencée sur la commande. Créer nous-mêmes une
+    écriture ici la compterait deux fois.
+    """
+    so = _commande(sales_order, "write")
+    avoirs = avoirs_disponibles(so.customer)
+    lignes = _lignes_echeancier(so)
+
+    index = None
+    if ligne:
+        index = next((i for i, l in enumerate(lignes) if l["nom"] == ligne), None)
+        if index is None:
+            frappe.throw(_("Ligne d'échéancier introuvable sur cette commande."))
+    else:
+        index = index_ligne_a_reduire(lignes)
+    if index is None:
+        frappe.throw(_("Aucune ligne d'échéancier ne peut être diminuée sur cette commande."))
+
+    erreur = erreur_application(
+        _resume_commande(so), avoirs["disponible"], montant, lignes[index])
+    if erreur:
+        frappe.throw(erreur)
+
+    plan = plan_application_avoir(lignes, index, montant, so.transaction_date)
+
+    row = so.payment_schedule[plan["index"]]
+    if plan["supprimer_ligne"]:
+        so.payment_schedule = [r for r in so.payment_schedule if r is not row]
+    else:
+        row.payment_amount = plan["nouveau_montant_ligne"]
+        if flt(row.invoice_portion):
+            row.invoice_portion = plan["nouvelle_portion_ligne"]
+    so.append("payment_schedule", plan["ligne_avoir"])
+    # `append` numérote à partir de la longueur de la table : après une
+    # suppression, l'idx obtenu ferait doublon.
+    for position, r in enumerate(so.payment_schedule, start=1):
+        r.idx = position
+
+    so.save()
+
+    return {
+        "sales_order": so.name,
+        "montant": plan["montant"],
+        "ligne_reduite": row.name,
+        "ligne_supprimee": plan["supprimer_ligne"],
+        "disponible": _millimes(avoirs["disponible"] - plan["montant"]),
     }
