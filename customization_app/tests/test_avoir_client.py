@@ -62,6 +62,12 @@ class TestMontantImputable(unittest.TestCase):
     def test_sans_ligne_a_diminuer_rien_n_est_imputable(self):
         self.assertEqual(montant_imputable(500, None), 0)
 
+    def test_un_encaissement_n_est_pas_remplacable(self):
+        """Espèces, Chèque, Virement : de l'argent déjà reçu (MODES_REDUCTIBLES)."""
+        self.assertEqual(montant_imputable(500, _ligne(600, "Espèces")), 0)
+        self.assertEqual(montant_imputable(500, _ligne(600, "Chèque")), 0)
+        self.assertEqual(montant_imputable(500, _ligne(600, MODE_AVOIR)), 0)
+
     def test_le_plafond_ignore_advance_paid(self):
         """400 DT encaissés + 600 DT de « Dette non payée » : les Server Scripts
         allouent DEUX Payment Entry à la commande, `advance_paid` vaut donc le
@@ -85,18 +91,20 @@ class TestLigneAReduire(unittest.TestCase):
         lignes = [_ligne(200, MODE_DETTE, 1), _ligne(800, MODE_DETTE, 2)]
         self.assertEqual(index_ligne_a_reduire(lignes), 1)
 
-    def test_sans_dette_c_est_la_derniere_ligne_hors_avoir(self):
+    def test_une_commande_entierement_encaissee_ne_propose_rien(self):
+        """Espèces et Chèque sont de l'argent reçu : un avoir ne les remplace
+        pas, ça se rend par la caisse (MODES_REDUCTIBLES)."""
         lignes = [_ligne(500, "Espèces", 1), _ligne(300, "Chèque", 2), _ligne(200, MODE_AVOIR, 3)]
-        self.assertEqual(index_ligne_a_reduire(lignes), 1)
+        self.assertIsNone(index_ligne_a_reduire(lignes))
+        self.assertEqual(index_lignes_reductibles(lignes), [])
 
     def test_les_lignes_reductibles_excluent_les_avoirs_et_les_zeros(self):
-        """Un avoir déjà imputé ne se diminue pas : le dialogue ne doit même pas
-        le proposer."""
-        lignes = [_ligne(500, "Espèces", 1), _ligne(200, MODE_AVOIR, 2), _ligne(0, MODE_DETTE, 3)]
+        """Un avoir déjà imputé ne se diminue pas, une ligne vide non plus."""
+        lignes = [_ligne(600, MODE_DETTE, 1), _ligne(200, MODE_AVOIR, 2), _ligne(0, MODE_DETTE, 3)]
         self.assertEqual(index_lignes_reductibles(lignes), [0])
 
     def test_les_lignes_a_zero_sont_ignorees(self):
-        lignes = [_ligne(1000, "Espèces", 1), _ligne(0, MODE_DETTE, 2)]
+        lignes = [_ligne(400, MODE_DETTE, 1), _ligne(0, MODE_DETTE, 2)]
         self.assertEqual(index_ligne_a_reduire(lignes), 0)
 
     def test_un_echeancier_entierement_en_avoir_ne_propose_rien(self):
@@ -214,6 +222,14 @@ class TestErreurApplication(unittest.TestCase):
         nouvelle ligne : l'échéancier et la compta divergeraient."""
         message = erreur_application(COMMANDE_OK, 500, 100, _ligne(300, MODE_AVOIR, 2))
         self.assertIn("déjà un avoir", message)
+
+    def test_diminuer_un_encaissement_est_refuse(self):
+        """Rendre de l'argent déjà reçu est une décision de caisse, pas un
+        rééquilibrage d'échéancier."""
+        message = erreur_application(COMMANDE_OK, 500, 100, _ligne(300, "Espèces", 1))
+        self.assertIn("Espèces", message)
+        self.assertIn("ne peut pas être remplacée par un avoir", message)
+        self.assertIn("Dette non payée", message)
 
     def test_une_ligne_trop_petite_est_refusee(self):
         message = erreur_application(COMMANDE_OK, 500, 300, _ligne(200))
@@ -368,7 +384,34 @@ class TestImputationSurLeServeur(unittest.TestCase):
         self.assertFalse(commande.enregistree)
         self.assertEqual(len(commande.payment_schedule), 3)
 
-    def test_le_contexte_ne_propose_pas_les_lignes_d_avoir(self):
+    def test_choisir_explicitement_un_encaissement_est_refuse(self):
+        """400 DT d'espèces déjà en caisse : un avoir ne les remplace pas. Le
+        script de régénération refuserait de toute façon de toucher au Payment
+        Entry verrouillé, en restaurant la ligne — l'échéancier se retrouverait
+        avec une ligne d'avoir en trop et un total supérieur au TTC."""
+        commande = _FausseCommande(ECHEANCIER)
+        with _serveur(commande):
+            with self.assertRaises(frappe.ValidationError) as refus:
+                avoir_client.appliquer_avoir(commande.name, 100, "PS-ESPECES")
+        self.assertIn("ne peut pas être remplacée par un avoir", str(refus.exception))
+        self.assertFalse(commande.enregistree)
+        self.assertEqual(len(commande.payment_schedule), 2)
+
+    def test_une_commande_entierement_encaissee_n_est_pas_imputable(self):
+        echeancier = [
+            {"nom": "PS-ESPECES", "idx": 1, "mode_of_payment": "Espèces",
+             "payment_amount": 1000.0, "invoice_portion": 100, "due_date": date(2026, 9, 1)},
+        ]
+        commande = _FausseCommande(echeancier)
+        with _serveur(commande):
+            ctx = avoir_client.contexte_avoir(commande.name)
+
+        self.assertFalse(ctx["imputable"])
+        self.assertIn("Dette non payée", ctx["empechement"])
+        self.assertEqual(ctx["lignes"], [])
+        self.assertEqual(ctx["montant_propose"], 0)
+
+    def test_le_contexte_ne_propose_que_les_echeances_remplacables(self):
         echeancier = ECHEANCIER + [
             {"nom": "PS-AVOIR", "idx": 3, "mode_of_payment": MODE_AVOIR,
              "payment_amount": 300.0, "invoice_portion": 30, "due_date": date(2026, 9, 3)},
@@ -377,7 +420,7 @@ class TestImputationSurLeServeur(unittest.TestCase):
         with _serveur(commande, disponible=200.0):
             ctx = avoir_client.contexte_avoir(commande.name)
 
-        self.assertEqual([l["nom"] for l in ctx["lignes"]], ["PS-ESPECES", "PS-DETTE"])
+        self.assertEqual([l["nom"] for l in ctx["lignes"]], ["PS-DETTE"])
         self.assertEqual(ctx["ligne_par_defaut"], "PS-DETTE")
         self.assertEqual(ctx["montant_propose"], 200.0)
         self.assertTrue(ctx["imputable"])

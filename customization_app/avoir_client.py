@@ -39,6 +39,27 @@ DEFAULT_DEBIT_ACCOUNT = "Compte temporaire - compte  d'overture - A&S"
 MODE_AVOIR = "Avoir client"
 MODE_DETTE = "Dette non payée"
 
+# Quelles échéances un avoir a le droit de remplacer.
+#
+# EN ATTENTE DE VALIDATION MÉTIER (ticket #23) : par défaut, la seule « Dette
+# non payée ». C'est le choix prudent, et le seul qui soit défendable sans
+# arbitrage du gérant :
+#   - c'est le seul mode qui ne correspond à AUCUN encaissement réel ; le
+#     Server Script « re-generate payment after sales order » le dit lui-même
+#     (`pe_is_locked` : « Une "Dette non payée" n'est jamais un encaissement
+#     reel : elle reste toujours regenerable ») ;
+#   - diminuer une ligne Espèces / Chèque / Virement déjà encaissée serait de
+#     toute façon refusée en aval : le script détecte le Payment Entry
+#     verrouillé, RESTAURE les anciennes valeurs de la ligne en base et se
+#     contente d'un message — l'échéancier se retrouverait alors avec une ligne
+#     d'avoir en trop et un total supérieur au TTC ;
+#   - rembourser un encaissement réel par un avoir, c'est une décision de
+#     caisse (rendre l'argent ou porter un crédit), pas un rééquilibrage.
+#
+# Pour élargir, ajouter les modes ici : le serveur, le dialogue et le montant
+# proposé s'y alignent automatiquement.
+MODES_REDUCTIBLES = (MODE_DETTE,)
+
 # Millime : la précision monétaire du site. Sert de marge aux comparaisons.
 TOLERANCE = 0.001
 
@@ -173,7 +194,7 @@ def avoirs_disponibles(customer):
 
 def montant_imputable(disponible, ligne):
     """Ce qu'on peut imputer : ni plus que l'avoir disponible du client, ni plus
-    que ce que porte l'échéance qu'on va diminuer.
+    que ce que porte la dette qu'on va diminuer.
 
     Ce n'est SURTOUT PAS « TTC − avance payée ». Sur ce site, chaque ligne de
     l'échéancier engendre un Payment Entry alloué à la commande — y compris les
@@ -183,8 +204,12 @@ def montant_imputable(disponible, ligne):
 
     C'est aussi pourquoi imputer un avoir ne fait PAS monter `advance_paid` : on
     remplace une allocation par une autre, le total alloué ne bouge pas.
+
+    Quelles échéances sont remplaçables : cf. `MODES_REDUCTIBLES`.
     """
-    porte = _millimes((ligne or {}).get("payment_amount"))
+    if not ligne or (ligne.get("mode_of_payment") or "") not in MODES_REDUCTIBLES:
+        return 0.0
+    porte = _millimes(ligne.get("payment_amount"))
     return max(_millimes(min(flt(disponible), porte)), 0.0)
 
 
@@ -224,13 +249,22 @@ def erreur_application(commande, disponible, montant=None, ligne=None):
     if ligne is None:
         return None
 
+    mode = ligne.get("mode_of_payment") or ""
+
     # Diminuer une ligne « Avoir client » déjà imputée ferait diverger
     # l'échéancier et la comptabilité : à la régénération, le script conserve
     # l'écriture existante (même uid de ligne) sans corriger son montant, PUIS
     # crée celle de la nouvelle ligne.
-    if (ligne.get("mode_of_payment") or "") == MODE_AVOIR:
+    if mode == MODE_AVOIR:
         return ("L'échéance choisie est déjà un avoir : choisissez une ligne d'un "
                 "autre mode de paiement.")
+
+    # Un encaissement réel ne se remplace pas par un avoir (cf. MODES_REDUCTIBLES).
+    if mode not in MODES_REDUCTIBLES:
+        return ("Une échéance « %s » ne peut pas être remplacée par un avoir : "
+                "seules les lignes « %s » le peuvent. Pour rendre un encaissement "
+                "déjà reçu, passez par la caisse."
+                % (mode or "sans mode de paiement", " » / « ".join(MODES_REDUCTIBLES)))
 
     if _millimes(ligne.get("payment_amount")) + TOLERANCE < montant:
         return ("L'échéance choisie (%s) ne couvre pas le montant de l'avoir (%s) : "
@@ -250,15 +284,11 @@ def montant_lisible(valeur):
 
 
 def index_lignes_reductibles(lignes):
-    """Les échéances qu'on a le droit de diminuer, par index.
-
-    Ni les lignes vides, ni les lignes « Avoir client » : réduire un avoir déjà
-    imputé désynchroniserait l'échéancier et les écritures (cf.
-    `erreur_application`).
-    """
+    """Les échéances qu'on a le droit de diminuer, par index : celles dont le
+    mode figure dans `MODES_REDUCTIBLES`, et qui portent un montant."""
     return [i for i, l in enumerate(lignes)
             if _millimes(l.get("payment_amount")) > 0
-            and (l.get("mode_of_payment") or "") != MODE_AVOIR]
+            and (l.get("mode_of_payment") or "") in MODES_REDUCTIBLES]
 
 
 def index_ligne_a_reduire(lignes):
@@ -266,7 +296,8 @@ def index_ligne_a_reduire(lignes):
 
     Une « Dette non payée » d'abord — la plus grosse : c'est la seule ligne qui
     ne correspond à aucun encaissement réel, la diminuer ne touche à aucune
-    caisse. À défaut, la dernière ligne réductible.
+    caisse. À défaut (si `MODES_REDUCTIBLES` est élargi), la dernière ligne
+    réductible.
     """
     reductibles = index_lignes_reductibles(lignes)
     dettes = [i for i in reductibles if (lignes[i].get("mode_of_payment") or "") == MODE_DETTE]
@@ -375,8 +406,9 @@ def contexte_avoir(sales_order):
     index = index_ligne_a_reduire(lignes)
     empechement = erreur_application(commande, avoirs["disponible"])
     if not empechement and index is None:
-        empechement = ("Aucune échéance de cette commande ne peut être diminuée "
-                       "pour laisser la place à un avoir.")
+        empechement = ("Aucune échéance « %s » à diminuer sur cette commande : "
+                       "il n'y a rien qu'un avoir puisse remplacer."
+                       % " » / « ".join(MODES_REDUCTIBLES))
 
     return {
         "customer": so.customer,
@@ -386,9 +418,10 @@ def contexte_avoir(sales_order):
         "disponible": avoirs["disponible"],
         "ecritures": avoirs["ecritures"],
         "grand_total": commande["grand_total"],
-        # Les lignes « Avoir client » ne sont pas proposées : on ne diminue pas
-        # un avoir déjà imputé.
+        # Seules les échéances remplaçables sont proposées (MODES_REDUCTIBLES) :
+        # ni un avoir déjà imputé, ni un encaissement réel.
         "lignes": reductibles,
+        "modes_reductibles": list(MODES_REDUCTIBLES),
         "ligne_par_defaut": lignes[index]["nom"] if index is not None else None,
         "montant_propose": montant_imputable(
             avoirs["disponible"], lignes[index] if index is not None else None),

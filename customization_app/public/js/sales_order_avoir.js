@@ -126,7 +126,10 @@ function open_utiliser_avoir_dialog(frm, ctx) {
           ${__("disponible")} : <b>${format_currency(ctx.disponible, devise)}</b><br>
           ${__(
             "L'avoir est ajouté à l'échéancier au mode « Avoir client » ; la ligne choisie est diminuée d'autant, le total reste égal au TTC."
-          )}</div>`,
+          )}<br>
+          ${__("Seules les échéances {0} peuvent être remplacées : un encaissement déjà reçu se rend par la caisse.", [
+            `<b>« ${(ctx.modes_reductibles || []).join(" » / « ")} »</b>`,
+          ])}</div>`,
       },
       {
         fieldname: "montant",
@@ -136,8 +139,8 @@ function open_utiliser_avoir_dialog(frm, ctx) {
         default: ctx.montant_propose,
       },
       {
-        // Les lignes « Avoir client » ne sont pas dans la liste : le serveur
-        // refuse de diminuer un avoir déjà imputé.
+        // La liste ne contient que les échéances remplaçables (par défaut les
+        // « Dette non payée ») : le serveur refuse les autres.
         fieldname: "ligne",
         label: __("Ligne d'échéancier à diminuer"),
         fieldtype: "Select",
