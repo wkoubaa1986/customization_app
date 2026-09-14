@@ -7,6 +7,7 @@ frappe.ui.form.on("Liste Commande Import", {
     frm.add_custom_button(__("➕ Article du catalogue"), () => lci_add_catalogue(frm));
     frm.add_custom_button(__("➕ Article libre"), () => lci_add_libre(frm));
     frm.add_custom_button(__("🗂 Organiser par groupe puis code"), () => lci_organize(frm));
+    lci_doublons_bouton(frm);
 
     // chemins de groupes (pour en-têtes) — chargés une fois puis re-render
     if (!frm.__lci_paths) {
@@ -198,6 +199,106 @@ async function lci_organize(frm) {
   frm.dirty();
   lci_render_table(frm);
   frappe.show_alert({ message: __("Articles organisés par groupe puis code — enregistrez pour figer l'ordre (PDF/Excel suivront)."), indicator: "blue" });
+}
+
+// --- Doublons : même article sur plusieurs lignes → une seule ligne, quantités ADDITIONNÉES ---
+// Bouton NU dans la barre (pas de groupe : un bouton dans un menu déroulant est un bouton
+// introuvable), visible sur tout brouillon y compris jamais enregistré. La règle de fusion est
+// au serveur (customization_app.lci_doublons) ; ici on ne fait que compter les codes répétés
+// pour colorer le bouton et poser un bandeau — indice d'affichage, pas règle métier.
+const LCI_DOUBLONS = "🧹 Enlever les doublons";
+
+// identité d'une ligne : code article, sinon désignation normalisée (miroir de lci_doublons._identite)
+function lci_identite(r) {
+  const code = (r.item_code || "").trim();
+  if (code) return code;
+  const nom = (r.item_name || "").trim().split(/\s+/).join(" ").toLowerCase();
+  return nom ? `libre:${nom}` : null;
+}
+
+function lci_nb_repetes(frm) {
+  const vus = new Map();   // Map : un code « constructor » ou « __proto__ » ne heurte aucun prototype
+  lci_rows(frm).forEach((r) => {
+    const k = lci_identite(r);
+    if (k !== null) vus.set(k, (vus.get(k) || 0) + 1);
+  });
+  let n = 0;
+  vus.forEach((c) => { if (c > 1) n += 1; });
+  return n;
+}
+
+function lci_doublons_bouton(frm) {
+  if (frm.doc.docstatus !== 0) return;
+  const $b = frm.add_custom_button(__(LCI_DOUBLONS), () => lci_enlever_doublons(frm));
+  if ($b) {
+    $b.attr("title", __("Regroupe les lignes du même article en une seule : les quantités sont ADDITIONNÉES sur la première ligne. Rien n'est écrit avant que vous enregistriez."));
+  }
+  lci_doublons_etat(frm);
+}
+
+// couleur du bouton + bandeau orange, recalculés à chaque rendu de la table
+function lci_doublons_etat(frm) {
+  const n = lci_nb_repetes(frm);
+  const $b = frm.custom_buttons && frm.custom_buttons[__(LCI_DOUBLONS)];
+  if ($b) $b.toggleClass("btn-warning", n > 0);
+
+  // show_message EMPILE les blocs et clear_headline viderait aussi ceux de Frappe :
+  // on ne retire que le nôtre.
+  const $box = frm.layout && frm.layout.message;
+  if (!$box) return;
+  $box.find(".lci-doublons").closest(".form-message").remove();
+  if ($box.children().length === 0) $box.addClass("hidden");
+  if (n > 0 && frm.doc.docstatus === 0) {
+    const html = `<span class="lci-doublons">${__("{0} article(s) apparaissent sur plusieurs lignes —", [n])}
+      <a class="lci-doublons-go" href="#" title="${__("Les quantités sont additionnées sur la première ligne ; rien n'est écrit avant l'enregistrement.")}">${__("enlever les doublons")}</a></span>`;
+    frm.layout.show_message(html, "orange", true);
+    $box.find(".lci-doublons-go").on("click", (e) => { e.preventDefault(); lci_enlever_doublons(frm); });
+  }
+}
+
+async function lci_enlever_doublons(frm) {
+  const rows = lci_rows(frm).map((r) => ({
+    name: r.name, item_code: r.item_code, item_name: r.item_name, uom: r.uom, qty: r.qty,
+    articles_additionnels: r.articles_additionnels,
+  }));
+  if (!rows.length) {
+    frappe.msgprint(__("Aucune ligne dans la liste."));
+    return;
+  }
+  const r = await frappe.call({
+    method: "customization_app.liste_commande_import.fusionner_lignes",
+    args: { articles: JSON.stringify(rows) },
+    freeze: true,
+    freeze_message: __("Recherche des doublons…"),
+  });
+  const res = r.message || {};
+  const non = res.non_fusionnees || [];
+  const non_txt = non.length
+    ? "<br><br>" + __("Non fusionnées (à trancher à la main) :") + "<ul>" + non.map((x) =>
+        `<li><b>${frappe.utils.escape_html(x.article)}</b> — ${x.lignes} ${__("lignes")}, ${__("motif")} : ${frappe.utils.escape_html(x.motif)}</li>`).join("") + "</ul>"
+    : "";
+
+  if (!res.doublons) {
+    frappe.msgprint({ title: __("Aucune ligne en double"), indicator: non.length ? "orange" : "blue",
+      message: __("Chaque article n'apparaît qu'une fois.") + non_txt });
+    return;
+  }
+
+  // appliquer À L'ÉCRAN seulement : quantités sommées sur la première ligne, lignes en trop retirées
+  const a_supprimer = new Set(res.supprimer || []);
+  (res.conserver || []).forEach((c) => {
+    if (c.fusionnees > 1) {
+      const row = lci_rows(frm).find((x) => x.name === c.name);
+      if (row) frappe.model.set_value(row.doctype, row.name, "qty", c.qty);
+    }
+  });
+  frm.doc.articles = lci_rows(frm).filter((x) => !a_supprimer.has(x.name));
+  lci_reindex(frm);
+  frm.dirty();
+  lci_recalc(frm);
+  frm.refresh_field("articles");
+  frappe.msgprint({ title: __("Doublons enlevés"), indicator: "green",
+    message: __("{0} ligne(s) en double retirée(s), quantités additionnées sur la première ligne. Enregistrez pour figer (un rechargement annule).", [res.doublons]) + non_txt });
 }
 
 async function lci_ai(frm, method, row_name) {
@@ -565,6 +666,7 @@ function lci_render_table(frm) {
   });
 
   lci_bind_sortable(frm, $t);
+  lci_doublons_etat(frm);   // couleur du bouton + bandeau suivent chaque rendu (ajout, retrait, fusion)
 }
 
 // ------------------------------------------------------------ réorganisation

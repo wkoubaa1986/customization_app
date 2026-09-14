@@ -300,6 +300,24 @@ def ai_translate(docname, row_names=None):
 
 
 @frappe.whitelist()
+def fusionner_lignes(articles):
+    """Bouton « Enlever les doublons » du formulaire Liste Commande Import.
+
+    ⚠️ CETTE MÉTHODE N'ÉCRIT RIEN. Elle reçoit les lignes telles qu'elles sont À L'ÉCRAN — donc y
+    compris les modifications non encore enregistrées — et ne rend qu'un calcul (règle pure dans
+    `customization_app.lci_doublons`). C'est le formulaire qui applique le résultat, et c'est
+    l'utilisateur qui enregistre : tant qu'il ne l'a pas fait, la liste en base n'a pas bougé et
+    un simple rechargement annule la fusion.
+    """
+    from customization_app.lci_doublons import regrouper
+
+    _guard()
+    if isinstance(articles, str):
+        articles = frappe.parse_json(articles) or []
+    return regrouper(articles)
+
+
+@frappe.whitelist()
 def get_group_paths():
     """{groupe: "Parent > Sous-groupe > Groupe"} — hiérarchie complète des
     groupes d'articles (racine exclue), pour organiser les listes."""
