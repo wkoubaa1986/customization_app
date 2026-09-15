@@ -223,3 +223,20 @@ class TestNotifications(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestRepliScrapingReferencesEntieres(unittest.TestCase):
+    """Bug du 15/09/2026 en prod : Aramex repond 503, le repli logge la liste des bordereaux
+    avec ", ".join(...) et plante sur un numero arrive en entier depuis l'ecran (TypeError),
+    ce qui prive du suivi au lieu de basculer sur le scraping."""
+
+    def test_par_api_tolere_les_entiers_quand_l_api_tombe(self):
+        from unittest.mock import patch
+        from customization_app import aramex_api, livraison_aramex
+
+        with patch.object(aramex_api, "suivi_par_api", return_value=True), \
+             patch.object(aramex_api, "track_shipments",
+                          side_effect=aramex_api.AramexIndisponible("HTTP 503")), \
+             patch.object(livraison_aramex.frappe, "log_error") as log:
+            self.assertIsNone(livraison_aramex._par_api([51330112061, "48812240761"], 30))
+        self.assertIn("51330112061, 48812240761", log.call_args.kwargs["message"])

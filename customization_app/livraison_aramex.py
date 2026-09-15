@@ -358,7 +358,7 @@ def _par_api(references, timeout):
         return aramex_api.track_shipments(references, timeout=timeout)
     except (aramex_api.AramexIndisponible, aramex_api.AramexNonConfigure) as e:
         frappe.log_error(title="Suivi Aramex : API indisponible, repli scraping",
-                         message="%s\n\nBordereaux : %s" % (e, ", ".join(references)))
+                         message="%s\n\nBordereaux : %s" % (e, ", ".join(str(r) for r in references)))
         return None
 
 
@@ -392,7 +392,8 @@ def interroger_plusieurs(references, timeout=60, parallele=None) -> dict:
     Par l'API (voir `_par_api`), tout cela n'a plus lieu d'etre : une requete porte la liste
     entiere et repond en moins de deux secondes.
     """
-    references = [r for r in dict.fromkeys(references or []) if r]
+    # Les numeros arrivent parfois en entiers (JSON de l'ecran) : tout en texte, une seule fois.
+    references = [str(r).strip() for r in dict.fromkeys(references or []) if r]
     if not references:
         return {}
     par_api = _par_api(references, timeout)
@@ -726,7 +727,7 @@ def rafraichir(references=None, limite=None, tout=0):
     _lecture()
     if isinstance(references, str):
         references = frappe.parse_json(references)
-    references = [r for r in (references or []) if r]
+    references = [str(r).strip() for r in (references or []) if r]
     limite = frappe.utils.cint(limite) or LIMITE_RAFRAICHISSEMENT
 
     # Le tri d'abord, les appels ensuite : on ne peut pas paralleliser une boucle qui decide au fur
