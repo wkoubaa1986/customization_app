@@ -9,6 +9,9 @@
     .ala-toolbar label { font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
                          color: var(--text-muted, #7a8291); margin: 0 2px 0 0; }
     .ala-toolbar input.form-control { width: 150px; }
+    .ala-toolbar input.ala-recherche { width: 260px; }
+    .ala-toolbar select.ala-statut { width: auto; min-width: 160px; }
+    .ala-compte { font-size: 12px; color: var(--text-muted, #7a8291); white-space: nowrap; }
     .ala-spacer { flex: 1; }
 
     .ala-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
@@ -72,6 +75,12 @@
     <label>Du</label><input type="date" class="form-control input-sm" id="ala-from">
     <label>au</label><input type="date" class="form-control input-sm" id="ala-to">
     <button class="btn btn-default btn-sm" data-action="refresh">Actualiser</button>
+    <input type="search" class="form-control input-sm ala-recherche" data-role="recherche"
+           placeholder="N° bordereau, client, téléphone, pièce…" title="Filtre : numéro de bordereau, nom du client, téléphone, commande / facture / BL">
+    <select class="form-control input-sm ala-statut" data-role="statut" title="Statut Aramex">
+      <option value="">Tous les statuts</option>
+    </select>
+    <span class="ala-compte" data-role="compte"></span>
     <span class="ala-spacer"></span>
     <label style="text-transform:none"><input type="checkbox" data-role="alertes-seules"> Alertes seulement</label>
     <label style="text-transform:none" title="Un seul SMS par bordereau, jamais pour un colis livré">

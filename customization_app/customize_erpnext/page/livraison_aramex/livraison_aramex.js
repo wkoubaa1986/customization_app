@@ -33,6 +33,9 @@ class LivraisonAramex {
     this.$root.on("click", "[data-action='refresh']", () => this.refresh());
     this.$root.on("click", "[data-action='suivre']", () => this._suivre());
     this.$root.on("change", "[data-role='alertes-seules']", () => this._render());
+    // Filtre local : les colis de la période sont déjà tous là, inutile de rappeler le serveur.
+    this.$root.on("input", "[data-role='recherche']", () => this._render());
+    this.$root.on("change", "[data-role='statut']", () => this._render());
     this.$root.on("change", "[data-role='sms-auto']", (e) => this._basculer_sms(e.currentTarget));
     this.$root.on("click", "[data-act='un-suivi']", (e) =>
       this._suivre([$(e.currentTarget).data("ref")], true)
@@ -59,8 +62,65 @@ class LivraisonAramex {
       })
       .then((r) => {
         this._data = r.message || {};
+        this._options_statut();
         this._render();
       });
+  }
+
+  // Le statut « tel que l'écran l'affiche » : la pastille du suivi, ou l'un des trois états
+  // sans pastille (sans bordereau, suivi jamais demandé, suivi indisponible).
+  _statut_de(c) {
+    if (!c.reference) return __("sans bordereau");
+    const s = c.suivi;
+    if (!s) return __("suivi jamais demandé");
+    if (s.erreur) return __("suivi indisponible");
+    return s.statut || "—";
+  }
+
+  // La liste déroulante ne propose que les statuts réellement présents sur la période, avec
+  // leur nombre — et garde le choix courant s'il existe encore.
+  _options_statut() {
+    const $sel = this.$root.find("[data-role='statut']");
+    const courant = $sel.val() || "";
+    const comptes = {};
+    (this._data.colis || []).forEach((c) => {
+      const st = this._statut_de(c);
+      comptes[st] = (comptes[st] || 0) + 1;
+    });
+    const esc = frappe.utils.escape_html;
+    const options = Object.keys(comptes)
+      .sort((a, b) => a.localeCompare(b, "fr"))
+      .map((st) => `<option value="${esc(st)}">${esc(st)} (${comptes[st]})</option>`);
+    $sel.html(`<option value="">${__("Tous les statuts")}</option>${options.join("")}`);
+    $sel.val(comptes[courant] ? courant : "");
+  }
+
+  _normaliser(texte) {
+    return String(texte || "")
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "");
+  }
+
+  // Recherche plein texte sur ce que l'œil cherche : le numéro de bordereau (aussi tel que saisi
+  // sur le paiement), le client, son téléphone / e-mail, les pièces (commande, facture, BL), le
+  // paiement, la ville de destination. Les espaces des numéros ne comptent pas.
+  _filtrer(colis) {
+    const q = this._normaliser(this.$root.find("[data-role='recherche']").val()).trim();
+    const statut = this.$root.find("[data-role='statut']").val() || "";
+    const qc = q.replace(/\s+/g, "");
+    return colis.filter((c) => {
+      if (statut && this._statut_de(c) !== statut) return false;
+      if (!q) return true;
+      const s = c.suivi || {};
+      const champs = [
+        c.reference, c.reference_brute, c.customer_name, c.customer, c.telephone, c.email,
+        c.payment_entry, (s.destination || {}).ville, s.statut,
+        ...(c.pieces || []).map((p) => p.name),
+      ];
+      const texte = this._normaliser(champs.filter(Boolean).join(" "));
+      return texte.includes(q) || texte.replace(/\s+/g, "").includes(qc);
+    });
   }
 
   // Le suivi frais se demande, il ne s'impose pas : 1,9 seconde par colis, et un colis livré ne
@@ -152,16 +212,23 @@ class LivraisonAramex {
 
     this.$root.find("[data-role='sms-auto']").prop("checked", !!d.sms_auto);
 
-    let colis = d.colis || [];
+    const tous = d.colis || [];
+    let colis = this._filtrer(tous);
     if (this.$root.find("[data-role='alertes-seules']").is(":checked")) {
       colis = colis.filter((c) => c.alerte);
     }
+    const filtre = colis.length !== tous.length;
+    this.$root
+      .find("[data-role='compte']")
+      .text(filtre ? __("{0} / {1} colis", [colis.length, tous.length]) : "");
     this.$root
       .find("[data-role='colis']")
       .html(
         colis.length
           ? `<div class="ala-liste">${colis.map((c) => this._ligne(c)).join("")}</div>`
-          : `<div class="ala-liste"><div class="ala-vide">${__("Aucun colis sur la période.")}</div></div>`
+          : `<div class="ala-liste"><div class="ala-vide">${
+              filtre ? __("Aucun colis ne correspond au filtre.") : __("Aucun colis sur la période.")
+            }</div></div>`
       );
   }
 
