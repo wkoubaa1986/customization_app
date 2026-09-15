@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ title }}</title>
+  <style>
+    body { font-family: Arial, Helvetica, sans-serif; color: #0f172a; margin: 0; padding: 18px 22px; font-size: 13px; }
+    a { color: #0e7490; }
+    .barre { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 14px; }
+    .barre a, .barre button { padding: 6px 12px; border: 1px solid #cbd5e1; border-radius: 7px;
+           background: #fff; color: #0f172a; text-decoration: none; font-size: 13px; cursor: pointer; }
+    .barre button.principal { background: #0e7490; color: #fff; border-color: #0e7490; font-weight: 600; }
+    .barre button:disabled { opacity: .5; cursor: not-allowed; }
+    h1 { font-size: 18px; margin: 0 0 10px; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 6px 7px; text-align: left; vertical-align: top; }
+    .selection th, .selection td { border-bottom: 1px solid #e2e8f0; }
+    .selection th { background: #f1f5f9; font-size: 12px; }
+    td.num, th.num { text-align: right; white-space: nowrap; }
+    td.bord { font-weight: 700; white-space: nowrap; }
+    tr.manuel td { background: #fffbeb; }
+    .vide { padding: 30px; text-align: center; color: #64748b; border: 1px dashed #cbd5e1; border-radius: 8px; }
+    .note { margin-top: 10px; font-size: 11.5px; color: #64748b; }
+    .anciens { margin-top: 28px; }
+    .anciens h2 { font-size: 15px; margin: 0 0 8px; }
+    .anciens td, .anciens th { border-bottom: 1px solid #e2e8f0; font-size: 12.5px; }
+
+    /* La feuille : reprise du « Manifest Report » de l'application PC d'Aramex. */
+    .feuille { max-width: 900px; margin: 0 auto; }
+    .feuille .titre { background: #1e1e8f; color: #fff; text-align: center; font-weight: 700;
+                      font-size: 18px; padding: 5px 0; margin-bottom: 8px; }
+    .feuille .entete { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px; }
+    .feuille .logo { color: #e11d1d; font-weight: 800; font-size: 28px; letter-spacing: -1px; line-height: 1; }
+    .feuille .meta { font-size: 12.5px; color: #1e1e8f; }
+    .feuille .meta b { color: #1e1e8f; display: inline-block; min-width: 110px; }
+    .feuille .meta span { color: #0f172a; }
+    .feuille table th { color: #1e1e8f; font-size: 11.5px; border-bottom: 2px solid #1e1e8f; padding: 6px 5px; }
+    .feuille table td { font-size: 12px; color: #1e1e8f; padding: 9px 5px; }
+    .feuille table td.bord { color: #1e1e8f; }
+    .feuille .pied { border-top: 2px solid #1e1e8f; margin-top: 260px; padding-top: 10px; font-size: 12.5px; color: #1e1e8f; }
+    .feuille .pied .total { font-weight: 700; margin-bottom: 14px; }
+    .feuille .sig { display: flex; gap: 14px; align-items: baseline; margin: 10px 0; }
+    .feuille .sig .ligne { display: inline-block; width: 220px; border-bottom: 1px solid #1e1e8f; }
+    .feuille .imprime { text-align: right; font-size: 11.5px; color: #1e1e8f; }
+    @media print { .barre, .anciens, .note { display: none; } body { padding: 0; } .feuille .pied { margin-top: 200px; } }
+  </style>
+</head>
+<body>
+
+{% if mode == "selection" %}
+  <div class="barre">
+    <button class="principal" id="btn-generer" {% if not peut_generer %}disabled{% endif %}>🧾 {{ _("Générer le manifeste des colis cochés") }}</button>
+    <button id="btn-tous">{{ _("Tout cocher") }}</button>
+    <button id="btn-aucun">{{ _("Tout décocher") }}</button>
+    <a href="/app/livraison-aramex">{{ _("Livraisons Aramex") }}</a>
+    <a href="/app/manifeste-aramex">{{ _("Tous les manifestes") }}</a>
+  </div>
+  <h1>{{ _("Colis Aramex créés, pas encore enlevés") }}</h1>
+  {% if not candidats %}
+    <div class="vide">{{ _("Aucun colis en attente d'enlèvement : tout est déjà sur un manifeste, ou déjà parti.") }}</div>
+  {% else %}
+  <table class="selection">
+    <thead>
+      <tr>
+        <th></th><th>{{ _("Bordereau") }}</th><th>{{ _("Commande") }}</th><th>{{ _("Destinataire") }}</th>
+        <th>{{ _("Téléphone") }}</th><th>{{ _("Ville") }}</th><th class="num">{{ _("Poids") }}</th>
+        <th class="num">{{ _("Pièces") }}</th><th class="num">{{ _("COD (TND)") }}</th><th>{{ _("Créé le") }}</th><th>{{ _("Statut") }}</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for c in candidats %}
+      <tr class="{{ '' if c.par_api else 'manuel' }}">
+        <td><input type="checkbox" class="coche" value="{{ c.bordereau }}" {% if c.coche %}checked{% endif %}></td>
+        <td class="bord">{{ c.bordereau }}</td>
+        <td>{% if c.commande %}<a href="/app/sales-order/{{ c.commande }}" target="_blank">{{ c.commande }}</a>{% endif %}</td>
+        <td>{{ c.destinataire }}</td>
+        <td>{{ c.telephone or "" }}</td>
+        <td>{{ c.ville }}</td>
+        <td class="num">{% if c.poids %}{{ c.poids }} kg{% endif %}</td>
+        <td class="num">{{ c.pieces }}</td>
+        <td class="num">{{ "%.3f"|format(c.cod or 0) }}</td>
+        <td>{{ frappe.utils.format_datetime(c.cree_le, "dd/MM HH:mm") if c.cree_le else "" }}</td>
+        <td>{{ c.statut }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <div class="note">
+    {{ _("Cochés par défaut : les colis créés aujourd'hui. Fond jaune : bordereau saisi à la main (montant = total de la commande). Un colis mis sur un manifeste ne se propose plus ; un colis qu'Aramex a déjà scanné n'apparaît pas.") }}
+  </div>
+  {% endif %}
+
+  <div class="anciens">
+    <h2>{{ _("Derniers manifestes") }}</h2>
+    {% if not manifestes %}
+      <div class="note">{{ _("Aucun manifeste généré pour l'instant.") }}</div>
+    {% else %}
+    <table>
+      <thead><tr><th>{{ _("Numéro") }}</th><th>{{ _("Date") }}</th><th class="num">{{ _("Colis") }}</th>
+        <th class="num">{{ _("Poids") }}</th><th class="num">{{ _("COD (TND)") }}</th><th>{{ _("Par") }}</th></tr></thead>
+      <tbody>
+        {% for m in manifestes %}
+        <tr>
+          <td><a href="/manifeste-aramex?manifeste={{ m.name }}">{{ m.name }}</a></td>
+          <td>{{ frappe.utils.formatdate(m.date, "dd/MM/yyyy") }}</td>
+          <td class="num">{{ m.total_colis }}</td><td class="num">{{ m.total_poids }} kg</td>
+          <td class="num">{{ "%.3f"|format(m.total_cod or 0) }}</td><td>{{ m.genere_par or "" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+  </div>
+
+  <script>
+    var csrf = "{{ csrf_token }}";
+    document.getElementById("btn-tous").onclick = function () { document.querySelectorAll(".coche").forEach(function (c) { c.checked = true; }); };
+    document.getElementById("btn-aucun").onclick = function () { document.querySelectorAll(".coche").forEach(function (c) { c.checked = false; }); };
+    document.getElementById("btn-generer").onclick = function () {
+      var choisis = Array.prototype.map.call(document.querySelectorAll(".coche:checked"), function (c) { return c.value; });
+      if (!choisis.length) { alert("{{ _('Cochez au moins un colis.') }}"); return; }
+      if (!confirm(choisis.length + " {{ _('colis sur le manifeste. Continuer ?') }}")) return;
+      var btn = this; btn.disabled = true;
+      fetch("/api/method/customization_app.aramex_manifeste.generer", {
+        method: "POST", credentials: "same-origin",
+        headers: { "Content-Type": "application/json", "Accept": "application/json", "X-Frappe-CSRF-Token": csrf },
+        body: JSON.stringify({ bordereaux: choisis })
+      }).then(function (r) { return r.json(); }).then(function (j) {
+        if (j.message && j.message.name) { window.location = "/manifeste-aramex?manifeste=" + encodeURIComponent(j.message.name); return; }
+        var msg = j._server_messages ? JSON.parse(j._server_messages).map(function (m) { try { return JSON.parse(m).message; } catch (e) { return m; } }).join("\n") : (j.exception || "{{ _('Erreur') }}");
+        alert(msg.replace(/<[^>]+>/g, "")); btn.disabled = false;
+      }).catch(function (e) { alert(e); btn.disabled = false; });
+    };
+  </script>
+
+{% else %}
+  <div class="barre">
+    <button class="principal" onclick="window.print()">🖨️ {{ _("Imprimer") }}</button>
+    <a href="/manifeste-aramex">◀ {{ _("Sélection des colis") }}</a>
+    <a href="/app/manifeste-aramex/{{ name }}">{{ _("Ouvrir le document") }}</a>
+  </div>
+
+  <div class="feuille">
+    <div class="titre">Manifest Report</div>
+    <div class="entete">
+      <div>
+        <div class="logo">aramex</div>
+        <div class="meta" style="margin-top:6px"><b>Manifest ID</b> <span>{{ name }}</span></div>
+        <div class="meta"><b>Manifest Date</b> <span>{{ date_lisible }}</span></div>
+        <div class="meta"><b>Account</b> <span>{{ expediteur.compte }} — {{ expediteur.societe }}</span></div>
+      </div>
+      <div class="meta" style="text-align:left">
+        <div><b>Total Shipments</b> <span>{{ total_colis }}</span></div>
+        <div><b>Total Weight</b> <span>{{ total_poids }} Kg</span></div>
+        <div><b>Total COD</b> <span>{{ "%.3f"|format(total_cod or 0) }} TND</span></div>
+      </div>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th><th>Shipment No</th><th>Shipper Reference</th><th>Receiver Name - Contact</th>
+          <th>Receiver Telephone</th><th>Destination City</th><th>Shipment WGT</th><th>COD (TND)</th><th>PCS</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for l in lignes %}
+        <tr>
+          <td>{{ loop.index }}</td>
+          <td class="bord">{{ l.bordereau }}</td>
+          <td>{{ l.commande or "" }}</td>
+          <td>{{ l.destinataire or "" }}</td>
+          <td>{{ l.telephone or "" }}</td>
+          <td>{{ l.ville or "" }}</td>
+          <td>{% if l.poids %}{{ l.poids }} Kg{% endif %}</td>
+          <td>{{ "%.3f"|format(l.cod or 0) }}</td>
+          <td>{{ l.pieces or 1 }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <div class="pied">
+      <div class="total">Total Shipments: &nbsp; {{ total_colis }}</div>
+      <div class="sig">Approved by customer <span class="ligne"></span> On Date _ _ _ / _ _ _ / _ _ _</div>
+      <div class="sig">Picked Up By Aramex Courier <span class="ligne"></span> On Date _ _ _ / _ _ _ / _ _ _ &nbsp; At _ _ _ AM\PM</div>
+      <div class="imprime">Printed Date &nbsp; {{ imprime_le }}</div>
+    </div>
+    {% if notes %}<div class="note">{{ notes }}</div>{% endif %}
+  </div>
+{% endif %}
+
+</body>
+</html>

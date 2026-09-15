@@ -197,3 +197,21 @@ class TestBordereauSurEcheancier(unittest.TestCase):
     def test_un_zero_isole_reste_un_bouchon(self):
         """« 0 » n'est pas un numéro de bordereau : c'est une case pas remplie."""
         self.assertTrue(P._bouchon("0"))
+
+
+class TestAManifester(unittest.TestCase):
+    """Le manifeste de la journée : les livraisons Aramex FAITES, avec bordereau, pas encore
+    sur un manifeste — et rien d'autre."""
+
+    def test_selection(self):
+        from customization_app.planning_employe import _a_manifester
+
+        lignes = [
+            {"aramex": True, "bordereau": "111", "statut": "Completed", "colis": {}},
+            {"aramex": True, "bordereau": "222", "statut": "Open", "colis": {}},
+            {"aramex": True, "bordereau": "", "statut": "Completed", "colis": {}},
+            {"aramex": False, "bordereau": "333", "statut": "Completed", "colis": {}},
+            {"aramex": True, "bordereau": "444", "statut": "Completed",
+             "colis": {"manifeste": "MAN-2026-00001"}},
+        ]
+        self.assertEqual(_a_manifester(lignes), ["111"])

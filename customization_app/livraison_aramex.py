@@ -196,14 +196,86 @@ def _ranger_suivi(reference, suivi):
         "tentatives": 0,                 # une reponse efface l'ardoise
         "derniere_erreur": None,
         "payload": frappe.as_json(suivi),
+        # Ce que seule l'API sait dire ; vide quand le scraping a repondu.
+        "source": "API" if (suivi or {}).get("source") == "api" else "Scraping",
+        "code": (suivi or {}).get("code"),
+        "probleme": (suivi or {}).get("probleme"),
     }
     if frappe.db.exists(DOCTYPE_SUIVI, reference):
         doc = frappe.get_doc(DOCTYPE_SUIVI, reference)
         doc.update(valeurs)
-        doc.save(ignore_permissions=True)
     else:
-        frappe.get_doc(dict(doctype=DOCTYPE_SUIVI, reference=reference,
-                            **valeurs)).insert(ignore_permissions=True)
+        doc = frappe.get_doc(dict(doctype=DOCTYPE_SUIVI, reference=reference, **valeurs))
+    # « Shipment charges paid » : Aramex a solde le contre-remboursement. On garde la date du
+    # PREMIER constat, pas celle de chaque passage du cron.
+    if (suivi or {}).get("frais_payes") and not doc.get("frais_payes"):
+        doc.frais_payes = 1
+        doc.frais_payes_le = now_datetime()
+    if doc.is_new():
+        doc.insert(ignore_permissions=True)
+    else:
+        doc.save(ignore_permissions=True)
+    if valeurs["livre"] and not doc.get("livre_notifie_le"):
+        _noter_livraison(doc, suivi)
+
+
+def _commandes_du_bordereau(reference) -> list:
+    """Les commandes qui portent ce bordereau : par leur champ, ou par le paiement Aramex qui
+    les vise (directement, ou a travers la facture). -> [nom, ...] sans doublon.
+
+    Le suivi ne connait que le numero ; pour ecrire sur la commande, il faut la retrouver par
+    les deux chemins que `traitement_commandes._bordereaux` a appris a couvrir.
+    """
+    if not reference:
+        return []
+    noms = [r.name for r in frappe.get_all(
+        "Sales Order", filters={"custom_bordereau_aramex": ("like", "%%%s%%" % reference),
+                                "docstatus": ("<", 2)}, fields=["name"])]
+    motif = "%%%s%%" % reference
+    for r in frappe.db.sql(
+            """SELECT per.reference_name AS commande
+               FROM `tabPayment Entry` pe
+               JOIN `tabPayment Entry Reference` per
+                    ON per.parent = pe.name AND per.reference_doctype = 'Sales Order'
+               WHERE pe.docstatus = 1 AND pe.paid_to = %(compte)s AND pe.reference_no LIKE %(motif)s
+               UNION
+               SELECT DISTINCT sii.sales_order
+               FROM `tabPayment Entry` pe
+               JOIN `tabPayment Entry Reference` per
+                    ON per.parent = pe.name AND per.reference_doctype = 'Sales Invoice'
+               JOIN `tabSales Invoice Item` sii ON sii.parent = per.reference_name
+               WHERE pe.docstatus = 1 AND pe.paid_to = %(compte)s AND pe.reference_no LIKE %(motif)s
+                 AND IFNULL(sii.sales_order, '') != ''""",
+            {"compte": COMPTE_ARAMEX, "motif": motif}, as_dict=True):
+        if r.commande and r.commande not in noms:
+            noms.append(r.commande)
+    return noms
+
+
+def _noter_livraison(doc, suivi):
+    """Pose UNE FOIS, sur la commande, le constat de livraison par Aramex.
+
+    C'est le pas « le paiement suit le colis » : un colis livre en contre-remboursement, c'est
+    un client qui a paye Aramex. Le commentaire le dit sur la commande, la ou le vendeur
+    regarde ; l'argent, lui, n'arrive qu'avec la remise Aramex, rapprochee par
+    bank_retenue_sync. Ne leve jamais — un commentaire rate n'invalide pas un suivi.
+    """
+    try:
+        maj = (suivi or {}).get("derniere_maj") or {}
+        commandes = _commandes_du_bordereau(doc.reference)
+        for commande in commandes:
+            frappe.get_doc({
+                "doctype": "Comment", "comment_type": "Info",
+                "reference_doctype": "Sales Order", "reference_name": commande,
+                "content": _("✅ Colis Aramex {0} livré le {1} — contre-remboursement encaissé "
+                             "par le transporteur, en attente de sa remise.")
+                .format(doc.reference, maj.get("date") or ""),
+            }).insert(ignore_permissions=True)
+        frappe.db.set_value(DOCTYPE_SUIVI, doc.name, "livre_notifie_le", now_datetime(),
+                            update_modified=False)
+    except Exception:
+        frappe.log_error(title="Suivi Aramex : note de livraison %s" % doc.reference,
+                         message=frappe.get_traceback())
 
 
 def _ranger_echec(reference, erreur):
@@ -260,12 +332,46 @@ def repond_vraiment(suivi) -> bool:
     return not erreur or "404" in erreur
 
 
+def _par_api(references, timeout):
+    """Le suivi par l'API officielle, si la configuration le demande. -> dict ou None.
+
+    DEUX CHEMINS, UN SEUL CONTRAT
+    -----------------------------
+    Depuis le 14/09/2026 le suivi peut venir de l'API Aramex (`aramex_api`) au lieu du scraping
+    du site public. Le choix est une case de « Config Livraison Aramex », et les deux chemins
+    rendent le MEME dictionnaire : rien d'autre dans ce module, ni dans les ecrans, ne sait
+    lequel a repondu.
+
+    ⚠️ UNE API MUETTE NE PRIVE PAS DU SUIVI : si le paquet entier echoue (login, reseau), on
+    rend None et l'appelant continue par le scraping, avec UNE erreur journalisee pour le tour.
+    C'est ce filet qui permet de basculer la source en production sans risque.
+    """
+    from customization_app import aramex_api
+
+    try:
+        if not aramex_api.suivi_par_api():
+            return None
+    except Exception:
+        # Config absente (site pas encore migre) : l'ancien chemin, sans bruit.
+        return None
+    try:
+        return aramex_api.track_shipments(references, timeout=timeout)
+    except (aramex_api.AramexIndisponible, aramex_api.AramexNonConfigure) as e:
+        frappe.log_error(title="Suivi Aramex : API indisponible, repli scraping",
+                         message="%s\n\nBordereaux : %s" % (e, ", ".join(references)))
+        return None
+
+
 def interroger(reference, timeout=60):
     """Demande le suivi d'UN bordereau au service. -> dict, jamais d'exception.
 
     Une erreur de transport n'est pas une absence de colis : elle est rendue telle quelle pour que
     l'ecran distingue « je ne sais pas » de « rien a signaler ».
     """
+    par_api = _par_api([reference], timeout)
+    if par_api is not None:
+        return par_api.get(reference) or {"erreur": "réponse sans résultat",
+                                          "reference": reference}
     _base_url, _headers = _client_service()
     return _appel(_base_url(), _headers(), reference, timeout)
 
@@ -282,10 +388,16 @@ def interroger_plusieurs(references, timeout=60, parallele=None) -> dict:
     essai, un colis en parfait etat ressortirait « suivi indisponible » et gagnerait une tentative
     au compteur. La reprise se fait UN PAR UN, puisque c'est la simultaneite qui a fait tomber le
     premier essai. Les 404, eux, ne sont pas repris : ce sont des reponses, pas des echecs.
+
+    Par l'API (voir `_par_api`), tout cela n'a plus lieu d'etre : une requete porte la liste
+    entiere et repond en moins de deux secondes.
     """
     references = [r for r in dict.fromkeys(references or []) if r]
     if not references:
         return {}
+    par_api = _par_api(references, timeout)
+    if par_api is not None:
+        return par_api
     _base_url, _headers = _client_service()
     base, entetes = _base_url(), _headers()
     largeur = max(1, int(parallele or PARALLELE))

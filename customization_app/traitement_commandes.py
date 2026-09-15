@@ -439,7 +439,7 @@ def creer_tache(commande, type_intervention, staff, starts_on, temps=None, titre
 
 
 @frappe.whitelist()
-def definir_bordereau(commande, bordereau):
+def definir_bordereau(commande, bordereau, origine=None):
     """Enregistre le numéro de suivi Aramex saisi depuis l'écran.
 
     Le numéro vit sur la COMMANDE (custom_bordereau_aramex) ; si un paiement sur
@@ -449,8 +449,21 @@ def definir_bordereau(commande, bordereau):
 
     db_set des deux côtés : commande et paiement sont soumis, on ne veut ni
     hooks de mise à jour ni champ modified touché. La trace vit en commentaire.
+
+    `origine` : d'où vient le numéro, pour la trace — « depuis l'écran Traitement
+    des commandes » par défaut (saisie manuelle), « créé par l'API Aramex » quand
+    c'est aramex_expedition qui l'a obtenu. Même règle, même alignement du
+    paiement dans les deux cas : c'est le point qui garantit qu'un bordereau
+    n'a qu'UN chemin d'entrée, quelle que soit sa provenance.
     """
     frappe.has_permission("Sales Order", "write", doc=commande, throw=True)
+    return _definir_bordereau(commande, bordereau, origine)
+
+
+def _definir_bordereau(commande, bordereau, origine=None):
+    """Le travail de `definir_bordereau`, SANS le contrôle de droit : la création par
+    l'API depuis « Ma journée » l'appelle pour un technicien dont le droit se lit sur sa
+    tâche (aramex_expedition._creer)."""
     if not frappe.db.exists("Sales Order", commande):
         frappe.throw(_("Commande introuvable."))
 
@@ -463,6 +476,12 @@ def definir_bordereau(commande, bordereau):
     frappe.db.set_value("Sales Order", commande, "custom_bordereau_aramex", numero,
                         update_modified=False)
 
+    # Aligner la ligne « Dette non payée » du calendrier de paiement : son champ « N: Chèque /
+    # Transaction » est ce que les Server Scripts « Generation payement » / « re-generate
+    # payment » recopient dans le libellé du paiement (« Aramex N: … »). Sans lui, une
+    # régénération de l'échéancier remettrait l'ancien numéro (« xxxx », « 0000 »).
+    echeancier = _aligner_echeancier(commande, numero)
+
     # Aligner le paiement Aramex éventuel — le plus récent, comme _bordereaux().
     pe_alignee = None
     aramex = _bordereaux([commande]).get(commande)
@@ -472,11 +491,14 @@ def definir_bordereau(commande, bordereau):
         frappe.db.set_value("Payment Entry", pe_alignee, "reference_no",
                             "Aramex N: %s" % numero, update_modified=False)
 
-    texte = _("🚚 Bordereau Aramex {0} enregistré depuis l'écran Traitement des commandes.").format(numero)
+    texte = _("🚚 Bordereau Aramex {0} enregistré {1}.").format(
+        numero, origine or _("depuis l'écran Traitement des commandes"))
     if ancien and ancien != numero:
         texte += " " + _("(remplace {0})").format(ancien)
     if pe_alignee:
         texte += " " + _("Paiement {0} aligné.").format(pe_alignee)
+    if echeancier:
+        texte += " " + _("Calendrier de paiement aligné.")
     frappe.get_doc({
         "doctype": "Comment", "comment_type": "Info",
         "reference_doctype": "Sales Order", "reference_name": commande,
@@ -484,6 +506,28 @@ def definir_bordereau(commande, bordereau):
     }).insert(ignore_permissions=True)
     frappe.db.commit()
     return {"bordereau": numero, "payment_entry": pe_alignee}
+
+
+CHAMP_NUMERO_ECHEANCIER = "custom__n_chèque__transaction"
+MODE_ATTENTE_ARAMEX = "Dette non payée"
+
+
+def _aligner_echeancier(commande, numero) -> int:
+    """Pose le numéro sur la ou les lignes « Dette non payée » du calendrier de paiement de la
+    commande. -> nombre de lignes modifiées. db_set : la commande est soumise, et on ne veut
+    surtout pas réveiller les Server Scripts qui régénèrent les paiements à l'enregistrement."""
+    lignes = frappe.get_all("Payment Schedule",
+                            filters={"parent": commande, "parenttype": "Sales Order",
+                                     "mode_of_payment": MODE_ATTENTE_ARAMEX},
+                            fields=["name", CHAMP_NUMERO_ECHEANCIER])
+    modifiees = 0
+    for l in lignes:
+        if (l.get(CHAMP_NUMERO_ECHEANCIER) or "").strip() == numero:
+            continue
+        frappe.db.set_value("Payment Schedule", l.name, CHAMP_NUMERO_ECHEANCIER, numero,
+                            update_modified=False)
+        modifiees += 1
+    return modifiees
 
 
 @frappe.whitelist()

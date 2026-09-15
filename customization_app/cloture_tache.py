@@ -85,8 +85,25 @@ def _est_livraison_aramex(commande):
         or bool(v.custom_bordereau_aramex)
 
 
+def _etiquette_aramex(commande):
+    """Le bordereau a-t-il ete cree par l'API, etiquette attachee a la commande ? Alors la
+    photo du bordereau n'a plus rien a prouver : l'etiquette EST le bordereau."""
+    if not commande:
+        return False
+    return bool(frappe.db.get_value("Sales Order", commande, "custom_etiquette_aramex"))
+
+
 def _exigence_livraison(doc):
-    if _est_livraison_aramex(doc.get("commande_client")):
+    commande = doc.get("commande_client")
+    if _est_livraison_aramex(commande):
+        if _etiquette_aramex(commande):
+            return {
+                "avant": 1, "apres": 0,
+                "slots": [
+                    {"label": "Produits envoyés (1 ou plusieurs)", "champ": "avant",
+                     "multiple": True},
+                ],
+            }
         return {
             "avant": 1, "apres": 1,
             "slots": [

@@ -379,6 +379,9 @@ app_include_js = [_js("customer_quick_entry.js"),
                   # tâches. Une FENÊTRE et non une page — elle sert sur le
                   # téléphone, entre deux interventions.
                   _js("ma_journee.js"),
+                  # Le dialogue de création d'un bordereau Aramex, partagé par la fiche
+                  # commande et « Ma journée » (aramex_expedition / planning_employe).
+                  _js("aramex_dialogue.js"),
                   _js("taches_gestion_groupe.js"),
                   _js("tache_cloture_partenaire.js"),
                   # Coloration des anomalies dans la liste des commandes.
@@ -605,6 +608,10 @@ doctype_js = {
     "Facture Achat a Saisir": "public/js/document_a_saisir.js",
     # Item : verrou sync WooCommerce sans image + popup saisie groupée des prix de vente.
     "Item": "public/js/item.js",
+    # Commande : boutons « Créer le bordereau Aramex » / étiquette / mise en attente
+    # (API Aramex — aramex_expedition.py). woocommerce_fusion a aussi un doctype_js sur
+    # Sales Order : Frappe concatène les deux, aucun n'écrase l'autre.
+    "Sales Order": "public/js/sales_order_aramex.js",
 }
 
 # doctype_js = {

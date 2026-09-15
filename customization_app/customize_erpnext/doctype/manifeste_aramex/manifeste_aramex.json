@@ -1,0 +1,51 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "MAN-.YYYY.-.#####",
+ "creation": "2026-09-15 08:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "date",
+  "genere_par",
+  "column_break_entete",
+  "total_colis",
+  "total_pieces",
+  "total_poids",
+  "total_cod",
+  "section_lignes",
+  "lignes",
+  "section_notes",
+  "notes"
+ ],
+ "fields": [
+  {"fieldname": "date", "fieldtype": "Date", "label": "Date du manifeste", "reqd": 1, "in_list_view": 1, "read_only": 1},
+  {"fieldname": "genere_par", "fieldtype": "Link", "options": "User", "label": "Genere par", "read_only": 1},
+  {"fieldname": "column_break_entete", "fieldtype": "Column Break"},
+  {"fieldname": "total_colis", "fieldtype": "Int", "label": "Colis", "read_only": 1, "in_list_view": 1},
+  {"fieldname": "total_pieces", "fieldtype": "Int", "label": "Pieces", "read_only": 1},
+  {"fieldname": "total_poids", "fieldtype": "Float", "label": "Poids total (kg)", "read_only": 1, "in_list_view": 1},
+  {"fieldname": "total_cod", "fieldtype": "Currency", "precision": "3", "label": "Contre-remboursement total (TND)", "read_only": 1, "in_list_view": 1},
+  {"fieldname": "section_lignes", "fieldtype": "Section Break", "label": "Colis remis au coursier"},
+  {"fieldname": "lignes", "fieldtype": "Table", "options": "Manifeste Aramex Ligne", "label": "Colis", "read_only": 1},
+  {"fieldname": "section_notes", "fieldtype": "Section Break", "label": "Notes"},
+  {"fieldname": "notes", "fieldtype": "Small Text", "label": "Notes"}
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-09-15 08:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "Manifeste Aramex",
+ "owner": "Administrator",
+ "permissions": [
+  {"create": 1, "delete": 1, "email": 1, "export": 1, "print": 1, "read": 1, "report": 1, "role": "System Manager", "share": 1, "write": 1},
+  {"create": 1, "print": 1, "read": 1, "report": 1, "role": "Sales Manager", "write": 1},
+  {"create": 1, "print": 1, "read": 1, "report": 1, "role": "Sales User"}
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

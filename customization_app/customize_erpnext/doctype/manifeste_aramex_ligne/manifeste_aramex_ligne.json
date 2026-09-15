@@ -1,0 +1,39 @@
+{
+ "actions": [],
+ "creation": "2026-09-15 08:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "bordereau",
+  "commande",
+  "destinataire",
+  "telephone",
+  "ville",
+  "poids",
+  "pieces",
+  "cod"
+ ],
+ "fields": [
+  {"fieldname": "bordereau", "fieldtype": "Data", "label": "Bordereau", "reqd": 1, "in_list_view": 1, "columns": 2},
+  {"fieldname": "commande", "fieldtype": "Data", "label": "Commande", "in_list_view": 1, "columns": 2},
+  {"fieldname": "destinataire", "fieldtype": "Data", "label": "Destinataire", "in_list_view": 1, "columns": 2},
+  {"fieldname": "telephone", "fieldtype": "Data", "label": "Telephone", "in_list_view": 1, "columns": 1},
+  {"fieldname": "ville", "fieldtype": "Data", "label": "Ville", "in_list_view": 1, "columns": 1},
+  {"fieldname": "poids", "fieldtype": "Float", "label": "Poids (kg)", "in_list_view": 1, "columns": 1},
+  {"fieldname": "pieces", "fieldtype": "Int", "label": "Pieces", "in_list_view": 1, "columns": 1},
+  {"fieldname": "cod", "fieldtype": "Currency", "precision": "3", "label": "COD (TND)"}
+ ],
+ "index_web_pages_for_search": 0,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-09-15 08:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "Manifeste Aramex Ligne",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

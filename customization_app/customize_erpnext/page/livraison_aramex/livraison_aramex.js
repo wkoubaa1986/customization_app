@@ -5,6 +5,10 @@ frappe.pages["livraison-aramex"].on_page_load = function (wrapper) {
     single_column: true,
   });
   $(wrapper).find(".layout-main-section").html(frappe.render_template("livraison_aramex", {}));
+  // Le manifeste de fin de journée : la feuille que signe le coursier (page imprimable).
+  wrapper.page.add_inner_button(__("🧾 Manifeste du jour"), () =>
+    window.open("/manifeste-aramex", "_blank")
+  );
   new LivraisonAramex(wrapper);
 };
 
@@ -272,11 +276,35 @@ class LivraisonAramex {
       <div class="ala-maj" style="${c.alerte ? "color:var(--ala-loss);font-weight:600" : ""}">
         ${esc(maj.description || "")}${maj.date ? ` <span class="ala-menu">— ${esc(maj.date)}</span>` : ""}
       </div>
+      ${this._historique(s)}
       <div class="ala-menu">
         ${s.url ? `<a href="${esc(s.url)}" target="_blank">${esc(c.reference)} ↗</a>` : esc(c.reference)}
         · ${bouton}
       </div>
       ${this._retour_chip(c)}`;
+  }
+
+  // L'historique complet, quand le suivi vient de l'API Aramex (le scraping ne
+  // rendait que le dernier événement). Replié : la ligne reste aussi courte qu'avant.
+  _historique(s) {
+    const esc = frappe.utils.escape_html;
+    const ev = s.evenements || [];
+    if (!ev.length) return "";
+    const lignes = ev
+      .map(
+        (e) =>
+          `<div style="display:flex;gap:6px;font-size:11px;line-height:1.35">
+            <span class="ala-menu" style="white-space:nowrap">${esc(e.date || "")}</span>
+            <span>${esc(e.description || e.code || "")}${
+              e.probleme ? ` <b style="color:var(--ala-loss)">${esc(e.probleme)}</b>` : ""
+            }${e.lieu ? ` <span class="ala-menu">· ${esc(e.lieu)}</span>` : ""}</span>
+          </div>`
+      )
+      .join("");
+    return `<details style="margin-top:2px">
+      <summary class="ala-menu" style="cursor:pointer">${__("{0} événements", [ev.length])}</summary>
+      <div style="margin-top:4px">${lignes}</div>
+    </details>`;
   }
 
   // Le retour physique : un colis « Returned » porte le bouton tant que le

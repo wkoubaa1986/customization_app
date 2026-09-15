@@ -214,6 +214,32 @@ def _aramex(commande):
     return bool(info.get("aramex")), info.get("bordereau") or ""
 
 
+def _creation_api_possible(commande, cfg_creation):
+    """Le bouton « Générer le bordereau » : commande soumise, création activée."""
+    if not (commande and cfg_creation):
+        return False
+    # Brouillon compris : le colis part souvent avant la validation de la commande web.
+    return cint(frappe.db.get_value("Sales Order", commande, "docstatus")) < 2
+
+
+def _colis_aramex(bordereau):
+    """Ce que le suivi sait du colis (étiquette, manifeste) — pour la carte."""
+    if not bordereau:
+        return {}
+    from customization_app.livraison_aramex import DOCTYPE_SUIVI
+
+    return frappe.db.get_value(DOCTYPE_SUIVI, bordereau, ["etiquette_url", "manifeste"],
+                               as_dict=True) or {}
+
+
+def _a_manifester(lignes) -> list:
+    """Les bordereaux des livraisons Aramex FAITES de la journée, pas encore sur un
+    manifeste : ce que le bouton « Générer le manifeste » va lister."""
+    return [l["bordereau"] for l in lignes
+            if l.get("aramex") and l.get("bordereau") and l.get("statut") == "Completed"
+            and not (l.get("colis") or {}).get("manifeste")]
+
+
 @frappe.whitelist()
 def ma_journee(date=None, employe=None):
     """Les interventions de la journée, avec tout ce qu'il faut pour les mener."""
@@ -235,6 +261,12 @@ def ma_journee(date=None, employe=None):
                 "dispense_photos", "dans_local",
                 "liste_photos_avant", "liste_photos_apres"],
         order_by="starts_on asc", limit_page_length=0)
+
+    try:
+        from customization_app import aramex_api
+        cfg_creation = aramex_api.creation_active()
+    except Exception:
+        cfg_creation = False
 
     lignes = []
     for t in taches:
@@ -270,6 +302,13 @@ def ma_journee(date=None, employe=None):
             "rapport": t.rapport_visite or "",
             "aramex": aramex,
             "bordereau": bordereau,
+            # Le bordereau se DEMANDE à Aramex depuis la carte (API) quand il manque.
+            "creation_api": bool(aramex and not bordereau
+                                 and _creation_api_possible(t.commande_client, cfg_creation)),
+            "etiquette": (frappe.db.get_value("Sales Order", t.commande_client,
+                                              "custom_etiquette_aramex") or "")
+                         if (aramex and bordereau) else "",
+            "colis": _colis_aramex(bordereau) if aramex else {},
             "appels": _appels(t.name),
             # Les photos prises pendant l'intervention : une fois la tâche
             # terminée, elles sont la seule preuve visible de ce qui a été fait
@@ -293,7 +332,68 @@ def ma_journee(date=None, employe=None):
                      if _supervise() else []),
         "lignes": lignes,
         "resultats_appel": list(RESULTATS_APPEL),
+        # Le manifeste de la journée : les livraisons Aramex faites, pas encore manifestées.
+        "a_manifester": _a_manifester(lignes),
+        # Les boutons Aramex de la barre (BL, étiquettes, manifeste) n'apparaissent que si
+        # la journée compte au moins une livraison Aramex.
+        "nb_aramex": sum(1 for l in lignes if l.get("aramex") and l.get("type") == TYPE_LIVRAISON),
     }
+
+
+def _tache_livraison(tache):
+    doc = _ma_tache(tache)
+    if not doc.commande_client:
+        frappe.throw(_("Cette intervention n'a pas de commande liée."))
+    if doc.custom_type_dintervention != TYPE_LIVRAISON:
+        frappe.throw(_("Le bordereau Aramex ne se génère que pour une Livraison."))
+    return doc
+
+
+@frappe.whitelist()
+def preparer_bordereau(tache):
+    """L'appel à blanc du dialogue (destinataire, ville Aramex, reste à payer, poids) pour la
+    commande de CETTE livraison — le droit se lit sur la tâche."""
+    doc = _tache_livraison(tache)
+    from customization_app import aramex_api
+    from customization_app.aramex_expedition import _commande, _preparer
+
+    return _preparer(_commande(doc.commande_client), aramex_api.config())
+
+
+@frappe.whitelist()
+def generer_bordereau(tache, destinataire=None, colis=None, poser_paiement=1):
+    """Demande le bordereau à Aramex pour la commande de CETTE livraison (API), depuis la
+    carte de « Ma journée » : le MÊME dialogue que sur la fiche commande, relu par le
+    technicien. Le droit se lit sur la tâche : c'est lui qui tient le colis."""
+    doc = _tache_livraison(tache)
+    from customization_app.aramex_expedition import _creer
+
+    res = _creer(doc.commande_client, destinataire=destinataire, colis=colis,
+                 poser_paiement=poser_paiement,
+                 origine=_("depuis Ma journée, {0}").format(tache))
+    frappe.get_doc({
+        "doctype": "Comment", "comment_type": "Info",
+        "reference_doctype": DOCTYPE_TACHE, "reference_name": doc.name,
+        "content": _("📦 Bordereau Aramex {0} généré par l'API — contre-remboursement {1} TND{2}")
+        .format(res["bordereau"], res.get("cod"),
+                (", " + _("étiquette attachée à la commande")) if res.get("etiquette") else ""),
+    }).insert(ignore_permissions=True)
+    frappe.db.commit()
+    return res
+
+
+@frappe.whitelist()
+def manifeste_du_jour(date=None, employe=None):
+    """Génère le manifeste des livraisons Aramex FAITES ce jour par cet employé (bordereaux
+    pas encore manifestés). -> {name, bordereaux} ; {name: None} s'il n'y a rien."""
+    m = ma_journee(date, employe)
+    bordereaux = m.get("a_manifester") or []
+    if not bordereaux:
+        return {"name": None, "bordereaux": []}
+    from customization_app.aramex_manifeste import generer
+
+    res = generer(bordereaux)
+    return {"name": res["name"], "bordereaux": bordereaux}
 
 
 def _ma_tache(tache):

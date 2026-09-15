@@ -121,6 +121,10 @@ frappe.provide("frappe.views");
             w.on("click", "[data-caisse]", () => this._caisse());
             w.on("click", "[data-appel]", (e) => this._appeler(e.currentTarget));
             w.on("click", "[data-aramex]", (e) => this._aramex(e.currentTarget));
+            w.on("click", "[data-generer]", (e) => this._generer(e.currentTarget));
+            w.on("click", "[data-manifeste]", () => this._manifeste());
+            w.on("click", "[data-bl-aramex]", () => this._pdf_aramex("bl_aramex_pdf"));
+            w.on("click", "[data-etiquettes]", () => this._pdf_aramex("etiquettes_aramex_pdf"));
             w.on("click", "[data-bordereau-photo]", (e) =>
                 this._photo_bordereau($(e.currentTarget).data("bordereau-photo")));
             w.on("click", "[data-terminer]", (e) => this._terminer(e.currentTarget));
@@ -175,6 +179,16 @@ frappe.provide("frappe.views");
                 <button class="btn btn-sm btn-default" data-decaler="1">▶</button>
                 <button class="btn btn-sm btn-primary" data-recharger>🔄 ${__("Actualiser")}</button>
                 <button class="btn btn-sm btn-default" data-caisse>💰 ${__("Ma caisse")}</button>
+                ${m.nb_aramex ? `
+                <button class="btn btn-sm btn-default" data-bl-aramex
+                    title="${__("Un PDF avec le BL de chaque livraison Aramex du jour")}"
+                    >🖨️ ${__("BL Aramex")} (${m.nb_aramex})</button>
+                <button class="btn btn-sm btn-default" data-etiquettes
+                    title="${__("Un PDF avec l étiquette de chaque colis Aramex du jour")}"
+                    >🏷️ ${__("Bordereaux")}</button>
+                <button class="btn btn-sm btn-default" data-manifeste
+                    title="${__("Sélection des colis à remettre au coursier, livraisons faites pré-cochées")}"
+                    >🧾 ${__("Manifeste du jour")}${(m.a_manifester || []).length ? ` (${m.a_manifester.length})` : ""}</button>` : ""}
                 <span class="mj-compte">${m.sans_employe ? ""
                     : `<b>${esc(m.employe_nom || "")}</b> · ${lignes.length} ${
                         __("intervention(s)")}, ${restant} ${__("à faire")}`}</span>
@@ -287,9 +301,19 @@ frappe.provide("frappe.views");
         _aramex_bloc(l, esc) {
             if (!l.aramex) return "";
             const manque = !l.bordereau;
+            const colis = l.colis || {};
             return `<div class="mj-l"><span class="k">Aramex</span><span>
                 ${manque ? `<span class="mj-badge ko">⚠️ ${__("bordereau manquant")}</span>`
                          : `<span class="mj-badge ok">📦 ${esc(l.bordereau)}</span>`}
+                ${l.etiquette ? ` <a href="${esc(l.etiquette)}" target="_blank">📄 ${__("Étiquette")}</a>` : ""}
+                ${colis.manifeste ? ` <a href="/manifeste-aramex?manifeste=${encodeURIComponent(colis.manifeste)}"
+                      target="_blank">🧾 ${esc(colis.manifeste)}</a>` : ""}
+                ${l.creation_api && l.statut === "Open" ? `<div style="margin-top:5px">
+                    <button class="btn btn-sm btn-primary" data-generer="${esc(l.tache)}"
+                      >🚚 ${__("Générer le bordereau Aramex")}</button>
+                    <div class="mj-conf">${
+                      __("Demande le bordereau à Aramex pour cette commande : numéro, étiquette PDF et paiement d attente posés d un coup. Ou saisissez un numéro ci-dessous.")
+                    }</div></div>` : ""}
                 ${l.statut === "Open" ? `<div style="display:flex;gap:5px;margin-top:5px;
                       flex-wrap:wrap">
                     <input type="text" class="form-control" inputmode="numeric"
@@ -575,6 +599,36 @@ frappe.provide("frappe.views");
         _aramex(el) {
             const tache = $(el).data("aramex");
             this._verifier(tache, this.dialog.$wrapper.find(`[data-champ="${tache}"]`).val());
+        }
+
+        /** Le bordereau demandé à Aramex (API) pour la commande de la livraison — le MÊME
+         *  dialogue que sur la fiche commande (aramex_dialogue.js), avec les méthodes de
+         *  Ma journée (le droit se lit sur la tâche, pas sur la commande). */
+        _generer(el) {
+            const tache = $(el).data("generer");
+            const l = ((this.data || {}).lignes || []).find((x) => x.tache === tache) || {};
+            if (typeof window.aramex_dialogue_creation !== "function") {
+                frappe.msgprint(__("Le dialogue Aramex n est pas chargé — rechargez la page."));
+                return;
+            }
+            window.aramex_dialogue_creation({
+                titre: `${l.commande || ""} · ${l.client || ""}`,
+                preparer: { method: "customization_app.planning_employe.preparer_bordereau", args: { tache } },
+                creer: { method: "customization_app.planning_employe.generer_bordereau", args: { tache } },
+                on_success: () => this.charger(),
+            });
+        }
+
+        /** Le manifeste du jour : l'écran de sélection, les livraisons faites pré-cochées. */
+        _manifeste() {
+            const pre = ((this.data || {}).a_manifester || []).join(",");
+            window.open("/manifeste-aramex" + (pre ? "?preselection=" + encodeURIComponent(pre) : ""), "_blank");
+        }
+
+        _pdf_aramex(methode) {
+            const q = "date=" + encodeURIComponent(this.jour)
+                + (this.employe ? "&employe=" + encodeURIComponent(this.employe) : "");
+            window.open("/api/method/customization_app.aramex_journee." + methode + "?" + q, "_blank");
         }
 
         _verifier(tache, numero) {

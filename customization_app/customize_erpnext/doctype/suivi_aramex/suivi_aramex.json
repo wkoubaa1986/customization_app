@@ -22,6 +22,26 @@
   "column_break_maj",
   "destination",
   "url",
+  "section_api",
+  "source",
+  "code",
+  "probleme",
+  "etiquette_url",
+  "column_break_api",
+  "frais_payes",
+  "frais_payes_le",
+  "livre_notifie_le",
+  "section_creation",
+  "cree_le",
+  "cree_par",
+  "commande",
+  "destinataire",
+  "column_break_creation",
+  "ville",
+  "cod",
+  "pieces",
+  "poids",
+  "manifeste",
   "section_brut",
   "payload",
   "section_sms",
@@ -124,6 +144,132 @@
    "options": "URL"
   },
   {
+   "fieldname": "section_api",
+   "fieldtype": "Section Break",
+   "label": "API Aramex",
+   "description": "Renseigne quand le suivi vient de l'API officielle (Config Livraison Aramex) ou que le bordereau a ete cree par elle."
+  },
+  {
+   "fieldname": "source",
+   "fieldtype": "Select",
+   "label": "Source du suivi",
+   "options": "\nScraping\nAPI",
+   "read_only": 1
+  },
+  {
+   "fieldname": "code",
+   "fieldtype": "Data",
+   "label": "Code du dernier evenement",
+   "read_only": 1,
+   "description": "Code Aramex (SH014 cree, SH005 livre, SH069 revenu, SH033 echec…)."
+  },
+  {
+   "fieldname": "probleme",
+   "fieldtype": "Data",
+   "label": "Code du probleme",
+   "read_only": 1,
+   "description": "ProblemCode Aramex du dernier evenement (A16 adresse, A18 paiement refuse, U13 injoignable…)."
+  },
+  {
+   "fieldname": "etiquette_url",
+   "fieldtype": "Data",
+   "label": "Etiquette (URL Aramex)",
+   "options": "URL",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_api",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "frais_payes",
+   "fieldtype": "Check",
+   "label": "Fonds remis par Aramex",
+   "read_only": 1,
+   "description": "Evenement SH239 « Shipment charges paid » : Aramex a solde le contre-remboursement. Le rapprochement bancaire (bank_retenue_sync) fait le reste."
+  },
+  {
+   "fieldname": "frais_payes_le",
+   "fieldtype": "Datetime",
+   "label": "Fonds remis le",
+   "read_only": 1
+  },
+  {
+   "fieldname": "livre_notifie_le",
+   "fieldtype": "Datetime",
+   "label": "Livraison notee sur la commande le",
+   "read_only": 1,
+   "description": "Le commentaire « Livre par Aramex » n'est pose qu'une fois sur la commande."
+  },
+  {
+   "fieldname": "section_creation",
+   "fieldtype": "Section Break",
+   "label": "Bordereau cree par l'API",
+   "description": "Ce qui a ete envoye a Aramex a la creation — c'est ce que liste le manifeste de fin de journee (/manifeste-aramex)."
+  },
+  {
+   "fieldname": "cree_le",
+   "fieldtype": "Datetime",
+   "label": "Cree le",
+   "read_only": 1
+  },
+  {
+   "fieldname": "cree_par",
+   "fieldtype": "Link",
+   "options": "User",
+   "label": "Cree par",
+   "read_only": 1
+  },
+  {
+   "fieldname": "commande",
+   "fieldtype": "Data",
+   "label": "Commande",
+   "read_only": 1
+  },
+  {
+   "fieldname": "destinataire",
+   "fieldtype": "Data",
+   "label": "Destinataire",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_creation",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "ville",
+   "fieldtype": "Data",
+   "label": "Ville Aramex",
+   "read_only": 1
+  },
+  {
+   "fieldname": "cod",
+   "fieldtype": "Currency",
+   "precision": "3",
+   "label": "Contre-remboursement (TND)",
+   "read_only": 1
+  },
+  {
+   "fieldname": "pieces",
+   "fieldtype": "Int",
+   "label": "Pieces",
+   "read_only": 1
+  },
+  {
+   "fieldname": "poids",
+   "fieldtype": "Float",
+   "label": "Poids (kg)",
+   "read_only": 1
+  },
+  {
+   "fieldname": "manifeste",
+   "fieldtype": "Link",
+   "options": "Manifeste Aramex",
+   "label": "Manifeste",
+   "read_only": 1,
+   "description": "La feuille signee par le coursier a l'enlevement. Un colis rattache ne se propose plus a la selection."
+  },
+  {
    "fieldname": "section_brut",
    "fieldtype": "Section Break",
    "label": "Technique"
@@ -214,7 +360,7 @@
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-08-13 03:00:00.000000",
+ "modified": "2026-09-14 10:00:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Suivi Aramex",
