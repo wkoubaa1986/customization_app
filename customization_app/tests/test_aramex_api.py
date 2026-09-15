@@ -240,3 +240,57 @@ class TestRepliScrapingReferencesEntieres(unittest.TestCase):
              patch.object(livraison_aramex.frappe, "log_error") as log:
             self.assertIsNone(livraison_aramex._par_api([51330112061, "48812240761"], 30))
         self.assertIn("51330112061, 48812240761", log.call_args.kwargs["message"])
+
+
+class TestPosterReessaieLes503(unittest.TestCase):
+    """Prod 15/09/2026 : Aramex repond HTTP 503 par intermittence (2 appels identiques sur 4).
+    Un seul 503 basculait tout le paquet sur le scraping (~2 min pour 21 colis → erreur 500 au
+    clic « Interroger »). `_poster` reessaie donc les 5xx et les erreurs reseau, pas les 4xx."""
+
+    def _reponse(self, status, json_=None, text=""):
+        from unittest.mock import MagicMock
+        r = MagicMock()
+        r.status_code = status
+        r.text = text
+        r.json.return_value = json_ if json_ is not None else {}
+        return r
+
+    def test_un_503_puis_200_rend_la_reponse(self):
+        from unittest.mock import patch
+        from customization_app import aramex_api as A
+        import requests
+        reponses = [self._reponse(503, text="Service Unavailable"), self._reponse(200, {"HasErrors": False, "ok": 1})]
+        with patch.object(requests, "post", side_effect=reponses) as post, patch.object(A, "PAUSE_TENTATIVE", 0):
+            r = A._poster("http://aramex.test", {})
+        self.assertEqual(r.get("ok"), 1)
+        self.assertEqual(post.call_count, 2)
+
+    def test_trois_503_rendent_l_erreur(self):
+        from unittest.mock import patch
+        from customization_app import aramex_api as A
+        import requests
+        with patch.object(requests, "post", return_value=self._reponse(503, text="Service Unavailable")) as post, \
+             patch.object(A, "PAUSE_TENTATIVE", 0):
+            r = A._poster("http://aramex.test", {})
+        self.assertIn("HTTP 503", r["erreur"])
+        self.assertEqual(post.call_count, A.TENTATIVES)
+
+    def test_un_4xx_ne_reessaie_pas(self):
+        from unittest.mock import patch
+        from customization_app import aramex_api as A
+        import requests
+        with patch.object(requests, "post", return_value=self._reponse(401, text="Unauthorized")) as post, \
+             patch.object(A, "PAUSE_TENTATIVE", 0):
+            r = A._poster("http://aramex.test", {})
+        self.assertIn("HTTP 401", r["erreur"])
+        self.assertEqual(post.call_count, 1)
+
+    def test_erreur_reseau_puis_200(self):
+        from unittest.mock import patch
+        from customization_app import aramex_api as A
+        import requests
+        with patch.object(requests, "post", side_effect=[requests.ConnectionError("boom"), self._reponse(200, {"HasErrors": False})]) as post, \
+             patch.object(A, "PAUSE_TENTATIVE", 0):
+            r = A._poster("http://aramex.test", {})
+        self.assertNotIn("erreur", r)
+        self.assertEqual(post.call_count, 2)

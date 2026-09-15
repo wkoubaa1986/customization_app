@@ -53,6 +53,9 @@ SOURCE_API = "API Aramex"
 # prudence, pas une limite documentee.
 PAQUET = 50
 TIMEOUT = 60
+# Nouvelles tentatives sur 5xx / reseau (voir `_poster`) : 3 essais, pauses 1 s puis 2 s.
+TENTATIVES = 3
+PAUSE_TENTATIVE = 1.0
 
 # Decalage horaire ecrit dans les dates envoyees (format WCF « /Date(ms+0100)/ »). La Tunisie
 # ne change pas d'heure ; Aramex repond en +0200 (heure de ses serveurs), ce qui n'a aucune
@@ -244,14 +247,32 @@ def _poster(url, corps, timeout=TIMEOUT) -> dict:
     fonction puisse un jour tourner dans un thread. Une reponse HTTP ≠ 200, un JSON illisible,
     un timeout ou `HasErrors` rendent `{"erreur": "..."}` ; le reste rend le JSON tel quel.
     """
+    import time
+
     import requests
 
-    try:
-        r = requests.post(url, json=corps, timeout=timeout,
-                          headers={"Content-Type": "application/json",
-                                   "Accept": "application/json"})
-    except Exception as e:
-        return {"erreur": ("réseau : %s" % e)[:200]}
+    # ⚠️ ARAMEX REPOND 503 PAR INTERMITTENCE (prod, 15/09/2026 : 2 appels sur 4 identiques a
+    # quelques secondes d'intervalle). Sans nouvelle tentative, chaque 503 bascule tout le
+    # paquet sur le scraping (21 colis, ~2 min, le clic « Interroger » finit en erreur 500).
+    # On reessaie donc les erreurs de serveur (5xx) et de reseau, jamais les 4xx ni un refus
+    # metier (HasErrors) : ceux-la ne changeront pas en attendant.
+    r = None
+    for tentative in range(TENTATIVES):
+        try:
+            r = requests.post(url, json=corps, timeout=timeout,
+                              headers={"Content-Type": "application/json",
+                                       "Accept": "application/json"})
+        except Exception as e:
+            r = None
+            erreur = ("réseau : %s" % e)[:200]
+        else:
+            if r.status_code < 500:
+                break
+            erreur = "HTTP %s — %s" % (r.status_code, (r.text or "")[:160])
+        if tentative + 1 < TENTATIVES:
+            time.sleep(PAUSE_TENTATIVE * (tentative + 1))
+    else:
+        return {"erreur": erreur}
     if r.status_code != 200:
         return {"erreur": "HTTP %s — %s" % (r.status_code, (r.text or "")[:160])}
     try:
