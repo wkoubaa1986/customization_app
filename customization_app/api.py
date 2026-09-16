@@ -1,3 +1,4 @@
+import re
 import hashlib
 import json
 from datetime import datetime
@@ -2559,11 +2560,15 @@ def get_relance_clients(search=None, customer_group=None, debt_type=None):
         if customer_group and c["customer_group"] != customer_group:
             continue
 
-        # Recherche texte (nom ou téléphone)
+        # Recherche texte (nom ou téléphone). Le TÉLÉPHONE se compare CHIFFRE À CHIFFRE : un
+        # client porte souvent deux numéros séparés par un espace (« 52160305 98321753 ») et
+        # l'employé tape le sien avec ou sans séparateurs.
         if search:
             s = search.strip().lower()
             hay = f"{c['customer_name']} {c['customer']} {c['telephone']}".lower()
-            if s not in hay:
+            chiffres = re.sub(r"\D", "", s)
+            tel = re.sub(r"\D", "", c["telephone"] or "")
+            if s not in hay and not (len(chiffres) >= 3 and chiffres in tel):
                 continue
 
         result.append(c)

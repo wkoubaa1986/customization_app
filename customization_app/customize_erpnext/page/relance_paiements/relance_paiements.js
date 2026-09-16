@@ -26,8 +26,8 @@ class RelancePaiements {
 		this.histo = {};
 
 		this.inject_styles();
-		this.setup_filters();
 		this.render_layout();
+		this.setup_filters();
 		this.bind_actions();
 		this.load();
 	}
@@ -57,6 +57,10 @@ class RelancePaiements {
 	inject_styles() {
 		if (document.getElementById('relance-paiements-styles')) return;
 		const css = `
+		.rp-toolbar { display:flex; flex-wrap:wrap; gap:10px; align-items:flex-end; margin-bottom:14px;
+		              padding:10px 12px; border:1px solid #e2e8f0; border-radius:10px; background:#f8fafc; }
+		.rp-toolbar .rp-filtre .frappe-control { margin-bottom:0; }
+		.rp-toolbar .rp-filtre .control-label { font-size:11px; color:#64748b; margin-bottom:2px; }
 		.rp-kpis { display:flex; flex-wrap:wrap; gap:12px; margin-bottom:18px; }
 		.rp-kpi { flex:1 1 160px; background:#fff; border:1px solid #e2e8f0; border-radius:10px;
 			padding:14px 16px; box-shadow:0 1px 2px rgba(0,0,0,.04); }
@@ -150,26 +154,33 @@ class RelancePaiements {
 	// ---------------------------------------------------------------
 	//  Filtres dans le header de la page
 	// ---------------------------------------------------------------
+	// Les filtres vivent DANS la page (barre au-dessus des KPI), pas dans l'en-tête Frappe :
+	// la ligne « page-form » n'apparaissait pas à l'écran (demande utilisateur 16/09/2026).
+	// La recherche porte sur le NOM et le TÉLÉPHONE, filtrée à la frappe.
 	setup_filters() {
-		this.search_field = this.page.add_field({
-			fieldname: 'search',
-			label: __('Recherche (nom / téléphone)'),
-			fieldtype: 'Data',
+		const $bar = this.$body.find('.rp-toolbar');
+		const controle = (df, largeur) => {
+			const $w = $(`<div class="rp-filtre" style="min-width:${largeur}px;flex:1"></div>`).appendTo($bar);
+			const c = frappe.ui.form.make_control({ df, parent: $w, render_input: true });
+			c.refresh();
+			return c;
+		};
+		this.search_field = controle({
+			fieldname: 'search', fieldtype: 'Data',
+			label: __('Recherche client'),
+			placeholder: __('Nom ou téléphone…'),
 			change: () => this.apply_filters(),
-		});
-
-		this.group_field = this.page.add_field({
-			fieldname: 'customer_group',
-			label: __('Groupe client'),
-			fieldtype: 'Link',
-			options: 'Customer Group',
+		}, 220);
+		this.search_field.$input.attr('autocomplete', 'off')
+			.on('input', frappe.utils.debounce(() => this.apply_filters(), 200));
+		this.group_field = controle({
+			fieldname: 'customer_group', fieldtype: 'Link', options: 'Customer Group',
+			label: __('Groupe client'), placeholder: __('Tous les groupes'),
 			change: () => this.apply_filters(),
-		});
-
-		this.type_field = this.page.add_field({
-			fieldname: 'debt_type',
+		}, 180);
+		this.type_field = controle({
+			fieldname: 'debt_type', fieldtype: 'Select',
 			label: __('Type de dette'),
-			fieldtype: 'Select',
 			options: [
 				{ value: '', label: __('Tous') },
 				{ value: 'dettes', label: __('Dettes') },
@@ -177,6 +188,14 @@ class RelancePaiements {
 				{ value: 'traites', label: __('Traites sans provision') },
 			],
 			change: () => this.apply_filters(),
+		}, 180);
+		$(`<button class="btn btn-sm btn-light rp-filtre-reset" style="align-self:flex-end">✕ ${__('Effacer')}</button>`)
+			.appendTo($bar);
+		$bar.find('.rp-filtre-reset').on('click', () => {
+			this.search_field.set_value('');
+			this.group_field.set_value('');
+			this.type_field.set_value('');
+			this.apply_filters();
 		});
 	}
 
@@ -265,6 +284,7 @@ class RelancePaiements {
 	// ---------------------------------------------------------------
 	render_layout() {
 		this.$body.html(`
+			<div class="rp-toolbar"></div>
 			<div class="rp-kpis"></div>
 			<div class="rp-selbar">
 				<span class="rp-selcount">0 sélectionné(s)</span>
@@ -328,7 +348,9 @@ class RelancePaiements {
 			if (type === 'traites' && c.traites <= 0.009) return false;
 			if (s) {
 				const hay = `${c.customer_name} ${c.customer} ${c.telephone}`.toLowerCase();
-				if (!hay.includes(s)) return false;
+				const chiffres = s.replace(/\D/g, '');
+				const tel = String(c.telephone || '').replace(/\D/g, '');
+				if (!hay.includes(s) && !(chiffres.length >= 3 && tel.includes(chiffres))) return false;
 			}
 			return true;
 		});
