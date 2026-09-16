@@ -413,12 +413,40 @@ def _paiements_anciennes_commandes(d1, d2, exclude_names):
     }
 
 
+COMPTE_DECOUVERT = "Compte de découvert bancaire - A&S"
+
+
+def _mode_depense(compte_credit, remarque, credit):
+    """Le mode d'une ligne de crédit d'une écriture de caisse, ou "" si la ligne n'est pas
+    un règlement (part « pas payé » sur le découvert). Fonction pure."""
+    remarque = remarque or ""
+    if compte_credit == "Espèces - A&S":
+        return "Espèces"
+    if compte_credit == COMPTE_DECOUVERT:
+        from customization_app.caisse_depenses import parser_traites
+
+        for t in parser_traites(remarque):
+            if abs(round(float(t["montant"] or 0), 3) - round(float(credit or 0), 3)) <= 0.001:
+                return "Traite bancaire"
+        return ""
+    if "Chq N°" in remarque:
+        return "Chèque"
+    if "virement" in remarque.lower():
+        return "Virement"
+    return "Carte de crédit"
+
+
 def _depenses_caisse(d1, d2, noms_par_user):
     """Les dépenses saisies en caisse (écritures « Dépense caisse — … ») sur la
-    période, attribuées à leur AUTEUR. Le mode se lit sur l'écriture elle-même :
-    crédit Espèces -> Espèces ; « Chq N° » en remarque -> Chèque ; sinon carte."""
+    période, attribuées à leur AUTEUR. Le mode se lit sur l'écriture elle-même
+    (`_mode_depense`) : crédit Espèces -> Espèces ; crédit découvert -> Traite
+    bancaire (seulement si la remarque porte « Traite N° … » du même montant, sinon
+    c'est une part « pas payé » qui ne sort de rien) ; « Chq N° » -> Chèque ;
+    « virement » -> Virement ; sinon carte."""
     # UNE LIGNE PAR CRÉDIT de l'écriture — un paiement fractionné (espèces +
     # chèque) doit compter sa part espèces dans le solde théorique, pas le TTC.
+    # Le découvert entre dans la lecture pour les TRAITES (16/09/2026) : la ligne
+    # est ensuite retenue ou écartée par `_mode_depense`.
     rows = frappe.db.sql(
         """SELECT je.name, je.posting_date, je.owner, je.cheque_no, je.user_remark,
                   jea.account AS compte_credit,
@@ -426,23 +454,18 @@ def _depenses_caisse(d1, d2, noms_par_user):
            FROM `tabJournal Entry` je
            INNER JOIN `tabJournal Entry Account` jea
                    ON jea.parent = je.name AND jea.credit_in_account_currency > 0
-                  AND jea.account != 'Compte de découvert bancaire - A&S'
            WHERE je.docstatus = 1 AND je.posting_date BETWEEN %s AND %s
              AND je.cheque_no LIKE 'Dépense caisse —%%'
            ORDER BY je.posting_date DESC, je.creation DESC, jea.idx""",
         (d1, d2), as_dict=True)
+    rows = [r for r in rows if _mode_depense(r.compte_credit, r.user_remark, r.credit)]
     lignes = []
     nb_credits = {}
     for r in rows:
         nb_credits[r.name] = nb_credits.get(r.name, 0) + 1
     for r in rows:
         remark = r.user_remark or ""
-        if r.compte_credit == "Espèces - A&S":
-            mode = "Espèces"
-        elif "Chq N°" in remark:
-            mode = "Chèque"
-        else:
-            mode = "Carte de crédit"
+        mode = _mode_depense(r.compte_credit, remark, r.credit)
         m = re.search(r"Type : (.+)", remark)
         description = (r.cheque_no or "").replace("Dépense caisse — ", "")
         if nb_credits.get(r.name, 1) > 1:

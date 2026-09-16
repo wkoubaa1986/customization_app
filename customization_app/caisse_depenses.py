@@ -22,6 +22,14 @@ MODES DE PAIEMENT ET COMPTES :
                        le n° cité en remarque est celui que lit l'identification
                        bancaire au débit « REGLEMENT CHEQUE nnnnnnn » ;
   - Carte de crédit -> Cr Zitouna, remarque dédiée (rapprochement montant+date) ;
+  - Virement        -> Cr Zitouna, référence bancaire en remarque si on l'a
+                       (demande utilisateur 16/09/2026) ;
+  - Traite bancaire -> Cr « Compte de découvert bancaire » et NON la banque : la
+                       traite n'est débitée qu'à son ÉCHÉANCE. Un ordre de paiement
+                       (bank_retenue_sync) porte cette attente ; l'identification
+                       bancaire, quand le débit paraît, recrée l'écriture sur Zitouna
+                       (décision utilisateur 16/09/2026). Remarque « Traite N° … —
+                       échéance … » = la mémoire de la traite, lue par le rapport ;
   - Pas payé        -> réservé à « Facture d'achat », aucune écriture.
 
 Les écritures sont SOUMISES, les photos attachées.
@@ -33,7 +41,7 @@ import re
 
 import frappe
 from frappe import _
-from frappe.utils import cint, flt, nowdate
+from frappe.utils import cint, flt, getdate, nowdate
 
 COMPTE_ESPECES = "Espèces - A&S"
 COMPTE_BANQUE = "STE430127B - Zitouna - A&S"
@@ -71,8 +79,20 @@ def _compte_retenue():
         return R.compte()
     except Exception:
         return COMPTE_RETENUE_ACHAT
-MODES = ("Espèces", "Chèque", "Carte de crédit")
+MODES = ("Espèces", "Chèque", "Carte de crédit", "Virement", "Traite bancaire")
 MODE_PAS_PAYE = "Pas payé"
+
+#: Les modes qui vont DIRECTEMENT à la banque (Zitouna) au jour de la saisie.
+MODES_BANQUE = ("Chèque", "Carte de crédit", "Virement")
+#: La traite ne sort de la banque qu'à son échéance : elle attend sur le découvert.
+MODE_TRAITE = "Traite bancaire"
+#: Le marqueur de la remarque qui porte la traite (n°, banque, montant, échéance) — lu par
+#: `parser_traites`, donc par le rapport de caisse et par bank_retenue_sync.
+MARQUEUR_TRAITE = "Traite N°"
+#: Le mode ERPNext de la traite (Mode of Payment existant, compte Traite Bancaire).
+MODE_PAIEMENT_TRAITE = "Traite bancaire LC"
+#: Identifiant de la règle des ordres de paiement créés pour une traite de caisse.
+SOURCE_ORDRE_TRAITE = "caisse_traite"
 
 # Dépense avec facture NON PAYÉE : la charge est comptabilisée tout de suite
 # CONTRE LE DÉCOUVERT (décision utilisateur 24/08) — la dette reste visible
@@ -463,7 +483,8 @@ def _supplier(nom, matricule=None, supplier=None):
 
 
 def _paiements_normalises(montant, mode, n_cheque=None, banque=None,
-                          photo_cheque=None, photo_cheque_nom=None, paiements=None):
+                          photo_cheque=None, photo_cheque_nom=None, paiements=None,
+                          dispense=False):
     """La liste normalisée des règlements d'une dépense.
 
     `paiements` (JSON) permet le PAIEMENT FRACTIONNÉ (plusieurs chèques, ou
@@ -488,16 +509,14 @@ def _paiements_normalises(montant, mode, n_cheque=None, banque=None,
         if mt <= 0:
             frappe.throw(_("Chaque règlement doit avoir un montant positif."))
         nc = (p.get("n_cheque") or "").strip()
-        if m == "Chèque":
-            if not re.fullmatch(r"\d{7}", nc):
-                frappe.throw(_("Le numéro de chèque doit comporter exactement 7 chiffres."))
-            if not (p.get("banque") or "").strip():
-                frappe.throw(_("Pour un chèque, la banque est obligatoire."))
-            if not p.get("photo_cheque"):
-                frappe.throw(_("Pour un chèque, la photo du chèque est obligatoire."))
+        motif = motif_refus_reglement(m, nc, p.get("banque"), p.get("photo_cheque"),
+                                      p.get("echeance"), dispense=dispense)
+        if motif:
+            frappe.throw(_(motif))
         total += mt
         lignes.append({"mode": m, "montant": mt, "n_cheque": nc,
                        "banque": (p.get("banque") or "").strip(),
+                       "echeance": str(getdate(p.get("echeance"))) if p.get("echeance") else "",
                        "photo_cheque": p.get("photo_cheque"),
                        "photo_cheque_nom": p.get("photo_cheque_nom")})
     if abs(total - flt(montant, 3)) > 0.001:
@@ -506,9 +525,83 @@ def _paiements_normalises(montant, mode, n_cheque=None, banque=None,
     return lignes
 
 
+def motif_refus_reglement(mode, numero, banque, photo, echeance=None, dispense=False):
+    """Pourquoi cette ligne de règlement est refusée — "" si elle passe.
+
+    ⚠️ FONCTION PURE (aucune base) : c'est LA règle de saisie par mode, et elle se teste.
+      - Chèque : 7 chiffres + banque + photo (règles historiques) ;
+      - Virement : la référence est FACULTATIVE (le relevé l'apporte plus tard), mais si
+        elle est donnée elle a une forme (3 à 30 lettres/chiffres) ;
+      - Traite : n° de 4 à 20 chiffres + ÉCHÉANCE obligatoire (c'est elle qu'on suit) ;
+        banque et photo facultatives, comme pour la traite reçue des dettes.
+    """
+    numero = (numero or "").strip()
+    if mode == "Chèque":
+        if not re.fullmatch(r"\d{7}", numero):
+            return "Le numéro de chèque doit comporter exactement 7 chiffres."
+        if not (banque or "").strip():
+            return "Pour un chèque, la banque est obligatoire."
+        if not photo and not dispense:
+            return "Pour un chèque, la photo du chèque est obligatoire (ou le code de dispense)."
+    elif mode == "Virement":
+        if numero and not re.fullmatch(r"[A-Za-z0-9/\-]{3,30}", numero):
+            return "La référence du virement doit comporter de 3 à 30 lettres ou chiffres."
+    elif mode == MODE_TRAITE:
+        if not re.fullmatch(r"\d{4,20}", numero):
+            return "Le numéro de traite doit comporter de 4 à 20 chiffres."
+        if not echeance:
+            return "Pour une traite, la date d'échéance est obligatoire."
+        try:
+            getdate(echeance)
+        except Exception:
+            return "Date d'échéance de la traite invalide."
+    return ""
+
+
+def compte_credit(mode):
+    """Le compte crédité par un règlement de ce mode. La TRAITE n'est pas de l'argent sorti :
+    elle attend sur le découvert jusqu'à son échéance (décision utilisateur 16/09/2026)."""
+    if mode == "Espèces":
+        return COMPTE_ESPECES
+    if mode == MODE_TRAITE:
+        return COMPTE_DECOUVERT
+    return COMPTE_BANQUE
+
+
+def libelle_traite(reg):
+    """La mention de remarque qui porte une traite émise — n°, banque, MONTANT et échéance.
+
+    Le montant y figure exprès : une écriture peut porter deux traites (ou une traite et une
+    part « pas payé », toutes deux sur le découvert), et c'est lui qui rattache chaque ligne
+    de crédit à SA traite (cf. `parser_traites` / rapport de caisse).
+    """
+    texte = "%s %s" % (MARQUEUR_TRAITE, reg["n_cheque"])
+    if reg.get("banque"):
+        texte += " - Bq %s" % reg["banque"]
+    texte += " - %.3f DT - échéance %s" % (round(float(reg["montant"] or 0), 3),
+                                          reg.get("echeance") or "")
+    return texte
+
+
+_RX_TRAITE = re.compile(
+    r"Traite N°\s*(?P<numero>\d{4,20})(?:\s*-\s*Bq\s*(?P<banque>[^-\n]+?))?"
+    r"\s*-\s*(?P<montant>[0-9]+(?:[.,][0-9]+)?)\s*DT\s*-\s*échéance\s*(?P<echeance>\d{4}-\d{2}-\d{2})")
+
+
+def parser_traites(remarque):
+    """Les traites que porte une remarque d'écriture -> [{numero, banque, montant, echeance}].
+    Fonction pure, inverse de `libelle_traite`."""
+    out = []
+    for m in _RX_TRAITE.finditer(remarque or ""):
+        out.append({"numero": m.group("numero"), "banque": (m.group("banque") or "").strip(),
+                    "montant": round(float(m.group("montant").replace(",", ".")), 3),
+                    "echeance": m.group("echeance")})
+    return out
+
+
 def _lignes_credit(regs):
     """Les lignes CRÉDITÉES de l'écriture : une par règlement PAYÉ."""
-    return [{"account": COMPTE_ESPECES if p["mode"] == "Espèces" else COMPTE_BANQUE,
+    return [{"account": compte_credit(p["mode"]),
              "credit_in_account_currency": p["montant"], "cost_center": CC}
             for p in regs if p["mode"] != MODE_PAS_PAYE]
 
@@ -528,16 +621,68 @@ def _remarques_paiements(remarques, regs):
             remarques.append("Chq N° %s - Bq %s" % (p["n_cheque"], p["banque"]))
         elif p["mode"] == "Carte de crédit":
             remarques.append(_("Réglé par carte bancaire"))
+        elif p["mode"] == "Virement":
+            # « Réf de paiement : » est la forme que bank_retenue_sync lit pour marquer une
+            # référence bancaire déjà consommée par une écriture.
+            remarques.append(_("Réglé par virement") + (
+                " | Réf de paiement : %s" % p["n_cheque"] if p.get("n_cheque") else ""))
+        elif p["mode"] == MODE_TRAITE:
+            remarques.append(libelle_traite(p))
     return remarques
 
 
-def _attacher_cheques(regs, je_nom):
-    """Attache la photo de chaque chèque à l'écriture."""
+def _attacher_cheques(regs, je_nom, dispense=False):
+    """Attache la photo de chaque chèque (ou traite) à l'écriture ; trace la dispense."""
     for p in regs:
         if p.get("photo_cheque"):
+            prefixe = "traite" if p["mode"] == MODE_TRAITE else "cheque"
             _attacher(p["photo_cheque"],
-                      p.get("photo_cheque_nom") or f"cheque-{p['n_cheque']}.jpg",
+                      p.get("photo_cheque_nom") or f"{prefixe}-{p['n_cheque']}.jpg",
                       "Journal Entry", je_nom)
+    if dispense and any(p["mode"] in ("Chèque", MODE_TRAITE) and not p.get("photo_cheque")
+                        for p in regs):
+        from customization_app import caisse_pieces
+
+        caisse_pieces.tracer_dispense("Journal Entry", je_nom)
+
+
+def _avertissements_pieces(regs):
+    """Lecture OpenAI des photos de chèques / traites (après commit) -> avertissements."""
+    from customization_app import caisse_pieces
+
+    return caisse_pieces.avertissements([
+        {"mode": p["mode"], "numero": p.get("n_cheque"), "montant": p["montant"],
+         "photo": p.get("photo_cheque")} for p in regs])
+
+
+def _ordres_traites(regs, je, description, fournisseur=None):
+    """Un ordre de paiement bank_retenue_sync PAR TRAITE émise : c'est lui qui porte
+    l'attente jusqu'à l'échéance. L'identification bancaire, quand le débit du bon montant
+    paraît dans la fenêtre de l'échéance, passe l'ordre à « Viré » et recrée l'écriture sur
+    Zitouna (cf. bank_retenue_sync.expenses.ordres.confirmer_par_banque).
+
+    Ne lève JAMAIS : sans bank_retenue_sync (ou si l'ordre échoue), l'écriture et sa remarque
+    restent la mémoire de la traite — on le dit dans le journal, pas à l'employé.
+    """
+    faits = []
+    for p in regs:
+        if p["mode"] != MODE_TRAITE:
+            continue
+        try:
+            from bank_retenue_sync.expenses import ordres
+
+            o = ordres.creer_ordre(
+                libelle=("%s — %s" % (libelle_traite(p), description))[:140],
+                montant=p["montant"], date_prevue=p["echeance"], journal_entry=je.name,
+                type_depense=MODE_TRAITE, beneficiaire=(fournisseur or "").strip() or None,
+                compte_banque=COMPTE_BANQUE, source_regle=SOURCE_ORDRE_TRAITE,
+                periode="%s|%s" % (je.name, p["n_cheque"]))
+            if o:
+                faits.append(o.name)
+        except Exception:
+            frappe.log_error(title="Caisse : ordre de paiement de traite non créé",
+                             message=frappe.get_traceback())
+    return faits
 
 
 def _mode_global(regs):
@@ -594,7 +739,7 @@ def creer(type_depense, montant, mode, compte=None, description=None, fournisseu
           n_cheque=None, banque=None, photo_facture=None, photo_facture_nom=None,
           photo_cheque=None, photo_cheque_nom=None, coins_facture=None,
           supplier=None, matricule=None, paiements=None, est_bl=0, numero_bl=None,
-          retenue=None):
+          retenue=None, code_sans_photo=None):
     """Crée la dépense selon son type (voir l'en-tête du module). Retourne les noms
     des pièces créées (écriture et/ou fiche de la file des factures d'achat)."""
     frappe.only_for(ROLES)
@@ -643,11 +788,15 @@ def creer(type_depense, montant, mode, compte=None, description=None, fournisseu
     # fractionné = paiement PARTIEL : la part payée sort de la caisse, le reste
     # part en dette (découvert pour une dépense, Créditeurs différés pour une
     # facture d'achat).
+    from customization_app import caisse_pieces
+
+    dispense = caisse_pieces.dispense_photo(code_sans_photo)
     if mode == MODE_PAS_PAYE:
         regs, paid, unpaid = [], [], a_regler
     else:
         regs = _paiements_normalises(a_regler, mode, n_cheque, banque,
-                                     photo_cheque, photo_cheque_nom, paiements)
+                                     photo_cheque, photo_cheque_nom, paiements,
+                                     dispense=dispense)
         paid, unpaid = _partage_paiements(regs)
     if unpaid > 0 and type_depense == "Dépense non facturée":
         frappe.throw(_("« Pas payé » est réservé aux dépenses facturées."))
@@ -788,8 +937,12 @@ def creer(type_depense, montant, mode, compte=None, description=None, fournisseu
                         "a_payer": not paye, "reste": unpaid if not paye else 0}
 
     if je:
-        _attacher_cheques(regs, je.name)
+        _attacher_cheques(regs, je.name, dispense=dispense)
+        ordres_traites = _ordres_traites(regs, je, description, fournisseur)
+        if ordres_traites:
+            resultat["ordres_traites"] = ordres_traites
     frappe.db.commit()
+    resultat["avertissements"] = _avertissements_pieces(regs) if je else []
     return resultat
 
 
@@ -909,7 +1062,7 @@ def attacher_facture_bl(fiches, numero_facture, date_facture=None,
 @frappe.whitelist()
 def solder_depense(fiche, date_reglement=None, mode=None, n_cheque=None,
                    banque=None, photo_cheque=None, photo_cheque_nom=None,
-                   paiements=None):
+                   paiements=None, code_sans_photo=None):
     """Règle une dépense « à payer » : NOUVELLE écriture découvert → caisse/banque
     au jour du paiement — c'est ce jour-là qu'elle entre au rapport de caisse.
     Accepte le paiement fractionné (`paiements`)."""
@@ -917,8 +1070,11 @@ def solder_depense(fiche, date_reglement=None, mode=None, n_cheque=None,
     f = frappe.get_doc("Depense A Payer", fiche)
     if f.statut != "À payer":
         frappe.throw(_("La fiche {0} est déjà payée.").format(fiche))
+    from customization_app import caisse_pieces
+
+    dispense = caisse_pieces.dispense_photo(code_sans_photo)
     regs = _paiements_normalises(f.montant, mode, n_cheque, banque,
-                                 photo_cheque, photo_cheque_nom, paiements)
+                                 photo_cheque, photo_cheque_nom, paiements, dispense=dispense)
     if any(p["mode"] == MODE_PAS_PAYE for p in regs):
         frappe.throw(_("Le règlement d'une dette ne peut pas contenir « Pas payé »."))
     date = date_reglement or nowdate()
@@ -961,7 +1117,8 @@ def solder_depense(fiche, date_reglement=None, mode=None, n_cheque=None,
         ligne_decouvert.pop("reference_name", None)
         je = _ecriture(_lignes_credit(regs) + [ligne_decouvert],
                        f.description, remarques, date=date)
-    _attacher_cheques(regs, je.name)
+    _attacher_cheques(regs, je.name, dispense=dispense)
+    ordres_traites = _ordres_traites(regs, je, f.description, f.fournisseur)
     _copier_justificatifs(f.name, "Journal Entry", je.name,
                           source_doctype="Depense A Payer")
     if f.journal_entry and frappe.db.exists("Journal Entry", f.journal_entry):
@@ -974,7 +1131,8 @@ def solder_depense(fiche, date_reglement=None, mode=None, n_cheque=None,
               "date_reglement": date},
              update_modified=False)
     frappe.db.commit()
-    return {"name": je.name}
+    return {"name": je.name, "ordres_traites": ordres_traites,
+            "avertissements": _avertissements_pieces(regs)}
 
 
 def _detecter_quad(img):
@@ -1337,7 +1495,7 @@ REFUS_PERIMEE = "perimee"
 REFUS_MULTI = "multi"
 
 
-def _valider_reglements(paiements):
+def _valider_reglements(paiements, dispense=False):
     """Contrôle chaque ligne de règlement du dialogue et rend la liste normalisée.
 
     Chèque : n° à 7 chiffres + banque + photo (mêmes règles que
@@ -1367,8 +1525,9 @@ def _valider_reglements(paiements):
             if not banque:
                 frappe.throw(_("Ligne {0} : pour un chèque, la banque est obligatoire.")
                              .format(i))
-            if not p.get("photo"):
-                frappe.throw(_("Ligne {0} : la photo du chèque est obligatoire.").format(i))
+            if not p.get("photo") and not dispense:
+                frappe.throw(_("Ligne {0} : la photo du chèque est obligatoire (ou saisissez "
+                               "le code de dispense).").format(i))
             if (numero, banque) in vus:
                 frappe.throw(_("Ligne {0} : le chèque {1} ({2}) est saisi deux fois.")
                              .format(i, numero, banque))
@@ -1480,7 +1639,7 @@ def _repartir_fifo(factures, reglements):
 
 
 @frappe.whitelist()
-def payer_factures(supplier, factures, paiements):
+def payer_factures(supplier, factures, paiements, code_sans_photo=None):
     """Règle en caisse les factures d'achat cochées d'UN fournisseur.
 
     Crée UN Payment Entry PAR PIÈCE (voir l'en-tête de section), soumis, avec la
@@ -1492,7 +1651,10 @@ def payer_factures(supplier, factures, paiements):
     _controler_champ_reglement()
     selection = json.loads(factures) if isinstance(factures, str) else (factures or [])
     selection = [str(n) for n in selection if n]
-    lignes = _valider_reglements(paiements)
+    from customization_app import caisse_pieces
+
+    dispense = caisse_pieces.dispense_photo(code_sans_photo)
+    lignes = _valider_reglements(paiements, dispense=dispense)
 
     # ⚠️ ON RELIT LA BASE, on ne fait pas confiance à ce que l'écran a envoyé :
     # l'encours a pu bouger depuis l'affichage (autre caissier, règlement saisi
@@ -1587,10 +1749,19 @@ def payer_factures(supplier, factures, paiements):
                             f["reste"] - alloue_par_facture.get(f["name"], 0), 3)}
                        for f in retenues]
 
+    if dispense:
+        for pce in pieces:
+            if pce.get("mode") == "Chèque" and pce.get("payment_entry"):
+                ligne = next((l for l in lignes if l["numero"] == pce.get("piece")), None)
+                if ligne is not None and not ligne.get("photo"):
+                    caisse_pieces.tracer_dispense("Payment Entry", pce["payment_entry"])
     frappe.db.commit()
     return {"supplier": supplier, "pieces": pieces, "factures": detail_factures,
             "total_paiements": total, "total_selection": total_selection,
-            "restant": round(total_selection - total, 3), "date": date}
+            "restant": round(total_selection - total, 3), "date": date,
+            "avertissements": caisse_pieces.avertissements([
+                {"mode": l["mode"], "numero": l["numero"], "montant": l["montant"],
+                 "photo": l.get("photo")} for l in lignes])}
 
 
 @frappe.whitelist()

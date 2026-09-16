@@ -600,3 +600,106 @@ class TestFixtureTraitementDesEncaissements(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestModesCarteEtVirement(unittest.TestCase):
+    """Carte de crédit (ticket TPE) et Virement (référence) — demande utilisateur
+    16/09/2026. L'argent va directement en banque : la RÉFÉRENCE est obligatoire,
+    la photo ne l'est plus (aucun papier à remettre) ; chèque et traite gardent
+    leurs règles. Le Server Script doit connaître la carte, sinon elle tomberait
+    dans la branche « virement » et perdrait son mode."""
+
+    def setUp(self):
+        self._vrais = (CED._, CED.frappe.throw, CED.flt)
+        CED._ = lambda message: message
+        CED.flt = lambda valeur, precision=None: float(valeur or 0)
+
+        def _throw(message, *a, **k):
+            raise Refus(message)
+        CED.frappe.throw = _throw
+
+    def tearDown(self):
+        CED._, CED.frappe.throw, CED.flt = self._vrais
+
+    def test_les_cinq_modes_sont_offerts(self):
+        self.assertEqual(CED.MODES, ("Espèces", "Chèque", "Traite bancaire",
+                                     "Carte de crédit", "Virement"))
+        self.assertEqual(CED.MODES_PAPIER, ("Chèque", "Traite bancaire"))
+
+    def test_une_carte_sans_photo_passe_avec_son_ticket(self):
+        lignes = CED._valider_paiements(
+            [{"mode": "Carte de crédit", "montant": 54, "n_piece": "TPE-0421"}])
+        self.assertEqual(lignes[0]["numero"], "TPE-0421")
+        self.assertEqual(lignes[0]["banque"], "")
+
+    def test_un_virement_sans_photo_passe_avec_sa_reference(self):
+        lignes = CED._valider_paiements(
+            [{"mode": "Virement", "montant": 120, "n_piece": "FT26260ABCDE", "banque": "BIAT"}])
+        self.assertEqual(lignes[0]["numero"], "FT26260ABCDE")
+
+    def test_la_reference_reste_obligatoire(self):
+        for mode in ("Carte de crédit", "Virement"):
+            with self.assertRaises(Refus) as cm:
+                CED._valider_paiements([{"mode": mode, "montant": 10, "n_piece": ""}])
+            self.assertIn("3 à 30", str(cm.exception))
+
+    def test_le_cheque_exige_toujours_sa_photo(self):
+        with self.assertRaises(Refus) as cm:
+            CED._valider_paiements([{"mode": "Chèque", "montant": 10, "n_piece": "1234567",
+                                     "banque": "BIAT"}])
+        self.assertIn("photo", str(cm.exception))
+
+    def test_la_verification_photo_ignore_carte_et_virement(self):
+        # Même avec une photo jointe, rien à confronter : pas d'appel au modèle.
+        avert = CED._avertissements_photos(
+            [{"mode": "Virement", "numero": "FT1", "montant": 5, "photo": "data:image/png;base64,x"},
+             {"mode": "Carte de crédit", "numero": "T1", "montant": 5, "photo": "data:image/png;base64,x"}])
+        self.assertEqual(avert, [])
+
+    def test_le_script_porte_la_branche_carte(self):
+        script = _script()
+        compile(script, NOM_SCRIPT, "exec")
+        self.assertIn('payement.type=="Carte de crédit"', script)
+        self.assertIn('pe.mode_of_payment = "Carte de crédit"', script)
+        self.assertIn('new_pay.mode_of_payment="Carte de crédit"', script)
+        self.assertIn("'CB':{}", script)
+        # Le virement sans banque ne produit plus « REF -  ».
+        self.assertIn("""(iCHQ['V']+" - "+iCHQ['Bank']) if iCHQ['Bank'] else iCHQ['V']""", script)
+
+    def test_les_tables_enfants_acceptent_les_nouveaux_modes(self):
+        chemin = os.path.join(os.path.dirname(FIXTURE), "property_setter.json")
+        with open(chemin, encoding="utf-8") as f:
+            setters = {p["name"]: p for p in json.load(f)}
+        for dt in ("Liste des Dettes client", "Liste Dettes"):
+            ps = setters["%s-type-options" % dt]
+            self.assertEqual(ps["property"], "options")
+            self.assertEqual(ps["value"].split("\n"),
+                             ["Espèces", "Chèque", "Virement", "Traite bancaire", "Carte de crédit"])
+
+    def test_le_dialogue_offre_les_nouveaux_modes(self):
+        with open(DIALOGUE, encoding="utf-8") as f:
+            js = f.read()
+        bloc = js[js.index("function rcj_encaissement_dettes"):][:1200]
+        self.assertIn('"Carte de crédit", "Virement"', bloc)
+        self.assertIn('const PAPIER = ["Chèque", "Traite bancaire"]', bloc)
+
+
+class TestDispenseDePhotoDettes(TestModesCarteEtVirement):
+    """Le code de dispense, vérifié en amont, lève l'obligation de photo du chèque / de la traite."""
+
+    def test_avec_dispense_le_cheque_passe_sans_photo(self):
+        lignes = CED._valider_paiements(
+            [{"mode": "Chèque", "montant": 10, "n_piece": "1234567", "banque": "BIAT"}],
+            dispense=True)
+        self.assertEqual(lignes[0]["numero"], "1234567")
+
+    def test_la_dispense_ne_leve_pas_la_banque(self):
+        with self.assertRaises(Refus):
+            CED._valider_paiements([{"mode": "Chèque", "montant": 10, "n_piece": "1234567"}],
+                                   dispense=True)
+
+    def test_le_dialogue_envoie_le_code(self):
+        with open(DIALOGUE, encoding="utf-8") as f:
+            js = f.read()
+        appel = js[js.index('method: API + ".encaisser"'):][:700]
+        self.assertIn("code_sans_photo: v.code_sans_photo", appel)

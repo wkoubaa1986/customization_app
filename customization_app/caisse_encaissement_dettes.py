@@ -271,15 +271,35 @@ def dettes_client(client):
 
 #: Les modes offerts par la caisse. « Traite bancaire » suit le circuit du chèque
 #: (n° + banque + photo, compte d'attente « Traite Bancaire - A&S », remise ensuite).
-MODES = ("Espèces", "Chèque", "Traite bancaire")
+#: « Carte de crédit » (TPE) et « Virement » (demande utilisateur 16/09/2026) vont
+#: DIRECTEMENT en banque (Zitouna) : pas de papier à remettre, donc pas de photo
+#: exigée — seule la RÉFÉRENCE (ticket TPE, référence du virement) est demandée,
+#: c'est elle que l'identification bancaire retrouvera au relevé.
+MODES = ("Espèces", "Chèque", "Traite bancaire", "Carte de crédit", "Virement")
+
+#: Les modes « papier » : une pièce physique entre en portefeuille, la photo est
+#: obligatoire et sa lecture automatique est confrontée au saisi.
+MODES_PAPIER = ("Chèque", "Traite bancaire")
 
 #: Un numéro de chèque tunisien porte 7 chiffres ; une traite n'a pas de format
-#: unique — on exige des chiffres, de 4 à 20.
-_RX_NUMERO = {"Chèque": r"\d{7}", "Traite bancaire": r"\d{4,20}"}
+#: unique — on exige des chiffres, de 4 à 20. Un ticket TPE ou une référence de
+#: virement (« FT26220ABCDE ») est alphanumérique, 3 à 30 caractères.
+_RX_NUMERO = {"Chèque": r"\d{7}", "Traite bancaire": r"\d{4,20}",
+              "Carte de crédit": r"[A-Za-z0-9/\-]{3,30}", "Virement": r"[A-Za-z0-9/\-]{3,30}"}
+
+#: Ce que le message d'erreur nomme, par mode.
+_LIBELLES = {"Chèque": "chèque", "Traite bancaire": "traite",
+             "Carte de crédit": "ticket TPE", "Virement": "référence de virement"}
+_ATTENDUS = {"Chèque": "exactement 7 chiffres", "Traite bancaire": "4 à 20 chiffres",
+             "Carte de crédit": "3 à 30 lettres ou chiffres",
+             "Virement": "3 à 30 lettres ou chiffres"}
 
 
-def _valider_paiements(paiements):
+def _valider_paiements(paiements, dispense=False):
     """Contrôle chaque ligne de paiement et rend la liste normalisée.
+
+    `dispense` : le code de dispense a été donné et vérifié (`caisse_pieces.dispense_photo`) —
+    la photo du chèque / de la traite n'est plus exigée.
 
     ⚠️ (N°, BANQUE) EST LA CLÉ D'APPARIEMENT DU SERVER SCRIPT « Traitement des
     encaissement » : deux chèques (ou deux traites) qui la partageraient seraient
@@ -298,22 +318,23 @@ def _valider_paiements(paiements):
         if montant <= 0:
             frappe.throw(_("Ligne {0} : le montant doit être positif.").format(i))
         if mode != "Espèces":
-            libelle = _("chèque") if mode == "Chèque" else _("traite")
+            libelle = _(_LIBELLES[mode])
             if not re.fullmatch(_RX_NUMERO[mode], numero):
-                attendu = (_("exactement 7 chiffres") if mode == "Chèque"
-                           else _("4 à 20 chiffres"))
+                attendu = _(_ATTENDUS[mode])
                 frappe.throw(_("Ligne {0} : le numéro de {1} doit comporter {2} "
                                "(reçu : « {3} »).").format(i, libelle, attendu,
                                                            numero or _("vide")))
             # Décision utilisateur 2026-08-20 : la banque n'est obligatoire QUE pour
             # un chèque — une traite peut se saisir sans (le papier ne la porte pas
-            # toujours lisiblement).
+            # toujours lisiblement). Carte et virement n'en ont pas.
             if mode == "Chèque" and not banque:
                 frappe.throw(_("Ligne {0} : pour un chèque, la banque est obligatoire.")
                              .format(i))
-            if not p.get("photo"):
-                frappe.throw(_("Ligne {0} : la photo du/de la {1} est obligatoire.")
-                             .format(i, libelle))
+            # La photo n'est exigée que pour une pièce PAPIER : un ticket TPE ou un
+            # avis de virement peut être joint, jamais imposé.
+            if mode in MODES_PAPIER and not p.get("photo") and not dispense:
+                frappe.throw(_("Ligne {0} : la photo du/de la {1} est obligatoire "
+                               "(ou saisissez le code de dispense).").format(i, libelle))
             cle = (mode, numero, banque)
             if cle in vus:
                 frappe.throw(_("Ligne {0} : le numéro {1} ({2}) est saisi deux fois pour "
@@ -414,7 +435,9 @@ def _avertissements_photos(lignes_paiement):
     """
     avertissements = []
     for p in lignes_paiement:
-        if p["mode"] == "Espèces" or not p.get("photo"):
+        # Seules les pièces PAPIER se lisent : un ticket TPE ou un avis de virement
+        # n'a ni montant ni numéro au format du chèque.
+        if p["mode"] not in MODES_PAPIER or not p.get("photo"):
             continue
         try:
             avertissements += _verifier_photo(p)
@@ -451,7 +474,7 @@ def _soumettre(doc):
 
 @frappe.whitelist()
 def encaisser(client, montant=None, mode=None, n_cheque=None, banque=None, dettes=None,
-              photo=None, photo_nom=None, paiements=None, soumettre=0):
+              photo=None, photo_nom=None, paiements=None, soumettre=0, code_sans_photo=None):
     """Encaisse les dettes sélectionnées : construit le document, l'attache aux
     photos et LE VALIDE dans la foulée (`soumettre`), puis rend l'allocation obtenue.
 
@@ -477,7 +500,10 @@ def encaisser(client, montant=None, mode=None, n_cheque=None, banque=None, dette
     if not paiements:
         paiements = [{"mode": mode, "montant": montant, "n_piece": n_cheque,
                       "banque": banque, "photo": photo, "photo_nom": photo_nom}]
-    lignes_paiement = _valider_paiements(paiements)
+    from customization_app import caisse_pieces
+
+    dispense = caisse_pieces.dispense_photo(code_sans_photo)
+    lignes_paiement = _valider_paiements(paiements, dispense=dispense)
     total = round(sum(p["montant"] for p in lignes_paiement), 3)
 
     selection = json.loads(dettes) if isinstance(dettes, str) else (dettes or [])
@@ -555,7 +581,8 @@ def encaisser(client, montant=None, mode=None, n_cheque=None, banque=None, dette
             allocation.append({"paiement": r.name, "commande": r.commande or "",
                                "montant": portion, "dette_totale": r.montant,
                                "mode": p["mode"],
-                               "piece": ("%s - %s" % (p["numero"], p["banque"])
+                               "piece": ((("%s - %s" % (p["numero"], p["banque"]))
+                                          if p["banque"] else p["numero"])
                                          if p["mode"] != "Espèces" else "")})
         if i_paiement >= len(file_paiements):
             break
@@ -566,7 +593,8 @@ def encaisser(client, montant=None, mode=None, n_cheque=None, banque=None, dette
         if not p.get("photo"):
             continue
         contenu = p["photo"].split(",", 1)[-1]
-        prefixe = "cheque" if p["mode"] == "Chèque" else "traite"
+        prefixe = {"Chèque": "cheque", "Traite bancaire": "traite",
+                   "Carte de crédit": "ticket-tpe", "Virement": "virement"}.get(p["mode"], "piece")
         save_file(p.get("photo_nom") or f"{prefixe}-{p['numero']}.jpg",
                   base64.b64decode(contenu), "Encaissement Paiement", doc.name,
                   is_private=1)
@@ -579,6 +607,8 @@ def encaisser(client, montant=None, mode=None, n_cheque=None, banque=None, dette
     # qui laissait un ENC en brouillon à chaque échec.
     if cint(soumettre):
         _soumettre(doc)
+    if dispense and any(p["mode"] in MODES_PAPIER and not p.get("photo") for p in lignes_paiement):
+        caisse_pieces.tracer_dispense("Encaissement Paiement", doc.name)
 
     frappe.db.commit()
 

@@ -69,6 +69,7 @@ class RapportCaisseJournaliere {
     // Paiement » et laisse les scripts maison faire (allocation FIFO, échéanciers,
     // reliquat de dette, création du paiement).
     $("#rcj-btn-dettes").on("click", () => rcj_encaissement_dettes(this));
+    $("#rcj-btn-aramex").on("click", () => rcj_encaissement_aramex(this));
     $("#rcj-btn-depense").on("click", () => rcj_depense(this));
     $("#rcj-btn-a-payer").on("click", () => rcj_depenses_a_payer(this));
     $("#rcj-btn-bl").on("click", () => rcj_depenses_bl(this));
@@ -616,6 +617,44 @@ class RapportCaisseJournaliere {
   }
 }
 
+// ── Pièces papier : avertissements OpenAI et code de dispense ────────────────
+// Après tout enregistrement d'un chèque / d'une traite avec photo, le serveur
+// rend des AVERTISSEMENTS (numéro ou montant lus ≠ saisis). L'opération est déjà
+// faite : on informe, l'employé tranche. Le champ « Code sans photo » lève
+// l'obligation de photo (code dans Config Cloture Tache, trace nominative).
+function rcj_afficher_avertissements(res, titre) {
+  const avert = (res && res.avertissements) || [];
+  if (!avert.length) return;
+  frappe.msgprint({
+    title: titre || __("Vérification des photos"), indicator: "orange",
+    message: `<ul style="margin:6px 0 0 18px">${avert.map((a) =>
+        `<li>${frappe.utils.escape_html(a)}</li>`).join("")}</ul>
+      <div class="text-muted" style="font-size:11px">${
+        __("Simple avertissement : contrôlez la pièce — l'opération est déjà enregistrée.")}</div>`,
+  });
+}
+// ⚠️ PAS un champ « Password » : le navigateur y collerait le mot de passe enregistré du
+// site (et l'e-mail dans le champ texte qui précède), et Frappe y ajoute sa jauge de
+// robustesse. Un champ texte MASQUÉ PAR CSS, sans autocomplétion, suffit : le code n'est
+// pas un mot de passe, c'est une clé courte de dispense.
+function rcj_champ_code_sans_photo(depends_on) {
+  return { fieldtype: "Data", fieldname: "code_sans_photo",
+           label: __("Code sans photo (chèque / traite)"),
+           description: __("Saisi et correct, la photo de la pièce n'est plus exigée. Chaque usage est tracé."),
+           depends_on: depends_on || undefined };
+}
+function rcj_masquer_code(d) {
+  const f = d.fields_dict && d.fields_dict.code_sans_photo;
+  if (!f || !f.$input) return;
+  f.$input.attr({ autocomplete: "off", autocorrect: "off", autocapitalize: "off",
+                  spellcheck: "false", name: "rcj-code-" + Math.random().toString(36).slice(2),
+                  placeholder: "••••" })
+    .css({ "-webkit-text-security": "disc", "text-security": "disc" });
+  // Les champs de numéro ne sont pas des identifiants : on le dit au navigateur.
+  d.$wrapper.find("input[data-fieldname=n_cheque], input[data-fieldname=n_piece]")
+    .attr("autocomplete", "off");
+}
+
 // ── Encaissement des anciennes dettes ────────────────────────────────────────
 // Le serveur (customization_app.caisse_encaissement_dettes) construit l'allocation
 // sur la SÉLECTION de l'employé (dettes en FIFO par date, paiements dans l'ordre
@@ -623,9 +662,17 @@ class RapportCaisseJournaliere {
 // photo pour chaque chèque (7 chiffres) et chaque traite bancaire, puis passe par
 // l'Outil d'encaissement (échéanciers, reliquat, paiements). PLUSIEURS pièces
 // peuvent couvrir la même sélection : chaque ligne devient son propre paiement.
+// Carte de crédit (ticket TPE) et Virement (référence bancaire) — demande
+// utilisateur 16/09/2026 : l'argent va directement en banque, la référence
+// est obligatoire, la photo facultative (aucun papier à remettre).
 function rcj_encaissement_dettes(rapport) {
   const API = "customization_app.caisse_encaissement_dettes";
-  const MODES = ["Espèces", "Chèque", "Traite bancaire"];
+  const MODES = ["Espèces", "Chèque", "Traite bancaire", "Carte de crédit", "Virement"];
+  const PAPIER = ["Chèque", "Traite bancaire"];
+  const RX_NUMERO = { "Chèque": /^\d{7}$/, "Traite bancaire": /^\d{4,20}$/,
+                      "Carte de crédit": /^[A-Za-z0-9/-]{3,30}$/, "Virement": /^[A-Za-z0-9/-]{3,30}$/ };
+  const PLACEHOLDER = { "Chèque": __("7 chiffres"), "Traite bancaire": __("N° traite"),
+                        "Carte de crédit": __("N° ticket TPE"), "Virement": __("Réf. virement") };
   let etat = { total: 0, banques: [], dettes: [], paiements: [] };
 
   const d = new frappe.ui.Dialog({
@@ -641,9 +688,11 @@ function rcj_encaissement_dettes(rapport) {
       { fieldtype: "HTML", fieldname: "liste" },
       { fieldtype: "Section Break", label: __("Paiements reçus") },
       { fieldtype: "HTML", fieldname: "paiements_zone" },
+      rcj_champ_code_sans_photo(),
     ],
     primary_action_label: __("Encaisser"),
     primary_action(v) {
+      const dispense = !!(v.code_sans_photo || "").trim();
       const choisies = selection();
       const total_sel = choisies.reduce((s, x) => s + x.montant, 0);
       if (!choisies.length) {
@@ -672,13 +721,19 @@ function rcj_encaissement_dettes(rapport) {
             frappe.msgprint(__("{0} : le numéro de traite doit comporter de 4 à 20 chiffres.", [no]));
             return;
           }
+          if (!PAPIER.includes(p.mode) && !RX_NUMERO[p.mode].test(num)) {
+            frappe.msgprint(__("{0} : {1} obligatoire (3 à 30 lettres ou chiffres).",
+              [no, PLACEHOLDER[p.mode]]));
+            return;
+          }
           // Banque obligatoire pour un chèque seulement (décision utilisateur 2026-08-20).
           if (p.mode === "Chèque" && !(p.banque || "").trim()) {
             frappe.msgprint(__("{0} : pour un chèque, la banque est obligatoire.", [no]));
             return;
           }
-          if (!p.photo) {
-            frappe.msgprint(__("{0} : prenez la photo de la pièce avant d'encaisser.", [no]));
+          // La photo n'est exigée que pour une pièce PAPIER (chèque, traite), sauf code.
+          if (PAPIER.includes(p.mode) && !p.photo && !dispense) {
+            frappe.msgprint(__("{0} : prenez la photo de la pièce avant d'encaisser (ou saisissez le code sans photo).", [no]));
             return;
           }
           const cle = p.mode + "|" + num + "|" + p.banque;
@@ -702,7 +757,7 @@ function rcj_encaissement_dettes(rapport) {
       // enchaînement en deux temps, pour les dialogues restés ouverts au déploiement.
       frappe.call({
         method: API + ".encaisser",
-        args: { client: v.client, soumettre: 1,
+        args: { client: v.client, soumettre: 1, code_sans_photo: v.code_sans_photo || null,
                 paiements: JSON.stringify(etat.paiements.map((p) => ({
                   mode: p.mode, montant: p.montant, n_piece: p.n_piece,
                   banque: p.banque, photo: p.photo, photo_nom: p.photo_nom }))),
@@ -827,17 +882,17 @@ function rcj_encaissement_dettes(rapport) {
           `<option ${m === p.mode ? "selected" : ""}>${m}</option>`).join("")}</select></td>
         <td><input type="number" step="0.001" min="0" class="form-control input-sm rcj-p-montant"
                    value="${p.montant || ""}"></td>
-        <td>${piece ? `<input type="text" class="form-control input-sm rcj-p-numero"
-                   placeholder="${p.mode === "Chèque" ? __("7 chiffres") : __("N° traite")}"
+        <td>${piece ? `<input type="text" autocomplete="off" class="form-control input-sm rcj-p-numero"
+                   placeholder="${PLACEHOLDER[p.mode] || ""}"
                    value="${frappe.utils.escape_html(p.n_piece || "")}">` : "—"}</td>
-        <td>${piece ? `<select class="form-control input-sm rcj-p-banque">${
+        <td>${piece && p.mode !== "Carte de crédit" ? `<select class="form-control input-sm rcj-p-banque">${
                    opts_banque(p.banque)}</select>` : "—"}</td>
         <td style="white-space:nowrap">${piece ? `
           <button type="button" class="btn btn-default btn-xs rcj-p-photo">📷</button>
           <span class="text-muted" style="font-size:11px">${p.photo
             ? `<a href="#" class="rcj-p-voir">✓ ${
                 frappe.utils.escape_html(p.photo_nom || "photo")}</a>`
-            : __("requise")}</span>
+            : (PAPIER.includes(p.mode) ? __("requise") : __("facultative"))}</span>
           <input type="file" accept="image/*,application/pdf" style="display:none">` : "—"}</td>
         <td><button type="button" class="btn btn-default btn-xs rcj-p-suppr">✕</button></td>
       </tr>`;
@@ -880,7 +935,15 @@ function rcj_encaissement_dettes(rapport) {
       if (!f) return;
       const p = ligne_de(this);
       const lecteur = new FileReader();
-      lecteur.onload = () => { p.photo = lecteur.result; p.photo_nom = f.name; render_paiements(); };
+      lecteur.onload = () => {
+        p.photo = lecteur.result; p.photo_nom = f.name; render_paiements();
+        rcj_photo_piece_ajoutee(p.photo, p.photo_nom, p.mode, (lu) => {
+          if (lu.numero) p.n_piece = lu.numero;
+          if (lu.banque) p.banque = lu.banque;
+          if (lu.montant && !(p.montant > 0)) p.montant = lu.montant;
+          render_paiements();
+        });
+      };
       lecteur.readAsDataURL(f);
     });
     $z.find(".rcj-p-suppr").on("click", function () {
@@ -956,6 +1019,7 @@ function rcj_encaissement_dettes(rapport) {
   }
 
   d.show();
+  rcj_masquer_code(d);
   render_paiements();
 }
 
@@ -966,9 +1030,327 @@ function rcj_encaissement_dettes(rapport) {
 // « data:application/pdf » dans un onglet ou une iframe (protection anti-
 // phishing) — le justificatif resterait invisible au moment où on veut le
 // vérifier.
-function rcj_apercu_fichier(dataUrl, nom) {
+// ── Encaissement des colis Aramex livrés ─────────────────────────────────────
+// Le serveur (customization_app.caisse_encaissement_aramex) liste les paiements
+// d'attente « Aramex N: … » dont le colis est LIVRÉ ; l'employé en coche
+// plusieurs et saisit LES PIÈCES de la remise d'Aramex — plusieurs paiements,
+// chacun avec son montant : virement (référence), chèque (7 chiffres + banque +
+// photo), traite (n° + photo). Répartition dans l'ordre (colis puis pièces) ;
+// ce qui manque devient une DETTE RESTANTE du client, ce qui dépasse un AVOIR
+// CLIENT (paiement non affecté). Chaque colis garde son montant ; son paiement
+// d'attente est remplacé, l'échéancier de la commande suit.
+function rcj_encaissement_aramex(rapport) {
+  const API = "customization_app.caisse_encaissement_aramex";
+  const esc = frappe.utils.escape_html;
+  const MODES = ["Virement", "Chèque", "Traite bancaire"];
+  const PAPIER = ["Chèque", "Traite bancaire"];
+  const RX = { "Virement": /^[A-Za-z0-9/-]{3,30}$/, "Chèque": /^\d{7}$/,
+               "Traite bancaire": /^\d{4,20}$/ };
+  const PLACEHOLDER = { "Virement": __("Réf. virement"), "Chèque": __("7 chiffres"),
+                        "Traite bancaire": __("N° traite") };
+  let etat = { colis: [], banques: [], tous: false, paiements: [] };
+  const nouvelle_piece = (mode, montant) => ({ mode: mode || "Virement", montant: montant || 0,
+    n_piece: "", banque: "", date: frappe.datetime.get_today(), photo: null, photo_nom: null });
+
+  const d = new frappe.ui.Dialog({
+    title: __("Encaissement des colis Aramex livrés"),
+    size: "large",
+    fields: [
+      { fieldtype: "HTML", fieldname: "liste" },
+      { fieldtype: "Section Break", label: __("Remise d'Aramex — paiements reçus") },
+      { fieldtype: "HTML", fieldname: "paiements_zone" },
+      rcj_champ_code_sans_photo(),
+    ],
+    primary_action_label: __("Encaisser"),
+    primary_action(v) {
+      const dispense = !!(v.code_sans_photo || "").trim();
+      const choisis = selection();
+      if (!choisis.length) {
+        frappe.msgprint(__("Cochez au moins un colis."));
+        return;
+      }
+      if (!etat.paiements.length) {
+        frappe.msgprint(__("Ajoutez au moins un paiement."));
+        return;
+      }
+      const doublons = new Set();
+      for (let i = 0; i < etat.paiements.length; i++) {
+        const p = etat.paiements[i];
+        const no = __("Paiement {0}", [i + 1]);
+        const num = (p.n_piece || "").trim();
+        if (!(p.montant > 0)) {
+          frappe.msgprint(__("{0} : le montant doit être positif.", [no]));
+          return;
+        }
+        if (!RX[p.mode].test(num)) {
+          frappe.msgprint(p.mode === "Chèque"
+            ? __("{0} : le numéro de chèque doit comporter exactement 7 chiffres.", [no])
+            : p.mode === "Traite bancaire"
+              ? __("{0} : le numéro de traite doit comporter de 4 à 20 chiffres.", [no])
+              : __("{0} : la référence du virement est obligatoire (3 à 30 lettres ou chiffres).", [no]));
+          return;
+        }
+        if (p.mode === "Chèque" && !(p.banque || "").trim()) {
+          frappe.msgprint(__("{0} : pour un chèque, la banque est obligatoire.", [no]));
+          return;
+        }
+        if (PAPIER.includes(p.mode) && !p.photo && !dispense) {
+          frappe.msgprint(__("{0} : prenez la photo de la pièce (ou saisissez le code sans photo).", [no]));
+          return;
+        }
+        if (!p.date) {
+          frappe.msgprint(__("{0} : indiquez la date de la remise.", [no]));
+          return;
+        }
+        const cle = p.mode + "|" + num + "|" + (p.banque || "");
+        if (doublons.has(cle)) {
+          frappe.msgprint(__("{0} : la pièce n° {1} est saisie deux fois.", [no, num]));
+          return;
+        }
+        doublons.add(cle);
+      }
+      const total_sel = choisis.reduce((s, c) => s + c.montant, 0);
+      const total_p = etat.paiements.reduce((s, p) => s + flt(p.montant), 0);
+      const ecart = flt(total_p - total_sel, 3);
+      const clients = new Set(choisis.map((c) => c.client));
+      if (ecart > 0.0005 && clients.size > 1) {
+        frappe.msgprint(__("Le total reçu dépasse le total des colis et la sélection mêle plusieurs clients : l'avoir ne saurait à qui aller. Ne cochez que les colis d'un seul client."));
+        return;
+      }
+      let suite = __("{0} colis pour {1}, {2} paiement(s) pour {3}.",
+        [choisis.length, format_currency(total_sel, "TND"), etat.paiements.length,
+         format_currency(total_p, "TND")]);
+      if (ecart < -0.0005) suite += " " + __("Le reste ({0}) deviendra une DETTE RESTANTE du client.", [format_currency(-ecart, "TND")]);
+      if (ecart > 0.0005) suite += " " + __("L'excédent ({0}) deviendra un AVOIR CLIENT (paiement non affecté).", [format_currency(ecart, "TND")]);
+      frappe.confirm(suite + " " + __("Les paiements d'attente seront remplacés. Continuer ?"),
+        () => frappe.call({
+          method: API + ".encaisser",
+          args: { colis: JSON.stringify(choisis.map((c) => c.paiement)),
+                  paiements: JSON.stringify(etat.paiements.map((p) => ({
+                    mode: p.mode, montant: flt(p.montant), n_piece: (p.n_piece || "").trim(),
+                    banque: p.mode === "Virement" ? "" : (p.banque || ""), date: p.date,
+                    photo: p.photo, photo_nom: p.photo_nom }))),
+                  code_sans_photo: v.code_sans_photo || null },
+          freeze: true, freeze_message: __("Encaissement des colis…"),
+          callback: (r) => resultat(r.message),
+        }));
+    },
+  });
+
+  function selection() {
+    const cochees = [];
+    d.fields_dict.liste.$wrapper.find("input.rcj-colis:checked").each(function () {
+      const nom = $(this).attr("data-pe");
+      const c = etat.colis.find((x) => x.paiement === nom);
+      if (c) cochees.push(c);
+    });
+    return cochees;
+  }
+  const total_selection = () => selection().reduce((s, c) => s + c.montant, 0);
+
+  function maj_totaux() {
+    const t = total_selection();
+    d.fields_dict.liste.$wrapper.find(".rcj-total-colis").text(format_currency(t, "TND"));
+    // Une seule pièce dont le montant suivait la sélection : elle continue de la suivre.
+    if (etat.paiements.length === 1 && etat.paiements[0]._suit) etat.paiements[0].montant = flt(t, 3);
+    render_paiements();
+  }
+
+  function lien(doctype, nom) {
+    if (!nom) return "—";
+    if (!doctype) return esc(nom);
+    return `<a href="/app/${frappe.router.slug(doctype)}/${encodeURIComponent(nom)}" target="_blank">${esc(nom)}</a>`;
+  }
+
+  function charger() {
+    const $l = d.fields_dict.liste.$wrapper;
+    $l.html(`<div class="text-muted" style="padding:8px">${__("Chargement…")}</div>`);
+    frappe.call({
+      method: API + ".colis", args: { tous: etat.tous ? 1 : 0 },
+      callback: (r) => {
+        const m = r.message || { colis: [], total: 0, banques: [] };
+        etat.colis = m.colis || [];
+        if (m.banques && m.banques.length) etat.banques = m.banques;
+        const lignes = etat.colis.map((c) => `
+          <tr style="${c.en_cours ? "opacity:.55" : ""}">
+            <td style="text-align:center"><input type="checkbox" class="rcj-colis"
+                   ${c.en_cours ? "disabled" : (c.livre ? "checked" : "")}
+                   data-pe="${esc(c.paiement)}"></td>
+            <td>${esc(c.bordereau)}</td>
+            <td>${esc(c.client_nom || c.client)}</td>
+            <td>${lien(c.commande_doctype, c.commande)}</td>
+            <td>${c.livre ? `<span style="background:#e6f4ea;color:#1d6f42;padding:1px 6px;border-radius:8px">✅ ${__("livré")}</span>`
+                          : `<span style="color:#a8071a">${esc(c.statut || __("non livré"))}</span>`}
+                ${c.livre_le ? `<div class="text-muted" style="font-size:11px">${esc(c.livre_le)}</div>` : ""}
+                ${c.en_cours ? `<div class="text-muted" style="font-size:11px">${__("rapprochement bancaire en cours")}</div>` : ""}</td>
+            <td>${frappe.datetime.str_to_user(c.date_paiement)}</td>
+            <td style="text-align:right">${format_currency(c.montant, "TND")}</td></tr>`).join("");
+        const total = etat.colis.filter((c) => c.livre && !c.en_cours)
+          .reduce((s, c) => s + c.montant, 0);
+        $l.html(`
+          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">
+            <div class="text-muted" style="font-size:12px">${
+              __("Colis dont Aramex a encaissé le contre-remboursement ; cochez ceux que couvre la remise reçue (répartition dans cet ordre).")}</div>
+            <label style="font-size:12px;margin:0"><input type="checkbox" class="rcj-tous" ${etat.tous ? "checked" : ""}>
+              ${__("Afficher aussi les colis non livrés")}</label>
+          </div>
+          ${etat.colis.length ? `<div style="overflow-x:auto">
+          <table class="table table-bordered" style="margin-top:8px;font-size:12px;min-width:680px">
+            <thead><tr><th></th><th>${__("Bordereau")}</th><th>${__("Client")}</th>
+                       <th>${__("Commande")}</th><th>${__("Suivi")}</th>
+                       <th>${__("Paiement du")}</th>
+                       <th style="text-align:right">${__("Montant")}</th></tr></thead>
+            <tbody>${lignes}</tbody>
+            <tfoot><tr><th colspan="6">${__("Total sélectionné")}</th>
+                       <th style="text-align:right" class="rcj-total-colis">${format_currency(total, "TND")}</th></tr></tfoot>
+          </table></div>`
+          : `<div class="text-muted" style="margin-top:8px">${__("Aucun colis Aramex livré en attente d'encaissement.")}</div>`}`);
+        $l.find("input.rcj-colis").on("change", maj_totaux);
+        $l.find("input.rcj-tous").on("change", function () {
+          etat.tous = $(this).is(":checked");
+          charger();
+        });
+        if (!etat.paiements.length) {
+          const p = nouvelle_piece("Virement", flt(total, 3));
+          p._suit = true;
+          etat.paiements = [p];
+        }
+        render_paiements();
+      },
+    });
+  }
+
+  // Les pièces de la remise : mode, MONTANT, n°, banque, date, photo — par pièce.
+  function render_paiements() {
+    const $z = d.fields_dict.paiements_zone.$wrapper;
+    const opts_banque = (b) => [""].concat(etat.banques).map((x) =>
+      `<option ${x === b ? "selected" : ""}>${esc(x)}</option>`).join("");
+    const lignes = etat.paiements.map((p, i) => `
+      <tr data-i="${i}">
+        <td><select class="form-control input-sm rcj-a-mode">${MODES.map((m) =>
+          `<option ${m === p.mode ? "selected" : ""}>${m}</option>`).join("")}</select></td>
+        <td><input type="number" step="0.001" min="0" class="form-control input-sm rcj-a-montant"
+                   value="${p.montant || ""}"></td>
+        <td><input type="text" autocomplete="off" class="form-control input-sm rcj-a-numero"
+                   placeholder="${PLACEHOLDER[p.mode] || ""}" value="${esc(p.n_piece || "")}"></td>
+        <td>${p.mode !== "Virement" ? `<select class="form-control input-sm rcj-a-banque">${
+                   opts_banque(p.banque)}</select>` : "—"}</td>
+        <td><input type="date" class="form-control input-sm rcj-a-date" value="${esc(p.date || "")}"></td>
+        <td style="white-space:nowrap">
+          <button type="button" class="btn btn-default btn-xs rcj-a-photo">📷</button>
+          <span class="text-muted" style="font-size:11px">${p.photo
+            ? `<a href="#" class="rcj-a-voir">✓ ${esc(p.photo_nom || "photo")}</a>`
+            : (PAPIER.includes(p.mode) ? __("requise") : __("facultative"))}</span>
+          <input type="file" accept="image/*,application/pdf" style="display:none"></td>
+        <td><button type="button" class="btn btn-default btn-xs rcj-a-suppr">✕</button></td>
+      </tr>`).join("");
+    const total_sel = total_selection();
+    const total_p = etat.paiements.reduce((s, p) => s + flt(p.montant), 0);
+    const ecart = flt(total_p - total_sel, 3);
+    let bilan = `<span style="color:#135200">${__("Le total reçu couvre exactement les colis sélectionnés.")}</span>`;
+    if (ecart < -0.0005) bilan = `<span style="color:#a8071a">${__("Reste non couvert : {0} → dette restante du client sur la commande.", [format_currency(-ecart, "TND")])}</span>`;
+    if (ecart > 0.0005) bilan = `<span style="color:#0958d9">${__("Excédent : {0} → avoir client (paiement non affecté, à imputer sur sa prochaine facture).", [format_currency(ecart, "TND")])}</span>`;
+    $z.html(`
+      <div style="overflow-x:auto">
+      <table class="table table-bordered" style="font-size:12px;margin:4px 0 6px">
+        <thead><tr><th style="min-width:120px">${__("Mode")}</th>
+                   <th style="min-width:110px;text-align:right">${__("Montant")}</th>
+                   <th style="min-width:120px">${__("N° pièce")}</th>
+                   <th style="min-width:130px">${__("Banque")}</th>
+                   <th style="min-width:130px">${__("Date remise")}</th>
+                   <th>${__("Photo")}</th><th></th></tr></thead>
+        <tbody>${lignes}</tbody>
+      </table></div>
+      <button type="button" class="btn btn-default btn-sm rcj-a-ajouter">＋ ${__("Ajouter un paiement")}</button>
+      <span class="text-muted" style="margin-left:12px">${__("Total paiements : {0} / colis sélectionnés : {1}",
+        [format_currency(total_p, "TND"), format_currency(total_sel, "TND")])}</span>
+      <div style="margin-top:6px;font-size:12.5px">${bilan}</div>`);
+
+    const ligne_de = (el) => etat.paiements[parseInt($(el).closest("tr").attr("data-i"), 10)];
+    $z.find(".rcj-a-mode").on("change", function () { ligne_de(this).mode = $(this).val(); render_paiements(); });
+    $z.find(".rcj-a-montant").on("input", function () {
+      const p = ligne_de(this); p.montant = parseFloat($(this).val()) || 0; p._suit = false;
+      // Le bilan suit la frappe sans re-rendre la table (le champ garderait le focus).
+      const tp = etat.paiements.reduce((s, x) => s + flt(x.montant), 0);
+      $z.find(".text-muted").last().text(__("Total paiements : {0} / colis sélectionnés : {1}",
+        [format_currency(tp, "TND"), format_currency(total_selection(), "TND")]));
+    });
+    $z.find(".rcj-a-montant").on("change", () => render_paiements());
+    $z.find(".rcj-a-numero").on("input", function () { ligne_de(this).n_piece = $(this).val(); });
+    $z.find(".rcj-a-banque").on("change", function () { ligne_de(this).banque = $(this).val(); });
+    $z.find(".rcj-a-date").on("change", function () { ligne_de(this).date = $(this).val(); });
+    $z.find(".rcj-a-photo").on("click", function () {
+      $(this).closest("td").find("input[type=file]").trigger("click");
+    });
+    $z.find(".rcj-a-voir").on("click", function (e) {
+      e.preventDefault();
+      const p = ligne_de(this);
+      rcj_apercu_fichier(p.photo, p.photo_nom);
+    });
+    $z.find("input[type=file]").on("change", function () {
+      const f = this.files && this.files[0];
+      if (!f) return;
+      const p = ligne_de(this);
+      const lecteur = new FileReader();
+      lecteur.onload = () => {
+        p.photo = lecteur.result; p.photo_nom = f.name; render_paiements();
+        rcj_photo_piece_ajoutee(p.photo, p.photo_nom, p.mode, (lu) => {
+          if (lu.numero && !(p.n_piece || "").trim()) p.n_piece = lu.numero;
+          if (lu.banque) p.banque = lu.banque;
+          if (lu.montant && !(flt(p.montant) > 0)) { p.montant = lu.montant; p._suit = false; }
+          if (lu.echeance && !p.date) p.date = lu.echeance;
+          render_paiements();
+        });
+      };
+      lecteur.readAsDataURL(f);
+    });
+    $z.find(".rcj-a-suppr").on("click", function () {
+      etat.paiements.splice(parseInt($(this).closest("tr").attr("data-i"), 10), 1);
+      render_paiements();
+    });
+    $z.find(".rcj-a-ajouter").on("click", () => {
+      // La pièce ajoutée prend ce qui reste à couvrir — le plus souvent le bon montant.
+      const reste = Math.max(0, flt(total_selection() - total_p, 3));
+      etat.paiements.push(nouvelle_piece("Chèque", reste));
+      render_paiements();
+    });
+  }
+
+  function resultat(res) {
+    d.hide();
+    rcj_afficher_avertissements(res);
+    const lignes = (res.conversions || []).map((c) => `
+      <tr><td>${esc(c.bordereau)}</td><td>${esc(c.client || "")}</td>
+          <td>${esc(c.commande || "")}</td>
+          <td>${(c.paiements || []).map((x) =>
+            `<a href="/app/payment-entry/${encodeURIComponent(x.nom)}" target="_blank">${esc(x.nom)}</a> — ${esc(x.piece)} : ${format_currency(x.montant, "TND")}`).join("<br>")}
+            ${c.reliquat ? `<br><span style="color:#a8071a">${__("Dette restante {0} ({1})", [format_currency(c.reliquat, "TND"), esc(c.dette)])}</span>` : ""}</td>
+          <td style="text-align:right">${format_currency(c.montant, "TND")}</td></tr>`).join("");
+    const avoirs = (res.avoirs || []).map((a) =>
+      `<li>${__("Avoir client {0} — {1} : {2}", [format_currency(a.montant, "TND"), esc(a.piece),
+        `<a href="/app/payment-entry/${encodeURIComponent(a.nom)}" target="_blank">${esc(a.nom)}</a>`])}</li>`).join("");
+    frappe.msgprint({
+      title: __("Colis Aramex encaissés"), indicator: "green",
+      message: `<p>${__("{0} colis pour {1} — {2} paiement(s) pour {3}.",
+        [(res.conversions || []).length, format_currency(res.total_colis, "TND"),
+         (res.pieces || []).length, format_currency(res.total_pieces, "TND")])}</p>
+        <div style="overflow-x:auto"><table class="table table-bordered" style="font-size:12px">
+          <thead><tr><th>${__("Bordereau")}</th><th>${__("Client")}</th><th>${__("Commande")}</th>
+                     <th>${__("Paiements créés")}</th><th style="text-align:right">${__("Colis")}</th></tr></thead>
+          <tbody>${lignes}</tbody></table></div>
+        ${avoirs ? `<ul style="margin:6px 0 0 18px;color:#0958d9">${avoirs}</ul>` : ""}`,
+    });
+    if (rapport && rapport._fetch) rapport._fetch();
+  }
+
+  d.show();
+  rcj_masquer_code(d);
+  charger();
+}
+
+function rcj_apercu_fichier(dataUrl, nom, info_html) {
   const virgule = (dataUrl || "").indexOf(",");
-  if (virgule < 0) return;
+  if (virgule < 0) return null;
   const entete = dataUrl.slice(0, virgule);
   const b64 = dataUrl.slice(virgule + 1);
   const mt = (entete.match(/data:([^;]+)/) || [])[1] || "application/octet-stream";
@@ -980,7 +1362,7 @@ function rcj_apercu_fichier(dataUrl, nom) {
     url = URL.createObjectURL(new Blob([buf], { type: mt }));
   } catch (e) {
     frappe.msgprint(__("Ce fichier ne peut pas être affiché."));
-    return;
+    return null;
   }
   const d = new frappe.ui.Dialog({
     title: nom || __("Justificatif"),
@@ -990,10 +1372,49 @@ function rcj_apercu_fichier(dataUrl, nom) {
     primary_action: () => window.open(url, "_blank"),
     onhide: () => setTimeout(() => URL.revokeObjectURL(url), 60000),
   });
-  d.fields_dict.zone.$wrapper.html(mt === "application/pdf"
+  d.fields_dict.zone.$wrapper.html(`<div class="rcj-apercu-info">${info_html || ""}</div>` + (mt === "application/pdf"
     ? `<iframe src="${url}" style="width:100%;height:70vh;border:1px solid #ddd"></iframe>`
-    : `<img src="${url}" style="max-width:100%;max-height:70vh;display:block;margin:0 auto">`);
+    : `<img src="${url}" style="max-width:100%;max-height:70vh;display:block;margin:0 auto">`));
   d.show();
+  return { dialogue: d, $info: d.fields_dict.zone.$wrapper.find(".rcj-apercu-info") };
+}
+
+// ── Photo d'un chèque / d'une traite ajoutée : APERÇU + LECTURE OpenAI ───────
+// Dans tous les dialogues où la pièce se photographie (demande utilisateur 16/09/2026) :
+// la photo s'ouvre aussitôt en aperçu pour contrôle, et le serveur la lit
+// (customization_app.caisse_pieces.lire_piece). `appliquer(lu)` pré-remplit les champs
+// du dialogue appelant — n°, montant, banque, échéance — l'employé vérifie et corrige.
+// Une panne de lecture n'empêche rien : saisie manuelle.
+function rcj_photo_piece_ajoutee(photo, nom, mode, appliquer) {
+  if (!["Chèque", "Traite bancaire"].includes(mode)) return;
+  const esc = frappe.utils.escape_html;
+  const ap = rcj_apercu_fichier(photo, nom,
+    `<div class="text-muted" style="margin-bottom:8px">🤖 ${__("Lecture de la pièce en cours…")}</div>`);
+  const dire = (html) => { if (ap && ap.$info) ap.$info.html(html); };
+  frappe.call({
+    method: "customization_app.caisse_pieces.lire_piece",
+    args: { photo, mode },
+    callback: (r) => {
+      const lu = r.message || {};
+      if (lu.erreur) {
+        dire(`<div class="rcj-warn-banner" style="margin-bottom:8px">⚠️ ${esc(lu.erreur)}</div>`);
+        return;
+      }
+      try { appliquer(lu); } catch (e) { console.error(e); }
+      const bouts = [];
+      if (lu.numero) bouts.push(`${__("n°")} <b>${esc(lu.numero)}</b>`);
+      if (lu.montant) bouts.push(`${__("montant")} <b>${format_currency(lu.montant, "TND")}</b>`);
+      if (lu.banque) bouts.push(`${__("banque")} <b>${esc(lu.banque)}</b>`);
+      else if (lu.banque_lue) bouts.push(`${__("banque lue")} « ${esc(lu.banque_lue)} » (${__("hors liste")})`);
+      if (lu.echeance) bouts.push(`${__("échéance")} <b>${frappe.datetime.str_to_user(lu.echeance)}</b>`);
+      dire(`<div style="background:${lu.lisible === false ? "#fff8e1" : "#e6f4ea"};border-radius:6px;padding:8px 12px;margin-bottom:8px;font-size:12.5px">
+          ${lu.lisible === false ? "⚠️ " + __("Photo peu lisible.") + " " : "✅ "}
+          ${bouts.length ? __("Lu sur la pièce : {0} — champs pré-remplis, vérifiez avant d'enregistrer.", [bouts.join(", ")])
+                         : __("Rien de lisible sur la pièce : saisie manuelle.")}</div>`);
+      frappe.show_alert({ message: __("Pièce lue : champs pré-remplis."), indicator: "green" });
+    },
+    error: () => dire(`<div class="rcj-warn-banner" style="margin-bottom:8px">⚠️ ${__("Lecture automatique indisponible : saisie manuelle.")}</div>`),
+  });
 }
 
 
@@ -1216,25 +1637,36 @@ function rcj_depense(rapport) {
       },
       {
         fieldtype: "Select", fieldname: "mode", label: __("Mode de paiement"),
-        options: "Espèces\nChèque\nCarte de crédit", default: "Espèces", reqd: 1,
+        options: "Espèces\nChèque\nCarte de crédit\nVirement\nTraite bancaire", default: "Espèces", reqd: 1,
         depends_on: "eval:!doc.fractionne",
       },
       { fieldtype: "Column Break" },
+      // Le même champ porte le n° de chèque, le n° de traite ou la référence du virement
+      // (facultative) : son libellé suit le mode (cf. maj_libelles_mode).
       {
         fieldtype: "Data", fieldname: "n_cheque", label: __("N° de chèque (7 chiffres)"),
-        depends_on: 'eval:doc.mode=="Chèque" && !doc.fractionne',
-        mandatory_depends_on: 'eval:doc.mode=="Chèque" && !doc.fractionne',
+        depends_on: 'eval:["Chèque","Traite bancaire","Virement"].includes(doc.mode) && !doc.fractionne',
+        mandatory_depends_on: 'eval:["Chèque","Traite bancaire"].includes(doc.mode) && !doc.fractionne',
       },
       {
         fieldtype: "Select", fieldname: "banque", label: __("Banque"),
-        depends_on: 'eval:doc.mode=="Chèque" && !doc.fractionne',
+        depends_on: 'eval:["Chèque","Traite bancaire"].includes(doc.mode) && !doc.fractionne',
         mandatory_depends_on: 'eval:doc.mode=="Chèque" && !doc.fractionne',
+      },
+      // Traite : l'ÉCHÉANCE est ce que l'identification bancaire suit — elle est obligatoire.
+      {
+        fieldtype: "Date", fieldname: "echeance", label: __("Échéance de la traite"),
+        depends_on: 'eval:doc.mode=="Traite bancaire" && !doc.fractionne',
+        mandatory_depends_on: 'eval:doc.mode=="Traite bancaire" && !doc.fractionne',
+        description: __("La traite reste sur le compte de découvert jusqu'à cette date ; le débit bancaire la soldera."),
       },
       { fieldtype: "HTML", fieldname: "zone_cheque" },
       { fieldtype: "HTML", fieldname: "zone_paiements" },
+      rcj_champ_code_sans_photo('eval:doc.fractionne || ["Chèque","Traite bancaire"].includes(doc.mode)'),
     ],
     primary_action_label: __("Enregistrer la dépense"),
     primary_action(v) {
+      const dispense = !!(v.code_sans_photo || "").trim();
       if (v.type_depense !== "Dépense non facturée") {
         if (!etat.facture) {
           frappe.msgprint(__("Prenez la photo de la facture avant d'enregistrer."));
@@ -1251,17 +1683,33 @@ function rcj_depense(rapport) {
       const a_regler = flt(v.montant) - flt(v.retenue || 0);
       let paiements = null;
       if (v.fractionne && v.mode !== "Pas payé") {
-        paiements = rcj_collecter_paiements(etat, a_regler);
+        paiements = rcj_collecter_paiements(etat, a_regler, dispense);
         if (!paiements) return;   // message déjà affiché
       } else if (v.mode === "Chèque") {
         if (!/^\d{7}$/.test((v.n_cheque || "").trim())) {
           frappe.msgprint(__("Le numéro de chèque doit comporter exactement 7 chiffres."));
           return;
         }
-        if (!etat.cheque) {
-          frappe.msgprint(__("Prenez la photo du chèque avant d'enregistrer."));
+        if (!etat.cheque && !dispense) {
+          frappe.msgprint(__("Prenez la photo du chèque avant d'enregistrer (ou saisissez le code sans photo)."));
           return;
         }
+      } else if (v.mode === "Traite bancaire") {
+        if (!/^\d{4,20}$/.test((v.n_cheque || "").trim())) {
+          frappe.msgprint(__("Le numéro de traite doit comporter de 4 à 20 chiffres."));
+          return;
+        }
+        if (!v.echeance) {
+          frappe.msgprint(__("Indiquez l'échéance de la traite."));
+          return;
+        }
+      }
+      // Sans fractionnement, la ligne unique est envoyée dans `paiements` dès qu'un mode
+      // porte une échéance (traite) : l'ancien chemin mono-mode ne la transporte pas.
+      if (!paiements && v.mode === "Traite bancaire") {
+        paiements = [{ mode: v.mode, montant: a_regler, n_cheque: (v.n_cheque || "").trim(),
+                       banque: v.banque || null, echeance: v.echeance,
+                       photo_cheque: etat.cheque || null, photo_cheque_nom: etat.cheque_nom || null }];
       }
       frappe.call({
         method: API + ".creer",
@@ -1280,10 +1728,19 @@ function rcj_depense(rapport) {
           retenue: flt(v.retenue || 0),
           est_bl: v.type_depense !== "Dépense non facturée" && etat.est_bl ? 1 : 0,
           numero_bl: etat.numero_bl || null,
+          code_sans_photo: v.code_sans_photo || null,
         },
         freeze: true, freeze_message: __("Enregistrement de la dépense…"),
         callback: (r) => {
           d.hide();
+          rcj_afficher_avertissements(r.message);
+          if ((r.message.ordres_traites || []).length) {
+            frappe.show_alert({
+              message: __("Traite enregistrée sur le compte de découvert — suivie jusqu'à son échéance ({0}).",
+                [r.message.ordres_traites.join(", ")]),
+              indicator: "blue",
+            }, 8);
+          }
           if (r.message.a_payer) {
             frappe.show_alert({
               message: __("Dépense enregistrée EN DETTE ({0}) — à régler via « 💸 Dépenses à payer ».",
@@ -1472,8 +1929,8 @@ function rcj_depense(rapport) {
     // ET dépense avec facture (charge immédiate contre le découvert, réglée
     // plus tard via « 💸 Dépenses à payer » — décision utilisateur 24/08).
     const modes = type !== "Dépense non facturée"
-      ? "Espèces\nChèque\nCarte de crédit\nPas payé"
-      : "Espèces\nChèque\nCarte de crédit";
+      ? "Espèces\nChèque\nCarte de crédit\nVirement\nTraite bancaire\nPas payé"
+      : "Espèces\nChèque\nCarte de crédit\nVirement\nTraite bancaire";
     const mode_courant = d.get_value("mode");
     d.set_df_property("mode", "options", modes);
     // set_df_property vide la valeur : on la repose (repli Espèces).
@@ -1499,17 +1956,32 @@ function rcj_depense(rapport) {
   d.fields_dict.fournisseur.$input.on("change input", () => maj_retenue());
   d.fields_dict.retenue.$input.on("input", () => { retenue_touchee = true; });
 
-  // Chèque : photo obligatoire, même patron que l'encaissement.
-  const $zc = zone_photo("zone_cheque", "cheque", "cheque_nom", __("Photo du chèque"));
+  // Chèque : photo obligatoire, même patron que l'encaissement. Traite : la même
+  // zone, photo facultative.
+  const $zc = zone_photo("zone_cheque", "cheque", "cheque_nom", __("Photo du chèque / de la traite"),
+    () => rcj_photo_piece_ajoutee(etat.cheque, etat.cheque_nom, d.get_value("mode"), (lu) => {
+      if (lu.numero && !(d.get_value("n_cheque") || "").trim()) d.set_value("n_cheque", lu.numero);
+      if (lu.banque) d.set_value("banque", lu.banque);
+      if (lu.echeance && d.get_value("mode") === "Traite bancaire" && !d.get_value("echeance")) {
+        d.set_value("echeance", lu.echeance);
+      }
+    }));
   const basculer_cheque = () =>
-    $zc.toggle(d.get_value("mode") === "Chèque" && !d.get_value("fractionne"));
-  d.fields_dict.mode.$input.on("change", basculer_cheque);
+    $zc.toggle(["Chèque", "Traite bancaire"].includes(d.get_value("mode")) && !d.get_value("fractionne"));
+  const maj_libelles_mode = () => {
+    const mode = d.get_value("mode");
+    d.set_df_property("n_cheque", "label",
+      mode === "Traite bancaire" ? __("N° de traite")
+        : mode === "Virement" ? __("Référence du virement (facultatif)")
+          : __("N° de chèque (7 chiffres)"));
+  };
+  d.fields_dict.mode.$input.on("change", () => { basculer_cheque(); maj_libelles_mode(); });
 
   // Paiement fractionné : lignes de règlement rendues dans zone_paiements.
   // « Pas payé » possible par ligne pour les DEUX types facturés (paiement
   // partiel — la part non payée part en dette).
   const rendre_paiements = rcj_zone_paiements(d, etat, () => flt(d.get_value("montant")),
-    ["Espèces", "Chèque", "Carte de crédit", "Pas payé"]);
+    ["Espèces", "Chèque", "Carte de crédit", "Virement", "Traite bancaire", "Pas payé"]);
   d.fields_dict.fractionne.$input.on("change", () => { basculer_cheque(); rendre_paiements(); });
   d.fields_dict.montant.$input.on("change", rendre_paiements);
 
@@ -1523,8 +1995,10 @@ function rcj_depense(rapport) {
   });
 
   d.show();
+  rcj_masquer_code(d);
   basculer_facture();
   basculer_cheque();
+  maj_libelles_mode();
 }
 
 
@@ -1766,7 +2240,7 @@ function rcj_zone_paiements(d, etat, get_cible, modes_lignes) {
   const $w = () => d.fields_dict.zone_paiements.$wrapper;
   // « Pas payé » comme LIGNE = paiement partiel (la part payée sort de la
   // caisse, le reste part en dette) — offert à la saisie, pas au règlement.
-  const MODES_L = modes_lignes || ["Espèces", "Chèque", "Carte de crédit"];
+  const MODES_L = modes_lignes || ["Espèces", "Chèque", "Carte de crédit", "Virement", "Traite bancaire"];
 
   function rendre() {
     const actif = !!d.get_value("fractionne");
@@ -1791,7 +2265,7 @@ function rcj_zone_paiements(d, etat, get_cible, modes_lignes) {
         <input type="number" step="any" min="0" class="form-control input-sm rcj-pay-montant"
                style="width:110px;text-align:right" value="${p.montant || ""}" placeholder="${__("Montant")}">
         ${p.mode === "Chèque" ? `
-          <input type="text" maxlength="7" class="form-control input-sm rcj-pay-cheque"
+          <input type="text" autocomplete="off" maxlength="7" class="form-control input-sm rcj-pay-cheque"
                  style="width:110px" value="${esc(p.n_cheque || "")}" placeholder="${__("N° chèque")}">
           <select class="form-control input-sm rcj-pay-banque" style="width:130px">
             <option value=""></option>
@@ -1799,6 +2273,22 @@ function rcj_zone_paiements(d, etat, get_cible, modes_lignes) {
           </select>
           <button type="button" class="btn btn-default btn-xs rcj-pay-photo">📷</button>
           <span class="text-muted" style="font-size:11px">${p.photo ? "✓ " + esc(p.photo_nom || __("photo")) : __("photo du chèque")}</span>
+        ` : ""}
+        ${p.mode === "Virement" ? `
+          <input type="text" autocomplete="off" maxlength="30" class="form-control input-sm rcj-pay-cheque"
+                 style="width:150px" value="${esc(p.n_cheque || "")}" placeholder="${__("Réf. virement (facultatif)")}">
+        ` : ""}
+        ${p.mode === "Traite bancaire" ? `
+          <input type="text" autocomplete="off" maxlength="20" class="form-control input-sm rcj-pay-cheque"
+                 style="width:120px" value="${esc(p.n_cheque || "")}" placeholder="${__("N° traite")}">
+          <select class="form-control input-sm rcj-pay-banque" style="width:130px">
+            <option value=""></option>
+            ${banques.map((b) => `<option ${p.banque === b ? "selected" : ""}>${esc(b)}</option>`).join("")}
+          </select>
+          <input type="date" class="form-control input-sm rcj-pay-echeance" style="width:150px"
+                 value="${esc(p.echeance || "")}" title="${__("Échéance de la traite")}">
+          <button type="button" class="btn btn-default btn-xs rcj-pay-photo">📷</button>
+          <span class="text-muted" style="font-size:11px">${p.photo ? "✓ " + esc(p.photo_nom || __("photo")) : __("échéance obligatoire, photo facultative")}</span>
         ` : ""}
         <button type="button" class="btn btn-default btn-xs rcj-pay-suppr" title="${__("Retirer")}">🗑</button>
       </div>`).join("");
@@ -1824,6 +2314,9 @@ function rcj_zone_paiements(d, etat, get_cible, modes_lignes) {
     $w().find(".rcj-pay-banque").on("change", (e) => {
       etat.paiements[ligne_de(e)].banque = $(e.currentTarget).val();
     });
+    $w().find(".rcj-pay-echeance").on("change", (e) => {
+      etat.paiements[ligne_de(e)].echeance = $(e.currentTarget).val();
+    });
     $w().find(".rcj-pay-photo").on("click", (e) => {
       const i = ligne_de(e);
       const input = document.createElement("input");
@@ -1833,9 +2326,17 @@ function rcj_zone_paiements(d, etat, get_cible, modes_lignes) {
         if (!f) return;
         const lecteur = new FileReader();
         lecteur.onload = () => {
-          etat.paiements[i].photo = lecteur.result;
-          etat.paiements[i].photo_nom = f.name;
+          const p = etat.paiements[i];
+          p.photo = lecteur.result;
+          p.photo_nom = f.name;
           rendre();
+          rcj_photo_piece_ajoutee(p.photo, p.photo_nom, p.mode, (lu) => {
+            if (lu.numero) p.n_cheque = lu.numero;
+            if (lu.banque) p.banque = lu.banque;
+            if (lu.echeance && p.mode === "Traite bancaire" && !p.echeance) p.echeance = lu.echeance;
+            if (lu.montant && !(flt(p.montant) > 0)) p.montant = lu.montant;
+            rendre();
+          });
         };
         lecteur.readAsDataURL(f);
       };
@@ -1853,7 +2354,7 @@ function rcj_zone_paiements(d, etat, get_cible, modes_lignes) {
 }
 
 // Valide et retourne les lignes prêtes pour le serveur, ou null (message montré).
-function rcj_collecter_paiements(etat, montant) {
+function rcj_collecter_paiements(etat, montant, dispense) {
   const lignes = (etat.paiements || []).filter((p) => flt(p.montant) > 0);
   if (!lignes.length) {
     frappe.msgprint(__("Ajoutez au moins un règlement avec un montant."));
@@ -1875,16 +2376,29 @@ function rcj_collecter_paiements(etat, montant) {
         frappe.msgprint(__("Choisissez la banque de chaque chèque."));
         return null;
       }
-      if (!p.photo) {
-        frappe.msgprint(__("Prenez la photo de chaque chèque."));
+      if (!p.photo && !dispense) {
+        frappe.msgprint(__("Prenez la photo de chaque chèque (ou saisissez le code sans photo)."));
         return null;
       }
+    } else if (p.mode === "Traite bancaire") {
+      if (!/^\d{4,20}$/.test((p.n_cheque || "").trim())) {
+        frappe.msgprint(__("Chaque traite doit avoir un numéro de 4 à 20 chiffres."));
+        return null;
+      }
+      if (!p.echeance) {
+        frappe.msgprint(__("Indiquez l'échéance de chaque traite."));
+        return null;
+      }
+    } else if (p.mode === "Virement" && p.n_cheque
+               && !/^[A-Za-z0-9/-]{3,30}$/.test((p.n_cheque || "").trim())) {
+      frappe.msgprint(__("La référence d'un virement comporte de 3 à 30 lettres ou chiffres."));
+      return null;
     }
   }
   return lignes.map((p) => ({
     mode: p.mode, montant: flt(p.montant), n_cheque: p.n_cheque || null,
-    banque: p.banque || null, photo_cheque: p.photo || null,
-    photo_cheque_nom: p.photo_nom || null,
+    banque: p.banque || null, echeance: p.echeance || null,
+    photo_cheque: p.photo || null, photo_cheque_nom: p.photo_nom || null,
   }));
 }
 
@@ -1964,21 +2478,26 @@ function rcj_payer_depense(fiche, rapport) {
       { fieldtype: "Check", fieldname: "fractionne",
         label: __("Paiement fractionné (plusieurs chèques, ou espèces + chèque…)") },
       { fieldtype: "Select", fieldname: "mode", label: __("Mode de paiement"),
-        options: "Espèces\nChèque\nCarte de crédit", default: "Espèces", reqd: 1,
+        options: "Espèces\nChèque\nCarte de crédit\nVirement\nTraite bancaire", default: "Espèces", reqd: 1,
         depends_on: "eval:!doc.fractionne" },
       { fieldtype: "Column Break" },
       { fieldtype: "Data", fieldname: "n_cheque", label: __("N° de chèque (7 chiffres)"),
-        depends_on: 'eval:doc.mode=="Chèque" && !doc.fractionne' },
+        depends_on: 'eval:["Chèque","Traite bancaire","Virement"].includes(doc.mode) && !doc.fractionne' },
       { fieldtype: "Select", fieldname: "banque", label: __("Banque"),
-        depends_on: 'eval:doc.mode=="Chèque" && !doc.fractionne' },
+        depends_on: 'eval:["Chèque","Traite bancaire"].includes(doc.mode) && !doc.fractionne' },
+      { fieldtype: "Date", fieldname: "echeance", label: __("Échéance de la traite"),
+        depends_on: 'eval:doc.mode=="Traite bancaire" && !doc.fractionne',
+        mandatory_depends_on: 'eval:doc.mode=="Traite bancaire" && !doc.fractionne' },
       { fieldtype: "HTML", fieldname: "zone_cheque" },
       { fieldtype: "HTML", fieldname: "zone_paiements" },
+      rcj_champ_code_sans_photo('eval:doc.fractionne || ["Chèque","Traite bancaire"].includes(doc.mode)'),
     ],
     primary_action_label: __("💸 Enregistrer le paiement"),
     primary_action(v) {
+      const dispense = !!(v.code_sans_photo || "").trim();
       let paiements = null;
       if (v.fractionne) {
-        paiements = rcj_collecter_paiements(etat, fiche.montant);
+        paiements = rcj_collecter_paiements(etat, fiche.montant, dispense);
         if (!paiements) return;
       } else if (v.mode === "Chèque") {
         if (!/^\d{7}$/.test((v.n_cheque || "").trim())) {
@@ -1989,10 +2508,23 @@ function rcj_payer_depense(fiche, rapport) {
           frappe.msgprint(__("Pour un chèque, la banque est obligatoire."));
           return;
         }
-        if (!etat.cheque) {
-          frappe.msgprint(__("Prenez la photo du chèque avant d'enregistrer."));
+        if (!etat.cheque && !dispense) {
+          frappe.msgprint(__("Prenez la photo du chèque avant d'enregistrer (ou saisissez le code sans photo)."));
           return;
         }
+      } else if (v.mode === "Traite bancaire") {
+        if (!/^\d{4,20}$/.test((v.n_cheque || "").trim())) {
+          frappe.msgprint(__("Le numéro de traite doit comporter de 4 à 20 chiffres."));
+          return;
+        }
+        if (!v.echeance) {
+          frappe.msgprint(__("Indiquez l'échéance de la traite."));
+          return;
+        }
+        // L'échéance ne voyage que dans `paiements` : ligne unique.
+        paiements = [{ mode: v.mode, montant: flt(fiche.montant), n_cheque: (v.n_cheque || "").trim(),
+                       banque: v.banque || null, echeance: v.echeance,
+                       photo_cheque: etat.cheque || null, photo_cheque_nom: etat.cheque_nom || null }];
       }
       frappe.call({
         method: API + ".solder_depense",
@@ -2002,10 +2534,12 @@ function rcj_payer_depense(fiche, rapport) {
           photo_cheque: !paiements && v.mode === "Chèque" ? etat.cheque : null,
           photo_cheque_nom: etat.cheque_nom,
           paiements: paiements ? JSON.stringify(paiements) : null,
+          code_sans_photo: v.code_sans_photo || null,
         },
         freeze: true, freeze_message: __("Enregistrement du paiement…"),
         callback: (r) => {
           d.hide();
+          rcj_afficher_avertissements(r.message);
           frappe.show_alert({
             message: __("Dépense payée — écriture {0}.", [r.message.name]),
             indicator: "green",
@@ -2034,14 +2568,28 @@ function rcj_payer_depense(fiche, rapport) {
       etat.cheque = lecteur.result;
       etat.cheque_nom = f.name;
       $zc.find(".rcj-ph-nom").text("✓ " + f.name);
+      rcj_photo_piece_ajoutee(etat.cheque, etat.cheque_nom, d.get_value("mode"), (lu) => {
+        if (lu.numero && !(d.get_value("n_cheque") || "").trim()) d.set_value("n_cheque", lu.numero);
+        if (lu.banque) d.set_value("banque", lu.banque);
+        if (lu.echeance && d.get_value("mode") === "Traite bancaire" && !d.get_value("echeance")) {
+          d.set_value("echeance", lu.echeance);
+        }
+      });
     };
     lecteur.readAsDataURL(f);
   });
   const basculer_cheque = () =>
-    $zc.toggle(d.get_value("mode") === "Chèque" && !d.get_value("fractionne"));
+    $zc.toggle(["Chèque", "Traite bancaire"].includes(d.get_value("mode")) && !d.get_value("fractionne"));
+  const maj_libelles_mode = () => {
+    const mode = d.get_value("mode");
+    d.set_df_property("n_cheque", "label",
+      mode === "Traite bancaire" ? __("N° de traite")
+        : mode === "Virement" ? __("Référence du virement (facultatif)")
+          : __("N° de chèque (7 chiffres)"));
+  };
 
   const rendre_paiements = rcj_zone_paiements(d, etat, () => flt(fiche.montant));
-  d.fields_dict.mode.$input.on("change", basculer_cheque);
+  d.fields_dict.mode.$input.on("change", () => { basculer_cheque(); maj_libelles_mode(); });
   d.fields_dict.fractionne.$input.on("change", () => { basculer_cheque(); rendre_paiements(); });
 
   frappe.call({
@@ -2053,6 +2601,7 @@ function rcj_payer_depense(fiche, rapport) {
   });
 
   d.show();
+  rcj_masquer_code(d);
   basculer_cheque();
   rendre_paiements();
 }
@@ -2385,9 +2934,11 @@ function rcj_reglement_fournisseur(supplier, factures, rapport) {
       { fieldtype: "HTML", fieldname: "factures" },
       { fieldtype: "Section Break", label: __("Règlements") },
       { fieldtype: "HTML", fieldname: "paiements_zone" },
+      rcj_champ_code_sans_photo(),
     ],
     primary_action_label: __("💸 Payer"),
-    primary_action() {
+    primary_action(v) {
+      const dispense = !!((v && v.code_sans_photo) || "").trim();
       if (!etat.paiements.length) {
         frappe.msgprint(__("Ajoutez au moins un règlement."));
         return;
@@ -2410,8 +2961,8 @@ function rcj_reglement_fournisseur(supplier, factures, rapport) {
             frappe.msgprint(__("{0} : pour un chèque, la banque est obligatoire.", [no]));
             return;
           }
-          if (!p.photo) {
-            frappe.msgprint(__("{0} : prenez la photo du chèque avant de payer.", [no]));
+          if (!p.photo && !dispense) {
+            frappe.msgprint(__("{0} : prenez la photo du chèque avant de payer (ou saisissez le code sans photo).", [no]));
             return;
           }
           const cle = num + "|" + p.banque;
@@ -2442,9 +2993,10 @@ function rcj_reglement_fournisseur(supplier, factures, rapport) {
           paiements: JSON.stringify(etat.paiements.map((p) => ({
             mode: p.mode, montant: p.montant, n_piece: p.n_piece,
             banque: p.banque, photo: p.photo, photo_nom: p.photo_nom }))),
+          code_sans_photo: (v && v.code_sans_photo) || null,
         },
         freeze: true, freeze_message: __("Règlement des factures…"),
-        callback: (r) => resultat(r.message),
+        callback: (r) => { rcj_afficher_avertissements(r.message); resultat(r.message); },
       });
     },
   });
@@ -2479,7 +3031,7 @@ function rcj_reglement_fournisseur(supplier, factures, rapport) {
           `<option ${m === p.mode ? "selected" : ""}>${m}</option>`).join("")}</select></td>
         <td><input type="number" step="0.001" min="0" class="form-control input-sm rcj-r-montant"
                    value="${p.montant || ""}"></td>
-        <td>${piece ? `<input type="text" class="form-control input-sm rcj-r-numero"
+        <td>${piece ? `<input type="text" autocomplete="off" class="form-control input-sm rcj-r-numero"
                    placeholder="${p.mode === "Chèque" ? __("7 chiffres") : __("Référence")}"
                    value="${esc(p.n_piece || "")}">` : "—"}</td>
         <td>${p.mode === "Chèque" ? `<select class="form-control input-sm rcj-r-banque">${
@@ -2531,7 +3083,15 @@ function rcj_reglement_fournisseur(supplier, factures, rapport) {
       if (!f) return;
       const p = ligne_de(this);
       const lecteur = new FileReader();
-      lecteur.onload = () => { p.photo = lecteur.result; p.photo_nom = f.name; render_paiements(); };
+      lecteur.onload = () => {
+        p.photo = lecteur.result; p.photo_nom = f.name; render_paiements();
+        rcj_photo_piece_ajoutee(p.photo, p.photo_nom, p.mode, (lu) => {
+          if (lu.numero) p.n_piece = lu.numero;
+          if (lu.banque) p.banque = lu.banque;
+          if (lu.montant && !(p.montant > 0)) p.montant = lu.montant;
+          render_paiements();
+        });
+      };
       lecteur.readAsDataURL(f);
     });
     $z.find(".rcj-r-suppr").on("click", function () {
@@ -2601,6 +3161,7 @@ function rcj_reglement_fournisseur(supplier, factures, rapport) {
   });
 
   d.show();
+  rcj_masquer_code(d);
   render_paiements();
 }
 
