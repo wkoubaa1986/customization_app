@@ -217,7 +217,7 @@ class RapportCaisseJournaliere {
           `✅ ${__("Caisse validée")} — <a href="/app/cloture-caisse/${
             encodeURIComponent(c.name)}">${c.name}</a> · ${__("par")} ${
             frappe.utils.escape_html(c.valide_par)} · ${__("écart")} ${
-            format_currency(ecart, "TND")}${c.pdf_url
+            rcj_dt(ecart)}${c.pdf_url
               ? ` · <a href="${c.pdf_url}" target="_blank"><b>📄 ${__("Ouvrir le PDF")}</b></a>`
               : ""}`).show();
       },
@@ -617,6 +617,16 @@ class RapportCaisseJournaliere {
   }
 }
 
+// ⚠️ LE SYMBOLE « د.ت » EST ÉCRIT DE DROITE À GAUCHE. Collé à un chiffre, l'algorithme
+// bidirectionnel du navigateur absorbe ce chiffre dans le sens inverse et le déplace :
+// « 1 colis pour 687.885 د.ت, 1 paiement(s) » s'affichait « 1 colis pour 1 687.885 د.ت
+// paiement(s) » (constat en prod le 16/09/2026) — un montant faux à la lecture, sur un
+// dialogue qui demande de confirmer une écriture comptable. Les isolants Unicode FSI/PDI
+// enferment le montant : il garde son sens, le texte autour garde le sien.
+function rcj_dt(valeur) {
+  return "\u2068" + format_currency(valeur, "TND") + "\u2069";
+}
+
 // ── Pièces papier : avertissements OpenAI et code de dispense ────────────────
 // Après tout enregistrement d'un chèque / d'une traite avec photo, le serveur
 // rend des AVERTISSEMENTS (numéro ou montant lus ≠ saisis). L'opération est déjà
@@ -747,7 +757,7 @@ function rcj_encaissement_dettes(rapport) {
       const total = etat.paiements.reduce((s, p) => s + (p.montant || 0), 0);
       if (total > total_sel + 0.001) {
         frappe.msgprint(__("Le total des paiements dépasse la somme des dettes sélectionnées ({0}).",
-          [format_currency(total_sel, "TND")]));
+          [rcj_dt(total_sel)]));
         return;
       }
       // UN SEUL GESTE (décision utilisateur 09/09/2026) : le serveur crée ET valide
@@ -781,7 +791,7 @@ function rcj_encaissement_dettes(rapport) {
   function maj_total_selection() {
     const t = selection().reduce((s, x) => s + x.montant, 0);
     d.fields_dict.liste.$wrapper.find(".rcj-total-sel")
-      .text(format_currency(t, "TND"));
+      .text(rcj_dt(t));
   }
 
   function lien_commande(x) {
@@ -828,10 +838,10 @@ function rcj_encaissement_dettes(rapport) {
               <td>${lien_commande(x)}${bloquee ? `<br><span class="text-danger"
                     style="font-size:11px">${frappe.utils.escape_html(motif(x))}</span>` : ""}</td>
               <td style="text-align:right">${x.commande_ttc
-                ? format_currency(x.commande_ttc, "TND") : "—"}</td>
+                ? rcj_dt(x.commande_ttc) : "—"}</td>
               <td>${x.commande_date ? frappe.datetime.str_to_user(x.commande_date) : "—"}</td>
               <td>${frappe.datetime.str_to_user(x.date)}</td>
-              <td style="text-align:right">${format_currency(x.montant, "TND")}</td></tr>`;
+              <td style="text-align:right">${rcj_dt(x.montant)}</td></tr>`;
         }).join("");
         d.fields_dict.liste.$wrapper.html(etat.dettes.length ? `
           <div style="overflow-x:auto">
@@ -844,10 +854,10 @@ function rcj_encaissement_dettes(rapport) {
             <tbody>${lignes}</tbody>
             <tfoot>
               <tr><th colspan="6">${__("Total des dettes")}</th>
-                  <th style="text-align:right">${format_currency(m.total, "TND")}</th></tr>
+                  <th style="text-align:right">${rcj_dt(m.total)}</th></tr>
               <tr><th colspan="6">${__("Total sélectionné")}</th>
                   <th style="text-align:right" class="rcj-total-sel">${
-                    format_currency(total_encaissable, "TND")}</th></tr>
+                    rcj_dt(total_encaissable)}</th></tr>
             </tfoot>
           </table></div>
           <div class="text-muted" style="font-size:11px">${
@@ -965,7 +975,7 @@ function rcj_encaissement_dettes(rapport) {
     const total_sel = selection().reduce((s, x) => s + x.montant, 0);
     const $t = d.fields_dict.paiements_zone.$wrapper.find(".rcj-p-total");
     $t.html(__("Total paiements : {0} / sélectionné : {1}",
-      [format_currency(total, "TND"), format_currency(total_sel, "TND")]));
+      [rcj_dt(total), rcj_dt(total_sel)]));
     $t.css("color", total > total_sel + 0.001 ? "#c0392b" : "");
   }
 
@@ -986,8 +996,8 @@ function rcj_encaissement_dettes(rapport) {
           <td>${a.commande ? frappe.utils.escape_html(a.commande) : "—"}</td>
           <td>${frappe.utils.escape_html(a.mode || "")}${
             a.piece ? " " + frappe.utils.escape_html(a.piece) : ""}</td>
-          <td style="text-align:right">${format_currency(a.montant, "TND")}</td>
-          <td style="text-align:right">${format_currency(a.dette_totale, "TND")}</td></tr>`).join("");
+          <td style="text-align:right">${rcj_dt(a.montant)}</td>
+          <td style="text-align:right">${rcj_dt(a.dette_totale)}</td></tr>`).join("");
     // Vérification OpenAI des photos : de simples AVERTISSEMENTS — l'employé tranche.
     const avert = (res.avertissements || []).length ? `
       <div style="background:#fff8e1;border:1px solid #f0c36d;border-radius:6px;
@@ -1001,7 +1011,7 @@ function rcj_encaissement_dettes(rapport) {
     const corps = `
       ${avert}
       <p>${__("Total reçu {0} — répartition sur les dettes sélectionnées :",
-        [format_currency(res.total_paiements, "TND")])}</p>
+        [rcj_dt(res.total_paiements)])}</p>
       <div style="overflow-x:auto"><table class="table table-bordered" style="font-size:12px">
         <thead><tr><th>${__("Dette consommée")}</th><th>${__("Commande")}</th>
                    <th>${__("Pièce")}</th>
@@ -1010,7 +1020,7 @@ function rcj_encaissement_dettes(rapport) {
         <tbody>${lignes}</tbody></table></div>
       ${res.restant > 0.001 ? `<p class="text-muted">${
         __("Reliquat non couvert : {0} — une dette a été recréée sur la commande concernée.",
-          [format_currency(res.restant, "TND")])}</p>` : ""}`;
+          [rcj_dt(res.restant)])}</p>` : ""}`;
     frappe.msgprint({ title: __("Dettes encaissées ({0})", [res.name]),
                       message: corps, indicator: "green" });
     frappe.show_alert(
@@ -1119,10 +1129,10 @@ function rcj_encaissement_aramex(rapport) {
         return;
       }
       let suite = __("{0} colis pour {1}, {2} paiement(s) pour {3}.",
-        [choisis.length, format_currency(total_sel, "TND"), etat.paiements.length,
-         format_currency(total_p, "TND")]);
-      if (ecart < -0.0005) suite += " " + __("Le reste ({0}) deviendra une DETTE RESTANTE du client.", [format_currency(-ecart, "TND")]);
-      if (ecart > 0.0005) suite += " " + __("L'excédent ({0}) deviendra un AVOIR CLIENT (paiement non affecté).", [format_currency(ecart, "TND")]);
+        [choisis.length, rcj_dt(total_sel), etat.paiements.length,
+         rcj_dt(total_p)]);
+      if (ecart < -0.0005) suite += " " + __("Le reste ({0}) deviendra une DETTE RESTANTE du client.", [rcj_dt(-ecart)]);
+      if (ecart > 0.0005) suite += " " + __("L'excédent ({0}) deviendra un AVOIR CLIENT (paiement non affecté).", [rcj_dt(ecart)]);
       frappe.confirm(suite + " " + __("Les paiements d'attente seront remplacés. Continuer ?"),
         () => frappe.call({
           method: API + ".encaisser",
@@ -1151,7 +1161,7 @@ function rcj_encaissement_aramex(rapport) {
 
   function maj_totaux() {
     const t = total_selection();
-    d.fields_dict.liste.$wrapper.find(".rcj-total-colis").text(format_currency(t, "TND"));
+    d.fields_dict.liste.$wrapper.find(".rcj-total-colis").text(rcj_dt(t));
     // Une seule pièce dont le montant suivait la sélection : elle continue de la suivre.
     if (etat.paiements.length === 1 && etat.paiements[0]._suit) etat.paiements[0].montant = flt(t, 3);
     render_paiements();
@@ -1185,7 +1195,7 @@ function rcj_encaissement_aramex(rapport) {
                 ${c.livre_le ? `<div class="text-muted" style="font-size:11px">${esc(c.livre_le)}</div>` : ""}
                 ${c.en_cours ? `<div class="text-muted" style="font-size:11px">${__("rapprochement bancaire en cours")}</div>` : ""}</td>
             <td>${frappe.datetime.str_to_user(c.date_paiement)}</td>
-            <td style="text-align:right">${format_currency(c.montant, "TND")}</td></tr>`).join("");
+            <td style="text-align:right">${rcj_dt(c.montant)}</td></tr>`).join("");
         const total = etat.colis.filter((c) => c.livre && !c.en_cours)
           .reduce((s, c) => s + c.montant, 0);
         $l.html(`
@@ -1203,7 +1213,7 @@ function rcj_encaissement_aramex(rapport) {
                        <th style="text-align:right">${__("Montant")}</th></tr></thead>
             <tbody>${lignes}</tbody>
             <tfoot><tr><th colspan="6">${__("Total sélectionné")}</th>
-                       <th style="text-align:right" class="rcj-total-colis">${format_currency(total, "TND")}</th></tr></tfoot>
+                       <th style="text-align:right" class="rcj-total-colis">${rcj_dt(total)}</th></tr></tfoot>
           </table></div>`
           : `<div class="text-muted" style="margin-top:8px">${__("Aucun colis Aramex livré en attente d'encaissement.")}</div>`}`);
         $l.find("input.rcj-colis").on("change", maj_totaux);
@@ -1249,8 +1259,8 @@ function rcj_encaissement_aramex(rapport) {
     const total_p = etat.paiements.reduce((s, p) => s + flt(p.montant), 0);
     const ecart = flt(total_p - total_sel, 3);
     let bilan = `<span style="color:#135200">${__("Le total reçu couvre exactement les colis sélectionnés.")}</span>`;
-    if (ecart < -0.0005) bilan = `<span style="color:#a8071a">${__("Reste non couvert : {0} → dette restante du client sur la commande.", [format_currency(-ecart, "TND")])}</span>`;
-    if (ecart > 0.0005) bilan = `<span style="color:#0958d9">${__("Excédent : {0} → avoir client (paiement non affecté, à imputer sur sa prochaine facture).", [format_currency(ecart, "TND")])}</span>`;
+    if (ecart < -0.0005) bilan = `<span style="color:#a8071a">${__("Reste non couvert : {0} → dette restante du client sur la commande.", [rcj_dt(-ecart)])}</span>`;
+    if (ecart > 0.0005) bilan = `<span style="color:#0958d9">${__("Excédent : {0} → avoir client (paiement non affecté, à imputer sur sa prochaine facture).", [rcj_dt(ecart)])}</span>`;
     $z.html(`
       <div style="overflow-x:auto">
       <table class="table table-bordered" style="font-size:12px;margin:4px 0 6px">
@@ -1264,7 +1274,7 @@ function rcj_encaissement_aramex(rapport) {
       </table></div>
       <button type="button" class="btn btn-default btn-sm rcj-a-ajouter">＋ ${__("Ajouter un paiement")}</button>
       <span class="text-muted" style="margin-left:12px">${__("Total paiements : {0} / colis sélectionnés : {1}",
-        [format_currency(total_p, "TND"), format_currency(total_sel, "TND")])}</span>
+        [rcj_dt(total_p), rcj_dt(total_sel)])}</span>
       <div style="margin-top:6px;font-size:12.5px">${bilan}</div>`);
 
     const ligne_de = (el) => etat.paiements[parseInt($(el).closest("tr").attr("data-i"), 10)];
@@ -1274,7 +1284,7 @@ function rcj_encaissement_aramex(rapport) {
       // Le bilan suit la frappe sans re-rendre la table (le champ garderait le focus).
       const tp = etat.paiements.reduce((s, x) => s + flt(x.montant), 0);
       $z.find(".text-muted").last().text(__("Total paiements : {0} / colis sélectionnés : {1}",
-        [format_currency(tp, "TND"), format_currency(total_selection(), "TND")]));
+        [rcj_dt(tp), rcj_dt(total_selection())]));
     });
     $z.find(".rcj-a-montant").on("change", () => render_paiements());
     $z.find(".rcj-a-numero").on("input", function () { ligne_de(this).n_piece = $(this).val(); });
@@ -1326,17 +1336,17 @@ function rcj_encaissement_aramex(rapport) {
       <tr><td>${esc(c.bordereau)}</td><td>${esc(c.client || "")}</td>
           <td>${esc(c.commande || "")}</td>
           <td>${(c.paiements || []).map((x) =>
-            `<a href="/app/payment-entry/${encodeURIComponent(x.nom)}" target="_blank">${esc(x.nom)}</a> — ${esc(x.piece)} : ${format_currency(x.montant, "TND")}`).join("<br>")}
-            ${c.reliquat ? `<br><span style="color:#a8071a">${__("Dette restante {0} ({1})", [format_currency(c.reliquat, "TND"), esc(c.dette)])}</span>` : ""}</td>
-          <td style="text-align:right">${format_currency(c.montant, "TND")}</td></tr>`).join("");
+            `<a href="/app/payment-entry/${encodeURIComponent(x.nom)}" target="_blank">${esc(x.nom)}</a> — ${esc(x.piece)} : ${rcj_dt(x.montant)}`).join("<br>")}
+            ${c.reliquat ? `<br><span style="color:#a8071a">${__("Dette restante {0} ({1})", [rcj_dt(c.reliquat), esc(c.dette)])}</span>` : ""}</td>
+          <td style="text-align:right">${rcj_dt(c.montant)}</td></tr>`).join("");
     const avoirs = (res.avoirs || []).map((a) =>
-      `<li>${__("Avoir client {0} — {1} : {2}", [format_currency(a.montant, "TND"), esc(a.piece),
+      `<li>${__("Avoir client {0} — {1} : {2}", [rcj_dt(a.montant), esc(a.piece),
         `<a href="/app/payment-entry/${encodeURIComponent(a.nom)}" target="_blank">${esc(a.nom)}</a>`])}</li>`).join("");
     frappe.msgprint({
       title: __("Colis Aramex encaissés"), indicator: "green",
       message: `<p>${__("{0} colis pour {1} — {2} paiement(s) pour {3}.",
-        [(res.conversions || []).length, format_currency(res.total_colis, "TND"),
-         (res.pieces || []).length, format_currency(res.total_pieces, "TND")])}</p>
+        [(res.conversions || []).length, rcj_dt(res.total_colis),
+         (res.pieces || []).length, rcj_dt(res.total_pieces)])}</p>
         <div style="overflow-x:auto"><table class="table table-bordered" style="font-size:12px">
           <thead><tr><th>${__("Bordereau")}</th><th>${__("Client")}</th><th>${__("Commande")}</th>
                      <th>${__("Paiements créés")}</th><th style="text-align:right">${__("Colis")}</th></tr></thead>
@@ -1415,7 +1425,7 @@ function rcj_photo_piece_ajoutee(photo, nom, mode, appliquer) {
       try { appliquer(lu); } catch (e) { console.error(e); }
       const bouts = [];
       if (lu.numero) bouts.push(`${__("n°")} <b>${esc(lu.numero)}</b>`);
-      if (lu.montant) bouts.push(`${__("montant")} <b>${format_currency(lu.montant, "TND")}</b>`);
+      if (lu.montant) bouts.push(`${__("montant")} <b>${rcj_dt(lu.montant)}</b>`);
       if (lu.banque) bouts.push(`${__("banque")} <b>${esc(lu.banque)}</b>`);
       else if (lu.banque_lue) bouts.push(`${__("banque lue")} « ${esc(lu.banque_lue)} » (${__("hors liste")})`);
       if (lu.echeance) bouts.push(`${__("échéance")} <b>${frappe.datetime.str_to_user(lu.echeance)}</b>`);
@@ -1847,7 +1857,7 @@ function rcj_depense(rapport) {
       (a) => `<div class="rcj-warn-banner" style="margin-top:6px">⚠️ ${frappe.utils.escape_html(a)}</div>`
     ).join("");
     $z.html(`<div style="font-size:12.5px;color:var(--text-muted)">
-        Net à régler : <b>${format_currency(r.net, "TND")}</b>
+        Net à régler : <b>${rcj_dt(r.net)}</b>
         — la retenue reste due au Trésor et fera l-objet dun certificat.</div>${avert}`);
   }, 350);
 
@@ -2111,7 +2121,7 @@ function rcj_cloture(rapport) {
         });
         return;
       }
-      const fmt = (v) => format_currency(v || 0, "TND");
+      const fmt = (v) => rcj_dt(v || 0);
       const d = new frappe.ui.Dialog({
         title: __("Valider la caisse — {0} ({1})", [caisse, frappe.datetime.str_to_user(d1)]),
         fields: [
@@ -2314,7 +2324,7 @@ function rcj_zone_paiements(d, etat, get_cible, modes_lignes) {
         ${lignes}
         <button type="button" class="btn btn-default btn-xs rcj-pay-ajout">➕ ${__("Ajouter un règlement")}</button>
         <span style="margin-left:10px;font-weight:700;color:${ok ? "#135200" : "#a8071a"}">
-          ${__("Somme")} : ${format_currency(somme, "TND")} / ${format_currency(cible, "TND")}
+          ${__("Somme")} : ${rcj_dt(somme)} / ${rcj_dt(cible)}
         </span>
       </div>`);
 
@@ -2381,7 +2391,7 @@ function rcj_collecter_paiements(etat, montant, dispense) {
   const somme = lignes.reduce((s, p) => s + flt(p.montant), 0);
   if (Math.abs(somme - flt(montant)) > 0.001) {
     frappe.msgprint(__("La somme des règlements ({0}) doit égaler le montant ({1}).",
-      [format_currency(somme, "TND"), format_currency(flt(montant), "TND")]));
+      [rcj_dt(somme), rcj_dt(flt(montant))]));
     return null;
   }
   for (const p of lignes) {
@@ -2455,7 +2465,7 @@ function rcj_depenses_a_payer(rapport) {
                 </div></td>
               <td>${esc(f.fournisseur || "")}</td>
               <td>${esc(f.numero_facture || "")}</td>
-              <td style="text-align:right;font-weight:700">${format_currency(f.montant, "TND")}</td>
+              <td style="text-align:right;font-weight:700">${rcj_dt(f.montant)}</td>
               <td style="text-align:center">${f.piece
                 ? `<a href="#" class="rcj-piece" data-url="${esc(f.piece)}" title="${__("Voir le justificatif")}">📎</a>`
                 : '<span style="opacity:.25">📎</span>'}</td>
@@ -2713,7 +2723,7 @@ function rcj_depenses_bl(rapport) {
       d.fields_dict.liste.$wrapper.find(".rcj-bl-choix:checked").each((_, el) => {
         total += flt($(el).data("montant"));
       });
-      d.fields_dict.liste.$wrapper.find(".rcj-bl-total").text(format_currency(total, "TND"));
+      d.fields_dict.liste.$wrapper.find(".rcj-bl-total").text(rcj_dt(total));
     };
 
     d.fields_dict.liste.$wrapper.html(`
@@ -2744,7 +2754,7 @@ function rcj_depenses_bl(rapport) {
               <td>${f.numero_facture
                     ? `<span class="rcj-badge" style="background:#e6f4ff;color:#0958d9;border:1px solid #91caff">🧾 ${esc(f.numero_facture)}</span>`
                     : `<span class="rcj-badge" style="background:#fff7e6;color:#ad6800;border:1px solid #ffd591">${__("sans facture")}</span>`}</td>
-              <td style="text-align:right;font-weight:700">${format_currency(f.montant, "TND")}</td>
+              <td style="text-align:right;font-weight:700">${rcj_dt(f.montant)}</td>
               <td style="text-align:center">${f.piece
                     ? `<a href="#" class="rcj-piece" data-url="${esc(f.piece)}" title="${__("Voir le justificatif")}">📎</a>`
                     : '<span style="opacity:.25">📎</span>'}</td>
@@ -2841,17 +2851,17 @@ function rcj_factures_a_payer(rapport) {
         $(this).closest("tr").css("opacity", autre ? 0.45 : "");
       });
       const total = sel.reduce((s2, x) => s2 + x.reste, 0);
-      $w.find(".rcj-fp-total").text(format_currency(total, "TND"));
+      $w.find(".rcj-fp-total").text(rcj_dt(total));
       const $btn = d.get_primary_btn();
       $btn.toggle(sel.length > 0);
-      $btn.text(__("💸 Payer ({0}) — {1}", [sel.length, format_currency(total, "TND")]));
+      $btn.text(__("💸 Payer ({0}) — {1}", [sel.length, rcj_dt(total)]));
     };
     const total_encours = factures.reduce((s2, f) => s2 + flt(f.outstanding_amount), 0);
     d.fields_dict.liste.$wrapper.html(`
       <div style="max-height:60vh;overflow-y:auto">
       ${factures.length ? `
       <div style="font-weight:700;margin-bottom:4px;color:#a8071a">
-        🧾 ${__("Factures d’achat non soldées")} — ${__("encours")} : ${format_currency(total_encours, "TND")}</div>
+        🧾 ${__("Factures d’achat non soldées")} — ${__("encours")} : ${rcj_dt(total_encours)}</div>
       <table class="table table-bordered" style="font-size:12.5px">
         <thead><tr>
           <th style="width:30px" title="${__("Cochez les factures d’UN fournisseur à régler")}"></th>
@@ -2874,8 +2884,8 @@ function rcj_factures_a_payer(rapport) {
               <td>${esc(f.supplier || "")}</td>
               <td>${esc(f.bill_no || "")}</td>
               <td>${esc(f.due_date || "")}</td>
-              <td style="text-align:right">${format_currency(f.montant, "TND")}</td>
-              <td style="text-align:right;font-weight:700;color:#a8071a">${format_currency(f.outstanding_amount, "TND")}</td>
+              <td style="text-align:right">${rcj_dt(f.montant)}</td>
+              <td style="text-align:right;font-weight:700;color:#a8071a">${rcj_dt(f.outstanding_amount)}</td>
               <td style="text-align:center">${f.piece
                 ? `<a href="#" class="rcj-piece" data-url="${esc(f.piece)}" title="${__("Voir le justificatif")}">📎</a>`
                 : '<span style="opacity:.25">📎</span>'}</td>
@@ -2901,7 +2911,7 @@ function rcj_factures_a_payer(rapport) {
               <td>${esc(f.fournisseur || f.supplier || "")}</td>
               <td>${esc(f.numero_facture || f.numero_bl || "")}</td>
               <td><span class="rcj-badge" style="background:#fff1f0;color:#a8071a;border:1px solid #ffa39e">${esc(f.mode_paiement || "")}</span></td>
-              <td style="text-align:right;font-weight:700">${format_currency(f.montant, "TND")}</td>
+              <td style="text-align:right;font-weight:700">${rcj_dt(f.montant)}</td>
               <td style="text-align:center">${f.piece
                 ? `<a href="#" class="rcj-piece" data-url="${esc(f.piece)}">📎</a>`
                 : '<span style="opacity:.25">📎</span>'}</td>
@@ -2911,7 +2921,7 @@ function rcj_factures_a_payer(rapport) {
       </div>
       ${factures.length ? `
       <div style="font-weight:700;margin-top:4px">${__("Total sélectionné")} :
-        <span class="rcj-fp-total">${format_currency(0, "TND")}</span></div>
+        <span class="rcj-fp-total">${rcj_dt(0)}</span></div>
       <div class="text-muted" style="font-size:11px">
         ${__("Cochez les factures à régler — d’UN SEUL fournisseur : les autres se grisent. Le règlement s’affecte de la facture la plus ancienne à la plus récente ; un paiement partiel laisse la plus récente partiellement due.")}
       </div>` : ""}`);
@@ -3001,7 +3011,7 @@ function rcj_reglement_fournisseur(supplier, factures, rapport) {
       const total = etat.paiements.reduce((s, p) => s + (p.montant || 0), 0);
       if (total > total_sel + 0.001) {
         frappe.msgprint(__("Le total des règlements dépasse le reste à payer des factures sélectionnées ({0}).",
-          [format_currency(total_sel, "TND")]));
+          [rcj_dt(total_sel)]));
         return;
       }
       frappe.call({
@@ -3029,10 +3039,10 @@ function rcj_reglement_fournisseur(supplier, factures, rapport) {
       <tbody>${factures.map((f) => `
         <tr><td>${esc(f.nom)}</td><td>${esc(f.date || "")}</td>
             <td>${esc(f.bill_no || "")}</td>
-            <td style="text-align:right">${format_currency(f.reste, "TND")}</td></tr>`).join("")}
+            <td style="text-align:right">${rcj_dt(f.reste)}</td></tr>`).join("")}
       </tbody>
       <tfoot><tr><th colspan="3">${__("Total à régler")}</th>
-                 <th style="text-align:right">${format_currency(total_sel, "TND")}</th></tr></tfoot>
+                 <th style="text-align:right">${rcj_dt(total_sel)}</th></tr></tfoot>
     </table></div>`);
 
   // Les lignes de règlement : mode, montant, n° de pièce (chèque) ou référence
@@ -3131,7 +3141,7 @@ function rcj_reglement_fournisseur(supplier, factures, rapport) {
     const total = etat.paiements.reduce((s, p) => s + (p.montant || 0), 0);
     const $t = d.fields_dict.paiements_zone.$wrapper.find(".rcj-r-total");
     $t.html(__("Total réglé : {0} / à payer : {1}",
-      [format_currency(total, "TND"), format_currency(total_sel, "TND")]));
+      [rcj_dt(total), rcj_dt(total_sel)]));
     $t.css("color", total > total_sel + 0.001 ? "#c0392b" : "");
   }
 
@@ -3144,16 +3154,16 @@ function rcj_reglement_fournisseur(supplier, factures, rapport) {
           <td>${esc(p.mode || "")}${p.piece ? " n° " + esc(p.piece) : ""}${
             p.banque ? " (" + esc(p.banque) + ")" : ""}</td>
           <td>${(p.references || []).map((x) =>
-            `${esc(x.facture)} : ${format_currency(x.montant, "TND")}`).join("<br>")}</td>
-          <td style="text-align:right">${format_currency(p.montant, "TND")}</td></tr>`).join("");
+            `${esc(x.facture)} : ${rcj_dt(x.montant)}`).join("<br>")}</td>
+          <td style="text-align:right">${rcj_dt(p.montant)}</td></tr>`).join("");
     const restes = (res.factures || []).filter((f) => f.reste_apres > 0.001).map((f) =>
-      `<li>${esc(f.facture)} : ${format_currency(f.reste_apres, "TND")}</li>`).join("");
+      `<li>${esc(f.facture)} : ${rcj_dt(f.reste_apres)}</li>`).join("");
     frappe.msgprint({
       title: __("Factures réglées ({0})", [supplier]),
       indicator: "green",
       message: `
         <p>${__("Total réglé {0} — une pièce = un paiement, réparti de la facture la plus ancienne à la plus récente :",
-          [format_currency(res.total_paiements, "TND")])}</p>
+          [rcj_dt(res.total_paiements)])}</p>
         <div style="overflow-x:auto"><table class="table table-bordered" style="font-size:12px">
           <thead><tr><th>${__("Paiement")}</th><th>${__("Pièce")}</th>
                      <th>${__("Factures soldées")}</th>
@@ -3215,8 +3225,8 @@ function rcj_factures_sans_justif() {
               <td><a href="/app/purchase-invoice/${encodeURIComponent(f.name)}" target="_blank">${esc(f.name)}</a></td>
               <td>${esc(f.supplier || "")}</td>
               <td>${esc(f.bill_no || "")}</td>
-              <td style="text-align:right">${format_currency(f.rounded_total || f.grand_total, "TND")}</td>
-              <td style="text-align:right">${format_currency(f.outstanding_amount, "TND")}</td>
+              <td style="text-align:right">${rcj_dt(f.rounded_total || f.grand_total)}</td>
+              <td style="text-align:right">${rcj_dt(f.outstanding_amount)}</td>
             </tr>`).join("")}
         </tbody>
       </table></div>
@@ -3270,7 +3280,7 @@ function rcj_factures_bl(rapport) {
       d.fields_dict.liste.$wrapper.find(".rcj-fbl-choix:checked").each((_, el) => {
         total += flt($(el).data("montant"));
       });
-      d.fields_dict.liste.$wrapper.find(".rcj-fbl-total").text(format_currency(total, "TND"));
+      d.fields_dict.liste.$wrapper.find(".rcj-fbl-total").text(rcj_dt(total));
     };
     d.fields_dict.liste.$wrapper.html(`
       <div style="max-height:52vh;overflow-y:auto">
@@ -3297,7 +3307,7 @@ function rcj_factures_bl(rapport) {
                     ? "background:#f6ffed;color:#135200;border:1px solid #b7eb8f"
                     : "background:#fff7e6;color:#ad6800;border:1px solid #ffd591"}">${esc(f.statut)}</span></td>
               <td>${f.mode_paiement === "Pas payé" ? "—" : esc(f.mode_paiement || "")}</td>
-              <td style="text-align:right;font-weight:700">${format_currency(f.montant, "TND")}</td>
+              <td style="text-align:right;font-weight:700">${rcj_dt(f.montant)}</td>
               <td>${f.purchase_order
                     ? `<a href="/app/purchase-order/${encodeURIComponent(f.purchase_order)}" target="_blank">${esc(f.purchase_order)}</a>
                        ${f.po_docstatus !== 1 ? ` <span class="rcj-badge" style="background:#fff7e6;color:#ad6800;border:1px solid #ffd591">${__("brouillon — à soumettre")}</span>` : ""}`

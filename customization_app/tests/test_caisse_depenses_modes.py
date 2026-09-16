@@ -281,3 +281,37 @@ class TestLectureQuelQueSoitLeMode(unittest.TestCase):
         src = inspect.getsource(CP.lire_piece)
         self.assertIn('"type_lu"', src)
         self.assertIn("traite", src)
+
+
+class TestMontantsIsolesDuSensArabe(unittest.TestCase):
+    """Le symbole « د.ت » est écrit de droite à gauche : collé à un chiffre, le navigateur
+    absorbe ce chiffre et le déplace. « 1 colis pour 687.885 د.ت, 1 paiement(s) » s'affichait
+    « 1 colis pour 1 687.885 د.ت paiement(s) » — un montant faux à la lecture, sur un dialogue
+    qui demande de confirmer une écriture comptable (constat en prod le 16/09/2026)."""
+
+    def test_le_helper_isole_le_montant(self):
+        with open(DIALOGUE, encoding="utf-8") as f:
+            js = f.read()
+        self.assertIn("function rcj_dt(valeur)", js)
+        self.assertIn("\\u2068", js)
+        self.assertIn("\\u2069", js)
+
+    def test_plus_aucun_montant_brut_dans_la_page(self):
+        with open(DIALOGUE, encoding="utf-8") as f:
+            lignes = f.read().splitlines()
+        brutes = [i + 1 for i, l in enumerate(lignes)
+                  if 'format_currency(' in l and 'function rcj_dt' not in l
+                  and '\\u2068' not in l]
+        self.assertEqual(brutes, [], "montants non isolés aux lignes %s" % brutes)
+
+    def test_la_confirmation_de_l_encaissement_aramex_isole_ses_montants(self):
+        """La phrase de confirmation est celle qui a montré le défaut : elle met un nombre
+        (le nombre de paiements) juste après un montant."""
+        with open(DIALOGUE, encoding="utf-8") as f:
+            js = f.read()
+        bloc = js[js.index("function rcj_encaissement_aramex"):]
+        phrase = bloc[bloc.index("let suite = "):][:700]
+        self.assertIn("rcj_dt(total_sel)", phrase)
+        self.assertIn("rcj_dt(total_p)", phrase)
+        self.assertNotIn("format_currency(", phrase)
+        self.assertIn("frappe.confirm(suite", phrase)
