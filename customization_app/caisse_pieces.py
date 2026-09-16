@@ -185,6 +185,8 @@ def lire_piece(photo, mode=None):
     """
     from customization_app.caisse_encaissement_dettes import banques as _banques
 
+    # Le mode n'est qu'une INDICATION : l'employé peut joindre une traite sur une ligne encore
+    # réglée sur « Virement » (cas réel du 16/09/2026). C'est la pièce qui dit ce qu'elle est.
     libelle = "traite (lettre de change)" if mode == "Traite bancaire" else "chèque"
     if not (photo or "").startswith("data:image/"):
         return {"erreur": _("La pièce jointe n'est pas une photo (PDF ?) : saisie manuelle.")}
@@ -207,6 +209,8 @@ def lire_piece(photo, mode=None):
                 'qu\'imprimé ; null si absent>", '
                 '"echeance": "<date d\'échéance ou date du document, AAAA-MM-JJ, null si absente>", '
                 '"beneficiaire": "<bénéficiaire, null si illisible>", '
+                '"type": "<\"chèque\" si c\'est un chèque, \"traite\" si c\'est une traite / lettre '
+                'de change, \"autre\" pour tout autre document>", '
                 '"lisible": <true si la photo montre bien un chèque ou une traite exploitable>}. '
                 "Un numéro de chèque tunisien a 7 chiffres, zéros de tête compris : "
                 "\"0012345\" et non 12345. Le numéro d'une traite (lettre de change) est la "
@@ -238,7 +242,9 @@ def lire_piece(photo, mode=None):
     echeance = str(lu.get("echeance") or "")
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", echeance):
         echeance = ""
-    return {"numero": numero, "montant": montant,
+    type_lu = {"chèque": "Chèque", "cheque": "Chèque", "traite": "Traite bancaire"}.get(
+        str(lu.get("type") or "").strip().lower(), "")
+    return {"numero": numero, "montant": montant, "type_lu": type_lu,
             "banque": normaliser_banque(lu.get("banque"), liste),
             "banque_lue": lu.get("banque") or "", "echeance": echeance,
             "beneficiaire": lu.get("beneficiaire") or "",

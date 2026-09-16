@@ -938,6 +938,7 @@ function rcj_encaissement_dettes(rapport) {
       lecteur.onload = () => {
         p.photo = lecteur.result; p.photo_nom = f.name; render_paiements();
         rcj_photo_piece_ajoutee(p.photo, p.photo_nom, p.mode, (lu) => {
+          if (lu.mode_propose && !(p.n_piece || "").trim()) p.mode = lu.mode_propose;
           if (lu.numero) p.n_piece = lu.numero;
           if (lu.banque) p.banque = lu.banque;
           if (lu.montant && !(p.montant > 0)) p.montant = lu.montant;
@@ -1295,8 +1296,10 @@ function rcj_encaissement_aramex(rapport) {
       lecteur.onload = () => {
         p.photo = lecteur.result; p.photo_nom = f.name; render_paiements();
         rcj_photo_piece_ajoutee(p.photo, p.photo_nom, p.mode, (lu) => {
+          // Le mode suit la pièce tant que la ligne n'a pas de numéro saisi à la main.
+          if (lu.mode_propose && !(p.n_piece || "").trim()) p.mode = lu.mode_propose;
           if (lu.numero && !(p.n_piece || "").trim()) p.n_piece = lu.numero;
-          if (lu.banque) p.banque = lu.banque;
+          if (lu.banque && p.mode !== "Virement") p.banque = lu.banque;
           if (lu.montant && !(flt(p.montant) > 0)) { p.montant = lu.montant; p._suit = false; }
           if (lu.echeance && !p.date) p.date = lu.echeance;
           render_paiements();
@@ -1385,8 +1388,12 @@ function rcj_apercu_fichier(dataUrl, nom, info_html) {
 // (customization_app.caisse_pieces.lire_piece). `appliquer(lu)` pré-remplit les champs
 // du dialogue appelant — n°, montant, banque, échéance — l'employé vérifie et corrige.
 // Une panne de lecture n'empêche rien : saisie manuelle.
+// ⚠️ LA PIÈCE DIT CE QU'ELLE EST, PAS LE MODE CHOISI. On ne lisait que si la ligne était déjà
+// réglée sur Chèque ou Traite : une traite photographiée sur une ligne restée « Virement » ne
+// déclenchait RIEN, sans un mot, et la lecture passait pour cassée (constat en prod le
+// 16/09/2026). On lit dès qu'une photo est jointe, quel que soit le mode, et ce qui est lu peut
+// corriger le mode — tant que l'employé n'a pas saisi de numéro à la main.
 function rcj_photo_piece_ajoutee(photo, nom, mode, appliquer) {
-  if (!["Chèque", "Traite bancaire"].includes(mode)) return;
   const esc = frappe.utils.escape_html;
   const ap = rcj_apercu_fichier(photo, nom,
     `<div class="text-muted" style="margin-bottom:8px">🤖 ${__("Lecture de la pièce en cours…")}</div>`);
@@ -1400,6 +1407,11 @@ function rcj_photo_piece_ajoutee(photo, nom, mode, appliquer) {
         dire(`<div class="rcj-warn-banner" style="margin-bottom:8px">⚠️ ${esc(lu.erreur)}</div>`);
         return;
       }
+      let bascule = "";
+      if (lu.type_lu && lu.type_lu !== mode) {
+        bascule = lu.type_lu;
+        lu.mode_propose = lu.type_lu;   // `appliquer` tranche : il connaît la ligne
+      }
       try { appliquer(lu); } catch (e) { console.error(e); }
       const bouts = [];
       if (lu.numero) bouts.push(`${__("n°")} <b>${esc(lu.numero)}</b>`);
@@ -1410,8 +1422,12 @@ function rcj_photo_piece_ajoutee(photo, nom, mode, appliquer) {
       dire(`<div style="background:${lu.lisible === false ? "#fff8e1" : "#e6f4ea"};border-radius:6px;padding:8px 12px;margin-bottom:8px;font-size:12.5px">
           ${lu.lisible === false ? "⚠️ " + __("Photo peu lisible.") + " " : "✅ "}
           ${bouts.length ? __("Lu sur la pièce : {0} — champs pré-remplis, vérifiez avant d'enregistrer.", [bouts.join(", ")])
-                         : __("Rien de lisible sur la pièce : saisie manuelle.")}</div>`);
-      frappe.show_alert({ message: __("Pièce lue : champs pré-remplis."), indicator: "green" });
+                         : __("Rien de lisible sur la pièce : saisie manuelle.")}
+          ${bascule ? `<div style="margin-top:4px">${
+            __("La pièce est un(e) {0} : le mode de la ligne suit.", [esc(bascule)])}</div>` : ""}</div>`);
+      frappe.show_alert({ message: bascule
+        ? __("Pièce lue : {0}, mode corrigé.", [bascule])
+        : __("Pièce lue : champs pré-remplis."), indicator: "green" });
     },
     error: () => dire(`<div class="rcj-warn-banner" style="margin-bottom:8px">⚠️ ${__("Lecture automatique indisponible : saisie manuelle.")}</div>`),
   });
@@ -1960,6 +1976,7 @@ function rcj_depense(rapport) {
   // zone, photo facultative.
   const $zc = zone_photo("zone_cheque", "cheque", "cheque_nom", __("Photo du chèque / de la traite"),
     () => rcj_photo_piece_ajoutee(etat.cheque, etat.cheque_nom, d.get_value("mode"), (lu) => {
+      if (lu.mode_propose && !(d.get_value("n_cheque") || "").trim()) d.set_value("mode", lu.mode_propose);
       if (lu.numero && !(d.get_value("n_cheque") || "").trim()) d.set_value("n_cheque", lu.numero);
       if (lu.banque) d.set_value("banque", lu.banque);
       if (lu.echeance && d.get_value("mode") === "Traite bancaire" && !d.get_value("echeance")) {
@@ -2331,6 +2348,7 @@ function rcj_zone_paiements(d, etat, get_cible, modes_lignes) {
           p.photo_nom = f.name;
           rendre();
           rcj_photo_piece_ajoutee(p.photo, p.photo_nom, p.mode, (lu) => {
+            if (lu.mode_propose && !(p.n_cheque || "").trim()) p.mode = lu.mode_propose;
             if (lu.numero) p.n_cheque = lu.numero;
             if (lu.banque) p.banque = lu.banque;
             if (lu.echeance && p.mode === "Traite bancaire" && !p.echeance) p.echeance = lu.echeance;
@@ -2569,6 +2587,7 @@ function rcj_payer_depense(fiche, rapport) {
       etat.cheque_nom = f.name;
       $zc.find(".rcj-ph-nom").text("✓ " + f.name);
       rcj_photo_piece_ajoutee(etat.cheque, etat.cheque_nom, d.get_value("mode"), (lu) => {
+        if (lu.mode_propose && !(d.get_value("n_cheque") || "").trim()) d.set_value("mode", lu.mode_propose);
         if (lu.numero && !(d.get_value("n_cheque") || "").trim()) d.set_value("n_cheque", lu.numero);
         if (lu.banque) d.set_value("banque", lu.banque);
         if (lu.echeance && d.get_value("mode") === "Traite bancaire" && !d.get_value("echeance")) {
@@ -3086,6 +3105,7 @@ function rcj_reglement_fournisseur(supplier, factures, rapport) {
       lecteur.onload = () => {
         p.photo = lecteur.result; p.photo_nom = f.name; render_paiements();
         rcj_photo_piece_ajoutee(p.photo, p.photo_nom, p.mode, (lu) => {
+          if (lu.mode_propose && !(p.n_piece || "").trim()) p.mode = lu.mode_propose;
           if (lu.numero) p.n_piece = lu.numero;
           if (lu.banque) p.banque = lu.banque;
           if (lu.montant && !(p.montant > 0)) p.montant = lu.montant;

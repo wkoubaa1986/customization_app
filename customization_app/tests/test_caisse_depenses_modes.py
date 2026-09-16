@@ -249,3 +249,35 @@ class TestBanqueEnArabe(unittest.TestCase):
     def test_le_latin_garde_la_priorite_quand_les_deux_sont_la(self):
         from customization_app.caisse_pieces import normaliser_banque as N
         self.assertEqual(N("BIAT بنك", self.B), "BIAT")
+
+
+class TestLectureQuelQueSoitLeMode(unittest.TestCase):
+    """Une traite photographiée sur une ligne restée « Virement » doit être lue quand même.
+
+    Constat en prod le 16/09/2026 : la lecture ne se déclenchait que si le mode était déjà
+    Chèque ou Traite. Rien ne se passait, sans un mot, et la lecture passait pour cassée.
+    """
+
+    def test_le_garde_par_mode_a_disparu(self):
+        with open(DIALOGUE, encoding="utf-8") as f:
+            js = f.read()
+        bloc = js[js.index("function rcj_photo_piece_ajoutee"):][:900]
+        self.assertNotIn('if (!["Chèque", "Traite bancaire"].includes(mode)) return;', bloc)
+        self.assertIn("lu.type_lu", bloc)
+        self.assertIn("mode_propose", bloc)
+
+    def test_chaque_point_de_capture_suit_le_mode_lu(self):
+        with open(DIALOGUE, encoding="utf-8") as f:
+            js = f.read()
+        # 6 points de capture + la pose dans le helper = 7 mentions minimum.
+        self.assertGreaterEqual(js.count("mode_propose"), 7)
+        # Jamais écrasé quand l'employé a déjà saisi un numéro.
+        self.assertIn('if (lu.mode_propose && !(p.n_piece || "").trim()) p.mode = lu.mode_propose;', js)
+
+    def test_le_lecteur_rend_le_type_de_la_piece(self):
+        import inspect
+
+        from customization_app import caisse_pieces as CP
+        src = inspect.getsource(CP.lire_piece)
+        self.assertIn('"type_lu"', src)
+        self.assertIn("traite", src)
