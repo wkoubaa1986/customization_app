@@ -13,68 +13,88 @@
   "qty",
   "uom",
   "volume_unitaire_m3",
+  "volume_estime",
   "volume_ligne_m3",
+  "prix_cible",
+  "qty_fournisseur",
+  "prix_fournisseur",
+  "qty_cible",
+  "prix_cible_negocie",
+  "total_retenu",
+  "total_fournisseur",
+  "total_fichier",
+  "ecart_pct",
+  "moq",
+  "qty_par_carton",
+  "volume_carton_m3",
+  "decision",
+  "remarque_fournisseur",
+  "observation",
+  "observation_auto",
+  "trace_changements",
+  "reponse_source",
   "description",
   "item_name_traduit",
   "description_traduite",
-  "articles_additionnels"
+  "articles_additionnels",
+  "repartition_conteneurs"
  ],
  "fields": [
   {
+   "columns": 2,
    "fieldname": "item_code",
    "fieldtype": "Link",
    "in_list_view": 1,
    "label": "Article (vide = article libre)",
-   "options": "Item",
-   "columns": 2
+   "options": "Item"
   },
   {
-   "fieldname": "item_name",
-   "fieldtype": "Data",
-   "label": "Désignation",
+   "columns": 2,
    "fetch_from": "item_code.item_name",
    "fetch_if_empty": 1,
+   "fieldname": "item_name",
+   "fieldtype": "Data",
    "in_list_view": 1,
-   "columns": 2
+   "label": "Désignation"
   },
   {
+   "fetch_from": "item_code.item_group",
+   "fetch_if_empty": 1,
    "fieldname": "item_group",
    "fieldtype": "Link",
    "label": "Groupe d'article",
-   "options": "Item Group",
-   "fetch_from": "item_code.item_group",
-   "fetch_if_empty": 1
+   "options": "Item Group"
   },
   {
+   "columns": 1,
    "fieldname": "qty",
    "fieldtype": "Float",
    "in_list_view": 1,
-   "label": "Quantité",
-   "columns": 1
+   "label": "Quantité"
   },
   {
+   "columns": 1,
    "fieldname": "uom",
    "fieldtype": "Data",
-   "label": "UDM",
    "in_list_view": 1,
-   "columns": 1
+   "label": "UDM"
   },
   {
+   "columns": 2,
    "fieldname": "volume_unitaire_m3",
    "fieldtype": "Float",
    "in_list_view": 1,
    "label": "Volume unitaire (m³)",
-   "precision": "4",
-   "columns": 2
+   "precision": "4"
   },
   {
+   "columns": 2,
    "fieldname": "volume_ligne_m3",
    "fieldtype": "Float",
    "in_list_view": 1,
    "label": "Volume ligne (m³)",
    "precision": "4",
-   "read_only": 1,
-   "columns": 2
+   "read_only": 1
   },
   {
    "fieldname": "image",
@@ -101,12 +121,145 @@
    "fieldtype": "Long Text",
    "hidden": 1,
    "label": "Articles additionnels (JSON)"
+  },
+  {
+   "description": "Prix unitaire que vous visez — imprimé dans la demande de cotation.",
+   "fieldname": "prix_cible",
+   "fieldtype": "Currency",
+   "label": "Prix cible",
+   "options": "devise",
+   "precision": "4"
+  },
+  {
+   "fieldname": "prix_fournisseur",
+   "fieldtype": "Currency",
+   "label": "Prix fournisseur",
+   "options": "devise",
+   "precision": "4"
+  },
+  {
+   "fieldname": "total_fournisseur",
+   "fieldtype": "Currency",
+   "label": "Total fournisseur",
+   "options": "devise",
+   "read_only": 1
+  },
+  {
+   "fieldname": "ecart_pct",
+   "fieldtype": "Percent",
+   "label": "Écart / cible",
+   "precision": "1",
+   "read_only": 1
+  },
+  {
+   "fieldname": "moq",
+   "fieldtype": "Float",
+   "label": "MOQ",
+   "precision": "0"
+  },
+  {
+   "fieldname": "qty_par_carton",
+   "fieldtype": "Float",
+   "label": "Qté / carton",
+   "precision": "0"
+  },
+  {
+   "fieldname": "volume_carton_m3",
+   "fieldtype": "Float",
+   "label": "Volume carton (m³)",
+   "precision": "4"
+  },
+  {
+   "fieldname": "decision",
+   "fieldtype": "Select",
+   "label": "Décision",
+   "options": "\nÀ négocier\nAccepté\nAbandonné"
+  },
+  {
+   "fieldname": "remarque_fournisseur",
+   "fieldtype": "Small Text",
+   "label": "Remarque fournisseur"
+  },
+  {
+   "description": "Ligne du fichier fournisseur qui a alimenté cette ligne (traçabilité de l'appariement).",
+   "fieldname": "reponse_source",
+   "fieldtype": "Small Text",
+   "label": "Origine de la réponse",
+   "read_only": 1
+  },
+  {
+   "description": "Quantité que le fournisseur a cotée ou facturée, quand elle diffère de la nôtre.",
+   "fieldname": "qty_fournisseur",
+   "fieldtype": "Float",
+   "label": "Qté fournisseur",
+   "precision": "2"
+  },
+  {
+   "fieldname": "qty_cible",
+   "fieldtype": "Float",
+   "label": "Qté cible",
+   "precision": "2",
+   "description": "Quantité que nous retenons après la réponse du fournisseur (contre-proposition). Vide = la quantité demandée."
+  },
+  {
+   "fieldname": "prix_cible_negocie",
+   "fieldtype": "Currency",
+   "label": "Prix cible négocié",
+   "options": "devise",
+   "description": "Prix que nous demandons au second tour. Vide = on accepte le prix du fournisseur."
+  },
+  {
+   "fieldname": "total_retenu",
+   "fieldtype": "Currency",
+   "label": "Total retenu",
+   "options": "devise",
+   "read_only": 1
+  },
+  {
+   "fieldname": "total_fichier",
+   "fieldtype": "Currency",
+   "label": "Total selon le fichier",
+   "options": "devise",
+   "read_only": 1,
+   "description": "Montant de ligne lu dans le classeur du fournisseur, tel quel — sert au rapprochement."
+  },
+  {
+   "fieldname": "observation",
+   "fieldtype": "Small Text",
+   "label": "Observation",
+   "description": "Ce qui part au fournisseur dans le fichier renvoyé."
+  },
+  {
+   "fieldname": "observation_auto",
+   "fieldtype": "Small Text",
+   "label": "Observation générée",
+   "hidden": 1,
+   "description": "Dernier texte écrit automatiquement : tant que l'observation lui est identique, elle est régénérée ; dès qu'elle est retouchée à la main, elle ne bouge plus."
+  },
+  {
+   "fieldname": "trace_changements",
+   "fieldtype": "Small Text",
+   "label": "Changements détectés",
+   "read_only": 1,
+   "hidden": 1
+  },
+  {
+   "fieldname": "repartition_conteneurs",
+   "fieldtype": "Long Text",
+   "label": "Répartition conteneurs (JSON)",
+   "hidden": 1
+  },
+  {
+   "fieldname": "volume_estime",
+   "fieldtype": "Check",
+   "label": "Volume estimé",
+   "description": "Volume proposé par l'IA, pas mesuré : il sert au chargement mais n'est PAS recopié sur la fiche Article."
   }
  ],
  "index_web_pages_for_search": 0,
  "istable": 1,
  "links": [],
- "modified": "2026-08-24 11:15:00.000000",
+ "modified": "2026-09-17 16:00:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Liste Commande Import Article",

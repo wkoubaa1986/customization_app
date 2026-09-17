@@ -6,22 +6,44 @@
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
+  "tab_liste",
   "titre",
   "statut",
   "date_commande",
   "column_break_head",
   "fournisseur",
   "langue_cible",
+  "devise",
+  "date_reponse",
   "section_articles",
   "articles",
   "section_totaux",
   "nb_articles",
   "column_break_tot",
   "volume_total_m3",
+  "nb_lignes_cotees",
+  "nb_lignes_divergentes",
+  "montant_cible",
+  "montant_propose",
+  "montant_fichier",
+  "montant_retenu",
+  "ecart_global_pct",
   "section_notes",
-  "notes"
+  "notes",
+  "section_reponse_fichier",
+  "fichier_fournisseur",
+  "reponse_plan",
+  "section_conteneurs",
+  "nb_conteneurs",
+  "conteneurs_html",
+  "plan_conteneurs"
  ],
  "fields": [
+  {
+   "fieldname": "tab_liste",
+   "fieldtype": "Tab Break",
+   "label": "Liste"
+  },
   {
    "fieldname": "titre",
    "fieldtype": "Data",
@@ -36,7 +58,7 @@
    "in_list_view": 1,
    "in_standard_filter": 1,
    "label": "Statut",
-   "options": "Brouillon\nEnvoyée\nClôturée"
+   "options": "Brouillon\nEnvoyée\nRéponse reçue\nClôturée"
   },
   {
    "default": "Today",
@@ -92,26 +114,129 @@
   {
    "fieldname": "volume_total_m3",
    "fieldtype": "Float",
+   "in_list_view": 1,
    "label": "Volume total (m³)",
    "precision": "4",
-   "read_only": 1,
-   "in_list_view": 1
+   "read_only": 1
   },
   {
+   "collapsible": 1,
    "fieldname": "section_notes",
    "fieldtype": "Section Break",
-   "label": "Notes",
-   "collapsible": 1
+   "label": "Notes"
   },
   {
    "fieldname": "notes",
    "fieldtype": "Small Text",
    "label": "Notes"
+  },
+  {
+   "default": "USD",
+   "fieldname": "devise",
+   "fieldtype": "Link",
+   "label": "Devise",
+   "options": "Currency"
+  },
+  {
+   "fieldname": "date_reponse",
+   "fieldtype": "Date",
+   "label": "Date de la réponse",
+   "read_only": 1
+  },
+  {
+   "fieldname": "montant_cible",
+   "fieldtype": "Currency",
+   "label": "Montant cible",
+   "options": "devise",
+   "read_only": 1
+  },
+  {
+   "fieldname": "montant_propose",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "Montant proposé",
+   "options": "devise",
+   "read_only": 1
+  },
+  {
+   "fieldname": "ecart_global_pct",
+   "fieldtype": "Percent",
+   "label": "Écart global",
+   "precision": "1",
+   "read_only": 1
+  },
+  {
+   "fieldname": "nb_lignes_cotees",
+   "fieldtype": "Int",
+   "label": "Lignes cotées",
+   "read_only": 1
+  },
+  {
+   "fieldname": "montant_fichier",
+   "fieldtype": "Currency",
+   "label": "Montant du fichier",
+   "options": "devise",
+   "read_only": 1,
+   "description": "Somme des montants de ligne lus dans le classeur du fournisseur (sa propre addition)."
+  },
+  {
+   "fieldname": "montant_retenu",
+   "fieldtype": "Currency",
+   "label": "Montant retenu",
+   "options": "devise",
+   "read_only": 1,
+   "description": "Quantités et prix retenus par nous — c'est ce que vaut la contre-proposition."
+  },
+  {
+   "fieldname": "nb_lignes_divergentes",
+   "fieldtype": "Int",
+   "label": "Lignes divergentes",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_reponse_fichier",
+   "fieldtype": "Section Break",
+   "label": "Fichier du fournisseur",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "fichier_fournisseur",
+   "fieldtype": "Attach",
+   "label": "Dernier fichier reçu",
+   "read_only": 1
+  },
+  {
+   "fieldname": "reponse_plan",
+   "fieldtype": "Long Text",
+   "label": "Plan de lecture du fichier (JSON)",
+   "hidden": 1
+  },
+  {
+   "fieldname": "section_conteneurs",
+   "fieldtype": "Tab Break",
+   "label": "Conteneurs"
+  },
+  {
+   "fieldname": "nb_conteneurs",
+   "fieldtype": "Int",
+   "label": "Nombre de conteneurs",
+   "read_only": 1
+  },
+  {
+   "fieldname": "plan_conteneurs",
+   "fieldtype": "Long Text",
+   "label": "Plan de chargement (JSON)",
+   "hidden": 1
+  },
+  {
+   "fieldname": "conteneurs_html",
+   "fieldtype": "HTML",
+   "label": "Plan de chargement"
   }
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-07-17 15:00:00.000000",
+ "modified": "2026-09-17 15:00:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Liste Commande Import",

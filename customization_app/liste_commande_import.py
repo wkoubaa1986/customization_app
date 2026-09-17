@@ -531,14 +531,14 @@ def estimate_finished_products(docname, include_stock=1, bundle_codes=None,
     for r in doc.articles:
         if not r.item_code:
             continue
-        ordered[r.item_code] = ordered.get(r.item_code, 0) + flt(r.qty)
+        ordered[r.item_code] = ordered.get(r.item_code, 0) + _qty_ret(r)
         try:
             adds = json.loads(r.articles_additionnels or "[]") or []
         except Exception:
             adds = []
         for a in adds:
             code = a.get("item_code")
-            q = flt(a.get("qty_par_pack")) * flt(r.qty)
+            q = flt(a.get("qty_par_pack")) * _qty_ret(r)
             if code and q:
                 additionnels[code] = additionnels.get(code, 0) + q
 
@@ -651,15 +651,15 @@ def preview_row_export(docname, row_name):
     adds = _adds_map(doc).get(row.name, [])
     lines = []
     for a in adds:
-        tot = flt(a.get("qty_par_pack")) * flt(row.qty)
+        tot = flt(a.get("qty_par_pack")) * _qty_ret(row)
         lines.append(f"+ {L['additional']} : {_add_label(a)} "
-                     f"— {flt(a.get('qty_par_pack')):g}/{L['pack']} × {flt(row.qty):g} "
+                     f"— {flt(a.get('qty_par_pack')):g}/{L['pack']} × {_qty_ret(row):g} "
                      f"= {tot:g} {_uom_out(a.get('uom'), L)}")
     return {
         "name": row.item_name_traduit or row.item_name or "",
         "desc": row.description_traduite or _strip_html(row.description),
         "adds": lines,
-        "qty": f"{flt(row.qty):g} {_uom_out(row.uom, L)}",
+        "qty": f"{_qty_ret(row):g} {_uom_out(row.uom, L)}",
         "lang": doc.langue_cible or "English",
     }
 
@@ -742,6 +742,16 @@ def _add_label(a):
     return f"{name} ({brand})" if brand else name
 
 
+def _qty_ret(row):
+    """Quantité qui part dans les documents : la contre-proposition si elle
+    existe, sinon la quantité demandée (cf. lci_observation.qty_retenue).
+
+    Défini ici plutôt qu'importé pour éviter une dépendance circulaire :
+    lci_observation importe déjà ce module.
+    """
+    return flt(row.qty_cible) or flt(row.qty)
+
+
 def _adds_map(doc):
     """{row.name: additionnels} avec la marque complétée depuis la fiche
     Article quand elle manque (additionnels enregistrés avant l'ajout du
@@ -770,6 +780,7 @@ EXPORT_LABELS = {
         "description": "Description", "qty": "Quantité", "uom": "UDM",
         "unit_vol": "Volume unitaire (m³)", "line_vol": "Volume ligne (m³)",
         "unit_price": "Prix unitaire", "line_total": "Total",
+        "target_price": "Prix cible",
         "total": "TOTAL", "articles": "articles",
         "total_volume": "Volume total estimé",
         "additional": "ADDITIONNEL", "pack": "pack", "pcs": "Pièce",
@@ -781,6 +792,7 @@ EXPORT_LABELS = {
         "description": "Description", "qty": "Quantity", "uom": "UOM",
         "unit_vol": "Unit volume (m³)", "line_vol": "Line volume (m³)",
         "unit_price": "Unit price", "line_total": "Total",
+        "target_price": "Target price",
         "total": "TOTAL", "articles": "items",
         "total_volume": "Estimated total volume",
         "additional": "ADDITIONAL", "pack": "pack", "pcs": "Pcs",
@@ -792,6 +804,7 @@ EXPORT_LABELS = {
         "description": "Beschreibung", "qty": "Menge", "uom": "Einheit",
         "unit_vol": "Stückvolumen (m³)", "line_vol": "Zeilenvolumen (m³)",
         "unit_price": "Stückpreis", "line_total": "Gesamt",
+        "target_price": "Zielpreis",
         "total": "GESAMT", "articles": "Artikel",
         "total_volume": "Geschätztes Gesamtvolumen",
         "additional": "ZUSÄTZLICH", "pack": "Pack", "pcs": "Stk",
@@ -803,6 +816,7 @@ EXPORT_LABELS = {
         "description": "الوصف", "qty": "الكمية", "uom": "الوحدة",
         "unit_vol": "حجم الوحدة (م³)", "line_vol": "حجم السطر (م³)",
         "unit_price": "سعر الوحدة", "line_total": "المجموع",
+        "target_price": "السعر المستهدف",
         "total": "المجموع", "articles": "أصناف",
         "total_volume": "الحجم الإجمالي التقديري",
         "additional": "إضافي", "pack": "علبة", "pcs": "قطعة",
@@ -814,6 +828,7 @@ EXPORT_LABELS = {
         "description": "Descripción", "qty": "Cantidad", "uom": "UdM",
         "unit_vol": "Volumen unitario (m³)", "line_vol": "Volumen línea (m³)",
         "unit_price": "Precio unitario", "line_total": "Total",
+        "target_price": "Precio objetivo",
         "total": "TOTAL", "articles": "artículos",
         "total_volume": "Volumen total estimado",
         "additional": "ADICIONAL", "pack": "pack", "pcs": "Uds",
@@ -844,6 +859,10 @@ def download_pdf(docname):
     if doc.fournisseur:
         supplier = frappe.db.get_value("Supplier", doc.fournisseur, "supplier_name") or doc.fournisseur
 
+    # même règle que l'Excel : pas de colonne « prix cible » s'il n'y en a aucun
+    cible = any(flt(r.prix_cible) > 0 for r in doc.articles)
+    devise = doc.devise or "USD"
+
     adds_map = _adds_map(doc)
     rows_html = ""
     for i, r in enumerate(doc.articles, 1):
@@ -858,7 +877,7 @@ def download_pdf(docname):
         adds_qty = ""
         adds_img = ""
         for a in adds:
-            tot = flt(a.get("qty_par_pack")) * flt(r.qty)
+            tot = flt(a.get("qty_par_pack")) * _qty_ret(r)
             aname = _esc(_add_label(a))
             auom = _esc(_uom_out(a.get("uom"), L))
             aimg = _img_data_uri(a.get("image"))
@@ -869,7 +888,7 @@ def download_pdf(docname):
                           f'border:1px solid #e8b0b0;border-radius:4px;'
                           f'padding:3px 6px;margin-top:4px;">'
                           f'<b>+ {L["additional"]}</b> : {aname} — '
-                          f'{flt(a.get("qty_par_pack")):g}/{L["pack"]} × {flt(r.qty):g} '
+                          f'{flt(a.get("qty_par_pack")):g}/{L["pack"]} × {_qty_ret(r):g} '
                           f'= <b>{tot:g} {auom}</b></div>')
             adds_qty += (f'<div style="color:#b00020;font-weight:bold;">'
                          f'+{tot:g} {auom}</div>')
@@ -879,8 +898,10 @@ def download_pdf(docname):
           <td style="text-align:center;">{img_html}{('<br>' + adds_img) if adds_img else ''}</td>
           <td><span{dir_attr}><b>{_esc(name)}</b></span></td>
           <td{dir_attr}>{_esc(desc).replace(chr(10), '<br>')}{adds_desc}</td>
-          <td style="text-align:right;">{flt(r.qty):g} {_esc(_uom_out(r.uom, L))}{adds_qty}</td>
+          <td style="text-align:right;">{_qty_ret(r):g} {_esc(_uom_out(r.uom, L))}{adds_qty}</td>
           <td style="text-align:right;">{flt(r.volume_ligne_m3):.3f}</td>
+          {f'<td style="text-align:right;font-weight:bold;">{flt(r.prix_cible):g}</td>' if cible and flt(r.prix_cible) else ('<td></td>' if cible else '')}
+          <td style="width:70px;"></td>
         </tr>"""
 
     html = f"""
@@ -906,6 +927,8 @@ def download_pdf(docname):
           <th style="width:150px;">{L["designation"]}</th><th>{L["description"]}</th>
           <th style="width:80px;text-align:right;">{L["qty"]}</th>
           <th style="width:70px;text-align:right;">{L["line_vol"]}</th>
+          {f'<th style="width:70px;text-align:right;">{L["target_price"]} ({devise})</th>' if cible else ""}
+          <th style="width:70px;text-align:right;">{L["unit_price"]} ({devise})</th>
         </tr></thead>
         <tbody>{rows_html}</tbody>
       </table>
@@ -951,10 +974,19 @@ def download_excel(docname):
     if doc.langue_cible in RTL_LANGS:
         ws.sheet_view.rightToLeft = True
 
+    # la colonne « prix cible » n'apparaît que si la liste en porte au moins un :
+    # une colonne de zéros inviterait le fournisseur à coter à zéro.
+    cible = any(flt(r.prix_cible) > 0 for r in doc.articles)
+    devise = doc.devise or "USD"
     header = ["#", L["image"], L["designation"], L["description"],
-              L["qty"], L["uom"], L["unit_vol"], L["line_vol"],
-              L["unit_price"], L["line_total"]]
-    widths = [4, 14, 36, 58, 10, 8, 12, 12, 12, 12]
+              L["qty"], L["uom"], L["unit_vol"], L["line_vol"]]
+    widths = [4, 14, 36, 58, 10, 8, 12, 12]
+    if cible:
+        header.append(f'{L["target_price"]} ({devise})')
+        widths.append(14)
+    header += [f'{L["unit_price"]} ({devise})', L["line_total"]]
+    widths += [14, 12]
+    COL_VOL_LIGNE = 8  # colonne H — volume de ligne, pour le pied de tableau
     for c, w in enumerate(widths, 1):
         ws.column_dimensions[get_column_letter(c)].width = w
 
@@ -1000,9 +1032,11 @@ def download_excel(docname):
         desc = r.description_traduite or _strip_html(r.description)
         adds = adds_map.get(r.name, [])
 
-        ws.append([i, "", name, "", flt(r.qty),
-                   _uom_out(r.uom, L),
-                   flt(r.volume_unitaire_m3), flt(r.volume_ligne_m3), "", ""])
+        ligne = [i, "", name, "", _qty_ret(r), _uom_out(r.uom, L),
+                 flt(r.volume_unitaire_m3), flt(r.volume_ligne_m3)]
+        if cible:
+            ligne.append(flt(r.prix_cible) or "")
+        ws.append(ligne + ["", ""])
         row_no = ws.max_row
 
         # description concaténée avec les ADDITIONNELS (texte riche, en rouge),
@@ -1010,11 +1044,11 @@ def download_excel(docname):
         dcell = ws.cell(row=row_no, column=4)
         parts = [TextBlock(small, desc)] if desc else []
         for a in adds:
-            tot = flt(a.get("qty_par_pack")) * flt(r.qty)
+            tot = flt(a.get("qty_par_pack")) * _qty_ret(r)
             parts.append(TextBlock(
                 red,
                 f"\n+ {L['additional']} : {_add_label(a)} "
-                f"— {flt(a.get('qty_par_pack')):g}/{L['pack']} × {flt(r.qty):g} "
+                f"— {flt(a.get('qty_par_pack')):g}/{L['pack']} × {_qty_ret(r):g} "
                 f"= {tot:g} {_uom_out(a.get('uom'), L)}"))
         dcell.value = CellRichText(*parts) if parts else ""
         for c in range(1, len(header) + 1):  # toute la ligne centrée verticalement
@@ -1036,9 +1070,17 @@ def download_excel(docname):
                 col_off += 36
 
     ws.append([])
-    ws.append(["", "", L["total"], "", "", "", "", flt(doc.volume_total_m3), "", ""])
+    pied = [""] * len(header)
+    pied[2] = L["total"]
+    pied[COL_VOL_LIGNE - 1] = flt(doc.volume_total_m3)
+    ws.append(pied)
     ws.cell(row=ws.max_row, column=3).font = Font(bold=True)
-    ws.cell(row=ws.max_row, column=8).font = Font(bold=True)
+    ws.cell(row=ws.max_row, column=COL_VOL_LIGNE).font = Font(bold=True)
+
+    # onglet du plan de chargement, quand il y en a un (import local :
+    # lci_conteneurs importe déjà ce module).
+    from customization_app.lci_conteneurs import ecrire_feuille
+    ecrire_feuille(wb, doc)
 
     buf = io.BytesIO()
     wb.save(buf)

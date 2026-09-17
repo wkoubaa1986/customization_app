@@ -13,6 +13,10 @@ dependencies = [
     # redressement de perspective (caisse_depenses._scan_pdf). Entre dans l'image de
     # prod au build (pip install de l'app lit ce fichier).
     "opencv-python-headless~=4.10",
+    # Lecture des classeurs .xls (BIFF, d'avant 2007) que les fournisseurs
+    # chinois envoient encore : openpyxl ne sait pas les ouvrir
+    # (lci_reponse._feuilles).
+    "xlrd~=2.0",
 ]
 
 [build-system]

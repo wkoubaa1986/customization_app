@@ -1,13 +1,93 @@
+// Menus de la barre d'outils : la liste comptait neuf boutons côte à côte,
+// regroupés ici par intention (ajouter, organiser, produire la cotation…).
+const LCI_GRP_AJOUT = "➕ Ajouter";
+const LCI_GRP_ORGANISER = "🗂 Organiser";
+const LCI_GRP_COTATION = "📄 Cotation";
+
+// Colonnes facultatives de la table : la liste en compte trop pour tenir sur un
+// écran, chacun affiche celles qui servent à son étape (préparation, puis
+// négociation). Le choix est gardé dans le navigateur, par utilisateur.
+const LCI_COLONNES = [
+  { cle: "image", label: "Image" },
+  { cle: "uom", label: "UDM" },
+  { cle: "vol_unit", label: "Vol. unitaire (m³)" },
+  { cle: "vol_ligne", label: "Vol. ligne (m³)" },
+  { cle: "prix_cible", label: "Prix cible" },
+  { cle: "prix_frn", label: "Prix fournisseur" },
+  { cle: "qty_frn", label: "Qté fournisseur" },
+  { cle: "qty_cible", label: "Qté cible (retenue)" },
+  { cle: "prix_neg", label: "Prix cible négocié" },
+  { cle: "decision", label: "Décision" },
+  { cle: "remarque", label: "Remarque du fournisseur" },
+  { cle: "observation", label: "Observation (envoyée)" },
+  { cle: "conteneur", label: "Conteneur" },
+  { cle: "desc", label: "Description (icônes)" },
+];
+const LCI_COLS_KEY = "lci_colonnes_visibles";
+
+function lci_cols() {
+  let v = {};
+  try {
+    v = JSON.parse(window.localStorage.getItem(LCI_COLS_KEY) || "{}") || {};
+  } catch (e) {
+    v = {};   // navigation privée ou stockage bloqué : tout reste visible
+  }
+  const out = {};
+  LCI_COLONNES.forEach((c) => (out[c.cle] = v[c.cle] !== false));
+  return out;
+}
+
+function lci_cols_dialog(frm) {
+  const v = lci_cols();
+  const d = new frappe.ui.Dialog({
+    title: __("Colonnes affichées"),
+    fields: LCI_COLONNES.map((c, i) => [
+      ...(i === Math.ceil(LCI_COLONNES.length / 2)
+        ? [{ fieldtype: "Column Break" }] : []),
+      { fieldtype: "Check", fieldname: c.cle, label: __(c.label), default: v[c.cle] ? 1 : 0 },
+    ]).flat(),
+    primary_action_label: __("Appliquer"),
+    primary_action: (val) => {
+      const garde = {};
+      LCI_COLONNES.forEach((c) => (garde[c.cle] = !!val[c.cle]));
+      try {
+        window.localStorage.setItem(LCI_COLS_KEY, JSON.stringify(garde));
+      } catch (e) { /* stockage indisponible : l'affichage vaut pour cette session */ }
+      d.hide();
+      lci_render_table(frm);
+    },
+    secondary_action_label: __("Tout afficher"),
+    secondary_action: () => {
+      try {
+        window.localStorage.removeItem(LCI_COLS_KEY);
+      } catch (e) { /* rien à nettoyer */ }
+      d.hide();
+      lci_render_table(frm);
+    },
+  });
+  d.show();
+}
+
 frappe.ui.form.on("Liste Commande Import", {
   refresh(frm) {
     // le grid natif est remplacé par la table custom (données inchangées)
     frm.get_field("articles").$wrapper.hide();
     lci_render_table(frm);
+    lci_render_conteneurs(frm);
 
-    frm.add_custom_button(__("➕ Article du catalogue"), () => lci_add_catalogue(frm));
-    frm.add_custom_button(__("➕ Article libre"), () => lci_add_libre(frm));
-    frm.add_custom_button(__("🗂 Organiser par groupe puis code"), () => lci_organize(frm));
-    lci_doublons_bouton(frm);
+    frm.add_custom_button(__("Depuis le catalogue"),
+      () => lci_add_catalogue(frm), __(LCI_GRP_AJOUT));
+    frm.add_custom_button(__("Article libre (hors catalogue)"),
+      () => lci_add_libre(frm), __(LCI_GRP_AJOUT));
+    frm.add_custom_button(__("Trier par groupe puis code"),
+      () => lci_organize(frm), __(LCI_GRP_ORGANISER));
+    lci_doublons_bouton(frm);   // « Enlever les doublons », dans le même menu
+    frm.add_custom_button(__("Colonnes affichées…"),
+      () => lci_cols_dialog(frm), __(LCI_GRP_ORGANISER));
+
+    // la table est plus large que le gabarit centré du formulaire : on rend la
+    // page pleine largeur (même mécanique que la vue Kanban).
+    if (frm.page && frm.page.container) frm.page.container.addClass("full-width");
 
     // chemins de groupes (pour en-têtes) — chargés une fois puis re-render
     if (!frm.__lci_paths) {
@@ -22,20 +102,54 @@ frappe.ui.form.on("Liste Commande Import", {
     frm.add_custom_button(__("🌐 Traduire tout vers ") + (frm.doc.langue_cible || "English"),
       () => lci_ai(frm, "ai_translate", null), __("IA"));
 
-    frm.add_custom_button(__("📄 PDF cotation"), () => {
+    frm.add_custom_button(__("PDF à envoyer"), () => {
       window.open(`/api/method/customization_app.liste_commande_import.download_pdf?docname=${encodeURIComponent(frm.doc.name)}`);
-    });
-    frm.add_custom_button(__("📥 Excel"), () => {
+    }, __(LCI_GRP_COTATION));
+    frm.add_custom_button(__("Excel à envoyer"), () => {
       window.open(`/api/method/customization_app.liste_commande_import.download_excel?docname=${encodeURIComponent(frm.doc.name)}`);
-    });
+    }, __(LCI_GRP_COTATION));
+
+    if (frm.doc.fichier_fournisseur) {
+      frm.add_custom_button(__("📤 Renvoyer SON fichier annoté"),
+        () => lci_export_annote(frm), __(LCI_GRP_COTATION));
+    }
 
     frm.add_custom_button(__("🏭 Produits assemblables"), () => lci_estimation_dialog(frm));
+    frm.add_custom_button(__("🚢 Répartir en conteneurs"), () => lci_conteneurs_dialog(frm));
+
+    frm.add_custom_button(__("📩 Importer la réponse du fournisseur"),
+      () => lci_reponse_import(frm), __("💰 Prix"));
+    frm.add_custom_button(__("🎯 Proposer des prix cibles"),
+      () => lci_prix_cibles(frm), __("💰 Prix"));
+    frm.add_custom_button(__("💬 Rédiger les observations"),
+      () => lci_observations_ia(frm), __("IA"));
+    frm.add_custom_button(__("📐 Estimer les volumes manquants"),
+      () => lci_volumes_dialog(frm), __("IA"));
 
     if (frm.doc.volume_total_m3) {
       frm.dashboard.add_indicator(
         __("Volume total : {0} m³", [format_number(frm.doc.volume_total_m3, null, 3)]),
         frm.doc.volume_total_m3 > 60 ? "red" : "blue"
       );
+    }
+    if (flt(frm.doc.montant_propose)) {
+      frm.dashboard.add_indicator(
+        __("Proposé : {0}", [format_currency(frm.doc.montant_propose, frm.doc.devise)]), "blue");
+    }
+    if (flt(frm.doc.montant_retenu)
+        && Math.abs(flt(frm.doc.montant_retenu) - flt(frm.doc.montant_propose)) > 0.01) {
+      frm.dashboard.add_indicator(
+        __("Retenu : {0}", [format_currency(frm.doc.montant_retenu, frm.doc.devise)]), "green");
+    }
+    if (cint(frm.doc.nb_conteneurs)) {
+      frm.dashboard.add_indicator(
+        __("{0} conteneur(s)", [cint(frm.doc.nb_conteneurs)]), "purple");
+    }
+    if (flt(frm.doc.montant_cible) && flt(frm.doc.montant_propose)) {
+      const e = flt(frm.doc.ecart_global_pct);
+      frm.dashboard.add_indicator(
+        __("Écart / cible : {0} %", [format_number(e, null, 1)]),
+        e > 10 ? "red" : e > 0 ? "orange" : "green");
     }
   },
   langue_cible(frm) { frm.refresh(); },
@@ -87,18 +201,131 @@ function lci_add_additionnel(frm, row, it, qty_par_pack) {
 }
 
 function lci_recalc(frm, render = true) {
-  let total = 0;
+  // miroir du controller serveur : volumes, montants et écarts, pour que la
+  // saisie inline se voie immédiatement sans aller-retour.
+  let total = 0, cible = 0, propose = 0, cotees = 0, base_cmp = 0, cote_cmp = 0;
+  let fichier = 0, retenu = 0, divergentes = 0;
   lci_rows(frm).forEach((r) => {
-    let vol = flt(r.qty) * flt(r.volume_unitaire_m3);
+    if (flt(r.qty_par_carton) > 0 && flt(r.volume_carton_m3) > 0) {
+      r.volume_unitaire_m3 = flt(r.volume_carton_m3) / flt(r.qty_par_carton);
+    }
+    r.total_fournisseur = flt(r.qty) * flt(r.prix_fournisseur);
+    r.ecart_pct = (flt(r.prix_cible) > 0 && flt(r.prix_fournisseur) > 0)
+      ? (flt(r.prix_fournisseur) - flt(r.prix_cible)) / flt(r.prix_cible) * 100 : 0;
+    cible += flt(r.qty) * flt(r.prix_cible);
+    propose += flt(r.total_fournisseur);
+    if (flt(r.prix_fournisseur) > 0) cotees += 1;
+    if (flt(r.prix_cible) > 0 && flt(r.prix_fournisseur) > 0) {
+      base_cmp += flt(r.qty) * flt(r.prix_cible);
+      cote_cmp += flt(r.total_fournisseur);
+    }
+
+    if (lci_qty_divergente(r)) divergentes += 1;
+    fichier += lci_total_fichier(r);
+
+    // la quantité retenue est celle qui part réellement : elle compte le
+    // volume et remplit les conteneurs.
+    const q_ret = lci_qty_ret(r);
+    r.total_retenu = (r.decision === "Abandonné") ? 0 : q_ret * lci_prix_ret(r);
+    retenu += flt(r.total_retenu);
+
+    let vol = q_ret * flt(r.volume_unitaire_m3);
     lci_adds(r).forEach((a) => {  // volume des additionnels embarqués
-      vol += flt(r.qty) * flt(a.qty_par_pack) * flt(a.volume_unitaire_m3);
+      vol += q_ret * flt(a.qty_par_pack) * flt(a.volume_unitaire_m3);
     });
     r.volume_ligne_m3 = vol;
     total += vol;
   });
   frm.doc.volume_total_m3 = total;
   frm.doc.nb_articles = lci_rows(frm).length;
+  frm.doc.montant_cible = cible;
+  frm.doc.montant_propose = propose;
+  frm.doc.montant_retenu = retenu;
+  frm.doc.nb_lignes_cotees = cotees;
+  frm.doc.nb_lignes_divergentes = divergentes;
+  if (fichier) frm.doc.montant_fichier = fichier;
+  frm.doc.ecart_global_pct = base_cmp ? (cote_cmp - base_cmp) / base_cmp * 100 : 0;
   if (render) lci_render_table(frm);
+}
+
+// écart d'une ligne -> couleur : au-dessus de la cible c'est rouge, en dessous
+// c'est gagné. Entre les deux (0 à +10 %) la négociation reste ouverte.
+function lci_ecart_couleur(e) {
+  return e > 10 ? "#a8071a" : e > 0 ? "#ad6800" : "#135200";
+}
+
+// valeurs retenues — miroir exact de lci_observation.py côté serveur
+function lci_qty_ret(r) { return flt(r.qty_cible) || flt(r.qty); }
+function lci_prix_ret(r) { return flt(r.prix_cible_negocie) || flt(r.prix_fournisseur); }
+
+// montant de la ligne TEL QUE LE FOURNISSEUR L'ÉCRIT : sa colonne « Amount »
+// quand il en a une, sinon SA quantité × son prix. Jamais la nôtre.
+function lci_total_fichier(r) {
+  if (flt(r.total_fichier) > 0) return flt(r.total_fichier);
+  if (flt(r.prix_fournisseur) <= 0) return 0;
+  return (flt(r.qty_fournisseur) || flt(r.qty)) * flt(r.prix_fournisseur);
+}
+
+function lci_qty_divergente(r) {
+  return flt(r.qty_fournisseur) > 0 && flt(r.qty) > 0
+    && Math.abs(flt(r.qty_fournisseur) - flt(r.qty)) > 0.001;
+}
+
+function lci_cont_parts(r) {
+  try { return JSON.parse(r.repartition_conteneurs || "[]") || []; } catch (e) { return []; }
+}
+
+function lci_cont_label(r) {
+  const parts = lci_cont_parts(r);
+  if (!parts.length) return "";
+  if (parts.length === 1) return `C${parts[0].no}`;
+  return parts.map((p) => `C${p.no} (${format_number(flt(p.qty), null, 0)})`).join(" + ");
+}
+
+// ------------------------------------------------------------------ filtre
+// Purement visuel : il ne touche JAMAIS frm.doc.articles. Une ligne masquée
+// reste dans le document, sinon un filtre supprimerait des lignes à
+// l'enregistrement. Le glisser-déposer est neutralisé tant qu'il est actif :
+// réordonner une liste partielle déplacerait les lignes cachées.
+function lci_filtre(frm) {
+  if (!frm.__lci_filtre) frm.__lci_filtre = { decision: "", etat: "", texte: "" };
+  return frm.__lci_filtre;
+}
+
+function lci_filtre_actif(frm) {
+  const f = lci_filtre(frm);
+  return !!(f.decision || f.etat || (f.texte || "").trim());
+}
+
+function lci_rows_visibles(frm) {
+  const f = lci_filtre(frm);
+  const q = (f.texte || "").trim().toLowerCase();
+  return lci_rows(frm).filter((r) => {
+    if (f.decision === "__vide") { if (r.decision) return false; }
+    else if (f.decision && (r.decision || "") !== f.decision) return false;
+    if (f.etat === "cotee" && !(flt(r.prix_fournisseur) > 0)) return false;
+    if (f.etat === "non_cotee" && flt(r.prix_fournisseur) > 0) return false;
+    if (f.etat === "qty_ko" && !lci_qty_divergente(r)) return false;
+    if (f.etat === "au_dessus"
+        && !(flt(r.prix_cible) > 0 && flt(r.prix_fournisseur) > flt(r.prix_cible))) return false;
+    if (f.etat === "sans_conteneur" && lci_cont_parts(r).length) return false;
+    if (q) {
+      const txt = `${r.item_code || ""} ${r.item_name || ""} ${r.item_name_traduit || ""}`.toLowerCase();
+      if (!txt.includes(q)) return false;
+    }
+    return true;
+  });
+}
+
+function lci_frn_meta(frm, r) {
+  const dev = frm.doc.devise || "USD";
+  if (!flt(r.prix_fournisseur)) return "";
+  const tot = `<span class="lci-frn-tot">${format_currency(flt(r.total_fournisseur), dev)}</span>`;
+  if (!flt(r.prix_cible)) return `<div class="lci-frn-meta">${tot}</div>`;
+  const e = flt(r.ecart_pct);
+  const badge = `<span class="lci-ecart" style="color:${lci_ecart_couleur(e)};">`
+    + `${e > 0 ? "+" : ""}${format_number(e, null, 1)} %</span>`;
+  return `<div class="lci-frn-meta">${badge} · ${tot}</div>`;
 }
 
 async function lci_add_catalogue(frm) {
@@ -229,7 +456,8 @@ function lci_nb_repetes(frm) {
 
 function lci_doublons_bouton(frm) {
   if (frm.doc.docstatus !== 0) return;
-  const $b = frm.add_custom_button(__(LCI_DOUBLONS), () => lci_enlever_doublons(frm));
+  const $b = frm.add_custom_button(__(LCI_DOUBLONS), () => lci_enlever_doublons(frm),
+                                   __(LCI_GRP_ORGANISER));
   if ($b) {
     $b.attr("title", __("Regroupe les lignes du même article en une seule : les quantités sont ADDITIONNÉES sur la première ligne. Rien n'est écrit avant que vous enregistriez."));
   }
@@ -241,6 +469,11 @@ function lci_doublons_etat(frm) {
   const n = lci_nb_repetes(frm);
   const $b = frm.custom_buttons && frm.custom_buttons[__(LCI_DOUBLONS)];
   if ($b) $b.toggleClass("btn-warning", n > 0);
+  // le bouton vit désormais dans un menu fermé la plupart du temps : c'est le
+  // bouton du GROUPE qui doit porter l'alerte, sinon le signal reste caché.
+  const $grp = frm.page && frm.page.get_inner_group_button
+    ? frm.page.get_inner_group_button(__(LCI_GRP_ORGANISER)) : null;
+  if ($grp && $grp.length) $grp.find("button").toggleClass("btn-warning", n > 0);
 
   // show_message EMPILE les blocs et clear_headline viderait aussi ceux de Frappe :
   // on ne retire que le nôtre.
@@ -366,8 +599,8 @@ function lci_desc_dialog(frm, row) {
         <div style="color:#a8071a;background:#fff1f0;border:1px solid #ffa39e;border-radius:6px;
                     padding:4px 8px;margin-bottom:4px;font-size:12px;">
           ➕ <b>ADDITIONNEL</b> : ${esc(lci_add_label(a))}
-          — ${format_number(flt(a.qty_par_pack), null, 0)}/pack × ${format_number(flt(row.qty), null, 0)}
-          = <b>${format_number(flt(a.qty_par_pack) * flt(row.qty), null, 0)} ${esc(a.uom || "")}</b>
+          — ${format_number(flt(a.qty_par_pack), null, 0)}/pack × ${format_number(lci_qty_ret(row), null, 0)}
+          = <b>${format_number(flt(a.qty_par_pack) * lci_qty_ret(row), null, 0)} ${esc(a.uom || "")}</b>
         </div>`).join("")}
       <div class="lci-gmeta">${__("Ajoutés automatiquement EN ROUGE dans le PDF de cotation (description + quantité + image). Gestion via le bouton 🧬 de la ligne (✕ pour retirer).")}</div>
     </div>`;
@@ -432,6 +665,58 @@ function lci_desc_dialog(frm, row) {
 
 // ------------------------------------------------------------------ table
 
+// Rapprochement des montants : quatre chiffres qui ne veulent pas dire la même
+// chose. Tant qu'ils cohabitent sans être nommés, « la somme ne correspond pas
+// à l'Excel » revient à chaque cotation.
+function lci_rapprochement(frm) {
+  const dev = frm.doc.devise || "USD";
+  const fichier = flt(frm.doc.montant_fichier);
+  if (!fichier) return "";
+  const propose = flt(frm.doc.montant_propose);
+  const retenu = flt(frm.doc.montant_retenu);
+  const div = cint(frm.doc.nb_lignes_divergentes);
+  const ecart = propose - fichier;
+  const colle = Math.abs(ecart) < Math.max(0.01, fichier * 0.001);
+  const sep = `<span class="lci-rapp-sep">·</span>`;
+  return `<div class="lci-rapp${colle ? " ok" : ""}">
+    ${colle ? "✅" : "📊"} ${__("Son fichier")} : <b>${format_currency(fichier, dev)}</b>${sep}
+    ${__("à nos quantités")} : <b>${format_currency(propose, dev)}</b>${sep}
+    ${__("retenu")} : <b>${format_currency(retenu, dev)}</b>
+    ${colle ? "" : `<br>${__("Écart de {0} — {1} ligne(s) cotée(s) sur une autre quantité que la nôtre.",
+      [`<b>${format_currency(Math.abs(ecart), dev)}</b>`, `<b>${div}</b>`])}
+      ${div ? `<a href="#" class="lci-fl-voir">${__("voir ces lignes")}</a>` : ""}`}
+  </div>`;
+}
+
+function lci_barre_filtre(frm, rows, vis) {
+  const F = lci_filtre(frm);
+  const opt = (v, lbl, sel) => `<option value="${v}" ${sel === v ? "selected" : ""}>${lbl}</option>`;
+  const actif = lci_filtre_actif(frm);
+  return `<div class="lci-filtres">
+    <span>🔎</span>
+    <select data-fl="decision">
+      ${opt("", __("Toutes les décisions"), F.decision)}
+      ${opt("__vide", __("— sans décision —"), F.decision)}
+      ${["À négocier", "Accepté", "Abandonné"].map((o) => opt(o, __(o), F.decision)).join("")}
+    </select>
+    <select data-fl="etat">
+      ${opt("", __("Toutes les lignes"), F.etat)}
+      ${opt("cotee", __("Cotées"), F.etat)}
+      ${opt("non_cotee", __("Non cotées"), F.etat)}
+      ${opt("qty_ko", __("Quantité divergente"), F.etat)}
+      ${opt("au_dessus", __("Au-dessus de la cible"), F.etat)}
+      ${opt("sans_conteneur", __("Sans conteneur"), F.etat)}
+    </select>
+    <input type="search" data-fl="texte" value="${frappe.utils.escape_html(F.texte || "")}"
+           placeholder="${__("code ou désignation…")}" style="width:180px;">
+    ${actif ? `<button class="btn btn-xs btn-default" data-fl="reset">✕ ${__("Filtre")}</button>` : ""}
+    <span class="lci-fl-count${actif ? " lci-fl-on" : ""}">
+      ${actif ? __("{0} ligne(s) sur {1}", [vis.length, rows.length])
+              : __("{0} ligne(s)", [rows.length])}</span>
+    ${actif ? `<span class="lci-fl-count">${__("· réorganisation désactivée sous filtre")}</span>` : ""}
+  </div>`;
+}
+
 function lci_render_table(frm) {
   const field = frm.get_field("articles");
   if (!field || !field.$wrapper) return;
@@ -440,75 +725,191 @@ function lci_render_table(frm) {
     $t = $('<div class="lci-table-wrap"></div>').insertBefore(field.$wrapper);
   }
   const rows = lci_rows(frm);
+  const vis = lci_rows_visibles(frm);      // filtre : affichage seulement
+  const filtre_on = lci_filtre_actif(frm);
   const esc = frappe.utils.escape_html;
   const paths = frm.__lci_paths || {};
   const strip = (h) => $("<div>").html((h || "").replace(/<br\s*\/?>/gi, " ")).text();
+  const V = lci_cols();          // colonnes retenues par l'utilisateur
+  const dev = frm.doc.devise || "USD";
+  // #, désignation, qté et actions sont toujours là ; le reste est facultatif
+  const nb_cols = 4 + LCI_COLONNES.filter((c) => V[c.cle]).length;
 
   let body = "";
   let prev_group = null;
-  rows.forEach((r, i) => {
+  vis.forEach((r) => {
+    const i = rows.indexOf(r);   // la position affichée reste la vraie position
     // en-tête de groupe (chemin hiérarchique complet) quand le groupe change
     const g = r.item_group || "";
     if (g !== prev_group) {
       const label = g ? (paths[g] || g) : __("Articles libres / sans groupe");
-      const members = rows.filter((x) => (x.item_group || "") === g);
+      const members = vis.filter((x) => (x.item_group || "") === g);
       const vol = members.reduce((s, x) => s + flt(x.volume_ligne_m3), 0);
-      body += `<tr class="lci-ghead"><td colspan="9">📁 ${esc(label)}
-        <span class="lci-gmeta">· ${members.length} article(s) · ${format_number(vol, null, 3)} m³</span></td></tr>`;
+      const mnt = members.reduce((s2, x) => s2 + flt(x.total_fournisseur), 0);
+      body += `<tr class="lci-ghead"><td colspan="${nb_cols}">📁 ${esc(label)}
+        <span class="lci-gmeta">· ${members.length} article(s) · ${format_number(vol, null, 3)} m³${
+          mnt ? " · " + format_currency(mnt, frm.doc.devise || "USD") : ""}</span></td></tr>`;
       prev_group = g;
     }
     const tr_name = (r.item_name_traduit || "").trim();
     const tr_desc = strip(r.description_traduite);
     const tr_txt = [tr_name, tr_desc].filter(Boolean).join(" — ");
-    body += `
-    <tr data-name="${esc(r.name)}" data-idx="${i}">
-      <td class="lci-c lci-drag" title="${__("Glisser pour déplacer · double-clic : envoyer à la ligne…")}">
+    const dec_cls = r.decision === "Accepté" ? " lci-dec-ok"
+      : r.decision === "Abandonné" ? " lci-dec-ko" : "";
+    const cells = [];
+    cells.push(`<td class="lci-c lci-drag" title="${__("Glisser pour déplacer · double-clic : envoyer à la ligne…")}">
         <div class="lci-dragnum">⠿ ${i + 1}</div>
         <div class="lci-updown"><span data-act="up" title="${__("Monter")}">▲</span><span data-act="down" title="${__("Descendre")}">▼</span></div>
-      </td>
-      <td class="lci-c">
+      </td>`);
+
+    if (V.image) {
+      const adds_img = lci_adds(r).filter((a) => a.image);
+      cells.push(`<td class="lci-c">
         <div class="lci-imgbox" data-act="image" title="${__("Changer l'image")}">
           ${r.image ? `<img src="${esc(r.image)}">` : `<span class="lci-noimg">📦</span>`}
         </div>
-        ${(() => {
-          const adds = lci_adds(r).filter((a) => a.image);
-          return adds.length ? `<div class="lci-addimgs">${adds.map((a) =>
-            `<img class="lci-addimg" src="${esc(a.image)}" title="${esc(a.item_name || a.item_code)} (ADDITIONNEL)">`).join("")}</div>` : "";
-        })()}
-      </td>
-      <td>
-        ${r.item_code
-          ? `<a href="/app/item/${encodeURIComponent(r.item_code)}" target="_blank" class="lci-code">${esc(r.item_code)}</a>`
-          : `<span class="lci-libre">${__("libre")}</span>`}
-        <input class="lci-inp lci-name" data-f="item_name" value="${esc(r.item_name || "")}"
-               placeholder="${__("Désignation…")}">
-        ${(() => {
-          const d0 = strip(r.description);
-          return d0 ? `<div class="lci-desc0" data-act="desc" title="${esc(d0)}">${esc(d0.slice(0, 100))}${d0.length > 100 ? "…" : ""}</div>` : "";
-        })()}
-        ${tr_txt ? `<div class="lci-tr" data-act="desc" title="${esc(tr_txt)}">🌐 ${esc(tr_txt.slice(0, 90))}${tr_txt.length > 90 ? "…" : ""}</div>` : ""}
-        ${lci_adds(r).map((a, ai) => `
-          <div class="lci-add">➕ <b>ADDITIONNEL</b> : ${esc(lci_add_label(a))}
-            — ${format_number(flt(a.qty_par_pack), null, 0)}/pack × ${format_number(flt(r.qty), null, 0)}
-            = <b>${format_number(flt(a.qty_par_pack) * flt(r.qty), null, 0)} ${esc(a.uom || "")}</b>
-            <span class="lci-add-x" data-addx="${ai}" title="${__("Retirer cet additionnel")}">✕</span></div>`).join("")}
-      </td>
-      <td><input class="lci-inp lci-num" data-f="qty" type="number" step="any" value="${r.qty ?? ""}"></td>
-      <td><input class="lci-inp lci-uom" data-f="uom" value="${esc(r.uom || "")}"></td>
-      <td><input class="lci-inp lci-num" data-f="volume_unitaire_m3" type="number" step="any"
-                 value="${r.volume_unitaire_m3 ?? ""}"></td>
-      <td class="lci-c lci-volligne">${format_number(flt(r.volume_ligne_m3), null, 3)}</td>
-      <td class="lci-c lci-desc-state" data-act="desc" title="${__("Voir / éditer la description")}">
+        ${adds_img.length ? `<div class="lci-addimgs">${adds_img.map((a) =>
+          `<img class="lci-addimg" src="${esc(a.image)}" title="${esc(a.item_name || a.item_code)} (ADDITIONNEL)">`).join("")}</div>` : ""}
+      </td>`);
+    }
+
+    const d0 = strip(r.description);
+    cells.push(`<td>
+      ${r.item_code
+        ? `<a href="/app/item/${encodeURIComponent(r.item_code)}" target="_blank" class="lci-code">${esc(r.item_code)}</a>`
+        : `<span class="lci-libre">${__("libre")}</span>`}
+      <input class="lci-inp lci-name" data-f="item_name" value="${esc(r.item_name || "")}"
+             placeholder="${__("Désignation…")}">
+      ${d0 ? `<div class="lci-desc0" data-act="desc" title="${esc(d0)}">${esc(d0.slice(0, 100))}${d0.length > 100 ? "…" : ""}</div>` : ""}
+      ${tr_txt ? `<div class="lci-tr" data-act="desc" title="${esc(tr_txt)}">🌐 ${esc(tr_txt.slice(0, 90))}${tr_txt.length > 90 ? "…" : ""}</div>` : ""}
+      ${lci_adds(r).map((a, ai) => `
+        <div class="lci-add">➕ <b>ADDITIONNEL</b> : ${esc(lci_add_label(a))}
+          — ${format_number(flt(a.qty_par_pack), null, 0)}/pack × ${format_number(lci_qty_ret(r), null, 0)}
+          = <b>${format_number(flt(a.qty_par_pack) * lci_qty_ret(r), null, 0)} ${esc(a.uom || "")}</b>
+          <span class="lci-add-x" data-addx="${ai}" title="${__("Retirer cet additionnel")}">✕</span></div>`).join("")}
+    </td>`);
+
+    cells.push(`<td><input class="lci-inp lci-num" data-f="qty" type="number" step="any" value="${r.qty ?? ""}"></td>`);
+    if (V.uom) cells.push(`<td><input class="lci-inp lci-uom" data-f="uom" value="${esc(r.uom || "")}"></td>`);
+    if (V.vol_unit) {
+      cells.push(`<td><input class="lci-inp lci-num${r.volume_estime ? " lci-vol-est" : ""}"
+                 data-f="volume_unitaire_m3" type="number" step="any"
+                 value="${r.volume_unitaire_m3 ?? ""}"
+                 title="${r.volume_estime ? __("Volume estimé par l'IA — non recopié sur la fiche Article")
+                                          : __("Volume unitaire (m³)")}">
+        ${r.volume_estime ? `<div class="lci-vol-est-l">≈ ${__("estimé")}</div>` : ""}</td>`);
+    }
+    if (V.vol_ligne) {
+      cells.push(`<td class="lci-c lci-volligne">${format_number(flt(r.volume_ligne_m3), null, 3)}</td>`);
+    }
+    if (V.prix_cible) {
+      cells.push(`<td><input class="lci-inp lci-num lci-cible" data-f="prix_cible" type="number" step="any"
+                 value="${r.prix_cible || ""}" placeholder="${__("cible")}"></td>`);
+    }
+    if (V.prix_frn) {
+      cells.push(`<td>
+        <input class="lci-inp lci-num lci-frn" data-f="prix_fournisseur" type="number" step="any"
+               value="${r.prix_fournisseur || ""}" placeholder="${__("fourn.")}">
+        ${lci_frn_meta(frm, r)}
+        ${r.reponse_source ? `<div class="lci-src" title="${esc(r.reponse_source)}">↩ ${esc(r.reponse_source.slice(0, 26))}</div>` : ""}
+      </td>`);
+    }
+    if (V.qty_frn) {
+      // une quantité cotée différente de la nôtre change le prix négocié :
+      // elle doit se voir, pas se deviner.
+      const ecart_q = flt(r.qty_fournisseur) > 0 && Math.abs(flt(r.qty_fournisseur) - flt(r.qty)) > 0.001;
+      cells.push(`<td>
+        <input class="lci-inp lci-num${ecart_q ? " lci-qty-ko" : ""}" data-f="qty_fournisseur"
+               type="number" step="any" value="${r.qty_fournisseur || ""}" placeholder="${__("qté")}"
+               title="${__("Quantité cotée ou facturée par le fournisseur")}">
+        ${ecart_q ? `<div class="lci-qty-note">${__("nous : {0}", [format_number(flt(r.qty), null, 0)])}</div>` : ""}
+      </td>`);
+    }
+    if (V.qty_cible) {
+      // ce qu'on retient après arbitrage : vide = on garde notre quantité.
+      const q_ret = lci_qty_ret(r);
+      const base = flt(r.qty_fournisseur) || flt(r.qty);
+      const bouge = flt(r.qty_cible) > 0 && Math.abs(q_ret - base) > 0.001;
+      cells.push(`<td>
+        <input class="lci-inp lci-num${bouge ? " lci-ret-ko" : ""}" data-f="qty_cible"
+               type="number" step="any" value="${r.qty_cible || ""}"
+               placeholder="${format_number(flt(r.qty), null, 0)}"
+               title="${__("Quantité retenue pour la contre-proposition (vide = {0})", [format_number(flt(r.qty), null, 0)])}">
+      </td>`);
+    }
+    if (V.prix_neg) {
+      const t = flt(r.total_retenu);
+      cells.push(`<td>
+        <input class="lci-inp lci-num lci-neg" data-f="prix_cible_negocie" type="number" step="any"
+               value="${r.prix_cible_negocie || ""}"
+               placeholder="${r.prix_fournisseur ? format_number(flt(r.prix_fournisseur), null, 4) : __("négocié")}"
+               title="${__("Prix que nous demandons au second tour (vide = son prix accepté)")}">
+        ${t ? `<div class="lci-frn-meta lci-frn-tot">${format_currency(t, dev)}</div>` : ""}
+      </td>`);
+    }
+    if (V.decision) {
+      cells.push(`<td>
+        <select class="lci-inp lci-dec" data-f="decision">
+          ${["", "À négocier", "Accepté", "Abandonné"].map((o) =>
+            `<option value="${esc(o)}" ${(r.decision || "") === o ? "selected" : ""}>${esc(o || "—")}</option>`).join("")}
+        </select>
+      </td>`);
+    }
+    if (V.remarque) {
+      const rq = r.remarque_fournisseur || "";
+      cells.push(`<td><input class="lci-inp lci-rq" data-f="remarque_fournisseur"
+                 value="${esc(rq)}" title="${esc(rq)}" placeholder="${__("observation…")}"></td>`);
+    }
+    if (V.observation) {
+      const ob = r.observation || "";
+      const auto = ob && ob === (r.observation_auto || "");
+      cells.push(`<td>
+        <textarea class="lci-inp lci-obs${auto ? " lci-obs-auto" : ""}" data-f="observation" rows="2"
+          placeholder="${__("écrite seule à l'enregistrement…")}"
+          title="${auto ? __("Texte généré : il suit les écarts tant que vous n'y touchez pas.")
+                        : __("Texte à vous : l'automatisme ne l'écrasera plus.")}">${esc(ob)}</textarea>
+      </td>`);
+    }
+    if (V.conteneur) {
+      const cl = lci_cont_label(r);
+      cells.push(`<td class="lci-c">${cl
+        ? `<span class="lci-cont">${esc(cl)}</span>`
+        : `<span style="opacity:.3;">—</span>`}</td>`);
+    }
+    if (V.desc) {
+      cells.push(`<td class="lci-c lci-desc-state" data-act="desc" title="${__("Voir / éditer la description")}">
         ${r.description ? "📝" : '<span style="opacity:.25;">📝</span>'}${r.description_traduite ? " 🌐" : ""}
-      </td>
-      <td class="lci-actions">
-        ${r.item_code ? `<button class="btn btn-xs btn-default" data-act="fam" title="${__("Variantes / articles apparentés")}">🧬</button>` : ""}
-        <button class="btn btn-xs btn-default" data-act="ai" title="${__("Améliorer cette ligne (IA)")}">✨</button>
-        <button class="btn btn-xs btn-default" data-act="tr" title="${__("Traduire cette ligne (IA)")}">🌐</button>
-        <button class="btn btn-xs btn-default" data-act="del" title="${__("Supprimer")}">🗑</button>
-      </td>
-    </tr>`;
+      </td>`);
+    }
+    cells.push(`<td class="lci-actions">
+      ${r.item_code ? `<button class="btn btn-xs btn-default" data-act="fam" title="${__("Variantes / articles apparentés")}">🧬</button>` : ""}
+      <button class="btn btn-xs btn-default" data-act="ai" title="${__("Améliorer cette ligne (IA)")}">✨</button>
+      <button class="btn btn-xs btn-default" data-act="tr" title="${__("Traduire cette ligne (IA)")}">🌐</button>
+      <button class="btn btn-xs btn-default" data-act="del" title="${__("Supprimer")}">🗑</button>
+    </td>`);
+
+    body += `<tr data-name="${esc(r.name)}" data-idx="${i}" class="${dec_cls.trim()}">${cells.join("")}</tr>`;
   });
+
+  const th = [];
+  th.push(`<th style="width:46px;">#</th>`);
+  if (V.image) th.push(`<th style="width:60px;">${__("Image")}</th>`);
+  th.push(`<th>${__("Article / Désignation")}</th>`);
+  th.push(`<th style="width:90px;">${__("Qté")}</th>`);
+  if (V.uom) th.push(`<th style="width:70px;">${__("UDM")}</th>`);
+  if (V.vol_unit) th.push(`<th style="width:90px;">${__("Vol. unit (m³)")}</th>`);
+  if (V.vol_ligne) th.push(`<th style="width:80px;">${__("Vol. ligne")}</th>`);
+  if (V.prix_cible) th.push(`<th style="width:92px;">${__("Prix cible")} (${esc(dev)})</th>`);
+  if (V.prix_frn) th.push(`<th style="width:120px;">${__("Prix fourn.")} (${esc(dev)})</th>`);
+  if (V.qty_frn) th.push(`<th style="width:92px;">${__("Qté fourn.")}</th>`);
+  if (V.qty_cible) th.push(`<th style="width:92px;">${__("Qté retenue")}</th>`);
+  if (V.prix_neg) th.push(`<th style="width:110px;">${__("Prix négocié")} (${esc(dev)})</th>`);
+  if (V.decision) th.push(`<th style="width:104px;">${__("Décision")}</th>`);
+  if (V.remarque) th.push(`<th style="width:160px;">${__("Remarque fourn.")}</th>`);
+  if (V.observation) th.push(`<th style="width:220px;">${__("Observation")}</th>`);
+  if (V.conteneur) th.push(`<th style="width:90px;">${__("Conteneur")}</th>`);
+  if (V.desc) th.push(`<th style="width:56px;">${__("Desc.")}</th>`);
+  th.push(`<th style="width:110px;">${__("Actions")}</th>`);
 
   $t.html(`
     <style>
@@ -543,6 +944,19 @@ function lci_render_table(frm) {
                           color: #0958d9; padding: 5px 10px; border-top: 2px solid #91caff; }
       .lci-gmeta { font-weight: 600; color: #6b7280; font-size: 10.5px; }
       .lci-num { width: 84px; text-align: right; }
+      .lci-cible { background: #fffbe6; }
+      .lci-frn-meta { font-size: 10.5px; margin-top: 2px; text-align: right; white-space: nowrap; }
+      .lci-ecart { font-weight: 800; }
+      .lci-frn-tot { color: var(--text-muted,#8a93a0); }
+      .lci-src { font-size: 9.5px; color: #8a93a0; text-align: right; overflow: hidden;
+                 text-overflow: ellipsis; white-space: nowrap; }
+      .lci-dec { width: 96px; font-size: 11px; padding: 2px 4px;
+                 border: 1px solid var(--border-color,#e4e8ee); }
+      .lci-qty-ko { color: #ad6800; font-weight: 700; background: #fffbe6; }
+      .lci-qty-note { font-size: 9.5px; color: #ad6800; text-align: right; white-space: nowrap; }
+      .lci-rq { font-size: 11px; min-width: 120px; }
+      tr.lci-dec-ok > td { background: #f6ffed; }
+      tr.lci-dec-ko > td { background: #fff1f0; opacity: .6; }
       .lci-uom { width: 64px; }
       .lci-volligne { font-weight: 700; white-space: nowrap; }
       .lci-desc-state { cursor: pointer; font-size: 14px; white-space: nowrap; }
@@ -570,19 +984,61 @@ function lci_render_table(frm) {
       .lci-addimgs { margin-top: 3px; display: flex; gap: 2px; justify-content: center; flex-wrap: wrap; }
       .lci-addimg { width: 22px; height: 22px; object-fit: contain; border: 1px solid #ffa39e;
                     border-radius: 4px; background: #fff; }
+      .lci-ret-ko { color: #0958d9; font-weight: 700; background: #e6f4ff; }
+      .lci-vol-est { background: #fff7e6; color: #ad6800; }
+      .lci-vol-est-l { font-size: 9.5px; color: #ad6800; text-align: right; }
+      .lci-neg { background: #f9f0ff; }
+      .lci-obs { min-width: 200px; font-size: 11px; resize: vertical; line-height: 1.35; }
+      .lci-obs-auto { color: #0958d9; font-style: italic; }
+      .lci-cont { font-size: 11px; font-weight: 700; color: #391085; background: #f9f0ff;
+                  border: 1px solid #d3adf7; border-radius: 6px; padding: 1px 6px; white-space: nowrap; }
+      .lci-filtres { display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+                     margin-bottom: 6px; font-size: 12px; }
+      .lci-filtres select, .lci-filtres input { font-size: 11.5px; padding: 3px 6px; height: 26px;
+        border: 1px solid var(--border-color,#e4e8ee); border-radius: 6px; background: var(--card-bg,#fff); }
+      .lci-fl-count { font-size: 11px; color: var(--text-muted,#8a93a0); }
+      .lci-fl-on { color: #ad6800; font-weight: 700; }
+      .lci-rapp { font-size: 11.5px; border-radius: 8px; padding: 6px 10px; margin-bottom: 6px;
+                  border: 1px solid #ffe58f; background: #fffbe6; color: #614700; }
+      .lci-rapp b { color: #874d00; }
+      .lci-rapp.ok { border-color: #b7eb8f; background: #f6ffed; color: #135200; }
+      .lci-rapp.ok b { color: #135200; }
+      .lci-rapp-sep { color: #d9d9d9; padding: 0 4px; }
     </style>
+    ${lci_rapprochement(frm)}
+    ${lci_barre_filtre(frm, rows, vis)}
     <table class="lci-tbl">
-      <thead><tr>
-        <th style="width:46px;">#</th><th style="width:60px;">${__("Image")}</th>
-        <th>${__("Article / Désignation")}</th>
-        <th style="width:90px;">${__("Qté")}</th><th style="width:70px;">UDM</th>
-        <th style="width:90px;">${__("Vol. unit (m³)")}</th>
-        <th style="width:80px;">${__("Vol. ligne")}</th>
-        <th style="width:56px;">${__("Desc.")}</th>
-        <th style="width:110px;">${__("Actions")}</th>
-      </tr></thead>
+      <thead><tr>${th.join("")}</tr></thead>
       <tbody>${body}</tbody>
     </table>`);
+
+  // ------------------------------------------------------------ filtre
+  const F = lci_filtre(frm);
+  $t.find("[data-fl]").on("change", function () {
+    const cle = $(this).data("fl");
+    if (cle === "reset") return;
+    F[cle] = this.value;
+    lci_render_table(frm);
+  });
+  $t.find('[data-fl="texte"]').on("input", function () {
+    F.texte = this.value;
+    frm.__lci_focus_filtre = true;
+    lci_render_table(frm);
+  });
+  $t.find(".lci-fl-voir").on("click", (e) => {
+    e.preventDefault();
+    F.etat = "qty_ko";
+    lci_render_table(frm);
+  });
+  $t.find('[data-fl="reset"]').on("click", () => {
+    frm.__lci_filtre = { decision: "", etat: "", texte: "" };
+    lci_render_table(frm);
+  });
+  if (frm.__lci_focus_filtre) {
+    frm.__lci_focus_filtre = false;
+    const el = $t.find('[data-fl="texte"]').get(0);
+    if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+  }
 
   const row_of = (e) => {
     const name = $(e.currentTarget).closest("tr").data("name");
@@ -595,14 +1051,28 @@ function lci_render_table(frm) {
     const row = row_of(e);
     if (!row) return;
     const f = $(e.currentTarget).data("f");
+    const NUM = ["qty", "volume_unitaire_m3", "prix_cible", "prix_fournisseur",
+                 "qty_fournisseur", "qty_cible", "prix_cible_negocie"];
     let v = $(e.currentTarget).val();
-    if (["qty", "volume_unitaire_m3"].includes(f)) v = flt(v);
+    if (NUM.includes(f)) v = flt(v);
     if (row[f] === v) return;
     frappe.model.set_value(row.doctype, row.name, f, v);
-    if (["qty", "volume_unitaire_m3"].includes(f)) {
+    if (f === "volume_unitaire_m3" && row.volume_estime) {
+      // corrigé à la main : ce n'est plus une estimation, il peut repartir
+      // vers la fiche Article.
+      frappe.model.set_value(row.doctype, row.name, "volume_estime", 0);
+    }
+    if (NUM.includes(f)) {
       lci_recalc(frm, false);
       const $tr = $(e.currentTarget).closest("tr");
       $tr.find(".lci-volligne").text(format_number(flt(row.volume_ligne_m3), null, 3));
+      $tr.find(".lci-frn-meta").remove();
+      $tr.find(".lci-frn").after(lci_frn_meta(frm, row));
+    }
+    if (f === "decision") {
+      const $tr = $(e.currentTarget).closest("tr");
+      $tr.removeClass("lci-dec-ok lci-dec-ko")
+        .addClass(v === "Accepté" ? "lci-dec-ok" : v === "Abandonné" ? "lci-dec-ko" : "");
     }
   });
 
@@ -665,7 +1135,7 @@ function lci_render_table(frm) {
     $inp.on("mousedown dblclick", (ev) => ev.stopPropagation());
   });
 
-  lci_bind_sortable(frm, $t);
+  if (!filtre_on) lci_bind_sortable(frm, $t);   // voir lci_rows_visibles
   lci_doublons_etat(frm);   // couleur du bouton + bandeau suivent chaque rendu (ajout, retrait, fusion)
 }
 
@@ -1118,4 +1588,1099 @@ function lci_estimation_dialog(frm) {
 
   d.show();
   load();
+}
+
+// ==================================================================
+// Réponse du fournisseur : import du classeur chiffré et appariement
+// ==================================================================
+
+// Valeurs qu'une ligne du fichier fournisseur propose d'écrire dans la LCI.
+// Le volume au carton prime : c'est la mesure que le fournisseur maîtrise.
+function lci_valeurs_source(src) {
+  const v = {};
+  if (!src) return v;
+  if (src.prix_unitaire != null) v.prix_fournisseur = src.prix_unitaire;
+  if (src.total != null) v.total_fichier = src.total;   // SON addition, pour le rapprochement
+  if (src.qty != null) v.qty_fournisseur = src.qty;
+  if (src.moq != null) v.moq = src.moq;
+  if (src.pcs_carton != null) v.qty_par_carton = src.pcs_carton;
+  if (src.volume_carton_m3 != null) v.volume_carton_m3 = src.volume_carton_m3;
+  else if (src.volume_unitaire_m3 != null) v.volume_unitaire_m3 = src.volume_unitaire_m3;
+  if (src.remarque) v.remarque_fournisseur = src.remarque;
+  return v;
+}
+
+function lci_src_label(src) {
+  if (!src) return "";
+  return `L${src.ligne} · ${src.code || ""} ${src.designation || ""}`.trim();
+}
+
+async function lci_reponse_import(frm) {
+  if (frm.is_new()) {
+    frappe.msgprint(__("Enregistrez d'abord le document."));
+    return;
+  }
+  if (frm.is_dirty()) {
+    frappe.msgprint(__("Enregistrez vos modifications en cours (Ctrl+S) avant d'importer la réponse."));
+    return;
+  }
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = ".xlsx,.xlsm,.xls,application/vnd.ms-excel,"
+    + "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+  input.onchange = async () => {
+    const file = input.files[0];
+    if (!file) return;
+    const fd = new FormData();
+    fd.append("file", file, file.name);
+    fd.append("is_private", "1");   // une grille de prix fournisseur reste privée
+    fd.append("doctype", frm.doc.doctype);
+    fd.append("docname", frm.doc.name);
+    frappe.dom.freeze(__("Lecture du fichier fournisseur…"));
+    let url;
+    try {
+      const res = await fetch("/api/method/upload_file", {
+        method: "POST",
+        headers: { "X-Frappe-CSRF-Token": frappe.csrf_token },
+        body: fd,
+      });
+      url = (await res.json()).message?.file_url;
+    } catch (e) {
+      url = null;
+    }
+    if (!url) {
+      frappe.dom.unfreeze();
+      frappe.msgprint(__("Échec de l'envoi du fichier."));
+      return;
+    }
+    try {
+      const r = await frappe.call({
+        method: "customization_app.lci_reponse.analyser_reponse",
+        args: { docname: frm.doc.name, file_url: url },
+      });
+      frappe.dom.unfreeze();
+      if (r.message) lci_reponse_dialog(frm, r.message, file.name);
+    } catch (e) {
+      frappe.dom.unfreeze();   // le message d'erreur serveur s'affiche seul
+    }
+  };
+  input.click();
+}
+
+function lci_reponse_dialog(frm, data, filename) {
+  const esc = frappe.utils.escape_html;
+  const dev = data.devise || "USD";
+  const src_by_id = {};
+  (data.sources || []).forEach((s) => (src_by_id[s.id] = s));
+
+  // état modifiable de l'aperçu : source retenue et prix retenu par ligne
+  const st = {};
+  data.lignes.forEach((l) => {
+    const src = l.source ? src_by_id[l.source] : null;
+    st[l.row] = {
+      source: l.source || "",
+      prix: src && src.prix_unitaire != null ? src.prix_unitaire : null,
+      apply: !!l.source,
+    };
+  });
+
+  let tout = false;   // afficher aussi les lignes sans correspondance
+
+  const d = new frappe.ui.Dialog({
+    title: __("Réponse du fournisseur"),
+    size: "extra-large",
+    fields: [{ fieldtype: "HTML", fieldname: "zone" }],
+    primary_action_label: __("Appliquer à la liste"),
+    primary_action: async () => {
+      const lignes = data.lignes
+        .filter((l) => st[l.row].apply)
+        .map((l) => {
+          const src = src_by_id[st[l.row].source];
+          const valeurs = lci_valeurs_source(src);
+          if (st[l.row].prix != null && st[l.row].prix !== "") {
+            valeurs.prix_fournisseur = flt(st[l.row].prix);
+            // son montant de ligne ne vaut plus rien si on corrige son prix
+            if (src && src.total != null) valeurs.total_fichier = 0;
+          }
+          return { row: l.row, valeurs, source_label: lci_src_label(src),
+                   source_id: st[l.row].source || "" };
+        })
+        .filter((x) => Object.keys(x.valeurs).length);
+      if (!lignes.length) {
+        frappe.msgprint(__("Aucune ligne sélectionnée."));
+        return;
+      }
+      const r = await frappe.call({
+        method: "customization_app.lci_reponse.appliquer_reponse",
+        args: { docname: frm.doc.name, lignes: JSON.stringify(lignes),
+                plan: JSON.stringify(data.plan || null) },
+        freeze: true,
+        freeze_message: __("Écriture des prix…"),
+      });
+      d.hide();
+      await frm.reload_doc();
+      lci_render_table(frm);
+      const m = r.message || {};
+      frappe.msgprint({
+        title: __("Réponse importée"),
+        indicator: "green",
+        message: __("{0} ligne(s) mise(s) à jour.", [m.maj])
+          + (m.montant_fichier
+            ? `<br>${__("Son fichier additionne")} : <b>${format_currency(m.montant_fichier, dev)}</b>`
+              + (m.nb_lignes_divergentes
+                ? ` <span style="color:#ad6800;">(${__("{0} ligne(s) cotée(s) sur une autre quantité",
+                    [m.nb_lignes_divergentes])})</span>` : "")
+            : "")
+          + `<br>${__("Montant à nos quantités")} : <b>${format_currency(m.montant_propose, dev)}</b>`
+          + (m.montant_cible
+            ? ` &nbsp;·&nbsp; ${__("cible")} : ${format_currency(m.montant_cible, dev)}`
+              + ` &nbsp;·&nbsp; ${__("écart")} : <b style="color:${lci_ecart_couleur(m.ecart_global_pct)};">`
+              + `${m.ecart_global_pct > 0 ? "+" : ""}${format_number(m.ecart_global_pct, null, 1)} %</b>`
+            : "")
+          + `<br>${__("Volume total")} : <b>${format_number(m.volume_total_m3, null, 3)} m³</b>`,
+      });
+    },
+  });
+
+  const $z = d.fields_dict.zone.$wrapper;
+
+  function render() {
+    const visibles = data.lignes.filter((l) => tout || st[l.row].source);
+    const options = [`<option value="">${__("— aucune —")}</option>`].concat(
+      (data.sources || []).map((s) =>
+        `<option value="${esc(s.id)}">${esc(lci_src_label(s))}${
+          s.prix_unitaire != null ? ` — ${s.prix_unitaire}` : ""}</option>`));
+
+    // une même ligne fournisseur servie deux fois est presque toujours une erreur
+    const usage = {};
+    data.lignes.forEach((l) => {
+      if (st[l.row].apply && st[l.row].source) {
+        usage[st[l.row].source] = (usage[st[l.row].source] || 0) + 1;
+      }
+    });
+
+    const body = visibles.map((l) => {
+      const s = st[l.row];
+      const src = s.source ? src_by_id[s.source] : null;
+      const prix = s.prix != null ? s.prix : "";
+      const ecart = (l.prix_cible > 0 && flt(prix) > 0)
+        ? (flt(prix) - l.prix_cible) / l.prix_cible * 100 : null;
+      const qty_ko = src && src.qty != null && Math.abs(flt(src.qty) - flt(l.qty)) > 0.001;
+      const v = lci_valeurs_source(src);
+      const extras = [
+        v.moq != null ? `MOQ ${format_number(v.moq, null, 0)}` : "",
+        v.qty_par_carton != null ? `${format_number(v.qty_par_carton, null, 0)}/ctn` : "",
+        v.volume_carton_m3 != null ? `${format_number(v.volume_carton_m3, null, 4)} m³/ctn` : "",
+        v.volume_unitaire_m3 != null ? `${format_number(v.volume_unitaire_m3, null, 4)} m³/u` : "",
+      ].filter(Boolean).join(" · ");
+
+      return `<tr data-row="${esc(l.row)}" class="${s.apply ? "" : "lci-rep-off"}">
+        <td class="lci-c"><input type="checkbox" data-k="apply" ${s.apply ? "checked" : ""}></td>
+        <td class="lci-c">${l.idx}</td>
+        <td>
+          <div><b>${esc(l.item_code || __("libre"))}</b></div>
+          <div class="lci-rep-nom">${esc(l.item_name || "")}</div>
+        </td>
+        <td class="lci-c">${format_number(l.qty, null, 0)}</td>
+        <td class="lci-c${qty_ko ? " lci-rep-qko" : ""}"
+            title="${qty_ko ? __("Le fournisseur a coté une quantité différente de la vôtre") : ""}">
+          ${src && src.qty != null ? format_number(src.qty, null, 0) : "—"}
+        </td>
+        <td>
+          <select class="form-control input-xs" data-k="source">${options.join("")}</select>
+          <div class="lci-rep-meta">
+            ${l.methode ? `<span class="lci-rep-badge">${esc(l.methode)}${
+              l.confiance && l.confiance < 1 ? ` ${Math.round(l.confiance * 100)} %` : ""}</span>` : ""}
+            ${usage[s.source] > 1 ? `<span class="lci-rep-warn">${__("utilisée {0}×", [usage[s.source]])}</span>` : ""}
+          </div>
+          ${extras ? `<div class="lci-rep-extra">${esc(extras)}</div>` : ""}
+        </td>
+        <td class="lci-c">${l.prix_cible ? format_number(l.prix_cible, null, 4) : "—"}</td>
+        <td><input type="number" step="any" class="form-control input-xs lci-rep-prix"
+                   data-k="prix" value="${prix}"></td>
+        <td class="lci-c" style="color:${ecart == null ? "#8a93a0" : lci_ecart_couleur(ecart)};font-weight:700;">
+          ${ecart == null ? "—" : `${ecart > 0 ? "+" : ""}${format_number(ecart, null, 1)} %`}
+        </td>
+      </tr>`;
+    }).join("");
+
+    const orphelines = (data.orphelines || []).map((id) => src_by_id[id]).filter(Boolean);
+    const nb_sel = data.lignes.filter((l) => st[l.row].apply).length;
+    const total_sel = data.lignes.reduce((acc, l) =>
+      acc + (st[l.row].apply ? flt(st[l.row].prix) * flt(l.qty) : 0), 0);
+    // même prix, quantités différentes : deux totaux, et l'écart se voit.
+    let nb_qty_ko = 0;
+    const total_frn = data.lignes.reduce((acc, l) => {
+      if (!st[l.row].apply) return acc;
+      const src = src_by_id[st[l.row].source];
+      const q = src && src.qty != null ? flt(src.qty) : flt(l.qty);
+      if (src && src.qty != null && Math.abs(q - flt(l.qty)) > 0.001) nb_qty_ko += 1;
+      return acc + flt(st[l.row].prix) * q;
+    }, 0);
+
+    $z.html(`
+      <style>
+        .lci-rep-info { font-size: 11.5px; color: var(--text-muted,#6b7280); margin-bottom: 8px; }
+        .lci-rep-info b { color: var(--text-color,#1f272e); }
+        table.lci-rep { width: 100%; border-collapse: collapse; font-size: 12px; }
+        table.lci-rep th { background: var(--bg-light-gray,#f6f8fa); font-size: 10px;
+          text-transform: uppercase; color: #6b7280; padding: 5px 6px; text-align: left;
+          position: sticky; top: 0; z-index: 2; }
+        table.lci-rep td { padding: 4px 6px; border-bottom: 1px solid var(--border-color,#eef1f5);
+          vertical-align: middle; }
+        .lci-rep-wrap { max-height: 54vh; overflow: auto; border: 1px solid var(--border-color,#e4e8ee);
+          border-radius: 8px; }
+        tr.lci-rep-off { opacity: .45; }
+        .lci-rep-nom { font-size: 11px; color: var(--text-muted,#8a93a0); max-width: 300px;
+          overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .lci-rep-meta { margin-top: 2px; }
+        .lci-rep-badge { font-size: 9.5px; background: #e6f4ff; color: #0958d9; border-radius: 5px;
+          padding: 1px 5px; margin-right: 3px; }
+        .lci-rep-warn { font-size: 9.5px; background: #fff1f0; color: #a8071a; border-radius: 5px;
+          padding: 1px 5px; margin-right: 3px; }
+        .lci-rep-extra { font-size: 10px; color: #135200; background: #f6ffed; border-radius: 5px;
+          padding: 1px 5px; margin-top: 2px; display: inline-block; }
+        .lci-rep-prix { width: 92px; text-align: right; }
+        .lci-rep-qko { color: #ad6800; font-weight: 800; background: #fffbe6; }
+        .lci-rep-qdiff { font-size: 11.5px; color: #ad6800; margin-top: 3px; }
+        .lci-rep-orph { margin-top: 10px; font-size: 11.5px; }
+        .lci-rep-orph li { color: #a8071a; }
+        .lci-rep-foot { margin-top: 8px; font-size: 12.5px; }
+      </style>
+      <div class="lci-rep-info">
+        📄 <b>${esc(filename || "")}</b> · ${__("feuille")} <b>${esc(data.feuille)}</b>,
+        ${__("en-tête ligne")} ${data.ligne_entete} ·
+        <b>${(data.sources || []).length}</b> ${__("ligne(s) de cotation lue(s)")}<br>
+        ${__("Colonnes reconnues")} : ${Object.entries(data.colonnes || {})
+          .map(([k, v]) => `<b>${esc(k)}</b>${v ? ` (${esc(v)})` : ""}`).join(" · ")}
+      </div>
+      <label style="font-size:12px;">
+        <input type="checkbox" id="lci-rep-tout" ${tout ? "checked" : ""}>
+        ${__("Afficher aussi les {0} ligne(s) sans correspondance",
+             [data.lignes.length - data.lignes.filter((l) => l.source).length])}
+      </label>
+      <div class="lci-rep-wrap">
+        <table class="lci-rep">
+          <thead><tr>
+            <th style="width:30px;"></th><th style="width:34px;">#</th>
+            <th>${__("Ligne de la liste")}</th>
+            <th style="width:54px;">${__("Qté")}</th>
+            <th style="width:66px;">${__("Qté fourn.")}</th>
+            <th style="width:34%;">${__("Ligne du fournisseur")}</th>
+            <th style="width:78px;">${__("Cible")}</th>
+            <th style="width:100px;">${__("Prix")} (${esc(dev)})</th>
+            <th style="width:72px;">${__("Écart")}</th>
+          </tr></thead>
+          <tbody>${body || `<tr><td colspan="9" style="padding:14px;text-align:center;color:#8a93a0;">${
+            __("Aucune correspondance trouvée — cochez « afficher toutes les lignes » pour apparier à la main.")}</td></tr>`}</tbody>
+        </table>
+      </div>
+      <div class="lci-rep-foot">
+        <b>${nb_sel}</b> ${__("ligne(s) à écrire")} ·
+        ${__("total à vos quantités")} <b>${format_currency(total_sel, dev)}</b>
+        ${nb_qty_ko ? `<div class="lci-rep-qdiff">⚠️ ${
+          __("{0} ligne(s) cotées sur une quantité différente de la vôtre — total aux quantités du fournisseur : {1}",
+             [nb_qty_ko, format_currency(total_frn, dev)])}</div>` : ""}
+      </div>
+      ${orphelines.length ? `<div class="lci-rep-orph">
+        ⚠️ <b>${orphelines.length}</b> ${__("ligne(s) du fournisseur ne correspondent à aucun article de la liste")} :
+        <ul>${orphelines.slice(0, 12).map((o) =>
+          `<li>L${o.ligne} — ${esc(o.code || "")} ${esc(o.designation || "")}${
+            o.prix_unitaire != null ? ` — ${o.prix_unitaire}` : ""}</li>`).join("")}
+        ${orphelines.length > 12 ? `<li>… ${orphelines.length - 12} ${__("autres")}</li>` : ""}</ul>
+      </div>` : ""}
+    `);
+
+    // les <select> sont posés après coup : une valeur avec « : » casse le sélecteur CSS
+    $z.find("tr[data-row]").each(function () {
+      const row = $(this).data("row");
+      $(this).find('[data-k="source"]').val(st[row].source || "");
+    });
+
+    $z.find("#lci-rep-tout").on("change", function () {
+      tout = this.checked;
+      render();
+    });
+    $z.find('[data-k="apply"]').on("change", function () {
+      st[$(this).closest("tr").data("row")].apply = this.checked;
+      render();
+    });
+    $z.find('[data-k="source"]').on("change", function () {
+      const row = $(this).closest("tr").data("row");
+      const src = src_by_id[this.value];
+      st[row].source = this.value;
+      st[row].prix = src && src.prix_unitaire != null ? src.prix_unitaire : null;
+      st[row].apply = !!this.value;
+      render();
+    });
+    $z.find('[data-k="prix"]').on("change", function () {
+      const row = $(this).closest("tr").data("row");
+      st[row].prix = this.value === "" ? null : flt(this.value);
+      render();
+    });
+  }
+
+  render();
+  d.show();
+}
+
+// ------------------------------------------------- prix cibles suggérés
+
+async function lci_prix_cibles(frm) {
+  if (frm.is_new()) {
+    frappe.msgprint(__("Enregistrez d'abord le document."));
+    return;
+  }
+  const r = await frappe.call({
+    method: "customization_app.lci_reponse.prix_cible_suggere",
+    args: { docname: frm.doc.name },
+    freeze: true,
+    freeze_message: __("Recherche des références de prix…"),
+  });
+  const lignes = (r.message || {}).lignes || [];
+  const dev = (r.message || {}).devise || frm.doc.devise || "USD";
+  if (!lignes.length) {
+    frappe.msgprint({
+      title: __("Aucune référence"),
+      indicator: "orange",
+      message: __("Aucun prix historique en {0} pour les articles de cette liste. "
+        + "Les prix cibles sont à saisir à la main dans la colonne « Prix cible ».", [dev]),
+    });
+    return;
+  }
+  const esc = frappe.utils.escape_html;
+  const par_nom = {};
+  lci_rows(frm).forEach((x) => (par_nom[x.name] = x));
+  const choix = {};
+  lignes.forEach((l) => (choix[l.row] = true));
+
+  const d = new frappe.ui.Dialog({
+    title: __("Prix cibles suggérés ({0})", [dev]),
+    size: "large",
+    fields: [{ fieldtype: "HTML", fieldname: "zone" }],
+    primary_action_label: __("Appliquer aux lignes cochées"),
+    primary_action: () => {
+      let n = 0;
+      lignes.forEach((l) => {
+        if (!choix[l.row] || !par_nom[l.row]) return;
+        frappe.model.set_value(par_nom[l.row].doctype, l.row, "prix_cible", flt(l.prix));
+        n += 1;
+      });
+      d.hide();
+      lci_recalc(frm);
+      frappe.show_alert({
+        message: __("{0} prix cible(s) proposé(s) — enregistrez pour figer.", [n]),
+        indicator: "blue",
+      });
+    },
+  });
+
+  const $z = d.fields_dict.zone.$wrapper;
+  $z.html(`
+    <div style="font-size:11.5px;color:#6b7280;margin-bottom:8px;">
+      ${__("Reprise du dernier prix connu <b>dans la même devise</b> : cotation précédente du même "
+        + "fournisseur, sinon d'un autre, sinon dernier achat facturé. Rien n'est écrit tant que "
+        + "vous n'avez pas enregistré.")}
+    </div>
+    <div style="max-height:52vh;overflow:auto;border:1px solid var(--border-color,#e4e8ee);border-radius:8px;">
+    <table class="lci-rep" style="width:100%;border-collapse:collapse;font-size:12px;">
+      <thead><tr>
+        <th style="width:30px;"></th><th>${__("Article")}</th>
+        <th style="width:100px;">${__("Cible actuelle")}</th>
+        <th style="width:100px;">${__("Proposé")}</th>
+        <th style="width:38%;">${__("Source")}</th>
+      </tr></thead>
+      <tbody>${lignes.map((l) => `
+        <tr data-row="${esc(l.row)}">
+          <td style="text-align:center;"><input type="checkbox" checked></td>
+          <td><b>${esc(l.item_code)}</b><div style="font-size:11px;color:#8a93a0;">${
+            esc((par_nom[l.row] || {}).item_name || "")}</div></td>
+          <td style="text-align:right;">${
+            flt((par_nom[l.row] || {}).prix_cible) ? format_number((par_nom[l.row] || {}).prix_cible, null, 4) : "—"}</td>
+          <td style="text-align:right;font-weight:700;">${format_number(l.prix, null, 4)}</td>
+          <td style="font-size:11px;color:#6b7280;">${esc(l.source || "")}</td>
+        </tr>`).join("")}</tbody>
+    </table></div>`);
+  $z.find("input[type=checkbox]").on("change", function () {
+    choix[$(this).closest("tr").data("row")] = this.checked;
+  });
+  d.show();
+}
+
+// --------------------------------------- renvoi du fichier du fournisseur
+
+function lci_export_annote(frm) {
+  if (!frm.doc.fichier_fournisseur) {
+    frappe.msgprint({
+      title: __("Aucun fichier du fournisseur"),
+      indicator: "orange",
+      message: __("Importez d'abord sa réponse (💰 Prix → Importer la réponse du fournisseur) : "
+        + "c'est le fichier reçu qui sert de base au renvoi."),
+    });
+    return;
+  }
+  if (frm.is_dirty()) {
+    frappe.msgprint(__("Enregistrez d'abord : le fichier est rempli avec la version enregistrée."));
+    return;
+  }
+  const url = "/api/method/customization_app.lci_export_fournisseur.download_reponse_annotee"
+    + `?docname=${encodeURIComponent(frm.doc.name)}`;
+  // un .xls (format d'avant 2007) ne se réécrit pas : il est reconstruit en
+  // .xlsx, donc ses photos et sa mise en forme ne suivent pas. Autant le dire
+  // avant, pas une fois le fichier envoyé au fournisseur.
+  if ((frm.doc.fichier_fournisseur || "").toLowerCase().endsWith(".xls")) {
+    frappe.confirm(
+      __("Son fichier est au vieux format .xls : il sera renvoyé en .xlsx. "
+        + "Les valeurs, l'ordre des lignes et ses colonnes sont conservés ; "
+        + "ses photos et sa mise en forme, non.<br><br>Continuer ?"),
+      () => window.open(url));
+    return;
+  }
+  window.open(url);
+}
+
+// ------------------------------------------------ observations rédigées
+
+async function lci_observations_ia(frm) {
+  if (frm.is_dirty()) {
+    frappe.msgprint(__("Enregistrez d'abord : l'IA part des écarts enregistrés."));
+    return;
+  }
+  const r = await frappe.call({
+    method: "customization_app.lci_observation.ai_observations",
+    args: { docname: frm.doc.name },
+    freeze: true,
+    freeze_message: __("Rédaction des observations…"),
+  });
+  const m = r.message || {};
+  await frm.reload_doc();
+  lci_render_table(frm);
+  frappe.show_alert({
+    message: m.maj ? __("{0} observation(s) rédigée(s).", [m.maj])
+                   : (m.message || __("Rien à commenter.")),
+    indicator: m.maj ? "green" : "blue",
+  });
+}
+
+// ------------------------------------------------------- conteneurs
+
+// « 2 × 40' HC + 1 × 20' » — la flotte en une ligne (miroir de resume_gabarits).
+function lci_ct_flotte(conteneurs) {
+  const ordre = [];
+  const compte = {};
+  (conteneurs || []).forEach((c) => {
+    const t = c.type || "40' HC";
+    if (!(t in compte)) ordre.push(t);
+    compte[t] = (compte[t] || 0) + 1;
+  });
+  return ordre.map((t) => `${compte[t]} × ${t}`).join(" + ");
+}
+
+async function lci_conteneurs_dialog(frm) {
+  if (frm.is_new()) {
+    frappe.msgprint(__("Enregistrez d'abord le document."));
+    return;
+  }
+  if (frm.is_dirty()) {
+    frappe.msgprint(__("Enregistrez d'abord : la répartition se calcule sur les volumes enregistrés."));
+    return;
+  }
+  const esc = frappe.utils.escape_html;
+  const dev = frm.doc.devise || "USD";
+  // `type` est le gabarit PAR DÉFAUT (nouveaux conteneurs) ; `types` porte
+  // celui de chaque conteneur, ce qui permet de mélanger 20' et 40' HC.
+  const etat = { type: "40' HC", taux: 0.9, types: [], dates: [], plan: null, unites: {} };
+  let dernier_ajout = null;   // conteneur à mettre en évidence après un ajout
+  const LCI_GABARITS = ["20'", "40'", "40' HC"];
+  const lci_cap = (c) => flt(c && c.capacite) || flt((etat.plan || {}).capacite);
+
+  const d = new frappe.ui.Dialog({
+    title: __("Répartition en conteneurs"),
+    size: "extra-large",
+    fields: [{ fieldtype: "HTML", fieldname: "zone" }],
+    primary_action_label: __("Appliquer la répartition"),
+    primary_action: async () => {
+      if (!etat.plan) return;
+      // conteneurs vidés à la main : on les retire et on renumérote, sinon la
+      // liste porterait un « C3 » qui ne contient rien.
+      const pleins = etat.plan.conteneurs.filter((c) => (c.lignes || []).length);
+      pleins.forEach((c, i) => (c.no = i + 1));
+      etat.plan.conteneurs = pleins;
+      const r = await frappe.call({
+        method: "customization_app.lci_conteneurs.appliquer_plan",
+        args: { docname: frm.doc.name, plan: JSON.stringify(etat.plan) },
+        freeze: true,
+        freeze_message: __("Écriture du plan de chargement…"),
+      });
+      d.hide();
+      await frm.reload_doc();
+      lci_render_table(frm);
+      lci_render_conteneurs(frm);
+      const m = r.message || {};
+      frappe.show_alert({
+        message: __("{0} conteneur(s) enregistré(s) — {1}.",
+                    [m.nb_conteneurs, m.gabarits || ""]),
+        indicator: "green",
+      });
+    },
+  });
+  const $z = d.fields_dict.zone.$wrapper;
+
+  function recalculer_totaux() {
+    etat.plan.conteneurs.forEach((c) => {
+      c.volume = 0;
+      c.montant = 0;
+      (c.lignes || []).forEach((l) => {
+        const u = etat.unites[l.row] || { vu: 0, pu: 0 };
+        l.volume = flt(l.qty) * u.vu;
+        l.montant = flt(l.qty) * u.pu;
+        c.volume += l.volume;
+        c.montant += l.montant;
+      });
+    });
+  }
+
+  async function calculer() {
+    const r = await frappe.call({
+      method: "customization_app.lci_conteneurs.plan_auto",
+      args: { docname: frm.doc.name, type_conteneur: etat.type, taux: etat.taux,
+              types: JSON.stringify(etat.types), dates: JSON.stringify(etat.dates) },
+      freeze: true,
+      freeze_message: __("Calcul du chargement…"),
+    });
+    etat.plan = r.message || { conteneurs: [], sans_volume: [] };
+    etat.types = (etat.plan.conteneurs || []).map((c) => c.type || etat.type);
+    etat.dates = (etat.plan.conteneurs || []).map((c) => c.date || "");
+    // volume et montant à l'unité : tout déplacement manuel s'y réfère
+    etat.unites = {};
+    (etat.plan.conteneurs || []).forEach((c) => (c.lignes || []).forEach((l) => {
+      etat.unites[l.row] = {
+        vu: flt(l.qty) ? flt(l.volume) / flt(l.qty) : 0,
+        pu: flt(l.qty) ? flt(l.montant) / flt(l.qty) : 0,
+        libelle: l.libelle,
+      };
+    }));
+    render();
+  }
+
+  function lci_ct_ajouter() {
+    const c = { no: etat.plan.conteneurs.length + 1, type: etat.type, date: "",
+                capacite: flt(etat.plan.capacite), volume: 0, montant: 0, lignes: [] };
+    etat.plan.conteneurs.push(c);
+    etat.types.push(etat.type);
+    etat.dates.push("");
+    dernier_ajout = c.no;   // sinon il naît tout en bas, hors de l'écran
+    return c;
+  }
+
+  function lci_ct_supprimer(ci) {
+    if (etat.plan.conteneurs.length <= 1) {
+      frappe.show_alert({ message: __("Il faut au moins un conteneur."), indicator: "orange" });
+      return;
+    }
+    etat.types.splice(ci, 1);
+    etat.dates.splice(ci, 1);
+    calculer();   // ses lignes doivent retrouver une place : on recalcule
+  }
+
+  function deplacer(ci, li, dest) {
+    const part = etat.plan.conteneurs[ci].lignes.splice(li, 1)[0];
+    if (dest === "__new") {
+      lci_ct_ajouter();
+      dest = etat.plan.conteneurs.length - 1;
+    }
+    const cible = etat.plan.conteneurs[cint(dest)];
+    const meme = cible.lignes.find((l) => l.row === part.row);
+    if (meme) meme.qty = flt(meme.qty) + flt(part.qty);   // deux morceaux réunis
+    else cible.lignes.push(part);
+    recalculer_totaux();
+    render();
+  }
+
+  function scinder(ci, li) {
+    const part = etat.plan.conteneurs[ci].lignes[li];
+    const options = etat.plan.conteneurs.map((c, i) => ({ label: `C${c.no}`, value: String(i) }))
+      .filter((o) => cint(o.value) !== ci);
+    options.push({ label: __("nouveau conteneur"), value: "__new" });
+    frappe.prompt([
+      { fieldname: "qty", label: __("Quantité à déplacer"), fieldtype: "Float",
+        default: Math.floor(flt(part.qty) / 2), reqd: 1,
+        description: __("sur {0}", [format_number(flt(part.qty), null, 0)]) },
+      { fieldname: "dest", label: __("Vers"), fieldtype: "Select",
+        options: options.map((o) => o.label).join("\n"), default: options[0].label },
+    ], (v) => {
+      const q = flt(v.qty);
+      if (q <= 0 || q >= flt(part.qty)) {
+        frappe.show_alert({ message: __("Quantité à scinder invalide."), indicator: "orange" });
+        return;
+      }
+      part.qty = flt(part.qty) - q;
+      part.scinde = true;
+      const dest = (options.find((o) => o.label === v.dest) || options[0]).value;
+      const copie = { row: part.row, libelle: part.libelle, qty: q, scinde: true };
+      if (dest === "__new") {
+        lci_ct_ajouter().lignes.push(copie);
+      } else {
+        const cible = etat.plan.conteneurs[cint(dest)];
+        const meme = cible.lignes.find((l) => l.row === copie.row);
+        if (meme) meme.qty = flt(meme.qty) + q;
+        else cible.lignes.push(copie);
+      }
+      recalculer_totaux();
+      render();
+    }, __("Scinder la ligne"), __("Scinder"));
+  }
+
+  function render() {
+    const plan = etat.plan || { conteneurs: [], sans_volume: [], capacite: 0 };
+    const vol_total = plan.conteneurs.reduce((a, c) => a + flt(c.volume), 0);
+    const mnt_total = plan.conteneurs.reduce((a, c) => a + flt(c.montant), 0);
+    const opts_conteneurs = (ci) => plan.conteneurs
+      .map((c, i) => `<option value="${i}" ${i === ci ? "selected" : ""}>C${c.no}</option>`)
+      .join("") + `<option value="__new">${__("+ nouveau")}</option>`;
+
+    const blocs = plan.conteneurs.map((c, ci) => {
+      const cc = lci_cap(c);
+      const pct = cc ? Math.min(100, flt(c.volume) / cc * 100) : 0;
+      const plein = flt(c.volume) > cc + 0.0001;
+      return `<div class="lci-ct${dernier_ajout === c.no ? " neuf" : ""}" data-no="${c.no}">
+        <div class="lci-ct-head">
+          <b>C${c.no}</b>
+          <span class="lci-ct-gab-l">${esc(c.type || etat.type)}</span>
+          ${c.date ? `<span class="lci-ct-date-l">🗓 ${esc(frappe.datetime.str_to_user(c.date))}</span>` : ""}
+          <span class="lci-ct-cap">${format_number(cc, null, 2)} m³ ${__("utiles")}</span>
+          · ${(c.lignes || []).length} ${__("ligne(s)")}
+          <span class="lci-ct-vol${plein ? " ko" : ""}">${format_number(flt(c.volume), null, 3)} /
+            ${format_number(cc, null, 2)} m³ (${format_number(pct, null, 0)} %)</span>
+          <span class="lci-ct-mnt">${format_currency(flt(c.montant), dev)}</span>
+        </div>
+        <div class="lci-ct-bar"><div class="lci-ct-fill${plein ? " ko" : ""}" style="width:${pct}%;"></div></div>
+        <table class="lci-ct-tbl"><tbody>
+          ${(c.lignes || []).length ? "" : `<tr><td class="lci-ct-vide">${
+            __("Conteneur vide — envoyez-y des lignes avec le menu « C{0} » à droite de chaque ligne.",
+               [c.no])}</td></tr>`}
+          ${(c.lignes || []).map((l, li) => `<tr>
+            <td>${esc(l.libelle || "")}${l.scinde ? ` <span class="lci-ct-split">${__("scindée")}</span>` : ""}</td>
+            <td style="width:80px;text-align:right;">${format_number(flt(l.qty), null, 0)}</td>
+            <td style="width:92px;text-align:right;">${format_number(flt(l.volume), null, 3)} m³</td>
+            <td style="width:74px;text-align:center;">
+              <select class="lci-ct-mv" data-ci="${ci}" data-li="${li}">${opts_conteneurs(ci)}</select></td>
+            <td style="width:34px;text-align:center;">
+              <button class="btn btn-xs btn-default lci-ct-cut" data-ci="${ci}" data-li="${li}"
+                      title="${__("Scinder cette ligne")}">✂</button></td>
+          </tr>`).join("")}
+        </tbody></table>
+      </div>`;
+    }).join("");
+
+    $z.html(`
+      <style>
+        .lci-ct { border: 1px solid var(--border-color,#e4e8ee); border-radius: 8px; margin-bottom: 8px; }
+        .lci-ct-head { padding: 6px 10px; font-size: 12px; background: var(--bg-light-gray,#f6f8fa);
+          display: flex; gap: 10px; align-items: center; border-radius: 8px 8px 0 0; }
+        .lci-ct-vol { margin-left: auto; font-weight: 700; color: #135200; }
+        .lci-ct-vol.ko { color: #a8071a; }
+        .lci-ct-mnt { color: #6b7280; }
+        .lci-ct-cap { font-size: 10.5px; color: #8a93a0; }
+        .lci-ct-gab { font-size: 11px; padding: 1px 3px; }
+        .lci-ct-gab-l { font-size: 11px; background: #f9f0ff; border: 1px solid #d3adf7;
+          border-radius: 6px; padding: 1px 6px; color: #391085; font-weight: 700; }
+        .lci-ct-date-l { font-size: 11px; color: #0958d9; }
+        .lci-ct-vide { color: #8a93a0; font-style: italic; padding: 8px 10px; }
+        .lci-ct-flotte { display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+          margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px dashed var(--border-color,#e4e8ee); }
+        .lci-ct-chip { display: flex; align-items: center; gap: 4px; font-size: 11.5px;
+          border: 1px solid var(--border-color,#e4e8ee); border-radius: 8px; padding: 3px 6px;
+          background: var(--card-bg,#fff); }
+        .lci-ct-chip.neuf, .lci-ct.neuf { box-shadow: 0 0 0 2px #b37feb; }
+        .lci-ct-chip .lci-ct-date { font-size: 11px; padding: 1px 4px; border: 1px solid
+          var(--border-color,#e4e8ee); border-radius: 6px; }
+        .lci-ct-chipvol { font-size: 10.5px; color: #8a93a0; }
+        .lci-ct-del { cursor: pointer; color: #a8071a; font-weight: 700; padding: 0 2px; }
+        .lci-ct-del:hover { color: #5c0011; }
+        .lci-ct-bar { height: 5px; background: #eef1f5; }
+        .lci-ct-fill { height: 5px; background: #52c41a; }
+        .lci-ct-fill.ko { background: #f5222d; }
+        .lci-ct-tbl { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+        .lci-ct-tbl td { padding: 3px 8px; border-bottom: 1px solid var(--border-color,#f2f4f7); }
+        .lci-ct-split { font-size: 9.5px; color: #391085; background: #f9f0ff; border-radius: 5px;
+          padding: 1px 5px; }
+        .lci-ct-mv { font-size: 11px; padding: 1px 3px; }
+        .lci-ct-top { display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+          font-size: 12px; margin-bottom: 8px; }
+        .lci-ct-warn { font-size: 11.5px; color: #ad6800; background: #fffbe6; border: 1px solid #ffe58f;
+          border-radius: 8px; padding: 6px 10px; margin-bottom: 8px; }
+        .lci-ct-wrap { max-height: 56vh; overflow: auto; }
+      </style>
+      <div class="lci-ct-top">
+        <label>${__("Gabarit par défaut")}
+          <select id="lci-ct-type">${LCI_GABARITS.map((t) =>
+            `<option value="${t}" ${etat.type === t ? "selected" : ""}>${t}</option>`).join("")}</select>
+        </label>
+        <label>${__("Remplissage")}
+          <input type="number" id="lci-ct-taux" step="5" min="50" max="100"
+                 value="${Math.round(etat.taux * 100)}" style="width:66px;"> %
+        </label>
+        <button class="btn btn-xs btn-default" id="lci-ct-calc">${__("Recalculer")}</button>
+        <span style="margin-left:auto;">
+          <b>${esc(lci_ct_flotte(plan.conteneurs) || __("aucun conteneur"))}</b> ·
+          <b>${format_number(vol_total, null, 3)} m³</b> · ${format_currency(mnt_total, dev)}
+        </span>
+      </div>
+      <div class="lci-ct-flotte">
+        ${plan.conteneurs.map((c, ci) => `<div class="lci-ct-chip${
+          dernier_ajout === c.no ? " neuf" : ""}" data-ci="${ci}" data-no="${c.no}">
+          <b>C${c.no}</b>
+          <select class="lci-ct-gab" data-ci="${ci}" title="${__("Gabarit")}">
+            ${LCI_GABARITS.map((t) =>
+              `<option value="${t}" ${(c.type || etat.type) === t ? "selected" : ""}>${t}</option>`).join("")}
+          </select>
+          <input type="date" class="lci-ct-date" data-ci="${ci}" value="${esc(c.date || "")}"
+                 title="${__("Date de départ de ce conteneur")}">
+          <span class="lci-ct-chipvol">${format_number(flt(c.volume), null, 1)} m³</span>
+          <span class="lci-ct-del" data-ci="${ci}" title="${__("Retirer ce conteneur")}">✕</span>
+        </div>`).join("")}
+        <button class="btn btn-xs btn-default" id="lci-ct-add">➕ ${__("Conteneur")}</button>
+      </div>
+      ${(plan.sans_volume || []).length ? `<div class="lci-ct-warn">
+        ⚠️ ${__("{0} ligne(s) sans volume unitaire ne sont pas réparties — renseignez le volume "
+                + "ou le couple qté/carton + CBM/carton :", [plan.sans_volume.length])}
+        ${plan.sans_volume.slice(0, 8).map((l) => esc(l.libelle)).join(", ")}
+        ${plan.sans_volume.length > 8 ? " …" : ""}
+        <button class="btn btn-xs btn-default" id="lci-ct-vol" style="margin-left:6px;">
+          📐 ${__("Estimer par IA")}</button></div>` : ""}
+      <div class="lci-ct-wrap">${blocs || `<div style="padding:20px;text-align:center;color:#8a93a0;">${
+        __("Aucune ligne à charger (lignes abandonnées ou sans quantité).")}</div>`}</div>`);
+
+    $z.find("#lci-ct-type").on("change", function () { etat.type = this.value; calculer(); });
+    $z.find("#lci-ct-taux").on("change", function () {
+      etat.taux = Math.min(1, Math.max(0.5, flt(this.value) / 100));
+      calculer();
+    });
+    $z.find("#lci-ct-calc").on("click", calculer);
+    $z.find("#lci-ct-add").on("click", () => { lci_ct_ajouter(); render(); });
+    $z.find(".lci-ct-gab").on("change", function () {
+      // changer un gabarit rebat les cartes en aval : on relance le calcul,
+      // sinon les lignes resteraient dans un conteneur devenu trop petit.
+      etat.types[cint($(this).data("ci"))] = this.value;
+      calculer();
+    });
+    $z.find(".lci-ct-date").on("change", function () {
+      // la date ne change pas le chargement : on l'inscrit sans tout recalculer
+      const ci = cint($(this).data("ci"));
+      etat.dates[ci] = this.value || "";
+      if (etat.plan.conteneurs[ci]) etat.plan.conteneurs[ci].date = this.value || "";
+      render();
+    });
+    $z.find(".lci-ct-del").on("click", function () { lci_ct_supprimer(cint($(this).data("ci"))); });
+    $z.find("#lci-ct-vol").on("click", () => lci_volumes_dialog(frm, calculer));
+
+    // un conteneur qui vient de naître se voit : on l'amène à l'écran
+    if (dernier_ajout) {
+      const el = $z.find(`.lci-ct[data-no="${dernier_ajout}"]`).get(0);
+      if (el && el.scrollIntoView) el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      dernier_ajout = null;
+    }
+    $z.find(".lci-ct-mv").on("change", function () {
+      deplacer(cint($(this).data("ci")), cint($(this).data("li")), this.value);
+    });
+    $z.find(".lci-ct-cut").on("click", function () {
+      scinder(cint($(this).data("ci")), cint($(this).data("li")));
+    });
+  }
+
+  d.show();
+  await calculer();
+}
+
+// ------------------------------------- onglet « Conteneurs » du formulaire
+
+// Le plan appliqué, relu depuis le document (miroir de plan_enregistre côté
+// serveur). Rien n'est recalculé : un plan retouché à la main doit rester tel
+// qu'il a été appliqué, à l'écran comme dans l'Excel.
+function lci_plan_local(frm) {
+  let entete = {};
+  try { entete = JSON.parse(frm.doc.plan_conteneurs || "{}") || {}; } catch (e) { entete = {}; }
+  const conteneurs = (entete.conteneurs || []).map((c) => ({
+    no: cint(c.no),
+    type: c.type || entete.type || "40' HC",
+    date: c.date || "",
+    capacite: flt(c.capacite) || flt(entete.capacite),
+    volume: 0, montant: 0, lignes: [],
+  }));
+  const par_no = {};
+  conteneurs.forEach((c) => (par_no[c.no] = c));
+
+  const hors_plan = [];
+  lci_rows(frm).forEach((r) => {
+    const parts = lci_cont_parts(r);
+    const q = lci_qty_ret(r);
+    if (!parts.length) {
+      if (q > 0 && r.decision !== "Abandonné") hors_plan.push(r);
+      return;
+    }
+    const vu = q ? flt(r.volume_ligne_m3) / q : 0;
+    const pu = lci_prix_ret(r);
+    parts.forEach((p) => {
+      const c = par_no[cint(p.no)];
+      if (!c) return;
+      const qq = flt(p.qty);
+      c.lignes.push({
+        item_code: r.item_code || "", libelle: r.item_name || r.item_code || "",
+        qty: qq, uom: r.uom || "", volume: qq * vu, montant: qq * pu,
+        scinde: parts.length > 1,
+      });
+      c.volume += qq * vu;
+      c.montant += qq * pu;
+    });
+  });
+  return { conteneurs, hors_plan, entete };
+}
+
+function lci_render_conteneurs(frm) {
+  const field = frm.get_field("conteneurs_html");
+  if (!field || !field.$wrapper) return;
+  const esc = frappe.utils.escape_html;
+  const dev = frm.doc.devise || "USD";
+  const { conteneurs, hors_plan, entete } = lci_plan_local(frm);
+  const $w = field.$wrapper;
+
+  const style = `<style>
+    .lci-pl { font-size: 12.5px; }
+    .lci-pl-top { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+    .lci-pl-flotte { font-weight: 800; color: #391085; }
+    .lci-pl-note { font-size: 11px; color: var(--text-muted,#8a93a0); }
+    .lci-pl-ct { border: 1px solid var(--border-color,#e4e8ee); border-radius: 8px; margin-bottom: 10px; }
+    .lci-pl-head { display: flex; gap: 10px; align-items: center; padding: 6px 10px;
+      background: #f9f0ff; border-radius: 8px 8px 0 0; font-size: 12px; }
+    .lci-pl-no { font-weight: 800; color: #391085; }
+    .lci-pl-gab { font-size: 11px; background: #fff; border: 1px solid #d3adf7; border-radius: 6px;
+      padding: 1px 6px; color: #391085; }
+    .lci-pl-date { font-size: 11px; color: #0958d9; font-weight: 700; }
+    .lci-pl-vol { margin-left: auto; font-weight: 700; color: #135200; }
+    .lci-pl-vol.ko { color: #a8071a; }
+    .lci-pl-bar { height: 5px; background: #eef1f5; }
+    .lci-pl-fill { height: 5px; background: #722ed1; }
+    .lci-pl-fill.ko { background: #f5222d; }
+    .lci-pl-tbl { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+    .lci-pl-tbl td { padding: 3px 10px; border-bottom: 1px solid var(--border-color,#f2f4f7); }
+    .lci-pl-split { font-size: 9.5px; color: #391085; background: #f9f0ff; border-radius: 5px; padding: 1px 5px; }
+    .lci-pl-vide { padding: 18px; text-align: center; color: #8a93a0; }
+    .lci-pl-hors { font-size: 11.5px; color: #ad6800; background: #fffbe6; border: 1px solid #ffe58f;
+      border-radius: 8px; padding: 6px 10px; }
+  </style>`;
+
+  if (!conteneurs.length) {
+    $w.html(`${style}<div class="lci-pl"><div class="lci-pl-vide">
+      ${__("Aucun plan de chargement. Le bouton « 🚢 Répartir en conteneurs » calcule la répartition "
+        + "à partir des volumes, gabarit par gabarit.")}
+      </div><div style="text-align:center;">
+      <button class="btn btn-sm btn-primary lci-pl-open">🚢 ${__("Répartir en conteneurs")}</button>
+      </div></div>`);
+    $w.find(".lci-pl-open").on("click", () => lci_conteneurs_dialog(frm));
+    return;
+  }
+
+  const vol = conteneurs.reduce((a, c) => a + flt(c.volume), 0);
+  const mnt = conteneurs.reduce((a, c) => a + flt(c.montant), 0);
+
+  const blocs = conteneurs.map((c) => {
+    const pct = flt(c.capacite) ? Math.min(100, flt(c.volume) / flt(c.capacite) * 100) : 0;
+    const ko = flt(c.volume) > flt(c.capacite) + 0.0001;
+    return `<div class="lci-pl-ct">
+      <div class="lci-pl-head">
+        <span class="lci-pl-no">C${c.no}</span>
+        <span class="lci-pl-gab">${esc(c.type)}</span>
+        ${c.date ? `<span class="lci-pl-date">🗓 ${esc(frappe.datetime.str_to_user(c.date))}</span>` : ""}
+        <span class="lci-pl-note">${__("capacité utile")} ${format_number(flt(c.capacite), null, 2)} m³</span>
+        <span>· ${c.lignes.length} ${__("ligne(s)")}</span>
+        <span class="lci-pl-vol${ko ? " ko" : ""}">${format_number(flt(c.volume), null, 3)} m³
+          (${format_number(pct, null, 0)} %)</span>
+        <span class="lci-pl-note">${format_currency(flt(c.montant), dev)}</span>
+      </div>
+      <div class="lci-pl-bar"><div class="lci-pl-fill${ko ? " ko" : ""}" style="width:${pct}%;"></div></div>
+      <table class="lci-pl-tbl"><tbody>
+        ${c.lignes.map((l) => `<tr>
+          <td style="width:130px;"><b>${esc(l.item_code)}</b></td>
+          <td>${esc(l.libelle)}${l.scinde ? ` <span class="lci-pl-split">${__("scindée")}</span>` : ""}</td>
+          <td style="width:90px;text-align:right;">${format_number(flt(l.qty), null, 0)} ${esc(l.uom)}</td>
+          <td style="width:96px;text-align:right;">${format_number(flt(l.volume), null, 3)} m³</td>
+          <td style="width:104px;text-align:right;">${format_currency(flt(l.montant), dev)}</td>
+        </tr>`).join("")}
+      </tbody></table>
+    </div>`;
+  }).join("");
+
+  $w.html(`${style}<div class="lci-pl">
+    <div class="lci-pl-top">
+      <span class="lci-pl-flotte">${esc(lci_ct_flotte(conteneurs))}</span>
+      <span>· <b>${format_number(vol, null, 3)} m³</b> · <b>${format_currency(mnt, dev)}</b></span>
+      <span class="lci-pl-note">· ${__("remplissage")} ${format_number(flt(entete.taux) * 100, null, 0)} %</span>
+      ${conteneurs.some((c) => c.date) ? `<span class="lci-pl-note">· ${
+        conteneurs.filter((c) => c.date).map((c) =>
+          `C${c.no} ${esc(frappe.datetime.str_to_user(c.date))}`).join(" · ")}</span>` : ""}
+      <button class="btn btn-xs btn-default lci-pl-open">🚢 ${__("Modifier la répartition")}</button>
+      <button class="btn btn-xs btn-default lci-pl-xls">📄 ${__("Excel (onglet Conteneurs)")}</button>
+    </div>
+    ${hors_plan.length ? `<div class="lci-pl-hors">⚠️ ${
+      __("{0} ligne(s) hors plan (volume unitaire manquant ou ajoutées depuis) : {1}",
+         [hors_plan.length, esc(hors_plan.slice(0, 10).map((r) => r.item_code || r.item_name).join(", "))])}
+      ${hors_plan.length > 10 ? " …" : ""}</div>` : ""}
+    <div style="margin-top:10px;">${blocs}</div>
+    <div class="lci-pl-note">${__("Ce plan part dans un onglet « Conteneurs » des deux exports Excel "
+      + "— notre cotation comme le fichier du fournisseur renvoyé annoté.")}</div>
+  </div>`);
+
+  $w.find(".lci-pl-open").on("click", () => lci_conteneurs_dialog(frm));
+  $w.find(".lci-pl-xls").on("click", () => {
+    window.open("/api/method/customization_app.liste_commande_import.download_excel"
+      + `?docname=${encodeURIComponent(frm.doc.name)}`);
+  });
+}
+
+// ------------------------------------ volumes manquants estimés par l'IA
+
+async function lci_volumes_dialog(frm, apres) {
+  if (frm.is_new() || frm.is_dirty()) {
+    frappe.msgprint(__("Enregistrez d'abord : l'estimation part des lignes enregistrées."));
+    return;
+  }
+  const r = await frappe.call({
+    method: "customization_app.lci_conteneurs.ai_estimer_volumes",
+    args: { docname: frm.doc.name },
+    freeze: true,
+    freeze_message: __("Estimation des volumes…"),
+  });
+  const data = r.message || {};
+  const lignes = data.lignes || [];
+  if (!lignes.length) {
+    frappe.msgprint({ title: __("Rien à estimer"), indicator: "blue",
+      message: data.message || __("Aucune ligne sans volume.") });
+    return;
+  }
+
+  const esc = frappe.utils.escape_html;
+  // état modifiable : un volume proposé se corrige avant d'entrer dans la liste
+  const st = {};
+  lignes.forEach((l) => (st[l.row] = {
+    vol: flt(l.volume_m3), pcs: flt(l.pcs_carton), vct: flt(l.volume_carton_m3),
+    apply: flt(l.volume_m3) > 0,
+  }));
+
+  const d = new frappe.ui.Dialog({
+    title: __("Volumes manquants — proposition"),
+    size: "extra-large",
+    fields: [{ fieldtype: "HTML", fieldname: "zone" }],
+    primary_action_label: __("Appliquer aux lignes cochées"),
+    primary_action: async () => {
+      const a_ecrire = lignes.filter((l) => st[l.row].apply && st[l.row].vol > 0)
+        .map((l) => ({ row: l.row, volume_m3: st[l.row].vol,
+                       pcs_carton: st[l.row].pcs, volume_carton_m3: st[l.row].vct,
+                       estime: l.estime }));
+      if (!a_ecrire.length) {
+        frappe.msgprint(__("Aucune ligne sélectionnée."));
+        return;
+      }
+      const res = await frappe.call({
+        method: "customization_app.lci_conteneurs.appliquer_volumes",
+        args: { docname: frm.doc.name, lignes: JSON.stringify(a_ecrire) },
+        freeze: true,
+        freeze_message: __("Écriture des volumes…"),
+      });
+      d.hide();
+      await frm.reload_doc();
+      lci_render_table(frm);
+      lci_render_conteneurs(frm);
+      const m = res.message || {};
+      frappe.show_alert({
+        message: __("{0} volume(s) écrit(s) — total {1} m³.",
+                    [m.maj, format_number(m.volume_total_m3, null, 3)]),
+        indicator: "green",
+      });
+      if (apres) apres();      // rouvre le calcul du chargement, le cas échéant
+    },
+  });
+
+  const $z = d.fields_dict.zone.$wrapper;
+  function render() {
+    const retenus = lignes.filter((l) => st[l.row].apply && st[l.row].vol > 0);
+    const ajout = retenus.reduce((a, l) => a + st[l.row].vol * flt(l.qty), 0);
+    const couleur = (c) => (c >= 0.75 ? "#135200" : c >= 0.5 ? "#ad6800" : "#a8071a");
+
+    $z.html(`
+      <style>
+        table.lci-vol { width: 100%; border-collapse: collapse; font-size: 12px; }
+        table.lci-vol th { background: var(--bg-light-gray,#f6f8fa); font-size: 10px;
+          text-transform: uppercase; color: #6b7280; padding: 5px 6px; text-align: left;
+          position: sticky; top: 0; z-index: 2; }
+        table.lci-vol td { padding: 4px 6px; border-bottom: 1px solid var(--border-color,#eef1f5); }
+        .lci-vol-wrap { max-height: 54vh; overflow: auto; border: 1px solid var(--border-color,#e4e8ee);
+          border-radius: 8px; }
+        .lci-vol-inp { width: 96px; text-align: right; }
+        .lci-vol-nom { font-size: 11px; color: var(--text-muted,#8a93a0); max-width: 320px;
+          overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .lci-vol-base { font-size: 10.5px; color: #6b7280; }
+        .lci-vol-foot { margin-top: 8px; font-size: 12.5px; }
+        tr.lci-vol-off { opacity: .45; }
+      </style>
+      <div style="font-size:11.5px;color:#6b7280;margin-bottom:8px;">
+        ${__("Volume d'expédition estimé, emballage compris, calé sur les articles voisins déjà "
+          + "mesurés. <b>Rien n'est écrit tant que vous n'avez pas appliqué</b> ; un volume estimé "
+          + "sert au chargement mais n'est pas recopié sur la fiche Article.")}
+      </div>
+      <div class="lci-vol-wrap">
+        <table class="lci-vol">
+          <thead><tr>
+            <th style="width:30px;"></th><th style="width:34px;">#</th>
+            <th>${__("Article")}</th>
+            <th style="width:80px;">${__("Qté")}</th>
+            <th style="width:110px;">${__("Vol. unitaire (m³)")}</th>
+            <th style="width:80px;">${__("Pcs/ctn")}</th>
+            <th style="width:100px;">${__("CBM/ctn")}</th>
+            <th style="width:96px;">${__("Vol. ligne")}</th>
+            <th style="width:30%;">${__("Base")}</th>
+          </tr></thead>
+          <tbody>${lignes.map((l) => {
+            const s = st[l.row];
+            return `<tr data-row="${esc(l.row)}" class="${s.apply ? "" : "lci-vol-off"}">
+              <td style="text-align:center;"><input type="checkbox" data-k="apply" ${
+                s.apply ? "checked" : ""} ${s.vol > 0 ? "" : "disabled"}></td>
+              <td style="text-align:center;">${l.idx}</td>
+              <td><b>${esc(l.item_code || __("libre"))}</b>
+                <div class="lci-vol-nom">${esc(l.item_name)}</div></td>
+              <td style="text-align:right;">${format_number(flt(l.qty), null, 0)} ${esc(l.uom)}</td>
+              <td><input type="number" step="any" class="form-control input-xs lci-vol-inp"
+                         data-k="vol" value="${s.vol || ""}"></td>
+              <td style="text-align:right;">${s.pcs ? format_number(s.pcs, null, 0) : "—"}</td>
+              <td style="text-align:right;">${s.vct ? format_number(s.vct, null, 4) : "—"}</td>
+              <td style="text-align:right;font-weight:700;">${
+                format_number(s.vol * flt(l.qty), null, 3)} m³</td>
+              <td class="lci-vol-base">${esc(l.base || "")}
+                ${l.estime ? `<span style="color:${couleur(flt(l.confiance))};font-weight:700;">
+                  · ${Math.round(flt(l.confiance) * 100)} %</span>` : ""}</td>
+            </tr>`;
+          }).join("")}</tbody>
+        </table>
+      </div>
+      <div class="lci-vol-foot">
+        <b>${retenus.length}</b> ${__("ligne(s) sur {0}", [lignes.length])} ·
+        ${__("volume ajouté")} <b>${format_number(ajout, null, 3)} m³</b> ·
+        ${__("total liste")} <b>${format_number(flt(frm.doc.volume_total_m3) + ajout, null, 3)} m³</b>
+      </div>`);
+
+    $z.find('[data-k="apply"]').on("change", function () {
+      st[$(this).closest("tr").data("row")].apply = this.checked;
+      render();
+    });
+    $z.find('[data-k="vol"]').on("change", function () {
+      const row = $(this).closest("tr").data("row");
+      st[row].vol = flt(this.value);
+      st[row].pcs = 0;        // volume corrigé à la main : le carton ne colle plus
+      st[row].vct = 0;
+      if (st[row].vol > 0) st[row].apply = true;
+      render();
+    });
+  }
+  render();
+  d.show();
 }
