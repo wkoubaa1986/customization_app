@@ -913,11 +913,17 @@ function lci_render_table(frm) {
 
   $t.html(`
     <style>
-      .lci-table-wrap { overflow-x: auto; margin-bottom: 8px; }
+      /* La table défile DANS son cadre : c'est ce qui permet de figer la barre de filtre et
+         l'en-tête des colonnes. Le débordement horizontal faisait déjà de ce bloc un conteneur
+         de défilement — sans hauteur maximale, une position collante n'a rien à quoi se
+         raccrocher et l'en-tête part avec la page.
+         (Pas d'accent grave dans ce commentaire : il vit dans un gabarit JS.) */
+      .lci-table-wrap { overflow: auto; margin-bottom: 8px; max-height: calc(100vh - 210px); }
       table.lci-tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
       table.lci-tbl th { background: var(--bg-light-gray,#f6f8fa); color: #6b7280; font-size: 10.5px;
         text-transform: uppercase; padding: 6px 8px; text-align: left; white-space: nowrap;
-        border-bottom: 1px solid var(--border-color,#e4e8ee); }
+        border-bottom: 1px solid var(--border-color,#e4e8ee);
+        position: sticky; top: 38px; z-index: 5; }
       table.lci-tbl td { padding: 5px 8px; border-bottom: 1px solid var(--border-color,#eef1f5); vertical-align: middle; }
       .lci-c { text-align: center; }
       .lci-imgbox { width: 54px; height: 54px; border-radius: 8px; background: var(--bg-light-gray,#f6f8fa);
@@ -941,7 +947,8 @@ function lci_render_table(frm) {
                 padding: 2px 6px; margin-top: 2px; max-width: 420px; overflow: hidden;
                 text-overflow: ellipsis; white-space: nowrap; }
       tr.lci-ghead > td { background: #e6f4ff; font-weight: 800; font-size: 11.5px;
-                          color: #0958d9; padding: 5px 10px; border-top: 2px solid #91caff; }
+                          color: #0958d9; padding: 5px 10px; border-top: 2px solid #91caff;
+                          position: sticky; top: 64px; z-index: 3; }
       .lci-gmeta { font-weight: 600; color: #6b7280; font-size: 10.5px; }
       .lci-num { width: 84px; text-align: right; }
       .lci-cible { background: #fffbe6; }
@@ -964,7 +971,10 @@ function lci_render_table(frm) {
       table.lci-tbl th:last-child, table.lci-tbl td.lci-actions {
         position: sticky; right: 0; background: var(--card-bg,#fff);
         box-shadow: -4px 0 6px -4px rgba(0,0,0,.15); }
-      table.lci-tbl th:last-child { background: var(--bg-light-gray,#f6f8fa); z-index: 1; }
+      /* l'angle haut-droit est collant DANS LES DEUX SENS : il doit passer devant l'en-tête
+         (z 5) et devant la colonne Actions des lignes (z 2), sinon il disparaît sous elles */
+      table.lci-tbl th:last-child { background: var(--bg-light-gray,#f6f8fa); z-index: 8; }
+      table.lci-tbl td.lci-actions { z-index: 2; }
       .lci-actions { white-space: nowrap; }
       .lci-actions .btn { padding: 2px 7px; }
       .lci-drag { cursor: grab; user-select: none; white-space: nowrap; }
@@ -993,7 +1003,10 @@ function lci_render_table(frm) {
       .lci-cont { font-size: 11px; font-weight: 700; color: #391085; background: #f9f0ff;
                   border: 1px solid #d3adf7; border-radius: 6px; padding: 1px 6px; white-space: nowrap; }
       .lci-filtres { display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
-                     margin-bottom: 6px; font-size: 12px; }
+                     margin-bottom: 6px; font-size: 12px;
+                     position: sticky; top: 0; z-index: 7; padding: 4px 0 6px;
+                     background: var(--card-bg,#fff);
+                     border-bottom: 1px solid var(--border-color,#e4e8ee); }
       .lci-filtres select, .lci-filtres input { font-size: 11.5px; padding: 3px 6px; height: 26px;
         border: 1px solid var(--border-color,#e4e8ee); border-radius: 6px; background: var(--card-bg,#fff); }
       .lci-fl-count { font-size: 11px; color: var(--text-muted,#8a93a0); }
