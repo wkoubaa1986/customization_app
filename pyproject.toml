@@ -13,6 +13,9 @@ dependencies = [
     # redressement de perspective (caisse_depenses._scan_pdf). Entre dans l'image de
     # prod au build (pip install de l'app lit ce fichier).
     "opencv-python-headless~=4.10",
+    # Lecture du conteneur OLE d'un .xls pour en extraire les images (xls_images.py) :
+    # xlrd ne lit que les valeurs, les photos du fournisseur disparaissaient à la conversion.
+    "olefile~=0.47",
     # Lecture des classeurs .xls (BIFF, d'avant 2007) que les fournisseurs
     # chinois envoient encore : openpyxl ne sait pas les ouvrir
     # (lci_reponse._feuilles).
