@@ -341,12 +341,20 @@ def _paiements_anciennes_commandes(d1, d2, exclude_names):
 
     pes = frappe.db.sql(
         f"""SELECT pe.name, pe.posting_date, DATE(pe.creation) AS creation_date,
-                   pe.owner, pe.party, pe.party_name, pe.mode_of_payment,
+                   pe.owner, COALESCE(origine.party, pe.party) AS party,
+                   COALESCE(origine.party_name, pe.party_name) AS party_name,
+                   pe.mode_of_payment, origine.name AS origine_impaye,
                    pe.paid_to, pe.paid_amount, pe.reference_no,
                    IFNULL(pe.custom_exclu_caisse, 0) AS exclu
             FROM `tabPayment Entry` pe
+            LEFT JOIN `tabPayment Entry` origine
+              ON pe.payment_type = 'Internal Transfer'
+             AND pe.paid_from = 'Chèques sans provision - A&S'
+             AND pe.paid_to = 'Espèces - A&S'
+             AND origine.name = pe.reference_no AND origine.docstatus = 1
+             AND origine.party_type = 'Customer'
             WHERE pe.docstatus = 1
-              AND pe.payment_type = 'Receive'
+              AND (pe.payment_type = 'Receive' OR origine.name IS NOT NULL)
               AND (pe.posting_date BETWEEN %s AND %s OR DATE(pe.creation) BETWEEN %s AND %s)
               AND ({like_conds})
               {exclude_sql}
@@ -404,7 +412,9 @@ def _paiements_anciennes_commandes(d1, d2, exclude_names):
             "compte": p.paid_to,
             "amount": flt(p.paid_amount),
             "reference_no": p.reference_no or "",
-            "pieces": refs_by_pe.get(p.name, []),
+            "pieces": refs_by_pe.get(p.name, []) + (
+                [{"doctype": "Payment Entry", "name": p.origine_impaye, "date": ""}]
+                if p.origine_impaye else []),
         })
     return {
         "paiements": paiements,

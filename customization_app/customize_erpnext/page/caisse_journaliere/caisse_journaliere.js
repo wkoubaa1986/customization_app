@@ -68,6 +68,7 @@ class RapportCaisseJournaliere {
     // Encaissement des anciennes dettes : le dialogue fabrique un « Encaissement
     // Paiement » et laisse les scripts maison faire (allocation FIFO, échéanciers,
     // reliquat de dette, création du paiement).
+    $("#rcj-btn-impayes").on("click", () => customization_app.encaisser_impaye({on_success: () => this._fetch()}));
     $("#rcj-btn-dettes").on("click", () => rcj_encaissement_dettes(this));
     $("#rcj-btn-aramex").on("click", () => rcj_encaissement_aramex(this));
     $("#rcj-btn-depense").on("click", () => rcj_depense(this));

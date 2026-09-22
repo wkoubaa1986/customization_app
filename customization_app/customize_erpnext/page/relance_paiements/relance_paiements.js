@@ -470,6 +470,14 @@ class RelancePaiements {
 			this.toggle_detail(cust);
 		});
 
+		this.$tbody.on('click.rp', '.rp-encaisser-impaye', (e) => {
+			const $b = $(e.currentTarget);
+			customization_app.encaisser_impaye({
+				client: $b.attr('data-client'), piece: $b.attr('data-piece'),
+				on_success: () => { this.oublier_detail(); this.load(); },
+			});
+		});
+
 		this.$tbody.on('click.rp', '.rp-relance-one', (e) => {
 			const cust = $(e.target).closest('tr').data('cust');
 			this.open_relance_dialog([cust]);
@@ -567,7 +575,7 @@ class RelancePaiements {
 	/** Les lignes qui constituent une DETTE : débit net positif. Un crédit est un règlement déjà
 	 *  reçu — il se lit dans le détail, mais on ne relance personne dessus. */
 	dettes_de(rows) {
-		return (rows || []).filter((x) => (x.debit || 0) - (x.credit || 0) > 0.009);
+		return (rows || []).filter((x) => (x.restant_impaye ?? ((x.debit || 0) - (x.credit || 0))) > 0.009);
 	}
 
 	detail_row_html(customer) {
@@ -605,13 +613,13 @@ class RelancePaiements {
 		const dettes = this.dettes_de(rows);
 		const total = dettes
 			.filter((x) => sel.has(x.voucher_no))
-			.reduce((s, x) => s + (x.debit || 0) - (x.credit || 0), 0);
+			.reduce((s, x) => s + (x.restant_impaye ?? ((x.debit || 0) - (x.credit || 0))), 0);
 		const toutes = dettes.length > 0 && dettes.every((x) => sel.has(x.voucher_no));
 
 		const body = rows
 			.map((x) => {
 				const net = (x.debit || 0) - (x.credit || 0);
-				const relancable = net > 0.009;
+				const relancable = (x.restant_impaye ?? net) > 0.009;
 				// Une ligne de crédit n'est pas une dette : pas de case, et on dit pourquoi.
 				const case_ = relancable
 					? `<input type="checkbox" class="rp-debt-check" data-piece="${this.esc(x.voucher_no)}"
@@ -639,6 +647,9 @@ class RelancePaiements {
 					<td class="num">${this.fmt(x.balance)}</td>
 					<td>${this.esc(x.docstatus)}</td>
 					<td style="max-width:260px;font-size:11px;color:#64748b">
+						${x.restant_impaye > 0 ? `<button class="rp-btn-mini rp-encaisser-impaye"
+							data-client="${this.esc(customer)}" data-piece="${this.esc(x.voucher_no)}">
+							${__('Encaisser en espèces')} (${this.fmt(x.restant_impaye)})</button><br>` : ''}
 						${refs}${x.remarks ? `<div>${this.esc(x.remarks)}</div>` : ''}
 					</td>
 				</tr>${noteRow}`;

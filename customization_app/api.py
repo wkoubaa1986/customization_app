@@ -2491,7 +2491,7 @@ def get_relance_clients(search=None, customer_group=None, debt_type=None):
     rows = frappe.db.sql(
         """
         SELECT
-            pe.party                         AS customer,
+            COALESCE(origine.party, pe.party) AS customer,
             cust.customer_name               AS customer_name,
             cust.customer_group              AS customer_group,
             cust.custom_liste_telephone      AS telephone,
@@ -2501,14 +2501,19 @@ def get_relance_clients(search=None, customer_group=None, debt_type=None):
         FROM `tabGL Entry` gle
         INNER JOIN `tabPayment Entry` pe
             ON pe.name = gle.voucher_no
+        LEFT JOIN `tabPayment Entry` origine
+            ON pe.payment_type = 'Internal Transfer'
+           AND pe.paid_from = 'Chèques sans provision - A&S'
+           AND pe.paid_to = 'Espèces - A&S'
+           AND origine.name = pe.reference_no AND origine.docstatus = 1
         LEFT JOIN `tabCustomer` cust
-            ON cust.name = pe.party
+            ON cust.name = COALESCE(origine.party, pe.party)
         WHERE gle.voucher_type = 'Payment Entry'
           AND gle.is_cancelled = 0
           AND gle.account IN %(accounts)s
-          AND pe.party_type = 'Customer'
-          AND pe.party IS NOT NULL
-        GROUP BY pe.party, gle.account
+          AND COALESCE(origine.party_type, pe.party_type) = 'Customer'
+          AND COALESCE(origine.party, pe.party) IS NOT NULL
+        GROUP BY COALESCE(origine.party, pe.party), gle.account
         """,
         {"accounts": accounts},
         as_dict=True,
@@ -2609,16 +2614,22 @@ def get_relance_detail(customer):
             gle.remarks                      AS remarks,
             pe.docstatus                     AS docstatus,
             pe.reference_no                  AS reference_no,
+            origine.name                     AS origine_impaye,
             pe.reference_date                AS reference_date,
             pe.remarks                       AS pe_remarks
         FROM `tabGL Entry` gle
         INNER JOIN `tabPayment Entry` pe
             ON pe.name = gle.voucher_no
+        LEFT JOIN `tabPayment Entry` origine
+            ON pe.payment_type = 'Internal Transfer'
+           AND pe.paid_from = 'Chèques sans provision - A&S'
+           AND pe.paid_to = 'Espèces - A&S'
+           AND origine.name = pe.reference_no AND origine.docstatus = 1
         WHERE gle.voucher_type = 'Payment Entry'
           AND gle.is_cancelled = 0
           AND gle.account IN %(accounts)s
-          AND pe.party_type = 'Customer'
-          AND pe.party = %(customer)s
+          AND COALESCE(origine.party_type, pe.party_type) = 'Customer'
+          AND COALESCE(origine.party, pe.party) = %(customer)s
         ORDER BY gle.posting_date DESC, gle.voucher_no
         """,
         {"accounts": accounts, "customer": customer},
@@ -2704,6 +2715,8 @@ def get_relance_detail(customer):
         running += float(r.debit or 0) - float(r.credit or 0)
         r["_balance"] = round(running, 3)
 
+    from customization_app.caisse_impayes import _soldes, IMPAYES
+    restants = {p.name: float(p.restant) for p in _soldes(customer)}
     for r in rows:
         # Tâches de travail liées à cette ligne (via les Sales Orders de la pièce)
         line_orders = voucher_orders.get(r.voucher_no, set())
@@ -2728,8 +2741,12 @@ def get_relance_detail(customer):
             "docstatus": status_label.get(r.docstatus, "?"),
             "reference_no": r.reference_no or "",
             "remarks": (r.pe_remarks or r.remarks or "").strip(),
-            "references": refs_map.get(r.voucher_no, []),
+            "references": (refs_map.get(r.voucher_no, []) +
+                           ([{"reference_doctype": "Payment Entry", "reference_name": r.origine_impaye}]
+                            if r.origine_impaye else [])),
             "tasks": line_tasks,
+            "restant_impaye": (restants.get(r.voucher_no, 0)
+                               if r.account == IMPAYES and not r.origine_impaye else None),
         })
 
     return detail
@@ -2752,14 +2769,19 @@ def _repartition_par_compte(customer, vouchers=None):
         SELECT gle.account AS account, SUM(gle.debit - gle.credit) AS montant
         FROM `tabGL Entry` gle
         INNER JOIN `tabPayment Entry` pe ON pe.name = gle.voucher_no
+        LEFT JOIN `tabPayment Entry` origine
+            ON pe.payment_type = 'Internal Transfer'
+           AND pe.paid_from = 'Chèques sans provision - A&S'
+           AND pe.paid_to = 'Espèces - A&S'
+           AND origine.name = pe.reference_no AND origine.docstatus = 1
         WHERE gle.voucher_type = 'Payment Entry'
           AND gle.is_cancelled = 0
           AND gle.account IN %(accounts)s
-          AND pe.party_type = 'Customer'
-          AND pe.party = %(customer)s
+          AND COALESCE(origine.party_type, pe.party_type) = 'Customer'
+          AND COALESCE(origine.party, pe.party) = %(customer)s
           {filtre_pieces}
         GROUP BY gle.account
-        """.format(filtre_pieces="AND gle.voucher_no IN %(vouchers)s" if vouchers else ""),
+        """.format(filtre_pieces="AND (gle.voucher_no IN %(vouchers)s OR origine.name IN %(vouchers)s)" if vouchers else ""),
         {"accounts": accounts, "customer": customer, "vouchers": vouchers},
         as_dict=True,
     )
