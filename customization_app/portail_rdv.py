@@ -522,7 +522,7 @@ def choisir_client(jeton_choix, client):
     return _ouvrir_session(donnees["telephone"], entree)
 
 
-def _ouvrir_session(numero, entree, agent=None):
+def _ouvrir_session(numero, entree, agent=None, origine=None):
     """Ouvre la session du portail pour UNE fiche client et rend tout ce que
     l'écran doit savoir (types, commandes, adresses, historique, tarifs).
 
@@ -534,7 +534,10 @@ def _ouvrir_session(numero, entree, agent=None):
     jeton = frappe.generate_hash(length=32)
     _cache().set_value("rdv_session:%s" % jeton,
                        {"client": entree["client"], "nom": entree["nom"],
-                        "telephone": numero, "agent": agent},
+                        "telephone": numero, "agent": agent,
+                        # d'où le magasin a lancé l'app (liste d'appels, rattrapage) :
+                        # à la réservation, cette origine est mise à jour (`_lier_origine`)
+                        "origine": origine or None},
                        expires_in_sec=SESSION_TTL)
 
     commandes = _commandes_du_client(entree["client"])
@@ -1123,4 +1126,33 @@ def reserver(jeton, type_intervention, date, demi_journee, adresse=None,
         ]))
 
     return {"tache": tache.name, "date": str(jour), "demi_journee": libelle_demi,
-            "type": type_intervention}
+            "type": type_intervention, "origine": _lier_origine(session, tache.name)}
+
+
+def _lier_origine(session, tache):
+    """Le rendez-vous pris depuis une liste d'appels (Liste Appelle Entretien) ou depuis le
+    rapport de rattrapage y est reporté — exactement ce que fait le calendrier interne
+    (« Prendre RDV ») : la ligne d'appel prend la tâche et « Rendez-vous pris », la tâche
+    manquée passe « planifié ». Jamais bloquant : le rendez-vous est déjà posé, un
+    rattachement qui échoue se voit dans le journal, pas chez le client."""
+    origine = (session or {}).get("origine") or {}
+    if not origine:
+        return None
+    try:
+        if origine.get("liste_appelle") and origine.get("ligne"):
+            ligne = frappe.db.get_value("Appelle Client", origine["ligne"], ["parent", "name"], as_dict=True)
+            if not ligne or ligne.parent != origine["liste_appelle"]:
+                return None
+            frappe.db.set_value("Appelle Client", ligne.name,
+                                {"tache_de_travail": tache, "resume_appel": "Rendez-vous pris",
+                                 "a_été_appelé": 1})
+            frappe.db.set_value("Liste Appelle Entretien", ligne.parent, "modified", frappe.utils.now_datetime())
+            frappe.db.commit()
+            return {"liste_appelle": ligne.parent, "ligne": ligne.name}
+        if origine.get("tache_rattrapage") and frappe.db.exists("Tache de travail", origine["tache_rattrapage"]):
+            from customization_app.api import marquer_tache_rattrapee
+            marquer_tache_rattrapee(origine["tache_rattrapage"], "planifié")
+            return {"tache_rattrapage": origine["tache_rattrapage"]}
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "Portail RDV : rattachement à l'origine")
+    return None

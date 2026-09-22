@@ -102,15 +102,46 @@ def _identite():
 # ------------------------------------------------------------------ entrée
 
 
+def origine_valide(origine):
+    """L'origine d'une prise de rendez-vous depuis le Desk, ou None (pur).
+
+    Deux formes : {"liste_appelle": <Liste Appelle Entretien>, "ligne": <nom de la ligne
+    Appelle Client>} — la ligne prendra la tâche et « Rendez-vous pris » — ou
+    {"tache_rattrapage": <Tache de travail>} — la tâche manquée passe « planifié » et sort du
+    rapport Liste Appels Rattrapage. Tout le reste est ignoré : l'origine n'est qu'un
+    rattachement de confort, jamais une règle de réservation."""
+    if isinstance(origine, str):
+        try:
+            origine = frappe.parse_json(origine)
+        except Exception:
+            return None
+    if not isinstance(origine, dict):
+        return None
+    if origine.get("liste_appelle") and origine.get("ligne"):
+        return {"liste_appelle": str(origine["liste_appelle"]), "ligne": str(origine["ligne"])}
+    if origine.get("tache_rattrapage"):
+        return {"tache_rattrapage": str(origine["tache_rattrapage"])}
+    return None
+
+
 @frappe.whitelist()
-def ouvrir(commande=None, client=None):
+def ouvrir(commande=None, client=None, origine=None):
     """Ouvre un lien d'accès au portail. -> {url}
 
     Depuis une commande, le client est déduit d'elle (et le type d'intervention
     qu'appellent ses lignes est transmis à titre d'indication). Depuis la liste,
-    ni l'un ni l'autre : l'app fera chercher le client.
+    ni l'un ni l'autre : l'app fera chercher le client. `origine` (liste d'appels
+    ou tâche de rattrapage, cf. `origine_valide`) suit la séance : à la
+    réservation, la liste est mise à jour comme le fait le calendrier interne.
     """
     _verifier_agent()
+    origine = origine_valide(origine)
+    if origine and origine.get("liste_appelle") and not frappe.has_permission(
+            "Liste Appelle Entretien", "write", doc=origine["liste_appelle"]):
+        frappe.throw(_("Vous ne pouvez pas modifier cette liste d'appels."), frappe.PermissionError)
+    if origine and origine.get("tache_rattrapage") and not frappe.has_permission(
+            "Tache de travail", "write", doc=origine["tache_rattrapage"]):
+        frappe.throw(_("Vous ne pouvez pas modifier cette tâche."), frappe.PermissionError)
     type_indicatif = None
     if commande:
         if not frappe.has_permission("Sales Order", "read", doc=commande):
@@ -150,7 +181,8 @@ def ouvrir(commande=None, client=None):
                              {"utilisateur": frappe.session.user,
                               "client": client or None,
                               "commande": commande or None,
-                              "type": type_indicatif},
+                              "type": type_indicatif,
+                              "origine": origine},
                              expires_in_sec=TICKET_TTL)
     return {"url": "/rdv?agent=%s" % jeton, "client": client, "commande": commande}
 
@@ -163,7 +195,8 @@ def contexte(jeton):
     donnees = _ticket(jeton)
     entete = {"utilisateur": _identite(),
               "commande": donnees.get("commande"),
-              "type": donnees.get("type")}
+              "type": donnees.get("type"),
+              "origine": donnees.get("origine")}
     if not donnees.get("client"):
         return {"agent": entete, "choisir": 1}
     return _seance(donnees["client"], entete)
@@ -209,7 +242,8 @@ def session(jeton, client):
     donnees = _ticket(jeton)
     return _seance(client, {"utilisateur": _identite(),
                             "commande": donnees.get("commande"),
-                            "type": donnees.get("type")})
+                            "type": donnees.get("type"),
+                            "origine": donnees.get("origine")})
 
 
 def _seance(client, entete):
@@ -222,7 +256,8 @@ def _seance(client, entete):
 
     _config()
     entree = _client_utilisable(client)
-    seance = _ouvrir_session(_telephone(client), entree, agent=entete["utilisateur"])
+    seance = _ouvrir_session(_telephone(client), entree, agent=entete["utilisateur"],
+                             origine=entete.get("origine"))
     seance["agent"] = entete
     # Le magasin voit le téléphone du client : il l'a en ligne, et il doit
     # pouvoir vérifier qu'il travaille sur la bonne fiche.
