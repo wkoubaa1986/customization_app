@@ -2504,8 +2504,9 @@ def get_relance_clients(search=None, customer_group=None, debt_type=None):
         LEFT JOIN `tabPayment Entry` origine
             ON pe.payment_type = 'Internal Transfer'
            AND pe.paid_from = 'Chèques sans provision - A&S'
-           AND pe.paid_to = 'Espèces - A&S'
-           AND origine.name = pe.reference_no AND origine.docstatus = 1
+           AND (origine.name = pe.custom_impaye_origine
+                OR (pe.paid_to = 'Espèces - A&S' AND origine.name = pe.reference_no))
+           AND origine.docstatus = 1
         LEFT JOIN `tabCustomer` cust
             ON cust.name = COALESCE(origine.party, pe.party)
         WHERE gle.voucher_type = 'Payment Entry'
@@ -2623,8 +2624,9 @@ def get_relance_detail(customer):
         LEFT JOIN `tabPayment Entry` origine
             ON pe.payment_type = 'Internal Transfer'
            AND pe.paid_from = 'Chèques sans provision - A&S'
-           AND pe.paid_to = 'Espèces - A&S'
-           AND origine.name = pe.reference_no AND origine.docstatus = 1
+           AND (origine.name = pe.custom_impaye_origine
+                OR (pe.paid_to = 'Espèces - A&S' AND origine.name = pe.reference_no))
+           AND origine.docstatus = 1
         WHERE gle.voucher_type = 'Payment Entry'
           AND gle.is_cancelled = 0
           AND gle.account IN %(accounts)s
@@ -2772,8 +2774,9 @@ def _repartition_par_compte(customer, vouchers=None):
         LEFT JOIN `tabPayment Entry` origine
             ON pe.payment_type = 'Internal Transfer'
            AND pe.paid_from = 'Chèques sans provision - A&S'
-           AND pe.paid_to = 'Espèces - A&S'
-           AND origine.name = pe.reference_no AND origine.docstatus = 1
+           AND (origine.name = pe.custom_impaye_origine
+                OR (pe.paid_to = 'Espèces - A&S' AND origine.name = pe.reference_no))
+           AND origine.docstatus = 1
         WHERE gle.voucher_type = 'Payment Entry'
           AND gle.is_cancelled = 0
           AND gle.account IN %(accounts)s

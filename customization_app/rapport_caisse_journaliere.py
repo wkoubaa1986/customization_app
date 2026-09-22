@@ -350,8 +350,9 @@ def _paiements_anciennes_commandes(d1, d2, exclude_names):
             LEFT JOIN `tabPayment Entry` origine
               ON pe.payment_type = 'Internal Transfer'
              AND pe.paid_from = 'Chèques sans provision - A&S'
-             AND pe.paid_to = 'Espèces - A&S'
-             AND origine.name = pe.reference_no AND origine.docstatus = 1
+             AND (origine.name = pe.custom_impaye_origine
+                  OR (pe.paid_to = 'Espèces - A&S' AND origine.name = pe.reference_no))
+             AND origine.docstatus = 1
              AND origine.party_type = 'Customer'
             WHERE pe.docstatus = 1
               AND (pe.payment_type = 'Receive' OR origine.name IS NOT NULL)

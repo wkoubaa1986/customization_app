@@ -649,7 +649,7 @@ class RelancePaiements {
 					<td style="max-width:260px;font-size:11px;color:#64748b">
 						${x.restant_impaye > 0 ? `<button class="rp-btn-mini rp-encaisser-impaye"
 							data-client="${this.esc(customer)}" data-piece="${this.esc(x.voucher_no)}">
-							${__('Encaisser en espèces')} (${this.fmt(x.restant_impaye)})</button><br>` : ''}
+							${__('Régulariser')} (${this.fmt(x.restant_impaye)})</button><br>` : ''}
 						${refs}${x.remarks ? `<div>${this.esc(x.remarks)}</div>` : ''}
 					</td>
 				</tr>${noteRow}`;

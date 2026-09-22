@@ -21,6 +21,34 @@ class TestMontants(unittest.TestCase):
         self.assertEqual(_montant(100, 100), 100)
 
 
+class TestModes(unittest.TestCase):
+    """Règles pures des trois modes : espèces, redépôt du même chèque, nouveau chèque."""
+
+    def test_numero_et_banque_de_la_piece_impayee(self):
+        from customization_app.caisse_impayes import numero_et_banque
+        self.assertEqual(numero_et_banque("0001170-BIAT / BR:90028502 / Impayé FT26259 du 2026-09-16"), ("0001170", "BIAT"))
+        self.assertEqual(numero_et_banque("4000608 / BR:90028502"), ("4000608", ""))
+        self.assertEqual(numero_et_banque(None), ("", ""))
+
+    def test_reference_du_transfert(self):
+        from customization_app.caisse_impayes import reference_transfert
+        self.assertEqual(reference_transfert("Espèces", "ACC-PAY-1", "0001170-BIAT / BR:1"), "ACC-PAY-1")
+        self.assertEqual(reference_transfert("Redépôt du même chèque", "ACC-PAY-1", "0001170-BIAT / BR:1"),
+                         "0001170-BIAT / Redépôt de ACC-PAY-1")
+        self.assertEqual(reference_transfert("Nouveau chèque", "ACC-PAY-1", "0001170-BIAT", n_cheque="0001173", banque="BIAT"),
+                         "0001173-BIAT / Remplace ACC-PAY-1")
+
+    def test_motifs_de_refus(self):
+        from customization_app.caisse_impayes import motif_refus_mode
+        self.assertIsNone(motif_refus_mode("Espèces", "0001170-BIAT"))
+        self.assertIsNone(motif_refus_mode("Redépôt du même chèque", "0001170-BIAT"))
+        self.assertIn("Nouveau chèque", motif_refus_mode("Redépôt du même chèque", ""))
+        self.assertIn("numéro", motif_refus_mode("Nouveau chèque", "x", n_cheque="12", banque="BIAT"))
+        self.assertIn("banque", motif_refus_mode("Nouveau chèque", "x", n_cheque="0001173", banque=" "))
+        self.assertIsNone(motif_refus_mode("Nouveau chèque", "x", n_cheque="0001173", banque="BIAT"))
+        self.assertIn("inconnu", motif_refus_mode("Troc", "x"))
+
+
 class TestReglementImpaye(unittest.TestCase):
     def test_reglement_et_restitutions(self):
         from customization_app.api import get_relance_detail, _repartition_par_compte
