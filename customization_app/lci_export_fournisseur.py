@@ -1,38 +1,34 @@
 """
-Renvoi au fournisseur de SON PROPRE classeur, annoté de nos ajustements.
+Renvoi au fournisseur de SON PROPRE classeur, RECONSTRUIT dans l'ordre de notre liste et
+annoté de nos ajustements.
 
-Le fournisseur a bâti sa cotation dans son fichier, avec ses références, son
-ordre et sa langue. Lui répondre dans un classeur maison l'oblige à tout
-réapparier à la main — c'est là que se perdent les remises et que reviennent
-les mauvaises quantités. On lui renvoie donc le fichier qu'il a envoyé, avec
-des colonnes ajoutées à droite (photo si son fichier n'en a plus, quantité
-retenue, prix cible, décision, observation, conteneur), et trois conventions
-demandées par l'utilisateur (22/09/2026) :
+Le fournisseur a bâti sa cotation dans son fichier, avec ses références, ses colonnes, ses
+photos et sa langue. Lui répondre dans un classeur maison l'oblige à tout réapparier à la
+main — c'est là que se perdent les remises et que reviennent les mauvaises quantités. On
+lui renvoie donc SES colonnes, SES valeurs et SES photos, mais :
 
-  - une ligne AJOUTÉE ou MODIFIÉE par nous est entièrement en orange clair,
-    la cellule dont la valeur change en orange plus soutenu ;
-  - une ligne ABANDONNÉE est RETIRÉE de son tableau et listée nommément en
-    bas (« lignes retirées de la commande »), avec le motif ;
-  - ses photos sont conservées quand son fichier en a (xlsx, ou xls via
-    xls_images) ; sinon on ajoute les nôtres (fiche Article) dans une colonne
-    « Photo ».
+  - dans l'ORDRE DE NOTRE DOCUMENT (groupes d'articles puis lignes), demande de
+    l'utilisateur du 22/09/2026 : c'est notre liste qui fait foi, son tableau est réordonné ;
+  - une ligne AJOUTÉE (absente de sa cotation) est insérée à sa place, avec notre photo
+    (fiche Article) posée dans sa colonne photo, comme dans « Excel à envoyer » ;
+  - une ligne ABANDONNÉE n'apparaît plus dans le tableau et est listée nommément en bas ;
+  - une ligne ajoutée ou modifiée (quantité, prix cible, additionnels) est entièrement en
+    orange clair, la cellule qui change en orange soutenu ;
+  - nos colonnes à droite : quantité retenue, prix cible, décision, observation (avec les
+    articles ADDITIONNELS embarqués, qu'il ne voyait pas), conteneur ;
+  - le plan de chargement : l'onglet récapitulatif « Conteneurs » ET un onglet par conteneur
+    (C1, C2…) avec ses lignes et leurs photos.
 
-Les articles ADDITIONNELS embarqués sur une ligne (membrane, robinet…)
-sont décrits dans l'observation de la ligne : sans cela, le fournisseur ne
-voyait pas qu'on attend 150 membranes en plus des 150 osmoseurs.
-
-Deux limites assumées, dites à l'écran :
-  - un .xls (format d'avant 2007) ne se réécrit pas : on le convertit en .xlsx.
-    Valeurs, hauteurs/largeurs, fusions et PHOTOS sont reprises (xls_images.py
-    lit les images et leurs ancrages dans le flux BIFF) ; le reste de la mise en
-    forme (couleurs, bordures, polices) n'est pas conservé ;
-  - dans un .xlsx qui porte des formules ou des photos, retirer physiquement
-    des lignes casserait ses totaux (openpyxl ne recale ni formules ni
-    ancrages) : la ligne est alors VIDÉE et MASQUÉE — même résultat à l'écran,
-    ses formules restent justes. Sans formule ni photo, la ligne est supprimée.
+Lecture du fichier reçu :
+  - .xlsx : openpyxl, en VALEURS (data_only) — le tableau étant réordonné, ses formules ne
+    peuvent pas survivre ; ses images sont relues avec leurs ancrages ;
+  - .xls : xlrd ne lit que les valeurs ; xls_images.py extrait les photos du flux BIFF avec
+    leurs ancrages, et on reprend hauteurs de lignes, largeurs de colonnes et fusions.
+Les lignes au-dessus de son en-tête (titres, coordonnées) et sous son tableau (conditions)
+sont recopiées ; les NOMBRES des lignes de queue sont effacés (ses totaux ne valent plus).
 """
 
-import bisect
+import copy
 import json
 import os
 
@@ -43,6 +39,7 @@ from frappe.utils import flt, nowdate
 from customization_app.lci_observation import qty_retenue
 from customization_app.liste_commande_import import (
     DOCTYPE,
+    RTL_LANGS,
     _add_label,
     _adds_map,
     _guard,
@@ -56,11 +53,12 @@ LABELS = {
         "ajoutees": "LIGNES NON COTÉES — merci de les chiffrer",
         "retirees": "LIGNES RETIRÉES DE LA COMMANDE",
         "additionnels": "Articles additionnels",
-        "legende": "Lignes orange : ajoutées ou modifiées de notre côté (cellule foncée = "
-                   "la valeur qui change). Lignes retirées de la commande : listées en bas.",
+        "legende": "Tableau réordonné selon notre liste. Lignes vertes : acceptées telles quelles. "
+                   "Lignes orange : ajoutées ou modifiées de notre côté (cellule foncée = la valeur qui change). Lignes retirées de la "
+                   "commande : listées en bas. Vos totaux d'origine ne sont pas repris.",
         "code": "Code", "designation": "Désignation", "titre": "Contre-proposition",
         "note_xls": "Fichier .xls converti en .xlsx : valeurs, dimensions et photos conservées ; le reste de la mise en forme d'origine peut différer.",
-        "note_masquees": "Lignes retirées : vidées et masquées (pour préserver vos formules et vos photos).",
+        "note_masquees": "",
     },
     "English": {
         "qty": "Target qty", "prix": "Target price", "decision": "Decision",
@@ -68,11 +66,12 @@ LABELS = {
         "ajoutees": "LINES NOT QUOTED — please price them",
         "retirees": "LINES REMOVED FROM THE ORDER",
         "additionnels": "Additional items",
-        "legende": "Orange rows: added or changed on our side (darker cell = the changed "
-                   "value). Lines removed from the order: listed below.",
+        "legende": "Table reordered to follow our list. Green rows: accepted as quoted. Orange rows: added or changed on our side "
+                   "(darker cell = the changed value). Lines removed from the order: listed below. "
+                   "Your original totals are not carried over.",
         "code": "Code", "designation": "Description", "titre": "Counter-offer",
         "note_xls": ".xls file converted to .xlsx: values, dimensions and pictures kept; other original formatting may differ.",
-        "note_masquees": "Removed lines: cleared and hidden (to keep your formulas and pictures intact).",
+        "note_masquees": "",
     },
     "Deutsch": {
         "qty": "Zielmenge", "prix": "Zielpreis", "decision": "Entscheidung",
@@ -80,11 +79,12 @@ LABELS = {
         "ajoutees": "NICHT ANGEBOTENE POSITIONEN — bitte bepreisen",
         "retirees": "AUS DER BESTELLUNG GESTRICHENE POSITIONEN",
         "additionnels": "Zusätzliche Artikel",
-        "legende": "Orange Zeilen: von uns hinzugefügt oder geändert (dunklere Zelle = "
-                   "geänderter Wert). Gestrichene Positionen: unten aufgeführt.",
+        "legende": "Tabelle nach unserer Liste neu geordnet. Grüne Zeilen: wie angeboten angenommen. Orange Zeilen: von uns hinzugefügt oder "
+                   "geändert (dunklere Zelle = geänderter Wert). Gestrichene Positionen: unten "
+                   "aufgeführt. Ihre ursprünglichen Summen werden nicht übernommen.",
         "code": "Code", "designation": "Bezeichnung", "titre": "Gegenangebot",
         "note_xls": ".xls-Datei in .xlsx umgewandelt: Werte, Abmessungen und Bilder erhalten; sonstige Formatierung kann abweichen.",
-        "note_masquees": "Gestrichene Zeilen: geleert und ausgeblendet (Formeln und Bilder bleiben erhalten).",
+        "note_masquees": "",
     },
     "Español": {
         "qty": "Cant. objetivo", "prix": "Precio objetivo", "decision": "Decisión",
@@ -92,11 +92,12 @@ LABELS = {
         "ajoutees": "LÍNEAS NO COTIZADAS — rogamos cotizarlas",
         "retirees": "LÍNEAS RETIRADAS DEL PEDIDO",
         "additionnels": "Artículos adicionales",
-        "legende": "Filas naranjas: añadidas o modificadas por nosotros (celda más oscura = "
-                   "valor modificado). Líneas retiradas del pedido: listadas abajo.",
+        "legende": "Tabla reordenada según nuestra lista. Filas verdes: aceptadas tal cual. Filas naranjas: añadidas o modificadas por "
+                   "nosotros (celda más oscura = valor modificado). Líneas retiradas del pedido: "
+                   "listadas abajo. Sus totales originales no se conservan.",
         "code": "Código", "designation": "Descripción", "titre": "Contraoferta",
         "note_xls": "Archivo .xls convertido a .xlsx: valores, dimensiones y fotos conservados; el resto del formato puede diferir.",
-        "note_masquees": "Líneas retiradas: vaciadas y ocultas (para conservar sus fórmulas y fotos).",
+        "note_masquees": "",
     },
     "العربية": {
         "qty": "الكمية المعتمدة", "prix": "السعر المستهدف", "decision": "القرار",
@@ -104,11 +105,12 @@ LABELS = {
         "ajoutees": "بنود غير مسعّرة — يرجى تسعيرها",
         "retirees": "بنود مستبعدة من الطلب",
         "additionnels": "بنود إضافية",
-        "legende": "الأسطر البرتقالية: بنود أضفناها أو عدّلناها (الخلية الأغمق = القيمة "
-                   "المعدّلة). البنود المستبعدة من الطلب: مدرجة في الأسفل.",
+        "legende": "أُعيد ترتيب الجدول وفق قائمتنا. الأسطر الخضراء: بنود مقبولة كما عُرضت. الأسطر البرتقالية: بنود أضفناها أو عدّلناها "
+                   "(الخلية الأغمق = القيمة المعدّلة). البنود المستبعدة من الطلب: مدرجة في الأسفل. "
+                   "مجاميعكم الأصلية غير منقولة.",
         "code": "المرجع", "designation": "التسمية", "titre": "عرض مضاد",
         "note_xls": "تم تحويل ملف .xls إلى .xlsx: القيم والأبعاد والصور محفوظة؛ قد يختلف باقي التنسيق.",
-        "note_masquees": "البنود المستبعدة: أُفرغت وأُخفيت (للحفاظ على معادلاتكم وصوركم).",
+        "note_masquees": "",
     },
 }
 
@@ -122,6 +124,7 @@ DECISIONS = {
 # hauteur (points) d'une ligne qui porte une vignette, et taille de la vignette (pixels)
 HAUTEUR_LIGNE_PHOTO = 52
 VIGNETTE_PX = 64
+EMU = 9525  # EMU par pixel
 
 
 def _labels(doc):
@@ -149,15 +152,17 @@ def _fichier_local(file_url):
     return frappe.get_doc("File", {"file_url": file_url}).get_full_path()
 
 
-def _charger(chemin):
-    """Classeur ouvert EN ÉCRITURE. Rend (workbook, converti?)."""
+def _charger(chemin, valeurs=False):
+    """Classeur ouvert EN LECTURE. Rend (workbook, converti?).
+
+    `valeurs=True` : un .xlsx est lu en valeurs (data_only) — nécessaire dès qu'on
+    réordonne son tableau, ses formules ne pouvant plus pointer au bon endroit.
+    """
     from openpyxl import Workbook, load_workbook
 
     ext = os.path.splitext(chemin)[1].lower()
     if ext != ".xls":
-        # data_only=False : les formules du fournisseur restent des formules,
-        # sinon son fichier revient figé sur les valeurs du jour de l'envoi.
-        return load_workbook(chemin), False
+        return load_workbook(chemin, data_only=valeurs), False
 
     import xlrd
     from openpyxl.utils import get_column_letter
@@ -205,47 +210,51 @@ def _mise_en_forme_xls(ws, sh, get_column_letter):
     return largeurs, hauteurs
 
 
-def _poser_images_xls(ws, images, largeurs, hauteurs):
-    """Ses images, à leur cellule d'origine, réduites à la taille de leur boîte (une photo
-    de 4 Mo dans une case de 200 px n'a pas besoin de ses 4 Mo)."""
+def _vignette(octets, cible):
+    """Octets d'image -> BytesIO réduit à `cible` (w, h) px, ou None. Une photo de 155 Mpx
+    dans une case de 200 px n'est pas une attaque : `draft` la décode déjà réduite."""
     import io as _io
+    import warnings
 
+    from PIL import Image as PILImage
+
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", PILImage.DecompressionBombWarning)
+            pil = PILImage.open(_io.BytesIO(octets))
+        if pil.format == "JPEG":
+            pil.draft("RGB", cible)
+        if pil.mode not in ("RGB", "RGBA", "L"):
+            pil = pil.convert("RGB")
+        pil.thumbnail(cible)
+        buf = _io.BytesIO()
+        if pil.mode == "RGBA":
+            pil.save(buf, format="PNG")
+        else:
+            pil.save(buf, format="JPEG", quality=85)
+        buf.seek(0)
+        return buf, pil.width, pil.height
+    except Exception:
+        return None
+
+
+def _poser_images_xls(ws, images, largeurs, hauteurs):
+    """Ses images, à leur cellule d'origine, réduites à la taille de leur boîte."""
     from openpyxl.drawing.image import Image as XLImage
     from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, OneCellAnchor
     from openpyxl.drawing.xdr import XDRPositiveSize2D
-    from PIL import Image as PILImage
 
     from customization_app.xls_images import boite_pixels
 
-    import warnings
-
-    EMU = 9525  # EMU par pixel
     for im in images:
         x, y, w, h = boite_pixels(im, largeurs, hauteurs)
-        try:
-            with warnings.catch_warnings():
-                # une photo de 155 Mpx dans son fichier n'est pas une attaque : on la réduit
-                warnings.simplefilter("ignore", PILImage.DecompressionBombWarning)
-                pil = PILImage.open(_io.BytesIO(im["data"]))
-            # certains fournisseurs collent des photos de 150 Mpx dans une case de 200 px :
-            # `draft` demande au décodeur JPEG une version réduite, sans charger l'original
-            cible = (max(16, int(w * 2)), max(16, int(h * 2)))
-            if pil.format == "JPEG":
-                pil.draft("RGB", cible)
-            if pil.mode not in ("RGB", "RGBA", "L"):
-                pil = pil.convert("RGB")
-            pil.thumbnail(cible)
-            buf = _io.BytesIO()
-            if pil.mode == "RGBA":
-                pil.save(buf, format="PNG")
-            else:
-                pil.save(buf, format="JPEG", quality=85)
-            buf.seek(0)
-            img = XLImage(buf)
-        except Exception:
+        res = _vignette(im["data"], (max(16, int(w * 2)), max(16, int(h * 2))))
+        if not res:
             continue
-        ratio = min(w / float(pil.width or 1), h / float(pil.height or 1))
-        img.width, img.height = max(1, int(pil.width * ratio)), max(1, int(pil.height * ratio))
+        buf, pw, ph = res
+        img = XLImage(buf)
+        ratio = min(w / float(pw or 1), h / float(ph or 1))
+        img.width, img.height = max(1, int(pw * ratio)), max(1, int(ph * ratio))
         img.anchor = OneCellAnchor(_from=AnchorMarker(col=im["col"], colOff=int(x * EMU), row=im["row"], rowOff=int(y * EMU)),
                                    ext=XDRPositiveSize2D(cx=int(img.width * EMU), cy=int(img.height * EMU)))
         ws.add_image(img)
@@ -277,31 +286,38 @@ def _conteneurs_ligne(row):
 # ------------------------------------------------------------ règles pures
 
 
-def lignes_supprimees(articles, corresp):
-    """Les lignes Excel (1-based, triées) des articles abandonnés qui ont une
-    place dans son tableau : celles qu'on retire."""
-    return sorted({int(corresp[r.name]) for r in articles
-                   if r.name in corresp and (r.decision or "") == "Abandonné"})
-
-
-def remapper_correspondances(corresp, supprimees):
-    """Après suppression physique de `supprimees` (lignes 1-based), chaque
-    ligne restante remonte d'autant de lignes supprimées au-dessus d'elle.
-    Les lignes supprimées disparaissent de la correspondance."""
-    supprimees = sorted(set(int(x) for x in supprimees))
-    out = {}
-    for k, xl in corresp.items():
-        xl = int(xl)
-        if xl in supprimees:
+def ordre_export(articles):
+    """L'ordre du fichier renvoyé = l'ordre de NOTRE document : [("groupe", nom) | ("ligne", r)],
+    une ligne de groupe à chaque changement de groupe d'articles ; les abandonnées n'y sont pas."""
+    sorties, courant = [], object()
+    for r in articles:
+        if (getattr(r, "decision", "") or "") == "Abandonné":
             continue
-        out[k] = xl - bisect.bisect_left(supprimees, xl)
-    return out
+        groupe = getattr(r, "item_group", "") or ""
+        if groupe != courant:
+            courant = groupe
+            if groupe:
+                sorties.append(("groupe", groupe))
+        sorties.append(("ligne", r))
+    return sorties
+
+
+def colonne_frequente(colonnes, defaut=None):
+    """La colonne où le fournisseur met ses photos = celle qui en porte le plus."""
+    if not colonnes:
+        return defaut
+    return max(set(colonnes), key=lambda c: (colonnes.count(c), -c))
+
+
+def hauteur_type(hauteurs, defaut=HAUTEUR_LIGNE_PHOTO):
+    """La hauteur (médiane) de ses lignes de données : celle qu'on donne aux lignes ajoutées."""
+    valeurs = sorted(float(h) for h in hauteurs if h)
+    return valeurs[len(valeurs) // 2] if valeurs else defaut
 
 
 def est_modifiee(qty, qty_fournisseur, prix, prix_fournisseur, additionnels=None):
-    """Une ligne est « modifiée » si notre quantité retenue diffère de la
-    sienne, si on renvoie un prix cible différent du sien, ou si on y embarque
-    des articles additionnels qu'il ne voit pas dans sa cotation."""
+    """Une ligne est « modifiée » si notre quantité retenue diffère de la sienne, si on
+    renvoie un prix cible différent du sien, ou si on y embarque des additionnels."""
     if additionnels:
         return True
     if qty > 0 and abs(flt(qty) - flt(qty_fournisseur)) > 0.001:
@@ -310,8 +326,7 @@ def est_modifiee(qty, qty_fournisseur, prix, prix_fournisseur, additionnels=None
 
 
 def texte_additionnels(adds, qty_ret, labels):
-    """« Articles additionnels : + 150 × Membrane 1812-80 GPD (Vontron) ; + 150 × Robinet »
-    — quantité = quantité par pack × quantité retenue, comme dans nos documents."""
+    """« Additional items: + 150 × Membrane 1812-80 GPD (Vontron) ; + 150 × Faucet »."""
     morceaux = []
     for a in adds or []:
         tot = flt(a.get("qty_par_pack")) * flt(qty_ret)
@@ -325,72 +340,89 @@ def texte_additionnels(adds, qty_ret, labels):
 
 
 def texte_observation(observation, adds, qty_ret, labels):
-    """L'observation envoyée = la sienne + la description des additionnels."""
     parties = [(observation or "").strip(), texte_additionnels(adds, qty_ret, labels)]
     return "\n".join(p for p in parties if p)
-
-
-def a_formules_ou_images(ws):
-    """Vrai si la feuille porte des formules ou des images : on ne supprime
-    alors pas de lignes physiquement (openpyxl ne recale ni les unes ni les
-    autres), on vide et on masque."""
-    if getattr(ws, "_images", None):
-        return True
-    for ligne in ws.iter_rows(values_only=True):
-        for v in ligne:
-            if isinstance(v, str) and v.startswith("="):
-                return True
-    return False
 
 
 # ------------------------------------------------------------ écriture
 
 
-def _poser_photo(ws, cellule, file_url, XLImage):
-    """Vignette de la fiche Article dans la cellule. Rend True si posée."""
-    buf = _img_thumb(file_url, max_px=VIGNETTE_PX * 2)
-    if not buf:
-        return False
+def _copier_image(ws, img, delta_lignes, XLImage, colonne=None):
+    """Recopie une image d'openpyxl à `delta_lignes` plus bas (ou plus haut), même colonne
+    (ou `colonne`), mêmes décalages, même taille."""
+    import io as _io
+
     try:
-        img = XLImage(buf)
-        ratio = (img.width or 1) / float(img.height or 1)
-        img.height = VIGNETTE_PX
-        img.width = int(VIGNETTE_PX * ratio)
-        img.anchor = cellule.coordinate
-        ws.add_image(img)
-        ws.row_dimensions[cellule.row].height = HAUTEUR_LIGNE_PHOTO
+        nouveau = XLImage(_io.BytesIO(img._data()))
+        ancre = copy.deepcopy(img.anchor)
+        ancre._from.row = int(ancre._from.row) + delta_lignes
+        if colonne is not None:
+            ancre._from.col = colonne
+        fin = getattr(ancre, "to", None)
+        if fin is not None:
+            fin.row = int(fin.row) + delta_lignes
+            if colonne is not None:
+                fin.col = colonne
+        ext = getattr(ancre, "ext", None)
+        if ext is not None:
+            nouveau.width, nouveau.height = ext.width / EMU, ext.height / EMU
+        nouveau.anchor = ancre
+        ws.add_image(nouveau)
         return True
     except Exception:
         return False
 
 
-def _retirer(ws, supprimees, physique):
-    """Retire les lignes abandonnées du tableau : suppression physique, ou
-    vidage + masquage quand la feuille porte des formules ou des photos."""
-    if physique:
-        for xl in sorted(supprimees, reverse=True):
-            ws.delete_rows(xl)
-        return
-    lignes = set(supprimees)
-    for xl in lignes:
-        for c in range(1, (ws.max_column or 1) + 1):
-            ws.cell(row=xl, column=c).value = None
-        ws.row_dimensions[xl].hidden = True
-    # une image ancrée sur une ligne masquée resterait visible par-dessus la suivante
-    restantes = []
-    for img in getattr(ws, "_images", []) or []:
-        marqueur = getattr(img.anchor, "_from", None)
-        if marqueur is not None and (int(marqueur.row) + 1) in lignes:
-            continue
-        restantes.append(img)
-    ws._images = restantes
+def _poser_vignette(ws, ligne, colonne, buf, pw, ph, max_px=VIGNETTE_PX, dx=2, dy=2):
+    """Une vignette (BytesIO) ancrée dans la cellule (ligne, colonne 1-based)."""
+    from openpyxl.drawing.image import Image as XLImage
+    from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, OneCellAnchor
+    from openpyxl.drawing.xdr import XDRPositiveSize2D
+
+    img = XLImage(buf)
+    ratio = min(max_px / float(pw or max_px), max_px / float(ph or max_px), 1.0)
+    img.width, img.height = max(1, int(pw * ratio)), max(1, int(ph * ratio))
+    img.anchor = OneCellAnchor(_from=AnchorMarker(col=colonne - 1, colOff=dx * EMU, row=ligne - 1, rowOff=dy * EMU),
+                               ext=XDRPositiveSize2D(cx=img.width * EMU, cy=img.height * EMU))
+    ws.add_image(img)
+    return img.height + dy
+
+
+def _poser_photo_article(ws, ligne, colonne, file_url, max_px=VIGNETTE_PX, dx=2, dy=2):
+    """Notre photo (fiche Article) dans une cellule — même logique que « Excel à envoyer »."""
+    buf = _img_thumb(file_url, max_px=max_px * 2)
+    if not buf:
+        return False
+    from PIL import Image as PILImage
+
+    try:
+        pil = PILImage.open(buf)
+        pw, ph = pil.size
+        buf.seek(0)
+    except Exception:
+        return False
+    _poser_vignette(ws, ligne, colonne, buf, pw, ph, max_px, dx, dy)
+    return True
+
+
+def _copier_style(src, dst):
+    try:
+        if src.has_style:
+            dst.font = copy.copy(src.font)
+            dst.fill = copy.copy(src.fill)
+            dst.border = copy.copy(src.border)
+            dst.alignment = copy.copy(src.alignment)
+            dst.number_format = src.number_format
+    except Exception:
+        pass
 
 
 @frappe.whitelist()
 def download_reponse_annotee(docname):
-    """Rend le classeur du fournisseur enrichi de nos ajustements."""
+    """Rend le classeur du fournisseur, réordonné selon notre liste et enrichi de nos ajustements."""
     import io
 
+    from openpyxl import Workbook
     from openpyxl.drawing.image import Image as XLImage
     from openpyxl.styles import Alignment, Font, PatternFill
     from openpyxl.utils import get_column_letter
@@ -401,41 +433,53 @@ def download_reponse_annotee(docname):
     L = _labels(doc)
     devise = doc.devise or "USD"
 
-    wb, converti = _charger(_fichier_local(doc.fichier_fournisseur))
+    wb_src, converti = _charger(_fichier_local(doc.fichier_fournisseur), valeurs=True)
     feuille = plan.get("feuille")
-    if feuille not in wb.sheetnames:
+    if feuille not in wb_src.sheetnames:
         frappe.throw(_("La feuille « {0} » n'existe plus dans le fichier joint.").format(feuille))
-    ws = wb[feuille]
+    ws_src = wb_src[feuille]
 
     corresp = {k: int(v) for k, v in (plan.get("correspondances") or {}).items()}
     mapping = plan.get("mapping") or {}
     ligne_entete = int(plan.get("ligne_entete") or 0) + 1      # 1-based
     adds_map = _adds_map(doc)
+    max_col = ws_src.max_column or 1
+
+    # ses images, indexées par ligne source ; sa colonne photo = la plus fournie
+    images_src = {}
+    for img in getattr(ws_src, "_images", []) or []:
+        images_src.setdefault(int(img.anchor._from.row) + 1, []).append(img)
+    lignes_tableau = sorted(set(corresp.values()))
+    fin_tableau = max(lignes_tableau) if lignes_tableau else ligne_entete
+    col_photo = colonne_frequente([int(i.anchor._from.col) + 1 for xl in lignes_tableau for i in images_src.get(xl, [])])
+    hauteur_donnees = hauteur_type([ws_src.row_dimensions[xl].height for xl in lignes_tableau])
+    fusions_par_ligne = {}
+    for rng in ws_src.merged_cells.ranges:
+        if rng.min_row == rng.max_row:
+            fusions_par_ligne.setdefault(rng.min_row, []).append((rng.min_col, rng.max_col))
 
     ORANGE = PatternFill("solid", fgColor="FFE0B2")        # ligne ajoutée ou modifiée
     ORANGE_FORT = PatternFill("solid", fgColor="FFB74D")   # la valeur qui change
+    VERT = PatternFill("solid", fgColor="DCEDC8")          # ligne acceptée telle quelle
     GRIS = PatternFill("solid", fgColor="EDEDED")          # bloc des lignes retirées
+    GROUPE = PatternFill("solid", fgColor="D9E7FF")        # ligne de groupe d'articles
     ENTETE = PatternFill("solid", fgColor="D9E7FF")
     gras = Font(bold=True)
 
-    # 1. les lignes abandonnées sortent de SON tableau (avant tout calcul de position)
-    supprimees = lignes_supprimees(doc.articles, corresp)
-    # suppression physique seulement si rien ne dépend des numéros de ligne (ni formule, ni
-    # image ancrée) : openpyxl ne recale ni les unes ni les autres. Un .xls converti porte
-    # désormais ses photos, donc il passe lui aussi par le vidage + masquage.
-    physique = not a_formules_ou_images(ws)
-    retirees = [r for r in doc.articles if (r.decision or "") == "Abandonné"]
-    if supprimees:
-        _retirer(ws, supprimees, physique)
-        if physique:
-            corresp = remapper_correspondances(corresp, supprimees)
+    out = Workbook()
+    ws = out.active
+    ws.title = feuille[:31]
+    if doc.langue_cible in RTL_LANGS:
+        ws.sheet_view.rightToLeft = True
+    for lettre, dim in ws_src.column_dimensions.items():
+        if dim.width:
+            ws.column_dimensions[lettre].width = dim.width
 
-    # 2. ses photos restent si son fichier en a encore ; sinon les nôtres
-    garder_photos = bool(getattr(ws, "_images", None))
-    col0 = (ws.max_column or 1) + 2                  # une colonne vide de respiration
+    # nos colonnes à droite ; « Photo » seulement s'il n'a pas de colonne photo à lui
+    col0 = max_col + 2
     avec_conteneurs = any((r.repartition_conteneurs or "") for r in doc.articles)
     colonnes = []
-    if not garder_photos:
+    if col_photo is None and any(getattr(r, "image", None) for r in doc.articles):
         colonnes.append(("photo", L["photo"], 12))
     colonnes += [("qty", L["qty"], 13), ("prix", f'{L["prix"]} ({devise})', 15),
                  ("decision", L["decision"], 14), ("observation", L["observation"], 56)]
@@ -444,12 +488,24 @@ def download_reponse_annotee(docname):
     pos = {cle: col0 + i for i, (cle, _lbl, _w) in enumerate(colonnes)}
     derniere_col = col0 + len(colonnes) - 1
 
-    for i, (_cle, lbl, w) in enumerate(colonnes):
-        c = ws.cell(row=ligne_entete, column=col0 + i, value=lbl)
-        c.font = gras
-        c.fill = ENTETE
-        c.alignment = Alignment(wrap_text=True, vertical="center")
-        ws.column_dimensions[get_column_letter(col0 + i)].width = w
+    def copier_ligne(xl_src, xl_dst, effacer_nombres=False):
+        for c in range(1, max_col + 1):
+            src = ws_src.cell(row=xl_src, column=c)
+            v = src.value
+            if effacer_nombres and isinstance(v, (int, float)) and not isinstance(v, bool):
+                v = None
+            dst = ws.cell(row=xl_dst, column=c, value=v)
+            _copier_style(src, dst)
+        h = ws_src.row_dimensions[xl_src].height
+        if h:
+            ws.row_dimensions[xl_dst].height = h
+        for c1, c2 in fusions_par_ligne.get(xl_src, []):
+            try:
+                ws.merge_cells(start_row=xl_dst, end_row=xl_dst, start_column=c1, end_column=c2)
+            except Exception:
+                pass
+        for img in images_src.get(xl_src, []):
+            _copier_image(ws, img, xl_dst - xl_src, XLImage)
 
     def colorer_ligne(xl, fond):
         for c in range(1, derniere_col + 1):
@@ -459,90 +515,210 @@ def download_reponse_annotee(docname):
         cq = ws.cell(row=xl, column=pos["qty"], value=(qty if qty > 0 else None))
         cp = ws.cell(row=xl, column=pos["prix"], value=prix or None)
         ws.cell(row=xl, column=pos["decision"], value=_decision(doc, r.decision))
-        co = ws.cell(row=xl, column=pos["observation"],
-                     value=texte_observation(r.observation, adds, qty, L))
+        co = ws.cell(row=xl, column=pos["observation"], value=texte_observation(r.observation, adds, qty, L))
         co.alignment = Alignment(wrap_text=True, vertical="top")
         if avec_conteneurs:
             ws.cell(row=xl, column=pos["conteneur"], value=_conteneurs_ligne(r))
         if "photo" in pos and getattr(r, "image", None):
-            _poser_photo(ws, ws.cell(row=xl, column=pos["photo"]), r.image, XLImage)
+            _poser_photo_article(ws, xl, pos["photo"], r.image)
+            ws.row_dimensions[xl].height = max(ws.row_dimensions[xl].height or 0, HAUTEUR_LIGNE_PHOTO)
         return cq, cp
 
-    # 3. ses lignes, annotées
-    dernier = ligne_entete
-    non_appariees = []
-    for r in doc.articles:
-        if (r.decision or "") == "Abandonné":
+    # 1. tout ce qui précède son en-tête (titres, coordonnées), puis l'en-tête lui-même
+    for xl in range(1, ligne_entete + 1):
+        copier_ligne(xl, xl)
+    for rng in ws_src.merged_cells.ranges:
+        if rng.min_row != rng.max_row and rng.max_row <= ligne_entete:
+            try:
+                ws.merge_cells(str(rng))
+            except Exception:
+                pass
+    for i, (_cle, lbl, w) in enumerate(colonnes):
+        c = ws.cell(row=ligne_entete, column=col0 + i, value=lbl)
+        c.font = gras
+        c.fill = ENTETE
+        c.alignment = Alignment(wrap_text=True, vertical="center")
+        ws.column_dimensions[get_column_letter(col0 + i)].width = w
+
+    # 2. le corps, dans NOTRE ordre
+    c_code = (mapping.get("code") + 1) if mapping.get("code") is not None else None
+    c_des = (mapping.get("designation") + 1) if mapping.get("designation") is not None else None
+    c_qty = (mapping.get("qty") + 1) if mapping.get("qty") is not None else None
+    c_vol = (mapping.get("volume_total_m3") + 1) if mapping.get("volume_total_m3") is not None else None
+    ligne = ligne_entete
+    for genre, valeur in ordre_export(doc.articles):
+        ligne += 1
+        if genre == "groupe":
+            cell = ws.cell(row=ligne, column=1, value=valeur)
+            cell.font = gras
+            for c in range(1, derniere_col + 1):
+                ws.cell(row=ligne, column=c).fill = GROUPE
+            try:
+                ws.merge_cells(start_row=ligne, end_row=ligne, start_column=1, end_column=max_col)
+            except Exception:
+                pass
+            ws.row_dimensions[ligne].height = 18
             continue
-        xl = corresp.get(r.name)
-        if not xl:
-            non_appariees.append(r)
-            continue
-        dernier = max(dernier, xl)
+        r = valeur
         qty = qty_retenue(r)
         prix = _prix_cible_export(r)
         adds = adds_map.get(r.name, [])
-        qty_frn = flt(r.qty_fournisseur) or flt(r.qty)
-        cq, cp = ecrire_nos_colonnes(xl, r, qty, prix, adds)
-        if est_modifiee(qty, qty_frn, prix, flt(r.prix_fournisseur), adds):
-            colorer_ligne(xl, ORANGE)
-            if qty > 0 and abs(qty - qty_frn) > 0.001:
-                cq.fill = ORANGE_FORT
-            if prix > 0 and abs(prix - flt(r.prix_fournisseur)) > 0.00001:
-                cp.fill = ORANGE_FORT
-            if adds:
-                ws.cell(row=xl, column=pos["observation"]).fill = ORANGE_FORT
-
-    # 4. nos lignes que sa cotation ne contient pas : ajoutées sous le tableau,
-    # dans SES colonnes quand on sait où elles sont — en orange, comme toute ligne ajoutée.
-    ligne = dernier + 3
-    c_code = (mapping.get("code") or 0) + 1
-    c_des = (mapping.get("designation") or 1) + 1
-    c_qty = (mapping.get("qty") or 2) + 1
-    if non_appariees:
-        t = ws.cell(row=ligne, column=1, value=L["ajoutees"])
-        t.font = Font(bold=True, color="FFB00020")
-        ligne += 1
-        for r in non_appariees:
-            ws.cell(row=ligne, column=c_code, value=r.item_code or "")
-            ws.cell(row=ligne, column=c_des, value=r.item_name_traduit or r.item_name or "")
-            ws.cell(row=ligne, column=c_qty, value=qty_retenue(r))
-            ecrire_nos_colonnes(ligne, r, qty_retenue(r), _prix_cible_export(r), adds_map.get(r.name, []))
+        xl = corresp.get(r.name)
+        if xl:
+            copier_ligne(xl, ligne)
+            qty_frn = flt(r.qty_fournisseur) or flt(r.qty)
+            cq, cp = ecrire_nos_colonnes(ligne, r, qty, prix, adds)
+            acceptee = (r.decision or "") == "Accepté"
+            if acceptee:
+                colorer_ligne(ligne, VERT)          # demande utilisateur 22/09 : accepté = vert
+            if est_modifiee(qty, qty_frn, prix, flt(r.prix_fournisseur), adds):
+                if not acceptee:
+                    colorer_ligne(ligne, ORANGE)
+                if qty > 0 and abs(qty - qty_frn) > 0.001:
+                    cq.fill = ORANGE_FORT
+                if prix > 0 and abs(prix - flt(r.prix_fournisseur)) > 0.00001:
+                    cp.fill = ORANGE_FORT
+                if adds:
+                    ws.cell(row=ligne, column=pos["observation"]).fill = ORANGE_FORT
+        else:
+            # ligne AJOUTÉE : nos valeurs dans ses colonnes, notre photo dans sa colonne photo
+            if c_code:
+                ws.cell(row=ligne, column=c_code, value=r.item_code or "")
+            if c_des:
+                d = ws.cell(row=ligne, column=c_des, value=r.item_name_traduit or r.item_name or "")
+                d.alignment = Alignment(wrap_text=True, vertical="top")
+            if c_qty:
+                ws.cell(row=ligne, column=c_qty, value=qty or None)
+            if c_vol and flt(r.volume_ligne_m3):
+                ws.cell(row=ligne, column=c_vol, value=round(flt(r.volume_ligne_m3), 4))
+            ws.row_dimensions[ligne].height = hauteur_donnees
+            if col_photo is not None:
+                if not c_code or c_code != col_photo:
+                    ws.cell(row=ligne, column=col_photo, value=r.item_code or "").alignment = Alignment(vertical="top")
+                if getattr(r, "image", None):
+                    _poser_photo_article(ws, ligne, col_photo, r.image, max_px=min(120, int(hauteur_donnees * 96 / 72) - 30), dx=4, dy=22)
+            ecrire_nos_colonnes(ligne, r, qty, prix, adds)
             colorer_ligne(ligne, ORANGE)
-            ligne += 1
+    fin_corps = ligne
 
-    # 5. les lignes retirées, nommées, avec le motif
-    if retirees:
+    # 3. ce qu'il avait sous son tableau (conditions, signature) — sans ses nombres (totaux caducs)
+    ligne += 1
+    for xl in range(fin_tableau + 1, (ws_src.max_row or 0) + 1):
+        if all(ws_src.cell(row=xl, column=c).value in (None, "") for c in range(1, max_col + 1)):
+            continue
         ligne += 1
+        copier_ligne(xl, ligne, effacer_nombres=True)
+
+    # 4. les lignes retirées, nommées, avec le motif
+    retirees = [r for r in doc.articles if (r.decision or "") == "Abandonné"]
+    if retirees:
+        ligne += 2
         t = ws.cell(row=ligne, column=1, value=L["retirees"])
         t.font = Font(bold=True, color="FF6B7280")
-        ligne += 1
         for r in retirees:
-            ws.cell(row=ligne, column=c_code, value=r.item_code or "")
-            ws.cell(row=ligne, column=c_des, value=r.item_name_traduit or r.item_name or "")
+            ligne += 1
+            ws.cell(row=ligne, column=(c_code or 1), value=r.item_code or "")
+            ws.cell(row=ligne, column=(c_des or 2), value=r.item_name_traduit or r.item_name or "")
             ws.cell(row=ligne, column=pos["decision"], value=_decision(doc, r.decision))
             co = ws.cell(row=ligne, column=pos["observation"], value=(r.observation or "").strip())
             co.alignment = Alignment(wrap_text=True, vertical="top")
             colorer_ligne(ligne, GRIS)
-            ligne += 1
 
-    ligne += 1
+    # 5. légende
+    ligne += 2
     lg = ws.cell(row=ligne, column=col0,
                  value=f"{L['titre']} — {doc.name} — {doc.date_commande or nowdate()} · {L['legende']}")
     lg.font = Font(italic=True, size=9, color="FF6B7280")
     if converti:
         ws.cell(row=ligne + 1, column=col0, value=L["note_xls"]).font = Font(italic=True, size=9)
-    elif supprimees and not physique:
-        ws.cell(row=ligne + 1, column=col0, value=L["note_masquees"]).font = Font(italic=True, size=9)
 
-    # le plan de chargement part dans un onglet à lui : le fournisseur charge
-    # les conteneurs, il lui faut la même feuille que nous.
+    # 6. le plan de chargement : récapitulatif + un onglet par conteneur, avec les photos
     from customization_app.lci_conteneurs import ecrire_feuille
-    ecrire_feuille(wb, doc)
+    ecrire_feuille(out, doc)
+    _onglets_par_conteneur(out, doc, images_src, corresp, col_photo, L)
 
     buf = io.BytesIO()
-    wb.save(buf)
+    out.save(buf)
     base = os.path.splitext(os.path.basename(doc.fichier_fournisseur))[0][:60]
     frappe.response["filename"] = f"{base}-{doc.name}-annote.xlsx"
     frappe.response["filecontent"] = buf.getvalue()
     frappe.response["type"] = "binary"
+    return {"lignes": fin_corps - ligne_entete, "photos": len(ws._images)}
+
+
+def _onglets_par_conteneur(wb, doc, images_src, corresp, col_photo, L):
+    """Un onglet par conteneur (C1, C2…) : ses lignes, quantités chargées, volumes, montants —
+    et la photo de chaque article (la sienne si sa cotation en avait une, sinon la nôtre)."""
+    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.utils import get_column_letter
+
+    from customization_app.lci_conteneurs import LABELS_CONT, plan_enregistre
+    from customization_app.liste_commande_import import _labels as _labels_export
+    from customization_app.liste_commande_import import _uom_out
+
+    plan = plan_enregistre(doc)
+    if not plan.get("conteneurs"):
+        return
+    LC = LABELS_CONT.get(doc.langue_cible) or LABELS_CONT["Français"]
+    LX = _labels_export(doc)
+    devise = doc.devise or "USD"
+    par_row = {r.name: r for r in doc.articles}
+    gras = Font(bold=True)
+    fond_th = PatternFill("solid", fgColor="F0F2F5")
+    fond_ct = PatternFill("solid", fgColor="F9F0FF")
+
+    for c in plan["conteneurs"]:
+        titre = f'C{c["no"]} {c.get("type") or ""}'.strip()[:31]
+        if titre in wb.sheetnames:
+            del wb[titre]
+        ws = wb.create_sheet(title=titre)
+        if doc.langue_cible in RTL_LANGS:
+            ws.sheet_view.rightToLeft = True
+        for col, w in enumerate([5, 18, 14, 48, 10, 8, 12, 14], 1):
+            ws.column_dimensions[get_column_letter(col)].width = w
+        cap = flt(c["capacite"])
+        pct = (flt(c["volume"]) / cap * 100) if cap else 0
+        ws.append([f'{LC["conteneur"]} C{c["no"]} — {c.get("type") or ""}'
+                   + (f' — {LC["depart"]} : {frappe.utils.formatdate(c["date"])}' if c.get("date") else "")
+                   + f' — {LC["capacite"]} : {cap:.2f} m³ — {LC["remplissage"]} : {pct:.0f} %'])
+        ws["A1"].font = Font(bold=True, size=12)
+        ws["A1"].fill = fond_ct
+        ws.append([])
+        ws.append(["#", LC["code"], L["photo"], LC["designation"], LC["qty"], LC["uom"], LC["volume"], LC["montant"]])
+        for col in range(1, 9):
+            cell = ws.cell(row=3, column=col)
+            cell.font = Font(bold=True, size=9)
+            cell.fill = fond_th
+        for i, l in enumerate(c["lignes"], 1):
+            r = par_row.get(l["row"])
+            ws.append([i, l["item_code"], "", l["libelle"] + (f' ({LC["scindee"]})' if l["scinde"] else ""),
+                       flt(l["qty"]), _uom_out(l["uom"], LX), round(flt(l["volume"]), 4), round(flt(l["montant"]), 2)])
+            ligne = ws.max_row
+            ws.row_dimensions[ligne].height = HAUTEUR_LIGNE_PHOTO
+            ws.cell(row=ligne, column=4).alignment = Alignment(wrap_text=True, vertical="center")
+            ws.cell(row=ligne, column=8).number_format = f'#,##0.00 "{devise}"'
+            _photo_conteneur(ws, ligne, r, images_src, corresp, col_photo)
+        ws.append(["", "", "", LC["total"], "", "", round(flt(c["volume"]), 3), round(flt(c["montant"]), 2)])
+        for col in (4, 7, 8):
+            ws.cell(row=ws.max_row, column=col).font = gras
+        ws.cell(row=ws.max_row, column=8).number_format = f'#,##0.00 "{devise}"'
+
+
+def _photo_conteneur(ws, ligne, r, images_src, corresp, col_photo):
+    """La photo d'une ligne d'onglet conteneur : la sienne (colonne photo de sa cotation), sinon la nôtre."""
+    if not r:
+        return
+    xl = corresp.get(r.name)
+    if xl and col_photo is not None:
+        siennes = [i for i in images_src.get(xl, []) if int(i.anchor._from.col) + 1 == col_photo]
+        for img in siennes[:1]:
+            try:
+                res = _vignette(img._data(), (VIGNETTE_PX * 2, VIGNETTE_PX * 2))
+            except Exception:
+                res = None
+            if res:
+                buf, pw, ph = res
+                _poser_vignette(ws, ligne, 3, buf, pw, ph)
+                return
+    if getattr(r, "image", None):
+        _poser_photo_article(ws, ligne, 3, r.image)

@@ -77,23 +77,28 @@ class TestLangue(unittest.TestCase):
         attendu = set(E.LABELS["Français"])
         for langue, mots in E.LABELS.items():
             self.assertEqual(set(mots), attendu, langue)
-        for cle in ("photo", "retirees", "additionnels", "note_xls", "note_masquees"):
+        for cle in ("photo", "retirees", "additionnels", "note_xls"):
             self.assertIn(cle, attendu)
 
 
-class TestLignesRetirees(unittest.TestCase):
-    def test_seules_les_abandonnees_appariees_sont_retirees(self):
-        articles = [Row(name="a", decision="Abandonné"), Row(name="b", decision="Accepté"),
-                    Row(name="c", decision="Abandonné"), Row(name="d", decision="Abandonné")]
-        corresp = {"a": 5, "b": 6, "c": 9}          # d n'a pas de place dans son tableau
-        self.assertEqual(E.lignes_supprimees(articles, corresp), [5, 9])
+class TestOrdreExport(unittest.TestCase):
+    def test_ordre_du_document_avec_groupes_sans_abandonnees(self):
+        articles = [Row(name="a", item_group="RO"), Row(name="b", item_group="RO"),
+                    Row(name="c", item_group="Filtres", decision="Abandonné"),
+                    Row(name="d", item_group="Filtres"), Row(name="e", item_group="")]
+        ordre = E.ordre_export(articles)
+        self.assertEqual([(g, (v if g == "groupe" else v.name)) for g, v in ordre],
+                         [("groupe", "RO"), ("ligne", "a"), ("ligne", "b"), ("groupe", "Filtres"), ("ligne", "d"), ("ligne", "e")])
 
-    def test_remapper_apres_suppression_physique(self):
-        corresp = {"a": 5, "b": 6, "c": 9, "e": 12}
-        self.assertEqual(E.remapper_correspondances(corresp, [5, 9]), {"b": 5, "e": 10})
+    def test_colonne_photo_la_plus_fournie(self):
+        self.assertEqual(E.colonne_frequente([3, 2, 3, 3, 4, 2]), 3)
+        self.assertEqual(E.colonne_frequente([2, 3]), 2)      # égalité : la plus à gauche
+        self.assertIsNone(E.colonne_frequente([]))
+        self.assertEqual(E.colonne_frequente([], 7), 7)
 
-    def test_remapper_sans_suppression(self):
-        self.assertEqual(E.remapper_correspondances({"a": 3}, []), {"a": 3})
+    def test_hauteur_type_mediane(self):
+        self.assertEqual(E.hauteur_type([357, 20, 400, None, 380]), 380)
+        self.assertEqual(E.hauteur_type([]), E.HAUTEUR_LIGNE_PHOTO)
 
 
 class TestLigneModifiee(unittest.TestCase):
