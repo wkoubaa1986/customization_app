@@ -7,19 +7,23 @@ depuis ce compte, dont le champ `custom_impaye_origine` désigne la pièce d'ori
 efface `party` sur un transfert interne : Relance, rapport de caisse et BRS retrouvent le client
 par ce lien).
 
-Trois façons de régulariser (demande utilisateur 22/09/2026) :
+Six façons de régulariser, COMBINABLES en plusieurs lignes (demande utilisateur 22/09/2026 :
+« ou plusieurs paiements fractionnés de ces combinaisons ») :
   - Espèces : transfert vers « Espèces - A&S » (entrée de caisse) ;
-  - Redépôt du même chèque : transfert vers « Chèques - A&S » (portefeuille), même n° et même
-    banque que l'impayé → il ressort dans les chèques à remettre, part sur un bordereau, et le
-    Server Script « Traitement des encaissement » le passe sur Zitouna à la remise ;
-  - Nouveau chèque : idem avec le n° / la banque du chèque de remplacement.
-Si le chèque redéposé ou de remplacement revient encore impayé, le transfert est simplement
-annulé (par le bordereau « Sans provision » ou par le flux BRS des impayés) : l'argent est de
-nouveau sur les impayés, porté par la pièce d'origine — la traçabilité est complète.
+  - Redépôt du même chèque : vers « Chèques - A&S » (portefeuille), même n° et même banque ;
+  - Nouveau chèque : idem avec le n° / la banque du chèque de remplacement ;
+  - Traite bancaire : vers « Traite Bancaire - A&S » (portefeuille des effets), n° + échéance ;
+  - Virement, Carte de crédit : directement sur Zitouna (l'argent y est déjà), référence /
+    n° de ticket TPE quand on les a — BRS relie le mouvement par la référence ou, à défaut,
+    par montant et date.
+Un chèque ou une traite de régularisation part ensuite sur un bordereau comme n'importe quelle
+pièce ; s'il revient encore impayé, le transfert est simplement annulé (bordereau « Sans
+provision » ou flux BRS des impayés) : la créance est de nouveau sur la pièce d'origine.
 
 `reference_no` : pour les espèces, le nom de la pièce d'origine (convention historique) ; pour un
-chèque, « <n°>-<banque> / … » — la forme que BRS lit pour apparier une remise.
+chèque ou une traite, « <n°>-<banque> / … » — la forme que BRS lit pour apparier une remise.
 """
+import json
 import math
 import re
 
@@ -32,11 +36,34 @@ from customization_app.caisse_encaissement_dettes import ROLES
 IMPAYES = "Chèques sans provision - A&S"
 ESPECES = "Espèces - A&S"
 PORTEFEUILLE = "Chèques - A&S"
+TRAITES = "Traite Bancaire - A&S"
+BANQUE = "STE430127B - Zitouna - A&S"
+
 MODE_ESPECES = "Espèces"
 MODE_REDEPOT = "Redépôt du même chèque"
 MODE_NOUVEAU = "Nouveau chèque"
-COMPTE_PAR_MODE = {MODE_ESPECES: ESPECES, MODE_REDEPOT: PORTEFEUILLE, MODE_NOUVEAU: PORTEFEUILLE}
-MOYEN_PAR_MODE = {MODE_ESPECES: "Espèces", MODE_REDEPOT: "Chèque", MODE_NOUVEAU: "Chèque"}
+MODE_TRAITE = "Traite bancaire"
+MODE_VIREMENT = "Virement"
+MODE_CARTE = "Carte de crédit"
+
+#: compte de destination, moyen de paiement ERPNext, contrôle de la pièce saisie.
+MODES = {
+    MODE_ESPECES: {"compte": ESPECES, "moyen": "Espèces", "piece": None},
+    MODE_REDEPOT: {"compte": PORTEFEUILLE, "moyen": "Chèque", "piece": None},
+    MODE_NOUVEAU: {"compte": PORTEFEUILLE, "moyen": "Chèque", "piece": "obligatoire",
+                   "rx": r"\d{4,20}", "attendu": "4 à 20 chiffres", "banque": True,
+                   "libelle": "le numéro du nouveau chèque"},
+    MODE_TRAITE: {"compte": TRAITES, "moyen": "Traite bancaire LC", "piece": "obligatoire",
+                  "rx": r"\d{4,20}", "attendu": "4 à 20 chiffres", "banque": False, "echeance": True,
+                  "libelle": "le numéro de la traite"},
+    MODE_VIREMENT: {"compte": BANQUE, "moyen": "Virement", "piece": "facultatif",
+                    "rx": r"[A-Za-z0-9/\-]{3,30}", "attendu": "3 à 30 lettres ou chiffres",
+                    "libelle": "la référence du virement"},
+    MODE_CARTE: {"compte": BANQUE, "moyen": "Carte de crédit", "piece": "facultatif",
+                 "rx": r"[A-Za-z0-9/\-]{3,30}", "attendu": "3 à 30 lettres ou chiffres",
+                 "libelle": "le numéro du ticket TPE"},
+}
+TOLERANCE = 0.0005
 
 
 # ------------------------------------------------------------ règles pures
@@ -49,32 +76,71 @@ def numero_et_banque(reference_no):
     return num.strip(), banque.strip()
 
 
-def reference_transfert(mode, piece, origine_reference, n_cheque=None, banque=None):
-    """Le `reference_no` du transfert selon le mode. Pour un chèque, le n° ouvre le libellé
-    (c'est ce que BRS et le bordereau lisent) et la pièce d'origine est citée après."""
+def reference_transfert(mode, piece, origine_reference, n_piece=None, banque=None):
+    """Le `reference_no` du transfert selon le mode. Pour un chèque ou une traite, le n° ouvre
+    le libellé (c'est ce que BRS et le bordereau lisent) ; la pièce d'origine est citée après."""
+    n_piece = (n_piece or "").strip()
+    banque = (banque or "").strip()
     if mode == MODE_ESPECES:
         return piece
     if mode == MODE_REDEPOT:
         num, bq = numero_et_banque(origine_reference)
         return "%s / Redépôt de %s" % ("%s-%s" % (num, bq) if bq else num, piece)
-    return "%s-%s / Remplace %s" % ((n_cheque or "").strip(), (banque or "").strip(), piece)
+    if mode in (MODE_NOUVEAU, MODE_TRAITE):
+        return "%s / Remplace %s" % ("%s-%s" % (n_piece, banque) if banque else n_piece, piece)
+    if mode == MODE_VIREMENT:
+        return "%s / Remplace %s" % ("Virement reçu N: %s" % n_piece if n_piece else "Virement", piece)
+    return "%s / Remplace %s" % ("Ticket TPE %s" % n_piece if n_piece else "Carte de crédit", piece)
 
 
-def motif_refus_mode(mode, origine_reference, n_cheque=None, banque=None):
+def motif_refus_mode(mode, origine_reference, n_piece=None, banque=None, echeance=None):
     """None si les paramètres du mode sont complets, sinon la phrase à afficher."""
-    if mode not in COMPTE_PAR_MODE:
+    cfg = MODES.get(mode)
+    if not cfg:
         return "Mode de régularisation inconnu."
     if mode == MODE_REDEPOT and not numero_et_banque(origine_reference)[0]:
         return "La pièce d'origine ne porte pas de numéro de chèque : choisissez « Nouveau chèque »."
-    if mode == MODE_NOUVEAU:
-        if not re.fullmatch(r"\d{4,20}", (n_cheque or "").strip()):
-            return "Le numéro du nouveau chèque est obligatoire (4 à 20 chiffres)."
-        if not (banque or "").strip():
-            return "La banque du nouveau chèque est obligatoire."
+    n_piece = (n_piece or "").strip()
+    if cfg.get("piece") == "obligatoire" and not n_piece:
+        return "Saisissez %s (%s)." % (cfg["libelle"], cfg["attendu"])
+    if n_piece and cfg.get("rx") and not re.fullmatch(cfg["rx"], n_piece):
+        return "%s : %s attendu." % (cfg["libelle"].capitalize(), cfg["attendu"])
+    if cfg.get("banque") and not (banque or "").strip():
+        return "La banque du nouveau chèque est obligatoire."
+    if cfg.get("echeance") and not echeance:
+        return "L'échéance de la traite est obligatoire."
     return None
 
 
+def normaliser_paiements(paiements, restant):
+    """Lignes du dialogue -> lignes propres [{mode, montant, n_piece, banque, date_piece, photo}].
+    Lève une erreur claire si une ligne est vide, un montant non positif, ou si le total dépasse
+    le restant. Pur (hors frappe.throw)."""
+    if isinstance(paiements, str):
+        paiements = json.loads(paiements or "[]")
+    lignes = []
+    for p in paiements or []:
+        try:
+            montant = round(float(p.get("montant") or 0), 3)
+        except (TypeError, ValueError):
+            montant = 0.0
+        if not math.isfinite(montant) or montant <= 0:
+            frappe.throw(_("Chaque ligne doit porter un montant positif."))
+        lignes.append({"mode": (p.get("mode") or MODE_ESPECES).strip(), "montant": montant,
+                       "n_piece": (p.get("n_piece") or p.get("n_cheque") or "").strip(),
+                       "banque": (p.get("banque") or "").strip(),
+                       "date_piece": p.get("date_piece") or p.get("date_cheque") or None,
+                       "photo": p.get("photo") or None})
+    if not lignes:
+        frappe.throw(_("Aucune ligne de règlement."))
+    total = round(sum(l["montant"] for l in lignes), 3)
+    if total > round(float(restant), 3) + TOLERANCE:
+        frappe.throw(_("Le total ({0}) dépasse le solde restant ({1}). Actualisez la liste.").format(total, round(float(restant), 3)))
+    return lignes
+
+
 def _montant(montant, restant):
+    """Conservé pour les appels historiques (une seule ligne)."""
     try:
         valeur = float(montant)
     except (TypeError, ValueError):
@@ -88,10 +154,6 @@ def _montant(montant, restant):
 
 
 # ------------------------------------------------------------ lecture
-
-# Un transfert régularise une pièce s'il la désigne par `custom_impaye_origine`, ou (forme
-# historique des espèces) si son `reference_no` est exactement le nom de la pièce.
-_LIEN = "(tr.custom_impaye_origine = pe.name OR (tr.paid_to = %(especes)s AND tr.reference_no = pe.name))"
 
 
 def _soldes(client, piece=None):
@@ -119,7 +181,7 @@ def _soldes(client, piece=None):
            GROUP BY pe.name
            HAVING restant > 0
            ORDER BY pe.posting_date, pe.name""",
-        dict(client=client, piece=piece, impayes=IMPAYES, especes=ESPECES), as_dict=True)
+        dict(client=client, piece=piece, impayes=IMPAYES), as_dict=True)
 
 
 def _restant_verrouille(piece):
@@ -155,7 +217,10 @@ def pieces(client):
 
 @frappe.whitelist()
 def modes():
-    return [MODE_ESPECES, MODE_REDEPOT, MODE_NOUVEAU]
+    """Les modes et leurs exigences, pour le dialogue."""
+    return [{"mode": m, "piece": c.get("piece"), "banque": bool(c.get("banque")), "echeance": bool(c.get("echeance")),
+             "libelle": c.get("libelle", ""), "attendu": c.get("attendu", ""), "compte": c["compte"]}
+            for m, c in MODES.items()]
 
 
 # ------------------------------------------------------------ écriture
@@ -169,8 +234,19 @@ def _commenter(doctype, name, texte):
         pass
 
 
+def _verifier_comptes(societe, comptes):
+    devise = frappe.get_cached_value("Company", societe, "default_currency")
+    for nom in comptes:
+        meta = frappe.get_doc("Account", nom)
+        if meta.company != societe or meta.account_currency != devise or meta.is_group or meta.disabled:
+            frappe.throw(_("Le compte {0} doit être actif, dans la société et sa devise.").format(nom))
+
+
 @frappe.whitelist()
-def encaisser(client, piece, montant, mode=MODE_ESPECES, n_cheque=None, banque=None, date_cheque=None, photo=None):
+def encaisser(client, piece, montant=None, mode=MODE_ESPECES, n_cheque=None, banque=None, date_cheque=None,
+              photo=None, paiements=None):
+    """Régularise `piece` par une ou plusieurs lignes {mode, montant, n_piece, banque, date_piece,
+    photo}. Les paramètres unitaires (`montant`, `mode`…) restent acceptés : une seule ligne."""
     frappe.only_for(ROLES)
     # Sérialiser deux validations de la même pièce avant de relire son solde.
     frappe.db.sql("SELECT name FROM `tabPayment Entry` WHERE name = %s FOR UPDATE", piece)
@@ -178,53 +254,67 @@ def encaisser(client, piece, montant, mode=MODE_ESPECES, n_cheque=None, banque=N
     origine.check_permission("read")
     if origine.docstatus != 1 or origine.party_type != "Customer" or origine.party != client:
         frappe.throw(_("La pièce ne correspond pas à un impayé validé de ce client."))
-    refus = motif_refus_mode(mode, origine.reference_no, n_cheque, banque)
-    if refus:
-        frappe.throw(_(refus))
     restant = _restant_verrouille(piece)
     if restant <= 0:
         frappe.throw(_("Cette pièce n'a plus de solde à encaisser. Actualisez la liste."))
-    valeur = _montant(montant, restant)
-    compte = COMPTE_PAR_MODE[mode]
-    devise = frappe.get_cached_value("Company", origine.company, "default_currency")
-    for nom in (IMPAYES, compte):
-        meta = frappe.get_doc("Account", nom)
-        if meta.company != origine.company or meta.account_currency != devise or meta.is_group or meta.disabled:
-            frappe.throw(_("Le compte {0} doit être actif, dans la société et sa devise.").format(nom))
-    reference = reference_transfert(mode, piece, origine.reference_no, n_cheque, banque)
-    jour = nowdate()
-    libelle = {
-        MODE_ESPECES: _("Règlement en espèces du chèque impayé {0} — client {1}"),
-        MODE_REDEPOT: _("Redépôt du chèque impayé {0} — client {1}"),
-        MODE_NOUVEAU: _("Chèque de remplacement de l'impayé {0} — client {1}"),
-    }[mode].format(piece, origine.party_name or client)
-    paiement = frappe.get_doc({
-        "doctype": "Payment Entry", "payment_type": "Internal Transfer",
-        "company": origine.company, "posting_date": jour,
-        "paid_from": IMPAYES, "paid_to": compte,
-        "paid_amount": valeur, "received_amount": valeur,
-        "source_exchange_rate": 1, "target_exchange_rate": 1,
-        "mode_of_payment": MOYEN_PAR_MODE[mode], "reference_no": reference,
-        "reference_date": date_cheque or jour, "custom_remarks": 1,
-        "custom_impaye_origine": piece,
-        "remarks": libelle,
-    })
-    paiement.insert()
-    paiement.submit()
-    if photo:
-        try:
-            from frappe.utils.file_manager import save_file
+    if paiements is None:
+        paiements = [{"mode": mode, "montant": montant, "n_piece": n_cheque, "banque": banque,
+                      "date_piece": date_cheque, "photo": photo}]
+    lignes = normaliser_paiements(paiements, restant)
+    for l in lignes:
+        refus = motif_refus_mode(l["mode"], origine.reference_no, l["n_piece"], l["banque"], l["date_piece"])
+        if refus:
+            frappe.throw(_(refus))
+    _verifier_comptes(origine.company, {IMPAYES} | {MODES[l["mode"]]["compte"] for l in lignes})
 
-            f = frappe.get_doc("File", {"file_url": photo})
-            save_file(f.file_name, f.get_content(), "Payment Entry", paiement.name, is_private=1)
-        except Exception:
-            pass
-    reste = round(restant - valeur, 3)
-    texte = "💵 %s : %s → %s (%s)%s" % (
-        libelle, frappe.format_value(valeur, {"fieldtype": "Currency"}), paiement.name, reference,
-        (" — " + _("reste {0}").format(frappe.format_value(reste, {"fieldtype": "Currency"}))) if reste > 0.0005 else "")
-    _commenter("Payment Entry", piece, texte)
+    jour = nowdate()
+    client_libelle = origine.party_name or client
+    crees, references = [], []
+    for l in lignes:
+        cfg = MODES[l["mode"]]
+        reference = reference_transfert(l["mode"], piece, origine.reference_no, l["n_piece"], l["banque"])
+        libelle = {
+            MODE_ESPECES: _("Règlement en espèces du chèque impayé {0} — client {1}"),
+            MODE_REDEPOT: _("Redépôt du chèque impayé {0} — client {1}"),
+            MODE_NOUVEAU: _("Chèque de remplacement de l'impayé {0} — client {1}"),
+            MODE_TRAITE: _("Traite en remplacement de l'impayé {0} — client {1}"),
+            MODE_VIREMENT: _("Virement en règlement de l'impayé {0} — client {1}"),
+            MODE_CARTE: _("Carte bancaire en règlement de l'impayé {0} — client {1}"),
+        }[l["mode"]].format(piece, client_libelle)
+        if len(lignes) > 1:
+            libelle += _(" — règlement fractionné ({0} lignes)").format(len(lignes))
+        paiement = frappe.get_doc({
+            "doctype": "Payment Entry", "payment_type": "Internal Transfer",
+            "company": origine.company, "posting_date": jour,
+            "paid_from": IMPAYES, "paid_to": cfg["compte"],
+            "paid_amount": l["montant"], "received_amount": l["montant"],
+            "source_exchange_rate": 1, "target_exchange_rate": 1,
+            "mode_of_payment": cfg["moyen"], "reference_no": reference,
+            "reference_date": l["date_piece"] or jour, "custom_remarks": 1,
+            "custom_impaye_origine": piece,
+            "remarks": libelle,
+        })
+        paiement.insert()
+        paiement.submit()
+        if l["photo"]:
+            try:
+                from frappe.utils.file_manager import save_file
+
+                f = frappe.get_doc("File", {"file_url": l["photo"]})
+                save_file(f.file_name, f.get_content(), "Payment Entry", paiement.name, is_private=1)
+            except Exception:
+                pass
+        crees.append(paiement.name)
+        references.append(reference)
+        _commenter("Payment Entry", piece, "💵 %s : %s → %s (%s)" % (
+            libelle, frappe.format_value(l["montant"], {"fieldtype": "Currency"}), paiement.name, reference))
+    total = round(sum(l["montant"] for l in lignes), 3)
+    reste = round(restant - total, 3)
+    resume = _("Impayé {0} régularisé pour {1} ({2}){3}").format(
+        piece, frappe.format_value(total, {"fieldtype": "Currency"}),
+        ", ".join("%s %s" % (l["mode"], frappe.format_value(l["montant"], {"fieldtype": "Currency"})) for l in lignes),
+        (" — " + _("reste {0}").format(frappe.format_value(reste, {"fieldtype": "Currency"}))) if reste > TOLERANCE else "")
     for r in origine.references:
         if r.reference_doctype in ("Sales Order", "Sales Invoice"):
-            _commenter(r.reference_doctype, r.reference_name, texte)
-    return {"name": paiement.name, "restant": reste, "reference": reference, "compte": compte}
+            _commenter(r.reference_doctype, r.reference_name, "💵 " + resume + " → " + ", ".join(crees))
+    return {"name": crees[0], "paiements": crees, "references": references, "montant": total, "restant": reste}
