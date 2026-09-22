@@ -74,11 +74,86 @@ def _adresse(so):
     return a, bool(a and not so.shipping_address_name)
 
 
-def _telephone(so):
-    tel = so.contact_mobile or so.contact_phone
-    if not tel:
-        tel = frappe.db.get_value("Customer", so.customer, "mobile_no")
-    return normaliser_telephone(tel)
+def proposition_adresse(a, liste_villes) -> dict:
+    """Ce que le dialogue pre-remplit pour UNE adresse (dict Address, ou None) : texte, ville
+    Aramex mise en correspondance, gouvernorat, code postal. Fonction pure."""
+    a = a or {}
+    ville_commande = a.get("city") or ""
+    gouvernorat = a.get("custom_state_s") or a.get("state") or ""
+    corr = ville_aramex(ville_commande, gouvernorat, liste_villes)
+    return {
+        "adresse": ", ".join(x for x in (a.get("address_line1"), a.get("address_line2")) if x),
+        # La ville envoyee a Aramex est la SIENNE ; celle de la commande reste visible a cote.
+        "ville": corr["ville"] or ville_commande,
+        "ville_commande": ville_commande,
+        "ville_certitude": corr["certitude"],
+        "ville_candidats": corr["candidats"],
+        "gouvernorat": gouvernorat,
+        "code_postal": a.get("pincode") or "",
+    }
+
+
+def _adresses_du_client(so, courante, liste_villes) -> list:
+    """Toutes les adresses actives de la fiche client, pretes a etre choisies dans le dialogue,
+    la proposee (`courante`) en tete. Choisir ici ne change que le COLIS, jamais la commande."""
+    noms = frappe.get_all("Dynamic Link", pluck="parent", filters={
+        "parenttype": "Address", "link_doctype": "Customer", "link_name": so.customer})
+    if not noms:
+        return []
+    lignes = frappe.get_all("Address", filters={"name": ["in", noms], "disabled": 0},
+                            fields=["name", "address_type", "address_line1", "address_line2",
+                                    "city", "state", "custom_state_s", "pincode"],
+                            order_by="creation")
+    lignes.sort(key=lambda a: a.name != courante)
+    out = []
+    for a in lignes:
+        prop = proposition_adresse(a, liste_villes)
+        out.append(dict(prop, name=a.name, courante=(a.name == courante),
+                        libelle="%s · %s" % (_(a.address_type or "Address"),
+                                             ", ".join(x for x in (prop["adresse"], prop["ville_commande"]) if x))))
+    return out
+
+
+def _telephones(so):
+    """(telephone, telephone2) du destinataire : les numeros de la commande (contact), puis
+    `mobile_no` du client, puis « Liste Telephone » de la fiche client — le champ que les SMS,
+    le portail et les relances lisent deja. Aramex en recoit deux : le premier est celui que
+    le livreur appelle, le second son repli.
+
+    ⚠️ Sans Liste Telephone, un client dont aucun numero de contact n'est coche « principal »
+    arrivait avec un telephone VIDE alors que sa fiche en porte deux (SAL-ORD-2026-03861,
+    22/09/2026) — et le dialogue refusait meme le numero tape a la main.
+    """
+    client = frappe.db.get_value("Customer", so.customer, ["mobile_no", "custom_liste_telephone"],
+                                 as_dict=True) or {}
+    return choisir_telephones([so.contact_mobile, so.contact_phone, client.get("mobile_no")],
+                              client.get("custom_liste_telephone"))
+
+
+def numeros_de_la_liste(brut) -> list:
+    """Les numeros a 8 chiffres d'un champ « Liste Telephone » (un par ligne, ou separes par
+    virgule, point-virgule, slash), dans l'ordre du champ, sans doublon. Fonction pure."""
+    nums = []
+    for morceau in re.split(r"[;\n/,]+", brut or ""):
+        n = normaliser_telephone(morceau)
+        if len(n) == 8 and n not in nums:
+            nums.append(n)
+    return nums
+
+
+def choisir_telephones(candidats, liste) -> tuple:
+    """(telephone, telephone2) : le premier numero a 8 chiffres parmi `candidats` (dans
+    l'ordre) puis dans `liste`, et le suivant distinct comme repli. S'il n'y a aucun numero
+    valide, on rend le premier candidat non vide tel quel — pour qu'il s'affiche et se
+    corrige, plutot que de disparaitre. Fonction pure."""
+    nums = []
+    for c in [normaliser_telephone(c) for c in candidats] + numeros_de_la_liste(liste):
+        if len(c) == 8 and c not in nums:
+            nums.append(c)
+    if not nums:
+        brut = next((normaliser_telephone(c) for c in candidats if normaliser_telephone(c)), "")
+        return brut, ""
+    return nums[0], (nums[1] if len(nums) > 1 else "")
 
 
 def normaliser_telephone(tel) -> str:
@@ -278,7 +353,9 @@ def construire_expedition(commande, expediteur, destinataire, colis, maintenant)
     pure : `aramex_api.create_shipment` complete et envoie.
 
     `expediteur`  : {nom, societe, telephone, email, adresse, ville, code_postal, compte}
-    `destinataire`: {nom, telephone, email, adresse, ville, gouvernorat, code_postal}
+    `destinataire`: {nom, telephone, telephone2, email, adresse, ville, gouvernorat,
+                     code_postal} — `telephone2` (facultatif) part en PhoneNumber2, le repli
+                     du livreur quand le premier ne repond pas.
     `colis`       : {cod, poids, pieces, description, product_group, product_type,
                      cheque_autorise, entite}
     `maintenant`  : datetime naif, heure locale.
@@ -307,7 +384,7 @@ def construire_expedition(commande, expediteur, destinataire, colis, maintenant)
                 # s'imprime deux fois sur l'etiquette, et c'est le prix du refus evite.
                 "CompanyName": p.get("societe") or p.get("nom") or "",
                 "PhoneNumber1": p.get("telephone") or "", "PhoneNumber1Ext": "",
-                "PhoneNumber2": "", "PhoneNumber2Ext": "", "FaxNumber": "",
+                "PhoneNumber2": p.get("telephone2") or "", "PhoneNumber2Ext": "", "FaxNumber": "",
                 "CellPhone": p.get("telephone") or "", "EmailAddress": p.get("email") or "",
                 "Type": "",
             },
@@ -409,21 +486,14 @@ def _preparer(so, cfg):
     gouvernorat = (adresse or {}).get("custom_state_s") or (adresse or {}).get("state") or ""
     correspondance = ville_aramex(ville_commande, gouvernorat, liste_villes)
     societe = frappe.db.get_value("Customer", so.customer, "customer_type") == "Company"
-    destinataire = {
+    telephone, telephone2 = _telephones(so)
+    destinataire = dict({
         "nom": so.customer_name or so.customer,
         "societe": (so.customer_name or so.customer) if societe else "",
-        "telephone": _telephone(so),
+        "telephone": telephone,
+        "telephone2": telephone2,
         "email": so.contact_email or "",
-        "adresse": ", ".join(x for x in ((adresse or {}).get("address_line1"),
-                                         (adresse or {}).get("address_line2")) if x),
-        # La ville envoyee a Aramex est la SIENNE ; celle de la commande reste visible a cote.
-        "ville": correspondance["ville"] or ville_commande,
-        "ville_commande": ville_commande,
-        "ville_certitude": correspondance["certitude"],
-        "ville_candidats": correspondance["candidats"],
-        "gouvernorat": gouvernorat,
-        "code_postal": (adresse or {}).get("pincode") or "",
-    }
+    }, **proposition_adresse(adresse, liste_villes))
     colis = {
         "cod": round(cod, PRECISION),
         "poids": _poids(so, cfg),
@@ -434,16 +504,22 @@ def _preparer(so, cfg):
     }
     info = aramex_des_commandes([commande]).get(commande) or {}
     pe = _paiement_aramex(so)
-    motifs = motifs_de_refus(destinataire, colis)
+    # Deux listes, parce que le dialogue les traite differemment : `a_corriger` se repare
+    # DANS le formulaire (telephone, adresse, ville…) et ne bloque pas le bouton — le serveur
+    # revalide a la creation sur ce qui a ete saisi ; `motifs` bloque quoi qu'on tape.
+    # ⚠️ Avant (jusqu'a 5.86.1), tout etait dans `motifs` : un telephone manquant rendait le
+    # bouton inerte MEME apres l'avoir tape dans le champ prevu pour ca.
+    a_corriger = motifs_de_refus(destinataire, colis)
     if ville_commande and not correspondance["ville"]:
-        motifs.append(_("Ville « {0} » inconnue d'Aramex : choisissez-la dans la liste.")
-                      .format(ville_commande))
-    if not info.get("aramex"):
-        motifs.insert(0, _("Cette commande n'est pas en livraison Aramex (échéancier)."))
-    if info.get("bordereau"):
-        motifs.insert(0, _("Un bordereau existe déjà : {0}.").format(info["bordereau"]))
+        a_corriger.append(_("Ville « {0} » inconnue d'Aramex : choisissez-la dans la liste.")
+                          .format(ville_commande))
+    motifs = []
     if not aramex_api.creation_active(cfg):
-        motifs.insert(0, _("La création de bordereaux n'est pas activée (Config Livraison Aramex)."))
+        motifs.append(_("La création de bordereaux n'est pas activée (Config Livraison Aramex)."))
+    if info.get("bordereau"):
+        motifs.append(_("Un bordereau existe déjà : {0}.").format(info["bordereau"]))
+    if not info.get("aramex"):
+        motifs.append(_("Cette commande n'est pas en livraison Aramex (échéancier)."))
     expediteur_ok = bool(cfg.get("expediteur_nom") and cfg.get("expediteur_telephone")
                          and cfg.get("expediteur_adresse") and cfg.get("expediteur_ville"))
     if not expediteur_ok:
@@ -451,6 +527,7 @@ def _preparer(so, cfg):
     return {
         "destinataire": destinataire,
         "villes": liste_villes,
+        "adresses": _adresses_du_client(so, (adresse or {}).get("name"), liste_villes),
         "adresse_de_facturation": de_facturation,
         "colis": colis,
         "total": flt(so.grand_total, PRECISION),
@@ -459,6 +536,7 @@ def _preparer(so, cfg):
         "poser_paiement": 0 if pe else 1,
         "brouillon": cint(so.docstatus) == 0,
         "motifs": motifs,
+        "a_corriger": a_corriger,
         "garde_fou_dev": _bloque_en_dev(cfg),
     }
 
@@ -540,6 +618,9 @@ def _creer(commande, destinataire=None, colis=None, poser_paiement=1, origine=No
     base = _preparer(so, cfg)
     destinataire = dict(base["destinataire"], **(frappe.parse_json(destinataire) or {}))
     destinataire["telephone"] = normaliser_telephone(destinataire.get("telephone"))
+    destinataire["telephone2"] = normaliser_telephone(destinataire.get("telephone2"))
+    if destinataire["telephone2"] == destinataire["telephone"]:
+        destinataire["telephone2"] = ""
     colis = dict(base["colis"], **(frappe.parse_json(colis) or {}))
     cod_max = base["colis"]["cod"]
     cod = flt(colis.get("cod"), PRECISION)
@@ -550,9 +631,9 @@ def _creer(commande, destinataire=None, colis=None, poser_paiement=1, origine=No
     colis["cheque_autorise"] = cint(colis.get("cheque_autorise"))
     colis["product_group"] = cfg.get("product_group") or "DOM"
     colis["product_type"] = cfg.get("product_type") or "ONP"
-    motifs = motifs_de_refus(destinataire, colis)
-    if base["motifs"] and not motifs:
-        motifs = [m for m in base["motifs"] if "Expéditeur" in m]
+    # Ce qui se corrige dans le dialogue est revalide ICI, sur la saisie ; ce qui bloque
+    # (expediteur incomplet, creation inactive…) bloque toujours.
+    motifs = motifs_de_refus(destinataire, colis) + list(base["motifs"])
     # ⚠️ LA VILLE DOIT ETRE UNE VILLE ARAMEX, A LA GRAPHIE PRES. Une ville « presque » bonne
     # fait refuser le colis (ERR05) ; une ville d'un autre gouvernorat qui ressemble le fait
     # partir au mauvais endroit. On exige donc un choix dans la liste, puis on demande

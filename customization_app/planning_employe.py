@@ -223,12 +223,13 @@ def _creation_api_possible(commande, cfg_creation):
 
 
 def _colis_aramex(bordereau):
-    """Ce que le suivi sait du colis (étiquette, manifeste) — pour la carte."""
+    """Ce que le suivi sait du colis (étiquette, manifeste, nombre de pièces) — pour la carte
+    et pour le PDF des étiquettes, qui en imprime une par pièce."""
     if not bordereau:
         return {}
     from customization_app.livraison_aramex import DOCTYPE_SUIVI
 
-    return frappe.db.get_value(DOCTYPE_SUIVI, bordereau, ["etiquette_url", "manifeste"],
+    return frappe.db.get_value(DOCTYPE_SUIVI, bordereau, ["etiquette_url", "manifeste", "pieces"],
                                as_dict=True) or {}
 
 

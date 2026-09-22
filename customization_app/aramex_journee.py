@@ -9,7 +9,8 @@ boutons de la barre de « Ma journée » rendent chacun un seul PDF, dans l'ordr
   soumet la commande en brouillon puisqu'un BL l'exige.
 - Étiquettes : le PDF attaché à la commande (custom_etiquette_aramex) ; à défaut, redemandé à
   Aramex (PrintLabel) pour un bordereau de notre compte ; un bordereau sans étiquette
-  possible est listé en tête du PDF, jamais passé sous silence.
+  possible est listé en tête du PDF, jamais passé sous silence. UNE ÉTIQUETTE PAR CARTON :
+  un colis de N pièces en sort avec N étiquettes « Pièce i / N » (voir etiquettes_par_piece).
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ import io
 
 import frappe
 from frappe import _
-from frappe.utils import getdate, nowdate
+from frappe.utils import cint, getdate, nowdate
 
 from customization_app.planning_employe import TYPE_LIVRAISON, _employe_demande, ma_journee
 
@@ -116,7 +117,8 @@ def etiquettes_aramex_pdf(date=None, employe=None):
                              % (l["tache"], l.get("client") or "", bordereau))
             continue
         try:
-            writer.append(PdfReader(io.BytesIO(contenu)))
+            for page in etiquettes_par_piece(contenu, (l.get("colis") or {}).get("pieces")):
+                writer.add_page(page)
             nb += 1
         except Exception:
             manquants.append("%s — étiquette %s illisible" % (l["tache"], bordereau))
@@ -134,6 +136,73 @@ def etiquettes_aramex_pdf(date=None, employe=None):
 
 A4 = (595.28, 841.89)
 MARGE = 8.0
+
+
+def etiquettes_par_piece(contenu, pieces) -> list:
+    """Une étiquette PAR CARTON (demande utilisateur 22/09/2026).
+
+    Un colis de N pièces porte UN numéro de bordereau, mais chaque carton doit porter sa
+    propre étiquette, numérotée, pour que le livreur les compte. Si Aramex a déjà rendu une
+    page par pièce, on les garde telles quelles (il les numérote lui-même) ; s'il n'en a
+    rendu qu'une, on la répète N fois et on tamponne « Pièce i / N » dans la case vide en
+    haut à droite (au-dessus du COD) — y compris « 1 / 1 » pour un colis d'une seule pièce
+    (demande utilisateur : le livreur voit ainsi que la série est complète). Le PDF est relu
+    pour chaque copie : pypdf ne sait pas dupliquer une page sans partager ses objets.
+    `contenu` : les octets du PDF d'étiquette ; -> liste de PageObject.
+    """
+    from pypdf import PdfReader
+
+    pieces = max(1, cint(pieces))
+    pages = list(PdfReader(io.BytesIO(contenu)).pages)
+    if len(pages) != 1:
+        return pages
+    sorties = []
+    for i in range(1, pieces + 1):
+        page = PdfReader(io.BytesIO(contenu)).pages[0]
+        page.merge_page(_tampon_piece(i, pieces, float(page.mediabox.width),
+                                      float(page.mediabox.height)))
+        sorties.append(page)
+    return sorties
+
+
+def _tampon_piece(i, n, largeur, hauteur):
+    """Une page transparente de la taille de l'étiquette, avec « Pièce » puis « i / N » en gros,
+    centrés DANS la case vide de l'étiquette 9729 (à droite de « Date / Ref1 », au-dessus du
+    COD). La case a été mesurée sur un vrai bordereau (50920351075, 295 × 432 pt) : x 183 → 283,
+    y 65 → 147 depuis le haut — exprimée ici en fractions pour suivre une éventuelle autre
+    taille. Helvetica-Bold est une police de base du PDF : rien à embarquer, aucune dépendance."""
+    from pypdf import PageObject
+    from pypdf.generic import DictionaryObject, NameObject, StreamObject
+
+    page = PageObject.create_blank_page(width=largeur, height=hauteur)
+    police = DictionaryObject({
+        NameObject("/Type"): NameObject("/Font"), NameObject("/Subtype"): NameObject("/Type1"),
+        NameObject("/BaseFont"): NameObject("/Helvetica-Bold"),
+        NameObject("/Encoding"): NameObject("/WinAnsiEncoding")})
+    page[NameObject("/Resources")] = DictionaryObject({
+        NameObject("/Font"): DictionaryObject({NameObject("/F1"): police})})
+    # La case, en coordonnées PDF (origine en bas à gauche).
+    x0, x1 = largeur * (183 / 295), largeur * (283 / 295)
+    y_haut, y_bas = hauteur * (1 - 65 / 432), hauteur * (1 - 147 / 432)
+    cx = (x0 + x1) / 2
+    ligne1, taille1 = "Pi\xe8ce", 12
+    ligne2, taille2 = "%d / %d" % (i, n), 30
+    flux = StreamObject()
+    flux.set_data(("BT /F1 %d Tf 0 0 0 rg %.1f %.1f Td (%s) Tj ET\n"
+                   "BT /F1 %d Tf 0 0 0 rg %.1f %.1f Td (%s) Tj ET\n" % (
+                       taille1, cx - _largeur_helvetica_bold(ligne1, taille1) / 2, y_haut - 20, ligne1,
+                       taille2, cx - _largeur_helvetica_bold(ligne2, taille2) / 2, y_bas + 18, ligne2,
+                   )).encode("latin-1"))
+    page[NameObject("/Contents")] = flux
+    return page
+
+
+# Chasses Helvetica-Bold (AFM, pour 1000 unités) des seuls caractères du tampon — pour centrer.
+_CHASSES = {"P": 667, "i": 278, "\xe8": 556, "c": 556, "e": 556, " ": 278, "/": 278}
+
+
+def _largeur_helvetica_bold(texte, taille) -> float:
+    return sum(_CHASSES.get(c, 556) for c in texte) / 1000.0 * taille
 
 
 def en_grille_a4(pages, colonnes=2, rangees=2):

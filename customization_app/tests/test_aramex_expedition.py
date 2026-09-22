@@ -54,6 +54,7 @@ class TestConstruireExpedition(unittest.TestCase):
         self.assertEqual(c["Consignee"]["PartyAddress"]["StateOrProvinceCode"], "Gafsa")
         self.assertEqual(c["Consignee"]["PartyAddress"]["CountryCode"], "TN")
         self.assertEqual(c["Consignee"]["Contact"]["CellPhone"], "24992312")
+        self.assertEqual(c["Consignee"]["Contact"]["PhoneNumber2"], "")
         # Particulier : la societe = le nom. Aramex REFUSE une societe vide (ERR48).
         self.assertEqual(c["Consignee"]["Contact"]["CompanyName"], "benbelgacem zied")
         self.assertEqual(c["Shipper"]["Contact"]["CompanyName"], "Aquaworld & Servicing")
@@ -69,6 +70,12 @@ class TestConstruireExpedition(unittest.TestCase):
         self.assertEqual(c["Details"]["ProductGroup"], "DOM")
         self.assertEqual(c["Details"]["ProductType"], "ONP")
         self.assertEqual(c["Details"]["PaymentType"], "P")
+
+    def test_second_telephone_part_en_repli(self):
+        c = E.construire_expedition("SAL-ORD-1", EXPEDITEUR, dict(DESTINATAIRE, telephone2="55055966"),
+                                    COLIS, MAINTENANT)
+        self.assertEqual(c["Consignee"]["Contact"]["PhoneNumber1"], "24992312")
+        self.assertEqual(c["Consignee"]["Contact"]["PhoneNumber2"], "55055966")
 
     def test_adresse_tronquee_a_50(self):
         c = E.construire_expedition("x", EXPEDITEUR, dict(DESTINATAIRE, adresse="a" * 80),
@@ -95,6 +102,30 @@ class TestTelephone(unittest.TestCase):
 
     def test_vide(self):
         self.assertEqual(E.normaliser_telephone(None), "")
+
+    def test_liste_telephone_du_client(self):
+        # Le champ « Liste Telephone » : un numero par ligne, parfois virgule ou slash, avec
+        # ou sans +216 — et des doublons.
+        self.assertEqual(E.numeros_de_la_liste("93933676\n55055966"), ["93933676", "55055966"])
+        self.assertEqual(E.numeros_de_la_liste("+216 24 992 312, 24992312 / 71 854 009"),
+                         ["24992312", "71854009"])
+        self.assertEqual(E.numeros_de_la_liste("2499\nabc"), [])
+        self.assertEqual(E.numeros_de_la_liste(None), [])
+
+    def test_choix_commande_avant_client(self):
+        # Le contact de la commande prime ; le repli vient ensuite, jamais en doublon.
+        self.assertEqual(E.choisir_telephones(["24992312", None, "93933676"], "93933676\n55055966"),
+                         ("24992312", "93933676"))
+        # SAL-ORD-2026-03861 : rien sur la commande ni dans mobile_no, deux numeros dans la liste.
+        self.assertEqual(E.choisir_telephones([None, None, None], "93933676\n55055966"),
+                         ("93933676", "55055966"))
+        self.assertEqual(E.choisir_telephones([None, None, None], "93933676"), ("93933676", ""))
+        self.assertEqual(E.choisir_telephones([None, None, None], None), ("", ""))
+        # Un numero invalide sur la commande ne masque pas la liste…
+        self.assertEqual(E.choisir_telephones(["2499", None, None], "55055966"), ("55055966", ""))
+        # …mais s'affiche tel quel s'il n'y a rien d'autre, pour etre corrige.
+        self.assertEqual(E.choisir_telephones(["+33 6 12 34 56 78", None, None], None),
+                         ("33612345678", ""))
 
 
 VILLES = ["Ariana", "Raoued", "La Soukra", "Sfax", "Midoun", "Houmet Essouk", "Sousse",
@@ -173,3 +204,29 @@ class TestDescription(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestPropositionAdresse(unittest.TestCase):
+    """Une adresse de la fiche client, telle que le dialogue la propose (ou la fait choisir)."""
+
+    def test_adresse_complete(self):
+        p = E.proposition_adresse({"address_line1": "40 Rue Ghazi Mustapha", "address_line2": "",
+                                   "city": "Djerba Houmt Souk", "custom_state_s": "Medenine",
+                                   "pincode": "4180"}, VILLES)
+        self.assertEqual(p["adresse"], "40 Rue Ghazi Mustapha")
+        self.assertEqual(p["ville"], "Houmet Essouk")
+        self.assertEqual(p["ville_commande"], "Djerba Houmt Souk")
+        self.assertEqual(p["gouvernorat"], "Medenine")
+        self.assertEqual(p["code_postal"], "4180")
+
+    def test_deux_lignes_et_state_de_repli(self):
+        p = E.proposition_adresse({"address_line1": "Rue A", "address_line2": "Imm. B",
+                                   "city": "Sfax", "state": "Sfax"}, VILLES)
+        self.assertEqual(p["adresse"], "Rue A, Imm. B")
+        self.assertEqual(p["gouvernorat"], "Sfax")
+        self.assertEqual(p["ville_certitude"], "exacte")
+
+    def test_sans_adresse(self):
+        p = E.proposition_adresse(None, VILLES)
+        self.assertEqual((p["adresse"], p["ville"], p["ville_commande"], p["code_postal"]),
+                         ("", "", "", ""))
