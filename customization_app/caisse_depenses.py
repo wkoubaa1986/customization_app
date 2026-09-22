@@ -2219,6 +2219,84 @@ def pi_rouvrir_fiche(doc, method=None):
                             update_modified=False)
 
 
+# ------------------------------------------------ erreur de saisie : « Espèces » au lieu de « Pas payé »
+
+
+def _pieces_de_fiche(f):
+    """(écritures d'avance, paiements) désignés par une fiche — champs simples + listes JSON."""
+    jes, pes = [], []
+    for champ, liste, cible in (("journal_entry", "journal_entries", jes),
+                                ("payment_entry", "payment_entries", pes)):
+        if f.get(champ):
+            cible.append(f.get(champ))
+        try:
+            cible += [x for x in (json.loads(f.get(liste) or "[]") or []) if x and x not in cible]
+        except Exception:
+            pass
+    return jes, pes
+
+
+def resume_bascule(mode, jes, pes):
+    """Le texte de la trace d'une bascule vers « Pas payé » (pur)."""
+    parts = [_("Mode « {0} » → « Pas payé » (erreur de saisie en caisse)").format(mode or "—")]
+    if jes:
+        parts.append(_("écriture(s) d'avance supprimée(s) : {0}").format(", ".join(jes)))
+    if pes:
+        parts.append(_("paiement(s) annulé(s) : {0}").format(", ".join(pes)))
+    return " — ".join(parts)
+
+
+@frappe.whitelist()
+def basculer_pas_paye(fiche):
+    """L'employé a saisi « Espèces » (ou chèque, carte…) alors que la facture n'était PAS payée :
+    la fiche passe « Pas payé » en gardant la même fiche et la même facture d'achat.
+
+    - fiche encore « À saisir » : l'écriture d'avance de caisse (Cr Espèces… / Dr Créditeurs) est
+      annulée et supprimée — comme le fait la soumission de la facture — la sortie de caisse
+      disparaît du rapport du jour, ce qui est la réalité ;
+    - facture déjà saisie : le(s) paiement(s) né(s) de l'avance sont ANNULÉS (gardés en trace) ;
+      la facture redevient due et rejoint « Factures à payer », où elle sera réglée le jour où
+      elle le sera vraiment.
+    Une traite n'est pas basculée : son ordre de paiement BRS suit sa propre vie."""
+    frappe.only_for(ROLES)
+    f = frappe.get_doc("Facture Achat a Saisir", fiche)
+    if f.mode_paiement == MODE_PAS_PAYE:
+        frappe.throw(_("La fiche est déjà « Pas payé »."))
+    jes, pes = _pieces_de_fiche(f)
+    jes = [j for j in jes if frappe.db.exists("Journal Entry", j)]
+    pes = [p for p in pes if frappe.db.exists("Payment Entry", p)]
+    if jes and frappe.db.exists("BRS Ordre de Paiement", {"source_regle": SOURCE_ORDRE_TRAITE,
+                                                       "periode": ["like", "%s|%%" % jes[0]]}):
+        frappe.throw(_("Cette fiche a été réglée par traite : annulez d'abord son ordre de paiement."))
+    if f.purchase_order and not pes and not jes:
+        frappe.throw(_("Aucune avance ni paiement à défaire sur cette fiche."))
+
+    for je_nom in jes:
+        je = frappe.get_doc("Journal Entry", je_nom)
+        if je.docstatus == 1:
+            je.flags.ignore_permissions = True
+            je.flags.ignore_links = True
+            je.cancel()
+        frappe.delete_doc("Journal Entry", je_nom, ignore_permissions=True, force=True)
+    for pe_nom in pes:
+        pe = frappe.get_doc("Payment Entry", pe_nom)
+        if pe.docstatus == 1:
+            pe.flags.ignore_permissions = True
+            pe.cancel()
+
+    trace = resume_bascule(f.mode_paiement, jes, pes)
+    ancien = f.mode_paiement
+    frappe.db.set_value("Facture Achat a Saisir", f.name,
+                        {"mode_paiement": MODE_PAS_PAYE, "journal_entry": "", "journal_entries": "",
+                         "payment_entry": "", "payment_entries": ""}, update_modified=False)
+    f.add_comment("Info", "🔁 " + trace)
+    if f.purchase_invoice:
+        frappe.get_doc("Purchase Invoice", f.purchase_invoice).add_comment(
+            "Info", "🔁 " + trace + " — " + _("fiche de caisse {0}").format(f.name))
+    return {"fiche": f.name, "ancien_mode": ancien, "ecritures": jes, "paiements": pes,
+            "purchase_invoice": f.purchase_invoice}
+
+
 # ---------------------------------------------------------------- voir le document à saisir
 
 #: Les pièces qu'on sait afficher côté navigateur. Un .docx ne s'ouvre pas dans un onglet.

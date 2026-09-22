@@ -36,5 +36,13 @@ frappe.ui.form.on("Facture Achat a Saisir", {
 			frm.add_custom_button(__("Écriture d'avance"), () =>
 				frappe.set_route("Form", "Journal Entry", frm.doc.journal_entry));
 		}
+		// Erreur de saisie fréquente : « Espèces » coché alors que la facture n'est
+		// pas payée. La bascule garde la fiche et la facture ; l'avance de caisse
+		// (ou le paiement né de l'avance) disparaît, la facture redevient due.
+		if (frm.doc.mode_paiement && frm.doc.mode_paiement !== "Pas payé"
+			&& (frm.doc.journal_entry || frm.doc.journal_entries || frm.doc.payment_entry || frm.doc.payment_entries)) {
+			frm.add_custom_button(__("🔁 Basculer en « Pas payé »"), () =>
+				customization_app.basculer_fiche_pas_paye(frm.doc.name, frm.doc.mode_paiement, () => frm.reload_doc()));
+		}
 	},
 });

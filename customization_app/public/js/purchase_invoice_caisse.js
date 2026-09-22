@@ -7,8 +7,39 @@
 // fiche passe « Saisie » et chaque avance devient un paiement de la facture
 // (hooks `pi_marquer_fiche_saisie`).
 
+frappe.provide("customization_app");
+// Dialogue partagé (fiche de caisse, facture d'achat) : confirmer puis basculer.
+customization_app.basculer_fiche_pas_paye = function (fiche, mode, apres) {
+  frappe.confirm(
+    __("Passer la fiche {0} de « {1} » à « Pas payé » ? L'avance de caisse (ou le paiement qui en est né) sera annulée : la facture redevient due et rejoint « Factures à payer ».", [fiche, mode || "—"]),
+    () => frappe.call({
+      method: "customization_app.caisse_depenses.basculer_pas_paye",
+      args: { fiche }, freeze: true, freeze_message: __("Bascule…"),
+      callback: (r) => {
+        const m = r.message || {};
+        frappe.show_alert({ message: __("Fiche {0} : « Pas payé ». {1} écriture(s) supprimée(s), {2} paiement(s) annulé(s).",
+          [m.fiche, (m.ecritures || []).length, (m.paiements || []).length]), indicator: "green" }, 8);
+        if (apres) apres();
+      },
+    })
+  );
+};
+
 frappe.ui.form.on("Purchase Invoice", {
   refresh(frm) {
+    if (frm.doc.docstatus === 1) {
+      // facture saisie depuis une fiche de caisse payée par erreur
+      frappe.db.get_list("Facture Achat a Saisir", {
+        filters: { purchase_invoice: frm.doc.name, mode_paiement: ["!=", "Pas payé"] },
+        fields: ["name", "mode_paiement", "payment_entry", "payment_entries"],
+      }).then((fiches) => {
+        (fiches || []).filter((f) => f.payment_entry || f.payment_entries).forEach((f) => {
+          frm.add_custom_button(__("🔁 Fiche {0} : basculer en « Pas payé »", [f.name]), () =>
+            customization_app.basculer_fiche_pas_paye(f.name, f.mode_paiement, () => frm.reload_doc()),
+            __("Caisse"));
+        });
+      });
+    }
     if (frm.doc.docstatus !== 0 || !frm.doc.supplier) return;
     frappe.call({
       method: "customization_app.caisse_depenses.bls_en_attente",
