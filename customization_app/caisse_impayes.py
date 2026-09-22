@@ -292,6 +292,9 @@ def encaisser(client, piece, montant=None, mode=MODE_ESPECES, n_cheque=None, ban
             "mode_of_payment": cfg["moyen"], "reference_no": reference,
             "reference_date": l["date_piece"] or jour, "custom_remarks": 1,
             "custom_impaye_origine": piece,
+            # ERPNext efface `party` sur un transfert, mais garde `party_name` (vérifié) : c'est lui
+            # que la ligne de bordereau affiche comme émetteur (fetch_from ref_paiement.party_name).
+            "party_name": origine.party_name or client,
             "remarks": libelle,
         })
         paiement.insert()
