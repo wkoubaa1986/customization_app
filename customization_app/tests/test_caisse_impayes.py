@@ -86,8 +86,11 @@ class TestReglementImpaye(unittest.TestCase):
                    AND gl.voucher_type = 'Payment Entry'
                    WHERE pe.docstatus = 1 AND pe.party_type = 'Customer'
                    AND gl.account = %s AND gl.is_cancelled = 0""", IMPAYES)
-            source = next((p for (client,) in clients for p in _soldes(client)
-                           if p.restant > 1), None)
+            # La plus PETITE pièce régularisable : deux impayés de 2024 ont été soldés par une
+            # écriture de journal globale (ACC-JV-2026-00200) que `_soldes` ne voit pas — les
+            # régulariser en test ferait passer le compte en crédit (« must always be Debit »).
+            candidats = [p for (client,) in clients for p in _soldes(client) if p.restant > 1]
+            source = min(candidats, key=lambda p: p.restant) if candidats else None
             if not source:
                 self.skipTest('Une pièce impayée de plus de 1 TND est nécessaire.')
             origine = frappe.get_doc('Payment Entry', source.name).as_dict()
