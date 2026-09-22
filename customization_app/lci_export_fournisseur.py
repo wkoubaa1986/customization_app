@@ -162,7 +162,8 @@ def _charger(chemin, valeurs=False):
 
     ext = os.path.splitext(chemin)[1].lower()
     if ext != ".xls":
-        return load_workbook(chemin, data_only=valeurs), False
+        # rich_text=True : les segments colorés d'une description restent colorés
+        return load_workbook(chemin, data_only=valeurs, rich_text=True), False
 
     import xlrd
     from openpyxl.utils import get_column_letter
@@ -181,8 +182,91 @@ def _charger(chemin, valeurs=False):
         for i in range(sh.nrows):
             ws.append([sh.cell_value(i, j) for j in range(sh.ncols)])
         largeurs, hauteurs = _mise_en_forme_xls(ws, sh, get_column_letter)
+        _styles_xls(ws, sh, src)
         _poser_images_xls(ws, images[index] if index < len(images) else [], largeurs, hauteurs)
     return wb, True
+
+
+_LIGNES_XLS = {1: "thin", 2: "medium", 3: "dashed", 4: "dotted", 5: "thick", 6: "double", 7: "hair",
+               8: "mediumDashed", 9: "dashDot", 10: "mediumDashDot", 11: "dashDotDot",
+               12: "mediumDashDotDot", 13: "slantDashDot"}
+_HOR_XLS = {1: "left", 2: "center", 3: "right", 4: "fill", 5: "justify", 6: "centerContinuous", 7: "distributed"}
+_VERT_XLS = {0: "top", 1: "center", 2: "bottom", 3: "justify", 4: "distributed"}
+
+
+def _styles_xls(ws, sh, bk):
+    """Reprend, cellule par cellule, la mise en forme du .xls : police (nom, taille, gras,
+    italique, souligné, couleur), alignement (dont le centrage vertical de ses descriptions),
+    fond, bordures — et le TEXTE ENRICHI (segments rouges/verts/soulignés d'une description),
+    que xlrd expose via `rich_text_runlist_map`. Demande utilisateur du 22/09/2026 : « garder
+    les mêmes couleurs et le même format que sa facture »."""
+    from openpyxl.cell.rich_text import CellRichText, TextBlock
+    from openpyxl.cell.text import InlineFont
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+    from openpyxl.styles.colors import Color
+
+    def couleur(idx):
+        rgb = bk.colour_map.get(idx) if idx is not None else None
+        return "FF%02X%02X%02X" % tuple(rgb) if rgb else None
+
+    def police(fo):
+        return Font(name=fo.name or None, size=(fo.height / 20.0) if fo.height else None, bold=bool(fo.bold),
+                    italic=bool(fo.italic), underline=("single" if fo.underline_type else None),
+                    color=couleur(fo.colour_index))
+
+    def police_segment(fo):
+        c = couleur(fo.colour_index)
+        return InlineFont(rFont=fo.name or None, sz=(fo.height / 20.0) if fo.height else None, b=bool(fo.bold),
+                          i=bool(fo.italic), u=("single" if fo.underline_type else None),
+                          color=Color(rgb=c) if c else None)
+
+    def cote(style, idx):
+        nom = _LIGNES_XLS.get(style)
+        return Side(style=nom, color=couleur(idx) or "FF000000") if nom else Side()
+
+    cache = {}
+    for i in range(sh.nrows):
+        for j in range(sh.ncols):
+            try:
+                xfi = sh.cell_xf_index(i, j)
+            except Exception:
+                continue
+            if xfi not in cache:
+                xf = bk.xf_list[xfi]
+                fo = bk.font_list[xf.font_index]
+                al = xf.alignment
+                bd = xf.border
+                fond = None
+                if xf.background.fill_pattern == 1:
+                    c = couleur(xf.background.pattern_colour_index)
+                    if c:
+                        fond = PatternFill("solid", fgColor=c)
+                cache[xfi] = (
+                    police(fo),
+                    Alignment(horizontal=_HOR_XLS.get(al.hor_align), vertical=_VERT_XLS.get(al.vert_align, "center"),
+                              wrap_text=bool(al.text_wrapped), shrink_to_fit=bool(al.shrink_to_fit),
+                              text_rotation=al.rotation if al.rotation in range(0, 181) else 0),
+                    fond,
+                    Border(left=cote(bd.left_line_style, bd.left_colour_index), right=cote(bd.right_line_style, bd.right_colour_index),
+                           top=cote(bd.top_line_style, bd.top_colour_index), bottom=cote(bd.bottom_line_style, bd.bottom_colour_index)),
+                )
+            font, align, fond, bord = cache[xfi]
+            cell = ws.cell(row=i + 1, column=j + 1)
+            cell.font, cell.alignment, cell.border = font, align, bord
+            if fond is not None:
+                cell.fill = fond
+            runs = sh.rich_text_runlist_map.get((i, j))
+            texte = cell.value
+            if runs and isinstance(texte, str) and texte:
+                bornes = [0] + [min(len(texte), max(0, k)) for k, _f in runs] + [len(texte)]
+                fontes = [bk.xf_list[xfi].font_index] + [f for _k, f in runs]
+                blocs = []
+                for k in range(len(fontes)):
+                    seg = texte[bornes[k]:bornes[k + 1]]
+                    if seg:
+                        blocs.append(TextBlock(police_segment(bk.font_list[fontes[k]]), seg))
+                if blocs:
+                    cell.value = CellRichText(*blocs)
 
 
 def _mise_en_forme_xls(ws, sh, get_column_letter):
@@ -466,6 +550,11 @@ def download_reponse_annotee(docname):
     ENTETE = PatternFill("solid", fgColor="D9E7FF")
     gras = Font(bold=True)
 
+    from openpyxl.styles import Border, Side
+
+    from customization_app.liste_commande_import import _labels as _labels_export
+
+    LX = _labels_export(doc)
     out = Workbook()
     ws = out.active
     ws.title = feuille[:31]
@@ -474,6 +563,16 @@ def download_reponse_annotee(docname):
     for lettre, dim in ws_src.column_dimensions.items():
         if dim.width:
             ws.column_dimensions[lettre].width = dim.width
+    # la date de notre réponse se lit EN TÊTE du fichier (demande 22/09), ses lignes descendent d'un cran
+    DECALAGE = 1
+    titre = ws.cell(row=1, column=1, value=f"{L['titre']} — {doc.titre or doc.name} ({doc.name}) — "
+                                            f"{LX['date']} : {frappe.utils.formatdate(doc.date_commande or nowdate())}"
+                                            + (f" — {LX['supplier']} : {doc.fournisseur}" if doc.fournisseur else ""))
+    titre.font = Font(bold=True, size=12)
+    titre.alignment = Alignment(vertical="center")
+    ws.row_dimensions[1].height = 22
+    NOIR = Side(style="thin", color="FF000000")
+    CADRE = Border(left=NOIR, right=NOIR, top=NOIR, bottom=NOIR)
 
     # nos colonnes à droite ; « Photo » seulement s'il n'a pas de colonne photo à lui
     col0 = max_col + 2
@@ -516,7 +615,8 @@ def download_reponse_annotee(docname):
         cp = ws.cell(row=xl, column=pos["prix"], value=prix or None)
         ws.cell(row=xl, column=pos["decision"], value=_decision(doc, r.decision))
         co = ws.cell(row=xl, column=pos["observation"], value=texte_observation(r.observation, adds, qty, L))
-        co.alignment = Alignment(wrap_text=True, vertical="top")
+        for c in range(col0, derniere_col + 1):   # nos colonnes centrées verticalement, comme ses cellules
+            ws.cell(row=xl, column=c).alignment = Alignment(wrap_text=(c == pos["observation"]), vertical="center")
         if avec_conteneurs:
             ws.cell(row=xl, column=pos["conteneur"], value=_conteneurs_ligne(r))
         if "photo" in pos and getattr(r, "image", None):
@@ -526,13 +626,15 @@ def download_reponse_annotee(docname):
 
     # 1. tout ce qui précède son en-tête (titres, coordonnées), puis l'en-tête lui-même
     for xl in range(1, ligne_entete + 1):
-        copier_ligne(xl, xl)
+        copier_ligne(xl, xl + DECALAGE)
     for rng in ws_src.merged_cells.ranges:
         if rng.min_row != rng.max_row and rng.max_row <= ligne_entete:
             try:
-                ws.merge_cells(str(rng))
+                ws.merge_cells(start_row=rng.min_row + DECALAGE, end_row=rng.max_row + DECALAGE,
+                               start_column=rng.min_col, end_column=rng.max_col)
             except Exception:
                 pass
+    ligne_entete += DECALAGE
     for i, (_cle, lbl, w) in enumerate(colonnes):
         c = ws.cell(row=ligne_entete, column=col0 + i, value=lbl)
         c.font = gras
@@ -586,7 +688,7 @@ def download_reponse_annotee(docname):
                 ws.cell(row=ligne, column=c_code, value=r.item_code or "")
             if c_des:
                 d = ws.cell(row=ligne, column=c_des, value=r.item_name_traduit or r.item_name or "")
-                d.alignment = Alignment(wrap_text=True, vertical="top")
+                d.alignment = Alignment(wrap_text=True, vertical="center")
             if c_qty:
                 ws.cell(row=ligne, column=c_qty, value=qty or None)
             if c_vol and flt(r.volume_ligne_m3):
@@ -594,12 +696,16 @@ def download_reponse_annotee(docname):
             ws.row_dimensions[ligne].height = hauteur_donnees
             if col_photo is not None:
                 if not c_code or c_code != col_photo:
-                    ws.cell(row=ligne, column=col_photo, value=r.item_code or "").alignment = Alignment(vertical="top")
+                    ws.cell(row=ligne, column=col_photo, value=r.item_code or "").alignment = Alignment(vertical="top", horizontal="center")
                 if getattr(r, "image", None):
                     _poser_photo_article(ws, ligne, col_photo, r.image, max_px=min(120, int(hauteur_donnees * 96 / 72) - 30), dx=4, dy=22)
             ecrire_nos_colonnes(ligne, r, qty, prix, adds)
             colorer_ligne(ligne, ORANGE)
     fin_corps = ligne
+    # bordures noires fines sur tout le tableau (ses colonnes ET les nôtres), en-tête compris
+    for xl in range(ligne_entete, fin_corps + 1):
+        for c in range(1, derniere_col + 1):
+            ws.cell(row=xl, column=c).border = CADRE
 
     # 3. ce qu'il avait sous son tableau (conditions, signature) — sans ses nombres (totaux caducs)
     ligne += 1
@@ -637,6 +743,8 @@ def download_reponse_annotee(docname):
     ecrire_feuille(out, doc)
     _onglets_par_conteneur(out, doc, images_src, corresp, col_photo, L)
 
+    _centrer_verticalement(out)   # demande 22/09 : TOUT centré verticalement, prix, remarque, conteneur…
+
     buf = io.BytesIO()
     out.save(buf)
     base = os.path.splitext(os.path.basename(doc.fichier_fournisseur))[0][:60]
@@ -644,6 +752,22 @@ def download_reponse_annotee(docname):
     frappe.response["filecontent"] = buf.getvalue()
     frappe.response["type"] = "binary"
     return {"lignes": fin_corps - ligne_entete, "photos": len(ws._images)}
+
+
+def _centrer_verticalement(wb):
+    """Centre verticalement toutes les cellules de tous les onglets, en gardant l'alignement
+    horizontal, le retour à la ligne et la rotation de chacune."""
+    from openpyxl.styles import Alignment
+
+    for ws in wb.worksheets:
+        for row in ws.iter_rows():
+            for cell in row:
+                if cell.value is None and not cell.has_style:
+                    continue
+                a = cell.alignment
+                cell.alignment = Alignment(horizontal=a.horizontal, vertical="center", wrap_text=a.wrap_text,
+                                           shrink_to_fit=a.shrink_to_fit, text_rotation=a.text_rotation or 0,
+                                           indent=a.indent or 0)
 
 
 def _onglets_par_conteneur(wb, doc, images_src, corresp, col_photo, L):
