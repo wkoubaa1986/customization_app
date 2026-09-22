@@ -56,6 +56,18 @@ class TestModes(unittest.TestCase):
         self.assertIsNone(M("Carte de crédit", "x", n_piece="TPE-12"))
         self.assertIn("inconnu", M("Troc", "x"))
 
+    def test_pieces_depuis_texte(self):
+        from customization_app.caisse_impayes import pieces_depuis_texte
+        self.assertEqual(pieces_depuis_texte("ACC-PAY-2024-00925, ACC-PAY-2024-02180\nACC-PAY-1 ; x"),
+                         ["ACC-PAY-2024-00925", "ACC-PAY-2024-02180", "ACC-PAY-1", "x"])
+        self.assertEqual(pieces_depuis_texte(None), [])
+
+    def test_perte_de_non_paiement(self):
+        from customization_app.caisse_impayes import MODES, motif_refus_mode, normaliser_paiements
+        self.assertTrue(MODES["Perte de non paiement"]["journal"])
+        self.assertIsNone(motif_refus_mode("Perte de non paiement", "x"))
+        self.assertEqual(normaliser_paiements([{"mode": "Perte de non paiement", "montant": 618}], 618)[0]["mode"], "Perte de non paiement")
+
     def test_fractionnement(self):
         from customization_app.caisse_impayes import normaliser_paiements as N
         lignes = N([{"mode": "Espèces", "montant": "100"}, {"mode": "Traite bancaire", "montant": 16, "n_piece": "998877", "date_piece": "2026-12-31"}], 116)

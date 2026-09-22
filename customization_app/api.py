@@ -2540,6 +2540,13 @@ def get_relance_clients(search=None, customer_group=None, debt_type=None):
         if key:
             clients[cust][key] += float(r.montant or 0)
 
+    # Les pièces passées en PERTE DE NON PAIEMENT par une écriture de journal (mode « Perte de non
+    # paiement », ou écriture ancienne taguée dans « Impayés soldés » : ACC-JV-2026-00200 soldait
+    # 3 781 + 618 de 2024 et Relance les réclamait encore) ne sont plus dues.
+    for p in _pertes_de_non_paiement():
+        if p.customer in clients:
+            clients[p.customer]["cheques"] -= p.restant
+
     # ⚠️ AVANT LE FILTRE, PAS APRÈS. La recherche texte compare aussi le TÉLÉPHONE : complété
     # ensuite, un client trouvé par un numéro venu de son contact resterait introuvable.
     _completer_coordonnees(list(clients.values()))
@@ -2710,6 +2717,20 @@ def get_relance_detail(customer):
             })
 
     status_label = {0: "Brouillon", 1: "Validé", 2: "Annulé"}
+    from customization_app.caisse_impayes import _soldes, IMPAYES
+    restants = {p.name: float(p.restant) for p in _soldes(customer)}
+    # Une pièce passée en PERTE DE NON PAIEMENT : une ligne « Journal Entry » datée crédite le
+    # restant effacé, et la pièce n'a plus rien à relancer.
+    for p in _pertes_de_non_paiement(customer):
+        info = frappe.db.get_value("Journal Entry", p.je, ["posting_date", "user_remark"], as_dict=True) or {}
+        rows.append(frappe._dict(
+            posting_date=info.get("posting_date"), account=IMPAYES, voucher_type="Journal Entry",
+            voucher_no=p.je, debit=0.0, credit=float(p.restant), remarks=info.get("user_remark") or "",
+            docstatus=1, reference_no="", reference_date=info.get("posting_date"),
+            pe_remarks=info.get("user_remark") or "", origine_impaye=p.name))
+        restants[p.name] = 0.0
+    rows.sort(key=lambda r: (str(r.posting_date or ""), r.voucher_no), reverse=True)
+
     detail = []
     running = 0.0
     # Calcul du solde cumulé chronologique (du plus ancien au plus récent)
@@ -2717,8 +2738,6 @@ def get_relance_detail(customer):
         running += float(r.debit or 0) - float(r.credit or 0)
         r["_balance"] = round(running, 3)
 
-    from customization_app.caisse_impayes import _soldes, IMPAYES
-    restants = {p.name: float(p.restant) for p in _soldes(customer)}
     for r in rows:
         # Tâches de travail liées à cette ligne (via les Sales Orders de la pièce)
         line_orders = voucher_orders.get(r.voucher_no, set())
@@ -2752,6 +2771,27 @@ def get_relance_detail(customer):
         })
 
     return detail
+
+
+def _pertes_de_non_paiement(customer=None, vouchers=None):
+    """Les pièces impayées effacées par une écriture « Perte de non paiement » (`custom_impayes_soldes`)
+    avec le restant qu'elle a effacé (`restant`, transferts partiels déduits) et l'écriture (`je`)."""
+    from customization_app.caisse_impayes import _soldes, pieces_soldees_par_journal
+
+    soldees = pieces_soldees_par_journal()
+    if vouchers is not None:
+        soldees = {k: v for k, v in soldees.items() if k in vouchers}
+    if not soldees:
+        return []
+    out = []
+    for piece, je in soldees.items():
+        party = frappe.db.get_value("Payment Entry", piece, "party")
+        if not party or (customer and party != customer):
+            continue
+        for p in _soldes(party, piece, inclure_soldees=True):
+            p["je"] = je
+            out.append(p)
+    return out
 
 
 def _repartition_par_compte(customer, vouchers=None):
@@ -2792,6 +2832,8 @@ def _repartition_par_compte(customer, vouchers=None):
         cle = RELANCE_ACCOUNTS.get(r.account, {}).get("key")
         if cle:
             montants[cle] = round(float(r.montant or 0), 3)
+    for p in _pertes_de_non_paiement(customer, vouchers):
+        montants["cheques"] = round(montants["cheques"] - float(p.restant), 3)
     montants["total"] = round(sum(montants.values()), 3)
     return montants
 

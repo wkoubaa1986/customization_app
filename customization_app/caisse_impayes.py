@@ -45,6 +45,8 @@ MODE_NOUVEAU = "Nouveau chèque"
 MODE_TRAITE = "Traite bancaire"
 MODE_VIREMENT = "Virement"
 MODE_CARTE = "Carte de crédit"
+MODE_PERTE = "Perte de non paiement"
+PERTE = "Perte de non paiement - A&S"
 
 #: compte de destination, moyen de paiement ERPNext, contrôle de la pièce saisie.
 MODES = {
@@ -62,6 +64,11 @@ MODES = {
     MODE_CARTE: {"compte": BANQUE, "moyen": "Carte de crédit", "piece": "facultatif",
                  "rx": r"[A-Za-z0-9/\-]{3,30}", "attendu": "3 à 30 lettres ou chiffres",
                  "libelle": "le numéro du ticket TPE"},
+    # Abandon de la créance : ce n'est plus un transfert (rien n'entre) mais une CHARGE — écriture
+    # de journal Perte de non paiement / Chèques sans provision, qui liste la pièce qu'elle solde
+    # (`custom_impayes_soldes`). Même convention que l'écriture manuelle ACC-JV-2026-00200 du
+    # 31/12/2024 (3 781 + 618), que Relance ne savait pas rattacher.
+    MODE_PERTE: {"compte": PERTE, "moyen": "", "piece": None, "journal": True},
 }
 TOLERANCE = 0.0005
 
@@ -139,6 +146,26 @@ def normaliser_paiements(paiements, restant):
     return lignes
 
 
+def pieces_depuis_texte(texte):
+    """« ACC-PAY-1, ACC-PAY-2\nACC-PAY-3 » -> ["ACC-PAY-1", "ACC-PAY-2", "ACC-PAY-3"]. Pur."""
+    return [t for t in re.split(r"[\s,;]+", (texte or "").strip()) if t]
+
+
+def pieces_soldees_par_journal():
+    """{pièce impayée -> écriture de journal validée qui la solde intégralement} : les pertes de
+    non paiement (mode « Perte de non paiement », ou une écriture ancienne taguée à la main dans
+    « Impayés soldés »). Une pièce listée est considérée SOLDÉE, quel que soit le partage du
+    montant entre les pièces d'une même écriture."""
+    if not frappe.db.has_column("Journal Entry", "custom_impayes_soldes"):
+        return {}
+    out = {}
+    for je in frappe.get_all("Journal Entry", filters={"docstatus": 1, "custom_impayes_soldes": ["!=", ""]},
+                             fields=["name", "custom_impayes_soldes"]):
+        for piece in pieces_depuis_texte(je.custom_impayes_soldes):
+            out.setdefault(piece, je.name)
+    return out
+
+
 def _montant(montant, restant):
     """Conservé pour les appels historiques (une seule ligne)."""
     try:
@@ -156,7 +183,11 @@ def _montant(montant, restant):
 # ------------------------------------------------------------ lecture
 
 
-def _soldes(client, piece=None):
+def _soldes(client, piece=None, inclure_soldees=False):
+    """Les pièces impayées du client et leur restant (règlements par transfert déduits). Les pièces
+    passées en perte de non paiement sont exclues, sauf `inclure_soldees` (pour connaître le montant
+    que la perte a effacé)."""
+    soldees = [""] if inclure_soldees else (list(pieces_soldees_par_journal()) or [""])
     return frappe.db.sql(
         """SELECT pe.name, pe.company, pe.party AS customer, pe.party_name,
                   pe.posting_date, pe.reference_no, pe.paid_amount,
@@ -178,13 +209,16 @@ def _soldes(client, piece=None):
            ) reg ON reg.origine = pe.name
            WHERE pe.docstatus = 1 AND pe.party_type = 'Customer' AND pe.party = %(client)s
              AND (%(piece)s IS NULL OR pe.name = %(piece)s)
+             AND pe.name NOT IN %(soldees)s
            GROUP BY pe.name
            HAVING restant > 0
            ORDER BY pe.posting_date, pe.name""",
-        dict(client=client, piece=piece, impayes=IMPAYES), as_dict=True)
+        dict(client=client, piece=piece, impayes=IMPAYES, soldees=soldees), as_dict=True)
 
 
 def _restant_verrouille(piece):
+    if piece in pieces_soldees_par_journal():
+        return 0.0
     # Lectures courantes : même sous REPEATABLE READ, une requête ayant attendu
     # le verrou doit voir les règlements validés entre-temps, pas son snapshot.
     origine = frappe.db.sql(
@@ -265,6 +299,11 @@ def encaisser(client, piece, montant=None, mode=MODE_ESPECES, n_cheque=None, ban
         refus = motif_refus_mode(l["mode"], origine.reference_no, l["n_piece"], l["banque"], l["date_piece"])
         if refus:
             frappe.throw(_(refus))
+    if any(MODES[l["mode"]].get("journal") for l in lignes) and (
+            len(lignes) > 1 or round(lignes[0]["montant"], 3) != round(restant, 3)):
+        # une perte partielle n'a pas de sens comptable : on abandonne le RESTE, seul, en dernier
+        frappe.throw(_("« Perte de non paiement » se saisit seule, pour tout le reste de la pièce ({0}).").format(
+            frappe.format_value(restant, {"fieldtype": "Currency"})))
     _verifier_comptes(origine.company, {IMPAYES} | {MODES[l["mode"]]["compte"] for l in lignes})
 
     jour = nowdate()
@@ -272,6 +311,24 @@ def encaisser(client, piece, montant=None, mode=MODE_ESPECES, n_cheque=None, ban
     crees, references = [], []
     for l in lignes:
         cfg = MODES[l["mode"]]
+        if cfg.get("journal"):
+            je = frappe.get_doc({
+                "doctype": "Journal Entry", "voucher_type": "Journal Entry", "company": origine.company,
+                "posting_date": jour, "custom_impayes_soldes": piece,
+                "user_remark": _("Perte de non paiement — chèque impayé {0} ({1}) — client {2}").format(
+                    piece, origine.reference_no or "", client_libelle),
+                "accounts": [
+                    {"account": PERTE, "debit_in_account_currency": l["montant"]},
+                    {"account": IMPAYES, "credit_in_account_currency": l["montant"]},
+                ],
+            })
+            je.insert()
+            je.submit()
+            crees.append(je.name)
+            references.append(je.name)
+            _commenter("Payment Entry", piece, "🗑 %s : %s → %s" % (
+                je.user_remark, frappe.format_value(l["montant"], {"fieldtype": "Currency"}), je.name))
+            continue
         reference = reference_transfert(l["mode"], piece, origine.reference_no, l["n_piece"], l["banque"])
         libelle = {
             MODE_ESPECES: _("Règlement en espèces du chèque impayé {0} — client {1}"),

@@ -1,10 +1,11 @@
 /* Dialogue partagé par Relance et le rapport de caisse : régulariser un chèque impayé par une ou
-   plusieurs lignes (espèces, redépôt, nouveau chèque, traite, virement, carte) sans toucher au
+   plusieurs lignes (espèces, redépôt, nouveau chèque, traite, virement, carte) — ou l'abandonner
+   en perte de non paiement (écriture de journal) — sans toucher au
    paiement d'origine. */
 frappe.provide('customization_app');
 customization_app.encaisser_impaye = function ({client, piece, on_success} = {}) {
     const api = 'customization_app.caisse_impayes';
-    const MODES = ['Espèces', 'Redépôt du même chèque', 'Nouveau chèque', 'Traite bancaire', 'Virement', 'Carte de crédit'];
+    const MODES = ['Espèces', 'Redépôt du même chèque', 'Nouveau chèque', 'Traite bancaire', 'Virement', 'Carte de crédit', 'Perte de non paiement'];
     const PIECE_LABEL = {
         'Nouveau chèque': __('N° du nouveau chèque'), 'Traite bancaire': __('N° de traite'),
         'Virement': __('Référence du virement'), 'Carte de crédit': __('N° ticket TPE'),
@@ -88,7 +89,7 @@ customization_app.encaisser_impaye = function ({client, piece, on_success} = {})
         d.set_value('restant', ligne ? ligne.restant : 0);
         poser_lignes(ligne ? [{mode: 'Espèces', montant: ligne.restant}] : []);
         const esc = frappe.utils.escape_html;
-        d.fields_dict.info.$wrapper.html(`<p class="text-muted">${__(
+        d.fields_dict.info.$wrapper.html(`<p class="text-muted">${__("« Perte de non paiement » : la créance est abandonnée (charge), à saisir seule pour le reste de la pièce.")} ${__(
             "Espèces → entrée de caisse. Redépôt / nouveau chèque / traite → la pièce entre en portefeuille et part sur un bordereau. Virement / carte → directement sur la banque. Le paiement impayé d’origine n’est jamais modifié ; chaque ligne le cite (« Impayé d’origine »). Si une pièce de régularisation revient impayée, son transfert est annulé et la créance réapparaît.")}${
             ligne && ligne.numero ? ' <b>' + __('Chèque impayé n° {0} ({1}).', [esc(ligne.numero), esc(ligne.banque || '—')]) + '</b>' : ''}</p>`);
     }

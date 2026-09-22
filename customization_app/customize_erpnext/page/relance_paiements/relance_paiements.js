@@ -641,7 +641,7 @@ class RelancePaiements {
 					<td style="width:28px">${case_}</td>
 					<td>${this.esc(x.posting_date)}</td>
 					<td>${this.esc(x.account_label)}</td>
-					<td>${this.puce_piece('Payment Entry', x.voucher_no)}</td>
+					<td>${this.puce_piece(x.voucher_type || 'Payment Entry', x.voucher_no)}</td>
 					<td class="num">${x.debit ? this.fmt(x.debit) : '—'}</td>
 					<td class="num">${x.credit ? this.fmt(x.credit) : '—'}</td>
 					<td class="num">${this.fmt(x.balance)}</td>
