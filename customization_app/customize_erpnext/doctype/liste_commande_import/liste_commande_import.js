@@ -2089,6 +2089,29 @@ function lci_ct_flotte(conteneurs) {
   return ordre.map((t) => `${compte[t]} × ${t}`).join(" + ");
 }
 
+// Déplace EN BLOC des lignes (repérées par conteneur/position) vers le conteneur `dest`
+// (index). On retire du plus grand index au plus petit pour ne rien décaler, et deux
+// morceaux d'une même ligne se réunissent à l'arrivée. Rend le nombre de lignes déplacées.
+// Pure (pas de DOM) : c'est elle que le menu par ligne ET la sélection multiple appellent.
+function lci_ct_deplacer_groupe(conteneurs, items, dest) {
+  const cible = conteneurs[dest];
+  if (!cible) return 0;
+  const vus = new Set();
+  const a_bouger = (items || []).filter((it) => {
+    const cle = it.ci + ":" + it.li;
+    if (vus.has(cle) || it.ci === dest) return false;
+    vus.add(cle);
+    return conteneurs[it.ci] && conteneurs[it.ci].lignes[it.li];
+  }).sort((a, b) => (b.ci - a.ci) || (b.li - a.li));
+  const parts = a_bouger.map((it) => conteneurs[it.ci].lignes.splice(it.li, 1)[0]).reverse();
+  parts.forEach((part) => {
+    const meme = cible.lignes.find((l) => l.row === part.row);
+    if (meme) meme.qty = flt(meme.qty) + flt(part.qty);
+    else cible.lignes.push(part);
+  });
+  return parts.length;
+}
+
 async function lci_conteneurs_dialog(frm) {
   if (frm.is_new()) {
     frappe.msgprint(__("Enregistrez d'abord le document."));
@@ -2102,7 +2125,8 @@ async function lci_conteneurs_dialog(frm) {
   const dev = frm.doc.devise || "USD";
   // `type` est le gabarit PAR DÉFAUT (nouveaux conteneurs) ; `types` porte
   // celui de chaque conteneur, ce qui permet de mélanger 20' et 40' HC.
-  const etat = { type: "40' HC", taux: 0.9, types: [], dates: [], plan: null, unites: {} };
+  const etat = { type: "40' HC", taux: 0.9, types: [], dates: [], plan: null, unites: {},
+                 coches: new Set() };   // "ci:row" des lignes cochées pour un déplacement groupé
   let dernier_ajout = null;   // conteneur à mettre en évidence après un ajout
   const LCI_GABARITS = ["20'", "40'", "40' HC"];
   const lci_cap = (c) => flt(c && c.capacite) || flt((etat.plan || {}).capacite);
@@ -2162,6 +2186,7 @@ async function lci_conteneurs_dialog(frm) {
       freeze_message: __("Calcul du chargement…"),
     });
     etat.plan = r.message || { conteneurs: [], sans_volume: [] };
+    etat.coches.clear();
     etat.types = (etat.plan.conteneurs || []).map((c) => c.type || etat.type);
     etat.dates = (etat.plan.conteneurs || []).map((c) => c.date || "");
     // volume et montant à l'unité : tout déplacement manuel s'y réfère
@@ -2196,18 +2221,31 @@ async function lci_conteneurs_dialog(frm) {
     calculer();   // ses lignes doivent retrouver une place : on recalcule
   }
 
-  function deplacer(ci, li, dest) {
-    const part = etat.plan.conteneurs[ci].lignes.splice(li, 1)[0];
+  function deplacer_groupe(items, dest) {
+    if (!items.length) return;
     if (dest === "__new") {
       lci_ct_ajouter();
       dest = etat.plan.conteneurs.length - 1;
     }
-    const cible = etat.plan.conteneurs[cint(dest)];
-    const meme = cible.lignes.find((l) => l.row === part.row);
-    if (meme) meme.qty = flt(meme.qty) + flt(part.qty);   // deux morceaux réunis
-    else cible.lignes.push(part);
+    const n = lci_ct_deplacer_groupe(etat.plan.conteneurs, items, cint(dest));
+    etat.coches.clear();
     recalculer_totaux();
     render();
+    if (n) {
+      frappe.show_alert({ message: __("{0} ligne(s) déplacée(s) vers C{1}.", [n, etat.plan.conteneurs[cint(dest)].no]),
+                          indicator: "green" });
+    }
+  }
+
+  function deplacer(ci, li, dest) {
+    deplacer_groupe([{ ci, li }], dest);
+  }
+
+  // la barre « N lignes cochées » se met à jour sans tout redessiner
+  function maj_bulk() {
+    const n = etat.coches.size;
+    $z.find("#lci-ct-bulk-n").text(n);
+    $z.find("#lci-ct-bulk").css("display", n ? "inline-flex" : "none");
   }
 
   function scinder(ci, li) {
@@ -2258,6 +2296,9 @@ async function lci_conteneurs_dialog(frm) {
       const plein = flt(c.volume) > cc + 0.0001;
       return `<div class="lci-ct${dernier_ajout === c.no ? " neuf" : ""}" data-no="${c.no}">
         <div class="lci-ct-head">
+          <label class="lci-ct-all-l" title="${__("Cocher toutes les lignes de ce conteneur")}">
+            <input type="checkbox" class="lci-ct-all" data-ci="${ci}"
+                   ${(c.lignes || []).length && (c.lignes || []).every((l) => etat.coches.has(ci + ":" + l.row)) ? "checked" : ""}></label>
           <b>C${c.no}</b>
           <span class="lci-ct-gab-l">${esc(c.type || etat.type)}</span>
           ${c.date ? `<span class="lci-ct-date-l">🗓 ${esc(frappe.datetime.str_to_user(c.date))}</span>` : ""}
@@ -2273,6 +2314,9 @@ async function lci_conteneurs_dialog(frm) {
             __("Conteneur vide — envoyez-y des lignes avec le menu « C{0} » à droite de chaque ligne.",
                [c.no])}</td></tr>`}
           ${(c.lignes || []).map((l, li) => `<tr>
+            <td style="width:24px;text-align:center;">
+              <input type="checkbox" class="lci-ct-sel" data-ci="${ci}" data-li="${li}" data-row="${esc(l.row)}"
+                     ${etat.coches.has(ci + ":" + l.row) ? "checked" : ""}></td>
             <td>${esc(l.libelle || "")}${l.scinde ? ` <span class="lci-ct-split">${__("scindée")}</span>` : ""}</td>
             <td style="width:80px;text-align:right;">${format_number(flt(l.qty), null, 0)}</td>
             <td style="width:92px;text-align:right;">${format_number(flt(l.volume), null, 3)} m³</td>
@@ -2319,6 +2363,9 @@ async function lci_conteneurs_dialog(frm) {
         .lci-ct-split { font-size: 9.5px; color: #391085; background: #f9f0ff; border-radius: 5px;
           padding: 1px 5px; }
         .lci-ct-mv { font-size: 11px; padding: 1px 3px; }
+        .lci-ct-bulk { gap: 6px; align-items: center; background: #fff7e6; border: 1px solid #ffd591;
+          border-radius: 6px; padding: 2px 8px; font-size: 12px; }
+        .lci-ct-all-l { margin: 0; font-weight: 400; display: inline-flex; }
         .lci-ct-top { display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
           font-size: 12px; margin-bottom: 8px; }
         .lci-ct-warn { font-size: 11.5px; color: #ad6800; background: #fffbe6; border: 1px solid #ffe58f;
@@ -2335,6 +2382,13 @@ async function lci_conteneurs_dialog(frm) {
                  value="${Math.round(etat.taux * 100)}" style="width:66px;"> %
         </label>
         <button class="btn btn-xs btn-default" id="lci-ct-calc">${__("Recalculer")}</button>
+        <span id="lci-ct-bulk" class="lci-ct-bulk" style="display:${etat.coches.size ? "inline-flex" : "none"};">
+          ✔ <b id="lci-ct-bulk-n">${etat.coches.size}</b> ${__("ligne(s) cochée(s)")} →
+          <select id="lci-ct-bulk-dest">${plan.conteneurs.map((c, i) =>
+            `<option value="${i}">C${c.no}</option>`).join("")}<option value="__new">${__("+ nouveau")}</option></select>
+          <button class="btn btn-xs btn-primary" id="lci-ct-bulk-go">${__("Déplacer")}</button>
+          <button class="btn btn-xs btn-default" id="lci-ct-bulk-clear" title="${__("Tout décocher")}">✕</button>
+        </span>
         <span style="margin-left:auto;">
           <b>${esc(lci_ct_flotte(plan.conteneurs) || __("aucun conteneur"))}</b> ·
           <b>${format_number(vol_total, null, 3)} m³</b> · ${format_currency(mnt_total, dev)}
@@ -2397,6 +2451,29 @@ async function lci_conteneurs_dialog(frm) {
     $z.find(".lci-ct-mv").on("change", function () {
       deplacer(cint($(this).data("ci")), cint($(this).data("li")), this.value);
     });
+    $z.find(".lci-ct-sel").on("change", function () {
+      const cle = cint($(this).data("ci")) + ":" + $(this).data("row");
+      if (this.checked) etat.coches.add(cle); else etat.coches.delete(cle);
+      maj_bulk();
+    });
+    $z.find(".lci-ct-all").on("change", function () {
+      const ci = cint($(this).data("ci"));
+      const on = this.checked;
+      $z.find(`.lci-ct-sel[data-ci="${ci}"]`).each(function () {
+        this.checked = on;
+        const cle = ci + ":" + $(this).data("row");
+        if (on) etat.coches.add(cle); else etat.coches.delete(cle);
+      });
+      maj_bulk();
+    });
+    $z.find("#lci-ct-bulk-go").on("click", () => {
+      const items = [];
+      $z.find(".lci-ct-sel:checked").each(function () {
+        items.push({ ci: cint($(this).data("ci")), li: cint($(this).data("li")) });
+      });
+      deplacer_groupe(items, $z.find("#lci-ct-bulk-dest").val());
+    });
+    $z.find("#lci-ct-bulk-clear").on("click", () => { etat.coches.clear(); render(); });
     $z.find(".lci-ct-cut").on("click", function () {
       scinder(cint($(this).data("ci")), cint($(this).data("li")));
     });
