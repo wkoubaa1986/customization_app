@@ -368,6 +368,7 @@ doc_events = {
 # Load my JS globally in the Desk (ERPNext admin interface)
 app_include_js = [_js("customer_quick_entry.js"),
                   _js("caisse_impayes.js"),
+                  _js("caisse_bascule_pas_paye.js"),
                   _js("custom_calendar.js"),
                   _js("mes_interventions_employe.js"),
                   _js("pos_auto_customer.js"),
