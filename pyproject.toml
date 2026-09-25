@@ -20,6 +20,8 @@ dependencies = [
     # chinois envoient encore : openpyxl ne sait pas les ouvrir
     # (lci_reponse._feuilles).
     "xlrd~=2.0",
+    # listes de prix PDF (tableaux du texte, rendu des pages pour l'IA) — 25/09/2026
+    "pymupdf>=1.24",
 ]
 
 [build-system]

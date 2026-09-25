@@ -1757,7 +1757,8 @@ async function lci_reponse_import(frm) {
   }
   const input = document.createElement("input");
   input.type = "file";
-  input.accept = ".xlsx,.xlsm,.xls,application/vnd.ms-excel,"
+  // .pdf : liste de prix PDF, tableau lu dans le texte, sinon transcrit par l'IA (25/09/2026)
+  input.accept = ".xlsx,.xlsm,.xls,.pdf,application/pdf,application/vnd.ms-excel,"
     + "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
   input.onchange = async () => {
     const file = input.files[0];
@@ -1767,7 +1768,7 @@ async function lci_reponse_import(frm) {
     fd.append("is_private", "1");   // une grille de prix fournisseur reste privée
     fd.append("doctype", frm.doc.doctype);
     fd.append("docname", frm.doc.name);
-    frappe.dom.freeze(__("Lecture du fichier fournisseur…"));
+    frappe.dom.freeze(/\.pdf$/i.test(file.name) ? __("Lecture de la liste de prix PDF (texte, sinon IA)…") : __("Lecture du fichier fournisseur…"));
     let url;
     try {
       const res = await fetch("/api/method/upload_file", {

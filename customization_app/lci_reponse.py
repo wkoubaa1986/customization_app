@@ -137,6 +137,8 @@ def _feuilles(chemin):
     rendent la même grille de listes, le reste du module ignore le format.
     """
     ext = os.path.splitext(chemin)[1].lower()
+    if ext == ".pdf":
+        return lire_pdf(chemin)
     if ext == ".xls":
         try:
             import xlrd
@@ -165,6 +167,124 @@ def _feuilles(chemin):
                                for row in ws.iter_rows(max_row=min(ws.max_row or 0, MAX_ROWS))]))
     wb.close()
     return out
+
+
+# ------------------------------------------------- PDF (liste de prix)
+# Demande utilisateur 25/09/2026 : « une liste de prix PDF, et l'IA en extrait les colonnes
+# (volume unitaire, prix fournisseur…) ». Deux lectures : les tableaux du texte du PDF
+# (PyMuPDF find_tables — un PDF exporté d'Excel), sinon chaque page transcrite par le
+# modèle vision (`lire_pdf_ia`). Dans les deux cas on rend une grille comme pour un
+# classeur : le reste du module (en-tête, rôles des colonnes, appariement) ne change pas.
+
+MAX_PAGES_PDF = 40
+MAX_PAGES_IA = 12
+DPI_PAGE_IA = 130
+
+PROMPT_PAGE_PRIX = (
+    "You read ONE page of a supplier price list / quotation (image attached). Transcribe the main "
+    "product table as JSON: {\"header\": [\"col1\", ...], \"rows\": [[\"cell\", ...], ...]}. Keep the column "
+    "names EXACTLY as printed (any language), one entry per printed column, in order; one row per "
+    "product line, cells as printed (numbers as plain text like \"12.50\", keep units such as USD, CBM, "
+    "pcs). Skip page titles, totals, terms and signatures. If the page has no product table, return "
+    "{\"header\": [], \"rows\": []}. Never invent values."
+)
+
+
+def _norm_entete_pdf(cells):
+    return tuple(_txt(c).lower() for c in cells)
+
+
+def _est_entete_repetee(ligne, entete):
+    """Une ligne identique à l'en-tête (le PDF le répète à chaque page). Pur."""
+    return entete and _norm_entete_pdf(ligne) == _norm_entete_pdf(entete)
+
+
+def fusionner_tables(tables):
+    """[(page, rows)] -> [(nom, grille)] : les tableaux de même en-tête (ou de même largeur
+    et sans en-tête propre : suite du précédent sur la page suivante) sont mis bout à bout,
+    l'en-tête répété est retiré. Un tableau d'une autre forme ouvre une nouvelle grille. Pur."""
+    grilles = []
+    for page, rows in tables:
+        rows = [list(r) for r in rows if r and any(_txt(c) for c in r)]
+        if not rows:
+            continue
+        if grilles:
+            nom, grille, entete, pages = grilles[-1]
+            if _est_entete_repetee(rows[0], entete):
+                grille.extend(rows[1:]); pages.append(page); continue
+            if len(rows[0]) == len(entete) and not _score_entete(rows[0]):
+                grille.extend(rows); pages.append(page); continue
+        grilles.append(["PDF", rows, rows[0], [page]])
+    out = []
+    for nom, grille, entete, pages in grilles:
+        p0, p1 = min(pages), max(pages)
+        out.append(("PDF p.%d" % p0 if p0 == p1 else "PDF p.%d-%d" % (p0, p1), grille[:MAX_ROWS]))
+    return out
+
+
+def lire_pdf(chemin, ia=None):
+    """PDF -> [(nom, grille)]. `ia=None` : tableaux du texte s'il y en a, sinon vision ;
+    `ia=True` : vision d'office ; `ia=False` : texte seulement."""
+    import pymupdf
+
+    doc = pymupdf.open(chemin)
+    tables = []
+    if ia is not True:
+        for no, page in enumerate(doc):
+            if no >= MAX_PAGES_PDF:
+                break
+            trouvees = []
+            for strategie in ("lines", "text"):
+                try:
+                    trouvees = page.find_tables(strategy=strategie).tables
+                except Exception:
+                    trouvees = []
+                if trouvees:
+                    break
+            for t in trouvees:
+                try:
+                    rows = t.extract()
+                except Exception:
+                    continue
+                if rows and len(rows) >= 2 and len(rows[0]) >= 2:
+                    tables.append((no + 1, rows))
+        grilles = fusionner_tables(tables)
+        if any(len(g) >= 2 for _n, g in grilles):
+            return grilles
+        if ia is False:
+            frappe.throw(_("Aucun tableau lisible dans le texte de ce PDF."))
+    return lire_pdf_ia(doc)
+
+
+def lire_pdf_ia(doc):
+    """Chaque page transcrite par le modèle vision -> grilles fusionnées par en-tête."""
+    from customization_app.liste_commande_import import _chat_json_image
+
+    tables = []
+    for no, page in enumerate(doc):
+        if no >= MAX_PAGES_IA:
+            break
+        png = page.get_pixmap(dpi=DPI_PAGE_IA, alpha=False).tobytes("png")
+        sortie = _chat_json_image(PROMPT_PAGE_PRIX, "Page %d of %d." % (no + 1, len(doc)), png) or {}
+        rows = grille_ia(sortie)
+        if rows:
+            tables.append((no + 1, rows))
+    grilles = fusionner_tables(tables)
+    if not grilles:
+        frappe.throw(_("L'IA n'a trouvé aucun tableau de prix dans ce PDF."))
+    return grilles
+
+
+def grille_ia(sortie):
+    """La réponse du modèle -> lignes de grille (en-tête + lignes, largeur homogène). Pur."""
+    if not isinstance(sortie, dict):
+        return []
+    entete = [_txt(c) for c in (sortie.get("header") or [])]
+    lignes = [[_txt(c) for c in (r or [])] for r in (sortie.get("rows") or []) if isinstance(r, (list, tuple))]
+    if not entete or not lignes:
+        return []
+    larg = max([len(entete)] + [len(r) for r in lignes])
+    return [entete + [""] * (larg - len(entete))] + [r + [""] * (larg - len(r)) for r in lignes]
 
 
 # ------------------------------------------------- repérage de l'en-tête
@@ -625,9 +745,15 @@ def analyser_reponse(docname, file_url):
     """Lit le fichier du fournisseur et rend un APERÇU. N'écrit rien."""
     _guard()
     doc = frappe.get_doc(DOCTYPE, docname)
-    feuille, ligne_entete, grille = _trouver_tableau(_feuilles(_fichier_local(file_url)))
+    chemin = _fichier_local(file_url)
+    feuille, ligne_entete, grille = _trouver_tableau(_feuilles(chemin))
     entete = grille[ligne_entete] if ligne_entete < len(grille) else []
     mapping = _mapper_colonnes(entete, grille[ligne_entete + 1:ligne_entete + 6])
+    if "prix_unitaire" not in mapping and chemin.lower().endswith(".pdf"):
+        # le texte du PDF n'a pas livré de tableau exploitable : la page lue par l'IA
+        feuille, ligne_entete, grille = _trouver_tableau(lire_pdf(chemin, ia=True))
+        entete = grille[ligne_entete] if ligne_entete < len(grille) else []
+        mapping = _mapper_colonnes(entete, grille[ligne_entete + 1:ligne_entete + 6])
     if "prix_unitaire" not in mapping:
         frappe.throw(_("Aucune colonne de prix unitaire reconnue dans « {0} » "
                        "(feuille « {1} »). Vérifiez que le fichier contient bien "

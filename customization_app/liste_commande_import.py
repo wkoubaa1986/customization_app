@@ -197,6 +197,33 @@ def _chat_json(system, user):
         frappe.throw(_("Réponse IA illisible : {0}").format(content[:300]))
 
 
+def _chat_json_image(system, user, image_png, detail="high"):
+    """Comme `_chat_json`, avec UNE image jointe (page d'une liste de prix PDF lue par le
+    modèle vision). Demande utilisateur 25/09/2026."""
+    import base64
+    client = _openai_client()
+    contenu = [{"type": "text", "text": user},
+               {"type": "image_url", "image_url": {"url": "data:image/png;base64," + base64.b64encode(image_png).decode(),
+                                                   "detail": detail}}]
+    params = {
+        "model": _model(),
+        "messages": [{"role": "system", "content": system}, {"role": "user", "content": contenu}],
+        "response_format": {"type": "json_object"},
+    }
+    try:
+        resp = client.chat.completions.create(temperature=_temperature(), **params)
+    except Exception as e:
+        if "temperature" in str(e):
+            resp = client.chat.completions.create(**params)
+        else:
+            raise
+    content = resp.choices[0].message.content
+    try:
+        return json.loads(content)
+    except Exception:
+        frappe.throw(_("Réponse IA illisible : {0}").format(content[:300]))
+
+
 def _target_rows(doc, row_names):
     names = None
     if row_names:
