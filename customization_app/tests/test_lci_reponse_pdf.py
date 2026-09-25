@@ -57,3 +57,19 @@ class TestLecturePdf(unittest.TestCase):
 		self.assertEqual([R._txt(c) for c in grille[0]], entete)
 		self.assertEqual(R._txt(grille[1][1]), "P-F-10'-O")
 		self.assertEqual(len(grille), 3)
+
+
+class _Row:
+	def __init__(self, **k):
+		self.__dict__.update(k)
+
+
+class TestCandidatsImage(unittest.TestCase):
+	def test_prefiltre_par_similarite(self):
+		row = _Row(item_code="P-F-T-10'-O-SC", item_name="Porte filtre, triple bleu, 10' (Sans cartouches)", item_name_traduit="Triple blue housing 10\"")
+		libres = [{"id": str(i), "code": "X%d" % i, "designation": "Widget %d" % i, "photo": ""} for i in range(30)]
+		libres.append({"id": "T", "code": "PF-T-10-O-SC", "designation": "Triple stage housing blue 10\"", "photo": "three blue housings"})
+		c = R._candidats_pour(row, libres, n=5)
+		self.assertEqual(len(c), 5)
+		self.assertEqual(c[0]["id"], "T")
+		self.assertEqual(len(R._candidats_pour(row, libres[:3], n=5)), 3)

@@ -186,7 +186,9 @@ PROMPT_PAGE_PRIX = (
     "names EXACTLY as printed (any language), one entry per printed column, in order; one row per "
     "product line, cells as printed (numbers as plain text like \"12.50\", keep units such as USD, CBM, "
     "pcs). Skip page titles, totals, terms and signatures. If the page has no product table, return "
-    "{\"header\": [], \"rows\": []}. Never invent values."
+    "{\"header\": [], \"rows\": []}. Never invent values. If the rows show product PICTURES, add one last column named "
+    "\"Photo\" with, for each row, a short description of its picture (product type, colour, shape, number of stages, "
+    "fittings…), so that the product can be recognised without the picture."
 )
 
 
@@ -287,6 +289,88 @@ def grille_ia(sortie):
     return [entete + [""] * (larg - len(entete))] + [r + [""] * (larg - len(r)) for r in lignes]
 
 
+# ------------------------------------------------- appariement par IA, ligne par ligne, avec la photo
+# (demande utilisateur 25/09/2026 : « l'identification doit utiliser l'IA, une par une, d'après
+# l'image et les caractéristiques »). Pour chaque ligne de la LCI : sa photo, sa désignation et sa
+# description sont présentées au modèle vision avec les entrées candidates du fournisseur
+# (code, désignation, photo décrite, prix, volumes) ; il désigne l'entrée qui est LE MÊME produit,
+# ou rien. Plus lent et plus cher que la cascade texte (≈ 1 à 2 ¢ par ligne), mais il voit.
+
+MAX_CANDIDATS_IMAGE = 14
+
+
+def _candidats_pour(row, libres, n=MAX_CANDIDATS_IMAGE):
+    """Les entrées fournisseur les plus proches de la ligne (similarité de désignation, code),
+    pour ne pas envoyer toute la liste à chaque appel ; toutes si elles sont peu nombreuses. Pur."""
+    if len(libres) <= n:
+        return list(libres)
+    ref = _norm("%s %s %s" % (row.item_code or "", row.item_name or "", row.item_name_traduit or ""))
+    def score(f):
+        t = _norm("%s %s %s" % (f.get("code") or "", f.get("designation") or "", f.get("photo") or ""))
+        return difflib.SequenceMatcher(None, ref, t).ratio()
+    return sorted(libres, key=score, reverse=True)[:n]
+
+
+def _description_courte(row, maxlen=600):
+    return _strip_html(row.description or "")[:maxlen] if getattr(row, "description", None) else ""
+
+
+def _photo_ligne(row):
+    """La vignette JPEG de l'article (octets) ou None."""
+    from customization_app.liste_commande_import import _img_thumb
+
+    if not getattr(row, "image", None):
+        return None
+    buf = _img_thumb(row.image, max_px=512)
+    return buf.getvalue() if buf else None
+
+
+PROMPT_APPARIEMENT_IMAGE = (
+    "You identify, in a supplier's price list, the entry that is THE SAME product as one line of our purchase "
+    "order (water treatment equipment: filter housings, cartridges, RO systems, fittings, pumps, softeners). "
+    "You get our line (code, name, description, characteristics, and its photo if attached) and the candidate "
+    "entries of the supplier (id, code, description, described photo, price, volumes). Compare shapes, colours, "
+    "sizes (10\"/20\", big blue…), number of stages, fittings/threads (1/2\", 3/4\", 1\"), transparency, materials. "
+    "A different size, thread, capacity or stage count means a different product. Answer JSON only: "
+    "{\"id\": \"<candidate id>\" or null, \"confiance\": 0..1, \"raison\": \"<15 words>\"}. Prefer null over a guess."
+)
+
+
+def _apparier_images(rows, libres):
+    """{nom de ligne LCI: (id source, confiance)} par IA, une ligne à la fois, avec sa photo."""
+    from customization_app.liste_commande_import import _chat_json_image
+
+    out, pris = {}, set()
+    for row in rows:
+        cands = [f for f in _candidats_pour(row, libres) if f["id"] not in pris]
+        if not cands:
+            continue
+        payload = {
+            "notre_ligne": {"code": row.item_code or "", "designation": row.item_name or "",
+                            "designation_traduite": row.item_name_traduit or "", "description": _description_courte(row),
+                            "quantite": flt(row.qty)},
+            "candidats": [{"id": f["id"], "code": f.get("code") or "", "designation": f.get("designation") or "",
+                           "photo": f.get("photo") or "", "prix": f.get("prix_unitaire"),
+                           "volume_unitaire_m3": f.get("volume_unitaire_m3"), "remarque": f.get("remarque") or ""}
+                          for f in cands],
+        }
+        user = json.dumps(payload, ensure_ascii=False)
+        try:
+            photo = _photo_ligne(row)
+            rep = (_chat_json_image(PROMPT_APPARIEMENT_IMAGE, user + "\n\nThe attached image is OUR product's photo.", photo, mime="image/jpeg")
+                   if photo else _chat_json(PROMPT_APPARIEMENT_IMAGE, user)) or {}
+        except Exception as e:
+            frappe.log_error(title="LCI réponse — appariement IA photo", message=str(e)[:2000])
+            continue
+        ident = rep.get("id") if isinstance(rep, dict) else None
+        conf = flt((rep or {}).get("confiance")) if isinstance(rep, dict) else 0
+        if isinstance(ident, str) and ident and ident not in pris and any(f["id"] == ident for f in cands):
+            if conf >= 0.5:
+                out[row.name] = (ident, round(min(1.0, conf), 2))
+                pris.add(ident)
+    return out
+
+
 # ------------------------------------------------- repérage de l'en-tête
 
 MOTS = {
@@ -335,6 +419,7 @@ MOTS = {
                           "measurement", "meas."],
     "poids": ["weight", "poids", "gross weight", "net weight", "gewicht",
               "peso", "重量", "毛重", "净重"],
+    "photo": ["photo", "picture", "image", "图片", "foto", "bild"],
     "remarque": ["remark", "remarks", "note", "notes", "comment", "commentaire",
                  "备注", "bemerkung", "observacion", "observación", "delivery",
                  "lead time", "délai", "交期"],
@@ -562,6 +647,7 @@ def _extraire(grille, ligne_entete, mapping, feuille):
             "volume_carton_m3": vol_ctn,
             "volume_unitaire_m3": vol_unit,
             "remarque": _txt(col("remarque")),
+            "photo": _txt(col("photo")),   # description de la photo (colonne écrite par l'IA)
         })
     return out
 
@@ -574,7 +660,7 @@ def _textes_ligne(r):
                         _strip_html(r.description)[:120]) if _txt(t)]
 
 
-def _apparier(rows, fournisseur):
+def _apparier(rows, fournisseur, mode="cascade"):
     """Rend {nom de ligne LCI: (ligne fournisseur, méthode, confiance)}.
 
     Chaque ligne fournisseur ne sert qu'une fois : un prix apparié deux fois
@@ -677,6 +763,13 @@ def _apparier(rows, fournisseur):
     restants = encore
 
     # 5) IA sur le reliquat, par lots
+    if restants and libres and mode == "images":
+        for row, (src_id, conf) in _apparier_images(restants, libres).items():
+            src = next((f for f in libres if f["id"] == src_id), None)
+            r = next((x for x in restants if x.name == row), None)
+            if src and r:
+                prendre(r, src, "IA photo", conf)
+        return res, libres
     if restants and libres:
         for chunk in _lots(restants, 20):
             if not libres:
@@ -740,30 +833,56 @@ def _fichier_local(file_url):
     return doc.get_full_path()
 
 
-@frappe.whitelist()
-def analyser_reponse(docname, file_url):
-    """Lit le fichier du fournisseur et rend un APERÇU. N'écrit rien."""
-    _guard()
-    doc = frappe.get_doc(DOCTYPE, docname)
+def _lire_un_fichier(file_url):
+    """Un fichier fournisseur (Excel ou PDF) -> (feuille, ligne_entete, entete, mapping, lignes).
+    Pour un PDF dont le texte ne livre pas de colonne de prix, les pages sont relues par l'IA."""
     chemin = _fichier_local(file_url)
+    nom = file_url.split("/")[-1]
     feuille, ligne_entete, grille = _trouver_tableau(_feuilles(chemin))
     entete = grille[ligne_entete] if ligne_entete < len(grille) else []
     mapping = _mapper_colonnes(entete, grille[ligne_entete + 1:ligne_entete + 6])
     if "prix_unitaire" not in mapping and chemin.lower().endswith(".pdf"):
-        # le texte du PDF n'a pas livré de tableau exploitable : la page lue par l'IA
         feuille, ligne_entete, grille = _trouver_tableau(lire_pdf(chemin, ia=True))
         entete = grille[ligne_entete] if ligne_entete < len(grille) else []
         mapping = _mapper_colonnes(entete, grille[ligne_entete + 1:ligne_entete + 6])
     if "prix_unitaire" not in mapping:
         frappe.throw(_("Aucune colonne de prix unitaire reconnue dans « {0} » "
                        "(feuille « {1} »). Vérifiez que le fichier contient bien "
-                       "la cotation chiffrée.").format(file_url.split("/")[-1], feuille))
+                       "la cotation chiffrée.").format(nom, feuille))
+    lignes = _extraire(grille, ligne_entete, mapping, feuille)
+    if not lignes:
+        frappe.throw(_("Aucune ligne de cotation lue dans « {0} » (feuille « {1} »).").format(nom, feuille))
+    return feuille, ligne_entete, entete, mapping, lignes
 
-    fournisseur = _extraire(grille, ligne_entete, mapping, feuille)
-    if not fournisseur:
-        frappe.throw(_("Aucune ligne de cotation lue dans la feuille « {0} ».").format(feuille))
 
-    apparies, libres = _apparier(doc.articles, fournisseur)
+@frappe.whitelist()
+def analyser_reponse(docname, file_url=None, file_urls=None, mode="cascade"):
+    """Lit le ou les fichiers du fournisseur (Excel, PDF — plusieurs listes de prix à la fois,
+    demande utilisateur 25/09/2026) et rend un APERÇU. N'écrit rien."""
+    _guard()
+    doc = frappe.get_doc(DOCTYPE, docname)
+    urls = json.loads(file_urls) if isinstance(file_urls, str) else list(file_urls or [])
+    if file_url and file_url not in urls:
+        urls.insert(0, file_url)
+    if not urls:
+        frappe.throw(_("Aucun fichier."))
+    fournisseur, feuilles, plans = [], [], []
+    entete, mapping, ligne_entete, feuille = [], {}, 0, ""
+    for url in urls:
+        feuille, ligne_entete, entete, mapping, lignes = _lire_un_fichier(url)
+        nom = url.split("/")[-1]
+        if len(urls) > 1:
+            # plusieurs fichiers : l'identifiant de chaque ligne dit de quel fichier elle vient
+            for l in lignes:
+                l["id"] = "%s › %s" % (nom, l["id"])
+                l["feuille"] = "%s › %s" % (nom, l.get("feuille") or "")
+        fournisseur.extend(lignes)
+        feuilles.append(feuille if len(urls) == 1 else "%s › %s" % (nom, feuille))
+        plans.append({"file_url": url, "feuille": feuille, "ligne_entete": ligne_entete, "mapping": mapping, "nb_lignes": len(lignes)})
+    file_url = urls[0]
+    feuille = feuilles[0] if len(feuilles) == 1 else _("{0} fichiers : {1}").format(len(feuilles), " ; ".join(feuilles))
+
+    apparies, libres = _apparier(doc.articles, fournisseur, mode=mode or "cascade")
     orphelines = {f["id"] for f in libres}
 
     lignes = [{
@@ -803,12 +922,14 @@ def analyser_reponse(docname, file_url):
         # annoté (quelle feuille, quelle ligne d'en-tête, quelle colonne porte quoi).
         "plan": {
             "file_url": file_url,
-            "feuille": feuille,
-            "ligne_entete": ligne_entete,
-            "mapping": mapping,
+            "feuille": plans[0]["feuille"],
+            "ligne_entete": plans[0]["ligne_entete"],
+            "mapping": plans[0]["mapping"],
             "montant_fichier": montant_fichier,
             "nb_lignes_fichier": len(fournisseur),
+            "fichiers": plans,
         },
+        "fichiers": urls,
     }
 
 

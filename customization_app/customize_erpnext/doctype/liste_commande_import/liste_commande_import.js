@@ -1755,48 +1755,61 @@ async function lci_reponse_import(frm) {
     frappe.msgprint(__("Enregistrez vos modifications en cours (Ctrl+S) avant d'importer la réponse."));
     return;
   }
-  const input = document.createElement("input");
-  input.type = "file";
-  // .pdf : liste de prix PDF, tableau lu dans le texte, sinon transcrit par l'IA (25/09/2026)
-  input.accept = ".xlsx,.xlsm,.xls,.pdf,application/pdf,application/vnd.ms-excel,"
-    + "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-  input.onchange = async () => {
-    const file = input.files[0];
-    if (!file) return;
-    const fd = new FormData();
-    fd.append("file", file, file.name);
-    fd.append("is_private", "1");   // une grille de prix fournisseur reste privée
-    fd.append("doctype", frm.doc.doctype);
-    fd.append("docname", frm.doc.name);
-    frappe.dom.freeze(/\.pdf$/i.test(file.name) ? __("Lecture de la liste de prix PDF (texte, sinon IA)…") : __("Lecture du fichier fournisseur…"));
-    let url;
-    try {
-      const res = await fetch("/api/method/upload_file", {
-        method: "POST",
-        headers: { "X-Frappe-CSRF-Token": frappe.csrf_token },
-        body: fd,
-      });
-      url = (await res.json()).message?.file_url;
-    } catch (e) {
-      url = null;
-    }
-    if (!url) {
-      frappe.dom.unfreeze();
-      frappe.msgprint(__("Échec de l'envoi du fichier."));
-      return;
-    }
-    try {
-      const r = await frappe.call({
-        method: "customization_app.lci_reponse.analyser_reponse",
-        args: { docname: frm.doc.name, file_url: url },
-      });
-      frappe.dom.unfreeze();
-      if (r.message) lci_reponse_dialog(frm, r.message, file.name);
-    } catch (e) {
-      frappe.dom.unfreeze();   // le message d'erreur serveur s'affiche seul
-    }
-  };
-  input.click();
+  // Un ou PLUSIEURS fichiers (Excel ou PDF de listes de prix), et le choix de l'appariement :
+  // cascade (n° de ligne, code, désignation, IA texte) ou IA ligne par ligne d'après la photo et
+  // les caractéristiques (demande utilisateur 25/09/2026).
+  const d = new frappe.ui.Dialog({
+    title: __("Importer la cotation / liste de prix du fournisseur"),
+    fields: [
+      { fieldtype: "HTML", fieldname: "fichiers", options: `<label class="control-label">${__("Fichiers du fournisseur")}</label>
+        <input type="file" class="form-control lci-rep-files" multiple accept=".xlsx,.xlsm,.xls,.pdf,application/pdf,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
+        <p class="text-muted small" style="margin-top:6px">${__("Excel (.xlsx, .xls) ou PDF. Un PDF est lu dans son texte, sinon chaque page est transcrite par l'IA. Plusieurs fichiers = une seule analyse, chaque ligne garde son fichier d'origine.")}</p>` },
+      { fieldtype: "Check", fieldname: "ia_images", label: __("Identifier chaque ligne par IA d'après la photo et les caractéristiques"), default: 1,
+        description: __("Chaque article de la liste (photo, désignation, description) est présenté à l'IA avec les entrées du fournisseur ; elle désigne celle qui est le même produit. Plus sûr sur des catalogues sans nos codes ; ≈ 1 à 2 centimes et 3 à 5 s par ligne. Décoché : appariement par numéro de ligne, code, désignation, puis IA texte.") },
+      { fieldtype: "HTML", options: `<p class="text-muted small">${__("Rien n'est écrit avant votre validation dans l'aperçu.")}</p>` },
+    ],
+    primary_action_label: __("Analyser"),
+    primary_action: async () => {
+      const input = d.$wrapper.find(".lci-rep-files")[0];
+      const files = Array.from((input && input.files) || []);
+      if (!files.length) { frappe.msgprint(__("Choisissez au moins un fichier.")); return; }
+      const mode = d.get_value("ia_images") ? "images" : "cascade";
+      d.hide();
+      const urls = [];
+      frappe.dom.freeze(__("Envoi de {0} fichier(s)…", [files.length]));
+      for (const file of files) {
+        const fd = new FormData();
+        fd.append("file", file, file.name);
+        fd.append("is_private", "1");   // une grille de prix fournisseur reste privée
+        fd.append("doctype", frm.doc.doctype);
+        fd.append("docname", frm.doc.name);
+        try {
+          const res = await fetch("/api/method/upload_file", { method: "POST", headers: { "X-Frappe-CSRF-Token": frappe.csrf_token }, body: fd });
+          const url = (await res.json()).message?.file_url;
+          if (url) urls.push(url);
+        } catch (e) { /* signalé ci-dessous */ }
+      }
+      if (urls.length !== files.length) {
+        frappe.dom.unfreeze();
+        frappe.msgprint(__("Échec de l'envoi d'un fichier."));
+        return;
+      }
+      frappe.dom.freeze(mode === "images"
+        ? __("Lecture des fichiers puis identification de chaque ligne par IA (photo + caractéristiques)… comptez 3 à 5 s par ligne.")
+        : __("Lecture des fichiers et appariement…"));
+      try {
+        const r = await frappe.call({
+          method: "customization_app.lci_reponse.analyser_reponse",
+          args: { docname: frm.doc.name, file_urls: urls, mode },
+        });
+        frappe.dom.unfreeze();
+        if (r.message) lci_reponse_dialog(frm, r.message, files.map((f) => f.name).join(" ; "));
+      } catch (e) {
+        frappe.dom.unfreeze();
+      }
+    },
+  });
+  d.show();
 }
 
 function lci_reponse_dialog(frm, data, filename) {
