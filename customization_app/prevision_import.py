@@ -78,7 +78,7 @@ def _fetch_items(search=None, item_group=None):
                       ["Item", "description", "like", like]]
     return frappe.get_all(
         "Item",
-        fields=["name", "item_name", "item_group", "stock_uom", "lead_time_days"],
+        fields=["name", "item_name", "item_group", "stock_uom", "lead_time_days", "image"],
         filters=filters, or_filters=or_filters,
     )
 
@@ -224,6 +224,7 @@ def build_row(item, sales_by_month, month_keys, stock, periode, fenetre_moy,
     return {
         "item_code": item["name"],
         "item_name": item.get("item_name") or "",
+        "image": item.get("image") or "",   # vignette du produit (demande utilisateur 25/09/2026)
         "item_group": item.get("item_group") or "",
         "stock_uom": item.get("stock_uom") or "",
         "serie": series,

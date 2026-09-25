@@ -256,6 +256,7 @@ class PrevisionImport {
 
     let html = `<table class="pi-tbl"><thead><tr>
       <th style="width:26px;"><input type="checkbox" id="pi-check-all" title="Tout cocher (page)"></th>
+      <th style="width:52px;"></th>
       ${th("item_code", "Article")}
       ${th("item_group", "Groupe")}
       ${th("mg", `MG ${p.fenetre_moy || ""} mois`, 1)}
@@ -275,6 +276,7 @@ class PrevisionImport {
       const ccls = r.croissance > 0 ? "pi-up" : r.croissance < 0 ? "pi-down" : "pi-muted";
       html += `<tr class="pi-row" data-idx="${i}" data-item="${frappe.utils.escape_html(r.item_code)}">
         <td><input type="checkbox" class="pi-check" data-idx="${i}" ${this.selection.has(r.item_code) ? "checked" : ""}></td>
+        <td>${r.image ? `<a class="pi-imgbox" href="${frappe.utils.escape_html(r.image)}" target="_blank" title="${__("Voir la photo en grand")}"><img src="${frappe.utils.escape_html(r.image)}" alt="" loading="lazy"></a>` : `<span class="pi-imgbox pi-noimg">📦</span>`}</td>
         <td><span class="pi-code">${frappe.utils.escape_html(r.item_code)}</span>
             <div class="pi-name">${frappe.utils.escape_html(r.item_name)}</div></td>
         <td>${frappe.utils.escape_html(r.item_group)}</td>
@@ -303,7 +305,7 @@ class PrevisionImport {
     const idx = $row.data("idx");
     const r = this.data.rows[idx];
     const chartId = "pi-chart-" + idx;
-    $row.after(`<tr class="pi-chart-row"><td colspan="12">
+    $row.after(`<tr class="pi-chart-row"><td colspan="13">
       <div class="pi-chart-title">📈 ${frappe.utils.escape_html(item)} — ventes mensuelles (BL) · MG ${this._fmt(r.mg)} · prévision ${this._fmt(r.prevision)}</div>
       <div id="${chartId}"><div class="pi-loading">⏳</div></div>
     </td></tr>`);
