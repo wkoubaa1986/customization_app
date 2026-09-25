@@ -1397,6 +1397,10 @@ def appliquer_reponse(docname, lignes, file_url=None, plan=None):
             touche = True
         if touche:
             row.reponse_source = entree.get("source_label") or ""
+            # un volume donné par le fournisseur est mesuré, pas estimé : il peut
+            # alors être recopié sur la fiche Article (voir validate de la LCI)
+            if any(flt(valeurs.get(c)) > 0 for c in ("volume_carton_m3", "volume_unitaire_m3")):
+                row.volume_estime = 0
             if not row.decision:
                 row.decision = "À négocier"
             # « feuille:ligne » -> numéro de ligne Excel, pour savoir plus tard
