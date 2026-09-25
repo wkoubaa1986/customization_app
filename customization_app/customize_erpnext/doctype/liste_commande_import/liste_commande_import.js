@@ -714,7 +714,98 @@ function lci_barre_filtre(frm, rows, vis) {
       ${actif ? __("{0} ligne(s) sur {1}", [vis.length, rows.length])
               : __("{0} ligne(s)", [rows.length])}</span>
     ${actif ? `<span class="lci-fl-count">${__("· réorganisation désactivée sous filtre")}</span>` : ""}
+    <span class="lci-sel-bar-slot"></span>
   </div>`;
+}
+
+// ─── sélection de lignes : dupliquer / copier vers une autre liste (demande utilisateur 25/09/2026)
+function lci_selection(frm) {
+  if (!frm._lci_sel) frm._lci_sel = new Set();
+  const noms = new Set(lci_rows(frm).map((r) => r.name));
+  frm._lci_sel.forEach((n) => { if (!noms.has(n)) frm._lci_sel.delete(n); });   // lignes disparues
+  return frm._lci_sel;
+}
+
+function lci_sel_barre(frm) {
+  // la table vit dans .lci-table-wrap, inséré AVANT le champ HTML (voir lci_render_table)
+  const $t = $(frm.wrapper).find(".lci-table-wrap"), sel = lci_selection(frm), n = sel.size;
+  const $slot = $t.find(".lci-sel-bar-slot");
+  if (!n) { $slot.html(""); return; }
+  $slot.html(`<span class="lci-sel-bar"><b>${__("{0} cochée(s)", [n])}</b>
+    <button class="btn btn-xs btn-default" data-sel="dup" title="${__("Une copie de chaque ligne cochée, juste en dessous")}">⧉ ${__("Dupliquer")}</button>
+    <button class="btn btn-xs btn-default" data-sel="copier" title="${__("Copier ces lignes vers une autre liste (brouillon existant ou nouvelle)")}">📋 ${__("Copier vers une liste…")}</button>
+    <button class="btn btn-xs btn-default" data-sel="aucune" title="${__("Tout décocher")}">✕</button></span>`);
+  $slot.find('[data-sel="dup"]').on("click", () => lci_dupliquer(frm, lci_rows(frm).filter((r) => sel.has(r.name))));
+  $slot.find('[data-sel="copier"]').on("click", () => lci_copier_vers(frm, lci_rows(frm).filter((r) => sel.has(r.name))));
+  $slot.find('[data-sel="aucune"]').on("click", () => { sel.clear(); lci_render_table(frm); });
+}
+
+// miroir de lci_copie.CHAMPS_COPIES : ce que nous avons saisi, jamais la réponse du fournisseur
+const LCI_CHAMPS_COPIES = ["item_code", "item_name", "item_group", "qty", "uom", "volume_unitaire_m3", "image", "description",
+  "item_name_traduit", "description_traduite", "articles_additionnels", "prix_cible", "moq", "qty_par_carton", "volume_carton_m3", "volume_estime"];
+
+function lci_copie_de(row) {
+  const c = {};
+  LCI_CHAMPS_COPIES.forEach((k) => { if (row[k] !== undefined && row[k] !== null && row[k] !== "") c[k] = row[k]; });
+  return c;
+}
+
+// Duplique les lignes données, chaque copie juste sous son original ; à enregistrer ensuite.
+function lci_dupliquer(frm, rows) {
+  if (!rows.length) return;
+  const noms = new Set(rows.map((r) => r.name));
+  const arr = frm.doc.articles, nouveau = [];
+  arr.forEach((r) => {
+    nouveau.push(r);
+    if (noms.has(r.name)) {
+      const copie = frm.add_child("articles", lci_copie_de(r));
+      nouveau.push(copie);
+    }
+  });
+  // add_child a ajouté les copies en fin de tableau : on remet l'ordre voulu
+  frm.doc.articles = nouveau;
+  lci_selection(frm).clear();
+  lci_reindex(frm);
+  frm.dirty();
+  lci_recalc(frm);
+  frm.refresh_field("articles");
+  frappe.show_alert({ message: __("{0} ligne(s) dupliquée(s). Enregistrez pour figer.", [rows.length]), indicator: "green" });
+}
+
+// Copie les lignes vers une autre liste (brouillon existant ou nouvelle) — côté serveur, sur les
+// lignes enregistrées : la liste doit être sauvegardée d'abord.
+function lci_copier_vers(frm, rows) {
+  if (!rows.length) return;
+  if (frm.is_dirty() || frm.is_new()) {
+    frappe.msgprint(__("Enregistrez d'abord la liste : la copie part des lignes enregistrées."));
+    return;
+  }
+  const d = new frappe.ui.Dialog({
+    title: __("Copier {0} ligne(s) vers une liste", [rows.length]),
+    fields: [
+      { fieldtype: "Link", fieldname: "target", label: __("Liste existante (brouillon)"), options: "Liste Commande Import",
+        get_query: () => ({ filters: { statut: "Brouillon", name: ["!=", frm.doc.name] } }),
+        description: __("Laissez vide pour créer une nouvelle liste.") },
+      { fieldtype: "Data", fieldname: "titre", label: __("Titre de la nouvelle liste"), default: __("Copie de {0}", [frm.doc.titre || frm.doc.name]) },
+      { fieldtype: "HTML", options: `<p class="text-muted small">${__("Sont copiés : article, désignation, quantité, unité, volume, image, descriptions et traductions, additionnels, prix cible, MOQ, carton. Pas la réponse du fournisseur (prix, quantités cotées, décisions, remarques, conteneurs).")}</p>` },
+    ],
+    primary_action_label: __("Copier"),
+    primary_action: async (v) => {
+      d.hide();
+      let r;
+      try {
+        r = await frappe.call({ method: "customization_app.liste_commande_import.copier_lignes",
+          args: { source: frm.doc.name, row_names: rows.map((x) => x.name), target: v.target || null, titre: v.titre || null },
+          freeze: true, freeze_message: __("Copie des lignes…") });
+      } catch (e) { return; }
+      const res = r.message;
+      lci_selection(frm).clear(); lci_render_table(frm);
+      frappe.msgprint({ title: __("Lignes copiées"), indicator: "green",
+        message: `${__("{0} ligne(s) copiée(s) vers", [res.nb])} <a href="/app/liste-commande-import/${encodeURIComponent(res.name)}">${frappe.utils.escape_html(res.titre || res.name)}</a>` +
+          `<div style="margin-top:8px"><button class="btn btn-xs btn-primary" onclick="frappe.set_route('Form','Liste Commande Import','${frappe.utils.escape_html(res.name)}')">${__("Ouvrir la liste")}</button></div>` });
+    },
+  });
+  d.show();
 }
 
 function lci_render_table(frm) {
@@ -882,16 +973,20 @@ function lci_render_table(frm) {
       </td>`);
     }
     cells.push(`<td class="lci-actions">
+      <button class="btn btn-xs btn-default" data-act="dup" title="${__("Dupliquer cette ligne (copie juste en dessous, sans la réponse du fournisseur)")}">⧉</button>
       ${r.item_code ? `<button class="btn btn-xs btn-default" data-act="fam" title="${__("Variantes / articles apparentés")}">🧬</button>` : ""}
       <button class="btn btn-xs btn-default" data-act="ai" title="${__("Améliorer cette ligne (IA)")}">✨</button>
       <button class="btn btn-xs btn-default" data-act="tr" title="${__("Traduire cette ligne (IA)")}">🌐</button>
       <button class="btn btn-xs btn-default" data-act="del" title="${__("Supprimer")}">🗑</button>
     </td>`);
 
-    body += `<tr data-name="${esc(r.name)}" data-idx="${i}" class="${dec_cls.trim()}">${cells.join("")}</tr>`;
+    const sel = lci_selection(frm);
+    cells.unshift(`<td class="lci-c lci-selcell"><input type="checkbox" class="lci-sel" ${sel.has(r.name) ? "checked" : ""} title="${__("Cocher pour dupliquer ou copier plusieurs lignes")}"></td>`);
+    body += `<tr data-name="${esc(r.name)}" data-idx="${i}" class="${dec_cls.trim()}${sel.has(r.name) ? " lci-selected" : ""}">${cells.join("")}</tr>`;
   });
 
   const th = [];
+  th.push(`<th style="width:30px;" class="lci-c"><input type="checkbox" class="lci-sel-all" title="${__("Tout cocher / décocher (lignes affichées)")}"></th>`);
   th.push(`<th style="width:46px;">#</th>`);
   if (V.image) th.push(`<th style="width:60px;">${__("Image")}</th>`);
   th.push(`<th>${__("Article / Désignation")}</th>`);
@@ -909,7 +1004,7 @@ function lci_render_table(frm) {
   if (V.observation) th.push(`<th style="width:220px;">${__("Observation")}</th>`);
   if (V.conteneur) th.push(`<th style="width:90px;">${__("Conteneur")}</th>`);
   if (V.desc) th.push(`<th style="width:56px;">${__("Desc.")}</th>`);
-  th.push(`<th style="width:110px;">${__("Actions")}</th>`);
+  th.push(`<th style="width:140px;">${__("Actions")}</th>`);
 
   $t.html(`
     <style>
@@ -957,6 +1052,10 @@ function lci_render_table(frm) {
       .lci-frn-tot { color: var(--text-muted,#8a93a0); }
       .lci-src { font-size: 9.5px; color: #8a93a0; text-align: right; overflow: hidden;
                  text-overflow: ellipsis; white-space: nowrap; }
+      tr.lci-selected > td { background: #fffbe6; }
+      .lci-selcell input { width: 14px; height: 14px; margin: 0; cursor: pointer; }
+      .lci-sel-bar { display: inline-flex; align-items: center; gap: 6px; margin-left: 8px; padding: 2px 8px;
+                     border-radius: 999px; background: #fff7e6; border: 1px solid #ffd591; font-size: 11.5px; }
       .lci-dec { width: 96px; font-size: 11px; padding: 2px 4px;
                  border: 1px solid var(--border-color,#e4e8ee); }
       .lci-qty-ko { color: #ad6800; font-weight: 700; background: #fffbe6; }
@@ -1093,6 +1192,25 @@ function lci_render_table(frm) {
   $t.find('[data-act="desc"]').on("click", (e) => { const r = row_of(e); r && lci_desc_dialog(frm, r); });
   $t.find('[data-act="ai"]').on("click", (e) => { const r = row_of(e); r && lci_ai(frm, "ai_improve_descriptions", r.name); });
   $t.find('[data-act="tr"]').on("click", (e) => { const r = row_of(e); r && lci_ai(frm, "ai_translate", r.name); });
+  $t.find('[data-act="dup"]').on("click", (e) => { const r = row_of(e); r && lci_dupliquer(frm, [r]); });
+  $t.find(".lci-sel").on("change", (e) => {
+    const row = row_of(e), sel = lci_selection(frm);
+    if (!row) return;
+    if (e.target.checked) sel.add(row.name); else sel.delete(row.name);
+    $(e.target).closest("tr").toggleClass("lci-selected", e.target.checked);
+    lci_sel_barre(frm);
+  });
+  $t.find(".lci-sel-all").on("change", (e) => {
+    // sans redessiner la table (le défilement resterait en place et les cases changent sous les yeux)
+    const sel = lci_selection(frm), coche = e.target.checked;
+    lci_rows_visibles(frm).forEach((r) => { if (coche) sel.add(r.name); else sel.delete(r.name); });
+    $t.find("tr[data-name]").each((_i, tr) => {
+      const on = sel.has($(tr).data("name"));
+      $(tr).toggleClass("lci-selected", on).find(".lci-sel").prop("checked", on);
+    });
+    lci_sel_barre(frm);
+  });
+  lci_sel_barre(frm);
   $t.find('[data-act="del"]').on("click", (e) => {
     const row = row_of(e);
     if (!row) return;

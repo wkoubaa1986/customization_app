@@ -100,6 +100,39 @@ def create_from_selection(items, target=None, titre=None):
     return {"name": doc.name, "nb_articles": doc.nb_articles}
 
 
+@frappe.whitelist()
+def copier_lignes(source, row_names, target=None, titre=None):
+	"""Copie des lignes de la liste `source` (leurs champs saisis, pas la réponse du fournisseur)
+	vers la liste Brouillon `target`, ou vers une nouvelle liste `titre`. Les lignes sont ajoutées
+	telles quelles, dans l'ordre de la liste d'origine (« Enlever les doublons » fusionne ensuite si
+	besoin). -> {name, nb}. Demande utilisateur 25/09/2026."""
+	from customization_app.lci_copie import ligne_copiee, lignes_dans_l_ordre
+
+	_guard()
+	noms = json.loads(row_names) if isinstance(row_names, str) else row_names
+	src = frappe.get_doc(DOCTYPE, source)
+	lignes = lignes_dans_l_ordre(src.articles, noms)
+	if not lignes:
+		frappe.throw(_("Aucune ligne à copier."))
+	if target:
+		if target == source:
+			frappe.throw(_("Pour copier dans la même liste, utilisez « Dupliquer »."))
+		doc = frappe.get_doc(DOCTYPE, target)
+		if doc.statut != "Brouillon":
+			frappe.throw(_("La liste {0} n'est plus en Brouillon.").format(target))
+	else:
+		doc = frappe.new_doc(DOCTYPE)
+		doc.titre = (titre or "").strip() or _("Copie de {0}").format(src.titre or source)
+		doc.fournisseur = src.fournisseur
+		doc.langue_cible = src.langue_cible
+		doc.devise = src.devise
+	for l in lignes:
+		doc.append("articles", ligne_copiee(l))
+	doc.save(ignore_permissions=True)
+	frappe.db.commit()
+	return {"name": doc.name, "nb": len(lignes), "titre": doc.titre}
+
+
 # ---------------------------------------------------------------- IA (OpenAI)
 
 def _ai_setting(fieldname):
