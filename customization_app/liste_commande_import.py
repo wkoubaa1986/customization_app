@@ -197,6 +197,45 @@ def _chat_json(system, user):
         frappe.throw(_("Réponse IA illisible : {0}").format(content[:300]))
 
 
+def _contexte_ia():
+    """(client, modèle, température) préparés dans le thread principal, pour des appels en
+    threads (frappe.local n'y existe pas)."""
+    return _openai_client(), _model(), _temperature()
+
+
+def _part_image(image_bytes, detail="high", mime="image/png"):
+    """Un morceau « image » d'un message utilisateur (data URI)."""
+    import base64
+    return {"type": "image_url", "image_url": {"url": "data:%s;base64,%s" % (mime, base64.b64encode(image_bytes).decode()),
+                                               "detail": detail}}
+
+
+def _completion_json(contexte, system, user, image_bytes=None, detail="high", mime="image/png"):
+    """Appel chat → dict, SANS toucher à Frappe (utilisable dans un thread) ; None si illisible."""
+    if image_bytes:
+        return _completion_parts(contexte, system, [{"type": "text", "text": user}, _part_image(image_bytes, detail, mime)])
+    return _completion_parts(contexte, system, user)
+
+
+def _completion_parts(contexte, system, contenu):
+    """Comme _completion_json, avec un message utilisateur déjà composé (texte et images mêlés :
+    liste de morceaux, ou une simple chaîne)."""
+    client, modele, temperature = contexte
+    params = {"model": modele, "messages": [{"role": "system", "content": system}, {"role": "user", "content": contenu}],
+              "response_format": {"type": "json_object"}}
+    try:
+        resp = client.chat.completions.create(temperature=temperature, **params)
+    except Exception as e:
+        if "temperature" in str(e):
+            resp = client.chat.completions.create(**params)
+        else:
+            raise
+    try:
+        return json.loads(resp.choices[0].message.content)
+    except Exception:
+        return None
+
+
 def _chat_json_image(system, user, image_bytes, detail="high", mime="image/png"):
     """Comme `_chat_json`, avec UNE image jointe (page d'une liste de prix PDF, photo d'un
     article) lue par le modèle vision. Demande utilisateur 25/09/2026."""

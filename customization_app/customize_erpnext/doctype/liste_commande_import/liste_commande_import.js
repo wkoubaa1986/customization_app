@@ -1789,27 +1789,53 @@ async function lci_reponse_import(frm) {
           if (url) urls.push(url);
         } catch (e) { /* signalé ci-dessous */ }
       }
+      frappe.dom.unfreeze();   // fin de l'envoi (chaque freeze a son unfreeze, sinon le voile reste)
       if (urls.length !== files.length) {
-        frappe.dom.unfreeze();
         frappe.msgprint(__("Échec de l'envoi d'un fichier."));
         return;
       }
-      frappe.dom.freeze(mode === "images"
-        ? __("Lecture des fichiers puis identification de chaque ligne par IA (photo + caractéristiques)… comptez 3 à 5 s par ligne.")
-        : __("Lecture des fichiers et appariement…"));
+      // l'analyse tourne en tâche de fond (des dizaines d'appels IA) : on l'interroge toutes les 2 s
+      frappe.dom.freeze(__("Lecture des fichiers…"));
       try {
         const r = await frappe.call({
-          method: "customization_app.lci_reponse.analyser_reponse",
+          method: "customization_app.lci_reponse.lancer_analyse",
           args: { docname: frm.doc.name, file_urls: urls, mode },
         });
+        const res = await lci_attendre_analyse(r.message && r.message.cle);
         frappe.dom.unfreeze();
-        if (r.message) lci_reponse_dialog(frm, r.message, files.map((f) => f.name).join(" ; "));
+        if (res) lci_reponse_dialog(frm, res, files.map((f) => f.name).join(" ; "));
       } catch (e) {
         frappe.dom.unfreeze();
       }
     },
   });
   d.show();
+}
+
+// Suit une analyse lancée en tâche de fond ; rend son résultat, ou null après un échec (signalé).
+async function lci_attendre_analyse(cle, delai_max_ms = 40 * 60 * 1000) {
+  if (!cle) return null;
+  const debut = Date.now();
+  const message = (e) => {
+    if (e.etat === "en attente") return __("En attente d'un worker…");
+    if (e.etape === "preselection") return __("Présélection des candidats par l'IA dans toute la liste ({0} lignes)…", [e.total]);
+    if (e.etape === "identification") return __("Identification par IA d'après les photos : {0} / {1} lignes…", [e.fait, e.total]);
+    return __("Lecture des fichiers…");
+  };
+  while (Date.now() - debut < delai_max_ms) {
+    await new Promise((ok) => setTimeout(ok, 2000));
+    const r = await frappe.call({ method: "customization_app.lci_reponse.etat_analyse", args: { cle } });
+    const e = r.message || {};
+    if (e.etat === "termine") return e.resultat;
+    if (e.etat === "echec" || e.etat === "inconnu") {
+      frappe.msgprint({ title: __("Analyse impossible"), indicator: "red",
+                        message: e.erreur || __("L'analyse a été perdue (worker redémarré ?). Relancez-la.") });
+      return null;
+    }
+    $("#freeze .freeze-message p").text(message(e));
+  }
+  frappe.msgprint(__("L'analyse n'a pas répondu à temps."));
+  return null;
 }
 
 function lci_reponse_dialog(frm, data, filename) {
@@ -1919,12 +1945,18 @@ function lci_reponse_dialog(frm, data, filename) {
         v.volume_unitaire_m3 != null ? `${format_number(v.volume_unitaire_m3, null, 4)} m³/u` : "",
       ].filter(Boolean).join(" · ");
 
+      // les deux photos côte à côte : c'est ce qui permet de juger l'appariement d'un coup d'œil
+      const photo_lci = l.image ? `<img class="lci-rep-photo" src="${esc(l.image)}" loading="lazy">` : "";
+      const photo_src = src && src.photo_b64
+        ? `<img class="lci-rep-photo" src="data:image/jpeg;base64,${src.photo_b64}">` : "";
       return `<tr data-row="${esc(l.row)}" class="${s.apply ? "" : "lci-rep-off"}">
         <td class="lci-c"><input type="checkbox" data-k="apply" ${s.apply ? "checked" : ""}></td>
         <td class="lci-c">${l.idx}</td>
         <td>
-          <div><b>${esc(l.item_code || __("libre"))}</b></div>
-          <div class="lci-rep-nom">${esc(l.item_name || "")}</div>
+          <div class="lci-rep-fiche">${photo_lci}<div>
+            <div><b>${esc(l.item_code || __("libre"))}</b></div>
+            <div class="lci-rep-nom">${esc(l.item_name || "")}</div>
+          </div></div>
         </td>
         <td class="lci-c">${format_number(l.qty, null, 0)}</td>
         <td class="lci-c${qty_ko ? " lci-rep-qko" : ""}"
@@ -1932,7 +1964,9 @@ function lci_reponse_dialog(frm, data, filename) {
           ${src && src.qty != null ? format_number(src.qty, null, 0) : "—"}
         </td>
         <td>
+          <div class="lci-rep-fiche">${photo_src}<div style="min-width:0;flex:1;">
           <select class="form-control input-xs" data-k="source">${options.join("")}</select>
+          </div></div>
           <div class="lci-rep-meta">
             ${l.methode ? `<span class="lci-rep-badge">${esc(l.methode)}${
               l.confiance && l.confiance < 1 ? ` ${Math.round(l.confiance * 100)} %` : ""}</span>` : ""}
@@ -1979,6 +2013,9 @@ function lci_reponse_dialog(frm, data, filename) {
         .lci-rep-nom { font-size: 11px; color: var(--text-muted,#8a93a0); max-width: 300px;
           overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .lci-rep-meta { margin-top: 2px; }
+        .lci-rep-fiche { display: flex; align-items: center; gap: 6px; }
+        .lci-rep-photo { width: 44px; height: 44px; object-fit: contain; border: 1px solid var(--border-color,#e4e8ee);
+          border-radius: 5px; background: #fff; flex: none; }
         .lci-rep-badge { font-size: 9.5px; background: #e6f4ff; color: #0958d9; border-radius: 5px;
           padding: 1px 5px; margin-right: 3px; }
         .lci-rep-warn { font-size: 9.5px; background: #fff1f0; color: #a8071a; border-radius: 5px;
@@ -2030,7 +2067,8 @@ function lci_reponse_dialog(frm, data, filename) {
       ${orphelines.length ? `<div class="lci-rep-orph">
         ⚠️ <b>${orphelines.length}</b> ${__("ligne(s) du fournisseur ne correspondent à aucun article de la liste")} :
         <ul>${orphelines.slice(0, 12).map((o) =>
-          `<li>L${o.ligne} — ${esc(o.code || "")} ${esc(o.designation || "")}${
+          `<li>${o.photo_b64 ? `<img class="lci-rep-photo" style="width:26px;height:26px;vertical-align:middle;" src="data:image/jpeg;base64,${o.photo_b64}"> ` : ""}L${
+            o.ligne} — ${esc(o.code || "")} ${esc(o.designation || "")}${
             o.prix_unitaire != null ? ` — ${o.prix_unitaire}` : ""}</li>`).join("")}
         ${orphelines.length > 12 ? `<li>… ${orphelines.length - 12} ${__("autres")}</li>` : ""}</ul>
       </div>` : ""}

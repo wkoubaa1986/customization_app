@@ -18,6 +18,7 @@ L'aperçu est volontairement séparé de l'écriture : un mauvais appariement de
 prix se paie en devises, il doit être relu avant d'entrer dans la base.
 """
 
+import base64
 import difflib
 import json
 import os
@@ -201,20 +202,32 @@ def _est_entete_repetee(ligne, entete):
     return entete and _norm_entete_pdf(ligne) == _norm_entete_pdf(entete)
 
 
+class LignePdf(list):
+    """Une ligne de tableau lue dans un PDF : ses textes (la liste elle-même) et, pour découper
+    les photos, la page et le rectangle de chaque cellule (None = cellule fusionnée avec celle
+    du dessus). Se manipule comme une liste ordinaire partout ailleurs."""
+
+    def __init__(self, textes, page=None, rects=None):
+        super().__init__(textes)
+        self.page = page
+        self.rects = list(rects or [])
+
+
 def fusionner_tables(tables):
     """[(page, rows)] -> [(nom, grille)] : les tableaux de même en-tête (ou de même largeur
     et sans en-tête propre : suite du précédent sur la page suivante) sont mis bout à bout,
     l'en-tête répété est retiré. Un tableau d'une autre forme ouvre une nouvelle grille. Pur."""
     grilles = []
     for page, rows in tables:
-        rows = [list(r) for r in rows if r and any(_txt(c) for c in r)]
+        rows = [r if isinstance(r, LignePdf) else list(r) for r in rows if r and any(_txt(c) for c in r)]
         if not rows:
             continue
         if grilles:
             nom, grille, entete, pages = grilles[-1]
             if _est_entete_repetee(rows[0], entete):
                 grille.extend(rows[1:]); pages.append(page); continue
-            if len(rows[0]) == len(entete) and not _score_entete(rows[0]):
+            # une ligne produit peut marquer 1 (un mot comme « port ») : seul un vrai en-tête (≥ 2) ouvre un tableau
+            if len(rows[0]) == len(entete) and _score_entete(rows[0]) < 2:
                 grille.extend(rows); pages.append(page); continue
         grilles.append(["PDF", rows, rows[0], [page]])
     out = []
@@ -246,10 +259,14 @@ def lire_pdf(chemin, ia=None):
             for t in trouvees:
                 try:
                     rows = t.extract()
+                    rects = [r.cells for r in t.rows]
                 except Exception:
                     continue
                 if rows and len(rows) >= 2 and len(rows[0]) >= 2:
-                    tables.append((no + 1, rows))
+                    # chaque ligne garde sa page et ses cellules : la colonne « Photo » d'un
+                    # catalogue est une image, elle se découpe plus tard, pas ici
+                    tables.append((no + 1, [LignePdf(r, page=page, rects=rects[k] if k < len(rects) else None)
+                                            for k, r in enumerate(rows)]))
         grilles = fusionner_tables(tables)
         if any(len(g) >= 2 for _n, g in grilles):
             return grilles
@@ -296,12 +313,15 @@ def grille_ia(sortie):
 # (code, désignation, photo décrite, prix, volumes) ; il désigne l'entrée qui est LE MÊME produit,
 # ou rien. Plus lent et plus cher que la cascade texte (≈ 1 à 2 ¢ par ligne), mais il voit.
 
-MAX_CANDIDATS_IMAGE = 14
+MAX_CANDIDATS_IMAGE = 8      # candidats (avec leur photo) présentés au modèle vision, par ligne
+LOT_PRESELECTION = 10        # lignes LCI par appel de présélection
+DESIG_MAX_PRESEL = 220       # caractères de désignation par entrée dans le catalogue compact
 
 
 def _candidats_pour(row, libres, n=MAX_CANDIDATS_IMAGE):
-    """Les entrées fournisseur les plus proches de la ligne (similarité de désignation, code),
-    pour ne pas envoyer toute la liste à chaque appel ; toutes si elles sont peu nombreuses. Pur."""
+    """Secours quand la présélection IA n'a pas répondu : les entrées fournisseur les plus proches
+    de la ligne par similarité de texte (faible entre un libellé français et un catalogue anglais,
+    d'où la présélection par l'IA en premier) ; toutes si elles sont peu nombreuses. Pur."""
     if len(libres) <= n:
         return list(libres)
     ref = _norm("%s %s %s" % (row.item_code or "", row.item_name or "", row.item_name_traduit or ""))
@@ -313,6 +333,106 @@ def _candidats_pour(row, libres, n=MAX_CANDIDATS_IMAGE):
 
 def _description_courte(row, maxlen=600):
     return _strip_html(row.description or "")[:maxlen] if getattr(row, "description", None) else ""
+
+
+# --- 1) présélection : l'IA (texte) choisit dans TOUTE la liste du fournisseur les entrées qui
+# peuvent être notre produit. Vu sur les vrais catalogues (25/09/2026) : la similarité de texte
+# entre « Porte filtre, double bleu, 10' » et « 2 stages water filter Housing: Blue housing
+# (10" * 2.5") » est nulle, les bons candidats n'étaient jamais présentés au modèle vision.
+
+def catalogue_court(libres):
+    """La liste du fournisseur en texte compact : un alias court par entrée (« S12 »), le code, la
+    désignation tronquée et le prix. Rend (texte, {alias: id}). Pur."""
+    alias, lignes = {}, []
+    for k, f in enumerate(libres, start=1):
+        a = "S%d" % k
+        alias[a] = f["id"]
+        prix = f.get("prix_unitaire")
+        lignes.append("%s | %s | %s | %s" % (
+            a, f.get("code") or "", (f.get("designation") or "")[:DESIG_MAX_PRESEL].replace("\n", " "),
+            "" if prix is None else prix))
+    return "\n".join(lignes), alias
+
+
+PROMPT_PRESELECTION = (
+    "You shortlist candidates in a supplier's price list for lines of our purchase order (water treatment "
+    "equipment: filter housings, cartridges, RO systems, fittings, pumps, softeners, purifiers). Our lines are in "
+    "French (sometimes with an English translation); the supplier writes in English. For EACH of our lines, list "
+    "the supplier entries (their alias, e.g. \"S12\") that could be THE SAME product, most likely first, at most "
+    "%d. Match on product type, size (5\"/10\"/20\", big blue…), number of stages, port/thread size (1/2\", 3/4\", "
+    "1\"), colour/transparency, material, capacity. Include every plausible variant (same product, other port "
+    "size); an empty list when nothing fits. Answer JSON only: {\"<our line key>\": [\"S3\", \"S4\"], ...}."
+    % MAX_CANDIDATS_IMAGE
+)
+
+
+def lire_preselection(rep, cles, alias):
+    """La réponse de présélection -> {clé de ligne: [ids fournisseur]} ; alias inconnus ignorés,
+    lignes sans réponse absentes (≠ liste vide = « rien ne convient »). Pur."""
+    out = {}
+    if not isinstance(rep, dict):
+        return out
+    for cle in cles:
+        v = rep.get(cle)
+        if not isinstance(v, list):
+            continue
+        ids = []
+        for a in v:
+            i = alias.get(str(a).strip())
+            if i and i not in ids:
+                ids.append(i)
+        out[cle] = ids[:MAX_CANDIDATS_IMAGE]
+    return out
+
+
+def _payload_preselection(rows):
+    return json.dumps({"nos_lignes": [
+        {"cle": r.name, "code": r.item_code or "", "designation": r.item_name or "",
+         "designation_traduite": r.item_name_traduit or "", "description": _description_courte(r, 300),
+         "quantite": flt(r.qty)} for r in rows]}, ensure_ascii=False)
+
+
+def _preselection_ia(rows, libres, contexte):
+    """{nom de ligne: [entrées candidates]} : par lots de lignes en parallèle, le modèle (texte)
+    présélectionne dans tout le catalogue. Une ligne sans réponse retombe sur la similarité de
+    texte ; une ligne à liste vide n'a aucun candidat (pas d'appel vision pour elle)."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from customization_app.liste_commande_import import _completion_parts
+
+    texte, alias = catalogue_court(libres)
+    lots = list(_lots(list(rows), LOT_PRESELECTION))
+
+    def un(lot):
+        user = ("SUPPLIER PRICE LIST (alias | code | description | unit price):\n%s\n\nOUR LINES:\n%s"
+                % (texte, _payload_preselection(lot)))
+        try:
+            rep = _completion_parts(contexte, PROMPT_PRESELECTION, user)
+        except Exception as e:
+            return {}, str(e)[:300]
+        return lire_preselection(rep, [r.name for r in lot], alias), None
+
+    with ThreadPoolExecutor(max_workers=PARALLELE_IMAGES) as pool:
+        resultats = list(pool.map(un, lots))
+    choisis, erreurs = {}, []
+    for res, err in resultats:
+        choisis.update(res)
+        if err:
+            erreurs.append(err)
+    if erreurs:
+        frappe.log_error(title="LCI réponse — présélection IA", message="\n".join(erreurs[:10]))
+    par_id = {f["id"]: f for f in libres}
+    out = {}
+    for row in rows:
+        if row.name in choisis:
+            out[row.name] = [par_id[i] for i in choisis[row.name] if i in par_id]
+        else:
+            out[row.name] = _candidats_pour(row, libres)
+    return out
+
+
+# --- 2) identification : pour chaque ligne, le modèle vision voit NOTRE photo et celles des
+# candidats présélectionnés (découpées dans le PDF), avec les caractéristiques de chacun.
 
 
 def _photo_ligne(row):
@@ -328,47 +448,148 @@ def _photo_ligne(row):
 PROMPT_APPARIEMENT_IMAGE = (
     "You identify, in a supplier's price list, the entry that is THE SAME product as one line of our purchase "
     "order (water treatment equipment: filter housings, cartridges, RO systems, fittings, pumps, softeners). "
-    "You get our line (code, name, description, characteristics, and its photo if attached) and the candidate "
-    "entries of the supplier (id, code, description, described photo, price, volumes). Compare shapes, colours, "
-    "sizes (10\"/20\", big blue…), number of stages, fittings/threads (1/2\", 3/4\", 1\"), transparency, materials. "
-    "A different size, thread, capacity or stage count means a different product. Answer JSON only: "
-    "{\"id\": \"<candidate id>\" or null, \"confiance\": 0..1, \"raison\": \"<15 words>\"}. Prefer null over a guess."
+    "You get our line (code, French name, English translation, description, and its photo when attached) and the "
+    "candidate entries of the supplier (alias C1, C2…: code, description, variant, price, volumes) followed by the "
+    "photo of each candidate that has one. Compare shapes, colours, sizes (5\"/10\"/20\", big blue…), number of "
+    "stages, fittings/threads (1/2\", 3/4\", 1\"), transparency, materials, accessories (bracket, wrench). "
+    "A different size, thread, capacity, stage count or transparency means a different product: a clear/transparent "
+    "(PET) housing never matches an opaque (blue/white) one, whatever else matches. When candidates are variants of "
+    "one product (other port size), pick the variant matching our line's specification (« In/Out 3/4\" »), or the "
+    "base variant when our line does not say. Answer JSON only: {\"id\": \"<candidate alias>\" or null, "
+    "\"confiance\": 0..1, \"raison\": \"<15 words>\"}. Prefer null over a guess."
 )
 
 
-def _apparier_images(rows, libres):
-    """{nom de ligne LCI: (id source, confiance)} par IA, une ligne à la fois, avec sa photo."""
-    from customization_app.liste_commande_import import _chat_json_image
+PARALLELE_IMAGES = 4
 
-    out, pris = {}, set()
-    for row in rows:
-        cands = [f for f in _candidats_pour(row, libres) if f["id"] not in pris]
-        if not cands:
+
+def _payload_image(row, cands):
+    return json.dumps({
+        "notre_ligne": {"code": row.item_code or "", "designation": row.item_name or "",
+                        "designation_traduite": row.item_name_traduit or "", "description": _description_courte(row),
+                        "quantite": flt(row.qty)},
+        "candidats": [{"id": "C%d" % k, "code": f.get("code") or "", "designation": f.get("designation_base") or f.get("designation") or "",
+                       "variante": f.get("variante") or "", "photo_decrite": f.get("photo") or "",
+                       "prix": f.get("prix_unitaire"), "volume_unitaire_m3": f.get("volume_unitaire_m3"),
+                       "remarque": f.get("remarque") or ""}
+                      for k, f in enumerate(cands, start=1)],
+    }, ensure_ascii=False)
+
+
+def _contenu_vision(row, cands, photo, photos):
+    """Le message utilisateur de l'identification : les caractéristiques, notre photo, puis la
+    photo de chaque candidat (étiquetée par son alias)."""
+    from customization_app.liste_commande_import import _part_image
+
+    parts = [{"type": "text", "text": _payload_image(row, cands)}]
+    if photo:
+        parts += [{"type": "text", "text": "Photo of OUR product:"}, _part_image(photo, "high", "image/jpeg")]
+    for k, f in enumerate(cands, start=1):
+        p = photos.get(f["id"]) or f.get("_photo")
+        if p:
+            parts += [{"type": "text", "text": "Photo of candidate C%d:" % k}, _part_image(p, "low", "image/jpeg")]
+    return parts
+
+
+def resoudre_choix(choix):
+    """[(nom de ligne, id source, confiance)] -> {nom: (id, confiance)} : une source ne sert
+    qu'une fois, la meilleure confiance l'emporte ; sous 0,5 on ne retient rien. Pur."""
+    out, pris = {}, {}
+    for nom, ident, conf in sorted(choix, key=lambda c: -c[2]):
+        if not ident or conf < 0.5 or ident in pris:
             continue
-        payload = {
-            "notre_ligne": {"code": row.item_code or "", "designation": row.item_name or "",
-                            "designation_traduite": row.item_name_traduit or "", "description": _description_courte(row),
-                            "quantite": flt(row.qty)},
-            "candidats": [{"id": f["id"], "code": f.get("code") or "", "designation": f.get("designation") or "",
-                           "photo": f.get("photo") or "", "prix": f.get("prix_unitaire"),
-                           "volume_unitaire_m3": f.get("volume_unitaire_m3"), "remarque": f.get("remarque") or ""}
-                          for f in cands],
-        }
-        user = json.dumps(payload, ensure_ascii=False)
-        try:
-            photo = _photo_ligne(row)
-            rep = (_chat_json_image(PROMPT_APPARIEMENT_IMAGE, user + "\n\nThe attached image is OUR product's photo.", photo, mime="image/jpeg")
-                   if photo else _chat_json(PROMPT_APPARIEMENT_IMAGE, user)) or {}
-        except Exception as e:
-            frappe.log_error(title="LCI réponse — appariement IA photo", message=str(e)[:2000])
-            continue
-        ident = rep.get("id") if isinstance(rep, dict) else None
-        conf = flt((rep or {}).get("confiance")) if isinstance(rep, dict) else 0
-        if isinstance(ident, str) and ident and ident not in pris and any(f["id"] == ident for f in cands):
-            if conf >= 0.5:
-                out[row.name] = (ident, round(min(1.0, conf), 2))
-                pris.add(ident)
+        out[nom] = (ident, round(min(1.0, conf), 2))
+        pris[ident] = nom
     return out
+
+
+def alias_choisi(rep, cands):
+    """La réponse du modèle vision -> (id fournisseur ou None, confiance) : l'alias « C3 » (ou
+    l'id brut) doit désigner un des candidats. Pur."""
+    if not isinstance(rep, dict):
+        return None, 0
+    ident = rep.get("id")
+    conf = flt(rep.get("confiance"))
+    if not isinstance(ident, str):
+        return None, conf
+    ident = ident.strip()
+    alias = {"C%d" % k: f["id"] for k, f in enumerate(cands, start=1)}
+    if ident in alias:
+        return alias[ident], conf
+    if any(f["id"] == ident for f in cands):
+        return ident, conf
+    return None, conf
+
+
+def _apparier_images(rows, libres, photos=None, contexte=None, progres=None):
+    """{nom de ligne LCI: (id source, confiance)} par IA : présélection dans tout le catalogue,
+    puis une ligne à la fois avec sa photo et celles des candidats — PARALLELE_IMAGES lignes en
+    même temps (appels réseau), le client OpenAI préparé dans le thread principal. Seul ce thread
+    touche à Frappe (progression, journal)."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    from customization_app.liste_commande_import import _completion_parts, _contexte_ia
+
+    photos = photos or {}
+    # un titre de section, une ligne sans prix, n'est pas un candidat
+    libres = [f for f in libres if f.get("prix_unitaire") is not None]
+    if not rows or not libres:
+        return {}
+    contexte = contexte or _contexte_ia()
+    if progres:
+        progres("preselection", 0, len(rows))
+    cands_par_ligne = _preselection_ia(rows, libres, contexte)
+    taches = []
+    for row in rows:
+        cands = cands_par_ligne.get(row.name) or []
+        if cands:
+            taches.append((row.name, cands, _contenu_vision(row, cands, _photo_ligne(row), photos)))
+    if not taches:
+        return {}
+
+    def une(t):
+        nom, cands, contenu = t
+        try:
+            rep = _completion_parts(contexte, PROMPT_APPARIEMENT_IMAGE, contenu) or {}
+        except Exception as e:
+            return (nom, None, 0, str(e)[:300])
+        ident, conf = alias_choisi(rep, cands)
+        return (nom, ident, conf, None)
+
+    def lancer(taches, deja=0, total=None):
+        resultats = []
+        with ThreadPoolExecutor(max_workers=PARALLELE_IMAGES) as pool:
+            futurs = [pool.submit(une, t) for t in taches]
+            for k, fut in enumerate(as_completed(futurs), start=1):
+                resultats.append(fut.result())
+                if progres:
+                    progres("identification", deja + k, total or len(taches))
+        erreurs = [r[3] for r in resultats if r[3]]
+        if erreurs:
+            frappe.log_error(title="LCI réponse — appariement IA photo", message="\n".join(erreurs[:20]))
+        return resultats
+
+    resultats = lancer(taches)
+    retenus = resoudre_choix([(nom, ident, conf) for nom, ident, conf, _e in resultats])
+    # Seconde passe pour les lignes qui ont perdu leur entrée au profit d'une autre ligne (trois
+    # lignes « porte-filtre double bleu » en 1/2", 3/4" et 1" : le modèle a pu désigner la même
+    # variante pour les trois) : on les représente sans les entrées déjà prises.
+    pris = {ident for ident, _c in retenus.values()}
+    perdants = [t for t in taches if t[0] not in retenus
+                and any(r[0] == t[0] and r[1] in pris for r in resultats)]
+    if perdants:
+        rows_par_nom = {r.name: r for r in rows}
+        rejouees = []
+        for nom, cands, _contenu in perdants:
+            restes = [f for f in cands if f["id"] not in pris]
+            if restes:
+                rejouees.append((nom, restes, _contenu_vision(rows_par_nom[nom], restes, _photo_ligne(rows_par_nom[nom]), photos)))
+        if rejouees:
+            seconds = lancer(rejouees, deja=len(taches), total=len(taches) + len(rejouees))
+            for nom, (ident, conf) in resoudre_choix(
+                    [(nom, ident, conf) for nom, ident, conf, _e in seconds if ident not in pris]).items():
+                retenus[nom] = (ident, conf)
+    return retenus
 
 
 # ------------------------------------------------- repérage de l'en-tête
@@ -385,7 +606,7 @@ MOTS = {
              "reference", "référence", "article", "art.", "part no", "sku",
              "型号", "货号", "artikelnummer", "codigo", "código"],
     "designation": ["designation", "désignation", "description", "item name",
-                    "product", "produit", "name", "nom", "item", "goods",
+                    "specification", "specifications", "spec", "product", "produit", "name", "nom", "item", "goods",
                     "品名", "名称", "描述", "bezeichnung", "descripcion",
                     "descripción", "nombre"],
     "qty": ["qty", "quantity", "quantité", "quantite", "qte", "qté", "menge",
@@ -602,7 +823,7 @@ def _extraire(grille, ligne_entete, mapping, feuille):
             return cells[idx] if idx is not None and idx < len(cells) else None
 
         code = _txt(col("code"))
-        desig = _txt(col("designation"))
+        desig_base = desig = _txt(col("designation"))
         # seules les valeurs vraiment textuelles sont reprises : sur la ligne
         # de total, ces colonnes portent souvent un « / » qui suffirait à faire
         # passer le pied de tableau pour un article.
@@ -614,11 +835,14 @@ def _extraire(grille, ligne_entete, mapping, feuille):
         qty = _num(col("qty"))
         if not code and not desig and prix is None:
             continue  # ligne vide, séparateur ou pied de tableau
+        if prix is None and not (code and desig):
+            continue  # un titre de section (« Water Softener »), pas un article
 
         # une ligne « TOTAL » n'est pas un article
         if not code and _norm(desig) in {"total", "grand total", "sub total",
                                          "subtotal", "amount", "sum", "合计", "总计"}:
             continue
+        photo_txt = _txt(col("photo"))
 
         pcs_ctn = _num(col("pcs_carton"))
         vol_ctn = _num(col("volume_carton_m3"))
@@ -647,9 +871,76 @@ def _extraire(grille, ligne_entete, mapping, feuille):
             "volume_carton_m3": vol_ctn,
             "volume_unitaire_m3": vol_unit,
             "remarque": _txt(col("remarque")),
-            "photo": _txt(col("photo")),   # description de la photo (colonne écrite par l'IA)
+            "photo": photo_txt,   # description de la photo (colonne écrite par l'IA)
+            # la photo elle-même quand la colonne est une image dans un PDF (octets JPEG,
+            # retirés de l'aperçu avant envoi au navigateur)
+            "_photo": None if photo_txt else _photo_cellule(cells, mapping.get("photo")),
+            "designation_base": desig_base,
+            "complement": " — ".join(extras),
         })
-    return out
+    return heriter_fusion(out)
+
+
+PHOTO_PX = 260            # grand côté de la photo fournisseur découpée dans le PDF
+
+
+def _photo_cellule(cells, idx):
+    """La photo d'une cellule de tableau PDF (rendu du rectangle en JPEG) ; None hors PDF,
+    cellule fusionnée, colonne inconnue ou rectangle trop petit pour être une image."""
+    page, rects = getattr(cells, "page", None), getattr(cells, "rects", None)
+    if idx is None or page is None or not rects or idx >= len(rects) or not rects[idx]:
+        return None
+    try:
+        import pymupdf
+        r = pymupdf.Rect(rects[idx]) + (2, 2, -2, -2)   # sans les traits de bordure
+        if r.width < 20 or r.height < 20:
+            return None
+        zoom = min(2.0, PHOTO_PX / max(r.width, r.height))
+        pix = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), clip=r)
+        if _uniforme(pix):
+            return None  # cellule blanche : pas de photo
+        return pix.tobytes("jpeg", jpg_quality=80)
+    except Exception:
+        return None
+
+
+def _uniforme(pix, part=0.995):
+    """Vrai si une seule teinte couvre (presque) toute l'image : une cellule vide, avec au plus
+    un bout de trait de bordure ; un logo plat comme une photo passent."""
+    from collections import Counter
+    import pymupdf
+    gris = pymupdf.Pixmap(pymupdf.csGRAY, pix) if pix.n > 1 else pix
+    comptes = Counter(bytes(gris.samples))
+    return max(comptes.values()) / max(1, len(gris.samples)) >= part
+
+
+VARIANTE_MAX = 40         # au-delà, une ligne sans code est un produit à part, pas une variante
+
+
+def heriter_fusion(lignes):
+    """Cellules fusionnées : dans un catalogue, un produit occupe une cellule (code, description,
+    photo) et ses variantes de raccord (« 1/2" Brass Port », « 3/4" Brass Port »…) autant de
+    sous-lignes avec un prix chacune ; lues ligne à ligne, ces sous-lignes n'ont ni code ni
+    description ni photo. Elles héritent de la ligne pleine au-dessus et gardent leur variante,
+    pour être reconnaissables par l'IA comme par l'utilisateur. Pur."""
+    parent = None
+    for l in lignes:
+        if l.get("code"):
+            l.setdefault("variante", l.get("complement") or "")
+            parent = l if l.get("designation_base") else None
+            continue
+        variante = (l.get("designation") or "").strip()
+        if parent and l.get("prix_unitaire") is not None and len(variante) <= VARIANTE_MAX:
+            l["code"] = parent["code"]
+            l["variante"] = variante
+            l["designation"] = " — ".join([parent["designation_base"]] + ([variante] if variante else []))
+            l["designation_base"] = parent["designation_base"]
+            for k in ("photo", "_photo", "moq", "pcs_carton", "volume_carton_m3", "volume_unitaire_m3"):
+                if l.get(k) in (None, "") and parent.get(k) not in (None, ""):
+                    l[k] = parent[k]
+        else:
+            parent = None  # une ligne d'une autre nature ferme le groupe
+    return lignes
 
 
 # ------------------------------------------------------- appariement
@@ -660,11 +951,13 @@ def _textes_ligne(r):
                         _strip_html(r.description)[:120]) if _txt(t)]
 
 
-def _apparier(rows, fournisseur, mode="cascade"):
+def _apparier(rows, fournisseur, mode="cascade", photos=None, progres=None):
     """Rend {nom de ligne LCI: (ligne fournisseur, méthode, confiance)}.
 
     Chaque ligne fournisseur ne sert qu'une fois : un prix apparié deux fois
     est presque toujours une erreur de lecture, pas une intention.
+    `photos` : {id fournisseur: octets JPEG} pour le mode « images » ; `progres(etape, fait, total)`
+    est appelé au fil de l'identification.
     """
     res = {}
     libres = list(fournisseur)
@@ -764,7 +1057,7 @@ def _apparier(rows, fournisseur, mode="cascade"):
 
     # 5) IA sur le reliquat, par lots
     if restants and libres and mode == "images":
-        for row, (src_id, conf) in _apparier_images(restants, libres).items():
+        for row, (src_id, conf) in _apparier_images(restants, libres, photos=photos, progres=progres).items():
             src = next((f for f in libres if f["id"] == src_id), None)
             r = next((x for x in restants if x.name == row), None)
             if src and r:
@@ -833,18 +1126,56 @@ def _fichier_local(file_url):
     return doc.get_full_path()
 
 
+def _lire_grilles_pdf(grilles):
+    """Un catalogue PDF porte souvent PLUSIEURS tableaux (une catégorie de produits chacun, des
+    en-têtes différents) : chaque grille qui a une colonne de prix est lue, et leurs lignes sont
+    mises bout à bout. -> (feuille, ligne_entete, entete, mapping, lignes) de la première grille
+    lue + toutes les lignes, ou None si aucune grille n'a de prix."""
+    premiere, lignes, precedent = None, [], None
+    for feuille, grille in grilles:
+        f, le, g, entete, mapping = feuille, 0, grille, [], {}
+        try:
+            f, le, g = _trouver_tableau([(feuille, grille)])
+            entete = g[le] if le < len(g) else []
+            mapping = _mapper_colonnes(entete, g[le + 1:le + 6])
+        except Exception:
+            pass
+        if "prix_unitaire" not in mapping:
+            # un tableau SANS en-tête (la suite du précédent sur la page suivante, un catalogue
+            # qui ne répète pas ses titres) : on reprend l'en-tête et les rôles du tableau
+            # précédent s'il a la même largeur
+            if precedent and grille and len(grille[0]) == len(precedent[0]):
+                entete, mapping, le, g = precedent[0], precedent[1], -1, grille
+            else:
+                continue
+        lues = _extraire(g, le, mapping, f)
+        if not lues:
+            continue
+        precedent = (entete, mapping)
+        if premiere is None:
+            premiere = (f, max(le, 0), entete, mapping)
+        lignes.extend(lues)
+    if premiere is None:
+        return None
+    return premiere + (lignes,)
+
+
 def _lire_un_fichier(file_url):
     """Un fichier fournisseur (Excel ou PDF) -> (feuille, ligne_entete, entete, mapping, lignes).
-    Pour un PDF dont le texte ne livre pas de colonne de prix, les pages sont relues par l'IA."""
+    Pour un PDF : tous les tableaux à prix du texte ; s'il n'y en a aucun, les pages relues par l'IA."""
     chemin = _fichier_local(file_url)
     nom = file_url.split("/")[-1]
+    if chemin.lower().endswith(".pdf"):
+        lu = _lire_grilles_pdf(lire_pdf(chemin))
+        if lu is None:
+            lu = _lire_grilles_pdf(lire_pdf(chemin, ia=True))
+        if lu is None:
+            frappe.throw(_("Aucune colonne de prix unitaire reconnue dans « {0} », ni dans son texte "
+                           "ni par l'IA.").format(nom))
+        return lu
     feuille, ligne_entete, grille = _trouver_tableau(_feuilles(chemin))
     entete = grille[ligne_entete] if ligne_entete < len(grille) else []
     mapping = _mapper_colonnes(entete, grille[ligne_entete + 1:ligne_entete + 6])
-    if "prix_unitaire" not in mapping and chemin.lower().endswith(".pdf"):
-        feuille, ligne_entete, grille = _trouver_tableau(lire_pdf(chemin, ia=True))
-        entete = grille[ligne_entete] if ligne_entete < len(grille) else []
-        mapping = _mapper_colonnes(entete, grille[ligne_entete + 1:ligne_entete + 6])
     if "prix_unitaire" not in mapping:
         frappe.throw(_("Aucune colonne de prix unitaire reconnue dans « {0} » "
                        "(feuille « {1} »). Vérifiez que le fichier contient bien "
@@ -855,17 +1186,77 @@ def _lire_un_fichier(file_url):
     return feuille, ligne_entete, entete, mapping, lignes
 
 
-@frappe.whitelist()
-def analyser_reponse(docname, file_url=None, file_urls=None, mode="cascade"):
-    """Lit le ou les fichiers du fournisseur (Excel, PDF — plusieurs listes de prix à la fois,
-    demande utilisateur 25/09/2026) et rend un APERÇU. N'écrit rien."""
-    _guard()
-    doc = frappe.get_doc(DOCTYPE, docname)
+def _urls(file_url, file_urls):
     urls = json.loads(file_urls) if isinstance(file_urls, str) else list(file_urls or [])
     if file_url and file_url not in urls:
         urls.insert(0, file_url)
     if not urls:
         frappe.throw(_("Aucun fichier."))
+    return urls
+
+
+@frappe.whitelist()
+def analyser_reponse(docname, file_url=None, file_urls=None, mode="cascade"):
+    """Lit le ou les fichiers du fournisseur (Excel, PDF — plusieurs listes de prix à la fois,
+    demande utilisateur 25/09/2026) et rend un APERÇU. N'écrit rien. Synchrone : pour le mode
+    « images » (des dizaines d'appels IA), passer par `lancer_analyse` + `etat_analyse`."""
+    _guard()
+    return _analyser(frappe.get_doc(DOCTYPE, docname), _urls(file_url, file_urls), mode or "cascade")
+
+
+PREFIXE_ANALYSE = "lci_rep:"
+DUREE_ETAT = 3600
+
+
+@frappe.whitelist()
+def lancer_analyse(docname, file_urls=None, mode="cascade", file_url=None):
+    """Lance l'analyse en tâche de fond et rend sa clé de suivi : l'identification par IA d'une
+    liste de 40 lignes dépasse le délai d'une requête web. Le navigateur interroge `etat_analyse`."""
+    _guard()
+    urls = _urls(file_url, file_urls)
+    frappe.get_doc(DOCTYPE, docname)  # existe ?
+    cle = "%s%s:%s" % (PREFIXE_ANALYSE, docname, frappe.generate_hash(length=10))
+    frappe.cache().set_value(cle, {"etat": "en attente"}, expires_in_sec=DUREE_ETAT)
+    frappe.enqueue("customization_app.lci_reponse.job_analyse", queue="long", timeout=1800,
+                   docname=docname, urls=urls, mode=mode or "cascade", cle=cle)
+    return {"cle": cle}
+
+
+@frappe.whitelist()
+def etat_analyse(cle):
+    """{etat: en attente | en cours | termine | echec, etape, fait, total, resultat, erreur}."""
+    _guard()
+    if not str(cle or "").startswith(PREFIXE_ANALYSE):
+        frappe.throw(_("Clé de suivi inconnue."))
+    return frappe.cache().get_value(cle) or {"etat": "inconnu"}
+
+
+def job_analyse(docname, urls, mode, cle):
+    """La tâche de fond : même travail que `analyser_reponse`, le résultat (ou l'erreur) déposé
+    sous la clé de suivi. Tourne sous l'identité de l'utilisateur qui l'a lancée."""
+    _guard()
+
+    def progres(etape, fait, total):
+        frappe.cache().set_value(cle, {"etat": "en cours", "etape": etape, "fait": fait, "total": total},
+                                 expires_in_sec=DUREE_ETAT)
+
+    try:
+        progres("lecture", 0, 0)
+        res = _analyser(frappe.get_doc(DOCTYPE, docname), urls, mode, progres=progres)
+        frappe.cache().set_value(cle, {"etat": "termine", "resultat": res}, expires_in_sec=DUREE_ETAT)
+    except Exception as e:
+        frappe.cache().set_value(cle, {"etat": "echec", "erreur": str(e)[:1000]}, expires_in_sec=DUREE_ETAT)
+        frappe.log_error(title="LCI réponse — analyse en tâche de fond", message=frappe.get_traceback())
+
+
+def _cle_id(ident):
+    """Tri des identifiants « fichier › feuille:ligne » par fichier puis numéro de ligne (pas L10 avant L3)."""
+    tete, _sep, fin = str(ident).rpartition(":")
+    return (tete, cint(fin) if fin.isdigit() else 0, str(ident))
+
+
+def _analyser(doc, urls, mode, progres=None):
+    """Lecture des fichiers, appariement, aperçu (dict prêt pour le navigateur)."""
     fournisseur, feuilles, plans = [], [], []
     entete, mapping, ligne_entete, feuille = [], {}, 0, ""
     for url in urls:
@@ -882,7 +1273,15 @@ def analyser_reponse(docname, file_url=None, file_urls=None, mode="cascade"):
     file_url = urls[0]
     feuille = feuilles[0] if len(feuilles) == 1 else _("{0} fichiers : {1}").format(len(feuilles), " ; ".join(feuilles))
 
-    apparies, libres = _apparier(doc.articles, fournisseur, mode=mode or "cascade")
+    # les photos découpées dans le PDF : en octets pour l'IA, en data URI (vignette) pour l'aperçu
+    photos = {}
+    for l in fournisseur:
+        p = l.pop("_photo", None)
+        if p:
+            photos[l["id"]] = p
+            l["photo_b64"] = base64.b64encode(p).decode()
+
+    apparies, libres = _apparier(doc.articles, fournisseur, mode=mode or "cascade", photos=photos, progres=progres)
     orphelines = {f["id"] for f in libres}
 
     lignes = [{
@@ -890,6 +1289,7 @@ def analyser_reponse(docname, file_url=None, file_urls=None, mode="cascade"):
         "idx": r.idx,
         "item_code": r.item_code,
         "item_name": r.item_name,
+        "image": r.image,
         "qty": flt(r.qty),
         "prix_cible": flt(r.prix_cible),
         "prix_actuel": flt(r.prix_fournisseur),
@@ -916,7 +1316,7 @@ def analyser_reponse(docname, file_url=None, file_urls=None, mode="cascade"):
         "devise": doc.devise or "USD",
         "sources": fournisseur,
         "lignes": lignes,
-        "orphelines": sorted(orphelines),
+        "orphelines": sorted(orphelines, key=_cle_id),
         "montant_fichier": montant_fichier,
         # plan de lecture : c'est lui qui permettra de RENVOYER ce même fichier
         # annoté (quelle feuille, quelle ligne d'en-tête, quelle colonne porte quoi).
