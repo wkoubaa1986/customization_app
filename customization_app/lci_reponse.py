@@ -130,6 +130,26 @@ def _volume_depuis_dimensions(v):
     return vol if 0 < vol < 100 else None
 
 
+# « Packing size: 59*45*26CM/12PCS » ou « Carton Size(W*D*H): 235*445*565MM » écrit DANS la
+# description (catalogues PDF sans colonne de volume)
+PACKING_RE = re.compile(
+    r"(packing|carton)\s*size[^:：\d]*[:：]?\s*([0-9]+(?:[.,][0-9]+)?)\s*[*x×]\s*([0-9]+(?:[.,][0-9]+)?)\s*[*x×]\s*"
+    r"([0-9]+(?:[.,][0-9]+)?)\s*(cm|mm|m)?\s*(?:/\s*([0-9]+)\s*pcs)?", re.I)
+
+
+def _packing_depuis_texte(texte):
+    """(volume du carton en m³, pièces par carton) lus dans une description, ou (None, None).
+    « Carton size » sans nombre de pièces = un produit par carton (gros appareil). Pur."""
+    m = PACKING_RE.search(_txt(texte))
+    if not m:
+        return None, None
+    vol = _volume_depuis_dimensions("%s*%s*%s%s" % (m.group(2), m.group(3), m.group(4), m.group(5) or ""))
+    if vol is None:
+        return None, None
+    pcs = cint(m.group(6)) if m.group(6) else (1 if m.group(1).lower() == "carton" else None)
+    return vol, (pcs or None)
+
+
 def _feuilles(chemin):
     """Classeur -> [(nom de feuille, grille de valeurs)], quel que soit le format.
 
@@ -855,6 +875,13 @@ def _extraire(grille, ligne_entete, mapping, feuille):
             vt = _num(col("volume_total_m3"))
             if vt is not None and qty and qty > 0:
                 vol_unit = vt / qty
+        if vol_ctn is None and vol_unit is None:
+            # pas de colonne : le colisage écrit dans la description (catalogue PDF)
+            vol_ctn, pcs = _packing_depuis_texte(desig)
+            if pcs and pcs_ctn is None:
+                pcs_ctn = pcs
+        if vol_unit is None and vol_ctn is not None and pcs_ctn:
+            vol_unit = vol_ctn / pcs_ctn
 
         out.append({
             "id": f"{feuille}:{i}",

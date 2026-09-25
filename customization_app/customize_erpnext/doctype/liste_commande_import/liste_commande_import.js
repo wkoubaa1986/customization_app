@@ -1743,7 +1743,16 @@ function lci_valeurs_source(src) {
 
 function lci_src_label(src) {
   if (!src) return "";
-  return `L${src.ligne} · ${src.code || ""} ${src.designation || ""}`.trim();
+  return `L${src.ligne} · ${src.code || ""} ${src.designation || ""}`.trim().slice(0, 140);
+}
+
+// Libellé court pour la liste déroulante : une description de catalogue fait 300 caractères,
+// le menu natif débordait de l'écran et devenait inutilisable.
+function lci_src_court(src) {
+  if (!src) return "";
+  const base = (src.designation_base || src.designation || "").replace(/\s+/g, " ");
+  const desc = base.length > 42 ? base.slice(0, 40) + "…" : base;
+  return `L${src.ligne} · ${src.code || ""}${src.variante ? " — " + src.variante : ""}${desc ? " · " + desc : ""}`;
 }
 
 async function lci_reponse_import(frm) {
@@ -1919,7 +1928,7 @@ function lci_reponse_dialog(frm, data, filename) {
     const visibles = data.lignes.filter((l) => tout || st[l.row].source);
     const options = [`<option value="">${__("— aucune —")}</option>`].concat(
       (data.sources || []).map((s) =>
-        `<option value="${esc(s.id)}">${esc(lci_src_label(s))}${
+        `<option value="${esc(s.id)}" title="${esc(lci_src_label(s))}">${esc(lci_src_court(s))}${
           s.prix_unitaire != null ? ` — ${s.prix_unitaire}` : ""}</option>`));
 
     // une même ligne fournisseur servie deux fois est presque toujours une erreur
@@ -1965,7 +1974,7 @@ function lci_reponse_dialog(frm, data, filename) {
         </td>
         <td>
           <div class="lci-rep-fiche">${photo_src}<div style="min-width:0;flex:1;">
-          <select class="form-control input-xs" data-k="source">${options.join("")}</select>
+          <select class="form-control input-xs" data-k="source" style="max-width:100%;" title="${esc(lci_src_label(src))}">${options.join("")}</select>
           </div></div>
           <div class="lci-rep-meta">
             ${l.methode ? `<span class="lci-rep-badge">${esc(l.methode)}${

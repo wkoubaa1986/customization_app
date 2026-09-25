@@ -193,3 +193,28 @@ class TestPhotoPdf(unittest.TestCase):
 		self.assertEqual(lignes_lues[1]["code"], "NW-1")   # variante héritée
 		self.assertEqual(lignes_lues[1]["designation"], "5 inch housing — 3/4\" Brass Port")
 		self.assertEqual(lignes_lues[1]["_photo"], lignes_lues[0]["_photo"])
+
+
+class TestPackingDansTexte(unittest.TestCase):
+	def test_packing_size_avec_pieces(self):
+		vol, pcs = R._packing_depuis_texte("Single stage water filter Housing: Blue housing(10\" * 2.5\") With plastic wrench Packing size: 59*45*26CM/12PCS")
+		self.assertAlmostEqual(vol, 0.06903, places=5)
+		self.assertEqual(pcs, 12)
+
+	def test_carton_size_sans_pieces(self):
+		vol, pcs = R._packing_depuis_texte("Product Size(W*D*H): 220*490*510MM Carton Size(W*D*H): 235*445*565MM")
+		self.assertAlmostEqual(vol, 0.059085, places=5)
+		self.assertEqual(pcs, 1)
+
+	def test_rien(self):
+		self.assertEqual(R._packing_depuis_texte("Flow rate: 3.1-3.8T/H"), (None, None))
+		self.assertEqual(R._packing_depuis_texte(None), (None, None))
+
+	def test_extraire_volume_unitaire_depuis_description(self):
+		grille = [["Model", "Description", "USD Price"],
+		          ["NW-1", "Housing Packing size: 59*45*26CM/12PCS — 1/2\" Brass Port", "3.38"],
+		          ["", "3/4\" Brass Port", "3.53"]]
+		lignes = R._extraire(grille, 0, {"code": 0, "designation": 1, "prix_unitaire": 2}, "F")
+		self.assertEqual(lignes[0]["pcs_carton"], 12)
+		self.assertAlmostEqual(lignes[0]["volume_unitaire_m3"], 0.06903 / 12, places=6)
+		self.assertAlmostEqual(lignes[1]["volume_unitaire_m3"], 0.06903 / 12, places=6)   # variante héritée
