@@ -734,10 +734,89 @@ function lci_sel_barre(frm) {
   $slot.html(`<span class="lci-sel-bar"><b>${__("{0} cochée(s)", [n])}</b>
     <button class="btn btn-xs btn-default" data-sel="dup" title="${__("Une copie de chaque ligne cochée, juste en dessous")}">⧉ ${__("Dupliquer")}</button>
     <button class="btn btn-xs btn-default" data-sel="copier" title="${__("Copier ces lignes vers une autre liste (brouillon existant ou nouvelle)")}">📋 ${__("Copier vers une liste…")}</button>
+    <button class="btn btn-xs btn-default" data-sel="desc" title="${__("Ajouter la même phrase à la description de chaque ligne cochée")}">📝 ${__("Ajouter au texte…")}</button>
     <button class="btn btn-xs btn-default" data-sel="aucune" title="${__("Tout décocher")}">✕</button></span>`);
+  lci_neutraliser_submit($slot);
   $slot.find('[data-sel="dup"]').on("click", () => lci_dupliquer(frm, lci_rows(frm).filter((r) => sel.has(r.name))));
   $slot.find('[data-sel="copier"]').on("click", () => lci_copier_vers(frm, lci_rows(frm).filter((r) => sel.has(r.name))));
+  $slot.find('[data-sel="desc"]').on("click", () => lci_ajouter_texte(frm, lci_rows(frm).filter((r) => sel.has(r.name))));
   $slot.find('[data-sel="aucune"]').on("click", () => { sel.clear(); lci_render_table(frm); });
+}
+
+// Un <button> sans type est un bouton de soumission : la colonne Frappe étant un
+// <form>, « Entrée » dans n'importe quel champ cliquait le premier de la table.
+function lci_neutraliser_submit($zone) {
+  $zone.find("button:not([type])").attr("type", "button");
+}
+
+// « 12*24 », « 1500 / 3 », « 2x36 », « (10+2)*3 » → nombre ; null si ce n'est pas
+// une expression complète et sûre (chiffres, + - * / x × , . et parenthèses).
+function lci_eval_num(txt) {
+  let s = String(txt ?? "").trim().replace(/[x×X]/g, "*").replace(/,/g, ".").replace(/\s+/g, "");
+  if (!s || !/[+\-*/]/.test(s.slice(1))) return null;       // pas d'opérateur : nombre simple
+  if (!/^[\d.()+\-*/]+$/.test(s)) return null;
+  if (/[+\-*/]$/.test(s) || /\/0(?![\d.])/.test(s)) return null;
+  let v;
+  try { v = Function(`"use strict"; return (${s});`)(); } catch (e) { return null; }
+  if (typeof v !== "number" || !isFinite(v)) return null;
+  return Math.round(v * 1e6) / 1e6;
+}
+
+// Ajoute une même phrase à la description des lignes cochées (fin ou tête du texte).
+// Une ligne qui contient déjà la phrase est laissée telle quelle : on peut rejouer sans doublon.
+function lci_ajouter_texte(frm, rows) {
+  if (!rows.length) return;
+  const esc = frappe.utils.escape_html;
+  const d = new frappe.ui.Dialog({
+    title: __("Ajouter au texte de {0} ligne(s)", [rows.length]),
+    fields: [
+      { fieldname: "texte", label: __("Phrase à ajouter"), fieldtype: "Small Text", reqd: 1,
+        description: __("Chaque retour à la ligne devient un paragraphe.") },
+      { fieldname: "ou", label: __("Position"), fieldtype: "Select",
+        options: ["À la fin", "En tête"].join("\n"), default: "À la fin" },
+      { fieldname: "cible", label: __("Dans"), fieldtype: "Select",
+        options: ["Description", "Description traduite", "Les deux"].join("\n"), default: "Description" },
+      { fieldname: "apercu", fieldtype: "HTML",
+        options: `<div class="lci-gmeta">${rows.slice(0, 8).map((r) => esc(r.item_name || r.item_code || "?")).join(" · ")}${
+          rows.length > 8 ? " …" : ""}</div>` },
+    ],
+    primary_action_label: __("Ajouter"),
+    primary_action(v) {
+      const lignes = (v.texte || "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+      if (!lignes.length) return;
+      const html = lignes.map((l) => `<p>${esc(l)}</p>`).join("");
+      const brut = lignes.join("\n");
+      const en_tete = v.ou === "En tête";
+      let faites = 0, deja = 0;
+      rows.forEach((r) => {
+        let touche = false;
+        if (v.cible !== "Description traduite") {
+          const cur = r.description || "";
+          if (cur.includes(html)) deja += 1;
+          else {
+            frappe.model.set_value(r.doctype, r.name, "description", en_tete ? html + cur : cur + html);
+            touche = true;
+          }
+        }
+        if (v.cible !== "Description") {
+          const cur = r.description_traduite || "";
+          if (!cur.includes(brut)) {
+            frappe.model.set_value(r.doctype, r.name, "description_traduite",
+              !cur ? brut : en_tete ? brut + "\n" + cur : cur + "\n" + brut);
+            touche = true;
+          }
+        }
+        if (touche) faites += 1;
+      });
+      d.hide();
+      if (faites) frm.dirty();
+      lci_render_table(frm);
+      frappe.show_alert({
+        message: __("{0} ligne(s) complétée(s){1} — pensez à enregistrer.", [faites, deja ? __(", {0} contenai(en)t déjà la phrase", [deja]) : ""]),
+        indicator: faites ? "green" : "orange" });
+    },
+  });
+  d.show();
 }
 
 // miroir de lci_copie.CHAMPS_COPIES : ce que nous avons saisi, jamais la réponse du fournisseur
@@ -880,11 +959,11 @@ function lci_render_table(frm) {
           <span class="lci-add-x" data-addx="${ai}" title="${__("Retirer cet additionnel")}">✕</span></div>`).join("")}
     </td>`);
 
-    cells.push(`<td><input class="lci-inp lci-num" data-f="qty" type="number" step="any" value="${r.qty ?? ""}"></td>`);
+    cells.push(`<td><input class="lci-inp lci-num" data-f="qty" type="text" inputmode="decimal" autocomplete="off" value="${r.qty ?? ""}"></td>`);
     if (V.uom) cells.push(`<td><input class="lci-inp lci-uom" data-f="uom" value="${esc(r.uom || "")}"></td>`);
     if (V.vol_unit) {
       cells.push(`<td><input class="lci-inp lci-num${r.volume_estime ? " lci-vol-est" : ""}"
-                 data-f="volume_unitaire_m3" type="number" step="any"
+                 data-f="volume_unitaire_m3" type="text" inputmode="decimal" autocomplete="off"
                  value="${r.volume_unitaire_m3 ?? ""}"
                  title="${r.volume_estime ? __("Volume estimé par l'IA — non recopié sur la fiche Article")
                                           : __("Volume unitaire (m³)")}">
@@ -894,12 +973,12 @@ function lci_render_table(frm) {
       cells.push(`<td class="lci-c lci-volligne">${format_number(flt(r.volume_ligne_m3), null, 3)}</td>`);
     }
     if (V.prix_cible) {
-      cells.push(`<td><input class="lci-inp lci-num lci-cible" data-f="prix_cible" type="number" step="any"
+      cells.push(`<td><input class="lci-inp lci-num lci-cible" data-f="prix_cible" type="text" inputmode="decimal" autocomplete="off"
                  value="${r.prix_cible || ""}" placeholder="${__("cible")}"></td>`);
     }
     if (V.prix_frn) {
       cells.push(`<td>
-        <input class="lci-inp lci-num lci-frn" data-f="prix_fournisseur" type="number" step="any"
+        <input class="lci-inp lci-num lci-frn" data-f="prix_fournisseur" type="text" inputmode="decimal" autocomplete="off"
                value="${r.prix_fournisseur || ""}" placeholder="${__("fourn.")}">
         ${lci_frn_meta(frm, r)}
         ${r.reponse_source ? `<div class="lci-src" title="${esc(r.reponse_source)}">↩ ${esc(r.reponse_source.slice(0, 26))}</div>` : ""}
@@ -911,7 +990,7 @@ function lci_render_table(frm) {
       const ecart_q = flt(r.qty_fournisseur) > 0 && Math.abs(flt(r.qty_fournisseur) - flt(r.qty)) > 0.001;
       cells.push(`<td>
         <input class="lci-inp lci-num${ecart_q ? " lci-qty-ko" : ""}" data-f="qty_fournisseur"
-               type="number" step="any" value="${r.qty_fournisseur || ""}" placeholder="${__("qté")}"
+               type="text" inputmode="decimal" autocomplete="off" value="${r.qty_fournisseur || ""}" placeholder="${__("qté")}"
                title="${__("Quantité cotée ou facturée par le fournisseur")}">
         ${ecart_q ? `<div class="lci-qty-note">${__("nous : {0}", [format_number(flt(r.qty), null, 0)])}</div>` : ""}
       </td>`);
@@ -923,7 +1002,7 @@ function lci_render_table(frm) {
       const bouge = flt(r.qty_cible) > 0 && Math.abs(q_ret - base) > 0.001;
       cells.push(`<td>
         <input class="lci-inp lci-num${bouge ? " lci-ret-ko" : ""}" data-f="qty_cible"
-               type="number" step="any" value="${r.qty_cible || ""}"
+               type="text" inputmode="decimal" autocomplete="off" value="${r.qty_cible || ""}"
                placeholder="${format_number(flt(r.qty), null, 0)}"
                title="${__("Quantité retenue pour la contre-proposition (vide = {0})", [format_number(flt(r.qty), null, 0)])}">
       </td>`);
@@ -931,7 +1010,7 @@ function lci_render_table(frm) {
     if (V.prix_neg) {
       const t = flt(r.total_retenu);
       cells.push(`<td>
-        <input class="lci-inp lci-num lci-neg" data-f="prix_cible_negocie" type="number" step="any"
+        <input class="lci-inp lci-num lci-neg" data-f="prix_cible_negocie" type="text" inputmode="decimal" autocomplete="off"
                value="${r.prix_cible_negocie || ""}"
                placeholder="${r.prix_fournisseur ? format_number(flt(r.prix_fournisseur), null, 4) : __("négocié")}"
                title="${__("Prix que nous demandons au second tour (vide = son prix accepté)")}">
@@ -1123,6 +1202,7 @@ function lci_render_table(frm) {
       <thead><tr>${th.join("")}</tr></thead>
       <tbody>${body}</tbody>
     </table>`);
+  lci_neutraliser_submit($t);
 
   // ------------------------------------------------------------ filtre
   const F = lci_filtre(frm);
@@ -1166,7 +1246,16 @@ function lci_render_table(frm) {
     const NUM = ["qty", "volume_unitaire_m3", "prix_cible", "prix_fournisseur",
                  "qty_fournisseur", "qty_cible", "prix_cible_negocie"];
     let v = $(e.currentTarget).val();
-    if (NUM.includes(f)) v = flt(v);
+    if (NUM.includes(f)) {
+      // « 12*24 », « 1500/3 », « 2x36 » : le résultat compte, l'expression ne
+      // se réécrit qu'à la validation (Entrée / sortie du champ) pour ne pas
+      // couper la frappe.
+      const calc = lci_eval_num(v);
+      v = calc === null ? flt(v) : calc;
+      if (e.type === "change" && calc !== null && String(v) !== String($(e.currentTarget).val()).trim()) {
+        $(e.currentTarget).val(v);
+      }
+    }
     if (row[f] === v) return;
     frappe.model.set_value(row.doctype, row.name, f, v);
     if (f === "volume_unitaire_m3" && row.volume_estime) {
@@ -1186,6 +1275,22 @@ function lci_render_table(frm) {
       $tr.removeClass("lci-dec-ok lci-dec-ko")
         .addClass(v === "Accepté" ? "lci-dec-ok" : v === "Abandonné" ? "lci-dec-ko" : "");
     }
+  });
+
+  // Entrée dans une cellule : on valide et on descend sur la même colonne
+  // (Maj+Entrée : on remonte). Sans cela, le navigateur « soumet » le <form>
+  // de la colonne Frappe, ce qui cliquait le premier bouton ⧉ de la table.
+  $t.find("input.lci-inp").on("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    e.stopPropagation();
+    const $inp = $(e.currentTarget), f = $inp.data("f");
+    $inp.trigger("change");
+    const $trs = $t.find("tr[data-name]");
+    const i = $trs.index($inp.closest("tr"));
+    const $next = $trs.eq(i + (e.shiftKey ? -1 : 1)).find(`.lci-inp[data-f="${f}"]`);
+    if (i >= 0 && $next.length) { $next.focus(); $next.get(0).select && $next.get(0).select(); }
+    else $inp.blur();
   });
 
   $t.find('[data-act="image"]').on("click", (e) => { const r = row_of(e); r && lci_upload_image(frm, r); });
