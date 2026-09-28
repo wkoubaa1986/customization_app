@@ -189,11 +189,14 @@ def appliquer_plan(docname, plan):
     doc = frappe.get_doc(DOCTYPE, docname)
     par_nom = {r.name: r for r in doc.articles}
 
+    # `pos` = rang de la ligne DANS son conteneur : l'ordre de chargement se
+    # règle à la main dans le dialogue (glisser-déposer) et doit survivre à
+    # l'enregistrement, à l'onglet et aux Excel.
     par_ligne = {}
     for c in plan.get("conteneurs") or []:
-        for l in c.get("lignes") or []:
+        for i, l in enumerate(c.get("lignes") or [], 1):
             par_ligne.setdefault(l.get("row"), []).append(
-                {"no": c.get("no"), "qty": flt(l.get("qty"))})
+                {"no": c.get("no"), "qty": flt(l.get("qty")), "pos": i})
 
     for row in doc.articles:
         parts = par_ligne.get(row.name)
@@ -313,9 +316,16 @@ def plan_enregistre(doc):
                 "qty": q, "uom": r.uom or "",
                 "volume": q * vu, "montant": q * pu,
                 "scinde": len(parts) > 1,
+                # rang choisi à la main ; un plan d'avant cette version n'en a
+                # pas : ses lignes restent dans l'ordre de la liste, après
+                # celles qui ont un rang (tri stable).
+                "pos": cint(part.get("pos")) or 10 ** 9,
             })
             bloc["volume"] += q * vu
             bloc["montant"] += q * pu
+
+    for bloc in conteneurs:
+        bloc["lignes"].sort(key=lambda l: l["pos"])
 
     return {"conteneurs": conteneurs, "type": entete.get("type") or TYPE_DEFAUT,
             "taux": flt(entete.get("taux")) or TAUX_DEFAUT,

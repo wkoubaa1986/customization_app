@@ -2429,6 +2429,27 @@ function lci_ct_deplacer_groupe(conteneurs, items, dest) {
   return parts.length;
 }
 
+// Déplace UNE part (src = {ci, li}) devant ou derrière la ligne dst = {ci, li}
+// (`apres` = derrière) ; dst.li null = à la fin du conteneur dst.ci. Dans le même
+// conteneur, c'est l'ordre de chargement qui change ; vers un autre conteneur,
+// la part y entre à cette position, ou fusionne avec un morceau déjà présent de
+// la même ligne. Pure (pas de DOM). Rend true si quelque chose a bougé.
+function lci_ct_reordonner(conteneurs, src, dst, apres) {
+  const de = conteneurs[src.ci];
+  const vers = conteneurs[dst.ci];
+  if (!de || !vers || !de.lignes[src.li]) return false;
+  if (src.ci === dst.ci && src.li === dst.li) return false;
+  const [part] = de.lignes.splice(src.li, 1);
+  if (src.ci !== dst.ci) {
+    const meme = vers.lignes.find((l) => l.row === part.row);
+    if (meme) { meme.qty = flt(meme.qty) + flt(part.qty); return true; }
+  }
+  let idx = dst.li == null ? vers.lignes.length : dst.li + (apres ? 1 : 0);
+  if (src.ci === dst.ci && src.li < idx) idx -= 1;
+  vers.lignes.splice(Math.min(idx, vers.lignes.length), 0, part);
+  return true;
+}
+
 async function lci_conteneurs_dialog(frm) {
   if (frm.is_new()) {
     frappe.msgprint(__("Enregistrez d'abord le document."));
@@ -2446,6 +2467,7 @@ async function lci_conteneurs_dialog(frm) {
                  coches: new Set() };   // "ci:row" des lignes cochées pour un déplacement groupé
   let dernier_ajout = null;   // conteneur à mettre en évidence après un ajout
   let dernier_coche = null;   // position DOM du dernier clic : Maj+clic coche toute la plage
+  let glisse = null;          // {ci, li} de la part en cours de glisser-déposer
   // miroir de TYPES dans lci_conteneurs.py — un gabarit inconnu du serveur retombe sur le 40' HC
   const LCI_GABARITS = ["20'", "40'", "40' HC", "45' HC"];
   const lci_cap = (c) => flt(c && c.capacite) || flt((etat.plan || {}).capacite);
@@ -2664,7 +2686,7 @@ async function lci_conteneurs_dialog(frm) {
       const cc = lci_cap(c);
       const pct = cc ? Math.min(100, flt(c.volume) / cc * 100) : 0;
       const plein = flt(c.volume) > cc + 0.0001;
-      return `<div class="lci-ct${dernier_ajout === c.no ? " neuf" : ""}" data-no="${c.no}">
+      return `<div class="lci-ct${dernier_ajout === c.no ? " neuf" : ""}" data-no="${c.no}" data-ci="${ci}">
         <div class="lci-ct-head">
           <label class="lci-ct-all-l" title="${__("Cocher toutes les lignes de ce conteneur")}">
             <input type="checkbox" class="lci-ct-all" data-ci="${ci}"
@@ -2683,7 +2705,8 @@ async function lci_conteneurs_dialog(frm) {
           ${(c.lignes || []).length ? "" : `<tr><td class="lci-ct-vide">${
             __("Conteneur vide — envoyez-y des lignes avec le menu « C{0} » à droite de chaque ligne.",
                [c.no])}</td></tr>`}
-          ${(c.lignes || []).map((l, li) => `<tr>
+          ${(c.lignes || []).map((l, li) => `<tr data-ci="${ci}" data-li="${li}">
+            <td class="lci-ct-drag" draggable="true" title="${__("Glisser pour changer l'ordre de chargement, ou déposer dans un autre conteneur")}">⠿</td>
             <td style="width:24px;text-align:center;">
               <input type="checkbox" class="lci-ct-sel" data-ci="${ci}" data-li="${li}" data-row="${esc(l.row)}"
                      ${etat.coches.has(ci + ":" + l.row) ? "checked" : ""}></td>
@@ -2744,6 +2767,12 @@ async function lci_conteneurs_dialog(frm) {
           border-radius: 6px; padding: 2px 8px; font-size: 12px; }
         .lci-ct-all-l { margin: 0; font-weight: 400; display: inline-flex; }
         .lci-ct-astuce { font-size: 10.5px; color: #8a93a0; cursor: help; }
+        .lci-ct-drag { width: 18px; text-align: center; color: #c3cad4; cursor: grab; font-size: 14px; }
+        .lci-ct-drag:hover { color: #391085; }
+        tr.lci-ct-dragging { opacity: .4; }
+        tr.lci-ct-over-haut td { box-shadow: inset 0 3px 0 #722ed1; }
+        tr.lci-ct-over-bas td { box-shadow: inset 0 -3px 0 #722ed1; }
+        .lci-ct-tbl.lci-ct-over-vide { outline: 2px dashed #b37feb; outline-offset: -2px; }
         .lci-ct-tbl, .lci-ct-head { user-select: none; }
         .lci-ct-top { display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
           font-size: 12px; margin-bottom: 8px; }
@@ -2769,7 +2798,7 @@ async function lci_conteneurs_dialog(frm) {
           <button class="btn btn-xs btn-default" id="lci-ct-bulk-clear" title="${__("Tout décocher")}">✕</button>
         </span>
         <span class="lci-ct-astuce" title="${__("Cochez une ligne, puis Maj+clic sur une autre : toute la plage est cochée.")}">
-          ${__("Maj+clic = plage")}</span>
+          ${__("Maj+clic = plage")} · ⠿ ${__("glisser = ordre")}</span>
         <span style="margin-left:auto;">
           <b>${esc(lci_ct_flotte(plan.conteneurs) || __("aucun conteneur"))}</b> ·
           <b>${format_number(vol_total, null, 3)} m³</b> · ${format_currency(mnt_total, dev)}
@@ -2872,6 +2901,61 @@ async function lci_conteneurs_dialog(frm) {
     $z.find(".lci-ct-cut").on("click", function () {
       scinder(cint($(this).data("ci")), cint($(this).data("li")));
     });
+
+    // Glisser-déposer : la poignée ⠿ prend la ligne, on la dépose sur une autre
+    // ligne (moitié haute = devant, moitié basse = derrière) ou sur la zone d'un
+    // conteneur (à la fin). C'est l'ordre de chargement, il est enregistré.
+    $z.find(".lci-ct-drag").on("dragstart", function (ev) {
+      const tr = $(this).closest("tr");
+      glisse = { ci: cint(tr.data("ci")), li: cint(tr.data("li")) };
+      const dt = ev.originalEvent.dataTransfer;
+      dt.effectAllowed = "move";
+      dt.setData("text/plain", "");     // sans donnée, Firefox ne démarre pas le glisser
+      tr.addClass("lci-ct-dragging");
+    }).on("dragend", function () {
+      glisse = null;
+      $z.find(".lci-ct-dragging, .lci-ct-over-haut, .lci-ct-over-bas").removeClass("lci-ct-dragging lci-ct-over-haut lci-ct-over-bas");
+      $z.find(".lci-ct-over-vide").removeClass("lci-ct-over-vide");
+    });
+    $z.find(".lci-ct-tbl tr[data-ci]").on("dragover", function (ev) {
+      if (!glisse) return;
+      ev.preventDefault();
+      const r = this.getBoundingClientRect();
+      const bas = ev.originalEvent.clientY - r.top > r.height / 2;
+      $(this).toggleClass("lci-ct-over-haut", !bas).toggleClass("lci-ct-over-bas", bas);
+    }).on("dragleave", function () {
+      $(this).removeClass("lci-ct-over-haut lci-ct-over-bas");
+    }).on("drop", function (ev) {
+      if (!glisse) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      const r = this.getBoundingClientRect();
+      const apres = ev.originalEvent.clientY - r.top > r.height / 2;
+      const dest = { ci: cint($(this).data("ci")), li: cint($(this).data("li")) };
+      if (lci_ct_reordonner(etat.plan.conteneurs, glisse, dest, apres)) {
+        glisse = null;
+        etat.coches.clear();
+        recalculer_totaux();
+        render();
+      }
+    });
+    $z.find(".lci-ct-tbl").on("dragover", function (ev) {
+      if (!glisse) return;
+      ev.preventDefault();
+      $(this).addClass("lci-ct-over-vide");
+    }).on("dragleave", function () {
+      $(this).removeClass("lci-ct-over-vide");
+    }).on("drop", function (ev) {
+      if (!glisse) return;
+      ev.preventDefault();
+      const dest = { ci: cint($(this).closest(".lci-ct").data("ci")), li: null };
+      if (lci_ct_reordonner(etat.plan.conteneurs, glisse, dest, true)) {
+        glisse = null;
+        etat.coches.clear();
+        recalculer_totaux();
+        render();
+      }
+    });
   }
 
   d.show();
@@ -2915,11 +2999,13 @@ function lci_plan_local(frm) {
         image: r.image || "",
         qty: qq, uom: r.uom || "", volume: qq * vu, montant: qq * pu,
         scinde: parts.length > 1,
+        pos: cint(p.pos) || 1e9,     // rang choisi à la main ; sans rang, ordre de la liste (tri stable)
       });
       c.volume += qq * vu;
       c.montant += qq * pu;
     });
   });
+  conteneurs.forEach((c) => c.lignes.sort((a, b) => a.pos - b.pos));
   return { conteneurs, hors_plan, entete };
 }
 

@@ -190,6 +190,31 @@ class TestPlanRelu(unittest.TestCase):
         self.assertEqual(C.plan_enregistre(Doc({}, []))["conteneurs"], [])
 
 
+class TestOrdreDansLeConteneur(unittest.TestCase):
+    """L'ordre de chargement se règle à la main : il est porté par `pos` dans
+    chaque part et relu tel quel — l'ordre de la liste ne compte plus."""
+
+    def _doc(self, parts_a, parts_b, parts_c):
+        entete = {"type": "40' HC", "taux": 0.9, "capacite": 68.4,
+                  "conteneurs": [{"no": 1, "type": "40' HC", "capacite": 68.4}]}
+        return Doc(entete, [
+            Ligne("a", "ART-1", 10, 5.0, 1.0, parts_a),
+            Ligne("b", "ART-2", 10, 5.0, 1.0, parts_b),
+            Ligne("c", "ART-3", 10, 5.0, 1.0, parts_c),
+        ])
+
+    def test_le_rang_enregistre_prime_sur_l_ordre_de_la_liste(self):
+        doc = self._doc([{"no": 1, "qty": 10, "pos": 3}], [{"no": 1, "qty": 10, "pos": 1}],
+                        [{"no": 1, "qty": 10, "pos": 2}])
+        p = C.plan_enregistre(doc)
+        self.assertEqual([l["row"] for l in p["conteneurs"][0]["lignes"]], ["b", "c", "a"])
+
+    def test_sans_rang_l_ordre_de_la_liste_est_garde_apres_les_lignes_rangees(self):
+        doc = self._doc([{"no": 1, "qty": 10}], [{"no": 1, "qty": 10, "pos": 1}], [{"no": 1, "qty": 10}])
+        p = C.plan_enregistre(doc)
+        self.assertEqual([l["row"] for l in p["conteneurs"][0]["lignes"]], ["b", "a", "c"])
+
+
 class TestPlanReluPourLeDialogue(unittest.TestCase):
     """Rouvrir le dialogue ne recalcule plus : il repart du plan appliqué.
     Ce qui a été ajouté depuis n'est pas perdu pour autant."""
