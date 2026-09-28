@@ -2412,8 +2412,23 @@ async function lci_conteneurs_dialog(frm) {
   const etat = { type: "40' HC", taux: 0.9, types: [], dates: [], plan: null, unites: {},
                  coches: new Set() };   // "ci:row" des lignes cochées pour un déplacement groupé
   let dernier_ajout = null;   // conteneur à mettre en évidence après un ajout
-  const LCI_GABARITS = ["20'", "40'", "40' HC"];
+  // miroir de TYPES dans lci_conteneurs.py — un gabarit inconnu du serveur retombe sur le 40' HC
+  const LCI_GABARITS = ["20'", "40'", "40' HC", "45' HC"];
   const lci_cap = (c) => flt(c && c.capacite) || flt((etat.plan || {}).capacite);
+  // photo + nom par ligne, lus sur le document : un déplacement ou une scission
+  // ne transporte que la référence de ligne, la fiche se retrouve ici.
+  const fiches = {};
+  lci_rows(frm).forEach((r) => (fiches[r.name] = r));
+  const lci_ct_fiche = (l) => {
+    const r = fiches[l.row] || {};
+    const code = r.item_code || l.libelle || "";
+    const nom = r.item_name_traduit || r.item_name || "";
+    return `<div class="lci-ct-fiche">
+      <div class="lci-ct-img">${r.image ? `<img src="${esc(r.image)}" loading="lazy">` : "📦"}</div>
+      <div style="min-width:0;"><b>${esc(code)}</b>${
+        nom && nom !== code ? `<div class="lci-ct-nom">${esc(nom)}</div>` : ""}</div>
+    </div>`;
+  };
 
   const d = new frappe.ui.Dialog({
     title: __("Répartition en conteneurs"),
@@ -2601,7 +2616,7 @@ async function lci_conteneurs_dialog(frm) {
             <td style="width:24px;text-align:center;">
               <input type="checkbox" class="lci-ct-sel" data-ci="${ci}" data-li="${li}" data-row="${esc(l.row)}"
                      ${etat.coches.has(ci + ":" + l.row) ? "checked" : ""}></td>
-            <td>${esc(l.libelle || "")}${l.scinde ? ` <span class="lci-ct-split">${__("scindée")}</span>` : ""}</td>
+            <td>${lci_ct_fiche(l)}${l.scinde ? ` <span class="lci-ct-split">${__("scindée")}</span>` : ""}</td>
             <td style="width:80px;text-align:right;">${format_number(flt(l.qty), null, 0)}</td>
             <td style="width:92px;text-align:right;">${format_number(flt(l.volume), null, 3)} m³</td>
             <td style="width:74px;text-align:center;">
@@ -2647,6 +2662,13 @@ async function lci_conteneurs_dialog(frm) {
         .lci-ct-split { font-size: 9.5px; color: #391085; background: #f9f0ff; border-radius: 5px;
           padding: 1px 5px; }
         .lci-ct-mv { font-size: 11px; padding: 1px 3px; }
+        .lci-ct-fiche { display: inline-flex; align-items: center; gap: 8px; vertical-align: middle; }
+        .lci-ct-img { width: 36px; height: 36px; flex: none; border-radius: 6px; display: flex;
+          align-items: center; justify-content: center; background: var(--bg-light-gray,#f6f8fa);
+          border: 1px solid var(--border-color,#e4e8ee); color: #c3cad4; font-size: 16px; overflow: hidden; }
+        .lci-ct-img img { max-width: 100%; max-height: 100%; object-fit: contain; }
+        .lci-ct-nom { font-size: 10.5px; color: var(--text-muted,#8a93a0); max-width: 420px;
+          overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .lci-ct-bulk { gap: 6px; align-items: center; background: #fff7e6; border: 1px solid #ffd591;
           border-radius: 6px; padding: 2px 8px; font-size: 12px; }
         .lci-ct-all-l { margin: 0; font-weight: 400; display: inline-flex; }
@@ -2800,7 +2822,8 @@ function lci_plan_local(frm) {
       if (!c) return;
       const qq = flt(p.qty);
       c.lignes.push({
-        item_code: r.item_code || "", libelle: r.item_name || r.item_code || "",
+        item_code: r.item_code || "", libelle: r.item_name_traduit || r.item_name || r.item_code || "",
+        image: r.image || "",
         qty: qq, uom: r.uom || "", volume: qq * vu, montant: qq * pu,
         scinde: parts.length > 1,
       });
@@ -2838,6 +2861,10 @@ function lci_render_conteneurs(frm) {
     .lci-pl-fill.ko { background: #f5222d; }
     .lci-pl-tbl { width: 100%; border-collapse: collapse; font-size: 11.5px; }
     .lci-pl-tbl td { padding: 3px 10px; border-bottom: 1px solid var(--border-color,#f2f4f7); }
+    .lci-pl-img { width: 36px; height: 36px; border-radius: 6px; display: flex; align-items: center;
+      justify-content: center; background: var(--bg-light-gray,#f6f8fa); color: #c3cad4;
+      border: 1px solid var(--border-color,#e4e8ee); font-size: 16px; overflow: hidden; }
+    .lci-pl-img img { max-width: 100%; max-height: 100%; object-fit: contain; }
     .lci-pl-split { font-size: 9.5px; color: #391085; background: #f9f0ff; border-radius: 5px; padding: 1px 5px; }
     .lci-pl-vide { padding: 18px; text-align: center; color: #8a93a0; }
     .lci-pl-hors { font-size: 11.5px; color: #ad6800; background: #fffbe6; border: 1px solid #ffe58f;
@@ -2875,6 +2902,8 @@ function lci_render_conteneurs(frm) {
       <div class="lci-pl-bar"><div class="lci-pl-fill${ko ? " ko" : ""}" style="width:${pct}%;"></div></div>
       <table class="lci-pl-tbl"><tbody>
         ${c.lignes.map((l) => `<tr>
+          <td style="width:44px;"><div class="lci-pl-img">${
+            l.image ? `<img src="${esc(l.image)}" loading="lazy">` : "📦"}</div></td>
           <td style="width:130px;"><b>${esc(l.item_code)}</b></td>
           <td>${esc(l.libelle)}${l.scinde ? ` <span class="lci-pl-split">${__("scindée")}</span>` : ""}</td>
           <td style="width:90px;text-align:right;">${format_number(flt(l.qty), null, 0)} ${esc(l.uom)}</td>

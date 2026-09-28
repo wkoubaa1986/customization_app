@@ -21,6 +21,10 @@ class TestCapacite(unittest.TestCase):
         self.assertAlmostEqual(C.capacite("40' HC", 0.90), 68.4)
         self.assertAlmostEqual(C.capacite("20'", 0.90), 29.7)
 
+    def test_le_45_hc_est_un_gabarit_connu(self):
+        self.assertAlmostEqual(C.capacite("45' HC", 1.0), 86.0)
+        self.assertAlmostEqual(C.capacite("45' HC", 0.90), 77.4)
+
     def test_type_inconnu_repli_sur_le_40_hc(self):
         self.assertAlmostEqual(C.capacite("35'", 1.0), 76.0)
 

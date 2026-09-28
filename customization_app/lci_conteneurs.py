@@ -35,6 +35,7 @@ TYPES = {
     "20'": 33.0,
     "40'": 67.0,
     "40' HC": 76.0,
+    "45' HC": 86.0,      # « 45 HQ » chez les transitaires : 45' high cube
 }
 TAUX_DEFAUT = 0.90       # part réellement chargeable
 TYPE_DEFAUT = "40' HC"
