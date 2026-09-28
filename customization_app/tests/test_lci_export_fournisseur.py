@@ -139,3 +139,34 @@ class TestObservation(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestDerniereColonneUtile(unittest.TestCase):
+    """Le fichier du fournisseur traîne souvent des colonnes mises en forme mais
+    vides : nos colonnes doivent venir juste après son contenu, pas après ses bordures."""
+
+    def _ws(self):
+        from openpyxl import Workbook
+        from openpyxl.styles import PatternFill
+        ws = Workbook().active
+        ws["A1"] = "titre très large"
+        ws["A3"], ws["B3"], ws["J3"] = "Code", "Désignation", "Weight"
+        ws["A4"], ws["J4"] = "SP-M", 150
+        for c in range(11, 23):                     # K..V : fond seulement, aucune valeur
+            ws.cell(row=4, column=c).fill = PatternFill("solid", fgColor="FFE0B2")
+        ws.cell(row=4, column=23).value = "   "     # W : espaces = vide
+        return ws
+
+    def test_les_colonnes_seulement_formatees_ne_comptent_pas(self):
+        ws = self._ws()
+        self.assertGreaterEqual(ws.max_column, 23)
+        self.assertEqual(E.derniere_colonne_utile(ws, premiere_ligne=3), 10)
+
+    def test_une_valeur_isolee_plus_loin_est_gardee(self):
+        ws = self._ws()
+        ws.cell(row=9, column=15).value = "note"
+        self.assertEqual(E.derniere_colonne_utile(ws, premiere_ligne=3), 15)
+
+    def test_feuille_vide_repli_sur_le_defaut(self):
+        from openpyxl import Workbook
+        self.assertEqual(E.derniere_colonne_utile(Workbook().active, 1), 1)

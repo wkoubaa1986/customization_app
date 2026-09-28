@@ -121,6 +121,8 @@ frappe.ui.form.on("Liste Commande Import", {
       () => lci_reponse_import(frm), __("💰 Prix"));
     frm.add_custom_button(__("🎯 Proposer des prix cibles"),
       () => lci_prix_cibles(frm), __("💰 Prix"));
+    frm.add_custom_button(__("⬆️ Qté retenue = max(fournisseur, retenue)"),
+      () => lci_qty_retenue_max(frm), __("💰 Prix"));
     frm.add_custom_button(__("💬 Rédiger les observations"),
       () => lci_observations_ia(frm), __("IA"));
     frm.add_custom_button(__("📐 Estimer les volumes manquants"),
@@ -2221,6 +2223,37 @@ function lci_reponse_dialog(frm, data, filename) {
   d.show();
 }
 
+// ------------------------------------------- quantité retenue = le plus grand
+
+// Le fournisseur cote souvent PLUS que demandé (MOQ, carton entier) : quand on
+// l'accepte, il faut reporter sa quantité ligne par ligne. Ce bouton aligne la
+// quantité retenue sur la plus grande des deux (la sienne, la nôtre retenue),
+// sans jamais la baisser, et n'écrit que là où ça change. Enregistrer fige.
+function lci_qty_retenue_max(frm) {
+  let n = 0;
+  lci_rows(frm).forEach((r) => {
+    if (r.decision === "Abandonné") return;
+    const frn = flt(r.qty_fournisseur);
+    if (frn <= 0) return;
+    const ret = lci_qty_ret(r);
+    const cible = Math.max(frn, ret);
+    if (Math.abs(cible - ret) < 0.001 && flt(r.qty_cible) > 0) return;
+    if (Math.abs(cible - ret) < 0.001 && Math.abs(cible - flt(r.qty)) < 0.001) return;
+    frappe.model.set_value(r.doctype, r.name, "qty_cible", cible);
+    n += 1;
+  });
+  if (!n) {
+    frappe.show_alert({ message: __("Rien à changer : les quantités retenues sont déjà au maximum."),
+                        indicator: "blue" });
+    return;
+  }
+  lci_recalc(frm);
+  frappe.show_alert({
+    message: __("{0} quantité(s) retenue(s) alignée(s) sur le maximum — enregistrez pour figer.", [n]),
+    indicator: "green",
+  });
+}
+
 // ------------------------------------------------- prix cibles suggérés
 
 async function lci_prix_cibles(frm) {
@@ -2412,6 +2445,7 @@ async function lci_conteneurs_dialog(frm) {
   const etat = { type: "40' HC", taux: 0.9, types: [], dates: [], plan: null, unites: {},
                  coches: new Set() };   // "ci:row" des lignes cochées pour un déplacement groupé
   let dernier_ajout = null;   // conteneur à mettre en évidence après un ajout
+  let dernier_coche = null;   // position DOM du dernier clic : Maj+clic coche toute la plage
   // miroir de TYPES dans lci_conteneurs.py — un gabarit inconnu du serveur retombe sur le 40' HC
   const LCI_GABARITS = ["20'", "40'", "40' HC", "45' HC"];
   const lci_cap = (c) => flt(c && c.capacite) || flt((etat.plan || {}).capacite);
@@ -2709,6 +2743,8 @@ async function lci_conteneurs_dialog(frm) {
         .lci-ct-bulk { gap: 6px; align-items: center; background: #fff7e6; border: 1px solid #ffd591;
           border-radius: 6px; padding: 2px 8px; font-size: 12px; }
         .lci-ct-all-l { margin: 0; font-weight: 400; display: inline-flex; }
+        .lci-ct-astuce { font-size: 10.5px; color: #8a93a0; cursor: help; }
+        .lci-ct-tbl, .lci-ct-head { user-select: none; }
         .lci-ct-top { display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
           font-size: 12px; margin-bottom: 8px; }
         .lci-ct-warn { font-size: 11.5px; color: #ad6800; background: #fffbe6; border: 1px solid #ffe58f;
@@ -2732,6 +2768,8 @@ async function lci_conteneurs_dialog(frm) {
           <button class="btn btn-xs btn-primary" id="lci-ct-bulk-go">${__("Déplacer")}</button>
           <button class="btn btn-xs btn-default" id="lci-ct-bulk-clear" title="${__("Tout décocher")}">✕</button>
         </span>
+        <span class="lci-ct-astuce" title="${__("Cochez une ligne, puis Maj+clic sur une autre : toute la plage est cochée.")}">
+          ${__("Maj+clic = plage")}</span>
         <span style="margin-left:auto;">
           <b>${esc(lci_ct_flotte(plan.conteneurs) || __("aucun conteneur"))}</b> ·
           <b>${format_number(vol_total, null, 3)} m³</b> · ${format_currency(mnt_total, dev)}
@@ -2794,9 +2832,23 @@ async function lci_conteneurs_dialog(frm) {
     $z.find(".lci-ct-mv").on("change", function () {
       deplacer(cint($(this).data("ci")), cint($(this).data("li")), this.value);
     });
-    $z.find(".lci-ct-sel").on("change", function () {
-      const cle = cint($(this).data("ci")) + ":" + $(this).data("row");
-      if (this.checked) etat.coches.add(cle); else etat.coches.delete(cle);
+    // clic = une ligne ; Maj+clic = toute la plage depuis le dernier clic, même
+    // à cheval sur plusieurs conteneurs (cocher 30 lignes une à une était la plainte).
+    $z.find(".lci-ct-sel").on("click", function (ev) {
+      const tous = $z.find(".lci-ct-sel").toArray();
+      const i = tous.indexOf(this);
+      const on = this.checked;
+      let cibles = [this];
+      if (ev.shiftKey && dernier_coche !== null && dernier_coche !== i) {
+        const [a, b] = dernier_coche < i ? [dernier_coche, i] : [i, dernier_coche];
+        cibles = tous.slice(a, b + 1);
+      }
+      cibles.forEach((el) => {
+        el.checked = on;
+        const cle = cint($(el).data("ci")) + ":" + $(el).data("row");
+        if (on) etat.coches.add(cle); else etat.coches.delete(cle);
+      });
+      dernier_coche = i;
       maj_bulk();
     });
     $z.find(".lci-ct-all").on("change", function () {

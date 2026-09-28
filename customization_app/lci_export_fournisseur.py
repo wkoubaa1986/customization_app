@@ -386,6 +386,24 @@ def ordre_export(articles):
     return sorties
 
 
+def derniere_colonne_utile(ws, premiere_ligne=1, defaut=1):
+    """Dernière colonne qui PORTE une valeur à partir de `premiere_ligne`.
+
+    `ws.max_column` compte aussi les cellules seulement mises en forme : un
+    classeur fournisseur dont la bordure ou le fond s'étend jusqu'en V faisait
+    naître une dizaine de colonnes vides entre son tableau et nos colonnes
+    (demande du 28/09/2026). On ne regarde que le contenu.
+    """
+    max_col = ws.max_column or 1
+    max_row = ws.max_row or 1
+    for c in range(max_col, 0, -1):
+        for r in range(premiere_ligne, max_row + 1):
+            v = ws.cell(row=r, column=c).value
+            if v is not None and not (isinstance(v, str) and not v.strip()):
+                return c
+    return defaut
+
+
 def colonne_frequente(colonnes, defaut=None):
     """La colonne où le fournisseur met ses photos = celle qui en porte le plus."""
     if not colonnes:
@@ -527,7 +545,8 @@ def download_reponse_annotee(docname):
     mapping = plan.get("mapping") or {}
     ligne_entete = int(plan.get("ligne_entete") or 0) + 1      # 1-based
     adds_map = _adds_map(doc)
-    max_col = ws_src.max_column or 1
+    # son tableau s'arrête à la dernière colonne REMPLIE, pas à la dernière mise en forme
+    max_col = derniere_colonne_utile(ws_src, ligne_entete)
 
     # ses images, indexées par ligne source ; sa colonne photo = la plus fournie
     images_src = {}
