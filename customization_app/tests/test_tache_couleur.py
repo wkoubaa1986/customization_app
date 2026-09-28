@@ -91,3 +91,23 @@ class TestLaCouleurParEmploye(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestLesNouveauxEmployesDu28092026(unittest.TestCase):
+    """Salma (HR-EMP-00011) et Hedi (HR-EMP-00012) : sans entrée dans le barème,
+    ils tomberaient tous deux sur le gris par défaut, celui de HR-EMP-00007."""
+
+    def test_salma_a_sa_couleur(self):
+        self.assertEqual(compute_tache_color(_tache(custom_choix_du_staff="HR-EMP-00011")), "#0F766E")
+
+    def test_hedi_a_sa_couleur(self):
+        self.assertEqual(compute_tache_color(_tache(custom_choix_du_staff="HR-EMP-00012")), "#8B4513")
+
+    def test_aucune_couleur_du_bareme_n_est_partagee(self):
+        from customization_app.api import STAFF_COLORS, STATUS_COLORS
+        couleurs = [c.lower() for c in STAFF_COLORS.values()]
+        couleurs += [c.lower() for c in STATUS_COLORS.values()] + [PARTNER_COLOR.lower()]
+        # le gris de HR-EMP-00007 est aussi le défaut : c'est le seul doublon toléré
+        self.assertEqual(len(couleurs), len(set(couleurs)))
+        self.assertNotIn(STAFF_COLORS["HR-EMP-00011"].lower(), (STAFF_COLOR_DEFAULT.lower(),))
+        self.assertNotIn(STAFF_COLORS["HR-EMP-00012"].lower(), (STAFF_COLOR_DEFAULT.lower(),))

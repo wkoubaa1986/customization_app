@@ -29,6 +29,11 @@ STAFF_COLORS = {
     # Akram. Sans entrée ici, il tombait sur STAFF_COLOR_DEFAULT et se
     # confondait donc avec HR-EMP-00007, qui porte exactement ce gris.
     "HR-EMP-00010": "#FFD400",
+    # Arrivés le 28/09/2026. Deux teintes foncées absentes du barème : le vert
+    # est pris par « Completed », le cyan par le partenaire, le bleu clair par
+    # HR-EMP-00001 — d'où un sarcelle et un brun, lisibles avec du texte blanc.
+    "HR-EMP-00011": "#0F766E",   # Salma Ben Saïd — sarcelle
+    "HR-EMP-00012": "#8B4513",   # Hedi Ibidhi — brun
 }
 STAFF_COLOR_DEFAULT = "#888c89"
 STATUS_COLORS = {"Completed": "#32CD32", "Cancelled": "#DCDCDC"}
