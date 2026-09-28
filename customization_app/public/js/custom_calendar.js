@@ -86,11 +86,6 @@ frappe.views.CalendarViewList = class CalendarViewList extends frappe.views.Cale
                 if (me.list_view.calendar_name === 'Calendrier de travail') {
 
                     let originalColor = event.backgroundColor || '#FF6347'; 
-                    if (originalColor === '#AA00AA') {
-                        // If the background color is '#AA00AA', make the text white
-                        // console.log("Applying white text color for event:", event.id);
-                        element.css("color", "#ffffff");  // Set text color to white
-                    }
                     element.css({
                         "border-color": originalColor,  // Green border color
                         "border-width": "3px",  // Thicker border (3px)
@@ -136,6 +131,11 @@ frappe.views.CalendarViewList = class CalendarViewList extends frappe.views.Cale
                             "background-color": originalColor, 
                         });
                     }
+                    // Texte lisible : Frappe choisit blanc ou noir d'après la couleur PLEINE de
+                    // l'employé, mais le fond est rendu translucide juste au-dessus (opacité
+                    // 0,55) — du blanc sur un pastel devenait illisible. On décide d'après
+                    // la couleur réellement affichée (mélangée au blanc de la page).
+                    element.css({ "color": texteLisible(originalColor), "font-weight": "600" });
                     let tooltipParts = [];
                     const defaultRapport = "Indiquez vos remarques sur l'intervention et le client:";
                     if (event.title) tooltipParts.push(`${event.title}`);
@@ -248,6 +248,23 @@ frappe.views.CalendarViewList = class CalendarViewList extends frappe.views.Cale
 };
 
 // Helper function to convert hex to rgba with given opacity
+// Couleur de texte (sombre ou blanc) pour un fond hex ou rgba(r, g, b, a) posé sur
+// une page blanche : l'alpha est mélangé au blanc avant de juger la luminosité (YIQ).
+function texteLisible(couleur) {
+    let r = 255, g = 255, b = 255, a = 1;
+    const m = String(couleur || "").match(/^rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)$/);
+    if (m) {
+        r = +m[1]; g = +m[2]; b = +m[3]; a = m[4] === undefined ? 1 : +m[4];
+    } else if (/^#[0-9a-f]{6}$/i.test(couleur || "")) {
+        r = parseInt(couleur.slice(1, 3), 16);
+        g = parseInt(couleur.slice(3, 5), 16);
+        b = parseInt(couleur.slice(5, 7), 16);
+    }
+    const mix = (c) => c * a + 255 * (1 - a);
+    const yiq = (mix(r) * 299 + mix(g) * 587 + mix(b) * 114) / 1000;
+    return yiq >= 128 ? "#111827" : "#ffffff";
+}
+
 function hexToRgba(hex, opacity) {
     // Ensure it's a valid hex color
     if (hex.charAt(0) === '#') {
