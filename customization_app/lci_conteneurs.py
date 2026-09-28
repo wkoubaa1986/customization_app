@@ -322,6 +322,57 @@ def plan_enregistre(doc):
             "capacite": flt(entete.get("capacite")) or capacite()}
 
 
+def plan_pour_dialogue(doc):
+    """Le plan APPLIQUÉ, dans la forme de `plan_auto`, pour rouvrir le dialogue
+    sans rien recalculer : un plan retouché à la main (lignes déplacées,
+    scindées, gabarits, dates) doit se retrouver tel qu'il a été enregistré.
+
+    Les lignes chargeables apparues depuis (ajoutées à la liste, ou dont le
+    volume vient d'être renseigné) ne sont pas dans le plan : elles sont mises
+    dans un conteneur SUPPLÉMENTAIRE plutôt que passées sous silence, et le
+    dialogue le signale. Rend None s'il n'y a pas de plan enregistré.
+    """
+    plan = plan_enregistre(doc)
+    if not plan["conteneurs"]:
+        return None
+    reparties = {l["row"] for c in plan["conteneurs"] for l in c["lignes"]}
+    sans_volume, ajoutees = [], []
+    for l in lignes_a_charger(doc):
+        if l["row"] in reparties:
+            continue
+        if flt(l["volume_unitaire"]) <= 0:
+            sans_volume.append({"row": l["row"], "libelle": l["libelle"], "qty": l["qty"]})
+        else:
+            ajoutees.append({
+                "row": l["row"], "libelle": l["libelle"], "qty": l["qty"],
+                "volume": round(l["qty"] * flt(l["volume_unitaire"]), 4),
+                "montant": round(l["qty"] * flt(l["montant_unitaire"]), 4),
+                "scinde": False,
+            })
+    if ajoutees:
+        plan["conteneurs"].append({
+            "no": len(plan["conteneurs"]) + 1, "type": plan["type"], "date": "",
+            "capacite": flt(plan["capacite"]),
+            "volume": round(sum(l["volume"] for l in ajoutees), 4),
+            "montant": round(sum(l["montant"] for l in ajoutees), 4),
+            "lignes": ajoutees,
+        })
+    plan["sans_volume"] = sans_volume
+    plan["ajoutees"] = len(ajoutees)
+    return plan
+
+
+@frappe.whitelist()
+def plan_courant(docname):
+    """Plan enregistré prêt pour le dialogue (cf. plan_pour_dialogue). N'écrit rien."""
+    _guard()
+    doc = frappe.get_doc(DOCTYPE, docname)
+    plan = plan_pour_dialogue(doc)
+    if plan:
+        plan["devise"] = doc.devise or "USD"
+    return plan
+
+
 def ecrire_feuille(wb, doc, plan=None):
     """Ajoute au classeur `wb` l'onglet du plan de chargement. Rend la feuille.
 

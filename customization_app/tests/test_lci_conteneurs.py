@@ -116,6 +116,7 @@ class TestGabaritsMelanges(unittest.TestCase):
 class Ligne:
     def __init__(self, name, code, qty, volume_ligne, prix, parts, decision=""):
         self.name = name
+        self.idx = 0
         self.item_code = code
         self.item_name = code
         self.item_name_traduit = ""
@@ -187,6 +188,52 @@ class TestPlanRelu(unittest.TestCase):
 
     def test_sans_plan_enregistre_rien_a_montrer(self):
         self.assertEqual(C.plan_enregistre(Doc({}, []))["conteneurs"], [])
+
+
+class TestPlanReluPourLeDialogue(unittest.TestCase):
+    """Rouvrir le dialogue ne recalcule plus : il repart du plan appliqué.
+    Ce qui a été ajouté depuis n'est pas perdu pour autant."""
+
+    def _doc(self, extra=()):
+        entete = {"type": "40' HC", "taux": 0.9, "capacite": 68.4, "conteneurs": [
+            {"no": 1, "type": "20'", "capacite": 29.7, "date": "2026-10-05"},
+            {"no": 2, "type": "40' HC", "capacite": 68.4}]}
+        return Doc(entete, [
+            Ligne("a", "ART-1", 100, 50.0, 2.0, [{"no": 1, "qty": 40}, {"no": 2, "qty": 60}]),
+            Ligne("b", "ART-2", 10, 5.0, 3.0, [{"no": 2, "qty": 10}]),
+        ] + list(extra))
+
+    def test_sans_plan_rien_a_relire(self):
+        self.assertIsNone(C.plan_pour_dialogue(Doc({}, [])))
+
+    def test_le_plan_revient_tel_quel_avec_gabarits_et_dates(self):
+        p = C.plan_pour_dialogue(self._doc())
+        self.assertEqual([c["type"] for c in p["conteneurs"]], ["20'", "40' HC"])
+        self.assertEqual(p["conteneurs"][0]["date"], "2026-10-05")
+        self.assertEqual(p["conteneurs"][0]["lignes"][0]["qty"], 40)
+        self.assertTrue(p["conteneurs"][0]["lignes"][0]["scinde"])
+        self.assertEqual(p["ajoutees"], 0)
+        self.assertEqual(p["sans_volume"], [])
+
+    def test_une_ligne_ajoutee_depuis_part_dans_un_conteneur_de_plus(self):
+        p = C.plan_pour_dialogue(self._doc([Ligne("c", "ART-3", 10, 5.0, 1.0, None)]))
+        self.assertEqual(len(p["conteneurs"]), 3)
+        c3 = p["conteneurs"][2]
+        self.assertEqual(c3["no"], 3)
+        self.assertEqual(c3["type"], "40' HC")          # le gabarit par défaut du plan
+        self.assertEqual([l["row"] for l in c3["lignes"]], ["c"])
+        self.assertAlmostEqual(c3["volume"], 5.0)
+        self.assertEqual(p["ajoutees"], 1)
+
+    def test_une_ligne_sans_volume_est_signalee_pas_chargee(self):
+        p = C.plan_pour_dialogue(self._doc([Ligne("c", "ART-3", 10, 0.0, 1.0, None)]))
+        self.assertEqual(len(p["conteneurs"]), 2)
+        self.assertEqual([l["row"] for l in p["sans_volume"]], ["c"])
+
+    def test_une_ligne_abandonnee_depuis_ne_revient_pas(self):
+        p = C.plan_pour_dialogue(self._doc([Ligne("c", "ART-3", 10, 5.0, 1.0, None, "Abandonné")]))
+        self.assertEqual(len(p["conteneurs"]), 2)
+        self.assertEqual(p["ajoutees"], 0)
 
 
 class TestDatesDeDepart(unittest.TestCase):

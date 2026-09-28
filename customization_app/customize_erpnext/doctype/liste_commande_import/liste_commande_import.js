@@ -2434,33 +2434,43 @@ async function lci_conteneurs_dialog(frm) {
     title: __("Répartition en conteneurs"),
     size: "extra-large",
     fields: [{ fieldtype: "HTML", fieldname: "zone" }],
-    primary_action_label: __("Appliquer la répartition"),
-    primary_action: async () => {
-      if (!etat.plan) return;
-      // conteneurs vidés à la main : on les retire et on renumérote, sinon la
-      // liste porterait un « C3 » qui ne contient rien.
-      const pleins = etat.plan.conteneurs.filter((c) => (c.lignes || []).length);
-      pleins.forEach((c, i) => (c.no = i + 1));
-      etat.plan.conteneurs = pleins;
-      const r = await frappe.call({
-        method: "customization_app.lci_conteneurs.appliquer_plan",
-        args: { docname: frm.doc.name, plan: JSON.stringify(etat.plan) },
-        freeze: true,
-        freeze_message: __("Écriture du plan de chargement…"),
-      });
-      d.hide();
-      await frm.reload_doc();
-      lci_render_table(frm);
-      lci_render_conteneurs(frm);
-      const m = r.message || {};
-      frappe.show_alert({
-        message: __("{0} conteneur(s) enregistré(s) — {1}.",
-                    [m.nb_conteneurs, m.gabarits || ""]),
-        indicator: "green",
-      });
-    },
+    // « Enregistrer » écrit le plan et laisse le dialogue ouvert : on peut sauver
+    // en cours de route sans perdre la main. « Enregistrer et fermer » fait de même
+    // puis referme. Dans les deux cas, rouvrir le dialogue repart du plan écrit.
+    primary_action_label: __("Enregistrer et fermer"),
+    primary_action: () => enregistrer(true),
+    secondary_action_label: __("💾 Enregistrer"),
+    secondary_action: () => enregistrer(false),
   });
   const $z = d.fields_dict.zone.$wrapper;
+
+  async function enregistrer(fermer) {
+    if (!etat.plan) return;
+    // conteneurs vidés à la main : on les retire et on renumérote, sinon la
+    // liste porterait un « C3 » qui ne contient rien.
+    const pleins = etat.plan.conteneurs.filter((c) => (c.lignes || []).length);
+    pleins.forEach((c, i) => (c.no = i + 1));
+    etat.plan.conteneurs = pleins;
+    etat.types = pleins.map((c) => c.type || etat.type);
+    etat.dates = pleins.map((c) => c.date || "");
+    const r = await frappe.call({
+      method: "customization_app.lci_conteneurs.appliquer_plan",
+      args: { docname: frm.doc.name, plan: JSON.stringify(etat.plan) },
+      freeze: true,
+      freeze_message: __("Écriture du plan de chargement…"),
+    });
+    if (fermer) d.hide();
+    await frm.reload_doc();
+    lci_render_table(frm);
+    lci_render_conteneurs(frm);
+    if (!fermer) render();
+    const m = r.message || {};
+    frappe.show_alert({
+      message: __("{0} conteneur(s) enregistré(s) — {1}.",
+                  [m.nb_conteneurs, m.gabarits || ""]),
+      indicator: "green",
+    });
+  }
 
   function recalculer_totaux() {
     etat.plan.conteneurs.forEach((c) => {
@@ -2476,15 +2486,8 @@ async function lci_conteneurs_dialog(frm) {
     });
   }
 
-  async function calculer() {
-    const r = await frappe.call({
-      method: "customization_app.lci_conteneurs.plan_auto",
-      args: { docname: frm.doc.name, type_conteneur: etat.type, taux: etat.taux,
-              types: JSON.stringify(etat.types), dates: JSON.stringify(etat.dates) },
-      freeze: true,
-      freeze_message: __("Calcul du chargement…"),
-    });
-    etat.plan = r.message || { conteneurs: [], sans_volume: [] };
+  function adopter(plan) {
+    etat.plan = plan || { conteneurs: [], sans_volume: [] };
     etat.coches.clear();
     etat.types = (etat.plan.conteneurs || []).map((c) => c.type || etat.type);
     etat.dates = (etat.plan.conteneurs || []).map((c) => c.date || "");
@@ -2498,6 +2501,40 @@ async function lci_conteneurs_dialog(frm) {
       };
     }));
     render();
+  }
+
+  async function calculer() {
+    const r = await frappe.call({
+      method: "customization_app.lci_conteneurs.plan_auto",
+      args: { docname: frm.doc.name, type_conteneur: etat.type, taux: etat.taux,
+              types: JSON.stringify(etat.types), dates: JSON.stringify(etat.dates) },
+      freeze: true,
+      freeze_message: __("Calcul du chargement…"),
+    });
+    adopter(r.message);
+  }
+
+  // À l'ouverture : le plan ENREGISTRÉ s'il existe, sinon un calcul. Recalculer
+  // de zéro effaçait chaque fois les déplacements faits à la main.
+  async function charger() {
+    const r = await frappe.call({
+      method: "customization_app.lci_conteneurs.plan_courant",
+      args: { docname: frm.doc.name },
+      freeze: true,
+      freeze_message: __("Lecture du plan enregistré…"),
+    });
+    const plan = r.message;
+    if (!plan) { await calculer(); return; }
+    etat.type = plan.type || etat.type;
+    etat.taux = flt(plan.taux) || etat.taux;
+    adopter(plan);
+    if (plan.ajoutees) {
+      frappe.show_alert({
+        message: __("{0} ligne(s) ajoutée(s) depuis le dernier plan : placée(s) dans C{1}.",
+                    [plan.ajoutees, plan.conteneurs.length]),
+        indicator: "orange",
+      });
+    }
   }
 
   function lci_ct_ajouter() {
@@ -2786,7 +2823,7 @@ async function lci_conteneurs_dialog(frm) {
   }
 
   d.show();
-  await calculer();
+  await charger();
 }
 
 // ------------------------------------- onglet « Conteneurs » du formulaire
