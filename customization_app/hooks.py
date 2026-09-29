@@ -266,6 +266,13 @@ doc_events = {
         "on_submit": "customization_app.commande_alertes.on_payment_entry_change",
         "on_cancel": "customization_app.commande_alertes.on_payment_entry_change",
     },
+    # Partage avec le partenaire à la création, retrait à la validation — avec
+    # ignore_share_permission, ce que les deux Server Scripts remplacés (éteints
+    # par patch) ne pouvaient pas faire : un Maintenance Manager ne validait plus.
+    "Liste Appelle Entretien": {
+        "after_insert": "customization_app.partage_partenaire.partager",
+        "on_submit": "customization_app.partage_partenaire.retirer_partages",
+    },
 }
 
 # Scheduled Tasks
