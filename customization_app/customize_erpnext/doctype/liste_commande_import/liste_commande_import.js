@@ -2468,8 +2468,12 @@ async function lci_conteneurs_dialog(frm) {
   let dernier_ajout = null;   // conteneur à mettre en évidence après un ajout
   let dernier_coche = null;   // position DOM du dernier clic : Maj+clic coche toute la plage
   let glisse = null;          // {ci, li} de la part en cours de glisser-déposer
-  // miroir de TYPES dans lci_conteneurs.py — un gabarit inconnu du serveur retombe sur le 40' HC
-  const LCI_GABARITS = ["20'", "40'", "40' HC", "45' HC"];
+  // miroir de TYPES / TAUX dans lci_conteneurs.py (cubage géométrique en m³) — un
+  // gabarit inconnu du serveur retombe sur le 40' HC, ici aussi.
+  const LCI_TYPES = { "20'": 33, "40'": 67, "40' HC": 76, "45' HC": 86 };
+  const LCI_GABARITS = Object.keys(LCI_TYPES);
+  const lci_ct_capacite = (type, taux) =>
+    Math.round((LCI_TYPES[type] || LCI_TYPES["40' HC"]) * (flt(taux) || 0.9) * 1000) / 1000;
   const lci_cap = (c) => flt(c && c.capacite) || flt((etat.plan || {}).capacite);
   // photo + nom par ligne, lus sur le document : un déplacement ou une scission
   // ne transporte que la référence de ligne, la fiche se retrouve ici.
@@ -2595,7 +2599,7 @@ async function lci_conteneurs_dialog(frm) {
 
   function lci_ct_ajouter() {
     const c = { no: etat.plan.conteneurs.length + 1, type: etat.type, date: "",
-                capacite: flt(etat.plan.capacite), volume: 0, montant: 0, lignes: [] };
+                capacite: lci_ct_capacite(etat.type, etat.taux), volume: 0, montant: 0, lignes: [] };
     etat.plan.conteneurs.push(c);
     etat.types.push(etat.type);
     etat.dates.push("");
@@ -2603,14 +2607,33 @@ async function lci_conteneurs_dialog(frm) {
     return c;
   }
 
+  // Retirer un conteneur ne recalcule plus rien (le recalcul effaçait tout le
+  // travail de répartition) : ses lignes rejoignent le conteneur voisin, en bloc.
   function lci_ct_supprimer(ci) {
-    if (etat.plan.conteneurs.length <= 1) {
+    const conteneurs = etat.plan.conteneurs;
+    if (conteneurs.length <= 1) {
       frappe.show_alert({ message: __("Il faut au moins un conteneur."), indicator: "orange" });
       return;
     }
-    etat.types.splice(ci, 1);
-    etat.dates.splice(ci, 1);
-    calculer();   // ses lignes doivent retrouver une place : on recalcule
+    const c = conteneurs[ci];
+    const retirer = () => {
+      conteneurs.splice(ci, 1);
+      etat.types.splice(ci, 1);
+      etat.dates.splice(ci, 1);
+      conteneurs.forEach((x, i) => (x.no = i + 1));
+      etat.coches.clear();
+      recalculer_totaux();
+      render();
+    };
+    const n = (c.lignes || []).length;
+    if (!n) { retirer(); return; }
+    const dest = ci > 0 ? ci - 1 : 1;
+    frappe.confirm(
+      __("C{0} contient {1} ligne(s) : les envoyer dans C{2}, puis retirer C{0} ?", [c.no, n, conteneurs[dest].no]),
+      () => {
+        lci_ct_deplacer_groupe(conteneurs, c.lignes.map((_l, li) => ({ ci, li })), dest);
+        retirer();
+      });
   }
 
   function deplacer_groupe(items, dest) {
@@ -2829,18 +2852,34 @@ async function lci_conteneurs_dialog(frm) {
       <div class="lci-ct-wrap">${blocs || `<div style="padding:20px;text-align:center;color:#8a93a0;">${
         __("Aucune ligne à charger (lignes abandonnées ou sans quantité).")}</div>`}</div>`);
 
-    $z.find("#lci-ct-type").on("change", function () { etat.type = this.value; calculer(); });
+    // Gabarit par défaut, remplissage, gabarit d'un conteneur : tout se change EN
+    // PLACE. Un recalcul effaçait la répartition faite à la main ; un conteneur
+    // devenu trop petit se voit (barre rouge), c'est à l'utilisateur de trancher.
+    $z.find("#lci-ct-type").on("change", function () {
+      etat.type = this.value;                       // ne vaut que pour les prochains conteneurs
+      etat.plan.type = etat.type;
+      etat.plan.capacite = lci_ct_capacite(etat.type, etat.taux);
+    });
     $z.find("#lci-ct-taux").on("change", function () {
       etat.taux = Math.min(1, Math.max(0.5, flt(this.value) / 100));
-      calculer();
+      etat.plan.taux = etat.taux;
+      etat.plan.capacite = lci_ct_capacite(etat.type, etat.taux);
+      etat.plan.conteneurs.forEach((c) => (c.capacite = lci_ct_capacite(c.type || etat.type, etat.taux)));
+      render();
     });
-    $z.find("#lci-ct-calc").on("click", calculer);
+    $z.find("#lci-ct-calc").on("click", () => {
+      frappe.confirm(
+        __("Recalculer repart de zéro : la répartition faite à la main est perdue (gabarits et dates sont gardés). Continuer ?"),
+        calculer);
+    });
     $z.find("#lci-ct-add").on("click", () => { lci_ct_ajouter(); render(); });
     $z.find(".lci-ct-gab").on("change", function () {
-      // changer un gabarit rebat les cartes en aval : on relance le calcul,
-      // sinon les lignes resteraient dans un conteneur devenu trop petit.
-      etat.types[cint($(this).data("ci"))] = this.value;
-      calculer();
+      const ci = cint($(this).data("ci"));
+      etat.types[ci] = this.value;
+      const c = etat.plan.conteneurs[ci];
+      c.type = this.value;
+      c.capacite = lci_ct_capacite(this.value, etat.taux);
+      render();
     });
     $z.find(".lci-ct-date").on("change", function () {
       // la date ne change pas le chargement : on l'inscrit sans tout recalculer
