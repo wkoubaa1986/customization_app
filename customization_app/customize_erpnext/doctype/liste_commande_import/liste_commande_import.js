@@ -2698,6 +2698,9 @@ async function lci_conteneurs_dialog(frm) {
   }
 
   function render() {
+    // Le dialogue est redessiné en entier à chaque geste : sans cela, déplacer
+    // une ligne au fond de la liste ramenait la vue tout en haut à chaque fois.
+    const defilement = $z.find(".lci-ct-wrap").scrollTop() || 0;
     const plan = etat.plan || { conteneurs: [], sans_volume: [], capacite: 0 };
     const vol_total = plan.conteneurs.reduce((a, c) => a + flt(c.volume), 0);
     const mnt_total = plan.conteneurs.reduce((a, c) => a + flt(c.montant), 0);
@@ -2891,6 +2894,7 @@ async function lci_conteneurs_dialog(frm) {
     $z.find(".lci-ct-del").on("click", function () { lci_ct_supprimer(cint($(this).data("ci"))); });
     $z.find("#lci-ct-vol").on("click", () => lci_volumes_dialog(frm, calculer));
 
+    $z.find(".lci-ct-wrap").scrollTop(defilement);   // on reste là où on travaillait
     // un conteneur qui vient de naître se voit : on l'amène à l'écran
     if (dernier_ajout) {
       const el = $z.find(`.lci-ct[data-no="${dernier_ajout}"]`).get(0);
