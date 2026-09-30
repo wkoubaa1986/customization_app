@@ -591,6 +591,7 @@ frappe.provide("frappe.views");
         "Main d'œuvre sans tâche": "rouge",
         "Livraison sans tâche": "rouge",
         "Tâche terminée, commande non soldée": "orange",
+        "Livraison partielle, dette surévaluée": "orange",
     };
     // « Commande annulée avec tâche Tache-XXXXX » porte le nom de la tâche : la couleur
     // se résout par PRÉFIXE (miroir de commande_alertes.couleur_du_motif).

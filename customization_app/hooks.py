@@ -209,13 +209,25 @@ doc_events = {
         "after_delete": "customization_app.commande_alertes.on_tache_change",
     },
     "Delivery Note": {
+        # Échange « E-… » : la pièce remise sort par sa propre ligne à 0 DT,
+        # posée avant la validation ERPNext (qui la complète) …
+        "before_validate": "customization_app.retour_echange.poser_composants",
+        # … et remise à 0 DT après ; les packed items du bundle d'échange
+        # (pièce reprise à −1, pièce remise) sont retirés : le stock ne doit
+        # bouger qu'une fois, par la ligne.
+        "validate": "customization_app.retour_echange.retirer_pieces_reprises",
         # Après update_prevdoc_status d'ERPNext : la commande passe à 100 %
         # livré si ses BL validés couvrent son TTC, ce que le calcul standard
         # sur les quantités rate en cas d'échange d'article.
         "on_submit": [
             "customization_app.per_delivered_montant.on_delivery_note_change",
             "customization_app.commande_alertes.on_delivery_note_change",
+            # Un BL d'échange (bundle « E-… » à ligne négative) fait rentrer la
+            # pièce reprise par un BL retour créé et validé ici même.
+            "customization_app.retour_echange.on_submit_bl",
         ],
+        # Annuler l'échange annule sa reprise ; la reprise ne s'annule pas seule.
+        "before_cancel": "customization_app.retour_echange.before_cancel_bl",
         "on_cancel": [
             "customization_app.api.on_delivery_note_cancel",
             "customization_app.per_delivered_montant.on_delivery_note_change",
@@ -249,7 +261,15 @@ doc_events = {
     # Numérotation auto de la facture (remplace le Server Script « Generation N Facture »).
     "Sales Invoice": {
         "before_insert": "customization_app.facturation_numbering.set_numero_facture",
-        "validate": "customization_app.ristourne_facture.apply_order_discounts",
+        # Lignes composants d'un échange : marque reprise du BL avant le
+        # contrôle « Commande client requise » (SalesInvoiceEchange).
+        "before_validate": "customization_app.retour_echange.marquer_composants_facture",
+        "validate": [
+            "customization_app.ristourne_facture.apply_order_discounts",
+            # La facture reprend les lignes du BL d'échange : packed items du
+            # bundle retirés, lignes composants remises à 0 DT comme sur le BL.
+            "customization_app.retour_echange.retirer_pieces_reprises",
+        ],
         # Annuler une facture rend le paiement à la ou aux commandes qui l'ont
         # générée, au prorata de leurs lignes. Le plan se calcule AVANT
         # l'annulation (les affectations existent encore) et s'applique APRÈS
@@ -374,6 +394,7 @@ doc_events = {
 
 # Load my JS globally in the Desk (ERPNext admin interface)
 app_include_js = [_js("customer_quick_entry.js"),
+                  _js("delivery_note_echange.js"),
                   _js("caisse_impayes.js"),
                   _js("caisse_bascule_pas_paye.js"),
                   _js("custom_calendar.js"),
@@ -382,6 +403,13 @@ app_include_js = [_js("customer_quick_entry.js"),
                   _js("buying_item_query_override.js"),
                   _js("calendrier_rdv_button.js"),
                   _js("sales_order_avoir.js"),
+                  # Livraison partielle : bandeau livré / réglé / dette réelle et bouton
+                  # « Régulariser sur le livré » (livraison_partielle.py).
+                  _js("sales_order_livraison_partielle.js"),
+                  # Liste des commandes : bouton « Livraisons partielles » — toutes
+                  # les commandes livrées en partie, dette surévaluée ou non, avec
+                  # le même bouton « Régulariser » que la fiche.
+                  _js("sales_order_list_livraisons_partielles.js"),
                   _js("tache_liste_groupe.js"),
                   # « Ma journée » : la fenêtre où chacun termine ses
                   # interventions du jour, depuis la liste ou le calendrier des
@@ -429,7 +457,11 @@ override_doctype_class = {
 	"Customer": "customization_app.customization.SynchroCustomer",
     "Item": "customization_app.customization.CustomItem",
     "Stock Ledger Entry": "customization_app.customization.CustomStockLedgerEntry",
-    "Item Price": "customization_app.customization.ItemPrice"
+    "Item Price": "customization_app.customization.ItemPrice",
+    # « Commande client requise » levé pour les BL retour d'échange et les
+    # lignes composants d'un échange (BL et facture).
+    "Delivery Note": "customization_app.retour_echange.DeliveryNoteEchange",
+    "Sales Invoice": "customization_app.retour_echange.SalesInvoiceEchange",
 }
 
 override_doctype_dashboards = {

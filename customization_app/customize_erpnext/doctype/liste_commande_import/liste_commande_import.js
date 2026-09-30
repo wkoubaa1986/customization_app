@@ -102,16 +102,16 @@ frappe.ui.form.on("Liste Commande Import", {
     frm.add_custom_button(__("🌐 Traduire tout vers ") + (frm.doc.langue_cible || "English"),
       () => lci_ai(frm, "ai_translate", null), __("IA"));
 
-    frm.add_custom_button(__("PDF à envoyer"), () => {
+    frm.add_custom_button(__("PDF à envoyer"), () => lci_traduire_puis(frm, () => {
       window.open(`/api/method/customization_app.liste_commande_import.download_pdf?docname=${encodeURIComponent(frm.doc.name)}`);
-    }, __(LCI_GRP_COTATION));
-    frm.add_custom_button(__("Excel à envoyer"), () => {
+    }), __(LCI_GRP_COTATION));
+    frm.add_custom_button(__("Excel à envoyer"), () => lci_traduire_puis(frm, () => {
       window.open(`/api/method/customization_app.liste_commande_import.download_excel?docname=${encodeURIComponent(frm.doc.name)}`);
-    }, __(LCI_GRP_COTATION));
+    }), __(LCI_GRP_COTATION));
 
     if (frm.doc.fichier_fournisseur) {
       frm.add_custom_button(__("📤 Renvoyer SON fichier annoté"),
-        () => lci_export_annote(frm), __(LCI_GRP_COTATION));
+        () => lci_traduire_puis(frm, () => lci_export_annote(frm)), __(LCI_GRP_COTATION));
     }
 
     frm.add_custom_button(__("🏭 Produits assemblables"), () => lci_estimation_dialog(frm));
@@ -556,6 +556,48 @@ async function lci_ai(frm, method, row_name) {
   }
 }
 
+// Les lignes qui partent chez le fournisseur sans désignation ni description
+// en langue cible : celles ajoutées après « Traduire tout » (variantes,
+// assemblables…) ou jamais traduites. L'export les enverrait en français.
+function lci_lignes_sans_traduction(doc) {
+  if (!doc.langue_cible || doc.langue_cible === "Français") return [];
+  const texte = (v) => (v || "").replace(/<[^>]*>/g, "").trim();
+  return (doc.articles || []).filter((r) =>
+    (texte(r.item_name) && !texte(r.item_name_traduit))
+    || (texte(r.description) && !texte(r.description_traduite)));
+}
+
+// Avant un export : traduit ce qui manque (même IA que « Traduire tout »),
+// recharge, puis lance l'export. Rien à traduire → export immédiat.
+async function lci_traduire_puis(frm, exporter) {
+  if (frm.is_dirty()) {
+    frappe.msgprint(__("Enregistrez d'abord le document (Ctrl+S) : l'export part de la version enregistrée."));
+    return;
+  }
+  const manquantes = lci_lignes_sans_traduction(frm.doc);
+  if (!manquantes.length) {
+    exporter();
+    return;
+  }
+  try {
+    const r = await frappe.call({
+      method: "customization_app.liste_commande_import.ai_translate",
+      args: { docname: frm.doc.name, row_names: JSON.stringify(manquantes.map((x) => x.name)) },
+      freeze: true,
+      freeze_message: __("Traduction de {0} ligne(s) sans désignation en {1} avant l'export…",
+        [manquantes.length, frm.doc.langue_cible]),
+    });
+    const n = (r.message?.updated || []).length;
+    frappe.show_alert({ message: __("{0} ligne(s) traduite(s) — export en cours", [n]), indicator: "green" });
+    await frm.reload_doc();
+    exporter();
+  } catch (err) {
+    console.error(err);
+    frappe.msgprint({ title: __("Traduction impossible"), indicator: "red",
+      message: __("L'export n'a pas été lancé : les lignes sans traduction partiraient en français. Réessayez, ou lancez « IA › Traduire tout ».") });
+  }
+}
+
 function lci_upload_image(frm, row) {
   if (frm.is_new()) {
     frappe.msgprint(__("Enregistrez d'abord le document pour joindre des images."));
@@ -736,7 +778,7 @@ function lci_sel_barre(frm) {
   $slot.html(`<span class="lci-sel-bar"><b>${__("{0} cochée(s)", [n])}</b>
     <button class="btn btn-xs btn-default" data-sel="dup" title="${__("Une copie de chaque ligne cochée, juste en dessous")}">⧉ ${__("Dupliquer")}</button>
     <button class="btn btn-xs btn-default" data-sel="copier" title="${__("Copier ces lignes vers une autre liste (brouillon existant ou nouvelle)")}">📋 ${__("Copier vers une liste…")}</button>
-    <button class="btn btn-xs btn-default" data-sel="desc" title="${__("Ajouter la même phrase à la description de chaque ligne cochée")}">📝 ${__("Ajouter au texte…")}</button>
+    <button class="btn btn-xs btn-default" data-sel="desc" title="${__("Ajouter la même phrase à la description ou à l'observation de chaque ligne cochée")}">📝 ${__("Ajouter au texte…")}</button>
     <button class="btn btn-xs btn-default" data-sel="aucune" title="${__("Tout décocher")}">✕</button></span>`);
   lci_neutraliser_submit($slot);
   $slot.find('[data-sel="dup"]').on("click", () => lci_dupliquer(frm, lci_rows(frm).filter((r) => sel.has(r.name))));
@@ -764,8 +806,10 @@ function lci_eval_num(txt) {
   return Math.round(v * 1e6) / 1e6;
 }
 
-// Ajoute une même phrase à la description des lignes cochées (fin ou tête du texte).
-// Une ligne qui contient déjà la phrase est laissée telle quelle : on peut rejouer sans doublon.
+// Ajoute une même phrase à la description des lignes cochées (fin ou tête du texte)
+// — ou à leur observation, ce qui part au fournisseur dans le fichier renvoyé
+// (demande 30/09). Une ligne qui contient déjà la phrase est laissée telle
+// quelle : on peut rejouer sans doublon.
 function lci_ajouter_texte(frm, rows) {
   if (!rows.length) return;
   const esc = frappe.utils.escape_html;
@@ -777,7 +821,7 @@ function lci_ajouter_texte(frm, rows) {
       { fieldname: "ou", label: __("Position"), fieldtype: "Select",
         options: ["À la fin", "En tête"].join("\n"), default: "À la fin" },
       { fieldname: "cible", label: __("Dans"), fieldtype: "Select",
-        options: ["Description", "Description traduite", "Les deux"].join("\n"), default: "Description" },
+        options: ["Description", "Description traduite", "Les deux", "Observation"].join("\n"), default: "Description" },
       { fieldname: "apercu", fieldtype: "HTML",
         options: `<div class="lci-gmeta">${rows.slice(0, 8).map((r) => esc(r.item_name || r.item_code || "?")).join(" · ")}${
           rows.length > 8 ? " …" : ""}</div>` },
@@ -789,10 +833,15 @@ function lci_ajouter_texte(frm, rows) {
       const html = lignes.map((l) => `<p>${esc(l)}</p>`).join("");
       const brut = lignes.join("\n");
       const en_tete = v.ou === "En tête";
+      const vers_desc = v.cible === "Description" || v.cible === "Les deux";
+      const vers_trad = v.cible === "Description traduite" || v.cible === "Les deux";
+      const vers_obs = v.cible === "Observation";
+      // texte brut (traduction, observation) : la phrase s'ajoute sur sa propre ligne
+      const ajouter_brut = (cur) => (!cur ? brut : en_tete ? brut + "\n" + cur : cur + "\n" + brut);
       let faites = 0, deja = 0;
       rows.forEach((r) => {
         let touche = false;
-        if (v.cible !== "Description traduite") {
+        if (vers_desc) {
           const cur = r.description || "";
           if (cur.includes(html)) deja += 1;
           else {
@@ -800,11 +849,18 @@ function lci_ajouter_texte(frm, rows) {
             touche = true;
           }
         }
-        if (v.cible !== "Description") {
+        if (vers_trad) {
           const cur = r.description_traduite || "";
           if (!cur.includes(brut)) {
-            frappe.model.set_value(r.doctype, r.name, "description_traduite",
-              !cur ? brut : en_tete ? brut + "\n" + cur : cur + "\n" + brut);
+            frappe.model.set_value(r.doctype, r.name, "description_traduite", ajouter_brut(cur));
+            touche = true;
+          }
+        }
+        if (vers_obs) {
+          const cur = r.observation || "";
+          if (cur.includes(brut)) deja += 1;
+          else {
+            frappe.model.set_value(r.doctype, r.name, "observation", ajouter_brut(cur));
             touche = true;
           }
         }

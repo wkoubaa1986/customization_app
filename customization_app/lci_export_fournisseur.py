@@ -38,6 +38,7 @@ from frappe.utils import flt, nowdate
 
 from customization_app.lci_observation import qty_retenue
 from customization_app.liste_commande_import import (
+    _strip_html,
     DOCTYPE,
     RTL_LANGS,
     _add_label,
@@ -441,6 +442,16 @@ def texte_additionnels(adds, qty_ret, labels):
     return f"{labels['additionnels']}: " + " ; ".join(morceaux)
 
 
+def designation_complete(r, adds, qty_ret, labels):
+    """Désignation + description détaillée + additionnels d'une ligne, telle
+    qu'elle part dans la cellule « Désignation » d'une ligne AJOUTÉE au
+    fichier du fournisseur (traduites si la traduction existe)."""
+    parties = [(r.item_name_traduit or r.item_name or "").strip(),
+               (r.description_traduite or _strip_html(r.description) or "").strip(),
+               texte_additionnels(adds, qty_ret, labels)]
+    return "\n".join(p for p in parties if p)
+
+
 def texte_observation(observation, adds, qty_ret, labels):
     parties = [(observation or "").strip(), texte_additionnels(adds, qty_ret, labels)]
     return "\n".join(p for p in parties if p)
@@ -706,7 +717,11 @@ def download_reponse_annotee(docname):
             if c_code:
                 ws.cell(row=ligne, column=c_code, value=r.item_code or "")
             if c_des:
-                d = ws.cell(row=ligne, column=c_des, value=r.item_name_traduit or r.item_name or "")
+                # Le fournisseur ne connaît pas cet article : sa cellule porte la
+                # désignation ET la description détaillée (en langue cible, comme
+                # le PDF/Excel à envoyer), plus les additionnels — sinon il ne
+                # sait pas ce qu'on lui demande (demande utilisateur 30/09).
+                d = ws.cell(row=ligne, column=c_des, value=designation_complete(r, adds, qty, L))
                 d.alignment = Alignment(wrap_text=True, vertical="center")
             if c_qty:
                 ws.cell(row=ligne, column=c_qty, value=qty or None)

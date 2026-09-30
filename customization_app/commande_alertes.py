@@ -16,6 +16,11 @@ Six situations se noient dans une liste de près de 10 000 commandes :
   Livraison Aramex sans bordereau       le colis est parti (BL validé) sur une
                                         commande Aramex non encore encaissée,
                                         et aucun bordereau n'est enregistré
+  Livraison partielle, dette surévaluée la commande est sortie en partie (BL),
+                                        et sa ligne « Dette non payée » dépasse
+                                        livré − réglé : la marchandise jamais
+                                        sortie est comptée comme une dette
+                                        (voir livraison_partielle.py)
 
 L'ordre du CASE fixe la priorité. Les recoupements sont marginaux par
 construction : « en retard » exige une tâche ouverte, les deux motifs « sans
@@ -54,6 +59,8 @@ import json
 import frappe
 
 from customization_app.per_delivered_montant import MARGE
+from customization_app.livraison_partielle import MOTIF as MOTIF_LIVRAISON_PARTIELLE
+from customization_app.livraison_partielle import SQL_CONDITION_MOTIF as _SQL_LIVRAISON_PARTIELLE
 
 CHAMP = "custom_anomalie"
 
@@ -107,6 +114,7 @@ COULEURS = {
     MOTIF_MAIN_OEUVRE: "rouge",
     MOTIF_LIVRAISON: "rouge",
     MOTIF_NON_SOLDEE: "orange",
+    MOTIF_LIVRAISON_PARTIELLE: "orange",
 }
 
 # Ordre d'affichage du champ Select, et donc du filtre de la liste.
@@ -116,6 +124,7 @@ MOTIFS = [
     MOTIF_MAIN_OEUVRE,
     MOTIF_LIVRAISON,
     MOTIF_NON_SOLDEE,
+    MOTIF_LIVRAISON_PARTIELLE,
 ]
 
 # Une page de liste Frappe affiche au plus 100 lignes.
@@ -225,6 +234,14 @@ _SQL_MOTIF = """
                  AND ({paiement_attente} OR NOT {paiement_quelconque})
             THEN %(motif_livraison)s
 
+            -- Commande sortie EN PARTIE dont la ligne « Dette non payée » compte
+            -- la marchandise jamais livrée comme une dette (30/09/2026). Avant
+            -- « non soldée », qui l'engloberait : ici on sait quoi faire — le
+            -- bouton « Régulariser sur le livré » de la fiche. Règle partagée
+            -- avec le bandeau : livraison_partielle.SQL_CONDITION_MOTIF.
+            WHEN {livraison_partielle}
+            THEN %(motif_livraison_partielle)s
+
             WHEN EXISTS (
                     SELECT 1 FROM `tabTache de travail` t
                     WHERE t.commande_client = so.name AND t.status = 'Completed')
@@ -246,6 +263,7 @@ _SQL_MOTIF = """
 _SQL_MOTIF = _SQL_MOTIF.format(paiement_dette=_PAIEMENT_DETTE,
                                paiement_attente=_PAIEMENT_ATTENTE,
                                paiement_quelconque=_PAIEMENT_QUELCONQUE,
+                               livraison_partielle=_SQL_LIVRAISON_PARTIELLE,
                                clause="{clause}")
 
 # Le fait « Livraison Aramex sans bordereau », calculé À CÔTÉ du motif (il
@@ -336,6 +354,7 @@ def _params(extra=None):
         "motif_main_oeuvre": MOTIF_MAIN_OEUVRE,
         "motif_livraison": MOTIF_LIVRAISON,
         "motif_non_soldee": MOTIF_NON_SOLDEE,
+        "motif_livraison_partielle": MOTIF_LIVRAISON_PARTIELLE,
         "motif_aramex_sans_bordereau": MOTIF_ARAMEX_SANS_BORDEREAU,
         "terms_aramex": PAYMENT_TERMS_ARAMEX,
         "compte_aramex": COMPTE_ARAMEX,
