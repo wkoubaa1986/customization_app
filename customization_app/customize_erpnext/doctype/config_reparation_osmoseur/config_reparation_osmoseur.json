@@ -1,0 +1,78 @@
+{
+ "actions": [],
+ "creation": "2026-10-01 10:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "responsables",
+  "machines_par_jour",
+  "duree_minutes",
+  "creneaux",
+  "horizon_jours"
+ ],
+ "fields": [
+  {
+   "fieldname": "responsables",
+   "fieldtype": "Table",
+   "label": "Responsables de réparation (dans l'ordre de priorité)",
+   "options": "Config Reparation Responsable",
+   "description": "À la clôture d'une réception, la tâche part au premier responsable disponible le lendemain, dans cet ordre. Un seul opérateur par jour."
+  },
+  {
+   "fieldname": "machines_par_jour",
+   "fieldtype": "Int",
+   "label": "Machines par jour (maxi)",
+   "default": "3"
+  },
+  {
+   "fieldname": "duree_minutes",
+   "fieldtype": "Int",
+   "label": "Durée d'une réparation (minutes)",
+   "default": "75"
+  },
+  {
+   "fieldname": "creneaux",
+   "fieldtype": "Data",
+   "label": "Heures des créneaux",
+   "default": "09:00,10:15,11:30",
+   "description": "Heures de début des tâches de la journée, séparées par des virgules (une par machine)."
+  },
+  {
+   "fieldname": "horizon_jours",
+   "fieldtype": "Int",
+   "label": "Horizon de recherche (jours)",
+   "default": "30"
+  }
+ ],
+ "issingle": 1,
+ "links": [],
+ "modified": "2026-10-01 10:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "Config Reparation Osmoseur",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "read": 1,
+   "role": "Sales User"
+  },
+  {
+   "read": 1,
+   "role": "Sales Manager"
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

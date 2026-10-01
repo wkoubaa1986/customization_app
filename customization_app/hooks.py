@@ -212,8 +212,13 @@ doc_events = {
             # livré, ce que le calcul d'anomalie doit voir.
             "customization_app.per_delivered_montant.on_tache_change",
             "customization_app.commande_alertes.on_tache_change",
+            # Atelier osmoseurs : la clôture de la dernière tâche liée valide le dossier.
+            "customization_app.reparation_osmoseur.on_tache_change",
         ],
-        "after_delete": "customization_app.commande_alertes.on_tache_change",
+        "after_delete": [
+            "customization_app.commande_alertes.on_tache_change",
+            "customization_app.reparation_osmoseur.on_tache_change",
+        ],
     },
     "Delivery Note": {
         # Échange « E-… » : la pièce remise sort par sa propre ligne à 0 DT,
@@ -638,6 +643,7 @@ scheduler_events = {
 # il faut donc le reposer à chaque migration. La fonction est idempotente.
 after_migrate = [
     "customization_app.patches.ensure_raccourci_commandes_a_traiter.execute",
+    "customization_app.patches.ensure_raccourci_reparation_osmoseurs.execute",  # "Selling", après "Commandes à traiter"
     # « Rapport Prime » dans l'onglet Banque (workspace importé par bank_retenue_sync).
     "customization_app.patches.ensure_raccourci_rapport_prime.execute",
     # « Transformation d’articles » dans l'espace Stock, après « Dashboard ».

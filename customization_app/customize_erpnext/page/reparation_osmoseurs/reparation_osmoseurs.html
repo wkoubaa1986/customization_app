@@ -1,0 +1,97 @@
+<div class="ro-page">
+  <style>
+    .ro-page { padding: 12px 16px; }
+    .ro-card { background: var(--card-bg,#fff); border: 1px solid var(--border-color,#e4e8ee);
+               border-radius: 12px; padding: 12px 14px; margin-bottom: 12px;
+               box-shadow: 0 1px 3px rgba(0,0,0,.05); }
+    .ro-kpis { display: flex; flex-wrap: wrap; gap: 10px; }
+    .ro-kpi { flex: 1 1 130px; border: 1px solid var(--border-color,#e4e8ee); border-radius: 10px;
+              padding: 8px 12px; background: var(--bg-light-gray,#f8fafc); cursor: pointer; }
+    .ro-kpi.actif { border-color: #0ea5e9; background: rgba(14,165,233,.08); }
+    .ro-kpi .v { font-size: 19px; font-weight: 700; line-height: 1.1; }
+    .ro-kpi .l { font-size: 11px; color: var(--text-muted,#6b7280); text-transform: uppercase;
+                 letter-spacing: .3px; font-weight: 600; }
+    .ro-filters { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: flex-end; }
+    .ro-field { display: flex; flex-direction: column; gap: 3px; }
+    .ro-field label { margin: 0; font-size: 11px; font-weight: 600; color: var(--text-muted,#6b7280);
+                      text-transform: uppercase; letter-spacing: .3px; }
+    .ro-field .form-control { width: 190px; height: 30px; font-size: 12.5px; }
+    .ro-actions { margin-left: auto; display: flex; gap: 8px; align-items: flex-end; }
+    .ro-alerte { background: #fff7ed; border: 1px solid #fdba74; color: #9a3412; border-radius: 10px;
+                 padding: 8px 12px; font-size: 12.5px; margin-bottom: 12px; }
+    .ro-table-wrap { overflow-x: auto; }
+    table.ro-tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+    table.ro-tbl th { text-align: left; padding: 7px 9px; background: var(--bg-light-gray,#f6f8fa);
+                      color: #6b7280; font-weight: 600; font-size: 10.5px; text-transform: uppercase;
+                      white-space: nowrap; border-bottom: 1px solid var(--border-color,#e4e8ee); }
+    table.ro-tbl td { padding: 8px 9px; border-bottom: 1px solid var(--border-color,#eef1f5); vertical-align: top; }
+    table.ro-tbl tr:hover > td { background: rgba(0,0,0,.02); }
+    table.ro-tbl tr.retard > td { background: rgba(249,115,22,.07); }
+    .ro-vignette { width: 56px; height: 56px; object-fit: cover; border-radius: 8px; border: 1px solid #e4e8ee;
+                   background: #f1f5f9; display: block; }
+    .ro-vignette.vide { display: flex; align-items: center; justify-content: center; color: #94a3b8; font-size: 20px; }
+    .ro-dossier { font-weight: 700; white-space: nowrap; }
+    .ro-sub { color: var(--text-muted,#6b7280); font-size: 11px; }
+    .ro-note { max-width: 260px; white-space: pre-wrap; font-size: 12px; color: #334155; }
+    .ro-badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; white-space: nowrap; }
+    .b-reception { background: #f1f5f9; color: #475569; }
+    .b-receptionnee { background: #fef3c7; color: #92400e; }
+    .b-planifiee { background: #dbeafe; color: #1e40af; }
+    .b-reparee { background: #dcfce7; color: #166534; }
+    .b-rendue { background: #e5e7eb; color: #374151; }
+    .ro-tache { display: block; font-size: 11.5px; white-space: nowrap; }
+    .ro-tache .st { font-weight: 600; }
+    .ro-tache .st.ok { color: #166534; } .ro-tache .st.open { color: #1e40af; } .ro-tache .st.ko { color: #991b1b; }
+    .ro-btns { display: flex; flex-direction: column; gap: 4px; }
+    .ro-btns .btn { white-space: nowrap; }
+    .ro-vide { text-align: center; color: #94a3b8; padding: 24px; }
+    .ro-slot { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid #eef1f5; }
+    .ro-slot .lbl { flex: 1; }
+    .ro-slot img { width: 64px; height: 64px; object-fit: cover; border-radius: 8px; border: 1px solid #e4e8ee; }
+    .ro-postit { display: inline-block; background: #fef08a; color: #713f12; font-weight: 800; padding: 8px 14px;
+                 border-radius: 4px; box-shadow: 1px 2px 4px rgba(0,0,0,.2); transform: rotate(-2deg); font-size: 14px;
+                 line-height: 1.5; margin: 6px 0; font-family: "Comic Sans MS", cursive, sans-serif; }
+    .ro-cmd-titre { font-weight: 700; margin-bottom: 6px; }
+    .ro-cmd-liste { max-height: 420px; overflow-y: auto; padding-right: 4px; }
+    .ro-cmd { border: 1px solid var(--border-color,#e4e8ee); border-radius: 10px; padding: 8px 10px; margin-bottom: 8px; cursor: pointer; }
+    .ro-cmd:hover { background: rgba(0,0,0,.02); }
+    .ro-cmd.garanti { border-color: #86efac; }
+    .ro-cmd.choisie { outline: 2px solid #0ea5e9; background: rgba(14,165,233,.06); }
+    .ro-cmd-tete { font-size: 12.5px; margin-bottom: 4px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+    .ro-cmd-art { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 2px 0; }
+    .ro-cmd-art.composant { padding-left: 18px; color: #475569; }
+    .ro-cmd-art img { width: 36px; height: 36px; object-fit: contain; border-radius: 6px; border: 1px solid #e4e8ee; background: #fff; }
+    .ro-cmd-noimg { width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center; color: #94a3b8; }
+  </style>
+
+  <div class="ro-card">
+    <div class="ro-kpis" id="ro-kpis"></div>
+  </div>
+
+  <div class="ro-card">
+    <div class="ro-filters">
+      <div class="ro-field"><label>Recherche</label>
+        <input type="text" class="form-control" id="ro-recherche" placeholder="dossier, client, tél, marque…"></div>
+      <div class="ro-field"><label>Responsable</label><select class="form-control" id="ro-responsable"><option value="">Tous</option></select></div>
+      <div class="ro-field"><label>&nbsp;</label>
+        <label class="ro-sub" style="text-transform:none;font-size:12px;cursor:pointer">
+          <input type="checkbox" id="ro-rendues"> Afficher les machines rendues</label></div>
+      <div class="ro-actions">
+        <button class="btn btn-default btn-sm" id="ro-config" style="display:none">⚙️ Responsables</button>
+        <button class="btn btn-default btn-sm" id="ro-rafraichir">🔄</button>
+        <button class="btn btn-primary btn-sm" id="ro-nouvelle">📷 Nouvelle réception</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="ro-alerte" id="ro-alerte" style="display:none"></div>
+
+  <div class="ro-card ro-table-wrap">
+    <table class="ro-tbl">
+      <thead><tr>
+        <th></th><th>Dossier</th><th>Client</th><th>Note</th><th>Statut</th><th>Réparation</th><th>Tâches</th><th></th>
+      </tr></thead>
+      <tbody id="ro-corps"></tbody>
+    </table>
+  </div>
+</div>

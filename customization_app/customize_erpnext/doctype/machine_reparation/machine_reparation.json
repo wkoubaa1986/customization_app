@@ -1,0 +1,250 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "OSM-.YYYY.-.####",
+ "creation": "2026-10-01 10:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "section_client",
+  "client",
+  "nom_client",
+  "tel",
+  "column_break_client",
+  "statut",
+  "section_reception",
+  "date_reception",
+  "note_reception",
+  "garantie",
+  "commande_garantie",
+  "column_break_reception",
+  "photo_arrivee",
+  "photo_post_it",
+  "dispense_post_it",
+  "date_cloture_reception",
+  "controle_ia_ok",
+  "controle_ia_resultat",
+  "section_reparation",
+  "responsable",
+  "nom_responsable",
+  "date_prevue",
+  "column_break_reparation",
+  "date_reparee",
+  "date_rendue",
+  "commande_client"
+ ],
+ "fields": [
+  {
+   "fieldname": "section_client",
+   "fieldtype": "Section Break",
+   "label": "Client et machine"
+  },
+  {
+   "fieldname": "client",
+   "fieldtype": "Link",
+   "label": "Client",
+   "options": "Customer",
+   "reqd": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "nom_client",
+   "fieldtype": "Data",
+   "label": "Nom du client",
+   "fetch_from": "client.customer_name",
+   "read_only": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "tel",
+   "fieldtype": "Data",
+   "label": "Téléphone"
+  },
+  {
+   "fieldname": "column_break_client",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "statut",
+   "fieldtype": "Select",
+   "label": "Statut",
+   "options": "Réception en cours\nRéceptionnée\nPlanifiée\nRéparée\nRendue au client",
+   "default": "Réception en cours",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_reception",
+   "fieldtype": "Section Break",
+   "label": "Réception"
+  },
+  {
+   "fieldname": "date_reception",
+   "fieldtype": "Datetime",
+   "label": "Reçue le",
+   "default": "Now"
+  },
+  {
+   "fieldname": "note_reception",
+   "fieldtype": "Small Text",
+   "label": "Note de réception",
+   "description": "Panne déclarée, accessoires laissés, remarques."
+  },
+  {
+   "fieldname": "garantie",
+   "fieldtype": "Select",
+   "label": "Garantie",
+   "options": "\nSous garantie\nHors garantie",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "description": "Décidé à la réception au vu des commandes du client sur les 13 derniers mois. Sous garantie = réparation gratuite, notée sur la tâche."
+  },
+  {
+   "fieldname": "commande_garantie",
+   "fieldtype": "Link",
+   "label": "Commande justifiant la garantie",
+   "options": "Sales Order"
+  },
+  {
+   "fieldname": "column_break_reception",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "photo_arrivee",
+   "fieldtype": "Attach Image",
+   "label": "Photo à l'arrivée"
+  },
+  {
+   "fieldname": "photo_post_it",
+   "fieldtype": "Attach Image",
+   "label": "Photo avec post-it"
+  },
+  {
+   "fieldname": "dispense_post_it",
+   "fieldtype": "Check",
+   "label": "Photo post-it dispensée (code superviseur)",
+   "read_only": 1,
+   "default": "0"
+  },
+  {
+   "fieldname": "date_cloture_reception",
+   "fieldtype": "Datetime",
+   "label": "Réception clôturée le",
+   "read_only": 1
+  },
+  {
+   "fieldname": "controle_ia_ok",
+   "fieldtype": "Check",
+   "label": "Contrôle IA des photos : conforme",
+   "read_only": 1,
+   "default": "0"
+  },
+  {
+   "fieldname": "controle_ia_resultat",
+   "fieldtype": "Small Text",
+   "label": "Contrôle IA des photos",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_reparation",
+   "fieldtype": "Section Break",
+   "label": "Réparation"
+  },
+  {
+   "fieldname": "responsable",
+   "fieldtype": "Link",
+   "label": "Responsable",
+   "options": "Employee",
+   "read_only": 1
+  },
+  {
+   "fieldname": "nom_responsable",
+   "fieldtype": "Data",
+   "label": "Nom du responsable",
+   "fetch_from": "responsable.employee_name",
+   "read_only": 1
+  },
+  {
+   "fieldname": "date_prevue",
+   "fieldtype": "Date",
+   "label": "Prévue le",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_reparation",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "date_reparee",
+   "fieldtype": "Datetime",
+   "label": "Réparée le",
+   "read_only": 1
+  },
+  {
+   "fieldname": "date_rendue",
+   "fieldtype": "Datetime",
+   "label": "Rendue le",
+   "read_only": 1
+  },
+  {
+   "fieldname": "commande_client",
+   "fieldtype": "Link",
+   "label": "Commande client",
+   "options": "Sales Order"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-10-01 10:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "Machine Reparation",
+ "naming_rule": "Expression (old style)",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Sales User",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Sales Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "nom_client",
+ "show_title_field_in_link": 1,
+ "track_changes": 1
+}
