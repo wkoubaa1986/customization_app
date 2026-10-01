@@ -1,0 +1,51 @@
+{
+ "actions": [],
+ "creation": "2026-10-02 09:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "item_code",
+  "item_name",
+  "qte_cible"
+ ],
+ "fields": [
+  {
+   "fieldname": "item_code",
+   "fieldtype": "Link",
+   "label": "Article",
+   "options": "Item",
+   "reqd": 1,
+   "in_list_view": 1,
+   "columns": 5
+  },
+  {
+   "fieldname": "item_name",
+   "fieldtype": "Data",
+   "label": "Désignation",
+   "fetch_from": "item_code.item_name",
+   "read_only": 1,
+   "in_list_view": 1,
+   "columns": 3
+  },
+  {
+   "fieldname": "qte_cible",
+   "fieldtype": "Float",
+   "label": "Quantité cible",
+   "reqd": 1,
+   "in_list_view": 1,
+   "columns": 2
+  }
+ ],
+ "links": [],
+ "modified": "2026-10-02 09:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "Stock Cible Ligne",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "istable": 1
+}

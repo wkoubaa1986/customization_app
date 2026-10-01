@@ -53,7 +53,10 @@ class StockEntrepots {
     if (!ctx.verification) r.find('[data-onglet="verif"]').remove();
     r.find("#se-s-reappro").on("click", (e) => { this.reappro = !this.reappro; $(e.currentTarget).toggleClass("on", this.reappro); this.chargerSolde(); });
     r.find("#se-s-aucun").on("click", () => { this.selSolde.clear(); this.peindreSolde(); });
+    r.find("#se-s-tout").on("click", () => { (this.solde ? this.solde.articles : []).forEach((a) => this.selSolde.add(a.item_code)); this.peindreSolde(); });
     r.find("#se-s-transferer").on("click", () => this.transfererSelection());
+    r.find("#se-s-vers-cible").on("click", () => this.ajouterSelectionAuCible());
+    r.find("#se-s-cible").on("click", () => this.ouvrirCible());
     r.find(".se-onglet").on("click", (e) => this.montrer($(e.currentTarget).attr("data-onglet")));
     this.peindreEntrepots();
 
@@ -126,7 +129,10 @@ class StockEntrepots {
   async chargerSolde() {
     const r = this.$r;
     const seuil = this.entrepot && this.ctx.seuils[this.entrepot];
-    r.find("#se-s-reappro").toggle(!!(seuil && this.ctx.responsable));
+    const cibleOk = !!(this.ctx.responsable && this.entrepot && this.entrepot !== this.ctx.magasin);
+    r.find("#se-s-reappro").toggle(!!((seuil || (this.ctx.cibles || []).includes(this.entrepot)) && this.ctx.responsable));
+    r.find("#se-s-cible").toggle(cibleOk).toggleClass("on", (this.ctx.cibles || []).includes(this.entrepot));
+    r.find("#se-s-cible-vue").hide(); r.find("#se-s-solde").show();
     if (!seuil) this.reappro = false;
     r.find("#se-s-reappro").toggleClass("on", this.reappro);
     const res = await this.appel("solde", "get_solde", { entrepot: this.entrepot || null,
@@ -151,7 +157,7 @@ class StockEntrepots {
         ${se_img(a.image)}
         <div class="txt"><div class="se-nom">${se_esc(a.item_name || a.item_code)}</div>
           <div class="se-code">${se_esc(a.item_code)}${a.zones ? ` · 📍 ${se_esc(a.zones)}` : ""}</div>
-          ${a.a_reappro ? `<span class="se-reappro">🔻 à réapprovisionner · seuil ${se_q(a.seuil)} · manque ${se_q(a.a_transferer)}</span>` : ""}
+          ${a.a_reappro ? `<span class="se-reappro">🔻 à réapprovisionner · ${a.cible != null ? `cible ${se_q(a.cible)}` : `seuil ${se_q(a.seuil)}`} · manque ${se_q(a.a_transferer)}</span>` : ""}
           ${tous ? `<div class="se-wh">${a.entrepots.map((e) => `<span class="${e.qte < 0 ? "neg" : ""}">${se_esc(e.libelle)} <b>${se_q(e.qte)}</b></span>`).join("")}</div>` : ""}
         </div>
         <div class="se-qte ${a.qte < 0 ? "neg" : ""}">${se_q(a.qte)}<small>${se_esc(a.uom || "")}</small></div>
@@ -163,6 +169,19 @@ class StockEntrepots {
     r.find("#se-s-liste [data-coche]").on("click", (e) => {
       e.stopPropagation();
       const c = $(e.currentTarget).closest(".se-art").attr("data-item");
+      const visibles = res.articles.slice(0, this.nSolde).map((a) => a.item_code);
+      const idx = visibles.indexOf(c);
+      if (e.shiftKey && this.dernierCoche != null && this.dernierCoche !== idx) {
+        // Maj + clic : toute la plage entre la dernière case cliquée et celle-ci prend l'état de celle-ci.
+        const coche = !this.selSolde.has(c);
+        const [d, f] = [Math.min(this.dernierCoche, idx), Math.max(this.dernierCoche, idx)];
+        visibles.slice(d, f + 1).forEach((code) => (coche ? this.selSolde.add(code) : this.selSolde.delete(code)));
+        window.getSelection && window.getSelection().removeAllRanges();
+        this.dernierCoche = idx;
+        this.peindreSolde();
+        return;
+      }
+      this.dernierCoche = idx;
       this.selSolde.has(c) ? this.selSolde.delete(c) : this.selSolde.add(c);
       $(e.currentTarget).toggleClass("on", this.selSolde.has(c)).text(this.selSolde.has(c) ? "✓" : "");
       $(e.currentTarget).closest(".se-art").toggleClass("sel", this.selSolde.has(c));
@@ -174,7 +193,86 @@ class StockEntrepots {
   majBarreSolde() {
     const n = this.selSolde.size, $b = this.$r.find("#se-s-barre");
     this.$r.find("#se-s-compte").text(`${n} article(s) coché(s)`);
-    n && this.onglet === "solde" && this.ctx.responsable ? $b.show() : $b.hide();
+    const feuilleCible = this.$r.find("#se-s-cible-vue").is(":visible");
+    n && this.onglet === "solde" && this.ctx.responsable && !feuilleCible ? $b.show() : $b.hide();
+  }
+
+  async ajouterSelectionAuCible() {
+    const items = Array.from(this.selSolde);
+    if (!items.length || !this.entrepot || this.entrepot === this.ctx.magasin) return;
+    const r = (await frappe.call({ method: SE_API + "ajouter_au_stock_cible", args: { entrepot: this.entrepot, items }, freeze: true })).message;
+    if (!(this.ctx.cibles || []).includes(this.entrepot)) (this.ctx.cibles = this.ctx.cibles || []).push(this.entrepot);
+    frappe.show_alert({ message: `🎯 ${r.ajoutes} article(s) ajouté(s) au stock cible (${r.total} au total) — réglez les quantités`, indicator: "green" }, 5);
+    this.selSolde.clear();
+    this.ouvrirCible();
+  }
+
+  /** Feuille « Stock cible » de l'entrepôt : quantité cible par article, manque, réassort en un geste. */
+  async ouvrirCible() {
+    const entrepot = this.entrepot, r = this.$r;
+    const d = (await frappe.call({ method: SE_API + "get_stock_cible", args: { entrepot } })).message;
+    const $v = r.find("#se-s-cible-vue");
+    r.find("#se-s-solde").hide(); $v.show();
+    this.selSolde.clear(); this.majBarreSolde();
+    const lignes = d.lignes.map((l) => Object.assign({}, l));
+    const ligne = (l) => `<div class="se-cb-ligne" data-item="${se_esc(l.item_code)}">${se_img(l.image)}
+        <div class="txt"><div class="se-nom" style="font-size:13.5px">${se_esc(l.item_name || l.item_code)}</div>
+          <div class="se-code">${se_esc(l.item_code)} · ici <b class="${l.qte < 0 ? "neg" : ""}">${se_q(l.qte)}</b> · ${se_esc(this.libelle(d.source))} ${se_q(l.qte_source)}</div></div>
+        <input type="number" inputmode="decimal" min="0" step="any" class="form-control c" value="${se_esc(l.qte_cible)}">
+        <div class="m ${l.manque > 0 ? "neg" : "pos"}">${l.manque > 0 ? `manque ${se_q(l.manque)}` : "✓"}</div>
+        <span class="x" data-enlever title="Retirer">✕</span></div>`;
+    const peindre = () => {
+      const n = lignes.filter((l) => l.manque > 0).length, u = lignes.reduce((s, l) => s + l.manque, 0);
+      $v.html(`<span class="se-retour" data-retour>← Solde</span>
+        <div class="se-card">
+          <div class="se-v-stock"><div class="t">🎯 Stock cible — ${se_esc(this.libelle(entrepot))}</div>
+            <div class="plan">Ce que ce stock doit contenir. Réassort depuis <b>${se_esc(this.libelle(d.source))}</b> : cible − stock actuel.</div></div>
+          <input type="search" class="form-control se-saisie" id="se-cb-recherche" style="margin-top:8px" placeholder="➕ Ajouter un article (nom ou code)…">
+          <div id="se-cb-trouves"></div>
+          <div id="se-cb-lignes" style="margin-top:6px">${lignes.map(ligne).join("") || `<div class="se-note" style="padding:10px 0">Aucun article : cherchez ci-dessus, ou cochez des articles dans le solde puis « Dans le stock cible ».</div>`}</div>
+          <div class="se-c-barre"><button type="button" class="btn btn-default" data-enregistrer>💾 Enregistrer</button>
+            <button type="button" class="btn btn-primary" data-reassort ${n ? "" : "disabled"}>🔁 Réassort (${n} art. · ${se_q(u)} u.)</button></div>
+        </div>`);
+      let t = null;
+      $v.find("#se-cb-recherche").on("input", (e) => { clearTimeout(t); const txt = e.currentTarget.value.trim(); t = setTimeout(async () => {
+        const tr = txt.length < 2 ? [] : (await frappe.call({ method: SE_API + "rechercher_articles", args: { txt, source: d.source, cible: entrepot } })).message;
+        const dans = new Set(lignes.map((l) => l.item_code));
+        $v.find("#se-cb-trouves").html(tr.map((a) => `<div class="se-z-ligne">${se_img(a.image)}<div style="flex:1;min-width:0"><div class="se-nom">${se_esc(a.item_name || a.item_code)}</div>
+            <div class="se-code">${se_esc(a.item_code)} · ici ${se_q(a.qte_cible)} · ${se_esc(this.libelle(d.source))} ${se_q(a.qte_source)}</div></div>
+            <span class="se-bt ${dans.has(a.item_code) ? "fait" : ""}" data-ajouter="${se_esc(a.item_code)}">${dans.has(a.item_code) ? "✓" : "＋"}</span></div>`).join(""));
+        $v.find("[data-ajouter]").on("click", (ev) => {
+          const a = tr.find((x) => x.item_code === $(ev.currentTarget).attr("data-ajouter"));
+          if (!a || dans.has(a.item_code)) return;
+          lignes.push({ item_code: a.item_code, item_name: a.item_name, image: a.image, uom: a.uom, qte_cible: Math.max(a.qte_cible, 1), qte: a.qte_cible, qte_source: a.qte_source, manque: 0 });
+          lignes.forEach((l) => { l.manque = Math.max(l.qte_cible - l.qte, 0); });
+          peindre(); $v.find("#se-cb-recherche").val(txt);
+        });
+      }, 250); });
+      $v.find("input.c").on("change", (e) => {
+        const l = lignes.find((x) => x.item_code === $(e.currentTarget).closest(".se-cb-ligne").attr("data-item"));
+        l.qte_cible = Math.max(0, +String(e.currentTarget.value).replace(",", ".") || 0); l.manque = Math.max(l.qte_cible - l.qte, 0); peindre();
+      });
+      $v.find("[data-enlever]").on("click", (e) => { const c = $(e.currentTarget).closest(".se-cb-ligne").attr("data-item"); lignes.splice(lignes.findIndex((x) => x.item_code === c), 1); peindre(); });
+      $v.find("[data-retour]").on("click", () => { $v.hide(); r.find("#se-s-solde").show(); this.chargerSolde(); });
+      const sauver = async () => {
+        const res = (await frappe.call({ method: SE_API + "definir_stock_cible", args: { entrepot, lignes: lignes.map((l) => ({ item_code: l.item_code, qte_cible: l.qte_cible })) }, freeze: true })).message;
+        if (!(this.ctx.cibles || []).includes(entrepot) && res.lignes.length) (this.ctx.cibles = this.ctx.cibles || []).push(entrepot);
+        return res;
+      };
+      $v.find("[data-enregistrer]").on("click", async () => { await sauver(); frappe.show_alert({ message: "Stock cible enregistré", indicator: "green" }, 3); });
+      $v.find("[data-reassort]").on("click", async () => {
+        const res = await sauver();
+        const aFaire = res.lignes.filter((l) => l.manque > 0);
+        if (!aFaire.length) return;
+        this.$r.find("#se-t-de").val(res.source); this.$r.find("#se-t-vers").val(entrepot);
+        this.panier = aFaire.map((l) => ({ item_code: l.item_code, item_name: l.item_name, image: l.image, uom: l.uom, qte: l.manque, qte_source: l.qte_source, qte_cible: l.qte }));
+        this.trouves = []; this.$r.find("#se-t-recherche").val("");
+        $v.hide(); r.find("#se-s-solde").show();
+        this.montrer("transfert"); this.peindreTrouves(); this.peindrePanier();
+        frappe.show_alert({ message: `🔁 Réassort préparé : ${aFaire.length} article(s) — vérifiez puis validez`, indicator: "blue" }, 5);
+      });
+    };
+    peindre();
   }
 
   /** Les articles cochés du solde partent dans le panier de l'onglet Transfert : Magasin → cet entrepôt,

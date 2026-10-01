@@ -1,0 +1,76 @@
+{
+ "actions": [],
+ "creation": "2026-10-02 09:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "entrepot",
+  "source",
+  "lignes"
+ ],
+ "fields": [
+  {
+   "fieldname": "entrepot",
+   "fieldtype": "Link",
+   "label": "Stock (entrepôt)",
+   "options": "Warehouse",
+   "reqd": 1,
+   "unique": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "source",
+   "fieldtype": "Link",
+   "label": "Approvisionné depuis",
+   "options": "Warehouse",
+   "description": "Vide = le Magasin du réglage."
+  },
+  {
+   "fieldname": "lignes",
+   "fieldtype": "Table",
+   "label": "Ce que ce stock doit contenir",
+   "options": "Stock Cible Ligne"
+  }
+ ],
+ "links": [],
+ "modified": "2026-10-02 09:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "Stock Cible",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "print": 1,
+   "email": 1,
+   "share": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "Responsable magasin",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "print": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "Stock User",
+   "read": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "autoname": "field:entrepot",
+ "naming_rule": "By fieldname",
+ "track_changes": 1
+}

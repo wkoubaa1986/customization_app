@@ -97,6 +97,9 @@ class TestCircuit(unittest.TestCase):
             for n in crees:
                 v = frappe.get_doc(S.VERIF, n)
                 self.assertTrue(v.tache_employe and v.tache_responsable)       # les deux tâches, créées d'avance
+                tache = frappe.get_doc("Tache de travail", v.tache_employe)
+                self.assertIn("Vérification stock", tache.titre or "")         # pas de « null » au calendrier
+                self.assertEqual((tache.ends_on - tache.starts_on).total_seconds(), 3600)   # 1 heure par défaut
                 self.assertFalse(v.lignes)                                     # photo du stock au premier comptage
             for l in actives:
                 self.assertTrue(frappe.db.exists(S.VERIF, {"entrepot": l["entrepot"], "date": S.prochaine_date(l["jour"], nowdate())}))

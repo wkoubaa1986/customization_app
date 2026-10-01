@@ -27,6 +27,7 @@ CONFIG_EXCLU = "Config Stock Entrepot Exclu"
 CONFIG_SEUIL = "Config Stock Entrepot Seuil"
 CONFIG_VERIF = "Config Stock Entrepot Verification"
 VERIF = "Verification Stock"
+CIBLE = "Stock Cible"
 JOURS = ("Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche")
 MAGASIN_DEFAUT = "Magasins - A&S"
 TYPE_TRANSFERT = "Transfer interne"
@@ -99,7 +100,8 @@ def get_context():
     return {"entrepots": liste, "mien": mien, "employe": emp.employee_name if emp else None,
             "defaut": mien or (m if m in actifs else (liste[0]["name"] if liste else None)),
             "magasin": m, "responsable": est_responsable(), "aujourdhui": nowdate(),
-            "seuils": seuils(), "verification": bool(est_responsable() or mien)}
+            "seuils": seuils(), "verification": bool(est_responsable() or mien),
+            "cibles": frappe.get_all(CIBLE, pluck="entrepot") if frappe.db.exists("DocType", CIBLE) else []}
 
 
 # ── Recherche d'articles ─────────────────────────────────────────────────────
@@ -153,11 +155,18 @@ def get_solde(entrepot=None, recherche=None, negatifs=0, a_reappro=0):
             articles.append(a)
         a["qte"] = flt(a["qte"] + flt(r.actual_qty), 6)
         a["entrepots"].append({"entrepot": r.warehouse, "libelle": r.warehouse_name, "qte": flt(r.actual_qty, 6)})
-    if seuil:
+    cible = stock_cible(entrepot) if entrepot else {}
+    if seuil or cible:
         for a in articles:
-            a["seuil"] = seuil["seuil"]
-            a["a_reappro"] = a["qte"] < seuil["seuil"]
-            a["a_transferer"] = flt(max(seuil["cible"] - a["qte"], 0), 6) if a["a_reappro"] else 0
+            if a["item_code"] in cible:
+                # Stock cible de l'entrepôt (article par article) : il prime sur le seuil global.
+                a["cible"] = cible[a["item_code"]]
+                a["a_reappro"] = a["qte"] < a["cible"]
+                a["a_transferer"] = flt(max(a["cible"] - a["qte"], 0), 6)
+            elif seuil:
+                a["seuil"] = seuil["seuil"]
+                a["a_reappro"] = a["qte"] < seuil["seuil"]
+                a["a_transferer"] = flt(max(seuil["cible"] - a["qte"], 0), 6) if a["a_reappro"] else 0
     out = {"articles": articles, "negatifs": sum(1 for a in articles if a["qte"] < 0),
            "positifs": sum(1 for a in articles if a["qte"] > 0),
            "a_reappro": cint(frappe.db.sql("select count(*) from tabBin where warehouse = %s and actual_qty < %s",
@@ -626,12 +635,28 @@ def _photographie(entrepot: str) -> list[dict]:
              "taux": flt(r.valuation_rate, 3), "zones": r.zones} for r in rows]
 
 
+DUREES_MIN = {"15 min": 15, "30 min": 30, "45 min": 45, "1 heure": 60, "1 heure, 15 min": 75, "1 heure, 30 min": 90,
+              "1 heure, 45 min": 105, ">=2 heures": 120}
+
+
 def _creer_tache(employe: str, entrepot_libelle: str, quand, duree: str, role: str) -> str:
+    """Tâche de vérification : titre lisible dans le calendrier (il affichait « null ») et une vraie durée
+    (fin = début + durée du réglage, 1 heure par défaut) — demande utilisateur 01/10/2026."""
+    from frappe.utils import add_to_date
+
+    from customization_app.api import compute_tache_color
+
+    nom = frappe.db.get_value("Employee", employe, "employee_name") or employe
     doc = frappe.get_doc({
         "doctype": "Tache de travail", "custom_type_dintervention": "Autre", "custom_choix_du_staff": employe,
-        "starts_on": quand, "temps": duree, "status": "Open",
+        "starts_on": quand, "ends_on": add_to_date(quand, minutes=DUREES_MIN.get(duree, 60)), "temps": duree, "status": "Open",
+        "titre": "🧾 Vérification stock\n%s\n%s" % (entrepot_libelle, nom),
         "subject": "Vérification du stock %s (%s) — compter les articles dans Stock › Vérif." % (entrepot_libelle, role),
     })
+    try:
+        doc.color = compute_tache_color(doc)
+    except Exception:
+        pass
     doc.flags.ignore_permissions = True
     doc.insert()
     return doc.name
@@ -836,3 +861,96 @@ def planifier_maintenant():
     """Bouton du responsable : exécute le cron tout de suite (utile le jour même ou pour tester)."""
     _responsable()
     return planifier_verifications()
+
+
+# ── Stock cible par entrepôt d'employé ───────────────────────────────────────
+#
+# « Ce que le véhicule doit contenir » : article → quantité cible, approvisionné depuis le Magasin.
+# Le réassort = cible − stock actuel, préparé en un geste dans l'onglet Transfert (demande 01/10/2026).
+
+def stock_cible(entrepot: str) -> dict:
+    if not entrepot or not frappe.db.exists("DocType", CIBLE) or not frappe.db.exists(CIBLE, entrepot):
+        return {}
+    return {r.item_code: flt(r.qte_cible) for r in frappe.get_all("Stock Cible Ligne", filters={"parent": entrepot, "parenttype": CIBLE},
+                                                                   fields=["item_code", "qte_cible"])}
+
+
+def _infos_articles(codes: list[str]) -> dict:
+    if not codes:
+        return {}
+    return {i.name: i for i in frappe.get_all("Item", filters={"name": ["in", codes]},
+                                              fields=["name", "item_name", "image", "stock_uom", "custom_emplacement_magasin"])}
+
+
+@frappe.whitelist()
+def get_stock_cible(entrepot):
+    """Le stock cible de l'entrepôt avec, pour chaque article, le stock actuel ici et au Magasin, et le manque."""
+    _responsable()
+    _verifier_entrepot(entrepot)
+    source = (frappe.db.get_value(CIBLE, entrepot, "source") if frappe.db.exists(CIBLE, entrepot) else None) or magasin()
+    cible = stock_cible(entrepot)
+    infos = _infos_articles(list(cible))
+    qtes = _quantites(list(cible), [entrepot, source])
+    lignes = []
+    for code, q in cible.items():
+        i = infos.get(code)
+        if not i:
+            continue
+        actuel = qtes.get((code, entrepot), 0.0)
+        lignes.append({"item_code": code, "item_name": i.item_name, "image": i.image, "uom": i.stock_uom, "zones": i.custom_emplacement_magasin,
+                       "qte_cible": q, "qte": actuel, "qte_source": qtes.get((code, source), 0.0), "manque": flt(max(q - actuel, 0), 6)})
+    lignes.sort(key=lambda l: (l["item_name"] or l["item_code"]))
+    return {"entrepot": entrepot, "source": source, "lignes": lignes,
+            "a_reassortir": sum(1 for l in lignes if l["manque"] > 0), "unites": flt(sum(l["manque"] for l in lignes), 6)}
+
+
+def _ecrire_cible(entrepot: str, lignes: dict, source: str | None = None):
+    doc = frappe.get_doc(CIBLE, entrepot) if frappe.db.exists(CIBLE, entrepot) else frappe.get_doc({"doctype": CIBLE, "entrepot": entrepot})
+    if source:
+        doc.source = source
+    doc.set("lignes", [])
+    for code, q in lignes.items():
+        doc.append("lignes", {"item_code": code, "qte_cible": flt(q, 6)})
+    doc.flags.ignore_permissions = True
+    doc.save()
+
+
+@frappe.whitelist(methods=["POST"])
+def definir_stock_cible(entrepot, lignes, source=None):
+    """Remplace le stock cible : lignes = [{item_code, qte_cible}] (qte_cible 0 ou vide = retiré)."""
+    _responsable()
+    _verifier_entrepot(entrepot)
+    if entrepot == magasin():
+        frappe.throw(_("Le Magasin est la source du réassort : il n'a pas de stock cible."))
+    brut = frappe.parse_json(lignes) if isinstance(lignes, str) else (lignes or [])
+    cible = {}
+    for l in brut:
+        q = flt(l.get("qte_cible"))
+        if l.get("item_code") and q > 0:
+            cible[l["item_code"]] = q
+    refus = {c: m for c, m in _articles_transferables(list(cible)).items() if m}
+    if refus:
+        frappe.throw("<br>".join(f"{frappe.utils.escape_html(c)} : {m}" for c, m in refus.items()))
+    _ecrire_cible(entrepot, cible, source)
+    return get_stock_cible(entrepot)
+
+
+@frappe.whitelist(methods=["POST"])
+def ajouter_au_stock_cible(entrepot, items, qte_cible=None):
+    """Ajoute des articles au stock cible (sans toucher ceux déjà présents). Sans quantité : la cible du
+    seuil global de l'entrepôt, sinon le stock actuel, sinon 1."""
+    _responsable()
+    _verifier_entrepot(entrepot)
+    codes = frappe.parse_json(items) if isinstance(items, str) else (items or [])
+    cible = stock_cible(entrepot)
+    seuil = seuils().get(entrepot)
+    qtes = _quantites(codes, [entrepot])
+    ajoutes = 0
+    for c in codes:
+        if c in cible:
+            continue
+        q = flt(qte_cible) if qte_cible else (seuil["cible"] if seuil else max(qtes.get((c, entrepot), 0.0), 1))
+        cible[c] = q
+        ajoutes += 1
+    _ecrire_cible(entrepot, cible)
+    return {"ajoutes": ajoutes, "total": len(cible)}
