@@ -1,0 +1,27 @@
+{
+ "content": null,
+ "creation": "2026-09-30 12:00:00.000000",
+ "docstatus": 0,
+ "doctype": "Page",
+ "icon": "chart",
+ "idx": 0,
+ "modified": "2026-09-30 12:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "rapport-prime",
+ "owner": "Administrator",
+ "page_name": "rapport-prime",
+ "roles": [
+  {
+   "role": "System Manager"
+  },
+  {
+   "role": "Banque"
+  }
+ ],
+ "script": null,
+ "standard": "Yes",
+ "style": null,
+ "system_page": 0,
+ "title": "Rapport Prime"
+}

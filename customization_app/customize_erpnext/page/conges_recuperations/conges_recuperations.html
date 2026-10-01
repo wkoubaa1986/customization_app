@@ -1,0 +1,94 @@
+<div class="cr-page">
+  <style>
+    .cr-page { padding: 14px 18px; }
+    .cr-card { background: var(--card-bg,#fff); border: 1px solid var(--border-color,#e4e8ee); border-radius: 12px;
+               padding: 14px 16px; margin-bottom: 14px; box-shadow: 0 1px 3px rgba(0,0,0,.05); }
+    .cr-title { font-size: 14px; font-weight: 700; color: var(--text-color,#36414c); margin-bottom: 10px; display: flex; align-items: center; gap: 10px; }
+    .cr-title .cr-sub { font-weight: 500; font-size: 12px; color: var(--text-muted,#6b7280); }
+    .cr-title .cr-right { margin-left: auto; display: flex; gap: 6px; align-items: center; }
+    .cr-filters { display: flex; flex-wrap: wrap; gap: 12px 18px; align-items: flex-end; }
+    .cr-field { display: flex; flex-direction: column; gap: 4px; }
+    .cr-field label { margin: 0; font-size: 11.5px; font-weight: 600; color: var(--text-muted,#6b7280); text-transform: uppercase; letter-spacing: .3px; }
+    .cr-field .form-control { width: 200px; }
+    .cr-mois { font-size: 15px; font-weight: 800; min-width: 170px; text-align: center; }
+    .cr-legende { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 11.5px; color: #4b5563; margin-left: auto; }
+    .cr-leg { display: inline-block; width: 18px; height: 16px; border-radius: 4px; text-align: center; font-size: 10.5px; font-weight: 800; line-height: 16px; margin-right: 3px; }
+
+    .cr-wrap { overflow-x: auto; }
+    table.cr-grid { border-collapse: collapse; font-size: 11.5px; }
+    table.cr-grid th { padding: 3px 2px; font-size: 10px; color: #6b7280; font-weight: 600; text-align: center; border-bottom: 1px solid var(--border-color,#e4e8ee); white-space: nowrap; }
+    table.cr-grid th.emp, table.cr-grid td.emp { text-align: left; padding: 4px 8px; white-space: nowrap; position: sticky; left: 0; background: var(--card-bg,#fff); z-index: 1; min-width: 190px; font-weight: 700; }
+    table.cr-grid td.emp .cr-avatar { width: 22px; height: 22px; border-radius: 50%; object-fit: cover; vertical-align: middle; margin-right: 6px; background: #eef1f5; }
+    table.cr-grid td.emp span.cr-sel { cursor: pointer; }
+    table.cr-grid td.emp span.cr-sel:hover { text-decoration: underline; }
+    table.cr-grid td.d { width: 28px; min-width: 28px; height: 30px; text-align: center; border: 1px solid var(--border-color,#eef1f5); cursor: pointer; user-select: none; font-weight: 800; font-size: 11px; }
+    table.cr-grid td.d.we { background: #f6f7f9; color: #b8bec6; }
+    table.cr-grid td.d.ferie { background: repeating-linear-gradient(45deg,#f1f3f5,#f1f3f5 3px,#fff 3px,#fff 6px); color: #9aa2ad; cursor: default; }
+    table.cr-grid td.d.auj { box-shadow: inset 0 0 0 2px #2b6cb0; }
+    table.cr-grid td.d.sel { background: #dbeafe !important; }
+    table.cr-grid td.d.demi { background-image: linear-gradient(135deg, transparent 50%, rgba(255,255,255,.7) 50%); }
+    .t-V { background: #dbeafe; color: #1e3a8a; } .t-R { background: #d1fae5; color: #065f46; } .t-M { background: #ffedd5; color: #9a3412; }
+    .t-S { background: #e5e7eb; color: #374151; } .t-X { background: #ede9fe; color: #5b21b6; }
+    table.cr-grid th.we { color: #b8bec6; }
+    .cr-hint { font-size: 11.5px; color: var(--text-muted,#6b7280); margin-top: 6px; }
+
+    table.cr-tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+    table.cr-tbl th { text-align: left; padding: 6px 8px; background: var(--bg-light-gray,#f6f8fa); color: #6b7280; font-weight: 600; font-size: 11px; text-transform: uppercase; white-space: nowrap; border-bottom: 1px solid var(--border-color,#e4e8ee); }
+    table.cr-tbl th.grp { text-align: center; border-left: 2px solid var(--border-color,#e4e8ee); }
+    table.cr-tbl td { padding: 5px 8px; border-bottom: 1px solid var(--border-color,#eef1f5); vertical-align: middle; }
+    table.cr-tbl th.num, table.cr-tbl td.num { text-align: right; white-space: nowrap; }
+    table.cr-tbl td.first, table.cr-tbl th.first { border-left: 2px solid var(--border-color,#eef1f5); }
+    table.cr-tbl tr.actif > td { background: #eef5ff; }
+    .cr-pos { color: #2e9e5b; font-weight: 700; } .cr-neg { color: #b02a37; font-weight: 700; } .cr-muted { color: #9aa2ad; }
+    .cr-badge { display: inline-block; font-size: 10px; font-weight: 800; padding: 1px 7px; border-radius: 8px; background: #e1ecff; color: #1f3a5f; }
+    .cr-del { cursor: pointer; color: #b02a37; }
+    .cr-empty { padding: 16px; text-align: center; color: #9aa2ad; font-size: 12.5px; }
+    #cr-denied { display: none; margin: 40px auto; max-width: 520px; background: #f8d7da; border: 1px solid #f0b6bd; border-radius: 10px; padding: 22px 26px; color: #721c24; font-size: 14px; font-weight: 600; text-align: center; }
+  </style>
+
+  <div id="cr-denied">⛔ Accès réservé. Cette page n’est pas disponible pour votre compte.</div>
+
+  <div id="cr-main">
+    <div class="cr-card">
+      <div class="cr-filters">
+        <div class="cr-field"><label>Année</label><select id="cr-annee" class="form-control" style="width:110px"></select></div>
+        <div class="cr-field"><label>Employé</label><select id="cr-employe" class="form-control"><option value="">Tous</option></select></div>
+        <div class="cr-field" style="margin-left:auto"><label>&nbsp;</label>
+          <div><button class="btn btn-default btn-sm" data-action="attribuer-tous">🎁 Attribuer à tous</button>
+          <button class="btn btn-default btn-sm" data-action="generer">📅 Planifier les récupérations</button>
+          <button class="btn btn-default btn-sm" data-action="print">🖨️ Imprimer</button></div></div>
+      </div>
+    </div>
+
+    <div class="cr-card">
+      <div class="cr-title">
+        <button class="btn btn-default btn-xs" data-action="mois-prec">‹</button>
+        <span class="cr-mois" id="cr-mois"></span>
+        <button class="btn btn-default btn-xs" data-action="mois-suiv">›</button>
+        <button class="btn btn-default btn-xs" data-action="mois-auj">Aujourd’hui</button>
+        <span class="cr-legende">
+          <span><span class="cr-leg t-V">V</span>Vacances</span><span><span class="cr-leg t-R">R</span>Récupération</span>
+          <span><span class="cr-leg t-M">M</span>Maladie</span><span><span class="cr-leg t-S">S</span>Sans solde</span>
+          <span><span class="cr-leg" style="background:repeating-linear-gradient(45deg,#f1f3f5,#f1f3f5 3px,#fff 3px,#fff 6px)"></span>Férié / repos</span>
+        </span>
+      </div>
+      <div class="cr-wrap" id="cr-planning"><div class="cr-empty">⏳ Chargement…</div></div>
+      <div class="cr-hint">Cliquez sur un jour, ou cliquez-glissez sur plusieurs jours d’une même ligne, pour poser une absence. Cliquez sur une absence pour la voir ou l’annuler. Cliquez sur un nom pour le détail.</div>
+    </div>
+
+    <div class="cr-card">
+      <div class="cr-title">Soldes <span class="cr-sub" id="cr-soldes-sub">acquis / pris / reste sur l’année</span></div>
+      <div style="overflow-x:auto" id="cr-soldes"></div>
+    </div>
+
+    <div class="cr-card" id="cr-card-detail" style="display:none">
+      <div class="cr-title"><span id="cr-detail-titre"></span></div>
+      <div id="cr-detail"></div>
+    </div>
+
+    <div class="cr-card">
+      <div class="cr-title">Jours de récupération <span class="cr-sub">par employé, un jour toutes les N semaines — posés dans le planning et le calendrier de travail</span></div>
+      <div style="overflow-x:auto" id="cr-regles"></div>
+    </div>
+  </div>
+</div>

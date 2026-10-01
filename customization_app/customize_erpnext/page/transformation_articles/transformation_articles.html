@@ -1,0 +1,109 @@
+<div class="ta-page">
+  <style>
+    .ta-page { padding: 14px 18px; }
+    .ta-card { background: var(--card-bg,#fff); border: 1px solid var(--border-color,#e4e8ee); border-radius: 12px;
+               padding: 14px 16px; margin-bottom: 14px; box-shadow: 0 1px 3px rgba(0,0,0,.05); }
+    .ta-filters { display: flex; flex-wrap: wrap; gap: 12px 18px; align-items: flex-end; }
+    .ta-field { display: flex; flex-direction: column; gap: 4px; }
+    .ta-field label { margin: 0; font-size: 11.5px; font-weight: 600; color: var(--text-muted,#6b7280); text-transform: uppercase; letter-spacing: .3px; }
+    .ta-field .form-control { width: 240px; }
+    .ta-actions { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+    .ta-title { font-size: 14px; font-weight: 700; color: var(--text-color,#36414c); margin-bottom: 10px; display: flex; align-items: center; gap: 10px; }
+    .ta-title .ta-sub { font-weight: 500; font-size: 12px; color: var(--text-muted,#6b7280); }
+    .ta-title .ta-right { margin-left: auto; display: flex; gap: 6px; }
+    .ta-cols { display: grid; grid-template-columns: 360px 1fr; gap: 14px; align-items: start; }
+    @media (max-width: 1100px) { .ta-cols { grid-template-columns: 1fr; } }
+
+    .ta-search { width: 100%; }
+    .ta-results { max-height: 620px; overflow-y: auto; margin-top: 8px; }
+    .ta-res { display: flex; gap: 10px; align-items: center; padding: 6px 4px; border-bottom: 1px solid var(--border-color,#eef1f5); }
+    .ta-res:hover { background: rgba(0,0,0,.02); }
+    .ta-img { width: 46px; height: 46px; object-fit: cover; border-radius: 6px; background: #f2f4f7; border: 1px solid var(--border-color,#e4e8ee); flex: none; }
+    .ta-img-empty { display: inline-flex; width: 46px; height: 46px; border-radius: 6px; background: #f2f4f7; align-items: center; justify-content: center; color: #c3cad4; font-size: 18px; flex: none; }
+    .ta-res .ta-code { font-weight: 700; font-size: 12.5px; }
+    .ta-res .ta-name { font-size: 11.5px; color: var(--text-muted,#6b7280); overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+    .ta-res .ta-meta { font-size: 11px; color: #4b5563; white-space: nowrap; }
+    .ta-res .ta-btns { display: flex; flex-direction: column; gap: 3px; margin-left: auto; flex: none; }
+    .ta-res .ta-btns .btn { padding: 1px 8px; font-size: 11px; white-space: nowrap; }
+    .ta-stock-ok { color: #2e9e5b; font-weight: 700; } .ta-stock-ko { color: #b02a37; font-weight: 700; }
+    .ta-badge { display: inline-block; font-size: 10px; font-weight: 800; padding: 1px 7px; border-radius: 8px; background: #e1ecff; color: #1f3a5f; letter-spacing: .3px; }
+
+    table.ta-tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+    table.ta-tbl th { text-align: left; padding: 6px 8px; background: var(--bg-light-gray,#f6f8fa); color: #6b7280; font-weight: 600; font-size: 11px; text-transform: uppercase; white-space: nowrap; border-bottom: 1px solid var(--border-color,#e4e8ee); }
+    table.ta-tbl td { padding: 5px 8px; border-bottom: 1px solid var(--border-color,#eef1f5); vertical-align: middle; }
+    table.ta-tbl th.num, table.ta-tbl td.num { text-align: right; white-space: nowrap; }
+    table.ta-tbl input.ta-qty, table.ta-tbl input.ta-taux { width: 84px; text-align: right; padding: 2px 6px; height: 26px; font-size: 12.5px; }
+    table.ta-tbl input.ta-taux { width: 96px; }
+    table.ta-tbl tr.ta-tot td { font-weight: 700; background: var(--bg-light-gray,#f6f8fa); }
+    .ta-del { cursor: pointer; color: #b02a37; }
+    .ta-zone { border: 1px solid var(--border-color,#e4e8ee); border-radius: 10px; padding: 10px 12px; margin-bottom: 12px; }
+    .ta-zone.conso { border-left: 4px solid #b02a37; } .ta-zone.obt { border-left: 4px solid #2e9e5b; }
+    .ta-zone .ta-empty { padding: 14px; text-align: center; color: #9aa2ad; font-size: 12.5px; }
+    .ta-bilan { display: flex; flex-wrap: wrap; gap: 8px 22px; align-items: center; font-size: 12.5px; margin-top: 6px; }
+    .ta-bilan b { font-size: 14px; }
+    .ta-alerte { background: #fff4e5; border: 1px solid #f5c98a; color: #7a4b00; border-radius: 8px; padding: 8px 12px; font-size: 12.5px; margin-top: 8px; }
+    .ta-alerte.ko { background: #f8d7da; border-color: #f0b6bd; color: #721c24; }
+    .ta-muted { color: #9aa2ad; } .ta-pos { color: #2e9e5b; font-weight: 700; } .ta-neg { color: #b02a37; font-weight: 700; }
+    .ta-hist-lines { font-size: 11.5px; color: #4b5563; }
+    input.ta-fois { width: 64px; text-align: right; padding: 2px 6px; height: 26px; font-size: 12.5px; display: inline-block; }
+    .ta-hist-lines .c { color: #b02a37; } .ta-hist-lines .o { color: #2e9e5b; }
+    #ta-denied { display: none; margin: 40px auto; max-width: 520px; background: #f8d7da; border: 1px solid #f0b6bd; border-radius: 10px; padding: 22px 26px; color: #721c24; font-size: 14px; font-weight: 600; text-align: center; }
+  </style>
+
+  <div id="ta-denied">⛔ Accès réservé. Cette page n’est pas disponible pour votre compte.</div>
+
+  <div id="ta-main">
+    <div class="ta-card">
+      <div class="ta-filters">
+        <div class="ta-field"><label>Magasin</label><select id="ta-magasin" class="form-control"></select></div>
+        <div class="ta-field"><label>Date</label><input type="date" id="ta-date" class="form-control" style="width:160px"></div>
+        <div class="ta-field" style="flex:1;min-width:220px"><label>Remarque</label><input type="text" id="ta-remarque" class="form-control" style="width:100%" placeholder="facultatif, reprise sur l’écriture"></div>
+        <div class="ta-actions">
+          <button class="btn btn-default btn-sm" data-action="modele" title="Garder la transformation en cours comme modèle unitaire" disabled>💾 Enregistrer comme modèle</button>
+          <button class="btn btn-default btn-sm" data-action="inverser" title="Échanger consommés et obtenus">🔁 Inverser</button>
+          <button class="btn btn-default btn-sm" data-action="vider">🧹 Vider</button>
+        </div>
+      </div>
+      <div class="ta-muted" style="font-size:12px;margin-top:8px">Une transformation = une écriture de stock « Reconditionnement » : les articles consommés sortent du magasin, les articles obtenus y entrent, pour la même valeur. Pas de rapprochement.</div>
+    </div>
+
+    <div class="ta-cols">
+      <div class="ta-card">
+        <div class="ta-title">Rechercher un article <span class="ta-sub">code ou nom, stock suivi</span></div>
+        <input type="text" id="ta-search" class="form-control ta-search" placeholder="Ex. : M-400, membrane, AP-M…" autocomplete="off">
+        <div class="ta-results" id="ta-results"><div class="ta-empty ta-muted" style="padding:14px;text-align:center">Tapez au moins 2 caractères.</div></div>
+      </div>
+
+      <div>
+        <div class="ta-card">
+          <div class="ta-zone conso">
+            <div class="ta-title" style="margin-bottom:6px">Je consomme <span class="ta-sub">sortent du magasin</span>
+              <span class="ta-right"><button class="btn btn-default btn-xs" data-action="composants-conso" style="display:none">🧩 Composants du bundle obtenu</button></span></div>
+            <div id="ta-conso"></div>
+          </div>
+          <div class="ta-zone obt">
+            <div class="ta-title" style="margin-bottom:6px">J’obtiens <span class="ta-sub">entrent au magasin</span>
+              <span class="ta-right"><button class="btn btn-default btn-xs" data-action="composants-obt" style="display:none">🧩 Composants du bundle consommé</button></span></div>
+            <div id="ta-obt"></div>
+          </div>
+          <div class="ta-bilan" id="ta-bilan"></div>
+          <div id="ta-alertes"></div>
+          <div style="margin-top:12px;display:flex;gap:8px;align-items:center">
+            <button class="btn btn-primary btn-sm" data-action="valider" disabled>✅ Valider la transformation</button>
+            <span class="ta-muted" style="font-size:12px" id="ta-etat"></span>
+          </div>
+        </div>
+
+        <div class="ta-card">
+          <div class="ta-title">Modèles de transformation <span class="ta-sub">quantités pour 1 application — choisissez le nombre d’applications puis « Charger »</span></div>
+          <div id="ta-modeles"></div>
+        </div>
+
+        <div class="ta-card">
+          <div class="ta-title">Dernières transformations <span class="ta-sub">écritures Reconditionnement</span></div>
+          <div id="ta-hist"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

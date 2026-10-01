@@ -1,0 +1,121 @@
+<div class="rp-page">
+  <style>
+    .rp-page { padding: 14px 18px; }
+    .rp-card { background: var(--card-bg,#fff); border: 1px solid var(--border-color,#e4e8ee);
+               border-radius: 12px; padding: 14px 16px; margin-bottom: 14px; box-shadow: 0 1px 3px rgba(0,0,0,.05); }
+    .rp-filters { display: flex; flex-wrap: wrap; gap: 12px 18px; align-items: flex-end; }
+    .rp-field { display: flex; flex-direction: column; gap: 4px; }
+    .rp-field label { margin: 0; font-size: 11.5px; font-weight: 600; color: var(--text-muted,#6b7280);
+                      text-transform: uppercase; letter-spacing: .3px; }
+    .rp-field .form-control { width: 220px; }
+    .rp-actions { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+    .rp-regle { font-size: 12px; color: var(--text-muted,#6b7280); margin-top: 10px; }
+
+    .rp-title { font-size: 14px; font-weight: 700; color: var(--text-color,#36414c); margin-bottom: 10px;
+                display: flex; align-items: center; gap: 10px; }
+    #rp-det-nom { display: flex; align-items: center; gap: 10px; width: 100%; }
+    .rp-title .rp-sub { font-weight: 500; font-size: 12px; color: var(--text-muted,#6b7280); }
+
+    .rp-table-wrap { overflow-x: auto; }
+    table.rp-tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+    table.rp-tbl th { text-align: left; padding: 7px 10px; background: var(--bg-light-gray,#f6f8fa); color: #6b7280;
+                      font-weight: 600; font-size: 11px; text-transform: uppercase; white-space: nowrap;
+                      border-bottom: 1px solid var(--border-color,#e4e8ee); }
+    table.rp-tbl th.grp { text-align: center; border-left: 2px solid var(--border-color,#e4e8ee); }
+    table.rp-tbl td { padding: 6px 10px; border-bottom: 1px solid var(--border-color,#eef1f5); vertical-align: middle; }
+    table.rp-tbl th.num, table.rp-tbl td.num { text-align: right; white-space: nowrap; }
+    table.rp-tbl td.first, table.rp-tbl th.first { border-left: 2px solid var(--border-color,#eef1f5); }
+    table.rp-tbl tr.rp-emp { cursor: pointer; }
+    table.rp-tbl tr.rp-emp:hover > td { background: rgba(0,0,0,.025); }
+    table.rp-tbl tr.rp-emp.actif > td { background: #eef5ff; }
+    table.rp-tbl tr.rp-total > td { font-weight: 700; background: var(--bg-light-gray,#f6f8fa); }
+    table.rp-tbl tr.rp-trim > td { background: #f9fafb; font-weight: 700; }
+    table.rp-tbl td.rp-ferme { color: #b8bec6; }
+
+    .rp-pos { color: #2e9e5b; font-weight: 700; }
+    .rp-neg { color: #b02a37; font-weight: 700; }
+    .rp-zero { color: #9aa2ad; }
+    .rp-muted { color: #9aa2ad; }
+    .rp-badge { display: inline-block; font-size: 10px; font-weight: 800; padding: 2px 8px; border-radius: 8px;
+                background: #e1ecff; color: #1f3a5f; letter-spacing: .4px; }
+
+    .rp-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; margin-bottom: 14px; }
+    .rp-kpi { border: 1px solid var(--border-color,#e4e8ee); border-radius: 10px; padding: 10px 12px; background: #fff; }
+    .rp-kpi.ferme { opacity: .55; }
+    .rp-kpi.total { background: #f4f8ff; border-color: #c9dbf7; }
+    .rp-kpi .k-lbl { font-size: 11px; text-transform: uppercase; color: #6b7280; font-weight: 600; letter-spacing: .3px; }
+    .rp-kpi .k-val { font-size: 18px; font-weight: 800; margin: 4px 0 2px; }
+    .rp-kpi .k-line { font-size: 12px; color: #4b5563; display: flex; justify-content: space-between; }
+    .rp-kpi .k-line b { font-weight: 700; }
+
+    .rp-appr-bloc { margin-top: 6px; border-top: 1px dashed var(--border-color,#e4e8ee); padding-top: 5px; }
+    .rp-appr-txt { color: #b02a37; font-style: italic; font-size: 11.5px; line-height: 1.35; white-space: pre-line; }
+    .rp-vers-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+    .rp-vers-head .btn { margin-left: auto; }
+    .rp-cand { font-size: 12px; }
+    .rp-cand .btn { padding: 1px 8px; }
+    .rp-del { cursor: pointer; color: #b02a37; }
+    .rp-toggle { cursor: pointer; user-select: none; color: #2b6cb0; font-weight: 700; }
+    .rp-loading, .rp-empty { padding: 26px; text-align: center; color: #9aa2ad; font-size: 13px; }
+    #rp-denied { display: none; margin: 40px auto; max-width: 520px; background: #f8d7da; border: 1px solid #f0b6bd;
+                 border-radius: 10px; padding: 22px 26px; color: #721c24; font-size: 14px; font-weight: 600; text-align: center; }
+    @media print {
+      .rp-filters, .rp-actions, .rp-vers-head .btn, .rp-cand, .rp-del { display: none !important; }
+      .rp-card { box-shadow: none; break-inside: avoid; }
+    }
+  </style>
+
+  <div id="rp-denied">⛔ Accès réservé. Cette page n’est pas disponible pour votre compte.</div>
+
+  <div id="rp-main">
+    <div class="rp-card">
+      <div class="rp-filters">
+        <div class="rp-field">
+          <label>Année</label>
+          <select id="rp-annee" class="form-control" style="width:120px"></select>
+        </div>
+        <div class="rp-field">
+          <label>Employé</label>
+          <select id="rp-employe" class="form-control"><option value="">Tous (synthèse)</option></select>
+        </div>
+        <div class="rp-actions">
+          <button class="btn btn-default btn-sm" data-action="refresh">🔄 Actualiser</button>
+          <button class="btn btn-default btn-sm" data-action="print">🖨️ Imprimer</button>
+          <button class="btn btn-default btn-sm" data-action="config" title="Taux ventes / main-d’œuvre et mode par employé">⚙️ Réglages</button>
+        </div>
+      </div>
+      <div class="rp-regle" id="rp-regle"></div>
+    </div>
+
+    <div class="rp-card">
+      <div class="rp-title">Synthèse par employé <span class="rp-sub">prime calculée / versée / reste, par trimestre — cliquer un employé pour le détail</span></div>
+      <div class="rp-table-wrap" id="rp-synthese"><div class="rp-loading">⏳ Chargement…</div></div>
+    </div>
+
+    <div id="rp-detail" style="display:none">
+      <div class="rp-card">
+        <div class="rp-title"><span id="rp-det-nom"></span></div>
+        <div class="rp-cards" id="rp-kpis"></div>
+      </div>
+
+      <div class="rp-card">
+        <div class="rp-vers-head">
+          <div class="rp-title" style="margin:0">Primes versées <span class="rp-sub">ce qui est déduit du calcul</span></div>
+          <button class="btn btn-primary btn-sm" data-action="ajouter">➕ Ajouter un versement</button>
+        </div>
+        <div class="rp-table-wrap" id="rp-versements"></div>
+        <div id="rp-candidates" style="margin-top:12px"></div>
+      </div>
+
+      <div class="rp-card" id="rp-card-taches" style="display:none">
+        <div class="rp-title">Main-d’œuvre réalisée <span class="rp-sub" id="rp-taches-sub"></span></div>
+        <div class="rp-table-wrap" id="rp-taches"></div>
+      </div>
+
+      <div class="rp-card" id="rp-card-lignes">
+        <div class="rp-title">Ventes — commandes prises en compte <span class="rp-sub" id="rp-det-sub"></span></div>
+        <div class="rp-table-wrap" id="rp-lignes"></div>
+      </div>
+    </div>
+  </div>
+</div>

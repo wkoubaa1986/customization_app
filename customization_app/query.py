@@ -14,6 +14,33 @@ def buying_item_query(doctype, txt, searchfield, start, page_len, filters, as_di
     
     Basée sur erpnext.controllers.queries.item_query mais SANS le filtre has_variants=0
     """
+    return _item_query_avec_modeles(
+        txt, searchfield, start, page_len, filters, as_dict,
+        base_cond="and tabItem.is_purchase_item=1",
+    )
+
+
+@frappe.whitelist()
+@frappe.validate_and_sanitize_search_inputs
+def stock_item_query(doctype, txt, searchfield, start, page_len, filters, as_dict=False):
+    """Articles proposés dans l'Écriture de stock et le Rapprochement de stock.
+
+    ERPNext écarte tout article modèle (has_variants = 1) de sa recherche, même
+    quand « Conserver le stock » est coché. Or certains modèles (AP-M, AP-C, SP-M…)
+    sont bien des unités physiques en magasin : leurs variantes ne sont que des
+    bundles de vente. Ici le seul critère est donc : le stock est suivi.
+    """
+    return _item_query_avec_modeles(
+        txt, searchfield, start, page_len, filters, as_dict,
+        base_cond="and tabItem.is_stock_item=1",
+    )
+
+
+def _item_query_avec_modeles(txt, searchfield, start, page_len, filters, as_dict, base_cond):
+    """Recherche d'article sans le filtre has_variants=0 d'ERPNext.
+
+    ``base_cond`` : condition SQL propre au contexte (achat, stock…).
+    """
     doctype = "Item"
     conditions = []
 
@@ -76,14 +103,14 @@ def buying_item_query(doctype, txt, searchfield, start, page_len, filters, as_di
         description_cond = "or tabItem.description LIKE %(txt)s"
 
     # MODIFICATION PRINCIPALE : Ne pas considérer has_variants ici.
-    # Seuls les items marqués comme 'is_purchase_item' seront retournés.
+    # Seul ``base_cond`` (achat ou stock) restreint les articles retournés.
     return frappe.db.sql(
         """select
             tabItem.name {columns}
         from tabItem
         where tabItem.docstatus < 2
             and tabItem.disabled=0
-            and tabItem.is_purchase_item=1
+            {base_cond}
             and (tabItem.end_of_life > %(today)s or ifnull(tabItem.end_of_life, '0000-00-00')='0000-00-00')
             and ({scond} or tabItem.item_code IN (select parent from `tabItem Barcode` where barcode LIKE %(txt)s)
                 {description_cond})
@@ -103,6 +130,7 @@ def buying_item_query(doctype, txt, searchfield, start, page_len, filters, as_di
             item_code, name, item_name
         limit %(start)s, %(page_len)s """.format(
             columns=columns,
+            base_cond=base_cond,
             scond=searchfields,
             fcond=get_filters_cond(doctype, filters, conditions).replace("%", "%%"),
             mcond=get_match_cond(doctype).replace("%", "%%"),

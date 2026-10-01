@@ -1,0 +1,115 @@
+{
+ "actions": [],
+ "autoname": "field:employee",
+ "creation": "2026-10-01 11:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "employee",
+  "employee_name",
+  "actif",
+  "column_break_1",
+  "date_premiere",
+  "periodicite_semaines",
+  "horizon_semaines",
+  "derniere_planifiee"
+ ],
+ "fields": [
+  {
+   "fieldname": "employee",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Employé",
+   "options": "Employee",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "fetch_from": "employee.employee_name",
+   "fieldname": "employee_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Nom",
+   "read_only": 1
+  },
+  {
+   "default": "1",
+   "fieldname": "actif",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Actif"
+  },
+  {
+   "fieldname": "column_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "date_premiere",
+   "fieldtype": "Date",
+   "in_list_view": 1,
+   "label": "Premier jour de récupération",
+   "reqd": 1,
+   "description": "Les suivants tombent le même jour de la semaine, toutes les N semaines."
+  },
+  {
+   "default": "2",
+   "fieldname": "periodicite_semaines",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Toutes les N semaines",
+   "reqd": 1
+  },
+  {
+   "default": "8",
+   "fieldname": "horizon_semaines",
+   "fieldtype": "Int",
+   "label": "Planifier à l’avance (semaines)",
+   "reqd": 1,
+   "description": "Les jours sont posés dans le planning jusqu’à aujourd’hui + cet horizon ; la tâche quotidienne complète au fil de l’eau."
+  },
+  {
+   "fieldname": "derniere_planifiee",
+   "fieldtype": "Date",
+   "label": "Dernier jour planifié",
+   "read_only": 1
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-10-01 13:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "Regle Recuperation",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Congés RH",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "employee_name",
+ "track_changes": 1
+}

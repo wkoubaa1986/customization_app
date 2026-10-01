@@ -1,0 +1,32 @@
+{
+ "actions": [],
+ "creation": "2026-09-30 16:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": ["section_taux", "taux_vente", "column_break_1", "taux_main_oeuvre", "section_employes", "note_html", "employes"],
+ "fields": [
+  {"fieldname": "section_taux", "fieldtype": "Section Break", "label": "Taux"},
+  {"fieldname": "taux_vente", "fieldtype": "Percent", "label": "Taux sur les ventes (%)", "default": "2",
+   "description": "Appliqué au HT éligible des commandes livrées du vendeur (hors main-d'œuvre et livraison)."},
+  {"fieldname": "column_break_1", "fieldtype": "Column Break"},
+  {"fieldname": "taux_main_oeuvre", "fieldtype": "Percent", "label": "Taux sur la main-d'œuvre (%)", "default": "2",
+   "description": "Appliqué au HT de main-d'œuvre des commandes dont le technicien a réalisé la tâche de travail (Installation, Entretien, Réparation). Si plusieurs techniciens sur une commande, la main-d'œuvre est partagée à parts égales."},
+  {"fieldname": "section_employes", "fieldtype": "Section Break", "label": "Employés"},
+  {"fieldname": "note_html", "fieldtype": "HTML", "options": "<p class='text-muted'>Un employé absent de cette liste est traité en <b>Ventes</b> (comportement historique). « Exclu » le retire du rapport.</p>"},
+  {"fieldname": "employes", "fieldtype": "Table", "label": "Mode par employé", "options": "Config Prime Employe"}
+ ],
+ "issingle": 1,
+ "links": [],
+ "modified": "2026-09-30 16:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "Config Prime",
+ "owner": "Administrator",
+ "permissions": [
+  {"create": 1, "delete": 1, "email": 1, "print": 1, "read": 1, "role": "System Manager", "share": 1, "write": 1},
+  {"create": 1, "email": 1, "print": 1, "read": 1, "role": "Banque", "share": 1, "write": 1}
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

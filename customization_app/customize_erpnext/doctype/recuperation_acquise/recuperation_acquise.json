@@ -1,0 +1,119 @@
+{
+ "actions": [],
+ "autoname": "format:RECUP-{employee}-{date_fin}",
+ "creation": "2026-10-01 11:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "employee",
+  "employee_name",
+  "date_debut",
+  "date_fin",
+  "column_break_1",
+  "jours",
+  "origine",
+  "leave_application",
+  "leave_allocation"
+ ],
+ "fields": [
+  {
+   "fieldname": "employee",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Employé",
+   "options": "Employee",
+   "reqd": 1
+  },
+  {
+   "fetch_from": "employee.employee_name",
+   "fieldname": "employee_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Nom",
+   "read_only": 1
+  },
+  {
+   "fieldname": "date_debut",
+   "fieldtype": "Date",
+   "in_list_view": 1,
+   "label": "Du",
+   "reqd": 1
+  },
+  {
+   "fieldname": "date_fin",
+   "fieldtype": "Date",
+   "in_list_view": 1,
+   "label": "Au",
+   "reqd": 1
+  },
+  {
+   "fieldname": "column_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "jours",
+   "fieldtype": "Float",
+   "in_list_view": 1,
+   "label": "Jours",
+   "reqd": 1
+  },
+  {
+   "fieldname": "origine",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Origine",
+   "options": "Planifié\nAffecté à la main",
+   "default": "Affecté à la main"
+  },
+  {
+   "fieldname": "leave_application",
+   "fieldtype": "Link",
+   "label": "Demande de congé",
+   "options": "Leave Application"
+  },
+  {
+   "fieldname": "leave_allocation",
+   "fieldtype": "Link",
+   "label": "Allocation HRMS",
+   "options": "Leave Allocation"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-10-01 13:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "Recuperation Acquise",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Congés RH",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "date_fin",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "employee_name"
+}

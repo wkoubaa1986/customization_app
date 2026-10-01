@@ -1,0 +1,24 @@
+{
+ "actions": [],
+ "creation": "2026-10-01 10:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": ["item_code", "item_name", "qty"],
+ "fields": [
+  {"fieldname": "item_code", "fieldtype": "Link", "in_list_view": 1, "label": "Article", "options": "Item", "reqd": 1},
+  {"fetch_from": "item_code.item_name", "fieldname": "item_name", "fieldtype": "Data", "in_list_view": 1, "label": "Désignation", "read_only": 1},
+  {"fieldname": "qty", "fieldtype": "Float", "in_list_view": 1, "label": "Quantité (pour 1 application)", "reqd": 1, "default": "1"}
+ ],
+ "istable": 1,
+ "links": [],
+ "modified": "2026-10-01 10:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "Modele Transformation Ligne",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

@@ -162,6 +162,13 @@ app_license = "mit"
 # Hook on document methods and events
 
 doc_events = {
+    # Congés & récupérations : chaque jour d'absence approuvé = une Tâche de travail « toute la
+    # journée » dans le calendrier (remplace le Server Script « Generer » sur Attendance), retirée
+    # à l'annulation. Voir conges_recuperations.py.
+    "Leave Application": {
+        "on_submit": "customization_app.conges_recuperations.leave_application_on_submit",
+        "on_cancel": "customization_app.conges_recuperations.leave_application_on_cancel",
+    },
     "Mes Interventions Employe": {
         "before_submit": "customization_app.api.before_submit_mes_interventions",
     },
@@ -401,6 +408,9 @@ app_include_js = [_js("customer_quick_entry.js"),
                   _js("mes_interventions_employe.js"),
                   _js("pos_auto_customer.js"),
                   _js("buying_item_query_override.js"),
+                  # Écriture / Rapprochement de stock : les modèles à variantes
+                  # suivis en stock (AP-M…) sont proposés (query.stock_item_query).
+                  _js("stock_item_query_override.js"),
                   _js("calendrier_rdv_button.js"),
                   _js("sales_order_avoir.js"),
                   # Livraison partielle : bandeau livré / réglé / dette réelle et bouton
@@ -568,6 +578,10 @@ scheduler_events = {
     "daily_long": [
         "customization_app.Maintenance.update_schedule.run_cron",
     ],
+    "daily": [
+        # Jours de récupération par quinzaine : crédite les quinzaines écoulées (Regle Recuperation).
+        "customization_app.conges_recuperations.tache_quotidienne",
+    ],
 
     "cron": {
         # Lundi–samedi à 07:00 : création liste d'appels
@@ -624,6 +638,12 @@ scheduler_events = {
 # il faut donc le reposer à chaque migration. La fonction est idempotente.
 after_migrate = [
     "customization_app.patches.ensure_raccourci_commandes_a_traiter.execute",
+    # « Rapport Prime » dans l'onglet Banque (workspace importé par bank_retenue_sync).
+    "customization_app.patches.ensure_raccourci_rapport_prime.execute",
+    # « Transformation d’articles » dans l'espace Stock, après « Dashboard ».
+    "customization_app.patches.ensure_raccourci_transformation_articles.execute",
+    # « Congés & récupérations » dans l'onglet HR + type de congé « Récupération (quinzaine) ».
+    "customization_app.patches.ensure_conges_recuperations.execute",
 ]
 
 # after_migrate = ["customization_app.patches.override_get_item_details.execute"]

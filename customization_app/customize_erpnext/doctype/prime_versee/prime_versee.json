@@ -1,0 +1,135 @@
+{
+ "actions": [],
+ "autoname": "format:PRIME-{annee}-{#####}",
+ "creation": "2026-09-30 12:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "employee",
+  "employee_name",
+  "annee",
+  "trimestre",
+  "column_break_1",
+  "date_versement",
+  "montant",
+  "journal_entry",
+  "ecriture_soldee",
+  "section_break_1",
+  "remarque"
+ ],
+ "fields": [
+  {
+   "fieldname": "employee",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Employé",
+   "options": "Employee",
+   "reqd": 1
+  },
+  {
+   "fetch_from": "employee.employee_name",
+   "fieldname": "employee_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Nom",
+   "read_only": 1
+  },
+  {
+   "fieldname": "annee",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Année",
+   "reqd": 1
+  },
+  {
+   "fieldname": "trimestre",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Trimestre",
+   "options": "Q1\nQ2\nQ3\nQ4",
+   "reqd": 1
+  },
+  {
+   "fieldname": "column_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "date_versement",
+   "fieldtype": "Date",
+   "in_list_view": 1,
+   "label": "Date du versement",
+   "reqd": 1
+  },
+  {
+   "fieldname": "montant",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "Montant versé",
+   "reqd": 1
+  },
+  {
+   "fieldname": "journal_entry",
+   "fieldtype": "Link",
+   "label": "Écriture de caisse",
+   "options": "Journal Entry"
+  },
+  {
+   "default": "0",
+   "depends_on": "journal_entry",
+   "fieldname": "ecriture_soldee",
+   "fieldtype": "Check",
+   "label": "Le reste de l'écriture est une autre prime (ne plus la proposer)",
+   "description": "L'écriture de caisse contient d'autres primes que celle des ventes : seule la part saisie ici est déduite, et l'écriture n'est plus proposée au rattachement."
+  },
+  {
+   "fieldname": "section_break_1",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "remarque",
+   "fieldtype": "Small Text",
+   "label": "Remarque"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-09-30 15:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "Prime Versee",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Banque",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "employee_name",
+ "track_changes": 1
+}

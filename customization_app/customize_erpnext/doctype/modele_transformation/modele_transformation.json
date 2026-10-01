@@ -1,0 +1,32 @@
+{
+ "actions": [],
+ "autoname": "field:nom",
+ "creation": "2026-10-01 10:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": ["nom", "remarque", "section_conso", "consommes", "section_obt", "obtenus"],
+ "fields": [
+  {"fieldname": "nom", "fieldtype": "Data", "in_list_view": 1, "label": "Nom du modèle", "reqd": 1, "unique": 1},
+  {"fieldname": "remarque", "fieldtype": "Small Text", "label": "Remarque"},
+  {"fieldname": "section_conso", "fieldtype": "Section Break", "label": "Je consomme (pour 1 application)"},
+  {"fieldname": "consommes", "fieldtype": "Table", "label": "Articles consommés", "options": "Modele Transformation Ligne", "reqd": 1},
+  {"fieldname": "section_obt", "fieldtype": "Section Break", "label": "J’obtiens (pour 1 application)"},
+  {"fieldname": "obtenus", "fieldtype": "Table", "label": "Articles obtenus", "options": "Modele Transformation Ligne", "reqd": 1}
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-10-01 10:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "Modele Transformation",
+ "owner": "Administrator",
+ "permissions": [
+  {"create": 1, "delete": 1, "email": 1, "export": 1, "print": 1, "read": 1, "report": 1, "role": "System Manager", "share": 1, "write": 1},
+  {"create": 1, "delete": 1, "email": 1, "export": 1, "print": 1, "read": 1, "report": 1, "role": "Stock Manager", "share": 1, "write": 1},
+  {"create": 1, "delete": 1, "email": 1, "export": 1, "print": 1, "read": 1, "report": 1, "role": "Stock User", "share": 1, "write": 1}
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

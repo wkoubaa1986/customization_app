@@ -1,0 +1,121 @@
+{
+ "actions": [],
+ "autoname": "format:COEF-{annee}-{trimestre}-{employee}",
+ "creation": "2026-09-30 18:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "employee",
+  "employee_name",
+  "annee",
+  "trimestre",
+  "column_break_1",
+  "coefficient",
+  "remarque",
+  "section_appreciation",
+  "appreciation"
+ ],
+ "fields": [
+  {
+   "fieldname": "employee",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Employé",
+   "options": "Employee",
+   "reqd": 1
+  },
+  {
+   "fetch_from": "employee.employee_name",
+   "fieldname": "employee_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Nom",
+   "read_only": 1
+  },
+  {
+   "fieldname": "annee",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Année",
+   "reqd": 1
+  },
+  {
+   "fieldname": "trimestre",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Trimestre",
+   "options": "Q1\nQ2\nQ3\nQ4",
+   "reqd": 1
+  },
+  {
+   "fieldname": "column_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "coefficient",
+   "fieldtype": "Percent",
+   "in_list_view": 1,
+   "label": "Coefficient (%)",
+   "reqd": 1,
+   "default": "100",
+   "description": "Part de la prime calculée réellement accordée pour ce trimestre : 100 = tout, 50 = la moitié, 0 = rien."
+  },
+  {
+   "fieldname": "remarque",
+   "fieldtype": "Small Text",
+   "label": "Remarque"
+  },
+  {
+   "fieldname": "section_appreciation",
+   "fieldtype": "Section Break",
+   "label": "Appréciation"
+  },
+  {
+   "fieldname": "appreciation",
+   "fieldtype": "Small Text",
+   "label": "Appréciation du trimestre",
+   "description": "Commentaire du responsable, imprimé en rouge sous le trimestre dans le PDF."
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-09-30 19:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "Prime Coefficient",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Banque",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "employee_name",
+ "track_changes": 1
+}
