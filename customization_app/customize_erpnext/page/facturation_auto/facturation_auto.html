@@ -39,6 +39,8 @@
     .fac-errors { background: #f8d7da; border: 1px solid #f0b6bd; border-radius: 8px; padding: 10px 14px; color: #721c24; font-size: 12.5px; }
     .fac-errors ul { margin: 6px 0 0; padding-left: 18px; }
     .fac-muted { color: #9aa2ad; }
+    tr.fac-excl td { background: #fdf2f3; color: #9aa2ad; text-decoration: line-through; }
+    tr.fac-excl td:first-child, tr.fac-excl td:last-child { text-decoration: none; }
     .fac-state-card { background: linear-gradient(135deg,#1f2d3d,#2b4c7e); color:#fff; border-radius: 12px; padding: 16px 18px; margin-bottom: 16px; box-shadow: 0 2px 8px rgba(0,0,0,.12); }
     .fac-state-head { display:flex; align-items:center; gap:8px; font-size:13px; font-weight:700; letter-spacing:.3px; opacity:.95; margin-bottom:12px; }
     .fac-state-grid { display:grid; grid-template-columns: repeat(auto-fit,minmax(150px,1fr)); gap:12px; }
@@ -58,6 +60,8 @@
   <div id="fac-main">
     <!-- État actuel de la base (avant lancement) -->
     <div id="fac-state"></div>
+    <!-- Paiements éligibles à cocher / décocher avant de lancer -->
+    <div id="fac-eligible"></div>
 
     <!-- Paramètres -->
     <div class="fac-card">

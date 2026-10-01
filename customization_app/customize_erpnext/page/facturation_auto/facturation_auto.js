@@ -20,6 +20,7 @@ class FacturationAuto {
       $("#fac-denied").show();
       return;
     }
+    this.excluded = new Set();      // paiements écartés (cases décochées), gardés d’un aperçu à l’autre
     this._bind();
     this._loadState();
   }
@@ -32,9 +33,10 @@ class FacturationAuto {
     try {
       const r = await frappe.call({
         method: "customization_app.facturation_auto.preview",
-        args: { use_gaps: useGaps },
+        args: { use_gaps: useGaps, exclude_payments: JSON.stringify([...this.excluded]) },
       });
       this._render_state(r.message || {});
+      this._render_eligible(r.message || {});
     } catch (e) {
       $("#fac-state").html(
         `<div class="fac-state-card"><div class="fac-state-loading">État indisponible : ${frappe.utils.escape_html(String(e))}</div></div>`
@@ -78,11 +80,56 @@ class FacturationAuto {
           <div class="fac-state-box">
             <div class="lbl">Paiements éligibles</div>
             <div class="val">${s.payments_found == null ? "—" : s.payments_found}</div>
-            <div class="sub">du mois à facturer</div>
+            <div class="sub">${s.payments_excluded_count ? `dont ${s.payments_excluded_count} écarté(s) · ` : ""}du mois à facturer</div>
           </div>
         </div>
         <div class="fac-state-period">Période facturée : ${s.date_start || ""} → ${s.date_end || ""} — lecture seule, rien n’est enregistré.</div>
       </div>`);
+  }
+
+  /** Les paiements éligibles AVANT de lancer : une case par paiement, décochée = écarté. */
+  _render_eligible(s) {
+    const list = s.payments_detail || [];
+    const $box = $("#fac-eligible");
+    if (!list.length) { $box.html(""); return; }
+    const esc = frappe.utils.escape_html;
+    const rows = list.map(p => {
+      const low = !p.excluded && !p.to_invoice;
+      const checked = !p.excluded && !low;
+      return `<tr class="${p.excluded ? "fac-excl" : ""}" data-client="${esc((p.customer_name || p.customer || "").toLowerCase())} ${esc((p.customer_group || "").toLowerCase())}">
+        <td><input type="checkbox" class="fac-elig-chk" data-pe="${esc(p.payment_entry)}" ${checked ? "checked" : ""} ${low ? "disabled" : ""}></td>
+        <td>${this._link("Payment Entry", p.payment_entry)}</td>
+        <td class="fac-muted" style="white-space:nowrap;">${p.date || ""}</td>
+        <td><b>${esc(p.customer_name || p.customer || "")}</b>${p.customer_name && p.customer_name !== p.customer ? `<br><span class="fac-muted" style="font-size:11px;">${esc(p.customer)}</span>` : ""}</td>
+        <td>${esc(p.customer_group || "")}</td>
+        <td class="num">${this._fmt(p.paid_amount)}</td>
+        <td>${p.sales_order ? this._link("Sales Order", p.sales_order) : '<span class="fac-muted">—</span>'}</td>
+        <td style="font-size:11px;">${esc(p.reference || "")}</td>
+        <td>${p.excluded ? '<span class="fac-badge" style="background:#b02a37;color:#fff;">ÉCARTÉ</span>'
+              : low ? '<span class="fac-badge" style="background:#6b7280;color:#fff;">IGNORÉ ≤1</span>'
+              : '<span class="fac-badge commit">À FACTURER</span>'}</td>
+      </tr>`;
+    }).join("");
+    const nExcl = list.filter(p => p.excluded).length;
+    $box.html(`<div class="fac-sub">✅ Paiements éligibles avant lancement (${list.length}${nExcl ? `, ${nExcl} écarté(s)` : ""}) — décochez ceux à ne pas facturer</div>
+      <div class="fac-card" style="padding:0; overflow-x:auto;">
+        <div style="display:flex; gap:10px; align-items:center; padding:10px 12px; border-bottom:1px solid var(--border-color,#e4e8ee);">
+          <input type="search" id="fac-elig-filtre" class="form-control input-sm" style="max-width:280px;" placeholder="Filtrer par client ou groupe…">
+          <span class="fac-muted" style="font-size:12px;">Les cases décochées sont écartées de la simulation et de la génération.</span>
+        </div>
+        <table class="fac-tbl">
+          <thead><tr><th></th><th>Paiement</th><th>Date</th><th>Client</th><th>Groupe</th><th class="num">Montant</th><th>Commande</th><th>Info</th><th>Statut</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table></div>`);
+    $box.find(".fac-elig-chk").on("change", (e) => {
+      const pe = $(e.currentTarget).attr("data-pe");
+      e.currentTarget.checked ? this.excluded.delete(pe) : this.excluded.add(pe);
+      this._loadState();
+    });
+    $box.find("#fac-elig-filtre").on("input", (e) => {
+      const q = (e.currentTarget.value || "").toLowerCase().trim();
+      $box.find("tbody tr").each((_, tr) => $(tr).toggle(!q || ($(tr).attr("data-client") || "").includes(q)));
+    });
   }
 
   _bind() {
@@ -103,12 +150,15 @@ class FacturationAuto {
       verbose: $("#fac-verbose").is(":checked") ? 1 : 0,
       last_fac_num: (num === "" || num == null) ? "" : num,
       passager_factor: $("#fac-passager").val() || "0.5",
+      exclude_payments: JSON.stringify([...this.excluded]),
     };
   }
 
   _confirm_commit() {
+    const n = this.excluded.size;
     frappe.confirm(
-      "⚠️ Génération RÉELLE : les factures du mois précédent vont être créées et soumises. Continuer ?",
+      "⚠️ Génération RÉELLE : les factures du mois précédent vont être créées et soumises."
+        + (n ? `<br><b>${n} paiement(s) écarté(s)</b> ne seront pas facturés.` : "") + " Continuer ?",
       () => this._launch(false)
     );
   }
@@ -193,17 +243,21 @@ class FacturationAuto {
   }
 
   _payments_table(list) {
-    const nonFac = list.filter(p => !p.to_invoice).length;
-    const title = `<div class="fac-sub">💳 Paiements éligibles du mois ${list.length ? "(" + list.length + ", dont " + nonFac + " non facturés)" : ""}</div>`;
+    const nonFac = list.filter(p => !p.to_invoice && !p.excluded).length;
+    const nExcl = list.filter(p => p.excluded).length;
+    const title = `<div class="fac-sub">💳 Paiements éligibles du mois ${list.length ? "(" + list.length + ", dont " + nonFac + " non facturés" + (nExcl ? ", " + nExcl + " écarté(s)" : "") + ")" : ""}</div>`;
     if (!list.length) return title + '<div class="fac-card fac-muted">Aucun paiement éligible.</div>';
     const rows = list.map(p => {
-      const badge = p.to_invoice
+      const badge = p.excluded
+        ? '<span class="fac-badge" style="background:#b02a37;color:#fff;">ÉCARTÉ</span>'
+        : p.to_invoice
         ? '<span class="fac-badge commit">À FACTURER</span>'
         : '<span class="fac-badge" style="background:#6b7280;color:#fff;">IGNORÉ ≤1</span>';
       return `<tr${p.to_invoice ? "" : ' style="background:#f4f5f7;"'}>
         <td>${this._link("Payment Entry", p.payment_entry)}</td>
         <td class="fac-muted">${p.date || ""}</td>
-        <td>${frappe.utils.escape_html(p.customer || "")}</td>
+        <td>${frappe.utils.escape_html(p.customer_name || p.customer || "")}</td>
+        <td>${frappe.utils.escape_html(p.customer_group || "")}</td>
         <td class="num">${this._fmt(p.paid_amount)}</td>
         <td>${p.sales_order ? this._link("Sales Order", p.sales_order) : '<span class="fac-muted">—</span>'}</td>
         <td style="font-size:11px;">${frappe.utils.escape_html(p.reference || "")}</td>
@@ -213,7 +267,7 @@ class FacturationAuto {
     return title + `<div class="fac-card" style="padding:0; overflow-x:auto;">
       <table class="fac-tbl">
         <thead><tr>
-          <th>Paiement</th><th>Date</th><th>Client</th><th class="num">Montant</th>
+          <th>Paiement</th><th>Date</th><th>Client</th><th>Groupe</th><th class="num">Montant</th>
           <th>Commande</th><th>Info</th><th>Statut</th>
         </tr></thead>
         <tbody>${rows}</tbody>

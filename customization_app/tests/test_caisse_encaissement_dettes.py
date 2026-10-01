@@ -74,9 +74,15 @@ class _FrappeFactice:
     def __init__(self, documents):
         self.documents = documents          # {(doctype, nom): {champ: valeur}}
         self.db = self                      # `frappe.db.get_value` retombe ici
+        self.utils = types.SimpleNamespace(flt=lambda v, p=None: round(float(v), p) if p else float(v))
 
     def get_value(self, doctype, nom, champ):
         return (self.documents.get((doctype, nom)) or {}).get(champ)
+
+    def sql(self, requete, nom):
+        """Les lignes « Dette non payée » de l'échéancier de la commande `nom` :
+        données sous la clé ("Payment Schedule", nom) comme une liste de montants."""
+        return [(m,) for m in (self.documents.get(("Payment Schedule", nom)) or [])]
 
     def throw(self, message):
         raise Refus(message)
@@ -105,12 +111,15 @@ def _avance(paiement, doctype="Payment Entry"):
 
 
 def _executer_controle(documents, cible, dette="ACC-PAY-2026-00123",
-                       enc="ENC-2026-00042"):
-    """Joue le contrôle préalable du script de la fixture sur une dette donnée."""
+                       enc="ENC-2026-00042", valeur=100.0, paye=None):
+    """Joue le contrôle préalable du script de la fixture sur une dette donnée.
+    `valeur` : le montant de la dette ; `paye` : ce que l'encaissement lui consacre
+    (toute la dette par défaut — un paiement PARTIEL se dit en donnant moins)."""
     bloc = _bloc_controle(ast.parse(_script(), NOM_SCRIPT))
     espace = {"frappe": _FrappeFactice(documents), "name": cible,
-              "ipay": types.SimpleNamespace(ref_paiement=dette),
-              "doc": types.SimpleNamespace(name=enc)}
+              "ipay": types.SimpleNamespace(ref_paiement=dette, valeur=valeur),
+              "doc": types.SimpleNamespace(name=enc),
+              "somme_par_dette": {dette: valeur if paye is None else paye}}
     exec(compile(bloc, "controle prealable", "exec"), espace)  # noqa: S102
 
 
@@ -377,6 +386,29 @@ class TestControlePrealableDuScript(unittest.TestCase):
         """Ni commande ni facture retrouvée : rien ne prouve qu'il y ait un problème."""
         _executer_controle({}, "VIEUX-REF-42")
 
+    def test_un_paiement_partiel_passe_si_l_echeancier_porte_la_dette(self):
+        _executer_controle({("Sales Order", "SAL-ORD-2026-02881"): {"docstatus": 1},
+                            ("Payment Schedule", "SAL-ORD-2026-02881"): [244.023]},
+                           "SAL-ORD-2026-02881", valeur=244.023, paye=73.207)
+
+    def test_un_paiement_partiel_sans_ligne_d_echeancier_est_refuse(self):
+        """ECONOMIQ, 01/10/2026 : échéancier « Dette non payée 280.028 », dette 244.023, payée
+        73.207 → le reste (170.816) disparaissait sans message. Refus AVANT toute écriture,
+        qui nomme la dette, la commande, l'échéancier réel et la sortie (payer en totalité)."""
+        with self.assertRaises(Refus) as levee:
+            _executer_controle({("Sales Order", "SAL-ORD-2026-02881"): {"docstatus": 1},
+                                ("Payment Schedule", "SAL-ORD-2026-02881"): [280.028]},
+                               "SAL-ORD-2026-02881", valeur=244.023, paye=73.207)
+        message = str(levee.exception)
+        for attendu in ("ACC-PAY-2026-00123", "SAL-ORD-2026-02881", "280.028", "244.023", "totalite"):
+            self.assertIn(attendu, message)
+
+    def test_le_meme_cas_paye_en_totalite_passe(self):
+        """Sans reste à inscrire, l'échéancier n'a pas à porter la dette."""
+        _executer_controle({("Sales Order", "SAL-ORD-2026-02881"): {"docstatus": 1},
+                            ("Payment Schedule", "SAL-ORD-2026-02881"): [280.028]},
+                           "SAL-ORD-2026-02881", valeur=244.023)
+
 
 class TestContratDeValidation(unittest.TestCase):
     """Les DEUX contrats d'`encaisser` : l'ancien (brouillon puis `valider`) reste
@@ -568,10 +600,38 @@ class TestFixtureTraitementDesEncaissements(unittest.TestCase):
             if "Sales_i=frappe.get_doc('Sales Order',sales_order)" in ligne:
                 self.assertIn("if frappe.db.exists(\"Sales Order\", sales_order) else None", ligne)
 
+    def test_la_commande_d_une_dette_vient_des_references_du_paiement(self):
+        """`bl` vide (libellé « Aramex N: 0000 »…) : la commande se lit sur le paiement, sinon la
+        dette passait par la branche « facture » et un paiement partiel plantait (« Payment
+        Schedule … not found » : Amina, Haythem, Hichem, LIMPID'EAU)."""
+        self.assertIn('commande_dette=ipay.bl', self.script)
+        self.assertIn('PE.references[0].reference_doctype=="Sales Order"', self.script)
+        self.assertIn('if commande_dette:\n        SO=frappe.get_doc("Sales Order",commande_dette)', self.script)
+
+    def test_la_barriere_d_avance_laisse_la_place_du_montant(self):
+        """`advance_paid` n'est qu'une barrière recalculée par ERPNext ; l'annulation de la facture
+        a pu la gonfler au-delà du total (réaffectation au prorata) → « already been fully paid »
+        sur un paiement partiel. Chaque affectation ouvre au moins sa place."""
+        self.assertEqual(self.script.count("Sales_i.advance_paid=min(Sales_i.advance_paid-round("), 5)
+        self.assertEqual(self.script.count("Sales_dette.advance_paid=min(Sales_dette.advance_paid-round("), 1)
+        self.assertEqual(self.script.count("Sales_i.advance_paid=Sales_i.advance_paid-round("), 0)
+
+    def test_les_paiements_detaches_sont_reimputes_et_gardent_leur_commande(self):
+        """Un paiement que le hook ne peut pas réémettre (chèque impayé régularisé : CFP,
+        ACC-PAY-2026-07069) restait détaché : facture à nouveau due, argent non alloué. Il est
+        réimputé à la facture recréée, et celle-ci n'absorbe pas sa part de commande."""
+        self.assertIn("paiements_de_facture[invoice]=frappe.db.sql(", self.script)
+        self.assertIn("devenu_libre", self.script)
+        self.assertIn("detaches[invoice].append(ligne_pf[0])", self.script)
+        apres_insert = self.script[self.script.index("    new_invoice.insert()\n"):]
+        self.assertIn("new_invoice.allocate_advances_automatically=0", apres_insert)
+        self.assertLess(apres_insert.index("new_invoice.allocate_advances_automatically=0"), apres_insert.index("new_invoice.submit()"))
+
     def test_la_part_d_une_facture_recreee_est_imputee_apres_recreation(self):
         """Une dette sans commande dont la facture est recréée pour d'autres dettes : sa part
         est mise de côté (`a_imputer`) puis rapprochée de la facture recréée."""
-        self.assertEqual(self.script.count("a_imputer.append("), 6)   # 4 pièces + espèces + reliquat
+        # 4 pièces + espèces + reliquat de dette + paiements détachés par l'annulation de la facture
+        self.assertEqual(self.script.count("a_imputer.append("), 7)
         self.assertIn("factures_recreees[invoice]=new_invoice.name", self.script)
         fin = self.script[self.script.index("factures_recreees[invoice]=new_invoice.name"):]
         self.assertIn("frappe.new_doc(\"Payment Reconciliation\")", fin)

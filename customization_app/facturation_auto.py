@@ -10,6 +10,8 @@ Paramètres (comme le script, lus dans frappe.form_dict) :
   dry_run, use_gaps, create_leftover, verbose, last_fac_num, passager_factor
 """
 
+import json
+
 import frappe
 from frappe import _
 from frappe.utils import flt
@@ -147,8 +149,21 @@ def _exec_script(form_params):
     return result
 
 
+def _exclusions(exclude_payments):
+    """La liste des paiements à écarter, telle que le script la lit : noms séparés par des virgules.
+    Accepte une liste JSON (la page) ou déjà une chaîne."""
+    if not exclude_payments:
+        return ""
+    if isinstance(exclude_payments, str):
+        try:
+            exclude_payments = json.loads(exclude_payments)
+        except ValueError:
+            return exclude_payments
+    return ",".join(str(x).strip() for x in exclude_payments if str(x).strip())
+
+
 @frappe.whitelist()
-def preview(use_gaps=1, last_fac_num=None, passager_factor=0.5):
+def preview(use_gaps=1, last_fac_num=None, passager_factor=0.5, exclude_payments=None):
     """État de la base AVANT lancement : dernier n° M-1, 1er n° M+1, nombre de trous.
 
     N'exécute PAS la génération (le script rollback et retourne dès le calcul de
@@ -163,13 +178,14 @@ def preview(use_gaps=1, last_fac_num=None, passager_factor=0.5):
         "verbose": 0,
         "last_fac_num": last_fac_num,
         "passager_factor": passager_factor,
+        "exclude_payments": _exclusions(exclude_payments),
     })
     return _enrich_next_month(result)
 
 
 @frappe.whitelist()
 def run(dry_run=1, use_gaps=0, create_leftover=0, verbose=0,
-        last_fac_num=None, passager_factor=0.5):
+        last_fac_num=None, passager_factor=0.5, exclude_payments=None):
     """Exécute la logique de facturation auto et renvoie son bilan (result)."""
     _guard()
     result = _exec_script({
@@ -180,5 +196,6 @@ def run(dry_run=1, use_gaps=0, create_leftover=0, verbose=0,
         "verbose": verbose,
         "last_fac_num": last_fac_num,
         "passager_factor": passager_factor,
+        "exclude_payments": _exclusions(exclude_payments),
     })
     return _enrich_result(_enrich_next_month(result))
