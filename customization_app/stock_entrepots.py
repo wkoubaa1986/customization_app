@@ -736,7 +736,10 @@ def detail_verification(name):
     v = frappe.get_doc(VERIF, name)
     _acces_verification(v.entrepot)
     # ⚠️ Un Float vaut 0 en base, jamais None : « pas compté » se lit sur le drapeau `compte`.
+    images = dict(frappe.get_all("Item", filters={"name": ["in", [l.item_code for l in v.lignes] or [""]]},
+                                 fields=["name", "image"], as_list=True))
     return {"fiche": _resume(v), "lignes": [{"item_code": l.item_code, "item_name": l.item_name, "qte_systeme": flt(l.qte_systeme, 6),
+                                             "image": images.get(l.item_code),
                                              "qte_comptee": flt(l.qte_comptee, 6) if l.compte else None,
                                              "ecart": flt(l.ecart, 6) if l.compte else None, "taux": flt(l.taux, 3),
                                              "valeur_ecart": flt(l.valeur_ecart, 3) if l.compte else None,
