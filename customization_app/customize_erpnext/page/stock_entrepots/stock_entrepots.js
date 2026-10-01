@@ -197,13 +197,32 @@ class StockEntrepots {
     n && this.onglet === "solde" && this.ctx.responsable && !feuilleCible ? $b.show() : $b.hide();
   }
 
+  /** Le véhicule visé : celui affiché, ou, depuis le Magasin / « Tous », un choix dans un dialogue. */
+  choisirVehicule(titre) {
+    if (this.entrepot && this.entrepot !== this.ctx.magasin) return Promise.resolve(this.entrepot);
+    const choix = this.ctx.entrepots.filter((w) => w.name !== this.ctx.magasin);
+    if (!choix.length) return Promise.resolve(null);
+    return new Promise((resolve) => {
+      const d = new frappe.ui.Dialog({ title: titre, fields: [{ fieldtype: "Select", fieldname: "vehicule", label: "Vers quel stock ?", reqd: 1,
+          options: choix.map((w) => ({ value: w.name, label: w.libelle + (w.employes.length ? ` (${w.employes.join(", ")})` : "") })),
+          default: this.ctx.mien && this.ctx.mien !== this.ctx.magasin ? this.ctx.mien : choix[0].name }],
+        primary_action_label: "Continuer", primary_action: (v) => { choisi = v.vehicule; d.hide(); } });
+      let choisi = null;
+      d.onhide = () => resolve(choisi);           // hide() déclenche onhide : le choix est posé AVANT
+      d.show();
+    });
+  }
+
   async ajouterSelectionAuCible() {
     const items = Array.from(this.selSolde);
-    if (!items.length || !this.entrepot || this.entrepot === this.ctx.magasin) return;
-    const r = (await frappe.call({ method: SE_API + "ajouter_au_stock_cible", args: { entrepot: this.entrepot, items }, freeze: true })).message;
-    if (!(this.ctx.cibles || []).includes(this.entrepot)) (this.ctx.cibles = this.ctx.cibles || []).push(this.entrepot);
-    frappe.show_alert({ message: `🎯 ${r.ajoutes} article(s) ajouté(s) au stock cible (${r.total} au total) — réglez les quantités`, indicator: "green" }, 5);
+    if (!items.length) return;
+    const cible = await this.choisirVehicule("🎯 Dans le stock cible de…");
+    if (!cible) return;
+    const r = (await frappe.call({ method: SE_API + "ajouter_au_stock_cible", args: { entrepot: cible, items }, freeze: true })).message;
+    if (!(this.ctx.cibles || []).includes(cible)) (this.ctx.cibles = this.ctx.cibles || []).push(cible);
+    frappe.show_alert({ message: `🎯 ${r.ajoutes} article(s) ajouté(s) au stock cible de ${se_esc(this.libelle(cible))} (${r.total} au total) — réglez les quantités`, indicator: "green" }, 5);
     this.selSolde.clear();
+    if (this.entrepot !== cible) { this.entrepot = cible; this.peindreEntrepots(); }
     this.ouvrirCible();
   }
 
@@ -278,9 +297,11 @@ class StockEntrepots {
   /** Les articles cochés du solde partent dans le panier de l'onglet Transfert : Magasin → cet entrepôt,
    *  quantité proposée = ce qui manque pour revenir à la cible (sinon 1). */
   async transfererSelection() {
-    const cible = this.entrepot, source = this.ctx.magasin;
+    const source = this.ctx.magasin;
     const items = (this.solde ? this.solde.articles : []).filter((a) => this.selSolde.has(a.item_code));
-    if (!items.length || !cible || cible === source) return;
+    if (!items.length) return;
+    const cible = await this.choisirVehicule("🔁 Transférer depuis le Magasin vers…");
+    if (!cible || cible === source) return;
     const qtes = (await frappe.call({ method: SE_API + "get_quantites", args: { items: items.map((a) => a.item_code), source, cible } })).message || {};
     this.$r.find("#se-t-de").val(source);
     this.$r.find("#se-t-vers").val(cible);
