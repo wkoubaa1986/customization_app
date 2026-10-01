@@ -954,3 +954,44 @@ def ajouter_au_stock_cible(entrepot, items, qte_cible=None):
         ajoutes += 1
     _ecrire_cible(entrepot, cible)
     return {"ajoutes": ajoutes, "total": len(cible)}
+
+
+# ── Modèle générique de stock cible (réglage) ────────────────────────────────
+
+def modele_stock_cible() -> dict:
+    """Le stock cible générique du réglage : {article: quantité}."""
+    if not frappe.db.exists("DocType", CONFIG):
+        return {}
+    return {r.item_code: flt(r.qte_cible) for r in frappe.get_all("Stock Cible Ligne", filters={"parent": CONFIG, "parenttype": CONFIG},
+                                                                   fields=["item_code", "qte_cible"]) if flt(r.qte_cible) > 0}
+
+
+def fusionner_cible(existant: dict, modele: dict, remplacer: bool = False) -> dict:
+    """Le stock cible après application du modèle : les articles du modèle sont ajoutés ; ceux déjà présents
+    gardent leur quantité, sauf `remplacer`. Les articles hors modèle restent. PURE."""
+    out = dict(existant)
+    for code, q in modele.items():
+        if remplacer or code not in out:
+            out[code] = q
+    return out
+
+
+@frappe.whitelist()
+def get_modele_stock_cible():
+    _responsable()
+    m = modele_stock_cible()
+    return {"articles": len(m), "unites": flt(sum(m.values()), 6)}
+
+
+@frappe.whitelist(methods=["POST"])
+def appliquer_modele_cible(entrepot, remplacer=0):
+    """Applique le modèle générique au stock cible du véhicule (ajout, ou remplacement des quantités)."""
+    _responsable()
+    _verifier_entrepot(entrepot)
+    if entrepot == magasin():
+        frappe.throw(_("Le Magasin est la source du réassort : il n'a pas de stock cible."))
+    modele = modele_stock_cible()
+    if not modele:
+        frappe.throw(_("Le stock cible générique est vide : remplissez-le dans Config Stock Entrepot."))
+    _ecrire_cible(entrepot, fusionner_cible(stock_cible(entrepot), modele, cint(remplacer)))
+    return get_stock_cible(entrepot)

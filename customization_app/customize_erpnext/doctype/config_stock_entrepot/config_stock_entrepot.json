@@ -9,6 +9,8 @@
   "entrepots_exclus",
   "sec_seuils",
   "seuils",
+  "sec_modele",
+  "modele_cible",
   "sec_verif",
   "responsable_verification",
   "duree_verification",
@@ -44,6 +46,18 @@
    "description": "Un article dont le stock de l’entrepôt est strictement inférieur au seuil est marqué « à réapprovisionner » dans la page Stock (responsable magasin)."
   },
   {
+   "fieldname": "sec_modele",
+   "fieldtype": "Section Break",
+   "label": "Stock cible générique"
+  },
+  {
+   "fieldname": "modele_cible",
+   "fieldtype": "Table",
+   "label": "Modèle : ce qu’un véhicule doit contenir",
+   "options": "Stock Cible Ligne",
+   "description": "À appliquer à chaque stock d’employé depuis la feuille 🎯 Stock cible de la page Stock (les quantités restent ensuite réglables véhicule par véhicule)."
+  },
+  {
    "fieldname": "sec_verif",
    "fieldtype": "Section Break",
    "label": "Vérification des stocks des employés"
@@ -71,7 +85,7 @@
   }
  ],
  "links": [],
- "modified": "2026-10-02 08:00:00.000000",
+ "modified": "2026-10-02 09:30:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Config Stock Entrepot",

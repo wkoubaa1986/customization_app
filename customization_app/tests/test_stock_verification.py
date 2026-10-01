@@ -33,6 +33,16 @@ class TestRegles(unittest.TestCase):
         self.assertEqual([l["ecart"] for l in lignes], [-2, 1, 0, None, None])
 
 
+class TestModeleCible(unittest.TestCase):
+    def test_fusion(self):
+        existant = {"A": 2.0, "B": 5.0}
+        modele = {"B": 3.0, "C": 4.0}
+        self.assertEqual(S.fusionner_cible(existant, modele), {"A": 2.0, "B": 5.0, "C": 4.0})            # B garde sa quantité
+        self.assertEqual(S.fusionner_cible(existant, modele, remplacer=True), {"A": 2.0, "B": 3.0, "C": 4.0})
+        self.assertEqual(S.fusionner_cible({}, modele), modele)
+        self.assertEqual(S.fusionner_cible(existant, {}), existant)
+
+
 class TestCircuit(unittest.TestCase):
     ENTREPOT = "Stock Sadok Bouziri - A&S"
 
@@ -128,8 +138,14 @@ class TestCircuit(unittest.TestCase):
             self.skipTest("pas de seuil réglé pour cet entrepôt")
         res = S.get_solde(self.ENTREPOT, a_reappro=1)
         self.assertTrue(res["articles"])
-        self.assertTrue(all(a["a_reappro"] and a["qte"] < seuil["seuil"] for a in res["articles"]))
-        self.assertTrue(all(a["a_transferer"] == max(seuil["cible"] - a["qte"], 0) for a in res["articles"]))
+        cible = S.stock_cible(self.ENTREPOT)
+        for a in res["articles"]:
+            self.assertTrue(a["a_reappro"])
+            if a["item_code"] in cible:                                          # la cible de l'article prime sur le seuil
+                self.assertEqual((a["cible"], a["a_transferer"]), (cible[a["item_code"]], max(cible[a["item_code"]] - a["qte"], 0)))
+            else:
+                self.assertTrue(a["qte"] < seuil["seuil"])
+                self.assertEqual(a["a_transferer"], max(seuil["cible"] - a["qte"], 0))
         self.assertEqual(res["a_reappro"], len(res["articles"]))
         sans = S.get_solde(self.ENTREPOT)
         self.assertTrue(all(abs(a["qte"]) > 0 for a in sans["articles"]))     # sans filtre : stock non nul seulement

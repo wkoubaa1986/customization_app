@@ -230,6 +230,7 @@ class StockEntrepots {
   async ouvrirCible() {
     const entrepot = this.entrepot, r = this.$r;
     const d = (await frappe.call({ method: SE_API + "get_stock_cible", args: { entrepot } })).message;
+    const modele = (await frappe.call({ method: SE_API + "get_modele_stock_cible" })).message || { articles: 0 };
     const $v = r.find("#se-s-cible-vue");
     r.find("#se-s-solde").hide(); $v.show();
     this.selSolde.clear(); this.majBarreSolde();
@@ -245,7 +246,10 @@ class StockEntrepots {
       $v.html(`<span class="se-retour" data-retour>← Solde</span>
         <div class="se-card">
           <div class="se-v-stock"><div class="t">🎯 Stock cible — ${se_esc(this.libelle(entrepot))}</div>
-            <div class="plan">Ce que ce stock doit contenir. Réassort depuis <b>${se_esc(this.libelle(d.source))}</b> : cible − stock actuel.</div></div>
+            <div class="plan">Ce que ce stock doit contenir. Réassort depuis <b>${se_esc(this.libelle(d.source))}</b> : cible − stock actuel.
+              · <a class="se-lien" href="/app/config-stock-entrepot">⚙️ Réglages</a></div>
+            ${modele.articles ? `<button type="button" class="btn btn-default btn-sm" data-modele style="margin-top:6px">📋 Appliquer le modèle générique (${modele.articles} articles)</button>`
+              : `<div class="se-note">Pas de modèle générique : définissez-le dans les réglages pour l’appliquer à chaque véhicule.</div>`}</div>
           <input type="search" class="form-control se-saisie" id="se-cb-recherche" style="margin-top:8px" placeholder="➕ Ajouter un article (nom ou code)…">
           <div id="se-cb-trouves"></div>
           <div id="se-cb-lignes" style="margin-top:6px">${lignes.map(ligne).join("") || `<div class="se-note" style="padding:10px 0">Aucun article : cherchez ci-dessus, ou cochez des articles dans le solde puis « Dans le stock cible ».</div>`}</div>
@@ -273,6 +277,19 @@ class StockEntrepots {
       });
       $v.find("[data-enlever]").on("click", (e) => { const c = $(e.currentTarget).closest(".se-cb-ligne").attr("data-item"); lignes.splice(lignes.findIndex((x) => x.item_code === c), 1); peindre(); });
       $v.find("[data-retour]").on("click", () => { $v.hide(); r.find("#se-s-solde").show(); this.chargerSolde(); });
+      $v.find("[data-modele]").on("click", () => {
+        const dlg = new frappe.ui.Dialog({ title: "📋 Appliquer le modèle générique", fields: [
+            { fieldtype: "HTML", options: `<div class="se-note">Les ${modele.articles} articles du modèle sont ajoutés au stock cible de <b>${se_esc(this.libelle(entrepot))}</b>. Les quantités déjà saisies ici (non enregistrées) seront perdues : enregistrez d’abord si besoin.</div>` },
+            { fieldtype: "Check", fieldname: "remplacer", label: "Remplacer les quantités déjà définies par celles du modèle" }],
+          primary_action_label: "Appliquer", primary_action: async (v) => {
+            dlg.hide();
+            const res = (await frappe.call({ method: SE_API + "appliquer_modele_cible", args: { entrepot, remplacer: v.remplacer ? 1 : 0 }, freeze: true })).message;
+            if (!(this.ctx.cibles || []).includes(entrepot)) (this.ctx.cibles = this.ctx.cibles || []).push(entrepot);
+            frappe.show_alert({ message: `📋 Modèle appliqué : ${res.lignes.length} article(s) dans le stock cible`, indicator: "green" }, 4);
+            this.ouvrirCible();
+          } });
+        dlg.show();
+      });
       const sauver = async () => {
         const res = (await frappe.call({ method: SE_API + "definir_stock_cible", args: { entrepot, lignes: lignes.map((l) => ({ item_code: l.item_code, qte_cible: l.qte_cible })) }, freeze: true })).message;
         if (!(this.ctx.cibles || []).includes(entrepot) && res.lignes.length) (this.ctx.cibles = this.ctx.cibles || []).push(entrepot);
