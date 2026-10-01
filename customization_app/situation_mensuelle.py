@@ -37,6 +37,9 @@ MOIS = ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août
         "novembre", "décembre"]
 MOIS_COURTS = ["janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.", "nov.", "déc."]
 DEBUT = date(2023, 10, 1)            # premier mois proposé par le rapport
+# « Comparer les années » commence en 2024 : 2023 (trois mois + bénéfice initial) n'est pas représentative
+# (demande utilisateur 01/10/2026 soir). Les vues Mois / Année / Total gardent 2023.
+DEBUT_COMPARAISON = date(2024, 1, 1)
 
 
 # ── Accès ────────────────────────────────────────────────────────────────────
@@ -404,12 +407,12 @@ def _valeurs(c: dict) -> dict:
 @frappe.whitelist()
 def get_comparaison():
     """Comparer les années : pour chaque année, les 12 mois de chaque indicateur (None = mois hors
-    période : avant octobre 2023 ou à venir) et les totaux de l'année (même logique que la vue
-    « Année » : 2023 comprend le bénéfice initial ; l'année en cours s'arrête à aujourd'hui)."""
+    période : à venir) et les totaux de l'année (même logique que la vue « Année » ; l'année en
+    cours s'arrête à aujourd'hui). Depuis 2024 seulement : 2023 n'est pas représentative."""
     _lecture()
     aujourd = getdate(nowdate())
     annees = []
-    for an in range(DEBUT.year, aujourd.year + 1):
+    for an in range(DEBUT_COMPARAISON.year, aujourd.year + 1):
         mois = []
         for m in range(1, 13):
             d = date(an, m, 1)
@@ -421,5 +424,5 @@ def get_comparaison():
         c = calculer(p)
         annees.append({"annee": str(an), "mois": mois, "total": _valeurs(c), "initial": c["initial"],
                        "debut": str(max(p["debut"], DEBUT)), "fin": str(p["fin"]),
-                       "partielle": an == aujourd.year or an == DEBUT.year})
+                       "partielle": an == aujourd.year})
     return {"annees": annees, "mois": MOIS_COURTS}

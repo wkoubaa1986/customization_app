@@ -321,7 +321,7 @@ class SituationMensuelle {
             return `<td class="${c.cle === this.indicateur ? "on" : ""} ${v != null && v < 0 ? "neg" : ""}"><bdi>${c.pct ? sm_pct(v) : sm_dt(v)}</bdi>${evol}</td>`;
           }).join("")}</tr>`;
       }).join("")}</tbody></table>
-      <div class="sm-aide" style="margin-top:6px">Évolution par rapport à l’année précédente. L’année en cours s’arrête à aujourd’hui ; 2023 commence avec le bénéfice initial, comme dans la vue « Année ».</div>`);
+      <div class="sm-aide" style="margin-top:6px">Évolution par rapport à l’année précédente. L’année en cours s’arrête à aujourd’hui. 2023 (trois mois et le bénéfice initial) n’est pas comparée : elle reste dans les vues Mois, Année et Total.</div>`);
   }
 
   /** Courbes d'une année par série, mois en abscisse. Dessinées à la main (SVG) : frappe-charts

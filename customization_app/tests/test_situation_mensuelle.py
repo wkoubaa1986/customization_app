@@ -65,7 +65,8 @@ class TestMargesEtComparaison(unittest.TestCase):
         frappe.set_user("Administrator")
         r = SM.get_comparaison()
         annees = {a["annee"]: a for a in r["annees"]}
-        self.assertEqual(list(annees)[0], "2023")
+        self.assertEqual(list(annees)[0], "2024")                   # 2023 écartée : pas représentative
+        self.assertNotIn("2023", annees)
         self.assertEqual(annees["2023"]["mois"][:9], [None] * 9)                 # avant octobre 2023 : rien
         auj = getdate(nowdate())
         courante = annees[str(auj.year)]
