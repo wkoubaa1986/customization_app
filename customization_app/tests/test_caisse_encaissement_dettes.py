@@ -576,6 +576,17 @@ class TestFixtureTraitementDesEncaissements(unittest.TestCase):
     def test_le_script_compile(self):
         compile(self.script, NOM_SCRIPT, "exec")
 
+    def test_les_reglages_de_vente_sont_restaures_meme_en_cas_d_echec(self):
+        """01/10/2026 : l'encaissement de BEN Sassi a échoué après une écriture commitée, « commande
+        obligatoire » est resté à Non en prod. Le corps est sous try ; l'except remet les deux réglages,
+        commite, et relance l'erreur."""
+        s = self.script
+        self.assertLess(s.index("selling_settings.save()"), s.index("\ntry:\n"))
+        fin = s[s.rindex("except Exception as e_enc:"):]
+        for attendu in ("frappe.db.rollback()", "set_single_value('Selling Settings', 'so_required', original_so)",
+                        "set_single_value('Selling Settings', 'dn_required', original_bl)", "frappe.db.commit()", "raise"):
+            self.assertIn(attendu, fin)
+
     def test_le_script_compile_dans_le_bac_a_sable(self):
         """Le compilateur de Frappe (RestrictedPython) est plus strict que `compile` :
         `frappe._dict` y est refusé (nom commençant par « _ ») — erreur vue le 01/10/2026
@@ -606,7 +617,7 @@ class TestFixtureTraitementDesEncaissements(unittest.TestCase):
         Schedule … not found » : Amina, Haythem, Hichem, LIMPID'EAU)."""
         self.assertIn('commande_dette=ipay.bl', self.script)
         self.assertIn('PE.references[0].reference_doctype=="Sales Order"', self.script)
-        self.assertIn('if commande_dette:\n        SO=frappe.get_doc("Sales Order",commande_dette)', self.script)
+        self.assertRegex(self.script, r'if commande_dette:\n\s+SO=frappe\.get_doc\("Sales Order",commande_dette\)')
 
     def test_la_barriere_d_avance_laisse_la_place_du_montant(self):
         """`advance_paid` n'est qu'une barrière recalculée par ERPNext ; l'annulation de la facture
@@ -623,7 +634,7 @@ class TestFixtureTraitementDesEncaissements(unittest.TestCase):
         self.assertIn("paiements_de_facture[invoice]=frappe.db.sql(", self.script)
         self.assertIn("devenu_libre", self.script)
         self.assertIn("detaches[invoice].append(ligne_pf[0])", self.script)
-        apres_insert = self.script[self.script.index("    new_invoice.insert()\n"):]
+        apres_insert = self.script[self.script.index("new_invoice.insert()\n"):]
         self.assertIn("new_invoice.allocate_advances_automatically=0", apres_insert)
         self.assertLess(apres_insert.index("new_invoice.allocate_advances_automatically=0"), apres_insert.index("new_invoice.submit()"))
 
