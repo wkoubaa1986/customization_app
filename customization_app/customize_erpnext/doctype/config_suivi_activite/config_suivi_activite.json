@@ -1,0 +1,41 @@
+{
+ "actions": [],
+ "creation": "2026-10-01 14:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "employes"
+ ],
+ "fields": [
+  {
+   "fieldname": "employes",
+   "fieldtype": "Table",
+   "label": "Employés ayant accès à l'onglet Suivi d'activité",
+   "options": "Config Suivi Activite Employe",
+   "description": "Chaque employé listé voit l'onglet « Suivi d'activité » et SES activités seulement. Cochez « Responsable » pour qui voit et affecte celles de tout le monde. L'accès suit le compte utilisateur de la fiche Employé."
+  }
+ ],
+ "links": [],
+ "modified": "2026-10-01 14:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "Config Suivi Activite",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "print": 1,
+   "email": 1,
+   "share": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "issingle": 1
+}

@@ -149,6 +149,15 @@ app_license = "mit"
 # 	"Event": "frappe.desk.doctype.event.event.has_permission",
 # }
 
+# Suivi d'activité : chaque employé ne voit QUE ses activités (liste, rapports, API, pièces
+# jointes), les responsables tout. ⚠️ Une seule affectation de chaque dict dans ce fichier.
+permission_query_conditions = {
+    "Activite Employe": "customization_app.suivi_activite.permission_query_conditions",
+}
+has_permission = {
+    "Activite Employe": "customization_app.suivi_activite.has_permission",
+}
+
 # DocType Class
 # ---------------
 # Override standard doctype classes
@@ -196,6 +205,10 @@ doc_events = {
         "on_update": "customization_app.caisse_depenses.po_lier_fiche_caisse",
         "on_submit": "customization_app.caisse_depenses.po_convertir_avances",
         "on_cancel": "customization_app.caisse_depenses.po_detacher_fiche_caisse",
+    },
+    # Zones magasin : la table « Zones magasin » de la fiche réécrit « Emplacement Magasin ».
+    "Item": {
+        "validate": "customization_app.zones_magasin.item_validate",
     },
     "Tache de travail": {
         "before_save": "customization_app.api.before_save_tache_de_travail",
@@ -447,6 +460,7 @@ app_include_js = [_js("customer_quick_entry.js"),
                   _js("sales_order_sms_groupe.js"),
                   # Clôture guidée des tâches : photos obligatoires + code superviseur.
                   _js("tache_photos_cloture.js"),
+                  _js("suivi_activite_onglet.js"),  # l'onglet « Suivi d'activité » ouvre l'outil
                   # 📨 SMS / e-mail au client depuis la fiche tâche, avec modèles prédéfinis
                   # (technicien + téléphone injectés automatiquement, commande liée si présente).
                   _js("tache_sms_email.js"),
@@ -642,12 +656,16 @@ scheduler_events = {
 # modification était retombée à celle du fichier. Un patch ne se rejoue pas :
 # il faut donc le reposer à chaque migration. La fonction est idempotente.
 after_migrate = [
+    # Onglet « Suivi d'activité » + rôles Suivi Activité / Responsable Activité.
+    "customization_app.patches.ensure_onglet_suivi_activite.execute",
     "customization_app.patches.ensure_raccourci_commandes_a_traiter.execute",
     "customization_app.patches.ensure_raccourci_reparation_osmoseurs.execute",  # "Selling", après "Commandes à traiter"
     # « Rapport Prime » dans l'onglet Banque (workspace importé par bank_retenue_sync).
     "customization_app.patches.ensure_raccourci_rapport_prime.execute",
     # « Transformation d’articles » dans l'espace Stock, après « Dashboard ».
     "customization_app.patches.ensure_raccourci_transformation_articles.execute",
+    # « Zones & sorties d’articles » dans l'espace Stock, après « Transformation d’articles ».
+    "customization_app.patches.ensure_raccourci_zones_magasin.execute",
     # « Congés & récupérations » dans l'onglet HR + type de congé « Récupération (quinzaine) ».
     "customization_app.patches.ensure_conges_recuperations.execute",
 ]

@@ -1,0 +1,110 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "autoname": "",
+ "creation": "2026-10-01 18:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "est_espace",
+  "espace",
+  "code",
+  "libelle",
+  "description"
+ ],
+ "fields": [
+  {
+   "fieldname": "est_espace",
+   "fieldtype": "Check",
+   "label": "C'est un espace (Magasin, Hall…)",
+   "in_list_view": 1,
+   "description": "Un espace regroupe des zones. On peut aussi y ranger un article directement."
+  },
+  {
+   "fieldname": "espace",
+   "fieldtype": "Link",
+   "label": "Espace",
+   "options": "Zone Magasin",
+   "depends_on": "eval:!doc.est_espace",
+   "mandatory_depends_on": "eval:!doc.est_espace",
+   "in_list_view": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "code",
+   "fieldtype": "Data",
+   "label": "Code",
+   "reqd": 1,
+   "description": "Ex. A1, K3, Armoire. Le nom complet devient « Espace - Code »."
+  },
+  {
+   "fieldname": "libelle",
+   "fieldtype": "Data",
+   "label": "Nom complet",
+   "read_only": 1,
+   "unique": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "description",
+   "fieldtype": "Small Text",
+   "label": "Description"
+  }
+ ],
+ "links": [],
+ "modified": "2026-10-01 20:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "Zone Magasin",
+ "owner": "Administrator",
+ "sort_field": "libelle",
+ "sort_order": "ASC",
+ "states": [],
+ "title_field": "libelle",
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "report": 1,
+   "export": 1,
+   "print": 1,
+   "email": 1,
+   "share": 1
+  },
+  {
+   "role": "Stock Manager",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "report": 1,
+   "export": 1,
+   "print": 1,
+   "email": 1,
+   "share": 1
+  },
+  {
+   "role": "Item Manager",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "report": 1,
+   "export": 1,
+   "print": 1,
+   "email": 1,
+   "share": 1
+  },
+  {
+   "role": "Stock User",
+   "read": 1,
+   "report": 1,
+   "print": 1
+  }
+ ],
+ "naming_rule": "By script"
+}

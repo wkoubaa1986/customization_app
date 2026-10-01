@@ -55,3 +55,4 @@ customization_app.patches.update_anomalie_livraison_partielle
 customization_app.patches.desactiver_server_scripts_echange
 customization_app.patches.attribuer_role_conges_rh
 customization_app.patches.ensure_machine_reparation_field
+customization_app.patches.zones_magasin_unitaires

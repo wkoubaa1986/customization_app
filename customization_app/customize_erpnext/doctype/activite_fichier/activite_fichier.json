@@ -1,0 +1,66 @@
+{
+ "actions": [],
+ "creation": "2026-10-01 14:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "fichier",
+  "type_fichier",
+  "description",
+  "ajoute_par",
+  "ajoute_le"
+ ],
+ "fields": [
+  {
+   "fieldname": "fichier",
+   "fieldtype": "Attach",
+   "label": "Fichier",
+   "reqd": 1,
+   "in_list_view": 1,
+   "columns": 4
+  },
+  {
+   "fieldname": "type_fichier",
+   "fieldtype": "Select",
+   "label": "Type",
+   "options": "Photo\nDocument",
+   "default": "Document",
+   "in_list_view": 1,
+   "columns": 1
+  },
+  {
+   "fieldname": "description",
+   "fieldtype": "Data",
+   "label": "Description",
+   "in_list_view": 1,
+   "columns": 3
+  },
+  {
+   "fieldname": "ajoute_par",
+   "fieldtype": "Link",
+   "label": "Ajouté par",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "ajoute_le",
+   "fieldtype": "Datetime",
+   "label": "Ajouté le",
+   "read_only": 1,
+   "in_list_view": 1,
+   "columns": 2
+  }
+ ],
+ "links": [],
+ "modified": "2026-10-01 14:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "Activite Fichier",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "istable": 1
+}

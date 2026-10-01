@@ -1,0 +1,49 @@
+{
+ "actions": [],
+ "creation": "2026-10-01 16:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "istable": 1,
+ "field_order": [
+  "employe",
+  "nom",
+  "utilisateur"
+ ],
+ "fields": [
+  {
+   "fieldname": "employe",
+   "fieldtype": "Link",
+   "label": "Employé",
+   "options": "Employee",
+   "reqd": 1,
+   "in_list_view": 1,
+   "ignore_user_permissions": 1
+  },
+  {
+   "fieldname": "nom",
+   "fieldtype": "Data",
+   "label": "Nom",
+   "fetch_from": "employe.employee_name",
+   "read_only": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "utilisateur",
+   "fieldtype": "Link",
+   "label": "Compte",
+   "options": "User",
+   "read_only": 1
+  }
+ ],
+ "links": [],
+ "modified": "2026-10-01 16:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "Activite Affectation",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

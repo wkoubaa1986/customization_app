@@ -1,0 +1,56 @@
+{
+ "actions": [],
+ "creation": "2026-10-01 14:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "libelle",
+  "fait",
+  "fait_le",
+  "fait_par"
+ ],
+ "fields": [
+  {
+   "fieldname": "libelle",
+   "fieldtype": "Data",
+   "label": "Étape",
+   "reqd": 1,
+   "in_list_view": 1,
+   "columns": 6
+  },
+  {
+   "fieldname": "fait",
+   "fieldtype": "Check",
+   "label": "Fait",
+   "in_list_view": 1,
+   "columns": 1
+  },
+  {
+   "fieldname": "fait_le",
+   "fieldtype": "Datetime",
+   "label": "Fait le",
+   "read_only": 1,
+   "in_list_view": 1,
+   "columns": 2
+  },
+  {
+   "fieldname": "fait_par",
+   "fieldtype": "Link",
+   "label": "Fait par",
+   "options": "User",
+   "read_only": 1
+  }
+ ],
+ "links": [],
+ "modified": "2026-10-01 14:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "Activite Etape",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "istable": 1
+}

@@ -1,0 +1,200 @@
+{
+ "actions": [],
+ "creation": "2026-10-01 14:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "titre",
+  "affectations",
+  "noms_employes",
+  "column_break_1",
+  "statut",
+  "priorite",
+  "avancement",
+  "section_dates",
+  "date_debut",
+  "date_prevue",
+  "column_break_2",
+  "date_fin",
+  "ia_ameliore",
+  "section_description",
+  "description",
+  "etapes",
+  "section_fichiers",
+  "fichiers",
+  "section_notes",
+  "notes"
+ ],
+ "fields": [
+  {
+   "fieldname": "titre",
+   "fieldtype": "Data",
+   "label": "Activité",
+   "reqd": 1,
+   "in_list_view": 1,
+   "in_global_search": 1
+  },
+  {
+   "fieldname": "affectations",
+   "fieldtype": "Table MultiSelect",
+   "label": "Employés",
+   "options": "Activite Affectation",
+   "reqd": 1,
+   "description": "Un ou plusieurs employés. Chacun voit l'activité dans sa liste : étapes, notes et photos sont partagées."
+  },
+  {
+   "fieldname": "noms_employes",
+   "fieldtype": "Data",
+   "label": "Employés (noms)",
+   "read_only": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 0
+  },
+  {
+   "fieldname": "column_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "statut",
+   "fieldtype": "Select",
+   "label": "Statut",
+   "options": "À faire\nEn cours\nEn attente\nTerminée\nAnnulée",
+   "default": "À faire",
+   "in_list_view": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "priorite",
+   "fieldtype": "Select",
+   "label": "Priorité",
+   "options": "Basse\nNormale\nHaute\nUrgente",
+   "default": "Normale",
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "avancement",
+   "fieldtype": "Percent",
+   "label": "Avancement"
+  },
+  {
+   "fieldname": "section_dates",
+   "fieldtype": "Section Break",
+   "label": "Dates"
+  },
+  {
+   "fieldname": "date_debut",
+   "fieldtype": "Date",
+   "label": "Date de début",
+   "default": "Today"
+  },
+  {
+   "fieldname": "date_prevue",
+   "fieldtype": "Date",
+   "label": "Date prévisionnelle",
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "column_break_2",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "date_fin",
+   "fieldtype": "Date",
+   "label": "Terminée le",
+   "read_only": 1
+  },
+  {
+   "fieldname": "ia_ameliore",
+   "fieldtype": "Check",
+   "label": "Améliorée par l'IA",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_description",
+   "fieldtype": "Section Break",
+   "label": "Description"
+  },
+  {
+   "fieldname": "description",
+   "fieldtype": "Text",
+   "label": "Description"
+  },
+  {
+   "fieldname": "etapes",
+   "fieldtype": "Table",
+   "label": "Étapes",
+   "options": "Activite Etape"
+  },
+  {
+   "fieldname": "section_fichiers",
+   "fieldtype": "Section Break",
+   "label": "Photos et documents"
+  },
+  {
+   "fieldname": "fichiers",
+   "fieldtype": "Table",
+   "label": "Photos et documents",
+   "options": "Activite Fichier"
+  },
+  {
+   "fieldname": "section_notes",
+   "fieldtype": "Section Break",
+   "label": "Notes"
+  },
+  {
+   "fieldname": "notes",
+   "fieldtype": "Table",
+   "label": "Notes",
+   "options": "Activite Note"
+  }
+ ],
+ "links": [],
+ "modified": "2026-10-01 16:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "Activite Employe",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "print": 1,
+   "report": 1,
+   "export": 1,
+   "email": 1,
+   "share": 1
+  },
+  {
+   "role": "Responsable Activité",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "print": 1,
+   "report": 1,
+   "export": 1,
+   "email": 1,
+   "share": 1
+  },
+  {
+   "role": "Suivi Activité",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "print": 1,
+   "email": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "autoname": "ACT-.YYYY.-.#####",
+ "naming_rule": "Expression (old style)",
+ "title_field": "titre",
+ "show_title_field_in_link": 1,
+ "track_changes": 1
+}

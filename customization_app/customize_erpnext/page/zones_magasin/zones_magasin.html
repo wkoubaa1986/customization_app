@@ -1,0 +1,113 @@
+<div class="zm-page">
+  <style>
+    .zm-page { padding: 10px 12px 110px; max-width: 1200px; }
+    .zm-card { background: var(--card-bg,#fff); border: 1px solid var(--border-color,#e4e8ee); border-radius: 12px;
+               padding: 10px 12px; margin-bottom: 10px; box-shadow: 0 1px 3px rgba(0,0,0,.05); }
+    .zm-vues { display: flex; background: #f1f5f9; border-radius: 12px; padding: 4px; margin-bottom: 10px; }
+    .zm-vue { flex: 1; text-align: center; padding: 9px 6px; border-radius: 9px; font-weight: 600; font-size: 14px; cursor: pointer; color: #475569; }
+    .zm-vue.on { background: #fff; color: #111827; box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+    .zm-saisie { width: 100%; height: 40px; font-size: 14px; }
+    .zm-aide { font-size: 11.5px; color: #94a3b8; margin-top: 4px; }
+
+    .zm-espace { margin-bottom: 12px; }
+    .zm-espace-tete { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+    .zm-espace-tete .nom { font-size: 16px; font-weight: 700; cursor: pointer; }
+    .zm-espace-tete .n { font-size: 12px; color: #64748b; cursor: pointer; }
+    .zm-espace-tete .act { margin-left: auto; display: flex; gap: 4px; }
+    .zm-act { font-size: 15px; padding: 4px 7px; cursor: pointer; color: #64748b; border-radius: 8px; }
+    .zm-act:hover { background: #f1f5f9; }
+    .zm-tuiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 8px; }
+    .zm-tuile { border: 1px solid #e2e8f0; border-radius: 10px; padding: 9px 8px; text-align: center; cursor: pointer; background: #fff; }
+    .zm-tuile:hover { border-color: #93c5fd; }
+    .zm-tuile .c { font-weight: 700; font-size: 15px; word-break: break-word; }
+    .zm-tuile .n { font-size: 11.5px; color: #94a3b8; }
+    .zm-tuile.vide .c { color: #94a3b8; }
+
+    .zm-filtres { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .zm-filtres .plein { grid-column: 1 / -1; }
+    .zm-filtres .form-control { height: 38px; font-size: 14px; width: 100%; }
+    .zm-filtres label { font-size: 13px; margin: 0; display: flex; align-items: center; gap: 6px; }
+    .zm-info { font-size: 12px; color: #64748b; margin: 4px 2px 8px; }
+    .zm-grille { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 10px; }
+    .zm-art { background: var(--card-bg,#fff); border: 1px solid var(--border-color,#e4e8ee); border-radius: 12px; padding: 10px; position: relative; }
+    .zm-art.sel { border-color: #2563eb; box-shadow: 0 0 0 2px rgba(37,99,235,.25); }
+    .zm-tete { display: flex; gap: 10px; align-items: flex-start; }
+    .zm-img { width: 52px; height: 52px; border-radius: 10px; object-fit: contain; border: 1px solid #e4e8ee; background: #f8fafc;
+              flex: none; display: flex; align-items: center; justify-content: center; color: #cbd5e1; font-size: 22px; }
+    .zm-tete .txt { flex: 1; min-width: 0; padding-right: 30px; }
+    .zm-nom { font-weight: 600; font-size: 14px; line-height: 1.25; word-break: break-word; }
+    .zm-code { font-size: 11.5px; color: #64748b; margin-top: 2px; word-break: break-all; }
+    .zm-coche { position: absolute; top: 10px; right: 10px; width: 26px; height: 26px; border-radius: 7px; border: 2px solid #cbd5e1;
+                display: flex; align-items: center; justify-content: center; cursor: pointer; color: #fff; font-size: 15px; background: #fff; }
+    .zm-art.sel .zm-coche { background: #2563eb; border-color: #2563eb; }
+    .zm-stock { font-size: 12px; color: #475569; margin: 6px 0 2px; }
+    .zm-lbl { font-size: 10.5px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: .3px; margin: 8px 0 3px; display: block; }
+    .zm-zchips { display: flex; flex-wrap: wrap; gap: 5px; }
+    .zm-zchip { background: #eff6ff; color: #1e40af; border-radius: 999px; padding: 3px 4px 3px 10px; font-size: 12.5px; display: inline-flex; align-items: center; gap: 2px; }
+    .zm-zchip .x { padding: 0 6px; cursor: pointer; color: #60a5fa; font-size: 14px; }
+    .zm-zchip.plus { background: #fff; border: 1px dashed #93c5fd; color: #2563eb; padding: 3px 10px; cursor: pointer; }
+    .zm-zchip.aucune { background: #fff7ed; color: #c2410c; padding: 3px 10px; }
+    .zm-art select { height: 36px; font-size: 13.5px; width: 100%; }
+    .zm-plus { display: block; width: 100%; margin: 12px 0; height: 40px; }
+    .zm-barre { position: fixed; left: 0; right: 0; bottom: 0; z-index: 1030; background: #111827; color: #fff; padding: 10px 12px; display: none;
+                box-shadow: 0 -4px 12px rgba(0,0,0,.2); }
+    .zm-barre .ligne { display: flex; gap: 8px; align-items: center; max-width: 1200px; margin: 0 auto; flex-wrap: wrap; }
+    .zm-barre .compte { font-weight: 700; font-size: 14px; margin-right: auto; }
+    .zm-barre .lien { color: #93c5fd; font-size: 13px; cursor: pointer; }
+    .zm-barre .btn { flex: 1 1 30%; }
+    .zm-barre select { height: 34px; font-size: 13px; border-radius: 6px; flex: 1 1 30%; color: #111827; }
+    .zm-vide { text-align: center; color: #94a3b8; padding: 24px 10px; }
+
+    .zm-ligne { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid #f1f5f9; }
+    .zm-ligne .zm-img { width: 40px; height: 40px; font-size: 18px; }
+    .zm-ligne .txt { flex: 1; min-width: 0; }
+    .zm-ligne .bt { flex: none; font-size: 18px; width: 36px; height: 36px; border-radius: 10px; border: 1px solid #e2e8f0; background: #fff;
+                    display: flex; align-items: center; justify-content: center; cursor: pointer; }
+    .zm-ligne .bt.ajout { color: #16a34a; } .zm-ligne .bt.retrait { color: #dc2626; } .zm-ligne .bt.fait { background: #dcfce7; border-color: #86efac; }
+    .zm-choix-espace { font-weight: 700; font-size: 13px; margin: 10px 0 6px; color: #334155; }
+    .zm-choix { display: flex; flex-wrap: wrap; gap: 6px; }
+    .zm-choix .ch { border: 1px solid #cbd5e1; border-radius: 999px; padding: 6px 12px; font-size: 13.5px; cursor: pointer; background: #fff; user-select: none; }
+    .zm-choix .ch.on { background: #2563eb; border-color: #2563eb; color: #fff; }
+    @media (max-width: 600px) { .zm-grille { grid-template-columns: 1fr; } }
+  </style>
+
+  <div class="zm-vues">
+    <div class="zm-vue on" data-vue="zones">📍 Par zone</div>
+    <div class="zm-vue" data-vue="articles">📦 Par article</div>
+  </div>
+
+  <div id="zm-v-zones">
+    <div class="zm-card" id="zm-nouvel-espace" style="display:none">
+      <input type="text" class="form-control zm-saisie" id="zm-espace-saisie" placeholder="➕ Nouvel espace (ex. Dépôt) puis Entrée">
+    </div>
+    <div id="zm-espaces"></div>
+  </div>
+
+  <div id="zm-v-articles" style="display:none">
+    <div class="zm-card">
+      <div class="zm-filtres">
+        <input type="search" class="form-control plein" id="zm-recherche" placeholder="🔎 Article (nom ou code)…">
+        <select class="form-control" id="zm-filtre-zone"></select>
+        <select class="form-control" id="zm-sortie"><option value="">Toutes les sorties</option></select>
+        <select class="form-control" id="zm-groupe"><option value="">Tous les groupes</option></select>
+        <label><input type="checkbox" id="zm-stockes" checked> Stockés seulement</label>
+      </div>
+    </div>
+    <div class="zm-info" id="zm-info"></div>
+    <div class="zm-grille" id="zm-grille"></div>
+    <button class="btn btn-default zm-plus" id="zm-plus" style="display:none">Afficher plus</button>
+  </div>
+
+  <div class="zm-barre" id="zm-barre">
+    <div class="ligne">
+      <span class="compte" id="zm-compte"></span>
+      <span class="lien" id="zm-tout">Tout cocher</span>
+      <span class="lien" id="zm-aucun">Annuler</span>
+    </div>
+    <div class="ligne" style="margin-top:8px">
+      <button class="btn btn-sm btn-light" id="zm-lot-ajout">📍 Ranger dans…</button>
+      <button class="btn btn-sm btn-light" id="zm-lot-retrait">➖ Retirer de…</button>
+      <select id="zm-lot-sortie"></select>
+    </div>
+  </div>
+</div>
