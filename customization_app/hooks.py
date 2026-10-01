@@ -604,6 +604,8 @@ scheduler_events = {
     "daily": [
         # Jours de récupération par quinzaine : crédite les quinzaines écoulées (Regle Recuperation).
         "customization_app.conges_recuperations.tache_quotidienne",
+        # Vérification hebdomadaire des stocks d'employés : fiche + tâches le jour fixé (Config Stock Entrepot).
+        "customization_app.stock_entrepots.planifier_verifications",
     ],
 
     "cron": {

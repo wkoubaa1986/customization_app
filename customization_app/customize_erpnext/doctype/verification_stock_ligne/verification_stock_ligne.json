@@ -1,0 +1,106 @@
+{
+ "actions": [],
+ "creation": "2026-10-02 08:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "item_code",
+  "item_name",
+  "qte_systeme",
+  "compte",
+  "qte_comptee",
+  "ecart",
+  "taux",
+  "valeur_ecart",
+  "zones",
+  "commentaire"
+ ],
+ "fields": [
+  {
+   "fieldname": "item_code",
+   "fieldtype": "Link",
+   "label": "Article",
+   "options": "Item",
+   "reqd": 1,
+   "in_list_view": 1,
+   "columns": 3
+  },
+  {
+   "fieldname": "item_name",
+   "fieldtype": "Data",
+   "label": "Désignation",
+   "fetch_from": "item_code.item_name",
+   "read_only": 1,
+   "in_list_view": 1,
+   "columns": 3
+  },
+  {
+   "fieldname": "qte_systeme",
+   "fieldtype": "Float",
+   "label": "Qté système",
+   "read_only": 1,
+   "in_list_view": 1,
+   "columns": 1
+  },
+  {
+   "fieldname": "compte",
+   "fieldtype": "Check",
+   "label": "Compté",
+   "in_list_view": 1,
+   "columns": 1,
+   "description": "Un Float vaut 0 en base, jamais « vide » : ce drapeau distingue « compté 0 » de « pas compté »."
+  },
+  {
+   "fieldname": "qte_comptee",
+   "fieldtype": "Float",
+   "label": "Qté comptée",
+   "in_list_view": 1,
+   "columns": 1
+  },
+  {
+   "fieldname": "ecart",
+   "fieldtype": "Float",
+   "label": "Écart",
+   "read_only": 1,
+   "in_list_view": 1,
+   "columns": 1
+  },
+  {
+   "fieldname": "taux",
+   "fieldtype": "Currency",
+   "label": "Taux de valorisation",
+   "read_only": 1
+  },
+  {
+   "fieldname": "valeur_ecart",
+   "fieldtype": "Currency",
+   "label": "Valeur de l’écart",
+   "read_only": 1,
+   "in_list_view": 1,
+   "columns": 1
+  },
+  {
+   "fieldname": "zones",
+   "fieldtype": "Data",
+   "label": "Zones",
+   "read_only": 1
+  },
+  {
+   "fieldname": "commentaire",
+   "fieldtype": "Data",
+   "label": "Commentaire"
+  }
+ ],
+ "links": [],
+ "modified": "2026-10-02 08:30:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "Verification Stock Ligne",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "istable": 1
+}

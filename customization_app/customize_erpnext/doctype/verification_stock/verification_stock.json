@@ -1,0 +1,203 @@
+{
+ "actions": [],
+ "creation": "2026-10-02 08:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "entrepot",
+  "date",
+  "statut",
+  "col1",
+  "employe",
+  "responsable",
+  "tache_employe",
+  "tache_responsable",
+  "sec_lignes",
+  "lignes",
+  "sec_bilan",
+  "nb_lignes",
+  "nb_comptes",
+  "nb_ecarts",
+  "col2",
+  "valeur_ecarts",
+  "valeur_manquants",
+  "termine_le",
+  "termine_par",
+  "note"
+ ],
+ "fields": [
+  {
+   "fieldname": "entrepot",
+   "fieldtype": "Link",
+   "label": "Stock vérifié",
+   "options": "Warehouse",
+   "reqd": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "date",
+   "fieldtype": "Date",
+   "label": "Date prévue",
+   "reqd": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "statut",
+   "fieldtype": "Select",
+   "label": "Statut",
+   "options": "En cours\nTerminée",
+   "default": "En cours",
+   "in_list_view": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "col1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "employe",
+   "fieldtype": "Link",
+   "label": "Employé du stock",
+   "options": "Employee",
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "responsable",
+   "fieldtype": "Link",
+   "label": "Responsable magasin",
+   "options": "Employee"
+  },
+  {
+   "fieldname": "tache_employe",
+   "fieldtype": "Link",
+   "label": "Tâche de l’employé",
+   "options": "Tache de travail",
+   "read_only": 1
+  },
+  {
+   "fieldname": "tache_responsable",
+   "fieldtype": "Link",
+   "label": "Tâche du responsable",
+   "options": "Tache de travail",
+   "read_only": 1
+  },
+  {
+   "fieldname": "sec_lignes",
+   "fieldtype": "Section Break",
+   "label": "Comptage"
+  },
+  {
+   "fieldname": "lignes",
+   "fieldtype": "Table",
+   "label": "Articles",
+   "options": "Verification Stock Ligne"
+  },
+  {
+   "fieldname": "sec_bilan",
+   "fieldtype": "Section Break",
+   "label": "Bilan"
+  },
+  {
+   "fieldname": "nb_lignes",
+   "fieldtype": "Int",
+   "label": "Articles",
+   "read_only": 1
+  },
+  {
+   "fieldname": "nb_comptes",
+   "fieldtype": "Int",
+   "label": "Articles comptés",
+   "read_only": 1
+  },
+  {
+   "fieldname": "nb_ecarts",
+   "fieldtype": "Int",
+   "label": "Articles en écart",
+   "read_only": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "col2",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "valeur_ecarts",
+   "fieldtype": "Currency",
+   "label": "Valeur nette des écarts",
+   "read_only": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "valeur_manquants",
+   "fieldtype": "Currency",
+   "label": "Valeur des manquants",
+   "read_only": 1
+  },
+  {
+   "fieldname": "termine_le",
+   "fieldtype": "Datetime",
+   "label": "Terminée le",
+   "read_only": 1
+  },
+  {
+   "fieldname": "termine_par",
+   "fieldtype": "Link",
+   "label": "Terminée par",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "note",
+   "fieldtype": "Small Text",
+   "label": "Note"
+  }
+ ],
+ "links": [],
+ "modified": "2026-10-02 08:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "Verification Stock",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "print": 1,
+   "email": 1,
+   "share": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "Responsable magasin",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "print": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "Stock Manager",
+   "read": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "Stock User",
+   "read": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "autoname": "VERIF-.YYYY.-.#####",
+ "naming_rule": "Expression (old style)",
+ "track_changes": 1
+}

@@ -6,7 +6,13 @@
  "engine": "InnoDB",
  "field_order": [
   "entrepot_magasin",
-  "entrepots_exclus"
+  "entrepots_exclus",
+  "sec_seuils",
+  "seuils",
+  "sec_verif",
+  "responsable_verification",
+  "duree_verification",
+  "verifications"
  ],
  "fields": [
   {
@@ -24,10 +30,48 @@
    "label": "Autres entrepôts jamais remis à zéro",
    "options": "Config Stock Entrepot Exclu",
    "description": "Ex. Articles défectueux : leur stock ne doit pas rejoindre le Magasin."
+  },
+  {
+   "fieldname": "sec_seuils",
+   "fieldtype": "Section Break",
+   "label": "Réapprovisionnement"
+  },
+  {
+   "fieldname": "seuils",
+   "fieldtype": "Table",
+   "label": "Seuil par entrepôt",
+   "options": "Config Stock Entrepot Seuil",
+   "description": "Un article dont le stock de l’entrepôt est strictement inférieur au seuil est marqué « à réapprovisionner » dans la page Stock (responsable magasin)."
+  },
+  {
+   "fieldname": "sec_verif",
+   "fieldtype": "Section Break",
+   "label": "Vérification des stocks des employés"
+  },
+  {
+   "fieldname": "responsable_verification",
+   "fieldtype": "Link",
+   "label": "Responsable principal du magasin",
+   "options": "Employee",
+   "description": "Reçoit une tâche à chaque vérification, avec l’employé du stock."
+  },
+  {
+   "fieldname": "duree_verification",
+   "fieldtype": "Select",
+   "label": "Durée de la tâche",
+   "options": "30 min\n45 min\n1 heure\n1 heure, 30 min\n>=2 heures",
+   "default": "1 heure"
+  },
+  {
+   "fieldname": "verifications",
+   "fieldtype": "Table",
+   "label": "Vérifications hebdomadaires",
+   "options": "Config Stock Entrepot Verification",
+   "description": "Chaque semaine, le jour indiqué, une fiche Vérification Stock est ouverte et deux tâches sont créées : l’employé du stock et le responsable principal."
   }
  ],
  "links": [],
- "modified": "2026-10-01 20:00:00.000000",
+ "modified": "2026-10-02 08:00:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Config Stock Entrepot",

@@ -1,0 +1,60 @@
+{
+ "actions": [],
+ "creation": "2026-10-02 08:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "entrepot",
+  "jour",
+  "heure",
+  "actif"
+ ],
+ "fields": [
+  {
+   "fieldname": "entrepot",
+   "fieldtype": "Link",
+   "label": "Stock (entrepôt d’un employé)",
+   "options": "Warehouse",
+   "reqd": 1,
+   "in_list_view": 1,
+   "columns": 4
+  },
+  {
+   "fieldname": "jour",
+   "fieldtype": "Select",
+   "label": "Jour",
+   "options": "Lundi\nMardi\nMercredi\nJeudi\nVendredi\nSamedi\nDimanche",
+   "reqd": 1,
+   "in_list_view": 1,
+   "columns": 2
+  },
+  {
+   "fieldname": "heure",
+   "fieldtype": "Time",
+   "label": "Heure",
+   "default": "09:00:00",
+   "in_list_view": 1,
+   "columns": 2
+  },
+  {
+   "fieldname": "actif",
+   "fieldtype": "Check",
+   "label": "Actif",
+   "default": 1,
+   "in_list_view": 1,
+   "columns": 1
+  }
+ ],
+ "links": [],
+ "modified": "2026-10-02 08:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "Config Stock Entrepot Verification",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "istable": 1
+}

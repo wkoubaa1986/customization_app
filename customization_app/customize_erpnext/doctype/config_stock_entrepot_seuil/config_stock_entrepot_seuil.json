@@ -1,0 +1,50 @@
+{
+ "actions": [],
+ "creation": "2026-10-02 08:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "entrepot",
+  "seuil",
+  "cible"
+ ],
+ "fields": [
+  {
+   "fieldname": "entrepot",
+   "fieldtype": "Link",
+   "label": "Entrepôt",
+   "options": "Warehouse",
+   "reqd": 1,
+   "in_list_view": 1,
+   "columns": 4
+  },
+  {
+   "fieldname": "seuil",
+   "fieldtype": "Float",
+   "label": "Seuil (en dessous = à réapprovisionner)",
+   "reqd": 1,
+   "in_list_view": 1,
+   "columns": 3
+  },
+  {
+   "fieldname": "cible",
+   "fieldtype": "Float",
+   "label": "Quantité à ramener (cible)",
+   "in_list_view": 1,
+   "columns": 3,
+   "description": "Proposée au transfert : cible − stock. Vide = le seuil."
+  }
+ ],
+ "links": [],
+ "modified": "2026-10-02 08:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "Config Stock Entrepot Seuil",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "istable": 1
+}

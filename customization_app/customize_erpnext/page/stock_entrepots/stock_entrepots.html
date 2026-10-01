@@ -90,6 +90,36 @@
     .se-z-ligne .mvt small { display: block; font-weight: 500; color: #94a3b8; font-size: 11px; }
     .se-resume { font-size: 13.5px; line-height: 1.6; }
     .se-note { font-size: 12.5px; color: #64748b; }
+    .se-chip.reappro.on { background: #c2410c; border-color: #c2410c; }
+    .se-reappro { display: inline-block; font-size: 11px; font-weight: 700; color: #c2410c; background: #fff7ed; border-radius: 6px; padding: 1px 6px; margin-top: 3px; }
+    .se-art .se-coche { margin-right: 2px; }
+    .se-art.sel { border-color: #2563eb; box-shadow: 0 0 0 2px rgba(37,99,235,.25); }
+    .se-s-barre { position: fixed; left: 0; right: 0; bottom: 0; z-index: 1030; background: #111827; color: #fff; padding: 10px 12px; display: none;
+                  box-shadow: 0 -4px 12px rgba(0,0,0,.2); }
+    .se-s-barre .ligne { display: flex; gap: 12px; align-items: center; max-width: 900px; margin: 0 auto 8px; }
+    .se-s-barre .compte { font-weight: 700; font-size: 14px; margin-right: auto; }
+    .se-s-barre .lien { color: #93c5fd; font-size: 13px; cursor: pointer; }
+    .se-s-barre .btn { display: block; width: 100%; max-width: 900px; margin: 0 auto; height: 44px; font-weight: 600; border-radius: 10px; }
+    .se-v-stock .t { font-size: 15.5px; font-weight: 700; }
+    .se-v-stock .plan { font-size: 13px; color: #475569; margin: 4px 0; }
+    .se-v-stock .btn { width: 100%; margin-top: 8px; }
+    .se-v-hist { margin-top: 10px; }
+    .se-v-h { display: flex; gap: 8px; align-items: center; padding: 7px 0; border-top: 1px solid #f1f5f9; font-size: 13px; cursor: pointer; }
+    .se-v-h .d { font-weight: 600; min-width: 46px; }
+    .se-v-h .n { color: #475569; flex: 1; }
+    .se-v-h .v { font-weight: 700; }
+    .se-v-det { background: #f8fafc; border-radius: 8px; padding: 6px 10px; font-size: 12.5px; margin-bottom: 6px; }
+    .se-v-det div { padding: 2px 0; }
+    .se-c-ligne { display: flex; gap: 8px; align-items: center; padding: 8px 0; border-bottom: 1px solid #f1f5f9; }
+    .se-c-ligne .txt { flex: 1; min-width: 0; }
+    .se-c-ligne .sys { flex: none; width: 54px; text-align: right; font-size: 13px; color: #475569; }
+    .se-c-ligne input.q { flex: none; width: 74px; height: 38px; text-align: center; font-size: 16px; font-weight: 700; }
+    .se-c-ligne .ec { flex: none; width: 56px; text-align: right; font-weight: 700; font-size: 13px; }
+    .se-c-ligne.fait { background: #f0fdf4; }
+    .se-c-tete { display: flex; gap: 8px; font-size: 10.5px; font-weight: 700; color: #64748b; text-transform: uppercase; padding: 6px 0 2px; }
+    .se-c-tete .txt { flex: 1; } .se-c-tete .sys { width: 54px; text-align: right; } .se-c-tete .q { width: 74px; text-align: center; } .se-c-tete .ec { width: 56px; text-align: right; }
+    .se-c-barre { position: sticky; bottom: 0; background: var(--bg-color, #fff); padding: 10px 0 6px; border-top: 1px solid var(--border-color, #e4e8ee); display: flex; gap: 8px; }
+    .se-c-barre .btn { flex: 1; height: 44px; font-weight: 600; border-radius: 10px; }
     @media (max-width: 420px) { .se-onglet { font-size: 11.5px; } .se-qte { font-size: 16px; } }
   </style>
 
@@ -98,6 +128,7 @@
     <div class="se-onglet" data-onglet="sorties"><span class="ic">📤</span>Sorties</div>
     <div class="se-onglet" data-onglet="transfert"><span class="ic">🔁</span>Transfert</div>
     <div class="se-onglet" data-onglet="zero"><span class="ic">0️⃣</span>À zéro</div>
+    <div class="se-onglet" data-onglet="verif"><span class="ic">✅</span>Vérif.</div>
   </div>
 
   <div class="se-chips" id="se-entrepots"></div>
@@ -106,6 +137,7 @@
     <div class="se-ligne-filtres" style="margin-top:2px">
       <input type="search" class="form-control se-saisie" id="se-s-recherche" placeholder="🔎 Article (nom ou code)…">
       <span class="se-chip alerte" id="se-s-negatifs">⚠️ Négatifs</span>
+      <span class="se-chip reappro" id="se-s-reappro" style="display:none">🔻 À réappro.</span>
     </div>
     <div class="se-info" id="se-s-info" style="margin-top:8px"></div>
     <div id="se-s-liste"></div>
@@ -154,5 +186,14 @@
 
   <div class="se-vue" data-vue="zero" style="display:none">
     <div id="se-z-contenu"></div>
+  </div>
+
+  <div class="se-vue" data-vue="verif" style="display:none">
+    <div id="se-v-contenu"></div>
+  </div>
+
+  <div class="se-s-barre" id="se-s-barre">
+    <div class="ligne"><span class="compte" id="se-s-compte"></span><span class="lien" id="se-s-aucun">Annuler</span></div>
+    <button type="button" class="btn btn-primary" id="se-s-transferer">🔁 Transférer depuis le Magasin</button>
   </div>
 </div>

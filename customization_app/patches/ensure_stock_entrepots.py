@@ -18,9 +18,23 @@ MAGASIN = "Magasins - A&S"
 EXCLUS = ["Articles defectueux - A&S"]
 
 
+RESPONSABLE_VERIFICATION = "HR-EMP-00012"   # Hedi ibidhii, responsable principal du magasin
+
+
 def execute():
     _reglage()
+    _responsable_verification()
     _raccourci()
+
+
+def _responsable_verification():
+    """Pose le responsable des vérifications s'il n'est pas renseigné (jamais écrasé ensuite)."""
+    if not frappe.db.exists("DocType", CONFIG) or not frappe.db.exists("Employee", RESPONSABLE_VERIFICATION):
+        return
+    if frappe.db.get_single_value(CONFIG, "responsable_verification"):
+        return
+    frappe.db.set_single_value(CONFIG, "responsable_verification", RESPONSABLE_VERIFICATION)
+    frappe.db.commit()
 
 
 def _reglage():

@@ -1,0 +1,103 @@
+"""Stock par entrepôt — réapprovisionnement (seuils) et vérification des stocks d'employés (01/10/2026).
+Règles pures d'abord ; puis le circuit complet dans un savepoint (le cron commite : on le contourne)."""
+from __future__ import annotations
+
+import json
+import unittest
+
+from customization_app import stock_entrepots as S
+
+
+class TestRegles(unittest.TestCase):
+    def test_prochaine_date(self):
+        self.assertEqual(S.prochaine_date("Jeudi", "2026-10-01"), "2026-10-01")     # jeudi → aujourd'hui
+        self.assertEqual(S.prochaine_date("Vendredi", "2026-10-01"), "2026-10-02")
+        self.assertEqual(S.prochaine_date("Mercredi", "2026-10-01"), "2026-10-07")  # la semaine suivante
+        self.assertEqual(S.prochaine_date("Lundi", "2026-10-04"), "2026-10-05")
+
+    def test_heure(self):
+        import datetime
+        self.assertEqual(S._heure(datetime.timedelta(hours=9)), "09:00")           # Time lu en base
+        self.assertEqual(S._heure(datetime.timedelta(hours=10, minutes=30)), "10:30")
+        self.assertEqual(S._heure("9:00:00"), "09:00")
+        self.assertEqual(S._heure(None), "09:00")
+
+    def test_ecarts(self):
+        lignes = [{"qte_systeme": 10, "qte_comptee": 8, "taux": 2.5},      # −2 × 2,5 = −5 (manquant)
+                  {"qte_systeme": -1, "qte_comptee": 0, "taux": 10},       # +1 × 10 = +10
+                  {"qte_systeme": 3, "qte_comptee": 3, "taux": 1},         # juste
+                  {"qte_systeme": 3, "qte_comptee": None, "taux": 1},      # pas compté : ignoré
+                  {"qte_systeme": 3, "qte_comptee": "", "taux": 1}]
+        b = S.calculer_ecarts(lignes)
+        self.assertEqual((b["nb_comptes"], b["nb_ecarts"], b["valeur_ecarts"], b["valeur_manquants"]), (3, 2, 5.0, 5.0))
+        self.assertEqual([l["ecart"] for l in lignes], [-2, 1, 0, None, None])
+
+
+class TestCircuit(unittest.TestCase):
+    ENTREPOT = "Stock Sadok Bouziri - A&S"
+
+    def setUp(self):
+        import frappe
+        frappe.set_user("Administrator")
+        if not frappe.db.exists("Employee", {"custom_warehouse": self.ENTREPOT, "status": "Active"}):
+            self.skipTest("pas d'employé pour cet entrepôt")
+        frappe.db.savepoint("verif")
+        # Pas de fiche « En cours » parasite : le circuit en ouvre une.
+        for n in frappe.get_all(S.VERIF, filters={"entrepot": self.ENTREPOT, "statut": "En cours"}, pluck="name"):
+            frappe.db.set_value(S.VERIF, n, "statut", "Terminée", update_modified=False)
+
+    def tearDown(self):
+        import frappe
+        frappe.set_user("Administrator")
+        frappe.db.rollback(save_point="verif")
+
+    def test_ouverture_comptage_cloture_sans_mouvement(self):
+        import frappe
+        nom = S.ouvrir_verification(self.ENTREPOT, "2026-10-01", avec_taches=True)
+        v = frappe.get_doc(S.VERIF, nom)
+        self.assertEqual(v.statut, "En cours")
+        self.assertTrue(v.lignes)
+        self.assertTrue(v.tache_employe)                                        # l'employé du stock
+        self.assertEqual(S.ouvrir_verification(self.ENTREPOT, "2026-10-01"), nom)   # une seule « En cours »
+        l0, l1 = v.lignes[0], v.lignes[1]
+        stock_avant = frappe.db.get_value("Bin", {"item_code": l1.item_code, "warehouse": self.ENTREPOT}, "actual_qty")
+        comptes = {l0.item_code: {"qte_comptee": l0.qte_systeme}, l1.item_code: {"qte_comptee": l1.qte_systeme + 2, "commentaire": "en plus"}}
+        r = S.enregistrer_verification(nom, json.dumps(comptes))
+        self.assertEqual((r["nb_comptes"], r["nb_ecarts"]), (2, 1))
+        r = S.terminer_verification(nom, json.dumps(comptes), note="test")
+        self.assertEqual(r["statut"], "Terminée")
+        self.assertAlmostEqual(r["valeur_ecarts"], round(2 * l1.taux, 3), places=3)
+        self.assertEqual(frappe.db.get_value("Tache de travail", v.tache_employe, "status"), "Completed")
+        # AUCUN mouvement de stock : la quantité en base est inchangée
+        self.assertEqual(frappe.db.get_value("Bin", {"item_code": l1.item_code, "warehouse": self.ENTREPOT}, "actual_qty"), stock_avant)
+        self.assertEqual(frappe.db.count("Stock Ledger Entry", {"voucher_no": nom}), 0)
+        self.assertEqual([h["name"] for h in S.historique_verifications(self.ENTREPOT)][0], nom)
+        with self.assertRaises(frappe.ValidationError):
+            S.terminer_verification(nom)                                        # déjà terminée
+
+    def test_un_employe_ne_voit_que_son_stock(self):
+        import frappe
+        emp = frappe.db.get_value("Employee", {"custom_warehouse": ["is", "set"], "status": "Active",
+                                               "name": ["!=", frappe.db.get_value("Employee", {"custom_warehouse": self.ENTREPOT}, "name")]},
+                                  ["user_id", "custom_warehouse"], as_dict=True)
+        if not emp or not emp.user_id or S.est_responsable(emp.user_id):
+            self.skipTest("pas d'employé non responsable avec un stock")
+        frappe.set_user(emp.user_id)
+        self.assertEqual([s["entrepot"] for s in S.verifications_etat()["stocks"]], [emp.custom_warehouse])
+        with self.assertRaises(frappe.PermissionError):
+            S.commencer_verification(self.ENTREPOT)
+        with self.assertRaises(frappe.PermissionError):
+            S.planifier_maintenant()
+
+    def test_solde_a_reapprovisionner(self):
+        import frappe
+        seuil = S.seuils().get(self.ENTREPOT)
+        if not seuil:
+            self.skipTest("pas de seuil réglé pour cet entrepôt")
+        res = S.get_solde(self.ENTREPOT, a_reappro=1)
+        self.assertTrue(res["articles"])
+        self.assertTrue(all(a["a_reappro"] and a["qte"] < seuil["seuil"] for a in res["articles"]))
+        self.assertTrue(all(a["a_transferer"] == max(seuil["cible"] - a["qte"], 0) for a in res["articles"]))
+        self.assertEqual(res["a_reappro"], len(res["articles"]))
+        sans = S.get_solde(self.ENTREPOT)
+        self.assertTrue(all(abs(a["qte"]) > 0 for a in sans["articles"]))     # sans filtre : stock non nul seulement

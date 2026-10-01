@@ -18,12 +18,16 @@ from __future__ import annotations
 
 import frappe
 from frappe import _
-from frappe.utils import cint, flt, get_first_day, getdate, nowdate
+from frappe.utils import add_days, cint, flt, get_datetime, get_first_day, getdate, now_datetime, nowdate
 
 from customization_app.zones_magasin import _societe
 
 CONFIG = "Config Stock Entrepot"
 CONFIG_EXCLU = "Config Stock Entrepot Exclu"
+CONFIG_SEUIL = "Config Stock Entrepot Seuil"
+CONFIG_VERIF = "Config Stock Entrepot Verification"
+VERIF = "Verification Stock"
+JOURS = ("Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche")
 MAGASIN_DEFAUT = "Magasins - A&S"
 TYPE_TRANSFERT = "Transfer interne"
 PURPOSE = "Material Transfer"
@@ -94,7 +98,8 @@ def get_context():
     m = magasin()
     return {"entrepots": liste, "mien": mien, "employe": emp.employee_name if emp else None,
             "defaut": mien or (m if m in actifs else (liste[0]["name"] if liste else None)),
-            "magasin": m, "responsable": est_responsable(), "aujourdhui": nowdate()}
+            "magasin": m, "responsable": est_responsable(), "aujourdhui": nowdate(),
+            "seuils": seuils(), "verification": bool(est_responsable() or mien)}
 
 
 # ── Recherche d'articles ─────────────────────────────────────────────────────
@@ -111,11 +116,18 @@ def _filtre_mots(texte: str | None, valeurs: dict, prefixe: str = "i") -> str:
 # ── Solde ────────────────────────────────────────────────────────────────────
 
 @frappe.whitelist()
-def get_solde(entrepot=None, recherche=None, negatifs=0):
-    """Stock non nul, par article. Sans entrepôt : tous les entrepôts, la quantité de chacun sous l'article."""
+def get_solde(entrepot=None, recherche=None, negatifs=0, a_reappro=0):
+    """Stock non nul, par article. Sans entrepôt : tous les entrepôts, la quantité de chacun sous l'article.
+    Avec un entrepôt qui a un seuil (réglage) : chaque article porte `a_reappro` (stock < seuil, les
+    articles à zéro compris) et la quantité `a_transferer` (cible − stock) ; `a_reappro=1` ne garde qu'eux."""
     _lecture()
     valeurs = {"societe": _societe()}
-    conds = ["abs(b.actual_qty) > 0.000001", "w.company = %(societe)s"]
+    seuil = seuils().get(entrepot) if entrepot else None
+    # Sans le filtre : le stock non nul seulement. Avec « à réapprovisionner » : tout ce qui est sous le
+    # seuil, articles à zéro compris (ils ont déjà été stockés ici : une ligne de Bin existe).
+    conds = ["w.company = %(societe)s", "b.actual_qty < %(seuil)s" if cint(a_reappro) and seuil else "abs(b.actual_qty) > 0.000001"]
+    if seuil:
+        valeurs["seuil"] = seuil["seuil"]
     if entrepot:
         conds.append("b.warehouse = %(entrepot)s")
         valeurs["entrepot"] = entrepot
@@ -141,8 +153,15 @@ def get_solde(entrepot=None, recherche=None, negatifs=0):
             articles.append(a)
         a["qte"] = flt(a["qte"] + flt(r.actual_qty), 6)
         a["entrepots"].append({"entrepot": r.warehouse, "libelle": r.warehouse_name, "qte": flt(r.actual_qty, 6)})
+    if seuil:
+        for a in articles:
+            a["seuil"] = seuil["seuil"]
+            a["a_reappro"] = a["qte"] < seuil["seuil"]
+            a["a_transferer"] = flt(max(seuil["cible"] - a["qte"], 0), 6) if a["a_reappro"] else 0
     out = {"articles": articles, "negatifs": sum(1 for a in articles if a["qte"] < 0),
-           "positifs": sum(1 for a in articles if a["qte"] > 0)}
+           "positifs": sum(1 for a in articles if a["qte"] > 0),
+           "a_reappro": cint(frappe.db.sql("select count(*) from tabBin where warehouse = %s and actual_qty < %s",
+                                            (entrepot, seuil["seuil"]))[0][0]) if seuil else None}
     if voir_valeur:
         out["valeur"] = flt(sum(flt(r.stock_value) for r in rows), 3)
     return out
@@ -509,3 +528,289 @@ def remettre_a_zero(entrepot, items=None):
     restant = [l for l in lignes_a_zero(entrepot) if choisis is None or l["item_code"] in choisis]
     return {"ecritures": ecritures, "apports": len(apports), "retours": len(retours),
             "restant": [l["item_code"] for l in restant if not l["bloque"]]}
+
+
+# ── Réapprovisionnement : seuils par entrepôt (réglage) ─────────────────────
+
+def seuils() -> dict:
+    """{entrepot: {"seuil", "cible"}} — un article sous le seuil est « à réapprovisionner »."""
+    out = {}
+    for r in frappe.get_all(CONFIG_SEUIL, filters={"parent": CONFIG, "parenttype": CONFIG},
+                            fields=["entrepot", "seuil", "cible"]):
+        out[r.entrepot] = {"seuil": flt(r.seuil), "cible": flt(r.cible) if flt(r.cible) >= flt(r.seuil) else flt(r.seuil)}
+    return out
+
+
+# ── Vérification des stocks des employés ─────────────────────────────────────
+#
+# Chaque semaine, le jour fixé dans le réglage pour un stock d'employé, une fiche « Verification Stock »
+# est ouverte avec la photographie du stock (quantité système et taux du moment), et deux tâches sont
+# créées : l'employé du stock et le responsable principal du magasin. On compte, on saisit, on termine :
+# l'écart (compté − système) est gardé ligne à ligne et valorisé — AUCUN mouvement de stock, aucun
+# rapprochement : la fiche est la trace, le Magasin reste la seule référence.
+
+def _employe_du_stock(entrepot: str):
+    return frappe.db.get_value("Employee", {"custom_warehouse": entrepot, "status": "Active"},
+                               ["name", "employee_name", "user_id"], as_dict=True)
+
+
+def _mon_employe():
+    return frappe.db.get_value("Employee", {"user_id": frappe.session.user, "status": "Active"},
+                               ["name", "employee_name", "custom_warehouse"], as_dict=True)
+
+
+def _acces_verification(entrepot: str):
+    """Responsable magasin, ou l'employé dont c'est le stock."""
+    if est_responsable():
+        return
+    emp = _mon_employe()
+    if not emp or emp.custom_warehouse != entrepot:
+        frappe.throw(_("La vérification de {0} est réservée au responsable magasin et à l'employé de ce stock.")
+                     .format(entrepot), frappe.PermissionError)
+
+
+def _heure(h) -> str:
+    """« HH:MM » depuis un champ Time (timedelta en base, chaîne « 9:00:00 » ou « 09:00 »)."""
+    if hasattr(h, "total_seconds"):
+        total = int(h.total_seconds())
+        return "%02d:%02d" % (total // 3600, (total % 3600) // 60)
+    parts = str(h or "09:00").split(":")
+    return "%02d:%02d" % (int(parts[0] or 0), int(parts[1] or 0) if len(parts) > 1 else 0)
+
+
+def config_verification() -> dict:
+    cfg = frappe.get_single(CONFIG) if frappe.db.exists("DocType", CONFIG) else None
+    lignes = [{"entrepot": r.entrepot, "jour": r.jour, "heure": _heure(r.heure), "actif": cint(r.actif)}
+              for r in (cfg.get("verifications") if cfg else []) or []]
+    return {"responsable": cfg.responsable_verification if cfg else None,
+            "duree": (cfg.duree_verification if cfg else None) or "1 heure", "lignes": lignes}
+
+
+def prochaine_date(jour: str, depuis) -> str:
+    """La prochaine occurrence (aujourd'hui compris) du jour de la semaine `jour` (« Lundi »…). PURE."""
+    depuis = getdate(depuis)
+    cible = JOURS.index(jour)
+    return str(add_days(depuis, (cible - depuis.weekday()) % 7))
+
+
+def calculer_ecarts(lignes: list[dict]) -> dict:
+    """Écarts d'une liste de lignes {qte_systeme, qte_comptee, taux} — seules les lignes comptées comptent.
+    PURE : renvoie les lignes complétées (ecart, valeur_ecart) et le bilan."""
+    nb_comptes = nb_ecarts = 0
+    valeur = manquants = 0.0
+    for l in lignes:
+        if l.get("qte_comptee") is None or l.get("qte_comptee") == "":
+            l["ecart"] = None
+            l["valeur_ecart"] = None
+            continue
+        nb_comptes += 1
+        l["ecart"] = flt(flt(l["qte_comptee"]) - flt(l.get("qte_systeme")), 6)
+        l["valeur_ecart"] = flt(l["ecart"] * flt(l.get("taux")), 3)
+        if abs(l["ecart"]) > 1e-6:
+            nb_ecarts += 1
+            valeur += l["valeur_ecart"]
+            if l["ecart"] < 0:
+                manquants += -l["valeur_ecart"]
+    return {"nb_comptes": nb_comptes, "nb_ecarts": nb_ecarts, "valeur_ecarts": flt(valeur, 3),
+            "valeur_manquants": flt(manquants, 3)}
+
+
+def _photographie(entrepot: str) -> list[dict]:
+    """Le stock de l'entrepôt au moment d'ouvrir la vérification : quantité système et taux, par article."""
+    seuil = seuils().get(entrepot)
+    rows = frappe.db.sql("""select b.item_code, i.item_name, b.actual_qty, b.valuation_rate, i.custom_emplacement_magasin zones
+                            from tabBin b join tabItem i on i.name = b.item_code
+                            where b.warehouse = %s and i.disabled = 0 and (abs(b.actual_qty) > 0.000001 or b.actual_qty < %s)
+                            order by i.item_name""", (entrepot, seuil["seuil"] if seuil else 0), as_dict=True)
+    return [{"item_code": r.item_code, "item_name": r.item_name, "qte_systeme": flt(r.actual_qty, 6),
+             "taux": flt(r.valuation_rate, 3), "zones": r.zones} for r in rows]
+
+
+def _creer_tache(employe: str, entrepot_libelle: str, quand, duree: str, role: str) -> str:
+    doc = frappe.get_doc({
+        "doctype": "Tache de travail", "custom_type_dintervention": "Autre", "custom_choix_du_staff": employe,
+        "starts_on": quand, "temps": duree, "status": "Open",
+        "subject": "Vérification du stock %s (%s) — compter les articles dans Stock › Vérif." % (entrepot_libelle, role),
+    })
+    doc.flags.ignore_permissions = True
+    doc.insert()
+    return doc.name
+
+
+def ouvrir_verification(entrepot: str, date_prevue, avec_taches: bool = True) -> str:
+    """Ouvre la fiche de la semaine pour ce stock (une seule « En cours » par stock : réutilisée)."""
+    existante = frappe.db.get_value(VERIF, {"entrepot": entrepot, "statut": "En cours"}, "name")
+    if existante:
+        return existante
+    emp = _employe_du_stock(entrepot)
+    cfg = config_verification()
+    doc = frappe.get_doc({"doctype": VERIF, "entrepot": entrepot, "date": date_prevue, "statut": "En cours",
+                          "employe": emp.name if emp else None, "responsable": cfg["responsable"]})
+    for l in _photographie(entrepot):
+        doc.append("lignes", l)
+    doc.nb_lignes = len(doc.lignes)
+    if avec_taches:
+        libelle = frappe.db.get_value("Warehouse", entrepot, "warehouse_name") or entrepot
+        heure = next((l["heure"] for l in cfg["lignes"] if l["entrepot"] == entrepot), "09:00")
+        quand = get_datetime("%s %s:00" % (date_prevue, heure))
+        if emp:
+            doc.tache_employe = _creer_tache(emp.name, libelle, quand, cfg["duree"], "employé du stock")
+        if cfg["responsable"] and (not emp or cfg["responsable"] != emp.name):
+            doc.tache_responsable = _creer_tache(cfg["responsable"], libelle, quand, cfg["duree"], "responsable magasin")
+    doc.flags.ignore_permissions = True
+    doc.insert()
+    return doc.name
+
+
+def planifier_verifications():
+    """Cron quotidien : le jour fixé pour chaque stock, ouvre la vérification de la semaine et ses deux tâches.
+    Idempotent (une seule fiche « En cours » par stock ; rien si une fiche a déjà été ouverte aujourd'hui)."""
+    if not frappe.db.exists("DocType", VERIF):
+        return []
+    aujourd = getdate(nowdate())
+    crees = []
+    for l in config_verification()["lignes"]:
+        if not l["actif"] or JOURS.index(l["jour"]) != aujourd.weekday():
+            continue
+        if frappe.db.exists(VERIF, {"entrepot": l["entrepot"], "date": str(aujourd)}):
+            continue
+        if frappe.db.get_value("Warehouse", l["entrepot"], "disabled") or not _employe_du_stock(l["entrepot"]):
+            continue
+        try:
+            crees.append(ouvrir_verification(l["entrepot"], str(aujourd)))
+            frappe.db.commit()
+        except Exception:
+            frappe.db.rollback()
+            frappe.log_error(frappe.get_traceback(), "Vérification stock %s" % l["entrepot"][:40])
+    return crees
+
+
+def _resume(v) -> dict:
+    return {"name": v.name, "entrepot": v.entrepot, "date": str(v.date), "statut": v.statut, "employe": v.employe,
+            "nb_lignes": cint(v.nb_lignes), "nb_comptes": cint(v.nb_comptes), "nb_ecarts": cint(v.nb_ecarts),
+            "valeur_ecarts": flt(v.valeur_ecarts, 3), "valeur_manquants": flt(v.valeur_manquants, 3),
+            "termine_le": str(v.termine_le or "")[:16], "tache_employe": v.tache_employe, "tache_responsable": v.tache_responsable}
+
+
+@frappe.whitelist()
+def verifications_etat():
+    """Les stocks d'employés (tous pour le responsable, le sien pour un employé) : planning, fiche en cours,
+    dernières fiches terminées."""
+    _lecture()
+    cfg = config_verification()
+    moi = _mon_employe()
+    noms = {e.custom_warehouse: e for e in frappe.get_all("Employee", filters={"status": "Active", "custom_warehouse": ["is", "set"]},
+                                                          fields=["name", "employee_name", "custom_warehouse"])}
+    actifs = {w["name"]: w for w in entrepots()}
+    out = []
+    for wh, emp in noms.items():
+        if wh not in actifs:
+            continue
+        if not est_responsable() and (not moi or moi.custom_warehouse != wh):
+            continue
+        plan = next((l for l in cfg["lignes"] if l["entrepot"] == wh), None)
+        en_cours = frappe.db.get_value(VERIF, {"entrepot": wh, "statut": "En cours"}, "name")
+        dernieres = [_resume(v) for v in frappe.get_all(VERIF, filters={"entrepot": wh, "statut": "Terminée"},
+                                                         fields=["*"], order_by="termine_le desc", limit=6)]
+        out.append({"entrepot": wh, "libelle": actifs[wh]["libelle"], "employe": emp.employee_name, "employe_id": emp.name,
+                    "jour": plan["jour"] if plan else None, "heure": plan["heure"] if plan else None,
+                    "actif": bool(plan and plan["actif"]),
+                    "prochaine": prochaine_date(plan["jour"], nowdate()) if plan and plan["actif"] else None,
+                    "en_cours": _resume(frappe.get_doc(VERIF, en_cours)) if en_cours else None,
+                    "dernieres": dernieres})
+    return {"stocks": out, "responsable": cfg["responsable"],
+            "responsable_nom": frappe.db.get_value("Employee", cfg["responsable"], "employee_name") if cfg["responsable"] else None,
+            "peut_planifier": est_responsable()}
+
+
+@frappe.whitelist(methods=["POST"])
+def commencer_verification(entrepot):
+    """Ouvre (ou reprend) la vérification du stock, hors planning : pas de tâches créées."""
+    _acces_verification(entrepot)
+    _verifier_entrepot(entrepot)
+    return ouvrir_verification(entrepot, nowdate(), avec_taches=False)
+
+
+@frappe.whitelist()
+def detail_verification(name):
+    v = frappe.get_doc(VERIF, name)
+    _acces_verification(v.entrepot)
+    # ⚠️ Un Float vaut 0 en base, jamais None : « pas compté » se lit sur le drapeau `compte`.
+    return {"fiche": _resume(v), "lignes": [{"item_code": l.item_code, "item_name": l.item_name, "qte_systeme": flt(l.qte_systeme, 6),
+                                             "qte_comptee": flt(l.qte_comptee, 6) if l.compte else None,
+                                             "ecart": flt(l.ecart, 6) if l.compte else None, "taux": flt(l.taux, 3),
+                                             "valeur_ecart": flt(l.valeur_ecart, 3) if l.compte else None,
+                                             "zones": l.zones, "commentaire": l.commentaire}
+                                            for l in v.lignes]}
+
+
+def _appliquer_comptage(v, comptes: dict):
+    """comptes : {item_code: {"qte_comptee": x|None, "commentaire": s}} — recalcule écarts et bilan."""
+    lignes = []
+    for l in v.lignes:
+        c = comptes.get(l.item_code)
+        if c is not None:
+            q = c.get("qte_comptee")
+            l.compte = 1 if q not in (None, "") else 0
+            l.qte_comptee = flt(q) if l.compte else 0
+            l.commentaire = (c.get("commentaire") or "")[:140] or None
+        lignes.append({"qte_systeme": l.qte_systeme, "qte_comptee": l.qte_comptee if l.compte else None, "taux": l.taux})
+    bilan = calculer_ecarts(lignes)
+    for l, calc in zip(v.lignes, lignes):
+        l.ecart = calc["ecart"] or 0
+        l.valeur_ecart = calc["valeur_ecart"] or 0
+    v.update(bilan)
+    v.nb_lignes = len(v.lignes)
+
+
+@frappe.whitelist(methods=["POST"])
+def enregistrer_verification(name, comptes):
+    """Sauvegarde du comptage en cours (on peut s'interrompre et reprendre)."""
+    v = frappe.get_doc(VERIF, name)
+    _acces_verification(v.entrepot)
+    if v.statut != "En cours":
+        frappe.throw(_("Cette vérification est terminée."))
+    _appliquer_comptage(v, frappe.parse_json(comptes) if isinstance(comptes, str) else (comptes or {}))
+    v.flags.ignore_permissions = True
+    v.save()
+    return _resume(v)
+
+
+@frappe.whitelist(methods=["POST"])
+def terminer_verification(name, comptes=None, note=None):
+    """Clôture : écarts figés et valorisés, tâches liées passées à Completed. Aucun mouvement de stock."""
+    v = frappe.get_doc(VERIF, name)
+    _acces_verification(v.entrepot)
+    if v.statut != "En cours":
+        frappe.throw(_("Cette vérification est déjà terminée."))
+    if comptes:
+        _appliquer_comptage(v, frappe.parse_json(comptes) if isinstance(comptes, str) else comptes)
+    else:
+        _appliquer_comptage(v, {})
+    if not v.nb_comptes:
+        frappe.throw(_("Aucun article compté : saisissez au moins une quantité."))
+    v.statut = "Terminée"
+    v.termine_le = now_datetime()
+    v.termine_par = frappe.session.user
+    if note:
+        v.note = note[:500]
+    v.flags.ignore_permissions = True
+    v.save()
+    for t in (v.tache_employe, v.tache_responsable):
+        if t and frappe.db.get_value("Tache de travail", t, "status") == "Open":
+            frappe.db.set_value("Tache de travail", t, "status", "Completed")
+    return _resume(v)
+
+
+@frappe.whitelist()
+def historique_verifications(entrepot, limite=12):
+    _acces_verification(entrepot)
+    return [_resume(v) for v in frappe.get_all(VERIF, filters={"entrepot": entrepot, "statut": "Terminée"}, fields=["*"],
+                                               order_by="termine_le desc", limit=min(cint(limite) or 12, 60))]
+
+
+@frappe.whitelist(methods=["POST"])
+def planifier_maintenant():
+    """Bouton du responsable : exécute le cron tout de suite (utile le jour même ou pour tester)."""
+    _responsable()
+    return planifier_verifications()

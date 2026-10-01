@@ -37,6 +37,8 @@ class StockEntrepots {
     this.$r = $(wrapper).find(".se-page");
     this.onglet = "solde";
     this.negatifs = false;
+    this.reappro = false;
+    this.selSolde = new Set();
     this.periode = "30j";
     this.panier = [];
     this.jetons = {};
@@ -48,6 +50,10 @@ class StockEntrepots {
     const r = this.$r, ctx = this.ctx;
     this.entrepot = ctx.defaut || "";
     if (!ctx.responsable) r.find('[data-onglet="transfert"], [data-onglet="zero"]').remove();
+    if (!ctx.verification) r.find('[data-onglet="verif"]').remove();
+    r.find("#se-s-reappro").on("click", (e) => { this.reappro = !this.reappro; $(e.currentTarget).toggleClass("on", this.reappro); this.chargerSolde(); });
+    r.find("#se-s-aucun").on("click", () => { this.selSolde.clear(); this.peindreSolde(); });
+    r.find("#se-s-transferer").on("click", () => this.transfererSelection());
     r.find(".se-onglet").on("click", (e) => this.montrer($(e.currentTarget).attr("data-onglet")));
     this.peindreEntrepots();
 
@@ -73,6 +79,7 @@ class StockEntrepots {
 
   montrer(onglet) {
     this.onglet = onglet;
+    if (onglet !== "verif") this.comptage = null;
     const r = this.$r;
     r.find(".se-onglet").each((_, el) => $(el).toggleClass("on", $(el).attr("data-onglet") === onglet));
     r.find(".se-vue").each((_, el) => $(el).toggle($(el).attr("data-vue") === onglet));
@@ -83,7 +90,9 @@ class StockEntrepots {
   rafraichir() {
     ({ solde: () => this.chargerSolde(), sorties: () => this.chargerSorties(),
        transfert: () => { this.chargerHistorique(); this.majQuantitesPanier(); },
-       zero: () => (this.zeroEntrepot ? this.ouvrirZero(this.zeroEntrepot) : this.chargerZero()) })[this.onglet]();
+       zero: () => (this.zeroEntrepot ? this.ouvrirZero(this.zeroEntrepot) : this.chargerZero()),
+       verif: () => (this.comptage ? this.ouvrirComptage(this.comptage) : this.chargerVerif()) })[this.onglet]();
+    this.majBarreSolde();
   }
 
   /** Appel serveur dont seule la DERNIÈRE réponse compte (frappe rapide au clavier, changement d'onglet). */
@@ -116,24 +125,33 @@ class StockEntrepots {
   // ── Solde ──────────────────────────────────────────────────────────────
   async chargerSolde() {
     const r = this.$r;
+    const seuil = this.entrepot && this.ctx.seuils[this.entrepot];
+    r.find("#se-s-reappro").toggle(!!(seuil && this.ctx.responsable));
+    if (!seuil) this.reappro = false;
+    r.find("#se-s-reappro").toggleClass("on", this.reappro);
     const res = await this.appel("solde", "get_solde", { entrepot: this.entrepot || null,
-      recherche: r.find("#se-s-recherche").val() || null, negatifs: this.negatifs ? 1 : 0 });
+      recherche: r.find("#se-s-recherche").val() || null, negatifs: this.negatifs ? 1 : 0, a_reappro: this.reappro ? 1 : 0 });
     if (!res) return;
     this.solde = res;
     this.nSolde = SE_PAGE;
+    this.selSolde.clear();
     this.peindreSolde();
   }
 
   peindreSolde() {
     const r = this.$r, res = this.solde, tous = !this.entrepot;
+    const coches = !!(this.ctx.responsable && this.entrepot);
     r.find("#se-s-info").html(`${res.articles.length} article(s)`
       + (res.negatifs ? ` · <span class="neg">${res.negatifs} négatif(s)</span>` : "")
+      + (res.a_reappro ? ` · <span style="color:#c2410c">${res.a_reappro} à réapprovisionner</span>` : "")
       + (res.valeur != null ? ` · valeur ${se_esc(se_argent(res.valeur))}` : "")
       + ` · ${tous ? "tous les entrepôts" : se_esc(this.libelle(this.entrepot))}`);
-    const cartes = res.articles.slice(0, this.nSolde).map((a) => `<div class="se-art" data-item="${se_esc(a.item_code)}">
+    const cartes = res.articles.slice(0, this.nSolde).map((a) => `<div class="se-art ${this.selSolde.has(a.item_code) ? "sel" : ""}" data-item="${se_esc(a.item_code)}">
+        ${coches ? `<span class="se-coche ${this.selSolde.has(a.item_code) ? "on" : ""}" data-coche>${this.selSolde.has(a.item_code) ? "✓" : ""}</span>` : ""}
         ${se_img(a.image)}
         <div class="txt"><div class="se-nom">${se_esc(a.item_name || a.item_code)}</div>
           <div class="se-code">${se_esc(a.item_code)}${a.zones ? ` · 📍 ${se_esc(a.zones)}` : ""}</div>
+          ${a.a_reappro ? `<span class="se-reappro">🔻 à réapprovisionner · seuil ${se_q(a.seuil)} · manque ${se_q(a.a_transferer)}</span>` : ""}
           ${tous ? `<div class="se-wh">${a.entrepots.map((e) => `<span class="${e.qte < 0 ? "neg" : ""}">${se_esc(e.libelle)} <b>${se_q(e.qte)}</b></span>`).join("")}</div>` : ""}
         </div>
         <div class="se-qte ${a.qte < 0 ? "neg" : ""}">${se_q(a.qte)}<small>${se_esc(a.uom || "")}</small></div>
@@ -142,6 +160,42 @@ class StockEntrepots {
       + (res.articles.length > this.nSolde ? `<button type="button" class="btn btn-default se-plus">Afficher plus (${res.articles.length - this.nSolde})</button>` : ""));
     r.find("#se-s-liste .se-plus").on("click", () => { this.nSolde += SE_PAGE; this.peindreSolde(); });
     r.find("#se-s-liste .se-art").on("click", (e) => this.voirSorties($(e.currentTarget).attr("data-item")));
+    r.find("#se-s-liste [data-coche]").on("click", (e) => {
+      e.stopPropagation();
+      const c = $(e.currentTarget).closest(".se-art").attr("data-item");
+      this.selSolde.has(c) ? this.selSolde.delete(c) : this.selSolde.add(c);
+      $(e.currentTarget).toggleClass("on", this.selSolde.has(c)).text(this.selSolde.has(c) ? "✓" : "");
+      $(e.currentTarget).closest(".se-art").toggleClass("sel", this.selSolde.has(c));
+      this.majBarreSolde();
+    });
+    this.majBarreSolde();
+  }
+
+  majBarreSolde() {
+    const n = this.selSolde.size, $b = this.$r.find("#se-s-barre");
+    this.$r.find("#se-s-compte").text(`${n} article(s) coché(s)`);
+    n && this.onglet === "solde" && this.ctx.responsable ? $b.show() : $b.hide();
+  }
+
+  /** Les articles cochés du solde partent dans le panier de l'onglet Transfert : Magasin → cet entrepôt,
+   *  quantité proposée = ce qui manque pour revenir à la cible (sinon 1). */
+  async transfererSelection() {
+    const cible = this.entrepot, source = this.ctx.magasin;
+    const items = (this.solde ? this.solde.articles : []).filter((a) => this.selSolde.has(a.item_code));
+    if (!items.length || !cible || cible === source) return;
+    const qtes = (await frappe.call({ method: SE_API + "get_quantites", args: { items: items.map((a) => a.item_code), source, cible } })).message || {};
+    this.$r.find("#se-t-de").val(source);
+    this.$r.find("#se-t-vers").val(cible);
+    this.panier = items.map((a) => ({ item_code: a.item_code, item_name: a.item_name, image: a.image, uom: a.uom,
+      qte: a.a_transferer && a.a_transferer > 0 ? a.a_transferer : 1,
+      qte_source: (qtes[a.item_code] || [0, 0])[0], qte_cible: (qtes[a.item_code] || [0, 0])[1] }));
+    this.selSolde.clear();
+    this.trouves = [];
+    this.$r.find("#se-t-recherche").val("");
+    this.montrer("transfert");
+    this.peindreTrouves();
+    this.peindrePanier();
+    frappe.show_alert({ message: `${items.length} article(s) dans le panier — vérifiez les quantités puis validez`, indicator: "blue" }, 5);
   }
 
   /** Depuis le solde : les sorties de cet article, détail déjà ouvert. */
@@ -450,6 +504,109 @@ class StockEntrepots {
       this.peindreZero();
     });
     $c.find("[data-valider]").on("click", () => this.validerZero(choisies, apports.length, retours.length));
+  }
+
+  // ── Vérification des stocks des employés ─────────────────────────────────
+  async chargerVerif() {
+    this.comptage = null;
+    const res = await this.appel("verif", "verifications_etat", {});
+    if (!res) return;
+    const $c = this.$r.find("#se-v-contenu");
+    const hist = (s) => s.dernieres.map((v) => `<div class="se-v-h" data-detail="${se_esc(v.name)}">
+        <span class="d">${se_dt(v.termine_le)}</span>
+        <span class="n">${v.nb_comptes}/${v.nb_lignes} comptés · <b class="${v.nb_ecarts ? "neg" : "pos"}">${v.nb_ecarts} écart(s)</b></span>
+        <span class="v ${v.valeur_ecarts < 0 ? "neg" : v.valeur_ecarts > 0 ? "pos" : ""}">${v.nb_ecarts ? se_argent(v.valeur_ecarts) : "✓"}</span>
+        <span class="fleche">▶</span></div><div class="se-v-det" style="display:none" data-det="${se_esc(v.name)}"></div>`).join("");
+    $c.html(`<div class="se-note" style="margin:0 2px 10px">Chaque semaine, le jour fixé, une fiche de comptage est ouverte et deux tâches créées :
+        l’employé du stock et ${res.responsable_nom ? `<b>${se_esc(res.responsable_nom)}</b>` : "le responsable magasin"}.
+        On compte, on saisit, on termine : l’écart est gardé et valorisé, <b>sans mouvement de stock</b>.
+        ${res.peut_planifier ? `<a class="se-lien" href="/app/config-stock-entrepot">⚙️ Réglages</a> · <span class="se-lien" data-planifier>▶ Ouvrir les vérifications du jour</span>` : ""}</div>`
+      + (res.stocks.map((s) => `<div class="se-card se-v-stock">
+          <div class="t">🚐 ${se_esc(s.libelle)}</div>
+          <div class="plan">👤 ${se_esc(s.employe)} · ${s.actif ? `chaque <b>${se_esc(s.jour)}</b> à ${se_esc(s.heure)} · prochaine le ${se_dt(s.prochaine)}` : `<span style="color:#c2410c">pas de jour fixé</span>`}</div>
+          ${s.en_cours ? `<div class="plan">📝 Comptage en cours du ${se_dt(s.en_cours.date)} : ${s.en_cours.nb_comptes}/${s.en_cours.nb_lignes} comptés</div>
+              <button type="button" class="btn btn-primary" data-reprendre="${se_esc(s.en_cours.name)}">Reprendre le comptage</button>`
+            : `<button type="button" class="btn btn-default" data-commencer="${se_esc(s.entrepot)}">Compter maintenant</button>`}
+          <div class="se-v-hist">${hist(s) || `<div class="se-note">Aucune vérification terminée.</div>`}</div>
+        </div>`).join("") || `<div class="se-vide">Aucun stock d’employé.</div>`));
+    $c.find("[data-planifier]").on("click", async () => {
+      const r = (await frappe.call({ method: SE_API + "planifier_maintenant", freeze: true })).message || [];
+      frappe.show_alert({ message: r.length ? `${r.length} vérification(s) ouverte(s) : ${r.map(se_esc).join(", ")}` : "Rien à ouvrir aujourd’hui (jour non prévu, ou déjà ouverte)", indicator: r.length ? "green" : "orange" }, 6);
+      this.chargerVerif();
+    });
+    $c.find("[data-commencer]").on("click", async (e) => {
+      const name = (await frappe.call({ method: SE_API + "commencer_verification", args: { entrepot: $(e.currentTarget).attr("data-commencer") }, freeze: true })).message;
+      this.ouvrirComptage(name);
+    });
+    $c.find("[data-reprendre]").on("click", (e) => this.ouvrirComptage($(e.currentTarget).attr("data-reprendre")));
+    $c.find("[data-detail]").on("click", async (e) => {
+      const name = $(e.currentTarget).attr("data-detail"), $d = $c.find(`[data-det="${CSS.escape(name)}"]`);
+      if ($d.is(":visible")) { $d.hide(); return; }
+      const d = (await frappe.call({ method: SE_API + "detail_verification", args: { name } })).message;
+      const ec = d.lignes.filter((l) => l.ecart != null && Math.abs(l.ecart) > 1e-6);
+      $d.html((ec.map((l) => `<div><b class="${l.ecart < 0 ? "neg" : "pos"}">${se_signe(l.ecart)}</b> ${se_esc(l.item_name || l.item_code)}
+          <span class="se-note">(système ${se_q(l.qte_systeme)}, compté ${se_q(l.qte_comptee)}, ${se_argent(l.valeur_ecart)})${l.commentaire ? ` — ${se_esc(l.commentaire)}` : ""}</span></div>`).join("")
+        || `<div class="pos">Aucun écart.</div>`) + `<div class="se-note">${se_lien("Verification Stock", d.fiche.name)}${d.fiche.tache_employe ? ` · ${se_lien("Tache de travail", d.fiche.tache_employe, "tâche employé")}` : ""}</div>`).show();
+    });
+  }
+
+  /** Feuille de comptage d'une vérification : quantité comptée par article, écart en direct. */
+  async ouvrirComptage(name) {
+    this.comptage = name;
+    const d = (await frappe.call({ method: SE_API + "detail_verification", args: { name } })).message;
+    const $c = this.$r.find("#se-v-contenu"), fini = d.fiche.statut !== "En cours";
+    const saisies = {};
+    d.lignes.forEach((l) => { saisies[l.item_code] = { qte_comptee: l.qte_comptee, commentaire: l.commentaire || "" }; });
+    const ligne = (l) => `<div class="se-c-ligne ${l.qte_comptee != null ? "fait" : ""}" data-item="${se_esc(l.item_code)}" data-cle="${se_esc(((l.item_name || "") + " " + l.item_code).toLowerCase())}">
+        <div class="txt"><div class="se-nom" style="font-size:13.5px">${se_esc(l.item_name || l.item_code)}</div>
+          <div class="se-code">${se_esc(l.item_code)}${l.zones ? ` · 📍 ${se_esc(l.zones)}` : ""}</div></div>
+        <div class="sys">${se_q(l.qte_systeme)}</div>
+        <input type="number" inputmode="decimal" step="any" class="form-control q" ${fini ? "disabled" : ""} value="${l.qte_comptee == null ? "" : se_esc(l.qte_comptee)}" placeholder="?">
+        <div class="ec ${l.ecart ? (l.ecart < 0 ? "neg" : "pos") : ""}">${l.ecart == null ? "" : se_signe(l.ecart)}</div>
+      </div>`;
+    $c.html(`<span class="se-retour" data-retour>← Vérifications</span>
+      <div class="se-card">
+        <div class="se-v-stock"><div class="t">📝 ${se_esc(this.libelle(d.fiche.entrepot))} — ${se_dt(d.fiche.date)} ${fini ? `<span class="se-badge">terminée</span>` : ""}</div>
+          <div class="plan" id="se-c-bilan"></div></div>
+        <input type="search" class="form-control se-saisie" id="se-c-filtre" placeholder="🔎 Filtrer un article…" style="margin-top:8px">
+        <div class="se-c-tete"><span class="txt">Article</span><span class="sys">Système</span><span class="q">Compté</span><span class="ec">Écart</span></div>
+        <div id="se-c-lignes">${d.lignes.map(ligne).join("")}</div>
+        ${fini ? "" : `<div class="se-c-barre"><button type="button" class="btn btn-default" data-enregistrer>💾 Enregistrer</button>
+          <button type="button" class="btn btn-primary" data-terminer>✅ Terminer</button></div>`}
+      </div>`);
+    const bilan = () => {
+      let n = 0, e = 0, v = 0;
+      d.lignes.forEach((l) => { const s = saisies[l.item_code]; if (s.qte_comptee == null || s.qte_comptee === "") return; n++;
+        const ec = Math.round((+s.qte_comptee - l.qte_systeme) * 1e6) / 1e6; if (ec) { e++; v += ec * l.taux; } });
+      $c.find("#se-c-bilan").html(`${n}/${d.lignes.length} comptés · <b class="${e ? "neg" : "pos"}">${e} écart(s)</b>${e ? ` · ${se_argent(v)}` : ""}`);
+    };
+    bilan();
+    $c.find("[data-retour]").on("click", () => this.chargerVerif());
+    $c.find("#se-c-filtre").on("input", (e) => { const q = (e.currentTarget.value || "").toLowerCase().trim();
+      $c.find(".se-c-ligne").each((_, el) => $(el).toggle(!q || ($(el).attr("data-cle") || "").includes(q))); });
+    $c.find("input.q").on("input", (e) => {
+      const $l = $(e.currentTarget).closest(".se-c-ligne"), code = $l.attr("data-item"), l = d.lignes.find((x) => x.item_code === code);
+      const v = String(e.currentTarget.value).replace(",", ".");
+      saisies[code].qte_comptee = v === "" ? null : +v;
+      const ec = v === "" ? null : Math.round((+v - l.qte_systeme) * 1e6) / 1e6;
+      $l.toggleClass("fait", v !== "").find(".ec").text(ec == null ? "" : se_signe(ec)).attr("class", "ec " + (ec ? (ec < 0 ? "neg" : "pos") : ""));
+      bilan();
+    });
+    const comptes = () => JSON.stringify(saisies);
+    $c.find("[data-enregistrer]").on("click", async () => {
+      await frappe.call({ method: SE_API + "enregistrer_verification", args: { name, comptes: comptes() }, freeze: true });
+      frappe.show_alert({ message: "Comptage enregistré — vous pourrez reprendre", indicator: "green" }, 3);
+    });
+    $c.find("[data-terminer]").on("click", () => {
+      const n = Object.values(saisies).filter((s) => s.qte_comptee != null && s.qte_comptee !== "").length;
+      frappe.confirm(`Terminer la vérification avec <b>${n}</b> article(s) compté(s) sur ${d.lignes.length} ?<br>Les écarts seront figés et valorisés ; <b>aucun mouvement de stock</b> ne sera passé.`, async () => {
+        const r = (await frappe.call({ method: SE_API + "terminer_verification", args: { name, comptes: comptes() }, freeze: true })).message;
+        frappe.msgprint({ title: "Vérification terminée", indicator: r.nb_ecarts ? "orange" : "green",
+          message: `${r.nb_comptes} article(s) comptés, <b>${r.nb_ecarts} écart(s)</b>${r.nb_ecarts ? ` · valeur nette ${se_esc(se_argent(r.valeur_ecarts))} · manquants ${se_esc(se_argent(r.valeur_manquants))}` : ""}` });
+        this.comptage = null;
+        this.chargerVerif();
+      });
+    });
   }
 
   validerZero(choisies, nApports, nRetours) {
