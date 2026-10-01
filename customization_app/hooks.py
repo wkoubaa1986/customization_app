@@ -676,6 +676,8 @@ after_migrate = [
     "customization_app.patches.ensure_raccourci_zones_magasin.execute",
     # « Stock par entrepôt » dans l'espace Stock, après « Zones & sorties d’articles » + premier réglage.
     "customization_app.patches.ensure_stock_entrepots.execute",
+    # « Ensembles de produits » dans l'espace Stock, après « Stock par entrepôt ».
+    "customization_app.patches.ensure_ensembles_produits.execute",
     # « Congés & récupérations » dans l'onglet HR + type de congé « Récupération (quinzaine) ».
     "customization_app.patches.ensure_conges_recuperations.execute",
 ]

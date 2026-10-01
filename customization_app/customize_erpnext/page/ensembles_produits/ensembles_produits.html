@@ -1,0 +1,68 @@
+<div class="ep-page">
+  <style>
+    .ep-page { padding: 8px 12px 40px; max-width: 1100px; margin: 0 auto; }
+    .ep-card { background: var(--card-bg, #fff); border: 1px solid var(--border-color, #e4e8ee); border-radius: 12px; padding: 10px 12px; margin-bottom: 10px; box-shadow: 0 1px 3px rgba(0,0,0,.05); }
+    .ep-saisie { width: 100%; height: 40px; font-size: 15px; }
+    .ep-chips { display: flex; gap: 6px; overflow-x: auto; padding: 6px 0 4px; scrollbar-width: none; }
+    .ep-chips::-webkit-scrollbar { display: none; }
+    .ep-chip { flex: none; border: 1px solid #cbd5e1; border-radius: 999px; padding: 6px 12px; font-size: 13px; cursor: pointer; background: #fff; white-space: nowrap; user-select: none; color: #334155; }
+    .ep-chip.on { background: #2563eb; border-color: #2563eb; color: #fff; }
+    .ep-info { font-size: 12.5px; color: #64748b; margin: 4px 2px 8px; display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+    .ep-info .btn { margin-left: auto; }
+    .ep-grille { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 10px; }
+    .ep-ens { background: var(--card-bg, #fff); border: 1px solid var(--border-color, #e4e8ee); border-radius: 12px; padding: 10px; cursor: pointer; }
+    .ep-ens.off { opacity: .6; background: #f8fafc; }
+    .ep-ens:active { background: #f8fafc; }
+    .ep-tete { display: flex; gap: 10px; align-items: flex-start; }
+    .ep-img { width: 56px; height: 56px; border-radius: 10px; object-fit: contain; border: 1px solid #e4e8ee; background: #f8fafc; flex: none; display: flex; align-items: center; justify-content: center; color: #cbd5e1; font-size: 24px; }
+    .ep-tete .txt { flex: 1; min-width: 0; }
+    .ep-nom { font-weight: 700; font-size: 14px; line-height: 1.25; word-break: break-word; }
+    .ep-code { font-size: 11.5px; color: #64748b; margin-top: 2px; word-break: break-all; }
+    .ep-kpi { display: flex; gap: 10px; font-size: 12px; color: #475569; margin-top: 6px; flex-wrap: wrap; }
+    .ep-kpi b { color: #0f172a; }
+    .ep-ass { display: inline-block; font-weight: 700; border-radius: 6px; padding: 1px 7px; font-size: 12px; }
+    .ep-ass.ok { background: #dcfce7; color: #166534; } .ep-ass.bas { background: #fef3c7; color: #92400e; } .ep-ass.zero { background: #fee2e2; color: #991b1b; } .ep-ass.na { background: #f1f5f9; color: #64748b; }
+    .ep-comps { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+    .ep-comp { display: inline-flex; align-items: center; gap: 5px; background: #f1f5f9; border-radius: 999px; padding: 3px 9px 3px 3px; font-size: 12px; color: #334155; max-width: 100%; }
+    .ep-comp img, .ep-comp .ph { width: 22px; height: 22px; border-radius: 50%; object-fit: cover; background: #fff; border: 1px solid #e2e8f0; flex: none; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; }
+    .ep-comp .n { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 170px; }
+    .ep-comp .q { font-weight: 700; }
+    .ep-comp .s { font-size: 11px; color: #64748b; }
+    .ep-comp.manque { background: #fee2e2; color: #991b1b; } .ep-comp.manque .s { color: #b91c1c; }
+    .ep-plus { display: block; width: 100%; height: 40px; margin: 10px 0; }
+    .ep-vide { text-align: center; color: #94a3b8; padding: 24px 10px; }
+    .neg { color: #dc2626 !important; } .pos { color: #15803d !important; }
+
+    .ep-f-ligne { display: flex; gap: 8px; align-items: center; padding: 8px 0; border-bottom: 1px solid #f1f5f9; }
+    .ep-f-ligne .ep-img { width: 40px; height: 40px; font-size: 18px; }
+    .ep-f-ligne .txt { flex: 1; min-width: 0; }
+    .ep-f-ligne input.q { flex: none; width: 68px; height: 38px; text-align: center; font-size: 16px; font-weight: 700; }
+    .ep-f-ligne .b { flex: none; width: 36px; height: 36px; border-radius: 10px; border: 1px solid #cbd5e1; background: #fff; font-size: 18px; display: flex; align-items: center; justify-content: center; cursor: pointer; user-select: none; }
+    .ep-f-ligne .b.x { color: #dc2626; border-color: #fecaca; font-size: 15px; }
+    .ep-f-ligne .b.ajout { color: #16a34a; } .ep-f-ligne .b.fait { background: #dcfce7; border-color: #86efac; }
+    .ep-f-tete { display: flex; gap: 10px; align-items: center; margin-bottom: 8px; }
+    .ep-f-tete .ep-img { width: 64px; height: 64px; }
+    .ep-f-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+    .ep-f-actions .btn { flex: 1 1 40%; height: 42px; font-weight: 600; border-radius: 10px; }
+    .ep-lbl { font-size: 10.5px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: .3px; margin: 10px 0 4px; display: block; }
+    .ep-note { font-size: 12.5px; color: #64748b; }
+    .ep-prix { display: flex; gap: 8px; align-items: center; }
+    .ep-prix input { width: 110px; height: 36px; text-align: right; font-weight: 700; }
+    .ep-n-form .form-control { height: 38px; margin-bottom: 8px; }
+    @media (max-width: 600px) { .ep-grille { grid-template-columns: 1fr; } }
+  </style>
+
+  <div class="ep-card">
+    <input type="search" class="form-control ep-saisie" id="ep-recherche" placeholder="🔎 Ensemble (nom, code) ou composant…">
+    <div class="ep-chips" id="ep-etats">
+      <span class="ep-chip on" data-etat="actifs">Actifs</span>
+      <span class="ep-chip" data-etat="desactives">Désactivés</span>
+      <span class="ep-chip" data-etat="tous">Tous</span>
+      <span class="ep-chip" id="ep-non-ass">⚠️ Non assemblables</span>
+    </div>
+    <div class="ep-chips" id="ep-groupes"></div>
+  </div>
+  <div class="ep-info"><span id="ep-info"></span><button type="button" class="btn btn-primary btn-sm" id="ep-nouveau" style="display:none">➕ Nouvel ensemble</button></div>
+  <div class="ep-grille" id="ep-grille"></div>
+  <button type="button" class="btn btn-default ep-plus" id="ep-plus" style="display:none">Afficher plus</button>
+</div>
