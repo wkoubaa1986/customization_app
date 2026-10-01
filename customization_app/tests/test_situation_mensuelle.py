@@ -55,9 +55,9 @@ class TestMargesEtComparaison(unittest.TestCase):
     def test_ratios(self):
         r = SM.ratios(1000, 380, 340)
         self.assertAlmostEqual(r["marge"], 34.0)
-        self.assertAlmostEqual(r["marge_brute"], 38.0)                 # définition utilisateur : coût / ventes
-        self.assertAlmostEqual(r["marge_brute_usuelle"], 62.0)         # (ventes − coût) / ventes
-        self.assertEqual(SM.ratios(0, 10, -10), {"marge": None, "marge_brute": None, "marge_brute_usuelle": None})
+        self.assertAlmostEqual(r["marge_brute"], 62.0)                 # (ventes − coût) / ventes — « c'est le contraire » (01/10 soir)
+        self.assertAlmostEqual(r["cout_ventes"], 38.0)                 # coût / ventes, affiché en sous-titre
+        self.assertEqual(SM.ratios(0, 10, -10), {"marge": None, "marge_brute": None, "cout_ventes": None})
 
     def test_comparaison_des_annees(self):
         import frappe

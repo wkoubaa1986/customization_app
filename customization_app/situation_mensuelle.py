@@ -170,12 +170,13 @@ def calculer(p: dict) -> dict:
 def ratios(ventes, cout, benefice) -> dict:
     """Indicateurs demandés le 01/10/2026, en % des ventes livrées TTC :
     - marge = bénéfice / ventes ;
-    - marge brute « coût / ventes » = coût de la marchandise / ventes (définition de l'utilisateur ;
-      la marge brute au sens usuel, (ventes − coût) / ventes, est son complément : renvoyée aussi)."""
+    - marge brute = (ventes − coût de la marchandise) / ventes — corrigée le 01/10/2026 au soir : la
+      première version affichait coût / ventes sous ce nom (« c'est le contraire ») ; ce ratio reste
+      renvoyé à part (`cout_ventes`)."""
     if not ventes:
-        return {"marge": None, "marge_brute": None, "marge_brute_usuelle": None}
-    return {"marge": 100.0 * benefice / ventes, "marge_brute": 100.0 * cout / ventes,
-            "marge_brute_usuelle": 100.0 * (ventes - cout) / ventes}
+        return {"marge": None, "marge_brute": None, "cout_ventes": None}
+    return {"marge": 100.0 * benefice / ventes, "marge_brute": 100.0 * (ventes - cout) / ventes,
+            "cout_ventes": 100.0 * cout / ventes}
 
 
 def serie(fin_mois: str | None = None, nb: int = 12) -> list[dict]:
@@ -397,7 +398,7 @@ INDICATEURS = ("ventes", "cout", "charges", "tva", "benefice", "marge", "marge_b
 def _valeurs(c: dict) -> dict:
     return {"ventes": c["ventes"], "cout": c["cout"]["net"], "charges": c["charges"]["net"], "tva": c["tva"]["net"],
             "benefice": c["benefice"], "marge": c["marge"], "marge_brute": c["marge_brute"],
-            "marge_brute_usuelle": c["marge_brute_usuelle"]}
+            "cout_ventes": c["cout_ventes"]}
 
 
 @frappe.whitelist()

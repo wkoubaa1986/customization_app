@@ -27,7 +27,7 @@ const sm_dt = (v, dec = 0) => format_currency(v || 0, "TND", dec);
 const SM_IND = [
   { cle: "ventes", titre: "Ventes" }, { cle: "cout", titre: "Coût marchandise" }, { cle: "charges", titre: "Charges" },
   { cle: "tva", titre: "TVA achat" }, { cle: "benefice", titre: "Bénéfice" },
-  { cle: "marge", titre: "Marge %", pct: true }, { cle: "marge_brute", titre: "Marge brute (coût/ventes) %", pct: true },
+  { cle: "marge", titre: "Marge %", pct: true }, { cle: "marge_brute", titre: "Marge brute %", pct: true },
 ];
 const SM_COULEURS_ANNEES = ["#94a3b8", "#f59e0b", "#2563eb", "#16a34a", "#9333ea", "#dc2626"];
 const sm_pct = (v) => (v == null ? "—" : `${(Math.round(v * 10) / 10).toLocaleString("fr-FR")} %`);
@@ -112,7 +112,7 @@ class SituationMensuelle {
         <div class="s">bénéfice / ventes TTC</div></div>
       <div class="sm-kpi ratio marge_brute">
         <div class="l">Marge brute</div><div class="v">${sm_pct(c.marge_brute)}</div>
-        <div class="s">coût / ventes TTC · au sens usuel ${sm_pct(c.marge_brute_usuelle)}</div></div>`);
+        <div class="s">(ventes − coût) / ventes TTC · coût / ventes ${sm_pct(c.cout_ventes)}</div></div>`);
     r.find(".sm-kpi[data-rubrique]").on("click", (e) => {
       const rub = $(e.currentTarget).attr("data-rubrique");
       if (rub === "Bénéfice") return this.expliquerBenefice();
