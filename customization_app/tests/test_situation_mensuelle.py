@@ -67,7 +67,10 @@ class TestMargesEtComparaison(unittest.TestCase):
         annees = {a["annee"]: a for a in r["annees"]}
         self.assertEqual(list(annees)[0], "2024")                   # 2023 écartée : pas représentative
         self.assertNotIn("2023", annees)
-        self.assertEqual(annees["2023"]["mois"][:9], [None] * 9)                 # avant octobre 2023 : rien
+        from frappe.utils import getdate, nowdate
+        en_cours = annees[str(getdate(nowdate()).year)]
+        self.assertTrue(all(m is None for m in en_cours["mois"][getdate(nowdate()).month:]))   # mois à venir : rien
+        self.assertTrue(all(m is not None for m in annees["2024"]["mois"]))                  # année pleine
         auj = getdate(nowdate())
         courante = annees[str(auj.year)]
         self.assertTrue(all(m is None for m in courante["mois"][auj.month:]))   # mois à venir : rien
