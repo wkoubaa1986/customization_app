@@ -56,9 +56,13 @@ class TestCircuit(unittest.TestCase):
         nom = S.ouvrir_verification(self.ENTREPOT, "2026-10-01", avec_taches=True)
         v = frappe.get_doc(S.VERIF, nom)
         self.assertEqual(v.statut, "En cours")
-        self.assertTrue(v.lignes)
+        self.assertFalse(v.lignes)                                              # pas de photo à la création (rendez-vous d'avance)
         self.assertTrue(v.tache_employe)                                        # l'employé du stock
-        self.assertEqual(S.ouvrir_verification(self.ENTREPOT, "2026-10-01"), nom)   # une seule « En cours »
+        self.assertEqual(S.ouvrir_verification(self.ENTREPOT, "2026-10-01"), nom)   # une seule fiche par date
+        self.assertEqual(S.commencer_verification(self.ENTREPOT), nom)          # « Compter maintenant » reprend la fiche ouverte
+        S.detail_verification(nom)                                              # première ouverture : photographie
+        v = frappe.get_doc(S.VERIF, nom)
+        self.assertTrue(v.lignes)
         l0, l1 = v.lignes[0], v.lignes[1]
         stock_avant = frappe.db.get_value("Bin", {"item_code": l1.item_code, "warehouse": self.ENTREPOT}, "actual_qty")
         comptes = {l0.item_code: {"qte_comptee": l0.qte_systeme}, l1.item_code: {"qte_comptee": l1.qte_systeme + 2, "commentaire": "en plus"}}
@@ -74,6 +78,31 @@ class TestCircuit(unittest.TestCase):
         self.assertEqual([h["name"] for h in S.historique_verifications(self.ENTREPOT)][0], nom)
         with self.assertRaises(frappe.ValidationError):
             S.terminer_verification(nom)                                        # déjà terminée
+
+    def test_le_cron_cree_la_prochaine_de_chaque_stock_dans_la_semaine(self):
+        """Les rendez-vous de la semaine à venir existent d'avance : la prochaine occurrence du jour réglé,
+        aujourd'hui compris, avec ses tâches ; rejouer le cron ne crée rien de plus."""
+        import frappe
+        from frappe.utils import nowdate
+        cfg = S.config_verification()
+        actives = [l for l in cfg["lignes"] if l["actif"]]
+        if not actives:
+            self.skipTest("aucune vérification planifiée dans le réglage")
+        vrai_commit = frappe.db.commit
+        frappe.db.commit = lambda *a, **k: None                                 # le cron commite : pas dans un test
+        try:
+            manquantes = [l for l in actives if not frappe.db.exists(S.VERIF, {"entrepot": l["entrepot"], "date": S.prochaine_date(l["jour"], nowdate())})]
+            crees = S.planifier_verifications()
+            self.assertEqual(len(crees), len(manquantes))
+            for n in crees:
+                v = frappe.get_doc(S.VERIF, n)
+                self.assertTrue(v.tache_employe and v.tache_responsable)       # les deux tâches, créées d'avance
+                self.assertFalse(v.lignes)                                     # photo du stock au premier comptage
+            for l in actives:
+                self.assertTrue(frappe.db.exists(S.VERIF, {"entrepot": l["entrepot"], "date": S.prochaine_date(l["jour"], nowdate())}))
+            self.assertEqual(S.planifier_verifications(), [])
+        finally:
+            frappe.db.commit = vrai_commit
 
     def test_un_employe_ne_voit_que_son_stock(self):
         import frappe

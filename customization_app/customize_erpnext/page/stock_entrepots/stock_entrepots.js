@@ -524,8 +524,11 @@ class StockEntrepots {
       + (res.stocks.map((s) => `<div class="se-card se-v-stock">
           <div class="t">🚐 ${se_esc(s.libelle)}</div>
           <div class="plan">👤 ${se_esc(s.employe)} · ${s.actif ? `chaque <b>${se_esc(s.jour)}</b> à ${se_esc(s.heure)} · prochaine le ${se_dt(s.prochaine)}` : `<span style="color:#c2410c">pas de jour fixé</span>`}</div>
-          ${s.en_cours ? `<div class="plan">📝 Comptage en cours du ${se_dt(s.en_cours.date)} : ${s.en_cours.nb_comptes}/${s.en_cours.nb_lignes} comptés</div>
-              <button type="button" class="btn btn-primary" data-reprendre="${se_esc(s.en_cours.name)}">Reprendre le comptage</button>`
+          ${s.en_cours ? (s.en_cours.photo
+              ? `<div class="plan">📝 Comptage en cours du ${se_dt(s.en_cours.date)} : ${s.en_cours.nb_comptes}/${s.en_cours.nb_lignes} comptés</div>
+                 <button type="button" class="btn btn-primary" data-reprendre="${se_esc(s.en_cours.name)}">Reprendre le comptage</button>`
+              : `<div class="plan">📅 Vérification ${s.en_cours.prevue ? "prévue le" : "du"} <b>${se_dt(s.en_cours.date)}</b>${s.en_cours.tache_employe ? " · tâches créées" : ""}</div>
+                 <button type="button" class="btn btn-primary" data-reprendre="${se_esc(s.en_cours.name)}">Commencer le comptage</button>`)
             : `<button type="button" class="btn btn-default" data-commencer="${se_esc(s.entrepot)}">Compter maintenant</button>`}
           <div class="se-v-hist">${hist(s) || `<div class="se-note">Aucune vérification terminée.</div>`}</div>
         </div>`).join("") || `<div class="se-vide">Aucun stock d’employé.</div>`));
@@ -568,6 +571,7 @@ class StockEntrepots {
     $c.html(`<span class="se-retour" data-retour>← Vérifications</span>
       <div class="se-card">
         <div class="se-v-stock"><div class="t">📝 ${se_esc(this.libelle(d.fiche.entrepot))} — ${se_dt(d.fiche.date)} ${fini ? `<span class="se-badge">terminée</span>` : ""}</div>
+          ${fini ? "" : `<div class="se-note">Quantités système photographiées à la première ouverture de cette feuille.</div>`}
           <div class="plan" id="se-c-bilan"></div></div>
         <input type="search" class="form-control se-saisie" id="se-c-filtre" placeholder="🔎 Filtrer un article…" style="margin-top:8px">
         <div class="se-c-tete"><span class="txt">Article</span><span class="sys">Système</span><span class="q">Compté</span><span class="ec">Écart</span></div>

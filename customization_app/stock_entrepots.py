@@ -638,17 +638,16 @@ def _creer_tache(employe: str, entrepot_libelle: str, quand, duree: str, role: s
 
 
 def ouvrir_verification(entrepot: str, date_prevue, avec_taches: bool = True) -> str:
-    """Ouvre la fiche de la semaine pour ce stock (une seule « En cours » par stock : réutilisée)."""
-    existante = frappe.db.get_value(VERIF, {"entrepot": entrepot, "statut": "En cours"}, "name")
+    """Ouvre la fiche de ce stock pour cette date (une seule par stock et par date : réutilisée).
+    ⚠️ Pas de photographie du stock ici : créée jusqu'à six jours à l'avance (rendez-vous de la semaine à
+    venir), la fiche se remplit à la PREMIÈRE OUVERTURE de la feuille de comptage (`_assurer_photo`)."""
+    existante = frappe.db.get_value(VERIF, {"entrepot": entrepot, "date": date_prevue, "statut": "En cours"}, "name")
     if existante:
         return existante
     emp = _employe_du_stock(entrepot)
     cfg = config_verification()
     doc = frappe.get_doc({"doctype": VERIF, "entrepot": entrepot, "date": date_prevue, "statut": "En cours",
                           "employe": emp.name if emp else None, "responsable": cfg["responsable"]})
-    for l in _photographie(entrepot):
-        doc.append("lignes", l)
-    doc.nb_lignes = len(doc.lignes)
     if avec_taches:
         libelle = frappe.db.get_value("Warehouse", entrepot, "warehouse_name") or entrepot
         heure = next((l["heure"] for l in cfg["lignes"] if l["entrepot"] == entrepot), "09:00")
@@ -663,21 +662,23 @@ def ouvrir_verification(entrepot: str, date_prevue, avec_taches: bool = True) ->
 
 
 def planifier_verifications():
-    """Cron quotidien : le jour fixé pour chaque stock, ouvre la vérification de la semaine et ses deux tâches.
-    Idempotent (une seule fiche « En cours » par stock ; rien si une fiche a déjà été ouverte aujourd'hui)."""
+    """Cron quotidien : pour chaque stock, la PROCHAINE vérification (dans les 7 jours à venir, aujourd'hui
+    compris) existe avec ses deux tâches — les rendez-vous de la semaine à venir sont donc créés d'avance
+    (demande utilisateur 01/10/2026). Idempotent : une fiche par stock et par date."""
     if not frappe.db.exists("DocType", VERIF):
         return []
     aujourd = getdate(nowdate())
     crees = []
     for l in config_verification()["lignes"]:
-        if not l["actif"] or JOURS.index(l["jour"]) != aujourd.weekday():
+        if not l["actif"]:
             continue
-        if frappe.db.exists(VERIF, {"entrepot": l["entrepot"], "date": str(aujourd)}):
+        date_cible = prochaine_date(l["jour"], aujourd)
+        if frappe.db.exists(VERIF, {"entrepot": l["entrepot"], "date": date_cible}):
             continue
         if frappe.db.get_value("Warehouse", l["entrepot"], "disabled") or not _employe_du_stock(l["entrepot"]):
             continue
         try:
-            crees.append(ouvrir_verification(l["entrepot"], str(aujourd)))
+            crees.append(ouvrir_verification(l["entrepot"], date_cible))
             frappe.db.commit()
         except Exception:
             frappe.db.rollback()
@@ -685,8 +686,20 @@ def planifier_verifications():
     return crees
 
 
+def _assurer_photo(v):
+    """La photographie du stock (quantité système, taux) est prise à la première ouverture du comptage."""
+    if v.statut != "En cours" or v.get("lignes"):
+        return
+    for l in _photographie(v.entrepot):
+        v.append("lignes", l)
+    v.nb_lignes = len(v.lignes)
+    v.flags.ignore_permissions = True
+    v.save()
+
+
 def _resume(v) -> dict:
     return {"name": v.name, "entrepot": v.entrepot, "date": str(v.date), "statut": v.statut, "employe": v.employe,
+            "prevue": str(v.date) > nowdate(), "photo": bool(v.get("lignes")),
             "nb_lignes": cint(v.nb_lignes), "nb_comptes": cint(v.nb_comptes), "nb_ecarts": cint(v.nb_ecarts),
             "valeur_ecarts": flt(v.valeur_ecarts, 3), "valeur_manquants": flt(v.valeur_manquants, 3),
             "termine_le": str(v.termine_le or "")[:16], "tache_employe": v.tache_employe, "tache_responsable": v.tache_responsable}
@@ -709,7 +722,7 @@ def verifications_etat():
         if not est_responsable() and (not moi or moi.custom_warehouse != wh):
             continue
         plan = next((l for l in cfg["lignes"] if l["entrepot"] == wh), None)
-        en_cours = frappe.db.get_value(VERIF, {"entrepot": wh, "statut": "En cours"}, "name")
+        en_cours = frappe.db.get_value(VERIF, {"entrepot": wh, "statut": "En cours"}, "name", order_by="date asc")
         dernieres = [_resume(v) for v in frappe.get_all(VERIF, filters={"entrepot": wh, "statut": "Terminée"},
                                                          fields=["*"], order_by="termine_le desc", limit=6)]
         out.append({"entrepot": wh, "libelle": actifs[wh]["libelle"], "employe": emp.employee_name, "employe_id": emp.name,
@@ -728,13 +741,17 @@ def commencer_verification(entrepot):
     """Ouvre (ou reprend) la vérification du stock, hors planning : pas de tâches créées."""
     _acces_verification(entrepot)
     _verifier_entrepot(entrepot)
-    return ouvrir_verification(entrepot, nowdate(), avec_taches=False)
+    # Une fiche déjà ouverte (celle de la semaine, même prévue dans quelques jours) est reprise : compter un
+    # peu avant le rendez-vous ne crée pas de doublon.
+    existante = frappe.db.get_value(VERIF, {"entrepot": entrepot, "statut": "En cours"}, "name", order_by="date asc")
+    return existante or ouvrir_verification(entrepot, nowdate(), avec_taches=False)
 
 
 @frappe.whitelist()
 def detail_verification(name):
     v = frappe.get_doc(VERIF, name)
     _acces_verification(v.entrepot)
+    _assurer_photo(v)
     # ⚠️ Un Float vaut 0 en base, jamais None : « pas compté » se lit sur le drapeau `compte`.
     images = dict(frappe.get_all("Item", filters={"name": ["in", [l.item_code for l in v.lignes] or [""]]},
                                  fields=["name", "image"], as_list=True))
@@ -773,6 +790,7 @@ def enregistrer_verification(name, comptes):
     _acces_verification(v.entrepot)
     if v.statut != "En cours":
         frappe.throw(_("Cette vérification est terminée."))
+    _assurer_photo(v)
     _appliquer_comptage(v, frappe.parse_json(comptes) if isinstance(comptes, str) else (comptes or {}))
     v.flags.ignore_permissions = True
     v.save()
@@ -786,6 +804,7 @@ def terminer_verification(name, comptes=None, note=None):
     _acces_verification(v.entrepot)
     if v.statut != "En cours":
         frappe.throw(_("Cette vérification est déjà terminée."))
+    _assurer_photo(v)
     if comptes:
         _appliquer_comptage(v, frappe.parse_json(comptes) if isinstance(comptes, str) else comptes)
     else:
