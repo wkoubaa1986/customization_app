@@ -358,19 +358,13 @@ class TestControlePrealableDuScript(unittest.TestCase):
                             {"docstatus": 1, "is_opening": "Yes"}},
                            "ACC-SINV-2026-00007")
 
-    def test_une_facture_soumise_que_le_traitement_annulerait_est_refusee(self):
-        """LE cas resté ouvert : la facture est encore soumise à l'entrée, mais le
-        bloc « Cancel invoices » l'annule et la recrée avant la création des
-        paiements — qui la référenceraient annulée. On refuse avant toute écriture,
-        en nommant la dette, la facture et l'encaissement."""
-        with self.assertRaises(Refus) as levee:
-            _executer_controle({("Sales Invoice", "ACC-SINV-2026-01068"):
-                                {"docstatus": 1, "is_opening": "No"}},
-                               "ACC-SINV-2026-01068")
-        message = str(levee.exception)
-        self.assertIn("ACC-PAY-2026-00123", message)      # la dette
-        self.assertIn("ACC-SINV-2026-01068", message)     # la facture
-        self.assertIn("ENC-2026-00042", message)          # l'encaissement
+    def test_une_facture_soumise_sans_commande_passe(self):
+        """Dette posée sur une facture ordinaire (reliquat de facture mensuelle, timbre) :
+        refusée jusqu'au 01/10/2026 (« sera annulee puis recreee »), elle est désormais payée
+        directement sur sa facture — BEN Sassi BIOAQUA, ENC-01-10-2026-00001."""
+        _executer_controle({("Sales Invoice", "ACC-SINV-2026-01046"):
+                            {"docstatus": 1, "is_opening": "No"}},
+                           "ACC-SINV-2026-01046")
 
     def test_une_facture_deja_annulee_est_refusee(self):
         with self.assertRaises(Refus) as levee:
@@ -549,6 +543,40 @@ class TestFixtureTraitementDesEncaissements(unittest.TestCase):
 
     def test_le_script_compile(self):
         compile(self.script, NOM_SCRIPT, "exec")
+
+    def test_le_script_compile_dans_le_bac_a_sable(self):
+        """Le compilateur de Frappe (RestrictedPython) est plus strict que `compile` :
+        `frappe._dict` y est refusé (nom commençant par « _ ») — erreur vue le 01/10/2026
+        en écrivant l'imputation sur facture recréée, invisible à `compile`."""
+        from RestrictedPython import compile_restricted
+        from frappe.utils.safe_exec import FrappeTransformer
+        compile_restricted(self.script, filename=NOM_SCRIPT, policy=FrappeTransformer)
+
+    def test_une_dette_sans_commande_ne_fait_pas_recreer_sa_facture(self):
+        """La facture n'entre dans `invoice_to_cancel` que pour une dette AVEC commande."""
+        self.assertIn("dette_sur_facture = not frappe.db.exists(\"Sales Order\", cible_dette)", self.script)
+        self.assertIn("not(iref.reference_name in invoice_to_cancel) and not dette_sur_facture", self.script)
+
+    def test_l_avance_de_commande_ne_se_corrige_que_sur_une_commande(self):
+        """Une cible facture (dette sans commande) n'a pas d'avance de commande : chaque
+        `Sales_i.advance_paid` doit être sous `if Sales_i:`, et `Sales_i` n'est lu
+        comme commande que s'il en est une."""
+        lignes = self.script.split("\n")
+        for i, ligne in enumerate(lignes):
+            if "Sales_i.advance_paid=" in ligne:
+                self.assertEqual(lignes[i - 1].strip(), "if Sales_i:", "ligne %d" % (i + 1))
+            if "Sales_i=frappe.get_doc('Sales Order',sales_order)" in ligne:
+                self.assertIn("if frappe.db.exists(\"Sales Order\", sales_order) else None", ligne)
+
+    def test_la_part_d_une_facture_recreee_est_imputee_apres_recreation(self):
+        """Une dette sans commande dont la facture est recréée pour d'autres dettes : sa part
+        est mise de côté (`a_imputer`) puis rapprochée de la facture recréée."""
+        self.assertEqual(self.script.count("a_imputer.append("), 6)   # 4 pièces + espèces + reliquat
+        self.assertIn("factures_recreees[invoice]=new_invoice.name", self.script)
+        fin = self.script[self.script.index("factures_recreees[invoice]=new_invoice.name"):]
+        self.assertIn("frappe.new_doc(\"Payment Reconciliation\")", fin)
+        self.assertIn("rapp.reconcile_allocations()", fin)
+        self.assertLess(fin.index("rapp.reconcile_allocations()"), fin.index("selling_settings.so_required=original_so"))
 
     def test_les_liens_bl_et_commande_passent_par_une_variable(self):
         """Recopier `item.delivery_note` tel quel est ce qui reliait un BL annulé."""
