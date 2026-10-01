@@ -1,0 +1,158 @@
+<div class="se-page">
+  <style>
+    .se-page { padding: 8px 12px 24px; max-width: 900px; margin: 0 auto; }
+    .se-onglets { display: flex; background: #f1f5f9; border-radius: 12px; padding: 4px; margin-bottom: 10px;
+                  position: sticky; top: calc(var(--navbar-height, 48px) + 2px); z-index: 20; }
+    .se-onglet { flex: 1; text-align: center; padding: 8px 2px; border-radius: 9px; font-weight: 600; font-size: 13px;
+                 cursor: pointer; color: #475569; user-select: none; line-height: 1.2; }
+    .se-onglet .ic { display: block; font-size: 17px; }
+    .se-onglet.on { background: #fff; color: #111827; box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+    .se-card { background: var(--card-bg, #fff); border: 1px solid var(--border-color, #e4e8ee); border-radius: 12px;
+               padding: 10px 12px; margin-bottom: 10px; box-shadow: 0 1px 3px rgba(0,0,0,.05); }
+    .se-chips { display: flex; gap: 6px; overflow-x: auto; padding: 2px 0 6px; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+    .se-chips::-webkit-scrollbar { display: none; }
+    .se-chip { flex: none; border: 1px solid #cbd5e1; border-radius: 999px; padding: 6px 12px; font-size: 13px; cursor: pointer;
+               background: #fff; white-space: nowrap; user-select: none; color: #334155; }
+    .se-chip.on { background: #2563eb; border-color: #2563eb; color: #fff; }
+    .se-chip.alerte.on { background: #dc2626; border-color: #dc2626; }
+    .se-saisie { width: 100%; height: 40px; font-size: 15px; }
+    .se-ligne-filtres { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+    .se-ligne-filtres .se-saisie { flex: 1; }
+    .se-dates { display: none; gap: 8px; margin-top: 8px; }
+    .se-dates input { flex: 1; height: 38px; font-size: 14px; }
+    .se-info { font-size: 12.5px; color: #64748b; margin: 2px 2px 8px; }
+    .se-vide { text-align: center; color: #94a3b8; padding: 24px 10px; }
+    .se-plus { display: block; width: 100%; height: 40px; margin: 6px 0 12px; }
+
+    .se-art { display: flex; gap: 10px; align-items: center; padding: 9px 10px; border: 1px solid var(--border-color, #e4e8ee);
+              border-radius: 12px; background: var(--card-bg, #fff); margin-bottom: 7px; cursor: pointer; }
+    .se-art:active { background: #f8fafc; }
+    .se-img { width: 44px; height: 44px; border-radius: 9px; object-fit: contain; border: 1px solid #e4e8ee; background: #f8fafc;
+              flex: none; display: flex; align-items: center; justify-content: center; color: #cbd5e1; font-size: 19px; }
+    .se-art .txt { flex: 1; min-width: 0; }
+    .se-nom { font-weight: 600; font-size: 14px; line-height: 1.25; word-break: break-word; }
+    .se-code { font-size: 11.5px; color: #64748b; margin-top: 2px; word-break: break-word; }
+    .se-wh { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 12px; color: #475569; margin-top: 3px; }
+    .se-qte { flex: none; text-align: right; font-weight: 700; font-size: 18px; color: #0f172a; min-width: 52px; }
+    .se-qte small { display: block; font-size: 10.5px; font-weight: 500; color: #94a3b8; }
+    .neg { color: #dc2626 !important; }
+    .pos { color: #15803d !important; }
+
+    .se-sortie { border: 1px solid var(--border-color, #e4e8ee); border-radius: 12px; background: var(--card-bg, #fff); margin-bottom: 7px; }
+    .se-sortie > .se-art { border: 0; margin: 0; }
+    .se-sortie .fleche { color: #94a3b8; font-size: 13px; flex: none; transition: transform .15s; }
+    .se-sortie.ouvert .fleche { transform: rotate(90deg); }
+    .se-lignes { border-top: 1px solid #f1f5f9; padding: 4px 10px 8px; }
+    .se-mvt { padding: 7px 0; border-bottom: 1px dashed #e2e8f0; font-size: 13px; line-height: 1.45; }
+    .se-mvt:last-child { border-bottom: 0; }
+    .se-mvt .l3 { font-size: 12px; color: #94a3b8; }
+    .se-mvt .tache { color: #334155; }
+    .se-lien { color: #2563eb; }
+    .se-badge { display: inline-block; font-size: 11px; border-radius: 6px; padding: 0 6px; background: #f1f5f9; color: #475569; margin-left: 4px; }
+
+    .se-sens { display: grid; grid-template-columns: 1fr auto 1fr; gap: 6px; align-items: end; }
+    .se-sens label { font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase; margin: 0 0 3px; display: block; }
+    .se-sens select { height: 40px; font-size: 14px; width: 100%; }
+    .se-inverser { height: 40px; width: 42px; border-radius: 10px; border: 1px solid #cbd5e1; background: #fff; font-size: 18px; cursor: pointer; }
+    .se-bt { flex: none; width: 38px; height: 38px; border-radius: 10px; border: 1px solid #e2e8f0; background: #fff; font-size: 19px;
+             display: flex; align-items: center; justify-content: center; cursor: pointer; color: #16a34a; user-select: none; }
+    .se-bt.fait { background: #dcfce7; border-color: #86efac; }
+    .se-panier-ligne { padding: 9px 0; border-bottom: 1px solid #f1f5f9; }
+    .se-panier-ligne:last-child { border-bottom: 0; }
+    .se-panier-ligne .haut { display: flex; gap: 10px; align-items: center; }
+    .se-pas { display: flex; align-items: center; gap: 6px; margin-top: 7px; }
+    .se-pas .b { width: 38px; height: 38px; border-radius: 10px; border: 1px solid #cbd5e1; background: #fff; font-size: 20px;
+                 display: flex; align-items: center; justify-content: center; cursor: pointer; user-select: none; }
+    .se-pas input { width: 80px; height: 38px; text-align: center; font-size: 16px; font-weight: 700; }
+    .se-pas .x { margin-left: auto; color: #dc2626; border-color: #fecaca; font-size: 16px; }
+    .se-alerte { font-size: 12px; color: #c2410c; margin-top: 4px; }
+    .se-barre { position: sticky; bottom: 0; z-index: 15; background: var(--bg-color, #fff); padding: 10px 0 6px;
+                border-top: 1px solid var(--border-color, #e4e8ee); margin-top: 6px; }
+    .se-barre .btn { width: 100%; height: 46px; font-size: 15px; font-weight: 600; border-radius: 12px; }
+    .se-titre { font-size: 15px; font-weight: 700; margin: 14px 2px 8px; }
+    .se-tr .tete { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; }
+    .se-tr .sens { font-size: 13.5px; font-weight: 600; margin: 3px 0; }
+    .se-tr .det { font-size: 12.5px; color: #475569; }
+    .se-tr.annule { opacity: .55; }
+    .se-tr .actions { margin-top: 6px; display: flex; gap: 8px; }
+
+    .se-wz .t { font-size: 15.5px; font-weight: 700; }
+    .se-wz .emp { font-size: 12.5px; color: #64748b; margin-top: 1px; }
+    .se-wz .stats { font-size: 13.5px; margin: 6px 0 8px; display: flex; flex-wrap: wrap; gap: 4px 12px; }
+    .se-wz .ok { color: #15803d; font-weight: 600; font-size: 13.5px; margin-top: 6px; }
+    .se-retour { color: #2563eb; cursor: pointer; font-size: 14px; display: inline-block; margin: 2px 0 8px; }
+    .se-z-ligne { display: flex; gap: 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid #f1f5f9; }
+    .se-z-ligne.bloque { opacity: .5; }
+    .se-coche { width: 26px; height: 26px; border-radius: 7px; border: 2px solid #cbd5e1; display: flex; align-items: center;
+                justify-content: center; color: #fff; font-size: 15px; flex: none; cursor: pointer; background: #fff; }
+    .se-coche.on { background: #2563eb; border-color: #2563eb; }
+    .se-z-ligne .mvt { flex: none; text-align: right; font-size: 13px; font-weight: 700; max-width: 92px; }
+    .se-z-ligne .mvt small { display: block; font-weight: 500; color: #94a3b8; font-size: 11px; }
+    .se-resume { font-size: 13.5px; line-height: 1.6; }
+    .se-note { font-size: 12.5px; color: #64748b; }
+    @media (max-width: 420px) { .se-onglet { font-size: 11.5px; } .se-qte { font-size: 16px; } }
+  </style>
+
+  <div class="se-onglets">
+    <div class="se-onglet on" data-onglet="solde"><span class="ic">📦</span>Solde</div>
+    <div class="se-onglet" data-onglet="sorties"><span class="ic">📤</span>Sorties</div>
+    <div class="se-onglet" data-onglet="transfert"><span class="ic">🔁</span>Transfert</div>
+    <div class="se-onglet" data-onglet="zero"><span class="ic">0️⃣</span>À zéro</div>
+  </div>
+
+  <div class="se-chips" id="se-entrepots"></div>
+
+  <div class="se-vue" data-vue="solde">
+    <div class="se-ligne-filtres" style="margin-top:2px">
+      <input type="search" class="form-control se-saisie" id="se-s-recherche" placeholder="🔎 Article (nom ou code)…">
+      <span class="se-chip alerte" id="se-s-negatifs">⚠️ Négatifs</span>
+    </div>
+    <div class="se-info" id="se-s-info" style="margin-top:8px"></div>
+    <div id="se-s-liste"></div>
+  </div>
+
+  <div class="se-vue" data-vue="sorties" style="display:none">
+    <div class="se-chips" id="se-periodes">
+      <span class="se-chip" data-periode="jour">Aujourd’hui</span>
+      <span class="se-chip" data-periode="7j">7 jours</span>
+      <span class="se-chip on" data-periode="30j">30 jours</span>
+      <span class="se-chip" data-periode="mois">Ce mois</span>
+      <span class="se-chip" data-periode="mois_prec">Mois dernier</span>
+      <span class="se-chip" data-periode="dates">📅 Dates…</span>
+    </div>
+    <div class="se-dates" id="se-dates">
+      <input type="date" class="form-control" id="se-debut">
+      <input type="date" class="form-control" id="se-fin">
+    </div>
+    <div class="se-ligne-filtres">
+      <input type="search" class="form-control se-saisie" id="se-o-recherche" placeholder="🔎 Article (nom ou code)…">
+    </div>
+    <div class="se-info" id="se-o-info" style="margin-top:8px"></div>
+    <div id="se-o-liste"></div>
+  </div>
+
+  <div class="se-vue" data-vue="transfert" style="display:none">
+    <div class="se-card">
+      <div class="se-sens">
+        <div><label>De</label><select class="form-control" id="se-t-de"></select></div>
+        <button type="button" class="se-inverser" id="se-t-inverser" title="Inverser">⇄</button>
+        <div><label>Vers</label><select class="form-control" id="se-t-vers"></select></div>
+      </div>
+      <input type="search" class="form-control se-saisie" id="se-t-recherche" style="margin-top:10px"
+             placeholder="➕ Ajouter un article suivi en stock (nom ou code)…">
+      <div id="se-t-trouves"></div>
+    </div>
+    <div class="se-card" id="se-t-panier-carte">
+      <div class="se-titre" style="margin-top:2px">🧺 À transférer</div>
+      <div id="se-t-panier"></div>
+      <input type="text" class="form-control" id="se-t-remarque" style="margin-top:8px;height:38px" placeholder="Remarque (facultatif)">
+      <div class="se-barre"><button type="button" class="btn btn-primary" id="se-t-valider" disabled>Valider le transfert</button></div>
+    </div>
+    <div class="se-titre">🕘 Derniers transferts</div>
+    <div id="se-t-historique"></div>
+  </div>
+
+  <div class="se-vue" data-vue="zero" style="display:none">
+    <div id="se-z-contenu"></div>
+  </div>
+</div>
