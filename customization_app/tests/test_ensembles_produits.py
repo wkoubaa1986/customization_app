@@ -24,6 +24,22 @@ class TestAssemblables(unittest.TestCase):
         self.assertEqual(EP.assemblables([{"qty": 0.5, "stock": 2.4, "is_stock_item": 1}]), 4)
 
 
+class TestActionEnLot(unittest.TestCase):
+    L = [{"item_code": "UV6", "qty": 1}, {"item_code": "MEMB", "qty": 2}]
+
+    def test_remplacer(self):
+        self.assertEqual(EP.appliquer_action(self.L, "remplacer", "UV6", {"item_code": "UV12"}, None), [{"item_code": "UV12", "qty": 1}, {"item_code": "MEMB", "qty": 2}])
+        self.assertEqual(EP.appliquer_action(self.L, "remplacer", "UV6", {"item_code": "UV12"}, 3)[0], {"item_code": "UV12", "qty": 3})
+        self.assertIsNone(EP.appliquer_action(self.L, "remplacer", "ABSENT", {"item_code": "UV12"}, None))     # non concerné
+
+    def test_quantite_ajouter_retirer(self):
+        self.assertEqual(EP.appliquer_action(self.L, "quantite", "MEMB", None, 5)[1]["qty"], 5)
+        self.assertEqual(EP.appliquer_action(self.L, "ajouter", None, {"item_code": "CLIP"}, 4)[-1], {"item_code": "CLIP", "qty": 4})
+        self.assertIsNone(EP.appliquer_action(self.L, "ajouter", None, {"item_code": "UV6"}, 1))              # déjà là
+        self.assertEqual(EP.appliquer_action(self.L, "retirer", "UV6", None, None), [{"item_code": "MEMB", "qty": 2}])
+        self.assertEqual(self.L[0]["item_code"], "UV6")                                                        # jamais modifié en place
+
+
 class TestCircuit(unittest.TestCase):
     def setUp(self):
         import frappe
@@ -56,6 +72,12 @@ class TestCircuit(unittest.TestCase):
             EP.enregistrer_ensemble(nom, [{"item_code": "TEST-ENS-X", "qty": 1}])        # un ensemble n'est pas un composant
         with self.assertRaises(frappe.ValidationError):
             EP.creer_ensemble([{"item_code": c1, "qty": 1}], parent=c1)                   # parent suivi en stock : refusé
+        r = EP.modifier_en_lot([nom], "remplacer", composant=c2, nouveau=c1, qte=None)
+        self.assertEqual((r["modifies"], r["ignores"], r["erreurs"]), (1, 0, []))
+        self.assertEqual([(l.item_code, l.qty) for l in frappe.get_doc(EP.PB, nom).items], [(c1, 4.0)])
+        r = EP.modifier_en_lot([nom], "retirer", composant="ABSENT")
+        self.assertEqual((r["modifies"], r["ignores"]), (0, 1))
+        self.assertEqual([c["item_code"] for c in EP.composants_communs([nom])], [c1])
         EP.activer_ensemble(nom, 0)
         self.assertEqual(frappe.db.get_value(EP.PB, nom, "disabled"), 1)
         self.assertEqual(EP.get_ensembles(recherche="TEST-ENS-X", etat="actifs")["total"], 0)

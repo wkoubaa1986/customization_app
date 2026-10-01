@@ -32,6 +32,8 @@ class EnsemblesProduits {
     this.groupe = "";
     this.nonAss = false;
     this.ensembles = [];
+    this.sel = new Set();
+    this.composant = null;
     this.init();
   }
 
@@ -61,6 +63,9 @@ class EnsemblesProduits {
     let t = null;
     r.find("#ep-recherche").on("input", () => { clearTimeout(t); t = setTimeout(() => this.charger(), 300); });
     r.find("#ep-plus").on("click", () => this.charger(true));
+    r.find("#ep-tout").on("click", () => { this.listeVisible().forEach((e) => this.sel.add(e.name)); this.peindre(); });
+    r.find("#ep-aucun").on("click", () => { this.sel.clear(); this.peindre(); });
+    r.find("#ep-barre [data-lot]").on("click", (e) => this.lot($(e.currentTarget).attr("data-lot")));
     this.pret = true;
     this.charger();
   }
@@ -68,10 +73,11 @@ class EnsemblesProduits {
   async charger(suite = false) {
     const r = this.$r, jeton = (this.jeton = (this.jeton || 0) + 1);
     const res = (await frappe.call({ method: EP_API + "get_ensembles", args: {
-      recherche: r.find("#ep-recherche").val() || null, groupe: this.groupe || null, etat: this.etat,
-      start: suite ? this.suivant || 0 : 0, limite: this.nonAss ? 200 : undefined } })).message;
+      recherche: r.find("#ep-recherche").val() || null, groupe: this.groupe || null, etat: this.etat, composant: this.composant,
+      start: suite ? this.suivant || 0 : 0, limite: this.nonAss || this.composant ? 200 : undefined } })).message;
     if (jeton !== this.jeton) return;
     this.ensembles = suite ? this.ensembles.concat(res.ensembles) : res.ensembles;
+    if (!suite) this.sel.clear();
     this.suivant = res.suivant;
     this.total = res.total;
     this.peindre();
@@ -86,10 +92,11 @@ class EnsemblesProduits {
   carte(e) {
     const comps = e.composants.map((c) => {
       const manque = c.is_stock_item && c.stock < c.qty;
-      return `<span class="ep-comp ${manque ? "manque" : ""}" title="${ep_esc(c.item_code)}">${ep_mini(c.image)}<span class="q">${ep_q(c.qty)}×</span>
+      return `<span class="ep-comp ${manque ? "manque" : ""}" title="Filtrer : contient ${ep_esc(c.item_code)}" data-filtre="${ep_esc(c.item_code)}" data-filtre-nom="${ep_esc(c.item_name || c.item_code)}">${ep_mini(c.image)}<span class="q">${ep_q(c.qty)}×</span>
         <span class="n">${ep_esc(c.item_name || c.item_code)}</span>${c.is_stock_item ? `<span class="s">(${ep_q(c.stock)})</span>` : ""}</span>`;
     }).join("");
-    return `<div class="ep-ens ${e.disabled ? "off" : ""}" data-name="${ep_esc(e.name)}">
+    return `<div class="ep-ens ${e.disabled ? "off" : ""} ${this.sel.has(e.name) ? "sel" : ""}" data-name="${ep_esc(e.name)}">
+      ${this.ctx.peut_modifier ? `<span class="ep-coche" data-coche>${this.sel.has(e.name) ? "✓" : ""}</span>` : ""}
       <div class="ep-tete">${ep_img(e.image)}<div class="txt">
         <div class="ep-nom">${ep_esc(e.item_name || e.item_code)}${e.disabled ? ` <span class="ep-ass na">désactivé</span>` : ""}</div>
         <div class="ep-code">${ep_esc(e.item_code)} · ${ep_esc(e.item_group || "")}</div>
@@ -99,15 +106,75 @@ class EnsemblesProduits {
       <div class="ep-comps">${comps || `<span class="ep-note">aucun composant</span>`}</div></div>`;
   }
 
+  listeVisible() {
+    return this.nonAss ? this.ensembles.filter((e) => e.assemblables === 0) : this.ensembles;
+  }
+
   peindre() {
     const r = this.$r;
-    const liste = this.nonAss ? this.ensembles.filter((e) => e.assemblables === 0) : this.ensembles;
+    const liste = this.listeVisible();
+    r.find("#ep-filtre-comp").html(this.composant ? `<span class="ep-filtre-comp">🧩 contient ${ep_esc(this.composantNom || this.composant)} <span class="x" data-x>✕</span></span>` : "");
+    r.find("#ep-filtre-comp [data-x]").on("click", () => { this.composant = null; this.charger(); });
     r.find("#ep-info").html(`${this.total || 0} ensemble(s)` + (this.nonAss ? ` · <b class="neg">${liste.length} non assemblable(s)</b> parmi les ${this.ensembles.length} chargés` : "")
       + (this.ensembles.length < (this.total || 0) && !this.nonAss ? ` — ${this.ensembles.length} affichés` : "")
       + ` · stock du <b>${ep_esc(this.ctx.magasin.replace(/ - [^-]+$/, ""))}</b>`);
     r.find("#ep-grille").html(liste.length ? liste.map((e) => this.carte(e)).join("") : `<div class="ep-vide">Aucun ensemble pour ces filtres.</div>`);
     r.find("#ep-grille .ep-ens").on("click", (e) => this.ouvrir($(e.currentTarget).attr("data-name")));
+    r.find("#ep-grille [data-filtre]").on("click", (e) => {
+      e.stopPropagation();
+      this.composant = $(e.currentTarget).attr("data-filtre"); this.composantNom = $(e.currentTarget).attr("data-filtre-nom");
+      this.charger();
+    });
+    r.find("#ep-grille [data-coche]").on("click", (e) => {
+      e.stopPropagation();
+      const n = $(e.currentTarget).closest(".ep-ens").attr("data-name"), noms = liste.map((x) => x.name), idx = noms.indexOf(n);
+      if (e.shiftKey && this.dernier != null && this.dernier !== idx) {
+        const coche = !this.sel.has(n), [d, f] = [Math.min(this.dernier, idx), Math.max(this.dernier, idx)];
+        noms.slice(d, f + 1).forEach((x) => (coche ? this.sel.add(x) : this.sel.delete(x)));
+        window.getSelection && window.getSelection().removeAllRanges();
+      } else {
+        this.sel.has(n) ? this.sel.delete(n) : this.sel.add(n);
+      }
+      this.dernier = idx;
+      this.peindre();
+    });
     r.find("#ep-plus").toggle(!!this.suivant);
+    this.majBarre();
+  }
+
+  majBarre() {
+    const n = this.sel.size, $b = this.$r.find("#ep-barre");
+    this.$r.find("#ep-compte").text(`${n} ensemble(s) coché(s)`);
+    n && this.ctx.peut_modifier ? $b.show() : $b.hide();
+    this.$r.toggleClass("avec-barre", n > 0);
+  }
+
+  /** Action groupée sur les ensembles cochés. */
+  async lot(action) {
+    const noms = Array.from(this.sel);
+    if (!noms.length) return;
+    const executer = async (args, libelle) => {
+      const res = (await frappe.call({ method: EP_API + "modifier_en_lot", args: Object.assign({ names: noms, action }, args), freeze: true })).message;
+      frappe.msgprint({ title: libelle, indicator: res.erreurs.length ? "orange" : "green",
+        message: `<b>${res.modifies}</b> ensemble(s) modifié(s)${res.ignores ? `, ${res.ignores} non concerné(s)` : ""}`
+          + (res.erreurs.length ? `<br><br>⚠️ Refusés :<br>${res.erreurs.map(ep_esc).join("<br>")}` : "") });
+      this.sel.clear(); this.charger();
+    };
+    if (action === "activer" || action === "desactiver") {
+      return frappe.confirm(`${action === "activer" ? "Activer" : "Désactiver"} <b>${noms.length}</b> ensemble(s) ?`, () => executer({}, action === "activer" ? "Ensembles activés" : "Ensembles désactivés"));
+    }
+    const communs = (await frappe.call({ method: EP_API + "composants_communs", args: { names: noms } })).message;
+    const options = communs.map((c) => ({ value: c.item_code, label: `${c.item_name} (${c.n}/${noms.length})` }));
+    const titres = { remplacer: "🔁 Remplacer un composant", quantite: "✏️ Changer une quantité", ajouter: "➕ Ajouter un composant", retirer: "➖ Retirer un composant" };
+    const champs = [{ fieldtype: "HTML", options: `<div class="ep-note">Sur les <b>${noms.length}</b> ensemble(s) cochés. Entre parenthèses : combien le contiennent.</div>` }];
+    if (action !== "ajouter") champs.push({ fieldtype: "Select", fieldname: "composant", label: "Composant", options, reqd: 1, default: options[0] && options[0].value });
+    if (action === "remplacer" || action === "ajouter") champs.push({ fieldtype: "Link", fieldname: "nouveau", label: action === "remplacer" ? "Remplacer par" : "Composant à ajouter", options: "Item", reqd: 1,
+      get_query: () => ({ filters: { disabled: 0, has_variants: 0 } }) });
+    if (action !== "retirer") champs.push({ fieldtype: "Float", fieldname: "qte", label: action === "remplacer" ? "Quantité (vide = garder celle du composant remplacé)" : action === "ajouter" ? "Quantité" : "Nouvelle quantité", default: action === "ajouter" ? 1 : null, reqd: action !== "remplacer" });
+    const d = new frappe.ui.Dialog({ title: titres[action], fields: champs, primary_action_label: "Appliquer", primary_action: (v) => {
+      d.hide(); executer({ composant: v.composant || null, nouveau: v.nouveau || null, qte: v.qte || null }, titres[action]);
+    } });
+    d.show();
   }
 
   /** Fiche d'un ensemble : composants modifiables, prix, activation, duplication, suppression. */

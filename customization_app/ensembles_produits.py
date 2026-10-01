@@ -289,3 +289,94 @@ def supprimer_ensemble(name):
         frappe.throw(_("{0} a déjà été vendu : désactivez l'ensemble plutôt que de le supprimer.").format(code))
     frappe.delete_doc(PB, name)
     return True
+
+
+# ── Modification en lot ───────────────────────────────────────────────────────
+#
+# Plusieurs ensembles partagent un composant (le filtre UV, une membrane…) : on les coche et on les modifie
+# d'un coup — remplacer le composant, changer sa quantité, en ajouter ou en retirer un, activer / désactiver.
+
+@frappe.whitelist()
+def composants_communs(names):
+    """Les composants présents dans les ensembles donnés, avec le nombre d'ensembles qui les contiennent."""
+    _lecture()
+    noms = frappe.parse_json(names) if isinstance(names, str) else (names or [])
+    if not noms:
+        return []
+    return frappe.db.sql("""select c.item_code, i.item_name, i.image, count(distinct c.parent) as n
+                            from `tabProduct Bundle Item` c join tabItem i on i.name = c.item_code
+                            where c.parent in %s group by c.item_code, i.item_name, i.image
+                            order by n desc, i.item_name""", [noms], as_dict=True)
+
+
+def appliquer_action(lignes: list[dict], action: str, composant: str | None, nouveau: dict | None, qte) -> list[dict] | None:
+    """Les lignes {item_code, qty} d'un ensemble après l'action — None si l'ensemble n'est pas concerné. PURE.
+    remplacer : composant → nouveau (quantité gardée, ou `qte`) ; quantite : qty de composant = qte ;
+    ajouter : nouveau ajouté avec `qte` (ignoré s'il est déjà là) ; retirer : composant enlevé."""
+    out = [dict(l) for l in lignes]
+    present = any(l["item_code"] == composant for l in out)
+    if action == "remplacer":
+        if not present or not nouveau:
+            return None
+        for l in out:
+            if l["item_code"] == composant:
+                l["item_code"] = nouveau["item_code"]
+                if qte:
+                    l["qty"] = flt(qte)
+        return out
+    if action == "quantite":
+        if not present or not qte:
+            return None
+        for l in out:
+            if l["item_code"] == composant:
+                l["qty"] = flt(qte)
+        return out
+    if action == "ajouter":
+        if not nouveau or any(l["item_code"] == nouveau["item_code"] for l in out):
+            return None
+        out.append({"item_code": nouveau["item_code"], "qty": flt(qte) or 1})
+        return out
+    if action == "retirer":
+        if not present:
+            return None
+        return [l for l in out if l["item_code"] != composant]
+    return None
+
+
+@frappe.whitelist(methods=["POST"])
+def modifier_en_lot(names, action, composant=None, nouveau=None, qte=None):
+    """Applique l'action à chaque ensemble coché ; rend {modifies, ignores, erreurs}. Un ensemble qui refuse
+    (règle ERPNext) n'empêche pas les autres."""
+    _ecriture()
+    noms = frappe.parse_json(names) if isinstance(names, str) else (names or [])
+    if not noms:
+        frappe.throw(_("Aucun ensemble coché."))
+    nv = None
+    if nouveau:
+        if frappe.db.exists(PB, {"new_item_code": nouveau}):
+            frappe.throw(_("{0} est lui-même un ensemble : il ne peut pas être composant.").format(nouveau))
+        if not frappe.db.exists("Item", nouveau):
+            frappe.throw(_("Article inconnu : {0}").format(nouveau))
+        nv = {"item_code": nouveau}
+    if action in ("activer", "desactiver"):
+        for n in noms:
+            frappe.db.set_value(PB, n, "disabled", 0 if action == "activer" else 1)
+        return {"modifies": len(noms), "ignores": 0, "erreurs": []}
+    modifies, ignores, erreurs = 0, 0, []
+    for n in noms:
+        doc = frappe.get_doc(PB, n)
+        lignes = appliquer_action([{"item_code": l.item_code, "qty": flt(l.qty)} for l in doc.items], action, composant, nv, qte)
+        if lignes is None:
+            ignores += 1
+            continue
+        try:
+            frappe.db.savepoint("lot")
+            doc.set("items", [])
+            for l in _lignes(lignes):
+                doc.append("items", l)
+            doc.save()
+            modifies += 1
+        except Exception as e:
+            frappe.db.rollback(save_point="lot")
+            erreurs.append("%s : %s" % (doc.new_item_code, str(e)[:120]))
+    return {"modifies": modifies, "ignores": ignores, "erreurs": erreurs}
