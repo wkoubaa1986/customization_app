@@ -73,8 +73,9 @@ def _stocks(codes: list[str], entrepot: str) -> dict:
 @frappe.whitelist()
 def get_context():
     _lecture()
-    groupes = frappe.db.sql_list("""select distinct i.item_group from `tabProduct Bundle` pb join tabItem i on i.name = pb.new_item_code
-                                    order by i.item_group""")
+    groupes = frappe.db.sql("""select i.item_group as nom, count(*) as n, sum(pb.disabled = 0) as actifs
+                               from `tabProduct Bundle` pb join tabItem i on i.name = pb.new_item_code
+                               group by i.item_group order by i.item_group""", as_dict=True)
     tous = frappe.db.sql_list("select name from `tabItem Group` where is_group = 0 order by name")
     return {"groupes": groupes, "groupes_articles": tous, "magasin": magasin(), "peut_modifier": bool(frappe.has_permission(PB, "write")),
             "total": frappe.db.count(PB), "desactives": frappe.db.count(PB, {"disabled": 1}),
@@ -95,7 +96,7 @@ def get_ensembles(recherche=None, groupe=None, composant=None, etat="actifs", st
         valeurs["groupe"] = groupe
     for n, mot in enumerate((recherche or "").split()):
         valeurs[f"m{n}"] = f"%{mot}%"
-        conds.append(f"(pb.new_item_code like %(m{n})s or i.item_name like %(m{n})s or pb.description like %(m{n})s)")
+        conds.append(f"(pb.new_item_code like %(m{n})s or i.item_name like %(m{n})s or pb.description like %(m{n})s or i.item_group like %(m{n})s)")
     if composant:
         conds.append("exists (select 1 from `tabProduct Bundle Item` c where c.parent = pb.name and c.item_code = %(composant)s)")
         valeurs["composant"] = composant

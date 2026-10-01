@@ -7,6 +7,10 @@
     .ep-chips::-webkit-scrollbar { display: none; }
     .ep-chip { flex: none; border: 1px solid #cbd5e1; border-radius: 999px; padding: 6px 12px; font-size: 13px; cursor: pointer; background: #fff; white-space: nowrap; user-select: none; color: #334155; }
     .ep-chip.on { background: #2563eb; border-color: #2563eb; color: #fff; }
+    .ep-chips.ep-wrap { flex-wrap: wrap; overflow: visible; }
+    .ep-chip .n { font-size: 11px; color: #94a3b8; margin-left: 2px; }
+    .ep-chip.on .n { color: #bfdbfe; }
+    .ep-chip.vide { opacity: .45; }
     .ep-info { font-size: 12.5px; color: #64748b; margin: 4px 2px 8px; display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
     .ep-info .btn { margin-left: auto; }
     .ep-grille { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 10px; }
@@ -60,7 +64,7 @@
       <span class="ep-chip" data-etat="tous">Tous</span>
       <span class="ep-chip" id="ep-non-ass">⚠️ Non assemblables</span>
     </div>
-    <div class="ep-chips" id="ep-groupes"></div>
+    <div class="ep-chips ep-wrap" id="ep-groupes"></div>
   </div>
   <div class="ep-info"><span id="ep-info"></span><button type="button" class="btn btn-primary btn-sm" id="ep-nouveau" style="display:none">➕ Nouvel ensemble</button></div>
   <div class="ep-grille" id="ep-grille"></div>

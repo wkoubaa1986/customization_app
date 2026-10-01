@@ -39,16 +39,22 @@ class EnsemblesProduits {
     this.ctx = (await frappe.call(EP_API + "get_context")).message;
     const r = this.$r, ctx = this.ctx;
     r.find("#ep-nouveau").toggle(!!ctx.peut_modifier).on("click", () => this.nouvel());
-    r.find("#ep-groupes").html(`<span class="ep-chip on" data-groupe="">Tous les groupes</span>`
-      + ctx.groupes.map((g) => `<span class="ep-chip" data-groupe="${ep_esc(g)}">${ep_esc(g)}</span>`).join(""));
-    r.find("#ep-groupes .ep-chip").on("click", (e) => {
-      this.groupe = $(e.currentTarget).attr("data-groupe");
-      r.find("#ep-groupes .ep-chip").each((_, el) => $(el).toggleClass("on", $(el).attr("data-groupe") === this.groupe));
-      this.charger();
-    });
+    const nb = (g) => (this.etat === "tous" ? g.n : this.etat === "desactives" ? g.n - g.actifs : g.actifs);
+    const peindreGroupes = () => {
+      r.find("#ep-groupes").html(`<span class="ep-chip ${this.groupe ? "" : "on"}" data-groupe="">Tous les groupes</span>`
+        + ctx.groupes.map((g) => `<span class="ep-chip ${this.groupe === g.nom ? "on" : ""} ${nb(g) ? "" : "vide"}" data-groupe="${ep_esc(g.nom)}">${ep_esc(g.nom)} <span class="n">${nb(g)}</span></span>`).join(""));
+      r.find("#ep-groupes .ep-chip").on("click", (e) => {
+        this.groupe = $(e.currentTarget).attr("data-groupe");
+        peindreGroupes();
+        this.charger();
+      });
+    };
+    this.peindreGroupes = peindreGroupes;
+    peindreGroupes();
     r.find("#ep-etats [data-etat]").on("click", (e) => {
       this.etat = $(e.currentTarget).attr("data-etat");
       r.find("#ep-etats [data-etat]").each((_, el) => $(el).toggleClass("on", $(el).attr("data-etat") === this.etat));
+      peindreGroupes();
       this.charger();
     });
     r.find("#ep-non-ass").on("click", (e) => { this.nonAss = !this.nonAss; $(e.currentTarget).toggleClass("on", this.nonAss); this.peindre(); });
