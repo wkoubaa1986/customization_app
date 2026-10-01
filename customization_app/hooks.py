@@ -308,6 +308,9 @@ doc_events = {
     # Les motifs « sans tâche » regardent OÙ sont parqués les paiements liés (19/08/2026) :
     # un encaissement de dette doit requalifier la commande tout de suite, pas à 04h00.
     "Payment Entry": {
+        # Lignes de référence en double (une par commande, converties vers la même facture par ERPNext) :
+        # fusionnées sur un brouillon/amendement, sinon « Duplicate entry in References » (01/10/2026).
+        "before_validate": "customization_app.paiement_references.before_validate",
         "on_submit": "customization_app.commande_alertes.on_payment_entry_change",
         "on_cancel": "customization_app.commande_alertes.on_payment_entry_change",
     },
@@ -461,6 +464,7 @@ app_include_js = [_js("customer_quick_entry.js"),
                   # Clôture guidée des tâches : photos obligatoires + code superviseur.
                   _js("tache_photos_cloture.js"),
                   _js("suivi_activite_onglet.js"),  # l'onglet « Suivi d'activité » ouvre l'outil
+                  _js("situation_mensuelle_clic.js"),  # graphe Situation Mensuelle → page de détail
                   # 📨 SMS / e-mail au client depuis la fiche tâche, avec modèles prédéfinis
                   # (technicien + téléphone injectés automatiquement, commande liée si présente).
                   _js("tache_sms_email.js"),
@@ -658,6 +662,8 @@ scheduler_events = {
 after_migrate = [
     # Onglet « Suivi d'activité » + rôles Suivi Activité / Responsable Activité.
     "customization_app.patches.ensure_onglet_suivi_activite.execute",
+    # Graphe « Situation Mensuelle » sur 12 mois + raccourci vers la page de détail (onglet Comptabilité).
+    "customization_app.patches.ensure_situation_mensuelle.execute",
     "customization_app.patches.ensure_raccourci_commandes_a_traiter.execute",
     "customization_app.patches.ensure_raccourci_reparation_osmoseurs.execute",  # "Selling", après "Commandes à traiter"
     # « Rapport Prime » dans l'onglet Banque (workspace importé par bank_retenue_sync).

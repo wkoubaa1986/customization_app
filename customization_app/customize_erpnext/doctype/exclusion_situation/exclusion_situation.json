@@ -1,0 +1,134 @@
+{
+ "actions": [],
+ "autoname": "EXS-.YYYY.-.#####",
+ "naming_rule": "Expression (old style)",
+ "creation": "2026-10-01 21:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "track_changes": 1,
+ "field_order": [
+  "rubrique",
+  "mode",
+  "montant_exclu",
+  "column_break_1",
+  "voucher_type",
+  "voucher_no",
+  "date_piece",
+  "montant_piece",
+  "section_motif",
+  "motif"
+ ],
+ "fields": [
+  {
+   "fieldname": "rubrique",
+   "fieldtype": "Select",
+   "label": "Rubrique",
+   "reqd": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "options": "Coût de la marchandise\nCharges\nTVA Achat"
+  },
+  {
+   "fieldname": "mode",
+   "fieldtype": "Select",
+   "label": "Omission",
+   "reqd": 1,
+   "default": "Totale",
+   "options": "Totale\nPartielle",
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "montant_exclu",
+   "fieldtype": "Currency",
+   "label": "Montant omis",
+   "in_list_view": 1,
+   "description": "Pour une omission totale : la contribution de la pièce au moment de l'omission (affichage)."
+  },
+  {
+   "fieldname": "column_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "voucher_type",
+   "fieldtype": "Link",
+   "label": "Type de pièce",
+   "options": "DocType",
+   "reqd": 1
+  },
+  {
+   "fieldname": "voucher_no",
+   "fieldtype": "Dynamic Link",
+   "label": "Pièce",
+   "options": "voucher_type",
+   "reqd": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "date_piece",
+   "fieldtype": "Date",
+   "label": "Date de la pièce",
+   "read_only": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "montant_piece",
+   "fieldtype": "Currency",
+   "label": "Montant compté de la pièce",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_motif",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "motif",
+   "fieldtype": "Small Text",
+   "label": "Motif",
+   "reqd": 1
+  }
+ ],
+ "links": [],
+ "modified": "2026-10-01 21:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "Exclusion Situation",
+ "owner": "Administrator",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "voucher_no",
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "report": 1,
+   "export": 1,
+   "print": 1,
+   "email": 1,
+   "share": 1
+  },
+  {
+   "role": "Banque",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "report": 1,
+   "export": 1,
+   "print": 1,
+   "email": 1,
+   "share": 1
+  },
+  {
+   "role": "Accounts Manager",
+   "read": 1,
+   "report": 1,
+   "print": 1
+  }
+ ]
+}

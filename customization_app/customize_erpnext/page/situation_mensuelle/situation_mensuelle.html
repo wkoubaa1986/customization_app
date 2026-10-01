@@ -1,0 +1,109 @@
+<div class="sm-page">
+  <style>
+    .sm-page { padding: 10px 12px 40px; max-width: 1200px; }
+    .sm-card { background: var(--card-bg,#fff); border: 1px solid var(--border-color,#e4e8ee); border-radius: 12px;
+               padding: 10px 12px; margin-bottom: 10px; box-shadow: 0 1px 3px rgba(0,0,0,.05); }
+    .sm-periode { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .sm-seg { display: flex; background: #f1f5f9; border-radius: 10px; padding: 3px; }
+    .sm-seg span { padding: 7px 12px; border-radius: 8px; font-size: 13px; font-weight: 600; color: #475569; cursor: pointer; }
+    .sm-seg span.on { background: #fff; color: #111827; box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+    .sm-periode select { height: 36px; font-size: 14px; flex: 1 1 160px; max-width: 260px; }
+    .sm-titre { font-size: 12px; color: #64748b; margin-left: auto; }
+    .sm-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+    .sm-kpi { border: 1px solid #e2e8f0; border-left: 5px solid #94a3b8; border-radius: 10px; padding: 9px 10px; cursor: pointer; background: #fff; }
+    .sm-kpi:hover { box-shadow: 0 2px 6px rgba(0,0,0,.08); }
+    .sm-kpi .l { font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: .3px; }
+    .sm-kpi .v { font-size: 18px; font-weight: 800; margin-top: 2px; white-space: nowrap; }
+    .sm-kpi .s { font-size: 11.5px; color: #94a3b8; margin-top: 2px; }
+    .sm-kpi .s.omis { color: #c2410c; font-weight: 600; }
+    .sm-kpi.ventes { border-left-color: #2563eb; } .sm-kpi.cout { border-left-color: #f59e0b; }
+    .sm-kpi.charges { border-left-color: #ef4444; } .sm-kpi.tva { border-left-color: #ec4899; }
+    .sm-kpi.benefice { border-left-color: #22c55e; } .sm-kpi.benefice.perte { border-left-color: #b91c1c; }
+    .sm-kpi.benefice .v { color: #15803d; } .sm-kpi.benefice.perte .v { color: #b91c1c; }
+    .sm-kpi.marge { border-left-color: #0d9488; } .sm-kpi.marge .v { color: #0f766e; }
+    .sm-kpi.marge.perte { border-left-color: #b91c1c; } .sm-kpi.marge.perte .v { color: #b91c1c; }
+    .sm-kpi.marge_brute { border-left-color: #a16207; } .sm-kpi.ratio { cursor: default; }
+    .sm-comp-tete { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 14px; margin-bottom: 8px; }
+    .sm-ind { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 6px; -webkit-overflow-scrolling: touch; }
+    .sm-ind span { flex: none; border: 1px solid #cbd5e1; border-radius: 999px; padding: 5px 12px; font-size: 13px; cursor: pointer; background: #fff; white-space: nowrap; }
+    .sm-ind span.on { background: #111827; border-color: #111827; color: #fff; }
+    .sm-courbes { position: relative; margin-top: 6px; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    .sm-courbes svg { display: block; }
+    .sm-courbes .axe { font-size: 11px; fill: #64748b; }
+    .sm-courbes .grille { stroke: #eef2f7; }
+    .sm-courbes .zero { stroke: #cbd5e1; }
+    .sm-courbes .colonne { fill: transparent; cursor: pointer; }
+    .sm-courbes .colonne.on { fill: rgba(37,99,235,.06); }
+    .sm-legende { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 6px; font-size: 13px; }
+    .sm-legende span { cursor: pointer; user-select: none; display: inline-flex; align-items: center; gap: 6px; }
+    .sm-legende span.off { opacity: .35; }
+    .sm-legende i { width: 14px; height: 4px; border-radius: 2px; display: inline-block; }
+    .sm-bulle { font-size: 12.5px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 8px 10px; margin-top: 8px; }
+    .sm-bulle b { display: inline-block; min-width: 46px; }
+    .sm-table-wrap { overflow-x: auto; margin-top: 10px; -webkit-overflow-scrolling: touch; }
+    table.sm-annees { width: 100%; border-collapse: collapse; font-size: 12.5px; min-width: 640px; }
+    table.sm-annees th { text-align: right; font-size: 10.5px; text-transform: uppercase; color: #64748b; padding: 6px 8px; border-bottom: 1px solid #e2e8f0; white-space: nowrap; }
+    table.sm-annees th:first-child, table.sm-annees td:first-child { text-align: left; }
+    table.sm-annees td { text-align: right; padding: 7px 8px; border-bottom: 1px solid #f1f5f9; white-space: nowrap; }
+    table.sm-annees td.on, table.sm-annees th.on { background: rgba(37,99,235,.06); font-weight: 700; }
+    table.sm-annees .neg { color: #b91c1c; }
+    .sm-evol { font-size: 11px; display: block; } .sm-evol.up { color: #15803d; } .sm-evol.down { color: #b91c1c; }
+    table.sm-annees bdi { unicode-bidi: isolate; }
+    .sm-graphe-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    .sm-graphe { min-width: 640px; }
+    .sm-aide { font-size: 11.5px; color: #94a3b8; }
+    .sm-omis-tete { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 13.5px; }
+    .sm-omis-tete .n { color: #c2410c; }
+    .sm-ligne { display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; padding: 8px 0; border-bottom: 1px solid #f1f5f9; font-size: 13px; }
+    .sm-ligne .lib { min-width: 0; word-break: break-word; }
+    .sm-ligne .sub { font-size: 11.5px; color: #64748b; }
+    .sm-ligne .mt { text-align: right; font-weight: 700; white-space: nowrap; }
+    .sm-ligne.omise .mt { color: #94a3b8; text-decoration: line-through; }
+    .sm-ligne.partielle .mt { color: #c2410c; }
+    .sm-ligne .act { grid-column: 1 / -1; display: flex; gap: 6px; flex-wrap: wrap; }
+    .sm-badge { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+    .sm-badge.omis { background: #fff7ed; color: #c2410c; }
+    details.sm-compte { border: 1px solid #e2e8f0; border-radius: 10px; margin-bottom: 8px; background: #fff; }
+    details.sm-compte summary { padding: 9px 12px; cursor: pointer; display: flex; gap: 8px; align-items: center; font-size: 13.5px; list-style: none; }
+    details.sm-compte summary::-webkit-details-marker { display: none; }
+    details.sm-compte summary .nom { flex: 1; min-width: 0; font-weight: 600; }
+    details.sm-compte summary .tot { font-weight: 800; white-space: nowrap; }
+    details.sm-compte .corps { padding: 0 12px 6px; }
+    .sm-entete-detail { display: flex; gap: 14px; flex-wrap: wrap; font-size: 13px; margin-bottom: 8px; }
+    .sm-entete-detail b { font-size: 15px; }
+    .sm-vide { text-align: center; color: #94a3b8; padding: 16px; }
+    @media (max-width: 760px) {
+      .sm-kpis { grid-template-columns: 1fr 1fr; }
+      .sm-kpi.benefice { grid-column: 1 / -1; }
+      .sm-titre { margin-left: 0; width: 100%; }
+    }
+  </style>
+
+  <div class="sm-card">
+    <div class="sm-periode">
+      <div class="sm-seg" id="sm-mode">
+        <span data-mode="mois" class="on">Mois</span><span data-mode="annee">Année</span><span data-mode="total">Total</span>
+      </div>
+      <select class="form-control" id="sm-choix"></select>
+      <div class="sm-titre" id="sm-titre"></div>
+    </div>
+  </div>
+
+  <div class="sm-kpis" id="sm-kpis"></div>
+
+  <div class="sm-card" style="margin-top:10px">
+    <div class="sm-aide" style="margin-bottom:4px">12 derniers mois — touchez un mois pour l’afficher, touchez une carte pour voir le détail.</div>
+    <div class="sm-graphe-wrap"><div class="sm-graphe" id="sm-graphe"></div></div>
+  </div>
+
+  <div class="sm-card" id="sm-comparaison">
+    <div class="sm-comp-tete">📈 Comparer les années</div>
+    <div class="sm-ind" id="sm-ind"></div>
+    <div class="sm-courbes" id="sm-courbes"><div class="sm-aide">Calcul des années…</div></div>
+    <div class="sm-legende" id="sm-legende"></div>
+    <div id="sm-bulle"></div>
+    <div class="sm-table-wrap" id="sm-table"></div>
+  </div>
+
+  <div class="sm-card" id="sm-omissions"></div>
+</div>
