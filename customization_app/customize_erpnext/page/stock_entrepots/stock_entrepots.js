@@ -58,6 +58,7 @@ class StockEntrepots {
     r.find("#se-s-vers-cible").on("click", () => this.ajouterSelectionAuCible());
     r.find("#se-s-cible").on("click", () => this.ouvrirCible());
     r.find(".se-onglet").on("click", (e) => this.montrer($(e.currentTarget).attr("data-onglet")));
+    r.find("#se-guide").on("click", () => this.ouvrirGuide());
     this.peindreEntrepots();
 
     let t1 = null, t2 = null;
@@ -84,6 +85,38 @@ class StockEntrepots {
     await this.chargerAttente();
     const voulu = frappe.route_options && frappe.route_options.valider;
     if (voulu) { frappe.route_options = null; this.ouvrirValidation(voulu); }
+  }
+
+  // ── Guide d'utilisation (lisible sur téléphone, selon le rôle) ─────────────
+  ouvrirGuide() {
+    const resp = !!this.ctx.responsable, mien = this.ctx.mien ? se_esc(this.libelle(this.ctx.mien)) : null;
+    const d = new frappe.ui.Dialog({ title: "❓ Stock par entrepôt — guide", size: "large", fields: [{ fieldtype: "HTML", fieldname: "zone" }] });
+    d.fields_dict.zone.$wrapper.html(`<div class="se-guide">
+      <p class="se-note">Le <b>Magasin</b> est la référence ; chaque employé a le stock de son véhicule${mien ? ` (le vôtre : <b>${mien}</b>, affiché en premier)` : ""}. Tout ce qui sort du Magasin vers un véhicule passe par un transfert, et tout transfert vers le stock d’un collègue est <b>confirmé par lui</b>.</p>
+      <div class="et"><div class="t">📦 Solde — ce qu’il y a dans un stock</div><ul>
+        <li>Choisissez un stock (pastilles) ou « Tous » ; cherchez un article ; « ⚠️ Négatifs » montre les quantités en dessous de zéro.</li>
+        <li>Toucher un article ouvre ses sorties.</li>
+        ${resp ? `<li>Cochez des articles (Maj + clic = plage) → « 🔁 Transférer depuis le Magasin » vers un véhicule, ou « 🎯 Dans le stock cible ».</li>
+        <li>« 🎯 Stock cible » : ce que le véhicule doit contenir ; « 🔻 À réappro. » liste ce qui manque ; « Réassort » prépare le transfert en un geste.</li>` : ""}
+        <li>Un bandeau en haut vous signale ce qui attend votre geste : un transfert à confirmer, une vérification à valider ou à accepter.</li></ul></div>
+      <div class="et"><div class="t">📤 Sorties — ce qui est parti, et pour qui</div><ul>
+        <li>Par période (7 j, 30 j, mois, dates) ; chaque sortie dit sa pièce (BL, facture, transfert), la commande et les tâches de cette commande.</li></ul></div>
+      ${resp ? `<div class="et"><div class="t">🔁 Transfert — d’un stock à un autre</div><ul>
+        <li>Choisissez De / Vers (⇄ inverse). Cherchez un article, indiquez la quantité, touchez ＋ : il entre dans le panier. Corrigez les quantités, puis « Valider le transfert ».</li>
+        <li>« 🎯 Compléter selon le stock cible » remplit le panier avec ce qui manque au véhicule (sa cible, sinon le modèle générique des réglages).</li>
+        <li><b>Magasin → stock d’un employé</b> : le transfert reste <b>en attente</b> (le stock ne bouge pas) jusqu’à ce que l’employé confirme la réception sur son téléphone, ligne par ligne ; une quantité baissée (0 = non reçu) vous est signalée. Vers votre propre stock, ou d’un autre entrepôt : immédiat.</li>
+        <li>« Derniers transferts » : ⏳ en attente de qui (rouge après 24 h), « 🔍 Détail » (photos, codes, quantités), « Annuler ».</li></ul></div>
+      <div class="et"><div class="t">0️⃣ À zéro — remettre un véhicule à zéro</div><ul>
+        <li>Les quantités négatives sont apportées depuis le Magasin, les positives y retournent : l’écart ne reste que sur le Magasin. Aperçu avant validation, articles cochés seulement.</li></ul></div>` : `<div class="et"><div class="t">📥 Transfert reçu — à confirmer</div><ul>
+        <li>Quand le Magasin vous envoie du matériel, un bandeau « Transfert à valider » apparaît (aussi dans Ma journée). Ouvrez-le, vérifiez chaque article : corrigez la quantité si le carton ne correspond pas (0 = non reçu), puis « Confirmer la réception ». Le stock n’entre dans votre véhicule qu’à ce moment-là.</li></ul></div>`}
+      <div class="et"><div class="t">✅ Vérif. — compter son stock, chaque semaine</div><ul>
+        <li>Le jour fixé, une fiche de comptage et deux tâches sont créées (l’employé et le responsable). « Commencer le comptage » photographie le stock système ; saisissez le compté, « 💾 Enregistrer » pour reprendre plus tard.</li>
+        <li>« ✅ Terminer le comptage » = votre validation → <b>à valider</b> par un responsable magasin (autre que vous).</li>
+        <li>Le responsable vérifie, corrige éventuellement, valide → <b>à accepter</b> par l’employé : d’accord → « ✅ Accepter », un <b>rapprochement de stock</b> aligne le véhicule ; pas d’accord → corrigez la quantité, la fiche repart chez le responsable, qui a le dernier mot.</li>
+        <li>Un article qui a bougé entre le comptage et la validation perd son comptage : à recompter (ligne marquée).</li></ul></div>
+      <p class="se-note"><b>Erreurs courantes</b> : transfert envoyé par erreur → « Annuler la demande » tant qu’il n’est pas confirmé · comptage terminé trop tôt → le responsable « Renvoie au comptage » · réglages (Magasin, seuils, cibles, jours de vérification) : <a href="/app/config-stock-entrepot">Config Stock Entrepot</a>.</p>
+    </div>`);
+    d.show();
   }
 
   // ── Transferts en attente de validation (double validation Magasin → stock d'un employé) ──
