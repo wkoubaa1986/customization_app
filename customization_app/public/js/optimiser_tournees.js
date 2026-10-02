@@ -116,7 +116,22 @@
           <select class="form-control input-xs" style="width:auto;height:26px;padding:0 6px;font-size:12px">
             <option value="magasin">🏬 Départ et retour : Magasin</option>
             <option value="domicile" ${e.domicile ? "" : "disabled"}>🏠 Départ et retour : domicile${e.domicile ? "" : " (non réglé)"}</option>
-          </select></div>`).join("")}` : `<div class="text-muted" style="font-size:12px">Aucun employé n’a de tâche ce jour-là.</div>`);
+          </select>
+          <a href="#" data-regler="${esc(e.employe)}" data-nom="${esc(e.nom)}" style="font-size:11.5px;white-space:nowrap">${e.domicile ? "📍 changer le domicile" : "📍 régler le domicile"}</a></div>`).join("")}
+        <div class="text-muted" style="font-size:11.5px;margin-top:4px">Le domicile se règle une fois (lien Google Maps) ; il reste proposé pour les jours suivants. <a href="/app/config-optimisation-tournees">Tous les réglages</a>.</div>` : `<div class="text-muted" style="font-size:12px">Aucun employé n’a de tâche ce jour-là.</div>`);
+      d.fields_dict.employes.$wrapper.find("[data-regler]").on("click", (ev) => {
+        ev.preventDefault();
+        const emp = $(ev.currentTarget).attr("data-regler"), nom = $(ev.currentTarget).attr("data-nom");
+        frappe.prompt([
+          { fieldtype: "HTML", options: `<div class="text-muted" style="font-size:12px;margin-bottom:6px">Ouvrez Google Maps sur le domicile de <b>${esc(nom)}</b> → Partager → copiez le lien, collez-le ici. Vide = il repart du Magasin.</div>` },
+          { fieldtype: "Data", fieldname: "lien", label: "Lien Google Maps du domicile" },
+        ], async (v) => {
+          const r = (await frappe.call({ method: API + "definir_depart", args: { employe: emp, lien: v.lien || "" }, freeze: true })).message;
+          frappe.show_alert({ message: r.domicile ? `Domicile de ${esc(nom)} enregistré` : `${esc(nom)} repart du Magasin`, indicator: "green" }, 4);
+          await chargerEmployes();
+          if (r.domicile) d.fields_dict.employes.$wrapper.find(`[data-emp="${CSS.escape(emp)}"] select`).val("domicile");
+        }, `📍 Domicile de ${nom}`, "Enregistrer");
+      });
     };
     d.fields_dict.date.$input.on("change", () => setTimeout(chargerEmployes, 200));
     d.show();

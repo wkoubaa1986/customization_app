@@ -463,6 +463,24 @@ def employes_du_jour(date):
     return out
 
 
+@frappe.whitelist(methods=["POST"])
+def definir_depart(employe, lien):
+    """Depuis la fenêtre : le point de départ (domicile) d'un employé, collé en lien Google Maps, enregistré dans
+    le réglage (table « Points de départ particuliers »). Lien vide = retour au Magasin."""
+    _superviseur()
+    cfg = frappe.get_single(CONFIG)
+    lignes = [r for r in (cfg.get("departs") or []) if r.employe != employe]
+    if (lien or "").strip():
+        c = resoudre_lien(lien.strip())
+        if not c:
+            frappe.throw(_("Ce lien ne donne pas de coordonnées : ouvrez Google Maps sur le lieu, « Partager », copiez le lien."))
+        lignes.append({"employe": employe, "lien": lien.strip(), "latitude": c[0], "longitude": c[1]})
+    cfg.set("departs", lignes)
+    cfg.flags.ignore_permissions = True
+    cfg.save()
+    return {"employe": employe, "domicile": bool((lien or "").strip())}
+
+
 @frappe.whitelist()
 def proposer(date, fenetre=None, employes=None):
     """La proposition pour la journée : par employé, tournée actuelle et tournée optimisée (ordre, heures,
