@@ -174,7 +174,7 @@ class ReparationOsmoseurs {
     if (m.statut === "Réception en cours") boutons.push(btn("photos", "📷 Photos et clôture", "btn-primary"));
     if (m.statut === "Réceptionnée") boutons.push(btn("planifier", "📅 Affecter (auto)", "btn-primary"));
     if (m.statut !== "Réception en cours" && m.statut !== "Rendue au client") boutons.push(btn("tache", "➕ Tâche à la main"));
-    if (m.statut === "Réceptionnée" || m.statut === "Planifiée") boutons.push(btn("rattacher", "🔗 Rattacher une tâche du calendrier"));
+    if (m.statut === "Réceptionnée" || m.statut === "Planifiée") boutons.push(btn("rattacher", "🔗 Rattacher une tâche"));
     if (m.statut === "Réparée") boutons.push(btn("restitution", "📦 Restitution", "btn-primary"));
     if (m.statut === "Prête au magasin") {
       boutons.push(btn("rendre", "✅ Rendue au client", "btn-success"));
