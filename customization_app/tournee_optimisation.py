@@ -443,12 +443,40 @@ def _route_actuelle(arrets_emp: list, mn: list, km: list, depot: int = 0) -> tup
 
 
 @frappe.whitelist()
-def proposer(date, fenetre=None):
+def employes_du_jour(date):
+    """Les employés qui ont des tâches ce jour-là (hors exclus du réglage), pour choisir qui entre dans
+    l'optimisation et d'où chacun part : Magasin, ou son domicile s'il est réglé."""
+    _superviseur()
+    jour = getdate(date)
+    cfg = config()
+    rows = frappe.db.sql("""select custom_choix_du_staff employe, count(*) n,
+                                   sum(custom_type_dintervention in %(types)s and status = 'Open') mobiles
+                            from `tabTache de travail`
+                            where starts_on between %(d)s and %(f)s and status != 'Cancelled'
+                              and ifnull(custom_choix_du_staff, '') != '' and custom_type_dintervention not in %(hors)s
+                            group by custom_choix_du_staff""",
+                         {"d": "%s 00:00:00" % jour, "f": "%s 23:59:59" % jour, "types": tuple(cfg["types"]), "hors": TYPES_HORS_JOURNEE}, as_dict=True)
+    noms = {e.name: e.employee_name for e in frappe.get_all("Employee", filters={"name": ["in", [r.employe for r in rows] or [""]]}, fields=["name", "employee_name"])}
+    out = [{"employe": r.employe, "nom": noms.get(r.employe, r.employe), "taches": cint(r.n), "mobiles": cint(r.mobiles),
+            "exclu": r.employe in cfg["exclus"], "domicile": r.employe in cfg["departs"]} for r in rows]
+    out.sort(key=lambda e: (e["exclu"], e["nom"]))
+    return out
+
+
+@frappe.whitelist()
+def proposer(date, fenetre=None, employes=None):
     """La proposition pour la journée : par employé, tournée actuelle et tournée optimisée (ordre, heures,
     km, minutes de route), tâches déplacées, approximations et tâches impossibles à placer. RIEN N'EST ÉCRIT."""
     _superviseur()
     jour = getdate(date)
     cfg = config()
+    # Choix de l'écran : qui entre dans l'optimisation, et d'où il part (« magasin » / « domicile »).
+    choix = frappe.parse_json(employes) if isinstance(employes, str) else (employes or [])
+    choix = {c["employe"]: (c.get("depart") or "magasin") for c in choix if c.get("employe")}
+    if choix:
+        du_jour = [x["employe"] for x in employes_du_jour(date)]
+        cfg = dict(cfg, exclus=set(cfg["exclus"]) | {e for e in du_jour if e not in choix},
+                   departs={e: p for e, p in cfg["departs"].items() if choix.get(e) == "domicile"})
     taches = frappe.get_all(TACHE, filters={"starts_on": ["between", ["%s 00:00:00" % jour, "%s 23:59:59" % jour]],
                                            "status": ["!=", "Cancelled"], "custom_choix_du_staff": ["is", "set"]},
                             fields=["name", "custom_choix_du_staff", "custom_type_dintervention", "starts_on", "ends_on", "temps",
@@ -557,7 +585,8 @@ def proposer(date, fenetre=None):
             "deplacees": sum(1 for e in out for a in e["apres"]["arrets"] if a["deplace"]),
             "decalees": sum(1 for e in out for a in e["apres"]["arrets"] if a["decale"] and not a["deplace"]),
             "non_places": non_places, "avertissements": avert, "journee": [_hm(debut_j), _hm(fin_j)], "premiere": _hm(cfg["premiere"]),
-            "fenetre": fenetre, "marge": cfg["marge"], "pause": [_hm(cfg["pause"][0]), _hm(cfg["pause"][1])] if cfg["pause"] else None}
+            "fenetre": fenetre, "marge": cfg["marge"], "pause": [_hm(cfg["pause"][0]), _hm(cfg["pause"][1])] if cfg["pause"] else None,
+            "sans_domicile": [noms.get(e, e) for e, p in choix.items() if p == "domicile" and e not in cfg["departs"] and e in noms]}
 
 
 @frappe.whitelist(methods=["POST"])

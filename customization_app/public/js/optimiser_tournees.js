@@ -72,14 +72,23 @@
         { fieldtype: "Int", fieldname: "fenetre", label: "Fenêtre (± minutes)", default: 60 },
         { fieldtype: "Column Break" },
         { fieldtype: "HTML", fieldname: "aide", options: `<div class="text-muted" style="font-size:12px;margin-top:26px">Seuls les employés qui ont des tâches ce jour-là sont utilisés. Une tâche cochée « Heure et employé fixes » ne bouge pas. Rien n’est écrit avant « Appliquer ».</div>` },
+        { fieldtype: "Section Break", label: "Employés du jour" },
+        { fieldtype: "HTML", fieldname: "employes" },
         { fieldtype: "Section Break" },
         { fieldtype: "HTML", fieldname: "resultat" },
       ],
       primary_action_label: "Calculer",
       primary_action: async (v) => {
+        const choix = [];
+        d.fields_dict.employes.$wrapper.find("[data-emp]").each((_, el) => {
+          const $e = $(el);
+          if ($e.find("input[type=checkbox]").is(":checked")) choix.push({ employe: $e.attr("data-emp"), depart: $e.find("select").val() });
+        });
+        if (!choix.length) { frappe.msgprint("Cochez au moins un employé."); return; }
         d.fields_dict.resultat.$wrapper.html(`<div class="text-muted" style="padding:16px">Calcul des distances et des tournées…</div>`);
         d.set_secondary_action_label("");
-        proposition = (await frappe.call({ method: API + "proposer", args: { date: v.date, fenetre: v.proche ? (v.fenetre || 60) : 0 }, freeze: true, freeze_message: "Optimisation…" })).message;
+        proposition = (await frappe.call({ method: API + "proposer", args: { date: v.date, fenetre: v.proche ? (v.fenetre || 60) : 0, employes: choix }, freeze: true, freeze_message: "Optimisation…" })).message;
+        if ((proposition.sans_domicile || []).length) frappe.show_alert({ message: `Pas de domicile réglé pour ${esc(proposition.sans_domicile.join(", "))} : départ du Magasin. (Réglages → Points de départ particuliers)`, indicator: "orange" }, 8);
         d.fields_dict.resultat.$wrapper.html(rendre(proposition));
         const n = proposition.deplacees + proposition.decalees;
         if (n) {
@@ -97,7 +106,22 @@
         }
       },
     });
+    const chargerEmployes = async () => {
+      const date = d.get_value("date");
+      if (!date) return;
+      const liste = (await frappe.call({ method: API + "employes_du_jour", args: { date } })).message || [];
+      d.fields_dict.employes.$wrapper.html(liste.length ? `<div class="text-muted" style="font-size:12px;margin-bottom:4px">Cochez qui entre dans l’optimisation et d’où chacun part et revient. Un employé décoché garde ses tâches telles quelles.</div>
+        ${liste.map((e) => `<div data-emp="${esc(e.employe)}" style="display:flex;align-items:center;gap:10px;padding:4px 0;border-bottom:1px solid #f1f5f9">
+          <label style="margin:0;display:flex;align-items:center;gap:6px;min-width:220px"><input type="checkbox" ${e.exclu ? "" : "checked"}> <b>${esc(e.nom)}</b> <span class="text-muted" style="font-size:11.5px">${e.taches} tâche(s), ${e.mobiles} déplaçable(s)${e.exclu ? " · exclu par le réglage" : ""}</span></label>
+          <select class="form-control input-xs" style="width:auto;height:26px;padding:0 6px;font-size:12px">
+            <option value="magasin">🏬 Départ et retour : Magasin</option>
+            <option value="domicile" ${e.domicile ? "" : "disabled"}>🏠 Départ et retour : domicile${e.domicile ? "" : " (non réglé)"}</option>
+          </select></div>`).join("")}` : `<div class="text-muted" style="font-size:12px">Aucun employé n’a de tâche ce jour-là.</div>`);
+    };
+    d.fields_dict.date.$input.on("change", () => setTimeout(chargerEmployes, 200));
     d.show();
+    d.set_value("proche", 1);        // le `default` d'une case à cocher n'est pas appliqué par le dialogue
+    chargerEmployes();
   }
 
   window.optimiserTournees_ouvrir = ouvrir;
