@@ -955,6 +955,33 @@ def verifications_etat():
             "peut_planifier": est_responsable()}
 
 
+@frappe.whitelist()
+def verifications_a_traiter():
+    """Les vérifications qui attendent un geste de l'utilisateur connecté : « à valider » (responsable magasin,
+    comptage d'un employé) ou « à accepter » (employé, quantités validées par le responsable). Pour le bandeau
+    de l'onglet Solde et le badge de l'onglet Vérif."""
+    _lecture()
+    actifs = {w["name"]: w["libelle"] for w in entrepots()}
+    out = []
+    for nom in frappe.get_all(VERIF, filters={"statut": ["in", [A_VALIDER, A_CONFIRMER]]}, pluck="name", order_by="date asc"):
+        v = frappe.get_doc(VERIF, nom)
+        if v.entrepot not in actifs:
+            continue
+        actions = _actions_possibles(v)
+        if "valider" in actions:
+            geste, texte = "valider", _("comptage de {0} du {1} à VALIDER : {2} écart(s)").format(
+                frappe.utils.get_fullname(v.valide_employe_par) if v.valide_employe_par else "?", frappe.utils.formatdate(v.date), cint(v.nb_ecarts))
+        elif "confirmer" in actions:
+            nb = sum(1 for l in v.lignes if l.ajuste)
+            geste, texte = "accepter", _("quantités validées par {0} à ACCEPTER{1}").format(
+                frappe.utils.get_fullname(v.valide_responsable_par) if v.valide_responsable_par else "?",
+                _(" — {0} quantité(s) ajustée(s)").format(nb) if nb else _(" (aucun changement)"))
+        else:
+            continue
+        out.append({"name": v.name, "entrepot": v.entrepot, "libelle": actifs[v.entrepot], "geste": geste, "texte": texte})
+    return out
+
+
 @frappe.whitelist(methods=["POST"])
 def commencer_verification(entrepot):
     """Ouvre (ou reprend) la vérification du stock, hors planning : pas de tâches créées."""

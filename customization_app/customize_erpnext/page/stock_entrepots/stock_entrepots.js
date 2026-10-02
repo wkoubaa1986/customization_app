@@ -77,6 +77,7 @@ class StockEntrepots {
     r.find("#se-debut, #se-fin").on("change", () => this.chargerSorties());
     if (ctx.responsable) this.initTransfert();
     r.find("#se-s-attente").on("click", "[data-valider]", (e) => this.ouvrirValidation($(e.currentTarget).attr("data-valider")));
+    r.find("#se-s-attente").on("click", "[data-verif]", (e) => { this.comptage = $(e.currentTarget).attr("data-verif"); this.montrer("verif"); });
     frappe.realtime.on("se_transferts_a_valider", () => { this.chargerAttente(); if (this.onglet === "transfert") this.chargerHistorique(); });
     this.pret = true;
     this.montrer("solde");
@@ -90,8 +91,14 @@ class StockEntrepots {
   async chargerAttente() {
     const liste = (await frappe.call({ method: SE_API + "transferts_a_valider" })).message || [];
     this.attente = liste;
+    const verifs = this.ctx.verification ? ((await frappe.call({ method: SE_API + "verifications_a_traiter" })).message || []) : [];
+    this.$r.find("#se-v-badge").toggle(!!verifs.length).text(verifs.length);
     const miens = liste.filter((t) => t.employe && t.employe === this.ctx.employe_id);
-    this.$r.find("#se-s-attente").html(miens.map((t) => `<div class="se-bandeau">
+    this.$r.find("#se-s-attente").html(verifs.map((v) => `<div class="se-bandeau">
+        <div class="t">🧾 Vérification ${se_esc(v.libelle)} — ${v.geste === "valider" ? "à valider" : "à accepter"}</div>
+        <div class="d">${se_esc(v.texte)}</div>
+        <button type="button" class="btn btn-primary btn-sm" data-verif="${se_esc(v.name)}">${v.geste === "valider" ? "🔍 Vérifier et valider" : "🔍 Voir et accepter"}</button>
+      </div>`).join("") + miens.map((t) => `<div class="se-bandeau">
         <div class="t">📥 Transfert ${se_esc(t.name)} à valider — ${se_esc(this.libelle(t.de))} → votre stock</div>
         <div class="d">${t.lignes.length} article(s) · ${se_esc(t.par)} · ${se_esc(t.quand)}${t.remarque ? ` · ${se_esc(t.remarque)}` : ""}</div>
         <button type="button" class="btn btn-primary btn-sm" data-valider="${se_esc(t.name)}">✅ Vérifier et confirmer la réception</button>
@@ -780,7 +787,7 @@ class StockEntrepots {
         (s’il en change une, le responsable revalide — il a le dernier mot) ; un <b>rapprochement de stock</b> aligne alors le véhicule.
         ${res.peut_planifier ? `<a class="se-lien" href="/app/config-stock-entrepot">⚙️ Réglages</a> · <span class="se-lien" data-planifier>▶ Ouvrir les vérifications du jour</span>` : ""}</div>`
       + (() => { const att = res.stocks.filter((s) => s.en_cours && s.en_cours.statut !== "En cours" && s.en_cours.actions.length);
-          return att.length ? `<div class="se-bandeau"><div class="t">🧾 ${att.length} vérification(s) attendent votre ${att.some((s) => s.en_cours.actions.includes("valider")) ? "validation" : "confirmation"}</div>
+          return att.length ? `<div class="se-bandeau"><div class="t">🧾 ${att.length} vérification(s) ${att.some((s) => s.en_cours.actions.includes("valider")) ? "à valider (comptage d’un employé)" : "à accepter (quantités validées par le responsable)"}</div>
             <div class="d">${att.map((s) => se_esc(s.libelle)).join(" · ")}</div></div>` : ""; })()
       + (res.stocks.map((s) => `<div class="se-card se-v-stock">
           <div class="t">🚐 ${se_esc(s.libelle)}</div>
@@ -821,10 +828,10 @@ class StockEntrepots {
          <button type="button" class="btn btn-primary" data-reprendre="${se_esc(v.name)}">Commencer le comptage</button>`;
     if (v.statut === "À valider") return `<div class="plan">📝 Comptage du ${se_dt(v.date)} ${v.renvois ? "revu" : "terminé"} par ${se_esc(v.valide_employe_par)} : <b class="${v.nb_ecarts ? "neg" : "pos"}">${v.nb_ecarts} écart(s)</b>${v.nb_ecarts ? ` · ${se_argent(v.valeur_ecarts)}` : ""}</div>
          ${a.includes("valider") ? `<button type="button" class="btn btn-primary" data-reprendre="${se_esc(v.name)}">🔍 Vérifier et valider</button>`
-           : `<div class="se-attente">⏳ En attente de validation d’un responsable magasin</div>`}`;
+           : `<div class="se-attente">⏳ À valider par un responsable magasin (autre que l’employé du stock)</div>`}`;
     if (v.statut === "À confirmer") return `<div class="plan">📝 Validé par ${se_esc(v.valide_responsable_par)}${v.nb_ajustes ? ` · <b class="neg">${v.nb_ajustes} quantité(s) ajustée(s)</b>` : " · sans changement"}</div>
-         ${a.includes("confirmer") ? `<button type="button" class="btn btn-primary" data-reprendre="${se_esc(v.name)}">🔍 Voir et confirmer</button>`
-           : `<div class="se-attente">⏳ En attente de la confirmation de ${se_esc(s.employe)}</div>`}`;
+         ${a.includes("confirmer") ? `<button type="button" class="btn btn-primary" data-reprendre="${se_esc(v.name)}">🔍 Voir et accepter</button>`
+           : `<div class="se-attente">⏳ À accepter par ${se_esc(s.employe)} (employé du stock)</div>`}`;
     return "";
   }
 
@@ -836,7 +843,7 @@ class StockEntrepots {
     const mode = statut === "En cours" ? "comptage" : statut === "À valider" && a.includes("valider") ? "validation"
       : statut === "À confirmer" && a.includes("confirmer") ? "confirmation" : "lecture";
     const fini = mode === "lecture";
-    const etat = { "À valider": "⏳ à valider", "À confirmer": "⏳ à confirmer", "Terminée": "terminée" }[statut];
+    const etat = { "À valider": "⏳ à valider par un responsable", "À confirmer": "⏳ à accepter par l’employé", "Terminée": "terminée" }[statut];
     const saisies = {};
     d.lignes.forEach((l) => { saisies[l.item_code] = { qte_comptee: l.qte_comptee, commentaire: l.commentaire || "" }; });
     const ligne = (l) => `<div class="se-c-ligne ${l.qte_comptee != null ? "fait" : ""}" data-item="${se_esc(l.item_code)}" data-cle="${se_esc(((l.item_name || "") + " " + l.item_code).toLowerCase())}">
@@ -852,7 +859,7 @@ class StockEntrepots {
         <div class="se-v-stock"><div class="t">📝 ${se_esc(this.libelle(d.fiche.entrepot))} — ${se_dt(d.fiche.date)} ${etat ? `<span class="se-badge">${etat}</span>` : ""}</div>
           ${mode === "comptage" ? `<div class="se-note">Quantités système photographiées à la première ouverture de cette feuille.</div>`
             : mode === "validation" ? `<div class="se-note">Comptage de <b>${se_esc(d.fiche.valide_employe_par)}</b> (${se_esc(d.fiche.valide_employe_le)}). Validez tel quel, corrigez une quantité (l’employé devra confirmer), ou renvoyez au comptage.<br>Quantités système actualisées à l’instant : un article qui a bougé depuis le comptage serait à recompter.</div>`
-            : mode === "confirmation" ? `<div class="se-note">Quantités validées par <b>${se_esc(d.fiche.valide_responsable_par)}</b>${d.fiche.nb_ajustes ? " (ajustées : surlignées, votre comptage en dessous)" : ""}. D’accord : validez. Sinon corrigez la quantité : la fiche repart chez le responsable, qui a le dernier mot.</div>`
+            : mode === "confirmation" ? `<div class="se-note">Quantités validées par <b>${se_esc(d.fiche.valide_responsable_par)}</b>${d.fiche.nb_ajustes ? " (ajustées : surlignées, votre comptage en dessous)" : ""}. D’accord : <b>acceptez</b>. Sinon corrigez la quantité : la fiche repart chez le responsable, qui a le dernier mot.</div>`
             : `<div class="se-note">${d.fiche.valide_employe_par ? `Comptage ${se_esc(d.fiche.valide_employe_par)}` : ""}${d.fiche.valide_responsable_par ? ` · validé par ${se_esc(d.fiche.valide_responsable_par)}` : ""}${d.fiche.rapprochement ? ` · ${se_lien("Stock Reconciliation", d.fiche.rapprochement, "rapprochement " + d.fiche.rapprochement)}` : ""}</div>`}
           ${d.fiche.nb_a_recompter ? `<div class="se-alerte">⚠️ ${d.fiche.nb_a_recompter} article(s) ont bougé depuis le comptage : leur comptage est effacé, à recompter (lignes marquées).</div>` : ""}
           ${d.fiche.note ? `<div class="se-note">${se_esc(d.fiche.note)}</div>` : ""}
@@ -865,7 +872,7 @@ class StockEntrepots {
           : mode === "validation" ? `<div class="se-c-barre"><button type="button" class="btn btn-default" data-renvoyer>↩ Renvoyer au comptage</button>
           <button type="button" class="btn btn-primary" data-valider>✅ Valider et rapprocher</button></div>`
           : mode === "confirmation" ? `<div class="se-c-barre"><button type="button" class="btn btn-default" data-renvoyer>🔁 Tout recompter</button>
-          <button type="button" class="btn btn-primary" data-confirmer>✅ Valider</button></div>` : ""}
+          <button type="button" class="btn btn-primary" data-confirmer>✅ Accepter</button></div>` : ""}
       </div>`);
     const bilan = () => {
       let n = 0, e = 0, v = 0;
@@ -890,7 +897,7 @@ class StockEntrepots {
       await frappe.call({ method: SE_API + "enregistrer_verification", args: { name, comptes: comptes() }, freeze: true });
       frappe.show_alert({ message: "Comptage enregistré — vous pourrez reprendre", indicator: "green" }, 3);
     });
-    const retour = () => { this.comptage = null; this.chargerVerif(); };
+    const retour = () => { this.comptage = null; this.chargerVerif(); this.chargerAttente(); };
     $c.find("[data-terminer]").on("click", () => {
       const n = Object.values(saisies).filter((s) => s.qte_comptee != null && s.qte_comptee !== "").length;
       frappe.confirm(`Terminer le comptage avec <b>${n}</b> article(s) compté(s) sur ${d.lignes.length} ?<br>Les écarts seront figés et soumis à la validation d’un responsable magasin ; le rapprochement de stock se fera à sa validation.`, async () => {
@@ -907,7 +914,7 @@ class StockEntrepots {
       frappe.confirm(`Valider ${changes ? `avec <b>${changes}</b> quantité(s) corrigée(s)` : `le comptage (${e} article(s))`} ?<br>L’employé devra accepter ces quantités ; ${ecarts ? `un <b>rapprochement de stock</b> alignera alors ${ecarts} article(s).` : "aucun écart : pas de rapprochement."}`, async () => {
         const r = (await frappe.call({ method: SE_API + "valider_verification", args: changes ? { name, comptes: comptes() } : { name }, freeze: true })).message;
         if (r.renvoye) { frappe.msgprint({ title: "À recompter", indicator: "orange", message: `${r.a_recompter.length} article(s) ont bougé depuis le comptage : leur comptage est effacé et la fiche repart chez l’employé.<br>${r.a_recompter.map(se_esc).join(", ")}` }); retour(); return; }
-        frappe.msgprint({ title: "Validé — à confirmer par l’employé", indicator: "green",
+        frappe.msgprint({ title: "Validé — à accepter par l’employé", indicator: "green",
           message: `${r.ajustes.length ? r.ajustes.map(se_esc).join("<br>") + "<br>" : "Aucune quantité changée.<br>"}L’employé du stock doit maintenant accepter ces quantités ; le rapprochement sera passé à son accord.` });
         retour();
       });
@@ -919,7 +926,7 @@ class StockEntrepots {
         : `D’accord avec les quantités validées ? Le rapprochement de stock sera passé sur votre stock.`, async () => {
         const r = (await frappe.call({ method: SE_API + "confirmer_verification", args: changes ? { name, comptes: comptes() } : { name }, freeze: true })).message;
         if (r.renvoye) { frappe.msgprint({ title: "À recompter", indicator: "orange", message: `${r.a_recompter.length} article(s) ont bougé depuis votre comptage : recomptez-les (lignes marquées) puis terminez à nouveau.` }); retour(); return; }
-        if (r.statut === "À valider") { frappe.msgprint({ title: "Renvoyé au responsable", indicator: "orange", message: `${r.changes.map(se_esc).join("<br>")}<br>Le responsable magasin doit revalider.` }); retour(); return; }
+        if (r.statut === "À valider") { frappe.msgprint({ title: "Renvoyé au responsable — à valider", indicator: "orange", message: `${r.changes.map(se_esc).join("<br>")}<br>Le responsable magasin doit revalider, puis vous accepterez.` }); retour(); return; }
         frappe.msgprint({ title: "Vérification terminée", indicator: "green", message: r.rapprochement ? `Validation mutuelle acquise. Rapprochement ${se_lien("Stock Reconciliation", r.rapprochement)} passé.` : "Validation mutuelle acquise. Aucun écart : pas de rapprochement." });
         retour();
       });
