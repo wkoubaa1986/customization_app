@@ -71,7 +71,9 @@
           description: "Chaque tâche déplaçable reste à ± la fenêtre ci-dessous autour de son heure actuelle" },
         { fieldtype: "Int", fieldname: "fenetre", label: "Fenêtre (± minutes)", default: 60 },
         { fieldtype: "Column Break" },
-        { fieldtype: "HTML", fieldname: "aide", options: `<div class="text-muted" style="font-size:12px;margin-top:26px">Seuls les employés qui ont des tâches ce jour-là sont utilisés. Une tâche cochée « Heure et employé fixes » ne bouge pas. Rien n’est écrit avant « Appliquer ».</div>` },
+        { fieldtype: "HTML", fieldname: "aide", options: `<div style="margin-top:26px;display:flex;gap:12px;align-items:flex-start">
+          <div class="text-muted" style="font-size:12px;flex:1">Seuls les employés qui ont des tâches ce jour-là sont utilisés. Une tâche cochée « Heure et employé fixes » ne bouge pas. Rien n’est écrit avant « Appliquer ».</div>
+          <a class="btn btn-default btn-xs" href="/app/config-optimisation-tournees" target="_blank" title="Magasin, heures, pause, stationnement, heures de pointe, types, exclus, domiciles" style="white-space:nowrap">⚙️ Réglages</a></div>` },
         { fieldtype: "Section Break", label: "Employés du jour" },
         { fieldtype: "HTML", fieldname: "employes" },
         { fieldtype: "Section Break" },
@@ -107,6 +109,15 @@
         }
       },
     });
+    // Les tâches d'un employé sous sa ligne : heure, type, client, adresse ; grisée si elle ne peut pas bouger (et pourquoi).
+    const ligneTaches = (liste) => liste.length ? `<table style="width:100%;font-size:12px;border-collapse:collapse">${liste.map((t) => `
+        <tr style="${t.mobile ? "" : "color:#94a3b8"}">
+          <td style="padding:1px 8px 1px 0;white-space:nowrap">${esc(t.debut)}${t.fin ? "–" + esc(t.fin) : ""}</td>
+          <td style="padding:1px 8px 1px 0;white-space:nowrap"><a href="/app/tache-de-travail/${encodeURIComponent(t.tache)}" target="_blank" style="color:inherit">${esc(t.type)}</a></td>
+          <td style="padding:1px 8px 1px 0"><b>${esc(t.client)}</b></td>
+          <td style="padding:1px 8px 1px 0">${esc(t.adresse)}${t.secteur ? ` <span class="text-muted">· ${esc(t.secteur)}</span>` : ""}${t.position === "secteur" ? ' <span title="Position approchée par le centre du secteur">≈</span>' : ""}</td>
+          <td style="padding:1px 0;white-space:nowrap;text-align:right">${t.mobile ? "🔀 déplaçable" : esc(t.motif)}</td>
+        </tr>`).join("")}</table>` : `<span class="text-muted">Aucune tâche.</span>`;
     const chargerEmployes = async () => {
       const date = d.get_value("date");
       if (!date) return;
@@ -120,8 +131,16 @@
           </select>
           <span style="font-size:11.5px;white-space:nowrap">🕘 <input type="time" data-debut value="${esc(e.debut)}" style="height:26px;font-size:12px;width:92px"> → <input type="time" data-fin value="${esc(e.fin)}" style="height:26px;font-size:12px;width:92px"></span>
           <a href="#" data-memoriser="${esc(e.employe)}" data-nom="${esc(e.nom)}" title="Enregistrer ces heures comme horaires habituels de cet employé" style="font-size:11.5px;white-space:nowrap">${e.horaire_propre ? "💾 horaires mémorisés" : "💾 mémoriser"}</a>
-          <a href="#" data-regler="${esc(e.employe)}" data-nom="${esc(e.nom)}" style="font-size:11.5px;white-space:nowrap">${e.domicile ? "📍 changer le domicile" : "📍 régler le domicile"}</a></div>`).join("")}
-        <div class="text-muted" style="font-size:11.5px;margin-top:4px">🕘 Début et fin de journée de chacun pour ce calcul (« 💾 mémoriser » les garde pour les jours suivants). Le domicile se règle une fois (lien Google Maps). <a href="/app/config-optimisation-tournees">Tous les réglages</a>.</div>` : `<div class="text-muted" style="font-size:12px">Aucun employé n’a de tâche ce jour-là.</div>`);
+          <a href="#" data-regler="${esc(e.employe)}" data-nom="${esc(e.nom)}" style="font-size:11.5px;white-space:nowrap">${e.domicile ? "📍 changer le domicile" : "📍 régler le domicile"}</a>
+          <a href="#" data-plier style="font-size:11.5px;white-space:nowrap;margin-left:auto" title="Voir les tâches de la journée">▸ tâches</a></div>
+          <div data-taches style="display:none;padding:2px 0 6px 28px;border-bottom:1px solid #f1f5f9">${ligneTaches(e.liste || [])}</div>`).join("")}
+        <div class="text-muted" style="font-size:11.5px;margin-top:4px">🕘 Début et fin de journée de chacun pour ce calcul (« 💾 mémoriser » les garde pour les jours suivants). Le domicile se règle une fois (lien Google Maps). <a href="/app/config-optimisation-tournees" target="_blank">⚙️ Tous les réglages</a>.</div>` : `<div class="text-muted" style="font-size:12px">Aucun employé n’a de tâche ce jour-là.</div>`);
+      d.fields_dict.employes.$wrapper.find("[data-plier]").on("click", (ev) => {
+        ev.preventDefault();
+        const $a = $(ev.currentTarget), $bloc = $a.closest("[data-emp]").next("[data-taches]");
+        $bloc.toggle();
+        $a.text($bloc.is(":visible") ? "▾ tâches" : "▸ tâches");
+      });
       d.fields_dict.employes.$wrapper.find("[data-memoriser]").on("click", async (ev) => {
         ev.preventDefault();
         const $row = $(ev.currentTarget).closest("[data-emp]"), emp = $row.attr("data-emp"), nom = $(ev.currentTarget).attr("data-nom");

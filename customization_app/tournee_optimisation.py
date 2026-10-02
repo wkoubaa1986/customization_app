@@ -491,12 +491,53 @@ def employes_du_jour(date):
                             group by custom_choix_du_staff""",
                          {"d": "%s 00:00:00" % jour, "f": "%s 23:59:59" % jour, "types": tuple(cfg["types"]), "hors": TYPES_HORS_JOURNEE}, as_dict=True)
     noms = {e.name: e.employee_name for e in frappe.get_all("Employee", filters={"name": ["in", [r.employe for r in rows] or [""]]}, fields=["name", "employee_name"])}
+    detail = _taches_par_employe(jour, cfg)
     out = [{"employe": r.employe, "nom": noms.get(r.employe, r.employe), "taches": cint(r.n), "mobiles": cint(r.mobiles),
             "exclu": r.employe in cfg["exclus"], "domicile": r.employe in cfg["departs"],
             "debut": _hm(cfg["horaires"].get(r.employe, (cfg["debut"], cfg["fin"]))[0]),
             "fin": _hm(cfg["horaires"].get(r.employe, (cfg["debut"], cfg["fin"]))[1]),
-            "horaire_propre": r.employe in cfg["horaires"]} for r in rows]
+            "horaire_propre": r.employe in cfg["horaires"], "liste": detail.get(r.employe, [])} for r in rows]
     out.sort(key=lambda e: (e["exclu"], e["nom"]))
+    return out
+
+
+def _taches_par_employe(jour, cfg) -> dict:
+    """Les tâches du jour de chaque employé pour la fenêtre : heure, type, client, adresse, et si elle peut
+    bouger (sinon pourquoi : épinglée, pas ouverte, type hors tournée, réparation au local, sans position)."""
+    taches = frappe.get_all(TACHE, filters={"starts_on": ["between", ["%s 00:00:00" % jour, "%s 23:59:59" % jour]],
+                                           "status": ["!=", "Cancelled"], "custom_choix_du_staff": ["is", "set"]},
+                            fields=["name", "custom_choix_du_staff", "custom_type_dintervention", "starts_on", "ends_on",
+                                    "status", "custom_client", "nom_client", "select_address", "google_map", "secteur",
+                                    "details_adresse", "dans_local",
+                                    *(["custom_tournee_fixe"] if frappe.db.has_column(TACHE, "custom_tournee_fixe") else [])],
+                            order_by="starts_on asc", limit_page_length=0)
+    centres = _centres_secteurs()
+    out = {}
+    for t in taches:
+        if t.custom_type_dintervention in TYPES_HORS_JOURNEE:
+            continue
+        d, f = get_datetime(t.starts_on), get_datetime(t.ends_on) if t.ends_on else None
+        pos = coordonnees_tache(t, centres)
+        if cint(t.get("custom_tournee_fixe")):
+            motif = "📌 épinglée"
+        elif t.status != "Open":
+            motif = "statut « %s »" % t.status
+        elif t.custom_type_dintervention not in cfg["types"]:
+            motif = "type hors tournée"
+        elif t.custom_type_dintervention == "Réparation" and (t.dans_local or "") == "Oui":
+            motif = "réparation au local"
+        elif not pos:
+            motif = "sans position"
+        else:
+            motif = ""
+        adresse = re.sub(r"^Secteur\s*:\s*[^,]*,\s*", "", t.details_adresse or "")     # le secteur est affiché à part
+        if not adresse and t.select_address:
+            adresse = frappe.db.get_value("Address", t.select_address, "address_line1") or t.select_address
+        out.setdefault(t.custom_choix_du_staff, []).append({
+            "tache": t.name, "debut": d.strftime("%H:%M"), "fin": f.strftime("%H:%M") if f else "",
+            "type": t.custom_type_dintervention or "", "client": t.nom_client or t.custom_client or "",
+            "adresse": adresse, "secteur": t.secteur or "", "mobile": not motif, "motif": motif,
+            "position": pos[2] if pos else ""})
     return out
 
 
