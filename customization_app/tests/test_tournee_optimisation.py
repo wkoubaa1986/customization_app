@@ -84,6 +84,16 @@ class TestSolveur(unittest.TestCase):
                          pause=(9 * 60, 10 * 60))
         self.assertEqual(sol["routes"][0][0][1], 10 * 60)
 
+    def test_vehicule_occupe_hors_tournee(self):
+        # le véhicule est pris 09:00–11:00 (tâche gardée telle quelle) : l'arrêt libre (service 30) se cale avant ou après,
+        # jamais dessus.
+        mn = [[0, 10], [10, 0]]
+        for k in range(3):
+            sol = T.resoudre(mn, [{"service": 30, "fenetre": (9 * 60 + 15, 12 * 60), "vehicule": None}], 1, 8 * 60, 17 * 60,
+                             limite_s=1, premiere=8 * 60, occupations={0: [(9 * 60, 11 * 60)]})
+            t = sol["routes"][0][0][1]
+            self.assertTrue(t >= 11 * 60, t)
+
     def test_journee_trop_courte_laisse_de_cote(self):
         pts = [(36.87, 10.19), (36.87, 10.30), (36.875, 10.31)]
         mn, km, _s = T.matrice_haversine(pts)

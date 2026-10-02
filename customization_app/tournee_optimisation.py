@@ -346,7 +346,7 @@ def matrice(points: list, osrm: str) -> tuple[list, list, str]:
 
 def resoudre(minutes: list, arrets: list, nb_vehicules: int, debut: int, fin: int, equilibre: int = 1,
              limite_s: int = 5, premiere: int | None = None, depots: list | None = None,
-             marge: int = 0, pause: tuple | None = None) -> dict:
+             marge: int = 0, pause: tuple | None = None, occupations: dict | None = None) -> dict:
     """Tournées à fenêtres de temps (OR-Tools). `minutes` couvre tous les nœuds : les dépôts (nœud 0 = Magasin,
     puis les points de départ particuliers) et les arrêts, qui occupent les DERNIERS nœuds. `arrets[i]` :
     {service: min, fenetre: (a, b) | None, vehicule: idx | None}. `depots[v]` = nœud de départ ET de retour du
@@ -376,12 +376,20 @@ def resoudre(minutes: list, arrets: list, nb_vehicules: int, debut: int, fin: in
     # solveur chargeait tout sur un seul — constaté en test.)
     charge = sum(service) + sum(min((minutes[i][j] for j in range(n) if j != i), default=0) for i in range(nb_depots, n))
     equitable = debut + int(charge / max(nb_vehicules, 1)) + 60
+    # Créneaux où un véhicule est OCCUPÉ hors tournée (tâche qu'on n'a pas pu placer, gardée telle quelle) :
+    # des pauses imposées, pour que les autres arrêts ne viennent pas se poser dessus.
+    visites = [service[manager.IndexToNode(i)] for i in range(routing.Size())]
     for v in range(nb_vehicules):
         temps.CumulVar(routing.Start(v)).SetRange(debut, debut)
         temps.CumulVar(routing.End(v)).SetRange(debut, horizon)
         if equilibre:
             temps.SetCumulVarSoftUpperBound(routing.End(v), equitable, 2 * cint(equilibre))
         routing.AddVariableMinimizedByFinalizer(temps.CumulVar(routing.End(v)))
+        occ = [(cint(d), cint(f)) for d, f in (occupations or {}).get(v, []) if f > d]
+        if occ:
+            solver = routing.solver()
+            temps.SetBreakIntervalsOfVehicle(
+                [solver.FixedDurationIntervalVar(d, d, f - d, False, "occupe_%d_%d" % (v, k)) for k, (d, f) in enumerate(occ)], v, visites)
     for k, a in enumerate(arrets):
         idx = manager.NodeToIndex(nb_depots + k)
         fen = a.get("fenetre") or (max(debut, premiere or debut), fin)     # pas de visite libre avant « première »
@@ -542,8 +550,11 @@ def proposer(date, fenetre=None, employes=None):
     mn, km, source = matrice(points, cfg["osrm"])
     debut_j, fin_j = cfg["debut"], cfg["fin"]
     for a in arrets:
+        # La journée ne coupe jamais le travail déjà planifié : une tâche qui finit après l'heure de fin du
+        # réglage étend la journée (sinon le moteur laisserait des tâches de côté au lieu de les placer).
+        fin_j = max(fin_j, a["debut"] + a["service"] + mn[a["noeud"]][depot_de[a["employe"]]])
         if not a["mobile"]:
-            debut_j, fin_j = min(debut_j, a["debut"]), max(fin_j, a["debut"] + a["service"] + mn[a["noeud"]][depot_de[a["employe"]]])
+            debut_j = min(debut_j, a["debut"])
     fenetre = cint(cfg["fenetre"]) if fenetre is None else cint(fenetre)
 
     def _noeud(a):
@@ -567,6 +578,25 @@ def proposer(date, fenetre=None, employes=None):
         noeuds = [_noeud(a) for a in arrets]
         sol = resoudre(mn, noeuds, len(employes), debut_j, fin_j, cfg["equilibre"], premiere=cfg["premiere"], depots=depots,
                        marge=cfg["marge"], pause=cfg["pause"])
+    if sol["non_places"]:
+        # Toujours impossibles (deux rendez-vous à la même heure…) : elles restent telles quelles ET occupent
+        # leur créneau — les autres arrêts du même employé se calculent autour.
+        bloques = set(sol["non_places"])
+        occupations = {}
+        for n in bloques:
+            a = par_noeud[n]
+            occupations.setdefault(employes.index(a["employe"]), []).append((a["debut"], a["debut"] + a["service"]))
+        restants = [a for a in arrets if a["noeud"] not in bloques]
+        nb_depots = len(points) - len(arrets)
+        garder = list(range(nb_depots)) + [a["noeud"] for a in restants]
+        mn2 = [[mn[i][j] for j in garder] for i in garder]
+        noeuds = [_noeud(a) for a in restants]
+        sol2 = resoudre(mn2, noeuds, len(employes), debut_j, fin_j, cfg["equilibre"], premiere=cfg["premiere"], depots=depots,
+                        marge=cfg["marge"], pause=cfg["pause"], occupations=occupations)
+        inverse = {nb_depots + i: a["noeud"] for i, a in enumerate(restants)}    # retour aux nœuds d'origine
+        sol = {"routes": [[(inverse[n], t) for n, t in r] for r in sol2["routes"]],
+               "non_places": sorted(bloques | {inverse[n] for n in sol2["non_places"]}), "cout": sol2["cout"]}
+
     out, tot_av, tot_ap, km_av, km_ap = [], 0, 0, 0.0, 0.0
     for v, e in enumerate(employes):
         actuels = [a for a in arrets if a["employe"] == e]
