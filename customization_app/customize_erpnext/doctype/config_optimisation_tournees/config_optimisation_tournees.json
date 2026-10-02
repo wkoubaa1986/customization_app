@@ -27,6 +27,7 @@
   "types_mobiles",
   "col_regles",
   "employes_exclus",
+  "pointes",
   "sec_tech",
   "osrm_url"
  ],
@@ -121,9 +122,9 @@
   {
    "fieldname": "marge_minutes",
    "fieldtype": "Int",
-   "label": "Marge entre deux interventions (min)",
+   "label": "Stationnement et sortie à chaque arrêt (min)",
    "default": "10",
-   "description": "Ajoutée à chaque trajet : stationnement, déchargement, accueil."
+   "description": "Ajouté à chaque trajet, en plus du temps de route OSRM : se garer, décharger, être accueilli, repartir."
   },
   {
    "fieldname": "fenetre_minutes",
@@ -155,6 +156,13 @@
    "options": "Config Optimisation Tournees Exclu"
   },
   {
+   "fieldname": "pointes",
+   "fieldtype": "Table",
+   "label": "Heures de pointe (trajet majoré)",
+   "options": "Config Optimisation Tournees Pointe",
+   "description": "Un trajet qui démarre dans une de ces plages est allongé du pourcentage indiqué (OSRM ne connaît pas le trafic). Ex. 07:30–09:00 +30 %, 16:30–18:30 +30 %."
+  },
+  {
    "fieldname": "sec_tech",
    "fieldtype": "Section Break",
    "label": "Distances"
@@ -169,7 +177,7 @@
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-10-02 17:11:54.111115",
+ "modified": "2026-10-02 17:18:14.490654",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Config Optimisation Tournees",

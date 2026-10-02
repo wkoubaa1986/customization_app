@@ -1,0 +1,48 @@
+{
+ "actions": [],
+ "creation": "2026-10-02 17:18:14.490654",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "istable": 1,
+ "field_order": [
+  "heure_debut",
+  "heure_fin",
+  "majoration"
+ ],
+ "fields": [
+  {
+   "fieldname": "heure_debut",
+   "fieldtype": "Time",
+   "label": "De",
+   "reqd": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "heure_fin",
+   "fieldtype": "Time",
+   "label": "À",
+   "reqd": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "majoration",
+   "fieldtype": "Int",
+   "label": "Majoration du trajet (%)",
+   "reqd": 1,
+   "in_list_view": 1,
+   "default": "30"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-10-02 17:18:14.490654",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "Config Optimisation Tournees Pointe",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

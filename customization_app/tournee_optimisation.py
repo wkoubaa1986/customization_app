@@ -89,7 +89,10 @@ def config() -> dict:
     horaires = {r.employe: (_minutes(r.heure_debut, 8 * 60), _minutes(r.heure_fin, 17 * 60)) for r in frappe.get_all(
         "Config Optimisation Tournees Horaire", filters={"parent": CONFIG, "parenttype": CONFIG}, fields=["employe", "heure_debut", "heure_fin"])} \
         if frappe.db.exists("DocType", "Config Optimisation Tournees Horaire") else {}
-    return {"depot": (lat, lng) if lat and lng else DEPOT_DEFAUT, "departs": departs, "horaires": horaires,
+    pointes = [(_minutes(r.heure_debut, 0), _minutes(r.heure_fin, 0), cint(r.majoration)) for r in frappe.get_all(
+        "Config Optimisation Tournees Pointe", filters={"parent": CONFIG, "parenttype": CONFIG}, fields=["heure_debut", "heure_fin", "majoration"])
+        if cint(r.majoration) > 0] if frappe.db.exists("DocType", "Config Optimisation Tournees Pointe") else []
+    return {"depot": (lat, lng) if lat and lng else DEPOT_DEFAUT, "departs": departs, "horaires": horaires, "pointes": pointes,
             "debut": _minutes(v("heure_debut"), 8 * 60), "fin": _minutes(v("heure_fin"), 17 * 60),
             "premiere": _minutes(v("heure_premiere"), 9 * 60),
             "pause": (_minutes(v("pause_debut"), 0), _minutes(v("pause_fin"), 0)) if v("pause_debut") and v("pause_fin") else None,
@@ -343,6 +346,23 @@ def matrice(points: list, osrm: str) -> tuple[list, list, str]:
     except Exception:
         frappe.log_error(frappe.get_traceback()[-800:], "tournées : OSRM injoignable, repli vol d’oiseau")
         return matrice_haversine(points)
+
+
+def facteur_pointe(minute: int, pointes: list) -> float:
+    """× appliqué à un trajet qui DÉMARRE à `minute` : 1 hors pointe, 1 + majoration % dans une plage. PURE."""
+    for d, f, pct in pointes or []:
+        if d <= minute < f:
+            return 1 + pct / 100.0
+    return 1.0
+
+
+def matrice_majoree(mn: list, departs: dict, pointes: list) -> list:
+    """La matrice des minutes, chaque ligne (origine) majorée selon l'heure à laquelle on en repart. PURE.
+    `departs` : {nœud: minute de départ} connue d'une première résolution ; nœud absent = pas de majoration."""
+    if not pointes:
+        return mn
+    return [[int(round(x * facteur_pointe(departs[i], pointes))) if i in departs and x else x for x in ligne]
+            for i, ligne in enumerate(mn)]
 
 
 # ── Solveur ─────────────────────────────────────────────────────────────────
@@ -602,49 +622,71 @@ def proposer(date, fenetre=None, employes=None):
         fen = None if not fenetre else (max(cfg["premiere"], a["debut"] - fenetre), min(fin_j, max(a["debut"] + fenetre, cfg["premiere"])))
         return {"service": a["service"], "fenetre": fen, "vehicule": None}
 
-    noeuds = [_noeud(a) for a in arrets]
-    sol = resoudre(mn, noeuds, len(employes), debut_j, fin_j, cfg["equilibre"], premiere=cfg["premiere"], depots=depots,
-                   marge=cfg["marge"], pause=cfg["pause"], debuts=debuts, fins=fins)
     par_noeud = {a["noeud"]: a for a in arrets}
-    if sol["non_places"]:
-        # Ce qui n'a pas trouvé place reste où c'est (employé, heure) et la tournée se recalcule autour,
-        # pour que la proposition soit complète et comparable à l'existant.
-        for n in sol["non_places"]:
-            a = par_noeud[n]
-            a["mobile"] = False
-            v = employes.index(a["employe"])
-            fins[v] = max(fins[v], a["debut"] + a["service"] + mn[n][depot_de[a["employe"]]])
-            fin_j = max(fins)
+
+    def _passes(mn_x):
+        """Les trois passes (libre → non placées fixées → non placées en créneaux occupés) sur une matrice donnée."""
+        nonlocal fin_j
         noeuds = [_noeud(a) for a in arrets]
-        sol = resoudre(mn, noeuds, len(employes), debut_j, fin_j, cfg["equilibre"], premiere=cfg["premiere"], depots=depots,
+        sol = resoudre(mn_x, noeuds, len(employes), debut_j, fin_j, cfg["equilibre"], premiere=cfg["premiere"], depots=depots,
                        marge=cfg["marge"], pause=cfg["pause"], debuts=debuts, fins=fins)
-    if sol["non_places"]:
-        # Toujours impossibles (deux rendez-vous à la même heure…) : elles restent telles quelles ET occupent
-        # leur créneau — les autres arrêts du même employé se calculent autour.
-        bloques = set(sol["non_places"])
-        occupations = {}
-        for n in bloques:
-            a = par_noeud[n]
-            occupations.setdefault(employes.index(a["employe"]), []).append((a["debut"], a["debut"] + a["service"]))
-        restants = [a for a in arrets if a["noeud"] not in bloques]
-        nb_depots = len(points) - len(arrets)
-        garder = list(range(nb_depots)) + [a["noeud"] for a in restants]
-        mn2 = [[mn[i][j] for j in garder] for i in garder]
-        noeuds = [_noeud(a) for a in restants]
-        sol2 = resoudre(mn2, noeuds, len(employes), debut_j, fin_j, cfg["equilibre"], premiere=cfg["premiere"], depots=depots,
-                        marge=cfg["marge"], pause=cfg["pause"], occupations=occupations, debuts=debuts, fins=fins)
-        inverse = {nb_depots + i: a["noeud"] for i, a in enumerate(restants)}    # retour aux nœuds d'origine
-        sol = {"routes": [[(inverse[n], t) for n, t in r] for r in sol2["routes"]],
-               "non_places": sorted(bloques | {inverse[n] for n in sol2["non_places"]}), "cout": sol2["cout"]}
+        if sol["non_places"]:
+            # Ce qui n'a pas trouvé place reste où c'est (employé, heure) et la tournée se recalcule autour,
+            # pour que la proposition soit complète et comparable à l'existant.
+            for n in sol["non_places"]:
+                a = par_noeud[n]
+                a["mobile"] = False
+                v = employes.index(a["employe"])
+                fins[v] = max(fins[v], a["debut"] + a["service"] + mn_x[n][depot_de[a["employe"]]])
+                fin_j = max(fins)
+            noeuds = [_noeud(a) for a in arrets]
+            sol = resoudre(mn_x, noeuds, len(employes), debut_j, fin_j, cfg["equilibre"], premiere=cfg["premiere"], depots=depots,
+                           marge=cfg["marge"], pause=cfg["pause"], debuts=debuts, fins=fins)
+        if sol["non_places"]:
+            # Toujours impossibles (deux rendez-vous à la même heure…) : elles restent telles quelles ET occupent
+            # leur créneau — les autres arrêts du même employé se calculent autour.
+            bloques = set(sol["non_places"])
+            occupations = {}
+            for n in bloques:
+                a = par_noeud[n]
+                occupations.setdefault(employes.index(a["employe"]), []).append((a["debut"], a["debut"] + a["service"]))
+            restants = [a for a in arrets if a["noeud"] not in bloques]
+            nb_depots = len(points) - len(arrets)
+            garder = list(range(nb_depots)) + [a["noeud"] for a in restants]
+            mn2 = [[mn_x[i][j] for j in garder] for i in garder]
+            noeuds = [_noeud(a) for a in restants]
+            sol2 = resoudre(mn2, noeuds, len(employes), debut_j, fin_j, cfg["equilibre"], premiere=cfg["premiere"], depots=depots,
+                            marge=cfg["marge"], pause=cfg["pause"], occupations=occupations, debuts=debuts, fins=fins)
+            inverse = {nb_depots + i: a["noeud"] for i, a in enumerate(restants)}    # retour aux nœuds d'origine
+            sol = {"routes": [[(inverse[n], t) for n, t in r] for r in sol2["routes"]],
+                   "non_places": sorted(bloques | {inverse[n] for n in sol2["non_places"]}), "cout": sol2["cout"]}
+
+        return sol
+
+    sol = _passes(mn)
+    mn_ap = mn
+    if cfg["pointes"]:
+        # Heures de pointe : OSRM ne connaît pas le trafic. On lit l'heure de départ de chaque trajet dans la première
+        # résolution, on majore les trajets qui partent en pointe, et on résout à nouveau.
+        departs = {depots[v]: debuts[v] for v in range(len(employes))}
+        for v, r in enumerate(sol["routes"]):
+            for n, t in r:
+                departs[n] = t + par_noeud[n]["service"]
+        mn_ap = matrice_majoree(mn, departs, cfg["pointes"])
+        sol = _passes(mn_ap)
+    # La tournée ACTUELLE, majorée aux heures où elle roule vraiment : comparable à la proposition.
+    departs_actuels = {depots[v]: debuts[v] for v in range(len(employes))}
+    departs_actuels.update({a["noeud"]: a["debut"] + a["service"] for a in arrets})
+    mn_av = matrice_majoree(mn, departs_actuels, cfg["pointes"]) if cfg["pointes"] else mn
 
     out, tot_av, tot_ap, km_av, km_ap = [], 0, 0, 0.0, 0.0
     for v, e in enumerate(employes):
         actuels = [a for a in arrets if a["employe"] == e]
         dep = depot_de[e]
-        m_av, k_av = _route_actuelle(actuels, mn, km, dep)
+        m_av, k_av = _route_actuelle(actuels, mn_av, km, dep)
         route = sol["routes"][v]
         ordre = [dep] + [n for n, _t in route] + [dep]
-        m_ap = sum(mn[ordre[i]][ordre[i + 1]] for i in range(len(ordre) - 1))
+        m_ap = sum(mn_ap[ordre[i]][ordre[i + 1]] for i in range(len(ordre) - 1))
         k_ap = round(sum(km[ordre[i]][ordre[i + 1]] for i in range(len(ordre) - 1)), 1)
         apres = []
         # Les tâches que même fixées le solveur n'a pu servir (deux rendez-vous à la même heure chez le même
@@ -675,6 +717,7 @@ def proposer(date, fenetre=None, employes=None):
             "decalees": sum(1 for e in out for a in e["apres"]["arrets"] if a["decale"] and not a["deplace"]),
             "non_places": non_places, "avertissements": avert, "journee": [_hm(debut_j), _hm(fin_j)], "premiere": _hm(cfg["premiere"]),
             "fenetre": fenetre, "marge": cfg["marge"], "pause": [_hm(cfg["pause"][0]), _hm(cfg["pause"][1])] if cfg["pause"] else None,
+            "pointes": ["%s–%s +%d %%" % (_hm(d), _hm(f), pct) for d, f, pct in cfg["pointes"]],
             "sans_domicile": [noms.get(e, e) for e, p in choix.items() if p == "domicile" and e not in cfg["departs"] and e in noms]}
 
 

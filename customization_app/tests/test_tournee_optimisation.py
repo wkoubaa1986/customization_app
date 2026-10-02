@@ -37,6 +37,17 @@ class TestDurees(unittest.TestCase):
         self.assertEqual(d("Inconnu", None, None), 60)
 
 
+class TestPointes(unittest.TestCase):
+    def test_facteur_et_matrice(self):
+        pointes = [(7 * 60 + 30, 9 * 60, 30), (12 * 60, 13 * 60 + 30, 20)]
+        self.assertEqual(T.facteur_pointe(8 * 60, pointes), 1.3)
+        self.assertEqual(T.facteur_pointe(9 * 60, pointes), 1.0)             # borne de fin exclue
+        self.assertEqual(T.facteur_pointe(12 * 60 + 30, pointes), 1.2)
+        mn = [[0, 10], [10, 0]]
+        self.assertEqual(T.matrice_majoree(mn, {0: 8 * 60}, pointes), [[0, 13], [10, 0]])   # seule la ligne « part à 8 h » est majorée
+        self.assertEqual(T.matrice_majoree(mn, {0: 8 * 60}, []), mn)
+
+
 class TestSolveur(unittest.TestCase):
     def test_depart_particulier(self):
         # véhicule 1 part de l'ouest (nœud 1) : il prend naturellement l'arrêt ouest, l'autre l'arrêt est.
@@ -127,7 +138,7 @@ class TestJournee(unittest.TestCase):
         self._config = T.config
         T.config = lambda: {"depot": T.DEPOT_DEFAUT, "departs": {}, "debut": 8 * 60, "premiere": 9 * 60, "fin": 17 * 60,
                             "types": list(T.TYPES_MOBILES_DEFAUT), "osrm": T.OSRM_DEFAUT, "equilibre": 1, "exclus": set(),
-                            "pause": None, "marge": 0, "fenetre": 0, "horaires": {}}
+                            "pause": None, "marge": 0, "fenetre": 0, "horaires": {}, "pointes": []}
         if not frappe.db.has_column("Tache de travail", "custom_tournee_fixe"):
             self.skipTest("patch ensure_tournee_fields non joué")
         emps = frappe.get_all("Employee", filters={"status": "Active"}, pluck="name", order_by="name", limit=2)
