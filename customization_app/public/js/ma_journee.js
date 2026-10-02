@@ -171,7 +171,15 @@ frappe.provide("frappe.views");
                     ? lignes.map((l) => this._carte(l, esc)).join("")
                     : `<div class="mj-vide">${__("Aucune intervention ce jour-là.")}</div>`);
 
+            const transferts = (m.transferts_a_valider || []);
+            const bandeau = transferts.length ? `
+              <div class="mj-transferts" style="border:1px solid #f59e0b;background:#fffbeb;border-radius:12px;padding:10px 12px;margin:6px 0 10px">
+                <div style="font-weight:700;color:#92400e">📥 ${transferts.length} ${__("transfert(s) à valider vers votre stock")}</div>
+                ${transferts.map((t) => `<div style="font-size:12.5px;color:#78350f;margin-top:2px">${esc(t.name)} · ${esc(t.de)} · ${t.articles} ${__("article(s)")} · ${esc(t.par)} · ${esc(t.quand)}</div>`).join("")}
+                <a class="btn btn-sm btn-primary" style="margin-top:8px" href="/app/stock-entrepots?valider=${encodeURIComponent(transferts[0].name)}">✅ ${__("Vérifier et confirmer la réception")}</a>
+              </div>` : "";
             this.$corps.html(`
+              ${bandeau}
               <div class="mj-bar">
                 <input type="date" class="form-control" data-jour value="${esc(this.jour)}">
                 ${selecteur}

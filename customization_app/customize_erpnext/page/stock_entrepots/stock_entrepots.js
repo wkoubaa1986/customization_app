@@ -76,8 +76,93 @@ class StockEntrepots {
     });
     r.find("#se-debut, #se-fin").on("change", () => this.chargerSorties());
     if (ctx.responsable) this.initTransfert();
+    r.find("#se-s-attente").on("click", "[data-valider]", (e) => this.ouvrirValidation($(e.currentTarget).attr("data-valider")));
+    frappe.realtime.on("se_transferts_a_valider", () => { this.chargerAttente(); if (this.onglet === "transfert") this.chargerHistorique(); });
     this.pret = true;
     this.montrer("solde");
+    await this.chargerAttente();
+    const voulu = frappe.route_options && frappe.route_options.valider;
+    if (voulu) { frappe.route_options = null; this.ouvrirValidation(voulu); }
+  }
+
+  // ── Transferts en attente de validation (double validation Magasin → stock d'un employé) ──
+  /** Les demandes en attente : les miennes en bandeau (Solde), toutes en badge de l'onglet Transfert. */
+  async chargerAttente() {
+    const liste = (await frappe.call({ method: SE_API + "transferts_a_valider" })).message || [];
+    this.attente = liste;
+    const miens = liste.filter((t) => t.employe && t.employe === this.ctx.employe_id);
+    this.$r.find("#se-s-attente").html(miens.map((t) => `<div class="se-bandeau">
+        <div class="t">📥 Transfert ${se_esc(t.name)} à valider — ${se_esc(this.libelle(t.de))} → votre stock</div>
+        <div class="d">${t.lignes.length} article(s) · ${se_esc(t.par)} · ${se_esc(t.quand)}${t.remarque ? ` · ${se_esc(t.remarque)}` : ""}</div>
+        <button type="button" class="btn btn-primary btn-sm" data-valider="${se_esc(t.name)}">✅ Vérifier et confirmer la réception</button>
+      </div>`).join(""));
+    this.$r.find("#se-t-badge").toggle(!!liste.length).text(liste.length);
+  }
+
+  /** Feuille de détail d'un transfert : photo, code, nom, quantité ; état de validation. */
+  ouvrirDetail(t) {
+    const lignes = (t.lignes || []).map((l) => `<div class="se-z-ligne">${se_img(l.image)}
+        <div style="flex:1;min-width:0"><div class="se-nom">${se_esc(l.item_name || l.item_code)}</div><div class="se-code">${se_esc(l.item_code)}</div></div>
+        <div class="mvt">${se_q(l.qte)}<small>${se_esc(l.uom || "")}</small></div></div>`).join("");
+    const etat = t.attente ? `<div class="se-attente ${t.attente.age_h > 24 ? "vieux" : ""}">⏳ En attente de validation de ${se_esc(t.attente.employe_nom)}</div>`
+      : t.validation ? `<div class="se-valide">✅ Réception confirmée par ${se_esc(t.validation.par)} le ${se_esc(t.validation.le)}${t.validation.ecart ? `<div class="ecart">⚠️ ${se_esc(t.validation.ecart)}</div>` : ""}</div>`
+      : t.docstatus === 2 ? `<span class="se-badge">annulé</span>` : "";
+    const d = new frappe.ui.Dialog({ title: `🔁 ${t.name}`, size: "large", fields: [{ fieldtype: "HTML", fieldname: "corps" }] });
+    d.fields_dict.corps.$wrapper.html(`<div class="se-note">${se_esc(this.libelle(t.de))} → <b>${se_esc(this.libelle(t.vers))}</b> · ${se_esc(t.par)} · ${se_esc(t.quand || `${se_dt(t.date)} ${t.heure || ""}`)}</div>
+      ${etat}${t.remarque ? `<div class="se-note">${se_esc(t.remarque)}</div>` : ""}
+      <div style="margin-top:8px">${lignes}</div>
+      <div class="se-note" style="margin-top:8px">${(t.lignes || []).length} article(s) · ${se_q((t.lignes || []).reduce((a, l) => a + l.qte, 0))} unité(s) · ${se_lien("Stock Entry", t.name, "ouvrir la fiche")}</div>`);
+    d.show();
+  }
+
+  /** L'employé confirme la réception, quantité par quantité : baisser = écart tracé, 0 = non reçu. */
+  async ouvrirValidation(name) {
+    const t = (this.attente || []).find((x) => x.name === name)
+      || ((await frappe.call({ method: SE_API + "transferts_a_valider" })).message || []).find((x) => x.name === name);
+    if (!t) { frappe.show_alert({ message: `Le transfert ${se_esc(name)} n’est plus en attente.`, indicator: "orange" }, 5); this.chargerAttente(); return; }
+    const d = new frappe.ui.Dialog({ title: `📥 Réception ${t.name}`, size: "large", fields: [{ fieldtype: "HTML", fieldname: "corps" }],
+      primary_action_label: "✅ Confirmer la réception", primary_action: async () => {
+        const lignes = t.lignes.map((l) => ({ item_code: l.item_code, qte: +String(d.$wrapper.find(`input[data-recu="${CSS.escape(l.item_code)}"]`).val()).replace(",", ".") || 0 }));
+        const ecarts = lignes.filter((l, i) => l.qte !== t.lignes[i].qte).length;
+        const go = async () => {
+          d.hide();
+          const res = (await frappe.call({ method: SE_API + "valider_transfert", args: { name: t.name, lignes }, freeze: true, freeze_message: "Réception…" })).message;
+          frappe.show_alert({ message: res.supprime ? `Rien reçu : demande ${se_esc(t.name)} retirée` : `✅ Réception confirmée : ${res.lignes} article(s)${res.ecarts.length ? ` · ${res.ecarts.length} écart(s) signalé(s)` : ""}`,
+            indicator: res.supprime ? "orange" : res.ecarts.length ? "yellow" : "green" }, 6);
+          this.chargerAttente(); this.rafraichir();
+        };
+        if (ecarts) frappe.confirm(`<b>${ecarts}</b> quantité(s) différente(s) de l’envoi : l’écart sera signalé à ${se_esc(t.par)}. Confirmer ?`, go);
+        else go();
+      } });
+    d.fields_dict.corps.$wrapper.html(`<div class="se-note">${se_esc(this.libelle(t.de))} → <b>${se_esc(this.libelle(t.vers))}</b> · demandé par ${se_esc(t.par)} · ${se_esc(t.quand)}${t.remarque ? ` · ${se_esc(t.remarque)}` : ""}</div>
+      <div class="se-note">Vérifiez chaque article : corrigez la quantité si le carton ne correspond pas (0 = non reçu).</div>
+      <div style="margin-top:8px">${t.lignes.map((l) => `<div class="se-cb-ligne">${se_img(l.image)}
+        <div class="txt"><div class="se-nom" style="font-size:13.5px">${se_esc(l.item_name || l.item_code)}</div><div class="se-code">${se_esc(l.item_code)} · envoyé <b>${se_q(l.qte)}</b> ${se_esc(l.uom || "")}</div></div>
+        <input type="number" inputmode="decimal" min="0" max="${se_esc(l.qte)}" step="any" class="form-control c" data-recu="${se_esc(l.item_code)}" value="${se_esc(l.qte)}"></div>`).join("")}</div>`);
+    d.show();
+  }
+
+  /** Transfert : complète le panier avec ce qui manque au stock cible de la destination (articles ciblés seulement). */
+  async reassortCible() {
+    const [source, cible] = this.sens();
+    const d = (await frappe.call({ method: SE_API + "get_stock_cible", args: { entrepot: cible } })).message;
+    const manque = (d.lignes || []).filter((l) => l.manque > 0);
+    if (!manque.length) { frappe.show_alert({ message: `Rien à compléter : ${se_esc(this.libelle(cible))} est au niveau de son stock cible.`, indicator: "green" }, 5); return; }
+    let ajoutes = 0;
+    manque.forEach((l) => {
+      if (this.panier.some((x) => x.item_code === l.item_code)) return;
+      this.panier.push({ item_code: l.item_code, item_name: l.item_name, image: l.image, uom: l.uom, qte: l.manque, qte_source: l.qte_source, qte_cible: l.qte });
+      ajoutes += 1;
+    });
+    await this.majQuantitesPanier();
+    this.peindreTrouves();
+    frappe.show_alert({ message: `🎯 ${ajoutes} article(s) ajouté(s) depuis le stock cible de ${se_esc(this.libelle(cible))}${manque.length - ajoutes ? ` (${manque.length - ajoutes} déjà dans le panier)` : ""} — vérifiez puis validez`, indicator: "blue" }, 6);
+  }
+
+  majBoutonReassort() {
+    const [, cible] = this.sens();
+    const w = this.ctx.entrepots.find((x) => x.name === cible);
+    this.$r.find("#se-t-reassort").toggle(!!(w && !w.magasin && (this.ctx.cibles || []).includes(cible)));
   }
 
   montrer(onglet) {
@@ -430,18 +515,26 @@ class StockEntrepots {
     const autre = ctx.entrepots.find((w) => w.name !== ctx.magasin && w.employes.length) || ctx.entrepots.find((w) => w.name !== ctx.magasin);
     r.find("#se-t-de").val(ctx.magasin);
     r.find("#se-t-vers").val(ctx.mien && ctx.mien !== ctx.magasin ? ctx.mien : autre ? autre.name : ctx.magasin);
-    r.find("#se-t-de, #se-t-vers").on("change", () => { this.chercherArticles(); this.majQuantitesPanier(); });
+    r.find("#se-t-de, #se-t-vers").on("change", () => { this.chercherArticles(); this.majQuantitesPanier(); this.majBoutonReassort(); });
+    r.find("#se-t-reassort").on("click", () => this.reassortCible());
     r.find("#se-t-inverser").on("click", () => {
       const de = r.find("#se-t-de").val();
       r.find("#se-t-de").val(r.find("#se-t-vers").val());
       r.find("#se-t-vers").val(de);
       this.chercherArticles();
       this.majQuantitesPanier();
+      this.majBoutonReassort();
     });
     let t = null;
     r.find("#se-t-recherche").on("input", () => { clearTimeout(t); t = setTimeout(() => this.chercherArticles(), 250); });
     r.find("#se-t-recherche").on("keydown", (e) => { if (e.key === "Enter") e.preventDefault(); });
-    r.find("#se-t-trouves").on("click", "[data-ajouter]", (e) => this.ajouterAuPanier($(e.currentTarget).attr("data-ajouter")));
+    r.find("#se-t-trouves").on("click", "[data-ajouter]", (e) => {
+      const $b = $(e.currentTarget), $q = $b.closest(".se-z-ligne").find("input[data-qte-trouve]");
+      this.ajouterAuPanier($b.attr("data-ajouter"), +String($q.val()).replace(",", ".") || 1);
+    });
+    r.find("#se-t-trouves").on("keydown", "input[data-qte-trouve]", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); $(e.currentTarget).closest(".se-z-ligne").find("[data-ajouter]").trigger("click"); }
+    });
     r.find("#se-t-panier").on("click", "[data-pas]", (e) => {
       const $b = $(e.currentTarget), l = this.panier.find((x) => x.item_code === $b.attr("data-item"));
       if (!l) return;
@@ -459,8 +552,14 @@ class StockEntrepots {
     });
     r.find("#se-t-valider").on("click", () => this.validerTransfert());
     r.find("#se-t-historique").on("click", "[data-annuler]", (e) => this.annulerTransfert($(e.currentTarget).attr("data-annuler")));
+    r.find("#se-t-historique").on("click", "[data-detail]", (e) => {
+      const t = (this.historique || []).find((x) => x.name === $(e.currentTarget).attr("data-detail"));
+      if (t) this.ouvrirDetail(t);
+    });
+    r.find("#se-t-historique").on("click", "[data-valider]", (e) => this.ouvrirValidation($(e.currentTarget).attr("data-valider")));
     this.trouves = [];
     this.peindrePanier();
+    this.majBoutonReassort();
   }
 
   sens() {
@@ -483,16 +582,18 @@ class StockEntrepots {
         <div class="txt" style="flex:1;min-width:0"><div class="se-nom">${se_esc(a.item_name || a.item_code)}</div>
           <div class="se-code">${se_esc(a.item_code)} · ${se_esc(this.libelle(de))} <b class="${a.qte_source < 0 ? "neg" : ""}">${se_q(a.qte_source)}</b>
             · ${se_esc(this.libelle(vers))} <b class="${a.qte_cible < 0 ? "neg" : ""}">${se_q(a.qte_cible)}</b></div></div>
+        <input type="number" inputmode="decimal" min="0" step="any" class="form-control se-qte-trouve" data-qte-trouve value="1" title="Quantité à ajouter">
         <span class="se-bt ${dans.has(a.item_code) ? "fait" : ""}" data-ajouter="${se_esc(a.item_code)}" title="Ajouter">${dans.has(a.item_code) ? "✓" : "＋"}</span>
       </div>`).join("") || ((this.$r.find("#se-t-recherche").val() || "").trim().length >= 2 ? `<div class="se-vide">Aucun article suivi en stock ne correspond.</div>` : ""));
   }
 
-  ajouterAuPanier(item) {
+  ajouterAuPanier(item, qte) {
     const a = this.trouves.find((x) => x.item_code === item);
     if (!a) return;
+    const n = Math.max(qte > 0 ? qte : 1, 0.001);
     const l = this.panier.find((x) => x.item_code === item);
-    if (l) l.qte = (+l.qte || 0) + 1;
-    else this.panier.push(Object.assign({}, a, { qte: 1 }));
+    if (l) l.qte = (+l.qte || 0) + n;
+    else this.panier.push(Object.assign({}, a, { qte: n }));
     this.peindrePanier();
     this.peindreTrouves();
   }
@@ -534,8 +635,10 @@ class StockEntrepots {
       try {
         const res = (await frappe.call({ method: SE_API + "creer_transfert", freeze: true, freeze_message: "Transfert…",
           args: { source, cible, lignes, remarque: this.$r.find("#se-t-remarque").val() || null } })).message;
-        frappe.show_alert({ message: `✅ Transfert ${se_esc(res.name)} : ${res.lignes} article(s)`, indicator: "green" }, 6);
+        frappe.show_alert({ message: res.en_attente ? `⏳ Transfert ${se_esc(res.name)} : ${res.lignes} article(s) — en attente de la validation de ${se_esc(res.employe_nom)} (le stock bougera à sa confirmation)`
+            : `✅ Transfert ${se_esc(res.name)} : ${res.lignes} article(s)`, indicator: res.en_attente ? "yellow" : "green" }, 8);
         this.panier = [];
+        this.chargerAttente();
         this.$r.find("#se-t-remarque").val("");
         this.chercherArticles();
         this.chargerHistorique();
@@ -549,21 +652,32 @@ class StockEntrepots {
   async chargerHistorique() {
     const res = await this.appel("historique", "transferts_recents", { limite: 15 });
     if (!res) return;
-    this.$r.find("#se-t-historique").html(res.map((t) => `<div class="se-card se-tr ${t.docstatus === 2 ? "annule" : ""}">
+    this.historique = res;
+    const moi = this.ctx.employe_id;
+    this.$r.find("#se-t-historique").html(res.map((t) => `<div class="se-card se-tr ${t.docstatus === 2 ? "annule" : ""} ${t.attente ? `attente ${t.attente.age_h > 24 ? "vieux" : ""}` : ""}">
         <div class="tete"><span>${se_lien("Stock Entry", t.name)} ${t.docstatus === 2 ? `<span class="se-badge">annulé</span>` : ""}</span>
           <span class="se-note">${se_dt(t.date)} ${se_esc(t.heure)} · ${se_esc(t.par)}</span></div>
         <div class="sens">${se_esc(this.libelle(t.de || (t.lignes[0] || {}).de))} → ${se_esc(this.libelle(t.vers || (t.lignes[0] || {}).vers))}</div>
+        ${t.attente ? `<div class="se-attente ${t.attente.age_h > 24 ? "vieux" : ""}">⏳ En attente de validation de ${se_esc(t.attente.employe_nom)}${t.attente.age_h > 24 ? ` · depuis ${Math.round(t.attente.age_h / 24)} j` : ""}</div>` : ""}
+        ${t.validation ? `<div class="se-valide">✅ Réception confirmée par ${se_esc(t.validation.par)} le ${se_esc(t.validation.le)}${t.validation.ecart ? `<div class="ecart">⚠️ ${se_esc(t.validation.ecart)}</div>` : ""}</div>` : ""}
         <div class="det">${t.lignes.slice(0, 6).map((l) => `${se_esc(l.item_name || l.item_code)} <b>${se_q(l.qte)}</b>`).join(" · ")}${t.lignes.length > 6 ? ` · … +${t.lignes.length - 6}` : ""}</div>
         ${t.remarque ? `<div class="se-note">${se_esc(t.remarque)}</div>` : ""}
-        ${t.docstatus === 1 ? `<div class="actions"><button type="button" class="btn btn-xs btn-default" data-annuler="${se_esc(t.name)}">Annuler ce transfert</button></div>` : ""}
+        <div class="actions"><button type="button" class="btn btn-xs btn-default" data-detail="${se_esc(t.name)}">🔍 Détail</button>
+          ${t.attente && t.attente.employe === moi ? `<button type="button" class="btn btn-xs btn-primary" data-valider="${se_esc(t.name)}">✅ Confirmer la réception</button>` : ""}
+          ${t.docstatus === 1 ? `<button type="button" class="btn btn-xs btn-default" data-annuler="${se_esc(t.name)}">Annuler ce transfert</button>` : ""}
+          ${t.attente ? `<button type="button" class="btn btn-xs btn-default" data-annuler="${se_esc(t.name)}">Annuler la demande</button>` : ""}</div>
       </div>`).join("") || `<div class="se-vide">Aucun transfert.</div>`);
   }
 
   annulerTransfert(name) {
-    frappe.confirm(`Annuler le transfert <b>${se_esc(name)}</b> ? Les quantités reviennent à leur place.`, async () => {
+    const t = (this.historique || []).find((x) => x.name === name);
+    const texte = t && t.attente ? `Retirer la demande <b>${se_esc(name)}</b> en attente de ${se_esc(t.attente.employe_nom)} ? Rien n’a bougé en stock.`
+      : `Annuler le transfert <b>${se_esc(name)}</b> ? Les quantités reviennent à leur place.`;
+    frappe.confirm(texte, async () => {
       await frappe.call({ method: SE_API + "annuler_transfert", args: { name }, freeze: true });
       frappe.show_alert({ message: `Transfert ${se_esc(name)} annulé`, indicator: "orange" }, 5);
       this.chargerHistorique();
+      this.chargerAttente();
       this.majQuantitesPanier();
     });
   }

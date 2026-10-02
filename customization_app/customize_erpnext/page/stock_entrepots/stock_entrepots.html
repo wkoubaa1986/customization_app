@@ -74,6 +74,18 @@
     .se-tr .sens { font-size: 13.5px; font-weight: 600; margin: 3px 0; }
     .se-tr .det { font-size: 12.5px; color: #475569; }
     .se-tr.annule { opacity: .55; }
+    .se-tr.attente { border-color: #f59e0b; background: #fffbeb; }
+    .se-tr.attente.vieux { border-color: #dc2626; }
+    .se-attente { display: inline-block; font-size: 11.5px; border-radius: 6px; padding: 1px 7px; background: #fef3c7; color: #b45309; font-weight: 600; }
+    .se-attente.vieux { background: #fee2e2; color: #b91c1c; }
+    .se-valide { font-size: 12px; color: #15803d; margin-top: 3px; }
+    .se-valide .ecart { color: #b91c1c; font-weight: 600; }
+    .se-badge-n { display: inline-block; min-width: 18px; font-size: 11px; border-radius: 9px; padding: 0 5px; background: #f59e0b; color: #fff; margin-left: 4px; font-weight: 700; }
+    .se-bandeau { border: 1px solid #f59e0b; background: #fffbeb; border-radius: 12px; padding: 10px 12px; margin: 6px 0 10px; }
+    .se-bandeau .t { font-weight: 700; font-size: 14px; color: #92400e; }
+    .se-bandeau .d { font-size: 12.5px; color: #78350f; margin-top: 2px; }
+    .se-bandeau .btn { margin-top: 8px; }
+    .se-qte-trouve { flex: none; width: 56px; height: 38px; text-align: center; font-size: 15px; font-weight: 700; margin-right: 6px; }
     .se-tr .actions { margin-top: 6px; display: flex; gap: 8px; }
 
     .se-wz .t { font-size: 15.5px; font-weight: 700; }
@@ -133,7 +145,7 @@
   <div class="se-onglets">
     <div class="se-onglet on" data-onglet="solde"><span class="ic">📦</span>Solde</div>
     <div class="se-onglet" data-onglet="sorties"><span class="ic">📤</span>Sorties</div>
-    <div class="se-onglet" data-onglet="transfert"><span class="ic">🔁</span>Transfert</div>
+    <div class="se-onglet" data-onglet="transfert"><span class="ic">🔁</span>Transfert<span class="se-badge-n" id="se-t-badge" style="display:none"></span></div>
     <div class="se-onglet" data-onglet="zero"><span class="ic">0️⃣</span>À zéro</div>
     <div class="se-onglet" data-onglet="verif"><span class="ic">✅</span>Vérif.</div>
   </div>
@@ -141,6 +153,7 @@
   <div class="se-chips" id="se-entrepots"></div>
 
   <div class="se-vue" data-vue="solde">
+    <div id="se-s-attente"></div>
     <div class="se-ligne-filtres" style="margin-top:2px">
       <input type="search" class="form-control se-saisie" id="se-s-recherche" placeholder="🔎 Article (nom ou code)…">
     </div>
@@ -183,6 +196,7 @@
         <button type="button" class="se-inverser" id="se-t-inverser" title="Inverser">⇄</button>
         <div><label>Vers</label><select class="form-control" id="se-t-vers"></select></div>
       </div>
+      <div class="se-chips" style="margin-top:8px;padding-bottom:0"><span class="se-chip" id="se-t-reassort" style="display:none">🎯 Compléter selon le stock cible</span></div>
       <input type="search" class="form-control se-saisie" id="se-t-recherche" style="margin-top:10px"
              placeholder="➕ Ajouter un article suivi en stock (nom ou code)…">
       <div id="se-t-trouves"></div>
