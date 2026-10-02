@@ -399,3 +399,12 @@ class TestRattachement(unittest.TestCase):
         frappe.db.set_value(RO.DOCTYPE, self.nom, "statut", RO.S_REPAREE)
         with self.assertRaises(frappe.ValidationError):
             RO.rattacher_tache(self.nom, self.tache.name)
+
+
+class TestGabarit(unittest.TestCase):
+    def test_pas_d_apostrophe_droite(self):
+        """Le .html d'une page Desk finit dans une chaîne JS entre apostrophes : une seule ' casse la page (vécu le 02/10/2026)."""
+        import re
+        from pathlib import Path
+        html = (Path(__file__).parents[1] / "customize_erpnext/page/reparation_osmoseurs/reparation_osmoseurs.html").read_text()
+        self.assertNotIn("'", re.sub(r"<!--.*?-->", "", html, flags=re.S))
