@@ -1,0 +1,59 @@
+{
+ "actions": [],
+ "creation": "2026-10-02 13:43:07.139736",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "istable": 1,
+ "field_order": [
+  "employe",
+  "lien",
+  "latitude",
+  "longitude"
+ ],
+ "fields": [
+  {
+   "fieldname": "employe",
+   "fieldtype": "Link",
+   "label": "Employé",
+   "options": "Employee",
+   "reqd": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "lien",
+   "fieldtype": "Data",
+   "label": "Lien Google Maps du point de départ",
+   "reqd": 1,
+   "in_list_view": 1,
+   "columns": 5
+  },
+  {
+   "fieldname": "latitude",
+   "fieldtype": "Float",
+   "label": "Latitude",
+   "precision": "6",
+   "read_only": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "longitude",
+   "fieldtype": "Float",
+   "label": "Longitude",
+   "precision": "6",
+   "read_only": 1,
+   "in_list_view": 1
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-10-02 13:43:07.139736",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "Config Optimisation Tournees Depart",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

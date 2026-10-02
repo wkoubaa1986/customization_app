@@ -37,6 +37,9 @@ DEPOT_DEFAUT = (36.8700, 10.1950)        # Soukra, à défaut du lien du réglag
 VITESSE_KMH = 30.0                       # repli à vol d'oiseau
 ROLES = ("System Manager", "Responsable magasin")
 PAS_MIN = 5                              # les heures proposées tombent sur 5 min
+# Temps standard par type (celui de api.DUREE_INTERVENTION) : la durée retenue est ce standard, sauf si la tâche
+# planifie nettement plus (décision utilisateur 02/10/2026 : un « 15 min » ne raccourcit pas un entretien).
+DUREE_TYPE = {"Entretien": 30, "Installation": 75, "Réparation": 120, "Livraison": 30, "Visite": 120, "Autre": 60}
 DUREES_MIN = {"15 min": 15, "30 min": 30, "45 min": 45, "1 heure": 60, "1 heure, 15 min": 75, "1 heure, 30 min": 90,
               "1 heure, 45 min": 105, ">=2 heures": 120}
 
@@ -71,7 +74,10 @@ def config() -> dict:
     lat, lng = flt(v("depot_latitude")), flt(v("depot_longitude"))
     exclus = set(frappe.get_all("Config Optimisation Tournees Exclu", filters={"parent": CONFIG, "parenttype": CONFIG}, pluck="employe")) \
         if frappe.db.exists("DocType", "Config Optimisation Tournees Exclu") else set()
-    return {"depot": (lat, lng) if lat and lng else DEPOT_DEFAUT,
+    departs = {r.employe: (flt(r.latitude), flt(r.longitude)) for r in frappe.get_all(
+        "Config Optimisation Tournees Depart", filters={"parent": CONFIG, "parenttype": CONFIG}, fields=["employe", "latitude", "longitude"])
+        if r.latitude and r.longitude} if frappe.db.exists("DocType", "Config Optimisation Tournees Depart") else {}
+    return {"depot": (lat, lng) if lat and lng else DEPOT_DEFAUT, "departs": departs,
             "debut": _minutes(v("heure_debut"), 8 * 60), "fin": _minutes(v("heure_fin"), 17 * 60),
             "premiere": _minutes(v("heure_premiere"), 9 * 60),
             "types": types, "osrm": (v("osrm_url") or OSRM_DEFAUT).rstrip("/"),
@@ -219,16 +225,20 @@ def matrice(points: list, osrm: str) -> tuple[list, list, str]:
 # ── Solveur ─────────────────────────────────────────────────────────────────
 
 def resoudre(minutes: list, arrets: list, nb_vehicules: int, debut: int, fin: int, equilibre: int = 1,
-             limite_s: int = 5, premiere: int | None = None) -> dict:
-    """Tournées à fenêtres de temps (OR-Tools). Nœud 0 = dépôt. `arrets[i]` décrit le nœud i+1 :
-    {service: min, fenetre: (a, b) | None, vehicule: idx | None}. Les temps sont en minutes depuis minuit.
+             limite_s: int = 5, premiere: int | None = None, depots: list | None = None) -> dict:
+    """Tournées à fenêtres de temps (OR-Tools). `minutes` couvre tous les nœuds : les dépôts (nœud 0 = Magasin,
+    puis les points de départ particuliers) et les arrêts, qui occupent les DERNIERS nœuds. `arrets[i]` :
+    {service: min, fenetre: (a, b) | None, vehicule: idx | None}. `depots[v]` = nœud de départ ET de retour du
+    véhicule v (0 par défaut). Les temps sont en minutes depuis minuit.
     → {"routes": [[(noeud, arrivee), …] par véhicule], "non_places": [noeuds], "cout": minutes de route}."""
     from ortools.constraint_solver import pywrapcp, routing_enums_pb2
 
-    n = len(arrets) + 1
-    manager = pywrapcp.RoutingIndexManager(n, nb_vehicules, 0)
+    n = len(minutes)
+    nb_depots = n - len(arrets)
+    depots = [cint(d) for d in (depots or [0] * nb_vehicules)]
+    manager = pywrapcp.RoutingIndexManager(n, nb_vehicules, depots, depots)
     routing = pywrapcp.RoutingModel(manager)
-    service = [0] + [cint(a.get("service")) for a in arrets]
+    service = [0] * nb_depots + [cint(a.get("service")) for a in arrets]
 
     def transit(i, j):
         a, b = manager.IndexToNode(i), manager.IndexToNode(j)
@@ -242,7 +252,7 @@ def resoudre(minutes: list, arrets: list, nb_vehicules: int, debut: int, fin: in
     # Équilibrage : au-delà d'une part équitable de la journée (travail total / véhicules, + 1 h), chaque
     # minute de plus coûte. (Une somme des amplitudes pénalise au contraire le second véhicule, et le
     # solveur chargeait tout sur un seul — constaté en test.)
-    charge = sum(service) + sum(min((minutes[i][j] for j in range(n) if j != i), default=0) for i in range(1, n))
+    charge = sum(service) + sum(min((minutes[i][j] for j in range(n) if j != i), default=0) for i in range(nb_depots, n))
     equitable = debut + int(charge / max(nb_vehicules, 1)) + 60
     for v in range(nb_vehicules):
         temps.CumulVar(routing.Start(v)).SetRange(debut, debut)
@@ -251,7 +261,7 @@ def resoudre(minutes: list, arrets: list, nb_vehicules: int, debut: int, fin: in
             temps.SetCumulVarSoftUpperBound(routing.End(v), equitable, 2 * cint(equilibre))
         routing.AddVariableMinimizedByFinalizer(temps.CumulVar(routing.End(v)))
     for k, a in enumerate(arrets):
-        idx = manager.NodeToIndex(k + 1)
+        idx = manager.NodeToIndex(nb_depots + k)
         fen = a.get("fenetre") or (max(debut, premiere or debut), fin)     # pas de visite libre avant « première »
         temps.CumulVar(idx).SetRange(cint(fen[0]), cint(fen[1]))
         if a.get("vehicule") is not None:
@@ -266,39 +276,43 @@ def resoudre(minutes: list, arrets: list, nb_vehicules: int, debut: int, fin: in
     params.time_limit.FromSeconds(limite_s)
     sol = routing.SolveWithParameters(params)
     if not sol:
-        return {"routes": [[] for _ in range(nb_vehicules)], "non_places": list(range(1, n)), "cout": 0}
+        return {"routes": [[] for _ in range(nb_vehicules)], "non_places": list(range(nb_depots, n)), "cout": 0}
     routes, places = [], set()
     for v in range(nb_vehicules):
         r, idx = [], routing.Start(v)
         while not routing.IsEnd(idx):
             node = manager.IndexToNode(idx)
-            if node != 0:
+            if node >= nb_depots:
                 r.append((node, sol.Min(temps.CumulVar(idx))))
                 places.add(node)
             idx = sol.Value(routing.NextVar(idx))
         routes.append(r)
-    return {"routes": routes, "non_places": [k for k in range(1, n) if k not in places], "cout": sol.ObjectiveValue()}
+    return {"routes": routes, "non_places": [k for k in range(nb_depots, n) if k not in places], "cout": sol.ObjectiveValue()}
 
 
 # ── Proposition ─────────────────────────────────────────────────────────────
 
+def duree_retenue(type_: str | None, planifie: int | None, temps: str | None) -> int:
+    """Standard du type, sauf planifié (créneau du calendrier, à défaut le champ Temps) NETTEMENT plus long. PURE."""
+    standard = DUREE_TYPE.get(type_ or "", 60)
+    propre = planifie if planifie and 5 <= planifie <= 480 else DUREES_MIN.get(temps or "")
+    return propre if propre and propre > standard else standard
+
+
 def _duree(t) -> int:
-    if t.get("temps") in DUREES_MIN:
-        return DUREES_MIN[t.temps]
+    planifie = None
     if t.get("starts_on") and t.get("ends_on"):
-        d = int((get_datetime(t.ends_on) - get_datetime(t.starts_on)).total_seconds() // 60)
-        if 5 <= d <= 480:
-            return d
-    return 60
+        planifie = int((get_datetime(t.ends_on) - get_datetime(t.starts_on)).total_seconds() // 60)
+    return duree_retenue(t.get("custom_type_dintervention"), planifie, t.get("temps"))
 
 
 def _hm(minutes: int) -> str:
     return "%02d:%02d" % (minutes // 60, minutes % 60)
 
 
-def _route_actuelle(arrets_emp: list, mn: list, km: list) -> tuple[int, float]:
+def _route_actuelle(arrets_emp: list, mn: list, km: list, depot: int = 0) -> tuple[int, float]:
     """Minutes et km de la tournée telle qu'elle est (ordre des heures), dépôt → … → dépôt."""
-    ordre = [0] + [a["noeud"] for a in sorted(arrets_emp, key=lambda a: a["debut"])] + [0]
+    ordre = [depot] + [a["noeud"] for a in sorted(arrets_emp, key=lambda a: a["debut"])] + [depot]
     return (sum(mn[ordre[i]][ordre[i + 1]] for i in range(len(ordre) - 1)),
             round(sum(km[ordre[i]][ordre[i + 1]] for i in range(len(ordre) - 1)), 1))
 
@@ -346,14 +360,22 @@ def proposer(date):
     if not employes:
         return {"date": str(jour), "employes": [], "message": _("Aucun employé n’a de tâche de terrain ce jour-là.")}
     noms = {e.name: e.employee_name for e in frappe.get_all("Employee", filters={"name": ["in", employes]}, fields=["name", "employee_name"])}
+    # Points de départ particuliers (domicile…) : insérés juste après le Magasin, les arrêts décalés d'autant.
+    particuliers = [e for e in employes if e in cfg["departs"]]
+    decalage = len(particuliers)
+    for a in arrets:
+        a["noeud"] += decalage
+    points = [points[0]] + [cfg["departs"][e] for e in particuliers] + points[1:]
+    depot_de = {e: (1 + particuliers.index(e) if e in cfg["departs"] else 0) for e in employes}
+    depots = [depot_de[e] for e in employes]
     mn, km, source = matrice(points, cfg["osrm"])
     debut_j, fin_j = cfg["debut"], cfg["fin"]
     for a in arrets:
         if not a["mobile"]:
-            debut_j, fin_j = min(debut_j, a["debut"]), max(fin_j, a["debut"] + a["service"] + mn[a["noeud"]][0])
+            debut_j, fin_j = min(debut_j, a["debut"]), max(fin_j, a["debut"] + a["service"] + mn[a["noeud"]][depot_de[a["employe"]]])
     noeuds = [{"service": a["service"], "fenetre": None if a["mobile"] else (a["debut"], a["debut"]),
                "vehicule": None if a["mobile"] else employes.index(a["employe"])} for a in arrets]
-    sol = resoudre(mn, noeuds, len(employes), debut_j, fin_j, cfg["equilibre"], premiere=cfg["premiere"])
+    sol = resoudre(mn, noeuds, len(employes), debut_j, fin_j, cfg["equilibre"], premiere=cfg["premiere"], depots=depots)
     par_noeud = {a["noeud"]: a for a in arrets}
     if sol["non_places"]:
         # Ce qui n'a pas trouvé place reste où c'est (employé, heure) et la tournée se recalcule autour,
@@ -361,16 +383,17 @@ def proposer(date):
         for n in sol["non_places"]:
             a = par_noeud[n]
             a["mobile"] = False
-            fin_j = max(fin_j, a["debut"] + a["service"] + mn[n][0])
+            fin_j = max(fin_j, a["debut"] + a["service"] + mn[n][depot_de[a["employe"]]])
         noeuds = [{"service": a["service"], "fenetre": None if a["mobile"] else (a["debut"], a["debut"]),
                    "vehicule": None if a["mobile"] else employes.index(a["employe"])} for a in arrets]
-        sol = resoudre(mn, noeuds, len(employes), debut_j, fin_j, cfg["equilibre"], premiere=cfg["premiere"])
+        sol = resoudre(mn, noeuds, len(employes), debut_j, fin_j, cfg["equilibre"], premiere=cfg["premiere"], depots=depots)
     out, tot_av, tot_ap, km_av, km_ap = [], 0, 0, 0.0, 0.0
     for v, e in enumerate(employes):
         actuels = [a for a in arrets if a["employe"] == e]
-        m_av, k_av = _route_actuelle(actuels, mn, km)
+        dep = depot_de[e]
+        m_av, k_av = _route_actuelle(actuels, mn, km, dep)
         route = sol["routes"][v]
-        ordre = [0] + [n for n, _t in route] + [0]
+        ordre = [dep] + [n for n, _t in route] + [dep]
         m_ap = sum(mn[ordre[i]][ordre[i + 1]] for i in range(len(ordre) - 1))
         k_ap = round(sum(km[ordre[i]][ordre[i + 1]] for i in range(len(ordre) - 1)), 1)
         apres = []
@@ -387,7 +410,7 @@ def proposer(date):
                           "deplace": a["employe"] != e, "decale": a["mobile"] and deb != a["debut"], "fixe": not a["mobile"],
                           "non_place": n in sol["non_places"],
                           "position": a["position"], "lat": a["lat"], "lng": a["lng"], "adresse": a["adresse"]})
-        out.append({"employe": e, "nom": noms.get(e, e),
+        out.append({"employe": e, "nom": noms.get(e, e), "depart": "domicile" if dep else "Magasin", "depart_point": points[dep],
                     "avant": {"minutes": m_av, "km": k_av, "arrets": [{"tache": a["tache"], "client": a["client"], "type": a["type"],
                                                                         "debut": _hm(a["debut"]), "fin": _hm(a["debut"] + a["service"]),
                                                                         "fixe": not a["mobile"], "lat": a["lat"], "lng": a["lng"]}

@@ -11,6 +11,7 @@
   "col_depot",
   "depot_latitude",
   "depot_longitude",
+  "departs",
   "sec_journee",
   "heure_debut",
   "heure_premiere",
@@ -51,6 +52,13 @@
    "fieldtype": "Float",
    "label": "Longitude",
    "precision": "6"
+  },
+  {
+   "fieldname": "departs",
+   "fieldtype": "Table",
+   "label": "Points de départ particuliers (sinon : le Magasin)",
+   "options": "Config Optimisation Tournees Depart",
+   "description": "Un employé qui part de chez lui (et y revient) : son lien Google Maps. Les autres partent du Magasin et y reviennent."
   },
   {
    "fieldname": "sec_journee",
@@ -124,7 +132,7 @@
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-10-02 13:35:09.500396",
+ "modified": "2026-10-02 13:43:07.139736",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Config Optimisation Tournees",

@@ -23,7 +23,29 @@ class TestLiens(unittest.TestCase):
         self.assertTrue(10 < km[0][2] < 20 and mn[0][2] == int(round(km[0][2] / 30 * 60)))
 
 
+class TestDurees(unittest.TestCase):
+    def test_standard_du_type_sauf_planifie_plus_long(self):
+        d = T.duree_retenue
+        self.assertEqual(d("Entretien", 30, "15 min"), 30)       # « 15 min » ne raccourcit pas un entretien
+        self.assertEqual(d("Entretien", 15, "15 min"), 30)
+        self.assertEqual(d("Entretien", 60, "30 min"), 60)       # planifié nettement plus long : retenu
+        self.assertEqual(d("Installation", None, "1 heure, 30 min"), 90)
+        self.assertEqual(d("Installation", None, "30 min"), 75)
+        self.assertEqual(d("Réparation", 600, None), 120)        # créneau aberrant ignoré
+        self.assertEqual(d("Inconnu", None, None), 60)
+
+
 class TestSolveur(unittest.TestCase):
+    def test_depart_particulier(self):
+        # véhicule 1 part de l'ouest (nœud 1) : il prend naturellement l'arrêt ouest, l'autre l'arrêt est.
+        pts = [(36.87, 10.19), (36.87, 10.06), (36.87, 10.30), (36.87, 10.08)]
+        mn, km, _s = T.matrice_haversine(pts)
+        sol = T.resoudre(mn, [{"service": 30, "fenetre": None, "vehicule": None}, {"service": 30, "fenetre": None, "vehicule": None}],
+                         2, 8 * 60, 17 * 60, limite_s=1, depots=[0, 1])
+        places = {n: v for v, r in enumerate(sol["routes"]) for n, _t in r}
+        self.assertEqual((places[2], places[3]), (0, 1))
+
+
     def test_deux_vehicules_et_une_fixe(self):
         # dépôt + 4 arrêts : A/B proches à l'est, C/D proches à l'ouest ; D fixe à 10:00 sur le véhicule 1.
         pts = [(36.87, 10.19), (36.87, 10.30), (36.875, 10.31), (36.87, 10.08), (36.865, 10.07)]
@@ -79,10 +101,11 @@ class TestJournee(unittest.TestCase):
                 ("B", self.e2, "09:00", "Installation", "https://maps.google.com/?q=36.875,10.310", 0),
                 # D épinglée à 10:00 : un seul véhicule ne peut pas faire l'est avant elle → deux tournées
                 ("D", self.e2, "10:00", "Entretien", "https://maps.google.com/?q=36.865,10.070", 1),
-                ("V", self.e2, "08:00", "Autre", "", 0)):
+                # « Autre » = 2 h par défaut (hook de création) : à 07:00 pour laisser D à 10:00 atteignable
+                ("V", self.e2, "07:00", "Autre", "", 0)):
             doc = frappe.get_doc({"doctype": "Tache de travail", "custom_type_dintervention": typ, "custom_choix_du_staff": emp,
                                   "custom_client": client if typ != "Autre" else None, "nom_client": "Client %s" % code,
-                                  "starts_on": "%s %s:00" % (self.JOUR, heure), "temps": "30 min", "status": "Open",
+                                  "starts_on": "%s %s:00" % (self.JOUR, heure), "temps": "15 min", "status": "Open",
                                   "google_map": lien, "custom_tournee_fixe": fixe, "subject": "essai tournée %s" % code})
             doc.flags.ignore_permissions = True
             doc.insert()
@@ -104,7 +127,7 @@ class TestJournee(unittest.TestCase):
         self.assertEqual(set(arrets), set(self.taches.values()))
         d, v = arrets[self.taches["D"]], arrets[self.taches["V"]]
         self.assertTrue(d["fixe"] and d["employe"] == self.e2 and d["debut"] == "10:00")      # épinglée : rien ne bouge
-        self.assertTrue(v["fixe"] and v["employe"] == self.e2 and v["debut"] == "08:00")      # « Autre » : fixe
+        self.assertTrue(v["fixe"] and v["employe"] == self.e2 and v["debut"] == "07:00")      # « Autre » : fixe
         self.assertEqual(arrets[self.taches["C"]]["employe"], self.e2)                          # C rejoint D à l'ouest
         self.assertEqual(arrets[self.taches["B"]]["employe"], self.e1)                          # B rejoint A à l'est
         self.assertLess(p["total"]["apres_km"], p["total"]["avant_km"])
@@ -119,7 +142,7 @@ class TestJournee(unittest.TestCase):
         t = frappe.get_doc("Tache de travail", self.taches["C"])
         self.assertEqual(t.custom_choix_du_staff, self.e2)
         self.assertEqual(str(t.starts_on)[11:16], arrets[self.taches["C"]]["debut"])
-        self.assertEqual((t.ends_on - t.starts_on).total_seconds(), 30 * 60)
+        self.assertEqual((t.ends_on - t.starts_on).total_seconds(), 30 * 60)      # standard Entretien, pas le « 15 min »
         self.assertTrue(frappe.db.exists("Comment", {"reference_name": t.name, "comment_type": "Comment", "content": ["like", "%Optimisation%"]}))
         # une seconde proposition sur la journée appliquée ne déplace plus rien
         p2 = T.proposer(self.JOUR)

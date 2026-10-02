@@ -41,9 +41,9 @@
         ${a.position === "secteur" ? `<span style="color:#b91c1c;font-size:11px"> ≈ secteur</span>` : ""}</div>`;
     const cartes = p.employes.map((e) => `<div style="border:1px solid #e2e8f0;border-radius:10px;padding:10px 12px;margin-bottom:10px">
         <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px">
-          <b>👤 ${esc(e.nom)}</b>
+          <b>👤 ${esc(e.nom)}</b> <span class="text-muted" style="font-size:11.5px">départ ${esc(e.depart)}</span>
           <span style="font-size:12.5px">${e.avant.km} km · ${e.avant.minutes} min → <b>${e.apres.km} km · ${e.apres.minutes} min</b>
-            ${itineraire(p.depot, e.apres.arrets) ? ` · <a href="${itineraire(p.depot, e.apres.arrets)}" target="_blank" rel="noopener">🗺️ itinéraire</a>` : ""}</span>
+            ${itineraire(e.depart_point || p.depot, e.apres.arrets) ? ` · <a href="${itineraire(e.depart_point || p.depot, e.apres.arrets)}" target="_blank" rel="noopener">🗺️ itinéraire</a>` : ""}</span>
         </div>
         <div class="row" style="margin-top:6px">
           <div class="col-sm-6"><div class="text-muted" style="font-size:11px;text-transform:uppercase">Actuel (${e.avant.arrets.length})</div>${e.avant.arrets.map(ligneAvant).join("") || `<div class="text-muted" style="font-size:12px">—</div>`}</div>
