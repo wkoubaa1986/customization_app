@@ -618,6 +618,74 @@ def planifier(machine, a_partir=None):
 
 
 @frappe.whitelist()
+def taches_candidates(machine):
+    """Les tâches Réparation du calendrier encore ouvertes et sans dossier, celles du client d'abord :
+    une réparation déjà planifiée au calendrier se rattache au dossier au lieu d'en recréer une."""
+    _lecture()
+    client = frappe.db.get_value(DOCTYPE, machine, "client")
+    rows = frappe.get_all(DOCTYPE_TACHE,
+                          filters={"custom_type_dintervention": TYPE_TACHE, "status": "Open", CHAMP_TACHE: ["in", ["", None]],
+                                   "starts_on": [">=", add_days(nowdate(), -30)]},
+                          fields=["name", "starts_on", "custom_choix_du_staff", "custom_client", "nom_client", "subject"],
+                          order_by="starts_on asc", limit_page_length=200)
+    noms = {e.name: e.employee_name for e in frappe.get_all("Employee", filters={"name": ["in", [r.custom_choix_du_staff for r in rows if r.custom_choix_du_staff] or [""]]},
+                                                            fields=["name", "employee_name"])}
+    out = [{"name": r.name, "date": str(r.starts_on)[:16], "employe": noms.get(r.custom_choix_du_staff, r.custom_choix_du_staff or ""),
+            "client": r.nom_client or r.custom_client or "", "meme_client": r.custom_client == client,
+            "sujet": (r.subject or "").split("\n")[0][:80]} for r in rows]
+    out.sort(key=lambda t: (not t["meme_client"], t["date"]))
+    return out
+
+
+@frappe.whitelist()
+def rattacher_tache(machine, tache):
+    """Rattache une tâche Réparation EXISTANTE du calendrier au dossier (demande 02/10/2026) : elle devient
+    la tâche de réparation du dossier, qui passe « Planifiée » ; sa clôture le validera comme une tâche créée ici."""
+    _ecriture(machine)
+    doc = frappe.get_doc(DOCTYPE, machine)
+    if doc.statut not in (S_RECEPTIONNEE, S_PLANIFIEE):
+        frappe.throw(_("Le dossier {0} ne peut pas recevoir de tâche ({1}).").format(machine, doc.statut))
+    t = frappe.get_doc(DOCTYPE_TACHE, tache)
+    if t.custom_type_dintervention != TYPE_TACHE:
+        frappe.throw(_("{0} n'est pas une tâche de type Réparation ({1}).").format(tache, t.custom_type_dintervention))
+    if t.status != "Open":
+        frappe.throw(_("{0} n'est plus ouverte ({1}).").format(tache, t.status))
+    if t.get(CHAMP_TACHE) and t.get(CHAMP_TACHE) != machine:
+        frappe.throw(_("{0} est déjà la tâche du dossier {1}.").format(tache, t.get(CHAMP_TACHE)))
+    garantie = doc.garantie == "Sous garantie"
+    t.set(CHAMP_TACHE, machine)
+    t.dans_local = "Oui"
+    if doc.client and not t.custom_client:
+        t.custom_client, t.nom_client, t.tel = doc.client, doc.nom_client, doc.tel
+    entete = "Réparation osmoseur %s" % machine
+    if entete not in (t.subject or ""):
+        t.subject = ((NOTE_GARANTIE + "\n") if garantie else "") + entete + ("\n" + t.subject if t.subject else "")
+    if garantie and not t.commande_client and doc.get("commande_garantie"):
+        t.commande_client = doc.commande_garantie
+    t.flags.ignore_permissions = True
+    t.save()
+    t.add_comment("Comment", _("🔗 Rattachée au dossier de réparation {0} par {1}").format(machine, frappe.utils.get_fullname(frappe.session.user)))
+    statut = synchroniser(machine)
+    return {"statut": statut, "tache": tache}
+
+
+@frappe.whitelist()
+def detacher_tache(machine, tache):
+    """Rattachement par erreur : la tâche reste au calendrier, sans dossier."""
+    _ecriture(machine)
+    t = frappe.get_doc(DOCTYPE_TACHE, tache)
+    if t.get(CHAMP_TACHE) != machine:
+        frappe.throw(_("{0} n'est pas rattachée à {1}.").format(tache, machine))
+    if t.status == "Completed":
+        frappe.throw(_("{0} est clôturée : elle reste la preuve de la réparation.").format(tache))
+    t.set(CHAMP_TACHE, None)
+    t.flags.ignore_permissions = True
+    t.save()
+    t.add_comment("Comment", _("🔗 Détachée du dossier de réparation {0}").format(machine))
+    return {"statut": synchroniser(machine)}
+
+
+@frappe.whitelist()
 def affecter_tache(machine, employee, date, heure="09:00"):
     """Affectation À LA MAIN d'une tâche supplémentaire (ou de remplacement)."""
     _ecriture(machine)

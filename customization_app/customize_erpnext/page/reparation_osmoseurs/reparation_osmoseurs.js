@@ -124,6 +124,13 @@ class ReparationOsmoseurs {
       const b = $(e.currentTarget);
       this.action(b.attr("data-action"), b.attr("data-machine"));
     });
+    corps.find("[data-detacher]").on("click", (e) => {
+      const b = $(e.currentTarget);
+      frappe.confirm(`Détacher ${b.attr("data-detacher")} du dossier ${b.attr("data-machine")} ? La tâche reste au calendrier.`, async () => {
+        await frappe.call({ method: RO_API + ".detacher_tache", args: { machine: b.attr("data-machine"), tache: b.attr("data-detacher") } });
+        this.charger();
+      });
+    });
   }
 
   ligne(m) {
@@ -137,7 +144,8 @@ class ReparationOsmoseurs {
       const st = t.status === "Completed" ? "clôturée" : t.status === "Cancelled" ? "annulée" : "ouverte";
       return `<a class="ro-tache" href="/app/tache-de-travail/${encodeURIComponent(t.name)}" target="_blank"
                  title="${esc(t.rapport || "")}">🛠️ ${esc(ro_date(t.starts_on))} · ${esc(t.employe || "")}
-                 · <span class="st ${cls}">${st}</span></a>`;
+                 · <span class="st ${cls}">${st}</span></a>${t.status === "Open" && (m.statut === "Planifiée" || m.statut === "Réceptionnée")
+                 ? ` <span class="ro-sub" style="cursor:pointer" title="Détacher cette tâche du dossier (elle reste au calendrier)" data-detacher="${esc(t.name)}" data-machine="${esc(m.name)}">✕</span>` : ""}`;
     }).join("") || `<span class="ro-sub">—</span>`;
 
     let reparation = "";
@@ -166,6 +174,7 @@ class ReparationOsmoseurs {
     if (m.statut === "Réception en cours") boutons.push(btn("photos", "📷 Photos et clôture", "btn-primary"));
     if (m.statut === "Réceptionnée") boutons.push(btn("planifier", "📅 Affecter (auto)", "btn-primary"));
     if (m.statut !== "Réception en cours" && m.statut !== "Rendue au client") boutons.push(btn("tache", "➕ Tâche à la main"));
+    if (m.statut === "Réceptionnée" || m.statut === "Planifiée") boutons.push(btn("rattacher", "🔗 Rattacher une tâche du calendrier"));
     if (m.statut === "Réparée") boutons.push(btn("restitution", "📦 Restitution", "btn-primary"));
     if (m.statut === "Prête au magasin") {
       boutons.push(btn("rendre", "✅ Rendue au client", "btn-success"));
@@ -200,6 +209,7 @@ class ReparationOsmoseurs {
     if (action === "ouvrir") return frappe.set_route("Form", "Machine Reparation", machine);
     if (action === "photos") return this.dialogue_photos(machine);
     if (action === "tache") return this.dialogue_tache(machine, m);
+    if (action === "rattacher") return this.dialogue_rattacher(machine, m);
     if (action === "planifier") {
       const r = await frappe.call({ method: RO_API + ".planifier", args: { machine } });
       frappe.show_alert({ message: (r.message || {}).message || "OK", indicator: r.message && r.message.tache ? "green" : "orange" }, 7);
@@ -503,7 +513,8 @@ class ReparationOsmoseurs {
         <li>« 📷 Photos et clôture » : photo à l’arrivée, puis photo avec le post-it (ou le code superviseur). L’IA relit le post-it et compare l’appareil ; si ça ne correspond pas, la clôture est refusée.</li></ul></div>
       <div class="et"><span class="ro-badge b-planifiee">2 · Planifiée</span><b>Automatique</b>
         <ul><li>À la clôture, une tâche <b>Réparation</b> est créée pour le lendemain : responsables dans l’ordre du réglage, un seul opérateur par jour, 3 machines par jour maxi, 1 h 15 chacune.</li>
-        <li>Personne de libre ou réglage vide → « Réceptionnée » : « 📅 Affecter » ou « ➕ Tâche à la main ».</li></ul></div>
+        <li>Personne de libre ou réglage vide → « Réceptionnée » : « 📅 Affecter » ou « ➕ Tâche à la main ».</li>
+        <li>Une réparation déjà au calendrier pour ce client ? « 🔗 Rattacher une tâche du calendrier » la relie au dossier (✕ pour la détacher).</li></ul></div>
       <div class="et"><span class="ro-badge b-reparee">3 · Réparée — à rendre</span><b>Technicien</b>
         <ul><li>Le technicien clôture sa tâche comme n’importe quelle intervention (photos obligatoires, rapport). Quand la dernière tâche est clôturée, le dossier passe ici tout seul.</li>
         <li>Une machine sous garantie porte « 🆓 GARANTIE » : rien à facturer.</li></ul></div>
@@ -518,6 +529,43 @@ class ReparationOsmoseurs {
         <ul><li>Date, personne, mode (magasin ou livraison) et photo restent sur le dossier. Cocher « Afficher les machines rendues » pour les revoir.</li></ul></div>
       <p class="ro-sub"><b>Erreurs courantes</b> : réception clôturée trop tôt → « ↩️ Rouvrir la réception » (tant qu’aucune réparation n’est clôturée) · restitution lancée par erreur → « ↩️ Annuler la restitution » · code superviseur : réglage « Config Cloture Tache ».</p>
     </div>`);
+    d.show();
+  }
+
+  // ── Rattacher une tâche Réparation déjà au calendrier ───────────────────────
+  async dialogue_rattacher(machine, m) {
+    const esc = frappe.utils.escape_html;
+    const cands = (await frappe.call({ method: RO_API + ".taches_candidates", args: { machine } })).message || [];
+    const d = new frappe.ui.Dialog({
+      title: `🔗 Rattacher une tâche — ${machine}`,
+      fields: [
+        { fieldtype: "HTML", fieldname: "liste" },
+        { fieldtype: "Link", fieldname: "tache", label: "Ou choisir une tâche", options: "Tache de travail",
+          get_query: () => ({ filters: { custom_type_dintervention: "Réparation", status: "Open", machine_reparation: ["in", ["", null]] } }) },
+      ],
+      primary_action_label: "Rattacher",
+      primary_action: async (v) => {
+        if (!v.tache) { frappe.msgprint("Choisissez une tâche."); return; }
+        try {
+          const r = await frappe.call({ method: RO_API + ".rattacher_tache", args: { machine, tache: v.tache } });
+          d.hide();
+          frappe.show_alert({ message: `${v.tache} rattachée — dossier ${(r.message || {}).statut}`, indicator: "green" }, 5);
+          this.charger();
+        } catch (e) { /* message déjà affiché */ }
+      },
+    });
+    d.fields_dict.liste.$wrapper.html(cands.length
+      ? `<div class="ro-sub" style="margin-bottom:6px">Tâches Réparation ouvertes du calendrier, sans dossier${cands.some((c) => c.meme_client) ? " — celles de <b>" + esc(m.nom_client || m.client) + "</b> d’abord" : ""} :</div>
+         ${cands.slice(0, 15).map((c) => `<div class="ro-slot" style="cursor:pointer" data-cand="${esc(c.name)}">
+            <div class="lbl"><div>${c.meme_client ? "⭐ " : ""}<b>${esc(c.name)}</b> · ${esc(c.date)} · ${esc(c.employe)}</div>
+              <div class="ro-sub">${esc(c.client)}${c.sujet ? " — " + esc(c.sujet) : ""}</div></div>
+            <button class="btn btn-sm btn-default">Choisir</button></div>`).join("")}`
+      : `<div class="ro-sub">Aucune tâche Réparation ouverte sans dossier dans le calendrier (30 derniers jours et à venir).</div>`);
+    d.fields_dict.liste.$wrapper.find("[data-cand]").on("click", (e) => {
+      d.set_value("tache", $(e.currentTarget).attr("data-cand"));
+      d.fields_dict.liste.$wrapper.find("[data-cand]").css("background", "");
+      $(e.currentTarget).css("background", "#f0fdf4");
+    });
     d.show();
   }
 

@@ -345,3 +345,57 @@ class TestRestitution(unittest.TestCase):
 
     def test_rendre_directement_depuis_reparee_reste_possible(self):
         self.assertEqual(RO.rendre(self.nom, rendu_a="Le client")["statut"], RO.S_RENDUE)
+
+
+class TestRattachement(unittest.TestCase):
+    """Une tâche Réparation déjà au calendrier se rattache au dossier (02/10/2026)."""
+
+    def setUp(self):
+        import frappe
+        frappe.db.savepoint("osm_ratt")
+        frappe.set_user("Administrator")
+        self.client = frappe.db.get_value("Customer", {"disabled": 0}, "name")
+        self.emp = frappe.db.get_value("Employee", {"status": "Active"}, "name")
+        if not self.client or not self.emp:
+            self.skipTest("pas de client / employé")
+        self.nom = RO.creer_reception(self.client, note="essai rattachement", garantie="Sous garantie", tel="20123456")["name"]
+        frappe.db.set_value(RO.DOCTYPE, self.nom, "statut", RO.S_RECEPTIONNEE)
+        self.tache = frappe.get_doc({"doctype": RO.DOCTYPE_TACHE, "custom_type_dintervention": "Réparation", "custom_choix_du_staff": self.emp,
+                                     "custom_client": self.client, "starts_on": "2031-06-06 09:00:00", "subject": "panne pompe", "status": "Open"})
+        self.tache.flags.ignore_permissions = True
+        self.tache.insert()
+
+    def tearDown(self):
+        import frappe
+        frappe.set_user("Administrator")
+        frappe.db.rollback(save_point="osm_ratt")
+
+    def test_rattacher_puis_detacher(self):
+        import frappe
+        cands = RO.taches_candidates(self.nom)
+        self.assertEqual((cands[0]["name"], cands[0]["meme_client"]), (self.tache.name, True))     # celle du client en tête
+        r = RO.rattacher_tache(self.nom, self.tache.name)
+        self.assertEqual((r["statut"], frappe.db.get_value(RO.DOCTYPE, self.nom, "statut")), (RO.S_PLANIFIEE, RO.S_PLANIFIEE))
+        t = frappe.get_doc(RO.DOCTYPE_TACHE, self.tache.name)
+        self.assertEqual((t.get(RO.CHAMP_TACHE), t.dans_local), (self.nom, "Oui"))
+        self.assertTrue(t.subject.startswith(RO.NOTE_GARANTIE) and "Réparation osmoseur %s" % self.nom in t.subject and "panne pompe" in t.subject)
+        self.assertEqual(frappe.db.get_value(RO.DOCTYPE, self.nom, "responsable"), self.emp)
+        self.assertNotIn(self.tache.name, [c["name"] for c in RO.taches_candidates(self.nom)])   # plus candidate
+        autre = RO.creer_reception(self.client, note="autre", garantie="Hors garantie")["name"]
+        frappe.db.set_value(RO.DOCTYPE, autre, "statut", RO.S_RECEPTIONNEE)
+        with self.assertRaises(frappe.ValidationError):
+            RO.rattacher_tache(autre, self.tache.name)                                               # déjà prise
+        self.assertEqual(RO.detacher_tache(self.nom, self.tache.name)["statut"], RO.S_RECEPTIONNEE)
+        self.assertFalse(frappe.db.get_value(RO.DOCTYPE_TACHE, self.tache.name, RO.CHAMP_TACHE))
+
+    def test_refus_type_et_statut(self):
+        import frappe
+        livraison = frappe.get_doc({"doctype": RO.DOCTYPE_TACHE, "custom_type_dintervention": "Livraison", "custom_choix_du_staff": self.emp,
+                                    "custom_client": self.client, "starts_on": "2031-06-07 09:00:00", "status": "Open"})
+        livraison.flags.ignore_permissions = True
+        livraison.insert()
+        with self.assertRaises(frappe.ValidationError):
+            RO.rattacher_tache(self.nom, livraison.name)
+        frappe.db.set_value(RO.DOCTYPE, self.nom, "statut", RO.S_REPAREE)
+        with self.assertRaises(frappe.ValidationError):
+            RO.rattacher_tache(self.nom, self.tache.name)
