@@ -52,7 +52,7 @@
     return `<div style="font-size:13px;margin-bottom:8px">
         <b>${t.avant_km} km · ${t.avant_min} min</b> de route aujourd’hui → <b>${t.apres_km} km · ${t.apres_min} min</b>
         <span style="color:${gain > 0 ? "#15803d" : "#b45309"};font-weight:700"> (${gain > 0 ? "−" : "+"}${Math.abs(gain)} min)</span>
-        · ${p.deplacees} tâche(s) changent d’employé · ${p.decalees} changent d’heure · départ ${esc(p.journee[0])}, visites dès ${esc(p.premiere)}, retour ${esc(p.journee[1])} (<a href="/app/config-optimisation-tournees">réglages</a>)
+        · ${p.deplacees} tâche(s) changent d’employé · ${p.decalees} changent d’heure · départ ${esc(p.journee[0])}, visites dès ${esc(p.premiere)}, retour ${esc(p.journee[1])}${p.pause ? `, pause ${esc(p.pause[0])}–${esc(p.pause[1])}` : ""} · marge ${p.marge} min entre deux interventions · ${p.fenetre ? `heures gardées à ± ${p.fenetre} min` : "heures libres"} (<a href="/app/config-optimisation-tournees">réglages</a>)
         · distances : ${esc(p.source)}</div>
       ${p.non_places.length ? `<div style="color:#b91c1c;font-size:12.5px;margin-bottom:6px">⚠️ ${p.non_places.length} tâche(s) ne tiennent pas dans la tournée (deux rendez-vous à la même heure, ou hors journée) : elles restent telles quelles, marquées dans la liste.</div>` : ""}
       ${p.avertissements.length ? `<div style="color:#b45309;font-size:12px;margin-bottom:6px">${p.avertissements.map(esc).join("<br>")}</div>` : ""}
@@ -67,6 +67,9 @@
       size: "extra-large",
       fields: [
         { fieldtype: "Date", fieldname: "date", label: "Jour", default: dateAffichee(), reqd: 1 },
+        { fieldtype: "Check", fieldname: "proche", label: "Garder les heures proches de l’actuel", default: 1,
+          description: "Chaque tâche déplaçable reste à ± la fenêtre ci-dessous autour de son heure actuelle" },
+        { fieldtype: "Int", fieldname: "fenetre", label: "Fenêtre (± minutes)", default: 60 },
         { fieldtype: "Column Break" },
         { fieldtype: "HTML", fieldname: "aide", options: `<div class="text-muted" style="font-size:12px;margin-top:26px">Seuls les employés qui ont des tâches ce jour-là sont utilisés. Une tâche cochée « Heure et employé fixes » ne bouge pas. Rien n’est écrit avant « Appliquer ».</div>` },
         { fieldtype: "Section Break" },
@@ -76,7 +79,7 @@
       primary_action: async (v) => {
         d.fields_dict.resultat.$wrapper.html(`<div class="text-muted" style="padding:16px">Calcul des distances et des tournées…</div>`);
         d.set_secondary_action_label("");
-        proposition = (await frappe.call({ method: API + "proposer", args: { date: v.date }, freeze: true, freeze_message: "Optimisation…" })).message;
+        proposition = (await frappe.call({ method: API + "proposer", args: { date: v.date, fenetre: v.proche ? (v.fenetre || 60) : 0 }, freeze: true, freeze_message: "Optimisation…" })).message;
         d.fields_dict.resultat.$wrapper.html(rendre(proposition));
         const n = proposition.deplacees + proposition.decalees;
         if (n) {

@@ -89,6 +89,9 @@ def config() -> dict:
     return {"depot": (lat, lng) if lat and lng else DEPOT_DEFAUT, "departs": departs,
             "debut": _minutes(v("heure_debut"), 8 * 60), "fin": _minutes(v("heure_fin"), 17 * 60),
             "premiere": _minutes(v("heure_premiere"), 9 * 60),
+            "pause": (_minutes(v("pause_debut"), 0), _minutes(v("pause_fin"), 0)) if v("pause_debut") and v("pause_fin") else None,
+            "marge": cint(v("marge_minutes")) if v("marge_minutes") is not None else 10,
+            "fenetre": cint(v("fenetre_minutes")) if v("fenetre_minutes") is not None else 60,
             "types": types, "osrm": (v("osrm_url") or OSRM_DEFAUT).rstrip("/"),
             "equilibre": cint(v("equilibre")) if v("equilibre") is not None else 1, "exclus": exclus}
 
@@ -340,7 +343,8 @@ def matrice(points: list, osrm: str) -> tuple[list, list, str]:
 # ── Solveur ─────────────────────────────────────────────────────────────────
 
 def resoudre(minutes: list, arrets: list, nb_vehicules: int, debut: int, fin: int, equilibre: int = 1,
-             limite_s: int = 5, premiere: int | None = None, depots: list | None = None) -> dict:
+             limite_s: int = 5, premiere: int | None = None, depots: list | None = None,
+             marge: int = 0, pause: tuple | None = None) -> dict:
     """Tournées à fenêtres de temps (OR-Tools). `minutes` couvre tous les nœuds : les dépôts (nœud 0 = Magasin,
     puis les points de départ particuliers) et les arrêts, qui occupent les DERNIERS nœuds. `arrets[i]` :
     {service: min, fenetre: (a, b) | None, vehicule: idx | None}. `depots[v]` = nœud de départ ET de retour du
@@ -356,8 +360,9 @@ def resoudre(minutes: list, arrets: list, nb_vehicules: int, debut: int, fin: in
     service = [0] * nb_depots + [cint(a.get("service")) for a in arrets]
 
     def transit(i, j):
+        # route + service au départ + marge (stationnement, accueil) à l'arrivée sur un arrêt
         a, b = manager.IndexToNode(i), manager.IndexToNode(j)
-        return minutes[a][b] + service[a]
+        return minutes[a][b] + service[a] + (cint(marge) if b >= nb_depots else 0)
 
     cb = routing.RegisterTransitCallback(transit)
     routing.SetArcCostEvaluatorOfAllVehicles(cb)
@@ -379,6 +384,9 @@ def resoudre(minutes: list, arrets: list, nb_vehicules: int, debut: int, fin: in
         idx = manager.NodeToIndex(nb_depots + k)
         fen = a.get("fenetre") or (max(debut, premiere or debut), fin)     # pas de visite libre avant « première »
         temps.CumulVar(idx).SetRange(cint(fen[0]), cint(fen[1]))
+        if pause and not a.get("fixe_pause"):
+            # Pas d'intervention à cheval sur la pause : elle finit avant, ou commence après.
+            temps.CumulVar(idx).RemoveInterval(max(cint(pause[0]) - cint(a.get("service")) + 1, cint(fen[0])), cint(pause[1]) - 1)
         if a.get("vehicule") is not None:
             # Le véhicule imposé, ET −1 (« non desservi ») pour rester compatible avec la disjonction
             # ci-dessous — sans −1, le modèle est insoluble dès qu'une tâche est fixée.
@@ -433,7 +441,7 @@ def _route_actuelle(arrets_emp: list, mn: list, km: list, depot: int = 0) -> tup
 
 
 @frappe.whitelist()
-def proposer(date):
+def proposer(date, fenetre=None):
     """La proposition pour la journée : par employé, tournée actuelle et tournée optimisée (ordre, heures,
     km, minutes de route), tâches déplacées, approximations et tâches impossibles à placer. RIEN N'EST ÉCRIT."""
     _superviseur()
@@ -488,9 +496,18 @@ def proposer(date):
     for a in arrets:
         if not a["mobile"]:
             debut_j, fin_j = min(debut_j, a["debut"]), max(fin_j, a["debut"] + a["service"] + mn[a["noeud"]][depot_de[a["employe"]]])
-    noeuds = [{"service": a["service"], "fenetre": None if a["mobile"] else (a["debut"], a["debut"]),
-               "vehicule": None if a["mobile"] else employes.index(a["employe"])} for a in arrets]
-    sol = resoudre(mn, noeuds, len(employes), debut_j, fin_j, cfg["equilibre"], premiere=cfg["premiere"], depots=depots)
+    fenetre = cint(cfg["fenetre"]) if fenetre is None else cint(fenetre)
+
+    def _noeud(a):
+        if not a["mobile"]:
+            return {"service": a["service"], "fenetre": (a["debut"], a["debut"]), "vehicule": employes.index(a["employe"]), "fixe_pause": True}
+        # Déplaçable : libre dans la journée, ou dans ± fenêtre autour de son heure actuelle (défaut).
+        fen = None if not fenetre else (max(cfg["premiere"], a["debut"] - fenetre), min(fin_j, max(a["debut"] + fenetre, cfg["premiere"])))
+        return {"service": a["service"], "fenetre": fen, "vehicule": None}
+
+    noeuds = [_noeud(a) for a in arrets]
+    sol = resoudre(mn, noeuds, len(employes), debut_j, fin_j, cfg["equilibre"], premiere=cfg["premiere"], depots=depots,
+                   marge=cfg["marge"], pause=cfg["pause"])
     par_noeud = {a["noeud"]: a for a in arrets}
     if sol["non_places"]:
         # Ce qui n'a pas trouvé place reste où c'est (employé, heure) et la tournée se recalcule autour,
@@ -499,9 +516,9 @@ def proposer(date):
             a = par_noeud[n]
             a["mobile"] = False
             fin_j = max(fin_j, a["debut"] + a["service"] + mn[n][depot_de[a["employe"]]])
-        noeuds = [{"service": a["service"], "fenetre": None if a["mobile"] else (a["debut"], a["debut"]),
-                   "vehicule": None if a["mobile"] else employes.index(a["employe"])} for a in arrets]
-        sol = resoudre(mn, noeuds, len(employes), debut_j, fin_j, cfg["equilibre"], premiere=cfg["premiere"], depots=depots)
+        noeuds = [_noeud(a) for a in arrets]
+        sol = resoudre(mn, noeuds, len(employes), debut_j, fin_j, cfg["equilibre"], premiere=cfg["premiere"], depots=depots,
+                       marge=cfg["marge"], pause=cfg["pause"])
     out, tot_av, tot_ap, km_av, km_ap = [], 0, 0, 0.0, 0.0
     for v, e in enumerate(employes):
         actuels = [a for a in arrets if a["employe"] == e]
@@ -537,7 +554,8 @@ def proposer(date):
             "total": {"avant_min": tot_av, "apres_min": tot_ap, "avant_km": round(km_av, 1), "apres_km": round(km_ap, 1)},
             "deplacees": sum(1 for e in out for a in e["apres"]["arrets"] if a["deplace"]),
             "decalees": sum(1 for e in out for a in e["apres"]["arrets"] if a["decale"] and not a["deplace"]),
-            "non_places": non_places, "avertissements": avert, "journee": [_hm(debut_j), _hm(fin_j)], "premiere": _hm(cfg["premiere"])}
+            "non_places": non_places, "avertissements": avert, "journee": [_hm(debut_j), _hm(fin_j)], "premiere": _hm(cfg["premiere"]),
+            "fenetre": fenetre, "marge": cfg["marge"], "pause": [_hm(cfg["pause"][0]), _hm(cfg["pause"][1])] if cfg["pause"] else None}
 
 
 @frappe.whitelist(methods=["POST"])

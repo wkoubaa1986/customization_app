@@ -70,6 +70,20 @@ class TestSolveur(unittest.TestCase):
         for v, r in enumerate(sol["routes"]):
             self.assertEqual([t for _n, t in r], sorted(t for _n, t in r))   # heures croissantes
 
+    def test_marge_et_pause(self):
+        # un arrêt à 10 min du dépôt, service 30, marge 10 : départ 08:00, arrivée possible 08:20 mais pas de visite avant
+        # « première » 09:00 → 09:00 ; avec la pause 09:00–10:00 l'intervention ne peut ni commencer ni finir dedans → 10:00.
+        pts = [(36.87, 10.19), (36.87, 10.25)]
+        mn, km, _s = T.matrice_haversine(pts)
+        mn = [[0, 10], [10, 0]]
+        sol = T.resoudre(mn, [{"service": 30, "fenetre": None, "vehicule": None}], 1, 8 * 60, 17 * 60, limite_s=1, premiere=9 * 60, marge=10)
+        self.assertEqual(sol["routes"][0][0][1], 9 * 60)
+        sol = T.resoudre(mn, [{"service": 30, "fenetre": None, "vehicule": None}], 1, 8 * 60, 17 * 60, limite_s=1, premiere=8 * 60, marge=10)
+        self.assertEqual(sol["routes"][0][0][1], 8 * 60 + 20)                   # 10 de route + 10 de marge
+        sol = T.resoudre(mn, [{"service": 30, "fenetre": None, "vehicule": None}], 1, 8 * 60, 17 * 60, limite_s=1, premiere=9 * 60, marge=10,
+                         pause=(9 * 60, 10 * 60))
+        self.assertEqual(sol["routes"][0][0][1], 10 * 60)
+
     def test_journee_trop_courte_laisse_de_cote(self):
         pts = [(36.87, 10.19), (36.87, 10.30), (36.875, 10.31)]
         mn, km, _s = T.matrice_haversine(pts)
@@ -91,7 +105,8 @@ class TestJournee(unittest.TestCase):
         # Un réglage FIXE, quel que soit celui enregistré sur le site (heures, exclus, départs).
         self._config = T.config
         T.config = lambda: {"depot": T.DEPOT_DEFAUT, "departs": {}, "debut": 8 * 60, "premiere": 9 * 60, "fin": 17 * 60,
-                            "types": list(T.TYPES_MOBILES_DEFAUT), "osrm": T.OSRM_DEFAUT, "equilibre": 1, "exclus": set()}
+                            "types": list(T.TYPES_MOBILES_DEFAUT), "osrm": T.OSRM_DEFAUT, "equilibre": 1, "exclus": set(),
+                            "pause": None, "marge": 0, "fenetre": 0}
         if not frappe.db.has_column("Tache de travail", "custom_tournee_fixe"):
             self.skipTest("patch ensure_tournee_fields non joué")
         emps = frappe.get_all("Employee", filters={"status": "Active"}, pluck="name", order_by="name", limit=2)

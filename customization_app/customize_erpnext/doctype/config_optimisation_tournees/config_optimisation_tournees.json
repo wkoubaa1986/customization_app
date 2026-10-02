@@ -16,8 +16,12 @@
   "heure_debut",
   "heure_premiere",
   "heure_fin",
+  "pause_debut",
+  "pause_fin",
   "col_journee",
   "equilibre",
+  "marge_minutes",
+  "fenetre_minutes",
   "sec_regles",
   "types_mobiles",
   "col_regles",
@@ -85,6 +89,17 @@
    "default": "17:00:00"
   },
   {
+   "fieldname": "pause_debut",
+   "fieldtype": "Time",
+   "label": "Pause déjeuner — début",
+   "description": "Aucune intervention pendant la pause (vide = pas de pause)."
+  },
+  {
+   "fieldname": "pause_fin",
+   "fieldtype": "Time",
+   "label": "Pause déjeuner — fin"
+  },
+  {
    "fieldname": "col_journee",
    "fieldtype": "Column Break"
   },
@@ -94,6 +109,20 @@
    "label": "Équilibrage des journées (0 = km minimum seulement)",
    "default": "1",
    "description": "Plus il est haut, plus les journées des employés sont de longueur voisine, au prix de quelques km."
+  },
+  {
+   "fieldname": "marge_minutes",
+   "fieldtype": "Int",
+   "label": "Marge entre deux interventions (min)",
+   "default": "10",
+   "description": "Ajoutée à chaque trajet : stationnement, déchargement, accueil."
+  },
+  {
+   "fieldname": "fenetre_minutes",
+   "fieldtype": "Int",
+   "label": "Garder les heures proches de l’actuel (± min)",
+   "default": "60",
+   "description": "Une tâche déplaçable reste dans cette fenêtre autour de son heure actuelle (0 = libre dans la journée). Modifiable à chaque calcul."
   },
   {
    "fieldname": "sec_regles",
@@ -132,7 +161,7 @@
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-10-02 13:43:07.139736",
+ "modified": "2026-10-02 16:02:17.528340",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Config Optimisation Tournees",
