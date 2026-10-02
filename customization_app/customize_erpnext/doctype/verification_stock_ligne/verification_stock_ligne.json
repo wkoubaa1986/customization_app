@@ -16,7 +16,8 @@
   "zones",
   "commentaire",
   "qte_employe",
-  "ajuste"
+  "ajuste",
+  "a_recompter"
  ],
  "fields": [
   {
@@ -104,10 +105,16 @@
    "fieldtype": "Check",
    "label": "Ajusté par le responsable",
    "read_only": 1
+  },
+  {
+   "fieldname": "a_recompter",
+   "fieldtype": "Check",
+   "label": "À recompter (stock modifié depuis le comptage)",
+   "read_only": 1
   }
  ],
  "links": [],
- "modified": "2026-10-02 12:28:47.038241",
+ "modified": "2026-10-02 12:47:21.872222",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Verification Stock Ligne",

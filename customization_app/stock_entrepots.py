@@ -916,8 +916,9 @@ def _resume(v) -> dict:
             "valide_employe_le": str(v.valide_employe_le or "")[:16],
             "valide_responsable_par": frappe.utils.get_fullname(v.valide_responsable_par) if v.valide_responsable_par else None,
             "valide_responsable_le": str(v.valide_responsable_le or "")[:16],
-            "rapprochement": v.rapprochement, "renvois": cint(v.renvois),
+            "rapprochement": v.rapprochement, "renvois": cint(v.renvois), "rafraichi_le": str(v.rafraichi_le or "")[:16],
             "nb_ajustes": sum(1 for l in (v.get("lignes") or []) if l.ajuste),
+            "nb_a_recompter": sum(1 for l in (v.get("lignes") or []) if l.a_recompter),
             # Ce que l'utilisateur connecté peut faire sur cette fiche, calculé ici pour que l'écran n'ait rien à deviner.
             "actions": _actions_possibles(v)}
 
@@ -969,6 +970,8 @@ def detail_verification(name):
     v = frappe.get_doc(VERIF, name)
     _acces_verification(v.entrepot)
     _assurer_photo(v)
+    if v.statut in (A_VALIDER, A_CONFIRMER) and _rafraichir_systeme(v):
+        _renvoi_auto(v, [l.item_code for l in v.lignes if l.a_recompter])   # des articles ont bougé : à recompter
     # ⚠️ Un Float vaut 0 en base, jamais None : « pas compté » se lit sur le drapeau `compte`.
     images = dict(frappe.get_all("Item", filters={"name": ["in", [l.item_code for l in v.lignes] or [""]]},
                                  fields=["name", "image"], as_list=True))
@@ -976,6 +979,7 @@ def detail_verification(name):
                                              "image": images.get(l.item_code),
                                              "qte_comptee": flt(l.qte_comptee, 6) if l.compte else None,
                                              "qte_employe": flt(l.qte_employe, 6) if l.ajuste else None, "ajuste": cint(l.ajuste),
+                                             "a_recompter": cint(l.a_recompter),
                                              "ecart": flt(l.ecart, 6) if l.compte else None, "taux": flt(l.taux, 3),
                                              "valeur_ecart": flt(l.valeur_ecart, 3) if l.compte else None,
                                              "zones": l.zones, "commentaire": l.commentaire}
@@ -992,6 +996,8 @@ def _appliquer_comptage(v, comptes: dict):
             l.compte = 1 if q not in (None, "") else 0
             l.qte_comptee = flt(q) if l.compte else 0
             l.commentaire = (c.get("commentaire") or "")[:140] or None
+            if l.compte:
+                l.a_recompter = 0
         lignes.append({"qte_systeme": l.qte_systeme, "qte_comptee": l.qte_comptee if l.compte else None, "taux": l.taux})
     bilan = calculer_ecarts(lignes)
     for l, calc in zip(v.lignes, lignes):
@@ -1027,6 +1033,9 @@ def terminer_verification(name, comptes=None, note=None):
     _appliquer_comptage(v, (frappe.parse_json(comptes) if isinstance(comptes, str) else comptes) or {})
     if not v.nb_comptes:
         frappe.throw(_("Aucun article compté : saisissez au moins une quantité."))
+    restants = [l.item_name or l.item_code for l in v.lignes if l.a_recompter]
+    if restants:
+        frappe.throw(_("À recompter avant de terminer (stock modifié depuis le comptage) : {0}").format(", ".join(restants)))
     for l in v.lignes:
         l.ajuste, l.qte_employe = 0, (l.qte_comptee if l.compte else 0)
     v.statut = A_VALIDER
@@ -1043,6 +1052,45 @@ def terminer_verification(name, comptes=None, note=None):
     if resp and resp != frappe.session.user:
         _prevenir(resp, _("🧾 Vérification {0} ({1}) à valider : {2} écart(s)").format(v.name, se_court(v.entrepot), cint(v.nb_ecarts)), v.name)
     return _resume(v)
+
+
+def _rafraichir_systeme(v) -> list[str]:
+    """Relit les quantités système du stock (décision utilisateur 02/10/2026). Un article qui a BOUGÉ depuis
+    le comptage perd son comptage : il est « à recompter » (le compté d'hier ne dit plus rien du stock
+    d'aujourd'hui). Rend les articles concernés ; les écarts des autres sont recalculés."""
+    qtes = _quantites([l.item_code for l in v.lignes], [v.entrepot])
+    bouges = []
+    for l in v.lignes:
+        nouveau = qtes.get((l.item_code, v.entrepot), 0.0)
+        if abs(flt(nouveau, 6) - flt(l.qte_systeme, 6)) > 1e-6:
+            if l.compte:
+                l.commentaire = (_("Stock modifié depuis le comptage ({0} → {1}) : à recompter")
+                                 .format(flt(l.qte_systeme, 6), flt(nouveau, 6)))[:140]
+                l.compte, l.qte_comptee, l.qte_employe, l.ajuste, l.a_recompter = 0, 0, 0, 0, 1
+                bouges.append(l.item_code)
+            l.qte_systeme = nouveau
+    _appliquer_comptage(v, {})
+    v.rafraichi_le = now_datetime()
+    v.flags.ignore_permissions = True
+    v.save()
+    return bouges
+
+
+def _renvoi_auto(v, bouges: list[str]) -> dict:
+    """Des articles ont bougé : leur comptage est effacé, la fiche repart au comptage chez l'employé."""
+    v.statut = EN_COURS
+    v.valide_employe_par = v.valide_employe_le = v.valide_responsable_par = v.valide_responsable_le = None
+    v.renvois = cint(v.renvois) + 1
+    v.note = ((v.note + "\n") if v.note else "") + _("Renvoi automatique : {0} article(s) ont bougé depuis le comptage, à recompter.").format(len(bouges))
+    v.flags.ignore_permissions = True
+    v.save()
+    if v.tache_employe and frappe.db.get_value("Tache de travail", v.tache_employe, "status") == "Completed":
+        frappe.db.set_value("Tache de travail", v.tache_employe, "status", "Open")
+    emp = _employe_du_stock(v.entrepot)
+    if emp and emp.user_id and emp.user_id != frappe.session.user:
+        _prevenir(emp.user_id, _("🧾 Vérification {0} : {1} article(s) ont bougé depuis votre comptage, à recompter")
+                  .format(v.name, len(bouges)), v.name)
+    return dict(_resume(v), renvoye=True, a_recompter=bouges)
 
 
 def _est_employe_du_stock(entrepot: str) -> bool:
@@ -1112,6 +1160,9 @@ def valider_verification(name, comptes=None, note=None):
     if v.statut != A_VALIDER:
         frappe.throw(_("Cette vérification n’est pas à valider ({0}).").format(v.statut))
     comptes = (frappe.parse_json(comptes) if isinstance(comptes, str) else comptes) or {}
+    bouges = _rafraichir_systeme(v)
+    if bouges:
+        return _renvoi_auto(v, bouges)
     avant = {l.item_code: (cint(l.compte), flt(l.qte_comptee, 6)) for l in v.lignes}
     _appliquer_comptage(v, comptes)
     ajustes = []
@@ -1145,6 +1196,9 @@ def confirmer_verification(name):
         frappe.throw(_("Seul l’employé de ce stock confirme les quantités ajustées."), frappe.PermissionError)
     if v.statut != A_CONFIRMER:
         frappe.throw(_("Cette vérification n’est pas à confirmer ({0}).").format(v.statut))
+    bouges = _rafraichir_systeme(v)
+    if bouges:
+        return _renvoi_auto(v, bouges)
     v.valide_employe_par, v.valide_employe_le = frappe.session.user, now_datetime()
     _cloturer(v)
     return _resume(v)

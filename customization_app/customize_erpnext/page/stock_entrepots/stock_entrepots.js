@@ -815,7 +815,7 @@ class StockEntrepots {
   blocVerif(s) {
     const v = s.en_cours, a = v.actions || [];
     if (v.statut === "En cours") return v.photo
-      ? `<div class="plan">📝 Comptage en cours du ${se_dt(v.date)} : ${v.nb_comptes}/${v.nb_lignes} comptés${v.renvois ? ` · renvoyé ${v.renvois}×` : ""}</div>
+      ? `<div class="plan">📝 Comptage en cours du ${se_dt(v.date)} : ${v.nb_comptes}/${v.nb_lignes} comptés${v.renvois ? ` · renvoyé ${v.renvois}×` : ""}${v.nb_a_recompter ? ` · <b class="neg">${v.nb_a_recompter} à recompter</b>` : ""}</div>
          <button type="button" class="btn btn-primary" data-reprendre="${se_esc(v.name)}">Reprendre le comptage</button>`
       : `<div class="plan">📅 Vérification ${v.prevue ? "prévue le" : "du"} <b>${se_dt(v.date)}</b>${v.tache_employe ? " · tâches créées" : ""}</div>
          <button type="button" class="btn btn-primary" data-reprendre="${se_esc(v.name)}">Commencer le comptage</button>`;
@@ -842,7 +842,7 @@ class StockEntrepots {
     const ligne = (l) => `<div class="se-c-ligne ${l.qte_comptee != null ? "fait" : ""}" data-item="${se_esc(l.item_code)}" data-cle="${se_esc(((l.item_name || "") + " " + l.item_code).toLowerCase())}">
         ${se_img(l.image)}
         <div class="txt"><div class="se-nom" style="font-size:13.5px">${se_esc(l.item_name || l.item_code)}</div>
-          <div class="se-code">${se_esc(l.item_code)}${l.zones ? ` · 📍 ${se_esc(l.zones)}` : ""}</div></div>
+          <div class="se-code">${se_esc(l.item_code)}${l.zones ? ` · 📍 ${se_esc(l.zones)}` : ""}</div>${l.a_recompter ? `<div class="se-alerte">⚠️ à recompter — ${se_esc(l.commentaire || "stock modifié")}</div>` : ""}</div>
         <div class="sys">${se_q(l.qte_systeme)}${l.ajuste ? `<small style="display:block;color:#b45309;font-size:10.5px">employé : ${se_q(l.qte_employe)}</small>` : ""}</div>
         <input type="number" inputmode="decimal" step="any" class="form-control q" ${fini || mode === "confirmation" ? "disabled" : ""} style="${l.ajuste ? "border-color:#f59e0b;background:#fffbeb" : ""}" value="${l.qte_comptee == null ? "" : se_esc(l.qte_comptee)}" placeholder="?">
         <div class="ec ${l.ecart ? (l.ecart < 0 ? "neg" : "pos") : ""}">${l.ecart == null ? "" : se_signe(l.ecart)}</div>
@@ -851,9 +851,10 @@ class StockEntrepots {
       <div class="se-card">
         <div class="se-v-stock"><div class="t">📝 ${se_esc(this.libelle(d.fiche.entrepot))} — ${se_dt(d.fiche.date)} ${etat ? `<span class="se-badge">${etat}</span>` : ""}</div>
           ${mode === "comptage" ? `<div class="se-note">Quantités système photographiées à la première ouverture de cette feuille.</div>`
-            : mode === "validation" ? `<div class="se-note">Comptage de <b>${se_esc(d.fiche.valide_employe_par)}</b>. Validez tel quel, corrigez une quantité (l’employé devra confirmer), ou renvoyez au comptage.</div>`
+            : mode === "validation" ? `<div class="se-note">Comptage de <b>${se_esc(d.fiche.valide_employe_par)}</b> (${se_esc(d.fiche.valide_employe_le)}). Validez tel quel, corrigez une quantité (l’employé devra confirmer), ou renvoyez au comptage.<br>Quantités système actualisées à l’instant : un article qui a bougé depuis le comptage serait à recompter.</div>`
             : mode === "confirmation" ? `<div class="se-note">Quantités ajustées par <b>${se_esc(d.fiche.valide_responsable_par)}</b> (surlignées, votre comptage en dessous). Confirmez, ou recomptez.</div>`
             : `<div class="se-note">${d.fiche.valide_employe_par ? `Comptage ${se_esc(d.fiche.valide_employe_par)}` : ""}${d.fiche.valide_responsable_par ? ` · validé par ${se_esc(d.fiche.valide_responsable_par)}` : ""}${d.fiche.rapprochement ? ` · ${se_lien("Stock Reconciliation", d.fiche.rapprochement, "rapprochement " + d.fiche.rapprochement)}` : ""}</div>`}
+          ${d.fiche.nb_a_recompter ? `<div class="se-alerte">⚠️ ${d.fiche.nb_a_recompter} article(s) ont bougé depuis le comptage : leur comptage est effacé, à recompter (lignes marquées).</div>` : ""}
           ${d.fiche.note ? `<div class="se-note">${se_esc(d.fiche.note)}</div>` : ""}
           <div class="plan" id="se-c-bilan"></div></div>
         <input type="search" class="form-control se-saisie" id="se-c-filtre" placeholder="🔎 Filtrer un article…" style="margin-top:8px">
@@ -907,6 +908,7 @@ class StockEntrepots {
         ? `Vous avez corrigé <b>${changes}</b> quantité(s) : la fiche repartira chez l’employé pour confirmation avant le rapprochement. Continuer ?`
         : `Valider le comptage (${e} article(s)) ?<br>${ecarts ? `Un <b>rapprochement de stock</b> alignera ${ecarts} article(s) sur les quantités comptées.` : "Aucun écart : pas de rapprochement."}`, async () => {
         const r = (await frappe.call({ method: SE_API + "valider_verification", args: { name, comptes: changes ? comptes() : null }, freeze: true })).message;
+        if (r.renvoye) { frappe.msgprint({ title: "À recompter", indicator: "orange", message: `${r.a_recompter.length} article(s) ont bougé depuis le comptage : leur comptage est effacé et la fiche repart chez l’employé.<br>${r.a_recompter.map(se_esc).join(", ")}` }); retour(); return; }
         frappe.msgprint({ title: r.statut === "Terminée" ? "Vérification validée" : "Ajustements envoyés à l’employé", indicator: r.statut === "Terminée" ? "green" : "orange",
           message: r.statut === "Terminée" ? (r.rapprochement ? `Rapprochement ${se_lien("Stock Reconciliation", r.rapprochement)} passé sur ${se_esc(this.libelle(d.fiche.entrepot))}.` : "Aucun écart : fiche terminée sans rapprochement.")
             : `${r.ajustes.map(se_esc).join("<br>")}<br>L’employé doit confirmer ces quantités.` });
@@ -916,6 +918,7 @@ class StockEntrepots {
     $c.find("[data-confirmer]").on("click", () => {
       frappe.confirm(`Confirmer les quantités ajustées ? Le rapprochement de stock sera passé sur votre stock.`, async () => {
         const r = (await frappe.call({ method: SE_API + "confirmer_verification", args: { name }, freeze: true })).message;
+        if (r.renvoye) { frappe.msgprint({ title: "À recompter", indicator: "orange", message: `${r.a_recompter.length} article(s) ont bougé depuis votre comptage : recomptez-les (lignes marquées) puis terminez à nouveau.` }); retour(); return; }
         frappe.msgprint({ title: "Vérification terminée", indicator: "green", message: r.rapprochement ? `Rapprochement ${se_lien("Stock Reconciliation", r.rapprochement)} passé.` : "Aucun écart : pas de rapprochement." });
         retour();
       });

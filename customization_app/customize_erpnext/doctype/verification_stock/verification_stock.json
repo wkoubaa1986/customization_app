@@ -32,6 +32,7 @@
   "col3",
   "valide_responsable_par",
   "valide_responsable_le",
+  "rafraichi_le",
   "rapprochement"
  ],
  "fields": [
@@ -203,6 +204,13 @@
    "read_only": 1
   },
   {
+   "fieldname": "rafraichi_le",
+   "fieldtype": "Datetime",
+   "label": "Quantités système actualisées le",
+   "read_only": 1,
+   "description": "À la validation, les quantités système sont relues : un article qui a bougé depuis le comptage perd son comptage et doit être recompté."
+  },
+  {
    "fieldname": "rapprochement",
    "fieldtype": "Link",
    "label": "Rapprochement de stock",
@@ -211,7 +219,7 @@
   }
  ],
  "links": [],
- "modified": "2026-10-02 12:28:47.038241",
+ "modified": "2026-10-02 12:47:21.872509",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Verification Stock",

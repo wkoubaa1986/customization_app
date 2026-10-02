@@ -231,12 +231,26 @@ class TestDoubleValidationVerif(unittest.TestCase):
         i1, i2 = self.items
         nom = self._comptage(3, 4)
         self.assertEqual(self._qte(i2), 5)                                      # rien n'a bougé
-        self.assertEqual(frappe.get_doc(S.VERIF, nom).get("actions") if False else S.detail_verification(nom)["fiche"]["actions"], ["valider", "renvoyer"])
+        self.assertEqual(S.detail_verification(nom)["fiche"]["actions"], ["valider", "renvoyer"])
+        # une sortie ENTRE le comptage et la validation : à la validation les quantités système sont relues,
+        # l'article qui a bougé PERD son comptage et la fiche repart au comptage (décision utilisateur 02/10/2026)
+        S.ecriture_transfert(self.essai, S.magasin(), [(i1, 1)], "sortie entre comptage et validation")
+        r = S.valider_verification(nom)
+        self.assertEqual((r["statut"], r["renvoye"], r["a_recompter"], r["renvois"]), ("En cours", True, [i1], 1))
+        l1 = next(l for l in frappe.get_doc(S.VERIF, nom).lignes if l.item_code == i1)
+        self.assertEqual((l1.compte, l1.a_recompter, l1.qte_systeme), (0, 1, 2))
+        self.assertIn("3.0 → 2.0", l1.commentaire)
+        frappe.set_user(self.AKRAM)
+        with self.assertRaises(frappe.ValidationError):                               # pas sans recompter l'article
+            S.terminer_verification(nom, {i2: {"qte_comptee": 4}})
+        r = S.terminer_verification(nom, {i1: {"qte_comptee": 2}, i2: {"qte_comptee": 4}})
+        self.assertEqual((r["statut"], r["nb_a_recompter"]), ("À valider", 0))
+        frappe.set_user("Administrator")
         r = S.valider_verification(nom)
         self.assertEqual((r["statut"], r["ajustes"]), ("Terminée", []))
         rec = frappe.get_doc("Stock Reconciliation", r["rapprochement"])
-        self.assertEqual((rec.docstatus, [(x.item_code, x.qty) for x in rec.items]), (1, [(i2, 4)]))   # seul l'écart
-        self.assertEqual((self._qte(i1), self._qte(i2)), (3, 4))
+        self.assertEqual((rec.docstatus, [(x.item_code, x.qty) for x in rec.items]), (1, [(i2, 4)]))   # seul le vrai écart
+        self.assertEqual((self._qte(i1), self._qte(i2)), (2, 4))
         self.assertEqual(frappe.db.get_value(S.VERIF, nom, "valide_responsable_par"), "Administrator")
 
     def test_ajustement_puis_confirmation_de_l_employe(self):
