@@ -22,6 +22,7 @@ from __future__ import annotations
 import math
 import re
 import statistics
+import time
 
 import frappe
 import requests
@@ -43,8 +44,14 @@ DUREE_TYPE = {"Entretien": 30, "Installation": 75, "Réparation": 75, "Livraison
 DUREES_MIN = {"15 min": 15, "30 min": 30, "45 min": 45, "1 heure": 60, "1 heure, 15 min": 75, "1 heure, 30 min": 90,
               "1 heure, 45 min": 105, ">=2 heures": 120}
 
-RE_COORDS = (r"[?&]q=(-?\d+\.\d+),(-?\d+\.\d+)", r"[?&](?:ll|destination|daddr|center)=(-?\d+\.\d+),(-?\d+\.\d+)",
-             r"!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)", r"@(-?\d+\.\d+),(-?\d+\.\d+)", r"/(-?\d+\.\d{4,}),(-?\d+\.\d{4,})")
+# Les formes rencontrées : ?q=lat,lng · @lat,lng · !3dlat!4dlng · /search/lat,+lng (liens goo.gl/maps, « + » ou
+# « %2B » ou « , » avant la longitude) · /place/lat,lng · ll=/destination=.
+_SEP = r"(?:,\s*|,\+|,%2B|%2C\+?|%2C%2B)"
+RE_COORDS = (r"[?&]q=(-?\d+\.\d+)" + _SEP + r"(-?\d+\.\d+)",
+             r"[?&](?:ll|destination|daddr|center)=(-?\d+\.\d+)" + _SEP + r"(-?\d+\.\d+)",
+             r"!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)", r"@(-?\d+\.\d+)" + _SEP + r"(-?\d+\.\d+)",
+             r"/(?:search|place|dir)/(-?\d+\.\d{3,})" + _SEP + r"(-?\d+\.\d{3,})",
+             r"/(-?\d+\.\d{4,})" + _SEP + r"(-?\d+\.\d{4,})")
 
 
 # ── Accès et réglage ────────────────────────────────────────────────────────
@@ -68,7 +75,9 @@ def config() -> dict:
     """Le réglage tel qu'ENREGISTRÉ (tabSingles) : un réglage jamais sauvegardé rend ses valeurs par défaut —
     `get_single` sur un Single vierge renvoie l'heure courante dans un champ Time, pas son défaut."""
     # Jamais enregistré : `get_single_value` rend 0 / timedelta(0), pas les défauts → on les pose nous-mêmes.
-    enregistre = frappe.db.exists("DocType", CONFIG) and frappe.db.exists("Singles", {"doctype": CONFIG, "field": "heure_fin"})
+    # (`frappe.db.exists` ne sait pas interroger tabSingles : requête directe.)
+    enregistre = frappe.db.exists("DocType", CONFIG) and frappe.db.sql(
+        "select 1 from tabSingles where doctype = %s and field = 'heure_fin' limit 1", CONFIG)
     v = (lambda champ: frappe.db.get_single_value(CONFIG, champ)) if enregistre else (lambda champ: None)
     types = [t.strip() for t in (v("types_mobiles") or "").splitlines() if t.strip()] or list(TYPES_MOBILES_DEFAUT)
     lat, lng = flt(v("depot_latitude")), flt(v("depot_longitude"))
@@ -87,9 +96,12 @@ def config() -> dict:
 # ── Coordonnées ─────────────────────────────────────────────────────────────
 
 def coordonnees_du_lien(url: str | None):
-    """(lat, lng) lu dans un lien Google Maps déjà développé, sinon None. PURE."""
+    """(lat, lng) lu dans un lien Google Maps déjà développé, sinon None. PURE.
+    Une page de consentement Google (consent.google.com?continue=<lien>) porte le lien dans `continue`."""
+    from urllib.parse import unquote
+    url = unquote(url or "")
     for motif in RE_COORDS:
-        m = re.search(motif, url or "")
+        m = re.search(motif, url)
         if m:
             lat, lng = float(m.group(1)), float(m.group(2))
             if -90 <= lat <= 90 and -180 <= lng <= 180:
@@ -124,19 +136,117 @@ def resoudre_lien(url: str | None, timeout: float = 6.0):
     return None
 
 
-def _geocoder_adresse(nom: str):
-    """Coordonnées mémorisées sur l'adresse, sinon résolues depuis son lien et mémorisées."""
+NOMINATIM = "https://nominatim.openstreetmap.org/search"
+MARQUE_LIEN_MORT = "lien mort"
+
+
+def geocoder_texte(adresse_texte: str, ville: str | None = None):
+    """Nominatim (OpenStreetMap, gratuit, 1 requête/s) sur le texte de l'adresse : une position APPROCHÉE
+    (le quartier, la rue), mieux que rien quand le lien est mort ou absent. None sans réseau ou sans résultat."""
+    if frappe.flags.get("tournee_sans_reseau") or not (adresse_texte or ville):
+        return None
+    try:
+        for q in ([x for x in (adresse_texte, ville, "Tunisia") if x], [x for x in (ville, "Tunisia") if x]):
+            r = requests.get(NOMINATIM, params={"q": ", ".join(q), "format": "json", "limit": 1, "countrycodes": "tn"},
+                             headers={"User-Agent": "aquaworld-erpnext (koubaawassim@gmail.com)"}, timeout=10)
+            d = r.json() if r.ok else []
+            if d:
+                return (float(d[0]["lat"]), float(d[0]["lon"]))
+            time.sleep(1.1)
+    except Exception:
+        return None
+    return None
+
+
+def _geocoder_adresse(nom: str, texte: bool = True):
+    """Coordonnées mémorisées sur l'adresse, sinon résolues depuis son lien (puis son texte) et mémorisées.
+    Un lien mort est marqué pour ne pas être réessayé à chaque proposition."""
     if not nom:
         return None
-    a = frappe.db.get_value("Address", nom, ["custom_latitude", "custom_longitude", "custom_lien_google_map"], as_dict=True)
+    a = frappe.db.get_value("Address", nom, ["custom_latitude", "custom_longitude", "custom_lien_google_map",
+                                             "custom_geocode_source", "address_line1", "city"], as_dict=True)
     if not a:
         return None
     if a.custom_latitude and a.custom_longitude:
         return (flt(a.custom_latitude), flt(a.custom_longitude))
-    c = resoudre_lien(a.custom_lien_google_map)
-    if c:
-        _memoriser(nom, c, "lien adresse")
-    return c
+    if a.custom_lien_google_map and not (a.custom_geocode_source or "").startswith(MARQUE_LIEN_MORT):
+        c = resoudre_lien(a.custom_lien_google_map)
+        if c:
+            _memoriser(nom, c, "lien adresse")
+            return c
+        if not frappe.flags.get("tournee_sans_reseau") and frappe.db.has_column("Address", "custom_geocode_source"):
+            frappe.db.set_value("Address", nom, "custom_geocode_source", "%s %s" % (MARQUE_LIEN_MORT, frappe.utils.nowdate()), update_modified=False)
+    if texte and not (a.custom_geocode_source or "").startswith("texte"):
+        c = geocoder_texte(a.address_line1, a.city)
+        if c:
+            _memoriser(nom, c, "texte ≈")
+            return c
+    return None
+
+
+def geocoder_adresses(limite: int = 500) -> dict:
+    """Tâche de fond : géocode les adresses sans position — par leur lien, sinon par leur texte. Idempotent :
+    les liens morts et les textes déjà essayés sont marqués. → {liens, textes, morts, restantes}."""
+    if not frappe.db.has_column("Address", "custom_latitude"):
+        return {}
+    bilan = {"liens": 0, "textes": 0, "morts": 0, "restantes": 0}
+    adresses = frappe.db.sql("""select name, custom_lien_google_map, custom_geocode_source, address_line1, city
+                                from tabAddress
+                                where disabled = 0 and ifnull(custom_latitude, 0) = 0
+                                  and (custom_lien_google_map like 'http%%' or ifnull(city, '') != '')
+                                  and ifnull(custom_geocode_source, '') not like 'texte introuvable%%'
+                                order by (custom_lien_google_map like 'http%%') desc, modified desc
+                                limit %(n)s""", {"n": cint(limite) or 500}, as_dict=True)
+    for a in adresses:
+        src = a.custom_geocode_source or ""
+        if a.custom_lien_google_map and not src.startswith(MARQUE_LIEN_MORT):
+            c = resoudre_lien(a.custom_lien_google_map)
+            if c:
+                _memoriser(a.name, c, "lien adresse")
+                bilan["liens"] += 1
+                continue
+            frappe.db.set_value("Address", a.name, "custom_geocode_source", "%s %s" % (MARQUE_LIEN_MORT, frappe.utils.nowdate()), update_modified=False)
+            bilan["morts"] += 1
+        if not src.startswith("texte"):
+            c = geocoder_texte(a.address_line1, a.city)
+            if c:
+                _memoriser(a.name, c, "texte ≈")
+                bilan["textes"] += 1
+            else:
+                frappe.db.set_value("Address", a.name, "custom_geocode_source", "texte introuvable %s" % frappe.utils.nowdate(), update_modified=False)
+            time.sleep(1.1)       # politesse Nominatim : 1 requête par seconde
+        frappe.db.commit()
+    bilan["restantes"] = frappe.db.sql("""select count(*) from tabAddress where disabled = 0 and ifnull(custom_latitude, 0) = 0
+                                          and custom_lien_google_map like 'http%%' and ifnull(custom_geocode_source, '') not like 'lien mort%%'""")[0][0]
+    return bilan
+
+
+def geocodage_quotidien():
+    """Cron : les adresses nouvelles ou modifiées depuis la veille (lien collé, adresse créée)."""
+    try:
+        geocoder_adresses(limite=300)
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "tournées : géocodage quotidien")
+
+
+@frappe.whitelist()
+def etat_geocodage():
+    _superviseur()
+    total = frappe.db.count("Address", {"disabled": 0})
+    return {"total": total,
+            "avec_lien": frappe.db.count("Address", {"disabled": 0, "custom_lien_google_map": ["like", "http%"]}),
+            "geocodees": frappe.db.count("Address", {"disabled": 0, "custom_latitude": [">", 0]}),
+            "liens_morts": frappe.db.count("Address", {"disabled": 0, "custom_geocode_source": ["like", MARQUE_LIEN_MORT + "%"]}),
+            "approchees": frappe.db.count("Address", {"disabled": 0, "custom_geocode_source": ["like", "texte%"], "custom_latitude": [">", 0]})}
+
+
+@frappe.whitelist(methods=["POST"])
+def lancer_geocodage(limite=500):
+    """Bouton du réglage : géocodage en tâche de fond (quelques minutes pour des centaines d'adresses)."""
+    _superviseur()
+    frappe.enqueue("customization_app.tournee_optimisation.geocoder_adresses", queue="long", timeout=3600,
+                   limite=cint(limite) or 500, enqueue_after_commit=True)
+    return etat_geocodage()
 
 
 def _memoriser(adresse: str, c, source: str):
@@ -154,7 +264,11 @@ def _centres_secteurs() -> dict:
     rows = frappe.db.sql("""select t.secteur, a.custom_latitude lat, a.custom_longitude lng
                             from `tabTache de travail` t join tabAddress a on a.name = t.select_address
                             where t.secteur is not null and t.secteur != '' and a.custom_latitude and a.custom_longitude
-                              and t.starts_on >= date_sub(curdate(), interval 365 day)""", as_dict=True)
+                              and t.starts_on >= date_sub(curdate(), interval 365 day)
+                            union all
+                            select a.custom_secteur, a.custom_latitude, a.custom_longitude from tabAddress a
+                            where a.custom_secteur is not null and a.custom_secteur != '' and a.custom_latitude and a.custom_longitude
+                              and a.custom_geocode_source not like 'texte%%'""", as_dict=True)
     par = {}
     for r in rows:
         par.setdefault(r.secteur, []).append((flt(r.lat), flt(r.lng)))
@@ -173,7 +287,8 @@ def coordonnees_tache(t, centres: dict):
         return c[0], c[1], "tâche"
     c = _geocoder_adresse(t.get("select_address"))
     if c:
-        return c[0], c[1], "adresse"
+        src = frappe.db.get_value("Address", t.select_address, "custom_geocode_source") or ""
+        return c[0], c[1], ("secteur" if src.startswith("texte") else "adresse")   # texte = approché, dit comme tel
     if t.get("secteur") in centres:
         c = centres[t.secteur]
         return c[0], c[1], "secteur"

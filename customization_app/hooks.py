@@ -605,6 +605,8 @@ scheduler_events = {
     # Tâche lourde exécutée une fois par jour (heure gérée par Frappe)
     "daily_long": [
         "customization_app.Maintenance.update_schedule.run_cron",
+        # Optimisation des tournées : positions des adresses nouvelles (lien Google Maps, sinon texte).
+        "customization_app.tournee_optimisation.geocodage_quotidien",
     ],
     "daily": [
         # Jours de récupération par quinzaine : crédite les quinzaines écoulées (Regle Recuperation).

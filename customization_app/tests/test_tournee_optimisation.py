@@ -13,6 +13,8 @@ class TestLiens(unittest.TestCase):
         self.assertEqual(c("https://maps.google.com/?q=36.8821509,10.252777"), (36.8821509, 10.252777))
         self.assertEqual(c("https://www.google.com/maps/place/X/@36.85,10.15,17z/data=!3m1"), (36.85, 10.15))
         self.assertEqual(c("https://www.google.com/maps/place/Rue/data=!4m6!3m5!1s0x12f:0x65!7e2!8m2!3d36.8505196!4d10.1578101?x=1"), (36.8505196, 10.1578101))
+        self.assertEqual(c("https://www.google.com/maps/search/36.877016,+10.257761?entry=tts&shorturl=1"), (36.877016, 10.257761))   # goo.gl/maps
+        self.assertEqual(c("https://consent.google.com/ml?continue=https://www.google.com/maps/search/36.877016,%2B10.257761?shorturl%3D1"), (36.877016, 10.257761))
         self.assertIsNone(c("https://maps.app.goo.gl/RRiBiumdXDYQ2wXUA"))      # lien court : à résoudre
         self.assertIsNone(c("https://maps.google.com/?cid=7227648310640122990"))
         self.assertIsNone(c(None))
