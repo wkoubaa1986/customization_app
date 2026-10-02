@@ -240,6 +240,31 @@ class TestJournee(unittest.TestCase):
         p2 = T.proposer(self.JOUR)
         self.assertEqual(p2["deplacees"], 0)
 
+    def test_journee_surchargee_sans_chevauchement(self):
+        """Journée voulue trop courte : des tâches restent de côté, mais RIEN ne se pose sur leur créneau
+        (bug du 03/10/2026 : une tâche laissée de côté au dernier tour n'était pas réservée)."""
+        p = T.proposer(self.JOUR, fenetre=0, employes=[{"employe": self.e1, "depart": "magasin", "debut": "08:30", "fin": "10:00"},
+                                                        {"employe": self.e2, "depart": "magasin", "debut": "08:30", "fin": "10:40"}])
+        self.assertTrue(p["non_places"], "la journée raccourcie devrait laisser des tâches de côté")
+
+        def paires(cle):
+            arrets = [{"employe": e["employe"], "tache": a["tache"], "debut": T._minutes(a["debut"], 0),
+                       "service": T._minutes(a["fin"], 0) - T._minutes(a["debut"], 0)} for e in p["employes"] for a in e[cle]["arrets"]]
+            return {frozenset((a["tache"], b["tache"])) for a, b in T.chevauchements(arrets)}
+        # B (installation 75 min) déborde déjà sur D épinglée à 10:00 dans les données : ce chevauchement-là est
+        # d'origine et peut rester ; aucun NOUVEAU ne doit apparaître.
+        self.assertTrue(paires("avant"))
+        self.assertLessEqual(paires("apres"), paires("avant"), p["employes"])
+        self.assertTrue(any("se chevauchent déjà" in w for w in p["avertissements"]))
+        self.assertTrue(all(a["fixe"] for e in p["employes"] for a in e["apres"]["arrets"] if a["non_place"]))   # laissée de côté = affichée fixe
+
+    def test_chevauchements(self):
+        a = {"employe": "x", "debut": 600, "service": 75, "client": "A"}
+        b = {"employe": "x", "debut": 630, "service": 30, "client": "B"}
+        c = {"employe": "x", "debut": 670, "service": 30, "client": "C"}
+        d = {"employe": "y", "debut": 630, "service": 30, "client": "D"}
+        self.assertEqual([(x["client"], y["client"]) for x, y in T.chevauchements([c, b, a, d])], [("A", "B"), ("A", "C")])
+
     def test_reserve_aux_superviseurs(self):
         import frappe
         autre = frappe.db.get_value("User", {"enabled": 1, "name": ["not in", ["Administrator", "Guest"]]}, "name")

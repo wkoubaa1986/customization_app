@@ -112,8 +112,11 @@
         const choix = [];
         d.fields_dict.employes.$wrapper.find("[data-emp]").each((_, el) => {
           const $e = $(el);
+          // Les heures ne sont envoyées que si vous les avez touchées : saisies, elles sont VOULUES (la journée
+          // s'arrête là, le reste va ailleurs) ; sinon la journée s'étend au travail déjà planifié.
           if ($e.find("input[type=checkbox]").is(":checked")) choix.push({ employe: $e.attr("data-emp"), depart: $e.find("select").val(),
-            debut: $e.find("input[data-debut]").val() || null, fin: $e.find("input[data-fin]").val() || null });
+            debut: $e.find("input[data-debut]").attr("data-modifie") ? $e.find("input[data-debut]").val() || null : null,
+            fin: $e.find("input[data-fin]").attr("data-modifie") ? $e.find("input[data-fin]").val() || null : null });
         });
         if (!choix.length) { frappe.msgprint("Cochez au moins un employé."); return; }
         d.fields_dict.resultat.$wrapper.html(`<div class="text-muted" style="padding:16px">Calcul des distances et des tournées…</div>`);
@@ -164,7 +167,7 @@
             <option value="magasin">🏬 Départ et retour : Magasin</option>
             <option value="domicile" ${e.domicile ? "" : "disabled"}>🏠 Départ et retour : domicile${e.domicile ? "" : " (non réglé)"}</option>
           </select>
-          <span style="font-size:11.5px;white-space:nowrap">🕘 <input type="time" data-debut value="${esc(e.debut)}" style="height:26px;font-size:12px;width:92px"> → <input type="time" data-fin value="${esc(e.fin)}" style="height:26px;font-size:12px;width:92px"></span>
+          <span style="font-size:11.5px;white-space:nowrap" title="Heures de ce calcul. Si vous les modifiez, la journée s’arrête à l’heure saisie et ce qui ne tient pas va à un autre employé ; sinon elle s’étend au travail déjà planifié.">🕘 <input type="time" data-debut value="${esc(e.debut)}" style="height:26px;font-size:12px;width:92px"> → <input type="time" data-fin value="${esc(e.fin)}" style="height:26px;font-size:12px;width:92px"></span>
           <a href="#" data-memoriser="${esc(e.employe)}" data-nom="${esc(e.nom)}" title="Enregistrer ces heures comme horaires habituels de cet employé" style="font-size:11.5px;white-space:nowrap">${e.horaire_propre ? "💾 horaires mémorisés" : "💾 mémoriser"}</a>
           <a href="#" data-regler="${esc(e.employe)}" data-nom="${esc(e.nom)}" style="font-size:11.5px;white-space:nowrap">${e.domicile ? "📍 changer le domicile" : "📍 régler le domicile"}</a>
           <a href="#" data-plier style="font-size:11.5px;white-space:nowrap;margin-left:auto" title="Voir les tâches de la journée">▸ tâches</a></div>
@@ -176,6 +179,7 @@
         $bloc.toggle();
         $a.text($bloc.is(":visible") ? "▾ tâches" : "▸ tâches");
       });
+      d.fields_dict.employes.$wrapper.find("input[data-debut], input[data-fin]").on("change", (ev) => $(ev.currentTarget).attr("data-modifie", "1"));
       d.fields_dict.employes.$wrapper.find("[data-memoriser]").on("click", async (ev) => {
         ev.preventDefault();
         const $row = $(ev.currentTarget).closest("[data-emp]"), emp = $row.attr("data-emp"), nom = $(ev.currentTarget).attr("data-nom");

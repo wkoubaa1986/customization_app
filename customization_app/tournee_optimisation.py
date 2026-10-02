@@ -469,6 +469,21 @@ def _duree(t) -> int:
     return duree_retenue(t.get("custom_type_dintervention"), planifie, t.get("temps"))
 
 
+def chevauchements(arrets: list) -> list:
+    """Les paires d'arrêts d'un même employé qui se recouvrent (clés `employe`, `debut`, `service`). PURE."""
+    out = []
+    par_emp = {}
+    for a in arrets:
+        par_emp.setdefault(a["employe"], []).append(a)
+    for liste in par_emp.values():
+        liste = sorted(liste, key=lambda a: a["debut"])
+        for i, a in enumerate(liste):
+            for b in liste[i + 1:]:
+                if b["debut"] < a["debut"] + a["service"]:
+                    out.append((a, b))
+    return out
+
+
 def _hm(minutes: int) -> str:
     return "%02d:%02d" % (minutes // 60, minutes % 60)
 
@@ -695,6 +710,9 @@ def proposer(date, fenetre=None, employes=None):
     if not employes:
         return {"date": str(jour), "employes": [], "message": _("Aucun employé n’a de tâche de terrain ce jour-là.")}
     noms = {e.name: e.employee_name for e in frappe.get_all("Employee", filters={"name": ["in", employes]}, fields=["name", "employee_name"])}
+    for a, b in chevauchements(arrets):
+        avert.append(_("{0} : {1} ({2}) et {3} ({4}) se chevauchent déjà dans le planning actuel").format(
+            noms.get(a["employe"], a["employe"]), a["client"], _hm(a["debut"]), b["client"], _hm(b["debut"])))
     # Points de départ particuliers (domicile…) : insérés juste après le Magasin, les arrêts décalés d'autant.
     particuliers = [e for e in employes if e in cfg["departs"]]
     decalage = len(particuliers)
@@ -752,14 +770,24 @@ def proposer(date, fenetre=None, employes=None):
             noeuds = [_noeud(a) for a in arrets]
             sol = resoudre(mn_x, noeuds, len(employes), debut_j, fin_j, cfg["equilibre"], premiere=cfg["premiere"], depots=depots,
                            marge=cfg["marge"], pause=cfg["pause"], debuts=debuts, fins=fins)
-        if sol["non_places"]:
-            # Toujours impossibles (deux rendez-vous à la même heure…) : elles restent telles quelles ET occupent
-            # leur créneau — les autres arrêts du même employé se calculent autour.
-            bloques = set(sol["non_places"])
+        bloques = set()
+        for _tour in range(6):
+            if not sol["non_places"]:
+                break
+            # Toujours impossibles (deux rendez-vous à la même heure, journée trop chargée…) : elles restent telles
+            # quelles ET occupent leur créneau — les autres arrêts du même employé se calculent autour. Chaque
+            # résolution peut en laisser de NOUVELLES de côté (en fixer une en chasse une autre) : on recommence
+            # jusqu'à ce que tout ce qui reste de côté ait son créneau réservé — sinon un arrêt se pose dessus
+            # (constaté le 03/10/2026 : Jilani 12:00 sur Ons 11:30–12:45, laissée de côté au dernier tour).
+            bloques |= set(sol["non_places"])
             occupations = {}
             for n in bloques:
                 a = par_noeud[n]
-                occupations.setdefault(employes.index(a["employe"]), []).append((a["debut"], a["debut"] + a["service"]))
+                a["mobile"] = False
+                v = employes.index(a["employe"])
+                occupations.setdefault(v, []).append((a["debut"], a["debut"] + a["service"]))
+                fins[v] = max(fins[v], a["debut"] + a["service"] + mn_x[n][depot_de[a["employe"]]])
+            fin_j = max(fins)
             restants = [a for a in arrets if a["noeud"] not in bloques]
             nb_depots = len(points) - len(arrets)
             garder = list(range(nb_depots)) + [a["noeud"] for a in restants]
@@ -769,8 +797,8 @@ def proposer(date, fenetre=None, employes=None):
                             marge=cfg["marge"], pause=cfg["pause"], occupations=occupations, debuts=debuts, fins=fins)
             inverse = {nb_depots + i: a["noeud"] for i, a in enumerate(restants)}    # retour aux nœuds d'origine
             sol = {"routes": [[(inverse[n], t) for n, t in r] for r in sol2["routes"]],
-                   "non_places": sorted(bloques | {inverse[n] for n in sol2["non_places"]}), "cout": sol2["cout"]}
-
+                   "non_places": sorted({inverse[n] for n in sol2["non_places"]} - bloques), "cout": sol2["cout"]}
+        sol["non_places"] = sorted(bloques | set(sol["non_places"]))
         return sol
 
     sol = _passes(mn)
