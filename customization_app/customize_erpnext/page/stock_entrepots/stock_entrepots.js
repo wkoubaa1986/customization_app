@@ -146,6 +146,10 @@ class StockEntrepots {
   async reassortCible() {
     const [source, cible] = this.sens();
     const d = (await frappe.call({ method: SE_API + "get_stock_cible", args: { entrepot: cible } })).message;
+    if (!(d.lignes || []).length) {
+      frappe.msgprint({ title: "Pas de stock cible", indicator: "orange", message: `Aucun stock cible n’est défini pour <b>${se_esc(this.libelle(cible))}</b>.<br>Définissez-le depuis l’onglet <b>Solde</b> : choisissez ce stock, puis <b>🎯 Stock cible</b> (ou appliquez le modèle générique des réglages).` });
+      return;
+    }
     const manque = (d.lignes || []).filter((l) => l.manque > 0);
     if (!manque.length) { frappe.show_alert({ message: `Rien à compléter : ${se_esc(this.libelle(cible))} est au niveau de son stock cible.`, indicator: "green" }, 5); return; }
     let ajoutes = 0;
@@ -162,7 +166,8 @@ class StockEntrepots {
   majBoutonReassort() {
     const [, cible] = this.sens();
     const w = this.ctx.entrepots.find((x) => x.name === cible);
-    this.$r.find("#se-t-reassort").toggle(!!(w && !w.magasin && (this.ctx.cibles || []).includes(cible)));
+    // Visible pour tout stock d'employé, cible définie ou non : sans cible, le bouton dit où la définir.
+    this.$r.find("#se-t-reassort").toggle(!!(w && !w.magasin)).toggleClass("on", (this.ctx.cibles || []).includes(cible));
   }
 
   montrer(onglet) {
