@@ -5,9 +5,16 @@ import frappe
 from frappe import _
 from frappe.model.document import Document
 
+from customization_app.stock_entrepots import articles_non_suivis
+
 
 class StockCible(Document):
     def validate(self):
+        # Un stock cible ne parle que d'articles suivis en stock : un service ou un article désactivé
+        # n'a pas de quantité à viser, et le réassort ne saurait pas le transférer.
+        mauvais = articles_non_suivis([r.item_code for r in self.get("lignes") or [] if r.item_code])
+        if mauvais:
+            frappe.throw(_("Stock cible : articles non suivis en stock (ou désactivés) : {0}").format(", ".join(mauvais)))
         vus, lignes = set(), []
         for r in self.get("lignes") or []:
             if not r.item_code or r.item_code in vus:

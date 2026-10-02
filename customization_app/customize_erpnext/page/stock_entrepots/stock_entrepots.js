@@ -145,13 +145,15 @@ class StockEntrepots {
   /** Transfert : complète le panier avec ce qui manque au stock cible de la destination (articles ciblés seulement). */
   async reassortCible() {
     const [source, cible] = this.sens();
-    const d = (await frappe.call({ method: SE_API + "get_stock_cible", args: { entrepot: cible } })).message;
+    // Sans cible propre au véhicule, le modèle générique du réglage sert de cible.
+    const d = (await frappe.call({ method: SE_API + "get_stock_cible", args: { entrepot: cible, avec_modele: 1 } })).message;
     if (!(d.lignes || []).length) {
-      frappe.msgprint({ title: "Pas de stock cible", indicator: "orange", message: `Aucun stock cible n’est défini pour <b>${se_esc(this.libelle(cible))}</b>.<br>Définissez-le depuis l’onglet <b>Solde</b> : choisissez ce stock, puis <b>🎯 Stock cible</b> (ou appliquez le modèle générique des réglages).` });
+      frappe.msgprint({ title: "Pas de stock cible", indicator: "orange", message: `Ni stock cible pour <b>${se_esc(this.libelle(cible))}</b>, ni modèle générique.<br>Remplissez le <b>stock cible générique</b> dans <a href="/app/config-stock-entrepot">les réglages</a>, ou définissez celui de ce stock depuis l’onglet <b>Solde</b> → <b>🎯 Stock cible</b>.` });
       return;
     }
+    const base = d.modele ? "modèle générique (ce stock n’a pas de cible propre)" : "stock cible";
     const manque = (d.lignes || []).filter((l) => l.manque > 0);
-    if (!manque.length) { frappe.show_alert({ message: `Rien à compléter : ${se_esc(this.libelle(cible))} est au niveau de son stock cible.`, indicator: "green" }, 5); return; }
+    if (!manque.length) { frappe.show_alert({ message: `Rien à compléter : ${se_esc(this.libelle(cible))} est au niveau du ${base}.`, indicator: "green" }, 5); return; }
     let ajoutes = 0;
     manque.forEach((l) => {
       if (this.panier.some((x) => x.item_code === l.item_code)) return;
@@ -160,7 +162,7 @@ class StockEntrepots {
     });
     await this.majQuantitesPanier();
     this.peindreTrouves();
-    frappe.show_alert({ message: `🎯 ${ajoutes} article(s) ajouté(s) depuis le stock cible de ${se_esc(this.libelle(cible))}${manque.length - ajoutes ? ` (${manque.length - ajoutes} déjà dans le panier)` : ""} — vérifiez puis validez`, indicator: "blue" }, 6);
+    frappe.show_alert({ message: `🎯 ${ajoutes} article(s) ajouté(s) selon le ${base} de ${se_esc(this.libelle(cible))}${manque.length - ajoutes ? ` (${manque.length - ajoutes} déjà dans le panier)` : ""} — vérifiez puis validez`, indicator: "blue" }, 6);
   }
 
   majBoutonReassort() {

@@ -1059,12 +1059,16 @@ def _infos_articles(codes: list[str]) -> dict:
 
 
 @frappe.whitelist()
-def get_stock_cible(entrepot):
-    """Le stock cible de l'entrepôt avec, pour chaque article, le stock actuel ici et au Magasin, et le manque."""
+def get_stock_cible(entrepot, avec_modele=0):
+    """Le stock cible de l'entrepôt avec, pour chaque article, le stock actuel ici et au Magasin, et le manque.
+    `avec_modele` : sans cible propre, le modèle générique du réglage tient lieu de cible (`modele` = True)."""
     _responsable()
     _verifier_entrepot(entrepot)
     source = (frappe.db.get_value(CIBLE, entrepot, "source") if frappe.db.exists(CIBLE, entrepot) else None) or magasin()
     cible = stock_cible(entrepot)
+    modele = False
+    if not cible and cint(avec_modele):
+        cible, modele = modele_stock_cible(), True
     infos = _infos_articles(list(cible))
     qtes = _quantites(list(cible), [entrepot, source])
     lignes = []
@@ -1076,7 +1080,7 @@ def get_stock_cible(entrepot):
         lignes.append({"item_code": code, "item_name": i.item_name, "image": i.image, "uom": i.stock_uom, "zones": i.custom_emplacement_magasin,
                        "qte_cible": q, "qte": actuel, "qte_source": qtes.get((code, source), 0.0), "manque": flt(max(q - actuel, 0), 6)})
     lignes.sort(key=lambda l: (l["item_name"] or l["item_code"]))
-    return {"entrepot": entrepot, "source": source, "lignes": lignes,
+    return {"entrepot": entrepot, "source": source, "lignes": lignes, "modele": modele,
             "a_reassortir": sum(1 for l in lignes if l["manque"] > 0), "unites": flt(sum(l["manque"] for l in lignes), 6)}
 
 
@@ -1150,6 +1154,59 @@ def fusionner_cible(existant: dict, modele: dict, remplacer: bool = False) -> di
         if remplacer or code not in out:
             out[code] = q
     return out
+
+
+# ── Saisie en bloc d'une liste d'articles (stock cible générique, stock cible d'un véhicule) ──
+#
+# « Coller une liste » : une ligne par article — code ou désignation, puis la quantité (séparée par une
+# tabulation, « ; », « , », « x », « × » ou un espace). Sans quantité : la quantité par défaut du dialogue.
+
+def parser_liste_articles(texte: str, qte_defaut: float = 1.0) -> list[tuple[str, float]]:
+    """PURE. « C-10'-CTO 10 », « Cartouche, UDF 10'\t5 », « PF-10' x 3 », « A-C » → [(référence, quantité)]."""
+    import re
+    out = []
+    for brute in (texte or "").splitlines():
+        ligne = brute.strip().strip("-•*· ").strip()
+        if not ligne:
+            continue
+        m = re.match(r"^(.*?)(?:\s*[\t;]\s*|\s+[x×X]\s*|\s+)(\d+(?:[.,]\d+)?)\s*$", ligne)
+        if m and m.group(1).strip():
+            out.append((m.group(1).strip().rstrip(",;"), flt(m.group(2).replace(",", "."), 6)))
+        else:
+            out.append((ligne.rstrip(",;"), flt(qte_defaut, 6)))
+    return out
+
+
+@frappe.whitelist()
+def resoudre_liste_articles(texte, qte_defaut=1):
+    """Chaque ligne collée → l'article suivi en stock qu'elle désigne : code exact (casse ignorée), puis désignation
+    exacte, puis code-barres. Rend les lignes reconnues, les références inconnues et les articles non suivis."""
+    _responsable()
+    lignes, inconnus, non_suivis, vus = [], [], [], set()
+    for ref, qte in parser_liste_articles(texte, flt(qte_defaut) or 1.0):
+        code = (frappe.db.get_value("Item", {"name": ref}, "name")
+                or frappe.db.get_value("Item", {"item_name": ref}, "name")
+                or frappe.db.get_value("Item Barcode", {"barcode": ref}, "parent"))
+        if not code:
+            inconnus.append(ref)
+            continue
+        i = frappe.db.get_value("Item", code, ["name", "item_name", "stock_uom", "is_stock_item", "disabled"], as_dict=True)
+        if not i.is_stock_item or i.disabled:
+            non_suivis.append(f"{i.name} ({i.item_name})")
+            continue
+        if i.name in vus:
+            continue
+        vus.add(i.name)
+        lignes.append({"item_code": i.name, "item_name": i.item_name, "uom": i.stock_uom, "qte": qte})
+    return {"lignes": lignes, "inconnus": inconnus, "non_suivis": non_suivis}
+
+
+def articles_non_suivis(codes: list[str]) -> list[str]:
+    """Les codes qui ne sont pas des articles actifs suivis en stock — refusés dans un stock cible."""
+    if not codes:
+        return []
+    ok = set(frappe.get_all("Item", filters={"name": ["in", codes], "is_stock_item": 1, "disabled": 0}, pluck="name"))
+    return [c for c in codes if c not in ok]
 
 
 @frappe.whitelist()

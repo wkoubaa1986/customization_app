@@ -149,3 +149,26 @@ class TestCircuit(unittest.TestCase):
         self.assertEqual(res["a_reappro"], len(res["articles"]))
         sans = S.get_solde(self.ENTREPOT)
         self.assertTrue(all(abs(a["qte"]) > 0 for a in sans["articles"]))     # sans filtre : stock non nul seulement
+
+
+class TestListeArticles(unittest.TestCase):
+    """« Coller une liste » dans un stock cible : lecture pure des lignes, puis résolution contre les articles."""
+
+    def test_parser(self):
+        p = S.parser_liste_articles
+        self.assertEqual(p("C-10'-CTO 10\nCartouche, UDF 10'\t5\nPF-10' x 3\n- A-C\n\n  "), [
+            ("C-10'-CTO", 10.0), ("Cartouche, UDF 10'", 5.0), ("PF-10'", 3.0), ("A-C", 1.0)])
+        self.assertEqual(p("C-10'-CTO;2,5\nM-80-V × 4", qte_defaut=7), [("C-10'-CTO", 2.5), ("M-80-V", 4.0)])
+        self.assertEqual(p("Pack Filtre 10\" (PP-UDF-CTO)"), [("Pack Filtre 10\" (PP-UDF-CTO)", 1.0)])  # un nom qui finit par « ) »
+        self.assertEqual(p(""), [])
+
+    def test_resolution(self):
+        import frappe
+        frappe.set_user("Administrator")
+        suivi = frappe.db.get_value("Item", {"is_stock_item": 1, "disabled": 0, "has_variants": 0}, ["name", "item_name"], as_dict=True)
+        service = frappe.db.get_value("Item", {"is_stock_item": 0, "disabled": 0}, "name")
+        r = S.resoudre_liste_articles(f"{suivi.name.lower()} 3\n{suivi.item_name}\t4\n{service or ''}\nZZZ-INEXISTANT 2")
+        self.assertEqual([(l["item_code"], l["qte"]) for l in r["lignes"]], [(suivi.name, 3.0)])     # dédoublonné, casse ignorée
+        self.assertEqual(r["inconnus"], ["ZZZ-INEXISTANT"])
+        self.assertEqual(len(r["non_suivis"]), 1 if service else 0)
+        self.assertEqual(S.articles_non_suivis([suivi.name] + ([service] if service else [])), [service] if service else [])

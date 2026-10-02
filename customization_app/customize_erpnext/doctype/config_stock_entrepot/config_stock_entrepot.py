@@ -6,9 +6,16 @@ import frappe
 from frappe import _
 from frappe.model.document import Document
 
+from customization_app.stock_entrepots import articles_non_suivis
+
 
 class ConfigStockEntrepot(Document):
     def validate(self):
+        # Un stock cible ne parle que d'articles suivis en stock : un service ou un article désactivé
+        # n'a pas de quantité à viser, et le réassort ne saurait pas le transférer.
+        mauvais = articles_non_suivis([r.item_code for r in self.get("modele_cible") or [] if r.item_code])
+        if mauvais:
+            frappe.throw(_("Stock cible : articles non suivis en stock (ou désactivés) : {0}").format(", ".join(mauvais)))
         vus, lignes = set(), []
         for r in self.get("entrepots_exclus") or []:
             if r.entrepot and r.entrepot not in vus and r.entrepot != self.entrepot_magasin:
