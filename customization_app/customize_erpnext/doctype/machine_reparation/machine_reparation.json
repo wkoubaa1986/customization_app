@@ -32,7 +32,16 @@
   "column_break_reparation",
   "date_reparee",
   "date_rendue",
-  "commande_client"
+  "commande_client",
+  "section_restitution",
+  "mode_restitution",
+  "sms_pret_le",
+  "tache_livraison",
+  "date_livraison_prevue",
+  "column_break_restitution",
+  "rendu_a",
+  "photo_remise",
+  "remarque_restitution"
  ],
  "fields": [
   {
@@ -70,7 +79,7 @@
    "fieldname": "statut",
    "fieldtype": "Select",
    "label": "Statut",
-   "options": "Réception en cours\nRéceptionnée\nPlanifiée\nRéparée\nRendue au client",
+   "options": "Réception en cours\nRéceptionnée\nPlanifiée\nRéparée\nPrête au magasin\nLivraison planifiée\nRendue au client",
    "default": "Réception en cours",
    "in_list_view": 1,
    "in_standard_filter": 1,
@@ -194,11 +203,61 @@
    "fieldtype": "Link",
    "label": "Commande client",
    "options": "Sales Order"
+  },
+  {
+   "fieldname": "section_restitution",
+   "fieldtype": "Section Break",
+   "label": "Restitution"
+  },
+  {
+   "fieldname": "mode_restitution",
+   "fieldtype": "Select",
+   "label": "Mode de restitution",
+   "options": "\nRetrait au magasin\nLivraison",
+   "read_only": 1
+  },
+  {
+   "fieldname": "sms_pret_le",
+   "fieldtype": "Datetime",
+   "label": "SMS « machine prête » envoyé le",
+   "read_only": 1
+  },
+  {
+   "fieldname": "tache_livraison",
+   "fieldtype": "Link",
+   "label": "Tâche de livraison",
+   "options": "Tache de travail",
+   "read_only": 1
+  },
+  {
+   "fieldname": "date_livraison_prevue",
+   "fieldtype": "Date",
+   "label": "Livraison prévue le",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_restitution",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "rendu_a",
+   "fieldtype": "Data",
+   "label": "Remise à (personne)"
+  },
+  {
+   "fieldname": "photo_remise",
+   "fieldtype": "Attach Image",
+   "label": "Photo de la remise"
+  },
+  {
+   "fieldname": "remarque_restitution",
+   "fieldtype": "Small Text",
+   "label": "Remarque de restitution"
   }
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-10-01 10:00:00.000000",
+ "modified": "2026-10-02 14:32:35.648825",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Machine Reparation",

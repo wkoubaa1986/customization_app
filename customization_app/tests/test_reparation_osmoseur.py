@@ -256,3 +256,90 @@ class TestCycleDeVie(unittest.TestCase):
         self.assertEqual(frappe.db.get_value(RO.DOCTYPE, nom, "statut"), RO.S_RECEPTION)
         # la tâche est SUPPRIMÉE, pas annulée
         self.assertFalse(frappe.db.exists(RO.DOCTYPE_TACHE, t))
+
+
+class TestRestitution(unittest.TestCase):
+    """Étape « à rendre » (02/10/2026) : retrait au magasin (SMS, remise) ou livraison (tâche, clôture, annulation)."""
+
+    def setUp(self):
+        import frappe
+        frappe.db.savepoint("osm_rest")
+        frappe.set_user("Administrator")
+        self.client = frappe.db.get_value("Customer", {"disabled": 0}, "name")
+        self.emp = frappe.db.get_value("Employee", {"status": "Active"}, "name")
+        if not self.client or not self.emp:
+            self.skipTest("pas de client / employé")
+        nom = RO.creer_reception(self.client, note="essai restitution", garantie="Hors garantie", tel="20123456")["name"]
+        frappe.db.set_value(RO.DOCTYPE, nom, {"statut": RO.S_REPAREE, "date_reparee": frappe.utils.now_datetime()})
+        self.nom = nom
+
+    def tearDown(self):
+        import frappe
+        frappe.set_user("Administrator")
+        frappe.db.rollback(save_point="osm_rest")
+
+    def _statut(self):
+        import frappe
+        return frappe.db.get_value(RO.DOCTYPE, self.nom, "statut")
+
+    def test_retrait_au_magasin_avec_sms_puis_remise(self):
+        import frappe
+        r = RO.restituer_magasin(self.nom, sms=1)
+        self.assertEqual((r["statut"], self._statut()), (RO.S_PRETE, RO.S_PRETE))
+        self.assertTrue(r["sms"]["simule"])                                      # dev : jamais un vrai SMS
+        self.assertEqual(r["sms"]["numeros"], ["20123456"])
+        self.assertIn("hors garantie", r["sms"]["texte"])
+        self.assertTrue(frappe.db.get_value(RO.DOCTYPE, self.nom, "sms_pret_le"))
+        with self.assertRaises(frappe.ValidationError):
+            RO.restituer_magasin(self.nom)                                       # déjà au magasin
+        RO.enregistrer_photo(self.nom, "remise", "/files/remise.jpg")
+        self.assertEqual(RO.rendre(self.nom, rendu_a="Son frère", remarque="règlement espèces")["statut"], RO.S_RENDUE)
+        m = frappe.db.get_value(RO.DOCTYPE, self.nom, ["rendu_a", "mode_restitution", "photo_remise", "date_rendue"], as_dict=True)
+        self.assertEqual((m.rendu_a, m.mode_restitution, m.photo_remise), ("Son frère", "Retrait au magasin", "/files/remise.jpg"))
+        self.assertTrue(m.date_rendue)
+        RO.synchroniser(self.nom)
+        self.assertEqual(self._statut(), RO.S_RENDUE)                            # une machine rendue ne redescend pas
+
+    def test_annuler_le_retrait(self):
+        RO.restituer_magasin(self.nom)
+        self.assertEqual(RO.annuler_restitution(self.nom)["statut"], RO.S_REPAREE)
+        self.assertEqual(self._statut(), RO.S_REPAREE)
+
+    def test_livraison_cloturee_rend_la_machine(self):
+        import frappe
+        r = RO.planifier_livraison(self.nom, self.emp, "2031-04-04", heure="10:30", note="appeler avant")
+        self.assertEqual((r["statut"], self._statut()), (RO.S_LIVRAISON, RO.S_LIVRAISON))
+        t = frappe.get_doc(RO.DOCTYPE_TACHE, r["tache"])
+        self.assertEqual((t.custom_type_dintervention, t.get(RO.CHAMP_TACHE), t.custom_choix_du_staff, str(t.starts_on)[:16]),
+                         ("Livraison", self.nom, self.emp, "2031-04-04 10:30"))
+        self.assertEqual((t.ends_on - t.starts_on).total_seconds(), 30 * 60)
+        self.assertIn("hors garantie", t.subject)
+        self.assertIn("appeler avant", t.subject)
+        m = frappe.db.get_value(RO.DOCTYPE, self.nom, ["tache_livraison", "date_livraison_prevue", "mode_restitution"], as_dict=True)
+        self.assertEqual((m.tache_livraison, str(m.date_livraison_prevue), m.mode_restitution), (t.name, "2031-04-04", "Livraison"))
+        with self.assertRaises(frappe.ValidationError):
+            RO.rendre(self.nom)                                                  # pas de remise à la main pendant une livraison
+        # un mouvement sur la tâche de RÉPARATION ne touche pas au statut de restitution
+        self.assertEqual(RO.synchroniser(self.nom), RO.S_LIVRAISON)
+        t.dispense_photos = 1
+        t.rapport_visite = "livrée, client présent"
+        t.status = "Completed"
+        t.flags.ignore_permissions = True
+        t.save()
+        m = frappe.db.get_value(RO.DOCTYPE, self.nom, ["statut", "rendu_a", "date_rendue"], as_dict=True)
+        self.assertEqual(m.statut, RO.S_RENDUE)
+        self.assertTrue(m.date_rendue and m.rendu_a.startswith("livrée par"))
+
+    def test_livraison_supprimee_revient_a_rendre(self):
+        import frappe
+        r = RO.planifier_livraison(self.nom, self.emp, "2031-04-05")
+        frappe.delete_doc(RO.DOCTYPE_TACHE, r["tache"], ignore_permissions=True, force=True)   # le hook after_delete resynchronise
+        self.assertEqual(self._statut(), RO.S_REPAREE)
+        self.assertFalse(frappe.db.get_value(RO.DOCTYPE, self.nom, "tache_livraison"))
+        # et l'annulation depuis l'écran supprime la tâche ouverte
+        r = RO.planifier_livraison(self.nom, self.emp, "2031-04-06")
+        self.assertEqual(RO.annuler_restitution(self.nom)["statut"], RO.S_REPAREE)
+        self.assertFalse(frappe.db.exists(RO.DOCTYPE_TACHE, r["tache"]))
+
+    def test_rendre_directement_depuis_reparee_reste_possible(self):
+        self.assertEqual(RO.rendre(self.nom, rendu_a="Le client")["statut"], RO.S_RENDUE)

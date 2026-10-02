@@ -12,8 +12,12 @@ Le processus, tel que demandé le 01/10/2026 :
    jour n'a qu'UN SEUL opérateur et reçoit au plus N machines (3 par défaut). Jour
    plein ou personne de disponible → jour suivant.
 3. VALIDATION : la clôture de la (des) tâche(s) liée(s) fait passer le dossier à
-   « Réparée » (hook on_update de la Tache de travail). « Rendue au client » reste
-   un geste humain : c'est la preuve de restitution.
+   « Réparée » — c'est-à-dire À RENDRE.
+4. RESTITUTION (02/10/2026) : deux chemins. « Le client vient la chercher » → « Prête au
+   magasin » (SMS « machine prête » proposé), puis « Rendue au client » à la remise (personne,
+   photo facultative). « Planifier une livraison » → tâche Livraison au calendrier, dossier
+   « Livraison planifiée » ; la clôture de cette tâche rend la machine toute seule, sa
+   suppression ramène le dossier à « Réparée ».
 
 Toute la décision est ici, côté serveur ; l'écran n'invente rien.
 """
@@ -39,11 +43,18 @@ TYPE_TACHE = "Réparation"
 S_RECEPTION = "Réception en cours"
 S_RECEPTIONNEE = "Réceptionnée"           # clôturée mais SANS tâche (personne à affecter)
 S_PLANIFIEE = "Planifiée"
-S_REPAREE = "Réparée"
+S_REPAREE = "Réparée"                     # = à rendre
+S_PRETE = "Prête au magasin"              # le client vient la chercher
+S_LIVRAISON = "Livraison planifiée"       # une tâche Livraison la ramène
 S_RENDUE = "Rendue au client"
-STATUTS = [S_RECEPTION, S_RECEPTIONNEE, S_PLANIFIEE, S_REPAREE, S_RENDUE]
+STATUTS = [S_RECEPTION, S_RECEPTIONNEE, S_PLANIFIEE, S_REPAREE, S_PRETE, S_LIVRAISON, S_RENDUE]
+EN_RESTITUTION = (S_PRETE, S_LIVRAISON)
 
-CHAMPS_PHOTO = {"arrivee": "photo_arrivee", "post_it": "photo_post_it"}
+CHAMPS_PHOTO = {"arrivee": "photo_arrivee", "post_it": "photo_post_it", "remise": "photo_remise"}
+TYPE_LIVRAISON = "Livraison"
+DUREE_LIVRAISON = 30
+SMS_PRET = ("Bonjour {nom}, votre appareil ({ref}) est repare et vous attend au magasin Aquaworld (Soukra).{garantie} "
+            "Pour toute question : {tel}.")
 GARANTIES = ("Sous garantie", "Hors garantie")
 MOIS_HISTORIQUE = 13                     # la dernière année + 1 mois (décision 01/10/2026)
 NOTE_GARANTIE = "🆓 SOUS GARANTIE — réparation GRATUITE, ne rien facturer au client"
@@ -189,7 +200,8 @@ def get_data(statut=None, client=None, responsable=None, recherche=None, inclure
                               fields=["name", "client", "nom_client", "tel", "statut", "date_reception", "note_reception", "photo_arrivee",
                                       "photo_post_it", "dispense_post_it", "date_cloture_reception",
                                       "controle_ia_ok", "controle_ia_resultat", "garantie", "commande_garantie", "responsable", "nom_responsable", "date_prevue", "date_reparee",
-                                      "date_rendue", "commande_client", "modified"],
+                                      "date_rendue", "commande_client", "modified", "mode_restitution", "sms_pret_le", "tache_livraison",
+                                      "date_livraison_prevue", "rendu_a", "photo_remise", "remarque_restitution"],
                               order_by="creation desc")
     taches = _taches_par_machine([m.name for m in machines])
     aujourdhui = getdate(nowdate())
@@ -625,7 +637,11 @@ def synchroniser(machine: str) -> str:
     courant = frappe.db.get_value(DOCTYPE, machine, "statut")
     if not courant or courant in (S_RECEPTION, S_RENDUE):
         return courant
-    taches = frappe.get_all(DOCTYPE_TACHE, filters={CHAMP_TACHE: machine, "status": ["!=", "Cancelled"]},
+    if courant in EN_RESTITUTION:
+        return _synchroniser_livraison(machine, courant)
+    # Les tâches de RÉPARATION seulement : une livraison de retour ne dit rien de l'état de la réparation.
+    taches = frappe.get_all(DOCTYPE_TACHE, filters={CHAMP_TACHE: machine, "status": ["!=", "Cancelled"],
+                                                    "custom_type_dintervention": ["!=", TYPE_LIVRAISON]},
                             fields=["name", "status", "custom_choix_du_staff", "starts_on"], order_by="starts_on")
     maj = {}
     if not taches:
@@ -658,14 +674,156 @@ def on_tache_change(doc, method=None):
         frappe.log_error(frappe.get_traceback(), "reparation_osmoseur.on_tache_change")
 
 
+def _synchroniser_livraison(machine: str, courant: str) -> str:
+    """Dossier en restitution par livraison : la tâche Livraison clôturée rend la machine ; disparue ou
+    annulée, le dossier revient « Réparée » (à rendre). « Prête au magasin » ne bouge pas tout seul."""
+    tache = frappe.db.get_value(DOCTYPE, machine, "tache_livraison")
+    if courant != S_LIVRAISON or not tache:
+        return courant
+    etat = frappe.db.get_value(DOCTYPE_TACHE, tache, ["status", "custom_choix_du_staff"], as_dict=True)
+    if etat and etat.status == "Completed":
+        nom = frappe.db.get_value("Employee", etat.custom_choix_du_staff, "employee_name") or etat.custom_choix_du_staff or ""
+        frappe.db.set_value(DOCTYPE, machine, {"statut": S_RENDUE, "date_rendue": now_datetime(),
+                                               "rendu_a": _("livrée par {0}").format(nom)[:140]})
+        return S_RENDUE
+    if not etat or etat.status == "Cancelled":
+        frappe.db.set_value(DOCTYPE, machine, {"statut": S_REPAREE, "tache_livraison": None, "date_livraison_prevue": None,
+                                               "mode_restitution": None})
+        return S_REPAREE
+    return courant
+
+
+def _sms_simule() -> bool:
+    """Le dev porte les vrais numéros : en developer_mode on SIMULE, sauf `sms_reel_en_dev` dans site_config."""
+    return bool(cint(frappe.conf.get("developer_mode"))) and not cint(frappe.conf.get("sms_reel_en_dev"))
+
+
 @frappe.whitelist()
-def rendre(machine):
+def envoyer_sms_pret(machine):
+    """SMS « votre appareil est réparé, à retirer au magasin » au(x) numéro(s) du dossier."""
+    from customization_app.customize_erpnext.doctype.compagne_sms.compagne_sms import _send_sms_with_fallback, traiter_numero_tel
+    from customization_app.sms_annulation import sans_accents, telephone_contact
+
+    _ecriture(machine)
+    doc = frappe.get_doc(DOCTYPE, machine)
+    if doc.statut not in (S_REPAREE, S_PRETE):
+        frappe.throw(_("Le SMS « machine prête » ne s'envoie que pour une machine réparée ({0}).").format(doc.statut))
+    numeros = traiter_numero_tel(doc.tel or "")
+    if not numeros:
+        frappe.throw(_("Aucun numéro mobile tunisien valide sur le dossier ({0}).").format(doc.tel or "—"))
+    texte = sans_accents(SMS_PRET.format(nom=doc.nom_client or doc.client, ref=doc.name, tel=telephone_contact(),
+                                         garantie=" Reparation hors garantie : a regler au retrait." if doc.garantie == "Hors garantie" else ""))
+    simule = _sms_simule()
+    if not simule:
+        _send_sms_with_fallback(["216%s" % n for n in numeros], texte)
+    doc.db_set("sms_pret_le", now_datetime(), update_modified=False)
+    doc.add_comment("Comment", _("📲 SMS « machine prête » {0} à {1} : {2}")
+                    .format(_("SIMULÉ (dev)") if simule else _("envoyé"), ", ".join(numeros), texte))
+    return {"numeros": numeros, "simule": simule, "texte": texte}
+
+
+@frappe.whitelist()
+def restituer_magasin(machine, sms=0):
+    """Le client viendra la chercher : « Prête au magasin », SMS proposé."""
     _ecriture(machine)
     doc = frappe.get_doc(DOCTYPE, machine)
     if doc.statut != S_REPAREE:
+        frappe.throw(_("Seule une machine réparée se met en attente au magasin ({0}).").format(doc.statut))
+    doc.statut, doc.mode_restitution = S_PRETE, "Retrait au magasin"
+    doc.save()
+    out = {"statut": doc.statut, "sms": None}
+    if cint(sms):
+        out["sms"] = envoyer_sms_pret(machine)
+    return out
+
+
+@frappe.whitelist()
+def adresses_client(client):
+    """Les adresses du client, pour choisir où livrer."""
+    _lecture()
+    noms = frappe.get_all("Dynamic Link", filters={"link_doctype": "Customer", "link_name": client, "parenttype": "Address"},
+                          pluck="parent", distinct=True)
+    out = []
+    for a in frappe.get_all("Address", filters={"name": ["in", noms or [""]], "disabled": 0},
+                            fields=["name", "address_title", "address_line1", "address_line2", "city", "custom_secteur",
+                                    "custom_lien_google_map", "is_shipping_address", "is_primary_address"]):
+        a["libelle"] = ", ".join(x for x in (a.address_line1, a.address_line2, a.city) if x)
+        out.append(a)
+    out.sort(key=lambda a: (not a.is_shipping_address, not a.is_primary_address, a.name))
+    return out
+
+
+@frappe.whitelist()
+def planifier_livraison(machine, employee, date, heure="09:00", adresse=None, note=None):
+    """Une tâche Livraison au calendrier ramène la machine chez le client ; sa clôture rend le dossier."""
+    _ecriture(machine)
+    doc = frappe.get_doc(DOCTYPE, machine)
+    if doc.statut not in (S_REPAREE, S_PRETE):
+        frappe.throw(_("Seule une machine réparée se livre ({0}).").format(doc.statut))
+    if not frappe.db.exists("Employee", {"name": employee, "status": "Active"}):
+        frappe.throw(_("Employé inconnu ou inactif : {0}").format(employee))
+    adresses = adresses_client(doc.client)
+    a = next((x for x in adresses if x.name == adresse), None) if adresse else (adresses[0] if adresses else None)
+    nom_emp = frappe.db.get_value("Employee", employee, "employee_name") or employee
+    garantie = doc.garantie == "Sous garantie"
+    sujet = "Retour de l'osmoseur réparé %s%s" % (doc.name, " — " + NOTE_GARANTIE if garantie else " — hors garantie : encaisser la réparation à la livraison")
+    if note:
+        sujet += "\n" + note.strip()[:300]
+    tache = frappe.get_doc({
+        "doctype": DOCTYPE_TACHE, "custom_type_dintervention": TYPE_LIVRAISON,
+        "custom_choix_du_staff": employee, "custom_employé": nom_emp,
+        "custom_client": doc.client, "nom_client": doc.nom_client, "tel": doc.tel,
+        "starts_on": "%s %s:00" % (getdate(date), str(heure or "09:00")[:5]),
+        "titre": "%s\n🚚 Livraison: Client: %s\n%s" % ((a.custom_secteur if a and a.custom_secteur else ""), doc.nom_client or doc.client, nom_emp),
+        "subject": sujet, "temps": "30 min", "status": "Open", CHAMP_TACHE: doc.name,
+        "select_address": a.name if a else None, "details_adresse": (a.libelle if a else "")[:140],
+        "secteur": a.custom_secteur if a else None, "google_map": (a.custom_lien_google_map if a else "") or "",
+        "commande_client": doc.get("commande_garantie") if garantie else None,
+    })
+    tache.flags.ignore_permissions = True
+    tache.flags.duree_fixee = True
+    tache.insert()
+    fin = frappe.utils.add_to_date(frappe.utils.get_datetime(tache.starts_on), minutes=DUREE_LIVRAISON)
+    frappe.db.set_value(DOCTYPE_TACHE, tache.name, "ends_on", fin, update_modified=False)
+    doc.reload()
+    doc.statut, doc.mode_restitution = S_LIVRAISON, "Livraison"
+    doc.tache_livraison, doc.date_livraison_prevue = tache.name, getdate(date)
+    doc.save()
+    return {"statut": doc.statut, "tache": tache.name, "employe": nom_emp, "date": str(getdate(date)),
+            "adresse": a.libelle if a else None}
+
+
+@frappe.whitelist()
+def rendre(machine, rendu_a=None, remarque=None):
+    """Remise en main propre (au magasin, ou directement depuis « Réparée ») : la preuve de restitution."""
+    _ecriture(machine)
+    doc = frappe.get_doc(DOCTYPE, machine)
+    if doc.statut not in (S_REPAREE, S_PRETE):
         frappe.throw(_("Seule une machine réparée peut être rendue ({0}).").format(doc.statut))
     doc.statut = S_RENDUE
     doc.date_rendue = now_datetime()
+    doc.mode_restitution = doc.mode_restitution or "Retrait au magasin"
+    if rendu_a:
+        doc.rendu_a = rendu_a.strip()[:140]
+    if remarque:
+        doc.remarque_restitution = remarque.strip()[:500]
+    doc.save()
+    return {"statut": doc.statut}
+
+
+@frappe.whitelist()
+def annuler_restitution(machine):
+    """Retour à « Réparée » (à rendre) : la tâche de livraison encore ouverte est supprimée."""
+    _ecriture(machine)
+    doc = frappe.get_doc(DOCTYPE, machine)
+    if doc.statut not in EN_RESTITUTION:
+        frappe.throw(_("Le dossier {0} n'est pas en restitution ({1}).").format(machine, doc.statut))
+    if doc.tache_livraison and frappe.db.exists(DOCTYPE_TACHE, doc.tache_livraison):
+        if frappe.db.get_value(DOCTYPE_TACHE, doc.tache_livraison, "status") == "Completed":
+            frappe.throw(_("La livraison {0} est déjà clôturée.").format(doc.tache_livraison))
+        frappe.delete_doc(DOCTYPE_TACHE, doc.tache_livraison, ignore_permissions=True, force=True)
+    doc.reload()
+    doc.statut, doc.mode_restitution, doc.tache_livraison, doc.date_livraison_prevue = S_REPAREE, None, None, None
     doc.save()
     return {"statut": doc.statut}
 
