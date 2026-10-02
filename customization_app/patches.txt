@@ -59,3 +59,4 @@ customization_app.patches.zones_magasin_unitaires
 customization_app.patches.reprendre_exclusions_situation
 customization_app.patches.ensure_transfert_validation_fields
 customization_app.patches.corriger_duree_taches_verification
+customization_app.patches.ensure_transfert_validation_fields #2

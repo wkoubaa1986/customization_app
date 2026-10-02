@@ -371,6 +371,10 @@ def ecriture_transfert(source: str, cible: str, lignes: list[tuple[str, float]],
     for item_code, qte in lignes:
         doc.append("items", {"item_code": item_code, "qty": qte, "s_warehouse": source, "t_warehouse": cible})
     avant = len(frappe.local.message_log)
+    # Le droit a été vérifié par le rôle (Responsable magasin). Frappe, lui, refuserait l'écriture à un
+    # responsable qui n'a pas le droit de LIRE la fiche Employé du valideur (permission utilisateur « son
+    # propre employé » : Hedi en prod, 02/10/2026) — le lien « Validation attendue de » le bloquait.
+    doc.flags.ignore_permissions = True
     if valideur:
         doc.set(CHAMP_VALIDEUR, valideur)
         doc.insert()
@@ -610,6 +614,7 @@ def annuler_transfert(name):
         return True
     if doc.purpose != PURPOSE or doc.docstatus != 1:
         frappe.throw(_("{0} n’est pas un transfert soumis.").format(name))
+    doc.flags.ignore_permissions = True
     doc.cancel()
     return True
 

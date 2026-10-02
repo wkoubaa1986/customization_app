@@ -22,6 +22,9 @@ def execute():
                     "read_only": 1,
                     "no_copy": 1,
                     "in_standard_filter": 1,
+                    # Un responsable ne lit que SA fiche Employé (permission utilisateur) : sans ceci, un
+                    # transfert vers le stock d'un collègue lui est « non permis » (Hedi, prod 02/10/2026).
+                    "ignore_user_permissions": 1,
                     "module": "Customize erpnext",
                     "description": "Transfert Magasin → stock d'un employé : reste en brouillon jusqu'à sa confirmation.",
                 },
@@ -60,4 +63,7 @@ def execute():
         },
         ignore_validate=True,
     )
+    # Champ déjà créé par une version précédente du patch : on pose le drapeau après coup.
+    frappe.db.set_value("Custom Field", "Stock Entry-custom_validation_employe", "ignore_user_permissions", 1)
+    frappe.clear_cache(doctype="Stock Entry")
     frappe.db.commit()
