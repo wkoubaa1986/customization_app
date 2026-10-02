@@ -741,6 +741,7 @@ def proposer(date, fenetre=None, employes=None):
                           "starts_on": "%s %s:00" % (base, _hm(deb)), "ends_on": "%s %s:00" % (base, _hm(deb + a["service"])),
                           "employe": e, "de": a["employe"], "de_nom": noms.get(a["employe"], a["employe"]),
                           "deplace": a["employe"] != e, "decale": a["mobile"] and deb != a["debut"], "fixe": not a["mobile"],
+                          "ancien_debut": _hm(a["debut"]), "ecart_min": deb - a["debut"],
                           "non_place": n in sol["non_places"],
                           "position": a["position"], "lat": a["lat"], "lng": a["lng"], "adresse": a["adresse"]})
         out.append({"employe": e, "nom": noms.get(e, e), "depart": "domicile" if dep else "Magasin", "depart_point": points[dep],

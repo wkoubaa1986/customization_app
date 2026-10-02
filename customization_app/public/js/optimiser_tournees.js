@@ -31,13 +31,19 @@
     return `https://www.google.com/maps/dir/?api=1&travelmode=driving&origin=${d}&destination=${d}&waypoints=${encodeURIComponent(pts.join("|"))}`;
   }
 
+  // « +1 h 30 » / « −45 min » : de combien l'heure d'une tâche bouge par rapport à l'actuel.
+  const decalage = (mn) => {
+    const a = Math.abs(mn), h = Math.floor(a / 60), m = a % 60;
+    return (mn < 0 ? "−" : "+") + (h ? `${h} h${m ? " " + String(m).padStart(2, "0") : ""}` : `${m} min`);
+  };
+
   function rendre(p) {
     if (!p.employes.length) return `<div class="text-muted" style="padding:16px">${esc(p.message || "Rien à optimiser.")}</div>`;
     const t = p.total, gain = t.avant_min - t.apres_min;
     const ligneAvant = (a) => `<div style="font-size:12.5px;padding:2px 0;${a.fixe ? "color:#64748b" : ""}">${esc(a.debut)}–${esc(a.fin)} · ${esc(a.client)} <span class="text-muted">${esc(a.type)}</span>${a.fixe ? " 📌" : ""}</div>`;
     const ligneApres = (a) => `<div style="font-size:12.5px;padding:2px 0;${a.deplace ? "background:#fef3c7;border-radius:4px" : a.decale ? "background:#eff6ff;border-radius:4px" : ""}${a.fixe ? ";color:#64748b" : ""}">
         ${esc(a.debut)}–${esc(a.fin)} · <b>${esc(a.client)}</b> <span class="text-muted">${esc(a.type)}</span>${a.fixe ? " 📌" : ""}
-        ${a.deplace ? `<span style="color:#b45309;font-size:11px"> ↔ venait de ${esc(a.de_nom)}</span>` : a.decale ? `<span style="color:#1d4ed8;font-size:11px"> ⏱ heure changée</span>` : a.non_place ? `<span style="color:#b91c1c;font-size:11px"> ⚠️ hors tournée (chevauchement ou hors journée), inchangée</span>` : ""}
+        ${a.deplace ? `<span style="color:#b45309;font-size:11px"> ↔ venait de ${esc(a.de_nom)}</span>` : ""}${a.decale ? `<span style="color:#1d4ed8;font-size:11px"> ⏱ était à ${esc(a.ancien_debut)} (${decalage(a.ecart_min)})</span>` : ""}${a.non_place ? `<span style="color:#b91c1c;font-size:11px"> ⚠️ hors tournée (chevauchement ou hors journée), inchangée</span>` : ""}
         ${a.position === "secteur" ? `<span style="color:#b91c1c;font-size:11px"> ≈ secteur</span>` : ""}</div>`;
     const cartes = p.employes.map((e) => `<div style="border:1px solid #e2e8f0;border-radius:10px;padding:10px 12px;margin-bottom:10px">
         <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px">
