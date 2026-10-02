@@ -1231,6 +1231,10 @@ def _fixer_duree_a_la_creation(doc):
     """
     if not doc.get("__islocal") or not doc.get("starts_on"):
         return
+    # Une tâche créée par le code avec une durée VOULUE (vérification de stock : la durée du réglage)
+    # la garde — le type ne décide que pour les saisies à la main et au calendrier.
+    if doc.flags.get("duree_fixee"):
+        return
     minutes = DUREE_INTERVENTION.get(doc.get("custom_type_dintervention"), DUREE_DEFAUT)
     doc.ends_on = frappe.utils.add_to_date(frappe.utils.get_datetime(doc.starts_on),
                                            minutes=minutes)

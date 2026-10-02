@@ -839,6 +839,9 @@ def _creer_tache(employe: str, entrepot_libelle: str, quand, duree: str, role: s
     except Exception:
         pass
     doc.flags.ignore_permissions = True
+    # Sans ce drapeau, api._fixer_duree_a_la_creation remplace la fin par la durée du TYPE (« Autre » :
+    # 2 h par défaut) et la durée du réglage est perdue (constaté le 02/10/2026).
+    doc.flags.duree_fixee = True
     doc.insert()
     return doc.name
 
