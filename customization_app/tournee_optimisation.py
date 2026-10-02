@@ -210,10 +210,12 @@ def geocoder_adresses(limite: int = 500) -> dict:
                 continue
             frappe.db.set_value("Address", a.name, "custom_geocode_source", "%s %s" % (MARQUE_LIEN_MORT, frappe.utils.nowdate()), update_modified=False)
             bilan["morts"] += 1
+            src = MARQUE_LIEN_MORT
         if not src.startswith("texte"):
             c = geocoder_texte(a.address_line1, a.city)
             if c:
-                _memoriser(a.name, c, "texte ≈")
+                # Le lien mort reste visible dans la source : c'est lui qu'il faut corriger sur l'adresse.
+                _memoriser(a.name, c, "texte ≈ (lien mort)" if src.startswith(MARQUE_LIEN_MORT) else "texte ≈")
                 bilan["textes"] += 1
             else:
                 frappe.db.set_value("Address", a.name, "custom_geocode_source", "texte introuvable %s" % frappe.utils.nowdate(), update_modified=False)
@@ -239,7 +241,7 @@ def etat_geocodage():
     return {"total": total,
             "avec_lien": frappe.db.count("Address", {"disabled": 0, "custom_lien_google_map": ["like", "http%"]}),
             "geocodees": frappe.db.count("Address", {"disabled": 0, "custom_latitude": [">", 0]}),
-            "liens_morts": frappe.db.count("Address", {"disabled": 0, "custom_geocode_source": ["like", MARQUE_LIEN_MORT + "%"]}),
+            "liens_morts": frappe.db.count("Address", {"disabled": 0, "custom_geocode_source": ["like", "%" + MARQUE_LIEN_MORT + "%"]}),
             "approchees": frappe.db.count("Address", {"disabled": 0, "custom_geocode_source": ["like", "texte%"], "custom_latitude": [">", 0]})}
 
 
