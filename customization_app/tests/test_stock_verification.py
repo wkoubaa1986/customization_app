@@ -79,12 +79,15 @@ class TestCircuit(unittest.TestCase):
         r = S.enregistrer_verification(nom, json.dumps(comptes))
         self.assertEqual((r["nb_comptes"], r["nb_ecarts"]), (2, 1))
         r = S.terminer_verification(nom, json.dumps(comptes), note="test")
-        self.assertEqual(r["statut"], "Terminée")
+        self.assertEqual(r["statut"], "À valider")                              # 1re validation : le comptage
         self.assertAlmostEqual(r["valeur_ecarts"], round(2 * l1.taux, 3), places=3)
         self.assertEqual(frappe.db.get_value("Tache de travail", v.tache_employe, "status"), "Completed")
-        # AUCUN mouvement de stock : la quantité en base est inchangée
+        # le stock ne bouge PAS avant la validation du responsable
         self.assertEqual(frappe.db.get_value("Bin", {"item_code": l1.item_code, "warehouse": self.ENTREPOT}, "actual_qty"), stock_avant)
-        self.assertEqual(frappe.db.count("Stock Ledger Entry", {"voucher_no": nom}), 0)
+        r = S.valider_verification(nom)                                         # 2e validation : rapprochement
+        self.assertEqual(r["statut"], "Terminée")
+        self.assertTrue(r["rapprochement"])
+        self.assertEqual(frappe.db.get_value("Bin", {"item_code": l1.item_code, "warehouse": self.ENTREPOT}, "actual_qty"), stock_avant + 2)
         self.assertEqual([h["name"] for h in S.historique_verifications(self.ENTREPOT)][0], nom)
         with self.assertRaises(frappe.ValidationError):
             S.terminer_verification(nom)                                        # déjà terminée
@@ -172,3 +175,97 @@ class TestListeArticles(unittest.TestCase):
         self.assertEqual(r["inconnus"], ["ZZZ-INEXISTANT"])
         self.assertEqual(len(r["non_suivis"]), 1 if service else 0)
         self.assertEqual(S.articles_non_suivis([suivi.name] + ([service] if service else [])), [service] if service else [])
+
+
+class TestDoubleValidationVerif(unittest.TestCase):
+    """Double validation (02/10/2026) : l'employé termine son comptage, un responsable AUTRE valide (ou ajuste,
+    et l'employé confirme) ; le rapprochement de stock n'est passé qu'alors, sur le véhicule."""
+    AKRAM = "morchediakram0@gmail.com"
+
+    def setUp(self):
+        import frappe
+        frappe.set_user("Administrator")
+        frappe.db.savepoint("dv_verif")
+        frappe.db.set_single_value("Stock Settings", "allow_negative_stock", 1)
+        self.akram = frappe.db.get_value("Employee", {"user_id": self.AKRAM, "status": "Active"}, "name")
+        if not self.akram or S.est_responsable(self.AKRAM):
+            self.skipTest("pas d'employé simple avec compte")
+        societe = S._societe()
+        parent = frappe.db.get_value("Warehouse", {"is_group": 1, "company": societe}, "name")
+        self.essai = frappe.get_doc({"doctype": "Warehouse", "warehouse_name": "ESSAI DVV", "company": societe,
+                                     "parent_warehouse": parent}).insert().name
+        frappe.db.set_value("Employee", self.akram, "custom_warehouse", self.essai)
+        self.items = frappe.db.sql_list("""select b.item_code from tabBin b join tabItem i on i.name = b.item_code
+                                           where b.warehouse = %s and b.actual_qty > 10 and b.valuation_rate > 0
+                                             and i.disabled = 0 and i.is_stock_item = 1 and i.has_variants = 0
+                                           order by b.item_code limit 2""", S.magasin())
+        if len(self.items) < 2:
+            self.skipTest("pas assez d'articles au Magasin")
+        S.ecriture_transfert(S.magasin(), self.essai, [(self.items[0], 3), (self.items[1], 5)], "essai")
+
+    def tearDown(self):
+        import frappe
+        frappe.set_user("Administrator")
+        frappe.db.rollback(save_point="dv_verif")
+
+    def _qte(self, code):
+        import frappe
+        return frappe.db.get_value("Bin", {"item_code": code, "warehouse": self.essai}, "actual_qty")
+
+    def _comptage(self, q1, q2):
+        """Akram compte et termine → « À valider »."""
+        import frappe
+        i1, i2 = self.items
+        nom = S.ouvrir_verification(self.essai, frappe.utils.nowdate(), avec_taches=False)
+        frappe.set_user(self.AKRAM)
+        S.detail_verification(nom)
+        r = S.terminer_verification(nom, {i1: {"qte_comptee": q1}, i2: {"qte_comptee": q2}})
+        self.assertEqual((r["statut"], r["valide_employe_par"], r["actions"]), ("À valider", "Akram", []))
+        with self.assertRaises(frappe.PermissionError):
+            S.valider_verification(nom)                                         # pas responsable
+        frappe.set_user("Administrator")
+        return nom
+
+    def test_validation_sans_ajustement_rapproche_le_vehicule(self):
+        import frappe
+        i1, i2 = self.items
+        nom = self._comptage(3, 4)
+        self.assertEqual(self._qte(i2), 5)                                      # rien n'a bougé
+        self.assertEqual(frappe.get_doc(S.VERIF, nom).get("actions") if False else S.detail_verification(nom)["fiche"]["actions"], ["valider", "renvoyer"])
+        r = S.valider_verification(nom)
+        self.assertEqual((r["statut"], r["ajustes"]), ("Terminée", []))
+        rec = frappe.get_doc("Stock Reconciliation", r["rapprochement"])
+        self.assertEqual((rec.docstatus, [(x.item_code, x.qty) for x in rec.items]), (1, [(i2, 4)]))   # seul l'écart
+        self.assertEqual((self._qte(i1), self._qte(i2)), (3, 4))
+        self.assertEqual(frappe.db.get_value(S.VERIF, nom, "valide_responsable_par"), "Administrator")
+
+    def test_ajustement_puis_confirmation_de_l_employe(self):
+        import frappe
+        i1, i2 = self.items
+        nom = self._comptage(3, 4)
+        r = S.valider_verification(nom, {i2: {"qte_comptee": 5}})               # le responsable corrige : 4 → 5
+        self.assertEqual((r["statut"], len(r["ajustes"])), ("À confirmer", 1))
+        l = next(x for x in frappe.get_doc(S.VERIF, nom).lignes if x.item_code == i2)
+        self.assertEqual((l.ajuste, l.qte_employe, l.qte_comptee), (1, 4, 5))
+        self.assertEqual(self._qte(i2), 5)                                      # toujours rien
+        with self.assertRaises(frappe.PermissionError):
+            S.confirmer_verification(nom)                                       # pas l'employé du stock
+        frappe.set_user(self.AKRAM)
+        self.assertEqual(S.detail_verification(nom)["fiche"]["actions"], ["confirmer", "recompter"])
+        r = S.confirmer_verification(nom)
+        self.assertEqual((r["statut"], r["rapprochement"], r["valide_employe_par"]), ("Terminée", None, "Akram"))  # 5 = 5 : rien à rapprocher
+        self.assertEqual(self._qte(i2), 5)
+
+    def test_renvoi_au_comptage(self):
+        import frappe
+        i1, i2 = self.items
+        nom = self._comptage(3, 4)
+        r = S.renvoyer_verification(nom, motif="recompte le carton")
+        self.assertEqual((r["statut"], r["renvois"], r["valide_employe_par"]), ("En cours", 1, None))
+        self.assertIn("recompte", frappe.db.get_value(S.VERIF, nom, "note"))
+        frappe.set_user(self.AKRAM)
+        r = S.terminer_verification(nom, {i1: {"qte_comptee": 3}, i2: {"qte_comptee": 5}})
+        self.assertEqual((r["statut"], r["nb_ecarts"]), ("À valider", 0))
+        frappe.set_user("Administrator")
+        r = S.valider_verification(nom)
+        self.assertEqual((r["statut"], r["rapprochement"]), ("Terminée", None))

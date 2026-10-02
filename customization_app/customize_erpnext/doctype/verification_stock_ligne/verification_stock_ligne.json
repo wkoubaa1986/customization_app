@@ -14,7 +14,9 @@
   "taux",
   "valeur_ecart",
   "zones",
-  "commentaire"
+  "commentaire",
+  "qte_employe",
+  "ajuste"
  ],
  "fields": [
   {
@@ -90,10 +92,22 @@
    "fieldname": "commentaire",
    "fieldtype": "Data",
    "label": "Commentaire"
+  },
+  {
+   "fieldname": "qte_employe",
+   "fieldtype": "Float",
+   "label": "Compté par l’employé (avant ajustement)",
+   "read_only": 1
+  },
+  {
+   "fieldname": "ajuste",
+   "fieldtype": "Check",
+   "label": "Ajusté par le responsable",
+   "read_only": 1
   }
  ],
  "links": [],
- "modified": "2026-10-02 08:30:00.000000",
+ "modified": "2026-10-02 12:28:47.038241",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Verification Stock Ligne",

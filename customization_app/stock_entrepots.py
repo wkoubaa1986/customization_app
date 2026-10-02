@@ -27,6 +27,11 @@ CONFIG_EXCLU = "Config Stock Entrepot Exclu"
 CONFIG_SEUIL = "Config Stock Entrepot Seuil"
 CONFIG_VERIF = "Config Stock Entrepot Verification"
 VERIF = "Verification Stock"
+# Statuts d'une vérification (double validation, décision 02/10/2026) : l'employé compte et valide son comptage
+# (« À valider »), un responsable magasin AUTRE que lui valide → rapprochement de stock sur le véhicule et
+# « Terminée ». S'il ajuste une quantité, l'employé doit confirmer (« À confirmer ») avant le rapprochement.
+EN_COURS, A_VALIDER, A_CONFIRMER, TERMINEE = "En cours", "À valider", "À confirmer", "Terminée"
+OUVERTS = (EN_COURS, A_VALIDER, A_CONFIRMER)
 CIBLE = "Stock Cible"
 JOURS = ("Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche")
 MAGASIN_DEFAUT = "Magasins - A&S"
@@ -842,7 +847,7 @@ def ouvrir_verification(entrepot: str, date_prevue, avec_taches: bool = True) ->
     """Ouvre la fiche de ce stock pour cette date (une seule par stock et par date : réutilisée).
     ⚠️ Pas de photographie du stock ici : créée jusqu'à six jours à l'avance (rendez-vous de la semaine à
     venir), la fiche se remplit à la PREMIÈRE OUVERTURE de la feuille de comptage (`_assurer_photo`)."""
-    existante = frappe.db.get_value(VERIF, {"entrepot": entrepot, "date": date_prevue, "statut": "En cours"}, "name")
+    existante = frappe.db.get_value(VERIF, {"entrepot": entrepot, "date": date_prevue, "statut": ["in", OUVERTS]}, "name")
     if existante:
         return existante
     emp = _employe_du_stock(entrepot)
@@ -889,7 +894,7 @@ def planifier_verifications():
 
 def _assurer_photo(v):
     """La photographie du stock (quantité système, taux) est prise à la première ouverture du comptage."""
-    if v.statut != "En cours" or v.get("lignes"):
+    if v.statut != EN_COURS or v.get("lignes"):
         return
     for l in _photographie(v.entrepot):
         v.append("lignes", l)
@@ -903,7 +908,15 @@ def _resume(v) -> dict:
             "prevue": str(v.date) > nowdate(), "photo": bool(v.get("lignes")),
             "nb_lignes": cint(v.nb_lignes), "nb_comptes": cint(v.nb_comptes), "nb_ecarts": cint(v.nb_ecarts),
             "valeur_ecarts": flt(v.valeur_ecarts, 3), "valeur_manquants": flt(v.valeur_manquants, 3),
-            "termine_le": str(v.termine_le or "")[:16], "tache_employe": v.tache_employe, "tache_responsable": v.tache_responsable}
+            "termine_le": str(v.termine_le or "")[:16], "tache_employe": v.tache_employe, "tache_responsable": v.tache_responsable,
+            "valide_employe_par": frappe.utils.get_fullname(v.valide_employe_par) if v.valide_employe_par else None,
+            "valide_employe_le": str(v.valide_employe_le or "")[:16],
+            "valide_responsable_par": frappe.utils.get_fullname(v.valide_responsable_par) if v.valide_responsable_par else None,
+            "valide_responsable_le": str(v.valide_responsable_le or "")[:16],
+            "rapprochement": v.rapprochement, "renvois": cint(v.renvois),
+            "nb_ajustes": sum(1 for l in (v.get("lignes") or []) if l.ajuste),
+            # Ce que l'utilisateur connecté peut faire sur cette fiche, calculé ici pour que l'écran n'ait rien à deviner.
+            "actions": _actions_possibles(v)}
 
 
 @frappe.whitelist()
@@ -923,9 +936,9 @@ def verifications_etat():
         if not est_responsable() and (not moi or moi.custom_warehouse != wh):
             continue
         plan = next((l for l in cfg["lignes"] if l["entrepot"] == wh), None)
-        en_cours = frappe.db.get_value(VERIF, {"entrepot": wh, "statut": "En cours"}, "name", order_by="date asc")
-        dernieres = [_resume(v) for v in frappe.get_all(VERIF, filters={"entrepot": wh, "statut": "Terminée"},
-                                                         fields=["*"], order_by="termine_le desc", limit=6)]
+        en_cours = frappe.db.get_value(VERIF, {"entrepot": wh, "statut": ["in", OUVERTS]}, "name", order_by="date asc")
+        dernieres = [_resume(frappe.get_doc(VERIF, v.name)) for v in frappe.get_all(VERIF, filters={"entrepot": wh, "statut": TERMINEE},
+                                                                                 fields=["name"], order_by="termine_le desc", limit=6)]
         out.append({"entrepot": wh, "libelle": actifs[wh]["libelle"], "employe": emp.employee_name, "employe_id": emp.name,
                     "jour": plan["jour"] if plan else None, "heure": plan["heure"] if plan else None,
                     "actif": bool(plan and plan["actif"]),
@@ -944,7 +957,7 @@ def commencer_verification(entrepot):
     _verifier_entrepot(entrepot)
     # Une fiche déjà ouverte (celle de la semaine, même prévue dans quelques jours) est reprise : compter un
     # peu avant le rendez-vous ne crée pas de doublon.
-    existante = frappe.db.get_value(VERIF, {"entrepot": entrepot, "statut": "En cours"}, "name", order_by="date asc")
+    existante = frappe.db.get_value(VERIF, {"entrepot": entrepot, "statut": ["in", OUVERTS]}, "name", order_by="date asc")
     return existante or ouvrir_verification(entrepot, nowdate(), avec_taches=False)
 
 
@@ -959,6 +972,7 @@ def detail_verification(name):
     return {"fiche": _resume(v), "lignes": [{"item_code": l.item_code, "item_name": l.item_name, "qte_systeme": flt(l.qte_systeme, 6),
                                              "image": images.get(l.item_code),
                                              "qte_comptee": flt(l.qte_comptee, 6) if l.compte else None,
+                                             "qte_employe": flt(l.qte_employe, 6) if l.ajuste else None, "ajuste": cint(l.ajuste),
                                              "ecart": flt(l.ecart, 6) if l.compte else None, "taux": flt(l.taux, 3),
                                              "valeur_ecart": flt(l.valeur_ecart, 3) if l.compte else None,
                                              "zones": l.zones, "commentaire": l.commentaire}
@@ -989,8 +1003,8 @@ def enregistrer_verification(name, comptes):
     """Sauvegarde du comptage en cours (on peut s'interrompre et reprendre)."""
     v = frappe.get_doc(VERIF, name)
     _acces_verification(v.entrepot)
-    if v.statut != "En cours":
-        frappe.throw(_("Cette vérification est terminée."))
+    if v.statut != EN_COURS:
+        frappe.throw(_("Cette vérification n’est plus au comptage ({0}).").format(v.statut))
     _assurer_photo(v)
     _appliquer_comptage(v, frappe.parse_json(comptes) if isinstance(comptes, str) else (comptes or {}))
     v.flags.ignore_permissions = True
@@ -1000,36 +1014,171 @@ def enregistrer_verification(name, comptes):
 
 @frappe.whitelist(methods=["POST"])
 def terminer_verification(name, comptes=None, note=None):
-    """Clôture : écarts figés et valorisés, tâches liées passées à Completed. Aucun mouvement de stock."""
+    """Fin du comptage = validation de l'employé : écarts figés et valorisés, fiche « À valider » par un
+    responsable magasin. Le stock ne bouge qu'à SA validation (rapprochement)."""
     v = frappe.get_doc(VERIF, name)
     _acces_verification(v.entrepot)
-    if v.statut != "En cours":
-        frappe.throw(_("Cette vérification est déjà terminée."))
+    if v.statut != EN_COURS:
+        frappe.throw(_("Cette vérification n’est plus au comptage ({0}).").format(v.statut))
     _assurer_photo(v)
-    if comptes:
-        _appliquer_comptage(v, frappe.parse_json(comptes) if isinstance(comptes, str) else comptes)
-    else:
-        _appliquer_comptage(v, {})
+    _appliquer_comptage(v, (frappe.parse_json(comptes) if isinstance(comptes, str) else comptes) or {})
     if not v.nb_comptes:
         frappe.throw(_("Aucun article compté : saisissez au moins une quantité."))
-    v.statut = "Terminée"
-    v.termine_le = now_datetime()
-    v.termine_par = frappe.session.user
+    for l in v.lignes:
+        l.ajuste, l.qte_employe = 0, (l.qte_comptee if l.compte else 0)
+    v.statut = A_VALIDER
+    v.valide_employe_par, v.valide_employe_le = frappe.session.user, now_datetime()
+    v.valide_responsable_par = v.valide_responsable_le = None
     if note:
         v.note = note[:500]
+    v.flags.ignore_permissions = True
+    v.save()
+    if v.tache_employe and frappe.db.get_value("Tache de travail", v.tache_employe, "status") == "Open":
+        frappe.db.set_value("Tache de travail", v.tache_employe, "status", "Completed")
+    cfg = config_verification()
+    resp = frappe.db.get_value("Employee", cfg["responsable"], "user_id") if cfg["responsable"] else None
+    if resp and resp != frappe.session.user:
+        _prevenir(resp, _("🧾 Vérification {0} ({1}) à valider : {2} écart(s)").format(v.name, se_court(v.entrepot), cint(v.nb_ecarts)), v.name)
+    return _resume(v)
+
+
+def _est_employe_du_stock(entrepot: str) -> bool:
+    moi = _mon_employe()
+    return bool(moi and moi.custom_warehouse == entrepot)
+
+
+def _actions_possibles(v) -> list[str]:
+    """Les boutons de l'utilisateur connecté sur cette fiche : compter / terminer (En cours), valider /
+    renvoyer (À valider, responsable AUTRE que l'employé du stock), confirmer / recompter (À confirmer,
+    employé du stock)."""
+    if v.statut == EN_COURS:
+        return ["compter"]
+    if v.statut == A_VALIDER:
+        return ["valider", "renvoyer"] if est_responsable() and not _est_employe_du_stock(v.entrepot) else []
+    if v.statut == A_CONFIRMER:
+        return ["confirmer", "recompter"] if _est_employe_du_stock(v.entrepot) else []
+    return []
+
+
+def _rapprochement(v):
+    """Le rapprochement de stock du véhicule : la quantité comptée devient la quantité système, pour les
+    articles comptés dont l'écart n'est pas nul (décision utilisateur 02/10/2026 : rapprochement sur le véhicule,
+    l'écart est un gain / une perte d'inventaire). Rien à rapprocher → None."""
+    lignes = [l for l in v.lignes if l.compte and abs(flt(l.ecart, 6)) > 1e-6]
+    if not lignes:
+        return None
+    societe = _societe()
+    doc = frappe.new_doc("Stock Reconciliation")
+    doc.update({"purpose": "Stock Reconciliation", "company": societe,
+                "expense_account": frappe.db.get_value("Company", societe, "stock_adjustment_account"),
+                "cost_center": frappe.db.get_value("Company", societe, "cost_center")})
+    for l in lignes:
+        taux = flt(l.taux, 6) or flt(frappe.db.get_value("Item", l.item_code, "valuation_rate"), 6)
+        doc.append("items", {"item_code": l.item_code, "warehouse": v.entrepot, "qty": flt(l.qte_comptee, 6),
+                             "valuation_rate": taux if flt(l.qte_comptee, 6) > 0 else 0})
+    doc.flags.ignore_permissions = True
+    doc.insert()
+    doc.submit()
+    doc.add_comment("Comment", _("Vérification du stock {0} ({1}) : comptage validé par {2}, validé par {3}.")
+                    .format(v.entrepot, v.name, frappe.utils.get_fullname(v.valide_employe_par),
+                            frappe.utils.get_fullname(v.valide_responsable_par)))
+    return doc.name
+
+
+def _cloturer(v):
+    """Les deux validations sont là : rapprochement, fiche terminée, tâches fermées."""
+    v.rapprochement = _rapprochement(v)
+    v.statut = TERMINEE
+    v.termine_le, v.termine_par = now_datetime(), frappe.session.user
     v.flags.ignore_permissions = True
     v.save()
     for t in (v.tache_employe, v.tache_responsable):
         if t and frappe.db.get_value("Tache de travail", t, "status") == "Open":
             frappe.db.set_value("Tache de travail", t, "status", "Completed")
+
+
+@frappe.whitelist(methods=["POST"])
+def valider_verification(name, comptes=None, note=None):
+    """Validation du responsable magasin (jamais l'employé du stock lui-même). Sans changement de quantité :
+    rapprochement et clôture. Avec un ajustement : la fiche repasse à l'employé (« À confirmer »), l'ajustement
+    tracé ligne à ligne (quantité de l'employé conservée)."""
+    v = frappe.get_doc(VERIF, name)
+    _responsable()
+    if _est_employe_du_stock(v.entrepot):
+        frappe.throw(_("Votre propre stock : un autre responsable magasin doit valider ce comptage."), frappe.PermissionError)
+    if v.statut != A_VALIDER:
+        frappe.throw(_("Cette vérification n’est pas à valider ({0}).").format(v.statut))
+    comptes = (frappe.parse_json(comptes) if isinstance(comptes, str) else comptes) or {}
+    avant = {l.item_code: (cint(l.compte), flt(l.qte_comptee, 6)) for l in v.lignes}
+    _appliquer_comptage(v, comptes)
+    ajustes = []
+    for l in v.lignes:
+        if (cint(l.compte), flt(l.qte_comptee, 6)) != avant[l.item_code]:
+            l.ajuste = 1
+            l.qte_employe = avant[l.item_code][1]
+            ajustes.append("%s : %g → %g" % (l.item_name or l.item_code, avant[l.item_code][1], flt(l.qte_comptee, 6)))
+    v.valide_responsable_par, v.valide_responsable_le = frappe.session.user, now_datetime()
+    if note:
+        v.note = ((v.note + "\n") if v.note else "") + note[:500]
+    if ajustes:
+        v.statut = A_CONFIRMER
+        v.valide_employe_par = v.valide_employe_le = None
+        v.flags.ignore_permissions = True
+        v.save()
+        emp = _employe_du_stock(v.entrepot)
+        if emp and emp.user_id:
+            _prevenir(emp.user_id, _("🧾 Vérification {0} : {1} quantité(s) ajustée(s) par {2}, à confirmer")
+                      .format(v.name, len(ajustes), frappe.utils.get_fullname(frappe.session.user)), v.name)
+        return dict(_resume(v), ajustes=ajustes)
+    _cloturer(v)
+    return dict(_resume(v), ajustes=[])
+
+
+@frappe.whitelist(methods=["POST"])
+def confirmer_verification(name):
+    """L'employé du stock accepte les ajustements du responsable : seconde validation, rapprochement, clôture."""
+    v = frappe.get_doc(VERIF, name)
+    if not _est_employe_du_stock(v.entrepot):
+        frappe.throw(_("Seul l’employé de ce stock confirme les quantités ajustées."), frappe.PermissionError)
+    if v.statut != A_CONFIRMER:
+        frappe.throw(_("Cette vérification n’est pas à confirmer ({0}).").format(v.statut))
+    v.valide_employe_par, v.valide_employe_le = frappe.session.user, now_datetime()
+    _cloturer(v)
+    return _resume(v)
+
+
+@frappe.whitelist(methods=["POST"])
+def renvoyer_verification(name, motif=None):
+    """Retour au comptage : par le responsable (« À valider ») ou par l'employé qui conteste un ajustement
+    (« À confirmer »). Les validations tombent, les quantités saisies restent pour être corrigées."""
+    v = frappe.get_doc(VERIF, name)
+    _acces_verification(v.entrepot)
+    if v.statut not in (A_VALIDER, A_CONFIRMER):
+        frappe.throw(_("Cette vérification n’est pas en attente ({0}).").format(v.statut))
+    if v.statut == A_VALIDER and not est_responsable():
+        frappe.throw(_("Seul un responsable magasin renvoie un comptage à valider."), frappe.PermissionError)
+    if v.statut == A_CONFIRMER and not _est_employe_du_stock(v.entrepot):
+        frappe.throw(_("Seul l’employé de ce stock recompte une fiche à confirmer."), frappe.PermissionError)
+    v.statut = EN_COURS
+    v.valide_employe_par = v.valide_employe_le = v.valide_responsable_par = v.valide_responsable_le = None
+    v.renvois = cint(v.renvois) + 1
+    if motif:
+        v.note = ((v.note + "\n") if v.note else "") + _("Renvoi par {0} : {1}").format(frappe.utils.get_fullname(frappe.session.user), motif[:300])
+    v.flags.ignore_permissions = True
+    v.save()
+    if v.tache_employe and frappe.db.get_value("Tache de travail", v.tache_employe, "status") == "Completed":
+        frappe.db.set_value("Tache de travail", v.tache_employe, "status", "Open")
+    emp = _employe_du_stock(v.entrepot)
+    if emp and emp.user_id and emp.user_id != frappe.session.user:
+        _prevenir(emp.user_id, _("🧾 Vérification {0} renvoyée au comptage par {1}").format(v.name, frappe.utils.get_fullname(frappe.session.user)), v.name)
     return _resume(v)
 
 
 @frappe.whitelist()
 def historique_verifications(entrepot, limite=12):
     _acces_verification(entrepot)
-    return [_resume(v) for v in frappe.get_all(VERIF, filters={"entrepot": entrepot, "statut": "Terminée"}, fields=["*"],
-                                               order_by="termine_le desc", limit=min(cint(limite) or 12, 60))]
+    return [_resume(frappe.get_doc(VERIF, v.name)) for v in frappe.get_all(VERIF, filters={"entrepot": entrepot, "statut": TERMINEE},
+                                                                       fields=["name"], order_by="termine_le desc", limit=min(cint(limite) or 12, 60))]
 
 
 @frappe.whitelist(methods=["POST"])

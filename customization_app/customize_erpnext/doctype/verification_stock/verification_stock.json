@@ -24,7 +24,15 @@
   "valeur_manquants",
   "termine_le",
   "termine_par",
-  "note"
+  "note",
+  "sec_validation",
+  "valide_employe_par",
+  "valide_employe_le",
+  "renvois",
+  "col3",
+  "valide_responsable_par",
+  "valide_responsable_le",
+  "rapprochement"
  ],
  "fields": [
   {
@@ -47,7 +55,7 @@
    "fieldname": "statut",
    "fieldtype": "Select",
    "label": "Statut",
-   "options": "En cours\nTerminée",
+   "options": "En cours\nÀ valider\nÀ confirmer\nTerminée",
    "default": "En cours",
    "in_list_view": 1,
    "in_standard_filter": 1
@@ -152,10 +160,58 @@
    "fieldname": "note",
    "fieldtype": "Small Text",
    "label": "Note"
+  },
+  {
+   "fieldname": "sec_validation",
+   "fieldtype": "Section Break",
+   "label": "Double validation"
+  },
+  {
+   "fieldname": "valide_employe_par",
+   "fieldtype": "Link",
+   "label": "Comptage validé par (employé)",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "valide_employe_le",
+   "fieldtype": "Datetime",
+   "label": "Comptage validé le",
+   "read_only": 1
+  },
+  {
+   "fieldname": "renvois",
+   "fieldtype": "Int",
+   "label": "Renvois au comptage",
+   "read_only": 1
+  },
+  {
+   "fieldname": "col3",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "valide_responsable_par",
+   "fieldtype": "Link",
+   "label": "Validé par (responsable magasin)",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "valide_responsable_le",
+   "fieldtype": "Datetime",
+   "label": "Validé le",
+   "read_only": 1
+  },
+  {
+   "fieldname": "rapprochement",
+   "fieldtype": "Link",
+   "label": "Rapprochement de stock",
+   "options": "Stock Reconciliation",
+   "read_only": 1
   }
  ],
  "links": [],
- "modified": "2026-10-02 08:00:00.000000",
+ "modified": "2026-10-02 12:28:47.038241",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Verification Stock",

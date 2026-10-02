@@ -776,17 +776,16 @@ class StockEntrepots {
         <span class="fleche">▶</span></div><div class="se-v-det" style="display:none" data-det="${se_esc(v.name)}"></div>`).join("");
     $c.html(`<div class="se-note" style="margin:0 2px 10px">Chaque semaine, le jour fixé, une fiche de comptage est ouverte et deux tâches créées :
         l’employé du stock et ${res.responsable_nom ? `<b>${se_esc(res.responsable_nom)}</b>` : "le responsable magasin"}.
-        On compte, on saisit, on termine : l’écart est gardé et valorisé, <b>sans mouvement de stock</b>.
+        L’employé compte et termine ; un <b>autre responsable magasin</b> valide (ou ajuste, et l’employé confirme) ;
+        un <b>rapprochement de stock</b> aligne alors le véhicule sur le comptage.
         ${res.peut_planifier ? `<a class="se-lien" href="/app/config-stock-entrepot">⚙️ Réglages</a> · <span class="se-lien" data-planifier>▶ Ouvrir les vérifications du jour</span>` : ""}</div>`
+      + (() => { const att = res.stocks.filter((s) => s.en_cours && s.en_cours.statut !== "En cours" && s.en_cours.actions.length);
+          return att.length ? `<div class="se-bandeau"><div class="t">🧾 ${att.length} vérification(s) attendent votre ${att.some((s) => s.en_cours.actions.includes("valider")) ? "validation" : "confirmation"}</div>
+            <div class="d">${att.map((s) => se_esc(s.libelle)).join(" · ")}</div></div>` : ""; })()
       + (res.stocks.map((s) => `<div class="se-card se-v-stock">
           <div class="t">🚐 ${se_esc(s.libelle)}</div>
           <div class="plan">👤 ${se_esc(s.employe)} · ${s.actif ? `chaque <b>${se_esc(s.jour)}</b> à ${se_esc(s.heure)} · prochaine le ${se_dt(s.prochaine)}` : `<span style="color:#c2410c">pas de jour fixé</span>`}</div>
-          ${s.en_cours ? (s.en_cours.photo
-              ? `<div class="plan">📝 Comptage en cours du ${se_dt(s.en_cours.date)} : ${s.en_cours.nb_comptes}/${s.en_cours.nb_lignes} comptés</div>
-                 <button type="button" class="btn btn-primary" data-reprendre="${se_esc(s.en_cours.name)}">Reprendre le comptage</button>`
-              : `<div class="plan">📅 Vérification ${s.en_cours.prevue ? "prévue le" : "du"} <b>${se_dt(s.en_cours.date)}</b>${s.en_cours.tache_employe ? " · tâches créées" : ""}</div>
-                 <button type="button" class="btn btn-primary" data-reprendre="${se_esc(s.en_cours.name)}">Commencer le comptage</button>`)
-            : `<button type="button" class="btn btn-default" data-commencer="${se_esc(s.entrepot)}">Compter maintenant</button>`}
+          ${s.en_cours ? this.blocVerif(s) : `<button type="button" class="btn btn-default" data-commencer="${se_esc(s.entrepot)}">Compter maintenant</button>`}
           <div class="se-v-hist">${hist(s) || `<div class="se-note">Aucune vérification terminée.</div>`}</div>
         </div>`).join("") || `<div class="se-vide">Aucun stock d’employé.</div>`));
     $c.find("[data-planifier]").on("click", async () => {
@@ -806,35 +805,66 @@ class StockEntrepots {
       const ec = d.lignes.filter((l) => l.ecart != null && Math.abs(l.ecart) > 1e-6);
       $d.html((ec.map((l) => `<div><b class="${l.ecart < 0 ? "neg" : "pos"}">${se_signe(l.ecart)}</b> ${se_esc(l.item_name || l.item_code)}
           <span class="se-note">(système ${se_q(l.qte_systeme)}, compté ${se_q(l.qte_comptee)}, ${se_argent(l.valeur_ecart)})${l.commentaire ? ` — ${se_esc(l.commentaire)}` : ""}</span></div>`).join("")
-        || `<div class="pos">Aucun écart.</div>`) + `<div class="se-note">${se_lien("Verification Stock", d.fiche.name)}${d.fiche.tache_employe ? ` · ${se_lien("Tache de travail", d.fiche.tache_employe, "tâche employé")}` : ""}</div>`).show();
+        || `<div class="pos">Aucun écart.</div>`) + `<div class="se-note">${se_lien("Verification Stock", d.fiche.name)}${d.fiche.tache_employe ? ` · ${se_lien("Tache de travail", d.fiche.tache_employe, "tâche employé")}` : ""}
+          ${d.fiche.valide_employe_par ? ` · comptage ${se_esc(d.fiche.valide_employe_par)}` : ""}${d.fiche.valide_responsable_par ? ` · validé ${se_esc(d.fiche.valide_responsable_par)}` : ""}
+          ${d.fiche.rapprochement ? ` · ${se_lien("Stock Reconciliation", d.fiche.rapprochement, "rapprochement " + d.fiche.rapprochement)}` : " · sans rapprochement (aucun écart)"}</div>`).show();
     });
   }
 
-  /** Feuille de comptage d'une vérification : quantité comptée par article, écart en direct. */
+  /** La fiche ouverte d'un stock, selon son statut et ce que l'utilisateur peut y faire. */
+  blocVerif(s) {
+    const v = s.en_cours, a = v.actions || [];
+    if (v.statut === "En cours") return v.photo
+      ? `<div class="plan">📝 Comptage en cours du ${se_dt(v.date)} : ${v.nb_comptes}/${v.nb_lignes} comptés${v.renvois ? ` · renvoyé ${v.renvois}×` : ""}</div>
+         <button type="button" class="btn btn-primary" data-reprendre="${se_esc(v.name)}">Reprendre le comptage</button>`
+      : `<div class="plan">📅 Vérification ${v.prevue ? "prévue le" : "du"} <b>${se_dt(v.date)}</b>${v.tache_employe ? " · tâches créées" : ""}</div>
+         <button type="button" class="btn btn-primary" data-reprendre="${se_esc(v.name)}">Commencer le comptage</button>`;
+    if (v.statut === "À valider") return `<div class="plan">📝 Comptage du ${se_dt(v.date)} terminé par ${se_esc(v.valide_employe_par)} : <b class="${v.nb_ecarts ? "neg" : "pos"}">${v.nb_ecarts} écart(s)</b>${v.nb_ecarts ? ` · ${se_argent(v.valeur_ecarts)}` : ""}</div>
+         ${a.includes("valider") ? `<button type="button" class="btn btn-primary" data-reprendre="${se_esc(v.name)}">🔍 Vérifier et valider</button>`
+           : `<div class="se-attente">⏳ En attente de validation d’un responsable magasin</div>`}`;
+    if (v.statut === "À confirmer") return `<div class="plan">📝 ${v.nb_ajustes} quantité(s) ajustée(s) par ${se_esc(v.valide_responsable_par)}</div>
+         ${a.includes("confirmer") ? `<button type="button" class="btn btn-primary" data-reprendre="${se_esc(v.name)}">🔍 Voir et confirmer</button>`
+           : `<div class="se-attente">⏳ En attente de la confirmation de ${se_esc(s.employe)}</div>`}`;
+    return "";
+  }
+
+  /** Feuille d'une vérification : comptage (employé), validation / ajustement (responsable), confirmation (employé). */
   async ouvrirComptage(name) {
     this.comptage = name;
     const d = (await frappe.call({ method: SE_API + "detail_verification", args: { name } })).message;
-    const $c = this.$r.find("#se-v-contenu"), fini = d.fiche.statut !== "En cours";
+    const $c = this.$r.find("#se-v-contenu"), statut = d.fiche.statut, a = d.fiche.actions || [];
+    const mode = statut === "En cours" ? "comptage" : statut === "À valider" && a.includes("valider") ? "validation"
+      : statut === "À confirmer" && a.includes("confirmer") ? "confirmation" : "lecture";
+    const fini = mode === "lecture";
+    const etat = { "À valider": "⏳ à valider", "À confirmer": "⏳ à confirmer", "Terminée": "terminée" }[statut];
     const saisies = {};
     d.lignes.forEach((l) => { saisies[l.item_code] = { qte_comptee: l.qte_comptee, commentaire: l.commentaire || "" }; });
     const ligne = (l) => `<div class="se-c-ligne ${l.qte_comptee != null ? "fait" : ""}" data-item="${se_esc(l.item_code)}" data-cle="${se_esc(((l.item_name || "") + " " + l.item_code).toLowerCase())}">
         ${se_img(l.image)}
         <div class="txt"><div class="se-nom" style="font-size:13.5px">${se_esc(l.item_name || l.item_code)}</div>
           <div class="se-code">${se_esc(l.item_code)}${l.zones ? ` · 📍 ${se_esc(l.zones)}` : ""}</div></div>
-        <div class="sys">${se_q(l.qte_systeme)}</div>
-        <input type="number" inputmode="decimal" step="any" class="form-control q" ${fini ? "disabled" : ""} value="${l.qte_comptee == null ? "" : se_esc(l.qte_comptee)}" placeholder="?">
+        <div class="sys">${se_q(l.qte_systeme)}${l.ajuste ? `<small style="display:block;color:#b45309;font-size:10.5px">employé : ${se_q(l.qte_employe)}</small>` : ""}</div>
+        <input type="number" inputmode="decimal" step="any" class="form-control q" ${fini || mode === "confirmation" ? "disabled" : ""} style="${l.ajuste ? "border-color:#f59e0b;background:#fffbeb" : ""}" value="${l.qte_comptee == null ? "" : se_esc(l.qte_comptee)}" placeholder="?">
         <div class="ec ${l.ecart ? (l.ecart < 0 ? "neg" : "pos") : ""}">${l.ecart == null ? "" : se_signe(l.ecart)}</div>
       </div>`;
     $c.html(`<span class="se-retour" data-retour>← Vérifications</span>
       <div class="se-card">
-        <div class="se-v-stock"><div class="t">📝 ${se_esc(this.libelle(d.fiche.entrepot))} — ${se_dt(d.fiche.date)} ${fini ? `<span class="se-badge">terminée</span>` : ""}</div>
-          ${fini ? "" : `<div class="se-note">Quantités système photographiées à la première ouverture de cette feuille.</div>`}
+        <div class="se-v-stock"><div class="t">📝 ${se_esc(this.libelle(d.fiche.entrepot))} — ${se_dt(d.fiche.date)} ${etat ? `<span class="se-badge">${etat}</span>` : ""}</div>
+          ${mode === "comptage" ? `<div class="se-note">Quantités système photographiées à la première ouverture de cette feuille.</div>`
+            : mode === "validation" ? `<div class="se-note">Comptage de <b>${se_esc(d.fiche.valide_employe_par)}</b>. Validez tel quel, corrigez une quantité (l’employé devra confirmer), ou renvoyez au comptage.</div>`
+            : mode === "confirmation" ? `<div class="se-note">Quantités ajustées par <b>${se_esc(d.fiche.valide_responsable_par)}</b> (surlignées, votre comptage en dessous). Confirmez, ou recomptez.</div>`
+            : `<div class="se-note">${d.fiche.valide_employe_par ? `Comptage ${se_esc(d.fiche.valide_employe_par)}` : ""}${d.fiche.valide_responsable_par ? ` · validé par ${se_esc(d.fiche.valide_responsable_par)}` : ""}${d.fiche.rapprochement ? ` · ${se_lien("Stock Reconciliation", d.fiche.rapprochement, "rapprochement " + d.fiche.rapprochement)}` : ""}</div>`}
+          ${d.fiche.note ? `<div class="se-note">${se_esc(d.fiche.note)}</div>` : ""}
           <div class="plan" id="se-c-bilan"></div></div>
         <input type="search" class="form-control se-saisie" id="se-c-filtre" placeholder="🔎 Filtrer un article…" style="margin-top:8px">
         <div class="se-c-tete"><span class="txt">Article</span><span class="sys">Système</span><span class="q">Compté</span><span class="ec">Écart</span></div>
         <div id="se-c-lignes">${d.lignes.map(ligne).join("")}</div>
-        ${fini ? "" : `<div class="se-c-barre"><button type="button" class="btn btn-default" data-enregistrer>💾 Enregistrer</button>
-          <button type="button" class="btn btn-primary" data-terminer>✅ Terminer</button></div>`}
+        ${mode === "comptage" ? `<div class="se-c-barre"><button type="button" class="btn btn-default" data-enregistrer>💾 Enregistrer</button>
+          <button type="button" class="btn btn-primary" data-terminer>✅ Terminer le comptage</button></div>`
+          : mode === "validation" ? `<div class="se-c-barre"><button type="button" class="btn btn-default" data-renvoyer>↩ Renvoyer au comptage</button>
+          <button type="button" class="btn btn-primary" data-valider>✅ Valider et rapprocher</button></div>`
+          : mode === "confirmation" ? `<div class="se-c-barre"><button type="button" class="btn btn-default" data-renvoyer>🔁 Recompter</button>
+          <button type="button" class="btn btn-primary" data-confirmer>✅ Confirmer</button></div>` : ""}
       </div>`);
     const bilan = () => {
       let n = 0, e = 0, v = 0;
@@ -859,15 +889,43 @@ class StockEntrepots {
       await frappe.call({ method: SE_API + "enregistrer_verification", args: { name, comptes: comptes() }, freeze: true });
       frappe.show_alert({ message: "Comptage enregistré — vous pourrez reprendre", indicator: "green" }, 3);
     });
+    const retour = () => { this.comptage = null; this.chargerVerif(); };
     $c.find("[data-terminer]").on("click", () => {
       const n = Object.values(saisies).filter((s) => s.qte_comptee != null && s.qte_comptee !== "").length;
-      frappe.confirm(`Terminer la vérification avec <b>${n}</b> article(s) compté(s) sur ${d.lignes.length} ?<br>Les écarts seront figés et valorisés ; <b>aucun mouvement de stock</b> ne sera passé.`, async () => {
+      frappe.confirm(`Terminer le comptage avec <b>${n}</b> article(s) compté(s) sur ${d.lignes.length} ?<br>Les écarts seront figés et soumis à la validation d’un responsable magasin ; le rapprochement de stock se fera à sa validation.`, async () => {
         const r = (await frappe.call({ method: SE_API + "terminer_verification", args: { name, comptes: comptes() }, freeze: true })).message;
-        frappe.msgprint({ title: "Vérification terminée", indicator: r.nb_ecarts ? "orange" : "green",
-          message: `${r.nb_comptes} article(s) comptés, <b>${r.nb_ecarts} écart(s)</b>${r.nb_ecarts ? ` · valeur nette ${se_esc(se_argent(r.valeur_ecarts))} · manquants ${se_esc(se_argent(r.valeur_manquants))}` : ""}` });
-        this.comptage = null;
-        this.chargerVerif();
+        frappe.msgprint({ title: "Comptage terminé — à valider", indicator: r.nb_ecarts ? "orange" : "green",
+          message: `${r.nb_comptes} article(s) comptés, <b>${r.nb_ecarts} écart(s)</b>${r.nb_ecarts ? ` · valeur nette ${se_esc(se_argent(r.valeur_ecarts))} · manquants ${se_esc(se_argent(r.valeur_manquants))}` : ""}<br>Un responsable magasin doit maintenant valider.` });
+        retour();
       });
+    });
+    $c.find("[data-valider]").on("click", () => {
+      const changes = d.lignes.filter((l) => { const s = saisies[l.item_code]; const q = s.qte_comptee === "" ? null : s.qte_comptee; return (q == null) !== (l.qte_comptee == null) || (q != null && Math.abs(q - l.qte_comptee) > 1e-6); }).length;
+      const e = Object.values(saisies).filter((s) => s.qte_comptee != null && s.qte_comptee !== "").length;
+      const ecarts = d.lignes.filter((l) => { const s = saisies[l.item_code]; return s.qte_comptee != null && s.qte_comptee !== "" && Math.abs(+s.qte_comptee - l.qte_systeme) > 1e-6; }).length;
+      frappe.confirm(changes
+        ? `Vous avez corrigé <b>${changes}</b> quantité(s) : la fiche repartira chez l’employé pour confirmation avant le rapprochement. Continuer ?`
+        : `Valider le comptage (${e} article(s)) ?<br>${ecarts ? `Un <b>rapprochement de stock</b> alignera ${ecarts} article(s) sur les quantités comptées.` : "Aucun écart : pas de rapprochement."}`, async () => {
+        const r = (await frappe.call({ method: SE_API + "valider_verification", args: { name, comptes: changes ? comptes() : null }, freeze: true })).message;
+        frappe.msgprint({ title: r.statut === "Terminée" ? "Vérification validée" : "Ajustements envoyés à l’employé", indicator: r.statut === "Terminée" ? "green" : "orange",
+          message: r.statut === "Terminée" ? (r.rapprochement ? `Rapprochement ${se_lien("Stock Reconciliation", r.rapprochement)} passé sur ${se_esc(this.libelle(d.fiche.entrepot))}.` : "Aucun écart : fiche terminée sans rapprochement.")
+            : `${r.ajustes.map(se_esc).join("<br>")}<br>L’employé doit confirmer ces quantités.` });
+        retour();
+      });
+    });
+    $c.find("[data-confirmer]").on("click", () => {
+      frappe.confirm(`Confirmer les quantités ajustées ? Le rapprochement de stock sera passé sur votre stock.`, async () => {
+        const r = (await frappe.call({ method: SE_API + "confirmer_verification", args: { name }, freeze: true })).message;
+        frappe.msgprint({ title: "Vérification terminée", indicator: "green", message: r.rapprochement ? `Rapprochement ${se_lien("Stock Reconciliation", r.rapprochement)} passé.` : "Aucun écart : pas de rapprochement." });
+        retour();
+      });
+    });
+    $c.find("[data-renvoyer]").on("click", () => {
+      frappe.prompt({ fieldtype: "Small Text", fieldname: "motif", label: "Motif (facultatif)" }, async (v) => {
+        await frappe.call({ method: SE_API + "renvoyer_verification", args: { name, motif: v.motif || null }, freeze: true });
+        frappe.show_alert({ message: "Fiche renvoyée au comptage", indicator: "orange" }, 4);
+        retour();
+      }, mode === "confirmation" ? "Recompter" : "Renvoyer au comptage", "Confirmer");
     });
   }
 
