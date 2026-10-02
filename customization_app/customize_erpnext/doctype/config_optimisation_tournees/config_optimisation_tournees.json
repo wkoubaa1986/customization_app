@@ -1,0 +1,143 @@
+{
+ "actions": [],
+ "creation": "2026-10-02 15:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "issingle": 1,
+ "field_order": [
+  "sec_depot",
+  "depot_lien",
+  "col_depot",
+  "depot_latitude",
+  "depot_longitude",
+  "sec_journee",
+  "heure_debut",
+  "heure_fin",
+  "col_journee",
+  "equilibre",
+  "sec_regles",
+  "types_mobiles",
+  "col_regles",
+  "employes_exclus",
+  "sec_tech",
+  "osrm_url"
+ ],
+ "fields": [
+  {
+   "fieldname": "sec_depot",
+   "fieldtype": "Section Break",
+   "label": "Point de départ (Magasin)"
+  },
+  {
+   "fieldname": "depot_lien",
+   "fieldtype": "Data",
+   "label": "Lien Google Maps du Magasin",
+   "description": "Collez le lien du Magasin : les coordonnées en sont lues à l’enregistrement. Chaque tournée part et revient d’ici."
+  },
+  {
+   "fieldname": "col_depot",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "depot_latitude",
+   "fieldtype": "Float",
+   "label": "Latitude",
+   "precision": "6"
+  },
+  {
+   "fieldname": "depot_longitude",
+   "fieldtype": "Float",
+   "label": "Longitude",
+   "precision": "6"
+  },
+  {
+   "fieldname": "sec_journee",
+   "fieldtype": "Section Break",
+   "label": "Journée"
+  },
+  {
+   "fieldname": "heure_debut",
+   "fieldtype": "Time",
+   "label": "Début de journée",
+   "default": "08:00:00"
+  },
+  {
+   "fieldname": "heure_fin",
+   "fieldtype": "Time",
+   "label": "Fin de journée",
+   "default": "17:00:00"
+  },
+  {
+   "fieldname": "col_journee",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "equilibre",
+   "fieldtype": "Int",
+   "label": "Équilibrage des journées (0 = km minimum seulement)",
+   "default": "1",
+   "description": "Plus il est haut, plus les journées des employés sont de longueur voisine, au prix de quelques km."
+  },
+  {
+   "fieldname": "sec_regles",
+   "fieldtype": "Section Break",
+   "label": "Ce qui se déplace"
+  },
+  {
+   "fieldname": "types_mobiles",
+   "fieldtype": "Small Text",
+   "label": "Types d’intervention déplaçables (un par ligne)",
+   "default": "Entretien\nRéparation\nInstallation\nVisite\nLivraison",
+   "description": "Une réparation dans les locaux d’Aquaworld et une tâche épinglée (« Heure et employé fixes ») ne bougent jamais."
+  },
+  {
+   "fieldname": "col_regles",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "employes_exclus",
+   "fieldtype": "Table MultiSelect",
+   "label": "Employés jamais réaffectés",
+   "options": "Config Optimisation Tournees Exclu"
+  },
+  {
+   "fieldname": "sec_tech",
+   "fieldtype": "Section Break",
+   "label": "Distances"
+  },
+  {
+   "fieldname": "osrm_url",
+   "fieldtype": "Data",
+   "label": "Serveur OSRM (OpenStreetMap)",
+   "default": "https://router.project-osrm.org",
+   "description": "Distances routières gratuites. Injoignable → vol d’oiseau à 30 km/h."
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-10-02 15:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "Config Optimisation Tournees",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "read": 1,
+   "write": 1,
+   "role": "Responsable magasin"
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

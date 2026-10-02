@@ -22,6 +22,8 @@ dependencies = [
     "xlrd~=2.0",
     # listes de prix PDF (tableaux du texte, rendu des pages pour l'IA) — 25/09/2026
     "pymupdf>=1.24",
+    # Optimisation des tournées : tournées à fenêtres de temps, plusieurs véhicules (tournee_optimisation.py).
+    "ortools>=9.10",
 ]
 
 [build-system]

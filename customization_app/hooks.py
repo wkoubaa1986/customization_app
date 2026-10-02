@@ -450,6 +450,8 @@ app_include_js = [_js("customer_quick_entry.js"),
                   # Stock cible (réglage + fiche véhicule) : articles suivis seulement,
                   # et « Coller une liste » pour saisir des dizaines de lignes en un bloc.
                   _js("stock_cible_liste.js"),
+                  # Calendrier des tâches : « 🗺️ Optimiser la journée » (tournee_optimisation.py).
+                  _js("optimiser_tournees.js"),
                   # Le dialogue de création d'un bordereau Aramex, partagé par la fiche
                   # commande et « Ma journée » (aramex_expedition / planning_employe).
                   _js("aramex_dialogue.js"),
