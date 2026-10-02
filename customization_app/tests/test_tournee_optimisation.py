@@ -31,7 +31,7 @@ class TestDurees(unittest.TestCase):
         self.assertEqual(d("Entretien", 60, "30 min"), 60)       # planifié nettement plus long : retenu
         self.assertEqual(d("Installation", None, "1 heure, 30 min"), 90)
         self.assertEqual(d("Installation", None, "30 min"), 75)
-        self.assertEqual(d("Réparation", 600, None), 120)        # créneau aberrant ignoré
+        self.assertEqual(d("Réparation", 600, None), 75)         # créneau aberrant ignoré ; réparation 1 h 15 (02/10)
         self.assertEqual(d("Inconnu", None, None), 60)
 
 

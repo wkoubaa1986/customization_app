@@ -39,7 +39,7 @@ ROLES = ("System Manager", "Responsable magasin")
 PAS_MIN = 5                              # les heures proposées tombent sur 5 min
 # Temps standard par type (celui de api.DUREE_INTERVENTION) : la durée retenue est ce standard, sauf si la tâche
 # planifie nettement plus (décision utilisateur 02/10/2026 : un « 15 min » ne raccourcit pas un entretien).
-DUREE_TYPE = {"Entretien": 30, "Installation": 75, "Réparation": 120, "Livraison": 30, "Visite": 120, "Autre": 60}
+DUREE_TYPE = {"Entretien": 30, "Installation": 75, "Réparation": 75, "Livraison": 30, "Visite": 120, "Autre": 60}
 DUREES_MIN = {"15 min": 15, "30 min": 30, "45 min": 45, "1 heure": 60, "1 heure, 15 min": 75, "1 heure, 30 min": 90,
               "1 heure, 45 min": 105, ">=2 heures": 120}
 
