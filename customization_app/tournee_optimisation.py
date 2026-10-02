@@ -73,6 +73,7 @@ def config() -> dict:
         if frappe.db.exists("DocType", "Config Optimisation Tournees Exclu") else set()
     return {"depot": (lat, lng) if lat and lng else DEPOT_DEFAUT,
             "debut": _minutes(v("heure_debut"), 8 * 60), "fin": _minutes(v("heure_fin"), 17 * 60),
+            "premiere": _minutes(v("heure_premiere"), 9 * 60),
             "types": types, "osrm": (v("osrm_url") or OSRM_DEFAUT).rstrip("/"),
             "equilibre": cint(v("equilibre")) if v("equilibre") is not None else 1, "exclus": exclus}
 
@@ -218,7 +219,7 @@ def matrice(points: list, osrm: str) -> tuple[list, list, str]:
 # ── Solveur ─────────────────────────────────────────────────────────────────
 
 def resoudre(minutes: list, arrets: list, nb_vehicules: int, debut: int, fin: int, equilibre: int = 1,
-             limite_s: int = 5) -> dict:
+             limite_s: int = 5, premiere: int | None = None) -> dict:
     """Tournées à fenêtres de temps (OR-Tools). Nœud 0 = dépôt. `arrets[i]` décrit le nœud i+1 :
     {service: min, fenetre: (a, b) | None, vehicule: idx | None}. Les temps sont en minutes depuis minuit.
     → {"routes": [[(noeud, arrivee), …] par véhicule], "non_places": [noeuds], "cout": minutes de route}."""
@@ -251,7 +252,7 @@ def resoudre(minutes: list, arrets: list, nb_vehicules: int, debut: int, fin: in
         routing.AddVariableMinimizedByFinalizer(temps.CumulVar(routing.End(v)))
     for k, a in enumerate(arrets):
         idx = manager.NodeToIndex(k + 1)
-        fen = a.get("fenetre") or (debut, fin)
+        fen = a.get("fenetre") or (max(debut, premiere or debut), fin)     # pas de visite libre avant « première »
         temps.CumulVar(idx).SetRange(cint(fen[0]), cint(fen[1]))
         if a.get("vehicule") is not None:
             # Le véhicule imposé, ET −1 (« non desservi ») pour rester compatible avec la disjonction
@@ -352,7 +353,7 @@ def proposer(date):
             debut_j, fin_j = min(debut_j, a["debut"]), max(fin_j, a["debut"] + a["service"] + mn[a["noeud"]][0])
     noeuds = [{"service": a["service"], "fenetre": None if a["mobile"] else (a["debut"], a["debut"]),
                "vehicule": None if a["mobile"] else employes.index(a["employe"])} for a in arrets]
-    sol = resoudre(mn, noeuds, len(employes), debut_j, fin_j, cfg["equilibre"])
+    sol = resoudre(mn, noeuds, len(employes), debut_j, fin_j, cfg["equilibre"], premiere=cfg["premiere"])
     par_noeud = {a["noeud"]: a for a in arrets}
     if sol["non_places"]:
         # Ce qui n'a pas trouvé place reste où c'est (employé, heure) et la tournée se recalcule autour,
@@ -363,7 +364,7 @@ def proposer(date):
             fin_j = max(fin_j, a["debut"] + a["service"] + mn[n][0])
         noeuds = [{"service": a["service"], "fenetre": None if a["mobile"] else (a["debut"], a["debut"]),
                    "vehicule": None if a["mobile"] else employes.index(a["employe"])} for a in arrets]
-        sol = resoudre(mn, noeuds, len(employes), debut_j, fin_j, cfg["equilibre"])
+        sol = resoudre(mn, noeuds, len(employes), debut_j, fin_j, cfg["equilibre"], premiere=cfg["premiere"])
     out, tot_av, tot_ap, km_av, km_ap = [], 0, 0, 0.0, 0.0
     for v, e in enumerate(employes):
         actuels = [a for a in arrets if a["employe"] == e]
@@ -398,7 +399,7 @@ def proposer(date):
             "total": {"avant_min": tot_av, "apres_min": tot_ap, "avant_km": round(km_av, 1), "apres_km": round(km_ap, 1)},
             "deplacees": sum(1 for e in out for a in e["apres"]["arrets"] if a["deplace"]),
             "decalees": sum(1 for e in out for a in e["apres"]["arrets"] if a["decale"] and not a["deplace"]),
-            "non_places": non_places, "avertissements": avert, "journee": [_hm(debut_j), _hm(fin_j)]}
+            "non_places": non_places, "avertissements": avert, "journee": [_hm(debut_j), _hm(fin_j)], "premiere": _hm(cfg["premiere"])}
 
 
 @frappe.whitelist(methods=["POST"])

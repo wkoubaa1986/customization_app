@@ -52,7 +52,7 @@
     return `<div style="font-size:13px;margin-bottom:8px">
         <b>${t.avant_km} km · ${t.avant_min} min</b> de route aujourd’hui → <b>${t.apres_km} km · ${t.apres_min} min</b>
         <span style="color:${gain > 0 ? "#15803d" : "#b45309"};font-weight:700"> (${gain > 0 ? "−" : "+"}${Math.abs(gain)} min)</span>
-        · ${p.deplacees} tâche(s) changent d’employé · ${p.decalees} changent d’heure · journée ${esc(p.journee[0])}–${esc(p.journee[1])}
+        · ${p.deplacees} tâche(s) changent d’employé · ${p.decalees} changent d’heure · départ ${esc(p.journee[0])}, visites dès ${esc(p.premiere)}, retour ${esc(p.journee[1])} (<a href="/app/config-optimisation-tournees">réglages</a>)
         · distances : ${esc(p.source)}</div>
       ${p.non_places.length ? `<div style="color:#b91c1c;font-size:12.5px;margin-bottom:6px">⚠️ ${p.non_places.length} tâche(s) ne tiennent pas dans la tournée (deux rendez-vous à la même heure, ou hors journée) : elles restent telles quelles, marquées dans la liste.</div>` : ""}
       ${p.avertissements.length ? `<div style="color:#b45309;font-size:12px;margin-bottom:6px">${p.avertissements.map(esc).join("<br>")}</div>` : ""}

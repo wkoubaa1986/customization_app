@@ -108,6 +108,8 @@ class TestJournee(unittest.TestCase):
         self.assertEqual(arrets[self.taches["C"]]["employe"], self.e2)                          # C rejoint D à l'ouest
         self.assertEqual(arrets[self.taches["B"]]["employe"], self.e1)                          # B rejoint A à l'est
         self.assertLess(p["total"]["apres_km"], p["total"]["avant_km"])
+        for e in p["employes"]:                                                                # pas de visite avant 09:00
+            self.assertTrue(all(a["debut"] >= "09:00" for a in e["apres"]["arrets"] if not a["fixe"]), e["apres"]["arrets"])
         self.assertEqual(p["deplacees"], 2)
 
         plan = [{"tache": a["tache"], "employe": a["employe"], "starts_on": a["starts_on"], "ends_on": a["ends_on"]}

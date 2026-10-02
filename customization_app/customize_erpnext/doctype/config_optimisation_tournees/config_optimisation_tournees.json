@@ -13,6 +13,7 @@
   "depot_longitude",
   "sec_journee",
   "heure_debut",
+  "heure_premiere",
   "heure_fin",
   "col_journee",
   "equilibre",
@@ -61,6 +62,13 @@
    "fieldtype": "Time",
    "label": "Début de journée",
    "default": "08:00:00"
+  },
+  {
+   "fieldname": "heure_premiere",
+   "fieldtype": "Time",
+   "label": "Première intervention au plus tôt",
+   "default": "09:00:00",
+   "description": "Aucune visite proposée avant cette heure (le départ du Magasin peut être plus tôt). Une tâche épinglée garde son heure."
   },
   {
    "fieldname": "heure_fin",
@@ -116,7 +124,7 @@
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-10-02 15:00:00.000000",
+ "modified": "2026-10-02 13:35:09.500396",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Config Optimisation Tournees",
