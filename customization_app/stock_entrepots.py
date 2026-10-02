@@ -27,9 +27,10 @@ CONFIG_EXCLU = "Config Stock Entrepot Exclu"
 CONFIG_SEUIL = "Config Stock Entrepot Seuil"
 CONFIG_VERIF = "Config Stock Entrepot Verification"
 VERIF = "Verification Stock"
-# Statuts d'une vérification (double validation, décision 02/10/2026) : l'employé compte et valide son comptage
-# (« À valider »), un responsable magasin AUTRE que lui valide → rapprochement de stock sur le véhicule et
-# « Terminée ». S'il ajuste une quantité, l'employé doit confirmer (« À confirmer ») avant le rapprochement.
+# Statuts d'une vérification (validation MUTUELLE, décision 02/10/2026) : l'employé compte et termine
+# (« À valider ») ; un responsable magasin AUTRE que lui vérifie et valide avec SES quantités (« À confirmer ») ;
+# l'employé les accepte telles quelles → rapprochement de stock sur le véhicule et « Terminée » — ou en change
+# une, et la fiche revient au responsable (« À valider ») : le dernier mot est au responsable.
 EN_COURS, A_VALIDER, A_CONFIRMER, TERMINEE = "En cours", "À valider", "À confirmer", "Terminée"
 OUVERTS = (EN_COURS, A_VALIDER, A_CONFIRMER)
 CIBLE = "Stock Cible"
@@ -1174,34 +1175,57 @@ def valider_verification(name, comptes=None, note=None):
     v.valide_responsable_par, v.valide_responsable_le = frappe.session.user, now_datetime()
     if note:
         v.note = ((v.note + "\n") if v.note else "") + note[:500]
-    if ajustes:
-        v.statut = A_CONFIRMER
-        v.valide_employe_par = v.valide_employe_le = None
-        v.flags.ignore_permissions = True
-        v.save()
-        emp = _employe_du_stock(v.entrepot)
-        if emp and emp.user_id:
-            _prevenir(emp.user_id, _("🧾 Vérification {0} : {1} quantité(s) ajustée(s) par {2}, à confirmer")
-                      .format(v.name, len(ajustes), frappe.utils.get_fullname(frappe.session.user)), v.name)
-        return dict(_resume(v), ajustes=ajustes)
-    _cloturer(v)
-    return dict(_resume(v), ajustes=[])
+    # Toujours vers l'employé : la validation est mutuelle, il accepte les quantités du responsable (ou en change
+    # une, et la fiche revient ici).
+    v.statut = A_CONFIRMER
+    v.valide_employe_par = v.valide_employe_le = None
+    v.flags.ignore_permissions = True
+    v.save()
+    emp = _employe_du_stock(v.entrepot)
+    if emp and emp.user_id:
+        _prevenir(emp.user_id, (_("🧾 Vérification {0} validée par {1} : {2} quantité(s) ajustée(s), à confirmer")
+                                if ajustes else _("🧾 Vérification {0} validée par {1}, à confirmer"))
+                  .format(v.name, frappe.utils.get_fullname(frappe.session.user), len(ajustes)), v.name)
+    return dict(_resume(v), ajustes=ajustes)
 
 
 @frappe.whitelist(methods=["POST"])
-def confirmer_verification(name):
-    """L'employé du stock accepte les ajustements du responsable : seconde validation, rapprochement, clôture."""
+def confirmer_verification(name, comptes=None):
+    """L'employé du stock répond aux quantités du responsable. Sans changement : validation mutuelle acquise,
+    rapprochement, clôture. S'il en change une (`comptes`) : la fiche revient au responsable (« À valider »),
+    le changement tracé en commentaire — c'est lui qui a le dernier mot."""
     v = frappe.get_doc(VERIF, name)
     if not _est_employe_du_stock(v.entrepot):
-        frappe.throw(_("Seul l’employé de ce stock confirme les quantités ajustées."), frappe.PermissionError)
+        frappe.throw(_("Seul l’employé de ce stock confirme les quantités validées."), frappe.PermissionError)
     if v.statut != A_CONFIRMER:
         frappe.throw(_("Cette vérification n’est pas à confirmer ({0}).").format(v.statut))
     bouges = _rafraichir_systeme(v)
     if bouges:
         return _renvoi_auto(v, bouges)
+    comptes = (frappe.parse_json(comptes) if isinstance(comptes, str) else comptes) or {}
+    avant = {l.item_code: (cint(l.compte), flt(l.qte_comptee, 6)) for l in v.lignes}
+    _appliquer_comptage(v, comptes)
+    changes = []
+    for l in v.lignes:
+        if (cint(l.compte), flt(l.qte_comptee, 6)) != avant[l.item_code]:
+            l.qte_employe, l.ajuste = flt(l.qte_comptee, 6), 0
+            l.commentaire = (_("Modifié par l’employé après validation ({0} → {1})")
+                             .format(avant[l.item_code][1], flt(l.qte_comptee, 6)))[:140]
+            changes.append("%s : %g → %g" % (l.item_name or l.item_code, avant[l.item_code][1], flt(l.qte_comptee, 6)))
     v.valide_employe_par, v.valide_employe_le = frappe.session.user, now_datetime()
+    if changes:
+        v.statut = A_VALIDER
+        v.valide_responsable_par = v.valide_responsable_le = None
+        v.flags.ignore_permissions = True
+        v.save()
+        cfg = config_verification()
+        resp = frappe.db.get_value("Employee", cfg["responsable"], "user_id") if cfg["responsable"] else None
+        if resp and resp != frappe.session.user:
+            _prevenir(resp, _("🧾 Vérification {0} : {1} quantité(s) modifiée(s) par l’employé, à revalider")
+                      .format(v.name, len(changes)), v.name)
+        return dict(_resume(v), changes=changes)
     _cloturer(v)
-    return _resume(v)
+    return dict(_resume(v), changes=[])
 
 
 @frappe.whitelist(methods=["POST"])

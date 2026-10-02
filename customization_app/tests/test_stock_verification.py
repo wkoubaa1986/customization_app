@@ -84,7 +84,12 @@ class TestCircuit(unittest.TestCase):
         self.assertEqual(frappe.db.get_value("Tache de travail", v.tache_employe, "status"), "Completed")
         # le stock ne bouge PAS avant la validation du responsable
         self.assertEqual(frappe.db.get_value("Bin", {"item_code": l1.item_code, "warehouse": self.ENTREPOT}, "actual_qty"), stock_avant)
-        r = S.valider_verification(nom)                                         # 2e validation : rapprochement
+        r = S.valider_verification(nom)                                         # validation du responsable
+        self.assertEqual(r["statut"], "À confirmer")
+        emp = frappe.db.get_value("Employee", {"custom_warehouse": self.ENTREPOT, "status": "Active"}, "user_id")
+        frappe.set_user(emp)
+        r = S.confirmer_verification(nom)                                       # accord de l'employé : rapprochement
+        frappe.set_user("Administrator")
         self.assertEqual(r["statut"], "Terminée")
         self.assertTrue(r["rapprochement"])
         self.assertEqual(frappe.db.get_value("Bin", {"item_code": l1.item_code, "warehouse": self.ENTREPOT}, "actual_qty"), stock_avant + 2)
@@ -247,7 +252,11 @@ class TestDoubleValidationVerif(unittest.TestCase):
         self.assertEqual((r["statut"], r["nb_a_recompter"]), ("À valider", 0))
         frappe.set_user("Administrator")
         r = S.valider_verification(nom)
-        self.assertEqual((r["statut"], r["ajustes"]), ("Terminée", []))
+        self.assertEqual((r["statut"], r["ajustes"]), ("À confirmer", []))      # toujours vers l'employé
+        self.assertEqual(self._qte(i2), 5)
+        frappe.set_user(self.AKRAM)
+        r = S.confirmer_verification(nom)                                       # d'accord : validation mutuelle
+        self.assertEqual((r["statut"], r["changes"]), ("Terminée", []))
         rec = frappe.get_doc("Stock Reconciliation", r["rapprochement"])
         self.assertEqual((rec.docstatus, [(x.item_code, x.qty) for x in rec.items]), (1, [(i2, 4)]))   # seul le vrai écart
         self.assertEqual((self._qte(i1), self._qte(i2)), (2, 4))
@@ -266,9 +275,18 @@ class TestDoubleValidationVerif(unittest.TestCase):
             S.confirmer_verification(nom)                                       # pas l'employé du stock
         frappe.set_user(self.AKRAM)
         self.assertEqual(S.detail_verification(nom)["fiche"]["actions"], ["confirmer", "recompter"])
+        r = S.confirmer_verification(nom, {i2: {"qte_comptee": 4}})            # l'employé maintient 4 → retour au responsable
+        self.assertEqual((r["statut"], len(r["changes"]), r["valide_responsable_par"]), ("À valider", 1, None))
+        l = next(x for x in frappe.get_doc(S.VERIF, nom).lignes if x.item_code == i2)
+        self.assertEqual((l.qte_comptee, l.ajuste), (4, 0))
+        self.assertIn("Modifié par l’employé", l.commentaire)
+        frappe.set_user("Administrator")
+        r = S.valider_verification(nom)                                         # le responsable tranche : 4, tel quel
+        self.assertEqual((r["statut"], r["ajustes"]), ("À confirmer", []))
+        frappe.set_user(self.AKRAM)
         r = S.confirmer_verification(nom)
-        self.assertEqual((r["statut"], r["rapprochement"], r["valide_employe_par"]), ("Terminée", None, "Akram"))  # 5 = 5 : rien à rapprocher
-        self.assertEqual(self._qte(i2), 5)
+        self.assertEqual((r["statut"], r["valide_employe_par"]), ("Terminée", "Akram"))
+        self.assertEqual(self._qte(i2), 4)                                      # rapproché sur le mot final : 4
 
     def test_renvoi_au_comptage(self):
         import frappe
@@ -282,4 +300,7 @@ class TestDoubleValidationVerif(unittest.TestCase):
         self.assertEqual((r["statut"], r["nb_ecarts"]), ("À valider", 0))
         frappe.set_user("Administrator")
         r = S.valider_verification(nom)
+        self.assertEqual(r["statut"], "À confirmer")
+        frappe.set_user(self.AKRAM)
+        r = S.confirmer_verification(nom)
         self.assertEqual((r["statut"], r["rapprochement"]), ("Terminée", None))
