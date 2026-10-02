@@ -60,5 +60,20 @@
   }
 
   brancher("Config Stock Entrepot", "modele_cible");
+
+  // Réglages : forcer la génération des vérifications (fiches + tâches) si le job quotidien n'est pas passé.
+  // Même règle que le cron : la prochaine occurrence de chaque stock actif, rien en double.
+  frappe.ui.form.on("Config Stock Entrepot", {
+    refresh(frm) {
+      frm.add_custom_button("▶ Générer les vérifications de la semaine", () => {
+        if (frm.is_dirty()) { frappe.msgprint("Enregistrez d’abord les réglages."); return; }
+        frappe.confirm("Créer maintenant, pour chaque stock actif, la prochaine vérification (fiche + tâches de l’employé et du responsable) si elle n’existe pas encore ?", async () => {
+          const r = (await frappe.call({ method: "customization_app.stock_entrepots.planifier_maintenant", freeze: true })).message || [];
+          frappe.msgprint({ title: "Vérifications", indicator: r.length ? "green" : "orange",
+            message: r.length ? `${r.length} vérification(s) créée(s) : ${r.map(esc).join(", ")}` : "Rien à créer : la prochaine vérification de chaque stock actif existe déjà (ou aucun jour fixé / aucun employé rattaché)." });
+        });
+      });
+    },
+  });
   brancher("Stock Cible", "lignes");
 })();
