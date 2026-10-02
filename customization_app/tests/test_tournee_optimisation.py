@@ -88,6 +88,10 @@ class TestJournee(unittest.TestCase):
         frappe.set_user("Administrator")
         frappe.db.savepoint("tournee")
         frappe.flags.tournee_sans_reseau = True
+        # Un réglage FIXE, quel que soit celui enregistré sur le site (heures, exclus, départs).
+        self._config = T.config
+        T.config = lambda: {"depot": T.DEPOT_DEFAUT, "departs": {}, "debut": 8 * 60, "premiere": 9 * 60, "fin": 17 * 60,
+                            "types": list(T.TYPES_MOBILES_DEFAUT), "osrm": T.OSRM_DEFAUT, "equilibre": 1, "exclus": set()}
         if not frappe.db.has_column("Tache de travail", "custom_tournee_fixe"):
             self.skipTest("patch ensure_tournee_fields non joué")
         emps = frappe.get_all("Employee", filters={"status": "Active"}, pluck="name", order_by="name", limit=2)
@@ -116,6 +120,7 @@ class TestJournee(unittest.TestCase):
     def tearDown(self):
         import frappe
         frappe.flags.tournee_sans_reseau = False
+        T.config = self._config
         frappe.set_user("Administrator")
         frappe.db.rollback(save_point="tournee")
 
