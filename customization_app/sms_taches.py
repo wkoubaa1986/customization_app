@@ -167,7 +167,9 @@ def rendre(modele, ligne):
         "signature": SIGNATURE,
         **{cle: ligne.get(cle, "") for cle in (
             "nom_client", "date", "heure", "type", "technicien",
-            "tel_technicien", "commande", "total_ttc", "devise")},
+            "tel_technicien", "commande", "total_ttc", "devise",
+            # posées par l'optimisation des tournées (tournee_optimisation.py)
+            "plage", "demi", "ancienne_heure", "au_lieu_de")},
     }))
 
 
@@ -221,11 +223,14 @@ def envoyer(taches, modele, sujet=None, sms=1, email=1):
     return {"differe": True, "taches": len(taches)}
 
 
-def _executer(taches, modele, sujet, sms, email, utilisateur, differe=False):
+def _executer(taches, modele, sujet, sms, email, utilisateur, differe=False,
+              extras=None, modele_email=None):
     """La tournée. Un échec n'interrompt pas les suivants ; chaque tâche touchée
     garde une trace au fil du document, avec un VERDICT HONNÊTE : l'envoi passe
     par envoyer_sms_verifie (réponse de la passerelle contrôlée), pas par le
-    fallback qui avale les refus."""
+    fallback qui avale les refus.
+    `extras` : {tache: {balise: valeur}} ajoutées au rendu (plage horaire de
+    l'optimisation…) ; `modele_email` : texte propre à l'e-mail, sinon le SMS."""
     from customization_app.customize_erpnext.doctype.compagne_sms.compagne_sms import (
         envoyer_sms_verifie,
     )
@@ -241,7 +246,9 @@ def _executer(taches, modele, sujet, sms, email, utilisateur, differe=False):
     lignes = _destinataires(taches)
     total = len(lignes)
     for index, ligne in enumerate(lignes, start=1):
+        ligne.update((extras or {}).get(ligne["tache"]) or {})
         texte = rendre(modele, ligne)
+        texte_email = rendre(modele_email, ligne) if modele_email else texte
         verdict = {"tache": ligne["tache"], "client": ligne["nom_client"],
                    "sms": None, "email": None}
 
@@ -276,7 +283,7 @@ def _executer(taches, modele, sujet, sms, email, utilisateur, differe=False):
                     recipients=ligne["emails"],
                     subject=(sujet or "").strip()
                             or _("Aqua World & Servicing — votre intervention"),
-                    message=frappe.utils.md_to_html(texte),
+                    message=frappe.utils.md_to_html(texte_email),
                     reference_doctype=DOCTYPE_TACHE,
                     reference_name=ligne["tache"],
                     now=True)

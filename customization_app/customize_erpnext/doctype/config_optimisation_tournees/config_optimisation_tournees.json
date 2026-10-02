@@ -28,6 +28,15 @@
   "col_regles",
   "employes_exclus",
   "pointes",
+  "sec_prevenir",
+  "prevenir_sms",
+  "prevenir_email",
+  "prevenir_seuil",
+  "plage_minutes",
+  "col_prevenir",
+  "sujet_email",
+  "modele_sms",
+  "modele_email",
   "sec_tech",
   "osrm_url"
  ],
@@ -161,6 +170,60 @@
    "label": "Heures de pointe (trajet majoré)",
    "options": "Config Optimisation Tournees Pointe",
    "description": "Un trajet qui démarre dans une de ces plages est allongé du pourcentage indiqué (OSRM ne connaît pas le trafic). Ex. 07:30–09:00 +30 %, 16:30–18:30 +30 %."
+  },
+  {
+   "fieldname": "sec_prevenir",
+   "fieldtype": "Section Break",
+   "label": "Prévenir les clients quand l'heure change",
+   "description": "À l'application d'une proposition, chaque client dont le rendez-vous bouge reçoit un message avec une plage horaire centrée sur la nouvelle heure. Balises : {nom_client} {date} {demi} {plage} {heure} {ancienne_heure} {au_lieu_de} (= « (au lieu de 14h30) », vide si seul le technicien change) {type} {technicien} {tel_technicien} {lien_rdv} {signature}"
+  },
+  {
+   "fieldname": "prevenir_sms",
+   "fieldtype": "Check",
+   "label": "Prévenir par SMS",
+   "default": "0"
+  },
+  {
+   "fieldname": "prevenir_email",
+   "fieldtype": "Check",
+   "label": "Prévenir par e-mail",
+   "default": "0"
+  },
+  {
+   "fieldname": "prevenir_seuil",
+   "fieldtype": "Int",
+   "label": "Seulement si l'heure bouge d'au moins (min)",
+   "default": "15",
+   "description": "Un changement d'employé seul prévient aussi (le message nomme le technicien). 0 = tout changement."
+  },
+  {
+   "fieldname": "plage_minutes",
+   "fieldtype": "Int",
+   "label": "Largeur de la plage annoncée (min)",
+   "default": "60",
+   "description": "Centrée sur la nouvelle heure, arrondie au quart d'heure : 15:15 → « entre 14h45 et 15h45 »."
+  },
+  {
+   "fieldname": "col_prevenir",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "sujet_email",
+   "fieldtype": "Data",
+   "label": "Objet de l'e-mail",
+   "default": "Aqua World & Servicing — votre rendez-vous est déplacé"
+  },
+  {
+   "fieldname": "modele_sms",
+   "fieldtype": "Small Text",
+   "label": "Message SMS",
+   "default": "Bonjour {nom_client},\n\nPour mieux organiser notre tournée, votre rendez-vous ({type}) du {date} est déplacé : notre technicien {technicien} passera {demi} entre {plage}{au_lieu_de}.\n\nVous pouvez consulter ou modifier votre rendez-vous ici : {lien_rdv}\n\nMerci de votre compréhension.\n\n{signature}"
+  },
+  {
+   "fieldname": "modele_email",
+   "fieldtype": "Small Text",
+   "label": "Message e-mail",
+   "description": "Vide = même texte que le SMS."
   },
   {
    "fieldname": "sec_tech",

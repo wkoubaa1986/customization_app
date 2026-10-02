@@ -99,7 +99,11 @@ def config() -> dict:
             "marge": cint(v("marge_minutes")) if v("marge_minutes") is not None else 10,
             "fenetre": cint(v("fenetre_minutes")) if v("fenetre_minutes") is not None else 60,
             "types": types, "osrm": (v("osrm_url") or OSRM_DEFAUT).rstrip("/"),
-            "equilibre": cint(v("equilibre")) if v("equilibre") is not None else 1, "exclus": exclus}
+            "equilibre": cint(v("equilibre")) if v("equilibre") is not None else 1, "exclus": exclus,
+            "prevenir": {"sms": cint(v("prevenir_sms")), "email": cint(v("prevenir_email")),
+                         "seuil": cint(v("prevenir_seuil")) if v("prevenir_seuil") is not None else 15,
+                         "plage": cint(v("plage_minutes")) or 60, "sujet": v("sujet_email") or SUJET_EMAIL_DEFAUT,
+                         "sms_texte": v("modele_sms") or MODELE_SMS_DEFAUT, "email_texte": v("modele_email") or ""}}
 
 
 # ── Coordonnées ─────────────────────────────────────────────────────────────
@@ -469,6 +473,71 @@ def _hm(minutes: int) -> str:
     return "%02d:%02d" % (minutes // 60, minutes % 60)
 
 
+# ── Prévenir les clients ────────────────────────────────────────────────────
+
+SUJET_EMAIL_DEFAUT = "Aqua World & Servicing — votre rendez-vous est déplacé"
+MODELE_SMS_DEFAUT = ("Bonjour {nom_client},\n\n"
+                     "Pour mieux organiser notre tournée, votre rendez-vous ({type}) du {date} est déplacé : "
+                     "notre technicien {technicien} passera {demi} entre {plage}{au_lieu_de}.\n\n"
+                     "Vous pouvez consulter ou modifier votre rendez-vous ici : {lien_rdv}\n\n"
+                     "Merci de votre compréhension.\n\n{signature}")
+
+
+def _h(minutes: int) -> str:
+    """« 14h45 », « 9h » — l'écriture d'un SMS, pas celle d'une base."""
+    return "%dh%s" % (minutes // 60, "%02d" % (minutes % 60) if minutes % 60 else "")
+
+
+def plage_annoncee(minute: int, largeur: int = 60) -> dict:
+    """La plage dite au client : `largeur` minutes centrées sur la nouvelle heure, bornes au quart d'heure.
+    15:15 / 60 → « 14h45 et 15h45 ». PURE."""
+    largeur = max(15, int(largeur or 60))
+    debut = max(0, int(math.floor((minute - largeur / 2) / 15.0) * 15))
+    fin = min(24 * 60 - 1, debut + largeur)
+    return {"debut": _hm(debut), "fin": _hm(fin), "plage": "%s et %s" % (_h(debut), _h(fin)),
+            "demi": "le matin" if minute < 12 * 60 + 30 else "l'après-midi"}
+
+
+def a_prevenir(arret: dict, seuil: int) -> bool:
+    """Un arrêt vaut un message si l'heure bouge d'au moins `seuil` minutes ou si l'employé change
+    (le message nomme le technicien). Fixes, non placés : jamais."""
+    if arret.get("fixe") or arret.get("non_place"):
+        return False
+    return bool(arret.get("deplace")) or (bool(arret.get("decale")) and abs(int(arret.get("ecart_min") or 0)) >= int(seuil or 0))
+
+
+def _extras_notification(arret: dict, largeur: int) -> dict:
+    """Les balises propres au déplacement, pour sms_taches.rendre : plage, demi, ancienne heure, nouvelle heure."""
+    deb = _minutes(arret["debut"], 0)
+    pl = plage_annoncee(deb, largeur)
+    ancienne = _h(_minutes(arret["ancien_debut"], 0))
+    return {"plage": pl["plage"], "demi": pl["demi"], "ancienne_heure": ancienne, "heure": _hm(deb),
+            # seul le technicien change : pas de « au lieu de 13h30 » quand l'heure est la même
+            "au_lieu_de": "" if arret["ancien_debut"] == arret["debut"] else " (au lieu de %s)" % ancienne}
+
+
+def notifications_proposees(arrets: list, cfg: dict) -> list:
+    """Pour la fenêtre, AVANT d'appliquer : qui recevra quoi (numéros, e-mails, texte rendu avec les NOUVELLES
+    valeurs) parmi les arrêts qui le méritent. Le technicien/heure de `_destinataires` sont ceux d'avant
+    application : on les écrase par ceux de la proposition."""
+    from customization_app import sms_taches
+    pv = cfg["prevenir"]
+    cibles = {a["tache"]: a for a in arrets if a_prevenir(a, pv["seuil"])}
+    if not cibles:
+        return []
+    noms = {e.name: (e.employee_name, e.cell_number) for e in frappe.get_all(
+        "Employee", filters={"name": ["in", list({a["employe"] for a in cibles.values()})]}, fields=["name", "employee_name", "cell_number"])}
+    out = []
+    for ligne in sms_taches._destinataires(list(cibles)):
+        a = cibles[ligne["tache"]]
+        ligne.update(_extras_notification(a, pv["plage"]))
+        ligne["technicien"], ligne["tel_technicien"] = noms.get(a["employe"], (ligne["technicien"], ligne["tel_technicien"]))
+        out.append({"tache": a["tache"], "client": ligne["nom_client"], "employe": a["employe"], "numeros": ligne["numeros"], "emails": ligne["emails"],
+                    "ancienne_heure": a["ancien_debut"], "heure": a["debut"], "plage": ligne["plage"], "demi": ligne["demi"],
+                    "sms": sms_taches.rendre(pv["sms_texte"], ligne), "email": sms_taches.rendre(pv["email_texte"] or pv["sms_texte"], ligne)})
+    return out
+
+
 def _route_actuelle(arrets_emp: list, mn: list, km: list, depot: int = 0) -> tuple[int, float]:
     """Minutes et km de la tournée telle qu'elle est (ordre des heures), dépôt → … → dépôt."""
     ordre = [depot] + [a["noeud"] for a in sorted(arrets_emp, key=lambda a: a["debut"])] + [depot]
@@ -760,17 +829,22 @@ def proposer(date, fenetre=None, employes=None):
             "non_places": non_places, "avertissements": avert, "journee": [_hm(debut_j), _hm(fin_j)], "premiere": _hm(cfg["premiere"]),
             "fenetre": fenetre, "marge": cfg["marge"], "pause": [_hm(cfg["pause"][0]), _hm(cfg["pause"][1])] if cfg["pause"] else None,
             "pointes": ["%s–%s +%d %%" % (_hm(d), _hm(f), pct) for d, f, pct in cfg["pointes"]],
-            "sans_domicile": [noms.get(e, e) for e, p in choix.items() if p == "domicile" and e not in cfg["departs"] and e in noms]}
+            "sans_domicile": [noms.get(e, e) for e, p in choix.items() if p == "domicile" and e not in cfg["departs"] and e in noms],
+            "prevenir": {"sms": cfg["prevenir"]["sms"], "email": cfg["prevenir"]["email"], "seuil": cfg["prevenir"]["seuil"], "plage": cfg["prevenir"]["plage"]},
+            "notifications": notifications_proposees([a for e in out for a in e["apres"]["arrets"]], cfg)}
 
 
 @frappe.whitelist(methods=["POST"])
-def appliquer(date, plan):
-    """Écrit la proposition : employé, heures de chaque tâche listée. plan : [{tache, employe, starts_on, ends_on}].
-    Un commentaire sur chaque tâche modifiée ; la tâche garde son statut, ses photos, sa commande."""
+def appliquer(date, plan, prevenir=0):
+    """Écrit la proposition : employé, heures de chaque tâche listée. plan : [{tache, employe, starts_on, ends_on, prevenir}].
+    Un commentaire sur chaque tâche modifiée ; la tâche garde son statut, ses photos, sa commande.
+    `prevenir` : les clients des tâches marquées `prevenir` dans le plan reçoivent le SMS / e-mail du réglage
+    (plage horaire centrée sur la nouvelle heure), en tâche de fond, verdict en commentaire sur la tâche."""
     _superviseur()
     plan = frappe.parse_json(plan) if isinstance(plan, str) else (plan or [])
+    cfg_pv = config()["prevenir"]
     noms = {}
-    modifiees = []
+    modifiees, a_prevenir_ = [], {}
     for p in plan:
         doc = frappe.get_doc(TACHE, p["tache"])
         if doc.status != "Open" or str(getdate(doc.starts_on)) != str(getdate(date)):
@@ -794,4 +868,12 @@ def appliquer(date, plan):
         doc.add_comment("Comment", _("🗺️ Optimisation de la tournée du {0} : {1} → {2} {3}")
                         .format(frappe.utils.formatdate(date), avant, noms[nouveau_emp], str(nd)[11:16]))
         modifiees.append(doc.name)
-    return {"modifiees": modifiees}
+        if cint(prevenir) and cint(p.get("prevenir")) and (cfg_pv["sms"] or cfg_pv["email"]):
+            a_prevenir_[doc.name] = _extras_notification({"debut": str(nd)[11:16], "ancien_debut": avant[-5:]}, cfg_pv["plage"])
+    if a_prevenir_:
+        frappe.enqueue("customization_app.sms_taches._executer", queue="short", timeout=1800,
+                       taches=list(a_prevenir_), modele=cfg_pv["sms_texte"], sujet=cfg_pv["sujet"],
+                       sms=cfg_pv["sms"], email=cfg_pv["email"], utilisateur=frappe.session.user, differe=True,
+                       extras=a_prevenir_, modele_email=cfg_pv["email_texte"] or None,
+                       job_name="tournee_prevenir_%s" % frappe.generate_hash(length=8))
+    return {"modifiees": modifiees, "prevenus": len(a_prevenir_)}

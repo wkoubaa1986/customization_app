@@ -37,6 +37,27 @@
     return (mn < 0 ? "−" : "+") + (h ? `${h} h${m ? " " + String(m).padStart(2, "0") : ""}` : `${m} min`);
   };
 
+  // « 📨 Clients à prévenir » : qui recevra quoi si on applique — le texte exact, avec la plage horaire.
+  function blocNotifications(p) {
+    const pv = p.prevenir || {}, actif = pv.sms || pv.email, n = (p.notifications || []).length;
+    const canaux = [pv.sms ? "SMS" : "", pv.email ? "e-mail" : ""].filter(Boolean).join(" + ");
+    if (!actif) return `<div class="text-muted" style="font-size:12px;margin-bottom:8px;padding:6px 10px;background:#f8fafc;border-radius:6px">📨 Les clients ne sont pas prévenus des changements d’heure (à activer dans <a href="/app/config-optimisation-tournees" target="_blank">⚙️ Réglages → Prévenir les clients</a>).</div>`;
+    if (!n) return `<div class="text-muted" style="font-size:12px;margin-bottom:8px">📨 Aucun client à prévenir (aucune heure ne bouge de ${pv.seuil} min ou plus).</div>`;
+    const sansNum = pv.sms ? p.notifications.filter((x) => !x.numeros.length).length : 0, sansMail = pv.email ? p.notifications.filter((x) => !x.emails.length).length : 0;
+    const sans = [sansNum ? `${sansNum} sans numéro` : "", sansMail ? `${sansMail} sans e-mail` : ""].filter(Boolean).join(", ");
+    return `<div style="border:1px solid #bfdbfe;background:#eff6ff;border-radius:8px;padding:8px 12px;margin-bottom:10px;font-size:12.5px">
+      <label style="margin:0;display:flex;align-items:center;gap:8px"><input type="checkbox" id="opt-prevenir" checked> <b>📨 Prévenir ${n} client(s) par ${canaux}</b>
+        <span class="text-muted" style="font-size:11.5px">plage de ${pv.plage} min centrée sur la nouvelle heure · envoyé à l’application, trace sur chaque tâche${sans ? ` · ⚠️ ${sans}` : ""}</span>
+        <a href="#" id="opt-voir-messages" style="margin-left:auto;font-size:11.5px">▸ voir les messages</a></label>
+      <div id="opt-messages" style="display:none;margin-top:8px">${p.notifications.map((x) => `
+        <div style="border-top:1px solid #dbeafe;padding:6px 0">
+          <div><b>${esc(x.client)}</b> · ${esc(x.ancienne_heure)} → ${esc(x.heure)} (${esc(x.demi)} entre ${esc(x.plage)})
+            <span class="text-muted" style="font-size:11.5px"> · 📱 ${x.numeros.length ? esc(x.numeros.join(", ")) : "<span style=\"color:#b91c1c\">aucun numéro</span>"} · ✉️ ${x.emails.length ? esc(x.emails.join(", ")) : "<span style=\"color:#b91c1c\">aucun e-mail</span>"}</span></div>
+          <pre style="white-space:pre-wrap;font-family:inherit;font-size:12px;margin:4px 0 0;color:#334155;background:#fff;border-radius:6px;padding:6px 8px">${esc(x.sms)}</pre>
+          ${pv.email && x.email !== x.sms ? `<pre style="white-space:pre-wrap;font-family:inherit;font-size:12px;margin:4px 0 0;color:#334155;background:#fff;border-radius:6px;padding:6px 8px">✉️ ${esc(x.email)}</pre>` : ""}
+        </div>`).join("")}</div></div>`;
+  }
+
   function rendre(p) {
     if (!p.employes.length) return `<div class="text-muted" style="padding:16px">${esc(p.message || "Rien à optimiser.")}</div>`;
     const t = p.total, gain = t.avant_min - t.apres_min;
@@ -63,6 +84,7 @@
       ${p.non_places.length ? `<div style="color:#b91c1c;font-size:12.5px;margin-bottom:6px">⚠️ ${p.non_places.length} tâche(s) ne tiennent pas dans la tournée : elles restent à leur heure et leur employé, marquées dans la liste, et leur créneau est réservé (rien d’autre dessus).${p.fenetre ? ` Souvent dû à la fenêtre ± ${p.fenetre} min : élargissez-la ou décochez « Garder les heures proches » pour recalculer.` : " Deux rendez-vous à la même heure chez le même employé, ou journée trop chargée."}</div>` : ""}
       ${p.avertissements.length ? `<div style="color:#b45309;font-size:12px;margin-bottom:6px">${p.avertissements.map(esc).join("<br>")}</div>` : ""}
       <div class="text-muted" style="font-size:11.5px;margin-bottom:8px">📌 fixe (type non déplaçable, épinglée, réparation au local, terminée) · 🟨 change d’employé · 🟦 change d’heure · ≈ position approchée</div>
+      ${blocNotifications(p)}
       ${cartes}`;
   }
 
@@ -99,16 +121,23 @@
         proposition = (await frappe.call({ method: API + "proposer", args: { date: v.date, fenetre: v.proche ? (v.fenetre || 60) : 0, employes: choix }, freeze: true, freeze_message: "Optimisation…" })).message;
         if ((proposition.sans_domicile || []).length) frappe.show_alert({ message: `Pas de domicile réglé pour ${esc(proposition.sans_domicile.join(", "))} : départ du Magasin. (Réglages → Points de départ particuliers)`, indicator: "orange" }, 8);
         d.fields_dict.resultat.$wrapper.html(rendre(proposition));
+        d.fields_dict.resultat.$wrapper.find("#opt-voir-messages").on("click", (ev) => {
+          ev.preventDefault();
+          const $m = d.fields_dict.resultat.$wrapper.find("#opt-messages"); $m.toggle();
+          $(ev.currentTarget).text($m.is(":visible") ? "▾ masquer les messages" : "▸ voir les messages");
+        });
         const n = proposition.deplacees + proposition.decalees;
         if (n) {
           d.set_secondary_action_label(`✅ Appliquer (${n} tâche(s))`);
           d.set_secondary_action(() => {
-            const plan = [];
-            proposition.employes.forEach((e) => e.apres.arrets.forEach((a) => { if (a.deplace || a.decale) plan.push({ tache: a.tache, employe: a.employe, starts_on: a.starts_on, ends_on: a.ends_on }); }));
-            frappe.confirm(`Appliquer la proposition : <b>${proposition.deplacees}</b> tâche(s) changent d’employé, <b>${proposition.decalees}</b> changent d’heure ?<br>Un commentaire sera posé sur chaque tâche modifiée.`, async () => {
-              const r = (await frappe.call({ method: API + "appliquer", args: { date: proposition.date, plan }, freeze: true, freeze_message: "Application…" })).message;
+            const plan = [], notifs = new Set((proposition.notifications || []).map((x) => x.tache));
+            const prevenir = d.fields_dict.resultat.$wrapper.find("#opt-prevenir").is(":checked") ? 1 : 0;
+            proposition.employes.forEach((e) => e.apres.arrets.forEach((a) => { if (a.deplace || a.decale) plan.push({ tache: a.tache, employe: a.employe, starts_on: a.starts_on, ends_on: a.ends_on, prevenir: notifs.has(a.tache) ? 1 : 0 }); }));
+            const nb = prevenir ? notifs.size : 0;
+            frappe.confirm(`Appliquer la proposition : <b>${proposition.deplacees}</b> tâche(s) changent d’employé, <b>${proposition.decalees}</b> changent d’heure ?<br>Un commentaire sera posé sur chaque tâche modifiée.${nb ? `<br><b>📨 ${nb} client(s)</b> recevront le message de changement d’horaire.` : ""}`, async () => {
+              const r = (await frappe.call({ method: API + "appliquer", args: { date: proposition.date, plan, prevenir }, freeze: true, freeze_message: "Application…" })).message;
               d.hide();
-              frappe.show_alert({ message: `🗺️ ${r.modifiees.length} tâche(s) mise(s) à jour`, indicator: "green" }, 6);
+              frappe.show_alert({ message: `🗺️ ${r.modifiees.length} tâche(s) mise(s) à jour${r.prevenus ? ` · 📨 ${r.prevenus} client(s) prévenus en arrière-plan` : ""}`, indicator: "green" }, 6);
               if (window.cur_list && cur_list.refresh) cur_list.refresh();
             });
           });
@@ -177,6 +206,11 @@
   }
 
   window.optimiserTournees_ouvrir = ouvrir;
+
+  frappe.realtime.on("envoi_taches_termine", (m) => {
+    if (!m || !document.getElementById("btn-optimiser-tournees")) return;
+    frappe.show_alert({ message: `📨 Messages clients : ${m.sms_envoyes} SMS, ${m.emails_envoyes} e-mail(s)${m.echecs ? `, ${m.echecs} échec(s)` : ""}${m.simulation ? " (simulés en dev)" : ""} — détail en commentaire sur chaque tâche`, indicator: m.echecs ? "orange" : "green" }, 10);
+  });
 
   function poser_bouton(essais) {
     if (document.getElementById("btn-optimiser-tournees")) return;

@@ -38,6 +38,19 @@ class TestDurees(unittest.TestCase):
 
 
 class TestPointes(unittest.TestCase):
+    def test_plage_annoncee_et_seuil(self):
+        self.assertEqual(T.plage_annoncee(15 * 60 + 15, 60)["plage"], "14h45 et 15h45")
+        self.assertEqual(T.plage_annoncee(15 * 60 + 15, 60)["demi"], "l'après-midi")
+        self.assertEqual(T.plage_annoncee(9 * 60, 60), {"debut": "08:30", "fin": "09:30", "plage": "8h30 et 9h30", "demi": "le matin"})
+        self.assertEqual(T.plage_annoncee(10 * 60 + 10, 120)["plage"], "9h et 11h")      # borne au quart d'heure inférieur
+        self.assertTrue(T.a_prevenir({"deplace": True, "decale": False, "ecart_min": 0}, 15))
+        self.assertTrue(T.a_prevenir({"deplace": False, "decale": True, "ecart_min": -20}, 15))
+        self.assertFalse(T.a_prevenir({"deplace": False, "decale": True, "ecart_min": 10}, 15))
+        self.assertFalse(T.a_prevenir({"deplace": True, "fixe": True}, 0))
+        self.assertEqual(T._extras_notification({"debut": "13:30", "ancien_debut": "13:30"}, 60)["au_lieu_de"], "")
+        self.assertEqual(T._extras_notification({"debut": "13:30", "ancien_debut": "14:30"}, 60)["au_lieu_de"], " (au lieu de 14h30)")
+        self.assertFalse(T.a_prevenir({"deplace": True, "non_place": True}, 0))
+
     def test_facteur_et_matrice(self):
         pointes = [(7 * 60 + 30, 9 * 60, 30), (12 * 60, 13 * 60 + 30, 20)]
         self.assertEqual(T.facteur_pointe(8 * 60, pointes), 1.3)
@@ -138,7 +151,9 @@ class TestJournee(unittest.TestCase):
         self._config = T.config
         T.config = lambda: {"depot": T.DEPOT_DEFAUT, "departs": {}, "debut": 8 * 60, "premiere": 9 * 60, "fin": 17 * 60,
                             "types": list(T.TYPES_MOBILES_DEFAUT), "osrm": T.OSRM_DEFAUT, "equilibre": 1, "exclus": set(),
-                            "pause": None, "marge": 0, "fenetre": 0, "horaires": {}, "pointes": []}
+                            "pause": None, "marge": 0, "fenetre": 0, "horaires": {}, "pointes": [],
+                            "prevenir": {"sms": 1, "email": 0, "seuil": 15, "plage": 60, "sujet": T.SUJET_EMAIL_DEFAUT,
+                                         "sms_texte": T.MODELE_SMS_DEFAUT, "email_texte": ""}}
         if not frappe.db.has_column("Tache de travail", "custom_tournee_fixe"):
             self.skipTest("patch ensure_tournee_fields non joué")
         emps = frappe.get_all("Employee", filters={"status": "Active"}, pluck="name", order_by="name", limit=2)
@@ -188,10 +203,33 @@ class TestJournee(unittest.TestCase):
         for e in p["employes"]:                                                                # pas de visite avant 09:00
             self.assertTrue(all(a["debut"] >= "09:00" for a in e["apres"]["arrets"] if not a["fixe"]), e["apres"]["arrets"])
         self.assertEqual(p["deplacees"], 2)
+        # aperçu des messages : les deux tâches qui changent d'employé, texte rendu avec la NOUVELLE heure et sa plage
+        notifs = {n["tache"]: n for n in p["notifications"]}
+        self.assertTrue({self.taches["B"], self.taches["C"]} <= set(notifs))                 # A peut bouger d'heure aussi
+        self.assertNotIn(self.taches["D"], notifs)                                             # épinglée : jamais prévenue
+        nc = notifs[self.taches["C"]]
+        self.assertEqual(nc["heure"], arrets[self.taches["C"]]["debut"])
+        self.assertIn("entre %s" % nc["plage"], nc["sms"])
+        self.assertIn("(au lieu de 11h)", nc["sms"])
+        self.assertIn("/rdv", nc["sms"])
 
-        plan = [{"tache": a["tache"], "employe": a["employe"], "starts_on": a["starts_on"], "ends_on": a["ends_on"]}
-                for e in p["employes"] for a in e["apres"]["arrets"] if a["deplace"] or a["decale"]]
-        r = T.appliquer(self.JOUR, plan)
+        # capture de l'envoi en arrière-plan : rien ne part, on vérifie ce qui aurait été mis en file
+        envois = []
+        enqueue = frappe.enqueue
+        frappe.enqueue = lambda *a, **k: envois.append(k)
+        try:
+            plan = [{"tache": a["tache"], "employe": a["employe"], "starts_on": a["starts_on"], "ends_on": a["ends_on"],
+                     "prevenir": 1 if a["tache"] in notifs else 0}
+                    for e in p["employes"] for a in e["apres"]["arrets"] if a["deplace"] or a["decale"]]
+            r = T.appliquer(self.JOUR, plan, prevenir=1)
+        finally:
+            frappe.enqueue = enqueue
+        self.assertEqual(r["prevenus"], len(notifs))
+        envois = [k for k in envois if str(k.get("job_name", "")).startswith("tournee_prevenir_")]   # les hooks de la tâche enfilent aussi
+        self.assertEqual(len(envois), 1)
+        self.assertEqual(set(envois[0]["taches"]), set(notifs))
+        self.assertEqual(envois[0]["extras"][self.taches["C"]]["plage"], nc["plage"])
+        self.assertEqual(envois[0]["sms"], 1)
         self.assertIn(self.taches["C"], r["modifiees"])
         t = frappe.get_doc("Tache de travail", self.taches["C"])
         self.assertEqual(t.custom_choix_du_staff, self.e2)
