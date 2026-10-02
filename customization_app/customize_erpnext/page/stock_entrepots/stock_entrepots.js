@@ -905,7 +905,7 @@ class StockEntrepots {
       const e = Object.values(saisies).filter((s) => s.qte_comptee != null && s.qte_comptee !== "").length;
       const ecarts = d.lignes.filter((l) => { const s = saisies[l.item_code]; return s.qte_comptee != null && s.qte_comptee !== "" && Math.abs(+s.qte_comptee - l.qte_systeme) > 1e-6; }).length;
       frappe.confirm(`Valider ${changes ? `avec <b>${changes}</b> quantité(s) corrigée(s)` : `le comptage (${e} article(s))`} ?<br>L’employé devra accepter ces quantités ; ${ecarts ? `un <b>rapprochement de stock</b> alignera alors ${ecarts} article(s).` : "aucun écart : pas de rapprochement."}`, async () => {
-        const r = (await frappe.call({ method: SE_API + "valider_verification", args: { name, comptes: changes ? comptes() : null }, freeze: true })).message;
+        const r = (await frappe.call({ method: SE_API + "valider_verification", args: changes ? { name, comptes: comptes() } : { name }, freeze: true })).message;
         if (r.renvoye) { frappe.msgprint({ title: "À recompter", indicator: "orange", message: `${r.a_recompter.length} article(s) ont bougé depuis le comptage : leur comptage est effacé et la fiche repart chez l’employé.<br>${r.a_recompter.map(se_esc).join(", ")}` }); retour(); return; }
         frappe.msgprint({ title: "Validé — à confirmer par l’employé", indicator: "green",
           message: `${r.ajustes.length ? r.ajustes.map(se_esc).join("<br>") + "<br>" : "Aucune quantité changée.<br>"}L’employé du stock doit maintenant accepter ces quantités ; le rapprochement sera passé à son accord.` });
@@ -917,7 +917,7 @@ class StockEntrepots {
       frappe.confirm(changes
         ? `Vous avez changé <b>${changes}</b> quantité(s) : la fiche repart chez le responsable magasin pour revalidation. Continuer ?`
         : `D’accord avec les quantités validées ? Le rapprochement de stock sera passé sur votre stock.`, async () => {
-        const r = (await frappe.call({ method: SE_API + "confirmer_verification", args: { name, comptes: changes ? comptes() : null }, freeze: true })).message;
+        const r = (await frappe.call({ method: SE_API + "confirmer_verification", args: changes ? { name, comptes: comptes() } : { name }, freeze: true })).message;
         if (r.renvoye) { frappe.msgprint({ title: "À recompter", indicator: "orange", message: `${r.a_recompter.length} article(s) ont bougé depuis votre comptage : recomptez-les (lignes marquées) puis terminez à nouveau.` }); retour(); return; }
         if (r.statut === "À valider") { frappe.msgprint({ title: "Renvoyé au responsable", indicator: "orange", message: `${r.changes.map(se_esc).join("<br>")}<br>Le responsable magasin doit revalider.` }); retour(); return; }
         frappe.msgprint({ title: "Vérification terminée", indicator: "green", message: r.rapprochement ? `Validation mutuelle acquise. Rapprochement ${se_lien("Stock Reconciliation", r.rapprochement)} passé.` : "Validation mutuelle acquise. Aucun écart : pas de rapprochement." });

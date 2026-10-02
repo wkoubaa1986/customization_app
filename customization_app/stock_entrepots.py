@@ -987,6 +987,16 @@ def detail_verification(name):
                                             for l in v.lignes]}
 
 
+def _dict_json(val) -> dict:
+    """Un argument d'écran : dict, chaîne JSON, ou rien (None, « », « null » — un `null` JS arrive en chaîne
+    vide, et `parse_json("")` lève)."""
+    if isinstance(val, dict):
+        return val
+    if not val or str(val).strip() in ("", "null", "undefined"):
+        return {}
+    return frappe.parse_json(val) or {}
+
+
 def _appliquer_comptage(v, comptes: dict):
     """comptes : {item_code: {"qte_comptee": x|None, "commentaire": s}} — recalcule écarts et bilan."""
     lignes = []
@@ -1016,7 +1026,7 @@ def enregistrer_verification(name, comptes):
     if v.statut != EN_COURS:
         frappe.throw(_("Cette vérification n’est plus au comptage ({0}).").format(v.statut))
     _assurer_photo(v)
-    _appliquer_comptage(v, frappe.parse_json(comptes) if isinstance(comptes, str) else (comptes or {}))
+    _appliquer_comptage(v, _dict_json(comptes))
     v.flags.ignore_permissions = True
     v.save()
     return _resume(v)
@@ -1031,7 +1041,7 @@ def terminer_verification(name, comptes=None, note=None):
     if v.statut != EN_COURS:
         frappe.throw(_("Cette vérification n’est plus au comptage ({0}).").format(v.statut))
     _assurer_photo(v)
-    _appliquer_comptage(v, (frappe.parse_json(comptes) if isinstance(comptes, str) else comptes) or {})
+    _appliquer_comptage(v, _dict_json(comptes))
     if not v.nb_comptes:
         frappe.throw(_("Aucun article compté : saisissez au moins une quantité."))
     restants = [l.item_name or l.item_code for l in v.lignes if l.a_recompter]
@@ -1160,7 +1170,7 @@ def valider_verification(name, comptes=None, note=None):
         frappe.throw(_("Votre propre stock : un autre responsable magasin doit valider ce comptage."), frappe.PermissionError)
     if v.statut != A_VALIDER:
         frappe.throw(_("Cette vérification n’est pas à valider ({0}).").format(v.statut))
-    comptes = (frappe.parse_json(comptes) if isinstance(comptes, str) else comptes) or {}
+    comptes = _dict_json(comptes)
     bouges = _rafraichir_systeme(v)
     if bouges:
         return _renvoi_auto(v, bouges)
@@ -1202,7 +1212,7 @@ def confirmer_verification(name, comptes=None):
     bouges = _rafraichir_systeme(v)
     if bouges:
         return _renvoi_auto(v, bouges)
-    comptes = (frappe.parse_json(comptes) if isinstance(comptes, str) else comptes) or {}
+    comptes = _dict_json(comptes)
     avant = {l.item_code: (cint(l.compte), flt(l.qte_comptee, 6)) for l in v.lignes}
     _appliquer_comptage(v, comptes)
     changes = []
