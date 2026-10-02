@@ -395,7 +395,7 @@ class ReparationOsmoseurs {
         </div>
         <div class="ro-choix-carte">
           <div class="t">🚚 Planifier une livraison</div>
-          <div class="ro-sub">Une tâche Livraison au calendrier, à l’adresse du client ; sa clôture rend la machine.</div>
+          <div class="ro-sub">Une tâche Livraison au calendrier, à l’adresse du client ; sa clôture rend la machine. SMS au client proposé.</div>
           <button class="btn btn-default btn-sm" data-livrer style="margin-top:8px">Choisir la date et le livreur</button>
         </div>
       </div>`);
@@ -426,15 +426,17 @@ class ReparationOsmoseurs {
           options: adresses.map((a) => a.name).join("\n"), default: adresses.length ? adresses[0].name : "",
           description: adresses.length ? "" : "Ce client n’a pas d’adresse enregistrée : la tâche sera créée sans adresse." },
         { fieldtype: "Small Text", fieldname: "note", label: "Note pour le livreur" },
+        { fieldtype: "Check", fieldname: "sms", label: "Prévenir le client par SMS (« nous vous le livrons le … »)", default: 1 },
       ],
       primary_action_label: "Créer la livraison",
       primary_action: async (v) => {
         try {
           const r = await frappe.call({ method: RO_API + ".planifier_livraison",
-                                        args: { machine, employee: v.employee, date: v.date, heure: String(v.heure || "09:00").slice(0, 5), adresse: v.adresse || null, note: v.note || null } });
+                                        args: { machine, employee: v.employee, date: v.date, heure: String(v.heure || "09:00").slice(0, 5), adresse: v.adresse || null, note: v.note || null, sms: v.sms ? 1 : 0 } });
           d.hide();
           const x = r.message || {};
-          frappe.show_alert({ message: `Livraison ${x.tache} créée le ${x.date} — ${x.employe}${x.adresse ? " · " + x.adresse : ""}`, indicator: "green" }, 7);
+          const sms = x.sms ? (x.sms.simule ? ` · SMS SIMULÉ (dev) → ${x.sms.numeros.join(", ")}` : ` · SMS envoyé à ${x.sms.numeros.join(", ")}`) : "";
+          frappe.show_alert({ message: `Livraison ${x.tache} créée le ${x.date} — ${x.employe}${x.adresse ? " · " + x.adresse : ""}${sms}`, indicator: "green" }, 8);
           this.charger();
         } catch (e) { /* message déjà affiché */ }
       },
@@ -510,7 +512,7 @@ class ReparationOsmoseurs {
         <li>À la remise : « ✅ Rendue au client » — nom de la personne, photo facultative. Hors garantie : encaisser à la caisse.</li>
         <li>Au-delà de 7 jours au magasin, la ligne passe en orange.</li></ul></div>
       <div class="et"><span class="ro-badge b-livraison">4b · Livraison planifiée</span><b>Accueil — « 📦 Restitution » → livrer</b>
-        <ul><li>Choisir livreur, date, adresse : une tâche <b>Livraison</b> apparaît au calendrier et dans « Ma journée » du livreur.</li>
+        <ul><li>Choisir livreur, date, adresse : une tâche <b>Livraison</b> apparaît au calendrier et dans « Ma journée » du livreur ; un SMS « nous vous le livrons le … » part si la case est cochée.</li>
         <li>Quand le livreur clôture sa tâche (photos), le dossier passe « Rendue au client » tout seul. Tâche supprimée → retour à « Réparée — à rendre ».</li></ul></div>
       <div class="et"><span class="ro-badge b-rendue">5 · Rendue au client</span><b>Terminé</b>
         <ul><li>Date, personne, mode (magasin ou livraison) et photo restent sur le dossier. Cocher « Afficher les machines rendues » pour les revoir.</li></ul></div>

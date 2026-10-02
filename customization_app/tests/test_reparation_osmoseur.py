@@ -307,8 +307,10 @@ class TestRestitution(unittest.TestCase):
 
     def test_livraison_cloturee_rend_la_machine(self):
         import frappe
-        r = RO.planifier_livraison(self.nom, self.emp, "2031-04-04", heure="10:30", note="appeler avant")
+        r = RO.planifier_livraison(self.nom, self.emp, "2031-04-04", heure="10:30", note="appeler avant", sms=1)
         self.assertEqual((r["statut"], self._statut()), (RO.S_LIVRAISON, RO.S_LIVRAISON))
+        self.assertTrue(r["sms"]["simule"] and "04/04/2031" in r["sms"]["texte"] and "livraison" in r["sms"]["texte"])
+        self.assertTrue(frappe.db.get_value(RO.DOCTYPE, self.nom, "sms_pret_le"))
         t = frappe.get_doc(RO.DOCTYPE_TACHE, r["tache"])
         self.assertEqual((t.custom_type_dintervention, t.get(RO.CHAMP_TACHE), t.custom_choix_du_staff, str(t.starts_on)[:16]),
                          ("Livraison", self.nom, self.emp, "2031-04-04 10:30"))

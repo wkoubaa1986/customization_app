@@ -55,6 +55,8 @@ TYPE_LIVRAISON = "Livraison"
 DUREE_LIVRAISON = 30
 SMS_PRET = ("Bonjour {nom}, votre appareil ({ref}) est repare et vous attend au magasin Aquaworld (Soukra).{garantie} "
             "Pour toute question : {tel}.")
+SMS_LIVRAISON = ("Bonjour {nom}, votre appareil ({ref}) est repare : nous vous le livrons le {date} ({employe}).{garantie} "
+                 "Pour toute question : {tel}.")
 GARANTIES = ("Sous garantie", "Hors garantie")
 MOIS_HISTORIQUE = 13                     # la dernière année + 1 mois (décision 01/10/2026)
 NOTE_GARANTIE = "🆓 SOUS GARANTIE — réparation GRATUITE, ne rien facturer au client"
@@ -698,28 +700,36 @@ def _sms_simule() -> bool:
     return bool(cint(frappe.conf.get("developer_mode"))) and not cint(frappe.conf.get("sms_reel_en_dev"))
 
 
+def _envoyer_sms(doc, texte: str, libelle: str) -> dict:
+    """Un SMS au(x) numéro(s) du dossier, tracé en commentaire ; simulé en dev."""
+    from customization_app.customize_erpnext.doctype.compagne_sms.compagne_sms import _send_sms_with_fallback, traiter_numero_tel
+    from customization_app.sms_annulation import sans_accents
+
+    numeros = traiter_numero_tel(doc.tel or "")
+    if not numeros:
+        frappe.throw(_("Aucun numéro mobile tunisien valide sur le dossier ({0}).").format(doc.tel or "—"))
+    texte = sans_accents(texte)
+    simule = _sms_simule()
+    if not simule:
+        _send_sms_with_fallback(["216%s" % n for n in numeros], texte)
+    doc.db_set("sms_pret_le", now_datetime(), update_modified=False)
+    doc.add_comment("Comment", _("📲 SMS « {0} » {1} à {2} : {3}")
+                    .format(libelle, _("SIMULÉ (dev)") if simule else _("envoyé"), ", ".join(numeros), texte))
+    return {"numeros": numeros, "simule": simule, "texte": texte}
+
+
 @frappe.whitelist()
 def envoyer_sms_pret(machine):
     """SMS « votre appareil est réparé, à retirer au magasin » au(x) numéro(s) du dossier."""
-    from customization_app.customize_erpnext.doctype.compagne_sms.compagne_sms import _send_sms_with_fallback, traiter_numero_tel
-    from customization_app.sms_annulation import sans_accents, telephone_contact
+    from customization_app.sms_annulation import telephone_contact
 
     _ecriture(machine)
     doc = frappe.get_doc(DOCTYPE, machine)
     if doc.statut not in (S_REPAREE, S_PRETE):
         frappe.throw(_("Le SMS « machine prête » ne s'envoie que pour une machine réparée ({0}).").format(doc.statut))
-    numeros = traiter_numero_tel(doc.tel or "")
-    if not numeros:
-        frappe.throw(_("Aucun numéro mobile tunisien valide sur le dossier ({0}).").format(doc.tel or "—"))
-    texte = sans_accents(SMS_PRET.format(nom=doc.nom_client or doc.client, ref=doc.name, tel=telephone_contact(),
-                                         garantie=" Reparation hors garantie : a regler au retrait." if doc.garantie == "Hors garantie" else ""))
-    simule = _sms_simule()
-    if not simule:
-        _send_sms_with_fallback(["216%s" % n for n in numeros], texte)
-    doc.db_set("sms_pret_le", now_datetime(), update_modified=False)
-    doc.add_comment("Comment", _("📲 SMS « machine prête » {0} à {1} : {2}")
-                    .format(_("SIMULÉ (dev)") if simule else _("envoyé"), ", ".join(numeros), texte))
-    return {"numeros": numeros, "simule": simule, "texte": texte}
+    return _envoyer_sms(doc, SMS_PRET.format(nom=doc.nom_client or doc.client, ref=doc.name, tel=telephone_contact(),
+                                             garantie=" Reparation hors garantie : a regler au retrait." if doc.garantie == "Hors garantie" else ""),
+                        "machine prête")
 
 
 @frappe.whitelist()
@@ -754,8 +764,11 @@ def adresses_client(client):
 
 
 @frappe.whitelist()
-def planifier_livraison(machine, employee, date, heure="09:00", adresse=None, note=None):
-    """Une tâche Livraison au calendrier ramène la machine chez le client ; sa clôture rend le dossier."""
+def planifier_livraison(machine, employee, date, heure="09:00", adresse=None, note=None, sms=0):
+    """Une tâche Livraison au calendrier ramène la machine chez le client ; sa clôture rend le dossier.
+    `sms` : prévenir le client (date et livreur)."""
+    from customization_app.sms_annulation import telephone_contact
+
     _ecriture(machine)
     doc = frappe.get_doc(DOCTYPE, machine)
     if doc.statut not in (S_REPAREE, S_PRETE):
@@ -789,8 +802,14 @@ def planifier_livraison(machine, employee, date, heure="09:00", adresse=None, no
     doc.statut, doc.mode_restitution = S_LIVRAISON, "Livraison"
     doc.tache_livraison, doc.date_livraison_prevue = tache.name, getdate(date)
     doc.save()
-    return {"statut": doc.statut, "tache": tache.name, "employe": nom_emp, "date": str(getdate(date)),
-            "adresse": a.libelle if a else None}
+    out = {"statut": doc.statut, "tache": tache.name, "employe": nom_emp, "date": str(getdate(date)),
+           "adresse": a.libelle if a else None, "sms": None}
+    if cint(sms):
+        out["sms"] = _envoyer_sms(doc, SMS_LIVRAISON.format(
+            nom=doc.nom_client or doc.client, ref=doc.name, date=frappe.utils.formatdate(getdate(date), "dd/MM/yyyy"),
+            employe=nom_emp, tel=telephone_contact(),
+            garantie=" Reparation hors garantie : a regler a la livraison." if doc.garantie == "Hors garantie" else ""), "livraison")
+    return out
 
 
 @frappe.whitelist()
