@@ -86,7 +86,10 @@ def config() -> dict:
     departs = {r.employe: (flt(r.latitude), flt(r.longitude)) for r in frappe.get_all(
         "Config Optimisation Tournees Depart", filters={"parent": CONFIG, "parenttype": CONFIG}, fields=["employe", "latitude", "longitude"])
         if r.latitude and r.longitude} if frappe.db.exists("DocType", "Config Optimisation Tournees Depart") else {}
-    return {"depot": (lat, lng) if lat and lng else DEPOT_DEFAUT, "departs": departs,
+    horaires = {r.employe: (_minutes(r.heure_debut, 8 * 60), _minutes(r.heure_fin, 17 * 60)) for r in frappe.get_all(
+        "Config Optimisation Tournees Horaire", filters={"parent": CONFIG, "parenttype": CONFIG}, fields=["employe", "heure_debut", "heure_fin"])} \
+        if frappe.db.exists("DocType", "Config Optimisation Tournees Horaire") else {}
+    return {"depot": (lat, lng) if lat and lng else DEPOT_DEFAUT, "departs": departs, "horaires": horaires,
             "debut": _minutes(v("heure_debut"), 8 * 60), "fin": _minutes(v("heure_fin"), 17 * 60),
             "premiere": _minutes(v("heure_premiere"), 9 * 60),
             "pause": (_minutes(v("pause_debut"), 0), _minutes(v("pause_fin"), 0)) if v("pause_debut") and v("pause_fin") else None,
@@ -346,7 +349,8 @@ def matrice(points: list, osrm: str) -> tuple[list, list, str]:
 
 def resoudre(minutes: list, arrets: list, nb_vehicules: int, debut: int, fin: int, equilibre: int = 1,
              limite_s: int = 5, premiere: int | None = None, depots: list | None = None,
-             marge: int = 0, pause: tuple | None = None, occupations: dict | None = None) -> dict:
+             marge: int = 0, pause: tuple | None = None, occupations: dict | None = None,
+             debuts: list | None = None, fins: list | None = None) -> dict:
     """Tournées à fenêtres de temps (OR-Tools). `minutes` couvre tous les nœuds : les dépôts (nœud 0 = Magasin,
     puis les points de départ particuliers) et les arrêts, qui occupent les DERNIERS nœuds. `arrets[i]` :
     {service: min, fenetre: (a, b) | None, vehicule: idx | None}. `depots[v]` = nœud de départ ET de retour du
@@ -368,22 +372,24 @@ def resoudre(minutes: list, arrets: list, nb_vehicules: int, debut: int, fin: in
 
     cb = routing.RegisterTransitCallback(transit)
     routing.SetArcCostEvaluatorOfAllVehicles(cb)
-    horizon = max(fin, max((a["fenetre"][1] + cint(a.get("service")) for a in arrets if a.get("fenetre")), default=fin)) + 1
+    debuts = [cint(x) for x in (debuts or [debut] * nb_vehicules)]       # début de journée par véhicule
+    fins = [cint(x) for x in (fins or [fin] * nb_vehicules)]             # fin de journée par véhicule (retour compris)
+    horizon = max(max(fins), max((a["fenetre"][1] + cint(a.get("service")) for a in arrets if a.get("fenetre")), default=fin)) + 1
     routing.AddDimension(cb, horizon, horizon, False, "Temps")
     temps = routing.GetDimensionOrDie("Temps")
     # Équilibrage : au-delà d'une part équitable de la journée (travail total / véhicules, + 1 h), chaque
     # minute de plus coûte. (Une somme des amplitudes pénalise au contraire le second véhicule, et le
     # solveur chargeait tout sur un seul — constaté en test.)
     charge = sum(service) + sum(min((minutes[i][j] for j in range(n) if j != i), default=0) for i in range(nb_depots, n))
-    equitable = debut + int(charge / max(nb_vehicules, 1)) + 60
+    part = int(charge / max(nb_vehicules, 1)) + 60
     # Créneaux où un véhicule est OCCUPÉ hors tournée (tâche qu'on n'a pas pu placer, gardée telle quelle) :
     # des pauses imposées, pour que les autres arrêts ne viennent pas se poser dessus.
     visites = [service[manager.IndexToNode(i)] for i in range(routing.Size())]
     for v in range(nb_vehicules):
-        temps.CumulVar(routing.Start(v)).SetRange(debut, debut)
-        temps.CumulVar(routing.End(v)).SetRange(debut, horizon)
+        temps.CumulVar(routing.Start(v)).SetRange(debuts[v], debuts[v])
+        temps.CumulVar(routing.End(v)).SetRange(debuts[v], max(fins[v], debuts[v]) + 1)
         if equilibre:
-            temps.SetCumulVarSoftUpperBound(routing.End(v), equitable, 2 * cint(equilibre))
+            temps.SetCumulVarSoftUpperBound(routing.End(v), debuts[v] + part, 2 * cint(equilibre))
         routing.AddVariableMinimizedByFinalizer(temps.CumulVar(routing.End(v)))
         occ = [(cint(d), cint(f)) for d, f in (occupations or {}).get(v, []) if f > d]
         if occ:
@@ -392,7 +398,7 @@ def resoudre(minutes: list, arrets: list, nb_vehicules: int, debut: int, fin: in
                 [solver.FixedDurationIntervalVar(d, d, f - d, False, "occupe_%d_%d" % (v, k)) for k, (d, f) in enumerate(occ)], v, visites)
     for k, a in enumerate(arrets):
         idx = manager.NodeToIndex(nb_depots + k)
-        fen = a.get("fenetre") or (max(debut, premiere or debut), fin)     # pas de visite libre avant « première »
+        fen = a.get("fenetre") or (max(debut, premiere or debut), max(fins))     # pas de visite libre avant « première »
         temps.CumulVar(idx).SetRange(cint(fen[0]), cint(fen[1]))
         if pause and not a.get("fixe_pause"):
             # Pas d'intervention à cheval sur la pause : elle finit avant, ou commence après.
@@ -466,7 +472,10 @@ def employes_du_jour(date):
                          {"d": "%s 00:00:00" % jour, "f": "%s 23:59:59" % jour, "types": tuple(cfg["types"]), "hors": TYPES_HORS_JOURNEE}, as_dict=True)
     noms = {e.name: e.employee_name for e in frappe.get_all("Employee", filters={"name": ["in", [r.employe for r in rows] or [""]]}, fields=["name", "employee_name"])}
     out = [{"employe": r.employe, "nom": noms.get(r.employe, r.employe), "taches": cint(r.n), "mobiles": cint(r.mobiles),
-            "exclu": r.employe in cfg["exclus"], "domicile": r.employe in cfg["departs"]} for r in rows]
+            "exclu": r.employe in cfg["exclus"], "domicile": r.employe in cfg["departs"],
+            "debut": _hm(cfg["horaires"].get(r.employe, (cfg["debut"], cfg["fin"]))[0]),
+            "fin": _hm(cfg["horaires"].get(r.employe, (cfg["debut"], cfg["fin"]))[1]),
+            "horaire_propre": r.employe in cfg["horaires"]} for r in rows]
     out.sort(key=lambda e: (e["exclu"], e["nom"]))
     return out
 
@@ -489,6 +498,22 @@ def definir_depart(employe, lien):
     return {"employe": employe, "domicile": bool((lien or "").strip())}
 
 
+@frappe.whitelist(methods=["POST"])
+def definir_horaires(employe, debut, fin):
+    """Depuis la fenêtre : les horaires habituels d'un employé, mémorisés dans le réglage. Vides = heures globales."""
+    _superviseur()
+    cfg = frappe.get_single(CONFIG)
+    lignes = [r for r in (cfg.get("horaires") or []) if r.employe != employe]
+    if debut and fin:
+        if _minutes(debut, 0) >= _minutes(fin, 0):
+            frappe.throw(_("La fin de journée doit suivre son début."))
+        lignes.append({"employe": employe, "heure_debut": str(debut)[:5] + ":00", "heure_fin": str(fin)[:5] + ":00"})
+    cfg.set("horaires", lignes)
+    cfg.flags.ignore_permissions = True
+    cfg.save()
+    return {"employe": employe, "propre": bool(debut and fin)}
+
+
 @frappe.whitelist()
 def proposer(date, fenetre=None, employes=None):
     """La proposition pour la journée : par employé, tournée actuelle et tournée optimisée (ordre, heures,
@@ -497,8 +522,9 @@ def proposer(date, fenetre=None, employes=None):
     jour = getdate(date)
     cfg = config()
     # Choix de l'écran : qui entre dans l'optimisation, et d'où il part (« magasin » / « domicile »).
-    choix = frappe.parse_json(employes) if isinstance(employes, str) else (employes or [])
-    choix = {c["employe"]: (c.get("depart") or "magasin") for c in choix if c.get("employe")}
+    brut = frappe.parse_json(employes) if isinstance(employes, str) else (employes or [])
+    choix = {c["employe"]: (c.get("depart") or "magasin") for c in brut if c.get("employe")}
+    horaires_choisis = {c["employe"]: (_minutes(c.get("debut"), 0) or None, _minutes(c.get("fin"), 0) or None) for c in brut if c.get("employe")}
     if choix:
         du_jour = [x["employe"] for x in employes_du_jour(date)]
         cfg = dict(cfg, exclus=set(cfg["exclus"]) | {e for e in du_jour if e not in choix},
@@ -548,13 +574,25 @@ def proposer(date, fenetre=None, employes=None):
     depot_de = {e: (1 + particuliers.index(e) if e in cfg["departs"] else 0) for e in employes}
     depots = [depot_de[e] for e in employes]
     mn, km, source = matrice(points, cfg["osrm"])
-    debut_j, fin_j = cfg["debut"], cfg["fin"]
-    for a in arrets:
-        # La journée ne coupe jamais le travail déjà planifié : une tâche qui finit après l'heure de fin du
-        # réglage étend la journée (sinon le moteur laisserait des tâches de côté au lieu de les placer).
-        fin_j = max(fin_j, a["debut"] + a["service"] + mn[a["noeud"]][depot_de[a["employe"]]])
-        if not a["mobile"]:
-            debut_j = min(debut_j, a["debut"])
+    # Journée de CHAQUE employé : réglage global, puis ses horaires du réglage, puis ceux saisis dans la fenêtre.
+    # Elle ne coupe jamais son travail déjà planifié (une tâche fixe plus tôt l'avance, une tâche qui finit
+    # après l'étend, retour compris) — sinon le moteur laisserait des tâches de côté au lieu de les placer.
+    debuts, fins = [], []
+    for e in employes:
+        d0, f0 = cfg["horaires"].get(e, (cfg["debut"], cfg["fin"]))
+        hc = horaires_choisis.get(e, (None, None))
+        fin_voulue = bool(hc[1])          # une fin saisie dans la fenêtre est VOULUE : ses tâches en trop vont ailleurs
+        d0, f0 = hc[0] or d0, hc[1] or f0
+        for a in arrets:
+            if a["employe"] != e:
+                continue
+            if not a["mobile"] or not fin_voulue:
+                f0 = max(f0, a["debut"] + a["service"] + mn[a["noeud"]][depot_de[e]])
+            if not a["mobile"]:
+                d0 = min(d0, a["debut"])
+        debuts.append(d0)
+        fins.append(f0)
+    debut_j, fin_j = min(debuts), max(fins)
     fenetre = cint(cfg["fenetre"]) if fenetre is None else cint(fenetre)
 
     def _noeud(a):
@@ -566,7 +604,7 @@ def proposer(date, fenetre=None, employes=None):
 
     noeuds = [_noeud(a) for a in arrets]
     sol = resoudre(mn, noeuds, len(employes), debut_j, fin_j, cfg["equilibre"], premiere=cfg["premiere"], depots=depots,
-                   marge=cfg["marge"], pause=cfg["pause"])
+                   marge=cfg["marge"], pause=cfg["pause"], debuts=debuts, fins=fins)
     par_noeud = {a["noeud"]: a for a in arrets}
     if sol["non_places"]:
         # Ce qui n'a pas trouvé place reste où c'est (employé, heure) et la tournée se recalcule autour,
@@ -574,10 +612,12 @@ def proposer(date, fenetre=None, employes=None):
         for n in sol["non_places"]:
             a = par_noeud[n]
             a["mobile"] = False
-            fin_j = max(fin_j, a["debut"] + a["service"] + mn[n][depot_de[a["employe"]]])
+            v = employes.index(a["employe"])
+            fins[v] = max(fins[v], a["debut"] + a["service"] + mn[n][depot_de[a["employe"]]])
+            fin_j = max(fins)
         noeuds = [_noeud(a) for a in arrets]
         sol = resoudre(mn, noeuds, len(employes), debut_j, fin_j, cfg["equilibre"], premiere=cfg["premiere"], depots=depots,
-                       marge=cfg["marge"], pause=cfg["pause"])
+                       marge=cfg["marge"], pause=cfg["pause"], debuts=debuts, fins=fins)
     if sol["non_places"]:
         # Toujours impossibles (deux rendez-vous à la même heure…) : elles restent telles quelles ET occupent
         # leur créneau — les autres arrêts du même employé se calculent autour.
@@ -592,7 +632,7 @@ def proposer(date, fenetre=None, employes=None):
         mn2 = [[mn[i][j] for j in garder] for i in garder]
         noeuds = [_noeud(a) for a in restants]
         sol2 = resoudre(mn2, noeuds, len(employes), debut_j, fin_j, cfg["equilibre"], premiere=cfg["premiere"], depots=depots,
-                        marge=cfg["marge"], pause=cfg["pause"], occupations=occupations)
+                        marge=cfg["marge"], pause=cfg["pause"], occupations=occupations, debuts=debuts, fins=fins)
         inverse = {nb_depots + i: a["noeud"] for i, a in enumerate(restants)}    # retour aux nœuds d'origine
         sol = {"routes": [[(inverse[n], t) for n, t in r] for r in sol2["routes"]],
                "non_places": sorted(bloques | {inverse[n] for n in sol2["non_places"]}), "cout": sol2["cout"]}
@@ -621,6 +661,7 @@ def proposer(date, fenetre=None, employes=None):
                           "non_place": n in sol["non_places"],
                           "position": a["position"], "lat": a["lat"], "lng": a["lng"], "adresse": a["adresse"]})
         out.append({"employe": e, "nom": noms.get(e, e), "depart": "domicile" if dep else "Magasin", "depart_point": points[dep],
+                    "journee": [_hm(debuts[v]), _hm(fins[v])],
                     "avant": {"minutes": m_av, "km": k_av, "arrets": [{"tache": a["tache"], "client": a["client"], "type": a["type"],
                                                                         "debut": _hm(a["debut"]), "fin": _hm(a["debut"] + a["service"]),
                                                                         "fixe": not a["mobile"], "lat": a["lat"], "lng": a["lng"]}

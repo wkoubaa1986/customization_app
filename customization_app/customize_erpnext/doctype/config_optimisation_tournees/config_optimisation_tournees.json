@@ -18,6 +18,7 @@
   "heure_fin",
   "pause_debut",
   "pause_fin",
+  "horaires",
   "col_journee",
   "equilibre",
   "marge_minutes",
@@ -100,6 +101,13 @@
    "label": "Pause déjeuner — fin"
   },
   {
+   "fieldname": "horaires",
+   "fieldtype": "Table",
+   "label": "Horaires par employé (sinon : les heures ci-dessus)",
+   "options": "Config Optimisation Tournees Horaire",
+   "description": "Début et fin de journée propres à un employé ; modifiables aussi à chaque calcul dans la fenêtre."
+  },
+  {
    "fieldname": "col_journee",
    "fieldtype": "Column Break"
   },
@@ -161,7 +169,7 @@
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-10-02 16:02:17.528340",
+ "modified": "2026-10-02 17:11:54.111115",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Config Optimisation Tournees",

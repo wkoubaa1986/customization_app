@@ -41,7 +41,7 @@
         ${a.position === "secteur" ? `<span style="color:#b91c1c;font-size:11px"> ≈ secteur</span>` : ""}</div>`;
     const cartes = p.employes.map((e) => `<div style="border:1px solid #e2e8f0;border-radius:10px;padding:10px 12px;margin-bottom:10px">
         <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px">
-          <b>👤 ${esc(e.nom)}</b> <span class="text-muted" style="font-size:11.5px">départ ${esc(e.depart)}</span>
+          <b>👤 ${esc(e.nom)}</b> <span class="text-muted" style="font-size:11.5px">départ ${esc(e.depart)} · journée ${esc((e.journee || [])[0] || "")}–${esc((e.journee || [])[1] || "")}</span>
           <span style="font-size:12.5px">${e.avant.km} km · ${e.avant.minutes} min → <b>${e.apres.km} km · ${e.apres.minutes} min</b>
             ${itineraire(e.depart_point || p.depot, e.apres.arrets) ? ` · <a href="${itineraire(e.depart_point || p.depot, e.apres.arrets)}" target="_blank" rel="noopener">🗺️ itinéraire</a>` : ""}</span>
         </div>
@@ -82,7 +82,8 @@
         const choix = [];
         d.fields_dict.employes.$wrapper.find("[data-emp]").each((_, el) => {
           const $e = $(el);
-          if ($e.find("input[type=checkbox]").is(":checked")) choix.push({ employe: $e.attr("data-emp"), depart: $e.find("select").val() });
+          if ($e.find("input[type=checkbox]").is(":checked")) choix.push({ employe: $e.attr("data-emp"), depart: $e.find("select").val(),
+            debut: $e.find("input[data-debut]").val() || null, fin: $e.find("input[data-fin]").val() || null });
         });
         if (!choix.length) { frappe.msgprint("Cochez au moins un employé."); return; }
         d.fields_dict.resultat.$wrapper.html(`<div class="text-muted" style="padding:16px">Calcul des distances et des tournées…</div>`);
@@ -117,8 +118,19 @@
             <option value="magasin">🏬 Départ et retour : Magasin</option>
             <option value="domicile" ${e.domicile ? "" : "disabled"}>🏠 Départ et retour : domicile${e.domicile ? "" : " (non réglé)"}</option>
           </select>
+          <span style="font-size:11.5px;white-space:nowrap">🕘 <input type="time" data-debut value="${esc(e.debut)}" style="height:26px;font-size:12px;width:92px"> → <input type="time" data-fin value="${esc(e.fin)}" style="height:26px;font-size:12px;width:92px"></span>
+          <a href="#" data-memoriser="${esc(e.employe)}" data-nom="${esc(e.nom)}" title="Enregistrer ces heures comme horaires habituels de cet employé" style="font-size:11.5px;white-space:nowrap">${e.horaire_propre ? "💾 horaires mémorisés" : "💾 mémoriser"}</a>
           <a href="#" data-regler="${esc(e.employe)}" data-nom="${esc(e.nom)}" style="font-size:11.5px;white-space:nowrap">${e.domicile ? "📍 changer le domicile" : "📍 régler le domicile"}</a></div>`).join("")}
-        <div class="text-muted" style="font-size:11.5px;margin-top:4px">Le domicile se règle une fois (lien Google Maps) ; il reste proposé pour les jours suivants. <a href="/app/config-optimisation-tournees">Tous les réglages</a>.</div>` : `<div class="text-muted" style="font-size:12px">Aucun employé n’a de tâche ce jour-là.</div>`);
+        <div class="text-muted" style="font-size:11.5px;margin-top:4px">🕘 Début et fin de journée de chacun pour ce calcul (« 💾 mémoriser » les garde pour les jours suivants). Le domicile se règle une fois (lien Google Maps). <a href="/app/config-optimisation-tournees">Tous les réglages</a>.</div>` : `<div class="text-muted" style="font-size:12px">Aucun employé n’a de tâche ce jour-là.</div>`);
+      d.fields_dict.employes.$wrapper.find("[data-memoriser]").on("click", async (ev) => {
+        ev.preventDefault();
+        const $row = $(ev.currentTarget).closest("[data-emp]"), emp = $row.attr("data-emp"), nom = $(ev.currentTarget).attr("data-nom");
+        const debut = $row.find("input[data-debut]").val(), fin = $row.find("input[data-fin]").val();
+        if (!debut || !fin) { frappe.msgprint("Renseignez le début et la fin."); return; }
+        await frappe.call({ method: API + "definir_horaires", args: { employe: emp, debut, fin }, freeze: true });
+        frappe.show_alert({ message: `Horaires de ${esc(nom)} mémorisés : ${debut} → ${fin}`, indicator: "green" }, 4);
+        $(ev.currentTarget).text("💾 horaires mémorisés");
+      });
       d.fields_dict.employes.$wrapper.find("[data-regler]").on("click", (ev) => {
         ev.preventDefault();
         const emp = $(ev.currentTarget).attr("data-regler"), nom = $(ev.currentTarget).attr("data-nom");

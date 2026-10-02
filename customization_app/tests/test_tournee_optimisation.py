@@ -94,6 +94,17 @@ class TestSolveur(unittest.TestCase):
             t = sol["routes"][0][0][1]
             self.assertTrue(t >= 11 * 60, t)
 
+    def test_horaires_par_vehicule(self):
+        # véhicule 1 commence à 10:00 : son arrêt (le seul proche de lui) ne peut pas être avant 10:10 + marge.
+        pts = [(36.87, 10.19), (36.87, 10.06), (36.87, 10.30), (36.87, 10.08)]
+        mn, km, _s = T.matrice_haversine(pts)
+        sol = T.resoudre(mn, [{"service": 30, "fenetre": None, "vehicule": None}, {"service": 30, "fenetre": None, "vehicule": 1}],
+                         2, 8 * 60, 17 * 60, limite_s=1, premiere=8 * 60, depots=[0, 1], debuts=[8 * 60, 10 * 60], fins=[17 * 60, 12 * 60])
+        places = {n: (v, t) for v, r in enumerate(sol["routes"]) for n, t in r}
+        self.assertEqual(places[3][0], 1)
+        self.assertGreaterEqual(places[3][1], 10 * 60 + mn[1][3])
+        self.assertEqual(sol["non_places"], [])
+
     def test_journee_trop_courte_laisse_de_cote(self):
         pts = [(36.87, 10.19), (36.87, 10.30), (36.875, 10.31)]
         mn, km, _s = T.matrice_haversine(pts)
@@ -116,7 +127,7 @@ class TestJournee(unittest.TestCase):
         self._config = T.config
         T.config = lambda: {"depot": T.DEPOT_DEFAUT, "departs": {}, "debut": 8 * 60, "premiere": 9 * 60, "fin": 17 * 60,
                             "types": list(T.TYPES_MOBILES_DEFAUT), "osrm": T.OSRM_DEFAUT, "equilibre": 1, "exclus": set(),
-                            "pause": None, "marge": 0, "fenetre": 0}
+                            "pause": None, "marge": 0, "fenetre": 0, "horaires": {}}
         if not frappe.db.has_column("Tache de travail", "custom_tournee_fixe"):
             self.skipTest("patch ensure_tournee_fields non joué")
         emps = frappe.get_all("Employee", filters={"status": "Active"}, pluck="name", order_by="name", limit=2)
