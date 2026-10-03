@@ -10,7 +10,12 @@
   "client",
   "nom_client",
   "group_client",
-  "liste_tel"
+  "liste_tel",
+  "envoyer",
+  "secteur",
+  "statut_envoi",
+  "envoye_le",
+  "detail"
  ],
  "fields": [
   {
@@ -36,6 +41,41 @@
    "fieldname": "liste_tel",
    "fieldtype": "Small Text",
    "label": "Liste tel"
+  },
+  {
+   "fieldname": "envoyer",
+   "fieldtype": "Check",
+   "label": "Envoyer",
+   "default": "1",
+   "in_list_view": 1,
+   "columns": 1
+  },
+  {
+   "fieldname": "secteur",
+   "fieldtype": "Data",
+   "label": "Secteur",
+   "in_list_view": 1,
+   "columns": 1
+  },
+  {
+   "fieldname": "statut_envoi",
+   "fieldtype": "Data",
+   "label": "Statut envoi",
+   "read_only": 1,
+   "in_list_view": 1,
+   "columns": 2
+  },
+  {
+   "fieldname": "envoye_le",
+   "fieldtype": "Datetime",
+   "label": "Envoyé le",
+   "read_only": 1
+  },
+  {
+   "fieldname": "detail",
+   "fieldtype": "Small Text",
+   "label": "Détail",
+   "read_only": 1
   }
  ],
  "grid_page_length": 50,

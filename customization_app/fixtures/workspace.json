@@ -4805,7 +4805,7 @@
  },
  {
   "charts": [],
-  "content": "[{\"id\": \"rl_h1\", \"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\"><b>Partenaire</b></span>\", \"col\": 12}}, {\"id\": \"rl_s1\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Clients partenaire\", \"col\": 4}}, {\"id\": \"rl_s2\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Zones du partenaire (Config Portail RDV)\", \"col\": 4}}, {\"id\": \"rl_s3\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Listes d’appels « Zone partenaire »\", \"col\": 4}}, {\"id\": \"rl_h2\", \"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\"><b>Messages automatiques</b></span>\", \"col\": 12}}, {\"id\": \"rl_s9\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Réglage des relances (échéanciers, SMS, appels)\", \"col\": 4}}, {\"id\": \"rl_s4\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Modèles SMS (rappel, Aramex, relance)\", \"col\": 4}}, {\"id\": \"rl_s5\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Numéros & boutique (Responsable Relance)\", \"col\": 4}}, {\"id\": \"rl_s6\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Messages de l’optimisation des tournées\", \"col\": 4}}, {\"id\": \"rl_h4\", \"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\"><b>Crons et journaux</b></span>\", \"col\": 12}}, {\"id\": \"rl_j0\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Journaux des relances (crons, résumés, erreurs)\", \"col\": 4}}, {\"id\": \"rl_j1\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Journal des tâches planifiées\", \"col\": 4}}, {\"id\": \"rl_j2\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Journal des erreurs\", \"col\": 4}}, {\"id\": \"rl_h3\", \"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\"><b>Listes d’appels</b></span>\", \"col\": 12}}, {\"id\": \"rl_s7\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Toutes les listes d’appels\", \"col\": 4}}, {\"id\": \"rl_s8\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Suivi clients non traités\", \"col\": 4}}]",
+  "content": "[{\"id\": \"rl_h1\", \"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\"><b>Partenaire</b></span>\", \"col\": 12}}, {\"id\": \"rl_s1\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Clients partenaire\", \"col\": 4}}, {\"id\": \"rl_s2\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Zones du partenaire (Config Portail RDV)\", \"col\": 4}}, {\"id\": \"rl_s3\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Listes d’appels « Zone partenaire »\", \"col\": 4}}, {\"id\": \"rl_h2\", \"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\"><b>Messages automatiques</b></span>\", \"col\": 12}}, {\"id\": \"rl_s9\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Réglage des relances (échéanciers, SMS, appels)\", \"col\": 4}}, {\"id\": \"rl_s10\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Campagne SMS (assistant)\", \"col\": 4}}, {\"id\": \"rl_s4\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Modèles SMS (rappel, Aramex, relance)\", \"col\": 4}}, {\"id\": \"rl_s5\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Numéros & boutique (Responsable Relance)\", \"col\": 4}}, {\"id\": \"rl_s6\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Messages de l’optimisation des tournées\", \"col\": 4}}, {\"id\": \"rl_h4\", \"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\"><b>Crons et journaux</b></span>\", \"col\": 12}}, {\"id\": \"rl_j0\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Journaux des relances (crons, résumés, erreurs)\", \"col\": 4}}, {\"id\": \"rl_j1\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Journal des tâches planifiées\", \"col\": 4}}, {\"id\": \"rl_j2\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Journal des erreurs\", \"col\": 4}}, {\"id\": \"rl_h3\", \"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\"><b>Listes d’appels</b></span>\", \"col\": 12}}, {\"id\": \"rl_s7\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Toutes les listes d’appels\", \"col\": 4}}, {\"id\": \"rl_s8\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Suivi clients non traités\", \"col\": 4}}]",
   "custom_blocks": [],
   "docstatus": 0,
   "doctype": "Workspace",
@@ -4816,7 +4816,7 @@
   "is_hidden": 0,
   "label": "Relances et partenaire",
   "links": [],
-  "modified": "2026-10-03 21:10:39.528404",
+  "modified": "2026-10-03 21:47:46.810041",
   "module": null,
   "name": "Relances et partenaire",
   "number_cards": [],
@@ -5037,6 +5037,23 @@
     "stats_filter": null,
     "type": "URL",
     "url": "/app/error-log"
+   },
+   {
+    "color": null,
+    "doc_view": "",
+    "format": null,
+    "icon": null,
+    "kanban_board": null,
+    "label": "Campagne SMS (assistant)",
+    "link_to": "campagne-sms",
+    "parent": "Relances et partenaire",
+    "parentfield": "shortcuts",
+    "parenttype": "Workspace",
+    "report_ref_doctype": null,
+    "restrict_to_domain": null,
+    "stats_filter": null,
+    "type": "Page",
+    "url": null
    }
   ],
   "title": "Relances et partenaire"

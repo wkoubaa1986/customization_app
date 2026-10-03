@@ -7,15 +7,23 @@
  "engine": "InnoDB",
  "field_order": [
   "section_break_q44l",
+  "titre",
+  "statut",
+  "envoye_le",
+  "envoyes",
+  "echecs",
+  "invalides",
+  "segments_estimes",
+  "filtres",
   "amended_from",
   "groupes_des_clients",
-  "g\u00e9n\u00e9rer_liste_des_clients",
+  "générer_liste_des_clients",
   "liste_des_clients",
-  "g\u00e9n\u00e9rer_liste_des_distinataires",
+  "générer_liste_des_distinataires",
   "column_break_olfn",
   "liste_des_destinataires",
   "message",
-  "total_des_charact\u00e8res",
+  "total_des_charactères",
   "total_message_s",
   "envoyer_sms",
   "nombre_total_compagne"
@@ -24,6 +32,61 @@
   {
    "fieldname": "section_break_q44l",
    "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "titre",
+   "fieldtype": "Data",
+   "label": "Titre de la campagne",
+   "in_list_view": 1,
+   "bold": 1
+  },
+  {
+   "fieldname": "statut",
+   "fieldtype": "Select",
+   "label": "Statut",
+   "options": "Brouillon\nEn cours\nEnvoyée\nPartielle\nÉchec",
+   "default": "Brouillon",
+   "read_only": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "envoye_le",
+   "fieldtype": "Datetime",
+   "label": "Envoyée le",
+   "read_only": 1
+  },
+  {
+   "fieldname": "envoyes",
+   "fieldtype": "Int",
+   "label": "SMS envoyés",
+   "read_only": 1
+  },
+  {
+   "fieldname": "echecs",
+   "fieldtype": "Int",
+   "label": "Échecs",
+   "read_only": 1
+  },
+  {
+   "fieldname": "invalides",
+   "fieldtype": "Int",
+   "label": "Sans numéro valide",
+   "read_only": 1
+  },
+  {
+   "fieldname": "segments_estimes",
+   "fieldtype": "Int",
+   "label": "Segments estimés",
+   "read_only": 1
+  },
+  {
+   "fieldname": "filtres",
+   "fieldtype": "Code",
+   "label": "Ciblage (JSON)",
+   "options": "JSON",
+   "read_only": 1,
+   "hidden": 1
   },
   {
    "fieldname": "amended_from",
@@ -42,9 +105,9 @@
    "options": "Group Client SMS"
   },
   {
-   "fieldname": "g\u00e9n\u00e9rer_liste_des_clients",
+   "fieldname": "générer_liste_des_clients",
    "fieldtype": "Button",
-   "label": "G\u00e9n\u00e9rer liste des clients"
+   "label": "Générer liste des clients"
   },
   {
    "fieldname": "liste_des_clients",
@@ -54,9 +117,9 @@
    "reqd": 1
   },
   {
-   "fieldname": "g\u00e9n\u00e9rer_liste_des_distinataires",
+   "fieldname": "générer_liste_des_distinataires",
    "fieldtype": "Button",
-   "label": "G\u00e9n\u00e9rer liste des distinataires"
+   "label": "Générer liste des distinataires"
   },
   {
    "fieldname": "column_break_olfn",
@@ -68,15 +131,15 @@
    "label": "Liste des destinataires"
   },
   {
-   "description": "Vous pouvez personnaliser votre SMS avec ces variables :<br>\n<code>{{ nom_client }}</code> : nom du client<br>\n<code>{{ group_client }}</code> : groupe de client<br>\n<code>{{ ristourne_acc }}</code> : montant total de ristourne<br>\n<code>{{ ristourne_uti }}</code> : ristourne disponible \u00e0 ce jour<br>\n",
+   "description": "Vous pouvez personnaliser votre SMS avec ces variables :<br>\n<code>{{ nom_client }}</code> : nom du client<br>\n<code>{{ group_client }}</code> : groupe de client<br>\n<code>{{ ristourne_acc }}</code> : montant total de ristourne<br>\n<code>{{ ristourne_uti }}</code> : ristourne disponible à ce jour<br>\n",
    "fieldname": "message",
    "fieldtype": "Text",
    "label": "Message"
   },
   {
-   "fieldname": "total_des_charact\u00e8res",
+   "fieldname": "total_des_charactères",
    "fieldtype": "Int",
-   "label": "Total des charact\u00e8res"
+   "label": "Total des charactères"
   },
   {
    "fieldname": "total_message_s",
@@ -119,6 +182,14 @@
    "share": 1,
    "submit": 1,
    "write": 1
+  },
+  {
+   "create": 1,
+   "read": 1,
+   "write": 1,
+   "submit": 1,
+   "cancel": 0,
+   "role": "Sales Manager"
   }
  ],
  "row_format": "Dynamic",

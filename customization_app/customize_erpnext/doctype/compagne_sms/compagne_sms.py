@@ -120,7 +120,13 @@ def _send_sms_with_fallback(phones: list, message: str) -> None:
 #  Constantes
 # -------------------------------------------------------------------
 
-DRY_RUN = False  # Pour tests locaux sans envoi de SMS
+DRY_RUN = False  # (historique) — voir simulation_dev() : en developer_mode on SIMULE, comme tous les envois de l'app
+
+
+def simulation_dev() -> bool:
+    """⛔ GARDE-FOU DEV : la base de dev porte les VRAIS numéros et la VRAIE passerelle (incident SMS de test à de vrais
+    clients). On simule en developer_mode, sauf `sms_groupe_reel_en_dev` posé dans site_config.json."""
+    return bool(frappe.utils.cint(frappe.conf.get("developer_mode"))) and not frappe.utils.cint(frappe.conf.get("sms_groupe_reel_en_dev"))
 APP_NAME = "booking_ristourne"
 
 # ⚠️ METS ICI LE(S) FIELDNAME(S) EXACT(S) DU CHAMP SUR CUSTOMER
@@ -552,7 +558,7 @@ class CompagneSMS(Document):
             total_segments += segments * len(nums_to_send)
             total_numbers += len(nums_to_send)
 
-            if DRY_RUN:
+            if DRY_RUN or simulation_dev():
                 dry_run_log.append(
                     f"{nom_client} ({group_client}) -> {', '.join(nums_to_send)} | "
                     f"{len(msg_text)} chars, {segments} SMS"
@@ -564,7 +570,7 @@ class CompagneSMS(Document):
         # 👉 On met le total des SMS segments dans le champ nombre_total_compagne
         self.nombre_total_compagne = total_segments
 
-        if DRY_RUN:
+        if DRY_RUN or simulation_dev():
             log_text = "<br>".join(dry_run_log) if dry_run_log else _("Aucun destinataire valide.")
             frappe.msgprint(
                 _(

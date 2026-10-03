@@ -1,0 +1,102 @@
+<div class="cs-page">
+  <style>
+    .cs-page { padding: 12px 16px; }
+    .cs-card { background: var(--card-bg,#fff); border: 1px solid var(--border-color,#e4e8ee); border-radius: 12px; padding: 12px 14px; margin-bottom: 12px; box-shadow: 0 1px 3px rgba(0,0,0,.05); }
+    .cs-card h5 { margin: 0 0 8px; font-size: 13px; text-transform: uppercase; letter-spacing: .3px; color: #475569; }
+    .cs-grid { display: grid; grid-template-columns: 1fr 1.4fr 1.2fr; gap: 12px; }
+    @media (max-width: 1100px) { .cs-grid { grid-template-columns: 1fr; } }
+    .cs-kpis { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
+    .cs-kpi { flex: 1 1 120px; border: 1px solid var(--border-color,#e4e8ee); border-radius: 10px; padding: 8px 12px; background: var(--bg-light-gray,#f8fafc); }
+    .cs-kpi .v { font-size: 19px; font-weight: 700; line-height: 1.1; }
+    .cs-kpi .l { font-size: 11px; color: #6b7280; text-transform: uppercase; letter-spacing: .3px; font-weight: 600; }
+    .cs-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+    .cs-chip { border: 1px solid #cbd5e1; border-radius: 999px; padding: 3px 10px; font-size: 12px; cursor: pointer; background: #fff; user-select: none; }
+    .cs-chip.on { background: #111827; border-color: #111827; color: #fff; }
+    .cs-chip small { opacity: .7; }
+    .cs-opt { font-size: 12.5px; display: flex; align-items: center; gap: 6px; margin: 4px 0; }
+    .cs-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+    .cs-table th { text-align: left; font-size: 11px; text-transform: uppercase; color: #64748b; padding: 5px 6px; border-bottom: 1px solid #e2e8f0; }
+    .cs-table td { padding: 5px 6px; border-bottom: 1px solid #f1f5f9; vertical-align: top; }
+    .cs-table tr.exclu td { color: #94a3b8; }
+    .cs-table tr.exclu .motif { color: #b45309; font-size: 11px; }
+    .cs-scroll { max-height: 520px; overflow: auto; }
+    .cs-msg textarea { width: 100%; min-height: 150px; font-size: 13.5px; border-radius: 8px; }
+    .cs-balises { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+    .cs-balise { font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; border: 1px dashed #94a3b8; border-radius: 6px; padding: 2px 7px; cursor: pointer; background: #f8fafc; }
+    .cs-cout { font-size: 12.5px; margin: 6px 0; }
+    .cs-cout.ko { color: #b91c1c; } .cs-cout.ok { color: #15803d; }
+    .cs-apercu { background: #f8fafc; border-radius: 8px; padding: 8px 10px; font-size: 12.5px; white-space: pre-wrap; margin-top: 6px; border-left: 3px solid #cbd5e1; }
+    .cs-apercu b { display: block; font-size: 11px; color: #64748b; margin-bottom: 2px; }
+    .cs-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; }
+    .cs-progress { height: 10px; background: #e2e8f0; border-radius: 999px; overflow: hidden; margin: 8px 0; }
+    .cs-progress > div { height: 100%; background: #16a34a; width: 0; transition: width .3s; }
+    .cs-badge { display: inline-block; border-radius: 999px; padding: 1px 8px; font-size: 11px; font-weight: 600; }
+    .cs-badge.ok { background: #dcfce7; color: #166534; } .cs-badge.ko { background: #fee2e2; color: #991b1b; }
+    .cs-badge.enc { background: #dbeafe; color: #1e40af; } .cs-badge.gris { background: #f1f5f9; color: #475569; }
+    .cs-sim { background: #fef3c7; color: #92400e; border-radius: 8px; padding: 6px 10px; font-size: 12.5px; margin-bottom: 10px; }
+    .cs-rec { font-size: 12.5px; }
+    .cs-rec td { padding: 4px 6px; border-bottom: 1px solid #f1f5f9; }
+    .cs-vide { color: #94a3b8; font-size: 12.5px; padding: 8px 2px; }
+  </style>
+
+  <div id="cs-sim" class="cs-sim" style="display:none"></div>
+  <div class="cs-kpis">
+    <div class="cs-kpi"><div class="v" id="cs-k-cibles">0</div><div class="l">Clients ciblés</div></div>
+    <div class="cs-kpi"><div class="v" id="cs-k-numeros">0</div><div class="l">Numéros</div></div>
+    <div class="cs-kpi"><div class="v" id="cs-k-exclus">0</div><div class="l">Écartés</div></div>
+    <div class="cs-kpi"><div class="v" id="cs-k-segments">0</div><div class="l">SMS facturés (estimation)</div></div>
+  </div>
+
+  <div class="cs-grid">
+    <div class="cs-card">
+      <h5>1 · Cibler</h5>
+      <div class="text-muted" style="font-size:11.5px;margin-bottom:4px">Groupes de clients <small>(clients · joignables)</small></div>
+      <div class="cs-chips" id="cs-groupes"></div>
+      <div class="text-muted" style="font-size:11.5px;margin-bottom:4px">Secteurs <small>(aucun coché = tous)</small></div>
+      <div class="cs-chips" id="cs-secteurs"></div>
+      <label class="cs-opt"><input type="checkbox" id="cs-consent" checked> Respecter le refus des SMS (Envoi SMS = Non)</label>
+      <label class="cs-opt"><input type="checkbox" id="cs-autorisation" checked> Fiches client autorisées seulement</label>
+      <label class="cs-opt"><input type="checkbox" id="cs-partenaire" checked> Écarter les clients gérés par le partenaire</label>
+      <div class="cs-opt">Intéressé entretien :
+        <select id="cs-interesse" class="form-control input-sm" style="width:auto;height:26px;font-size:12px">
+          <option value="">indifférent</option><option value="Oui">Oui</option><option value="Non">Non</option></select></div>
+      <div class="text-muted" style="font-size:11.5px;margin-top:8px">Ajouter un client (nom, code ou téléphone, 5 caractères)</div>
+      <input type="text" class="form-control input-sm" id="cs-ajout" placeholder="Rechercher…">
+      <div id="cs-ajout-res"></div>
+      <div class="cs-chips" id="cs-ajoutes" style="margin-top:6px"></div>
+      <div class="cs-actions"><button class="btn btn-sm btn-primary" id="cs-cibler">🎯 Calculer la cible</button></div>
+    </div>
+
+    <div class="cs-card">
+      <h5>2 · Liste <span id="cs-liste-titre" class="text-muted" style="text-transform:none;font-weight:400"></span></h5>
+      <div class="cs-actions" style="margin:0 0 6px">
+        <input type="text" class="form-control input-sm" id="cs-filtre" placeholder="Filtrer la liste…" style="max-width:220px">
+        <button class="btn btn-xs btn-default" id="cs-tout">Tout cocher</button>
+        <button class="btn btn-xs btn-default" id="cs-rien">Tout décocher</button>
+        <label class="cs-opt" style="margin:0"><input type="checkbox" id="cs-voir-exclus"> voir les écartés</label>
+      </div>
+      <div class="cs-scroll" id="cs-liste"><div class="cs-vide">Choisissez des groupes puis « Calculer la cible ».</div></div>
+    </div>
+
+    <div class="cs-card cs-msg">
+      <h5>3 · Message et envoi</h5>
+      <input type="text" class="form-control input-sm" id="cs-titre" placeholder="Titre de la campagne (ex. Revendeurs — compte activé)">
+      <div class="cs-balises" id="cs-balises"></div>
+      <textarea id="cs-message" class="form-control" placeholder="Bonjour {{ nom_client }}, …"></textarea>
+      <div class="cs-cout" id="cs-cout">—</div>
+      <div id="cs-apercus"></div>
+      <div class="cs-actions">
+        <input type="text" class="form-control input-sm" id="cs-test-num" placeholder="Numéro de test" style="max-width:150px">
+        <button class="btn btn-sm btn-default" id="cs-test">📲 M’envoyer un test</button>
+        <button class="btn btn-sm btn-default" id="cs-enregistrer">💾 Enregistrer</button>
+        <button class="btn btn-sm btn-primary" id="cs-envoyer">🚀 Lancer l’envoi</button>
+      </div>
+      <div id="cs-etat" style="margin-top:8px"></div>
+    </div>
+  </div>
+
+  <div class="cs-card">
+    <h5>Campagnes récentes</h5>
+    <div id="cs-recentes"><div class="cs-vide">Chargement…</div></div>
+  </div>
+</div>
