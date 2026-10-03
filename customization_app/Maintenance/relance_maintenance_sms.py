@@ -18,7 +18,7 @@ from customization_app.utils.run_safely import run_safely
 # ---------------------------------------------------------------------------
 
 def _logger():
-    return frappe.logger("maintenance_sms")
+    return RC.journal("maintenance_sms")      # niveau INFO forcé : le logger Frappe est en ERROR en prod (journal vide)
 
 def log(msg):
     _logger().info(msg)
