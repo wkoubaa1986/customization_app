@@ -2,6 +2,8 @@
 from __future__ import unicode_literals
 
 import frappe
+
+from customization_app import modeles_sms
 from frappe.utils import nowdate, add_days, getdate
 from urllib.parse import quote_plus
 import requests
@@ -171,6 +173,25 @@ def get_price_for_item(item_code, price_list):
 # ---------------------------------------------------------------------------
 #  Point d'entrée principal (pour CRON)
 # ---------------------------------------------------------------------------
+
+HORS_SECTEUR = "Hors Secteur"
+
+
+def message_relance(T, nom_client, appareil, cout, telephones, lien_boutique, secteur, lien_rdv, voeux="", promo=""):
+    """Le texte de la relance, assemblé depuis le réglage « Config Modeles SMS » (modeles_sms). PURE.
+    Client de nos secteurs : coût de la main-d'œuvre + (portail ouvert → lien RDV, sinon « contactez-nous ») ;
+    hors secteur : sans coût, lien RDV si un partenaire couvre la zone, sinon vente de filtres à distance."""
+    from customization_app.modeles_sms import rendre
+    hors = secteur == HORS_SECTEUR
+    valeurs = {"nom_client": nom_client, "voeux": voeux or "", "appareil": appareil, "promo": promo or "",
+               "telephones": telephones, "lien_rdv": lien_rdv or "", "lien_boutique": lien_boutique or "",
+               "cout": None if hors else cout}
+    if lien_rdv:
+        suite = T["relance_rdv_en_ligne"]
+    else:
+        suite = T["relance_hors_secteur"] if hors else T["relance_sans_lien"]
+    return rendre(T["relance_entretien"], dict(valeurs, suite=rendre(suite, valeurs)))
+
 
 def envoyer_relances_maintenance(dry_run: bool = False):
     """
@@ -670,6 +691,7 @@ def envoyer_et_marquer_sms(list_sms, secteurs_autorises, today, dry_run: bool = 
         corp = "\nInchallah Ramdhanek Mabrouk."
     website_url, phones_emp = get_relance_config()
     phones_txt = _format_phones_for_message(phones_emp)
+    modeles = modeles_sms.textes()        # textes du réglage « Config Modeles SMS », défauts = textes historiques
     for sms_dict in list_sms:
         familles = set()
         secteur = None
@@ -743,40 +765,8 @@ def envoyer_et_marquer_sms(list_sms, secteurs_autorises, today, dry_run: bool = 
         # réserver : nos secteurs, ou un gouvernorat couvert par un partenaire.
         lien_rdv = lien_rdv_pour_client(customer_name, secteur, config_portail)
 
-        if secteur != "Hors Secteur":
-            message = (
-                f"Bonjour {client.customer_name},{corp}\n"
-                f"Rappel: La maintenance de {desc}{suff} à échéance."
-                f"{promo}\n"
-            )
-            if cout is not None:
-                message += (
-                    f"Cout main-d'oeuvre: {cout} DT. Ce tarif exclut les filtres de remplacement, "
-                    f"facturés séparément selon entretien.\n"
-                )
-            if lien_rdv:
-                message += f"Prenez RDV en ligne: {lien_rdv}\nOu appelez le {phones_txt}."
-            else:
-                message += f"Pour planifier votre entretien, contactez-nous au {phones_txt}."
-
-        else:
-            message = (
-                f"Bonjour {client.customer_name},{corp}\n"
-                f"Rappel: La maintenance de {desc}{suff} à échéance."
-                f"{promo}\n"
-            )
-            if lien_rdv:
-                # Zone partenaire : il se déplace, donc on propose le RDV
-                # AVANT la vente de filtres à distance.
-                message += (
-                    f"Prenez RDV en ligne: {lien_rdv}\n"
-                    f"Ou contactez-nous au {phones_txt}."
-                )
-            else:
-                message += (
-                    f"Commandez vos filtres directement sur notre site :\n{website_url}\n"
-                    f"Ou contactez-nous au {phones_txt} pour passer votre commande"
-                )
+        message = message_relance(modeles, nom_client=client.customer_name, appareil=desc, cout=cout, telephones=phones_txt,
+                                  lien_boutique=website_url, secteur=secteur, lien_rdv=lien_rdv, voeux=corp, promo=promo)
 
         # Numéros de téléphone
         try:

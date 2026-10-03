@@ -55,6 +55,8 @@ import frappe
 from frappe import _
 from frappe.utils import add_days, cint, getdate, nowdate
 
+from customization_app import modeles_sms
+
 DOCTYPE_TACHE = "Tache de travail"
 
 # Les types rappelés la veille, nommés explicitement (cf. en-tête).
@@ -62,9 +64,10 @@ TYPES_RAPPELES = ("Entretien", "Réparation", "Installation", "Visite")
 TYPE_LIVRAISON = "Livraison"
 TERMES_ARAMEX = "Livraison Aramex"
 
-SIGNATURE = "Aqua World - 98511119"
+# Valeurs d'origine, gardées comme constantes : le réglage « Config Modeles SMS » prime (modeles_sms.textes()).
+SIGNATURE = modeles_sms.DEFAUTS["signature"]
 # Une seule phrase, et elle dit l'essentiel : ce n'est pas une heure ferme.
-AVERTISSEMENT = "Horaire indicatif, il peut varier dans la journee."
+AVERTISSEMENT = modeles_sms.DEFAUTS["avertissement_horaire"]
 
 
 # ------------------------------------------------------------------ outils
@@ -129,44 +132,36 @@ def _bordereau_aramex(commande):
 # ------------------------------------------------------------------ messages
 
 
-def message_rendez_vous(tache):
-    """Le rappel de la veille, pour Entretien / Réparation / Installation / Visite."""
+def _valeurs(tache, T):
     nom, tel = _technicien(tache)
-    lignes = [
-        "Bonsoir %s," % (tache.get("nom_client") or tache.get("custom_client") or ""),
-        "Rappel : %s demain %s vers %s. %s" % (
-            tache.get("custom_type_dintervention") or "rendez-vous",
-            _jour(tache["starts_on"]), _heure(tache["starts_on"]), AVERTISSEMENT),
-    ]
-    if nom:
-        lignes.append("Technicien : %s%s." % (nom, (" - " + tel) if tel else ""))
-    lignes.append(SIGNATURE)
-    return "\n".join(lignes)
+    return {"nom_client": tache.get("nom_client") or tache.get("custom_client") or "",
+            "type": tache.get("custom_type_dintervention") or "rendez-vous",
+            "date": _jour(tache["starts_on"]) if tache.get("starts_on") else "",
+            "heure": _heure(tache.get("starts_on")),
+            "avertissement": T["avertissement_horaire"],
+            # « Nom - téléphone » ; sans employé la ligne entière disparaît (règle de rendu).
+            "technicien": (nom + (" - " + tel if tel else "")) if nom else "",
+            "signature": T["signature"]}
 
 
-def message_livraison(tache):
-    """Livraison par NOTRE équipe : le client attend un passage, pas un colis."""
-    nom, tel = _technicien(tache)
-    lignes = [
-        "Bonsoir %s," % (tache.get("nom_client") or tache.get("custom_client") or ""),
-        "Votre commande sera livree demain %s vers %s. %s" % (
-            _jour(tache["starts_on"]), _heure(tache["starts_on"]), AVERTISSEMENT),
-    ]
-    if nom:
-        lignes.append("Livreur : %s%s." % (nom, (" - " + tel) if tel else ""))
-    lignes.append(SIGNATURE)
-    return "\n".join(lignes)
+def message_rendez_vous(tache, T=None):
+    """Le rappel de la veille, pour Entretien / Réparation / Installation / Visite (modèle `rappel_rdv`)."""
+    T = T or modeles_sms.textes()
+    return modeles_sms.rendre(T["rappel_rdv"], _valeurs(tache, T))
 
 
-def message_aramex(tache, bordereau):
-    """Avis de remise : le colis est parti, voici son suivi."""
-    return "\n".join([
-        "Bonsoir %s," % (tache.get("nom_client") or tache.get("custom_client") or ""),
-        "Votre commande a ete remise aujourd'hui a ARAMEX pour livraison.",
-        ("N de suivi : %s." % bordereau) if bordereau
-        else "Le numero de suivi vous sera communique.",
-        SIGNATURE,
-    ])
+def message_livraison(tache, T=None):
+    """Livraison par NOTRE équipe : le client attend un passage, pas un colis (modèle `rappel_livraison`)."""
+    T = T or modeles_sms.textes()
+    return modeles_sms.rendre(T["rappel_livraison"], _valeurs(tache, T))
+
+
+def message_aramex(tache, bordereau, T=None):
+    """Avis de remise : le colis est parti, voici son suivi (modèle `avis_aramex`)."""
+    T = T or modeles_sms.textes()
+    ligne = modeles_sms.rendre(T["aramex_ligne_suivi"], {"bordereau": bordereau}) if bordereau else T["aramex_sans_suivi"]
+    return modeles_sms.rendre(T["avis_aramex"], {"nom_client": tache.get("nom_client") or tache.get("custom_client") or "",
+                                                 "ligne_suivi": ligne, "signature": T["signature"]})
 
 
 # ------------------------------------------------------------------ collecte

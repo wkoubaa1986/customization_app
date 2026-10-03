@@ -1,0 +1,146 @@
+{
+ "actions": [],
+ "creation": "2026-10-03 18:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "sec_intro",
+  "sec_rappel",
+  "rappel_rdv",
+  "rappel_livraison",
+  "col_rappel",
+  "signature",
+  "avertissement_horaire",
+  "avis_aramex",
+  "aramex_ligne_suivi",
+  "aramex_sans_suivi",
+  "sec_relance",
+  "relance_entretien",
+  "col_relance",
+  "relance_rdv_en_ligne",
+  "relance_sans_lien",
+  "relance_hors_secteur"
+ ],
+ "fields": [
+  {
+   "fieldname": "sec_intro",
+   "fieldtype": "Section Break",
+   "label": "Comment ça marche",
+   "description": "Chaque texte est envoyé tel quel, balises remplacées. Une ligne dont toutes les balises sont vides est retirée (pas de « Technicien : . » sans employé, pas de ligne de coût sans tarif). Un champ vide = le texte d’origine. Évitez les caractères hors alphabet SMS (— “ ” … œ â ê î ô û ç) : un seul fait passer tout le message en unicode, deux fois plus de segments facturés. Le bouton Aperçu montre chaque message sur de vraies données et son coût en segments."
+  },
+  {
+   "fieldname": "sec_rappel",
+   "fieldtype": "Section Break",
+   "label": "Rappel de la veille (tous les soirs à 20:00)"
+  },
+  {
+   "fieldname": "rappel_rdv",
+   "fieldtype": "Small Text",
+   "label": "Rappel de rendez-vous (Entretien, Réparation, Installation, Visite)",
+   "description": "Balises : {nom_client} {type} {date} {heure} {avertissement} {technicien} {signature}. {technicien} = nom - téléphone de l’employé affecté."
+  },
+  {
+   "fieldname": "rappel_livraison",
+   "fieldtype": "Small Text",
+   "label": "Rappel de livraison par notre équipe",
+   "description": "Balises : {nom_client} {date} {heure} {avertissement} {technicien} {signature}."
+  },
+  {
+   "fieldname": "col_rappel",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "signature",
+   "fieldtype": "Data",
+   "label": "Signature {signature}"
+  },
+  {
+   "fieldname": "avertissement_horaire",
+   "fieldtype": "Data",
+   "label": "Phrase « horaire indicatif » {avertissement}"
+  },
+  {
+   "fieldname": "avis_aramex",
+   "fieldtype": "Small Text",
+   "label": "Avis de remise Aramex (le soir où la livraison est terminée)",
+   "description": "Balises : {nom_client} {ligne_suivi} {signature}."
+  },
+  {
+   "fieldname": "aramex_ligne_suivi",
+   "fieldtype": "Data",
+   "label": "Ligne de suivi {ligne_suivi} quand le bordereau est connu",
+   "description": "Balise : {bordereau}."
+  },
+  {
+   "fieldname": "aramex_sans_suivi",
+   "fieldtype": "Data",
+   "label": "Ligne de suivi quand le bordereau est inconnu"
+  },
+  {
+   "fieldname": "sec_relance",
+   "fieldtype": "Section Break",
+   "label": "Relance entretien (lundi–samedi à 10:00, depuis les échéanciers de maintenance)"
+  },
+  {
+   "fieldname": "relance_entretien",
+   "fieldtype": "Small Text",
+   "label": "Corps du message",
+   "description": "Balises : {nom_client} {voeux} {appareil} {promo} {cout} {suite}. {suite} = l’un des trois blocs de droite selon le client ; {cout} = tarif main-d’œuvre de la liste « Vente standard » (ligne retirée s’il est inconnu ou pour un client hors secteur)."
+  },
+  {
+   "fieldname": "col_relance",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "relance_rdv_en_ligne",
+   "fieldtype": "Small Text",
+   "label": "{suite} — client qui peut réserver en ligne (nos secteurs, ou zone d’un partenaire)",
+   "description": "Balises : {lien_rdv} {telephones}."
+  },
+  {
+   "fieldname": "relance_sans_lien",
+   "fieldtype": "Small Text",
+   "label": "{suite} — client de nos secteurs, portail fermé",
+   "description": "Balise : {telephones}."
+  },
+  {
+   "fieldname": "relance_hors_secteur",
+   "fieldtype": "Small Text",
+   "label": "{suite} — client hors secteur sans partenaire (vente de filtres à distance)",
+   "description": "Balises : {lien_boutique} {telephones}. Lien et numéros : réglage « Responsable Relance »."
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "issingle": 1,
+ "links": [],
+ "modified": "2026-10-03 18:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "Config Modeles SMS",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "read": 1,
+   "write": 1,
+   "role": "Sales Manager"
+  },
+  {
+   "read": 1,
+   "write": 1,
+   "role": "Maintenance Manager"
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}
