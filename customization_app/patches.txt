@@ -63,3 +63,4 @@ customization_app.patches.ensure_transfert_validation_fields #2
 customization_app.patches.ensure_tournee_fields
 customization_app.patches.ensure_partenaire_fields
 customization_app.patches.restreindre_onglet_relances
+customization_app.patches.ensure_reponse_client_appelle
