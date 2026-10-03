@@ -70,3 +70,4 @@ customization_app.patches.ensure_echeancier_modifiable_apres_soumission
 customization_app.patches.ensure_statut_relance
 customization_app.patches.clore_visites_orphelines
 customization_app.patches.attribuer_onglet_appels
+customization_app.patches.ensure_commentaire_commande_fields

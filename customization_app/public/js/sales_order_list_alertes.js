@@ -237,6 +237,15 @@ frappe.provide("frappe.views");
                 title="${esc(t.tache)}${t.temps ? " · " + esc(t.temps) : ""}"
                 onclick="event.stopPropagation()">${esc(libelle)}</a>`);
         });
+        // 💬 Dernier commentaire écrit sur la commande (Salma pendant le traitement) : texte court,
+        // date et auteur dans l'infobulle. Le champ est tenu par commentaires_commande (hook Comment).
+        const c = infos.commentaire;
+        if (c && c.texte) {
+            const quand = c.le ? frappe.datetime.str_to_user(c.le.slice(0, 10)) + " " + c.le.slice(11, 16) : "";
+            const court = c.texte.length > 70 ? c.texte.slice(0, 69) + "…" : c.texte;
+            out.push(`<span class="so-alerte-pastille gris" title="${esc(c.texte)}${quand ? " — " + esc(quand) : ""}${c.par ? " · " + esc(c.par) : ""}"
+                   >💬 ${esc(court)}${quand ? ` <span style="opacity:.7">· ${esc(quand)}</span>` : ""}</span>`);
+        }
         return out;
     }
 

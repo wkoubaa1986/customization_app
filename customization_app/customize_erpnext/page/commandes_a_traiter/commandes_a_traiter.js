@@ -53,6 +53,16 @@ function rendre_articles(articles) {
   }).join("") || `<span class="ct-sub">—</span>`;
 }
 
+/** 💬 Le dernier commentaire écrit sur la commande (commentaires_commande) : texte, date et auteur. */
+function rendre_commentaire(c) {
+  if (!c || !c.commentaire) return "";
+  const esc = frappe.utils.escape_html;
+  const quand = c.commentaire_le ? `${frappe.datetime.str_to_user(c.commentaire_le.slice(0, 10))} ${c.commentaire_le.slice(11, 16)}` : "";
+  return `<div><span class="ct-badge b-info" style="white-space:normal;text-align:left"
+      title="${esc(c.commentaire)}${quand ? " — " + esc(quand) : ""}${c.commentaire_par ? " · " + esc(c.commentaire_par) : ""}"
+      >💬 ${esc(c.commentaire.length > 90 ? c.commentaire.slice(0, 89) + "…" : c.commentaire)}${quand ? ` <span style="opacity:.75">· ${esc(quand)}</span>` : ""}${c.commentaire_par ? ` <span style="opacity:.75">· ${esc(c.commentaire_par)}</span>` : ""}</span></div>`;
+}
+
 /** Les appels de confirmation restés SANS RÉPONSE, sous la pastille de relance.
  *
  *  « On a écrit » et « on a essayé de joindre » ne disent pas la même chose, et
@@ -126,6 +136,7 @@ class CommandesATraiter {
       origine: $("#ct-origine").val() || "",
       dispo: $("#ct-dispo").val() || "",
       anomalie: $("#ct-anomalie").val() || "",
+      commentaire: $("#ct-commentaire").val() || "",
       tache: $("#ct-tache").val() || "",
       secteur: $("#ct-secteurs .ct-sect").length
         ? JSON.stringify($("#ct-secteurs .ct-sect:checked").map((i, e) => e.value).get())
@@ -150,7 +161,7 @@ class CommandesATraiter {
       timer = setTimeout(() => { this.start = 0; this._load(); }, 400);
     });
     ["#ct-depuis", "#ct-jusqua", "#ct-statut", "#ct-origine", "#ct-dispo",
-     "#ct-anomalie", "#ct-tache", "#ct-livraison", "#ct-envoi",
+     "#ct-anomalie", "#ct-commentaire", "#ct-tache", "#ct-livraison", "#ct-envoi",
      "#ct-prestation", "#ct-client", "#ct-tri"].forEach((sel) =>
       $(sel).on("change", () => { this.start = 0; this._load(); }));
     // Les cases de secteur sont créées APRÈS ce branchement (elles attendent la
@@ -159,7 +170,7 @@ class CommandesATraiter {
 
     $("#ct-clear").on("click", () => {
       $("#ct-search").val("");
-      ["#ct-statut", "#ct-origine", "#ct-dispo", "#ct-anomalie", "#ct-tache",
+      ["#ct-statut", "#ct-origine", "#ct-dispo", "#ct-anomalie", "#ct-commentaire", "#ct-tache",
        "#ct-livraison", "#ct-envoi", "#ct-prestation", "#ct-client"]
         .forEach((s) => $(s).val(""));
       $("#ct-groupes .ct-grp, #ct-secteurs .ct-sect").prop("checked", true);
@@ -291,7 +302,7 @@ class CommandesATraiter {
                  title="${esc(canaux(c.envoi))} — dernier envoi le ${esc(c.envoi.dernier)} par ${esc(c.envoi.par)}"
                  >📨 relancé${c.envoi.n > 1 ? ` ×${c.envoi.n}` : ""} · ${esc(String(c.envoi.dernier).slice(0, 10))}</span></div>`
               : ""}
-            ${rendre_appels(c.appels)}</td>
+            ${rendre_appels(c.appels)}${rendre_commentaire(c)}</td>
         <td><a href="/app/customer/${encodeURIComponent(c.client)}" target="_blank">${esc(c.client_nom)}</a>
             <div class="ct-sub">${c.telephone
               ? `📞 <a href="tel:${esc(c.telephone)}">${esc(c.telephone)}</a>`
@@ -394,7 +405,7 @@ class CommandesATraiter {
                 ${c.envoi ? `<div><span class="ct-badge b-svc"
                      title="${esc(canaux(c.envoi))} — le ${esc(c.envoi.dernier)}"
                      >📨 relancé</span></div>` : ""}
-                ${rendre_appels(c.appels)}</td>
+                ${rendre_appels(c.appels)}${rendre_commentaire(c)}</td>
             <td class="ct-adr">${esc(c.adresse || "—")}
                 <div>${c.secteur
                   ? `<span class="ct-badge b-info">📍 ${esc(c.secteur)}</span>`

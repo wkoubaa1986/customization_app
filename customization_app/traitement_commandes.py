@@ -61,6 +61,7 @@ def _commandes(depuis, jusqu_a):
             "custom_anomalie", "custom_retour_colis", CHAMP_TRAITEE,
             "custom_bordereau_aramex",
             "custom_appel_1_sans_reponse", "custom_appel_2_sans_reponse",
+            "custom_dernier_commentaire", "custom_commentaire_le", "custom_commentaire_par",
         ],
         # Du plus ancien au plus récent : la commande qui traîne depuis trois
         # semaines passe avant celle d'hier — c'est elle qu'on risque d'oublier.
@@ -279,7 +280,8 @@ def infos_liste(noms):
         "Sales Order",
         filters={"name": ["in", noms],
                  "transaction_date": [">=", DEPUIS_INFOS_LISTE]},
-        fields=["name", "payment_terms_template", "custom_bordereau_aramex"])
+        fields=["name", "payment_terms_template", "custom_bordereau_aramex",
+                "custom_dernier_commentaire", "custom_commentaire_le", "custom_commentaire_par"])
     noms = [l.name for l in lignes]
     if not noms:
         return {}
@@ -304,6 +306,10 @@ def infos_liste(noms):
         if taches.get(so.name):
             # Les deux plus récentes suffisent à la liste — la fiche montre tout.
             info["taches"] = taches[so.name][:2]
+        if so.get("custom_dernier_commentaire"):
+            # 💬 le dernier commentaire humain (commentaires_commande), avec sa date et son auteur.
+            info["commentaire"] = {"texte": so.custom_dernier_commentaire, "le": str(so.custom_commentaire_le or "")[:16],
+                                   "par": so.custom_commentaire_par or ""}
         if info:
             out[so.name] = info
     return out

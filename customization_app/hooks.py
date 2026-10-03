@@ -338,6 +338,12 @@ doc_events = {
     "Customer": {
         "before_insert": "customization_app.partenaire_clients.customer_before_insert",
     },
+    # Le dernier commentaire d'une commande est recopié sur la fiche (pastille + filtre de la liste, écran Commandes à traiter).
+    "Comment": {
+        "after_insert": "customization_app.commentaires_commande.comment_change",
+        "on_update": "customization_app.commentaires_commande.comment_change",
+        "after_delete": "customization_app.commentaires_commande.comment_change",   # après la suppression (on_trash voit encore la ligne)
+    },
 }
 
 # Scheduled Tasks

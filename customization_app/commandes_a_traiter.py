@@ -348,7 +348,7 @@ def _liste_cochee(valeur):
 @frappe.whitelist()
 def get_commandes(depuis=None, jusqu_a=None, recherche=None, statut=None,
                   origine=None, dispo=None, anomalie=None, tache=None,
-                  secteur=None, livraison=None, prestation=None, client=None,
+                  secteur=None, livraison=None, prestation=None, client=None, commentaire=None,
                   groupes=None, envoi=None, tri=None, start=0,
                   page_length=PAGE_LENGTH):
     """L'arriéré filtré. Tout est calculé sur l'ENSEMBLE puis découpé en pages :
@@ -421,6 +421,10 @@ def get_commandes(depuis=None, jusqu_a=None, recherche=None, statut=None,
             "stock_negatif": negatifs,
             "taches": taches.get(l.name, []),
             "anomalie": l.custom_anomalie or "",
+            # 💬 dernier commentaire humain (commentaires_commande) : texte, date, auteur.
+            "commentaire": l.get("custom_dernier_commentaire") or "",
+            "commentaire_le": str(l.get("custom_commentaire_le") or "")[:16],
+            "commentaire_par": l.get("custom_commentaire_par") or "",
             "aramex_sb": bool(l.get("custom_aramex_sans_bordereau")),
             "bordereau": (bordereaux.get(l.name) or {}).get("bordereau")
                          or l.custom_bordereau_aramex or "",
@@ -438,7 +442,7 @@ def get_commandes(depuis=None, jusqu_a=None, recherche=None, statut=None,
 
     out = _trier(_filtrer(out, recherche, statut, origine, dispo, anomalie,
                           tache, secteur, livraison, prestation, client,
-                          groupes, envoi), tri)
+                          groupes, envoi, commentaire), tri)
     total = len(out)
     page = out[start:start + page_length] if page_length else out
     return {
@@ -470,9 +474,14 @@ def _trier(lignes, tri):
 
 def _filtrer(lignes, recherche, statut, origine, dispo, anomalie, tache,
              secteur=None, livraison=None, prestation=None, client=None,
-             groupes=None, envoi=None):
+             groupes=None, envoi=None, commentaire=None):
     def garde(c):
         if statut and c["statut"] != statut:
+            return False
+        # 💬 commenté ou pas (le dernier commentaire humain de la commande).
+        if commentaire == "avec" and not c.get("commentaire"):
+            return False
+        if commentaire == "sans" and c.get("commentaire"):
             return False
         # Secteurs cochés (multi-sélection). « __vide__ » désigne les adresses
         # jamais sectorisées, qu'on veut pouvoir isoler pour les corriger.
@@ -524,7 +533,7 @@ def _filtrer(lignes, recherche, statut, origine, dispo, anomalie, tache,
             aiguille = recherche.lower().strip()
             foin = " ".join([c["name"], c["client"], c["client_nom"],
                              c["groupe_client"], c["telephone"],
-                             c["adresse"], c["anomalie"]]
+                             c["adresse"], c["anomalie"], c.get("commentaire") or ""]
                             + [a["code"] + " " + a["article"] for a in c["articles"]])
             if aiguille not in foin.lower():
                 return False
