@@ -371,6 +371,20 @@ def matrice_majoree(mn: list, departs: dict, pointes: list) -> list:
 
 # ── Solveur ─────────────────────────────────────────────────────────────────
 
+def fusionner_intervalles(intervalles: list) -> list:
+    """Union de créneaux (début, fin) en minutes : ceux qui se recouvrent ou se touchent n'en font qu'un. PURE.
+    Deux pauses imposées qui se chevauchent (deux réparations d'Akram à 11:01 et 11:20 le 03/10/2026) déroutent
+    OR-Tools : il repousse les visites suivantes d'une heure, et dans la journée réelle n'a plus rien placé chez
+    l'employé après — l'après-midi entier allait à son collègue, déjà le plus chargé."""
+    out = []
+    for d, f in sorted((int(d), int(f)) for d, f in intervalles if f > d):
+        if out and d <= out[-1][1]:
+            out[-1] = (out[-1][0], max(out[-1][1], f))
+        else:
+            out.append((d, f))
+    return out
+
+
 def resoudre(minutes: list, arrets: list, nb_vehicules: int, debut: int, fin: int, equilibre: int = 1,
              limite_s: int = 5, premiere: int | None = None, depots: list | None = None,
              marge: int = 0, pause: tuple | None = None, occupations: dict | None = None,
@@ -401,21 +415,25 @@ def resoudre(minutes: list, arrets: list, nb_vehicules: int, debut: int, fin: in
     horizon = max(max(fins), max((a["fenetre"][1] + cint(a.get("service")) for a in arrets if a.get("fenetre")), default=fin)) + 1
     routing.AddDimension(cb, horizon, horizon, False, "Temps")
     temps = routing.GetDimensionOrDie("Temps")
-    # Équilibrage : au-delà d'une part équitable de la journée (travail total / véhicules, + 1 h), chaque
-    # minute de plus coûte. (Une somme des amplitudes pénalise au contraire le second véhicule, et le
-    # solveur chargeait tout sur un seul — constaté en test.)
-    charge = sum(service) + sum(min((minutes[i][j] for j in range(n) if j != i), default=0) for i in range(nb_depots, n))
-    part = int(charge / max(nb_vehicules, 1)) + 60
+    # Équilibrage : c'est la fin de journée LA PLUS TARDIVE, toutes tournées confondues, qui coûte — chaque minute
+    # vaut 2 × equilibre minutes de route. Charger un employé n'a d'intérêt que tant que sa journée reste plus
+    # courte que celle du plus chargé : les fins de journée se rapprochent d'elles-mêmes.
+    # (Historique : une borne souple « part équitable + 1 h » par véhicule ne voyait pas qu'un employé occupé par
+    # des tâches sorties du modèle restait libre après, et laissait tout l'après-midi au collègue déjà le plus
+    # chargé — Akram 13:20 / Mohamed Hedi 17:25, 03/10/2026. Une somme des amplitudes chargeait tout sur un seul.)
+    if equilibre:
+        temps.SetGlobalSpanCostCoefficient(2 * cint(equilibre))
     # Créneaux où un véhicule est OCCUPÉ hors tournée (tâche qu'on n'a pas pu placer, gardée telle quelle) :
     # des pauses imposées, pour que les autres arrêts ne viennent pas se poser dessus.
     visites = [service[manager.IndexToNode(i)] for i in range(routing.Size())]
     for v in range(nb_vehicules):
+        occ = fusionner_intervalles([(cint(d), cint(f)) for d, f in (occupations or {}).get(v, []) if f > d])
+        # Sa journée finit au plus tôt à la fin de son dernier créneau occupé : c'est sur cette base que son
+        # amplitude est comparée aux autres (sinon un employé pris jusqu'à 13:20 paraît fini à 10:30).
+        fin_min = max(debuts[v], occ[-1][1] if occ else debuts[v])
         temps.CumulVar(routing.Start(v)).SetRange(debuts[v], debuts[v])
-        temps.CumulVar(routing.End(v)).SetRange(debuts[v], max(fins[v], debuts[v]) + 1)
-        if equilibre:
-            temps.SetCumulVarSoftUpperBound(routing.End(v), debuts[v] + part, 2 * cint(equilibre))
+        temps.CumulVar(routing.End(v)).SetRange(fin_min, max(fins[v], fin_min) + 1)
         routing.AddVariableMinimizedByFinalizer(temps.CumulVar(routing.End(v)))
-        occ = [(cint(d), cint(f)) for d, f in (occupations or {}).get(v, []) if f > d]
         if occ:
             solver = routing.solver()
             temps.SetBreakIntervalsOfVehicle(
@@ -826,7 +844,7 @@ def proposer(date, fenetre=None, employes=None):
         ordre = [dep] + [n for n, _t in route] + [dep]
         m_ap = sum(mn_ap[ordre[i]][ordre[i + 1]] for i in range(len(ordre) - 1))
         k_ap = round(sum(km[ordre[i]][ordre[i + 1]] for i in range(len(ordre) - 1)), 1)
-        apres = []
+        apres, serv_ap, fin_ap = [], 0, 0
         # Les tâches que même fixées le solveur n'a pu servir (deux rendez-vous à la même heure chez le même
         # employé, hors journée…) restent dans la liste de leur employé, telles quelles, pour que la journée
         # proposée soit complète.
@@ -834,6 +852,7 @@ def proposer(date, fenetre=None, employes=None):
         for n, arrivee in sorted(list(route) + restes, key=lambda x: x[1]):
             a = par_noeud[n]
             deb = a["debut"] if not a["mobile"] else int(math.ceil(arrivee / PAS_MIN) * PAS_MIN)
+            serv_ap, fin_ap = serv_ap + a["service"], max(fin_ap, deb + a["service"])
             apres.append({"tache": a["tache"], "client": a["client"], "type": a["type"], "debut": _hm(deb), "fin": _hm(deb + a["service"]),
                           "starts_on": "%s %s:00" % (base, _hm(deb)), "ends_on": "%s %s:00" % (base, _hm(deb + a["service"])),
                           "employe": e, "de": a["employe"], "de_nom": noms.get(a["employe"], a["employe"]),
@@ -843,11 +862,12 @@ def proposer(date, fenetre=None, employes=None):
                           "position": a["position"], "lat": a["lat"], "lng": a["lng"], "adresse": a["adresse"]})
         out.append({"employe": e, "nom": noms.get(e, e), "depart": "domicile" if dep else "Magasin", "depart_point": points[dep],
                     "journee": [_hm(debuts[v]), _hm(fins[v])],
-                    "avant": {"minutes": m_av, "km": k_av, "arrets": [{"tache": a["tache"], "client": a["client"], "type": a["type"],
+                    "avant": {"minutes": m_av, "km": k_av, "interventions": sum(a["service"] for a in actuels),
+                              "fin": _hm(max((a["debut"] + a["service"] for a in actuels), default=debuts[v])), "arrets": [{"tache": a["tache"], "client": a["client"], "type": a["type"],
                                                                         "debut": _hm(a["debut"]), "fin": _hm(a["debut"] + a["service"]),
                                                                         "fixe": not a["mobile"], "lat": a["lat"], "lng": a["lng"]}
                                                                        for a in sorted(actuels, key=lambda a: a["debut"])]},
-                    "apres": {"minutes": m_ap, "km": k_ap, "arrets": apres}})
+                    "apres": {"minutes": m_ap, "km": k_ap, "interventions": serv_ap, "fin": _hm(fin_ap or debuts[v]), "arrets": apres}})
         tot_av, tot_ap, km_av, km_ap = tot_av + m_av, tot_ap + m_ap, km_av + k_av, km_ap + k_ap
     non_places = [{"tache": par_noeud[n]["tache"], "client": par_noeud[n]["client"], "employe": noms.get(par_noeud[n]["employe"])} for n in sol["non_places"]]
     return {"date": str(jour), "employes": out, "depot": cfg["depot"], "source": source,

@@ -118,6 +118,45 @@ class TestSolveur(unittest.TestCase):
             t = sol["routes"][0][0][1]
             self.assertTrue(t >= 11 * 60, t)
 
+    def test_fusionner_intervalles(self):
+        self.assertEqual(T.fusionner_intervalles([(661, 781), (680, 800)]), [(661, 800)])          # chevauchants
+        self.assertEqual(T.fusionner_intervalles([(781, 800), (661, 781)]), [(661, 800)])          # contigus, désordonnés
+        self.assertEqual(T.fusionner_intervalles([(540, 615), (661, 781)]), [(540, 615), (661, 781)])
+        self.assertEqual(T.fusionner_intervalles([(700, 700), (600, 650)]), [(600, 650)])          # vide ignoré
+
+    def test_occupations_chevauchantes_ne_retardent_pas(self):
+        # Deux réparations qui se chevauchent (11:01–13:01 et 11:20–13:20, Akram le 03/10/2026) déroutaient OR-Tools :
+        # la visite suivante partait à 14:39 au lieu de 13:30. Fusionnées, elles valent un seul créneau 11:01–13:20.
+        pts = [(36.87, 10.19), (36.88, 10.22), (36.86, 10.25), (36.85, 10.20)]
+        mn, km, _s = T.matrice_haversine(pts)
+        arrets = [{"service": 75, "fenetre": (540, 540), "vehicule": 0}, {"service": 30, "fenetre": None, "vehicule": None},
+                  {"service": 30, "fenetre": None, "vehicule": None}]
+        heures = []
+        for occ in ([(661, 781), (680, 800)], [(661, 800)]):
+            sol = T.resoudre(mn, arrets, 1, 510, 1080, limite_s=1, premiere=540, marge=15, pause=(750, 810), occupations={0: occ})
+            self.assertEqual(sol["non_places"], [])
+            heures.append(sorted(t for _n, t in sol["routes"][0]))
+        self.assertEqual(heures[0], heures[1])
+        self.assertEqual(heures[0][1], 810)                                             # 13:30, juste après le créneau
+
+    def test_equilibre_rapproche_les_fins_de_journee(self):
+        # Six interventions d'une heure, voisines ; deux employés, le second pris 11:01–13:20 par des tâches hors
+        # tournée (deux créneaux qui se chevauchent). Sans équilibrage le premier travaille jusqu'à 17:05 et le second
+        # finit à 10:00 ; avec, le second reçoit l'après-midi et les deux finissent à moins d'1 h 30 l'un de l'autre.
+        pts = [(36.87, 10.19)] + [(36.87 + 0.004 * i, 10.19 + 0.004 * (i % 3)) for i in range(1, 7)]
+        mn, km, _s = T.matrice_haversine(pts)
+        arrets = [{"service": 60, "fenetre": None, "vehicule": None} for _ in range(6)]
+        fins = {}
+        for eq in (0, 1):
+            sol = T.resoudre(mn, arrets, 2, 510, 1080, equilibre=eq, limite_s=2, premiere=540, marge=15, pause=(750, 810),
+                             occupations={1: [(661, 781), (680, 800)]})
+            self.assertEqual(sol["non_places"], [])
+            fins[eq] = [max((t + 60 for _n, t in r), default=510) for r in sol["routes"]]
+            if eq:
+                self.assertGreaterEqual(len([t for _n, t in sol["routes"][1] if t >= 800]), 2, sol["routes"])
+        self.assertGreater(abs(fins[0][0] - fins[0][1]), 180, fins)                   # sans : très déséquilibré
+        self.assertLessEqual(abs(fins[1][0] - fins[1][1]), 90, fins)                  # avec : fins voisines
+
     def test_horaires_par_vehicule(self):
         # véhicule 1 commence à 10:00 : son arrêt (le seul proche de lui) ne peut pas être avant 10:10 + marge.
         pts = [(36.87, 10.19), (36.87, 10.06), (36.87, 10.30), (36.87, 10.08)]

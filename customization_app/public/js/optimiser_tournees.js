@@ -71,6 +71,7 @@
           <b>👤 ${esc(e.nom)}</b> <span class="text-muted" style="font-size:11.5px">départ ${esc(e.depart)} · journée ${esc((e.journee || [])[0] || "")}–${esc((e.journee || [])[1] || "")}</span>
           <span style="font-size:12.5px">${e.avant.km} km · ${e.avant.minutes} min → <b>${e.apres.km} km · ${e.apres.minutes} min</b>
             ${itineraire(e.depart_point || p.depot, e.apres.arrets) ? ` · <a href="${itineraire(e.depart_point || p.depot, e.apres.arrets)}" target="_blank" rel="noopener">🗺️ itinéraire</a>` : ""}</span>
+          ${e.avant.fin ? `<span class="text-muted" style="font-size:11.5px;flex-basis:100%">⏱ interventions ${e.avant.interventions} min · fin ${esc(e.avant.fin)} → <b>interventions ${e.apres.interventions} min · fin ${esc(e.apres.fin)}</b> <span style="font-size:11px">(l’équilibrage rapproche les fins de journée)</span></span>` : ""}
         </div>
         <div class="row" style="margin-top:6px">
           <div class="col-sm-6"><div class="text-muted" style="font-size:11px;text-transform:uppercase">Actuel (${e.avant.arrets.length})</div>${e.avant.arrets.map(ligneAvant).join("") || `<div class="text-muted" style="font-size:12px">—</div>`}</div>
