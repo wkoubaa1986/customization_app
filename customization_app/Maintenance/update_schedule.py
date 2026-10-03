@@ -533,8 +533,9 @@ def run_maintenance_planning():
             summary["errors"] += 1
             erreurs.append(i_sal["sales_order"])
             frappe.log_error(frappe.get_traceback(), f"Échéancier maintenance — commande {i_sal['sales_order']}")
+    summary["prolonges"] = prolonger_echeanciers_epuises()
     summary_line = ("[SUMMARY] total=%(total_sales_orders)s new_ms=%(new_ms_created)s from_conso=%(updated_from_consumables)s "
-                    "guessed=%(guessed)s no_link=%(no_link)s already_covered=%(already_covered)s errors=%(errors)s" % summary)
+                    "guessed=%(guessed)s no_link=%(no_link)s already_covered=%(already_covered)s prolonges=%(prolonges)s errors=%(errors)s" % summary)
     if erreurs:
         summary_line += " (" + ", ".join(erreurs[:10]) + ")"
     log(summary_line)
@@ -542,19 +543,39 @@ def run_maintenance_planning():
     return {"summary": summary, "log": summary_line}
 
 
+def echeanciers_epuises() -> list:
+    """Les échéanciers soumis dont TOUTES les visites ont déjà reçu un SMS (plus rien à relancer) — une requête."""
+    return frappe.db.sql_list("""select ms.name from `tabMaintenance Schedule` ms join `tabMaintenance Schedule Detail` d on d.parent = ms.name
+                                 where ms.docstatus = 1 group by ms.name
+                                 having sum(d.custom_sms_1 is null and d.custom_sms_2 is null) = 0""")
+
+
+def prolonger_echeanciers_epuises(extra_visits_per_item=None):
+    """Chaque nuit : les échéanciers épuisés reçoivent leurs visites suivantes (la prolongation « au fil des SMS » ne les
+    rattrape jamais, puisqu'ils n'ont plus de visite à relancer — 23 échéanciers muets au 03/10/2026). Chaque échéancier
+    est isolé. → nombre prolongés."""
+    n, erreurs = 0, 0
+    for name in echeanciers_epuises():
+        frappe.db.savepoint("ms_extend")
+        try:
+            ms = frappe.get_doc("Maintenance Schedule", name)
+            if extend_schedule_for_sms(ms, cint(extra_visits_per_item) or None):
+                ms.flags.ignore_permissions = True
+                ms.save()
+                n += 1
+        except Exception:
+            frappe.db.rollback(save_point="ms_extend")
+            erreurs += 1
+            frappe.log_error(frappe.get_traceback(), f"Prolongation échéancier {name}")
+    log(f"[EXTEND] échéanciers épuisés prolongés : {n}, erreurs : {erreurs}")
+    return n
+
+
 @frappe.whitelist()
 def extend_sms_for_all_active_schedules(extra_visits_per_item=None):
-    """Prolonge tous les échéanciers soumis dont les visites sont épuisées (rattrapage, à la main)."""
+    """Même chose, à la main (bouton / console)."""
     frappe.only_for(("System Manager", "Maintenance Manager"))
-    n = 0
-    for name in frappe.db.get_all("Maintenance Schedule", filters={"docstatus": 1}, pluck="name"):
-        ms = frappe.get_doc("Maintenance Schedule", name)
-        if extend_schedule_for_sms(ms, cint(extra_visits_per_item) or None):
-            ms.flags.ignore_permissions = True
-            ms.save()
-            n += 1
-    log(f"[EXTEND] rattrapage : {n} échéancier(s) prolongé(s)")
-    return n
+    return prolonger_echeanciers_epuises(extra_visits_per_item)
 
 
 def run_cron():
