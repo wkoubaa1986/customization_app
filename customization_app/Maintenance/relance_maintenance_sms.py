@@ -177,18 +177,17 @@ def get_price_for_item(item_code, price_list):
 HORS_SECTEUR = "Hors Secteur"
 
 
-def message_relance(T, nom_client, appareil, cout, telephones, lien_boutique, secteur, lien_rdv, voeux="", promo="", partenaire=""):
+def message_relance(T, nom_client, appareil, cout, telephones, lien_boutique, secteur, lien_rdv, voeux="", promo="", zone_partenaire=False):
     """Le texte de la relance, assemblé depuis le réglage « Config Modeles SMS » (modeles_sms). PURE.
-    Client de nos secteurs : coût de la main-d'œuvre + (portail ouvert → lien RDV, sinon « contactez-nous ») ;
-    hors secteur : sans coût, lien RDV si un partenaire couvre la zone, sinon vente de filtres à distance."""
+    Client de nos secteurs — ou de la ZONE d'un partenaire (Sousse, Monastir, Mahdia… : notre client, même message,
+    décision 03/10/2026) : coût de la main-d'œuvre + (portail ouvert → lien RDV, sinon « contactez-nous ») ;
+    hors secteur : sans coût, vente de filtres à distance."""
     from customization_app.modeles_sms import rendre
-    hors = secteur == HORS_SECTEUR
+    hors = secteur == HORS_SECTEUR and not zone_partenaire
     valeurs = {"nom_client": nom_client, "voeux": voeux or "", "appareil": appareil, "promo": promo or "",
                "telephones": telephones, "lien_rdv": lien_rdv or "", "lien_boutique": lien_boutique or "",
-               "partenaire": partenaire or "", "cout": None if hors else cout}
-    if hors and lien_rdv and partenaire:
-        suite = T["relance_zone_partenaire"]          # notre client, chez qui passe notre équipe partenaire
-    elif lien_rdv:
+               "cout": None if hors else cout}
+    if lien_rdv:
         suite = T["relance_rdv_en_ligne"]
     else:
         suite = T["relance_hors_secteur"] if hors else T["relance_sans_lien"]
@@ -780,7 +779,7 @@ def envoyer_et_marquer_sms(list_sms, secteurs_autorises, today, dry_run: bool = 
         zone = partenaire_clients.zone_partenaire_du_client(customer_name, zones_partenaires) if (secteur == HORS_SECTEUR and lien_rdv) else None
         message = message_relance(modeles, nom_client=client.customer_name, appareil=desc, cout=cout, telephones=phones_txt,
                                   lien_boutique=website_url, secteur=secteur, lien_rdv=lien_rdv, voeux=corp, promo=promo,
-                                  partenaire=zone["nom"] if zone else "")
+                                  zone_partenaire=bool(zone))
 
         # Numéros de téléphone
         try:

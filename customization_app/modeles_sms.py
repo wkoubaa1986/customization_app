@@ -48,9 +48,6 @@ DEFAUTS = {
     "relance_sans_lien": "Pour planifier votre entretien, contactez-nous au {telephones}.",
     "relance_hors_secteur": "Commandez vos filtres directement sur notre site :\n{lien_boutique}\n"
                             "Ou contactez-nous au {telephones} pour passer votre commande",
-    # Nos clients de Sousse / Monastir / Mahdia : c'est NOTRE équipe partenaire qui passe, mais nous qui gérons.
-    "relance_zone_partenaire": "Dans votre region, l'entretien est assure par notre equipe partenaire {partenaire}.\n"
-                               "Prenez RDV en ligne: {lien_rdv}\nOu appelez le {telephones}.",
 }
 
 BALISES = {
@@ -62,7 +59,6 @@ BALISES = {
     "relance_rdv_en_ligne": "{lien_rdv} {telephones}",
     "relance_sans_lien": "{telephones}",
     "relance_hors_secteur": "{lien_boutique} {telephones}",
-    "relance_zone_partenaire": "{partenaire} {lien_rdv} {telephones}",
 }
 
 _BALISE = re.compile(r"\{(\w+)\}")
@@ -176,11 +172,12 @@ def apercu(modeles=None):
     lien_rdv = frappe.utils.get_url("/rdv")
     for champ, titre, kw in (("relance_rdv_en_ligne", _("Relance entretien — client de nos secteurs, portail ouvert"), dict(secteur="Secteur 1", lien_rdv=lien_rdv)),
                              ("relance_sans_lien", _("Relance entretien — client de nos secteurs, portail fermé"), dict(secteur="Secteur 1", lien_rdv="")),
-                             ("relance_hors_secteur", _("Relance entretien — hors secteur, sans partenaire"), dict(secteur="Hors Secteur", lien_rdv="")),
-                             ("relance_zone_partenaire", _("Relance entretien — notre client en zone partenaire (Sousse, Monastir…)"),
-                              dict(secteur="Hors Secteur", lien_rdv=lien_rdv, partenaire="Economic Aqua Solution"))):
+                             ("relance_hors_secteur", _("Relance entretien — hors secteur, sans partenaire"), dict(secteur="Hors Secteur", lien_rdv=""))):
         out.append({"champ": champ, "titre": titre, "texte": M.message_relance(
             T, nom_client="Ahmed Farhat", appareil="votre osmoseur", cout=cout, telephones=telephones, lien_boutique=lien_boutique, **kw)})
+    # Nos clients en zone partenaire (Sousse, Monastir, Mahdia…) reçoivent EXACTEMENT le message de nos secteurs (décision 03/10/2026).
+    out[-3]["titre"] = _("Relance entretien — nos secteurs ou zone partenaire, portail ouvert")
+    out[-2]["titre"] = _("Relance entretien — nos secteurs, secours si le portail est désactivé")
     for m in out:
         m["analyse"] = analyser(m["texte"])
     return out

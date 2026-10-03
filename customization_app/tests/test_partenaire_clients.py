@@ -29,19 +29,16 @@ class TestRegles(unittest.TestCase):
         self.assertIsNone(PC.zone_partenaire([], ZONES, norm))
         self.assertIsNone(PC.zone_partenaire(["Sousse"], {}, norm))
 
-    def test_sms_zone_partenaire(self):
+    def test_sms_zone_partenaire_identique_a_nos_secteurs(self):
+        """Décision 03/10/2026 : notre client de Sousse reçoit le MÊME message que celui de Tunis (coût + lien), sans
+        mention du partenaire ; un vrai hors secteur reste sans coût."""
         T = dict(MS.DEFAUTS)
-        m = REL.message_relance(T, nom_client="Ali", appareil="votre osmoseur", cout=40, telephones="98 511 119", lien_boutique="https://b",
-                                secteur="Hors Secteur", lien_rdv="https://x/rdv", partenaire="Economic Aqua Solution")
-        self.assertIn("notre equipe partenaire Economic Aqua Solution", m)
-        self.assertIn("Prenez RDV en ligne: https://x/rdv", m)
-        self.assertNotIn("Cout main-d'oeuvre", m)                                               # hors secteur : jamais de coût
-        # sans partenaire nommé, le texte générique ; dans nos secteurs, jamais le texte de zone
-        self.assertNotIn("partenaire", REL.message_relance(T, nom_client="Ali", appareil="x", cout=40, telephones="t", lien_boutique="b",
-                                                           secteur="Hors Secteur", lien_rdv="https://x/rdv"))
-        self.assertNotIn("partenaire", REL.message_relance(T, nom_client="Ali", appareil="x", cout=40, telephones="t", lien_boutique="b",
-                                                           secteur="Secteur 1", lien_rdv="https://x/rdv", partenaire="EAS"))
-        self.assertFalse(MS.analyser(MS.DEFAUTS["relance_zone_partenaire"])["unicode"])
+        kw = dict(nom_client="Ali", appareil="votre osmoseur", cout=40, telephones="98 511 119", lien_boutique="https://b", lien_rdv="https://x/rdv")
+        zone = REL.message_relance(T, secteur="Hors Secteur", zone_partenaire=True, **kw)
+        self.assertEqual(zone, REL.message_relance(T, secteur="Secteur 1", **kw))
+        self.assertIn("Cout main-d'oeuvre: 40 DT", zone) ; self.assertNotIn("partenaire", zone)
+        self.assertNotIn("Cout", REL.message_relance(T, secteur="Hors Secteur", **kw))
+        self.assertNotIn("relance_zone_partenaire", MS.DEFAUTS)
 
 
 class TestMarquage(unittest.TestCase):
