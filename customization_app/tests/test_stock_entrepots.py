@@ -193,8 +193,8 @@ class TestDoubleValidation(unittest.TestCase):
 
         frappe.set_user(EMPLOYE_AVEC_ENTREPOT)
         mien = S.transferts_a_valider()
-        self.assertEqual([t["name"] for t in mien], [name])
-        self.assertEqual({l["item_code"]: l["qte"] for l in mien[0]["lignes"]}, {i1: 2, i2: 5})
+        self.assertIn(name, [t["name"] for t in mien])                      # ses autres vraies demandes restent
+        self.assertEqual({l["item_code"]: l["qte"] for l in next(t for t in mien if t["name"] == name)["lignes"]}, {i1: 2, i2: 5})
         with self.assertRaises(frappe.ValidationError):                               # pas plus qu'envoyé
             S.valider_transfert(name, [{"item_code": i2, "qte": 6}])
         r = S.valider_transfert(name, [{"item_code": i1, "qte": 2}, {"item_code": i2, "qte": 3}])

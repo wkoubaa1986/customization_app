@@ -479,6 +479,28 @@ def stock_entry_before_submit(doc, method=None):
                  .format(doc.name, nom), title=_("Validation attendue"))
 
 
+def stock_reconciliation_before_submit(doc, method=None):
+    """Hook `before_submit` de Stock Reconciliation : le stock d'un employé (Employee.custom_warehouse) ne se
+    rapproche QUE par une vérification de la page « Stock par entrepôt » (comptage de l'employé + validation
+    d'un autre responsable, mutuelle), qui pose `flags.depuis_verification`. Le formulaire Stock Reconciliation
+    standard, ouvert à Stock User / Stock Manager, pourrait sinon réécrire ces stocks sans contrôle — même
+    porte que celle fermée pour les transferts (MAT-STE-2026-00104, 02/10/2026)."""
+    if doc.flags.depuis_verification:
+        return
+    entrepots = sorted({it.warehouse for it in doc.get("items") or [] if it.warehouse})
+    if not entrepots:
+        return
+    employes = frappe.get_all("Employee", filters={"status": "Active", "custom_warehouse": ["in", entrepots]},
+                              fields=["employee_name", "custom_warehouse"], order_by="employee_name")
+    if not employes:
+        return
+    frappe.throw(_("{0} : le stock d’un employé ne se rapproche pas directement. Passez par une vérification de "
+                   "stock dans la page « Stock par entrepôt » (comptage de l’employé, validation d’un autre "
+                   "responsable) : le rapprochement est passé automatiquement à la clôture.")
+                 .format(", ".join(f"{e.custom_warehouse} ({e.employee_name})" for e in employes)),
+                 title=_("Vérification requise"))
+
+
 def _peut_valider(doc) -> bool:
     emp = _mon_employe()
     return bool(emp and emp.name == doc.get(CHAMP_VALIDEUR)) or est_responsable()
@@ -887,6 +909,7 @@ def ouvrir_verification(entrepot: str, date_prevue, avec_taches: bool = True) ->
         if cfg["responsable"] and (not emp or cfg["responsable"] != emp.name):
             doc.tache_responsable = _creer_tache(cfg["responsable"], libelle, quand, cfg["duree"], "responsable magasin")
     doc.flags.ignore_permissions = True
+    doc.flags.circuit_verification = True
     doc.insert()
     return doc.name
 
@@ -916,6 +939,15 @@ def planifier_verifications():
     return crees
 
 
+def _sauver(v):
+    """Toute écriture d'une fiche Verification Stock par le circuit (page / cron) passe ici : le drapeau
+    `circuit_verification` est ce que le contrôleur du DocType exige pour accepter un changement de statut,
+    de comptage ou de validation — le formulaire /app/verification-stock, un script ou un import ne l'ont pas."""
+    v.flags.ignore_permissions = True
+    v.flags.circuit_verification = True
+    v.save()
+
+
 def _assurer_photo(v):
     """La photographie du stock (quantité système, taux) est prise à la première ouverture du comptage."""
     if v.statut != EN_COURS or v.get("lignes"):
@@ -923,8 +955,7 @@ def _assurer_photo(v):
     for l in _photographie(v.entrepot):
         v.append("lignes", l)
     v.nb_lignes = len(v.lignes)
-    v.flags.ignore_permissions = True
-    v.save()
+    _sauver(v)
 
 
 def _resume(v) -> dict:
@@ -1074,8 +1105,7 @@ def enregistrer_verification(name, comptes):
         frappe.throw(_("Cette vérification n’est plus au comptage ({0}).").format(v.statut))
     _assurer_photo(v)
     _appliquer_comptage(v, _dict_json(comptes))
-    v.flags.ignore_permissions = True
-    v.save()
+    _sauver(v)
     return _resume(v)
 
 
@@ -1101,8 +1131,7 @@ def terminer_verification(name, comptes=None, note=None):
     v.valide_responsable_par = v.valide_responsable_le = None
     if note:
         v.note = note[:500]
-    v.flags.ignore_permissions = True
-    v.save()
+    _sauver(v)
     if v.tache_employe and frappe.db.get_value("Tache de travail", v.tache_employe, "status") == "Open":
         frappe.db.set_value("Tache de travail", v.tache_employe, "status", "Completed")
     cfg = config_verification()
@@ -1129,8 +1158,7 @@ def _rafraichir_systeme(v) -> list[str]:
             l.qte_systeme = nouveau
     _appliquer_comptage(v, {})
     v.rafraichi_le = now_datetime()
-    v.flags.ignore_permissions = True
-    v.save()
+    _sauver(v)
     return bouges
 
 
@@ -1140,8 +1168,7 @@ def _renvoi_auto(v, bouges: list[str]) -> dict:
     v.valide_employe_par = v.valide_employe_le = v.valide_responsable_par = v.valide_responsable_le = None
     v.renvois = cint(v.renvois) + 1
     v.note = ((v.note + "\n") if v.note else "") + _("Renvoi automatique : {0} article(s) ont bougé depuis le comptage, à recompter.").format(len(bouges))
-    v.flags.ignore_permissions = True
-    v.save()
+    _sauver(v)
     if v.tache_employe and frappe.db.get_value("Tache de travail", v.tache_employe, "status") == "Completed":
         frappe.db.set_value("Tache de travail", v.tache_employe, "status", "Open")
     emp = _employe_du_stock(v.entrepot)
@@ -1186,6 +1213,7 @@ def _rapprochement(v):
         doc.append("items", {"item_code": l.item_code, "warehouse": v.entrepot, "qty": flt(l.qte_comptee, 6),
                              "valuation_rate": taux if flt(l.qte_comptee, 6) > 0 else 0})
     doc.flags.ignore_permissions = True
+    doc.flags.depuis_verification = v.name          # seul laissez-passer du hook stock_reconciliation_before_submit
     doc.insert()
     doc.submit()
     doc.add_comment("Comment", _("Vérification du stock {0} ({1}) : comptage validé par {2}, validé par {3}.")
@@ -1199,8 +1227,7 @@ def _cloturer(v):
     v.rapprochement = _rapprochement(v)
     v.statut = TERMINEE
     v.termine_le, v.termine_par = now_datetime(), frappe.session.user
-    v.flags.ignore_permissions = True
-    v.save()
+    _sauver(v)
     for t in (v.tache_employe, v.tache_responsable):
         if t and frappe.db.get_value("Tache de travail", t, "status") == "Open":
             frappe.db.set_value("Tache de travail", t, "status", "Completed")
@@ -1236,8 +1263,7 @@ def valider_verification(name, comptes=None, note=None):
     # une, et la fiche revient ici).
     v.statut = A_CONFIRMER
     v.valide_employe_par = v.valide_employe_le = None
-    v.flags.ignore_permissions = True
-    v.save()
+    _sauver(v)
     emp = _employe_du_stock(v.entrepot)
     if emp and emp.user_id:
         _prevenir(emp.user_id, (_("🧾 Vérification {0} validée par {1} : {2} quantité(s) ajustée(s), à confirmer")
@@ -1273,8 +1299,7 @@ def confirmer_verification(name, comptes=None):
     if changes:
         v.statut = A_VALIDER
         v.valide_responsable_par = v.valide_responsable_le = None
-        v.flags.ignore_permissions = True
-        v.save()
+        _sauver(v)
         cfg = config_verification()
         resp = frappe.db.get_value("Employee", cfg["responsable"], "user_id") if cfg["responsable"] else None
         if resp and resp != frappe.session.user:
@@ -1302,8 +1327,7 @@ def renvoyer_verification(name, motif=None):
     v.renvois = cint(v.renvois) + 1
     if motif:
         v.note = ((v.note + "\n") if v.note else "") + _("Renvoi par {0} : {1}").format(frappe.utils.get_fullname(frappe.session.user), motif[:300])
-    v.flags.ignore_permissions = True
-    v.save()
+    _sauver(v)
     if v.tache_employe and frappe.db.get_value("Tache de travail", v.tache_employe, "status") == "Completed":
         frappe.db.set_value("Tache de travail", v.tache_employe, "status", "Open")
     emp = _employe_du_stock(v.entrepot)

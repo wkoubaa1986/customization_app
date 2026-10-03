@@ -186,6 +186,10 @@ doc_events = {
     "Stock Entry": {
         "before_submit": "customization_app.stock_entrepots.stock_entry_before_submit",
     },
+    # Le stock d'un employé ne se rapproche que par une vérification (page) : jamais depuis le formulaire.
+    "Stock Reconciliation": {
+        "before_submit": "customization_app.stock_entrepots.stock_reconciliation_before_submit",
+    },
     # La file « Facture Achat a Saisir » (captures de la caisse) se rattache toute
     # seule aux vraies factures d'achat : appariement (fournisseur, n°), copie du
     # justificatif scanné, statut « Saisie » à la soumission.

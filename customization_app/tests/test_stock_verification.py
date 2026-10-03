@@ -288,6 +288,51 @@ class TestDoubleValidationVerif(unittest.TestCase):
         self.assertEqual((r["statut"], r["valide_employe_par"]), ("Terminée", "Akram"))
         self.assertEqual(self._qte(i2), 4)                                      # rapproché sur le mot final : 4
 
+    def test_rapprochement_direct_refuse(self):
+        """Le formulaire Stock Reconciliation (ou un script) ne réécrit pas le stock d'un employé : hook
+        before_submit ; seul le rapprochement posé par la clôture de la vérification passe."""
+        import frappe
+        i1 = self.items[0]
+        societe = S._societe()
+        sr = frappe.get_doc({"doctype": "Stock Reconciliation", "purpose": "Stock Reconciliation", "company": societe,
+                             "expense_account": frappe.db.get_value("Company", societe, "stock_adjustment_account"),
+                             "cost_center": frappe.db.get_value("Company", societe, "cost_center"),
+                             "items": [{"item_code": i1, "warehouse": self.essai, "qty": 1, "valuation_rate": 1}]})
+        sr.flags.ignore_permissions = True
+        sr.insert()
+        with self.assertRaises(frappe.ValidationError) as cm:
+            sr.submit()
+        self.assertIn("Akram", str(cm.exception))
+        self.assertEqual(self._qte(i1), 3)                                          # rien n'a bougé
+        sr.flags.depuis_verification = "essai"                                      # le laissez-passer du circuit
+        sr.reload()
+        sr.flags.depuis_verification = "essai"
+        sr.submit()
+        self.assertEqual(self._qte(i1), 1)
+
+    def test_fiche_non_modifiable_hors_circuit(self):
+        """Le formulaire /app/verification-stock ne force ni le statut, ni le comptage, ni les validations ;
+        la note, elle, reste éditable."""
+        import frappe
+        i1, i2 = self.items
+        nom = self._comptage(3, 5)
+        v = frappe.get_doc(S.VERIF, nom)
+        v.statut = "Terminée"
+        v.flags.ignore_permissions = True
+        with self.assertRaises(frappe.ValidationError):
+            v.save()
+        v = frappe.get_doc(S.VERIF, nom)
+        next(l for l in v.lignes if l.item_code == i2).qte_comptee = 4
+        v.flags.ignore_permissions = True
+        with self.assertRaises(frappe.ValidationError):
+            v.save()
+        v = frappe.get_doc(S.VERIF, nom)
+        v.note = "remarque libre"
+        v.flags.ignore_permissions = True
+        v.save()                                                                    # passe
+        self.assertEqual(frappe.db.get_value(S.VERIF, nom, ["statut", "note"]), ("À valider", "remarque libre"))
+        self.assertEqual(self._qte(i2), 5)
+
     def test_renvoi_au_comptage(self):
         import frappe
         i1, i2 = self.items
