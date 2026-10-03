@@ -608,7 +608,7 @@ fixtures = [
     {
         "doctype": "Workspace",
         "filters": [
-            ["name", "in", ["Selling", "Accounting", "Partenaire", "Analyse des Articles", "Buying", "Relances et partenaire"]],
+            ["name", "in", ["Selling", "Accounting", "Partenaire", "Analyse des Articles", "Buying", "Relances et partenaire", "Appels"]],
         ],
     },
     {
@@ -706,6 +706,8 @@ after_migrate = [
     "customization_app.patches.ensure_conges_recuperations.execute",
     # Onglet « Relances & partenaire » : réservé au rôle « Relances » (attribué par patch restreindre_onglet_relances).
     "customization_app.patches.ensure_onglet_relances.execute",
+    # Onglet « Appels » (poste de Salma) : réservé au rôle « Appels » (attribué par patch attribuer_onglet_appels).
+    "customization_app.patches.ensure_onglet_appels.execute",
 ]
 
 # after_migrate = ["customization_app.patches.override_get_item_details.execute"]
