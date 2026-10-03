@@ -46,6 +46,13 @@ def _synchroniser_ligne(ligne):
             maj["custom_envoi_sms"] = ligne.intéressé_par_le_service_de_relance
         if maj:
             frappe.db.set_value("Customer", ligne.client, maj)
+    # Issue d'un appel pour un client « À requalifier » : un rendez-vous pris le réactive ; « pas de système » = perdu.
+    if frappe.db.has_column("Customer", "custom_statut_relance") and frappe.db.get_value("Customer", ligne.client, "custom_statut_relance") == "À requalifier":
+        issue = ligne.get("resume_appel") or ""
+        if issue == "Rendez-vous pris":
+            frappe.db.set_value("Customer", ligne.client, "custom_statut_relance", "")
+        elif issue == "Il n'y a pas de système de traitement installé":
+            frappe.db.set_value("Customer", ligne.client, "custom_statut_relance", "Perdu")
     articles = articles_appeles(ligne.get("detail_articles"))
     if not articles:
         return

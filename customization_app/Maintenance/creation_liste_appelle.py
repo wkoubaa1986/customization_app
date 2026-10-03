@@ -329,7 +329,7 @@ def _generate_normal_urgence_list(today, rdv_clients, create_normal=True, create
     clients = echeances_a_appeler(today, cfg)
     zones = partenaire_clients.zones_partenaires()
     normal, zone, urgence, ecartes = repartir(
-        clients, today, cfg, partenaire_clients.clients_geres(), zones,
+        clients, today, cfg, RC.clients_exclus_relance(cfg), zones,
         lambda c: partenaire_clients.zone_partenaire_du_client(c, zones), rdv_clients,
         urg["secteur_urgence"], urgence_active=bool(urg["gener_urgence"] and create_urgence))
     results["ecartes"] = ecartes
@@ -344,7 +344,49 @@ def _generate_normal_urgence_list(today, rdv_clients, create_normal=True, create
         results["normal"] = _create_liste_appel_doc(today, normal, TYPE_NORMAL, cfg=cfg)
     elif normal:
         log(f"[NORMAL] {len(normal)} client(s) en attente (brouillon existant ou génération non demandée)")
+    if create_normal and (ignore_draft_normal or not has_draft_of_type(TYPE_REQUALIFICATION)):
+        results["requalification"] = _generate_requalification_list(today, cfg)
     return results
+
+
+TYPE_REQUALIFICATION = "Requalification"
+
+
+def clients_requalification_a_lister() -> list:
+    """Clients « À requalifier » jamais entrés dans une liste Requalification (un seul dernier appel)."""
+    if not frappe.db.has_column("Customer", "custom_statut_relance"):
+        return []
+    return frappe.db.sql_list("""select c.name from tabCustomer c where c.custom_statut_relance = 'À requalifier'
+                                 and not exists (select 1 from `tabAppelle Client` a join `tabListe Appelle Entretien` l on l.name = a.parent
+                                                 where a.client = c.name and l.type_liste = %s and l.docstatus <> 2)""", (TYPE_REQUALIFICATION,))
+
+
+def _generate_requalification_list(today, cfg=None):
+    """La liste du dernier appel humain : les clients requalifiés, avec leurs visites échues non réalisées."""
+    cfg = cfg or RC.config()
+    noms = clients_requalification_a_lister()
+    if not noms:
+        return None
+    clients = {}
+    for r in frappe.db.sql("""select ms.customer, d.parent, d.item_code, min(d.scheduled_date) premiere,
+                                     (select group_concat(distinct a.custom_secteur separator ', ') from `tabDynamic Link` dl join `tabAddress` a on a.name = dl.parent
+                                       where dl.parenttype = 'Address' and dl.link_doctype = 'Customer' and dl.link_name = ms.customer) secteurs
+                              from `tabMaintenance Schedule Detail` d join `tabMaintenance Schedule` ms on ms.name = d.parent and ms.docstatus = 1
+                              where ms.customer in %s and d.actual_date is null and d.scheduled_date < %s group by ms.customer, d.parent, d.item_code""",
+                           (tuple(noms), getdate(today)), as_dict=True):
+        c = clients.setdefault(r.customer, {"echeanciers": {}, "secteurs": r.secteurs or "", "premiere": None, "nb_appels": 0})
+        c["echeanciers"].setdefault(r.parent, {})[r.item_code] = getdate(r.premiere)
+        c["premiere"] = getdate(r.premiere) if c["premiere"] is None or getdate(r.premiere) < c["premiere"] else c["premiere"]
+    for n in noms:
+        clients.setdefault(n, {"echeanciers": {}, "secteurs": "", "premiere": getdate(today), "nb_appels": 0})
+    # Un client sans visite échue ne peut pas porter de ligne (échéancier requis) : il reste « À requalifier » sans appel.
+    clients = {k: v for k, v in clients.items() if v["echeanciers"]}
+    if not clients:
+        return None
+    r = _create_liste_appel_doc(today, clients, TYPE_REQUALIFICATION, cfg=cfg)
+    if r.get("created"):
+        frappe.db.set_value(DOCTYPE, r["name"], "titre", "%s %s — dernier appel : %d cycles de relance sans réponse" % (TYPE_REQUALIFICATION, today, cint(cfg["cycles_sans_reponse"])), update_modified=False)
+    return r
 
 
 # =============================================================================
@@ -397,7 +439,7 @@ def resume_resultats(results) -> str:
     if sc.get("created"):
         morceaux.append("2e appel : %d client(s)" % sc.get("count_clients", 0))
     nu = (results or {}).get("normal_urgence") or {}
-    for cle, libelle in (("normal", "Normal"), ("zone_partenaire", "Zone partenaire"), ("urgence", "Urgence")):
+    for cle, libelle in (("normal", "Normal"), ("zone_partenaire", "Zone partenaire"), ("urgence", "Urgence"), ("requalification", "Requalification")):
         r = nu.get(cle)
         if r and r.get("created"):
             morceaux.append("%s : %d client(s)%s" % (libelle, r["count_clients"], (" (+%d en attente)" % r["en_attente"]) if r.get("en_attente") else ""))

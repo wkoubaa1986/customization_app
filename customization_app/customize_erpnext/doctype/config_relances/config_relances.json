@@ -23,6 +23,10 @@
   "col_sms",
   "jours_rdv_recent",
   "types_rdv_exclusion",
+  "sec_lassitude",
+  "cycles_sans_reponse",
+  "col_lass",
+  "relancer_non_interesses",
   "sec_appels",
   "plafond_liste",
   "jours_entre_deux_appels",
@@ -136,6 +140,28 @@
    "fieldtype": "Small Text",
    "label": "Types de rendez-vous qui excluent (un par ligne)",
    "description": "(Entretien, Réparation, Installation, Visite, Livraison) Même règle pour le SMS et pour l’appel."
+  },
+  {
+   "fieldname": "sec_lassitude",
+   "fieldtype": "Section Break",
+   "label": "Lassitude et requalification",
+   "description": "Un client relancé plusieurs cycles de suite (SMS 1, SMS 2, appel) sans commande ni rendez-vous passe « À requalifier » : il sort de la relance automatique et entre une fois dans une liste d’appels « Requalification » pour un dernier appel humain. Un achat le réactive ; le statut se change aussi à la main sur sa fiche."
+  },
+  {
+   "fieldname": "cycles_sans_reponse",
+   "fieldtype": "Int",
+   "label": "Cycles complets sans réponse avant requalification",
+   "description": "(2) 0 = jamais. Un cycle = une visite échue relancée par SMS 1, SMS 2 et appel, non réalisée, postérieure à la dernière visite réalisée."
+  },
+  {
+   "fieldname": "col_lass",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "relancer_non_interesses",
+   "fieldtype": "Check",
+   "label": "Relancer quand même les clients « Non » à l’entretien",
+   "description": "(non) Par défaut, un client marqué « pas intéressé par l’entretien » ne reçoit ni SMS ni appel d’entretien ; ses échéanciers sont conservés."
   },
   {
    "fieldname": "sec_appels",

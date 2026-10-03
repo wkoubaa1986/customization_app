@@ -293,9 +293,9 @@ def envoyer_relances_maintenance(dry_run: bool = False):
     list_sms1 = []
     list_sms2 = []
 
-    # Clients gérés par le partenaire (fiches créées par son compte, ou marquées à la main) : ses relances, pas les nôtres.
+    # Clients hors relance : gérés par le partenaire, « À requalifier » / « Perdu », « Non » à l'entretien (règle commune).
     from customization_app import partenaire_clients
-    exclus_partenaire = partenaire_clients.clients_geres()
+    exclus_partenaire = RC.clients_exclus_relance(cfg)
     summary["exclus_partenaire"] = 0
 
     for imant in all_maintenance:

@@ -344,6 +344,7 @@ def shift_schedule_for_delivery(target_ms, delivery_date, sales_order, famille=N
     target_ms.save()
     log(f"[UPDATE] {target_ms.name} ({target_ms.customer}) : visite {ref.item_code} du {ancienne} réalisée par {sales_order}, "
         f"suivantes décalées de {decalage} j")
+    _reactiver_client(target_ms.customer)
     return True
 
 
@@ -408,6 +409,7 @@ def create_maintenance_for_machines(i_sal, cfg=None, fams=None, cache=None):
         _retirer_echeancier_devine(i_sal["customer"], fam, fams, cache)
     ms = _nouvel_echeancier(i_sal["customer"], i_sal["delivery_date"], machines, cfg)
     log(f"[CREATE] {ms.name} pour {i_sal['customer']}, SO {i_sal['sales_order']}, machines : {', '.join(m['item_code'] for m in machines)}")
+    _reactiver_client(i_sal["customer"])
     return True
 
 
@@ -548,13 +550,57 @@ def run_maintenance_planning():
             erreurs.append(i_sal["sales_order"])
             frappe.log_error(frappe.get_traceback(), f"Échéancier maintenance — commande {i_sal['sales_order']}")
     summary["prolonges"] = prolonger_echeanciers_epuises()
+    summary["requalifies"] = requalifier_clients_silencieux(cfg)
     summary_line = ("[SUMMARY] total=%(total_sales_orders)s new_ms=%(new_ms_created)s from_conso=%(updated_from_consumables)s "
-                    "guessed=%(guessed)s no_link=%(no_link)s already_covered=%(already_covered)s prolonges=%(prolonges)s errors=%(errors)s" % summary)
+                    "guessed=%(guessed)s no_link=%(no_link)s already_covered=%(already_covered)s prolonges=%(prolonges)s requalifies=%(requalifies)s errors=%(errors)s" % summary)
     if erreurs:
         summary_line += " (" + ", ".join(erreurs[:10]) + ")"
     log(summary_line)
     log("========== [CRON] Fin run_maintenance_planning ==========")
     return {"summary": summary, "log": summary_line}
+
+
+def _reactiver_client(customer):
+    """Un achat lié à l'entretien remet à vide un client « À requalifier » (pas « Perdu », décision humaine)."""
+    if frappe.db.has_column("Customer", "custom_statut_relance") and frappe.db.get_value("Customer", customer, "custom_statut_relance") == "À requalifier":
+        frappe.db.set_value("Customer", customer, "custom_statut_relance", "")
+        frappe.get_doc({"doctype": "Comment", "comment_type": "Info", "reference_doctype": "Customer", "reference_name": customer,
+                        "content": "✅ Relance réactivée : achat lié à l’entretien."}).insert(ignore_permissions=True)
+        log(f"[REQUALIF] {customer} réactivé par un achat")
+
+
+def clients_a_requalifier(cfg=None) -> list:
+    """Clients avec au moins `cycles_sans_reponse` cycles complets (visite échue, SMS 1 + SMS 2 + appel, non réalisée)
+    POSTÉRIEURS à leur dernière visite réalisée, encore relancés normalement, hors B2B. Une requête."""
+    cfg = cfg or RC.config()
+    n = cint(cfg["cycles_sans_reponse"])
+    if n <= 0 or not frappe.db.has_column("Customer", "custom_statut_relance"):
+        return []
+    return frappe.db.sql_list("""
+        select ms.customer from `tabMaintenance Schedule Detail` d
+        join `tabMaintenance Schedule` ms on ms.name = d.parent and ms.docstatus = 1
+        join tabCustomer c on c.name = ms.customer
+        where d.actual_date is null and d.scheduled_date < %(today)s
+          and d.custom_sms_1 is not null and d.custom_sms_2 is not null and d.custom_appelle is not null
+          and ifnull(c.custom_statut_relance, '') = '' and ifnull(c.customer_group, '') not in %(b2b)s
+          and d.scheduled_date > ifnull((select max(d2.actual_date) from `tabMaintenance Schedule Detail` d2
+                                          join `tabMaintenance Schedule` m2 on m2.name = d2.parent where m2.customer = ms.customer), '1900-01-01')
+        group by ms.customer having count(*) >= %(n)s""", {"today": nowdate(), "n": n, "b2b": tuple(cfg["groupes_b2b_liste"]) or ("",)})
+
+
+def requalifier_clients_silencieux(cfg=None) -> int:
+    """Chaque nuit : les clients silencieux passent « À requalifier » (sortie de la relance automatique, un dernier appel via
+    la liste Requalification). → nombre de clients marqués."""
+    cfg = cfg or RC.config()
+    marques = 0
+    for customer in clients_a_requalifier(cfg):
+        frappe.db.set_value("Customer", customer, "custom_statut_relance", "À requalifier")
+        frappe.get_doc({"doctype": "Comment", "comment_type": "Info", "reference_doctype": "Customer", "reference_name": customer,
+                        "content": "⏸️ Relance d’entretien suspendue : %d cycles (SMS 1, SMS 2, appel) sans réponse. Dernier appel via la liste « Requalification »."
+                                   % cint(cfg["cycles_sans_reponse"])}).insert(ignore_permissions=True)
+        marques += 1
+    log(f"[REQUALIF] clients passés « À requalifier » : {marques}")
+    return marques
 
 
 def echeanciers_epuises() -> list:

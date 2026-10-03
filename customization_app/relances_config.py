@@ -25,7 +25,11 @@ DEFAUTS = {
     "plafond_liste": 100, "jours_entre_deux_appels": 60, "jours_apres_intervention": 160,
     "delai_apres_sms2_jours": 2, "delai_2e_appel_jours": 3,
     "secteurs_urgence": "Secteur 7\nSecteur 8\nSecteur 9",
+    # Lassitude : après N cycles complets (SMS 1 + SMS 2 + appel) sans réponse, le client passe « À requalifier » et sort de
+    # la relance automatique (0 = jamais). Les « Non » à l'entretien sortent de la relance d'entretien sauf réglage contraire.
+    "cycles_sans_reponse": 2, "relancer_non_interesses": 0,
 }
+STATUTS_RELANCE_EXCLUS = ("À requalifier", "Perdu")
 
 # L'ORDRE est la priorité : famille retenue pour le coût du SMS / de l'appel, et pour deviner une machine.
 DEFAUT_FAMILLES = [
@@ -210,6 +214,20 @@ def clients_avec_rdv(cfg: dict | None = None, jours: int | None = None, types: l
                               and ifnull(dans_local, '') <> 'Oui' and custom_type_dintervention in %s""",
                          (str(add_days(getdate(), -jours)) + " 00:00:00", tuple(types)))
     return {r[0] for r in rows if r[0]}
+
+
+def clients_exclus_relance(cfg: dict | None = None) -> set:
+    """Les clients que NI le SMS NI l'appel d'entretien ne doivent toucher : gérés par le partenaire, statut de relance
+    « À requalifier » / « Perdu », et « Non » à l'entretien (sauf réglage `relancer_non_interesses`). Une seule règle
+    pour les trois crons (décision 03/10/2026)."""
+    cfg = cfg or config()
+    from customization_app import partenaire_clients
+    out = set(partenaire_clients.clients_geres())
+    if frappe.db.has_column("Customer", "custom_statut_relance"):
+        out |= set(frappe.get_all("Customer", filters={"custom_statut_relance": ["in", STATUTS_RELANCE_EXCLUS]}, pluck="name"))
+    if not cfg.get("relancer_non_interesses"):
+        out |= set(frappe.get_all("Customer", filters={"custom_intéressé_par_le_service_entretien": "Non"}, pluck="name"))
+    return out
 
 
 def journal(nom: str):
