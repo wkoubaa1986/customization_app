@@ -663,13 +663,12 @@ def disponibilites(jeton, adresse=None, type_intervention=None, tache=None):
         type_intervention = doc.get("custom_type_dintervention")
         secteur = doc.get("secteur")
         exclure = doc.name
-        contexte = planning.contexte_partenaire(
-            config, _gouvernorat_adresse(doc.get("select_address")))
+        gouvernorat = _gouvernorat_adresse(doc.get("select_address"))
     else:
         doc_adresse = _adresse_du_client(session["client"], adresse)
         secteur = doc_adresse.get("custom_secteur")
-        contexte = planning.contexte_partenaire(
-            config, doc_adresse.get("custom_state_s") or doc_adresse.get("state"))
+        gouvernorat = doc_adresse.get("custom_state_s") or doc_adresse.get("state")
+    contexte = planning.contexte_partenaire(config, gouvernorat)
     hors = (not secteur or secteur == planning.HORS_SECTEUR) and not contexte
     return {
         "secteur": secteur or "",
@@ -684,7 +683,7 @@ def disponibilites(jeton, adresse=None, type_intervention=None, tache=None):
         # grille vide sans explication.
         "ouvert_le": _ouverture_a_annoncer(config, contexte, type_intervention),
         "jours": [] if hors else planning.disponibilites(
-            config, secteur, type_intervention, exclure=exclure, contexte=contexte),
+            config, secteur, type_intervention, exclure=exclure, contexte=contexte, gouvernorat=gouvernorat),
     }
 
 
@@ -717,7 +716,7 @@ def deplacer_rdv(jeton, tache, date, demi_journee):
     with _verrou_placement():
         employe, starts_on, duree = planning.placer(
             config, jour, demi_journee, doc.get("secteur"), type_i,
-            exclure=doc.name, contexte=contexte)
+            exclure=doc.name, contexte=contexte, gouvernorat=_gouvernorat_adresse(doc.get("select_address")))
 
         import datetime as _dt
         nom_employe = frappe.db.get_value("Employee", employe, "employee_name") or employe
@@ -1057,7 +1056,8 @@ def reserver(jeton, type_intervention, date, demi_journee, adresse=None,
     with _verrou_placement():
         employe, starts_on, duree = planning.placer(
             config, jour, demi_journee,
-            doc_adresse.get("custom_secteur"), type_intervention, contexte=contexte)
+            doc_adresse.get("custom_secteur"), type_intervention, contexte=contexte,
+            gouvernorat=doc_adresse.get("custom_state_s") or doc_adresse.get("state"))
 
         libelle_demi = _("matin") if demi_journee == "matin" else _("après-midi")
         # Le TITRE du calendrier est composé côté FICHE par le Client Script

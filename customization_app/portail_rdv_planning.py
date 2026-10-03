@@ -143,15 +143,32 @@ def ouverture_type(config, type_intervention):
     return None
 
 
+REPOS_PARTENAIRE = (5, 6)   # samedi, dimanche : hors du délai de la zone partenaire (demande 03/10/2026)
+
+
+def ajouter_jours_ouvres(date, n, repos=REPOS_PARTENAIRE):
+    """`date` + n jours OUVRÉS (les jours de `repos`, weekday() 5 = samedi, 6 = dimanche, ne comptent pas). PURE.
+    Jeudi + 3 → mardi ; vendredi + 3 → mercredi ; samedi + 3 → mercredi."""
+    d, reste = getdate(date), max(cint(n), 0)
+    while reste > 0:
+        d = add_days(d, 1)
+        if d.weekday() not in repos:
+            reste -= 1
+    return d
+
+
 def premier_jour(config, contexte, type_intervention):
-    """Le premier jour réservable : le délai standard (ou celui du partenaire),
-    repoussé à la date d'ouverture du type si elle est plus tardive.
+    """Le premier jour réservable : le délai standard (ou celui du partenaire,
+    compté EN JOURS OUVRÉS — le week-end n'entre pas dans ses 3 jours, demande
+    du 03/10/2026), repoussé à la date d'ouverture du type si elle est plus tardive.
 
     Un SEUL endroit décide — la grille, la réservation et le déplacement s'y
     réfèrent, sans quoi l'écran proposerait un créneau que le serveur refuse.
     """
-    delai = (contexte or {}).get("delai_jours") or delai_standard(config)
-    debut = add_days(getdate(), delai)
+    if contexte:
+        debut = ajouter_jours_ouvres(getdate(), contexte.get("delai_jours") or delai_standard(config))
+    else:
+        debut = add_days(getdate(), delai_standard(config))
     ouverture = ouverture_type(config, type_intervention)
     return max(debut, ouverture) if ouverture else debut
 
@@ -203,13 +220,15 @@ def _taches_periode(employes, debut, fin, exclure=None):
     if not employes:
         return {}
     lignes = frappe.db.sql(
-        """SELECT name, custom_choix_du_staff AS employe, starts_on, ends_on,
-                  custom_type_dintervention AS type_i, secteur,
-                  `toute_la_journée` AS jour_entier
-           FROM `tabTache de travail`
-           WHERE status != 'Cancelled'
-             AND custom_choix_du_staff IN %(qui)s
-             AND starts_on >= %(debut)s AND starts_on < %(fin)s""",
+        """SELECT t.name, t.custom_choix_du_staff AS employe, t.starts_on, t.ends_on,
+                  t.custom_type_dintervention AS type_i, t.secteur,
+                  t.`toute_la_journée` AS jour_entier,
+                  COALESCE(NULLIF(a.custom_state_s, ''), a.state) AS gouvernorat
+           FROM `tabTache de travail` t
+           LEFT JOIN `tabAddress` a ON a.name = t.select_address
+           WHERE t.status != 'Cancelled'
+             AND t.custom_choix_du_staff IN %(qui)s
+             AND t.starts_on >= %(debut)s AND t.starts_on < %(fin)s""",
         {"qui": tuple(employes), "debut": str(debut),
          "fin": str(add_days(fin, 1))}, as_dict=True)
     out = {}
@@ -220,7 +239,10 @@ def _taches_periode(employes, debut, fin, exclure=None):
         cle = (l.employe, jour)
         entree = out.setdefault(cle, {"matin": [], "apres_midi": [],
                                       "secteurs": {"matin": set(), "apres_midi": set()},
-                                      "jour_entier": False})
+                                      "gouvernorats": set(), "jour_entier": False})
+        # Zone partenaire : UN gouvernorat par JOURNÉE (Sousse OU Monastir OU Mahdia — demande 03/10/2026).
+        if l.gouvernorat:
+            entree["gouvernorats"].add(_gouvernorat_normalise(l.gouvernorat))
         # ⚠️ « TOUTE LA JOURNÉE » COCHÉE = journée prise, quelles que soient les
         # heures saisies. C'est ainsi que sont posés les JOURS DE RÉCUPÉRATION
         # (tâche « Autre », 10:00-12:00 mais cochée) : lire les seules heures
@@ -337,16 +359,27 @@ def _compagnons(config, secteur):
     return permis
 
 
-def _demi_faisable(entree, jour, demi, secteur, duree, config=None):
+def _gouvernorat_normalise(nom):
+    from customization_app.sectorisation import gouvernorat_proche
+    return gouvernorat_proche(nom) or (nom or "").strip()
+
+
+def _demi_faisable(entree, jour, demi, secteur, duree, config=None, gouvernorat=None):
     """L'employé peut-il prendre ce secteur, cette durée, sur cette demi-journée ?
-    -> datetime de début (premier trou réel), ou None."""
+    -> datetime de début (premier trou réel), ou None.
+    `gouvernorat` (zone partenaire seulement) : la journée du partenaire est consacrée à UN gouvernorat —
+    un jour déjà engagé à Sousse ne reçoit pas Monastir, matin comme après-midi."""
     entree = entree or {"matin": [], "apres_midi": [],
                         "secteurs": {"matin": set(), "apres_midi": set()},
-                        "jour_entier": False}
+                        "gouvernorats": set(), "jour_entier": False}
     # Journée entière prise (récupération, formation, congé posé en tâche) :
     # rien ne se réserve ce jour-là chez cet employé.
     if entree.get("jour_entier"):
         return None
+    if gouvernorat:
+        deja = entree.get("gouvernorats") or set()
+        if deja and deja != {_gouvernorat_normalise(gouvernorat)}:
+            return None
     autre = "apres_midi" if demi == "matin" else "matin"
     sect_ici = entree["secteurs"][demi]
     sect_autre = entree["secteurs"][autre]
@@ -472,7 +505,7 @@ def _quota_lointain_ok(lointains, jour, secteur):
 
 
 def disponibilites(config, secteur, type_intervention, horizon=HORIZON_PLANNING,
-                   exclure=None, contexte=None):
+                   exclure=None, contexte=None, gouvernorat=None):
     """La grille des demi-journées faisables. -> [{date, matin, apres_midi}].
 
     `contexte` : zone partenaire (employé dédié, délai propre, dimanche) — la
@@ -507,11 +540,12 @@ def disponibilites(config, secteur, type_intervention, horizon=HORIZON_PLANNING,
         if contexte or _quota_lointain_ok(lointains, jour, secteur):
             for employe in _pool_du_jour(config, liste, taches, jour, conges, contexte):
                 entree = taches.get((employe, jour))
+                gouv = gouvernorat if contexte else None     # un gouvernorat par jour : zone partenaire seulement
                 if not matin and _demi_faisable(entree, jour, "matin", secteur,
-                                                duree, config) is not None:
+                                                duree, config, gouv) is not None:
                     matin = True
                 if not apres_midi and _demi_faisable(entree, jour, "apres_midi", secteur,
-                                                     duree, config) is not None:
+                                                     duree, config, gouv) is not None:
                     apres_midi = True
                 if matin and apres_midi:
                     break
@@ -521,7 +555,7 @@ def disponibilites(config, secteur, type_intervention, horizon=HORIZON_PLANNING,
 
 
 def placer(config, jour, demi, secteur, type_intervention, exclure=None,
-           contexte=None):
+           contexte=None, gouvernorat=None):
     """Choisit l'employé (ordre de la liste = priorité) et l'heure de début.
     -> (employe, starts_on, duree_minutes) ou lève."""
     duree = DUREES.get(type_intervention)
@@ -559,7 +593,7 @@ def placer(config, jour, demi, secteur, type_intervention, exclure=None,
         pool = sorted(pool, key=lambda e: _charge_demi(taches.get((e, jour)), demi))
     for employe in pool:
         starts_on = _demi_faisable(taches.get((employe, jour)), jour, demi,
-                                   secteur, duree, config)
+                                   secteur, duree, config, gouvernorat if contexte else None)
         if starts_on is not None:
             return employe, starts_on, duree
 

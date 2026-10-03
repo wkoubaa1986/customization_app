@@ -154,3 +154,29 @@ class TestPlafondDuJour(unittest.TestCase):
         pool = PL._pool_du_jour({"nb_employes": 3}, ["A", "B", "C", "D"], {},
                                 self.JOUR, conges={("A", self.JOUR)})
         self.assertEqual(pool, ["B", "C", "D"])
+
+
+class TestZonePartenaire(unittest.TestCase):
+    """Zone partenaire (demandes 03/10/2026) : délai en jours OUVRÉS, un gouvernorat par journée."""
+
+    def test_jours_ouvres(self):
+        import datetime
+        P = PL
+        self.assertEqual(P.ajouter_jours_ouvres(datetime.date(2026, 10, 1), 3), datetime.date(2026, 10, 6))   # jeudi → mardi
+        self.assertEqual(P.ajouter_jours_ouvres(datetime.date(2026, 10, 2), 3), datetime.date(2026, 10, 7))   # vendredi → mercredi
+        self.assertEqual(P.ajouter_jours_ouvres(datetime.date(2026, 10, 3), 3), datetime.date(2026, 10, 7))   # samedi → mercredi
+        self.assertEqual(P.ajouter_jours_ouvres(datetime.date(2026, 10, 5), 1), datetime.date(2026, 10, 6))   # lundi → mardi
+        self.assertEqual(P.ajouter_jours_ouvres(datetime.date(2026, 10, 5), 0), datetime.date(2026, 10, 5))
+
+    def test_un_gouvernorat_par_journee(self):
+        import datetime
+        P = PL
+        jour = datetime.date(2026, 10, 6)
+        vide = None
+        sousse = {"matin": [], "apres_midi": [], "secteurs": {"matin": set(), "apres_midi": set()},
+                  "gouvernorats": {"Sousse"}, "jour_entier": False}
+        self.assertIsNotNone(P._demi_faisable(vide, jour, "matin", "Hors Secteur", 30, {}, "Monastir"))      # journée libre
+        self.assertIsNone(P._demi_faisable(sousse, jour, "apres_midi", "Hors Secteur", 30, {}, "Monastir"))  # déjà Sousse
+        self.assertIsNotNone(P._demi_faisable(sousse, jour, "apres_midi", "Hors Secteur", 30, {}, "Sousse"))
+        self.assertIsNotNone(P._demi_faisable(sousse, jour, "apres_midi", "Hors Secteur", 30, {}, "sousse "))  # tolérant
+        self.assertIsNotNone(P._demi_faisable(sousse, jour, "apres_midi", "Secteur 1", 30, {}))               # hors zone : règle inactive
