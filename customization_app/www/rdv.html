@@ -1162,8 +1162,7 @@
     const zone = $("rdv-types");
     const a = (seance.adresses || []).find((x) => x.adresse === adresse_choisie);
     const occupes = (a && a.rdv_en_cours) || {};
-    const hors = !!adresse_choisie
-      && (!secteur_choisi() || secteur_choisi() === "Hors Secteur");
+    const hors = !!adresse_choisie && hors_secteur_choisi();
     zone.innerHTML = "";
     (seance.types || []).forEach((t) => {
       const b = document.createElement("button");
@@ -1269,12 +1268,19 @@
     const a = (seance.adresses || []).find((x) => x.adresse === adresse_choisie);
     return a ? a.secteur : "";
   }
+  // « Hors Secteur » pour l'équipe de Tunis, mais couverte par un PARTENAIRE (Sousse, Monastir, Mahdia…) :
+  // réservable — le serveur (`partenaire` dans la liste des adresses, puis `disponibilites`) a le dernier mot.
+  function hors_secteur_choisi() {
+    const a = (seance.adresses || []).find((x) => x.adresse === adresse_choisie);
+    const sec = secteur_choisi();
+    return (!sec || sec === "Hors Secteur") && !(a && a.partenaire);
+  }
 
   // Adresse hors secteur, ou adresse qui a DÉJÀ un rendez-vous en cours :
   // dans les deux cas les types se grisent, pas de nouvelle réservation.
   function apres_choix_adresse() {
     const a = (seance.adresses || []).find((x) => x.adresse === adresse_choisie);
-    const hors = !secteur_choisi() || secteur_choisi() === "Hors Secteur";
+    const hors = hors_secteur_choisi();
     const occupes = (a && a.rdv_en_cours) || {};
     // Bandeau : le hors-secteur (bloquant), ou le rappel quand TOUS les types
     // possibles sont déjà pris à cette adresse. Sinon, l'info vit sur le

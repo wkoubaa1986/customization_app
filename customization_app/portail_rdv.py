@@ -192,6 +192,10 @@ def _adresses_du_client(client):
             t.custom_type_dintervention,
             {"tache": t.name, "date": str(t.starts_on)[:16],
              "type": t.custom_type_dintervention})
+    # Zone partenaire (Sousse, Monastir, Mahdia…) : l'adresse est « Hors Secteur » pour l'équipe de Tunis mais
+    # RÉSERVABLE — l'écran grisait les types avant même d'interroger `disponibilites` (constaté le 03/10/2026).
+    from customization_app import portail_rdv_planning as planning
+    config = _config()
     return [{
         "adresse": l.name,
         "ligne": l.address_line1 or "",
@@ -199,6 +203,7 @@ def _adresses_du_client(client):
         "ville": l.custom_villes_s or l.city or "",
         "code_postal": l.pincode or "",
         "secteur": l.custom_secteur or "",
+        "partenaire": bool(planning.contexte_partenaire(config, l.custom_state_s or l.state)),
         "lien_maps": l.custom_lien_google_map or "",
         "rdv_en_cours": en_cours.get(l.name) or {},
     } for l in lignes]
