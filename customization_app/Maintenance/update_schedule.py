@@ -557,6 +557,11 @@ def run_maintenance_planning():
         summary_line += " (" + ", ".join(erreurs[:10]) + ")"
     log(summary_line)
     log("========== [CRON] Fin run_maintenance_planning ==========")
+    nb_err = summary["errors"] + summary["cleanup"]["erreurs"]
+    if nb_err:
+        RC.alerter("[ERPNext] Échéanciers de maintenance : %d erreur(s) cette nuit" % nb_err,
+                   "<p>%s</p><p>Commandes en erreur : %s</p><p>Détail dans Journal des erreurs (/app/error-log) et la page Journaux des relances.</p>"
+                   % (frappe.utils.escape_html(summary_line), ", ".join(erreurs) or "—"), cfg)
     return {"summary": summary, "log": summary_line}
 
 

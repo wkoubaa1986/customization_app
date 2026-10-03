@@ -28,7 +28,20 @@ DEFAUTS = {
     # Lassitude : après N cycles complets (SMS 1 + SMS 2 + appel) sans réponse, le client passe « À requalifier » et sort de
     # la relance automatique (0 = jamais). Les « Non » à l'entretien sortent de la relance d'entretien sauf réglage contraire.
     "cycles_sans_reponse": 2, "relancer_non_interesses": 0,
+    "email_alertes": "koubaawassim@gmail.com",
 }
+
+# Les crons de l'entretien : clé = préfixe du Scheduled Job Log, fichier journal, horaire lisible, méthode d'Error Log.
+CRONS = [
+    {"cle": "update_schedule.run_cron", "titre": "Échéanciers de maintenance", "quand": "chaque nuit (tâche longue quotidienne)",
+     "journal": "maintenance_scheduler", "erreurs": ("Échéancier maintenance%", "Nettoyage échéancier%", "Prolongation échéancier%", "Cron - Mise à jour échéancier%")},
+    {"cle": "creation_liste_appelle.run_cron", "titre": "Listes d’appels", "quand": "lundi–samedi 07:00",
+     "journal": "creation_liste_appelle", "erreurs": ("2e appel%", "Cron - Génération listes%")},
+    {"cle": "relance_maintenance_sms.run_cron", "titre": "Relance SMS / e-mail", "quand": "lundi–samedi 10:00",
+     "journal": "maintenance_sms", "erreurs": ("SMS Maintenance%", "Cron - Relance maintenance%")},
+    {"cle": "rappel_rdv.cron_du_soir", "titre": "Rappel des rendez-vous du lendemain", "quand": "tous les soirs 20:00",
+     "journal": None, "erreurs": ("Cron - Rappel%", "Rappel SMS%")},
+]
 STATUTS_RELANCE_EXCLUS = ("À requalifier", "Perdu")
 
 # L'ORDRE est la priorité : famille retenue pour le coût du SMS / de l'appel, et pour deviner une machine.
@@ -228,6 +241,23 @@ def clients_exclus_relance(cfg: dict | None = None) -> set:
     if not cfg.get("relancer_non_interesses"):
         out |= set(frappe.get_all("Customer", filters={"custom_intéressé_par_le_service_entretien": "Non"}, pluck="name"))
     return out
+
+
+def emails_alertes(cfg: dict | None = None) -> list:
+    return liste((cfg or config())["email_alertes"])
+
+
+def alerter(sujet: str, corps: str, cfg: dict | None = None) -> bool:
+    """E-mail d'alerte à l'adresse du réglage (dev : coupé par mute_emails comme tout e-mail). Jamais bloquant."""
+    dest = emails_alertes(cfg)
+    if not dest:
+        return False
+    try:
+        frappe.sendmail(recipients=dest, subject=sujet, message=corps)
+        return True
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "Alerte cron : envoi impossible")
+        return False
 
 
 def journal(nom: str):

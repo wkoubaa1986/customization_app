@@ -344,8 +344,10 @@ def executer(envoyer: bool = True) -> dict:
 
 
 def cron_du_soir():
-    """Point d'entrée du planificateur (20 h)."""
-    return executer(envoyer=True)
+    """Point d'entrée du planificateur (20 h) — dans le filet run_safely : un plantage global est journalisé et envoyé par
+    e-mail (Config Relances), au lieu de n'apparaître que dans le journal des tâches planifiées."""
+    from customization_app.utils.run_safely import run_safely
+    return run_safely("Cron - Rappel des rendez-vous du lendemain", lambda: executer(envoyer=True))
 
 
 @frappe.whitelist()

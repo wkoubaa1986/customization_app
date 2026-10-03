@@ -6,6 +6,8 @@
  "engine": "InnoDB",
  "field_order": [
   "sec_intro",
+  "sec_alertes",
+  "email_alertes",
   "sec_echeanciers",
   "groupes_b2b",
   "clients_proteges",
@@ -42,6 +44,19 @@
    "fieldtype": "Section Break",
    "label": "Comment ça marche",
    "description": "Trois automatismes lisent ce réglage : la mise à jour des échéanciers (nuit), la relance SMS/e-mail (lundi–samedi 10:00) et les listes d’appels (lundi–samedi 07:00). Un champ vide = la valeur historique indiquée entre parenthèses."
+  },
+  {
+   "fieldname": "sec_alertes",
+   "fieldtype": "Section Break",
+   "label": "Alertes",
+   "description": "Un cron qui plante entièrement, ou qui a laissé des commandes / listes en erreur, envoie un e-mail à cette adresse (une par passage). Les journaux détaillés sont dans la page « Journaux des relances » de l’onglet."
+  },
+  {
+   "fieldname": "email_alertes",
+   "fieldtype": "Data",
+   "options": "Email",
+   "label": "E-mail des alertes",
+   "description": "(koubaawassim@gmail.com) Plusieurs adresses séparées par des virgules."
   },
   {
    "fieldname": "sec_echeanciers",

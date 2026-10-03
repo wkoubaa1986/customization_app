@@ -297,6 +297,9 @@ def _generate_second_call_list(today, rdv_clients, cfg=None):
             traitees.append(src.name)
         except Exception:
             frappe.log_error(frappe.get_traceback(), f"2e appel — liste source {src.name}")
+            RC.alerter("[ERPNext] Listes d’appels : liste source %s en erreur au 2e appel" % src.name,
+                       "<p>La liste %s n’a pas pu être relue pour le 2e appel ; elle n’est pas marquée traitée et sera retentée demain. "
+                       "Détail dans /app/error-log.</p>" % src.name, cfg)
     resultats = []
     for cle, lot in lots.items():
         if not lot:
