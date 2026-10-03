@@ -71,3 +71,4 @@ customization_app.patches.ensure_statut_relance
 customization_app.patches.clore_visites_orphelines
 customization_app.patches.attribuer_onglet_appels
 customization_app.patches.ensure_commentaire_commande_fields
+customization_app.patches.backfill_statut_compagne_sms
