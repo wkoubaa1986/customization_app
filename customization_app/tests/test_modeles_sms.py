@@ -126,7 +126,8 @@ class TestReglage(unittest.TestCase):
         self.assertEqual((T["signature"], T["rappel_rdv"]), ("AW TEST", MS.DEFAUTS["rappel_rdv"]))
         a = MS.apercu({"rappel_rdv": "Test {nom_client} {heure}\n{signature}"})
         self.assertEqual([m["champ"] for m in a], ["rappel_rdv", "rappel_livraison", "avis_aramex",
-                                                   "relance_rdv_en_ligne", "relance_sans_lien", "relance_hors_secteur"])
+                                                   "relance_rdv_en_ligne", "relance_sans_lien", "relance_hors_secteur", "relance_zone_partenaire"])
+        self.assertIn("equipe partenaire Economic Aqua Solution", a[6]["texte"])
         self.assertTrue(a[0]["texte"].startswith("Test ") and a[0]["texte"].endswith("\nAW TEST"), a[0]["texte"])
         self.assertTrue(all(m["analyse"]["segments"] >= 1 for m in a))
         self.assertIn("Prenez RDV en ligne:", a[3]["texte"]) ; self.assertIn("Commandez vos filtres", a[5]["texte"])

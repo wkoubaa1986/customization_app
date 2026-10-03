@@ -327,8 +327,14 @@ doc_events = {
     # ignore_share_permission, ce que les deux Server Scripts remplacés (éteints
     # par patch) ne pouvaient pas faire : un Maintenance Manager ne validait plus.
     "Liste Appelle Entretien": {
-        "after_insert": "customization_app.partage_partenaire.partager",
+        # Le partage automatique avec le compte partenaire (after_insert → partage_partenaire.partager) est RETIRÉ le
+        # 03/10/2026 : le partenaire n'appelle pas nos clients, il exécute les tâches qu'on lui affecte. Le retrait à la
+        # validation reste, pour nettoyer les partages des listes encore ouvertes.
         "on_submit": "customization_app.partage_partenaire.retirer_partages",
+    },
+    # Une fiche client créée par le compte partenaire est « gérée par le partenaire » : exclue de nos relances.
+    "Customer": {
+        "before_insert": "customization_app.partenaire_clients.customer_before_insert",
     },
 }
 
@@ -707,6 +713,8 @@ after_migrate = [
 # ligne de `purchase_invoice_caisse`. Tout tient donc ici, et les ajouts se font DANS ce
 # dictionnaire, jamais dans un second.
 doctype_js = {
+    # Fiche client : bandeau « géré par le partenaire » + bouton pour (dé)marquer (partenaire_clients).
+    "Customer": "public/js/customer_partenaire.js",
     # Facture d'achat : bouton « 📦 Rattacher des BL » (bons de livraison capturés en caisse,
     # en attente de leur facture — voir caisse_depenses.bls_en_attente) ; et le panneau qui
     # montre le scan pendant la saisie.

@@ -20,7 +20,8 @@
   "col_relance",
   "relance_rdv_en_ligne",
   "relance_sans_lien",
-  "relance_hors_secteur"
+  "relance_hors_secteur",
+  "relance_zone_partenaire"
  ],
  "fields": [
   {
@@ -109,6 +110,12 @@
    "fieldtype": "Small Text",
    "label": "{suite} — client hors secteur sans partenaire (vente de filtres à distance)",
    "description": "Balises : {lien_boutique} {telephones}. Lien et numéros : réglage « Responsable Relance »."
+  },
+  {
+   "fieldname": "relance_zone_partenaire",
+   "fieldtype": "Small Text",
+   "label": "{suite} — notre client dans une zone partenaire (Sousse, Monastir, Mahdia…)",
+   "description": "Balises : {partenaire} {lien_rdv} {telephones}. Zones : table « Partenaires » de Config Portail RDV. Le client reste le nôtre : nos numéros, pas ceux du partenaire."
   }
  ],
  "index_web_pages_for_search": 0,

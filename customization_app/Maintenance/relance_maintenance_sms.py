@@ -177,7 +177,7 @@ def get_price_for_item(item_code, price_list):
 HORS_SECTEUR = "Hors Secteur"
 
 
-def message_relance(T, nom_client, appareil, cout, telephones, lien_boutique, secteur, lien_rdv, voeux="", promo=""):
+def message_relance(T, nom_client, appareil, cout, telephones, lien_boutique, secteur, lien_rdv, voeux="", promo="", partenaire=""):
     """Le texte de la relance, assemblé depuis le réglage « Config Modeles SMS » (modeles_sms). PURE.
     Client de nos secteurs : coût de la main-d'œuvre + (portail ouvert → lien RDV, sinon « contactez-nous ») ;
     hors secteur : sans coût, lien RDV si un partenaire couvre la zone, sinon vente de filtres à distance."""
@@ -185,8 +185,10 @@ def message_relance(T, nom_client, appareil, cout, telephones, lien_boutique, se
     hors = secteur == HORS_SECTEUR
     valeurs = {"nom_client": nom_client, "voeux": voeux or "", "appareil": appareil, "promo": promo or "",
                "telephones": telephones, "lien_rdv": lien_rdv or "", "lien_boutique": lien_boutique or "",
-               "cout": None if hors else cout}
-    if lien_rdv:
+               "partenaire": partenaire or "", "cout": None if hors else cout}
+    if hors and lien_rdv and partenaire:
+        suite = T["relance_zone_partenaire"]          # notre client, chez qui passe notre équipe partenaire
+    elif lien_rdv:
         suite = T["relance_rdv_en_ligne"]
     else:
         suite = T["relance_hors_secteur"] if hors else T["relance_sans_lien"]
@@ -317,9 +319,17 @@ def envoyer_relances_maintenance(dry_run: bool = False):
     list_sms1 = []
     list_sms2 = []
 
+    # Clients gérés par le partenaire (fiches créées par son compte, ou marquées à la main) : ses relances, pas les nôtres.
+    from customization_app import partenaire_clients
+    exclus_partenaire = partenaire_clients.clients_geres()
+    summary["exclus_partenaire"] = 0
+
     for imant in all_maintenance:
         if imant["customer"] in clients_avec_rdv:
             # Le client a déjà un rendez-vous planifié : on ne l'inclut pas
+            continue
+        if imant["customer"] in exclus_partenaire:
+            summary["exclus_partenaire"] += 1
             continue
 
         secteur = imant["secteurs"] or "Secteur 1"
@@ -692,6 +702,8 @@ def envoyer_et_marquer_sms(list_sms, secteurs_autorises, today, dry_run: bool = 
     website_url, phones_emp = get_relance_config()
     phones_txt = _format_phones_for_message(phones_emp)
     modeles = modeles_sms.textes()        # textes du réglage « Config Modeles SMS », défauts = textes historiques
+    from customization_app import partenaire_clients
+    zones_partenaires = partenaire_clients.zones_partenaires()
     for sms_dict in list_sms:
         familles = set()
         secteur = None
@@ -765,8 +777,10 @@ def envoyer_et_marquer_sms(list_sms, secteurs_autorises, today, dry_run: bool = 
         # réserver : nos secteurs, ou un gouvernorat couvert par un partenaire.
         lien_rdv = lien_rdv_pour_client(customer_name, secteur, config_portail)
 
+        zone = partenaire_clients.zone_partenaire_du_client(customer_name, zones_partenaires) if (secteur == HORS_SECTEUR and lien_rdv) else None
         message = message_relance(modeles, nom_client=client.customer_name, appareil=desc, cout=cout, telephones=phones_txt,
-                                  lien_boutique=website_url, secteur=secteur, lien_rdv=lien_rdv, voeux=corp, promo=promo)
+                                  lien_boutique=website_url, secteur=secteur, lien_rdv=lien_rdv, voeux=corp, promo=promo,
+                                  partenaire=zone["nom"] if zone else "")
 
         # Numéros de téléphone
         try:

@@ -1,0 +1,54 @@
+<div class="cp-page">
+  <style>
+    .cp-page { padding: 12px 16px; }
+    .cp-card { background: var(--card-bg,#fff); border: 1px solid var(--border-color,#e4e8ee); border-radius: 12px;
+               padding: 12px 14px; margin-bottom: 12px; box-shadow: 0 1px 3px rgba(0,0,0,.05); }
+    .cp-intro { font-size: 12.5px; color: #475569; }
+    .cp-kpis { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
+    .cp-kpi { flex: 1 1 150px; border: 1px solid var(--border-color,#e4e8ee); border-radius: 10px; padding: 8px 12px;
+              background: var(--bg-light-gray,#f8fafc); cursor: pointer; }
+    .cp-kpi.actif { border-color: #3b82f6; background: rgba(59,130,246,.08); }
+    .cp-kpi .v { font-size: 19px; font-weight: 700; line-height: 1.1; }
+    .cp-kpi .l { font-size: 11px; color: var(--text-muted,#6b7280); text-transform: uppercase; letter-spacing: .3px; font-weight: 600; }
+    .cp-kpi.verif .v { color: #b45309; }
+    .cp-barre { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
+    .cp-barre input { max-width: 360px; height: 30px; font-size: 12.5px; }
+    .cp-aide { font-size: 11.5px; color: #64748b; flex: 1 1 260px; }
+    .cp-actions { display: flex; gap: 6px; }
+    .cp-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+    .cp-table th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .3px; color: #64748b; padding: 6px 8px;
+                   border-bottom: 1px solid #e2e8f0; white-space: nowrap; }
+    .cp-table td { padding: 6px 8px; border-bottom: 1px solid #f1f5f9; vertical-align: top; }
+    .cp-table tr:hover td { background: #f8fafc; }
+    .cp-badge { display: inline-block; border-radius: 999px; padding: 1px 8px; font-size: 11px; font-weight: 600; white-space: nowrap; }
+    .cp-badge.gere { background: #fee2e2; color: #991b1b; }
+    .cp-badge.nous { background: #dcfce7; color: #166534; }
+    .cp-badge.compte { background: #fef3c7; color: #92400e; }
+    .cp-badge.zone { background: #dbeafe; color: #1e40af; }
+    .cp-num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .cp-num b { color: #b45309; }
+    .cp-vide { color: #94a3b8; font-size: 12.5px; padding: 14px 4px; }
+  </style>
+
+  <div class="cp-card cp-intro" id="cp-intro">Chargement…</div>
+
+  <div class="cp-kpis">
+    <div class="cp-kpi" data-onglet="geres"><div class="v" id="cp-n-geres">–</div><div class="l">Gérés par le partenaire</div></div>
+    <div class="cp-kpi verif" data-onglet="a_verifier"><div class="v" id="cp-n-verif">–</div><div class="l">À vérifier</div></div>
+    <div class="cp-kpi" data-onglet="zones"><div class="v" id="cp-n-zones">–</div><div class="l">Nos clients en zone partenaire</div></div>
+    <div class="cp-kpi" data-onglet="recherche"><div class="v">🔍</div><div class="l">Rechercher un client</div></div>
+  </div>
+
+  <div class="cp-card">
+    <div class="cp-barre">
+      <input id="cp-recherche" class="form-control" placeholder="Nom, code client ou téléphone (4 caractères minimum)" style="display:none">
+      <span class="cp-aide" id="cp-explication"></span>
+      <span class="cp-actions">
+        <button class="btn btn-xs btn-default" id="cp-tout">Tout cocher</button>
+        <button class="btn btn-xs btn-primary" id="cp-marquer">🤝 Géré par le partenaire</button>
+        <button class="btn btn-xs btn-default" id="cp-reprendre">↩️ Repasser chez nous</button>
+      </span>
+    </div>
+    <div id="cp-liste"><div class="cp-vide">Chargement…</div></div>
+  </div>
+</div>

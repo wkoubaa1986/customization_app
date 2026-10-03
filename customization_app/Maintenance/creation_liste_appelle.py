@@ -543,6 +543,7 @@ def _generate_normal_urgence_list(
     create_normal=True,
     create_urgence=True,
     ignore_draft_normal=False,
+    create_zone=True,
 ):
     """
     Génère :
@@ -595,10 +596,19 @@ def _generate_normal_urgence_list(
 
     months3ago_global = frappe.utils.add_days(today, -60)
 
+    # Clients gérés par le partenaire : exclus. Nos clients en ZONE partenaire (Sousse, Monastir, Mahdia…) : liste à part,
+    # pour notre équipe (décision 03/10/2026 : nous gérons, le partenaire exécute).
+    from customization_app import partenaire_clients
+    exclus_partenaire = partenaire_clients.clients_geres()
+    zones_partenaires = partenaire_clients.zones_partenaires()
+
     List_appel = {}
+    List_zone = {}
 
     for imant in All_maintenance:
         customer_name = imant["customer"]
+        if customer_name in exclus_partenaire:
+            continue
 
         # Exclusion si RDV récent / futur
         if customer_name in rdv_clients:
@@ -608,7 +618,11 @@ def _generate_normal_urgence_list(
             )
             continue
 
-        if imant["secteurs"] == "Hors Secteur":
+        zone = None
+        if (imant["secteurs"] or "") == "Hors Secteur" and zones_partenaires:
+            zone = partenaire_clients.zone_partenaire_du_client(customer_name, zones_partenaires)
+        classe = partenaire_clients.classer(imant["secteurs"], False, zone)
+        if classe == "hors_secteur":
             continue
 
         Item_relanced = _ajout_Liste_appel(imant["schedule_name"], today)
@@ -622,7 +636,11 @@ def _generate_normal_urgence_list(
             Item_relanced.setdefault("secteurs", imant["secteurs"])
             if not Item_relanced["secteurs"]:
                 Item_relanced["secteurs"] = "Hors Secteur"
-            List_appel[imant["schedule_name"]] = Item_relanced
+            if classe == "zone_partenaire":
+                Item_relanced["secteurs"] = "Zone partenaire - %s" % zone["nom"]
+                List_zone[imant["schedule_name"]] = Item_relanced
+            else:
+                List_appel[imant["schedule_name"]] = Item_relanced
 
     # tri par nb d'appels puis par secteur
     List_appel = dict(
@@ -653,6 +671,14 @@ def _generate_normal_urgence_list(
         )
     else:
         log("[URGENCE] Aucune liste urgence générée (pas d'urgence ou pas de données).")
+
+    # 4.15 Génération ZONE PARTENAIRE (nos clients de Sousse / Monastir / Mahdia…) : une liste à part, même règle de
+    # brouillon que la liste Normal (une seule en cours ; en manuel on peut forcer).
+    if create_zone and List_zone and (ignore_draft_normal or not has_draft_of_type(partenaire_clients.TYPE_LISTE_ZONE)):
+        results["zone_partenaire"] = _create_liste_appel_doc(today, List_zone, type_liste=partenaire_clients.TYPE_LISTE_ZONE)
+    else:
+        results["zone_partenaire"] = None
+        log("[ZONE PARTENAIRE] Pas de liste (%d client(s) en zone, create_zone=%s)." % (len(List_zone), create_zone))
 
     # 4.2 Génération NORMAL (selon draft + flag create_normal)
     draft_normal_exists = has_draft_of_type("Normal")
@@ -742,7 +768,7 @@ def _run_manual_internal(list_type: str | None):
         results["second_call"] = _generate_second_call_list(today, rdv_clients)
 
     # Normal / Urgence
-    if lt in ("all", "normal", "urgence"):
+    if lt in ("all", "normal", "urgence", "zone", "partenaire", "zone_partenaire"):
         create_normal = lt in ("all", "normal")
         create_urgence = lt in ("all", "urgence")
         results["normal_urgence"] = _generate_normal_urgence_list(
@@ -751,6 +777,7 @@ def _run_manual_internal(list_type: str | None):
             create_normal=create_normal,
             create_urgence=create_urgence,
             ignore_draft_normal=True,   # en manuel, on laisse l'utilisateur forcer
+            create_zone=lt in ("all", "zone", "partenaire", "zone_partenaire"),
         )
 
     log(f"[MANUAL SUMMARY] ({lt}) {results}")

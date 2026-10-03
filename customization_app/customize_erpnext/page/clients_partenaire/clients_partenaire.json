@@ -1,0 +1,30 @@
+{
+ "content": null,
+ "creation": "2026-10-03 19:00:00.000000",
+ "docstatus": 0,
+ "doctype": "Page",
+ "icon": "users",
+ "idx": 0,
+ "modified": "2026-10-03 19:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "clients-partenaire",
+ "owner": "Administrator",
+ "page_name": "clients-partenaire",
+ "roles": [
+  {
+   "role": "System Manager"
+  },
+  {
+   "role": "Sales Manager"
+  },
+  {
+   "role": "Maintenance Manager"
+  }
+ ],
+ "script": null,
+ "standard": "Yes",
+ "style": null,
+ "system_page": 0,
+ "title": "Clients partenaire"
+}
