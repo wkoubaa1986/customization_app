@@ -286,10 +286,12 @@ def extend_schedule_for_sms(ms, extra_visits_per_item=None, aujourd_hui=None):
 # ----------------------------------------------------------------------
 
 def ligne_a_marquer(lignes, delivery_date, famille, famille_de, deja_commande=None):
-    """La visite que l'achat « réalise » : parmi les lignes de la FAMILLE concernée, non réalisées, la plus proche de la
-    livraison. None si la commande a déjà été appliquée à cet échéancier ou s'il n'y a rien à marquer. PURE.
-    `lignes` : objets avec item_code, scheduled_date, actual_date, completion_status, custom_sales_order ;
-    `famille_de(item_code)` → famille."""
+    """La visite que l'achat « réalise », parmi les lignes de la FAMILLE concernée non réalisées : la PLUS ANCIENNE en
+    retard (le client vient enfin faire son entretien, c'est la visite qu'il devait), sinon la prochaine à venir.
+    L'ancienne règle « la plus proche de la livraison » marquait la visite voisine et laissait la visite en retard
+    ouverte pour toujours : 1 625 visites orphelines en base au 03/10/2026. None si la commande a déjà été appliquée à
+    cet échéancier ou s'il n'y a rien à marquer. PURE. `lignes` : objets avec item_code, scheduled_date, actual_date,
+    completion_status, custom_sales_order ; `famille_de(item_code)` → famille."""
     delivery_date = getdate(delivery_date)
     if deja_commande and any((getattr(r, "custom_sales_order", None) or "") == deja_commande for r in lignes):
         return None
@@ -298,7 +300,13 @@ def ligne_a_marquer(lignes, delivery_date, famille, famille_de, deja_commande=No
                   and (famille is None or famille_de(r.item_code) == famille)]
     if not candidates:
         return None
-    return min(candidates, key=lambda r: (abs(date_diff(getdate(r.scheduled_date), delivery_date)), str(r.scheduled_date), r.idx or 0))
+    en_retard = [r for r in candidates if getdate(r.scheduled_date) <= delivery_date]
+    if en_retard:
+        return min(en_retard, key=lambda r: (str(r.scheduled_date), r.idx or 0))
+    return min(candidates, key=lambda r: (str(r.scheduled_date), r.idx or 0))
+
+
+CHAMPS_RELANCE = ("custom_sms_1", "custom_sms_2", "custom_sms1_status", "custom_sms2_status", "custom_appelle", "custom_1er_appel")
 
 
 def shift_schedule_for_delivery(target_ms, delivery_date, sales_order, famille=None, fams=None, cache=None, aujourd_hui=None):
@@ -324,7 +332,13 @@ def shift_schedule_for_delivery(target_ms, delivery_date, sales_order, famille=N
         if r is ref or r.item_code != ref.item_code or not r.scheduled_date:
             continue
         if getdate(r.scheduled_date) > ancienne and not getattr(r, "actual_date", None):
+            etait_passee = getdate(r.scheduled_date) <= delivery_date
             r.scheduled_date = add_days(getdate(r.scheduled_date), decalage)
+            # Une visite repoussée du passé vers l'avenir redevient une visite NEUVE : ses SMS et appels d'alors ne
+            # comptent plus (sinon elle ne serait plus jamais relancée).
+            if etait_passee and getdate(r.scheduled_date) > delivery_date:
+                for champ in CHAMPS_RELANCE:
+                    setattr(r, champ, None)
     extend_schedule_for_sms(target_ms, aujourd_hui=aujourd_hui)
     target_ms.flags.ignore_permissions = True
     target_ms.save()

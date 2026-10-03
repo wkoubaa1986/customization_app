@@ -46,19 +46,39 @@ class TestProlongation(unittest.TestCase):
 class TestDecalage(unittest.TestCase):
     FAM = {"OSMO": "RO_DOM", "ADOU": "ADOUCISSEUR"}.get
 
-    def test_vise_la_famille_et_les_lignes_en_attente(self):
+    def test_vise_la_famille_et_la_plus_ancienne_en_retard(self):
         lignes = [_ligne("OSMO", "2026-03-01", actual="2026-03-02", so="SO-1", statut="Fully Completed", idx=1),
                   _ligne("OSMO", "2026-09-01", idx=2), _ligne("ADOU", "2026-09-05", idx=3), _ligne("OSMO", "2027-03-01", idx=4)]
         ref = U.ligne_a_marquer(lignes, "2026-09-04", "RO_DOM", self.FAM, "SO-2")
-        self.assertEqual((ref.item_code, str(ref.scheduled_date)), ("OSMO", "2026-09-01"))      # pas l'adoucisseur du 05/09, plus proche
+        self.assertEqual((ref.item_code, str(ref.scheduled_date)), ("OSMO", "2026-09-01"))      # pas l'adoucisseur du 05/09
         self.assertIsNone(U.ligne_a_marquer(lignes, "2026-03-03", "RO_DOM", self.FAM, "SO-1"))  # commande déjà appliquée
         self.assertIsNone(U.ligne_a_marquer([lignes[0]], "2026-03-03", "RO_DOM", self.FAM, "SO-9"))  # rien en attente
-        ref = U.ligne_a_marquer(lignes, "2026-03-03", "ADOUCISSEUR", self.FAM, "SO-3")
-        self.assertEqual(ref.item_code, "ADOU")
+        self.assertEqual(U.ligne_a_marquer(lignes, "2026-03-03", "ADOUCISSEUR", self.FAM, "SO-3").item_code, "ADOU")
+        # Client en retard de deux visites qui achète enfin : c'est la PLUS ANCIENNE qui est soldée (l'ancienne règle
+        # prenait la plus proche, 2027-03-01, et laissait 2026-09-01 ouverte pour toujours).
+        tard = [_ligne("OSMO", "2026-09-01", idx=1), _ligne("OSMO", "2027-03-01", idx=2), _ligne("OSMO", "2027-09-01", idx=3)]
+        self.assertEqual(str(U.ligne_a_marquer(tard, "2027-02-20", "RO_DOM", self.FAM, "SO-4").scheduled_date), "2026-09-01")
+        # Rien en retard : la prochaine à venir
+        self.assertEqual(str(U.ligne_a_marquer(tard, "2026-08-01", "RO_DOM", self.FAM, "SO-5").scheduled_date), "2026-09-01")
 
     def test_sans_famille_toutes_les_lignes(self):
         lignes = [_ligne("OSMO", "2026-09-01"), _ligne("ADOU", "2026-09-05")]
-        self.assertEqual(U.ligne_a_marquer(lignes, "2026-09-05", None, self.FAM).item_code, "ADOU")
+        self.assertEqual(U.ligne_a_marquer(lignes, "2026-09-05", None, self.FAM).item_code, "OSMO")   # la plus ancienne en retard
+
+    def test_decalage_remet_a_neuf_les_visites_repoussees(self):
+        import types
+        rows = [_ligne("OSMO", "2025-03-01", idx=1), _ligne("OSMO", "2025-09-01", idx=2), _ligne("OSMO", "2026-03-01", idx=3)]
+        for r in rows[:2]:
+            r.update(custom_sms_1=datetime.date(2025, 3, 3), custom_sms_2=datetime.date(2025, 3, 10), custom_appelle=datetime.date(2025, 4, 1))
+        saved = []
+        ms = types.SimpleNamespace(name="MS", customer="C", items=[frappe._dict(item_code="OSMO", periodicity="Half Yearly")], schedules=rows,
+                                   flags=frappe._dict(), save=lambda: saved.append(True), append=lambda champ, v: rows.append(frappe._dict(v)))
+        U._famille_de_la_ligne = lambda ms_, code, fams=None, cache=None: "RO_DOM"
+        ok = U.shift_schedule_for_delivery(ms, "2026-02-20", "SO-7", "RO_DOM", aujourd_hui="2026-10-03")
+        self.assertTrue(ok and saved)
+        self.assertEqual((str(rows[0].actual_date), rows[0].custom_sales_order, rows[0].completion_status), ("2026-02-20", "SO-7", "Fully Completed"))
+        self.assertEqual([str(r.scheduled_date) for r in rows[:3]], ["2026-02-20", "2026-08-23", "2027-02-20"])   # + 356 j
+        self.assertIsNone(rows[1].custom_sms_1) ; self.assertIsNone(rows[1].custom_appelle)                      # repoussée → neuve
 
 
 class TestFamilles(unittest.TestCase):
