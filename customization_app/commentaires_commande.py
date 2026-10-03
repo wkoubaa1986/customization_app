@@ -15,7 +15,7 @@ from frappe.utils import strip_html
 
 CHAMPS = ("custom_dernier_commentaire", "custom_commentaire_le", "custom_commentaire_par", "custom_avec_commentaire")
 # Débuts de commentaires AUTOMATIQUES (code), à ne pas confondre avec un mot de Salma.
-AUTOMATIQUES = ("SMS d'annulation", "SMS d’annulation", "📨", "📲", "🤝", "↩️", "📱", "✅", "⏸️", "🧹", "🔁")
+AUTOMATIQUES = ("SMS d'annulation", "SMS d’annulation", "BL consolidé", "📨", "📲", "🤝", "↩️", "📱", "✅", "⏸️", "🧹", "🔁")
 LONGUEUR = 140
 
 
