@@ -181,6 +181,11 @@ doc_events = {
     "Mes Interventions Employe": {
         "before_submit": "customization_app.api.before_submit_mes_interventions",
     },
+    # Stock par entrepôt : un transfert en attente de la confirmation d'un employé ne se soumet que par
+    # la page (valider_transfert) — jamais depuis le formulaire Stock Entry (MAT-STE-2026-00104, 02/10/2026).
+    "Stock Entry": {
+        "before_submit": "customization_app.stock_entrepots.stock_entry_before_submit",
+    },
     # La file « Facture Achat a Saisir » (captures de la caisse) se rattache toute
     # seule aux vraies factures d'achat : appariement (fournisseur, n°), copie du
     # justificatif scanné, statut « Saisie » à la soumission.

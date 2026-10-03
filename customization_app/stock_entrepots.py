@@ -464,6 +464,21 @@ def _prevenir(user: str, sujet: str, name: str):
         frappe.log_error(frappe.get_traceback(), "stock_entrepots: notification")
 
 
+def stock_entry_before_submit(doc, method=None):
+    """Hook `before_submit` de Stock Entry : un transfert qui attend la confirmation d'un employé ne se soumet
+    QUE par `valider_transfert`, qui remplit « Réception confirmée par » juste avant. Le formulaire Stock Entry,
+    la liste, un script ou un import ne peuvent pas le passer en force. Le 02/10/2026, MAT-STE-2026-00104
+    (Magasin → Stock Akram) avait été soumis depuis le formulaire par le demandeur lui-même, sans Akram :
+    la double validation n'existait que dans la page, pas dans le DocType."""
+    if not doc.get(CHAMP_VALIDEUR) or doc.get(CHAMP_VALIDE_PAR):
+        return
+    nom = frappe.db.get_value("Employee", doc.get(CHAMP_VALIDEUR), "employee_name") or doc.get(CHAMP_VALIDEUR)
+    frappe.throw(_("{0} attend la confirmation de {1} : le stock ne bouge qu’à sa validation, depuis la page "
+                   "« Stock par entrepôt » (Ma journée → transferts à valider). Pour y renoncer, annulez la "
+                   "demande depuis l’onglet Transfert ; pour passer outre, demandez-lui de valider.")
+                 .format(doc.name, nom), title=_("Validation attendue"))
+
+
 def _peut_valider(doc) -> bool:
     emp = _mon_employe()
     return bool(emp and emp.name == doc.get(CHAMP_VALIDEUR)) or est_responsable()

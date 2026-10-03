@@ -209,7 +209,7 @@ class TestDoubleValidation(unittest.TestCase):
         recent = next(t for t in S.transferts_recents() if t["name"] == name)
         self.assertIsNone(recent["attente"])
         self.assertIn("reçu 3", recent["validation"]["ecart"])
-        self.assertEqual(S.transferts_a_valider(), [])
+        self.assertNotIn(name, [t["name"] for t in S.transferts_a_valider()])   # d’autres vraies demandes peuvent exister
 
     def test_rien_recu_retire_la_demande(self):
         import frappe
@@ -242,9 +242,25 @@ class TestDoubleValidation(unittest.TestCase):
         r = S.creer_transfert(self.essai, self.magasin, [{"item_code": i1, "qte": 1}])  # retour : jamais d'attente
         self.assertNotIn("en_attente", r)
 
+    def test_soumission_directe_refusee(self):
+        """Le formulaire Stock Entry (ou un script) ne passe pas outre l'attente : hook before_submit.
+        MAT-STE-2026-00104 avait été soumis ainsi par le demandeur, sans l'employé (02/10/2026)."""
+        import frappe
+        name = self._demande()
+        se = frappe.get_doc("Stock Entry", name)
+        se.flags.ignore_permissions = True
+        with self.assertRaises(frappe.ValidationError) as cm:
+            se.submit()
+        self.assertIn("attend la confirmation", str(cm.exception))
+        self.assertEqual(frappe.db.get_value("Stock Entry", name, "docstatus"), 0)
+        self.assertEqual(self._solde(self.essai), {})                                 # le stock n'a pas bougé
+        frappe.set_user(EMPLOYE_AVEC_ENTREPOT)                                        # la vraie validation passe
+        S.valider_transfert(name)
+        self.assertEqual(frappe.db.get_value("Stock Entry", name, "docstatus"), 1)
+
     def test_annuler_une_demande_en_attente(self):
         import frappe
         name = self._demande()
         self.assertTrue(S.annuler_transfert(name))
         self.assertFalse(frappe.db.exists("Stock Entry", name))
-        self.assertEqual(S.transferts_a_valider(), [])
+        self.assertNotIn(name, [t["name"] for t in S.transferts_a_valider()])   # d’autres vraies demandes peuvent exister
