@@ -29,7 +29,14 @@ class TestRendu(unittest.TestCase):
         self.assertEqual(MS.rendre("x {a}{b} y", {"a": "", "b": "1"}), "x 1 y")
 
     def test_sans_base_les_defauts(self):
-        self.assertEqual(MS.textes(), MS.DEFAUTS)
+        """Sans connexion (tests purs, scripts hors site), les textes d'origine ; avec la base, les mêmes clés."""
+        db = getattr(frappe.local, "db", None)
+        frappe.local.db = None
+        try:
+            self.assertEqual(MS.textes(), MS.DEFAUTS)
+        finally:
+            frappe.local.db = db
+        self.assertEqual(set(MS.textes()), set(MS.DEFAUTS))
 
 
 class TestTextesDorigine(unittest.TestCase):

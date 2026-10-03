@@ -1,0 +1,80 @@
+{
+ "actions": [],
+ "creation": "2026-10-03 20:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "code",
+  "libelle_sms",
+  "article_entretien",
+  "article_type",
+  "groupes_machines",
+  "groupes_consommables"
+ ],
+ "fields": [
+  {
+   "fieldname": "code",
+   "fieldtype": "Data",
+   "label": "Code famille",
+   "reqd": 1,
+   "in_list_view": 1,
+   "columns": 1,
+   "description": "RO_DOM, ADOUCISSEUR… L’ordre des lignes = priorité (coût annoncé, famille devinée)."
+  },
+  {
+   "fieldname": "libelle_sms",
+   "fieldtype": "Data",
+   "label": "Libellé dans le SMS",
+   "in_list_view": 1,
+   "columns": 2,
+   "description": "« votre osmoseur domestique »"
+  },
+  {
+   "fieldname": "article_entretien",
+   "fieldtype": "Link",
+   "options": "Item",
+   "label": "Article main-d’œuvre",
+   "in_list_view": 1,
+   "columns": 1,
+   "description": "Son prix « Vente standard » = coût annoncé. Vide = M-E-OD."
+  },
+  {
+   "fieldname": "article_type",
+   "fieldtype": "Link",
+   "options": "Item",
+   "label": "Machine type (échéancier deviné)",
+   "in_list_view": 1,
+   "columns": 1,
+   "description": "Machine posée sur l’échéancier créé à partir d’un achat de consommables. Vide = pas de devinette pour cette famille."
+  },
+  {
+   "fieldname": "groupes_machines",
+   "fieldtype": "Small Text",
+   "label": "Groupes d’articles « machine »",
+   "in_list_view": 1,
+   "columns": 2,
+   "description": "Un groupe par ligne : un article de ce groupe crée un échéancier de 5 ans."
+  },
+  {
+   "fieldname": "groupes_consommables",
+   "fieldtype": "Small Text",
+   "label": "Groupes d’articles « consommable »",
+   "in_list_view": 1,
+   "columns": 2,
+   "description": "Un groupe par ligne : un achat décale l’échéancier de la machine. Un groupe peut figurer dans plusieurs familles."
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-10-03 20:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "Config Relances Famille",
+ "owner": "Administrator",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "istable": 1,
+ "permissions": []
+}

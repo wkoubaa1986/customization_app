@@ -3,7 +3,7 @@ from __future__ import unicode_literals
 
 import frappe
 
-from customization_app import modeles_sms
+from customization_app import modeles_sms, relances_config as RC
 from frappe.utils import nowdate, add_days, getdate
 from urllib.parse import quote_plus
 import requests
@@ -232,7 +232,7 @@ def envoyer_relances_maintenance(dry_run: bool = False):
     }
 
     # On ne fait rien certains jours (jours fériés, etc.)
-    if today in EXCLUDED_DATES:
+    if False and today in EXCLUDED_DATES:   # jours fériés 2024 : obsolète (réglage à venir si besoin)
         log(f"[INFO] Date {today} dans EXCLUDED_DATES, aucune relance envoyée.")
         end_line = "========== [CRON] Fin envoyer_relances_maintenance (jour exclu) =========="
         log(end_line)
@@ -247,8 +247,9 @@ def envoyer_relances_maintenance(dry_run: bool = False):
         }
 
     # Fenêtres temporelles
-    rend_date = add_days(today, -15)     # RDV existants sur 15 jours
-    relance_date = add_days(today, -7)  # fenêtre pour considérer les SMS récents
+    cfg = RC.config()
+    rend_date = add_days(today, -cfg["jours_rdv_recent"])     # RDV existants (réglage)
+    relance_date = add_days(today, -cfg["delai_sms2_jours"])  # fenêtre pour considérer les SMS récents (réglage)
 
     # 1) Récupérer tous les échéanciers de maintenance
     all_maintenance = frappe.db.sql(
@@ -284,34 +285,8 @@ def envoyer_relances_maintenance(dry_run: bool = False):
 
     summary["total_maintenance_schedules"] = len(all_maintenance)
 
-    # 2) Récupérer les rendez-vous déjà planifiés (pour éviter de relancer ces clients)
-    rendez_vous = frappe.db.sql(
-        """
-        SELECT DISTINCT
-            TT.custom_client,
-            TT.custom_employé,
-            TT.custom_type_dintervention,
-            TT.starts_on,
-            TT.ends_on,
-            C.custom_envoi_sms,
-            C.custom_liste_telephone
-        FROM
-            `tabTache de travail` TT
-        JOIN
-            `tabCustomer` C ON C.name = TT.custom_client
-        WHERE
-            TT.status IN ('Open','Completed')
-            AND DATE(TT.starts_on) >= %s
-            AND TT.dans_local != 'Oui'
-            AND TT.custom_client IS NOT NULL
-            AND TT.custom_type_dintervention != 'Livraison'
-            AND C.custom_envoi_sms = 'Oui'
-        """,
-        (rend_date,),
-        as_dict=True,
-    )
-
-    clients_avec_rdv = list({x["custom_client"] for x in rendez_vous})
+    # 2) Clients à ne pas relancer : rendez-vous récent ou à venir — MÊME règle que la liste d'appels (relances_config).
+    clients_avec_rdv = RC.clients_avec_rdv(cfg)
     summary["clients_avec_rdv"] = len(clients_avec_rdv)
 
     # 3) Calculer les SMS à envoyer pour chaque échéancier
@@ -456,7 +431,7 @@ def calculer_sms_pour_maintenance(maint_name, today, relance_date, secteur):
             and item.scheduled_date < today
             and item.custom_sms_1
             and not item.custom_sms_2
-            and today >= add_days(item.custom_sms_1, 7)
+            and today >= add_days(item.custom_sms_1, RC.config()["delai_sms2_jours"])
         ):
             if item.item_code not in date_par_item_sms2:
                 date_par_item_sms2[item.item_code] = item.scheduled_date
@@ -529,7 +504,7 @@ def calculer_secteurs_autorises(list_sms):
             secteurs_autorises.append(secteur)
             total_sms += nb
         else:
-            if total_sms + nb <= MAX_SMS_PAR_JOUR:
+            if total_sms + nb <= RC.config()["max_sms_par_jour"]:
                 secteurs_autorises.append(secteur)
                 total_sms += nb
 
@@ -721,8 +696,7 @@ def envoyer_et_marquer_sms(list_sms, secteurs_autorises, today, dry_run: bool = 
                 item_cache[item_code] = frappe.get_doc("Item", item_code)
             item_doc = item_cache[item_code]
 
-            group = item_doc.item_group
-            family = MACHINE_FAMILY_BY_GROUP.get(group)
+            family = RC.famille_du_groupe_machine(item_doc.item_group)
             if family:
                 familles.add(family)
 
@@ -733,28 +707,13 @@ def envoyer_et_marquer_sms(list_sms, secteurs_autorises, today, dry_run: bool = 
             continue
 
         # --- Construction description en fonction de la famille de machine ---
-        if len(familles) == 1:
-            primary_family = next(iter(familles))
-            desc = FAMILY_SMS_LABEL.get(
-                primary_family, "votre appareil de traitement d'eau"
-            )
-        elif len(familles) > 1:
-            primary_family = None
-            # on essaie de prioriser RO_DOM / ADOUCISSEUR si présent
-            for fam in ("RO_DOM", "ADOUCISSEUR", "RO_COM", "RO_IND"):
-                if fam in familles:
-                    primary_family = fam
-                    break
+        # Famille PRIORITAIRE (ordre du réglage, déterministe) : libellé et coût de la main-d'œuvre — règle commune
+        # avec la liste d'appels (elle annonçait le prix maximum, le SMS la famille prioritaire).
+        primary_family, cout = RC.cout_entretien(familles)
+        if len(familles) > 1:
             desc = "vos équipements de traitement d'eau"
         else:
-            primary_family = None
-            desc = "votre appareil de traitement d'eau"
-
-        # --- Calcul du coût main d'oeuvre en fonction de la famille ---
-        cout = get_price_for_item("M-E-OD", "Vente standard")
-        if primary_family and primary_family in FAMILY_MAINTENANCE_ITEM:
-            maint_item_code = FAMILY_MAINTENANCE_ITEM[primary_family]
-            cout = get_price_for_item(maint_item_code, "Vente standard")
+            desc = RC.libelle_famille(primary_family) if primary_family else RC.LIBELLE_FAMILLE_DEFAUT
 
         # Récup Maintenance + Client
         if maint_name not in maintenance_cache:
@@ -883,10 +842,10 @@ def envoyer_et_marquer_sms(list_sms, secteurs_autorises, today, dry_run: bool = 
 
         # 🔁 EXTENSION DE L'ÉCHÉANCIER UNIQUEMENT SI SMS considéré "envoyé"
         if status_sms in ("Success", "Invalid Number") and maint_name not in extended_maintenances:
-            extend_schedule_for_sms(maintenance, extra_visits_per_item=2)
-            maintenance.save()
             extended_maintenances.add(maint_name)
-            stats["maintenances_extended"] += 1
+            if extend_schedule_for_sms(maintenance):            # visites ajoutées (réglage) — 0 si rien à faire
+                maintenance.save()
+                stats["maintenances_extended"] += 1
 
     if dry_run:
         # Pas de commit, on renvoie juste la preview + stats

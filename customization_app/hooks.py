@@ -331,6 +331,8 @@ doc_events = {
         # 03/10/2026 : le partenaire n'appelle pas nos clients, il exécute les tâches qu'on lui affecte. Le retrait à la
         # validation reste, pour nettoyer les partages des listes encore ouvertes.
         "on_submit": "customization_app.partage_partenaire.retirer_partages",
+        # Lignes « a été appelé » → cases du client + visites marquées appelées (remplace le Server Script « update donnee appelle »).
+        "on_update": "customization_app.liste_appels.synchroniser_appels",
     },
     # Une fiche client créée par le compte partenaire est « gérée par le partenaire » : exclue de nos relances.
     "Customer": {

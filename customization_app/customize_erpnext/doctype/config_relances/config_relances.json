@@ -1,0 +1,218 @@
+{
+ "actions": [],
+ "creation": "2026-10-03 20:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "sec_intro",
+  "sec_echeanciers",
+  "groupes_b2b",
+  "clients_proteges",
+  "col_ech",
+  "fenetre_mois_avant",
+  "fenetre_mois_apres",
+  "nb_visites",
+  "periodicite_defaut",
+  "visites_ajoutees",
+  "sec_familles",
+  "familles",
+  "sec_sms",
+  "max_sms_par_jour",
+  "delai_sms2_jours",
+  "col_sms",
+  "jours_rdv_recent",
+  "types_rdv_exclusion",
+  "sec_appels",
+  "plafond_liste",
+  "jours_entre_deux_appels",
+  "jours_apres_intervention",
+  "col_appels",
+  "delai_apres_sms2_jours",
+  "delai_2e_appel_jours",
+  "secteurs_urgence"
+ ],
+ "fields": [
+  {
+   "fieldname": "sec_intro",
+   "fieldtype": "Section Break",
+   "label": "Comment ça marche",
+   "description": "Trois automatismes lisent ce réglage : la mise à jour des échéanciers (nuit), la relance SMS/e-mail (lundi–samedi 10:00) et les listes d’appels (lundi–samedi 07:00). Un champ vide = la valeur historique indiquée entre parenthèses."
+  },
+  {
+   "fieldname": "sec_echeanciers",
+   "fieldtype": "Section Break",
+   "label": "Échéanciers de maintenance (cron de nuit)"
+  },
+  {
+   "fieldname": "groupes_b2b",
+   "fieldtype": "Small Text",
+   "label": "Groupes de clients B2B exclus (un par ligne)",
+   "description": "(Compte Pro, Quincaillerie, Technicien, Pro Grand Rayon) Pas d’échéancier, et leurs échéanciers existants sont supprimés — sauf clients protégés."
+  },
+  {
+   "fieldname": "clients_proteges",
+   "fieldtype": "Table MultiSelect",
+   "options": "Config Relances Client Protege",
+   "label": "Clients protégés (jamais nettoyés)",
+   "description": "(Ayman Belguith, Koubaâ Néjib, Jamel Aloui, Koubaâ Néjib - 1) Leurs échéanciers ne sont jamais supprimés et leur case « intéressé » n’est pas corrigée."
+  },
+  {
+   "fieldname": "col_ech",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "fenetre_mois_avant",
+   "fieldtype": "Int",
+   "label": "Commandes regardées : mois en arrière",
+   "description": "(4) Commandes livrées dont la date de livraison est dans cette fenêtre."
+  },
+  {
+   "fieldname": "fenetre_mois_apres",
+   "fieldtype": "Int",
+   "label": "Commandes regardées : mois en avant",
+   "description": "(1)"
+  },
+  {
+   "fieldname": "nb_visites",
+   "fieldtype": "Int",
+   "label": "Visites planifiées à la création",
+   "description": "(10) 5 ans par semestre."
+  },
+  {
+   "fieldname": "periodicite_defaut",
+   "fieldtype": "Select",
+   "options": "Monthly\nQuarterly\nHalf Yearly\nYearly",
+   "label": "Périodicité",
+   "description": "(Half Yearly)"
+  },
+  {
+   "fieldname": "visites_ajoutees",
+   "fieldtype": "Int",
+   "label": "Visites ajoutées quand l’échéancier est épuisé",
+   "description": "(2) Quand toutes les visites ont reçu leurs SMS, on prolonge l’échéancier d’autant de visites."
+  },
+  {
+   "fieldname": "sec_familles",
+   "fieldtype": "Section Break",
+   "label": "Familles de machines",
+   "description": "Vide = les familles historiques (RO_DOM, ADOUCISSEUR, RO_COM, RO_IND, BIO, FONTAINE, UV, PF, POMPE). Le bouton « Familles par défaut » les recopie ici pour les adapter."
+  },
+  {
+   "fieldname": "familles",
+   "fieldtype": "Table",
+   "options": "Config Relances Famille",
+   "label": "Familles"
+  },
+  {
+   "fieldname": "sec_sms",
+   "fieldtype": "Section Break",
+   "label": "Relance SMS / e-mail (lundi–samedi 10:00)"
+  },
+  {
+   "fieldname": "max_sms_par_jour",
+   "fieldtype": "Int",
+   "label": "Plafond de SMS par jour",
+   "description": "(110) Les clients hors secteur passent d’abord sans plafond, puis les secteurs entiers tant que le plafond le permet."
+  },
+  {
+   "fieldname": "delai_sms2_jours",
+   "fieldtype": "Int",
+   "label": "Jours entre SMS 1 et SMS 2",
+   "description": "(7)"
+  },
+  {
+   "fieldname": "col_sms",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "jours_rdv_recent",
+   "fieldtype": "Int",
+   "label": "Rendez-vous récent : jours en arrière",
+   "description": "(15) Un client avec un rendez-vous depuis N jours ou à venir n’est ni relancé ni appelé."
+  },
+  {
+   "fieldname": "types_rdv_exclusion",
+   "fieldtype": "Small Text",
+   "label": "Types de rendez-vous qui excluent (un par ligne)",
+   "description": "(Entretien, Réparation, Installation, Visite, Livraison) Même règle pour le SMS et pour l’appel."
+  },
+  {
+   "fieldname": "sec_appels",
+   "fieldtype": "Section Break",
+   "label": "Listes d’appels (lundi–samedi 07:00)"
+  },
+  {
+   "fieldname": "plafond_liste",
+   "fieldtype": "Int",
+   "label": "Clients par liste au maximum",
+   "description": "(100) Au-delà, les clients restants attendent la liste suivante ; le titre de la liste indique combien."
+  },
+  {
+   "fieldname": "jours_entre_deux_appels",
+   "fieldtype": "Int",
+   "label": "Jours minimum entre deux appels d’un même client",
+   "description": "(60)"
+  },
+  {
+   "fieldname": "jours_apres_intervention",
+   "fieldtype": "Int",
+   "label": "Pas d’appel si une intervention date de moins de (jours)",
+   "description": "(160)"
+  },
+  {
+   "fieldname": "col_appels",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "delai_apres_sms2_jours",
+   "fieldtype": "Int",
+   "label": "Jours d’attente après le SMS 2 avant d’appeler",
+   "description": "(2) Laisser au client le temps de réserver en ligne."
+  },
+  {
+   "fieldname": "delai_2e_appel_jours",
+   "fieldtype": "Int",
+   "label": "Jours avant le 2e appel des « ne répond pas »",
+   "description": "(3) Compté depuis la date de fin de la liste."
+  },
+  {
+   "fieldname": "secteurs_urgence",
+   "fieldtype": "Small Text",
+   "label": "Secteurs lointains (liste Urgence)",
+   "description": "(Secteur 7, 8, 9) Un rendez-vous planifié dans un de ces secteurs déclenche une liste Urgence pour y grouper les clients à échéance."
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-10-03 20:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "Config Relances",
+ "owner": "Administrator",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "issingle": 1,
+ "permissions": [
+  {
+   "create": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "read": 1,
+   "write": 1,
+   "role": "Sales Manager"
+  },
+  {
+   "read": 1,
+   "write": 1,
+   "role": "Maintenance Manager"
+  }
+ ]
+}
