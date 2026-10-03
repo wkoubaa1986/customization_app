@@ -5,7 +5,7 @@ donc c'est ici que la restriction est garantie. L'attribution du rôle aux compt
 import frappe
 
 ROLE = "Relances"
-WORKSPACE = "Relances"
+WORKSPACE = "Relances et partenaire"
 
 
 def execute():
