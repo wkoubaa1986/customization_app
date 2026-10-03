@@ -606,7 +606,7 @@ fixtures = [
     {
         "doctype": "Workspace",
         "filters": [
-            ["name", "in", ["Selling", "Accounting", "Partenaire", "Analyse des Articles", "Buying"]],
+            ["name", "in", ["Selling", "Accounting", "Partenaire", "Analyse des Articles", "Buying", "Relances"]],
         ],
     },
     {
@@ -702,6 +702,8 @@ after_migrate = [
     "customization_app.patches.ensure_ensembles_produits.execute",
     # « Congés & récupérations » dans l'onglet HR + type de congé « Récupération (quinzaine) ».
     "customization_app.patches.ensure_conges_recuperations.execute",
+    # Onglet « Relances & partenaire » : réservé au rôle « Relances » (attribué par patch restreindre_onglet_relances).
+    "customization_app.patches.ensure_onglet_relances.execute",
 ]
 
 # after_migrate = ["customization_app.patches.override_get_item_details.execute"]

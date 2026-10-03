@@ -62,3 +62,4 @@ customization_app.patches.corriger_duree_taches_verification
 customization_app.patches.ensure_transfert_validation_fields #2
 customization_app.patches.ensure_tournee_fields
 customization_app.patches.ensure_partenaire_fields
+customization_app.patches.restreindre_onglet_relances
