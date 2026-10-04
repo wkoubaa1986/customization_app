@@ -249,3 +249,67 @@ def _prevenir(taches, modele, sujet, sms, email):
 
     return sms_taches.envoyer(taches, modele, sujet=sujet, sms=cint(sms),
                               email=cint(email))
+
+
+
+# ── Réunion : une tâche « Autre » par participant (demande utilisateur 04/10/2026) ──────────
+
+def plan_reunion(titre, jour, heure, duree_minutes, noms):
+    """Le plan d'une réunion : un dict par participant, même créneau, titre choisi.
+    `noms` = [(employee_id, employee_name)]. La dernière ligne du titre porte le nom de l'employé
+    (gabarit des autres tâches, repris par reaffecter_titre). Fonction pure."""
+    titre = (titre or "").strip()
+    if not titre:
+        raise ValueError("Donnez un titre à la réunion.")
+    if not noms:
+        raise ValueError("Choisissez au moins un participant.")
+    duree = int(duree_minutes or 0)
+    if not 5 <= duree <= 720:
+        raise ValueError("La durée doit être comprise entre 5 minutes et 12 heures.")
+    heure = (heure or "").strip()[:5]
+    if len(heure) != 5 or heure[2] != ":":
+        raise ValueError("Heure de début invalide (HH:MM).")
+    debut = "%s %s:00" % (jour, heure)
+    tous = ", ".join(n for _e, n in noms)
+    return [{"employe": e, "nom": n, "starts_on": debut, "duree": duree,
+             "titre": "👥 %s\n%s" % (titre, n),
+             "subject": "%s\nParticipants : %s" % (titre, tous)}
+            for e, n in noms]
+
+
+@frappe.whitelist()
+def employes_reunion() -> list:
+    """Les employés actifs proposables comme participants."""
+    frappe.has_permission(DOCTYPE, "create", throw=True)
+    return frappe.get_all("Employee", filters={"status": "Active"},
+                          fields=["name as valeur", "employee_name as libelle"], order_by="employee_name")
+
+
+@frappe.whitelist(methods=["POST"])
+def creer_reunion(titre, jour, heure, duree_minutes, employes, notes=None):
+    """Crée UNE tâche « Autre » par participant, même créneau, avec le titre choisi. Un commentaire
+    commun trace la réunion sur chaque tâche. Renvoie les tâches créées."""
+    frappe.has_permission(DOCTYPE, "create", throw=True)
+    ids = frappe.parse_json(employes) if isinstance(employes, str) else (employes or [])
+    ids = list(dict.fromkeys(i for i in ids if i))
+    noms = [(i, frappe.db.get_value("Employee", i, "employee_name") or i) for i in ids]
+    try:
+        plan = plan_reunion(titre, jour, heure, duree_minutes, noms)
+    except ValueError as exc:
+        frappe.throw(str(exc))
+    creees = []
+    for p in plan:
+        fin = frappe.utils.add_to_date(frappe.utils.get_datetime(p["starts_on"]), minutes=p["duree"])
+        doc = frappe.get_doc({
+            "doctype": DOCTYPE, "custom_type_dintervention": "Autre",
+            "custom_choix_du_staff": p["employe"], "custom_employé": p["nom"],
+            "titre": p["titre"], "subject": p["subject"] + (("\n" + notes.strip()) if notes and notes.strip() else ""),
+            "starts_on": p["starts_on"], "ends_on": fin, "status": "Open",
+        })
+        doc.flags.duree_fixee = True          # la durée saisie, pas le standard du type (Autre = 2 h)
+        doc.insert()
+        doc.add_comment("Comment", _("👥 Réunion « {0} » créée par {1} avec {2}.").format(
+            titre.strip(), frappe.session.user, ", ".join(x["nom"] for x in plan)))
+        creees.append({"tache": doc.name, "employe": p["nom"]})
+    frappe.db.commit()
+    return {"creees": creees, "debut": plan[0]["starts_on"]}

@@ -473,6 +473,8 @@ app_include_js = [_js("customer_quick_entry.js"),
                   # le même bouton « Régulariser » que la fiche.
                   _js("sales_order_list_livraisons_partielles.js"),
                   _js("tache_liste_groupe.js"),
+                  # « 👥 Réunion » : une tâche « Autre » par participant, titre choisi.
+                  _js("tache_reunion.js"),
                   # « Ma journée » : la fenêtre où chacun termine ses
                   # interventions du jour, depuis la liste ou le calendrier des
                   # tâches. Une FENÊTRE et non une page — elle sert sur le

@@ -48,5 +48,26 @@ class _Doc(dict):
         self[k] = v
 
 
+class TestPlanReunion(unittest.TestCase):
+    NOMS = [("HR-EMP-00010", "Akram"), ("HR-EMP-00001", "Sadok Bouziri")]
+
+    def setUp(self):
+        from customization_app.taches_groupe import plan_reunion
+        self.f = plan_reunion
+
+    def test_une_tache_par_participant_meme_creneau(self):
+        plan = self.f("Point hebdo", "2026-10-06", "09:30", 60, self.NOMS)
+        self.assertEqual([p["employe"] for p in plan], ["HR-EMP-00010", "HR-EMP-00001"])
+        self.assertTrue(all(p["starts_on"] == "2026-10-06 09:30:00" and p["duree"] == 60 for p in plan))
+        self.assertEqual(plan[0]["titre"], "👥 Point hebdo\nAkram")        # dernière ligne = nom de l'employé
+        self.assertIn("Participants : Akram, Sadok Bouziri", plan[1]["subject"])
+
+    def test_refus(self):
+        for args in (("", "2026-10-06", "09:30", 60, self.NOMS), ("X", "2026-10-06", "09:30", 60, []),
+                     ("X", "2026-10-06", "09:30", 1, self.NOMS), ("X", "2026-10-06", "9h", 60, self.NOMS)):
+            with self.assertRaises(ValueError):
+                self.f(*args)
+
+
 if __name__ == "__main__":
     unittest.main()
