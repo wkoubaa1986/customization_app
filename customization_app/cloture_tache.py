@@ -12,7 +12,8 @@ Exigences par type (décision utilisateur du 27/08/2026) :
   - Entretien    : filtres enlevés + nouveaux filtres (avant) et appareil final (après)
   - Installation : connecteur d'eau, appareil sous l'évier, robinet avec eau
   - Réparation   : pièces enlevées (avant) et appareil réparé (après)
-  - Livraison    : produits envoyés + photo du bordereau si Aramex ; produits livrés sinon
+  - Livraison    : produits envoyés + REÇU Aramex posé avec les produits si Aramex (toujours,
+                   étiquette API ou pas — décision utilisateur 04/10/2026) ; produits livrés sinon
   Visite, Autre et Tournée commerciale ne sont pas concernés (la tournée a déjà
   sa propre clôture verrouillée dans tournee.py).
 
@@ -96,20 +97,15 @@ def _etiquette_aramex(commande):
 def _exigence_livraison(doc):
     commande = doc.get("commande_client")
     if _est_livraison_aramex(commande):
-        if _etiquette_aramex(commande):
-            return {
-                "avant": 1, "apres": 0,
-                "slots": [
-                    {"label": "Produits envoyés (1 ou plusieurs)", "champ": "avant",
-                     "multiple": True},
-                ],
-            }
+        # Le REÇU remis par Aramex au dépôt est la preuve que le colis est parti : photo
+        # obligatoire, posé avec les produits, même quand l'étiquette vient de l'API
+        # (04/10/2026 — avant, l'étiquette dispensait de la photo du bordereau).
         return {
             "avant": 1, "apres": 1,
             "slots": [
                 {"label": "Produits envoyés (1 ou plusieurs)", "champ": "avant",
                  "multiple": True},
-                {"label": "Bordereau Aramex", "champ": "apres"},
+                {"label": "Reçu Aramex, posé avec les produits", "champ": "apres"},
             ],
         }
     return {

@@ -73,3 +73,25 @@ class TestBoutonValiderBrancheDansLesDeuxZones(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestRecuAramexToujoursExige(unittest.TestCase):
+    """Livraison Aramex : le reçu Aramex (avec les produits) est exigé même quand l'étiquette
+    vient de l'API — avant, l'étiquette dispensait de la photo du bordereau (décision 04/10/2026)."""
+
+    def _exigence(self, etiquette):
+        from unittest import mock
+        from customization_app import cloture_tache as CT
+        with mock.patch.object(CT, "_est_livraison_aramex", return_value=True), \
+             mock.patch.object(CT, "_etiquette_aramex", return_value=etiquette):
+            return CT._exigence_livraison({"commande_client": "SAL-ORD-X"})
+
+    def test_avec_etiquette_api(self):
+        e = self._exigence(True)
+        self.assertEqual((e["avant"], e["apres"]), (1, 1))
+        self.assertIn("Reçu Aramex", e["slots"][1]["label"])
+
+    def test_sans_etiquette(self):
+        e = self._exigence(False)
+        self.assertEqual((e["avant"], e["apres"]), (1, 1))
+        self.assertEqual(e["slots"][1]["champ"], "apres")
