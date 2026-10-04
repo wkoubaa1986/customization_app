@@ -48,7 +48,7 @@ def config():
         doc = frappe.get_cached_doc("Config Caisse")
     except Exception:
         return {"responsable": None, "responsables": [], "delegues": [], "hors_periode": [],
-                "photo_obligatoire": 0, "date_depart": None}
+                "photo_obligatoire": 0, "date_depart": None, "departs": {}}
     titulaire = doc.get("responsable") or None
     jour = nowdate()
     lignes_co = [r for r in (doc.get("responsables") or []) if r.user and r.user != titulaire]
@@ -68,7 +68,15 @@ def config():
         "photo_obligatoire": cint(doc.get("photo_remise_obligatoire")),
         # Remise à zéro : les clôtures antérieures à cette date ne font plus report.
         "date_depart": (str(doc.get("date_depart")) if doc.get("date_depart") else None),
+        # Par caisse (prime sur la date générale) : {nom de caisse: date}.
+        "departs": {(r.caisse or "").strip(): str(r.date_depart) for r in (doc.get("departs") or [])
+                    if r.caisse and r.date_depart},
     }
+
+
+def date_depart_pour(caisse, cfg):
+    """La date de remise à zéro qui vaut pour CETTE caisse : la sienne si réglée, sinon la générale."""
+    return (cfg.get("departs") or {}).get((caisse or "").strip()) or cfg.get("date_depart")
 
 
 def delegation_active(date_debut, date_fin, jour):

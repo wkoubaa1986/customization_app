@@ -1,0 +1,41 @@
+{
+ "actions": [],
+ "creation": "2026-10-04 18:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "caisse",
+  "date_depart"
+ ],
+ "fields": [
+  {
+   "fieldname": "caisse",
+   "fieldtype": "Data",
+   "label": "Caisse (nom de l'employé)",
+   "reqd": 1,
+   "in_list_view": 1,
+   "description": "Exactement le nom affiché dans le sélecteur « Caisse » du rapport"
+  },
+  {
+   "fieldname": "date_depart",
+   "fieldtype": "Date",
+   "label": "Repart à zéro le",
+   "reqd": 1,
+   "in_list_view": 1
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-10-04 18:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "Config Caisse Depart",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

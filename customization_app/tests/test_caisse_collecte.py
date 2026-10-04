@@ -84,6 +84,17 @@ class TestJustificationsDepuisControles(unittest.TestCase):
         self.assertEqual(f(None), {})
 
 
+class TestDateDepartParCaisse(unittest.TestCase):
+
+    def test_la_date_de_la_caisse_prime_sur_la_generale(self):
+        from customization_app.caisse_collecte import date_depart_pour
+        cfg = {"date_depart": "2026-10-05", "departs": {"Salma Ben Saïd": "2026-10-10"}}
+        self.assertEqual(date_depart_pour("Salma Ben Saïd", cfg), "2026-10-10")
+        self.assertEqual(date_depart_pour("Akram", cfg), "2026-10-05")
+        self.assertIsNone(date_depart_pour("Akram", {"date_depart": None, "departs": {}}))
+        self.assertEqual(date_depart_pour(" Salma Ben Saïd ", cfg), "2026-10-10")
+
+
 class TestPeriodeDelegation(unittest.TestCase):
     """Un délégué ne l'est que pendant sa période (Du / Au) ; bornes vides = sans limite."""
 

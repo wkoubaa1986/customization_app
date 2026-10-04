@@ -62,7 +62,8 @@ class TestDoubleValidationCaisse(unittest.TestCase):
         cfg = frappe.get_doc("Config Caisse")
         cls._cfg_avant = {"responsable": cfg.responsable, "delegues": [d.user for d in cfg.delegues],
                           "responsables": [r.user for r in cfg.responsables],
-                          "photo": cfg.photo_remise_obligatoire, "date_depart": cfg.date_depart}
+                          "photo": cfg.photo_remise_obligatoire, "date_depart": cfg.date_depart,
+                          "departs": [(r.caisse, r.date_depart) for r in cfg.get("departs") or []]}
         cfg.responsable = TITULAIRE
         cfg.set("responsables", [{"user": CO_TITULAIRE}])
         cfg.photo_remise_obligatoire = 0
@@ -94,6 +95,7 @@ class TestDoubleValidationCaisse(unittest.TestCase):
         cfg.responsable = cls._cfg_avant["responsable"]
         cfg.photo_remise_obligatoire = cls._cfg_avant["photo"]
         cfg.date_depart = cls._cfg_avant["date_depart"]
+        cfg.set("departs", [{"caisse": c, "date_depart": d} for c, d in cls._cfg_avant["departs"]])
         cfg.set("delegues", [{"user": u} for u in cls._cfg_avant["delegues"]])
         cfg.set("responsables", [{"user": u} for u in cls._cfg_avant["responsables"]])
         cfg.save(ignore_permissions=True)
@@ -301,8 +303,18 @@ class TestDoubleValidationCaisse(unittest.TestCase):
             frappe.db.set_single_value("Config Caisse", "date_depart", "2026-10-01")
             frappe.clear_cache(doctype="Config Caisse")
             self.assertEqual(CL._ouverture(CAISSES[EMPLOYE], "2026-10-02"), 15.5)  # la clôture du 01 est ≥ départ
+            # Date PAR CAISSE : celle-ci repart à zéro le 02 alors que la générale est au 01.
+            cfg = frappe.get_doc("Config Caisse")
+            cfg.set("departs", [{"caisse": CAISSES[EMPLOYE], "date_depart": "2026-10-02"}])
+            cfg.save(ignore_permissions=True)
+            frappe.clear_cache(doctype="Config Caisse")
+            self.assertEqual(CL._ouverture(CAISSES[EMPLOYE], "2026-10-02"), 0.0)
+            self.assertEqual(CL._ouverture(CAISSES[TITULAIRE], "2026-10-02"), 0.0)   # pas de clôture : 0 de toute façon
         finally:
-            frappe.db.set_single_value("Config Caisse", "date_depart", None)
+            cfg = frappe.get_doc("Config Caisse")
+            cfg.date_depart = None
+            cfg.set("departs", [])
+            cfg.save(ignore_permissions=True)
             frappe.clear_cache(doctype="Config Caisse")
 
     def test_co_titulaire_collecte_sans_passation_et_valide_sa_caisse_seul(self):

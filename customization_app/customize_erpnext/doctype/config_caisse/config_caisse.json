@@ -7,6 +7,7 @@
   "responsable",
   "responsables",
   "date_depart",
+  "departs",
   "photo_remise_obligatoire",
   "section_delegues",
   "delegues"
@@ -34,6 +35,13 @@
    "description": "À partir de cette date, toutes les caisses repartent de ZÉRO : le solde d'ouverture ignore les clôtures antérieures. La première clôture de chaque caisse à compter de ce jour ouvre à 0."
   },
   {
+   "fieldname": "departs",
+   "fieldtype": "Table",
+   "label": "Date de départ par caisse",
+   "options": "Config Caisse Depart",
+   "description": "Prime sur la date générale pour la caisse nommée : elle repart à zéro ce jour-là, les autres suivent la date générale."
+  },
+  {
    "fieldname": "photo_remise_obligatoire",
    "fieldtype": "Check",
    "label": "Photo de la remise obligatoire",
@@ -54,7 +62,7 @@
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-10-04 17:00:00.000000",
+ "modified": "2026-10-04 18:00:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Config Caisse",

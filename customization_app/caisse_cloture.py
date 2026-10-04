@@ -222,7 +222,7 @@ def _ouverture(caisse, date):
     # Remise à zéro (Config Caisse, date de départ) : à partir de ce jour, les clôtures
     # antérieures ne font plus report — chaque caisse repart de 0.
     from customization_app import caisse_collecte as CC
-    plancher = CC.plancher_report(date, CC.config()["date_depart"])
+    plancher = CC.plancher_report(date, CC.date_depart_pour(caisse, CC.config()))
     ligne = frappe.db.sql(
         """SELECT solde_theorique, especes_comptees, especes_remises, fond_conserve FROM `tabCloture Caisse`
            WHERE docstatus = 1 AND caisse = %s AND date_cloture < %s AND date_cloture >= %s
@@ -375,7 +375,7 @@ def etat(caisse, date):
         "en_attente": en_attente,
         "mode_validation": CC.mode_validation(caisse),
         "photo_obligatoire": CC.config()["photo_obligatoire"],
-        "date_depart": CC.config()["date_depart"],
+        "date_depart": CC.date_depart_pour(caisse, CC.config()),
         "solde_ouverture": ouverture,
         "encaissements_especes": m["encaissements_especes"],
         "depenses_especes": m["depenses_especes"],
