@@ -11,11 +11,11 @@
  "fields": [
   {
    "fieldname": "caisse",
-   "fieldtype": "Data",
+   "fieldtype": "Autocomplete",
    "label": "Caisse (nom de l'employé)",
    "reqd": 1,
    "in_list_view": 1,
-   "description": "Exactement le nom affiché dans le sélecteur « Caisse » du rapport"
+   "description": "Choisir dans la liste : les noms sont ceux du sélecteur « Caisse » du rapport"
   },
   {
    "fieldname": "date_depart",
@@ -28,7 +28,7 @@
  "index_web_pages_for_search": 0,
  "istable": 1,
  "links": [],
- "modified": "2026-10-04 18:00:00.000000",
+ "modified": "2026-10-04 18:30:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Config Caisse Depart",

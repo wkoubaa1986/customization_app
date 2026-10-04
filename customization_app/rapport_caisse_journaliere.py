@@ -72,6 +72,22 @@ SO_STATUS_FR = {
 }
 
 
+def noms_caisses():
+    """Les noms de caisse tels que le sélecteur du rapport les propose : employés de la société
+    (nom d'employé) + utilisateurs système sans fiche employé (nom complet), exclusions comprises."""
+    exclus_u, exclus_e = _exclusions()
+    employees = [e for e in frappe.db.sql(
+        """SELECT e.name AS employee_id, e.employee_name, e.user_id AS user_email
+           FROM `tabEmployee` e WHERE e.company = %s""", COMPANY, as_dict=True)
+        if e.employee_id not in exclus_e and (e.user_email or "") not in exclus_u]
+    users = [u for u in frappe.get_all(
+        "User", filters={"enabled": 1, "user_type": "System User", "name": ["not in", ["Administrator", "Guest"]]},
+        fields=["name", "full_name"]) if u.name not in exclus_u]
+    emails_employes = {e.user_email for e in employees if e.user_email}
+    return sorted({e.employee_name for e in employees if e.employee_name}
+                  | {u.full_name for u in users if u.full_name and u.name not in emails_employes})
+
+
 def _unbilled_sos(user, start_date, end_date):
     conds = ["so.transaction_date BETWEEN %s AND %s"]
     vals = [start_date, end_date]

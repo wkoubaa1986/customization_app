@@ -74,6 +74,14 @@ def config():
     }
 
 
+@frappe.whitelist()
+def noms_caisses():
+    """Pour le réglage « Date de départ par caisse » : les noms exacts acceptés."""
+    frappe.only_for(("System Manager", "Accounts Manager"))
+    from customization_app.rapport_caisse_journaliere import noms_caisses as _noms
+    return _noms()
+
+
 def date_depart_pour(caisse, cfg):
     """La date de remise à zéro qui vaut pour CETTE caisse : la sienne si réglée, sinon la générale."""
     return (cfg.get("departs") or {}).get((caisse or "").strip()) or cfg.get("date_depart")

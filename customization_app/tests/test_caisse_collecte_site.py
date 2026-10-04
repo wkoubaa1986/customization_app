@@ -81,6 +81,9 @@ class TestDoubleValidationCaisse(unittest.TestCase):
             # save_file valide les PDF avec pypdf : un faux PDF serait rejeté — on compte les appels.
             mock.patch("frappe.utils.file_manager.save_file", return_value=frappe._dict(file_url="/private/files/t.pdf")),
             mock.patch.object(CC, "_caisse_de", side_effect=lambda u: CAISSES.get(u)),
+            # Config Caisse refuse une « date par caisse » sur un nom inconnu : nos caisses de test sont connues.
+            mock.patch("customization_app.rapport_caisse_journaliere.noms_caisses",
+                       return_value=list(CAISSES.values()) + ["TEST-COLLECTE-Jamais"]),
         ]
         for p in cls._patches:
             p.start()
@@ -447,6 +450,26 @@ class TestDoubleValidationCaisse(unittest.TestCase):
                 CL._controler_droits(CAISSES[EMPLOYE])                 # sa propre caisse
         finally:
             patch_droits.start()
+
+    def test_config_refuse_une_caisse_inconnue_ou_en_double(self):
+        frappe.set_user("Administrator")
+        cfg = frappe.get_doc("Config Caisse")
+        try:
+            cfg.set("departs", [{"caisse": "Quelqu'un Qui N'existe Pas", "date_depart": "2026-10-05"}])
+            with self.assertRaises(frappe.ValidationError):
+                cfg.save(ignore_permissions=True)
+            cfg.reload()
+            cfg.set("departs", [{"caisse": CAISSES[EMPLOYE], "date_depart": "2026-10-05"},
+                                {"caisse": " %s " % CAISSES[EMPLOYE], "date_depart": "2026-10-06"}])
+            with self.assertRaises(frappe.ValidationError):
+                cfg.save(ignore_permissions=True)
+            cfg.reload()
+            cfg.set("departs", [{"caisse": " %s " % CAISSES[EMPLOYE], "date_depart": "2026-10-05"}])
+            cfg.save(ignore_permissions=True)                       # espaces nettoyés
+            self.assertEqual(CC.config()["departs"], {CAISSES[EMPLOYE]: "2026-10-05"})
+        finally:
+            cfg.reload(); cfg.set("departs", []); cfg.save(ignore_permissions=True)
+            frappe.clear_cache(doctype="Config Caisse")
 
     def test_soumission_directe_refusee(self):
         cl = self._compter(EMPLOYE)
