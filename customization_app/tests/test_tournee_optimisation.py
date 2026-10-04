@@ -272,6 +272,11 @@ class TestJournee(unittest.TestCase):
         self.assertIn(self.taches["C"], r["modifiees"])
         t = frappe.get_doc("Tache de travail", self.taches["C"])
         self.assertEqual(t.custom_choix_du_staff, self.e2)
+        # Le NOM affiché suit le lien (bug prod 04/10/2026 : il restait l'ancien employé).
+        nom_e2 = frappe.db.get_value("Employee", self.e2, "employee_name")
+        self.assertEqual(t.get("custom_employé"), nom_e2)
+        if t.titre and "\n" in t.titre:
+            self.assertEqual(t.titre.split("\n")[-1], nom_e2)
         self.assertEqual(str(t.starts_on)[11:16], arrets[self.taches["C"]]["debut"])
         self.assertEqual((t.ends_on - t.starts_on).total_seconds(), 30 * 60)      # standard Entretien, pas le « 15 min »
         self.assertTrue(frappe.db.exists("Comment", {"reference_name": t.name, "comment_type": "Comment", "content": ["like", "%Optimisation%"]}))
@@ -312,3 +317,25 @@ class TestJournee(unittest.TestCase):
         frappe.set_user(autre)
         with self.assertRaises(frappe.PermissionError):
             T.proposer(self.JOUR)
+
+
+class TestReaffectation(unittest.TestCase):
+    """Changer d'employé à l'application du plan : le titre suit (bug prod 04/10/2026 : le nom restait l'ancien)."""
+
+    def test_derniere_ligne_remplacee(self):
+        from customization_app.tournee_optimisation import reaffecter_titre
+        titre = "Secteur 1\n🔧 Entretien: Client: Ahmed\nSadok Bouziri"
+        self.assertEqual(reaffecter_titre(titre, ("Sadok Bouziri", ""), "Akram"),
+                         "Secteur 1\n🔧 Entretien: Client: Ahmed\nAkram")
+
+    def test_ancien_nom_du_champ_texte_suffit(self):
+        from customization_app.tournee_optimisation import reaffecter_titre
+        # Le lien pointait sur une fiche renommée : le champ texte garde l'ancien libellé du titre.
+        titre = "Secteur 2\nInstallation: Client: X\nM. Hedi"
+        self.assertEqual(reaffecter_titre(titre, ("Mohamed Hedi Chouchane", "M. Hedi"), "Akram"),
+                         "Secteur 2\nInstallation: Client: X\nAkram")
+
+    def test_titre_sans_nom_inchange(self):
+        from customization_app.tournee_optimisation import reaffecter_titre
+        self.assertEqual(reaffecter_titre("Libre", ("Sadok",), "Akram"), "Libre")
+        self.assertIsNone(reaffecter_titre(None, ("Sadok",), "Akram"))

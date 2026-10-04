@@ -882,6 +882,18 @@ def proposer(date, fenetre=None, employes=None):
             "notifications": notifications_proposees([a for e in out for a in e["apres"]["arrets"]], cfg)}
 
 
+def reaffecter_titre(titre, anciens_noms, nouveau_nom):
+    """La dernière ligne du titre porte le nom de l'employé (gabarit du script client et du portail) :
+    elle est remplacée quand elle vaut un des anciens noms. Sinon le titre reste tel quel. Fonction pure."""
+    if not titre:
+        return titre
+    lignes = titre.split("\n")
+    anciens = {(a or "").strip() for a in anciens_noms if a}
+    if lignes and lignes[-1].strip() in anciens:
+        lignes[-1] = nouveau_nom
+    return "\n".join(lignes)
+
+
 @frappe.whitelist(methods=["POST"])
 def appliquer(date, plan, prevenir=0):
     """Écrit la proposition : employé, heures de chaque tâche listée. plan : [{tache, employe, starts_on, ends_on, prevenir}].
@@ -904,12 +916,14 @@ def appliquer(date, plan, prevenir=0):
             if e and e not in noms:
                 noms[e] = frappe.db.get_value("Employee", e, "employee_name") or e
         avant = "%s %s" % (noms.get(doc.custom_choix_du_staff, doc.custom_choix_du_staff), str(doc.starts_on)[11:16])
-        if nouveau_emp != doc.custom_choix_du_staff and doc.titre:
-            # Le titre porte le nom de l'employé en dernière ligne : il suit la réaffectation.
-            lignes = doc.titre.split("\n")
-            if lignes and lignes[-1].strip() == noms.get(doc.custom_choix_du_staff):
-                lignes[-1] = noms[nouveau_emp]
-                doc.titre = "\n".join(lignes)
+        if nouveau_emp != doc.custom_choix_du_staff:
+            # Le NOM de l'employé vit à trois endroits sur la tâche : le lien (custom_choix_du_staff), le
+            # texte « Employé » (custom_employé — calendrier, Ma tournée, historique client, SMS) et la
+            # dernière ligne du titre. Les trois suivent la réaffectation (bug prod 04/10/2026 : seul le
+            # lien changeait, le nom affiché restait l'ancien).
+            ancien_nom = noms.get(doc.custom_choix_du_staff) or doc.get("custom_employé") or ""
+            doc.titre = reaffecter_titre(doc.titre, (ancien_nom, doc.get("custom_employé") or ""), noms[nouveau_emp])
+            doc.set("custom_employé", noms[nouveau_emp])
         doc.custom_choix_du_staff, doc.starts_on, doc.ends_on = nouveau_emp, nd, nf
         doc.flags.ignore_permissions = True
         doc.save()
