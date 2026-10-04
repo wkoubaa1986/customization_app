@@ -1254,6 +1254,10 @@ def before_save_tache_de_travail(doc, method=None):
 
     _fixer_duree_a_la_creation(doc)
 
+    # Le nom de l'employé affiché suit TOUJOURS le choix du staff (voir tache_employe.py).
+    from customization_app.tache_employe import aligner_nom_employe
+    aligner_nom_employe(doc)
+
     # Couleur : seule autorité. Priorité statut > partenaire > staff > défaut.
     doc.color = compute_tache_color(doc)
 
