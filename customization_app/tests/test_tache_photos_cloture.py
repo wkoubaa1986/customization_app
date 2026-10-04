@@ -75,9 +75,9 @@ if __name__ == "__main__":
     unittest.main()
 
 
-class TestRecuAramexToujoursExige(unittest.TestCase):
-    """Livraison Aramex : le reçu Aramex (avec les produits) est exigé même quand l'étiquette
-    vient de l'API — avant, l'étiquette dispensait de la photo du bordereau (décision 04/10/2026)."""
+class TestBordereauSurProduitsToujoursExige(unittest.TestCase):
+    """Livraison Aramex : la photo du bordereau (n° de suivi) collé sur les produits est exigée même
+    quand l'étiquette vient de l'API — avant, l'étiquette en dispensait (décision 04/10/2026)."""
 
     def _exigence(self, etiquette):
         from unittest import mock
@@ -89,7 +89,8 @@ class TestRecuAramexToujoursExige(unittest.TestCase):
     def test_avec_etiquette_api(self):
         e = self._exigence(True)
         self.assertEqual((e["avant"], e["apres"]), (1, 1))
-        self.assertIn("Reçu Aramex", e["slots"][1]["label"])
+        self.assertIn("Bordereau Aramex", e["slots"][1]["label"])
+        self.assertIn("collé sur les produits", e["slots"][1]["label"])
 
     def test_sans_etiquette(self):
         e = self._exigence(False)

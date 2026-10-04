@@ -12,8 +12,9 @@ Exigences par type (décision utilisateur du 27/08/2026) :
   - Entretien    : filtres enlevés + nouveaux filtres (avant) et appareil final (après)
   - Installation : connecteur d'eau, appareil sous l'évier, robinet avec eau
   - Réparation   : pièces enlevées (avant) et appareil réparé (après)
-  - Livraison    : produits envoyés + REÇU Aramex posé avec les produits si Aramex (toujours,
-                   étiquette API ou pas — décision utilisateur 04/10/2026) ; produits livrés sinon
+  - Livraison    : produits envoyés + bordereau Aramex (n° de suivi) COLLÉ SUR les produits si
+                   Aramex, toujours, étiquette API ou pas (décision 04/10/2026 : la photo prouve
+                   que le bon colis part avec le bon numéro) ; produits livrés sinon
   Visite, Autre et Tournée commerciale ne sont pas concernés (la tournée a déjà
   sa propre clôture verrouillée dans tournee.py).
 
@@ -97,15 +98,15 @@ def _etiquette_aramex(commande):
 def _exigence_livraison(doc):
     commande = doc.get("commande_client")
     if _est_livraison_aramex(commande):
-        # Le REÇU remis par Aramex au dépôt est la preuve que le colis est parti : photo
-        # obligatoire, posé avec les produits, même quand l'étiquette vient de l'API
-        # (04/10/2026 — avant, l'étiquette dispensait de la photo du bordereau).
+        # La photo du bordereau COLLÉ sur les produits (numéro de suivi lisible) prouve que le
+        # bon colis part avec le bon numéro : obligatoire même quand l'étiquette vient de l'API
+        # (04/10/2026 — avant, l'étiquette dispensait de cette photo).
         return {
             "avant": 1, "apres": 1,
             "slots": [
                 {"label": "Produits envoyés (1 ou plusieurs)", "champ": "avant",
                  "multiple": True},
-                {"label": "Reçu Aramex, posé avec les produits", "champ": "apres"},
+                {"label": "Bordereau Aramex (n° de suivi) collé sur les produits", "champ": "apres"},
             ],
         }
     return {
