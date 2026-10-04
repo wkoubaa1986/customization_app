@@ -98,7 +98,7 @@
       .rcj-toolbar .form-control { width: calc(50% - 34px); min-width: 110px; }
       #rcj-employe { width: 100%; max-width: none !important; }
       .rcj-toolbar .btn { flex: 1 1 auto; }
-      #rcj-btn-dettes, #rcj-btn-aramex, #rcj-btn-depense, #rcj-btn-a-payer, #rcj-btn-bl, #rcj-btn-cloture { width: 100%; padding: 10px; font-size: 14px;
+      #rcj-btn-dettes, #rcj-btn-aramex, #rcj-btn-depense, #rcj-btn-a-payer, #rcj-btn-bl, #rcj-btn-cloture, #rcj-btn-collecte, #rcj-btn-passation { width: 100%; padding: 10px; font-size: 14px;
         margin: 0 0 6px 0 !important; }
       .rcj-kpis { grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; }
       .rcj-kpi { padding: 10px 12px; }
@@ -107,6 +107,44 @@
       .rcj-recap { overflow-x: auto; }
       table.rcj-recap-tbl { min-width: 560px; }
       .rcj-note { font-size: 12px; }
+      #rcj-btn-impayes, #rcj-btn-fa-payer, #rcj-btn-fa-bl, #rcj-btn-fa-sans-justif, #rcj-btn-fa-saisir {
+        width: 100%; padding: 10px; font-size: 14px; margin: 0 0 6px 0 !important; }
+      .rcj-titre-caisse { font-size: 16px; }
+      #rcj-cloture-banner, #rcj-collecte-banner { font-size: 12px; padding: 8px 10px; }
+      #rcj-cloture-banner .btn, #rcj-collecte-banner .btn { display: block; width: 100%; margin: 6px 0 0 !important; }
+    }
+    /* Collecte : une carte par caisse, conforme en un geste */
+    .rcj-cc-carte { border: 1px solid #e4e8ee; border-radius: 12px; padding: 12px 14px; margin-bottom: 12px; background: #fff; }
+    .rcj-cc-contestee { border-color: #e0b4b4; background: #fdf3f2; }
+    .rcj-cc-tete { display: flex; justify-content: space-between; gap: 8px; align-items: flex-start; flex-wrap: wrap; }
+    .rcj-cc-nom { font-size: 17px; font-weight: 800; }
+    .rcj-cc-sous { font-size: 12px; color: #6b7280; }
+    .rcj-cc-badge { font-size: 11.5px; font-weight: 700; padding: 3px 9px; border-radius: 999px; background: #fff3cd; color: #7a5d10; white-space: nowrap; }
+    .rcj-cc-badge-rouge { background: #fdecea; color: #a93226; } .rcj-cc-badge-orange { background: #ffedd5; color: #9a3412; }
+    .rcj-cc-declare { margin: 10px 0 6px; padding: 10px 12px; border-radius: 10px; background: #f6f8fa; }
+    .rcj-cc-montant { font-size: 28px; font-weight: 800; line-height: 1.1; color: #1d6f42; }
+    .rcj-cc-detail { font-size: 12.5px; margin-top: 2px; }
+    .rcj-cc-photo { max-height: 90px; border-radius: 8px; margin-top: 8px; border: 1px solid #ddd; }
+    .rcj-cc-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+    .rcj-cc-actions .btn-lg { font-size: 16px; padding: 10px 18px; font-weight: 700; }
+    .rcj-cc-saisie { margin-top: 10px; padding: 10px 12px; border: 1px dashed #cbd5e1; border-radius: 10px; }
+    .rcj-cc-saisie label { font-size: 12px; font-weight: 600; margin: 6px 0 2px; display: block; }
+    .rcj-cc-saisie .form-control { font-size: 16px; }
+    .rcj-cc-deux { display: flex; gap: 10px; } .rcj-cc-deux > div { flex: 1; }
+    .rcj-cc-attente { font-size: 12.5px; color: #6b7280; margin-top: 8px; }
+    .rcj-cc-info { margin-bottom: 10px; color: #92400e; background: #fffbeb; border-radius: 10px; padding: 8px 12px; }
+    .rcj-cc-vide { color: #1d6f42; font-weight: 600; padding: 8px 0; }
+    .rcj-cc-titre { font-weight: 700; margin: 12px 0 4px; } .rcj-cc-manque { font-size: 12.5px; color: #92400e; margin: 2px 0; }
+    @media (max-width: 768px) {
+      .rcj-cc-actions .btn { width: 100%; }
+      .rcj-cc-montant { font-size: 32px; }
+    }
+    /* Dialogues de comptage / collecte / passation sur téléphone : un champ par ligne, boutons pleine largeur */
+    @media (max-width: 768px) {
+      .rcj-col-ligne input, .rcj-pas-bloc input { width: 100% !important; }
+      .rcj-col-ligne .btn, .rcj-pas-bloc .btn { width: 100%; margin: 4px 0 0 !important; }
+      .rcj-pas-bloc .table { font-size: 11px; }
+      .modal-dialog .rcj-clo-fond, .modal-dialog .rcj-clo-ecart { font-size: 15px; }
     }
   </style>
 
@@ -124,6 +162,7 @@
     <div class="rcj-spacer"></div>
     <button id="rcj-toggle-all" class="btn btn-default btn-sm">Tout replier</button>
     <button id="rcj-chart-btn" class="btn btn-default btn-sm">📊 Graphique</button>
+    <button id="rcj-btn-config" class="btn btn-default btn-sm" style="display:none" title="Config Caisse : responsable de collecte, délégués, date de départ, photo">⚙️ Réglages</button>
   </div>
   <!-- Note d’utilisation -->
   <details class="rcj-note" open>
@@ -164,6 +203,8 @@
   <!-- La caisse affichée : la sélection saute aux yeux, en rouge -->
   <div class="rcj-titre-caisse">Caisse : <span id="rcj-caisse-nom">—</span></div>
   <div id="rcj-cloture-banner" style="display:none;background:#e6f4ea;border:1px solid #b7dfc2;border-left:4px solid #1d6f42;border-radius:8px;padding:8px 14px;margin-bottom:12px;font-size:12.5px;color:#1d6f42;font-weight:600"></div>
+  <!-- Double validation : caisses à collecter (responsable / délégué), passations, remises contestées -->
+  <div id="rcj-collecte-banner" style="display:none;background:#fffbeb;border:1px solid #f59e0b;border-left:4px solid #b45309;border-radius:8px;padding:8px 14px;margin-bottom:12px;font-size:12.5px;color:#92400e;font-weight:600"></div>
 
   <!-- Bandeau d’avertissements (dynamique) -->
   <div id="rcj-warn-banner"></div>
@@ -175,7 +216,9 @@
     <button id="rcj-btn-dettes" class="btn btn-success btn-sm">💰 Encaissement dettes</button>
     <button id="rcj-btn-aramex" class="btn btn-success btn-sm" style="margin-left:8px">🚚 Encaissement Aramex</button>
     <button id="rcj-btn-depense" class="btn btn-warning btn-sm" style="margin-left:8px">🧾 Dépense</button>
-    <button id="rcj-btn-cloture" class="btn btn-primary btn-sm" style="margin-left:8px">✅ Valider la caisse</button>
+    <button id="rcj-btn-cloture" class="btn btn-primary btn-sm" style="margin-left:8px">✅ Compter et remettre la caisse</button>
+    <button id="rcj-btn-collecte" class="btn btn-dark btn-sm" style="margin-left:8px;display:none">📥 Collecte du jour</button>
+    <button id="rcj-btn-passation" class="btn btn-default btn-sm" style="margin-left:8px;display:none">🤝 Passation</button>
   </div>
 
   <!-- Chart (hidden) -->

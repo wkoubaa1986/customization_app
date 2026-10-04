@@ -1,0 +1,83 @@
+{
+ "actions": [],
+ "creation": "2026-10-04 10:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "responsable",
+  "responsables",
+  "date_depart",
+  "photo_remise_obligatoire",
+  "section_delegues",
+  "delegues"
+ ],
+ "fields": [
+  {
+   "fieldname": "responsable",
+   "fieldtype": "Link",
+   "label": "Responsable de collecte (titulaire)",
+   "options": "User",
+   "description": "Collecte les caisses des employés chaque soir. Sa propre caisse est validée seule, sans remise."
+  },
+  {
+   "fieldname": "responsables",
+   "fieldtype": "Table",
+   "label": "Autres responsables de collecte (co-titulaires)",
+   "options": "Config Caisse Delegue",
+   "description": "Mêmes droits que le titulaire : collectent sans passation, valident seuls leur propre caisse."
+  },
+  {
+   "fieldname": "date_depart",
+   "fieldtype": "Date",
+   "label": "Date de départ (caisses à zéro)",
+   "default": "2026-10-05",
+   "description": "À partir de cette date, toutes les caisses repartent de ZÉRO : le solde d'ouverture ignore les clôtures antérieures. La première clôture de chaque caisse à compter de ce jour ouvre à 0."
+  },
+  {
+   "fieldname": "photo_remise_obligatoire",
+   "fieldtype": "Check",
+   "label": "Photo de la remise obligatoire",
+   "default": "0"
+  },
+  {
+   "fieldname": "section_delegues",
+   "fieldtype": "Section Break",
+   "label": "Délégués"
+  },
+  {
+   "fieldname": "delegues",
+   "fieldtype": "Table",
+   "label": "Délégués",
+   "options": "Config Caisse Delegue",
+   "description": "Collectent en l'absence du titulaire, pendant leur PÉRIODE (Du / Au, vide = sans limite) : hors période, un délégué ne voit plus les autres caisses. Chaque caisse collectée par un délégué entre dans une Passation que le titulaire confirme à son retour."
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-10-04 17:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "Config Caisse",
+ "owner": "Administrator",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1,
+ "issingle": 1,
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "read": 1,
+   "role": "Accounts Manager"
+  }
+ ]
+}

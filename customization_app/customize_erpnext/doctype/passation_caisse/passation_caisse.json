@@ -1,0 +1,220 @@
+{
+ "actions": [],
+ "creation": "2026-10-04 10:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "delegue",
+  "responsable",
+  "statut",
+  "column_break_1",
+  "date_debut",
+  "date_fin",
+  "remise_le",
+  "validee_le",
+  "section_lignes",
+  "clotures",
+  "total_especes",
+  "total_cheques",
+  "total_traites",
+  "section_reception",
+  "especes_recues",
+  "nb_cheques_recus",
+  "nb_traites_recus",
+  "ecart",
+  "tours_ecart",
+  "column_break_2",
+  "note",
+  "echanges"
+ ],
+ "fields": [
+  {
+   "fieldname": "delegue",
+   "fieldtype": "Link",
+   "label": "Délégué",
+   "options": "User",
+   "reqd": 1,
+   "read_only": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "responsable",
+   "fieldtype": "Link",
+   "label": "Responsable de collecte",
+   "options": "User",
+   "read_only": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "statut",
+   "fieldtype": "Select",
+   "label": "Statut",
+   "options": "Ouverte\nÀ remettre\nÉcart\nValidée",
+   "default": "Ouverte",
+   "read_only": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "column_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "date_debut",
+   "fieldtype": "Date",
+   "label": "Du",
+   "read_only": 1
+  },
+  {
+   "fieldname": "date_fin",
+   "fieldtype": "Date",
+   "label": "Au",
+   "read_only": 1
+  },
+  {
+   "fieldname": "remise_le",
+   "fieldtype": "Datetime",
+   "label": "Remise le",
+   "read_only": 1
+  },
+  {
+   "fieldname": "validee_le",
+   "fieldtype": "Datetime",
+   "label": "Validée le",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_lignes",
+   "fieldtype": "Section Break",
+   "label": "Caisses collectées par délégation"
+  },
+  {
+   "fieldname": "clotures",
+   "fieldtype": "Table",
+   "label": "Clôtures",
+   "options": "Passation Caisse Ligne",
+   "read_only": 1
+  },
+  {
+   "fieldname": "total_especes",
+   "fieldtype": "Currency",
+   "label": "Espèces à remettre",
+   "read_only": 1
+  },
+  {
+   "fieldname": "total_cheques",
+   "fieldtype": "Int",
+   "label": "Chèques à remettre (nombre)",
+   "read_only": 1
+  },
+  {
+   "fieldname": "total_traites",
+   "fieldtype": "Int",
+   "label": "Traites à remettre (nombre)",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_reception",
+   "fieldtype": "Section Break",
+   "label": "Réception par le responsable"
+  },
+  {
+   "fieldname": "especes_recues",
+   "fieldtype": "Currency",
+   "label": "Espèces reçues",
+   "read_only": 1
+  },
+  {
+   "fieldname": "nb_cheques_recus",
+   "fieldtype": "Int",
+   "label": "Chèques reçus (nombre)",
+   "read_only": 1
+  },
+  {
+   "fieldname": "nb_traites_recus",
+   "fieldtype": "Int",
+   "label": "Traites reçues (nombre)",
+   "read_only": 1
+  },
+  {
+   "fieldname": "ecart",
+   "fieldtype": "Currency",
+   "label": "Écart (reçu − à remettre)",
+   "read_only": 1
+  },
+  {
+   "fieldname": "tours_ecart",
+   "fieldtype": "Int",
+   "label": "Tours d'écart",
+   "read_only": 1,
+   "hidden": 1
+  },
+  {
+   "fieldname": "column_break_2",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "note",
+   "fieldtype": "Small Text",
+   "label": "Note",
+   "read_only": 1
+  },
+  {
+   "fieldname": "echanges",
+   "fieldtype": "Long Text",
+   "label": "Échanges",
+   "read_only": 1
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-10-04 10:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "Passation Caisse",
+ "owner": "Administrator",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1,
+ "autoname": "format:PAS-{####}",
+ "naming_rule": "Expression",
+ "is_submittable": 1,
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "submit": 1,
+   "cancel": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "read": 1,
+   "role": "Accounts Manager",
+   "submit": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "read": 1,
+   "role": "Accounts User",
+   "submit": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "read": 1,
+   "role": "Sales User",
+   "submit": 1,
+   "write": 1
+  }
+ ]
+}

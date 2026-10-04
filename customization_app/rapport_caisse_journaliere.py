@@ -729,6 +729,13 @@ def get_data(d1, d2, employe=None):
     if defaut_demande:
         employe = _ma_caisse(employees, users) or ""
 
+    # Visibilité (04/10/2026) : hors responsables de collecte, délégués en période et direction,
+    # chacun ne voit QUE sa caisse — ni « Tous les employés », ni celle d'un collègue.
+    from customization_app.caisse_collecte import peut_voir_toutes_les_caisses
+    restreint = not peut_voir_toutes_les_caisses()
+    if restreint:
+        employe = _ma_caisse(employees, users) or "—"
+
     # La liste déroulante du filtre montre TOUT le monde, même quand on filtre.
     # Déduplication par COMPTE et non par nom : Economiq a deux fiches aux orthographes
     # différentes (« Economic … » côté Employé, « Economiq … » côté User) — un User déjà
@@ -738,6 +745,8 @@ def get_data(d1, d2, employe=None):
         {e.employee_name for e in employees if e.employee_name}
         | {u.full_name for u in users if u.full_name and u.name not in emails_employes}
     )
+    if restreint:
+        noms_disponibles = [employe] if employe != "—" else []
 
     # ⚠️ ANTI-DOUBLE-COMPTAGE : on traite TOUTES les caisses, même filtré — la
     # liste d'exclusion des « anciennes commandes » doit connaître les paiements
@@ -847,6 +856,7 @@ def get_data(d1, d2, employe=None):
         "periode": {"d1": start_date, "d2": end_date},
         "employe": employe or None,
         "employes": noms_disponibles,
+        "restreint": restreint,
         "anciens": anciens,
         "depenses": {"lignes": depenses,
                      "total": flt(sum(l["montant"] for l in depenses)),

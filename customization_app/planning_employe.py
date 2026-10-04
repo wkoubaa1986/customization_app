@@ -341,7 +341,18 @@ def ma_journee(date=None, employe=None):
         # Les transferts du Magasin vers SON stock qu'il doit confirmer (page Stock, double validation) :
         # ceux de l'utilisateur connecté seulement — un superviseur ne valide pas à la place d'un autre.
         "transferts_a_valider": _transferts_a_valider(cible),
+        # Caisse : caisses à collecter (responsable / délégué), remises contestées, passations — pour MOI.
+        "caisse_collecte": _caisse_collecte(),
     }
+
+
+def _caisse_collecte():
+    try:
+        from customization_app.caisse_collecte import resume
+        return resume(frappe.session.user)
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "ma_journee: caisse collecte")
+        return None
 
 
 def _transferts_a_valider(employe):

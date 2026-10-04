@@ -9,6 +9,10 @@
   "caisse",
   "date_cloture",
   "valide_par",
+  "statut",
+  "compte_le",
+  "validation_seule",
+  "historique",
   "column_break_1",
   "solde_ouverture",
   "encaissements_especes",
@@ -34,7 +38,26 @@
   "dettes_avant",
   "dettes_apres",
   "note",
-  "controles"
+  "controles",
+  "section_remise",
+  "especes_remises",
+  "fond_conserve",
+  "nb_cheques_remis",
+  "nb_traites_remis",
+  "column_break_5",
+  "collecte_par",
+  "collecte_le",
+  "par_delegation",
+  "passation",
+  "photo_remise",
+  "section_reception",
+  "especes_recues",
+  "nb_cheques_recus",
+  "nb_traites_recus",
+  "ecart_remise",
+  "tours_ecart",
+  "column_break_6",
+  "echanges"
  ],
  "fields": [
   {
@@ -58,9 +81,39 @@
   {
    "fieldname": "valide_par",
    "fieldtype": "Link",
-   "label": "Validée par",
+   "label": "Comptée par",
    "options": "User",
    "read_only": 1
+  },
+  {
+   "fieldname": "statut",
+   "fieldtype": "Select",
+   "label": "Statut",
+   "options": "À collecter\nÉcart de remise\nValidée",
+   "default": "À collecter",
+   "read_only": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "compte_le",
+   "fieldtype": "Datetime",
+   "label": "Comptée le",
+   "read_only": 1
+  },
+  {
+   "fieldname": "validation_seule",
+   "fieldtype": "Check",
+   "label": "Validée seul (responsable / direction)",
+   "read_only": 1,
+   "description": "Caisse du responsable de collecte ou caisse globale : pas de remise, pas de seconde signature."
+  },
+  {
+   "fieldname": "historique",
+   "fieldtype": "Check",
+   "label": "Clôture antérieure à la double validation",
+   "read_only": 1,
+   "hidden": 1
   },
   {
    "fieldname": "column_break_1",
@@ -230,11 +283,123 @@
    "fieldtype": "Long Text",
    "read_only": 1,
    "label": "Points de contrôle et justifications"
+  },
+  {
+   "fieldname": "section_remise",
+   "fieldtype": "Section Break",
+   "label": "Remise au responsable de collecte"
+  },
+  {
+   "fieldname": "especes_remises",
+   "fieldtype": "Currency",
+   "label": "Espèces remises",
+   "read_only": 1
+  },
+  {
+   "fieldname": "fond_conserve",
+   "fieldtype": "Currency",
+   "label": "Fond de caisse conservé",
+   "read_only": 1,
+   "description": "Espèces comptées − espèces remises : c'est le solde d'ouverture du lendemain."
+  },
+  {
+   "fieldname": "nb_cheques_remis",
+   "fieldtype": "Int",
+   "label": "Chèques remis (nombre)",
+   "read_only": 1
+  },
+  {
+   "fieldname": "nb_traites_remis",
+   "fieldtype": "Int",
+   "label": "Traites remises (nombre)",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_5",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "collecte_par",
+   "fieldtype": "Link",
+   "label": "Collectée par",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "collecte_le",
+   "fieldtype": "Datetime",
+   "label": "Collectée le",
+   "read_only": 1
+  },
+  {
+   "fieldname": "par_delegation",
+   "fieldtype": "Check",
+   "label": "Collectée par délégation",
+   "read_only": 1
+  },
+  {
+   "fieldname": "passation",
+   "fieldtype": "Link",
+   "label": "Passation",
+   "options": "Passation Caisse",
+   "read_only": 1
+  },
+  {
+   "fieldname": "photo_remise",
+   "fieldtype": "Attach Image",
+   "label": "Photo de la remise",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_reception",
+   "fieldtype": "Section Break",
+   "label": "Réception par le responsable"
+  },
+  {
+   "fieldname": "especes_recues",
+   "fieldtype": "Currency",
+   "label": "Espèces reçues",
+   "read_only": 1
+  },
+  {
+   "fieldname": "nb_cheques_recus",
+   "fieldtype": "Int",
+   "label": "Chèques reçus (nombre)",
+   "read_only": 1
+  },
+  {
+   "fieldname": "nb_traites_recus",
+   "fieldtype": "Int",
+   "label": "Traites reçues (nombre)",
+   "read_only": 1
+  },
+  {
+   "fieldname": "ecart_remise",
+   "fieldtype": "Currency",
+   "label": "Écart de remise (reçu − remis)",
+   "read_only": 1
+  },
+  {
+   "fieldname": "tours_ecart",
+   "fieldtype": "Int",
+   "label": "Tours d'écart",
+   "read_only": 1,
+   "hidden": 1
+  },
+  {
+   "fieldname": "column_break_6",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "echanges",
+   "fieldtype": "Long Text",
+   "label": "Échanges sur la remise",
+   "read_only": 1
   }
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-08-19 22:00:00.000000",
+ "modified": "2026-10-04 10:00:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Cloture Caisse",

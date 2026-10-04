@@ -174,8 +174,13 @@ def remettre_en_banque(paiements, date):
 
 
 def _controler_droits(caisse):
-    """Chaque employé -> sa caisse ; la direction -> toutes + la globale."""
+    """Chaque employé -> sa caisse ; la direction -> toutes + la globale ; le responsable de
+    collecte (titulaire) -> toutes les caisses individuelles (il compte pour un employé absent,
+    puis valide directement depuis la collecte — 04/10/2026)."""
     if frappe.session.user in DIRECTION or "System Manager" in frappe.get_roles():
+        return
+    from customization_app import caisse_collecte as CC
+    if caisse != CAISSE_GLOBALE and CC.role_collecte() == "titulaire":
         return
     # _ma_caisse a besoin des listes ; on la reconstruit a minima.
     exclus_u, exclus_e = _exclusions()
@@ -214,15 +219,26 @@ def _mesures(caisse, date):
 def _ouverture(caisse, date):
     """Le report de la dernière clôture validée : espèces comptées si saisies,
     sinon le théorique."""
+    # Remise à zéro (Config Caisse, date de départ) : à partir de ce jour, les clôtures
+    # antérieures ne font plus report — chaque caisse repart de 0.
+    from customization_app import caisse_collecte as CC
+    plancher = CC.plancher_report(date, CC.config()["date_depart"])
     ligne = frappe.db.sql(
-        """SELECT solde_theorique, especes_comptees FROM `tabCloture Caisse`
-           WHERE docstatus = 1 AND caisse = %s AND date_cloture < %s
+        """SELECT solde_theorique, especes_comptees, especes_remises, fond_conserve FROM `tabCloture Caisse`
+           WHERE docstatus = 1 AND caisse = %s AND date_cloture < %s AND date_cloture >= %s
            ORDER BY date_cloture DESC, creation DESC LIMIT 1""",
-        (caisse, date), as_dict=True)
+        (caisse, date, plancher or "1900-01-01"), as_dict=True)
     if not ligne:
         return 0.0
     r = ligne[0]
-    return flt(r.especes_comptees if r.especes_comptees is not None else r.solde_theorique, 3)
+    # Double validation (04/10/2026) : l'employé repart avec ce qu'il a GARDÉ,
+    # pas avec tout son comptage — les espèces remises au responsable sont parties.
+    # `fond_conserve` fait foi (recalculé quand l'employé accepte le chiffre du
+    # responsable) ; sinon comptées − remises ; clôtures historiques : comptées.
+    if r.fond_conserve is not None:
+        return flt(r.fond_conserve, 3)
+    base = r.especes_comptees if r.especes_comptees is not None else r.solde_theorique
+    return flt(flt(base, 3) - flt(r.especes_remises, 3), 3)
 
 
 def _fmt_montant(v):
@@ -337,9 +353,29 @@ def etat(caisse, date):
         pdf_url = frappe.db.get_value(
             "File", {"attached_to_doctype": "Cloture Caisse", "attached_to_name": deja,
                      "file_name": ["like", "%.pdf"]}, "file_url")
+    from customization_app import caisse_collecte as CC
+    en_attente = frappe.db.get_value(
+        "Cloture Caisse", {"caisse": caisse, "date_cloture": date, "docstatus": 0,
+                           "statut": ["in", CC.STATUTS_EN_ATTENTE]},
+        ["name", "statut", "tours_ecart", "especes_remises", "especes_recues", "collecte_par", "valide_par",
+         "especes_comptees", "nb_cheques_remis", "nb_traites_remis", "note", "controles"], as_dict=True)
+    if en_attente:
+        # Réouverture (04/10/2026) : tant que le responsable n'a pas confirmé la réception, l'employé
+        # peut rouvrir et modifier son comptage — le dialogue se pré-remplit avec ses valeurs.
+        en_attente["caisse"] = caisse
+        en_attente["mienne"] = CC.peut_agir_sur(en_attente)
+        en_attente["rouvrable"] = en_attente["mienne"]
+        en_attente["justifications_precedentes"] = CC.justifications_depuis_controles(en_attente.get("controles"))
+    points = _controles(m["data"])
+    if caisse == CAISSE_GLOBALE:
+        points += CC.controles_globale(date, m["data"])
     return {
         "caisse": caisse, "date": str(date),
-        "controles": _controles(m["data"]),
+        "controles": points,
+        "en_attente": en_attente,
+        "mode_validation": CC.mode_validation(caisse),
+        "photo_obligatoire": CC.config()["photo_obligatoire"],
+        "date_depart": CC.config()["date_depart"],
         "solde_ouverture": ouverture,
         "encaissements_especes": m["encaissements_especes"],
         "depenses_especes": m["depenses_especes"],
@@ -355,8 +391,13 @@ def etat(caisse, date):
 
 
 @frappe.whitelist()
-def valider(caisse, date, especes_comptees=None, note=None, justifications=None):
-    """Fige la caisse : document soumis + PDF instantané attaché."""
+def valider(caisse, date, especes_comptees=None, note=None, justifications=None,
+            especes_remises=None, nb_cheques_remis=0, nb_traites_remis=0, photo=None, photo_nom=None,
+            rouvrir=None):
+    """L'employé COMPTE et REMET (double validation, 04/10/2026) : la clôture
+    naît en brouillon « À collecter » et c'est le responsable de collecte qui la
+    soumet (caisse_collecte.collecter). Validation SEULE (soumise ici, PDF
+    attaché) : la caisse du responsable de collecte et la caisse globale."""
     frappe.only_for(ROLES)
     caisse = (caisse or "").strip() or CAISSE_GLOBALE
     _controler_droits(caisse)
@@ -364,6 +405,22 @@ def valider(caisse, date, especes_comptees=None, note=None, justifications=None)
     if frappe.db.get_value("Cloture Caisse",
                            {"caisse": caisse, "date_cloture": date, "docstatus": 1}):
         frappe.throw(_("La caisse « {0} » du {1} est déjà validée.").format(caisse, date))
+    from customization_app import caisse_collecte as CC
+    attente = frappe.db.get_value("Cloture Caisse",
+                                  {"caisse": caisse, "date_cloture": date, "docstatus": 0,
+                                   "statut": ["in", CC.STATUTS_EN_ATTENTE]})
+    existante = None
+    if attente and rouvrir and rouvrir == attente:
+        # Réouverture : on MODIFIE le brouillon (même numéro), tant qu'il n'est pas collecté.
+        existante = frappe.get_doc("Cloture Caisse", attente)
+        if not CC.peut_agir_sur(existante):
+            frappe.throw(_("Seul {0} (ou le titulaire de la caisse) peut rouvrir ce comptage.").format(existante.valide_par))
+    elif attente:
+        frappe.throw(_("La caisse « {0} » du {1} est déjà comptée ({2}) : elle attend la collecte.")
+                     .format(caisse, date, attente))
+    elif rouvrir:
+        frappe.throw(_("Le comptage {0} n'est plus modifiable : il a été collecté ou n'existe plus.").format(rouvrir))
+    mode = CC.mode_validation(caisse)
 
     m = _mesures(caisse, date)
 
@@ -373,6 +430,8 @@ def valider(caisse, date, especes_comptees=None, note=None, justifications=None)
     justifs = (_json.loads(justifications) if isinstance(justifications, str)
                else (justifications or {}))
     points = _controles(m["data"])
+    if caisse == CAISSE_GLOBALE:
+        points += CC.controles_globale(date, m["data"])
     bloquants = [p for p in points if p["bloquant"]]
     if bloquants:
         frappe.throw(_("Validation refusée — bon(s) de livraison à valider d'abord : {0}")
@@ -393,6 +452,16 @@ def valider(caisse, date, especes_comptees=None, note=None, justifications=None)
     ouverture = _ouverture(caisse, date)
     theorique = flt(ouverture + m["encaissements_especes"] - m["depenses_especes"], 3)
     comptees = flt(especes_comptees, 3) if especes_comptees not in (None, "") else None
+    remises = flt(especes_remises, 3) if especes_remises not in (None, "") else None
+    if mode == "double":
+        try:
+            CC.controler_remise(comptees, remises)
+        except ValueError as exc:
+            frappe.throw(str(exc))
+        if CC.config()["photo_obligatoire"] and not photo:
+            frappe.throw(_("La photo de la remise est obligatoire (Config Caisse)."))
+    else:
+        remises = 0.0
 
     rap = _rapprochement(date) if caisse == CAISSE_GLOBALE else None
     champs_rap = {}
@@ -405,11 +474,16 @@ def valider(caisse, date, especes_comptees=None, note=None, justifications=None)
             "dettes_avant": rap["dettes"]["avant"], "dettes_apres": rap["dettes"]["apres"],
         }
 
-    doc = frappe.get_doc({
-        "doctype": "Cloture Caisse",
+    valeurs = {
         "caisse": caisse,
         "date_cloture": date,
         "valide_par": frappe.session.user,
+        "compte_le": now_datetime(),
+        "statut": CC.STATUT_A_COLLECTER,
+        "especes_remises": remises,
+        "fond_conserve": (CC.fond_conserve(comptees, remises) if comptees is not None else None),
+        "nb_cheques_remis": frappe.utils.cint(nb_cheques_remis),
+        "nb_traites_remis": frappe.utils.cint(nb_traites_remis),
         "solde_ouverture": ouverture,
         "encaissements_especes": m["encaissements_especes"],
         "depenses_especes": m["depenses_especes"],
@@ -421,17 +495,20 @@ def valider(caisse, date, especes_comptees=None, note=None, justifications=None)
         "note": (note or "").strip(),
         "controles": controles_txt,
         **champs_rap,
-    })
-    doc.insert(ignore_permissions=True)
-    doc.submit()
+    }
+    if existante:
+        doc = CC.rouvrir_comptage(existante, valeurs)
+    else:
+        doc = frappe.get_doc({"doctype": "Cloture Caisse", **valeurs})
+        doc.insert(ignore_permissions=True)
+    CC.enregistrer_photo_remise(doc, photo, photo_nom)
 
-    from frappe.utils.pdf import get_pdf
-    pdf = get_pdf(_html_instantane(doc, m["data"], rap))
-    from frappe.utils.file_manager import save_file
-    save_file("caisse-%s-%s.pdf" % (caisse.replace(" ", "_"), date), pdf,
-              "Cloture Caisse", doc.name, is_private=1)
+    if mode == "seule":
+        CC.finaliser(doc, m, rap, validation_seule=True)
+    else:
+        CC.notifier_collecteurs(doc, rouverte=bool(existante))
     frappe.db.commit()
-    return {"name": doc.name}
+    return {"name": doc.name, "statut": doc.statut, "mode": mode, "rouverte": bool(existante)}
 
 
 def _html_instantane(doc, data, rap=None):
@@ -467,8 +544,12 @@ def _html_instantane(doc, data, rap=None):
     </style>"""]
     html.append(
         "<h1>Clôture de caisse — %s</h1>"
-        "<div class='sous'>%s · validée par %s · %s · %s</div>"
-        % (esc(doc.caisse), esc(str(doc.date_cloture)), esc(doc.valide_par),
+        "<div class='sous'>%s · %s · %s · %s</div>"
+        % (esc(doc.caisse), esc(str(doc.date_cloture)),
+           esc(("validée seule par %s" % doc.valide_par) if doc.get("validation_seule")
+               else "comptée par %s · collectée par %s%s" % (
+                   doc.valide_par, doc.get("collecte_par") or "?",
+                   " (par délégation, passation %s)" % doc.passation if doc.get("par_delegation") else "")),
            esc(str(now_datetime())[:19]), esc(doc.name)))
 
     html.append("""
@@ -485,6 +566,28 @@ def _html_instantane(doc, data, rap=None):
         fmt(doc.depenses_especes), fmt(doc.solde_theorique),
         (fmt(doc.especes_comptees) if doc.especes_comptees is not None else "—"),
         fmt(doc.ecart)))
+
+    # ── Remise au responsable de collecte (double validation) ────────────────
+    if not doc.get("validation_seule") and doc.get("collecte_par"):
+        html.append("""
+        <h2>Remise au responsable de collecte</h2>
+        <table class="etat">
+          <tr><td>Espèces remises (déclarées par %s)</td><td class="val">%s</td></tr>
+          <tr><td>Fond de caisse conservé</td><td class="val">%s</td></tr>
+          <tr><td>Chèques / traites remis (nombre)</td><td class="val">%s / %s</td></tr>
+          <tr><td>Espèces reçues (comptées par %s)</td><td class="val">%s</td></tr>
+          <tr><td>Chèques / traites reçus (nombre)</td><td class="val">%s / %s</td></tr>
+          <tr><td><b>Écart de remise (reçu − remis)</b></td><td class="val">%s</td></tr>
+          <tr><td>Collectée le</td><td class="val">%s</td></tr>
+        </table>""" % (
+            esc(doc.valide_par), fmt(doc.especes_remises), fmt(doc.fond_conserve),
+            doc.get("nb_cheques_remis") or 0, doc.get("nb_traites_remis") or 0,
+            esc(doc.collecte_par), fmt(doc.especes_recues),
+            doc.get("nb_cheques_recus") or 0, doc.get("nb_traites_recus") or 0,
+            fmt(doc.ecart_remise), esc(str(doc.collecte_le or "")[:16])))
+        if doc.get("echanges"):
+            html.append("<h3>Échanges sur la remise</h3><pre style='font-size:10.5px'>%s</pre>"
+                        % esc(doc.echanges))
 
     # ── Rapprochement (caisse globale) ───────────────────────────────────────
     if rap:
@@ -640,13 +743,29 @@ def cloture_info(caisse, date):
     page (lecture seule) : nom, PDF, qui, écart. None si pas encore validée."""
     frappe.only_for(ROLES)
     caisse = (caisse or "").strip() or CAISSE_GLOBALE
+    from customization_app import caisse_collecte as CC
+    if not CC.peut_voir_toutes_les_caisses() and caisse != CC._caisse_de(frappe.session.user):
+        return None
+    champs = ["name", "valide_par", "solde_theorique", "especes_comptees", "ecart", "statut",
+              "especes_remises", "especes_recues", "ecart_remise", "collecte_par", "collecte_le",
+              "validation_seule", "par_delegation", "passation", "tours_ecart", "echanges", "docstatus"]
     row = frappe.db.get_value(
         "Cloture Caisse",
-        {"caisse": caisse, "date_cloture": getdate(date), "docstatus": 1},
-        ["name", "valide_par", "solde_theorique", "especes_comptees", "ecart"],
-        as_dict=True)
+        {"caisse": caisse, "date_cloture": getdate(date), "docstatus": 1}, champs, as_dict=True)
     if not row:
-        return None
+        from customization_app import caisse_collecte as CC
+        row = frappe.db.get_value(
+            "Cloture Caisse",
+            {"caisse": caisse, "date_cloture": getdate(date), "docstatus": 0,
+             "statut": ["in", CC.STATUTS_EN_ATTENTE]}, champs, as_dict=True)
+        if not row:
+            return None
+        row["caisse"] = caisse
+        row["mienne"] = CC.peut_agir_sur(row)
+        row["pdf_url"] = None
+        return row
+    row["caisse"] = caisse
+    row["mienne"] = CC.peut_agir_sur(row)
     row["pdf_url"] = frappe.db.get_value(
         "File", {"attached_to_doctype": "Cloture Caisse", "attached_to_name": row.name,
                  "file_name": ["like", "%.pdf"]}, "file_url")

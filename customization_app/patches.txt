@@ -72,3 +72,5 @@ customization_app.patches.clore_visites_orphelines
 customization_app.patches.attribuer_onglet_appels
 customization_app.patches.ensure_commentaire_commande_fields
 customization_app.patches.backfill_statut_compagne_sms
+customization_app.patches.reprise_clotures_collecte
+customization_app.patches.config_caisse_date_depart

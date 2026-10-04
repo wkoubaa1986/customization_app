@@ -80,6 +80,28 @@ class RapportCaisseJournaliere {
     $("#rcj-btn-fa-saisir").on("click", () =>
       frappe.set_route("List", "Facture Achat a Saisir", { statut: "À saisir" }));
     $("#rcj-btn-cloture").on("click", () => rcj_cloture(this));
+    // Double validation : collecte par le responsable / un délégué, passation délégué -> titulaire.
+    $("#rcj-btn-collecte").on("click", () => rcj_collecte(this));
+    $("#rcj-btn-passation").on("click", () => rcj_passation(this));
+    $("#rcj-collecte-banner").on("click", "[data-ecart]", (e) => {
+      const $b = $(e.currentTarget);
+      rcj_repondre_ecart($b.attr("data-ecart"), $b.attr("data-accepter") === "1", () => this._fetch());
+    });
+    $("#rcj-cloture-banner").on("click", "[data-ecart]", (e) => {
+      const $b = $(e.currentTarget);
+      rcj_repondre_ecart($b.attr("data-ecart"), $b.attr("data-accepter") === "1", () => this._fetch());
+    });
+    $("#rcj-cloture-banner").on("click", "[data-rouvrir-comptage]", (e) => {
+      rcj_cloture(this, { rouvrir: $(e.currentTarget).attr("data-rouvrir-comptage") });
+    });
+    $("#rcj-cloture-banner").on("click", "[data-annuler-comptage]", (e) => {
+      const name = $(e.currentTarget).attr("data-annuler-comptage");
+      frappe.confirm(__("Annuler votre comptage {0} et recommencer ?", [name]), () => {
+        frappe.call({ method: "customization_app.caisse_collecte.annuler_comptage", args: { name },
+                      freeze: true, callback: () => this._fetch() });
+      });
+    });
+    frappe.realtime.on("caisse_collecte", () => this._afficher_collecte());
     // Exclure / réintégrer un paiement d'ancienne commande (correction de saisie).
     $(this.wrapper).on("click", ".rcj-exclure", (e) => {
       const $b = $(e.currentTarget);
@@ -93,6 +115,12 @@ class RapportCaisseJournaliere {
     $("#rcj-toggle-all").on("click", () => this._toggle_all());
     $("#rcj-chart-btn").on("click", () => this._toggle_chart());
     $("#rcj-chart-close").on("click", () => $("#rcj-chart-section").hide());
+    // Réglages de la caisse (Config Caisse) : responsable de collecte, délégués, date de départ, photo.
+    if (frappe.user.has_role("System Manager")) {
+      $("#rcj-btn-config").show().on("click", () => frappe.set_route("Form", "Config Caisse"));
+    }
+    // Sur téléphone, l'aide reste repliée : la caisse et ses boutons doivent arriver au premier écran.
+    if (window.innerWidth < 768) $(this.wrapper).find("details.rcj-note").removeAttr("open");
 
     const $emp = $("#rcj-employees");
     // collapse employee
@@ -194,6 +222,7 @@ class RapportCaisseJournaliere {
       this._peupler_filtre_employe();
       this._render();
       this._afficher_cloture();
+      this._afficher_collecte();
     } catch (e) {
       frappe.msgprint({ title: "Erreur", message: String(e), indicator: "red" });
     } finally {
@@ -213,14 +242,82 @@ class RapportCaisseJournaliere {
       callback: (r) => {
         const c = r.message;
         if (!c) return;
-        const ecart = c.ecart || 0;
-        $b.html(
-          `✅ ${__("Caisse validée")} — <a href="/app/cloture-caisse/${
-            encodeURIComponent(c.name)}">${c.name}</a> · ${__("par")} ${
-            frappe.utils.escape_html(c.valide_par)} · ${__("écart")} ${
-            rcj_dt(ecart)}${c.pdf_url
-              ? ` · <a href="${c.pdf_url}" target="_blank"><b>📄 ${__("Ouvrir le PDF")}</b></a>`
-              : ""}`).show();
+        const esc = frappe.utils.escape_html;
+        const lien = `<a href="/app/cloture-caisse/${encodeURIComponent(c.name)}">${c.name}</a>`;
+        if (c.docstatus === 1) {
+          const ecart = c.ecart || 0;
+          const qui = c.validation_seule
+            ? `${__("validée seule par")} ${esc(c.valide_par)}`
+            : `${__("comptée par")} ${esc(c.valide_par)} · ${__("collectée par")} ${esc(c.collecte_par || "?")}${
+                c.par_delegation ? ` (${__("par délégation")})` : ""}`;
+          const remise = (!c.validation_seule && Math.abs(c.ecart_remise || 0) >= 0.0005)
+            ? ` · <span style="color:#c0392b">${__("écart de remise")} ${rcj_dt(c.ecart_remise)}</span>` : "";
+          $b.css({ background: "#e6f4ea", borderColor: "#b7dfc2", borderLeftColor: "#1d6f42", color: "#1d6f42" })
+            .html(`✅ ${__("Caisse validée")} — ${lien} · ${qui} · ${__("écart")} ${rcj_dt(ecart)}${remise}${
+              c.pdf_url ? ` · <a href="${c.pdf_url}" target="_blank"><b>📄 ${__("Ouvrir le PDF")}</b></a>` : ""}`)
+            .show();
+          return;
+        }
+        // En attente de collecte / écart de remise (double validation).
+        if (c.statut === "Écart de remise") {
+          $b.css({ background: "#fdecea", borderColor: "#e0b4b4", borderLeftColor: "#a93226", color: "#a93226" })
+            .html(`⚠️ ${__("Remise contestée")} — ${lien} · ${esc(c.collecte_par || "?")} ${__("a reçu")} <b>${
+                rcj_dt(c.especes_recues)}</b> ${__("au lieu de")} <b>${rcj_dt(c.especes_remises)}</b>${
+              c.mienne ? `<div style="margin-top:6px">
+                  <button class="btn btn-xs btn-success" data-ecart="${esc(c.name)}" data-accepter="1">✅ ${__("Accepter le chiffre du responsable")}</button>
+                  <button class="btn btn-xs btn-default" data-ecart="${esc(c.name)}" data-accepter="0" style="margin-left:6px">✋ ${__("Maintenir mon comptage")}</button>
+                  <button class="btn btn-xs btn-primary" data-rouvrir-comptage="${esc(c.name)}" style="margin-left:6px">✏️ ${__("Rouvrir et recompter")}</button>
+                </div>` : ` · ${__("en attente de la réponse de")} ${esc(c.valide_par)}`}${
+              c.echanges ? `<pre style="font-size:11px;margin:6px 0 0;white-space:pre-wrap">${esc(c.echanges)}</pre>` : ""}`)
+            .show();
+          return;
+        }
+        $b.css({ background: "#fffbeb", borderColor: "#f59e0b", borderLeftColor: "#b45309", color: "#92400e" })
+          .html(`⏳ ${__("Caisse comptée, en attente de collecte")} — ${lien} · ${__("comptée par")} ${esc(c.valide_par)} · ${
+              __("espèces remises")} <b>${rcj_dt(c.especes_remises)}</b>${
+            c.mienne
+              ? ` · <button class="btn btn-xs btn-primary" data-rouvrir-comptage="${esc(c.name)}">✏️ ${__("Rouvrir et modifier")}</button>${
+                  !c.tours_ecart ? ` <button class="btn btn-xs btn-default" data-annuler-comptage="${esc(c.name)}">🗑 ${__("Annuler")}</button>` : ""}`
+              : ""}${c.echanges ? `<pre style="font-size:11px;margin:6px 0 0;white-space:pre-wrap">${esc(c.echanges)}</pre>` : ""}`)
+          .show();
+      },
+    });
+  }
+
+  _afficher_collecte() {
+    // Bandeau du responsable de collecte / délégué : caisses à collecter, passations ; et pour
+    // chacun, ses remises contestées (même quand la page affiche une autre caisse).
+    const $b = $("#rcj-collecte-banner").hide().empty();
+    $("#rcj-btn-collecte, #rcj-btn-passation").hide();
+    frappe.call({
+      method: "customization_app.caisse_collecte.contexte",
+      args: { date: $("#rcj-d2").val() || frappe.datetime.get_today() },
+      callback: (r) => {
+        const c = r.message || {};
+        this._collecte = c;
+        const esc = frappe.utils.escape_html;
+        const bouts = [];
+        if (c.role) {
+          $("#rcj-btn-collecte").show();
+          if (c.passations_a_remettre || c.passations_a_recevoir || c.role !== "titulaire") $("#rcj-btn-passation").show();
+          if (c.a_collecter) bouts.push(`📥 <b>${c.a_collecter}</b> ${__("caisse(s) à collecter")} — <a href="#" data-ouvrir="collecte">${__("ouvrir la collecte")}</a>`);
+          if (c.passations_a_recevoir) bouts.push(`🤝 <b>${c.passations_a_recevoir}</b> ${__("passation(s) à recevoir")} — <a href="#" data-ouvrir="passation">${__("ouvrir")}</a>`);
+          if (c.passations_a_remettre) bouts.push(`🤝 ${__("votre passation est ouverte")} — <a href="#" data-ouvrir="passation">${__("remettre au responsable")}</a>`);
+        }
+        (c.mes_ecarts || []).forEach((e) => bouts.push(
+          `⚠️ ${__("Remise contestée")} ${esc(e.caisse)} ${__("du")} ${esc(e.date)} : ${esc(e.collecte_par || "?")} ${__("a reçu")} <b>${
+            rcj_dt(e.especes_recues)}</b> ${__("au lieu de")} <b>${rcj_dt(e.especes_remises)}</b>
+           <button class="btn btn-xs btn-success" data-ecart="${esc(e.name)}" data-accepter="1" style="margin-left:6px">✅ ${__("Accepter")}</button>
+           <button class="btn btn-xs btn-default" data-ecart="${esc(e.name)}" data-accepter="0" style="margin-left:4px">✋ ${__("Maintenir")}</button>`));
+        (c.mes_passations_ecart || []).forEach((p) => bouts.push(
+          `⚠️ ${__("Passation contestée")} ${esc(p.name)} : ${__("reçu")} <b>${rcj_dt(p.especes_recues)}</b> ${__("au lieu de")} <b>${
+            rcj_dt(p.total_especes)}</b> — <a href="#" data-ouvrir="passation">${__("répondre")}</a>`));
+        if (!bouts.length) return;
+        $b.html(bouts.map((x) => `<div style="margin:2px 0">${x}</div>`).join("")).show();
+        $b.find("[data-ouvrir]").on("click", (e) => {
+          e.preventDefault();
+          ($(e.currentTarget).attr("data-ouvrir") === "collecte" ? rcj_collecte : rcj_passation)(this);
+        });
       },
     });
   }
@@ -231,14 +328,18 @@ class RapportCaisseJournaliere {
     const $sel = $("#rcj-employe");
     const courant = this._data.employe || $sel.val() || "";
     const noms = this._data.employes || [];
-    if ($sel.data("peuple") !== noms.join("|")) {
-      $sel.data("peuple", noms.join("|"));
-      $sel.empty().append(`<option value="">${__("Tous les employés")}</option>`);
+    const cle = (this._data.restreint ? "R|" : "") + noms.join("|");
+    if ($sel.data("peuple") !== cle) {
+      $sel.data("peuple", cle);
+      $sel.empty();
+      // Vue restreinte (ni responsable de collecte, ni délégué en période) : sa caisse, rien d'autre.
+      if (!this._data.restreint) $sel.append(`<option value="">${__("Tous les employés")}</option>`);
       noms.forEach((n) => $sel.append(
         `<option value="${frappe.utils.escape_html(n)}">${frappe.utils.escape_html(n)}</option>`));
     }
     $sel.val(courant);
     $("#rcj-caisse-nom").text(courant || __("Tous les employés"));
+    $sel.prop("disabled", !!this._data.restreint && noms.length <= 1);
   }
 
   _render() {
@@ -2095,8 +2196,9 @@ RapportCaisseJournaliere.prototype._render_depenses = function () {
 // (théorique), espèces comptées et écart — figé dans un document soumis avec
 // son PDF instantané. Chaque employé valide SA caisse ; la direction valide
 // n'importe laquelle et la globale « Tous les employés ».
-function rcj_cloture(rapport) {
+function rcj_cloture(rapport, opts) {
   const API = "customization_app.caisse_cloture";
+  opts = opts || {};   // { rouvrir: <nom du brouillon> } : réouverture du comptage de l'employé
   const d1 = $("#rcj-d1").val(), d2 = $("#rcj-d2").val();
   if (d1 !== d2) {
     frappe.msgprint(__("La clôture porte sur UNE journée : mettez « De » = « À »."));
@@ -2109,6 +2211,24 @@ function rcj_cloture(rapport) {
     freeze: true,
     callback: (r) => {
       const e = r.message || {};
+      const reprise = (e.en_attente && opts.rouvrir === e.en_attente.name) ? e.en_attente : null;
+      if (e.en_attente && !reprise) {
+        const lien = `<a href="/app/cloture-caisse/${encodeURIComponent(e.en_attente.name)}">${e.en_attente.name}</a>`;
+        const msg = frappe.msgprint({
+          title: __("Caisse déjà comptée"),
+          indicator: "orange",
+          message: __("La caisse « {0} » du {1} est comptée ({2}, {3}) : elle attend la collecte du responsable.",
+            [caisse, frappe.datetime.str_to_user(d1), lien, e.en_attente.statut])
+            + (e.en_attente.rouvrable
+              ? `<div style="margin-top:10px">${__("Tant qu'elle n'est pas collectée, vous pouvez la rouvrir et corriger votre comptage.")}</div>`
+              : ""),
+          primary_action: e.en_attente.rouvrable ? {
+            label: __("↩ Rouvrir et modifier mon comptage"),
+            action: () => { msg.hide(); rcj_cloture(rapport, { rouvrir: e.en_attente.name }); },
+          } : undefined,
+        });
+        return;
+      }
       if (e.deja_validee) {
         frappe.msgprint({
           title: __("Caisse déjà validée"),
@@ -2124,13 +2244,16 @@ function rcj_cloture(rapport) {
       }
       const fmt = (v) => rcj_dt(v || 0);
       const d = new frappe.ui.Dialog({
-        title: __("Valider la caisse — {0} ({1})", [caisse, frappe.datetime.str_to_user(d1)]),
+        title: reprise
+          ? __("Rouvrir le comptage — {0} ({1}) — {2}", [caisse, frappe.datetime.str_to_user(d1), reprise.name])
+          : __("Valider la caisse — {0} ({1})", [caisse, frappe.datetime.str_to_user(d1)]),
         fields: [
           { fieldtype: "HTML", fieldname: "controles" },
           { fieldtype: "HTML", fieldname: "etat" },
           {
             fieldtype: "Currency", fieldname: "comptees",
-            label: __("Espèces comptées (physique)"), default: e.solde_theorique,
+            label: __("Espèces comptées (physique)"),
+            default: reprise ? reprise.especes_comptees : e.solde_theorique,
             onchange: () => {
               const ecart = (d.get_value("comptees") || 0) - e.solde_theorique;
               d.fields_dict.etat.$wrapper.find(".rcj-clo-ecart")
@@ -2138,9 +2261,31 @@ function rcj_cloture(rapport) {
                 .css("color", Math.abs(ecart) < 0.005 ? "#1d6f42" : "#c0392b");
             },
           },
-          { fieldtype: "Small Text", fieldname: "note", label: __("Note") },
+          ...(e.mode_validation === "double" ? [
+            { fieldtype: "Section Break", fieldname: "sb_remise", label: __("Remise au responsable de collecte") },
+            {
+              fieldtype: "Currency", fieldname: "remises", label: __("Espèces remises au responsable"),
+              default: reprise ? reprise.especes_remises : e.solde_theorique, reqd: 1,
+              description: __("Ce que vous donnez ce soir. Le reste est votre fond de caisse pour demain."),
+              onchange: () => {
+                const fond = (d.get_value("comptees") || 0) - (d.get_value("remises") || 0);
+                d.fields_dict.etat.$wrapper.find(".rcj-clo-fond").text(fmt(fond))
+                  .css("color", fond < -0.0005 ? "#c0392b" : "#333");
+              },
+            },
+            { fieldtype: "Column Break", fieldname: "cb_remise" },
+            { fieldtype: "Int", fieldname: "nb_cheques", label: __("Chèques remis (nombre)"), default: reprise ? reprise.nb_cheques_remis : 0 },
+            { fieldtype: "Int", fieldname: "nb_traites", label: __("Traites remises (nombre)"), default: reprise ? reprise.nb_traites_remis : 0 },
+            { fieldtype: "Section Break", fieldname: "sb_photo" },
+            { fieldtype: "HTML", fieldname: "photo",
+              options: `<label style="font-weight:600">📷 ${__("Photo de la remise")}${e.photo_obligatoire ? " *" : ` <span class="text-muted">(${__("facultative")})</span>`}</label>
+                        <input type="file" accept="image/*" capture="environment" class="form-control input-sm rcj-photo-remise">
+                        <div class="rcj-photo-remise-nom text-muted" style="font-size:11px;margin-top:2px"></div>` },
+          ] : []),
+          { fieldtype: "Small Text", fieldname: "note", label: __("Note"), default: reprise ? reprise.note : "" },
         ],
-        primary_action_label: __("Valider et figer"),
+        primary_action_label: reprise ? __("Enregistrer mon nouveau comptage")
+          : (e.mode_validation === "double" ? __("Compter et remettre") : __("Valider et figer")),
         primary_action(v) {
           // Un BL en brouillon bloque ; chaque autre point exige sa justification.
           if ((e.controles || []).some((c) => c.bloquant)) {
@@ -2158,15 +2303,36 @@ function rcj_cloture(rapport) {
             frappe.msgprint(__("Chaque point de contrôle doit être justifié."));
             return;
           }
+          const double = e.mode_validation === "double";
+          if (double) {
+            if (v.comptees === undefined || v.comptees === null || v.comptees === "") {
+              frappe.msgprint(__("Comptez d'abord les espèces.")); return;
+            }
+            if ((v.remises || 0) < 0 || (v.remises || 0) - (v.comptees || 0) > 0.0005) {
+              frappe.msgprint(__("Les espèces remises ne peuvent pas dépasser les espèces comptées.")); return;
+            }
+            if (e.photo_obligatoire && !photo.data) {
+              frappe.msgprint(__("La photo de la remise est obligatoire.")); return;
+            }
+          }
           frappe.call({
             method: API + ".valider",
             args: { caisse, date: d1, especes_comptees: v.comptees, note: v.note,
-                    justifications: JSON.stringify(justifications) },
-            freeze: true, freeze_message: __("Clôture et génération du PDF…"),
+                    justifications: JSON.stringify(justifications),
+                    especes_remises: double ? v.remises : null,
+                    nb_cheques_remis: double ? (v.nb_cheques || 0) : 0,
+                    nb_traites_remis: double ? (v.nb_traites || 0) : 0,
+                    photo: photo.data, photo_nom: photo.nom,
+                    rouvrir: reprise ? reprise.name : null },
+            freeze: true, freeze_message: double ? __("Enregistrement du comptage…") : __("Clôture et génération du PDF…"),
             callback: (rr) => {
               d.hide();
-              frappe.msgprint(__("Caisse validée : {0} — le PDF instantané est attaché.",
-                [`<a href="/app/cloture-caisse/${encodeURIComponent(rr.message.name)}">${rr.message.name}</a>`]));
+              const lien = `<a href="/app/cloture-caisse/${encodeURIComponent(rr.message.name)}">${rr.message.name}</a>`;
+              frappe.msgprint(rr.message.rouverte
+                ? __("Comptage modifié : {0} — le responsable est prévenu et recollectera sur ces nouveaux chiffres.", [lien])
+                : rr.message.mode === "double"
+                  ? __("Comptage enregistré : {0} — remettez la caisse au responsable, qui confirmera la réception.", [lien])
+                  : __("Caisse validée : {0} — le PDF instantané est attaché.", [lien]));
               if (rapport && rapport._fetch) rapport._fetch();
             },
           });
@@ -2186,6 +2352,7 @@ function rcj_cloture(rapport) {
                <div style="color:#7a5d10;font-weight:600">⚠️ ${frappe.utils.escape_html(c.libelle)}</div>
                <input class="form-control input-sm rcj-just" style="margin-top:4px"
                       data-cle="${frappe.utils.escape_html(c.cle)}"
+                      value="${frappe.utils.escape_html((reprise && reprise.justifications_precedentes || {})[c.libelle] || "")}"
                       placeholder="${__("Justification (obligatoire)")}">
              </div>`).join("");
         d.fields_dict.controles.$wrapper.html(
@@ -2216,10 +2383,346 @@ function rcj_cloture(rapport) {
           <tr><td>${__("Écart (compté − théorique)")}</td>
               <td style="text-align:right;font-weight:700" ><span class="rcj-clo-ecart"
                   style="color:#1d6f42">${fmt(0)}</span></td></tr>
+          ${e.mode_validation === "double" ? `
+          <tr><td>${__("Fond de caisse conservé (compté − remis)")}</td>
+              <td style="text-align:right;font-weight:700"><span class="rcj-clo-fond">${fmt(0)}</span></td></tr>` : ""}
           <tr><td class="text-muted">${__("Chèques du jour")} · ${__("Autres modes")}</td>
               <td style="text-align:right" class="text-muted">${fmt(e.total_cheques)} · ${
                 fmt(e.total_autres_modes)}</td></tr>
-        </table>${rcj_html_rapprochement(e.rapprochement, fmt)}`);
+        </table>${e.date_depart && d1 >= e.date_depart && e.solde_ouverture === 0
+          ? `<div class="text-muted" style="font-size:11px;margin:-4px 0 8px">${__("Caisses remises à zéro depuis le {0} (Config Caisse).",
+              [frappe.datetime.str_to_user(e.date_depart)])}</div>` : ""}${rcj_html_rapprochement(e.rapprochement, fmt)}`);
+      const photo = { data: null, nom: null };
+      if (e.mode_validation === "double") {
+        d.fields_dict.photo.$wrapper.find("input[type=file]").on("change", function () {
+          const f = this.files && this.files[0];
+          if (!f) { photo.data = null; photo.nom = null; return; }
+          const lecteur = new FileReader();
+          lecteur.onload = () => {
+            photo.data = lecteur.result; photo.nom = f.name;
+            d.fields_dict.photo.$wrapper.find(".rcj-photo-remise-nom").text(f.name);
+          };
+          lecteur.readAsDataURL(f);
+        });
+      }
+      d.show();
+      if (e.mode_validation === "double") {
+        // Le fond conservé part de « tout remis » (0) : l'employé ajuste s'il garde de la monnaie.
+        d.fields_dict.etat.$wrapper.find(".rcj-clo-fond").text(fmt(0));
+      }
+    },
+  });
+}
+
+
+// ── Double validation : collecte (responsable / délégué) ─────────────────────
+// Chaque clôture « À collecter » : montant déclaré par l'employé, ce que le
+// responsable a reçu ; identique -> validée (deux signatures) ; différent ->
+// « Écart de remise » renvoyé à l'employé ; après un tour, le responsable tranche.
+function rcj_html_echanges(txt) {
+  return txt ? `<pre style="font-size:11px;margin:4px 0 0;white-space:pre-wrap;background:#fafafa;border:1px solid #eee;padding:4px 6px">${
+    frappe.utils.escape_html(txt)}</pre>` : "";
+}
+
+function rcj_repondre_ecart(name, accepter, on_done) {
+  const d = new frappe.ui.Dialog({
+    title: accepter ? __("Accepter le chiffre du responsable") : __("Maintenir mon comptage"),
+    fields: [{ fieldtype: "Small Text", fieldname: "commentaire", label: __("Commentaire"),
+               reqd: accepter ? 0 : 1 }],
+    primary_action_label: accepter ? __("Accepter") : __("Maintenir"),
+    primary_action(v) {
+      frappe.call({
+        method: "customization_app.caisse_collecte.repondre_ecart",
+        args: { name, accepter: accepter ? 1 : 0, commentaire: v.commentaire },
+        freeze: true,
+        callback: (r) => {
+          d.hide();
+          frappe.show_alert({ message: `${name} : ${r.message.statut}`, indicator: accepter ? "green" : "orange" });
+          if (on_done) on_done();
+        },
+      });
+    },
+  });
+  d.show();
+}
+
+function rcj_collecte(rapport) {
+  const API = "customization_app.caisse_collecte";
+  const esc = frappe.utils.escape_html;
+  const date = $("#rcj-d2").val() || frappe.datetime.get_today();
+  frappe.call({
+    method: API + ".a_collecter", args: { date }, freeze: true,
+    callback: (r) => {
+      const m = r.message || {};
+      const d = new frappe.ui.Dialog({
+        title: __("Collecte des caisses — {0}", [frappe.datetime.str_to_user(date)]),
+        size: "large",
+        fields: [{ fieldtype: "HTML", fieldname: "corps" }],
+      });
+      // Une CARTE par caisse : ce que l'employé déclare en gros, puis un seul geste quand c'est
+      // conforme (« ✅ Reçu conforme ») ; « ✏️ Autre montant » ouvre la saisie du reçu.
+      const carte = (c) => {
+        const contestee = c.statut === "Écart de remise";
+        const maintenue = !contestee && c.tours_ecart > 0;
+        const entete = `
+          <div class="rcj-cc-tete">
+            <div>
+              <div class="rcj-cc-nom">${esc(c.caisse)}</div>
+              <div class="rcj-cc-sous">${__("comptée par")} <b>${esc(c.valide_par_nom || c.valide_par)}</b> · ${esc(c.compte_le)} ·
+                <a href="/app/cloture-caisse/${encodeURIComponent(c.name)}" target="_blank">${esc(c.name)}</a></div>
+            </div>
+            ${contestee ? `<span class="rcj-cc-badge rcj-cc-badge-rouge">⚠️ ${__("écart signalé")}</span>`
+              : maintenue ? `<span class="rcj-cc-badge rcj-cc-badge-orange">✋ ${__("comptage maintenu")}</span>`
+              : `<span class="rcj-cc-badge">⏳ ${__("à recevoir")}</span>`}
+          </div>`;
+        const declare = `
+          <div class="rcj-cc-declare">
+            <div class="rcj-cc-montant">${rcj_dt(c.especes_remises)}</div>
+            <div class="rcj-cc-detail">${__("espèces à recevoir")} · ${c.nb_cheques_remis} ${__("chèque(s)")} · ${c.nb_traites_remis} ${__("traite(s)")}</div>
+            <div class="rcj-cc-detail text-muted">${__("comptées")} ${rcj_dt(c.especes_comptees)} · ${__("fond conservé")} ${rcj_dt(c.fond_conserve)} · ${__("écart caisse")} ${rcj_dt(c.ecart)}${
+              c.note ? ` · <i>${esc(c.note)}</i>` : ""}</div>
+            ${c.photo_remise ? `<a href="${c.photo_remise}" target="_blank"><img class="rcj-cc-photo" src="${c.photo_remise}" alt="photo"></a>` : ""}
+          </div>`;
+        let actions = "";
+        if (contestee) {
+          actions = `<div class="rcj-cc-attente">⚠️ ${__("Vous avez reçu")} <b>${rcj_dt(c.especes_recues)}</b> ${__("au lieu de")} <b>${rcj_dt(c.especes_remises)}</b> — ${__("en attente de la réponse de")} ${esc(c.valide_par)}.</div>`;
+        } else if (c.validation_directe) {
+          actions = `
+            <div class="rcj-cc-attente">${__("Vous avez compté cette caisse vous-même : validation directe, sans seconde signature.")}</div>
+            <div class="rcj-cc-actions">
+              <button class="btn btn-success btn-lg rcj-cc-ok" data-name="${esc(c.name)}">✅ ${__("Valider directement")} — ${rcj_dt(c.especes_remises)}</button>
+            </div>`;
+        } else if (c.auto_passation) {
+          actions = `
+            <div class="rcj-cc-attente">${__("Votre propre caisse, en l'absence du titulaire : elle entre telle quelle dans votre passation.")}</div>
+            <button class="btn btn-success rcj-cc-ok" data-name="${esc(c.name)}">🤝 ${__("Verser dans ma passation")}</button>`;
+        } else {
+          actions = `
+            <div class="rcj-cc-actions">
+              <button class="btn btn-success btn-lg rcj-cc-ok" data-name="${esc(c.name)}">✅ ${__("Reçu conforme")} — ${rcj_dt(c.especes_remises)}</button>
+              <button class="btn btn-default rcj-cc-autre" data-name="${esc(c.name)}">✏️ ${__("J'ai reçu un autre montant")}</button>
+            </div>
+            <div class="rcj-cc-saisie" style="display:none">
+              <label>${__("Espèces reçues")}</label>
+              <input type="number" step="0.001" min="0" inputmode="decimal" class="form-control rcj-col-especes" value="${c.especes_recues !== null && c.especes_recues !== undefined ? c.especes_recues : c.especes_remises}">
+              <div class="rcj-cc-deux">
+                <div><label>${__("Chèques reçus")}</label><input type="number" step="1" min="0" inputmode="numeric" class="form-control rcj-col-cheques" value="${c.nb_cheques_remis}"></div>
+                <div><label>${__("Traites reçues")}</label><input type="number" step="1" min="0" inputmode="numeric" class="form-control rcj-col-traites" value="${c.nb_traites_remis}"></div>
+              </div>
+              <label>${__("Commentaire pour l'employé")}</label>
+              <input type="text" class="form-control rcj-col-comm" placeholder="${__("ex. : il manque 50 DT, enveloppe ouverte…")}">
+              <div class="rcj-cc-actions">
+                <button class="btn btn-warning rcj-cc-ecart" data-name="${esc(c.name)}">⚠️ ${__("Signaler l'écart à l'employé")}</button>
+                ${c.forcable ? `<button class="btn btn-danger rcj-cc-forcer" data-name="${esc(c.name)}">⚖️ ${__("Trancher : retenir mon chiffre")}</button>` : ""}
+              </div>
+            </div>`;
+        }
+        return `<div class="rcj-cc-carte${contestee ? " rcj-cc-contestee" : ""}" data-name="${esc(c.name)}">
+            ${entete}${declare}${rcj_html_echanges(c.echanges)}${actions}</div>`;
+      };
+      const rendre = () => {
+        const cartes = (m.clotures || []).map(carte).join("");
+        const manquantes = (m.non_comptees || []).map((n) =>
+          `<div class="rcj-cc-manque">⏳ <b>${esc(n.caisse)}</b> : ${rcj_dt(n.especes)} ${__("d'espèces encaissées, pas encore comptées")}
+             <button class="btn btn-xs btn-default rcj-cc-compter" data-caisse="${esc(n.caisse)}" style="margin-left:6px">📝 ${__("Compter cette caisse")}</button></div>`).join("");
+        d.fields_dict.corps.$wrapper.html(`
+          ${m.par_delegation ? `<div class="rcj-cc-info">🤝 ${__("Vous collectez par délégation : chaque caisse confirmée entre dans votre passation, à remettre au responsable.")}</div>` : ""}
+          ${cartes || `<div class="rcj-cc-vide">✅ ${__("Aucune caisse en attente de collecte.")}</div>`}
+          ${manquantes ? `<div class="rcj-cc-titre">${__("Pas encore comptées aujourd'hui")}</div>${manquantes}` : ""}`);
+        const $w = d.fields_dict.corps.$wrapper;
+        // Compter à la place d'un employé absent : la page bascule sur sa caisse et ouvre le
+        // comptage ; le responsable validera ensuite directement depuis cette collecte.
+        $w.find(".rcj-cc-compter").on("click", function () {
+          const caisse = $(this).attr("data-caisse");
+          d.hide();
+          $("#rcj-d1").val(date); $("#rcj-d2").val(date);
+          const $sel = $("#rcj-employe");
+          if (!$sel.find(`option[value="${caisse.replace(/"/g, '\\"')}"]`).length) {
+            $sel.append(`<option value="${esc(caisse)}">${esc(caisse)}</option>`);
+          }
+          $sel.val(caisse);
+          if (rapport && rapport._fetch) {
+            Promise.resolve(rapport._fetch()).then(() => rcj_cloture(rapport));
+          } else {
+            rcj_cloture(rapport);
+          }
+        });
+        $w.find(".rcj-cc-autre").on("click", function () {
+          const $c = $(this).closest(".rcj-cc-carte");
+          $c.find(".rcj-cc-saisie").slideDown(150);
+          $(this).hide();
+          $c.find(".rcj-col-especes").focus().select();
+        });
+        const envoyer = (name, args, confirmer) => {
+          const go = () => frappe.call({
+            method: API + ".collecter", args: Object.assign({ name }, args), freeze: true, freeze_message: __("Collecte…"),
+            callback: (rr) => {
+              const res = rr.message || {};
+              frappe.show_alert({ message: res.statut === "Validée"
+                  ? __("Caisse {0} validée.", [name]) : __("Écart signalé à l'employé ({0}).", [name]),
+                indicator: res.statut === "Validée" ? "green" : "orange" });
+              frappe.call({ method: API + ".a_collecter", args: { date },
+                            callback: (r2) => { Object.assign(m, r2.message || {}); rendre(); } });
+              if (rapport && rapport._fetch) rapport._fetch();
+            },
+          });
+          if (confirmer) frappe.confirm(confirmer, go); else go();
+        };
+        $w.find(".rcj-cc-ok").on("click", function () {
+          // Conforme : on confirme exactement ce que l'employé déclare — un seul geste.
+          const c = (m.clotures || []).find((x) => x.name === $(this).attr("data-name"));
+          envoyer(c.name, { especes_recues: c.especes_remises, nb_cheques_recus: c.nb_cheques_remis,
+                            nb_traites_recus: c.nb_traites_remis, forcer: 0 });
+        });
+        $w.find(".rcj-cc-ecart, .rcj-cc-forcer").on("click", function () {
+          const $c = $(this).closest(".rcj-cc-carte");
+          const forcer = $(this).hasClass("rcj-cc-forcer") ? 1 : 0;
+          const args = { forcer,
+            especes_recues: $c.find(".rcj-col-especes").val() || 0,
+            nb_cheques_recus: $c.find(".rcj-col-cheques").val() || 0,
+            nb_traites_recus: $c.find(".rcj-col-traites").val() || 0,
+            commentaire: $c.find(".rcj-col-comm").val() || "" };
+          envoyer($(this).attr("data-name"), args,
+                  forcer ? __("Trancher : l'écart de remise est retenu tel que vous l'avez saisi. Continuer ?") : null);
+        });
+      };
+      rendre();
+      d.show();
+    },
+  });
+}
+
+
+// ── Passation délégué -> titulaire ───────────────────────────────────────────
+function rcj_passation(rapport) {
+  const API = "customization_app.caisse_collecte";
+  const esc = frappe.utils.escape_html;
+  frappe.call({
+    method: API + ".passations", freeze: true,
+    callback: (r) => {
+      const m = r.message || {};
+      const d = new frappe.ui.Dialog({
+        title: __("Passations de caisse"), size: "extra-large",
+        fields: [{ fieldtype: "HTML", fieldname: "corps" }],
+      });
+      const bloc = (p, recevoir) => {
+        const lignes = p.lignes.map((l) =>
+          `<tr><td>${esc(l.caisse)}</td><td>${esc(l.date)}</td><td>${esc(l.employe_nom || l.employe || "")}</td>
+               <td style="text-align:right">${rcj_dt(l.especes)}</td><td style="text-align:right">${l.nb_cheques}</td>
+               <td style="text-align:right">${l.nb_traites}</td>
+               <td><a href="/app/cloture-caisse/${encodeURIComponent(l.cloture)}" target="_blank">${esc(l.cloture)}</a></td></tr>`).join("");
+        let actions = "";
+        if (recevoir && p.statut !== "Écart") {
+          actions = `
+            <div class="rcj-cc-actions">
+              <button class="btn btn-success btn-lg rcj-pas-conforme" data-name="${esc(p.name)}">✅ ${__("Reçu conforme")} — ${rcj_dt(p.total_especes)}</button>
+              <button class="btn btn-default rcj-pas-autre">✏️ ${__("J'ai reçu un autre montant")}</button>
+            </div>
+            <div class="rcj-cc-saisie" style="display:none">
+              <label>${__("Espèces reçues")}</label>
+              <input type="number" step="0.001" min="0" inputmode="decimal" class="form-control rcj-pas-especes"
+                     value="${p.especes_recues !== null && p.especes_recues !== undefined ? p.especes_recues : p.total_especes}">
+              <div class="rcj-cc-deux">
+                <div><label>${__("Chèques reçus")}</label><input type="number" step="1" min="0" class="form-control rcj-pas-cheques" value="${p.total_cheques}"></div>
+                <div><label>${__("Traites reçues")}</label><input type="number" step="1" min="0" class="form-control rcj-pas-traites" value="${p.total_traites}"></div>
+              </div>
+              <label>${__("Commentaire pour le délégué")}</label>
+              <input type="text" class="form-control rcj-pas-comm" placeholder="${__("ex. : il manque 100 DT")}">
+              <div class="rcj-cc-actions">
+                <button class="btn btn-warning rcj-pas-ok" data-name="${esc(p.name)}">⚠️ ${__("Signaler l'écart au délégué")}</button>
+                ${p.forcable ? `<button class="btn btn-danger rcj-pas-forcer" data-name="${esc(p.name)}">⚖️ ${__("Trancher : retenir mon chiffre")}</button>` : ""}
+              </div>
+            </div>`;
+        } else if (recevoir) {
+          actions = `<div class="text-muted" style="margin-top:4px">⚠️ ${__("Écart signalé — en attente de la réponse de")} ${esc(p.delegue)}</div>`;
+        } else if (p.statut === "Écart") {
+          actions = `
+            <div style="margin-top:6px">⚠️ ${esc(p.responsable || "?")} ${__("a reçu")} <b>${rcj_dt(p.especes_recues)}</b> ${__("au lieu de")} <b>${rcj_dt(p.total_especes)}</b>
+              <button class="btn btn-xs btn-success rcj-pas-rep" data-name="${esc(p.name)}" data-accepter="1" style="margin-left:6px">✅ ${__("Accepter")}</button>
+              <button class="btn btn-xs btn-default rcj-pas-rep" data-name="${esc(p.name)}" data-accepter="0" style="margin-left:4px">✋ ${__("Maintenir")}</button>
+            </div>`;
+        } else {
+          actions = `
+            <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:6px">
+              <input type="text" class="form-control input-sm rcj-pas-note" style="width:260px" placeholder="${__("Note (facultative)")}">
+              <button class="btn btn-sm btn-primary rcj-pas-remettre" data-name="${esc(p.name)}" ${p.statut === "À remettre" ? "disabled" : ""}>
+                🤝 ${p.statut === "À remettre" ? __("Remise annoncée, en attente du responsable") : __("Remettre au responsable")}</button>
+            </div>`;
+        }
+        return `
+          <div class="rcj-pas-bloc" data-name="${esc(p.name)}" style="border:1px solid #e4e8ee;border-radius:8px;padding:8px 10px;margin-bottom:10px">
+            <div><b>${esc(p.name)}</b> · ${__("délégué")} <b>${esc(p.delegue_nom || p.delegue)}</b> · ${esc(p.date_debut)} → ${esc(p.date_fin)} · <b>${esc(p.statut)}</b></div>
+            <table class="table table-bordered table-sm" style="font-size:12px;margin:6px 0">
+              <tr style="background:#f6f6f6"><th>${__("Caisse")}</th><th>${__("Date")}</th><th>${__("Comptée par")}</th>
+                  <th style="text-align:right">${__("Espèces")}</th><th style="text-align:right">${__("Chèques")}</th>
+                  <th style="text-align:right">${__("Traites")}</th><th></th></tr>
+              ${lignes}
+              <tr style="font-weight:700"><td colspan="3">${__("Total à remettre")}</td><td style="text-align:right">${rcj_dt(p.total_especes)}</td>
+                  <td style="text-align:right">${p.total_cheques}</td><td style="text-align:right">${p.total_traites}</td><td></td></tr>
+            </table>
+            ${rcj_html_echanges(p.echanges)}
+            ${actions}
+          </div>`;
+      };
+      const rendre = () => {
+        const a_rem = (m.a_remettre || []).map((p) => bloc(p, false)).join("");
+        const a_rec = (m.a_recevoir || []).map((p) => bloc(p, true)).join("");
+        d.fields_dict.corps.$wrapper.html(`
+          ${a_rem ? `<div style="font-weight:700;margin-bottom:6px">${__("À remettre au responsable (vous)")}</div>${a_rem}` : ""}
+          ${a_rec ? `<div style="font-weight:700;margin-bottom:6px">${__("À recevoir des délégués")}</div>${a_rec}` : ""}
+          ${!a_rem && !a_rec ? `<div class="text-muted">${__("Aucune passation en cours.")}</div>` : ""}`);
+        const recharger = () => frappe.call({ method: API + ".passations",
+          callback: (r2) => { Object.assign(m, r2.message || {}); rendre(); if (rapport && rapport._fetch) rapport._fetch(); } });
+        const $w = d.fields_dict.corps.$wrapper;
+        $w.find(".rcj-pas-remettre").on("click", function () {
+          const $b = $(this).closest(".rcj-pas-bloc");
+          frappe.call({ method: API + ".remettre_passation",
+                        args: { name: $(this).attr("data-name"), note: $b.find(".rcj-pas-note").val() || "" },
+                        freeze: true, callback: recharger });
+        });
+        $w.find(".rcj-pas-autre").on("click", function () {
+          const $b = $(this).closest(".rcj-pas-bloc");
+          $b.find(".rcj-cc-saisie").slideDown(150); $(this).hide();
+          $b.find(".rcj-pas-especes").focus().select();
+        });
+        $w.find(".rcj-pas-conforme, .rcj-pas-ok, .rcj-pas-forcer").on("click", function () {
+          const $b = $(this).closest(".rcj-pas-bloc");
+          const forcer = $(this).hasClass("rcj-pas-forcer") ? 1 : 0;
+          const conforme = $(this).hasClass("rcj-pas-conforme");
+          const p = (m.a_recevoir || []).find((x) => x.name === $(this).attr("data-name")) || {};
+          const args = conforme
+            ? { name: p.name, forcer: 0, especes_recues: p.total_especes, nb_cheques_recus: p.total_cheques,
+                nb_traites_recus: p.total_traites, commentaire: "" }
+            : { name: $(this).attr("data-name"), forcer,
+                especes_recues: $b.find(".rcj-pas-especes").val() || 0,
+                nb_cheques_recus: $b.find(".rcj-pas-cheques").val() || 0,
+                nb_traites_recus: $b.find(".rcj-pas-traites").val() || 0,
+                commentaire: $b.find(".rcj-pas-comm").val() || "" };
+          const envoyer = () => frappe.call({ method: API + ".valider_passation", args, freeze: true,
+            callback: (rr) => {
+              frappe.show_alert({ message: `${args.name} : ${rr.message.statut}`,
+                                  indicator: rr.message.statut === "Validée" ? "green" : "orange" });
+              recharger();
+            } });
+          if (forcer) frappe.confirm(__("Trancher : l'écart est retenu tel que saisi. Continuer ?"), envoyer);
+          else envoyer();
+        });
+        $w.find(".rcj-pas-rep").on("click", function () {
+          const name = $(this).attr("data-name"), accepter = $(this).attr("data-accepter") === "1";
+          const dd = new frappe.ui.Dialog({
+            title: accepter ? __("Accepter le chiffre du responsable") : __("Maintenir mes totaux"),
+            fields: [{ fieldtype: "Small Text", fieldname: "commentaire", label: __("Commentaire"), reqd: accepter ? 0 : 1 }],
+            primary_action_label: accepter ? __("Accepter") : __("Maintenir"),
+            primary_action(v) {
+              frappe.call({ method: API + ".repondre_ecart_passation",
+                            args: { name, accepter: accepter ? 1 : 0, commentaire: v.commentaire },
+                            freeze: true, callback: () => { dd.hide(); recharger(); } });
+            },
+          });
+          dd.show();
+        });
+      };
+      rendre();
       d.show();
     },
   });
