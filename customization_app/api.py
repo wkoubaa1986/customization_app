@@ -2308,12 +2308,57 @@ def save_investigation_note(tache, note):
 def marquer_tache_rattrapee(tache, raison="planifié"):
     """
     Mark a Tache de travail as handled (planifié, contacté, etc.)
-    so it disappears from the Rattrapage report.
+    so it disappears from the Rattrapage report (qui / quand gardés depuis le 05/10/2026).
     """
-    frappe.db.set_value("Tache de travail", tache, "recontacte", raison,
-                        update_modified=False)
+    _tracer_recontacte(tache, raison)
     frappe.db.commit()
     return True
+
+
+# Liste Appels Rattrapage — client injoignable : le 1er appel sans réponse le LAISSE dans la liste (on rappellera),
+# le 2e l'en SORT (demande du 05/10/2026).
+RECONTACTE_1ER_APPEL = "1er appel sans réponse"
+RECONTACTE_2E_APPEL = "2e appel sans réponse"
+
+
+def _tracer_recontacte(tache, valeur):
+    """recontacte + qui / quand, sans toucher à `modified` : la tâche elle-même n'a pas changé."""
+    valeurs = {"recontacte": valeur}
+    if frappe.db.has_column("Tache de travail", "recontacte_le"):
+        valeurs.update({"recontacte_le": frappe.utils.now_datetime(), "recontacte_par": frappe.session.user})
+    frappe.db.set_value("Tache de travail", tache, valeurs, update_modified=False)
+
+
+@frappe.whitelist(methods=["POST"])
+def appel_sans_reponse(taches):
+    """Le client n'a pas répondu. `taches` : toutes ses cartes de la liste — on appelle un client, pas une tâche,
+    ses autres rendez-vous manqués avancent avec. Jamais appelé → « 1er appel sans réponse » (reste dans la liste,
+    avec qui / quand) ; déjà un 1er appel → « 2e appel sans réponse » (sort de la liste)."""
+    if not frappe.has_permission("Tache de travail", "write"):
+        frappe.throw(_("Vous ne pouvez pas modifier les tâches."), frappe.PermissionError)
+    noms = sorted(set(frappe.parse_json(taches) if isinstance(taches, str) else (taches or [])))
+    if not noms:
+        frappe.throw(_("Aucune tâche indiquée."))
+    rows = frappe.get_all("Tache de travail", filters={"name": ["in", noms]},
+                          fields=["name", "custom_client", "status", "recontacte"])
+    if len(rows) != len(noms):
+        frappe.throw(_("Tâche introuvable : {0}").format(", ".join(set(noms) - {r.name for r in rows})))
+    if len({r.custom_client for r in rows}) != 1:
+        frappe.throw(_("Un seul client à la fois."))
+    deja = [r for r in rows if r.status not in ("Open", "Cancelled") or (r.recontacte or "") not in ("", RECONTACTE_1ER_APPEL)]
+    if deja:
+        frappe.throw(_("Déjà sortie de la liste : {0}").format(
+            ", ".join(f"{r.name} ({r.recontacte or r.status})" for r in deja)))
+    nouveau = RECONTACTE_2E_APPEL if any(r.recontacte == RECONTACTE_1ER_APPEL for r in rows) else RECONTACTE_1ER_APPEL
+    qui = frappe.utils.get_fullname(frappe.session.user)
+    for r in rows:
+        _tracer_recontacte(r.name, nouveau)
+        frappe.get_doc({"doctype": "Comment", "comment_type": "Comment", "reference_doctype": "Tache de travail",
+                        "reference_name": r.name,
+                        "content": "📵 " + _("{0} — appel de {1} (Liste Appels Rattrapage){2}").format(
+                            nouveau, qui, " : sort de la liste" if nouveau == RECONTACTE_2E_APPEL else "")
+                        }).insert(ignore_permissions=True)
+    return {"recontacte": nouveau, "sort": nouveau == RECONTACTE_2E_APPEL, "taches": noms}
 
 
 # =====================================================================

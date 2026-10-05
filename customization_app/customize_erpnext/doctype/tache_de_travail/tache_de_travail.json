@@ -22,6 +22,8 @@
   "subject",
   "toute_la_journée",
   "recontacte",
+  "recontacte_le",
+  "recontacte_par",
   "column_break_gpovc",
   "dans_local",
   "select_address",
@@ -139,7 +141,24 @@
    "fieldtype": "Select",
    "hidden": 1,
    "label": "recontacte",
-   "options": "\ncontacté\nInvestigué\nplanifié\ncouvert\nvendu"
+   "options": "\ncontacté\nInvestigué\nplanifié\ncouvert\nvendu\n1er appel sans réponse\n2e appel sans réponse"
+  },
+  {
+   "fieldname": "recontacte_le",
+   "fieldtype": "Datetime",
+   "hidden": 1,
+   "label": "Recontacté le",
+   "no_copy": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "recontacte_par",
+   "fieldtype": "Link",
+   "hidden": 1,
+   "label": "Recontacté par",
+   "no_copy": 1,
+   "options": "User",
+   "read_only": 1
   },
   {
    "fieldname": "column_break_gpovc",
@@ -346,7 +365,7 @@
    "link_fieldname": "tache_de_travail"
   }
  ],
- "modified": "2026-10-01 12:00:00.000000",
+ "modified": "2026-10-05 14:00:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Tache de travail",
