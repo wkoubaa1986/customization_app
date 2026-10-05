@@ -308,9 +308,9 @@ def exigences(tache):
     # ⚠️ MIROIR des mandatory_depends_on du doctype (tache_de_travail.json) :
     # c'est LUI qui bloque au save — le dialogue ne fait que permettre de
     # remplir sur place, et le code superviseur ne dispense PAS de ces deux-là.
-    commande_requise = (
-        type_i in ("Installation", "Livraison", "Entretien", "Réparation")
-        or cint(doc.get("afficher_commande")))
+    # La case « Afficher Commande » ne fait plus que MONTRER le champ (05/10/2026) : sur une tâche « Autre », elle
+    # rendait la commande obligatoire — impossible d'enlever une commande rattachée par erreur (Tache-08720).
+    commande_requise = type_i in ("Installation", "Livraison", "Entretien", "Réparation")
     rapport_requis = type_i in ("Entretien", "Réparation", "Installation", "Visite")
 
     # Résumé financier et logistique de la commande liée, pour le dialogue :

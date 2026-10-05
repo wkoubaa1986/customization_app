@@ -119,6 +119,9 @@ frappe.provide("frappe.views");
             });
             w.on("click", "[data-recharger]", () => this.charger());
             w.on("click", "[data-caisse]", () => this._caisse());
+            // Itinéraire de la journée planifiée (optimiser_tournees.js, chargé sur tout le Desk).
+            w.on("click", "[data-itineraire]", () => window.tournees_itineraire
+                && window.tournees_itineraire(this.jour, (this.data || {}).employe || this.employe).catch(() => {}));
             w.on("click", "[data-appel]", (e) => this._appeler(e.currentTarget));
             w.on("click", "[data-aramex]", (e) => this._aramex(e.currentTarget));
             w.on("click", "[data-generer]", (e) => this._generer(e.currentTarget));
@@ -201,6 +204,7 @@ frappe.provide("frappe.views");
                 <button class="btn btn-sm btn-default" data-decaler="1">▶</button>
                 <button class="btn btn-sm btn-primary" data-recharger>🔄 ${__("Actualiser")}</button>
                 <button class="btn btn-sm btn-default" data-caisse>💰 ${__("Ma caisse")}</button>
+                <button class="btn btn-sm btn-default" data-itineraire title="${__("Le trajet de la journée : départ, chaque client, retour — km et temps de route mesurés par Google")}">🗺️ ${__("Itinéraire")}</button>
                 ${m.nb_aramex ? `
                 <button class="btn btn-sm btn-default" data-bl-aramex
                     title="${__("Un PDF avec le BL de chaque livraison Aramex du jour")}"

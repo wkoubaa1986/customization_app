@@ -108,6 +108,19 @@ class TestSolveur(unittest.TestCase):
                          pause=(9 * 60, 10 * 60))
         self.assertEqual(sol["routes"][0][0][1], 10 * 60)
 
+    def test_tache_au_magasin_au_debut_de_journee(self):
+        """Une tâche sans lieu (vérification de stock) est « au Magasin » : pas de marge de stationnement. Fixée à
+        09:00 pour une journée qui commence à 09:00, elle tient (Tache-08926, 06/10/2026 : déclarée hors tournée)."""
+        mn = [[0, 0, 15], [0, 0, 15], [15, 15, 0]]
+        arrets = [{"service": 90, "fenetre": (9 * 60, 9 * 60), "vehicule": 0, "fixe_pause": True, "sans_marge": True},
+                  {"service": 30, "fenetre": None, "vehicule": None}]
+        sol = T.resoudre(mn, arrets, 1, 9 * 60, 18 * 60, limite_s=1, premiere=9 * 60, marge=20)
+        self.assertEqual(sol["non_places"], [])
+        self.assertEqual(sol["routes"][0][0], (1, 9 * 60))
+        self.assertEqual(sol["routes"][0][1][1], 9 * 60 + 90 + 15 + 20)       # le client suivant garde sa marge
+        arrets[0]["sans_marge"] = False                                       # l'ancien comportement : impossible
+        self.assertEqual(T.resoudre(mn, arrets, 1, 9 * 60, 18 * 60, limite_s=1, premiere=9 * 60, marge=20)["non_places"], [1])
+
     def test_vehicule_occupe_hors_tournee(self):
         # le véhicule est pris 09:00–11:00 (tâche gardée telle quelle) : l'arrêt libre (service 30) se cale avant ou après,
         # jamais dessus.
@@ -190,7 +203,7 @@ class TestJournee(unittest.TestCase):
         self._config = T.config
         T.config = lambda: {"depot": T.DEPOT_DEFAUT, "departs": {}, "debut": 8 * 60, "premiere": 9 * 60, "fin": 17 * 60,
                             "types": list(T.TYPES_MOBILES_DEFAUT), "osrm": T.OSRM_DEFAUT, "equilibre": 1, "exclus": set(),
-                            "pause": None, "marge": 0, "fenetre": 0, "horaires": {}, "pointes": [],
+                            "pause": None, "marge": 0, "rangement": 0, "coef": 1.0, "fenetre": 0, "horaires": {}, "pointes": [],
                             "prevenir": {"sms": 1, "email": 0, "seuil": 15, "plage": 60, "sujet": T.SUJET_EMAIL_DEFAUT,
                                          "sms_texte": T.MODELE_SMS_DEFAUT, "email_texte": ""}}
         if not frappe.db.has_column("Tache de travail", "custom_tournee_fixe"):

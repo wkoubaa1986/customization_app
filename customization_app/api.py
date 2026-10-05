@@ -1207,7 +1207,7 @@ def get_historique_taches_client(client, exclude=None, limit=25):
 DUREE_INTERVENTION = {
     "Entretien": 30,
     "Installation": 75,
-    "Réparation": 120,
+    "Réparation": 75,       # 1 h 15 partout : création, portail /rdv, tournées, atelier (décision 05/10/2026)
     "Livraison": 30,
     "Visite": 120,
     "Autre": 120,

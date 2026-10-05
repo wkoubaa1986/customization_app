@@ -240,14 +240,15 @@
    "default": "0",
    "fieldname": "afficher_commande",
    "fieldtype": "Check",
-   "label": "Afficher Commande"
+   "label": "Afficher Commande",
+   "description": "Montre le champ « Commande client » pour rattacher une commande. Ne le rend pas obligatoire."
   },
   {
-   "depends_on": "eval:(\r\n    (doc.status === \"Completed\" && (doc.custom_type_dintervention === \"Entretien\" || doc.custom_type_dintervention === \"Réparation\"))\r\n    || doc.afficher_commande === 1\r\n    || doc.custom_type_dintervention === \"Installation\"\r\n    || doc.custom_type_dintervention === \"Livraison\"\r\n)",
+   "depends_on": "eval:(\n    (doc.status === \"Completed\" && (doc.custom_type_dintervention === \"Entretien\" || doc.custom_type_dintervention === \"Réparation\"))\n    || doc.afficher_commande === 1\n    || doc.custom_type_dintervention === \"Installation\"\n    || doc.custom_type_dintervention === \"Livraison\"\n    || !!doc.commande_client\n)",
    "fieldname": "commande_client",
    "fieldtype": "Link",
    "label": "Commande client",
-   "mandatory_depends_on": "eval:doc.status !== \"Cancelled\" && (\r\n    (doc.status === \"Completed\" && (doc.custom_type_dintervention === \"Entretien\" || doc.custom_type_dintervention === \"Réparation\"))\r\n    || doc.afficher_commande === 1\r\n    || doc.custom_type_dintervention === \"Installation\"\r\n    || doc.custom_type_dintervention === \"Livraison\"\r\n)",
+   "mandatory_depends_on": "eval:doc.status !== \"Cancelled\" && (\n    (doc.status === \"Completed\" && (doc.custom_type_dintervention === \"Entretien\" || doc.custom_type_dintervention === \"Réparation\"))\n    || doc.custom_type_dintervention === \"Installation\"\n    || doc.custom_type_dintervention === \"Livraison\"\n)",
    "options": "Sales Order"
   },
   {
@@ -365,7 +366,7 @@
    "link_fieldname": "tache_de_travail"
   }
  ],
- "modified": "2026-10-05 14:00:00.000000",
+ "modified": "2026-10-05 18:00:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Tache de travail",

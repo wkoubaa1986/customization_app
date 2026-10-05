@@ -76,3 +76,5 @@ customization_app.patches.reprise_clotures_collecte
 customization_app.patches.config_caisse_date_depart
 customization_app.patches.aligner_nom_employe_taches
 customization_app.patches.ensure_transfert_double_validation
+customization_app.patches.reparations_a_75_min
+customization_app.patches.tournees_marges_10_5

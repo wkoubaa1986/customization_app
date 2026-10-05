@@ -211,7 +211,7 @@ class TestCycleDeVie(unittest.TestCase):
         t = frappe.get_doc(RO.DOCTYPE_TACHE, r["tache"])
         self.assertEqual((t.custom_type_dintervention, t.get(RO.CHAMP_TACHE), t.custom_client, t.dans_local),
                          ("Réparation", nom, self.client, "Oui"))
-        # 1 h 15 par réparation (et non les 2 h du type Réparation)
+        # 1 h 15 par réparation (réglage de l’atelier, même valeur que le type Réparation depuis le 05/10/2026)
         self.assertEqual((t.ends_on - t.starts_on).total_seconds(), 75 * 60)
         m = frappe.db.get_value(RO.DOCTYPE, nom, ["statut", "responsable", "date_prevue"], as_dict=True)
         self.assertEqual((m.statut, m.responsable, str(m.date_prevue)), (RO.S_PLANIFIEE, t.custom_choix_du_staff, str(getdate(t.starts_on))))

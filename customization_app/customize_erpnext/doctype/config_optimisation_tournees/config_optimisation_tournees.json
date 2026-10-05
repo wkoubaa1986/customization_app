@@ -22,6 +22,7 @@
   "col_journee",
   "equilibre",
   "marge_minutes",
+  "rangement_minutes",
   "fenetre_minutes",
   "sec_regles",
   "types_mobiles",
@@ -38,7 +39,13 @@
   "modele_sms",
   "modele_email",
   "sec_tech",
-  "osrm_url"
+  "osrm_url",
+  "col_google",
+  "google_routes_cle",
+  "google_routes_max_jour",
+  "coef_osrm",
+  "google_compte_jour",
+  "google_compte"
  ],
  "fields": [
   {
@@ -131,9 +138,16 @@
   {
    "fieldname": "marge_minutes",
    "fieldtype": "Int",
-   "label": "Stationnement et sortie à chaque arrêt (min)",
+   "label": "Stationnement à l’arrivée chez le client (min)",
    "default": "10",
-   "description": "Ajouté à chaque trajet, en plus du temps de route OSRM : se garer, décharger, être accueilli, repartir."
+   "description": "Se garer et arriver chez le client avant l’heure de la tâche. Pas compté pour une tâche au Magasin."
+  },
+  {
+   "fieldname": "rangement_minutes",
+   "fieldtype": "Int",
+   "label": "Rangement après chaque tâche (min)",
+   "default": "5",
+   "description": "Ranger ses affaires dans la voiture après la fin de la tâche, avant de repartir."
   },
   {
    "fieldname": "fenetre_minutes",
@@ -228,7 +242,7 @@
   {
    "fieldname": "sec_tech",
    "fieldtype": "Section Break",
-   "label": "Distances"
+   "label": "Distances et temps de trajet"
   },
   {
    "fieldname": "osrm_url",
@@ -236,11 +250,53 @@
    "label": "Serveur OSRM (OpenStreetMap)",
    "default": "https://router.project-osrm.org",
    "description": "Distances routières gratuites. Injoignable → vol d’oiseau à 30 km/h."
+  },
+  {
+   "fieldname": "col_google",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "google_routes_cle",
+   "fieldtype": "Password",
+   "label": "Clé API Google Routes (temps avec trafic)",
+   "description": "Facultative. Sert au bouton « 🚗 Vérifier avec Google » du résultat de l’optimisation : chaque trajet de la tournée proposée est re-mesuré par Google avec le trafic habituel de son heure. Clé restreinte à l’adresse IP du serveur et à « Routes API » seulement."
+  },
+  {
+   "fieldname": "google_routes_max_jour",
+   "fieldtype": "Int",
+   "label": "Appels Google au plus par jour",
+   "default": "150",
+   "description": "Au-delà, plus aucun appel ce jour-là. Google offre 5 000 appels par mois : 150 par jour reste dessous."
+  },
+  {
+   "fieldname": "coef_osrm",
+   "fieldtype": "Float",
+   "label": "Correction des temps OSRM (× mesuré par Google)",
+   "default": "1",
+   "read_only": 1,
+   "precision": "2",
+   "description": "Mis à jour automatiquement à chaque calcul avec Google : temps Google sans trafic ÷ temps OSRM. Sert à choisir l’ordre des tâches avec des temps réalistes ; les heures proposées, elles, viennent de Google."
+  },
+  {
+   "fieldname": "google_compte_jour",
+   "fieldtype": "Date",
+   "label": "Appels Google — jour",
+   "hidden": 1,
+   "read_only": 1,
+   "no_copy": 1
+  },
+  {
+   "fieldname": "google_compte",
+   "fieldtype": "Int",
+   "label": "Appels Google — nombre ce jour-là",
+   "hidden": 1,
+   "read_only": 1,
+   "no_copy": 1
   }
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-10-02 17:18:14.490654",
+ "modified": "2026-10-05 17:00:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Config Optimisation Tournees",

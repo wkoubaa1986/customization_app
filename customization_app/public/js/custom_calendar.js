@@ -421,6 +421,7 @@ function _load_employees(dialog) {
                             <option value="">-- Véhicule --</option>
                         </select>
                     </div>
+                    <div class="genbl-iti" data-emp="${idx}" style="font-size:11.5px;color:#64748b;padding:4px 10px;border-bottom:1px solid #e5e7eb">🚗 itinéraire du jour…</div>
                     <table style="width:100%;border-collapse:collapse;font-size:12.5px">`;
 
                 emp.taches.forEach((t, tidx) => {
@@ -446,6 +447,28 @@ function _load_employees(dialog) {
 
             html += `</div>`;
             $wrap.html(html);
+
+            // Résumé de l'itinéraire de chacun (km, temps de route, départ, retour) pour choisir le véhicule —
+            // trajets mesurés par Google (customization_app.tournee_itineraire), absent pour un non-superviseur.
+            frappe.call({
+                method: "customization_app.tournee_itineraire.itineraires_du_jour",
+                args: { date, employes: employees.map((e) => e.employee) },
+                callback: (r2) => {
+                    const parEmp = {};
+                    ((r2.message || {}).employes || []).forEach((x) => { parEmp[x.employe] = x; });
+                    employees.forEach((emp, idx) => {
+                        const x = parEmp[emp.employee], $l = $wrap.find(`.genbl-iti[data-emp="${idx}"]`);
+                        if (!x || !window.tournees_resume || !window.tournees_resume(x)) { $l.remove(); return; }
+                        $l.html(window.tournees_resume(x) + ` · <a href="#" data-iti="${idx}">🗺️ voir</a>`);
+                    });
+                },
+                error: () => $wrap.find(".genbl-iti").remove(),
+            });
+            $wrap.on("click", "[data-iti]", (ev) => {
+                ev.preventDefault();
+                const emp = employees[ev.currentTarget.getAttribute("data-iti")];
+                if (emp && window.tournees_itineraire) window.tournees_itineraire(date, emp.employee).catch(() => {});
+            });
 
             // Cocher/décocher un employé bascule toutes ses tâches imprimables
             $wrap.find(".genbl-emp-chk").on("change", function() {

@@ -19,6 +19,7 @@ avec un commentaire sur chaque tâche déplacée.
 
 from __future__ import annotations
 
+import hashlib
 import math
 import re
 import statistics
@@ -97,6 +98,8 @@ def config() -> dict:
             "premiere": _minutes(v("heure_premiere"), 9 * 60),
             "pause": (_minutes(v("pause_debut"), 0), _minutes(v("pause_fin"), 0)) if v("pause_debut") and v("pause_fin") else None,
             "marge": cint(v("marge_minutes")) if v("marge_minutes") is not None else 10,
+            "rangement": cint(v("rangement_minutes")) if v("rangement_minutes") is not None else 5,
+            "coef": min(2.0, max(1.0, flt(v("coef_osrm")) or 1.0)),
             "fenetre": cint(v("fenetre_minutes")) if v("fenetre_minutes") is not None else 60,
             "types": types, "osrm": (v("osrm_url") or OSRM_DEFAUT).rstrip("/"),
             "equilibre": cint(v("equilibre")) if v("equilibre") is not None else 1, "exclus": exclus,
@@ -122,9 +125,18 @@ def coordonnees_du_lien(url: str | None):
     return None
 
 
+LIEN_CACHE = "tournee_lien:"
+LIEN_CACHE_OK = 30 * 24 * 3600          # un lien court ne change pas de destination
+LIEN_CACHE_VIDE = 6 * 3600              # rien de lisible (ou réseau absent) : on réessaie plus tard, pas à chaque écran
+
+
 def resoudre_lien(url: str | None, timeout: float = 6.0):
     """Les coordonnées d'un lien Google Maps, lien court compris (maps.app.goo.gl → redirection vers le
-    lien développé, qui porte « !3d<lat>!4d<lng> »). None si rien n'est lisible ou sans réseau."""
+    lien développé, qui porte « !3d<lat>!4d<lng> »). None si rien n'est lisible ou sans réseau.
+
+    ⚠️ MÉMORISÉ. Chaque lien court coûte une requête à Google (≈ 0,2 s) : sans mémoire, la liste des
+    employés du jour et chaque « Calculer » les résolvaient TOUS à nouveau — 1,5 à 2,5 s d'attente à chaque
+    changement de date (05/10/2026). Résultat gardé 30 jours ; « rien de lisible » gardé 6 h."""
     if not url:
         return None
     direct = coordonnees_du_lien(url)
@@ -132,6 +144,16 @@ def resoudre_lien(url: str | None, timeout: float = 6.0):
         return direct
     if frappe.flags.get("tournee_sans_reseau"):
         return None
+    cle = LIEN_CACHE + hashlib.sha1(url.strip().encode()).hexdigest()
+    deja = frappe.cache().get_value(cle, expires=True)          # expires=True : pas de valeur figée dans la requête
+    if deja is not None:
+        return tuple(deja) if deja else None
+    c = _resoudre_par_le_reseau(url, timeout)
+    frappe.cache().set_value(cle, list(c) if c else [], expires_in_sec=LIEN_CACHE_OK if c else LIEN_CACHE_VIDE)
+    return c
+
+
+def _resoudre_par_le_reseau(url: str, timeout: float):
     courant = url
     try:
         for _i in range(4):
@@ -153,22 +175,46 @@ NOMINATIM = "https://nominatim.openstreetmap.org/search"
 MARQUE_LIEN_MORT = "lien mort"
 
 
+TEXTE_CACHE = "tournee_texte:"
+TEXTE_CACHE_INCONNU = 7 * 24 * 3600     # Nominatim a bien répondu : l'adresse lui est inconnue
+TEXTE_CACHE_REFUS = 3600                 # refus / limite de débit / réseau : on réessaiera dans une heure
+
+
 def geocoder_texte(adresse_texte: str, ville: str | None = None):
     """Nominatim (OpenStreetMap, gratuit, 1 requête/s) sur le texte de l'adresse : une position APPROCHÉE
-    (le quartier, la rue), mieux que rien quand le lien est mort ou absent. None sans réseau ou sans résultat."""
+    (le quartier, la rue), mieux que rien quand le lien est mort ou absent. None sans réseau ou sans résultat.
+
+    ⚠️ MÉMORISÉ, échecs compris : un texte introuvable était recherché à nouveau à CHAQUE affichage, avec
+    1,1 s de pause entre deux requêtes — 2 à 3 s d'attente pour trois adresses (05/10/2026)."""
     if frappe.flags.get("tournee_sans_reseau") or not (adresse_texte or ville):
         return None
+    cle = TEXTE_CACHE + hashlib.sha1(("%s|%s" % (adresse_texte or "", ville or "")).encode()).hexdigest()
+    deja = frappe.cache().get_value(cle, expires=True)
+    if deja is not None:
+        return tuple(deja) if deja else None
+    c, repondu = _geocoder_texte_reseau(adresse_texte, ville)
+    frappe.cache().set_value(cle, list(c) if c else [],
+                             expires_in_sec=LIEN_CACHE_OK if c else (TEXTE_CACHE_INCONNU if repondu else TEXTE_CACHE_REFUS))
+    return c
+
+
+def _geocoder_texte_reseau(adresse_texte: str, ville: str | None):
+    """(coordonnées ou None, Nominatim a-t-il vraiment répondu ?). Un refus (429, 403…) arrête tout de suite :
+    inutile d'attendre pour une seconde requête qui serait refusée aussi."""
     try:
-        for q in ([x for x in (adresse_texte, ville, "Tunisia") if x], [x for x in (ville, "Tunisia") if x]):
+        for i, q in enumerate(([x for x in (adresse_texte, ville, "Tunisia") if x], [x for x in (ville, "Tunisia") if x])):
+            if i:
+                time.sleep(1.1)                  # règle de Nominatim : une requête par seconde
             r = requests.get(NOMINATIM, params={"q": ", ".join(q), "format": "json", "limit": 1, "countrycodes": "tn"},
                              headers={"User-Agent": "aquaworld-erpnext (koubaawassim@gmail.com)"}, timeout=10)
-            d = r.json() if r.ok else []
+            if not r.ok:
+                return None, False
+            d = r.json()
             if d:
-                return (float(d[0]["lat"]), float(d[0]["lon"]))
-            time.sleep(1.1)
+                return (float(d[0]["lat"]), float(d[0]["lon"])), True
     except Exception:
-        return None
-    return None
+        return None, False
+    return None, True
 
 
 def _geocoder_adresse(nom: str, texte: bool = True):
@@ -237,11 +283,30 @@ def geocoder_adresses(limite: int = 500) -> dict:
 
 
 def geocodage_quotidien():
-    """Cron : les adresses nouvelles ou modifiées depuis la veille (lien collé, adresse créée)."""
+    """Cron : les adresses nouvelles ou modifiées depuis la veille (lien collé, adresse créée), puis les positions
+    des tâches des 14 prochains jours mises en mémoire — la première ouverture d'un jour dans « Optimiser la
+    journée » est alors immédiate, comme les suivantes."""
     try:
         geocoder_adresses(limite=300)
     except Exception:
         frappe.log_error(frappe.get_traceback(), "tournées : géocodage quotidien")
+    try:
+        prechauffer_positions(jours=14)
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "tournées : positions des tâches à venir")
+
+
+def prechauffer_positions(jours: int = 14) -> int:
+    """Résout (et mémorise) la position de chaque tâche ouverte des `jours` prochains jours. -> nombre de tâches."""
+    debut = frappe.utils.nowdate()
+    taches = frappe.get_all(TACHE, filters={"starts_on": ["between", ["%s 00:00:00" % debut, "%s 23:59:59" % frappe.utils.add_days(debut, jours)]],
+                                           "status": "Open"},
+                            fields=["name", "google_map", "select_address", "secteur"], limit_page_length=0)
+    centres = _centres_secteurs()
+    for t in taches:
+        coordonnees_tache(t, centres)
+        frappe.db.commit()          # les positions mémorisées sur les adresses tiennent même si le cron s'arrête
+    return len(taches)
 
 
 @frappe.whitelist()
@@ -388,7 +453,7 @@ def fusionner_intervalles(intervalles: list) -> list:
 def resoudre(minutes: list, arrets: list, nb_vehicules: int, debut: int, fin: int, equilibre: int = 1,
              limite_s: int = 5, premiere: int | None = None, depots: list | None = None,
              marge: int = 0, pause: tuple | None = None, occupations: dict | None = None,
-             debuts: list | None = None, fins: list | None = None) -> dict:
+             debuts: list | None = None, fins: list | None = None, rangement: int = 0) -> dict:
     """Tournées à fenêtres de temps (OR-Tools). `minutes` couvre tous les nœuds : les dépôts (nœud 0 = Magasin,
     puis les points de départ particuliers) et les arrêts, qui occupent les DERNIERS nœuds. `arrets[i]` :
     {service: min, fenetre: (a, b) | None, vehicule: idx | None}. `depots[v]` = nœud de départ ET de retour du
@@ -402,11 +467,18 @@ def resoudre(minutes: list, arrets: list, nb_vehicules: int, debut: int, fin: in
     manager = pywrapcp.RoutingIndexManager(n, nb_vehicules, depots, depots)
     routing = pywrapcp.RoutingModel(manager)
     service = [0] * nb_depots + [cint(a.get("service")) for a in arrets]
+    # Marge (stationnement, accueil) à l'arrivée sur un arrêt — sauf un arrêt « au Magasin » (tâche sans lieu :
+    # vérification de stock, réunion…) : on y est déjà. Sans cette exception, une telle tâche fixée au début de la
+    # journée (09:00 pour une journée qui commence à 09:00) n'était « atteignable » qu'à 09:20 et finissait en
+    # « tâche qui ne tient pas dans la tournée » (Tache-08926, 06/10/2026).
+    marges = [0] * nb_depots + [0 if a.get("sans_marge") else cint(marge) for a in arrets]
+    # Rangement (ranger ses affaires dans la voiture) après la fin d'une tâche, avant de repartir (05/10/2026).
+    rangements = [0] * nb_depots + [0 if a.get("sans_marge") else cint(rangement) for a in arrets]
 
     def transit(i, j):
-        # route + service au départ + marge (stationnement, accueil) à l'arrivée sur un arrêt
+        # service au départ + rangement + route + marge à l'arrivée sur un arrêt
         a, b = manager.IndexToNode(i), manager.IndexToNode(j)
-        return minutes[a][b] + service[a] + (cint(marge) if b >= nb_depots else 0)
+        return minutes[a][b] + service[a] + rangements[a] + marges[b]
 
     cb = routing.RegisterTransitCallback(transit)
     routing.SetArcCostEvaluatorOfAllVehicles(cb)
@@ -719,7 +791,11 @@ def proposer(date, fenetre=None, employes=None):
                 continue        # une tâche sans lieu, hors journée (ex. « Autre » à minuit) : pas une étape
             pos = (cfg["depot"][0], cfg["depot"][1], "dépôt")
         elif pos[2] == "secteur" and mobile:
-            avert.append(_("{0} ({1}) : position approchée par le centre du {2}").format(t.name, t.nom_client or t.custom_client or "", t.secteur))
+            # « secteur » couvre deux cas : le centre du secteur (aucune position), ou le point trouvé d'après le TEXTE
+            # de l'adresse (OpenStreetMap, rue ou quartier) — le dire tel quel.
+            d_ou = (_("par le centre du {0}").format(t.secteur) if centres.get(t.secteur) == (pos[0], pos[1])
+                    else _("d’après le texte de l’adresse (OpenStreetMap : rue ou quartier)"))
+            avert.append(_("{0} ({1}) : position approchée {2}").format(t.name, t.nom_client or t.custom_client or "", d_ou))
         points.append((pos[0], pos[1]))
         arrets.append({"noeud": len(points) - 1, "tache": t.name, "client": t.nom_client or t.custom_client or "", "type": t.custom_type_dintervention,
                        "employe": t.custom_choix_du_staff, "debut": dmin, "service": service, "mobile": mobile, "statut": t.status,
@@ -739,7 +815,10 @@ def proposer(date, fenetre=None, employes=None):
     points = [points[0]] + [cfg["departs"][e] for e in particuliers] + points[1:]
     depot_de = {e: (1 + particuliers.index(e) if e in cfg["departs"] else 0) for e in employes}
     depots = [depot_de[e] for e in employes]
-    mn, km, source = matrice(points, cfg["osrm"])
+    mn_brut, km, source = matrice(points, cfg["osrm"])
+    # OSRM sous-estime les trajets à Tunis (≈ ×1,3 mesuré avec Google le 05/10/2026) : l'ordre est choisi sur des temps
+    # corrigés par le rapport Google / OSRM appris à chaque calcul ; les heures, elles, viennent de Google (recalage).
+    mn = [[int(round(x * cfg["coef"])) for x in ligne] for ligne in mn_brut] if cfg["coef"] != 1 else mn_brut
     # Journée de CHAQUE employé : réglage global, puis ses horaires du réglage, puis ceux saisis dans la fenêtre.
     # Elle ne coupe jamais son travail déjà planifié (une tâche fixe plus tôt l'avance, une tâche qui finit
     # après l'étend, retour compris) — sinon le moteur laisserait des tâches de côté au lieu de les placer.
@@ -753,7 +832,7 @@ def proposer(date, fenetre=None, employes=None):
             if a["employe"] != e:
                 continue
             if not a["mobile"] or not fin_voulue:
-                f0 = max(f0, a["debut"] + a["service"] + mn[a["noeud"]][depot_de[e]])
+                f0 = max(f0, a["debut"] + a["service"] + cfg["rangement"] + mn[a["noeud"]][depot_de[e]])
             if not a["mobile"]:
                 d0 = min(d0, a["debut"])
         debuts.append(d0)
@@ -763,9 +842,11 @@ def proposer(date, fenetre=None, employes=None):
 
     def _noeud(a):
         if not a["mobile"]:
-            return {"service": a["service"], "fenetre": (a["debut"], a["debut"]), "vehicule": employes.index(a["employe"]), "fixe_pause": True}
+            return {"service": a["service"], "fenetre": (a["debut"], a["debut"]), "vehicule": employes.index(a["employe"]), "fixe_pause": True,
+                    "sans_marge": a["position"] == "dépôt"}
         # Déplaçable : libre dans la journée, ou dans ± fenêtre autour de son heure actuelle (défaut).
         fen = None if not fenetre else (max(cfg["premiere"], a["debut"] - fenetre), min(fin_j, max(a["debut"] + fenetre, cfg["premiere"])))
+        a["fenetre"] = fen
         return {"service": a["service"], "fenetre": fen, "vehicule": None}
 
     par_noeud = {a["noeud"]: a for a in arrets}
@@ -775,7 +856,8 @@ def proposer(date, fenetre=None, employes=None):
         nonlocal fin_j
         noeuds = [_noeud(a) for a in arrets]
         sol = resoudre(mn_x, noeuds, len(employes), debut_j, fin_j, cfg["equilibre"], premiere=cfg["premiere"], depots=depots,
-                       marge=cfg["marge"], pause=cfg["pause"], debuts=debuts, fins=fins)
+                       marge=cfg["marge"], pause=cfg["pause"], debuts=debuts, fins=fins,
+                       rangement=cfg["rangement"])
         if sol["non_places"]:
             # Ce qui n'a pas trouvé place reste où c'est (employé, heure) et la tournée se recalcule autour,
             # pour que la proposition soit complète et comparable à l'existant.
@@ -783,11 +865,12 @@ def proposer(date, fenetre=None, employes=None):
                 a = par_noeud[n]
                 a["mobile"] = False
                 v = employes.index(a["employe"])
-                fins[v] = max(fins[v], a["debut"] + a["service"] + mn_x[n][depot_de[a["employe"]]])
+                fins[v] = max(fins[v], a["debut"] + a["service"] + cfg["rangement"] + mn_x[n][depot_de[a["employe"]]])
                 fin_j = max(fins)
             noeuds = [_noeud(a) for a in arrets]
             sol = resoudre(mn_x, noeuds, len(employes), debut_j, fin_j, cfg["equilibre"], premiere=cfg["premiere"], depots=depots,
-                           marge=cfg["marge"], pause=cfg["pause"], debuts=debuts, fins=fins)
+                           marge=cfg["marge"], pause=cfg["pause"], debuts=debuts, fins=fins,
+                       rangement=cfg["rangement"])
         bloques = set()
         for _tour in range(6):
             if not sol["non_places"]:
@@ -804,7 +887,7 @@ def proposer(date, fenetre=None, employes=None):
                 a["mobile"] = False
                 v = employes.index(a["employe"])
                 occupations.setdefault(v, []).append((a["debut"], a["debut"] + a["service"]))
-                fins[v] = max(fins[v], a["debut"] + a["service"] + mn_x[n][depot_de[a["employe"]]])
+                fins[v] = max(fins[v], a["debut"] + a["service"] + cfg["rangement"] + mn_x[n][depot_de[a["employe"]]])
             fin_j = max(fins)
             restants = [a for a in arrets if a["noeud"] not in bloques]
             nb_depots = len(points) - len(arrets)
@@ -812,7 +895,8 @@ def proposer(date, fenetre=None, employes=None):
             mn2 = [[mn_x[i][j] for j in garder] for i in garder]
             noeuds = [_noeud(a) for a in restants]
             sol2 = resoudre(mn2, noeuds, len(employes), debut_j, fin_j, cfg["equilibre"], premiere=cfg["premiere"], depots=depots,
-                            marge=cfg["marge"], pause=cfg["pause"], occupations=occupations, debuts=debuts, fins=fins)
+                            marge=cfg["marge"], pause=cfg["pause"], occupations=occupations, debuts=debuts, fins=fins,
+                            rangement=cfg["rangement"])
             inverse = {nb_depots + i: a["noeud"] for i, a in enumerate(restants)}    # retour aux nœuds d'origine
             sol = {"routes": [[(inverse[n], t) for n, t in r] for r in sol2["routes"]],
                    "non_places": sorted({inverse[n] for n in sol2["non_places"]} - bloques), "cout": sol2["cout"]}
@@ -859,8 +943,11 @@ def proposer(date, fenetre=None, employes=None):
                           "deplace": a["employe"] != e, "decale": a["mobile"] and deb != a["debut"], "fixe": not a["mobile"],
                           "ancien_debut": _hm(a["debut"]), "ecart_min": deb - a["debut"],
                           "non_place": n in sol["non_places"],
-                          "position": a["position"], "lat": a["lat"], "lng": a["lng"], "adresse": a["adresse"]})
+                          "position": a["position"], "lat": a["lat"], "lng": a["lng"], "adresse": a["adresse"],
+                          "noeud": n, "mobile": a["mobile"], "service": a["service"], "debut_min": deb, "original_min": a["debut"],
+                          "fenetre": a.get("fenetre") if a["mobile"] else None})
         out.append({"employe": e, "nom": noms.get(e, e), "depart": "domicile" if dep else "Magasin", "depart_point": points[dep],
+                    "depot_noeud": dep, "journee_min": [debuts[v], fins[v]],
                     "journee": [_hm(debuts[v]), _hm(fins[v])],
                     "avant": {"minutes": m_av, "km": k_av, "interventions": sum(a["service"] for a in actuels),
                               "fin": _hm(max((a["debut"] + a["service"] for a in actuels), default=debuts[v])), "arrets": [{"tache": a["tache"], "client": a["client"], "type": a["type"],
@@ -870,7 +957,12 @@ def proposer(date, fenetre=None, employes=None):
                     "apres": {"minutes": m_ap, "km": k_ap, "interventions": serv_ap, "fin": _hm(fin_ap or debuts[v]), "arrets": apres}})
         tot_av, tot_ap, km_av, km_ap = tot_av + m_av, tot_ap + m_ap, km_av + k_av, km_ap + k_ap
     non_places = [{"tache": par_noeud[n]["tache"], "client": par_noeud[n]["client"], "employe": noms.get(par_noeud[n]["employe"])} for n in sol["non_places"]]
-    return {"date": str(jour), "employes": out, "depot": cfg["depot"], "source": source,
+    # Les heures de la tournée choisie sont recalculées trajet par trajet avec Google (trafic habituel à l'heure de chaque
+    # départ), avec stationnement et rangement : départ du Magasin, chaque tâche, retour (05/10/2026).
+    from customization_app.tournee_google import recaler_proposition
+    recalage = recaler_proposition(out, jour, cfg, mn_brut, mn, km)
+    return {"date": str(jour), "employes": out, "depot": cfg["depot"], "source": source, "recalage": recalage,
+            "rangement": cfg["rangement"], "coef": cfg["coef"],
             "total": {"avant_min": tot_av, "apres_min": tot_ap, "avant_km": round(km_av, 1), "apres_km": round(km_ap, 1)},
             "deplacees": sum(1 for e in out for a in e["apres"]["arrets"] if a["deplace"]),
             "decalees": sum(1 for e in out for a in e["apres"]["arrets"] if a["decale"] and not a["deplace"]),
