@@ -5,7 +5,8 @@
  *    Toucher un article ouvre ses sorties.
  *  - Sorties : sur une période, les sorties par article ; chaque sortie dit sa pièce, sa commande, son client
  *    et les tâches de la commande.
- *  - Transfert (responsable magasin) : d'un entrepôt à un autre, articles suivis en stock seulement.
+ *  - Transfert (responsable magasin) : d'un entrepôt à un autre, sur les trajets du réglage ; un trajet qui
+ *    touche un véhicule est en double validation (l'employé ↔ un responsable magasin, en va-et-vient).
  *  - À zéro (responsable magasin) : ramène un entrepôt à zéro par transferts avec le Magasin, pour que
  *    l'écart ne reste que sur le Magasin.
  * Toute la règle est côté serveur (customization_app.stock_entrepots).
@@ -92,51 +93,60 @@ class StockEntrepots {
     const resp = !!this.ctx.responsable, mien = this.ctx.mien ? se_esc(this.libelle(this.ctx.mien)) : null;
     const d = new frappe.ui.Dialog({ title: "❓ Stock par entrepôt — guide", size: "large", fields: [{ fieldtype: "HTML", fieldname: "zone" }] });
     d.fields_dict.zone.$wrapper.html(`<div class="se-guide">
-      <p class="se-note">Le <b>Magasin</b> est la référence ; chaque employé a le stock de son véhicule${mien ? ` (le vôtre : <b>${mien}</b>, affiché en premier)` : ""}. Tout ce qui sort du Magasin vers un véhicule passe par un transfert, et tout transfert vers le stock d’un collègue est <b>confirmé par lui</b>.</p>
+      <p class="se-note">Le <b>Magasin</b> est la référence ; chaque employé a le stock de son véhicule${mien ? ` (le vôtre : <b>${mien}</b>, affiché en premier)` : ""}. Un transfert qui touche un véhicule (avec le Magasin ou les Articles défectueux) est en <b>double validation</b> : l’employé du véhicule et un responsable magasin doivent être d’accord sur les quantités.</p>
       <div class="et"><div class="t">📦 Solde — ce qu’il y a dans un stock</div><ul>
         <li>Choisissez un stock (pastilles) ou « Tous » ; cherchez un article ; « ⚠️ Négatifs » montre les quantités en dessous de zéro.</li>
         <li>Toucher un article ouvre ses sorties.</li>
         ${resp ? `<li>Cochez des articles (Maj + clic = plage) → « 🔁 Transférer depuis le Magasin » vers un véhicule, ou « 🎯 Dans le stock cible ».</li>
         <li>« 🎯 Stock cible » : ce que le véhicule doit contenir ; « 🔻 À réappro. » liste ce qui manque ; « Réassort » prépare le transfert en un geste.</li>` : ""}
-        <li>Un bandeau en haut vous signale ce qui attend votre geste : un transfert à confirmer, une vérification à valider ou à accepter.</li></ul></div>
+        <li>Un bandeau en haut vous signale ce qui attend votre geste : un transfert à valider, une vérification à valider ou à accepter.</li></ul></div>
       <div class="et"><div class="t">📤 Sorties — ce qui est parti, et pour qui</div><ul>
         <li>Par période (7 j, 30 j, mois, dates) ; chaque sortie dit sa pièce (BL, facture, transfert), la commande et les tâches de cette commande.</li></ul></div>
       ${resp ? `<div class="et"><div class="t">🔁 Transfert — d’un stock à un autre</div><ul>
         <li>Choisissez De / Vers (⇄ inverse). Cherchez un article, indiquez la quantité, touchez ＋ : il entre dans le panier. Corrigez les quantités, puis « Valider le transfert ».</li>
         <li>« 🎯 Compléter selon le stock cible » remplit le panier avec ce qui manque au véhicule (sa cible, sinon le modèle générique des réglages).</li>
-        <li><b>Magasin → stock d’un employé</b> : le transfert reste <b>en attente</b> (le stock ne bouge pas) jusqu’à ce que l’employé confirme la réception sur son téléphone, ligne par ligne ; une quantité baissée (0 = non reçu) vous est signalée. Vers votre propre stock, ou d’un autre entrepôt : immédiat.</li>
-        <li>« Derniers transferts » : ⏳ en attente de qui (rouge après 24 h), « 🔍 Détail » (photos, codes, quantités), « Annuler ».</li></ul></div>
+        <li><b>Trajets</b> : seuls ceux du réglage sont permis (Hall ↔ Magasin seulement, jamais un véhicule vers le Hall…). Sous De / Vers, la page dit si le trajet est immédiat, en double validation ou interdit.</li>
+        <li><b>Double validation</b> (Magasin ↔ véhicule, véhicule ↔ Articles défectueux) : le stock ne bouge pas tant que l’employé du véhicule et un responsable magasin ne sont pas d’accord. Chacun, à son tour, accepte les quantités de l’autre (→ transfert validé) ou les corrige (→ la demande repart chez l’autre), jusqu’à l’accord. Pour votre propre véhicule, c’est un autre responsable qui valide.</li>
+        <li>« Derniers transferts » : ⏳ au tour de qui (rouge après 24 h), « 🔍 Vérifier et valider » quand c’est à vous, « 🔍 Détail », « Annuler ».</li></ul></div>
       <div class="et"><div class="t">0️⃣ À zéro — remettre un véhicule à zéro</div><ul>
-        <li>Les quantités négatives sont apportées depuis le Magasin, les positives y retournent : l’écart ne reste que sur le Magasin. Aperçu avant validation, articles cochés seulement.</li></ul></div>` : `<div class="et"><div class="t">📥 Transfert reçu — à confirmer</div><ul>
-        <li>Quand le Magasin vous envoie du matériel, un bandeau « Transfert à valider » apparaît (aussi dans Ma journée). Ouvrez-le, vérifiez chaque article : corrigez la quantité si le carton ne correspond pas (0 = non reçu), puis « Confirmer la réception ». Le stock n’entre dans votre véhicule qu’à ce moment-là.</li></ul></div>`}
+        <li>Les quantités négatives sont apportées depuis le Magasin, les positives y retournent : l’écart ne reste que sur le Magasin. Aperçu avant validation, articles cochés seulement.</li></ul></div>` : `<div class="et"><div class="t">🔁 Transfert — à valider</div><ul>
+        <li>Quand un transfert touche votre véhicule (chargement depuis le Magasin, retour au Magasin, articles défectueux), un bandeau « Transfert à valider » apparaît (aussi dans Ma journée).</li>
+        <li>Vérifiez chaque quantité : d’accord → « Valider », le stock bouge ; pas d’accord → corrigez (0 = article retiré) et renvoyez : le responsable magasin accepte ou corrige à son tour, jusqu’à ce que vous soyez d’accord tous les deux.</li></ul></div>`}
       <div class="et"><div class="t">✅ Vérif. — compter son stock, chaque semaine</div><ul>
         <li>Le jour fixé, une fiche de comptage et deux tâches sont créées (l’employé et le responsable). « Commencer le comptage » photographie le stock système ; saisissez le compté, « 💾 Enregistrer » pour reprendre plus tard.</li>
         <li>« ✅ Terminer le comptage » = votre validation → <b>à valider</b> par un responsable magasin (autre que vous).</li>
         <li>Le responsable vérifie, corrige éventuellement, valide → <b>à accepter</b> par l’employé : d’accord → « ✅ Accepter », un <b>rapprochement de stock</b> aligne le véhicule ; pas d’accord → corrigez la quantité, la fiche repart chez le responsable, qui a le dernier mot.</li>
         <li>Un article qui a bougé entre le comptage et la validation perd son comptage : à recompter (ligne marquée).</li></ul></div>
-      <p class="se-note"><b>Erreurs courantes</b> : transfert envoyé par erreur → « Annuler la demande » tant qu’il n’est pas confirmé · comptage terminé trop tôt → le responsable « Renvoie au comptage » · réglages (Magasin, seuils, cibles, jours de vérification) : <a href="/app/config-stock-entrepot">Config Stock Entrepot</a>.</p>
+      <p class="se-note"><b>Erreurs courantes</b> : transfert envoyé par erreur → « Annuler la demande » tant qu’il n’est pas validé · comptage terminé trop tôt → le responsable « Renvoie au comptage » · réglages (Magasin, trajets permis, seuils, cibles, jours de vérification) : <a href="/app/config-stock-entrepot">Config Stock Entrepot</a>.</p>
     </div>`);
     d.show();
   }
 
-  // ── Transferts en attente de validation (double validation Magasin → stock d'un employé) ──
-  /** Les demandes en attente : les miennes en bandeau (Solde), toutes en badge de l'onglet Transfert. */
+  // ── Transferts en double validation (un trajet qui touche un véhicule : l'employé ↔ le Magasin) ──
+  /** Les demandes où c'est à MOI de répondre : en bandeau (Solde) et en badge de l'onglet Transfert. */
   async chargerAttente() {
     const liste = (await frappe.call({ method: SE_API + "transferts_a_valider" })).message || [];
     this.attente = liste;
     const verifs = this.ctx.verification ? ((await frappe.call({ method: SE_API + "verifications_a_traiter" })).message || []) : [];
     this.$r.find("#se-v-badge").toggle(!!verifs.length).text(verifs.length);
-    const miens = liste.filter((t) => t.employe && t.employe === this.ctx.employe_id);
+    const miens = liste.filter((t) => t.a_moi);
     this.$r.find("#se-s-attente").html(verifs.map((v) => `<div class="se-bandeau">
         <div class="t">🧾 Vérification ${se_esc(v.libelle)} — ${v.geste === "valider" ? "à valider" : "à accepter"}</div>
         <div class="d">${se_esc(v.texte)}</div>
         <button type="button" class="btn btn-primary btn-sm" data-verif="${se_esc(v.name)}">${v.geste === "valider" ? "🔍 Vérifier et valider" : "🔍 Voir et accepter"}</button>
       </div>`).join("") + miens.map((t) => `<div class="se-bandeau">
-        <div class="t">📥 Transfert ${se_esc(t.name)} à valider — ${se_esc(this.libelle(t.de))} → votre stock</div>
-        <div class="d">${t.lignes.length} article(s) · ${se_esc(t.par)} · ${se_esc(t.quand)}${t.remarque ? ` · ${se_esc(t.remarque)}` : ""}</div>
-        <button type="button" class="btn btn-primary btn-sm" data-valider="${se_esc(t.name)}">✅ Vérifier et confirmer la réception</button>
+        <div class="t">🔁 Transfert ${se_esc(t.name)} à valider — ${se_esc(this.libelle(t.de))} → ${se_esc(this.libelle(t.vers))}</div>
+        <div class="d">${t.lignes.length} article(s) · ${se_esc(this.dernierTour(t))} · ${se_esc(t.quand)}${t.remarque ? ` · ${se_esc(t.remarque)}` : ""}</div>
+        <button type="button" class="btn btn-primary btn-sm" data-valider="${se_esc(t.name)}">🔍 Vérifier les quantités et valider</button>
       </div>`).join(""));
-    this.$r.find("#se-t-badge").toggle(!!liste.length).text(liste.length);
+    this.$r.find("#se-t-badge").toggle(!!miens.length).text(miens.length);
+  }
+
+  /** « demandé par Hedi » ou « Akram a changé 2 quantité(s) ». */
+  dernierTour(t) {
+    const h = (t.tours || [])[(t.tours || []).length - 1];
+    if (!h) return `demandé par ${t.par}`;
+    return h.changes == null ? `demandé par ${h.nom}` : `${h.nom} a changé ${h.changes} quantité(s)`;
   }
 
   /** Feuille de détail d'un transfert : photo, code, nom, quantité ; état de validation. */
@@ -144,41 +154,70 @@ class StockEntrepots {
     const lignes = (t.lignes || []).map((l) => `<div class="se-z-ligne">${se_img(l.image)}
         <div style="flex:1;min-width:0"><div class="se-nom">${se_esc(l.item_name || l.item_code)}</div><div class="se-code">${se_esc(l.item_code)}</div></div>
         <div class="mvt">${se_q(l.qte)}<small>${se_esc(l.uom || "")}</small></div></div>`).join("");
-    const etat = t.attente ? `<div class="se-attente ${t.attente.age_h > 24 ? "vieux" : ""}">⏳ En attente de validation de ${se_esc(t.attente.employe_nom)}</div>`
-      : t.validation ? `<div class="se-valide">✅ Réception confirmée par ${se_esc(t.validation.par)} le ${se_esc(t.validation.le)}${t.validation.ecart ? `<div class="ecart">⚠️ ${se_esc(t.validation.ecart)}</div>` : ""}</div>`
-      : t.docstatus === 2 ? `<span class="se-badge">annulé</span>` : "";
     const d = new frappe.ui.Dialog({ title: `🔁 ${t.name}`, size: "large", fields: [{ fieldtype: "HTML", fieldname: "corps" }] });
     d.fields_dict.corps.$wrapper.html(`<div class="se-note">${se_esc(this.libelle(t.de))} → <b>${se_esc(this.libelle(t.vers))}</b> · ${se_esc(t.par)} · ${se_esc(t.quand || `${se_dt(t.date)} ${t.heure || ""}`)}</div>
-      ${etat}${t.remarque ? `<div class="se-note">${se_esc(t.remarque)}</div>` : ""}
+      ${this.etatTransfert(t)}${t.remarque ? `<div class="se-note">${se_esc(t.remarque)}</div>` : ""}
+      ${t.attente ? `<div class="se-note">Quantités de la proposition en cours.</div>` : ""}
       <div style="margin-top:8px">${lignes}</div>
       <div class="se-note" style="margin-top:8px">${(t.lignes || []).length} article(s) · ${se_q((t.lignes || []).reduce((a, l) => a + l.qte, 0))} unité(s) · ${se_lien("Stock Entry", t.name, "ouvrir la fiche")}</div>`);
     d.show();
   }
 
-  /** L'employé confirme la réception, quantité par quantité : baisser = écart tracé, 0 = non reçu. */
+  /** ⏳ au tour de qui / ✅ accord final, pour une carte ou une feuille de l'historique. */
+  etatTransfert(t) {
+    if (t.attente) {
+      const vieux = t.attente.age_h > 24;
+      return `<div class="se-attente ${vieux ? "vieux" : ""}">⏳ Au tour de ${se_esc(t.attente.attente_de)}${t.attente.propositions > 1 ? ` · ${t.attente.propositions} propositions` : ""}${vieux ? ` · depuis ${Math.round(t.attente.age_h / 24)} j` : ""}</div>`;
+    }
+    if (t.validation) {
+      return `<div class="se-valide">✅ Accord final : ${se_esc(t.validation.par)} le ${se_esc(t.validation.le)}${t.validation.propositions > 1 ? ` · après ${t.validation.propositions} propositions` : ""}${t.validation.ecart ? `<div class="ecart">⚠️ ${se_esc(t.validation.ecart)}</div>` : ""}</div>`;
+    }
+    return t.docstatus === 2 ? `<span class="se-badge">annulé</span>` : "";
+  }
+
+  /** Double validation, à mon tour : mêmes quantités = accord (le stock bouge) ; une quantité changée = la
+   *  demande repart chez l'autre côté, jusqu'à ce que l'un accepte les quantités de l'autre. */
   async ouvrirValidation(name) {
-    const t = (this.attente || []).find((x) => x.name === name)
-      || ((await frappe.call({ method: SE_API + "transferts_a_valider" })).message || []).find((x) => x.name === name);
+    const liste = (await frappe.call({ method: SE_API + "transferts_a_valider" })).message || [];
+    this.attente = liste;
+    const t = liste.find((x) => x.name === name);
     if (!t) { frappe.show_alert({ message: `Le transfert ${se_esc(name)} n’est plus en attente.`, indicator: "orange" }, 5); this.chargerAttente(); return; }
-    const d = new frappe.ui.Dialog({ title: `📥 Réception ${t.name}`, size: "large", fields: [{ fieldtype: "HTML", fieldname: "corps" }],
-      primary_action_label: "✅ Confirmer la réception", primary_action: async () => {
-        const lignes = t.lignes.map((l) => ({ item_code: l.item_code, qte: +String(d.$wrapper.find(`input[data-recu="${CSS.escape(l.item_code)}"]`).val()).replace(",", ".") || 0 }));
-        const ecarts = lignes.filter((l, i) => l.qte !== t.lignes[i].qte).length;
+    if (!t.a_moi) { frappe.msgprint({ title: `🔁 ${se_esc(t.name)}`, indicator: "orange", message: `⏳ Au tour de <b>${se_esc(t.attente_de)}</b> : vous avez déjà donné vos quantités, ou ce transfert ne vous concerne pas.` }); return; }
+    const autre = t.tour === "Employé" ? "un responsable magasin" : t.employe_nom;
+    const dernier = t.tours[t.tours.length - 1];
+    const lire = () => t.lignes.map((l) => ({ item_code: l.item_code,
+      qte: Math.max(0, +String(d.$wrapper.find(`input[data-recu="${CSS.escape(l.item_code)}"]`).val()).replace(",", ".") || 0) }));
+    const nChanges = () => lire().filter((l, i) => l.qte !== t.lignes[i].qte).length;
+    const d = new frappe.ui.Dialog({ title: `🔁 ${t.name} — à valider`, size: "large", fields: [{ fieldtype: "HTML", fieldname: "corps" }],
+      primary_action_label: "✅ D’accord : valider", primary_action: () => {
+        const lignes = lire(), n = nChanges();
         const go = async () => {
           d.hide();
-          const res = (await frappe.call({ method: SE_API + "valider_transfert", args: { name: t.name, lignes }, freeze: true, freeze_message: "Réception…" })).message;
-          frappe.show_alert({ message: res.supprime ? `Rien reçu : demande ${se_esc(t.name)} retirée` : `✅ Réception confirmée : ${res.lignes} article(s)${res.ecarts.length ? ` · ${res.ecarts.length} écart(s) signalé(s)` : ""}`,
-            indicator: res.supprime ? "orange" : res.ecarts.length ? "yellow" : "green" }, 6);
+          const res = (await frappe.call({ method: SE_API + "valider_transfert", args: { name: t.name, lignes }, freeze: true, freeze_message: "Validation…" })).message;
+          if (res.statut === "renvoye") frappe.show_alert({ message: `↩️ ${se_esc(t.name)} renvoyé à ${se_esc(res.attente_de)} avec vos quantités (${res.changes.length} changement(s)) — le stock ne bouge pas encore`, indicator: "orange" }, 8);
+          else if (res.statut === "supprime") frappe.show_alert({ message: `Transfert ${se_esc(t.name)} abandonné : toutes les quantités à 0`, indicator: "orange" }, 6);
+          else frappe.show_alert({ message: `✅ Accord : ${se_esc(t.name)} validé, ${res.lignes} article(s) transféré(s)${res.ecarts.length ? ` · ${res.ecarts.length} écart(s) avec la demande` : ""}`,
+            indicator: res.ecarts.length ? "yellow" : "green" }, 7);
           this.chargerAttente(); this.rafraichir();
         };
-        if (ecarts) frappe.confirm(`<b>${ecarts}</b> quantité(s) différente(s) de l’envoi : l’écart sera signalé à ${se_esc(t.par)}. Confirmer ?`, go);
+        if (n) frappe.confirm(`<b>${n}</b> quantité(s) changée(s) : la demande repart chez <b>${se_esc(autre)}</b>, qui acceptera vos quantités ou les changera à son tour. Le stock ne bouge pas encore. Renvoyer ?`, go);
         else go();
       } });
+    const tours = t.tours.length > 1 ? `<ul class="se-tours">${t.tours.map((h) => `<li>${se_esc(h.nom)} (${h.cote === "Employé" ? "employé" : "magasin"}) · ${se_dt((h.le || "").slice(0, 10))} ${se_esc((h.le || "").slice(11, 16))} : ${h.changes == null ? "demande" : `${h.changes} quantité(s) changée(s)`}</li>`).join("")}</ul>` : "";
     d.fields_dict.corps.$wrapper.html(`<div class="se-note">${se_esc(this.libelle(t.de))} → <b>${se_esc(this.libelle(t.vers))}</b> · demandé par ${se_esc(t.par)} · ${se_esc(t.quand)}${t.remarque ? ` · ${se_esc(t.remarque)}` : ""}</div>
-      <div class="se-note">Vérifiez chaque article : corrigez la quantité si le carton ne correspond pas (0 = non reçu).</div>
-      <div style="margin-top:8px">${t.lignes.map((l) => `<div class="se-cb-ligne">${se_img(l.image)}
-        <div class="txt"><div class="se-nom" style="font-size:13.5px">${se_esc(l.item_name || l.item_code)}</div><div class="se-code">${se_esc(l.item_code)} · envoyé <b>${se_q(l.qte)}</b> ${se_esc(l.uom || "")}</div></div>
-        <input type="number" inputmode="decimal" min="0" max="${se_esc(l.qte)}" step="any" class="form-control c" data-recu="${se_esc(l.item_code)}" value="${se_esc(l.qte)}"></div>`).join("")}</div>`);
+      ${tours}
+      <div class="se-note">Vérifiez chaque quantité. <b>D’accord</b> → validez : le stock bouge. <b>Pas d’accord</b> → corrigez (0 = article retiré) : la demande repart chez ${se_esc(autre)}, jusqu’à ce que vous soyez d’accord tous les deux.</div>
+      <div style="margin-top:8px">${t.lignes.map((l) => {
+        const change = l.qte_precedente != null && l.qte !== l.qte_precedente;
+        return `<div class="se-cb-ligne ${change ? "change" : ""}">${se_img(l.image)}
+        <div class="txt"><div class="se-nom" style="font-size:13.5px">${se_esc(l.item_name || l.item_code)}</div><div class="se-code">${se_esc(l.item_code)} · demandé <b>${se_q(l.qte_initiale)}</b> ${se_esc(l.uom || "")}</div>
+          ${change ? `<div class="prev">${se_esc(dernier.nom)} : ${se_q(l.qte)} (avant : ${se_q(l.qte_precedente)})</div>` : ""}</div>
+        <input type="number" inputmode="decimal" min="0" step="any" class="form-control c" data-recu="${se_esc(l.item_code)}" value="${se_esc(l.qte)}"></div>`;
+      }).join("")}</div>`);
+    d.$wrapper.on("input", "input[data-recu]", () => {
+      const n = nChanges();
+      d.get_primary_btn().text(n ? `↩️ Renvoyer avec mes quantités (${n})` : "✅ D’accord : valider");
+    });
     d.show();
   }
 
@@ -224,7 +263,7 @@ class StockEntrepots {
 
   rafraichir() {
     ({ solde: () => this.chargerSolde(), sorties: () => this.chargerSorties(),
-       transfert: () => { this.chargerHistorique(); this.majQuantitesPanier(); },
+       transfert: () => { this.chargerHistorique(); this.majQuantitesPanier(); this.majRegle(); },
        zero: () => (this.zeroEntrepot ? this.ouvrirZero(this.zeroEntrepot) : this.chargerZero()),
        verif: () => (this.comptage ? this.ouvrirComptage(this.comptage) : this.chargerVerif()) })[this.onglet]();
     this.majBarreSolde();
@@ -562,7 +601,7 @@ class StockEntrepots {
     const autre = ctx.entrepots.find((w) => w.name !== ctx.magasin && w.employes.length) || ctx.entrepots.find((w) => w.name !== ctx.magasin);
     r.find("#se-t-de").val(ctx.magasin);
     r.find("#se-t-vers").val(ctx.mien && ctx.mien !== ctx.magasin ? ctx.mien : autre ? autre.name : ctx.magasin);
-    r.find("#se-t-de, #se-t-vers").on("change", () => { this.chercherArticles(); this.majQuantitesPanier(); this.majBoutonReassort(); });
+    r.find("#se-t-de, #se-t-vers").on("change", () => { this.chercherArticles(); this.majQuantitesPanier(); this.majBoutonReassort(); this.majRegle(); });
     r.find("#se-t-reassort").on("click", () => this.reassortCible());
     r.find("#se-t-inverser").on("click", () => {
       const de = r.find("#se-t-de").val();
@@ -571,6 +610,7 @@ class StockEntrepots {
       this.chercherArticles();
       this.majQuantitesPanier();
       this.majBoutonReassort();
+      this.majRegle();
     });
     let t = null;
     r.find("#se-t-recherche").on("input", () => { clearTimeout(t); t = setTimeout(() => this.chercherArticles(), 250); });
@@ -607,6 +647,29 @@ class StockEntrepots {
     this.trouves = [];
     this.peindrePanier();
     this.majBoutonReassort();
+    this.majRegle();
+  }
+
+  /** Ce que le réglage dit du trajet (même règle que le serveur, qui tranche) : permis ? double validation ? */
+  regle(de, vers) {
+    const cat = (w) => (this.ctx.categories || {})[w] || "Autre entrepôt";
+    const c1 = cat(de), c2 = cat(vers), t = this.ctx.trajets;
+    if (!t) return { permis: true, double: c1 === "Magasin" && c2 === "Stock véhicule", de: c1, vers: c2 };
+    const r = t.find((x) => x[0] === c1 && x[1] === c2);
+    return { permis: !!r, double: !!(r && r[2]), de: c1, vers: c2 };
+  }
+
+  majRegle() {
+    const [de, vers] = this.sens(), $g = this.$r.find("#se-t-regle");
+    if (!de || !vers || de === vers) { $g.hide(); return; }
+    const g = this.regle(de, vers);
+    const veh = this.ctx.entrepots.find((w) => w.name === (g.de === "Stock véhicule" ? de : vers));
+    const emp = veh && veh.employes.length ? veh.employes.join(", ") : "l’employé du véhicule";
+    $g.removeClass("double direct interdit").addClass(!g.permis ? "interdit" : g.double ? "double" : "direct").show()
+      .html(!g.permis ? `⛔ Trajet interdit par le réglage : ${se_esc(g.de)} → ${se_esc(g.vers)}.`
+        : g.double ? `🤝 Double validation : ${se_esc(emp)} et un responsable magasin valident les quantités ; le stock bouge à l’accord des deux.`
+        : "⚡ Immédiat : le stock bouge dès la validation.");
+    this.peindrePanier();
   }
 
   sens() {
@@ -668,9 +731,10 @@ class StockEntrepots {
         </div>
         ${l.qte > l.qte_source ? `<div class="se-alerte">⚠️ Plus que le stock de ${se_esc(this.libelle(de))} (${se_q(l.qte_source)}) : il passera en négatif.</div>` : ""}
       </div>`).join("") || `<div class="se-note">Cherchez un article ci-dessus puis touchez ＋.</div>`);
-    const n = this.panier.filter((l) => l.qte > 0).length;
-    r.find("#se-t-valider").prop("disabled", !n || de === vers)
-      .text(de === vers ? "Choisissez deux entrepôts différents" : n ? `Valider le transfert (${n} article${n > 1 ? "s" : ""})` : "Valider le transfert");
+    const n = this.panier.filter((l) => l.qte > 0).length, permis = de === vers || this.regle(de, vers).permis;
+    r.find("#se-t-valider").prop("disabled", !n || de === vers || !permis)
+      .text(de === vers ? "Choisissez deux entrepôts différents" : !permis ? "Trajet interdit (réglage)"
+        : n ? `Valider le transfert (${n} article${n > 1 ? "s" : ""})` : "Valider le transfert");
   }
 
   validerTransfert() {
@@ -682,7 +746,7 @@ class StockEntrepots {
       try {
         const res = (await frappe.call({ method: SE_API + "creer_transfert", freeze: true, freeze_message: "Transfert…",
           args: { source, cible, lignes, remarque: this.$r.find("#se-t-remarque").val() || null } })).message;
-        frappe.show_alert({ message: res.en_attente ? `⏳ Transfert ${se_esc(res.name)} : ${res.lignes} article(s) — en attente de la validation de ${se_esc(res.employe_nom)} (le stock bougera à sa confirmation)`
+        frappe.show_alert({ message: res.en_attente ? `⏳ Transfert ${se_esc(res.name)} : ${res.lignes} article(s) — au tour de ${se_esc(res.attente_de)} (le stock bougera à l’accord des deux)`
             : `✅ Transfert ${se_esc(res.name)} : ${res.lignes} article(s)`, indicator: res.en_attente ? "yellow" : "green" }, 8);
         this.panier = [];
         this.chargerAttente();
@@ -700,17 +764,15 @@ class StockEntrepots {
     const res = await this.appel("historique", "transferts_recents", { limite: 15 });
     if (!res) return;
     this.historique = res;
-    const moi = this.ctx.employe_id;
     this.$r.find("#se-t-historique").html(res.map((t) => `<div class="se-card se-tr ${t.docstatus === 2 ? "annule" : ""} ${t.attente ? `attente ${t.attente.age_h > 24 ? "vieux" : ""}` : ""}">
         <div class="tete"><span>${se_lien("Stock Entry", t.name)} ${t.docstatus === 2 ? `<span class="se-badge">annulé</span>` : ""}</span>
           <span class="se-note">${se_dt(t.date)} ${se_esc(t.heure)} · ${se_esc(t.par)}</span></div>
         <div class="sens">${se_esc(this.libelle(t.de || (t.lignes[0] || {}).de))} → ${se_esc(this.libelle(t.vers || (t.lignes[0] || {}).vers))}</div>
-        ${t.attente ? `<div class="se-attente ${t.attente.age_h > 24 ? "vieux" : ""}">⏳ En attente de validation de ${se_esc(t.attente.employe_nom)}${t.attente.age_h > 24 ? ` · depuis ${Math.round(t.attente.age_h / 24)} j` : ""}</div>` : ""}
-        ${t.validation ? `<div class="se-valide">✅ Réception confirmée par ${se_esc(t.validation.par)} le ${se_esc(t.validation.le)}${t.validation.ecart ? `<div class="ecart">⚠️ ${se_esc(t.validation.ecart)}</div>` : ""}</div>` : ""}
+        ${t.docstatus === 2 ? "" : this.etatTransfert(t)}
         <div class="det">${t.lignes.slice(0, 6).map((l) => `${se_esc(l.item_name || l.item_code)} <b>${se_q(l.qte)}</b>`).join(" · ")}${t.lignes.length > 6 ? ` · … +${t.lignes.length - 6}` : ""}</div>
         ${t.remarque ? `<div class="se-note">${se_esc(t.remarque)}</div>` : ""}
         <div class="actions"><button type="button" class="btn btn-xs btn-default" data-detail="${se_esc(t.name)}">🔍 Détail</button>
-          ${t.attente && t.attente.employe === moi ? `<button type="button" class="btn btn-xs btn-primary" data-valider="${se_esc(t.name)}">✅ Confirmer la réception</button>` : ""}
+          ${t.attente && t.attente.a_moi ? `<button type="button" class="btn btn-xs btn-primary" data-valider="${se_esc(t.name)}">🔍 Vérifier et valider</button>` : ""}
           ${t.docstatus === 1 ? `<button type="button" class="btn btn-xs btn-default" data-annuler="${se_esc(t.name)}">Annuler ce transfert</button>` : ""}
           ${t.attente ? `<button type="button" class="btn btn-xs btn-default" data-annuler="${se_esc(t.name)}">Annuler la demande</button>` : ""}</div>
       </div>`).join("") || `<div class="se-vide">Aucun transfert.</div>`);
@@ -718,7 +780,7 @@ class StockEntrepots {
 
   annulerTransfert(name) {
     const t = (this.historique || []).find((x) => x.name === name);
-    const texte = t && t.attente ? `Retirer la demande <b>${se_esc(name)}</b> en attente de ${se_esc(t.attente.employe_nom)} ? Rien n’a bougé en stock.`
+    const texte = t && t.attente ? `Retirer la demande <b>${se_esc(name)}</b> (au tour de ${se_esc(t.attente.attente_de)}) ? Rien n’a bougé en stock.`
       : `Annuler le transfert <b>${se_esc(name)}</b> ? Les quantités reviennent à leur place.`;
     frappe.confirm(texte, async () => {
       await frappe.call({ method: SE_API + "annuler_transfert", args: { name }, freeze: true });

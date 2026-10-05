@@ -206,7 +206,8 @@ class TestDoubleValidationVerif(unittest.TestCase):
                                            order by b.item_code limit 2""", S.magasin())
         if len(self.items) < 2:
             self.skipTest("pas assez d'articles au Magasin")
-        S.ecriture_transfert(S.magasin(), self.essai, [(self.items[0], 3), (self.items[1], 5)], "essai")
+        # Stock de départ du véhicule, hors trajets du réglage (Magasin → véhicule = double validation).
+        S.ecriture_transfert(S.magasin(), self.essai, [(self.items[0], 3), (self.items[1], 5)], "essai", ignore_trajets=True)
 
     def tearDown(self):
         import frappe
@@ -239,7 +240,7 @@ class TestDoubleValidationVerif(unittest.TestCase):
         self.assertEqual(S.detail_verification(nom)["fiche"]["actions"], ["valider", "renvoyer"])
         # une sortie ENTRE le comptage et la validation : à la validation les quantités système sont relues,
         # l'article qui a bougé PERD son comptage et la fiche repart au comptage (décision utilisateur 02/10/2026)
-        S.ecriture_transfert(self.essai, S.magasin(), [(i1, 1)], "sortie entre comptage et validation")
+        S.ecriture_transfert(self.essai, S.magasin(), [(i1, 1)], "sortie entre comptage et validation", ignore_trajets=True)
         r = S.valider_verification(nom)
         self.assertEqual((r["statut"], r["renvoye"], r["a_recompter"], r["renvois"]), ("En cours", True, [i1], 1))
         l1 = next(l for l in frappe.get_doc(S.VERIF, nom).lignes if l.item_code == i1)

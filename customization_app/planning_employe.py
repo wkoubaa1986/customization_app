@@ -361,9 +361,10 @@ def _transferts_a_valider(employe):
         mien = _mon_employe()
         if not employe or not mien or mien.name != employe:
             return []
-        return [{"name": t["name"], "de": t["de"], "par": t["par"], "quand": t["quand"],
+        # Seulement ceux où c'est à LUI de répondre (double validation : au tour de l'employé du véhicule).
+        return [{"name": t["name"], "de": t["de"], "vers": t["vers"], "par": t["par"], "quand": t["quand"],
                  "articles": len(t["lignes"]), "unites": sum(l["qte"] for l in t["lignes"])}
-                for t in transferts_a_valider() if t.get("employe") == employe]
+                for t in transferts_a_valider() if t.get("employe") == employe and t.get("a_moi")]
     except Exception:
         frappe.log_error(frappe.get_traceback(), "ma_journee: transferts à valider")
         return []

@@ -172,6 +172,8 @@ def _transferer_vers_magasin_defaut(dn, magasins_desactives: list):
             "t_warehouse": defaut,
         })
     se.flags.ignore_permissions = True
+    # Reprise forcée d'un magasin désactivé : hors trajets permis de la page Stock (stock_entrepots).
+    se.flags.ignore_trajets = True
     se.insert()
     se.submit()
 

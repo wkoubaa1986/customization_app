@@ -10,6 +10,36 @@ from pathlib import Path
 from customization_app import stock_entrepots as S
 
 EMPLOYE_AVEC_ENTREPOT = "morchediakram0@gmail.com"     # Akram : « Stock Akram », pas responsable magasin
+# Les trajets demandés le 05/10/2026 (= patch ensure_transfert_double_validation).
+TRAJETS_DEFAUT = [("Magasin", "Hall", 0), ("Hall", "Magasin", 0), ("Magasin", "Stock véhicule", 1),
+                  ("Stock véhicule", "Magasin", 1), ("Stock véhicule", "Articles défectueux", 1),
+                  ("Articles défectueux", "Stock véhicule", 1), ("Magasin", "Articles défectueux", 0)]
+
+
+def regler_trajets(trajets, **entrepots):
+    """Réglage des trajets (et du Hall / des Articles défectueux) pour le test — dans son savepoint."""
+    import frappe
+    frappe.db.delete(S.CONFIG_TRAJET, {"parent": S.CONFIG, "parenttype": S.CONFIG})
+    for idx, (de, vers, double) in enumerate(trajets, 1):
+        frappe.get_doc({"doctype": S.CONFIG_TRAJET, "parent": S.CONFIG, "parenttype": S.CONFIG, "parentfield": "trajets",
+                        "idx": idx, "depuis": de, "vers": vers, "double_validation": double}).db_insert()
+    for champ, wh in entrepots.items():
+        frappe.db.set_single_value(S.CONFIG, champ, wh)
+
+
+def entrepot_essai(nom):
+    import frappe
+    societe = S._societe()
+    parent = frappe.db.get_value("Warehouse", {"is_group": 1, "company": societe}, "name")
+    return frappe.get_doc({"doctype": "Warehouse", "warehouse_name": nom, "company": societe,
+                           "parent_warehouse": parent}).insert().name
+
+
+def fin_de_test(save_point):
+    import frappe
+    frappe.set_user("Administrator")
+    frappe.db.rollback(save_point=save_point)
+    frappe.db.value_cache.pop(S.CONFIG, None)        # le rollback ne vide pas le cache des valeurs du réglage
 
 
 class TestGabarit(unittest.TestCase):
@@ -30,6 +60,7 @@ class TestStockEntrepots(unittest.TestCase):
         parent = frappe.db.get_value("Warehouse", {"is_group": 1, "company": societe}, "name")
         self.essai = frappe.get_doc({"doctype": "Warehouse", "warehouse_name": "ESSAI SE", "company": societe,
                                      "parent_warehouse": parent}).insert().name
+        regler_trajets(TRAJETS_DEFAUT + [("Magasin", "Autre entrepôt", 0), ("Autre entrepôt", "Magasin", 0)])
         self.items = frappe.db.sql_list("""select b.item_code from tabBin b join tabItem i on i.name = b.item_code
                                            where b.warehouse = %s and b.actual_qty > 10 and b.valuation_rate > 0
                                              and i.disabled = 0 and i.is_stock_item = 1 and i.has_variants = 0
@@ -38,9 +69,7 @@ class TestStockEntrepots(unittest.TestCase):
             self.skipTest("pas assez d'articles en stock au Magasin")
 
     def tearDown(self):
-        import frappe
-        frappe.set_user("Administrator")
-        frappe.db.rollback(save_point="stock_entrepots")
+        fin_de_test("stock_entrepots")
 
     def _solde(self, entrepot):
         return {a["item_code"]: a["qte"] for a in S.get_solde(entrepot)["articles"]}
@@ -99,6 +128,19 @@ class TestStockEntrepots(unittest.TestCase):
         with self.assertRaises(frappe.ValidationError):
             S.creer_transfert(self.magasin, self.essai, [{"item_code": i1, "qte": 1}])
 
+    def test_trajet_absent_du_reglage_interdit(self):
+        import frappe
+        i1 = self.items[0]
+        regler_trajets([("Magasin", "Autre entrepôt", 0)])
+        S.creer_transfert(self.magasin, self.essai, [{"item_code": i1, "qte": 1}])
+        with self.assertRaises(frappe.ValidationError) as cm:
+            S.creer_transfert(self.essai, self.magasin, [{"item_code": i1, "qte": 1}])
+        self.assertIn("interdit", str(cm.exception))
+        S.remettre_a_zero(self.essai)                     # la remise à zéro, elle, n'est pas un trajet du réglage
+        self.assertEqual(self._solde(self.essai), {})
+        regler_trajets([])                                # tableau vide = ancien fonctionnement, tout est permis
+        S.creer_transfert(self.essai, self.magasin, [{"item_code": i1, "qte": 1}])
+
     def test_employe_voit_son_entrepot_et_rien_de_plus(self):
         import frappe
         entrepot = frappe.db.get_value("Employee", {"user_id": EMPLOYE_AVEC_ENTREPOT, "status": "Active"}, "custom_warehouse")
@@ -140,7 +182,8 @@ class TestSortiesEnrichies(unittest.TestCase):
 
 
 class TestDoubleValidation(unittest.TestCase):
-    """Magasin → stock d'un employé : l'écriture attend sa confirmation, ligne par ligne (02/10/2026)."""
+    """Trajets qui touchent un véhicule : l'employé du véhicule et un responsable magasin valident les mêmes
+    quantités, en va-et-vient jusqu'à l'accord (02/10/2026, va-et-vient et trajets le 05/10/2026)."""
 
     def setUp(self):
         import frappe
@@ -150,14 +193,14 @@ class TestDoubleValidation(unittest.TestCase):
         if not S._champs_validation():
             self.skipTest("champs de validation absents (patch non joué)")
         self.magasin = S.magasin()
-        societe = S._societe()
-        parent = frappe.db.get_value("Warehouse", {"is_group": 1, "company": societe}, "name")
-        self.essai = frappe.get_doc({"doctype": "Warehouse", "warehouse_name": "ESSAI DV", "company": societe,
-                                     "parent_warehouse": parent}).insert().name
+        self.essai = entrepot_essai("ESSAI DV")
+        self.hall = entrepot_essai("ESSAI HALL")
+        self.defectueux = entrepot_essai("ESSAI DEF")
+        regler_trajets(TRAJETS_DEFAUT, entrepot_hall=self.hall, entrepot_defectueux=self.defectueux)
         self.akram = frappe.db.get_value("Employee", {"user_id": EMPLOYE_AVEC_ENTREPOT, "status": "Active"}, "name")
         if not self.akram or S.est_responsable(EMPLOYE_AVEC_ENTREPOT):
             self.skipTest("pas d'employé simple avec compte")
-        frappe.db.set_value("Employee", self.akram, "custom_warehouse", self.essai)   # son stock = l'entrepôt d'essai
+        frappe.db.set_value("Employee", self.akram, "custom_warehouse", self.essai)   # son véhicule = l'entrepôt d'essai
         self.items = frappe.db.sql_list("""select b.item_code from tabBin b join tabItem i on i.name = b.item_code
                                            where b.warehouse = %s and b.actual_qty > 10 and b.valuation_rate > 0
                                              and i.disabled = 0 and i.is_stock_item = 1 and i.has_variants = 0
@@ -166,58 +209,147 @@ class TestDoubleValidation(unittest.TestCase):
             self.skipTest("pas assez d'articles en stock au Magasin")
 
     def tearDown(self):
-        import frappe
-        frappe.set_user("Administrator")
-        frappe.db.rollback(save_point="double_validation")
+        fin_de_test("double_validation")
 
     def _solde(self, entrepot):
         return {a["item_code"]: a["qte"] for a in S.get_solde(entrepot)["articles"]}
 
-    def _demande(self):
+    def _demande(self, source=None, cible=None):
         i1, i2 = self.items
-        r = S.creer_transfert(self.magasin, self.essai, [{"item_code": i1, "qte": 2}, {"item_code": i2, "qte": 5}])
+        r = S.creer_transfert(source or self.magasin, cible or self.essai,
+                              [{"item_code": i1, "qte": 2}, {"item_code": i2, "qte": 5}])
         self.assertTrue(r["en_attente"])
         self.assertEqual(r["employe"], self.akram)
         return r["name"]
 
-    def test_attente_puis_reception_avec_ecart(self):
+    def _formulaire(self, source, cible, item):
+        """Un transfert saisi dans le formulaire Stock Entry standard, hors de la page."""
+        import frappe
+        se = frappe.get_doc({"doctype": "Stock Entry", "stock_entry_type": S._type_transfert(), "purpose": S.PURPOSE,
+                             "company": S._societe(), "items": [{"item_code": item, "qty": 1, "s_warehouse": source,
+                                                                 "t_warehouse": cible}]})
+        se.flags.ignore_permissions = True
+        se.insert()
+        return se
+
+    def test_categories(self):
+        self.assertEqual([S.categorie(w) for w in (self.magasin, self.hall, self.defectueux, self.essai)],
+                         [S.CAT_MAGASIN, S.HALL, S.DEFECTUEUX, S.VEHICULE])
+
+    def test_accord_du_premier_coup(self):
         import frappe
         i1, i2 = self.items
         name = self._demande()
         self.assertEqual(self._solde(self.essai), {})                              # rien n'a bougé
-        self.assertEqual(frappe.db.get_value("Stock Entry", name, ["docstatus", S.CHAMP_VALIDEUR]), (0, self.akram))
-        self.assertIn(name, [t["name"] for t in S.transferts_a_valider()])          # le responsable les voit toutes
-        recent = next(t for t in S.transferts_recents() if t["name"] == name)
-        self.assertEqual(recent["attente"]["employe"], self.akram)
-        self.assertTrue(all(l.get("image") is not None or True for l in recent["lignes"]))
-
+        self.assertEqual(frappe.db.get_value("Stock Entry", name, ["docstatus", S.CHAMP_TOUR]), (0, S.COTE_EMPLOYE))
+        t = next(t for t in S.transferts_a_valider() if t["name"] == name)         # le responsable les voit toutes
+        self.assertFalse(t["a_moi"])                                               # … mais c'est au tour d'Akram
         frappe.set_user(EMPLOYE_AVEC_ENTREPOT)
-        mien = S.transferts_a_valider()
-        self.assertIn(name, [t["name"] for t in mien])                      # ses autres vraies demandes restent
-        self.assertEqual({l["item_code"]: l["qte"] for l in next(t for t in mien if t["name"] == name)["lignes"]}, {i1: 2, i2: 5})
-        with self.assertRaises(frappe.ValidationError):                               # pas plus qu'envoyé
-            S.valider_transfert(name, [{"item_code": i2, "qte": 6}])
-        r = S.valider_transfert(name, [{"item_code": i1, "qte": 2}, {"item_code": i2, "qte": 3}])
-        self.assertEqual((r["lignes"], len(r["ecarts"])), (2, 1))
-        self.assertIn("reçu 3", r["ecarts"][0])
-
+        t = next(t for t in S.transferts_a_valider() if t["name"] == name)
+        self.assertTrue(t["a_moi"])
+        self.assertEqual({l["item_code"]: l["qte"] for l in t["lignes"]}, {i1: 2, i2: 5})
+        r = S.valider_transfert(name)
+        self.assertEqual((r["statut"], r["ecarts"]), ("valide", []))
         frappe.set_user("Administrator")
-        self.assertEqual(self._solde(self.essai), {i1: 2, i2: 3})
+        self.assertEqual(self._solde(self.essai), {i1: 2, i2: 5})
         se = frappe.get_doc("Stock Entry", name)
         self.assertEqual((se.docstatus, se.get(S.CHAMP_VALIDE_PAR)), (1, EMPLOYE_AVEC_ENTREPOT))
-        self.assertIn("reçu 3", se.get(S.CHAMP_ECART))
-        recent = next(t for t in S.transferts_recents() if t["name"] == name)
-        self.assertIsNone(recent["attente"])
-        self.assertIn("reçu 3", recent["validation"]["ecart"])
-        self.assertNotIn(name, [t["name"] for t in S.transferts_a_valider()])   # d’autres vraies demandes peuvent exister
+        self.assertIsNone(next(t for t in S.transferts_recents() if t["name"] == name)["attente"])
 
-    def test_rien_recu_retire_la_demande(self):
+    def test_va_et_vient_jusqu_a_l_accord(self):
+        """Akram change une quantité → au Magasin ; le responsable corrige à son tour → à Akram ; Akram accepte."""
+        import frappe
+        i1, i2 = self.items
+        name = self._demande()
+        frappe.set_user(EMPLOYE_AVEC_ENTREPOT)
+        r = S.valider_transfert(name, [{"item_code": i2, "qte": 3}])
+        self.assertEqual((r["statut"], r["tour"]), ("renvoye", S.COTE_MAGASIN))
+        with self.assertRaises(frappe.ValidationError):                         # plus son tour
+            S.valider_transfert(name)
+        self.assertNotIn(name, [t["name"] for t in S.transferts_a_valider() if t["a_moi"]])
+
+        frappe.set_user("Administrator")
+        self.assertEqual(self._solde(self.essai), {})                               # toujours rien en stock
+        t = next(t for t in S.transferts_a_valider() if t["name"] == name)
+        self.assertTrue(t["a_moi"])
+        l2 = next(l for l in t["lignes"] if l["item_code"] == i2)
+        self.assertEqual((l2["qte"], l2["qte_precedente"], l2["qte_initiale"]), (3, 5, 5))
+        recent = next(t for t in S.transferts_recents() if t["name"] == name)
+        self.assertEqual((recent["attente"]["tour"], recent["attente"]["a_moi"]), (S.COTE_MAGASIN, True))
+        self.assertEqual({l["item_code"]: l["qte"] for l in recent["lignes"]}, {i1: 2, i2: 3})   # proposition en cours
+        r = S.valider_transfert(name, [{"item_code": i2, "qte": 4}])             # le Magasin corrige à son tour
+        self.assertEqual(r["tour"], S.COTE_EMPLOYE)
+
+        frappe.set_user(EMPLOYE_AVEC_ENTREPOT)
+        r = S.valider_transfert(name, [{"item_code": i1, "qte": 2}, {"item_code": i2, "qte": 4}])   # d'accord
+        self.assertEqual(r["statut"], "valide")
+        frappe.set_user("Administrator")
+        self.assertEqual(self._solde(self.essai), {i1: 2, i2: 4})
+        se = frappe.get_doc("Stock Entry", name)
+        self.assertIn("demandé 5, validé 4", se.get(S.CHAMP_ECART))
+        self.assertEqual(len(json.loads(se.get(S.CHAMP_HISTO))), 4)              # demande, 2 contre-propositions, accord
+        self.assertEqual(next(t for t in S.transferts_recents() if t["name"] == name)["validation"]["propositions"], 3)
+
+    def test_retour_au_magasin_meme_mecanisme(self):
+        import frappe
+        i1, i2 = self.items
+        S.creer_transfert(self.magasin, self.essai, [{"item_code": i1, "qte": 3}])
+        frappe.set_user(EMPLOYE_AVEC_ENTREPOT)
+        S.valider_transfert(next(t["name"] for t in S.transferts_a_valider() if t["a_moi"] and t["de"] == self.magasin))
+        frappe.set_user("Administrator")
+        r = S.creer_transfert(self.essai, self.magasin, [{"item_code": i1, "qte": 3}])
+        self.assertEqual((r["en_attente"], r["tour"]), (True, S.COTE_EMPLOYE))
+        frappe.set_user(EMPLOYE_AVEC_ENTREPOT)
+        self.assertEqual(S.valider_transfert(r["name"], [{"item_code": i1, "qte": 2}])["statut"], "renvoye")
+        frappe.set_user("Administrator")
+        self.assertEqual(S.valider_transfert(r["name"])["statut"], "valide")    # le Magasin accepte 2
+        self.assertEqual(self._solde(self.essai), {i1: 1})
+
+    def test_vehicule_et_articles_defectueux(self):
+        import frappe
+        i1 = self.items[0]
+        r = S.creer_transfert(self.essai, self.defectueux, [{"item_code": i1, "qte": 1}])
+        self.assertEqual((r["en_attente"], r["tour"]), (True, S.COTE_EMPLOYE))
+        frappe.set_user(EMPLOYE_AVEC_ENTREPOT)
+        self.assertEqual(S.valider_transfert(r["name"])["statut"], "valide")
+        frappe.set_user("Administrator")
+        self.assertEqual(self._solde(self.defectueux), {i1: 1})
+
+    def test_trajets_interdits_et_formulaire(self):
+        import frappe
+        i1 = self.items[0]
+        for source, cible in ((self.essai, self.hall), (self.hall, self.essai)):    # Hall : avec le Magasin seulement
+            with self.assertRaises(frappe.ValidationError) as cm:
+                S.creer_transfert(source, cible, [{"item_code": i1, "qte": 1}])
+            self.assertIn("interdit", str(cm.exception))
+        r = S.creer_transfert(self.magasin, self.hall, [{"item_code": i1, "qte": 1}])  # Hall ↔ Magasin : immédiat
+        self.assertNotIn("en_attente", r)
+        self.assertEqual(self._solde(self.hall), {i1: 1})
+
+        se = self._formulaire(self.magasin, self.essai, i1)          # le formulaire ne contourne pas la double validation
+        with self.assertRaises(frappe.ValidationError) as cm:
+            se.submit()
+        self.assertIn("double validation", str(cm.exception))
+        se = self._formulaire(self.essai, self.hall, i1)
+        with self.assertRaises(frappe.ValidationError):
+            se.submit()
+        frappe.set_user(EMPLOYE_AVEC_ENTREPOT)                          # Hall ↔ Magasin : responsable magasin seulement
+        se = self._formulaire(self.hall, self.magasin, i1)
+        se.flags.ignore_permissions = True
+        with self.assertRaises(frappe.PermissionError):
+            se.submit()
+        frappe.set_user("Administrator")
+        self.assertEqual(self._solde(self.hall), {i1: 1})
+
+    def test_rien_d_accord_a_zero_retire_la_demande(self):
         import frappe
         name = self._demande()
         frappe.set_user(EMPLOYE_AVEC_ENTREPOT)
         r = S.valider_transfert(name, [{"item_code": c, "qte": 0} for c in self.items])
-        self.assertTrue(r["supprime"])
+        self.assertEqual(r["statut"], "renvoye")                                    # contre-proposition « rien »
         frappe.set_user("Administrator")
+        r = S.valider_transfert(name)                                               # le Magasin l'accepte
+        self.assertTrue(r["supprime"])
         self.assertFalse(frappe.db.exists("Stock Entry", name))
         self.assertEqual(self._solde(self.essai), {})
 
@@ -232,15 +364,22 @@ class TestDoubleValidation(unittest.TestCase):
         with self.assertRaises(frappe.PermissionError):
             S.valider_transfert(name)
 
-    def test_vers_son_propre_stock_et_hors_magasin_sans_attente(self):
+    def test_son_propre_vehicule_valide_par_un_autre_responsable(self):
+        """Un responsable qui charge SON véhicule (Sadok) ne se valide pas lui-même : un autre responsable le fait."""
         import frappe
+        autres = [u for u in frappe.get_all("Has Role", filters={"role": "Responsable magasin", "parenttype": "User"},
+                                            pluck="parent")
+                  if u not in ("Administrator", EMPLOYE_AVEC_ENTREPOT) and frappe.db.get_value("User", u, "enabled")]
+        if not autres:
+            self.skipTest("pas d'autre responsable magasin")
+        frappe.db.set_value("Employee", self.akram, "user_id", "Administrator")      # c'est MON véhicule
         i1 = self.items[0]
-        frappe.db.set_value("Employee", self.akram, "user_id", "Administrator")      # c'est MON stock
         r = S.creer_transfert(self.magasin, self.essai, [{"item_code": i1, "qte": 1}])
-        self.assertNotIn("en_attente", r)
-        self.assertEqual(self._solde(self.essai), {i1: 1})
-        r = S.creer_transfert(self.essai, self.magasin, [{"item_code": i1, "qte": 1}])  # retour : jamais d'attente
-        self.assertNotIn("en_attente", r)
+        self.assertEqual((r["en_attente"], r["tour"]), (True, S.COTE_MAGASIN))
+        with self.assertRaises(frappe.ValidationError):
+            S.valider_transfert(r["name"])
+        frappe.set_user(autres[0])
+        self.assertEqual(S.valider_transfert(r["name"])["statut"], "valide")
 
     def test_soumission_directe_refusee(self):
         """Le formulaire Stock Entry (ou un script) ne passe pas outre l'attente : hook before_submit.
@@ -251,12 +390,23 @@ class TestDoubleValidation(unittest.TestCase):
         se.flags.ignore_permissions = True
         with self.assertRaises(frappe.ValidationError) as cm:
             se.submit()
-        self.assertIn("attend la confirmation", str(cm.exception))
+        self.assertIn("attend la double validation", str(cm.exception))
         self.assertEqual(frappe.db.get_value("Stock Entry", name, "docstatus"), 0)
         self.assertEqual(self._solde(self.essai), {})                                 # le stock n'a pas bougé
         frappe.set_user(EMPLOYE_AVEC_ENTREPOT)                                        # la vraie validation passe
         S.valider_transfert(name)
         self.assertEqual(frappe.db.get_value("Stock Entry", name, "docstatus"), 1)
+
+    def test_ancienne_demande_sans_historique(self):
+        """Un brouillon d'avant le va-et-vient (ni tour ni historique) : au tour de l'employé, demande = 1er tour."""
+        import frappe
+        i1, i2 = self.items
+        name = self._demande()
+        frappe.db.set_value("Stock Entry", name, {S.CHAMP_TOUR: None, S.CHAMP_HISTO: None})
+        frappe.set_user(EMPLOYE_AVEC_ENTREPOT)
+        t = next(t for t in S.transferts_a_valider() if t["name"] == name)
+        self.assertEqual((t["tour"], t["a_moi"], len(t["tours"])), (S.COTE_EMPLOYE, True, 1))
+        self.assertEqual(S.valider_transfert(name, [{"item_code": i2, "qte": 1}])["tour"], S.COTE_MAGASIN)
 
     def test_annuler_une_demande_en_attente(self):
         import frappe
@@ -264,3 +414,12 @@ class TestDoubleValidation(unittest.TestCase):
         self.assertTrue(S.annuler_transfert(name))
         self.assertFalse(frappe.db.exists("Stock Entry", name))
         self.assertNotIn(name, [t["name"] for t in S.transferts_a_valider()])   # d’autres vraies demandes peuvent exister
+
+    def test_ma_journee_seulement_a_son_tour(self):
+        import frappe
+        from customization_app.planning_employe import _transferts_a_valider
+        name = self._demande()
+        frappe.set_user(EMPLOYE_AVEC_ENTREPOT)
+        self.assertIn(name, [t["name"] for t in _transferts_a_valider(self.akram)])
+        S.valider_transfert(name, [{"item_code": self.items[1], "qte": 1}])     # renvoyé au Magasin
+        self.assertNotIn(name, [t["name"] for t in _transferts_a_valider(self.akram)])

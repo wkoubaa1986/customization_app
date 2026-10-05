@@ -7,6 +7,12 @@
  "field_order": [
   "entrepot_magasin",
   "entrepots_exclus",
+  "sec_trajets",
+  "entrepot_hall",
+  "col_trajets",
+  "entrepot_defectueux",
+  "sec_trajets_table",
+  "trajets",
   "sec_seuils",
   "seuils",
   "sec_modele",
@@ -31,7 +37,41 @@
    "fieldtype": "Table MultiSelect",
    "label": "Autres entrepôts jamais remis à zéro",
    "options": "Config Stock Entrepot Exclu",
-   "description": "Ex. Articles défectueux : leur stock ne doit pas rejoindre le Magasin."
+   "description": "Leur stock n’est jamais ramené à zéro par l’onglet « À zéro » de la page Stock (ex. Articles défectueux, ou un véhicule, ou le Hall, pour lesquels la remise à zéro est désactivée)."
+  },
+  {
+   "fieldname": "sec_trajets",
+   "fieldtype": "Section Break",
+   "label": "Transferts autorisés"
+  },
+  {
+   "fieldname": "entrepot_hall",
+   "fieldtype": "Link",
+   "label": "Hall",
+   "options": "Warehouse",
+   "description": "L’entrepôt « Hall » des trajets ci-dessous."
+  },
+  {
+   "fieldname": "col_trajets",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "entrepot_defectueux",
+   "fieldtype": "Link",
+   "label": "Articles défectueux",
+   "options": "Warehouse",
+   "description": "L’entrepôt « Articles défectueux » des trajets ci-dessous."
+  },
+  {
+   "fieldname": "sec_trajets_table",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "trajets",
+   "fieldtype": "Table",
+   "label": "Trajets permis",
+   "options": "Config Stock Entrepot Trajet",
+   "description": "Seuls ces trajets sont possibles, depuis la page Stock comme depuis le formulaire Stock Entry. Stock véhicule = l’entrepôt d’un employé actif (fiche Employé, champ Warehouse). Sans double validation : réservé au responsable magasin, le stock bouge tout de suite. Avec : l’employé du véhicule et un responsable magasin (autre que lui) valident les mêmes quantités ; une quantité changée renvoie la demande à l’autre, jusqu’à l’accord des deux. Tableau vide = aucune restriction (ancien fonctionnement). La remise à zéro n’est pas concernée : elle se règle par « Autres entrepôts jamais remis à zéro »."
   },
   {
    "fieldname": "sec_seuils",
@@ -85,7 +125,7 @@
   }
  ],
  "links": [],
- "modified": "2026-10-02 09:30:00.000000",
+ "modified": "2026-10-05 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Config Stock Entrepot",

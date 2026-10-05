@@ -1,0 +1,52 @@
+{
+ "actions": [],
+ "creation": "2026-10-05 12:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "depuis",
+  "vers",
+  "double_validation"
+ ],
+ "fields": [
+  {
+   "fieldname": "depuis",
+   "fieldtype": "Select",
+   "label": "De",
+   "options": "Magasin\nHall\nStock véhicule\nArticles défectueux\nAutre entrepôt",
+   "reqd": 1,
+   "in_list_view": 1,
+   "columns": 3
+  },
+  {
+   "fieldname": "vers",
+   "fieldtype": "Select",
+   "label": "Vers",
+   "options": "Magasin\nHall\nStock véhicule\nArticles défectueux\nAutre entrepôt",
+   "reqd": 1,
+   "in_list_view": 1,
+   "columns": 3
+  },
+  {
+   "default": "0",
+   "fieldname": "double_validation",
+   "fieldtype": "Check",
+   "label": "Double validation (employé ↔ responsable magasin)",
+   "in_list_view": 1,
+   "columns": 4,
+   "description": "Seulement sur un trajet qui touche un stock véhicule : l’employé du véhicule et un responsable magasin valident les mêmes quantités. Décoché : immédiat, réservé au responsable magasin."
+  }
+ ],
+ "links": [],
+ "modified": "2026-10-05 12:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "Config Stock Entrepot Trajet",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "istable": 1
+}

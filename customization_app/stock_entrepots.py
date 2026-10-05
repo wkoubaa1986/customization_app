@@ -5,8 +5,11 @@ Quatre onglets :
   entrepôt (Employee.custom_warehouse : le stock de son véhicule) le voit par défaut.
 - Sorties : sur une période, les sorties de stock par article ; pour chaque sortie, la pièce (BL,
   facture, transfert…), la commande et les tâches de cette commande (Tache de travail.commande_client).
-- Transfert (responsable magasin) : écriture de stock « Transfer interne » d'un entrepôt à un autre,
-  soumise directement ; seuls les articles suivis en stock sont proposés.
+- Transfert (responsable magasin) : écriture de stock « Transfer interne » d'un entrepôt à un autre ; seuls
+  les articles suivis en stock sont proposés. Seuls les trajets du réglage sont permis (05/10/2026 : Hall ↔
+  Magasin seulement, jamais véhicule → Hall). Un trajet qui touche un véhicule (Magasin ↔ véhicule, véhicule ↔
+  Articles défectueux) est en DOUBLE VALIDATION : l'employé du véhicule et un responsable magasin valident
+  les mêmes quantités, en va-et-vient jusqu'à l'accord ; les autres sont soumis directement.
 - Remise à zéro (responsable magasin) : un entrepôt actif autre que le Magasin (réglage « Config Stock
   Entrepot ») est ramené à zéro par transferts avec le Magasin — les quantités négatives sont apportées
   depuis le Magasin, les positives y retournent. L'écart d'inventaire ne vit plus que sur le Magasin.
@@ -16,8 +19,11 @@ Responsable magasin = rôle « Responsable magasin » (ou System Manager).
 
 from __future__ import annotations
 
+import json
+
 import frappe
 from frappe import _
+from frappe.model.document import Document
 from frappe.utils import add_days, cint, flt, get_datetime, get_first_day, getdate, now_datetime, nowdate
 
 from customization_app.zones_magasin import _societe
@@ -26,7 +32,10 @@ CONFIG = "Config Stock Entrepot"
 CONFIG_EXCLU = "Config Stock Entrepot Exclu"
 CONFIG_SEUIL = "Config Stock Entrepot Seuil"
 CONFIG_VERIF = "Config Stock Entrepot Verification"
+CONFIG_TRAJET = "Config Stock Entrepot Trajet"
 VERIF = "Verification Stock"
+# Catégories d'entrepôts des trajets permis (réglage) : un véhicule = l'entrepôt d'un employé actif.
+CAT_MAGASIN, HALL, VEHICULE, DEFECTUEUX, AUTRE = "Magasin", "Hall", "Stock véhicule", "Articles défectueux", "Autre entrepôt"
 # Statuts d'une vérification (validation MUTUELLE, décision 02/10/2026) : l'employé compte et termine
 # (« À valider ») ; un responsable magasin AUTRE que lui vérifie et valide avec SES quantités (« À confirmer ») ;
 # l'employé les accepte telles quelles → rapprochement de stock sur le véhicule et « Terminée » — ou en change
@@ -43,12 +52,17 @@ RESPONSABLES = {"Responsable magasin", "System Manager"}
 LECTEURS = RESPONSABLES | {"Stock User", "Stock Manager"}
 LIMITE_RECHERCHE = 30
 LIMITE_DETAIL = 300
-# Transfert Magasin → stock d'un employé : l'écriture reste en BROUILLON (le stock ne bouge pas) jusqu'à ce que
-# l'employé confirme la réception, ligne par ligne (double validation, demande du 02/10/2026).
+# Trajet en double validation (Magasin ↔ véhicule, véhicule ↔ défectueux) : l'écriture reste en BROUILLON (le
+# stock ne bouge pas) tant que l'employé du véhicule et un responsable magasin ne sont pas d'accord sur les
+# quantités (02/10/2026 ; va-et-vient des deux côtés depuis le 05/10/2026). CHAMP_VALIDEUR = l'employé du véhicule ;
+# CHAMP_TOUR = le côté qui doit répondre ; CHAMP_HISTO = chaque proposition, JSON [{cote, par, nom, le, lignes}].
 CHAMP_VALIDEUR = "custom_validation_employe"
 CHAMP_VALIDE_LE = "custom_valide_le"
 CHAMP_VALIDE_PAR = "custom_valide_par"
 CHAMP_ECART = "custom_ecart_reception"
+CHAMP_TOUR = "custom_validation_tour"
+CHAMP_HISTO = "custom_validation_historique"
+COTE_EMPLOYE, COTE_MAGASIN = "Employé", "Magasin"
 
 LIBELLES_PIECE = {"Delivery Note": "BL", "Sales Invoice": "Facture", "Stock Entry": "Écriture de stock",
                   "Stock Reconciliation": "Rapprochement", "Purchase Receipt": "Retour fournisseur",
@@ -100,6 +114,47 @@ def _verifier_entrepot(entrepot: str) -> None:
         frappe.throw(_("Entrepôt inutilisable : {0}").format(entrepot))
 
 
+# ── Trajets permis (réglage) ─────────────────────────────────────────────────
+
+def categorie(entrepot: str) -> str:
+    """Magasin, Hall, Articles défectueux (réglage), Stock véhicule (entrepôt d'un employé actif) ou Autre."""
+    if entrepot == magasin():
+        return CAT_MAGASIN
+    if entrepot and entrepot == frappe.db.get_single_value(CONFIG, "entrepot_hall"):
+        return HALL
+    if entrepot and entrepot == frappe.db.get_single_value(CONFIG, "entrepot_defectueux"):
+        return DEFECTUEUX
+    if entrepot and frappe.db.exists("Employee", {"custom_warehouse": entrepot, "status": "Active"}):
+        return VEHICULE
+    return AUTRE
+
+
+def trajets() -> dict[tuple[str, str], bool] | None:
+    """{(catégorie de départ, catégorie d'arrivée): double validation} — None = tableau vide, aucune restriction."""
+    if not frappe.db.exists("DocType", CONFIG_TRAJET):
+        return None
+    rows = frappe.get_all(CONFIG_TRAJET, filters={"parent": CONFIG, "parenttype": CONFIG},
+                          fields=["depuis", "vers", "double_validation"])
+    return {(r.depuis, r.vers): bool(r.double_validation) for r in rows} or None
+
+
+def regle_trajet(source: str, cible: str) -> dict:
+    """Ce que le réglage dit du transfert source → cible : permis ? en double validation ?
+    Sans trajets réglés (ancien fonctionnement) : tout est permis, Magasin → véhicule en double validation."""
+    de, vers = categorie(source), categorie(cible)
+    t = trajets()
+    if t is None:
+        return {"de": de, "vers": vers, "permis": True, "double": de == CAT_MAGASIN and vers == VEHICULE}
+    return {"de": de, "vers": vers, "permis": (de, vers) in t, "double": bool(t.get((de, vers)))}
+
+
+def _refuser_trajet(source: str, cible: str, regle: dict):
+    frappe.throw(_("Transfert {0} → {1} interdit : le trajet « {2} → {3} » n’est pas permis (réglage "
+                   "Config Stock Entrepot, « Trajets permis »).").format(se_court(source), se_court(cible),
+                                                                        regle["de"], regle["vers"]),
+                 title=_("Trajet interdit"))
+
+
 @frappe.whitelist()
 def get_context():
     _lecture()
@@ -109,9 +164,12 @@ def get_context():
                               ["name", "employee_name", "custom_warehouse"], as_dict=True)
     mien = emp.custom_warehouse if emp and emp.custom_warehouse in actifs else None
     m = magasin()
+    t = trajets()
     return {"entrepots": liste, "mien": mien, "employe": emp.employee_name if emp else None,
             "employe_id": emp.name if emp else None,
-            "a_valider": len(transferts_a_valider()) if _champs_validation() else 0,
+            "categories": {w["name"]: categorie(w["name"]) for w in liste},
+            "trajets": [[de, vers, double] for (de, vers), double in t.items()] if t is not None else None,
+            "a_valider": sum(1 for x in transferts_a_valider() if x["a_moi"]) if _champs_validation() else 0,
             "defaut": mien or (m if m in actifs else (liste[0]["name"] if liste else None)),
             "magasin": m, "responsable": est_responsable(), "aujourdhui": nowdate(),
             "seuils": seuils(), "verification": bool(est_responsable() or mien),
@@ -362,9 +420,10 @@ def rechercher_articles(txt, source=None, cible=None):
 
 
 def ecriture_transfert(source: str, cible: str, lignes: list[tuple[str, float]], remarque: str,
-                       valideur: str | None = None):
+                       valideur: str | None = None, champs: dict | None = None, ignore_trajets: bool = False):
     """Crée et soumet un transfert source → cible. lignes : [(item_code, qte)], qte > 0.
-    Avec `valideur` (un employé), l'écriture reste en brouillon : elle attend sa validation."""
+    Avec `valideur` (l'employé du véhicule), l'écriture reste en brouillon : elle attend la double validation
+    (`champs` : tour et historique). `ignore_trajets` : remise à zéro, hors réglage des trajets."""
     doc = frappe.new_doc("Stock Entry")
     doc.update({"stock_entry_type": _type_transfert(), "purpose": PURPOSE, "company": _societe(),
                 "from_warehouse": source, "to_warehouse": cible, "remarks": remarque})
@@ -375,8 +434,10 @@ def ecriture_transfert(source: str, cible: str, lignes: list[tuple[str, float]],
     # responsable qui n'a pas le droit de LIRE la fiche Employé du valideur (permission utilisateur « son
     # propre employé » : Hedi en prod, 02/10/2026) — le lien « Validation attendue de » le bloquait.
     doc.flags.ignore_permissions = True
+    doc.flags.ignore_trajets = ignore_trajets
     if valideur:
         doc.set(CHAMP_VALIDEUR, valideur)
+        doc.update(champs or {})
         doc.insert()
         return doc
     doc.insert()
@@ -404,12 +465,16 @@ def _articles_transferables(codes: list[str]) -> dict[str, str | None]:
 
 @frappe.whitelist(methods=["POST"])
 def creer_transfert(source, cible, lignes, remarque=None):
-    """Transfert d'articles d'un entrepôt à un autre, soumis directement. lignes : [{item_code, qte}]."""
+    """Transfert d'articles d'un entrepôt à un autre, sur un trajet permis par le réglage. lignes : [{item_code, qte}].
+    Trajet en double validation : brouillon, au tour de l'autre côté ; sinon soumis directement."""
     _responsable()
     _verifier_entrepot(source)
     _verifier_entrepot(cible)
     if source == cible:
         frappe.throw(_("L’entrepôt de départ et celui d’arrivée sont les mêmes."))
+    regle = regle_trajet(source, cible)
+    if not regle["permis"]:
+        _refuser_trajet(source, cible, regle)
     cumul = {}
     for l in frappe.parse_json(lignes) if isinstance(lignes, str) else (lignes or []):
         qte = flt(l.get("qte"), 6)
@@ -421,37 +486,122 @@ def creer_transfert(source, cible, lignes, remarque=None):
     if refus:
         frappe.throw("<br>".join(f"{frappe.utils.escape_html(c)} : {m}" for c, m in refus.items()))
     texte = f"{MARQUE} — transfert" + (f" — {remarque.strip()}" if (remarque or "").strip() else "")
-    valideur = _valideur_requis(source, cible)
-    doc = ecriture_transfert(source, cible, list(cumul.items()), texte, valideur=valideur.name if valideur else None)
+    valideur = _employe_du_trajet(source, cible) if regle["double"] and _champs_validation() else None
     if not valideur:
+        doc = ecriture_transfert(source, cible, list(cumul.items()), texte)
         return {"name": doc.name, "lignes": len(cumul)}
-    doc.add_comment("Comment", _("En attente de validation de {0} : le stock ne bouge qu’à sa confirmation.")
-                    .format(valideur.employee_name))
-    _prevenir(valideur.user_id, _("📥 Transfert {0} à valider : {1} article(s) de {2} vers votre stock")
-              .format(doc.name, len(cumul), se_court(source)), doc.name)
-    return {"name": doc.name, "lignes": len(cumul), "en_attente": True,
+    cote = _cote(valideur.name)
+    tour = _autre(cote)
+    histo = [_proposition(cote, cumul)]
+    doc = ecriture_transfert(source, cible, list(cumul.items()), texte, valideur=valideur.name,
+                             champs={CHAMP_TOUR: tour, CHAMP_HISTO: json.dumps(histo, ensure_ascii=False)})
+    attente_de = _attente_de(valideur.employee_name, tour)
+    doc.add_comment("Comment", _("Double validation : en attente de {0}. Le stock ne bouge qu’à l’accord des deux "
+                                 "côtés (l’employé du véhicule et un responsable magasin).").format(attente_de))
+    for user in _destinataires(valideur.name, tour, histo):
+        _prevenir(user, _("📥 Transfert {0} à valider : {1} article(s), {2} → {3}")
+                  .format(doc.name, len(cumul), se_court(source), se_court(cible)), doc.name)
+    return {"name": doc.name, "lignes": len(cumul), "en_attente": True, "tour": tour, "attente_de": attente_de,
             "employe": valideur.name, "employe_nom": valideur.employee_name}
 
 
-# ── Double validation (Magasin → stock d'un employé) ─────────────────────────
+# ── Double validation (trajets qui touchent un véhicule) ─────────────────────
+#
+# Celui qui crée la demande donne ses quantités (1er tour) ; c'est alors à l'autre côté. Chaque côté, à son
+# tour, accepte les quantités telles quelles — le transfert est soumis avec elles — ou en change : la demande
+# repart chez l'autre, autant de fois qu'il faut. Côtés : l'employé du véhicule / un responsable magasin AUTRE
+# que lui (Sadok, responsable ET titulaire d'un véhicule, est « Employé » pour le sien).
 
 def se_court(wh: str) -> str:
     return (wh or "").rsplit(" - ", 1)[0]
 
 
 def _champs_validation() -> bool:
-    return frappe.db.has_column("Stock Entry", CHAMP_VALIDEUR)
+    return frappe.db.has_column("Stock Entry", CHAMP_VALIDEUR) and frappe.db.has_column("Stock Entry", CHAMP_TOUR)
 
 
-def _valideur_requis(source: str, cible: str):
-    """L'employé qui doit confirmer, ou None : départ du Magasin vers le stock d'un employé AUTRE que
-    celui qui fait le transfert (le responsable qui charge son propre véhicule n'a rien à se confirmer)."""
-    if source != magasin() or not _champs_validation():
-        return None
-    emp = _employe_du_stock(cible)
-    if not emp or not emp.user_id or emp.user_id == frappe.session.user:
-        return None
+def _employe_du_trajet(source: str, cible: str):
+    """L'employé du véhicule du trajet : c'est lui, face au Magasin, qui valide. Sans compte, impossible."""
+    vehicule = source if categorie(source) == VEHICULE else cible
+    emp = _employe_du_stock(vehicule)
+    if not emp:
+        frappe.throw(_("Aucun employé actif n’a {0} pour stock : la double validation est impossible.").format(vehicule))
+    if not emp.user_id:
+        frappe.throw(_("{0} n’a pas de compte utilisateur : il ne peut pas valider le transfert (fiche Employé, "
+                       "champ Utilisateur).").format(emp.employee_name))
     return emp
+
+
+def _cote(employe: str, user: str | None = None) -> str | None:
+    """Le côté de `user` sur un transfert du véhicule de `employe` — None s'il n'en est pas."""
+    user = user or frappe.session.user
+    if frappe.db.get_value("Employee", employe, "user_id") == user:
+        return COTE_EMPLOYE
+    return COTE_MAGASIN if est_responsable(user) else None
+
+
+def _autre(cote: str) -> str:
+    return COTE_MAGASIN if cote == COTE_EMPLOYE else COTE_EMPLOYE
+
+
+def _attente_de(employe_nom: str, tour: str) -> str:
+    return employe_nom if tour == COTE_EMPLOYE else _("un responsable magasin")
+
+
+def _nom_session() -> str:
+    emp = _mon_employe()
+    return (emp.employee_name if emp else None) or frappe.utils.get_fullname(frappe.session.user)
+
+
+def _proposition(cote: str, lignes: dict, accord: bool = False) -> dict:
+    p = {"cote": cote, "par": frappe.session.user, "nom": _nom_session(), "le": str(now_datetime())[:16],
+         "lignes": {code: flt(q, 6) for code, q in lignes.items()}}
+    if accord:
+        p["accord"] = 1
+    return p
+
+
+def _histo(doc) -> list[dict]:
+    """Les propositions successives. Un brouillon d'avant le va-et-vient (05/10/2026) n'en a pas : sa demande,
+    côté Magasin, en est le premier tour."""
+    try:
+        h = json.loads(doc.get(CHAMP_HISTO) or "[]")
+    except ValueError:
+        h = []
+    if h:
+        return h
+    return [{"cote": COTE_MAGASIN, "par": doc.get("owner"), "nom": frappe.utils.get_fullname(doc.get("owner")),
+             "le": str(doc.get("creation"))[:16], "lignes": _lignes_initiales(doc)}]
+
+
+def _lignes_initiales(doc) -> dict:
+    if isinstance(doc, Document):
+        return {it.item_code: flt(it.qty, 6) for it in doc.items}
+    return {d.item_code: flt(d.qty, 6) for d in frappe.get_all("Stock Entry Detail", filters={"parent": doc.name},
+                                                               fields=["item_code", "qty"], order_by="idx")}
+
+
+def _tour(doc) -> str | None:
+    if not doc.get(CHAMP_VALIDEUR):
+        return None
+    return doc.get(CHAMP_TOUR) or COTE_EMPLOYE
+
+
+def _destinataires(employe: str, tour: str, histo: list[dict]) -> list[str]:
+    """Qui prévenir quand c'est au tour de `tour` : l'employé du véhicule ; côté Magasin, les responsables qui
+    ont déjà donné leurs quantités sur la demande et le responsable principal du magasin (réglage)."""
+    emp_user = frappe.db.get_value("Employee", employe, "user_id")
+    if tour == COTE_EMPLOYE:
+        return [emp_user] if emp_user else []
+    users = [h.get("par") for h in histo if h.get("cote") == COTE_MAGASIN]
+    principal = frappe.db.get_single_value(CONFIG, "responsable_verification")
+    if principal:
+        users.append(frappe.db.get_value("Employee", principal, "user_id"))
+    out = []
+    for u in users:
+        if u and u != emp_user and u not in out:
+            out.append(u)
+    return out
 
 
 def _prevenir(user: str, sujet: str, name: str):
@@ -465,18 +615,36 @@ def _prevenir(user: str, sujet: str, name: str):
 
 
 def stock_entry_before_submit(doc, method=None):
-    """Hook `before_submit` de Stock Entry : un transfert qui attend la confirmation d'un employé ne se soumet
-    QUE par `valider_transfert`, qui remplit « Réception confirmée par » juste avant. Le formulaire Stock Entry,
-    la liste, un script ou un import ne peuvent pas le passer en force. Le 02/10/2026, MAT-STE-2026-00104
-    (Magasin → Stock Akram) avait été soumis depuis le formulaire par le demandeur lui-même, sans Akram :
-    la double validation n'existait que dans la page, pas dans le DocType."""
-    if not doc.get(CHAMP_VALIDEUR) or doc.get(CHAMP_VALIDE_PAR):
+    """Hook `before_submit` de Stock Entry.
+    1. Un transfert en double validation ne se soumet QUE par `valider_transfert`, à l'accord des deux côtés, qui
+       remplit « Validé par » juste avant. Le formulaire Stock Entry, la liste, un script ou un import ne peuvent
+       pas le passer en force : le 02/10/2026, MAT-STE-2026-00104 (Magasin → Stock Akram) avait été soumis depuis
+       le formulaire par le demandeur lui-même, sans Akram.
+    2. Tout autre transfert (formulaire, script, transfert immédiat de la page) suit les trajets du réglage : un
+       trajet interdit ou en double validation est refusé, un trajet immédiat est réservé au responsable magasin
+       (05/10/2026 — le formulaire passait jusque-là à côté de tout : 4 transferts Magasin → véhicule les 28-29/09).
+       Sauf `flags.ignore_trajets` : remise à zéro, reprise du BL d'une commande annulée."""
+    if doc.get(CHAMP_VALIDEUR):
+        if doc.get(CHAMP_VALIDE_PAR):
+            return
+        nom = frappe.db.get_value("Employee", doc.get(CHAMP_VALIDEUR), "employee_name") or doc.get(CHAMP_VALIDEUR)
+        frappe.throw(_("{0} attend la double validation (au tour de {1}) : le stock ne bouge qu’à l’accord de {2} "
+                       "et d’un responsable magasin, depuis la page « Stock par entrepôt ». Pour y renoncer, annulez "
+                       "la demande depuis l’onglet Transfert.").format(doc.name, _attente_de(nom, _tour(doc)), nom),
+                     title=_("Validation attendue"))
+    if doc.purpose != PURPOSE or doc.flags.ignore_trajets or trajets() is None:
         return
-    nom = frappe.db.get_value("Employee", doc.get(CHAMP_VALIDEUR), "employee_name") or doc.get(CHAMP_VALIDEUR)
-    frappe.throw(_("{0} attend la confirmation de {1} : le stock ne bouge qu’à sa validation, depuis la page "
-                   "« Stock par entrepôt » (Ma journée → transferts à valider). Pour y renoncer, annulez la "
-                   "demande depuis l’onglet Transfert ; pour passer outre, demandez-lui de valider.")
-                 .format(doc.name, nom), title=_("Validation attendue"))
+    couples = sorted({(it.s_warehouse, it.t_warehouse) for it in doc.items if it.s_warehouse and it.t_warehouse})
+    for source, cible in couples:
+        regle = regle_trajet(source, cible)
+        if not regle["permis"]:
+            _refuser_trajet(source, cible, regle)
+        if regle["double"]:
+            frappe.throw(_("{0} → {1} : ce trajet est en double validation (l’employé du véhicule et un responsable "
+                           "magasin). Faites le transfert depuis la page « Stock par entrepôt », onglet Transfert.")
+                         .format(se_court(source), se_court(cible)), title=_("Double validation requise"))
+    if couples and not est_responsable():
+        frappe.throw(_("Les transferts entre entrepôts sont réservés au responsable magasin."), frappe.PermissionError)
 
 
 def stock_reconciliation_before_submit(doc, method=None):
@@ -501,9 +669,9 @@ def stock_reconciliation_before_submit(doc, method=None):
                  title=_("Vérification requise"))
 
 
-def _peut_valider(doc) -> bool:
-    emp = _mon_employe()
-    return bool(emp and emp.name == doc.get(CHAMP_VALIDEUR)) or est_responsable()
+def _a_moi(tour: str | None, employe: str, resp: bool, emp) -> bool:
+    mien = bool(emp and emp.name == employe)
+    return (tour == COTE_EMPLOYE and mien) or (tour == COTE_MAGASIN and resp and not mien)
 
 
 def _images(codes: list[str]) -> dict[str, str | None]:
@@ -511,99 +679,147 @@ def _images(codes: list[str]) -> dict[str, str | None]:
         if codes else {}
 
 
+def _changes(avant: dict, apres: dict) -> list[str]:
+    return [c for c in apres if flt(apres[c], 6) != flt(avant.get(c), 6)]
+
+
+def _resume_tours(histo: list[dict]) -> list[dict]:
+    return [{"cote": h.get("cote"), "nom": h.get("nom"), "le": h.get("le"), "accord": bool(h.get("accord")),
+             "changes": len(_changes(histo[i - 1]["lignes"], h["lignes"])) if i else None}
+            for i, h in enumerate(histo)]
+
+
 @frappe.whitelist()
 def transferts_a_valider(entrepot=None):
-    """Les transferts en attente : ceux que MON employé doit confirmer ; tous pour le responsable."""
+    """Les demandes en double validation que je peux voir — celles de mon véhicule ; toutes pour un responsable
+    magasin —, chacune avec le côté attendu (`tour`, `attente_de`) et `a_moi` : c'est à moi de répondre."""
     _lecture()
     if not _champs_validation():
         return []
     filtres = {"purpose": PURPOSE, "docstatus": 0, "company": _societe(), CHAMP_VALIDEUR: ["is", "set"]}
-    if entrepot:
-        filtres["to_warehouse"] = entrepot
-    if not est_responsable():
-        emp = _mon_employe()
+    ou = [["from_warehouse", "=", entrepot], ["to_warehouse", "=", entrepot]] if entrepot else None
+    resp, emp = est_responsable(), _mon_employe()
+    if not resp:
         if not emp:
             return []
         filtres[CHAMP_VALIDEUR] = emp.name
-    entetes = frappe.get_all("Stock Entry", filters=filtres,
-                             fields=["name", "creation", "from_warehouse", "to_warehouse", "remarks", "owner", CHAMP_VALIDEUR],
-                             order_by="creation asc")
-    return [_detail_transfert(e) for e in entetes]
+    entetes = frappe.get_all("Stock Entry", filters=filtres, or_filters=ou,
+                             fields=["name", "creation", "from_warehouse", "to_warehouse", "remarks", "owner",
+                                     CHAMP_VALIDEUR, CHAMP_TOUR, CHAMP_HISTO], order_by="creation asc")
+    return [_detail_transfert(e, resp, emp) for e in entetes]
 
 
-def _detail_transfert(e) -> dict:
+def _detail_transfert(e, resp: bool, emp) -> dict:
+    """Une demande en attente : les lignes portent la proposition EN COURS (`qte`), la demande initiale et la
+    proposition d'avant (ce que l'autre côté vient de changer)."""
     lignes = frappe.get_all("Stock Entry Detail", filters={"parent": e.name},
                             fields=["item_code", "item_name", "qty", "uom"], order_by="idx")
     images = _images([l.item_code for l in lignes])
+    histo = _histo(e)
+    courant, initial = histo[-1]["lignes"], histo[0]["lignes"]
+    precedent = histo[-2]["lignes"] if len(histo) > 1 else None
+    tour = _tour(e)
     valideur = frappe.db.get_value("Employee", e.get(CHAMP_VALIDEUR), "employee_name") if e.get(CHAMP_VALIDEUR) else None
     return {"name": e.name, "quand": str(e.creation)[:16], "de": e.from_warehouse, "vers": e.to_warehouse,
             "remarque": (e.remarks or "").replace(f"{MARQUE} — transfert", "").strip(" —"),
             "par": frappe.utils.get_fullname(e.owner), "employe": e.get(CHAMP_VALIDEUR), "employe_nom": valideur,
+            "tour": tour, "attente_de": _attente_de(valideur, tour), "a_moi": _a_moi(tour, e.get(CHAMP_VALIDEUR), resp, emp),
+            "tours": _resume_tours(histo),
             "age_h": round((now_datetime() - get_datetime(e.creation)).total_seconds() / 3600, 1),
-            "lignes": [{"item_code": l.item_code, "item_name": l.item_name, "qte": flt(l.qty, 6), "uom": l.uom,
-                        "image": images.get(l.item_code)} for l in lignes]}
+            "lignes": [{"item_code": l.item_code, "item_name": l.item_name, "uom": l.uom, "image": images.get(l.item_code),
+                        "qte": flt(courant.get(l.item_code, l.qty), 6),
+                        "qte_initiale": flt(initial.get(l.item_code, l.qty), 6),
+                        "qte_precedente": flt(precedent.get(l.item_code, l.qty), 6) if precedent else None}
+                       for l in lignes]}
 
 
 @frappe.whitelist(methods=["POST"])
 def valider_transfert(name, lignes=None):
-    """L'employé confirme la réception. `lignes` : [{item_code, qte}] = ce qu'il a RÉELLEMENT reçu ; une
-    quantité baissée est tracée (commentaire + champ), 0 = article non reçu (il reste au Magasin). Si rien
-    n'est reçu, la demande est supprimée. Le responsable est prévenu de tout écart."""
+    """Double validation, à mon tour, de mon côté (l'employé du véhicule, ou un responsable magasin autre que lui).
+    `lignes` : [{item_code, qte}] = MES quantités (un article absent garde la quantité proposée).
+    - Les mêmes que la proposition en cours = accord : le transfert est soumis avec ces quantités (0 = article
+      retiré ; tout à 0 = demande abandonnée d'un commun accord, supprimée).
+    - Une quantité changée = contre-proposition : la demande repasse à l'autre côté, autant de fois qu'il faut,
+      jusqu'à ce que l'un accepte telles quelles les quantités de l'autre."""
     _lecture()
     doc = frappe.get_doc("Stock Entry", name)
     if doc.purpose != PURPOSE or doc.docstatus != 0 or not doc.get(CHAMP_VALIDEUR):
         frappe.throw(_("{0} n’est pas un transfert en attente de validation.").format(name))
-    if not _peut_valider(doc):
-        frappe.throw(_("Seul {0} peut valider ce transfert.")
-                     .format(frappe.db.get_value("Employee", doc.get(CHAMP_VALIDEUR), "employee_name")), frappe.PermissionError)
-    recues = {}
+    employe = frappe.db.get_value("Employee", doc.get(CHAMP_VALIDEUR), ["name", "employee_name"], as_dict=True)
+    cote, tour = _cote(employe.name), _tour(doc)
+    if not cote:
+        frappe.throw(_("Seuls {0} et un responsable magasin valident ce transfert.").format(employe.employee_name),
+                     frappe.PermissionError)
+    if cote != tour:
+        frappe.throw(_("Vous avez donné vos quantités : c’est maintenant à {0} de valider {1}.")
+                     .format(_attente_de(employe.employee_name, tour), name), title=_("Pas votre tour"))
+    histo = _histo(doc)
+    courant = {c: flt(q, 6) for c, q in histo[-1]["lignes"].items()}
+    miennes = dict(courant)
     for l in (frappe.parse_json(lignes) if isinstance(lignes, str) else (lignes or [])):
-        if l.get("item_code"):
-            recues[l["item_code"]] = max(flt(l.get("qte"), 6), 0)
-    ecarts, gardees = [], []
-    for it in doc.items:
-        qte = recues.get(it.item_code, flt(it.qty, 6))
-        if qte > flt(it.qty, 6):
-            frappe.throw(_("{0} : reçu {1} alors que {2} étaient envoyés — on ne reçoit pas plus qu’envoyé.")
-                         .format(it.item_code, qte, it.qty))
-        if qte != flt(it.qty, 6):
-            ecarts.append(f"{it.item_name or it.item_code} : envoyé {flt(it.qty, 6):g}, reçu {qte:g}")
-        if qte > 0:
-            it.qty = qte
-            gardees.append(it)
-    qui = _mon_employe()
-    nom = (qui.employee_name if qui else None) or frappe.utils.get_fullname(frappe.session.user)
+        code = l.get("item_code")
+        if code not in miennes:
+            frappe.throw(_("{0} ne fait pas partie du transfert {1}.").format(code, name))
+        miennes[code] = max(flt(l.get("qte"), 6), 0)
+    noms = {it.item_code: it.item_name or it.item_code for it in doc.items}
+    nom = _nom_session()
+
+    changes = _changes(courant, miennes)
+    if changes:
+        histo.append(_proposition(cote, miennes))
+        autre = _autre(cote)
+        doc.db_set({CHAMP_TOUR: autre, CHAMP_HISTO: json.dumps(histo, ensure_ascii=False)})
+        textes = [f"{noms.get(c, c)} : {courant[c]:g} → {miennes[c]:g}" for c in changes]
+        attente_de = _attente_de(employe.employee_name, autre)
+        doc.add_comment("Comment", _("Quantités changées par {0} ({1}) — à valider par {2} :").format(nom, cote, attente_de)
+                        + "<br>" + "<br>".join(frappe.utils.escape_html(t) for t in textes))
+        for user in _destinataires(employe.name, autre, histo):
+            _prevenir(user, _("🔁 Transfert {0} : {1} a changé {2} quantité(s) — à vous de valider")
+                      .format(name, nom, len(changes)), name)
+        return {"name": name, "statut": "renvoye", "tour": autre, "attente_de": attente_de, "changes": textes}
+
+    # Accord : mes quantités = celles de l'autre côté.
+    initial = histo[0]["lignes"]
+    ecarts = [f"{noms.get(c, c)} : demandé {flt(initial[c], 6):g}, validé {miennes.get(c, 0):g}"
+              for c in initial if flt(miennes.get(c, 0), 6) != flt(initial[c], 6)]
+    histo.append(_proposition(cote, miennes, accord=True))
+    autres = [u for u in _destinataires(employe.name, _autre(cote), histo) if u != frappe.session.user]
+    gardees = [it for it in doc.items if miennes.get(it.item_code, 0) > 0]
     if not gardees:
-        texte = _("Rien reçu : demande {0} supprimée par {1}").format(name, nom)
-        _prevenir(doc.owner, "⚠️ " + texte + " — " + " ; ".join(ecarts), name)
+        for user in autres:
+            _prevenir(user, _("Transfert {0} abandonné : toutes les quantités à 0, accord de {1}").format(name, nom), name)
         frappe.delete_doc("Stock Entry", name, ignore_permissions=True)
-        return {"name": name, "supprime": True, "ecarts": ecarts}
-    doc.items = gardees
-    for i, it in enumerate(doc.items, 1):
+        return {"name": name, "statut": "supprime", "supprime": True, "ecarts": ecarts}
+    for i, it in enumerate(gardees, 1):
+        it.qty = miennes[it.item_code]
         it.idx = i
+    doc.items = gardees
+    doc.set(CHAMP_TOUR, None)
+    doc.set(CHAMP_HISTO, json.dumps(histo, ensure_ascii=False))
     doc.set(CHAMP_VALIDE_LE, now_datetime())
     doc.set(CHAMP_VALIDE_PAR, frappe.session.user)
     doc.set(CHAMP_ECART, " ; ".join(ecarts))
     doc.flags.ignore_permissions = True
     doc.save()
     doc.submit()
-    doc.add_comment("Comment", _("Réception confirmée par {0}").format(nom)
-                    + (("<br>⚠️ " + "<br>".join(ecarts)) if ecarts else ""))
-    if ecarts:
-        _prevenir(doc.owner, _("⚠️ Transfert {0} reçu avec écart par {1} : {2}").format(name, nom, " ; ".join(ecarts)), name)
-    return {"name": doc.name, "lignes": len(gardees), "ecarts": ecarts}
+    doc.add_comment("Comment", _("Accord : validé par {0} ({1}) après {2} proposition(s)").format(nom, cote, len(histo) - 1)
+                    + (("<br>⚠️ " + "<br>".join(frappe.utils.escape_html(e) for e in ecarts)) if ecarts else ""))
+    for user in autres:
+        _prevenir(user, _("✅ Transfert {0} validé par {1}{2}").format(
+            name, nom, (" — écart : " + " ; ".join(ecarts)) if ecarts else ""), name)
+    return {"name": doc.name, "statut": "valide", "lignes": len(gardees), "ecarts": ecarts}
 
 
 @frappe.whitelist()
 def transferts_recents(limite=15, entrepot=None):
-    """Derniers transferts (soumis ou annulés), lignes comprises."""
+    """Derniers transferts (soumis ou annulés), lignes comprises ; les demandes en attente d'abord."""
     _responsable()
     avec = _champs_validation()
     filtres = {"purpose": PURPOSE, "docstatus": ["in", [1, 2]], "company": _societe()}
     ou = [["from_warehouse", "=", entrepot], ["to_warehouse", "=", entrepot]] if entrepot else None
     champs = ["name", "posting_date", "posting_time", "docstatus", "from_warehouse", "to_warehouse", "remarks", "owner", "creation"]
     if avec:
-        champs += [CHAMP_VALIDEUR, CHAMP_VALIDE_LE, CHAMP_VALIDE_PAR, CHAMP_ECART]
+        champs += [CHAMP_VALIDEUR, CHAMP_VALIDE_LE, CHAMP_VALIDE_PAR, CHAMP_ECART, CHAMP_TOUR, CHAMP_HISTO]
     entetes = frappe.get_all("Stock Entry", filters=filtres, or_filters=ou, fields=champs,
                              order_by="creation desc", limit=min(cint(limite) or 15, 50))
     if avec:
@@ -623,17 +839,28 @@ def transferts_recents(limite=15, entrepot=None):
         for l in ls:
             l["image"] = images.get(l["item_code"])
     employes = _par_nom("Employee", [e.get(CHAMP_VALIDEUR) for e in entetes if e.get(CHAMP_VALIDEUR)], ["employee_name"]) if avec else {}
+    resp, emp = est_responsable(), _mon_employe()
     out = []
     for e in entetes:
-        emp = employes.get(e.get(CHAMP_VALIDEUR)) if avec else None
+        nom_emp = (employes.get(e.get(CHAMP_VALIDEUR)) or {}).get("employee_name") or e.get(CHAMP_VALIDEUR)
+        ls, attente, validation = lignes.get(e.name, []), None, None
+        if avec and e.get(CHAMP_VALIDEUR):
+            histo = _histo(e)
+            if e.docstatus == 0:
+                courant = histo[-1]["lignes"]
+                for l in ls:                                   # la proposition en cours, pas la demande initiale
+                    l["qte"] = flt(courant.get(l["item_code"], l["qte"]), 6)
+                tour = _tour(e)
+                attente = {"employe": e.get(CHAMP_VALIDEUR), "employe_nom": nom_emp, "tour": tour,
+                           "attente_de": _attente_de(nom_emp, tour), "a_moi": _a_moi(tour, e.get(CHAMP_VALIDEUR), resp, emp),
+                           "propositions": len(histo),
+                           "age_h": round((now_datetime() - get_datetime(e.creation)).total_seconds() / 3600, 1)}
+            elif e.get(CHAMP_VALIDE_LE):
+                validation = {"par": frappe.utils.get_fullname(e.get(CHAMP_VALIDE_PAR)), "le": str(e.get(CHAMP_VALIDE_LE))[:16],
+                              "ecart": e.get(CHAMP_ECART) or "", "propositions": max(len(histo) - 1, 1)}
         out.append({"name": e.name, "date": str(e.posting_date), "heure": str(e.posting_time or "")[:5], "docstatus": e.docstatus,
                     "de": e.from_warehouse, "vers": e.to_warehouse, "remarque": e.remarks or "",
-                    "par": frappe.utils.get_fullname(e.owner), "lignes": lignes.get(e.name, []),
-                    "attente": {"employe": e.get(CHAMP_VALIDEUR), "employe_nom": emp.employee_name if emp else e.get(CHAMP_VALIDEUR),
-                                "age_h": round((now_datetime() - get_datetime(e.creation)).total_seconds() / 3600, 1)}
-                               if e.docstatus == 0 else None,
-                    "validation": {"par": frappe.utils.get_fullname(e.get(CHAMP_VALIDE_PAR)), "le": str(e.get(CHAMP_VALIDE_LE))[:16],
-                                   "ecart": e.get(CHAMP_ECART) or ""} if e.get(CHAMP_VALIDE_LE) else None})
+                    "par": frappe.utils.get_fullname(e.owner), "lignes": ls, "attente": attente, "validation": validation})
     return out
 
 
@@ -642,11 +869,12 @@ def annuler_transfert(name):
     _responsable()
     doc = frappe.get_doc("Stock Entry", name)
     if doc.purpose == PURPOSE and doc.docstatus == 0 and doc.get(CHAMP_VALIDEUR):
-        # Demande encore en attente : rien n'a bougé, on la retire (l'employé est prévenu).
-        emp = _employe_du_stock(doc.to_warehouse)
-        if emp and emp.user_id:
-            _prevenir(emp.user_id, _("Transfert {0} annulé par {1} avant votre validation")
-                      .format(name, frappe.utils.get_fullname(frappe.session.user)), name)
+        # Demande encore en attente : rien n'a bougé, on la retire (les deux côtés sont prévenus).
+        histo = _histo(doc)
+        qui = frappe.utils.get_fullname(frappe.session.user)
+        for user in set(_destinataires(doc.get(CHAMP_VALIDEUR), COTE_EMPLOYE, histo)
+                        + _destinataires(doc.get(CHAMP_VALIDEUR), COTE_MAGASIN, histo)) - {frappe.session.user}:
+            _prevenir(user, _("Transfert {0} annulé par {1} avant l’accord").format(name, qui), name)
         frappe.delete_doc("Stock Entry", name, ignore_permissions=True)
         return True
     if doc.purpose != PURPOSE or doc.docstatus != 1:
@@ -754,10 +982,12 @@ def remettre_a_zero(entrepot, items=None):
     ecritures = []
     if apports:
         ecritures.append(ecriture_transfert(m, entrepot, apports,
-                                            f"{MARQUE} — remise à zéro de {entrepot} : apport du {m} (stock négatif)").name)
+                                            f"{MARQUE} — remise à zéro de {entrepot} : apport du {m} (stock négatif)",
+                                            ignore_trajets=True).name)
     if retours:
         ecritures.append(ecriture_transfert(entrepot, m, retours,
-                                            f"{MARQUE} — remise à zéro de {entrepot} : retour au {m}").name)
+                                            f"{MARQUE} — remise à zéro de {entrepot} : retour au {m}",
+                                            ignore_trajets=True).name)
     restant = [l for l in lignes_a_zero(entrepot) if choisis is None or l["item_code"] in choisis]
     return {"ecritures": ecritures, "apports": len(apports), "retours": len(retours),
             "restant": [l["item_code"] for l in restant if not l["bloque"]]}
