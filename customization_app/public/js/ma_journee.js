@@ -188,6 +188,8 @@ frappe.provide("frappe.views");
             if (cc.passations_a_remettre) bouts_caisse.push(`🤝 ${__("votre passation est à remettre au responsable")}`);
             (cc.mes_ecarts || []).forEach((e) => bouts_caisse.push(
               `⚠️ ${__("remise contestée")} ${esc(e.caisse)} ${esc(e.date)} : ${__("reçu")} ${e.especes_recues} ${__("au lieu de")} ${e.especes_remises}`));
+            (cc.mes_justifs || []).forEach((j) => bouts_caisse.push(
+              `📋 ${__("justifications contestées")} ${esc(j.caisse)} ${esc(j.date)} : ${__("à corriger depuis la caisse")}`));
             (cc.mes_passations_ecart || []).forEach((p) => bouts_caisse.push(`⚠️ ${__("passation contestée")} ${esc(p.name)}`));
             const bandeau_caisse = bouts_caisse.length ? `
               <div class="mj-caisse" style="border:1px solid #b45309;background:#fffbeb;border-radius:12px;padding:10px 12px;margin:6px 0 10px">

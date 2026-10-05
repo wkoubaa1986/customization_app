@@ -52,6 +52,23 @@ MODES_PORTEFEUILLE = (("cheques", "Chèque"), ("traites", "Traite bancaire"))
 # marqués remis) ne polluent pas le portefeuille.
 PLANCHER_PORTEFEUILLE = "2026-07-01"
 
+# ── Justification d'un point de contrôle (05/10/2026) ────────────────────────
+# Un MOTIF choisi dans la liste de son type + un commentaire d'au moins 10 caractères.
+# Avant, n'importe quel texte passait : en septembre, 17 points sur 28 justifiés par « rs ».
+COMMENTAIRE_MIN = 10
+MOTIFS = {
+    "tache": ["Client absent ou injoignable", "Rendez-vous reporté par le client",
+              "Intervention à terminer (pièce, temps)", "Tâche faite, clôture oubliée", "Autre"],
+    "dette": ["Le client paiera plus tard (date dans le commentaire)", "Dette accordée par la direction (qui ?)",
+              "Client professionnel : paiement sur facture ou virement", "Paiement reçu, pas encore saisi",
+              "Litige avec le client", "Autre"],
+    "ancien_exclu": ["Déjà encaissé dans une autre caisse ou un autre jour",
+                     "Paiement régénéré (facture refaite ou annulée)", "Autre"],
+    "caisse_non_collectee": ["Employé absent, collecte au prochain passage", "Collecte en cours", "Autre"],
+}
+FAMILLE_DU_POINT = {"tache_ouverte": "tache", "tache_sans_commande": "tache", "dette_hors_aramex": "dette",
+                    "ancien_exclu": "ancien_exclu", "caisse_non_collectee": "caisse_non_collectee"}
+
 
 def _est_direction():
     return (frappe.session.user in DIRECTION
@@ -249,14 +266,17 @@ def _fmt_montant(v):
 def _controles(data):
     """Les points de contrôle de la clôture (décisions utilisateur 19/08) :
 
-      tache_ouverte    : une intervention du jour reste ouverte -> JUSTIFIER ;
+      tache_ouverte    : une intervention du jour reste ouverte -> JUSTIFIER
+                         (avec le montant en dette de la commande, s'il y en a) ;
       bl_non_valide    : tâche terminée mais bon de livraison en brouillon ->
                          BLOQUANT, le BL doit être validé (bouton dédié) ;
-      dette_hors_aramex: commande validée, tâche terminée, un paiement en
-                         « Dette non payée » hors flux Aramex -> JUSTIFIER ;
+      dette_hors_aramex: un paiement en « Dette non payée » hors flux Aramex sur une
+                         commande dont la tâche n'est plus ouverte -> JUSTIFIER.
+                         Jusqu'au 05/10/2026, seulement commande validée + tâche
+                         terminée : une dette sans tâche, ou sur tâche annulée, passait ;
       ancien_exclu     : un paiement d'ancienne commande a été EXCLU de la
                          caisse -> JUSTIFIER l'exclusion.
-    """
+    Les tâches ouvertes SANS commande : `_taches_sans_commande` (hors rapport)."""
     def _qui(o):
         """« SAL-ORD-… · Client · tâche TASK-… (Entretien, Akram) » — le lecteur du point de
         contrôle décide en une ligne, sans aller ouvrir la commande (demande utilisateur
@@ -273,12 +293,15 @@ def _controles(data):
     points = []
     for e in data.get("employees") or []:
         for o in e.get("orders") or []:
+            dette = 0 if o.get("is_aramex") else flt(sum(
+                flt(p.get("amount")) for p in o.get("payments") or [] if p.get("mode") == "Dette non payée"), 3)
             if o.get("task_open"):
                 points.append({
                     "cle": "tache_ouverte:%s" % o["sales_order"],
                     "type": "tache_ouverte", "bloquant": 0,
-                    "commande": o["sales_order"], "client": o.get("customer"),
-                    "libelle": "Tâche ouverte — %s" % _qui(o),
+                    "commande": o["sales_order"], "client": o.get("customer"), "montant": dette,
+                    "libelle": "Tâche ouverte — %s%s" % (
+                        _qui(o), (" — %s DT en dette" % _fmt_montant(dette)) if dette else ""),
                 })
             if o.get("tache_status") == "Completed":
                 for dn in o.get("delivery_notes") or []:
@@ -290,17 +313,21 @@ def _controles(data):
                             "libelle": "Tâche terminée mais BL %s (%s DT) non validé — %s" % (
                                 dn["name"], _fmt_montant(dn.get("grand_total")), _qui(o)),
                         })
-                dette = sum(flt(p.get("amount")) for p in o.get("payments") or []
-                            if p.get("mode") == "Dette non payée")
-                if o.get("is_validated") and not o.get("is_aramex") and dette:
-                    points.append({
-                        "cle": "dette_hors_aramex:%s" % o["sales_order"],
-                        "type": "dette_hors_aramex", "bloquant": 0,
-                        "commande": o["sales_order"], "client": o.get("customer"),
-                        "montant": flt(dette, 3),
-                        "libelle": "Commande validée, tâche terminée, mais %s DT en dette "
-                                   "(hors Aramex) — %s" % (_fmt_montant(dette), _qui(o)),
-                    })
+            if dette and not o.get("task_open"):
+                if o.get("is_validated") and o.get("tache_status") == "Completed":
+                    libelle = "Commande validée, tâche terminée, mais %s DT en dette (hors Aramex) — %s" % (
+                        _fmt_montant(dette), _qui(o))
+                else:
+                    situation = ("tâche annulée" if o.get("tache_status") == "Cancelled"
+                                 else "commande sans tâche" if not o.get("tache_status")
+                                 else "commande non validée")
+                    libelle = "%s DT en dette (hors Aramex), %s — %s" % (_fmt_montant(dette), situation, _qui(o))
+                points.append({
+                    "cle": "dette_hors_aramex:%s" % o["sales_order"],
+                    "type": "dette_hors_aramex", "bloquant": 0,
+                    "commande": o["sales_order"], "client": o.get("customer"),
+                    "montant": dette, "libelle": libelle,
+                })
     for pmt in (data.get("anciens") or {}).get("paiements") or []:
         if pmt.get("exclu"):
             points.append({
@@ -311,6 +338,83 @@ def _controles(data):
                     pmt["name"], pmt.get("customer_name") or "?", pmt.get("amount")),
             })
     return points
+
+
+def _taches_sans_commande(caisse, date):
+    """Les tâches du jour ENCORE OUVERTES et sans commande (Autre, Visite, entretien dont la commande
+    n'est pas encore créée…). Le rapport de caisse part des commandes : sans ce contrôle, une tâche
+    sans commande restée ouverte ne se voyait jamais (05/10/2026). « Tous les employés » : toutes."""
+    from customization_app.rapport_caisse_journaliere import COMPANY
+    from customization_app.tournee_optimisation import TYPES_HORS_JOURNEE
+    date = getdate(date)
+    filtre, valeurs = "", [COMPANY, "%s 00:00:00" % date, "%s 23:59:59" % date, list(TYPES_HORS_JOURNEE)]
+    if caisse != CAISSE_GLOBALE:
+        filtre = "AND e.employee_name = %s"
+        valeurs.append(caisse)
+    exclus_u, exclus_e = _exclusions()
+    points = []
+    for t in frappe.db.sql(
+            f"""SELECT tt.name, tt.custom_type_dintervention AS type_i, tt.subject, tt.starts_on,
+                       COALESCE(NULLIF(tt.nom_client, ''), tt.custom_client) AS client,
+                       e.name AS employee_id, e.employee_name, e.user_id
+                FROM `tabTache de travail` tt INNER JOIN `tabEmployee` e ON e.name = tt.custom_choix_du_staff
+                WHERE e.company = %s AND tt.status = 'Open' AND IFNULL(tt.commande_client, '') = ''
+                  AND tt.starts_on BETWEEN %s AND %s AND IFNULL(tt.custom_type_dintervention, '') NOT IN %s {filtre}
+                ORDER BY tt.starts_on""", tuple(valeurs), as_dict=True):
+        if t.employee_id in exclus_e or (t.user_id or "") in exclus_u:
+            continue
+        objet = " ".join((t.subject or "").split())
+        points.append({
+            "cle": "tache_sans_commande:%s" % t.name, "type": "tache_sans_commande", "bloquant": 0,
+            "tache": t.name, "client": t.client,
+            "libelle": "Tâche ouverte sans commande — %s (%s, %s, %s)%s%s" % (
+                t.name, t.type_i or "?", t.employee_name, str(t.starts_on)[11:16],
+                (" · " + t.client) if t.client else "",
+                (" · « %s »" % (objet[:60] + ("…" if len(objet) > 60 else ""))) if objet else ""),
+        })
+    return points
+
+
+def motifs_du_point(point):
+    famille = FAMILLE_DU_POINT.get(point.get("type"))
+    return MOTIFS[famille] if famille else ["Autre"]
+
+
+def points_controle(caisse, date, data):
+    """Tous les points de la clôture de cette caisse, chacun avec la liste de ses motifs."""
+    from customization_app import caisse_collecte as CC
+    points = _controles(data) + _taches_sans_commande(caisse, date)
+    if caisse == CAISSE_GLOBALE:
+        points += CC.controles_globale(date, data)
+    for p in points:
+        if not p.get("bloquant"):
+            p["motifs"] = motifs_du_point(p)
+    return points
+
+
+def verifier_justifications(points, justifs):
+    """-> (texte à stocker, erreurs). Chaque point non bloquant attend {"motif": un motif de SA liste,
+    "commentaire": au moins COMMENTAIRE_MIN caractères}. Le texte garde le format historique
+    (« libellé\\n  → motif — commentaire ») que relisent le PDF et la réouverture. Fonction pure."""
+    lignes, erreurs = [], []
+    for p in points:
+        if p.get("bloquant"):
+            continue
+        j = (justifs or {}).get(p["cle"])
+        if not isinstance(j, dict):
+            # Une chaîne = l'ancienne page encore en cache dans le navigateur.
+            erreurs.append("%s : choisissez un motif%s" % (
+                p["libelle"], " (rechargez la page : Ctrl+Maj+R)" if isinstance(j, str) and j.strip() else ""))
+            continue
+        motif = (j.get("motif") or "").strip()
+        commentaire = " ".join(str(j.get("commentaire") or "").split())
+        if motif not in (p.get("motifs") or motifs_du_point(p)):
+            erreurs.append("%s : choisissez un motif" % p["libelle"])
+        elif len(commentaire) < COMMENTAIRE_MIN:
+            erreurs.append("%s : commentaire trop court (%s caractères minimum)" % (p["libelle"], COMMENTAIRE_MIN))
+        else:
+            lignes.append("%s\n  → %s — %s" % (p["libelle"], motif, commentaire))
+    return "\n".join(lignes), erreurs
 
 
 @frappe.whitelist()
@@ -366,9 +470,7 @@ def etat(caisse, date):
         en_attente["mienne"] = CC.peut_agir_sur(en_attente)
         en_attente["rouvrable"] = en_attente["mienne"]
         en_attente["justifications_precedentes"] = CC.justifications_depuis_controles(en_attente.get("controles"))
-    points = _controles(m["data"])
-    if caisse == CAISSE_GLOBALE:
-        points += CC.controles_globale(date, m["data"])
+    points = points_controle(caisse, date, m["data"])
     return {
         "caisse": caisse, "date": str(date),
         "controles": points,
@@ -425,29 +527,19 @@ def valider(caisse, date, especes_comptees=None, note=None, justifications=None,
     m = _mesures(caisse, date)
 
     # Les contrôles sont REJOUÉS côté serveur : un BL encore en brouillon bloque,
-    # chaque autre point exige sa justification écrite.
+    # chaque autre point exige un motif et un commentaire.
     import json as _json
     justifs = (_json.loads(justifications) if isinstance(justifications, str)
                else (justifications or {}))
-    points = _controles(m["data"])
-    if caisse == CAISSE_GLOBALE:
-        points += CC.controles_globale(date, m["data"])
+    points = points_controle(caisse, date, m["data"])
     bloquants = [p for p in points if p["bloquant"]]
     if bloquants:
         frappe.throw(_("Validation refusée — bon(s) de livraison à valider d'abord : {0}")
                      .format(", ".join(p["bl"] for p in bloquants)))
-    manquantes = []
-    for p in points:
-        if not (justifs.get(p["cle"]) or "").strip():
-            manquantes.append(p["libelle"])
-    if manquantes:
-        frappe.throw(_("Justification manquante :<br>• {0}")
-                     .format("<br>• ".join(frappe.utils.escape_html(x)
-                                           for x in manquantes)))
-    lignes_controles = []
-    for p in points:
-        lignes_controles.append("%s\n  → %s" % (p["libelle"], justifs.get(p["cle"]).strip()))
-    controles_txt = "\n".join(lignes_controles)
+    controles_txt, erreurs = verifier_justifications(points, justifs)
+    if erreurs:
+        frappe.throw(_("Justification incomplète :<br>• {0}")
+                     .format("<br>• ".join(frappe.utils.escape_html(x) for x in erreurs)))
 
     ouverture = _ouverture(caisse, date)
     theorique = flt(ouverture + m["encaissements_especes"] - m["depenses_especes"], 3)

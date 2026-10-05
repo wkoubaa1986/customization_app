@@ -94,6 +94,19 @@ class RapportCaisseJournaliere {
     $("#rcj-cloture-banner").on("click", "[data-rouvrir-comptage]", (e) => {
       rcj_cloture(this, { rouvrir: $(e.currentTarget).attr("data-rouvrir-comptage") });
     });
+    // Justifications contestées (bandeau du haut, toutes dates) : la page bascule sur la caisse et le
+    // jour du comptage, puis rouvre le comptage pré-rempli pour corriger.
+    $("#rcj-collecte-banner").on("click", "[data-rouvrir-justifs]", (e) => {
+      const $b = $(e.currentTarget);
+      const caisse = $b.attr("data-caisse"), date = $b.attr("data-date");
+      $("#rcj-d1").val(date); $("#rcj-d2").val(date);
+      const $sel = $("#rcj-employe");
+      if (!$sel.find("option").filter(function () { return $(this).val() === caisse; }).length) {
+        $sel.append($("<option>").val(caisse).text(caisse));
+      }
+      $sel.val(caisse);
+      Promise.resolve(this._fetch()).then(() => rcj_cloture(this, { rouvrir: $b.attr("data-rouvrir-justifs") }));
+    });
     $("#rcj-cloture-banner").on("click", "[data-annuler-comptage]", (e) => {
       const name = $(e.currentTarget).attr("data-annuler-comptage");
       frappe.confirm(__("Annuler votre comptage {0} et recommencer ?", [name]), () => {
@@ -258,7 +271,17 @@ class RapportCaisseJournaliere {
             .show();
           return;
         }
-        // En attente de collecte / écart de remise (double validation).
+        // En attente de collecte / écart de remise / justifications contestées (double validation).
+        if (c.statut === "Justification contestée") {
+          $b.css({ background: "#fdecea", borderColor: "#e0b4b4", borderLeftColor: "#a93226", color: "#a93226" })
+            .html(`📋 ${__("Justifications contestées par le responsable")} — ${lien}${
+              c.mienne ? `<div style="margin-top:6px">
+                  <button class="btn btn-xs btn-primary" data-rouvrir-comptage="${esc(c.name)}">✏️ ${__("Rouvrir et corriger mes justifications")}</button>
+                </div>` : ` · ${__("en attente de")} ${esc(c.valide_par)}`}${
+              c.echanges ? `<pre style="font-size:11px;margin:6px 0 0;white-space:pre-wrap">${esc(c.echanges)}</pre>` : ""}`)
+            .show();
+          return;
+        }
         if (c.statut === "Écart de remise") {
           $b.css({ background: "#fdecea", borderColor: "#e0b4b4", borderLeftColor: "#a93226", color: "#a93226" })
             .html(`⚠️ ${__("Remise contestée")} — ${lien} · ${esc(c.collecte_par || "?")} ${__("a reçu")} <b>${
@@ -309,6 +332,9 @@ class RapportCaisseJournaliere {
             rcj_dt(e.especes_recues)}</b> ${__("au lieu de")} <b>${rcj_dt(e.especes_remises)}</b>
            <button class="btn btn-xs btn-success" data-ecart="${esc(e.name)}" data-accepter="1" style="margin-left:6px">✅ ${__("Accepter")}</button>
            <button class="btn btn-xs btn-default" data-ecart="${esc(e.name)}" data-accepter="0" style="margin-left:4px">✋ ${__("Maintenir")}</button>`));
+        (c.mes_justifs || []).forEach((j) => bouts.push(
+          `📋 ${__("Justifications contestées")} — ${__("caisse")} ${esc(j.caisse)} ${__("du")} ${esc(frappe.datetime.str_to_user(j.date))}
+           <button class="btn btn-xs btn-primary" data-rouvrir-justifs="${esc(j.name)}" data-caisse="${esc(j.caisse)}" data-date="${esc(j.date)}" style="margin-left:6px">✏️ ${__("Corriger")}</button>`));
         (c.mes_passations_ecart || []).forEach((p) => bouts.push(
           `⚠️ ${__("Passation contestée")} ${esc(p.name)} : ${__("reçu")} <b>${rcj_dt(p.especes_recues)}</b> ${__("au lieu de")} <b>${
             rcj_dt(p.total_especes)}</b> — <a href="#" data-ouvrir="passation">${__("répondre")}</a>`));
@@ -2196,6 +2222,41 @@ RapportCaisseJournaliere.prototype._render_depenses = function () {
 // (théorique), espèces comptées et écart — figé dans un document soumis avec
 // son PDF instantané. Chaque employé valide SA caisse ; la direction valide
 // n'importe laquelle et la globale « Tous les employés ».
+const RCJ_COMMENTAIRE_MIN = 10;
+
+// Un point de contrôle à justifier : motif (liste propre au type de point) + commentaire.
+// `precedente` = « motif — commentaire » relu d'une réouverture (ou un ancien texte libre).
+function rcj_html_point_a_justifier(c, precedente) {
+  const esc = frappe.utils.escape_html;
+  const motifs = c.motifs || ["Autre"];
+  let motif = "", commentaire = precedente || "";
+  motifs.forEach((m) => {
+    if (precedente && precedente.indexOf(m + " — ") === 0) { motif = m; commentaire = precedente.slice(m.length + 3); }
+  });
+  return `<div class="rcj-just-bloc" data-cle="${esc(c.cle)}" data-libelle="${esc(c.libelle)}"
+      style="border:1px solid #e6d9a8;background:#fffbe9;border-radius:6px;padding:8px 10px;margin-bottom:6px">
+    <div style="color:#7a5d10;font-weight:600">⚠️ ${esc(c.libelle)}</div>
+    <select class="form-control input-sm rcj-just-motif" style="margin-top:4px">
+      <option value="">${__("— Motif (obligatoire) —")}</option>
+      ${motifs.map((m) => `<option value="${esc(m)}"${m === motif ? " selected" : ""}>${esc(m)}</option>`).join("")}
+    </select>
+    <input class="form-control input-sm rcj-just" style="margin-top:4px" value="${esc(commentaire)}"
+           placeholder="${__("Expliquez : qui, quand, pourquoi ({0} caractères minimum)", [RCJ_COMMENTAIRE_MIN])}">
+    <div class="rcj-just-err" style="display:none;color:#c0392b;font-size:12px;margin-top:2px"></div>
+  </div>`;
+}
+
+// Les points justifiés par l'employé, tels que le collecteur les lit sur sa carte.
+function rcj_html_controles_justifies(controles) {
+  if (!controles || !controles.length) return "";
+  const esc = frappe.utils.escape_html;
+  return `<div class="rcj-cc-controles">
+    <div class="rcj-cc-controles-titre">📋 ${__("Points de contrôle justifiés")} (${controles.length})</div>
+    ${controles.map((p) => `<div class="rcj-cc-controle"><div>${esc(p.libelle)}</div>
+      <div class="rcj-cc-justif">→ ${esc(p.justification || "—")}</div></div>`).join("")}
+  </div>`;
+}
+
 function rcj_cloture(rapport, opts) {
   const API = "customization_app.caisse_cloture";
   opts = opts || {};   // { rouvrir: <nom du brouillon> } : réouverture du comptage de l'employé
@@ -2292,15 +2353,27 @@ function rcj_cloture(rapport, opts) {
             frappe.msgprint(__("Validez d'abord le(s) bon(s) de livraison signalés en rouge."));
             return;
           }
+          // Chaque point : un motif de SA liste + un commentaire d'au moins 10 caractères (05/10/2026).
+          // Erreurs affichées DANS le dialogue : un msgprint par-dessus vide les montants saisis à sa fermeture.
           const justifications = {};
-          let manque = false;
-          d.fields_dict.controles.$wrapper.find("input.rcj-just").each(function () {
-            const val = ($(this).val() || "").trim();
-            if (!val) manque = true;
-            justifications[$(this).attr("data-cle")] = val;
+          let premier = null;
+          d.fields_dict.controles.$wrapper.find(".rcj-just-bloc").each(function () {
+            const motif = $(this).find("select.rcj-just-motif").val() || "";
+            const commentaire = ($(this).find("input.rcj-just").val() || "").replace(/\s+/g, " ").trim();
+            const erreur = !motif ? __("Choisissez un motif.")
+              : commentaire.length < RCJ_COMMENTAIRE_MIN ? __("Commentaire trop court ({0} caractères minimum).", [RCJ_COMMENTAIRE_MIN]) : "";
+            $(this).find(".rcj-just-err").text(erreur).toggle(!!erreur);
+            $(this).css("border-color", erreur ? "#c0392b" : "#e6d9a8");
+            if (erreur && !premier) premier = this;
+            justifications[$(this).attr("data-cle")] = { motif, commentaire };
           });
-          if (manque) {
-            frappe.msgprint(__("Chaque point de contrôle doit être justifié."));
+          if (premier) {
+            // Frappe vide un montant à 0 au clic refusé (« Espèces remises » manquante au clic suivant) : on le remet.
+            setTimeout(() => ["comptees", "remises", "nb_cheques", "nb_traites"].forEach((f) => {
+              if (d.fields_dict[f] && v[f] !== undefined && d.get_value(f) !== v[f]) d.set_value(f, v[f]);
+            }), 0);
+            premier.scrollIntoView({ block: "center" });
+            frappe.show_alert({ message: __("Justifiez chaque point : un motif et un commentaire."), indicator: "orange" });
             return;
           }
           const double = e.mode_validation === "double";
@@ -2347,14 +2420,7 @@ function rcj_cloture(rapport, opts) {
                <button class="btn btn-xs btn-danger rcj-valider-bl" style="margin-left:8px"
                        data-bl="${frappe.utils.escape_html(c.bl)}">${__("Valider le BL")}</button>
              </div>`
-          : `<div style="border:1px solid #e6d9a8;background:#fffbe9;border-radius:6px;
-                padding:8px 10px;margin-bottom:6px">
-               <div style="color:#7a5d10;font-weight:600">⚠️ ${frappe.utils.escape_html(c.libelle)}</div>
-               <input class="form-control input-sm rcj-just" style="margin-top:4px"
-                      data-cle="${frappe.utils.escape_html(c.cle)}"
-                      value="${frappe.utils.escape_html((reprise && reprise.justifications_precedentes || {})[c.libelle] || "")}"
-                      placeholder="${__("Justification (obligatoire)")}">
-             </div>`).join("");
+          : rcj_html_point_a_justifier(c, (reprise && reprise.justifications_precedentes || {})[c.libelle])).join("");
         d.fields_dict.controles.$wrapper.html(
           `<div style="margin-bottom:6px;font-weight:700">${__("Points de contrôle")}</div>${lignes}`);
         d.fields_dict.controles.$wrapper.find(".rcj-valider-bl").on("click", function () {
@@ -2463,7 +2529,8 @@ function rcj_collecte(rapport) {
       // conforme (« ✅ Reçu conforme ») ; « ✏️ Autre montant » ouvre la saisie du reçu.
       const carte = (c) => {
         const contestee = c.statut === "Écart de remise";
-        const maintenue = !contestee && c.tours_ecart > 0;
+        const justifs_contestees = c.statut === "Justification contestée";
+        const maintenue = !contestee && !justifs_contestees && c.tours_ecart > 0;
         const entete = `
           <div class="rcj-cc-tete">
             <div>
@@ -2472,6 +2539,7 @@ function rcj_collecte(rapport) {
                 <a href="/app/cloture-caisse/${encodeURIComponent(c.name)}" target="_blank">${esc(c.name)}</a></div>
             </div>
             ${contestee ? `<span class="rcj-cc-badge rcj-cc-badge-rouge">⚠️ ${__("écart signalé")}</span>`
+              : justifs_contestees ? `<span class="rcj-cc-badge rcj-cc-badge-rouge">📋 ${__("justifications contestées")}</span>`
               : maintenue ? `<span class="rcj-cc-badge rcj-cc-badge-orange">✋ ${__("comptage maintenu")}</span>`
               : `<span class="rcj-cc-badge">⏳ ${__("à recevoir")}</span>`}
           </div>`;
@@ -2486,6 +2554,12 @@ function rcj_collecte(rapport) {
         let actions = "";
         if (contestee) {
           actions = `<div class="rcj-cc-attente">⚠️ ${__("Vous avez reçu")} <b>${rcj_dt(c.especes_recues)}</b> ${__("au lieu de")} <b>${rcj_dt(c.especes_remises)}</b> — ${__("en attente de la réponse de")} ${esc(c.valide_par)}.</div>`;
+        } else if (justifs_contestees) {
+          actions = `<div class="rcj-cc-attente">📋 ${__("Justifications contestées : en attente de")} ${esc(c.valide_par)}. ${
+              __("Vous pouvez aussi collecter : les justifications sont alors acceptées en l'état.")}</div>
+            <div class="rcj-cc-actions">
+              <button class="btn btn-success rcj-cc-ok" data-name="${esc(c.name)}">✅ ${__("Reçu conforme quand même")} — ${rcj_dt(c.especes_remises)}</button>
+            </div>`;
         } else if (c.validation_directe) {
           actions = `
             <div class="rcj-cc-attente">${__("Vous avez compté cette caisse vous-même : validation directe, sans seconde signature.")}</div>
@@ -2501,6 +2575,7 @@ function rcj_collecte(rapport) {
             <div class="rcj-cc-actions">
               <button class="btn btn-success btn-lg rcj-cc-ok" data-name="${esc(c.name)}">✅ ${__("Reçu conforme")} — ${rcj_dt(c.especes_remises)}</button>
               <button class="btn btn-default rcj-cc-autre" data-name="${esc(c.name)}">✏️ ${__("J'ai reçu un autre montant")}</button>
+              ${(c.controles || []).length ? `<button class="btn btn-default rcj-cc-contester" data-name="${esc(c.name)}">📋 ${__("Contester les justifications")}</button>` : ""}
             </div>
             <div class="rcj-cc-saisie" style="display:none">
               <label>${__("Espèces reçues")}</label>
@@ -2517,8 +2592,8 @@ function rcj_collecte(rapport) {
               </div>
             </div>`;
         }
-        return `<div class="rcj-cc-carte${contestee ? " rcj-cc-contestee" : ""}" data-name="${esc(c.name)}">
-            ${entete}${declare}${rcj_html_echanges(c.echanges)}${actions}</div>`;
+        return `<div class="rcj-cc-carte${contestee || justifs_contestees ? " rcj-cc-contestee" : ""}" data-name="${esc(c.name)}">
+            ${entete}${declare}${rcj_html_controles_justifies(c.controles)}${rcj_html_echanges(c.echanges)}${actions}</div>`;
       };
       const rendre = () => {
         const cartes = (m.clotures || []).map(carte).join("");
@@ -2573,6 +2648,22 @@ function rcj_collecte(rapport) {
           const c = (m.clotures || []).find((x) => x.name === $(this).attr("data-name"));
           envoyer(c.name, { especes_recues: c.especes_remises, nb_cheques_recus: c.nb_cheques_remis,
                             nb_traites_recus: c.nb_traites_remis, forcer: 0 });
+        });
+        $w.find(".rcj-cc-contester").on("click", function () {
+          const name = $(this).attr("data-name");
+          frappe.prompt([{ fieldtype: "Small Text", fieldname: "commentaire", reqd: 1,
+                           label: __("Ce qui ne va pas (l'employé le lira)") }],
+            (v) => frappe.call({
+              method: API + ".contester_justifications", args: { name, commentaire: v.commentaire },
+              freeze: true,
+              callback: () => {
+                frappe.show_alert({ message: __("Justifications renvoyées à l'employé ({0}).", [name]), indicator: "orange" });
+                frappe.call({ method: API + ".a_collecter", args: { date },
+                              callback: (r2) => { Object.assign(m, r2.message || {}); rendre(); } });
+                if (rapport && rapport._fetch) rapport._fetch();
+              },
+            }),
+            __("Contester les justifications"), __("Renvoyer à l'employé"));
         });
         $w.find(".rcj-cc-ecart, .rcj-cc-forcer").on("click", function () {
           const $c = $(this).closest(".rcj-cc-carte");

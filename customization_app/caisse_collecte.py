@@ -11,6 +11,9 @@ Le circuit :
   3. un DÉLÉGUÉ (Config Caisse) collecte en l'absence du titulaire : chaque
      caisse qu'il collecte entre dans une PASSATION ouverte à son nom, que le
      titulaire confirme à son retour (même boucle d'écart).
+  4. le collecteur LIT les justifications des points de contrôle sur la carte de
+     collecte et peut les CONTESTER (« Justification contestée », 05/10/2026) :
+     l'employé rouvre et corrige ; collecter quand même = les accepter en l'état.
 
 Sans double validation : la propre caisse du titulaire et la caisse globale
 « Tous les employés » (direction), marquées `validation_seule`.
@@ -31,7 +34,8 @@ from customization_app import caisse_cloture as CL
 STATUT_A_COLLECTER = "À collecter"
 STATUT_ECART = "Écart de remise"
 STATUT_VALIDEE = "Validée"
-STATUTS_EN_ATTENTE = (STATUT_A_COLLECTER, STATUT_ECART)
+STATUT_JUSTIF = "Justification contestée"
+STATUTS_EN_ATTENTE = (STATUT_A_COLLECTER, STATUT_ECART, STATUT_JUSTIF)
 
 PAS_OUVERTE = "Ouverte"
 PAS_A_REMETTRE = "À remettre"
@@ -252,6 +256,12 @@ def justifications_depuis_controles(texte):
     return out
 
 
+def controles_en_liste(texte):
+    """Le texte stocké des points justifiés -> [{libelle, justification}] dans l'ordre, pour la carte
+    de collecte. Fonction pure."""
+    return [{"libelle": k, "justification": v} for k, v in justifications_depuis_controles(texte).items()]
+
+
 def rouvrir_comptage(doc, valeurs):
     """L'employé rouvre son comptage (04/10/2026) : le brouillon garde son numéro, reprend les
     nouvelles valeurs, et tout ce que le collecteur avait saisi est effacé — il devra recollecter.
@@ -262,6 +272,7 @@ def rouvrir_comptage(doc, valeurs):
         CL._fmt_montant(doc.especes_remises), CL._fmt_montant(doc.especes_comptees),
         cint(doc.nb_cheques_remis), cint(doc.nb_traites_remis))
     ancien_collecteur = doc.collecte_par
+    justifs_modifiees = (valeurs.get("controles") or "") != (doc.controles or "")
     doc.update(valeurs)
     doc.collecte_par = None
     doc.collecte_le = None
@@ -274,7 +285,8 @@ def rouvrir_comptage(doc, valeurs):
         "↩ %s rouvre et modifie son comptage (avant : %s)" % (frappe.session.user, avant),
         "maintenant : remis %s DT, comptées %s DT, %s chèque(s), %s traite(s)" % (
             CL._fmt_montant(doc.especes_remises), CL._fmt_montant(doc.especes_comptees),
-            cint(doc.nb_cheques_remis), cint(doc.nb_traites_remis)))).strip()
+            cint(doc.nb_cheques_remis), cint(doc.nb_traites_remis))
+        + (" · justifications modifiées" if justifs_modifiees else ""))).strip()
     doc.flags.ignore_permissions = True
     doc.save(ignore_permissions=True)
     doc.collecte_par_precedent = ancien_collecteur
@@ -391,6 +403,9 @@ def _dict_cloture(c):
         "ecart_remise": flt(c.ecart_remise, 3), "tours_ecart": cint(c.tours_ecart),
         "echanges": c.echanges or "", "collecte_par": c.collecte_par, "note": c.note or "",
         "mienne": c.valide_par == frappe.session.user or c.caisse == _caisse_de(frappe.session.user),
+        # Les points de contrôle et leurs justifications : le collecteur les LIT avant de confirmer.
+        "controles": controles_en_liste(c.controles),
+        "justif_contestee": c.statut == STATUT_JUSTIF,
     }
     d["forcable"] = cint(c.tours_ecart) >= 1 and c.statut == STATUT_A_COLLECTER
     return d
@@ -502,6 +517,9 @@ def collecter(name, especes_recues, nb_cheques_recus=0, nb_traites_recus=0, comm
     cl.ecart_remise = ecart_remise(declare["especes"], recu["especes"])
     cl.collecte_par = moi
     identique = remise_identique(declare, recu)
+    if cl.statut == STATUT_JUSTIF:
+        cl.echanges = ((cl.echanges or "") + "\n" + _ligne_echange(
+            "📋 %s collecte quand même" % moi, "justifications acceptées en l'état")).strip()
 
     if not identique and not (cint(forcer) and cint(cl.tours_ecart) >= 1):
         cl.statut = STATUT_ECART
@@ -532,6 +550,35 @@ def collecter(name, especes_recues, nb_cheques_recus=0, nb_traites_recus=0, comm
     frappe.db.commit()
     return {"name": cl.name, "statut": cl.statut, "ecart_remise": cl.ecart_remise,
             "passation": cl.passation}
+
+
+@frappe.whitelist()
+def contester_justifications(name, commentaire):
+    """Le collecteur conteste les justifications des points de contrôle (05/10/2026) : la clôture
+    passe « Justification contestée », l'employé est prévenu, rouvre son comptage et les corrige
+    (retour « À collecter »). Le collecteur garde le dernier mot : collecter = les accepter."""
+    frappe.only_for(CL.ROLES)
+    _exiger_collecteur()
+    cl = frappe.get_doc("Cloture Caisse", name)
+    if cl.docstatus != 0 or cl.statut != STATUT_A_COLLECTER:
+        frappe.throw(_("La clôture {0} n'attend pas la collecte ({1}) : rien à contester.").format(name, cl.statut))
+    if not (cl.controles or "").strip():
+        frappe.throw(_("La clôture {0} n'a aucun point de contrôle justifié.").format(name))
+    moi = frappe.session.user
+    if cl.valide_par == moi:
+        frappe.throw(_("Vous avez compté cette caisse vous-même : rouvrez votre comptage pour corriger."))
+    commentaire = " ".join((commentaire or "").split())
+    if len(commentaire) < 5:
+        frappe.throw(_("Dites à l'employé ce qui ne va pas (commentaire obligatoire)."))
+    cl.statut = STATUT_JUSTIF
+    cl.echanges = ((cl.echanges or "") + "\n" + _ligne_echange(
+        "📋 %s conteste les justifications" % moi, commentaire)).strip()
+    cl.flags.ignore_permissions = True
+    cl.save(ignore_permissions=True)
+    _prevenir(cl.valide_par, "Justifications contestées — caisse %s du %s : %s" % (
+        cl.caisse, cl.date_cloture, commentaire[:80]), "Cloture Caisse", cl.name)
+    frappe.db.commit()
+    return {"name": cl.name, "statut": cl.statut}
 
 
 @frappe.whitelist()
@@ -771,6 +818,12 @@ def resume(user, date=None):
                                 filters={"docstatus": 0, "statut": STATUT_ECART, "valide_par": user},
                                 fields=["name", "caisse", "date_cloture", "especes_remises",
                                         "especes_recues", "collecte_par"])]
+    ma_caisse = _caisse_de(user)
+    out["mes_justifs"] = [
+        {"name": c.name, "caisse": c.caisse, "date": str(c.date_cloture)}
+        for c in frappe.get_all("Cloture Caisse", filters={"docstatus": 0, "statut": STATUT_JUSTIF},
+                                fields=["name", "caisse", "date_cloture", "valide_par"])
+        if c.valide_par == user or (ma_caisse and c.caisse == ma_caisse)]
     out["mes_passations_ecart"] = [
         {"name": p.name, "total_especes": flt(p.total_especes, 3), "especes_recues": flt(p.especes_recues, 3)}
         for p in frappe.get_all("Passation Caisse", filters={"docstatus": 0, "statut": PAS_ECART, "delegue": user},

@@ -84,6 +84,8 @@ class TestDoubleValidationCaisse(unittest.TestCase):
             # Config Caisse refuse une « date par caisse » sur un nom inconnu : nos caisses de test sont connues.
             mock.patch("customization_app.rapport_caisse_journaliere.noms_caisses",
                        return_value=list(CAISSES.values()) + ["TEST-COLLECTE-Jamais"]),
+            # En dernier : test_le_titulaire_peut_compter… arrête self._patches[2] par sa position.
+            mock.patch.object(CL, "_taches_sans_commande", return_value=[]),
         ]
         for p in cls._patches:
             p.start()
@@ -518,6 +520,49 @@ class TestDoubleValidationCaisse(unittest.TestCase):
         with self.assertRaises(frappe.ValidationError):
             CC.a_collecter(DATE)
         self.assertIsNone(CC.resume(EMPLOYE, DATE)["role"])
+
+    def test_justifications_lues_contestees_puis_corrigees(self):
+        point = {"cle": "tache_ouverte:SO-T", "type": "tache_ouverte", "bloquant": 0, "libelle": "Tâche ouverte — SO-T"}
+        ok = '{"tache_ouverte:SO-T": {"motif": "Rendez-vous reporté par le client", "commentaire": "rs"}}'
+        with mock.patch.object(CL, "_controles", side_effect=lambda data: [dict(point)]):
+            frappe.set_user(EMPLOYE)
+            with self.assertRaises(frappe.ValidationError):            # commentaire trop court
+                CL.valider(CAISSES[EMPLOYE], DATE, especes_comptees=1315.5, justifications=ok, especes_remises=1300)
+            r = CL.valider(CAISSES[EMPLOYE], DATE, especes_comptees=1315.5, especes_remises=1300,
+                           justifications=ok.replace('"rs"', '"le client rappelle jeudi"'))
+            # Le collecteur LIT la justification sur sa carte.
+            frappe.set_user(TITULAIRE)
+            carte = next(c for c in CC.a_collecter(DATE)["clotures"] if c["name"] == r["name"])
+            self.assertEqual(carte["controles"], [{"libelle": "Tâche ouverte — SO-T",
+                                                   "justification": "Rendez-vous reporté par le client — le client rappelle jeudi"}])
+            with self.assertRaises(frappe.ValidationError):            # commentaire du collecteur obligatoire
+                CC.contester_justifications(r["name"], "")
+            self.assertEqual(CC.contester_justifications(r["name"], "Quel jour ? Mets la date.")["statut"], CC.STATUT_JUSTIF)
+            with self.assertRaises(frappe.ValidationError):            # déjà contestée
+                CC.contester_justifications(r["name"], "encore une fois")
+            self.assertEqual([j["name"] for j in CC.resume(EMPLOYE, DATE)["mes_justifs"]], [r["name"]])
+            # Un simple employé ne conteste pas.
+            frappe.set_user(EMPLOYE)
+            with self.assertRaises(frappe.ValidationError):
+                CC.contester_justifications(r["name"], "pas mon rôle")
+            # L'employé rouvre et corrige : retour « À collecter », trace des justifications modifiées.
+            cl = frappe.get_doc("Cloture Caisse", r["name"])
+            e = CL.etat(CAISSES[EMPLOYE], DATE)
+            self.assertTrue(e["en_attente"]["rouvrable"])
+            self.assertEqual(e["controles"][0]["motifs"], CL.MOTIFS["tache"])
+            CL.valider(CAISSES[EMPLOYE], DATE, especes_comptees=1315.5, especes_remises=1300, rouvrir=cl.name,
+                       justifications=ok.replace('"rs"', '"le client rappelle jeudi 08/10 pour fixer"'))
+            cl.reload()
+            self.assertEqual(cl.statut, CC.STATUT_A_COLLECTER)
+            self.assertIn("justifications modifiées", cl.echanges)
+            self.assertIn("jeudi 08/10", cl.controles)
+            # Contestée une seconde fois, le titulaire collecte quand même : acceptées en l'état, validée.
+            frappe.set_user(TITULAIRE)
+            CC.contester_justifications(cl.name, "toujours pas clair")
+            CC.collecter(cl.name, especes_recues=1300, nb_cheques_recus=0)
+            cl.reload()
+            self.assertEqual((cl.docstatus, cl.statut), (1, CC.STATUT_VALIDEE))
+            self.assertIn("justifications acceptées en l'état", cl.echanges)
 
     def test_caisse_globale_exige_justification_des_caisses_non_collectees(self):
         self._compter(EMPLOYE)          # comptée mais pas collectée
