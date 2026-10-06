@@ -76,9 +76,14 @@ class TestCircuit(unittest.TestCase):
         l0, l1 = v.lignes[0], v.lignes[1]
         stock_avant = frappe.db.get_value("Bin", {"item_code": l1.item_code, "warehouse": self.ENTREPOT}, "actual_qty")
         comptes = {l0.item_code: {"qte_comptee": l0.qte_systeme}, l1.item_code: {"qte_comptee": l1.qte_systeme + 2, "commentaire": "en plus"}}
+        # L'employé du stock compte lui-même (un responsable qui compte à sa place fait l'autre circuit, cf.
+        # TestDoubleValidationVerif.test_compte_par_un_responsable_l_employe_accepte).
+        emp = frappe.db.get_value("Employee", {"custom_warehouse": self.ENTREPOT, "status": "Active"}, "user_id")
+        frappe.set_user(emp)
         r = S.enregistrer_verification(nom, json.dumps(comptes))
         self.assertEqual((r["nb_comptes"], r["nb_ecarts"]), (2, 1))
         r = S.terminer_verification(nom, json.dumps(comptes), note="test")
+        frappe.set_user("Administrator")
         self.assertEqual(r["statut"], "À valider")                              # 1re validation : le comptage
         self.assertAlmostEqual(r["valeur_ecarts"], round(2 * l1.taux, 3), places=3)
         self.assertEqual(frappe.db.get_value("Tache de travail", v.tache_employe, "status"), "Completed")
@@ -86,7 +91,6 @@ class TestCircuit(unittest.TestCase):
         self.assertEqual(frappe.db.get_value("Bin", {"item_code": l1.item_code, "warehouse": self.ENTREPOT}, "actual_qty"), stock_avant)
         r = S.valider_verification(nom)                                         # validation du responsable
         self.assertEqual(r["statut"], "À confirmer")
-        emp = frappe.db.get_value("Employee", {"custom_warehouse": self.ENTREPOT, "status": "Active"}, "user_id")
         frappe.set_user(emp)
         r = S.confirmer_verification(nom)                                       # accord de l'employé : rapprochement
         frappe.set_user("Administrator")
@@ -283,6 +287,38 @@ class TestDoubleValidationVerif(unittest.TestCase):
         r = S.terminer_verification(nom, {i1: {"qte_comptee": 2}, i2: {"qte_comptee": 4}})
         self.assertEqual((r["statut"], r["nb_ecarts"]), ("À valider", 0))       # aucun faux écart
         frappe.set_user("Administrator")
+
+    def test_compte_par_un_responsable_l_employe_accepte(self):
+        """Cas réel 06/10/2026 (VERIF-2026-00001) : un responsable magasin compte le stock d'un employé et
+        termine. La seconde signature revient à l'employé du stock — avant, la fiche restait « À valider » et
+        l'employé ne voyait aucun bouton."""
+        import frappe
+        i1, i2 = self.items
+        nom = S.ouvrir_verification(self.essai, frappe.utils.nowdate(), avec_taches=False)
+        S.detail_verification(nom)                                              # Administrator, responsable
+        r = S.terminer_verification(nom, {i1: {"qte_comptee": 3}, i2: {"qte_comptee": 4}})
+        self.assertEqual((r["statut"], r["valide_responsable_par"]), ("À confirmer", "Administrator"))
+        frappe.set_user(self.AKRAM)
+        self.assertEqual(S.detail_verification(nom)["fiche"]["actions"], ["confirmer", "recompter"])
+        self.assertEqual([x["geste"] for x in S.verifications_a_traiter() if x["name"] == nom], ["accepter"])
+        r = S.confirmer_verification(nom)                                       # l'employé accepte : clôture
+        self.assertEqual((r["statut"], r["changes"]), ("Terminée", []))
+        self.assertEqual(self._qte(i2), 4)                                      # écart rapproché
+        frappe.set_user("Administrator")
+
+    def test_patch_reprend_une_fiche_comptee_par_un_responsable(self):
+        import frappe
+        from customization_app.patches import verification_comptee_par_responsable as P
+        i1, i2 = self.items
+        nom = S.ouvrir_verification(self.essai, frappe.utils.nowdate(), avec_taches=False)
+        S.detail_verification(nom)
+        v = frappe.get_doc(S.VERIF, nom)                                        # l'état d'avant le correctif
+        S._appliquer_comptage(v, {i1: {"qte_comptee": 3}, i2: {"qte_comptee": 5}})
+        v.statut, v.valide_employe_par, v.valide_employe_le = S.A_VALIDER, "Administrator", frappe.utils.now_datetime()
+        S._sauver(v)
+        P.execute()
+        v.reload()
+        self.assertEqual((v.statut, v.valide_responsable_par, v.valide_employe_par), ("À confirmer", "Administrator", None))
 
     def test_ajustement_puis_confirmation_de_l_employe(self):
         import frappe

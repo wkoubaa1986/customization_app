@@ -1363,11 +1363,18 @@ def terminer_verification(name, comptes=None, note=None):
         frappe.throw(_("À recompter avant de terminer (stock modifié depuis le comptage) : {0}").format(", ".join(restants)))
     for l in v.lignes:
         l.ajuste, l.qte_employe = 0, (l.qte_comptee if l.compte else 0)
+    if note:
+        v.note = note[:500]
+    emp = _employe_du_stock(v.entrepot)
+    if not _est_employe_du_stock(v.entrepot) and emp and emp.user_id:
+        # Un responsable magasin a compté À LA PLACE de l'employé (06/10/2026, VERIF-2026-00001 : Hedi ibidhii a
+        # compté le stock de Mohamed Hedi Chouchane, qui ne voyait ensuite AUCUN bouton). Son comptage vaut
+        # validation du responsable : la seconde signature revient à l'employé du stock, qui accepte les quantités
+        # ou en change une (la fiche repart alors « À valider »).
+        return passer_a_l_employe(v, frappe.session.user, now_datetime())
     v.statut = A_VALIDER
     v.valide_employe_par, v.valide_employe_le = frappe.session.user, now_datetime()
     v.valide_responsable_par = v.valide_responsable_le = None
-    if note:
-        v.note = note[:500]
     _sauver(v)
     if v.tache_employe and frappe.db.get_value("Tache de travail", v.tache_employe, "status") == "Open":
         frappe.db.set_value("Tache de travail", v.tache_employe, "status", "Completed")
@@ -1375,6 +1382,24 @@ def terminer_verification(name, comptes=None, note=None):
     resp = frappe.db.get_value("Employee", cfg["responsable"], "user_id") if cfg["responsable"] else None
     if resp and resp != frappe.session.user:
         _prevenir(resp, _("🧾 Vérification {0} ({1}) à valider : {2} écart(s)").format(v.name, se_court(v.entrepot), cint(v.nb_ecarts)), v.name)
+    return _resume(v)
+
+
+def passer_a_l_employe(v, compte_par: str, compte_le) -> dict:
+    """Un comptage fait par un responsable magasin part chez l'employé du stock pour la seconde signature :
+    « À confirmer », le responsable qui a compté porté comme valideur. Sert à `terminer_verification` et au
+    patch qui reprend les fiches restées « À valider » sans geste possible pour l'employé."""
+    v.statut = A_CONFIRMER
+    v.valide_responsable_par, v.valide_responsable_le = compte_par, compte_le
+    v.valide_employe_par = v.valide_employe_le = None
+    v.note = ((v.note + "\n") if v.note else "") + _(
+        "Compté par {0} (responsable magasin) à la place de l’employé : quantités à accepter par l’employé du stock."
+    ).format(frappe.utils.get_fullname(compte_par))
+    _sauver(v)
+    emp = _employe_du_stock(v.entrepot)
+    if emp and emp.user_id and emp.user_id != frappe.session.user:
+        _prevenir(emp.user_id, _("🧾 Vérification {0} comptée par {1} : quantités à accepter")
+                  .format(v.name, frappe.utils.get_fullname(compte_par)), v.name)
     return _resume(v)
 
 
