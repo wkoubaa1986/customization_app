@@ -27,7 +27,7 @@ import base64
 
 import frappe
 from frappe import _
-from frappe.utils import cint, flt, getdate, now_datetime, nowdate
+from frappe.utils import add_days, cint, date_diff, flt, getdate, now_datetime, nowdate
 
 from customization_app import caisse_cloture as CL
 
@@ -359,30 +359,233 @@ def enregistrer_photo_remise(doc, photo, photo_nom=None):
 # ── Contrôles de la caisse globale ───────────────────────────────────────────
 
 def controles_globale(date, data):
-    """Pour « Tous les employés » : chaque caisse ayant encaissé des espèces ce
-    jour-là doit être VALIDÉE (collectée) ; sinon la direction justifie."""
+    """Pour « Tous les employés » : chaque caisse qui a la MOINDRE action ce jour-là (encaissement
+    quel que soit le mode, dette comprise, commande, dépense — règle du 06/10/2026 ; avant : les
+    espèces seules) doit être VALIDÉE (collectée) ; sinon la direction justifie."""
     date = getdate(date)
     points = []
-    recap = (data or {}).get("recap") or {}
     etats = {r.caisse: r for r in frappe.get_all(
         "Cloture Caisse", filters={"date_cloture": date, "docstatus": ["<", 2]},
         fields=["caisse", "statut", "docstatus", "name"])}
-    for e in recap.get("par_employe") or []:
-        especes = flt((e.get("par_mode") or {}).get("Espèces"), 3)
-        if especes <= 0:
+    cfg = config()
+    for caisse, act in sorted(activite_par_caisse(data).items()):
+        if caisse == CL.CAISSE_GLOBALE or not caisse_active(act):
             continue
-        cl = etats.get(e["employe"])
+        depart = date_depart_pour(caisse, cfg)
+        if depart and date < getdate(depart):
+            continue                # avant la date de départ de cette caisse : rien ne compte
+        cl = etats.get(caisse)
         if cl and cl.docstatus == 1:
             continue
         if cl:
-            libelle = "Caisse %s : %s DT d'espèces, comptée mais pas encore collectée (%s, %s)" % (
-                e["employe"], CL._fmt_montant(especes), cl.name, cl.statut)
+            libelle = "Caisse %s : %s — comptée mais pas encore collectée (%s, %s)" % (
+                caisse, resume_activite(act), cl.name, cl.statut)
         else:
-            libelle = "Caisse %s : %s DT d'espèces, pas comptée ni collectée" % (
-                e["employe"], CL._fmt_montant(especes))
-        points.append({"cle": "caisse_non_collectee:%s" % e["employe"], "type": "caisse_non_collectee",
-                       "bloquant": 0, "caisse": e["employe"], "montant": especes, "libelle": libelle})
+            libelle = "Caisse %s : %s — pas comptée ni collectée" % (caisse, resume_activite(act))
+        points.append({"cle": "caisse_non_collectee:%s" % caisse, "type": "caisse_non_collectee",
+                       "bloquant": 0, "caisse": caisse, "montant": flt(act["par_mode"].get("Espèces"), 3),
+                       "libelle": libelle})
     return points
+
+
+# ── Activité d'une caisse et état depuis la remise à zéro (06/10/2026) ───────
+# Règle utilisateur : une caisse est À COLLECTER dès qu'elle a la moindre action dans le rapport du
+# jour, dette comprise — pas seulement des espèces. Le collecteur voit, caisse par caisse et jour par
+# jour depuis la date de départ, ce qui n'a été ni compté ni collecté.
+
+ETAT_VIDE = "vide"                # aucune action, aucun comptage
+ETAT_AVANT = "avant"              # avant la date de départ de cette caisse
+ETAT_A_COMPTER = "a_compter"      # aujourd'hui : actions, pas encore comptée (pas un retard)
+ETAT_NON_COMPTEE = "non_comptee"  # jour passé : actions, jamais comptée
+ETAT_DE_STATUT = {STATUT_A_COLLECTER: "a_collecter", STATUT_ECART: "ecart", STATUT_JUSTIF: "justif",
+                  STATUT_VALIDEE: "validee"}
+ETATS_A_REGLER = ("non_comptee", "a_collecter", "ecart", "justif")
+JOURS_MAX = 62                    # au-delà, la grille commence 62 jours avant la date affichée
+JOURS_SANS_DEPART = 7             # sans date de départ réglée : la dernière semaine
+
+
+def commande_active(o):
+    """Une commande du rapport est une action de la caisse, sauf une tâche ANNULÉE sans paiement du
+    jour (rendez-vous annulé : rien à compter). Une dette n'est jamais une avance : elle n'est jamais
+    `hors_periode` (rapport_caisse_journaliere.MODES_PAS_AVANCE), donc elle compte. Fonction pure."""
+    if o.get("tache_status") != "Cancelled":
+        return True
+    return any(not p.get("hors_periode") for p in o.get("payments") or [])
+
+
+def activite_par_caisse(data):
+    """{caisse: {commandes, par_mode, anciens, depenses, nb_depenses}} depuis le rapport d'UN jour
+    (`get_data` sur toutes les caisses). `par_mode` = le récapitulatif du rapport, anciennes
+    commandes comprises, dette comprise. Fonction pure."""
+    out = {}
+
+    def acc(nom):
+        return out.setdefault(nom, {"commandes": 0, "par_mode": {}, "anciens": 0, "depenses": 0.0, "nb_depenses": 0})
+
+    for e in (data or {}).get("employees") or []:
+        n = sum(1 for o in e.get("orders") or [] if commande_active(o))
+        if n:
+            acc(e["employe"])["commandes"] += n
+    for r in ((data or {}).get("recap") or {}).get("par_employe") or []:
+        for mode, v in (r.get("par_mode") or {}).items():
+            v = round(float(v or 0), 3)
+            if abs(v) > 0.0005:
+                pm = acc(r["employe"])["par_mode"]
+                pm[mode] = round(pm.get(mode, 0) + v, 3)
+    for p in ((data or {}).get("anciens") or {}).get("paiements") or []:
+        acc(p.get("saisi_par") or "—")["anciens"] += 1
+    for l in ((data or {}).get("depenses") or {}).get("lignes") or []:
+        a = acc(l.get("saisi_par") or "—")
+        a["depenses"] = round(a["depenses"] + float(l.get("montant") or 0), 3)
+        a["nb_depenses"] += 1
+    out.pop("—", None)
+    return out
+
+
+def caisse_active(act):
+    return bool(act) and bool(act.get("commandes") or act.get("par_mode") or act.get("anciens")
+                              or act.get("nb_depenses"))
+
+
+def resume_activite(act):
+    """« 15,000 DT Espèces · 441,000 DT Dette non payée · 2 commande(s) · 3 dépense(s) 2 556,245 DT ». Pure."""
+    if not act:
+        return "aucune action"
+    ordre = ["Espèces", "Chèque", "Traite bancaire LC", "Virement", "Carte de crédit", "Dette non payée"]
+    modes = sorted(act.get("par_mode") or {}, key=lambda m: (ordre.index(m) if m in ordre else len(ordre), m))
+    bouts = ["%s DT %s" % (CL._fmt_montant(act["par_mode"][m]), m) for m in modes]
+    if act.get("commandes"):
+        bouts.append("%s commande(s)" % act["commandes"])
+    if act.get("anciens"):
+        bouts.append("%s paiement(s) d'anciennes commandes" % act["anciens"])
+    if act.get("nb_depenses"):
+        bouts.append("%s dépense(s) %s DT" % (act["nb_depenses"], CL._fmt_montant(act.get("depenses"))))
+    return " · ".join(bouts) or "aucune action"
+
+
+def _activite_du_jour(jour):
+    """L'activité de TOUTES les caisses un jour donné, depuis le même rapport que la page. En cache :
+    une minute pour aujourd'hui, dix pour hier, une heure au-delà (un jour passé bouge rarement)."""
+    from customization_app.rapport_caisse_journaliere import PEUVENT_VOIR_ECONOMIQ
+    jour = getdate(jour)
+    # Economiq n'apparaît qu'à la direction : deux vues, deux caches.
+    cle = "caisse_activite|%s|%s" % ("dir" if frappe.session.user in PEUVENT_VOIR_ECONOMIQ else "std", jour)
+    cache = frappe.cache()
+    act = cache.get_value(cle)
+    if act is not None:
+        return act
+    avant = frappe.flags.get("caisse_vue_complete")
+    # Vue complète même pour un employé : on filtre ensuite sur SA caisse (rien d'autre ne sort).
+    frappe.flags.caisse_vue_complete = True
+    try:
+        act = activite_par_caisse(CL.get_data(str(jour), str(jour), employe=""))
+    finally:
+        frappe.flags.caisse_vue_complete = avant
+    age = date_diff(nowdate(), jour)
+    cache.set_value(cle, act, expires_in_sec=60 if age <= 0 else 600 if age == 1 else 3600)
+    return act
+
+
+def etat_de_cellule(jour, aujourdhui, depart, cloture, act):
+    """L'état d'une caisse un jour donné. `cloture` = {statut, docstatus} ou None. Tout part de la
+    date de départ de la caisse (« from the starting day », 06/10/2026) : avant, rien ne compte,
+    même un comptage. Fonction pure."""
+    jour, aujourdhui = getdate(jour), getdate(aujourdhui)
+    if depart and jour < getdate(depart):
+        return ETAT_AVANT
+    if cloture:
+        return "validee" if cint(cloture.get("docstatus")) == 1 else ETAT_DE_STATUT.get(cloture.get("statut"), "a_collecter")
+    if not caisse_active(act):
+        return ETAT_VIDE
+    return ETAT_A_COMPTER if jour >= aujourdhui else ETAT_NON_COMPTEE
+
+
+def bornes_etat(fin, departs, jours_max=JOURS_MAX):
+    """(début, tronqué) : la plus ancienne date de départ, au plus `jours_max` jours avant `fin`.
+    Sans date de départ : la dernière semaine. Fonction pure."""
+    fin = getdate(fin)
+    dates = sorted(getdate(d) for d in departs if d)
+    debut = dates[0] if dates else add_days(fin, -(JOURS_SANS_DEPART - 1))
+    if debut > fin:
+        debut = fin
+    if date_diff(fin, debut) >= jours_max:
+        return getdate(add_days(fin, -(jours_max - 1))), True
+    return getdate(debut), False
+
+
+def _etat(fin=None):
+    fin = getdate(fin or nowdate())
+    aujourdhui = getdate(nowdate())
+    cfg = config()
+    tout_voir = peut_voir_toutes_les_caisses()
+    ma_caisse = None if tout_voir else _caisse_de(frappe.session.user)
+    if not tout_voir and not ma_caisse:
+        return {"restreint": True, "jours": [], "caisses": [], "a_regler": [], "compteurs": {}}
+    departs = ([date_depart_pour(ma_caisse, cfg)] if ma_caisse
+               else [cfg.get("date_depart")] + list((cfg.get("departs") or {}).values()))
+    debut, tronque = bornes_etat(fin, departs)
+    jours = [getdate(add_days(debut, i)) for i in range(date_diff(fin, debut) + 1)]
+
+    filtres = {"date_cloture": ["between", [debut, fin]], "docstatus": ["<", 2], "caisse": ["!=", CL.CAISSE_GLOBALE]}
+    if ma_caisse:
+        filtres["caisse"] = ma_caisse
+    clotures = {}
+    for c in frappe.get_all("Cloture Caisse", filters=filtres, order_by="docstatus asc, creation asc",
+                            fields=["name", "caisse", "date_cloture", "statut", "docstatus", "valide_par",
+                                    "collecte_par", "especes_remises", "validation_seule"]):
+        clotures[(c.caisse, getdate(c.date_cloture))] = c     # la soumise l'emporte (triée après)
+    activites = {j: _activite_du_jour(j) for j in jours}
+
+    # Les clôtures d'une caisse que l'utilisateur ne voit pas (Economiq hors direction) restent cachées.
+    from customization_app.rapport_caisse_journaliere import noms_caisses as _noms_visibles
+    visibles = set(_noms_visibles())
+    noms = {c for c, _j in clotures if c in visibles}
+    for act in activites.values():
+        noms.update(n for n, a in act.items() if caisse_active(a))
+    if ma_caisse:
+        noms = {ma_caisse}
+    noms.discard(CL.CAISSE_GLOBALE)
+
+    caisses, a_regler = [], []
+    compteurs = {"non_comptee": 0, "a_collecter": 0, "a_compter": 0}
+    for caisse in sorted(noms):
+        depart = date_depart_pour(caisse, cfg)
+        cellules = {}
+        for j in jours:
+            cl = clotures.get((caisse, j))
+            act = activites[j].get(caisse)
+            etat = etat_de_cellule(j, aujourdhui, depart, cl, act)
+            cell = {"etat": etat, "resume": resume_activite(act) if caisse_active(act) and etat != ETAT_AVANT else ""}
+            if cl and etat != ETAT_AVANT:
+                cell.update({"cloture": cl.name, "statut": cl.statut, "valide_par": cl.valide_par,
+                             "collecte_par": cl.collecte_par, "validation_seule": cint(cl.validation_seule),
+                             "especes_remises": flt(cl.especes_remises, 3)})
+            cellules[str(j)] = cell
+            if etat in ETATS_A_REGLER or etat == ETAT_A_COMPTER:
+                a_regler.append(dict(cell, caisse=caisse, date=str(j), depart=str(depart) if depart else None))
+                compteurs["non_comptee" if etat == ETAT_NON_COMPTEE else
+                          "a_compter" if etat == ETAT_A_COMPTER else "a_collecter"] += 1
+        if not ma_caisse and all(c["etat"] in (ETAT_AVANT, ETAT_VIDE) for c in cellules.values()):
+            continue
+        caisses.append({"caisse": caisse, "depart": str(depart) if depart else None, "cellules": cellules,
+                        "non_comptees": sum(1 for c in cellules.values() if c["etat"] == ETAT_NON_COMPTEE),
+                        "en_attente": sum(1 for c in cellules.values() if c["etat"] in ("a_collecter", "ecart", "justif"))})
+    a_regler.sort(key=lambda x: (x["date"], x["caisse"]))
+    return {"restreint": not tout_voir, "debut": str(debut), "fin": str(fin), "aujourdhui": str(aujourdhui),
+            "tronque": tronque, "date_depart": cfg.get("date_depart"), "jours": [str(j) for j in jours],
+            # Les dates de départ propres à une caisse affichée (le message les cite à côté de la générale).
+            "departs": {c["caisse"]: c["depart"] for c in caisses
+                        if c["depart"] and c["depart"] != cfg.get("date_depart")},
+            "ma_caisse": ma_caisse, "mon_depart": (str(date_depart_pour(ma_caisse, cfg) or "") or None) if ma_caisse else None,
+            "caisses": caisses, "a_regler": a_regler, "compteurs": compteurs}
+
+
+@frappe.whitelist()
+def etat_caisses(date=None):
+    """La grille « état des caisses » : chaque caisse, chaque jour depuis la date de départ, jusqu'à
+    `date`. Collecteurs / direction : toutes les caisses ; un employé : la sienne."""
+    frappe.only_for(CL.ROLES)
+    return _etat(date)
 
 
 # ── Côté collecteur ──────────────────────────────────────────────────────────
@@ -413,8 +616,8 @@ def _dict_cloture(c):
 
 @frappe.whitelist()
 def a_collecter(date=None):
-    """Les clôtures en attente de collecte (toutes dates ≤ `date`) + les caisses
-    du jour qui ont encaissé des espèces sans avoir compté."""
+    """Les clôtures en attente de collecte (toutes dates ≤ `date`) + les caisses qui ont eu la
+    moindre action sans avoir compté, depuis la date de départ."""
     frappe.only_for(CL.ROLES)
     role = _exiger_collecteur()
     date = getdate(date or nowdate())
@@ -431,15 +634,14 @@ def a_collecter(date=None):
         c["validation_directe"] = c["mienne"] and role == "titulaire"
         c["collectable"] = True
 
-    data = CL.get_data(str(date), str(date), employe="")
-    comptees = {c["caisse"] for c in frappe.get_all(
-        "Cloture Caisse", filters={"date_cloture": date, "docstatus": ["<", 2]}, fields=["caisse"])}
-    non_comptees = []
-    for e in (data.get("recap") or {}).get("par_employe") or []:
-        especes = flt((e.get("par_mode") or {}).get("Espèces"), 3)
-        if especes > 0 and e["employe"] not in comptees:
-            non_comptees.append({"caisse": e["employe"], "especes": especes, "total": flt(e.get("total"), 3)})
+    # Pas comptées : depuis la date de départ, toute caisse qui a eu la moindre action (dette
+    # comprise) sans comptage — les jours passés d'abord (06/10/2026 ; avant : le jour même, espèces seules).
+    etat = _etat(date)
+    non_comptees = [{"caisse": c["caisse"], "date": c["date"], "resume": c["resume"], "depart": c.get("depart"),
+                     "aujourdhui": c["etat"] == ETAT_A_COMPTER}
+                    for c in etat["a_regler"] if c["etat"] in (ETAT_NON_COMPTEE, ETAT_A_COMPTER)]
     return {"role": role, "date": str(date), "clotures": clotures, "non_comptees": non_comptees,
+            "debut": etat.get("debut"), "date_depart": etat.get("date_depart"), "departs": etat.get("departs") or {},
             "par_delegation": role != "titulaire"}
 
 
@@ -625,6 +827,7 @@ def annuler_comptage(name):
         frappe.throw(_("Seul {0} (ou le titulaire de la caisse) peut annuler ce comptage.").format(cl.valide_par))
     if cl.docstatus != 0 or cl.statut != STATUT_A_COLLECTER or cint(cl.tours_ecart):
         frappe.throw(_("Ce comptage a déjà été traité par le responsable : il ne s'annule plus."))
+    CL.retirer_justifications(name)
     frappe.delete_doc("Cloture Caisse", name, ignore_permissions=True, force=True)
     frappe.db.commit()
     return {"supprimee": name}

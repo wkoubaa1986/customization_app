@@ -98,7 +98,7 @@
       .rcj-toolbar .form-control { width: calc(50% - 34px); min-width: 110px; }
       #rcj-employe { width: 100%; max-width: none !important; }
       .rcj-toolbar .btn { flex: 1 1 auto; }
-      #rcj-btn-dettes, #rcj-btn-aramex, #rcj-btn-depense, #rcj-btn-a-payer, #rcj-btn-bl, #rcj-btn-cloture, #rcj-btn-collecte, #rcj-btn-passation { width: 100%; padding: 10px; font-size: 14px;
+      #rcj-btn-dettes, #rcj-btn-aramex, #rcj-btn-depense, #rcj-btn-a-payer, #rcj-btn-bl, #rcj-btn-cloture, #rcj-btn-collecte, #rcj-btn-passation, #rcj-btn-etat { width: 100%; padding: 10px; font-size: 14px;
         margin: 0 0 6px 0 !important; }
       .rcj-kpis { grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; }
       .rcj-kpi { padding: 10px 12px; }
@@ -139,6 +139,41 @@
     .rcj-cc-info { margin-bottom: 10px; color: #92400e; background: #fffbeb; border-radius: 10px; padding: 8px 12px; }
     .rcj-cc-vide { color: #1d6f42; font-weight: 600; padding: 8px 0; }
     .rcj-cc-titre { font-weight: 700; margin: 12px 0 4px; } .rcj-cc-manque { font-size: 12.5px; color: #92400e; margin: 2px 0; }
+    .rcj-cc-manque-retard { color: #a93226; }
+    .rcj-cc-controles-note { font-weight: 400; color: #8a7a4a; font-size: 11.5px; margin-left: 6px; }
+    /* État des caisses : une ligne par caisse, une colonne par jour depuis la date de départ */
+    .rcj-etat-resume { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+    .rcj-etat-pastille { font-size: 12.5px; font-weight: 700; padding: 4px 10px; border-radius: 999px; }
+    .rcj-etat-note { font-size: 12px; color: #6b7280; margin-bottom: 10px; }
+    .rcj-etat-wrap { overflow-x: auto; border: 1px solid #e4e8ee; border-radius: 10px; }
+    table.rcj-etat { border-collapse: separate; border-spacing: 0; font-size: 12px; min-width: 100%; }
+    table.rcj-etat th, table.rcj-etat td { padding: 6px 8px; text-align: center; border-bottom: 1px solid #eef1f5; white-space: nowrap; }
+    table.rcj-etat thead th { background: #f6f8fa; font-weight: 600; color: #6b7280; font-size: 11px; line-height: 1.25; }
+    table.rcj-etat thead th.rcj-etat-auj { color: #1d4ed8; }
+    table.rcj-etat .rcj-etat-nom { position: sticky; left: 0; background: #fff; text-align: left; font-weight: 700; z-index: 1;
+                                   border-right: 1px solid #e4e8ee; max-width: 190px; overflow: hidden; text-overflow: ellipsis; }
+    table.rcj-etat thead .rcj-etat-nom { background: #f6f8fa; }
+    td.rcj-etat-c { cursor: pointer; font-size: 15px; min-width: 44px; }
+    td.rcj-etat-vide, td.rcj-etat-avant { cursor: default; color: #c0c6cf; }
+    td.rcj-etat-avant { background: repeating-linear-gradient(45deg, #fafafa, #fafafa 4px, #f1f3f5 4px, #f1f3f5 8px); }
+    .rcj-etat-validee { background: #e6f4ea; } .rcj-etat-a_collecter { background: #fff3cd; }
+    .rcj-etat-ecart, .rcj-etat-justif { background: #ffe5d0; } .rcj-etat-non_comptee { background: #fdecea; color: #a93226; }
+    .rcj-etat-a_compter { background: #e1ecff; }
+    .rcj-etat-depart { font-size: 10.5px; font-weight: 400; color: #6b7280; }
+    @media (max-width: 768px) {
+      table.rcj-etat .rcj-etat-nom { max-width: 118px; white-space: normal; font-size: 11.5px; }
+      td.rcj-etat-c { min-width: 40px; padding: 6px 4px; }
+    }
+    .rcj-etat-mini.rcj-etat-avant { background: repeating-linear-gradient(45deg, #fafafa, #fafafa 4px, #e5e7eb 4px, #e5e7eb 8px); }
+    .rcj-etat-compte { font-size: 10.5px; font-weight: 700; padding: 1px 6px; border-radius: 999px; margin-left: 4px; }
+    .rcj-etat-legende { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 11.5px; color: #6b7280; margin: 8px 0 4px; }
+    .rcj-etat-mini { display: inline-block; min-width: 22px; text-align: center; border-radius: 6px; padding: 1px 3px; }
+    .rcj-etat-ligne { border: 1px solid #e4e8ee; border-radius: 10px; padding: 8px 12px; margin-bottom: 6px; font-size: 12.5px;
+                      display: flex; gap: 10px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+    .rcj-etat-ligne-non_comptee { border-color: #f1b0a8; background: #fdf6f5; }
+    .rcj-etat-ligne-txt { flex: 1 1 260px; min-width: 0; }
+    .rcj-etat-ligne-resume { color: #6b7280; font-size: 12px; margin-top: 2px; }
+    @media (max-width: 768px) { .rcj-etat-ligne-act, .rcj-etat-ligne-act .btn { width: 100%; } }
     @media (max-width: 768px) {
       .rcj-cc-actions .btn { width: 100%; }
       .rcj-cc-montant { font-size: 32px; }
@@ -223,6 +258,7 @@
     <button id="rcj-btn-cloture" class="btn btn-primary btn-sm" style="margin-left:8px">✅ Compter et remettre la caisse</button>
     <button id="rcj-btn-collecte" class="btn btn-dark btn-sm" style="margin-left:8px;display:none">📥 Collecte du jour</button>
     <button id="rcj-btn-passation" class="btn btn-default btn-sm" style="margin-left:8px;display:none">🤝 Passation</button>
+    <button id="rcj-btn-etat" class="btn btn-default btn-sm" style="margin-left:8px" title="Chaque caisse, jour par jour depuis la date de départ : comptée, collectée ou non">📊 État des caisses</button>
   </div>
 
   <!-- Chart (hidden) -->

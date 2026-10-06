@@ -187,12 +187,21 @@ def _dans_periode(valeur, d1, d2):
     return bool(valeur) and getdate(d1) <= getdate(valeur) <= getdate(d2)
 
 
+# Ni la dette ni la perte de non paiement ne sont des AVANCES (décision utilisateur 06/10/2026) :
+# l'avance, c'est de l'argent reçu avant la journée — tous les autres modes. Une dette (ou une perte)
+# saisie avant reste celle de la journée de l'intervention : elle compte dans la caisse de ce jour.
+MODES_PAS_AVANCE = ("Dette non payée", "Perte de paiement")
+
+
 def _hors_periode(p, d1, d2):
     """VRAIE avance antérieure : ni la date comptable ni la date de SAISIE ne
     tombent dans la période — exclue des totaux du jour. Un paiement saisi
     aujourd'hui mais antidaté (mauvaise date entrée par l'employé) COMPTE :
-    l'argent est entré aujourd'hui (même règle que les anciennes commandes)."""
+    l'argent est entré aujourd'hui (même règle que les anciennes commandes).
+    Une dette ou une perte n'est jamais une avance (MODES_PAS_AVANCE)."""
     if not (d1 and d2):
+        return False
+    if (p.get("mode_of_payment") or p.get("mode")) in MODES_PAS_AVANCE:
         return False
     return not (_dans_periode(p.get("posting_date"), d1, d2)
                 or _dans_periode(p.get("creation_date"), d1, d2))
@@ -748,7 +757,9 @@ def get_data(d1, d2, employe=None):
     # Visibilité (04/10/2026) : hors responsables de collecte, délégués en période et direction,
     # chacun ne voit QUE sa caisse — ni « Tous les employés », ni celle d'un collègue.
     from customization_app.caisse_collecte import peut_voir_toutes_les_caisses
-    restreint = not peut_voir_toutes_les_caisses()
+    # `caisse_vue_complete` (drapeau serveur, jamais venu du navigateur) : l'état des caisses calcule
+    # l'activité de toutes les caisses puis ne rend à l'employé que la sienne.
+    restreint = not peut_voir_toutes_les_caisses() and not frappe.flags.get("caisse_vue_complete")
     if restreint:
         employe = _ma_caisse(employees, users) or "—"
 

@@ -299,7 +299,8 @@ def _controles(data):
                 points.append({
                     "cle": "tache_ouverte:%s" % o["sales_order"],
                     "type": "tache_ouverte", "bloquant": 0,
-                    "commande": o["sales_order"], "client": o.get("customer"), "montant": dette,
+                    "commande": o["sales_order"], "tache": o.get("tache_reference"),
+                    "client": o.get("customer"), "montant": dette,
                     "libelle": "Tâche ouverte — %s%s" % (
                         _qui(o), (" — %s DT en dette" % _fmt_montant(dette)) if dette else ""),
                 })
@@ -325,7 +326,7 @@ def _controles(data):
                 points.append({
                     "cle": "dette_hors_aramex:%s" % o["sales_order"],
                     "type": "dette_hors_aramex", "bloquant": 0,
-                    "commande": o["sales_order"], "client": o.get("customer"),
+                    "commande": o["sales_order"], "tache": o.get("tache_reference"), "client": o.get("customer"),
                     "montant": dette, "libelle": libelle,
                 })
     for pmt in (data.get("anciens") or {}).get("paiements") or []:
@@ -415,6 +416,71 @@ def verifier_justifications(points, justifs):
         else:
             lignes.append("%s\n  → %s — %s" % (p["libelle"], motif, commentaire))
     return "\n".join(lignes), erreurs
+
+
+# ── Justifications recopiées sur les documents liés (06/10/2026) ─────────────
+# Chaque point justifié devient un COMMENTAIRE sur sa commande, sa tâche ou son paiement : le
+# responsable de collecte (et Salma, pastille 💬 de la commande) le lit sur la fiche elle-même.
+# Le nom de la clôture entre parenthèses sert de marque : rouvrir ou annuler le comptage les remplace.
+MARQUE_COMMENTAIRE = "💵 Caisse du "
+DOCTYPES_DU_POINT = (("commande", "Sales Order"), ("tache", "Tache de travail"), ("paiement", "Payment Entry"))
+NATURE_DU_POINT = {"tache_ouverte": "Tâche ouverte", "tache_sans_commande": "Tâche ouverte sans commande",
+                   "dette_hors_aramex": "Dette hors Aramex", "ancien_exclu": "Paiement exclu de la caisse"}
+
+
+def documents_du_point(point):
+    """[(doctype, nom)] des documents qu'un point de contrôle concerne. Fonction pure."""
+    return [(dt, point[cle]) for cle, dt in DOCTYPES_DU_POINT if point.get(cle)]
+
+
+def texte_commentaire(point, justif, cloture, caisse, date, auteur):
+    """Le commentaire posé sur la commande / la tâche : la justification d'abord (c'est elle que la
+    pastille 💬 de la commande montre), puis qui l'a écrite et dans quelle clôture. Fonction pure."""
+    esc = frappe.utils.escape_html
+    nature = NATURE_DU_POINT.get(point.get("type"), point.get("type") or "Point de contrôle")
+    if point.get("montant"):
+        nature += " (%s DT)" % _fmt_montant(point["montant"])
+    commentaire = " ".join(str(justif.get("commentaire") or "").split())
+    return "%s%s — %s : <b>%s</b> — %s<br><small>Justifié par %s au comptage de la caisse %s (%s)</small>" % (
+        MARQUE_COMMENTAIRE, getdate(date).strftime("%d/%m/%Y"), esc(nature), esc((justif.get("motif") or "").strip()),
+        esc(commentaire), esc(auteur), esc(caisse), cloture)
+
+
+def retirer_justifications(cloture):
+    """Supprime les commentaires posés par cette clôture (réouverture, annulation du comptage)."""
+    noms = frappe.get_all("Comment", filters={
+        "comment_type": "Comment", "reference_doctype": ["in", [dt for _c, dt in DOCTYPES_DU_POINT]],
+        "content": ["like", "%%(%s)%%" % cloture]}, fields=["name", "content"])
+    for c in noms:
+        if (c.content or "").startswith(MARQUE_COMMENTAIRE):
+            frappe.delete_doc("Comment", c.name, ignore_permissions=True, force=True)
+    return len(noms)
+
+
+def publier_justifications(doc, points, justifs):
+    """Un commentaire par document lié à chaque point justifié. Jamais bloquant : un document
+    disparu ne doit pas empêcher de compter la caisse. La caisse globale (direction) ne publie pas :
+    elle reprend les points de toutes les caisses, déjà publiés par chaque employé."""
+    if doc.caisse == CAISSE_GLOBALE:
+        return 0
+    auteur = frappe.utils.get_fullname(frappe.session.user) or frappe.session.user
+    n = 0
+    for p in points:
+        j = (justifs or {}).get(p.get("cle"))
+        if p.get("bloquant") or not isinstance(j, dict):
+            continue
+        texte = texte_commentaire(p, j, doc.name, doc.caisse, doc.date_cloture, auteur)
+        for doctype, nom in documents_du_point(p):
+            if not frappe.db.exists(doctype, nom):
+                continue
+            try:
+                frappe.get_doc({"doctype": "Comment", "comment_type": "Comment", "reference_doctype": doctype,
+                                "reference_name": nom, "content": texte, "comment_email": frappe.session.user,
+                                "comment_by": auteur}).insert(ignore_permissions=True)
+                n += 1
+            except Exception:
+                frappe.log_error(frappe.get_traceback(), "caisse: commentaire %s %s" % (doctype, nom))
+    return n
 
 
 @frappe.whitelist()
@@ -588,12 +654,19 @@ def valider(caisse, date, especes_comptees=None, note=None, justifications=None,
         "controles": controles_txt,
         **champs_rap,
     }
+    justifs_avant = existante.controles if existante else None
     if existante:
         doc = CC.rouvrir_comptage(existante, valeurs)
     else:
         doc = frappe.get_doc({"doctype": "Cloture Caisse", **valeurs})
         doc.insert(ignore_permissions=True)
     CC.enregistrer_photo_remise(doc, photo, photo_nom)
+    # Les justifications vont aussi sur les commandes / tâches concernées (06/10/2026) ; à la
+    # réouverture, seulement si elles ont changé (sinon la pastille 💬 changerait de date pour rien).
+    if not existante or (justifs_avant or "") != (controles_txt or ""):
+        if existante:
+            retirer_justifications(doc.name)
+        publier_justifications(doc, points, justifs)
 
     if mode == "seule":
         CC.finaliser(doc, m, rap, validation_seule=True)

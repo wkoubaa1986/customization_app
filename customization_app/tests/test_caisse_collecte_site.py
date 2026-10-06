@@ -508,13 +508,18 @@ class TestDoubleValidationCaisse(unittest.TestCase):
         res = CC.resume(TITULAIRE, DATE)
         self.assertEqual(res["role"], "titulaire")
         self.assertGreaterEqual(res["a_collecter"], 1)
-        with mock.patch.object(CL, "get_data", return_value={"recap": {"par_employe": [
-                {"employe": "TEST-COLLECTE-Jamais", "total": 80, "par_mode": {"Espèces": 80}},
-                {"employe": CAISSES[EMPLOYE], "total": 1300, "par_mode": {"Espèces": 1300}}]}}):
+        # Depuis le 06/10/2026 : toute action compte (ici une dette seule), sur chaque jour depuis la
+        # date de départ (aucune réglée en test -> la dernière semaine) ; l'activité est simulée par jour.
+        rapport = {"recap": {"par_employe": [
+            {"employe": "TEST-COLLECTE-Jamais", "total": 80, "par_mode": {"Dette non payée": 80}},
+            {"employe": CAISSES[EMPLOYE], "total": 1300, "par_mode": {"Espèces": 1300}}]}}
+        with mock.patch.object(CC, "_activite_du_jour",
+                               side_effect=lambda j: CC.activite_par_caisse(rapport) if str(j) == DATE else {}):
             liste = CC.a_collecter(DATE)
         noms = [c["name"] for c in liste["clotures"]]
         self.assertIn(cl.name, noms)
-        self.assertEqual([n["caisse"] for n in liste["non_comptees"]], ["TEST-COLLECTE-Jamais"])
+        self.assertEqual([(n["caisse"], n["date"]) for n in liste["non_comptees"]], [("TEST-COLLECTE-Jamais", DATE)])
+        self.assertIn("80,000 DT Dette non payée", liste["non_comptees"][0]["resume"])
         self.assertFalse(liste["par_delegation"])
         frappe.set_user(EMPLOYE)
         with self.assertRaises(frappe.ValidationError):
@@ -571,6 +576,53 @@ class TestDoubleValidationCaisse(unittest.TestCase):
             {"employe": "TEST-COLLECTE-Jamais", "total": 80, "par_mode": {"Espèces": 80}},
             {"employe": "TEST-COLLECTE-Cheques", "total": 80, "par_mode": {"Chèque": 80}}]}}
         points = CC.controles_globale(DATE, data)
-        self.assertEqual(sorted(p["caisse"] for p in points), [CAISSES[EMPLOYE], "TEST-COLLECTE-Jamais"])
+        # La moindre action compte (06/10/2026) : la caisse aux seuls chèques aussi.
+        self.assertEqual(sorted(p["caisse"] for p in points),
+                         ["TEST-COLLECTE-Cheques", CAISSES[EMPLOYE], "TEST-COLLECTE-Jamais"])
         self.assertTrue(all(not p["bloquant"] for p in points))
-        self.assertIn("pas encore collectée", points[0]["libelle"])
+        par_caisse = {p["caisse"]: p for p in points}
+        self.assertIn("pas encore collectée", par_caisse[CAISSES[EMPLOYE]]["libelle"])
+        self.assertIn("80,000 DT Chèque", par_caisse["TEST-COLLECTE-Cheques"]["libelle"])
+        # Rien ne compte avant la date de départ PROPRE à une caisse.
+        cfg = dict(CC.config(), departs={"TEST-COLLECTE-Cheques": "2026-10-02"})
+        with mock.patch.object(CC, "config", return_value=cfg):
+            apres = CC.controles_globale(DATE, data)
+        self.assertNotIn("TEST-COLLECTE-Cheques", [p["caisse"] for p in apres])
+
+    def test_etat_des_caisses_jour_par_jour(self):
+        cl = self._compter(EMPLOYE)                     # comptée le DATE, pas collectée
+        veille = str(frappe.utils.add_days(DATE, -1))
+        rapports = {DATE: {"recap": {"par_employe": [
+                        {"employe": CAISSES[EMPLOYE], "total": 1300, "par_mode": {"Espèces": 1300}},
+                        {"employe": "TEST-COLLECTE-Jamais", "total": 0, "par_mode": {}}]},
+                        "depenses": {"lignes": [{"saisi_par": "TEST-COLLECTE-Jamais", "montant": 12.5}]}},
+                    veille: {"recap": {"par_employe": [
+                        {"employe": CAISSES[EMPLOYE], "total": 40, "par_mode": {"Dette non payée": 40}}]}}}
+        activite = lambda j: CC.activite_par_caisse(rapports.get(str(j), {}))  # noqa: E731
+        with mock.patch.object(CC, "_activite_du_jour", side_effect=activite):
+            frappe.set_user(TITULAIRE)
+            e = CC.etat_caisses(DATE)
+            frappe.set_user(EMPLOYE)
+            mien = CC.etat_caisses(DATE)
+        lignes = {c["caisse"]: c for c in e["caisses"]}
+        self.assertEqual(lignes[CAISSES[EMPLOYE]]["cellules"][DATE]["etat"], "a_collecter")
+        self.assertEqual(lignes[CAISSES[EMPLOYE]]["cellules"][DATE]["cloture"], cl.name)
+        self.assertEqual(lignes[CAISSES[EMPLOYE]]["cellules"][veille]["etat"], "non_comptee")
+        self.assertEqual(lignes["TEST-COLLECTE-Jamais"]["cellules"][DATE]["etat"], "non_comptee")  # dépense seule
+        self.assertEqual(lignes["TEST-COLLECTE-Jamais"]["cellules"][veille]["etat"], "vide")
+        self.assertEqual(lignes[CAISSES[EMPLOYE]]["non_comptees"], 1)
+        self.assertEqual(e["compteurs"]["non_comptee"], 2)
+        self.assertFalse(e["restreint"])
+        # L'employé ne voit que SA caisse.
+        self.assertTrue(mien["restreint"])
+        self.assertEqual([c["caisse"] for c in mien["caisses"]], [CAISSES[EMPLOYE]])
+        self.assertEqual({x["caisse"] for x in mien["a_regler"]}, {CAISSES[EMPLOYE]})
+        # Avec une date de départ au DATE : la veille ne compte plus, ni dans la grille ni dans le message.
+        cfg = dict(CC.config(), date_depart=DATE)
+        with mock.patch.object(CC, "_activite_du_jour", side_effect=activite), \
+                mock.patch.object(CC, "config", return_value=cfg):
+            frappe.set_user(TITULAIRE)
+            e2 = CC.etat_caisses(DATE)
+        self.assertEqual(e2["debut"], DATE)
+        self.assertEqual([(x["caisse"], x["date"], x["depart"]) for x in e2["a_regler"] if x["etat"] == "non_comptee"],
+                         [("TEST-COLLECTE-Jamais", DATE, DATE)])

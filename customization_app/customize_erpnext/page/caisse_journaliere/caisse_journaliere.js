@@ -83,6 +83,8 @@ class RapportCaisseJournaliere {
     // Double validation : collecte par le responsable / un délégué, passation délégué -> titulaire.
     $("#rcj-btn-collecte").on("click", () => rcj_collecte(this));
     $("#rcj-btn-passation").on("click", () => rcj_passation(this));
+    // État de toutes les caisses, jour par jour depuis la date de départ (06/10/2026).
+    $("#rcj-btn-etat").on("click", () => rcj_etat_caisses(this));
     $("#rcj-collecte-banner").on("click", "[data-ecart]", (e) => {
       const $b = $(e.currentTarget);
       rcj_repondre_ecart($b.attr("data-ecart"), $b.attr("data-accepter") === "1", () => this._fetch());
@@ -309,12 +311,14 @@ class RapportCaisseJournaliere {
 
   _afficher_collecte() {
     // Bandeau du responsable de collecte / délégué : caisses à collecter, passations ; et pour
-    // chacun, ses remises contestées (même quand la page affiche une autre caisse).
+    // chacun, ses remises contestées (même quand la page affiche une autre caisse). Depuis le
+    // 06/10/2026 : les caisses qui ont eu une action sans être comptées, depuis la date de départ.
     const $b = $("#rcj-collecte-banner").hide().empty();
     $("#rcj-btn-collecte, #rcj-btn-passation").hide();
+    const date = $("#rcj-d2").val() || frappe.datetime.get_today();
     frappe.call({
       method: "customization_app.caisse_collecte.contexte",
-      args: { date: $("#rcj-d2").val() || frappe.datetime.get_today() },
+      args: { date },
       callback: (r) => {
         const c = r.message || {};
         this._collecte = c;
@@ -338,11 +342,49 @@ class RapportCaisseJournaliere {
         (c.mes_passations_ecart || []).forEach((p) => bouts.push(
           `⚠️ ${__("Passation contestée")} ${esc(p.name)} : ${__("reçu")} <b>${rcj_dt(p.especes_recues)}</b> ${__("au lieu de")} <b>${
             rcj_dt(p.total_especes)}</b> — <a href="#" data-ouvrir="passation">${__("répondre")}</a>`));
-        if (!bouts.length) return;
-        $b.html(bouts.map((x) => `<div style="margin:2px 0">${x}</div>`).join("")).show();
-        $b.find("[data-ouvrir]").on("click", (e) => {
-          e.preventDefault();
-          ($(e.currentTarget).attr("data-ouvrir") === "collecte" ? rcj_collecte : rcj_passation)(this);
+        const afficher = () => {
+          if (!bouts.length) return;
+          $b.html(bouts.map((x) => `<div style="margin:2px 0">${x}</div>`).join("")).show();
+          $b.find("[data-ouvrir]").on("click", (e) => {
+            e.preventDefault();
+            const quoi = $(e.currentTarget).attr("data-ouvrir");
+            (quoi === "collecte" ? rcj_collecte : quoi === "etat" ? rcj_etat_caisses : rcj_passation)(this);
+          });
+          $b.find("[data-compter-caisse]").on("click", (e) => {
+            const $x = $(e.currentTarget);
+            rcj_aller_caisse(this, $x.attr("data-compter-caisse"), $x.attr("data-date"), () => rcj_cloture(this));
+          });
+        };
+        // Les jours passés jamais comptés (toute action, dette comprise) : le collecteur les voit
+        // pour toutes les caisses, l'employé pour la sienne.
+        frappe.call({
+          method: "customization_app.caisse_collecte.etat_caisses", args: { date },
+          callback: (re) => {
+            const e = re.message || {};
+            const retards = (e.a_regler || []).filter((x) => x.etat === "non_comptee");
+            if (retards.length && e.restreint) {
+              bouts.push(`❌ ${__("Votre caisse n'a pas été comptée depuis votre date de départ ({0}) :",
+                [esc(frappe.datetime.str_to_user(e.mon_depart || e.debut))])}`);
+              retards.slice(0, 5).forEach((x) => bouts.push(
+                `&nbsp;&nbsp;• ${__("le")} <b>${esc(frappe.datetime.str_to_user(x.date))}</b> — ${esc(x.resume)}
+                 <button class="btn btn-xs btn-primary" data-compter-caisse="${esc(x.caisse)}" data-date="${esc(x.date)}" style="margin-left:6px">📝 ${__("Compter")}</button>`));
+              if (retards.length > 5) bouts.push(`&nbsp;&nbsp;• … ${__("et {0} autre(s) jour(s)", [retards.length - 5])} — <a href="#" data-ouvrir="etat">${__("voir l'état")}</a>`);
+            } else if (retards.length) {
+              // Groupé par date de départ : chaque caisse est comptée à partir de SA date de départ.
+              const par_depart = {};
+              retards.forEach((x) => {
+                const dep = x.depart || e.debut;
+                const g = (par_depart[dep] = par_depart[dep] || {});
+                (g[x.caisse] = g[x.caisse] || []).push(frappe.datetime.str_to_user(x.date).slice(0, 5));
+              });
+              Object.keys(par_depart).sort().forEach((dep) => bouts.push(
+                `❌ ${__("Pas comptées depuis la date de départ du {0}", [esc(frappe.datetime.str_to_user(dep))])} : ${
+                  Object.keys(par_depart[dep]).map((k) => `<b>${esc(k)}</b> (${par_depart[dep][k].join(", ")})`).join(" · ")}`));
+              bouts.push(`<a href="#" data-ouvrir="etat">📊 ${__("voir l'état des caisses")}</a>`);
+            }
+            afficher();
+          },
+          error: afficher,
         });
       },
     });
@@ -2246,15 +2288,36 @@ function rcj_html_point_a_justifier(c, precedente) {
   </div>`;
 }
 
+// Un libellé de point de contrôle avec ses documents cliquables (commande, tâche, paiement) : le
+// collecteur ouvre la fiche, où la justification est aussi posée en commentaire (06/10/2026).
+function rcj_lier_documents(texte_echappe) {
+  return texte_echappe
+    .replace(/\b(SAL-ORD-\d{4}-\d+)\b/g, '<a href="/app/sales-order/$1" target="_blank">$1</a>')
+    .replace(/\b(Tache-\d+)\b/g, '<a href="/app/tache-de-travail/$1" target="_blank">$1</a>')
+    .replace(/\b(ACC-PAY-\d{4}-\d+)\b/g, '<a href="/app/payment-entry/$1" target="_blank">$1</a>');
+}
+
 // Les points justifiés par l'employé, tels que le collecteur les lit sur sa carte.
 function rcj_html_controles_justifies(controles) {
   if (!controles || !controles.length) return "";
   const esc = frappe.utils.escape_html;
   return `<div class="rcj-cc-controles">
-    <div class="rcj-cc-controles-titre">📋 ${__("Points de contrôle justifiés")} (${controles.length})</div>
-    ${controles.map((p) => `<div class="rcj-cc-controle"><div>${esc(p.libelle)}</div>
+    <div class="rcj-cc-controles-titre">📋 ${__("Points de contrôle justifiés")} (${controles.length})
+      <span class="rcj-cc-controles-note">${__("aussi en commentaire sur la commande / la tâche")}</span></div>
+    ${controles.map((p) => `<div class="rcj-cc-controle"><div>${rcj_lier_documents(esc(p.libelle))}</div>
       <div class="rcj-cc-justif">→ ${esc(p.justification || "—")}</div></div>`).join("")}
   </div>`;
+}
+
+// Bascule la page sur une caisse et un jour, puis `ensuite` (compter, revoir…).
+function rcj_aller_caisse(rapport, caisse, date, ensuite) {
+  $("#rcj-d1").val(date); $("#rcj-d2").val(date);
+  const $sel = $("#rcj-employe");
+  if (!$sel.find("option").filter(function () { return $(this).val() === caisse; }).length) {
+    $sel.append($("<option>").val(caisse).text(caisse));
+  }
+  $sel.val(caisse);
+  return Promise.resolve(rapport && rapport._fetch ? rapport._fetch() : null).then(() => { if (ensuite) ensuite(); });
 }
 
 function rcj_cloture(rapport, opts) {
@@ -2597,31 +2660,28 @@ function rcj_collecte(rapport) {
       };
       const rendre = () => {
         const cartes = (m.clotures || []).map(carte).join("");
+        // Depuis la date de départ, toute caisse qui a eu la moindre action (dette comprise) sans
+        // comptage ; les jours passés en rouge, aujourd'hui en attente.
         const manquantes = (m.non_comptees || []).map((n) =>
-          `<div class="rcj-cc-manque">⏳ <b>${esc(n.caisse)}</b> : ${rcj_dt(n.especes)} ${__("d'espèces encaissées, pas encore comptées")}
-             <button class="btn btn-xs btn-default rcj-cc-compter" data-caisse="${esc(n.caisse)}" style="margin-left:6px">📝 ${__("Compter cette caisse")}</button></div>`).join("");
+          `<div class="rcj-cc-manque${n.aujourdhui ? "" : " rcj-cc-manque-retard"}">${n.aujourdhui ? "⏳" : "❌"} <b>${esc(n.caisse)}</b>
+             · ${n.aujourdhui ? __("aujourd'hui") : esc(frappe.datetime.str_to_user(n.date))} : ${esc(n.resume)}${
+               n.depart ? ` <span class="text-muted">(${__("départ le {0}", [esc(frappe.datetime.str_to_user(n.depart))])})</span>` : ""}
+             <button class="btn btn-xs btn-default rcj-cc-compter" data-caisse="${esc(n.caisse)}" data-date="${esc(n.date)}" style="margin-left:6px">📝 ${__("Compter cette caisse")}</button></div>`).join("");
         d.fields_dict.corps.$wrapper.html(`
           ${m.par_delegation ? `<div class="rcj-cc-info">🤝 ${__("Vous collectez par délégation : chaque caisse confirmée entre dans votre passation, à remettre au responsable.")}</div>` : ""}
           ${cartes || `<div class="rcj-cc-vide">✅ ${__("Aucune caisse en attente de collecte.")}</div>`}
-          ${manquantes ? `<div class="rcj-cc-titre">${__("Pas encore comptées aujourd'hui")}</div>${manquantes}` : ""}`);
+          ${manquantes ? `<div class="rcj-cc-titre">${__("Pas encore comptées depuis la date de départ")}${
+            m.date_depart ? " " + __("du {0}", [frappe.datetime.str_to_user(m.date_depart)]) : ""}${
+            Object.keys(m.departs || {}).length ? " — " + Object.keys(m.departs).map((k) => `${esc(k)} : ${esc(frappe.datetime.str_to_user(m.departs[k]))}`).join(", ") : ""}</div>${manquantes}` : ""}
+          <div style="margin-top:10px"><a href="#" class="rcj-cc-etat">📊 ${__("État de toutes les caisses, jour par jour")}</a></div>`);
         const $w = d.fields_dict.corps.$wrapper;
         // Compter à la place d'un employé absent : la page bascule sur sa caisse et ouvre le
         // comptage ; le responsable validera ensuite directement depuis cette collecte.
         $w.find(".rcj-cc-compter").on("click", function () {
-          const caisse = $(this).attr("data-caisse");
           d.hide();
-          $("#rcj-d1").val(date); $("#rcj-d2").val(date);
-          const $sel = $("#rcj-employe");
-          if (!$sel.find(`option[value="${caisse.replace(/"/g, '\\"')}"]`).length) {
-            $sel.append(`<option value="${esc(caisse)}">${esc(caisse)}</option>`);
-          }
-          $sel.val(caisse);
-          if (rapport && rapport._fetch) {
-            Promise.resolve(rapport._fetch()).then(() => rcj_cloture(rapport));
-          } else {
-            rcj_cloture(rapport);
-          }
+          rcj_aller_caisse(rapport, $(this).attr("data-caisse"), $(this).attr("data-date") || date, () => rcj_cloture(rapport));
         });
+        $w.find(".rcj-cc-etat").on("click", (e) => { e.preventDefault(); d.hide(); rcj_etat_caisses(rapport); });
         $w.find(".rcj-cc-autre").on("click", function () {
           const $c = $(this).closest(".rcj-cc-carte");
           $c.find(".rcj-cc-saisie").slideDown(150);
@@ -2683,6 +2743,115 @@ function rcj_collecte(rapport) {
   });
 }
 
+
+// ── État des caisses, jour par jour depuis la date de départ (06/10/2026) ────
+// Une caisse est à collecter dès la moindre action dans le rapport du jour, dette comprise.
+const RCJ_ETAT = {
+  validee:     { ico: "✅", lib: "Validée (collectée)" },
+  a_collecter: { ico: "📥", lib: "Comptée, à collecter" },
+  ecart:       { ico: "⚠️", lib: "Écart de remise" },
+  justif:      { ico: "📋", lib: "Justifications contestées" },
+  non_comptee: { ico: "❌", lib: "Pas comptée" },
+  a_compter:   { ico: "⏳", lib: "Aujourd'hui, pas encore comptée" },
+  vide:        { ico: "·", lib: "Aucune action" },
+  avant:       { ico: "", lib: "Avant la date de départ" },
+};
+const RCJ_JOURS_COURTS = ["dim.", "lun.", "mar.", "mer.", "jeu.", "ven.", "sam."];
+
+function rcj_etat_caisses(rapport) {
+  const API = "customization_app.caisse_collecte";
+  const esc = frappe.utils.escape_html;
+  const date = $("#rcj-d2").val() || frappe.datetime.get_today();
+  const role = (rapport && rapport._collecte && rapport._collecte.role) || null;
+  frappe.call({
+    method: API + ".etat_caisses", args: { date }, freeze: true, freeze_message: __("État des caisses…"),
+    callback: (r) => {
+      const m = r.message || {};
+      // Compter pour un autre : le titulaire et la direction seulement (même règle que le serveur).
+      const peut_compter = m.restreint || role === "titulaire" || role === "direction" || frappe.user.has_role("System Manager");
+      const d = new frappe.ui.Dialog({
+        title: m.restreint ? __("Ma caisse — jour par jour") : __("État des caisses — jour par jour"),
+        size: "extra-large",
+        fields: [{ fieldtype: "HTML", fieldname: "corps" }],
+      });
+      const jour_court = (j) => {
+        const o = frappe.datetime.str_to_obj(j);
+        return `${RCJ_JOURS_COURTS[o.getDay()]}<br>${frappe.datetime.str_to_user(j).slice(0, 5)}`;
+      };
+      const infobulle = (c) => [__(RCJ_ETAT[c.etat].lib), c.resume, c.cloture,
+        c.valide_par ? __("comptée par {0}", [c.valide_par]) : "", c.collecte_par ? __("collectée par {0}", [c.collecte_par]) : "",
+        c.validation_seule ? __("validation seule") : ""].filter(Boolean).join(" · ");
+      const cpt = m.compteurs || {};
+      const tete = `
+        <div class="rcj-etat-resume">
+          <span class="rcj-etat-pastille rcj-etat-non_comptee">❌ ${cpt.non_comptee || 0} ${__("pas comptée(s)")}</span>
+          <span class="rcj-etat-pastille rcj-etat-a_collecter">📥 ${cpt.a_collecter || 0} ${__("comptée(s), pas collectée(s)")}</span>
+          <span class="rcj-etat-pastille rcj-etat-a_compter">⏳ ${cpt.a_compter || 0} ${__("aujourd'hui")}</span>
+        </div>
+        <div class="rcj-etat-note">${m.restreint
+            ? __("Depuis votre date de départ : {0}", [frappe.datetime.str_to_user(m.mon_depart || m.debut)])
+            : __("Depuis la date de départ : {0}", [frappe.datetime.str_to_user(m.date_depart || m.debut)]) + (
+                Object.keys(m.departs || {}).length ? " ; " + Object.keys(m.departs).map((k) =>
+                  `${esc(k)} : ${frappe.datetime.str_to_user(m.departs[k])}`).join(", ") : "")}${
+          m.tronque ? " — " + __("limité aux 62 derniers jours") : ""}. ${__("Avant la date de départ d'une caisse : case hachurée, rien ne compte.")} ${
+          __("Une caisse est à compter et à collecter dès la moindre action dans le rapport du jour : encaissement (dette comprise), commande, dépense.")}
+          ${__("Cliquez sur une case pour ouvrir la caisse ce jour-là.")}</div>`;
+      const grille = (m.caisses || []).length ? `
+        <div class="rcj-etat-wrap"><table class="rcj-etat">
+          <thead><tr><th class="rcj-etat-nom">${__("Caisse")}</th>${(m.jours || []).map((j) =>
+            `<th class="${j === m.aujourdhui ? "rcj-etat-auj" : ""}">${jour_court(j)}</th>`).join("")}</tr></thead>
+          <tbody>${m.caisses.map((c) => `<tr>
+            <th class="rcj-etat-nom">${esc(c.caisse)}${c.depart ? `<div class="rcj-etat-depart">${__("départ le {0}", [frappe.datetime.str_to_user(c.depart)])}</div>` : ""}${c.non_comptees ? ` <span class="rcj-etat-compte rcj-etat-non_comptee">${c.non_comptees} ❌</span>` : ""}${
+              c.en_attente ? ` <span class="rcj-etat-compte rcj-etat-a_collecter">${c.en_attente} 📥</span>` : ""}</th>
+            ${(m.jours || []).map((j) => {
+              const x = c.cellules[j] || { etat: "vide" };
+              return `<td class="rcj-etat-c rcj-etat-${x.etat}" data-caisse="${esc(c.caisse)}" data-date="${esc(j)}"
+                          title="${esc(infobulle(x))}">${RCJ_ETAT[x.etat] ? RCJ_ETAT[x.etat].ico : ""}</td>`;
+            }).join("")}</tr>`).join("")}</tbody>
+        </table></div>
+        <div class="rcj-etat-legende">${["validee", "a_collecter", "ecart", "justif", "non_comptee", "a_compter", "vide", "avant"].map((k) =>
+          `<span><span class="rcj-etat-mini rcj-etat-${k}">${RCJ_ETAT[k].ico}</span> ${__(RCJ_ETAT[k].lib)}</span>`).join("")}</div>`
+        : `<div class="rcj-cc-vide">✅ ${__("Aucune action de caisse sur la période.")}</div>`;
+      const action = (x) => {
+        if (x.etat === "non_comptee" || x.etat === "a_compter") {
+          return peut_compter
+            ? `<button class="btn btn-xs btn-primary rcj-etat-compter" data-caisse="${esc(x.caisse)}" data-date="${esc(x.date)}">📝 ${__("Compter")}</button>`
+            : `<button class="btn btn-xs btn-default rcj-etat-voir" data-caisse="${esc(x.caisse)}" data-date="${esc(x.date)}">👁 ${__("Voir")}</button>`;
+        }
+        return role && !m.restreint
+          ? `<button class="btn btn-xs btn-dark rcj-etat-collecter">📥 ${__("Collecter")}</button>`
+          : `<button class="btn btn-xs btn-default rcj-etat-voir" data-caisse="${esc(x.caisse)}" data-date="${esc(x.date)}">👁 ${__("Voir")}</button>`;
+      };
+      const liste = (m.a_regler || []).length ? `
+        <div class="rcj-cc-titre">${__("À régulariser")} (${m.a_regler.length})</div>
+        ${m.a_regler.map((x) => `<div class="rcj-etat-ligne rcj-etat-ligne-${x.etat}">
+          <div class="rcj-etat-ligne-txt">
+            <span class="rcj-etat-mini rcj-etat-${x.etat}">${RCJ_ETAT[x.etat].ico}</span>
+            <b>${esc(x.caisse)}</b> · ${esc(frappe.datetime.str_to_user(x.date))} · ${__(RCJ_ETAT[x.etat].lib)}${
+              x.cloture ? ` (<a href="/app/cloture-caisse/${encodeURIComponent(x.cloture)}" target="_blank">${esc(x.cloture)}</a>)` : ""}
+            <div class="rcj-etat-ligne-resume">${esc(x.resume || "")}</div>
+          </div>
+          <div class="rcj-etat-ligne-act">${action(x)}</div></div>`).join("")}` : "";
+      d.fields_dict.corps.$wrapper.html(tete + grille + liste);
+      const $w = d.fields_dict.corps.$wrapper;
+      // Les jours les plus récents à droite : une fois le dialogue affiché, la grille défile jusqu'au bout.
+      const $wrap = $w.find(".rcj-etat-wrap");
+      d.$wrapper.one("shown.bs.modal", () => $wrap.scrollLeft($wrap[0] ? $wrap[0].scrollWidth : 0));
+      const aller = (caisse, jour, ensuite) => { d.hide(); rcj_aller_caisse(rapport, caisse, jour, ensuite); };
+      $w.find(".rcj-etat-c").on("click", function () {
+        const etat = this.className.match(/rcj-etat-(\w+)$/);
+        if (etat && (etat[1] === "vide" || etat[1] === "avant")) return;
+        aller($(this).attr("data-caisse"), $(this).attr("data-date"));
+      });
+      $w.find(".rcj-etat-voir").on("click", function () { aller($(this).attr("data-caisse"), $(this).attr("data-date")); });
+      $w.find(".rcj-etat-compter").on("click", function () {
+        aller($(this).attr("data-caisse"), $(this).attr("data-date"), () => rcj_cloture(rapport));
+      });
+      $w.find(".rcj-etat-collecter").on("click", () => { d.hide(); rcj_collecte(rapport); });
+      d.show();
+    },
+  });
+}
 
 // ── Passation délégué -> titulaire ───────────────────────────────────────────
 function rcj_passation(rapport) {
