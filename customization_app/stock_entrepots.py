@@ -1279,6 +1279,11 @@ def detail_verification(name):
     v = frappe.get_doc(VERIF, name)
     _acces_verification(v.entrepot)
     _assurer_photo(v)
+    # Pendant le comptage aussi, la feuille montre le stock D'AUJOURD'HUI (06/10/2026) : une fiche ouverte le
+    # 02/10 et comptée le 06/10 montrait encore 2 adaptateurs alors qu'un BL du 05/10 en avait sorti un — le
+    # comptage aurait produit un faux écart, puis un renvoi automatique à la validation.
+    if v.statut == EN_COURS:
+        _rafraichir_systeme(v, seulement_si_change=True)
     if v.statut in (A_VALIDER, A_CONFIRMER) and _rafraichir_systeme(v):
         _renvoi_auto(v, [l.item_code for l in v.lignes if l.a_recompter])   # des articles ont bougé : à recompter
     # ⚠️ Un Float vaut 0 en base, jamais None : « pas compté » se lit sur le drapeau `compte`.
@@ -1348,6 +1353,8 @@ def terminer_verification(name, comptes=None, note=None):
     if v.statut != EN_COURS:
         frappe.throw(_("Cette vérification n’est plus au comptage ({0}).").format(v.statut))
     _assurer_photo(v)
+    # Les écarts se figent contre le stock du moment, pas contre celui de l'ouverture de la fiche.
+    _rafraichir_systeme(v, seulement_si_change=True)
     _appliquer_comptage(v, _dict_json(comptes))
     if not v.nb_comptes:
         frappe.throw(_("Aucun article compté : saisissez au moins une quantité."))
@@ -1371,21 +1378,25 @@ def terminer_verification(name, comptes=None, note=None):
     return _resume(v)
 
 
-def _rafraichir_systeme(v) -> list[str]:
+def _rafraichir_systeme(v, seulement_si_change: bool = False) -> list[str]:
     """Relit les quantités système du stock (décision utilisateur 02/10/2026). Un article qui a BOUGÉ depuis
     le comptage perd son comptage : il est « à recompter » (le compté d'hier ne dit plus rien du stock
-    d'aujourd'hui). Rend les articles concernés ; les écarts des autres sont recalculés."""
+    d'aujourd'hui). Rend les articles concernés ; les écarts des autres sont recalculés.
+    `seulement_si_change` : rien n'est écrit si aucune quantité n'a bougé (relecture à chaque ouverture)."""
     qtes = _quantites([l.item_code for l in v.lignes], [v.entrepot])
-    bouges = []
+    bouges, change = [], False
     for l in v.lignes:
         nouveau = qtes.get((l.item_code, v.entrepot), 0.0)
         if abs(flt(nouveau, 6) - flt(l.qte_systeme, 6)) > 1e-6:
+            change = True
             if l.compte:
                 l.commentaire = (_("Stock modifié depuis le comptage ({0} → {1}) : à recompter")
                                  .format(flt(l.qte_systeme, 6), flt(nouveau, 6)))[:140]
                 l.compte, l.qte_comptee, l.qte_employe, l.ajuste, l.a_recompter = 0, 0, 0, 0, 1
                 bouges.append(l.item_code)
             l.qte_systeme = nouveau
+    if seulement_si_change and not change:
+        return bouges
     _appliquer_comptage(v, {})
     v.rafraichi_le = now_datetime()
     _sauver(v)

@@ -263,6 +263,27 @@ class TestDoubleValidationVerif(unittest.TestCase):
         self.assertEqual((self._qte(i1), self._qte(i2)), (2, 4))
         self.assertEqual(frappe.db.get_value(S.VERIF, nom, "valide_responsable_par"), "Administrator")
 
+    def test_la_feuille_de_comptage_montre_le_stock_du_jour(self):
+        """Cas réel 06/10/2026 (stock de Mohamed Hedi Chouchane) : fiche ouverte le 02/10 avec 2 adaptateurs, un
+        BL du 05/10 en sort un ; le jour du comptage, la feuille doit dire 1, pas 2."""
+        import frappe
+        i1, i2 = self.items
+        nom = S.ouvrir_verification(self.essai, frappe.utils.nowdate(), avec_taches=False)
+        frappe.set_user(self.AKRAM)
+        lignes = {l["item_code"]: l for l in S.detail_verification(nom)["lignes"]}
+        self.assertEqual(lignes[i1]["qte_systeme"], 3)                          # photographie à l'ouverture
+        S.enregistrer_verification(nom, {i2: {"qte_comptee": 5}})               # i2 compté avant la sortie
+        frappe.set_user("Administrator")
+        S.ecriture_transfert(self.essai, S.magasin(), [(i1, 1), (i2, 1)], "sortie pendant le comptage", ignore_trajets=True)
+        frappe.set_user(self.AKRAM)
+        lignes = {l["item_code"]: l for l in S.detail_verification(nom)["lignes"]}
+        self.assertEqual((lignes[i1]["qte_systeme"], lignes[i1]["qte_comptee"], lignes[i1]["a_recompter"]), (2, None, 0))
+        # déjà compté puis bougé : son comptage ne vaut plus rien, à recompter
+        self.assertEqual((lignes[i2]["qte_systeme"], lignes[i2]["qte_comptee"], lignes[i2]["a_recompter"]), (4, None, 1))
+        r = S.terminer_verification(nom, {i1: {"qte_comptee": 2}, i2: {"qte_comptee": 4}})
+        self.assertEqual((r["statut"], r["nb_ecarts"]), ("À valider", 0))       # aucun faux écart
+        frappe.set_user("Administrator")
+
     def test_ajustement_puis_confirmation_de_l_employe(self):
         import frappe
         i1, i2 = self.items
