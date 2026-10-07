@@ -176,6 +176,24 @@ class TestHistorique(unittest.TestCase):
         self.assertEqual(H.texte("Test note d&apos;appel &lt;b&gt;gras&lt;/b&gt;"), "Test note d'appel <b>gras</b>")
 
 
+class TestAcces(unittest.TestCase):
+    def _avec(self, roles, lecture=True):
+        from unittest.mock import patch
+        with patch.object(H.frappe, "get_roles", return_value=roles), \
+                patch.object(H.frappe, "has_permission", return_value=lecture):
+            return H._autorise()
+
+    def test_technicien_et_operatrice(self):
+        self.assertTrue(self._avec(["Employee", "Sales User", "Stock User"]))
+
+    def test_partenaire_seul_exclu(self):
+        """Le partenaire exécute chez nos clients, mais leur historique (achats, échéancier, appels) reste à nous."""
+        self.assertFalse(self._avec(["Employee", "Partenaire", "Raven User"]))
+
+    def test_sans_lecture_client(self):
+        self.assertFalse(self._avec(["Employee"], lecture=False))
+
+
 class TestTraceDecalage(unittest.TestCase):
     def test_texte(self):
         t = U.texte_decalage("OSMO", datetime.date(2025, 3, 1), datetime.date(2026, 2, 20), "SO-7", 356,

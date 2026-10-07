@@ -222,6 +222,8 @@ frappe.provide("frappe.views");
                         __("intervention(s)")}, ${restant} ${__("à faire")}`}</span>
               </div>
               ${corps}`);
+            // « 🔧 À proposer » des clients de la journée, en un appel (historique_client.js).
+            if (window.historique_remplir_pieces) window.historique_remplir_pieces(this.$corps);
         }
 
         _carte(l, esc) {
@@ -233,12 +235,14 @@ frappe.provide("frappe.views");
                 <span class="mj-heure">${esc(l.debut)}</span>
                 <span class="mj-badge inf">${ICONES[l.type] || "📌"} ${esc(l.type || "?")}</span>
                 <span class="mj-client">${esc(l.client || "")}</span>
+                ${window.historique_bouton_html && l.client_id ? window.historique_bouton_html(l.client_id) : ""}
                 ${l.secteur ? `<span class="mj-badge gris">📍 ${esc(l.secteur)}</span>` : ""}
                 <a href="#" class="mj-ref" data-fiche="${esc(l.tache)}"
                    title="${__("Ouvrir la fiche sans quitter cet écran")}">${esc(l.tache)}</a>
                 <span class="mj-badge ${st[0]}" style="margin-left:auto">${esc(st[1])}</span>
               </div>
               <div class="mj-corps">
+                ${window.historique_pieces_html && l.client_id ? window.historique_pieces_html(l.client_id) : ""}
                 ${this._tel(l, esc)}${this._adresse(l, esc)}${this._articles(l, esc)}
                 ${l.note ? `<div class="mj-l"><span class="k">${__("Note")}</span>
                     <span>${esc(l.note)}</span></div>` : ""}

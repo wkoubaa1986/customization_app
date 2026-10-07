@@ -129,7 +129,7 @@
    "fieldname": "sec_pieces",
    "fieldtype": "Section Break",
    "label": "Pièces à proposer aux clients (écrans d’appel)",
-   "collapsible": 1,
+   "collapsible": 0,
    "description": "Ligne « 🔧 À proposer » des listes d’appels, du rattrapage et des commandes à traiter, et panneau 📜 Historique. Seule la DATE du dernier achat (ou de la pose de la machine) compte, jamais la quantité. Les revendeurs (groupes B2B ci-dessus) sont ignorés. Table vide = valeurs d’origine (bouton « ↩️ Pièces par défaut »)."
   },
   {
@@ -241,7 +241,7 @@
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-10-07 12:00:00.000000",
+ "modified": "2026-10-07 13:00:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Config Relances",

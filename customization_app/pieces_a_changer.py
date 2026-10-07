@@ -50,12 +50,13 @@ DEFAUT_PIECES = [
     {"cle": "mineral", "libelle": "Cartouche minérale", "intervalle_mois": 12, "mode": FIXE, "actif": 1, "message": ""},
     {"cle": "alcalin", "libelle": "Cartouche alcaline", "intervalle_mois": 12, "mode": FIXE, "actif": 1, "message": ""},
     {"cle": "membrane", "libelle": "Membrane d’osmose", "intervalle_mois": 24, "mode": FIXE, "actif": 1, "message": ""},
-    {"cle": "lampe_uv", "libelle": "Lampe UV", "intervalle_mois": 9, "mode": FIXE, "actif": 1,
-     "message": "Pas de rappel si l’UV a l’activation automatique (Relais 24 V)."},
+    # Pas de rappel quand l'UV de l'osmoseur a l'activation automatique (Relais 24 V) : règle dans `calculer`.
+    {"cle": "lampe_uv", "libelle": "Lampe UV", "intervalle_mois": 9, "mode": FIXE, "actif": 1, "message": ""},
     {"cle": "resine", "libelle": "Résine de l’adoucisseur", "intervalle_mois": 36, "mode": FIXE, "actif": 1,
      "message": "Proposer d’abord un test de dureté (Trousse TH) : on ne change la résine que si l’eau reste dure."},
+    # Rythme d'achat du client ; l'intervalle ne sert que tant qu'il n'a acheté qu'une fois.
     {"cle": "porte_filtre", "libelle": "Cartouches du porte-filtre", "intervalle_mois": 6, "mode": HISTORIQUE, "actif": 1,
-     "message": "Rythme d’achat du client ; l’intervalle indiqué sert tant qu’il n’a acheté qu’une fois."},
+     "message": ""},
 ]
 CLES = [p["cle"] for p in DEFAUT_PIECES]
 

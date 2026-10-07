@@ -45,10 +45,22 @@ CHAMPS_LISTE = ("a_été_appelé", "resume_appel", "reponse_client", "intéress�
 LIMITE = 60
 
 
+# Le compte du partenaire (rôle « Partenaire » seul) exécute des tâches chez nos clients, mais leur historique
+# (achats, échéancier, appels) reste à nous.
+ROLES_INTERNES = {"Sales User", "Sales Manager", "Maintenance Manager", "System Manager"}
+
+
+def _autorise() -> bool:
+    roles = set(frappe.get_roles())
+    if "Partenaire" in roles and not roles & ROLES_INTERNES:
+        return False
+    return bool(frappe.has_permission("Customer", "read"))
+
+
 def _guard(client: str):
     if not client or not frappe.db.exists("Customer", client):
         frappe.throw(_("Client introuvable : {0}").format(client))
-    if not frappe.has_permission("Customer", "read"):
+    if not _autorise():
         frappe.throw(_("Accès non autorisé"), frappe.PermissionError)
 
 
@@ -318,7 +330,7 @@ def get_pieces_lot(clients) -> dict:
     """{client: {"texte", "pieces", "revendeur"}} pour les cartes d'un écran (une page de liste)."""
     if isinstance(clients, str):
         clients = json.loads(clients) if clients.strip().startswith("[") else [clients]
-    if not frappe.has_permission("Customer", "read"):
+    if not _autorise():
         frappe.throw(_("Accès non autorisé"), frappe.PermissionError)
     clients = [c for c in clients or [] if c][:300]
     res = PC.pour_clients(clients)

@@ -13,6 +13,9 @@
   const heure = (d) => (d && String(d).length > 10 ? " " + String(d).slice(11, 16) : "");
   const lien = (doctype, nom) => nom
     ? `<a href="/app/${frappe.router.slug(doctype)}/${encodeURIComponent(nom)}" target="_blank">${esc(nom)}</a>` : "";
+  // Le partenaire (rôle « Partenaire » seul) ne voit pas l'historique de nos clients.
+  const ROLES_INTERNES = ["Sales User", "Sales Manager", "Maintenance Manager", "System Manager"];
+  const partenaire_seul = () => frappe.user.has_role("Partenaire") && !ROLES_INTERNES.some((r) => frappe.user.has_role(r));
   const STATUT = { retard: ["hc-r", "En retard"], bientot: ["hc-b", "Bientôt"], ok: ["hc-ok", "À jour"],
                    ancien: ["hc-a", "Ancien"] };
 
@@ -49,12 +52,12 @@
   // ── Bouton et ligne « pièces » sur les cartes ───────────────────────────────
   window.historique_bouton_html = function (client) {
     style();
-    return client ? `<button type="button" class="hc-btn" data-hc-client="${esc(client)}"
+    return client && !partenaire_seul() ? `<button type="button" class="hc-btn" data-hc-client="${esc(client)}"
       title="Historique du client : appels, commentaires, interventions, échéancier, pièces à proposer">📜 Historique</button>` : "";
   };
   window.historique_pieces_html = function (client) {
     style();
-    return client ? `<div class="hc-pieces" data-hc-pieces="${esc(client)}"></div>` : "";
+    return client && !partenaire_seul() ? `<div class="hc-pieces" data-hc-pieces="${esc(client)}"></div>` : "";
   };
   window.historique_remplir_pieces = async function ($racine) {
     const $places = $($racine || document).find("[data-hc-pieces]").filter((_, el) => !el.dataset.hcFait);
@@ -68,15 +71,49 @@
     $places.each((_, el) => {
       const r = res[el.dataset.hcPieces];
       if (!r || r.revendeur || !(r.pieces || []).length) return;
-      el.innerHTML = "🔧 <b>À proposer :</b> " + r.pieces.map((p) => {
-        const [cls] = STATUT[p.statut] || STATUT.ok;
-        const quand = p.statut === "retard"
-          ? (p.retard_jours >= 30 ? `retard ${Math.floor(p.retard_jours / 30)} mois` : "à changer")
-          : `le ${jour(p.echeance)}`;
-        return `<span class="hc-tag ${cls}" title="${esc(p.message || "")}">${esc(p.libelle)} · ${esc(quand)}</span>`;
-      }).join("");
+      el.innerHTML = "🔧 <b>À proposer :</b> " + etiquettes(r.pieces);
     });
   };
+  function etiquettes(pieces) {
+    return pieces.map((p) => {
+      const [cls] = STATUT[p.statut] || STATUT.ok;
+      const quand = p.statut === "retard"
+        ? (p.retard_jours >= 30 ? `retard ${Math.floor(p.retard_jours / 30)} mois` : "à changer")
+        : `le ${jour(p.echeance)}`;
+      return `<span class="hc-tag ${cls}" title="${esc(p.message || "")}">${esc(p.libelle)} · ${esc(quand)}</span>`;
+    }).join("");
+  }
+
+  // ── Fiche « Tache de travail » : pour le technicien chez le client (demande du 07/10/2026) ─────
+  // Bouton dans la barre + bandeau sous l'en-tête. Le conseil (« test de dureté »…) est écrit en clair :
+  // sur téléphone, une infobulle ne s'affiche pas.
+  function bandeau_tache(frm) {
+    $(frm.layout && frm.layout.wrapper).find(".hc-tache").remove();
+    const client = frm.doc.custom_client;
+    if (!client || frm.is_new() || partenaire_seul()) return;
+    style();
+    frm.add_custom_button("📜 Historique client", () => window.ouvrir_historique_client(client));
+    const nom = frm.doc.name;
+    frappe.call({ method: M + "get_pieces_lot", args: { clients: JSON.stringify([client]) } }).then((r) => {
+      // Le Desk est une SPA : si on a changé de fiche pendant l'appel, on ne peint rien.
+      if (frm.doc.name !== nom || frm.doc.custom_client !== client) return;
+      const x = (r.message || {})[client];
+      if (!x || x.revendeur || !(x.pieces || []).length) return;
+      const conseils = [...new Set(x.pieces.map((p) => p.message).filter(Boolean))];
+      const $b = $(`<div class="hc-tache hc-pieces" style="margin:8px 0 10px;padding:8px 12px;border:1px solid
+          rgba(230,126,34,.45);border-radius:8px;background:rgba(230,126,34,.07);font-size:12.5px">
+        🔧 <b>À proposer au client :</b> ${etiquettes(x.pieces)}
+        ${conseils.map((c) => `<div class="m" style="margin-top:3px;font-size:11.5px">💡 ${esc(c)}</div>`).join("")}
+      </div>`);
+      const $w = $(frm.layout.wrapper);
+      const $tabs = $w.find(".form-tabs-list").first();
+      if ($tabs.length) $b.insertBefore($tabs); else $w.prepend($b);
+    });
+  }
+  frappe.ui.form.on("Tache de travail", {
+    refresh: bandeau_tache,
+    custom_client: bandeau_tache,
+  });
 
   $(document).on("click", "[data-hc-client]", (e) => {
     e.preventDefault();
