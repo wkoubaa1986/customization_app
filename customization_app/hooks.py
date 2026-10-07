@@ -516,7 +516,9 @@ app_include_js = [_js("customer_quick_entry.js"),
                   _js("sales_order_annulation.js"),
                   # Bandeau des tâches de travail liées sur la fiche commande :
                   # type d'intervention, employé, statut, durée, date planifiée.
-                  _js("sales_order_tache_details.js")]
+                  _js("sales_order_tache_details.js"),
+                  # 📜 Historique client + « 🔧 À proposer » : listes d'appels, rattrapage, commandes à traiter.
+                  _js("historique_client.js")]
 # Hide filter message shown in the awesomplete dropdown
 app_include_css = ["/assets/customization_app/css/hide_filter_message.css"]
 # doctype_calendar_js = {

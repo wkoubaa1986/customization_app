@@ -9,6 +9,15 @@ frappe.ui.form.on("Config Relances", {
         frm.refresh_field("familles");
       });
     });
+    // Pièces à proposer (07/10/2026) : recopier les règles d'origine pour les ajuster.
+    frm.add_custom_button("↩️ Pièces par défaut", async () => {
+      const r = (await frappe.call({ method: "customization_app.pieces_a_changer.pieces_par_defaut" })).message || [];
+      frappe.confirm(`Remplacer la table des pièces par les ${r.length} règles d’origine ? (à enregistrer ensuite)`, () => {
+        frm.clear_table("pieces");
+        r.forEach((p) => { const row = frm.add_child("pieces"); Object.assign(row, p); });
+        frm.refresh_field("pieces");
+      });
+    });
     frm.dashboard.set_headline("Un champ vide = la valeur historique entre parenthèses. Les trois automatismes relisent ce réglage à chaque passage.");
   },
 });

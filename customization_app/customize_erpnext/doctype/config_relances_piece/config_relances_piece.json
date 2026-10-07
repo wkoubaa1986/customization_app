@@ -1,0 +1,78 @@
+{
+ "actions": [],
+ "creation": "2026-10-07 12:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "cle",
+  "libelle",
+  "intervalle_mois",
+  "mode",
+  "actif",
+  "message"
+ ],
+ "fields": [
+  {
+   "fieldname": "cle",
+   "fieldtype": "Data",
+   "label": "Clé",
+   "reqd": 1,
+   "in_list_view": 1,
+   "columns": 1,
+   "description": "pp, udf, cto, t33, mineral, alcalin, membrane, lampe_uv, resine, porte_filtre — la reconnaissance des articles est dans le code (pieces_a_changer.py)."
+  },
+  {
+   "fieldname": "libelle",
+   "fieldtype": "Data",
+   "label": "Libellé montré à l’opératrice",
+   "in_list_view": 1,
+   "columns": 3
+  },
+  {
+   "fieldname": "intervalle_mois",
+   "fieldtype": "Int",
+   "label": "Tous les (mois)",
+   "in_list_view": 1,
+   "columns": 1,
+   "description": "Pour « Selon historique » : intervalle tant que le client n’a acheté qu’une fois."
+  },
+  {
+   "fieldname": "mode",
+   "fieldtype": "Select",
+   "label": "Mode",
+   "options": "Fixe\nSelon historique",
+   "default": "Fixe",
+   "in_list_view": 1,
+   "columns": 1,
+   "description": "« Selon historique » (porte-filtre) : le rythme auquel CE client rachète la cartouche."
+  },
+  {
+   "fieldname": "actif",
+   "fieldtype": "Check",
+   "label": "Actif",
+   "default": "1",
+   "in_list_view": 1,
+   "columns": 1
+  },
+  {
+   "fieldname": "message",
+   "fieldtype": "Small Text",
+   "label": "Conseil à l’opératrice",
+   "in_list_view": 1,
+   "columns": 3
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-10-07 12:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "Config Relances Piece",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

@@ -309,6 +309,58 @@ def ligne_a_marquer(lignes, delivery_date, famille, famille_de, deja_commande=No
 CHAMPS_RELANCE = ("custom_sms_1", "custom_sms_2", "custom_sms1_status", "custom_sms2_status", "custom_appelle", "custom_1er_appel")
 
 
+def _effaces_en_clair(effaces):
+    """{champ: valeur} → « SMS1 27/07/2026 ✓, SMS2 03/08/2026 ✗, appelé 03/10/2026 ». PURE."""
+    bouts = []
+    for date_champ, statut_champ, libelle in (("custom_sms_1", "custom_sms1_status", "SMS1"),
+                                              ("custom_sms_2", "custom_sms2_status", "SMS2")):
+        if effaces.get(date_champ):
+            statut = effaces.get(statut_champ)
+            marque = "" if not statut else (" ✓" if statut == "Success" else " ✗ " + str(statut))
+            bouts.append("{0} {1}{2}".format(libelle, _jj(effaces[date_champ]), marque))
+    for champ, libelle in (("custom_1er_appel", "1er appel"), ("custom_appelle", "appelé")):
+        if effaces.get(champ):
+            bouts.append("{0} {1}".format(libelle, _jj(effaces[champ])))
+    return ", ".join(bouts)
+
+
+def _jj(d):
+    return getdate(d).strftime("%d/%m/%Y") if d else ""
+
+
+def texte_decalage(item_code, ancienne, livraison, sales_order, decalage, deplacees):
+    """La trace d'un décalage, en clair. PURE.
+
+    ⚠️ C'EST LA SEULE MÉMOIRE DE CE QUI EST EFFACÉ. L'échéancier n'a pas de suivi des modifications : une visite repoussée
+    perd ses dates de SMS et d'appel, et rien ne disait plus qu'elle avait été relancée (constaté le 07/10/2026 en
+    construisant l'historique client). Ce commentaire est relu par le panneau « Historique client ».
+    `deplacees` : [(date avant, date après, {champ: valeur effacée})]."""
+    tete = "📅 Visite {0} du {1} réalisée par {2} (livraison du {3})".format(
+        item_code, _jj(ancienne), sales_order, _jj(livraison))
+    if not deplacees:
+        return tete + "."
+    bouts = []
+    for avant, apres, effaces in deplacees:
+        b = "{0} → {1}".format(_jj(avant), _jj(apres))
+        clair = _effaces_en_clair(effaces or {})
+        if clair:
+            b += " (effacés : {0})".format(clair)
+        bouts.append(b)
+    return "{0}. {1} visite(s) suivante(s) décalée(s) de {2} j : {3}.".format(
+        tete, len(deplacees), decalage, " ; ".join(bouts))
+
+
+def _tracer(ms, texte):
+    """Commentaire Info sur l'échéancier ; jamais bloquant (un échec de trace ne doit pas défaire le décalage)."""
+    add = getattr(ms, "add_comment", None)
+    if not callable(add):
+        return
+    try:
+        add("Info", texte)
+    except Exception:
+        log(f"[UPDATE] trace de décalage non écrite sur {getattr(ms, 'name', '?')}")
+
+
 def shift_schedule_for_delivery(target_ms, delivery_date, sales_order, famille=None, fams=None, cache=None, aujourd_hui=None):
     """Marque la visite de la famille concernée comme réalisée par la commande, et décale les visites SUIVANTES du même
     article d'autant. Les autres machines de l'échéancier et les visites déjà réalisées ne bougent pas ; une commande
@@ -328,20 +380,27 @@ def shift_schedule_for_delivery(target_ms, delivery_date, sales_order, famille=N
     ref.custom_sales_order = sales_order
     ref.completion_status = "Fully Completed"
     ref.scheduled_date = delivery_date
+    deplacees = []
     for r in lignes:
         if r is ref or r.item_code != ref.item_code or not r.scheduled_date:
             continue
         if getdate(r.scheduled_date) > ancienne and not getattr(r, "actual_date", None):
             etait_passee = getdate(r.scheduled_date) <= delivery_date
+            avant = getdate(r.scheduled_date)
             r.scheduled_date = add_days(getdate(r.scheduled_date), decalage)
+            effaces = {}
             # Une visite repoussée du passé vers l'avenir redevient une visite NEUVE : ses SMS et appels d'alors ne
             # comptent plus (sinon elle ne serait plus jamais relancée).
             if etait_passee and getdate(r.scheduled_date) > delivery_date:
                 for champ in CHAMPS_RELANCE:
+                    if getattr(r, champ, None):
+                        effaces[champ] = getattr(r, champ)
                     setattr(r, champ, None)
+            deplacees.append((avant, getdate(r.scheduled_date), effaces))
     extend_schedule_for_sms(target_ms, aujourd_hui=aujourd_hui)
     target_ms.flags.ignore_permissions = True
     target_ms.save()
+    _tracer(target_ms, texte_decalage(ref.item_code, ancienne, delivery_date, sales_order, decalage, deplacees))
     log(f"[UPDATE] {target_ms.name} ({target_ms.customer}) : visite {ref.item_code} du {ancienne} réalisée par {sales_order}, "
         f"suivantes décalées de {decalage} j")
     _reactiver_client(target_ms.customer)

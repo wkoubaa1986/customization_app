@@ -311,7 +311,9 @@ class CommandesATraiter {
             ${c.commandes_client > 1
               ? `<div><span class="ct-badge b-warn ct-multi" data-client="${esc(c.client)}"
                      style="cursor:pointer" title="Ouvrir les ${c.commandes_client} commandes de ce client sur la période"
-                     >🧾 ${c.commandes_client} commandes</span></div>` : ""}</td>
+                     >🧾 ${c.commandes_client} commandes</span></div>` : ""}
+            ${window.historique_bouton_html ? `<div style="margin-top:3px">${window.historique_bouton_html(c.client)}</div>` : ""}
+            ${window.historique_pieces_html ? window.historique_pieces_html(c.client) : ""}</td>
         <td class="ct-adr">${esc(c.adresse || "—")}
             <div>${c.secteur
               ? `<span class="ct-badge b-info">📍 ${esc(c.secteur)}</span>`
@@ -329,6 +331,8 @@ class CommandesATraiter {
       ? `${this.start + 1}–${fin} sur ${this.data.total}` : "—");
     $("#ct-all").prop("checked", false);
     this._maj_compte();
+    // « 🔧 À proposer » : un seul appel serveur pour toute la page (historique_client.js).
+    if (window.historique_remplir_pieces) window.historique_remplir_pieces($("#ct-body"));
   }
 
   _maj_compte() {
