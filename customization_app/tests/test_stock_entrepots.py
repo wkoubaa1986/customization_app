@@ -88,6 +88,12 @@ class TestStockEntrepots(unittest.TestCase):
         self.assertEqual([(a["item_code"], a["qte"]) for a in sorties["articles"]], [(i2, 4)])
         ligne = S.get_sorties_article(i2, self.essai, today, today)["lignes"][0]
         self.assertEqual((ligne["libelle"], ligne["vers"], ligne["qte"]), ("Transfert", self.magasin, 4))
+        # Le même transfert vu de l'autre côté : une ENTRÉE, avec son origine (08/10/2026).
+        entrees = S.get_mouvements(S.ENTREES, self.essai, today, today)
+        self.assertEqual(([(a["item_code"], a["qte"]) for a in entrees["articles"]], entrees["sens"]), ([(i1, 3)], "entrees"))
+        ligne = S.get_mouvements_article(i1, S.ENTREES, self.essai, today, today)["lignes"][0]
+        self.assertEqual((ligne["libelle"], ligne["de"], ligne["qte"], ligne["demande_par"]),
+                         ("Transfert", self.magasin, 3, frappe.utils.get_fullname("Administrator")))
 
         etat = next(w for w in S.entrepots_a_zero()["entrepots"] if w["name"] == self.essai)
         self.assertEqual((etat["negatifs"], etat["positifs"]), (1, 1))
@@ -179,6 +185,41 @@ class TestSortiesEnrichies(unittest.TestCase):
         self.assertEqual((ligne["libelle"], ligne["commande"]), ("BL", row[0].commande))
         self.assertTrue(ligne["taches"])
         self.assertTrue(all(t["name"] and "employe" in t and "type" in t for t in ligne["taches"]))
+
+
+class TestEntreesOrigine(unittest.TestCase):
+    """Sous-onglet Entrées (08/10/2026) : chaque entrée dit son origine, comme une sortie sa destination."""
+
+    def _entree(self, voucher_type, jointure="", condition="1=1"):
+        import frappe
+        row = frappe.db.sql(f"""select sle.posting_date, sle.posting_time, sle.warehouse, sle.voucher_type, sle.voucher_no,
+                                       sle.voucher_detail_no, sle.actual_qty as qte
+                                from `tabStock Ledger Entry` sle {jointure}
+                                where sle.voucher_type = %s and sle.is_cancelled = 0 and sle.actual_qty > 0 and {condition}
+                                order by sle.posting_date desc limit 1""", voucher_type, as_dict=True)
+        if not row:
+            self.skipTest("aucune entrée %s" % voucher_type)
+        return row[0], S.enrichir_mouvements(row)[0]
+
+    def test_achat_donne_le_fournisseur(self):
+        import frappe
+        row, ligne = self._entree("Purchase Invoice")
+        pi = frappe.db.get_value("Purchase Invoice", row.voucher_no, ["supplier_name", "bill_no"], as_dict=True)
+        self.assertEqual((ligne["libelle"], ligne["fournisseur"], ligne["facture_fournisseur"]),
+                         ("Facture d’achat", pi.supplier_name, pi.bill_no))
+
+    def test_bl_retour_donne_le_bl_d_origine_et_la_commande(self):
+        row, ligne = self._entree("Delivery Note", "join `tabDelivery Note` dn on dn.name = sle.voucher_no "
+                                  "join `tabDelivery Note Item` dni on dni.name = sle.voucher_detail_no",
+                                  "dn.is_return = 1 and dn.return_against is not null and ifnull(dni.against_sales_order, '') != ''")
+        self.assertEqual(ligne["libelle"], "BL retour")
+        self.assertTrue(ligne["retour_de"] and ligne["commande"] and ligne["client"])
+
+    def test_transfert_donne_l_entrepot_d_origine(self):
+        row, ligne = self._entree("Stock Entry", "join `tabStock Entry Detail` d on d.name = sle.voucher_detail_no",
+                                  "d.s_warehouse is not null")
+        self.assertTrue(ligne["de"] and ligne["de"] != row.warehouse)
+        self.assertTrue(ligne["demande_par"])
 
 
 class TestDoubleValidation(unittest.TestCase):

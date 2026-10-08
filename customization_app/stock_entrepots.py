@@ -3,8 +3,10 @@
 Quatre onglets :
 - Solde : le stock d'un entrepôt (ou de tous), article par article. Un employé dont la fiche porte un
   entrepôt (Employee.custom_warehouse : le stock de son véhicule) le voit par défaut.
-- Sorties : sur une période, les sorties de stock par article ; pour chaque sortie, la pièce (BL,
-  facture, transfert…), la commande et les tâches de cette commande (Tache de travail.commande_client).
+- Entrées / Sorties : sur une période, les mouvements de stock par article, en deux sous-onglets ; pour
+  chaque sortie, la pièce (BL, facture, transfert…), la commande et les tâches de cette commande (Tache de
+  travail.commande_client) ; pour chaque entrée, son origine (transfert depuis tel entrepôt et qui l'a validé,
+  achat et fournisseur, BL retour et sa commande, rapprochement d'une vérification).
 - Transfert (responsable magasin) : écriture de stock « Transfer interne » d'un entrepôt à un autre ; seuls
   les articles suivis en stock sont proposés. Seuls les trajets du réglage sont permis (05/10/2026 : Hall ↔
   Magasin seulement, jamais véhicule → Hall). Un trajet qui touche un véhicule (Magasin ↔ véhicule, véhicule ↔
@@ -248,7 +250,13 @@ def get_solde(entrepot=None, recherche=None, negatifs=0, a_reappro=0):
     return out
 
 
-# ── Sorties ──────────────────────────────────────────────────────────────────
+# ── Entrées / Sorties ────────────────────────────────────────────────────────
+# Les deux sous-onglets lisent le même grand livre : une sortie est une ligne négative, une entrée une ligne
+# positive. L'entrée dit son ORIGINE comme la sortie dit sa destination (08/10/2026) : transfert (depuis quel
+# entrepôt, demandé et validé par qui), achat (fournisseur, facture, commande d'achat), BL retour (BL d'origine,
+# commande, client, tâches), rapprochement (la vérification qui l'a produit).
+ENTREES, SORTIES = "entrees", "sorties"
+
 
 def _periode(debut, fin) -> tuple[str, str]:
     fin = getdate(fin or nowdate())
@@ -258,10 +266,14 @@ def _periode(debut, fin) -> tuple[str, str]:
     return str(debut), str(fin)
 
 
-def _conditions_sorties(entrepot, debut, fin, valeurs: dict) -> list[str]:
+def _sens(sens) -> str:
+    return ENTREES if sens == ENTREES else SORTIES
+
+
+def _conditions_mouvements(sens, entrepot, debut, fin, valeurs: dict) -> list[str]:
     valeurs.update({"debut": debut, "fin": fin, "societe": _societe()})
-    conds = ["sle.is_cancelled = 0", "sle.actual_qty < 0", "sle.posting_date between %(debut)s and %(fin)s",
-             "sle.company = %(societe)s"]
+    conds = ["sle.is_cancelled = 0", "sle.actual_qty > 0" if _sens(sens) == ENTREES else "sle.actual_qty < 0",
+             "sle.posting_date between %(debut)s and %(fin)s", "sle.company = %(societe)s"]
     if entrepot:
         conds.append("sle.warehouse = %(entrepot)s")
         valeurs["entrepot"] = entrepot
@@ -269,17 +281,19 @@ def _conditions_sorties(entrepot, debut, fin, valeurs: dict) -> list[str]:
 
 
 @frappe.whitelist()
-def get_sorties(entrepot=None, debut=None, fin=None, recherche=None):
-    """Sorties de stock de la période, totalisées par article (le détail se charge à l'ouverture d'un article)."""
+def get_mouvements(sens=SORTIES, entrepot=None, debut=None, fin=None, recherche=None):
+    """Entrées ou sorties de stock de la période, totalisées par article (le détail se charge à l'ouverture
+    d'un article). Quantités toujours positives : le sens dit si elles entrent ou sortent."""
     _lecture()
+    sens = _sens(sens)
     debut, fin = _periode(debut, fin)
     valeurs = {}
-    conds = _conditions_sorties(entrepot, debut, fin, valeurs)
+    conds = _conditions_mouvements(sens, entrepot, debut, fin, valeurs)
     mots = _filtre_mots(recherche, valeurs)
     if mots:
         conds.append(mots)
     rows = frappe.db.sql(f"""select sle.item_code, i.item_name, i.image, i.stock_uom as uom,
-                                    sum(-sle.actual_qty) as qte, count(*) as mouvements,
+                                    sum(abs(sle.actual_qty)) as qte, count(*) as mouvements,
                                     max(sle.posting_date) as derniere
                              from `tabStock Ledger Entry` sle
                              join tabItem i on i.name = sle.item_code
@@ -289,23 +303,36 @@ def get_sorties(entrepot=None, debut=None, fin=None, recherche=None):
     for r in rows:
         r.qte = flt(r.qte, 6)
         r.derniere = str(r.derniere)
-    return {"articles": rows, "debut": debut, "fin": fin, "mouvements": sum(cint(r.mouvements) for r in rows)}
+    return {"articles": rows, "debut": debut, "fin": fin, "sens": sens,
+            "mouvements": sum(cint(r.mouvements) for r in rows)}
 
 
 @frappe.whitelist()
-def get_sorties_article(item_code, entrepot=None, debut=None, fin=None):
-    """Chaque sortie de l'article sur la période : pièce, commande, client, tâches de la commande."""
+def get_mouvements_article(item_code, sens=SORTIES, entrepot=None, debut=None, fin=None):
+    """Chaque entrée (ou sortie) de l'article sur la période : pièce, origine (ou destination), commande,
+    client, tâches de la commande."""
     _lecture()
     debut, fin = _periode(debut, fin)
     valeurs = {"item": item_code, "limite": LIMITE_DETAIL}
-    conds = _conditions_sorties(entrepot, debut, fin, valeurs) + ["sle.item_code = %(item)s"]
+    conds = _conditions_mouvements(sens, entrepot, debut, fin, valeurs) + ["sle.item_code = %(item)s"]
     rows = frappe.db.sql(f"""select sle.posting_date, sle.posting_time, sle.warehouse, sle.voucher_type, sle.voucher_no,
-                                    sle.voucher_detail_no, -sle.actual_qty as qte
+                                    sle.voucher_detail_no, abs(sle.actual_qty) as qte
                              from `tabStock Ledger Entry` sle
                              where {" and ".join(conds)}
                              order by sle.posting_date desc, sle.posting_time desc, sle.creation desc
                              limit %(limite)s""", valeurs, as_dict=True)
-    return {"lignes": enrichir_sorties(rows), "limite": LIMITE_DETAIL}
+    return {"lignes": enrichir_mouvements(rows), "limite": LIMITE_DETAIL, "sens": _sens(sens)}
+
+
+@frappe.whitelist()
+def get_sorties(entrepot=None, debut=None, fin=None, recherche=None):
+    """Compatibilité (écran d'avant le 08/10/2026 resté ouvert) : les sorties seules."""
+    return get_mouvements(SORTIES, entrepot, debut, fin, recherche)
+
+
+@frappe.whitelist()
+def get_sorties_article(item_code, entrepot=None, debut=None, fin=None):
+    return get_mouvements_article(item_code, SORTIES, entrepot, debut, fin)
 
 
 def _par_nom(doctype: str, noms, champs: list[str]) -> dict:
@@ -315,46 +342,81 @@ def _par_nom(doctype: str, noms, champs: list[str]) -> dict:
     return {r.name: r for r in frappe.get_all(doctype, filters={"name": ["in", noms]}, fields=["name"] + champs)}
 
 
-def enrichir_sorties(rows: list[dict]) -> list[dict]:
-    """Ajoute à chaque sortie du grand livre sa pièce lisible, sa commande, son client et ses tâches."""
+def _nom_utilisateur(user: str | None) -> str | None:
+    return frappe.utils.get_fullname(user) if user else None
+
+
+def enrichir_mouvements(rows: list[dict]) -> list[dict]:
+    """Ajoute à chaque ligne du grand livre (entrée ou sortie) sa pièce lisible et ce qui l'explique :
+    commande, client et tâches (BL, facture), entrepôt d'origine / de destination et auteurs (transfert),
+    fournisseur et commande d'achat (achat), vérification (rapprochement)."""
     par_type = {}
     for r in rows:
         par_type.setdefault(r.voucher_type, []).append(r)
-    bl_lignes = _par_nom("Delivery Note Item", [r.voucher_detail_no for r in par_type.get("Delivery Note", [])],
-                         ["against_sales_order"])
-    bls = _par_nom("Delivery Note", [r.voucher_no for r in par_type.get("Delivery Note", [])],
-                   ["customer_name", "custom_commande", "`custom_livré_par` as livre_par", "is_return"])
-    fa_lignes = _par_nom("Sales Invoice Item", [r.voucher_detail_no for r in par_type.get("Sales Invoice", [])],
-                         ["sales_order"])
-    fas = _par_nom("Sales Invoice", [r.voucher_no for r in par_type.get("Sales Invoice", [])],
-                   ["customer_name", "is_return"])
-    se_lignes = _par_nom("Stock Entry Detail", [r.voucher_detail_no for r in par_type.get("Stock Entry", [])],
-                         ["t_warehouse"])
-    ses = _par_nom("Stock Entry", [r.voucher_no for r in par_type.get("Stock Entry", [])],
-                   ["stock_entry_type", "purpose", "remarks"])
+
+    def lignes(doctype_ligne, voucher_type, champs):
+        return _par_nom(doctype_ligne, [r.voucher_detail_no for r in par_type.get(voucher_type, [])], champs)
+
+    def pieces(voucher_type, champs):
+        return _par_nom(voucher_type, [r.voucher_no for r in par_type.get(voucher_type, [])], champs)
+
+    bl_lignes = lignes("Delivery Note Item", "Delivery Note", ["against_sales_order"])
+    bls = pieces("Delivery Note", ["customer_name", "custom_commande", "`custom_livré_par` as livre_par", "is_return",
+                                   "return_against"])
+    fa_lignes = lignes("Sales Invoice Item", "Sales Invoice", ["sales_order"])
+    fas = pieces("Sales Invoice", ["customer_name", "is_return", "return_against"])
+    se_lignes = lignes("Stock Entry Detail", "Stock Entry", ["s_warehouse", "t_warehouse"])
+    ses = pieces("Stock Entry", ["stock_entry_type", "purpose", "remarks", "owner"]
+                 + ([CHAMP_VALIDE_PAR] if frappe.db.has_column("Stock Entry", CHAMP_VALIDE_PAR) else []))
+    pr_lignes = lignes("Purchase Receipt Item", "Purchase Receipt", ["purchase_order"])
+    prs = pieces("Purchase Receipt", ["supplier_name", "is_return", "return_against"])
+    pi_lignes = lignes("Purchase Invoice Item", "Purchase Invoice", ["purchase_order"])
+    pis = pieces("Purchase Invoice", ["supplier_name", "bill_no", "is_return", "return_against"])
+    rapprochements = [r.voucher_no for r in par_type.get("Stock Reconciliation", [])]
+    verifs = ({v.rapprochement: v.name for v in frappe.get_all(VERIF, filters={"rapprochement": ["in", rapprochements]},
+                                                              fields=["name", "rapprochement"])}
+              if rapprochements else {})
     livreurs = _par_nom("Employee", [b.livre_par for b in bls.values()], ["employee_name"])
 
     out = []
     for r in rows:
-        l = {"date": str(r.posting_date), "heure": str(r.posting_time or "")[:5], "entrepot": r.warehouse,
+        # _heure : « 9:20:38 » (timedelta) → « 09:20 » ; le découpage [:5] donnait « 9:20: » avant 10 h.
+        l = {"date": str(r.posting_date), "heure": _heure(r.posting_time) if r.posting_time else "", "entrepot": r.warehouse,
              "qte": flt(r.qte, 6), "type": r.voucher_type, "libelle": LIBELLES_PIECE.get(r.voucher_type, r.voucher_type),
-             "piece": r.voucher_no, "commande": None, "client": None, "vers": None, "par": None, "taches": []}
+             "piece": r.voucher_no, "commande": None, "client": None, "de": None, "vers": None, "par": None,
+             "demande_par": None, "valide_par": None, "retour_de": None, "fournisseur": None,
+             "facture_fournisseur": None, "commande_achat": None, "verification": None, "taches": []}
         if r.voucher_type == "Delivery Note":
             bl = bls.get(r.voucher_no) or {}
             l["commande"] = (bl_lignes.get(r.voucher_detail_no) or {}).get("against_sales_order") or bl.get("custom_commande")
             l["client"] = bl.get("customer_name")
             l["par"] = (livreurs.get(bl.get("livre_par")) or {}).get("employee_name")
             if bl.get("is_return"):
-                l["libelle"] = "BL retour"
+                l["libelle"], l["retour_de"] = "BL retour", bl.get("return_against")
         elif r.voucher_type == "Sales Invoice":
             fa = fas.get(r.voucher_no) or {}
             l["commande"] = (fa_lignes.get(r.voucher_detail_no) or {}).get("sales_order")
             l["client"] = fa.get("customer_name")
+            if fa.get("is_return"):
+                l["libelle"], l["retour_de"] = "Avoir", fa.get("return_against")
         elif r.voucher_type == "Stock Entry":
-            se = ses.get(r.voucher_no) or {}
-            l["vers"] = (se_lignes.get(r.voucher_detail_no) or {}).get("t_warehouse")
+            se, sl = ses.get(r.voucher_no) or {}, se_lignes.get(r.voucher_detail_no) or {}
+            l["de"], l["vers"] = sl.get("s_warehouse"), sl.get("t_warehouse")
             l["libelle"] = "Transfert" if se.get("purpose") == PURPOSE else (se.get("stock_entry_type") or l["libelle"])
             l["remarque"] = (se.get("remarks") or "")[:140]
+            l["demande_par"] = _nom_utilisateur(se.get("owner"))
+            l["valide_par"] = _nom_utilisateur(se.get(CHAMP_VALIDE_PAR))
+        elif r.voucher_type in ("Purchase Receipt", "Purchase Invoice"):
+            achat = (prs if r.voucher_type == "Purchase Receipt" else pis).get(r.voucher_no) or {}
+            ligne = (pr_lignes if r.voucher_type == "Purchase Receipt" else pi_lignes).get(r.voucher_detail_no) or {}
+            l["fournisseur"], l["commande_achat"] = achat.get("supplier_name"), ligne.get("purchase_order")
+            l["facture_fournisseur"] = achat.get("bill_no")
+            if achat.get("is_return"):
+                l["retour_de"] = achat.get("return_against")
+            else:
+                l["libelle"] = "Réception d’achat" if r.voucher_type == "Purchase Receipt" else "Facture d’achat"
+        elif r.voucher_type == "Stock Reconciliation":
+            l["verification"] = verifs.get(r.voucher_no)
         out.append(l)
 
     taches = _taches_des_commandes({l["commande"] for l in out if l["commande"]})
@@ -364,6 +426,9 @@ def enrichir_sorties(rows: list[dict]) -> list[dict]:
                                                                                - getdate(l["date"])).days))
             l["taches"] = proches[:3]
     return out
+
+
+enrichir_sorties = enrichir_mouvements      # nom d'avant le 08/10/2026
 
 
 def _taches_des_commandes(commandes: set[str]) -> dict[str, list[dict]]:

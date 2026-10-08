@@ -2,9 +2,10 @@
  * « Stock par entrepôt » — le stock vu du téléphone.
  *
  *  - Solde : le stock d'un entrepôt (ou de tous). L'employé qui a un entrepôt (son véhicule) le voit par défaut.
- *    Toucher un article ouvre ses sorties.
- *  - Sorties : sur une période, les sorties par article ; chaque sortie dit sa pièce, sa commande, son client
- *    et les tâches de la commande.
+ *    Toucher un article ouvre ses mouvements (entrées / sorties).
+ *  - Entrées / Sorties : sur une période, les mouvements par article, en deux sous-onglets. Chaque sortie dit
+ *    sa pièce, sa commande, son client et les tâches de la commande ; chaque entrée dit son origine (transfert
+ *    depuis tel entrepôt et qui l’a validé, achat et fournisseur, BL retour et sa commande, rapprochement).
  *  - Transfert (responsable magasin) : d'un entrepôt à un autre, sur les trajets du réglage ; un trajet qui
  *    touche un véhicule est en double validation (l'employé ↔ un responsable magasin, en va-et-vient).
  *  - À zéro (responsable magasin) : ramène un entrepôt à zéro par transferts avec le Magasin, pour que
@@ -41,6 +42,7 @@ class StockEntrepots {
     this.reappro = false;
     this.selSolde = new Set();
     this.periode = "30j";
+    this.sensMvt = "sorties";   // sous-onglet Entrées / Sorties (≠ sens(), le De → Vers du transfert)
     this.panier = [];
     this.jetons = {};
     this.init();
@@ -77,6 +79,11 @@ class StockEntrepots {
       this.chargerSorties();
     });
     r.find("#se-debut, #se-fin").on("change", () => this.chargerSorties());
+    r.find("#se-sens .se-sous").on("click", (e) => {
+      this.sensMvt = $(e.currentTarget).attr("data-sens");
+      r.find("#se-sens .se-sous").each((_, el) => $(el).toggleClass("on", $(el).attr("data-sens") === this.sensMvt));
+      this.chargerSorties();
+    });
     if (ctx.responsable) this.initTransfert();
     r.find("#se-s-attente").on("click", "[data-valider]", (e) => this.ouvrirValidation($(e.currentTarget).attr("data-valider")));
     r.find("#se-s-attente").on("click", "[data-verif]", (e) => { this.comptage = $(e.currentTarget).attr("data-verif"); this.montrer("verif"); });
@@ -96,12 +103,14 @@ class StockEntrepots {
       <p class="se-note">Le <b>Magasin</b> est la référence ; chaque employé a le stock de son véhicule${mien ? ` (le vôtre : <b>${mien}</b>, affiché en premier)` : ""}. Un transfert qui touche un véhicule (avec le Magasin ou les Articles défectueux) est en <b>double validation</b> : l’employé du véhicule et un responsable magasin doivent être d’accord sur les quantités.</p>
       <div class="et"><div class="t">📦 Solde — ce qu’il y a dans un stock</div><ul>
         <li>Choisissez un stock (pastilles) ou « Tous » ; cherchez un article ; « ⚠️ Négatifs » montre les quantités en dessous de zéro.</li>
-        <li>Toucher un article ouvre ses sorties.</li>
+        <li>Toucher un article ouvre ses entrées / sorties.</li>
         ${resp ? `<li>Cochez des articles (Maj + clic = plage) → « 🔁 Transférer depuis le Magasin » vers un véhicule, ou « 🎯 Dans le stock cible ».</li>
         <li>« 🎯 Stock cible » : ce que le véhicule doit contenir ; « 🔻 À réappro. » liste ce qui manque ; « Réassort » prépare le transfert en un geste.</li>` : ""}
         <li>Un bandeau en haut vous signale ce qui attend votre geste : un transfert à valider, une vérification à valider ou à accepter.</li></ul></div>
-      <div class="et"><div class="t">📤 Sorties — ce qui est parti, et pour qui</div><ul>
-        <li>Par période (7 j, 30 j, mois, dates) ; chaque sortie dit sa pièce (BL, facture, transfert), la commande et les tâches de cette commande.</li></ul></div>
+      <div class="et"><div class="t">↕️ Entrées / Sorties — ce qui est arrivé, ce qui est parti</div><ul>
+        <li>Par période (7 j, 30 j, mois, dates), deux sous-onglets : 📥 Entrées et 📤 Sorties.</li>
+        <li>📤 Chaque sortie dit sa pièce (BL, facture, transfert), la commande et les tâches de cette commande.</li>
+        <li>📥 Chaque entrée dit son origine : transfert depuis quel stock (demandé et validé par qui), achat (fournisseur, n° de facture), BL retour d’un client (commande et tâches), rapprochement d’une vérification.</li></ul></div>
       ${resp ? `<div class="et"><div class="t">🔁 Transfert — d’un stock à un autre</div><ul>
         <li>Choisissez De / Vers (⇄ inverse). Cherchez un article, indiquez la quantité, touchez ＋ : il entre dans le panier. Corrigez les quantités, puis « Valider le transfert ».</li>
         <li>« 🎯 Compléter selon le stock cible » remplit le panier avec ce qui manque au véhicule (sa cible, sinon le modèle générique des réglages).</li>
@@ -505,14 +514,14 @@ class StockEntrepots {
     frappe.show_alert({ message: `${items.length} article(s) dans le panier — vérifiez les quantités puis validez`, indicator: "blue" }, 5);
   }
 
-  /** Depuis le solde : les sorties de cet article, détail déjà ouvert. */
+  /** Depuis le solde : les mouvements de cet article (sous-onglet en cours), détail déjà ouvert. */
   voirSorties(item) {
     this.$r.find("#se-o-recherche").val(item);
     this.ouvrirApres = item;
     this.montrer("sorties");
   }
 
-  // ── Sorties ────────────────────────────────────────────────────────────
+  // ── Entrées / Sorties ──────────────────────────────────────────────────
   periodeDates() {
     const auj = frappe.datetime.get_today(), debutMois = frappe.datetime.month_start();
     switch (this.periode) {
@@ -528,7 +537,7 @@ class StockEntrepots {
 
   async chargerSorties() {
     const r = this.$r, [debut, fin] = this.periodeDates();
-    const res = await this.appel("sorties", "get_sorties", { entrepot: this.entrepot || null, debut, fin,
+    const res = await this.appel("sorties", "get_mouvements", { sens: this.sensMvt, entrepot: this.entrepot || null, debut, fin,
       recherche: r.find("#se-o-recherche").val() || null });
     if (!res) return;
     this.sorties = res;
@@ -541,20 +550,21 @@ class StockEntrepots {
   }
 
   peindreSorties() {
-    const r = this.$r, res = this.sorties;
+    const r = this.$r, res = this.sorties, entree = res.sens === "entrees";
+    const mot = entree ? "entrée(s)" : "sortie(s)", signe = entree ? "+" : "−", classe = entree ? "pos" : "neg";
     const qte = res.articles.reduce((s, a) => s + a.qte, 0);
-    r.find("#se-o-info").html(`${res.articles.length} article(s) · ${res.mouvements} sortie(s) · ${se_q(qte)} unité(s)`
+    r.find("#se-o-info").html(`${res.articles.length} article(s) · ${res.mouvements} ${mot} · ${se_q(qte)} unité(s)`
       + ` · du ${se_dt(res.debut)} au ${se_dt(res.fin)} · ${this.entrepot ? se_esc(this.libelle(this.entrepot)) : "tous les entrepôts"}`);
     const cartes = res.articles.slice(0, this.nSorties).map((a) => `<div class="se-sortie" data-item="${se_esc(a.item_code)}">
         <div class="se-art">${se_img(a.image)}
           <div class="txt"><div class="se-nom">${se_esc(a.item_name || a.item_code)}</div>
-            <div class="se-code">${se_esc(a.item_code)} · ${a.mouvements} sortie(s) · dernière le ${se_dt(a.derniere)}</div></div>
-          <div class="se-qte neg">−${se_q(a.qte)}<small>${se_esc(a.uom || "")}</small></div>
+            <div class="se-code">${se_esc(a.item_code)} · ${a.mouvements} ${mot} · dernière le ${se_dt(a.derniere)}</div></div>
+          <div class="se-qte ${classe}">${signe}${se_q(a.qte)}<small>${se_esc(a.uom || "")}</small></div>
           <span class="fleche">▶</span>
         </div>
         <div class="se-lignes" style="display:none"></div>
       </div>`).join("");
-    r.find("#se-o-liste").html((cartes || `<div class="se-vide">Aucune sortie sur cette période.</div>`)
+    r.find("#se-o-liste").html((cartes || `<div class="se-vide">Aucune ${entree ? "entrée" : "sortie"} sur cette période.</div>`)
       + (res.articles.length > this.nSorties ? `<button type="button" class="btn btn-default se-plus">Afficher plus (${res.articles.length - this.nSorties})</button>` : ""));
     r.find("#se-o-liste .se-plus").on("click", () => { this.nSorties += SE_PAGE; this.peindreSorties(); });
     r.find("#se-o-liste .se-sortie > .se-art").on("click", (e) => this.basculerSortie($(e.currentTarget).closest(".se-sortie").attr("data-item")));
@@ -568,9 +578,9 @@ class StockEntrepots {
     $c.addClass("ouvert");
     $l.show().html(`<div class="se-note" style="padding:8px 0">Chargement…</div>`);
     if (!this.details[item]) {
-      const [debut, fin] = [this.sorties.debut, this.sorties.fin];
-      const res = (await frappe.call({ method: SE_API + "get_sorties_article",
-        args: { item_code: item, entrepot: this.entrepot || null, debut, fin } })).message;
+      const [debut, fin, sens] = [this.sorties.debut, this.sorties.fin, this.sorties.sens];
+      const res = (await frappe.call({ method: SE_API + "get_mouvements_article",
+        args: { item_code: item, sens, entrepot: this.entrepot || null, debut, fin } })).message;
       this.details[item] = res;
     }
     const d = this.details[item];
@@ -579,9 +589,19 @@ class StockEntrepots {
   }
 
   ligneSortie(l) {
-    const p = [`<div><b>${se_dt(l.date)}</b> ${se_esc(l.heure)} · <b class="neg">−${se_q(l.qte)}</b>`
+    const entree = this.sorties.sens === "entrees";
+    const p = [`<div><b>${se_dt(l.date)}</b> ${se_esc(l.heure)} · `
+      + (entree ? `<b class="pos">+${se_q(l.qte)}</b>` : `<b class="neg">−${se_q(l.qte)}</b>`)
       + (this.entrepot ? "" : ` <span class="se-badge">${se_esc(this.libelle(l.entrepot))}</span>`) + `</div>`];
-    p.push(`<div>${se_lien(l.type, l.piece, `${l.libelle} ${l.piece}`)}${l.vers ? ` → <b>${se_esc(this.libelle(l.vers))}</b>` : ""}</div>`);
+    // Une entrée dit d’où elle vient, une sortie où elle va.
+    const autre = entree ? (l.de ? ` ← depuis <b>${se_esc(this.libelle(l.de))}</b>` : "") : (l.vers ? ` → <b>${se_esc(this.libelle(l.vers))}</b>` : "");
+    p.push(`<div>${se_lien(l.type, l.piece, `${l.libelle} ${l.piece}`)}${autre}</div>`);
+    if (l.retour_de) p.push(`<div class="l3">↩️ retour de ${se_lien(l.type, l.retour_de)}</div>`);
+    if (l.fournisseur) p.push(`<div>🏭 ${se_esc(l.fournisseur)}${l.facture_fournisseur ? ` <span class="l3">· facture n° ${se_esc(l.facture_fournisseur)}</span>` : ""}</div>`);
+    if (l.commande_achat) p.push(`<div class="l3">📋 commande d’achat ${se_lien("Purchase Order", l.commande_achat)}</div>`);
+    if (l.verification) p.push(`<div>✅ ${se_lien("Verification Stock", l.verification, `Vérification ${l.verification}`)}</div>`);
+    if (l.demande_par || l.valide_par) p.push(`<div class="l3">✍️ ${l.demande_par ? `demandé par ${se_esc(l.demande_par)}` : ""}`
+      + `${l.demande_par && l.valide_par ? " · " : ""}${l.valide_par ? `validé par ${se_esc(l.valide_par)}` : ""}</div>`);
     if (l.commande) p.push(`<div>🧾 ${se_lien("Sales Order", l.commande)}${l.client ? ` · ${se_esc(l.client)}` : ""}</div>`);
     else if (l.client) p.push(`<div>👤 ${se_esc(l.client)} <span class="l3">· sans commande</span></div>`);
     if (l.par) p.push(`<div class="l3">🚚 livré par ${se_esc(l.par)}</div>`);

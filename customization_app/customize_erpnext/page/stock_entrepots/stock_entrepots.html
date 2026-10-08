@@ -48,6 +48,11 @@
     .se-mvt .l3 { font-size: 12px; color: #94a3b8; }
     .se-mvt .tache { color: #334155; }
     .se-lien { color: #2563eb; }
+    .se-sous-onglets { display: flex; gap: 6px; margin: 2px 0 8px; }
+    .se-sous { flex: 1; text-align: center; padding: 8px 4px; border-radius: 10px; border: 1px solid #cbd5e1; background: #fff;
+               font-weight: 600; font-size: 13.5px; color: #475569; cursor: pointer; user-select: none; }
+    .se-sous.on[data-sens="entrees"] { background: #15803d; border-color: #15803d; color: #fff; }
+    .se-sous.on[data-sens="sorties"] { background: #dc2626; border-color: #dc2626; color: #fff; }
     .se-badge { display: inline-block; font-size: 11px; border-radius: 6px; padding: 0 6px; background: #f1f5f9; color: #475569; margin-left: 4px; }
 
     .se-sens { display: grid; grid-template-columns: 1fr auto 1fr; gap: 6px; align-items: end; }
@@ -164,7 +169,7 @@
 
   <div class="se-onglets">
     <div class="se-onglet on" data-onglet="solde"><span class="ic">📦</span>Solde</div>
-    <div class="se-onglet" data-onglet="sorties"><span class="ic">📤</span>Sorties</div>
+    <div class="se-onglet" data-onglet="sorties"><span class="ic">↕️</span>Entrées / Sorties</div>
     <div class="se-onglet" data-onglet="transfert"><span class="ic">🔁</span>Transfert<span class="se-badge-n" id="se-t-badge" style="display:none"></span></div>
     <div class="se-onglet" data-onglet="zero"><span class="ic">0️⃣</span>À zéro</div>
     <div class="se-onglet" data-onglet="verif"><span class="ic">✅</span>Vérif.<span class="se-badge-n" id="se-v-badge" style="display:none"></span></div>
@@ -191,6 +196,10 @@
   </div>
 
   <div class="se-vue" data-vue="sorties" style="display:none">
+    <div class="se-sous-onglets" id="se-sens">
+      <div class="se-sous" data-sens="entrees">📥 Entrées</div>
+      <div class="se-sous on" data-sens="sorties">📤 Sorties</div>
+    </div>
     <div class="se-chips" id="se-periodes">
       <span class="se-chip" data-periode="jour">Aujourd’hui</span>
       <span class="se-chip" data-periode="7j">7 jours</span>
