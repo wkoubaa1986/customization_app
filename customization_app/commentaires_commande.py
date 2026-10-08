@@ -15,7 +15,9 @@ from frappe.utils import strip_html
 
 CHAMPS = ("custom_dernier_commentaire", "custom_commentaire_le", "custom_commentaire_par", "custom_avec_commentaire")
 # Débuts de commentaires AUTOMATIQUES (code), à ne pas confondre avec un mot de Salma.
-AUTOMATIQUES = ("SMS d'annulation", "SMS d’annulation", "BL consolidé", "📨", "📲", "🤝", "↩️", "📱", "✅", "⏸️", "🧹", "🔁")
+# 🗺️ = recalage des tournées, « Référence retirée » = suppression d'une commande annulée (08/10/2026).
+AUTOMATIQUES = ("SMS d'annulation", "SMS d’annulation", "BL consolidé", "📨", "📲", "🤝", "↩️", "📱", "✅", "⏸️", "🧹", "🔁",
+                "🗺️", "Référence retirée")
 LONGUEUR = 140
 
 

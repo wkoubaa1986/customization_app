@@ -110,6 +110,18 @@ class RelancePaiements {
 		.rp-note-open { background:#fffbeb; color:#92400e; border:1px solid #fde68a; }
 		.rp-note-done { background:#fef2f2; color:#b91c1c; border:1px solid #fecaca; font-weight:600; }
 		.rp-note-neutral { background:#f1f5f9; color:#475569; border:1px solid #e2e8f0; }
+		/* Un commentaire qui explique la dette (caisse, commande, tâche) : en bleu, distinct des alertes. */
+		.rp-note-cmt { background:#eff6ff; color:#1e3a8a; border:1px solid #bfdbfe; }
+		.rp-note-cmt .qui { font-weight:600; }
+		.rp-note-cmt .rp-ref { background:#dbeafe; }
+		/* Sous le nom du client : la dernière relance et le dernier commentaire d'une dette, lisibles
+		   sans déplier. Une ligne chacun, coupée ; le texte entier est dans l'infobulle. */
+		.rp-mini { font-size:11px; color:#475569; margin-top:3px; max-width:340px; white-space:nowrap;
+		           overflow:hidden; text-overflow:ellipsis; cursor:pointer; }
+		.rp-mini.cmt { color:#1e40af; }
+		.rp-mini .n { display:inline-block; font-size:10px; font-weight:700; border-radius:8px; padding:0 5px;
+		              background:#e2e8f0; color:#334155; margin-left:4px; }
+		.rp-histo-par { font-size:11px; color:#64748b; margin-left:6px; }
 
 		/* Le détail déplié sous son client : encadré et décalé, pour qu'on voie d'un coup d'œil
 		   où il commence et à quelle ligne il appartient. */
@@ -250,7 +262,13 @@ class RelancePaiements {
 				<li>Une <b>note de tâche</b> peut apparaître :
 					<span style="color:#b45309">⏳ transaction non finie</span> ou
 					<span style="color:#dc2626">⚠️ tâche terminée à vérifier</span>.</li>
-				<li>L'<b>historique des relances</b> du client s'affiche en bas du détail.</li>
+				<li>💬 Un <b>commentaire</b> qui explique une dette (justification saisie au comptage de la
+					caisse, mot laissé sur la commande, la facture, la tâche ou le paiement) s'affiche sous la dette,
+					avec son auteur et sa date.</li>
+				<li>L'<b>historique des relances</b> du client (SMS, Email, appels et leur commentaire, et qui les a faits)
+					s'affiche en bas du détail.</li>
+				<li>Sans déplier : sous le nom du client, la <b>dernière relance</b> (📞 avec le commentaire pris au
+					téléphone) et le <b>dernier commentaire</b> d'une dette (💬). Un clic dessus ouvre le détail.</li>
 			</ul>
 
 			<h4>4 · Relancer un ou plusieurs clients</h4>
@@ -410,7 +428,7 @@ class RelancePaiements {
 					return `
 					<tr data-cust="${this.esc(c.customer)}" class="${ouvert ? 'rp-open' : ''}">
 						<td><input type="checkbox" class="rp-row-check" ${checked}></td>
-						<td><b>${this.esc(c.customer_name)}</b></td>
+						<td><b>${this.esc(c.customer_name)}</b>${this.resume_client(c)}</td>
 						<td>${c.customer_group ? `<span class="rp-grp">${this.esc(c.customer_group)}</span>` : ''}</td>
 						<td>${phone}</td>
 						<td class="num rp-amt-dettes">${c.dettes > 0.009 ? this.fmt(c.dettes) : '—'}</td>
@@ -465,7 +483,7 @@ class RelancePaiements {
 			this.update_selbar();
 		});
 
-		this.$tbody.on('click.rp', '.rp-detail', (e) => {
+		this.$tbody.on('click.rp', '.rp-detail, .rp-mini', (e) => {
 			const cust = $(e.target).closest('tr').data('cust');
 			this.toggle_detail(cust);
 		});
@@ -520,6 +538,26 @@ class RelancePaiements {
 			const cust = $(e.target).closest('tr').data('cust');
 			this.open_relance_tel(cust);
 		});
+	}
+
+	/** Sous le nom : la DERNIÈRE relance (avec le commentaire pris au téléphone) et le dernier
+	 *  commentaire qui explique une dette. Un clic déplie le client pour tout lire. */
+	resume_client(c) {
+		const icons = { 'Téléphone': '📞', SMS: '📱', Email: '✉️' };
+		let html = '';
+		const r = c.derniere_relance;
+		if (r) {
+			const texte = `${r.type} ${r.date.slice(0, 10)} · ${r.par}${r.note ? ' — ' + r.note : ''}`;
+			html += `<div class="rp-mini" title="${this.esc(texte)}">${icons[r.type] || '🔔'} ${this.esc(r.date.slice(0, 10))}
+				· ${this.esc(r.par)}${r.note ? ` — ${this.esc(r.note)}` : ''}${r.nb > 1 ? `<span class="n">${r.nb} relances</span>` : ''}</div>`;
+		}
+		const k = c.commentaires;
+		if (k && k.dernier) {
+			const d = k.dernier;
+			html += `<div class="rp-mini cmt" title="${this.esc(d.par + ' · ' + d.le + ' — ' + d.texte)}">💬 ${this.esc(d.le.slice(0, 10))}
+				· ${this.esc(d.par)} — ${this.esc(d.texte)}${k.nb > 1 ? `<span class="n">${k.nb}</span>` : ''}</div>`;
+		}
+		return html;
 	}
 
 	clear_selection() {
@@ -632,7 +670,7 @@ class RelancePaiements {
 				// ⚠️ LES ALERTES RESTENT ACCROCHÉES À LEUR DETTE. Remontées en tête du panneau,
 				// elles ne disaient plus DE QUELLE pièce elles parlaient — et c'est justement ce
 				// qu'il faut savoir avant de décider si on relance sur celle-là.
-				const notes = this.render_task_notes(x.tasks || []);
+				const notes = this.render_task_notes(x.tasks || []) + this.render_commentaires(x.commentaires || []);
 				const noteRow = notes
 					? `<tr class="rp-note-row"><td></td><td colspan="8">${notes}</td></tr>`
 					: '';
@@ -705,6 +743,15 @@ class RelancePaiements {
 					},
 				})
 			);
+	}
+
+	/** Les commentaires qui expliquent la dette : justification saisie au comptage de la caisse,
+	 *  mot laissé sur la commande, la facture, la tâche ou le paiement. */
+	render_commentaires(liste) {
+		return (liste || [])
+			.map((c) => `<div class="rp-note rp-note-cmt">💬 <span class="qui">${this.esc(c.par)}</span>
+				· ${this.esc(c.le)} — ${this.esc(c.texte)} ${this.puce_piece(c.doctype, c.name)}</div>`)
+			.join('');
 	}
 
 	// ---------------------------------------------------------------
@@ -821,7 +868,7 @@ class RelancePaiements {
 				const icon = icons[h.type] || '🔔';
 				return `<div class="rp-histo-item">
 					<span class="rp-histo-type">${icon} ${this.esc(h.type)}</span>
-					<span class="rp-histo-date">${this.esc(h.date)}</span>
+					<span class="rp-histo-date">${this.esc(h.date)}</span>${h.par ? `<span class="rp-histo-par">· ${this.esc(h.par)}</span>` : ''}
 					${h.note ? `<div class="rp-histo-note">${this.esc(h.note)}</div>` : ''}
 				</div>`;
 			})

@@ -1,3 +1,4 @@
+import html
 import re
 import hashlib
 import json
@@ -2450,7 +2451,163 @@ def get_historique_relances(customer):
             "type": type_relance,
             "note": note,
             "user": r.owner,
+            "par": frappe.utils.get_fullname(r.owner) or r.owner,
         })
+    return out
+
+
+def _dernieres_relances(customers):
+    """{client: {type, date, note, par, nb}} : la DERNIÈRE relance tracée par cette page (SMS, e-mail ou appel
+    avec le commentaire pris au téléphone) et le nombre de relances — pour la voir dans la liste sans
+    déplier le client (demande 08/10/2026)."""
+    if not customers:
+        return {}
+    rows = frappe.db.sql(
+        """
+        SELECT reference_name, content, creation, owner
+        FROM `tabComment`
+        WHERE reference_doctype = 'Customer' AND reference_name IN %(cust)s
+          AND comment_type = 'Comment' AND content LIKE %(marker)s
+        ORDER BY creation DESC
+        """,
+        {"cust": list(customers), "marker": "%" + RELANCE_MARKER + "%"},
+        as_dict=True,
+    )
+    out = {}
+    for r in rows:
+        if r.reference_name in out:
+            out[r.reference_name]["nb"] += 1
+            continue
+        parts = (r.content or "").split("|", 2)
+        out[r.reference_name] = {
+            "type": parts[1].strip() if len(parts) > 1 else "—",
+            "note": parts[2].strip() if len(parts) > 2 else "",
+            "date": frappe.utils.format_datetime(r.creation, "dd/MM/yyyy HH:mm"),
+            "par": frappe.utils.get_fullname(r.owner) or r.owner,
+            "nb": 1,
+        }
+    return out
+
+
+# ── Commentaires qui expliquent une dette (demande 08/10/2026) ─────────────────────────────────
+# Une dette s'explique là où les gens écrivent : sur le paiement, la commande, la facture ou la tâche
+# liés — notamment la justification saisie au comptage de la caisse (« 💵 Caisse du … — Dette hors
+# Aramex … », publiée sur la commande ET la tâche). Les traces posées par le code sont écartées.
+LONGUEUR_COMMENTAIRE = 600
+
+
+def _pieces_des_paiements(vouchers):
+    """{paiement: {(doctype, nom), …}} : le paiement lui-même, ses commandes (directes ou via la facture),
+    ses factures et les tâches de ces commandes."""
+    pieces = {v: {("Payment Entry", v)} for v in vouchers}
+    if not vouchers:
+        return pieces
+    refs = frappe.db.sql(
+        """SELECT parent, reference_doctype, reference_name FROM `tabPayment Entry Reference`
+           WHERE parent IN %(v)s AND reference_doctype IN ('Sales Order', 'Sales Invoice')""",
+        {"v": list(vouchers)}, as_dict=True)
+    commandes = {}
+    factures = {}
+    for r in refs:
+        pieces[r.parent].add((r.reference_doctype, r.reference_name))
+        if r.reference_doctype == "Sales Order":
+            commandes.setdefault(r.reference_name, set()).add(r.parent)
+        else:
+            factures.setdefault(r.reference_name, set()).add(r.parent)
+    if factures:
+        for row in frappe.db.sql(
+                """SELECT DISTINCT parent, sales_order FROM `tabSales Invoice Item`
+                   WHERE parent IN %(f)s AND IFNULL(sales_order, '') != ''""", {"f": list(factures)}, as_dict=True):
+            for v in factures[row.parent]:
+                pieces[v].add(("Sales Order", row.sales_order))
+                commandes.setdefault(row.sales_order, set()).add(v)
+    if commandes:
+        for t in frappe.db.sql(
+                """SELECT name, commande_client FROM `tabTache de travail` WHERE commande_client IN %(c)s""",
+                {"c": list(commandes)}, as_dict=True):
+            for v in commandes[t.commande_client]:
+                pieces[v].add(("Tache de travail", t.name))
+    return pieces
+
+
+def _commentaires_des_paiements(pieces):
+    """{paiement: [{texte, par, le, doctype, name, _tri}, …]} du plus récent au plus ancien. Un même texte publié
+    sur la commande ET sur la tâche (justification de caisse) n'apparaît qu'une fois."""
+    from customization_app.commentaires_commande import est_automatique
+
+    par_doctype = {}
+    for docs in pieces.values():
+        for doctype, nom in docs:
+            par_doctype.setdefault(doctype, set()).add(nom)
+    if not par_doctype:
+        return {}
+    conds, valeurs = [], {}
+    for i, (doctype, noms) in enumerate(par_doctype.items()):
+        conds.append(f"(reference_doctype = %(dt{i})s AND reference_name IN %(n{i})s)")
+        valeurs[f"dt{i}"], valeurs[f"n{i}"] = doctype, list(noms)
+    rows = frappe.db.sql(
+        f"""SELECT reference_doctype, reference_name, content, creation, owner, comment_by
+            FROM `tabComment` WHERE comment_type = 'Comment' AND ({" OR ".join(conds)})
+            ORDER BY creation DESC""", valeurs, as_dict=True)
+    par_doc = {}
+    for r in rows:
+        texte = re.sub(r"\s+", " ", html.unescape(frappe.utils.strip_html((r.content or "").replace("<br>", " · ")))).strip()
+        # Administrator = les scripts de maintenance (« Correction de numérotation… ») : pas l'explication d'une personne.
+        if not texte or r.owner == "Administrator" or est_automatique(texte) or texte.startswith(RELANCE_MARKER):
+            continue
+        if len(texte) > LONGUEUR_COMMENTAIRE:
+            texte = texte[:LONGUEUR_COMMENTAIRE - 1].rstrip() + "…"
+        par_doc.setdefault((r.reference_doctype, r.reference_name), []).append({
+            "texte": texte, "par": r.comment_by or frappe.utils.get_fullname(r.owner) or r.owner,
+            "le": frappe.utils.format_datetime(r.creation, "dd/MM/yyyy HH:mm"), "_tri": str(r.creation),
+            "doctype": r.reference_doctype, "name": r.reference_name})
+    out = {}
+    for v, docs in pieces.items():
+        vus, liste = set(), []
+        for c in sorted((c for d in docs for c in par_doc.get(d, [])), key=lambda c: c["_tri"], reverse=True):
+            if c["texte"] in vus:
+                continue
+            vus.add(c["texte"])
+            liste.append({k: c[k] for k in ("texte", "par", "le", "doctype", "name", "_tri")})
+        if liste:
+            out[v] = liste
+    return out
+
+
+def _commentaires_des_clients(customers):
+    """{client: {nb, dernier}} : les commentaires des DETTES du client (lignes au débit des trois comptes),
+    pour la pastille 💬 de la liste."""
+    if not customers:
+        return {}
+    rows = frappe.db.sql(
+        """
+        SELECT DISTINCT gle.voucher_no AS voucher, COALESCE(origine.party, pe.party) AS customer
+        FROM `tabGL Entry` gle
+        INNER JOIN `tabPayment Entry` pe ON pe.name = gle.voucher_no
+        LEFT JOIN `tabPayment Entry` origine
+            ON pe.payment_type = 'Internal Transfer'
+           AND pe.paid_from = 'Chèques sans provision - A&S'
+           AND (origine.name = pe.custom_impaye_origine
+                OR (pe.paid_to = 'Espèces - A&S' AND origine.name = pe.reference_no))
+           AND origine.docstatus = 1
+        WHERE gle.voucher_type = 'Payment Entry' AND gle.is_cancelled = 0 AND gle.debit > 0
+          AND gle.account IN %(accounts)s
+          AND COALESCE(origine.party_type, pe.party_type) = 'Customer'
+          AND COALESCE(origine.party, pe.party) IN %(cust)s
+        """,
+        {"accounts": _relance_account_list(), "cust": list(customers)}, as_dict=True)
+    client_de = {r.voucher: r.customer for r in rows}
+    commentaires = _commentaires_des_paiements(_pieces_des_paiements(list(client_de)))
+    out = {}
+    for v, liste in commentaires.items():
+        c = out.setdefault(client_de[v], {"vus": set(), "tous": []})
+        for x in liste:
+            if x["texte"] not in c["vus"]:
+                c["vus"].add(x["texte"])
+                c["tous"].append(x)
+    for cust, c in out.items():
+        c["tous"].sort(key=lambda x: x["_tri"], reverse=True)
+        out[cust] = {"nb": len(c["tous"]), "dernier": c["tous"][0]}
     return out
 
 
@@ -2644,6 +2801,14 @@ def get_relance_clients(search=None, customer_group=None, debt_type=None):
 
         result.append(c)
 
+    # Ce qui s'est dit sur ce client, visible sans le déplier (08/10/2026) : la dernière relance (avec le
+    # commentaire pris au téléphone) et le dernier commentaire qui explique une de ses dettes.
+    relances = _dernieres_relances([c["customer"] for c in result])
+    commentaires = _commentaires_des_clients([c["customer"] for c in result])
+    for c in result:
+        c["derniere_relance"] = relances.get(c["customer"])
+        c["commentaires"] = commentaires.get(c["customer"])
+
     # Tri par total décroissant
     result.sort(key=lambda x: x["total"], reverse=True)
 
@@ -2789,6 +2954,9 @@ def get_relance_detail(customer):
         restants[p.name] = 0.0
     rows.sort(key=lambda r: (str(r.posting_date or ""), r.voucher_no), reverse=True)
 
+    commentaires = _commentaires_des_paiements(
+        _pieces_des_paiements([r.voucher_no for r in rows if r.voucher_type == "Payment Entry"]))
+
     detail = []
     running = 0.0
     # Calcul du solde cumulé chronologique (du plus ancien au plus récent)
@@ -2824,6 +2992,7 @@ def get_relance_detail(customer):
                            ([{"reference_doctype": "Payment Entry", "reference_name": r.origine_impaye}]
                             if r.origine_impaye else [])),
             "tasks": line_tasks,
+            "commentaires": commentaires.get(r.voucher_no, []),
             "restant_impaye": (restants.get(r.voucher_no, 0)
                                if r.account == IMPAYES and not r.origine_impaye else None),
         })
