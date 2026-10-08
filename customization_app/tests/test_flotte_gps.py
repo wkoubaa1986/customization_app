@@ -128,11 +128,18 @@ class TestVehiculesDuJour(unittest.TestCase):
         journaux = {"3554": self._j([_arret(10, 30, CHEZ_A), _arret(12, 30, CHEZ_B)]), "3647": self._j([_arret(9, 600, MAGASIN)])}
         self.assertEqual(fg.vehicules_du_jour(taches, journaux, {"HR-EMP-00010": "3647"}, 150), {"HR-EMP-00010": "3554"})
 
-    def test_un_seul_indice_ne_suffit_pas_sauf_pour_le_vehicule_habituel(self):
-        taches = [_tache("A", "HR-EMP-00010", CHEZ_A, 10)]
+    def test_un_seul_client_suffit_des_le_matin(self):
+        # Live, 10 h : Akram (habituellement sur 3647) n'a encore qu'un arrêt… chez son premier client, avec la 3554.
+        taches = [_tache("A", "HR-EMP-00010", CHEZ_A, 10), _tache("B", "HR-EMP-00010", CHEZ_B, 12)]
         journaux = {"3554": self._j([_arret(10, 30, CHEZ_A)]), "3647": self._j([_arret(9, 600, MAGASIN)])}
-        self.assertEqual(fg.vehicules_du_jour(taches, journaux, {"HR-EMP-00010": "3647"}, 150), {"HR-EMP-00010": "3647"})
-        self.assertEqual(fg.vehicules_du_jour(taches, journaux, {"HR-EMP-00010": "3554"}, 150), {"HR-EMP-00010": "3554"})
+        self.assertEqual(fg.vehicules_du_jour(taches, journaux, {"HR-EMP-00010": "3647"}, 150), {"HR-EMP-00010": "3554"})
+
+    def test_un_arret_au_magasin_n_identifie_personne(self):
+        # Tâche de Hedi au Magasin + tâche d'Akram au Magasin : la 3647 s'y arrête — aucun indice, chacun garde son habituel.
+        taches = [_tache("H", "HR-EMP-00006", MAGASIN, 9), _tache("K", "HR-EMP-00010", MAGASIN, 9)]
+        journaux = {"3554": self._j([]), "3647": self._j([_arret(9, 30, MAGASIN)])}
+        r = fg.vehicules_du_jour(taches, journaux, {"HR-EMP-00010": "3647", "HR-EMP-00006": "3554"}, 150, [MAGASIN])
+        self.assertEqual(r, {"HR-EMP-00010": "3647", "HR-EMP-00006": "3554"})
 
     def test_un_vehicule_par_employe_et_defaut_pour_les_autres(self):
         taches = [_tache("A", "HR-EMP-00010", CHEZ_A, 10), _tache("B", "HR-EMP-00010", CHEZ_B, 12),

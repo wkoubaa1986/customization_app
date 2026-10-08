@@ -177,15 +177,18 @@ def grappes(arrets: list, point: tuple, rayon_m: float) -> list:
     return out
 
 
-def vehicules_du_jour(taches: list, journaux: dict, defaut: dict, rayon_m: float) -> dict:
+def vehicules_du_jour(taches: list, journaux: dict, defaut: dict, rayon_m: float, lieux_communs: list = ()) -> dict:
     """{employé: cbox} — qui conduisait quoi ce jour-là. Ça change d'un jour à l'autre (Akram sur la 261 TU 3554 du 15 au
     25/09/2026 puis sur le Changan, Sadok sur la 5957 TU 232 puis sur le Changan) : le réglage n'est qu'un défaut.
-    Score = nombre de tâches de l'employé ayant un arrêt du véhicule à ≤ rayon, à ± 3 h de l'heure annoncée ;
-    attribution par score décroissant, un véhicule par employé. Un seul indice ne suffit que pour le véhicule habituel
-    (tout le monde s'arrête au Magasin)."""
+    Indice = une tâche de l'employé avec un arrêt du véhicule à ≤ rayon, à ± 3 h de l'heure annoncée. **Un seul indice
+    suffit** (en live, dès le premier client de la matinée) — sauf aux lieux communs (Magasin, domiciles), où tout le
+    monde s'arrête : ces tâches-là ne comptent pas. Attribution par nombre d'indices décroissant, un véhicule par employé ;
+    à égalité le véhicule habituel ; sans indice, le véhicule habituel s'il est libre."""
     scores = {}
     for t in taches:
         if not (t.get("lat") and t.get("lng")) or t.get("statut") == "Cancelled" or not t.get("employe"):
+            continue
+        if any(_m((t["lat"], t["lng"]), lieu) <= RAYON_LIEU_M + rayon_m for lieu in lieux_communs):
             continue
         for cb, j in journaux.items():
             if j.get("erreur") or not j["arrets"]:
@@ -195,7 +198,7 @@ def vehicules_du_jour(taches: list, journaux: dict, defaut: dict, rayon_m: float
                 scores[(t["employe"], cb)] = scores.get((t["employe"], cb), 0) + 1
     out, pris = {}, set()
     for (e, cb), n in sorted(scores.items(), key=lambda kv: (-kv[1], kv[0][1] != defaut.get(kv[0][0]), kv[0])):
-        if e in out or cb in pris or n < (1 if cb == defaut.get(e) else 2):
+        if e in out or cb in pris:
             continue
         out[e] = cb
         pris.add(cb)
@@ -239,6 +242,12 @@ def apparier_pure(taches: list, journaux: dict, employe_cbox: dict, rayon_m: flo
         out[nom] = {"statut": CONFIRME, "cbox": cbox, "arrivee": g["arr"], "depart": g["dep"], "duree": g["minutes"],
                     "distance": round(g["dist"]), "ecart": ecart, "en_cours": False}
     return out
+
+
+def _lieux_communs(cfg_t: dict | None = None) -> list:
+    """Magasin et domiciles connus (réglage des tournées) : des arrêts qui n'identifient personne."""
+    cfg_t = cfg_t or to.config()
+    return [cfg_t["depot"], *cfg_t["departs"].values()]
 
 
 # ── Tâches du jour ───────────────────────────────────────────────────────────
@@ -302,7 +311,7 @@ def apparier(jour=None, ecrire: bool = True) -> dict:
     taches = _taches(jour)
     cboxes = cfg["cboxes"]
     journaux = lire_journal(jour, cboxes, cfg=cfg) if cboxes else {}
-    emp_cbox = vehicules_du_jour(taches, journaux, cfg["employe_cbox"], cfg["rayon"])
+    emp_cbox = vehicules_du_jour(taches, journaux, cfg["employe_cbox"], cfg["rayon"], _lieux_communs())
     cbox_emp = {cb: e for e, cb in emp_cbox.items()}
     resultat = apparier_pure(taches, journaux, emp_cbox, cfg["rayon"])
     bilan = {"jour": str(jour), "taches": len(taches), "vehicules": len(cboxes), CONFIRME: 0, AUCUN: 0, SANS_POS: 0,
@@ -431,7 +440,7 @@ def suivi(jour=None):
         journaux = lire_journal(jour, cboxes, live=aujourdhui, cfg=cfg) if cboxes else {}
     except Exception as e:
         journaux, erreur = {}, str(e)[:300]
-    emp_cbox = vehicules_du_jour(taches, journaux, cfg["employe_cbox"], cfg["rayon"])
+    emp_cbox = vehicules_du_jour(taches, journaux, cfg["employe_cbox"], cfg["rayon"], _lieux_communs(cfg_t))
     resultat = apparier_pure(taches, journaux, emp_cbox, cfg["rayon"])
     sortie = []
     for emp, e in sorted(employes.items(), key=lambda kv: kv[1]["nom"]):
