@@ -1420,6 +1420,19 @@ def _rafraichir_systeme(v, seulement_si_change: bool = False) -> list[str]:
                 l.compte, l.qte_comptee, l.qte_employe, l.ajuste, l.a_recompter = 0, 0, 0, 0, 1
                 bouges.append(l.item_code)
             l.qte_systeme = nouveau
+    if v.statut == EN_COURS:
+        # Les articles ENTRÉS dans le stock depuis la photographie s'ajoutent à la feuille (08/10/2026) : la fiche
+        # d'Akram photographiée le 02/10 (34 articles) ignorait les 39 articles reçus après la remise à zéro du 05/10
+        # — seules les quantités des lignes déjà présentes étaient relues.
+        presents = {l.item_code for l in v.lignes}
+        nouveaux = [p for p in _photographie(v.entrepot) if p["item_code"] not in presents]
+        if nouveaux:
+            change = True
+            for p in nouveaux:
+                v.append("lignes", p)
+            v.lignes.sort(key=lambda l: (l.item_name or l.item_code or "").lower())   # même ordre que la photographie
+            for i, l in enumerate(v.lignes, 1):
+                l.idx = i
     if seulement_si_change and not change:
         return bouges
     _appliquer_comptage(v, {})

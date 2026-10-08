@@ -288,6 +288,33 @@ class TestDoubleValidationVerif(unittest.TestCase):
         self.assertEqual((r["statut"], r["nb_ecarts"]), ("À valider", 0))       # aucun faux écart
         frappe.set_user("Administrator")
 
+    def test_un_article_recu_apres_la_photographie_apparait_sur_la_feuille(self):
+        """Cas réel 08/10/2026 (VERIF-2026-00002, stock Akram) : fiche photographiée le 02/10 avec 34 articles, le
+        véhicule remis à zéro puis réapprovisionné — 39 articles en stock n'étaient pas sur la feuille."""
+        import frappe
+        i1, i2 = self.items
+        i3 = frappe.db.sql_list("""select b.item_code from tabBin b join tabItem i on i.name = b.item_code
+                                   where b.warehouse = %s and b.actual_qty > 10 and b.valuation_rate > 0
+                                     and i.disabled = 0 and i.is_stock_item = 1 and i.has_variants = 0
+                                     and b.item_code not in %s order by b.item_code limit 1""", (S.magasin(), (i1, i2)))
+        if not i3:
+            self.skipTest("pas de troisième article au Magasin")
+        i3 = i3[0]
+        nom = S.ouvrir_verification(self.essai, frappe.utils.nowdate(), avec_taches=False)
+        frappe.set_user(self.AKRAM)
+        S.enregistrer_verification(nom, {i1: {"qte_comptee": 3}})              # photographie + un comptage
+        frappe.set_user("Administrator")
+        S.ecriture_transfert(S.magasin(), self.essai, [(i3, 2)], "reçu pendant le comptage", ignore_trajets=True)
+        frappe.set_user(self.AKRAM)
+        d = S.detail_verification(nom)
+        lignes = {l["item_code"]: l for l in d["lignes"]}
+        self.assertEqual((lignes[i3]["qte_systeme"], lignes[i3]["qte_comptee"]), (2, None))   # ajouté, pas compté
+        self.assertEqual(lignes[i1]["qte_comptee"], 3)                          # le comptage déjà fait reste
+        self.assertEqual(d["fiche"]["nb_lignes"], 3)
+        noms = [l["item_name"].lower() for l in d["lignes"]]
+        self.assertEqual(noms, sorted(noms))                                    # ordre de la photographie
+        frappe.set_user("Administrator")
+
     def test_compte_par_un_responsable_l_employe_accepte(self):
         """Cas réel 06/10/2026 (VERIF-2026-00001) : un responsable magasin compte le stock d'un employé et
         termine. La seconde signature revient à l'employé du stock — avant, la fiche restait « À valider » et
