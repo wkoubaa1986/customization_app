@@ -266,12 +266,29 @@ class SuiviTerrain {
       <div class="st-kpi"><div class="v">${pc(B["avance"], nb)}</div><div class="l">en avance de plus de ${s.tolerance} min</div></div>
       <div class="st-kpi"><div class="v">${pc(B["retard"], nb)}</div><div class="l">en retard de plus de ${s.tolerance} min</div></div>
       <div class="st-kpi"><div class="v">${s.manquants.length}</div><div class="l">clôturées sans passage GPS</div></div></div>`;
-    html += `<div class="st-section">Par employé</div><table class="st-t"><thead><tr><th>Employé</th><th class="num">Tâches</th><th class="num">Confirmées</th><th class="num">Sans passage</th><th class="num">Durée moy.</th><th class="num">Durée méd.</th><th class="num">Écart moy.</th><th class="num">Avance</th><th class="num">À l’heure</th><th class="num">Retard</th><th>Par type (réel méd. / standard)</th></tr></thead><tbody>`;
+    html += `<div class="st-section">Par employé</div><table class="st-t"><thead><tr><th>Employé</th><th class="num">Tâches</th><th class="num">Confirmées</th><th class="num">Sans passage</th><th class="num">Durée moy.</th><th class="num">Durée méd.</th><th class="num">Écart moy.</th><th class="num">Avance</th><th class="num">À l’heure</th><th class="num">Retard</th></tr></thead><tbody>`;
     for (const e of s.employes) {
-      const types = e.types.filter((t) => t.n).map((t) => `${esc(t.type)} ${t.duree.mediane != null ? t.duree.mediane + " min" : "–"}${s.standard[t.type] ? " / " + s.standard[t.type] : ""} (${t.n})`).join(", ");
-      html += `<tr><td>${esc(e.nom)}</td><td class="num">${e.taches}</td><td class="num">${e.confirmes}</td><td class="num">${e.aucun}</td><td class="num">${e.duree.moyenne ?? "–"}</td><td class="num">${e.duree.mediane ?? "–"}</td><td class="num">${e.ecart.moyenne != null ? (e.ecart.moyenne > 0 ? "+" : "") + e.ecart.moyenne + " min" : "–"}</td><td class="num">${e["avance"]}</td><td class="num">${e["à l’heure"]}</td><td class="num">${e["retard"]}</td><td class="st-dim">${types}</td></tr>`;
+      html += `<tr><td>${esc(e.nom)}</td><td class="num">${e.taches}</td><td class="num">${e.confirmes}</td><td class="num">${e.aucun}</td><td class="num">${e.duree.moyenne ?? "–"}</td><td class="num">${e.duree.mediane ?? "–"}</td><td class="num">${e.ecart.moyenne != null ? (e.ecart.moyenne > 0 ? "+" : "") + e.ecart.moyenne + " min" : "–"}</td><td class="num">${e["avance"]}</td><td class="num">${e["à l’heure"]}</td><td class="num">${e["retard"]}</td></tr>`;
     }
     html += `</tbody></table>`;
+    // Tableau croisé : durée réelle sur place par technicien ET par type (moyenne / médiane / nombre).
+    const emps = s.employes.filter((e) => e.confirmes);
+    if (emps.length) {
+      html += `<div class="st-section">Durée sur place par technicien et par type d’intervention <span class="st-dim">(moyenne · médiane · nombre de passages)</span></div>
+        <table class="st-t"><thead><tr><th>Type</th><th class="num">Standard</th>${emps.map((e) => `<th class="num">${esc(e.nom)}</th>`).join("")}<th class="num">Tous</th></tr></thead><tbody>`;
+      for (const t of s.types) {
+        if (!t.confirmes) continue;
+        html += `<tr><td>${esc(t.type)}</td><td class="num">${t.standard != null ? t.standard + " min" : "–"}</td>`;
+        for (const e of emps) {
+          const x = e.types.find((y) => y.type === t.type && y.n);
+          if (!x) { html += `<td class="num st-dim">–</td>`; continue; }
+          const lent = t.standard && x.duree.moyenne > t.standard * 1.25, rapide = t.standard && x.duree.moyenne < t.standard * 0.75;
+          html += `<td class="num"><span class="st-ecart ${lent ? "retard" : rapide ? "avance" : "ok"}">${x.duree.moyenne} min</span> <span class="st-dim">· ${x.duree.mediane} · ×${x.n}</span></td>`;
+        }
+        html += `<td class="num">${t.duree.moyenne} min <span class="st-dim">· ${t.duree.mediane} · ×${t.confirmes}</span></td></tr>`;
+      }
+      html += `</tbody></table><div class="st-dim" style="margin-top:4px">Rouge : plus de 25 % au-dessus du standard du planning ; bleu : plus de 25 % en dessous.</div>`;
+    }
     html += `<div class="st-section">Par type d’intervention — durée réelle sur place vs standard de l’optimiseur</div><table class="st-t"><thead><tr><th>Type</th><th class="num">Tâches</th><th class="num">Confirmées</th><th class="num">Standard</th><th class="num">Réel moyen</th><th class="num">Réel médian</th><th class="num">Max</th><th class="num">Écart moyen</th></tr></thead><tbody>`;
     html += `<div id="st-graphe" style="margin:6px 0 10px"></div>`;
     for (const t of s.types) html += `<tr><td>${esc(t.type)}</td><td class="num">${t.taches}</td><td class="num">${t.confirmes}</td><td class="num">${t.standard ?? "–"}</td><td class="num">${t.duree.moyenne ?? "–"}</td><td class="num">${t.duree.mediane ?? "–"}</td><td class="num">${t.duree.max ?? "–"}</td><td class="num">${t.ecart.moyenne != null ? (t.ecart.moyenne > 0 ? "+" : "") + t.ecart.moyenne + " min" : "–"}</td></tr>`;
