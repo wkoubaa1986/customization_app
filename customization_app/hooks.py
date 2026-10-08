@@ -714,6 +714,8 @@ scheduler_events = {
 after_migrate = [
     # Onglet « Suivi d'activité » + rôles Suivi Activité / Responsable Activité.
     "customization_app.patches.ensure_onglet_suivi_activite.execute",
+    # Onglet « Suivi des techniciens » (flotte GPS) : où sont les techniciens, journées par véhicule, réglage.
+    "customization_app.patches.ensure_onglet_suivi_terrain.execute",
     # Graphe « Situation Mensuelle » sur 12 mois + raccourci vers la page de détail (onglet Comptabilité).
     "customization_app.patches.ensure_situation_mensuelle.execute",
     "customization_app.patches.ensure_raccourci_commandes_a_traiter.execute",
