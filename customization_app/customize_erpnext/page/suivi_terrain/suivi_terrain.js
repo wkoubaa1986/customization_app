@@ -256,6 +256,8 @@ class SuiviTerrain {
     $sel.val(cur);
     if (!s.taches) { $out.html(`<div class="st-empty">Aucune tâche appariée sur la période : lancer « Apparier ce jour » ou « Reprendre la période ».</div>`); return; }
     const pc = (n, d) => (d ? Math.round((n / d) * 100) + " %" : "–");
+    const sel_nom = cur ? ($sel.find("option:selected").text() || "") : "";
+    this._stats_data = s;
     const B = s.buckets, nb = B["avance"] + B["à l’heure"] + B["retard"];
     let html = `<div class="st-kpis">
       <div class="st-kpi"><div class="v">${s.taches}</div><div class="l">tâches appariées</div></div>
@@ -271,11 +273,26 @@ class SuiviTerrain {
     }
     html += `</tbody></table>`;
     html += `<div class="st-section">Par type d’intervention — durée réelle sur place vs standard de l’optimiseur</div><table class="st-t"><thead><tr><th>Type</th><th class="num">Tâches</th><th class="num">Confirmées</th><th class="num">Standard</th><th class="num">Réel moyen</th><th class="num">Réel médian</th><th class="num">Max</th><th class="num">Écart moyen</th></tr></thead><tbody>`;
+    html += `<div id="st-graphe" style="margin:6px 0 10px"></div>`;
     for (const t of s.types) html += `<tr><td>${esc(t.type)}</td><td class="num">${t.taches}</td><td class="num">${t.confirmes}</td><td class="num">${t.standard ?? "–"}</td><td class="num">${t.duree.moyenne ?? "–"}</td><td class="num">${t.duree.mediane ?? "–"}</td><td class="num">${t.duree.max ?? "–"}</td><td class="num">${t.ecart.moyenne != null ? (t.ecart.moyenne > 0 ? "+" : "") + t.ecart.moyenne + " min" : "–"}</td></tr>`;
     html += `</tbody></table>`;
     if (s.vehicules.length) {
       html += `<div class="st-section">Par véhicule</div><table class="st-t"><thead><tr><th>Véhicule</th><th>Employé</th><th class="num">Jours</th><th class="num">Km</th><th class="num">Km / jour</th><th class="num">Conduite / jour</th><th class="num">Chez clients / jour</th><th class="num">Départ moyen</th><th class="num">Retour moyen</th><th class="num">Passages / tâches</th></tr></thead><tbody>`;
       for (const v of s.vehicules) html += `<tr><td>${esc(v.vehicule)}</td><td>${esc(v.employe_nom || "")}</td><td class="num">${v.jours}</td><td class="num">${v.km}</td><td class="num">${v.km_jour}</td><td class="num">${this._min(v.minutes_conduite / v.jours)}</td><td class="num">${this._min(v.minutes_chez_clients / v.jours)}</td><td class="num">${this._hm(v.sortie_moyenne)}</td><td class="num">${this._hm(v.retour_moyen)}</td><td class="num">${v.nb_passages} / ${v.nb_taches}</td></tr>`;
+      html += `</tbody></table>`;
+    }
+    if (s.par_jour.length) {
+      html += `<div class="st-section">Par jour${sel_nom ? " — " + esc(sel_nom) : ""}</div><table class="st-t"><thead><tr><th>Date</th><th>Véhicule</th><th class="num">Tâches</th><th class="num">Passages</th><th class="num">Chez les clients</th><th class="num">Conduite</th><th class="num">Km</th><th class="num">Départ</th><th class="num">Retour</th><th class="num">Écart moyen</th></tr></thead><tbody>`;
+      for (const j of s.par_jour) html += `<tr><td>${frappe.datetime.str_to_user(j.date)}</td><td>${esc(j.vehicule || "–")}</td><td class="num">${j.taches}</td><td class="num">${j.confirmes}</td><td class="num">${this._min(j.minutes)}</td><td class="num">${j.conduite != null ? this._min(j.conduite) : "–"}</td><td class="num">${j.km != null ? j.km : "–"}</td><td class="num">${j.depart || "–"}</td><td class="num">${j.retour || "–"}</td><td class="num">${j.ecart_moyen != null ? (j.ecart_moyen > 0 ? "+" : "") + j.ecart_moyen + " min" : "–"}</td></tr>`;
+      html += `</tbody></table>`;
+    }
+    if (s.detail.length) {
+      html += `<div class="st-section">Détail tâche par tâche <button class="btn btn-default btn-xs" data-action="csv" style="margin-left:8px">⬇ CSV</button></div>
+        <table class="st-t"><thead><tr><th>Date</th><th>Annoncé</th><th>Technicien</th><th>Client</th><th>Type</th><th>Passage</th><th class="num">Arrivée</th><th class="num">Départ</th><th class="num">Sur place</th><th class="num">Planifié</th><th>Écart</th></tr></thead><tbody>`;
+      for (const t of s.detail.slice().reverse()) {
+        const cls = t.passage === "Passage confirmé" ? "passee" : t.passage === "Aucun passage" ? "manque" : "autre";
+        html += `<tr><td>${frappe.datetime.str_to_user(t.date)}</td><td class="num">${t.annonce}</td><td>${esc(t.employe || "")}</td><td><a href="/app/tache-de-travail/${encodeURIComponent(t.tache)}">${esc(t.client || t.tache)}</a></td><td>${esc(t.type || "")}</td><td><span class="st-etape ${cls}">${esc(t.passage)}</span></td><td class="num">${t.arrivee}</td><td class="num">${t.depart}</td><td class="num">${t.duree != null ? this._min(t.duree) : ""}</td><td class="num">${t.planifie != null ? this._min(t.planifie) : ""}</td><td>${t.ecart != null ? this._ecart(t.ecart, s.tolerance) : ""}</td></tr>`;
+      }
       html += `</tbody></table>`;
     }
     if (s.manquants.length) {
@@ -284,5 +301,24 @@ class SuiviTerrain {
       html += `</tbody></table>`;
     }
     $out.html(html);
+    const types = s.types.filter((t) => t.confirmes);
+    if (types.length && window.frappe.Chart) {
+      new frappe.Chart("#st-graphe", { type: "bar", height: 200, colors: ["#94a3b8", "#2563eb", "#16a34a"],
+        data: { labels: types.map((t) => `${t.type} (${t.confirmes})`),
+          datasets: [{ name: "Standard (planning)", values: types.map((t) => t.standard || 0) },
+                     { name: "Réel moyen", values: types.map((t) => t.duree.moyenne || 0) },
+                     { name: "Réel médian", values: types.map((t) => t.duree.mediane || 0) }] },
+        tooltipOptions: { formatTooltipY: (v) => v + " min" } });
+    }
+    $out.find("[data-action='csv']").on("click", () => this._csv());
+  }
+
+  _csv() {
+    const s = this._stats_data; if (!s) return;
+    const cols = ["date", "annonce", "fin_annoncee", "employe", "client", "type", "statut", "passage", "vehicule", "arrivee", "depart", "duree", "planifie", "ecart", "tache"];
+    const q = (v) => `"${String(v == null ? "" : v).replace(/"/g, "\"\"")}"`;
+    const lignes = [cols.join(";")].concat(s.detail.map((t) => cols.map((c) => q(t[c])).join(";")));
+    const blob = new Blob(["\ufeff" + lignes.join("\n")], { type: "text/csv;charset=utf-8" });
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `passages_gps_${s.du}_${s.au}.csv`; a.click();
   }
 }

@@ -652,7 +652,34 @@ def statistiques(du=None, au=None, employe=None):
         v["sortie_moyenne"] = round(statistics.mean(v["sorties"])) if v["sorties"] else None
         v["retour_moyen"] = round(statistics.mean(v["retours"])) if v["retours"] else None
         v.pop("sorties"), v.pop("retours")
-    return {"du": str(du), "au": str(au), "tolerance": tol, "taches": len(rows),
+    # Détail tâche par tâche (pour un technicien, ou tout le monde sur une courte période) et vue par jour.
+    detail = [{"tache": r.name, "date": str(r.starts_on)[:10], "annonce": str(r.starts_on)[11:16], "fin_annoncee": str(r.ends_on)[11:16] if r.ends_on else "",
+               "employe": r["custom_employé"] or r.custom_choix_du_staff, "client": r.nom_client, "type": r.custom_type_dintervention,
+               "statut": r.status, "passage": r.custom_gps_statut, "vehicule": r.custom_gps_vehicule,
+               "arrivee": str(r.custom_gps_arrivee)[11:16] if r.custom_gps_arrivee else "", "depart": str(r.custom_gps_depart)[11:16] if r.custom_gps_depart else "",
+               "duree": cint(r.custom_gps_duree) if r.custom_gps_statut == CONFIRME else None,
+               "ecart": cint(r.custom_gps_ecart) if r.custom_gps_statut == CONFIRME else None,
+               "planifie": int((get_datetime(r.ends_on) - get_datetime(r.starts_on)).total_seconds() // 60) if r.ends_on else None}
+              for r in rows[-600:]]
+    par_jour = {}
+    for r in rows:
+        if employe or len(par_emp) == 1:
+            pj = par_jour.setdefault(str(r.starts_on)[:10], {"date": str(r.starts_on)[:10], "taches": 0, "confirmes": 0, "minutes": 0, "ecarts": []})
+            pj["taches"] += 1
+            if r.custom_gps_statut == CONFIRME:
+                pj["confirmes"] += 1
+                pj["minutes"] += cint(r.custom_gps_duree)
+                pj["ecarts"].append(cint(r.custom_gps_ecart))
+    for jr in journees:
+        if (employe and jr.employe == employe) or (not employe and len(par_emp) == 1):
+            pj = par_jour.setdefault(str(jr.date), {"date": str(jr.date), "taches": 0, "confirmes": 0, "minutes": 0, "ecarts": []})
+            pj.update(vehicule=jr.vehicule, km=flt(jr.km), conduite=cint(jr.minutes_conduite), depart=str(jr.premiere_sortie)[11:16] if jr.premiere_sortie else "",
+                      retour=str(jr.dernier_retour)[11:16] if jr.dernier_retour else "")
+    for pj in par_jour.values():
+        pj["ecart_moyen"] = round(statistics.mean(pj["ecarts"])) if pj["ecarts"] else None
+        pj.pop("ecarts")
+    return {"du": str(du), "au": str(au), "tolerance": tol, "taches": len(rows), "detail": detail,
+            "par_jour": sorted(par_jour.values(), key=lambda x: x["date"], reverse=True),
             "confirmes": sum(e["confirmes"] for e in par_emp.values()), "buckets": buckets,
             "employes": sorted(par_emp.values(), key=lambda e: e["nom"]), "types": sorted(par_type.values(), key=lambda t: -t["taches"]),
             "manquants": manquants[-60:], "vehicules": sorted(par_vehicule.values(), key=lambda v: v["vehicule"]),
