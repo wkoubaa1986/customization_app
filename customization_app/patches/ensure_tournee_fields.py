@@ -17,6 +17,7 @@ def execute():
                  "insert_after": "custom_longitude", "read_only": 1, "no_copy": 1, "module": "Customize erpnext"},
             ],
             "Tache de travail": [
+                # Libellé d'origine ; devenu « Heure fixe » le 08/10/2026 (patch ensure_tournee_heure_employe_fixes).
                 {"fieldname": "custom_tournee_fixe", "label": "Heure et employé fixes (ne pas déplacer à l’optimisation)",
                  "fieldtype": "Check", "insert_after": "temps", "no_copy": 1, "module": "Customize erpnext",
                  "description": "Rendez-vous promis au client ou technicien imposé : l’optimisation des tournées s’organise autour."},

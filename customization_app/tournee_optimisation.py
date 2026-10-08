@@ -125,6 +125,82 @@ def coordonnees_du_lien(url: str | None):
     return None
 
 
+# ── Plus Codes (Open Location Code) ─────────────────────────────────────────
+# Un lieu partagé depuis l'appli Google Maps (résidence, magasin) donne un lien court qui se développe en
+# « …/maps/place/V59C+242 Résidence La Princesse, … /data=…!1s0x…:0x… » : AUCUNE coordonnée, mais un Plus Code,
+# qui EST une position (≈ 14 m à 10 caractères, ≈ 3 m à 11). Décodé ici, sans API ni réseau (08/10/2026 : Faleh
+# Wajdi, « Cité Ennasr 2 », était lu d'après le texte à Mateur, 55 km plus loin). Un code COURT (« V59C+242 », les
+# 4 premiers caractères omis) se complète autour d'un point de référence : valable à ± 0,5° (≈ 55 km) — au-delà, on
+# préfère ne rien dire plutôt qu'une position à 111 km.
+OLC_ALPHABET = "23456789CFGHJMPQRVWX"
+RE_PLUS_CODE = re.compile(r"(?:^|[/\s,=:])([23456789CFGHJMPQRVWX]{2,8}\+[23456789CFGHJMPQRVWX]{2,3})(?=$|[\s,+/&?])")
+PLUS_CODE_PORTEE_KM = 50
+
+
+def _olc_decoder(code: str):
+    """Centre (lat, lng) d'un Plus Code COMPLET (8 caractères avant le « + »). PURE."""
+    chiffres = code.replace("+", "")
+    if len(chiffres) < 10 or any(c not in OLC_ALPHABET for c in chiffres):
+        return None
+    lat, lng, res = -90.0, -180.0, 20.0
+    for i in range(0, 10, 2):
+        lat += OLC_ALPHABET.index(chiffres[i]) * res
+        lng += OLC_ALPHABET.index(chiffres[i + 1]) * res
+        res /= 20
+    res_lat = res_lng = res * 20
+    for c in chiffres[10:]:                      # au-delà de 10 : grille de 4 colonnes × 5 lignes
+        res_lat, res_lng = res_lat / 5, res_lng / 4
+        v = OLC_ALPHABET.index(c)
+        lat, lng = lat + (v // 4) * res_lat, lng + (v % 4) * res_lng
+    return lat + res_lat / 2, lng + res_lng / 2
+
+
+def _olc_prefixe(lat: float, lng: float, n: int) -> str:
+    lat, lng, res, out = min(max(lat, -90), 89.999999) + 90, ((lng + 180) % 360), 20.0, ""
+    for _i in range(n // 2):
+        a, b = int(lat // res), int(lng // res)
+        out += OLC_ALPHABET[a] + OLC_ALPHABET[b]
+        lat, lng, res = lat - a * res, lng - b * res, res / 20
+    return out
+
+
+def decoder_plus_code(code: str, reference=DEPOT_DEFAUT):
+    """(lat, lng) d'un Plus Code complet, ou court complété autour de `reference` ; None si invalide ou si le code
+    court tombe à plus de PLUS_CODE_PORTEE_KM de la référence (ambiguïté). PURE."""
+    code = (code or "").strip().upper()
+    if "+" not in code:
+        return None
+    avant = code.index("+")
+    if avant > 8 or avant % 2 or len(code) - avant - 1 < 2:
+        return None
+    if avant == 8:
+        return _olc_decoder(code)
+    manque = 8 - avant
+    res = 20.0 ** (2 - manque // 2)              # taille de la cellule que le préfixe désigne (1° pour 4 caractères)
+    centre = _olc_decoder(_olc_prefixe(reference[0], reference[1], manque) + code)
+    if not centre:
+        return None
+    lat, lng = centre
+    if reference[0] + res / 2 < lat:
+        lat -= res
+    elif reference[0] - res / 2 > lat:
+        lat += res
+    if reference[1] + res / 2 < lng:
+        lng -= res
+    elif reference[1] - res / 2 > lng:
+        lng += res
+    if haversine_km((lat, lng), reference) > PLUS_CODE_PORTEE_KM:
+        return None
+    return (round(lat, 6), round(lng, 6))
+
+
+def coordonnees_plus_code(url: str | None, reference=DEPOT_DEFAUT):
+    """(lat, lng) d'après le Plus Code d'un lien Google Maps développé (« /place/V59C+242 … »), sinon None. PURE."""
+    from urllib.parse import unquote
+    m = RE_PLUS_CODE.search(unquote(url or ""))
+    return decoder_plus_code(m.group(1), reference) if m else None
+
+
 LIEN_CACHE = "tournee_lien:"
 LIEN_CACHE_OK = 30 * 24 * 3600          # un lien court ne change pas de destination
 LIEN_CACHE_VIDE = 6 * 3600              # rien de lisible (ou réseau absent) : on réessaie plus tard, pas à chaque écran
@@ -162,7 +238,8 @@ def _resoudre_par_le_reseau(url: str, timeout: float):
             suivant = r.headers.get("location")
             if not suivant:
                 break
-            c = coordonnees_du_lien(suivant)
+            # Coordonnées écrites dans le lien d'abord (le point exact du lieu), sinon son Plus Code.
+            c = coordonnees_du_lien(suivant) or coordonnees_plus_code(suivant)
             if c:
                 return c
             courant = suivant
@@ -241,6 +318,39 @@ def _geocoder_adresse(nom: str, texte: bool = True):
             _memoriser(nom, c, "texte ≈")
             return c
     return None
+
+
+def reprendre_liens_sans_coordonnees(limite: int = 500, ecrire: bool = True) -> dict:
+    """Reprise (08/10/2026) des adresses dont le lien n'avait rien donné (« lien mort », position « texte ≈ (lien mort) »)
+    maintenant que le Plus Code du lien se lit : le lien est relu SANS le cache, la position trouvée remplace
+    l'approximation. `ecrire=False` : simple mesure. → {vues, reprises, toujours_sans, exemples}."""
+    adresses = frappe.db.sql("""select name, custom_lien_google_map lien, custom_latitude lat, custom_longitude lng,
+                                       custom_geocode_source src
+                                from tabAddress
+                                where ifnull(custom_lien_google_map, '') != ''
+                                  and (custom_geocode_source like %(mort)s or custom_geocode_source like %(texte)s)
+                                limit %(limite)s""",
+                             {"mort": MARQUE_LIEN_MORT + "%", "texte": "texte%" + MARQUE_LIEN_MORT + "%", "limite": cint(limite)},
+                             as_dict=True)
+    reprises, sans, exemples, plus_de_5_km = 0, 0, [], 0
+    for a in adresses:
+        c = coordonnees_du_lien(a.lien) or coordonnees_plus_code(a.lien) or _resoudre_par_le_reseau(a.lien.strip(), 8.0)
+        if not c:
+            sans += 1
+            continue
+        reprises += 1
+        if a.lat and haversine_km((flt(a.lat), flt(a.lng)), c) > 5:
+            plus_de_5_km += 1
+        if len(exemples) < 10:
+            exemples.append({"adresse": a.name, "avant": [flt(a.lat), flt(a.lng)] if a.lat else None, "apres": list(c),
+                             "ecart_km": round(haversine_km((flt(a.lat), flt(a.lng)), c), 1) if a.lat else None})
+        if ecrire:
+            _memoriser(a.name, c, "lien adresse (plus code)")
+            frappe.cache().set_value(LIEN_CACHE + hashlib.sha1(a.lien.strip().encode()).hexdigest(), list(c),
+                                     expires_in_sec=LIEN_CACHE_OK)
+    if ecrire:
+        frappe.db.commit()
+    return {"vues": len(adresses), "reprises": reprises, "toujours_sans": sans, "plus_de_5_km": plus_de_5_km, "exemples": exemples}
 
 
 def geocoder_adresses(limite: int = 500) -> dict:
@@ -362,8 +472,12 @@ def coordonnees_tache(t, centres: dict):
     """(lat, lng, source) — source : « tâche », « adresse », « secteur » (approximatif) ou None."""
     c = resoudre_lien(t.get("google_map"))
     if c:
-        if t.get("select_address") and not frappe.db.get_value("Address", t.select_address, "custom_latitude"):
-            _memoriser(t.select_address, c, "lien tâche")
+        if t.get("select_address") and frappe.db.has_column("Address", "custom_latitude"):
+            lat, src = frappe.db.get_value("Address", t.select_address, ["custom_latitude", "custom_geocode_source"]) or (None, None)
+            # Vide, ou seulement approchée d'après le texte (Faleh Wajdi : « Cité Ennasr 2 » lu à Mateur, 55 km, 09/10/2026) :
+            # le lien de la tâche est plus sûr — l'adresse le garde pour les autres tâches du client.
+            if not lat or (src or "").startswith("texte"):
+                _memoriser(t.select_address, c, "lien tâche")
         return c[0], c[1], "tâche"
     c = _geocoder_adresse(t.get("select_address"))
     if c:
@@ -545,6 +659,16 @@ def resoudre(minutes: list, arrets: list, nb_vehicules: int, debut: int, fin: in
 
 # ── Proposition ─────────────────────────────────────────────────────────────
 
+# Épingles d'une tâche (08/10/2026 : une seule case « Heure et employé fixes » devient deux) : « Heure fixe »
+# (custom_tournee_fixe — l'heure promise ne bouge pas, un autre employé peut la faire) et « Employé fixe »
+# (custom_employe_fixe — le technicien ne change pas, l'heure peut bouger). Les deux cochées = rien ne bouge.
+HEURE_FIXE, EMPLOYE_FIXE = "custom_tournee_fixe", "custom_employe_fixe"
+
+
+def _champs_epingles() -> list[str]:
+    return [c for c in (HEURE_FIXE, EMPLOYE_FIXE) if frappe.db.has_column(TACHE, c)]
+
+
 def duree_retenue(type_: str | None, planifie: int | None, temps: str | None) -> int:
     """Standard du type, sauf planifié (créneau du calendrier, à défaut le champ Temps) NETTEMENT plus long. PURE."""
     standard = DUREE_TYPE.get(type_ or "", 60)
@@ -683,7 +807,7 @@ def _taches_par_employe(jour, cfg) -> dict:
                             fields=["name", "custom_choix_du_staff", "custom_type_dintervention", "starts_on", "ends_on",
                                     "status", "custom_client", "nom_client", "select_address", "google_map", "secteur",
                                     "details_adresse", "dans_local",
-                                    *(["custom_tournee_fixe"] if frappe.db.has_column(TACHE, "custom_tournee_fixe") else [])],
+                                    *_champs_epingles()],
                             order_by="starts_on asc", limit_page_length=0)
     centres = _centres_secteurs()
     out = {}
@@ -692,8 +816,9 @@ def _taches_par_employe(jour, cfg) -> dict:
             continue
         d, f = get_datetime(t.starts_on), get_datetime(t.ends_on) if t.ends_on else None
         pos = coordonnees_tache(t, centres)
-        if cint(t.get("custom_tournee_fixe")):
-            motif = "📌 épinglée"
+        heure_fixe, employe_fixe = cint(t.get(HEURE_FIXE)), cint(t.get(EMPLOYE_FIXE))
+        if heure_fixe and employe_fixe:
+            motif = "📌 heure et employé fixes"
         elif t.status != "Open":
             motif = "statut « %s »" % t.status
         elif t.custom_type_dintervention not in cfg["types"]:
@@ -711,6 +836,8 @@ def _taches_par_employe(jour, cfg) -> dict:
             "tache": t.name, "debut": d.strftime("%H:%M"), "fin": f.strftime("%H:%M") if f else "",
             "type": t.custom_type_dintervention or "", "client": t.nom_client or t.custom_client or "",
             "adresse": adresse, "secteur": t.secteur or "", "mobile": not motif, "motif": motif,
+            # Déplaçable, mais à moitié : ce qui reste imposé.
+            "contrainte": "🕘 heure fixe" if heure_fixe and not employe_fixe else "👤 employé fixe" if employe_fixe and not heure_fixe else "",
             "position": pos[2] if pos else ""})
     return out
 
@@ -769,7 +896,7 @@ def proposer(date, fenetre=None, employes=None):
                             fields=["name", "custom_choix_du_staff", "custom_type_dintervention", "starts_on", "ends_on", "temps",
                                     "status", "custom_client", "nom_client", "select_address", "google_map", "secteur",
                                     "details_adresse", "dans_local", "titre",
-                                    *(["custom_tournee_fixe"] if frappe.db.has_column(TACHE, "custom_tournee_fixe") else [])],
+                                    *_champs_epingles()],
                             order_by="starts_on asc", limit_page_length=0)
     centres = _centres_secteurs()
     base = jour.strftime("%Y-%m-%d")
@@ -780,7 +907,8 @@ def proposer(date, fenetre=None, employes=None):
         debut = get_datetime(t.starts_on)
         dmin = debut.hour * 60 + debut.minute
         service = _duree(t)
-        mobile = (t.custom_type_dintervention in cfg["types"] and t.status == "Open" and not cint(t.get("custom_tournee_fixe"))
+        heure_fixe, employe_fixe = bool(cint(t.get(HEURE_FIXE))), bool(cint(t.get(EMPLOYE_FIXE)))
+        mobile = (t.custom_type_dintervention in cfg["types"] and t.status == "Open" and not (heure_fixe and employe_fixe)
                   and not (t.custom_type_dintervention == "Réparation" and (t.dans_local or "") == "Oui"))
         pos = coordonnees_tache(t, centres)
         if not pos:
@@ -799,6 +927,7 @@ def proposer(date, fenetre=None, employes=None):
         points.append((pos[0], pos[1]))
         arrets.append({"noeud": len(points) - 1, "tache": t.name, "client": t.nom_client or t.custom_client or "", "type": t.custom_type_dintervention,
                        "employe": t.custom_choix_du_staff, "debut": dmin, "service": service, "mobile": mobile, "statut": t.status,
+                       "heure_fixe": heure_fixe, "employe_fixe": employe_fixe,
                        "position": pos[2], "lat": pos[0], "lng": pos[1], "adresse": t.details_adresse or ""})
     employes = sorted({a["employe"] for a in arrets})
     if not employes:
@@ -831,9 +960,10 @@ def proposer(date, fenetre=None, employes=None):
         for a in arrets:
             if a["employe"] != e:
                 continue
-            if not a["mobile"] or not fin_voulue:
+            heure_imposee = not a["mobile"] or a["heure_fixe"]
+            if heure_imposee or not fin_voulue:
                 f0 = max(f0, a["debut"] + a["service"] + cfg["rangement"] + mn[a["noeud"]][depot_de[e]])
-            if not a["mobile"]:
+            if heure_imposee:
                 d0 = min(d0, a["debut"])
         debuts.append(d0)
         fins.append(f0)
@@ -844,16 +974,32 @@ def proposer(date, fenetre=None, employes=None):
         if not a["mobile"]:
             return {"service": a["service"], "fenetre": (a["debut"], a["debut"]), "vehicule": employes.index(a["employe"]), "fixe_pause": True,
                     "sans_marge": a["position"] == "dépôt"}
+        vehicule = employes.index(a["employe"]) if a["employe_fixe"] else None      # « Employé fixe »
+        if a["heure_fixe"]:
+            # « Heure fixe » : l'heure promise, chez n'importe quel employé (sauf s'il est fixe aussi).
+            a["fenetre"] = (a["debut"], a["debut"])
+            return {"service": a["service"], "fenetre": a["fenetre"], "vehicule": vehicule, "fixe_pause": True}
         # Déplaçable : libre dans la journée, ou dans ± fenêtre autour de son heure actuelle (défaut).
         fen = None if not fenetre else (max(cfg["premiere"], a["debut"] - fenetre), min(fin_j, max(a["debut"] + fenetre, cfg["premiere"])))
         a["fenetre"] = fen
-        return {"service": a["service"], "fenetre": fen, "vehicule": None}
+        return {"service": a["service"], "fenetre": fen, "vehicule": vehicule}
 
     par_noeud = {a["noeud"]: a for a in arrets}
+    # L'état de départ de chaque calcul. ⚠️ Les passes FIGENT les tâches qu'elles n'arrivent pas à placer (mobile=False,
+    # journée étendue) : sans remise à zéro, le 2e calcul (heures de pointe) héritait des tâches figées par le 1er et ne
+    # tentait même plus de les déplacer — JUS NATUR ALL restait à 10:20 au milieu de la réparation de Ghassen Mbarek
+    # alors qu'elle se plaçait chez Mohamed Hedi à 10:55 (09/10/2026).
+    mobiles_depart, fins_depart = {a["noeud"]: a["mobile"] for a in arrets}, list(fins)
+    for a in arrets:
+        a["fixe_initial"] = not a["mobile"]          # pour la colonne « Actuel » : les vraies épingles, pas les abandons
 
     def _passes(mn_x):
         """Les trois passes (libre → non placées fixées → non placées en créneaux occupés) sur une matrice donnée."""
         nonlocal fin_j
+        for a in arrets:
+            a["mobile"] = mobiles_depart[a["noeud"]]
+        fins[:] = fins_depart
+        fin_j = max(fins)
         noeuds = [_noeud(a) for a in arrets]
         sol = resoudre(mn_x, noeuds, len(employes), debut_j, fin_j, cfg["equilibre"], premiere=cfg["premiere"], depots=depots,
                        marge=cfg["marge"], pause=cfg["pause"], debuts=debuts, fins=fins,
@@ -935,14 +1081,14 @@ def proposer(date, fenetre=None, employes=None):
         restes = [(a["noeud"], a["debut"]) for a in arrets if a["noeud"] in sol["non_places"] and a["employe"] == e]
         for n, arrivee in sorted(list(route) + restes, key=lambda x: x[1]):
             a = par_noeud[n]
-            deb = a["debut"] if not a["mobile"] else int(math.ceil(arrivee / PAS_MIN) * PAS_MIN)
+            deb = a["debut"] if not a["mobile"] or a["heure_fixe"] else int(math.ceil(arrivee / PAS_MIN) * PAS_MIN)
             serv_ap, fin_ap = serv_ap + a["service"], max(fin_ap, deb + a["service"])
             apres.append({"tache": a["tache"], "client": a["client"], "type": a["type"], "debut": _hm(deb), "fin": _hm(deb + a["service"]),
                           "starts_on": "%s %s:00" % (base, _hm(deb)), "ends_on": "%s %s:00" % (base, _hm(deb + a["service"])),
                           "employe": e, "de": a["employe"], "de_nom": noms.get(a["employe"], a["employe"]),
                           "deplace": a["employe"] != e, "decale": a["mobile"] and deb != a["debut"], "fixe": not a["mobile"],
                           "ancien_debut": _hm(a["debut"]), "ecart_min": deb - a["debut"],
-                          "non_place": n in sol["non_places"],
+                          "non_place": n in sol["non_places"], "heure_fixe": a["heure_fixe"], "employe_fixe": a["employe_fixe"],
                           "position": a["position"], "lat": a["lat"], "lng": a["lng"], "adresse": a["adresse"],
                           "noeud": n, "mobile": a["mobile"], "service": a["service"], "debut_min": deb, "original_min": a["debut"],
                           "fenetre": a.get("fenetre") if a["mobile"] else None})
@@ -952,7 +1098,8 @@ def proposer(date, fenetre=None, employes=None):
                     "avant": {"minutes": m_av, "km": k_av, "interventions": sum(a["service"] for a in actuels),
                               "fin": _hm(max((a["debut"] + a["service"] for a in actuels), default=debuts[v])), "arrets": [{"tache": a["tache"], "client": a["client"], "type": a["type"],
                                                                         "debut": _hm(a["debut"]), "fin": _hm(a["debut"] + a["service"]),
-                                                                        "fixe": not a["mobile"], "lat": a["lat"], "lng": a["lng"]}
+                                                                        "fixe": a["fixe_initial"], "heure_fixe": a["heure_fixe"],
+                                                                        "employe_fixe": a["employe_fixe"], "lat": a["lat"], "lng": a["lng"]}
                                                                        for a in sorted(actuels, key=lambda a: a["debut"])]},
                     "apres": {"minutes": m_ap, "km": k_ap, "interventions": serv_ap, "fin": _hm(fin_ap or debuts[v]), "arrets": apres}})
         tot_av, tot_ap, km_av, km_ap = tot_av + m_av, tot_ap + m_ap, km_av + k_av, km_ap + k_ap
@@ -1002,6 +1149,11 @@ def appliquer(date, plan, prevenir=0):
         if doc.status != "Open" or str(getdate(doc.starts_on)) != str(getdate(date)):
             continue
         nouveau_emp, nd, nf = p.get("employe") or doc.custom_choix_du_staff, get_datetime(p["starts_on"]), get_datetime(p["ends_on"])
+        # Une épingle posée APRÈS le calcul (fenêtre restée ouverte) l'emporte sur le plan.
+        if cint(doc.get(EMPLOYE_FIXE)):
+            nouveau_emp = doc.custom_choix_du_staff
+        if cint(doc.get(HEURE_FIXE)):
+            nd, nf = get_datetime(doc.starts_on), get_datetime(doc.ends_on)
         if nouveau_emp == doc.custom_choix_du_staff and get_datetime(doc.starts_on) == nd and get_datetime(doc.ends_on) == nf:
             continue
         for e in (doc.custom_choix_du_staff, nouveau_emp):

@@ -25,6 +25,29 @@ class TestLiens(unittest.TestCase):
         self.assertTrue(10 < km[0][2] < 20 and mn[0][2] == int(round(km[0][2] / 30 * 60)))
 
 
+class TestPlusCode(unittest.TestCase):
+    """Lien d'un LIEU partagé depuis l'appli Google Maps : pas de coordonnées, un Plus Code (08/10/2026, Faleh Wajdi)."""
+
+    def test_lien_de_lieu_sans_coordonnees(self):
+        u = ("https://www.google.com/maps/place/V59C%2B242+R%C3%A9sidence+La+Princesse,+Av.+Mohamed+Rached+El+Baji,+Ariana"
+             "/data=!4m2!3m1!1s0x12e2cd18cafb8a3f:0x8036cdcc3a94f233?utm_source=mstt_1&entry=gps")
+        self.assertIsNone(T.coordonnees_du_lien(u))
+        self.assertEqual(T.coordonnees_plus_code(u), (36.867512, 10.170266))            # Cité Ennasr 2, pas Mateur
+
+    def test_codes_complet_et_court(self):
+        lat, lng = T.decoder_plus_code("8F8GV59C+242")
+        self.assertAlmostEqual(lat, 36.86751, places=4)
+        self.assertAlmostEqual(lng, 10.17027, places=4)
+        self.assertEqual(T.decoder_plus_code("V59F+GR"), (36.868812, 10.174563))        # le point de Google, à 10 m près
+        self.assertIsNone(T.decoder_plus_code("CFFV+22"))                              # court, trop loin de Tunis : ambigu
+        self.assertIsNone(T.decoder_plus_code("V59+242"))                              # longueur impaire : invalide
+
+    def test_pas_de_faux_positif(self):
+        for u in ("https://www.google.com/maps/place/R%C3%A9sidence+La+Princesse/", "https://maps.google.com/?q=RUE+DE+PARIS",
+                  "https://www.google.com/maps/place/CAFE+VERT/"):
+            self.assertIsNone(T.coordonnees_plus_code(u), u)
+
+
 class TestDurees(unittest.TestCase):
     def test_standard_du_type_sauf_planifie_plus_long(self):
         d = T.duree_retenue
@@ -226,7 +249,9 @@ class TestJournee(unittest.TestCase):
             doc = frappe.get_doc({"doctype": "Tache de travail", "custom_type_dintervention": typ, "custom_choix_du_staff": emp,
                                   "custom_client": client if typ != "Autre" else None, "nom_client": "Client %s" % code,
                                   "starts_on": "%s %s:00" % (self.JOUR, heure), "temps": "15 min", "status": "Open",
-                                  "google_map": lien, "custom_tournee_fixe": fixe, "subject": "essai tournée %s" % code})
+                                  "google_map": lien, "custom_tournee_fixe": fixe, "subject": "essai tournée %s" % code,
+                                  # « épinglée » = les DEUX cases depuis le 08/10/2026 (heure fixe ET employé fixe)
+                                  **({"custom_employe_fixe": fixe} if frappe.db.has_column("Tache de travail", "custom_employe_fixe") else {})})
             doc.flags.ignore_permissions = True
             doc.insert()
             self.taches[code] = doc.name
@@ -314,6 +339,68 @@ class TestJournee(unittest.TestCase):
         self.assertLessEqual(paires("apres"), paires("avant"), p["employes"])
         self.assertTrue(any("se chevauchent déjà" in w for w in p["avertissements"]))
         self.assertTrue(all(a["fixe"] for e in p["employes"] for a in e["apres"]["arrets"] if a["non_place"]))   # laissée de côté = affichée fixe
+
+    def _epingler(self, code, heure=0, employe=0):
+        import frappe
+        if not frappe.db.has_column("Tache de travail", "custom_employe_fixe"):
+            self.skipTest("patch ensure_tournee_heure_employe_fixes non joué")
+        frappe.db.set_value("Tache de travail", self.taches[code], {"custom_tournee_fixe": heure, "custom_employe_fixe": employe})
+
+    def _arrets(self, p):
+        return {a["tache"]: a for e in p["employes"] for a in e["apres"]["arrets"]}
+
+    def test_heure_fixe_seule_l_employe_peut_changer(self):
+        """C (ouest, 11:00) chez e1 qui fait l'est : « Heure fixe » seule → elle part chez e2 (ouest), à 11:00 pile."""
+        self._epingler("C", heure=1)
+        p = T.proposer(self.JOUR)
+        c = self._arrets(p)[self.taches["C"]]
+        self.assertEqual((c["employe"], c["debut"], c["heure_fixe"], c["fixe"]), (self.e2, "11:00", True, False))
+        self.assertTrue(c["deplace"] and not c["decale"])
+        avant = {a["tache"]: a for e in p["employes"] for a in e["avant"]["arrets"]}
+        self.assertFalse(avant[self.taches["C"]]["fixe"])                       # pas 📌 : seulement 🕘
+
+    def test_employe_fixe_seul_l_heure_peut_bouger(self):
+        """C reste chez e1 (« Employé fixe »), même si l'ouest est le secteur de e2 ; son heure peut bouger."""
+        self._epingler("C", employe=1)
+        p = T.proposer(self.JOUR)
+        c = self._arrets(p)[self.taches["C"]]
+        self.assertEqual((c["employe"], c["employe_fixe"], c["fixe"], c["deplace"]), (self.e1, True, False, False))
+        self.assertEqual(self._arrets(p)[self.taches["B"]]["employe"], self.e1)  # le reste s'organise quand même
+
+    def test_appliquer_respecte_une_epingle_posee_apres_le_calcul(self):
+        import frappe
+        p = T.proposer(self.JOUR)
+        c = self._arrets(p)[self.taches["C"]]
+        self.assertEqual(c["employe"], self.e2)
+        self._epingler("C", employe=1)                                          # épinglée entre le calcul et « Appliquer »
+        T.appliquer(self.JOUR, [{"tache": c["tache"], "employe": c["employe"], "starts_on": c["starts_on"], "ends_on": c["ends_on"]}])
+        self.assertEqual(frappe.db.get_value("Tache de travail", self.taches["C"], "custom_choix_du_staff"), self.e1)
+
+    def test_le_calcul_heures_de_pointe_repart_de_l_etat_initial(self):
+        """Bug du 08/10/2026 : les tâches que le 1er calcul n'avait pas su placer (figées) restaient figées au 2e (heures
+        de pointe), qui ne tentait plus de les déplacer. Les deux calculs doivent partir des mêmes tâches libres."""
+        cfg = T.config()
+        T.config = lambda: dict(cfg, pointes=[(0, 24 * 60, 10)])
+        appels, serie = [], {"n": 0}
+        resoudre, majoree = T.resoudre, T.matrice_majoree
+
+        def espion(minutes, arrets, *a, **k):
+            appels.append((serie["n"], tuple(x.get("vehicule") is not None for x in arrets), bool(k.get("occupations"))))
+            return resoudre(minutes, arrets, *a, **k)
+
+        def nouvelle_serie(*a, **k):
+            serie["n"] += 1
+            return majoree(*a, **k)
+        T.resoudre, T.matrice_majoree = espion, nouvelle_serie
+        try:
+            p = T.proposer(self.JOUR, fenetre=0, employes=[{"employe": self.e1, "depart": "magasin", "debut": "08:30", "fin": "10:00"},
+                                                            {"employe": self.e2, "depart": "magasin", "debut": "08:30", "fin": "10:40"}])
+        finally:
+            T.resoudre, T.matrice_majoree = resoudre, majoree
+        self.assertTrue(p["non_places"], "il faut une journée qui laisse des tâches de côté")
+        premiers = [next(x for x in appels if x[0] == n) for n in (0, 1)]
+        self.assertEqual(premiers[0][1], premiers[1][1])                        # mêmes tâches figées au départ des deux calculs
+        self.assertFalse(premiers[1][2])
 
     def test_chevauchements(self):
         a = {"employe": "x", "debut": 600, "service": 75, "client": "A"}

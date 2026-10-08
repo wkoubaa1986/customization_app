@@ -138,14 +138,17 @@
   function rendre(p) {
     if (!p.employes.length) return `<div class="text-muted" style="padding:16px">${esc(p.message || "Rien à optimiser.")}</div>`;
     const t = p.total, gain = t.avant_min - t.apres_min;
-    const ligneAvant = (a) => `<div style="font-size:12.5px;padding:2px 0;${a.fixe ? "color:#64748b" : ""}">${esc(a.debut)}–${esc(a.fin)} · ${lienTache(a.tache, esc(a.client))} <span class="text-muted">${esc(a.type)}</span>${a.fixe ? " 📌" : ""}</div>`;
+    // 📌 rien ne bouge (deux cases, type ou statut non déplaçable, laissée de côté) ; 🕘 heure fixe seule ; 👤 employé fixe seul.
+    const epingles = (a) => (a.fixe ? " 📌" : a.heure_fixe ? ' <span title="Heure fixe : un autre employé peut la faire">🕘</span>'
+      : a.employe_fixe ? ' <span title="Employé fixe : l’heure peut bouger">👤</span>' : "");
+    const ligneAvant = (a) => `<div style="font-size:12.5px;padding:2px 0;${a.fixe ? "color:#64748b" : ""}">${esc(a.debut)}–${esc(a.fin)} · ${lienTache(a.tache, esc(a.client))} <span class="text-muted">${esc(a.type)}</span>${epingles(a)}</div>`;
     // Le trajet qui MÈNE à l'arrêt (🚗 Google, ≈ OSRM corrigé), puis ce qui cloche : retard sur une heure fixe, attente.
     const trajetAvant = (a) => a.trajet == null ? "" : `<span class="text-muted" style="font-size:11px">${a.trajet_source === "sur place" ? "📍 sur place" : `${a.trajet_source === "google" ? "🚗" : "≈"} ${duree(a.trajet)}${a.trajet_km ? ` · ${a.trajet_km} km` : ""}`} → </span>`;
     const marques = (a) => (a.retard ? `<span style="color:#b91c1c;font-size:11px;font-weight:600"> ⚠️ arrivée ${a.retard} min après l’heure fixe</span>` : "")
       + (a.hors_fenetre ? `<span style="color:#b91c1c;font-size:11px;font-weight:600"> ⚠️ hors de sa fenêtre</span>` : "")
       + (a.attente >= 15 ? `<span class="text-muted" style="font-size:11px"> ⏳ ${duree(a.attente)} d’attente avant</span>` : "");
     const ligneApres = (a, lettre = "") => `<div style="font-size:12.5px;padding:2px 0;${a.deplace ? "background:#fef3c7;border-radius:4px" : a.decale ? "background:#eff6ff;border-radius:4px" : ""}${a.fixe ? ";color:#64748b" : ""}">
-        ${lettre}${trajetAvant(a)}${esc(a.debut)}–${esc(a.fin)} · ${lienTache(a.tache, `<b>${esc(a.client)}</b>`)} <span class="text-muted">${esc(a.type)}</span>${a.fixe ? " 📌" : ""}${marques(a)}
+        ${lettre}${trajetAvant(a)}${esc(a.debut)}–${esc(a.fin)} · ${lienTache(a.tache, `<b>${esc(a.client)}</b>`)} <span class="text-muted">${esc(a.type)}</span>${epingles(a)}${marques(a)}
         ${a.deplace ? `<span style="color:#b45309;font-size:11px"> ↔ venait de ${esc(a.de_nom)}</span>` : ""}${a.decale ? `<span style="color:#1d4ed8;font-size:11px"> ⏱ était à ${esc(a.ancien_debut)} (${decalage(a.ecart_min)})</span>` : ""}${a.non_place ? `<span style="color:#b91c1c;font-size:11px"> ⚠️ hors tournée (chevauchement ou hors journée), inchangée</span>` : ""}
         ${a.position === "secteur" ? `<span style="color:#b91c1c;font-size:11px"> ≈ secteur</span>` : ""}</div>`;
     const cartes = p.employes.map((e, i) => { const it = itineraires(e.depart_point || p.depot, e.apres.arrets), coul = COULEURS[i % COULEURS.length]; return `<div style="border:1px solid #e2e8f0;border-radius:10px;padding:10px 12px;margin-bottom:10px">
@@ -174,7 +177,7 @@
       <div id="opt-carte" style="display:none;height:460px;border-radius:10px;margin:0 0 10px;border:1px solid #e2e8f0"></div>
       ${p.non_places.length ? `<div style="color:#b91c1c;font-size:12.5px;margin-bottom:6px">⚠️ ${p.non_places.length} tâche(s) ne tiennent pas dans la tournée : elles restent à leur heure et leur employé, marquées dans la liste, et leur créneau est réservé (rien d’autre dessus).${p.fenetre ? ` Souvent dû à la fenêtre ± ${p.fenetre} min : élargissez-la ou décochez « Garder les heures proches » pour recalculer.` : " Deux rendez-vous à la même heure chez le même employé, ou journée trop chargée."}</div>` : ""}
       ${p.avertissements.length ? `<div style="color:#b45309;font-size:12px;margin-bottom:6px">${p.avertissements.map(esc).join("<br>")}</div>` : ""}
-      <div class="text-muted" style="font-size:11.5px;margin-bottom:8px">📌 fixe (type non déplaçable, épinglée, réparation au local, terminée) · 🟨 change d’employé · 🟦 change d’heure · ≈ position approchée</div>
+      <div class="text-muted" style="font-size:11.5px;margin-bottom:8px">📌 fixe (heure et employé fixes, type non déplaçable, réparation au local, terminée) · 🕘 heure fixe · 👤 employé fixe · 🟨 change d’employé · 🟦 change d’heure · ≈ position approchée</div>
       ${blocNotifications(p)}
       ${cartes}`;
   }
@@ -223,7 +226,7 @@
         { fieldtype: "Int", fieldname: "fenetre", label: "Fenêtre (± minutes)", default: 60 },
         { fieldtype: "Column Break" },
         { fieldtype: "HTML", fieldname: "aide", options: `<div style="margin-top:26px;display:flex;gap:12px;align-items:flex-start">
-          <div class="text-muted" style="font-size:12px;flex:1">Seuls les employés qui ont des tâches ce jour-là sont utilisés. Une tâche cochée « Heure et employé fixes » ne bouge pas. Rien n’est écrit avant « Appliquer ».</div>
+          <div class="text-muted" style="font-size:12px;flex:1">Seuls les employés qui ont des tâches ce jour-là sont utilisés. Sur la tâche, « Heure fixe » garde l’heure (l’employé peut changer), « Employé fixe » garde l’employé (l’heure peut bouger) ; les deux cochées, elle ne bouge pas. Rien n’est écrit avant « Appliquer ».</div>
           <a class="btn btn-default btn-xs" href="/app/config-optimisation-tournees" target="_blank" title="Magasin, heures, pause, stationnement, heures de pointe, types, exclus, domiciles" style="white-space:nowrap">⚙️ Réglages</a></div>` },
         { fieldtype: "Section Break", label: "Employés du jour" },
         { fieldtype: "HTML", fieldname: "employes" },
@@ -283,7 +286,7 @@
           <td style="padding:1px 8px 1px 0;white-space:nowrap">${lienTache(t.tache, esc(t.type))}</td>
           <td style="padding:1px 8px 1px 0">${lienTache(t.tache, `<b>${esc(t.client)}</b>`)}</td>
           <td style="padding:1px 8px 1px 0">${esc(t.adresse)}${t.secteur ? ` <span class="text-muted">· ${esc(t.secteur)}</span>` : ""}${t.position === "secteur" ? ' <span title="Position approchée par le centre du secteur">≈</span>' : ""}</td>
-          <td style="padding:1px 0;white-space:nowrap;text-align:right">${t.mobile ? "🔀 déplaçable" : esc(t.motif)}</td>
+          <td style="padding:1px 0;white-space:nowrap;text-align:right">${t.mobile ? (t.contrainte ? esc(t.contrainte) : "🔀 déplaçable") : esc(t.motif)}</td>
         </tr>`).join("")}</table>` : `<span class="text-muted">Aucune tâche.</span>`;
     const chargerEmployes = async () => {
       const date = d.get_value("date");
