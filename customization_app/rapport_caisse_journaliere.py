@@ -356,7 +356,11 @@ def _paiements_anciennes_commandes(d1, d2, exclude_names):
     """Payment Entries validés encaissés sur un compte de caisse pendant la
     période (date comptable OU date de création — attrape les saisies
     antidatées), et qui n'appartiennent à aucune commande du rapport :
-    ce sont des règlements d'anciennes commandes à tracer dans la caisse."""
+    ce sont des règlements d'anciennes commandes à tracer dans la caisse.
+    Un paiement RÉÉMIS (ACC-PAY-…-1, créé par l'annulation d'une facture qui
+    réémet ses paiements) n'est pas une saisie antidatée : l'argent est entré
+    avec l'original — c'est la date de création de l'original qui compte
+    (SCPS.Tn, 61,301 DT du 03/08 réapparu dans la caisse du 08/10/2026)."""
     like_conds = " OR ".join(["pe.paid_to LIKE %s"] * len(CAISSE_ACCOUNTS_LIKE))
     vals = [d1, d2, d1, d2, *CAISSE_ACCOUNTS_LIKE]
     exclude_sql = ""
@@ -365,7 +369,8 @@ def _paiements_anciennes_commandes(d1, d2, exclude_names):
         vals += list(exclude_names)
 
     pes = frappe.db.sql(
-        f"""SELECT pe.name, pe.posting_date, DATE(pe.creation) AS creation_date,
+        f"""SELECT pe.name, pe.posting_date,
+                   DATE(COALESCE(racine.creation, pe.creation)) AS creation_date,
                    pe.owner, COALESCE(origine.party, pe.party) AS party,
                    COALESCE(origine.party_name, pe.party_name) AS party_name,
                    pe.mode_of_payment, origine.name AS origine_impaye,
@@ -379,9 +384,13 @@ def _paiements_anciennes_commandes(d1, d2, exclude_names):
                   OR (pe.paid_to = 'Espèces - A&S' AND origine.name = pe.reference_no))
              AND origine.docstatus = 1
              AND origine.party_type = 'Customer'
+            LEFT JOIN `tabPayment Entry` racine
+              ON pe.amended_from IS NOT NULL
+             AND racine.name = SUBSTRING_INDEX(pe.name, '-', 4)
             WHERE pe.docstatus = 1
               AND (pe.payment_type = 'Receive' OR origine.name IS NOT NULL)
-              AND (pe.posting_date BETWEEN %s AND %s OR DATE(pe.creation) BETWEEN %s AND %s)
+              AND (pe.posting_date BETWEEN %s AND %s
+                   OR DATE(COALESCE(racine.creation, pe.creation)) BETWEEN %s AND %s)
               AND ({like_conds})
               {exclude_sql}
             ORDER BY pe.posting_date, pe.name""",
