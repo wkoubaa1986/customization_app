@@ -29,6 +29,7 @@ ANCRAGE, le magasin garde la main.
 from __future__ import annotations
 
 import datetime
+import re
 
 import frappe
 from frappe import _
@@ -359,6 +360,162 @@ def _compagnons(config, secteur):
     return permis
 
 
+# ------------------------------------------------------------------ secteurs voisins (jours proches)
+#
+# Demande du 08/10/2026 : demain et après-demain, une demi-journée pas encore pleine ne doit pas rester à moitié vide
+# parce qu'elle a commencé dans un secteur — elle accepte aussi un secteur VOISIN de ceux où le technicien va déjà.
+# Plus loin dans le calendrier, la règle « un secteur par demi-journée » reste : il est encore temps de remplir la
+# demi-journée avec son propre secteur.
+#
+# « Voisin » se MESURE : trajet entre les centres des deux secteurs (médiane des adresses localisées de l'année, cf.
+# tournee_optimisation._centres_secteurs), OSRM corrigé du coefficient appris, ≤ le seuil du réglage dans les DEUX sens.
+# Calculé UNE fois (un appel OSRM pour 6 ou 7 points, < 1 s) puis gardé en cache : la grille du client ne fait qu'une
+# lecture de dictionnaire. Les secteurs 7, 8, 9 (lointains, quota d'une journée par semaine) et « Hors Secteur » n'ont
+# jamais de voisins — leurs règles restent les leurs.
+VOISINS_JOURS_DEFAUT = 2
+VOISINS_MINUTES_DEFAUT = 25
+VOISINS_CACHE = "portail_rdv_voisins"
+VOISINS_CACHE_TTL = 26 * 3600            # recalculés chaque nuit ; 26 h pour ne jamais tomber à vide entre deux nuits
+SECTEURS_SANS_VOISINS = SECTEURS_LOINTAINS | {HORS_SECTEUR}
+
+
+def voisins_depuis_matrice(noms, minutes, seuil):
+    """{secteur: set(voisins)} — voisins si le trajet entre centres est ≤ `seuil` minutes dans les deux sens. PURE."""
+    out = {s: set() for s in noms if s not in SECTEURS_SANS_VOISINS}
+    for i, a in enumerate(noms):
+        for j, b in enumerate(noms):
+            if i < j and a in out and b in out and max(minutes[i][j], minutes[j][i]) <= seuil:
+                out[a].add(b)
+                out[b].add(a)
+    return out
+
+
+def calculer_voisins(seuil):
+    """Mesure les trajets entre centres de secteurs (un seul appel OSRM) et en déduit les voisins."""
+    from customization_app import tournee_optimisation as T
+
+    centres = T._centres_secteurs()
+    noms = sorted((s for s in centres if s.startswith("Secteur") and s not in SECTEURS_SANS_VOISINS),
+                  key=lambda s: (len(s), s))
+    if len(noms) < 2:
+        return {}
+    reglage = T.config()
+    minutes, _km, _source = T.matrice([centres[s] for s in noms], reglage["osrm"])
+    coef = reglage.get("coef") or 1
+    return voisins_depuis_matrice(noms, [[x * coef for x in ligne] for ligne in minutes], seuil)
+
+
+def _seuil_voisins(config):
+    return cint((config or {}).get("voisins_minutes")) or VOISINS_MINUTES_DEFAUT
+
+
+def _nom_secteur(brut):
+    """« 7 », « secteur 7 », « Secteur 7 » → « Secteur 7 ». PURE."""
+    b = (brut or "").strip()
+    m = re.fullmatch(r"(?:secteur\s*)?(\d+)", b, re.I)
+    return "Secteur %s" % m.group(1) if m else b
+
+
+def paires_secteurs(texte):
+    """Les paires d'un réglage « une paire par ligne » (« Secteur 7, Secteur 3 » ou « 7, 3 »). Une ligne de plus de
+    deux secteurs donne toutes ses paires. -> set de frozenset. PURE."""
+    paires = set()
+    for ligne in (texte or "").splitlines():
+        noms = list(dict.fromkeys(_nom_secteur(x) for x in re.split(r"[,;]", ligne) if x.strip()))
+        for i, a in enumerate(noms):
+            for b in noms[i + 1:]:
+                paires.add(frozenset((a, b)))
+    return paires
+
+
+def ajuster_voisins(voisins, ajouts, retraits):
+    """Les choix de l'utilisateur par-dessus le calcul (08/10/2026 : « 6–5 et 2–1 non, 7 voisin de 3 et 4 ») : les
+    paires AJOUTÉES sont voisines quel que soit le trajet, les RETIRÉES ne le sont jamais (le retrait l'emporte).
+    Les secteurs 8/9 (journée entière) et « Hors Secteur » ne s'ajoutent jamais. PURE."""
+    out = {k: set(v) for k, v in voisins.items()}
+    interdits = SECTEURS_JOURNEE_COMPLETE | {HORS_SECTEUR}
+    for paire in ajouts:
+        if len(paire) == 2 and not paire & interdits:
+            a, b = sorted(paire)
+            out.setdefault(a, set()).add(b)
+            out.setdefault(b, set()).add(a)
+    for paire in retraits:
+        if len(paire) == 2:
+            a, b = sorted(paire)
+            out.get(a, set()).discard(b)
+            out.get(b, set()).discard(a)
+    return out
+
+
+def _cle_voisins(config):
+    """Ce dont dépend le résultat : le cache n'est valable que pour ce seuil et ces ajustements."""
+    config = config or {}
+    norme = lambda texte: sorted("|".join(sorted(p)) for p in paires_secteurs(texte))
+    return "%s/%s/%s" % (_seuil_voisins(config), norme(config.get("voisins_ajouts")), norme(config.get("voisins_retraits")))
+
+
+def rafraichir_voisins(config=None):
+    """Recalcule les voisins, les met en cache et les écrit (lecture seule) dans le réglage. Cron de nuit, et à
+    l'enregistrement du réglage (le seuil a pu changer). -> {secteur: set}."""
+    config = config if config is not None else (frappe.db.get_singles_dict("Config Portail RDV") or {})
+    voisins = ajuster_voisins(calculer_voisins(_seuil_voisins(config)), paires_secteurs(config.get("voisins_ajouts")),
+                              paires_secteurs(config.get("voisins_retraits")))
+    frappe.cache().set_value(VOISINS_CACHE, {"cle": _cle_voisins(config), "voisins": {k: sorted(v) for k, v in voisins.items()}},
+                             expires_in_sec=VOISINS_CACHE_TTL)
+    frappe.local.rdv_voisins = voisins
+    return voisins
+
+
+def libeller_voisins(voisins):
+    """« Secteur 1 : Secteur 2, Secteur 4 » par ligne, pour le réglage. PURE."""
+    lignes = ["%s : %s" % (s, ", ".join(sorted(v, key=lambda x: (len(x), x))) or "aucun")
+              for s, v in sorted(voisins.items(), key=lambda kv: (len(kv[0]), kv[0]))]
+    return "\n".join(lignes)
+
+
+def rafraichir_voisins_nuit():
+    """Cron de nuit : voisins recalculés et affichés dans le réglage. Une panne laisse le cache précédent (26 h)."""
+    config = frappe.db.get_singles_dict("Config Portail RDV") or {}
+    try:
+        texte = libeller_voisins(rafraichir_voisins(config))
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "Portail RDV : secteurs voisins")
+        return
+    frappe.db.set_single_value("Config Portail RDV", "voisins_calcules", texte, update_modified=False)
+
+
+def secteurs_voisins(config):
+    """{secteur: set(voisins)} — depuis le cache (une lecture), recalculé seulement s'il manque ou si le seuil a changé.
+    Une panne de calcul n'empêche jamais de réserver : pas de voisins, la règle stricte s'applique."""
+    memo = getattr(frappe.local, "rdv_voisins", None)
+    if memo is not None:
+        return memo
+    cache = frappe.cache().get_value(VOISINS_CACHE, expires=True)
+    if cache and cache.get("cle") == _cle_voisins(config):
+        voisins = {k: set(v) for k, v in (cache.get("voisins") or {}).items()}
+        frappe.local.rdv_voisins = voisins
+        return voisins
+    try:
+        return rafraichir_voisins(config)
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "Portail RDV : secteurs voisins")
+        frappe.local.rdv_voisins = {}
+        return {}
+
+
+def voisins_ouverts(config, jour, secteur):
+    """Les secteurs voisins acceptés EN PLUS à côté de `secteur` ce jour-là : seulement de J+1 à J+N et si le réglage
+    est coché ; vide sinon."""
+    # Le secteur 7 peut recevoir des voisins AJOUTÉS à la main (3 et 4) : seul « Hors Secteur » est exclu ici ; les
+    # secteurs 8/9 n'en ont jamais (calcul et ajustements les écartent, et leur règle de journée entière demeure).
+    if not cint((config or {}).get("voisins_actif")) or secteur == HORS_SECTEUR:
+        return set()
+    ecart = (getdate(jour) - getdate()).days
+    if ecart < 1 or ecart > (cint(config.get("voisins_jours")) or VOISINS_JOURS_DEFAUT):
+        return set()
+    return secteurs_voisins(config).get(secteur, set())
+
+
 def _gouvernorat_normalise(nom):
     from customization_app.sectorisation import gouvernorat_proche
     return gouvernorat_proche(nom) or (nom or "").strip()
@@ -389,7 +546,11 @@ def _demi_faisable(entree, jour, demi, secteur, duree, config=None, gouvernorat=
     # Desk mélangent parfois plusieurs secteurs : on n'exige pas la pureté du
     # passé, on refuse seulement d'AJOUTER un secteur incompatible avec ceux
     # où l'employé va déjà cette demi-journée.
-    if sect_ici and not sect_ici <= _compagnons(config or {}, secteur):
+    # Demain et après-demain (réglage), les secteurs VOISINS s'ajoutent : une demi-journée qui a encore de la place
+    # ne reste pas à moitié vide pour une question de secteur (08/10/2026). Chaque secteur déjà présent doit être
+    # voisin du nouveau. La place, elle, se vérifie plus bas comme toujours (premier trou + battement).
+    permis = _compagnons(config or {}, secteur) | voisins_ouverts(config or {}, jour, secteur)
+    if sect_ici and not sect_ici <= permis:
         return None
     # Journée allouée à un secteur 8/9 : rien d'autre ce jour-là.
     if any(s in SECTEURS_JOURNEE_COMPLETE and s != secteur for s in sect_ici | sect_autre):

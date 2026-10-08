@@ -32,6 +32,12 @@
   "apres_midi_fin",
   "section_secteurs",
   "groupes_secteurs",
+  "voisins_actif",
+  "voisins_jours",
+  "voisins_minutes",
+  "voisins_ajouts",
+  "voisins_retraits",
+  "voisins_calcules",
   "section_partenaire",
   "partenaires",
   "section_ouvertures",
@@ -126,12 +132,12 @@
    "label": "Nombre d'employés mobilisables par jour"
   },
   {
+   "default": "Priorité à l'ordre de la liste",
+   "description": "Comment le portail choisit l'employé parmi ceux qui ont encore de la place. « Priorité » remplit le premier de la liste avant de passer au suivant ; « Répartition » donne le rendez-vous au MOINS CHARGÉ de la demi-journée, l'ordre de la liste ne servant plus qu'en cas d'égalité.",
    "fieldname": "mode_affectation",
    "fieldtype": "Select",
    "label": "Affectation des rendez-vous",
-   "options": "Priorité à l'ordre de la liste\nRépartition sur les disponibles",
-   "default": "Priorité à l'ordre de la liste",
-   "description": "Comment le portail choisit l'employé parmi ceux qui ont encore de la place. « Priorité » remplit le premier de la liste avant de passer au suivant ; « Répartition » donne le rendez-vous au MOINS CHARGÉ de la demi-journée, l'ordre de la liste ne servant plus qu'en cas d'égalité."
+   "options": "Priorité à l'ordre de la liste\nRépartition sur les disponibles"
   },
   {
    "default": "0",
@@ -156,6 +162,44 @@
    "fieldname": "groupes_secteurs",
    "fieldtype": "Small Text",
    "label": "Groupes de secteurs combinables"
+  },
+  {
+   "default": "0",
+   "description": "Demain et les jours suivants (réglage ci-dessous), une demi-journée qui a encore de la place accepte aussi un secteur VOISIN de ceux où le technicien va déjà. Les secteurs 7, 8 et 9 gardent leurs règles.",
+   "fieldname": "voisins_actif",
+   "fieldtype": "Check",
+   "label": "Ouvrir les secteurs voisins sur les jours proches"
+  },
+  {
+   "description": "Vide = 2 : demain et après-demain.",
+   "fieldname": "voisins_jours",
+   "fieldtype": "Int",
+   "label": "Jours concernés (J+1 à J+N)"
+  },
+  {
+   "description": "Vide = 25. Mesuré entre les centres des secteurs (médiane des adresses localisées), recalculé chaque nuit et à l'enregistrement. Doit rester sous les 30 min de battement entre deux interventions.",
+   "fieldname": "voisins_minutes",
+   "fieldtype": "Int",
+   "label": "Trajet maximum entre deux secteurs voisins (minutes)"
+  },
+  {
+   "description": "Toujours voisins, quel que soit le trajet. Une paire par ligne : « Secteur 7, Secteur 3 » (ou « 7, 3 »). Les secteurs 8 et 9 (journée entière) ne se mélangent jamais.",
+   "fieldname": "voisins_ajouts",
+   "fieldtype": "Small Text",
+   "label": "Voisins ajoutés à la main"
+  },
+  {
+   "description": "Jamais voisins, même proches. Une paire par ligne : « Secteur 6, Secteur 5 ».",
+   "fieldname": "voisins_retraits",
+   "fieldtype": "Small Text",
+   "label": "Voisins retirés à la main"
+  },
+  {
+   "description": "Lecture seule — ce que le portail applique actuellement.",
+   "fieldname": "voisins_calcules",
+   "fieldtype": "Small Text",
+   "label": "Secteurs voisins calculés",
+   "read_only": 1
   },
   {
    "fieldname": "section_partenaire",
@@ -242,7 +286,7 @@
  ],
  "issingle": 1,
  "links": [],
- "modified": "2026-08-30 17:53:58.911239",
+ "modified": "2026-10-08 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Config Portail RDV",

@@ -642,6 +642,8 @@ scheduler_events = {
         "customization_app.Maintenance.update_schedule.run_cron",
         # Optimisation des tournées : positions des adresses nouvelles (lien Google Maps, sinon texte).
         "customization_app.tournee_optimisation.geocodage_quotidien",
+        # Portail /rdv : secteurs voisins recalculés APRÈS le géocodage de la nuit (centres des secteurs à jour).
+        "customization_app.portail_rdv_planning.rafraichir_voisins_nuit",
     ],
     "daily": [
         # Jours de récupération par quinzaine : crédite les quinzaines écoulées (Regle Recuperation).

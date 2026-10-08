@@ -13,6 +13,24 @@ class ConfigPortailRDV(Document):
 
     def validate(self):
         self._corriger_gouvernorats()
+        self._secteurs_voisins()
+
+    def _secteurs_voisins(self):
+        """Le seuil ou les ajustements ont pu changer : voisins recalculés (un appel OSRM) et affichés tels que le
+        portail les applique. Un nom de secteur inconnu dans les ajustements est SIGNALÉ (il serait ignoré en silence)."""
+        from customization_app.portail_rdv_planning import libeller_voisins, paires_secteurs, rafraichir_voisins
+
+        connus = set(frappe.get_all("Territory", pluck="name")) if frappe.db.exists("DocType", "Territory") else set()
+        noms = {n for champ in ("voisins_ajouts", "voisins_retraits") for p in paires_secteurs(self.get(champ)) for n in p}
+        inconnus = sorted(n for n in noms if not n.startswith("Secteur ") and n not in connus)
+        if inconnus:
+            frappe.msgprint(_("Secteur(s) non reconnu(s) dans les voisins : <b>{0}</b> — écrivez « Secteur 7, Secteur 3 » "
+                              "ou « 7, 3 ».").format(", ".join(inconnus)), title=_("Secteurs voisins"), indicator="orange")
+
+        try:
+            self.voisins_calcules = libeller_voisins(rafraichir_voisins(self.as_dict()))
+        except Exception:
+            frappe.log_error(frappe.get_traceback(), "Portail RDV : secteurs voisins")
 
     def _corriger_gouvernorats(self):
         """« Monastire », « le kef », « Gabes » -> le nom officiel.

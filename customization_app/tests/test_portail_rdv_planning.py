@@ -180,3 +180,70 @@ class TestZonePartenaire(unittest.TestCase):
         self.assertIsNotNone(P._demi_faisable(sousse, jour, "apres_midi", "Hors Secteur", 30, {}, "Sousse"))
         self.assertIsNotNone(P._demi_faisable(sousse, jour, "apres_midi", "Hors Secteur", 30, {}, "sousse "))  # tolérant
         self.assertIsNotNone(P._demi_faisable(sousse, jour, "apres_midi", "Secteur 1", 30, {}))               # hors zone : règle inactive
+
+
+class TestSecteursVoisins(unittest.TestCase):
+    """Demande 08/10/2026 : demain et après-demain, une demi-journée qui a encore de la place accepte un secteur VOISIN
+    de ceux où le technicien va déjà ; plus loin, la règle « un secteur par demi-journée » reste."""
+
+    VOISINS = {"Secteur 1": {"Secteur 2"}, "Secteur 2": {"Secteur 1", "Secteur 5"}, "Secteur 5": {"Secteur 2"}}
+
+    def setUp(self):
+        import frappe
+        frappe.local.rdv_voisins = {k: set(v) for k, v in self.VOISINS.items()}    # le cache, sans OSRM
+
+    def tearDown(self):
+        import frappe
+        frappe.local.rdv_voisins = None
+
+    def test_voisins_depuis_les_temps_de_route(self):
+        noms = ["Secteur 1", "Secteur 2", "Secteur 3", "Secteur 8"]
+        minutes = [[0, 21, 31, 68],
+                   [20, 0, 19, 58],
+                   [31, 26, 0, 63],          # 3 → 2 : 26 min, au-dessus du seuil dans CE sens
+                   [68, 58, 62, 0]]
+        v = PL.voisins_depuis_matrice(noms, minutes, 25)
+        self.assertEqual(v, {"Secteur 1": {"Secteur 2"}, "Secteur 2": {"Secteur 1"}, "Secteur 3": set()})   # 8 : jamais
+        self.assertEqual(PL.libeller_voisins(v).splitlines()[0], "Secteur 1 : Secteur 2")
+
+    def _faisable(self, secteurs_deja, secteur, decalage, config):
+        import datetime
+        from frappe.utils import add_days, getdate
+        jour = add_days(getdate(), decalage)
+        debut = datetime.datetime.combine(jour, datetime.time(9, 30))
+        entree = {"matin": [(debut, debut + datetime.timedelta(minutes=30))], "apres_midi": [],
+                  "secteurs": {"matin": set(secteurs_deja), "apres_midi": set()}, "gouvernorats": set(), "jour_entier": False}
+        return PL._demi_faisable(entree, jour, "matin", secteur, 30, config)
+
+    def test_jours_proches_seulement(self):
+        actif = {"voisins_actif": 1}
+        self.assertIsNotNone(self._faisable({"Secteur 2"}, "Secteur 1", 1, actif))     # demain : voisin accepté
+        self.assertIsNotNone(self._faisable({"Secteur 2"}, "Secteur 1", 2, actif))     # après-demain aussi
+        self.assertIsNone(self._faisable({"Secteur 2"}, "Secteur 1", 3, actif))        # J+3 : règle stricte
+        self.assertIsNotNone(self._faisable({"Secteur 2"}, "Secteur 1", 3, dict(actif, voisins_jours=3)))   # réglable
+        self.assertIsNone(self._faisable({"Secteur 2"}, "Secteur 1", 1, {}))           # case décochée : rien ne change
+
+    def test_chaque_secteur_present_doit_etre_voisin(self):
+        actif = {"voisins_actif": 1}
+        self.assertIsNone(self._faisable({"Secteur 2", "Secteur 5"}, "Secteur 1", 1, actif))   # 5 n'est pas voisin de 1
+        self.assertIsNotNone(self._faisable({"Secteur 1", "Secteur 5"}, "Secteur 2", 1, actif))
+        self.assertIsNone(self._faisable({"Secteur 2"}, "Secteur 9", 1, actif))         # lointain : jamais en voisin
+
+    def test_ajustements_a_la_main(self):
+        """08/10/2026 : 6 touche 1, 2 et 5 sur la carte (35 min entre centres : le calcul ne les voit pas) ; 7 touche 3 et 4."""
+        auto = {"Secteur 1": {"Secteur 2"}, "Secteur 2": {"Secteur 1"}, "Secteur 5": {"Secteur 6"}, "Secteur 6": {"Secteur 5"}}
+        ajouts = PL.paires_secteurs("Secteur 6, Secteur 2\n6, 1\nsecteur 7 ; Secteur 3\n7, 4\nSecteur 8, Secteur 9\n")
+        v = PL.ajuster_voisins(auto, ajouts, PL.paires_secteurs("Secteur 2, Secteur 1"))
+        self.assertEqual(v["Secteur 6"], {"Secteur 1", "Secteur 2", "Secteur 5"})
+        self.assertEqual(v["Secteur 7"], {"Secteur 3", "Secteur 4"})
+        self.assertNotIn("Secteur 2", v["Secteur 1"])                               # retrait : l'emporte
+        self.assertNotIn("Secteur 8", v)                                           # journée entière : jamais ajouté
+        self.assertEqual(PL._cle_voisins({"voisins_ajouts": "7, 3"}), PL._cle_voisins({"voisins_ajouts": "Secteur 3, Secteur 7"}))
+
+    def test_secteur_7_voisin_de_3_sur_les_jours_proches(self):
+        import frappe
+        frappe.local.rdv_voisins = {"Secteur 3": {"Secteur 7"}, "Secteur 7": {"Secteur 3"}}
+        actif = {"voisins_actif": 1}
+        self.assertIsNotNone(self._faisable({"Secteur 3"}, "Secteur 7", 1, actif))     # demain : 7 rejoint une demi-journée en 3
+        self.assertIsNotNone(self._faisable({"Secteur 7"}, "Secteur 3", 2, actif))     # et inversement
+        self.assertIsNone(self._faisable({"Secteur 3"}, "Secteur 7", 3, actif))        # J+3 : règle stricte
