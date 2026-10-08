@@ -1,5 +1,6 @@
 """Onglet « Suivi des techniciens » dans la barre de gauche (flotte GPS). Rejoué à chaque migrate (after_migrate), idempotent.
-Visible des rôles Appels, Responsable magasin et System Manager (et des Workspace Manager, comme tout onglet)."""
+Visible de tous les employés (rôle Employee) ; les statistiques, journées par véhicule et réglages sont réservés au rôle
+« Direction Suivi Terrain » (créé ici, donné à Wassim et Néjib)."""
 
 import json
 
@@ -7,10 +8,25 @@ import frappe
 
 ESPACE = "Suivi des techniciens"
 PAGE = "suivi-terrain"
-ROLES = ("Appels", "Responsable magasin", "System Manager")
+ROLES = ("Employee", "Appels", "Responsable magasin", "System Manager")
+DIRECTION = "Direction Suivi Terrain"
+# Qui voit les statistiques, les journées par véhicule et les réglages (demande du 08/10/2026 : Wassim et Néjib).
+DIRECTION_USERS = ("koubaawassim@gmail.com", "aquaworld.servicing@gmail.com")
+
+
+def _assurer_role_direction():
+    if not frappe.db.exists("Role", DIRECTION):
+        frappe.get_doc({"doctype": "Role", "role_name": DIRECTION, "desk_access": 1}).insert(ignore_permissions=True)
+    for email in DIRECTION_USERS:
+        if frappe.db.exists("User", email) and not frappe.db.exists("Has Role", {"parent": email, "parenttype": "User", "role": DIRECTION}):
+            u = frappe.get_doc("User", email)
+            u.append("roles", {"role": DIRECTION})
+            u.flags.ignore_permissions = True
+            u.save()
 
 
 def execute():
+    _assurer_role_direction()
     if not frappe.db.exists("Page", PAGE):
         return
     if frappe.db.exists("Workspace", ESPACE):

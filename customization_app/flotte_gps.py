@@ -26,7 +26,8 @@ from customization_app import tournee_optimisation as to
 CONFIG = "Config Flotte GPS"
 TACHE = "Tache de travail"
 JOURNEE = "Journee Flotte GPS"
-ROLES = ("System Manager", "Responsable magasin", "Appels")
+ROLES = ("Employee", "System Manager", "Responsable magasin", "Appels")      # le suivi live : tous les employés
+DIRECTION = "Direction Suivi Terrain"                                          # statistiques, journées, réglages, appariement manuel
 DECALAGE = timedelta(hours=1)                      # UTC → heure de Tunis
 BUNDLE = os.path.join(os.path.dirname(__file__), "flotte_gps_client.bundle.js")
 DELAI_NODE = 120                                   # secondes, par appel (login + un RPC par véhicule)
@@ -48,6 +49,11 @@ CHAMPS_VIDES = {"custom_gps_statut": "", "custom_gps_vehicule": "", "custom_gps_
 def _garde():
     if not set(frappe.get_roles()) & set(ROLES):
         frappe.throw("Accès réservé (rôles %s)" % ", ".join(ROLES), frappe.PermissionError)
+
+
+def _garde_direction():
+    if DIRECTION not in frappe.get_roles():
+        frappe.throw("Réservé à la direction (rôle %s)" % DIRECTION, frappe.PermissionError)
 
 
 def config() -> dict:
@@ -101,7 +107,7 @@ def appeler_plateforme(commande: str, cfg: dict | None = None, **q):
 
 @frappe.whitelist()
 def lister_vehicules():
-    _garde()
+    _garde_direction()
     return appeler_plateforme("vehicules")
 
 
@@ -356,14 +362,14 @@ def apparier(jour=None, ecrire: bool = True) -> dict:
 
 @frappe.whitelist(methods=["POST"])
 def apparier_jour(jour):
-    _garde()
+    _garde_direction()
     return apparier(jour)
 
 
 @frappe.whitelist(methods=["POST"])
 def apparier_periode(du, au):
     """Reprise de l'historique, jour par jour (un appel plateforme par jour)."""
-    _garde()
+    _garde_direction()
     d, fin, out = getdate(du), getdate(au), []
     while d <= fin:
         try:
@@ -601,7 +607,7 @@ def _bucket(ecart, tol) -> str:
 def statistiques(du=None, au=None, employe=None):
     """Sur les tâches déjà appariées (custom_gps_statut) : par employé et par type, durées réelles vs standard,
     ponctualité, passages manquants ; par jour, km et amplitude depuis Journee Flotte GPS."""
-    _garde()
+    _garde_direction()
     au = getdate(au or nowdate())
     du = getdate(du or add_days(au, -29))
     tol = cint(frappe.db.get_single_value(CONFIG, "ecart_tolere")) or 30

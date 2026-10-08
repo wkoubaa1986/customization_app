@@ -25,6 +25,9 @@ class SuiviTerrain {
     this.$root = $(wrapper).find(".st-page");
     this.timer = null;
     this.data = null;
+    // Direction (Wassim, Néjib) : statistiques, appariement manuel, reprise, réglages. Les autres : le suivi live seulement.
+    this.direction = frappe.user.has_role("Direction Suivi Terrain");
+    if (!this.direction) this.$root.find(".st-tab[data-tab='stats'], [data-action='apparier'], [data-action='reglages'], [data-action='backfill']").hide();
     this.$root.find("#st-jour").val(frappe.datetime.get_today());
     this.$root.find("#st-du").val(frappe.datetime.add_days(frappe.datetime.get_today(), -29));
     this.$root.find("#st-au").val(frappe.datetime.get_today());
