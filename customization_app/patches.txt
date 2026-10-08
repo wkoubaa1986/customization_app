@@ -84,3 +84,4 @@ customization_app.patches.packs_entretien_2ans_7a_mineral
 customization_app.patches.ensure_tournee_heure_employe_fixes
 customization_app.patches.reprendre_liens_plus_code
 customization_app.patches.activer_secteurs_voisins
+customization_app.patches.ensure_flotte_gps_fields

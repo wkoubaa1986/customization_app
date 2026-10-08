@@ -1,0 +1,71 @@
+<div class="st-page">
+  <style>
+    .st-page { padding: 4px 0 30px; }
+    .st-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
+    .st-bar input[type=date] { height: 30px; border: 1px solid var(--border-color); border-radius: 6px; padding: 0 8px; background: var(--control-bg); color: var(--text-color); }
+    .st-bar .st-info { color: var(--text-muted); font-size: 12px; margin-left: auto; }
+    .st-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border-color); margin-bottom: 12px; }
+    .st-tab { padding: 7px 14px; cursor: pointer; border-bottom: 2px solid transparent; font-weight: 600; color: var(--text-muted); }
+    .st-tab.active { color: var(--text-color); border-bottom-color: var(--primary); }
+    .st-panel { display: none; } .st-panel.active { display: block; }
+    .st-alert { background: var(--bg-orange, #fff4e5); border: 1px solid var(--orange-500, #f90); border-radius: 8px; padding: 8px 12px; margin-bottom: 10px; }
+    .st-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(460px, 1fr)); gap: 12px; }
+    .st-card { border: 1px solid var(--border-color); border-radius: 10px; background: var(--card-bg, var(--fg-color)); overflow: hidden; }
+    .st-card-head { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; padding: 10px 12px; background: var(--subtle-fg, var(--bg-color)); border-bottom: 1px solid var(--border-color); }
+    .st-card-head .st-nom { font-weight: 700; font-size: 15px; }
+    .st-card-head .st-veh { color: var(--text-muted); font-size: 12px; }
+    .st-card-head .st-prog { margin-left: auto; font-weight: 600; }
+    .st-etat { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+    .st-etat.mouv { background: #d8f5dd; color: #166534; } .st-etat.arret { background: #fde9c8; color: #92400e; }
+    .st-etat.off { background: #e5e7eb; color: #374151; } .st-etat.fin { background: #dbeafe; color: #1e40af; }
+    .st-sub { padding: 6px 12px; font-size: 12px; color: var(--text-muted); display: flex; flex-wrap: wrap; gap: 4px 14px; }
+    .st-msg { margin: 0 12px 8px; padding: 8px 10px; border-left: 3px solid var(--primary); background: var(--bg-light-gray, var(--bg-color)); font-size: 13px; border-radius: 0 6px 6px 0; cursor: pointer; }
+    .st-msg:hover { filter: brightness(0.97); }
+    table.st-t { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+    table.st-t th { text-align: left; font-weight: 600; color: var(--text-muted); padding: 5px 8px; border-bottom: 1px solid var(--border-color); white-space: nowrap; }
+    table.st-t td { padding: 5px 8px; border-bottom: 1px solid var(--border-color); vertical-align: top; }
+    table.st-t tr:last-child td { border-bottom: 0; }
+    table.st-t td.num, table.st-t th.num { text-align: right; white-space: nowrap; }
+    .st-etape { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 11.5px; font-weight: 600; white-space: nowrap; }
+    .st-etape.passee { background: #d8f5dd; color: #166534; } .st-etape.surplace { background: #fef08a; color: #713f12; }
+    .st-etape.enroute { background: #dbeafe; color: #1e40af; } .st-etape.avenir { background: #f3f4f6; color: #374151; }
+    .st-etape.manque { background: #fee2e2; color: #991b1b; } .st-etape.annulee { background: #e5e7eb; color: #6b7280; text-decoration: line-through; }
+    .st-etape.autre { background: #ede9fe; color: #5b21b6; }
+    .st-ecart { font-weight: 600; } .st-ecart.avance { color: #1d4ed8; } .st-ecart.retard { color: #b91c1c; } .st-ecart.ok { color: #166534; }
+    .st-client { font-weight: 600; } .st-dim { color: var(--text-muted); font-size: 11.5px; }
+    .st-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-bottom: 14px; }
+    .st-kpi { border: 1px solid var(--border-color); border-radius: 8px; padding: 8px 12px; }
+    .st-kpi .v { font-size: 22px; font-weight: 700; } .st-kpi .l { font-size: 12px; color: var(--text-muted); }
+    .st-section { margin: 16px 0 6px; font-weight: 700; font-size: 14px; }
+    .st-empty { padding: 30px; text-align: center; color: var(--text-muted); }
+    @media (max-width: 600px) { .st-grid { grid-template-columns: 1fr; } }
+  </style>
+
+  <div class="st-bar">
+    <input type="date" id="st-jour" />
+    <button class="btn btn-default btn-sm" data-action="refresh">🔄 Actualiser</button>
+    <button class="btn btn-default btn-sm" data-action="apparier" title="Écrit arrivée / départ / durée réels sur les tâches de ce jour">✅ Apparier ce jour</button>
+    <button class="btn btn-default btn-sm" data-action="reglages">⚙️ Réglages</button>
+    <span class="st-info" id="st-info"></span>
+  </div>
+
+  <div class="st-tabs">
+    <div class="st-tab active" data-tab="live">📍 Maintenant</div>
+    <div class="st-tab" data-tab="stats">📊 Statistiques</div>
+  </div>
+
+  <div class="st-panel active" data-panel="live">
+    <div id="st-live"><div class="st-empty">Chargement…</div></div>
+  </div>
+
+  <div class="st-panel" data-panel="stats">
+    <div class="st-bar">
+      <label class="st-dim">Du</label><input type="date" id="st-du" />
+      <label class="st-dim">au</label><input type="date" id="st-au" />
+      <select id="st-emp" class="form-control input-sm" style="width: 200px; height: 30px;"><option value="">Tous les employés</option></select>
+      <button class="btn btn-default btn-sm" data-action="stats">Calculer</button>
+      <button class="btn btn-default btn-sm" data-action="backfill" title="Reprend l’historique jour par jour depuis la plateforme (un appel par jour)">⏮️ Reprendre la période</button>
+    </div>
+    <div id="st-stats"><div class="st-empty">Choisir une période puis « Calculer ».</div></div>
+  </div>
+</div>

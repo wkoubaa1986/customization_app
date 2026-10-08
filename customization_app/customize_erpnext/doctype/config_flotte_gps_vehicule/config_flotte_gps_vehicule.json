@@ -1,0 +1,64 @@
+{
+ "actions": [],
+ "creation": "2026-10-08 14:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-10-08 14:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "owner": "Administrator",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "istable": 1,
+ "permissions": [],
+ "name": "Config Flotte GPS Vehicule",
+ "fields": [
+  {
+   "fieldname": "vehicule",
+   "fieldtype": "Data",
+   "label": "Véhicule (immatriculation)",
+   "in_list_view": 1,
+   "reqd": 1
+  },
+  {
+   "fieldname": "cbox",
+   "fieldtype": "Data",
+   "label": "Identifiant boîtier (CBOX)",
+   "in_list_view": 1,
+   "reqd": 1
+  },
+  {
+   "fieldname": "employe",
+   "fieldtype": "Link",
+   "label": "Employé",
+   "options": "Employee",
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "employe_nom",
+   "fieldtype": "Data",
+   "label": "Nom",
+   "fetch_from": "employe.employee_name",
+   "read_only": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "actif",
+   "fieldtype": "Check",
+   "label": "Suivi",
+   "default": "1",
+   "in_list_view": 1
+  }
+ ],
+ "field_order": [
+  "vehicule",
+  "cbox",
+  "employe",
+  "employe_nom",
+  "actif"
+ ]
+}

@@ -1,0 +1,156 @@
+{
+ "actions": [],
+ "creation": "2026-10-08 14:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-10-08 14:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "owner": "Administrator",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "autoname": "format:GPS-{date}-{cbox}",
+ "title_field": "vehicule",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "export": 1,
+   "role": "Responsable magasin"
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "role": "Appels"
+  }
+ ],
+ "name": "Journee Flotte GPS",
+ "fields": [
+  {
+   "fieldname": "date",
+   "fieldtype": "Date",
+   "label": "Date",
+   "reqd": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "vehicule",
+   "fieldtype": "Data",
+   "label": "Véhicule",
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "cbox",
+   "fieldtype": "Data",
+   "label": "CBOX",
+   "read_only": 1
+  },
+  {
+   "fieldname": "employe",
+   "fieldtype": "Link",
+   "label": "Employé",
+   "options": "Employee",
+   "in_list_view": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "employe_nom",
+   "fieldtype": "Data",
+   "label": "Nom",
+   "fetch_from": "employe.employee_name",
+   "read_only": 1
+  },
+  {
+   "fieldname": "col_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "km",
+   "fieldtype": "Float",
+   "label": "Km parcourus",
+   "precision": "1",
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "minutes_conduite",
+   "fieldtype": "Int",
+   "label": "Minutes de conduite"
+  },
+  {
+   "fieldname": "minutes_arrets",
+   "fieldtype": "Int",
+   "label": "Minutes à l’arrêt (journée)"
+  },
+  {
+   "fieldname": "nb_arrets",
+   "fieldtype": "Int",
+   "label": "Arrêts"
+  },
+  {
+   "fieldname": "col_2",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "premiere_sortie",
+   "fieldtype": "Datetime",
+   "label": "Premier départ"
+  },
+  {
+   "fieldname": "dernier_retour",
+   "fieldtype": "Datetime",
+   "label": "Dernière arrivée"
+  },
+  {
+   "fieldname": "nb_taches",
+   "fieldtype": "Int",
+   "label": "Tâches planifiées",
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "nb_passages",
+   "fieldtype": "Int",
+   "label": "Passages confirmés",
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "minutes_chez_clients",
+   "fieldtype": "Int",
+   "label": "Minutes chez les clients"
+  }
+ ],
+ "field_order": [
+  "date",
+  "vehicule",
+  "cbox",
+  "employe",
+  "employe_nom",
+  "col_1",
+  "km",
+  "minutes_conduite",
+  "minutes_arrets",
+  "nb_arrets",
+  "col_2",
+  "premiere_sortie",
+  "dernier_retour",
+  "nb_taches",
+  "nb_passages",
+  "minutes_chez_clients"
+ ]
+}

@@ -1202,7 +1202,7 @@
  },
  {
   "charts": [],
-  "content": "[{\"id\": \"ow595dYDrI\", \"type\": \"onboarding\", \"data\": {\"onboarding_name\": \"Selling\", \"col\": 12}}, {\"id\": \"aW2i5R5GRP\", \"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"id\": \"1it3dCOnm6\", \"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\"><b>Acc\\u00e8s rapide</b></span>\", \"col\": 12}}, {\"id\": \"x7pLl-spS4\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Article\", \"col\": 3}}, {\"id\": \"SSGrXWmY-H\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Sales Order\", \"col\": 3}}, {\"id\": \"-5J_yLxDaS\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Sales Analytics\", \"col\": 3}}, {\"id\": \"c_GjZuZ2oN\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Dashboard\", \"col\": 3}}, {\"id\": \"nOwm5Oj0Ur\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Compagne SMS\", \"col\": 3}}, {\"id\": \"extMXRTkma\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Suivi dettes client\", \"col\": 3}}, {\"id\": \"AfeYp-FBQa\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Rapport Client\", \"col\": 3}}, {\"id\": \"dff20d109f\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Rapport Caisse Journali\\u00e8re\", \"col\": 3}}, {\"id\": \"rsvShortcut01\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Retenue \\u00e0 la source Ventes\", \"col\": 3}}, {\"id\": \"livraisonAramexShortcut\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Livraisons Aramex\", \"col\": 3}}, {\"id\": \"tourneeScma-tou\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Ma Tourn\\u00e9e\", \"col\": 3}}, {\"id\": \"tourneeScanalys\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Analyse Tourn\\u00e9es\", \"col\": 3}}, {\"id\": \"cdesATraiterRac\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Commandes \\u00e0 traiter\", \"col\": 3}}, {\"id\": \"reparationOsmoseursRac\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"R\\u00e9paration osmoseurs\", \"col\": 3}}, {\"id\": \"oNjjNbnUHp\", \"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"id\": \"0BcePLg0g1\", \"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\"><b>Rapports et Pages principales</b></span>\", \"col\": 12}}, {\"id\": \"uze5dJ1ipL\", \"type\": \"card\", \"data\": {\"card_name\": \"Vente\", \"col\": 4}}, {\"id\": \"3j2fYwMAkq\", \"type\": \"card\", \"data\": {\"card_name\": \"Point of Sale\", \"col\": 4}}, {\"id\": \"xImm8NepFt\", \"type\": \"card\", \"data\": {\"card_name\": \"Items and Pricing\", \"col\": 4}}, {\"id\": \"6MjIe7KCQo\", \"type\": \"card\", \"data\": {\"card_name\": \"Settings\", \"col\": 4}}, {\"id\": \"lBu2EKgmJF\", \"type\": \"card\", \"data\": {\"card_name\": \"Key Reports\", \"col\": 4}}, {\"id\": \"1ARHrjg4kI\", \"type\": \"card\", \"data\": {\"card_name\": \"Other Reports\", \"col\": 4}}]",
+  "content": "[{\"id\": \"ow595dYDrI\", \"type\": \"onboarding\", \"data\": {\"onboarding_name\": \"Selling\", \"col\": 12}}, {\"id\": \"aW2i5R5GRP\", \"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"id\": \"1it3dCOnm6\", \"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\"><b>Accès rapide</b></span>\", \"col\": 12}}, {\"id\": \"x7pLl-spS4\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Article\", \"col\": 3}}, {\"id\": \"SSGrXWmY-H\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Sales Order\", \"col\": 3}}, {\"id\": \"-5J_yLxDaS\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Sales Analytics\", \"col\": 3}}, {\"id\": \"c_GjZuZ2oN\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Dashboard\", \"col\": 3}}, {\"id\": \"nOwm5Oj0Ur\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Compagne SMS\", \"col\": 3}}, {\"id\": \"extMXRTkma\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Suivi dettes client\", \"col\": 3}}, {\"id\": \"AfeYp-FBQa\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Rapport Client\", \"col\": 3}}, {\"id\": \"dff20d109f\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Rapport Caisse Journalière\", \"col\": 3}}, {\"id\": \"rsvShortcut01\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Retenue à la source Ventes\", \"col\": 3}}, {\"id\": \"livraisonAramexShortcut\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Livraisons Aramex\", \"col\": 3}}, {\"id\": \"tourneeScma-tou\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Ma Tournée\", \"col\": 3}}, {\"id\": \"tourneeScanalys\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Analyse Tournées\", \"col\": 3}}, {\"id\": \"sel_s_st\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Suivi terrain\", \"col\": 3}}, {\"id\": \"cdesATraiterRac\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Commandes à traiter\", \"col\": 3}}, {\"id\": \"reparationOsmoseursRac\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Réparation osmoseurs\", \"col\": 3}}, {\"id\": \"oNjjNbnUHp\", \"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"id\": \"0BcePLg0g1\", \"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\"><b>Rapports et Pages principales</b></span>\", \"col\": 12}}, {\"id\": \"uze5dJ1ipL\", \"type\": \"card\", \"data\": {\"card_name\": \"Vente\", \"col\": 4}}, {\"id\": \"3j2fYwMAkq\", \"type\": \"card\", \"data\": {\"card_name\": \"Point of Sale\", \"col\": 4}}, {\"id\": \"xImm8NepFt\", \"type\": \"card\", \"data\": {\"card_name\": \"Items and Pricing\", \"col\": 4}}, {\"id\": \"6MjIe7KCQo\", \"type\": \"card\", \"data\": {\"card_name\": \"Settings\", \"col\": 4}}, {\"id\": \"lBu2EKgmJF\", \"type\": \"card\", \"data\": {\"card_name\": \"Key Reports\", \"col\": 4}}, {\"id\": \"1ARHrjg4kI\", \"type\": \"card\", \"data\": {\"card_name\": \"Other Reports\", \"col\": 4}}]",
   "custom_blocks": [],
   "docstatus": 0,
   "doctype": "Workspace",
@@ -2384,7 +2384,7 @@
     "type": "Link"
    }
   ],
-  "modified": "2026-10-03 13:56:01.829140",
+  "modified": "2026-10-08 14:30:00.000000",
   "module": "Selling",
   "name": "Selling",
   "number_cards": [],
@@ -2597,6 +2597,23 @@
     "kanban_board": null,
     "label": "Analyse Tournées",
     "link_to": "analyse-tournees",
+    "parent": "Selling",
+    "parentfield": "shortcuts",
+    "parenttype": "Workspace",
+    "report_ref_doctype": null,
+    "restrict_to_domain": null,
+    "stats_filter": null,
+    "type": "Page",
+    "url": null
+   },
+   {
+    "color": "Blue",
+    "doc_view": "",
+    "format": null,
+    "icon": null,
+    "kanban_board": null,
+    "label": "Suivi terrain",
+    "link_to": "suivi-terrain",
     "parent": "Selling",
     "parentfield": "shortcuts",
     "parenttype": "Workspace",
@@ -5077,7 +5094,7 @@
  },
  {
   "charts": [],
-  "content": "[{\"id\": \"ap_h1\", \"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\"><b>Mes listes d’appels</b></span>\", \"col\": 12}}, {\"id\": \"ap_q1\", \"type\": \"quick_list\", \"data\": {\"quick_list_name\": \"Listes à appeler (en cours)\", \"col\": 6}}, {\"id\": \"ap_s1\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Liste Normal en cours\", \"col\": 3}}, {\"id\": \"ap_s2\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Zone partenaire en cours\", \"col\": 3}}, {\"id\": \"ap_s3\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"2e appel (Relance) en cours\", \"col\": 3}}, {\"id\": \"ap_s4\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Requalification (dernier appel)\", \"col\": 3}}, {\"id\": \"ap_s5\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Urgence en cours\", \"col\": 3}}, {\"id\": \"ap_s6\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Toutes les listes d’appels\", \"col\": 3}}, {\"id\": \"ap_h2\", \"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\"><b>Suivi d’activité</b></span>\", \"col\": 12}}, {\"id\": \"ap_s7\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Mes activités (suivi d’activité)\", \"col\": 4}}, {\"id\": \"ap_s8\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Toutes les activités\", \"col\": 4}}, {\"id\": \"ap_h3\", \"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\"><b>Calendrier et clients</b></span>\", \"col\": 12}}, {\"id\": \"ap_q2\", \"type\": \"quick_list\", \"data\": {\"quick_list_name\": \"Planning d’aujourd’hui\", \"col\": 6}}, {\"id\": \"ap_s9\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Calendrier de travail\", \"col\": 3}}, {\"id\": \"ap_s10\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Suivi clients non traités\", \"col\": 3}}, {\"id\": \"ap_s11\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Clients à requalifier\", \"col\": 3}}]",
+  "content": "[{\"id\": \"ap_h1\", \"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\"><b>Mes listes d’appels</b></span>\", \"col\": 12}}, {\"id\": \"ap_q1\", \"type\": \"quick_list\", \"data\": {\"quick_list_name\": \"Listes à appeler (en cours)\", \"col\": 6}}, {\"id\": \"ap_s1\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Liste Normal en cours\", \"col\": 3}}, {\"id\": \"ap_s2\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Zone partenaire en cours\", \"col\": 3}}, {\"id\": \"ap_s3\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"2e appel (Relance) en cours\", \"col\": 3}}, {\"id\": \"ap_s4\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Requalification (dernier appel)\", \"col\": 3}}, {\"id\": \"ap_s5\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Urgence en cours\", \"col\": 3}}, {\"id\": \"ap_s6\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Toutes les listes d’appels\", \"col\": 3}}, {\"id\": \"ap_h2\", \"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\"><b>Suivi d’activité</b></span>\", \"col\": 12}}, {\"id\": \"ap_s7\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Mes activités (suivi d’activité)\", \"col\": 4}}, {\"id\": \"ap_s8\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Toutes les activités\", \"col\": 4}}, {\"id\": \"ap_h3\", \"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\"><b>Calendrier et clients</b></span>\", \"col\": 12}}, {\"id\": \"ap_q2\", \"type\": \"quick_list\", \"data\": {\"quick_list_name\": \"Planning d’aujourd’hui\", \"col\": 6}}, {\"id\": \"ap_s9\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Calendrier de travail\", \"col\": 3}}, {\"id\": \"ap_s_st\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Suivi terrain (où sont les techniciens)\", \"col\": 3}}, {\"id\": \"ap_s10\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Suivi clients non traités\", \"col\": 3}}, {\"id\": \"ap_s11\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Clients à requalifier\", \"col\": 3}}]",
   "custom_blocks": [],
   "docstatus": 0,
   "doctype": "Workspace",
@@ -5088,7 +5105,7 @@
   "is_hidden": 0,
   "label": "Appels",
   "links": [],
-  "modified": "2026-10-03 21:25:50.714346",
+  "modified": "2026-10-08 14:30:00.000000",
   "module": null,
   "name": "Appels",
   "number_cards": [],
@@ -5275,6 +5292,23 @@
     "stats_filter": null,
     "type": "URL",
     "url": "/app/tache-de-travail/view/calendar/Calendrier%20de%20travail"
+   },
+   {
+    "color": "Blue",
+    "doc_view": "",
+    "format": null,
+    "icon": null,
+    "kanban_board": null,
+    "label": "Suivi terrain (où sont les techniciens)",
+    "link_to": "suivi-terrain",
+    "parent": "Appels",
+    "parentfield": "shortcuts",
+    "parenttype": "Workspace",
+    "report_ref_doctype": null,
+    "restrict_to_domain": null,
+    "stats_filter": null,
+    "type": "Page",
+    "url": null
    },
    {
     "color": null,

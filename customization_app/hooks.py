@@ -695,6 +695,12 @@ scheduler_events = {
         "0 16 * * *": [
             "customization_app.livraison_aramex.run_cron",
         ],
+
+        # Tous les soirs à 21:00 : les tâches du jour (et de la veille) rapprochées des arrêts GPS des
+        # véhicules — arrivée, départ, durée réelles sur chaque tâche (Config Flotte GPS).
+        "0 21 * * *": [
+            "customization_app.flotte_gps.cron_du_soir",
+        ],
     },
 }
 

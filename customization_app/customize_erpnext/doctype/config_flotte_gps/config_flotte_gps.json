@@ -1,0 +1,148 @@
+{
+ "actions": [],
+ "creation": "2026-10-08 14:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-10-08 14:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "owner": "Administrator",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "issingle": 1,
+ "permissions": [
+  {
+   "create": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "read": 1,
+   "write": 1,
+   "role": "Responsable magasin"
+  }
+ ],
+ "name": "Config Flotte GPS",
+ "fields": [
+  {
+   "fieldname": "sec_connexion",
+   "fieldtype": "Section Break",
+   "label": "Plateforme GPS (unidevpro.com.tn/track)"
+  },
+  {
+   "fieldname": "url_ws",
+   "fieldtype": "Data",
+   "label": "Adresse du serveur (websocket)",
+   "default": "wss://www.unidevpro.com.tn/api",
+   "reqd": 1
+  },
+  {
+   "fieldname": "utilisateur",
+   "fieldtype": "Data",
+   "label": "Utilisateur",
+   "reqd": 1
+  },
+  {
+   "fieldname": "mot_de_passe",
+   "fieldtype": "Password",
+   "label": "Mot de passe",
+   "reqd": 1
+  },
+  {
+   "fieldname": "lire_vehicules",
+   "fieldtype": "Button",
+   "label": "Lire les véhicules de la plateforme"
+  },
+  {
+   "fieldname": "col_connexion",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "actif",
+   "fieldtype": "Check",
+   "label": "Appariement automatique chaque soir (21 h)",
+   "default": "1",
+   "description": "Chaque soir, les tâches du jour sont rapprochées des arrêts GPS : arrivée, départ, durée sur place."
+  },
+  {
+   "fieldname": "rayon_metres",
+   "fieldtype": "Int",
+   "label": "Rayon d’appariement (m)",
+   "default": "150",
+   "description": "Un arrêt à moins de cette distance de l’adresse de la tâche compte comme un passage chez le client."
+  },
+  {
+   "fieldname": "arret_minimum",
+   "fieldtype": "Int",
+   "label": "Arrêt minimum (secondes)",
+   "default": "60",
+   "description": "En dessous, un arrêt n’est pas retenu (feu rouge, embouteillage)."
+  },
+  {
+   "fieldname": "ecart_tolere",
+   "fieldtype": "Int",
+   "label": "Tolérance « à l’heure » (minutes)",
+   "default": "30",
+   "description": "Arrivée dans cette marge autour de l’heure annoncée = à l’heure ; au-delà = en avance / en retard."
+  },
+  {
+   "fieldname": "sec_vehicules",
+   "fieldtype": "Section Break",
+   "label": "Véhicules et employés"
+  },
+  {
+   "fieldname": "vehicules",
+   "fieldtype": "Table",
+   "label": "Véhicules",
+   "options": "Config Flotte GPS Vehicule",
+   "description": "Qui conduit quel véhicule : c’est ce lien qui permet de retrouver les passages de chaque employé."
+  },
+  {
+   "fieldname": "sec_etat",
+   "fieldtype": "Section Break",
+   "label": "État"
+  },
+  {
+   "fieldname": "derniere_synchro",
+   "fieldtype": "Datetime",
+   "label": "Dernier appariement",
+   "read_only": 1
+  },
+  {
+   "fieldname": "col_etat",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "dernier_message",
+   "fieldtype": "Small Text",
+   "label": "Dernier résultat",
+   "read_only": 1
+  }
+ ],
+ "field_order": [
+  "sec_connexion",
+  "url_ws",
+  "utilisateur",
+  "mot_de_passe",
+  "lire_vehicules",
+  "col_connexion",
+  "actif",
+  "rayon_metres",
+  "arret_minimum",
+  "ecart_tolere",
+  "sec_vehicules",
+  "vehicules",
+  "sec_etat",
+  "derniere_synchro",
+  "col_etat",
+  "dernier_message"
+ ]
+}
