@@ -16,6 +16,9 @@ const ST_ETAPE = {
   "non suivie": ["autre", "– non suivie"], "sans position": ["autre", "📍 sans position"], "annulée": ["annulee", "annulée"],
 };
 const ST_RAFRAICHIR_S = 60;
+const ST_COULEURS = ["#2563eb", "#16a34a", "#d97706", "#9333ea", "#dc2626", "#0891b2", "#be185d", "#4d7c0f"];
+const ST_FOND = { "passée": "#16a34a", "clôturée": "#16a34a", "sur place": "#eab308", "en route": "#2563eb", "à venir": "#60a5fa",
+  "en retard": "#dc2626", "sans passage": "#dc2626", "clôturée sans passage": "#dc2626", "annulée": "#9ca3af" };
 
 class SuiviTerrain {
   constructor(wrapper) {
@@ -37,6 +40,19 @@ class SuiviTerrain {
     $r.find("[data-action='apparier']").on("click", () => this.apparier());
     $r.find("[data-action='stats']").on("click", () => this.stats());
     $r.find("[data-action='backfill']").on("click", () => this.backfill());
+    let carte_voulue = true;
+    try { carte_voulue = localStorage.getItem("st_carte") !== "0"; } catch (e) { /* stockage indisponible */ }
+    this.carte_visible = carte_voulue;
+    $r.find("[data-action='carte']").on("click", () => {
+      this.carte_visible = !this.carte_visible;
+      try { localStorage.setItem("st_carte", this.carte_visible ? "1" : "0"); } catch (e) { /* ignoré */ }
+      if (this.data) this._render_carte();
+    });
+    $r.on("click", ".st-nom", (e) => {
+      const nom = $(e.currentTarget).text();
+      const emp = this.data && this.data.employes.find((x) => x.nom === nom);
+      if (emp && emp.position && this.carte) this.carte.setView([emp.position.lat, emp.position.lng], 14);
+    });
     $r.find(".st-tab").on("click", (e) => {
       const t = $(e.currentTarget).attr("data-tab");
       $r.find(".st-tab").removeClass("active"); $(e.currentTarget).addClass("active");
@@ -162,6 +178,65 @@ class SuiviTerrain {
       html += `</div>`;
     }
     $out.html(html + `</div>`);
+    this._render_carte();
+  }
+
+  // ── Carte : véhicules en live, itinéraire prévu, trajet réel, clients numérotés ─────────────────────────
+  _render_carte() {
+    const d = this.data, el = this.$root.find("#st-carte")[0], esc = frappe.utils.escape_html;
+    if (!this.carte_visible || !window.L || !d.employes.some((e) => e.taches.length || e.position)) {
+      $(el).hide(); return;
+    }
+    $(el).show();
+    if (!this.carte) {
+      this.carte = L.map(el, { scrollWheelZoom: true });
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "© OpenStreetMap" }).addTo(this.carte);
+      this.couches = L.layerGroup().addTo(this.carte);
+      this.carte_cadree = null;
+    }
+    this.couches.clearLayers();
+    const bornes = [];
+    const pt = (lat, lng) => { bornes.push([lat, lng]); return [lat, lng]; };
+    const depots = new Set();
+    d.employes.forEach((e, i) => {
+      const c = ST_COULEURS[i % ST_COULEURS.length];
+      const dep = e.depart || d.depot;
+      if (dep && !depots.has(dep.join())) {
+        depots.add(dep.join());
+        L.marker(pt(dep[0], dep[1]), { icon: L.divIcon({ className: "", html: `<div style="font-size:20px;line-height:20px">${dep.join() === (d.depot || []).join() ? "🏬" : "🏠"}</div>`, iconSize: [22, 22], iconAnchor: [11, 11] }) })
+          .bindTooltip(dep.join() === (d.depot || []).join() ? "Magasin" : `Domicile de ${esc(e.nom)}`, { direction: "top" }).addTo(this.couches);
+      }
+      if (e.itineraire && e.itineraire.length > 1) L.polyline(e.itineraire, { color: c, weight: 3, opacity: 0.55, dashArray: "7 7" }).addTo(this.couches);
+      if (e.trace && e.trace.length > 1) {
+        const ligne = L.polyline(e.trace.map((p) => [p[0], p[1]]), { color: c, weight: 3, opacity: 0.8 }).addTo(this.couches);
+        ligne.bindTooltip(`${esc(e.nom)} · trajet réel ${esc(e.trace[0][2])} → ${esc(e.trace[e.trace.length - 1][2])}${e.km != null ? " · " + e.km + " km" : ""}`, { sticky: true });
+      }
+      let n = 0;
+      e.taches.forEach((t) => {
+        if (!(t.lat && t.lng) || t.etape === "annulée") return;
+        n++;
+        const fond = ST_FOND[t.etape] || "#6b7280", approx = t.position_src && t.position_src !== "tâche";
+        let detail = `${this._h(t.debut)} annoncé`;
+        if (t.etape === "passée") detail += ` · réel ${this._h(t.gps_live.arrivee)} → ${this._h(t.gps_live.depart)} (${this._min(t.gps_live.duree)})`;
+        else if (t.etape === "sur place") detail += ` · sur place depuis ${this._h(t.arrivee_reelle)}`;
+        else if (t.eta) detail += ` · arrivée estimée ${this._h(t.eta)}`;
+        L.marker(pt(t.lat, t.lng), { icon: L.divIcon({ className: "", iconSize: [24, 24], iconAnchor: [12, 12],
+          html: `<div style="width:24px;height:24px;border-radius:12px;background:${fond};color:#fff;font-weight:700;font-size:11px;display:flex;align-items:center;justify-content:center;border:3px ${approx ? "dashed" : "solid"} ${c};box-shadow:0 0 0 1px #fff">${n}</div>` }) })
+          .bindTooltip(`${n} · ${esc(t.client || t.titre || t.name)} <span style="color:#64748b">${this._h(t.debut)}</span>`, { direction: "right", offset: [12, 0] })
+          .bindPopup(`<b>${n} · ${esc(t.client || t.titre || t.name)}</b><br>${esc(e.nom)} · ${esc(t.type)} · <b>${esc(t.etape)}</b><br>${esc(detail)}${approx ? "<br>≈ position approchée" : ""}<br><a href="/app/tache-de-travail/${encodeURIComponent(t.name)}">ouvrir la tâche</a>`)
+          .addTo(this.couches);
+      });
+      if (e.position) {
+        const p = e.position, age = p.age_min != null ? ` · il y a ${this._min(p.age_min)}` : "";
+        L.marker(pt(p.lat, p.lng), { zIndexOffset: 1000, icon: L.divIcon({ className: "", iconSize: [34, 34], iconAnchor: [17, 17],
+          html: `<div style="width:34px;height:34px;border-radius:17px;background:#fff;border:3px solid ${c};display:flex;align-items:center;justify-content:center;font-size:18px;box-shadow:0 1px 4px rgba(0,0,0,.4)">🚗</div>` }) })
+          .bindTooltip(`<b>${esc(e.nom)}</b> · ${esc(e.vehicule || "")}<br>${esc(e.etat)}${e.lieu ? " " + esc(e.lieu) : ""}${p.vitesse ? " · " + p.vitesse + " km/h" : ""}${age}`, { permanent: true, direction: "top", offset: [0, -18], className: "st-etiq" })
+          .addTo(this.couches);
+      }
+    });
+    if (bornes.length && !this.carte_cadree) { this.carte.fitBounds(bornes, { padding: [30, 30] }); this.carte_cadree = d.jour; }
+    else if (bornes.length && this.carte_cadree !== d.jour) { this.carte.fitBounds(bornes, { padding: [30, 30] }); this.carte_cadree = d.jour; }
+    setTimeout(() => this.carte && this.carte.invalidateSize(), 50);
   }
 
   // ── Statistiques ──────────────────────────────────────────────────────────

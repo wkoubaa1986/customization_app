@@ -38,6 +38,8 @@
     .st-kpi .v { font-size: 22px; font-weight: 700; } .st-kpi .l { font-size: 12px; color: var(--text-muted); }
     .st-section { margin: 16px 0 6px; font-weight: 700; font-size: 14px; }
     .st-empty { padding: 30px; text-align: center; color: var(--text-muted); }
+    .st-etiq { font-size: 11px; padding: 2px 6px; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,.3); }
+    #st-carte .leaflet-container { font: inherit; }
     @media (max-width: 600px) { .st-grid { grid-template-columns: 1fr; } }
   </style>
 
@@ -55,6 +57,11 @@
   </div>
 
   <div class="st-panel active" data-panel="live">
+    <div class="st-bar" style="margin-bottom:6px">
+      <button class="btn btn-default btn-sm" data-action="carte">🗺 Carte</button>
+      <span class="st-dim" id="st-legende">🚗 véhicule (position live) · ligne pointillée = itinéraire prévu · ligne pleine = trajet réel du jour · pastilles numérotées = clients dans l’ordre (vert passé, jaune sur place, bleu à venir, rouge heure dépassée)</span>
+    </div>
+    <div id="st-carte" style="height: 440px; border: 1px solid var(--border-color); border-radius: 10px; margin-bottom: 12px; display: none;"></div>
     <div id="st-live"><div class="st-empty">Chargement…</div></div>
   </div>
 

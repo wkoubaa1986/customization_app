@@ -118,14 +118,15 @@ def _bornes_utc(jour) -> tuple[str, str]:
     return d.strftime("%Y-%m-%dT%H:%M:%S.000Z"), (d + timedelta(days=1) - timedelta(seconds=1)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
 
-def lire_journal(jour, cboxes: list, live: bool = False, cfg: dict | None = None) -> dict:
+def lire_journal(jour, cboxes: list, live: bool = False, cfg: dict | None = None, trace: bool = False) -> dict:
     """{cbox: {arrets: [{arr, dep, lat, lng, minutes}], trajets: [{debut, fin, minutes, km, vmax}], km, position, erreur}}.
     Les arrêts sont en heure locale ; un arrêt commencé la veille est gardé (il dit où dormait le véhicule)."""
     cfg = cfg or config()
     if not cboxes:
         return {}
     dt1, dt2 = _bornes_utc(jour)
-    res = appeler_plateforme("suivi" if live else "journal", cfg, cbox=list(cboxes), dt1=dt1, dt2=dt2, stoplen=cfg["arret_min"])
+    res = appeler_plateforme("suivi" if live else "journal", cfg, cbox=list(cboxes), dt1=dt1, dt2=dt2, stoplen=cfg["arret_min"],
+                             trace=bool(trace))
     out = {}
     for cbox in cboxes:
         lignes = (res.get("journal") or {}).get(str(cbox))
@@ -144,6 +145,9 @@ def lire_journal(jour, cboxes: list, live: bool = False, cfg: dict | None = None
                     v["arrets"].append({"arr": d, "dep": d + timedelta(minutes=minutes), "lat": flt(r.get("LAT")),
                                         "lng": flt(r.get("LON")), "minutes": round(minutes)})
             v["km"] = round(v["km"], 1)
+        # Trace du jour : [[lat, lng, "HH:MM"]] (heure UTC rendue en heure de Tunis)
+        v["trace"] = [[t[0], t[1], "%02d:%s" % ((int(t[2][:2]) + 1) % 24, t[2][3:])] for t in ((res.get("traces") or {}).get(str(cbox)) or [])
+                      if isinstance(t, list) and len(t) == 3]
         pos = (res.get("positions") or {}).get(str(cbox))
         if pos and not pos.get("erreur") and pos.get("lat"):
             v["position"] = {"lat": flt(pos["lat"]), "lng": flt(pos["lng"]), "vitesse": cint(pos.get("vitesse")),
@@ -383,6 +387,31 @@ def cron_du_soir():
 
 # ── Suivi terrain (temps réel) ───────────────────────────────────────────────
 
+def _trace_routiere(points: list, osrm: str) -> list:
+    """Le tracé routier (OSRM, simplifié) qui enchaîne les points dans l'ordre → [[lat, lng], …] ; repli : traits droits.
+    Mis en cache 15 min (la carte se rafraîchit toutes les 60 s)."""
+    pts = [(round(p[0], 5), round(p[1], 5)) for p in points if p and p[0] and p[1]]
+    if len(pts) < 2:
+        return [list(p) for p in pts]
+    cle = "flotte_gps:route:" + frappe.generate_hash(json.dumps(pts), 12)
+    cache = frappe.cache().get_value(cle)
+    if cache:
+        return cache
+    out = [list(p) for p in pts]
+    if not frappe.flags.get("tournee_sans_reseau"):
+        try:
+            import requests
+            coords = ";".join("%.5f,%.5f" % (p[1], p[0]) for p in pts)
+            r = requests.get("%s/route/v1/driving/%s" % (osrm, coords), params={"overview": "simplified", "geometries": "geojson"}, timeout=15)
+            d = r.json()
+            if d.get("code") == "Ok" and d["routes"]:
+                out = [[round(c[1], 5), round(c[0], 5)] for c in d["routes"][0]["geometry"]["coordinates"]]
+        except Exception:
+            pass                                    # traits droits, sans bruit dans le journal d'erreurs
+    frappe.cache().set_value(cle, out, expires_in_sec=900)
+    return out
+
+
 def _lieu(point, taches: list, depot, departs: dict, employe, rayon_m) -> str:
     for t in taches:
         if t.get("lat") and _m(point, (t["lat"], t["lng"])) <= rayon_m:
@@ -437,7 +466,7 @@ def suivi(jour=None):
     cboxes = cfg["cboxes"]
     erreur = None
     try:
-        journaux = lire_journal(jour, cboxes, live=aujourdhui, cfg=cfg) if cboxes else {}
+        journaux = lire_journal(jour, cboxes, live=aujourdhui, cfg=cfg, trace=True) if cboxes else {}
     except Exception as e:
         journaux, erreur = {}, str(e)[:300]
     emp_cbox = vehicules_du_jour(taches, journaux, cfg["employe_cbox"], cfg["rayon"], _lieux_communs(cfg_t))
@@ -504,12 +533,19 @@ def suivi(jour=None):
                         restantes[0]["etape"] = "en route"
                 except Exception:
                     frappe.log_error(frappe.get_traceback()[-800:], "Flotte GPS : projection")
+        # Pour la carte : la trace réelle du véhicule et l'itinéraire prévu (Magasin ou domicile → clients dans l'ordre).
+        e["trace"] = j["trace"] if j and not j.get("erreur") else []
+        depart = cfg_t["departs"].get(emp) or cfg_t["depot"]
+        etapes = [t for t in e["taches"] if t.get("lat") and t["etape"] != "annulée"]
+        e["itineraire"] = _trace_routiere([depart] + [(t["lat"], t["lng"]) for t in etapes], cfg_t["osrm"]) if etapes else []
+        e["depart"] = list(depart)
         e["faites"] = len([t for t in e["taches"] if t["etape"] in ("passée", "clôturée")])
         e["total"] = len([t for t in e["taches"] if t["etape"] != "annulée"])
         for t in e["taches"]:
             t.pop("gps", None)
         sortie.append(e)
     return {"jour": str(jour), "aujourdhui": aujourdhui, "maintenant": maintenant, "employes": sortie, "erreur": erreur,
+            "depot": list(cfg_t["depot"]),
             "rayon": cfg["rayon"], "tolerance": cfg["tolerance"], "configure": bool(cfg["utilisateur"] and cfg["vehicules"])}
 
 

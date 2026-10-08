@@ -3,7 +3,8 @@
 //   commande "vehicules"  → [{CVEH, LVEH, CBOX}]
 //   commande "positions"  → {CBOX: {lat, lng, vitesse, heure (fixTime), moteur, mouvement, en_ligne}} pour cbox: [..]
 //   commande "journal"    → {journal: {CBOX: [lignes]}, positions: {}} pour cbox: [..], dt1, dt2 (ISO UTC), stoplen (s)
-//   commande "suivi"      → journal + positions live, en une seule connexion
+//   commande "suivi"      → journal + positions live, en une seule connexion ; avec trace: true, la trace du jour
+//                           (getPath, un point gardé toutes les ≥ 20 s ou ≥ 40 m) → {cbox: [[lat, lng, "HH:MM" UTC]]}
 // Reconstruire le bundle après modification : dans un dossier de travail (hors dépôt),
 //   npm install @deepstream/client@7   puis
 //   NODE_PATH=<ce dossier>/node_modules <frappe-bench>/apps/frappe/node_modules/.bin/esbuild <chemin>/flotte_gps_client.src.js \
@@ -51,11 +52,29 @@ async function main() {
       rec.discard();
     }
   } else if (q.commande === 'journal' || q.commande === 'suivi') {
-    out = { journal: {}, positions: {} };
+    out = { journal: {}, positions: {}, traces: {} };
     for (const cbox of q.cbox || []) {
       try {
         out.journal[String(cbox)] = await rpc('journal', { CBOX: cbox, DT1: q.dt1, DT2: q.dt2, STOPLEN: q.stoplen || 60 });
       } catch (e) { out.journal[String(cbox)] = { erreur: String(e) }; }
+      if (q.trace) {
+        try {
+          const r = await rpc('getPath', { CBOX: cbox, DT1: q.dt1, AGE: 24, withSummary: false, STOPLEN: q.stoplen || 60 });
+          const pts = Array.isArray(r) ? r : ((r && r.positions) || []);
+          const garde = []; let dernier = null;
+          for (const p of pts) {
+            if (!(p.LAT && p.LON)) continue;
+            const t = Date.parse(p.DT);
+            if (dernier) {
+              const dt = (t - dernier.t) / 1000, dd = Math.hypot((p.LAT - dernier.lat) * 111000, (p.LON - dernier.lng) * 89000);
+              if (dt < 20 && dd < 40) continue;
+            }
+            dernier = { t, lat: p.LAT, lng: p.LON };
+            garde.push([Math.round(p.LAT * 1e5) / 1e5, Math.round(p.LON * 1e5) / 1e5, String(p.DT).slice(11, 16)]);
+          }
+          out.traces[String(cbox)] = garde;
+        } catch (e) { out.traces[String(cbox)] = []; }
+      }
       if (q.commande === 'suivi') {
         const rec = client.record.getRecord('tracker/' + cbox);
         try {
