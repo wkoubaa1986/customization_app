@@ -30,7 +30,13 @@ ETAPES_A_VENIR = ("en route", "à venir", "en retard", "sur place")
 
 def reglage() -> dict:
     v = lambda champ: frappe.db.get_single_value(fg.CONFIG, champ)  # noqa: E731
-    return {"en_route": cint(v("sms_en_route")), "retard": cint(v("sms_retard")), "lien": cint(v("sms_lien")) if v("sms_lien") is not None else 1,
+    # Date de début : avant elle, les SMS clients restent éteints quoi qu'on coche (demande du 08/10/2026) ;
+    # les alertes internes (Salma) ne sont pas concernées.
+    debut = v("sms_date_debut")
+    sms_ok = not debut or getdate(nowdate()) >= getdate(debut)
+    return {"en_route": cint(v("sms_en_route")) if sms_ok else 0, "retard": cint(v("sms_retard")) if sms_ok else 0,
+            "sms_date_debut": str(debut) if debut else "", "sms_ok": sms_ok,
+            "lien": cint(v("sms_lien")) if v("sms_lien") is not None else 1,
             "alerte": cint(v("alerte_salma")) if v("alerte_salma") is not None else 1,
             "delai_max": cint(v("sms_delai_max")) or 45, "tolerance": cint(v("ecart_tolere")) or 30,
             # Un champ Time jamais saisi vaut timedelta(0) en base : 0 = « pas réglé » → défaut.
@@ -190,11 +196,12 @@ def evaluer(ecrire: bool = True) -> dict:
     """Un tour du moteur : ce qui doit partir maintenant, envoyé/simulé si `ecrire`, sinon seulement listé (aperçu)."""
     cfg = reglage()
     if not (cfg["en_route"] or cfg["retard"] or cfg["alerte"]):
-        return {"messages": [], "simulation": simulation(), "actif": False}
+        return {"messages": [], "simulation": simulation(), "actif": False, "sms_ok": cfg["sms_ok"], "sms_date_debut": cfg["sms_date_debut"]}
     s = fg._suivi(nowdate())
     maintenant = get_datetime(s["maintenant"])
     messages = decider(s["employes"], maintenant, cfg, _deja(nowdate()))
-    return {"messages": executer(messages, cfg, ecrire=ecrire), "simulation": simulation(), "actif": True, "maintenant": maintenant}
+    return {"messages": executer(messages, cfg, ecrire=ecrire), "simulation": simulation(), "actif": True, "maintenant": maintenant,
+            "sms_ok": cfg["sms_ok"], "sms_date_debut": cfg["sms_date_debut"]}
 
 
 def cron():

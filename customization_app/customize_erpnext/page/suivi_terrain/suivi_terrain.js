@@ -225,7 +225,7 @@ class SuiviTerrain {
         for (const m of extra.messages) html += `<tr><td>${esc(m.type)}</td><td>${esc(m.client)}</td><td>${esc(m.telephone || "")}</td><td>${esc(m.texte || "")}</td><td class="st-dim">${esc(m.raison || "")}</td><td>${esc(m.statut || "")} <span class="st-dim">${esc(m.detail || "")}</span></td></tr>`;
         html += `</tbody></table>`;
       }
-      html += `<div class="st-dim" style="margin-top:4px">${extra.simulation ? "🧪 developer_mode : tout est simulé, rien ne part." : "Envoi réel (production)."}</div></div>`;
+      html += `<div class="st-dim" style="margin-top:4px">${extra.simulation ? "🧪 developer_mode : tout est simulé, rien ne part." : "Envoi réel (production)."}${extra.sms_ok === false ? ` · SMS clients éteints jusqu’au ${frappe.datetime.str_to_user(extra.sms_date_debut)} (réglage).` : ""}</div></div>`;
     }
     if (!msgs.length) { $el.html(html + `<span class="st-dim">Aucun message aujourd’hui.</span>`); return; }
     html += `<div class="st-msgs"><table class="st-t"><thead><tr><th>Heure</th><th>Type</th><th>Client</th><th>Technicien</th><th>Tél.</th><th>Message</th><th>Verdict</th></tr></thead><tbody>`;
