@@ -172,7 +172,7 @@ class SuiviTerrain {
           if (t.etape === "passée") { reel = `${this._h(t.gps_live.arrivee)} → ${this._h(t.gps_live.depart)} ${this._ecart(t.gps_live.ecart, d.tolerance)}`; duree = this._min(t.gps_live.duree); }
           else if (t.etape === "sur place") { reel = `arrivé ${this._h(t.arrivee_reelle)}${t.eta_depart ? ", fin estimée " + this._h(t.eta_depart) : ""}`; duree = this._min((new Date(d.maintenant) - new Date(t.arrivee_reelle)) / 60000); }
           else if (t.eta) { reel = `arrivée estimée ${this._h(t.eta)} ${this._ecart(t.ecart_prevu, d.tolerance)}${t.route_min ? ` <span class="st-dim">(${t.route_min} min de route)</span>` : ""}`; }
-          const prevenu = (t.messages || []).filter((m) => m.type !== "Alerte interne").map((m) => `📨 ${m.type} ${this._h(m.heure)}${m.statut === "Simulé" ? " (simulé)" : m.statut === "Échec" ? " ❌" : ""}`).join(", ");
+          const prevenu = (t.messages || []).filter((m) => !["Alerte interne", "Non faite"].includes(m.type)).map((m) => `📨 ${m.type} ${this._h(m.heure)}${m.statut === "Simulé" ? " (simulé)" : m.statut === "Échec" ? " ❌" : ""}`).join(", ");
           html += `<tr><td class="num">${this._h(t.debut)}${t.fin ? "–" + this._h(t.fin) : ""}</td>
             <td><span class="st-client">${esc(t.client || t.titre || t.name)}</span><br><span class="st-dim">${esc(t.type)}${t.secteur ? " · " + esc(t.secteur) : ""}${t.position_src && t.position_src !== "tâche" ? " · position " + esc(t.position_src) : ""}</span></td>
             <td><span class="st-etape ${ec}">${el}</span></td><td>${reel} <a href="#" class="st-dim" data-copie="${esc(this._phrase(e, t, d))}" title="Copier la phrase pour le client">📋</a></td><td class="num">${duree}${prevenu ? `<br><span class="st-dim">${prevenu}</span>` : ""}</td></tr>`;
@@ -199,7 +199,7 @@ class SuiviTerrain {
     const ns = lignes.filter((l) => l.t.etape === "sautée").length, nr = lignes.length - ns;
     let html = `<div class="st-retard-bloc"><div class="t">⚠️ ${nr ? nr + " retard" + (nr > 1 ? "s" : "") + " prévisible" + (nr > 1 ? "s" : "") : ""}${nr && ns ? " · " : ""}${ns ? ns + " intervention" + (ns > 1 ? "s" : "") + " non faite" + (ns > 1 ? "s" : "") + " à reprogrammer" : ""} — à prévenir</div><table class="st-t"><thead><tr><th>Client</th><th>Tél.</th><th>Technicien</th><th class="num">Annoncé</th><th class="num">Estimé</th><th>Retard</th><th>Client prévenu ?</th><th></th></tr></thead><tbody>`;
     for (const { e, t } of lignes) {
-      const sms = (t.messages || []).filter((m) => m.type !== "Alerte interne");
+      const sms = (t.messages || []).filter((m) => !["Alerte interne", "Non faite"].includes(m.type));
       const prevenu = sms.length ? sms.map((m) => `${m.type} ${this._h(m.heure)} (${m.statut})`).join(", ") : "<span class='st-ecart retard'>non</span>";
       const estime = t.etape === "sautée" ? `<span class="st-ecart retard">⛔ non faite, une suivante déjà faite</span>` : `${this._h(t.eta)}</td><td>${this._ecart(t.ecart_prevu, d.tolerance)}`;
       html += `<tr><td class="st-client">${esc(t.client || t.name)}</td><td>${esc(t.tel || "")}</td><td>${esc(e.nom)}</td><td class="num">${this._h(t.debut)}</td><td class="num">${estime}</td><td>${prevenu}</td><td><a href="#" data-copie="${esc(this._phrase(e, t, d))}" title="Copier la phrase">📋</a></td></tr>`;

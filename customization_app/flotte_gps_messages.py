@@ -19,7 +19,8 @@ from frappe.utils import cint, get_datetime, getdate, now_datetime, nowdate
 from customization_app import flotte_gps as fg
 
 JOURNAL = "Message Client GPS"
-EN_ROUTE, RETARD, ALERTE = "En route", "Retard", "Alerte interne"
+EN_ROUTE, RETARD, ALERTE, NON_FAITE = "En route", "Retard", "Alerte interne", "Non faite"
+INTERNES = (ALERTE, NON_FAITE)
 DEFAUT_EN_ROUTE = ("Bonjour {nom_client}, votre technicien {technicien} est en route, arrivée estimée vers {heure_estimee}."
                    " Suivre : {lien} - Aqua World")
 DEFAUT_RETARD = ("Bonjour {nom_client}, votre technicien {technicien} a du retard : arrivée estimée vers {heure_estimee}"
@@ -71,8 +72,8 @@ def decider(employes: list, maintenant: datetime, cfg: dict, deja: dict) -> list
     for e in employes:
         # Sautée (non faite, une suivante déjà faite) : jamais de SMS automatique, une alerte interne pour la reprogrammer.
         for t in e["taches"]:
-            if t.get("etape") == "sautée" and cfg["alerte"] and ALERTE not in deja.get(t["name"], set()):
-                out.append({"tache": t["name"], "type": ALERTE, "eta": get_datetime(t["debut"]), "ecart": None, "employe": e["employe"],
+            if t.get("etape") == "sautée" and cfg["alerte"] and NON_FAITE not in deja.get(t["name"], set()):
+                out.append({"tache": t["name"], "type": NON_FAITE, "eta": get_datetime(t["debut"]), "ecart": None, "employe": e["employe"],
                             "client": t.get("client") or "", "raison": "non faite à l'heure prévue, à reprogrammer (rappeler le client)"})
         restantes = [t for t in e["taches"] if t.get("etape") in ETAPES_A_VENIR and t.get("eta")]
         if not restantes:
@@ -83,7 +84,9 @@ def decider(employes: list, maintenant: datetime, cfg: dict, deja: dict) -> list
             eta, debut = get_datetime(t["eta"]), get_datetime(t["debut"])
             ecart = round((eta - debut).total_seconds() / 60)
             base = {"tache": t["name"], "eta": eta, "ecart": ecart, "employe": e["employe"], "client": t.get("client") or ""}
-            if t is prochaine and cfg["en_route"] and dans_plage and EN_ROUTE not in faits and t["etape"] in ("en route", "à venir", "en retard") \
+            # « En route » seulement si le créneau n'est pas déjà dépassé : une intervention en retard a reçu (ou reçoit)
+            # « retard » avec l'heure estimée, et le technicien va peut-être à la suivante (on ne sait pas vers qui il roule).
+            if t is prochaine and cfg["en_route"] and dans_plage and EN_ROUTE not in faits and t["etape"] in ("en route", "à venir") \
                     and e.get("etat") == "en mouvement" and (eta - maintenant).total_seconds() / 60 <= cfg["delai_max"]:
                 out.append(dict(base, type=EN_ROUTE, raison="prochaine intervention, arrivée dans %d min" % max(0, (eta - maintenant).total_seconds() // 60)))
                 faits = faits | {EN_ROUTE}
@@ -124,7 +127,7 @@ def _alerter_appels(m: dict, ligne: dict):
     """Notification Desk (cloche) aux utilisateurs du rôle Appels : retard prévisible chez tel client."""
     users = frappe.get_all("Has Role", filters={"role": "Appels", "parenttype": "User"}, pluck="parent")
     users = [u for u in set(users) if frappe.db.get_value("User", u, "enabled")]
-    if m.get("ecart") is None:
+    if m["type"] == NON_FAITE:
         sujet = "⛔ Intervention non faite : %s (%s), prévue %s — à reprogrammer, rappeler le client" % (
             ligne.get("nom_client") or m["tache"], (ligne.get("technicien") or "").split(" ")[0], ligne.get("heure") or "?")
     else:
@@ -147,7 +150,7 @@ def executer(messages: list, cfg: dict, ecrire: bool = True) -> list:
     verdicts = []
     for m in messages:
         ligne = lignes.get(m["tache"]) or {}
-        if m["type"] == ALERTE:
+        if m["type"] in INTERNES:
             users = _alerter_appels(m, ligne) if ecrire else []
             v = dict(m, statut="Interne", texte="", telephone="", detail="notifiés : %s" % ", ".join(users))
         else:
@@ -270,4 +273,9 @@ def etat_suivi(code: str):
                 out["adresse"] = [x["lat"], x["lng"]]
             if e.get("position") and x["etape"] in ("en route", "sur place") or (e.get("position") and out["avant"] == 0 and x["etape"] in ("à venir", "en retard")):
                 out["position"] = [e["position"]["lat"], e["position"]["lng"]]
+                out["position_heure"] = get_datetime(e["position"]["heure"]).strftime("%H:%M") if e["position"].get("heure") else ""
+                # Le trajet routier de la voiture jusqu'au client (OSRM, mis en cache), et sa durée.
+                if out["adresse"] and x["etape"] != "sur place":
+                    out["trajet"] = fg._trace_routiere([tuple(out["position"]), tuple(out["adresse"])], fg.to.config()["osrm"])
+                    out["route_min"] = x.get("route_min")
     return out

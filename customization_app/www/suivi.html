@@ -47,7 +47,7 @@
     var etat = "", cls = "p-attente", eta = "";
     switch (d.etape) {
       case "en route": etat = "🚗 Votre technicien " + esc(d.technicien) + " est en route"; cls = "p-route";
-        eta = d.eta ? '<div class="sv-eta">Arrivée estimée<b>' + esc(d.eta) + '</b></div>' : ""; break;
+        eta = d.eta ? '<div class="sv-eta">Arrivée estimée<b>' + esc(d.eta) + '</b>' + (d.route_min ? "environ " + esc(d.route_min) + " min de route" : "") + "</div>" : ""; break;
       case "sur place": etat = "🟡 " + esc(d.technicien) + " est chez vous depuis " + esc(d.arrivee); cls = "p-place"; break;
       case "passée": etat = "✅ Intervention réalisée"; cls = "p-ok";
         eta = d.reel ? '<div class="sv-eta">Passage de <b style="font-size:18px">' + esc(d.reel.arrivee) + " à " + esc(d.reel.depart) + "</b></div>" : ""; break;
@@ -71,7 +71,8 @@
       couches.clearLayers();
       var pts = [d.adresse];
       L.marker(d.adresse, { icon: L.divIcon({ className: "", html: '<div style="font-size:22px;line-height:22px">🏠</div>', iconSize: [24, 24], iconAnchor: [12, 12] }) }).addTo(couches);
-      if (d.position) { pts.push(d.position); L.marker(d.position, { icon: L.divIcon({ className: "", html: '<div style="font-size:24px;line-height:24px">🚗</div>', iconSize: [26, 26], iconAnchor: [13, 13] }) }).addTo(couches); }
+      if (d.trajet && d.trajet.length > 1) { L.polyline(d.trajet, { color: "#0e7490", weight: 5, opacity: 0.8 }).addTo(couches); d.trajet.forEach(function (p) { pts.push(p); }); }
+      if (d.position) { pts.push(d.position); L.marker(d.position, { icon: L.divIcon({ className: "", html: '<div style="font-size:24px;line-height:24px">🚗</div>', iconSize: [26, 26], iconAnchor: [13, 13] }) }).bindTooltip("Votre technicien" + (d.position_heure ? " · " + d.position_heure : ""), { permanent: true, direction: "top", offset: [0, -14] }).addTo(couches); }
       carte.fitBounds(pts, { padding: [40, 40], maxZoom: 15 });
       setTimeout(function () { carte.invalidateSize(); }, 50);
     } else { mp.style.display = "none"; }

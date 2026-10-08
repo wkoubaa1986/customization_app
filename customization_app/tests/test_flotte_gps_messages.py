@@ -48,12 +48,20 @@ class TestDecider(unittest.TestCase):
         self.assertEqual(fm.decider([emp], now, CFG, {"C": {fm.RETARD, fm.ALERTE}}), [])
 
     def test_en_route_avec_retard_ne_double_pas_le_sms(self):
-        # Prochaine intervention, en mouvement, arrivée dans 20 min mais 50 min après l'heure annoncée :
-        # un SMS « en route » (qui porte déjà l'heure estimée) + l'alerte interne, pas de second SMS « retard ».
+        # Prochaine intervention, en mouvement, arrivée dans 20 min mais 50 min après l'heure annoncée, créneau pas
+        # encore dépassé (« à venir ») : un SMS « en route » (qui porte déjà l'heure estimée) + l'alerte interne,
+        # pas de second SMS « retard ».
         now = J + timedelta(hours=14, minutes=30)
-        emp = _e("en mouvement", [_t("B", 14, "en retard", 14.83)])
+        emp = _e("en mouvement", [_t("B", 14, "à venir", 14.83)])
         r = fm.decider([emp], now, CFG, {})
         self.assertEqual(sorted(m["type"] for m in r), [fm.ALERTE, fm.EN_ROUTE])
+
+    def test_creneau_depasse_pas_de_en_route_mais_retard(self):
+        # Créneau déjà dépassé : on ne sait pas s'il y va ou s'il la saute → « retard » (avec l'heure estimée) + alerte, jamais « en route ».
+        now = J + timedelta(hours=14, minutes=30)
+        emp = _e("en mouvement", [_t("B", 13, "en retard", 14.83)])
+        r = fm.decider([emp], now, CFG, {})
+        self.assertEqual(sorted(m["type"] for m in r), [fm.ALERTE, fm.RETARD])
 
     def test_hors_plage_horaire_sms_mais_alerte_interne(self):
         now = J + timedelta(hours=19, minutes=30)
@@ -65,8 +73,8 @@ class TestDecider(unittest.TestCase):
         now = J + timedelta(hours=14, minutes=10)
         emp = _e("en mouvement", [_t("B", 10.5, "sautée"), _t("C", 14.5, "en route", 14.5)])
         r = fm.decider([emp], now, CFG, {})
-        self.assertEqual(sorted((m["tache"], m["type"]) for m in r), [("B", fm.ALERTE), ("C", fm.EN_ROUTE)])
-        self.assertEqual(fm.decider([emp], now, CFG, {"B": {fm.ALERTE}, "C": {fm.EN_ROUTE}}), [])
+        self.assertEqual(sorted((m["tache"], m["type"]) for m in r), [("B", fm.NON_FAITE), ("C", fm.EN_ROUTE)])
+        self.assertEqual(fm.decider([emp], now, CFG, {"B": {fm.NON_FAITE}, "C": {fm.EN_ROUTE}}), [])
 
     def test_reglage_eteint(self):
         now = J + timedelta(hours=14)
