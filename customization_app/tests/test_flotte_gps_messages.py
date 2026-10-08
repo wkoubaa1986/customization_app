@@ -61,6 +61,13 @@ class TestDecider(unittest.TestCase):
         r = fm.decider([emp], now, CFG, {})
         self.assertEqual([m["type"] for m in r], [fm.ALERTE])
 
+    def test_sautee_alerte_interne_jamais_de_sms(self):
+        now = J + timedelta(hours=14, minutes=10)
+        emp = _e("en mouvement", [_t("B", 10.5, "sautée"), _t("C", 14.5, "en route", 14.5)])
+        r = fm.decider([emp], now, CFG, {})
+        self.assertEqual(sorted((m["tache"], m["type"]) for m in r), [("B", fm.ALERTE), ("C", fm.EN_ROUTE)])
+        self.assertEqual(fm.decider([emp], now, CFG, {"B": {fm.ALERTE}, "C": {fm.EN_ROUTE}}), [])
+
     def test_reglage_eteint(self):
         now = J + timedelta(hours=14)
         emp = _e("en mouvement", [_t("B", 14.5, "à venir", 15.5)])

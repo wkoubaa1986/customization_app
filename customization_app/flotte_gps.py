@@ -33,6 +33,7 @@ DELAI_NODE = 120                                   # secondes, par appel (login 
 FUSION_MIN = 10                                    # deux arrêts au même endroit à ≤ 10 min = un seul passage
 FUSION_M = 80                                      # … « même endroit » = à moins de 80 m l'un de l'autre
 RAYON_LIEU_M = 200                                 # « au Magasin », « domicile »
+SAUTEE_APRES_MIN = 60                              # créneau dépassé d'une heure sans passage = probablement sautée
 TYPES_HORS = set(to.TYPES_HORS_JOURNEE) | {"Congé", "Tournée commerciale"}
 
 CONFIRME, AUCUN, SANS_POS, SANS_VEH, SANS_GPS = ("Passage confirmé", "Aucun passage", "Sans position",
@@ -550,6 +551,14 @@ def _suivi_calcul(jour) -> dict:
                 t["etape"] = "en retard"          # heure dépassée, toujours ouverte : projetée à sa place dans l'ordre
             else:
                 t["etape"] = "à venir"
+        # Sautée : heure dépassée sans passage, ET une intervention planifiée APRÈS elle déjà faite (ou en cours), ou le
+        # créneau dépassé depuis plus d'une heure. Elle sort du calcul (sinon elle fausse l'arrivée estimée des suivants)
+        # et ne reçoit aucun SMS automatique : c'est à Salma de rappeler le client pour la reprogrammer.
+        for t in e["taches"]:
+            if t["etape"] == "en retard" and (
+                    any(x["etape"] in ("passée", "sur place") and x["debut"] > t["debut"] for x in e["taches"])
+                    or (t.get("fin") and t["fin"] < maintenant - timedelta(minutes=SAUTEE_APRES_MIN))):
+                t["etape"] = "sautée"
         if aujourdhui and e.get("position"):
             restantes = [t for t in e["taches"] if t["etape"] in ("à venir", "sur place", "en retard") and t.get("lat")]
             if restantes:

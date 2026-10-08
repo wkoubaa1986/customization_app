@@ -52,6 +52,7 @@
       case "passée": etat = "✅ Intervention réalisée"; cls = "p-ok";
         eta = d.reel ? '<div class="sv-eta">Passage de <b style="font-size:18px">' + esc(d.reel.arrivee) + " à " + esc(d.reel.depart) + "</b></div>" : ""; break;
       case "annulée": etat = "Intervention annulée"; cls = "p-off"; break;
+      case "sautée": etat = "⏳ Votre intervention n’a pas pu être réalisée à l’heure prévue. Nous vous rappelons pour la reprogrammer."; cls = "p-retard"; break;
       case "à venir": case "en retard":
         etat = d.avant ? "⏳ " + esc(d.technicien) + " a encore " + d.avant + " intervention" + (d.avant > 1 ? "s" : "") + " avant la vôtre" : "⏳ Votre intervention est la prochaine";
         cls = d.etape === "en retard" ? "p-retard" : "p-attente";

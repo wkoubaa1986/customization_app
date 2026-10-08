@@ -69,6 +69,11 @@ def decider(employes: list, maintenant: datetime, cfg: dict, deja: dict) -> list
     dans_plage = cfg["heure_min"] <= minute <= cfg["heure_max"]
     out = []
     for e in employes:
+        # Sautée (non faite, une suivante déjà faite) : jamais de SMS automatique, une alerte interne pour la reprogrammer.
+        for t in e["taches"]:
+            if t.get("etape") == "sautée" and cfg["alerte"] and ALERTE not in deja.get(t["name"], set()):
+                out.append({"tache": t["name"], "type": ALERTE, "eta": get_datetime(t["debut"]), "ecart": None, "employe": e["employe"],
+                            "client": t.get("client") or "", "raison": "non faite à l'heure prévue, à reprogrammer (rappeler le client)"})
         restantes = [t for t in e["taches"] if t.get("etape") in ETAPES_A_VENIR and t.get("eta")]
         if not restantes:
             continue
@@ -119,8 +124,12 @@ def _alerter_appels(m: dict, ligne: dict):
     """Notification Desk (cloche) aux utilisateurs du rôle Appels : retard prévisible chez tel client."""
     users = frappe.get_all("Has Role", filters={"role": "Appels", "parenttype": "User"}, pluck="parent")
     users = [u for u in set(users) if frappe.db.get_value("User", u, "enabled")]
-    sujet = "⚠️ Retard prévisible : %s (%s) — arrivée estimée %s au lieu de %s" % (
-        ligne.get("nom_client") or m["tache"], (ligne.get("technicien") or "").split(" ")[0], get_datetime(m["eta"]).strftime("%H:%M"), ligne.get("heure") or "?")
+    if m.get("ecart") is None:
+        sujet = "⛔ Intervention non faite : %s (%s), prévue %s — à reprogrammer, rappeler le client" % (
+            ligne.get("nom_client") or m["tache"], (ligne.get("technicien") or "").split(" ")[0], ligne.get("heure") or "?")
+    else:
+        sujet = "⚠️ Retard prévisible : %s (%s) — arrivée estimée %s au lieu de %s" % (
+            ligne.get("nom_client") or m["tache"], (ligne.get("technicien") or "").split(" ")[0], get_datetime(m["eta"]).strftime("%H:%M"), ligne.get("heure") or "?")
     for u in users:
         frappe.get_doc({"doctype": "Notification Log", "for_user": u, "type": "Alert", "subject": sujet,
                         "document_type": fg.TACHE, "document_name": m["tache"]}).insert(ignore_permissions=True)

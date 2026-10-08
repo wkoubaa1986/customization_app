@@ -11,7 +11,7 @@ frappe.pages["suivi-terrain"].on_page_show = function (wrapper) {
 // Rendu pur : tout vient de customization_app.flotte_gps.suivi / statistiques.
 const ST_ETAPE = {
   "passée": ["passee", "✅ passée"], "sur place": ["surplace", "🟡 sur place"], "en route": ["enroute", "🚗 en route"],
-  "à venir": ["avenir", "⏳ à venir"], "en retard": ["manque", "⏰ heure dépassée"], "sans passage": ["manque", "❌ sans passage"],
+  "à venir": ["avenir", "⏳ à venir"], "en retard": ["manque", "⏰ heure dépassée"], "sautée": ["manque", "⛔ non faite (sautée ?)"], "sans passage": ["manque", "❌ sans passage"],
   "clôturée sans passage": ["manque", "⚠️ clôturée sans passage GPS"], "clôturée": ["autre", "✔ clôturée (non suivie)"],
   "non suivie": ["autre", "– non suivie"], "sans position": ["autre", "📍 sans position"], "annulée": ["annulee", "annulée"],
 };
@@ -135,6 +135,7 @@ class SuiviTerrain {
         if (!avant) return `${qui[0].toUpperCase() + qui.slice(1)} vient chez vous juste après, arrivée estimée vers ${this._h(t.eta)}${ann}.`;
         return `${qui[0].toUpperCase() + qui.slice(1)} a encore ${avant} intervention${avant > 1 ? "s" : ""} avant la vôtre, arrivée estimée vers ${this._h(t.eta)}${ann}.`;
       }
+      case "sautée": return `Votre intervention n’a pas pu être réalisée à l’heure prévue ; nous vous rappelons pour la reprogrammer.`;
       case "sans passage": case "clôturée sans passage": return `Aucun passage du véhicule n’a été relevé chez vous${ann} — à vérifier avec ${e.nom}.`;
       case "annulée": return `Cette intervention a été annulée.`;
       default: return `Intervention prévue à ${this._h(t.debut)} avec ${e.nom}${t.statut === "Completed" ? " (clôturée)" : ""}.`;
@@ -191,15 +192,17 @@ class SuiviTerrain {
     const d = this.data, esc = frappe.utils.escape_html, $el = this.$root.find("#st-retards");
     const lignes = [];
     for (const e of d.employes) for (const t of e.taches) {
-      if (["à venir", "en route", "en retard", "sur place"].includes(t.etape) && t.ecart_prevu != null && t.ecart_prevu > d.tolerance)
+      if ((["à venir", "en route", "en retard", "sur place"].includes(t.etape) && t.ecart_prevu != null && t.ecart_prevu > d.tolerance) || t.etape === "sautée")
         lignes.push({ e, t });
     }
     if (!d.aujourdhui || !lignes.length) { $el.empty(); return; }
-    let html = `<div class="st-retard-bloc"><div class="t">⚠️ ${lignes.length} retard${lignes.length > 1 ? "s" : ""} prévisible${lignes.length > 1 ? "s" : ""} — à prévenir</div><table class="st-t"><thead><tr><th>Client</th><th>Tél.</th><th>Technicien</th><th class="num">Annoncé</th><th class="num">Estimé</th><th>Retard</th><th>Client prévenu ?</th><th></th></tr></thead><tbody>`;
+    const ns = lignes.filter((l) => l.t.etape === "sautée").length, nr = lignes.length - ns;
+    let html = `<div class="st-retard-bloc"><div class="t">⚠️ ${nr ? nr + " retard" + (nr > 1 ? "s" : "") + " prévisible" + (nr > 1 ? "s" : "") : ""}${nr && ns ? " · " : ""}${ns ? ns + " intervention" + (ns > 1 ? "s" : "") + " non faite" + (ns > 1 ? "s" : "") + " à reprogrammer" : ""} — à prévenir</div><table class="st-t"><thead><tr><th>Client</th><th>Tél.</th><th>Technicien</th><th class="num">Annoncé</th><th class="num">Estimé</th><th>Retard</th><th>Client prévenu ?</th><th></th></tr></thead><tbody>`;
     for (const { e, t } of lignes) {
       const sms = (t.messages || []).filter((m) => m.type !== "Alerte interne");
       const prevenu = sms.length ? sms.map((m) => `${m.type} ${this._h(m.heure)} (${m.statut})`).join(", ") : "<span class='st-ecart retard'>non</span>";
-      html += `<tr><td class="st-client">${esc(t.client || t.name)}</td><td>${esc(t.tel || "")}</td><td>${esc(e.nom)}</td><td class="num">${this._h(t.debut)}</td><td class="num">${this._h(t.eta)}</td><td>${this._ecart(t.ecart_prevu, d.tolerance)}</td><td>${prevenu}</td><td><a href="#" data-copie="${esc(this._phrase(e, t, d))}" title="Copier la phrase">📋</a></td></tr>`;
+      const estime = t.etape === "sautée" ? `<span class="st-ecart retard">⛔ non faite, une suivante déjà faite</span>` : `${this._h(t.eta)}</td><td>${this._ecart(t.ecart_prevu, d.tolerance)}`;
+      html += `<tr><td class="st-client">${esc(t.client || t.name)}</td><td>${esc(t.tel || "")}</td><td>${esc(e.nom)}</td><td class="num">${this._h(t.debut)}</td><td class="num">${estime}</td><td>${prevenu}</td><td><a href="#" data-copie="${esc(this._phrase(e, t, d))}" title="Copier la phrase">📋</a></td></tr>`;
     }
     $el.html(html + `</tbody></table></div>`);
   }
