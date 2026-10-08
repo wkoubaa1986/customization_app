@@ -40,6 +40,8 @@ class SuiviTerrain {
     $r.find("[data-action='apparier']").on("click", () => this.apparier());
     $r.find("[data-action='stats']").on("click", () => this.stats());
     $r.find("[data-action='backfill']").on("click", () => this.backfill());
+    $r.find("[data-action='apercu']").on("click", () => this.apercu_messages());
+    $r.find("[data-action='simuler']").on("click", () => this.simuler_messages());
     let carte_voulue = true;
     try { carte_voulue = localStorage.getItem("st_carte") !== "0"; } catch (e) { /* stockage indisponible */ }
     this.carte_visible = carte_voulue;
@@ -169,9 +171,10 @@ class SuiviTerrain {
           if (t.etape === "passée") { reel = `${this._h(t.gps_live.arrivee)} → ${this._h(t.gps_live.depart)} ${this._ecart(t.gps_live.ecart, d.tolerance)}`; duree = this._min(t.gps_live.duree); }
           else if (t.etape === "sur place") { reel = `arrivé ${this._h(t.arrivee_reelle)}${t.eta_depart ? ", fin estimée " + this._h(t.eta_depart) : ""}`; duree = this._min((new Date(d.maintenant) - new Date(t.arrivee_reelle)) / 60000); }
           else if (t.eta) { reel = `arrivée estimée ${this._h(t.eta)} ${this._ecart(t.ecart_prevu, d.tolerance)}${t.route_min ? ` <span class="st-dim">(${t.route_min} min de route)</span>` : ""}`; }
+          const prevenu = (t.messages || []).filter((m) => m.type !== "Alerte interne").map((m) => `📨 ${m.type} ${this._h(m.heure)}${m.statut === "Simulé" ? " (simulé)" : m.statut === "Échec" ? " ❌" : ""}`).join(", ");
           html += `<tr><td class="num">${this._h(t.debut)}${t.fin ? "–" + this._h(t.fin) : ""}</td>
             <td><span class="st-client">${esc(t.client || t.titre || t.name)}</span><br><span class="st-dim">${esc(t.type)}${t.secteur ? " · " + esc(t.secteur) : ""}${t.position_src && t.position_src !== "tâche" ? " · position " + esc(t.position_src) : ""}</span></td>
-            <td><span class="st-etape ${ec}">${el}</span></td><td>${reel} <a href="#" class="st-dim" data-copie="${esc(this._phrase(e, t, d))}" title="Copier la phrase pour le client">📋</a></td><td class="num">${duree}</td></tr>`;
+            <td><span class="st-etape ${ec}">${el}</span></td><td>${reel} <a href="#" class="st-dim" data-copie="${esc(this._phrase(e, t, d))}" title="Copier la phrase pour le client">📋</a></td><td class="num">${duree}${prevenu ? `<br><span class="st-dim">${prevenu}</span>` : ""}</td></tr>`;
         }
         html += `</tbody></table>`;
       } else html += `<div class="st-sub">Aucune tâche planifiée.</div>`;
@@ -179,6 +182,60 @@ class SuiviTerrain {
     }
     $out.html(html + `</div>`);
     this._render_carte();
+    this._render_retards();
+    this._render_messages();
+  }
+
+  // ── Retards prévisibles (pour Salma) : arrivée estimée au-delà de la tolérance ───────────────────────
+  _render_retards() {
+    const d = this.data, esc = frappe.utils.escape_html, $el = this.$root.find("#st-retards");
+    const lignes = [];
+    for (const e of d.employes) for (const t of e.taches) {
+      if (["à venir", "en route", "en retard", "sur place"].includes(t.etape) && t.ecart_prevu != null && t.ecart_prevu > d.tolerance)
+        lignes.push({ e, t });
+    }
+    if (!d.aujourdhui || !lignes.length) { $el.empty(); return; }
+    let html = `<div class="st-retard-bloc"><div class="t">⚠️ ${lignes.length} retard${lignes.length > 1 ? "s" : ""} prévisible${lignes.length > 1 ? "s" : ""} — à prévenir</div><table class="st-t"><thead><tr><th>Client</th><th>Tél.</th><th>Technicien</th><th class="num">Annoncé</th><th class="num">Estimé</th><th>Retard</th><th>Client prévenu ?</th><th></th></tr></thead><tbody>`;
+    for (const { e, t } of lignes) {
+      const sms = (t.messages || []).filter((m) => m.type !== "Alerte interne");
+      const prevenu = sms.length ? sms.map((m) => `${m.type} ${this._h(m.heure)} (${m.statut})`).join(", ") : "<span class='st-ecart retard'>non</span>";
+      html += `<tr><td class="st-client">${esc(t.client || t.name)}</td><td>${esc(t.tel || "")}</td><td>${esc(e.nom)}</td><td class="num">${this._h(t.debut)}</td><td class="num">${this._h(t.eta)}</td><td>${this._ecart(t.ecart_prevu, d.tolerance)}</td><td>${prevenu}</td><td><a href="#" data-copie="${esc(this._phrase(e, t, d))}" title="Copier la phrase">📋</a></td></tr>`;
+    }
+    $el.html(html + `</tbody></table></div>`);
+  }
+
+  _render_messages(extra) {
+    const d = this.data, esc = frappe.utils.escape_html, $el = this.$root.find("#st-messages");
+    const msgs = [];
+    for (const e of d.employes) for (const t of e.taches) for (const m of (t.messages || [])) msgs.push({ e, t, m });
+    msgs.sort((a, b) => (a.m.heure < b.m.heure ? 1 : -1));
+    let html = "";
+    if (extra) {
+      html += `<div class="st-retard-bloc" style="background:#eff6ff;border-color:#93c5fd"><div class="t" style="color:#1e40af">${esc(extra.titre)}</div>`;
+      if (!extra.actif) html += `<div>Aucun type de message n’est activé dans Config Flotte GPS (SMS en route / retard / alerte Appels).</div>`;
+      else if (!extra.messages.length) html += `<div>Rien à envoyer maintenant.</div>`;
+      else {
+        html += `<table class="st-t"><thead><tr><th>Type</th><th>Client</th><th>Tél.</th><th>Message</th><th>Pourquoi</th><th>Verdict</th></tr></thead><tbody>`;
+        for (const m of extra.messages) html += `<tr><td>${esc(m.type)}</td><td>${esc(m.client)}</td><td>${esc(m.telephone || "")}</td><td>${esc(m.texte || "")}</td><td class="st-dim">${esc(m.raison || "")}</td><td>${esc(m.statut || "")} <span class="st-dim">${esc(m.detail || "")}</span></td></tr>`;
+        html += `</tbody></table>`;
+      }
+      html += `<div class="st-dim" style="margin-top:4px">${extra.simulation ? "🧪 developer_mode : tout est simulé, rien ne part." : "Envoi réel (production)."}</div></div>`;
+    }
+    if (!msgs.length) { $el.html(html + `<span class="st-dim">Aucun message aujourd’hui.</span>`); return; }
+    html += `<div class="st-msgs"><table class="st-t"><thead><tr><th>Heure</th><th>Type</th><th>Client</th><th>Technicien</th><th>Tél.</th><th>Message</th><th>Verdict</th></tr></thead><tbody>`;
+    for (const { e, t, m } of msgs) html += `<tr><td class="num">${this._h(m.heure)}</td><td>${esc(m.type)}</td><td>${esc(t.client || t.name)}</td><td>${esc(e.nom)}</td><td>${esc(m.telephone || "")}</td><td>${esc(m.texte || "")}</td><td>${esc(m.statut)}</td></tr>`;
+    $el.html(html + `</tbody></table></div>`);
+  }
+
+  async apercu_messages() {
+    const r = await frappe.call({ method: "customization_app.flotte_gps_messages.apercu", freeze: true, freeze_message: __("Calcul…") });
+    this._render_messages({ titre: "👁 Ce qui partirait maintenant (rien n’a été envoyé)", ...r.message });
+  }
+
+  async simuler_messages() {
+    const r = await frappe.call({ method: "customization_app.flotte_gps_messages.simuler", freeze: true, freeze_message: __("Simulation…") });
+    await this.charger(true);
+    this._render_messages({ titre: "🧪 Tour simulé — journalisé comme « Simulé »", ...r.message });
   }
 
   // ── Carte : véhicules en live, itinéraire prévu, trajet réel, clients numérotés ─────────────────────────

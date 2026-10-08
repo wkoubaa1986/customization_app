@@ -38,6 +38,9 @@
     .st-kpi .v { font-size: 22px; font-weight: 700; } .st-kpi .l { font-size: 12px; color: var(--text-muted); }
     .st-section { margin: 16px 0 6px; font-weight: 700; font-size: 14px; }
     .st-empty { padding: 30px; text-align: center; color: var(--text-muted); }
+    .st-retard-bloc { background: #fef2f2; border: 1px solid #fca5a5; border-radius: 10px; padding: 8px 12px; margin-bottom: 10px; }
+    .st-retard-bloc .t { font-weight: 700; color: #991b1b; margin-bottom: 4px; }
+    .st-msgs table.st-t td { font-size: 12px; }
     .st-etiq { font-size: 11px; padding: 2px 6px; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,.3); }
     #st-carte .leaflet-container { font: inherit; }
     @media (max-width: 600px) { .st-grid { grid-template-columns: 1fr; } }
@@ -61,8 +64,14 @@
       <button class="btn btn-default btn-sm" data-action="carte">🗺 Carte</button>
       <span class="st-dim" id="st-legende">🚗 véhicule (position live) · ligne pointillée = itinéraire prévu · ligne pleine = trajet réel du jour · pastilles numérotées = clients dans l’ordre (vert passé, jaune sur place, bleu à venir, rouge heure dépassée)</span>
     </div>
+    <div id="st-retards"></div>
     <div id="st-carte" style="height: 440px; border: 1px solid var(--border-color); border-radius: 10px; margin-bottom: 12px; display: none;"></div>
     <div id="st-live"><div class="st-empty">Chargement…</div></div>
+    <div class="st-section">📨 Messages aux clients (SMS déclenchés par le GPS)
+      <button class="btn btn-default btn-xs" data-action="apercu" style="margin-left:8px" title="Ce que le moteur enverrait maintenant, sans rien envoyer">👁 Ce qui partirait maintenant</button>
+      <button class="btn btn-default btn-xs" data-action="simuler" title="Dev seulement : un tour du moteur, journalisé comme simulé">🧪 Simuler un tour (dev)</button>
+    </div>
+    <div id="st-messages" class="st-dim">Les messages du jour apparaissent ici (type, client, numéro, texte, verdict).</div>
   </div>
 
   <div class="st-panel" data-panel="stats">

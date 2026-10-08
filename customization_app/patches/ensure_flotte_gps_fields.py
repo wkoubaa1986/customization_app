@@ -28,6 +28,8 @@ def execute():
                 {"fieldname": "custom_gps_ecart", "label": "Écart arrivée − heure annoncée (min)", "fieldtype": "Int",
                  "insert_after": "custom_gps_duree", "read_only": 1, "no_copy": 1, "module": "Customize erpnext",
                  "description": "Négatif = en avance sur l’heure annoncée au client, positif = en retard."},
+                {"fieldname": "custom_gps_code", "label": "Code du lien de suivi client", "fieldtype": "Data",
+                 "insert_after": "custom_gps_ecart", "read_only": 1, "no_copy": 1, "hidden": 1, "module": "Customize erpnext"},
             ],
         },
         ignore_validate=True,

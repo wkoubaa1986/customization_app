@@ -701,6 +701,11 @@ scheduler_events = {
         "0 21 * * *": [
             "customization_app.flotte_gps.cron_du_soir",
         ],
+        # Toutes les 2 min, lundi–samedi 7 h–19 h : SMS « en route » / « retard » aux clients d'après la position des
+        # véhicules, alerte du rôle Appels sur les retards prévisibles (Config Flotte GPS ; simulé en developer_mode).
+        "*/2 7-19 * * 1-6": [
+            "customization_app.flotte_gps_messages.cron",
+        ],
     },
 }
 
@@ -780,3 +785,7 @@ doctype_js = {
 doctype_list_js = {
     "Item": "public/js/item_list.js",
 }
+# Page publique de suivi d'une intervention (lien envoyé par SMS) : /suivi/<code>
+website_route_rules = [
+    {"from_route": "/suivi/<code>", "to_route": "suivi"},
+]

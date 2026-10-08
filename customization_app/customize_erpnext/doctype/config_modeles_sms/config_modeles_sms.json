@@ -20,7 +20,11 @@
   "col_relance",
   "relance_rdv_en_ligne",
   "relance_sans_lien",
-  "relance_hors_secteur"
+  "relance_hors_secteur",
+  "sec_suivi",
+  "suivi_en_route",
+  "col_suivi",
+  "suivi_retard"
  ],
  "fields": [
   {
@@ -109,12 +113,33 @@
    "fieldtype": "Small Text",
    "label": "{suite} — client hors secteur sans partenaire (vente de filtres à distance)",
    "description": "Balises : {lien_boutique} {telephones}. Lien et numéros : réglage « Responsable Relance »."
+  },
+  {
+   "fieldname": "sec_suivi",
+   "fieldtype": "Section Break",
+   "label": "Suivi terrain (SMS déclenchés par le GPS)"
+  },
+  {
+   "fieldname": "suivi_en_route",
+   "fieldtype": "Small Text",
+   "label": "SMS « en route »",
+   "description": "Balises : {nom_client} {technicien} {heure_estimee} {heure_annoncee} {lien}. Défaut si vide."
+  },
+  {
+   "fieldname": "col_suivi",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "suivi_retard",
+   "fieldtype": "Small Text",
+   "label": "SMS « retard »",
+   "description": "Mêmes balises. Défaut si vide."
   }
  ],
  "index_web_pages_for_search": 0,
  "issingle": 1,
  "links": [],
- "modified": "2026-10-03 18:00:00.000000",
+ "modified": "2026-10-08 18:00:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Config Modeles SMS",

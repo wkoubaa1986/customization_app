@@ -1,0 +1,137 @@
+{
+ "actions": [],
+ "creation": "2026-10-08 18:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-10-08 18:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "owner": "Administrator",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "name": "Message Client GPS",
+ "autoname": "hash",
+ "title_field": "client",
+ "fields": [
+  {
+   "fieldname": "tache",
+   "fieldtype": "Link",
+   "label": "Tâche",
+   "options": "Tache de travail",
+   "reqd": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "client",
+   "fieldtype": "Data",
+   "label": "Client",
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "telephone",
+   "fieldtype": "Data",
+   "label": "Téléphone"
+  },
+  {
+   "fieldname": "type",
+   "fieldtype": "Select",
+   "label": "Type",
+   "options": "En route\nRetard\nAlerte interne",
+   "in_list_view": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "statut",
+   "fieldtype": "Select",
+   "label": "Statut",
+   "options": "Simulé\nEnvoyé\nÉchec\nInterne",
+   "in_list_view": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "col_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "heure",
+   "fieldtype": "Datetime",
+   "label": "Heure",
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "eta",
+   "fieldtype": "Datetime",
+   "label": "Arrivée estimée"
+  },
+  {
+   "fieldname": "ecart",
+   "fieldtype": "Int",
+   "label": "Écart prévu (min)"
+  },
+  {
+   "fieldname": "employe",
+   "fieldtype": "Link",
+   "label": "Technicien",
+   "options": "Employee"
+  },
+  {
+   "fieldname": "sec_texte",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "texte",
+   "fieldtype": "Small Text",
+   "label": "Message"
+  },
+  {
+   "fieldname": "detail",
+   "fieldtype": "Small Text",
+   "label": "Détail (passerelle / simulation)"
+  }
+ ],
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "export": 1,
+   "role": "Responsable magasin"
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "role": "Appels"
+  }
+ ],
+ "field_order": [
+  "tache",
+  "client",
+  "telephone",
+  "type",
+  "statut",
+  "col_1",
+  "heure",
+  "eta",
+  "ecart",
+  "employe",
+  "sec_texte",
+  "texte",
+  "detail"
+ ]
+}

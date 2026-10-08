@@ -447,10 +447,31 @@ def _projection(position, maintenant, restantes: list, osrm: str, sur_place: dic
 
 @frappe.whitelist()
 def suivi(jour=None):
-    """Où en est chaque employé par rapport à son planning : position, arrêt en cours, tâches passées (heures réelles),
-    en cours, restantes (arrivée estimée). Aujourd'hui = live ; un autre jour = relecture du journal."""
+    """Page Suivi terrain : où en est chaque employé par rapport à son planning (voir _suivi)."""
     _garde()
+    return _suivi(jour)
+
+
+CACHE_SUIVI_S = 45          # le live est partagé entre la page (60 s), le moteur de messages (2 min) et la page client
+
+
+def _suivi(jour=None) -> dict:
+    """Où en est chaque employé par rapport à son planning : position, arrêt en cours, tâches passées (heures réelles),
+    en cours, restantes (arrivée estimée). Aujourd'hui = live (mis en cache CACHE_SUIVI_S) ; un autre jour = relecture."""
     jour = getdate(jour or nowdate())
+    cle = "flotte_gps:suivi:%s" % jour
+    if jour == getdate(nowdate()):
+        cache = frappe.cache().get_value(cle)
+        if cache:
+            return cache
+    out = _suivi_calcul(jour)
+    if out["aujourdhui"]:
+        frappe.cache().set_value(cle, out, expires_in_sec=CACHE_SUIVI_S)
+    return out
+
+
+def _suivi_calcul(jour) -> dict:
+    jour = getdate(jour)
     aujourdhui = jour == getdate(nowdate())
     maintenant = now_datetime().replace(microsecond=0)
     cfg = config()
@@ -471,6 +492,11 @@ def suivi(jour=None):
         journaux, erreur = {}, str(e)[:300]
     emp_cbox = vehicules_du_jour(taches, journaux, cfg["employe_cbox"], cfg["rayon"], _lieux_communs(cfg_t))
     resultat = apparier_pure(taches, journaux, emp_cbox, cfg["rayon"])
+    messages = {}
+    if frappe.db.exists("DocType", "Message Client GPS"):
+        for m in frappe.get_all("Message Client GPS", filters={"tache": ["in", [t["name"] for t in taches] or [""]]},
+                                fields=["tache", "type", "statut", "heure", "eta", "texte", "telephone"], order_by="heure"):
+            messages.setdefault(m.tache, []).append(m)
     sortie = []
     for emp, e in sorted(employes.items(), key=lambda kv: kv[1]["nom"]):
         cbox = emp_cbox.get(emp)
@@ -543,6 +569,7 @@ def suivi(jour=None):
         e["total"] = len([t for t in e["taches"] if t["etape"] != "annulée"])
         for t in e["taches"]:
             t.pop("gps", None)
+            t["messages"] = messages.get(t["name"], [])
         sortie.append(e)
     return {"jour": str(jour), "aujourdhui": aujourdhui, "maintenant": maintenant, "employes": sortie, "erreur": erreur,
             "depot": list(cfg_t["depot"]),

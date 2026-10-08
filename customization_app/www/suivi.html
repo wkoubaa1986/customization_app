@@ -1,0 +1,87 @@
+{% extends "templates/base.html" %}
+
+{% block title %}Suivi de votre intervention — Aqua World & Servicing{% endblock %}
+
+{% block head_include %}
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+{% endblock %}
+
+{% block content %}
+<style>
+  body { background: #f1f5f9; }
+  .sv-page { max-width: 480px; margin: 20px auto 60px; padding: 0 14px; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .sv-carte { background: #fff; border-radius: 14px; padding: 20px 18px; box-shadow: 0 4px 18px rgba(15, 23, 42, .08); }
+  .sv-logo { text-align: center; font-weight: 800; color: #0e7490; font-size: 18px; margin-bottom: 4px; }
+  .sv-sous { text-align: center; color: #64748b; font-size: 13px; margin-bottom: 16px; }
+  .sv-etat { font-size: 20px; font-weight: 800; color: #0f172a; text-align: center; margin: 6px 0; }
+  .sv-eta { text-align: center; font-size: 15px; color: #334155; margin-bottom: 12px; }
+  .sv-eta b { font-size: 26px; color: #0e7490; display: block; }
+  .sv-ligne { display: flex; justify-content: space-between; font-size: 14px; padding: 7px 0; border-top: 1px solid #e2e8f0; color: #334155; }
+  .sv-ligne span:last-child { font-weight: 600; color: #0f172a; text-align: right; }
+  #sv-map { height: 260px; border-radius: 10px; margin: 12px 0; display: none; }
+  .sv-note { font-size: 12px; color: #64748b; text-align: center; margin-top: 12px; }
+  .sv-note a { color: #0e7490; font-weight: 600; text-decoration: none; }
+  .sv-pastille { display: inline-block; padding: 3px 12px; border-radius: 999px; font-size: 13px; font-weight: 700; }
+  .p-route { background: #dbeafe; color: #1e40af; } .p-place { background: #fef08a; color: #713f12; } .p-ok { background: #d8f5dd; color: #166534; }
+  .p-attente { background: #f1f5f9; color: #334155; } .p-retard { background: #fee2e2; color: #991b1b; } .p-off { background: #e5e7eb; color: #374151; }
+</style>
+<div class="sv-page">
+  <div class="sv-carte">
+    <div class="sv-logo">Aqua World &amp; Servicing</div>
+    <div class="sv-sous">Suivi de votre intervention</div>
+    <div id="sv-contenu"><div class="sv-etat">Chargement…</div></div>
+    <div id="sv-map"></div>
+    <div class="sv-note" id="sv-maj"></div>
+    {% if tel_support %}<div class="sv-note">Une question ? <a href="tel:{{ tel_support }}">{{ tel_support }}</a></div>{% endif %}
+  </div>
+</div>
+<script>
+(function () {
+  var code = {{ code | tojson }};
+  var carte = null, couches = null;
+  function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
+  function rendre(d) {
+    var el = document.getElementById("sv-contenu");
+    if (d.erreur) { el.innerHTML = '<div class="sv-etat">Lien invalide ou expiré.</div>'; return; }
+    var etat = "", cls = "p-attente", eta = "";
+    switch (d.etape) {
+      case "en route": etat = "🚗 Votre technicien " + esc(d.technicien) + " est en route"; cls = "p-route";
+        eta = d.eta ? '<div class="sv-eta">Arrivée estimée<b>' + esc(d.eta) + '</b></div>' : ""; break;
+      case "sur place": etat = "🟡 " + esc(d.technicien) + " est chez vous depuis " + esc(d.arrivee); cls = "p-place"; break;
+      case "passée": etat = "✅ Intervention réalisée"; cls = "p-ok";
+        eta = d.reel ? '<div class="sv-eta">Passage de <b style="font-size:18px">' + esc(d.reel.arrivee) + " à " + esc(d.reel.depart) + "</b></div>" : ""; break;
+      case "annulée": etat = "Intervention annulée"; cls = "p-off"; break;
+      case "à venir": case "en retard":
+        etat = d.avant ? "⏳ " + esc(d.technicien) + " a encore " + d.avant + " intervention" + (d.avant > 1 ? "s" : "") + " avant la vôtre" : "⏳ Votre intervention est la prochaine";
+        cls = d.etape === "en retard" ? "p-retard" : "p-attente";
+        eta = d.eta ? '<div class="sv-eta">Arrivée estimée<b>' + esc(d.eta) + '</b>' + (d.annonce ? "heure annoncée " + esc(d.annonce) : "") + "</div>" : ""; break;
+      default: etat = d.etape === "clôturée" ? "✅ Intervention réalisée" : "Intervention prévue le " + esc(d.date) + " à " + esc(d.annonce); cls = d.etape === "clôturée" ? "p-ok" : "p-attente";
+    }
+    el.innerHTML = '<div style="text-align:center;margin-bottom:8px"><span class="sv-pastille ' + cls + '">' + esc(d.date) + " · " + esc(d.annonce) + "</span></div>"
+      + '<div class="sv-etat">' + etat + "</div>" + eta
+      + '<div class="sv-ligne"><span>Client</span><span>' + esc(d.client) + "</span></div>"
+      + '<div class="sv-ligne"><span>Intervention</span><span>' + esc(d.type) + "</span></div>"
+      + (d.technicien ? '<div class="sv-ligne"><span>Technicien</span><span>' + esc(d.technicien) + "</span></div>" : "");
+    var mp = document.getElementById("sv-map");
+    if (window.L && d.adresse && (d.position || d.etape === "sur place")) {
+      mp.style.display = "block";
+      if (!carte) { carte = L.map(mp); L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 18, attribution: "© OpenStreetMap" }).addTo(carte); couches = L.layerGroup().addTo(carte); }
+      couches.clearLayers();
+      var pts = [d.adresse];
+      L.marker(d.adresse, { icon: L.divIcon({ className: "", html: '<div style="font-size:22px;line-height:22px">🏠</div>', iconSize: [24, 24], iconAnchor: [12, 12] }) }).addTo(couches);
+      if (d.position) { pts.push(d.position); L.marker(d.position, { icon: L.divIcon({ className: "", html: '<div style="font-size:24px;line-height:24px">🚗</div>', iconSize: [26, 26], iconAnchor: [13, 13] }) }).addTo(couches); }
+      carte.fitBounds(pts, { padding: [40, 40], maxZoom: 15 });
+      setTimeout(function () { carte.invalidateSize(); }, 50);
+    } else { mp.style.display = "none"; }
+    document.getElementById("sv-maj").textContent = "Mis à jour à " + d.maintenant + " · actualisation automatique";
+  }
+  function charger() {
+    fetch("/api/method/customization_app.flotte_gps_messages.etat_suivi?code=" + encodeURIComponent(code))
+      .then(function (r) { return r.json(); }).then(function (r) { rendre(r.message || { erreur: "x" }); })
+      .catch(function () { document.getElementById("sv-maj").textContent = "Connexion impossible, nouvel essai dans 60 s"; });
+  }
+  charger(); setInterval(charger, 60000);
+})();
+</script>
+{% endblock %}

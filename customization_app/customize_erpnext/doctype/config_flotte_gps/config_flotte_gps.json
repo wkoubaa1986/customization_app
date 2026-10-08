@@ -6,7 +6,7 @@
  "engine": "InnoDB",
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-10-08 14:00:00.000000",
+ "modified": "2026-10-08 18:00:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "owner": "Administrator",
@@ -106,6 +106,71 @@
    "description": "Qui conduit quel véhicule : c’est ce lien qui permet de retrouver les passages de chaque employé."
   },
   {
+   "fieldname": "sec_messages",
+   "fieldtype": "Section Break",
+   "label": "Messages aux clients (SMS avec lien de suivi)"
+  },
+  {
+   "fieldname": "sms_en_route",
+   "fieldtype": "Check",
+   "label": "SMS « en route » automatique",
+   "default": "0",
+   "description": "Quand le technicien quitte le client précédent et que votre adresse est la suivante : heure d’arrivée estimée + lien de suivi. Un seul par intervention."
+  },
+  {
+   "fieldname": "sms_retard",
+   "fieldtype": "Check",
+   "label": "SMS « retard » automatique",
+   "default": "0",
+   "description": "Quand l’arrivée estimée dépasse l’heure annoncée de plus que la tolérance. Un seul par intervention."
+  },
+  {
+   "fieldname": "sms_lien",
+   "fieldtype": "Check",
+   "label": "Joindre le lien de suivi",
+   "default": "1"
+  },
+  {
+   "fieldname": "alerte_salma",
+   "fieldtype": "Check",
+   "label": "Alerter le rôle Appels des retards prévisibles",
+   "default": "1",
+   "description": "Notification Desk (cloche) aux utilisateurs du rôle Appels, une fois par intervention."
+  },
+  {
+   "fieldname": "col_messages",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "sms_delai_max",
+   "fieldtype": "Int",
+   "label": "« En route » seulement si l’arrivée est à moins de (min)",
+   "default": "45"
+  },
+  {
+   "fieldname": "sms_heure_min",
+   "fieldtype": "Time",
+   "label": "Pas de SMS avant",
+   "default": "08:00:00"
+  },
+  {
+   "fieldname": "sms_heure_max",
+   "fieldtype": "Time",
+   "label": "Pas de SMS après",
+   "default": "19:00:00"
+  },
+  {
+   "fieldname": "url_suivi",
+   "fieldtype": "Data",
+   "label": "Adresse publique du site (pour le lien)",
+   "description": "Ex. https://erp.aquaworld.tn — vide = adresse du site."
+  },
+  {
+   "fieldname": "messages_info",
+   "fieldtype": "HTML",
+   "options": "<div class='text-muted small'>En developer_mode (dev) tout est <b>simulé</b> : les messages sont journalisés (Message Client GPS) mais rien ne part. Les textes se règlent dans <a href='/app/config-modeles-sms'>Config Modèles SMS</a>.</div>"
+  },
+  {
    "fieldname": "sec_etat",
    "fieldtype": "Section Break",
    "label": "État"
@@ -140,6 +205,17 @@
   "ecart_tolere",
   "sec_vehicules",
   "vehicules",
+  "sec_messages",
+  "sms_en_route",
+  "sms_retard",
+  "sms_lien",
+  "alerte_salma",
+  "col_messages",
+  "sms_delai_max",
+  "sms_heure_min",
+  "sms_heure_max",
+  "url_suivi",
+  "messages_info",
   "sec_etat",
   "derniere_synchro",
   "col_etat",
