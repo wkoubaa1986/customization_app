@@ -35,6 +35,9 @@ FUSION_MIN = 10                                    # deux arrêts au même endro
 FUSION_M = 80                                      # … « même endroit » = à moins de 80 m l'un de l'autre
 RAYON_LIEU_M = 200                                 # « au Magasin », « domicile »
 SAUTEE_APRES_MIN = 60                              # créneau dépassé d'une heure sans passage = probablement sautée
+ARRET_PROBABLE_MIN = 5                             # tâche sans position : un arrêt plus court ne fait pas une intervention
+FENETRE_AVANT_MIN = 90                             # … ni un arrêt commencé plus de 1 h 30 avant l'heure annoncée
+FENETRE_APRES_MIN = 180                            # … ou plus de 3 h après
 TYPES_HORS = set(to.TYPES_HORS_JOURNEE) | {"Congé", "Tournée commerciale"}
 
 CONFIRME, AUCUN, SANS_POS, SANS_VEH, SANS_GPS = ("Passage confirmé", "Aucun passage", "Sans position",
@@ -255,6 +258,58 @@ def apparier_pure(taches: list, journaux: dict, employe_cbox: dict, rayon_m: flo
     return out
 
 
+def _fusionner(arrets: list) -> list:
+    """Arrêts qui se suivent à ≤ FUSION_MIN et à ≤ FUSION_M l'un de l'autre = un seul (voiture déplacée devant chez le client)."""
+    out = []
+    for a in arrets:
+        p = out[-1] if out else None
+        if p and (a["arr"] - p["dep"]).total_seconds() <= FUSION_MIN * 60 and _m((a["lat"], a["lng"]), (p["lat"], p["lng"])) <= FUSION_M:
+            p.update(dep=a["dep"], minutes=p["minutes"] + a["minutes"], lat=a["lat"], lng=a["lng"])
+        else:
+            out.append(dict(a))
+    return out
+
+
+def arrets_candidats(taches: list, journal: dict | None, resultat: dict, lieux: list, rayon_m: float, max_n: int = 4) -> dict:
+    """Tâches SANS position exacte (adresse approchée ou inconnue) d'UN employé : les arrêts du véhicule qui POURRAIENT
+    être l'intervention → {tâche: [{arrivee, depart, duree, lat, lng, ecart, km_approx}, …]} (au plus max_n, du plus
+    plausible au moins plausible). Demande du 12/10/2026.
+
+    Le GPS ne peut pas trancher seul : rejoué sur 3 semaines (21/09 → 10/10/2026) en cachant la position de tâches au
+    passage confirmé, « le meilleur arrêt » n'était le bon que 63 fois sur 148, et il inventait un passage pour 27 des 33
+    interventions non faites (pauses, fournisseurs, ordre de tournée changé). D'où une liste de pistes, que l'on confirme
+    d'un clic (fixer_position) — jamais une étape « passée » déduite.
+
+    Pistes : arrêts (fusionnés) d'au moins ARRET_PROBABLE_MIN min que rien d'autre n'explique — ni chez un client dont la
+    position est connue (≤ rayon), ni au Magasin / domicile (≤ RAYON_LIEU_M) — commencés entre FENETRE_AVANT_MIN avant et
+    FENETRE_APRES_MIN après l'heure annoncée. Ordre : minutes d'écart + 2 × km jusqu'à la position approchée. PURE."""
+    if not journal or journal.get("erreur"):
+        return {}
+    # Chez un client seulement : une tâche interne (vérification de stock…) n'a pas d'adresse à retrouver.
+    cibles = [t for t in taches if resultat.get(t["name"], {}).get("statut") == SANS_POS and t.get("debut") and t.get("client")]
+    if not cibles:
+        return {}
+    connus = [(t["lat"], t["lng"]) for t in taches if t.get("lat") and t.get("lng")]
+    libres = [a for a in _fusionner(journal.get("arrets") or [])
+              if a["minutes"] >= ARRET_PROBABLE_MIN
+              and not any(_m((a["lat"], a["lng"]), c) <= rayon_m for c in connus)
+              and not any(lieu and _m((a["lat"], a["lng"]), lieu) <= RAYON_LIEU_M for lieu in lieux)]
+    out = {}
+    for t in cibles:
+        pistes = []
+        for a in libres:
+            ecart = (a["arr"] - t["debut"]).total_seconds() / 60
+            if ecart < -FENETRE_AVANT_MIN or ecart > FENETRE_APRES_MIN:
+                continue
+            km = to.haversine_km((a["lat"], a["lng"]), tuple(t["approx"])) if t.get("approx") else None
+            pistes.append((abs(ecart) + 2 * (km or 0), {"arrivee": a["arr"], "depart": a["dep"], "duree": a["minutes"],
+                                                        "lat": a["lat"], "lng": a["lng"], "ecart": round(ecart),
+                                                        "km_approx": round(km, 1) if km is not None else None}))
+        if pistes:
+            out[t["name"]] = [p for _s, p in sorted(pistes, key=lambda x: x[0])[:max_n]]
+    return out
+
+
 def _lieux_communs(cfg_t: dict | None = None) -> list:
     """Magasin et domiciles connus (réglage des tournées) : des arrêts qui n'identifient personne."""
     cfg_t = cfg_t or to.config()
@@ -274,16 +329,25 @@ def _taches(jour) -> list:
     out = []
     for r in rows:
         pos = to.coordonnees_tache(r, centres) if r.custom_type_dintervention not in TYPES_HORS else None
+        approx = approx_src = None
         if pos and pos[2] == "secteur":
             # Position approchée (centre du secteur, adresse lue depuis le texte) : on ne peut ni confirmer ni
-            # infirmer un passage à 150 m près → « sans position », plutôt qu'un faux « aucun passage ».
+            # infirmer un passage à 150 m près → « sans position », plutôt qu'un faux « aucun passage ». Elle sert
+            # seulement à ordonner les arrêts possibles (pistes) et à une arrivée estimée marquée « ≈ ».
+            approx = [pos[0], pos[1]]
+            # D'où vient le point : le texte de l'adresse lu par OpenStreetMap (la rue si connue, sinon le quartier ou la
+            # ville) ou, à défaut, le centre du secteur (3 clients sur 4 à moins de 4,3 km, mesuré le 12/10/2026).
+            c = centres.get(r.secteur)
+            approx_src = "secteur" if c and abs(c[0] - pos[0]) < 1e-6 and abs(c[1] - pos[1]) < 1e-6 else "texte"
             pos = (None, None, "approchée")
         out.append({"name": r.name, "employe": r.custom_choix_du_staff, "employe_nom": r["custom_employé"],
                     "type": r.custom_type_dintervention or "", "debut": get_datetime(r.starts_on),
                     "fin": get_datetime(r.ends_on) if r.ends_on else None, "statut": r.status,
                     "client": r.nom_client or r.custom_client or "", "client_id": r.custom_client, "tel": r.tel,
                     "adresse": r.details_adresse or r.select_address or "", "secteur": r.secteur or "",
+                    "google_map": r.google_map or "",
                     "lat": pos[0] if pos else None, "lng": pos[1] if pos else None, "position_src": pos[2] if pos else "",
+                    "approx": approx, "approx_src": approx_src,
                     "dans_local": r.dans_local, "temps": r.temps, "titre": r.titre or "", "commande": r.commande_client,
                     "gps": {"statut": r.custom_gps_statut, "arrivee": r.custom_gps_arrivee, "depart": r.custom_gps_depart,
                             "duree": r.custom_gps_duree, "ecart": r.custom_gps_ecart}})
@@ -430,11 +494,18 @@ def _lieu(point, taches: list, depot, departs: dict, employe, rayon_m) -> str:
     return ""
 
 
+def _point(t) -> tuple | None:
+    """Où aller pour cette tâche : sa position exacte, sinon la position approchée (centre du secteur…)."""
+    if t.get("lat") and t.get("lng"):
+        return (t["lat"], t["lng"])
+    return tuple(t["approx"]) if t.get("approx") else None
+
+
 def _projection(position, maintenant, restantes: list, osrm: str, sur_place: dict | None) -> None:
     """Heure d'arrivée estimée des tâches restantes, dans l'ordre planifié : on enchaîne depuis la position actuelle
     (temps de route OSRM + durée planifiée de chaque tâche). Si l'employé est déjà sur place, le temps restant y est
     la durée planifiée moins le temps déjà passé. Écrit eta / eta_depart / ecart_prevu sur chaque tâche."""
-    pts = [position] + [(t["lat"], t["lng"]) for t in restantes]
+    pts = [position] + [_point(t) for t in restantes]
     mn, _km, _src = to.matrice(pts, osrm)
     heure, i_prec = maintenant, 0
     for k, t in enumerate(restantes, start=1):
@@ -450,6 +521,29 @@ def _projection(position, maintenant, restantes: list, osrm: str, sur_place: dic
             t.update(eta=arrivee, eta_depart=heure, route_min=route)
         t["ecart_prevu"] = round((t["eta"] - t["debut"]).total_seconds() / 60) if t.get("debut") else None
         i_prec = k
+
+
+@frappe.whitelist(methods=["POST"])
+def fixer_position(tache, lat, lng):
+    """« 📌 C'est ici » (page Suivi terrain) : l'arrêt GPS choisi devient la position de l'intervention — lien Google Maps
+    de la tâche. Au calcul suivant le passage est apparié comme les autres (heures réelles), et l'adresse du client
+    apprend la position (coordonnees_tache → _memoriser) pour ses prochaines tâches. Trace en commentaire, ancien lien
+    compris. Demande du 12/10/2026."""
+    _garde()
+    doc = frappe.get_doc(TACHE, tache)
+    doc.check_permission("write")
+    lat, lng = flt(lat), flt(lng)
+    if not (30 <= lat <= 38 and 7 <= lng <= 12):                # la Tunisie, large
+        frappe.throw("Position invalide : %s, %s" % (lat, lng))
+    lien = "https://www.google.com/maps?q=%.6f,%.6f" % (lat, lng)
+    frappe.db.set_value(TACHE, tache, "google_map", lien)
+    frappe.get_doc({"doctype": "Comment", "comment_type": "Info", "reference_doctype": TACHE, "reference_name": tache,
+                    "content": "📍 Position fixée depuis le suivi terrain par %s : arrêt GPS %.6f, %.6f.%s" % (
+                        frappe.session.user, lat, lng, (" Ancien lien : %s" % doc.google_map) if doc.google_map else "")}
+                   ).insert(ignore_permissions=True)
+    if doc.starts_on:
+        frappe.cache().delete_value("flotte_gps:suivi:%s" % getdate(doc.starts_on))
+    return {"lien": lien}
 
 
 @frappe.whitelist()
@@ -514,6 +608,7 @@ def _suivi_calcul(jour) -> dict:
                  premiere_sortie=j["trajets"][0]["debut"] if j and j["trajets"] else None,
                  dernier_mouvement=(j["trajets"][-1]["fin"] if j and j["trajets"] else None))
         sur_place = None
+        pistes = arrets_candidats(e["taches"], j, resultat, _lieux_communs(cfg_t), cfg["rayon"]) if j else {}
         if j and not j.get("erreur"):
             dernier = j["arrets"][-1] if j["arrets"] and (not j["trajets"] or j["arrets"][-1]["arr"] > j["trajets"][-1]["debut"]) else None
             pos = j.get("position")
@@ -535,6 +630,11 @@ def _suivi_calcul(jour) -> dict:
                             sur_place = {"name": t["name"], "arr": dernier["arr"]}
                             resultat[t["name"]]["en_cours"] = True
                             break
+                    # Une piste qui est l'arrêt EN COURS : « arrêté ici depuis … » (à confirmer d'un clic).
+                    for liste in pistes.values():
+                        for p in liste:
+                            p["en_cours"] = p["depart"] >= dernier["dep"] and \
+                                _m((p["lat"], p["lng"]), (dernier["lat"], dernier["lng"])) <= FUSION_M
                 else:
                     e["etat"] = "à l’arrêt"
             elif not aujourdhui and j["trajets"]:
@@ -542,6 +642,7 @@ def _suivi_calcul(jour) -> dict:
         for t in e["taches"]:
             r = resultat.get(t["name"], {})
             t["gps_live"] = r
+            t["pistes"] = pistes.get(t["name"], [])
             if t["statut"] == "Cancelled":
                 t["etape"] = "annulée"
             elif sur_place and sur_place["name"] == t["name"]:
@@ -549,6 +650,10 @@ def _suivi_calcul(jour) -> dict:
                 t["arrivee_reelle"] = sur_place["arr"]
             elif r.get("statut") == CONFIRME:
                 t["etape"] = "passée"
+            elif r.get("statut") == SANS_POS and aujourdhui and t["statut"] != "Completed" and t.get("client"):
+                # Sans position : l'heure seule (le GPS ne peut pas dire si c'est fait) ; « non repérée » plus bas si la
+                # suite du parcours est déjà faite. Les arrêts qui pourraient être l'intervention : t["pistes"].
+                t["etape"] = "en retard" if t.get("fin") and t["fin"] < maintenant else "à venir"
             elif r.get("statut") in (SANS_VEH, SANS_GPS, SANS_POS) or not r:
                 t["etape"] = "clôturée" if t["statut"] == "Completed" else ("non suivie" if r.get("statut") == SANS_VEH or not r else "sans position")
             elif t.get("fin") and t["fin"] < maintenant and (t["statut"] == "Completed" or not aujourdhui):
@@ -564,9 +669,12 @@ def _suivi_calcul(jour) -> dict:
             if t["etape"] == "en retard" and (
                     any(x["etape"] in ("passée", "sur place") and x["debut"] > t["debut"] for x in e["taches"])
                     or (t.get("fin") and t["fin"] < maintenant - timedelta(minutes=SAUTEE_APRES_MIN))):
-                t["etape"] = "sautée"
+                # Sans position, on ne SAIT pas qu'elle n'a pas été faite (arrêt trop court, à pied…) : pas d'alerte.
+                t["etape"] = "non repérée" if t.get("gps_live", {}).get("statut") == SANS_POS else "sautée"
         if aujourdhui and e.get("position"):
-            restantes = [t for t in e["taches"] if t["etape"] in ("à venir", "sur place", "en retard") and t.get("lat")]
+            restantes = [t for t in e["taches"] if t["etape"] in ("à venir", "sur place", "en retard") and _point(t)]
+            for t in restantes:
+                t["eta_approx"] = not t.get("lat")       # position approchée : arrivée « ≈ », jamais de SMS
             if restantes:
                 try:
                     _projection((e["position"]["lat"], e["position"]["lng"]), maintenant, restantes, cfg_t["osrm"], sur_place)
@@ -577,8 +685,8 @@ def _suivi_calcul(jour) -> dict:
         # Pour la carte : la trace réelle du véhicule et l'itinéraire prévu (Magasin ou domicile → clients dans l'ordre).
         e["trace"] = j["trace"] if j and not j.get("erreur") else []
         depart = cfg_t["departs"].get(emp) or cfg_t["depot"]
-        etapes = [t for t in e["taches"] if t.get("lat") and t["etape"] != "annulée"]
-        e["itineraire"] = _trace_routiere([depart] + [(t["lat"], t["lng"]) for t in etapes], cfg_t["osrm"]) if etapes else []
+        etapes = [t for t in e["taches"] if _point(t) and t["etape"] != "annulée"]      # positions approchées comprises (≈)
+        e["itineraire"] = _trace_routiere([depart] + [_point(t) for t in etapes], cfg_t["osrm"]) if etapes else []
         e["depart"] = list(depart)
         e["faites"] = len([t for t in e["taches"] if t["etape"] in ("passée", "clôturée")])
         e["total"] = len([t for t in e["taches"] if t["etape"] != "annulée"])

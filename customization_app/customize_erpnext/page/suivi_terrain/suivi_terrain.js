@@ -14,11 +14,13 @@ const ST_ETAPE = {
   "à venir": ["avenir", "⏳ à venir"], "en retard": ["manque", "⏰ heure dépassée"], "sautée": ["manque", "⛔ non faite (sautée ?)"], "sans passage": ["manque", "❌ sans passage"],
   "clôturée sans passage": ["manque", "⚠️ clôturée sans passage GPS"], "clôturée": ["autre", "✔ clôturée (non suivie)"],
   "non suivie": ["autre", "– non suivie"], "sans position": ["autre", "📍 sans position"], "annulée": ["annulee", "annulée"],
+  "non repérée": ["autre", "❔ non repérée"],
 };
 const ST_RAFRAICHIR_S = 60;
+const ST_RAYON_SECTEUR_M = 4300;     // 3 clients sur 4 sont à moins de 4,3 km du centre de leur secteur (mesuré le 12/10/2026)
 const ST_COULEURS = ["#2563eb", "#16a34a", "#d97706", "#9333ea", "#dc2626", "#0891b2", "#be185d", "#4d7c0f"];
 const ST_FOND = { "passée": "#16a34a", "clôturée": "#16a34a", "sur place": "#eab308", "en route": "#2563eb", "à venir": "#60a5fa",
-  "en retard": "#dc2626", "sans passage": "#dc2626", "clôturée sans passage": "#dc2626", "annulée": "#9ca3af" };
+  "en retard": "#dc2626", "sans passage": "#dc2626", "clôturée sans passage": "#dc2626", "annulée": "#9ca3af", "non repérée": "#9ca3af" };
 
 class SuiviTerrain {
   constructor(wrapper) {
@@ -63,6 +65,19 @@ class SuiviTerrain {
       $r.find(".st-tab").removeClass("active"); $(e.currentTarget).addClass("active");
       $r.find(".st-panel").removeClass("active"); $r.find(`.st-panel[data-panel='${t}']`).addClass("active");
       if (t === "stats" && !this._stats_faites) this.stats();
+    });
+    // Demande du 12/10/2026 : une tâche s'ouvre en fenêtre sans quitter le suivi, et chaque adresse
+    // mène à l'intervention sur la carte de la page (Google Maps si la position n'est pas connue).
+    $r.on("click", "[data-tache]", (e) => {
+      // Un lien À L'INTÉRIEUR de la tâche (adresse, Google Maps, copie) garde son propre rôle.
+      const lien = $(e.target).closest("[data-carte], [data-copie], a[href]")[0];
+      if (lien && lien !== e.currentTarget) return;
+      e.preventDefault();
+      this.ouvrir_tache($(e.currentTarget).attr("data-tache"));
+    });
+    $r.on("click", "[data-carte]", (e) => {
+      e.preventDefault(); e.stopPropagation();
+      this.voir_sur_carte($(e.currentTarget).attr("data-carte"));
     });
     $r.on("click", ".st-msg, [data-copie]", (e) => {
       const txt = $(e.currentTarget).attr("data-copie") || $(e.currentTarget).text();
@@ -174,10 +189,11 @@ class SuiviTerrain {
           let reel = "", duree = "";
           if (t.etape === "passée") { reel = `${this._h(t.gps_live.arrivee)} → ${this._h(t.gps_live.depart)} ${this._ecart(t.gps_live.ecart, d.tolerance)}`; duree = this._min(t.gps_live.duree); }
           else if (t.etape === "sur place") { reel = `arrivé ${this._h(t.arrivee_reelle)}${t.eta_depart ? ", fin estimée " + this._h(t.eta_depart) : ""}`; duree = this._min((new Date(d.maintenant) - new Date(t.arrivee_reelle)) / 60000); }
-          else if (t.eta) { reel = `arrivée estimée ${this._h(t.eta)} ${this._ecart(t.ecart_prevu, d.tolerance)}${t.route_min ? ` <span class="st-dim">(${t.route_min} min de route)</span>` : ""}`; }
+          else if (t.eta) { reel = `arrivée estimée ${t.eta_approx ? "<span title=\"Position approchée : heure indicative, aucun SMS\">≈ </span>" : ""}${this._h(t.eta)} ${this._ecart(t.ecart_prevu, d.tolerance)}${t.route_min ? ` <span class="st-dim">(${t.route_min} min de route)</span>` : ""}`; }
+          if ((t.pistes || []).length) reel += `${reel ? "<br>" : ""}${this._pistes_resume(t)}`;
           const prevenu = (t.messages || []).filter((m) => !["Alerte interne", "Non faite"].includes(m.type)).map((m) => `📨 ${m.type} ${this._h(m.heure)}${m.statut === "Simulé" ? " (simulé)" : m.statut === "Échec" ? " ❌" : ""}`).join(", ");
           html += `<tr><td class="num">${this._h(t.debut)}${t.fin ? "–" + this._h(t.fin) : ""}</td>
-            <td><span class="st-client">${esc(t.client || t.titre || t.name)}</span><br><span class="st-dim">${esc(t.type)}${t.secteur ? " · " + esc(t.secteur) : ""}${t.position_src && t.position_src !== "tâche" ? " · position " + esc(t.position_src) : ""}</span></td>
+            <td class="st-ouvrir" data-tache="${esc(t.name)}" title="Ouvrir la tâche"><span class="st-client">${esc(t.client || t.titre || t.name)}</span><br><span class="st-dim">${esc(t.type)}${t.secteur ? " · " + esc(t.secteur) : ""}${t.position_src && t.position_src !== "tâche" ? " · position " + esc(t.position_src) : ""}</span>${this._adresse(t)}</td>
             <td><span class="st-etape ${ec}">${el}</span></td><td>${reel} <a href="#" class="st-dim" data-copie="${esc(this._phrase(e, t, d))}" title="Copier la phrase pour le client">📋</a></td><td class="num">${duree}${prevenu ? `<br><span class="st-dim">${prevenu}</span>` : ""}</td></tr>`;
         }
         html += `</tbody></table>`;
@@ -188,6 +204,153 @@ class SuiviTerrain {
     this._render_carte();
     this._render_retards();
     this._render_messages();
+  }
+
+  // ── Tâche : adresse cliquable, carte, fenêtre ─────────────────────────────
+  _trouver(nom) {
+    for (const e of (this.data && this.data.employes) || []) {
+      const t = e.taches.find((x) => x.name === nom);
+      if (t) return { e, t };
+    }
+    return {};
+  }
+
+  /** Google Maps : la position de la tâche, sinon son lien enregistré, sinon une recherche sur l'adresse. */
+  _lien_maps(t) {
+    if (t.lat && t.lng) return `https://www.google.com/maps/search/?api=1&query=${t.lat},${t.lng}`;
+    if (/^https?:\/\//.test(t.google_map || "")) return t.google_map;
+    const q = [t.adresse, t.secteur].filter(Boolean).join(", ");
+    return q ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}` : "";
+  }
+
+  /** Ligne d'adresse sous le client : vers la carte de la page si la position est connue, sinon Google Maps. */
+  _adresse(t) {
+    const esc = frappe.utils.escape_html, txt = (t.adresse || "").replace(/\s+/g, " ").trim();
+    if (t.etape === "annulée") return "";
+    if (t.lat && t.lng) return `<br><a href="#" class="st-adr" data-carte="${esc(t.name)}" title="Voir l’intervention sur la carte">📍 ${esc(txt || "voir sur la carte")}</a>`;
+    if (t.approx) return `<br><a href="#" class="st-adr" data-carte="${esc(t.name)}" title="Position approchée : voir où elle tombe sur la carte">📍≈ ${esc(txt || "voir sur la carte")}</a>`;
+    const lien = this._lien_maps(t);
+    return lien ? `<br><a href="${esc(lien)}" class="st-adr" target="_blank" rel="noopener" title="Position exacte inconnue : ouvrir dans Google Maps">🌐 ${esc(txt || "Google Maps")} ↗</a>` : "";
+  }
+
+  /** Tâche sans position : les arrêts du véhicule qui POURRAIENT être l'intervention (le GPS ne tranche pas). */
+  _pistes_resume(t) {
+    const p = t.pistes || [], esc = frappe.utils.escape_html;
+    const encours = p.find((x) => x.en_cours);
+    const txt = encours ? `🅿️ arrêté depuis ${this._h(encours.arrivee)} — chez ce client ?` : `🅿️ ${p.length} arrêt${p.length > 1 ? "s" : ""} possible${p.length > 1 ? "s" : ""}`;
+    return `<a href="#" class="st-dim st-pistes" data-tache="${esc(t.name)}" title="Arrêts non identifiés autour du créneau : ouvrir pour choisir le bon">${txt}</a>`;
+  }
+
+  montrer_point(lat, lng, html) {
+    if (!this.carte_visible) {
+      this.carte_visible = true;
+      try { localStorage.setItem("st_carte", "1"); } catch (e) { /* ignoré */ }
+      this._render_carte();
+    }
+    if (!this.carte) return;
+    if (!this.point_temp) this.point_temp = L.layerGroup().addTo(this.carte);
+    this.point_temp.clearLayers();
+    const m = L.marker([lat, lng], { zIndexOffset: 2000, icon: L.divIcon({ className: "", iconSize: [28, 28], iconAnchor: [14, 14],
+      html: `<div style="width:28px;height:28px;border-radius:14px;background:#fff;border:3px dashed #7c3aed;display:flex;align-items:center;justify-content:center;font-size:14px">🅿️</div>` }) })
+      .bindPopup(html).addTo(this.point_temp);
+    this.$root.find("#st-carte")[0].scrollIntoView({ behavior: "smooth", block: "center" });
+    this.carte.invalidateSize();
+    this.carte.setView([lat, lng], 16);
+    m.openPopup();
+  }
+
+  fixer_position(t, p, dlg) {
+    frappe.confirm(`Enregistrer l’arrêt de <b>${this._h(p.arrivee)}–${this._h(p.depart)}</b> comme position de <b>${frappe.utils.escape_html(t.client || t.name)}</b> ?
+      <br><span class="text-muted">Le passage sera reconnu avec ses heures réelles, et l’adresse du client gardera cette position pour les prochaines fois.</span>`, async () => {
+      await frappe.call({ method: "customization_app.flotte_gps.fixer_position", args: { tache: t.name, lat: p.lat, lng: p.lng }, freeze: true });
+      if (dlg) dlg.hide();
+      frappe.show_alert({ message: `📍 Position enregistrée pour ${frappe.utils.escape_html(t.client || t.name)}`, indicator: "green" }, 5);
+      if (this.point_temp) this.point_temp.clearLayers();
+      this.charger();
+    });
+  }
+
+  /** D'où vient une position approchée — à dire tel quel, sans fausse précision. */
+  _origine_approx(t) {
+    if (t.approx_src === "secteur") return `≈ centre du ${frappe.utils.escape_html(t.secteur || "secteur")} : aucune position connue pour cette adresse (3 clients sur 4 du secteur sont à moins de 4,3 km de ce point, cercle pointillé)`;
+    return "≈ lue dans le texte de l’adresse par OpenStreetMap : la rue si elle est connue, sinon le quartier ou la ville — pas de lien Google Maps";
+  }
+
+  voir_sur_carte(nom) {
+    const { t } = this._trouver(nom);
+    if (!t) return;
+    if (!this.carte_visible) {
+      this.carte_visible = true;
+      try { localStorage.setItem("st_carte", "1"); } catch (e) { /* ignoré */ }
+      this._render_carte();
+    }
+    const m = this.marqueurs && this.marqueurs[nom];
+    if (!m) { window.open(this._lien_maps(t), "_blank", "noopener"); return; }
+    const el = this.$root.find("#st-carte")[0];
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    this.carte.invalidateSize();
+    this.carte.setView(m.getLatLng(), t.lat ? 17 : t.approx_src === "secteur" ? 12 : 15);
+    m.openPopup();
+  }
+
+  _pistes_fenetre(t) {
+    if (!t.gps_live || t.gps_live.statut !== "Sans position") return "";
+    const p = t.pistes || [], esc = frappe.utils.escape_html, modif = frappe.model.can_write("Tache de travail");
+    let html = `<div class="st-pistes-bloc"><div class="t">🅿️ Arrêts possibles autour du créneau</div>
+      <div class="st-dim" style="margin-bottom:6px">Sans la position exacte du client, le GPS ne peut pas savoir lequel est le bon : regardez sur la carte et confirmez.</div>`;
+    if (!p.length) return html + `<div class="st-dim">Aucun arrêt non identifié de plus de 5 min entre 1 h 30 avant et 3 h après l’heure annoncée.</div></div>`;
+    html += p.map((x, i) => `<div class="st-piste">
+        <span><b>${this._h(x.arrivee)}–${this._h(x.depart)}</b> · ${this._min(x.duree)}${x.en_cours ? " · <b>en cours</b>" : ""}
+          <span class="st-dim">${x.ecart > 0 ? "+" : ""}${x.ecart} min / annoncé${x.km_approx != null ? ` · à ${String(x.km_approx).replace(".", ",")} km du secteur` : ""}</span></span>
+        <span class="st-piste-btns"><button class="btn btn-default btn-xs" data-piste-voir="${i}">🗺 voir</button>
+          ${modif ? `<button class="btn btn-primary btn-xs" data-piste-ici="${i}">📌 C’est ici</button>` : ""}</span></div>`).join("");
+    return html + `</div>`;
+  }
+
+  ouvrir_tache(nom) {
+    const { e, t } = this._trouver(nom), d = this.data, esc = frappe.utils.escape_html;
+    if (!t) { window.open(`/app/tache-de-travail/${encodeURIComponent(nom)}`, "_blank"); return; }
+    const [ec, el] = ST_ETAPE[t.etape] || ["autre", t.etape];
+    let reel = "";
+    if (t.etape === "passée") reel = `${this._h(t.gps_live.arrivee)} → ${this._h(t.gps_live.depart)} ${this._ecart(t.gps_live.ecart, d.tolerance)} · ${this._min(t.gps_live.duree)} sur place`;
+    else if (t.etape === "sur place") reel = `arrivé ${this._h(t.arrivee_reelle)}${t.eta_depart ? ", fin estimée " + this._h(t.eta_depart) : ""}`;
+    else if (t.eta) reel = `arrivée estimée ${this._h(t.eta)} ${this._ecart(t.ecart_prevu, d.tolerance)}${t.route_min ? ` (${t.route_min} min de route)` : ""}`;
+    const ligne = (ico, lbl, val) => (val ? `<div class="st-pop-l"><span class="st-pop-k">${ico} ${lbl}</span><span>${val}</span></div>` : "");
+    const lien = this._lien_maps(t), adresse = (t.adresse || "").replace(/\s+/g, " ").trim();
+    const sms = (t.messages || []).map((m) => `${esc(m.type)} ${this._h(m.heure)} (${esc(m.statut)})`).join("<br>");
+    const phrase = this._phrase(e, t, d);
+    const dlg = new frappe.ui.Dialog({
+      title: `${esc(t.client || t.titre || t.name)}`, size: "large",
+      fields: [{ fieldtype: "HTML", fieldname: "corps" }],
+      primary_action_label: "📄 Ouvrir la fiche complète",
+      primary_action: () => window.open(`/app/tache-de-travail/${encodeURIComponent(t.name)}`, "_blank"),
+    });
+    dlg.fields_dict.corps.$wrapper.html(`<div class="st-pop">
+      ${ligne("🗂", "Tâche", `${esc(t.type)}${!t.client && t.titre ? " · " + esc(t.titre) : ""} <span class="st-dim">${esc(t.name)}</span>`)}
+      ${ligne("🕘", "Annoncé", `${this._h(t.debut)}${t.fin ? "–" + this._h(t.fin) : ""}`)}
+      ${ligne("👷", "Technicien", `${esc(e.nom)}${e.vehicule ? ` <span class="st-dim">${esc(e.vehicule)}</span>` : ""}`)}
+      ${ligne("🚦", "Étape", `<span class="st-etape ${ec}">${el}</span>${reel ? " " + reel : ""}`)}
+      ${ligne("📞", "Téléphone", t.tel ? `<a href="tel:${esc(String(t.tel).replace(/\s+/g, ""))}">${esc(t.tel)}</a>` : "")}
+      ${ligne("🏠", "Adresse", `${esc(adresse || "—")}${t.secteur ? ` <span class="st-dim">· ${esc(t.secteur)}</span>` : ""}${t.position_src && t.position_src !== "tâche" ? ` <span class="st-dim">· position ${esc(t.position_src)}</span>` : ""}${t.approx ? `<br><span class="st-dim">${this._origine_approx(t)}</span>` : ""}`)}
+      ${/^https?:\/\//.test(t.google_map || "") ? ligne("🔗", "Lien Maps", `<a href="${esc(t.google_map)}" target="_blank" rel="noopener" title="${esc(t.google_map)}" class="st-pop-url">${esc(t.google_map.replace(/^https?:\/\/(www\.)?/, ""))} ↗</a>`) : ""}
+      ${ligne("🧾", "Commande", t.commande ? `<a href="/app/sales-order/${encodeURIComponent(t.commande)}" target="_blank">${esc(t.commande)}</a>` : "")}
+      ${ligne("📨", "Messages", sms)}
+      ${this._pistes_fenetre(t)}
+      <div class="st-msg" data-copie="${esc(phrase)}" title="Cliquer pour copier" style="margin:10px 0 0">💬 ${esc(phrase)}</div>
+      <div class="st-pop-btns">
+        ${(t.lat && t.lng) || t.approx ? `<button class="btn btn-default btn-sm" data-pop="carte">🗺 Voir sur la carte${t.lat ? "" : " (≈)"}</button>` : ""}
+        ${lien ? `<a class="btn btn-default btn-sm" href="${esc(lien)}" target="_blank" rel="noopener">🌐 Google Maps ↗</a>` : ""}
+      </div></div>`);
+    dlg.fields_dict.corps.$wrapper.on("click", "[data-pop='carte']", () => { dlg.hide(); this.voir_sur_carte(t.name); });
+    dlg.fields_dict.corps.$wrapper.on("click", "[data-piste-voir]", (ev) => {
+      const p = t.pistes[+$(ev.currentTarget).attr("data-piste-voir")];
+      dlg.hide();
+      this.montrer_point(p.lat, p.lng, `<b>🅿️ Arrêt ${this._h(p.arrivee)}–${this._h(p.depart)}</b> (${this._min(p.duree)})<br>${esc(e.nom)} · piste pour ${esc(t.client || t.name)}`
+        + `<br><a href="https://www.google.com/maps?q=${p.lat},${p.lng}" target="_blank" rel="noopener">Google Maps ↗</a>`);
+    });
+    dlg.fields_dict.corps.$wrapper.on("click", "[data-piste-ici]", (ev) => this.fixer_position(t, t.pistes[+$(ev.currentTarget).attr("data-piste-ici")], dlg));
+    dlg.fields_dict.corps.$wrapper.on("click", "[data-copie]", (ev) => frappe.utils.copy_to_clipboard($(ev.currentTarget).attr("data-copie")));
+    dlg.show();
   }
 
   // ── Retards prévisibles (pour Salma) : arrivée estimée au-delà de la tolérance ───────────────────────
@@ -204,8 +367,8 @@ class SuiviTerrain {
     for (const { e, t } of lignes) {
       const sms = (t.messages || []).filter((m) => !["Alerte interne", "Non faite"].includes(m.type));
       const prevenu = sms.length ? sms.map((m) => `${m.type} ${this._h(m.heure)} (${m.statut})`).join(", ") : "<span class='st-ecart retard'>non</span>";
-      const estime = t.etape === "sautée" ? `<span class="st-ecart retard">⛔ non faite, une suivante déjà faite</span>` : `${this._h(t.eta)}</td><td>${this._ecart(t.ecart_prevu, d.tolerance)}`;
-      html += `<tr><td class="st-client">${esc(t.client || t.name)}</td><td>${esc(t.tel || "")}</td><td>${esc(e.nom)}</td><td class="num">${this._h(t.debut)}</td><td class="num">${estime}</td><td>${prevenu}</td><td><a href="#" data-copie="${esc(this._phrase(e, t, d))}" title="Copier la phrase">📋</a></td></tr>`;
+      const estime = t.etape === "sautée" ? `<span class="st-ecart retard">⛔ non faite, une suivante déjà faite</span>` : `${t.eta_approx ? "≈ " : ""}${this._h(t.eta)}</td><td>${this._ecart(t.ecart_prevu, d.tolerance)}`;
+      html += `<tr><td class="st-client st-ouvrir" data-tache="${esc(t.name)}" title="Ouvrir la tâche">${esc(t.client || t.name)}</td><td>${esc(t.tel || "")}</td><td>${esc(e.nom)}</td><td class="num">${this._h(t.debut)}</td><td class="num">${estime}</td><td>${prevenu}</td><td><a href="#" data-copie="${esc(this._phrase(e, t, d))}" title="Copier la phrase">📋</a></td></tr>`;
     }
     $el.html(html + `</tbody></table></div>`);
   }
@@ -258,9 +421,15 @@ class SuiviTerrain {
       this.carte_cadree = null;
     }
     this.couches.clearLayers();
-    const bornes = [];
+    this.marqueurs = {};
+    const bornes = [], bornes_approx = [];
     const pt = (lat, lng) => { bornes.push([lat, lng]); return [lat, lng]; };
+    // Une position approchée (livraison hors secteur à Djerba…) ne doit pas élargir le cadrage à tout le pays.
+    const pt_approx = (lat, lng) => { bornes_approx.push([lat, lng]); return [lat, lng]; };
     const depots = new Set();
+    // Plusieurs interventions au même endroit (même lien Google Maps, même immeuble) : les pastilles se
+    // décalent côte à côte — sinon la dernière cache les autres (n°7 « à venir » sur n°2 « passée », 12/10/2026).
+    const occupes = {};
     d.employes.forEach((e, i) => {
       const c = ST_COULEURS[i % ST_COULEURS.length];
       const dep = e.depart || d.depot;
@@ -276,17 +445,23 @@ class SuiviTerrain {
       }
       let n = 0;
       e.taches.forEach((t) => {
-        if (!(t.lat && t.lng) || t.etape === "annulée") return;
+        const exact = t.lat && t.lng, ap = !exact && t.approx;
+        if (!(exact || ap) || t.etape === "annulée") return;
         n++;
-        const fond = ST_FOND[t.etape] || "#6b7280", approx = t.position_src && t.position_src !== "tâche";
+        const [lat, lng] = exact ? [t.lat, t.lng] : t.approx;
+        const fond = ST_FOND[t.etape] || "#6b7280", approx = ap || (t.position_src && t.position_src !== "tâche");
+        const cle = `${lat.toFixed(4)},${lng.toFixed(4)}`, rang = occupes[cle] = (occupes[cle] || 0) + 1;
+        if (ap && t.approx_src === "secteur") {
+          L.circle([lat, lng], { radius: ST_RAYON_SECTEUR_M, color: c, weight: 1, dashArray: "4 6", fillOpacity: 0.04, interactive: false }).addTo(this.couches);
+        }
         let detail = `${this._h(t.debut)} annoncé`;
         if (t.etape === "passée") detail += ` · réel ${this._h(t.gps_live.arrivee)} → ${this._h(t.gps_live.depart)} (${this._min(t.gps_live.duree)})`;
         else if (t.etape === "sur place") detail += ` · sur place depuis ${this._h(t.arrivee_reelle)}`;
         else if (t.eta) detail += ` · arrivée estimée ${this._h(t.eta)}`;
-        L.marker(pt(t.lat, t.lng), { icon: L.divIcon({ className: "", iconSize: [24, 24], iconAnchor: [12, 12],
-          html: `<div style="width:24px;height:24px;border-radius:12px;background:${fond};color:#fff;font-weight:700;font-size:11px;display:flex;align-items:center;justify-content:center;border:3px ${approx ? "dashed" : "solid"} ${c};box-shadow:0 0 0 1px #fff">${n}</div>` }) })
-          .bindTooltip(`${n} · ${esc(t.client || t.titre || t.name)} <span style="color:#64748b">${this._h(t.debut)}</span>`, { direction: "right", offset: [12, 0] })
-          .bindPopup(`<b>${n} · ${esc(t.client || t.titre || t.name)}</b><br>${esc(e.nom)} · ${esc(t.type)} · <b>${esc(t.etape)}</b><br>${esc(detail)}${approx ? "<br>≈ position approchée" : ""}<br><a href="/app/tache-de-travail/${encodeURIComponent(t.name)}">ouvrir la tâche</a>`)
+        this.marqueurs[t.name] = L.marker(ap ? pt_approx(lat, lng) : pt(lat, lng), { icon: L.divIcon({ className: "", iconSize: [24, 24], iconAnchor: [12 - 22 * (rang - 1), 12],
+          html: `<div style="width:24px;height:24px;border-radius:12px;background:${fond};${ap ? "opacity:.75;" : ""}color:#fff;font-weight:700;font-size:${ap ? 10 : 11}px;display:flex;align-items:center;justify-content:center;border:3px ${approx ? "dashed" : "solid"} ${c};box-shadow:0 0 0 1px #fff">${ap ? "≈" : ""}${n}</div>` }) })
+          .bindTooltip(`${n} · ${esc(t.client || t.titre || t.name)} <span style="color:#64748b">${this._h(t.debut)}${ap ? " · ≈ position approchée" : ""}</span>`, { direction: "right", offset: [12, 0] })
+          .bindPopup(`<b>${n} · ${esc(t.client || t.titre || t.name)}</b><br>${esc(e.nom)} · ${esc(t.type)} · <b>${esc(t.etape)}</b><br>${esc(detail)}${ap ? `<br>${this._origine_approx(t)}` : approx ? "<br>≈ position approchée" : ""}<br><a href="#" data-tache="${esc(t.name)}">ouvrir la tâche</a> · <a href="${esc(this._lien_maps(t))}" target="_blank" rel="noopener">Google Maps ↗</a>`)
           .addTo(this.couches);
       });
       if (e.position) {
@@ -297,6 +472,7 @@ class SuiviTerrain {
           .addTo(this.couches);
       }
     });
+    if (!bornes.length) bornes.push(...bornes_approx);
     if (bornes.length && !this.carte_cadree) { this.carte.fitBounds(bornes, { padding: [30, 30] }); this.carte_cadree = d.jour; }
     else if (bornes.length && this.carte_cadree !== d.jour) { this.carte.fitBounds(bornes, { padding: [30, 30] }); this.carte_cadree = d.jour; }
     setTimeout(() => this.carte && this.carte.invalidateSize(), 50);

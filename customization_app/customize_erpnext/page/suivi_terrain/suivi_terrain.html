@@ -43,6 +43,21 @@
     .st-msgs table.st-t td { font-size: 12px; }
     .st-etiq { font-size: 11px; padding: 2px 6px; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,.3); }
     #st-carte .leaflet-container { font: inherit; }
+    .st-ouvrir { cursor: pointer; }
+    .st-ouvrir:hover .st-client, td.st-client.st-ouvrir:hover { color: var(--primary); text-decoration: underline; }
+    .st-adr { display: inline-block; max-width: 280px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom;
+              font-size: 11.5px; color: #2563eb; }
+    .st-adr:hover { text-decoration: underline; }
+    .st-pop-l { display: flex; gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--border-color); font-size: 13.5px; }
+    .st-pop-k { flex: 0 0 110px; color: var(--text-muted); }
+    .st-pop-url { word-break: break-all; color: #2563eb; }
+    .st-pop-url:hover { text-decoration: underline; }
+    .st-pistes { color: #7c3aed !important; }
+    .st-pistes-bloc { margin-top: 10px; padding: 8px 10px; border: 1px dashed #c4b5fd; border-radius: 8px; background: #faf5ff; }
+    .st-pistes-bloc .t { font-weight: 700; margin-bottom: 2px; }
+    .st-piste { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 5px 0; border-top: 1px solid #ede9fe; flex-wrap: wrap; }
+    .st-piste-btns { display: flex; gap: 6px; }
+    .st-pop-btns { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
     @media (max-width: 600px) { .st-grid { grid-template-columns: 1fr; } }
   </style>
 
@@ -62,7 +77,7 @@
   <div class="st-panel active" data-panel="live">
     <div class="st-bar" style="margin-bottom:6px">
       <button class="btn btn-default btn-sm" data-action="carte">🗺 Carte</button>
-      <span class="st-dim" id="st-legende">🚗 véhicule (position live) · ligne pointillée = itinéraire prévu · ligne pleine = trajet réel du jour · pastilles numérotées = clients dans l’ordre (vert passé, jaune sur place, bleu à venir, rouge heure dépassée)</span>
+      <span class="st-dim" id="st-legende">🚗 véhicule (position live) · ligne pointillée = itinéraire prévu · ligne pleine = trajet réel du jour · pastilles numérotées = clients dans l’ordre (vert passé, jaune sur place, bleu à venir, rouge heure dépassée) · pastille pâle « ≈ » en pointillés = position approchée (adresse sans lien Google Maps)</span>
     </div>
     <div id="st-retards"></div>
     <div id="st-carte" style="height: 440px; border: 1px solid var(--border-color); border-radius: 10px; margin-bottom: 12px; display: none;"></div>

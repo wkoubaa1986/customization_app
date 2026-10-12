@@ -86,6 +86,8 @@ def decider(employes: list, maintenant: datetime, cfg: dict, deja: dict) -> list
             continue
         prochaine = restantes[0]
         for t in restantes:
+            if t.get("eta_approx"):
+                continue                # position approchée : l'heure estimée n'est pas assez sûre pour écrire au client
             faits = deja.get(t["name"], set())
             eta, debut = get_datetime(t["eta"]), get_datetime(t["debut"])
             ecart = round((eta - debut).total_seconds() / 60)

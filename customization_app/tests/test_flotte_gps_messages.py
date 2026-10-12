@@ -83,5 +83,14 @@ class TestDecider(unittest.TestCase):
         self.assertEqual(fm.decider([emp], now, cfg, {}), [])
 
 
+    def test_position_approchee_jamais_de_message(self):
+        """Tâche sans position exacte : arrivée estimée « ≈ » (centre du secteur), ni SMS ni alerte — même en retard ;
+        elle reste la prochaine étape : pas de « en route » à la suivante tant qu'on ne sait pas où il va."""
+        now = J + timedelta(hours=14, minutes=10)
+        approx = dict(_t("C", 14.5, "en route", 15.6), eta_approx=True)
+        emp = _e("en mouvement", [approx, _t("D", 16, "à venir", 16.9)])
+        self.assertEqual([(m["tache"], m["type"]) for m in fm.decider([emp], now, CFG, {})], [("D", fm.RETARD), ("D", fm.ALERTE)])
+
+
 if __name__ == "__main__":
     unittest.main()

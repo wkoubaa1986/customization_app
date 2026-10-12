@@ -153,3 +153,70 @@ class TestVehiculesDuJour(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestPistesSansPosition(unittest.TestCase):
+    """Tâche sans position exacte : les arrêts qui POURRAIENT être l'intervention, sans jamais conclure (12/10/2026)."""
+    CHEZ_C = (36.80500, 10.18000)                                       # client sans lien Google Maps
+
+    def setUp(self):
+        self.taches = [_tache("A", "E1", CHEZ_A, 9), _tache("C", "E1", None, 11, approx=[36.80, 10.17], client="Client C"), _tache("B", "E1", CHEZ_B, 14)]
+        self.arrets = [_arret(8.0, 40, MAGASIN), _arret(9.1, 35, CHEZ_A), _arret(10.0, 3, (36.70, 10.20)),     # 3 min : trop court
+                       _arret(11.2, 30, self.CHEZ_C), _arret(12.5, 45, (36.83, 10.30)), _arret(14.0, 30, CHEZ_B)]
+        self.j = {"arrets": self.arrets, "trajets": [{"debut": J}], "erreur": None}
+        self.res = fg.apparier_pure(self.taches, {"cb": self.j}, {"E1": "cb"}, 150)
+
+    def test_pistes_classees_sans_conclure(self):
+        self.assertEqual(self.res["C"]["statut"], fg.SANS_POS)
+        p = fg.arrets_candidats(self.taches, self.j, self.res, [MAGASIN], 150)["C"]
+        # ni le Magasin, ni A ni B (positions connues), ni l'arrêt de 3 min ; la plus plausible d'abord
+        self.assertEqual([(x["arrivee"].strftime("%H:%M"), x["duree"]) for x in p], [("11:12", 30), ("12:30", 45)])
+        self.assertEqual(p[0]["ecart"], 12)
+        self.assertLess(p[0]["km_approx"], p[1]["km_approx"])
+
+    def test_fenetre_autour_de_l_heure_annoncee(self):
+        self.taches[1]["debut"] = J + timedelta(hours=17)               # annoncée à 17 h : 11:12 est à plus de 1 h 30 avant
+        p = fg.arrets_candidats(self.taches, self.j, self.res, [MAGASIN], 150).get("C", [])
+        self.assertEqual(p, [])
+
+    def test_rien_pour_une_tache_positionnee_interne_ou_sans_journal(self):
+        self.assertNotIn("A", fg.arrets_candidats(self.taches, self.j, self.res, [MAGASIN], 150))
+        self.taches[1]["client"] = ""                                    # vérification de stock, sans client
+        self.assertEqual(fg.arrets_candidats(self.taches, self.j, self.res, [MAGASIN], 150), {})
+        self.taches[1]["client"] = "Client C"
+        self.assertEqual(fg.arrets_candidats(self.taches, {"erreur": "x"}, self.res, [MAGASIN], 150), {})
+        self.assertEqual(fg.arrets_candidats(self.taches, None, self.res, [MAGASIN], 150), {})
+
+    def test_point_de_projection(self):
+        self.assertEqual(fg._point(self.taches[0]), CHEZ_A)
+        self.assertEqual(fg._point(self.taches[1]), (36.80, 10.17))      # position approchée → arrivée « ≈ »
+        self.assertIsNone(fg._point(_tache("D", "E1", None, 15)))
+
+
+class TestFixerPosition(unittest.TestCase):
+    """« 📌 C'est ici » : la piste choisie devient le lien Google Maps de la tâche, relu tel quel. Savepoint annulé."""
+
+    def setUp(self):
+        import frappe
+        frappe.set_user("Administrator")
+        frappe.db.savepoint("fixer_position")
+        self.tache = frappe.db.get_value(fg.TACHE, {"starts_on": ["is", "set"]}, "name")
+        if not self.tache:
+            self.skipTest("aucune tâche")
+
+    def tearDown(self):
+        import frappe
+        frappe.db.rollback(save_point="fixer_position")
+
+    def test_lien_ecrit_relu_et_trace(self):
+        import frappe
+        from customization_app import tournee_optimisation as to
+        ancien = frappe.db.get_value(fg.TACHE, self.tache, "google_map")
+        r = fg.fixer_position(self.tache, 36.842016, 10.142024)
+        self.assertEqual(frappe.db.get_value(fg.TACHE, self.tache, "google_map"), r["lien"])
+        self.assertEqual(to.coordonnees_du_lien(r["lien"]), (36.842016, 10.142024))
+        trace = frappe.get_all("Comment", filters={"reference_doctype": fg.TACHE, "reference_name": self.tache,
+                                                   "content": ["like", "%Position fixée%"]}, pluck="content")
+        self.assertTrue(trace and (not ancien or ancien in trace[0]))
+        with self.assertRaises(frappe.ValidationError):
+            fg.fixer_position(self.tache, 48.85, 2.35)                   # hors de Tunisie
