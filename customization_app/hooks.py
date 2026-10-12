@@ -253,7 +253,13 @@ doc_events = {
     "Delivery Note": {
         # Échange « E-… » : la pièce remise sort par sa propre ligne à 0 DT,
         # posée avant la validation ERPNext (qui la complète) …
-        "before_validate": "customization_app.retour_echange.poser_composants",
+        "before_validate": [
+            "customization_app.retour_echange.poser_composants",
+            # Commande Aramex : chaque ligne sort (ou rentre, BL de retour) du Magasin,
+            # quelle que soit la sortie principale de l'article. Après poser_composants,
+            # pour couvrir aussi les lignes qu'il ajoute.
+            "customization_app.aramex_stock.delivery_note_before_validate",
+        ],
         # … et remise à 0 DT après ; les packed items du bundle d'échange
         # (pièce reprise à −1, pièce remise) sont retirés : le stock ne doit
         # bouger qu'une fois, par la ligne.
@@ -278,6 +284,9 @@ doc_events = {
         "after_cancel": "customization_app.api.on_delivery_note_cancel",
     },
     "Sales Order": {
+        # Commande Aramex : ses lignes visent le Magasin (réservation au bon entrepôt) —
+        # la sortie principale de l'article ne s'applique pas. Voir aramex_stock.
+        "before_validate": "customization_app.aramex_stock.sales_order_before_validate",
         # on_update se déclenche à l'enregistrement d'un brouillon ET à la
         # validation : ajouter une ligne de main d'œuvre à un devis non validé
         # met donc aussitôt l'anomalie à jour. on_submit seul l'aurait raté.

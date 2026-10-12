@@ -28,6 +28,7 @@ import frappe
 from frappe import _
 from frappe.utils import flt, now_datetime
 
+from customization_app.aramex_stock import ENTREPOT_ARAMEX
 from customization_app.livraison_aramex import (
     COMPTE_ARAMEX,
     DOCTYPE_SUIVI,
@@ -40,8 +41,9 @@ ROLES = ("System Manager", "Accounts Manager", "Accounts User",
 
 # Le colis retourné revient PHYSIQUEMENT au magasin — quel que soit l'entrepôt
 # de départ (souvent désactivé depuis : « Hall - A&S » a bloqué le premier
-# essai). Le BL de retour entre donc toujours ici.
-ENTREPOT_RETOUR = "Magasins - A&S"
+# essai). Le BL de retour entre donc toujours ici (même règle que la sortie :
+# aramex_stock).
+ENTREPOT_RETOUR = ENTREPOT_ARAMEX
 
 # Les formes, dans le statut ou la dernière description, qui disent qu'un colis
 # REVIENT — sous-ensemble « retour » des mots d'alerte du suivi.
