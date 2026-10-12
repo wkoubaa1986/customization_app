@@ -125,15 +125,19 @@ def recaler(depot: dict, arrets: list, mesure, marge: int, rangement: int, debut
     out, pos, libre, depart_jour = [], depot, None, None
     for a in arrets:
         arrivee_marge = 0 if a.get("sans_lieu") else cint(marge)
+        # « Heure fixe » (l'employé peut changer, pas l'heure) : comme une tâche fixe pour l'horaire — son heure, quoi
+        # qu'il arrive ; un trajet plus long se lit en RETARD. Avant le 12/10/2026 elle s'affichait décalée « hors de sa
+        # fenêtre », alors que l'application gardait l'heure promise.
+        libre_heure = a["mobile"] and not a.get("heure_fixe")
         if libre is None:
             # 1er arrêt : on part du Magasin juste à temps (mesuré à l'heure de départ probable).
             m = mesure(pos, a, max(debut_jour, a["debut"] - arrivee_marge - 30))
-            depart_jour = max(debut_jour, a["debut"] - arrivee_marge - m["minutes"]) if a["mobile"] else a["debut"] - arrivee_marge - m["minutes"]
+            depart_jour = max(debut_jour, a["debut"] - arrivee_marge - m["minutes"]) if libre_heure else a["debut"] - arrivee_marge - m["minutes"]
             arrivee = depart_jour + m["minutes"] + arrivee_marge
         else:
             m = mesure(pos, a, libre)
             arrivee = libre + m["minutes"] + arrivee_marge
-        if a["mobile"]:
+        if libre_heure:
             debut = _au_pas(max(arrivee, premiere, (a.get("fenetre") or (0, 0))[0]))
             if pause and debut < pause[1] and debut + a["service"] > pause[0]:
                 debut = pause[1]                     # pas de tâche à cheval sur la pause
@@ -141,8 +145,8 @@ def recaler(depot: dict, arrets: list, mesure, marge: int, rangement: int, debut
             debut = a["debut"]                       # fixe : son heure, quoi qu'il arrive
         fin = debut + a["service"]
         out.append({"debut": debut, "fin": fin, "trajet": m["minutes"], "km": m.get("km", 0), "source": m["source"],
-                    "attente": max(0, debut - arrivee), "retard": max(0, arrivee - debut) if not a["mobile"] else 0,
-                    "hors_fenetre": bool(a["mobile"] and a.get("fenetre") and debut > a["fenetre"][1])})
+                    "attente": max(0, debut - arrivee), "retard": max(0, arrivee - debut) if not libre_heure else 0,
+                    "hors_fenetre": bool(libre_heure and a.get("fenetre") and debut > a["fenetre"][1])})
         libre = fin + (0 if a.get("sans_lieu") else cint(rangement))
         pos = a
     if libre is None:
@@ -193,7 +197,8 @@ def recaler_proposition(employes: list, jour, cfg: dict, mn_brut: list, mn: list
         arrets = e["apres"]["arrets"]
         depot = {"pos": tuple(e["depart_point"]), "noeud": e["depot_noeud"]}
         etapes = [{"pos": (a["lat"], a["lng"]), "noeud": a["noeud"], "debut": a["debut_min"], "service": a["service"],
-                   "mobile": a["mobile"], "fenetre": a.get("fenetre"), "sans_lieu": a["position"] == "dépôt"} for a in arrets]
+                   "mobile": a["mobile"], "heure_fixe": a.get("heure_fixe"), "fenetre": a.get("fenetre"),
+                   "sans_lieu": a["position"] == "dépôt"} for a in arrets]
         r = recaler(depot, etapes, mesure, cfg["marge"], cfg["rangement"], e["journee_min"][0], e["journee_min"][1],
                     cfg["premiere"], cfg["pause"])
         for a, x in zip(arrets, r["arrets"]):

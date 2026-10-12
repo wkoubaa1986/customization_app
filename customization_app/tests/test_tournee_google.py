@@ -29,6 +29,17 @@ class TestRecaler(unittest.TestCase):
         self.assertEqual([(x["debut"], x["retard"]) for x in r["arrets"]], [(570, 0), (630, 5), (695, 0)])
         self.assertEqual(r["retards"], 1)
 
+    def test_heure_fixe_jamais_decalee_par_le_trafic(self):
+        """« Heure fixe » : l'heure promise reste affichée telle quelle ; un trafic plus lent donne un RETARD, pas une
+        tâche décalée « hors de sa fenêtre » (l'application, elle, gardait déjà l'heure — 12/10/2026)."""
+        fixe = dict(etape(2, 630, fenetre=(630, 630)), heure_fixe=True)        # déplaçable d'employé, pas d'heure
+        r = G.recaler(DEPOT, [etape(1, 570), fixe], vingt_minutes, marge=10, rangement=5, debut_jour=480, fin_jour=1080, premiere=540)
+        self.assertEqual([(x["debut"], x["retard"], x["hors_fenetre"]) for x in r["arrets"]], [(570, 0, False), (630, 5, False)])
+        # en première étape : départ calculé pour arriver à l'heure
+        r = G.recaler(DEPOT, [dict(etape(1, 600, fenetre=(600, 600)), heure_fixe=True)], vingt_minutes, marge=10, rangement=5,
+                      debut_jour=480, fin_jour=1080, premiere=540)
+        self.assertEqual((r["depart"], r["arrets"][0]["debut"], r["arrets"][0]["retard"]), (570, 600, 0))
+
     def test_tache_au_magasin_ni_stationnement_ni_rangement(self):
         # Vérification de stock au Magasin à 09:00, puis un client : départ 10:30 sans rangement, arrivée 11:00.
         r = G.recaler(DEPOT, [dict(etape(0, 540, service=90, mobile=False, sans_lieu=True), pos=DEPOT["pos"]), etape(2, 700)],
