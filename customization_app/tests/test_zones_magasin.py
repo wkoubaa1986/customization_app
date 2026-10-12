@@ -125,6 +125,23 @@ class TestZones(unittest.TestCase):
             with self.assertRaises(frappe.ValidationError):
                 ZM.definir_sortie([item], wh)
 
+    def test_sortie_magasin_ou_hall_seulement(self):
+        import frappe
+        self.assertEqual({e.name for e in ZM.entrepots_de_sortie(self.societe)},
+                         {w for w in ZM.SORTIES_AUTORISEES if frappe.db.get_value("Warehouse", w, "disabled") == 0})
+        autre = frappe.db.get_value("Warehouse", {"disabled": 0, "is_group": 0, "company": self.societe,
+                                                  "name": ["not in", ZM.SORTIES_AUTORISEES]}, "name")
+        if not autre:
+            self.skipTest("aucun autre entrepôt actif")
+        with self.assertRaises(frappe.ValidationError):                  # page : stock d'un employé refusé
+            ZM.definir_sortie(self.items[:1], autre)
+        doc = frappe.get_doc("Item", self.items[0])
+        doc.set("item_defaults", [{"company": self.societe, "default_warehouse": autre}])
+        with self.assertRaises(frappe.ValidationError):                  # fiche article : refusé aussi
+            ZM.item_validate(doc)
+        doc.set("item_defaults", [{"company": self.societe, "default_warehouse": "Hall - A&S"}])
+        ZM.item_validate(doc)                                            # Hall : accepté
+
     def test_ecriture_reservee(self):
         import frappe
         user = next((u for u in frappe.get_all("User", filters={"enabled": 1, "user_type": "System User"}, pluck="name")
@@ -137,3 +154,41 @@ class TestZones(unittest.TestCase):
         for appel in (lambda: ZM.ajouter_a_zone("TESTESP - A1", self.items[:1]), lambda: ZM.creer_zones("Z9", "TESTESP")):
             with self.assertRaises(frappe.PermissionError):
                 appel()
+
+    def test_filtres_arbre_espace_entier_et_sans_sortie(self):
+        import frappe
+        i0, i1, i2 = self.items
+        ZM.creer_zones("TESTESP2")
+        ZM.ajouter_a_zone("TESTESP - A1", [i0])
+        ZM.ajouter_a_zone("TESTESP", [i1])                               # rangé « sans zone précise »
+        ZM.ajouter_a_zone("TESTESP2", [i2])
+        codes = lambda **f: sorted(a.item_code for a in ZM.get_articles(stockes=0, limite=200, **f)["articles"])
+        # tout l'espace = l'espace ET ses zones ; l'espace seul = « sans zone précise »
+        self.assertEqual(codes(zone=ZM.TOUT_ESPACE + "TESTESP"), sorted([i0, i1]))
+        self.assertEqual(codes(zone="TESTESP"), [i1])
+        espace = next(z for z in ZM.get_context()["zones"] if z["name"] == "TESTESP")
+        self.assertEqual((espace["articles"], espace["total"]), (1, 2))
+        # codes de tout le filtre (action de groupe)
+        self.assertEqual(sorted(ZM.get_articles(zone=ZM.TOUT_ESPACE + "TESTESP", stockes=0, codes_seulement=1)["codes"]),
+                         sorted([i0, i1]))
+        # sans sortie principale
+        frappe.db.delete("Item Default", {"parent": i0, "company": self.societe})
+        self.assertIn(i0, codes(recherche=i0, sortie=ZM.SANS_SORTIE))
+        ZM.definir_sortie([i0], ZM.entrepots_de_sortie(self.societe)[0].name)
+        self.assertNotIn(i0, codes(recherche=i0, sortie=ZM.SANS_SORTIE))
+
+    def test_groupes_en_arbre(self):
+        import frappe
+        groupes = ZM.get_context()["groupes"]
+        self.assertTrue(groupes and all(g["articles"] > 0 for g in groupes))
+        parent = next((g for g in groupes if g["is_group"]), None)
+        if not parent:
+            self.skipTest("aucun groupe parent")
+        enfants = [g for g in groupes if not g["is_group"] and g["profondeur"] > parent["profondeur"]
+                   and frappe.db.get_value("Item Group", g["name"], "parent_item_group") == parent["name"]]
+        self.assertTrue(enfants)
+        # un groupe parent prend toute sa branche
+        total = ZM.get_articles(groupe=parent["name"], stockes=0)["total"]
+        self.assertEqual(total, parent["articles"])
+        self.assertGreaterEqual(total, sum(ZM.get_articles(groupe=e["name"], stockes=0)["total"] for e in enfants))
+

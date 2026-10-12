@@ -6,7 +6,8 @@ Demande du 01/10/2026, précisée le soir même :
 - un article peut être rangé dans PLUSIEURS zones, et l'on affecte dans les deux sens : depuis
   l'article (ses zones) ou depuis la zone (ses articles) ;
 - les zones de l'article s'affichent dans « Emplacement Magasin » (texte, « K-1 / Hall ») ;
-- même page : la SORTIE PRINCIPALE de l'article (entrepôt par défaut de la société), prise
+- même page : la SORTIE PRINCIPALE de l'article (entrepôt par défaut de la société : Magasin ou
+  Hall seulement depuis le 12/10/2026), prise
   automatiquement par une commande, un BL ou une facture qui n'impose pas d'entrepôt. Un document
   qui en impose un (stock du véhicule d'un employé, profil de caisse) garde la main — même règle
   dans customization_app.get_item_details.
@@ -30,7 +31,15 @@ DOCTYPE_LIEN = "Article Zone Magasin"
 TEXTE = "custom_emplacement_magasin"
 TABLE = "custom_zones_magasin"
 SANS_ZONE = "__sans__"
+SANS_SORTIE = "__sans__"
+# Filtre « tout l'espace » : l'espace ET toutes ses zones. Un nom de zone ne contient jamais « / ».
+TOUT_ESPACE = "tout/"
 PAGE = 60
+MAX_LOT = 5000
+# Demande du 12/10/2026 : la sortie principale d'un article est le Magasin ou le Hall, rien d'autre
+# (ni le stock d'un employé, ni les articles défectueux). Vérifié par la page ET à l'enregistrement
+# de la fiche article (item_validate) : la table « Item Defaults » ne contourne pas la règle.
+SORTIES_AUTORISEES = ("Magasins - A&S", "Hall - A&S")
 
 
 def _lecture():
@@ -48,8 +57,9 @@ def _societe() -> str:
 
 
 def entrepots_de_sortie(societe: str | None = None) -> list[dict]:
-    """Les entrepôts qui peuvent servir de sortie : actifs, non-groupes, de la société."""
-    return frappe.get_all("Warehouse", filters={"is_group": 0, "disabled": 0, "company": societe or _societe()},
+    """Les entrepôts qui peuvent servir de sortie : Magasin ou Hall, actifs, de la société."""
+    return frappe.get_all("Warehouse", filters={"name": ["in", SORTIES_AUTORISEES], "is_group": 0, "disabled": 0,
+                                                "company": societe or _societe()},
                           fields=["name", "warehouse_name"], order_by="lft")
 
 
@@ -86,7 +96,13 @@ def _retirer(item: str, zone: str) -> bool:
 
 
 def item_validate(doc, method=None):
-    """Hook Item.validate : la fiche article (table « Zones magasin ») réécrit aussi le texte."""
+    """Hook Item.validate : la fiche article (table « Zones magasin ») réécrit aussi le texte, et sa
+    sortie principale (Item Defaults de la société) ne peut être que le Magasin ou le Hall."""
+    societe = _societe()
+    for d in doc.get("item_defaults") or []:
+        if d.company == societe and d.default_warehouse and d.default_warehouse not in SORTIES_AUTORISEES:
+            frappe.throw(_("Sortie principale (entrepôt par défaut) : Magasin ou Hall seulement — « {0} » refusé.")
+                         .format(d.default_warehouse))
     vues, lignes = set(), []
     for r in doc.get(TABLE) or []:
         if r.zone and r.zone not in vues:
@@ -99,60 +115,107 @@ def item_validate(doc, method=None):
 # ── Lecture ──────────────────────────────────────────────────────────────────
 
 def _zones() -> list[dict]:
-    """Toutes les zones (espaces compris), avec leur nombre d'articles actifs, espaces d'abord."""
+    """Toutes les zones (espaces compris), avec leur nombre d'articles actifs, espaces d'abord.
+    Un espace porte aussi `total` : ses articles, directement ou dans l'une de ses zones (sans doublon)."""
     comptes = dict(frappe.db.sql(f"""select l.zone, count(distinct l.parent) from `tab{DOCTYPE_LIEN}` l
                                      join tabItem i on i.name = l.parent and i.disabled = 0
                                      where l.parenttype = 'Item' group by l.zone"""))
+    totaux = dict(frappe.db.sql(f"""select coalesce(z.espace, z.name), count(distinct l.parent) from `tab{DOCTYPE_LIEN}` l
+                                    join `tab{DOCTYPE_ZONE}` z on z.name = l.zone
+                                    join tabItem i on i.name = l.parent and i.disabled = 0
+                                    where l.parenttype = 'Item' group by coalesce(z.espace, z.name)"""))
     return [{"name": z.name, "code": z.code, "espace": z.espace, "est_espace": cint(z.est_espace),
-             "articles": cint(comptes.get(z.name))}
+             "articles": cint(comptes.get(z.name)), "total": cint(totaux.get(z.name)) if z.est_espace else None}
             for z in frappe.get_all(DOCTYPE_ZONE, fields=["name", "code", "espace", "est_espace"],
                                     order_by="est_espace desc, espace, code")]
+
+
+def _groupes() -> list[dict]:
+    """L'arbre des groupes d'articles, dans l'ordre de l'arbre (racine exclue) : profondeur et nombre
+    d'articles actifs de la BRANCHE (sous-groupes compris). Les branches vides sont omises."""
+    groupes = frappe.get_all("Item Group", fields=["name", "is_group", "lft", "rgt"], order_by="lft")
+    comptes = dict(frappe.db.sql("select item_group, count(*) from tabItem where disabled = 0 group by item_group"))
+    out, pile = [], []
+    for g in groupes:
+        while pile and pile[-1] < g.lft:
+            pile.pop()
+        profondeur = len(pile)
+        pile.append(g.rgt)
+        if profondeur == 0:                         # « Tous les Groupes d'Articles » = pas de filtre
+            continue
+        n = sum(cint(comptes.get(x.name)) for x in groupes if g.lft <= x.lft and x.rgt <= g.rgt)
+        if n:
+            out.append({"name": g.name, "profondeur": profondeur - 1, "is_group": cint(g.is_group), "articles": n})
+    return out
 
 
 @frappe.whitelist()
 def get_context():
     _lecture()
+    from customization_app.aramex_stock import ENTREPOT_ARAMEX
+
     societe = _societe()
-    groupes = [g[0] for g in frappe.db.sql("""select distinct item_group from tabItem
-                                               where disabled = 0 and ifnull(item_group, '') != '' order by item_group""")]
     sans = frappe.db.sql(f"""select count(*) from tabItem i where i.disabled = 0 and i.is_stock_item = 1
                              and not exists (select 1 from `tab{DOCTYPE_LIEN}` l
                                              where l.parent = i.name and l.parenttype = 'Item')""")[0][0]
-    return {"zones": _zones(), "entrepots": entrepots_de_sortie(societe), "groupes": groupes, "societe": societe,
-            "sans_zone": sans, "peut_modifier": bool(frappe.has_permission("Item", "write"))}
+    return {"zones": _zones(), "entrepots": entrepots_de_sortie(societe), "groupes": _groupes(), "societe": societe,
+            "sans_zone": sans, "entrepot_aramex": ENTREPOT_ARAMEX,
+            "peut_modifier": bool(frappe.has_permission("Item", "write"))}
 
 
-@frappe.whitelist()
-def get_articles(recherche=None, groupe=None, zone=None, sortie=None, stockes=1, start=0, limite=PAGE):
-    """Une page d'articles actifs avec leurs zones, leur sortie principale et leur stock par entrepôt."""
-    _lecture()
-    societe = _societe()
-    conditions, valeurs = ["i.disabled = 0"], {"societe": societe}
+def _filtres(recherche, groupe, zone, sortie, stockes):
+    """Clause SQL des filtres de la vue « Par article » (alias i = Item, d = Item Default de la société)."""
+    conditions, valeurs = ["i.disabled = 0"], {"societe": _societe()}
     if cint(stockes):
         conditions.append("i.is_stock_item = 1")
     if recherche:
         conditions.append("(i.name like %(q)s or i.item_name like %(q)s)")
         valeurs["q"] = f"%{recherche}%"
     if groupe:
-        conditions.append("i.item_group = %(groupe)s")
-        valeurs["groupe"] = groupe
+        # Un groupe parent prend toute sa branche (lft/rgt de l'arbre des groupes).
+        bornes = frappe.db.get_value("Item Group", groupe, ["lft", "rgt"])
+        if bornes:
+            conditions.append("i.item_group in (select g.name from `tabItem Group` g"
+                              " where g.lft >= %(g_lft)s and g.rgt <= %(g_rgt)s)")
+            valeurs.update(g_lft=bornes[0], g_rgt=bornes[1])
+        else:
+            conditions.append("i.item_group = %(groupe)s")
+            valeurs["groupe"] = groupe
     lien = f"select 1 from `tab{DOCTYPE_LIEN}` l where l.parent = i.name and l.parenttype = 'Item'"
     if zone == SANS_ZONE:
         conditions.append(f"not exists ({lien})")
+    elif zone and zone.startswith(TOUT_ESPACE):
+        espace = zone[len(TOUT_ESPACE):]
+        valeurs["zones"] = [espace] + frappe.get_all(DOCTYPE_ZONE, filters={"espace": espace}, pluck="name")
+        conditions.append(f"exists ({lien} and l.zone in %(zones)s)")
     elif zone:
         conditions.append(f"exists ({lien} and l.zone = %(zone)s)")
         valeurs["zone"] = zone
-    if sortie:
+    if sortie == SANS_SORTIE:
+        conditions.append("ifnull(d.default_warehouse, '') = ''")
+    elif sortie:
         conditions.append("d.default_warehouse = %(sortie)s")
         valeurs["sortie"] = sortie
-    where = " and ".join(conditions)
     jointure = "left join `tabItem Default` d on d.parent = i.name and d.parenttype = 'Item' and d.company = %(societe)s"
-    total = frappe.db.sql(f"select count(*) from tabItem i {jointure} where {where}", valeurs)[0][0]
+    return f"from tabItem i {jointure} where {' and '.join(conditions)}", valeurs
+
+
+@frappe.whitelist()
+def get_articles(recherche=None, groupe=None, zone=None, sortie=None, stockes=1, start=0, limite=PAGE, codes_seulement=0):
+    """Une page d'articles actifs avec leurs zones, leur sortie principale et leur stock par entrepôt.
+    `codes_seulement` : tous les codes du filtre (action de groupe sur « tout le filtre »)."""
+    _lecture()
+    base, valeurs = _filtres(recherche, groupe, zone, sortie, stockes)
+    if cint(codes_seulement):
+        codes = [r[0] for r in frappe.db.sql(f"select i.name {base} order by i.item_name limit {MAX_LOT + 1}", valeurs)]
+        if len(codes) > MAX_LOT:
+            frappe.throw(_("Plus de {0} articles : affinez le filtre.").format(MAX_LOT))
+        return {"codes": codes}
+    total = frappe.db.sql(f"select count(*) {base}", valeurs)[0][0]
     valeurs.update({"start": cint(start), "page": min(cint(limite) or PAGE, 200)})
     rows = frappe.db.sql(f"""select i.name as item_code, i.item_name, i.item_group, i.image, i.stock_uom,
                                     d.default_warehouse as sortie
-                             from tabItem i {jointure} where {where}
-                             order by i.item_name limit %(page)s offset %(start)s""", valeurs, as_dict=True)
+                             {base} order by i.item_name limit %(page)s offset %(start)s""", valeurs, as_dict=True)
     codes = [r.item_code for r in rows]
     stocks, zones = {}, {}
     for b in (frappe.get_all("Bin", filters={"item_code": ["in", codes], "actual_qty": ["!=", 0]},
@@ -323,7 +386,7 @@ def definir_sortie(items, entrepot):
     items = _liste(items)
     societe = _societe()
     if entrepot not in {e.name for e in entrepots_de_sortie(societe)}:
-        frappe.throw(_("Entrepôt de sortie invalide ou désactivé : {0}").format(entrepot))
+        frappe.throw(_("Sortie principale : Magasin ou Hall seulement (« {0} » refusé ou désactivé).").format(entrepot))
     for item in items:
         ligne = frappe.db.get_value("Item Default", {"parent": item, "parenttype": "Item", "company": societe}, "name")
         if ligne:

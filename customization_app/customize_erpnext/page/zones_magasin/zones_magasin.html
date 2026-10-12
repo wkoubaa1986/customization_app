@@ -28,34 +28,43 @@
     .zm-filtres .form-control { height: 38px; font-size: 14px; width: 100%; }
     .zm-filtres label { font-size: 13px; margin: 0; display: flex; align-items: center; gap: 6px; }
     .zm-info { font-size: 12px; color: #64748b; margin: 4px 2px 8px; }
-    .zm-grille { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 10px; }
-    .zm-art { background: var(--card-bg,#fff); border: 1px solid var(--border-color,#e4e8ee); border-radius: 12px; padding: 10px; position: relative; }
-    .zm-art.sel { border-color: #2563eb; box-shadow: 0 0 0 2px rgba(37,99,235,.25); }
-    .zm-tete { display: flex; gap: 10px; align-items: flex-start; }
-    .zm-img { width: 52px; height: 52px; border-radius: 10px; object-fit: contain; border: 1px solid #e4e8ee; background: #f8fafc;
-              flex: none; display: flex; align-items: center; justify-content: center; color: #cbd5e1; font-size: 22px; }
-    .zm-tete .txt { flex: 1; min-width: 0; padding-right: 30px; }
-    .zm-nom { font-weight: 600; font-size: 14px; line-height: 1.25; word-break: break-word; }
-    .zm-code { font-size: 11.5px; color: #64748b; margin-top: 2px; word-break: break-all; }
-    .zm-coche { position: absolute; top: 10px; right: 10px; width: 26px; height: 26px; border-radius: 7px; border: 2px solid #cbd5e1;
-                display: flex; align-items: center; justify-content: center; cursor: pointer; color: #fff; font-size: 15px; background: #fff; }
-    .zm-art.sel .zm-coche { background: #2563eb; border-color: #2563eb; }
-    .zm-stock { font-size: 12px; color: #475569; margin: 6px 0 2px; }
-    .zm-lbl { font-size: 10.5px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: .3px; margin: 8px 0 3px; display: block; }
-    .zm-zchips { display: flex; flex-wrap: wrap; gap: 5px; }
-    .zm-zchip { background: #eff6ff; color: #1e40af; border-radius: 999px; padding: 3px 4px 3px 10px; font-size: 12.5px; display: inline-flex; align-items: center; gap: 2px; }
-    .zm-zchip .x { padding: 0 6px; cursor: pointer; color: #60a5fa; font-size: 14px; }
-    .zm-zchip.plus { background: #fff; border: 1px dashed #93c5fd; color: #2563eb; padding: 3px 10px; cursor: pointer; }
-    .zm-zchip.aucune { background: #fff7ed; color: #c2410c; padding: 3px 10px; }
-    .zm-art select { height: 36px; font-size: 13.5px; width: 100%; }
+    .zm-aramex { font-size: 12.5px; color: #92400e; background: #fffbeb; border: 1px solid #fde68a; border-radius: 10px;
+                 padding: 7px 10px; margin-bottom: 10px; }
+    .zm-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+                  background: var(--card-bg,#fff); border: 1px solid var(--border-color,#e4e8ee); border-radius: 12px;
+                  padding: 8px 10px; margin-bottom: 8px; box-shadow: 0 1px 3px rgba(0,0,0,.05); }
+    .zm-actions .sel { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-right: auto; font-size: 13px; }
+    .zm-actions .lien { color: #2563eb; cursor: pointer; font-size: 12.5px; }
+    .zm-actions .boutons { display: flex; gap: 6px; flex-wrap: wrap; }
+    .zm-actions .btn, .zm-actions select { height: 32px; font-size: 13px; }
+    .zm-actions select { border-radius: 6px; border: 1px solid var(--border-color,#d1d5db); padding: 0 6px; max-width: 220px; }
+    .zm-actions.vide .boutons { opacity: .45; pointer-events: none; }
+    @media (min-width: 768px) { .zm-actions { position: sticky; top: var(--zm-haut, 0px); z-index: 5; } }
+    .zm-table-wrap { overflow-x: auto; background: var(--card-bg,#fff); border: 1px solid var(--border-color,#e4e8ee); border-radius: 12px; }
+    .zm-table { width: 100%; min-width: 920px; border-collapse: separate; border-spacing: 0; font-size: 13px; }
+    .zm-table th { background: #f8fafc; color: #475569; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .3px;
+                   text-align: left; padding: 8px 10px; border-bottom: 1px solid #e2e8f0; white-space: nowrap; }
+    .zm-table td { padding: 7px 10px; border-bottom: 1px solid #f1f5f9; vertical-align: middle; background: var(--card-bg,#fff); }
+    .zm-table tr.sel td { background: #eff6ff; }
+    .zm-table .c-sel { width: 34px; text-align: center; position: sticky; left: 0; z-index: 1; }
+    .zm-table th.c-sel { z-index: 2; }
+    .zm-table .c-sel input { width: 17px; height: 17px; cursor: pointer; margin: 0; }
+    .zm-table .c-art { min-width: 230px; position: sticky; left: 34px; z-index: 1; box-shadow: 1px 0 0 #f1f5f9; }
+    .zm-table th.c-art { z-index: 2; }
+    .zm-table .c-grp { color: #475569; min-width: 150px; }
+    .zm-table .c-stock { color: #475569; white-space: nowrap; font-size: 12.5px; }
+    .zm-table .c-zones { min-width: 220px; }
+    .zm-table .c-sortie { min-width: 170px; }
+    .zm-table .c-sortie select { height: 32px; font-size: 13px; width: 100%; }
+    .zm-art-cell { display: flex; gap: 8px; align-items: center; }
+    .zm-art-cell .zm-img { width: 34px; height: 34px; font-size: 16px; border-radius: 8px; }
+    .zm-art-cell a { color: inherit; }
+    .zm-zchips { display: flex; flex-wrap: wrap; gap: 4px; }
+    .zm-zchip { background: #eff6ff; color: #1e40af; border-radius: 999px; padding: 2px 3px 2px 9px; font-size: 12px; display: inline-flex; align-items: center; gap: 2px; white-space: nowrap; }
+    .zm-zchip .x { padding: 0 5px; cursor: pointer; color: #60a5fa; font-size: 13px; }
+    .zm-zchip.plus { background: #fff; border: 1px dashed #93c5fd; color: #2563eb; padding: 2px 9px; cursor: pointer; }
+    .zm-zchip.aucune { background: #fff7ed; color: #c2410c; padding: 2px 9px; }
     .zm-plus { display: block; width: 100%; margin: 12px 0; height: 40px; }
-    .zm-barre { position: fixed; left: 0; right: 0; bottom: 0; z-index: 1030; background: #111827; color: #fff; padding: 10px 12px; display: none;
-                box-shadow: 0 -4px 12px rgba(0,0,0,.2); }
-    .zm-barre .ligne { display: flex; gap: 8px; align-items: center; max-width: 1200px; margin: 0 auto; flex-wrap: wrap; }
-    .zm-barre .compte { font-weight: 700; font-size: 14px; margin-right: auto; }
-    .zm-barre .lien { color: #93c5fd; font-size: 13px; cursor: pointer; }
-    .zm-barre .btn { flex: 1 1 30%; }
-    .zm-barre select { height: 34px; font-size: 13px; border-radius: 6px; flex: 1 1 30%; color: #111827; }
     .zm-vide { text-align: center; color: #94a3b8; padding: 24px 10px; }
 
     .zm-ligne { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid #f1f5f9; }
@@ -68,7 +77,13 @@
     .zm-choix { display: flex; flex-wrap: wrap; gap: 6px; }
     .zm-choix .ch { border: 1px solid #cbd5e1; border-radius: 999px; padding: 6px 12px; font-size: 13.5px; cursor: pointer; background: #fff; user-select: none; }
     .zm-choix .ch.on { background: #2563eb; border-color: #2563eb; color: #fff; }
-    @media (max-width: 600px) { .zm-grille { grid-template-columns: 1fr; } }
+    .zm-choix-espace .tout { font-weight: 600; font-size: 12px; color: #2563eb; cursor: pointer; margin-left: 8px; }
+    .zm-nom { font-weight: 600; font-size: 13.5px; line-height: 1.25; word-break: break-word; }
+    .zm-code { font-size: 11.5px; color: #64748b; margin-top: 1px; word-break: break-all; }
+    .zm-img { width: 52px; height: 52px; border-radius: 10px; object-fit: contain; border: 1px solid #e4e8ee; background: #f8fafc;
+              flex: none; display: flex; align-items: center; justify-content: center; color: #cbd5e1; font-size: 22px; }
+    .zm-lbl { font-size: 10.5px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: .3px; margin: 8px 0 3px; display: block; }
+    @media (max-width: 600px) { .zm-filtres { grid-template-columns: 1fr; } .zm-actions select { max-width: none; flex: 1 1 100%; } }
   </style>
 
   <div class="zm-vues">
@@ -88,26 +103,35 @@
       <div class="zm-filtres">
         <input type="search" class="form-control plein" id="zm-recherche" placeholder="🔎 Article (nom ou code)…">
         <select class="form-control" id="zm-filtre-zone"></select>
-        <select class="form-control" id="zm-sortie"><option value="">Toutes les sorties</option></select>
-        <select class="form-control" id="zm-groupe"><option value="">Tous les groupes</option></select>
+        <select class="form-control" id="zm-sortie"></select>
+        <select class="form-control" id="zm-groupe"></select>
         <label><input type="checkbox" id="zm-stockes" checked> Stockés seulement</label>
       </div>
     </div>
+    <div class="zm-aramex" id="zm-aramex" style="display:none"></div>
     <div class="zm-info" id="zm-info"></div>
-    <div class="zm-grille" id="zm-grille"></div>
+    <div class="zm-actions vide" id="zm-actions" style="display:none">
+      <div class="sel">
+        <b id="zm-compte">0 article coché</b>
+        <span class="lien" id="zm-tout-filtre"></span>
+        <span class="lien" id="zm-aucun" style="display:none">Décocher</span>
+      </div>
+      <div class="boutons">
+        <button class="btn btn-default" id="zm-lot-ajout">📍 Ranger dans…</button>
+        <button class="btn btn-default" id="zm-lot-retrait">➖ Retirer de…</button>
+        <select id="zm-lot-sortie"></select>
+      </div>
+    </div>
+    <div class="zm-table-wrap">
+      <table class="zm-table">
+        <thead><tr>
+          <th class="c-sel"><input type="checkbox" id="zm-page-tout" title="Cocher les articles affichés"></th>
+          <th class="c-art">Article</th><th class="c-grp">Groupe</th><th class="c-stock">Stock</th>
+          <th class="c-zones">📍 Zones</th><th class="c-sortie">🚚 Sortie principale</th>
+        </tr></thead>
+        <tbody id="zm-lignes"></tbody>
+      </table>
+    </div>
     <button class="btn btn-default zm-plus" id="zm-plus" style="display:none">Afficher plus</button>
-  </div>
-
-  <div class="zm-barre" id="zm-barre">
-    <div class="ligne">
-      <span class="compte" id="zm-compte"></span>
-      <span class="lien" id="zm-tout">Tout cocher</span>
-      <span class="lien" id="zm-aucun">Annuler</span>
-    </div>
-    <div class="ligne" style="margin-top:8px">
-      <button class="btn btn-sm btn-light" id="zm-lot-ajout">📍 Ranger dans…</button>
-      <button class="btn btn-sm btn-light" id="zm-lot-retrait">➖ Retirer de…</button>
-      <select id="zm-lot-sortie"></select>
-    </div>
   </div>
 </div>
