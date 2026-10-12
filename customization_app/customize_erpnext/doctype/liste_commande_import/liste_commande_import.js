@@ -1010,6 +1010,10 @@ function lci_render_table(frm) {
              placeholder="${__("Désignation…")}">
       ${d0 ? `<div class="lci-desc0" data-act="desc" title="${esc(d0)}">${esc(d0.slice(0, 100))}${d0.length > 100 ? "…" : ""}</div>` : ""}
       ${tr_txt ? `<div class="lci-tr" data-act="desc" title="${esc(tr_txt)}">🌐 ${esc(tr_txt.slice(0, 90))}${tr_txt.length > 90 ? "…" : ""}</div>` : ""}
+      ${r.description_fournisseur ? `<div class="lci-frn-desc" data-frn-desc="${esc(r.name)}" title="${esc(__("Description du fournisseur") + " : " + r.description_fournisseur)}"
+          style="font-size:11px;margin-top:2px;padding:1px 6px;border-radius:5px;background:#fff7e6;color:#874d00;cursor:pointer;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;max-width:460px;">🏭 ${esc(r.description_fournisseur.slice(0, 160))}</div>` : ""}
+      ${r.controle_description ? `<div title="${esc(__("Contrôle de la description (IA), à l'import de la réponse du fournisseur") + " : " + r.controle_description)}"
+          style="font-size:10.5px;margin-top:2px;color:${r.controle_description.startsWith("✓") ? "#237804" : r.controle_description.startsWith("⚠") ? "#a8071a" : "#ad4e00"};${r.controle_description.startsWith("✓") ? "" : "font-weight:700;"}">${esc(r.controle_description.slice(0, 110))}</div>` : ""}
       ${lci_adds(r).map((a, ai) => `
         <div class="lci-add">➕ <b>ADDITIONNEL</b> : ${esc(lci_add_label(a))}
           — ${format_number(flt(a.qty_par_pack), null, 0)}/pack × ${format_number(lci_qty_ret(r), null, 0)}
@@ -1353,6 +1357,16 @@ function lci_render_table(frm) {
 
   $t.find('[data-act="image"]').on("click", (e) => { const r = row_of(e); r && lci_upload_image(frm, r); });
   $t.find('[data-act="desc"]').on("click", (e) => { const r = row_of(e); r && lci_desc_dialog(frm, r); });
+  // Description du fournisseur (enregistrée à l'application de sa réponse) : en entier, en lecture seule.
+  $t.find("[data-frn-desc]").on("click", (e) => {
+    const r = row_of(e);
+    if (!r) return;
+    const esc = frappe.utils.escape_html;
+    frappe.msgprint({ title: __("Description du fournisseur — #{0} {1}", [r.idx, r.item_code || r.item_name || ""]), indicator: "orange",
+      message: `<div style="white-space:pre-wrap;font-size:13px">${esc(r.description_fournisseur || "")}</div>`
+        + (r.controle_description ? `<div style="margin-top:10px;font-size:12px"><b>${__("Contrôle")}</b> : ${esc(r.controle_description)}</div>` : "")
+        + `<div style="margin-top:10px;font-size:12px;color:#6b7280"><b>${__("Notre désignation")}</b> : ${esc(r.item_name || "")}</div>` });
+  });
   $t.find('[data-act="ai"]').on("click", (e) => { const r = row_of(e); r && lci_ai(frm, "ai_improve_descriptions", r.name); });
   $t.find('[data-act="tr"]').on("click", (e) => { const r = row_of(e); r && lci_ai(frm, "ai_translate", r.name); });
   $t.find('[data-act="dup"]').on("click", (e) => { const r = row_of(e); r && lci_dupliquer(frm, [r]); });
@@ -1904,6 +1918,14 @@ function lci_valeurs_source(src) {
   return v;
 }
 
+// Le texte complet de SA ligne, enregistré à l'application (description_fournisseur) : n° de ligne, code, désignation,
+// variante, remarque — de quoi relire après coup ce qu'il a coté, sans rouvrir son fichier.
+function lci_src_description(src) {
+  if (!src) return "";
+  return [`L${src.ligne}`, src.code, (src.designation || "").replace(/\s+/g, " ").trim(),
+          src.variante ? `(${src.variante})` : "", src.remarque ? `— ${src.remarque}` : ""].filter(Boolean).join(" · ");
+}
+
 function lci_src_label(src) {
   if (!src) return "";
   return `L${src.ligne} · ${src.code || ""} ${src.designation || ""}`.trim().slice(0, 140);
@@ -1992,6 +2014,7 @@ async function lci_attendre_analyse(cle, delai_max_ms = 40 * 60 * 1000) {
     if (e.etat === "en attente") return __("En attente d'un worker…");
     if (e.etape === "preselection") return __("Présélection des candidats par l'IA dans toute la liste ({0} lignes)…", [e.total]);
     if (e.etape === "identification") return __("Identification par IA d'après les photos : {0} / {1} lignes…", [e.fait, e.total]);
+    if (e.etape === "comparaison") return __("Comparaison des descriptions par l'IA : lot {0} / {1}…", [e.fait, e.total]);
     return __("Lecture des fichiers…");
   };
   while (Date.now() - debut < delai_max_ms) {
@@ -2024,7 +2047,15 @@ function lci_reponse_dialog(frm, data, filename) {
       source: l.source || "",
       prix: src && src.prix_unitaire != null ? src.prix_unitaire : null,
       apply: !!l.source,
+      controle: l.controle || null,          // comparaison des descriptions (IA + valeurs chiffrées)
+      controle_de: l.source || "",           // … faite pour CETTE ligne du fournisseur
     };
+  });
+  // Lignes du fournisseur sans correspondance : à ajouter à la liste (12/10/2026)
+  const ajout = {};
+  (data.orphelines || []).forEach((id) => {
+    const src = src_by_id[id];
+    if (src) ajout[id] = { on: false, qty: flt(src.qty) || flt(src.moq) || 1 };
   });
 
   let tout = false;   // afficher aussi les lignes sans correspondance
@@ -2045,18 +2076,25 @@ function lci_reponse_dialog(frm, data, filename) {
             // son montant de ligne ne vaut plus rien si on corrige son prix
             if (src && src.total != null) valeurs.total_fichier = 0;
           }
+          const ctrl = st[l.row].controle_de === st[l.row].source ? st[l.row].controle : null;
           return { row: l.row, valeurs, source_label: lci_src_label(src),
-                   source_id: st[l.row].source || "" };
+                   source_id: st[l.row].source || "", controle: lci_texte_controle(ctrl),
+                   description_fournisseur: lci_src_description(src) };
         })
         .filter((x) => Object.keys(x.valeurs).length);
-      if (!lignes.length) {
+      const ajouts = orphelines_libres().filter((o) => ajout[o.id] && ajout[o.id].on).map((o) => ({
+        source_id: o.id, source_label: lci_src_label(o), designation: o.designation || "", code: o.code || "",
+        qty: flt(ajout[o.id].qty) || 1, valeurs: lci_valeurs_source(o), photo_b64: o.photo_b64 || "",
+        description_fournisseur: lci_src_description(o),
+      }));
+      if (!lignes.length && !ajouts.length) {
         frappe.msgprint(__("Aucune ligne sélectionnée."));
         return;
       }
       const r = await frappe.call({
         method: "customization_app.lci_reponse.appliquer_reponse",
         args: { docname: frm.doc.name, lignes: JSON.stringify(lignes),
-                plan: JSON.stringify(data.plan || null) },
+                plan: JSON.stringify(data.plan || null), ajouts: JSON.stringify(ajouts) },
         freeze: true,
         freeze_message: __("Écriture des prix…"),
       });
@@ -2068,6 +2106,7 @@ function lci_reponse_dialog(frm, data, filename) {
         title: __("Réponse importée"),
         indicator: "green",
         message: __("{0} ligne(s) mise(s) à jour.", [m.maj])
+          + (m.ajoutees ? `<br>${__("{0} ligne(s) du fournisseur ajoutée(s) à la liste (article libre)", [m.ajoutees])}` : "")
           + (m.montant_fichier
             ? `<br>${__("Son fichier additionne")} : <b>${format_currency(m.montant_fichier, dev)}</b>`
               + (m.nb_lignes_divergentes
@@ -2089,16 +2128,14 @@ function lci_reponse_dialog(frm, data, filename) {
 
   function render() {
     const visibles = data.lignes.filter((l) => tout || st[l.row].source);
-    const options = [`<option value="">${__("— aucune —")}</option>`].concat(
-      (data.sources || []).map((s) =>
-        `<option value="${esc(s.id)}" title="${esc(lci_src_label(s))}">${esc(lci_src_court(s))}${
-          s.prix_unitaire != null ? ` — ${s.prix_unitaire}` : ""}</option>`));
 
-    // une même ligne fournisseur servie deux fois est presque toujours une erreur
-    const usage = {};
+    // une même ligne fournisseur servie deux fois est presque toujours une erreur (l'analyse ne le fait jamais :
+    // c'est un choix à la main dans une liste déroulante) — on dit aussi SUR QUELLE autre ligne.
+    const usage = {}, usagers = {};
     data.lignes.forEach((l) => {
       if (st[l.row].apply && st[l.row].source) {
         usage[st[l.row].source] = (usage[st[l.row].source] || 0) + 1;
+        (usagers[st[l.row].source] = usagers[st[l.row].source] || []).push(l);
       }
     });
 
@@ -2118,9 +2155,9 @@ function lci_reponse_dialog(frm, data, filename) {
       ].filter(Boolean).join(" · ");
 
       // les deux photos côte à côte : c'est ce qui permet de juger l'appariement d'un coup d'œil
-      const photo_lci = l.image ? `<img class="lci-rep-photo" src="${esc(l.image)}" loading="lazy">` : "";
+      const photo_lci = l.image ? `<img class="lci-rep-photo" data-zoom="${esc(l.image)}" data-zoom-titre="${esc("#" + l.idx + " " + (l.item_code || "") + " " + (l.item_name || ""))}" src="${esc(l.image)}" loading="lazy">` : "";
       const photo_src = src && src.photo_b64
-        ? `<img class="lci-rep-photo" src="data:image/jpeg;base64,${src.photo_b64}">` : "";
+        ? `<img class="lci-rep-photo" data-zoom="data:image/jpeg;base64,${src.photo_b64}" data-zoom-titre="${esc(lci_src_label(src))}" src="data:image/jpeg;base64,${src.photo_b64}">` : "";
       return `<tr data-row="${esc(l.row)}" class="${s.apply ? "" : "lci-rep-off"}">
         <td class="lci-c"><input type="checkbox" data-k="apply" ${s.apply ? "checked" : ""}></td>
         <td class="lci-c">${l.idx}</td>
@@ -2137,13 +2174,20 @@ function lci_reponse_dialog(frm, data, filename) {
         </td>
         <td>
           <div class="lci-rep-fiche">${photo_src}<div style="min-width:0;flex:1;">
-          <select class="form-control input-xs" data-k="source" style="max-width:100%;" title="${esc(lci_src_label(src))}">${options.join("")}</select>
+          <div class="lci-pk-btn" data-pick="${esc(l.row)}" title="${esc(src ? lci_src_label(src) + " — " + __("cliquer pour changer") : __("Choisir la ligne du fournisseur"))}">
+            ${src ? `<span class="lci-pk-l">L${esc(src.ligne)}</span><span class="lci-pk-txt">${esc((src.designation || src.code || "").replace(/\s+/g, " "))}</span>${
+              src.prix_unitaire != null ? `<b class="lci-pk-prix">${src.prix_unitaire}</b>` : ""}`
+              : `<span class="lci-pk-vide">${__("— choisir une ligne du fournisseur —")}</span>`}
+            <span class="lci-pk-chev">▾</span>
+          </div>
           </div></div>
           <div class="lci-rep-meta">
             ${l.methode ? `<span class="lci-rep-badge">${esc(l.methode)}${
               l.confiance && l.confiance < 1 ? ` ${Math.round(l.confiance * 100)} %` : ""}</span>` : ""}
-            ${usage[s.source] > 1 ? `<span class="lci-rep-warn">${__("utilisée {0}×", [usage[s.source]])}</span>` : ""}
+            ${usage[s.source] > 1 ? `<span class="lci-rep-warn" title="${__("La même ligne du fournisseur est choisie pour plusieurs de vos articles")}">${__("utilisée {0}×", [usage[s.source]])} — ${__("aussi")} ${
+              usagers[s.source].filter((x) => x.row !== l.row).map((x) => `#${x.idx} ${esc(x.item_code || x.item_name || "")}`).join(", ")}</span>` : ""}
           </div>
+          ${s.source ? lci_badge_controle(s.controle_de === s.source ? s.controle : null, l.row) : ""}
           ${extras ? `<div class="lci-rep-extra">${esc(extras)}</div>` : ""}
         </td>
         <td class="lci-c">${l.prix_cible ? format_number(l.prix_cible, null, 4) : "—"}</td>
@@ -2155,8 +2199,10 @@ function lci_reponse_dialog(frm, data, filename) {
       </tr>`;
     }).join("");
 
-    const orphelines = (data.orphelines || []).map((id) => src_by_id[id]).filter(Boolean);
+    const orphelines = orphelines_libres();
+    const sans_source = data.lignes.filter((l) => !(st[l.row].apply && st[l.row].source));
     const nb_sel = data.lignes.filter((l) => st[l.row].apply).length;
+    const nb_ajouts = orphelines.filter((o) => ajout[o.id] && ajout[o.id].on).length;
     const total_sel = data.lignes.reduce((acc, l) =>
       acc + (st[l.row].apply ? flt(st[l.row].prix) * flt(l.qty) : 0), 0);
     // même prix, quantités différentes : deux totaux, et l'écart se voit.
@@ -2199,6 +2245,28 @@ function lci_reponse_dialog(frm, data, filename) {
         .lci-rep-qdiff { font-size: 11.5px; color: #ad6800; margin-top: 3px; }
         .lci-rep-orph { margin-top: 10px; font-size: 11.5px; }
         .lci-rep-orph li { color: #a8071a; }
+        .lci-rep-aide { color: #8a93a0; font-size: 11px; }
+        .lci-pk-btn { display: flex; align-items: center; gap: 6px; border: 1px solid var(--border-color,#d9dee5); border-radius: 7px;
+          padding: 4px 8px; cursor: pointer; background: var(--control-bg,#f7f8fa); min-height: 30px; max-width: 440px; }
+        .lci-pk-btn:hover { border-color: #1677ff; background: #f0f7ff; }
+        .lci-pk-l { font-weight: 800; color: #1677ff; flex: none; }
+        .lci-pk-txt { flex: 1; min-width: 0; overflow: hidden; font-size: 12px; line-height: 1.25;
+          display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+        .lci-pk-prix { flex: none; }
+        .lci-pk-vide { flex: 1; color: #8a93a0; font-style: italic; }
+        .lci-pk-chev { flex: none; color: #8a93a0; }
+        table.lci-rep-orph-t { width: 100%; margin-top: 6px; border-collapse: collapse; }
+        table.lci-rep-orph-t td { padding: 3px 6px; border-bottom: 1px solid #fde2e2; vertical-align: middle; }
+        .lci-rep-orph-d { color: #a8071a; }
+        .lci-rep-orph-d .txt { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+        .lci-rep-orph-t select { min-width: 210px; }
+        .lci-rep-photo-g { width: 56px !important; height: 56px !important; min-width: 56px; }
+        [data-zoom] { cursor: zoom-in; }
+        .lci-ctrl { display: inline-block; font-size: 10px; border-radius: 5px; padding: 1px 6px; margin-top: 3px; max-width: 100%; }
+        .lci-ctrl-ok { background: #f6ffed; color: #237804; }
+        .lci-ctrl-ko { background: #fff1f0; color: #a8071a; font-weight: 700; }
+        .lci-ctrl-doute { background: #fff7e6; color: #ad4e00; }
+        .lci-ctrl-refaire { color: #1677ff; cursor: pointer; font-size: 10px; }
         .lci-rep-foot { margin-top: 8px; font-size: 12.5px; }
       </style>
       <div class="lci-rep-info">
@@ -2231,26 +2299,32 @@ function lci_reponse_dialog(frm, data, filename) {
       </div>
       <div class="lci-rep-foot">
         <b>${nb_sel}</b> ${__("ligne(s) à écrire")} ·
+        ${nb_ajouts ? `<b>${nb_ajouts}</b> ${__("ligne(s) à ajouter")} · ` : ""}
         ${__("total à vos quantités")} <b>${format_currency(total_sel, dev)}</b>
         ${nb_qty_ko ? `<div class="lci-rep-qdiff">⚠️ ${
           __("{0} ligne(s) cotées sur une quantité différente de la vôtre — total aux quantités du fournisseur : {1}",
              [nb_qty_ko, format_currency(total_frn, dev)])}</div>` : ""}
       </div>
       ${orphelines.length ? `<div class="lci-rep-orph">
-        ⚠️ <b>${orphelines.length}</b> ${__("ligne(s) du fournisseur ne correspondent à aucun article de la liste")} :
-        <ul>${orphelines.slice(0, 12).map((o) =>
-          `<li>${o.photo_b64 ? `<img class="lci-rep-photo" style="width:26px;height:26px;vertical-align:middle;" src="data:image/jpeg;base64,${o.photo_b64}"> ` : ""}L${
-            o.ligne} — ${esc(o.code || "")} ${esc(o.designation || "")}${
-            o.prix_unitaire != null ? ` — ${o.prix_unitaire}` : ""}</li>`).join("")}
-        ${orphelines.length > 12 ? `<li>… ${orphelines.length - 12} ${__("autres")}</li>` : ""}</ul>
+        ⚠️ <b>${orphelines.length}</b> ${__("ligne(s) du fournisseur ne correspondent à aucun article de la liste")}
+        <span class="lci-rep-aide">— ${__("attribuez-la à un de vos articles, ou cochez « ➕ ajouter » pour la mettre dans la liste (article libre, avec ses prix et sa photo)")}</span>
+        <table class="lci-rep-orph-t">${orphelines.map((o) => `<tr data-orph="${esc(o.id)}">
+          <td style="width:66px;">${o.photo_b64 ? `<img class="lci-rep-photo lci-rep-photo-g" data-zoom="data:image/jpeg;base64,${o.photo_b64}" data-zoom-titre="${esc(lci_src_label(o))}" src="data:image/jpeg;base64,${o.photo_b64}">` : `<div class="lci-rep-photo lci-rep-photo-g" style="display:flex;align-items:center;justify-content:center;color:#cbd5e1">📦</div>`}</td>
+          <td class="lci-rep-orph-d" title="${esc(lci_src_label(o))}"><div class="txt">L${o.ligne} — ${esc(o.code || "")} ${esc(o.designation || "")}</div>${
+            o.prix_unitaire != null ? `<b>${o.prix_unitaire}</b>` : ""}${o.qty != null ? ` <span class="lci-rep-aide">(${__("qté")} ${format_number(o.qty, null, 0)})</span>` : ""}</td>
+          <td style="white-space:nowrap;width:230px;"><select class="form-control input-xs" data-k="attribuer" style="max-width:230px;">
+            <option value="">${__("attribuer à…")}</option>
+            ${sans_source.map((l) => `<option value="${esc(l.row)}">#${l.idx} ${esc((l.item_code ? l.item_code + " · " : "") + (l.item_name || "")).slice(0, 60)}</option>`).join("")}
+          </select></td>
+          <td style="white-space:nowrap;"><label style="margin:0;font-size:12px;"><input type="checkbox" data-k="ajouter" ${ajout[o.id] && ajout[o.id].on ? "checked" : ""}> ➕ ${__("ajouter")}</label>
+            <input type="number" min="0" step="any" class="form-control input-xs" data-k="qty_ajout" value="${ajout[o.id] ? ajout[o.id].qty : 1}"
+                   title="${__("Quantité de la nouvelle ligne")}" style="width:70px;display:inline-block;margin-left:4px;${ajout[o.id] && ajout[o.id].on ? "" : "visibility:hidden;"}"></td>
+        </tr>`).join("")}</table>
       </div>` : ""}
     `);
 
-    // les <select> sont posés après coup : une valeur avec « : » casse le sélecteur CSS
-    $z.find("tr[data-row]").each(function () {
-      const row = $(this).data("row");
-      $(this).find('[data-k="source"]').val(st[row].source || "");
-    });
+    $z.find("[data-pick]").on("click", function () { choisir_source($(this).attr("data-pick")); });
+    $z.find("[data-zoom]").on("click", function (e) { e.stopPropagation(); lci_zoom_photo($(this).attr("data-zoom"), $(this).attr("data-zoom-titre")); });
 
     $z.find("#lci-rep-tout").on("change", function () {
       tout = this.checked;
@@ -2260,14 +2334,21 @@ function lci_reponse_dialog(frm, data, filename) {
       st[$(this).closest("tr").data("row")].apply = this.checked;
       render();
     });
-    $z.find('[data-k="source"]').on("change", function () {
-      const row = $(this).closest("tr").data("row");
-      const src = src_by_id[this.value];
-      st[row].source = this.value;
-      st[row].prix = src && src.prix_unitaire != null ? src.prix_unitaire : null;
-      st[row].apply = !!this.value;
+
+    $z.find('[data-k="attribuer"]').on("change", function () {
+      const id = $(this).closest("tr").data("orph"), row = this.value;
+      if (row) attribuer(row, id);
+    });
+    $z.find('[data-k="ajouter"]').on("change", function () {
+      const id = $(this).closest("tr").data("orph");
+      ajout[id].on = this.checked;
       render();
     });
+    $z.find('[data-k="qty_ajout"]').on("change", function () {
+      ajout[$(this).closest("tr").data("orph")].qty = flt(this.value) || 1;
+      render();
+    });
+    $z.find("[data-recomparer]").on("click", function () { recomparer($(this).attr("data-recomparer")); });
     $z.find('[data-k="prix"]').on("change", function () {
       const row = $(this).closest("tr").data("row");
       st[row].prix = this.value === "" ? null : flt(this.value);
@@ -2275,8 +2356,208 @@ function lci_reponse_dialog(frm, data, filename) {
     });
   }
 
+  // Attribue (ou retire, id vide) une ligne du fournisseur à une de vos lignes, puis compare les descriptions.
+  function attribuer(row, id) {
+    const src = src_by_id[id];
+    st[row].source = id || "";
+    st[row].prix = src && src.prix_unitaire != null ? src.prix_unitaire : null;
+    st[row].apply = !!id;
+    if (id && ajout[id]) ajout[id].on = false;
+    render();
+    if (id) recomparer(row);
+  }
+
+  // Sélecteur visuel (12/10/2026) : votre article en référence, une recherche, les suggestions les plus proches puis
+  // toutes les lignes du fournisseur en cartes (photo, désignation, prix, quantité, libre ou déjà prise).
+  function choisir_source(row) {
+    const l = data.lignes.find((x) => x.row === row);
+    if (!l) return;
+    const prises = {};
+    data.lignes.forEach((x) => {
+      if (x.row !== row && st[x.row].apply && st[x.row].source) (prises[st[x.row].source] = prises[st[x.row].source] || []).push(x);
+    });
+    const orph = new Set(data.orphelines || []);
+    const sources = data.sources || [];
+    const scores = {};
+    sources.forEach((src) => (scores[src.id] = lci_score_source(l, src)));
+    const suggestions = sources.filter((src) => scores[src.id] > 0.12)
+      .sort((a, b) => scores[b.id] - scores[a.id]).slice(0, 8);
+    let filtre = "", libres_seul = false;
+    const pk = new frappe.ui.Dialog({
+      title: __("Ligne du fournisseur pour #{0} {1}", [l.idx, l.item_code || ""]),
+      size: "extra-large",
+      fields: [{ fieldtype: "HTML", fieldname: "z" }],
+      secondary_action_label: st[row].source ? __("✕ Retirer l'attribution") : undefined,
+      secondary_action: st[row].source ? () => { pk.hide(); attribuer(row, ""); } : undefined,
+    });
+    const $p = pk.fields_dict.z.$wrapper;
+    const carte = (src) => {
+      const deja = prises[src.id], actuelle = st[row].source === src.id;
+      const v = lci_valeurs_source(src);
+      const infos = [
+        src.code ? esc(src.code) : "",
+        src.prix_unitaire != null ? `<b>${esc(src.prix_unitaire)} ${esc(dev)}</b>` : `<span style="color:#a8071a">${__("sans prix")}</span>`,
+        src.qty != null ? `${__("qté")} ${format_number(src.qty, null, 0)}` : "",
+        v.moq != null ? `MOQ ${format_number(v.moq, null, 0)}` : "",
+        v.qty_par_carton != null ? `${format_number(v.qty_par_carton, null, 0)}/ctn` : "",
+      ].filter(Boolean).join(" · ");
+      const etat = actuelle ? `<span class="lci-pk-chip on">${__("choix actuel")}</span>`
+        : deja ? `<span class="lci-pk-chip pris" title="${esc(deja.map((x) => "#" + x.idx + " " + (x.item_code || x.item_name || "")).join(", "))}">${__("déjà prise par")} ${deja.map((x) => "#" + x.idx).join(", ")}</span>`
+        : orph.has(src.id) ? `<span class="lci-pk-chip libre">${__("libre — sans correspondance")}</span>`
+        : `<span class="lci-pk-chip libre">${__("libre")}</span>`;
+      return `<div class="lci-pk-carte${actuelle ? " on" : ""}${deja ? " pris" : ""}" data-src="${esc(src.id)}">
+        ${src.photo_b64 ? `<img src="data:image/jpeg;base64,${src.photo_b64}">` : `<div class="lci-pk-nophoto">📦</div>`}
+        <div class="lci-pk-c">
+          <div class="lci-pk-d"><span class="lci-pk-l">L${esc(src.ligne)}</span> ${esc((src.designation || "").replace(/\s+/g, " "))}${src.variante ? ` <i>— ${esc(src.variante)}</i>` : ""}</div>
+          <div class="lci-pk-i">${infos}</div>
+          ${etat}
+        </div></div>`;
+    };
+    const correspond = (src) => {
+      if (libres_seul && prises[src.id]) return false;
+      if (!filtre) return true;
+      const q = filtre.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+      if (/^l?\d+$/.test(q)) return String(src.ligne) === q.replace(/^l/, "");
+      const t = `${src.code || ""} ${src.designation || ""} ${src.variante || ""}`.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+      return q.split(/\s+/).every((m) => t.includes(m));
+    };
+    const peindre = () => {
+      const sug = suggestions.filter(correspond), toutes = sources.filter(correspond);
+      const actuelle = src_by_id[st[row].source];
+      $p.find(".lci-pk-list").html(
+        (actuelle && !filtre ? `<div class="lci-pk-titre">${__("Choix actuel")}</div><div class="lci-pk-grille">${carte(actuelle)}</div>` : "")
+        + (sug.length && !filtre ? `<div class="lci-pk-titre">⭐ ${__("Suggestions (les plus proches de votre article)")}</div><div class="lci-pk-grille">${sug.map(carte).join("")}</div>` : "")
+        + `<div class="lci-pk-titre">${filtre ? __("{0} ligne(s) trouvée(s)", [toutes.length]) : __("Toutes les lignes du fournisseur ({0})", [toutes.length])}</div>`
+        + `<div class="lci-pk-grille">${toutes.map(carte).join("") || `<div class="lci-rep-aide">${__("Aucune ligne ne correspond.")}</div>`}</div>`);
+    };
+    $p.html(`
+      <style>
+        .lci-pk-ref { display: flex; gap: 10px; align-items: flex-start; background: #f6f8fa; border-radius: 10px; padding: 8px 10px; margin-bottom: 8px; }
+        .lci-pk-ref img, .lci-pk-ref .lci-pk-nophoto { width: 70px; height: 70px; }
+        .lci-pk-ref .dim { color: #6b7280; font-size: 11.5px; }
+        .lci-pk-bar { display: flex; gap: 10px; align-items: center; margin-bottom: 6px; }
+        .lci-pk-bar input[type=search] { flex: 1; }
+        .lci-pk-list { max-height: 58vh; overflow: auto; }
+        .lci-pk-titre { font-weight: 700; font-size: 12px; color: #475569; margin: 8px 0 4px; }
+        .lci-pk-grille { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 6px; }
+        .lci-pk-carte { display: flex; gap: 8px; border: 1px solid #e4e8ee; border-radius: 9px; padding: 6px; cursor: pointer; background: #fff; }
+        .lci-pk-carte:hover { border-color: #1677ff; box-shadow: 0 0 0 2px rgba(22,119,255,.15); }
+        .lci-pk-carte.on { border-color: #1677ff; background: #f0f7ff; }
+        .lci-pk-carte.pris { opacity: .75; }
+        .lci-pk-carte img, .lci-pk-nophoto { width: 64px; height: 64px; object-fit: contain; border: 1px solid #eef1f5; border-radius: 6px; background: #fff; flex: none; }
+        .lci-pk-carte img { transition: transform .15s; transform-origin: left center; position: relative; }
+        .lci-pk-carte img:hover { transform: scale(3); z-index: 10; box-shadow: 0 6px 24px rgba(0,0,0,.25); }
+        .lci-pk-nophoto { display: flex; align-items: center; justify-content: center; color: #cbd5e1; font-size: 24px; }
+        .lci-pk-c { min-width: 0; flex: 1; }
+        .lci-pk-d { font-size: 12px; line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+        .lci-pk-i { font-size: 11px; color: #475569; margin-top: 2px; }
+        .lci-pk-chip { display: inline-block; font-size: 10px; border-radius: 5px; padding: 1px 6px; margin-top: 3px; }
+        .lci-pk-chip.libre { background: #f6ffed; color: #237804; }
+        .lci-pk-chip.pris { background: #fff7e6; color: #ad4e00; }
+        .lci-pk-chip.on { background: #e6f4ff; color: #0958d9; font-weight: 700; }
+      </style>
+      <div class="lci-pk-ref">
+        ${l.image ? `<img src="${esc(l.image)}" style="object-fit:contain;border:1px solid #e4e8ee;border-radius:6px;background:#fff">` : `<div class="lci-pk-nophoto">📦</div>`}
+        <div style="min-width:0">
+          <div><b>#${l.idx} ${esc(l.item_code || __("libre"))}</b> — ${esc(l.item_name || "")} · <b>${__("qté")} ${format_number(l.qty, null, 0)}</b></div>
+          ${l.item_name_traduit ? `<div class="dim">🌐 ${esc(l.item_name_traduit)}</div>` : ""}
+          ${l.description ? `<div class="dim">${esc(l.description.slice(0, 220))}${l.description.length > 220 ? "…" : ""}</div>` : ""}
+        </div>
+      </div>
+      <div class="lci-pk-bar">
+        <input type="search" class="form-control" placeholder="${__("Rechercher : mot, code, « L35 »…")}">
+        <label style="margin:0;white-space:nowrap;font-size:12px"><input type="checkbox" data-libres> ${__("libres seulement")}</label>
+      </div>
+      <div class="lci-pk-list"></div>`);
+    let t = null;
+    $p.find("input[type=search]").on("input", (e) => { clearTimeout(t); t = setTimeout(() => { filtre = e.target.value; peindre(); }, 150); });
+    $p.find("[data-libres]").on("change", (e) => { libres_seul = e.target.checked; peindre(); });
+    $p.on("click", ".lci-pk-carte", (e) => {
+      const id = $(e.currentTarget).attr("data-src");
+      const deja = prises[id];
+      const go = () => { pk.hide(); attribuer(row, id); };
+      if (deja && st[row].source !== id) {
+        frappe.confirm(__("Cette ligne du fournisseur est déjà attribuée à {0}. L'attribuer AUSSI à #{1} ?",
+          [deja.map((x) => "#" + x.idx + " " + esc(x.item_code || x.item_name || "")).join(", "), l.idx]), go);
+      } else go();
+    });
+    peindre();
+    pk.show();
+    setTimeout(() => $p.find("input[type=search]").trigger("focus"), 200);
+  }
+
+  // Les lignes du fournisseur qu'aucune de vos lignes n'utilise (parmi celles que l'analyse n'a pas su attribuer).
+  function orphelines_libres() {
+    const prises = new Set(data.lignes.filter((l) => st[l.row].apply && st[l.row].source).map((l) => st[l.row].source));
+    return (data.orphelines || []).map((id) => src_by_id[id]).filter((o) => o && !prises.has(o.id));
+  }
+
+  // Après un choix à la main : la comparaison des descriptions est refaite pour CETTE paire.
+  async function recomparer(row) {
+    const src = src_by_id[st[row].source];
+    if (!src) return;
+    st[row].controle = { verdict: "en cours" };
+    st[row].controle_de = st[row].source;
+    render();
+    try {
+      const r = await frappe.call({ method: "customization_app.lci_reponse.comparer_descriptions",
+        args: { docname: frm.doc.name, paires: JSON.stringify([{ row, source: Object.assign({}, src, { photo_b64: undefined }) }]) } });
+      if (st[row].controle_de === src.id) st[row].controle = (r.message || {})[row] || null;
+    } catch (e) {
+      st[row].controle = null;
+    }
+    render();
+  }
+
   render();
   d.show();
+}
+
+// Une photo en grand (lignes du fournisseur découpées dans son PDF : la vignette ne suffit pas pour juger).
+function lci_zoom_photo(src, titre) {
+  const esc = frappe.utils.escape_html;
+  const d = new frappe.ui.Dialog({ title: titre ? titre.slice(0, 90) : __("Photo"), size: "large",
+    fields: [{ fieldtype: "HTML", fieldname: "z" }] });
+  d.fields_dict.z.$wrapper.html(`<div style="text-align:center"><img src="${esc(src)}"
+    style="max-width:100%;max-height:70vh;object-fit:contain;background:#fff;border:1px solid #e4e8ee;border-radius:8px;image-rendering:auto"></div>
+    ${titre ? `<div style="margin-top:8px;font-size:12px;color:#475569">${esc(titre)}</div>` : ""}`);
+  d.show();
+}
+
+// Proximité d'une ligne du fournisseur avec un de vos articles, pour ordonner les suggestions du sélecteur : la part de VOS
+// mots et valeurs (code, désignation, traduction anglaise, description) qu'elle reprend — un chiffre (1/4, 300, 75) compte
+// double —, une désignation à rallonge légèrement pénalisée. Mesuré sur LCI-2026-00295 (12/10/2026) : la ligne retenue
+// est 1re 114 fois sur 129, et toujours dans les 8 suggestions.
+const LCI_MOTS_VIDES = new Set(["with", "and", "for", "the", "de", "du", "des", "la", "le", "les", "et", "avec", "sans",
+  "pour", "en", "un", "une", "pc", "pcs", "type"]);
+function lci_jetons(t) {
+  return (String(t || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .match(/\d+\/\d+|\d+(?:[.,]\d+)?|[a-z]{2,}/g) || []).map((x) => x.replace(",", ".")).filter((x) => !LCI_MOTS_VIDES.has(x));
+}
+function lci_score_source(l, src) {
+  const nous = new Set(lci_jetons([l.item_code, l.item_name, l.item_name_traduit, l.description].join(" ")));
+  const eux = new Set(lci_jetons([src.code, src.designation, src.variante].join(" ")));
+  if (!nous.size || !eux.size) return 0;
+  let commun = 0, total = 0;
+  nous.forEach((x) => { const w = /\d/.test(x) ? 2 : 1; total += w; if (eux.has(x)) commun += w; });
+  return commun / total - 0.002 * eux.size;
+}
+
+// Le résultat de la comparaison des descriptions, en badge (ce qu'il cote est-il ce que nous avons demandé ?).
+function lci_badge_controle(c, row) {
+  const esc = frappe.utils.escape_html;
+  if (!c) return `<div><span class="lci-ctrl-refaire" data-recomparer="${esc(row)}">🔎 ${__("comparer les descriptions")}</span></div>`;
+  if (c.verdict === "en cours") return `<div><span class="lci-ctrl lci-ctrl-doute">🔎 ${__("comparaison…")}</span></div>`;
+  const txt = lci_texte_controle(c);
+  const cls = c.verdict === "conforme" ? "lci-ctrl-ok" : c.verdict === "ecart" ? "lci-ctrl-ko" : "lci-ctrl-doute";
+  return `<div><span class="lci-ctrl ${cls}" title="${esc(txt + (c.note && c.verdict !== "conforme" ? " — " + c.note : ""))}">${esc(txt)}</span></div>`;
+}
+
+function lci_texte_controle(c) {
+  if (!c || !c.verdict || c.verdict === "en cours") return "";
+  if (c.verdict === "conforme") return "✓ " + __("description conforme") + (c.note ? ` — ${c.note}` : "");
+  const ecarts = (c.ecarts || []).filter(Boolean);
+  return (c.verdict === "ecart" ? "⚠️ " : "❔ " + __("à vérifier") + " : ") + (ecarts.length ? ecarts.join(" ; ") : (c.note || ""));
 }
 
 // ------------------------------------------- quantité retenue = le plus grand

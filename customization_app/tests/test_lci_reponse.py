@@ -355,3 +355,175 @@ class TestEstTexte(unittest.TestCase):
     def test_un_nombre_ou_un_tiret_n_est_pas_du_texte(self):
         for v in ("150", "36.3", "1 234,56", "/", "-", "", None, 150):
             self.assertFalse(R._est_texte(v), v)
+
+
+class TestCaracteristiques(unittest.TestCase):
+    """12/10/2026 : la ressemblance des lettres ne voit pas qu'un chiffre change le produit (1/4" ≠ 3/8" à 88 %)."""
+
+    def test_valeurs_lues(self):
+        self.assertEqual(R.specs('Électrovanne 24 V tube 1/4" x 1/4"'), {"V": {"24"}, "pouce": {"1/4"}})
+        self.assertEqual(R.specs("AutoFlush 24V 300 cc retard 18 s"), {"V": {"24"}, "cc": {"300"}})
+        self.assertEqual(R.specs("Membrane 75 GPD, 5 microns, 6 stages, UV 6W, tank 3.2 L"),
+                         {"GPD": {"75"}, "µm": {"5"}, "étages": {"6"}, "W": {"6"}, "L": {"3.2"}})
+        self.assertEqual(R.specs("livré le 12/10/2026, code L153"), {})              # ni date ni code
+
+    def test_conflits(self):
+        fr = R.specs('Électrovanne 24 V tube 1/4" x 1/4"')
+        self.assertEqual(R.conflits_specs(fr, R.specs('24V inlet solenoid valve, 3/8" x 3/8"')), ['1/4" ≠ 3/8"'])
+        self.assertEqual(R.conflits_specs(R.specs("AutoFlush 24 V 300 cc"), R.specs("AutoFlush valve 24V 200cc")), ["300 cc ≠ 200 cc"])
+        # une valeur commune suffit ; une grandeur dite d'un seul côté ne prouve rien
+        self.assertEqual(R.conflits_specs(R.specs('Clé porte-filtre 10"'), R.specs('10" filter housing wrench for 1/4" RO')), [])
+        self.assertEqual(R.conflits_specs(R.specs("Cartouche sédiment 10\""), R.specs("PP cartridge 5 micron")), [])
+
+
+class TestApprochanteEtValeurs(unittest.TestCase):
+    def setUp(self):
+        self._ia = R._apparier_ia
+        R._apparier_ia = lambda rows, libres: {}
+
+    def tearDown(self):
+        R._apparier_ia = self._ia
+
+    def _src(self, i, desig):
+        return {"id": f"S:{i}", "feuille": "S", "ligne": i, "ref_ligne": None, "code": "", "designation": desig,
+                "qty": None, "prix_unitaire": 1.0, "total": None, "moq": None, "pcs_carton": None,
+                "volume_carton_m3": None, "volume_unitaire_m3": None, "remarque": ""}
+
+    def test_la_mauvaise_variante_seule_n_est_pas_prise(self):
+        rows = [_ligne("r1", 1, nom='Électrovanne 24 V tube 1/4" x 1/4"', traduit='24V solenoid valve tube 1/4" x 1/4"')]
+        res, libres = R._apparier(rows, [self._src(7, '24V solenoid valve tube 3/8" x 3/8"')])
+        self.assertEqual(res, {})
+        self.assertEqual(len(libres), 1)
+
+    def test_la_bonne_variante_gagne(self):
+        rows = [_ligne("r1", 1, nom='Électrovanne 24 V tube 1/4" x 1/4"', traduit='24V solenoid valve tube 1/4 x 1/4 inch')]
+        res, _l = R._apparier(rows, [self._src(7, '24V solenoid valve tube 3/8" x 3/8"'), self._src(8, '24V solenoid valve, tube 1/4" x 1/4"')])
+        self.assertEqual(res["r1"][0]["ligne"], 8)
+
+
+class TestComparaison(unittest.TestCase):
+    """Ce qu'il cote est-il ce que nous avons demandé ? IA recoupée par les valeurs chiffrées (IA simulée)."""
+
+    ROW = _ligne("r1", 1, nom="AutoFlush 24 V 300 cc retard 18 s", traduit="AutoFlush 24V 300cc 18s delay")
+
+    def test_fusion(self):
+        self.assertIsNone(R.fusionner_controle(None, []))
+        self.assertEqual(R.fusionner_controle(None, ["300 cc ≠ 200 cc"])["verdict"], "ecart")
+        c = R.fusionner_controle({"verdict": "conforme", "note": "même produit"}, ["300 cc ≠ 200 cc"])
+        self.assertEqual((c["verdict"], c["ecarts"]), ("incertain", ["300 cc ≠ 200 cc"]))      # jamais « conforme »
+        self.assertEqual(R.fusionner_controle({"verdict": "ecart", "ecarts": ["sans support"]}, [])["ecarts"], ["sans support"])
+        self.assertEqual(R.texte_controle({"verdict": "ecart", "ecarts": ["300 cc ≠ 200 cc"], "note": ""}), "⚠️ 300 cc ≠ 200 cc")
+        self.assertTrue(R.texte_controle({"verdict": "conforme", "ecarts": [], "note": ""}).startswith("✓"))
+
+    def test_sans_ia_les_valeurs_seules(self):
+        from unittest.mock import patch
+        src = {"designation": "AutoFlush valve 24V 200 cc", "code": ""}
+        with patch("customization_app.liste_commande_import._contexte_ia", side_effect=Exception("pas de clé")), \
+                patch.object(frappe, "log_error"):
+            out = R.comparer([("r1", self.ROW, src)])
+        self.assertEqual((out["r1"]["verdict"], out["r1"]["ecarts"], out["r1"]["source"]), ("ecart", ["300 cc ≠ 200 cc"], "valeurs"))
+
+    def test_avec_ia(self):
+        from unittest.mock import patch
+        vu = []
+
+        def faux(contexte, system, user):
+            vu.append(user)
+            return {"resultats": [{"cle": "r1", "verdict": "conforme", "ecarts": [], "note": "même vanne"},
+                                  {"cle": "r2", "verdict": "ecart", "ecarts": ["sans raccords"], "note": ""}]}
+        r2 = _ligne("r2", 2, nom="Pompe booster avec raccords")
+        with patch("customization_app.liste_commande_import._contexte_ia", return_value=None), \
+                patch("customization_app.liste_commande_import._completion_json", side_effect=faux):
+            out = R.comparer([("r1", self.ROW, {"designation": "AutoFlush 24V 300cc 18 s"}),
+                              ("r2", r2, {"designation": "Booster pump 75 GPD"})])
+        self.assertEqual(out["r1"]["verdict"], "conforme")
+        self.assertEqual((out["r2"]["verdict"], out["r2"]["ecarts"]), ("ecart", ["sans raccords"]))
+        self.assertEqual(len(vu), 1)                                       # un seul lot pour deux paires
+        self.assertIn("AutoFlush 24V 300cc 18 s", vu[0])
+
+
+class TestAjoutDeLignes(unittest.TestCase):
+    """Une ligne du fournisseur sans correspondance, ajoutée à la liste avec ses prix (vraie base, nettoyée)."""
+
+    def setUp(self):
+        from customization_app.liste_commande_import import ALLOWED_USER
+        if not frappe.db.exists("User", ALLOWED_USER):
+            self.skipTest("utilisateur LCI absent")
+        frappe.set_user(ALLOWED_USER)
+        self.doc = frappe.get_doc({"doctype": R.DOCTYPE, "titre": "TEST ajout réponse fournisseur",
+                                   "articles": [{"item_name": "Coude fileté", "qty": 10}]}).insert(ignore_permissions=True)
+        frappe.db.commit()
+
+    def tearDown(self):
+        frappe.set_user("Administrator")
+        frappe.delete_doc(R.DOCTYPE, self.doc.name, force=True, ignore_permissions=True)
+        frappe.db.commit()
+
+    def test_ajout_et_controle_ecrits(self):
+        r1 = self.doc.articles[0].name
+        long = "AR05-B Purium: Compact 6 Stages with Pump " + "x" * 200
+        res = R.appliquer_reponse(self.doc.name, [
+            {"row": r1, "valeurs": {"prix_fournisseur": 0.8}, "source_label": "L5 · Elbow", "source_id": "S:5",
+             "controle": "⚠️ 1/4\" ≠ 3/8\""}],
+            ajouts=[{"source_id": "S:18", "source_label": "L18 · AR05-B", "designation": long, "code": "AR05-B",
+                     "qty": 5, "valeurs": {"prix_fournisseur": 64.35, "moq": 50, "qty_par_carton": 1}}])
+        self.assertEqual((res["maj"], res["ajoutees"]), (2, 1))
+        doc = frappe.get_doc(R.DOCTYPE, self.doc.name)
+        self.assertEqual(len(doc.articles), 2)
+        a, b = doc.articles
+        self.assertEqual((a.prix_fournisseur, a.controle_description), (0.8, "⚠️ 1/4\" ≠ 3/8\""))
+        self.assertTrue(b.item_name.startswith("AR05-B Purium") and len(b.item_name) <= 140)
+        self.assertEqual((b.item_code, b.qty, b.prix_fournisseur, b.moq, b.reponse_source, b.decision),
+                         (None, 5.0, 64.35, 50.0, "L18 · AR05-B", "À négocier"))
+        self.assertIn("AR05-B — AR05-B Purium", b.description)
+
+
+class TestRattrapageParQuantite(unittest.TestCase):
+    """Le fournisseur répond à NOTRE demande : la quantité est un indice (136 paires sur 141 identiques, 12/10/2026)."""
+
+    def _src(self, i, desig, qty):
+        return {"id": f"S:{i}", "ligne": i, "code": "", "designation": desig, "qty": qty, "variante": ""}
+
+    def _l(self, name, idx, code, nom, qty, traduit=""):
+        return _ligne(name, idx, code=code, nom=nom, qty=qty, traduit=traduit)
+
+    def test_doublon_la_quantite_choisit_le_bon_exemplaire(self):
+        r8 = self._l("r8", 8, "AP-C+", "Osmoseur compact+ 7 étages", 4)
+        r9 = self._l("r9", 9, "AP-C+", "Osmoseur compact+ 7 étages", 150)
+        l19 = self._src(19, "Compact 7 Stages with Pump", 150)
+        res, libres = {"r8": (l19, "IA", 0.8)}, []
+        R._rattraper_par_quantite([r8, r9], res, libres)
+        self.assertEqual(list(res), ["r9"])
+        self.assertEqual(res["r9"][1], "IA + quantité")
+
+    def test_meme_quantite_et_meme_famille(self):
+        r7 = self._l("r7", 7, "AP-C-EP-7", "Osmoseur compact pompe 75 GPD 7 étages", 200,
+                     traduit="Compact reverse osmosis system with pump 75 GPD 7 stages")
+        l18 = self._src(18, "AR05-B Purium: Compact 6 Stages with Pump, RO Membrane (75 GPD)", 200)
+        lampe = self._src(71, "UV lamp 6 W - 4pins", 200)
+        res, libres = {}, [lampe, l18]
+        R._rattraper_par_quantite([r7], res, libres)
+        self.assertIs(res["r7"][0], l18)                                   # pas la lampe, de même quantité
+        self.assertEqual(res["r7"][1], "quantité identique")
+        self.assertEqual(libres, [lampe])
+
+    def test_ni_autre_quantite_ni_egalite(self):
+        r = self._l("r62", 62, "L-UV-6w", "Lampe UV 6W", 50, traduit="UV lamp 6W")
+        res, libres = {}, [self._src(71, "UV lamp 6 W - 4pins", 50), self._src(72, "UV lamp 6 W - 4pins", 50)]
+        R._rattraper_par_quantite([r], res, libres)
+        self.assertEqual(res, {})                                          # deux candidates identiques : à vous de choisir
+        res, libres = {}, [self._src(71, "UV lamp 6 W - 4pins", 40)]
+        R._rattraper_par_quantite([r], res, libres)
+        self.assertEqual(res, {})                                          # autre quantité : rien
+
+    def test_correction_quand_la_quantite_et_les_valeurs_disent_autre_chose(self):
+        r = self._l("r124", 124, "Acc013-E", 'Vanne arrêt rapide M 1/4" x tube 3/8"', 150,
+                    traduit='Quick shut-off valve M 1/4" x tube 3/8"')
+        l136 = self._src(136, 'Quick shut-off valve, M1/2" x tube 3/8"', 200)
+        l134 = self._src(134, 'Quick shut-off valve M 1/4" x tube 3/8" • Male thread: 1/4" • Tube fitting: 3/8"', 150)
+        res, libres = {"r124": (l136, "IA", 0.8)}, [l134]
+        R._rattraper_par_quantite([r], res, libres)
+        self.assertIs(res["r124"][0], l134)
+        self.assertEqual(res["r124"][1], "quantité et valeurs")
+        self.assertEqual(libres, [l136])                                   # la mauvaise variante redevient libre
+

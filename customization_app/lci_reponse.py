@@ -900,15 +900,17 @@ def _extraire(grille, ligne_entete, mapping, feuille):
             "remarque": _txt(col("remarque")),
             "photo": photo_txt,   # description de la photo (colonne écrite par l'IA)
             # la photo elle-même quand la colonne est une image dans un PDF (octets JPEG,
-            # retirés de l'aperçu avant envoi au navigateur)
-            "_photo": None if photo_txt else _photo_cellule(cells, mapping.get("photo")),
+            # retirés de l'aperçu avant envoi au navigateur). Même quand la cellule porte AUSSI du
+            # texte : « MODEL A.1 -5 STAGES » au-dessus de la photo de l'osmoseur (facture Ang Ran,
+            # 12/10/2026) faisait sauter la découpe — 10 lignes sans photo. Hors PDF : None.
+            "_photo": _photo_cellule(cells, mapping.get("photo")),
             "designation_base": desig_base,
             "complement": " — ".join(extras),
         })
     return heriter_fusion(out)
 
 
-PHOTO_PX = 260            # grand côté de la photo fournisseur découpée dans le PDF
+PHOTO_PX = 480            # grand côté de la photo fournisseur découpée dans le PDF (260 → 480 le 12/10/2026 : floue une fois agrandie)
 
 
 def _photo_cellule(cells, idx):
@@ -922,7 +924,16 @@ def _photo_cellule(cells, idx):
         r = pymupdf.Rect(rects[idx]) + (2, 2, -2, -2)   # sans les traits de bordure
         if r.width < 20 or r.height < 20:
             return None
-        zoom = min(2.0, PHOTO_PX / max(r.width, r.height))
+        # Au plus près des images incrustées dans la cellule (sans le libellé du modèle écrit à côté) ;
+        # sans image incrustée (dessin vectoriel), toute la cellule comme avant.
+        dedans = [pymupdf.Rect(i["bbox"]) & r for i in page.get_image_info()]
+        dedans = [b for b in dedans if b.width >= 12 and b.height >= 12]
+        if dedans:
+            u = dedans[0]
+            for b in dedans[1:]:
+                u |= b
+            r = (u + (-3, -3, 3, 3)) & r
+        zoom = min(4.0, PHOTO_PX / max(r.width, r.height))     # ×2 plafonnait à 185 px de large
         pix = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), clip=r)
         if _uniforme(pix):
             return None  # cellule blanche : pas de photo
@@ -971,6 +982,65 @@ def heriter_fusion(lignes):
 
 
 # ------------------------------------------------------- appariement
+
+# ------------------------------------------- caractéristiques chiffrées (12/10/2026)
+# « Électrovanne 24 V tube 1/4" » et « … 3/8" » se ressemblent à 88 %, « AutoFlush 300 cc » et « 200 cc » à 98 % :
+# la ressemblance des lettres ne voit pas qu'un chiffre change le produit. Ces valeurs se lisent des deux côtés ;
+# une même grandeur donnée des deux côtés SANS valeur commune = deux produits différents.
+_FRACTION = r"\d+\s*/\s*\d+"
+_NOMBRE = r"\d+(?:[.,]\d+)?"
+SPECS = (
+    ("pouce", r"(%s|%s)\s*(?:\"|”|″|''|-?\s*inch(?:es)?\b|-?\s*pouces?\b)" % (_FRACTION, _NOMBRE)),
+    ("pouce", r"(?<![\d/])(%s)(?![\d/])" % _FRACTION),                  # 1/4, 3/8 : des pouces dans ce métier
+    ("cc", r"(%s)\s*(?:cc|ml)\b" % _NOMBRE),
+    ("V", r"(%s)\s*v(?:olts?)?(?:\s*(?:dc|ac))?\b" % _NOMBRE),
+    ("GPD", r"(%s)\s*g\.?p\.?d\b" % _NOMBRE),
+    ("µm", r"(%s)\s*(?:microns?|µm|um)\b" % _NOMBRE),
+    ("W", r"(%s)\s*(?:w|watts?)\b" % _NOMBRE),
+    ("L", r"(%s)\s*(?:l|litres?|liters?)\b" % _NOMBRE),
+    ("étages", r"(\d+)\s*-?\s*(?:stages?|etages?|etapes?)\b"),
+)
+
+
+def _valeur_spec(v):
+    v = re.sub(r"\s+", "", v).replace(",", ".")
+    if "/" in v:
+        return v
+    try:
+        return ("%g" % float(v))
+    except ValueError:
+        return v
+
+
+def specs(*textes):
+    """{grandeur: {valeurs}} lues dans des libellés (accents et casse ignorés). PURE."""
+    out = {}
+    for t in textes:
+        t = unicodedata.normalize("NFKD", _strip_html(_txt(t)).lower())
+        t = "".join(c for c in t if not unicodedata.combining(c))
+        for unite, motif in SPECS:
+            for m in re.finditer(motif, t):
+                out.setdefault(unite, set()).add(_valeur_spec(m.group(1)))
+    return out
+
+
+def conflits_specs(a, b):
+    """Les grandeurs présentes des deux côtés sans aucune valeur commune → [« 300 cc ≠ 200 cc »]. PURE."""
+    out = []
+    for unite in sorted(set(a) & set(b)):
+        if not (a[unite] & b[unite]):
+            fmt = lambda vals: "/".join(sorted(vals)) + ('"' if unite == "pouce" else " " + unite)
+            out.append("%s ≠ %s" % (fmt(a[unite]), fmt(b[unite])))
+    return out
+
+
+def _specs_ligne(r):
+    return specs(r.item_name, r.item_name_traduit, _strip_html(r.description or "")[:300])
+
+
+def _specs_source(f):
+    return specs(f.get("designation"), f.get("variante"), f.get("code"))
+
 
 def _textes_ligne(r):
     """Tous les libellés sous lesquels une ligne LCI peut être reconnue."""
@@ -1063,13 +1133,17 @@ def _apparier(rows, fournisseur, mode="cascade", photos=None, progres=None):
             encore.append(row)
     restants = encore
 
-    # 4) désignation approchante — refusée si deux candidats se valent
+    # 4) désignation approchante — refusée si deux candidats se valent, et jamais quand une valeur chiffrée
+    #    dit autre chose (1/4" ≠ 3/8", 300 cc ≠ 200 cc) : la ligne passe alors à l'IA, ou reste sans correspondance.
     encore = []
     for row in restants:
         notes = []
+        nos_specs = _specs_ligne(row)
         for f in libres:
             cible = _norm(f.get("designation")) or _norm(f.get("code"))
             if not cible:
+                continue
+            if conflits_specs(nos_specs, _specs_source(f)):
                 continue
             best = max((difflib.SequenceMatcher(None, _norm(t), cible).ratio()
                         for t in _textes_ligne(row)), default=0)
@@ -1089,6 +1163,7 @@ def _apparier(rows, fournisseur, mode="cascade", photos=None, progres=None):
             r = next((x for x in restants if x.name == row), None)
             if src and r:
                 prendre(r, src, "IA photo", conf)
+        _rattraper_par_quantite(rows, res, libres)
         return res, libres
     if restants and libres:
         for chunk in _lots(restants, 20):
@@ -1100,7 +1175,99 @@ def _apparier(rows, fournisseur, mode="cascade", photos=None, progres=None):
                 src = next((f for f in libres if f["id"] == src_id), None)
                 if row and src:
                     prendre(row, src, "IA", 0.8)
+    _rattraper_par_quantite(rows, res, libres)
     return res, libres
+
+
+# ------------------------------------------- rattrapage par la quantité (12/10/2026)
+FAMILLE_MIN = 0.2         # part minimale de NOS mots reprise par sa ligne : « même famille de produit »
+_MOTS_VIDES = {"with", "and", "for", "the", "de", "du", "des", "la", "le", "les", "et", "avec", "sans", "pour", "en",
+               "un", "une", "pc", "pcs", "type"}
+
+
+def _jetons(*textes):
+    t = unicodedata.normalize("NFKD", " ".join(_strip_html(_txt(x)) for x in textes).lower())
+    t = "".join(c for c in t if not unicodedata.combining(c))
+    return {x.replace(",", ".") for x in re.findall(r"\d+/\d+|\d+(?:[.,]\d+)?|[a-z]{2,}", t)} - _MOTS_VIDES
+
+
+def couverture(row, f):
+    """Part de nos mots et valeurs (code, FR, EN, description) que reprend sa ligne ; un chiffre compte double. PURE.
+    Mesuré sur LCI-2026-00295 : vraies paires 0,29 à 0,40 ; lampe UV face à un osmoseur 0,04."""
+    nous = _jetons(row.item_code, row.item_name, row.item_name_traduit, _strip_html(row.description or "")[:300])
+    eux = _jetons(f.get("code"), f.get("designation"), f.get("variante"))
+    poids = lambda x: 2 if re.search(r"\d", x) else 1      # noqa: E731
+    total = sum(poids(x) for x in nous)
+    return sum(poids(x) for x in nous if x in eux) / total if total else 0.0
+
+
+def _meme_qte(a, b):
+    return a is not None and b is not None and abs(flt(a) - flt(b)) < 0.001
+
+
+def _accord(row, f):
+    """Ce qui plaide pour la paire : mots en commun, mêmes valeurs chiffrées, même quantité. PUR."""
+    a, b = _specs_ligne(row), _specs_source(f)
+    communes = set(a) & set(b)
+    egales = bool(communes) and all(a[u] == b[u] for u in communes)
+    return couverture(row, f) + (0.5 if egales else 0) + (0.3 if _meme_qte(f.get("qty"), row.qty) else 0)
+
+
+def _rattraper_par_quantite(rows, res, libres):
+    """Le fournisseur répond à NOTRE demande : 136 paires sur 141 avaient la même quantité des deux côtés
+    (LCI-2026-00295, 12/10/2026). Trois passes, après l'appariement, en place sur `res` / `libres` :
+    0. correction — une paire dont la quantité ne correspond pas cède la place à une ligne LIBRE de notre quantité qui
+       s'accorde nettement mieux (mêmes valeurs, plus de mots communs) : #124 « M 1/4" × tube 3/8" » (150) avait reçu
+       L136 « M1/2" × tube 3/8" » (200) ; L134 « M 1/4" × tube 3/8" » (150) était libre ;
+    1. doublons — une de nos lignes répétée (même code, ou même désignation) a reçu une ligne dont la quantité est celle
+       d'un AUTRE exemplaire resté sans correspondance : l'attribution passe sur celui-là (L19 150 pièces : #8 qté 4 →
+       #9 qté 150) ;
+    2. quantité identique — une ligne sans correspondance prend la ligne libre du fournisseur de MÊME quantité et de même
+       famille (≥ FAMILLE_MIN), la plus proche d'abord, jamais entre deux candidates à égalité ; la comparaison des
+       descriptions dit ensuite ce qui diffère (#7 « 7 étages » ↔ L18 « Compact 6 Stages », 200 pièces)."""
+    for r in list(rows):
+        if r.name not in res:
+            continue
+        f, methode, conf = res[r.name]
+        if f.get("qty") is None or _meme_qte(f["qty"], r.qty) or flt(r.qty) <= 0:
+            continue
+        actuel = _accord(r, f)
+        mieux = sorted(((_accord(r, g), g) for g in libres
+                        if _meme_qte(g.get("qty"), r.qty) and couverture(r, g) >= FAMILLE_MIN
+                        and not conflits_specs(_specs_ligne(r), _specs_source(g))), key=lambda x: -x[0])
+        if mieux and mieux[0][0] >= actuel + 0.15:
+            g = mieux[0][1]
+            res[r.name] = (g, "quantité et valeurs", round(min(0.9, 0.3 + couverture(r, g)), 2))
+            libres.remove(g)
+            libres.append(f)
+    meme_article = lambda a, b: bool((a.item_code and a.item_code == b.item_code)        # noqa: E731
+                                     or (_norm(a.item_name) and _norm(a.item_name) == _norm(b.item_name)))
+    sans = [r for r in rows if r.name not in res]
+    for r in list(rows):
+        if r.name not in res:
+            continue
+        f, methode, conf = res[r.name]
+        if f.get("qty") is None or _meme_qte(f["qty"], r.qty):
+            continue
+        jumeau = next((x for x in sans if meme_article(x, r) and _meme_qte(x.qty, f["qty"])), None)
+        if jumeau:
+            res[jumeau.name] = (f, "%s + quantité" % methode, conf)
+            del res[r.name]
+            sans.remove(jumeau)
+            sans.append(r)
+    paires = []
+    for r in sans:
+        if flt(r.qty) <= 0:
+            continue
+        cands = sorted(((couverture(r, f), f) for f in libres if _meme_qte(f.get("qty"), r.qty)), key=lambda x: -x[0])
+        # deux lignes à égalité (« UV lamp 6 W - 4pins » à 7,5 et à 2,5, même quantité) : au hasard, non — à vous de choisir
+        if cands and cands[0][0] >= FAMILLE_MIN and (len(cands) == 1 or cands[0][0] - cands[1][0] >= FUZZY_MARGE):
+            paires.append((cands[0][0], r, cands[0][1]))
+    for c, r, f in sorted(paires, key=lambda p: -p[0]):
+        if r.name in res or f not in libres:
+            continue
+        res[r.name] = (f, "quantité identique", round(min(0.6, 0.3 + c), 2))
+        libres.remove(f)
 
 
 def _lots(lst, size):
@@ -1276,6 +1443,95 @@ def job_analyse(docname, urls, mode, cle):
         frappe.log_error(title="LCI réponse — analyse en tâche de fond", message=frappe.get_traceback())
 
 
+# ------------------------------------------- comparaison des descriptions (12/10/2026)
+PROMPT_COMPARAISON = (
+    "You check whether the item a supplier quoted is the SAME product as the one we asked for (water treatment "
+    "equipment: housings, cartridges, RO systems, valves, fittings, pumps, UV, softeners). For each pair you get OUR "
+    "line (code, French name, English name we sent, description) and the SUPPLIER's line (code, description, variant, "
+    "remark, description of its photo). Compare technical characteristics only: sizes and threads (1/4\", 3/8\", "
+    "10\", 20\"), capacities (cc, L, GPD), voltages, wattages, microns, number of stages, materials, colour or "
+    "transparency, included parts or accessories, pieces per set. Ignore language, wording, brands and details one "
+    "side simply does not mention. Answer JSON only: {\"resultats\": [{\"cle\": \"…\", \"verdict\": \"conforme\" | "
+    "\"ecart\" | \"incertain\", \"ecarts\": [\"<what we asked> ≠ <what is quoted>, in French, max 8 words\"], "
+    "\"note\": \"<max 12 words, in French>\"}]}. \"ecart\" only for a real difference of characteristic; "
+    "\"incertain\" when the supplier text is too vague to tell."
+)
+LOT_COMPARAISON = 12
+
+
+def _paire_payload(cle, row, f):
+    return {"cle": cle,
+            "notre_ligne": {"code": row.item_code or "", "designation": row.item_name or "",
+                            "designation_traduite": row.item_name_traduit or "", "description": _description_courte(row, 400)},
+            "fournisseur": {"code": f.get("code") or "", "designation": f.get("designation") or "",
+                            "variante": f.get("variante") or "", "remarque": f.get("remarque") or "",
+                            "photo_decrite": f.get("photo") or ""}}
+
+
+def fusionner_controle(ia, auto):
+    """Le verdict de l'IA, recoupé par les valeurs chiffrées : une valeur qui diffère des deux côtés ne laisse jamais
+    passer « conforme » (au mieux « incertain », à vérifier). Sans IA, les valeurs seules. PURE."""
+    if not ia:
+        return ({"verdict": "ecart", "ecarts": auto, "note": "valeurs chiffrées différentes", "source": "valeurs"}
+                if auto else None)
+    verdict = ia.get("verdict") if ia.get("verdict") in ("conforme", "ecart", "incertain") else "incertain"
+    ecarts = [str(e)[:80] for e in (ia.get("ecarts") or []) if str(e).strip()][:5]
+    if auto and verdict == "conforme":
+        verdict, ecarts = "incertain", auto
+    elif auto and verdict == "ecart":
+        ecarts = ecarts or auto
+    return {"verdict": verdict, "ecarts": ecarts, "note": str(ia.get("note") or "")[:120], "source": "ia"}
+
+
+def comparer(paires, progres=None):
+    """[(clé, ligne LCI, ligne fournisseur)] → {clé: {verdict, ecarts, note, source}}. L'IA par lots de
+    LOT_COMPARAISON en parallèle ; sans clé ou en erreur, les valeurs chiffrées seules."""
+    auto = {cle: conflits_specs(_specs_ligne(row), _specs_source(f)) for cle, row, f in paires}
+    ia = {}
+    try:
+        from concurrent.futures import ThreadPoolExecutor
+
+        from customization_app.liste_commande_import import _completion_json, _contexte_ia
+        contexte = _contexte_ia()
+        lots = list(_lots([_paire_payload(cle, row, f) for cle, row, f in paires], LOT_COMPARAISON))
+
+        def un_lot(lot):
+            return _completion_json(contexte, PROMPT_COMPARAISON, json.dumps({"paires": lot}, ensure_ascii=False)) or {}
+
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            for k, rep_lot in enumerate(pool.map(un_lot, lots), start=1):
+                for r in (rep_lot.get("resultats") or []):
+                    if r.get("cle") in auto:
+                        ia[r["cle"]] = r
+                if progres:
+                    progres("comparaison", k, len(lots))
+    except Exception:
+        frappe.log_error(title="LCI réponse — comparaison des descriptions", message=frappe.get_traceback())
+    return {cle: fusionner_controle(ia.get(cle), auto[cle]) for cle, _row, _f in paires}
+
+
+def texte_controle(c):
+    """Ce qui s'écrit sur la ligne de la liste : « ✓ conforme » ou « ⚠️ 300 cc ≠ 200 cc ; … »."""
+    if not c:
+        return ""
+    if c["verdict"] == "conforme":
+        return "✓ conforme" + (" — %s" % c["note"] if c.get("note") else "")
+    tete = "⚠️ " if c["verdict"] == "ecart" else "❔ à vérifier : "
+    return (tete + " ; ".join(c.get("ecarts") or [c.get("note") or ""]))[:300]
+
+
+@frappe.whitelist()
+def comparer_descriptions(docname, paires):
+    """Depuis l'aperçu, après un changement à la main : compare de nouveau ces paires.
+    `paires` : [{"row": nom de ligne LCI, "source": ligne du fournisseur}]."""
+    _guard()
+    paires = json.loads(paires) if isinstance(paires, str) else (paires or [])
+    doc = frappe.get_doc(DOCTYPE, docname)
+    par_nom = {r.name: r for r in doc.articles}
+    a_faire = [(p["row"], par_nom[p["row"]], p.get("source") or {}) for p in paires if p.get("row") in par_nom and p.get("source")]
+    return comparer(a_faire) if a_faire else {}
+
+
 def _cle_id(ident):
     """Tri des identifiants « fichier › feuille:ligne » par fichier puis numéro de ligne (pas L10 avant L3)."""
     tete, _sep, fin = str(ident).rpartition(":")
@@ -1310,12 +1566,19 @@ def _analyser(doc, urls, mode, progres=None):
 
     apparies, libres = _apparier(doc.articles, fournisseur, mode=mode or "cascade", photos=photos, progres=progres)
     orphelines = {f["id"] for f in libres}
+    # Après l'appariement, chaque paire est relue : ce qu'il cote est-il bien ce que nous avons demandé ?
+    par_nom = {r.name: r for r in doc.articles}
+    controles = comparer([(nom, par_nom[nom], src) for nom, (src, _m, _c) in apparies.items()], progres=progres) \
+        if apparies else {}
 
     lignes = [{
         "row": r.name,
         "idx": r.idx,
         "item_code": r.item_code,
         "item_name": r.item_name,
+        # pour le sélecteur visuel (suggestions) : le texte envoyé au fournisseur et le début de la description
+        "item_name_traduit": r.item_name_traduit or "",
+        "description": _description_courte(r, 240),
         "image": r.image,
         "qty": flt(r.qty),
         "prix_cible": flt(r.prix_cible),
@@ -1323,6 +1586,7 @@ def _analyser(doc, urls, mode, progres=None):
         "source": apparies[r.name][0]["id"] if r.name in apparies else None,
         "methode": apparies[r.name][1] if r.name in apparies else None,
         "confiance": apparies[r.name][2] if r.name in apparies else 0,
+        "controle": controles.get(r.name),
     } for r in doc.articles]
 
     # ce que le fichier additionne, LUI : sa colonne « Amount » quand il en a
@@ -1360,6 +1624,31 @@ def _analyser(doc, urls, mode, progres=None):
     }
 
 
+DOCTYPE_LIGNE = "Liste Commande Import Article"
+
+
+def _ajouter_ligne(doc, a):
+    """Une ligne du fournisseur que nous n'avions pas demandée devient une ligne « libre » de la liste : sa
+    désignation (en anglais, telle qu'il l'écrit : c'est aussi ce qui lui sera renvoyé), sa photo, la quantité
+    choisie dans l'aperçu ; les prix suivent par le chemin normal des lignes appariées."""
+    desig = re.sub(r"\s+", " ", _txt(a.get("designation"))).strip() or _txt(a.get("code")) or _("Article du fournisseur")
+    court = desig if len(desig) <= 140 else desig[:137].rsplit(" ", 1)[0] + "…"
+    row = doc.append("articles", {
+        "item_name": court, "item_name_traduit": court, "qty": flt(a.get("qty")) or 1, "uom": "Pièce",
+        "description": frappe.utils.escape_html(("%s — %s" % (a["code"], desig)) if a.get("code") else desig),
+        "description_traduite": desig,
+    })
+    row.name = frappe.generate_hash(length=10)
+    if a.get("photo_b64"):
+        from frappe.utils.file_manager import save_file
+        try:
+            f = save_file("lci-%s-%s.jpg" % (doc.name, row.name), base64.b64decode(a["photo_b64"]), DOCTYPE, doc.name, is_private=0)
+            row.image = f.file_url
+        except Exception:
+            frappe.log_error(title="LCI réponse — photo d'une ligne ajoutée", message=frappe.get_traceback())
+    return row
+
+
 CHAMPS_APPLICABLES = {"prix_fournisseur", "qty_fournisseur", "moq",
                       "qty_par_carton", "volume_carton_m3",
                       "volume_unitaire_m3", "remarque_fournisseur",
@@ -1367,20 +1656,33 @@ CHAMPS_APPLICABLES = {"prix_fournisseur", "qty_fournisseur", "moq",
 
 
 @frappe.whitelist()
-def appliquer_reponse(docname, lignes, file_url=None, plan=None):
+def appliquer_reponse(docname, lignes, file_url=None, plan=None, ajouts=None):
     """Écrit dans la LCI les valeurs validées dans l'aperçu.
 
-    `lignes` : [{"row": <nom de ligne>, "valeurs": {...}, "source_label": "..."}]
+    `lignes` : [{"row": <nom de ligne>, "valeurs": {...}, "source_label": "...", "controle": "...",
+                "description_fournisseur": "<texte complet de sa ligne>"}]
     Seuls les champs de CHAMPS_APPLICABLES sont écrits — l'aperçu ne peut pas
-    servir à modifier autre chose que la réponse du fournisseur.
+    servir à modifier autre chose que la réponse du fournisseur (plus le résultat
+    de la comparaison des descriptions, dans `controle_description`).
+    `ajouts` : lignes du fournisseur sans correspondance que l'on AJOUTE à la liste
+    (12/10/2026) : [{"source_id", "source_label", "designation", "code", "qty",
+    "valeurs", "photo_b64"}] — une ligne « libre » chacune, avec ses prix.
     """
     _guard()
     if isinstance(lignes, str):
         lignes = json.loads(lignes)
     if isinstance(plan, str):
         plan = json.loads(plan or "null")
+    if isinstance(ajouts, str):
+        ajouts = json.loads(ajouts or "[]")
     doc = frappe.get_doc(DOCTYPE, docname)
     par_nom = {r.name: r for r in doc.articles}
+    for a in ajouts or []:
+        row = _ajouter_ligne(doc, a)
+        par_nom[row.name] = row
+        lignes = list(lignes or []) + [{"row": row.name, "valeurs": a.get("valeurs") or {},
+                                        "source_label": a.get("source_label") or "", "source_id": a.get("source_id") or "",
+                                        "description_fournisseur": a.get("description_fournisseur") or ""}]
 
     corresp = {}
     maj = 0
@@ -1395,6 +1697,10 @@ def appliquer_reponse(docname, lignes, file_url=None, plan=None):
                 continue
             setattr(row, champ, val if champ == "remarque_fournisseur" else flt(val))
             touche = True
+        if "controle" in entree and frappe.get_meta(DOCTYPE_LIGNE).has_field("controle_description"):
+            row.controle_description = (entree.get("controle") or "")[:300]
+        if entree.get("description_fournisseur") and frappe.get_meta(DOCTYPE_LIGNE).has_field("description_fournisseur"):
+            row.description_fournisseur = _txt(entree["description_fournisseur"])[:4000]
         if touche:
             row.reponse_source = entree.get("source_label") or ""
             # un volume donné par le fournisseur est mesuré, pas estimé : il peut
@@ -1434,6 +1740,7 @@ def appliquer_reponse(docname, lignes, file_url=None, plan=None):
     frappe.db.commit()
     return {
         "maj": maj,
+        "ajoutees": len(ajouts or []),
         "montant_propose": flt(doc.montant_propose),
         "montant_cible": flt(doc.montant_cible),
         "ecart_global_pct": flt(doc.ecart_global_pct),
