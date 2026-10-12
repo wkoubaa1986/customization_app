@@ -35,6 +35,11 @@ TACHE = "Tache de travail"
 TYPES_MOBILES_DEFAUT = ("Entretien", "Réparation", "Installation", "Visite", "Livraison")
 TYPES_HORS_JOURNEE = ("Jour de récupération",)
 OSRM_DEFAUT = "https://router.project-osrm.org"
+# Dépassement de la fin de journée (12/10/2026) : plutôt que de laisser des tâches « gardées telles quelles » faute de
+# place, l'employé peut finir jusqu'à N minutes plus tard. Chaque minute en plus coûte COUT_DEPASSEMENT (contre 1 par
+# minute de route et 100 000 pour une tâche laissée de côté) : le moteur ne s'en sert que si c'est nécessaire.
+DEPASSEMENT_DEFAUT = 60
+COUT_DEPASSEMENT = 100
 DEPOT_DEFAUT = (36.8700, 10.1950)        # Soukra, à défaut du lien du réglage
 VITESSE_KMH = 30.0                       # repli à vol d'oiseau
 ROLES = ("System Manager", "Responsable magasin")
@@ -80,6 +85,9 @@ def config() -> dict:
     enregistre = frappe.db.exists("DocType", CONFIG) and frappe.db.sql(
         "select 1 from tabSingles where doctype = %s and field = 'heure_fin' limit 1", CONFIG)
     v = (lambda champ: frappe.db.get_single_value(CONFIG, champ)) if enregistre else (lambda champ: None)
+    # Champ ajouté le 12/10/2026 : tant qu'il n'est pas enregistré, sa valeur par défaut (get_single_value rendrait 0).
+    depassement = cint(v("depassement_minutes")) if enregistre and frappe.db.sql(
+        "select 1 from tabSingles where doctype = %s and field = 'depassement_minutes' limit 1", CONFIG) else DEPASSEMENT_DEFAUT
     types = [t.strip() for t in (v("types_mobiles") or "").splitlines() if t.strip()] or list(TYPES_MOBILES_DEFAUT)
     lat, lng = flt(v("depot_latitude")), flt(v("depot_longitude"))
     exclus = set(frappe.get_all("Config Optimisation Tournees Exclu", filters={"parent": CONFIG, "parenttype": CONFIG}, pluck="employe")) \
@@ -101,6 +109,7 @@ def config() -> dict:
             "rangement": cint(v("rangement_minutes")) if v("rangement_minutes") is not None else 5,
             "coef": min(2.0, max(1.0, flt(v("coef_osrm")) or 1.0)),
             "fenetre": cint(v("fenetre_minutes")) if v("fenetre_minutes") is not None else 60,
+            "depassement": max(0, depassement),
             "types": types, "osrm": (v("osrm_url") or OSRM_DEFAUT).rstrip("/"),
             "equilibre": cint(v("equilibre")) if v("equilibre") is not None else 1, "exclus": exclus,
             "prevenir": {"sms": cint(v("prevenir_sms")), "email": cint(v("prevenir_email")),
@@ -567,11 +576,13 @@ def fusionner_intervalles(intervalles: list) -> list:
 def resoudre(minutes: list, arrets: list, nb_vehicules: int, debut: int, fin: int, equilibre: int = 1,
              limite_s: int = 5, premiere: int | None = None, depots: list | None = None,
              marge: int = 0, pause: tuple | None = None, occupations: dict | None = None,
-             debuts: list | None = None, fins: list | None = None, rangement: int = 0) -> dict:
+             debuts: list | None = None, fins: list | None = None, rangement: int = 0,
+             depassements: list | None = None) -> dict:
     """Tournées à fenêtres de temps (OR-Tools). `minutes` couvre tous les nœuds : les dépôts (nœud 0 = Magasin,
     puis les points de départ particuliers) et les arrêts, qui occupent les DERNIERS nœuds. `arrets[i]` :
     {service: min, fenetre: (a, b) | None, vehicule: idx | None}. `depots[v]` = nœud de départ ET de retour du
-    véhicule v (0 par défaut). Les temps sont en minutes depuis minuit.
+    véhicule v (0 par défaut). Les temps sont en minutes depuis minuit. `depassements[v]` : minutes que le véhicule v peut
+    finir après sa fin de journée, chacune coûtant COUT_DEPASSEMENT (0 = fin stricte).
     → {"routes": [[(noeud, arrivee), …] par véhicule], "non_places": [noeuds], "cout": minutes de route}."""
     from ortools.constraint_solver import pywrapcp, routing_enums_pb2
 
@@ -598,7 +609,9 @@ def resoudre(minutes: list, arrets: list, nb_vehicules: int, debut: int, fin: in
     routing.SetArcCostEvaluatorOfAllVehicles(cb)
     debuts = [cint(x) for x in (debuts or [debut] * nb_vehicules)]       # début de journée par véhicule
     fins = [cint(x) for x in (fins or [fin] * nb_vehicules)]             # fin de journée par véhicule (retour compris)
-    horizon = max(max(fins), max((a["fenetre"][1] + cint(a.get("service")) for a in arrets if a.get("fenetre")), default=fin)) + 1
+    deps = [max(0, cint(x)) for x in (depassements or [0] * nb_vehicules)]
+    fin_max = max(f + d for f, d in zip(fins, deps))                     # la plus tardive, dépassement compris
+    horizon = max(fin_max, max((a["fenetre"][1] + cint(a.get("service")) for a in arrets if a.get("fenetre")), default=fin)) + 1
     routing.AddDimension(cb, horizon, horizon, False, "Temps")
     temps = routing.GetDimensionOrDie("Temps")
     # Équilibrage : c'est la fin de journée LA PLUS TARDIVE, toutes tournées confondues, qui coûte — chaque minute
@@ -618,7 +631,11 @@ def resoudre(minutes: list, arrets: list, nb_vehicules: int, debut: int, fin: in
         # amplitude est comparée aux autres (sinon un employé pris jusqu'à 13:20 paraît fini à 10:30).
         fin_min = max(debuts[v], occ[-1][1] if occ else debuts[v])
         temps.CumulVar(routing.Start(v)).SetRange(debuts[v], debuts[v])
-        temps.CumulVar(routing.End(v)).SetRange(fin_min, max(fins[v], fin_min) + 1)
+        fin_v = max(fins[v], fin_min)
+        temps.CumulVar(routing.End(v)).SetRange(fin_min, fin_v + deps[v] + 1)
+        if deps[v]:
+            # Au-delà de la fin de journée : permis jusqu'à deps[v] minutes, mais chaque minute est pénalisée.
+            temps.SetCumulVarSoftUpperBound(routing.End(v), fin_v + 1, COUT_DEPASSEMENT)
         routing.AddVariableMinimizedByFinalizer(temps.CumulVar(routing.End(v)))
         if occ:
             solver = routing.solver()
@@ -626,7 +643,7 @@ def resoudre(minutes: list, arrets: list, nb_vehicules: int, debut: int, fin: in
                 [solver.FixedDurationIntervalVar(d, d, f - d, False, "occupe_%d_%d" % (v, k)) for k, (d, f) in enumerate(occ)], v, visites)
     for k, a in enumerate(arrets):
         idx = manager.NodeToIndex(nb_depots + k)
-        fen = a.get("fenetre") or (max(debut, premiere or debut), max(fins))     # pas de visite libre avant « première »
+        fen = a.get("fenetre") or (max(debut, premiere or debut), fin_max)       # pas de visite libre avant « première »
         temps.CumulVar(idx).SetRange(cint(fen[0]), cint(fen[1]))
         if pause and not a.get("fixe_pause"):
             # Pas d'intervention à cheval sur la pause : elle finit avant, ou commence après.
@@ -775,6 +792,14 @@ def _route_actuelle(arrets_emp: list, mn: list, km: list, depot: int = 0) -> tup
 
 
 @frappe.whitelist()
+def reglages_calcul():
+    """Les valeurs du réglage que la fenêtre d'optimisation propose par défaut (fenêtre ±, dépassement permis)."""
+    _superviseur()
+    cfg = config()
+    return {"fenetre": cfg["fenetre"], "depassement": cfg["depassement"]}
+
+
+@frappe.whitelist()
 def employes_du_jour(date):
     """Les employés qui ont des tâches ce jour-là (hors exclus du réglage), pour choisir qui entre dans
     l'optimisation et d'où chacun part : Magasin, ou son domicile s'il est réglé."""
@@ -877,9 +902,10 @@ def definir_horaires(employe, debut, fin):
 
 
 @frappe.whitelist()
-def proposer(date, fenetre=None, employes=None):
+def proposer(date, fenetre=None, employes=None, depassement=None):
     """La proposition pour la journée : par employé, tournée actuelle et tournée optimisée (ordre, heures,
-    km, minutes de route), tâches déplacées, approximations et tâches impossibles à placer. RIEN N'EST ÉCRIT."""
+    km, minutes de route), tâches déplacées, approximations et tâches impossibles à placer. RIEN N'EST ÉCRIT.
+    `depassement` : minutes permises après la fin de journée pour ce calcul (vide = réglage)."""
     _superviseur()
     jour = getdate(date)
     cfg = config()
@@ -951,7 +977,8 @@ def proposer(date, fenetre=None, employes=None):
     # Journée de CHAQUE employé : réglage global, puis ses horaires du réglage, puis ceux saisis dans la fenêtre.
     # Elle ne coupe jamais son travail déjà planifié (une tâche fixe plus tôt l'avance, une tâche qui finit
     # après l'étend, retour compris) — sinon le moteur laisserait des tâches de côté au lieu de les placer.
-    debuts, fins = [], []
+    debuts, fins, deps = [], [], []
+    dep_calcul = cint(cfg.get("depassement")) if depassement in (None, "") else max(0, cint(depassement))
     for e in employes:
         d0, f0 = cfg["horaires"].get(e, (cfg["debut"], cfg["fin"]))
         hc = horaires_choisis.get(e, (None, None))
@@ -967,6 +994,7 @@ def proposer(date, fenetre=None, employes=None):
                 d0 = min(d0, a["debut"])
         debuts.append(d0)
         fins.append(f0)
+        deps.append(0 if fin_voulue else dep_calcul)       # une fin saisie dans la fenêtre reste stricte
     debut_j, fin_j = min(debuts), max(fins)
     fenetre = cint(cfg["fenetre"]) if fenetre is None else cint(fenetre)
 
@@ -980,7 +1008,8 @@ def proposer(date, fenetre=None, employes=None):
             a["fenetre"] = (a["debut"], a["debut"])
             return {"service": a["service"], "fenetre": a["fenetre"], "vehicule": vehicule, "fixe_pause": True}
         # Déplaçable : libre dans la journée, ou dans ± fenêtre autour de son heure actuelle (défaut).
-        fen = None if not fenetre else (max(cfg["premiere"], a["debut"] - fenetre), min(fin_j, max(a["debut"] + fenetre, cfg["premiere"])))
+        fen = None if not fenetre else (max(cfg["premiere"], a["debut"] - fenetre),
+                                        min(fin_j + max(deps), max(a["debut"] + fenetre, cfg["premiere"])))
         a["fenetre"] = fen
         return {"service": a["service"], "fenetre": fen, "vehicule": vehicule}
 
@@ -1003,7 +1032,7 @@ def proposer(date, fenetre=None, employes=None):
         noeuds = [_noeud(a) for a in arrets]
         sol = resoudre(mn_x, noeuds, len(employes), debut_j, fin_j, cfg["equilibre"], premiere=cfg["premiere"], depots=depots,
                        marge=cfg["marge"], pause=cfg["pause"], debuts=debuts, fins=fins,
-                       rangement=cfg["rangement"])
+                       rangement=cfg["rangement"], depassements=deps)
         if sol["non_places"]:
             # Ce qui n'a pas trouvé place reste où c'est (employé, heure) et la tournée se recalcule autour,
             # pour que la proposition soit complète et comparable à l'existant.
@@ -1016,7 +1045,7 @@ def proposer(date, fenetre=None, employes=None):
             noeuds = [_noeud(a) for a in arrets]
             sol = resoudre(mn_x, noeuds, len(employes), debut_j, fin_j, cfg["equilibre"], premiere=cfg["premiere"], depots=depots,
                            marge=cfg["marge"], pause=cfg["pause"], debuts=debuts, fins=fins,
-                       rangement=cfg["rangement"])
+                       rangement=cfg["rangement"], depassements=deps)
         bloques = set()
         for _tour in range(6):
             if not sol["non_places"]:
@@ -1042,7 +1071,7 @@ def proposer(date, fenetre=None, employes=None):
             noeuds = [_noeud(a) for a in restants]
             sol2 = resoudre(mn2, noeuds, len(employes), debut_j, fin_j, cfg["equilibre"], premiere=cfg["premiere"], depots=depots,
                             marge=cfg["marge"], pause=cfg["pause"], occupations=occupations, debuts=debuts, fins=fins,
-                            rangement=cfg["rangement"])
+                            rangement=cfg["rangement"], depassements=deps)
             inverse = {nb_depots + i: a["noeud"] for i, a in enumerate(restants)}    # retour aux nœuds d'origine
             sol = {"routes": [[(inverse[n], t) for n, t in r] for r in sol2["routes"]],
                    "non_places": sorted({inverse[n] for n in sol2["non_places"]} - bloques), "cout": sol2["cout"]}
@@ -1093,7 +1122,7 @@ def proposer(date, fenetre=None, employes=None):
                           "noeud": n, "mobile": a["mobile"], "service": a["service"], "debut_min": deb, "original_min": a["debut"],
                           "fenetre": a.get("fenetre") if a["mobile"] else None})
         out.append({"employe": e, "nom": noms.get(e, e), "depart": "domicile" if dep else "Magasin", "depart_point": points[dep],
-                    "depot_noeud": dep, "journee_min": [debuts[v], fins[v]],
+                    "depot_noeud": dep, "journee_min": [debuts[v], fins[v]], "depassement_autorise": deps[v],
                     "journee": [_hm(debuts[v]), _hm(fins[v])],
                     "avant": {"minutes": m_av, "km": k_av, "interventions": sum(a["service"] for a in actuels),
                               "fin": _hm(max((a["debut"] + a["service"] for a in actuels), default=debuts[v])), "arrets": [{"tache": a["tache"], "client": a["client"], "type": a["type"],
@@ -1108,7 +1137,13 @@ def proposer(date, fenetre=None, employes=None):
     # départ), avec stationnement et rangement : départ du Magasin, chaque tâche, retour (05/10/2026).
     from customization_app.tournee_google import recaler_proposition
     recalage = recaler_proposition(out, jour, cfg, mn_brut, mn, km)
+    for e in out:
+        h = e.get("horaires") or {}
+        # Retour après la fin de journée : de combien, et est-ce dans le dépassement permis (affiché en orange, pas en rouge) ?
+        h["depassement_min"] = max(0, _minutes(h["retour"], 0) - e["journee_min"][1]) if h.get("retour") else 0
+        h["depassement_autorise"] = e["depassement_autorise"]
     return {"date": str(jour), "employes": out, "depot": cfg["depot"], "source": source, "recalage": recalage,
+            "depassement": dep_calcul,
             "rangement": cfg["rangement"], "coef": cfg["coef"],
             "total": {"avant_min": tot_av, "apres_min": tot_ap, "avant_km": round(km_av, 1), "apres_km": round(km_ap, 1)},
             "deplacees": sum(1 for e in out for a in e["apres"]["arrets"] if a["deplace"]),

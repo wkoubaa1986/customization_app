@@ -24,6 +24,7 @@
   "marge_minutes",
   "rangement_minutes",
   "fenetre_minutes",
+  "depassement_minutes",
   "sec_regles",
   "types_mobiles",
   "col_regles",
@@ -155,6 +156,14 @@
    "label": "Garder les heures proches de l’actuel (± min)",
    "default": "60",
    "description": "Une tâche déplaçable reste dans cette fenêtre autour de son heure actuelle (0 = libre dans la journée). Modifiable à chaque calcul."
+  },
+  {
+   "fieldname": "depassement_minutes",
+   "fieldtype": "Int",
+   "label": "Dépassement autorisé de la fin de journée (min)",
+   "default": "60",
+   "non_negative": 1,
+   "description": "Quand toutes les tâches ne tiennent pas dans la journée, l’optimiseur peut finir jusqu’à ce nombre de minutes plus tard plutôt que de laisser des tâches « gardées telles quelles ». Chaque minute en plus est pénalisée : il ne s’en sert que si c’est nécessaire. 0 = fin de journée stricte. Une fin saisie dans la fenêtre d’optimisation reste stricte. Modifiable à chaque calcul."
   },
   {
    "fieldname": "sec_regles",
@@ -296,7 +305,7 @@
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-10-05 17:00:00.000000",
+ "modified": "2026-10-12 15:30:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Config Optimisation Tournees",

@@ -138,18 +138,22 @@
   function rendre(p) {
     if (!p.employes.length) return `<div class="text-muted" style="padding:16px">${esc(p.message || "Rien à optimiser.")}</div>`;
     const t = p.total, gain = t.avant_min - t.apres_min;
-    // 📌 rien ne bouge (deux cases, type ou statut non déplaçable, laissée de côté) ; 🕘 heure fixe seule ; 👤 employé fixe seul.
-    const epingles = (a) => (a.fixe ? " 📌" : a.heure_fixe ? ' <span title="Heure fixe : un autre employé peut la faire">🕘</span>'
+    const depassePermis = (e) => e.horaires && e.horaires.depassement_autorise && e.horaires.depassement_min <= e.horaires.depassement_autorise;
+    // 📌 rien ne bouge (deux cases, type ou statut non déplaçable) ; ⏸ pas de place dans la tournée, gardée telle quelle ;
+    // 🕘 heure fixe seule ; 👤 employé fixe seul.
+    const epingles = (a) => (a.non_place ? ' <span title="Pas de place dans la tournée optimisée : gardée telle quelle (même employé, même heure)">⏸</span>'
+      : a.fixe ? " 📌" : a.heure_fixe ? ' <span title="Heure fixe : un autre employé peut la faire">🕘</span>'
       : a.employe_fixe ? ' <span title="Employé fixe : l’heure peut bouger">👤</span>' : "");
     const ligneAvant = (a) => `<div style="font-size:12.5px;padding:2px 0;${a.fixe ? "color:#64748b" : ""}">${esc(a.debut)}–${esc(a.fin)} · ${lienTache(a.tache, esc(a.client))} <span class="text-muted">${esc(a.type)}</span>${epingles(a)}</div>`;
     // Le trajet qui MÈNE à l'arrêt (🚗 Google, ≈ OSRM corrigé), puis ce qui cloche : retard sur une heure fixe, attente.
     const trajetAvant = (a) => a.trajet == null ? "" : `<span class="text-muted" style="font-size:11px">${a.trajet_source === "sur place" ? "📍 sur place" : `${a.trajet_source === "google" ? "🚗" : "≈"} ${duree(a.trajet)}${a.trajet_km ? ` · ${a.trajet_km} km` : ""}`} → </span>`;
-    const marques = (a) => (a.retard ? `<span style="color:#b91c1c;font-size:11px;font-weight:600"> ⚠️ arrivée ${a.retard} min après l’heure fixe</span>` : "")
+    const heureTenue = (a) => (a.non_place ? `l’heure gardée (${esc(a.ancien_debut || a.debut)})` : a.heure_fixe ? "l’heure fixe" : "l’heure du rendez-vous");
+    const marques = (a) => (a.retard ? `<span style="color:#b91c1c;font-size:11px;font-weight:600"> ⚠️ arrivée ${a.retard} min après ${heureTenue(a)}</span>` : "")
       + (a.hors_fenetre ? `<span style="color:#b91c1c;font-size:11px;font-weight:600"> ⚠️ hors de sa fenêtre</span>` : "")
       + (a.attente >= 15 ? `<span class="text-muted" style="font-size:11px"> ⏳ ${duree(a.attente)} d’attente avant</span>` : "");
     const ligneApres = (a, lettre = "") => `<div style="font-size:12.5px;padding:2px 0;${a.deplace ? "background:#fef3c7;border-radius:4px" : a.decale ? "background:#eff6ff;border-radius:4px" : ""}${a.fixe ? ";color:#64748b" : ""}">
         ${lettre}${trajetAvant(a)}${esc(a.debut)}–${esc(a.fin)} · ${lienTache(a.tache, `<b>${esc(a.client)}</b>`)} <span class="text-muted">${esc(a.type)}</span>${epingles(a)}${marques(a)}
-        ${a.deplace ? `<span style="color:#b45309;font-size:11px"> ↔ venait de ${esc(a.de_nom)}</span>` : ""}${a.decale ? `<span style="color:#1d4ed8;font-size:11px"> ⏱ était à ${esc(a.ancien_debut)} (${decalage(a.ecart_min)})</span>` : ""}${a.non_place ? `<span style="color:#b91c1c;font-size:11px"> ⚠️ hors tournée (chevauchement ou hors journée), inchangée</span>` : ""}
+        ${a.deplace ? `<span style="color:#b45309;font-size:11px"> ↔ venait de ${esc(a.de_nom)}</span>` : ""}${a.decale ? `<span style="color:#1d4ed8;font-size:11px"> ⏱ était à ${esc(a.ancien_debut)} (${decalage(a.ecart_min)})</span>` : ""}${a.non_place ? `<span style="color:#b91c1c;font-size:11px"> ⏸ pas de place dans la tournée : gardée telle quelle (même employé, même heure)</span>` : ""}
         ${a.position === "secteur" ? `<span style="color:#b91c1c;font-size:11px"> ≈ secteur</span>` : ""}</div>`;
     const cartes = p.employes.map((e, i) => { const it = itineraires(e.depart_point || p.depot, e.apres.arrets), coul = COULEURS[i % COULEURS.length]; return `<div style="border:1px solid #e2e8f0;border-radius:10px;padding:10px 12px;margin-bottom:10px">
         <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px">
@@ -158,8 +162,10 @@
             ${it.liens.map((l, n) => ` · <a href="${l.url}" target="_blank" rel="noopener" title="Dans Google Maps, les clients apparaissent dans l’ordre des numéros de la page">🗺️ itinéraire${it.liens.length > 1 ? ` ${n + 1}/${it.liens.length} (clients ${l.de} à ${l.a})` : ""}</a>`).join("")}</span>
           ${e.avant.fin ? `<span class="text-muted" style="font-size:11.5px;flex-basis:100%">⏱ interventions ${e.avant.interventions} min · fin ${esc(e.avant.fin)} → <b>interventions ${e.apres.interventions} min · fin ${esc(e.apres.fin)}</b> <span style="font-size:11px">(l’équilibrage rapproche les fins de journée)</span></span>` : ""}
         </div>
-        ${e.horaires && e.horaires.depart ? `<div style="font-size:12.5px;margin-top:6px;padding:6px 10px;border-radius:8px;background:${e.horaires.depasse || e.horaires.retards ? "#fef2f2" : "#f0fdf4"}">
-          🕘 <b>Départ ${esc(e.depart)} ${esc(e.horaires.depart)}</b> → <b>retour ${esc(e.horaires.retour)}</b>${e.horaires.depasse ? ` <b style="color:#b91c1c">(après la fin de journée ${esc(e.horaires.fin_journee)})</b>` : ""}
+        ${e.horaires && e.horaires.depart ? `<div style="font-size:12.5px;margin-top:6px;padding:6px 10px;border-radius:8px;background:${(e.horaires.depasse && !depassePermis(e)) || e.horaires.retards ? "#fef2f2" : e.horaires.depasse ? "#fff7ed" : "#f0fdf4"}">
+          🕘 <b>Départ ${esc(e.depart)} ${esc(e.horaires.depart)}</b> → <b>retour ${esc(e.horaires.retour)}</b>${!e.horaires.depasse ? ""
+            : depassePermis(e) ? ` <b style="color:#c2410c">(⏱ ${duree(e.horaires.depassement_min)} après la fin de journée ${esc(e.horaires.fin_journee)} — dépassement permis jusqu’à ${duree(e.horaires.depassement_autorise)})</b>`
+            : ` <b style="color:#b91c1c">(après la fin de journée ${esc(e.horaires.fin_journee)}${e.horaires.depassement_autorise ? `, au-delà du dépassement permis de ${duree(e.horaires.depassement_autorise)}` : ""})</b>`}
           · trajets ${duree(e.horaires.trajets)} · ${e.horaires.km} km${e.horaires.retour_trajet != null ? ` <span class="text-muted">(dont retour ${duree(e.horaires.retour_trajet)})</span>` : ""}
           ${e.horaires.retards ? ` · <b style="color:#b91c1c">⚠️ ${e.horaires.retards} arrivée(s) en retard ou hors fenêtre</b>` : ""}</div>` : ""}
         <div class="row" style="margin-top:6px">
@@ -169,15 +175,15 @@
     return `<div style="font-size:13px;margin-bottom:8px">
         <b>${t.avant_km} km · ${t.avant_min} min</b> de route aujourd’hui → <b>${t.apres_km} km · ${t.apres_min} min</b>
         <span style="color:${gain > 0 ? "#15803d" : "#b45309"};font-weight:700"> (${gain > 0 ? "−" : "+"}${Math.abs(gain)} min)</span>
-        · ${p.deplacees} tâche(s) changent d’employé · ${p.decalees} changent d’heure · départ ${esc(p.journee[0])}, visites dès ${esc(p.premiere)}, retour ${esc(p.journee[1])}${p.pause ? `, pause ${esc(p.pause[0])}–${esc(p.pause[1])}` : ""} · stationnement ${p.marge} min + rangement ${p.rangement} min par arrêt${(p.pointes || []).length ? ` · pointes ${p.pointes.map(esc).join(", ")}` : ""} · ${p.fenetre ? `heures gardées à ± ${p.fenetre} min` : "heures libres"} (<a href="/app/config-optimisation-tournees">réglages</a>)
+        · ${p.deplacees} tâche(s) changent d’employé · ${p.decalees} changent d’heure · départ ${esc(p.journee[0])}, visites dès ${esc(p.premiere)}, retour ${esc(p.journee[1])}${p.pause ? `, pause ${esc(p.pause[0])}–${esc(p.pause[1])}` : ""} · stationnement ${p.marge} min + rangement ${p.rangement} min par arrêt${(p.pointes || []).length ? ` · pointes ${p.pointes.map(esc).join(", ")}` : ""} · ${p.fenetre ? `heures gardées à ± ${p.fenetre} min` : "heures libres"} · ${p.depassement ? `dépassement de la fin de journée permis jusqu’à ${duree(p.depassement)}` : "fin de journée stricte"} (<a href="/app/config-optimisation-tournees">réglages</a>)
         · distances : ${esc(p.source)}</div>
       <div style="margin-bottom:8px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         ${blocRecalage(p)}
         <button type="button" class="btn btn-xs btn-default" id="opt-carte-btn" title="Les tournées proposées sur une carte : une couleur par employé, chaque étape avec sa lettre Google et le nom du client">🗺️ Carte de la journée</button></div>
       <div id="opt-carte" style="display:none;height:460px;border-radius:10px;margin:0 0 10px;border:1px solid #e2e8f0"></div>
-      ${p.non_places.length ? `<div style="color:#b91c1c;font-size:12.5px;margin-bottom:6px">⚠️ ${p.non_places.length} tâche(s) ne tiennent pas dans la tournée : elles restent à leur heure et leur employé, marquées dans la liste, et leur créneau est réservé (rien d’autre dessus).${p.fenetre ? ` Souvent dû à la fenêtre ± ${p.fenetre} min : élargissez-la ou décochez « Garder les heures proches » pour recalculer.` : " Deux rendez-vous à la même heure chez le même employé, ou journée trop chargée."}</div>` : ""}
+      ${p.non_places.length ? `<div style="color:#b91c1c;font-size:12.5px;margin-bottom:6px">⏸ ${p.non_places.length} tâche(s) n’ont pas de place dans la tournée : elles restent à leur heure et chez leur employé (marquées ⏸), et leur créneau est réservé (rien d’autre dessus). Causes possibles : journée trop chargée pour les employés cochés, deux rendez-vous à la même heure${p.fenetre ? `, fenêtre ± ${p.fenetre} min trop étroite` : ""}. Essayez : cocher un employé de plus, augmenter le dépassement permis${p.fenetre ? ", élargir la fenêtre" : ""}.</div>` : ""}
       ${p.avertissements.length ? `<div style="color:#b45309;font-size:12px;margin-bottom:6px">${p.avertissements.map(esc).join("<br>")}</div>` : ""}
-      <div class="text-muted" style="font-size:11.5px;margin-bottom:8px">📌 fixe (heure et employé fixes, type non déplaçable, réparation au local, terminée) · 🕘 heure fixe · 👤 employé fixe · 🟨 change d’employé · 🟦 change d’heure · ≈ position approchée</div>
+      <div class="text-muted" style="font-size:11.5px;margin-bottom:8px">📌 fixe (heure et employé fixes, type non déplaçable, réparation au local, terminée) · ⏸ pas de place, gardée telle quelle · 🕘 heure fixe · 👤 employé fixe · 🟨 change d’employé · 🟦 change d’heure · ≈ position approchée</div>
       ${blocNotifications(p)}
       ${cartes}`;
   }
@@ -224,6 +230,8 @@
         { fieldtype: "Check", fieldname: "proche", label: "Garder les heures proches de l’actuel", default: 1,
           description: "Chaque tâche déplaçable reste à ± la fenêtre ci-dessous autour de son heure actuelle" },
         { fieldtype: "Int", fieldname: "fenetre", label: "Fenêtre (± minutes)", default: 60 },
+        { fieldtype: "Int", fieldname: "depassement", label: "Dépassement autorisé de la fin de journée (min)", default: 60,
+          description: "Si tout ne tient pas, la journée peut finir jusqu’à autant plus tard (seulement si nécessaire). 0 = fin stricte ; une fin saisie pour un employé reste stricte." },
         { fieldtype: "Column Break" },
         { fieldtype: "HTML", fieldname: "aide", options: `<div style="margin-top:26px;display:flex;gap:12px;align-items:flex-start">
           <div class="text-muted" style="font-size:12px;flex:1">Seuls les employés qui ont des tâches ce jour-là sont utilisés. Sur la tâche, « Heure fixe » garde l’heure (l’employé peut changer), « Employé fixe » garde l’employé (l’heure peut bouger) ; les deux cochées, elle ne bouge pas. Rien n’est écrit avant « Appliquer ».</div>
@@ -247,7 +255,8 @@
         if (!choix.length) { frappe.msgprint("Cochez au moins un employé."); return; }
         d.fields_dict.resultat.$wrapper.html(`<div class="text-muted" style="padding:16px">Calcul des distances et des tournées…</div>`);
         d.set_secondary_action_label("");
-        proposition = (await frappe.call({ method: API + "proposer", args: { date: v.date, fenetre: v.proche ? (v.fenetre || 60) : 0, employes: choix }, freeze: true, freeze_message: "Optimisation, puis heures calculées avec Google…" })).message;
+        proposition = (await frappe.call({ method: API + "proposer", args: { date: v.date, fenetre: v.proche ? (v.fenetre || 60) : 0, employes: choix,
+          depassement: v.depassement == null ? null : v.depassement }, freeze: true, freeze_message: "Optimisation, puis heures calculées avec Google…" })).message;
         if ((proposition.sans_domicile || []).length) frappe.show_alert({ message: `Pas de domicile réglé pour ${esc(proposition.sans_domicile.join(", "))} : départ du Magasin. (Réglages → Points de départ particuliers)`, indicator: "orange" }, 8);
         d.fields_dict.resultat.$wrapper.html(rendre(proposition));
         d.fields_dict.resultat.$wrapper.find("#opt-carte-btn").on("click", (ev) => {
@@ -351,6 +360,12 @@
     });
     d.show();
     d.set_value("proche", 1);        // le `default` d'une case à cocher n'est pas appliqué par le dialogue
+    // Les valeurs du réglage, pas des constantes : la fenêtre restait à ± 60 quand le réglage disait ± 120 (12/10/2026).
+    frappe.call({ method: API + "reglages_calcul" }).then((r) => {
+      if (!r.message) return;
+      d.set_value("fenetre", r.message.fenetre || 60);
+      d.set_value("depassement", r.message.depassement);
+    });
     chargerEmployes();
   }
 

@@ -212,6 +212,21 @@ class TestSolveur(unittest.TestCase):
                          1, 8 * 60, 13 * 60, limite_s=1)
         self.assertEqual(len(sol["non_places"]), 1)
 
+    def test_depassement_permis_seulement_si_necessaire(self):
+        """12/10/2026 : plutôt que de laisser une tâche de côté, la journée peut finir plus tard — dans la limite permise."""
+        pts = [(36.87, 10.19), (36.87, 10.30), (36.875, 10.31)]
+        mn, km, _s = T.matrice_haversine(pts)
+        deux = [{"service": 200, "fenetre": None, "vehicule": None}, {"service": 200, "fenetre": None, "vehicule": None}]
+        fin_reelle = lambda sol: max(t + 200 + mn[n][0] for n, t in sol["routes"][0])      # dernière tâche + retour
+        # 3 h permises : les deux tiennent, la journée finit après 13:00 mais avant 16:00
+        sol = T.resoudre(mn, deux, 1, 8 * 60, 13 * 60, limite_s=1, depassements=[180])
+        self.assertEqual(sol["non_places"], [])
+        self.assertTrue(13 * 60 < fin_reelle(sol) <= 16 * 60)
+        # 1 h permise ne suffit pas : toujours une de côté
+        self.assertEqual(len(T.resoudre(mn, deux, 1, 8 * 60, 13 * 60, limite_s=1, depassements=[60])["non_places"]), 1)
+        # une seule tâche : rien à rattraper, la fin de journée est tenue
+        self.assertLessEqual(fin_reelle(T.resoudre(mn, deux[:1], 1, 8 * 60, 13 * 60, limite_s=1, depassements=[180])), 13 * 60)
+
 
 class TestJournee(unittest.TestCase):
     """Une journée fabriquée : 2 employés, 5 tâches dont une épinglée et une « Autre » au Magasin."""
