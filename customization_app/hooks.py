@@ -245,6 +245,10 @@ doc_events = {
             # Atelier osmoseurs : la clôture de la dernière tâche liée valide le dossier.
             "customization_app.reparation_osmoseur.on_tache_change",
         ],
+        # Tâche supprimée : les simples renvois (ligne d'appel, message GPS, tournée,
+        # visite) sont vidés AVANT le contrôle des liens — sinon une liste d'appels
+        # validée rend la tâche insupprimable. Voir suppression_tache.
+        "on_trash": "customization_app.suppression_tache.on_trash_tache",
         "after_delete": [
             "customization_app.commande_alertes.on_tache_change",
             "customization_app.reparation_osmoseur.on_tache_change",
