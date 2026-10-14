@@ -754,6 +754,10 @@ after_migrate = [
     "customization_app.patches.ensure_onglet_relances.execute",
     # Onglet « Appels » (poste de Salma) : réservé au rôle « Appels » (attribué par patch attribuer_onglet_appels).
     "customization_app.patches.ensure_onglet_appels.execute",
+    # « Tableau des appels » (appels et rendez-vous par utilisateur et par jour) dans l'onglet Appels.
+    "customization_app.patches.ensure_raccourci_tableau_appels.execute",
+    # Bloc « Mes appels par priorité » tout en haut de l'onglet Appels (HTML/CSS/JS dans blocs_html/).
+    "customization_app.patches.ensure_bloc_priorites_appels.execute",
 ]
 
 # after_migrate = ["customization_app.patches.override_get_item_details.execute"]
