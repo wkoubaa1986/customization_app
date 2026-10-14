@@ -8,8 +8,8 @@ Deux formes : un conteneur (`no`), ou tous (une page de récapitulatif puis un c
 Lit le plan ENREGISTRÉ (`plan_enregistre`) : jamais de recalcul, le PDF montre ce qui a été validé.
 
 Pour qu'il s'y retrouve, chaque ligne parle SA langue : sa photo (tirée de son propre fichier, la nôtre à
-défaut), sa ligne (« Your line 11 »), sa description (en puces si l'IA l'a remise en forme), et une ligne
-scindée dit où est le reste (« 100 of 150 — rest in C1 (50) »).
+défaut), sa ligne (« Your line 11 »), sa description en puces (remise en forme par l'IA), et une ligne scindée dit où
+est le reste (« 100 of 150 — rest in C1 (50) »). Pas d'« additionnels » : sa description, acceptée, suffit (14/10).
 """
 
 import base64
@@ -26,11 +26,9 @@ from customization_app.lci_observation import prix_retenu, qty_retenue
 from customization_app.liste_commande_import import (
     DOCTYPE,
     RTL_LANGS,
-    _add_label,
     _esc,
     _guard,
     _img_data_uri,
-    _row_adds,
     _strip_html,
     _uom_out,
 )
@@ -126,19 +124,21 @@ def description_pour_lui(row):
 
 
 def description_html(texte):
-    """Sa description, compacte : la première puce en gras (le produit), les suivantes à la suite, séparées par
-    « · » — une puce par ligne faisait une page par article. Un texte sans puces reste tel quel. PURE."""
+    """Sa description en PUCES, une puce par ligne (demandes du 14/10/2026 : « just the fournisseur description …
+    in bullet point », « one line per bullet point ») : la première en titre (le produit), les autres en liste.
+    Un texte sans puces reste tel quel. PURE."""
     from customization_app.lci_comparaison import puces_de
 
     t = str(texte or "").strip()
     if not t:
         return ""
+    esc = frappe.utils.escape_html
     if "•" not in t:
-        return frappe.utils.escape_html(t).replace("\n", "<br>")
+        return esc(t).replace("\n", "<br>")
     puces = puces_de(t)
     tete, reste = puces[0], puces[1:]
-    return (f"<b>{frappe.utils.escape_html(tete)}</b>"
-            + ("<br>" + " · ".join(frappe.utils.escape_html(p) for p in reste) if reste else ""))
+    liste = ('<ul class="pu">' + "".join(f"<li>{esc(p)}</li>" for p in reste) + "</ul>") if reste else ""
+    return f'<div class="pu-t">{esc(tete)}</div>{liste}'
 
 
 def manques(doc):
@@ -260,7 +260,9 @@ CSS = """
   .ref { font-size: 9.5px; color: #0958d9; font-weight: bold; }
   .split { font-size: 9.5px; color: #391085; background: #f9f0ff; border-radius: 3px; padding: 1px 4px; display: inline-block;
            margin-top: 3px; }
-  .add { color: #b00020; background: #fdf0f0; border: 1px solid #e8b0b0; border-radius: 4px; padding: 2px 5px; margin-top: 3px; }
+  .pu-t { font-weight: bold; }
+  ul.pu { margin: 2px 0 0; padding-left: 12px; }
+  ul.pu li { margin: 0; }
   .tot td { font-weight: bold; background: #f9f0ff; font-size: 12px; }
   .saut { page-break-before: always; }
 """
@@ -302,18 +304,12 @@ def _bloc_conteneur(doc, c, L, LX, par_row, photos, devise, nb_conteneurs):
         sa_ligne = ref_ligne(r.reponse_source)
         scinde = texte_scinde(parts_de(r.repartition_conteneurs), c["no"], qty_retenue(r), L)
         desc = description_html(description_pour_lui(r))
-        adds = ""
-        for a in _row_adds(r):
-            tot = flt(a.get("qty_par_pack")) * flt(l["qty"])
-            adds += (f'<div class="add"><b>+ {L["additionnel"]}</b> : {_esc(_add_label(a))} — '
-                     f'{_n(a.get("qty_par_pack"))}/pack × {_n(l["qty"])} = <b>{_n(tot)} '
-                     f'{_esc(_uom_out(a.get("uom"), LX))}</b></div>')
         html += f"""
       <tr>
         <td>{i}</td>
         <td style="text-align:center">{f'<img src="{photo}" style="max-width:80px;max-height:80px">' if photo else ""}</td>
         <td>{f'<div class="ref">{L["ref"]} {sa_ligne}</div>' if sa_ligne else ""}{desc}
-          {f'<div class="split">{_esc(scinde)}</div>' if scinde else ""}{adds}</td>
+          {f'<div class="split">{_esc(scinde)}</div>' if scinde else ""}</td>
         <td class="n"><b>{_n(l["qty"])}</b> {_esc(_uom_out(r.uom, LX))}</td>
         <td class="n">{flt(l["volume"]):.3f}</td>
         <td class="n">{prix_retenu(r):,.2f}</td>
@@ -388,6 +384,12 @@ def construire_html(doc, no=None):
             f'<body>{corps}</body></html>')
 
 
+# À l'italienne : la colonne description est assez large pour qu'une puce tienne sur UNE ligne (en portrait, elle
+# faisait 300 px et chaque puce passait sur deux ou trois lignes).
+OPTIONS_PDF = {"orientation": "Landscape", "margin-top": "8mm", "margin-bottom": "8mm",
+               "margin-left": "8mm", "margin-right": "8mm"}
+
+
 @frappe.whitelist()
 def download(docname, no=None):
     """PDF d'un conteneur (`no`) ou de tous."""
@@ -396,8 +398,7 @@ def download(docname, no=None):
     _guard()
     doc = frappe.get_doc(DOCTYPE, docname)
     no = int(no) if no not in (None, "", "0", 0) else None
-    pdf = get_pdf(construire_html(doc, no), {"margin-top": "10mm", "margin-bottom": "10mm",
-                                             "margin-left": "8mm", "margin-right": "8mm"})
+    pdf = get_pdf(construire_html(doc, no), OPTIONS_PDF)
     frappe.local.response.filename = f"{doc.name}-{'C%d' % no if no else 'containers'}.pdf"
     frappe.local.response.filecontent = pdf
     frappe.local.response.type = "download"
