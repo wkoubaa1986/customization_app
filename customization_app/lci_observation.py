@@ -100,8 +100,9 @@ def trace_ligne(row):
     elif prix_neg > 0 and prix_frn <= 0:
         out.append({"type": "prix_demande", "a": prix_neg})
 
-    # son prix face à notre cible initiale — l'argument de la négociation
-    if prix_frn > 0 and cible > 0 and prix_frn > cible + TOL_PRIX and not prix_neg:
+    # son prix face à notre cible initiale — l'argument de la négociation, qui tombe une fois la ligne
+    # acceptée (approbation finale du 14/10/2026 : on ne lui oppose plus notre cible)
+    if prix_frn > 0 and cible > 0 and prix_frn > cible + TOL_PRIX and not prix_neg and decision != "Accepté":
         out.append({"type": "au_dessus_cible", "cible": cible, "a": prix_frn,
                     "pct": (prix_frn - cible) / cible * 100})
 

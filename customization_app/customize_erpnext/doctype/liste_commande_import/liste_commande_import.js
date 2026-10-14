@@ -114,6 +114,8 @@ frappe.ui.form.on("Liste Commande Import", {
         () => lci_traduire_puis(frm, () => lci_export_annote(frm)), __(LCI_GRP_COTATION));
     }
 
+    frm.add_custom_button(__("📄 PDF conteneurs (pour le fournisseur)"), () => lci_pdf_conteneurs(frm), __(LCI_GRP_COTATION));
+
     frm.add_custom_button(__("🏭 Produits assemblables"), () => lci_estimation_dialog(frm));
     frm.add_custom_button(__("🚢 Répartir en conteneurs"), () => lci_conteneurs_dialog(frm));
 
@@ -123,10 +125,14 @@ frappe.ui.form.on("Liste Commande Import", {
       () => lci_prix_cibles(frm), __("💰 Prix"));
     frm.add_custom_button(__("⬆️ Qté retenue = max(fournisseur, retenue)"),
       () => lci_qty_retenue_max(frm), __("💰 Prix"));
+    frm.add_custom_button(__("✅ Approbation finale (prix et qtés du fournisseur)"),
+      () => lci_approbation(frm), __("💰 Prix"));
     frm.add_custom_button(__("💬 Rédiger les observations"),
       () => lci_observations_ia(frm), __("IA"));
     frm.add_custom_button(__("📐 Estimer les volumes manquants"),
       () => lci_volumes_dialog(frm), __("IA"));
+    frm.add_custom_button(__("🏭 Description fournisseur : puces + comparaison"),
+      () => lci_comparaison_tout(frm), __("IA"));
 
     if (frm.doc.volume_total_m3) {
       frm.dashboard.add_indicator(
@@ -1012,6 +1018,7 @@ function lci_render_table(frm) {
       ${tr_txt ? `<div class="lci-tr" data-act="desc" title="${esc(tr_txt)}">🌐 ${esc(tr_txt.slice(0, 90))}${tr_txt.length > 90 ? "…" : ""}</div>` : ""}
       ${r.description_fournisseur ? `<div class="lci-frn-desc" data-frn-desc="${esc(r.name)}" title="${esc(__("Description du fournisseur") + " : " + r.description_fournisseur)}"
           style="font-size:11px;margin-top:2px;padding:1px 6px;border-radius:5px;background:#fff7e6;color:#874d00;cursor:pointer;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;max-width:460px;">🏭 ${esc(r.description_fournisseur.slice(0, 160))}</div>` : ""}
+      ${lci_cmp_pastille(r)}
       ${r.controle_description ? `<div title="${esc(__("Contrôle de la description (IA), à l'import de la réponse du fournisseur") + " : " + r.controle_description)}"
           style="font-size:10.5px;margin-top:2px;color:${r.controle_description.startsWith("✓") ? "#237804" : r.controle_description.startsWith("⚠") ? "#a8071a" : "#ad4e00"};${r.controle_description.startsWith("✓") ? "" : "font-weight:700;"}">${esc(r.controle_description.slice(0, 110))}</div>` : ""}
       ${lci_adds(r).map((a, ai) => `
@@ -1358,14 +1365,10 @@ function lci_render_table(frm) {
   $t.find('[data-act="image"]').on("click", (e) => { const r = row_of(e); r && lci_upload_image(frm, r); });
   $t.find('[data-act="desc"]').on("click", (e) => { const r = row_of(e); r && lci_desc_dialog(frm, r); });
   // Description du fournisseur (enregistrée à l'application de sa réponse) : en entier, en lecture seule.
+  // Notre description face à la sienne (puces + comparaison par l'IA), son texte d'origine en dessous.
   $t.find("[data-frn-desc]").on("click", (e) => {
     const r = row_of(e);
-    if (!r) return;
-    const esc = frappe.utils.escape_html;
-    frappe.msgprint({ title: __("Description du fournisseur — #{0} {1}", [r.idx, r.item_code || r.item_name || ""]), indicator: "orange",
-      message: `<div style="white-space:pre-wrap;font-size:13px">${esc(r.description_fournisseur || "")}</div>`
-        + (r.controle_description ? `<div style="margin-top:10px;font-size:12px"><b>${__("Contrôle")}</b> : ${esc(r.controle_description)}</div>` : "")
-        + `<div style="margin-top:10px;font-size:12px;color:#6b7280"><b>${__("Notre désignation")}</b> : ${esc(r.item_name || "")}</div>` });
+    if (r) lci_frn_dialog(frm, r);
   });
   $t.find('[data-act="ai"]').on("click", (e) => { const r = row_of(e); r && lci_ai(frm, "ai_improve_descriptions", r.name); });
   $t.find('[data-act="tr"]').on("click", (e) => { const r = row_of(e); r && lci_ai(frm, "ai_translate", r.name); });
@@ -3062,6 +3065,7 @@ async function lci_conteneurs_dialog(frm) {
           <span class="lci-ct-vol${plein ? " ko" : ""}">${format_number(flt(c.volume), null, 3)} /
             ${format_number(cc, null, 2)} m³ (${format_number(pct, null, 0)} %)</span>
           <span class="lci-ct-mnt">${format_currency(flt(c.montant), dev)}</span>
+          <button class="btn btn-xs btn-default lci-ct-pdf" data-ci="${ci}" title="${__("Enregistre le plan puis télécharge le PDF de ce conteneur pour le fournisseur")}">📄 PDF</button>
         </div>
         <div class="lci-ct-bar"><div class="lci-ct-fill${plein ? " ko" : ""}" style="width:${pct}%;"></div></div>
         <table class="lci-ct-tbl"><tbody>
@@ -3181,6 +3185,7 @@ async function lci_conteneurs_dialog(frm) {
           <span class="lci-ct-del" data-ci="${ci}" title="${__("Retirer ce conteneur")}">✕</span>
         </div>`).join("")}
         <button class="btn btn-xs btn-default" id="lci-ct-add">➕ ${__("Conteneur")}</button>
+        <button class="btn btn-xs btn-default" id="lci-ct-pdf-tous" title="${__("Enregistre le plan puis télécharge le PDF de tous les conteneurs (récapitulatif + un conteneur par page)")}">📄 ${__("PDF tous")}</button>
       </div>
       ${(plan.sans_volume || []).length ? `<div class="lci-ct-warn">
         ⚠️ ${__("{0} ligne(s) sans volume unitaire ne sont pas réparties — renseignez le volume "
@@ -3213,6 +3218,23 @@ async function lci_conteneurs_dialog(frm) {
         calculer);
     });
     $z.find("#lci-ct-add").on("click", () => { lci_ct_ajouter(); render(); });
+    // Le PDF lit le plan ENREGISTRÉ : on enregistre d'abord ce qui est à l'écran. Les conteneurs vides
+    // disparaissant à l'enregistrement, le numéro est celui du conteneur parmi les non vides.
+    $z.find("#lci-ct-pdf-tous").on("click", async () => {
+      await enregistrer(false);
+      lci_telecharger(lci_pdf_url(frm, null));
+    });
+    $z.find(".lci-ct-pdf").on("click", async function () {
+      const ci = cint($(this).data("ci"));
+      const pleins = etat.plan.conteneurs.filter((c) => (c.lignes || []).length);
+      const k = pleins.indexOf(etat.plan.conteneurs[ci]);
+      if (k < 0) {
+        frappe.msgprint(__("Ce conteneur est vide : rien à imprimer."));
+        return;
+      }
+      await enregistrer(false);
+      lci_telecharger(lci_pdf_url(frm, k + 1));
+    });
     $z.find(".lci-ct-gab").on("change", function () {
       const ci = cint($(this).data("ci"));
       etat.types[ci] = this.value;
@@ -3453,6 +3475,7 @@ function lci_render_conteneurs(frm) {
         <span class="lci-pl-vol${ko ? " ko" : ""}">${format_number(flt(c.volume), null, 3)} m³
           (${format_number(pct, null, 0)} %)</span>
         <span class="lci-pl-note">${format_currency(flt(c.montant), dev)}</span>
+        <button class="btn btn-xs btn-default lci-pl-pdf" data-no="${c.no}" title="${__("PDF de ce conteneur pour le fournisseur")}">📄 PDF</button>
       </div>
       <div class="lci-pl-bar"><div class="lci-pl-fill${ko ? " ko" : ""}" style="width:${pct}%;"></div></div>
       <table class="lci-pl-tbl"><tbody>
@@ -3479,6 +3502,7 @@ function lci_render_conteneurs(frm) {
           `C${c.no} ${esc(frappe.datetime.str_to_user(c.date))}`).join(" · ")}</span>` : ""}
       <button class="btn btn-xs btn-default lci-pl-open">🚢 ${__("Modifier la répartition")}</button>
       <button class="btn btn-xs btn-default lci-pl-xls">📄 ${__("Excel (onglet Conteneurs)")}</button>
+      <button class="btn btn-xs btn-default lci-pl-pdf" data-no="">📄 ${__("PDF tous les conteneurs")}</button>
     </div>
     ${hors_plan.length ? `<div class="lci-pl-hors">⚠️ ${
       __("{0} ligne(s) hors plan (volume unitaire manquant ou ajoutées depuis) : {1}",
@@ -3490,6 +3514,13 @@ function lci_render_conteneurs(frm) {
   </div>`);
 
   $w.find(".lci-pl-open").on("click", () => lci_conteneurs_dialog(frm));
+  $w.find(".lci-pl-pdf").on("click", function () {
+    if (frm.is_dirty()) {
+      frappe.msgprint(__("Enregistrez d'abord le document (Ctrl+S) : le PDF lit le plan enregistré."));
+      return;
+    }
+    lci_telecharger(lci_pdf_url(frm, cint($(this).data("no")) || null));
+  });
   $w.find(".lci-pl-xls").on("click", () => {
     window.open("/api/method/customization_app.liste_commande_import.download_excel"
       + `?docname=${encodeURIComponent(frm.doc.name)}`);
@@ -3640,5 +3671,322 @@ async function lci_volumes_dialog(frm, apres) {
     });
   }
   render();
+  d.show();
+}
+
+// ------------------------------------------- description du fournisseur : puces + comparaison (14/10/2026)
+// L'IA remet SON texte en puces (langue de la liste) et aligne nos puces sur les siennes :
+// ✓ identique · ≠ différent · − absent chez lui · + en plus chez lui. Backend : lci_comparaison.py.
+
+const LCI_CMP_STATUTS = {
+  identique: { icone: "✓", libelle: __("Identique"), fond: "#f6ffed", couleur: "#237804" },
+  different: { icone: "≠", libelle: __("Différent"), fond: "#fff7e6", couleur: "#ad4e00" },
+  manquant: { icone: "−", libelle: __("Absent chez lui"), fond: "#fff1f0", couleur: "#a8071a" },
+  en_plus: { icone: "+", libelle: __("En plus chez lui"), fond: "#e6f4ff", couleur: "#0958d9" },
+};
+
+function lci_cmp_json(r) {
+  try { return JSON.parse(r.comparaison_description || "null") || null; } catch (e) { return null; }
+}
+
+function lci_cmp_resume(cmp) {
+  const n = { identique: 0, different: 0, manquant: 0, en_plus: 0 };
+  (cmp || []).forEach((c) => { if (c.statut in n) n[c.statut] += 1; });
+  return n;
+}
+
+// La pastille sous la ligne : « ✓ 5 ≠ 1 − 1 + 3 », cliquable (ouvre la fenêtre de comparaison).
+function lci_cmp_pastille(r) {
+  const cmp = lci_cmp_json(r);
+  if (!cmp || !r.description_fournisseur) return "";
+  const n = lci_cmp_resume(cmp);
+  const morceaux = Object.keys(LCI_CMP_STATUTS).filter((k) => n[k]).map((k) => {
+    const s = LCI_CMP_STATUTS[k];
+    return `<span style="color:${s.couleur};margin-right:6px" title="${frappe.utils.escape_html(s.libelle)}"><b>${s.icone}</b> ${n[k]}</span>`;
+  });
+  return `<div data-frn-desc="${frappe.utils.escape_html(r.name)}" title="${__("Notre description vs la sienne — cliquer pour comparer")}"
+      style="font-size:11px;margin-top:2px;cursor:pointer;">🔍 ${morceaux.join("")}</div>`;
+}
+
+// Les prix des deux côtés, sous les en-têtes : notre cible (et contre-proposition) | son prix, sa quantité, son total ;
+// puis ce qui est retenu. Demande du 14/10/2026 : « show me his price and mine as well here ».
+function lci_cmp_prix(r, dev) {
+  const esc = frappe.utils.escape_html;
+  const m = (v) => format_currency(flt(v), dev);
+  const q = (v) => format_number(flt(v), null, 0);
+  const cible = flt(r.prix_cible), neg = flt(r.prix_cible_negocie), frn = flt(r.prix_fournisseur);
+  const q_frn = flt(r.qty_fournisseur) || flt(r.qty);
+  const total_frn = flt(r.total_fichier) || (frn ? q_frn * frn : 0);
+  const ecart = cible && frn ? (frn - cible) / cible * 100 : null;
+  const pct = (v) => `<b style="color:${v > 0.05 ? "#a8071a" : v < -0.05 ? "#237804" : "#6b7280"}">${v > 0 ? "+" : ""}${format_number(v, null, 1)} %</b>`;
+  const notre = `<div>${__("Prix cible")} : <b>${cible ? m(cible) : "—"}</b>${cible ? "" : ` <span style="color:#9ca3af">(${__("aucun")})</span>`}</div>`
+    + (neg ? `<div>${__("Contre-proposé")} : <b style="color:#0958d9">${m(neg)}</b></div>` : "")
+    + `<div>${__("Qté demandée")} : <b>${q(r.qty)}</b>${flt(r.qty_cible) && Math.abs(flt(r.qty_cible) - flt(r.qty)) > 0.001 ? ` · ${__("retenue")} <b>${q(r.qty_cible)}</b>` : ""}</div>`
+    + (cible ? `<div>${__("Total cible")} : ${m(cible * flt(r.qty))}</div>` : "");
+  const sien = `<div>${__("Son prix")} : <b>${frn ? m(frn) : "—"}</b>${ecart != null ? ` (${pct(ecart)} ${__("vs cible")})` : ""}${neg && frn ? ` · ${__("vs contre-proposition")} ${pct((frn - neg) / neg * 100)}` : ""}</div>`
+    + `<div>${__("Sa qté")} : <b>${flt(r.qty_fournisseur) ? q(r.qty_fournisseur) : q(r.qty)}</b>${flt(r.qty_fournisseur) && Math.abs(flt(r.qty_fournisseur) - flt(r.qty)) > 0.001 ? ` <span style="color:#ad4e00">(≠ ${q(r.qty)})</span>` : ""}`
+    + `${flt(r.moq) ? ` · MOQ ${q(r.moq)}` : ""}</div>`
+    + (total_frn ? `<div>${__("Son total")} : <b>${m(total_frn)}</b></div>` : "");
+  const q_ret = lci_qty_ret(r), p_ret = lci_prix_ret(r);
+  const retenu = r.decision === "Abandonné"
+    ? `<b style="color:#a8071a">${__("Abandonné")}</b>`
+    : `${__("Retenu")} : <b>${q(q_ret)} × ${m(p_ret)} = ${m(q_ret * p_ret)}</b>`
+      + (r.decision ? ` · ${esc(r.decision)}` : "")
+      + (p_ret && frn && Math.abs(p_ret - frn) > 0.00001 ? ` <span style="color:#0958d9">(${__("notre contre-proposition")})</span>` : "");
+  return `<tr style="background:#fafafa;font-size:12px;vertical-align:top">
+      <td></td><td style="padding:6px;border-bottom:1px solid #eee">${notre}</td>
+      <td style="padding:6px;border-bottom:1px solid #eee">${sien}</td></tr>
+    <tr style="background:#fafafa;font-size:12px"><td></td>
+      <td colspan="2" style="padding:4px 6px 8px;border-bottom:2px solid #e5e7eb">${retenu}</td></tr>`;
+}
+
+function lci_cmp_html(r, res, dev) {
+  const esc = frappe.utils.escape_html;
+  dev = dev || "USD";
+  const cmp = res ? res.comparaison : lci_cmp_json(r);
+  const puces = res ? res.puces : (r.description_fournisseur_puces || "").split("\n").map((l) => l.replace(/^\s*•\s*/, "").trim()).filter(Boolean);
+  const nom_notre = r.item_name_traduit || r.item_name || r.item_code || "";
+  let html = `<div style="font-size:12.5px">`;
+  if (cmp && cmp.length) {
+    const n = lci_cmp_resume(cmp);
+    html += `<div style="margin-bottom:8px">${Object.keys(LCI_CMP_STATUTS).map((k) => {
+      const s = LCI_CMP_STATUTS[k];
+      return `<span style="display:inline-block;margin-right:12px;color:${s.couleur}"><b>${s.icone} ${n[k]}</b> ${esc(s.libelle)}</span>`;
+    }).join("")}</div>
+      <table style="width:100%;border-collapse:collapse">
+        <thead><tr style="background:#fafafa">
+          <th style="width:26px"></th>
+          <th style="text-align:left;padding:6px;border-bottom:1px solid #eee">${__("Notre description")}<div style="font-weight:400;color:#6b7280;font-size:11px">${esc(nom_notre)}</div></th>
+          <th style="text-align:left;padding:6px;border-bottom:1px solid #eee">${__("Fournisseur")}<div style="font-weight:400;color:#6b7280;font-size:11px">${esc((r.reponse_source || "").slice(0, 60))}</div></th>
+        </tr>${lci_cmp_prix(r, dev)}</thead><tbody>
+        ${cmp.map((c) => {
+          const s = LCI_CMP_STATUTS[c.statut] || LCI_CMP_STATUTS.different;
+          return `<tr style="background:${s.fond}">
+            <td style="text-align:center;font-weight:700;color:${s.couleur};padding:5px" title="${esc(s.libelle)}">${s.icone}</td>
+            <td style="padding:5px 6px;border-bottom:1px solid #fff">${c.notre ? esc(c.notre) : `<span style="color:#9ca3af">—</span>`}</td>
+            <td style="padding:5px 6px;border-bottom:1px solid #fff">${c.fournisseur ? esc(c.fournisseur) : `<span style="color:#9ca3af">${__("non mentionné")}</span>`}
+              ${c.note ? `<div style="font-size:11px;color:${s.couleur}">${esc(c.note)}</div>` : ""}</td></tr>`;
+        }).join("")}
+        </tbody></table>`;
+  } else {
+    html += `<table style="width:100%;border-collapse:collapse;margin-bottom:8px">
+        <thead><tr style="background:#fafafa"><th style="width:26px"></th>
+          <th style="text-align:left;padding:6px">${__("Notre prix")}</th><th style="text-align:left;padding:6px">${__("Son prix")}</th></tr>
+        ${lci_cmp_prix(r, dev)}</thead></table>`;
+    html += `<div style="padding:10px;background:#fafafa;border-radius:6px;color:#6b7280">
+      ${__("Pas encore de comparaison : « 🤖 Puces + comparaison » la demande à l'IA pour cette ligne.")}</div>`;
+  }
+  if (puces && puces.length) {
+    html += `<div style="margin-top:12px"><b>${__("Sa description en puces")}</b>
+      <ul style="margin:4px 0 0 0;padding-left:18px">${puces.map((p) => `<li>${esc(p)}</li>`).join("")}</ul></div>`;
+  }
+  html += `<details style="margin-top:12px"${cmp && cmp.length ? "" : " open"}><summary style="cursor:pointer"><b>${__("Son texte d'origine")}</b></summary>
+      <div style="white-space:pre-wrap;margin-top:4px;color:#374151">${esc(r.description_fournisseur || "")}</div></details>`;
+  if (r.controle_description) {
+    html += `<div style="margin-top:10px;font-size:12px"><b>${__("Contrôle à l'import")}</b> : ${esc(r.controle_description)}</div>`;
+  }
+  return html + `</div>`;
+}
+
+function lci_frn_dialog(frm, r) {
+  const d = new frappe.ui.Dialog({
+    title: __("Notre description vs fournisseur — #{0} {1}", [r.idx, r.item_code || r.item_name || ""]),
+    size: "large",
+    fields: [{ fieldtype: "HTML", fieldname: "corps" }],
+    primary_action_label: lci_cmp_json(r) ? __("🤖 Refaire (IA)") : __("🤖 Puces + comparaison"),
+    primary_action: async () => {
+      if (frm.is_dirty()) {
+        frappe.msgprint(__("Enregistrez d'abord le document (Ctrl+S)."));
+        return;
+      }
+      try {
+        const rep = await frappe.call({
+          method: "customization_app.lci_comparaison.comparer_ligne",
+          args: { docname: frm.doc.name, row_name: r.name },
+          freeze: true, freeze_message: __("L'IA compare les deux descriptions…"),
+        });
+        d.fields_dict.corps.$wrapper.html(lci_cmp_html(r, rep.message, frm.doc.devise));
+        d.set_primary_action(__("🤖 Refaire (IA)"), d.primary_action);
+        frm.reload_doc();
+      } catch (e) {
+        console.error(e);
+      }
+    },
+  });
+  d.fields_dict.corps.$wrapper.html(lci_cmp_html(r, null, frm.doc.devise));
+  d.show();
+}
+
+async function lci_comparaison_tout(frm) {
+  if (frm.is_dirty()) {
+    frappe.msgprint(__("Enregistrez d'abord le document (Ctrl+S)."));
+    return;
+  }
+  const sel = lci_selection(frm);
+  const lignes = lci_rows(frm).filter((r) => (r.description_fournisseur || "").trim() && (!sel.size || sel.has(r.name)));
+  if (!lignes.length) {
+    frappe.msgprint(__("Aucune ligne n'a de description du fournisseur : importez d'abord sa réponse (💰 Prix)."));
+    return;
+  }
+  const deja = lignes.filter((r) => lci_cmp_json(r)).length;
+  frappe.confirm(
+    __("L'IA va mettre en puces la description du fournisseur et la comparer à la nôtre sur <b>{0}</b> ligne(s){1}. Compter environ 1 minute pour 30 lignes.",
+       [lignes.length, sel.size ? " " + __("cochée(s)") : ""])
+      + (deja ? "<br>" + __("{0} ligne(s) déjà comparée(s) seront refaites.", [deja]) : ""),
+    async () => {
+      frappe.dom.freeze(__("Lancement…"));
+      try {
+        const r = await frappe.call({
+          method: "customization_app.lci_comparaison.lancer",
+          args: { docname: frm.doc.name, row_names: sel.size ? JSON.stringify(lignes.map((l) => l.name)) : "" },
+        });
+        const fin = await lci_cmp_attendre(r.message && r.message.cle);
+        frappe.dom.unfreeze();
+        if (fin) {
+          const b = fin.bilan || {};
+          frappe.msgprint({ title: __("Descriptions comparées"), indicator: "green",
+            message: __("{0} ligne(s) sur {1} : ✓ {2} identiques · ≠ {3} différents · − {4} absents chez lui · + {5} en plus chez lui.",
+                        [fin.lignes, fin.demandees, b.identique || 0, b.different || 0, b.manquant || 0, b.en_plus || 0])
+              + "<br>" + __("Cliquez la ligne 🔍 d'un article pour voir le détail.") });
+          frm.reload_doc();
+        }
+      } catch (e) {
+        frappe.dom.unfreeze();
+      }
+    });
+}
+
+async function lci_cmp_attendre(cle, delai_max_ms = 30 * 60 * 1000) {
+  if (!cle) return null;
+  const debut = Date.now();
+  while (Date.now() - debut < delai_max_ms) {
+    await new Promise((ok) => setTimeout(ok, 2000));
+    const r = await frappe.call({ method: "customization_app.lci_comparaison.etat", args: { cle } });
+    const e = r.message || {};
+    if (e.etat === "termine") return e;
+    if (e.etat === "echec" || e.etat === "inconnu") {
+      frappe.dom.unfreeze();
+      frappe.msgprint({ title: __("Comparaison impossible"), indicator: "red",
+                        message: e.erreur || __("La tâche a été perdue (worker redémarré ?). Relancez-la.") });
+      return null;
+    }
+    $("#freeze .freeze-message p").text(e.etat === "en attente" ? __("En attente d'un worker…")
+      : __("L'IA compare les descriptions : lot {0} / {1}…", [e.fait || 0, e.total || "?"]));
+  }
+  frappe.dom.unfreeze();
+  frappe.msgprint(__("La comparaison n'a pas répondu à temps."));
+  return null;
+}
+
+// ------------------------------------------------- approbation finale (14/10/2026)
+// Partout où le fournisseur a donné un prix : SON prix et SA quantité, ligne « Accepté » ; sans prix de sa part,
+// la ligne reste telle quelle. Aperçu d'abord, rien n'est écrit avant « Approuver ». Backend : lci_approbation.py.
+
+async function lci_approbation(frm) {
+  if (frm.is_dirty()) {
+    frappe.msgprint(__("Enregistrez d'abord le document (Ctrl+S)."));
+    return;
+  }
+  const r = await frappe.call({ method: "customization_app.lci_approbation.approbation_finale",
+                                args: { docname: frm.doc.name, appliquer: 0 } });
+  const p = r.message;
+  if (!p) return;
+  const esc = frappe.utils.escape_html, dev = p.devise || "USD";
+  const m = (v) => format_currency(flt(v), dev);
+  const prix = p.lignes.filter((c) => "prix_de" in c), qtes = p.lignes.filter((c) => "qty_de" in c);
+  const decisions = p.lignes.filter((c) => "decision_de" in c).length;
+  const liste = (rows, f) => rows.length ? `<table style="width:100%;font-size:12px;margin-top:4px">${rows.map(f).join("")}</table>` : "";
+  const ecart = flt(p.montant_apres) - flt(p.montant_avant);
+  const html = `<div style="font-size:13px">
+    <p>${__("Sur chaque ligne où le fournisseur a donné un prix, on retient <b>son prix</b> et <b>sa quantité</b>, et la ligne passe « Accepté ». Les lignes sans prix de sa part ne bougent pas. La liste reste ouverte.")}</p>
+    <table style="width:100%;margin:8px 0;font-size:13px">
+      <tr><td>${__("Montant retenu")}</td><td style="text-align:right">${m(p.montant_avant)} → <b>${m(p.montant_apres)}</b>
+        <span style="color:${ecart > 0 ? "#a8071a" : "#237804"}">(${ecart >= 0 ? "+" : ""}${m(ecart)})</span></td></tr>
+      <tr><td>${__("Volume")}</td><td style="text-align:right">${format_number(p.volume_avant, null, 3)} → <b>${format_number(p.volume_apres, null, 3)} m³</b></td></tr>
+      <tr><td>${__("Lignes qui passent « Accepté »")}</td><td style="text-align:right"><b>${decisions}</b></td></tr>
+      <tr><td>${__("Déjà à son prix et sa quantité")}</td><td style="text-align:right">${p.deja_ok}</td></tr>
+    </table>
+    ${prix.length ? `<div style="margin-top:10px"><b>${__("Vos prix négociés remplacés par les siens")} (${prix.length})</b>
+      ${liste(prix, (c) => `<tr><td>#${c.idx} ${esc(c.code)}</td><td style="text-align:right">${m(c.prix_de)} → <b>${m(c.prix_a)}</b></td>
+        <td style="text-align:right;color:#a8071a">${m(c.montant_a - c.montant_de)}</td></tr>`)}</div>` : ""}
+    ${qtes.length ? `<div style="margin-top:10px"><b>${__("Quantités alignées sur les siennes")} (${qtes.length})</b>
+      ${liste(qtes, (c) => `<tr><td>#${c.idx} ${esc(c.code)}</td><td style="text-align:right">${format_number(c.qty_de, null, 0)} → <b>${format_number(c.qty_a, null, 0)}</b></td></tr>`)}</div>` : ""}
+    ${p.sans_prix.length ? `<div style="margin-top:10px"><b>${__("Sans prix du fournisseur — laissées telles quelles")} (${p.sans_prix.length})</b>
+      ${liste(p.sans_prix, (c) => `<tr><td>#${c.idx} ${esc(c.code)}</td><td style="text-align:right">${format_number(c.qty, null, 0)} × ${m(c.prix)}</td></tr>`)}</div>` : ""}
+    ${p.abandonnees ? `<div style="margin-top:8px;color:#6b7280">${__("{0} ligne(s) abandonnée(s) : non concernées.", [p.abandonnees])}</div>` : ""}
+  </div>`;
+  if (!p.lignes.length) {
+    frappe.msgprint({ title: __("Approbation finale"), message: html + `<p style="margin-top:10px"><b>${__("Rien à changer.")}</b></p>` });
+    return;
+  }
+  const d = new frappe.ui.Dialog({
+    title: __("✅ Approbation finale — aperçu"),
+    size: "large",
+    fields: [{ fieldtype: "HTML", fieldname: "corps" }],
+    primary_action_label: __("Approuver"),
+    primary_action: async () => {
+      d.hide();
+      try {
+        const rep = await frappe.call({
+          method: "customization_app.lci_approbation.approbation_finale",
+          args: { docname: frm.doc.name, appliquer: 1 },
+          freeze: true, freeze_message: __("Approbation…"),
+        });
+        const a = rep.message || {};
+        frappe.show_alert({ message: __("Approuvé : montant retenu {0}", [m(a.montant_retenu)]), indicator: "green" }, 7);
+        frm.reload_doc();
+      } catch (e) {
+        console.error(e);
+      }
+    },
+  });
+  d.fields_dict.corps.$wrapper.html(html);
+  d.show();
+}
+
+// ------------------------------------------------- PDF du plan de chargement (14/10/2026)
+// Pour le fournisseur, dans la langue de la liste : sa photo, sa ligne, sa description, qté / volume / prix / montant
+// par conteneur, départ et remplissage en tête. Un conteneur (no) ou tous (récapitulatif d'abord).
+// Backend : lci_pdf_conteneurs.py — lit le plan ENREGISTRÉ.
+
+function lci_pdf_url(frm, no) {
+  return "/api/method/customization_app.lci_pdf_conteneurs.download?docname="
+    + encodeURIComponent(frm.doc.name) + (no ? "&no=" + no : "");
+}
+
+// Téléchargement par un lien cliqué plutôt que window.open : après un await (enregistrement du plan), le
+// navigateur bloquerait la fenêtre comme une popup.
+function lci_telecharger(url) {
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  frappe.show_alert({ message: __("PDF en préparation (quelques secondes : photos du fournisseur)…"), indicator: "blue" }, 5);
+}
+
+function lci_pdf_conteneurs(frm) {
+  if (frm.is_dirty()) {
+    frappe.msgprint(__("Enregistrez d'abord le document (Ctrl+S)."));
+    return;
+  }
+  const { conteneurs } = lci_plan_local(frm);
+  if (!conteneurs.length) {
+    frappe.msgprint(__("Aucun plan de chargement enregistré : « 🚢 Répartir en conteneurs » puis « Enregistrer »."));
+    return;
+  }
+  const d = new frappe.ui.Dialog({
+    title: __("📄 PDF du plan de chargement"),
+    fields: [{
+      fieldtype: "Select", fieldname: "no", label: __("Conteneur"), default: "",
+      options: [{ label: __("Tous (récapitulatif + un conteneur par page)"), value: "" }].concat(conteneurs.map((c) => ({
+        label: `C${c.no} — ${c.type}${c.date ? " — " + frappe.datetime.str_to_user(c.date) : ""} — ${format_currency(flt(c.montant), frm.doc.devise || "USD")}`,
+        value: String(c.no),
+      }))),
+    }],
+    primary_action_label: __("Télécharger"),
+    primary_action: (v) => { d.hide(); lci_telecharger(lci_pdf_url(frm, cint(v.no) || null)); },
+  });
   d.show();
 }

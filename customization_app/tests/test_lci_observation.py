@@ -97,6 +97,12 @@ class TestTrace(unittest.TestCase):
                                 decision="Abandonné"))
         self.assertEqual(t[0]["type"], "abandon")
 
+    def test_ligne_acceptee_ne_rappelle_plus_la_cible(self):
+        """Approbation finale (14/10/2026) : son prix accepté, on ne lui oppose plus notre cible."""
+        t = O.trace_ligne(ligne(qty=10, qty_fournisseur=10, prix_cible=35.0, prix_fournisseur=40.0,
+                                decision="Accepté"))
+        self.assertEqual([c["type"] for c in t], ["accepte"])
+
     def test_accepte_sans_ecart_le_dit_quand_meme(self):
         t = O.trace_ligne(ligne(qty=100, qty_fournisseur=100, prix_fournisseur=1,
                                 decision="Accepté"))
