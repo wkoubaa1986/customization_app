@@ -17,6 +17,7 @@ from frappe.utils import flt
 
 from customization_app.liste_commande_import import DOCTYPE, _guard
 from customization_app.lci_observation import TOL, TOL_PRIX, prix_retenu, qty_retenue
+from customization_app.lci_conteneurs import ajuster_parts  # noqa: F401 — réexporté (tests, appels existants)
 
 ACCEPTE = "Accepté"
 ABANDONNE = "Abandonné"
@@ -73,29 +74,6 @@ def plan_approbation(rows):
     return {"lignes": lignes, "sans_prix": sans_prix, "abandonnees": abandonnees, "deja_ok": deja_ok,
             "montant_avant": round(montant_avant, 4), "montant_apres": round(montant_apres, 4),
             "volume_avant": round(volume_avant, 4), "volume_apres": round(volume_apres, 4)}
-
-
-def ajuster_parts(parts, q_avant, q_apres):
-    """La répartition d'une ligne en conteneurs quand sa quantité change : l'écart va au DERNIER conteneur (en plus),
-    ou se retire en partant du dernier (en moins) — jamais une part négative. PURE.
-
-    `parts` : [{"no", "qty", …}] (le JSON `repartition_conteneurs`). Sans répartition : rien à faire."""
-    if not parts:
-        return parts
-    out = [dict(p) for p in parts]
-    delta = flt(q_apres) - flt(q_avant)
-    if delta > 0:
-        out[-1]["qty"] = flt(out[-1]["qty"]) + delta
-    else:
-        reste = -delta
-        for p in reversed(out):
-            pris = min(flt(p["qty"]), reste)
-            p["qty"] = flt(p["qty"]) - pris
-            reste -= pris
-            if reste <= TOL:
-                break
-        out = [p for p in out if flt(p["qty"]) > TOL]
-    return out
 
 
 def appliquer_plan(doc, plan):

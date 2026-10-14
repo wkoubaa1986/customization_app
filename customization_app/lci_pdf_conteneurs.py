@@ -141,20 +141,6 @@ def description_html(texte):
     return f'<div class="pu-t">{esc(tete)}</div>{liste}'
 
 
-def manques(doc):
-    """Lignes dont la quantité retenue n'est pas entièrement dans les conteneurs : [(ligne, chargé, retenu)]. PURE
-    sur les champs de la ligne."""
-    out = []
-    for r in doc.articles:
-        if (r.decision or "") == "Abandonné" or qty_retenue(r) <= 0:
-            continue
-        parts = parts_de(r.repartition_conteneurs)
-        charge = sum(p["qty"] for p in parts)
-        if parts and abs(charge - qty_retenue(r)) > 1e-6:
-            out.append((r, charge, qty_retenue(r)))
-    return out
-
-
 def _n(v):
     v = flt(v)
     return ("%d" % v) if abs(v - round(v)) < 1e-9 else ("%g" % v)
@@ -368,7 +354,7 @@ def _echeances(doc):
     return tri([e.as_dict() if hasattr(e, "as_dict") else dict(e) for e in (doc.get("plan_paiement") or [])])
 
 
-def _recap(doc, plan, L, devise, hors_plan, incomplets=()):
+def _recap(doc, plan, L, devise, hors_plan):
     lignes = ""
     for c in plan["conteneurs"]:
         ko = flt(c["volume"]) > flt(c["capacite"]) + 1e-4
@@ -391,10 +377,6 @@ def _recap(doc, plan, L, devise, hors_plan, incomplets=()):
     bases = {int(c["no"]): flt(c["montant"]) for c in plan["conteneurs"]}
     bases[0] = flt(doc.montant_retenu)
     html += bloc_paiements(_echeances(doc), L, devise, L["paiements"], base=round(mnt, 2), bases=bases)
-    if incomplets:
-        html += (f'<p style="margin-top:12px;color:#a8071a"><b>{L["incomplet"]}</b> : '
-                 + " · ".join(f'{_esc(r.item_code or r.item_name or "")} ({_n(charge)} / {_n(total)})'
-                              for r, charge, total in incomplets) + "</p>")
     if hors_plan:
         html += (f'<p style="margin-top:12px;color:#ad6800"><b>{L["non_charge"]}</b> : '
                  + " · ".join(_esc(r.item_code or r.item_name or "") + f" ({_n(qty_retenue(r))})" for r in hors_plan)
@@ -424,7 +406,7 @@ def construire_html(doc, no=None):
     if not no:
         hors_plan = [r for r in doc.articles if (r.decision or "") != "Abandonné" and qty_retenue(r) > 0
                      and not parts_de(r.repartition_conteneurs)]
-        corps += _recap(doc, plan, L, devise, hors_plan, manques(doc))
+        corps += _recap(doc, plan, L, devise, hors_plan)
     for k, c in enumerate(conteneurs):
         saut = ' class="saut"' if (not no or k) else ""
         corps += f"<div{saut}>" + _bloc_conteneur(doc, c, L, LX, par_row, photos, devise, len(plan["conteneurs"]),

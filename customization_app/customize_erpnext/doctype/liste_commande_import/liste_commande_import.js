@@ -280,7 +280,25 @@ function lci_qty_divergente(r) {
 }
 
 function lci_cont_parts(r) {
-  try { return JSON.parse(r.repartition_conteneurs || "[]") || []; } catch (e) { return []; }
+  let parts;
+  try { parts = JSON.parse(r.repartition_conteneurs || "[]") || []; } catch (e) { return []; }
+  // alignées sur la quantité retenue, comme lci_conteneurs.parts_alignees : une quantité corrigée après la répartition
+  // (99 → 100) se reporte sur le dernier conteneur, ou se retire en partant du dernier
+  const q = lci_qty_ret(r), charge = parts.reduce((a, p) => a + flt(p.qty), 0);
+  if (!parts.length || Math.abs(charge - q) <= 0.001) return parts;
+  parts = parts.map((p) => Object.assign({}, p));
+  let delta = q - charge;
+  if (delta > 0) {
+    parts[parts.length - 1].qty = flt(parts[parts.length - 1].qty) + delta;
+    return parts;
+  }
+  delta = -delta;
+  for (let i = parts.length - 1; i >= 0 && delta > 0.001; i--) {
+    const pris = Math.min(flt(parts[i].qty), delta);
+    parts[i].qty = flt(parts[i].qty) - pris;
+    delta -= pris;
+  }
+  return parts.filter((p) => flt(p.qty) > 0.001);
 }
 
 function lci_cont_label(r) {

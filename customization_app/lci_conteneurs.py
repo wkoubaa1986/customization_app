@@ -279,6 +279,45 @@ LABELS_CONT = {
 }
 
 
+def ajuster_parts(parts, q_avant, q_apres):
+    """La répartition d'une ligne en conteneurs quand sa quantité change : l'écart va au DERNIER conteneur (en plus),
+    ou se retire en partant du dernier (en moins) — jamais une part négative. PURE.
+
+    `parts` : [{"no", "qty", …}] (le JSON `repartition_conteneurs`). Sans répartition : rien à faire."""
+    if not parts:
+        return parts
+    out = [dict(p) for p in parts]
+    delta = flt(q_apres) - flt(q_avant)
+    if delta > 0:
+        out[-1]["qty"] = flt(out[-1]["qty"]) + delta
+    else:
+        reste = -delta
+        for p in reversed(out):
+            pris = min(flt(p["qty"]), reste)
+            p["qty"] = flt(p["qty"]) - pris
+            reste -= pris
+            if reste <= 0.001:
+                break
+        out = [p for p in out if flt(p["qty"]) > 0.001]
+    return out
+
+
+def parts_alignees(row):
+    """Les parts d'une ligne, alignées sur sa quantité RETENUE (14/10/2026 : Acc023-H corrigé de 99 à 100 restait à 99
+    dans la répartition). Rend (parts, changé ?). PURE (row = dict ou Document)."""
+    try:
+        parts = json.loads(row.get("repartition_conteneurs") or "[]") or []
+    except Exception:
+        return [], False
+    if not parts:
+        return parts, False
+    charge = sum(flt(p.get("qty")) for p in parts)
+    q = qty_retenue(row)
+    if abs(charge - q) <= 0.001:
+        return parts, False
+    return ajuster_parts(parts, charge, q), True
+
+
 def plan_enregistre(doc):
     """Relit le plan appliqué : entête (`plan_conteneurs`) + parts des lignes.
 
@@ -301,10 +340,8 @@ def plan_enregistre(doc):
         par_no[bloc["no"]] = bloc
 
     for r in doc.articles:
-        try:
-            parts = json.loads(r.repartition_conteneurs or "[]") or []
-        except Exception:
-            parts = []
+        # une quantité changée depuis la répartition se lit déjà alignée (le prochain enregistrement l'écrit)
+        parts, _change = parts_alignees(r)
         if not parts:
             continue
         q_tot = qty_retenue(r)

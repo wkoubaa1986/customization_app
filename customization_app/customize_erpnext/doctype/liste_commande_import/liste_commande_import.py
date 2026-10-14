@@ -23,6 +23,7 @@ import frappe
 from frappe.model.document import Document
 from frappe.utils import flt
 
+from customization_app.lci_conteneurs import parts_alignees
 from customization_app.lci_paiement import appliquer as appliquer_plan_paiement
 from customization_app.lci_observation import (
     maj_ligne,
@@ -103,6 +104,11 @@ class ListeCommandeImport(Document):
             row.total_retenu = 0.0 if abandon else q_ret * prix_retenu(row)
             montant_retenu += flt(row.total_retenu)
             maj_ligne(row, langue, devise)
+
+            # déjà répartie en conteneurs : la répartition suit la quantité retenue (corrigée à la main, approuvée…)
+            parts, change = parts_alignees(row)
+            if change:
+                row.repartition_conteneurs = json.dumps(parts, ensure_ascii=False) if parts else ""
 
             vol = q_ret * flt(row.volume_unitaire_m3)
             for a in _adds(row):  # volume des additionnels embarqués

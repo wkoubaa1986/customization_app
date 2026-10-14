@@ -307,3 +307,41 @@ class TestEstimationVolume(unittest.TestCase):
 
     def test_rien_du_tout_ne_propose_rien(self):
         self.assertIsNone(C.normaliser_estimation(None, None, None))
+
+
+class TestPartsAlignees(unittest.TestCase):
+    """14/10/2026 : Acc023-H corrigé de 99 à 100, la répartition affichait toujours 99."""
+
+    def test_quantite_corrigee_reportee_sur_le_dernier_conteneur(self):
+        import json
+
+        import frappe
+
+        from customization_app.lci_conteneurs import parts_alignees
+        r = frappe._dict(qty=99, qty_cible=100, repartition_conteneurs=json.dumps([{"no": 1, "qty": 50, "pos": 3}, {"no": 4, "qty": 49, "pos": 1}]))
+        parts, change = parts_alignees(r)
+        self.assertTrue(change)
+        self.assertEqual(parts, [{"no": 1, "qty": 50, "pos": 3}, {"no": 4, "qty": 50, "pos": 1}])
+
+    def test_deja_alignee_ou_sans_repartition(self):
+        import json
+
+        import frappe
+
+        from customization_app.lci_conteneurs import parts_alignees
+        self.assertEqual(parts_alignees(frappe._dict(qty=10, qty_cible=0, repartition_conteneurs=json.dumps([{"no": 1, "qty": 10}])))[1], False)
+        self.assertEqual(parts_alignees(frappe._dict(qty=10, repartition_conteneurs="")), ([], False))
+
+    def test_le_plan_relu_suit_la_quantite(self):
+        import json
+
+        import frappe
+
+        from customization_app.lci_conteneurs import plan_enregistre
+        r = frappe._dict(name="r1", item_code="Acc023-H", item_name="wrench", item_name_traduit="", uom="Pcs", qty=99,
+                         qty_cible=100, prix_fournisseur=0.3, prix_cible_negocie=0, volume_ligne_m3=0.04,
+                         repartition_conteneurs=json.dumps([{"no": 1, "qty": 99, "pos": 1}]))
+        doc = frappe._dict(articles=[r], plan_conteneurs=json.dumps({"conteneurs": [{"no": 1, "type": "45' HC", "capacite": 77.4}]}))
+        c = plan_enregistre(doc)["conteneurs"][0]
+        self.assertEqual(c["lignes"][0]["qty"], 100)
+        self.assertAlmostEqual(c["montant"], 30.0)

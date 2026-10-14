@@ -59,15 +59,5 @@ class TestDescription(unittest.TestCase):
         self.assertEqual(P.remplissage({"volume": 3, "capacite": 0}), 0.0)
 
 
-class TestManques(unittest.TestCase):
-    def test_quantite_pas_entierement_chargee(self):
-        rows = [frappe._dict(name="a", decision="Accepté", qty=99, qty_cible=100,
-                             repartition_conteneurs=json.dumps([{"no": 4, "qty": 99}])),
-                frappe._dict(name="b", decision="", qty=10, qty_cible=0, repartition_conteneurs=json.dumps([{"no": 1, "qty": 10}])),
-                frappe._dict(name="c", decision="Abandonné", qty=5, qty_cible=0, repartition_conteneurs="[]")]
-        m = P.manques(frappe._dict(articles=rows))
-        self.assertEqual([(r.name, charge, total) for r, charge, total in m], [("a", 99, 100)])
-
-
 if __name__ == "__main__":
     unittest.main()
