@@ -215,6 +215,11 @@ def appliquer_plan(docname, plan):
                         "nb_lignes": len(c.get("lignes") or [])}
                        for c in plan.get("conteneurs") or []],
     }, ensure_ascii=False)
+    # plan de paiement saisi conteneur par conteneur dans le dialogue (14/10/2026) : le montant des % se calcule
+    # dans validate, sur le montant de chaque conteneur tel qu'il vient d'être réparti
+    if any("paiements" in c for c in plan.get("conteneurs") or []):
+        from customization_app.lci_paiement import remplacer_par_conteneur
+        remplacer_par_conteneur(doc, plan.get("conteneurs"))
     doc.save(ignore_permissions=True)
     frappe.db.commit()
     return {"nb_conteneurs": len(plan.get("conteneurs") or []),
@@ -380,6 +385,10 @@ def plan_courant(docname):
     plan = plan_pour_dialogue(doc)
     if plan:
         plan["devise"] = doc.devise or "USD"
+        from customization_app.lci_paiement import par_conteneur
+        paiements = par_conteneur(doc.get("plan_paiement") or [])
+        for c in plan["conteneurs"]:
+            c["paiements"] = paiements.get(int(c["no"]), [])
     return plan
 
 

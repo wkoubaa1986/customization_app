@@ -35,7 +35,7 @@ from customization_app.liste_commande_import import (
 from customization_app.liste_commande_import import _labels as _labels_export
 
 LABELS = {
-    "English": {"incomplet": "Not fully loaded (loaded / ordered)", "titre": "Loading plan", "conteneur": "Container", "type": "Type", "depart": "Departure",
+    "English": {"paiements": "Payment plan", "libelle": "Description", "commande_entiere": "Whole order", "total_planifie": "Total scheduled", "reste_planifier": "Remaining to schedule", "paiements_conteneur": "Payments for this container", "legende_type": "TT = telegraphic transfer (bank transfer) · LC = letter of credit", "incomplet": "Not fully loaded (loaded / ordered)", "titre": "Loading plan", "conteneur": "Container", "type": "Type", "depart": "Departure",
                 "a_confirmer": "to be confirmed", "capacite": "Usable capacity", "charge": "Loaded volume",
                 "remplissage": "Fill", "lignes": "Lines", "photo": "Photo", "ref": "Your line",
                 "description": "Description", "qty": "Qty", "volume": "Volume (m³)", "pu": "Unit price",
@@ -43,7 +43,7 @@ LABELS = {
                 "total_general": "Grand total", "scinde": "{q} of {t} — rest in {autres}",
                 "additionnel": "Additional", "non_charge": "Not loaded (no unit volume)", "ref_doc": "Ref.",
                 "date": "Date", "fournisseur": "Supplier", "conteneurs": "Containers"},
-    "Français": {"incomplet": "Pas entièrement chargées (chargé / commandé)", "titre": "Plan de chargement", "conteneur": "Conteneur", "type": "Gabarit", "depart": "Départ",
+    "Français": {"paiements": "Plan de paiement", "libelle": "Libellé", "commande_entiere": "Toute la commande", "total_planifie": "Total planifié", "reste_planifier": "Reste à planifier", "paiements_conteneur": "Paiements de ce conteneur", "legende_type": "TT = virement bancaire · LC = lettre de crédit", "incomplet": "Pas entièrement chargées (chargé / commandé)", "titre": "Plan de chargement", "conteneur": "Conteneur", "type": "Gabarit", "depart": "Départ",
                  "a_confirmer": "à confirmer", "capacite": "Capacité utile", "charge": "Volume chargé",
                  "remplissage": "Remplissage", "lignes": "Lignes", "photo": "Photo", "ref": "Votre ligne",
                  "description": "Description", "qty": "Qté", "volume": "Volume (m³)", "pu": "Prix unitaire",
@@ -51,7 +51,7 @@ LABELS = {
                  "total_general": "Total général", "scinde": "{q} sur {t} — reste dans {autres}",
                  "additionnel": "Additionnel", "non_charge": "Non chargées (sans volume unitaire)",
                  "ref_doc": "Réf.", "date": "Date", "fournisseur": "Fournisseur", "conteneurs": "Conteneurs"},
-    "Deutsch": {"incomplet": "Nicht vollständig verladen (verladen / bestellt)", "titre": "Ladeplan", "conteneur": "Container", "type": "Typ", "depart": "Abfahrt",
+    "Deutsch": {"paiements": "Zahlungsplan", "libelle": "Bezeichnung", "commande_entiere": "Gesamter Auftrag", "total_planifie": "Geplant gesamt", "reste_planifier": "Noch einzuplanen", "paiements_conteneur": "Zahlungen für diesen Container", "legende_type": "TT = Banküberweisung · LC = Akkreditiv", "incomplet": "Nicht vollständig verladen (verladen / bestellt)", "titre": "Ladeplan", "conteneur": "Container", "type": "Typ", "depart": "Abfahrt",
                 "a_confirmer": "noch offen", "capacite": "Nutzbares Volumen", "charge": "Geladenes Volumen",
                 "remplissage": "Auslastung", "lignes": "Positionen", "photo": "Foto", "ref": "Ihre Zeile",
                 "description": "Beschreibung", "qty": "Menge", "volume": "Volumen (m³)", "pu": "Stückpreis",
@@ -59,7 +59,7 @@ LABELS = {
                 "total_general": "Gesamtsumme", "scinde": "{q} von {t} — Rest in {autres}",
                 "additionnel": "Zusätzlich", "non_charge": "Nicht verladen (ohne Stückvolumen)", "ref_doc": "Ref.",
                 "date": "Datum", "fournisseur": "Lieferant", "conteneurs": "Container"},
-    "Español": {"incomplet": "No cargadas por completo (cargado / pedido)", "titre": "Plan de carga", "conteneur": "Contenedor", "type": "Tipo", "depart": "Salida",
+    "Español": {"paiements": "Plan de pagos", "libelle": "Concepto", "commande_entiere": "Pedido completo", "total_planifie": "Total programado", "reste_planifier": "Pendiente de programar", "paiements_conteneur": "Pagos de este contenedor", "legende_type": "TT = transferencia bancaria · LC = carta de crédito", "incomplet": "No cargadas por completo (cargado / pedido)", "titre": "Plan de carga", "conteneur": "Contenedor", "type": "Tipo", "depart": "Salida",
                 "a_confirmer": "por confirmar", "capacite": "Capacidad útil", "charge": "Volumen cargado",
                 "remplissage": "Llenado", "lignes": "Líneas", "photo": "Foto", "ref": "Su línea",
                 "description": "Descripción", "qty": "Cant.", "volume": "Volumen (m³)", "pu": "Precio unitario",
@@ -67,7 +67,7 @@ LABELS = {
                 "total_general": "Total general", "scinde": "{q} de {t} — resto en {autres}",
                 "additionnel": "Adicional", "non_charge": "No cargadas (sin volumen unitario)", "ref_doc": "Ref.",
                 "date": "Fecha", "fournisseur": "Proveedor", "conteneurs": "Contenedores"},
-    "العربية": {"incomplet": "غير محمّلة بالكامل (المحمّل / المطلوب)", "titre": "خطة الشحن", "conteneur": "حاوية", "type": "النوع", "depart": "المغادرة",
+    "العربية": {"paiements": "خطة الدفع", "libelle": "البيان", "commande_entiere": "الطلبية كاملة", "total_planifie": "إجمالي المبرمج", "reste_planifier": "المتبقي للبرمجة", "paiements_conteneur": "دفعات هذه الحاوية", "legende_type": "TT = تحويل بنكي · LC = اعتماد مستندي", "incomplet": "غير محمّلة بالكامل (المحمّل / المطلوب)", "titre": "خطة الشحن", "conteneur": "حاوية", "type": "النوع", "depart": "المغادرة",
                 "a_confirmer": "سيتم التأكيد", "capacite": "السعة المفيدة", "charge": "الحجم المحمّل",
                 "remplissage": "نسبة الملء", "lignes": "البنود", "photo": "صورة", "ref": "سطركم",
                 "description": "الوصف", "qty": "الكمية", "volume": "الحجم (م³)", "pu": "سعر الوحدة",
@@ -251,18 +251,19 @@ CSS = """
   .ct-grille b { font-size: 12.5px; }
   .ko { color: #a8071a; }
   table.l { width: 100%; border-collapse: collapse; }
-  table.l th { background: #f0f2f5; text-align: left; padding: 5px 6px; font-size: 9.5px; text-transform: uppercase;
+  table.l th { background: #f0f2f5; text-align: left; padding: 4px 5px; font-size: 8px; text-transform: uppercase;
                border: 1px solid #d5dae1; }
-  table.l td { padding: 4px 6px; border: 1px solid #d5dae1; vertical-align: top; font-size: 9.5px; line-height: 1.35; }
-  table.l td.n { font-size: 10.5px; }
+  table.l td { padding: 3px 5px; border: 1px solid #d5dae1; vertical-align: top; font-size: 8px; line-height: 1.22; }
+  table.l td.n { font-size: 9.5px; }
+  table.l td.ph { vertical-align: middle; text-align: center; padding: 2px; }
   table.l tr { page-break-inside: avoid; }
   .n { text-align: right; white-space: nowrap; }
-  .ref { font-size: 9.5px; color: #0958d9; font-weight: bold; }
-  .split { font-size: 9.5px; color: #391085; background: #f9f0ff; border-radius: 3px; padding: 1px 4px; display: inline-block;
+  .ref { font-size: 8.5px; color: #0958d9; font-weight: bold; }
+  .split { white-space: nowrap; font-size: 8px; color: #391085; background: #f9f0ff; border-radius: 3px; padding: 1px 4px; display: inline-block;
            margin-top: 3px; }
-  .pu-t { font-weight: bold; }
-  ul.pu { margin: 2px 0 0; padding-left: 12px; }
-  ul.pu li { margin: 0; }
+  .pu-t { font-weight: bold; font-size: 8.5px; }
+  ul.pu { margin: 1px 0 0; padding-left: 10px; }
+  ul.pu li { margin: 0; padding: 0; }
   .tot td { font-weight: bold; background: #f9f0ff; font-size: 12px; }
   .saut { page-break-before: always; }
 """
@@ -275,7 +276,7 @@ def _entete_doc(doc, L, fournisseur):
             + "</div>")
 
 
-def _bloc_conteneur(doc, c, L, LX, par_row, photos, devise, nb_conteneurs):
+def _bloc_conteneur(doc, c, L, LX, par_row, photos, devise, nb_conteneurs, echeances=()):
     pct = remplissage(c)
     ko = flt(c["volume"]) > flt(c["capacite"]) + 1e-4
     depart = _esc(formatdate(c["date"])) if c.get("date") else f'<i>{L["a_confirmer"]}</i>'
@@ -291,10 +292,12 @@ def _bloc_conteneur(doc, c, L, LX, par_row, photos, devise, nb_conteneurs):
         <td style="text-align:right">{L["total"]}<br><b>{_esc(frappe.utils.fmt_money(flt(c["montant"]), currency=devise))}</b></td>
       </tr></table>
     </div>
-    <table class="l"><thead><tr>
-      <th style="width:18px">#</th><th style="width:86px">{L["photo"]}</th><th>{L["description"]}</th>
-      <th class="n" style="width:70px">{L["qty"]}</th><th class="n" style="width:62px">{L["volume"]}</th>
-      <th class="n" style="width:66px">{L["pu"]} ({devise})</th><th class="n" style="width:80px">{L["montant"]} ({devise})</th>
+    {bloc_paiements([e for e in echeances if int(e.get("conteneur") or 0) == int(c["no"])], L, devise,
+                    L["paiements_conteneur"], avec_conteneur=False, bases={int(c["no"]): flt(c["montant"])})}
+    <table class="l" style="margin-top:8px"><thead><tr>
+      <th style="width:16px">#</th><th style="width:66px">{L["photo"]}</th><th>{L["description"]}</th>
+      <th class="n" style="width:50px">{L["qty"]}</th><th class="n" style="width:50px">{L["volume"]}</th>
+      <th class="n" style="width:56px">{L["pu"]} ({devise})</th><th class="n" style="width:66px">{L["montant"]} ({devise})</th>
     </tr></thead><tbody>"""
     for i, l in enumerate(c["lignes"], 1):
         r = par_row.get(l["row"])
@@ -307,7 +310,7 @@ def _bloc_conteneur(doc, c, L, LX, par_row, photos, devise, nb_conteneurs):
         html += f"""
       <tr>
         <td>{i}</td>
-        <td style="text-align:center">{f'<img src="{photo}" style="max-width:80px;max-height:80px">' if photo else ""}</td>
+        <td class="ph">{f'<img src="{photo}" style="max-width:60px;max-height:60px">' if photo else ""}</td>
         <td>{f'<div class="ref">{L["ref"]} {sa_ligne}</div>' if sa_ligne else ""}{desc}
           {f'<div class="split">{_esc(scinde)}</div>' if scinde else ""}</td>
         <td class="n"><b>{_n(l["qty"])}</b> {_esc(_uom_out(r.uom, LX))}</td>
@@ -321,6 +324,48 @@ def _bloc_conteneur(doc, c, L, LX, par_row, photos, devise, nb_conteneurs):
         <td class="n">{flt(c["montant"]):,.2f}</td></tr>
     </tbody></table>"""
     return html
+
+
+def bloc_paiements(echeances, L, devise, titre, avec_conteneur=True, base=None, bases=None):
+    """Le tableau des échéances (déjà triées) : libellé, conteneur, type, date, %, montant ; total, et le reste à
+    planifier quand `base` (montant de la commande) est donné. "" sans échéance. PURE (hors formatdate).
+
+    `bases` : {n° de conteneur (0 = commande): montant} — le % d'un montant saisi (ou du reste) s'en déduit, pour
+    qu'il se lise aussi (« 20 000 » sur 62 770,95 → 31,9 %)."""
+    if not echeances:
+        return ""
+    lignes = ""
+    for e in echeances:
+        no = int(e.get("conteneur") or 0)
+        pct = flt(e.get("pourcentage"))
+        if not pct and bases and flt(bases.get(no)) and flt(e.get("montant")):
+            pct = round(100 * flt(e.get("montant")) / flt(bases.get(no)), 1)
+        lignes += (f'<tr><td>{_esc(e.get("libelle") or "")}</td>'
+                   + (f'<td>{("C%d" % no) if no else L["commande_entiere"]}</td>' if avec_conteneur else "")
+                   + f'<td><b>{_esc(e.get("type_paiement") or "")}</b></td>'
+                   f'<td>{_esc(formatdate(e.get("date_execution"))) if e.get("date_execution") else "<i>" + L["a_confirmer"] + "</i>"}</td>'
+                   f'<td class="n">{(_n(pct) + " %") if pct else ""}</td>'
+                   f'<td class="n"><b>{flt(e.get("montant")):,.2f}</b></td></tr>')
+    total = sum(flt(e.get("montant")) for e in echeances)
+    reste = (flt(base) - total) if base is not None else 0
+    pied = (f'<tr class="tot"><td colspan="{5 if avec_conteneur else 4}">{L["total_planifie"]}</td>'
+            f'<td class="n">{total:,.2f}</td></tr>')
+    if base is not None and abs(reste) > 0.005:
+        pied += (f'<tr><td colspan="{5 if avec_conteneur else 4}" class="ko">{L["reste_planifier"]}</td>'
+                 f'<td class="n ko"><b>{reste:,.2f}</b></td></tr>')
+    return (f'<h2 style="font-size:13px;margin:12px 0 4px">{titre}</h2>'
+            f'<table class="l"><thead><tr><th>{L["libelle"]}</th>'
+            + (f'<th style="width:110px">{L["conteneur"]}</th>' if avec_conteneur else "")
+            + f'<th style="width:50px">{L["type"]}</th><th style="width:90px">{L["date"]}</th>'
+            f'<th class="n" style="width:50px">%</th><th class="n" style="width:110px">{L["montant"]} ({devise})</th>'
+            f'</tr></thead><tbody>{lignes}{pied}</tbody></table>'
+            f'<div style="font-size:9px;color:#6b7280;margin-top:3px">{L["legende_type"]}</div>')
+
+
+def _echeances(doc):
+    from customization_app.lci_paiement import tri
+
+    return tri([e.as_dict() if hasattr(e, "as_dict") else dict(e) for e in (doc.get("plan_paiement") or [])])
 
 
 def _recap(doc, plan, L, devise, hors_plan, incomplets=()):
@@ -343,6 +388,9 @@ def _recap(doc, plan, L, devise, hors_plan, incomplets=()):
       <tbody>{lignes}
       <tr class="tot"><td colspan="4">{L["total_general"]}</td><td class="n">{vol:.3f}</td><td></td>
         <td class="n">{mnt:,.2f}</td></tr></tbody></table>"""
+    bases = {int(c["no"]): flt(c["montant"]) for c in plan["conteneurs"]}
+    bases[0] = flt(doc.montant_retenu)
+    html += bloc_paiements(_echeances(doc), L, devise, L["paiements"], base=round(mnt, 2), bases=bases)
     if incomplets:
         html += (f'<p style="margin-top:12px;color:#a8071a"><b>{L["incomplet"]}</b> : '
                  + " · ".join(f'{_esc(r.item_code or r.item_name or "")} ({_n(charge)} / {_n(total)})'
@@ -369,6 +417,7 @@ def construire_html(doc, no=None):
     fournisseur = (frappe.db.get_value("Supplier", doc.fournisseur, "supplier_name") or doc.fournisseur) if doc.fournisseur else ""
     par_row = {r.name: r for r in doc.articles}
     photos = photos_fournisseur(doc)
+    echeances = _echeances(doc)
     dir_attr = ' dir="rtl"' if doc.langue_cible in RTL_LANGS else ""
 
     corps = f'<h1>{L["titre"]} — {_esc(doc.titre or doc.name)}</h1>' + _entete_doc(doc, L, fournisseur)
@@ -378,16 +427,17 @@ def construire_html(doc, no=None):
         corps += _recap(doc, plan, L, devise, hors_plan, manques(doc))
     for k, c in enumerate(conteneurs):
         saut = ' class="saut"' if (not no or k) else ""
-        corps += f"<div{saut}>" + _bloc_conteneur(doc, c, L, LX, par_row, photos, devise, len(plan["conteneurs"])) + "</div>"
+        corps += f"<div{saut}>" + _bloc_conteneur(doc, c, L, LX, par_row, photos, devise, len(plan["conteneurs"]),
+                                                  echeances) + "</div>"
     # le doctype n'est pas décoratif : sans lui (mode quirks), les tableaux n'héritent pas la taille du texte
     return (f'<!DOCTYPE html><html{dir_attr}><head><meta charset="utf-8"><style>{CSS}</style></head>'
             f'<body>{corps}</body></html>')
 
 
-# À l'italienne : la colonne description est assez large pour qu'une puce tienne sur UNE ligne (en portrait, elle
-# faisait 300 px et chaque puce passait sur deux ou trois lignes).
-OPTIONS_PDF = {"orientation": "Landscape", "margin-top": "8mm", "margin-bottom": "8mm",
-               "margin-left": "8mm", "margin-right": "8mm"}
+# En PORTRAIT (demande du 14/10 après un essai à l'italienne) : une puce tient sur une ligne grâce à une description
+# en petit corps (8 px) et à des colonnes de chiffres étroites ; plus d'articles par page.
+OPTIONS_PDF = {"orientation": "Portrait", "margin-top": "8mm", "margin-bottom": "8mm",
+               "margin-left": "7mm", "margin-right": "7mm"}
 
 
 @frappe.whitelist()

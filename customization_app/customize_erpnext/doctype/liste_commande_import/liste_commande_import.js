@@ -2886,6 +2886,70 @@ async function lci_conteneurs_dialog(frm) {
     });
   }
 
+  // ---- plan de paiement par conteneur (14/10/2026) : « basé sur le montant de chaque conteneur ».
+  // Le % fait foi (montant = % du conteneur, recalculé quand des lignes bougent) ; un montant tapé l'emporte.
+  const LIB_PAIE = frm.doc.langue_cible === "Français"
+    ? ["Acompte", "Solde avant chargement"] : ["Deposit", "Balance before loading"];
+  function paiements_maj(c) {
+    // même règle que lci_paiement.calculer : le paiement qui complète 100 % prend le reste (pas de centime en trop),
+    // puis le paiement « = reste » prend le conteneur moins tous les autres
+    let pct = 0, deja = 0, fixes = 0;
+    (c.paiements || []).forEach((p) => {
+      if (p.solde) return;
+      if (flt(p.pourcentage) > 0) {
+        pct += flt(p.pourcentage);
+        p.montant = Math.abs(pct - 100) < 1e-6 ? Math.round((flt(c.montant) - deja) * 100) / 100
+          : Math.round(flt(c.montant) * flt(p.pourcentage)) / 100;
+        deja += p.montant;
+      }
+      fixes += flt(p.montant);
+    });
+    (c.paiements || []).filter((p) => p.solde).forEach((p) => {
+      p.montant = Math.max(Math.round((flt(c.montant) - fixes) * 100) / 100, 0);
+      p.pourcentage = 0;
+      fixes += p.montant;
+    });
+  }
+  function paiements_total(c) {
+    paiements_maj(c);
+    return (c.paiements || []).reduce((a, p) => a + flt(p.montant), 0);
+  }
+  function paiements_html(c, ci) {
+    const ps = c.paiements || [];
+    const total = paiements_total(c), reste = flt(c.montant) - total;
+    const etat_reste = !ps.length ? "" : Math.abs(reste) < 0.01
+      ? `<span style="color:#237804">✓ ${__("100 % planifié")}</span>`
+      : `<span style="color:#a8071a">${__("reste")} ${format_currency(reste, dev)}</span>`;
+    return `<div class="lci-pay">
+      <div class="lci-pay-tete">💳 <b>${__("Paiements C{0}", [c.no])}</b>
+        ${ps.length ? `· ${__("planifié")} <b>${format_currency(total, dev)}</b> / ${format_currency(flt(c.montant), dev)} · ${etat_reste}` : ""}
+        <button class="btn btn-xs btn-default lci-pay-add" data-ci="${ci}">+ ${__("Paiement")}</button>
+        <button class="btn btn-xs btn-default lci-pay-3070" data-ci="${ci}"
+                title="${__("Ajoute un acompte de 30 % et un solde de 70 % en TT")}">30 % / 70 %</button>
+      </div>
+      ${ps.map((p, pi) => `<div class="lci-pay-l">
+        <input class="lci-pay-f" data-ci="${ci}" data-pi="${pi}" data-f="libelle" value="${esc(p.libelle || "")}"
+               placeholder="${__("Acompte, solde…")}" style="flex:1;min-width:140px;">
+        <select class="lci-pay-f" data-ci="${ci}" data-pi="${pi}" data-f="type_paiement" title="${__("TT = virement · LC = lettre de crédit")}">
+          ${["TT", "LC"].map((t) => `<option ${p.type_paiement === t ? "selected" : ""}>${t}</option>`).join("")}</select>
+        <input type="date" class="lci-pay-f" data-ci="${ci}" data-pi="${pi}" data-f="date_execution"
+               value="${esc(p.date_execution || "")}" title="${__("Date d'exécution")}">
+        <input class="lci-pay-f lci-pay-n${p.solde ? " lci-pay-auto" : !flt(p.pourcentage) && flt(p.montant) ? " lci-pay-deduit" : ""}"
+               data-ci="${ci}" data-pi="${pi}" data-f="pourcentage" inputmode="decimal"
+               title="${p.solde || !flt(p.pourcentage) ? __("% calculé depuis le montant — tapez un % pour qu'il fixe le montant") : ""}"
+               value="${flt(p.pourcentage) && !p.solde ? p.pourcentage
+                        : (flt(p.montant) && flt(c.montant) ? format_number(100 * flt(p.montant) / flt(c.montant), null, 1) : "")}"
+               placeholder="%" style="width:58px;"> %
+        <button class="btn btn-xs ${p.solde ? "btn-primary" : "btn-default"} lci-pay-solde" data-ci="${ci}" data-pi="${pi}"
+                title="${p.solde ? __("Montant calculé : le reste du conteneur après les autres paiements. Tapez un % ou un montant pour le fixer.")
+                                 : __("Prendre automatiquement le reste du conteneur après les autres paiements")}">= ${__("reste")}</button>
+        <input class="lci-pay-f lci-pay-n${p.solde ? " lci-pay-auto" : ""}" data-ci="${ci}" data-pi="${pi}" data-f="montant" inputmode="decimal"
+               value="${flt(p.montant) ? flt(p.montant).toFixed(2) : ""}" placeholder="${__("montant")}" style="width:110px;"> ${esc(dev)}
+        <span class="lci-pay-del" data-ci="${ci}" data-pi="${pi}" title="${__("Retirer ce paiement")}">✕</span>
+      </div>`).join("")}
+    </div>`;
+  }
+
   function adopter(plan) {
     etat.plan = plan || { conteneurs: [], sans_volume: [] };
     etat.coches.clear();
@@ -2911,6 +2975,9 @@ async function lci_conteneurs_dialog(frm) {
       freeze: true,
       freeze_message: __("Calcul du chargement…"),
     });
+    // un recalcul refait les conteneurs : leurs paiements restent attachés au même rang (C1 garde ceux de C1)
+    const anciens = ((etat.plan || {}).conteneurs || []).map((c) => c.paiements || []);
+    ((r.message || {}).conteneurs || []).forEach((c, i) => (c.paiements = anciens[i] || []));
     adopter(r.message);
   }
 
@@ -3065,9 +3132,12 @@ async function lci_conteneurs_dialog(frm) {
           <span class="lci-ct-vol${plein ? " ko" : ""}">${format_number(flt(c.volume), null, 3)} /
             ${format_number(cc, null, 2)} m³ (${format_number(pct, null, 0)} %)</span>
           <span class="lci-ct-mnt">${format_currency(flt(c.montant), dev)}</span>
+          ${(c.paiements || []).length ? `<span class="lci-pay-badge" title="${__("Part du conteneur planifiée en paiements")}">💳 ${
+            format_number(flt(c.montant) ? 100 * paiements_total(c) / flt(c.montant) : 0, null, 0)} %</span>` : ""}
           <button class="btn btn-xs btn-default lci-ct-pdf" data-ci="${ci}" title="${__("Enregistre le plan puis télécharge le PDF de ce conteneur pour le fournisseur")}">📄 PDF</button>
         </div>
         <div class="lci-ct-bar"><div class="lci-ct-fill${plein ? " ko" : ""}" style="width:${pct}%;"></div></div>
+        ${paiements_html(c, ci)}
         <table class="lci-ct-tbl"><tbody>
           ${(c.lignes || []).length ? "" : `<tr><td class="lci-ct-vide">${
             __("Conteneur vide — envoyez-y des lignes avec le menu « C{0} » à droite de chaque ligne.",
@@ -3104,6 +3174,17 @@ async function lci_conteneurs_dialog(frm) {
           border-radius: 6px; padding: 1px 6px; color: #391085; font-weight: 700; }
         .lci-ct-date-l { font-size: 11px; color: #0958d9; }
         .lci-ct-vide { color: #8a93a0; font-style: italic; padding: 8px 10px; }
+        .lci-pay { padding: 6px 10px 8px; border-bottom: 1px dashed var(--border-color,#e4e8ee); background: #fcfaff; font-size: 12px; }
+        .lci-pay-tete { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+        .lci-pay-l { display: flex; gap: 6px; align-items: center; margin-top: 5px; flex-wrap: wrap; }
+        .lci-pay-l input, .lci-pay-l select { font-size: 12px; padding: 2px 5px; border: 1px solid var(--border-color,#d9d9d9);
+          border-radius: 5px; background: var(--card-bg,#fff); }
+        .lci-pay-n { text-align: right; }
+        .lci-pay-l input.lci-pay-auto { background: #f0f5ff; color: #1d39c4; font-weight: 600; }
+        .lci-pay-l input.lci-pay-deduit { color: #8a93a0; font-style: italic; }
+        .lci-pay-del { cursor: pointer; color: #a8071a; padding: 0 4px; }
+        .lci-pay-badge { font-size: 11px; background: #f9f0ff; border: 1px solid #d3adf7; border-radius: 6px; padding: 1px 6px;
+          color: #391085; font-weight: 700; }
         .lci-ct-flotte { display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
           margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px dashed var(--border-color,#e4e8ee); }
         .lci-ct-chip { display: flex; align-items: center; gap: 4px; font-size: 11.5px;
@@ -3218,6 +3299,54 @@ async function lci_conteneurs_dialog(frm) {
         calculer);
     });
     $z.find("#lci-ct-add").on("click", () => { lci_ct_ajouter(); render(); });
+    const conteneur_de = (el) => etat.plan.conteneurs[cint($(el).data("ci"))];
+    $z.find(".lci-pay-add").on("click", function () {
+      const c = conteneur_de(this);
+      c.paiements = c.paiements || [];
+      // la nouvelle ligne prend le reste… sauf s'il y a déjà un « = reste » : elle se saisit alors (acompte, etc.)
+      c.paiements.push({ libelle: "", type_paiement: "TT", date_execution: c.date || "", pourcentage: 0, montant: 0,
+                         solde: !c.paiements.some((p) => p.solde) });
+      render();
+    });
+    $z.find(".lci-pay-3070").on("click", function () {
+      const c = conteneur_de(this);
+      (c.paiements = c.paiements || []).push(
+        { libelle: LIB_PAIE[0], type_paiement: "TT", date_execution: frappe.datetime.get_today(), pourcentage: 30, montant: 0 },
+        { libelle: LIB_PAIE[1], type_paiement: "TT", date_execution: c.date || "", pourcentage: 0, montant: 0, solde: true });
+      render();
+    });
+    $z.find(".lci-pay-f").on("change", function () {
+      const c = conteneur_de(this), p = (c.paiements || [])[cint($(this).data("pi"))];
+      if (!p) return;
+      const f = $(this).data("f");
+      let v = $(this).val();
+      if (f === "pourcentage" || f === "montant") v = flt(String(v).replace(",", "."));
+      if (f === "montant" && flt(p.pourcentage) > 0
+          && Math.abs(v - Math.round(flt(c.montant) * flt(p.pourcentage)) / 100) > 0.01) {
+        p.pourcentage = 0;   // montant tapé à la main : il l'emporte sur le %
+      }
+      if ((f === "pourcentage" || f === "montant") && p.solde) {
+        p.solde = false;     // une valeur tapée fixe la ligne : elle n'est plus « le reste »
+        if (f === "montant") p.pourcentage = 0;
+      }
+      p[f] = v;
+      render();
+    });
+    $z.find(".lci-pay-solde").on("click", function () {
+      const c = conteneur_de(this), p = (c.paiements || [])[cint($(this).data("pi"))];
+      if (!p) return;
+      p.solde = !p.solde;
+      if (p.solde) {
+        (c.paiements || []).forEach((x) => { if (x !== p) x.solde = false; });   // un seul « = reste » par conteneur
+        p.pourcentage = 0;
+      }
+      render();
+    });
+    $z.find(".lci-pay-del").on("click", function () {
+      const c = conteneur_de(this);
+      (c.paiements || []).splice(cint($(this).data("pi")), 1);
+      render();
+    });
     // Le PDF lit le plan ENREGISTRÉ : on enregistre d'abord ce qui est à l'écran. Les conteneurs vides
     // disparaissant à l'enregistrement, le numéro est celui du conteneur parmi les non vides.
     $z.find("#lci-ct-pdf-tous").on("click", async () => {
@@ -3477,6 +3606,7 @@ function lci_render_conteneurs(frm) {
         <span class="lci-pl-note">${format_currency(flt(c.montant), dev)}</span>
         <button class="btn btn-xs btn-default lci-pl-pdf" data-no="${c.no}" title="${__("PDF de ce conteneur pour le fournisseur")}">📄 PDF</button>
       </div>
+      ${lci_pl_paiements(frm, c)}
       <div class="lci-pl-bar"><div class="lci-pl-fill${ko ? " ko" : ""}" style="width:${pct}%;"></div></div>
       <table class="lci-pl-tbl"><tbody>
         ${c.lignes.map((l) => `<tr>
@@ -3989,4 +4119,77 @@ function lci_pdf_conteneurs(frm) {
     primary_action: (v) => { d.hide(); lci_telecharger(lci_pdf_url(frm, cint(v.no) || null)); },
   });
   d.show();
+}
+
+// ------------------------------------------------- plan de paiement (14/10/2026)
+// Échéances TT / LC dans l'onglet Conteneurs : montant saisi, ou % de la commande (montant retenu) — du conteneur
+// s'il est indiqué. Le % fait foi ; taper un montant différent l'efface (le montant saisi l'emporte).
+// Le serveur refait le même calcul à l'enregistrement (lci_paiement.py) ; ici, on le voit en direct.
+
+function lci_paiement_base(frm, row) {
+  const no = cint(row.conteneur);
+  if (!no) return flt(frm.doc.montant_retenu);
+  const c = lci_plan_local(frm).conteneurs.find((x) => cint(x.no) === no);
+  return c ? flt(c.montant) : null;
+}
+
+function lci_paiement_totaux(frm) {
+  const total = (frm.doc.plan_paiement || []).reduce((a, e) => a + flt(e.montant), 0);
+  const cts = lci_plan_local(frm).conteneurs;   // à payer : le plan de chargement, sinon le montant retenu
+  const base = cts.length ? cts.reduce((a, c) => a + flt(c.montant), 0) : flt(frm.doc.montant_retenu);
+  frm.set_value("total_paiements", total);
+  frm.set_value("reste_a_planifier", Math.round((base - total) * 100) / 100);
+}
+
+function lci_paiement_calcul(frm, cdt, cdn) {
+  const row = locals[cdt][cdn];
+  const base = lci_paiement_base(frm, row);
+  if (base === null) {
+    frappe.show_alert({ message: __("Le conteneur C{0} n'existe pas dans le plan de chargement enregistré.", [row.conteneur]),
+                        indicator: "orange" });
+  } else if (flt(row.pourcentage) > 0) {
+    frappe.model.set_value(cdt, cdn, "montant", Math.round(base * flt(row.pourcentage)) / 100);
+  }
+  lci_paiement_totaux(frm);
+}
+
+frappe.ui.form.on("Liste Commande Import Paiement", {
+  solde(frm, cdt, cdn) {
+    const row = locals[cdt][cdn];
+    if (!row.solde) return lci_paiement_totaux(frm);
+    const base = lci_paiement_base(frm, row);
+    const autres = (frm.doc.plan_paiement || []).filter((p) => p.name !== row.name && cint(p.conteneur) === cint(row.conteneur))
+      .reduce((a, p) => a + flt(p.montant), 0);
+    if (base !== null) frappe.model.set_value(cdt, cdn, "montant", Math.max(Math.round((base - autres) * 100) / 100, 0));
+    frappe.model.set_value(cdt, cdn, "pourcentage", 0);
+    lci_paiement_totaux(frm);
+  },
+  pourcentage: lci_paiement_calcul,
+  conteneur: lci_paiement_calcul,
+  montant(frm, cdt, cdn) {
+    const row = locals[cdt][cdn];
+    const base = lci_paiement_base(frm, row);
+    if (flt(row.pourcentage) > 0 && base !== null
+        && Math.abs(flt(row.montant) - Math.round(base * flt(row.pourcentage)) / 100) > 0.01) {
+      frappe.model.set_value(cdt, cdn, "pourcentage", 0);   // montant tapé à la main : il l'emporte sur le %
+    }
+    lci_paiement_totaux(frm);
+  },
+  plan_paiement_remove(frm) { lci_paiement_totaux(frm); },
+});
+
+// Les paiements d'un conteneur, en lecture, dans l'onglet Conteneurs (ils se saisissent dans « Répartition en conteneurs »).
+function lci_pl_paiements(frm, c) {
+  const esc = frappe.utils.escape_html, dev = frm.doc.devise || "USD";
+  const ps = (frm.doc.plan_paiement || []).filter((p) => cint(p.conteneur) === cint(c.no))
+    .sort((a, b) => String(a.date_execution || "9").localeCompare(String(b.date_execution || "9")));
+  if (!ps.length) return "";
+  const total = ps.reduce((a, p) => a + flt(p.montant), 0), reste = flt(c.montant) - total;
+  return `<div style="padding:4px 10px;font-size:11.5px;background:#fcfaff;border-bottom:1px dashed var(--border-color,#e4e8ee)">💳 ${
+    ps.map((p) => `<b>${esc(p.type_paiement || "")}</b> ${esc(p.libelle || "")} ${
+      p.date_execution ? esc(frappe.datetime.str_to_user(p.date_execution)) : `<i>${__("à confirmer")}</i>`}${
+      flt(p.pourcentage) ? ` · ${format_number(p.pourcentage, null, 1)} %`
+        : flt(p.montant) && flt(c.montant) ? ` · ${format_number(100 * flt(p.montant) / flt(c.montant), null, 1)} %` : ""} · <b>${format_currency(flt(p.montant), dev)}</b>`).join(" &nbsp;|&nbsp; ")}
+    ${Math.abs(reste) < 0.01 ? `<span style="color:#237804"> · ✓ 100 %</span>`
+      : `<span style="color:#a8071a"> · ${__("reste")} ${format_currency(reste, dev)}</span>`}</div>`;
 }

@@ -1,0 +1,91 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-10-14 13:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "libelle",
+  "conteneur",
+  "type_paiement",
+  "date_execution",
+  "pourcentage",
+  "solde",
+  "montant"
+ ],
+ "fields": [
+  {
+   "columns": 2,
+   "description": "Ce que paie ce versement : acompte, solde du conteneur C1 avant chargement…",
+   "fieldname": "libelle",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Libellé"
+  },
+  {
+   "columns": 1,
+   "description": "N° du conteneur (1 pour C1…). Vide = toute la commande (acompte…).",
+   "fieldname": "conteneur",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Conteneur"
+  },
+  {
+   "columns": 1,
+   "default": "TT",
+   "description": "TT = virement (telegraphic transfer) · LC = lettre de crédit.",
+   "fieldname": "type_paiement",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Type",
+   "options": "TT\nLC",
+   "reqd": 1
+  },
+  {
+   "columns": 2,
+   "description": "Vide = à confirmer (écrit « to be confirmed » dans le PDF).",
+   "fieldname": "date_execution",
+   "fieldtype": "Date",
+   "in_list_view": 1,
+   "label": "Date d'exécution"
+  },
+  {
+   "columns": 1,
+   "description": "Part du montant du conteneur (de la commande si aucun conteneur). Rempli : le montant se calcule.",
+   "fieldname": "pourcentage",
+   "fieldtype": "Percent",
+   "in_list_view": 1,
+   "label": "%"
+  },
+  {
+   "columns": 1,
+   "default": "0",
+   "description": "Coché : prend automatiquement le reste du conteneur (ou de la commande) après les autres paiements — le solde suit quand l'acompte change.",
+   "fieldname": "solde",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "= Reste"
+  },
+  {
+   "columns": 2,
+   "description": "Saisi directement, ou calculé depuis le %.",
+   "fieldname": "montant",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "Montant",
+   "options": "devise"
+  }
+ ],
+ "istable": 1,
+ "links": [],
+ "modified": "2026-10-14 15:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "Liste Commande Import Paiement",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

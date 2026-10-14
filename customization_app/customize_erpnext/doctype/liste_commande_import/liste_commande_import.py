@@ -23,6 +23,7 @@ import frappe
 from frappe.model.document import Document
 from frappe.utils import flt
 
+from customization_app.lci_paiement import appliquer as appliquer_plan_paiement
 from customization_app.lci_observation import (
     maj_ligne,
     prix_retenu,
@@ -135,3 +136,5 @@ class ListeCommandeImport(Document):
         cote = sum(flt(r.total_fournisseur) for r in self.articles
                    if flt(r.prix_cible) > 0 and flt(r.prix_fournisseur) > 0)
         self.ecart_global_pct = (cote - base) / base * 100 if base else 0
+        # plan de paiement (14/10/2026) : montants en %, total planifié, reste — après le montant retenu
+        appliquer_plan_paiement(self)

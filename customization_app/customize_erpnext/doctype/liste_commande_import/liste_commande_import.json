@@ -36,7 +36,12 @@
   "section_conteneurs",
   "nb_conteneurs",
   "conteneurs_html",
-  "plan_conteneurs"
+  "plan_conteneurs",
+  "section_paiement",
+  "plan_paiement",
+  "total_paiements",
+  "column_break_paiement",
+  "reste_a_planifier"
  ],
  "fields": [
   {
@@ -172,20 +177,20 @@
    "read_only": 1
   },
   {
+   "description": "Somme des montants de ligne lus dans le classeur du fournisseur (sa propre addition).",
    "fieldname": "montant_fichier",
    "fieldtype": "Currency",
    "label": "Montant du fichier",
    "options": "devise",
-   "read_only": 1,
-   "description": "Somme des montants de ligne lus dans le classeur du fournisseur (sa propre addition)."
+   "read_only": 1
   },
   {
+   "description": "Quantités et prix retenus par nous — c'est ce que vaut la contre-proposition.",
    "fieldname": "montant_retenu",
    "fieldtype": "Currency",
    "label": "Montant retenu",
    "options": "devise",
-   "read_only": 1,
-   "description": "Quantités et prix retenus par nous — c'est ce que vaut la contre-proposition."
+   "read_only": 1
   },
   {
    "fieldname": "nb_lignes_divergentes",
@@ -194,10 +199,10 @@
    "read_only": 1
   },
   {
+   "collapsible": 1,
    "fieldname": "section_reponse_fichier",
    "fieldtype": "Section Break",
-   "label": "Fichier du fournisseur",
-   "collapsible": 1
+   "label": "Fichier du fournisseur"
   },
   {
    "fieldname": "fichier_fournisseur",
@@ -208,8 +213,8 @@
   {
    "fieldname": "reponse_plan",
    "fieldtype": "Long Text",
-   "label": "Plan de lecture du fichier (JSON)",
-   "hidden": 1
+   "hidden": 1,
+   "label": "Plan de lecture du fichier (JSON)"
   },
   {
    "fieldname": "section_conteneurs",
@@ -225,8 +230,39 @@
   {
    "fieldname": "plan_conteneurs",
    "fieldtype": "Long Text",
-   "label": "Plan de chargement (JSON)",
-   "hidden": 1
+   "hidden": 1,
+   "label": "Plan de chargement (JSON)"
+  },
+  {
+   "description": "Quand et comment le fournisseur est payé (TT ou LC) — repris dans le PDF du plan de chargement.",
+   "fieldname": "section_paiement",
+   "fieldtype": "Section Break",
+   "label": "Plan de paiement"
+  },
+  {
+   "fieldname": "plan_paiement",
+   "fieldtype": "Table",
+   "label": "Échéances",
+   "options": "Liste Commande Import Paiement"
+  },
+  {
+   "fieldname": "total_paiements",
+   "fieldtype": "Currency",
+   "label": "Total planifié",
+   "options": "devise",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_paiement",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "Total du plan de chargement (montant retenu sans plan) − total planifié.",
+   "fieldname": "reste_a_planifier",
+   "fieldtype": "Currency",
+   "label": "Reste à planifier",
+   "options": "devise",
+   "read_only": 1
   },
   {
    "fieldname": "conteneurs_html",
@@ -236,7 +272,7 @@
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-09-17 15:00:00.000000",
+ "modified": "2026-10-14 13:00:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Liste Commande Import",
