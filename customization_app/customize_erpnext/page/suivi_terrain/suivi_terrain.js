@@ -503,6 +503,105 @@ class SuiviTerrain {
   }
 
   // ── Statistiques ──────────────────────────────────────────────────────────
+  // ── Analyse : distributions, comparaisons, granularité, d'où vient le retard (15/10/2026) ───────────────────────
+  _render_analyse() {
+    const s = this._stats_data, esc = frappe.utils.escape_html, $a = this.$root.find("#st-analyse");
+    if (!s || !(s.lignes || []).length) return;
+    const L = s.lignes, tol = s.tolerance;
+    const o = this._analyse_opts = this._analyse_opts || { gran: "semaine", metrique: "aheure", emps: null };
+    const noms = {}; L.forEach((l) => { noms[l.e] = l.n; });
+    const tous = Object.keys(noms).filter((e) => L.some((l) => l.e === e && l.st === "Passage confirmé")).sort((a, b) => (noms[a] || "").localeCompare(noms[b] || ""));
+    if (!o.emps) o.emps = tous.slice();
+    const sel = tous.filter((e) => o.emps.includes(e));
+    const med = (v) => { if (!v.length) return null; const t = v.slice().sort((a, b) => a - b), m = Math.floor(t.length / 2); return t.length % 2 ? t[m] : Math.round((t[m - 1] + t[m]) / 2); };
+    const pctl = (v, q) => { if (!v.length) return null; const t = v.slice().sort((a, b) => a - b); return t[Math.min(t.length - 1, Math.floor(q * t.length))]; };
+    const pc = (n, d) => (d ? Math.round((n / d) * 100) + " %" : "–");
+    const signe = (m) => (m == null ? "–" : (m > 0 ? "+" : "") + m + " min");
+    const conf = (l) => l.st === "Passage confirmé" && l.ec != null;
+    const aheure = (l) => Math.abs(l.ec) <= tol;
+    const couleur = (v, bon, mauvais) => v == null ? "" : v >= bon ? "ok" : v <= mauvais ? "retard" : "";
+    const METRIQUES = { aheure: "% à l'heure (± " + tol + " min)", retard: "% en retard de plus de " + tol + " min", ecart: "écart médian (min)", p90: "écart P90 (min)", confirme: "% passage confirmé", duree: "durée médiane sur place (min)", taches: "tâches clôturées", parjour: "tâches par jour travaillé" };
+    const mesure = (ls) => {
+      const c = ls.filter(conf), ec = c.map((l) => l.ec), du = c.filter((l) => l.du != null).map((l) => l.du);
+      const jours = new Set(ls.map((l) => l.d)).size;
+      switch (o.metrique) {
+        case "aheure": return c.length ? Math.round(100 * c.filter(aheure).length / c.length) : null;
+        case "retard": return c.length ? Math.round(100 * c.filter((l) => l.ec > tol).length / c.length) : null;
+        case "ecart": return med(ec);
+        case "p90": return pctl(ec, 0.9);
+        case "confirme": return ls.length ? Math.round(100 * ls.filter((l) => l.st === "Passage confirmé").length / ls.length) : null;
+        case "duree": return med(du);
+        case "taches": return ls.length;
+        case "parjour": return jours ? Math.round(10 * ls.length / jours) / 10 : null;
+      }
+    };
+    const fmt = (v) => (v == null ? "–" : ["aheure", "retard", "confirme"].includes(o.metrique) ? v + " %" : ["ecart", "p90"].includes(o.metrique) ? signe(v) : String(v).replace(".", ","));
+    const bonne = (v) => (v == null ? "" : o.metrique === "aheure" || o.metrique === "confirme" ? couleur(v, 60, 35) : o.metrique === "retard" ? couleur(-v, -25, -50) : o.metrique === "ecart" || o.metrique === "p90" ? couleur(-Math.abs(v), -tol, -2 * tol) : "");
+    let html = `<div class="st-section">🔎 Analyse <span class="st-dim">— tâches clôturées appariées de la période ; ponctualité et durées sur les passages confirmés seulement</span></div>
+      <div class="st-bar" style="margin:4px 0 8px">
+        <label class="st-dim">Période</label><select id="st-an-gran"><option value="semaine"${o.gran === "semaine" ? " selected" : ""}>par semaine</option><option value="mois"${o.gran === "mois" ? " selected" : ""}>par mois</option><option value="jsem"${o.gran === "jsem" ? " selected" : ""}>par jour de la semaine</option></select>
+        <label class="st-dim">Mesure</label><select id="st-an-metrique">${Object.entries(METRIQUES).map(([k, v]) => `<option value="${k}"${o.metrique === k ? " selected" : ""}>${esc(v)}</option>`).join("")}</select>
+        <span class="st-dim">Techniciens :</span> ${tous.map((e) => `<label style="margin:0 6px 0 0;font-weight:400"><input type="checkbox" data-an-emp="${esc(e)}"${sel.includes(e) ? " checked" : ""}> ${esc(noms[e])}</label>`).join("")}
+      </div>`;
+    // F. Qualité de mesure : sur quoi reposent les chiffres de chacun
+    html += `<div class="st-section" style="font-size:13px">Qualité de la mesure <span class="st-dim">— un taux de retard calculé sur 40 % de passages confirmés ne vaut pas celui calculé sur 90 %</span></div>
+      <table class="st-t"><thead><tr><th>Technicien</th><th class="num">Tâches</th><th class="num">Passage confirmé</th><th class="num">Sans position</th><th class="num">Aucun passage</th><th class="num">Pas de véhicule</th><th class="num">Mesure fiable ?</th></tr></thead><tbody>`;
+    for (const e of tous) {
+      const ls = L.filter((l) => l.e === e), n = ls.length, c = ls.filter((l) => l.st === "Passage confirmé").length;
+      const cpt = (st) => ls.filter((l) => l.st === st).length, taux = n ? Math.round(100 * c / n) : 0;
+      html += `<tr><td>${esc(noms[e])}</td><td class="num">${n}</td><td class="num"><span class="st-ecart ${couleur(taux, 70, 45)}">${pc(c, n)}</span> <span class="st-dim">(${c})</span></td><td class="num">${pc(cpt("Sans position"), n)}</td><td class="num">${pc(cpt("Aucun passage"), n)}</td><td class="num">${pc(cpt("Pas de véhicule"), n)}</td><td class="num">${taux >= 70 ? "✅ oui" : taux >= 45 ? "⚠️ partielle" : "❌ non"}</td></tr>`;
+    }
+    html += `</tbody></table>`;
+    // B. Distribution des écarts
+    const TR = [["< −60", -1e9, -60], ["−60 / −30", -60, -30], ["−30 / −10", -30, -10], ["−10 / +10", -10, 10], ["+10 / +30", 10, 30], ["+30 / +60", 30, 60], ["+60 / +120", 60, 120], ["> +120", 120, 1e9]];
+    html += `<div class="st-section" style="font-size:13px">Distribution des écarts à l'heure annoncée <span class="st-dim">— en % des passages confirmés de chacun · négatif = en avance</span></div>
+      <table class="st-t"><thead><tr><th>Technicien</th><th class="num">Passages</th>${TR.map((t) => `<th class="num">${t[0]}</th>`).join("")}<th class="num">Médiane</th><th class="num">P90</th><th class="num">À l'heure</th></tr></thead><tbody>`;
+    const lignesDist = sel.map((e) => [noms[e], L.filter((l) => l.e === e && conf(l))]).concat([["Tous", L.filter((l) => sel.includes(l.e) && conf(l))]]);
+    for (const [nom, c] of lignesDist) {
+      if (!c.length) continue;
+      const ec = c.map((l) => l.ec);
+      html += `<tr><td>${nom === "Tous" ? "<b>Tous</b>" : esc(nom)}</td><td class="num">${c.length}</td>`;
+      for (const [, a, b] of TR) {
+        const n = ec.filter((x) => x >= a && x < b).length, p = Math.round(100 * n / ec.length);
+        const fond = a >= -10 && b <= 10 ? "rgba(22,163,74," + (0.15 + p / 100) + ")" : a >= 30 ? "rgba(220,38,38," + (0.1 + p / 60) + ")" : b <= -30 ? "rgba(37,99,235," + (0.1 + p / 60) + ")" : "transparent";
+        html += `<td class="num" style="background:${fond}">${p ? p + " %" : ""}</td>`;
+      }
+      html += `<td class="num">${signe(med(ec))}</td><td class="num">${signe(pctl(ec, 0.9))}</td><td class="num"><b>${pc(c.filter(aheure).length, c.length)}</b></td></tr>`;
+    }
+    html += `</tbody></table>`;
+    // C. Comparaison période × technicien
+    const JOURS = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"];
+    const cle = (l) => o.gran === "mois" ? l.d.slice(0, 7) : o.gran === "jsem" ? String(l.jsem) : `${l.a}-S${String(l.s).padStart(2, "0")}`;
+    const lib = (k) => o.gran === "mois" ? frappe.datetime.str_to_obj(k + "-01").toLocaleDateString("fr-FR", { month: "long", year: "numeric" }) : o.gran === "jsem" ? JOURS[+k] : "semaine " + k.split("-S")[1] + " <span class='st-dim'>" + k.split("-S")[0] + "</span>";
+    const periodes = [...new Set(L.filter((l) => sel.includes(l.e)).map(cle))].sort((a, b) => (o.gran === "jsem" ? +a - +b : b.localeCompare(a)));
+    html += `<div class="st-section" style="font-size:13px">Comparaison ${o.gran === "jsem" ? "par jour de la semaine" : o.gran === "mois" ? "mois par mois" : "semaine par semaine"} — ${esc(METRIQUES[o.metrique])}</div>
+      <table class="st-t"><thead><tr><th>Période</th>${sel.map((e) => `<th class="num">${esc(noms[e])}</th>`).join("")}<th class="num">Tous</th></tr></thead><tbody>`;
+    for (const k of periodes) {
+      const lp = L.filter((l) => cle(l) === k);
+      html += `<tr><td>${lib(k)}</td>${sel.map((e) => { const v = mesure(lp.filter((l) => l.e === e)); return `<td class="num"><span class="st-ecart ${bonne(v)}">${fmt(v)}</span></td>`; }).join("")}<td class="num"><b>${fmt(mesure(lp.filter((l) => sel.includes(l.e))))}</b></td></tr>`;
+    }
+    html += `</tbody></table>`;
+    // D. D'où vient le retard : heure annoncée, rang dans la tournée, type
+    const cellule = (ls) => { const c = ls.filter(conf); if (!c.length) return `<td class="num st-dim">–</td>`; const m = med(c.map((l) => l.ec)), a = Math.round(100 * c.filter(aheure).length / c.length); return `<td class="num"><span class="st-ecart ${couleur(-Math.abs(m), -tol, -2 * tol)}">${signe(m)}</span> <span class="st-dim">· ${a} % · ×${c.length}</span></td>`; };
+    const bloc = (titre, cats, f) => {
+      let h = `<div class="st-section" style="font-size:13px">${titre} <span class="st-dim">(écart médian · % à l'heure · passages)</span></div><table class="st-t"><thead><tr><th></th>${sel.map((e) => `<th class="num">${esc(noms[e])}</th>`).join("")}<th class="num">Tous</th></tr></thead><tbody>`;
+      for (const [libc, test] of cats) {
+        const lc = L.filter((l) => sel.includes(l.e) && test(l));
+        if (!lc.some(conf)) continue;
+        h += `<tr><td>${libc}</td>${sel.map((e) => cellule(lc.filter((l) => l.e === e))).join("")}${cellule(lc)}</tr>`;
+      }
+      return h + `</tbody></table>`;
+    };
+    html += bloc("D'où vient le retard — par heure annoncée", [["avant 9 h", (l) => l.h < 9], ["9 h – 10 h", (l) => l.h === 9], ["10 h – 11 h", (l) => l.h === 10], ["11 h – 12 h", (l) => l.h === 11], ["12 h – 14 h", (l) => l.h >= 12 && l.h < 14], ["14 h – 15 h", (l) => l.h === 14], ["15 h – 16 h", (l) => l.h === 15], ["16 h – 17 h", (l) => l.h === 16], ["17 h et après", (l) => l.h >= 17]]);
+    html += bloc("Par rang dans la tournée du jour", [["1re tâche du jour", (l) => l.r === 1], ["2e", (l) => l.r === 2], ["3e", (l) => l.r === 3], ["4e", (l) => l.r === 4], ["5e et plus", (l) => l.r >= 5]]);
+    html += bloc("Par type d'intervention", [...new Set(L.map((l) => l.t))].sort().map((t) => [esc(t), (l) => l.t === t]));
+    html += `<div class="st-dim" style="margin-top:4px">Lecture : si l'écart grandit avec l'heure ou le rang, ce sont les durées planifiées ou les trajets qui sont trop courts ; s'il est déjà là à la 1re tâche, c'est l'heure de départ.</div>`;
+    $a.html(html);
+    $a.find("#st-an-gran").on("change", (e) => { o.gran = e.target.value; this._render_analyse(); });
+    $a.find("#st-an-metrique").on("change", (e) => { o.metrique = e.target.value; this._render_analyse(); });
+    $a.find("[data-an-emp]").on("change", () => { o.emps = $a.find("[data-an-emp]:checked").map((i, x) => $(x).attr("data-an-emp")).get(); this._render_analyse(); });
+  }
+
   async stats() {
     const args = { du: this.$root.find("#st-du").val(), au: this.$root.find("#st-au").val(), employe: this.$root.find("#st-emp").val() || null };
     const r = await frappe.call({ method: "customization_app.flotte_gps.statistiques", args, freeze: true });
@@ -550,6 +649,7 @@ class SuiviTerrain {
       }
       html += `</tbody></table>`;
     }
+    html += `<div id="st-analyse"></div>`;
     // Tableau croisé : durée réelle sur place par technicien ET par type (moyenne / médiane / nombre).
     const emps = s.employes.filter((e) => e.confirmes);
     if (emps.length) {
@@ -607,6 +707,7 @@ class SuiviTerrain {
         tooltipOptions: { formatTooltipY: (v) => v + " min" } });
     }
     $out.find("[data-action='csv']").on("click", () => this._csv());
+    this._render_analyse();
   }
 
   _csv() {

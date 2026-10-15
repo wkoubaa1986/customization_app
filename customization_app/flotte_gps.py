@@ -904,6 +904,20 @@ def statistiques(du=None, au=None, employe=None):
         pm["km"] = round(pm["km"], 1)
         pm.pop("durees"), pm.pop("ecarts")
     par_mois = sorted(par_mois.values(), key=lambda x: (x["mois"], x["nom"] or ""), reverse=True)
+    # Lignes compactes, TOUTES les tâches : distributions, comparaisons, granularité jour / semaine / mois et « d'où vient le
+    # retard » (heure annoncée, rang dans la tournée, type) se calculent côté page sans revenir au serveur (15/10/2026).
+    lignes, rang, precedent = [], 0, None
+    for r in sorted(rows, key=lambda x: (x.custom_choix_du_staff or "", str(x.starts_on))):
+        cle_jour = (r.custom_choix_du_staff, str(r.starts_on)[:10])
+        rang = rang + 1 if cle_jour == precedent else 1
+        precedent = cle_jour
+        d = get_datetime(r.starts_on)
+        lignes.append({"d": str(r.starts_on)[:10], "s": d.isocalendar()[1], "a": d.isocalendar()[0], "e": r.custom_choix_du_staff,
+                       "n": r["custom_employé"] or r.custom_choix_du_staff, "t": r.custom_type_dintervention or "?", "st": r.custom_gps_statut,
+                       "h": d.hour, "r": rang, "jsem": d.weekday(),
+                       "ec": cint(r.custom_gps_ecart) if r.custom_gps_statut == CONFIRME and r.custom_gps_ecart is not None else None,
+                       "du": cint(r.custom_gps_duree) if r.custom_gps_statut == CONFIRME and r.custom_gps_duree is not None else None,
+                       "pl": int((get_datetime(r.ends_on) - d).total_seconds() // 60) if r.ends_on else None})
     par_jour = {}
     for r in rows:
         if employe or len(par_emp) == 1:
@@ -926,4 +940,4 @@ def statistiques(du=None, au=None, employe=None):
             "confirmes": sum(e["confirmes"] for e in par_emp.values()), "buckets": buckets,
             "employes": sorted(par_emp.values(), key=lambda e: e["nom"]), "types": sorted(par_type.values(), key=lambda t: -t["taches"]),
             "manquants": manquants[-60:], "vehicules": sorted(par_vehicule.values(), key=lambda v: v["vehicule"]),
-            "journees": journees[:120], "standard": to.DUREE_TYPE, "terrain": DUREE_TERRAIN, "par_mois": par_mois}
+            "journees": journees[:120], "standard": to.DUREE_TYPE, "terrain": DUREE_TERRAIN, "par_mois": par_mois, "lignes": lignes}
