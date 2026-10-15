@@ -145,3 +145,15 @@ class TestOriginesRdv(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestJoursDesFiles(unittest.TestCase):
+    """15/10/2026 : relance paiements le lundi, retenue à la source le mardi ; les files quotidiennes tous les jours."""
+
+    def test_est_son_jour(self):
+        self.assertTrue(T.est_son_jour("relances", "2026-10-19"))     # lundi
+        self.assertFalse(T.est_son_jour("relances", "2026-10-20"))    # mardi
+        self.assertTrue(T.est_son_jour("ras", "2026-10-20"))
+        self.assertFalse(T.est_son_jour("ras", "2026-10-19"))
+        self.assertTrue(T.est_son_jour("normal", "2026-10-20"))
+        self.assertTrue(T.est_son_jour("hors_secteur", "2026-10-24"))

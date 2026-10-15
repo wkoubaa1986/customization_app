@@ -66,8 +66,8 @@ PRIORITES = (
     ("relance_liste", "2e appel (Relance)"),
     ("requalif", "Requalification"),
     ("zone", "Zone partenaire"),
-    ("relances", "Relance paiements (1×/semaine)"),
-    ("ras", "Retenue à la source (certificats manquants)"),
+    ("relances", "Relance paiements (le lundi)"),
+    ("ras", "Retenue à la source (le mardi, certificats manquants)"),
     ("hors_secteur", "Hors secteur (quand tout le reste est fait)"),
 )
 #: Les autres suivis : comptés, mais hors des files d'appels.
@@ -91,6 +91,19 @@ CLES_LISTES = tuple(TYPES_LISTE.values())
 MARQUEURS_RELANCE = {"[RELANCE-PAIEMENT]": "relances", "[RELANCE-RAS]": "relance_ras"}
 #: Un client qui doit de l'argent est relancé une fois par semaine.
 RELANCE_JOURS = 7
+#: Les files hebdomadaires ont leur jour (décision 15/10/2026) : relance paiements le LUNDI, retenue à la
+#: source le MARDI. Les autres jours, la file est « pas aujourd'hui » (reste 0) et n'appelle pas.
+JOUR_RELANCES, JOUR_RAS = 0, 1          # weekday() : lundi = 0
+
+
+def jour_de(cle: str, today=None) -> int | None:
+    return {"relances": JOUR_RELANCES, "ras": JOUR_RAS}.get(cle)
+
+
+def est_son_jour(cle: str, today=None) -> bool:
+    """Une file hebdomadaire n'est « à faire » que son jour ; une file quotidienne l'est toujours. PURE."""
+    j = jour_de(cle)
+    return True if j is None else getdate(today or nowdate()).weekday() == j
 
 RAPPORT_RATTRAPAGE = "Liste Appels Rattrapage"
 #: Où chaque priorité s'ouvre : (route, options) pour frappe.set_route.
@@ -365,7 +378,9 @@ def restes() -> dict:
     out = _restes_listes()
     out["commandes"] = _reste_commandes()
     out["rattrapage"] = _reste_rattrapage()
-    out["relances"] = _reste_relances()
+    out["relances"] = _reste_relances() if est_son_jour("relances") else 0
+    if not est_son_jour("ras"):
+        out["ras"] = 0
     return out
 
 
