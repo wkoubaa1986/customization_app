@@ -90,3 +90,4 @@ customization_app.patches.rattraper_echeanciers_entretien
 customization_app.patches.recalculer_requalification
 customization_app.patches.ensure_qualification_appels
 customization_app.patches.ensure_liste_hors_secteur
+customization_app.patches.positions_grossieres_oubliees

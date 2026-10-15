@@ -477,20 +477,43 @@ def _centres_secteurs() -> dict:
     return out
 
 
+GRILLE_GROSSIERE = 37          # pas de la grille (1/37° ≈ 3 km) des positions réseau/IP rendues par un téléphone sans GPS
+GROSSIERE = "grossière"
+
+
+def position_grossiere(c) -> bool:
+    """Vrai pour une position RÉSEAU/IP (pas le GPS) : le téléphone la rend sur une grille de 1/37° en latitude
+    (La Goulette 36.810811 × 37 = 1362.000007). Le bouton « 📍 Ma position » de la clôture en a écrit 31 sur 156 liens
+    q=lat,lng depuis 09/2026 (15/10/2026) : une vraie position tombe sur la grille moins d'une fois sur 10 000. PURE."""
+    if not c or not c[0]:
+        return False
+    x = flt(c[0]) * GRILLE_GROSSIERE
+    return abs(x - round(x)) < 5e-5
+
+
 def coordonnees_tache(t, centres: dict):
-    """(lat, lng, source) — source : « tâche », « adresse », « secteur » (approximatif) ou None."""
+    """(lat, lng, source) — source : « tâche », « adresse », « secteur » ou « grossière » (approximatifs) ou None.
+
+    « grossière » : un lien de tâche (ou mémorisé depuis un lien de tâche) sur la grille 1/37° — position réseau du
+    téléphone, à 1-3 km du client ; on la donne comme approchée, et on ne la mémorise jamais sur l'adresse
+    (13 des 16 tâches à lien grossier finissaient « aucun passage », 15/10/2026)."""
     c = resoudre_lien(t.get("google_map"))
     if c:
+        if position_grossiere(c):
+            return c[0], c[1], GROSSIERE
         if t.get("select_address") and frappe.db.has_column("Address", "custom_latitude"):
             lat, src = frappe.db.get_value("Address", t.select_address, ["custom_latitude", "custom_geocode_source"]) or (None, None)
-            # Vide, ou seulement approchée d'après le texte (Faleh Wajdi : « Cité Ennasr 2 » lu à Mateur, 55 km, 09/10/2026) :
-            # le lien de la tâche est plus sûr — l'adresse le garde pour les autres tâches du client.
-            if not lat or (src or "").startswith("texte"):
+            # Vide, ou seulement approchée d'après le texte (Faleh Wajdi : « Cité Ennasr 2 » lu à Mateur, 55 km, 09/10/2026),
+            # ou mémorisée depuis un lien de tâche grossier : le lien de la tâche est plus sûr — l'adresse le garde pour
+            # les autres tâches du client.
+            if not lat or (src or "").startswith("texte") or (src == "lien tâche" and position_grossiere((lat, 0))):
                 _memoriser(t.select_address, c, "lien tâche")
         return c[0], c[1], "tâche"
     c = _geocoder_adresse(t.get("select_address"))
     if c:
         src = frappe.db.get_value("Address", t.select_address, "custom_geocode_source") or ""
+        if src == "lien tâche" and position_grossiere(c):
+            return c[0], c[1], GROSSIERE
         return c[0], c[1], ("secteur" if src.startswith("texte") else "adresse")   # texte = approché, dit comme tel
     if t.get("secteur") in centres:
         c = centres[t.secteur]

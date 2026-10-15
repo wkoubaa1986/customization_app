@@ -179,6 +179,30 @@ class TestPistesSansPosition(unittest.TestCase):
         p = fg.arrets_candidats(self.taches, self.j, self.res, [MAGASIN], 150).get("C", [])
         self.assertEqual(p, [])
 
+    def test_sans_passage_a_des_pistes_mesurees_depuis_le_lien(self):
+        # B a un lien, mais le véhicule ne s'est pas arrêté chez elle : le lien est peut-être faux → les mêmes pistes,
+        # distance comptée depuis le lien ; A, passage confirmé, n'en a pas.
+        self.arrets[5] = _arret(14.0, 30, (36.83, 10.30))
+        self.taches[2]["client"] = "Client B"
+        res = fg.apparier_pure(self.taches, {"cb": self.j}, {"E1": "cb"}, 150)
+        self.assertEqual(res["B"]["statut"], fg.AUCUN)
+        p = fg.arrets_candidats(self.taches, self.j, res, [MAGASIN], 150)
+        self.assertNotIn("A", p)
+        self.assertEqual([x["arrivee"].strftime("%H:%M") for x in p["B"]], ["14:00", "12:30", "11:12"])
+        self.assertAlmostEqual(p["B"][0]["km_approx"], round(fg.to.haversine_km((36.83, 10.30), CHEZ_B), 1))
+
+    def test_fenetre_large_et_six_pistes(self):
+        # L'heure planifiée est fausse de 3-4 h (Akram 13/10) : −3 h / +5 h, 6 pistes — 96 % de « dedans » rejoués
+        self.arrets += [_arret(13.0, 20, (36.9, 10.1)), _arret(15.5, 20, (36.9, 10.2)), _arret(16.2, 20, (36.95, 10.2)),
+                        _arret(8.5, 20, (36.7, 10.1)), _arret(9.7, 20, (36.72, 10.12))]
+        self.j["arrets"] = sorted(self.arrets, key=lambda a: a["arr"])
+        p = fg.arrets_candidats(self.taches, self.j, self.res, [MAGASIN], 150)["C"]
+        self.assertEqual(len(p), fg.PISTES_MAX)
+        heures = {x["arrivee"].strftime("%H:%M") for x in p}
+        self.assertIn("08:30", heures)                                  # 2 h 30 avant : dedans
+        self.assertIn("15:30", heures)                                  # 4 h 30 après : dedans
+        self.assertNotIn("16:12", heures)                               # 5 h 12 après : dehors
+
     def test_rien_pour_une_tache_positionnee_interne_ou_sans_journal(self):
         self.assertNotIn("A", fg.arrets_candidats(self.taches, self.j, self.res, [MAGASIN], 150))
         self.taches[1]["client"] = ""                                    # vérification de stock, sans client
@@ -186,6 +210,14 @@ class TestPistesSansPosition(unittest.TestCase):
         self.taches[1]["client"] = "Client C"
         self.assertEqual(fg.arrets_candidats(self.taches, {"erreur": "x"}, self.res, [MAGASIN], 150), {})
         self.assertEqual(fg.arrets_candidats(self.taches, None, self.res, [MAGASIN], 150), {})
+
+    def test_duree_pour_l_arrivee_estimee_plafonnee_a_la_duree_reelle(self):
+        t = _tache("V", "E1", CHEZ_A, 9, duree=120, type="Visite")
+        self.assertEqual(fg._duree_planifiee(t), fg.DUREE_TERRAIN["Visite"])          # créneau de 2 h, visite de 30 min
+        t = _tache("E", "E1", CHEZ_A, 9, duree=20, type="Entretien")
+        self.assertEqual(fg._duree_planifiee(t), 20)                                  # créneau plus court : voulu
+        t = _tache("X", "E1", CHEZ_A, 9, duree=45, type="Inconnu")
+        self.assertEqual(fg._duree_planifiee(t), 45)
 
     def test_point_de_projection(self):
         self.assertEqual(fg._point(self.taches[0]), CHEZ_A)

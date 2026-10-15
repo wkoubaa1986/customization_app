@@ -273,6 +273,7 @@ class SuiviTerrain {
   /** D'où vient une position approchée — à dire tel quel, sans fausse précision. */
   _origine_approx(t) {
     if (t.approx_src === "secteur") return `≈ centre du ${frappe.utils.escape_html(t.secteur || "secteur")} : aucune position connue pour cette adresse (3 clients sur 4 du secteur sont à moins de 4,3 km de ce point, cercle pointillé)`;
+    if (t.approx_src === "grossiere") return "≈ position réseau du téléphone (bouton « Ma position » sans GPS précis) : à 1 à 3 km du client — choisissez le bon arrêt ci-dessous pour corriger le lien";
     return "≈ lue dans le texte de l’adresse par OpenStreetMap : la rue si elle est connue, sinon le quartier ou la ville — pas de lien Google Maps";
   }
 
@@ -294,14 +295,18 @@ class SuiviTerrain {
   }
 
   _pistes_fenetre(t) {
-    if (!t.gps_live || t.gps_live.statut !== "Sans position") return "";
+    if (!t.gps_live || !["Sans position", "Aucun passage"].includes(t.gps_live.statut)) return "";
     const p = t.pistes || [], esc = frappe.utils.escape_html, modif = frappe.model.can_write("Tache de travail");
+    const sans_passage = t.gps_live.statut === "Aucun passage";
     let html = `<div class="st-pistes-bloc"><div class="t">🅿️ Arrêts possibles autour du créneau</div>
-      <div class="st-dim" style="margin-bottom:6px">Sans la position exacte du client, le GPS ne peut pas savoir lequel est le bon : regardez sur la carte et confirmez.</div>`;
-    if (!p.length) return html + `<div class="st-dim">Aucun arrêt non identifié de plus de 5 min entre 1 h 30 avant et 3 h après l’heure annoncée.</div></div>`;
+      <div class="st-dim" style="margin-bottom:6px">${sans_passage
+        ? "Le véhicule ne s’est pas arrêté à moins de " + esc(String(this.data.rayon)) + " m du lien de la tâche : le lien est peut-être faux. Si l’un de ces arrêts est le client, « C’est ici » corrige le lien et l’adresse."
+        : "Sans la position exacte du client, le GPS ne peut pas savoir lequel est le bon : regardez sur la carte et confirmez."}</div>`;
+    if (!p.length) return html + `<div class="st-dim">Aucun arrêt non identifié de plus de 5 min entre 3 h avant et 5 h après l’heure annoncée.</div></div>`;
+    const ref = t.approx ? (t.approx_src === "grossiere" ? "du point réseau" : t.approx_src === "secteur" ? "du secteur" : "de l’adresse lue") : "du lien";
     html += p.map((x, i) => `<div class="st-piste">
         <span><b>${this._h(x.arrivee)}–${this._h(x.depart)}</b> · ${this._min(x.duree)}${x.en_cours ? " · <b>en cours</b>" : ""}
-          <span class="st-dim">${x.ecart > 0 ? "+" : ""}${x.ecart} min / annoncé${x.km_approx != null ? ` · à ${String(x.km_approx).replace(".", ",")} km du secteur` : ""}</span></span>
+          <span class="st-dim">${x.ecart > 0 ? "+" : ""}${x.ecart} min / annoncé${x.km_approx != null ? ` · à ${String(x.km_approx).replace(".", ",")} km ${ref}` : ""}</span></span>
         <span class="st-piste-btns"><button class="btn btn-default btn-xs" data-piste-voir="${i}">🗺 voir</button>
           ${modif ? `<button class="btn btn-primary btn-xs" data-piste-ici="${i}">📌 C’est ici</button>` : ""}</span></div>`).join("");
     return html + `</div>`;

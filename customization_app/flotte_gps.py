@@ -36,8 +36,13 @@ FUSION_M = 80                                      # … « même endroit » = �
 RAYON_LIEU_M = 200                                 # « au Magasin », « domicile »
 SAUTEE_APRES_MIN = 60                              # créneau dépassé d'une heure sans passage = probablement sautée
 ARRET_PROBABLE_MIN = 5                             # tâche sans position : un arrêt plus court ne fait pas une intervention
-FENETRE_AVANT_MIN = 90                             # … ni un arrêt commencé plus de 1 h 30 avant l'heure annoncée
-FENETRE_APRES_MIN = 180                            # … ou plus de 3 h après
+FENETRE_AVANT_MIN = 180                            # … ni un arrêt commencé plus de 3 h avant l'heure annoncée
+FENETRE_APRES_MIN = 300                            # … ou plus de 5 h après (l'heure planifiée est fausse de 3-4 h, Akram 13/10)
+PISTES_MAX = 6
+# Durée RÉELLE chez le client par type (médiane des passages confirmés 14/09 → 14/10/2026), pour l'arrivée estimée des
+# interventions suivantes. Le créneau planifié (Réparation 75, Visite 120, Autre 120) est un créneau, pas une durée :
+# enchaîné, il annonçait des retards 3 h à l'avance (14 des 30 alertes, 11 fausses sur 15 passages, 15/10/2026).
+DUREE_TERRAIN = {"Entretien": 40, "Installation": 80, "Réparation": 40, "Livraison": 15, "Visite": 30, "Autre": 35}
 TYPES_HORS = set(to.TYPES_HORS_JOURNEE) | {"Congé", "Tournée commerciale"}
 
 CONFIRME, AUCUN, SANS_POS, SANS_VEH, SANS_GPS = ("Passage confirmé", "Aucun passage", "Sans position",
@@ -270,23 +275,28 @@ def _fusionner(arrets: list) -> list:
     return out
 
 
-def arrets_candidats(taches: list, journal: dict | None, resultat: dict, lieux: list, rayon_m: float, max_n: int = 4) -> dict:
-    """Tâches SANS position exacte (adresse approchée ou inconnue) d'UN employé : les arrêts du véhicule qui POURRAIENT
-    être l'intervention → {tâche: [{arrivee, depart, duree, lat, lng, ecart, km_approx}, …]} (au plus max_n, du plus
-    plausible au moins plausible). Demande du 12/10/2026.
+def arrets_candidats(taches: list, journal: dict | None, resultat: dict, lieux: list, rayon_m: float, max_n: int = PISTES_MAX) -> dict:
+    """Tâches SANS position exacte (adresse approchée ou inconnue) ou SANS PASSAGE (position connue, mais aucun arrêt à
+    moins de rayon_m : le lien est peut-être faux) d'UN employé : les arrêts du véhicule qui POURRAIENT être
+    l'intervention → {tâche: [{arrivee, depart, duree, lat, lng, ecart, km_approx}, …]} (au plus max_n, du plus plausible
+    au moins plausible). Demande du 12/10/2026 ; étendu aux « sans passage » le 15/10/2026.
 
     Le GPS ne peut pas trancher seul : rejoué sur 3 semaines (21/09 → 10/10/2026) en cachant la position de tâches au
     passage confirmé, « le meilleur arrêt » n'était le bon que 63 fois sur 148, et il inventait un passage pour 27 des 33
-    interventions non faites (pauses, fournisseurs, ordre de tournée changé). D'où une liste de pistes, que l'on confirme
-    d'un clic (fixer_position) — jamais une étape « passée » déduite.
+    interventions non faites (pauses, fournisseurs, ordre de tournée changé). Rejoué sur un mois (14/09 → 14/10/2026,
+    225 passages) : l'alignement planning ↔ séquence d'arrêts ne fait pas mieux (56 %), les vrais arrêts étant souvent
+    courts et l'ordre planifié peu suivi ; une piste unique n'est la bonne que 2 fois sur 3. D'où une liste de pistes,
+    que l'on confirme d'un clic (fixer_position) — jamais une étape « passée » déduite.
 
     Pistes : arrêts (fusionnés) d'au moins ARRET_PROBABLE_MIN min que rien d'autre n'explique — ni chez un client dont la
     position est connue (≤ rayon), ni au Magasin / domicile (≤ RAYON_LIEU_M) — commencés entre FENETRE_AVANT_MIN avant et
-    FENETRE_APRES_MIN après l'heure annoncée. Ordre : minutes d'écart + 2 × km jusqu'à la position approchée. PURE."""
+    FENETRE_APRES_MIN après l'heure annoncée (−3 h / +5 h et 6 pistes : le bon arrêt est dans la liste 96 fois sur 100,
+    contre 81 avec −1 h 30 / +3 h et 4 pistes). Ordre : minutes d'écart + 2 × km jusqu'à la position approchée ou au
+    lien de la tâche. PURE."""
     if not journal or journal.get("erreur"):
         return {}
     # Chez un client seulement : une tâche interne (vérification de stock…) n'a pas d'adresse à retrouver.
-    cibles = [t for t in taches if resultat.get(t["name"], {}).get("statut") == SANS_POS and t.get("debut") and t.get("client")]
+    cibles = [t for t in taches if resultat.get(t["name"], {}).get("statut") in (SANS_POS, AUCUN) and t.get("debut") and t.get("client")]
     if not cibles:
         return {}
     connus = [(t["lat"], t["lng"]) for t in taches if t.get("lat") and t.get("lng")]
@@ -301,7 +311,8 @@ def arrets_candidats(taches: list, journal: dict | None, resultat: dict, lieux: 
             ecart = (a["arr"] - t["debut"]).total_seconds() / 60
             if ecart < -FENETRE_AVANT_MIN or ecart > FENETRE_APRES_MIN:
                 continue
-            km = to.haversine_km((a["lat"], a["lng"]), tuple(t["approx"])) if t.get("approx") else None
+            ref = t.get("approx") or ((t["lat"], t["lng"]) if t.get("lat") and t.get("lng") else None)
+            km = to.haversine_km((a["lat"], a["lng"]), tuple(ref)) if ref else None
             pistes.append((abs(ecart) + 2 * (km or 0), {"arrivee": a["arr"], "depart": a["dep"], "duree": a["minutes"],
                                                         "lat": a["lat"], "lng": a["lng"], "ecart": round(ecart),
                                                         "km_approx": round(km, 1) if km is not None else None}))
@@ -330,15 +341,17 @@ def _taches(jour) -> list:
     for r in rows:
         pos = to.coordonnees_tache(r, centres) if r.custom_type_dintervention not in TYPES_HORS else None
         approx = approx_src = None
-        if pos and pos[2] == "secteur":
-            # Position approchée (centre du secteur, adresse lue depuis le texte) : on ne peut ni confirmer ni
-            # infirmer un passage à 150 m près → « sans position », plutôt qu'un faux « aucun passage ». Elle sert
-            # seulement à ordonner les arrêts possibles (pistes) et à une arrivée estimée marquée « ≈ ».
+        if pos and pos[2] in ("secteur", to.GROSSIERE):
+            # Position approchée (centre du secteur, adresse lue depuis le texte, position réseau du téléphone) : on ne
+            # peut ni confirmer ni infirmer un passage à 150 m près → « sans position », plutôt qu'un faux « aucun
+            # passage ». Elle sert seulement à ordonner les arrêts possibles (pistes) et à une arrivée estimée marquée « ≈ ».
             approx = [pos[0], pos[1]]
             # D'où vient le point : le texte de l'adresse lu par OpenStreetMap (la rue si connue, sinon le quartier ou la
-            # ville) ou, à défaut, le centre du secteur (3 clients sur 4 à moins de 4,3 km, mesuré le 12/10/2026).
+            # ville), le centre du secteur (3 clients sur 4 à moins de 4,3 km, mesuré le 12/10/2026), ou le bouton
+            # « 📍 Ma position » appuyé sans GPS précis (grille 1/37°, à 1-3 km).
             c = centres.get(r.secteur)
-            approx_src = "secteur" if c and abs(c[0] - pos[0]) < 1e-6 and abs(c[1] - pos[1]) < 1e-6 else "texte"
+            approx_src = "grossiere" if pos[2] == to.GROSSIERE else (
+                "secteur" if c and abs(c[0] - pos[0]) < 1e-6 and abs(c[1] - pos[1]) < 1e-6 else "texte")
             pos = (None, None, "approchée")
         out.append({"name": r.name, "employe": r.custom_choix_du_staff, "employe_nom": r["custom_employé"],
                     "type": r.custom_type_dintervention or "", "debut": get_datetime(r.starts_on),
@@ -355,9 +368,13 @@ def _taches(jour) -> list:
 
 
 def _duree_planifiee(t) -> int:
+    """Durée retenue pour l'arrivée estimée des suivantes : le créneau planifié, plafonné à la durée réelle du type
+    (DUREE_TERRAIN) — un créneau plus court que d'habitude est voulu, un créneau plus long est un créneau."""
+    terrain = DUREE_TERRAIN.get(t.get("type") or "")
     if t.get("debut") and t.get("fin") and t["fin"] > t["debut"]:
-        return int((t["fin"] - t["debut"]).total_seconds() // 60)
-    return to.duree_retenue(t.get("type"), None, t.get("temps"))
+        planifiee = int((t["fin"] - t["debut"]).total_seconds() // 60)
+        return min(planifiee, terrain) if terrain else planifiee
+    return terrain or to.duree_retenue(t.get("type"), None, t.get("temps"))
 
 
 # ── Appariement écrit (cron / bouton) ────────────────────────────────────────
@@ -733,7 +750,8 @@ def statistiques(du=None, au=None, employe=None):
                                                         "avance": 0, "à l’heure": 0, "retard": 0, "types": {}})
         e["taches"] += 1
         typ = r.custom_type_dintervention or "?"
-        ty = par_type.setdefault(typ, {"type": typ, "standard": to.DUREE_TYPE.get(typ), "taches": 0, "confirmes": 0, "durees": [], "ecarts": []})
+        ty = par_type.setdefault(typ, {"type": typ, "standard": to.DUREE_TYPE.get(typ), "terrain": DUREE_TERRAIN.get(typ),
+                                       "taches": 0, "confirmes": 0, "durees": [], "ecarts": []})
         ty["taches"] += 1
         et = e["types"].setdefault(typ, {"type": typ, "n": 0, "durees": []})
         if r.custom_gps_statut == CONFIRME:
@@ -833,4 +851,4 @@ def statistiques(du=None, au=None, employe=None):
             "confirmes": sum(e["confirmes"] for e in par_emp.values()), "buckets": buckets,
             "employes": sorted(par_emp.values(), key=lambda e: e["nom"]), "types": sorted(par_type.values(), key=lambda t: -t["taches"]),
             "manquants": manquants[-60:], "vehicules": sorted(par_vehicule.values(), key=lambda v: v["vehicule"]),
-            "journees": journees[:120], "standard": to.DUREE_TYPE}
+            "journees": journees[:120], "standard": to.DUREE_TYPE, "terrain": DUREE_TERRAIN}

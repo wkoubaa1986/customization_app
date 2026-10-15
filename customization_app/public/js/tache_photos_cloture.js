@@ -105,23 +105,60 @@ function tache_bouton_gps(frm) {
             return;
         }
         $btn.prop("disabled", true).text("📍 " + __("Localisation…"));
-        navigator.geolocation.getCurrentPosition(
+        tache_position_precise(
             (pos) => {
                 const lien = `https://maps.google.com/?q=${pos.coords.latitude},${pos.coords.longitude}`;
                 frm.set_value("google_map", lien);
                 $btn.prop("disabled", false).text("📍 " + __("Ma position actuelle"));
                 frappe.show_alert({
-                    message: __("Position enregistrée dans le lien Google Map — pensez à sauvegarder."),
+                    message: __("Position enregistrée dans le lien Google Map (à {0} m près) — pensez à sauvegarder.",
+                        [Math.round(pos.coords.accuracy || 0)]),
                     indicator: "green",
                 });
             },
-            (err) => {
+            (err, meilleure) => {
                 $btn.prop("disabled", false).text("📍 " + __("Ma position actuelle"));
-                frappe.msgprint(__("Position introuvable : {0}", [err.message || ""]));
-            },
-            { enableHighAccuracy: true, timeout: 15000 }
+                if (meilleure) {
+                    // Une position RÉSEAU (antenne / IP), à 1-3 km du client : écrite dans le lien, elle faisait
+                    // conclure « clôturée sans passage GPS » (13 tâches sur 16, 15/10/2026). On la refuse.
+                    frappe.msgprint({
+                        title: __("Position trop imprécise"),
+                        indicator: "orange",
+                        message: __("Le téléphone ne donne la position qu'à {0} m près (il faut {1} m). Activez la localisation précise (GPS), sortez à l'air libre, puis réessayez — ou collez le lien Google Maps du client.",
+                            [Math.round(meilleure.coords.accuracy), TCT_PRECISION_MAX_M]),
+                    });
+                } else {
+                    frappe.msgprint(__("Position introuvable : {0}", [(err && err.message) || ""]));
+                }
+            }
         );
     });
+}
+
+// Précision exigée du bouton « Ma position » : au-delà, ce n'est pas le GPS mais le réseau qui répond.
+const TCT_PRECISION_MAX_M = 150;
+const TCT_ATTENTE_MS = 20000;
+
+function tache_position_precise(ok, ko) {
+    // On écoute les positions pendant TCT_ATTENTE_MS au plus : la première assez précise gagne (le GPS affine
+    // en quelques secondes) ; sinon on rend la meilleure vue, pour le message.
+    let meilleure = null, fini = false, watch = null;
+    const terminer = (fn, ...args) => {
+        if (fini) return;
+        fini = true;
+        if (watch !== null) navigator.geolocation.clearWatch(watch);
+        fn(...args);
+    };
+    const timer = setTimeout(() => terminer(ko, null, meilleure), TCT_ATTENTE_MS);
+    watch = navigator.geolocation.watchPosition(
+        (pos) => {
+            const acc = pos.coords.accuracy;
+            if (!meilleure || (acc || Infinity) < (meilleure.coords.accuracy || Infinity)) meilleure = pos;
+            if (acc != null && acc <= TCT_PRECISION_MAX_M) { clearTimeout(timer); terminer(ok, pos); }
+        },
+        (err) => { clearTimeout(timer); terminer(ko, err, meilleure); },
+        { enableHighAccuracy: true, timeout: TCT_ATTENTE_MS, maximumAge: 0 }
+    );
 }
 
 function tache_dialogue_cloture(frm, exigences) {

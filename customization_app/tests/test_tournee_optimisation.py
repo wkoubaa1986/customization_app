@@ -25,6 +25,27 @@ class TestLiens(unittest.TestCase):
         self.assertTrue(10 < km[0][2] < 20 and mn[0][2] == int(round(km[0][2] / 30 * 60)))
 
 
+class TestPositionGrossiere(unittest.TestCase):
+    def test_grille_du_reseau_reconnue(self):
+        self.assertTrue(T.position_grossiere((36.810811, 10.284844)))       # La Goulette, 36.810811 × 37 = 1362.000007
+        self.assertTrue(T.position_grossiere((36.783784, 10.17)))           # 1362 − 1 = 1361 / 37
+        self.assertFalse(T.position_grossiere((36.8821509, 10.252777)))     # vrai GPS
+        self.assertFalse(T.position_grossiere((36.842016, 10.142024)))
+        self.assertFalse(T.position_grossiere(None))
+        self.assertFalse(T.position_grossiere((0, 0)))                       # adresse sans position
+
+    def test_lien_grossier_donne_une_position_approchee_sans_memoriser(self):
+        import frappe
+        frappe.flags.tournee_sans_reseau = True
+        try:
+            t = frappe._dict(google_map="https://maps.google.com/?q=36.810811,10.284844", select_address=None, secteur=None)
+            self.assertEqual(T.coordonnees_tache(t, {})[2], T.GROSSIERE)
+            t.google_map = "https://maps.google.com/?q=36.8821509,10.252777"
+            self.assertEqual(T.coordonnees_tache(t, {})[2], "tâche")
+        finally:
+            frappe.flags.tournee_sans_reseau = False
+
+
 class TestPlusCode(unittest.TestCase):
     """Lien d'un LIEU partagé depuis l'appli Google Maps : pas de coordonnées, un Plus Code (08/10/2026, Faleh Wajdi)."""
 
