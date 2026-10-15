@@ -773,13 +773,15 @@ def _bucket(ecart, tol) -> str:
 
 @frappe.whitelist()
 def statistiques(du=None, au=None, employe=None):
-    """Sur les tâches déjà appariées (custom_gps_statut) : par employé et par type, durées réelles vs standard,
+    """Sur les tâches clôturées déjà appariées (custom_gps_statut) : par employé et par type, durées réelles vs standard,
     ponctualité, passages manquants ; par jour, km et amplitude depuis Journee Flotte GPS."""
     _garde_direction()
     au = getdate(au or nowdate())
     du = getdate(du or add_days(au, -29))
     tol = cint(frappe.db.get_single_value(CONFIG, "ecart_tolere")) or 30
-    filtres = {"starts_on": ["between", ["%s 00:00:00" % du, "%s 23:59:59" % au]], "custom_gps_statut": ["is", "set"]}
+    # Tâches CLÔTURÉES seulement (décision du 15/10/2026) : une tâche restée ouverte n'a pas été faite ce jour-là (reportée,
+    # oubliée), son « aucun passage » n'est pas une mesure ; une annulée après appariement garde un verdict qui ne vaut plus.
+    filtres = {"starts_on": ["between", ["%s 00:00:00" % du, "%s 23:59:59" % au]], "custom_gps_statut": ["is", "set"], "status": "Completed"}
     if employe:
         filtres["custom_choix_du_staff"] = employe
     rows = frappe.get_all(TACHE, filters=filtres, fields=["name", "custom_choix_du_staff", "custom_employé", "custom_type_dintervention",
