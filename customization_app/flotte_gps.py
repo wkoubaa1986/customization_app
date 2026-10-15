@@ -275,7 +275,24 @@ def _fusionner(arrets: list) -> list:
     return out
 
 
-def arrets_candidats(taches: list, journal: dict | None, resultat: dict, lieux: list, rayon_m: float, max_n: int = PISTES_MAX) -> dict:
+PHOTO_APRES_MAX_MIN = 60                           # photos envoyées jusqu'à 1 h après un arrêt : encore rattachables à cet arrêt
+
+
+def _photo_vs_arret(a: dict, heure_photo):
+    """(« pendant » | « juste avant » | None, minutes après la fin de l'arrêt) — où en était le véhicule quand la 1re
+    photo de clôture est partie. PURE."""
+    if not heure_photo:
+        return None, None
+    if a["arr"] <= heure_photo <= a["dep"]:
+        return "pendant", 0
+    m = (heure_photo - a["dep"]).total_seconds() / 60
+    if 0 < m <= PHOTO_APRES_MAX_MIN:
+        return "juste avant", int(m)
+    return None, None
+
+
+def arrets_candidats(taches: list, journal: dict | None, resultat: dict, lieux: list, rayon_m: float, max_n: int = PISTES_MAX,
+                     photos: dict | None = None) -> dict:
     """Tâches SANS position exacte (adresse approchée ou inconnue) ou SANS PASSAGE (position connue, mais aucun arrêt à
     moins de rayon_m : le lien est peut-être faux) d'UN employé : les arrêts du véhicule qui POURRAIENT être
     l'intervention → {tâche: [{arrivee, depart, duree, lat, lng, ecart, km_approx}, …]} (au plus max_n, du plus plausible
@@ -291,8 +308,15 @@ def arrets_candidats(taches: list, journal: dict | None, resultat: dict, lieux: 
     Pistes : arrêts (fusionnés) d'au moins ARRET_PROBABLE_MIN min que rien d'autre n'explique — ni chez un client dont la
     position est connue (≤ rayon), ni au Magasin / domicile (≤ RAYON_LIEU_M) — commencés entre FENETRE_AVANT_MIN avant et
     FENETRE_APRES_MIN après l'heure annoncée (−3 h / +5 h et 6 pistes : le bon arrêt est dans la liste 96 fois sur 100,
-    contre 81 avec −1 h 30 / +3 h et 4 pistes). Ordre : minutes d'écart + 2 × km jusqu'à la position approchée ou au
-    lien de la tâche. PURE."""
+    contre 81 avec −1 h 30 / +3 h et 4 pistes).
+
+    Ordre : d'abord l'arrêt PENDANT lequel la 1re photo de clôture est partie (`photos` = {tâche: heure de la 1re
+    photo}), puis celui qui venait de finir (≤ PHOTO_APRES_MAX_MIN), puis les autres par minutes d'écart + 2 × km
+    jusqu'à la position approchée ou au lien. Le technicien envoie ses photos chez le client : rejoué sur 216 passages
+    (14/09 → 14/10/2026, position cachée, référence = secteur), la 1re piste est la bonne 77 fois sur 100 (Akram 87,
+    Hedi 83, Sadok 61 — il envoie souvent ses photos plus tard) contre 50 par l'heure et la distance seules ; dans les
+    3 premières 95 fois sur 100. Un fait affiché (« photos envoyées pendant cet arrêt »), jamais une confirmation
+    automatique : une erreur sur cinq deviendrait une adresse fausse mémorisée. PURE."""
     if not journal or journal.get("erreur"):
         return {}
     # Chez un client seulement : une tâche interne (vérification de stock…) n'a pas d'adresse à retrouver.
@@ -305,17 +329,26 @@ def arrets_candidats(taches: list, journal: dict | None, resultat: dict, lieux: 
               and not any(_m((a["lat"], a["lng"]), c) <= rayon_m for c in connus)
               and not any(lieu and _m((a["lat"], a["lng"]), lieu) <= RAYON_LIEU_M for lieu in lieux)]
     out = {}
+    rang_photo = {"pendant": 0, "juste avant": 1000, None: 10000}
     for t in cibles:
         pistes = []
+        heure_photo = (photos or {}).get(t["name"])
         for a in libres:
             ecart = (a["arr"] - t["debut"]).total_seconds() / 60
             if ecart < -FENETRE_AVANT_MIN or ecart > FENETRE_APRES_MIN:
                 continue
             ref = t.get("approx") or ((t["lat"], t["lng"]) if t.get("lat") and t.get("lng") else None)
             km = to.haversine_km((a["lat"], a["lng"]), tuple(ref)) if ref else None
-            pistes.append((abs(ecart) + 2 * (km or 0), {"arrivee": a["arr"], "depart": a["dep"], "duree": a["minutes"],
-                                                        "lat": a["lat"], "lng": a["lng"], "ecart": round(ecart),
-                                                        "km_approx": round(km, 1) if km is not None else None}))
+            photo, photo_min = _photo_vs_arret(a, heure_photo)
+            pistes.append((rang_photo[photo] + abs(ecart) + 2 * (km or 0),
+                           {"arrivee": a["arr"], "depart": a["dep"], "duree": a["minutes"], "lat": a["lat"], "lng": a["lng"],
+                            "ecart": round(ecart), "km_approx": round(km, 1) if km is not None else None,
+                            "photo": photo, "photo_min": photo_min}))
+        if any(p["photo"] == "pendant" for _s, p in pistes):
+            # Le véhicule était à l'arrêt quand les photos sont parties : l'arrêt qui venait de finir n'est plus un indice.
+            pistes = [(sc - (rang_photo[p["photo"]] - rang_photo[None]) if p["photo"] == "juste avant" else sc,
+                       dict(p, photo=None if p["photo"] == "juste avant" else p["photo"], photo_min=None if p["photo"] == "juste avant" else p["photo_min"]))
+                      for sc, p in pistes]
         if pistes:
             out[t["name"]] = [p for _s, p in sorted(pistes, key=lambda x: x[0])[:max_n]]
     return out
@@ -365,6 +398,15 @@ def _taches(jour) -> list:
                     "gps": {"statut": r.custom_gps_statut, "arrivee": r.custom_gps_arrivee, "depart": r.custom_gps_depart,
                             "duree": r.custom_gps_duree, "ecart": r.custom_gps_ecart}})
     return out
+
+
+def _premieres_photos(noms: list) -> dict:
+    """{tâche: heure de la 1re pièce jointe} — les photos de clôture partent de chez le client (arrets_candidats)."""
+    if not noms:
+        return {}
+    return {r[0]: get_datetime(r[1]) for r in frappe.db.sql(
+        """select attached_to_name, min(creation) from tabFile where attached_to_doctype = %s and attached_to_name in %s
+           group by attached_to_name""", (TACHE, tuple(noms)))}
 
 
 def _duree_planifiee(t) -> int:
@@ -615,6 +657,7 @@ def _suivi_calcul(jour) -> dict:
         for m in frappe.get_all("Message Client GPS", filters={"tache": ["in", [t["name"] for t in taches] or [""]]},
                                 fields=["tache", "type", "statut", "heure", "eta", "texte", "telephone"], order_by="heure"):
             messages.setdefault(m.tache, []).append(m)
+    photos_jour = _premieres_photos([t["name"] for t in taches])
     sortie = []
     for emp, e in sorted(employes.items(), key=lambda kv: kv[1]["nom"]):
         cbox = emp_cbox.get(emp)
@@ -625,7 +668,7 @@ def _suivi_calcul(jour) -> dict:
                  premiere_sortie=j["trajets"][0]["debut"] if j and j["trajets"] else None,
                  dernier_mouvement=(j["trajets"][-1]["fin"] if j and j["trajets"] else None))
         sur_place = None
-        pistes = arrets_candidats(e["taches"], j, resultat, _lieux_communs(cfg_t), cfg["rayon"]) if j else {}
+        pistes = arrets_candidats(e["taches"], j, resultat, _lieux_communs(cfg_t), cfg["rayon"], photos=photos_jour) if j else {}
         if j and not j.get("erreur"):
             dernier = j["arrets"][-1] if j["arrets"] and (not j["trajets"] or j["arrets"][-1]["arr"] > j["trajets"][-1]["debut"]) else None
             pos = j.get("position")

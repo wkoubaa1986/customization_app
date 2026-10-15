@@ -191,6 +191,17 @@ class TestPistesSansPosition(unittest.TestCase):
         self.assertEqual([x["arrivee"].strftime("%H:%M") for x in p["B"]], ["14:00", "12:30", "11:12"])
         self.assertAlmostEqual(p["B"][0]["km_approx"], round(fg.to.haversine_km((36.83, 10.30), CHEZ_B), 1))
 
+    def test_l_arret_des_photos_de_cloture_passe_en_tete(self):
+        # Photos envoyées à 12:40 : pendant l'arrêt 12:30–13:15 → en tête, devant 11:12 (plus proche de l'heure annoncée)
+        p = fg.arrets_candidats(self.taches, self.j, self.res, [MAGASIN], 150, photos={"C": J + timedelta(hours=12, minutes=40)})["C"]
+        self.assertEqual([(x["arrivee"].strftime("%H:%M"), x["photo"]) for x in p], [("12:30", "pendant"), ("11:12", None)])
+        # Photos envoyées à 11:55 : l'arrêt 11:12–11:42 vient de finir (13 min) → « juste avant »
+        p = fg.arrets_candidats(self.taches, self.j, self.res, [MAGASIN], 150, photos={"C": J + timedelta(hours=11, minutes=55)})["C"]
+        self.assertEqual((p[0]["arrivee"].strftime("%H:%M"), p[0]["photo"], p[0]["photo_min"]), ("11:12", "juste avant", 13))
+        # Photos envoyées le soir (> 1 h après tout) : aucun marqueur, ordre habituel
+        p = fg.arrets_candidats(self.taches, self.j, self.res, [MAGASIN], 150, photos={"C": J + timedelta(hours=19)})["C"]
+        self.assertEqual([x["photo"] for x in p], [None, None])
+
     def test_fenetre_large_et_six_pistes(self):
         # L'heure planifiée est fausse de 3-4 h (Akram 13/10) : −3 h / +5 h, 6 pistes — 96 % de « dedans » rejoués
         self.arrets += [_arret(13.0, 20, (36.9, 10.1)), _arret(15.5, 20, (36.9, 10.2)), _arret(16.2, 20, (36.95, 10.2)),

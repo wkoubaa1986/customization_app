@@ -236,8 +236,10 @@ class SuiviTerrain {
   /** Tâche sans position : les arrêts du véhicule qui POURRAIENT être l'intervention (le GPS ne tranche pas). */
   _pistes_resume(t) {
     const p = t.pistes || [], esc = frappe.utils.escape_html;
-    const encours = p.find((x) => x.en_cours);
-    const txt = encours ? `🅿️ arrêté depuis ${this._h(encours.arrivee)} — chez ce client ?` : `🅿️ ${p.length} arrêt${p.length > 1 ? "s" : ""} possible${p.length > 1 ? "s" : ""}`;
+    const encours = p.find((x) => x.en_cours), photo = p.find((x) => x.photo === "pendant");
+    const txt = encours ? `🅿️ arrêté depuis ${this._h(encours.arrivee)} — chez ce client ?`
+      : photo ? `📸 photos envoyées pendant l’arrêt de ${this._h(photo.arrivee)} — c’est là ?`
+      : `🅿️ ${p.length} arrêt${p.length > 1 ? "s" : ""} possible${p.length > 1 ? "s" : ""}`;
     return `<a href="#" class="st-dim st-pistes" data-tache="${esc(t.name)}" title="Arrêts non identifiés autour du créneau : ouvrir pour choisir le bon">${txt}</a>`;
   }
 
@@ -299,13 +301,14 @@ class SuiviTerrain {
     const p = t.pistes || [], esc = frappe.utils.escape_html, modif = frappe.model.can_write("Tache de travail");
     const sans_passage = t.gps_live.statut === "Aucun passage";
     let html = `<div class="st-pistes-bloc"><div class="t">🅿️ Arrêts possibles autour du créneau</div>
-      <div class="st-dim" style="margin-bottom:6px">${sans_passage
+      <div class="st-dim" style="margin-bottom:6px">${p.some((x) => x.photo) ? "Le technicien envoie ses photos de clôture chez le client : l’arrêt marqué 📸 est le plus probable (juste 4 fois sur 5) — vérifiez sur la carte avant de confirmer. " : ""}${sans_passage
         ? "Le véhicule ne s’est pas arrêté à moins de " + esc(String(this.data.rayon)) + " m du lien de la tâche : le lien est peut-être faux. Si l’un de ces arrêts est le client, « C’est ici » corrige le lien et l’adresse."
         : "Sans la position exacte du client, le GPS ne peut pas savoir lequel est le bon : regardez sur la carte et confirmez."}</div>`;
     if (!p.length) return html + `<div class="st-dim">Aucun arrêt non identifié de plus de 5 min entre 3 h avant et 5 h après l’heure annoncée.</div></div>`;
     const ref = t.approx ? (t.approx_src === "grossiere" ? "du point réseau" : t.approx_src === "secteur" ? "du secteur" : "de l’adresse lue") : "du lien";
     html += p.map((x, i) => `<div class="st-piste">
         <span><b>${this._h(x.arrivee)}–${this._h(x.depart)}</b> · ${this._min(x.duree)}${x.en_cours ? " · <b>en cours</b>" : ""}
+          ${x.photo === "pendant" ? `<br><b>📸 photos de clôture envoyées pendant cet arrêt</b>` : x.photo === "juste avant" ? `<br>📸 photos de clôture envoyées ${x.photo_min} min après cet arrêt` : ""}
           <span class="st-dim">${x.ecart > 0 ? "+" : ""}${x.ecart} min / annoncé${x.km_approx != null ? ` · à ${String(x.km_approx).replace(".", ",")} km ${ref}` : ""}</span></span>
         <span class="st-piste-btns"><button class="btn btn-default btn-xs" data-piste-voir="${i}">🗺 voir</button>
           ${modif ? `<button class="btn btn-primary btn-xs" data-piste-ici="${i}">📌 C’est ici</button>` : ""}</span></div>`).join("");
