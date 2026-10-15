@@ -35,8 +35,11 @@ RAS_RELANCE_MARKER = "[RELANCE-RAS]"
 
 
 def _invoice_rows(start, end):
+    """Factures ET commandes reglees par une ecriture de retenue : les paiements se font aussi sur les
+    commandes avant facturation (15/10/2026 : 13 ecritures de retenue, 48 DT, n'apparaissaient nulle
+    part). A la facturation, ERPNext reporte l'imputation sur la facture, qui prend le relais."""
     return frappe.db.sql(
-        """SELECT si.name, si.customer, si.posting_date, si.grand_total, si.status,
+        """SELECT 'Sales Invoice' AS doctype, si.name, si.customer, si.posting_date, si.grand_total, si.status,
                   c.customer_name, c.tax_id,
                   per.allocated_amount, pe.name AS payment_entry,
                   pe.posting_date AS pe_date, pe.reference_no, pe.reference_date
@@ -48,17 +51,32 @@ def _invoice_rows(start, end):
                    ON pe.name = per.parent AND pe.docstatus = 1
            LEFT JOIN `tabCustomer` c ON c.name = si.customer
            WHERE si.docstatus = 1
-             AND si.posting_date BETWEEN %s AND %s
-             AND pe.mode_of_payment = %s
-           ORDER BY si.posting_date DESC, si.name, pe.posting_date, pe.name""",
-        (start, end, RAS_MODE), as_dict=True,
+             AND si.posting_date BETWEEN %(de)s AND %(a)s
+             AND pe.mode_of_payment = %(mode)s
+           UNION ALL
+           SELECT 'Sales Order' AS doctype, so.name, so.customer, so.transaction_date AS posting_date, so.grand_total, so.status,
+                  c.customer_name, c.tax_id,
+                  per.allocated_amount, pe.name AS payment_entry,
+                  pe.posting_date AS pe_date, pe.reference_no, pe.reference_date
+           FROM `tabSales Order` so
+           INNER JOIN `tabPayment Entry Reference` per
+                   ON per.reference_doctype = 'Sales Order'
+                  AND per.reference_name = so.name
+           INNER JOIN `tabPayment Entry` pe
+                   ON pe.name = per.parent AND pe.docstatus = 1
+           LEFT JOIN `tabCustomer` c ON c.name = so.customer
+           WHERE so.docstatus = 1
+             AND so.transaction_date BETWEEN %(de)s AND %(a)s
+             AND pe.mode_of_payment = %(mode)s
+           ORDER BY posting_date DESC, name, pe_date, payment_entry""",
+        {"de": start, "a": end, "mode": RAS_MODE}, as_dict=True,
     )
 
 
-def _attachments(si_names, pe_names):
+def _attachments(si_names, pe_names, so_names=None):
     """Fichiers attachés aux factures et aux écritures de paiement."""
     out = {}
-    for doctype, names in (("Sales Invoice", si_names), ("Payment Entry", pe_names)):
+    for doctype, names in (("Sales Invoice", si_names), ("Sales Order", so_names or []), ("Payment Entry", pe_names)):
         if not names:
             continue
         ph = ",".join(["%s"] * len(names))
@@ -100,6 +118,7 @@ def get_data(from_date=None, to_date=None):
         if not inv:
             inv = invoices[r.name] = {
                 "name": r.name,
+                "doctype": r.doctype or "Sales Invoice",
                 "customer": r.customer,
                 "customer_name": r.customer_name or r.customer,
                 "tax_id": r.tax_id,
@@ -121,16 +140,17 @@ def get_data(from_date=None, to_date=None):
         })
 
     files = _attachments(
-        list(invoices),
+        [n for n, inv in invoices.items() if inv["doctype"] == "Sales Invoice"],
         list({p["payment_entry"] for inv in invoices.values() for p in inv["payments"]}),
+        so_names=[n for n, inv in invoices.items() if inv["doctype"] == "Sales Order"],
     )
 
     result = []
     for name in order:
         inv = invoices[name]
         attachments = [
-            {**f, "source": "Facture", "source_name": name}
-            for f in files.get(("Sales Invoice", name), [])
+            {**f, "source": "Commande" if inv["doctype"] == "Sales Order" else "Facture", "source_name": name}
+            for f in files.get((inv["doctype"], name), [])
         ]
         for p in inv["payments"]:
             attachments.extend(
@@ -428,7 +448,7 @@ def _excel_rows(data):
         [f"Retenue à la source — Ventes",
          f"du {data['period']['from']} au {data['period']['to']}"],
         [],
-        ["Facture", "Date", "Client", "Matricule fiscale", "Total TTC",
+        ["Pièce", "Date", "Client", "Matricule fiscale", "Total TTC",
          "Retenue", "Taux %", "Écriture de paiement", "Date paiement",
          "Référence", "Montant alloué", "Justificatifs"],
     ]

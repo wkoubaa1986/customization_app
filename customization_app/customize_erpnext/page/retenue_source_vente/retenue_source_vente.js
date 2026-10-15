@@ -472,7 +472,7 @@ class RetenueSourceVente {
     <div class="rsv-inv">
       <button class="rsv-inv-head" type="button">
         <span class="rsv-caret">▶</span>
-        <span>${this._doclink("Sales Invoice", inv.name, inv.name, "rsv-si")}</span>
+        <span>${this._doclink(inv.doctype || "Sales Invoice", inv.name, inv.name, "rsv-si")}${inv.doctype === "Sales Order" ? ` <span class="rsv-rate">commande</span>` : ""}</span>
         <span class="rsv-cust">
           ${this._doclink("Customer", inv.customer, inv.customer_name)}
           ${inv.tax_id ? ` · MF ${esc(inv.tax_id)}` : ""}
