@@ -324,19 +324,22 @@ class RetenueSourceVente {
         : __("Jamais relancé");
       const tels = (l.telephones || []).map((t) => `<a href="tel:${esc(t)}">${esc(t)}</a>`).join("") || `<span class="rsv-cust">${__("aucun numéro")}</span>`;
       const dans_factures = (this._data && this._data.invoices || []).some((i) => i.customer === l.customer && !i.attachments.length);
-      return `<div class="rsv-rec ${l.a_appeler ? "" : "calme"}" data-customer="${esc(l.customer)}">
+      const BADGE = { a_rectifier: ["st-red", __("Certificat à rectifier")], facture_inconnue: ["st-orange", __("Facture à préciser")], manquant: ["st-neutral", __("Certificat manquant")] };
+      const badges = (l.types || []).map((t) => `<span class="rsv-badge ${(BADGE[t] || BADGE.manquant)[0]}">${(BADGE[t] || BADGE.manquant)[1]}</span>`).join(" ");
+      return `<div class="rsv-rec ${l.a_appeler ? "" : "calme"} ${(l.types || []).includes("a_rectifier") ? "erreur" : ""}" data-customer="${esc(l.customer || "")}" data-nom="${esc(l.customer_name)}">
         <div>
-          <div class="rsv-rec-nom">${this._doclink("Customer", l.customer, l.customer_name)}</div>
+          <div class="rsv-rec-nom">${l.customer ? this._doclink("Customer", l.customer, l.customer_name) : `${esc(l.customer_name)} <span class="rsv-cust">(${__("fiche client à identifier")})</span>`}</div>
+          <div style="margin:3px 0">${badges}</div>
           <div class="rsv-cust">${l.tax_id ? `MF ${esc(l.tax_id)}` : __("sans matricule")} · ${__("depuis le")} ${frappe.datetime.str_to_user(l.depuis)}</div>
           <div class="rsv-rec-tel">${tels}</div>
           <div class="rsv-rec-last">${last}${l.a_appeler ? "" : ` · <span style="color:var(--rsv-gain)">${__("relancé il y a moins de {0} jours", [m.jours])}</span>`}</div>
         </div>
         <div><ul>${(l.pieces || []).map((p) => `<li>${esc(p.texte)}</li>`).join("")}</ul></div>
-        <div><div class="rsv-rec-total">${this._fmt(l.total)}</div><div class="rsv-cust">${__("de retenue sans certificat")}</div></div>
+        <div><div class="rsv-rec-total">${this._fmt(l.total)}</div><div class="rsv-cust">${__("de retenue en jeu")}</div></div>
         <div class="rsv-rec-actions">
-          <button class="btn btn-sm ${l.a_appeler ? "btn-primary" : "btn-default"}" data-rec="appel">📞 ${__("J'ai appelé")}</button>
+          ${l.customer ? `<button class="btn btn-sm ${l.a_appeler ? "btn-primary" : "btn-default"}" data-rec="appel">📞 ${__("J'ai appelé")}</button>` : `<span class="rsv-cust">${__("identifier la fiche client d'abord (onglet Certificats TEJ)")}</span>`}
           ${dans_factures ? `<button class="btn btn-sm btn-default" data-rec="sms">✉️ ${__("SMS / e-mail")}</button>` : ""}
-          <button class="btn btn-sm btn-default" data-rec="histo">📜 ${__("Historique")}</button>
+          ${l.customer ? `<button class="btn btn-sm btn-default" data-rec="histo">📜 ${__("Historique")}</button>` : ""}
         </div>
       </div>`;
     };
@@ -346,11 +349,12 @@ class RetenueSourceVente {
         ${kpi(__("Relancés récemment"), lignes.length - a_appeler.length)}
         ${kpi(__("Retenue sans certificat"), this._fmt(m.total || 0), m.total > 0.001 ? "warn" : "")}
       </div>
-      <p class="rsv-cust" style="margin:-8px 0 12px">${__("Clients dont un certificat de retenue manque depuis plus de {0} jours : retenue comptabilisée chez nous sans certificat au portail, ou 1 % laissé en dette que le client n'a pas déclaré. Appelez, tracez ici : la fiche client garde la trace, le tableau des appels compte l'appel (file « Retenue à la source », le mardi), et le client ne revient pas avant {0} jours.", [m.jours])}</p>
+      <p class="rsv-cust" style="margin:-8px 0 12px">${__("Trois raisons d'appeler : <b>certificat à rectifier</b> (le client a déclaré un montant faux, il doit corriger sur le portail), <b>facture à préciser</b> (il a déclaré sur une assiette qui ne correspond à aucune de nos factures), <b>certificat manquant</b> depuis plus de {0} jours (retenue chez nous sans certificat, ou 1 % laissé en dette non déclaré). Appelez, tracez ici : la fiche client garde la trace, le tableau des appels compte l'appel (file du mardi), et le client ne revient pas avant {0} jours.", [m.jours])}</p>
       ${lignes.length ? lignes.map(carte).join("") : `<div class="rsv-empty-state">${__("Aucun certificat manquant depuis plus de {0} jours.", [m.jours])}</div>`}`);
     $pane.off("click.rec").on("click.rec", "[data-rec]", (e) => {
       const $b = $(e.currentTarget);
-      const l = lignes.find((x) => x.customer === $b.closest(".rsv-rec").data("customer"));
+      const $c = $b.closest(".rsv-rec");
+      const l = lignes.find((x) => (x.customer || "") === String($c.data("customer") || "") && x.customer_name === $c.data("nom"));
       if (!l) return;
       if ($b.data("rec") === "appel") this._tracer_appel_ras(l, () => this._load_reclamer());
       else if ($b.data("rec") === "sms") this._open_relance_dialog([l.customer]);
@@ -363,7 +367,7 @@ class RetenueSourceVente {
       title: __("Appel — {0}", [l.customer_name || l.customer]),
       fields: [
         { fieldname: "resume", label: __("Résultat de l'appel"), fieldtype: "Select", reqd: 1,
-          options: ["Va déposer la retenue sur le portail", "Certificat envoyé / reçu", "Ne répond pas", "Conteste la retenue", "Autre"].join("\n") },
+          options: ["Va déposer la retenue sur le portail", "Va rectifier le certificat", "A précisé la facture", "Certificat envoyé / reçu", "Ne répond pas", "Conteste la retenue", "Autre"].join("\n") },
         { fieldname: "note", label: __("Commentaire"), fieldtype: "Small Text", description: __("Ex : promet de déposer avant la fin du mois.") },
       ],
       primary_action_label: __("Enregistrer l'appel"),
