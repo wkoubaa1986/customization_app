@@ -534,14 +534,30 @@ class SuiviTerrain {
       html += `<tr><td>${esc(e.nom)}</td><td class="num">${e.taches}</td><td class="num">${e.confirmes}</td><td class="num">${e.aucun}</td><td class="num">${e.duree.moyenne ?? "–"}</td><td class="num">${e.duree.mediane ?? "–"}</td><td class="num">${e.ecart.moyenne != null ? (e.ecart.moyenne > 0 ? "+" : "") + e.ecart.moyenne + " min" : "–"}</td><td class="num">${e["avance"]}</td><td class="num">${e["à l’heure"]}</td><td class="num">${e["retard"]}</td></tr>`;
     }
     html += `</tbody></table>`;
+    // Par mois et par employé (15/10/2026) : l'évolution, mois après mois.
+    if ((s.par_mois || []).length) {
+      html += `<div class="st-section">Par mois et par employé <span class="st-dim">(tâches clôturées appariées · km des journées GPS)</span></div>
+        <table class="st-t"><thead><tr><th>Mois</th><th>Employé</th><th class="num">Tâches</th><th class="num">Confirmées</th><th class="num">Sans passage</th><th class="num">À l’heure</th><th class="num">Avance</th><th class="num">Retard</th><th class="num">Durée moy.</th><th class="num">Écart moy.</th><th class="num">Jours GPS</th><th class="num">Km</th><th class="num">Km / jour</th></tr></thead><tbody>`;
+      let mois = null;
+      for (const m of s.par_mois) {
+        if (!m.confirmes && !m.jours && !m.aucun) continue;        // sans véhicule suivi ce mois-là : rien à mesurer
+        const nb = m["avance"] + m["à l’heure"] + m["retard"];
+        const lib = m.mois !== mois ? frappe.datetime.str_to_obj(m.mois + "-01").toLocaleDateString("fr-FR", { month: "long", year: "numeric" }) : "";
+        mois = m.mois;
+        html += `<tr><td>${lib ? `<b>${esc(lib)}</b>` : ""}</td><td>${esc(m.nom)}</td><td class="num">${m.taches}</td><td class="num">${m.confirmes} <span class="st-dim">${pc(m.confirmes, m.taches)}</span></td><td class="num">${m.aucun || ""}</td>
+          <td class="num">${nb ? pc(m["à l’heure"], nb) : "–"}</td><td class="num">${m["avance"] || ""}</td><td class="num">${m["retard"] || ""}</td><td class="num">${m.duree.moyenne ?? "–"}</td><td class="num">${m.ecart.moyenne != null ? (m.ecart.moyenne > 0 ? "+" : "") + m.ecart.moyenne + " min" : "–"}</td>
+          <td class="num">${m.jours || ""}</td><td class="num">${m.km ? String(m.km).replace(".", ",") : ""}</td><td class="num">${m.jours && m.km ? String(Math.round(m.km / m.jours)) : ""}</td></tr>`;
+      }
+      html += `</tbody></table>`;
+    }
     // Tableau croisé : durée réelle sur place par technicien ET par type (moyenne / médiane / nombre).
     const emps = s.employes.filter((e) => e.confirmes);
     if (emps.length) {
       html += `<div class="st-section">Durée sur place par technicien et par type d’intervention <span class="st-dim">(moyenne · médiane · nombre de passages)</span></div>
-        <table class="st-t"><thead><tr><th>Type</th><th class="num">Standard</th>${emps.map((e) => `<th class="num">${esc(e.nom)}</th>`).join("")}<th class="num">Tous</th></tr></thead><tbody>`;
+        <table class="st-t"><thead><tr><th>Type</th><th class="num">Standard</th><th class="num" title="Durée réelle retenue pour l’arrivée estimée (mesurée 14/09 → 14/10/2026)">Réelle retenue</th>${emps.map((e) => `<th class="num">${esc(e.nom)}</th>`).join("")}<th class="num">Tous</th></tr></thead><tbody>`;
       for (const t of s.types) {
         if (!t.confirmes) continue;
-        html += `<tr><td>${esc(t.type)}</td><td class="num">${t.standard != null ? t.standard + " min" : "–"}</td>`;
+        html += `<tr><td>${esc(t.type)}</td><td class="num">${t.standard != null ? t.standard + " min" : "–"}</td><td class="num">${t.terrain != null ? t.terrain + " min" : "–"}</td>`;
         for (const e of emps) {
           const x = e.types.find((y) => y.type === t.type && y.n);
           if (!x) { html += `<td class="num st-dim">–</td>`; continue; }

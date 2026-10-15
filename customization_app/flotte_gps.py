@@ -874,6 +874,36 @@ def statistiques(du=None, au=None, employe=None):
                "ecart": cint(r.custom_gps_ecart) if r.custom_gps_statut == CONFIRME else None,
                "planifie": int((get_datetime(r.ends_on) - get_datetime(r.starts_on)).total_seconds() // 60) if r.ends_on else None}
               for r in rows[-600:]]
+    # Par mois et par employé (demande du 15/10/2026) : tâches, passages, ponctualité, durées — et les km des journées GPS.
+    par_mois = {}
+    for r in rows:
+        mois = str(r.starts_on)[:7]
+        pm = par_mois.setdefault((mois, r.custom_choix_du_staff), {"mois": mois, "employe": r.custom_choix_du_staff, "nom": r["custom_employé"] or r.custom_choix_du_staff,
+                                                                     "taches": 0, "confirmes": 0, "aucun": 0, "durees": [], "ecarts": [],
+                                                                     "avance": 0, "à l’heure": 0, "retard": 0, "km": 0.0, "jours": 0})
+        pm["taches"] += 1
+        if r.custom_gps_statut == CONFIRME:
+            pm["confirmes"] += 1
+            if r.custom_gps_duree is not None:
+                pm["durees"].append(cint(r.custom_gps_duree))
+            if r.custom_gps_ecart is not None:
+                pm["ecarts"].append(cint(r.custom_gps_ecart))
+                pm[_bucket(cint(r.custom_gps_ecart), tol)] += 1
+        elif r.custom_gps_statut == AUCUN:
+            pm["aucun"] += 1
+    for jr in journees:
+        if not jr.employe:
+            continue
+        pm = par_mois.get((str(jr.date)[:7], jr.employe))
+        if pm:
+            pm["km"] += flt(jr.km)
+            pm["jours"] += 1
+    for pm in par_mois.values():
+        pm["duree"] = _stats(pm["durees"])
+        pm["ecart"] = _stats(pm["ecarts"])
+        pm["km"] = round(pm["km"], 1)
+        pm.pop("durees"), pm.pop("ecarts")
+    par_mois = sorted(par_mois.values(), key=lambda x: (x["mois"], x["nom"] or ""), reverse=True)
     par_jour = {}
     for r in rows:
         if employe or len(par_emp) == 1:
@@ -896,4 +926,4 @@ def statistiques(du=None, au=None, employe=None):
             "confirmes": sum(e["confirmes"] for e in par_emp.values()), "buckets": buckets,
             "employes": sorted(par_emp.values(), key=lambda e: e["nom"]), "types": sorted(par_type.values(), key=lambda t: -t["taches"]),
             "manquants": manquants[-60:], "vehicules": sorted(par_vehicule.values(), key=lambda v: v["vehicule"]),
-            "journees": journees[:120], "standard": to.DUREE_TYPE, "terrain": DUREE_TERRAIN}
+            "journees": journees[:120], "standard": to.DUREE_TYPE, "terrain": DUREE_TERRAIN, "par_mois": par_mois}
