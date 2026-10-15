@@ -37,12 +37,24 @@ def articles_appeles(detail_articles) -> dict:
         return {}
 
 
+TYPE_RAS = "Retenue à la source"
+
+
 def synchroniser_appels(doc, method=None):
     """Hook on_update de Liste Appelle Entretien."""
+    avant = doc.get_doc_before_save()
+    deja = {l.name: bool(l.get("a_été_appelé")) for l in (avant.get("clients") or [])} if avant else {}
     for ligne in doc.get("clients") or []:
         if not ligne.get("a_été_appelé") or not ligne.get("client"):
             continue
         try:
+            if doc.get("type_liste") == TYPE_RAS:
+                # Liste des certificats manquants : l'appel se trace comme une relance RAS (onglet
+                # Factures, 📞 derniere relance, tableau des appels), une fois, au passage a « appele ».
+                if not deja.get(ligne.name):
+                    from customization_app.retenue_source import _log_ras_comment
+                    _log_ras_comment(ligne.client, "Téléphone", " — ".join(x for x in (ligne.get("resume_appel"), ligne.get("reponse_client")) if x))
+                continue
             _synchroniser_ligne(ligne)
         except Exception:
             frappe.log_error(frappe.get_traceback(), f"Liste d'appels {doc.name} : ligne {ligne.get('client')}")

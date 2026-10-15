@@ -5094,7 +5094,7 @@
  },
  {
   "charts": [],
-  "content": "[{\"id\": \"ap_h1\", \"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\"><b>Mes listes d’appels</b></span>\", \"col\": 12}}, {\"id\": \"ap_q1\", \"type\": \"quick_list\", \"data\": {\"quick_list_name\": \"Listes à appeler (en cours)\", \"col\": 6}}, {\"id\": \"ap_s1\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Liste Normal en cours\", \"col\": 3}}, {\"id\": \"ap_s2\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Zone partenaire en cours\", \"col\": 3}}, {\"id\": \"ap_s3\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"2e appel (Relance) en cours\", \"col\": 3}}, {\"id\": \"ap_s4\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Requalification (dernier appel)\", \"col\": 3}}, {\"id\": \"ap_s4b\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Hors secteur (en dernier)\", \"col\": 3}}, {\"id\": \"ap_s5\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Urgence en cours\", \"col\": 3}}, {\"id\": \"ap_s6\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Toutes les listes d’appels\", \"col\": 3}}, {\"id\": \"ap_h2\", \"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\"><b>Suivi d’activité</b></span>\", \"col\": 12}}, {\"id\": \"ap_s7\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Mes activités (suivi d’activité)\", \"col\": 4}}, {\"id\": \"ap_s8\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Toutes les activités\", \"col\": 4}}, {\"id\": \"ap_h3\", \"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\"><b>Calendrier et clients</b></span>\", \"col\": 12}}, {\"id\": \"ap_q2\", \"type\": \"quick_list\", \"data\": {\"quick_list_name\": \"Planning d’aujourd’hui\", \"col\": 6}}, {\"id\": \"ap_s9\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Calendrier de travail\", \"col\": 3}}, {\"id\": \"ap_s_st\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Suivi terrain (où sont les techniciens)\", \"col\": 3}}, {\"id\": \"ap_s10\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Suivi clients non traités\", \"col\": 3}}, {\"id\": \"ap_s11\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Clients à requalifier\", \"col\": 3}}]",
+  "content": "[{\"id\": \"ap_h1\", \"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\"><b>Mes listes d’appels</b></span>\", \"col\": 12}}, {\"id\": \"ap_q1\", \"type\": \"quick_list\", \"data\": {\"quick_list_name\": \"Listes à appeler (en cours)\", \"col\": 6}}, {\"id\": \"ap_s1\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Liste Normal en cours\", \"col\": 3}}, {\"id\": \"ap_s2\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Zone partenaire en cours\", \"col\": 3}}, {\"id\": \"ap_s3\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"2e appel (Relance) en cours\", \"col\": 3}}, {\"id\": \"ap_s4\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Requalification (dernier appel)\", \"col\": 3}}, {\"id\": \"ap_s4c\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Retenue à la source (certificats)\", \"col\": 3}}, {\"id\": \"ap_s4b\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Hors secteur (en dernier)\", \"col\": 3}}, {\"id\": \"ap_s5\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Urgence en cours\", \"col\": 3}}, {\"id\": \"ap_s6\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Toutes les listes d’appels\", \"col\": 3}}, {\"id\": \"ap_h2\", \"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\"><b>Suivi d’activité</b></span>\", \"col\": 12}}, {\"id\": \"ap_s7\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Mes activités (suivi d’activité)\", \"col\": 4}}, {\"id\": \"ap_s8\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Toutes les activités\", \"col\": 4}}, {\"id\": \"ap_h3\", \"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\"><b>Calendrier et clients</b></span>\", \"col\": 12}}, {\"id\": \"ap_q2\", \"type\": \"quick_list\", \"data\": {\"quick_list_name\": \"Planning d’aujourd’hui\", \"col\": 6}}, {\"id\": \"ap_s9\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Calendrier de travail\", \"col\": 3}}, {\"id\": \"ap_s_st\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Suivi terrain (où sont les techniciens)\", \"col\": 3}}, {\"id\": \"ap_s10\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Suivi clients non traités\", \"col\": 3}}, {\"id\": \"ap_s11\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Clients à requalifier\", \"col\": 3}}]",
   "custom_blocks": [],
   "docstatus": 0,
   "doctype": "Workspace",
@@ -5207,6 +5207,23 @@
     "stats_filter": null,
     "type": "URL",
     "url": "/app/liste-appelle-entretien?docstatus=0&type_liste=Requalification"
+   },
+   {
+    "color": null,
+    "doc_view": "",
+    "format": null,
+    "icon": null,
+    "kanban_board": null,
+    "label": "Retenue à la source (certificats)",
+    "link_to": null,
+    "parent": "Appels",
+    "parentfield": "shortcuts",
+    "parenttype": "Workspace",
+    "report_ref_doctype": null,
+    "restrict_to_domain": null,
+    "stats_filter": null,
+    "type": "URL",
+    "url": "/app/liste-appelle-entretien?docstatus=0&type_liste=Retenue%20%C3%A0%20la%20source"
    },
    {
     "color": null,

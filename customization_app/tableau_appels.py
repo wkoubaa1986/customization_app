@@ -67,6 +67,7 @@ PRIORITES = (
     ("requalif", "Requalification"),
     ("zone", "Zone partenaire"),
     ("relances", "Relance paiements (1×/semaine)"),
+    ("ras", "Retenue à la source (certificats manquants)"),
     ("hors_secteur", "Hors secteur (quand tout le reste est fait)"),
 )
 #: Les autres suivis : comptés, mais hors des files d'appels.
@@ -84,7 +85,8 @@ CLES_RDV = tuple("rdv_" + c for c in CLES_PRIORITES) + ("rdv_hors",)
 
 #: `type_liste` d'une Liste Appelle Entretien → priorité. Un type inconnu est rangé en Normal.
 TYPES_LISTE = {"Urgence": "urgence", "Normal": "normal", "Relance": "relance_liste",
-               "Zone partenaire": "zone", "Requalification": "requalif", "Hors secteur": "hors_secteur"}
+               "Zone partenaire": "zone", "Requalification": "requalif", "Hors secteur": "hors_secteur",
+               "Retenue à la source": "ras"}
 CLES_LISTES = tuple(TYPES_LISTE.values())
 MARQUEURS_RELANCE = {"[RELANCE-PAIEMENT]": "relances", "[RELANCE-RAS]": "relance_ras"}
 #: Un client qui doit de l'argent est relancé une fois par semaine.
