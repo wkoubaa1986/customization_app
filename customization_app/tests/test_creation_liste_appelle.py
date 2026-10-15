@@ -39,16 +39,17 @@ class TestRepartition(unittest.TestCase):
 
     def test_classes(self):
         zone = lambda c: {"employe": "HR-EMP-00007", "nom": "EAS"} if c == "sousse" else None
-        normal, z, urg, ecartes = L.repartir(self._clients(), D(2026, 10, 3), CFG, exclus={"partenaire"}, zones={"x": 1},
-                                             zone_du_client=zone, rdv_clients={"rdv"}, secteur_urgence=["Secteur 7"], urgence_active=True)
+        normal, z, urg, ecartes, hors = L.repartir(self._clients(), D(2026, 10, 3), CFG, exclus={"partenaire"}, zones={"x": 1},
+                                                   zone_du_client=zone, rdv_clients={"rdv"}, secteur_urgence=["Secteur 7"], urgence_active=True)
         self.assertEqual(set(normal), {"tunis"})
         self.assertEqual(set(urg), {"deux_adresses"})                          # « Secteur 7, Secteur 2 » → urgence (plus la chaîne entière)
         self.assertEqual(set(z), {"sousse"}) ; self.assertTrue(z["sousse"]["secteurs"].startswith("Zone partenaire - EAS"))
         self.assertEqual(ecartes, {"partenaire": 1, "rdv": 1, "recent": 1, "hors_secteur": 1})
+        self.assertEqual(set(hors), {"gafsa"})                                  # 15/10 : plus écarté, liste « Hors secteur » en dernier
 
     def test_urgence_detectee_mais_non_creee_garde_les_clients(self):
-        normal, _z, urg, _e = L.repartir(self._clients(), D(2026, 10, 3), CFG, exclus=set(), zones={}, zone_du_client=lambda c: None,
-                                         rdv_clients=set(), secteur_urgence=["Secteur 7"], urgence_active=False)
+        normal, _z, urg, _e, _h = L.repartir(self._clients(), D(2026, 10, 3), CFG, exclus=set(), zones={}, zone_du_client=lambda c: None,
+                                             rdv_clients=set(), secteur_urgence=["Secteur 7"], urgence_active=False)
         self.assertIn("deux_adresses", normal) ; self.assertEqual(urg, {})
 
     def test_resume(self):

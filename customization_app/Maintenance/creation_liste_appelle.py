@@ -28,6 +28,9 @@ from customization_app.utils.run_safely import run_safely
 DOCTYPE = "Liste Appelle Entretien"
 TYPE_NORMAL, TYPE_RELANCE, TYPE_URGENCE = "Normal", "Relance", "Urgence"
 TYPE_ZONE = partenaire_clients.TYPE_LISTE_ZONE
+# 15/10/2026 : les clients hors secteur (Gafsa, Sfax, Sousse sans partenaire…) recevaient leurs SMS puis n'étaient jamais
+# appelés (217 en attente, pour toujours). Ils ont leur liste, dernière priorité : on l'appelle quand tout le reste est fait.
+TYPE_HORS_SECTEUR = "Hors secteur"
 NE_REPOND_PAS = "Ne répond pas 1er appel"
 PROMO_SELS = "Promo sac sels: pour l'achat de 5 sacs, le prix du sac est à 28 DT au lieu de 35 DT."
 
@@ -181,10 +184,12 @@ def echeances_a_appeler(today, cfg=None):
 
 
 def repartir(clients, today, cfg, exclus, zones, zone_du_client, rdv_clients, secteur_urgence, urgence_active):
-    """Range chaque client dans normal / zone / urgence (ou l'écarte) : géré par le partenaire, rendez-vous récent,
-    appelé il y a moins de `jours_entre_deux_appels`, vrai hors secteur. PURE (zone_du_client injectable)."""
+    """Range chaque client dans normal / zone / urgence / hors secteur (ou l'écarte) : géré par le partenaire, rendez-vous
+    récent, appelé il y a moins de `jours_entre_deux_appels`. Les vrais hors secteur ne sont plus écartés : ils forment
+    la liste « Hors secteur », dernière priorité (le compteur `ecartes["hors_secteur"]` reste pour le journal).
+    PURE (zone_du_client injectable). → (normal, zone, urgence, ecartes, hors)."""
     limite = add_days(getdate(today), -cfg["jours_entre_deux_appels"])
-    normal, zone, urgence, ecartes = {}, {}, {}, {"partenaire": 0, "rdv": 0, "recent": 0, "hors_secteur": 0}
+    normal, zone, urgence, hors, ecartes = {}, {}, {}, {}, {"partenaire": 0, "rdv": 0, "recent": 0, "hors_secteur": 0}
     for customer, c in clients.items():
         if customer in exclus:
             ecartes["partenaire"] += 1
@@ -199,6 +204,7 @@ def repartir(clients, today, cfg, exclus, zones, zone_du_client, rdv_clients, se
         classe = partenaire_clients.classer(c["secteurs"], False, z)
         if classe == "hors_secteur":
             ecartes["hors_secteur"] += 1
+            hors[customer] = dict(c, secteurs="Hors Secteur")
             continue
         if classe == "zone_partenaire":
             c = dict(c, secteurs="Zone partenaire - %s" % z["nom"])
@@ -209,7 +215,7 @@ def repartir(clients, today, cfg, exclus, zones, zone_du_client, rdv_clients, se
             urgence[customer] = c
         else:
             normal[customer] = c
-    return normal, zone, urgence, ecartes
+    return normal, zone, urgence, ecartes, hors
 
 
 # =============================================================================
@@ -304,9 +310,10 @@ def _generate_second_call_list(today, rdv_clients, cfg=None):
     les sources ne sont marquées traitées QU'APRÈS la création réussie."""
     cfg = cfg or RC.config()
     limite = add_days(getdate(today), -cfg["delai_2e_appel_jours"])
-    sources = frappe.get_all(DOCTYPE, filters={"docstatus": 1, "type_liste": ["!=", TYPE_RELANCE], "liste_2iéme_relance": 0, "date_fin": ["<=", limite]},
+    hors_2e = [TYPE_RELANCE, TYPE_HORS_SECTEUR]     # Hors secteur : un seul appel, pas de 2e (dernière priorité)
+    sources = frappe.get_all(DOCTYPE, filters={"docstatus": 1, "type_liste": ["not in", hors_2e], "liste_2iéme_relance": 0, "date_fin": ["<=", limite]},
                              fields=["name", "type_liste"])
-    sans_fin = frappe.db.count(DOCTYPE, {"docstatus": 1, "type_liste": ["!=", TYPE_RELANCE], "liste_2iéme_relance": 0, "date_fin": ["is", "not set"]})
+    sans_fin = frappe.db.count(DOCTYPE, {"docstatus": 1, "type_liste": ["not in", hors_2e], "liste_2iéme_relance": 0, "date_fin": ["is", "not set"]})
     if sans_fin:
         log(f"[2e APPEL] {sans_fin} liste(s) validée(s) sans date de fin : jamais éligibles au 2e appel")
     if not sources:
@@ -355,13 +362,14 @@ def _generate_second_call_list(today, rdv_clients, cfg=None):
 # 4) LISTES NORMAL / ZONE PARTENAIRE / URGENCE
 # =============================================================================
 
-def _generate_normal_urgence_list(today, rdv_clients, create_normal=True, create_urgence=True, ignore_draft_normal=False, create_zone=True, cfg=None):
+def _generate_normal_urgence_list(today, rdv_clients, create_normal=True, create_urgence=True, ignore_draft_normal=False, create_zone=True, cfg=None,
+                                  create_hors=True):
     cfg = cfg or RC.config()
-    results = {"normal": None, "urgence": None, "zone_partenaire": None}
+    results = {"normal": None, "urgence": None, "zone_partenaire": None, "hors_secteur": None}
     urg = get_urgence_context(today, cfg)
     clients = echeances_a_appeler(today, cfg)
     zones = partenaire_clients.zones_partenaires()
-    normal, zone, urgence, ecartes = repartir(
+    normal, zone, urgence, ecartes, hors = repartir(
         clients, today, cfg, RC.clients_exclus_relance(cfg), zones,
         lambda c: partenaire_clients.zone_partenaire_du_client(c, zones), rdv_clients,
         urg["secteur_urgence"], urgence_active=bool(urg["gener_urgence"] and create_urgence))
@@ -385,6 +393,10 @@ def _generate_normal_urgence_list(today, rdv_clients, create_normal=True, create
         log(f"[NORMAL] {len(normal)} client(s) en attente (brouillon existant ou génération non demandée)")
     if create_normal and (ignore_draft_normal or not has_draft_of_type(TYPE_REQUALIFICATION)):
         results["requalification"] = _generate_requalification_list(today, cfg)
+    if create_hors and hors and (ignore_draft_normal or not has_draft_of_type(TYPE_HORS_SECTEUR)):
+        results["hors_secteur"] = _create_liste_appel_doc(today, hors, TYPE_HORS_SECTEUR, cfg=cfg)
+    elif hors:
+        log(f"[HORS SECTEUR] {len(hors)} client(s) en attente (brouillon existant ou génération non demandée)")
     return results
 
 
@@ -472,10 +484,11 @@ def _run_manual_internal(list_type=None):
     results = {}
     if lt in ("all", "relance", "2e", "2e_appel", "second", "second_call"):
         results["second_call"] = _generate_second_call_list(today, rdv, cfg)
-    if lt in ("all", "normal", "urgence", "zone", "partenaire", "zone_partenaire"):
+    if lt in ("all", "normal", "urgence", "zone", "partenaire", "zone_partenaire", "hors", "hors_secteur"):
         results["normal_urgence"] = _generate_normal_urgence_list(
             today, rdv, create_normal=lt in ("all", "normal"), create_urgence=lt in ("all", "urgence"),
-            ignore_draft_normal=True, create_zone=lt in ("all", "zone", "partenaire", "zone_partenaire"), cfg=cfg)
+            ignore_draft_normal=True, create_zone=lt in ("all", "zone", "partenaire", "zone_partenaire"), cfg=cfg,
+            create_hors=lt in ("all", "hors", "hors_secteur"))
     log(f"[MANUAL SUMMARY] ({lt}) {results}")
     return results
 
@@ -499,7 +512,8 @@ def resume_resultats(results) -> str:
     if sc.get("created"):
         morceaux.append("2e appel : %d client(s)" % sc.get("count_clients", 0))
     nu = (results or {}).get("normal_urgence") or {}
-    for cle, libelle in (("normal", "Normal"), ("zone_partenaire", "Zone partenaire"), ("urgence", "Urgence"), ("requalification", "Requalification")):
+    for cle, libelle in (("normal", "Normal"), ("zone_partenaire", "Zone partenaire"), ("urgence", "Urgence"), ("requalification", "Requalification"),
+                         ("hors_secteur", "Hors secteur")):
         r = nu.get(cle)
         if r and r.get("created"):
             morceaux.append("%s : %d client(s)%s" % (libelle, r["count_clients"], (" (+%d en attente)" % r["en_attente"]) if r.get("en_attente") else ""))

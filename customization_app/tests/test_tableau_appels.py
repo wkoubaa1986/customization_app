@@ -45,7 +45,7 @@ class TestPriorites(unittest.TestCase):
         """14/10 : le Rattrapage passe AVANT le 2e appel, la Requalification AVANT la Zone partenaire, et la relance
         paiements (1×/semaine) ferme la marche."""
         self.assertEqual(T.CLES_PRIORITES, ("urgence", "commandes", "normal", "rattrapage", "relance_liste", "requalif",
-                                            "zone", "relances"))
+                                            "zone", "relances", "hors_secteur"))           # 15/10 : Hors secteur ferme la marche
 
     def test_type_de_liste(self):
         self.assertEqual(T.priorite_de_liste("Urgence"), "urgence")
