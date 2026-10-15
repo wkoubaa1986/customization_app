@@ -302,7 +302,15 @@ class RetenueSourceVente {
     $pane.html(`<div class="rsv-empty-state">${__("Chargement…")}</div>`);
     frappe.call({ method: "bank_retenue_sync.api.certificats.a_reclamer" })
       .then((r) => this._render_reclamer($pane, r.message || {}))
-      .catch(() => $pane.html(`<div class="rsv-inv" style="padding:18px;text-align:center;color:var(--rsv-loss)">${__("Impossible de lire les certificats manquants (bank_retenue_sync).")}</div>`));
+      .catch((e) => {
+        // Dire POURQUOI (serveur en redémarrage, droits, erreur) et proposer de réessayer : un message
+        // muet a déjà coûté une question.
+        const detail = (e && (e.statusText || e.message)) || (e && e.status ? `HTTP ${e.status}` : __("serveur injoignable"));
+        $pane.html(`<div class="rsv-inv" style="padding:18px;text-align:center;color:var(--rsv-loss)">
+          ${__("Impossible de lire les certificats manquants (bank_retenue_sync)")} — ${frappe.utils.escape_html(String(detail))}.
+          <div style="margin-top:10px"><button class="btn btn-sm btn-default" data-rec-retry>🔄 ${__("Réessayer")}</button></div></div>`);
+        $pane.find("[data-rec-retry]").on("click", () => this._load_reclamer());
+      });
   }
 
   _render_reclamer($pane, m) {
