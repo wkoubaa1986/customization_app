@@ -32,6 +32,8 @@ class SuiviTerrain {
     // Direction (Wassim, Néjib) : statistiques, appariement manuel, reprise, réglages. Les autres : le suivi live seulement.
     this.direction = frappe.user.has_role("Direction Suivi Terrain");
     if (!this.direction) this.$root.find(".st-tab[data-tab='stats'], [data-action='apparier'], [data-action='reglages'], [data-action='backfill']").hide();
+    // Sorties de circuit (arrêts inexpliqués, hors horaires, détours) : Wassim et Néjib seulement — rôle « Sortie Circuit ».
+    if (!frappe.user.has_role("Sortie Circuit")) this.$root.find(".st-tab[data-tab='circuit']").hide();
     this.$root.find("#st-jour").val(frappe.datetime.get_today());
     this.$root.find("#st-du").val(frappe.datetime.add_days(frappe.datetime.get_today(), -29));
     this.$root.find("#st-au").val(frappe.datetime.get_today());
@@ -67,6 +69,13 @@ class SuiviTerrain {
       $r.find(".st-tab").removeClass("active"); $(e.currentTarget).addClass("active");
       $r.find(".st-panel").removeClass("active"); $r.find(`.st-panel[data-panel='${t}']`).addClass("active");
       if (t === "stats" && !this._stats_faites) this.stats();
+      if (t === "circuit" && !this.circuit) {
+        frappe.require("/assets/customization_app/js/sortie_circuit.js", () => {
+          const $p = $r.find(".st-panel[data-panel='circuit']");
+          $p.html(SortieCircuit.html());
+          this.circuit = new SortieCircuit($p[0]);
+        });
+      }
     });
     // Demande du 12/10/2026 : une tâche s'ouvre en fenêtre sans quitter le suivi, et chaque adresse
     // mène à l'intervention sur la carte de la page (Google Maps si la position n'est pas connue).
