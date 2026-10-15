@@ -717,24 +717,29 @@ def cycles_sans_reponse_par_client(cfg=None, statut="") -> dict:
 
 
 def clients_a_requalifier(cfg=None) -> list:
-    """Clients avec au moins `cycles_sans_reponse` cycles sans réponse, encore relancés normalement."""
+    """Clients avec au moins `cycles_sans_reponse` cycles sans réponse, encore relancés normalement, SANS rendez-vous
+    récent ou à venir : un client requalifié qui prenait rendez-vous à l'appel était réactivé par la liste puis
+    re-requalifié la nuit même (ses visites restent ouvertes jusqu'à l'intervention) — 19 clients marqués 2 à 4 fois
+    au 15/10/2026."""
     cfg = cfg or RC.config()
     n = cint(cfg["cycles_sans_reponse"])
     if n <= 0 or not frappe.db.has_column("Customer", "custom_statut_relance"):
         return []
-    return [c for c, cycles in cycles_sans_reponse_par_client(cfg, "").items() if cycles >= n]
+    rdv = RC.clients_avec_rdv(cfg)
+    return [c for c, cycles in cycles_sans_reponse_par_client(cfg, "").items() if cycles >= n and c not in rdv]
 
 
 def requalifies_a_tort(cfg=None) -> list:
-    """Les « À requalifier » qui n'atteignent pas (ou plus) le seuil de cycles : comptés en visites avant le 15/10/2026, ou
-    dont les visites ont été soldées depuis par le rattrapage des entretiens. → [(client, cycles)]."""
+    """Les « À requalifier » qui n'atteignent pas (ou plus) le seuil de cycles (comptés en visites avant le 15/10/2026, ou
+    visites soldées depuis par le rattrapage des entretiens), ou qui ont un rendez-vous. → [(client, cycles)]."""
     cfg = cfg or RC.config()
     n = cint(cfg["cycles_sans_reponse"])
     if n <= 0 or not frappe.db.has_column("Customer", "custom_statut_relance"):
         return []
     cycles = cycles_sans_reponse_par_client(cfg, "À requalifier")
+    rdv = RC.clients_avec_rdv(cfg)
     return [(c, cycles.get(c, 0)) for c in frappe.get_all("Customer", filters={"custom_statut_relance": "À requalifier"}, pluck="name")
-            if cycles.get(c, 0) < n]
+            if cycles.get(c, 0) < n or c in rdv]
 
 
 def reactiver_requalifies_a_tort(cfg=None) -> int:
@@ -743,8 +748,10 @@ def reactiver_requalifies_a_tort(cfg=None) -> int:
     for customer, cycles in requalifies_a_tort(cfg):
         frappe.db.set_value("Customer", customer, "custom_statut_relance", "")
         frappe.get_doc({"doctype": "Comment", "comment_type": "Info", "reference_doctype": "Customer", "reference_name": customer,
-                        "content": "✅ Relance réactivée le %s : %d cycle(s) sans réponse, sous le seuil de %d (la règle comptait des visites, "
-                                   "pas des cycles)." % (_jj(nowdate()), cycles, cint(cfg["cycles_sans_reponse"]))}).insert(ignore_permissions=True)
+                        "content": "✅ Relance réactivée le %s : %s." % (_jj(nowdate()),
+                                   "rendez-vous récent ou à venir" if cycles >= cint(cfg["cycles_sans_reponse"]) else
+                                   "%d cycle(s) sans réponse, sous le seuil de %d (la règle comptait des visites, pas des cycles)"
+                                   % (cycles, cint(cfg["cycles_sans_reponse"])))}).insert(ignore_permissions=True)
         n += 1
     log(f"[REQUALIF] clients réactivés (sous le seuil de cycles) : {n}")
     return n
