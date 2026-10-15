@@ -14,31 +14,18 @@ import frappe
 from frappe.utils import getdate, nowdate
 
 NE_REPOND_PAS = "Ne répond pas 1er appel"
-NE_VEUT_PLUS = "Ne veut plus d'entretien"        # 15/10/2026 : « pas besoin », « pas d'appareil », « ne plus appeler »
-RAPPELER = "Rappeler plus tard"                  # 15/10/2026 : « rappel fin décembre » → relance reportée à la date
 PAS_DE_SYSTEME = "Il n'y a pas de système de traitement installé"
-RAPPEL_DEFAUT_MOIS = 3
 
 
 def effet_reponse(issue: str, statut: str) -> dict:
-    """Ce que la réponse d'un appel écrit sur la fiche client. « Ne veut plus d'entretien » et « pas de système » arrêtent
-    la relance (Perdu ; le premier passe aussi « Non » à l'entretien) ; « Rendez-vous pris » réactive un client
-    « À requalifier ». Un client déjà « Perdu » ne bouge plus. PURE."""
-    if issue == NE_VEUT_PLUS and statut != "Perdu":
-        return {"custom_statut_relance": "Perdu", "custom_intéressé_par_le_service_entretien": "Non"}
+    """Ce que la réponse à choix d'un appel écrit sur la fiche client : « pas de système » arrête la relance (Perdu),
+    « Rendez-vous pris » réactive un client « À requalifier ». Les réponses libres (« Autres reponses ») sont lues par
+    qualification_appels le lendemain matin. Un client déjà « Perdu » ne bouge plus. PURE."""
     if issue == PAS_DE_SYSTEME and statut != "Perdu":
         return {"custom_statut_relance": "Perdu"}
     if issue == "Rendez-vous pris" and statut == "À requalifier":
         return {"custom_statut_relance": ""}
     return {}
-
-
-def date_de_rappel(rappeler_le, today, mois=RAPPEL_DEFAUT_MOIS):
-    """La date de reprise : celle saisie si elle est à venir, sinon dans `mois`. PURE."""
-    from frappe.utils import add_months
-    if rappeler_le and getdate(rappeler_le) > getdate(today):
-        return getdate(rappeler_le)
-    return add_months(getdate(today), mois)
 
 
 def articles_appeles(detail_articles) -> dict:
@@ -71,19 +58,13 @@ def _synchroniser_ligne(ligne):
             maj["custom_envoi_sms"] = ligne.intéressé_par_le_service_de_relance
         if maj:
             frappe.db.set_value("Customer", ligne.client, maj)
-    # Issue de l'appel sur la fiche client : Perdu / réactivé / relance reportée (effet_reponse, date_de_rappel).
+    # Issue de l'appel sur la fiche client : Perdu / réactivé (effet_reponse) ; les réponses libres, c'est l'IA du lendemain.
     if frappe.db.has_column("Customer", "custom_statut_relance"):
         issue = ligne.get("resume_appel") or ""
         statut = frappe.db.get_value("Customer", ligne.client, "custom_statut_relance") or ""
         maj = effet_reponse(issue, statut)
         if maj:
             frappe.db.set_value("Customer", ligne.client, maj)
-            if issue == NE_VEUT_PLUS:
-                _commenter(ligne.client, "⛔ Relance arrêtée (Perdu, Non à l’entretien) : « %s » à l’appel du %s." % (NE_VEUT_PLUS, _jj(nowdate())))
-        if issue == RAPPELER and frappe.db.has_column("Customer", "custom_relance_reportee_au"):
-            d = date_de_rappel(ligne.get("rappeler_le"), nowdate())
-            frappe.db.set_value("Customer", ligne.client, "custom_relance_reportee_au", d)
-            _commenter(ligne.client, "⏰ Relance reportée au %s (« %s » à l’appel du %s)." % (d.strftime("%d/%m/%Y"), RAPPELER, _jj(nowdate())))
     articles = articles_appeles(ligne.get("detail_articles"))
     if not articles:
         return
@@ -101,12 +82,3 @@ def _synchroniser_ligne(ligne):
             maj["custom_1er_appel"] = aujourd_hui
         if maj:
             frappe.db.set_value("Maintenance Schedule Detail", row.name, maj, update_modified=False)
-
-
-def _jj(d):
-    return getdate(d).strftime("%d/%m/%Y")
-
-
-def _commenter(client, contenu):
-    frappe.get_doc({"doctype": "Comment", "comment_type": "Info", "reference_doctype": "Customer", "reference_name": client,
-                    "content": contenu}).insert(ignore_permissions=True)

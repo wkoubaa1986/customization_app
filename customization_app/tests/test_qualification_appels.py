@@ -36,15 +36,13 @@ class TestInterpretation(unittest.TestCase):
 
 class TestReponsesAChoix(unittest.TestCase):
     def test_effet_reponse(self):
-        self.assertEqual(H.effet_reponse(H.NE_VEUT_PLUS, ""), {"custom_statut_relance": "Perdu", "custom_intéressé_par_le_service_entretien": "Non"})
-        self.assertEqual(H.effet_reponse(H.NE_VEUT_PLUS, "Perdu"), {})
         self.assertEqual(H.effet_reponse(H.PAS_DE_SYSTEME, "À requalifier"), {"custom_statut_relance": "Perdu"})
+        self.assertEqual(H.effet_reponse(H.PAS_DE_SYSTEME, ""), {"custom_statut_relance": "Perdu"})
+        self.assertEqual(H.effet_reponse(H.PAS_DE_SYSTEME, "Perdu"), {})
         self.assertEqual(H.effet_reponse("Rendez-vous pris", "À requalifier"), {"custom_statut_relance": ""})
         self.assertEqual(H.effet_reponse("Rendez-vous pris", ""), {})
         self.assertEqual(H.effet_reponse("Fait lui-même", "À requalifier"), {})
-        self.assertEqual(str(H.date_de_rappel("2026-12-28", TODAY)), "2026-12-28")
-        self.assertEqual(str(H.date_de_rappel("2026-10-01", TODAY)), "2027-01-15")                   # date passée : 3 mois
-        self.assertEqual(str(H.date_de_rappel(None, TODAY)), "2027-01-15")
+        self.assertEqual(H.effet_reponse("Autres reponses", "À requalifier"), {})                    # lue par l'IA le lendemain
 
 
 class TestReveil(unittest.TestCase):

@@ -1,10 +1,7 @@
-"""Réponses d'appel « Ne veut plus d'entretien » / « Rappeler plus tard » (+ date), qualification IA des réponses libres,
-relance reportée et SMS de réveil annuel (15/10/2026). Idempotent."""
+"""Qualification IA des réponses libres, relance reportée et SMS de réveil annuel (15/10/2026). L'écran de Salma ne change
+pas : elle écrit ses commentaires comme avant, l'IA lit derrière elle (champ caché `qualification_ia`). Idempotent."""
 import frappe
 from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
-
-NOUVELLES_OPTIONS = ("Ne veut plus d'entretien", "Rappeler plus tard")
-
 
 def execute():
     create_custom_fields({"Customer": [
@@ -19,19 +16,11 @@ def execute():
     frappe.clear_cache(doctype="Customer")
 
     # « Appelle Client » est un DocType personnalisé (custom = 1) : ses champs se modifient directement.
-    champ = frappe.db.get_value("DocField", {"parent": "Appelle Client", "fieldname": "resume_appel"}, ["name", "options"], as_dict=True)
-    if champ:
-        options = [o for o in (champ.options or "").split("\n")]
-        manquantes = [o for o in NOUVELLES_OPTIONS if o not in options]
-        if manquantes:
-            frappe.db.set_value("DocField", champ.name, "options", "\n".join(options).rstrip("\n") + "\n" + "\n".join(manquantes), update_modified=False)
     dt = frappe.get_doc("DocType", "Appelle Client")
     existants = {f.fieldname for f in dt.fields}
     ajoutes = False
     for f in (
-        {"fieldname": "rappeler_le", "label": "Rappeler le", "fieldtype": "Date", "insert_after": "resume_appel",
-         "depends_on": "eval:doc.resume_appel == 'Rappeler plus tard'", "description": "Vide = dans 3 mois."},
-        {"fieldname": "qualification_ia", "label": "Qualification IA", "fieldtype": "Data", "read_only": 1,
+        {"fieldname": "qualification_ia", "label": "Qualification IA", "fieldtype": "Data", "read_only": 1, "hidden": 1,
          "insert_after": "reponse_client", "description": "Lecture automatique de la réponse libre (06:30)."},
     ):
         if f["fieldname"] in existants:
@@ -49,4 +38,4 @@ def execute():
         dt.save()
     frappe.clear_cache(doctype="Appelle Client")
     frappe.clear_cache(doctype="Liste Appelle Entretien")
-    print("ensure_qualification_appels : options %s, champs %s" % ("ok", "ajoutés" if ajoutes else "déjà là"))
+    print("ensure_qualification_appels : champ qualification_ia %s" % ("ajouté" if ajoutes else "déjà là"))
