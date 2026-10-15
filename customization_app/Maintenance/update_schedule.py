@@ -444,24 +444,55 @@ def _retirer_echeancier_devine(customer_name, famille, fams, cache):
         log(f"[GUESS] {ms.name} deviné ({type_code}) retiré : la vraie machine {famille} est vendue")
 
 
+# Un porte-filtre (famille PF) vendu à un client qui a DÉJÀ un échéancier est une pièce posée pendant l'entretien, pas une
+# machine : il ne crée pas d'échéancier. Constat du 15/10/2026 : 191 échéanciers « porte-filtre » doublaient l'échéancier
+# de l'osmoseur (221 SMS en double en 2026) et, la commande étant « portée » par ce doublon, la visite de l'osmoseur
+# restait non réalisée pour toujours. Vendu seul à un client sans échéancier, le porte-filtre reste une machine suivie.
+FAMILLES_ACCESSOIRES = ("PF",)
+
+
+def machines_de_la_commande(items, fams, client_suivi):
+    """[(item, famille)] des machines d'une commande qui méritent un échéancier : une famille « accessoire » ne compte
+    que si le client n'a encore aucun échéancier. Un article n'est compté qu'une fois. PURE."""
+    out, vus = [], set()
+    for item in items:
+        fam = famille_machine(item, fams)
+        if not fam or item["item_code"] in vus:
+            continue
+        if client_suivi and fam in FAMILLES_ACCESSOIRES:
+            continue
+        vus.add(item["item_code"])
+        out.append((item, fam))
+    return out
+
+
+def echeanciers_hors_commande(echeanciers, sales_order):
+    """Les échéanciers que cette commande n'a pas elle-même créés (ligne machine liée à la commande) : une installation ne
+    doit pas « réaliser » la première visite de la machine qu'elle vient de poser. PURE."""
+    return [ms for ms in echeanciers
+            if not any((getattr(i, "sales_order", None) or "") == sales_order for i in (getattr(ms, "items", None) or []))]
+
+
+def _client_suivi(customer_name) -> bool:
+    return bool(frappe.db.exists("Maintenance Schedule", {"customer": customer_name, "docstatus": 1}))
+
+
 def create_maintenance_for_machines(i_sal, cfg=None, fams=None, cache=None):
     """Un échéancier pour les MACHINES de la commande (groupes « machine » du réglage). → True si créé."""
     cfg, fams = cfg or RC.config(), fams or RC.familles()
     client = _client(i_sal["customer"])
-    if is_b2b_group(client.customer_group, cfg) or (client.custom_intéressé_par_le_service_entretien or "").upper() != "OUI":
+    if is_b2b_group(client.customer_group, cfg) or not is_customer_interested(client):
         return False
-    machines, vus, familles_vendues = [], set(), set()
+    items = []
     for brut in [x.strip() for x in (i_sal.get("items") or "").split(",,") if x.strip()]:
         item = resoudre_article(brut, cache)
         if not item:
             log(f"[WARN] SO {i_sal['sales_order']} : article '{brut}' introuvable")
             continue
-        fam = famille_machine(item, fams)
-        if not fam or item["item_code"] in vus:
-            continue
-        vus.add(item["item_code"])
-        familles_vendues.add(fam)
-        machines.append({"item_code": item["item_code"], "item_name": item["item_name"], "sales_order": i_sal["sales_order"]})
+        items.append(item)
+    retenues = machines_de_la_commande(items, fams, _client_suivi(i_sal["customer"]))
+    machines = [{"item_code": it["item_code"], "item_name": it["item_name"], "sales_order": i_sal["sales_order"]} for it, _ in retenues]
+    familles_vendues = {fam for _, fam in retenues}
     if not machines:
         return False
     for fam in familles_vendues:
@@ -482,16 +513,23 @@ def create_maintenance_from_consumable_guess(customer_name, family, delivery_dat
     return ms
 
 
-def update_single_machine_schedule(customer_name, family, delivery_date, sales_order, cfg=None, fams=None, cache=None):
-    """Les échéanciers de cette famille chez ce client sont décalés ; s'il n'y en a aucun, un échéancier deviné est créé."""
+def update_single_machine_schedule(customer_name, family, delivery_date, sales_order, cfg=None, fams=None, cache=None, creer=True):
+    """Les échéanciers de cette famille chez ce client sont décalés (sauf celui que la commande vient de créer) ; s'il n'y
+    en a aucun et que `creer` le permet, un échéancier deviné est créé."""
     cfg, fams = cfg or RC.config(), fams or RC.familles()
     delivery_date = getdate(delivery_date)
-    existants = find_machine_schedules(customer_name, family, fams, cache)
-    if not existants:
+    tous = find_machine_schedules(customer_name, family, fams, cache)
+    if not tous:
+        if not creer:
+            return False
         ms = create_maintenance_from_consumable_guess(customer_name, family, delivery_date, sales_order, cfg, fams)
         if ms:
             shift_schedule_for_delivery(ms, delivery_date, sales_order, family, fams, cache)
         return bool(ms)
+    existants = echeanciers_hors_commande(tous, sales_order)
+    if not existants:
+        log(f"[UPDATE] {customer_name} : l'échéancier {family} a été créé par {sales_order}, rien à décaler")
+        return False
     fait = False
     for ms in existants:
         fait = shift_schedule_for_delivery(ms, delivery_date, sales_order, family, fams, cache) or fait
@@ -499,9 +537,18 @@ def update_single_machine_schedule(customer_name, family, delivery_date, sales_o
 
 
 def familles_cibles(items, fams=None):
-    """(toutes les familles possibles, familles « sûres » = consommables à famille unique) pour les articles d'une commande. PURE."""
+    """(toutes les familles possibles, familles « sûres » = consommables à famille unique) pour les articles d'une commande.
+    La main-d'œuvre d'entretien d'une famille (`article_entretien` du réglage : M-E-OD, M-E-Ad…) est le signal le plus sûr :
+    1 121 entretiens de 2026 la portent, et 45 d'entre eux n'avaient AUCUN consommable connu (filtres offerts, pièces hors
+    familles) et restaient invisibles. PURE."""
     cibles, sures = set(), set()
+    entretien = {f["article_entretien"]: f["code"] for f in (fams or RC.familles()) if f.get("article_entretien")}
     for item in items:
+        code = ((item or {}).get("item_code") or "").strip()
+        if code in entretien:
+            cibles.add(entretien[code])
+            sures.add(entretien[code])
+            continue
         if not est_consommable(item, fams):
             continue
         fs = familles_consommable(item, fams)
@@ -511,13 +558,17 @@ def familles_cibles(items, fams=None):
     return cibles, sures
 
 
-def update_maintenance_schedule(i_sal, cfg=None, fams=None, cache=None):
+def update_maintenance_schedule(i_sal, cfg=None, fams=None, cache=None, creer=True):
     """Achat de consommables : on décale les échéanciers des familles concernées que le client possède ; s'il n'en a aucune,
-    on en devine UNE (famille sûre puis ordre de priorité du réglage — plus de tirage dans un set)."""
+    on en devine UNE (famille sûre puis ordre de priorité du réglage — plus de tirage dans un set).
+    Un client « Non » à l'entretien qui a quand même un échéancier voit sa visite marquée réalisée (il a bien fait
+    l'entretien : 104 clients « Non » entretenus en 12 mois au 15/10/2026 restaient « en retard » pour toujours) ; le
+    « Non » ne gouverne que les relances et la CRÉATION d'échéanciers. `creer=False` (rattrapage) : jamais de devinette."""
     cfg, fams = cfg or RC.config(), fams or RC.familles()
     client = _client(i_sal["customer"])
-    if is_b2b_group(client.customer_group, cfg) or (client.custom_intéressé_par_le_service_entretien or "").upper() != "OUI":
+    if is_b2b_group(client.customer_group, cfg):
         return "skip"
+    interesse = is_customer_interested(client)
     items = [it for it in (resoudre_article(b, cache) for b in (i_sal.get("items") or "").split(",,") if b.strip()) if it]
     cibles, sures = familles_cibles(items, fams)
     if not cibles:
@@ -526,20 +577,33 @@ def update_maintenance_schedule(i_sal, cfg=None, fams=None, cache=None):
     existantes = get_customer_machine_families(i_sal["customer"], fams, cache)
     communes = cibles & existantes
     if communes:
+        fait = False
         for fam in sorted(communes, key=lambda c: ([f["code"] for f in fams] + [c]).index(c)):
-            update_single_machine_schedule(i_sal["customer"], fam, i_sal["delivery_date"], i_sal["sales_order"], cfg, fams, cache)
-        return "update"
+            fait = update_single_machine_schedule(i_sal["customer"], fam, i_sal["delivery_date"], i_sal["sales_order"], cfg, fams, cache, creer=creer) or fait
+        return "update" if fait else "rien"
+    if not interesse or not creer:
+        return "skip"
     devinee = RC.famille_prioritaire(sures or cibles, fams)
     log(f"[GUESS] SO {i_sal['sales_order']} : famille devinée {devinee} (sûres={sorted(sures)}, cibles={sorted(cibles)})")
     return "guess" if update_single_machine_schedule(i_sal["customer"], devinee, i_sal["delivery_date"], i_sal["sales_order"], cfg, fams, cache) else "no-guess"
+
+
+def traiter_commande(i_sal, cfg, fams, cache, creer=True):
+    """Une commande livrée : ses machines (échéancier neuf) PUIS ses consommables (visite réalisée sur les échéanciers
+    existants). Avant le 15/10/2026, une commande qui créait une machine n'allait pas plus loin : l'entretien d'un
+    osmoseur avec un porte-filtre de rechange créait un échéancier « porte-filtre » et ne soldait jamais la visite.
+    → (machine créée ?, résultat des consommables)."""
+    cree = bool(creer and create_maintenance_for_machines(i_sal, cfg, fams, cache))
+    return cree, update_maintenance_schedule(i_sal, cfg, fams, cache, creer=creer)
 
 
 # ----------------------------------------------------------------------
 # 7) PASSAGE PRINCIPAL
 # ----------------------------------------------------------------------
 
-def commandes_a_traiter(cfg):
-    """Commandes livrées (ou BL rapproché) de clients intéressés non B2B, dans la fenêtre du réglage."""
+def commandes_a_traiter(cfg, de=None, a=None):
+    """Commandes livrées (ou BL rapproché) de clients non B2B, intéressés OU déjà suivis par un échéancier, dans la fenêtre
+    du réglage (ou [de, a] pour un rattrapage)."""
     today = nowdate()
     return frappe.db.sql("""
         SELECT so.name AS sales_order, so.customer, so.delivery_date,
@@ -551,12 +615,14 @@ def commandes_a_traiter(cfg):
         LEFT JOIN `tabDelivery Note` dn ON dni.parent = dn.name AND dn.docstatus = 1 AND dn.status != 'Closed'
         WHERE so.docstatus = 1
           AND IFNULL(cust.customer_group, '') NOT IN %(b2b)s
-          AND UPPER(IFNULL(cust.custom_intéressé_par_le_service_entretien, '')) = 'OUI'
+          AND (UPPER(IFNULL(cust.custom_intéressé_par_le_service_entretien, '')) = 'OUI'
+               OR EXISTS (SELECT 1 FROM `tabMaintenance Schedule` ms WHERE ms.customer = cust.name AND ms.docstatus = 1))
           AND (so.delivery_status = 'Fully Delivered' OR (dn.name IS NOT NULL AND dn.custom_reconciliation_stock IS NOT NULL))
           AND so.delivery_date BETWEEN %(de)s AND %(a)s
         GROUP BY so.name, so.customer, so.delivery_date
         ORDER BY so.delivery_date""",
-        {"b2b": tuple(cfg["groupes_b2b_liste"]) or ("",), "de": add_months(today, -cfg["fenetre_mois_avant"]), "a": add_months(today, cfg["fenetre_mois_apres"])},
+        {"b2b": tuple(cfg["groupes_b2b_liste"]) or ("",), "de": de or add_months(today, -cfg["fenetre_mois_avant"]),
+         "a": a or add_months(today, cfg["fenetre_mois_apres"])},
         as_dict=True)
 
 
@@ -593,16 +659,15 @@ def run_maintenance_planning():
             continue
         frappe.db.savepoint("ms_so")
         try:
-            if create_maintenance_for_machines(i_sal, cfg, fams, cache):
+            cree, r = traiter_commande(i_sal, cfg, fams, cache)
+            if cree:
                 summary["new_ms_created"] += 1
-            else:
-                r = update_maintenance_schedule(i_sal, cfg, fams, cache)
-                if r == "update":
-                    summary["updated_from_consumables"] += 1
-                elif r == "guess":
-                    summary["guessed"] += 1
-                else:
-                    summary["no_link"] += 1
+            if r == "update":
+                summary["updated_from_consumables"] += 1
+            elif r == "guess":
+                summary["guessed"] += 1
+            elif r == "no-link" and not cree:
+                summary["no_link"] += 1
         except Exception:
             frappe.db.rollback(save_point="ms_so")
             summary["errors"] += 1
@@ -700,6 +765,147 @@ def extend_sms_for_all_active_schedules(extra_visits_per_item=None):
     """Même chose, à la main (bouton / console)."""
     frappe.only_for(("System Manager", "Maintenance Manager"))
     return prolonger_echeanciers_epuises(extra_visits_per_item)
+
+
+# ----------------------------------------------------------------------
+# 8) RATTRAPAGE (15/10/2026) — commandes d'entretien jamais appliquées à l'échéancier
+# ----------------------------------------------------------------------
+
+def commande_rattrapable(delivery_date, derniere_realisee) -> bool:
+    """Une commande ne se rejoue que si elle est POSTÉRIEURE à la dernière visite réalisée du client : avant, l'échéancier
+    a déjà avancé, la marquer ne changerait rien aux relances et déplacerait des visites déjà cyclées. PURE."""
+    return not derniere_realisee or getdate(delivery_date) > getdate(derniere_realisee)
+
+
+def est_accessoire(familles) -> bool:
+    """Un échéancier fait uniquement de machines accessoires (porte-filtre). PURE."""
+    return bool(familles) and set(familles) <= set(FAMILLES_ACCESSOIRES)
+
+
+def _familles_par_echeancier(fams=None, cache=None) -> dict:
+    """{échéancier soumis: (client, {familles de ses machines})} — une requête pour toute la base."""
+    out = {}
+    for ms, customer, code in frappe.db.sql("""select ms.name, ms.customer, msi.item_code from `tabMaintenance Schedule` ms
+                                               join `tabMaintenance Schedule Item` msi on msi.parent = ms.name where ms.docstatus = 1"""):
+        cust, fs = out.setdefault(ms, (customer, set()))
+        f = famille_machine(_item(code, cache), fams)
+        if f:
+            fs.add(f)
+    return out
+
+
+def _dernieres_visites_realisees(par_ms) -> dict:
+    """{client: date de la dernière visite réalisée} sur les échéanciers soumis, hors accessoires — une requête."""
+    out = {}
+    for ms, customer, derniere in frappe.db.sql("""select ms.name, ms.customer, max(d.actual_date) from `tabMaintenance Schedule` ms
+                                                   join `tabMaintenance Schedule Detail` d on d.parent = ms.name
+                                                   where ms.docstatus = 1 and d.actual_date is not null group by ms.name, ms.customer"""):
+        if est_accessoire(par_ms.get(ms, (None, set()))[1]):
+            continue
+        if not out.get(customer) or getdate(derniere) > getdate(out[customer]):
+            out[customer] = derniere
+    return out
+
+
+def doublon_sans_histoire_propre(realisees_doublon, realisees_autres) -> bool:
+    """Un doublon se retire s'il ne porte aucune visite réalisée, ou si chacune de ses visites réalisées l'a été par une
+    commande que l'échéancier de la vraie machine porte aussi (l'achat de cartouches avait marqué les deux). Une visite
+    réalisée sans commande (à la main) le protège. PURE. `realisees_*` : commandes des visites réalisées ('' = sans)."""
+    r = set(realisees_doublon)
+    return not r or ("" not in r and r <= set(realisees_autres))
+
+
+def echeanciers_accessoires_en_double(fams=None, cache=None) -> list:
+    """Les échéanciers soumis faits UNIQUEMENT de machines accessoires (porte-filtre), chez un client qui a un autre
+    échéancier soumis d'une vraie famille, et sans histoire propre (`doublon_sans_histoire_propre`) : des doublons nés
+    d'un entretien. → [{name, customer, autre, sales_orders}]."""
+    fams = fams or RC.familles()
+    par_ms = _familles_par_echeancier(fams, cache)
+    par_client = {}
+    for name, (customer, fs) in par_ms.items():
+        par_client.setdefault(customer, []).append((name, fs))
+    realisees = {}
+    for parent, so in frappe.db.sql("""select parent, ifnull(custom_sales_order, '') from `tabMaintenance Schedule Detail` where actual_date is not null"""):
+        realisees.setdefault(parent, []).append((so or "").strip())
+    out = []
+    for name, (customer, fs) in par_ms.items():
+        if not est_accessoire(fs):
+            continue
+        autres = [n for n, f2 in par_client[customer] if n != name and f2 and not est_accessoire(f2)]
+        if not autres:
+            continue
+        if not doublon_sans_histoire_propre(realisees.get(name, []), [so for n in autres for so in realisees.get(n, [])]):
+            continue
+        so = frappe.db.sql_list("select distinct ifnull(sales_order, '') from `tabMaintenance Schedule Item` where parent = %s", (name,))
+        out.append({"name": name, "customer": customer, "autre": autres[0], "sales_orders": [s for s in so if s]})
+    return out
+
+
+def retirer_echeanciers_accessoires_en_double(fams=None) -> dict:
+    """Retire ces doublons (annulation puis suppression, comme le nettoyage de nuit), avec une trace sur le client : la
+    commande qui les avait créés redevient libre et le rattrapage l'applique à l'échéancier de l'osmoseur."""
+    supprimes, erreurs = 0, 0
+    for d in echeanciers_accessoires_en_double(fams):
+        frappe.db.savepoint("ms_accessoire")
+        try:
+            doc = frappe.get_doc("Maintenance Schedule", d["name"])
+            doc.flags.ignore_links = doc.flags.ignore_permissions = True
+            doc.cancel()
+            frappe.delete_doc("Maintenance Schedule", d["name"], force=True, ignore_permissions=True)
+            frappe.get_doc({"doctype": "Comment", "comment_type": "Info", "reference_doctype": "Customer", "reference_name": d["customer"],
+                            "content": "🧹 Échéancier porte-filtre %s retiré le %s : pièce posée lors d'un entretien (échéancier %s), aucune visite "
+                                       "réalisée qui ne soit déjà portée par celui-ci. Commande(s) %s appliquée(s) à l'échéancier de la machine."
+                                       % (d["name"], _jj(nowdate()), d["autre"], ", ".join(d["sales_orders"]) or "—")}).insert(ignore_permissions=True)
+            supprimes += 1
+            log(f"[ACCESSOIRE] {d['name']} ({d['customer']}) retiré, doublon de {d['autre']}")
+        except Exception:
+            frappe.db.rollback(save_point="ms_accessoire")
+            erreurs += 1
+            frappe.log_error(frappe.get_traceback(), f"Retrait échéancier accessoire {d['name']}")
+    log(f"[ACCESSOIRE] doublons porte-filtre retirés : {supprimes}, erreurs : {erreurs}")
+    return {"supprimes": supprimes, "erreurs": erreurs}
+
+
+def rattraper_commandes_entretien(depuis="2025-01-01", cfg=None) -> dict:
+    """Rejoue, sur les échéanciers EXISTANTS seulement (jamais de création ni de devinette), les commandes livrées depuis
+    `depuis` que le cron n'a jamais appliquées : clients « Non » (jamais lus avant le 15/10/2026), commandes avec
+    porte-filtre (absorbées par le doublon), commandes sorties de la fenêtre de 4 mois. Chronologique, chaque commande
+    isolée, rejouable sans effet (une commande déjà appliquée est refusée par `ligne_a_marquer`)."""
+    cfg, fams, cache = cfg or RC.config(), RC.familles(), {}
+    commandes = commandes_a_traiter(cfg, de=depuis, a=nowdate())
+    couvertes = commandes_couvertes()
+    dernieres = _dernieres_visites_realisees(_familles_par_echeancier(fams, cache))
+    summary = {"total": len(commandes), "deja_couvertes": 0, "historiques": 0, "decalees": 0, "sans_lien": 0, "ignorees": 0, "erreurs": 0}
+    erreurs = []
+    for i_sal in commandes:
+        if i_sal["sales_order"] in couvertes:
+            summary["deja_couvertes"] += 1
+            continue
+        if not commande_rattrapable(i_sal["delivery_date"], dernieres.get(i_sal["customer"])):
+            summary["historiques"] += 1
+            continue
+        frappe.db.savepoint("ms_rattrapage")
+        try:
+            r = update_maintenance_schedule(i_sal, cfg, fams, cache, creer=False)
+            if r == "update":
+                summary["decalees"] += 1
+                dernieres[i_sal["customer"]] = max(getdate(i_sal["delivery_date"]), getdate(dernieres.get(i_sal["customer"]) or i_sal["delivery_date"]))
+            elif r == "no-link":
+                summary["sans_lien"] += 1
+            else:
+                summary["ignorees"] += 1
+        except Exception:
+            frappe.db.rollback(save_point="ms_rattrapage")
+            summary["erreurs"] += 1
+            erreurs.append(i_sal["sales_order"])
+            frappe.log_error(frappe.get_traceback(), f"Rattrapage échéancier — commande {i_sal['sales_order']}")
+    line = ("[RATTRAPAGE] total=%(total)s deja_couvertes=%(deja_couvertes)s historiques=%(historiques)s decalees=%(decalees)s "
+            "sans_lien=%(sans_lien)s ignorees=%(ignorees)s erreurs=%(erreurs)s" % summary)
+    if erreurs:
+        line += " (" + ", ".join(erreurs[:10]) + ")"
+    log(line)
+    summary["log"] = line
+    return summary
 
 
 def run_cron():

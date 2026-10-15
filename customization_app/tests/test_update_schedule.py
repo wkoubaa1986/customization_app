@@ -100,3 +100,42 @@ class TestFamilles(unittest.TestCase):
         fam, _prix = RC.cout_entretien({"RO_IND", "RO_DOM"}, FAMS) if False else (RC.famille_prioritaire({"RO_IND", "RO_DOM"}, FAMS), None)
         self.assertEqual(fam, "RO_DOM")
         self.assertEqual(RC.liste("a, b\nc\n\nb"), ["a", "b", "c"])
+
+
+class TestRattrapage(unittest.TestCase):
+    """15/10/2026 : porte-filtre = pièce de rechange chez un client suivi, pas de décalage par la commande qui crée la
+    machine, rattrapage limité aux commandes postérieures à la dernière visite réalisée."""
+
+    def test_porte_filtre_machine_seulement_chez_un_client_sans_echeancier(self):
+        items = [{"item_code": "PF1", "item_name": "Porte-filtre 10\"", "item_group": "Porte-filtres"},
+                 {"item_code": "C1", "item_name": "Cartouche", "item_group": "Cartouches à charbon"},
+                 {"item_code": "PF1", "item_name": "Porte-filtre 10\"", "item_group": "Porte-filtres"}]
+        self.assertEqual(U.machines_de_la_commande(items, FAMS, client_suivi=True), [])                 # entretien : pièce
+        self.assertEqual([f for _, f in U.machines_de_la_commande(items, FAMS, client_suivi=False)], ["PF"])  # vendu seul : machine, une fois
+        osmo = [{"item_code": "M1", "item_name": "Osmoseur", "item_group": "RO flux direct"}] + items
+        self.assertEqual([f for _, f in U.machines_de_la_commande(osmo, FAMS, client_suivi=True)], ["RO_DOM"])  # la vraie machine passe
+
+    def test_la_commande_qui_cree_la_machine_ne_la_decale_pas(self):
+        from types import SimpleNamespace as NS   # pas frappe._dict : « items » y est la méthode du dict
+        neuf = NS(name="MS-NEUF", items=[NS(item_code="M1", sales_order="SO-1")])
+        ancien = NS(name="MS-ANCIEN", items=[NS(item_code="M0", sales_order="SO-0")])
+        self.assertEqual([m.name for m in U.echeanciers_hors_commande([neuf, ancien], "SO-1")], ["MS-ANCIEN"])
+        self.assertEqual([m.name for m in U.echeanciers_hors_commande([neuf, ancien], "SO-9")], ["MS-NEUF", "MS-ANCIEN"])
+
+    def test_commande_rattrapable_et_accessoire(self):
+        self.assertTrue(U.commande_rattrapable("2026-02-10", None))
+        self.assertTrue(U.commande_rattrapable("2026-02-10", "2025-08-01"))
+        self.assertFalse(U.commande_rattrapable("2025-03-01", "2025-08-01"))   # l'échéancier a déjà avancé : historique
+        self.assertFalse(U.commande_rattrapable("2025-08-01", "2025-08-01"))
+        self.assertTrue(U.est_accessoire({"PF"}))
+        self.assertFalse(U.est_accessoire({"PF", "RO_DOM"}))
+        self.assertFalse(U.est_accessoire(set()))
+
+    def test_main_d_oeuvre_d_entretien_et_doublon_sans_histoire(self):
+        cibles, sures = U.familles_cibles([{"item_code": "M-E-OD", "item_name": "Main d’œuvre entretien", "item_group": "Main d’œuvre"}], FAMS)
+        self.assertEqual((cibles, sures), ({"RO_DOM"}, {"RO_DOM"}))           # entretien facturé sans consommable : reconnu
+        self.assertEqual(U.familles_cibles([{"item_code": "M-I-OD", "item_group": "Main d’œuvre"}], FAMS), (set(), set()))  # installation : non
+        self.assertTrue(U.doublon_sans_histoire_propre([], ["SO-1"]))
+        self.assertTrue(U.doublon_sans_histoire_propre(["SO-1", "SO-2"], ["SO-1", "SO-2", "SO-3"]))   # tout déjà porté par l'osmoseur
+        self.assertFalse(U.doublon_sans_histoire_propre(["SO-1", "SO-9"], ["SO-1"]))                  # SO-9 n'est que sur le doublon
+        self.assertFalse(U.doublon_sans_histoire_propre([""], ["SO-1"]))                               # visite faite à la main
