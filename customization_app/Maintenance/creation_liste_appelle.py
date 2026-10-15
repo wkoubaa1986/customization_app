@@ -31,9 +31,6 @@ TYPE_ZONE = partenaire_clients.TYPE_LISTE_ZONE
 # 15/10/2026 : les clients hors secteur (Gafsa, Sfax, Sousse sans partenaire…) recevaient leurs SMS puis n'étaient jamais
 # appelés (217 en attente, pour toujours). Ils ont leur liste, dernière priorité : on l'appelle quand tout le reste est fait.
 TYPE_HORS_SECTEUR = "Hors secteur"
-# 15/10/2026 : liste des certificats de retenue a la source manquants (> 45 j), creee le lundi par
-# bank_retenue_sync.tej.liste_appels_ras ; sans echeancier, pas de 2e appel (elle revient d'elle-meme).
-TYPE_RAS = "Retenue à la source"
 NE_REPOND_PAS = "Ne répond pas 1er appel"
 PROMO_SELS = "Promo sac sels: pour l'achat de 5 sacs, le prix du sac est à 28 DT au lieu de 35 DT."
 
@@ -313,7 +310,7 @@ def _generate_second_call_list(today, rdv_clients, cfg=None):
     les sources ne sont marquées traitées QU'APRÈS la création réussie."""
     cfg = cfg or RC.config()
     limite = add_days(getdate(today), -cfg["delai_2e_appel_jours"])
-    hors_2e = [TYPE_RELANCE, TYPE_HORS_SECTEUR, TYPE_RAS]     # Hors secteur / RAS : un seul appel, pas de 2e
+    hors_2e = [TYPE_RELANCE, TYPE_HORS_SECTEUR]     # Hors secteur : un seul appel, pas de 2e (dernière priorité)
     sources = frappe.get_all(DOCTYPE, filters={"docstatus": 1, "type_liste": ["not in", hors_2e], "liste_2iéme_relance": 0, "date_fin": ["<=", limite]},
                              fields=["name", "type_liste"])
     sans_fin = frappe.db.count(DOCTYPE, {"docstatus": 1, "type_liste": ["not in", hors_2e], "liste_2iéme_relance": 0, "date_fin": ["is", "not set"]})

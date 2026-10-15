@@ -25,7 +25,7 @@ LES SOURCES (une action = un client ou une pièce, par utilisateur et par jour �
                    sans réponse » — dont l'auteur n'est pas enregistré (non attribué).
 - rattrapage     : Liste Appels Rattrapage — « 📵 … sans réponse » (commentaire) ou client recontacté / planifié.
 - relances       : relance paiement, par téléphone, SMS ou e-mail ([RELANCE-PAIEMENT] | <type> | …) ;
-  relance_ras    : relance de retenue à la source ([RELANCE-RAS]), hors files.
+  ras            : relance de retenue à la source ([RELANCE-RAS]) tracée depuis la page, file du mardi.
 - terrain        : « 📞 Appel au … » d'un technicien depuis Ma journée.
 - client         : commentaire écrit sur une fiche client (hors relances et traces automatiques).
 - activite       : note du suivi d'activité.
@@ -67,12 +67,11 @@ PRIORITES = (
     ("requalif", "Requalification"),
     ("zone", "Zone partenaire"),
     ("relances", "Relance paiements (le lundi)"),
-    ("ras", "Retenue à la source (le mardi, certificats manquants)"),
+    ("ras", "Retenue à la source (le mardi, dans sa page)"),
     ("hors_secteur", "Hors secteur (quand tout le reste est fait)"),
 )
 #: Les autres suivis : comptés, mais hors des files d'appels.
 AUTRES = (
-    ("relance_ras", "Relances retenue à la source"),
     ("terrain", "Appels terrain"),
     ("client", "Commentaires clients"),
     ("activite", "Notes d’activité"),
@@ -85,10 +84,9 @@ CLES_RDV = tuple("rdv_" + c for c in CLES_PRIORITES) + ("rdv_hors",)
 
 #: `type_liste` d'une Liste Appelle Entretien → priorité. Un type inconnu est rangé en Normal.
 TYPES_LISTE = {"Urgence": "urgence", "Normal": "normal", "Relance": "relance_liste",
-               "Zone partenaire": "zone", "Requalification": "requalif", "Hors secteur": "hors_secteur",
-               "Retenue à la source": "ras"}
+               "Zone partenaire": "zone", "Requalification": "requalif", "Hors secteur": "hors_secteur"}
 CLES_LISTES = tuple(TYPES_LISTE.values())
-MARQUEURS_RELANCE = {"[RELANCE-PAIEMENT]": "relances", "[RELANCE-RAS]": "relance_ras"}
+MARQUEURS_RELANCE = {"[RELANCE-PAIEMENT]": "relances", "[RELANCE-RAS]": "ras"}
 #: Un client qui doit de l'argent est relancé une fois par semaine.
 RELANCE_JOURS = 7
 #: Les files hebdomadaires ont leur jour (décision 15/10/2026) : relance paiements le LUNDI, retenue à la
@@ -111,6 +109,8 @@ OUVERTURE = {
     "commandes": (["commandes-a-traiter"], {}),
     "rattrapage": (["query-report", RAPPORT_RATTRAPAGE], {}),
     "relances": (["relance-paiements"], {}),
+    # La retenue à la source s'appelle et se trace DANS SA PAGE (onglet « À réclamer »), pas par une liste.
+    "ras": (["retenue-source-vente"], {"tab": "reclamer"}),
 }
 for _type, _cle in TYPES_LISTE.items():
     OUVERTURE[_cle] = (["List", "Liste Appelle Entretien"], {"docstatus": 0, "type_liste": _type})
@@ -146,7 +146,7 @@ def priorite_de_liste(type_liste: str | None) -> str:
 
 
 def type_relance(contenu: str) -> str | None:
-    """'relances' (paiement : téléphone, SMS ou e-mail) | 'relance_ras' | None pour un commentaire
+    """'relances' (paiement : téléphone, SMS ou e-mail) | 'ras' | None pour un commentaire
     « [RELANCE-…] | <type> | … ». PURE."""
     t = HC.texte(contenu or "", 200)
     return next((source for marqueur, source in MARQUEURS_RELANCE.items() if t.startswith(marqueur)), None)
@@ -379,9 +379,22 @@ def restes() -> dict:
     out["commandes"] = _reste_commandes()
     out["rattrapage"] = _reste_rattrapage()
     out["relances"] = _reste_relances() if est_son_jour("relances") else 0
-    if not est_son_jour("ras"):
-        out["ras"] = 0
+    out["ras"] = _reste_ras() if est_son_jour("ras") else 0
     return out
+
+
+def _reste_ras():
+    """Clients à appeler pour un certificat de retenue manquant (> 45 j, pas relancés depuis), lus chez
+    bank_retenue_sync ; None si l'app n'est pas là."""
+    try:
+        fn = frappe.get_attr("bank_retenue_sync.tej.liste_appels_ras.clients_a_reclamer")
+    except Exception:
+        return None
+    try:
+        return len([c for c in fn() if c.get("a_appeler")])
+    except Exception:
+        frappe.log_error(title="Tableau des appels : retenue à la source", message=frappe.get_traceback())
+        return None
 
 
 # ── API ───────────────────────────────────────────────────────────────────────

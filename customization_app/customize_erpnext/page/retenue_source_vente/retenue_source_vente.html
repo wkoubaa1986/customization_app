@@ -68,6 +68,16 @@
     .rsv-att-count { font-size: 12px; color: var(--text-muted, #6b7280); white-space: nowrap; }
     .rsv-att-count.none { color: var(--rsv-warn); font-weight: 700; }
 
+    .rsv-rec { background: var(--card-bg, #fff); border: 1px solid var(--border-color, #e4e8ee); border-radius: 10px; margin-bottom: 10px; padding: 12px 14px;
+      display: grid; grid-template-columns: 1.4fr 1.6fr 1fr auto; gap: 14px; align-items: start; border-left: 4px solid var(--rsv-warn); }
+    .rsv-rec.calme { border-left-color: var(--border-color, #e4e8ee); opacity: .75; }
+    .rsv-rec .rsv-rec-nom { font-weight: 700; font-size: 14px; }
+    .rsv-rec .rsv-rec-tel a { font-weight: 600; margin-right: 10px; white-space: nowrap; }
+    .rsv-rec ul { margin: 4px 0 0 16px; padding: 0; font-size: 12.5px; }
+    .rsv-rec .rsv-rec-actions { display: flex; flex-direction: column; gap: 6px; min-width: 150px; }
+    .rsv-rec .rsv-rec-total { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
+    .rsv-rec .rsv-rec-last { font-size: 12px; color: var(--text-muted, #7a8291); margin-top: 4px; }
+    @media (max-width: 900px) { .rsv-rec { grid-template-columns: 1fr; } }
     .rsv-badge { display: inline-flex; align-items: center; font-size: 11.5px; font-weight: 700; padding: 2px 9px; border-radius: 999px; white-space: nowrap; }
     .rsv-badge.st-green  { color: var(--rsv-gain);  background: var(--rsv-gain-bg); }
     .rsv-badge.st-orange { color: var(--rsv-warn);  background: var(--rsv-warn-bg); }
@@ -157,6 +167,7 @@
   <div class="rsv-tabs">
     <button class="rsv-tab active" data-tab="factures">Factures</button>
     <button class="rsv-tab" data-tab="certificats">Certificats TEJ</button>
+    <button class="rsv-tab" data-tab="reclamer">📞 À réclamer</button>
   </div>
 
   <div data-pane="factures">
@@ -164,4 +175,5 @@
     <div data-role="invoices"></div>
   </div>
   <div data-pane="certificats" style="display:none"></div>
+  <div data-pane="reclamer" style="display:none"></div>
 </div>

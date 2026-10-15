@@ -74,8 +74,8 @@ class TestTypeRelance(unittest.TestCase):
         self.assertEqual(T.type_relance("<p>[RELANCE-PAIEMENT] | Email | Envoyé à a@b.tn</p>"), "relances")
 
     def test_retenue_hors_files(self):
-        self.assertEqual(T.type_relance("[RELANCE-RAS] | Téléphone | ok"), "relance_ras")
-        self.assertNotIn("relance_ras", T.CLES_PRIORITES)
+        self.assertEqual(T.type_relance("[RELANCE-RAS] | Téléphone | ok"), "ras")   # 15/10 : la file du mardi
+        self.assertIn("ras", T.CLES_PRIORITES)
 
     def test_commentaire_ordinaire(self):
         self.assertIsNone(T.type_relance("Client rappelé, il passe demain"))

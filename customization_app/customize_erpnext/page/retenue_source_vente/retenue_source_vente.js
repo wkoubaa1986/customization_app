@@ -66,6 +66,12 @@ class RetenueSourceVente {
     this._init_defaults();
     this._bind();
     this._fetch();
+    // Le bloc « Mes appels par priorité » ouvre directement l'onglet « À réclamer » (file du mardi).
+    const tab = (frappe.route_options || {}).tab;
+    if (tab) {
+      frappe.route_options = null;
+      this._switch_tab(tab);
+    }
   }
 
   _init_defaults() {
@@ -91,6 +97,7 @@ class RetenueSourceVente {
     // laisserait croire qu'elle relance les declarants.
     this.$root.find("[data-action='relance'], [data-action='toggle-all'], [data-action='excel']")
       .toggle(tab === "factures");
+    if (tab === "reclamer") return this._load_reclamer();
     if (tab !== "certificats") return;
     if (this._certs) return this._certs.refresh();
     // ⚠️ PAS `frappe.require` AVEC UN « ?v= ». Son `assets.extn()` prend ce qui suit le « ? » :
@@ -284,6 +291,80 @@ class RetenueSourceVente {
     } else {
       proceed();
     }
+  }
+
+  // ------------------------------------------------------------------ onglet « À réclamer »
+  // Là où Salma voit le problème et agit : un client par carte, ses pièces, ses téléphones, sa
+  // dernière relance ; l'appel se trace ici même ([RELANCE-RAS] | Téléphone), et le tableau des appels
+  // le compte dans la file « Retenue à la source » du mardi. Données : bank_retenue_sync.
+  _load_reclamer() {
+    const $pane = this.$root.find("[data-pane='reclamer']");
+    $pane.html(`<div class="rsv-empty-state">${__("Chargement…")}</div>`);
+    frappe.call({ method: "bank_retenue_sync.api.certificats.a_reclamer" })
+      .then((r) => this._render_reclamer($pane, r.message || {}))
+      .catch(() => $pane.html(`<div class="rsv-inv" style="padding:18px;text-align:center;color:var(--rsv-loss)">${__("Impossible de lire les certificats manquants (bank_retenue_sync).")}</div>`));
+  }
+
+  _render_reclamer($pane, m) {
+    const esc = frappe.utils.escape_html;
+    const lignes = m.lignes || [];
+    const a_appeler = lignes.filter((l) => l.a_appeler);
+    const kpi = (lbl, val, cls = "") => `<div class="rsv-kpi ${cls}"><div class="lbl">${lbl}</div><div class="val">${val}</div></div>`;
+    const carte = (l) => {
+      const last = l.derniere_relance
+        ? `${__("Dernière relance")} : <b>${esc(l.derniere_relance.type || "")}</b> ${frappe.datetime.prettyDate(l.derniere_relance.date)}${l.derniere_relance.note ? ` — ${esc(l.derniere_relance.note)}` : ""}`
+        : __("Jamais relancé");
+      const tels = (l.telephones || []).map((t) => `<a href="tel:${esc(t)}">${esc(t)}</a>`).join("") || `<span class="rsv-cust">${__("aucun numéro")}</span>`;
+      const dans_factures = (this._data && this._data.invoices || []).some((i) => i.customer === l.customer && !i.attachments.length);
+      return `<div class="rsv-rec ${l.a_appeler ? "" : "calme"}" data-customer="${esc(l.customer)}">
+        <div>
+          <div class="rsv-rec-nom">${this._doclink("Customer", l.customer, l.customer_name)}</div>
+          <div class="rsv-cust">${l.tax_id ? `MF ${esc(l.tax_id)}` : __("sans matricule")} · ${__("depuis le")} ${frappe.datetime.str_to_user(l.depuis)}</div>
+          <div class="rsv-rec-tel">${tels}</div>
+          <div class="rsv-rec-last">${last}${l.a_appeler ? "" : ` · <span style="color:var(--rsv-gain)">${__("relancé il y a moins de {0} jours", [m.jours])}</span>`}</div>
+        </div>
+        <div><ul>${(l.pieces || []).map((p) => `<li>${esc(p.texte)}</li>`).join("")}</ul></div>
+        <div><div class="rsv-rec-total">${this._fmt(l.total)}</div><div class="rsv-cust">${__("de retenue sans certificat")}</div></div>
+        <div class="rsv-rec-actions">
+          <button class="btn btn-sm ${l.a_appeler ? "btn-primary" : "btn-default"}" data-rec="appel">📞 ${__("J'ai appelé")}</button>
+          ${dans_factures ? `<button class="btn btn-sm btn-default" data-rec="sms">✉️ ${__("SMS / e-mail")}</button>` : ""}
+          <button class="btn btn-sm btn-default" data-rec="histo">📜 ${__("Historique")}</button>
+        </div>
+      </div>`;
+    };
+    $pane.html(`
+      <div class="rsv-kpis">
+        ${kpi(__("À appeler"), a_appeler.length, a_appeler.length ? "warn" : "")}
+        ${kpi(__("Relancés récemment"), lignes.length - a_appeler.length)}
+        ${kpi(__("Retenue sans certificat"), this._fmt(m.total || 0), m.total > 0.001 ? "warn" : "")}
+      </div>
+      <p class="rsv-cust" style="margin:-8px 0 12px">${__("Clients dont un certificat de retenue manque depuis plus de {0} jours : retenue comptabilisée chez nous sans certificat au portail, ou 1 % laissé en dette que le client n'a pas déclaré. Appelez, tracez ici : la fiche client garde la trace, le tableau des appels compte l'appel (file « Retenue à la source », le mardi), et le client ne revient pas avant {0} jours.", [m.jours])}</p>
+      ${lignes.length ? lignes.map(carte).join("") : `<div class="rsv-empty-state">${__("Aucun certificat manquant depuis plus de {0} jours.", [m.jours])}</div>`}`);
+    $pane.off("click.rec").on("click.rec", "[data-rec]", (e) => {
+      const $b = $(e.currentTarget);
+      const l = lignes.find((x) => x.customer === $b.closest(".rsv-rec").data("customer"));
+      if (!l) return;
+      if ($b.data("rec") === "appel") this._tracer_appel_ras(l, () => this._load_reclamer());
+      else if ($b.data("rec") === "sms") this._open_relance_dialog([l.customer]);
+      else this._show_historique(l.customer, l.customer_name);
+    });
+  }
+
+  _tracer_appel_ras(l, apres) {
+    const d = new frappe.ui.Dialog({
+      title: __("Appel — {0}", [l.customer_name || l.customer]),
+      fields: [
+        { fieldname: "resume", label: __("Résultat de l'appel"), fieldtype: "Select", reqd: 1,
+          options: ["Va déposer la retenue sur le portail", "Certificat envoyé / reçu", "Ne répond pas", "Conteste la retenue", "Autre"].join("\n") },
+        { fieldname: "note", label: __("Commentaire"), fieldtype: "Small Text", description: __("Ex : promet de déposer avant la fin du mois.") },
+      ],
+      primary_action_label: __("Enregistrer l'appel"),
+      primary_action: (v) => {
+        frappe.call({ method: "bank_retenue_sync.api.certificats.tracer_appel_ras", args: { customer: l.customer, resume: v.resume, note: v.note || "" }, freeze: true })
+          .then(() => { d.hide(); frappe.show_alert({ message: __("Appel enregistré."), indicator: "green" }); apres && apres(); });
+      },
+    });
+    d.show();
   }
 
   _relance_telephone(customer, customer_name) {
