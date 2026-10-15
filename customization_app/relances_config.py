@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 
 import frappe
-from frappe.utils import add_days, cint, getdate
+from frappe.utils import nowdate, add_days, cint, getdate
 
 DOCTYPE = "Config Relances"
 
@@ -240,7 +240,28 @@ def clients_exclus_relance(cfg: dict | None = None) -> set:
         out |= set(frappe.get_all("Customer", filters={"custom_statut_relance": ["in", STATUTS_RELANCE_EXCLUS]}, pluck="name"))
     if not cfg.get("relancer_non_interesses"):
         out |= set(frappe.get_all("Customer", filters={"custom_intéressé_par_le_service_entretien": "Non"}, pluck="name"))
-    return out
+    return out | clients_reportes()
+
+
+def clients_reportes(today=None) -> set:
+    """Les clients dont la relance est reportée à une date à venir (« Rappeler plus tard » à l'appel, ou qualification
+    automatique d'une réponse libre, 15/10/2026) : ni SMS, ni appel, ni requalification jusque-là."""
+    if not frappe.db.has_column("Customer", "custom_relance_reportee_au"):
+        return set()
+    return set(frappe.get_all("Customer", filters=[["custom_relance_reportee_au", "is", "set"],
+                                                    ["custom_relance_reportee_au", ">", getdate(today or nowdate())]], pluck="name"))
+
+
+def clients_reportes_echus(today=None, statut=None) -> set:
+    """Les clients dont la date de reprise est atteinte : à rappeler aujourd'hui. `statut` : '' (relance normale) ou
+    « À requalifier »."""
+    if not frappe.db.has_column("Customer", "custom_relance_reportee_au"):
+        return set()
+    # « is set » obligatoire : Frappe traduit `<=` sur une date NULL par ifnull(…, '0001-01-01'), vrai pour tout le monde.
+    filtres = [["custom_relance_reportee_au", "is", "set"], ["custom_relance_reportee_au", "<=", getdate(today or nowdate())]]
+    if statut is not None:
+        filtres.append(["custom_statut_relance", "=", statut] if statut else ["custom_statut_relance", "in", ("", None)])
+    return set(frappe.get_all("Customer", filters=filtres, pluck="name"))
 
 
 def emails_alertes(cfg: dict | None = None) -> list:

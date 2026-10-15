@@ -48,6 +48,11 @@ DEFAUTS = {
     "relance_sans_lien": "Pour planifier votre entretien, contactez-nous au {telephones}.",
     "relance_hors_secteur": "Commandez vos filtres directement sur notre site :\n{lien_boutique}\n"
                             "Ou contactez-nous au {telephones} pour passer votre commande",
+    # 15/10/2026 : un SMS par an aux clients sortis de la relance (« À requalifier ») — voir Maintenance/sms_reveil.
+    "sms_reveil": "Bonjour {nom_client},\n"
+                  "cela fait plus d'un an que {appareil} n'a pas ete entretenu. Un entretien regulier garantit la qualite de votre eau.\n"
+                  "{suite}\n"
+                  "{signature}",
 }
 
 BALISES = {
@@ -59,6 +64,7 @@ BALISES = {
     "relance_rdv_en_ligne": "{lien_rdv} {telephones}",
     "relance_sans_lien": "{telephones}",
     "relance_hors_secteur": "{lien_boutique} {telephones}",
+    "sms_reveil": "{nom_client} {appareil} {suite} {signature}",
 }
 
 _BALISE = re.compile(r"\{(\w+)\}")

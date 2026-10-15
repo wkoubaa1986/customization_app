@@ -373,8 +373,14 @@ def _generate_normal_urgence_list(today, rdv_clients, create_normal=True, create
         results["zone_partenaire"] = _create_liste_appel_doc(today, zone, TYPE_ZONE, cfg=cfg)
     elif zone:
         log(f"[ZONE PARTENAIRE] {len(zone)} client(s) en attente (brouillon existant ou génération non demandée)")
+    rappels = RC.clients_reportes_echus(today, statut="") - set(normal) - set(zone) - set(urgence)
+    if rappels:
+        normal.update(_clients_depuis_visites_echues(rappels, today))
+        log(f"[RAPPEL] {len(rappels)} client(s) « rappeler plus tard » à échéance repris dans la liste Normal")
     if create_normal and normal and (ignore_draft_normal or not has_draft_of_type(TYPE_NORMAL)):
         results["normal"] = _create_liste_appel_doc(today, normal, TYPE_NORMAL, cfg=cfg)
+        if results["normal"].get("created"):
+            _solder_rappels(rappels, today)
     elif normal:
         log(f"[NORMAL] {len(normal)} client(s) en attente (brouillon existant ou génération non demandée)")
     if create_normal and (ignore_draft_normal or not has_draft_of_type(TYPE_REQUALIFICATION)):
@@ -385,31 +391,51 @@ def _generate_normal_urgence_list(today, rdv_clients, create_normal=True, create
 TYPE_REQUALIFICATION = "Requalification"
 
 
-def clients_requalification_a_lister() -> list:
-    """Clients « À requalifier » jamais entrés dans une liste Requalification (un seul dernier appel)."""
+def clients_requalification_a_lister(today=None) -> list:
+    """Clients « À requalifier » jamais entrés dans une liste Requalification (un seul dernier appel), plus ceux dont le
+    « Rappeler plus tard » arrive à échéance (15/10/2026 : ils reviennent pour un nouvel appel à la date demandée)."""
     if not frappe.db.has_column("Customer", "custom_statut_relance"):
         return []
-    return frappe.db.sql_list("""select c.name from tabCustomer c where c.custom_statut_relance = 'À requalifier'
-                                 and not exists (select 1 from `tabAppelle Client` a join `tabListe Appelle Entretien` l on l.name = a.parent
-                                                 where a.client = c.name and l.type_liste = %s and l.docstatus <> 2)""", (TYPE_REQUALIFICATION,))
+    jamais = frappe.db.sql_list("""select c.name from tabCustomer c where c.custom_statut_relance = 'À requalifier'
+                                   and not exists (select 1 from `tabAppelle Client` a join `tabListe Appelle Entretien` l on l.name = a.parent
+                                                   where a.client = c.name and l.type_liste = %s and l.docstatus <> 2)""", (TYPE_REQUALIFICATION,))
+    return sorted(set(jamais) | RC.clients_reportes_echus(today or nowdate(), statut="À requalifier"))
 
 
-def _generate_requalification_list(today, cfg=None):
-    """La liste du dernier appel humain : les clients requalifiés, avec leurs visites échues non réalisées."""
-    cfg = cfg or RC.config()
-    noms = clients_requalification_a_lister()
+def _clients_depuis_visites_echues(noms, today) -> dict:
+    """{client: {echeanciers, secteurs, premiere, nb_appels}} depuis les visites échues non réalisées — la forme attendue
+    par _create_liste_appel_doc. Un client sans visite échue n'y figure pas (une ligne exige un échéancier)."""
+    noms = tuple(noms)
     if not noms:
-        return None
+        return {}
     clients = {}
     for r in frappe.db.sql("""select ms.customer, d.parent, d.item_code, min(d.scheduled_date) premiere,
                                      (select group_concat(distinct a.custom_secteur separator ', ') from `tabDynamic Link` dl join `tabAddress` a on a.name = dl.parent
                                        where dl.parenttype = 'Address' and dl.link_doctype = 'Customer' and dl.link_name = ms.customer) secteurs
                               from `tabMaintenance Schedule Detail` d join `tabMaintenance Schedule` ms on ms.name = d.parent and ms.docstatus = 1
                               where ms.customer in %s and d.actual_date is null and d.scheduled_date < %s group by ms.customer, d.parent, d.item_code""",
-                           (tuple(noms), getdate(today)), as_dict=True):
+                           (noms, getdate(today)), as_dict=True):
         c = clients.setdefault(r.customer, {"echeanciers": {}, "secteurs": r.secteurs or "", "premiere": None, "nb_appels": 0})
         c["echeanciers"].setdefault(r.parent, {})[r.item_code] = getdate(r.premiere)
         c["premiere"] = getdate(r.premiere) if c["premiere"] is None or getdate(r.premiere) < c["premiere"] else c["premiere"]
+    return clients
+
+
+def _solder_rappels(noms, today):
+    """La date de rappel est consommée dès que le client est dans une liste."""
+    noms = tuple(noms)
+    if noms and frappe.db.has_column("Customer", "custom_relance_reportee_au"):
+        frappe.db.sql("update tabCustomer set custom_relance_reportee_au = null where name in %s and custom_relance_reportee_au <= %s",
+                      (noms, getdate(today)))
+
+
+def _generate_requalification_list(today, cfg=None):
+    """La liste du dernier appel humain : les clients requalifiés, avec leurs visites échues non réalisées."""
+    cfg = cfg or RC.config()
+    noms = clients_requalification_a_lister(today)
+    if not noms:
+        return None
+    clients = _clients_depuis_visites_echues(noms, today)
     for n in noms:
         clients.setdefault(n, {"echeanciers": {}, "secteurs": "", "premiere": getdate(today), "nb_appels": 0})
     # Un client sans visite échue ne peut pas porter de ligne (échéancier requis) : il reste « À requalifier » sans appel.
@@ -418,6 +444,7 @@ def _generate_requalification_list(today, cfg=None):
         return None
     r = _create_liste_appel_doc(today, clients, TYPE_REQUALIFICATION, cfg=cfg)
     if r.get("created"):
+        _solder_rappels(clients, today)
         frappe.db.set_value(DOCTYPE, r["name"], "titre", "%s %s — dernier appel : %d cycles de relance sans réponse" % (TYPE_REQUALIFICATION, today, cint(cfg["cycles_sans_reponse"])), update_modified=False)
     return r
 

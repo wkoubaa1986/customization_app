@@ -725,8 +725,8 @@ def clients_a_requalifier(cfg=None) -> list:
     n = cint(cfg["cycles_sans_reponse"])
     if n <= 0 or not frappe.db.has_column("Customer", "custom_statut_relance"):
         return []
-    rdv = RC.clients_avec_rdv(cfg)
-    return [c for c, cycles in cycles_sans_reponse_par_client(cfg, "").items() if cycles >= n and c not in rdv]
+    hors = RC.clients_avec_rdv(cfg) | RC.clients_reportes()
+    return [c for c, cycles in cycles_sans_reponse_par_client(cfg, "").items() if cycles >= n and c not in hors]
 
 
 def requalifies_a_tort(cfg=None) -> list:

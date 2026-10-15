@@ -21,6 +21,8 @@
   "relance_rdv_en_ligne",
   "relance_sans_lien",
   "relance_hors_secteur",
+  "sec_reveil",
+  "sms_reveil",
   "sec_suivi",
   "suivi_en_route",
   "col_suivi",
@@ -113,6 +115,17 @@
    "fieldtype": "Small Text",
    "label": "{suite} — client hors secteur sans partenaire (vente de filtres à distance)",
    "description": "Balises : {lien_boutique} {telephones}. Lien et numéros : réglage « Responsable Relance »."
+  },
+  {
+   "fieldname": "sec_reveil",
+   "fieldtype": "Section Break",
+   "label": "SMS de réveil (un an sans contact, 10:05)"
+  },
+  {
+   "fieldname": "sms_reveil",
+   "fieldtype": "Small Text",
+   "label": "SMS de réveil",
+   "description": "Un seul SMS par an aux clients « À requalifier » (sortis de la relance après plusieurs cycles sans réponse), jamais aux « Perdu ». Balises : {nom_client} {appareil} {suite} {signature} ; {suite} = « RDV en ligne » ou « sans lien » ci-dessus selon le client."
   },
   {
    "fieldname": "sec_suivi",

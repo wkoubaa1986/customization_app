@@ -667,6 +667,10 @@ scheduler_events = {
 
     "cron": {
         # Lundi–samedi à 07:00 : création liste d'appels
+        "30 6 * * 1-6": [
+            "customization_app.qualification_appels.run_cron",           # réponses libres de la veille → effets, avant les listes
+        ],
+
         "0 7 * * 1-6": [
             "customization_app.Maintenance.creation_liste_appelle.run_cron",
         ],
@@ -674,6 +678,10 @@ scheduler_events = {
         # Lundi–samedi à 10:00 : relance SMS maintenance
         "0 10 * * 1-6": [
             "customization_app.Maintenance.relance_maintenance_sms.run_cron",
+        ],
+
+        "5 10 * * 1-6": [
+            "customization_app.Maintenance.sms_reveil.run_cron",          # un SMS par an aux clients sortis de la relance
         ],
 
         # Tous les soirs à 20:00 : rappel des rendez-vous du lendemain et avis
