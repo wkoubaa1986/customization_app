@@ -16,6 +16,8 @@ const ST_ETAPE = {
   "non suivie": ["autre", "– non suivie"], "sans position": ["autre", "📍 sans position"], "annulée": ["annulee", "annulée"],
   "non repérée": ["autre", "❔ non repérée"],
 };
+// Le statut de la FICHE (ouverte / clôturée / annulée), à côté de l'étape GPS : « passée » ne dit pas si le technicien a clôturé.
+const ST_STATUT = { Open: ["ouverte", "🔓 ouverte"], Completed: ["cloturee", "✔ clôturée"], Cancelled: ["annulee", "✖ annulée"] };
 const ST_RAFRAICHIR_S = 60;
 const ST_RAYON_SECTEUR_M = 4300;     // 3 clients sur 4 sont à moins de 4,3 km du centre de leur secteur (mesuré le 12/10/2026)
 const ST_COULEURS = ["#2563eb", "#16a34a", "#d97706", "#9333ea", "#dc2626", "#0891b2", "#be185d", "#4d7c0f"];
@@ -194,7 +196,7 @@ class SuiviTerrain {
           const prevenu = (t.messages || []).filter((m) => !["Alerte interne", "Non faite"].includes(m.type)).map((m) => `📨 ${m.type} ${this._h(m.heure)}${m.statut === "Simulé" ? " (simulé)" : m.statut === "Échec" ? " ❌" : ""}`).join(", ");
           html += `<tr><td class="num">${this._h(t.debut)}${t.fin ? "–" + this._h(t.fin) : ""}</td>
             <td class="st-ouvrir" data-tache="${esc(t.name)}" title="Ouvrir la tâche"><span class="st-client">${esc(t.client || t.titre || t.name)}</span><br><span class="st-dim">${esc(t.type)}${t.secteur ? " · " + esc(t.secteur) : ""}${t.position_src && t.position_src !== "tâche" ? " · position " + esc(t.position_src) : ""}</span>${this._adresse(t)}</td>
-            <td><span class="st-etape ${ec}">${el}</span></td><td>${reel} <a href="#" class="st-dim" data-copie="${esc(this._phrase(e, t, d))}" title="Copier la phrase pour le client">📋</a></td><td class="num">${duree}${prevenu ? `<br><span class="st-dim">${prevenu}</span>` : ""}</td></tr>`;
+            <td><span class="st-etape ${ec}">${el}</span>${this._statut(t)}</td><td>${reel} <a href="#" class="st-dim" data-copie="${esc(this._phrase(e, t, d))}" title="Copier la phrase pour le client">📋</a></td><td class="num">${duree}${prevenu ? `<br><span class="st-dim">${prevenu}</span>` : ""}</td></tr>`;
         }
         html += `</tbody></table>`;
       } else html += `<div class="st-sub">Aucune tâche planifiée.</div>`;
@@ -234,6 +236,11 @@ class SuiviTerrain {
   }
 
   /** Tâche sans position : les arrêts du véhicule qui POURRAIENT être l'intervention (le GPS ne tranche pas). */
+  _statut(t) {
+    const [cls, lib] = ST_STATUT[t.statut] || ["autre", t.statut || ""];
+    return lib ? `<br><span class="st-statut ${cls}">${lib}</span>` : "";
+  }
+
   _pistes_resume(t) {
     const p = t.pistes || [], esc = frappe.utils.escape_html;
     const encours = p.find((x) => x.en_cours), photo = p.find((x) => x.photo === "pendant");
@@ -337,7 +344,7 @@ class SuiviTerrain {
       ${ligne("🗂", "Tâche", `${esc(t.type)}${!t.client && t.titre ? " · " + esc(t.titre) : ""} <span class="st-dim">${esc(t.name)}</span>`)}
       ${ligne("🕘", "Annoncé", `${this._h(t.debut)}${t.fin ? "–" + this._h(t.fin) : ""}`)}
       ${ligne("👷", "Technicien", `${esc(e.nom)}${e.vehicule ? ` <span class="st-dim">${esc(e.vehicule)}</span>` : ""}`)}
-      ${ligne("🚦", "Étape", `<span class="st-etape ${ec}">${el}</span>${reel ? " " + reel : ""}`)}
+      ${ligne("🚦", "Étape", `<span class="st-etape ${ec}">${el}</span> ${this._statut(t).replace("<br>", "")}${reel ? " · " + reel : ""}`)}
       ${ligne("📞", "Téléphone", t.tel ? `<a href="tel:${esc(String(t.tel).replace(/\s+/g, ""))}">${esc(t.tel)}</a>` : "")}
       ${ligne("🏠", "Adresse", `${esc(adresse || "—")}${t.secteur ? ` <span class="st-dim">· ${esc(t.secteur)}</span>` : ""}${t.position_src && t.position_src !== "tâche" ? ` <span class="st-dim">· position ${esc(t.position_src)}</span>` : ""}${t.approx ? `<br><span class="st-dim">${this._origine_approx(t)}</span>` : ""}`)}
       ${/^https?:\/\//.test(t.google_map || "") ? ligne("🔗", "Lien Maps", `<a href="${esc(t.google_map)}" target="_blank" rel="noopener" title="${esc(t.google_map)}" class="st-pop-url">${esc(t.google_map.replace(/^https?:\/\/(www\.)?/, ""))} ↗</a>`) : ""}
