@@ -1,0 +1,179 @@
+{
+ "actions": [],
+ "creation": "2026-10-15 19:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-10-15 19:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "owner": "Administrator",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "name": "Ecart Circuit GPS",
+ "autoname": "hash",
+ "title_field": "detail",
+ "track_changes": 0,
+ "description": "Sorties de circuit détectées par le GPS (page Sorties de circuit, rôle Sortie Circuit) : arrêt inexpliqué, hors horaires, détour.",
+ "fields": [
+  {
+   "fieldname": "date",
+   "fieldtype": "Date",
+   "label": "Jour",
+   "reqd": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "employe",
+   "fieldtype": "Link",
+   "label": "Employé",
+   "options": "Employee",
+   "in_list_view": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "employe_nom",
+   "fieldtype": "Data",
+   "label": "Nom"
+  },
+  {
+   "fieldname": "vehicule",
+   "fieldtype": "Data",
+   "label": "Véhicule"
+  },
+  {
+   "fieldname": "cbox",
+   "fieldtype": "Data",
+   "label": "Boîtier"
+  },
+  {
+   "fieldname": "type",
+   "fieldtype": "Select",
+   "label": "Type",
+   "options": "Arrêt inexpliqué\nHors horaires\nDétour",
+   "in_list_view": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "col_1",
+   "fieldtype": "Column Break",
+   "label": ""
+  },
+  {
+   "fieldname": "debut",
+   "fieldtype": "Datetime",
+   "label": "Début"
+  },
+  {
+   "fieldname": "fin",
+   "fieldtype": "Datetime",
+   "label": "Fin"
+  },
+  {
+   "fieldname": "minutes",
+   "fieldtype": "Int",
+   "label": "Minutes"
+  },
+  {
+   "fieldname": "km",
+   "fieldtype": "Float",
+   "label": "Km"
+  },
+  {
+   "fieldname": "lat",
+   "fieldtype": "Float",
+   "label": "Latitude",
+   "precision": "6"
+  },
+  {
+   "fieldname": "lng",
+   "fieldtype": "Float",
+   "label": "Longitude",
+   "precision": "6"
+  },
+  {
+   "fieldname": "km_client",
+   "fieldtype": "Float",
+   "label": "Km du client le plus proche"
+  },
+  {
+   "fieldname": "client_proche",
+   "fieldtype": "Data",
+   "label": "Client le plus proche"
+  },
+  {
+   "fieldname": "tache_proche",
+   "fieldtype": "Link",
+   "label": "Tâche la plus proche",
+   "options": "Tache de travail"
+  },
+  {
+   "fieldname": "sec_2",
+   "fieldtype": "Section Break",
+   "label": ""
+  },
+  {
+   "fieldname": "detail",
+   "fieldtype": "Small Text",
+   "label": "Détail",
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "cle",
+   "fieldtype": "Data",
+   "label": "Clé",
+   "unique": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "col_2",
+   "fieldtype": "Column Break",
+   "label": ""
+  },
+  {
+   "fieldname": "justification",
+   "fieldtype": "Select",
+   "label": "Justification",
+   "options": "\nFournisseur\nClient non planifié\nAramex / courses\nPause\nAutre\nAnomalie confirmée",
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "note",
+   "fieldtype": "Small Text",
+   "label": "Note"
+  },
+  {
+   "fieldname": "justifie_par",
+   "fieldtype": "Link",
+   "label": "Justifié par",
+   "options": "User"
+  },
+  {
+   "fieldname": "justifie_le",
+   "fieldtype": "Datetime",
+   "label": "Justifié le"
+  }
+ ],
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "export": 1,
+   "report": 1
+  },
+  {
+   "role": "Sortie Circuit",
+   "read": 1,
+   "write": 1,
+   "export": 1,
+   "report": 1
+  }
+ ]
+}

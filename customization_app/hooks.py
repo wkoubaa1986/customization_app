@@ -722,6 +722,11 @@ scheduler_events = {
         "0 21 * * *": [
             "customization_app.flotte_gps.cron_du_soir",
         ],
+        # 21 h 10, après l'appariement : sorties de circuit (arrêts inexpliqués, hors horaires, détours) du jour et de la
+        # veille, pour la page réservée Sorties de circuit (rôle Sortie Circuit).
+        "10 21 * * *": [
+            "customization_app.flotte_circuit.cron_du_soir",
+        ],
         # Toutes les 2 min, lundi–samedi 7 h–19 h : SMS « en route » / « retard » aux clients d'après la position des
         # véhicules, alerte du rôle Appels sur les retards prévisibles (Config Flotte GPS ; simulé en developer_mode).
         "*/2 7-19 * * 1-6": [
