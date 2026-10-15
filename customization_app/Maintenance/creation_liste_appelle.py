@@ -40,6 +40,36 @@ def has_draft_of_type(list_type: str) -> bool:
     return bool(frappe.db.exists(DOCTYPE, {"docstatus": 0, "type_liste": list_type}))
 
 
+# Un brouillon que personne n'a touché depuis sa création bloque pour toujours les listes suivantes de son type : la liste
+# « Zone partenaire » du 05/10/2026 (100 clients, aucun appelé) a laissé 108 clients « en attente » chaque matin pendant dix
+# jours. Passé ce délai, un brouillon intact est remplacé par une liste à jour ; un brouillon entamé n'est jamais touché.
+JOURS_BROUILLON_INTACT = 7
+
+
+def brouillon_abandonne(creation, modified, lignes_touchees: int, today, jours=JOURS_BROUILLON_INTACT) -> bool:
+    """Jamais modifié depuis sa création, aucune ligne appelée/renseignée, et plus vieux que `jours`. PURE."""
+    if lignes_touchees or getdate(modified) != getdate(creation):
+        return False
+    return getdate(creation) <= add_days(getdate(today), -jours)
+
+
+def purger_brouillons_abandonnes(today, jours=JOURS_BROUILLON_INTACT) -> list:
+    """Supprime les brouillons abandonnés (tous types) pour que le cron en recrée un à jour. → noms supprimés."""
+    supprimes = []
+    for l in frappe.get_all(DOCTYPE, filters={"docstatus": 0}, fields=["name", "type_liste", "creation", "modified"]):
+        touchees = frappe.db.count("Appelle Client", {"parent": l.name, "parenttype": DOCTYPE, "a_été_appelé": 1}) \
+            + frappe.db.count("Appelle Client", {"parent": l.name, "parenttype": DOCTYPE, "resume_appel": ["!=", ""]})
+        if not brouillon_abandonne(l.creation, l.modified, touchees, today, jours):
+            continue
+        try:
+            frappe.delete_doc(DOCTYPE, l.name, ignore_permissions=True, force=True)
+            supprimes.append(l.name)
+            log(f"[BROUILLON] {l.name} ({l.type_liste}) du {getdate(l.creation)} jamais touché : supprimé, une liste à jour prend sa place")
+        except Exception:
+            frappe.log_error(frappe.get_traceback(), f"Brouillon abandonné {l.name}")
+    return supprimes
+
+
 def get_recent_rdv_customers(days_back=None, cfg=None):
     """Clients avec un rendez-vous récent ou à venir : même règle que la relance SMS (relances_config)."""
     return RC.clients_avec_rdv(cfg, jours=days_back)
@@ -399,7 +429,7 @@ def _generate_requalification_list(today, cfg=None):
 def _run_cron_internal():
     cfg, today = RC.config(), nowdate()
     rdv = get_recent_rdv_customers(cfg=cfg)
-    results = {}
+    results = {"brouillons_supprimes": purger_brouillons_abandonnes(today)}
     results["second_call"] = _generate_second_call_list(today, rdv, cfg) if not has_draft_of_type(TYPE_RELANCE) \
         else {"created": False, "skipped": True, "reason": "draft_relance_exists"}
     results["normal_urgence"] = _generate_normal_urgence_list(today, rdv, create_normal=not has_draft_of_type(TYPE_NORMAL),

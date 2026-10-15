@@ -87,3 +87,4 @@ customization_app.patches.activer_secteurs_voisins
 customization_app.patches.ensure_flotte_gps_fields
 customization_app.patches.attribuer_tableau_appels
 customization_app.patches.rattraper_echeanciers_entretien
+customization_app.patches.recalculer_requalification

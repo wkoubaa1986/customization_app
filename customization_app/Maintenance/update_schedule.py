@@ -698,23 +698,56 @@ def _reactiver_client(customer):
         log(f"[REQUALIF] {customer} réactivé par un achat")
 
 
-def clients_a_requalifier(cfg=None) -> list:
-    """Clients avec au moins `cycles_sans_reponse` cycles complets (visite échue, SMS 1 + SMS 2 + appel, non réalisée)
-    POSTÉRIEURS à leur dernière visite réalisée, encore relancés normalement, hors B2B. Une requête."""
+def cycles_sans_reponse_par_client(cfg=None, statut="") -> dict:
+    """{client: nombre de CYCLES sans réponse} — un cycle = un mois d'échéance distinct avec visite échue, SMS 1 + SMS 2 +
+    appel, non réalisée, POSTÉRIEURE à la dernière visite réalisée du client ; hors B2B. Jusqu'au 15/10/2026 on comptait
+    des VISITES : un client à trois appareils ratait un seul cycle et passait « À requalifier » (23 clients sur 401).
+    `statut` : les clients de ce statut de relance ('' = relancés normalement). Une requête."""
     cfg = cfg or RC.config()
-    n = cint(cfg["cycles_sans_reponse"])
-    if n <= 0 or not frappe.db.has_column("Customer", "custom_statut_relance"):
-        return []
-    return frappe.db.sql_list("""
-        select ms.customer from `tabMaintenance Schedule Detail` d
+    return dict(frappe.db.sql("""
+        select ms.customer, count(distinct date_format(d.scheduled_date, '%%Y-%%m')) from `tabMaintenance Schedule Detail` d
         join `tabMaintenance Schedule` ms on ms.name = d.parent and ms.docstatus = 1
         join tabCustomer c on c.name = ms.customer
         where d.actual_date is null and d.scheduled_date < %(today)s
           and d.custom_sms_1 is not null and d.custom_sms_2 is not null and d.custom_appelle is not null
-          and ifnull(c.custom_statut_relance, '') = '' and ifnull(c.customer_group, '') not in %(b2b)s
+          and ifnull(c.custom_statut_relance, '') = %(statut)s and ifnull(c.customer_group, '') not in %(b2b)s
           and d.scheduled_date > ifnull((select max(d2.actual_date) from `tabMaintenance Schedule Detail` d2
                                           join `tabMaintenance Schedule` m2 on m2.name = d2.parent where m2.customer = ms.customer), '1900-01-01')
-        group by ms.customer having count(*) >= %(n)s""", {"today": nowdate(), "n": n, "b2b": tuple(cfg["groupes_b2b_liste"]) or ("",)})
+        group by ms.customer""", {"today": nowdate(), "statut": statut, "b2b": tuple(cfg["groupes_b2b_liste"]) or ("",)}))
+
+
+def clients_a_requalifier(cfg=None) -> list:
+    """Clients avec au moins `cycles_sans_reponse` cycles sans réponse, encore relancés normalement."""
+    cfg = cfg or RC.config()
+    n = cint(cfg["cycles_sans_reponse"])
+    if n <= 0 or not frappe.db.has_column("Customer", "custom_statut_relance"):
+        return []
+    return [c for c, cycles in cycles_sans_reponse_par_client(cfg, "").items() if cycles >= n]
+
+
+def requalifies_a_tort(cfg=None) -> list:
+    """Les « À requalifier » qui n'atteignent pas (ou plus) le seuil de cycles : comptés en visites avant le 15/10/2026, ou
+    dont les visites ont été soldées depuis par le rattrapage des entretiens. → [(client, cycles)]."""
+    cfg = cfg or RC.config()
+    n = cint(cfg["cycles_sans_reponse"])
+    if n <= 0 or not frappe.db.has_column("Customer", "custom_statut_relance"):
+        return []
+    cycles = cycles_sans_reponse_par_client(cfg, "À requalifier")
+    return [(c, cycles.get(c, 0)) for c in frappe.get_all("Customer", filters={"custom_statut_relance": "À requalifier"}, pluck="name")
+            if cycles.get(c, 0) < n]
+
+
+def reactiver_requalifies_a_tort(cfg=None) -> int:
+    cfg = cfg or RC.config()
+    n = 0
+    for customer, cycles in requalifies_a_tort(cfg):
+        frappe.db.set_value("Customer", customer, "custom_statut_relance", "")
+        frappe.get_doc({"doctype": "Comment", "comment_type": "Info", "reference_doctype": "Customer", "reference_name": customer,
+                        "content": "✅ Relance réactivée le %s : %d cycle(s) sans réponse, sous le seuil de %d (la règle comptait des visites, "
+                                   "pas des cycles)." % (_jj(nowdate()), cycles, cint(cfg["cycles_sans_reponse"]))}).insert(ignore_permissions=True)
+        n += 1
+    log(f"[REQUALIF] clients réactivés (sous le seuil de cycles) : {n}")
+    return n
 
 
 def requalifier_clients_silencieux(cfg=None) -> int:

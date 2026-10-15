@@ -54,3 +54,16 @@ class TestRepartition(unittest.TestCase):
     def test_resume(self):
         self.assertIn("Normal : 3 client(s) (+5 en attente)", L.resume_resultats({"normal_urgence": {"normal": {"created": True, "count_clients": 3, "en_attente": 5}}}))
         self.assertIn("Aucune liste", L.resume_resultats({}))
+
+
+class TestBrouillonAbandonne(unittest.TestCase):
+    """15/10/2026 : un brouillon jamais touché depuis plus de 7 jours est remplacé ; un brouillon entamé ou récent reste."""
+
+    def test_regle(self):
+        from customization_app.Maintenance.creation_liste_appelle import brouillon_abandonne as b
+        self.assertTrue(b("2026-10-05 07:01:07", "2026-10-05 07:01:07", 0, "2026-10-15"))      # la liste Zone du 05/10
+        self.assertFalse(b("2026-10-14 07:00:32", "2026-10-14 07:00:32", 0, "2026-10-15"))     # trop récent
+        self.assertFalse(b("2026-10-05 07:01:07", "2026-10-05 07:01:07", 3, "2026-10-15"))     # des lignes appelées
+        self.assertFalse(b("2026-10-05 07:01:07", "2026-10-06 09:00:00", 0, "2026-10-15"))     # quelqu'un l'a ouverte et enregistrée
+        self.assertTrue(b("2026-10-08 07:00:00", "2026-10-08 07:00:00", 0, "2026-10-15"))      # exactement 7 jours
+        self.assertFalse(b("2026-10-09 07:00:00", "2026-10-09 07:00:00", 0, "2026-10-15"))
