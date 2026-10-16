@@ -112,10 +112,17 @@ def marque_principale(modele, ref, no, total) -> str:
     return m.replace("{ref}", str(ref or "")).replace("{conteneur}", "C%d" % int(no)).replace("{total}", str(int(total or 1)))
 
 
-def accessoires_conteneur(c, par_row, adds_de) -> list:
+def marques_articles(doc) -> dict:
+    """{clé: marque} mémorisées (lci_marquage) — clé = nom de ligne (unité) ou « acc:<code> » (accessoire)."""
+    from customization_app.lci_marquage import marques_enregistrees
+    return marques_enregistrees(doc)
+
+
+def accessoires_conteneur(c, par_row, adds_de, marques=None) -> list:
     """Les accessoires embarqués dans un conteneur, cumulés par article : quantité = unités chargées × quantité par pack,
     avec les unités qu'ils accompagnent. `adds_de(row)` → la liste JSON des additionnels d'une ligne. PURE."""
     out = {}
+    marques = marques or {}
     for l in c.get("lignes") or []:
         r = par_row.get(l.get("row"))
         if not r:
@@ -123,9 +130,10 @@ def accessoires_conteneur(c, par_row, adds_de) -> list:
         for a in adds_de(r) or []:
             code = a.get("item_code") or a.get("item_name") or "?"
             e = out.setdefault(code, {"item_code": code, "nom": a.get("item_name_traduit") or a.get("item_name") or code,
-                                      "brand": a.get("brand") or "", "uom": a.get("uom") or "", "qty": 0.0, "pour": []})
+                                      "brand": a.get("brand") or "", "uom": a.get("uom") or "", "qty": 0.0, "pour": [],
+                                      "marque": marques.get("acc:" + code) or ""})
             e["qty"] += flt(l.get("qty")) * (flt(a.get("qty_par_pack")) or 1)
-            unite = r.item_code or r.item_name or ""
+            unite = marques.get(r.name) or r.item_code or r.item_name or ""   # l'unité par sa marque lisible si elle en a une
             if unite and unite not in e["pour"]:
                 e["pour"].append(unite)
     return sorted(out.values(), key=lambda e: e["item_code"])
@@ -138,7 +146,7 @@ def bloc_marquage(doc, c, L, par_row, nb_conteneurs, adds_de, LX=None, note=None
     html = (f'<h2 style="font-size:13px;margin:12px 0 4px">{L["marquage"]} — C{c["no"]}</h2>'
             f'<div style="margin:0 0 6px"><span style="color:#6b7280">{L["marque_principale"]} :</span> '
             f'<b style="font-size:12px;letter-spacing:.5px">{_esc(marque)}</b></div>')
-    acc = accessoires_conteneur(c, par_row, adds_de)
+    acc = accessoires_conteneur(c, par_row, adds_de, marques_articles(doc))
     if acc:
         html += (f'<div style="font-size:10px;margin:2px 0 4px"><b>{L["accessoires"]}</b></div>'
                  f'<table class="l"><thead><tr><th style="width:70px">{L["accessoire"]}</th><th>{L["description"]}</th>'
@@ -146,7 +154,7 @@ def bloc_marquage(doc, c, L, par_row, nb_conteneurs, adds_de, LX=None, note=None
         for e in acc:
             html += (f'<tr><td><b>{_esc(e["item_code"])}</b></td><td>{_esc(e["nom"])}{(" — " + _esc(e["brand"])) if e["brand"] else ""}</td>'
                      f'<td class="n"><b>{_n(e["qty"])}</b> {_esc(_uom_out(e["uom"], LX) if LX else e["uom"])}</td><td>{_esc(", ".join(e["pour"]))}</td>'
-                     f'<td><b>{_esc(marque)} · ACC · {_esc(e["item_code"])} · {_n(e["qty"])} {L["pcs"]}</b></td></tr>')
+                     f'<td><b>{_esc(marque)} · ACC · {_esc(e.get("marque") or e["item_code"])} · {_n(e["qty"])} {L["pcs"]}</b></td></tr>')
         html += f'</tbody></table><div style="font-size:9px;color:#6b7280;margin-top:3px">{L["note"]}</div>'
     if (note or "").strip():
         html += f'<div style="font-size:10px;margin-top:4px;padding:4px 6px;border:1px solid #d1d5db;border-radius:3px">{_esc(note.strip())}</div>'
@@ -356,6 +364,7 @@ def _bloc_conteneur(doc, c, L, LX, par_row, photos, devise, nb_conteneurs, echea
       <th class="n" style="width:50px">{L["qty"]}</th><th class="n" style="width:50px">{L["volume"]}</th>
       <th class="n" style="width:56px">{L["pu"]} ({devise})</th><th class="n" style="width:66px">{L["montant"]} ({devise})</th>
     </tr></thead><tbody>"""
+    marques = marques_articles(doc)
     for i, l in enumerate(c["lignes"], 1):
         r = par_row.get(l["row"])
         if not r:
@@ -364,12 +373,14 @@ def _bloc_conteneur(doc, c, L, LX, par_row, photos, devise, nb_conteneurs, echea
         sa_ligne = ref_ligne(r.reponse_source)
         scinde = texte_scinde(parts_de(r.repartition_conteneurs), c["no"], qty_retenue(r), L)
         desc = description_html(description_pour_lui(r))
+        m_art = marques.get(r.name) if marquage else None
         html += f"""
       <tr>
         <td>{i}</td>
         <td class="ph">{f'<img src="{photo}" style="max-width:60px;max-height:60px">' if photo else ""}</td>
         <td>{f'<div class="ref">{L["ref"]} {sa_ligne}</div>' if sa_ligne else ""}{desc}
-          {f'<div class="split">{_esc(scinde)}</div>' if scinde else ""}</td>
+          {f'<div class="split">{_esc(scinde)}</div>' if scinde else ""}
+          {f'<div style="margin-top:2px"><span style="color:#6b7280">{L["marque"]} :</span> <b>{_esc(marque_principale(doc.get("marquage_expedition"), doc.name, c["no"], nb_conteneurs))} · {_esc(m_art)}</b></div>' if m_art else ""}</td>
         <td class="n"><b>{_n(l["qty"])}</b> {_esc(_uom_out(r.uom, LX))}</td>
         <td class="n">{flt(l["volume"]):.3f}</td>
         <td class="n">{prix_retenu(r):,.2f}</td>

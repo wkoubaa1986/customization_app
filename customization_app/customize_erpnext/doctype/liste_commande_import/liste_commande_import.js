@@ -4157,8 +4157,49 @@ function lci_pdf_conteneurs(frm) {
       description: __("Balises : {ref} = n° de commande, {conteneur} = C1, {total} = nombre de conteneurs. Mémorisée sur la commande.") },
     { fieldtype: "Small Text", fieldname: "note_marquage", label: __("Remarque pour le fournisseur (imprimée sous les marques)"),
       description: __("Ex. : accessories in separate cartons, one carton per model — labels in English and Arabic") },
+    { fieldtype: "Button", fieldname: "btn_marques", label: __("✨ Marques par article (IA) : BRAND · MODEL A…"),
+      click: () => lci_marques_articles(frm) },
+    { fieldtype: "HTML", fieldname: "marques_etat", options: `<div class="text-muted small">${frm.doc.marques_articles ? __("Marques par article mémorisées : imprimées sous chaque article et dans le bloc accessoires.") : __("Sans marques par article, le PDF n'imprime que la marque principale et les codes.")}</div>` },
   ].forEach((df) => d.fields.push(df));
   d.refresh();
+  d.show();
+}
+
+// Marques lisibles par article (16/10/2026) : « ECOPURIUM · MODEL A », « FAUCET DELUXE CHROME »… proposées par l'IA
+// (lci_marquage.py), relues ici, mémorisées sur la commande ; le PDF les imprime.
+async function lci_marques_articles(frm) {
+  const esc = frappe.utils.escape_html;
+  let r;
+  try {
+    r = (await frappe.call({ method: "customization_app.lci_marquage.proposer", args: { docname: frm.doc.name, ia: 1 }, freeze: true,
+      freeze_message: __("L'IA propose une marque par article…") })).message;
+  } catch (e) { frappe.msgprint(String(e.message || e)); return; }
+  const lignes = r.lignes || [];
+  const d = new frappe.ui.Dialog({
+    title: __("✨ Marques par article") + (r.source === "ia" ? "" : " — " + __("proposition sans IA (clé OpenAI absente ou appel échoué)")),
+    size: "large",
+    fields: [{ fieldtype: "HTML", fieldname: "corps" }],
+    primary_action_label: __("Enregistrer les marques"),
+    primary_action: async () => {
+      const marques = {};
+      d.$wrapper.find("[data-cle]").each((i, el) => { const v = $(el).val().trim(); if (v) marques[$(el).attr("data-cle")] = v; });
+      try {
+        await frappe.call({ method: "customization_app.lci_marquage.enregistrer", args: { docname: frm.doc.name, marques }, freeze: true });
+        frm.doc.marques_articles = JSON.stringify(marques);
+        frappe.show_alert({ message: __("{0} marque(s) mémorisée(s) — elles sortent dans le PDF", [Object.keys(marques).length]), indicator: "green" });
+        d.hide();
+      } catch (e) { frappe.msgprint(String(e.message || e)); }
+    },
+  });
+  let html = `<div class="text-muted small" style="margin-bottom:6px">${__("Relisez, corrigez, puis enregistrez. Même produit = même marque. Les accessoires sont marqués par leur nature.")}</div>
+    <table class="table table-bordered table-sm"><thead><tr><th>${__("Article")}</th><th>${__("Marque commerciale")}</th><th style="width:34%">${__("Shipping mark")}</th></tr></thead><tbody>`;
+  lignes.forEach((l) => {
+    html += `<tr><td>${l.genre === "accessoire" ? "🔩 " : ""}<b>${esc(l.code)}</b><div class="text-muted small">${esc(l.nom_traduit || l.nom)}${l.qty ? " · " + l.qty : ""}</div></td>
+      <td>${esc(l.marque_commerciale || "")}</td>
+      <td><input class="form-control input-sm" data-cle="${esc(l.cle)}" value="${esc(l.marque || "")}" maxlength="28" style="text-transform:uppercase"></td></tr>`;
+  });
+  html += `</tbody></table>`;
+  d.fields_dict.corps.$wrapper.html(html);
   d.show();
 }
 

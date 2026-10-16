@@ -91,3 +91,25 @@ class TestMarquage(unittest.TestCase):
         for langue in LABELS:
             L = labels(langue)
             self.assertTrue(L["marquage"] and L["accessoires"] and L["note"], langue)
+
+
+class TestMarquesArticles(unittest.TestCase):
+    def test_proposition_deterministe_par_marque_et_lettre(self):
+        from customization_app.lci_marquage import proposition_deterministe, _nettoyer
+        lignes = [{"cle": "r1", "genre": "unite", "code": "AP-P-EP-7", "nom": "x", "marque_commerciale": "ecoPurium"},
+                  {"cle": "r2", "genre": "unite", "code": "AP-C-EP-7", "nom": "x", "marque_commerciale": "ecoPurium"},
+                  {"cle": "r3", "genre": "unite", "code": "AP-M-AJ-7", "nom": "x", "marque_commerciale": "AquaJad"},
+                  {"cle": "r4", "genre": "unite", "code": "C-3.2", "nom": "x", "marque_commerciale": ""},
+                  {"cle": "acc:Rob-LC", "genre": "accessoire", "code": "Rob-LC", "nom": "Robinet, Luxe Chromé", "nom_traduit": "Faucet, Deluxe Chrome"}]
+        p = proposition_deterministe(lignes)
+        self.assertEqual(p, {"r1": "ECOPURIUM · MODEL A", "r2": "ECOPURIUM · MODEL B", "r3": "AQUAJAD · MODEL A", "r4": "AQUAWORLD · MODEL A", "acc:Rob-LC": "FAUCET DELUXE CHROME"})
+        self.assertEqual(_nettoyer("  faucet,   deluxe  chrome extra long name that goes on  "), "FAUCET,   DELUXE  CHROME EXTRA".replace("   ", " ").replace("  ", " ")[:28].rstrip())
+
+    def test_accessoires_portent_les_marques(self):
+        from customization_app.lci_pdf_conteneurs import accessoires_conteneur
+        class R:
+            def __init__(self, name, code, adds): self.name, self.item_code, self.item_name, self.adds = name, code, code, adds
+        rows = {"r1": R("r1", "AP-C-EP-7", [{"item_code": "Rob-LC", "item_name": "Robinet", "qty_par_pack": 1, "uom": "Pièce"}])}
+        c = {"no": 1, "lignes": [{"row": "r1", "qty": 10}]}
+        acc = accessoires_conteneur(c, rows, lambda r: r.adds, {"r1": "ECOPURIUM · MODEL A", "acc:Rob-LC": "FAUCET DELUXE CHROME"})
+        self.assertEqual((acc[0]["pour"], acc[0]["marque"]), (["ECOPURIUM · MODEL A"], "FAUCET DELUXE CHROME"))
