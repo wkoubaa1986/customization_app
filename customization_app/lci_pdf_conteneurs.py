@@ -367,13 +367,19 @@ def _bloc_conteneur(doc, c, L, LX, par_row, photos, devise, nb_conteneurs, echea
       </tr></table>
     </div>
     {bloc_paiements([e for e in echeances if int(e.get("conteneur") or 0) == int(c["no"])], L, devise,
-                    L["paiements_conteneur"], avec_conteneur=False, bases={int(c["no"]): flt(c["montant"])})}
+                    L["paiements_conteneur"], avec_conteneur=False, bases={int(c["no"]): flt(c["montant"])})}"""
+    # Colonne « Mark » (16/10/2026 : « is it better to add column for mark » — oui : l'emballeur la lit d'un coup d'œil),
+    # seulement si au moins un article du conteneur a sa marque ; le préfixe = la marque principale sans référence ni conteneur.
+    marques = marques_articles(doc)
+    col_marque = bool(marquage and any(marques.get(l.get("row")) for l in c["lignes"]))
+    prefixe = prefixe_marque(doc.get("marquage_expedition"))
+    html += f"""
     <table class="l" style="margin-top:8px"><thead><tr>
       <th style="width:16px">#</th><th style="width:66px">{L["photo"]}</th><th>{L["description"]}</th>
+      {f'<th style="width:118px">{L["marque"]}</th>' if col_marque else ""}
       <th class="n" style="width:50px">{L["qty"]}</th><th class="n" style="width:50px">{L["volume"]}</th>
       <th class="n" style="width:56px">{L["pu"]} ({devise})</th><th class="n" style="width:66px">{L["montant"]} ({devise})</th>
     </tr></thead><tbody>"""
-    marques = marques_articles(doc)
     for i, l in enumerate(c["lignes"], 1):
         r = par_row.get(l["row"])
         if not r:
@@ -388,15 +394,15 @@ def _bloc_conteneur(doc, c, L, LX, par_row, photos, devise, nb_conteneurs, echea
         <td>{i}</td>
         <td class="ph">{f'<img src="{photo}" style="max-width:60px;max-height:60px">' if photo else ""}</td>
         <td>{f'<div class="ref">{L["ref"]} {sa_ligne}</div>' if sa_ligne else ""}{desc}
-          {f'<div class="split">{_esc(scinde)}</div>' if scinde else ""}
-          {f'<div style="margin-top:2px"><span style="color:#6b7280">{L["marque"]} :</span> <b>{_esc(prefixe_marque(doc.get("marquage_expedition")))} · {_esc(m_art)}</b></div>' if m_art else ""}</td>
+          {f'<div class="split">{_esc(scinde)}</div>' if scinde else ""}</td>
+        {(f'<td><b>{_esc(prefixe)} · {_esc(m_art)}</b></td>' if m_art else "<td></td>") if col_marque else ""}
         <td class="n"><b>{_n(l["qty"])}</b> {_esc(_uom_out(r.uom, LX))}</td>
         <td class="n">{flt(l["volume"]):.3f}</td>
         <td class="n">{prix_retenu(r):,.2f}</td>
         <td class="n"><b>{flt(l["montant"]):,.2f}</b></td>
       </tr>"""
     html += f"""
-      <tr class="tot"><td colspan="3">{L["total"]} C{c["no"]}</td>
+      <tr class="tot"><td colspan="{4 if col_marque else 3}">{L["total"]} C{c["no"]}</td>
         <td></td><td class="n">{flt(c["volume"]):.3f}</td><td></td>
         <td class="n">{flt(c["montant"]):,.2f}</td></tr>
     </tbody></table>"""
