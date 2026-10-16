@@ -133,7 +133,7 @@ class PresenceAquaworld {
     const d = this.data, esc = frappe.utils.escape_html, $r = this.$root;
     if (!d) return;
     $r.find("#pa-intro").html(`Tout vient du <b>véhicule</b> : la nuit d'avant (l'arrêt qui chevauche minuit) donne le <b>départ du matin</b> et où il a dormi ; le premier arrêt à moins de ${d.seuils.rayon_m} m du Magasin donne l'<b>arrivée à Aquaworld</b>, le dernier le <b>départ d'Aquaworld</b> ; la nuit d'après donne le <b>retour du soir</b>. Un véhicule qui dort au Magasin ne dit pas quand son technicien arrive. Le lieu d'une nuit se lit contre les domiciles du réglage des tournées : régler un domicile requalifie tout l'historique. Calculé chaque soir à 21 h avec l'appariement.`);
-    const n = d.lignes.length - d.non_calculees;
+    const n = d.lignes.length;                                   // les journées calculées (coéquipiers hérités compris) ; les non calculées sont à part
     $r.find("#pa-info").html(`${n} journée${n > 1 ? "s" : ""} du ${frappe.datetime.str_to_user(d.du)} au ${frappe.datetime.str_to_user(d.au)}${d.stats_depuis && d.stats_depuis === d.du ? ` <span class="pa-dim">(réglage)</span>` : ""}${d.non_calculees ? ` · ${d.non_calculees} sans présence calculée` : ""}${d.jours_manquants ? ` · <b>${d.jours_manquants} jour${d.jours_manquants > 1 ? "s" : ""} sans calcul</b> <button class="btn btn-xs btn-default" data-action="rattraper">⏳ Rattraper les jours manquants</button>` : ""}`);
     this.suivre_rattrapage(false);
 
