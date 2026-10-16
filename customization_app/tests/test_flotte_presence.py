@@ -113,6 +113,23 @@ class TestMicroDeplacement(unittest.TestCase):
         self.assertIsNone(p["arrivee_aquaworld"])                        # la nuit elle-même n'est pas un « passage » au Magasin
 
 
+class TestVoisinDuMagasin(unittest.TestCase):
+    def test_la_voiture_avancee_du_parking_voisin_n_est_pas_arrivee(self):
+        """Changan garé chez Néjib (830 m) : 06:47 → 06:50 jusqu'au Magasin, puis immobile jusqu'à 10:47 = la journée commence à 10:47."""
+        nejib = (MAGASIN[0] - 0.0069, MAGASIN[1] - 0.0035)
+        j = {"arrets": [_arret(_h(19.0, J - timedelta(days=1)), _h(6.78), nejib),
+                        _arret(_h(6.83), _h(10.78), MAGASIN),
+                        _arret(_h(11.5), _h(12.5), CLIENT),
+                        _arret(_h(17.0), _h(17.2), MAGASIN),                     # repasse au Magasin, puis va dormir chez le voisin
+                        _arret(_h(17.3), _h(23.999), nejib)], "trajets": []}
+        p = fp.presence_pure(J.date(), j, MAGASIN)
+        self.assertEqual(p["depart_matin"].strftime("%H:%M"), "10:47")
+        self.assertEqual(p["retour_soir"].strftime("%H:%M"), "17:00")
+        self.assertEqual((p["nuit_avant_lat"], p["nuit_avant_lng"]), MAGASIN)       # la nuit soudée au Magasin se lit « Magasin »
+        self.assertIsNone(p["arrivee_aquaworld"])
+        self.assertEqual(fp.fenetres_trajets(J.date(), j, MAGASIN), [])
+
+
 class TestTrajets(unittest.TestCase):
     def test_arrets_intermediaires_du_matin_et_du_soir(self):
         j = journee_akram()

@@ -104,6 +104,30 @@ def _trajet(arrets: list, debut, fin) -> dict:
             "minutes": cint(plus["minutes"]) if plus else 0}
 
 
+def _rattacher_au_magasin(arrets: list, depot, rayon_m: float = RAYON_LIEU_M) -> list:
+    """Une voiture garée la nuit À CÔTÉ du Magasin (≤ 1 km : résidence de Néjib, 830 m) et amenée au Magasin au petit matin
+    en 3 minutes (06:47 → 06:50, 1,1 km, puis 4 h immobile) n'est pas « partie » : c'est Néjib qui l'avance. On soude la nuit
+    à l'arrêt Magasin qui la suit de près (≤ 10 min), et de même le soir (Magasin → parking voisin). Le départ du matin devient
+    la vraie sortie du Magasin, et ce passage ne compte pas comme une arrivée du technicien (16/10/2026). PURE."""
+    if not depot or len(arrets) < 2:
+        return arrets
+    out = [dict(a) for a in arrets]
+    i = 0
+    while i < len(out) - 1:
+        a, b = out[i], out[i + 1]
+        proche_a = _m(_pt(a), depot) <= fg.DOMICILE_PROCHE_DEPOT_M
+        proche_b = _m(_pt(b), depot) <= fg.DOMICILE_PROCHE_DEPOT_M
+        mag_a, mag_b = _m(_pt(a), depot) <= rayon_m, _m(_pt(b), depot) <= rayon_m
+        if proche_a and proche_b and (mag_a or mag_b) and (b["arr"] - a["dep"]).total_seconds() <= fg.FUSION_MIN * 60:
+            fusion = dict(a, dep=b["dep"], minutes=cint(a.get("minutes")) + cint(b.get("minutes")))
+            if mag_b and not mag_a:                       # la nuit chez le voisin + l'arrêt Magasin : le point retenu = le Magasin
+                fusion.update(lat=b["lat"], lng=b["lng"])
+            out[i:i + 2] = [fusion]
+        else:
+            i += 1
+    return out
+
+
 def presence_pure(jour, journal: dict, depot: tuple, rayon_m: float = RAYON_LIEU_M) -> dict:
     """Une journée d'un véhicule → heures de départ / arrivée / retour, points de nuit, arrêts des trajets. PURE.
     Rend aussi `immobile` (pas bougé de la journée) et `en_cours` (pas encore de nuit d'après : journée pas finie)."""
@@ -113,6 +137,7 @@ def presence_pure(jour, journal: dict, depot: tuple, rayon_m: float = RAYON_LIEU
     # Logistar au Magasin 07:34 → 07:35, 0,0 km, puis immobile jusqu'à 09:57) n'est PAS un départ ni une arrivée : on fusionne
     # les arrêts qui se suivent de près au même endroit avant de lire les nuits et les passages (cas d'Akram, 16/10/2026).
     arrets = fg._fusionner(sorted((dict(a) for a in (journal or {}).get("arrets") or [] if a.get("arr") and a.get("dep")), key=lambda a: a["arr"]))
+    arrets = _rattacher_au_magasin(arrets, depot)
     avant, apres = nuits_pure(jour, arrets)
     out = dict(VIDE, immobile=False, en_cours=False)
     if avant is not None:
