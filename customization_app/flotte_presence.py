@@ -21,7 +21,7 @@ tournées, pour qu'un domicile réglé après coup requalifie aussi l'historique
 
 QUI CONDUISAIT (16/10/2026) : les employés changent de voiture. L'estimation de là où habite chacun se fait sur TOUTES les
 voitures confondues (`lieux_nuit_pure` : les endroits où les voitures dorment, c'est l'utilisateur qui dit quel endroit est
-la maison de qui). Puis LA NUIT PRIME : un véhicule qui a dormi à ≤ 1 km (`fg.RAYON_NUIT_M`) du domicile réglé d'un employé
+la maison de qui). Puis LA NUIT PRIME : un véhicule qui a dormi à ≤ 500 m (`fg.RAYON_NUIT_M`) du domicile réglé d'un employé
 est le sien ce jour-là — au calcul (`fg.vehicules_du_jour(nuits=, domiciles=)`, aussi pour l'appariement du soir et les
 sorties de circuit) et à la lecture (`reattribuer_pure`, pour l'historique) ; les tâches ne tranchent que si le véhicule a
 dormi au Magasin ou à un endroit inconnu.
@@ -215,8 +215,8 @@ def lieux_nuit_pure(nuits: list, depot: tuple, departs: dict, noms: dict | None 
     return sorted(lieux, key=lambda c: (-c["n"], c["lat"]))
 
 
-def reattribuer_pure(lignes: list, departs: dict, noms: dict, rayon_m: float = fg.RAYON_NUIT_M) -> list:
-    """La nuit d'avant prime aussi à la lecture : une journée dont le véhicule a dormi à ≤ 1 km du domicile réglé d'un
+def reattribuer_pure(lignes: list, departs: dict, noms: dict, rayon_m: float = fg.RAYON_NUIT_M, depot: tuple | None = None) -> list:
+    """La nuit d'avant prime aussi à la lecture : une journée dont le véhicule a dormi à ≤ 500 m du domicile réglé d'un
     employé est la sienne, quoi qu'aient dit les tâches le soir du calcul (régler un domicile requalifie l'historique).
     L'ancien employé reste en `attribue_par_taches`. Un même employé ne prend qu'une journée par date (la plus proche). PURE."""
     out = [dict(l) for l in lignes]
@@ -226,6 +226,8 @@ def reattribuer_pure(lignes: list, departs: dict, noms: dict, rayon_m: float = f
         if not flt(l.get("nuit_avant_lat")):
             continue
         pt = (flt(l["nuit_avant_lat"]), flt(l["nuit_avant_lng"]))
+        if depot and _m(pt, depot) <= RAYON_LIEU_M:                 # a dormi au Magasin : les tâches décident
+            continue
         for e, dom in (departs or {}).items():
             if dom and _m(pt, dom) <= rayon_m:
                 cand.append((_m(pt, dom), i, e))
@@ -462,7 +464,7 @@ def calculer(jour=None, ecrire: bool = True, journaux: dict | None = None) -> di
         journaux = fg.lire_journal(jour, cboxes, cfg=cfg) if cboxes else {}
     taches = fg._taches(jour)
     emp_cbox = fg.vehicules_du_jour(taches, journaux, cfg["employe_cbox"], cfg["rayon"], fg._lieux_communs(cfg_t),
-                                    nuits={cb: fg.point_de_nuit(jour, j) for cb, j in journaux.items()}, domiciles=cfg_t["departs"])
+                                    nuits={cb: fg.point_de_nuit(jour, j) for cb, j in journaux.items()}, domiciles=cfg_t["departs"], depot=cfg_t["depot"])
     for emp, cb in cfg["employe_cbox"].items():                  # véhicule sans employé reconnu : son conducteur habituel
         if cb not in emp_cbox.values() and emp not in emp_cbox:
             emp_cbox[emp] = cb
@@ -635,7 +637,7 @@ def presence(du=None, au=None, employe=None):
     lignes = frappe.get_all(fg.JOURNEE, filters={"date": ["between", [du, au]]}, order_by="date desc, employe_nom asc, vehicule asc",
                             limit_page_length=0, fields=["name", "date", "vehicule", "cbox", "employe", "employe_nom", "km", *CHAMPS])
     noms = {e.name: e.employee_name for e in frappe.get_all("Employee", fields=["name", "employee_name"], limit_page_length=0)}
-    lignes = reattribuer_pure([dict(l) for l in lignes], departs, noms)       # la nuit d'avant prime sur les tâches
+    lignes = reattribuer_pure([dict(l) for l in lignes], departs, noms, depot=depot)   # la nuit d'avant prime sur les tâches
     lignes = [_qualifier(l, depot, departs) for l in lignes]
     suivies = [l for l in lignes if l.get("nuit_avant_lat") or l.get("nuit_lat") or l.get("arrivee_aquaworld")]
     nuits = []

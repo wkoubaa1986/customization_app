@@ -237,13 +237,14 @@ class TestLieuxDeNuit(unittest.TestCase):
 
     def test_la_nuit_prime_sur_les_taches_a_la_lecture(self):
         noms = {"A": "Akram", "S": "Sadok", "J": "Jamel"}
-        lignes = [{"name": "1", "date": "2026-10-14", "employe": "A", "employe_nom": "Akram", "nuit_avant_lat": self.SADOK[0] + 0.004, "nuit_avant_lng": self.SADOK[1]},   # ~450 m de chez Sadok
+        lignes = [{"name": "1", "date": "2026-10-14", "employe": "A", "employe_nom": "Akram", "nuit_avant_lat": self.SADOK[0] + 0.004, "nuit_avant_lng": self.SADOK[1]},   # ~445 m de chez Sadok (≤ 500 m)
                   {"name": "2", "date": "2026-10-14", "employe": "S", "employe_nom": "Sadok", "nuit_avant_lat": MAGASIN[0], "nuit_avant_lng": MAGASIN[1]},
                   {"name": "3", "date": "2026-10-15", "employe": "J", "employe_nom": "Jamel", "nuit_avant_lat": self.SADOK[0], "nuit_avant_lng": self.SADOK[1]},
-                  {"name": "4", "date": "2026-10-15", "employe": "S", "employe_nom": "Sadok", "nuit_avant_lat": self.SADOK[0] + 0.006, "nuit_avant_lng": self.SADOK[1]}]
-        out = fp.reattribuer_pure(lignes, {"S": self.SADOK, "A": self.AKRAM}, noms)
+                  {"name": "4", "date": "2026-10-15", "employe": "S", "employe_nom": "Sadok", "nuit_avant_lat": self.SADOK[0] + 0.003, "nuit_avant_lng": self.SADOK[1]}]
+        out = fp.reattribuer_pure(lignes, {"S": self.SADOK, "A": self.AKRAM, "N": (MAGASIN[0] - 0.0069, MAGASIN[1] - 0.0035)}, noms, depot=MAGASIN)
         self.assertEqual((out[0]["employe"], out[0]["attribue_par_taches"]), ("S", "Akram"))     # le Changan a dormi chez Sadok
-        self.assertEqual(out[1]["employe"], "S")                                                 # inchangé (Magasin) — Sadok déjà pris ce jour-là : la ligne garde son employé
+        self.assertEqual(out[1]["employe"], "S")                                                 # a dormi au Magasin : jamais réattribué (pas à Néjib, à 830 m)
+        self.assertNotIn("attribue_par_taches", out[1])
         self.assertEqual((out[2]["employe"], out[2]["attribue_par_taches"]), ("S", "Jamel"))     # la plus proche de chez Sadok devient la sienne
         self.assertEqual(out[3]["employe"], "S")                                                 # deux voitures chez Sadok : la 2e garde son employé
         self.assertNotIn("attribue_par_taches", out[3])
@@ -252,7 +253,12 @@ class TestLieuxDeNuit(unittest.TestCase):
         from customization_app import flotte_gps as fg
         nuits = {"CB1": (self.AKRAM[0] + 0.003, self.AKRAM[1]), "CB2": (self.SADOK[0], self.SADOK[1]), "CB3": MAGASIN, "CB4": None}
         self.assertEqual(fg.attribution_par_nuit(nuits, {"A": self.AKRAM, "S": self.SADOK}), {"A": "CB1", "S": "CB2"})
-        self.assertEqual(fg.attribution_par_nuit(nuits, {"A": (36.0, 10.0)}), {})                 # trop loin (> 1 km)
+        self.assertEqual(fg.attribution_par_nuit(nuits, {"A": (36.0, 10.0)}), {})                 # trop loin
+        self.assertEqual(fg.attribution_par_nuit({"CB1": (self.AKRAM[0] + 0.006, self.AKRAM[1])}, {"A": self.AKRAM}), {})   # 670 m : au-delà de 500 m
+        # Néjib habite à 830 m du Magasin : une voiture qui dort au Magasin ne lui est pas attribuée
+        nejib = (MAGASIN[0] - 0.0069, MAGASIN[1] - 0.0035)
+        self.assertEqual(fg.attribution_par_nuit({"CB3": MAGASIN, "CB5": nejib}, {"N": nejib}, depot=MAGASIN), {"N": "CB5"})
+        self.assertEqual(fg.attribution_par_nuit({"CB3": nejib}, {"N": nejib}), {"N": "CB3"})       # une voiture chez Néjib, elle, lui revient
         # vehicules_du_jour : la nuit prime, les tâches servent au reste
         journaux = {"CB1": {"arrets": [], "trajets": []}, "CB2": {"arrets": [], "trajets": []}}
         out = fg.vehicules_du_jour([], journaux, {"J": "CB2", "A": "CB1"}, 150, [], nuits={"CB2": self.SADOK}, domiciles={"S": self.SADOK})
