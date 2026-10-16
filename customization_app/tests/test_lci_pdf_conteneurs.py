@@ -61,3 +61,33 @@ class TestDescription(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestMarquage(unittest.TestCase):
+    """Shipping marks (16/10/2026) : marque principale + accessoires par conteneur."""
+
+    def test_marque_principale(self):
+        from customization_app.lci_pdf_conteneurs import marque_principale
+        self.assertEqual(marque_principale("", "LCI-2026-00295", 1, 3), "AQUAWORLD · LCI-2026-00295 · C1/3")
+        self.assertEqual(marque_principale("AQW TUNIS {conteneur} {ref}", "LCI-1", 2, 2), "AQW TUNIS C2 LCI-1")
+
+    def test_accessoires_cumules_par_conteneur(self):
+        from customization_app.lci_pdf_conteneurs import accessoires_conteneur
+        class R:
+            def __init__(self, name, code, adds): self.name, self.item_code, self.item_name, self.adds = name, code, code, adds
+        rows = {"r1": R("r1", "AP-C-EP-7", [{"item_code": "Rob-LC", "item_name": "Robinet, Luxe Chromé", "item_name_traduit": "Faucet, Deluxe Chrome", "qty_par_pack": 1, "uom": "Pièce"},
+                                            {"item_code": "M-75-DF", "item_name": "Membrane 75", "brand": "Dow Filmtec", "qty_par_pack": 1, "uom": "Pièce"}]),
+                "r2": R("r2", "AP-FD-7", [{"item_code": "Rob-LC", "item_name": "Robinet, Luxe Chromé", "qty_par_pack": 2, "uom": "Pièce"}]),
+                "r3": R("r3", "SANS", [])}
+        c = {"no": 1, "lignes": [{"row": "r1", "qty": 100}, {"row": "r2", "qty": 50}, {"row": "r3", "qty": 10}, {"row": "inconnue", "qty": 5}]}
+        acc = accessoires_conteneur(c, rows, lambda r: r.adds)
+        self.assertEqual([(a["item_code"], a["qty"], a["pour"]) for a in acc], [("M-75-DF", 100.0, ["AP-C-EP-7"]), ("Rob-LC", 200.0, ["AP-C-EP-7", "AP-FD-7"])])
+        self.assertEqual(acc[1]["nom"], "Faucet, Deluxe Chrome")           # le nom traduit du premier vu
+        self.assertEqual(acc[0]["brand"], "Dow Filmtec")
+        self.assertEqual(accessoires_conteneur({"no": 2, "lignes": []}, rows, lambda r: r.adds), [])
+
+    def test_labels_portent_le_marquage_dans_toutes_les_langues(self):
+        from customization_app.lci_pdf_conteneurs import labels, LABELS
+        for langue in LABELS:
+            L = labels(langue)
+            self.assertTrue(L["marquage"] and L["accessoires"] and L["note"], langue)

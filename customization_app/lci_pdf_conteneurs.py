@@ -78,8 +78,76 @@ LABELS = {
 }
 
 
+MARQUAGE = {
+    "English": {"marquage": "Shipping marks", "marque_principale": "Main mark (every package)", "accessoires": "Accessories — mark each accessory carton",
+                "accessoire": "Accessory", "pour": "for", "pcs": "pcs", "marque": "Mark",
+                "note": "Accessories packed separately must carry the mark below; if packed inside the unit carton, add “WITH ACCESSORIES” to the main mark."},
+    "Français": {"marquage": "Marquage d'expédition", "marque_principale": "Marque principale (chaque colis)", "accessoires": "Accessoires — marquer chaque carton d'accessoires",
+                 "accessoire": "Accessoire", "pour": "pour", "pcs": "pcs", "marque": "Marque",
+                 "note": "Les accessoires emballés à part portent la marque ci-dessous ; s'ils sont dans le carton de l'unité, ajouter « AVEC ACCESSOIRES » à la marque principale."},
+    "Deutsch": {"marquage": "Versandmarkierung", "marque_principale": "Hauptmarkierung (jedes Packstück)", "accessoires": "Zubehör — jeden Zubehörkarton markieren",
+                "accessoire": "Zubehör", "pour": "für", "pcs": "Stk.", "marque": "Markierung",
+                "note": "Separat verpacktes Zubehör trägt die folgende Markierung; im Gerätekarton verpackt: „MIT ZUBEHÖR“ zur Hauptmarkierung hinzufügen."},
+    "Español": {"marquage": "Marcas de envío", "marque_principale": "Marca principal (cada bulto)", "accessoires": "Accesorios — marcar cada caja de accesorios",
+                "accessoire": "Accesorio", "pour": "para", "pcs": "uds.", "marque": "Marca",
+                "note": "Los accesorios embalados aparte llevan la marca siguiente; si van dentro de la caja de la unidad, añadir «CON ACCESORIOS» a la marca principal."},
+    "العربية": {"marquage": "علامات الشحن", "marque_principale": "العلامة الرئيسية (كل طرد)", "accessoires": "الملحقات — وضع العلامة على كل كرتونة ملحقات",
+                "accessoire": "ملحق", "pour": "لـ", "pcs": "قطعة", "marque": "العلامة",
+                "note": "الملحقات المعبأة على حدة تحمل العلامة أدناه؛ وإذا كانت داخل كرتونة الجهاز تُضاف عبارة «مع الملحقات» إلى العلامة الرئيسية."},
+}
+MARQUE_DEFAUT = "AQUAWORLD · {ref} · {conteneur}/{total}"
+
+
+for _langue, _l in LABELS.items():                      # les libellés du marquage rejoignent ceux de chaque langue (même objet)
+    _l.update(MARQUAGE.get(_langue) or MARQUAGE["English"])
+
+
 def labels(langue):
     return LABELS.get(langue or "English") or LABELS["English"]
+
+
+def marque_principale(modele, ref, no, total) -> str:
+    """La marque des colis d'un conteneur : le modèle du document (balises {ref} {conteneur} {total}), sinon le défaut. PURE."""
+    m = (modele or "").strip() or MARQUE_DEFAUT
+    return m.replace("{ref}", str(ref or "")).replace("{conteneur}", "C%d" % int(no)).replace("{total}", str(int(total or 1)))
+
+
+def accessoires_conteneur(c, par_row, adds_de) -> list:
+    """Les accessoires embarqués dans un conteneur, cumulés par article : quantité = unités chargées × quantité par pack,
+    avec les unités qu'ils accompagnent. `adds_de(row)` → la liste JSON des additionnels d'une ligne. PURE."""
+    out = {}
+    for l in c.get("lignes") or []:
+        r = par_row.get(l.get("row"))
+        if not r:
+            continue
+        for a in adds_de(r) or []:
+            code = a.get("item_code") or a.get("item_name") or "?"
+            e = out.setdefault(code, {"item_code": code, "nom": a.get("item_name_traduit") or a.get("item_name") or code,
+                                      "brand": a.get("brand") or "", "uom": a.get("uom") or "", "qty": 0.0, "pour": []})
+            e["qty"] += flt(l.get("qty")) * (flt(a.get("qty_par_pack")) or 1)
+            unite = r.item_code or r.item_name or ""
+            if unite and unite not in e["pour"]:
+                e["pour"].append(unite)
+    return sorted(out.values(), key=lambda e: e["item_code"])
+
+
+def bloc_marquage(doc, c, L, par_row, nb_conteneurs, adds_de, LX=None) -> str:
+    """Le bloc « Shipping marks » d'un conteneur : la marque principale, puis une ligne par accessoire avec sa marque."""
+    marque = marque_principale(doc.get("marquage_expedition"), doc.name, c["no"], nb_conteneurs)
+    html = (f'<h2 style="font-size:13px;margin:12px 0 4px">{L["marquage"]} — C{c["no"]}</h2>'
+            f'<div style="margin:0 0 6px"><span style="color:#6b7280">{L["marque_principale"]} :</span> '
+            f'<b style="font-size:12px;letter-spacing:.5px">{_esc(marque)}</b></div>')
+    acc = accessoires_conteneur(c, par_row, adds_de)
+    if acc:
+        html += (f'<div style="font-size:10px;margin:2px 0 4px"><b>{L["accessoires"]}</b></div>'
+                 f'<table class="l"><thead><tr><th style="width:70px">{L["accessoire"]}</th><th>{L["description"]}</th>'
+                 f'<th class="n" style="width:60px">{L["qty"]}</th><th>{L["pour"]}</th><th>{L["marque"]}</th></tr></thead><tbody>')
+        for e in acc:
+            html += (f'<tr><td><b>{_esc(e["item_code"])}</b></td><td>{_esc(e["nom"])}{(" — " + _esc(e["brand"])) if e["brand"] else ""}</td>'
+                     f'<td class="n"><b>{_n(e["qty"])}</b> {_esc(_uom_out(e["uom"], LX) if LX else e["uom"])}</td><td>{_esc(", ".join(e["pour"]))}</td>'
+                     f'<td><b>{_esc(marque)} · ACC · {_esc(e["item_code"])} · {_n(e["qty"])} {L["pcs"]}</b></td></tr>')
+        html += f'</tbody></table><div style="font-size:9px;color:#6b7280;margin-top:3px">{L["note"]}</div>'
+    return html
 
 
 # ----------------------------------------------------------------- fonctions pures
@@ -309,6 +377,9 @@ def _bloc_conteneur(doc, c, L, LX, par_row, photos, devise, nb_conteneurs, echea
         <td></td><td class="n">{flt(c["volume"]):.3f}</td><td></td>
         <td class="n">{flt(c["montant"]):,.2f}</td></tr>
     </tbody></table>"""
+    # Marquage d'expédition (16/10/2026 : le fournisseur demande le shipping mark des accessoires pour la LC)
+    from customization_app.customize_erpnext.doctype.liste_commande_import.liste_commande_import import _adds
+    html += bloc_marquage(doc, c, L, par_row, nb_conteneurs, _adds, LX)
     return html
 
 

@@ -41,7 +41,9 @@
   "plan_paiement",
   "total_paiements",
   "column_break_paiement",
-  "reste_a_planifier"
+  "reste_a_planifier",
+  "section_marquage",
+  "marquage_expedition"
  ],
  "fields": [
   {
@@ -268,11 +270,23 @@
    "fieldname": "conteneurs_html",
    "fieldtype": "HTML",
    "label": "Plan de chargement"
+  },
+  {
+   "fieldname": "section_marquage",
+   "fieldtype": "Section Break",
+   "label": "Marquage d'expédition (shipping marks)",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "marquage_expedition",
+   "fieldtype": "Small Text",
+   "label": "Marque principale des colis",
+   "description": "Texte à apposer sur chaque colis. Balises : {ref} = n° de la commande, {conteneur} = C1, {total} = nombre de conteneurs. Vide = « AQUAWORLD · {ref} · {conteneur}/{total} ». Le PDF du plan de chargement y ajoute, par conteneur, la marque des cartons d'ACCESSOIRES (robinets, membranes…) calculée d'après les unités chargées — ce que le fournisseur demande pour l'ouverture de la LC."
   }
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-10-14 13:00:00.000000",
+ "modified": "2026-10-16 17:30:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Liste Commande Import",
