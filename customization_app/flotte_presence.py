@@ -365,9 +365,13 @@ def trajets_pure(lignes: list, max_min: int = TRAJET_MAX_MIN, depot: tuple | Non
                                            "soir": {"heures": [], "durees": [], "directs": 0, "n": 0, "par_terrain": 0, "sans_passage": 0, "demi_journee": 0, "points": [], "magasin_heures": []}})
         # La voiture a dormi au Magasin (ou l'employé était passager d'une telle voiture) : on ne voit pas l'arrivée, mais la
         # PREMIÈRE SORTIE du Magasin la borne (il était là avant) ; le soir, le DERNIER RETOUR au Magasin borne la fin du terrain.
-        if (l.get("nuit_avant_lieu") == "Magasin" or colle_au_depot(l.get("nuit_avant_lat"), l.get("nuit_avant_lng"))) and l.get("premiere_sortie"):
+        # Mêmes garde-fous que les trajets : une première sortie l'après-midi (Akram 19:04) n'est pas un début de journée,
+        # un dernier retour le matin n'est pas une fin de journée.
+        if (l.get("nuit_avant_lieu") == "Magasin" or colle_au_depot(l.get("nuit_avant_lat"), l.get("nuit_avant_lng"))) and l.get("premiere_sortie") \
+                and (_minutes(l["premiere_sortie"]) or 0) < MATIN_ARRIVEE_MAX:
             e["matin"]["magasin_heures"].append(_minutes(l["premiere_sortie"]))
-        if (l.get("nuit_lieu") == "Magasin" or colle_au_depot(l.get("nuit_lat"), l.get("nuit_lng"))) and l.get("dernier_retour"):
+        if (l.get("nuit_lieu") == "Magasin" or colle_au_depot(l.get("nuit_lat"), l.get("nuit_lng"))) and l.get("dernier_retour") \
+                and (_minutes(l["dernier_retour"]) or 0) >= SOIR_DEPART_MIN:
             e["soir"]["magasin_heures"].append(_minutes(l["dernier_retour"]))
         # Matin : domicile → Aquaworld
         if l.get("nuit_avant_lieu") and l["nuit_avant_lieu"] != "Magasin" and l.get("depart_matin") and not colle_au_depot(l.get("nuit_avant_lat"), l.get("nuit_avant_lng")):
