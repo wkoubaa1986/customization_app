@@ -385,7 +385,6 @@ def _bloc_conteneur(doc, c, L, LX, par_row, photos, devise, nb_conteneurs, echea
         if not r:
             continue
         photo = photos.get(r.name) or _img_data_uri(r.image)
-        sa_ligne = ref_ligne(r.reponse_source)
         scinde = texte_scinde(parts_de(r.repartition_conteneurs), c["no"], qty_retenue(r), L)
         desc = description_html(description_pour_lui(r))
         m_art = marques.get(r.name) if marquage else None
@@ -393,7 +392,7 @@ def _bloc_conteneur(doc, c, L, LX, par_row, photos, devise, nb_conteneurs, echea
       <tr>
         <td>{i}</td>
         <td class="ph">{f'<img src="{photo}" style="max-width:60px;max-height:60px">' if photo else ""}</td>
-        <td>{f'<div class="ref">{L["ref"]} {sa_ligne}</div>' if sa_ligne else ""}{desc}
+        <td>{desc}
           {f'<div class="split">{_esc(scinde)}</div>' if scinde else ""}</td>
         {(f'<td><b>{_esc(prefixe)} · {_esc(m_art)}</b></td>' if m_art else "<td></td>") if col_marque else ""}
         <td class="n"><b>{_n(l["qty"])}</b> {_esc(_uom_out(r.uom, LX))}</td>
