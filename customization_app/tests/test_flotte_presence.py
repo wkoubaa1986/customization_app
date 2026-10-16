@@ -324,3 +324,59 @@ class TestDomicileEmploye(unittest.TestCase):
         self.assertEqual(out[1]["lien"], "https://www.google.com/maps?q=36.840000,10.200000")
         self.assertEqual([r["employe"] for r in fusionner_pure(table, "A", 0, 0, "")], ["S"])      # vidé sur la fiche → ligne retirée
         self.assertEqual(fusionner_pure(table, "J", 36.88, 10.31, "lj")[-1], {"employe": "J", "lien": "lj", "latitude": 36.88, "longitude": 10.31})
+
+
+class TestJourneeDeTravail(unittest.TestCase):
+    """Arrêts 08:00-18:00 classés : client apparié, tâche non appariée probable, Magasin, domicile, autre."""
+
+    def test_classement_des_arrets(self):
+        from customization_app import flotte_circuit as fc
+        from customization_app import flotte_gps as fg
+        dom = (36.83703, 10.19232)
+        journal = {"arrets": [
+            _arret(_h(7.0), _h(8.3), dom),                      # commencé avant 08:00 : départ du matin, pas un retour
+            _arret(_h(9.0), _h(9.5), CLIENT),                    # passage confirmé (Tache-1)
+            _arret(_h(10.0), _h(10.2), MAGASIN),                 # Magasin 12 min
+            _arret(_h(11.0), _h(11.4), (CLIENT[0] + 0.005, CLIENT[1])),   # ~550 m d'une tâche non appariée positionnée → probable
+            _arret(_h(13.0), _h(13.9), dom),                     # retour au domicile 54 min
+            _arret(_h(15.0), _h(15.3), (36.80, 10.10)),          # tâche sans position à 15:10 → probable par l'heure
+            _arret(_h(16.0), _h(16.05), (36.81, 10.11)),         # 3 min : ignoré
+            _arret(_h(17.0), _h(17.5), (36.82, 10.12)),          # autre
+            _arret(_h(18.5), _h(19.0), (36.83, 10.13)),          # après 18:00 : hors plage
+        ], "trajets": []}
+        taches = [
+            {"name": "Tache-1", "debut": _h(9.0), "lat": CLIENT[0], "lng": CLIENT[1], "client": "Ali", "type": "Entretien", "statut": "Completed",
+             "gps": {"statut": fg.CONFIRME, "arrivee": _h(9.02), "depart": _h(9.48)}},
+            {"name": "Tache-2", "debut": _h(11.0), "lat": CLIENT[0] + 0.006, "lng": CLIENT[1], "client": "Mongi", "type": "Entretien", "statut": "Completed", "gps": {"statut": "Aucun passage"}},
+            {"name": "Tache-3", "debut": _h(15.17), "lat": None, "lng": None, "client": "Sana", "type": "Livraison", "statut": "Completed", "gps": {"statut": "Sans position"}},
+            {"name": "Tache-4", "debut": _h(12.0), "lat": None, "lng": None, "client": "X", "type": "Entretien", "statut": "Cancelled", "gps": {}},
+        ]
+        r = fc.arrets_jour_pure(J.date(), taches, journal, MAGASIN, {"A": dom})
+        cats = [(a["arr"].strftime("%H:%M"), a["cat"], a["tache"]) for a in r["arrets"]]
+        self.assertEqual(cats, [("09:00", "client", "Tache-1"), ("10:00", "magasin", None), ("11:00", "probable", "Tache-2"),
+                                ("13:00", "domicile", None), ("15:00", "probable", "Tache-3"), ("17:00", "autre", None)])
+        self.assertEqual(r["n"], {"client": 1, "probable": 2, "magasin": 1, "domicile": 1, "autre": 1})
+        self.assertEqual((r["retours_domicile"], r["minutes_domicile"]), (1, 54))
+        self.assertEqual(r["arrets"][3]["qui"], "A")
+        self.assertEqual(r["minutes"]["autre"], 30)
+        v = fc._journee_valeurs(r)
+        self.assertEqual((v["arrets_clients"], v["retours_domicile"], v["arrets_autres"]), (1, 1, 1))
+        self.assertEqual(len(__import__("json").loads(v["arrets_journee"])), 6)
+
+    def test_sans_journal_ni_arret(self):
+        from customization_app import flotte_circuit as fc
+        self.assertEqual(fc.arrets_jour_pure(J.date(), [], {"erreur": "x"}, MAGASIN, {})["n"]["autre"], 0)
+        self.assertEqual(fc.arrets_jour_pure(J.date(), [], {"arrets": [], "trajets": []}, MAGASIN, {})["arrets"], [])
+
+    def test_agregats_par_employe(self):
+        from customization_app import flotte_circuit as fc
+        js = [{"employe": "A", "employe_nom": "Akram", "arrets_journee": "[]", "arrets_clients": 3, "arrets_probables": 1, "arrets_magasin": 1, "retours_domicile": 1, "minutes_domicile": 40, "arrets_autres": 2, "minutes_autres": 30},
+              {"employe": "A", "employe_nom": "Akram", "arrets_journee": "[]", "arrets_clients": 2, "retours_domicile": 0, "arrets_autres": 0},
+              {"employe": "A", "employe_nom": "Akram", "arrets_journee": "[]", "retours_domicile": 2, "minutes_domicile": 90},
+              {"employe": "B", "employe_nom": "Bob", "arrets_journee": None, "retours_domicile": 5}]
+        t = fc.journee_travail_pure(js)
+        self.assertEqual(len(t), 1)
+        a = t[0]
+        self.assertEqual((a["jours"], a["clients"], a["probables"], a["retours"], a["jours_retour"], a["part_jours_retour"]), (3, 5, 1, 3, 2, 67))
+        self.assertEqual(a["minutes_domicile_mediane"], 65)
+        self.assertEqual((a["autres"], a["minutes_autres"], a["jours_autres"]), (2, 30, 1))

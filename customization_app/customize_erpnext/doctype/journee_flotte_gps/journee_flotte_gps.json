@@ -6,7 +6,7 @@
  "engine": "InnoDB",
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-10-16 11:00:00.000000",
+ "modified": "2026-10-16 15:00:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "owner": "Administrator",
@@ -239,6 +239,56 @@
    "fieldname": "soir_arret_minutes",
    "fieldtype": "Int",
    "label": "Soir : arrêt le plus long (min)"
+  },
+  {
+   "fieldname": "sec_journee",
+   "fieldtype": "Section Break",
+   "label": "Journée de travail 08:00–18:00 (arrêts classés)"
+  },
+  {
+   "fieldname": "arrets_clients",
+   "fieldtype": "Int",
+   "label": "Arrêts clients (passages confirmés)"
+  },
+  {
+   "fieldname": "arrets_probables",
+   "fieldtype": "Int",
+   "label": "Arrêts affectés à des tâches non appariées (probables)"
+  },
+  {
+   "fieldname": "arrets_magasin",
+   "fieldtype": "Int",
+   "label": "Arrêts au Magasin"
+  },
+  {
+   "fieldname": "col_5",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "retours_domicile",
+   "fieldtype": "Int",
+   "label": "Retours au domicile"
+  },
+  {
+   "fieldname": "minutes_domicile",
+   "fieldtype": "Int",
+   "label": "Minutes au domicile"
+  },
+  {
+   "fieldname": "arrets_autres",
+   "fieldtype": "Int",
+   "label": "Autres arrêts"
+  },
+  {
+   "fieldname": "minutes_autres",
+   "fieldtype": "Int",
+   "label": "Minutes des autres arrêts"
+  },
+  {
+   "fieldname": "arrets_journee",
+   "fieldtype": "Small Text",
+   "label": "Détail des arrêts (JSON)",
+   "read_only": 1
   }
  ],
  "field_order": [
@@ -278,6 +328,16 @@
   "arrets_soir",
   "soir_arret_lat",
   "soir_arret_lng",
-  "soir_arret_minutes"
+  "soir_arret_minutes",
+  "sec_journee",
+  "arrets_clients",
+  "arrets_probables",
+  "arrets_magasin",
+  "col_5",
+  "retours_domicile",
+  "minutes_domicile",
+  "arrets_autres",
+  "minutes_autres",
+  "arrets_journee"
  ]
 }

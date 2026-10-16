@@ -34,6 +34,7 @@ class SortieCircuit {
     .sc-vide { padding: 14px 12px; color: var(--text-muted); }
     .sc-jour { font-weight: 700; padding: 7px 12px; background: var(--subtle-fg, var(--bg-color)); border-top: 1px solid var(--border-color); }
     .sc-page a.sc-carte { white-space: nowrap; }
+    .sc-chip { display: inline-block; border: 1px solid var(--border-color); border-radius: 10px; padding: 1px 7px; margin: 1px 0; font-size: 11.5px; white-space: nowrap; }
   </style>
   <div class="sc-bar">
     <label class="sc-dim">Du</label> <input type="date" id="sc-du">
@@ -49,6 +50,7 @@ class SortieCircuit {
     <span class="sc-info" id="sc-info"></span>
   </div>
   <div class="sc-intro" id="sc-intro"></div>
+  <div class="sc-bloc" id="sc-journee"></div>
   <div class="sc-bloc" id="sc-stats"></div>
   <div class="sc-bloc" id="sc-lieux"></div>
   <div class="sc-bloc" id="sc-liste"></div>
@@ -127,6 +129,7 @@ class SortieCircuit {
       html += `</tbody></table>`;
     }
     $r.find("#sc-stats").html(html);
+    this._render_journee();
     // Lieux récurrents : un domicile non réglé, un fournisseur, un café — à justifier d'un coup
     html = `<div class="t">📍 Mêmes endroits, plusieurs fois <span class="sc-dim">— un domicile non réglé (Réglages des tournées → domiciles), un fournisseur, un café… à justifier d'un coup</span></div>`;
     const lieux = (d.lieux || []).filter((c) => filtre_lieux(c));
@@ -176,6 +179,42 @@ class SortieCircuit {
       html += `</tbody></table>`;
     }
     $r.find("#sc-liste").html(html);
+  }
+
+  // Journée de travail 08:00–18:00 : chaque arrêt classé (client apparié, tâche non appariée probable, Magasin, domicile, autre)
+  _render_journee() {
+    const d = this.data, esc = frappe.utils.escape_html, $r = this.$root;
+    const CAT = { client: ["🧑", "client"], probable: ["❓", "tâche non appariée (probable)"], magasin: ["🏢", "Magasin"], domicile: ["🏠", "domicile"], autre: ["⚠️", "autre arrêt"] };
+    const [p0, p1] = d.plage_jour || [480, 1080];
+    const hm = (m) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+    let html = `<div class="t">🕗 Journée de travail ${hm(p0)}–${hm(p1)} : où s'arrêtent-ils ? <span class="sc-dim">— chaque arrêt ≥ 5 min commencé dans la plage est classé : passage confirmé d'une tâche, tâche non appariée à qui on l'affecte (≤ 1 km, sinon la plus proche en heure à ± 3 h), Magasin, retour au domicile, autre. Calculé avec les sorties de circuit.</span></div>`;
+    const t = d.travail || [];
+    if (!t.length) html += `<div class="sc-vide">Pas encore de journée classée sur la période : « Tout recalculer » (onglet Présence Aquaworld) ou « Recalculer la période ».</div>`;
+    else {
+      html += `<table class="sc-t"><thead><tr><th>Technicien</th><th class="num">Jours</th><th class="num">🧑 Clients appariés</th><th class="num">❓ Probables</th><th class="num">🏢 Magasin</th><th class="num">🏠 Retours au domicile</th><th class="num">Jours avec retour</th><th class="num">Temps chez soi (médiane / jour)</th><th class="num">⚠️ Autres arrêts</th><th class="num">Temps</th><th class="num">Jours avec autres</th></tr></thead><tbody>`;
+      t.forEach((e) => {
+        html += `<tr><td><b>${esc(e.employe_nom)}</b></td><td class="num">${e.jours}</td><td class="num">${e.clients}</td><td class="num">${e.probables}</td><td class="num">${e.magasin}</td>
+          <td class="num">${e.retours ? `<b style="color:#b45309">${e.retours}</b>` : "0"}</td><td class="num">${e.jours_retour} <span class="sc-dim">(${e.part_jours_retour} %)</span></td><td class="num">${e.minutes_domicile_mediane ? this._min(e.minutes_domicile_mediane) : "—"}</td>
+          <td class="num">${e.autres}</td><td class="num">${e.minutes_autres ? this._min(e.minutes_autres) : ""}</td><td class="num">${e.jours_autres}</td></tr>`;
+      });
+      html += `</tbody></table>`;
+      const jours = d.jours_travail || [];
+      if (jours.length) {
+        html += `<div class="sc-dim" style="margin:8px 0 4px">Jour par jour (${jours.length} journée${jours.length > 1 ? "s" : ""}${jours.length >= 120 ? ", les 120 plus récentes" : ""}) — passez la souris sur un arrêt pour la tâche :</div>`;
+        html += `<table class="sc-t"><thead><tr><th>Jour</th><th>Technicien</th><th>Arrêts de la journée</th></tr></thead><tbody>`;
+        jours.forEach((j) => {
+          const chips = j.arrets.map((a) => {
+            const [ic, lib] = CAT[a.c] || ["•", a.c];
+            const titre = `${lib}${a.cl ? " — " + a.cl : ""}${a.t ? " (" + a.t + ")" : ""}${a.q ? " — " + a.q : ""}`;
+            const style = a.c === "domicile" ? "background:#fef3c7" : a.c === "autre" ? "background:#fee2e2" : a.c === "probable" ? "background:#e0e7ff" : "";
+            return `<span class="sc-chip" style="${style}" title="${esc(titre)}">${a.h} ${ic} ${a.c === "client" || a.c === "probable" ? esc((a.cl || lib).slice(0, 18)) : lib} ${this._min(a.m)} <a class="sc-carte" href="https://www.google.com/maps?q=${a.la},${a.lo}" target="_blank" rel="noopener">🗺</a></span>`;
+          }).join(" ");
+          html += `<tr><td>${frappe.datetime.str_to_user(j.date)}</td><td>${esc(j.employe_nom || "")}<div class="sc-dim">${esc(j.vehicule || "")}</div></td><td>${chips || "<span class='sc-dim'>aucun arrêt dans la plage</span>"}</td></tr>`;
+        });
+        html += `</tbody></table>`;
+      }
+    }
+    $r.find("#sc-journee").html(html);
   }
 
   async justifier(name, justification, note) {

@@ -19,6 +19,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
+import json
+
 import frappe
 from frappe.utils import add_days, cint, flt, get_datetime, getdate, now_datetime, nowdate
 
@@ -40,6 +42,16 @@ RATIO_DETOUR = 1.5             # km réels > 1,5 × km du circuit…
 KM_DETOUR_MIN = 20.0           # … et au moins 20 km de plus : détour
 
 TYPES = ("Arrêt inexpliqué", "Hors horaires", "Détour")
+
+# Journée de travail (demande du 16/10/2026 : « voir les arrêts en plus par journée ; si on n'est pas certain, affecter les
+# arrêts aux tâches non appariées ; voir si les employés retournent à leur domicile entre 8 h et 18 h »).
+PLAGE_JOUR = (8 * 60, 18 * 60)          # arrêts COMMENCÉS entre 08:00 et 18:00 (le départ du matin n'est pas un retour)
+ARRET_JOUR_MIN = 5                      # un arrêt de la journée compte dès 5 min
+PROBABLE_KM = 1.0                       # tâche non appariée à position connue : un arrêt libre à ≤ 1 km lui est affecté
+PROBABLE_H = 3                          # tâche non appariée sans position : l'arrêt libre le plus proche de l'heure annoncée, à ± 3 h
+CATEGORIES = ("client", "probable", "magasin", "domicile", "autre")
+CHAMPS_JOURNEE = ("arrets_clients", "arrets_probables", "arrets_magasin", "retours_domicile", "minutes_domicile", "arrets_autres",
+                  "minutes_autres", "arrets_journee")
 JUSTIFICATIONS = ("", "Fournisseur", "Client non planifié", "Aramex / courses", "Pause", "Autre", "Anomalie confirmée")
 
 
@@ -136,6 +148,95 @@ def ecarts_pure(jour, taches: list, journal: dict, lieux: list, horaires: tuple,
 
 # ── Calcul écrit (cron / lot) ────────────────────────────────────────────────
 
+def arrets_jour_pure(jour, taches: list, journal: dict, depot, domiciles: dict, plage: tuple = PLAGE_JOUR) -> dict:
+    """Tous les arrêts (≥ ARRET_JOUR_MIN) commencés dans la journée de travail, classés, pour UN véhicule et les tâches de
+    l'équipage qui roule dedans. PURE.
+    - `client` : l'arrêt chevauche le passage confirmé d'une tâche (custom_gps_arrivee / depart) ;
+    - `probable` : tâche NON appariée — à position connue, un arrêt libre à ≤ PROBABLE_KM ; sans position, l'arrêt libre le
+      plus proche de l'heure annoncée à ± PROBABLE_H ; un arrêt par tâche, une tâche par arrêt ;
+    - `magasin` (≤ 200 m du dépôt) ; `domicile` (≤ 200 m du domicile réglé d'un membre de l'équipage, `qui`) ; `autre`.
+    Rend {arrets: [...], n: {cat: n}, minutes: {cat: min}, retours_domicile, minutes_domicile}."""
+    vide = {"arrets": [], "n": {c: 0 for c in CATEGORIES}, "minutes": {c: 0 for c in CATEGORIES}, "retours_domicile": 0, "minutes_domicile": 0}
+    if not journal or journal.get("erreur"):
+        return vide
+    jour = getdate(jour)
+    d0 = datetime.combine(jour, datetime.min.time())
+    deb, fin = d0 + timedelta(minutes=plage[0]), d0 + timedelta(minutes=plage[1])
+    arrets = []
+    for a in fg._fusionner(journal.get("arrets") or []):
+        if not (deb <= a["arr"] < fin):
+            continue
+        minutes = int((min(a["dep"], fin) - a["arr"]).total_seconds() // 60)
+        if minutes < ARRET_JOUR_MIN:
+            continue
+        arrets.append({"arr": a["arr"], "dep": a["dep"], "minutes": minutes, "lat": flt(a["lat"]), "lng": flt(a["lng"]),
+                       "cat": None, "tache": None, "client": "", "qui": None})
+    if not arrets:
+        return vide
+    tt = [t for t in taches if t.get("statut") != "Cancelled" and t.get("type") not in fg.TYPES_HORS]
+    # 1. Passages confirmés : l'arrêt qui chevauche [arrivée, départ] de la tâche
+    for t in tt:
+        g = t.get("gps") or {}
+        if g.get("statut") != fg.CONFIRME or not (g.get("arrivee") and g.get("depart")):
+            continue
+        ga, gd = get_datetime(g["arrivee"]), get_datetime(g["depart"])
+        for a in arrets:
+            if a["cat"] is None and a["arr"] <= gd and a["dep"] >= ga:
+                a.update(cat="client", tache=t["name"], client=t.get("client") or "")
+                break
+    # 2. Lieux connus
+    for a in arrets:
+        if a["cat"]:
+            continue
+        pa = (a["lat"], a["lng"])
+        if depot and fg._m(pa, depot) <= fg.RAYON_LIEU_M:
+            a["cat"] = "magasin"
+            continue
+        chez = sorted((fg._m(pa, dom), e) for e, dom in (domiciles or {}).items() if dom and fg._m(pa, dom) <= fg.RAYON_LIEU_M)
+        if chez:
+            a.update(cat="domicile", qui=chez[0][1])
+    # 3. Tâches non appariées : d'abord par la distance (position connue), puis par l'heure (sans position)
+    non_appariees = [t for t in tt if (t.get("gps") or {}).get("statut") != fg.CONFIRME]
+    prises = set()
+    for t in sorted(non_appariees, key=lambda t: t["debut"]):
+        if not (t.get("lat") and t.get("lng")):
+            continue
+        cand = [(to.haversine_km((a["lat"], a["lng"]), (t["lat"], t["lng"])), abs((a["arr"] - t["debut"]).total_seconds()), i)
+                for i, a in enumerate(arrets) if a["cat"] is None]
+        cand = [c for c in cand if c[0] <= PROBABLE_KM]
+        if cand:
+            i = min(cand)[2]
+            arrets[i].update(cat="probable", tache=t["name"], client=t.get("client") or "")
+            prises.add(t["name"])
+    for t in sorted(non_appariees, key=lambda t: t["debut"]):
+        if t["name"] in prises or (t.get("lat") and t.get("lng")):
+            continue
+        cand = [(abs((a["arr"] - t["debut"]).total_seconds()), i) for i, a in enumerate(arrets)
+                if a["cat"] is None and abs((a["arr"] - t["debut"]).total_seconds()) <= PROBABLE_H * 3600]
+        if cand:
+            i = min(cand)[1]
+            arrets[i].update(cat="probable", tache=t["name"], client=t.get("client") or "")
+            prises.add(t["name"])
+    for a in arrets:
+        a["cat"] = a["cat"] or "autre"
+    out = {"arrets": arrets, "n": {c: 0 for c in CATEGORIES}, "minutes": {c: 0 for c in CATEGORIES}}
+    for a in arrets:
+        out["n"][a["cat"]] += 1
+        out["minutes"][a["cat"]] += a["minutes"]
+    out["retours_domicile"] = out["n"]["domicile"]
+    out["minutes_domicile"] = out["minutes"]["domicile"]
+    return out
+
+
+def _journee_valeurs(r: dict) -> dict:
+    """Ce qui s'écrit sur Journee Flotte GPS (compteurs + détail JSON compact pour la lecture jour par jour)."""
+    detail = [{"h": a["arr"].strftime("%H:%M"), "f": a["dep"].strftime("%H:%M"), "m": a["minutes"], "c": a["cat"], "t": a["tache"],
+               "cl": (a["client"] or "")[:40], "q": a["qui"], "la": round(a["lat"], 5), "lo": round(a["lng"], 5)} for a in r["arrets"]]
+    return {"arrets_clients": r["n"]["client"], "arrets_probables": r["n"]["probable"], "arrets_magasin": r["n"]["magasin"],
+            "retours_domicile": r["n"]["domicile"], "minutes_domicile": r["minutes"]["domicile"], "arrets_autres": r["n"]["autre"],
+            "minutes_autres": r["minutes"]["autre"], "arrets_journee": json.dumps(detail, ensure_ascii=False)}
+
+
 def calculer(jour=None, ecrire: bool = True, journaux: dict | None = None) -> dict:
     """Les écarts de tous les techniciens d'un jour, écrits dans Ecart Circuit GPS (les justifications sont gardées).
     `journaux` : le journal déjà lu (lire_journal) pour ne pas solliciter la plateforme deux fois (rattrapage)."""
@@ -160,6 +261,7 @@ def calculer(jour=None, ecrire: bool = True, journaux: dict | None = None) -> di
     equipage_de = {}
     for e, cb in emp_cbox.items():
         equipage_de.setdefault(cb, []).append(e)
+    journees = {}
     for cbox, emps in equipage_de.items():
         emp = emps[0]
         j = journaux.get(cbox)
@@ -168,16 +270,25 @@ def calculer(jour=None, ecrire: bool = True, journaux: dict | None = None) -> di
         tt = [t for t in taches if t["employe"] in emps and t.get("type") not in fg.TYPES_HORS]
         horaires = cfg_t["horaires"].get(emp) or (cfg_t["debut"], cfg_t["fin"])
         depart = cfg_t["departs"].get(emp) or cfg_t["depot"]
+        # Journée de travail : chaque arrêt de 08:00 à 18:00 classé (client, tâche non appariée probable, Magasin, domicile, autre)
+        journees[cbox] = arrets_jour_pure(jour, tt, j, cfg_t["depot"], {e: cfg_t["departs"].get(e) for e in emps if cfg_t["departs"].get(e)})
         for e in ecarts_pure(jour, tt, j, lieux, horaires, depart, cfg_t["depot"], cfg_t.get("coef") or 1.3):
             if emp not in noms:
                 noms[emp] = frappe.db.get_value("Employee", emp, "employee_name") or emp
             e.update(date=jour, employe=emp, employe_nom=noms[emp], cbox=cbox, vehicule=cfg["cbox_vehicule"].get(cbox) or cbox,
                      cle=_cle(jour, emp, e["type"], e["debut"]))
             trouves.append(e)
-    bilan = {"jour": str(jour), "ecarts": len(trouves), "par_type": {t: len([e for e in trouves if e["type"] == t]) for t in TYPES}, "ecrit": ecrire}
+    bilan = {"jour": str(jour), "ecarts": len(trouves), "par_type": {t: len([e for e in trouves if e["type"] == t]) for t in TYPES}, "ecrit": ecrire,
+             "journees": {cb: {k: v for k, v in r.items() if k != "arrets"} for cb, r in journees.items()}}
     if not ecrire:
         bilan["lignes"] = trouves
+        bilan["arrets_journee"] = journees
         return bilan
+    if frappe.db.has_column(fg.JOURNEE, "arrets_journee"):
+        for cbox, r in journees.items():
+            nom = frappe.db.exists(fg.JOURNEE, {"date": jour, "cbox": cbox})
+            if nom:
+                frappe.db.set_value(fg.JOURNEE, nom, _journee_valeurs(r), update_modified=False)
     existants = {r.cle: r for r in frappe.get_all(ECART, filters={"date": jour}, fields=["name", "cle", "justification"])}
     vus = set()
     for e in trouves:
@@ -296,6 +407,38 @@ def justifier_lot(names, justification="", note=""):
     return {"n": len(names)}
 
 
+def journee_travail_pure(journees: list) -> list:
+    """Par employé, la journée de travail 08:00-18:00 d'après les journées véhicule : arrêts clients appariés, tâches non
+    appariées probables, Magasin, retours au domicile (jours avec retour, nombre, minutes médianes par jour de retour), autres
+    arrêts (nombre, minutes). Seules comptent les journées où la classification a été calculée (arrets_journee). PURE."""
+    par = {}
+    for j in journees:
+        if not j.get("employe") or not j.get("arrets_journee"):
+            continue
+        e = par.setdefault(j["employe"], {"employe": j["employe"], "employe_nom": j.get("employe_nom") or j["employe"], "jours": 0,
+                                           "clients": 0, "probables": 0, "magasin": 0, "retours": 0, "jours_retour": 0, "minutes_domicile": [],
+                                           "autres": 0, "minutes_autres": 0, "jours_autres": 0})
+        e["jours"] += 1
+        e["clients"] += cint(j.get("arrets_clients"))
+        e["probables"] += cint(j.get("arrets_probables"))
+        e["magasin"] += cint(j.get("arrets_magasin"))
+        e["autres"] += cint(j.get("arrets_autres"))
+        e["minutes_autres"] += cint(j.get("minutes_autres"))
+        if cint(j.get("arrets_autres")):
+            e["jours_autres"] += 1
+        if cint(j.get("retours_domicile")):
+            e["retours"] += cint(j["retours_domicile"])
+            e["jours_retour"] += 1
+            e["minutes_domicile"].append(cint(j.get("minutes_domicile")))
+    out = []
+    for e in par.values():
+        v = sorted(e.pop("minutes_domicile"))
+        e["minutes_domicile_mediane"] = (v[len(v) // 2] if len(v) % 2 else (v[len(v) // 2 - 1] + v[len(v) // 2]) // 2) if v else 0
+        e["part_jours_retour"] = round(100 * e["jours_retour"] / e["jours"]) if e["jours"] else 0
+        out.append(e)
+    return sorted(out, key=lambda e: e["employe_nom"] or "")
+
+
 @frappe.whitelist()
 def sorties(du=None, au=None, employe=None):
     """Les écarts d'une période + statistiques par employé + journées suivies. Sans `du`, la période part du réglage
@@ -314,11 +457,26 @@ def sorties(du=None, au=None, employe=None):
     fj = {"date": ["between", [du, au]], "employe": ["is", "set"]}
     if employe:
         fj["employe"] = employe
-    journees = frappe.get_all(fg.JOURNEE, filters=fj, fields=["date", "employe", "employe_nom", "km", "vehicule"], limit_page_length=0)
+    champs_j = ["date", "employe", "employe_nom", "km", "vehicule"]
+    a_journee = frappe.db.has_column(fg.JOURNEE, "arrets_journee")
+    if a_journee:
+        champs_j += list(CHAMPS_JOURNEE)
+    journees = frappe.get_all(fg.JOURNEE, filters=fj, fields=champs_j, order_by="date desc, employe_nom asc", limit_page_length=0)
     employes = sorted({(l["employe"], l["employe_nom"]) for l in lignes} | {(j["employe"], j["employe_nom"]) for j in journees},
                       key=lambda x: x[1] or "")
+    travail = journee_travail_pure(journees) if a_journee else []
+    jours_travail = []
+    if a_journee:
+        for j in journees:
+            if j.get("arrets_journee"):
+                try:
+                    jours_travail.append({"date": str(j["date"]), "employe": j["employe"], "employe_nom": j["employe_nom"], "vehicule": j["vehicule"],
+                                          "arrets": json.loads(j["arrets_journee"])})
+                except Exception:
+                    pass
     return {"du": str(du), "au": str(au), "stats_depuis": str(depuis) if depuis else None, "lignes": lignes,
             "stats": statistiques_pure(lignes, journees), "lieux": lieux_recurrents(lignes),
+            "travail": travail, "jours_travail": jours_travail[:120], "plage_jour": list(PLAGE_JOUR),
             "employes": [{"employe": e, "nom": n} for e, n in employes if e], "justifications": list(JUSTIFICATIONS),
             "types": list(TYPES), "seuils": {"arret_min": ARRET_MIN, "distance_km": DISTANCE_KM, "distance_approx_km": DISTANCE_APPROX_KM,
                                               "ratio_detour": RATIO_DETOUR, "km_detour_min": KM_DETOUR_MIN}}
