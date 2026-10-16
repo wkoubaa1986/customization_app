@@ -66,6 +66,13 @@ if __name__ == "__main__":
 class TestMarquage(unittest.TestCase):
     """Shipping marks (16/10/2026) : marque principale + accessoires par conteneur."""
 
+    def test_prefixe_sans_reference_ni_conteneur(self):
+        from customization_app.lci_pdf_conteneurs import prefixe_marque
+        self.assertEqual(prefixe_marque(""), "AQUAWORLD")
+        self.assertEqual(prefixe_marque("AQUAWORLD · {ref} · {conteneur}/{total}"), "AQUAWORLD")
+        self.assertEqual(prefixe_marque("AQW TUNIS {conteneur} {ref}"), "AQW TUNIS")
+        self.assertEqual(prefixe_marque("{ref} - AQUA WORLD - {conteneur}"), "AQUA WORLD")
+
     def test_marque_principale(self):
         from customization_app.lci_pdf_conteneurs import marque_principale
         self.assertEqual(marque_principale("", "LCI-2026-00295", 1, 3), "AQUAWORLD · LCI-2026-00295 · C1/3")

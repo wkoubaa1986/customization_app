@@ -118,6 +118,15 @@ def marques_articles(doc) -> dict:
     return marques_enregistrees(doc)
 
 
+def prefixe_marque(modele) -> str:
+    """Le modèle de marque SANS référence ni conteneur : « AQUAWORLD · {ref} · {conteneur}/{total} » → « AQUAWORLD ». C'est ce
+    qui précède la marque d'un article ou d'un accessoire (demande du 16/10 : « enlève LCI-2026-00295 · C1/4 »). PURE."""
+    m = (modele or "").strip() or MARQUE_DEFAUT
+    m = re.sub(r"\{ref\}|\{conteneur\}|\{total\}", "", m)
+    m = re.sub(r"[\s·/\-]{2,}", " · ", m)
+    return m.strip(" ·/-") or "AQUAWORLD"
+
+
 def accessoires_conteneur(c, par_row, adds_de, marques=None) -> list:
     """Les accessoires embarqués dans un conteneur, cumulés par article : quantité = unités chargées × quantité par pack,
     avec les unités qu'ils accompagnent. `adds_de(row)` → la liste JSON des additionnels d'une ligne. PURE."""
@@ -154,7 +163,7 @@ def bloc_marquage(doc, c, L, par_row, nb_conteneurs, adds_de, LX=None, note=None
         for e in acc:
             html += (f'<tr><td><b>{_esc(e["item_code"])}</b></td><td>{_esc(e["nom"])}{(" — " + _esc(e["brand"])) if e["brand"] else ""}</td>'
                      f'<td class="n"><b>{_n(e["qty"])}</b> {_esc(_uom_out(e["uom"], LX) if LX else e["uom"])}</td><td>{_esc(", ".join(e["pour"]))}</td>'
-                     f'<td><b>{_esc(marque)} · ACC · {_esc(e.get("marque") or e["item_code"])} · {_n(e["qty"])} {L["pcs"]}</b></td></tr>')
+                     f'<td><b>{_esc(prefixe_marque(doc.get("marquage_expedition")))} · ACC · {_esc(e.get("marque") or e["item_code"])} · {_n(e["qty"])} {L["pcs"]}</b></td></tr>')
         html += f'</tbody></table><div style="font-size:9px;color:#6b7280;margin-top:3px">{L["note"]}</div>'
     if (note or "").strip():
         html += f'<div style="font-size:10px;margin-top:4px;padding:4px 6px;border:1px solid #d1d5db;border-radius:3px">{_esc(note.strip())}</div>'
@@ -380,7 +389,7 @@ def _bloc_conteneur(doc, c, L, LX, par_row, photos, devise, nb_conteneurs, echea
         <td class="ph">{f'<img src="{photo}" style="max-width:60px;max-height:60px">' if photo else ""}</td>
         <td>{f'<div class="ref">{L["ref"]} {sa_ligne}</div>' if sa_ligne else ""}{desc}
           {f'<div class="split">{_esc(scinde)}</div>' if scinde else ""}
-          {f'<div style="margin-top:2px"><span style="color:#6b7280">{L["marque"]} :</span> <b>{_esc(marque_principale(doc.get("marquage_expedition"), doc.name, c["no"], nb_conteneurs))} · {_esc(m_art)}</b></div>' if m_art else ""}</td>
+          {f'<div style="margin-top:2px"><span style="color:#6b7280">{L["marque"]} :</span> <b>{_esc(prefixe_marque(doc.get("marquage_expedition")))} · {_esc(m_art)}</b></div>' if m_art else ""}</td>
         <td class="n"><b>{_n(l["qty"])}</b> {_esc(_uom_out(r.uom, LX))}</td>
         <td class="n">{flt(l["volume"]):.3f}</td>
         <td class="n">{prix_retenu(r):,.2f}</td>
