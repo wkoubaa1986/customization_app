@@ -184,7 +184,7 @@ class TestEquipages(unittest.TestCase):
 
     def test_le_coequipier_herite_de_la_journee(self):
         noms = dict(self.EMP)
-        lignes = [{"name": "GPS-1", "date": "2026-10-14", "employe": "HR-EMP-00001", "employe_nom": "Sadok Bouziri", "depart_aquaworld": "x"},
+        lignes = [{"name": "GPS-1", "date": "2026-10-14", "employe": "HR-EMP-00001", "employe_nom": "Sadok Bouziri", "depart_aquaworld": "x", "attribue_par_taches": "Jamel Aloui"},
                   {"name": "GPS-2", "date": "2026-10-15", "employe": "HR-EMP-00001", "employe_nom": "Sadok Bouziri"},
                   {"name": "GPS-3", "date": "2026-10-15", "employe": "HR-EMP-00002", "employe_nom": "Jamel Aloui"}]
         out = fp.heriter_pure(lignes, [["HR-EMP-00001", "HR-EMP-00002"]], noms)
@@ -193,6 +193,7 @@ class TestEquipages(unittest.TestCase):
         self.assertEqual((v["date"], v["employe"], v["employe_nom"], v["avec"], v["passager"]), ("2026-10-14", "HR-EMP-00002", "Jamel Aloui", "Sadok Bouziri", True))
         self.assertEqual(v["depart_aquaworld"], "x")
         self.assertEqual(v["name"], "GPS-1|HR-EMP-00002")
+        self.assertNotIn("attribue_par_taches", v)                 # la note « par la nuit » reste au conducteur
         self.assertFalse(any(l.get("passager") for l in out[:3]))
 
     def test_les_nuits_du_passager_ne_comptent_pas(self):
@@ -203,60 +204,61 @@ class TestEquipages(unittest.TestCase):
         self.assertEqual(s[0]["depart"], "17:30")
 
 
-class TestDomiciles(unittest.TestCase):
-    def _nuits(self, employe, point, n, nom=None, bruit=0.0):
-        return [{"employe": employe, "employe_nom": nom or employe, "lat": point[0] + bruit * (i % 2), "lng": point[1],
-                 "date": (J + timedelta(days=i)).date()} for i in range(n)]
+class TestLieuxDeNuit(unittest.TestCase):
+    """Toutes voitures confondues : les endroits où les voitures dorment, et qui on propose."""
+    AKRAM, SADOK = (36.8370, 10.1924), (36.9634, 10.2172)
 
-    def test_domicile_a_regler_quand_rien_n_est_regle(self):
-        nuits = self._nuits("AKR", DOM_AKRAM, 6, "Akram", bruit=0.0004) + self._nuits("AKR", MAGASIN, 1, "Akram")
-        d = fp.domiciles_pure(nuits, MAGASIN, {})
-        self.assertEqual(len(d), 1)
-        e = d[0]
-        self.assertEqual(e["verdict"], "a_regler")
-        self.assertEqual(e["nuits"], 7)
-        self.assertEqual(e["lieux"][0]["n"], 6)                     # les 6 nuits à ± 45 m forment UN endroit
-        self.assertFalse(e["lieux"][0]["magasin"])
-        self.assertTrue(e["lieux"][1]["magasin"])
-        self.assertEqual(e["principal"], e["lieux"][0])
-        self.assertEqual(e["lieux"][0]["part"], 86)
+    def _nuits(self):
+        out = []
+        for i in range(5):                                             # le Changan dort chez Akram, attribué à Akram
+            out.append({"lat": self.AKRAM[0] + 0.0003 * (i % 2), "lng": self.AKRAM[1], "date": "2026-10-%02d" % (1 + i), "vehicule": "Changan", "employe": "A", "employe_nom": "Akram"})
+        for i in range(4):                                             # la 5957 dort chez Sadok, 3 fois attribuée à Jamel (tâches)
+            out.append({"lat": self.SADOK[0], "lng": self.SADOK[1], "date": "2026-10-%02d" % (1 + i), "vehicule": "5957", "employe": "J" if i else "S", "employe_nom": "Jamel" if i else "Sadok"})
+        out.append({"lat": MAGASIN[0], "lng": MAGASIN[1], "date": "2026-10-03", "vehicule": "3554", "employe": "H", "employe_nom": "Hedi"})
+        out.append({"lat": 36.80, "lng": 10.10, "date": "2026-10-04", "vehicule": "Changan", "employe": "A", "employe_nom": "Akram"})
+        return out
 
-    def test_domicile_regle_au_bon_endroit(self):
-        d = fp.domiciles_pure(self._nuits("SAD", DOM_SADOK, 4), MAGASIN, {"SAD": (DOM_SADOK[0] + 0.0003, DOM_SADOK[1])})
-        self.assertEqual(d[0]["verdict"], "ok")
-        self.assertTrue(d[0]["lieux"][0]["regle"])
+    def test_regroupement_toutes_voitures_et_statuts(self):
+        lieux = fp.lieux_nuit_pure(self._nuits(), MAGASIN, {}, {"A": "Akram"})
+        self.assertEqual(sorted((c["n"], c["statut"]) for c in lieux), [(1, "magasin"), (1, "rare"), (4, "a_regler"), (5, "a_regler")])
+        self.assertEqual([c["n"] for c in lieux], [5, 4, 1, 1])                    # du plus fréquent au moins
+        self.assertEqual(lieux[0]["suggestion"], "Akram")
+        self.assertEqual(lieux[1]["employes"], {"Jamel": 3, "Sadok": 1})       # indice seulement : à l'utilisateur de dire
+        self.assertEqual(lieux[1]["suggestion"], "Jamel")
+        self.assertEqual(lieux[0]["vehicules"], {"Changan": 5})
+        self.assertEqual((lieux[0]["premiere"], lieux[0]["derniere"]), ("2026-10-01", "2026-10-05"))
 
-    def test_domicile_regle_ailleurs(self):
-        d = fp.domiciles_pure(self._nuits("SAD", DOM_SADOK, 4), MAGASIN, {"SAD": DOM_AKRAM})
-        self.assertEqual(d[0]["verdict"], "different")
-        self.assertGreater(d[0]["ecart_m"], 10000)
+    def test_domicile_regle_nomme_et_visible_meme_sans_nuit(self):
+        lieux = fp.lieux_nuit_pure(self._nuits(), MAGASIN, {"S": self.SADOK, "X": (36.70, 10.00)}, {"S": "Sadok", "X": "Nouveau"})
+        chez_sadok = next(c for c in lieux if c["n"] == 4)
+        self.assertEqual((chez_sadok["statut"], chez_sadok["employe_nom"], chez_sadok["suggestion"]), ("domicile", "Sadok", None))
+        vide = next(c for c in lieux if c["employe"] == "X")
+        self.assertEqual((vide["n"], vide["statut"]), (0, "domicile"))
 
-    def test_vehicule_qui_dort_au_magasin(self):
-        nuits = self._nuits("HED", MAGASIN, 10, "Hedi") + self._nuits("HED", CLIENT, 1, "Hedi")
-        d = fp.domiciles_pure(nuits, MAGASIN, {})
-        self.assertEqual(d[0]["verdict"], "magasin")
-        self.assertIsNotNone(d[0]["principal"])                      # l'arrêt isolé existe, mais trop rare pour un domicile
+    def test_la_nuit_prime_sur_les_taches_a_la_lecture(self):
+        noms = {"A": "Akram", "S": "Sadok", "J": "Jamel"}
+        lignes = [{"name": "1", "date": "2026-10-14", "employe": "A", "employe_nom": "Akram", "nuit_avant_lat": self.SADOK[0] + 0.004, "nuit_avant_lng": self.SADOK[1]},   # ~450 m de chez Sadok
+                  {"name": "2", "date": "2026-10-14", "employe": "S", "employe_nom": "Sadok", "nuit_avant_lat": MAGASIN[0], "nuit_avant_lng": MAGASIN[1]},
+                  {"name": "3", "date": "2026-10-15", "employe": "J", "employe_nom": "Jamel", "nuit_avant_lat": self.SADOK[0], "nuit_avant_lng": self.SADOK[1]},
+                  {"name": "4", "date": "2026-10-15", "employe": "S", "employe_nom": "Sadok", "nuit_avant_lat": self.SADOK[0] + 0.006, "nuit_avant_lng": self.SADOK[1]}]
+        out = fp.reattribuer_pure(lignes, {"S": self.SADOK, "A": self.AKRAM}, noms)
+        self.assertEqual((out[0]["employe"], out[0]["attribue_par_taches"]), ("S", "Akram"))     # le Changan a dormi chez Sadok
+        self.assertEqual(out[1]["employe"], "S")                                                 # inchangé (Magasin) — Sadok déjà pris ce jour-là : la ligne garde son employé
+        self.assertEqual((out[2]["employe"], out[2]["attribue_par_taches"]), ("S", "Jamel"))     # la plus proche de chez Sadok devient la sienne
+        self.assertEqual(out[3]["employe"], "S")                                                 # deux voitures chez Sadok : la 2e garde son employé
+        self.assertNotIn("attribue_par_taches", out[3])
 
-    def test_le_domicile_regle_d_un_collegue_n_est_jamais_propose(self):
-        # Jamel conduit la voiture de Sadok et la rend chez Sadok le soir : ce n'est pas le domicile de Jamel.
-        nuits = self._nuits("SAD", DOM_SADOK, 5, "Sadok") + self._nuits("JAM", DOM_SADOK, 4, "Jamel")
-        d = {e["employe"]: e for e in fp.domiciles_pure(nuits, MAGASIN, {"SAD": DOM_SADOK})}
-        self.assertEqual(d["SAD"]["verdict"], "ok")
-        self.assertEqual(d["JAM"]["verdict"], "chez_autre")
-        self.assertEqual(d["JAM"]["lieux"][0]["chez_nom"], "Sadok")
-        self.assertTrue(d["JAM"]["lieux"][0]["exclu"])
-        self.assertIsNone(d["JAM"]["principal"])
-        # Sans réglage, l'endroit est proposé à Jamel aussi : rien ne permet encore de le distinguer
-        d = {e["employe"]: e for e in fp.domiciles_pure(nuits, MAGASIN, {})}
-        self.assertEqual(d["JAM"]["verdict"], "a_regler")
-
-    def test_pas_assez_de_nuits(self):
-        d = fp.domiciles_pure(self._nuits("X", DOM_AKRAM, 2), MAGASIN, {})
-        self.assertEqual(d[0]["verdict"], "insuffisant")
-
-    def test_sans_employe_ni_point_ignore(self):
-        d = fp.domiciles_pure([{"employe": None, "lat": 1, "lng": 1}, {"employe": "A", "lat": 0, "lng": 0}], MAGASIN, {})
-        self.assertEqual(d, [])
+    def test_attribution_par_nuit_au_calcul(self):
+        from customization_app import flotte_gps as fg
+        nuits = {"CB1": (self.AKRAM[0] + 0.003, self.AKRAM[1]), "CB2": (self.SADOK[0], self.SADOK[1]), "CB3": MAGASIN, "CB4": None}
+        self.assertEqual(fg.attribution_par_nuit(nuits, {"A": self.AKRAM, "S": self.SADOK}), {"A": "CB1", "S": "CB2"})
+        self.assertEqual(fg.attribution_par_nuit(nuits, {"A": (36.0, 10.0)}), {})                 # trop loin (> 1 km)
+        # vehicules_du_jour : la nuit prime, les tâches servent au reste
+        journaux = {"CB1": {"arrets": [], "trajets": []}, "CB2": {"arrets": [], "trajets": []}}
+        out = fg.vehicules_du_jour([], journaux, {"J": "CB2", "A": "CB1"}, 150, [], nuits={"CB2": self.SADOK}, domiciles={"S": self.SADOK})
+        self.assertEqual(out, {"S": "CB2", "A": "CB1"})                                            # CB2 à Sadok (nuit) ; Jamel n'a plus son défaut, Akram garde le sien
+        self.assertIsNone(fg.point_de_nuit(J.date(), {"arrets": [_arret(_h(8.0), _h(9.0), self.AKRAM)]}))
+        self.assertEqual(fg.point_de_nuit(J.date(), journee_akram()), (journee_akram()["arrets"][0]["lat"], journee_akram()["arrets"][0]["lng"]))
 
 
 class TestStatistiques(unittest.TestCase):

@@ -19,6 +19,13 @@ LA LOGIQUE, en quatre temps, uniquement d'après le journal GPS (arrêts / traje
 Le lieu de chaque nuit (Domicile / Magasin / Autre) n'est PAS figé : il se lit à l'affichage contre le réglage des
 tournées, pour qu'un domicile réglé après coup requalifie aussi l'historique.
 
+QUI CONDUISAIT (16/10/2026) : les employés changent de voiture. L'estimation de là où habite chacun se fait sur TOUTES les
+voitures confondues (`lieux_nuit_pure` : les endroits où les voitures dorment, c'est l'utilisateur qui dit quel endroit est
+la maison de qui). Puis LA NUIT PRIME : un véhicule qui a dormi à ≤ 1 km (`fg.RAYON_NUIT_M`) du domicile réglé d'un employé
+est le sien ce jour-là — au calcul (`fg.vehicules_du_jour(nuits=, domiciles=)`, aussi pour l'appariement du soir et les
+sorties de circuit) et à la lecture (`reattribuer_pure`, pour l'historique) ; les tâches ne tranchent que si le véhicule a
+dormi au Magasin ou à un endroit inconnu.
+
 ⚠️ Un véhicule qui dort au Magasin (Hedi Chouchane, 3554) ne dit rien de l'arrivée du technicien : il vient autrement.
 On montre alors « départ du Magasin » le matin et « retour au Magasin » le soir, sans inventer d'arrivée.
 
@@ -162,57 +169,78 @@ def _grouper(points: list, rayon_m: float = LIEU_M) -> list:
     return sorted(lieux, key=lambda c: -c["n"])
 
 
-def domiciles_pure(nuits: list, depot: tuple, departs: dict, rayon_m: float = RAYON_LIEU_M, minimum: int = NUITS_MIN_DOMICILE) -> list:
-    """Où dort le véhicule de chacun : regroupement des points de nuit par distance (≤ LIEU_M), par employé.
-    `nuits` : [{employe, employe_nom, lat, lng, date}]. Rend, par employé, ses endroits (du plus fréquent au moins),
-    le domicile réglé, et un verdict : `ok` (le réglage est l'endroit principal), `a_regler` (pas de réglage, un
-    endroit principal ≥ minimum nuits), `different` (réglé ailleurs que l'endroit principal), `magasin` (le véhicule
-    dort au Magasin : domicile indétectable), `chez_autre` (il dort au domicile réglé d'un collègue : véhicule rendu),
-    `insuffisant`. PURE."""
-    par_emp = {}
-    noms = {n["employe"]: n.get("employe_nom") or n["employe"] for n in nuits if n.get("employe")}
+def lieux_nuit_pure(nuits: list, depot: tuple, departs: dict, noms: dict | None = None, rayon_m: float = RAYON_LIEU_M,
+                    minimum: int = NUITS_MIN_DOMICILE) -> list:
+    """Où dorment les voitures la nuit, TOUTES VOITURES CONFONDUES (demande du 16/10/2026 : « l'estimation de là où
+    habite chacun doit être faite à partir de n'importe quelle voiture »). `nuits` = [{lat, lng, date, vehicule, employe,
+    employe_nom}] (nuit d'avant et nuit d'après de chaque journée véhicule). Regroupement par distance (≤ LIEU_M) ; par
+    endroit : nuits, première / dernière date, véhicules, employés auxquels les journées étaient attribuées (indice), et
+    le statut : `magasin`, `domicile` (domicile réglé de `employe`, ≤ rayon), `a_regler` (≥ minimum nuits), `rare`.
+    Les domiciles réglés qui n'ont aucune nuit sur la période sont ajoutés (n = 0) pour rester visibles. PURE."""
+    noms = noms or {}
+    lieux = []
     for n in nuits:
-        if not n.get("lat") or not n.get("employe"):
+        if not n.get("lat"):
             continue
-        e = par_emp.setdefault(n["employe"], {"employe": n["employe"], "employe_nom": n.get("employe_nom") or n["employe"], "lieux": [], "nuits": 0})
         pt = (flt(n["lat"]), flt(n["lng"]))
-        c = next((c for c in e["lieux"] if _m(pt, (c["lat"], c["lng"])) <= LIEU_M), None)
+        c = next((c for c in lieux if _m(pt, (c["lat"], c["lng"])) <= LIEU_M), None)
         if c is None:
-            # Un endroit déjà connu — le Magasin, ou le domicile RÉGLÉ d'un collègue (Jamel qui rend la voiture de Sadok
-            # chez Sadok) — n'est jamais proposé comme domicile de cet employé.
-            chez = next((a for a, p in departs.items() if a != n["employe"] and _m(pt, p) <= rayon_m), None)
-            c = {"lat": pt[0], "lng": pt[1], "n": 0, "derniere": None, "magasin": bool(depot) and _m(pt, depot) <= rayon_m,
-                 "chez": chez, "chez_nom": noms.get(chez, chez) if chez else None}
-            c["exclu"] = c["magasin"] or bool(chez)
-            e["lieux"].append(c)
+            c = {"lat": pt[0], "lng": pt[1], "n": 0, "premiere": None, "derniere": None, "vehicules": {}, "employes": {}}
+            lieux.append(c)
         c["n"] += 1
-        e["nuits"] += 1
         d = str(n.get("date") or "")
+        if d and (c["premiere"] is None or d < c["premiere"]):
+            c["premiere"] = d
         if d > str(c["derniere"] or ""):
             c["derniere"] = d
-    out = []
-    for e in par_emp.values():
-        e["lieux"].sort(key=lambda c: -c["n"])
-        regle = departs.get(e["employe"])
-        e["regle"] = list(regle) if regle else None
-        for c in e["lieux"]:
-            c["part"] = round(100 * c["n"] / e["nuits"]) if e["nuits"] else 0
-            c["regle"] = bool(regle) and _m((c["lat"], c["lng"]), regle) <= rayon_m
-        principal = next((c for c in e["lieux"] if not c["exclu"]), None)
-        e["principal"] = principal
-        if e["lieux"][0]["exclu"] and (principal is None or principal["n"] < minimum):
-            e["verdict"] = "magasin" if e["lieux"][0]["magasin"] else "chez_autre"
-        elif principal is None or principal["n"] < minimum:
-            e["verdict"] = "insuffisant"
-        elif regle and principal["regle"]:
-            e["verdict"] = "ok"
-        elif regle:
-            e["verdict"] = "different"
-            e["ecart_m"] = round(_m((principal["lat"], principal["lng"]), regle))
-        else:
-            e["verdict"] = "a_regler"
-        out.append(e)
-    return sorted(out, key=lambda e: e["employe_nom"] or "")
+        if n.get("vehicule"):
+            c["vehicules"][n["vehicule"]] = c["vehicules"].get(n["vehicule"], 0) + 1
+        if n.get("employe"):
+            nom = n.get("employe_nom") or noms.get(n["employe"]) or n["employe"]
+            c["employes"][nom] = c["employes"].get(nom, 0) + 1
+    for e, dom in (departs or {}).items():
+        if dom and not any(_m((c["lat"], c["lng"]), dom) <= rayon_m for c in lieux):
+            lieux.append({"lat": flt(dom[0]), "lng": flt(dom[1]), "n": 0, "premiere": None, "derniere": None, "vehicules": {}, "employes": {}})
+    for c in lieux:
+        pt = (c["lat"], c["lng"])
+        regle = sorted((_m(pt, dom), e) for e, dom in (departs or {}).items() if dom and _m(pt, dom) <= rayon_m)
+        c["employe"] = regle[0][1] if regle else None
+        c["employe_nom"] = noms.get(c["employe"], c["employe"]) if c["employe"] else None
+        c["magasin"] = bool(depot) and _m(pt, depot) <= rayon_m
+        c["statut"] = "magasin" if c["magasin"] else "domicile" if c["employe"] else "a_regler" if c["n"] >= minimum else "rare"
+        c["employes"] = dict(sorted(c["employes"].items(), key=lambda kv: -kv[1]))
+        c["vehicules"] = dict(sorted(c["vehicules"].items(), key=lambda kv: -kv[1]))
+        # Suggestion : l'employé le plus souvent attribué ces jours-là, s'il n'a pas déjà un domicile réglé ailleurs
+        c["suggestion"] = next((n for n in c["employes"]), None) if c["statut"] == "a_regler" else None
+    return sorted(lieux, key=lambda c: (-c["n"], c["lat"]))
+
+
+def reattribuer_pure(lignes: list, departs: dict, noms: dict, rayon_m: float = fg.RAYON_NUIT_M) -> list:
+    """La nuit d'avant prime aussi à la lecture : une journée dont le véhicule a dormi à ≤ 1 km du domicile réglé d'un
+    employé est la sienne, quoi qu'aient dit les tâches le soir du calcul (régler un domicile requalifie l'historique).
+    L'ancien employé reste en `attribue_par_taches`. Un même employé ne prend qu'une journée par date (la plus proche). PURE."""
+    out = [dict(l) for l in lignes]
+    pris = set()
+    cand = []
+    for i, l in enumerate(out):
+        if not flt(l.get("nuit_avant_lat")):
+            continue
+        pt = (flt(l["nuit_avant_lat"]), flt(l["nuit_avant_lng"]))
+        for e, dom in (departs or {}).items():
+            if dom and _m(pt, dom) <= rayon_m:
+                cand.append((_m(pt, dom), i, e))
+    for _, i, e in sorted(cand):
+        l = out[i]
+        if (str(l.get("date")), e) in pris or l.get("_fixe"):
+            continue
+        pris.add((str(l.get("date")), e))
+        l["_fixe"] = True
+        if l.get("employe") != e:
+            l["attribue_par_taches"] = l.get("employe_nom") or l.get("employe") or None
+            l["employe"], l["employe_nom"] = e, noms.get(e, e)
+    for l in out:
+        l.pop("_fixe", None)
+    return out
 
 
 def _dt(v):
@@ -415,6 +443,7 @@ def heriter_pure(lignes: list, groupes: list, noms: dict) -> list:
                 continue
             v = dict(l, employe=p, employe_nom=noms.get(p, p), passager=True, avec=l.get("employe_nom") or e,
                      name="%s|%s" % (l.get("name"), p))
+            v.pop("attribue_par_taches", None)                   # la note « par la nuit » concerne le conducteur, pas la copie
             reelles.add((str(l.get("date")), p))
             out.append(v)
     return out
@@ -432,7 +461,8 @@ def calculer(jour=None, ecrire: bool = True, journaux: dict | None = None) -> di
     if journaux is None:
         journaux = fg.lire_journal(jour, cboxes, cfg=cfg) if cboxes else {}
     taches = fg._taches(jour)
-    emp_cbox = fg.vehicules_du_jour(taches, journaux, cfg["employe_cbox"], cfg["rayon"], fg._lieux_communs(cfg_t))
+    emp_cbox = fg.vehicules_du_jour(taches, journaux, cfg["employe_cbox"], cfg["rayon"], fg._lieux_communs(cfg_t),
+                                    nuits={cb: fg.point_de_nuit(jour, j) for cb, j in journaux.items()}, domiciles=cfg_t["departs"])
     for emp, cb in cfg["employe_cbox"].items():                  # véhicule sans employé reconnu : son conducteur habituel
         if cb not in emp_cbox.values() and emp not in emp_cbox:
             emp_cbox[emp] = cb
@@ -452,6 +482,8 @@ def calculer(jour=None, ecrire: bool = True, journaux: dict | None = None) -> di
         nom = frappe.db.exists(fg.JOURNEE, {"date": jour, "cbox": cbox})
         if nom:
             valeurs = {c: p[c] for c in CHAMPS}
+            if emp and not frappe.db.get_value(fg.JOURNEE, nom, "employe"):      # journée sans employé : la nuit (ou le défaut) le désigne
+                valeurs.update(employe=emp, employe_nom=frappe.db.get_value("Employee", emp, "employee_name"))
             if not flt(frappe.db.get_value(fg.JOURNEE, nom, "km")):              # ligne créée par ce lot avant l'appariement
                 res = fg._resume_journee(jour, cbox, j, [], {}, cfg, depot=cfg_t["depot"])
                 valeurs.update({k: res[k] for k in ("km", "minutes_conduite", "minutes_arrets", "nb_arrets", "premiere_sortie", "dernier_retour")})
@@ -602,28 +634,36 @@ def presence(du=None, au=None, employe=None):
     depot, departs = cfg_t["depot"], cfg_t["departs"]
     lignes = frappe.get_all(fg.JOURNEE, filters={"date": ["between", [du, au]]}, order_by="date desc, employe_nom asc, vehicule asc",
                             limit_page_length=0, fields=["name", "date", "vehicule", "cbox", "employe", "employe_nom", "km", *CHAMPS])
-    lignes = [_qualifier(dict(l), depot, departs) for l in lignes]
+    noms = {e.name: e.employee_name for e in frappe.get_all("Employee", fields=["name", "employee_name"], limit_page_length=0)}
+    lignes = reattribuer_pure([dict(l) for l in lignes], departs, noms)       # la nuit d'avant prime sur les tâches
+    lignes = [_qualifier(l, depot, departs) for l in lignes]
     suivies = [l for l in lignes if l.get("nuit_avant_lat") or l.get("nuit_lat") or l.get("arrivee_aquaworld")]
     nuits = []
     for l in suivies:
         for k in ("nuit_avant", "nuit"):
             if l.get(k + "_lat"):
-                nuits.append({"employe": l["employe"], "employe_nom": l["employe_nom"], "lat": l[k + "_lat"], "lng": l[k + "_lng"], "date": l["date"]})
+                nuits.append({"employe": l["employe"], "employe_nom": l["employe_nom"], "vehicule": l.get("vehicule"),
+                              "lat": l[k + "_lat"], "lng": l[k + "_lng"], "date": l["date"]})
     groupes = equipages()
-    noms = {e.name: e.employee_name for e in frappe.get_all("Employee", fields=["name", "employee_name"], limit_page_length=0)}
     toutes = heriter_pure(suivies, groupes, noms)
     toutes.sort(key=lambda l: (str(l["date"]), l.get("employe_nom") or "", l.get("vehicule") or ""), reverse=True)
     if employe:
         toutes = [l for l in toutes if l.get("employe") == employe]
     employes = sorted({(l["employe"], l["employe_nom"]) for l in toutes if l["employe"]}, key=lambda x: x[1] or "")
+    # Techniciens proposés pour « Définir comme domicile » : conducteurs du réglage, membres d'équipage, employés des journées
+    cfg_g = fg.config()
+    techniciens = {e for e in cfg_g["employe_cbox"]} | {m for g in groupes for m in g} | {e for e, _ in employes} | set(departs)
     return {"du": str(du), "au": str(au), "stats_depuis": str(depuis) if depuis else None, "jours_manquants": len(jours_manquants(du, au)),
             "lignes": toutes, "non_calculees": len(lignes) - len(suivies),
-            "stats": statistiques_pure(toutes), "trajets": trajets_pure(toutes), "domiciles": domiciles_pure(nuits, depot, departs),
+            "stats": statistiques_pure(toutes), "trajets": trajets_pure(toutes),
+            "lieux_nuit": lieux_nuit_pure(nuits, depot, departs, noms),
+            "reglages": [{"employe": e, "employe_nom": noms.get(e, e), "lat": d[0], "lng": d[1]} for e, d in departs.items() if d],
+            "techniciens": sorted(({"employe": e, "nom": noms.get(e, e)} for e in techniciens if e in noms), key=lambda x: x["nom"]),
             "equipages": [[noms.get(m, m) for m in g] for g in groupes],
             "covoiturage": (frappe.db.get_single_value(fg.CONFIG, "covoiturage") or "") if _a_covoiturage() else "",
             "employes": [{"employe": e, "nom": n} for e, n in employes], "depot": list(depot),
             "seuils": {"rayon_m": RAYON_LIEU_M, "lieu_m": LIEU_M, "nuits_min": NUITS_MIN_DOMICILE, "trajet_max_min": TRAJET_MAX_MIN,
-                       "arret_trajet_min": ARRET_TRAJET_MIN}}
+                       "arret_trajet_min": ARRET_TRAJET_MIN, "rayon_nuit_m": fg.RAYON_NUIT_M}}
 
 
 @frappe.whitelist(methods=["POST"])

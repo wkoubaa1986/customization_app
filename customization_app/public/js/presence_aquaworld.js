@@ -4,10 +4,6 @@
 // domiciles détectés d'après les nuits, à régler d'un clic dans le réglage des tournées.
 
 const PA_LIEU = { Domicile: ["dom", "🏠 domicile"], Magasin: ["mag", "🏢 Magasin"], Autre: ["autre", "❓ autre"] };
-const PA_VERDICT = {
-  ok: ["ok", "✅ domicile réglé = lieu de nuit"], a_regler: ["warn", "📍 à régler"], different: ["bad", "⚠️ réglé ailleurs"],
-  magasin: ["mag", "🏢 le véhicule dort au Magasin"], chez_autre: ["mag", "🚗 véhicule rendu chez un collègue"], insuffisant: ["dim", "pas assez de nuits"],
-};
 
 class PresenceAquaworld {
   static html() {
@@ -88,6 +84,13 @@ class PresenceAquaworld {
     $r.find("[data-action='recalculer']").on("click", () => this.recalculer());
     $r.on("click", "[data-action='equipages']", () => this.definir_equipages());
     $r.on("click", "[data-action='rattraper']", () => this.rattraper());
+    $r.on("click", "[data-definir]", (e) => {
+      const [i, lat, lng] = $(e.currentTarget).attr("data-definir").split("|");
+      const emp = $r.find(`[data-qui='${i}']`).val();
+      if (!emp) { frappe.msgprint(__("Choisissez d'abord le technicien qui habite là.")); return; }
+      const nom = (this.data.techniciens.find((t) => t.employe === emp) || {}).nom || emp;
+      this.fixer_domicile(emp, +lat, +lng, nom);
+    });
     $r.on("click", "[data-domicile]", (e) => {
       const [emp, lat, lng, nom] = $(e.currentTarget).attr("data-domicile").split("|");
       this.fixer_domicile(emp, +lat, +lng, nom);
@@ -131,21 +134,20 @@ class PresenceAquaworld {
     this.suivre_rattrapage(false);
 
     this._render_trajets();
-    // Domiciles d'après les nuits
-    let html = `<div class="t">🏠 Où dort le véhicule de chacun <span class="pa-dim">— nuits regroupées à ${d.seuils.lieu_m} m ; « Définir comme domicile » écrit le point de départ de l'employé dans le réglage des tournées (au moins ${d.seuils.nuits_min} nuits)</span></div>`;
-    if (!d.domiciles.length) html += `<div class="pa-vide">Aucune nuit connue sur la période. Cliquez « Recalculer la période » pour lire la plateforme GPS.</div>`;
+    // Où dorment les voitures la nuit — toutes voitures confondues ; c'est l'utilisateur qui dit quel endroit est la maison de qui
+    let html = `<div class="t">🏠 Où dorment les voitures la nuit <span class="pa-dim">— toutes voitures confondues, nuits regroupées à ${d.seuils.lieu_m} m. Choisissez le technicien et « Définir comme domicile » : son point de départ est écrit dans le réglage des tournées, et tout véhicule qui dort à moins de ${Math.round(d.seuils.rayon_nuit_m / 1000)} km de chez lui lui est attribué ce jour-là, même dans l'historique</span></div>`;
+    if (!d.lieux_nuit.length) html += `<div class="pa-vide">Aucune nuit connue sur la période. Cliquez « Recalculer la période » pour lire la plateforme GPS.</div>`;
     else {
-      html += `<table class="pa-t"><thead><tr><th>Technicien</th><th>Verdict</th><th>Lieux de nuit (du plus fréquent au moins)</th><th>Domicile réglé</th></tr></thead><tbody>`;
-      d.domiciles.forEach((e) => {
-        const [vc, vt] = PA_VERDICT[e.verdict] || ["dim", e.verdict];
-        const lieux = e.lieux.slice(0, 4).map((c) => {
-          const quoi = c.magasin ? `🏢 Magasin` : c.regle ? `🏠 domicile réglé` : c.chez ? `🚗 domicile de ${esc(c.chez_nom || c.chez)}` : `❓ ${c.lat.toFixed(4)}, ${c.lng.toFixed(4)}`;
-          const btn = !c.exclu && !c.regle && c.n >= d.seuils.nuits_min
-            ? ` <button class="btn btn-xs btn-default" data-domicile="${esc(e.employe)}|${c.lat}|${c.lng}|${esc(e.employe_nom)}">📍 Définir comme domicile</button>` : "";
-          return `<li><a class="pa-carte" href="https://www.google.com/maps?q=${c.lat},${c.lng}" target="_blank" rel="noopener">🗺</a> ${quoi} <b>×${c.n}</b> <span class="pa-dim">(${c.part} % · dernière ${frappe.datetime.str_to_user(c.derniere)})</span>${btn}</li>`;
-        }).join("");
-        const regle = e.regle ? `<a class="pa-carte" href="https://www.google.com/maps?q=${e.regle[0]},${e.regle[1]}" target="_blank" rel="noopener">🗺 ${e.regle[0].toFixed(4)}, ${e.regle[1].toFixed(4)}</a>${e.ecart_m ? `<div class="pa-dim">à ${e.ecart_m >= 1000 ? (e.ecart_m / 1000).toFixed(1).replace(".", ",") + " km" : e.ecart_m + " m"} du lieu principal</div>` : ""}` : `<span class="pa-dim">aucun (Magasin)</span>`;
-        html += `<tr><td><b>${esc(e.employe_nom)}</b><div class="pa-dim">${e.nuits} nuit${e.nuits > 1 ? "s" : ""}</div></td><td><span class="pa-lieu ${vc}">${vt}</span></td><td><ul class="pa-lieux">${lieux}</ul></td><td>${regle}</td></tr>`;
+      const opts = (sel) => `<option value="">— technicien —</option>` + d.techniciens.map((t) => `<option value="${esc(t.employe)}"${t.nom === sel ? " selected" : ""}>${esc(t.nom)}</option>`).join("");
+      html += `<table class="pa-t"><thead><tr><th>Lieu</th><th class="num">Nuits</th><th>Véhicules</th><th>Attribué ces jours-là (tâches)</th><th>Statut</th><th>Domicile de…</th></tr></thead><tbody>`;
+      d.lieux_nuit.forEach((c, i) => {
+        const veh = Object.entries(c.vehicules).map(([v, n]) => `${esc(v)} ×${n}`).join(", ");
+        const emp = Object.entries(c.employes).map(([e, n]) => `${esc(e)} ×${n}`).join(", ");
+        const statut = c.statut === "magasin" ? `<span class="pa-lieu mag">🏢 Magasin</span>` : c.statut === "domicile" ? `<span class="pa-lieu dom">🏠 domicile de ${esc(c.employe_nom)}</span>` : c.statut === "a_regler" ? `<span class="pa-lieu autre">❓ à régler</span>` : `<span class="pa-dim">rare</span>`;
+        const action = c.statut === "magasin" ? "" : `<select class="form-control input-sm pa-qui" data-qui="${i}" style="width:170px;display:inline-block;height:26px;padding:0 6px">${opts(c.statut === "domicile" ? c.employe_nom : c.suggestion)}</select> <button class="btn btn-xs btn-default" data-definir="${i}|${c.lat}|${c.lng}">📍 Définir</button>`;
+        html += `<tr><td><a class="pa-carte" href="https://www.google.com/maps?q=${c.lat},${c.lng}" target="_blank" rel="noopener">🗺 ${c.lat.toFixed(4)}, ${c.lng.toFixed(4)}</a></td>
+          <td class="num"><b>${c.n}</b>${c.n ? `<div class="pa-dim">${frappe.datetime.str_to_user(c.premiere)} → ${frappe.datetime.str_to_user(c.derniere)}</div>` : `<div class="pa-dim">aucune sur la période</div>`}</td>
+          <td>${veh || "—"}</td><td>${emp || "—"}</td><td>${statut}</td><td>${action}</td></tr>`;
       });
       html += `</tbody></table>`;
     }
@@ -174,7 +176,7 @@ class PresenceAquaworld {
       html += `<table class="pa-t"><thead><tr><th>Technicien</th><th>Nuit d'avant</th><th class="num">Départ matin</th><th class="num">Arrivée Aquaworld</th><th class="num">Départ Aquaworld</th><th class="num">Retour soir</th><th>Nuit d'après</th><th class="num">À Aquaworld</th><th class="num">Km</th></tr></thead><tbody>`;
       lignes.forEach((l) => {
         if (l.date !== jour) { jour = l.date; html += `<tr><td colspan="9" class="pa-jour">${frappe.datetime.str_to_user(l.date)}</td></tr>`; }
-        const note = (l.passager ? `<div class="pa-dim">🚗 avec ${esc(l.avec)}</div>` : "") + (l.immobile ? `<div class="pa-dim">véhicule immobile toute la journée</div>` : l.en_cours ? `<div class="pa-dim">journée en cours</div>` : "");
+        const note = (l.attribue_par_taches ? `<div class="pa-dim" title="Le véhicule a dormi à moins de ${Math.round(d.seuils.rayon_nuit_m / 1000)} km de son domicile : la nuit prime sur les tâches">🌙 par la nuit (tâches : ${esc(l.attribue_par_taches)})</div>` : "") + (l.passager ? `<div class="pa-dim">🚗 avec ${esc(l.avec)}</div>` : "") + (l.immobile ? `<div class="pa-dim">véhicule immobile toute la journée</div>` : l.en_cours ? `<div class="pa-dim">journée en cours</div>` : "");
         const tm = l.duree_matin != null && l.duree_matin <= d.seuils.trajet_max_min ? `<div class="pa-sous">↑ ${this._min(l.duree_matin)}${l.arrets_matin ? ` · ${l.arrets_matin} arrêt${l.arrets_matin > 1 ? "s" : ""}` : " direct"}</div>` : "";
         const ts = l.duree_soir != null && l.duree_soir <= d.seuils.trajet_max_min ? `<div class="pa-sous">↓ ${this._min(l.duree_soir)}${l.arrets_soir ? ` · ${l.arrets_soir} arrêt${l.arrets_soir > 1 ? "s" : ""}` : " direct"}</div>` : "";
         html += `<tr><td>${esc(l.employe_nom || "")}${l.employe_nom ? `<div class="pa-dim">${esc(l.vehicule || "")}</div>` : `<b>${esc(l.vehicule || "")}</b><div class="pa-dim">sans employé reconnu</div>`}${note}</td>
@@ -208,7 +210,7 @@ class PresenceAquaworld {
       // Un endroit déjà connu (Magasin, domicile réglé de n'importe qui — le conducteur passe chez lui avant de repartir) est
       // nommé, jamais proposé comme domicile d'un autre.
       const connu = this._m([c.lat, c.lng], d.depot) <= s.rayon_m ? "🏪 Magasin"
-        : (d.domiciles.filter((dm) => dm.regle && this._m([c.lat, c.lng], dm.regle) <= s.lieu_m).map((dm) => `🏠 domicile de ${esc(dm.employe_nom)}`)[0] || "");
+        : (d.reglages.filter((dm) => this._m([c.lat, c.lng], [dm.lat, dm.lng]) <= s.lieu_m).map((dm) => `🏠 domicile de ${esc(dm.employe_nom)}`)[0] || "");
       const btns = connu ? ` <span class="pa-dim">${connu}</span>` : cible.map((x) =>
         ` <button class="btn btn-xs btn-default" data-domicile="${esc(x.employe)}|${c.lat}|${c.lng}|${esc(x.nom)}" title="Ce point récurrent est probablement le domicile de ${esc(x.nom)}">📍 domicile de ${esc(x.nom)}</button>`).join("");
       const qui = lui_meme ? ` <span class="pa-dim">(en passager)</span>` : "";

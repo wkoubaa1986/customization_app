@@ -147,7 +147,8 @@ def calculer(jour=None, ecrire: bool = True, journaux: dict | None = None) -> di
     if journaux is None:
         journaux = fg.lire_journal(jour, cboxes, cfg=cfg) if cboxes else {}
     lieux = fg._lieux_communs(cfg_t)
-    emp_cbox = fg.vehicules_du_jour(taches, journaux, cfg["employe_cbox"], cfg["rayon"], lieux)
+    emp_cbox = fg.vehicules_du_jour(taches, journaux, cfg["employe_cbox"], cfg["rayon"], lieux,
+                                    nuits={cb: fg.point_de_nuit(jour, j) for cb, j in journaux.items()}, domiciles=cfg_t["departs"])
     # Un véhicule sans employé reconnu ce jour-là : son conducteur habituel (le réglage), pour ne pas le perdre.
     for emp, cb in cfg["employe_cbox"].items():
         if cb not in emp_cbox.values() and emp not in emp_cbox:
