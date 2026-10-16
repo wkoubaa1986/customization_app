@@ -342,6 +342,7 @@ class TestJourneeDeTravail(unittest.TestCase):
             _arret(_h(15.0), _h(15.3), (36.80, 10.10)),          # tâche sans position à 15:10 → probable par l'heure
             _arret(_h(16.0), _h(16.05), (36.81, 10.11)),         # 3 min : ignoré
             _arret(_h(17.0), _h(17.5), (36.82, 10.12)),          # autre
+            _arret(_h(17.75), _h(17.9), (36.84, 10.20)),         # pendant le trajet du soir (17:40 → 18:20) : en chemin, pas « en plus »
             _arret(_h(18.5), _h(19.0), (36.83, 10.13)),          # après 18:00 : hors plage
         ], "trajets": []}
         taches = [
@@ -351,17 +352,24 @@ class TestJourneeDeTravail(unittest.TestCase):
             {"name": "Tache-3", "debut": _h(15.17), "lat": None, "lng": None, "client": "Sana", "type": "Livraison", "statut": "Completed", "gps": {"statut": "Sans position"}},
             {"name": "Tache-4", "debut": _h(12.0), "lat": None, "lng": None, "client": "X", "type": "Entretien", "statut": "Cancelled", "gps": {}},
         ]
-        r = fc.arrets_jour_pure(J.date(), taches, journal, MAGASIN, {"A": dom})
+        r = fc.arrets_jour_pure(J.date(), taches, journal, MAGASIN, {"A": dom}, trajets=[(_h(7.0), _h(8.5)), (_h(17.67), _h(18.33))])
         cats = [(a["arr"].strftime("%H:%M"), a["cat"], a["tache"]) for a in r["arrets"]]
         self.assertEqual(cats, [("09:00", "client", "Tache-1"), ("10:00", "magasin", None), ("11:00", "probable", "Tache-2"),
-                                ("13:00", "domicile", None), ("15:00", "probable", "Tache-3"), ("17:00", "autre", None)])
-        self.assertEqual(r["n"], {"client": 1, "probable": 2, "magasin": 1, "domicile": 1, "autre": 1})
+                                ("13:00", "domicile", None), ("15:00", "probable", "Tache-3"), ("17:00", "autre", None), ("17:45", "trajet", None)])
+        self.assertEqual(r["n"], {"client": 1, "probable": 2, "magasin": 1, "domicile": 1, "trajet": 1, "autre": 1})
         self.assertEqual((r["retours_domicile"], r["minutes_domicile"]), (1, 54))
         self.assertEqual(r["arrets"][3]["qui"], "A")
         self.assertEqual(r["minutes"]["autre"], 30)
         v = fc._journee_valeurs(r)
         self.assertEqual((v["arrets_clients"], v["retours_domicile"], v["arrets_autres"]), (1, 1, 1))
-        self.assertEqual(len(__import__("json").loads(v["arrets_journee"])), 6)
+        self.assertEqual(len(__import__("json").loads(v["arrets_journee"])), 7)
+        self.assertEqual(v["arrets_trajet"], 1)
+
+    def test_fenetres_de_trajet_depuis_la_presence(self):
+        f = fp.fenetres_trajets(J.date(), journee_akram(), MAGASIN)
+        self.assertEqual(len(f), 2)                                         # matin et soir, tous deux ≤ 3 h
+        self.assertTrue(all(d < x for d, x in f))
+        self.assertEqual(fp.fenetres_trajets(J.date(), journee_hedi(), MAGASIN), [])     # dort au Magasin : pas de trajet domicile
 
     def test_sans_journal_ni_arret(self):
         from customization_app import flotte_circuit as fc
@@ -380,3 +388,5 @@ class TestJourneeDeTravail(unittest.TestCase):
         self.assertEqual((a["jours"], a["clients"], a["probables"], a["retours"], a["jours_retour"], a["part_jours_retour"]), (3, 5, 1, 3, 2, 67))
         self.assertEqual(a["minutes_domicile_mediane"], 65)
         self.assertEqual((a["autres"], a["minutes_autres"], a["jours_autres"]), (2, 30, 1))
+        self.assertEqual(a["jours_par_autres"], [2, 0, 1, 0, 0, 0])          # 2 journées sans arrêt en plus, 1 avec 2
+        self.assertEqual(a["jours_par_termines"], [1, 0, 1, 0, 1, 0])        # 4 (3+1), 2, 0

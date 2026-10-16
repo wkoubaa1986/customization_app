@@ -6,7 +6,7 @@
  "engine": "InnoDB",
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-10-16 15:00:00.000000",
+ "modified": "2026-10-16 15:30:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "owner": "Administrator",
@@ -289,6 +289,11 @@
    "fieldtype": "Small Text",
    "label": "Détail des arrêts (JSON)",
    "read_only": 1
+  },
+  {
+   "fieldname": "arrets_trajet",
+   "fieldtype": "Int",
+   "label": "Arrêts en chemin (trajets domicile ↔ Aquaworld)"
   }
  ],
  "field_order": [
@@ -336,6 +341,7 @@
   "col_5",
   "retours_domicile",
   "minutes_domicile",
+  "arrets_trajet",
   "arrets_autres",
   "minutes_autres",
   "arrets_journee"

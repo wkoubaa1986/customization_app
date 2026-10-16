@@ -48,6 +48,8 @@ class PresenceAquaworld {
     .pa-histo .n { text-align: right; color: var(--text-muted); }
     .pa-histo .l { color: var(--text-muted); white-space: nowrap; }
     .pa-histo .l.med { color: var(--text-color); font-weight: 700; }
+    .pa-cumul { margin-top: 4px; }
+    .pa-cumul span { white-space: nowrap; }
     .pa-equip { padding: 10px 12px; display: flex; gap: 10px; align-items: flex-start; flex-wrap: wrap; }
     .pa-equip textarea { width: 320px; min-height: 48px; font-size: 12.5px; border: 1px solid var(--border-color); border-radius: 6px; padding: 4px 8px; background: var(--control-bg); color: var(--text-color); }
   </style>
@@ -196,6 +198,31 @@ class PresenceAquaworld {
     return `<div class="pa-histo ${cls}">${tr.map(([l, n]) => `<span class="l${l === mediane.slice(0, 2) + ":" + (mediane.slice(3) < "30" ? "00" : "30") ? " med" : ""}">${l}</span><span class="b"><i style="width:${Math.round(100 * n / max)}%"></i></span><span class="n">${n || ""}</span>`).join("")}</div>`;
   }
 
+  // Distribution cumulative : « à telle heure, x % sont arrivés / partis » (demande du 16/10). tr = [[libellé, n]] par demi-heure,
+  // première et dernière tranches ouvertes ; la courbe monte à chaque borne, les repères donnent le % atteint.
+  _cumul(tr, cls, quoi) {
+    const total = tr.reduce((a, [, n]) => a + n, 0);
+    if (!total) return "";
+    const bornes = tr.slice(1).map(([l]) => l.replace("≥ ", ""));            // borne de fin de chaque tranche sauf la dernière ouverte
+    let acc = 0;
+    const pts = tr.slice(0, -1).map(([, n], i) => { acc += n; return { h: bornes[i], pct: Math.round(100 * acc / total) }; });
+    const W = 300, H = 70, mx = 24, my = 10, ix = (i) => mx + (i * (W - 2 * mx)) / Math.max(1, pts.length - 1), iy = (pct) => H - my - ((H - 2 * my) * pct) / 100;
+    let path = `M ${ix(0)} ${iy(0)}`;
+    pts.forEach((p, i) => { path += ` L ${ix(i)} ${iy(pts[i - 1] ? pts[i - 1].pct : 0)} L ${ix(i)} ${iy(p.pct)}`; });
+    const q = (pct) => { const i = pts.findIndex((p) => p.pct >= pct); return i >= 0 ? pts[i].h : "—"; };
+    const reperes = [25, 50, 75, 90].map((pct) => `<span><b>${pct} %</b> avant ${q(pct)}</span>`).join(" · ");
+    const ticks = pts.filter((p, i) => i % 2 === 0).map((p, i) => `<text x="${ix(i * 2)}" y="${H - 1}" font-size="8" text-anchor="middle" fill="currentColor" opacity=".6">${p.h}</text>`).join("");
+    const col = cls === "soir" ? "#f59e0b" : "#3b82f6";
+    return `<div class="pa-cumul"><div class="pa-dim" style="margin:6px 0 2px">Cumul ${quoi} : ${reperes}</div>
+      <svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="none" style="display:block;overflow:visible">
+        ${[25, 50, 75].map((pct) => `<line x1="${mx}" x2="${W - mx}" y1="${iy(pct)}" y2="${iy(pct)}" stroke="currentColor" stroke-opacity=".12" stroke-dasharray="2 3"/>`).join("")}
+        <text x="2" y="${iy(50) + 3}" font-size="8" fill="currentColor" opacity=".6">50 %</text><text x="2" y="${iy(100) + 3}" font-size="8" fill="currentColor" opacity=".6">100 %</text>
+        <path d="${path}" fill="none" stroke="${col}" stroke-width="2"/>
+        ${pts.map((p, i) => `<circle cx="${ix(i)}" cy="${iy(p.pct)}" r="2" fill="${col}"><title>${p.h} : ${p.pct} %</title></circle>`).join("")}
+        ${ticks}
+      </svg></div>`;
+  }
+
   _render_trajets() {
     const d = this.data, esc = frappe.utils.escape_html, $r = this.$root, s = d.seuils;
     const equip = d.equipages.length ? d.equipages.map((g) => g.join(" + ")).join(" · ") : "aucun";
@@ -227,10 +254,10 @@ class PresenceAquaworld {
         html += `<div class="pa-emp"><h4>${esc(e.employe_nom)}</h4><div class="pa-deux">
           <div class="pa-sens"><b class="t">🌅 Matin : domicile → Aquaworld</b>
             <div class="pa-kpi">${m.n ? `Arrive à <strong>${m.mediane}</strong> en médiane (de ${m.premiere} à ${m.derniere}) · trajet <strong>${this._min(m.duree_mediane)}</strong> · ${m.n} jour${m.n > 1 ? "s" : ""}, ${pct(m.directs, m.n)} % directs` : `Aucun trajet domicile → Aquaworld mesuré`}${m.sans_passage ? `<br>${m.sans_passage} matin${m.sans_passage > 1 ? "s" : ""} parti${m.sans_passage > 1 ? "s" : ""} de chez soi directement sur le terrain` : ""}${m.par_terrain ? `<br>${m.par_terrain} par le terrain avant Aquaworld` : ""}</div>
-            ${m.n ? this._histo(m.tranches, m.mediane, "matin") : ""}${lieux_html(m, e, "Arrêts en chemin (prise en charge ?)")}</div>
+            ${m.n ? this._histo(m.tranches, m.mediane, "matin") + this._cumul(m.tranches, "matin", "des arrivées") : ""}${lieux_html(m, e, "Arrêts en chemin (prise en charge ?)")}</div>
           <div class="pa-sens"><b class="t">🌇 Soir : Aquaworld → domicile</b>
             <div class="pa-kpi">${so.n ? `Part à <strong>${so.mediane}</strong> en médiane (de ${so.premiere} à ${so.derniere}) · trajet <strong>${this._min(so.duree_mediane)}</strong> · ${so.n} soir${so.n > 1 ? "s" : ""}, ${pct(so.directs, so.n)} % directs` : `Aucun trajet Aquaworld → domicile mesuré`}${so.sans_passage ? `<br>${so.sans_passage} soir${so.sans_passage > 1 ? "s" : ""} rentré${so.sans_passage > 1 ? "s" : ""} du terrain sans repasser par Aquaworld` : ""}${so.par_terrain ? `<br>${so.par_terrain} par le terrain après Aquaworld` : ""}</div>
-            ${so.n ? this._histo(so.tranches, so.mediane, "soir") : ""}${lieux_html(so, e, "Arrêts en chemin (dépose ?)")}</div>
+            ${so.n ? this._histo(so.tranches, so.mediane, "soir") + this._cumul(so.tranches, "soir", "des départs") : ""}${lieux_html(so, e, "Arrêts en chemin (dépose ?)")}</div>
         </div></div>`;
       });
       html += `</div>`;

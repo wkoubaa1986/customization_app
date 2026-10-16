@@ -34,6 +34,8 @@ class SortieCircuit {
     .sc-vide { padding: 14px 12px; color: var(--text-muted); }
     .sc-jour { font-weight: 700; padding: 7px 12px; background: var(--subtle-fg, var(--bg-color)); border-top: 1px solid var(--border-color); }
     .sc-page a.sc-carte { white-space: nowrap; }
+    .sc-graphs { display: grid; grid-template-columns: repeat(auto-fill, minmax(480px, 1fr)); gap: 10px; margin: 10px 0; }
+    .sc-graph { border: 1px solid var(--border-color); border-radius: 8px; padding: 8px 10px; }
     .sc-chip { display: inline-block; border: 1px solid var(--border-color); border-radius: 10px; padding: 1px 7px; margin: 1px 0; font-size: 11.5px; white-space: nowrap; }
   </style>
   <div class="sc-bar">
@@ -184,20 +186,45 @@ class SortieCircuit {
   // Journée de travail 08:00–18:00 : chaque arrêt classé (client apparié, tâche non appariée probable, Magasin, domicile, autre)
   _render_journee() {
     const d = this.data, esc = frappe.utils.escape_html, $r = this.$root;
-    const CAT = { client: ["🧑", "client"], probable: ["❓", "tâche non appariée (probable)"], magasin: ["🏢", "Magasin"], domicile: ["🏠", "domicile"], autre: ["⚠️", "autre arrêt"] };
+    const CAT = { client: ["🧑", "client"], probable: ["❓", "tâche non appariée (probable)"], magasin: ["🏢", "Magasin"], domicile: ["🏠", "domicile"], trajet: ["🚗", "en chemin (trajet domicile ↔ Aquaworld)"], autre: ["⚠️", "autre arrêt"] };
     const [p0, p1] = d.plage_jour || [480, 1080];
     const hm = (m) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
-    let html = `<div class="t">🕗 Journée de travail ${hm(p0)}–${hm(p1)} : où s'arrêtent-ils ? <span class="sc-dim">— chaque arrêt ≥ 5 min commencé dans la plage est classé : passage confirmé d'une tâche, tâche non appariée à qui on l'affecte (≤ 1 km, sinon la plus proche en heure à ± 3 h), Magasin, retour au domicile, autre. Calculé avec les sorties de circuit.</span></div>`;
+    let html = `<div class="t">🕗 Journée de travail ${hm(p0)}–${hm(p1)} : où s'arrêtent-ils ? <span class="sc-dim">— chaque arrêt ≥ 5 min commencé dans la plage est classé : passage confirmé d'une tâche, tâche non appariée à qui on l'affecte (≤ 1 km, sinon la plus proche en heure à ± 3 h), Magasin, retour au domicile, en chemin (les arrêts des trajets domicile ↔ Aquaworld de l'onglet Présence : exclus des « autres »), autre = en plus. Calculé avec les sorties de circuit.</span></div>`;
     const t = d.travail || [];
     if (!t.length) html += `<div class="sc-vide">Pas encore de journée classée sur la période : « Tout recalculer » (onglet Présence Aquaworld) ou « Recalculer la période ».</div>`;
     else {
-      html += `<table class="sc-t"><thead><tr><th>Technicien</th><th class="num">Jours</th><th class="num">🧑 Clients appariés</th><th class="num">❓ Probables</th><th class="num">🏢 Magasin</th><th class="num">🏠 Retours au domicile</th><th class="num">Jours avec retour</th><th class="num">Temps chez soi (médiane / jour)</th><th class="num">⚠️ Autres arrêts</th><th class="num">Temps</th><th class="num">Jours avec autres</th></tr></thead><tbody>`;
+      html += `<table class="sc-t"><thead><tr><th>Technicien</th><th class="num">Jours</th><th class="num">🧑 Clients appariés</th><th class="num">❓ Probables</th><th class="num">🏢 Magasin</th><th class="num">🏠 Retours au domicile</th><th class="num">Jours avec retour</th><th class="num">Temps chez soi (médiane / jour)</th><th class="num">🚗 En chemin</th><th class="num">⚠️ Autres arrêts</th><th class="num">Temps</th><th class="num">Jours avec autres</th></tr></thead><tbody>`;
       t.forEach((e) => {
         html += `<tr><td><b>${esc(e.employe_nom)}</b></td><td class="num">${e.jours}</td><td class="num">${e.clients}</td><td class="num">${e.probables}</td><td class="num">${e.magasin}</td>
-          <td class="num">${e.retours ? `<b style="color:#b45309">${e.retours}</b>` : "0"}</td><td class="num">${e.jours_retour} <span class="sc-dim">(${e.part_jours_retour} %)</span></td><td class="num">${e.minutes_domicile_mediane ? this._min(e.minutes_domicile_mediane) : "—"}</td>
+          <td class="num">${e.retours ? `<b style="color:#b45309">${e.retours}</b>` : "0"}</td><td class="num">${e.jours_retour} <span class="sc-dim">(${e.part_jours_retour} %)</span></td><td class="num">${e.minutes_domicile_mediane ? this._min(e.minutes_domicile_mediane) : "—"}</td><td class="num">${e.trajets || 0}</td>
           <td class="num">${e.autres}</td><td class="num">${e.minutes_autres ? this._min(e.minutes_autres) : ""}</td><td class="num">${e.jours_autres}</td></tr>`;
       });
       html += `</tbody></table>`;
+      // Graphiques : composition des arrêts de la journée, et répartition des journées selon le nombre d'arrêts « en plus »
+      // (autres) et de clients (appariés + probables) — demande du 16/10 : « un graph qui facilite la lecture ».
+      const COL = { client: "#3b82f6", probable: "#818cf8", magasin: "#9ca3af", domicile: "#f59e0b", trajet: "#67e8f9", autre: "#ef4444" };
+      const LIB = { client: "clients appariés", probable: "probables", magasin: "Magasin", domicile: "domicile", trajet: "en chemin", autre: "autres (en plus)" };
+      const barres = (vals, col, titre, lib) => {
+        const max = Math.max(1, ...vals), W = 220, H = 84, haut = 14, bas = 14, bw = W / vals.length;
+        return `<div style="flex:1 1 220px"><div class="sc-dim" style="margin-top:6px">${titre}</div><svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" style="display:block">
+          ${vals.map((v, i) => { const h = (H - haut - bas) * v / max; return `<rect x="${i * bw + 4}" y="${H - bas - h}" width="${bw - 8}" height="${h}" rx="2" fill="${col}"><title>${lib(i)} : ${v} journée(s)</title></rect>
+            <text x="${i * bw + bw / 2}" y="${H - bas - h - 3}" font-size="9" text-anchor="middle" fill="currentColor" opacity=".8">${v || ""}</text>
+            <text x="${i * bw + bw / 2}" y="${H - 3}" font-size="9" text-anchor="middle" fill="currentColor" opacity=".6">${i === 5 ? "5+" : i}</text>`; }).join("")}</svg></div>`;
+      };
+      html += `<div class="sc-graphs">`;
+      t.forEach((e) => {
+        const comp = { client: e.clients, probable: e.probables, magasin: e.magasin, domicile: e.retours, trajet: e.trajets || 0, autre: e.autres };
+        const tot = Object.values(comp).reduce((a, b) => a + b, 0) || 1;
+        let x = 0;
+        const stack = Object.entries(comp).map(([k, v]) => { const w = 100 * v / tot; const r = `<rect x="${x}" y="0" width="${w}" height="14" fill="${COL[k]}"><title>${LIB[k]} : ${v} (${Math.round(w)} %)</title></rect>`; x += w; return r; }).join("");
+        const legende = Object.entries(comp).map(([k, v]) => `<span><i style="display:inline-block;width:9px;height:9px;border-radius:2px;background:${COL[k]};vertical-align:middle"></i> ${LIB[k]} ${Math.round(100 * v / tot)} %</span>`).join(" · ");
+        html += `<div class="sc-graph"><b>${esc(e.employe_nom)}</b> <span class="sc-dim">· ${e.jours} journées · ${(tot / e.jours).toFixed(1).replace(".", ",")} arrêts / jour</span>
+          <svg viewBox="0 0 100 14" width="100%" height="14" preserveAspectRatio="none" style="display:block;margin:4px 0 2px;border-radius:3px;overflow:hidden">${stack}</svg>
+          <div class="sc-dim" style="font-size:11px">${legende}</div>
+          <div style="display:flex;gap:14px;flex-wrap:wrap">${barres(e.jours_par_autres || [], COL.autre, "Journées selon le nombre d'arrêts en plus (autres)", (i) => (i === 5 ? "5 arrêts ou plus" : i + " arrêt(s) en plus"))}
+          ${barres(e.jours_par_termines || [], COL.client, "Journées selon le nombre d'arrêts clients (appariés + probables)", (i) => (i === 5 ? "5 clients ou plus" : i + " client(s)"))}</div></div>`;
+      });
+      html += `</div>`;
       const jours = d.jours_travail || [];
       if (jours.length) {
         html += `<div class="sc-dim" style="margin:8px 0 4px">Jour par jour (${jours.length} journée${jours.length > 1 ? "s" : ""}${jours.length >= 120 ? ", les 120 plus récentes" : ""}) — passez la souris sur un arrêt pour la tâche :</div>`;
@@ -206,7 +233,7 @@ class SortieCircuit {
           const chips = j.arrets.map((a) => {
             const [ic, lib] = CAT[a.c] || ["•", a.c];
             const titre = `${lib}${a.cl ? " — " + a.cl : ""}${a.t ? " (" + a.t + ")" : ""}${a.q ? " — " + a.q : ""}`;
-            const style = a.c === "domicile" ? "background:#fef3c7" : a.c === "autre" ? "background:#fee2e2" : a.c === "probable" ? "background:#e0e7ff" : "";
+            const style = a.c === "domicile" ? "background:#fef3c7" : a.c === "autre" ? "background:#fee2e2" : a.c === "probable" ? "background:#e0e7ff" : a.c === "trajet" ? "background:#cffafe" : "";
             return `<span class="sc-chip" style="${style}" title="${esc(titre)}">${a.h} ${ic} ${a.c === "client" || a.c === "probable" ? esc((a.cl || lib).slice(0, 18)) : lib} ${this._min(a.m)} <a class="sc-carte" href="https://www.google.com/maps?q=${a.la},${a.lo}" target="_blank" rel="noopener">🗺</a></span>`;
           }).join(" ");
           html += `<tr><td>${frappe.datetime.str_to_user(j.date)}</td><td>${esc(j.employe_nom || "")}<div class="sc-dim">${esc(j.vehicule || "")}</div></td><td>${chips || "<span class='sc-dim'>aucun arrêt dans la plage</span>"}</td></tr>`;

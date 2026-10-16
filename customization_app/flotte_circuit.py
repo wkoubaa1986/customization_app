@@ -49,9 +49,9 @@ PLAGE_JOUR = (8 * 60, 18 * 60)          # arrêts COMMENCÉS entre 08:00 et 18:0
 ARRET_JOUR_MIN = 5                      # un arrêt de la journée compte dès 5 min
 PROBABLE_KM = 1.0                       # tâche non appariée à position connue : un arrêt libre à ≤ 1 km lui est affecté
 PROBABLE_H = 3                          # tâche non appariée sans position : l'arrêt libre le plus proche de l'heure annoncée, à ± 3 h
-CATEGORIES = ("client", "probable", "magasin", "domicile", "autre")
-CHAMPS_JOURNEE = ("arrets_clients", "arrets_probables", "arrets_magasin", "retours_domicile", "minutes_domicile", "arrets_autres",
-                  "minutes_autres", "arrets_journee")
+CATEGORIES = ("client", "probable", "magasin", "domicile", "trajet", "autre")
+CHAMPS_JOURNEE = ("arrets_clients", "arrets_probables", "arrets_magasin", "retours_domicile", "minutes_domicile", "arrets_trajet",
+                  "arrets_autres", "minutes_autres", "arrets_journee")
 JUSTIFICATIONS = ("", "Fournisseur", "Client non planifié", "Aramex / courses", "Pause", "Autre", "Anomalie confirmée")
 
 
@@ -148,13 +148,17 @@ def ecarts_pure(jour, taches: list, journal: dict, lieux: list, horaires: tuple,
 
 # ── Calcul écrit (cron / lot) ────────────────────────────────────────────────
 
-def arrets_jour_pure(jour, taches: list, journal: dict, depot, domiciles: dict, plage: tuple = PLAGE_JOUR) -> dict:
+def arrets_jour_pure(jour, taches: list, journal: dict, depot, domiciles: dict, plage: tuple = PLAGE_JOUR, trajets: list = ()) -> dict:
     """Tous les arrêts (≥ ARRET_JOUR_MIN) commencés dans la journée de travail, classés, pour UN véhicule et les tâches de
     l'équipage qui roule dedans. PURE.
     - `client` : l'arrêt chevauche le passage confirmé d'une tâche (custom_gps_arrivee / depart) ;
+    - `magasin` (≤ 200 m du dépôt) ; `domicile` (≤ 200 m du domicile réglé d'un membre de l'équipage, `qui`) ;
     - `probable` : tâche NON appariée — à position connue, un arrêt libre à ≤ PROBABLE_KM ; sans position, l'arrêt libre le
-      plus proche de l'heure annoncée à ± PROBABLE_H ; un arrêt par tâche, une tâche par arrêt ;
-    - `magasin` (≤ 200 m du dépôt) ; `domicile` (≤ 200 m du domicile réglé d'un membre de l'équipage, `qui`) ; `autre`.
+      plus proche de l'heure annoncée à ± PROBABLE_H (hors trajet) ; un arrêt par tâche, une tâche par arrêt ;
+    - `trajet` : arrêt pendant le trajet domicile → Aquaworld du matin ou Aquaworld → domicile du soir (`trajets` =
+      [(début, fin)] venant de la présence) — ce sont les « arrêts en chemin » de l'onglet Présence Aquaworld : ils ne sont
+      PAS des arrêts « en plus » de la journée (demande du 16/10 : les deux lectures doivent être exclusives) ;
+    - `autre` : le reste, les arrêts en plus.
     Rend {arrets: [...], n: {cat: n}, minutes: {cat: min}, retours_domicile, minutes_domicile}."""
     vide = {"arrets": [], "n": {c: 0 for c in CATEGORIES}, "minutes": {c: 0 for c in CATEGORIES}, "retours_domicile": 0, "minutes_domicile": 0}
     if not journal or journal.get("erreur"):
@@ -195,7 +199,7 @@ def arrets_jour_pure(jour, taches: list, journal: dict, depot, domiciles: dict, 
         chez = sorted((fg._m(pa, dom), e) for e, dom in (domiciles or {}).items() if dom and fg._m(pa, dom) <= fg.RAYON_LIEU_M)
         if chez:
             a.update(cat="domicile", qui=chez[0][1])
-    # 3. Tâches non appariées : d'abord par la distance (position connue), puis par l'heure (sans position)
+    # 3. Tâches non appariées à position connue : l'arrêt libre à ≤ 1 km (un client sur le chemin du retour compte aussi)
     non_appariees = [t for t in tt if (t.get("gps") or {}).get("statut") != fg.CONFIRME]
     prises = set()
     for t in sorted(non_appariees, key=lambda t: t["debut"]):
@@ -208,6 +212,11 @@ def arrets_jour_pure(jour, taches: list, journal: dict, depot, domiciles: dict, 
             i = min(cand)[2]
             arrets[i].update(cat="probable", tache=t["name"], client=t.get("client") or "")
             prises.add(t["name"])
+    # 4. Trajets domicile ↔ Aquaworld (présence) : un arrêt en chemin n'est pas un arrêt « en plus »
+    for a in arrets:
+        if a["cat"] is None and any(d and f and d <= a["arr"] <= f for d, f in (trajets or ())):
+            a["cat"] = "trajet"
+    # 5. Tâches non appariées sans position : l'arrêt libre le plus proche de l'heure annoncée
     for t in sorted(non_appariees, key=lambda t: t["debut"]):
         if t["name"] in prises or (t.get("lat") and t.get("lng")):
             continue
@@ -233,7 +242,8 @@ def _journee_valeurs(r: dict) -> dict:
     detail = [{"h": a["arr"].strftime("%H:%M"), "f": a["dep"].strftime("%H:%M"), "m": a["minutes"], "c": a["cat"], "t": a["tache"],
                "cl": (a["client"] or "")[:40], "q": a["qui"], "la": round(a["lat"], 5), "lo": round(a["lng"], 5)} for a in r["arrets"]]
     return {"arrets_clients": r["n"]["client"], "arrets_probables": r["n"]["probable"], "arrets_magasin": r["n"]["magasin"],
-            "retours_domicile": r["n"]["domicile"], "minutes_domicile": r["minutes"]["domicile"], "arrets_autres": r["n"]["autre"],
+            "retours_domicile": r["n"]["domicile"], "minutes_domicile": r["minutes"]["domicile"], "arrets_trajet": r["n"]["trajet"],
+            "arrets_autres": r["n"]["autre"],
             "minutes_autres": r["minutes"]["autre"], "arrets_journee": json.dumps(detail, ensure_ascii=False)}
 
 
@@ -270,8 +280,11 @@ def calculer(jour=None, ecrire: bool = True, journaux: dict | None = None) -> di
         tt = [t for t in taches if t["employe"] in emps and t.get("type") not in fg.TYPES_HORS]
         horaires = cfg_t["horaires"].get(emp) or (cfg_t["debut"], cfg_t["fin"])
         depart = cfg_t["departs"].get(emp) or cfg_t["depot"]
-        # Journée de travail : chaque arrêt de 08:00 à 18:00 classé (client, tâche non appariée probable, Magasin, domicile, autre)
-        journees[cbox] = arrets_jour_pure(jour, tt, j, cfg_t["depot"], {e: cfg_t["departs"].get(e) for e in emps if cfg_t["departs"].get(e)})
+        # Journée de travail : chaque arrêt de 08:00 à 18:00 classé (client, tâche non appariée probable, Magasin, domicile,
+        # trajet, autre). Les trajets domicile ↔ Aquaworld viennent de la présence (même journal, pas de 2e lecture).
+        from customization_app import flotte_presence as fp
+        journees[cbox] = arrets_jour_pure(jour, tt, j, cfg_t["depot"], {e: cfg_t["departs"].get(e) for e in emps if cfg_t["departs"].get(e)},
+                                          trajets=fp.fenetres_trajets(jour, j, cfg_t["depot"]))
         for e in ecarts_pure(jour, tt, j, lieux, horaires, depart, cfg_t["depot"], cfg_t.get("coef") or 1.3):
             if emp not in noms:
                 noms[emp] = frappe.db.get_value("Employee", emp, "employee_name") or emp
@@ -417,12 +430,17 @@ def journee_travail_pure(journees: list) -> list:
             continue
         e = par.setdefault(j["employe"], {"employe": j["employe"], "employe_nom": j.get("employe_nom") or j["employe"], "jours": 0,
                                            "clients": 0, "probables": 0, "magasin": 0, "retours": 0, "jours_retour": 0, "minutes_domicile": [],
-                                           "autres": 0, "minutes_autres": 0, "jours_autres": 0})
+                                           "autres": 0, "minutes_autres": 0, "jours_autres": 0, "trajets": 0,
+                                           "jours_par_autres": [0, 0, 0, 0, 0, 0],      # journées avec 0, 1, 2, 3, 4, 5 arrêts en plus ou davantage
+                                           "jours_par_termines": [0, 0, 0, 0, 0, 0]})   # journées avec 0…5+ arrêts clients (appariés + probables)
         e["jours"] += 1
+        e["jours_par_autres"][min(cint(j.get("arrets_autres")), 5)] += 1
+        e["jours_par_termines"][min(cint(j.get("arrets_clients")) + cint(j.get("arrets_probables")), 5)] += 1
         e["clients"] += cint(j.get("arrets_clients"))
         e["probables"] += cint(j.get("arrets_probables"))
         e["magasin"] += cint(j.get("arrets_magasin"))
         e["autres"] += cint(j.get("arrets_autres"))
+        e["trajets"] += cint(j.get("arrets_trajet"))
         e["minutes_autres"] += cint(j.get("minutes_autres"))
         if cint(j.get("arrets_autres")):
             e["jours_autres"] += 1

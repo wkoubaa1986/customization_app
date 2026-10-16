@@ -137,6 +137,19 @@ def presence_pure(jour, journal: dict, depot: tuple, rayon_m: float = RAYON_LIEU
     return out
 
 
+def fenetres_trajets(jour, journal: dict, depot: tuple, max_min: int = TRAJET_MAX_MIN) -> list:
+    """[(début, fin)] des trajets domicile ↔ Aquaworld d'un véhicule ce jour-là : le matin (départ de chez soi → 1er
+    Magasin) et le soir (dernier Magasin → retour chez soi), seulement s'ils durent ≤ max_min (sinon le terrain s'y est
+    glissé : ce ne sont pas des trajets). Sert aux sorties de circuit pour ne pas compter un arrêt en chemin comme un
+    arrêt « en plus » de la journée. PURE."""
+    p = presence_pure(jour, journal, depot)
+    out = []
+    for d, f in ((p.get("depart_matin"), p.get("arrivee_aquaworld")), (p.get("depart_aquaworld"), p.get("retour_soir"))):
+        if d and f and f >= d and (f - d).total_seconds() / 60 <= max_min:
+            out.append((d, f))
+    return out
+
+
 def lieu(point: tuple | None, depot: tuple | None, domicile: tuple | None, rayon_m: float = RAYON_LIEU_M) -> str:
     """« Magasin » / « Domicile » (réglé, ≤ 200 m) / « Autre » / « » sans point. PURE."""
     if not point or not point[0]:

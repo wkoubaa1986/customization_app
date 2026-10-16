@@ -94,3 +94,4 @@ customization_app.patches.positions_grossieres_oubliees
 customization_app.patches.attribuer_role_sortie_circuit
 customization_app.patches.seed_covoiturage_flotte_gps
 customization_app.patches.ensure_domicile_employe_fields
+customization_app.patches.seed_domiciles_flotte_gps
