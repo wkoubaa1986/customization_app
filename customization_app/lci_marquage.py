@@ -3,7 +3,9 @@
 « En plus, regarde le cas de ma commande : est-ce que je peux le faire par IA, par exemple brand Modèle A and so on ? »
 Le fournisseur marque les cartons ; plutôt que nos codes (AP-C+-EP-7-MA-SM), une marque courte et lisible par unité et par
 accessoire : « ECOPURIUM · MODEL A », « AQUAJAD · MODEL B », « FAUCET DELUXE CHROME »… proposée par l'IA (AI Settings :
-clé et modèle OpenAI), relue et corrigée dans la fenêtre du PDF, mémorisée sur la commande (`marques_articles`, JSON
+clé et modèle OpenAI) — PUIS, décision du 16/10 au soir : la marque reste ABSTRAITE (douane, transporteur) = NOTRE CODE ARTICLE
+(`proposition_codes`, par défaut et sans clic) ; l'IA n'est plus proposée dans l'interface (code gardé, `ia=1`) ; relue et
+corrigée dans la fenêtre, mémorisée sur la commande (`marques_articles`, JSON
 {clé: marque} — clé = nom de la ligne pour une unité, « acc:<code> » pour un accessoire). Sans clé OpenAI : une proposition
 déterministe (marque commerciale + lettre par modèle dans l'ordre de la liste). Le PDF du plan de chargement imprime la
 marque sous chaque article et dans le bloc « Shipping marks » (accessoires « for ECOPURIUM · MODEL A »).
@@ -61,6 +63,13 @@ def proposition_deterministe(lignes: list) -> dict:
     return out
 
 
+def proposition_codes(lignes: list) -> dict:
+    """Par défaut (choix du 16/10/2026 : « AQUAWORLD · REF code, c'est mieux pour mes employés ») : la marque = NOTRE code article,
+    celui qu'on retrouve à la réception, sur le bon et dans le stock ; une ligne libre sans code garde le nom déterministe. PURE."""
+    deter = proposition_deterministe(lignes)
+    return {l["cle"]: (_nettoyer(l["code"]) if l.get("code") else deter[l["cle"]]) for l in lignes}
+
+
 def _prompt(lignes: list) -> str:
     desc = "\n".join("- key=%s | kind=%s | code=%s | name=%s | english=%s | brand=%s | group=%s" % (
         l["cle"], l["genre"], l["code"], l["nom"], l.get("nom_traduit") or "", l.get("marque_commerciale") or "", l.get("groupe") or "") for l in lignes)
@@ -106,16 +115,17 @@ def marques_enregistrees(doc) -> dict:
 
 
 @frappe.whitelist()
-def proposer(docname, ia=1):
-    """La liste à marquer, avec la proposition (IA si possible, sinon déterministe) et ce qui est déjà mémorisé."""
+def proposer(docname, ia=0):
+    """La liste à marquer, avec la proposition — par défaut nos codes article (`ia=0`), sinon des noms lisibles par l'IA
+    (`ia=1`, repli déterministe) — et ce qui est déjà mémorisé."""
     from customization_app.liste_commande_import import _guard
 
     _guard()
     doc = frappe.get_doc("Liste Commande Import", docname)
     lignes = _lignes_a_marquer(doc)
-    deter = proposition_deterministe(lignes)
+    deter = proposition_codes(lignes)
     prop = (proposition_ia(lignes) if int(ia or 0) else None) or {}
-    source = "ia" if prop else "deterministe"
+    source = "ia" if prop else "codes"
     deja = marques_enregistrees(doc)
     for l in lignes:
         l["proposee"] = prop.get(l["cle"]) or deter.get(l["cle"]) or ""

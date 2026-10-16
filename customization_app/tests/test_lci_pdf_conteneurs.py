@@ -112,6 +112,13 @@ class TestMarquesArticles(unittest.TestCase):
         self.assertEqual(p, {"r1": "ECOPURIUM · MODEL A", "r2": "ECOPURIUM · MODEL B", "r3": "AQUAJAD · MODEL A", "r4": "AQUAWORLD · MODEL A", "acc:Rob-LC": "FAUCET DELUXE CHROME"})
         self.assertEqual(_nettoyer("  faucet,   deluxe  chrome extra long name that goes on  "), "FAUCET,   DELUXE  CHROME EXTRA".replace("   ", " ").replace("  ", " ")[:28].rstrip())
 
+    def test_proposition_par_defaut_nos_codes(self):
+        from customization_app.lci_marquage import proposition_codes
+        lignes = [{"cle": "r1", "genre": "unite", "code": "AP-C+-EP-7-MA-SM", "nom": "x", "marque_commerciale": "ecoPurium"},
+                  {"cle": "r2", "genre": "unite", "code": "", "nom": "Réservoir acier 2,8 G", "marque_commerciale": ""},
+                  {"cle": "acc:Rob-LC", "genre": "accessoire", "code": "Rob-LC", "nom": "Robinet, Luxe Chromé", "nom_traduit": "Faucet, Deluxe Chrome"}]
+        self.assertEqual(proposition_codes(lignes), {"r1": "AP-C+-EP-7-MA-SM", "r2": "AQUAWORLD · MODEL A", "acc:Rob-LC": "ROB-LC"})
+
     def test_accessoires_portent_les_marques(self):
         from customization_app.lci_pdf_conteneurs import accessoires_conteneur
         class R:

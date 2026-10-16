@@ -133,7 +133,7 @@ frappe.ui.form.on("Liste Commande Import", {
       () => lci_volumes_dialog(frm), __("IA"));
     // Marques d'expédition par article (16/10/2026) : aussi dans le menu IA — l'utilisateur les cherchait là, pas dans la
     // fenêtre du PDF conteneurs (où le bouton reste).
-    frm.add_custom_button(__("🏷️ Marques d'expédition par article (shipping marks)"), () => lci_marques_articles(frm), __("IA"));
+    frm.add_custom_button(__("🏷️ Marques d'expédition par article (shipping marks)"), () => lci_marques_articles(frm, false), __("IA"));
     frm.add_custom_button(__("🏭 Description fournisseur : puces + comparaison"),
       () => lci_comparaison_tout(frm), __("IA"));
 
@@ -1048,7 +1048,7 @@ function lci_render_table(frm) {
       ${lci_cmp_pastille(r)}
       ${r.controle_description ? `<div title="${esc(__("Contrôle de la description (IA), à l'import de la réponse du fournisseur") + " : " + r.controle_description)}"
           style="font-size:10.5px;margin-top:2px;color:${r.controle_description.startsWith("✓") ? "#237804" : r.controle_description.startsWith("⚠") ? "#a8071a" : "#ad4e00"};${r.controle_description.startsWith("✓") ? "" : "font-weight:700;"}">${esc(r.controle_description.slice(0, 110))}</div>` : ""}
-      ${lci_marque_de(frm, r.name) ? `<div class="lci-mark" data-act="marques" title="${__("Shipping mark de cet article (imprimée sur les cartons et dans le PDF du plan de chargement) — cliquer pour modifier")}">🏷️ ${esc(lci_marque_de(frm, r.name))}</div>` : ""}
+      ${(lci_marque_de(frm, r.name) || r.item_code) ? `<div class="lci-mark" data-act="marques" title="${__("Shipping mark de cet article (imprimée sur les cartons et dans le PDF du plan de chargement) — cliquer pour modifier")}">🏷️ ${esc(lci_marque_de(frm, r.name) || r.item_code)}</div>` : ""}
       ${lci_adds(r).map((a, ai) => `
         <div class="lci-add">➕ <b>ADDITIONNEL</b> : ${esc(lci_add_label(a))}
           — ${format_number(flt(a.qty_par_pack), null, 0)}/pack × ${format_number(lci_qty_ret(r), null, 0)}
@@ -4172,8 +4172,8 @@ function lci_pdf_conteneurs(frm) {
       description: __("Balises : {ref} = n° de commande, {conteneur} = C1, {total} = nombre de conteneurs. Mémorisée sur la commande.") },
     { fieldtype: "Small Text", fieldname: "note_marquage", label: __("Remarque pour le fournisseur (imprimée sous les marques)"),
       description: __("Ex. : accessories in separate cartons, one carton per model — labels in English and Arabic") },
-    { fieldtype: "Button", fieldname: "btn_marques", label: __("✨ Marques par article (IA) : BRAND · MODEL A…"),
-      click: () => lci_marques_articles(frm) },
+    { fieldtype: "Button", fieldname: "btn_marques", label: __("🏷️ Marques par article (nos codes)"),
+      click: () => lci_marques_articles(frm, false) },
     { fieldtype: "HTML", fieldname: "marques_etat", options: `<div class="text-muted small">${frm.doc.marques_articles ? __("Marques par article mémorisées : imprimées sous chaque article et dans le bloc accessoires.") : __("Sans marques par article, le PDF n'imprime que la marque principale et les codes.")}</div>` },
   ].forEach((df) => d.fields.push(df));
   d.refresh();
@@ -4182,17 +4182,18 @@ function lci_pdf_conteneurs(frm) {
 
 // Marques lisibles par article (16/10/2026) : « ECOPURIUM · MODEL A », « FAUCET DELUXE CHROME »… proposées par l'IA
 // (lci_marquage.py), relues ici, mémorisées sur la commande ; le PDF les imprime.
-async function lci_marques_articles(frm) {
+async function lci_marques_articles(frm, ia) {
   const esc = frappe.utils.escape_html;
   let r;
   try {
-    r = (await frappe.call({ method: "customization_app.lci_marquage.proposer", args: { docname: frm.doc.name, ia: 1 }, freeze: true,
-      freeze_message: __("L'IA propose une marque par article…") })).message;
+    r = (await frappe.call({ method: "customization_app.lci_marquage.proposer", args: { docname: frm.doc.name, ia: ia ? 1 : 0 }, freeze: true,
+      freeze_message: ia ? __("L'IA propose un nom par article…") : __("Marques = nos codes article…") })).message;
   } catch (e) { frappe.msgprint(String(e.message || e)); return; }
   const lignes = r.lignes || [];
   const d = new frappe.ui.Dialog({
-    title: __("✨ Marques par article") + (r.source === "ia" ? "" : " — " + __("proposition sans IA (clé OpenAI absente ou appel échoué)")),
+    title: __("🏷️ Marques par article") + (r.source === "ia" ? " — " + __("noms IA") : r.source === "codes" ? " — " + __("nos codes article") : " — " + __("proposition sans IA (clé OpenAI absente ou appel échoué)")),
     size: "large",
+    // Pas de noms descriptifs (IA) : les marques restent ABSTRAITES, pour le transporteur comme pour la douane (16/10/2026).
     fields: [{ fieldtype: "HTML", fieldname: "corps" }],
     primary_action_label: __("Enregistrer les marques"),
     primary_action: async () => {
@@ -4207,7 +4208,7 @@ async function lci_marques_articles(frm) {
       } catch (e) { frappe.msgprint(String(e.message || e)); }
     },
   });
-  let html = `<div class="text-muted small" style="margin-bottom:6px">${__("Relisez, corrigez, puis enregistrez. Même produit = même marque. Les accessoires sont marqués par leur nature.")}</div>
+  let html = `<div class="text-muted small" style="margin-bottom:6px">${__("La marque = notre code article (AQUAWORLD · code) : abstraite pour le transporteur et la douane, parlante pour vos employés à la réception. Corrigez si besoin, puis enregistrez. Même produit = même marque.")}</div>
     <table class="table table-bordered table-sm"><thead><tr><th>${__("Article")}</th><th>${__("Marque commerciale")}</th><th style="width:34%">${__("Shipping mark")}</th></tr></thead><tbody>`;
   lignes.forEach((l) => {
     html += `<tr><td>${l.genre === "accessoire" ? "🔩 " : ""}<b>${esc(l.code)}</b><div class="text-muted small">${esc(l.nom_traduit || l.nom)}${l.qty ? " · " + l.qty : ""}</div></td>
