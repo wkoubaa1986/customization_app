@@ -92,3 +92,4 @@ customization_app.patches.ensure_qualification_appels
 customization_app.patches.ensure_liste_hors_secteur
 customization_app.patches.positions_grossieres_oubliees
 customization_app.patches.attribuer_role_sortie_circuit
+customization_app.patches.seed_covoiturage_flotte_gps

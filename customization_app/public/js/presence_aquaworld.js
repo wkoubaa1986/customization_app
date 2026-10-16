@@ -37,6 +37,23 @@ class PresenceAquaworld {
     .pa-lieux li { padding: 2px 0; }
     .pa-h { font-variant-numeric: tabular-nums; }
     .pa-h.vide { color: var(--text-muted); }
+    .pa-sous { color: var(--text-muted); font-size: 11px; white-space: nowrap; }
+    .pa-trajets { display: grid; grid-template-columns: repeat(auto-fill, minmax(460px, 1fr)); gap: 12px; padding: 12px; }
+    .pa-emp { border: 1px solid var(--border-color); border-radius: 10px; padding: 10px 12px; }
+    .pa-emp h4 { margin: 0 0 8px; font-size: 14px; }
+    .pa-deux { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .pa-sens b.t { display: block; margin-bottom: 4px; }
+    .pa-kpi { font-size: 12px; color: var(--text-muted); margin-bottom: 6px; line-height: 1.5; }
+    .pa-kpi strong { color: var(--text-color); font-size: 15px; }
+    .pa-histo { display: grid; grid-template-columns: 52px 1fr 28px; gap: 2px 6px; font-size: 11.5px; align-items: center; }
+    .pa-histo .b { height: 12px; background: var(--border-color); border-radius: 3px; overflow: hidden; }
+    .pa-histo .b i { display: block; height: 100%; background: #3b82f6; }
+    .pa-histo.soir .b i { background: #f59e0b; }
+    .pa-histo .n { text-align: right; color: var(--text-muted); }
+    .pa-histo .l { color: var(--text-muted); white-space: nowrap; }
+    .pa-histo .l.med { color: var(--text-color); font-weight: 700; }
+    .pa-equip { padding: 10px 12px; display: flex; gap: 10px; align-items: flex-start; flex-wrap: wrap; }
+    .pa-equip textarea { width: 320px; min-height: 48px; font-size: 12.5px; border: 1px solid var(--border-color); border-radius: 6px; padding: 4px 8px; background: var(--control-bg); color: var(--text-color); }
   </style>
   <div class="pa-bar">
     <label class="pa-dim">Du</label> <input type="date" id="pa-du">
@@ -45,8 +62,10 @@ class PresenceAquaworld {
     <button class="btn btn-default btn-sm" data-action="refresh">🔄 Actualiser</button>
     <button class="btn btn-default btn-sm" data-action="recalculer" title="Relit la plateforme GPS jour par jour (au plus deux mois)">🧮 Recalculer la période</button>
     <span class="pa-info" id="pa-info"></span>
+    <span class="pa-info" id="pa-rattrapage"></span>
   </div>
   <div class="pa-intro" id="pa-intro"></div>
+  <div class="pa-bloc" id="pa-trajets"></div>
   <div class="pa-bloc" id="pa-domiciles"></div>
   <div class="pa-bloc" id="pa-stats"></div>
   <div class="pa-bloc" id="pa-liste"></div>
@@ -57,7 +76,7 @@ class PresenceAquaworld {
   constructor(racine) {
     this.$root = $(racine).find(".pa-page");
     this.data = null;
-    this.$root.find("#pa-du").val(frappe.datetime.add_days(frappe.datetime.get_today(), -29));
+    // Période par défaut : le réglage « Statistiques depuis le » (Config Flotte GPS), sinon 30 jours — décidé côté serveur.
     this.$root.find("#pa-au").val(frappe.datetime.get_today());
     this._bind();
     this.charger();
@@ -67,6 +86,8 @@ class PresenceAquaworld {
     const $r = this.$root;
     $r.find("[data-action='refresh'], #pa-du, #pa-au, #pa-employe").on("change click", (e) => { if (e.type === "click" && e.currentTarget.tagName !== "BUTTON") return; this.charger(); });
     $r.find("[data-action='recalculer']").on("click", () => this.recalculer());
+    $r.on("click", "[data-action='equipages']", () => this.definir_equipages());
+    $r.on("click", "[data-action='rattraper']", () => this.rattraper());
     $r.on("click", "[data-domicile]", (e) => {
       const [emp, lat, lng, nom] = $(e.currentTarget).attr("data-domicile").split("|");
       this.fixer_domicile(emp, +lat, +lng, nom);
@@ -79,6 +100,8 @@ class PresenceAquaworld {
       const r = await frappe.call({ method: "customization_app.flotte_presence.presence",
         args: { du: $r.find("#pa-du").val(), au: $r.find("#pa-au").val(), employe: $r.find("#pa-employe").val() || null }, freeze: true });
       this.data = r.message;
+      $r.find("#pa-du").val(this.data.du);
+      $r.find("#pa-au").val(this.data.au);
       const $e = $r.find("#pa-employe"), cur = $e.val();
       $e.find("option:not(:first)").remove();
       this.data.employes.forEach((x) => $e.append(`<option value="${frappe.utils.escape_html(x.employe)}">${frappe.utils.escape_html(x.nom || x.employe)}</option>`));
@@ -90,6 +113,7 @@ class PresenceAquaworld {
   }
 
   _h(dt) { return dt ? `<span class="pa-h">${String(dt).slice(11, 16)}</span>` : `<span class="pa-h vide">—</span>`; }
+  _m(a, b) { const r = Math.PI / 180, dl = (b[1] - a[1]) * r, dp = (b[0] - a[0]) * r, h = Math.sin(dp / 2) ** 2 + Math.cos(a[0] * r) * Math.cos(b[0] * r) * Math.sin(dl / 2) ** 2; return 12742000 * Math.asin(Math.sqrt(h)); }
   _min(m) { m = Math.round(m || 0); return m >= 60 ? `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, "0")}` : `${m} min`; }
   _lieu(l, lat, lng) {
     if (!l) return `<span class="pa-dim">—</span>`;
@@ -103,8 +127,10 @@ class PresenceAquaworld {
     if (!d) return;
     $r.find("#pa-intro").html(`Tout vient du <b>véhicule</b> : la nuit d'avant (l'arrêt qui chevauche minuit) donne le <b>départ du matin</b> et où il a dormi ; le premier arrêt à moins de ${d.seuils.rayon_m} m du Magasin donne l'<b>arrivée à Aquaworld</b>, le dernier le <b>départ d'Aquaworld</b> ; la nuit d'après donne le <b>retour du soir</b>. Un véhicule qui dort au Magasin ne dit pas quand son technicien arrive. Le lieu d'une nuit se lit contre les domiciles du réglage des tournées : régler un domicile requalifie tout l'historique. Calculé chaque soir à 21 h avec l'appariement.`);
     const n = d.lignes.length - d.non_calculees;
-    $r.find("#pa-info").text(`${n} journée${n > 1 ? "s" : ""} du ${frappe.datetime.str_to_user(d.du)} au ${frappe.datetime.str_to_user(d.au)}${d.non_calculees ? ` · ${d.non_calculees} sans présence calculée (Recalculer)` : ""}`);
+    $r.find("#pa-info").html(`${n} journée${n > 1 ? "s" : ""} du ${frappe.datetime.str_to_user(d.du)} au ${frappe.datetime.str_to_user(d.au)}${d.stats_depuis && d.stats_depuis === d.du ? ` <span class="pa-dim">(réglage)</span>` : ""}${d.non_calculees ? ` · ${d.non_calculees} sans présence calculée` : ""}${d.jours_manquants ? ` · <b>${d.jours_manquants} jour${d.jours_manquants > 1 ? "s" : ""} sans calcul</b> <button class="btn btn-xs btn-default" data-action="rattraper">⏳ Rattraper les jours manquants</button>` : ""}`);
+    this.suivre_rattrapage(false);
 
+    this._render_trajets();
     // Domiciles d'après les nuits
     let html = `<div class="t">🏠 Où dort le véhicule de chacun <span class="pa-dim">— nuits regroupées à ${d.seuils.lieu_m} m ; « Définir comme domicile » écrit le point de départ de l'employé dans le réglage des tournées (au moins ${d.seuils.nuits_min} nuits)</span></div>`;
     if (!d.domiciles.length) html += `<div class="pa-vide">Aucune nuit connue sur la période. Cliquez « Recalculer la période » pour lire la plateforme GPS.</div>`;
@@ -132,7 +158,7 @@ class PresenceAquaworld {
       html += `<table class="pa-t"><thead><tr><th>Technicien</th><th class="num">Jours</th><th class="num">Passés à Aquaworld</th><th class="num">Départ matin</th><th class="num">Arrivée Aquaworld</th><th class="num">Départ Aquaworld</th><th class="num">Retour soir</th><th class="num">Temps à Aquaworld</th><th>Nuits</th></tr></thead><tbody>`;
       d.stats.forEach((e) => {
         const nuits = Object.entries(e.nuits).filter(([, v]) => v).map(([k, v]) => `${PA_LIEU[k][1]} ×${v}`).join(", ");
-        html += `<tr><td><b>${esc(e.employe_nom || e.employe || "?")}</b>${e.immobiles ? `<div class="pa-dim">${e.immobiles} jour(s) sans bouger</div>` : ""}</td><td class="num">${e.jours}</td><td class="num">${e.jours_magasin} <span class="pa-dim">(${e.jours ? Math.round(100 * e.jours_magasin / e.jours) : 0} %)</span></td>
+        html += `<tr><td><b>${esc(e.employe_nom || e.employe || "?")}</b>${e.passager ? `<div class="pa-dim">${e.passager} jour(s) comme passager</div>` : ""}${e.immobiles ? `<div class="pa-dim">${e.immobiles} jour(s) sans bouger</div>` : ""}</td><td class="num">${e.jours}</td><td class="num">${e.jours_magasin} <span class="pa-dim">(${e.jours ? Math.round(100 * e.jours_magasin / e.jours) : 0} %)</span></td>
           <td class="num">${e.depart_matin || "—"}</td><td class="num">${e.arrivee || "—"}</td><td class="num">${e.depart || "—"}</td><td class="num">${e.retour || "—"}</td><td class="num">${e.minutes_aquaworld ? this._min(e.minutes_aquaworld) : "—"}</td><td>${nuits}</td></tr>`;
       });
       html += `</tbody></table>`;
@@ -148,15 +174,107 @@ class PresenceAquaworld {
       html += `<table class="pa-t"><thead><tr><th>Technicien</th><th>Nuit d'avant</th><th class="num">Départ matin</th><th class="num">Arrivée Aquaworld</th><th class="num">Départ Aquaworld</th><th class="num">Retour soir</th><th>Nuit d'après</th><th class="num">À Aquaworld</th><th class="num">Km</th></tr></thead><tbody>`;
       lignes.forEach((l) => {
         if (l.date !== jour) { jour = l.date; html += `<tr><td colspan="9" class="pa-jour">${frappe.datetime.str_to_user(l.date)}</td></tr>`; }
-        const note = l.immobile ? `<div class="pa-dim">véhicule immobile toute la journée</div>` : l.en_cours ? `<div class="pa-dim">journée en cours</div>` : "";
+        const note = (l.passager ? `<div class="pa-dim">🚗 avec ${esc(l.avec)}</div>` : "") + (l.immobile ? `<div class="pa-dim">véhicule immobile toute la journée</div>` : l.en_cours ? `<div class="pa-dim">journée en cours</div>` : "");
+        const tm = l.duree_matin != null && l.duree_matin <= d.seuils.trajet_max_min ? `<div class="pa-sous">↑ ${this._min(l.duree_matin)}${l.arrets_matin ? ` · ${l.arrets_matin} arrêt${l.arrets_matin > 1 ? "s" : ""}` : " direct"}</div>` : "";
+        const ts = l.duree_soir != null && l.duree_soir <= d.seuils.trajet_max_min ? `<div class="pa-sous">↓ ${this._min(l.duree_soir)}${l.arrets_soir ? ` · ${l.arrets_soir} arrêt${l.arrets_soir > 1 ? "s" : ""}` : " direct"}</div>` : "";
         html += `<tr><td>${esc(l.employe_nom || "")}${l.employe_nom ? `<div class="pa-dim">${esc(l.vehicule || "")}</div>` : `<b>${esc(l.vehicule || "")}</b><div class="pa-dim">sans employé reconnu</div>`}${note}</td>
-          <td>${this._lieu(l.nuit_avant_lieu, l.nuit_avant_lat, l.nuit_avant_lng)}</td><td class="num">${this._h(l.depart_matin)}</td><td class="num">${this._h(l.arrivee_aquaworld)}</td>
-          <td class="num">${this._h(l.depart_aquaworld)}</td><td class="num">${this._h(l.retour_soir)}</td><td>${this._lieu(l.nuit_lieu, l.nuit_lat, l.nuit_lng)}</td>
+          <td>${this._lieu(l.nuit_avant_lieu, l.nuit_avant_lat, l.nuit_avant_lng)}</td><td class="num">${this._h(l.depart_matin)}</td><td class="num">${this._h(l.arrivee_aquaworld)}${tm}</td>
+          <td class="num">${this._h(l.depart_aquaworld)}</td><td class="num">${this._h(l.retour_soir)}${ts}</td><td>${this._lieu(l.nuit_lieu, l.nuit_lat, l.nuit_lng)}</td>
           <td class="num">${l.minutes_aquaworld ? this._min(l.minutes_aquaworld) : "—"}</td><td class="num">${l.km ? String(Math.round(l.km)).replace(".", ",") : ""}</td></tr>`;
       });
       html += `</tbody></table>`;
     }
     $r.find("#pa-liste").html(html);
+  }
+
+  _histo(tr, mediane, cls) {
+    const max = Math.max(1, ...tr.map(([, n]) => n));
+    return `<div class="pa-histo ${cls}">${tr.map(([l, n]) => `<span class="l${l === mediane.slice(0, 2) + ":" + (mediane.slice(3) < "30" ? "00" : "30") ? " med" : ""}">${l}</span><span class="b"><i style="width:${Math.round(100 * n / max)}%"></i></span><span class="n">${n || ""}</span>`).join("")}</div>`;
+  }
+
+  _render_trajets() {
+    const d = this.data, esc = frappe.utils.escape_html, $r = this.$root, s = d.seuils;
+    const equip = d.equipages.length ? d.equipages.map((g) => g.join(" + ")).join(" · ") : "aucun";
+    let html = `<div class="t">🚗 Trajets domicile ↔ Aquaworld <span class="pa-dim">— le matin : du départ de chez soi au premier arrêt au Magasin ; le soir : du dernier départ du Magasin au retour chez soi. Un trajet de plus de ${Math.round(s.trajet_max_min / 60)} h est « par le terrain » (hors distribution) ; un arrêt en chemin ≥ ${s.arret_trajet_min} min est compté (dépose ou prise en charge d'un collègue)</span></div>`;
+    html += `<div class="pa-equip"><div><div class="pa-dim">Qui rentre avec qui <span title="Un coéquipier sans véhicule à lui ce jour-là hérite des heures du véhicule de son équipage (marqué « avec X »). Une ligne par équipage, noms séparés par +.">ⓘ</span></div><textarea id="pa-covoiturage" placeholder="Sadok Bouziri + Jamel Aloui">${esc(d.covoiturage || "")}</textarea></div>
+      <div><div class="pa-dim">Statistiques depuis le <span title="Période par défaut des onglets Sorties de circuit et Présence Aquaworld. Les jours sans calcul depuis cette date se rattrapent en arrière-plan (bouton en haut).">ⓘ</span></div><input type="date" id="pa-depuis" value="${esc(d.stats_depuis || "")}"></div>
+      <div><button class="btn btn-default btn-sm" data-action="equipages">💾 Enregistrer les réglages</button><div class="pa-dim" style="margin-top:6px">Équipages lus : ${esc(equip)}</div></div></div>`;
+    // Qui habite là ? Si la majorité des arrêts viennent de journées héritées (l'employé était passager), c'est sa propre
+    // dépose → son domicile. Sinon il conduisait : c'est là qu'il dépose (ou prend) un coéquipier → le domicile du coéquipier.
+    const lieux_html = (b, emp, quoi) => b.lieux.length ? `<div class="pa-kpi">${quoi} : ${b.lieux.map((c) => {
+      const partenaires = d.equipages.filter((g) => g.includes(emp.employe_nom)).flat().filter((n) => n !== emp.employe_nom);
+      const lui_meme = c.passagers * 2 > c.n;
+      const cible = lui_meme ? d.employes.filter((x) => x.employe === emp.employe) : d.employes.filter((x) => partenaires.includes(x.nom));
+      // Un endroit déjà connu (Magasin, domicile réglé de n'importe qui — le conducteur passe chez lui avant de repartir) est
+      // nommé, jamais proposé comme domicile d'un autre.
+      const connu = this._m([c.lat, c.lng], d.depot) <= s.rayon_m ? "🏪 Magasin"
+        : (d.domiciles.filter((dm) => dm.regle && this._m([c.lat, c.lng], dm.regle) <= s.lieu_m).map((dm) => `🏠 domicile de ${esc(dm.employe_nom)}`)[0] || "");
+      const btns = connu ? ` <span class="pa-dim">${connu}</span>` : cible.map((x) =>
+        ` <button class="btn btn-xs btn-default" data-domicile="${esc(x.employe)}|${c.lat}|${c.lng}|${esc(x.nom)}" title="Ce point récurrent est probablement le domicile de ${esc(x.nom)}">📍 domicile de ${esc(x.nom)}</button>`).join("");
+      const qui = lui_meme ? ` <span class="pa-dim">(en passager)</span>` : "";
+      return `<span><a class="pa-carte" href="https://www.google.com/maps?q=${c.lat},${c.lng}" target="_blank" rel="noopener">🗺 ${c.lat.toFixed(4)}, ${c.lng.toFixed(4)}</a> ×${c.n} (${this._min(Math.round(c.minutes / c.n))} en moyenne)${qui}${connu || c.n >= s.nuits_min ? btns : ""}</span>`;
+    }).join(" · ")}</div>` : "";
+    if (!d.trajets.length) html += `<div class="pa-vide">Aucune journée calculée sur la période.</div>`;
+    else {
+      html += `<div class="pa-trajets">`;
+      d.trajets.forEach((e) => {
+        const m = e.matin, so = e.soir;
+        const pct = (a, b) => (b ? Math.round(100 * a / b) : 0);
+        html += `<div class="pa-emp"><h4>${esc(e.employe_nom)}</h4><div class="pa-deux">
+          <div class="pa-sens"><b class="t">🌅 Matin : domicile → Aquaworld</b>
+            <div class="pa-kpi">${m.n ? `Arrive à <strong>${m.mediane}</strong> en médiane (de ${m.premiere} à ${m.derniere}) · trajet <strong>${this._min(m.duree_mediane)}</strong> · ${m.n} jour${m.n > 1 ? "s" : ""}, ${pct(m.directs, m.n)} % directs` : `Aucun trajet domicile → Aquaworld mesuré`}${m.sans_passage ? `<br>${m.sans_passage} matin${m.sans_passage > 1 ? "s" : ""} parti${m.sans_passage > 1 ? "s" : ""} de chez soi directement sur le terrain` : ""}${m.par_terrain ? `<br>${m.par_terrain} par le terrain avant Aquaworld` : ""}</div>
+            ${m.n ? this._histo(m.tranches, m.mediane, "matin") : ""}${lieux_html(m, e, "Arrêts en chemin (prise en charge ?)")}</div>
+          <div class="pa-sens"><b class="t">🌇 Soir : Aquaworld → domicile</b>
+            <div class="pa-kpi">${so.n ? `Part à <strong>${so.mediane}</strong> en médiane (de ${so.premiere} à ${so.derniere}) · trajet <strong>${this._min(so.duree_mediane)}</strong> · ${so.n} soir${so.n > 1 ? "s" : ""}, ${pct(so.directs, so.n)} % directs` : `Aucun trajet Aquaworld → domicile mesuré`}${so.sans_passage ? `<br>${so.sans_passage} soir${so.sans_passage > 1 ? "s" : ""} rentré${so.sans_passage > 1 ? "s" : ""} du terrain sans repasser par Aquaworld` : ""}${so.par_terrain ? `<br>${so.par_terrain} par le terrain après Aquaworld` : ""}</div>
+            ${so.n ? this._histo(so.tranches, so.mediane, "soir") : ""}${lieux_html(so, e, "Arrêts en chemin (dépose ?)")}</div>
+        </div></div>`;
+      });
+      html += `</div>`;
+    }
+    $r.find("#pa-trajets").html(html);
+  }
+
+  async definir_equipages() {
+    try {
+      await frappe.call({ method: "customization_app.flotte_presence.definir_equipages",
+        args: { texte: this.$root.find("#pa-covoiturage").val(), stats_depuis: this.$root.find("#pa-depuis").val() || "" }, freeze: true });
+      frappe.show_alert({ message: __("Réglages enregistrés"), indicator: "green" });
+      this.$root.find("#pa-du").val("");                           // la période par défaut repart du réglage
+      this.charger();
+    } catch (e) { frappe.msgprint(String(e.message || e)); }
+  }
+
+  async rattraper() {
+    try {
+      const r = await frappe.call({ method: "customization_app.flotte_presence.rattraper", args: { au: this.$root.find("#pa-au").val() }, freeze: true });
+      const b = r.message || {};
+      if (b.deja) frappe.show_alert({ message: __("Un rattrapage tourne déjà"), indicator: "orange" });
+      else if (!b.jours) frappe.show_alert({ message: __("Rien à rattraper"), indicator: "green" });
+      else frappe.show_alert({ message: __("{0} jour(s) en cours de calcul en arrière-plan (présence + sorties de circuit)", [b.jours]), indicator: "blue" });
+      this.suivre_rattrapage(true);
+    } catch (e) { frappe.msgprint(String(e.message || e)); }
+  }
+
+  // Avancement du rattrapage (tâche de fond) : lu toutes les 8 s tant qu'il tourne, puis la période est rechargée.
+  async suivre_rattrapage(force) {
+    if (this._suivi) { clearTimeout(this._suivi); this._suivi = null; }
+    if (!force && !this._suivi_en_cours) return;
+    try {
+      const r = await frappe.call({ method: "customization_app.flotte_presence.etat_rattrapage" });
+      const e = r.message || {};
+      const $i = this.$root.find("#pa-rattrapage");
+      if (e.actif || e.statut === "en attente" || e.statut === "en cours") {
+        this._suivi_en_cours = true;
+        $i.html(`⏳ Rattrapage ${e.faits || 0} / ${e.total || "?"} jour(s)${e.jour ? ` · ${frappe.datetime.str_to_user(e.jour)}` : ""}${e.erreurs && e.erreurs.length ? ` · ${e.erreurs.length} erreur(s)` : ""}`);
+        this._suivi = setTimeout(() => this.suivre_rattrapage(true), 8000);
+      } else {
+        const fini = this._suivi_en_cours;
+        this._suivi_en_cours = false;
+        $i.html(e.statut === "terminé" && e.fin ? `<span class="pa-dim">Dernier rattrapage : ${e.faits || 0} jour(s), terminé le ${frappe.datetime.str_to_user(e.fin.slice(0, 10))} à ${e.fin.slice(11, 16)}${e.erreurs && e.erreurs.length ? ` · ${e.erreurs.length} erreur(s)` : ""}</span>` : "");
+        if (e.erreurs && e.erreurs.length && fini) frappe.msgprint(e.erreurs.join("<br>"));
+        if (fini) this.charger();
+      }
+    } catch (err) { /* état indisponible : on n'insiste pas */ }
   }
 
   fixer_domicile(employe, lat, lng, nom) {

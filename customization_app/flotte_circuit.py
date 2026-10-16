@@ -136,14 +136,16 @@ def ecarts_pure(jour, taches: list, journal: dict, lieux: list, horaires: tuple,
 
 # ── Calcul écrit (cron / lot) ────────────────────────────────────────────────
 
-def calculer(jour=None, ecrire: bool = True) -> dict:
-    """Les écarts de tous les techniciens d'un jour, écrits dans Ecart Circuit GPS (les justifications sont gardées)."""
+def calculer(jour=None, ecrire: bool = True, journaux: dict | None = None) -> dict:
+    """Les écarts de tous les techniciens d'un jour, écrits dans Ecart Circuit GPS (les justifications sont gardées).
+    `journaux` : le journal déjà lu (lire_journal) pour ne pas solliciter la plateforme deux fois (rattrapage)."""
     jour = getdate(jour or nowdate())
     cfg = fg.config()
     cfg_t = to.config()
     taches = fg._taches(jour)
     cboxes = cfg["cboxes"]
-    journaux = fg.lire_journal(jour, cboxes, cfg=cfg) if cboxes else {}
+    if journaux is None:
+        journaux = fg.lire_journal(jour, cboxes, cfg=cfg) if cboxes else {}
     lieux = fg._lieux_communs(cfg_t)
     emp_cbox = fg.vehicules_du_jour(taches, journaux, cfg["employe_cbox"], cfg["rayon"], lieux)
     # Un véhicule sans employé reconnu ce jour-là : son conducteur habituel (le réglage), pour ne pas le perdre.
@@ -289,10 +291,12 @@ def justifier_lot(names, justification="", note=""):
 
 @frappe.whitelist()
 def sorties(du=None, au=None, employe=None):
-    """Les écarts d'une période + statistiques par employé + journées suivies."""
+    """Les écarts d'une période + statistiques par employé + journées suivies. Sans `du`, la période part du réglage
+    « Statistiques depuis le » (Config Flotte GPS), sinon des 30 derniers jours."""
     _garde()
     au = getdate(au or nowdate())
-    du = getdate(du or add_days(au, -29))
+    depuis = fg.stats_depuis()
+    du = getdate(du) if du else (depuis if depuis and depuis <= au else add_days(au, -29))
     filtres = {"date": ["between", [du, au]]}
     if employe:
         filtres["employe"] = employe
@@ -306,7 +310,8 @@ def sorties(du=None, au=None, employe=None):
     journees = frappe.get_all(fg.JOURNEE, filters=fj, fields=["date", "employe", "employe_nom", "km", "vehicule"], limit_page_length=0)
     employes = sorted({(l["employe"], l["employe_nom"]) for l in lignes} | {(j["employe"], j["employe_nom"]) for j in journees},
                       key=lambda x: x[1] or "")
-    return {"du": str(du), "au": str(au), "lignes": lignes, "stats": statistiques_pure(lignes, journees), "lieux": lieux_recurrents(lignes),
+    return {"du": str(du), "au": str(au), "stats_depuis": str(depuis) if depuis else None, "lignes": lignes,
+            "stats": statistiques_pure(lignes, journees), "lieux": lieux_recurrents(lignes),
             "employes": [{"employe": e, "nom": n} for e, n in employes if e], "justifications": list(JUSTIFICATIONS),
             "types": list(TYPES), "seuils": {"arret_min": ARRET_MIN, "distance_km": DISTANCE_KM, "distance_approx_km": DISTANCE_APPROX_KM,
                                               "ratio_detour": RATIO_DETOUR, "km_detour_min": KM_DETOUR_MIN}}

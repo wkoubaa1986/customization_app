@@ -82,6 +82,18 @@ def config() -> dict:
             "cbox_employe": {r.cbox: (r.employe, r.employe_nom) for r in vehicules}}
 
 
+def stats_depuis():
+    """Réglage « Statistiques depuis le » (Config Flotte GPS) : le « Du » par défaut des onglets Sorties de circuit et
+    Présence Aquaworld. None si vide (les onglets prennent alors les 30 derniers jours)."""
+    try:
+        v = frappe.db.get_single_value(CONFIG, "stats_date_debut")
+    except Exception:                                   # champ pas encore migré
+        return None
+    # Un Single à NULL ressort comme date « 0001-01-01 » (cast du champ Date) : ce n'est pas un réglage.
+    d = getdate(v) if v else None
+    return d if d and d.year >= 2020 else None
+
+
 def _node() -> str:
     n = shutil.which("node")
     if not n:

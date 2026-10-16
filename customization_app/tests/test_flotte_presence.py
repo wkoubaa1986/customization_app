@@ -100,6 +100,109 @@ class TestPresence(unittest.TestCase):
         self.assertEqual(fp.lieu((0, 0), MAGASIN, None), "")
 
 
+class TestTrajets(unittest.TestCase):
+    def test_arrets_intermediaires_du_matin_et_du_soir(self):
+        j = journee_akram()
+        # Le soir, Akram dépose Hedi 12 min à mi-chemin ; le matin, un arrêt de 2 min (feu) ne compte pas.
+        j["arrets"].insert(4, _arret(_h(18.0), _h(18.2), (36.85, 10.22)))
+        j["arrets"].insert(1, _arret(_h(8.45), _h(8.48), (36.84, 10.20)))
+        p = fp.presence_pure(J.date(), j, MAGASIN)
+        self.assertEqual(p["arrets_matin"], 0)
+        self.assertEqual(p["arrets_soir"], 1)
+        self.assertEqual((p["soir_arret_lat"], p["soir_arret_lng"], p["soir_arret_minutes"]), (36.85, 10.22, 12))
+
+    def _ligne(self, jour, **kw):
+        base = {"employe": "A", "employe_nom": "Akram", "date": jour, "nuit_avant_lieu": "Domicile", "nuit_lieu": "Domicile",
+                "depart_matin": "%s 08:20:00" % jour, "arrivee_aquaworld": "%s 08:45:00" % jour,
+                "depart_aquaworld": "%s 17:40:00" % jour, "retour_soir": "%s 18:30:00" % jour, "arrets_matin": 0, "arrets_soir": 0}
+        base.update(kw)
+        return base
+
+    def test_distributions_et_medianes(self):
+        lignes = [self._ligne("2026-10-13"),
+                  self._ligne("2026-10-14", arrivee_aquaworld="2026-10-14 09:10:00", depart_aquaworld="2026-10-14 18:05:00",
+                              arrets_soir=1, soir_arret_lat=36.85, soir_arret_lng=10.22, soir_arret_minutes=10),
+                  # Dernier passage au Magasin à 11 h, retour 18 h 30 : par le terrain, hors distribution du soir
+                  self._ligne("2026-10-15", depart_aquaworld="2026-10-15 11:00:00"),
+                  # Rentré sans passer par Aquaworld
+                  self._ligne("2026-10-16", arrivee_aquaworld=None, depart_aquaworld=None),
+                  # Le véhicule dort au Magasin : aucun trajet domicile
+                  self._ligne("2026-10-17", nuit_avant_lieu="Magasin", nuit_lieu="Magasin")]
+        t = fp.trajets_pure(lignes)
+        self.assertEqual(len(t), 1)
+        m, s = t[0]["matin"], t[0]["soir"]
+        self.assertEqual((m["n"], m["directs"], m["sans_passage"], m["par_terrain"]), (3, 3, 1, 0))
+        self.assertEqual(m["mediane"], "08:45")
+        self.assertEqual(m["duree_mediane"], 25)
+        self.assertEqual(dict((k, v) for k, v in m["tranches"] if v), {"08:30": 2, "09:00": 1})
+        self.assertEqual((s["n"], s["directs"], s["sans_passage"], s["par_terrain"]), (2, 1, 1, 1))
+        self.assertEqual(s["mediane"], "17:52")
+        self.assertEqual(dict((k, v) for k, v in s["tranches"] if v), {"17:30": 1, "18:00": 1})
+        self.assertEqual(s["lieux"][0]["n"], 1)
+        self.assertEqual(s["lieux"][0]["minutes"], 10)
+        self.assertEqual(s["lieux"][0]["passagers"], 0)
+        t2 = fp.trajets_pure([self._ligne("2026-10-14", passager=True, depart_aquaworld="2026-10-14 18:05:00",
+                                          arrets_soir=1, soir_arret_lat=36.85, soir_arret_lng=10.22, soir_arret_minutes=10)])
+        self.assertEqual(t2[0]["soir"]["lieux"][0]["passagers"], 1)
+
+    def test_tranches_bornes_ouvertes(self):
+        t = fp.tranches([6 * 60, 7 * 60, 7 * 60 + 29, 7 * 60 + 30, 11 * 60, 12 * 60, None], (7 * 60, 11 * 60))
+        self.assertEqual(t[0], ["< 07:00", 1])
+        self.assertEqual(t[1], ["07:00", 2])
+        self.assertEqual(t[2], ["07:30", 1])
+        self.assertEqual(t[-1], ["≥ 11:00", 2])
+        self.assertEqual(len(t), 10)
+
+
+class TestRattrapage(unittest.TestCase):
+    def test_jours_manquants_jusqu_a_hier(self):
+        calcules = {"2026-10-10", "2026-10-12"}
+        self.assertEqual(fp.jours_manquants_pure("2026-10-09", "2026-10-16", calcules, "2026-10-16"),
+                         ["2026-10-09", "2026-10-11", "2026-10-13", "2026-10-14", "2026-10-15"])
+        self.assertEqual(fp.jours_manquants_pure("2026-10-16", "2026-10-20", set(), "2026-10-16"), [])   # aujourd'hui pas fini
+
+    def test_le_lieu_de_depose_dit_qui_etait_passager(self):
+        pts = [{"lat": 36.95, "lng": 10.23, "minutes": 10, "passager": True, "date": "2026-10-13"},
+               {"lat": 36.9501, "lng": 10.2301, "minutes": 20, "passager": True, "date": "2026-10-14"},
+               {"lat": 36.9502, "lng": 10.2302, "minutes": 6, "passager": False, "date": "2026-10-15"},
+               {"lat": 36.80, "lng": 10.10, "minutes": 5, "date": "2026-10-15"}]
+        g = fp._grouper(pts)
+        self.assertEqual([(c["n"], c["passagers"]) for c in g], [(3, 2), (1, 0)])
+        self.assertEqual(g[0]["minutes"], 36)
+        self.assertEqual(g[0]["derniere"], "2026-10-15")
+
+
+class TestEquipages(unittest.TestCase):
+    EMP = [("HR-EMP-00001", "Sadok Bouziri"), ("HR-EMP-00002", "Jamel Aloui"), ("HR-EMP-00006", "Mohamed Hedi Chouchane"),
+           ("HR-EMP-00010", "Akram"), ("HR-EMP-00012", "Hedi ibidhii")]
+
+    def test_lecture_du_reglage(self):
+        g = fp.equipages_pure("Sadok Bouziri + Jamel Aloui\nakram + MOHAMED HEDI CHOUCHANE\nInconnu + Akram\nSadok Bouziri", self.EMP)
+        self.assertEqual(g, [["HR-EMP-00001", "HR-EMP-00002"], ["HR-EMP-00010", "HR-EMP-00006"]])
+        self.assertEqual(fp.equipages_pure("HR-EMP-00001, HR-EMP-00002", self.EMP), [["HR-EMP-00001", "HR-EMP-00002"]])
+        self.assertEqual(fp.equipages_pure("", self.EMP), [])
+
+    def test_le_coequipier_herite_de_la_journee(self):
+        noms = dict(self.EMP)
+        lignes = [{"name": "GPS-1", "date": "2026-10-14", "employe": "HR-EMP-00001", "employe_nom": "Sadok Bouziri", "depart_aquaworld": "x"},
+                  {"name": "GPS-2", "date": "2026-10-15", "employe": "HR-EMP-00001", "employe_nom": "Sadok Bouziri"},
+                  {"name": "GPS-3", "date": "2026-10-15", "employe": "HR-EMP-00002", "employe_nom": "Jamel Aloui"}]
+        out = fp.heriter_pure(lignes, [["HR-EMP-00001", "HR-EMP-00002"]], noms)
+        self.assertEqual(len(out), 4)                               # le 14, Jamel hérite ; le 15, il a sa propre journée
+        v = out[-1]
+        self.assertEqual((v["date"], v["employe"], v["employe_nom"], v["avec"], v["passager"]), ("2026-10-14", "HR-EMP-00002", "Jamel Aloui", "Sadok Bouziri", True))
+        self.assertEqual(v["depart_aquaworld"], "x")
+        self.assertEqual(v["name"], "GPS-1|HR-EMP-00002")
+        self.assertFalse(any(l.get("passager") for l in out[:3]))
+
+    def test_les_nuits_du_passager_ne_comptent_pas(self):
+        s = fp.statistiques_pure([{"employe": "J", "employe_nom": "Jamel", "nuit_avant_lieu": "Domicile", "nuit_lieu": "Domicile",
+                                   "passager": True, "depart_aquaworld": "2026-10-14 17:30:00"}])
+        self.assertEqual(s[0]["nuits"], {"Domicile": 0, "Magasin": 0, "Autre": 0})
+        self.assertEqual(s[0]["passager"], 1)
+        self.assertEqual(s[0]["depart"], "17:30")
+
+
 class TestDomiciles(unittest.TestCase):
     def _nuits(self, employe, point, n, nom=None, bruit=0.0):
         return [{"employe": employe, "employe_nom": nom or employe, "lat": point[0] + bruit * (i % 2), "lng": point[1],

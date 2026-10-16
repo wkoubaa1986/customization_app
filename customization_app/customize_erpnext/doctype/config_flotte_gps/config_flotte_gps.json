@@ -6,7 +6,7 @@
  "engine": "InnoDB",
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-10-08 20:30:00.000000",
+ "modified": "2026-10-16 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "owner": "Administrator",
@@ -196,6 +196,27 @@
    "fieldtype": "Small Text",
    "label": "Dernier résultat",
    "read_only": 1
+  },
+  {
+   "fieldname": "covoiturage",
+   "fieldtype": "Small Text",
+   "label": "Qui rentre avec qui",
+   "description": "Une ligne par équipage, noms d'employés séparés par « + » : « Sadok Bouziri + Jamel Aloui ». Un coéquipier sans véhicule à lui ce jour-là hérite des heures (départ d'Aquaworld, retour) du véhicule de son équipage dans l'onglet Présence Aquaworld."
+  },
+  {
+   "fieldname": "sec_equipages",
+   "fieldtype": "Section Break",
+   "label": "Statistiques (Sorties de circuit, Présence Aquaworld)"
+  },
+  {
+   "fieldname": "stats_date_debut",
+   "fieldtype": "Date",
+   "label": "Statistiques depuis le",
+   "description": "Période par défaut des onglets Sorties de circuit et Présence Aquaworld (du … à aujourd'hui). Le bouton « Rattraper les jours manquants » calcule depuis cette date les journées qui ne l'ont pas encore été (une lecture de la plateforme GPS par jour, en arrière-plan)."
+  },
+  {
+   "fieldname": "col_stats",
+   "fieldtype": "Column Break"
   }
  ],
  "field_order": [
@@ -211,6 +232,10 @@
   "ecart_tolere",
   "sec_vehicules",
   "vehicules",
+  "sec_equipages",
+  "stats_date_debut",
+  "col_stats",
+  "covoiturage",
   "sec_messages",
   "sms_en_route",
   "sms_retard",

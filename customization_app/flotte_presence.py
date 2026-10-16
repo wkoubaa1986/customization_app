@@ -2,19 +2,30 @@
 réservé au rôle « Sortie Circuit » (Wassim, Néjib), à côté de l'onglet « Sorties de circuit ».
 
 Demande du 16/10/2026 : « détecte les arrêts la nuit ; estime l'heure d'arrivée à Aquaworld et l'heure de départ ;
-affecte la position de la maison de chacun des employés ».
+affecte la position de la maison de chacun des employés », puis « statistiques globales par employé : quand partent-ils
+d'Aquaworld (trajet Aquaworld → domicile le soir), trajet du matin domicile → Aquaworld, en distribution ; Jamel et
+Sadok partent ensemble, Mohamed et Akram partent ensemble ».
 
-Lecture d'une journée, uniquement d'après le journal GPS (arrêts / trajets du véhicule) :
-- la NUIT D'AVANT = l'arrêt qui chevauche minuit au début du jour (commencé la veille, fini le matin) ; sa fin est
-  l'heure de départ du matin, son point dit où le véhicule a dormi ;
-- la NUIT D'APRÈS = l'arrêt qui atteint la fin de la journée (23 h 59) ; son début est l'heure de retour du soir ;
-- entre les deux, les passages au MAGASIN (≤ 200 m du dépôt réglé) : le premier donne l'arrivée à Aquaworld, le dernier
-  le départ d'Aquaworld, leur somme le temps passé sur place dans la journée.
+LA LOGIQUE, en quatre temps, uniquement d'après le journal GPS (arrêts / trajets du véhicule) :
+1. la NUIT D'AVANT = l'arrêt qui chevauche minuit au début du jour (commencé la veille, fini le matin) ; sa fin est
+   l'heure de départ du matin, son point dit où le véhicule a dormi ;
+2. la NUIT D'APRÈS = l'arrêt qui atteint la fin de la journée (23 h 59) ; son début est l'heure de retour du soir ;
+3. entre les deux, les passages au MAGASIN (≤ 200 m du dépôt réglé) : le premier donne l'arrivée à Aquaworld, le
+   dernier le départ d'Aquaworld, leur somme le temps passé sur place dans la journée ;
+4. les TRAJETS : le matin, de la fin de la nuit d'avant au premier passage au Magasin ; le soir, du dernier départ du
+   Magasin au début de la nuit d'après. On compte les arrêts intermédiaires (≥ 3 min) et on garde le plus long : le
+   soir, c'est là qu'on dépose le collègue ; le matin, là qu'on le prend. Un trajet de plus de 3 h n'est pas un trajet
+   domicile ↔ Aquaworld (le véhicule est passé par le terrain) : il sort des distributions.
 Le lieu de chaque nuit (Domicile / Magasin / Autre) n'est PAS figé : il se lit à l'affichage contre le réglage des
 tournées, pour qu'un domicile réglé après coup requalifie aussi l'historique.
 
 ⚠️ Un véhicule qui dort au Magasin (Hedi Chouchane, 3554) ne dit rien de l'arrivée du technicien : il vient autrement.
 On montre alors « départ du Magasin » le matin et « retour au Magasin » le soir, sans inventer d'arrivée.
+
+ÉQUIPAGES (Config Flotte GPS → « Qui rentre avec qui », une ligne par équipage : « Sadok Bouziri + Jamel Aloui ») :
+un employé sans journée de véhicule à lui ce jour-là hérite de la journée de son coéquipier (mêmes heures, marqué
+« avec X ») — ses nuits, elles, restent celles du conducteur et ne servent pas à son domicile ; son domicile se devine
+à l'arrêt intermédiaire récurrent du trajet du soir (la dépose).
 
 Les champs sont écrits sur `Journee Flotte GPS` (une ligne par véhicule et par jour) par l'appariement du soir
 (`flotte_gps.apparier` → `_resume_journee`) et par le lot `calculer_periode` (bouton « Recalculer la période »,
@@ -34,12 +45,20 @@ from customization_app import tournee_optimisation as to
 
 RAYON_LIEU_M = fg.RAYON_LIEU_M                  # 200 m : « au Magasin », « au domicile »
 FIN_JOUR_S = 90                                 # l'arrêt du soir atteint la fin du jour (23:59:59 au journal) à 90 s près
-LIEU_M = fc.LIEU_M                              # deux nuits à moins de 200 m = le même endroit
+LIEU_M = fc.LIEU_M                              # deux nuits (ou deux déposes) à moins de 200 m = le même endroit
 NUITS_MIN_DOMICILE = 3                          # en dessous, on ne propose pas un domicile
+ARRET_TRAJET_MIN = 3                            # un arrêt de 3 min sur le trajet compte (dépose d'un collègue, café)
+TRAJET_MAX_MIN = 180                            # au-delà, ce n'est pas un trajet domicile ↔ Aquaworld : le terrain s'y est glissé
+PAS_TRANCHE_MIN = 30                            # distributions par demi-heure
+TRANCHES_MATIN = (7 * 60, 11 * 60)              # arrivées à Aquaworld : < 07:00 … ≥ 11:00
+TRANCHES_SOIR = (15 * 60, 21 * 60)              # départs d'Aquaworld : < 15:00 … ≥ 21:00
 
 CHAMPS = ("depart_matin", "arrivee_aquaworld", "depart_aquaworld", "retour_soir", "minutes_aquaworld",
-          "nuit_avant_lat", "nuit_avant_lng", "nuit_lat", "nuit_lng")
-VIDE = {c: (0 if c in ("minutes_aquaworld", "nuit_avant_lat", "nuit_avant_lng", "nuit_lat", "nuit_lng") else None) for c in CHAMPS}
+          "nuit_avant_lat", "nuit_avant_lng", "nuit_lat", "nuit_lng",
+          "arrets_matin", "matin_arret_lat", "matin_arret_lng", "matin_arret_minutes",
+          "arrets_soir", "soir_arret_lat", "soir_arret_lng", "soir_arret_minutes")
+_DATES = ("depart_matin", "arrivee_aquaworld", "depart_aquaworld", "retour_soir")
+VIDE = {c: (None if c in _DATES else 0) for c in CHAMPS}
 
 
 def _garde():
@@ -67,8 +86,16 @@ def nuits_pure(jour, arrets: list) -> tuple:
     return avant, apres
 
 
+def _trajet(arrets: list, debut, fin) -> dict:
+    """Les arrêts intermédiaires d'un trajet (≥ ARRET_TRAJET_MIN) : leur nombre et le plus long (la dépose). PURE."""
+    inter = [a for a in arrets if a["arr"] >= debut and a["dep"] <= fin and cint(a.get("minutes")) >= ARRET_TRAJET_MIN]
+    plus = max(inter, key=lambda a: cint(a["minutes"])) if inter else None
+    return {"n": len(inter), "lat": flt(plus["lat"]) if plus else 0, "lng": flt(plus["lng"]) if plus else 0,
+            "minutes": cint(plus["minutes"]) if plus else 0}
+
+
 def presence_pure(jour, journal: dict, depot: tuple, rayon_m: float = RAYON_LIEU_M) -> dict:
-    """Une journée d'un véhicule → heures de départ / arrivée / retour et points de nuit. PURE.
+    """Une journée d'un véhicule → heures de départ / arrivée / retour, points de nuit, arrêts des trajets. PURE.
     Rend aussi `immobile` (pas bougé de la journée) et `en_cours` (pas encore de nuit d'après : journée pas finie)."""
     d0 = datetime.combine(getdate(jour), datetime.min.time())
     d1 = d0 + timedelta(days=1)
@@ -93,6 +120,12 @@ def presence_pure(jour, journal: dict, depot: tuple, rayon_m: float = RAYON_LIEU
         out["arrivee_aquaworld"] = max(magasin[0]["arr"], d0)
         out["depart_aquaworld"] = min(magasin[-1]["dep"], d1)
         out["minutes_aquaworld"] = sum(int((min(a["dep"], d1) - max(a["arr"], d0)).total_seconds() // 60) for a in magasin)
+        if out["depart_matin"]:
+            t = _trajet(arrets, out["depart_matin"], magasin[0]["arr"])
+            out.update(arrets_matin=t["n"], matin_arret_lat=t["lat"], matin_arret_lng=t["lng"], matin_arret_minutes=t["minutes"])
+        if out["retour_soir"]:
+            t = _trajet(arrets, magasin[-1]["dep"], out["retour_soir"])
+            out.update(arrets_soir=t["n"], soir_arret_lat=t["lat"], soir_arret_lng=t["lng"], soir_arret_minutes=t["minutes"])
     return out
 
 
@@ -105,6 +138,28 @@ def lieu(point: tuple | None, depot: tuple | None, domicile: tuple | None, rayon
     if domicile and _m(point, domicile) <= rayon_m:
         return "Domicile"
     return "Autre"
+
+
+def _grouper(points: list, rayon_m: float = LIEU_M) -> list:
+    """Regroupement par distance au premier point de l'endroit (pas par grille). points = [{lat, lng, date, minutes, passager}].
+    `passagers` = combien de ces arrêts viennent d'une journée héritée d'un coéquipier : si c'est la majorité, l'arrêt est
+    la dépose de l'employé lui-même (son domicile probable) ; sinon c'est lui qui dépose un coéquipier. PURE."""
+    lieux = []
+    for p in points:
+        if not p.get("lat"):
+            continue
+        pt = (flt(p["lat"]), flt(p["lng"]))
+        c = next((c for c in lieux if _m(pt, (c["lat"], c["lng"])) <= rayon_m), None)
+        if c is None:
+            c = {"lat": pt[0], "lng": pt[1], "n": 0, "passagers": 0, "derniere": None, "minutes": 0}
+            lieux.append(c)
+        c["n"] += 1
+        c["passagers"] += 1 if p.get("passager") else 0
+        c["minutes"] += cint(p.get("minutes"))
+        d = str(p.get("date") or "")
+        if d > str(c["derniere"] or ""):
+            c["derniere"] = d
+    return sorted(lieux, key=lambda c: -c["n"])
 
 
 def domiciles_pure(nuits: list, depot: tuple, departs: dict, rayon_m: float = RAYON_LIEU_M, minimum: int = NUITS_MIN_DOMICILE) -> list:
@@ -160,11 +215,20 @@ def domiciles_pure(nuits: list, depot: tuple, departs: dict, rayon_m: float = RA
     return sorted(out, key=lambda e: e["employe_nom"] or "")
 
 
+def _dt(v):
+    if not v or isinstance(v, datetime):
+        return v or None
+    return datetime.strptime(str(v)[:19], "%Y-%m-%d %H:%M:%S")
+
+
 def _minutes(dt) -> int | None:
-    if not dt:
-        return None
-    dt = dt if isinstance(dt, datetime) else datetime.strptime(str(dt)[:19], "%Y-%m-%d %H:%M:%S")
-    return dt.hour * 60 + dt.minute
+    dt = _dt(dt)
+    return dt.hour * 60 + dt.minute if dt else None
+
+
+def _duree(a, b) -> int | None:
+    a, b = _dt(a), _dt(b)
+    return int((b - a).total_seconds() // 60) if a and b and b >= a else None
 
 
 def _hhmm(minutes) -> str:
@@ -178,18 +242,37 @@ def _mediane(valeurs: list):
     return v[len(v) // 2] if len(v) % 2 else (v[len(v) // 2 - 1] + v[len(v) // 2]) // 2
 
 
+def tranches(valeurs: list, bornes: tuple, pas: int = PAS_TRANCHE_MIN) -> list:
+    """Distribution par demi-heure entre deux bornes, avec une tranche ouverte à chaque bout : [[libellé, n]]. PURE."""
+    debut, fin = bornes
+    out = [["< %s" % _hhmm(debut), 0]] + [[_hhmm(m), 0] for m in range(debut, fin, pas)] + [["≥ %s" % _hhmm(fin), 0]]
+    for v in valeurs:
+        if v is None:
+            continue
+        if v < debut:
+            out[0][1] += 1
+        elif v >= fin:
+            out[-1][1] += 1
+        else:
+            out[1 + (v - debut) // pas][1] += 1
+    return out
+
+
 def statistiques_pure(lignes: list) -> list:
     """Par employé : jours suivis, jours passés au Magasin, heures médianes (départ matin, arrivée / départ Aquaworld,
-    retour soir), temps médian sur place, nuits par lieu. `lignes` = les journées déjà qualifiées (nuit_avant_lieu…). PURE."""
+    retour soir), temps médian sur place, nuits par lieu. `lignes` = les journées déjà qualifiées (nuit_avant_lieu…) ;
+    une ligne `passager` (héritée d'un coéquipier) compte pour les heures, pas pour les nuits. PURE."""
     par = {}
     for l in lignes:
         cle = l.get("employe") or l.get("vehicule") or "?"
         e = par.setdefault(cle, {"employe": l.get("employe"), "employe_nom": l.get("employe_nom") or l.get("vehicule") or "?",
-                                 "jours": 0, "jours_magasin": 0, "immobiles": 0, "depart_matin": [], "arrivee": [], "depart": [],
-                                 "retour": [], "minutes": [], "nuits": {"Domicile": 0, "Magasin": 0, "Autre": 0}})
+                                 "jours": 0, "jours_magasin": 0, "immobiles": 0, "passager": 0, "depart_matin": [], "arrivee": [],
+                                 "depart": [], "retour": [], "minutes": [], "nuits": {"Domicile": 0, "Magasin": 0, "Autre": 0}})
         e["jours"] += 1
         if l.get("immobile"):
             e["immobiles"] += 1
+        if l.get("passager"):
+            e["passager"] += 1
         if l.get("arrivee_aquaworld") or l.get("depart_aquaworld"):
             e["jours_magasin"] += 1
         e["depart_matin"].append(_minutes(l.get("depart_matin")))
@@ -198,27 +281,156 @@ def statistiques_pure(lignes: list) -> list:
         e["retour"].append(_minutes(l.get("retour_soir")))
         if l.get("minutes_aquaworld"):
             e["minutes"].append(cint(l["minutes_aquaworld"]))
-        for k in ("nuit_avant_lieu", "nuit_lieu"):
-            if l.get(k) in e["nuits"]:
-                e["nuits"][l[k]] += 1
+        if not l.get("passager"):
+            for k in ("nuit_avant_lieu", "nuit_lieu"):
+                if l.get(k) in e["nuits"]:
+                    e["nuits"][l[k]] += 1
     out = []
     for e in par.values():
         out.append({"employe": e["employe"], "employe_nom": e["employe_nom"], "jours": e["jours"], "jours_magasin": e["jours_magasin"],
-                    "immobiles": e["immobiles"], "depart_matin": _hhmm(_mediane(e["depart_matin"])), "arrivee": _hhmm(_mediane(e["arrivee"])),
-                    "depart": _hhmm(_mediane(e["depart"])), "retour": _hhmm(_mediane(e["retour"])),
+                    "immobiles": e["immobiles"], "passager": e["passager"], "depart_matin": _hhmm(_mediane(e["depart_matin"])),
+                    "arrivee": _hhmm(_mediane(e["arrivee"])), "depart": _hhmm(_mediane(e["depart"])), "retour": _hhmm(_mediane(e["retour"])),
                     "minutes_aquaworld": _mediane(e["minutes"]) or 0, "nuits": e["nuits"]})
     return sorted(out, key=lambda e: e["employe_nom"] or "")
 
 
+def trajets_pure(lignes: list, max_min: int = TRAJET_MAX_MIN) -> list:
+    """Par employé, les trajets domicile ↔ Aquaworld et leurs distributions. PURE.
+
+    MATIN (nuit d'avant hors Magasin, départ du matin ET arrivée à Aquaworld connus) : heure d'arrivée à Aquaworld par
+    demi-heure, durée médiane du trajet, part de trajets directs (aucun arrêt ≥ 3 min), endroits où l'on s'arrête en
+    chemin (prise en charge d'un collègue). SOIR (nuit d'après hors Magasin, départ d'Aquaworld ET retour connus) :
+    heure de départ d'Aquaworld par demi-heure, durée, directs, endroits de dépose. Un trajet > max_min n'est pas un
+    trajet domicile ↔ Aquaworld (le terrain s'y est glissé) : compté « par le terrain », hors distribution.
+    `sans_passage` = rentré au domicile (ou parti de chez soi) sans passer du tout par Aquaworld ce jour-là."""
+    par = {}
+    for l in lignes:
+        if not l.get("employe"):
+            continue
+        e = par.setdefault(l["employe"], {"employe": l["employe"], "employe_nom": l.get("employe_nom") or l["employe"],
+                                           "matin": {"heures": [], "durees": [], "directs": 0, "n": 0, "par_terrain": 0, "sans_passage": 0, "points": []},
+                                           "soir": {"heures": [], "durees": [], "directs": 0, "n": 0, "par_terrain": 0, "sans_passage": 0, "points": []}})
+        # Matin : domicile → Aquaworld
+        if l.get("nuit_avant_lieu") and l["nuit_avant_lieu"] != "Magasin" and l.get("depart_matin"):
+            m = e["matin"]
+            if l.get("arrivee_aquaworld"):
+                d = _duree(l["depart_matin"], l["arrivee_aquaworld"])
+                if d is not None and d <= max_min:
+                    m["n"] += 1
+                    m["heures"].append(_minutes(l["arrivee_aquaworld"]))
+                    m["durees"].append(d)
+                    if not cint(l.get("arrets_matin")):
+                        m["directs"] += 1
+                    elif flt(l.get("matin_arret_lat")):
+                        m["points"].append({"lat": l["matin_arret_lat"], "lng": l["matin_arret_lng"], "date": l.get("date"),
+                                            "minutes": l.get("matin_arret_minutes"), "passager": bool(l.get("passager"))})
+                else:
+                    m["par_terrain"] += 1
+            else:
+                m["sans_passage"] += 1
+        # Soir : Aquaworld → domicile
+        if l.get("nuit_lieu") and l["nuit_lieu"] != "Magasin" and l.get("retour_soir"):
+            s = e["soir"]
+            if l.get("depart_aquaworld"):
+                d = _duree(l["depart_aquaworld"], l["retour_soir"])
+                if d is not None and d <= max_min:
+                    s["n"] += 1
+                    s["heures"].append(_minutes(l["depart_aquaworld"]))
+                    s["durees"].append(d)
+                    if not cint(l.get("arrets_soir")):
+                        s["directs"] += 1
+                    elif flt(l.get("soir_arret_lat")):
+                        s["points"].append({"lat": l["soir_arret_lat"], "lng": l["soir_arret_lng"], "date": l.get("date"),
+                                            "minutes": l.get("soir_arret_minutes"), "passager": bool(l.get("passager"))})
+                else:
+                    s["par_terrain"] += 1
+            else:
+                s["sans_passage"] += 1
+    out = []
+    for e in par.values():
+        for sens, bornes in (("matin", TRANCHES_MATIN), ("soir", TRANCHES_SOIR)):
+            b = e[sens]
+            b["mediane"] = _hhmm(_mediane(b["heures"]))
+            b["premiere"] = _hhmm(min((h for h in b["heures"] if h is not None), default=None))
+            b["derniere"] = _hhmm(max((h for h in b["heures"] if h is not None), default=None))
+            b["duree_mediane"] = _mediane(b["durees"]) or 0
+            b["tranches"] = tranches(b["heures"], bornes)
+            b["lieux"] = _grouper(b["points"])[:3]
+            del b["heures"], b["durees"], b["points"]
+        out.append(e)
+    return sorted(out, key=lambda e: e["employe_nom"] or "")
+
+
+# ── Équipages ────────────────────────────────────────────────────────────────
+
+def equipages_pure(texte: str, employes: list) -> list:
+    """« Sadok Bouziri + Jamel Aloui » par ligne → [[id, id], …] ; les noms se lisent sans la casse, les ID aussi.
+    `employes` = [(id, nom)]. Un nom inconnu est ignoré, un équipage d'une seule personne aussi. PURE."""
+    par_nom = {}
+    for ident, nom in employes:
+        par_nom[str(ident).strip().lower()] = ident
+        if nom:
+            par_nom[str(nom).strip().lower()] = ident
+    out = []
+    for ligne in (texte or "").splitlines():
+        membres = []
+        for part in ligne.replace(",", "+").split("+"):
+            ident = par_nom.get(part.strip().lower())
+            if ident and ident not in membres:
+                membres.append(ident)
+        if len(membres) >= 2:
+            out.append(membres)
+    return out
+
+
+def _a_covoiturage() -> bool:
+    """Le champ existe-t-il déjà (Single : pas de table, donc pas de has_column) ?"""
+    try:
+        return bool(frappe.get_meta(fg.CONFIG).has_field("covoiturage"))
+    except Exception:
+        return False
+
+
+def equipages() -> list:
+    texte = frappe.db.get_single_value(fg.CONFIG, "covoiturage") if _a_covoiturage() else ""
+    employes = frappe.get_all("Employee", fields=["name", "employee_name"], limit_page_length=0)
+    return equipages_pure(texte, [(e.name, e.employee_name) for e in employes])
+
+
+def heriter_pure(lignes: list, groupes: list, noms: dict) -> list:
+    """Un coéquipier sans journée de véhicule à lui ce jour-là hérite de celle de son équipage (mêmes heures), marquée
+    `passager` + `avec`. Les nuits restent au conducteur (le domicile du passager ne s'en déduit pas). PURE."""
+    reelles = {(str(l.get("date")), l.get("employe")) for l in lignes if l.get("employe")}
+    groupe_de = {}
+    for g in groupes:
+        for m in g:
+            groupe_de.setdefault(m, set()).update(x for x in g if x != m)
+    out = list(lignes)
+    for l in lignes:
+        e = l.get("employe")
+        if not e or l.get("passager"):
+            continue
+        for p in sorted(groupe_de.get(e, ())):
+            if (str(l.get("date")), p) in reelles:
+                continue
+            v = dict(l, employe=p, employe_nom=noms.get(p, p), passager=True, avec=l.get("employe_nom") or e,
+                     name="%s|%s" % (l.get("name"), p))
+            reelles.add((str(l.get("date")), p))
+            out.append(v)
+    return out
+
+
 # ── Calcul et écriture ───────────────────────────────────────────────────────
 
-def calculer(jour=None, ecrire: bool = True) -> dict:
-    """Les présences d'un jour pour tous les véhicules, écrites sur Journee Flotte GPS (ligne créée si absente)."""
+def calculer(jour=None, ecrire: bool = True, journaux: dict | None = None) -> dict:
+    """Les présences d'un jour pour tous les véhicules, écrites sur Journee Flotte GPS (ligne créée si absente).
+    `journaux` : le journal déjà lu (lire_journal) pour ne pas solliciter la plateforme deux fois (rattrapage)."""
     jour = getdate(jour or nowdate())
     cfg = fg.config()
     cfg_t = to.config()
     cboxes = cfg["cboxes"]
-    journaux = fg.lire_journal(jour, cboxes, cfg=cfg) if cboxes else {}
+    if journaux is None:
+        journaux = fg.lire_journal(jour, cboxes, cfg=cfg) if cboxes else {}
     taches = fg._taches(jour)
     emp_cbox = fg.vehicules_du_jour(taches, journaux, cfg["employe_cbox"], cfg["rayon"], fg._lieux_communs(cfg_t))
     for emp, cb in cfg["employe_cbox"].items():                  # véhicule sans employé reconnu : son conducteur habituel
@@ -271,6 +483,90 @@ def calculer_periode(du, au) -> dict:
     return out
 
 
+# ── Rattrapage depuis la date de début des statistiques ──────────────────────
+#
+# Réglage « Statistiques depuis le » (Config Flotte GPS). Les onglets Sorties de circuit et Présence Aquaworld partent de
+# cette date ; le bouton « Rattraper les jours manquants » calcule, en tâche de fond (file `long`), les jours de la période
+# qui n'ont encore aucune présence écrite — présence ET écarts de circuit d'un coup, une seule lecture de la plateforme par
+# jour. Un jour est « calculé » dès qu'une journée de véhicule porte un point de nuit ou une heure (immobile compris) ;
+# un jour sans journal (plateforme muette, boîtiers éteints) reste « manquant » et sera retenté au prochain rattrapage.
+
+CLE_RATTRAPAGE = "flotte_rattrapage"            # état d'avancement en cache (lu par les onglets) ; aussi l'identifiant du job
+
+
+def jours_manquants_pure(du, au, calcules: set, aujourd_hui) -> list:
+    """Les jours de [du, au] ∩ passé (hier au plus tard : la journée du jour n'est pas finie) sans calcul. PURE."""
+    du, au = getdate(du), min(getdate(au), add_days(getdate(aujourd_hui), -1))
+    out, j = [], du
+    while j <= au:
+        if str(j) not in calcules:
+            out.append(str(j))
+        j = add_days(j, 1)
+    return out
+
+
+def jours_manquants(du, au) -> list:
+    rows = frappe.get_all(fg.JOURNEE, filters={"date": ["between", [getdate(du), getdate(au)]]},
+                          or_filters=[["nuit_lat", "!=", 0], ["nuit_avant_lat", "!=", 0], ["depart_matin", "is", "set"]],
+                          fields=["date"], distinct=True, limit_page_length=0)
+    return jours_manquants_pure(du, au, {str(r.date) for r in rows}, nowdate())
+
+
+def _etat(**maj) -> dict:
+    etat = frappe.cache().get_value(CLE_RATTRAPAGE) or {}
+    if maj:
+        etat.update(maj)
+        frappe.cache().set_value(CLE_RATTRAPAGE, etat, expires_in_sec=7 * 86400)
+    return etat
+
+
+def _rattraper_job(jours: list):
+    """Tâche de fond : pour chaque jour, UNE lecture de la plateforme, puis présence + écarts de circuit."""
+    _etat(statut="en cours", total=len(jours), faits=0, erreurs=[], ecarts=0, vehicules=0, jour=None, debut=str(frappe.utils.now_datetime())[:19])
+    for jour in jours:
+        try:
+            cfg = fg.config()
+            journaux = fg.lire_journal(jour, cfg["cboxes"], cfg=cfg) if cfg["cboxes"] else {}
+            b = calculer(jour, journaux=journaux)
+            c = fc.calculer(jour, journaux=journaux)
+            frappe.db.commit()
+            e = _etat()
+            _etat(faits=e.get("faits", 0) + 1, jour=str(jour), vehicules=e.get("vehicules", 0) + b["vehicules"], ecarts=e.get("ecarts", 0) + c["ecarts"])
+        except Exception as ex:
+            frappe.db.rollback()
+            e = _etat()
+            _etat(faits=e.get("faits", 0) + 1, jour=str(jour), erreurs=(e.get("erreurs") or []) + ["%s : %s" % (jour, str(ex)[:120])])
+    _etat(statut="terminé", fin=str(frappe.utils.now_datetime())[:19])
+
+
+@frappe.whitelist(methods=["POST"])
+def rattraper(du=None, au=None):
+    """Bouton « Rattraper les jours manquants » : depuis le réglage (ou `du`) jusqu'à hier, en tâche de fond."""
+    _garde()
+    from frappe.utils.background_jobs import is_job_enqueued
+    depuis = fg.stats_depuis()
+    du = getdate(du) if du else depuis
+    if not du:
+        frappe.throw("Réglez d'abord « Statistiques depuis le » (Config Flotte GPS)")
+    au = getdate(au or nowdate())
+    if is_job_enqueued(CLE_RATTRAPAGE):
+        return dict(_etat(), deja=True)
+    jours = jours_manquants(du, au)
+    if not jours:
+        return dict(_etat(statut="rien à faire", total=0, faits=0, jours=[]), jours=0)
+    frappe.enqueue("customization_app.flotte_presence._rattraper_job", queue="long", timeout=10 * 3600, job_id=CLE_RATTRAPAGE,
+                   enqueue_after_commit=True, jours=jours)
+    return dict(_etat(statut="en attente", total=len(jours), faits=0, erreurs=[], jour=None, du=jours[0], au=jours[-1]), jours=len(jours))
+
+
+@frappe.whitelist()
+def etat_rattrapage():
+    """Où en est le rattrapage (lu toutes les quelques secondes par l'onglet tant qu'il tourne)."""
+    _garde()
+    from frappe.utils.background_jobs import is_job_enqueued
+    return dict(_etat(), actif=is_job_enqueued(CLE_RATTRAPAGE))
+
+
 # ── Page ─────────────────────────────────────────────────────────────────────
 
 def _qualifier(l: dict, depot: tuple, departs: dict) -> dict:
@@ -282,22 +578,23 @@ def _qualifier(l: dict, depot: tuple, departs: dict) -> dict:
                          and not l.get("arrivee_aquaworld")
                          and _m((flt(l["nuit_avant_lat"]), flt(l["nuit_avant_lng"])), (flt(l["nuit_lat"]), flt(l["nuit_lng"]))) <= LIEU_M)
     l["en_cours"] = bool(l.get("nuit_avant_lat") and not l.get("nuit_lat"))
+    l["duree_matin"] = _duree(l.get("depart_matin"), l.get("arrivee_aquaworld")) if l["nuit_avant_lieu"] and l["nuit_avant_lieu"] != "Magasin" else None
+    l["duree_soir"] = _duree(l.get("depart_aquaworld"), l.get("retour_soir")) if l["nuit_lieu"] and l["nuit_lieu"] != "Magasin" else None
     return l
 
 
 @frappe.whitelist()
 def presence(du=None, au=None, employe=None):
-    """Les journées d'une période (heures, nuits qualifiées), statistiques par employé et domiciles détectés."""
+    """Les journées d'une période (heures, nuits qualifiées, coéquipiers hérités), statistiques et trajets par employé,
+    domiciles détectés."""
     _garde()
     au = getdate(au or nowdate())
-    du = getdate(du or add_days(au, -29))
+    depuis = fg.stats_depuis()
+    du = getdate(du) if du else (depuis if depuis and depuis <= au else add_days(au, -29))
     cfg_t = to.config()
     depot, departs = cfg_t["depot"], cfg_t["departs"]
-    filtres = {"date": ["between", [du, au]]}
-    if employe:
-        filtres["employe"] = employe
-    lignes = frappe.get_all(fg.JOURNEE, filters=filtres, order_by="date desc, employe_nom asc, vehicule asc", limit_page_length=0,
-                            fields=["name", "date", "vehicule", "cbox", "employe", "employe_nom", "km", *CHAMPS])
+    lignes = frappe.get_all(fg.JOURNEE, filters={"date": ["between", [du, au]]}, order_by="date desc, employe_nom asc, vehicule asc",
+                            limit_page_length=0, fields=["name", "date", "vehicule", "cbox", "employe", "employe_nom", "km", *CHAMPS])
     lignes = [_qualifier(dict(l), depot, departs) for l in lignes]
     suivies = [l for l in lignes if l.get("nuit_avant_lat") or l.get("nuit_lat") or l.get("arrivee_aquaworld")]
     nuits = []
@@ -305,23 +602,34 @@ def presence(du=None, au=None, employe=None):
         for k in ("nuit_avant", "nuit"):
             if l.get(k + "_lat"):
                 nuits.append({"employe": l["employe"], "employe_nom": l["employe_nom"], "lat": l[k + "_lat"], "lng": l[k + "_lng"], "date": l["date"]})
-    employes = sorted({(l["employe"], l["employe_nom"]) for l in lignes if l["employe"]}, key=lambda x: x[1] or "")
-    return {"du": str(du), "au": str(au), "lignes": lignes, "non_calculees": len(lignes) - len(suivies),
-            "stats": statistiques_pure(suivies), "domiciles": domiciles_pure(nuits, depot, departs),
+    groupes = equipages()
+    noms = {e.name: e.employee_name for e in frappe.get_all("Employee", fields=["name", "employee_name"], limit_page_length=0)}
+    toutes = heriter_pure(suivies, groupes, noms)
+    toutes.sort(key=lambda l: (str(l["date"]), l.get("employe_nom") or "", l.get("vehicule") or ""), reverse=True)
+    if employe:
+        toutes = [l for l in toutes if l.get("employe") == employe]
+    employes = sorted({(l["employe"], l["employe_nom"]) for l in toutes if l["employe"]}, key=lambda x: x[1] or "")
+    return {"du": str(du), "au": str(au), "stats_depuis": str(depuis) if depuis else None, "jours_manquants": len(jours_manquants(du, au)),
+            "lignes": toutes, "non_calculees": len(lignes) - len(suivies),
+            "stats": statistiques_pure(toutes), "trajets": trajets_pure(toutes), "domiciles": domiciles_pure(nuits, depot, departs),
+            "equipages": [[noms.get(m, m) for m in g] for g in groupes],
+            "covoiturage": (frappe.db.get_single_value(fg.CONFIG, "covoiturage") or "") if _a_covoiturage() else "",
             "employes": [{"employe": e, "nom": n} for e, n in employes], "depot": list(depot),
-            "seuils": {"rayon_m": RAYON_LIEU_M, "lieu_m": LIEU_M, "nuits_min": NUITS_MIN_DOMICILE}}
+            "seuils": {"rayon_m": RAYON_LIEU_M, "lieu_m": LIEU_M, "nuits_min": NUITS_MIN_DOMICILE, "trajet_max_min": TRAJET_MAX_MIN,
+                       "arret_trajet_min": ARRET_TRAJET_MIN}}
 
 
 @frappe.whitelist(methods=["POST"])
 def fixer_domicile(employe, lat, lng):
-    """« Définir comme domicile » : le point de nuit devient le point de départ de l'employé dans le réglage des tournées
-    (table « Points de départ particuliers ») — le même réglage que sert la fenêtre d'optimisation. Il requalifie les nuits
-    affichées, sort l'endroit des « Arrêts inexpliqués » des sorties de circuit et fait dire « au domicile » au suivi live.
-    L'optimisation des tournées, elle, ne part du domicile que si on le choisit dans sa fenêtre (dépôt par défaut)."""
+    """« Définir comme domicile » : le point (de nuit, ou de dépose du soir pour un passager) devient le point de départ
+    de l'employé dans le réglage des tournées (table « Points de départ particuliers ») — le même réglage que sert la
+    fenêtre d'optimisation. Il requalifie les nuits affichées, sort l'endroit des « Arrêts inexpliqués » des sorties de
+    circuit et fait dire « au domicile » au suivi live. L'optimisation des tournées, elle, ne part du domicile que si on
+    le choisit dans sa fenêtre (dépôt par défaut)."""
     _garde()
     lat, lng = flt(lat), flt(lng)
     if not (lat and lng):
-        frappe.throw("Point de nuit sans coordonnées")
+        frappe.throw("Point sans coordonnées")
     if not frappe.db.exists("Employee", employe):
         frappe.throw("Employé inconnu : %s" % employe)
     cfg = frappe.get_single(to.CONFIG)
@@ -331,6 +639,17 @@ def fixer_domicile(employe, lat, lng):
     cfg.flags.ignore_permissions = True
     cfg.save()
     return {"employe": employe, "latitude": lat, "longitude": lng}
+
+
+@frappe.whitelist(methods=["POST"])
+def definir_equipages(texte=None, stats_depuis=None):
+    """Depuis l'onglet : « Qui rentre avec qui » (une ligne par équipage) et « Statistiques depuis le » (Config Flotte GPS)."""
+    _garde()
+    if texte is not None:
+        frappe.db.set_single_value(fg.CONFIG, "covoiturage", (texte or "").strip())
+    if stats_depuis is not None:
+        frappe.db.set_single_value(fg.CONFIG, "stats_date_debut", getdate(stats_depuis) if stats_depuis else None)
+    return {"equipages": equipages(), "stats_depuis": str(fg.stats_depuis() or "")}
 
 
 @frappe.whitelist()

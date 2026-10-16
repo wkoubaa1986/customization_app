@@ -6,7 +6,7 @@
  "engine": "InnoDB",
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-10-16 09:00:00.000000",
+ "modified": "2026-10-16 11:00:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "owner": "Administrator",
@@ -186,6 +186,59 @@
    "fieldtype": "Float",
    "label": "Nuit d'après : longitude",
    "precision": "6"
+  },
+  {
+   "fieldname": "sec_trajets",
+   "fieldtype": "Section Break",
+   "label": "Trajets domicile ↔ Aquaworld (arrêts intermédiaires ≥ 3 min)"
+  },
+  {
+   "fieldname": "arrets_matin",
+   "fieldtype": "Int",
+   "label": "Matin : arrêts en chemin"
+  },
+  {
+   "fieldname": "matin_arret_lat",
+   "fieldtype": "Float",
+   "label": "Matin : arrêt le plus long, latitude",
+   "precision": "6"
+  },
+  {
+   "fieldname": "matin_arret_lng",
+   "fieldtype": "Float",
+   "label": "Matin : arrêt le plus long, longitude",
+   "precision": "6"
+  },
+  {
+   "fieldname": "matin_arret_minutes",
+   "fieldtype": "Int",
+   "label": "Matin : arrêt le plus long (min)"
+  },
+  {
+   "fieldname": "col_4",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "arrets_soir",
+   "fieldtype": "Int",
+   "label": "Soir : arrêts en chemin"
+  },
+  {
+   "fieldname": "soir_arret_lat",
+   "fieldtype": "Float",
+   "label": "Soir : arrêt le plus long, latitude",
+   "precision": "6"
+  },
+  {
+   "fieldname": "soir_arret_lng",
+   "fieldtype": "Float",
+   "label": "Soir : arrêt le plus long, longitude",
+   "precision": "6"
+  },
+  {
+   "fieldname": "soir_arret_minutes",
+   "fieldtype": "Int",
+   "label": "Soir : arrêt le plus long (min)"
   }
  ],
  "field_order": [
@@ -215,6 +268,16 @@
   "nuit_avant_lat",
   "nuit_avant_lng",
   "nuit_lat",
-  "nuit_lng"
+  "nuit_lng",
+  "sec_trajets",
+  "arrets_matin",
+  "matin_arret_lat",
+  "matin_arret_lng",
+  "matin_arret_minutes",
+  "col_4",
+  "arrets_soir",
+  "soir_arret_lat",
+  "soir_arret_lng",
+  "soir_arret_minutes"
  ]
 }

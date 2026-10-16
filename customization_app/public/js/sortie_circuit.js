@@ -59,7 +59,7 @@ class SortieCircuit {
   constructor(racine) {
     this.$root = $(racine).find(".sc-page");
     this.data = null;
-    this.$root.find("#sc-du").val(frappe.datetime.add_days(frappe.datetime.get_today(), -29));
+    // Période par défaut : le réglage « Statistiques depuis le » (Config Flotte GPS), sinon 30 jours — décidé côté serveur.
     this.$root.find("#sc-au").val(frappe.datetime.get_today());
     try { const f = localStorage.getItem("sc_filtre"); if (f) this.$root.find("#sc-filtre").val(f); } catch (e) { /* stockage indisponible */ }
     this._bind();
@@ -92,6 +92,8 @@ class SortieCircuit {
       const r = await frappe.call({ method: "customization_app.flotte_circuit.sorties",
         args: { du: $r.find("#sc-du").val(), au: $r.find("#sc-au").val(), employe: $r.find("#sc-employe").val() || null }, freeze: true });
       this.data = r.message;
+      $r.find("#sc-du").val(this.data.du);
+      $r.find("#sc-au").val(this.data.au);
       const $e = $r.find("#sc-employe"), cur = $e.val();
       $e.find("option:not(:first)").remove();
       this.data.employes.forEach((x) => $e.append(`<option value="${frappe.utils.escape_html(x.employe)}">${frappe.utils.escape_html(x.nom || x.employe)}</option>`));
@@ -111,7 +113,7 @@ class SortieCircuit {
     if (!d) return;
     const s = d.seuils;
     $r.find("#sc-intro").html(`Le circuit = les clients planifiés du jour (+ Magasin et domicile). Un écart est un fait à <b>regarder</b>, pas une faute : fournisseur, client non planifié, course Aramex, pause… justifiez-le et il sort de la liste. Seuils : arrêt ≥ ${s.arret_min} min à plus de ${s.distance_km} km de tout client (${s.distance_approx_km} km si la position du client est approchée) · trajet 2 h avant / 3 h après les horaires ou un dimanche · km réels ≥ ${String(s.ratio_detour).replace(".", ",")} × le circuit et + ${s.km_detour_min} km. Calculé chaque soir à 21 h 10.`);
-    $r.find("#sc-info").text(`${d.lignes.length} écart${d.lignes.length > 1 ? "s" : ""} du ${frappe.datetime.str_to_user(d.du)} au ${frappe.datetime.str_to_user(d.au)}`);
+    $r.find("#sc-info").html(`${d.lignes.length} écart${d.lignes.length > 1 ? "s" : ""} du ${frappe.datetime.str_to_user(d.du)} au ${frappe.datetime.str_to_user(d.au)}${d.stats_depuis && d.stats_depuis === d.du ? ` <span class="sc-dim">(réglage)</span>` : ""}`);
     // Statistiques par technicien
     let html = `<div class="t">📊 Par technicien <span class="sc-dim">— km et jours d'après les journées GPS, écarts d'après ce calcul</span></div>`;
     if (!d.stats.length) html += `<div class="sc-vide">Aucune journée GPS ni écart sur la période. Cliquez « Recalculer la période » si les journées existent.</div>`;
