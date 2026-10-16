@@ -155,6 +155,14 @@ class TestTrajets(unittest.TestCase):
         self.assertEqual((t["matin"]["n"], t["matin"]["demi_journee"]), (2, 1))       # 13 et 15 ; 14 = demi-journée ; 16 = collé au Magasin
         self.assertEqual((t["soir"]["n"], t["soir"]["demi_journee"]), (2, 1))
 
+    def test_voiture_au_magasin_premiere_sortie_dernier_retour(self):
+        lignes = [self._ligne("2026-10-13"),
+                  self._ligne("2026-10-14", nuit_avant_lieu="Magasin", nuit_lieu="Magasin", premiere_sortie="2026-10-14 09:12:00", dernier_retour="2026-10-14 18:05:00"),
+                  self._ligne("2026-10-15", nuit_avant_lieu="Magasin", nuit_lieu="Magasin", premiere_sortie="2026-10-15 08:50:00", dernier_retour="2026-10-15 17:40:00")]
+        t = fp.trajets_pure(lignes, depot=MAGASIN)[0]
+        self.assertEqual((t["matin"]["n"], t["matin"]["magasin"]["n"], t["matin"]["magasin"]["mediane"]), (1, 2, "09:01"))
+        self.assertEqual((t["soir"]["n"], t["soir"]["magasin"]["n"], t["soir"]["magasin"]["premiere"], t["soir"]["magasin"]["derniere"]), (1, 2, "17:40", "18:05"))
+
     def test_tranches_bornes_ouvertes(self):
         t = fp.tranches([6 * 60, 7 * 60, 7 * 60 + 29, 7 * 60 + 30, 11 * 60, 12 * 60, None], (7 * 60, 11 * 60))
         self.assertEqual(t[0], ["< 07:00", 1])

@@ -34,7 +34,8 @@ class PresenceAquaworld {
     .pa-h { font-variant-numeric: tabular-nums; }
     .pa-h.vide { color: var(--text-muted); }
     .pa-sous { color: var(--text-muted); font-size: 11px; white-space: nowrap; }
-    .pa-trajets { display: grid; grid-template-columns: repeat(auto-fill, minmax(460px, 1fr)); gap: 12px; padding: 12px; }
+    .pa-trajets { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(460px, 100%), 1fr)); gap: 12px; padding: 12px; }
+    .pa-emp { min-width: 0; }
     .pa-emp { border: 1px solid var(--border-color); border-radius: 10px; padding: 10px 12px; }
     .pa-emp h4 { margin: 0 0 8px; font-size: 14px; }
     .pa-deux { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
@@ -254,10 +255,12 @@ class PresenceAquaworld {
         html += `<div class="pa-emp"><h4>${esc(e.employe_nom)}</h4><div class="pa-deux">
           <div class="pa-sens"><b class="t">🌅 Matin : domicile → Aquaworld</b>
             <div class="pa-kpi">${m.n ? `Arrive à <strong>${m.mediane}</strong> en médiane (de ${m.premiere} à ${m.derniere}) · trajet <strong>${this._min(m.duree_mediane)}</strong> · ${m.n} jour${m.n > 1 ? "s" : ""}, ${pct(m.directs, m.n)} % directs` : `Aucun trajet domicile → Aquaworld mesuré`}${m.sans_passage ? `<br>${m.sans_passage} matin${m.sans_passage > 1 ? "s" : ""} parti${m.sans_passage > 1 ? "s" : ""} de chez soi directement sur le terrain` : ""}${m.par_terrain ? `<br>${m.par_terrain} par le terrain avant Aquaworld` : ""}${m.demi_journee ? `<br>${m.demi_journee} demi-journée${m.demi_journee > 1 ? "s" : ""} (arrivé à Aquaworld après midi, hors distribution)` : ""}</div>
-            ${m.n ? this._histo(m.tranches, m.mediane, "matin") + this._cumul(m.tranches, "matin", "des arrivées") : ""}${lieux_html(m, e, "Arrêts en chemin (prise en charge ?)")}</div>
+            ${m.n ? this._histo(m.tranches, m.mediane, "matin") + this._cumul(m.tranches, "matin", "des arrivées") : ""}${lieux_html(m, e, "Arrêts en chemin (prise en charge ?)")}
+            ${m.magasin && m.magasin.n ? `<div class="pa-kpi" style="margin-top:8px;border-top:1px dashed var(--border-color);padding-top:6px"><b>${m.magasin.n} matin${m.magasin.n > 1 ? "s" : ""} où la voiture dormait au Magasin</b> (arrivée non mesurable) : première sortie du Magasin à <strong>${m.magasin.mediane}</strong> en médiane (de ${m.magasin.premiere} à ${m.magasin.derniere}) — il était là avant.</div>${this._histo(m.magasin.tranches, m.magasin.mediane, "matin")}` : ""}</div>
           <div class="pa-sens"><b class="t">🌇 Soir : Aquaworld → domicile</b>
             <div class="pa-kpi">${so.n ? `Part à <strong>${so.mediane}</strong> en médiane (de ${so.premiere} à ${so.derniere}) · trajet <strong>${this._min(so.duree_mediane)}</strong> · ${so.n} soir${so.n > 1 ? "s" : ""}, ${pct(so.directs, so.n)} % directs` : `Aucun trajet Aquaworld → domicile mesuré`}${so.sans_passage ? `<br>${so.sans_passage} soir${so.sans_passage > 1 ? "s" : ""} rentré${so.sans_passage > 1 ? "s" : ""} du terrain sans repasser par Aquaworld` : ""}${so.par_terrain ? `<br>${so.par_terrain} par le terrain après Aquaworld` : ""}${so.demi_journee ? `<br>${so.demi_journee} demi-journée${so.demi_journee > 1 ? "s" : ""} (Magasin quitté avant 13 h, hors distribution)` : ""}</div>
-            ${so.n ? this._histo(so.tranches, so.mediane, "soir") + this._cumul(so.tranches, "soir", "des départs") : ""}${lieux_html(so, e, "Arrêts en chemin (dépose ?)")}</div>
+            ${so.n ? this._histo(so.tranches, so.mediane, "soir") + this._cumul(so.tranches, "soir", "des départs") : ""}${lieux_html(so, e, "Arrêts en chemin (dépose ?)")}
+            ${so.magasin && so.magasin.n ? `<div class="pa-kpi" style="margin-top:8px;border-top:1px dashed var(--border-color);padding-top:6px"><b>${so.magasin.n} soir${so.magasin.n > 1 ? "s" : ""} où la voiture rentre dormir au Magasin</b> (départ non mesurable) : dernier retour au Magasin à <strong>${so.magasin.mediane}</strong> en médiane (de ${so.magasin.premiere} à ${so.magasin.derniere}) — fin du terrain.</div>${this._histo(so.magasin.tranches, so.magasin.mediane, "soir")}` : ""}</div>
         </div></div>`;
       });
       html += `</div>`;

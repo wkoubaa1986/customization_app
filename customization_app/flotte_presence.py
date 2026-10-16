@@ -361,8 +361,14 @@ def trajets_pure(lignes: list, max_min: int = TRAJET_MAX_MIN, depot: tuple | Non
         if not l.get("employe"):
             continue
         e = par.setdefault(l["employe"], {"employe": l["employe"], "employe_nom": l.get("employe_nom") or l["employe"],
-                                           "matin": {"heures": [], "durees": [], "directs": 0, "n": 0, "par_terrain": 0, "sans_passage": 0, "demi_journee": 0, "points": []},
-                                           "soir": {"heures": [], "durees": [], "directs": 0, "n": 0, "par_terrain": 0, "sans_passage": 0, "demi_journee": 0, "points": []}})
+                                           "matin": {"heures": [], "durees": [], "directs": 0, "n": 0, "par_terrain": 0, "sans_passage": 0, "demi_journee": 0, "points": [], "magasin_heures": []},
+                                           "soir": {"heures": [], "durees": [], "directs": 0, "n": 0, "par_terrain": 0, "sans_passage": 0, "demi_journee": 0, "points": [], "magasin_heures": []}})
+        # La voiture a dormi au Magasin (ou l'employé était passager d'une telle voiture) : on ne voit pas l'arrivée, mais la
+        # PREMIÈRE SORTIE du Magasin la borne (il était là avant) ; le soir, le DERNIER RETOUR au Magasin borne la fin du terrain.
+        if (l.get("nuit_avant_lieu") == "Magasin" or colle_au_depot(l.get("nuit_avant_lat"), l.get("nuit_avant_lng"))) and l.get("premiere_sortie"):
+            e["matin"]["magasin_heures"].append(_minutes(l["premiere_sortie"]))
+        if (l.get("nuit_lieu") == "Magasin" or colle_au_depot(l.get("nuit_lat"), l.get("nuit_lng"))) and l.get("dernier_retour"):
+            e["soir"]["magasin_heures"].append(_minutes(l["dernier_retour"]))
         # Matin : domicile → Aquaworld
         if l.get("nuit_avant_lieu") and l["nuit_avant_lieu"] != "Magasin" and l.get("depart_matin") and not colle_au_depot(l.get("nuit_avant_lat"), l.get("nuit_avant_lng")):
             m = e["matin"]
@@ -417,7 +423,10 @@ def trajets_pure(lignes: list, max_min: int = TRAJET_MAX_MIN, depot: tuple | Non
             b["duree_mediane"] = _mediane(b["durees"]) or 0
             b["tranches"] = tranches(b["heures"], bornes)
             b["lieux"] = _grouper(b["points"])[:3]
-            del b["heures"], b["durees"], b["points"]
+            mh = [x for x in b["magasin_heures"] if x is not None]
+            b["magasin"] = {"n": len(mh), "mediane": _hhmm(_mediane(mh)), "premiere": _hhmm(min(mh, default=None)), "derniere": _hhmm(max(mh, default=None)),
+                            "tranches": tranches(mh, bornes)}
+            del b["heures"], b["durees"], b["points"], b["magasin_heures"]
         out.append(e)
     return sorted(out, key=lambda e: e["employe_nom"] or "")
 
@@ -667,7 +676,7 @@ def presence(du=None, au=None, employe=None):
     cfg_t = to.config()
     depot, departs = cfg_t["depot"], cfg_t["departs"]
     lignes = frappe.get_all(fg.JOURNEE, filters={"date": ["between", [du, au]]}, order_by="date desc, employe_nom asc, vehicule asc",
-                            limit_page_length=0, fields=["name", "date", "vehicule", "cbox", "employe", "employe_nom", "km", *CHAMPS])
+                            limit_page_length=0, fields=["name", "date", "vehicule", "cbox", "employe", "employe_nom", "km", "premiere_sortie", "dernier_retour", *CHAMPS])
     noms = {e.name: e.employee_name for e in frappe.get_all("Employee", fields=["name", "employee_name"], limit_page_length=0)}
     lignes = reattribuer_pure([dict(l) for l in lignes], departs, noms, depot=depot)   # la nuit d'avant prime sur les tâches
     lignes = [_qualifier(l, depot, departs) for l in lignes]
