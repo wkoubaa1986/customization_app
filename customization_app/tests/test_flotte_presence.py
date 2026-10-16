@@ -162,6 +162,10 @@ class TestTrajets(unittest.TestCase):
         t = fp.trajets_pure(lignes, depot=MAGASIN)[0]
         self.assertEqual((t["matin"]["n"], t["matin"]["magasin"]["n"], t["matin"]["magasin"]["mediane"]), (1, 2, "09:01"))
         self.assertEqual((t["soir"]["n"], t["soir"]["magasin"]["n"], t["soir"]["magasin"]["premiere"], t["soir"]["magasin"]["derniere"]), (1, 2, "17:40", "18:05"))
+        e = t["matin"]["ensemble"]                                                     # une seule lecture : 08:45 mesuré + 09:12 + 08:50 bornes
+        self.assertEqual((e["n"], e["n_mesure"], e["n_borne"], e["mediane"], e["premiere"], e["derniere"]), (3, 1, 2, "08:50", "08:45", "09:12"))
+        self.assertEqual(dict((k, v) for k, v in e["tranches"] if v), {"08:30": 2, "09:00": 1})
+        self.assertEqual(dict((k, v) for k, v in e["tranches_borne"] if v), {"08:30": 1, "09:00": 1})
 
     def test_tranches_bornes_ouvertes(self):
         t = fp.tranches([6 * 60, 7 * 60, 7 * 60 + 29, 7 * 60 + 30, 11 * 60, 12 * 60, None], (7 * 60, 11 * 60))

@@ -44,8 +44,11 @@ class PresenceAquaworld {
     .pa-kpi strong { color: var(--text-color); font-size: 15px; }
     .pa-histo { display: grid; grid-template-columns: 52px 1fr 28px; gap: 2px 6px; font-size: 11.5px; align-items: center; }
     .pa-histo .b { height: 12px; background: var(--border-color); border-radius: 3px; overflow: hidden; }
+    .pa-histo .b { display: flex; }
     .pa-histo .b i { display: block; height: 100%; background: #3b82f6; }
+    .pa-histo .b i.borne { background: #93c5fd; }
     .pa-histo.soir .b i { background: #f59e0b; }
+    .pa-histo.soir .b i.borne { background: #fcd34d; }
     .pa-histo .n { text-align: right; color: var(--text-muted); }
     .pa-histo .l { color: var(--text-muted); white-space: nowrap; }
     .pa-histo .l.med { color: var(--text-color); font-weight: 700; }
@@ -194,6 +197,14 @@ class PresenceAquaworld {
     $r.find("#pa-liste").html(html);
   }
 
+  // Un seul histogramme par côté : mesuré (plein) + borne « voiture au Magasin » (clair), même échelle, médiane en gras.
+  _histo2(tr, trb, mediane, cls) {
+    const max = Math.max(1, ...tr.map(([, n]) => n));
+    const med = mediane ? mediane.slice(0, 2) + ":" + (mediane.slice(3) < "30" ? "00" : "30") : "";
+    return `<div class="pa-histo ${cls}">${tr.map(([l, n], i) => { const nb = (trb[i] || [0, 0])[1], nm = n - nb;
+      return `<span class="l${l === med ? " med" : ""}">${l}</span><span class="b"><i style="width:${Math.round(100 * nm / max)}%" title="mesuré : ${nm}"></i><i class="borne" style="width:${Math.round(100 * nb / max)}%" title="voiture au Magasin : ${nb}"></i></span><span class="n">${n || ""}</span>`; }).join("")}</div>`;
+  }
+
   _histo(tr, mediane, cls) {
     const max = Math.max(1, ...tr.map(([, n]) => n));
     return `<div class="pa-histo ${cls}">${tr.map(([l, n]) => `<span class="l${l === mediane.slice(0, 2) + ":" + (mediane.slice(3) < "30" ? "00" : "30") ? " med" : ""}">${l}</span><span class="b"><i style="width:${Math.round(100 * n / max)}%"></i></span><span class="n">${n || ""}</span>`).join("")}</div>`;
@@ -254,13 +265,11 @@ class PresenceAquaworld {
         const pct = (a, b) => (b ? Math.round(100 * a / b) : 0);
         html += `<div class="pa-emp"><h4>${esc(e.employe_nom)}</h4><div class="pa-deux">
           <div class="pa-sens"><b class="t">🌅 Matin : domicile → Aquaworld</b>
-            <div class="pa-kpi">${m.n ? `Arrive à <strong>${m.mediane}</strong> en médiane (de ${m.premiere} à ${m.derniere}) · trajet <strong>${this._min(m.duree_mediane)}</strong> · ${m.n} jour${m.n > 1 ? "s" : ""}, ${pct(m.directs, m.n)} % directs` : `Aucun trajet domicile → Aquaworld mesuré`}${m.sans_passage ? `<br>${m.sans_passage} matin${m.sans_passage > 1 ? "s" : ""} parti${m.sans_passage > 1 ? "s" : ""} de chez soi directement sur le terrain` : ""}${m.par_terrain ? `<br>${m.par_terrain} par le terrain avant Aquaworld` : ""}${m.demi_journee ? `<br>${m.demi_journee} demi-journée${m.demi_journee > 1 ? "s" : ""} (arrivé à Aquaworld après midi, hors distribution)` : ""}</div>
-            ${m.n ? this._histo(m.tranches, m.mediane, "matin") + this._cumul(m.tranches, "matin", "des arrivées") : ""}${lieux_html(m, e, "Arrêts en chemin (prise en charge ?)")}
-            ${m.magasin && m.magasin.n ? `<div class="pa-kpi" style="margin-top:8px;border-top:1px dashed var(--border-color);padding-top:6px"><b>${m.magasin.n} matin${m.magasin.n > 1 ? "s" : ""} où la voiture dormait au Magasin</b> (arrivée non mesurable) : première sortie du Magasin à <strong>${m.magasin.mediane}</strong> en médiane (de ${m.magasin.premiere} à ${m.magasin.derniere}) — il était là avant.</div>${this._histo(m.magasin.tranches, m.magasin.mediane, "matin")}` : ""}</div>
+            <div class="pa-kpi">${(m.ensemble || {}).n ? `À Aquaworld à <strong>${m.ensemble.mediane}</strong> en médiane (de ${m.ensemble.premiere} à ${m.ensemble.derniere}) · ${m.ensemble.n} matins : <span style="color:#3b82f6">■</span> ${m.ensemble.n_mesure} arrivée${m.ensemble.n_mesure > 1 ? "s" : ""} mesurée${m.ensemble.n_mesure > 1 ? "s" : ""} depuis chez lui${m.n ? ` (trajet ${this._min(m.duree_mediane)}, ${pct(m.directs, m.n)} % directs)` : ""}${m.ensemble.n_borne ? ` · <span style="color:#93c5fd">■</span> ${m.ensemble.n_borne} première${m.ensemble.n_borne > 1 ? "s" : ""} sortie${m.ensemble.n_borne > 1 ? "s" : ""} du Magasin (voiture restée au Magasin : il était là avant)` : ""}` : `Aucun matin mesuré`}${m.sans_passage ? `<br>${m.sans_passage} matin${m.sans_passage > 1 ? "s" : ""} parti${m.sans_passage > 1 ? "s" : ""} de chez soi directement sur le terrain` : ""}${m.par_terrain ? `<br>${m.par_terrain} par le terrain avant Aquaworld` : ""}${m.demi_journee ? `<br>${m.demi_journee} demi-journée${m.demi_journee > 1 ? "s" : ""} (arrivé après midi, hors distribution)` : ""}</div>
+            ${(m.ensemble || {}).n ? this._histo2(m.ensemble.tranches, m.ensemble.tranches_borne, m.ensemble.mediane, "matin") + this._cumul(m.ensemble.tranches, "matin", "des débuts de journée") : ""}${lieux_html(m, e, "Arrêts en chemin (prise en charge ?)")}</div>
           <div class="pa-sens"><b class="t">🌇 Soir : Aquaworld → domicile</b>
-            <div class="pa-kpi">${so.n ? `Part à <strong>${so.mediane}</strong> en médiane (de ${so.premiere} à ${so.derniere}) · trajet <strong>${this._min(so.duree_mediane)}</strong> · ${so.n} soir${so.n > 1 ? "s" : ""}, ${pct(so.directs, so.n)} % directs` : `Aucun trajet Aquaworld → domicile mesuré`}${so.sans_passage ? `<br>${so.sans_passage} soir${so.sans_passage > 1 ? "s" : ""} rentré${so.sans_passage > 1 ? "s" : ""} du terrain sans repasser par Aquaworld` : ""}${so.par_terrain ? `<br>${so.par_terrain} par le terrain après Aquaworld` : ""}${so.demi_journee ? `<br>${so.demi_journee} demi-journée${so.demi_journee > 1 ? "s" : ""} (Magasin quitté avant 13 h, hors distribution)` : ""}</div>
-            ${so.n ? this._histo(so.tranches, so.mediane, "soir") + this._cumul(so.tranches, "soir", "des départs") : ""}${lieux_html(so, e, "Arrêts en chemin (dépose ?)")}
-            ${so.magasin && so.magasin.n ? `<div class="pa-kpi" style="margin-top:8px;border-top:1px dashed var(--border-color);padding-top:6px"><b>${so.magasin.n} soir${so.magasin.n > 1 ? "s" : ""} où la voiture rentre dormir au Magasin</b> (départ non mesurable) : dernier retour au Magasin à <strong>${so.magasin.mediane}</strong> en médiane (de ${so.magasin.premiere} à ${so.magasin.derniere}) — fin du terrain.</div>${this._histo(so.magasin.tranches, so.magasin.mediane, "soir")}` : ""}</div>
+            <div class="pa-kpi">${(so.ensemble || {}).n ? `Quitte Aquaworld à <strong>${so.ensemble.mediane}</strong> en médiane (de ${so.ensemble.premiere} à ${so.ensemble.derniere}) · ${so.ensemble.n} soirs : <span style="color:#f59e0b">■</span> ${so.ensemble.n_mesure} départ${so.ensemble.n_mesure > 1 ? "s" : ""} mesuré${so.ensemble.n_mesure > 1 ? "s" : ""} vers chez lui${so.n ? ` (trajet ${this._min(so.duree_mediane)}, ${pct(so.directs, so.n)} % directs)` : ""}${so.ensemble.n_borne ? ` · <span style="color:#fcd34d">■</span> ${so.ensemble.n_borne} dernier${so.ensemble.n_borne > 1 ? "s" : ""} retour${so.ensemble.n_borne > 1 ? "s" : ""} au Magasin (voiture laissée au Magasin : fin du terrain)` : ""}` : `Aucun soir mesuré`}${so.sans_passage ? `<br>${so.sans_passage} soir${so.sans_passage > 1 ? "s" : ""} rentré${so.sans_passage > 1 ? "s" : ""} du terrain sans repasser par Aquaworld` : ""}${so.par_terrain ? `<br>${so.par_terrain} par le terrain après Aquaworld` : ""}${so.demi_journee ? `<br>${so.demi_journee} demi-journée${so.demi_journee > 1 ? "s" : ""} (Magasin quitté avant 13 h, hors distribution)` : ""}</div>
+            ${(so.ensemble || {}).n ? this._histo2(so.ensemble.tranches, so.ensemble.tranches_borne, so.ensemble.mediane, "soir") + this._cumul(so.ensemble.tranches, "soir", "des fins de journée") : ""}${lieux_html(so, e, "Arrêts en chemin (dépose ?)")}</div>
         </div></div>`;
       });
       html += `</div>`;

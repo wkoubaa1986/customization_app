@@ -426,6 +426,12 @@ def trajets_pure(lignes: list, max_min: int = TRAJET_MAX_MIN, depot: tuple | Non
             mh = [x for x in b["magasin_heures"] if x is not None]
             b["magasin"] = {"n": len(mh), "mediane": _hhmm(_mediane(mh)), "premiere": _hhmm(min(mh, default=None)), "derniere": _hhmm(max(mh, default=None)),
                             "tranches": tranches(mh, bornes)}
+            # UNE lecture par côté (demande du 16/10 : « un le matin, un le soir, englobe les deux dans la même fiche ») :
+            # les arrivées mesurées ET les bornes (voiture au Magasin) dans la même distribution, la part de chaque dite.
+            tous = [x for x in b["heures"] if x is not None] + mh
+            b["ensemble"] = {"n": len(tous), "n_mesure": len([x for x in b["heures"] if x is not None]), "n_borne": len(mh),
+                             "mediane": _hhmm(_mediane(tous)), "premiere": _hhmm(min(tous, default=None)), "derniere": _hhmm(max(tous, default=None)),
+                             "tranches": tranches(tous, bornes), "tranches_borne": tranches(mh, bornes)}
             del b["heures"], b["durees"], b["points"], b["magasin_heures"]
         out.append(e)
     return sorted(out, key=lambda e: e["employe_nom"] or "")
