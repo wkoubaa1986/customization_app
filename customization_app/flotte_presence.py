@@ -446,10 +446,10 @@ def calculer(jour=None, ecrire: bool = True, journaux: dict | None = None) -> di
     if journaux is None:
         journaux = fg.lire_journal(jour, cboxes, cfg=cfg) if cboxes else {}
     taches = fg._taches(jour)
-    emp_cbox = fg.vehicules_du_jour(taches, journaux, cfg["employe_cbox"], cfg["rayon"], fg._lieux_communs(cfg_t),
+    emp_cbox = fg.vehicules_du_jour(taches, journaux, fg.defaut_du_jour(cfg, jour), cfg["rayon"], fg._lieux_communs(cfg_t),
                                     nuits={cb: fg.point_de_nuit(jour, j) for cb, j in journaux.items()}, domiciles=cfg_t["departs"], depot=cfg_t["depot"],
                                     groupes=fg.equipages(), priorite="nuit")
-    for emp, cb in cfg["employe_cbox"].items():                  # véhicule sans employé reconnu : son conducteur habituel
+    for emp, cb in fg.defaut_du_jour(cfg, jour).items():         # véhicule sans employé reconnu : son conducteur habituel (en poste)
         if cb not in emp_cbox.values() and emp not in emp_cbox:
             emp_cbox[emp] = cb
     cbox_emp = fg.principal_par_cbox(emp_cbox)                   # la journée véhicule porte le conducteur principal

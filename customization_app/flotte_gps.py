@@ -94,6 +94,22 @@ def stats_depuis():
     return d if d and d.year >= 2020 else None
 
 
+def defaut_du_jour(cfg: dict, jour) -> dict:
+    """Le conducteur habituel de chaque véhicule (réglage), mais seulement les employés en poste ce jour-là : avant la date
+    d'embauche (Akram : 29/07/2026 — 50 journées et 18 écarts de juin-juillet lui étaient attribués par défaut) ou après la
+    date de départ, le réglage ne vaut pas."""
+    jour = getdate(jour)
+    out = {}
+    for e, cb in cfg["employe_cbox"].items():
+        d = frappe.db.get_value("Employee", e, ["date_of_joining", "relieving_date"], as_dict=True) or {}
+        if d.get("date_of_joining") and getdate(d["date_of_joining"]) > jour:
+            continue
+        if d.get("relieving_date") and getdate(d["relieving_date"]) < jour:
+            continue
+        out[e] = cb
+    return out
+
+
 def _node() -> str:
     n = shutil.which("node")
     if not n:
@@ -574,7 +590,7 @@ def apparier(jour=None, ecrire: bool = True, journaux: dict | None = None) -> di
     if journaux is None:
         journaux = lire_journal(jour, cboxes, cfg=cfg) if cboxes else {}
     cfg_t = to.config()
-    emp_cbox = vehicules_du_jour(taches, journaux, cfg["employe_cbox"], cfg["rayon"], _lieux_communs(cfg_t),
+    emp_cbox = vehicules_du_jour(taches, journaux, defaut_du_jour(cfg, jour), cfg["rayon"], _lieux_communs(cfg_t),
                                  nuits={cb: point_de_nuit(jour, j) for cb, j in journaux.items()}, domiciles=cfg_t["departs"], depot=cfg_t["depot"],
                                  groupes=equipages())
     cbox_emp = principal_par_cbox(emp_cbox)                  # la journée véhicule porte le conducteur principal
@@ -781,7 +797,7 @@ def _suivi_calcul(jour) -> dict:
         journaux = lire_journal(jour, cboxes, live=aujourdhui, cfg=cfg, trace=True) if cboxes else {}
     except Exception as e:
         journaux, erreur = {}, str(e)[:300]
-    emp_cbox = vehicules_du_jour(taches, journaux, cfg["employe_cbox"], cfg["rayon"], _lieux_communs(cfg_t),
+    emp_cbox = vehicules_du_jour(taches, journaux, defaut_du_jour(cfg, jour), cfg["rayon"], _lieux_communs(cfg_t),
                                  nuits={cb: point_de_nuit(jour, j) for cb, j in journaux.items()}, domiciles=cfg_t["departs"], depot=cfg_t["depot"],
                                  groupes=equipages())
     resultat = apparier_pure(taches, journaux, emp_cbox, cfg["rayon"])
