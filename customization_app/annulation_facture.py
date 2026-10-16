@@ -172,7 +172,14 @@ def _affectations_sur_la_facture(nom):
 
 
 def before_cancel_sales_invoice(doc, method=None):
-    """Retient QUI avait payé QUOI, tant que l'information existe encore."""
+    """Retient QUI avait payé QUOI, tant que l'information existe encore.
+    Pendant une RÉGÉNÉRATION des paiements d'une commande (Server Script « re-generate payment after sales order », qui
+    annule la facture pour recréer le paiement avec le nouveau mode), on ne réémet rien : sinon l'ancien paiement espèces
+    revenait sur la commande (ACC-PAY-…-1) et le nouveau paiement chèque trouvait la commande « déjà entièrement payée »
+    (SAL-ORD-2026-04302, 16/10/2026)."""
+    if frappe.flags.get("regeneration_paiements"):
+        doc.flags.reaffectation = []
+        return
     parts = _parts_par_commande(doc)
     affectations = _affectations_sur_la_facture(doc.name)
     if not parts or not affectations:
