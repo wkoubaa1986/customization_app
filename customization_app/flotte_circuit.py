@@ -79,11 +79,12 @@ def circuit(taches: list) -> list:
     return out
 
 
-def km_circuit(points: list, depart, depot, coef: float = 1.3) -> float:
-    """Km du circuit à vol d'oiseau × coef : départ → clients (dans l'ordre donné) → Magasin. 0 sans client."""
+def km_circuit(points: list, depart, depot, coef: float = 1.3, arrivee=None) -> float:
+    """Km du circuit à vol d'oiseau × coef : départ → clients (dans l'ordre donné) → arrivée (le Magasin par défaut ; le
+    soir, là où la voiture va dormir — sinon le retour chez soi de Sadok, 25 km, passait pour un détour, 16/10/2026). 0 sans client."""
     if not points:
         return 0.0
-    etapes = [depart] + [(p[0], p[1]) for p in points] + [depot]
+    etapes = [depart] + [(p[0], p[1]) for p in points] + [arrivee or depot]
     return round(coef * sum(to.haversine_km(etapes[i], etapes[i + 1]) for i in range(len(etapes) - 1)), 1)
 
 
@@ -98,10 +99,17 @@ def ecarts_pure(jour, taches: list, journal: dict, lieux: list, horaires: tuple,
     h_deb, h_fin = horaires
     pts = circuit(sorted(taches, key=lambda t: t["debut"]))
     out = []
+    # Où la voiture a dormi (avant / après) et ses trajets domicile ↔ Aquaworld : la présence le sait déjà (même journal).
+    from customization_app import flotte_presence as fp
+    arrets_f = fg._fusionner(sorted((dict(a) for a in journal.get("arrets") or [] if a.get("arr") and a.get("dep")), key=lambda a: a["arr"]))
+    nuit_avant, nuit_apres = fp.nuits_pure(jour, arrets_f)
+    fenetres = fp.fenetres_trajets(jour, journal, depot)
     # 1. Arrêts inexpliqués
-    for a in fg._fusionner(journal.get("arrets") or []):
+    for a in arrets_f:
         if not (d0 <= a["arr"] < d1) or a["minutes"] < ARRET_MIN:
             continue
+        if a["dep"] >= d1 - timedelta(seconds=fp.FIN_JOUR_S):
+            continue                                        # l'arrêt de nuit : là où la voiture dort, pas une sortie (Akram : 2 « arrêts » de 13 h)
         m = a["arr"].hour * 60 + a["arr"].minute
         if m < h_deb - MARGE_AVANT_MIN or m > h_fin + MARGE_APRES_MIN:
             continue                                        # avant / après la journée : le trajet domicile, pas une sortie
@@ -113,12 +121,14 @@ def ecarts_pure(jour, taches: list, journal: dict, lieux: list, horaires: tuple,
         seuil = DISTANCE_APPROX_KM if (p and p[2]) else DISTANCE_KM
         if km_client is not None and km_client <= seuil:
             continue
+        en_chemin = any(d and f and d <= a["arr"] <= f for d, f in fenetres)
         out.append({"type": "Arrêt inexpliqué", "debut": a["arr"], "fin": a["dep"], "minutes": a["minutes"], "lat": a["lat"], "lng": a["lng"],
                     "km_client": round(km_client, 1) if km_client is not None else None,
                     "client_proche": p[3] if p else None, "tache_proche": p[4] if p else None, "km": None,
                     "detail": ("%d min à l'arrêt, à %s km du client le plus proche (%s%s)" % (
                         a["minutes"], ("%.1f" % km_client).replace(".", ","), p[3], ", position approchée" if p[2] else "")
-                               if p else "%d min à l'arrêt — aucune tâche planifiée ce jour" % a["minutes"])})
+                               if p else "%d min à l'arrêt — aucune tâche planifiée ce jour" % a["minutes"])
+                              + (" — sur le trajet domicile ↔ Aquaworld" if en_chemin else "")})
     # 2. Hors horaires
     dimanche = jour.weekday() == 6
     for tr in journal.get("trajets") or []:
@@ -136,7 +146,11 @@ def ecarts_pure(jour, taches: list, journal: dict, lieux: list, horaires: tuple,
     # 3. Détour (un seul par jour, indicatif)
     trajets_jour = [tr for tr in journal.get("trajets") or [] if d0 <= tr["debut"] < d1]
     km_reel = round(sum(flt(tr.get("km")) for tr in trajets_jour), 1)
-    km_prevu = km_circuit(pts, depart, depot, coef)
+    # Le circuit part de là où la voiture a dormi et finit là où elle va dormir (domicile, Magasin, ailleurs) : ce sont des
+    # kilomètres obligés, pas un détour. Sans nuit connue : le domicile réglé / le Magasin.
+    pt_depart = (flt(nuit_avant["lat"]), flt(nuit_avant["lng"])) if nuit_avant and flt(nuit_avant.get("lat")) else depart
+    pt_arrivee = (flt(nuit_apres["lat"]), flt(nuit_apres["lng"])) if nuit_apres and flt(nuit_apres.get("lat")) else depot
+    km_prevu = km_circuit(pts, pt_depart, depot, coef, arrivee=pt_arrivee)
     if pts and km_reel >= max(RATIO_DETOUR * km_prevu, km_prevu + KM_DETOUR_MIN):
         out.append({"type": "Détour", "debut": trajets_jour[0]["debut"] if trajets_jour else d0, "fin": trajets_jour[-1]["fin"] if trajets_jour else d0,
                     "minutes": sum(tr["minutes"] for tr in trajets_jour), "lat": None, "lng": None, "km_client": None, "client_proche": None,

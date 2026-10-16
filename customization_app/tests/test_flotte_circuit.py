@@ -93,6 +93,17 @@ class TestEcarts(unittest.TestCase):
         self.journal["trajets"] = [_trajet(8.3, 40, 15), _trajet(9.7, 60, 15), _trajet(12.9, 60, 15), _trajet(14.5, 40, 15)]
         self.assertEqual([x for x in self._ecarts() if x["type"] == "Détour"], [])
 
+    def test_la_nuit_n_est_pas_un_arret_inexplique_et_le_retour_chez_soi_n_est_pas_un_detour(self):
+        """La voiture dort le soir à un endroit inconnu (arrêt qui atteint 23:59) : pas un « arrêt inexpliqué ». Et le circuit
+        finit là où elle dort : les km du retour ne sont pas un détour."""
+        loin = (36.70, 10.00)
+        self.journal["arrets"] = self.journal["arrets"] + [{"arr": _h(18.0), "dep": _h(23.999), "minutes": 360, "lat": loin[0], "lng": loin[1]}]
+        e = [x for x in self._ecarts() if x["type"] == "Arrêt inexpliqué" and x["debut"] == _h(18.0)]
+        self.assertEqual(e, [])
+        # 60 km réels : sous le seuil au départ du domicile ; le retour vers `loin` (~30 km) s'ajoute au circuit prévu, pas au détour
+        self.journal["trajets"] = [_trajet(8.3, 40, 15), _trajet(9.7, 60, 15), _trajet(12.9, 60, 15), _trajet(14.5, 40, 15), _trajet(17.0, 60, 30)]
+        self.assertEqual([x for x in self._ecarts() if x["type"] == "Détour"], [])
+
     def test_journal_absent_ou_en_erreur(self):
         self.assertEqual(self._ecarts(journal=None), [])
         self.assertEqual(self._ecarts(journal={"erreur": "x"}), [])
