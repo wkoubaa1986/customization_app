@@ -42,7 +42,7 @@ class PresenceAquaworld {
     .pa-sens b.t { display: block; margin-bottom: 4px; }
     .pa-kpi { font-size: 12px; color: var(--text-muted); margin-bottom: 6px; line-height: 1.5; }
     .pa-kpi strong { color: var(--text-color); font-size: 15px; }
-    .pa-histo { display: grid; grid-template-columns: 52px 1fr 28px; gap: 2px 6px; font-size: 11.5px; align-items: center; }
+    .pa-histo { display: grid; grid-template-columns: 84px 1fr 28px; gap: 2px 6px; font-size: 11.5px; align-items: center; }
     .pa-histo .b { height: 12px; background: var(--border-color); border-radius: 3px; overflow: hidden; }
     .pa-histo .b { display: flex; }
     .pa-histo .b i { display: block; height: 100%; background: #3b82f6; }
@@ -198,11 +198,14 @@ class PresenceAquaworld {
   }
 
   // Un seul histogramme par côté : mesuré (plein) + borne « voiture au Magasin » (clair), même échelle, médiane en gras.
+  // « 07:30 » veut dire de 07:30 à 07:59 : on l'écrit (une arrivée à 07:57 n'est pas « 7 h 30 », 16/10/2026).
+  _lib(l) { const m = /^(\d\d):(\d\d)$/.exec(l); if (!m) return l; const fin = +m[1] * 60 + +m[2] + 29; return `${l}–${String(Math.floor(fin / 60)).padStart(2, "0")}:${String(fin % 60).padStart(2, "0")}`; }
+
   _histo2(tr, trb, mediane, cls) {
     const max = Math.max(1, ...tr.map(([, n]) => n));
     const med = mediane ? mediane.slice(0, 2) + ":" + (mediane.slice(3) < "30" ? "00" : "30") : "";
     return `<div class="pa-histo ${cls}">${tr.map(([l, n], i) => { const nb = (trb[i] || [0, 0])[1], nm = n - nb;
-      return `<span class="l${l === med ? " med" : ""}">${l}</span><span class="b"><i style="width:${Math.round(100 * nm / max)}%" title="mesuré : ${nm}"></i><i class="borne" style="width:${Math.round(100 * nb / max)}%" title="voiture au Magasin : ${nb}"></i></span><span class="n">${n || ""}</span>`; }).join("")}</div>`;
+      return `<span class="l${l === med ? " med" : ""}">${this._lib(l)}</span><span class="b"><i style="width:${Math.round(100 * nm / max)}%" title="mesuré : ${nm}"></i><i class="borne" style="width:${Math.round(100 * nb / max)}%" title="voiture au Magasin : ${nb}"></i></span><span class="n">${n || ""}</span>`; }).join("")}</div>`;
   }
 
   _histo(tr, mediane, cls) {

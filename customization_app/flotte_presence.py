@@ -109,7 +109,10 @@ def presence_pure(jour, journal: dict, depot: tuple, rayon_m: float = RAYON_LIEU
     Rend aussi `immobile` (pas bougé de la journée) et `en_cours` (pas encore de nuit d'après : journée pas finie)."""
     d0 = datetime.combine(getdate(jour), datetime.min.time())
     d1 = d0 + timedelta(days=1)
-    arrets = sorted((a for a in (journal or {}).get("arrets") or [] if a.get("arr") and a.get("dep")), key=lambda a: a["arr"])
+    # Un arrêt coupé par un déplacement de quelques mètres (voiture bougée dans la cour, boîtier qui « démarre » 1 min :
+    # Logistar au Magasin 07:34 → 07:35, 0,0 km, puis immobile jusqu'à 09:57) n'est PAS un départ ni une arrivée : on fusionne
+    # les arrêts qui se suivent de près au même endroit avant de lire les nuits et les passages (cas d'Akram, 16/10/2026).
+    arrets = fg._fusionner(sorted((dict(a) for a in (journal or {}).get("arrets") or [] if a.get("arr") and a.get("dep")), key=lambda a: a["arr"]))
     avant, apres = nuits_pure(jour, arrets)
     out = dict(VIDE, immobile=False, en_cours=False)
     if avant is not None:
@@ -367,12 +370,14 @@ def trajets_pure(lignes: list, max_min: int = TRAJET_MAX_MIN, depot: tuple | Non
         # PREMIÈRE SORTIE du Magasin la borne (il était là avant) ; le soir, le DERNIER RETOUR au Magasin borne la fin du terrain.
         # Mêmes garde-fous que les trajets : une première sortie l'après-midi (Akram 19:04) n'est pas un début de journée,
         # un dernier retour le matin n'est pas une fin de journée.
-        if (l.get("nuit_avant_lieu") == "Magasin" or colle_au_depot(l.get("nuit_avant_lat"), l.get("nuit_avant_lng"))) and l.get("premiere_sortie") \
-                and (_minutes(l["premiere_sortie"]) or 0) < MATIN_ARRIVEE_MAX:
-            e["matin"]["magasin_heures"].append(_minutes(l["premiere_sortie"]))
-        if (l.get("nuit_lieu") == "Magasin" or colle_au_depot(l.get("nuit_lat"), l.get("nuit_lng"))) and l.get("dernier_retour") \
-                and (_minutes(l["dernier_retour"]) or 0) >= SOIR_DEPART_MIN:
-            e["soir"]["magasin_heures"].append(_minutes(l["dernier_retour"]))
+        # La borne = la fin de la nuit au Magasin (départ du matin) et le début de la nuit au Magasin (retour du soir), lues
+        # après fusion des micro-déplacements — pas le « premier trajet » du journal, qui peut faire 0 km (16/10/2026).
+        if (l.get("nuit_avant_lieu") == "Magasin" or colle_au_depot(l.get("nuit_avant_lat"), l.get("nuit_avant_lng"))) and l.get("depart_matin") \
+                and (_minutes(l["depart_matin"]) or 0) < MATIN_ARRIVEE_MAX:
+            e["matin"]["magasin_heures"].append(_minutes(l["depart_matin"]))
+        if (l.get("nuit_lieu") == "Magasin" or colle_au_depot(l.get("nuit_lat"), l.get("nuit_lng"))) and l.get("retour_soir") \
+                and (_minutes(l["retour_soir"]) or 0) >= SOIR_DEPART_MIN:
+            e["soir"]["magasin_heures"].append(_minutes(l["retour_soir"]))
         # Matin : domicile → Aquaworld
         if l.get("nuit_avant_lieu") and l["nuit_avant_lieu"] != "Magasin" and l.get("depart_matin") and not colle_au_depot(l.get("nuit_avant_lat"), l.get("nuit_avant_lng")):
             m = e["matin"]

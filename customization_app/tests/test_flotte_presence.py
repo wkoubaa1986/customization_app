@@ -100,6 +100,19 @@ class TestPresence(unittest.TestCase):
         self.assertEqual(fp.lieu((0, 0), MAGASIN, None), "")
 
 
+class TestMicroDeplacement(unittest.TestCase):
+    def test_un_demarrage_d_une_minute_ne_coupe_pas_la_nuit_au_magasin(self):
+        """Logistar au Magasin : « trajet » 07:34 → 07:35 de 0 km puis immobile jusqu'à 09:57 — le départ du matin est 09:57."""
+        j = {"arrets": [_arret(_h(15.0, J - timedelta(days=1)), _h(7.57), MAGASIN),            # nuit au Magasin, coupée à 07:34
+                        _arret(_h(7.58), _h(9.95), (MAGASIN[0] + 0.0001, MAGASIN[1])),          # même endroit, 1 min plus tard
+                        _arret(_h(10.5), _h(12.0), CLIENT),
+                        _arret(_h(18.0), _h(23.999), MAGASIN)], "trajets": []}
+        p = fp.presence_pure(J.date(), j, MAGASIN)
+        self.assertEqual(p["depart_matin"].strftime("%H:%M"), "09:57")
+        self.assertEqual(p["retour_soir"].strftime("%H:%M"), "18:00")
+        self.assertIsNone(p["arrivee_aquaworld"])                        # la nuit elle-même n'est pas un « passage » au Magasin
+
+
 class TestTrajets(unittest.TestCase):
     def test_arrets_intermediaires_du_matin_et_du_soir(self):
         j = journee_akram()
@@ -157,8 +170,8 @@ class TestTrajets(unittest.TestCase):
 
     def test_voiture_au_magasin_premiere_sortie_dernier_retour(self):
         lignes = [self._ligne("2026-10-13"),
-                  self._ligne("2026-10-14", nuit_avant_lieu="Magasin", nuit_lieu="Magasin", premiere_sortie="2026-10-14 09:12:00", dernier_retour="2026-10-14 18:05:00"),
-                  self._ligne("2026-10-15", nuit_avant_lieu="Magasin", nuit_lieu="Magasin", premiere_sortie="2026-10-15 08:50:00", dernier_retour="2026-10-15 17:40:00")]
+                  self._ligne("2026-10-14", nuit_avant_lieu="Magasin", nuit_lieu="Magasin", depart_matin="2026-10-14 09:12:00", retour_soir="2026-10-14 18:05:00"),
+                  self._ligne("2026-10-15", nuit_avant_lieu="Magasin", nuit_lieu="Magasin", depart_matin="2026-10-15 08:50:00", retour_soir="2026-10-15 17:40:00")]
         t = fp.trajets_pure(lignes, depot=MAGASIN)[0]
         self.assertEqual((t["matin"]["n"], t["matin"]["magasin"]["n"], t["matin"]["magasin"]["mediane"]), (1, 2, "09:01"))
         self.assertEqual((t["soir"]["n"], t["soir"]["magasin"]["n"], t["soir"]["magasin"]["premiere"], t["soir"]["magasin"]["derniere"]), (1, 2, "17:40", "18:05"))
