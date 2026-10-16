@@ -131,6 +131,9 @@ frappe.ui.form.on("Liste Commande Import", {
       () => lci_observations_ia(frm), __("IA"));
     frm.add_custom_button(__("📐 Estimer les volumes manquants"),
       () => lci_volumes_dialog(frm), __("IA"));
+    // Marques d'expédition par article (16/10/2026) : aussi dans le menu IA — l'utilisateur les cherchait là, pas dans la
+    // fenêtre du PDF conteneurs (où le bouton reste).
+    frm.add_custom_button(__("🏷️ Marques d'expédition par article (shipping marks)"), () => lci_marques_articles(frm), __("IA"));
     frm.add_custom_button(__("🏭 Description fournisseur : puces + comparaison"),
       () => lci_comparaison_tout(frm), __("IA"));
 
