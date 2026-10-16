@@ -243,19 +243,73 @@ def attribution_par_nuit(nuits: dict, domiciles: dict, rayon_m: float = RAYON_NU
     return out
 
 
+def equipages_pure(texte: str, employes: list) -> list:
+    """« Sadok Bouziri + Jamel Aloui » par ligne → [[id, id], …] ; les noms se lisent sans la casse, les ID aussi.
+    `employes` = [(id, nom)]. Un nom inconnu est ignoré, un équipage d'une seule personne aussi. PURE."""
+    par_nom = {}
+    for ident, nom in employes:
+        par_nom[str(ident).strip().lower()] = ident
+        if nom:
+            par_nom[str(nom).strip().lower()] = ident
+    out = []
+    for ligne in (texte or "").splitlines():
+        membres = []
+        for part in ligne.replace(",", "+").split("+"):
+            ident = par_nom.get(part.strip().lower())
+            if ident and ident not in membres:
+                membres.append(ident)
+        if len(membres) >= 2:
+            out.append(membres)
+    return out
+
+
+def equipages() -> list:
+    """Config Flotte GPS → « Qui rentre avec qui » : les équipages (listes d'ID d'employés)."""
+    try:
+        texte = frappe.db.get_single_value(CONFIG, "covoiturage") if frappe.get_meta(CONFIG).has_field("covoiturage") else ""
+    except Exception:
+        return []
+    if not (texte or "").strip():
+        return []
+    employes = frappe.get_all("Employee", fields=["name", "employee_name"], limit_page_length=0)
+    return equipages_pure(texte, [(e.name, e.employee_name) for e in employes])
+
+
+def partager_equipage_pure(emp_cbox: dict, groupes: list) -> dict:
+    """Un coéquipier sans véhicule roule avec son équipage : il reçoit le même boîtier, APRÈS les attributions propres
+    (l'ordre du dict dit qui est le conducteur principal : le premier d'un boîtier). PURE."""
+    out = dict(emp_cbox)
+    for g in groupes:
+        cb = next((out[m] for m in g if m in out), None)
+        if cb:
+            for m in g:
+                out.setdefault(m, cb)
+    return out
+
+
+def principal_par_cbox(emp_cbox: dict) -> dict:
+    """{cbox: employé} — le PREMIER employé attribué à chaque boîtier (nuit, puis tâches, puis défaut, puis équipage)."""
+    out = {}
+    for e, cb in emp_cbox.items():
+        out.setdefault(cb, e)
+    return out
+
+
 def vehicules_du_jour(taches: list, journaux: dict, defaut: dict, rayon_m: float, lieux_communs: list = (),
-                      nuits: dict | None = None, domiciles: dict | None = None, depot: tuple | None = None) -> dict:
+                      nuits: dict | None = None, domiciles: dict | None = None, depot: tuple | None = None,
+                      groupes: list | None = None, priorite: str = "taches") -> dict:
     """{employé: cbox} — qui conduisait quoi ce jour-là. Ça change d'un jour à l'autre (Akram sur la 261 TU 3554 du 15 au
     25/09/2026 puis sur le Changan, Sadok sur la 5957 TU 232 puis sur le Changan) : le réglage n'est qu'un défaut.
-    1. LA NUIT D'AVANT PRIME (demande du 16/10/2026) : le véhicule qui a dormi à ≤ 500 m du domicile réglé d'un employé est
-       le sien (`nuits` = {cbox: point de nuit}, `domiciles` = réglage des tournées) ;
-    2. puis les tâches : indice = une tâche de l'employé avec un arrêt du véhicule à ≤ rayon, à ± 3 h de l'heure annoncée.
-       **Un seul indice suffit** (en live, dès le premier client de la matinée) — sauf aux lieux communs (Magasin,
-       domiciles), où tout le monde s'arrête : ces tâches-là ne comptent pas. Attribution par nombre d'indices
-       décroissant, un véhicule par employé ; à égalité le véhicule habituel ;
-    3. sans indice, le véhicule habituel s'il est libre."""
-    out = attribution_par_nuit(nuits or {}, domiciles or {}, depot=depot)
-    pris = set(out.values())
+    Deux questions, deux priorités (mesuré le 16/10/2026 sur 20 jours : tâches d'abord = 136 passages confirmés, nuit
+    d'abord = 78 — la nuit dit chez qui la voiture a dormi, pas qui conduit laquelle des deux voitures de l'équipage) :
+    - `priorite="taches"` (appariement des tâches, sorties de circuit, suivi live) : les TÂCHES d'abord — indice = une
+      tâche de l'employé avec un arrêt du véhicule à ≤ rayon, à ± 3 h de l'heure annoncée ; un seul indice suffit (en
+      live, dès le premier client de la matinée), sauf aux lieux communs (Magasin, domiciles), où tout le monde s'arrête ;
+      attribution par nombre d'indices décroissant, un véhicule par employé, à égalité le véhicule habituel — puis la NUIT
+      pour les véhicules restants (dormi à ≤ RAYON_NUIT_M du domicile réglé d'un employé encore sans véhicule) ;
+    - `priorite="nuit"` (présence : départ de chez soi, retour) : la NUIT d'abord, puis les tâches.
+    Ensuite le véhicule habituel s'il est libre, puis l'ÉQUIPAGE (`groupes`, Config Flotte GPS « Qui rentre avec qui ») :
+    un coéquipier sans véhicule reçoit celui de son équipage (mêmes arrêts pour ses tâches, même présence)."""
     scores = {}
     for t in taches:
         if not (t.get("lat") and t.get("lng")) or t.get("statut") == "Cancelled" or not t.get("employe"):
@@ -268,16 +322,29 @@ def vehicules_du_jour(taches: list, journaux: dict, defaut: dict, rayon_m: float
             if any(not t.get("debut") or abs((g["arr"] - t["debut"]).total_seconds()) <= 3 * 3600
                    for g in grappes(j["arrets"], (t["lat"], t["lng"]), rayon_m)):
                 scores[(t["employe"], cb)] = scores.get((t["employe"], cb), 0) + 1
-    for (e, cb), n in sorted(scores.items(), key=lambda kv: (-kv[1], kv[0][1] != defaut.get(kv[0][0]), kv[0])):
-        if e in out or cb in pris:
-            continue
-        out[e] = cb
-        pris.add(cb)
+
+    def par_taches(out, pris):
+        for (e, cb), n in sorted(scores.items(), key=lambda kv: (-kv[1], kv[0][1] != defaut.get(kv[0][0]), kv[0])):
+            if e in out or cb in pris:
+                continue
+            out[e] = cb
+            pris.add(cb)
+
+    def par_nuit(out, pris):
+        for e, cb in attribution_par_nuit(nuits or {}, domiciles or {}, depot=depot).items():
+            if e in out or cb in pris:
+                continue
+            out[e] = cb
+            pris.add(cb)
+
+    out, pris = {}, set()
+    for etape in ((par_nuit, par_taches) if priorite == "nuit" else (par_taches, par_nuit)):
+        etape(out, pris)
     for e, cb in defaut.items():
         if e not in out and cb not in pris and cb in journaux:
             out[e] = cb
             pris.add(cb)
-    return out
+    return partager_equipage_pure(out, groupes or [])
 
 
 def apparier_pure(taches: list, journaux: dict, employe_cbox: dict, rayon_m: float) -> dict:
@@ -497,17 +564,20 @@ def _resume_journee(jour, cbox, j: dict, taches: list, resultat: dict, cfg: dict
     return res
 
 
-def apparier(jour=None, ecrire: bool = True) -> dict:
-    """Rapproche les tâches du jour des arrêts GPS et l'écrit sur chaque tâche (sans toucher `modified`)."""
+def apparier(jour=None, ecrire: bool = True, journaux: dict | None = None) -> dict:
+    """Rapproche les tâches du jour des arrêts GPS et l'écrit sur chaque tâche (sans toucher `modified`).
+    `journaux` : le journal déjà lu, pour ne pas solliciter la plateforme deux fois (recalcul complet)."""
     jour = getdate(jour or nowdate())
     cfg = config()
     taches = _taches(jour)
     cboxes = cfg["cboxes"]
-    journaux = lire_journal(jour, cboxes, cfg=cfg) if cboxes else {}
+    if journaux is None:
+        journaux = lire_journal(jour, cboxes, cfg=cfg) if cboxes else {}
     cfg_t = to.config()
     emp_cbox = vehicules_du_jour(taches, journaux, cfg["employe_cbox"], cfg["rayon"], _lieux_communs(cfg_t),
-                                 nuits={cb: point_de_nuit(jour, j) for cb, j in journaux.items()}, domiciles=cfg_t["departs"], depot=cfg_t["depot"])
-    cbox_emp = {cb: e for e, cb in emp_cbox.items()}
+                                 nuits={cb: point_de_nuit(jour, j) for cb, j in journaux.items()}, domiciles=cfg_t["departs"], depot=cfg_t["depot"],
+                                 groupes=equipages())
+    cbox_emp = principal_par_cbox(emp_cbox)                  # la journée véhicule porte le conducteur principal
     resultat = apparier_pure(taches, journaux, emp_cbox, cfg["rayon"])
     bilan = {"jour": str(jour), "taches": len(taches), "vehicules": len(cboxes), CONFIRME: 0, AUCUN: 0, SANS_POS: 0,
              SANS_VEH: 0, SANS_GPS: 0, "ecrit": ecrire,
@@ -712,7 +782,8 @@ def _suivi_calcul(jour) -> dict:
     except Exception as e:
         journaux, erreur = {}, str(e)[:300]
     emp_cbox = vehicules_du_jour(taches, journaux, cfg["employe_cbox"], cfg["rayon"], _lieux_communs(cfg_t),
-                                 nuits={cb: point_de_nuit(jour, j) for cb, j in journaux.items()}, domiciles=cfg_t["departs"], depot=cfg_t["depot"])
+                                 nuits={cb: point_de_nuit(jour, j) for cb, j in journaux.items()}, domiciles=cfg_t["departs"], depot=cfg_t["depot"],
+                                 groupes=equipages())
     resultat = apparier_pure(taches, journaux, emp_cbox, cfg["rayon"])
     messages = {}
     if frappe.db.exists("DocType", "Message Client GPS"):

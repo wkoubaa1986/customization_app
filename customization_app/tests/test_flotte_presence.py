@@ -262,7 +262,19 @@ class TestLieuxDeNuit(unittest.TestCase):
         # vehicules_du_jour : la nuit prime, les tâches servent au reste
         journaux = {"CB1": {"arrets": [], "trajets": []}, "CB2": {"arrets": [], "trajets": []}}
         out = fg.vehicules_du_jour([], journaux, {"J": "CB2", "A": "CB1"}, 150, [], nuits={"CB2": self.SADOK}, domiciles={"S": self.SADOK})
-        self.assertEqual(out, {"S": "CB2", "A": "CB1"})                                            # CB2 à Sadok (nuit) ; Jamel n'a plus son défaut, Akram garde le sien
+        self.assertEqual(out, {"S": "CB2", "A": "CB1"})                                            # CB2 à Sadok (nuit, sans tâche) ; Jamel n'a plus son défaut, Akram garde le sien
+        # Tâches d'abord (appariement) : Jamel a un client près d'un arrêt de CB2 → CB2 à Jamel même si CB2 a dormi chez Sadok ;
+        # présence (nuit d'abord) : CB2 à Sadok, Jamel suit par l'équipage.
+        j2 = {"CB1": {"arrets": [], "trajets": []}, "CB2": {"arrets": [_arret(_h(10.0), _h(10.5), CLIENT)], "trajets": []}}
+        taches = [{"employe": "J", "lat": CLIENT[0], "lng": CLIENT[1], "debut": _h(10.0), "statut": "Open"}]
+        self.assertEqual(fg.vehicules_du_jour(taches, j2, {}, 150, [], nuits={"CB2": self.SADOK}, domiciles={"S": self.SADOK}, groupes=[["S", "J"]]), {"J": "CB2", "S": "CB2"})
+        self.assertEqual(fg.vehicules_du_jour(taches, j2, {}, 150, [], nuits={"CB2": self.SADOK}, domiciles={"S": self.SADOK}, groupes=[["S", "J"]], priorite="nuit"), {"S": "CB2", "J": "CB2"})
+        # Équipage : Jamel roule avec Sadok → même boîtier, Sadok reste le conducteur principal
+        out = fg.vehicules_du_jour([], journaux, {"J": "CB2", "A": "CB1"}, 150, [], nuits={"CB2": self.SADOK}, domiciles={"S": self.SADOK}, groupes=[["S", "J"], ["A", "H"]])
+        self.assertEqual(out, {"S": "CB2", "A": "CB1", "J": "CB2", "H": "CB1"})
+        self.assertEqual(fg.principal_par_cbox(out), {"CB2": "S", "CB1": "A"})
+        self.assertEqual(fg.partager_equipage_pure({"J": "CB2"}, [["S", "J"]]), {"J": "CB2", "S": "CB2"})   # l'autre sens aussi
+        self.assertEqual(fg.partager_equipage_pure({}, [["S", "J"]]), {})                                 # personne n'a de véhicule : rien
         self.assertIsNone(fg.point_de_nuit(J.date(), {"arrets": [_arret(_h(8.0), _h(9.0), self.AKRAM)]}))
         self.assertEqual(fg.point_de_nuit(J.date(), journee_akram()), (journee_akram()["arrets"][0]["lat"], journee_akram()["arrets"][0]["lng"]))
 

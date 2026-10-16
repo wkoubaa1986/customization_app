@@ -57,6 +57,7 @@ class PresenceAquaworld {
     <select id="pa-employe"><option value="">Tous les techniciens</option></select>
     <button class="btn btn-default btn-sm" data-action="refresh">🔄 Actualiser</button>
     <button class="btn btn-default btn-sm" data-action="recalculer" title="Relit la plateforme GPS jour par jour (au plus deux mois)">🧮 Recalculer la période</button>
+    <button class="btn btn-default btn-sm" data-action="tout" title="Après un changement de domicile, d'équipage ou de règle : refait présence, sorties de circuit et appariement des tâches sur toute la période du réglage, en arrière-plan">♻️ Tout recalculer</button>
     <span class="pa-info" id="pa-info"></span>
     <span class="pa-info" id="pa-rattrapage"></span>
   </div>
@@ -83,7 +84,8 @@ class PresenceAquaworld {
     $r.find("[data-action='refresh'], #pa-du, #pa-au, #pa-employe").on("change click", (e) => { if (e.type === "click" && e.currentTarget.tagName !== "BUTTON") return; this.charger(); });
     $r.find("[data-action='recalculer']").on("click", () => this.recalculer());
     $r.on("click", "[data-action='equipages']", () => this.definir_equipages());
-    $r.on("click", "[data-action='rattraper']", () => this.rattraper());
+    $r.on("click", "[data-action='rattraper']", () => this.rattraper(false));
+    $r.find("[data-action='tout']").on("click", () => this.rattraper(true));
     $r.on("click", "[data-definir]", (e) => {
       const [i, lat, lng] = $(e.currentTarget).attr("data-definir").split("|");
       const emp = $r.find(`[data-qui='${i}']`).val();
@@ -246,9 +248,13 @@ class PresenceAquaworld {
     } catch (e) { frappe.msgprint(String(e.message || e)); }
   }
 
-  async rattraper() {
+  async rattraper(tout) {
+    if (tout) {
+      const ok = await new Promise((res) => frappe.confirm(__("Tout recalculer depuis la date de début des statistiques jusqu'à hier : présence, sorties de circuit et appariement des tâches (qui conduisait quoi), avec les domiciles et équipages d'aujourd'hui ? Les justifications des sorties de circuit sont conservées. Une lecture de la plateforme par jour, en arrière-plan."), () => res(true), () => res(false)));
+      if (!ok) return;
+    }
     try {
-      const r = await frappe.call({ method: "customization_app.flotte_presence.rattraper", args: { au: this.$root.find("#pa-au").val() }, freeze: true });
+      const r = await frappe.call({ method: "customization_app.flotte_presence.rattraper", args: { au: this.$root.find("#pa-au").val(), tout: tout ? 1 : 0 }, freeze: true });
       const b = r.message || {};
       if (b.deja) frappe.show_alert({ message: __("Un rattrapage tourne déjà"), indicator: "orange" });
       else if (!b.jours) frappe.show_alert({ message: __("Rien à rattraper"), indicator: "green" });
@@ -267,7 +273,7 @@ class PresenceAquaworld {
       const $i = this.$root.find("#pa-rattrapage");
       if (e.actif || e.statut === "en attente" || e.statut === "en cours") {
         this._suivi_en_cours = true;
-        $i.html(`⏳ Rattrapage ${e.faits || 0} / ${e.total || "?"} jour(s)${e.jour ? ` · ${frappe.datetime.str_to_user(e.jour)}` : ""}${e.erreurs && e.erreurs.length ? ` · ${e.erreurs.length} erreur(s)` : ""}`);
+        $i.html(`⏳ ${e.taches ? "Recalcul complet" : "Rattrapage"} ${e.faits || 0} / ${e.total || "?"} jour(s)${e.jour ? ` · ${frappe.datetime.str_to_user(e.jour)}` : ""}${e.erreurs && e.erreurs.length ? ` · ${e.erreurs.length} erreur(s)` : ""}`);
         this._suivi = setTimeout(() => this.suivre_rattrapage(true), 8000);
       } else {
         const fini = this._suivi_en_cours;

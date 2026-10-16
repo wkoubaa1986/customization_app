@@ -22,9 +22,10 @@ tournées, pour qu'un domicile réglé après coup requalifie aussi l'historique
 QUI CONDUISAIT (16/10/2026) : les employés changent de voiture. L'estimation de là où habite chacun se fait sur TOUTES les
 voitures confondues (`lieux_nuit_pure` : les endroits où les voitures dorment, c'est l'utilisateur qui dit quel endroit est
 la maison de qui). Puis LA NUIT PRIME : un véhicule qui a dormi à ≤ 500 m (`fg.RAYON_NUIT_M`) du domicile réglé d'un employé
-est le sien ce jour-là — au calcul (`fg.vehicules_du_jour(nuits=, domiciles=)`, aussi pour l'appariement du soir et les
-sorties de circuit) et à la lecture (`reattribuer_pure`, pour l'historique) ; les tâches ne tranchent que si le véhicule a
-dormi au Magasin ou à un endroit inconnu.
+est le sien ce jour-là POUR LA PRÉSENCE (`fg.vehicules_du_jour(..., priorite='nuit')` au calcul, `reattribuer_pure` à la
+lecture pour l'historique). Pour l'appariement des tâches et les sorties de circuit, ce sont les tâches qui disent qui
+conduisait laquelle des voitures de l'équipage (priorité « taches », la nuit en secours) — mesuré le 16/10 : 136 passages
+confirmés contre 78 en mettant la nuit d'abord.
 
 ⚠️ Un véhicule qui dort au Magasin (Hedi Chouchane, 3554) ne dit rien de l'arrivée du technicien : il vient autrement.
 On montre alors « départ du Magasin » le matin et « retour au Magasin » le soir, sans inventer d'arrivée.
@@ -393,38 +394,20 @@ def trajets_pure(lignes: list, max_min: int = TRAJET_MAX_MIN) -> list:
 
 # ── Équipages ────────────────────────────────────────────────────────────────
 
-def equipages_pure(texte: str, employes: list) -> list:
-    """« Sadok Bouziri + Jamel Aloui » par ligne → [[id, id], …] ; les noms se lisent sans la casse, les ID aussi.
-    `employes` = [(id, nom)]. Un nom inconnu est ignoré, un équipage d'une seule personne aussi. PURE."""
-    par_nom = {}
-    for ident, nom in employes:
-        par_nom[str(ident).strip().lower()] = ident
-        if nom:
-            par_nom[str(nom).strip().lower()] = ident
-    out = []
-    for ligne in (texte or "").splitlines():
-        membres = []
-        for part in ligne.replace(",", "+").split("+"):
-            ident = par_nom.get(part.strip().lower())
-            if ident and ident not in membres:
-                membres.append(ident)
-        if len(membres) >= 2:
-            out.append(membres)
-    return out
-
-
 def _a_covoiturage() -> bool:
-    """Le champ existe-t-il déjà (Single : pas de table, donc pas de has_column) ?"""
+    """Le champ « Qui rentre avec qui » existe-t-il déjà (Single : pas de table, donc pas de has_column) ?"""
     try:
         return bool(frappe.get_meta(fg.CONFIG).has_field("covoiturage"))
     except Exception:
         return False
 
 
+def equipages_pure(texte: str, employes: list) -> list:
+    return fg.equipages_pure(texte, employes)
+
+
 def equipages() -> list:
-    texte = frappe.db.get_single_value(fg.CONFIG, "covoiturage") if _a_covoiturage() else ""
-    employes = frappe.get_all("Employee", fields=["name", "employee_name"], limit_page_length=0)
-    return equipages_pure(texte, [(e.name, e.employee_name) for e in employes])
+    return fg.equipages()
 
 
 def heriter_pure(lignes: list, groupes: list, noms: dict) -> list:
@@ -464,11 +447,12 @@ def calculer(jour=None, ecrire: bool = True, journaux: dict | None = None) -> di
         journaux = fg.lire_journal(jour, cboxes, cfg=cfg) if cboxes else {}
     taches = fg._taches(jour)
     emp_cbox = fg.vehicules_du_jour(taches, journaux, cfg["employe_cbox"], cfg["rayon"], fg._lieux_communs(cfg_t),
-                                    nuits={cb: fg.point_de_nuit(jour, j) for cb, j in journaux.items()}, domiciles=cfg_t["departs"], depot=cfg_t["depot"])
+                                    nuits={cb: fg.point_de_nuit(jour, j) for cb, j in journaux.items()}, domiciles=cfg_t["departs"], depot=cfg_t["depot"],
+                                    groupes=fg.equipages(), priorite="nuit")
     for emp, cb in cfg["employe_cbox"].items():                  # véhicule sans employé reconnu : son conducteur habituel
         if cb not in emp_cbox.values() and emp not in emp_cbox:
             emp_cbox[emp] = cb
-    cbox_emp = {cb: e for e, cb in emp_cbox.items()}
+    cbox_emp = fg.principal_par_cbox(emp_cbox)                   # la journée véhicule porte le conducteur principal
     bilan = {"jour": str(jour), "vehicules": 0, "lignes": [], "ecrit": ecrire}
     for cbox in cboxes:
         j = journaux.get(cbox)
@@ -554,17 +538,22 @@ def _etat(**maj) -> dict:
     return etat
 
 
-def _rattraper_job(jours: list):
-    """Tâche de fond : pour chaque jour, UNE lecture de la plateforme, puis présence + écarts de circuit.
+def _rattraper_job(jours: list, taches: bool = False):
+    """Tâche de fond : pour chaque jour, UNE lecture de la plateforme, puis présence + écarts de circuit — et, si `taches`,
+    l'appariement des tâches (qui conduisait quoi, passage confirmé ou non) : « Tout recalculer » après un changement de
+    domicile ou d'équipage, pour que l'historique suive les règles du jour.
     L'état complet est réécrit à chaque jour (pas fusionné) : un cache vidé en route (clear-cache, redéploiement) ne laisse
     pas un avancement sans total ni statut."""
     etat = {"statut": "en cours", "total": len(jours), "faits": 0, "erreurs": [], "ecarts": 0, "vehicules": 0, "jour": None,
-            "du": jours[0] if jours else None, "au": jours[-1] if jours else None, "debut": str(frappe.utils.now_datetime())[:19]}
+            "du": jours[0] if jours else None, "au": jours[-1] if jours else None, "debut": str(frappe.utils.now_datetime())[:19],
+            "taches": bool(taches)}
     _etat(**etat)
     for jour in jours:
         try:
             cfg = fg.config()
             journaux = fg.lire_journal(jour, cfg["cboxes"], cfg=cfg) if cfg["cboxes"] else {}
+            if taches:
+                fg.apparier(jour, journaux=journaux)                 # écrit aussi la journée véhicule (km, employé)
             b = calculer(jour, journaux=journaux)
             c = fc.calculer(jour, journaux=journaux)
             frappe.db.commit()
@@ -581,8 +570,10 @@ def _rattraper_job(jours: list):
 
 
 @frappe.whitelist(methods=["POST"])
-def rattraper(du=None, au=None):
-    """Bouton « Rattraper les jours manquants » : depuis le réglage (ou `du`) jusqu'à hier, en tâche de fond."""
+def rattraper(du=None, au=None, tout=0):
+    """Bouton « Rattraper les jours manquants » : depuis le réglage (ou `du`) jusqu'à hier, en tâche de fond.
+    `tout` = « Tout recalculer » : chaque jour de la période (pas seulement les manquants), appariement des tâches compris —
+    après un changement de domicile, d'équipage ou de règle, pour que l'historique suive."""
     _garde()
     from frappe.utils.background_jobs import is_job_enqueued
     depuis = fg.stats_depuis()
@@ -592,11 +583,11 @@ def rattraper(du=None, au=None):
     au = getdate(au or nowdate())
     if is_job_enqueued(CLE_RATTRAPAGE):
         return dict(_etat(), deja=True)
-    jours = jours_manquants(du, au)
+    jours = jours_manquants_pure(du, au, set(), nowdate()) if cint(tout) else jours_manquants(du, au)
     if not jours:
         return dict(_etat(statut="rien à faire", total=0, faits=0, jours=[]), jours=0)
     frappe.enqueue("customization_app.flotte_presence._rattraper_job", queue="long", timeout=10 * 3600, job_id=CLE_RATTRAPAGE,
-                   enqueue_after_commit=True, jours=jours)
+                   enqueue_after_commit=True, jours=jours, taches=bool(cint(tout)))
     return dict(_etat(statut="en attente", total=len(jours), faits=0, erreurs=[], jour=None, du=jours[0], au=jours[-1]), jours=len(jours))
 
 

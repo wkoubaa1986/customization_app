@@ -148,18 +148,24 @@ def calculer(jour=None, ecrire: bool = True, journaux: dict | None = None) -> di
         journaux = fg.lire_journal(jour, cboxes, cfg=cfg) if cboxes else {}
     lieux = fg._lieux_communs(cfg_t)
     emp_cbox = fg.vehicules_du_jour(taches, journaux, cfg["employe_cbox"], cfg["rayon"], lieux,
-                                    nuits={cb: fg.point_de_nuit(jour, j) for cb, j in journaux.items()}, domiciles=cfg_t["departs"], depot=cfg_t["depot"])
+                                    nuits={cb: fg.point_de_nuit(jour, j) for cb, j in journaux.items()}, domiciles=cfg_t["departs"], depot=cfg_t["depot"],
+                                    groupes=fg.equipages())
     # Un véhicule sans employé reconnu ce jour-là : son conducteur habituel (le réglage), pour ne pas le perdre.
     for emp, cb in cfg["employe_cbox"].items():
         if cb not in emp_cbox.values() and emp not in emp_cbox:
             emp_cbox[emp] = cb
     noms = {}
     trouves = []
-    for emp, cbox in emp_cbox.items():
+    # Un véhicule = un circuit : les tâches de tout l'équipage qui roule dedans, les écarts au conducteur principal.
+    equipage_de = {}
+    for e, cb in emp_cbox.items():
+        equipage_de.setdefault(cb, []).append(e)
+    for cbox, emps in equipage_de.items():
+        emp = emps[0]
         j = journaux.get(cbox)
         if not j or j.get("erreur"):
             continue
-        tt = [t for t in taches if t["employe"] == emp and t.get("type") not in fg.TYPES_HORS]
+        tt = [t for t in taches if t["employe"] in emps and t.get("type") not in fg.TYPES_HORS]
         horaires = cfg_t["horaires"].get(emp) or (cfg_t["debut"], cfg_t["fin"])
         depart = cfg_t["departs"].get(emp) or cfg_t["depot"]
         for e in ecarts_pure(jour, tt, j, lieux, horaires, depart, cfg_t["depot"], cfg_t.get("coef") or 1.3):
