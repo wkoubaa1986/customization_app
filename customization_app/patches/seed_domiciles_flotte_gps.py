@@ -35,6 +35,9 @@ def execute():
             cfg.set("departs", lignes)
             cfg.flags.ignore_permissions = True
             cfg.save()                                   # on_update → fiches Employé (section Domicile)
-    if not frappe.db.get_single_value("Config Flotte GPS", "stats_date_debut"):
+    # ⚠️ get_single_value d'un Date à NULL rend « 0001-01-01 » (vrai) : passer par stats_depuis(), qui ignore l'an 1 —
+    # en prod le 16/10 la date n'avait pas été posée pour cette raison (posée à la main ensuite).
+    from customization_app.flotte_gps import stats_depuis
+    if not stats_depuis():
         frappe.db.set_single_value("Config Flotte GPS", "stats_date_debut", STATS_DEPUIS)
     frappe.db.commit()
