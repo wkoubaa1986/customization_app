@@ -640,6 +640,12 @@ class SuiviTerrain {
       <div class="st-kpi"><div class="v">${pc(B["avance"], nb)}</div><div class="l">en avance de plus de ${s.tolerance} min</div></div>
       <div class="st-kpi"><div class="v">${pc(B["retard"], nb)}</div><div class="l">en retard de plus de ${s.tolerance} min</div></div>
       <div class="st-kpi"><div class="v">${s.manquants.length}</div><div class="l">clôturées sans passage GPS</div></div></div>`;
+    // Par type d'intervention EN TÊTE (demande du 16/10/2026) : le graphe, puis le tableau.
+    html += `<div class="st-section">Par type d’intervention — durée réelle sur place vs standard de l’optimiseur</div>`;
+    html += `<div id="st-graphe" style="margin:6px 0 10px"></div>`;
+    html += `<table class="st-t"><thead><tr><th>Type</th><th class="num">Tâches</th><th class="num">Confirmées</th><th class="num">Standard</th><th class="num">Réel moyen</th><th class="num">Réel médian</th><th class="num">Max</th><th class="num">Écart moyen</th></tr></thead><tbody>`;
+    for (const t of s.types) html += `<tr><td>${esc(t.type)}</td><td class="num">${t.taches}</td><td class="num">${t.confirmes}</td><td class="num">${t.standard ?? "–"}</td><td class="num">${t.duree.moyenne ?? "–"}</td><td class="num">${t.duree.mediane ?? "–"}</td><td class="num">${t.duree.max ?? "–"}</td><td class="num">${t.ecart.moyenne != null ? (t.ecart.moyenne > 0 ? "+" : "") + t.ecart.moyenne + " min" : "–"}</td></tr>`;
+    html += `</tbody></table>`;
     html += `<div class="st-section">Par employé</div><table class="st-t"><thead><tr><th>Employé</th><th class="num">Tâches</th><th class="num">Confirmées</th><th class="num">Sans passage</th><th class="num">Durée moy.</th><th class="num">Durée méd.</th><th class="num">Écart moy.</th><th class="num">Avance</th><th class="num">À l’heure</th><th class="num">Retard</th></tr></thead><tbody>`;
     for (const e of s.employes) {
       html += `<tr><td>${esc(e.nom)}</td><td class="num">${e.taches}</td><td class="num">${e.confirmes}</td><td class="num">${e.aucun}</td><td class="num">${e.duree.moyenne ?? "–"}</td><td class="num">${e.duree.mediane ?? "–"}</td><td class="num">${e.ecart.moyenne != null ? (e.ecart.moyenne > 0 ? "+" : "") + e.ecart.moyenne + " min" : "–"}</td><td class="num">${e["avance"]}</td><td class="num">${e["à l’heure"]}</td><td class="num">${e["retard"]}</td></tr>`;
@@ -680,10 +686,6 @@ class SuiviTerrain {
       }
       html += `</tbody></table><div class="st-dim" style="margin-top:4px">Rouge : plus de 25 % au-dessus du standard du planning ; bleu : plus de 25 % en dessous.</div>`;
     }
-    html += `<div class="st-section">Par type d’intervention — durée réelle sur place vs standard de l’optimiseur</div><table class="st-t"><thead><tr><th>Type</th><th class="num">Tâches</th><th class="num">Confirmées</th><th class="num">Standard</th><th class="num">Réel moyen</th><th class="num">Réel médian</th><th class="num">Max</th><th class="num">Écart moyen</th></tr></thead><tbody>`;
-    html += `<div id="st-graphe" style="margin:6px 0 10px"></div>`;
-    for (const t of s.types) html += `<tr><td>${esc(t.type)}</td><td class="num">${t.taches}</td><td class="num">${t.confirmes}</td><td class="num">${t.standard ?? "–"}</td><td class="num">${t.duree.moyenne ?? "–"}</td><td class="num">${t.duree.mediane ?? "–"}</td><td class="num">${t.duree.max ?? "–"}</td><td class="num">${t.ecart.moyenne != null ? (t.ecart.moyenne > 0 ? "+" : "") + t.ecart.moyenne + " min" : "–"}</td></tr>`;
-    html += `</tbody></table>`;
     if (s.vehicules.length) {
       html += `<div class="st-section">Par véhicule</div><table class="st-t"><thead><tr><th>Véhicule</th><th>Employé</th><th class="num">Jours</th><th class="num">Km</th><th class="num">Km / jour</th><th class="num">Conduite / jour</th><th class="num">Chez clients / jour</th><th class="num">Départ moyen</th><th class="num">Retour moyen</th><th class="num">Passages / tâches</th></tr></thead><tbody>`;
       for (const v of s.vehicules) html += `<tr><td>${esc(v.vehicule)}</td><td>${esc(v.employe_nom || "")}</td><td class="num">${v.jours}</td><td class="num">${v.km}</td><td class="num">${v.km_jour}</td><td class="num">${this._min(v.minutes_conduite / v.jours)}</td><td class="num">${this._min(v.minutes_chez_clients / v.jours)}</td><td class="num">${this._hm(v.sortie_moyenne)}</td><td class="num">${this._hm(v.retour_moyen)}</td><td class="num">${v.nb_passages} / ${v.nb_taches}</td></tr>`;
