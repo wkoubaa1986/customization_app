@@ -4097,9 +4097,13 @@ async function lci_approbation(frm) {
 // par conteneur, départ et remplissage en tête. Un conteneur (no) ou tous (récapitulatif d'abord).
 // Backend : lci_pdf_conteneurs.py — lit le plan ENREGISTRÉ.
 
-function lci_pdf_url(frm, no) {
+function lci_pdf_url(frm, no, opts) {
+  opts = opts || {};
   return "/api/method/customization_app.lci_pdf_conteneurs.download?docname="
-    + encodeURIComponent(frm.doc.name) + (no ? "&no=" + no : "");
+    + encodeURIComponent(frm.doc.name) + (no ? "&no=" + no : "")
+    + "&marquage=" + (opts.marquage === false ? 0 : 1)
+    + (opts.marque != null ? "&marque=" + encodeURIComponent(opts.marque) : "")
+    + (opts.note ? "&note=" + encodeURIComponent(opts.note) : "");
 }
 
 // Téléchargement par un lien cliqué plutôt que window.open : après un await (enregistrement du plan), le
@@ -4134,8 +4138,27 @@ function lci_pdf_conteneurs(frm) {
       }))),
     }],
     primary_action_label: __("Télécharger"),
-    primary_action: (v) => { d.hide(); lci_telecharger(lci_pdf_url(frm, cint(v.no) || null)); },
+    primary_action: (v) => {
+      d.hide();
+      lci_telecharger(lci_pdf_url(frm, cint(v.no) || null, { marquage: !!cint(v.avec_marquage), marque: v.marque || "", note: v.note_marquage || "" }));
+      if ((v.marque || "") !== (frm.doc.marquage_expedition || "")) {
+        frm.doc.marquage_expedition = v.marque || "";      // mémorisée côté serveur par le téléchargement
+        frm.refresh_field("marquage_expedition");
+      }
+    },
   });
+  // Marquage d'expédition (16/10/2026) : la marque principale se choisit ici, elle est mémorisée sur la commande ;
+  // le PDF y ajoute, par conteneur, la marque des cartons d'accessoires (ce que le fournisseur demande pour la LC).
+  d.fields_dict.no.df.description = __("Chaque conteneur sur sa page ; sous ses articles, le bloc « Shipping marks ».");
+  [
+    { fieldtype: "Section Break", fieldname: "sec_marquage", label: __("Marquage d'expédition (shipping marks)") },
+    { fieldtype: "Check", fieldname: "avec_marquage", label: __("Inclure les shipping marks (marque principale + cartons d'accessoires)"), default: 1 },
+    { fieldtype: "Data", fieldname: "marque", label: __("Marque principale des colis"), default: frm.doc.marquage_expedition || "AQUAWORLD · {ref} · {conteneur}/{total}",
+      description: __("Balises : {ref} = n° de commande, {conteneur} = C1, {total} = nombre de conteneurs. Mémorisée sur la commande.") },
+    { fieldtype: "Small Text", fieldname: "note_marquage", label: __("Remarque pour le fournisseur (imprimée sous les marques)"),
+      description: __("Ex. : accessories in separate cartons, one carton per model — labels in English and Arabic") },
+  ].forEach((df) => d.fields.push(df));
+  d.refresh();
   d.show();
 }
 

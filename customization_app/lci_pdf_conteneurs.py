@@ -131,8 +131,9 @@ def accessoires_conteneur(c, par_row, adds_de) -> list:
     return sorted(out.values(), key=lambda e: e["item_code"])
 
 
-def bloc_marquage(doc, c, L, par_row, nb_conteneurs, adds_de, LX=None) -> str:
-    """Le bloc « Shipping marks » d'un conteneur : la marque principale, puis une ligne par accessoire avec sa marque."""
+def bloc_marquage(doc, c, L, par_row, nb_conteneurs, adds_de, LX=None, note=None) -> str:
+    """Le bloc « Shipping marks » d'un conteneur : la marque principale, puis une ligne par accessoire avec sa marque,
+    et la remarque libre saisie au moment du téléchargement (`note`)."""
     marque = marque_principale(doc.get("marquage_expedition"), doc.name, c["no"], nb_conteneurs)
     html = (f'<h2 style="font-size:13px;margin:12px 0 4px">{L["marquage"]} — C{c["no"]}</h2>'
             f'<div style="margin:0 0 6px"><span style="color:#6b7280">{L["marque_principale"]} :</span> '
@@ -147,6 +148,8 @@ def bloc_marquage(doc, c, L, par_row, nb_conteneurs, adds_de, LX=None) -> str:
                      f'<td class="n"><b>{_n(e["qty"])}</b> {_esc(_uom_out(e["uom"], LX) if LX else e["uom"])}</td><td>{_esc(", ".join(e["pour"]))}</td>'
                      f'<td><b>{_esc(marque)} · ACC · {_esc(e["item_code"])} · {_n(e["qty"])} {L["pcs"]}</b></td></tr>')
         html += f'</tbody></table><div style="font-size:9px;color:#6b7280;margin-top:3px">{L["note"]}</div>'
+    if (note or "").strip():
+        html += f'<div style="font-size:10px;margin-top:4px;padding:4px 6px;border:1px solid #d1d5db;border-radius:3px">{_esc(note.strip())}</div>'
     return html
 
 
@@ -330,7 +333,7 @@ def _entete_doc(doc, L, fournisseur):
             + "</div>")
 
 
-def _bloc_conteneur(doc, c, L, LX, par_row, photos, devise, nb_conteneurs, echeances=()):
+def _bloc_conteneur(doc, c, L, LX, par_row, photos, devise, nb_conteneurs, echeances=(), marquage=True, note=None):
     pct = remplissage(c)
     ko = flt(c["volume"]) > flt(c["capacite"]) + 1e-4
     depart = _esc(formatdate(c["date"])) if c.get("date") else f'<i>{L["a_confirmer"]}</i>'
@@ -379,7 +382,8 @@ def _bloc_conteneur(doc, c, L, LX, par_row, photos, devise, nb_conteneurs, echea
     </tbody></table>"""
     # Marquage d'expédition (16/10/2026 : le fournisseur demande le shipping mark des accessoires pour la LC)
     from customization_app.customize_erpnext.doctype.liste_commande_import.liste_commande_import import _adds
-    html += bloc_marquage(doc, c, L, par_row, nb_conteneurs, _adds, LX)
+    if marquage:
+        html += bloc_marquage(doc, c, L, par_row, nb_conteneurs, _adds, LX, note=note)
     return html
 
 
@@ -455,8 +459,9 @@ def _recap(doc, plan, L, devise, hors_plan):
     return html
 
 
-def construire_html(doc, no=None):
-    """Le HTML du PDF : un conteneur (`no`) ou tous (récapitulatif d'abord)."""
+def construire_html(doc, no=None, marquage=True, note=None):
+    """Le HTML du PDF : un conteneur (`no`) ou tous (récapitulatif d'abord). `marquage` : avec le bloc shipping marks ;
+    `note` : remarque libre imprimée sous ce bloc (saisie dans la fenêtre de téléchargement)."""
     plan = plan_enregistre(doc)
     if not plan.get("conteneurs"):
         frappe.throw(_("Aucun plan de chargement enregistré : « 🚢 Répartir en conteneurs » puis « Enregistrer »."))
@@ -481,7 +486,7 @@ def construire_html(doc, no=None):
     for k, c in enumerate(conteneurs):
         saut = ' class="saut"' if (not no or k) else ""
         corps += f"<div{saut}>" + _bloc_conteneur(doc, c, L, LX, par_row, photos, devise, len(plan["conteneurs"]),
-                                                  echeances) + "</div>"
+                                                  echeances, marquage=marquage, note=note) + "</div>"
     # le doctype n'est pas décoratif : sans lui (mode quirks), les tableaux n'héritent pas la taille du texte
     return (f'<!DOCTYPE html><html{dir_attr}><head><meta charset="utf-8"><style>{CSS}</style></head>'
             f'<body>{corps}</body></html>')
@@ -494,14 +499,19 @@ OPTIONS_PDF = {"orientation": "Portrait", "margin-top": "8mm", "margin-bottom": 
 
 
 @frappe.whitelist()
-def download(docname, no=None):
-    """PDF d'un conteneur (`no`) ou de tous."""
+def download(docname, no=None, marquage=1, marque=None, note=None):
+    """PDF d'un conteneur (`no`) ou de tous. `marque` : la marque principale choisie au téléchargement — mémorisée sur la
+    commande (champ marquage_expedition) pour les prochains PDF ; `marquage` = 0 sans le bloc shipping marks ; `note` :
+    remarque libre sous le bloc (16/10/2026 : « lorsque je sors le PDF, est-ce que je peux ajouter les marks ? »)."""
     from frappe.utils.pdf import get_pdf
+    from frappe.utils import cint
 
     _guard()
     doc = frappe.get_doc(DOCTYPE, docname)
     no = int(no) if no not in (None, "", "0", 0) else None
-    pdf = get_pdf(construire_html(doc, no), OPTIONS_PDF)
+    if marque is not None and (marque or "").strip() != (doc.get("marquage_expedition") or "").strip():
+        doc.db_set("marquage_expedition", (marque or "").strip(), update_modified=False)
+    pdf = get_pdf(construire_html(doc, no, marquage=bool(cint(marquage)), note=note), OPTIONS_PDF)
     frappe.local.response.filename = f"{doc.name}-{'C%d' % no if no else 'containers'}.pdf"
     frappe.local.response.filecontent = pdf
     frappe.local.response.type = "download"
