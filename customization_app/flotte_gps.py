@@ -28,7 +28,8 @@ TACHE = "Tache de travail"
 JOURNEE = "Journee Flotte GPS"
 ROLES = ("Employee", "System Manager", "Responsable magasin", "Appels")      # le suivi live : tous les employés
 DIRECTION = "Direction Suivi Terrain"                                          # statistiques, journées, réglages, appariement manuel
-DECALAGE = timedelta(hours=1)                      # UTC → heure de Tunis
+DECALAGE = timedelta(hours=1)                      # UTC → heure de Tunis (repli si le fuseau du site est illisible)
+FUSEAU_DEFAUT = "Africa/Tunis"
 BUNDLE = os.path.join(os.path.dirname(__file__), "flotte_gps_client.bundle.js")
 DELAI_NODE = 120                                   # secondes, par appel (login + un RPC par véhicule)
 FUSION_MIN = 10                                    # deux arrêts au même endroit à ≤ 10 min = un seul passage
@@ -149,15 +150,39 @@ def lister_vehicules():
 
 # ── Lecture du journal ───────────────────────────────────────────────────────
 
+def _fuseau():
+    """Le fuseau du SITE (System Settings, Africa/Tunis) — la plateforme GPS parle UTC, le tableau de bord parle l'heure du site.
+    Un décalage figé (+1 h) suffit aujourd'hui (la Tunisie n'a pas d'heure d'été) ; passer par le fuseau du site protège le
+    jour où cela change, ou si le site est réglé autrement. Sans base (tests), Africa/Tunis."""
+    from zoneinfo import ZoneInfo
+    try:
+        nom = frappe.utils.get_system_timezone() or FUSEAU_DEFAUT
+    except Exception:
+        nom = FUSEAU_DEFAUT
+    try:
+        return ZoneInfo(nom)
+    except Exception:
+        return None
+
+
 def _local(s: str | None):
-    """« 2026-10-07T16:05:44.000000000Z » / « 2026-10-07 07:25:09+00:00 » (UTC) → datetime naïf heure de Tunis."""
+    """« 2026-10-07T16:05:44.000000000Z » / « 2026-10-07 07:25:09+00:00 » (UTC) → datetime naïf dans le fuseau du site (Tunis)."""
     if not s:
         return None
-    return datetime.strptime(str(s)[:19].replace("T", " "), "%Y-%m-%d %H:%M:%S") + DECALAGE
+    from datetime import timezone
+    utc = datetime.strptime(str(s)[:19].replace("T", " "), "%Y-%m-%d %H:%M:%S")
+    tz = _fuseau()
+    if tz is None:
+        return utc + DECALAGE
+    return utc.replace(tzinfo=timezone.utc).astimezone(tz).replace(tzinfo=None)
 
 
 def _bornes_utc(jour) -> tuple[str, str]:
-    d = datetime.combine(getdate(jour), datetime.min.time()) - DECALAGE
+    """Le jour local [00:00, 23:59:59] exprimé en UTC pour interroger la plateforme."""
+    from datetime import timezone
+    local = datetime.combine(getdate(jour), datetime.min.time())
+    tz = _fuseau()
+    d = (local.replace(tzinfo=tz).astimezone(timezone.utc).replace(tzinfo=None)) if tz is not None else (local - DECALAGE)
     return d.strftime("%Y-%m-%dT%H:%M:%S.000Z"), (d + timedelta(days=1) - timedelta(seconds=1)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
 
@@ -225,6 +250,7 @@ def grappes(arrets: list, point: tuple, rayon_m: float) -> list:
 
 
 RAYON_NUIT_M = 500                                  # un véhicule qui a dormi à ≤ 500 m du domicile réglé d'un employé est le sien (demande du 16/10 : 500 m, pas 1 km)
+DOMICILE_PROCHE_DEPOT_M = 1000                      # un domicile à ≤ 1 km du Magasin (Néjib, 830 m) : la voiture y est « au Magasin », la nuit n'attribue pas
 
 
 def point_de_nuit(jour, journal: dict | None) -> tuple | None:
@@ -248,7 +274,9 @@ def attribution_par_nuit(nuits: dict, domiciles: dict, rayon_m: float = RAYON_NU
         if not pt or not pt[0] or (depot and _m(pt, depot) <= RAYON_LIEU_M):
             continue
         for e, dom in (domiciles or {}).items():
-            if dom and _m(pt, dom) <= rayon_m:
+            if not dom or (depot and _m(dom, depot) <= DOMICILE_PROCHE_DEPOT_M):
+                continue                                   # domicile collé au Magasin : parking, pas une preuve de conducteur
+            if _m(pt, dom) <= rayon_m:
                 cand.append((_m(pt, dom), e, cb))
     out, pris = {}, set()
     for _, e, cb in sorted(cand):

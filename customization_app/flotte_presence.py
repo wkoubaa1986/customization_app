@@ -58,6 +58,8 @@ NUITS_MIN_DOMICILE = 3                          # en dessous, on ne propose pas 
 ARRET_TRAJET_MIN = 3                            # un arrêt de 3 min sur le trajet compte (dépose d'un collègue, café)
 TRAJET_MAX_MIN = 180                            # au-delà, ce n'est pas un trajet domicile ↔ Aquaworld : le terrain s'y est glissé
 PAS_TRANCHE_MIN = 30                            # distributions par demi-heure
+MATIN_DEPART_MAX = 12 * 60                      # un trajet du matin part de chez soi avant midi ; après = demi-journée (après-midi)
+SOIR_DEPART_MIN = 13 * 60                       # un trajet du soir quitte le Magasin après 13 h ; avant = demi-journée (matinée)
 TRANCHES_MATIN = (7 * 60, 11 * 60)              # arrivées à Aquaworld : < 07:00 … ≥ 11:00
 TRANCHES_SOIR = (15 * 60, 21 * 60)              # départs d'Aquaworld : < 15:00 … ≥ 21:00
 
@@ -243,7 +245,9 @@ def reattribuer_pure(lignes: list, departs: dict, noms: dict, rayon_m: float = f
         if depot and _m(pt, depot) <= RAYON_LIEU_M:                 # a dormi au Magasin : les tâches décident
             continue
         for e, dom in (departs or {}).items():
-            if dom and _m(pt, dom) <= rayon_m:
+            if not dom or (depot and _m(dom, depot) <= fg.DOMICILE_PROCHE_DEPOT_M):
+                continue                                            # domicile collé au Magasin (Néjib) : pas une preuve
+            if _m(pt, dom) <= rayon_m:
                 cand.append((_m(pt, dom), i, e))
     for _, i, e in sorted(cand):
         l = out[i]
@@ -338,7 +342,7 @@ def statistiques_pure(lignes: list) -> list:
     return sorted(out, key=lambda e: e["employe_nom"] or "")
 
 
-def trajets_pure(lignes: list, max_min: int = TRAJET_MAX_MIN) -> list:
+def trajets_pure(lignes: list, max_min: int = TRAJET_MAX_MIN, depot: tuple | None = None) -> list:
     """Par employé, les trajets domicile ↔ Aquaworld et leurs distributions. PURE.
 
     MATIN (nuit d'avant hors Magasin, départ du matin ET arrivée à Aquaworld connus) : heure d'arrivée à Aquaworld par
@@ -346,20 +350,29 @@ def trajets_pure(lignes: list, max_min: int = TRAJET_MAX_MIN) -> list:
     chemin (prise en charge d'un collègue). SOIR (nuit d'après hors Magasin, départ d'Aquaworld ET retour connus) :
     heure de départ d'Aquaworld par demi-heure, durée, directs, endroits de dépose. Un trajet > max_min n'est pas un
     trajet domicile ↔ Aquaworld (le terrain s'y est glissé) : compté « par le terrain », hors distribution.
-    `sans_passage` = rentré au domicile (ou parti de chez soi) sans passer du tout par Aquaworld ce jour-là."""
+    `sans_passage` = rentré au domicile (ou parti de chez soi) sans passer du tout par Aquaworld ce jour-là.
+    PRÉCISION (16/10/2026) : un départ de chez soi après midi n'est pas un trajet du matin (`demi_journee`), un départ du
+    Magasin avant 13 h n'est pas un trajet du soir (`demi_journee`) ; une nuit à ≤ 1 km du Magasin (résidence de Néjib,
+    830 m) n'est pas un domicile d'où l'on part : pas de trajet."""
+    def colle_au_depot(lat, lng):
+        return bool(depot) and bool(flt(lat)) and _m((flt(lat), flt(lng)), depot) <= fg.DOMICILE_PROCHE_DEPOT_M
     par = {}
     for l in lignes:
         if not l.get("employe"):
             continue
         e = par.setdefault(l["employe"], {"employe": l["employe"], "employe_nom": l.get("employe_nom") or l["employe"],
-                                           "matin": {"heures": [], "durees": [], "directs": 0, "n": 0, "par_terrain": 0, "sans_passage": 0, "points": []},
-                                           "soir": {"heures": [], "durees": [], "directs": 0, "n": 0, "par_terrain": 0, "sans_passage": 0, "points": []}})
+                                           "matin": {"heures": [], "durees": [], "directs": 0, "n": 0, "par_terrain": 0, "sans_passage": 0, "demi_journee": 0, "points": []},
+                                           "soir": {"heures": [], "durees": [], "directs": 0, "n": 0, "par_terrain": 0, "sans_passage": 0, "demi_journee": 0, "points": []}})
         # Matin : domicile → Aquaworld
-        if l.get("nuit_avant_lieu") and l["nuit_avant_lieu"] != "Magasin" and l.get("depart_matin"):
+        if l.get("nuit_avant_lieu") and l["nuit_avant_lieu"] != "Magasin" and l.get("depart_matin") and not colle_au_depot(l.get("nuit_avant_lat"), l.get("nuit_avant_lng")):
             m = e["matin"]
             if l.get("arrivee_aquaworld"):
                 d = _duree(l["depart_matin"], l["arrivee_aquaworld"])
-                if d is not None and d <= max_min:
+                if d is not None and d > max_min:
+                    m["par_terrain"] += 1
+                elif (_minutes(l["depart_matin"]) or 0) > MATIN_DEPART_MAX:
+                    m["demi_journee"] += 1
+                elif d is not None:
                     m["n"] += 1
                     m["heures"].append(_minutes(l["arrivee_aquaworld"]))
                     m["durees"].append(d)
@@ -373,11 +386,15 @@ def trajets_pure(lignes: list, max_min: int = TRAJET_MAX_MIN) -> list:
             else:
                 m["sans_passage"] += 1
         # Soir : Aquaworld → domicile
-        if l.get("nuit_lieu") and l["nuit_lieu"] != "Magasin" and l.get("retour_soir"):
+        if l.get("nuit_lieu") and l["nuit_lieu"] != "Magasin" and l.get("retour_soir") and not colle_au_depot(l.get("nuit_lat"), l.get("nuit_lng")):
             s = e["soir"]
             if l.get("depart_aquaworld"):
                 d = _duree(l["depart_aquaworld"], l["retour_soir"])
-                if d is not None and d <= max_min:
+                if d is not None and d > max_min:
+                    s["par_terrain"] += 1
+                elif (_minutes(l["depart_aquaworld"]) or 0) < SOIR_DEPART_MIN:
+                    s["demi_journee"] += 1
+                elif d is not None:
                     s["n"] += 1
                     s["heures"].append(_minutes(l["depart_aquaworld"]))
                     s["durees"].append(d)
@@ -445,7 +462,7 @@ def heriter_pure(lignes: list, groupes: list, noms: dict, periodes: dict | None 
     out = list(lignes)
     for l in lignes:
         e = l.get("employe")
-        if not e or l.get("passager"):
+        if not e or l.get("passager") or l.get("immobile"):        # une voiture qui n'a pas bougé n'a transporté personne
             continue
         for p in sorted(groupe_de.get(e, ())):
             if (str(l.get("date")), p) in reelles or not en_poste_pure(p, l.get("date"), periodes):
@@ -673,7 +690,7 @@ def presence(du=None, au=None, employe=None):
     techniciens = {e for e in cfg_g["employe_cbox"]} | {m for g in groupes for m in g} | {e for e, _ in employes} | set(departs)
     return {"du": str(du), "au": str(au), "stats_depuis": str(depuis) if depuis else None, "jours_manquants": len(jours_manquants(du, au)),
             "lignes": toutes, "non_calculees": len(lignes) - len(suivies),
-            "stats": statistiques_pure(toutes), "trajets": trajets_pure(toutes),
+            "stats": statistiques_pure(toutes), "trajets": trajets_pure(toutes, depot=depot),
             "lieux_nuit": lieux_nuit_pure(nuits, depot, departs, noms),
             "reglages": [{"employe": e, "employe_nom": noms.get(e, e), "lat": d[0], "lng": d[1]} for e, d in departs.items() if d],
             "techniciens": sorted(({"employe": e, "nom": noms.get(e, e)} for e in techniciens if e in noms), key=lambda x: x["nom"]),

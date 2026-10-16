@@ -145,6 +145,16 @@ class TestTrajets(unittest.TestCase):
                                           arrets_soir=1, soir_arret_lat=36.85, soir_arret_lng=10.22, soir_arret_minutes=10)])
         self.assertEqual(t2[0]["soir"]["lieux"][0]["passagers"], 1)
 
+    def test_demi_journees_et_domicile_colle_au_magasin(self):
+        lignes = [self._ligne("2026-10-13"),
+                  self._ligne("2026-10-14", depart_matin="2026-10-14 13:10:00", arrivee_aquaworld="2026-10-14 13:40:00"),     # parti après midi
+                  self._ligne("2026-10-15", depart_aquaworld="2026-10-15 09:40:00", retour_soir="2026-10-15 10:10:00"),    # Magasin quitté le matin
+                  self._ligne("2026-10-16", nuit_avant_lat=MAGASIN[0] - 0.0069, nuit_avant_lng=MAGASIN[1] - 0.0035,         # dort chez Néjib (830 m)
+                              nuit_lat=MAGASIN[0] - 0.0069, nuit_lng=MAGASIN[1] - 0.0035)]
+        t = fp.trajets_pure(lignes, depot=MAGASIN)[0]
+        self.assertEqual((t["matin"]["n"], t["matin"]["demi_journee"]), (2, 1))       # 13 et 15 ; 14 = demi-journée ; 16 = collé au Magasin
+        self.assertEqual((t["soir"]["n"], t["soir"]["demi_journee"]), (2, 1))
+
     def test_tranches_bornes_ouvertes(self):
         t = fp.tranches([6 * 60, 7 * 60, 7 * 60 + 29, 7 * 60 + 30, 11 * 60, 12 * 60, None], (7 * 60, 11 * 60))
         self.assertEqual(t[0], ["< 07:00", 1])
@@ -203,6 +213,8 @@ class TestEquipages(unittest.TestCase):
         periodes = {"HR-EMP-00010": ("2026-07-29", None), "HR-EMP-00006": ("2024-04-15", None)}
         out = fp.heriter_pure(lignes, [["HR-EMP-00010", "HR-EMP-00006"]], noms, periodes)
         self.assertEqual([(l["date"], l["employe"]) for l in out if l.get("passager")], [("2026-08-19", "HR-EMP-00010")])   # pas le 10/07
+        lignes[1]["immobile"] = True
+        self.assertEqual([l for l in fp.heriter_pure(lignes, [["HR-EMP-00010", "HR-EMP-00006"]], noms, periodes) if l.get("passager")], [])   # immobile : rien
         self.assertTrue(fp.en_poste_pure("X", "2026-01-01", None))
         self.assertFalse(fp.en_poste_pure("X", "2026-01-01", {"X": (None, "2025-12-31")}))      # parti
 
@@ -251,7 +263,9 @@ class TestLieuxDeNuit(unittest.TestCase):
                   {"name": "2", "date": "2026-10-14", "employe": "S", "employe_nom": "Sadok", "nuit_avant_lat": MAGASIN[0], "nuit_avant_lng": MAGASIN[1]},
                   {"name": "3", "date": "2026-10-15", "employe": "J", "employe_nom": "Jamel", "nuit_avant_lat": self.SADOK[0], "nuit_avant_lng": self.SADOK[1]},
                   {"name": "4", "date": "2026-10-15", "employe": "S", "employe_nom": "Sadok", "nuit_avant_lat": self.SADOK[0] + 0.003, "nuit_avant_lng": self.SADOK[1]}]
+        lignes.append({"name": "5", "date": "2026-10-16", "employe": "J", "employe_nom": "Jamel", "nuit_avant_lat": MAGASIN[0] - 0.0069, "nuit_avant_lng": MAGASIN[1] - 0.0035})
         out = fp.reattribuer_pure(lignes, {"S": self.SADOK, "A": self.AKRAM, "N": (MAGASIN[0] - 0.0069, MAGASIN[1] - 0.0035)}, noms, depot=MAGASIN)
+        self.assertEqual(out[4]["employe"], "J")                                                 # dormi chez Néjib (collé au Magasin) : les tâches gardent la main
         self.assertEqual((out[0]["employe"], out[0]["attribue_par_taches"]), ("S", "Akram"))     # le Changan a dormi chez Sadok
         self.assertEqual(out[1]["employe"], "S")                                                 # a dormi au Magasin : jamais réattribué (pas à Néjib, à 830 m)
         self.assertNotIn("attribue_par_taches", out[1])
@@ -267,8 +281,9 @@ class TestLieuxDeNuit(unittest.TestCase):
         self.assertEqual(fg.attribution_par_nuit({"CB1": (self.AKRAM[0] + 0.006, self.AKRAM[1])}, {"A": self.AKRAM}), {})   # 670 m : au-delà de 500 m
         # Néjib habite à 830 m du Magasin : une voiture qui dort au Magasin ne lui est pas attribuée
         nejib = (MAGASIN[0] - 0.0069, MAGASIN[1] - 0.0035)
-        self.assertEqual(fg.attribution_par_nuit({"CB3": MAGASIN, "CB5": nejib}, {"N": nejib}, depot=MAGASIN), {"N": "CB5"})
-        self.assertEqual(fg.attribution_par_nuit({"CB3": nejib}, {"N": nejib}), {"N": "CB3"})       # une voiture chez Néjib, elle, lui revient
+        self.assertEqual(fg.attribution_par_nuit({"CB3": MAGASIN, "CB5": nejib}, {"N": nejib}, depot=MAGASIN), {})          # domicile collé au Magasin : jamais par la nuit
+        self.assertEqual(fg.attribution_par_nuit({"CB3": nejib}, {"N": nejib}, depot=MAGASIN), {})   # chez Néjib = collé au Magasin : la nuit n'attribue pas
+        self.assertEqual(fg.attribution_par_nuit({"CB3": nejib}, {"N": nejib}), {"N": "CB3"})       # sans dépôt connu, on ne peut pas le savoir
         # vehicules_du_jour : la nuit prime, les tâches servent au reste
         journaux = {"CB1": {"arrets": [], "trajets": []}, "CB2": {"arrets": [], "trajets": []}}
         out = fg.vehicules_du_jour([], journaux, {"J": "CB2", "A": "CB1"}, 150, [], nuits={"CB2": self.SADOK}, domiciles={"S": self.SADOK})
