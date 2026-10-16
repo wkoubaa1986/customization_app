@@ -147,7 +147,7 @@ class TestTrajets(unittest.TestCase):
 
     def test_demi_journees_et_domicile_colle_au_magasin(self):
         lignes = [self._ligne("2026-10-13"),
-                  self._ligne("2026-10-14", depart_matin="2026-10-14 13:10:00", arrivee_aquaworld="2026-10-14 13:40:00"),     # parti après midi
+                  self._ligne("2026-10-14", depart_matin="2026-10-14 11:34:00", arrivee_aquaworld="2026-10-14 13:54:00"),     # arrivé après midi (Akram 02/08)
                   self._ligne("2026-10-15", depart_aquaworld="2026-10-15 09:40:00", retour_soir="2026-10-15 10:10:00"),    # Magasin quitté le matin
                   self._ligne("2026-10-16", nuit_avant_lat=MAGASIN[0] - 0.0069, nuit_avant_lng=MAGASIN[1] - 0.0035,         # dort chez Néjib (830 m)
                               nuit_lat=MAGASIN[0] - 0.0069, nuit_lng=MAGASIN[1] - 0.0035)]

@@ -58,7 +58,7 @@ NUITS_MIN_DOMICILE = 3                          # en dessous, on ne propose pas 
 ARRET_TRAJET_MIN = 3                            # un arrêt de 3 min sur le trajet compte (dépose d'un collègue, café)
 TRAJET_MAX_MIN = 180                            # au-delà, ce n'est pas un trajet domicile ↔ Aquaworld : le terrain s'y est glissé
 PAS_TRANCHE_MIN = 30                            # distributions par demi-heure
-MATIN_DEPART_MAX = 12 * 60                      # un trajet du matin part de chez soi avant midi ; après = demi-journée (après-midi)
+MATIN_ARRIVEE_MAX = 12 * 60                     # un trajet du matin ARRIVE à Aquaworld avant midi ; après = demi-journée (après-midi)
 SOIR_DEPART_MIN = 13 * 60                       # un trajet du soir quitte le Magasin après 13 h ; avant = demi-journée (matinée)
 TRANCHES_MATIN = (7 * 60, 11 * 60)              # arrivées à Aquaworld : < 07:00 … ≥ 11:00
 TRANCHES_SOIR = (15 * 60, 21 * 60)              # départs d'Aquaworld : < 15:00 … ≥ 21:00
@@ -351,7 +351,7 @@ def trajets_pure(lignes: list, max_min: int = TRAJET_MAX_MIN, depot: tuple | Non
     heure de départ d'Aquaworld par demi-heure, durée, directs, endroits de dépose. Un trajet > max_min n'est pas un
     trajet domicile ↔ Aquaworld (le terrain s'y est glissé) : compté « par le terrain », hors distribution.
     `sans_passage` = rentré au domicile (ou parti de chez soi) sans passer du tout par Aquaworld ce jour-là.
-    PRÉCISION (16/10/2026) : un départ de chez soi après midi n'est pas un trajet du matin (`demi_journee`), un départ du
+    PRÉCISION (16/10/2026) : une arrivée à Aquaworld après midi n'est pas un trajet du matin (`demi_journee`), un départ du
     Magasin avant 13 h n'est pas un trajet du soir (`demi_journee`) ; une nuit à ≤ 1 km du Magasin (résidence de Néjib,
     830 m) n'est pas un domicile d'où l'on part : pas de trajet."""
     def colle_au_depot(lat, lng):
@@ -370,7 +370,7 @@ def trajets_pure(lignes: list, max_min: int = TRAJET_MAX_MIN, depot: tuple | Non
                 d = _duree(l["depart_matin"], l["arrivee_aquaworld"])
                 if d is not None and d > max_min:
                     m["par_terrain"] += 1
-                elif (_minutes(l["depart_matin"]) or 0) > MATIN_DEPART_MAX:
+                elif (_minutes(l["arrivee_aquaworld"]) or 0) >= MATIN_ARRIVEE_MAX:
                     m["demi_journee"] += 1
                 elif d is not None:
                     m["n"] += 1
