@@ -67,7 +67,8 @@ def est_osmoseur(l: dict) -> bool:
     """Un osmoseur (unité RO domestique, flux direct, commercial) : par son groupe d'articles ou son code (AP-… / SP-…). PURE."""
     g = (l.get("groupe") or "").lower()
     code = (l.get("code") or "").upper()
-    return l.get("genre") == "unite" and ("osmoseur" in g or g.startswith("ro ") or "appareils commerciaux" in g
+    # pas « osmoseur » dans le nom du groupe : « Pompes osmoseur », « Cartouches osmoseur » en ont et ne sont pas des appareils
+    return l.get("genre") == "unite" and (g.startswith("ro ") or "appareils commerciaux" in g
                                           or code.startswith("AP-") or code.startswith("SP-"))
 
 
