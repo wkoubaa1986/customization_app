@@ -34,13 +34,25 @@ def _lignes_a_marquer(doc) -> list:
             continue
         out.append({"cle": r.name, "genre": "unite", "code": r.item_code or "", "nom": r.item_name or "", "nom_traduit": r.get("item_name_traduit") or "",
                     "marque_commerciale": marques.get(r.item_code) or "", "groupe": (frappe.db.get_value("Item", r.item_code, "item_group") or "") if r.item_code else "",
-                    "qty": qty_retenue(r)})
+                    "qty": qty_retenue(r), "signature": signature_ligne(r, _adds(r))})
         for a in _adds(r):
             code = a.get("item_code") or a.get("item_name") or ""
             if code and code not in acc:
                 acc[code] = {"cle": "acc:" + code, "genre": "accessoire", "code": code, "nom": a.get("item_name") or code,
                              "nom_traduit": a.get("item_name_traduit") or "", "marque_commerciale": a.get("brand") or "", "groupe": "", "qty": 0}
     return out + list(acc.values())
+
+
+def signature_ligne(r, adds: list) -> str:
+    """Ce qui fait qu'une ligne est « le même produit » qu'une autre de même code : ses accessoires embarqués (code × qté par
+    pack) et sa description côté fournisseur (puces, sinon son texte, sinon la nôtre). Deux lignes de même code mais de
+    signature différente = deux variantes (16/10/2026 : « une description un peu différente, plus d'articles dedans »). PURE."""
+    g = r.get if hasattr(r, "get") else (lambda k: getattr(r, k, None))
+    acc = sorted((str(a.get("item_code") or a.get("item_name") or ""), flt(a.get("qty_par_pack")) or 1) for a in adds or [])
+    desc = (g("description_fournisseur_puces") or g("description_fournisseur") or g("description_traduite") or g("description") or "")
+    desc = re.sub(r"<[^>]+>", " ", str(desc))
+    desc = re.sub(r"\s+", " ", desc).strip().lower()
+    return json.dumps([acc, desc], ensure_ascii=False)
 
 
 def _nettoyer(m: str) -> str:
@@ -83,12 +95,21 @@ def proposition_codes(lignes: list) -> dict:
     lettre) ; tout le reste (accessoires, réservoirs, manomètres, filtres…) = NOTRE code article ; une ligne libre sans code =
     nom déterministe. PURE."""
     out, lettres, libres = {}, {}, {}
+    variantes = {}                                             # code → [signatures distinctes, dans l'ordre]
+    for l in lignes:
+        if est_osmoseur(l):
+            sig = l.get("signature") or ""
+            variantes.setdefault(l.get("code") or l["cle"], [])
+            if sig not in variantes[l.get("code") or l["cle"]]:
+                variantes[l.get("code") or l["cle"]].append(sig)
     for l in lignes:
         if est_osmoseur(l):
             code = l.get("code") or l["cle"]
             if code not in lettres:
                 lettres[code] = _lettre(len(lettres))
-            out[l["cle"]] = "MODEL " + lettres[code]
+            sigs = variantes.get(code) or [""]
+            suffixe = ("-%d" % (sigs.index(l.get("signature") or "") + 1)) if len(sigs) > 1 else ""   # même code, contenus différents
+            out[l["cle"]] = "MODEL " + lettres[code] + suffixe
         elif l.get("code"):
             out[l["cle"]] = _nettoyer(l["code"])
         else:                                                  # ligne libre sans code : « ITEM A, B… », abstrait aussi

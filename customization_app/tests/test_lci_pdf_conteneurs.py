@@ -126,6 +126,20 @@ class TestMarquesArticles(unittest.TestCase):
                   {"cle": "r6", "genre": "unite", "code": "PF-10'-PP-UDF-CTO", "groupe": "RO Consommables & Kits d’entretien"}]   # un pack, pas un appareil
         self.assertEqual(proposition_codes(lignes), {"r1": "MODEL A", "r2": "MODEL A", "r3": "MODEL B", "r4": "C-3.2", "r5": "M-16-V", "r6": "PF-10'-PP-UDF-CTO"})
 
+    def test_meme_code_contenu_different_deux_variantes(self):
+        from customization_app.lci_marquage import proposition_codes, signature_ligne
+        class R(dict):
+            def get(self, k, d=None): return dict.get(self, k, d)
+        s1 = signature_ligne(R(description_fournisseur_puces="• 7 stages • pump"), [{"item_code": "Rob-LC", "qty_par_pack": 1}])
+        s2 = signature_ligne(R(description_fournisseur_puces="• 7 stages • pump"), [{"item_code": "Rob-LC", "qty_par_pack": 1}, {"item_code": "M-75", "qty_par_pack": 1}])
+        s3 = signature_ligne(R(description_fournisseur_puces="<b>• 7 stages</b>   • pump "), [{"item_code": "Rob-LC", "qty_par_pack": 1}])
+        self.assertNotEqual(s1, s2); self.assertEqual(s1, s3)                      # un accessoire de plus = variante ; HTML / espaces = pareil
+        lignes = [{"cle": "r1", "genre": "unite", "code": "AP-C+", "groupe": "RO domestique avec pompe", "signature": s1},
+                  {"cle": "r2", "genre": "unite", "code": "AP-C+", "groupe": "RO domestique avec pompe", "signature": s2},
+                  {"cle": "r3", "genre": "unite", "code": "AP-C+", "groupe": "RO domestique avec pompe", "signature": s3},
+                  {"cle": "r4", "genre": "unite", "code": "SP-M", "groupe": "RO domestique sans pompe", "signature": "x"}]
+        self.assertEqual(proposition_codes(lignes), {"r1": "MODEL A-1", "r2": "MODEL A-2", "r3": "MODEL A-1", "r4": "MODEL B"})
+
     def test_accessoires_portent_les_marques(self):
         from customization_app.lci_pdf_conteneurs import accessoires_conteneur
         class R:
