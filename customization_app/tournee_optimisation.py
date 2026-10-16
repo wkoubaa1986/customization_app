@@ -303,17 +303,39 @@ def _geocoder_texte_reseau(adresse_texte: str, ville: str | None):
     return None, True
 
 
+PLAUSIBLE_KM = 30.0                      # un point lu dans le texte à plus de 30 km du centre de son secteur est faux
+TEXTE_HORS_SECTEUR = "texte ≈ (hors secteur)"
+
+
+def plausible(c, secteur: str | None, centres: dict | None = None, max_km: float = PLAUSIBLE_KM) -> bool:
+    """Un point géocodé d'après le TEXTE est-il crédible pour son secteur ? Nominatim lit « Cité Ennasr, Ariana » à
+    Mateur (51 km) ou « Secteur 2 » du côté de Bizerte : 26 adresses du Secteur 2 à plus de 30 km de son centre le
+    16/10/2026 — deux clients fantômes à 65 km rendaient la journée du 17/10 infaisable (Mariem et Nabil laissées de
+    côté). Sans secteur connu (Hors Secteur, vide) on ne juge pas. PURE si `centres` est donné."""
+    if not c or not secteur or secteur == "Hors Secteur":
+        return True
+    centres = centres if centres is not None else _centres_secteurs()
+    centre = centres.get(secteur)
+    return not centre or haversine_km((c[0], c[1]), centre) <= max_km
+
+
 def _geocoder_adresse(nom: str, texte: bool = True):
     """Coordonnées mémorisées sur l'adresse, sinon résolues depuis son lien (puis son texte) et mémorisées.
     Un lien mort est marqué pour ne pas être réessayé à chaque proposition."""
     if not nom:
         return None
     a = frappe.db.get_value("Address", nom, ["custom_latitude", "custom_longitude", "custom_lien_google_map",
-                                             "custom_geocode_source", "address_line1", "city"], as_dict=True)
+                                             "custom_geocode_source", "address_line1", "city", "custom_secteur"], as_dict=True)
     if not a:
         return None
     if a.custom_latitude and a.custom_longitude:
-        return (flt(a.custom_latitude), flt(a.custom_longitude))
+        c = (flt(a.custom_latitude), flt(a.custom_longitude))
+        if (a.custom_geocode_source or "").startswith("texte") and not plausible(c, a.custom_secteur):
+            # Mémorisé avant le contrôle (16/10/2026) : on l'oublie, le centre du secteur fera mieux
+            if not frappe.flags.get("tournee_sans_reseau") and frappe.db.has_column("Address", "custom_geocode_source"):
+                frappe.db.set_value("Address", nom, {"custom_latitude": 0, "custom_longitude": 0, "custom_geocode_source": TEXTE_HORS_SECTEUR}, update_modified=False)
+            return None
+        return c
     if a.custom_lien_google_map and not (a.custom_geocode_source or "").startswith(MARQUE_LIEN_MORT):
         c = resoudre_lien(a.custom_lien_google_map)
         if c:
@@ -323,6 +345,10 @@ def _geocoder_adresse(nom: str, texte: bool = True):
             frappe.db.set_value("Address", nom, "custom_geocode_source", "%s %s" % (MARQUE_LIEN_MORT, frappe.utils.nowdate()), update_modified=False)
     if texte and not (a.custom_geocode_source or "").startswith("texte"):
         c = geocoder_texte(a.address_line1, a.city)
+        if c and not plausible(c, a.custom_secteur):
+            if frappe.db.has_column("Address", "custom_geocode_source"):
+                frappe.db.set_value("Address", nom, "custom_geocode_source", TEXTE_HORS_SECTEUR, update_modified=False)
+            return None
         if c:
             _memoriser(nom, c, "texte ≈")
             return c
@@ -390,6 +416,9 @@ def geocoder_adresses(limite: int = 500) -> dict:
             c = geocoder_texte(a.address_line1, a.city)
             if c:
                 # Le lien mort reste visible dans la source : c'est lui qu'il faut corriger sur l'adresse.
+                if not plausible(c, frappe.db.get_value("Address", a.name, "custom_secteur")):
+                    frappe.db.set_value("Address", a.name, "custom_geocode_source", TEXTE_HORS_SECTEUR, update_modified=False)
+                    continue
                 _memoriser(a.name, c, "texte ≈ (lien mort)" if src.startswith(MARQUE_LIEN_MORT) else "texte ≈")
                 bilan["textes"] += 1
             else:
@@ -1020,6 +1049,7 @@ def proposer(date, fenetre=None, employes=None, depassement=None):
         deps.append(0 if fin_voulue else dep_calcul)       # une fin saisie dans la fenêtre reste stricte
     debut_j, fin_j = min(debuts), max(fins)
     fenetre = cint(cfg["fenetre"]) if fenetre is None else cint(fenetre)
+    fenetre_courante = fenetre
 
     def _noeud(a):
         if not a["mobile"]:
@@ -1030,9 +1060,10 @@ def proposer(date, fenetre=None, employes=None, depassement=None):
             # « Heure fixe » : l'heure promise, chez n'importe quel employé (sauf s'il est fixe aussi).
             a["fenetre"] = (a["debut"], a["debut"])
             return {"service": a["service"], "fenetre": a["fenetre"], "vehicule": vehicule, "fixe_pause": True}
-        # Déplaçable : libre dans la journée, ou dans ± fenêtre autour de son heure actuelle (défaut).
-        fen = None if not fenetre else (max(cfg["premiere"], a["debut"] - fenetre),
-                                        min(fin_j + max(deps), max(a["debut"] + fenetre, cfg["premiere"])))
+        # Déplaçable : libre dans la journée, ou dans ± fenêtre autour de son heure actuelle (défaut) — fenêtre
+        # élargie automatiquement si rien ne tient (voir _passes).
+        fen = None if not fenetre_courante else (max(cfg["premiere"], a["debut"] - fenetre_courante),
+                                                 min(fin_j + max(deps), max(a["debut"] + fenetre_courante, cfg["premiere"])))
         a["fenetre"] = fen
         return {"service": a["service"], "fenetre": fen, "vehicule": vehicule}
 
@@ -1045,17 +1076,37 @@ def proposer(date, fenetre=None, employes=None, depassement=None):
     for a in arrets:
         a["fixe_initial"] = not a["mobile"]          # pour la colonne « Actuel » : les vraies épingles, pas les abandons
 
+    elargie = {"fait": False}
+
     def _passes(mn_x):
-        """Les trois passes (libre → non placées fixées → non placées en créneaux occupés) sur une matrice donnée."""
-        nonlocal fin_j
-        for a in arrets:
-            a["mobile"] = mobiles_depart[a["noeud"]]
-        fins[:] = fins_depart
-        fin_j = max(fins)
-        noeuds = [_noeud(a) for a in arrets]
-        sol = resoudre(mn_x, noeuds, len(employes), debut_j, fin_j, cfg["equilibre"], premiere=cfg["premiere"], depots=depots,
-                       marge=cfg["marge"], pause=cfg["pause"], debuts=debuts, fins=fins,
-                       rangement=cfg["rangement"], depassements=deps)
+        """Les passes (fenêtre réglée → fenêtre doublée → libre ; puis non placées fixées → non placées en créneaux
+        occupés) sur une matrice donnée.
+        ÉLARGISSEMENT AUTOMATIQUE (16/10/2026) : à ± 2 h, la journée de Mohamed Hedi du 17/10 ne tenait pas (Hatem à heure
+        fixe 12:00, pause, marges) et le repli figeait Mariem et Nabil à leurs heures qui se chevauchent, avec des retards
+        partout ; en fenêtre libre, les 7 tâches tenaient, retour 16:40, 29 km au lieu de 44. Mieux vaut bouger une heure
+        que laisser une tâche sans place : on essaie la fenêtre réglée, puis le double, puis libre, et on le dit."""
+        nonlocal fin_j, fenetre_courante
+        candidats = [fenetre] if not fenetre else [fenetre, fenetre * 2, 0]
+        sans_place = 0                                     # combien ne tenaient pas à la fenêtre réglée
+        for k, fen_k in enumerate(candidats):
+            fenetre_courante = fen_k
+            for a in arrets:
+                a["mobile"] = mobiles_depart[a["noeud"]]
+            fins[:] = fins_depart
+            fin_j = max(fins)
+            noeuds = [_noeud(a) for a in arrets]
+            sol = resoudre(mn_x, noeuds, len(employes), debut_j, fin_j, cfg["equilibre"], premiere=cfg["premiere"], depots=depots,
+                           marge=cfg["marge"], pause=cfg["pause"], debuts=debuts, fins=fins,
+                           rangement=cfg["rangement"], depassements=deps)
+            if k == 0:
+                sans_place = len(sol["non_places"])
+            if not sol["non_places"]:
+                break
+        if fenetre_courante != fenetre and not elargie["fait"]:
+            elargie["fait"] = True
+            avert.append(_("Fenêtre élargie à {0} : à ± {1}, {2} tâche(s) ne tenaient pas dans la tournée").format(
+                _("libre dans la journée") if not fenetre_courante else "± " + _hm(fenetre_courante).lstrip("0").replace(":", " h "),
+                _hm(fenetre).lstrip("0").replace(":", " h "), sans_place))
         if sol["non_places"]:
             # Ce qui n'a pas trouvé place reste où c'est (employé, heure) et la tournée se recalcule autour,
             # pour que la proposition soit complète et comparable à l'existant.

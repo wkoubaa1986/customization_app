@@ -390,3 +390,15 @@ class TestJourneeDeTravail(unittest.TestCase):
         self.assertEqual((a["autres"], a["minutes_autres"], a["jours_autres"]), (2, 30, 1))
         self.assertEqual(a["jours_par_autres"], [2, 0, 1, 0, 0, 0])          # 2 journées sans arrêt en plus, 1 avec 2
         self.assertEqual(a["jours_par_termines"], [1, 0, 1, 0, 1, 0])        # 4 (3+1), 2, 0
+
+
+class TestGeocodagePlausible(unittest.TestCase):
+    def test_un_point_texte_loin_de_son_secteur_est_rejete(self):
+        from customization_app.tournee_optimisation import plausible
+        centres = {"Secteur 2": (36.86, 10.1736)}
+        self.assertFalse(plausible((37.0507, 9.6382), "Secteur 2", centres))      # « Cité Ennasr » lu à Mateur, 51 km
+        self.assertTrue(plausible((36.85, 10.16), "Secteur 2", centres))           # Ennasr, le vrai
+        self.assertTrue(plausible((37.0507, 9.6382), "Hors Secteur", centres))     # pas de jugement hors secteur
+        self.assertTrue(plausible((37.0507, 9.6382), None, centres))
+        self.assertTrue(plausible((37.0507, 9.6382), "Secteur 42", centres))       # centre inconnu : on ne juge pas
+        self.assertTrue(plausible(None, "Secteur 2", centres))
