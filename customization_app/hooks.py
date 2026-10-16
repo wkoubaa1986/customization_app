@@ -171,6 +171,10 @@ has_permission = {
 # Hook on document methods and events
 
 doc_events = {
+    # Domicile des employés : la fiche Employé et « Points de départ particuliers » (Config Optimisation Tournees) sont
+    # une seule valeur, synchronisée dans les deux sens. Voir domicile_employe.py.
+    "Employee": {"on_update": "customization_app.domicile_employe.depuis_employe"},
+    "Config Optimisation Tournees": {"on_update": "customization_app.domicile_employe.depuis_config"},
     # Congés & récupérations : chaque jour d'absence approuvé = une Tâche de travail « toute la
     # journée » dans le calendrier (remplace le Server Script « Generer » sur Attendance), retirée
     # à l'annulation. Voir conges_recuperations.py.

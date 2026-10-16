@@ -6,7 +6,7 @@
  "engine": "InnoDB",
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-10-16 13:00:00.000000",
+ "modified": "2026-10-16 14:00:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "owner": "Administrator",
@@ -217,6 +217,16 @@
   {
    "fieldname": "col_stats",
    "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "sec_domiciles",
+   "fieldtype": "Section Break",
+   "label": "Domiciles des techniciens (même réglage que l'optimisation des tournées)"
+  },
+  {
+   "fieldname": "domiciles_html",
+   "fieldtype": "HTML",
+   "label": "Domiciles"
   }
  ],
  "field_order": [
@@ -236,6 +246,8 @@
   "stats_date_debut",
   "col_stats",
   "covoiturage",
+  "sec_domiciles",
+  "domiciles_html",
   "sec_messages",
   "sms_en_route",
   "sms_retard",

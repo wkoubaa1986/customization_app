@@ -690,6 +690,19 @@ def fixer_domicile(employe, lat, lng):
     return {"employe": employe, "latitude": lat, "longitude": lng}
 
 
+@frappe.whitelist()
+def domiciles_regles():
+    """Les domiciles réglés (table « Points de départ particuliers » de Config Optimisation Tournees), pour le bloc
+    « Domiciles » de Config Flotte GPS : la même source que l'optimisation des tournées, le suivi GPS n'en a pas d'autre."""
+    if not frappe.has_permission(fg.CONFIG, "read"):
+        frappe.throw("Accès réservé", frappe.PermissionError)
+    departs = to.config()["departs"]
+    noms = {e.name: e.employee_name for e in frappe.get_all("Employee", filters={"name": ["in", list(departs) or [""]]}, fields=["name", "employee_name"])}
+    return {"rayon_nuit_m": fg.RAYON_NUIT_M,
+            "domiciles": sorted(({"employe": e, "employe_nom": noms.get(e, e), "lat": flt(d[0]), "lng": flt(d[1])} for e, d in departs.items() if d),
+                                key=lambda x: x["employe_nom"] or "")}
+
+
 @frappe.whitelist(methods=["POST"])
 def definir_equipages(texte=None, stats_depuis=None):
     """Depuis l'onglet : « Qui rentre avec qui » (une ligne par équipage) et « Statistiques depuis le » (Config Flotte GPS)."""

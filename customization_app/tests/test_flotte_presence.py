@@ -301,3 +301,14 @@ class TestStatistiques(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestDomicileEmploye(unittest.TestCase):
+    def test_fusion_de_la_table_des_points_de_depart(self):
+        from customization_app.domicile_employe import fusionner_pure
+        table = [{"employe": "S", "lien": "l1", "latitude": 36.96, "longitude": 10.21}, {"employe": "A", "lien": "l2", "latitude": 36.83, "longitude": 10.19}]
+        out = fusionner_pure(table, "A", 36.84, 10.20, None)
+        self.assertEqual([(r["employe"], r["latitude"]) for r in out], [("S", 36.96), ("A", 36.84)])
+        self.assertEqual(out[1]["lien"], "https://www.google.com/maps?q=36.840000,10.200000")
+        self.assertEqual([r["employe"] for r in fusionner_pure(table, "A", 0, 0, "")], ["S"])      # vidé sur la fiche → ligne retirée
+        self.assertEqual(fusionner_pure(table, "J", 36.88, 10.31, "lj")[-1], {"employe": "J", "lien": "lj", "latitude": 36.88, "longitude": 10.31})
