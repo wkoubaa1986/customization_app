@@ -73,6 +73,7 @@ frappe.ui.form.on("Liste Commande Import", {
     // le grid natif est remplacé par la table custom (données inchangées)
     frm.get_field("articles").$wrapper.hide();
     lci_render_table(frm);
+      lci_charger_marques(frm);
     lci_render_conteneurs(frm);
 
     frm.add_custom_button(__("Depuis le catalogue"),
@@ -177,9 +178,18 @@ function lci_reindex(frm) {
 // articles additionnels embarqués dans une ligne pack (JSON sur la ligne)
 // Marques d'expédition par article (16/10/2026) : {clé: marque} mémorisées sur la commande (lci_marquage.py).
 function lci_marques(frm) {
+  if (frm._lci_marques) return frm._lci_marques;                      // effectives (défauts + mémorisées), chargées par lci_charger_marques
   try { return JSON.parse(frm.doc.marques_articles || "{}") || {}; } catch (e) { return {}; }
 }
 function lci_marque_de(frm, cle) { return (lci_marques(frm)[cle] || ""); }
+async function lci_charger_marques(frm) {
+  if (frm.is_new()) return;
+  try {
+    const r = await frappe.call({ method: "customization_app.lci_marquage.defauts", args: { docname: frm.doc.name } });
+    frm._lci_marques = r.message || {};
+    lci_render_table(frm);
+  } catch (e) { /* pas d'accès : pastilles sur la base du champ mémorisé seulement */ }
+}
 
 function lci_adds(row) {
   try { return JSON.parse(row.articles_additionnels || "[]") || []; }
@@ -1048,7 +1058,7 @@ function lci_render_table(frm) {
       ${lci_cmp_pastille(r)}
       ${r.controle_description ? `<div title="${esc(__("Contrôle de la description (IA), à l'import de la réponse du fournisseur") + " : " + r.controle_description)}"
           style="font-size:10.5px;margin-top:2px;color:${r.controle_description.startsWith("✓") ? "#237804" : r.controle_description.startsWith("⚠") ? "#a8071a" : "#ad4e00"};${r.controle_description.startsWith("✓") ? "" : "font-weight:700;"}">${esc(r.controle_description.slice(0, 110))}</div>` : ""}
-      ${(lci_marque_de(frm, r.name) || r.item_code) ? `<div class="lci-mark" data-act="marques" title="${__("Shipping mark de cet article (imprimée sur les cartons et dans le PDF du plan de chargement) — cliquer pour modifier")}">🏷️ ${esc(lci_marque_de(frm, r.name) || r.item_code)}</div>` : ""}
+      ${lci_marque_de(frm, r.name) ? `<div class="lci-mark" data-act="marques" title="${__("Shipping mark de cet article (imprimée sur les cartons et dans le PDF du plan de chargement) — cliquer pour modifier")}">🏷️ ${esc(lci_marque_de(frm, r.name))}</div>` : ""}
       ${lci_adds(r).map((a, ai) => `
         <div class="lci-add">➕ <b>ADDITIONNEL</b> : ${esc(lci_add_label(a))}
           — ${format_number(flt(a.qty_par_pack), null, 0)}/pack × ${format_number(lci_qty_ret(r), null, 0)}
@@ -4204,7 +4214,8 @@ async function lci_marques_articles(frm, ia) {
         frm.doc.marques_articles = JSON.stringify(marques);
         frappe.show_alert({ message: __("{0} marque(s) mémorisée(s) — elles sortent dans le PDF", [Object.keys(marques).length]), indicator: "green" });
         d.hide();
-        try { lci_render_table(frm); } catch (err) { /* re-rendu au prochain refresh */ }
+        frm._lci_marques = null;
+        lci_charger_marques(frm);
       } catch (e) { frappe.msgprint(String(e.message || e)); }
     },
   });

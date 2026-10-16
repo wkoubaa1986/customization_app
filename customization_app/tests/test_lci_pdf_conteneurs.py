@@ -117,7 +117,13 @@ class TestMarquesArticles(unittest.TestCase):
         lignes = [{"cle": "r1", "genre": "unite", "code": "AP-C+-EP-7-MA-SM", "nom": "x", "marque_commerciale": "ecoPurium"},
                   {"cle": "r2", "genre": "unite", "code": "", "nom": "Réservoir acier 2,8 G", "marque_commerciale": ""},
                   {"cle": "acc:Rob-LC", "genre": "accessoire", "code": "Rob-LC", "nom": "Robinet, Luxe Chromé", "nom_traduit": "Faucet, Deluxe Chrome"}]
-        self.assertEqual(proposition_codes(lignes), {"r1": "AP-C+-EP-7-MA-SM", "r2": "AQUAWORLD · MODEL A", "acc:Rob-LC": "ROB-LC"})
+        self.assertEqual(proposition_codes(lignes), {"r1": "MODEL A", "r2": "ITEM A", "acc:Rob-LC": "ROB-LC"})
+        lignes = [{"cle": "r1", "genre": "unite", "code": "AP-P-EP-7", "groupe": "RO domestique avec pompe"},
+                  {"cle": "r2", "genre": "unite", "code": "AP-P-EP-7", "groupe": "RO domestique avec pompe"},      # même code = même lettre
+                  {"cle": "r3", "genre": "unite", "code": "AP-STDS-5-800GPD", "groupe": "Appareils commerciaux"},
+                  {"cle": "r4", "genre": "unite", "code": "C-3.2", "groupe": "Réservoirs pressurisés verticaux"},
+                  {"cle": "r5", "genre": "unite", "code": "M-16-V", "groupe": "Manomètres"}]
+        self.assertEqual(proposition_codes(lignes), {"r1": "MODEL A", "r2": "MODEL A", "r3": "MODEL B", "r4": "C-3.2", "r5": "M-16-V"})
 
     def test_accessoires_portent_les_marques(self):
         from customization_app.lci_pdf_conteneurs import accessoires_conteneur

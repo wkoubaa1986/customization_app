@@ -63,11 +63,43 @@ def proposition_deterministe(lignes: list) -> dict:
     return out
 
 
+def est_osmoseur(l: dict) -> bool:
+    """Un osmoseur (unité RO domestique, flux direct, commercial) : par son groupe d'articles ou son code (AP-… / SP-…). PURE."""
+    g = (l.get("groupe") or "").lower()
+    code = (l.get("code") or "").upper()
+    return l.get("genre") == "unite" and ("osmoseur" in g or g.startswith("ro ") or "appareils commerciaux" in g
+                                          or code.startswith("AP-") or code.startswith("SP-"))
+
+
+def _lettre(n: int) -> str:
+    return chr(ord("A") + n) if n < 26 else "A" + chr(ord("A") + n - 26)
+
+
 def proposition_codes(lignes: list) -> dict:
-    """Par défaut (choix du 16/10/2026 : « AQUAWORLD · REF code, c'est mieux pour mes employés ») : la marque = NOTRE code article,
-    celui qu'on retrouve à la réception, sur le bon et dans le stock ; une ligne libre sans code garde le nom déterministe. PURE."""
-    deter = proposition_deterministe(lignes)
-    return {l["cle"]: (_nettoyer(l["code"]) if l.get("code") else deter[l["cle"]]) for l in lignes}
+    """Marques ABSTRAITES (décisions du 16/10/2026 : « AQUAWORLD · REF code », « abstrait même pour la douane », « garde les
+    Model A, B, C pour les osmoseurs ») : un osmoseur = « MODEL A / B / C… » dans l'ordre de la liste (même code = même
+    lettre) ; tout le reste (accessoires, réservoirs, manomètres, filtres…) = NOTRE code article ; une ligne libre sans code =
+    nom déterministe. PURE."""
+    out, lettres, libres = {}, {}, {}
+    for l in lignes:
+        if est_osmoseur(l):
+            code = l.get("code") or l["cle"]
+            if code not in lettres:
+                lettres[code] = _lettre(len(lettres))
+            out[l["cle"]] = "MODEL " + lettres[code]
+        elif l.get("code"):
+            out[l["cle"]] = _nettoyer(l["code"])
+        else:                                                  # ligne libre sans code : « ITEM A, B… », abstrait aussi
+            nom = (l.get("nom") or l["cle"]).strip().lower()
+            if nom not in libres:
+                libres[nom] = _lettre(len(libres))
+            out[l["cle"]] = "ITEM " + libres[nom]
+    return out
+
+
+def marques_par_defaut(doc) -> dict:
+    """Les marques sans rien avoir cliqué : osmoseurs en MODEL A/B/C, le reste par code (sert au PDF et aux pastilles)."""
+    return proposition_codes(_lignes_a_marquer(doc))
 
 
 def _prompt(lignes: list) -> str:
@@ -131,6 +163,18 @@ def proposer(docname, ia=0):
         l["proposee"] = prop.get(l["cle"]) or deter.get(l["cle"]) or ""
         l["marque"] = deja.get(l["cle"]) or l["proposee"]
     return {"lignes": lignes, "source": source, "deja": bool(deja)}
+
+
+@frappe.whitelist()
+def defauts(docname):
+    """{clé: marque} effectives (défauts + mémorisées), pour les pastilles de la liste d'articles."""
+    from customization_app.liste_commande_import import _guard
+
+    _guard()
+    doc = frappe.get_doc("Liste Commande Import", docname)
+    out = marques_par_defaut(doc)
+    out.update({k: v for k, v in marques_enregistrees(doc).items() if v})
+    return out
 
 
 @frappe.whitelist(methods=["POST"])

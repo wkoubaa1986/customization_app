@@ -115,11 +115,9 @@ def marque_principale(modele, ref, no, total) -> str:
 def marques_articles(doc) -> dict:
     """{clé: marque} — clé = nom de ligne (unité) ou « acc:<code> » (accessoire). Les marques mémorisées (lci_marquage),
     complétées par NOTRE CODE ARTICLE pour toute ligne qui n'en a pas (défaut du 16/10/2026 : « AQUAWORLD · REF code »)."""
-    from customization_app.lci_marquage import marques_enregistrees
-    out = {k: v for k, v in marques_enregistrees(doc).items() if v}
-    for r in doc.get("articles") or []:
-        if r.item_code and not out.get(r.name):
-            out[r.name] = r.item_code
+    from customization_app.lci_marquage import marques_enregistrees, marques_par_defaut
+    out = marques_par_defaut(doc)
+    out.update({k: v for k, v in marques_enregistrees(doc).items() if v})
     return out
 
 
