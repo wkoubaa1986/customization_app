@@ -11,7 +11,7 @@
  */
 (() => {
   const esc = (s) => frappe.utils.escape_html(s == null ? "" : String(s));
-  const ROLES = ["System Manager", "Responsable magasin"];
+  const ROLES = ["System Manager", "Responsable magasin", "Appels"];   // même liste que tournee_optimisation.ROLES
   const API = "customization_app.tournee_optimisation.";
 
   function dateAffichee() {

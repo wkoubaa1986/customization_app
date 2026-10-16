@@ -42,7 +42,7 @@ DEPASSEMENT_DEFAUT = 60
 COUT_DEPASSEMENT = 100
 DEPOT_DEFAUT = (36.8700, 10.1950)        # Soukra, à défaut du lien du réglage
 VITESSE_KMH = 30.0                       # repli à vol d'oiseau
-ROLES = ("System Manager", "Responsable magasin")
+ROLES = ("System Manager", "Responsable magasin", "Appels")   # Appels = le poste de Salma, qui planifie la journée (16/10/2026 : elle ne voyait pas le bouton)
 PAS_MIN = 5                              # les heures proposées tombent sur 5 min
 # Temps standard par type (celui de api.DUREE_INTERVENTION) : la durée retenue est ce standard, sauf si la tâche
 # planifie nettement plus (décision utilisateur 02/10/2026 : un « 15 min » ne raccourcit pas un entretien).
