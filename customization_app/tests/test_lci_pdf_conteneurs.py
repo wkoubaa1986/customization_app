@@ -122,8 +122,9 @@ class TestMarquesArticles(unittest.TestCase):
                   {"cle": "r2", "genre": "unite", "code": "AP-P-EP-7", "groupe": "RO domestique avec pompe"},      # même code = même lettre
                   {"cle": "r3", "genre": "unite", "code": "AP-STDS-5-800GPD", "groupe": "Appareils commerciaux"},
                   {"cle": "r4", "genre": "unite", "code": "C-3.2", "groupe": "Réservoirs pressurisés verticaux"},
-                  {"cle": "r5", "genre": "unite", "code": "M-16-V", "groupe": "Manomètres"}]
-        self.assertEqual(proposition_codes(lignes), {"r1": "MODEL A", "r2": "MODEL A", "r3": "MODEL B", "r4": "C-3.2", "r5": "M-16-V"})
+                  {"cle": "r5", "genre": "unite", "code": "M-16-V", "groupe": "Manomètres"},
+                  {"cle": "r6", "genre": "unite", "code": "PF-10'-PP-UDF-CTO", "groupe": "RO Consommables & Kits d’entretien"}]   # un pack, pas un appareil
+        self.assertEqual(proposition_codes(lignes), {"r1": "MODEL A", "r2": "MODEL A", "r3": "MODEL B", "r4": "C-3.2", "r5": "M-16-V", "r6": "PF-10'-PP-UDF-CTO"})
 
     def test_accessoires_portent_les_marques(self):
         from customization_app.lci_pdf_conteneurs import accessoires_conteneur

@@ -67,9 +67,10 @@ def est_osmoseur(l: dict) -> bool:
     """Un osmoseur (unité RO domestique, flux direct, commercial) : par son groupe d'articles ou son code (AP-… / SP-…). PURE."""
     g = (l.get("groupe") or "").lower()
     code = (l.get("code") or "").upper()
-    # pas « osmoseur » dans le nom du groupe : « Pompes osmoseur », « Cartouches osmoseur » en ont et ne sont pas des appareils
-    return l.get("genre") == "unite" and (g.startswith("ro ") or "appareils commerciaux" in g
-                                          or code.startswith("AP-") or code.startswith("SP-"))
+    # un APPAREIL seulement : « RO domestique… », « RO flux direct », « Appareils commerciaux » — pas « RO Consommables & Kits »
+    # (packs de cartouches), ni « Pompes osmoseur » ; ou le code AP-… / SP-… de nos appareils.
+    appareil = (g.startswith("ro ") and "consommable" not in g and "kit" not in g) or "appareils commerciaux" in g
+    return l.get("genre") == "unite" and (appareil or code.startswith("AP-") or code.startswith("SP-"))
 
 
 def _lettre(n: int) -> str:
