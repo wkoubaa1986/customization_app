@@ -423,9 +423,20 @@ def equipages() -> list:
     return fg.equipages()
 
 
-def heriter_pure(lignes: list, groupes: list, noms: dict) -> list:
+def en_poste_pure(employe: str, date, periodes: dict | None) -> bool:
+    """L'employé était-il en poste ce jour-là ? `periodes` = {employé: (date d'embauche | None, date de départ | None)}.
+    Sans information, oui. PURE."""
+    if not periodes or employe not in periodes:
+        return True
+    d, f = periodes[employe]
+    date = str(date)[:10]
+    return not (d and date < str(d)[:10]) and not (f and date > str(f)[:10])
+
+
+def heriter_pure(lignes: list, groupes: list, noms: dict, periodes: dict | None = None) -> list:
     """Un coéquipier sans journée de véhicule à lui ce jour-là hérite de celle de son équipage (mêmes heures), marquée
-    `passager` + `avec`. Les nuits restent au conducteur (le domicile du passager ne s'en déduit pas). PURE."""
+    `passager` + `avec` — s'il était EN POSTE ce jour-là (`periodes`, fiche Employé : Akram, embauché le 29/07, héritait des
+    journées de Mohamed de juin-juillet, 16/10/2026). Les nuits restent au conducteur. PURE."""
     reelles = {(str(l.get("date")), l.get("employe")) for l in lignes if l.get("employe")}
     groupe_de = {}
     for g in groupes:
@@ -437,7 +448,7 @@ def heriter_pure(lignes: list, groupes: list, noms: dict) -> list:
         if not e or l.get("passager"):
             continue
         for p in sorted(groupe_de.get(e, ())):
-            if (str(l.get("date")), p) in reelles:
+            if (str(l.get("date")), p) in reelles or not en_poste_pure(p, l.get("date"), periodes):
                 continue
             v = dict(l, employe=p, employe_nom=noms.get(p, p), passager=True, avec=l.get("employe_nom") or e,
                      name="%s|%s" % (l.get("name"), p))
@@ -651,7 +662,8 @@ def presence(du=None, au=None, employe=None):
                 nuits.append({"employe": l["employe"], "employe_nom": l["employe_nom"], "vehicule": l.get("vehicule"),
                               "lat": l[k + "_lat"], "lng": l[k + "_lng"], "date": l["date"]})
     groupes = equipages()
-    toutes = heriter_pure(suivies, groupes, noms)
+    periodes = {e.name: (e.date_of_joining, e.relieving_date) for e in frappe.get_all("Employee", fields=["name", "date_of_joining", "relieving_date"], limit_page_length=0)}
+    toutes = heriter_pure(suivies, groupes, noms, periodes)
     toutes.sort(key=lambda l: (str(l["date"]), l.get("employe_nom") or "", l.get("vehicule") or ""), reverse=True)
     if employe:
         toutes = [l for l in toutes if l.get("employe") == employe]

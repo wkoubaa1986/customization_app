@@ -196,6 +196,16 @@ class TestEquipages(unittest.TestCase):
         self.assertNotIn("attribue_par_taches", v)                 # la note « par la nuit » reste au conducteur
         self.assertFalse(any(l.get("passager") for l in out[:3]))
 
+    def test_pas_d_heritage_avant_l_embauche(self):
+        noms = dict(self.EMP)
+        lignes = [{"name": "GPS-1", "date": "2026-07-10", "employe": "HR-EMP-00006", "employe_nom": "Mohamed Hedi Chouchane"},
+                  {"name": "GPS-2", "date": "2026-08-19", "employe": "HR-EMP-00006", "employe_nom": "Mohamed Hedi Chouchane"}]
+        periodes = {"HR-EMP-00010": ("2026-07-29", None), "HR-EMP-00006": ("2024-04-15", None)}
+        out = fp.heriter_pure(lignes, [["HR-EMP-00010", "HR-EMP-00006"]], noms, periodes)
+        self.assertEqual([(l["date"], l["employe"]) for l in out if l.get("passager")], [("2026-08-19", "HR-EMP-00010")])   # pas le 10/07
+        self.assertTrue(fp.en_poste_pure("X", "2026-01-01", None))
+        self.assertFalse(fp.en_poste_pure("X", "2026-01-01", {"X": (None, "2025-12-31")}))      # parti
+
     def test_les_nuits_du_passager_ne_comptent_pas(self):
         s = fp.statistiques_pure([{"employe": "J", "employe_nom": "Jamel", "nuit_avant_lieu": "Domicile", "nuit_lieu": "Domicile",
                                    "passager": True, "depart_aquaworld": "2026-10-14 17:30:00"}])
