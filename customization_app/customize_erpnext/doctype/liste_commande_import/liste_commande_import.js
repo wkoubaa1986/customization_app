@@ -175,6 +175,12 @@ function lci_reindex(frm) {
 }
 
 // articles additionnels embarqués dans une ligne pack (JSON sur la ligne)
+// Marques d'expédition par article (16/10/2026) : {clé: marque} mémorisées sur la commande (lci_marquage.py).
+function lci_marques(frm) {
+  try { return JSON.parse(frm.doc.marques_articles || "{}") || {}; } catch (e) { return {}; }
+}
+function lci_marque_de(frm, cle) { return (lci_marques(frm)[cle] || ""); }
+
 function lci_adds(row) {
   try { return JSON.parse(row.articles_additionnels || "[]") || []; }
   catch (e) { return []; }
@@ -1042,10 +1048,12 @@ function lci_render_table(frm) {
       ${lci_cmp_pastille(r)}
       ${r.controle_description ? `<div title="${esc(__("Contrôle de la description (IA), à l'import de la réponse du fournisseur") + " : " + r.controle_description)}"
           style="font-size:10.5px;margin-top:2px;color:${r.controle_description.startsWith("✓") ? "#237804" : r.controle_description.startsWith("⚠") ? "#a8071a" : "#ad4e00"};${r.controle_description.startsWith("✓") ? "" : "font-weight:700;"}">${esc(r.controle_description.slice(0, 110))}</div>` : ""}
+      ${lci_marque_de(frm, r.name) ? `<div class="lci-mark" data-act="marques" title="${__("Shipping mark de cet article (imprimée sur les cartons et dans le PDF du plan de chargement) — cliquer pour modifier")}">🏷️ ${esc(lci_marque_de(frm, r.name))}</div>` : ""}
       ${lci_adds(r).map((a, ai) => `
         <div class="lci-add">➕ <b>ADDITIONNEL</b> : ${esc(lci_add_label(a))}
           — ${format_number(flt(a.qty_par_pack), null, 0)}/pack × ${format_number(lci_qty_ret(r), null, 0)}
           = <b>${format_number(flt(a.qty_par_pack) * lci_qty_ret(r), null, 0)} ${esc(a.uom || "")}</b>
+          ${lci_marque_de(frm, "acc:" + (a.item_code || a.item_name || "")) ? `<span class="lci-mark lci-mark-acc" data-act="marques" title="${__("Shipping mark des cartons de cet accessoire")}">🏷️ ${esc(lci_marque_de(frm, "acc:" + (a.item_code || a.item_name || "")))}</span>` : ""}
           <span class="lci-add-x" data-addx="${ai}" title="${__("Retirer cet additionnel")}">✕</span></div>`).join("")}
     </td>`);
 
@@ -1255,6 +1263,9 @@ function lci_render_table(frm) {
       .lci-updown span { cursor: pointer; font-size: 9px; color: #b6bec9; padding: 0 2px; }
       .lci-updown span:hover { color: #0958d9; }
       tr.sortable-ghost { opacity: .4; background: #e6f4ff; }
+      .lci-mark { display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: .3px; color: #0b3d91; background: #e6f0ff;
+        border: 1px solid #adc6ff; border-radius: 5px; padding: 1px 7px; margin-top: 3px; cursor: pointer; }
+      .lci-mark-acc { margin: 0 0 0 6px; font-size: 10.5px; }
       .lci-add { font-size: 11px; color: #a8071a; background: #fff1f0; border: 1px solid #ffa39e;
                  border-radius: 6px; padding: 2px 6px; margin-top: 3px; max-width: 460px; }
       .lci-add-x { cursor: pointer; font-weight: 700; color: #a8071a; padding: 0 3px; float: right; }
@@ -1385,6 +1396,7 @@ function lci_render_table(frm) {
 
   $t.find('[data-act="image"]').on("click", (e) => { const r = row_of(e); r && lci_upload_image(frm, r); });
   $t.find('[data-act="desc"]').on("click", (e) => { const r = row_of(e); r && lci_desc_dialog(frm, r); });
+  $t.find('[data-act="marques"]').on("click", (e) => { e.stopPropagation(); lci_marques_articles(frm); });
   // Description du fournisseur (enregistrée à l'application de sa réponse) : en entier, en lecture seule.
   // Notre description face à la sienne (puces + comparaison par l'IA), son texte d'origine en dessous.
   $t.find("[data-frn-desc]").on("click", (e) => {
@@ -4191,6 +4203,7 @@ async function lci_marques_articles(frm) {
         frm.doc.marques_articles = JSON.stringify(marques);
         frappe.show_alert({ message: __("{0} marque(s) mémorisée(s) — elles sortent dans le PDF", [Object.keys(marques).length]), indicator: "green" });
         d.hide();
+        try { lci_render_table(frm); } catch (err) { /* re-rendu au prochain refresh */ }
       } catch (e) { frappe.msgprint(String(e.message || e)); }
     },
   });
