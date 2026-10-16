@@ -421,14 +421,16 @@ def _duree_planifiee(t) -> int:
 
 # ── Appariement écrit (cron / bouton) ────────────────────────────────────────
 
-def _resume_journee(jour, cbox, j: dict, taches: list, resultat: dict, cfg: dict) -> dict:
+def _resume_journee(jour, cbox, j: dict, taches: list, resultat: dict, cfg: dict, depot: tuple | None = None) -> dict:
+    """La journée d'un véhicule pour Journee Flotte GPS. Avec `depot`, les heures de présence à Aquaworld et les points
+    de nuit (flotte_presence) s'ajoutent — l'onglet « Présence Aquaworld » les lit sans relire la plateforme."""
     d0 = datetime.combine(getdate(jour), datetime.min.time())
     d1 = d0 + timedelta(days=1)
     trajets = [x for x in j["trajets"] if d0 <= x["debut"] < d1]
     arrets = [x for x in j["arrets"] if x["dep"] > d0 and x["arr"] < d1]
     noms = [t["name"] for t in taches]
     passages = [resultat[n] for n in noms if resultat.get(n, {}).get("statut") == CONFIRME]
-    return {"date": getdate(jour), "vehicule": cfg["cbox_vehicule"].get(cbox) or cbox, "cbox": cbox,
+    res = {"date": getdate(jour), "vehicule": cfg["cbox_vehicule"].get(cbox) or cbox, "cbox": cbox,
             "km": round(sum(x["km"] for x in trajets), 1),
             "minutes_conduite": sum(x["minutes"] for x in trajets),
             "minutes_arrets": sum(int((min(x["dep"], d1) - max(x["arr"], d0)).total_seconds() // 60) for x in arrets),
@@ -436,6 +438,11 @@ def _resume_journee(jour, cbox, j: dict, taches: list, resultat: dict, cfg: dict
             "premiere_sortie": trajets[0]["debut"] if trajets else None,
             "dernier_retour": trajets[-1]["fin"] if trajets else None,
             "nb_taches": len(noms), "nb_passages": len(passages), "minutes_chez_clients": sum(p["duree"] for p in passages)}
+    if depot:
+        from customization_app import flotte_presence as fp                       # import local : fp importe ce module
+
+        res.update({c: v for c, v in fp.presence_pure(jour, j, depot).items() if c in fp.CHAMPS})
+    return res
 
 
 def apparier(jour=None, ecrire: bool = True) -> dict:
@@ -445,7 +452,8 @@ def apparier(jour=None, ecrire: bool = True) -> dict:
     taches = _taches(jour)
     cboxes = cfg["cboxes"]
     journaux = lire_journal(jour, cboxes, cfg=cfg) if cboxes else {}
-    emp_cbox = vehicules_du_jour(taches, journaux, cfg["employe_cbox"], cfg["rayon"], _lieux_communs())
+    cfg_t = to.config()
+    emp_cbox = vehicules_du_jour(taches, journaux, cfg["employe_cbox"], cfg["rayon"], _lieux_communs(cfg_t))
     cbox_emp = {cb: e for e, cb in emp_cbox.items()}
     resultat = apparier_pure(taches, journaux, emp_cbox, cfg["rayon"])
     bilan = {"jour": str(jour), "taches": len(taches), "vehicules": len(cboxes), CONFIRME: 0, AUCUN: 0, SANS_POS: 0,
@@ -469,7 +477,7 @@ def apparier(jour=None, ecrire: bool = True) -> dict:
             if not j or j.get("erreur"):
                 continue
             emp = cbox_emp.get(cbox)
-            res = _resume_journee(jour, cbox, j, [t for t in taches if emp and t["employe"] == emp], resultat, cfg)
+            res = _resume_journee(jour, cbox, j, [t for t in taches if emp and t["employe"] == emp], resultat, cfg, depot=cfg_t["depot"])
             res["employe"], res["employe_nom"] = emp, (frappe.db.get_value("Employee", emp, "employee_name") if emp else None)
             nom = frappe.db.exists(JOURNEE, {"date": res["date"], "cbox": cbox})
             doc = frappe.get_doc(JOURNEE, nom) if nom else frappe.new_doc(JOURNEE)

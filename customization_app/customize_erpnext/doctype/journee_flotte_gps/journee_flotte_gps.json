@@ -6,7 +6,7 @@
  "engine": "InnoDB",
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-10-08 20:00:00.000000",
+ "modified": "2026-10-16 09:00:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "owner": "Administrator",
@@ -128,6 +128,64 @@
    "fieldname": "minutes_chez_clients",
    "fieldtype": "Int",
    "label": "Minutes chez les clients"
+  },
+  {
+   "fieldname": "sec_presence",
+   "fieldtype": "Section Break",
+   "label": "Présence Aquaworld (d'après les nuits du véhicule)"
+  },
+  {
+   "fieldname": "depart_matin",
+   "fieldtype": "Datetime",
+   "label": "Départ du matin (fin de la nuit d'avant)"
+  },
+  {
+   "fieldname": "arrivee_aquaworld",
+   "fieldtype": "Datetime",
+   "label": "Arrivée à Aquaworld"
+  },
+  {
+   "fieldname": "depart_aquaworld",
+   "fieldtype": "Datetime",
+   "label": "Départ d'Aquaworld"
+  },
+  {
+   "fieldname": "retour_soir",
+   "fieldtype": "Datetime",
+   "label": "Retour du soir (début de la nuit d'après)"
+  },
+  {
+   "fieldname": "minutes_aquaworld",
+   "fieldtype": "Int",
+   "label": "Minutes à Aquaworld (jour)"
+  },
+  {
+   "fieldname": "col_3",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "nuit_avant_lat",
+   "fieldtype": "Float",
+   "label": "Nuit d'avant : latitude",
+   "precision": "6"
+  },
+  {
+   "fieldname": "nuit_avant_lng",
+   "fieldtype": "Float",
+   "label": "Nuit d'avant : longitude",
+   "precision": "6"
+  },
+  {
+   "fieldname": "nuit_lat",
+   "fieldtype": "Float",
+   "label": "Nuit d'après : latitude",
+   "precision": "6"
+  },
+  {
+   "fieldname": "nuit_lng",
+   "fieldtype": "Float",
+   "label": "Nuit d'après : longitude",
+   "precision": "6"
   }
  ],
  "field_order": [
@@ -146,6 +204,17 @@
   "dernier_retour",
   "nb_taches",
   "nb_passages",
-  "minutes_chez_clients"
+  "minutes_chez_clients",
+  "sec_presence",
+  "depart_matin",
+  "arrivee_aquaworld",
+  "depart_aquaworld",
+  "retour_soir",
+  "minutes_aquaworld",
+  "col_3",
+  "nuit_avant_lat",
+  "nuit_avant_lng",
+  "nuit_lat",
+  "nuit_lng"
  ]
 }

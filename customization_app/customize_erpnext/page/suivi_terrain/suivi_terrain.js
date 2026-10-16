@@ -33,7 +33,7 @@ class SuiviTerrain {
     this.direction = frappe.user.has_role("Direction Suivi Terrain");
     if (!this.direction) this.$root.find(".st-tab[data-tab='stats'], [data-action='apparier'], [data-action='reglages'], [data-action='backfill']").hide();
     // Sorties de circuit (arrêts inexpliqués, hors horaires, détours) : Wassim et Néjib seulement — rôle « Sortie Circuit ».
-    if (!frappe.user.has_role("Sortie Circuit")) this.$root.find(".st-tab[data-tab='circuit']").hide();
+    if (!frappe.user.has_role("Sortie Circuit")) this.$root.find(".st-tab[data-tab='circuit'], .st-tab[data-tab='presence']").hide();
     this.$root.find("#st-jour").val(frappe.datetime.get_today());
     this.$root.find("#st-du").val(frappe.datetime.add_days(frappe.datetime.get_today(), -29));
     this.$root.find("#st-au").val(frappe.datetime.get_today());
@@ -74,6 +74,14 @@ class SuiviTerrain {
           const $p = $r.find(".st-panel[data-panel='circuit']");
           $p.html(SortieCircuit.html());
           this.circuit = new SortieCircuit($p[0]);
+        });
+      }
+      // Présence Aquaworld (arrivée / départ d'après les nuits du véhicule, domiciles) : même accès que les sorties de circuit.
+      if (t === "presence" && !this.presence) {
+        frappe.require("/assets/customization_app/js/presence_aquaworld.js", () => {
+          const $p = $r.find(".st-panel[data-panel='presence']");
+          $p.html(PresenceAquaworld.html());
+          this.presence = new PresenceAquaworld($p[0]);
         });
       }
     });
