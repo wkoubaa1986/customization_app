@@ -35,7 +35,8 @@ class SuiviTerrain {
     // Sorties de circuit (arrêts inexpliqués, hors horaires, détours) : Wassim et Néjib seulement — rôle « Sortie Circuit ».
     if (!frappe.user.has_role("Sortie Circuit")) this.$root.find(".st-tab[data-tab='circuit'], .st-tab[data-tab='presence']").hide();
     this.$root.find("#st-jour").val(frappe.datetime.get_today());
-    this.$root.find("#st-du").val(frappe.datetime.add_days(frappe.datetime.get_today(), -29));
+    // Période par défaut des statistiques : le réglage « Statistiques depuis le » (Config Flotte GPS), sinon 30 jours — décidé
+    // côté serveur (même date pour Sorties de circuit et Présence Aquaworld) ; la réponse remplit les champs.
     this.$root.find("#st-au").val(frappe.datetime.get_today());
     this._bind();
     this.charger();
@@ -614,6 +615,9 @@ class SuiviTerrain {
     const args = { du: this.$root.find("#st-du").val(), au: this.$root.find("#st-au").val(), employe: this.$root.find("#st-emp").val() || null };
     const r = await frappe.call({ method: "customization_app.flotte_gps.statistiques", args, freeze: true });
     this._stats_faites = true;
+    this.$root.find("#st-du").val(r.message.du);
+    this.$root.find("#st-au").val(r.message.au);
+    this.$root.find("#st-periode").html(r.message.stats_depuis && r.message.stats_depuis === r.message.du ? `depuis le ${frappe.datetime.str_to_user(r.message.du)} <span title="Réglage « Statistiques depuis le » (Config Flotte GPS), commun aux onglets Statistiques, Sorties de circuit et Présence Aquaworld">(réglage)</span>` : "");
     this._render_stats(r.message);
   }
 

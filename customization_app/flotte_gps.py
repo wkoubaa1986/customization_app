@@ -83,8 +83,8 @@ def config() -> dict:
 
 
 def stats_depuis():
-    """Réglage « Statistiques depuis le » (Config Flotte GPS) : le « Du » par défaut des onglets Sorties de circuit et
-    Présence Aquaworld. None si vide (les onglets prennent alors les 30 derniers jours)."""
+    """Réglage « Statistiques depuis le » (Config Flotte GPS) : le « Du » par défaut des onglets Statistiques, Sorties de
+    circuit et Présence Aquaworld. None si vide (les onglets prennent alors les 30 derniers jours)."""
     try:
         v = frappe.db.get_single_value(CONFIG, "stats_date_debut")
     except Exception:                                   # champ pas encore migré
@@ -797,7 +797,8 @@ def statistiques(du=None, au=None, employe=None):
     ponctualité, passages manquants ; par jour, km et amplitude depuis Journee Flotte GPS."""
     _garde_direction()
     au = getdate(au or nowdate())
-    du = getdate(du or add_days(au, -29))
+    depuis = stats_depuis()                             # réglage « Statistiques depuis le » : même date pour les trois onglets
+    du = getdate(du) if du else (depuis if depuis and depuis <= au else add_days(au, -29))
     tol = cint(frappe.db.get_single_value(CONFIG, "ecart_tolere")) or 30
     # Tâches CLÔTURÉES seulement (décision du 15/10/2026) : une tâche restée ouverte n'a pas été faite ce jour-là (reportée,
     # oubliée), son « aucun passage » n'est pas une mesure ; une annulée après appariement garde un verdict qui ne vaut plus.
@@ -955,7 +956,7 @@ def statistiques(du=None, au=None, employe=None):
     for pj in par_jour.values():
         pj["ecart_moyen"] = round(statistics.mean(pj["ecarts"])) if pj["ecarts"] else None
         pj.pop("ecarts")
-    return {"du": str(du), "au": str(au), "tolerance": tol, "taches": len(rows), "detail": detail,
+    return {"du": str(du), "au": str(au), "stats_depuis": str(depuis) if depuis else None, "tolerance": tol, "taches": len(rows), "detail": detail,
             "par_jour": sorted(par_jour.values(), key=lambda x: x["date"], reverse=True),
             "confirmes": sum(e["confirmes"] for e in par_emp.values()), "buckets": buckets,
             "employes": sorted(par_emp.values(), key=lambda e: e["nom"]), "types": sorted(par_type.values(), key=lambda t: -t["taches"]),

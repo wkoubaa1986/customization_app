@@ -521,8 +521,12 @@ def _etat(**maj) -> dict:
 
 
 def _rattraper_job(jours: list):
-    """Tâche de fond : pour chaque jour, UNE lecture de la plateforme, puis présence + écarts de circuit."""
-    _etat(statut="en cours", total=len(jours), faits=0, erreurs=[], ecarts=0, vehicules=0, jour=None, debut=str(frappe.utils.now_datetime())[:19])
+    """Tâche de fond : pour chaque jour, UNE lecture de la plateforme, puis présence + écarts de circuit.
+    L'état complet est réécrit à chaque jour (pas fusionné) : un cache vidé en route (clear-cache, redéploiement) ne laisse
+    pas un avancement sans total ni statut."""
+    etat = {"statut": "en cours", "total": len(jours), "faits": 0, "erreurs": [], "ecarts": 0, "vehicules": 0, "jour": None,
+            "du": jours[0] if jours else None, "au": jours[-1] if jours else None, "debut": str(frappe.utils.now_datetime())[:19]}
+    _etat(**etat)
     for jour in jours:
         try:
             cfg = fg.config()
@@ -530,13 +534,16 @@ def _rattraper_job(jours: list):
             b = calculer(jour, journaux=journaux)
             c = fc.calculer(jour, journaux=journaux)
             frappe.db.commit()
-            e = _etat()
-            _etat(faits=e.get("faits", 0) + 1, jour=str(jour), vehicules=e.get("vehicules", 0) + b["vehicules"], ecarts=e.get("ecarts", 0) + c["ecarts"])
+            etat["vehicules"] += b["vehicules"]
+            etat["ecarts"] += c["ecarts"]
         except Exception as ex:
             frappe.db.rollback()
-            e = _etat()
-            _etat(faits=e.get("faits", 0) + 1, jour=str(jour), erreurs=(e.get("erreurs") or []) + ["%s : %s" % (jour, str(ex)[:120])])
-    _etat(statut="terminé", fin=str(frappe.utils.now_datetime())[:19])
+            etat["erreurs"].append("%s : %s" % (jour, str(ex)[:120]))
+        etat["faits"] += 1
+        etat["jour"] = str(jour)
+        _etat(**etat)
+    etat.update(statut="terminé", fin=str(frappe.utils.now_datetime())[:19])
+    _etat(**etat)
 
 
 @frappe.whitelist(methods=["POST"])

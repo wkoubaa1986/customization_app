@@ -6,7 +6,7 @@
  "engine": "InnoDB",
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-10-16 12:00:00.000000",
+ "modified": "2026-10-16 13:00:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "owner": "Administrator",
@@ -212,7 +212,7 @@
    "fieldname": "stats_date_debut",
    "fieldtype": "Date",
    "label": "Statistiques depuis le",
-   "description": "Période par défaut des onglets Sorties de circuit et Présence Aquaworld (du … à aujourd'hui). Le bouton « Rattraper les jours manquants » calcule depuis cette date les journées qui ne l'ont pas encore été (une lecture de la plateforme GPS par jour, en arrière-plan)."
+   "description": "Date fixe : période par défaut des onglets Statistiques, Sorties de circuit et Présence Aquaworld du suivi terrain (du … à aujourd'hui). Le bouton « Rattraper les jours manquants » (Présence Aquaworld) calcule depuis cette date les journées qui ne l'ont pas encore été, en arrière-plan ; « Reprendre la période » (Statistiques) rejoue l'appariement des tâches."
   },
   {
    "fieldname": "col_stats",
