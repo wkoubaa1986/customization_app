@@ -141,9 +141,13 @@
     const depassePermis = (e) => e.horaires && e.horaires.depassement_autorise && e.horaires.depassement_min <= e.horaires.depassement_autorise;
     // 📌 rien ne bouge (deux cases, type ou statut non déplaçable) ; ⏸ pas de place dans la tournée, gardée telle quelle ;
     // 🕘 heure fixe seule ; 👤 employé fixe seul.
-    const epingles = (a) => (a.non_place ? ' <span title="Pas de place dans la tournée optimisée : gardée telle quelle (même employé, même heure)">⏸</span>'
-      : a.fixe ? " 📌" : a.heure_fixe ? ' <span title="Heure fixe : un autre employé peut la faire">🕘</span>'
-      : a.employe_fixe ? ' <span title="Employé fixe : l’heure peut bouger">👤</span>' : "");
+    // Les épingles sont dites en toutes lettres (18/10/2026 : une horloge seule passait inaperçue sur Noura Elouaer).
+    const pastille = (texte, titre, couleur, fond) => ` <span title="${esc(titre)}" style="font-size:10.5px;font-weight:600;color:${couleur};background:${fond};border-radius:9px;padding:0 6px;white-space:nowrap">${texte}</span>`;
+    const epingles = (a) => (a.non_place ? pastille("⏸ pas de place", "Pas de place dans la tournée optimisée : gardée telle quelle (même employé, même heure)", "#b91c1c", "#fee2e2")
+      : a.heure_fixe && a.employe_fixe ? pastille("📌 heure et employé fixes", "Les deux cases sont cochées sur la tâche : elle ne bouge pas", "#475569", "#e2e8f0")
+      : a.fixe ? pastille("📌 fixe", "Type non déplaçable, réparation au local ou tâche terminée : elle ne bouge pas", "#475569", "#e2e8f0")
+      : a.heure_fixe ? pastille("🕘 heure fixe", "« Heure fixe » cochée sur la tâche : l’heure promise est gardée, un autre employé peut la faire", "#9a3412", "#ffedd5")
+      : a.employe_fixe ? pastille("👤 employé fixe", "« Employé fixe » coché sur la tâche : le technicien est gardé, l’heure peut bouger", "#1e40af", "#dbeafe") : "");
     const ligneAvant = (a) => `<div style="font-size:12.5px;padding:2px 0;${a.fixe ? "color:#64748b" : ""}">${esc(a.debut)}–${esc(a.fin)} · ${lienTache(a.tache, esc(a.client))} <span class="text-muted">${esc(a.type)}</span>${epingles(a)}</div>`;
     // Le trajet qui MÈNE à l'arrêt (🚗 Google, ≈ OSRM corrigé), puis ce qui cloche : retard sur une heure fixe, attente.
     const trajetAvant = (a) => a.trajet == null ? "" : `<span class="text-muted" style="font-size:11px">${a.trajet_source === "sur place" ? "📍 sur place" : `${a.trajet_source === "google" ? "🚗" : "≈"} ${duree(a.trajet)}${a.trajet_km ? ` · ${a.trajet_km} km` : ""}`} → </span>`;
