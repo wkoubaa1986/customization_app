@@ -136,7 +136,14 @@ frappe.views.CalendarViewList = class CalendarViewList extends frappe.views.Cale
                     // 0,55) — du blanc sur un pastel devenait illisible. On décide d'après
                     // la couleur réellement affichée (mélangée au blanc de la page).
                     element.css({ "color": texteLisible(originalColor), "font-weight": "600" });
+                    // Épingles de l'optimisation des tournées (18/10/2026) : repère devant le titre et ligne dans l'info-bulle.
+                    const heureFixe = cint(event.custom_tournee_fixe), employeFixe = cint(event.custom_employe_fixe);
+                    const epingle = heureFixe && employeFixe ? ["📌", "Heure et employé fixes : l’optimisation des tournées ne la bouge pas"]
+                        : heureFixe ? ["🕘", "Heure fixe : l’optimisation des tournées garde l’heure (l’employé peut changer)"]
+                        : employeFixe ? ["👤", "Employé fixe : l’optimisation des tournées garde l’employé (l’heure peut bouger)"] : null;
+                    if (epingle) element.find('.fc-title').prepend(`<span style="font-weight:700" title="${epingle[1]}">${epingle[0]} </span>`);
                     let tooltipParts = [];
+                    if (epingle) tooltipParts.push(`**Optimisation des tournées :** ${epingle[1]}`);
                     const defaultRapport = "Indiquez vos remarques sur l'intervention et le client:";
                     if (event.title) tooltipParts.push(`${event.title}`);
                     if (event.custom_type_dintervention) tooltipParts.push(`**Type intervention:** \n ${event.custom_type_dintervention}`);

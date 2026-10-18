@@ -266,6 +266,8 @@ def get_custom_tache_events(start, end, filters=None):
         # « owner » sert au calcul de repli de la couleur (cf. plus bas).
         "owner"
     ]
+    # Épingles de l'optimisation des tournées (18/10/2026 : repère 🕘 / 👤 / 📌 sur l'événement du calendrier).
+    fields += [c for c in ("custom_tournee_fixe", "custom_employe_fixe") if frappe.db.has_column("Tache de travail", c)]
 
     # If filters are passed, use them; otherwise, default to an empty list
     filters = json.loads(filters) if filters else []
