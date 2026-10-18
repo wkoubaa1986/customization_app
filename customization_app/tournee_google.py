@@ -167,7 +167,8 @@ def recaler_proposition(employes: list, jour, cfg: dict, mn_brut: list, mn: list
     cle_api = cle()
     fuseau = frappe.utils.get_system_timezone()
     maintenant = now_datetime()
-    etat = {"google": 0, "osrm": 0, "nouveaux": 0, "limite": False, "erreur": None, "libre": 0.0, "osrm_brut": 0.0}
+    etat = {"google": 0, "osrm": 0, "nouveaux": 0, "limite": False, "erreur": None, "libre": 0.0, "osrm_brut": 0.0,
+            "mesures": {}}          # (nœud origine, nœud destination) → minutes Google avec trafic, pour re-planifier
 
     def mesure(o, d, depart):
         (la, lo), (lb, ld) = o["pos"], d["pos"]
@@ -187,6 +188,7 @@ def recaler_proposition(employes: list, jour, cfg: dict, mn_brut: list, mn: list
                 if mn_brut[o["noeud"]][d["noeud"]]:
                     etat["libre"] += g["minutes_libre"]
                     etat["osrm_brut"] += mn_brut[o["noeud"]][d["noeud"]]
+                etat["mesures"][(o["noeud"], d["noeud"])] = g["minutes"]
                 return {"minutes": g["minutes"], "km": g["km"], "source": "google"}
         etat["osrm"] += 1
         return {"minutes": int(round(mn[o["noeud"]][d["noeud"]] * facteur_pointe(depart, cfg["pointes"]))),
@@ -223,7 +225,9 @@ def recaler_proposition(employes: list, jour, cfg: dict, mn_brut: list, mn: list
         raison = "plafond du jour atteint en cours de calcul" if etat["limite"] else "Google indisponible : %s" % etat["erreur"]
     return {"source": "google" if etat["google"] and not etat["osrm"] else "osrm" if not etat["google"] else "mixte",
             "trajets_google": etat["google"], "trajets_osrm": etat["osrm"], "raison": raison, "nouveaux_appels": etat["nouveaux"],
-            "appels_du_jour": appels_du_jour(), "plafond": plafond(), "coef": coef}
+            "appels_du_jour": appels_du_jour(), "plafond": plafond(), "coef": coef,
+            # Les trajets mesurés par Google (clés = tuples : à retirer avant de rendre la réponse en JSON).
+            "mesures": etat["mesures"]}
 
 
 def apprendre_coef(google_libre: float, osrm_brut: float) -> float:

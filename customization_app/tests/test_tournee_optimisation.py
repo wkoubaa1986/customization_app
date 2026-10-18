@@ -25,6 +25,26 @@ class TestLiens(unittest.TestCase):
         self.assertTrue(10 < km[0][2] < 20 and mn[0][2] == int(round(km[0][2] / 30 * 60)))
 
 
+class TestHorsRoute(unittest.TestCase):
+    """18/10/2026 : un point géocodé dans le lac (Fondation Kamel LAZA, 314 m de la route) → OSRM contourne, 45 min au lieu de 17."""
+
+    def test_point_loin_de_la_route(self):
+        self.assertEqual(T.hors_route([5, 1, 19, 9, 314], [1, 2, 3, 4]), [4])
+        self.assertEqual(T.hors_route([5, 1, 19, 9, 314], [1, 2, 3]), [])            # le dépôt n'est pas jugé
+        self.assertEqual(T.hors_route([0.0] * 5, [1, 2, 3, 4]), [])                 # sans OSRM (vol d'oiseau) : rien
+        self.assertEqual(T.hors_route([5, 250], [1, 7]), [1])                       # nœud au-delà de la liste : ignoré
+
+    def test_matrice_sans_reseau_rend_des_ecarts_nuls(self):
+        import frappe
+        frappe.flags.tournee_sans_reseau = True
+        try:
+            ecarts = [999]
+            mn, km, src = T.matrice([(36.80, 10.18), (36.89, 10.25)], T.OSRM_DEFAUT, ecarts)
+        finally:
+            frappe.flags.tournee_sans_reseau = False
+        self.assertEqual((src, ecarts), ("vol d’oiseau", [0.0, 0.0]))
+
+
 class TestPositionGrossiere(unittest.TestCase):
     def test_grille_du_reseau_reconnue(self):
         self.assertTrue(T.position_grossiere((36.810811, 10.284844)))       # La Goulette, 36.810811 × 37 = 1362.000007
@@ -375,6 +395,31 @@ class TestJournee(unittest.TestCase):
         self.assertLessEqual(paires("apres"), paires("avant"), p["employes"])
         self.assertTrue(any("se chevauchent déjà" in w for w in p["avertissements"]))
         self.assertTrue(all(a["fixe"] for e in p["employes"] for a in e["apres"]["arrets"] if a["non_place"]))   # laissée de côté = affichée fixe
+
+    def test_journee_trop_chargee_deborde_au_lieu_de_figer(self):
+        """18/10/2026 (journée de Mohamed Hedi du 19/10) : quand tout ne tient pas avant la fin de journée, le moteur
+        figeait les tâches « sans place » à leur heure d'origine, SANS leurs trajets — tournée absurde, retards partout,
+        et chaque tâche figée en chassait une autre. Désormais la journée déborde (fin relâchée, dite en rouge) et toutes
+        les tâches sont placées, dans un ordre cohérent. Une fin SAISIE dans la fenêtre reste stricte (voir
+        test_journee_surchargee_sans_chevauchement)."""
+        import frappe
+        cfg = T.config()
+        # Un seul employé, deux entretiens à 09:00 et 11:00, et 4 h 10 de stationnement par arrêt : les deux ne tiennent
+        # pas dans la journée (08:00–17:00) ; sans dépassement permis, l'une restait « sans place », figée.
+        T.config = lambda: dict(cfg, marge=250)
+        p = T.proposer(self.JOUR, fenetre=0, employes=[{"employe": self.e1, "depart": "magasin"}], depassement=0)
+        self.assertEqual(p["non_places"], [], p["avertissements"])
+        self.assertTrue(any("trop chargée" in w for w in p["avertissements"]), p["avertissements"])
+        e = p["employes"][0]
+        arrets = e["apres"]["arrets"]
+        self.assertEqual({a["tache"] for a in arrets}, {self.taches["A"], self.taches["C"]})
+        self.assertTrue(all(a["mobile"] and not a["non_place"] for a in arrets), arrets)
+        # Les deux se suivent sans chevauchement, 2 h de marge respectées, et la journée déborde (affiché en rouge).
+        a1, a2 = sorted(arrets, key=lambda a: a["debut"])
+        self.assertGreaterEqual(T._minutes(a2["debut"], 0), T._minutes(a1["fin"], 0) + 250)
+        self.assertTrue(e["horaires"]["depasse"], e["horaires"])
+        self.assertEqual(e["depassement_autorise"], 0)                       # l'écran garde le dépassement DEMANDÉ
+        self.assertEqual(p["depassement"], 0)
 
     def _epingler(self, code, heure=0, employe=0):
         import frappe

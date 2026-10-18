@@ -97,3 +97,4 @@ customization_app.patches.ensure_domicile_employe_fields
 customization_app.patches.seed_domiciles_flotte_gps
 customization_app.patches.oublier_geocodage_texte_hors_secteur
 customization_app.patches.renommer_vehicules_flotte_gps
+customization_app.patches.tournees_depassement_defaut

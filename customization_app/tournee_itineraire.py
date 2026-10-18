@@ -89,6 +89,7 @@ def journee(jour, employes: list[str] | None = None) -> dict:
                     "apres": {"arrets": arrets}, "hors_itineraire": hors.get(e, [])})
     from customization_app.tournee_google import recaler_proposition
     recalage = recaler_proposition(out, jour, cfg, mn_brut, mn, km)
+    recalage.pop("mesures", None)                 # clés tuples : pas pour le JSON
     for e in out:
         for a in e["apres"]["arrets"]:
             for interne in ("noeud", "debut_min", "original_min", "mobile", "fenetre", "decale", "ecart_min"):
