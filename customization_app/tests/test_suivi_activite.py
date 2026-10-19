@@ -325,3 +325,30 @@ class TestReunions(TestAcces):
         texte = self.RA.texte_rappel(reu, "veille")
         self.assertIn("demain a 09:00", texte)
         self.assertIn(reu.lien_visio, texte)
+
+    def test_reunions_par_equipe_ou_individuelles(self):
+        import frappe
+        from frappe.utils import add_days, nowdate
+        self._comme(self.ur)
+        # Un point individuel avec e1, un point à deux ; la précédente est celle des MÊMES participants.
+        seul = self.RA.creer(add_days(nowdate(), -7), employes=[self.e1])["name"]
+        duo = self.RA.creer(add_days(nowdate(), -7), employes=[self.e1, self.e2])["name"]     # même jour, équipe différente : OK
+        with self.assertRaises(frappe.ValidationError):
+            self.RA.creer(add_days(nowdate(), -7), employes=[self.e2, self.e1])               # mêmes participants : refusée
+        self.RA.changer_statut(seul, "Tenue"); self.RA.changer_statut(duo, "Tenue")
+        d_seul = frappe.get_doc(self.RA.DOCTYPE, seul)
+        self.assertTrue(d_seul.titre.startswith("Point avec "))
+        self.assertEqual([p.employe for p in d_seul.participants], [self.e1])
+        suivant = self.RA.creer(nowdate(), employes=[self.e1], titre="Point Sadok", lieu="Bureau")["name"]
+        d = frappe.get_doc(self.RA.DOCTYPE, suivant)
+        self.assertEqual((d.precedente, d.titre, d.lieu), (seul, "Point Sadok", "Bureau"))
+        # L'ordre du jour ne parle que de e1.
+        odj = self.RA.get_reunion(suivant)["ordre_du_jour"]
+        self.assertEqual([e["employe"] for e in odj["employes"]], [self.e1])
+        # Changer les participants recalcule la précédente.
+        self.RA.modifier(suivant, {"employes": [self.e1, self.e2]})
+        self.assertEqual(frappe.db.get_value(self.RA.DOCTYPE, suivant, "precedente"), duo)
+        # Un employé non participant ne voit pas le point individuel.
+        self._comme(self.u2)
+        with self.assertRaises(frappe.PermissionError):
+            self.RA.get_reunion(seul)

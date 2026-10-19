@@ -485,16 +485,32 @@ class SuiviReunions {
 
   nouvelle() {
     const d = this.data || {}, c = d.config || {};
+    const equipe = this.parent.ctx.employes || [];
+    const choisis = new Set(equipe.map((e) => e.name));          // toute l'équipe par défaut ; on décoche, ou on n'en garde qu'un
     const dlg = new frappe.ui.Dialog({
-      title: "Nouvelle réunion d’équipe",
+      title: "Nouvelle réunion",
       fields: [{ fieldtype: "Date", fieldname: "date", label: "Date", reqd: 1, default: d.prochaine_date || frappe.datetime.get_today() },
-               { fieldtype: "Time", fieldname: "heure", label: "Heure", default: c.heure || "09:00:00" }],
+               { fieldtype: "Time", fieldname: "heure", label: "Heure", default: c.heure || "09:00:00" },
+               { fieldtype: "Column Break" },
+               { fieldtype: "Data", fieldname: "titre", label: "Titre", description: "Vide = « Réunion d’équipe · point du … », ou « Point avec <employé> » s’il n’y en a qu’un" },
+               { fieldtype: "Data", fieldname: "lieu", label: "Lieu", default: c.lieu || "" },
+               { fieldtype: "Section Break" },
+               { fieldtype: "HTML", fieldname: "parts" }],
       primary_action_label: "Créer",
       primary_action: async (v) => {
-        const r = await frappe.call({ method: RR_API + ".creer", args: v });
+        if (!choisis.size) return frappe.msgprint("Choisissez au moins un participant.");
+        const r = await frappe.call({ method: RR_API + ".creer", args: Object.assign(v, { employes: Array.from(choisis) }) });
         dlg.hide(); await this.charger(); this.ouvrir(r.message.name);
       },
     });
+    const $p = dlg.fields_dict.parts.$wrapper;
+    $p.html(`<label class="control-label" style="font-size:12px">Participants <span class="text-muted">— cliquez pour cocher / décocher ; un seul employé = point individuel</span></label>
+      <div class="sa-chips"></div>
+      <div style="margin-top:6px;display:flex;gap:6px"><button type="button" class="btn btn-default btn-xs" data-tous="1">Tous</button><button type="button" class="btn btn-default btn-xs" data-tous="0">Aucun</button></div>
+      <div class="small text-muted" style="margin-top:6px">L’ordre du jour ne montrera que les activités des participants cochés.</div>`);
+    const peindre = () => sa_chips($p.find(".sa-chips"), equipe, choisis);
+    peindre();
+    $p.on("click", "[data-tous]", (e) => { choisis.clear(); if ($(e.currentTarget).attr("data-tous") === "1") equipe.forEach((x) => choisis.add(x.name)); peindre(); });
     dlg.show();
   }
 

@@ -87,18 +87,38 @@ def _derniere(avant=None, statuts=("Prévue", "Tenue")):
     return rows[0] if rows else None
 
 
-def creer_reunion(date, heure=None, cron: bool = False, cfg: dict | None = None):
+def _derniere_avec(employes: set, avant):
+    """La dernière réunion (Prévue/Tenue) avant `avant` qui réunissait EXACTEMENT ces participants — c'est elle
+    la « précédente » d'un point d'équipe ou individuel, pas la dernière réunion de n'importe qui."""
+    rows = frappe.get_all(DOCTYPE, filters={"statut": ["in", ["Prévue", "Tenue"]], "date": ["<", str(getdate(avant))]},
+                          fields=["name", "date"], order_by="date desc, heure desc", limit=30)
+    for r in rows:
+        if set(frappe.get_all("Reunion Participant", filters={"parent": r.name, "parenttype": DOCTYPE}, pluck="employe")) == employes:
+            return r
+    return None
+
+
+def creer_reunion(date, heure=None, cron: bool = False, cfg: dict | None = None, employes: list | None = None,
+                  titre: str | None = None, lieu: str | None = None):
+    """Une réunion pour `employes` (défaut : toute l'équipe du réglage) : point d'équipe, d'un groupe, ou d'une seule
+    personne. La « précédente » (dont on relit les décisions) est la dernière réunion des MÊMES participants."""
     cfg = cfg or config()
     date = getdate(date)
     doc = frappe.new_doc(DOCTYPE)
-    prec = _derniere(avant=date)
-    doc.update({"titre": _("Réunion d'équipe · point du {0}").format(frappe.utils.formatdate(date, "dd/MM/yyyy")),
-                "date": date, "heure": heure or cfg["reunion_heure"], "duree_min": cfg["reunion_duree"],
-                "lieu": cfg["reunion_lieu"], "statut": "Prévue", "creee_par_cron": 1 if cron else 0,
+    employes = [e for e in (employes or []) if e] or [e["name"] for e in SA.employes_parametres()]
+    prec = _derniere_avec(set(employes), date)
+    if not titre:
+        if len(employes) == 1:
+            titre = _("Point avec {0} · {1}").format(frappe.db.get_value("Employee", employes[0], "employee_name") or employes[0],
+                                                     frappe.utils.formatdate(date, "dd/MM/yyyy"))
+        else:
+            titre = _("Réunion d'équipe · point du {0}").format(frappe.utils.formatdate(date, "dd/MM/yyyy"))
+    doc.update({"titre": titre[:140], "date": date, "heure": heure or cfg["reunion_heure"], "duree_min": cfg["reunion_duree"],
+                "lieu": lieu or cfg["reunion_lieu"], "statut": "Prévue", "creee_par_cron": 1 if cron else 0,
                 "precedente": prec.name if prec else None,
                 "lien_visio": lien_visio(date) if cfg["reunion_visio"] else None})
-    for e in SA.employes_parametres():
-        doc.append("participants", {"employe": e["name"]})
+    for e in employes:
+        doc.append("participants", {"employe": e})
     doc.insert(ignore_permissions=True)
     return doc
 
@@ -345,11 +365,20 @@ def _gerer():
 
 
 @frappe.whitelist()
-def creer(date, heure=None):
+def creer(date, heure=None, employes=None, titre=None, lieu=None):
+    """Réunion à la date voulue pour les employés cochés (tous par défaut). Plusieurs réunions le même jour sont
+    possibles (équipes différentes) ; refusée seulement si la même liste de participants a déjà une réunion prévue ce jour."""
     _gerer()
-    if frappe.db.exists(DOCTYPE, {"date": str(getdate(date)), "statut": "Prévue"}):
-        frappe.throw(_("Une réunion est déjà prévue ce jour-là."))
-    doc = creer_reunion(date, heure)
+    employes = frappe.parse_json(employes) if isinstance(employes, str) and employes.startswith("[") else employes
+    if isinstance(employes, str):
+        employes = [employes]
+    employes = [e for e in (employes or []) if e] or [e["name"] for e in SA.employes_parametres()]
+    if not employes:
+        frappe.throw(_("Choisissez au moins un participant."))
+    for n in frappe.get_all(DOCTYPE, filters={"date": str(getdate(date)), "statut": "Prévue"}, pluck="name"):
+        if set(frappe.get_all("Reunion Participant", filters={"parent": n, "parenttype": DOCTYPE}, pluck="employe")) == set(employes):
+            frappe.throw(_("Une réunion avec exactement ces participants est déjà prévue ce jour-là ({0}).").format(n))
+    doc = creer_reunion(date, heure, employes=employes, titre=titre, lieu=lieu)
     return {"name": doc.name}
 
 
@@ -365,6 +394,8 @@ def modifier(name, data):
     if data.get("employes") is not None:
         presents = {p.employe: p.present for p in doc.participants}
         doc.set("participants", [{"employe": e, "present": presents.get(e)} for e in data["employes"] if e])
+        prec = _derniere_avec({e for e in data["employes"] if e}, doc.date)
+        doc.precedente = prec.name if prec and prec.name != doc.name else None
     doc.save(ignore_permissions=True)
     return {"name": doc.name}
 
