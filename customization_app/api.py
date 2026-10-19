@@ -318,6 +318,7 @@ def get_custom_tache_events(start, end, filters=None):
 # Les réunions d'équipe du Suivi d'activité (19/10/2026) s'affichent dans le Calendrier de travail, en lecture :
 # un clic ouvre la réunion dans la page Suivi d'activité (pas la fiche Tache), on ne la déplace pas d'ici.
 COULEUR_REUNION = "#0f6e8c"
+COULEUR_REUNION_TENUE = "#22c55e"      # clôturée = verte, comme une tâche terminée
 
 
 def _ajouter_reunions(events, start, end, filters):
@@ -355,7 +356,8 @@ def _ajouter_reunions(events, start, end, filters):
         events.append(frappe._dict({
             "doctype": "Reunion Activite", "name": r.name, "starts_on": debut, "ends_on": fin, "all_day": 0,
             "titre": "🗓️ %s%s" % (r.titre, " ✅" if r.statut == "Tenue" else ""),
-            "color": COULEUR_REUNION, "status": "Completed" if r.statut == "Tenue" else "Open",
+            "color": COULEUR_REUNION_TENUE if r.statut == "Tenue" else COULEUR_REUNION,
+            "status": "Completed" if r.statut == "Tenue" else "Open",
             "custom_employé": ", ".join(p.nom for p in mes), "custom_type_dintervention": "Réunion d'équipe",
             "subject": "%s%s" % (r.lieu or "", (" · " + r.lien_visio) if r.lien_visio else ""),
             "reunion": 1,

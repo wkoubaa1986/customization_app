@@ -19,6 +19,7 @@
   "section_participants",
   "participants",
   "section_suivies",
+  "seulement_suivies",
   "activites_suivies",
   "section_notes",
   "notes",
@@ -115,11 +116,18 @@
    "label": "Activités suivies"
   },
   {
+   "fieldname": "seulement_suivies",
+   "fieldtype": "Check",
+   "label": "Ne parler que des activités suivies",
+   "default": "0",
+   "description": "Coché : l'ordre du jour ne montre que les activités suivies. Décoché : elles s'ajoutent à celles des participants."
+  },
+  {
    "fieldname": "activites_suivies",
    "fieldtype": "Table",
    "label": "Activités suivies",
    "options": "Reunion Activite Suivie",
-   "description": "Vide = toutes les activités des participants. Sinon l'ordre du jour ne parle que de celles-ci."
+   "description": "Activités ajoutées à l'ordre du jour (de n'importe quel employé)."
   },
   {
    "fieldname": "section_notes",
@@ -151,7 +159,7 @@
   }
  ],
  "links": [],
- "modified": "2026-10-19 16:00:00.000000",
+ "modified": "2026-10-19 19:00:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Reunion Activite",

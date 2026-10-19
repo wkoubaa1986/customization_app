@@ -376,10 +376,21 @@ class TestReunions(TestAcces):
         self.assertEqual(len({d.lien_visio for d in docs}), 3)
         self.assertEqual([d.precedente for d in docs], [None, docs[0].name, docs[1].name])
         self.assertEqual([x.activite for x in docs[0].activites_suivies], [a1, a2])
+        self.assertEqual(docs[0].seulement_suivies, 1)
         # L'ordre du jour ne parle que des activités suivies.
         odj = self.RA.get_reunion(docs[0].name)["ordre_du_jour"]
         self.assertEqual(odj["suivies"], [a1, a2])
         self.assertEqual({x["name"] for x in odj["employes"][0]["ouvertes"]}, {a1, a2})
+        # Ajouter une activité d'un NON-participant (e2 seul) sans restreindre : elle apparaît sous « Autres ».
+        a3 = SA.enregistrer({"titre": "Activité de e2", "employes": [self.e2]})["name"]
+        self.RA.modifier(docs[0].name, {"activites": [a1, a2, a3], "seulement_suivies": 0})
+        odj = self.RA.get_reunion(docs[0].name)["ordre_du_jour"]
+        self.assertTrue({x["name"] for x in odj["employes"][0]["ouvertes"]} >= {a1, a2})     # e1 retrouve toutes les siennes
+        autres = [g for g in odj["employes"] if g["employe"] is None]
+        self.assertEqual([x["name"] for x in autres[0]["ouvertes"]], [a3])
+        tous = self.RA.activites_de([self.e1], toutes=1)
+        self.assertEqual([x["des_participants"] for x in tous][:1], [1])
+        self.assertIn(a3, [x["name"] for x in tous if not x["des_participants"]])
         self.assertEqual(len(self.RA.get_reunion(docs[0].name)["serie_reunions"]), 3)
         # Annuler à partir de la 2e : la 1re reste prévue.
         self.RA.annuler_serie_suivantes(docs[1].name)
@@ -436,3 +447,7 @@ class TestEtapesResponsablesOrdre(TestAcces):
         self.assertIn(seul, noms())                     # participant : oui
         self._comme(self.u2)
         self.assertNotIn(seul, noms())                  # pas participant : non
+        self._comme(self.ur)
+        RA.changer_statut(seul, "Tenue")
+        ev = next(e for e in get_custom_tache_events(nowdate(), nowdate()) if e.get("name") == seul)
+        self.assertEqual((ev["color"], ev["status"]), ("#22c55e", "Completed"))       # clôturée = verte

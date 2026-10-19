@@ -100,7 +100,7 @@ def _derniere_avec(employes: set, avant):
 
 def creer_reunion(date, heure=None, cron: bool = False, cfg: dict | None = None, employes: list | None = None,
                   titre: str | None = None, lieu: str | None = None, activites: list | None = None,
-                  serie: str | None = None, toutes_les: int = 0, precedente: str | None = None):
+                  serie: str | None = None, toutes_les: int = 0, precedente: str | None = None, seulement: bool = True):
     """Une réunion pour `employes` (défaut : toute l'équipe du réglage) : point d'équipe, d'un groupe, ou d'une seule
     personne. La « précédente » (dont on relit les décisions) est la dernière réunion des MÊMES participants."""
     cfg = cfg or config()
@@ -117,6 +117,7 @@ def creer_reunion(date, heure=None, cron: bool = False, cfg: dict | None = None,
     doc.update({"titre": titre[:140], "date": date, "heure": heure or cfg["reunion_heure"], "duree_min": cfg["reunion_duree"],
                 "lieu": lieu or cfg["reunion_lieu"], "statut": "Prévue", "creee_par_cron": 1 if cron else 0,
                 "precedente": prec.name if prec else None, "serie": serie, "toutes_les_semaines": cint(toutes_les) or None,
+                "seulement_suivies": 1 if (activites and seulement) else 0,
                 "lien_visio": lien_visio(date) if cfg["reunion_visio"] else None})
     for e in employes:
         doc.append("participants", {"employe": e})
@@ -301,10 +302,13 @@ def ordre_du_jour(doc) -> dict:
     aff = frappe.get_all("Activite Affectation", filters={"employe": ["in", employes], "parenttype": SA.DOCTYPE},
                          fields=["parent", "employe"])
     suivies = [r.activite for r in (doc.get("activites_suivies") or []) if r.activite]
-    if suivies:
-        # La réunion suit des activités précises : l'ordre du jour ne parle que d'elles (même si un participant en a d'autres).
+    if suivies and cint(doc.get("seulement_suivies")):
+        # La réunion ne parle que d'activités précises (même si un participant en a d'autres).
         aff = [a for a in aff if a.parent in suivies]
-    noms = sorted({a.parent for a in aff})
+    # Activités AJOUTÉES à l'ordre du jour qui n'appartiennent à aucun participant : groupe « Autres » en fin.
+    des_participants = {a.parent for a in aff}
+    autres = [n for n in suivies if n not in des_participants]
+    noms = sorted(des_participants | set(autres))
     acts = {}
     if noms:
         for a in frappe.get_all(SA.DOCTYPE, filters={"name": ["in", noms]},
@@ -353,6 +357,26 @@ def ordre_du_jour(doc) -> dict:
         sortie.append({"employe": p.employe, "nom": p.nom, "present": p.present, "ouvertes": ouvertes, "terminees": terminees,
                        "nb_retard": sum(1 for x in ouvertes if x["en_retard"]),
                        "nb_en_cours": sum(1 for x in ouvertes if not x["en_retard"]), "nb_terminees": len(terminees)})
+    if autres:
+        lignes = []
+        for n in autres:
+            a = acts.get(n)
+            if not a:
+                continue
+            ligne = dict(a)
+            ligne["etapes"] = total_etapes.get(n, [0, 0])
+            ligne["retard_jours"] = (aujourdhui - getdate(a.date_prevue)).days if a.date_prevue and a.statut not in SA.FERMES and getdate(a.date_prevue) < aujourdhui else 0
+            ligne["etapes_retard"] = etapes_retard.get(n, 0) if a.statut not in SA.FERMES else 0
+            ligne["prochaine"] = prochaine.get(n)
+            ligne["en_retard"] = bool(ligne["retard_jours"] or ligne["etapes_retard"])
+            lignes.append(ligne)
+            if a.statut not in SA.FERMES and n not in vus_kpi:
+                vus_kpi.add(n); kpis["retard" if ligne["en_retard"] else "en_cours"] += 1
+        if lignes:
+            sortie.append({"employe": None, "nom": _("Autres activités ajoutées"), "present": None,
+                           "ouvertes": [x for x in lignes if x["statut"] not in SA.FERMES], "terminees": [x for x in lignes if x["statut"] == "Terminée"],
+                           "nb_retard": sum(1 for x in lignes if x["en_retard"]), "nb_en_cours": sum(1 for x in lignes if not x["en_retard"] and x["statut"] not in SA.FERMES),
+                           "nb_terminees": sum(1 for x in lignes if x["statut"] == "Terminée")})
     decisions = []
     if doc.precedente:
         for n in frappe.get_all("Reunion Note", filters={"parent": doc.precedente, "parenttype": DOCTYPE, "activite": ["is", "set"]},
@@ -362,7 +386,8 @@ def ordre_du_jour(doc) -> dict:
                               "avancement": a.get("avancement"), "date_prevue": a.get("date_prevue"),
                               "en_retard": bool(a.get("date_prevue") and a.get("statut") not in SA.FERMES
                                                 and getdate(a["date_prevue"]) < aujourdhui)})
-    return {"employes": sortie, "kpis": kpis, "decisions_precedente": decisions, "depuis": str(depuis), "suivies": suivies}
+    return {"employes": sortie, "kpis": kpis, "decisions_precedente": decisions, "depuis": str(depuis), "suivies": suivies,
+            "seulement_suivies": cint(doc.get("seulement_suivies"))}
 
 
 @frappe.whitelist()
@@ -436,6 +461,8 @@ def modifier(name, data):
     if data.get("activites") is not None:
         doc.set("activites_suivies", [{"activite": a, "titre": frappe.db.get_value(SA.DOCTYPE, a, "titre")}
                                       for a in data["activites"] if a and frappe.db.exists(SA.DOCTYPE, a)])
+    if "seulement_suivies" in data:
+        doc.seulement_suivies = 1 if cint(data["seulement_suivies"]) else 0
     if data.get("employes") is not None:
         presents = {p.employe: p.present for p in doc.participants}
         doc.set("participants", [{"employe": e, "present": presents.get(e)} for e in data["employes"] if e])
@@ -530,22 +557,27 @@ def supprimer(name):
 
 
 @frappe.whitelist()
-def activites_de(employes=None):
-    """Les activités OUVERTES des employés donnés (pour choisir celles qu'une réunion suit)."""
+def activites_de(employes=None, toutes=0):
+    """Les activités OUVERTES des employés donnés — ou de tout le monde (`toutes`), celles des employés donnés en
+    premier (`des_participants` = 1) — pour choisir celles qu'une réunion suit ou ajoute à son ordre du jour."""
     _gerer()
     employes = frappe.parse_json(employes) if isinstance(employes, str) and employes.startswith("[") else employes
     if isinstance(employes, str):
         employes = [employes]
     employes = [e for e in (employes or []) if e]
-    if not employes:
-        return []
-    noms = sorted({a.parent for a in frappe.get_all("Activite Affectation", filters={"employe": ["in", employes], "parenttype": SA.DOCTYPE},
-                                                    fields=["parent"])})
-    if not noms:
-        return []
-    return frappe.get_all(SA.DOCTYPE, filters={"name": ["in", noms], "statut": ["not in", list(SA.FERMES)]},
-                          fields=["name", "titre", "noms_employes", "statut", "priorite", "avancement", "date_prevue"],
+    des = {a.parent for a in frappe.get_all("Activite Affectation", filters={"employe": ["in", employes], "parenttype": SA.DOCTYPE},
+                                            fields=["parent"])} if employes else set()
+    filtres = {"statut": ["not in", list(SA.FERMES)]}
+    if not cint(toutes):
+        if not des:
+            return []
+        filtres["name"] = ["in", sorted(des)]
+    rows = frappe.get_all(SA.DOCTYPE, filters=filtres, fields=["name", "titre", "noms_employes", "statut", "priorite", "avancement", "date_prevue"],
                           order_by="date_prevue is null, date_prevue asc")
+    for r in rows:
+        r["des_participants"] = 1 if r.name in des else 0
+    rows.sort(key=lambda r: -r["des_participants"])
+    return rows
 
 
 @frappe.whitelist()

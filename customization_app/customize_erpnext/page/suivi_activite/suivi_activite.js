@@ -452,15 +452,18 @@ const rr_tag = (a) => a.statut === "Terminée" ? `<span class="rr-tag done">Term
   : a.statut === "En attente" ? `<span class="rr-tag run">En attente</span>` : `<span class="rr-tag todo">À faire</span>`;
 
 /** Cases à cocher des activités ouvertes des employés choisis ; `choisies` (Set) vide = toutes leurs activités. */
-async function rr_picker_activites($zone, employes, choisies) {
-  if (!employes.length) { $zone.html(`<div class="small text-muted">Choisissez d’abord des participants.</div>`); return; }
-  const r = await frappe.call({ method: RR_API + ".activites_de", args: { employes }, freeze: false });
+async function rr_picker_activites($zone, employes, choisies, toutes) {
+  if (!employes.length && !toutes) { $zone.html(`<div class="small text-muted">Choisissez d’abord des participants.</div>`); return; }
+  const r = await frappe.call({ method: RR_API + ".activites_de", args: { employes, toutes: toutes ? 1 : 0 }, freeze: false });
   const acts = r.message || [];
   Array.from(choisies).forEach((n) => { if (!acts.some((a) => a.name === n)) choisies.delete(n); });
-  $zone.html(acts.length ? acts.map((a) => `<label style="display:block;font-weight:normal;margin:2px 0">
+  let sep = false;
+  $zone.html(acts.length ? acts.map((a) => {
+      const titre = (toutes && !a.des_participants && !sep) ? (sep = true, `<div class="small text-muted" style="margin:6px 0 2px;border-top:1px solid #e4e8ee;padding-top:4px">Autres employés</div>`) : "";
+      return titre + `<label style="display:block;font-weight:normal;margin:2px 0">
       <input type="checkbox" class="rr-act" value="${sa_esc(a.name)}" ${choisies.has(a.name) ? "checked" : ""}>
-      ${sa_esc(a.titre)} <span class="text-muted small">· ${sa_esc(a.noms_employes || "")} · ${sa_esc(a.statut)}${a.avancement ? " " + a.avancement + " %" : ""}${a.date_prevue ? " · prévue " + sa_esc(sa_date(a.date_prevue)) : ""}</span></label>`).join("")
-    : `<div class="small text-muted">Aucune activité ouverte pour ces participants.</div>`);
+      ${sa_esc(a.titre)} <span class="text-muted small">· ${sa_esc(a.noms_employes || "")} · ${sa_esc(a.statut)}${a.avancement ? " " + a.avancement + " %" : ""}${a.date_prevue ? " · prévue " + sa_esc(sa_date(a.date_prevue)) : ""}</span></label>`; }).join("")
+    : `<div class="small text-muted">Aucune activité ouverte${toutes ? "" : " pour ces participants"}.</div>`);
   $zone.off("change.rr").on("change.rr", ".rr-act", (e) => { const v = e.currentTarget.value; e.currentTarget.checked ? choisies.add(v) : choisies.delete(v); });
 }
 const RR_REPETE = ["Non", "Chaque semaine", "Toutes les 2 semaines", "Toutes les 3 semaines", "Toutes les 4 semaines"];
@@ -597,12 +600,13 @@ class SuiviReunions {
         </div>
         ${r.serie || (r.activites_suivies || []).length ? `<div class="small" style="margin-top:6px;display:flex;flex-wrap:wrap;gap:4px 14px;align-items:center">
           ${r.serie ? `<span>🔁 Série : toutes les ${sa_esc(r.toutes_les_semaines)} sem., ${(r.serie_reunions || []).length} réunion(s) : ${(r.serie_reunions || []).map((x) => `<span class="${x.name === r.name ? "" : "text-muted"}" style="${x.statut === "Annulée" ? "text-decoration:line-through" : ""}">${sa_esc(sa_date(x.date).slice(0, 5))}</span>`).join(" · ")}</span>` : ""}
-          ${(r.activites_suivies || []).length ? `<span>🎯 Suit : ${r.activites_suivies.map((x) => `<span class="sa-pastille" data-act="${sa_esc(x.activite)}" style="cursor:pointer">${sa_esc(x.titre)}${x.avancement ? " · " + x.avancement + " %" : ""}${x.statut === "Terminée" ? " ✅" : ""}</span>`).join("")}</span>` : ""}
+          ${(r.activites_suivies || []).length ? `<span>${r.seulement_suivies ? "🎯 Ne parle que de :" : "➕ Ajoutées à l’ordre du jour :"} ${r.activites_suivies.map((x) => `<span class="sa-pastille" data-act="${sa_esc(x.activite)}" style="cursor:pointer">${sa_esc(x.titre)}${x.avancement ? " · " + x.avancement + " %" : ""}${x.statut === "Terminée" ? " ✅" : ""}</span>`).join("")}</span>` : ""}
         </div>` : ""}
         <div class="sa-section"><h6>👥 Participants</h6>
           <div>${(r.participants || []).map((p) => `<span class="rr-chip ${p.present === "Présent" ? "on" : p.present === "Absent" ? "off" : ""}" data-emp="${sa_esc(p.employe)}" data-present="${sa_esc(p.present || "")}"><i class="dot"></i>${sa_esc(p.nom)}</span>`).join("")}</div>
           <div class="small text-muted">Un clic : présent → absent → non renseigné.${r.participants && r.participants.some((p) => p.rappel_envoye) ? " Rappel envoyé le " + sa_esc(sa_date(r.participants.find((p) => p.rappel_envoye).rappel_envoye)) + "." : ""}</div></div>
-        <div class="sa-section"><h6>📋 Ordre du jour <span class="small text-muted" style="font-weight:normal;text-transform:none">assemblé depuis les activités, depuis le ${sa_esc(sa_date(odj.depuis))}</span></h6>
+        <div class="sa-section"><h6>📋 Ordre du jour <span class="small text-muted" style="font-weight:normal;text-transform:none">assemblé depuis les activités, depuis le ${sa_esc(sa_date(odj.depuis))}</span>
+          ${r.peut_gerer ? `<button type="button" class="btn btn-default btn-xs" id="rr-ajouter-act" style="margin-left:auto">➕ Ajouter une activité</button>` : ""}</h6>
           <div class="rr-kpis"><div class="rr-kpi late"><b>${k.retard || 0}</b><span>en retard</span></div><div class="rr-kpi run"><b>${k.en_cours || 0}</b><span>en cours</span></div><div class="rr-kpi done"><b>${k.terminees || 0}</b><span>terminées depuis</span></div></div>
           ${(odj.decisions_precedente || []).length ? `<div class="rr-emp"><div class="who">Décisions du ${sa_esc(sa_date(r.precedente_date))}<small>${odj.decisions_precedente.length} à relire</small></div><div>
             ${odj.decisions_precedente.map((x) => `<div class="rr-it" data-act="${sa_esc(x.activite)}">${rr_tag({ statut: x.statut, retard_jours: x.en_retard ? frappe.datetime.get_day_diff(frappe.datetime.get_today(), x.date_prevue) : 0, avancement: x.avancement })}<span class="tt">${sa_esc(x.texte)} <em>· ${sa_esc(x.pour || "")}</em></span><span class="ref">${sa_esc(x.activite)}</span></div>`).join("")}</div></div>` : ""}
@@ -667,6 +671,21 @@ class SuiviReunions {
       const ligne = $(e.currentTarget).attr("data-sup-note");
       frappe.confirm("Retirer cette note du compte-rendu ?", () => appel("supprimer_note", { ligne }));
     });
+    // ➕ Activité à l'ordre du jour : n'importe quelle activité ouverte (celles des participants d'abord), ou restreindre.
+    $z.on("click", "#rr-ajouter-act", () => {
+      const actsChoisies = new Set((r.activites_suivies || []).map((x) => x.activite));
+      const m = new frappe.ui.Dialog({
+        title: "Activités à l’ordre du jour",
+        size: "large",
+        fields: [{ fieldtype: "Check", fieldname: "seulement", label: "Ne parler que des activités cochées (sinon elles s’ajoutent à celles des participants)", default: r.seulement_suivies ? 1 : 0 },
+                 { fieldtype: "HTML", fieldname: "acts" }],
+        primary_action_label: "Enregistrer",
+        primary_action: async (v) => { await appel("modifier", { data: { activites: Array.from(actsChoisies), seulement_suivies: v.seulement ? 1 : 0 } }); m.hide(); },
+      });
+      m.fields_dict.acts.$wrapper.html(`<div class="small text-muted" style="margin-bottom:4px">Pour une activité qui n’existe pas encore : écrivez-la dans le compte-rendu avec « Décision pour », elle sera créée et ajoutée.</div><div class="rr-acts"></div>`);
+      rr_picker_activites(m.fields_dict.acts.$wrapper.find(".rr-acts"), (r.participants || []).map((p) => p.employe), actsChoisies, true);
+      m.show();
+    });
     $z.on("click", "#rr-modifier", () => {
       const choisis = new Set((r.participants || []).map((p) => p.employe));
       const m = new frappe.ui.Dialog({
@@ -681,16 +700,17 @@ class SuiviReunions {
           { fieldtype: "Data", fieldname: "lien_visio", label: "Lien visio", default: r.lien_visio },
           { fieldtype: "Section Break" },
           { fieldtype: "HTML", fieldname: "parts" },
-          { fieldtype: "Section Break", label: "Activités suivies" },
+          { fieldtype: "Section Break", label: "Activités à l’ordre du jour" },
+          { fieldtype: "Check", fieldname: "seulement_suivies", label: "Ne parler que des activités cochées", default: r.seulement_suivies ? 1 : 0 },
           { fieldtype: "HTML", fieldname: "acts" },
         ],
         primary_action_label: "Enregistrer",
-        primary_action: async (v) => { await appel("modifier", { data: Object.assign(v, { employes: Array.from(choisis), activites: Array.from(actsChoisies) }) }); m.hide(); },
+        primary_action: async (v) => { await appel("modifier", { data: Object.assign(v, { employes: Array.from(choisis), activites: Array.from(actsChoisies), seulement_suivies: v.seulement_suivies ? 1 : 0 }) }); m.hide(); },
       });
       const actsChoisies = new Set((r.activites_suivies || []).map((x) => x.activite));
       const $a = m.fields_dict.acts.$wrapper;
-      $a.html(`<div class="small text-muted" style="margin-bottom:4px">Rien de coché = toutes les activités des participants.</div><div class="rr-acts"></div>`);
-      const peindreActs = () => rr_picker_activites($a.find(".rr-acts"), Array.from(choisis), actsChoisies);
+      $a.html(`<div class="small text-muted" style="margin-bottom:4px">Rien de coché = toutes les activités des participants. Les activités d’autres employés peuvent être ajoutées.</div><div class="rr-acts"></div>`);
+      const peindreActs = () => rr_picker_activites($a.find(".rr-acts"), Array.from(choisis), actsChoisies, true);
       m.fields_dict.parts.$wrapper.html(`<label class="control-label" style="font-size:12px">Participants</label><div class="sa-chips"></div>`);
       const equipe = (r.employes || []).slice();
       (r.participants || []).forEach((p) => { if (!equipe.some((e) => e.name === p.employe)) equipe.push({ name: p.employe, employee_name: p.nom }); });
