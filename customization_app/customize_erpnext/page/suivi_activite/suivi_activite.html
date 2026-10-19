@@ -75,14 +75,84 @@
     .sa-statuts { display: flex; flex-wrap: wrap; gap: 6px; }
     .sa-ia { background: #f5f3ff; border: 1px solid #ddd6fe; border-radius: 10px; padding: 10px 12px; }
     .sa-ia .desc { white-space: pre-wrap; font-size: 13px; }
+    .sa-ia .etp { display: grid; grid-template-columns: auto minmax(0,1fr) auto; gap: 8px; align-items: center; padding: 2px 0; font-weight: normal; }
+    .sa-ia .etp input[type=date] { height: 26px; font-size: 12px; padding: 2px 6px; width: 140px; }
+    .sa-etape .dt { font-size: 11.5px; color: #64748b; white-space: nowrap; cursor: pointer; border-bottom: 1px dashed #cbd5e1; }
+    .sa-etape .dt.retard { color: #b91c1c; font-weight: 700; }
+    .sa-etape .dt.vide { color: #cbd5e1; }
+    .sa-etape input.dt-edit { height: 24px; font-size: 12px; padding: 1px 4px; width: 130px; }
+    .sa-ajout input[type=date].sa-etape-date { flex: 0 0 140px; }
+
+    .sa-onglets { display: flex; gap: 4px; margin-bottom: 12px; border-bottom: 1px solid var(--border-color,#e4e8ee); }
+    .sa-onglet { padding: 8px 14px; font-size: 13.5px; font-weight: 600; color: #64748b; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+    .sa-onglet.actif { color: #111827; border-bottom-color: #111827; }
+    .sa-onglet .n { background: #e2e8f0; border-radius: 999px; padding: 0 7px; font-size: 11px; margin-left: 4px; }
+
+    .sa-reu { display: grid; grid-template-columns: 150px minmax(200px,1fr) auto auto; gap: 10px 14px; align-items: center;
+              background: var(--card-bg,#fff); border: 1px solid var(--border-color,#e4e8ee); border-radius: 10px; padding: 10px 14px; margin-bottom: 6px; cursor: pointer; }
+    .sa-reu:hover { box-shadow: 0 2px 6px rgba(0,0,0,.07); }
+    .sa-reu.prochaine { border-left: 4px solid #0f6e8c; }
+    .sa-reu.tenue { opacity: .75; }
+    .sa-reu .d { font-weight: 700; font-size: 13.5px; } .sa-reu .d small { display: block; font-weight: 400; color: #64748b; }
+    .sa-reu .t { font-weight: 600; } .sa-reu .t small { display: block; font-weight: 400; color: #64748b; font-size: 12px; }
+    .sa-reu .visio { font-size: 12px; } .sa-reu .visio a { color: #0f6e8c; font-weight: 600; }
+    .sa-reu-vide { color: #94a3b8; font-size: 13px; text-align: center; padding: 20px; }
+    .sa-reu-regl { font-size: 12.5px; color: #475569; display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; }
+    @media (max-width: 760px) { .sa-reu { grid-template-columns: 1fr; } }
+
+    /* fenêtre de réunion */
+    .rr-head { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; justify-content: space-between; }
+    .rr-visio a.btn { background: #0f6e8c; color: #fff; border-color: #0f6e8c; }
+    .rr-visio code { font-size: 11.5px; color: #64748b; }
+    .rr-chip { border: 1px solid #cbd5e1; border-radius: 999px; padding: 3px 10px 3px 8px; font-size: 12.5px; cursor: pointer; display: inline-flex; gap: 6px; align-items: center; user-select: none; margin: 2px 4px 2px 0; }
+    .rr-chip .dot { width: 9px; height: 9px; border-radius: 50%; background: #e2e8f0; }
+    .rr-chip.on { border-color: #157347; background: #e3f4ea; } .rr-chip.on .dot { background: #157347; }
+    .rr-chip.off { border-color: #b42318; background: #fde8e6; } .rr-chip.off .dot { background: #b42318; }
+    .rr-kpis { display: flex; gap: 10px; margin: 6px 0 10px; }
+    .rr-kpi { flex: 1; border: 1px solid #e4e8ee; border-radius: 8px; padding: 6px 10px; }
+    .rr-kpi b { display: block; font-size: 18px; } .rr-kpi span { font-size: 11.5px; color: #64748b; }
+    .rr-kpi.late b { color: #b42318; } .rr-kpi.run b { color: #8a5a00; } .rr-kpi.done b { color: #157347; }
+    .rr-emp { display: grid; grid-template-columns: 170px minmax(0,1fr); gap: 4px 14px; border-top: 1px solid #e4e8ee; padding: 10px 0; }
+    .rr-emp:first-child { border-top: 0; }
+    .rr-emp .who { font-weight: 700; } .rr-emp .who small { display: block; font-weight: 400; color: #64748b; }
+    .rr-emp .who .abs { color: #b42318; }
+    .rr-it { display: grid; grid-template-columns: auto minmax(0,1fr) auto; gap: 8px; align-items: baseline; padding: 2px 0; font-size: 13px; cursor: pointer; }
+    .rr-it:hover .tt { text-decoration: underline; }
+    .rr-it .ref { font-size: 11px; color: #94a3b8; font-family: monospace; }
+    .rr-it .tt em { font-style: normal; color: #64748b; font-size: 12px; }
+    .rr-tag { font-size: 10.5px; font-weight: 700; padding: 1px 7px; border-radius: 4px; white-space: nowrap; }
+    .rr-tag.late { background: #fde8e6; color: #b42318; } .rr-tag.run { background: #fff4d6; color: #8a5a00; }
+    .rr-tag.done { background: #e3f4ea; color: #157347; } .rr-tag.todo { background: #f1f5f9; color: #475569; }
+    .rr-note { display: grid; grid-template-columns: 48px minmax(0,1fr) auto; gap: 10px; padding: 4px 0; align-items: start; font-size: 13px; }
+    .rr-note time { font-family: monospace; font-size: 12px; color: #64748b; }
+    .rr-note .dec { background: #e3f1f5; border-radius: 6px; padding: 6px 10px; }
+    .rr-note .dec .to { color: #64748b; font-size: 12px; } .rr-note .dec .ok { color: #157347; font-size: 12px; cursor: pointer; }
+    .rr-note .sup { color: #94a3b8; cursor: pointer; }
+    .rr-write { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 8px; margin-top: 8px; }
+    .rr-write-opts { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; margin-top: 6px; font-size: 12px; color: #64748b; }
+    .rr-write-opts input[type=date] { height: 28px; font-size: 12px; width: 140px; display: inline-block; }
+    @media (max-width: 760px) { .rr-emp { grid-template-columns: 1fr; } }
   </style>
+
+  <div class="sa-onglets">
+    <span class="sa-onglet actif" data-onglet="activites">☑️ Activités</span>
+    <span class="sa-onglet" data-onglet="reunions">🗓️ Réunions <span class="n" id="sa-reu-n" style="display:none"></span></span>
+  </div>
+
+  <div id="sa-vue-reunions" style="display:none">
+    <div class="sa-card">
+      <div class="sa-reu-regl" id="sa-reu-regl"></div>
+    </div>
+    <div id="sa-reu-liste"></div>
+  </div>
+  <div id="sa-vue-activites">
 
   <div class="sa-card"><div class="sa-kpis" id="sa-kpis"></div></div>
 
   <div class="sa-card">
     <div class="sa-ecrire">
       <input type="text" class="form-control sa-titre" id="sa-titre" placeholder="Écrire une activité…" autocomplete="off">
-      <button class="sa-envoi" id="sa-envoi" title="Ajouter">↵</button>
+      <button type="button" class="sa-envoi" id="sa-envoi" title="Ajouter">↵</button>
     </div>
     <div class="sa-ecrire-opts">
       <div id="sa-pour" style="display:none"><span class="lbl">Pour</span> <div class="sa-chips" id="sa-chips" style="display:inline-flex"></div></div>
@@ -97,9 +167,10 @@
     <input type="text" class="form-control" id="sa-recherche" placeholder="Rechercher…">
     <label><input type="checkbox" id="sa-fermees"> Anciennes terminées / annulées</label>
     <div class="droite">
-      <button class="btn btn-default btn-xs" id="sa-config" style="display:none">⚙️ Réglage</button>
+      <button type="button" class="btn btn-default btn-xs" id="sa-config" style="display:none">⚙️ Réglage</button>
     </div>
   </div>
 
   <div id="sa-liste"></div>
+  </div>
 </div>

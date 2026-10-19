@@ -1,0 +1,66 @@
+{
+ "actions": [],
+ "creation": "2026-10-19 10:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "employe",
+  "nom",
+  "utilisateur",
+  "present",
+  "rappel_envoye"
+ ],
+ "fields": [
+  {
+   "fieldname": "employe",
+   "fieldtype": "Link",
+   "label": "Employé",
+   "options": "Employee",
+   "reqd": 1,
+   "in_list_view": 1,
+   "columns": 4,
+   "ignore_user_permissions": 1
+  },
+  {
+   "fieldname": "nom",
+   "fieldtype": "Data",
+   "label": "Nom",
+   "read_only": 1,
+   "in_list_view": 1,
+   "columns": 3
+  },
+  {
+   "fieldname": "utilisateur",
+   "fieldtype": "Link",
+   "label": "Compte",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "present",
+   "fieldtype": "Select",
+   "label": "Présence",
+   "options": "\nPrésent\nAbsent",
+   "in_list_view": 1,
+   "columns": 2
+  },
+  {
+   "fieldname": "rappel_envoye",
+   "fieldtype": "Datetime",
+   "label": "Rappel envoyé le",
+   "read_only": 1
+  }
+ ],
+ "links": [],
+ "modified": "2026-10-19 10:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "Reunion Participant",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "istable": 1
+}

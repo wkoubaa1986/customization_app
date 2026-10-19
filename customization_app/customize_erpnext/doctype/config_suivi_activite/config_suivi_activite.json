@@ -5,7 +5,19 @@
  "editable_grid": 1,
  "engine": "InnoDB",
  "field_order": [
-  "employes"
+  "employes",
+  "section_reunions",
+  "reunion_active",
+  "reunion_jour",
+  "reunion_toutes_les",
+  "reunion_premiere_date",
+  "column_break_reu",
+  "reunion_heure",
+  "reunion_duree",
+  "reunion_lieu",
+  "reunion_visio",
+  "reunion_creer_jours_avant",
+  "reunion_rappel_sms"
  ],
  "fields": [
   {
@@ -14,10 +26,82 @@
    "label": "Employés ayant accès à l'onglet Suivi d'activité",
    "options": "Config Suivi Activite Employe",
    "description": "Chaque employé listé voit l'onglet « Suivi d'activité » et SES activités seulement. Cochez « Responsable » pour qui voit et affecte celles de tout le monde. L'accès suit le compte utilisateur de la fiche Employé."
+  },
+  {
+   "fieldname": "section_reunions",
+   "fieldtype": "Section Break",
+   "label": "Réunions d'équipe (point d'avancement)"
+  },
+  {
+   "fieldname": "reunion_active",
+   "fieldtype": "Check",
+   "label": "Créer les réunions automatiquement",
+   "default": "0",
+   "description": "Le cron du matin crée la prochaine réunion quelques jours avant, avec les employés de la liste comme participants."
+  },
+  {
+   "fieldname": "reunion_jour",
+   "fieldtype": "Select",
+   "label": "Jour",
+   "options": "Lundi\nMardi\nMercredi\nJeudi\nVendredi\nSamedi",
+   "default": "Mercredi"
+  },
+  {
+   "fieldname": "reunion_toutes_les",
+   "fieldtype": "Int",
+   "label": "Toutes les N semaines",
+   "default": "2"
+  },
+  {
+   "fieldname": "reunion_premiere_date",
+   "fieldtype": "Date",
+   "label": "À partir du (repère du rythme)",
+   "description": "Les réunions tombent ce jour-là puis toutes les N semaines. Vide = la prochaine occurrence du jour choisi."
+  },
+  {
+   "fieldname": "column_break_reu",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "reunion_heure",
+   "fieldtype": "Time",
+   "label": "Heure",
+   "default": "09:00:00"
+  },
+  {
+   "fieldname": "reunion_duree",
+   "fieldtype": "Int",
+   "label": "Durée (min)",
+   "default": "45"
+  },
+  {
+   "fieldname": "reunion_lieu",
+   "fieldtype": "Data",
+   "label": "Lieu",
+   "default": "Magasin"
+  },
+  {
+   "fieldname": "reunion_visio",
+   "fieldtype": "Check",
+   "label": "Ajouter un lien visio Jitsi",
+   "default": "1",
+   "description": "Un lien meet.jit.si par réunion, sans compte ni serveur. Rien n'est enregistré."
+  },
+  {
+   "fieldname": "reunion_creer_jours_avant",
+   "fieldtype": "Int",
+   "label": "Créer la réunion N jours avant",
+   "default": "7"
+  },
+  {
+   "fieldname": "reunion_rappel_sms",
+   "fieldtype": "Check",
+   "label": "Rappel SMS aux participants (la veille 18:00 et le jour 08:00)",
+   "default": "0"
   }
  ],
  "links": [],
- "modified": "2026-10-01 14:00:00.000000",
+ "modified": "2026-10-19 10:00:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Config Suivi Activite",

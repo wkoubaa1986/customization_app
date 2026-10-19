@@ -1,0 +1,65 @@
+{
+ "actions": [],
+ "creation": "2026-10-19 10:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "date",
+  "auteur",
+  "texte",
+  "activite",
+  "pour"
+ ],
+ "fields": [
+  {
+   "fieldname": "date",
+   "fieldtype": "Datetime",
+   "label": "Date",
+   "read_only": 1,
+   "in_list_view": 1,
+   "columns": 2
+  },
+  {
+   "fieldname": "auteur",
+   "fieldtype": "Link",
+   "label": "Auteur",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "texte",
+   "fieldtype": "Small Text",
+   "label": "Note ou décision",
+   "reqd": 1,
+   "in_list_view": 1,
+   "columns": 6
+  },
+  {
+   "fieldname": "activite",
+   "fieldtype": "Link",
+   "label": "Activité créée",
+   "options": "Activite Employe",
+   "read_only": 1,
+   "in_list_view": 1,
+   "columns": 2
+  },
+  {
+   "fieldname": "pour",
+   "fieldtype": "Data",
+   "label": "Pour",
+   "read_only": 1
+  }
+ ],
+ "links": [],
+ "modified": "2026-10-19 10:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "Reunion Note",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "istable": 1
+}

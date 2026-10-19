@@ -47,6 +47,10 @@ class ActiviteEmploye(Document):
             self.avancement = round(100.0 * faites / len(etapes))
             if faites and self.statut == "À faire":
                 self.statut = "En cours"
+        # Une activité sans date prévue prend celle de sa dernière étape datée (les étapes portent le planning).
+        dates = [str(e.date_prevue) for e in etapes if e.date_prevue]
+        if dates and not self.date_prevue and (not self.date_debut or max(dates) >= str(self.date_debut)):
+            self.date_prevue = max(dates)
         if self.statut == "Terminée":
             self.avancement = 100
             self.date_fin = self.date_fin or nowdate()

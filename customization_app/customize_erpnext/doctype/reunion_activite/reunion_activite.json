@@ -1,0 +1,169 @@
+{
+ "actions": [],
+ "creation": "2026-10-19 10:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "titre",
+  "date",
+  "heure",
+  "duree_min",
+  "column_break_1",
+  "statut",
+  "lieu",
+  "lien_visio",
+  "precedente",
+  "section_participants",
+  "participants",
+  "section_notes",
+  "notes",
+  "compte_rendu",
+  "tenue_le",
+  "creee_par_cron"
+ ],
+ "fields": [
+  {
+   "fieldname": "titre",
+   "fieldtype": "Data",
+   "label": "Titre",
+   "reqd": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "date",
+   "fieldtype": "Date",
+   "label": "Date",
+   "reqd": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "heure",
+   "fieldtype": "Time",
+   "label": "Heure",
+   "reqd": 1
+  },
+  {
+   "fieldname": "duree_min",
+   "fieldtype": "Int",
+   "label": "Durée (min)",
+   "default": "45"
+  },
+  {
+   "fieldname": "column_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "statut",
+   "fieldtype": "Select",
+   "label": "Statut",
+   "options": "Prévue\nTenue\nAnnulée",
+   "default": "Prévue",
+   "in_list_view": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "lieu",
+   "fieldtype": "Data",
+   "label": "Lieu"
+  },
+  {
+   "fieldname": "lien_visio",
+   "fieldtype": "Data",
+   "label": "Lien visio",
+   "description": "Lien Jitsi (ou autre) à rejoindre depuis le navigateur ou l'appli."
+  },
+  {
+   "fieldname": "precedente",
+   "fieldtype": "Link",
+   "label": "Réunion précédente",
+   "options": "Reunion Activite",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_participants",
+   "fieldtype": "Section Break",
+   "label": "Participants"
+  },
+  {
+   "fieldname": "participants",
+   "fieldtype": "Table",
+   "label": "Participants",
+   "options": "Reunion Participant"
+  },
+  {
+   "fieldname": "section_notes",
+   "fieldtype": "Section Break",
+   "label": "Compte-rendu"
+  },
+  {
+   "fieldname": "notes",
+   "fieldtype": "Table",
+   "label": "Notes et décisions",
+   "options": "Reunion Note"
+  },
+  {
+   "fieldname": "compte_rendu",
+   "fieldtype": "Text",
+   "label": "Synthèse"
+  },
+  {
+   "fieldname": "tenue_le",
+   "fieldtype": "Datetime",
+   "label": "Clôturée le",
+   "read_only": 1
+  },
+  {
+   "fieldname": "creee_par_cron",
+   "fieldtype": "Check",
+   "label": "Créée automatiquement",
+   "read_only": 1
+  }
+ ],
+ "links": [],
+ "modified": "2026-10-19 10:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "Reunion Activite",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "print": 1,
+   "report": 1,
+   "export": 1,
+   "email": 1,
+   "share": 1
+  },
+  {
+   "role": "Responsable Activité",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "print": 1,
+   "report": 1,
+   "export": 1,
+   "email": 1,
+   "share": 1
+  },
+  {
+   "role": "Suivi Activité",
+   "read": 1,
+   "print": 1,
+   "email": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "autoname": "REU-.YYYY.-.#####",
+ "naming_rule": "Expression (old style)",
+ "title_field": "titre",
+ "track_changes": 1
+}

@@ -23,7 +23,7 @@ import json
 
 import frappe
 from frappe import _
-from frappe.utils import cint, getdate, now_datetime, nowdate
+from frappe.utils import add_days, cint, getdate, now_datetime, nowdate
 
 DOCTYPE = "Activite Employe"
 DOCTYPE_CONFIG = "Config Suivi Activite"
@@ -166,10 +166,17 @@ def get_activites(employe=None, recherche=None, inclure_fermees=0):
                                             fields=["parent", "count(name) as n"], group_by="parent",
                                             as_list=True)) if noms else {}
     nb_fichiers, nb_notes = compte("Activite Fichier"), compte("Activite Note")
-    etapes, vignettes, affectes = {}, {}, {}
+    etapes, vignettes, affectes, etapes_retard, prochaine = {}, {}, {}, {}, {}
+    aujourdhui = getdate(nowdate())
     for e in (frappe.get_all("Activite Etape", filters={"parent": ["in", noms], "parenttype": DOCTYPE},
-                             fields=["parent", "fait"]) if noms else []):
+                             fields=["parent", "fait", "libelle", "date_prevue"], order_by="parent, idx") if noms else []):
         t = etapes.setdefault(e.parent, [0, 0]); t[1] += 1; t[0] += cint(e.fait)
+        if not cint(e.fait):
+            # Étape datée en retard (seulement tant que l'activité est ouverte, cf. plus bas) ; la première
+            # étape non faite est « la prochaine », affichée dans la liste et l'ordre du jour des réunions.
+            if e.date_prevue and getdate(e.date_prevue) < aujourdhui:
+                etapes_retard[e.parent] = etapes_retard.get(e.parent, 0) + 1
+            prochaine.setdefault(e.parent, {"libelle": e.libelle, "date_prevue": e.date_prevue})
     for f in (frappe.get_all("Activite Fichier", filters={"parent": ["in", noms], "parenttype": DOCTYPE,
                                                           "type_fichier": "Photo"},
                              fields=["parent", "fichier"], order_by="idx") if noms else []):
@@ -177,7 +184,6 @@ def get_activites(employe=None, recherche=None, inclure_fermees=0):
     for a in (frappe.get_all("Activite Affectation", filters={"parent": ["in", noms], "parenttype": DOCTYPE},
                              fields=["parent", "employe", "nom"], order_by="idx") if noms else []):
         affectes.setdefault(a.parent, []).append({"employe": a.employe, "nom": a.nom})
-    aujourdhui = getdate(nowdate())
     for r in rows:
         r["nb_fichiers"] = cint(nb_fichiers.get(r.name))
         r["nb_notes"] = cint(nb_notes.get(r.name))
@@ -185,6 +191,8 @@ def get_activites(employe=None, recherche=None, inclure_fermees=0):
         r["vignette"] = vignettes.get(r.name)
         r["employes"] = affectes.get(r.name, [])
         r["en_retard"] = bool(r.date_prevue and r.statut not in FERMES and getdate(r.date_prevue) < aujourdhui)
+        r["etapes_retard"] = etapes_retard.get(r.name, 0) if r.statut not in FERMES else 0
+        r["prochaine"] = prochaine.get(r.name) if r.statut not in FERMES else None
     kpis = {s: sum(1 for r in rows if r.statut == s) for s in STATUTS}
     kpis["En retard"] = sum(1 for r in rows if r["en_retard"])
     return {"activites": rows, "kpis": kpis}
@@ -250,9 +258,10 @@ def enregistrer(data):
             doc.set(champ, data.get(champ) or None)
     if data.get("statut") and data["statut"] not in STATUTS:
         frappe.throw(_("Statut inconnu : {0}").format(data["statut"]))
-    for e in data.get("etapes") or []:            # étapes proposées par l'IA
-        if (e or "").strip():
-            doc.append("etapes", {"libelle": e.strip()[:140]})
+    for e in data.get("etapes") or []:            # étapes proposées par l'IA : « libellé » ou {libelle, date_prevue}
+        ligne = _ligne_etape(e)
+        if ligne:
+            doc.append("etapes", ligne)
     if cint(data.get("ia_ameliore")):
         doc.ia_ameliore = 1
     doc.save()
@@ -269,14 +278,27 @@ def changer_statut(name, statut):
     return {"statut": doc.statut, "avancement": doc.avancement}
 
 
+def _ligne_etape(e) -> dict | None:
+    """Une étape reçue de l'écran ou de l'IA : chaîne, ou {libelle, date_prevue}. None si vide."""
+    if isinstance(e, dict):
+        libelle, date = e.get("libelle"), e.get("date_prevue")
+    else:
+        libelle, date = e, None
+    libelle = (libelle or "").strip()
+    if not libelle:
+        return None
+    return {"libelle": libelle[:140], "date_prevue": str(getdate(date)) if date else None}
+
+
 @frappe.whitelist()
-def etape(name, action, libelle=None, ligne=None):
-    """Ajouter / cocher-décocher / supprimer une étape."""
+def etape(name, action, libelle=None, ligne=None, date=None):
+    """Ajouter / cocher-décocher / dater / supprimer une étape."""
     doc = _doc(name, "write")
     if action == "ajouter":
-        if not (libelle or "").strip():
+        nouvelle = _ligne_etape({"libelle": libelle, "date_prevue": date})
+        if not nouvelle:
             frappe.throw(_("Écrivez l'étape."))
-        doc.append("etapes", {"libelle": libelle.strip()[:140]})
+        doc.append("etapes", nouvelle)
     else:
         # Par l'identifiant de la ligne, pas par son rang : après une suppression, deux
         # lignes peuvent porter le même idx et le clic cocherait la mauvaise étape.
@@ -287,12 +309,14 @@ def etape(name, action, libelle=None, ligne=None):
             row.fait = 0 if cint(row.fait) else 1
             row.fait_le = now_datetime() if row.fait else None
             row.fait_par = frappe.session.user if row.fait else None
+        elif action == "dater":
+            row.date_prevue = str(getdate(date)) if date else None
         elif action == "supprimer":
             doc.remove(row)
         else:
             frappe.throw(_("Action inconnue."))
     doc.save()
-    return {"avancement": doc.avancement, "statut": doc.statut}
+    return {"avancement": doc.avancement, "statut": doc.statut, "date_prevue": doc.date_prevue}
 
 
 @frappe.whitelist()
@@ -343,7 +367,32 @@ def supprimer(name):
 
 # ── IA ───────────────────────────────────────────────────────────────────────
 
-def prompt_amelioration(titre: str, description: str, employe: str | None, notes: list[str]) -> tuple[str, str]:
+def ajouter_jours_ouvres(depart, n: int):
+    """Date + n jours ouvrés (dimanche chômé) — même règle que l'écran (sa_ajouter_jours_ouvres)."""
+    d = getdate(depart or nowdate())
+    reste = max(0, cint(n))
+    while reste > 0:
+        d = add_days(d, 1)
+        if d.weekday() != 6:
+            reste -= 1
+    return d
+
+
+def dater_etapes(etapes: list[dict], depart) -> list[dict]:
+    """Pose `date_prevue` sur chaque étape d'après son `jour` (jour ouvré de fin, 1 = le premier jour).
+    Un `jour` manquant ou non croissant reprend celui de l'étape d'avant (jamais de date qui recule)."""
+    depart = getdate(depart or nowdate())
+    courant = 1
+    for e in etapes:
+        j = cint(e.get("jour") or 0)
+        courant = max(courant, j) if j else courant
+        e["jour"] = courant
+        e["date_prevue"] = str(ajouter_jours_ouvres(depart, courant - 1))
+    return etapes
+
+
+def prompt_amelioration(titre: str, description: str, employe: str | None, notes: list[str],
+                        date_debut=None) -> tuple[str, str]:
     system = (
         "Tu aides une petite entreprise tunisienne de traitement de l'eau (osmoseurs, adoucisseurs, "
         "installation, entretien, vente) à rédiger les activités confiées à ses employés. "
@@ -351,11 +400,15 @@ def prompt_amelioration(titre: str, description: str, employe: str | None, notes
         'JSON, sans texte autour : {"titre": "<titre court et clair, verbe d\'action, 80 caractères max>", '
         '"description": "<description claire en français : objectif, contexte, résultat attendu ; 2 à 6 '
         'phrases ; ne rien inventer de factuel (noms, montants, dates) qui ne soit pas dans le texte>", '
-        '"etapes": ["<étape concrète et vérifiable>", ...] (3 à 8 étapes, dans l\'ordre), '
-        '"duree_jours": <estimation raisonnable du nombre de jours ouvrés, entier>}. '
+        '"etapes": [{"etape": "<étape concrète et vérifiable, une action, un résultat visible>", '
+        '"jour": <jour ouvré de FIN de l\'étape, entier à partir de 1, croissant d\'une étape à la suivante>}, ...] '
+        "(3 à 8 étapes, dans l'ordre d'exécution ; les jours tiennent compte de la charge réelle d'un employé "
+        "qui a d'autres tâches : une étape simple = 1 jour, une étape lourde = plusieurs jours ; dimanche chômé), "
+        '"duree_jours": <jour de la dernière étape, entier>}. '
         "Garde le vocabulaire du métier et les mots de l'utilisateur quand ils sont précis."
     )
     user = "Titre : %s\nDescription : %s" % (titre or "", description or "(vide)")
+    user += "\nDébut de l'activité : %s (jour 1)" % frappe.utils.formatdate(getdate(date_debut or nowdate()), "dd/MM/yyyy")
     if employe:
         user += "\nConfiée à : %s" % employe
     if notes:
@@ -374,19 +427,35 @@ def lire_reponse_ia(texte: str) -> dict:
         d = {}
     if not isinstance(d, dict):
         d = {}
-    etapes = [str(e).strip()[:140] for e in (d.get("etapes") or []) if str(e).strip()] if isinstance(d.get("etapes"), list) else []
+    etapes = []
+    for e in (d.get("etapes") or []) if isinstance(d.get("etapes"), list) else []:
+        # Nouveau format {"etape", "jour"} ; l'ancien (une chaîne) reste lu, sans jour.
+        if isinstance(e, dict):
+            libelle, jour = e.get("etape") or e.get("libelle") or "", e.get("jour")
+        else:
+            libelle, jour = e, None
+        libelle = str(libelle or "").strip()[:140]
+        if not libelle:
+            continue
+        try:
+            jour = max(0, min(365, int(jour or 0)))
+        except (TypeError, ValueError):
+            jour = 0
+        etapes.append({"libelle": libelle, "jour": jour})
     try:
         duree = max(0, min(365, int(d.get("duree_jours") or 0)))
     except (TypeError, ValueError):
         duree = 0
+    etapes = etapes[:12]
+    duree = max(duree, max((e["jour"] for e in etapes), default=0))
     return {"titre": str(d.get("titre") or "").strip()[:140], "description": str(d.get("description") or "").strip(),
-            "etapes": etapes[:12], "duree_jours": duree}
+            "etapes": etapes, "duree_jours": duree}
 
 
 @frappe.whitelist()
-def ameliorer_ia(titre=None, description=None, employes=None, name=None):
-    """Propose une version améliorée (titre, description, étapes, durée) — rien n'est enregistré :
-    l'écran montre la proposition et l'utilisateur choisit ce qu'il garde."""
+def ameliorer_ia(titre=None, description=None, employes=None, name=None, date_debut=None):
+    """Propose une version améliorée (titre, description, étapes DATÉES, durée) — rien n'est enregistré :
+    l'écran montre la proposition et l'utilisateur choisit ce qu'il garde, et peut retoucher chaque date."""
     _verifier_acces()
     notes = []
     if name:
@@ -395,13 +464,14 @@ def ameliorer_ia(titre=None, description=None, employes=None, name=None):
         description = description if description is not None else doc.description
         employes = employes or [r.employe for r in doc.affectations]
         notes = [n.texte for n in doc.notes]
+        date_debut = date_debut or doc.date_debut
     if len((titre or "") + (description or "")) < 4:
         frappe.throw(_("Écrivez d'abord quelques mots à améliorer."))
     employes = frappe.parse_json(employes) if isinstance(employes, str) and employes.startswith("[") else employes
     if isinstance(employes, str):
         employes = [employes]
     noms = ", ".join(frappe.db.get_value("Employee", e, "employee_name") or e for e in (employes or []))
-    system, user = prompt_amelioration(titre, description, noms or None, notes)
+    system, user = prompt_amelioration(titre, description, noms or None, notes, date_debut)
     from customization_app.liste_commande_import import _model, _openai_client
     client = _openai_client()
     params = {"model": _model(), "messages": [{"role": "system", "content": system},
@@ -415,5 +485,11 @@ def ameliorer_ia(titre=None, description=None, employes=None, name=None):
     prop = lire_reponse_ia(resp.choices[0].message.content)
     if not (prop["titre"] or prop["description"]):
         frappe.throw(_("L'IA n'a pas rendu de proposition exploitable, réessayez."))
+    prop["date_debut"] = str(getdate(date_debut or nowdate()))
+    dater_etapes(prop["etapes"], prop["date_debut"])
+    if prop["etapes"]:
+        prop["date_prevue"] = prop["etapes"][-1]["date_prevue"]
+    elif prop["duree_jours"]:
+        prop["date_prevue"] = str(ajouter_jours_ouvres(prop["date_debut"], prop["duree_jours"]))
     return prop
 

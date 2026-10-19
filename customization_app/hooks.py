@@ -665,6 +665,8 @@ scheduler_events = {
     "daily": [
         # Jours de récupération par quinzaine : crédite les quinzaines écoulées (Regle Recuperation).
         "customization_app.conges_recuperations.tache_quotidienne",
+        # Suivi d'activité : la prochaine réunion d'équipe (toutes les N semaines) créée N jours avant.
+        "customization_app.reunion_activite.cron_creer_prochaine",
         # Vérification hebdomadaire des stocks d'employés : fiche + tâches le jour fixé (Config Stock Entrepot).
         "customization_app.stock_entrepots.planifier_verifications",
     ],
@@ -696,6 +698,10 @@ scheduler_events = {
         "0 20 * * *": [
             "customization_app.rappel_rdv.cron_du_soir",
         ],
+
+        # Réunion d'équipe (Suivi d'activité) : rappel aux participants la veille à 18:00 et le jour à 08:00.
+        "0 18 * * *": ["customization_app.reunion_activite.cron_rappel_veille"],
+        "0 8 * * *": ["customization_app.reunion_activite.cron_rappel_jour"],
 
         # Tous les jours à 07:30 : création/MAJ liste interventions Nizar
         "30 7 * * *": [
