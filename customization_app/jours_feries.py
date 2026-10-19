@@ -25,10 +25,13 @@ def feries(debut, fin, employee: str | None = None) -> dict[str, str]:
     liste = (frappe.db.get_value("Employee", employee, "holiday_list") if employee else None) or liste_par_defaut()
     if not liste:
         return {}
-    rows = frappe.get_all("Holiday", filters={"parent": liste, "parenttype": "Holiday List", "weekly_off": 0,
+    rows = frappe.get_all("Holiday", filters={"parent": liste, "parenttype": "Holiday List",
                                               "holiday_date": ["between", [str(getdate(debut)), str(getdate(fin))]]},
-                          fields=["holiday_date", "description"], order_by="holiday_date")
-    return {str(r.holiday_date): (r.description or _("Jour férié")).strip() for r in rows}
+                          fields=["holiday_date", "description", "weekly_off"], order_by="holiday_date")
+    # Une fête qui tombe un dimanche garde la ligne « repos hebdomadaire » (une seule ligne par date dans HRMS) :
+    # on la reconnaît à son libellé « <fête> (dimanche) » et on l'affiche quand même.
+    return {str(r.holiday_date): (r.description or _("Jour férié")).strip() for r in rows
+            if not cint(r.weekly_off) or (r.description or "").strip().lower().endswith("(dimanche)")}
 
 
 def est_ferie(jour, employee: str | None = None) -> str | None:
