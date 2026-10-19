@@ -99,14 +99,15 @@ def _derniere_avec(employes: set, avant):
 
 
 def creer_reunion(date, heure=None, cron: bool = False, cfg: dict | None = None, employes: list | None = None,
-                  titre: str | None = None, lieu: str | None = None):
+                  titre: str | None = None, lieu: str | None = None, activites: list | None = None,
+                  serie: str | None = None, toutes_les: int = 0, precedente: str | None = None):
     """Une réunion pour `employes` (défaut : toute l'équipe du réglage) : point d'équipe, d'un groupe, ou d'une seule
     personne. La « précédente » (dont on relit les décisions) est la dernière réunion des MÊMES participants."""
     cfg = cfg or config()
     date = getdate(date)
     doc = frappe.new_doc(DOCTYPE)
     employes = [e for e in (employes or []) if e] or [e["name"] for e in SA.employes_parametres()]
-    prec = _derniere_avec(set(employes), date)
+    prec = frappe._dict(name=precedente) if precedente else _derniere_avec(set(employes), date)
     if not titre:
         if len(employes) == 1:
             titre = _("Point avec {0} · {1}").format(frappe.db.get_value("Employee", employes[0], "employee_name") or employes[0],
@@ -115,12 +116,33 @@ def creer_reunion(date, heure=None, cron: bool = False, cfg: dict | None = None,
             titre = _("Réunion d'équipe · point du {0}").format(frappe.utils.formatdate(date, "dd/MM/yyyy"))
     doc.update({"titre": titre[:140], "date": date, "heure": heure or cfg["reunion_heure"], "duree_min": cfg["reunion_duree"],
                 "lieu": lieu or cfg["reunion_lieu"], "statut": "Prévue", "creee_par_cron": 1 if cron else 0,
-                "precedente": prec.name if prec else None,
+                "precedente": prec.name if prec else None, "serie": serie, "toutes_les_semaines": cint(toutes_les) or None,
                 "lien_visio": lien_visio(date) if cfg["reunion_visio"] else None})
     for e in employes:
         doc.append("participants", {"employe": e})
+    for a in activites or []:
+        if a and frappe.db.exists(SA.DOCTYPE, a):
+            doc.append("activites_suivies", {"activite": a, "titre": frappe.db.get_value(SA.DOCTYPE, a, "titre")})
     doc.insert(ignore_permissions=True)
     return doc
+
+
+def creer_serie(date, jusquau, toutes_les: int, heure=None, employes=None, titre=None, lieu=None, activites=None) -> list:
+    """Une réunion toutes les `toutes_les` semaines de `date` à `jusquau` inclus (52 au plus), un lien visio chacune,
+    chacune « précédente » de la suivante. Rend les noms créés."""
+    toutes_les = max(1, cint(toutes_les))
+    d, fin = getdate(date), getdate(jusquau)
+    if fin < d:
+        frappe.throw(_("La date de fin précède la date de début."))
+    serie = frappe.generate_hash(length=8)
+    noms, prec = [], None
+    while d <= fin and len(noms) < 52:
+        doc = creer_reunion(d, heure, employes=employes, titre=titre, lieu=lieu, activites=activites, serie=serie,
+                            toutes_les=toutes_les, precedente=prec)
+        noms.append(doc.name)
+        prec = doc.name
+        d = add_days(d, 7 * toutes_les)
+    return noms
 
 
 def cron_creer_prochaine():
@@ -229,7 +251,8 @@ def _acces_reunion(doc):
 def get_reunions():
     SA._verifier_acces()
     cfg = config()
-    champs = ["name", "titre", "date", "heure", "duree_min", "lieu", "lien_visio", "statut", "tenue_le", "creee_par_cron"]
+    champs = ["name", "titre", "date", "heure", "duree_min", "lieu", "lien_visio", "statut", "tenue_le", "creee_par_cron",
+              "serie", "toutes_les_semaines"]
     filtres = {}
     if not SA.est_responsable():
         mes = frappe.get_all("Reunion Participant", filters={"utilisateur": frappe.session.user, "parenttype": DOCTYPE}, pluck="parent")
@@ -238,8 +261,11 @@ def get_reunions():
     passees = frappe.get_all(DOCTYPE, filters=dict(filtres, statut=["in", ["Tenue", "Annulée"]]), fields=champs,
                              order_by="date desc, heure desc", limit=20)
     noms = [r.name for r in a_venir + passees]
-    presences, decisions = {}, {}
+    presences, decisions, suivies = {}, {}, {}
     if noms:
+        for r in frappe.get_all("Reunion Activite Suivie", filters={"parent": ["in", noms], "parenttype": DOCTYPE},
+                                fields=["parent", "titre"], order_by="idx"):
+            suivies.setdefault(r.parent, []).append(r.titre)
         for p in frappe.get_all("Reunion Participant", filters={"parent": ["in", noms], "parenttype": DOCTYPE},
                                 fields=["parent", "nom", "present"], order_by="idx"):
             presences.setdefault(p.parent, []).append({"nom": p.nom, "present": p.present})
@@ -255,6 +281,7 @@ def get_reunions():
         r["nb_presents"] = sum(1 for p in r["participants"] if p["present"] == "Présent")
         r["nb_decisions"] = len(decisions.get(r.name, []))
         r["nb_decisions_faites"] = sum(1 for a in decisions.get(r.name, []) if etats.get(a) == "Terminée")
+        r["suivies"] = suivies.get(r.name, [])
     derniere = _derniere()
     return {"a_venir": a_venir, "passees": passees, "peut_gerer": SA.est_responsable(),
             "config": {k.replace("reunion_", ""): v for k, v in cfg.items()},
@@ -273,6 +300,10 @@ def ordre_du_jour(doc) -> dict:
         return {"employes": [], "kpis": {"retard": 0, "en_cours": 0, "terminees": 0}, "decisions_precedente": [], "depuis": str(depuis)}
     aff = frappe.get_all("Activite Affectation", filters={"employe": ["in", employes], "parenttype": SA.DOCTYPE},
                          fields=["parent", "employe"])
+    suivies = [r.activite for r in (doc.get("activites_suivies") or []) if r.activite]
+    if suivies:
+        # La réunion suit des activités précises : l'ordre du jour ne parle que d'elles (même si un participant en a d'autres).
+        aff = [a for a in aff if a.parent in suivies]
     noms = sorted({a.parent for a in aff})
     acts = {}
     if noms:
@@ -331,7 +362,7 @@ def ordre_du_jour(doc) -> dict:
                               "avancement": a.get("avancement"), "date_prevue": a.get("date_prevue"),
                               "en_retard": bool(a.get("date_prevue") and a.get("statut") not in SA.FERMES
                                                 and getdate(a["date_prevue"]) < aujourdhui)})
-    return {"employes": sortie, "kpis": kpis, "decisions_precedente": decisions, "depuis": str(depuis)}
+    return {"employes": sortie, "kpis": kpis, "decisions_precedente": decisions, "depuis": str(depuis), "suivies": suivies}
 
 
 @frappe.whitelist()
@@ -347,7 +378,12 @@ def get_reunion(name):
         if n.get("activite"):
             a = frappe.db.get_value(SA.DOCTYPE, n["activite"], ["statut", "avancement"], as_dict=True) or {}
             n["activite_statut"], n["activite_avancement"] = a.get("statut"), a.get("avancement")
+    for r in d.get("activites_suivies") or []:
+        a = frappe.db.get_value(SA.DOCTYPE, r.get("activite"), ["statut", "avancement", "titre"], as_dict=True) or {}
+        r.update({"statut": a.get("statut"), "avancement": a.get("avancement"), "titre": a.get("titre") or r.get("titre")})
     d["ordre_du_jour"] = ordre_du_jour(doc)
+    if doc.serie:
+        d["serie_reunions"] = frappe.get_all(DOCTYPE, filters={"serie": doc.serie}, fields=["name", "date", "statut"], order_by="date")
     d["peut_gerer"] = SA.est_responsable()
     d["moi"] = SA.employe_de()
     d["employes"] = SA.employes_parametres() if SA.est_responsable() else []
@@ -365,10 +401,13 @@ def _gerer():
 
 
 @frappe.whitelist()
-def creer(date, heure=None, employes=None, titre=None, lieu=None):
-    """Réunion à la date voulue pour les employés cochés (tous par défaut). Plusieurs réunions le même jour sont
-    possibles (équipes différentes) ; refusée seulement si la même liste de participants a déjà une réunion prévue ce jour."""
+def creer(date, heure=None, employes=None, titre=None, lieu=None, activites=None, toutes_les=0, jusquau=None):
+    """Réunion à la date voulue pour les employés cochés (tous par défaut), qui suit éventuellement des activités
+    précises. Avec `toutes_les` (semaines) et `jusquau` : une SÉRIE, une réunion par occurrence, un lien visio chacune.
+    Plusieurs réunions le même jour sont possibles (équipes différentes) ; refusée seulement si la même liste de
+    participants a déjà une réunion prévue ce jour."""
     _gerer()
+    activites = frappe.parse_json(activites) if isinstance(activites, str) and activites.startswith("[") else (activites or [])
     employes = frappe.parse_json(employes) if isinstance(employes, str) and employes.startswith("[") else employes
     if isinstance(employes, str):
         employes = [employes]
@@ -378,8 +417,11 @@ def creer(date, heure=None, employes=None, titre=None, lieu=None):
     for n in frappe.get_all(DOCTYPE, filters={"date": str(getdate(date)), "statut": "Prévue"}, pluck="name"):
         if set(frappe.get_all("Reunion Participant", filters={"parent": n, "parenttype": DOCTYPE}, pluck="employe")) == set(employes):
             frappe.throw(_("Une réunion avec exactement ces participants est déjà prévue ce jour-là ({0}).").format(n))
-    doc = creer_reunion(date, heure, employes=employes, titre=titre, lieu=lieu)
-    return {"name": doc.name}
+    if cint(toutes_les) and jusquau:
+        noms = creer_serie(date, jusquau, cint(toutes_les), heure, employes, titre, lieu, activites)
+        return {"name": noms[0], "noms": noms}
+    doc = creer_reunion(date, heure, employes=employes, titre=titre, lieu=lieu, activites=activites)
+    return {"name": doc.name, "noms": [doc.name]}
 
 
 @frappe.whitelist()
@@ -391,6 +433,9 @@ def modifier(name, data):
     for champ in ("titre", "date", "heure", "duree_min", "lieu", "lien_visio", "compte_rendu"):
         if champ in data:
             doc.set(champ, data.get(champ) or None)
+    if data.get("activites") is not None:
+        doc.set("activites_suivies", [{"activite": a, "titre": frappe.db.get_value(SA.DOCTYPE, a, "titre")}
+                                      for a in data["activites"] if a and frappe.db.exists(SA.DOCTYPE, a)])
     if data.get("employes") is not None:
         presents = {p.employe: p.present for p in doc.participants}
         doc.set("participants", [{"employe": e, "present": presents.get(e)} for e in data["employes"] if e])
@@ -482,3 +527,37 @@ def supprimer(name):
     _gerer()
     frappe.delete_doc(DOCTYPE, name, ignore_permissions=True)
     return {"ok": True}
+
+
+@frappe.whitelist()
+def activites_de(employes=None):
+    """Les activités OUVERTES des employés donnés (pour choisir celles qu'une réunion suit)."""
+    _gerer()
+    employes = frappe.parse_json(employes) if isinstance(employes, str) and employes.startswith("[") else employes
+    if isinstance(employes, str):
+        employes = [employes]
+    employes = [e for e in (employes or []) if e]
+    if not employes:
+        return []
+    noms = sorted({a.parent for a in frappe.get_all("Activite Affectation", filters={"employe": ["in", employes], "parenttype": SA.DOCTYPE},
+                                                    fields=["parent"])})
+    if not noms:
+        return []
+    return frappe.get_all(SA.DOCTYPE, filters={"name": ["in", noms], "statut": ["not in", list(SA.FERMES)]},
+                          fields=["name", "titre", "noms_employes", "statut", "priorite", "avancement", "date_prevue"],
+                          order_by="date_prevue is null, date_prevue asc")
+
+
+@frappe.whitelist()
+def annuler_serie_suivantes(name):
+    """Annule cette réunion et toutes les suivantes de sa série (celles encore Prévue)."""
+    _gerer()
+    doc = frappe.get_doc(DOCTYPE, name)
+    if not doc.serie:
+        frappe.throw(_("Cette réunion ne fait pas partie d'une série."))
+    noms = frappe.get_all(DOCTYPE, filters={"serie": doc.serie, "date": [">=", str(doc.date)], "statut": "Prévue"}, pluck="name")
+    for n in noms:
+        d = frappe.get_doc(DOCTYPE, n)
+        d.statut = "Annulée"
+        d.save(ignore_permissions=True)
+    return {"annulees": noms}

@@ -352,3 +352,32 @@ class TestReunions(TestAcces):
         self._comme(self.u2)
         with self.assertRaises(frappe.PermissionError):
             self.RA.get_reunion(seul)
+
+    def test_serie_et_activites_suivies(self):
+        import frappe
+        from frappe.utils import add_days, nowdate
+        self._comme(self.ur)
+        a1 = SA.enregistrer({"titre": "Catalogue produits", "employes": [self.e1]})["name"]
+        a2 = SA.enregistrer({"titre": "Inventaire magasin", "employes": [self.e1, self.e2]})["name"]
+        SA.enregistrer({"titre": "Autre chose de e1", "employes": [self.e1]})
+        ouvertes = self.RA.activites_de([self.e1])
+        self.assertTrue({a1, a2} <= {x["name"] for x in ouvertes})
+        # Série : toutes les 2 semaines, 5 semaines → 3 réunions, chacune précédente de la suivante, un lien chacune.
+        r = self.RA.creer(nowdate(), employes=[self.e1], toutes_les=2, jusquau=add_days(nowdate(), 35), activites=[a1, a2])
+        self.assertEqual(len(r["noms"]), 3)
+        docs = [frappe.get_doc(self.RA.DOCTYPE, n) for n in r["noms"]]
+        self.assertEqual([str(d.date) for d in docs], [nowdate(), add_days(nowdate(), 14), add_days(nowdate(), 28)])
+        self.assertEqual(len({d.serie for d in docs}), 1)
+        self.assertEqual(len({d.lien_visio for d in docs}), 3)
+        self.assertEqual([d.precedente for d in docs], [None, docs[0].name, docs[1].name])
+        self.assertEqual([x.activite for x in docs[0].activites_suivies], [a1, a2])
+        # L'ordre du jour ne parle que des activités suivies.
+        odj = self.RA.get_reunion(docs[0].name)["ordre_du_jour"]
+        self.assertEqual(odj["suivies"], [a1, a2])
+        self.assertEqual({x["name"] for x in odj["employes"][0]["ouvertes"]}, {a1, a2})
+        self.assertEqual(len(self.RA.get_reunion(docs[0].name)["serie_reunions"]), 3)
+        # Annuler à partir de la 2e : la 1re reste prévue.
+        self.RA.annuler_serie_suivantes(docs[1].name)
+        self.assertEqual([frappe.db.get_value(self.RA.DOCTYPE, d.name, "statut") for d in docs], ["Prévue", "Annulée", "Annulée"])
+        with self.assertRaises(frappe.ValidationError):
+            self.RA.creer(nowdate(), employes=[self.e1], toutes_les=1, jusquau=add_days(nowdate(), -1))
