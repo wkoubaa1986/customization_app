@@ -12,6 +12,9 @@
   "date_premiere",
   "periodicite_semaines",
   "horizon_semaines",
+  "section_suspension",
+  "suspendue_du",
+  "suspendue_au",
   "derniere_planifiee"
  ],
  "fields": [
@@ -68,6 +71,22 @@
    "description": "Les jours sont posés dans le planning jusqu’à aujourd’hui + cet horizon ; la tâche quotidienne complète au fil de l’eau."
   },
   {
+   "fieldname": "section_suspension",
+   "fieldtype": "Section Break",
+   "label": "Suspension"
+  },
+  {
+   "fieldname": "suspendue_du",
+   "fieldtype": "Date",
+   "label": "Suspendue du",
+   "description": "Aucun jour de récupération n'est posé entre ces deux dates (inclus) ; ceux déjà posés dans la fenêtre sont annulés."
+  },
+  {
+   "fieldname": "suspendue_au",
+   "fieldtype": "Date",
+   "label": "Suspendue jusqu'au"
+  },
+  {
    "fieldname": "derniere_planifiee",
    "fieldtype": "Date",
    "label": "Dernier jour planifié",
@@ -76,7 +95,7 @@
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-10-01 13:00:00.000000",
+ "modified": "2026-10-19 21:00:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Regle Recuperation",

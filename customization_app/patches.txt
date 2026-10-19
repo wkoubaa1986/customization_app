@@ -98,3 +98,4 @@ customization_app.patches.seed_domiciles_flotte_gps
 customization_app.patches.oublier_geocodage_texte_hors_secteur
 customization_app.patches.renommer_vehicules_flotte_gps
 customization_app.patches.tournees_depassement_defaut
+customization_app.patches.recup_allocations_sans_report

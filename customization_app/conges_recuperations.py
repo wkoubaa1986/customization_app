@@ -186,7 +186,11 @@ def get_context(annee=None, mois=None, employee=None):
         planning.append({"employee": e.name, "employee_name": e.employee_name, "image": e.image or "",
                          "feries": feries, "cases": cases})
     regles = {r.employee: r for r in frappe.get_all(
-        "Regle Recuperation", fields=["employee", "date_premiere", "periodicite_semaines", "horizon_semaines", "actif", "derniere_planifiee"])}
+        "Regle Recuperation", fields=["employee", "date_premiere", "periodicite_semaines", "horizon_semaines", "actif", "derniere_planifiee",
+                                      "suspendue_du", "suspendue_au"])}
+    a_venir = {r.employee: cint(r.n) for r in frappe.db.sql("""
+        SELECT employee, COUNT(*) AS n FROM `tabRecuperation Acquise` WHERE origine = 'Planifié' AND date_debut >= %s GROUP BY employee
+    """, (str(auj),), as_dict=True)}
     acquis = {r.employee: flt(r.total) for r in frappe.db.sql("""
         SELECT employee, SUM(jours) AS total FROM `tabRecuperation Acquise` WHERE YEAR(date_fin) = %s GROUP BY employee
     """, (annee,), as_dict=True)}
@@ -203,6 +207,9 @@ def get_context(annee=None, mois=None, employee=None):
                     "horizon_semaines": cint(regles[e.name].horizon_semaines) if e.name in regles else 8,
                     "actif": cint(regles[e.name].actif) if e.name in regles else 0,
                     "derniere": str(regles[e.name].derniere_planifiee) if e.name in regles and regles[e.name].derniere_planifiee else None,
+                    "suspendue_du": str(regles[e.name].suspendue_du) if e.name in regles and regles[e.name].suspendue_du else None,
+                    "suspendue_au": str(regles[e.name].suspendue_au) if e.name in regles and regles[e.name].suspendue_au else None,
+                    "a_venir": a_venir.get(e.name, 0),
                     "jours_annee": acquis.get(e.name, 0.0)} for e in employes],
         "absences_annee": _absences(f"{annee}-01-01", f"{annee}-12-31", employee) if employee else [],
         "allocations_annee": frappe.get_all("Leave Allocation", filters={"docstatus": 1, "employee": employee, "to_date": [">=", f"{annee}-01-01"], "from_date": ["<=", f"{annee}-12-31"]},
@@ -341,10 +348,56 @@ def _assurer_type_recup() -> str:
     return TYPE_RECUP
 
 
+def _suspendu(r, d) -> bool:
+    """`d` tombe dans la fenêtre de suspension de la règle (bornes incluses)."""
+    du, au = r.get("suspendue_du"), r.get("suspendue_au")
+    if not du and not au:
+        return False
+    d = getdate(d)
+    return (not du or getdate(du) <= d) and (not au or d <= getdate(au))
+
+
+def jours_planifies_a_venir(employee: str, du=None, au=None) -> list[dict]:
+    """Les jours de récupération POSÉS PAR LA RÈGLE (origine « Planifié »), à partir d'aujourd'hui (ou de `du`),
+    jusqu'à `au` si donné : [{date, leave_application}]."""
+    debut = max(getdate(nowdate()), getdate(du)) if du else getdate(nowdate())
+    filtres = {"employee": employee, "origine": "Planifié", "date_debut": [">=", str(debut)]}
+    if au:
+        filtres["date_debut"] = ["between", [str(debut), str(getdate(au))]]
+    return [{"date": str(r.date_debut), "leave_application": r.leave_application}
+            for r in frappe.get_all("Recuperation Acquise", filters=filtres, fields=["date_debut", "leave_application"],
+                                    order_by="date_debut")]
+
+
+def annuler_planifies(employee: str, du=None, au=None) -> list[str]:
+    """Annule les jours posés par la règle dans la fenêtre (la demande de congé annulée emporte la tâche
+    du calendrier et la trace, via le hook on_cancel). -> dates annulées."""
+    annules = []
+    for j in jours_planifies_a_venir(employee, du, au):
+        la = j["leave_application"]
+        if la and frappe.db.exists("Leave Application", la):
+            doc = frappe.get_doc("Leave Application", la)
+            if doc.docstatus == 1:
+                doc.cancel()
+            elif doc.docstatus == 0:
+                doc.delete()
+        else:
+            # Trace orpheline : on la retire pour que le jour puisse être reposé plus tard.
+            for tr in frappe.get_all("Recuperation Acquise", filters={"employee": employee, "date_debut": j["date"], "origine": "Planifié"}, pluck="name"):
+                frappe.delete_doc("Recuperation Acquise", tr, ignore_permissions=True, force=True)
+        annules.append(j["date"])
+    return annules
+
+
 @frappe.whitelist()
-def enregistrer_regle(employee, date_premiere, periodicite_semaines=2, horizon_semaines=8, actif=1, planifier=1):
+def enregistrer_regle(employee, date_premiere, periodicite_semaines=2, horizon_semaines=8, actif=1, planifier=1,
+                      suspendue_du=None, suspendue_au=None, annuler_poses=1):
     """Enregistre la règle et, si elle est active, pose tout de suite ses jours jusqu'à l'horizon :
-    l'utilisateur voit le résultat sans second clic."""
+    l'utilisateur voit le résultat sans second clic.
+
+    Suspension (19/10/2026) : entre `suspendue_du` et `suspendue_au`, aucun jour n'est posé et ceux déjà posés
+    dans la fenêtre sont annulés. Règle désactivée avec `annuler_poses` : tous les jours posés à venir sont annulés
+    (une règle inactive qui laissait 60 jours de récupération posés jusqu'en 2028 ne désactivait rien)."""
     _verifier_acces()
     if frappe.db.exists("Regle Recuperation", employee):
         doc = frappe.get_doc("Regle Recuperation", employee)
@@ -353,10 +406,18 @@ def enregistrer_regle(employee, date_premiere, periodicite_semaines=2, horizon_s
     else:
         doc = frappe.new_doc("Regle Recuperation")
         doc.employee = employee
+    if suspendue_du and suspendue_au and getdate(suspendue_au) < getdate(suspendue_du):
+        frappe.throw(_("La fin de la suspension précède son début."))
     doc.update({"date_premiere": date_premiere, "periodicite_semaines": cint(periodicite_semaines) or 2,
-                "horizon_semaines": cint(horizon_semaines) or 8, "actif": cint(actif)})
+                "horizon_semaines": cint(horizon_semaines) or 8, "actif": cint(actif),
+                "suspendue_du": suspendue_du or None, "suspendue_au": suspendue_au or None})
     doc.save()
-    resultat = {"name": doc.name, "poses": [], "sautes": []}
+    resultat = {"name": doc.name, "poses": [], "sautes": [], "annules": []}
+    if cint(annuler_poses):
+        if not cint(actif):
+            resultat["annules"] = annuler_planifies(employee)
+        elif suspendue_du or suspendue_au:
+            resultat["annules"] = annuler_planifies(employee, suspendue_du, suspendue_au)
     if cint(actif) and cint(planifier):
         _assurer_type_recup()
         resultat.update(_planifier_regle(frappe.get_doc("Regle Recuperation", doc.name)))
@@ -364,23 +425,27 @@ def enregistrer_regle(employee, date_premiere, periodicite_semaines=2, horizon_s
 
 
 @frappe.whitelist()
-def supprimer_regle(employee):
+def supprimer_regle(employee, annuler_poses=1):
+    """Supprime la règle et, par défaut, les jours qu'elle avait posés à venir."""
     _verifier_acces()
+    annules = annuler_planifies(employee) if cint(annuler_poses) else []
     if frappe.db.exists("Regle Recuperation", employee):
         frappe.delete_doc("Regle Recuperation", employee)
-    return True
+    return {"annules": annules}
 
 
 def _allocation_recup(employee: str, annee: int, jours: float) -> str:
-    """Allocation de récupération de l'année : augmentée si elle existe, sinon créée avec report
-    des jours non pris de l'année précédente (pas d'expiration)."""
+    """Allocation de récupération de l'année : augmentée si elle existe, sinon créée.
+
+    SANS report (carry_forward) — 19/10/2026 : le crédit est posé exactement au moment où le jour est pris, le
+    solde non utilisé est donc toujours 0 et le report ne rapportait rien ; mais une allocation FUTURE marquée
+    « report » interdit à HRMS tout crédit sur l'année d'avant (« Leave cannot be allocated before 01-01-2027 »)
+    — les règles planifiées jusqu'en 2028 bloquaient ainsi toute récupération ajoutée en 2026."""
     debut, fin = f"{annee}-01-01", f"{annee}-12-31"
     existante = _allocation_existante(employee, TYPE_RECUP, debut, fin)
     if existante:
         return _augmenter_allocation(existante, jours)
-    precedente = frappe.db.exists("Leave Allocation", {"employee": employee, "leave_type": TYPE_RECUP, "docstatus": 1,
-                                                       "to_date": ["<", debut]})
-    return _creer_allocation(employee, TYPE_RECUP, debut, fin, jours, carry_forward=1 if precedente else 0)
+    return _creer_allocation(employee, TYPE_RECUP, debut, fin, jours, carry_forward=0)
 
 
 @frappe.whitelist()
@@ -396,7 +461,7 @@ def planifier_recuperations(jusqu_a=None, employee=None):
         filtres["employee"] = employee
     for r in frappe.get_all("Regle Recuperation", filters=filtres,
                             fields=["name", "employee", "employee_name", "date_premiere", "periodicite_semaines",
-                                    "horizon_semaines", "derniere_planifiee"]):
+                                    "horizon_semaines", "derniere_planifiee", "suspendue_du", "suspendue_au"]):
         res = _planifier_regle(r, jusqu_a)
         if res["poses"] or res["sautes"]:
             resume.append({"employee": r.employee, "employee_name": r.employee_name, **res})
@@ -414,6 +479,9 @@ def _planifier_regle(r, jusqu_a=None) -> dict:
         sd = str(d)
         derniere = d
         if frappe.db.exists("Recuperation Acquise", {"employee": r.employee, "date_debut": sd, "date_fin": sd}):
+            continue
+        if _suspendu(r, d):
+            sautes.append(f"{sd} (suspendue)")
             continue
         if sd in _feries(r.employee, sd, sd):
             sautes.append(sd)

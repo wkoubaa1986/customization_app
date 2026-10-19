@@ -31,8 +31,10 @@ class CongesRecuperations {
     this.$root.find("[data-action='generer']").on("click", () => this._planifier());
     this.$root.on("click", ".cr-regle-suppr", (e) => {
       const employee = $(e.currentTarget).data("employee");
-      frappe.confirm("Supprimer cette règle ? Les jours déjà posés restent dans le planning.", async () => {
-        await frappe.call({ method: "customization_app.conges_recuperations.supprimer_regle", args: { employee } });
+      frappe.confirm("Supprimer cette règle ? Les jours de récupération qu’elle avait posés à venir seront annulés ; les jours passés restent.", async () => {
+        const r = await frappe.call({ method: "customization_app.conges_recuperations.supprimer_regle", args: { employee } });
+        const n = ((r.message || {}).annules || []).length;
+        if (n) frappe.show_alert({ message: `${n} jour(s) de récupération à venir annulé(s)`, indicator: "orange" }, 5);
         this._fetch();
       });
     });
@@ -216,12 +218,16 @@ class CongesRecuperations {
     const d = this._data;
     let h = '<table class="cr-tbl"><thead><tr><th>Employé</th><th>Premier jour</th><th class="num">Toutes les</th><th class="num">Planifié à l’avance</th><th>Dernier jour planifié</th><th class="num">Jours cette année</th><th>État</th><th></th></tr></thead><tbody>';
     d.regles.forEach((r) => {
-      const etat = !r.existe ? '<span class="cr-muted">aucune règle</span>' : r.actif ? '<span class="cr-badge" style="background:#d1fae5;color:#065f46">active</span>' : '<span class="cr-badge" style="background:#eee;color:#666">inactive</span>';
+      const auj = frappe.datetime.get_today();
+      const susp = r.existe && r.actif && (r.suspendue_du || r.suspendue_au) && (!r.suspendue_au || r.suspendue_au >= auj);
+      const etat = !r.existe ? '<span class="cr-muted">aucune règle</span>'
+        : susp ? `<span class="cr-badge" style="background:#fef3c7;color:#92400e" title="Aucun jour posé dans cette fenêtre">⏸ suspendue ${r.suspendue_du ? "du " + frappe.datetime.str_to_user(r.suspendue_du) : ""} ${r.suspendue_au ? "au " + frappe.datetime.str_to_user(r.suspendue_au) : "(sans fin)"}</span>`
+        : r.actif ? '<span class="cr-badge" style="background:#d1fae5;color:#065f46">active</span>' : '<span class="cr-badge" style="background:#eee;color:#666">inactive</span>';
       h += `<tr><td><b>${frappe.utils.escape_html(r.employee_name)}</b></td>
         <td>${r.date_premiere ? frappe.datetime.str_to_user(r.date_premiere) : "—"}</td>
         <td class="num">${r.existe ? `${r.periodicite_semaines} sem.` : "—"}</td>
         <td class="num">${r.existe ? `${r.horizon_semaines} sem.` : "—"}</td>
-        <td>${r.derniere ? frappe.datetime.str_to_user(r.derniere) : '<span class="cr-muted">—</span>'}</td>
+        <td>${r.derniere ? frappe.datetime.str_to_user(r.derniere) : '<span class="cr-muted">—</span>'}${r.a_venir ? ` <span class="cr-muted">· ${r.a_venir} posé(s) à venir</span>` : ""}</td>
         <td class="num">${this._fmt(r.jours_annee)}</td><td>${etat}</td>
         <td style="white-space:nowrap">${d.peut_modifier ? `<button class="btn btn-default btn-xs cr-regle" data-employee="${r.employee}">✏️ Règle</button> ${r.existe ? `<span class="cr-del cr-regle-suppr" data-employee="${r.employee}" title="Supprimer la règle">🗑️</span>` : ""}` : ""}</td></tr>`;
     });
@@ -326,7 +332,16 @@ class CongesRecuperations {
         { fieldname: "periodicite_semaines", fieldtype: "Int", label: "Toutes les N semaines", reqd: 1, default: r.periodicite_semaines || 2 },
         { fieldname: "horizon_semaines", fieldtype: "Int", label: "Planifier à l’avance (semaines)", reqd: 1, default: r.horizon_semaines || 8,
           description: "Chaque jour planifié = absence approuvée « Récupération » + tâche « Jour de récupération » sur toute la journée dans le calendrier. Le solde est crédité d’office." },
-        { fieldname: "actif", fieldtype: "Check", label: "Règle active", default: r.existe ? r.actif : 1 },
+        { fieldname: "actif", fieldtype: "Check", label: "Règle active", default: r.existe ? r.actif : 1,
+          description: "Décochée : la règle s’arrête et les jours déjà posés à venir sont annulés (case ci-dessous)." },
+        { fieldtype: "Section Break", label: "Suspendre un temps (sans arrêter la règle)" },
+        { fieldname: "suspendue_du", fieldtype: "Date", label: "Suspendue du", default: r.suspendue_du || null },
+        { fieldtype: "Column Break" },
+        { fieldname: "suspendue_au", fieldtype: "Date", label: "Suspendue jusqu’au", default: r.suspendue_au || null,
+          description: "Aucun jour de récupération entre ces deux dates (inclus) ; la règle reprend après. Vider les deux dates = fin de la suspension." },
+        { fieldtype: "Section Break" },
+        { fieldname: "annuler_poses", fieldtype: "Check", label: "Annuler les jours déjà posés concernés (absence, tâche calendrier, crédit)", default: 1,
+          description: "Les jours dans la fenêtre de suspension, ou tous les jours à venir si la règle est désactivée." },
       ],
       primary_action_label: "Enregistrer",
       primary_action: async (v) => {
@@ -334,8 +349,10 @@ class CongesRecuperations {
         dlg.hide();
         const m = r.message || {};
         const poses = (m.poses || []).map((p) => frappe.datetime.str_to_user(p));
+        const annules = (m.annules || []).map((p) => frappe.datetime.str_to_user(p));
         frappe.msgprint({ title: "Règle enregistrée", indicator: "green",
-          message: (poses.length ? `${poses.length} jour(s) de récupération posé(s) : ${poses.join(", ")}.` : "Aucun nouveau jour à poser pour l’instant.")
+          message: (annules.length ? `<div>⏸ ${annules.length} jour(s) annulé(s) : ${annules.join(", ")}.</div>` : "")
+            + (poses.length ? `${poses.length} jour(s) de récupération posé(s) : ${poses.join(", ")}.` : "Aucun nouveau jour à poser pour l’instant.")
             + ((m.sautes || []).length ? `<div class="cr-muted">Sautés : ${m.sautes.map((x) => frappe.utils.escape_html(x)).join(", ")}</div>` : "")
             + "<div class='cr-muted' style='margin-top:6px'>Chaque jour = absence approuvée « Récupération » + tâche « Jour de récupération » toute la journée dans le calendrier. La suite est posée automatiquement chaque jour, jusqu’à l’horizon.</div>" });
         this._fetch();

@@ -100,6 +100,39 @@ class TestHRMS(unittest.TestCase):
         self.assertEqual(r["poses"], [str(premier)], r["sautes"])
         self.assertEqual(frappe.db.get_value("Regle Recuperation", self.emp, "derniere_planifiee"), frappe.utils.getdate(premier))
 
+    def test_suspension_et_desactivation_annulent_les_jours_poses(self):
+        import frappe
+        from frappe.utils import add_days, nowdate
+        premier = add_days(nowdate(), 3)
+        while str(premier) in CR._feries(self.emp, premier, premier) or frappe.utils.getdate(premier).weekday() == 6:
+            premier = add_days(premier, 1)
+        # L'employé de la base peut déjà avoir des jours posés par sa vraie règle (Akram jusqu'en 2028) :
+        # on raisonne sur l'ENSEMBLE des jours à venir, avant et après.
+        avant = [j["date"] for j in CR.jours_planifies_a_venir(self.emp)]
+        # Toutes les semaines, 5 semaines d'avance → 5 jours posés (hors fériés et jours déjà tracés).
+        r = CR.enregistrer_regle(self.emp, premier, 1, 5, 1)
+        poses = r["poses"]
+        self.assertGreaterEqual(len(poses), 3, r["sautes"])
+        self.assertEqual(set(j["date"] for j in CR.jours_planifies_a_venir(self.emp)), set(avant) | set(poses))
+        # Suspension sur les 2e et 3e jours : annulés (absence annulée, tâche et trace disparues), pas reposés.
+        du, au = poses[1], poses[2]
+        r = CR.enregistrer_regle(self.emp, premier, 1, 5, 1, suspendue_du=du, suspendue_au=au)
+        self.assertEqual(r["annules"], sorted(d for d in set(avant) | set(poses) if du <= d <= au))
+        self.assertEqual(r["poses"], [])
+        restants = [j["date"] for j in CR.jours_planifies_a_venir(self.emp)]
+        self.assertEqual(set(restants), {d for d in set(avant) | set(poses) if not (du <= d <= au)})
+        self.assertFalse(self._taches(du))
+        self.assertFalse(frappe.db.exists("Recuperation Acquise", {"employee": self.emp, "date_debut": du}))
+        self.assertEqual(frappe.db.get_value("Leave Application", {"employee": self.emp, "from_date": du, "leave_type": CR.TYPE_RECUP}, "docstatus"), 2)
+        # Replanifier ne repose rien dans la fenêtre.
+        r = CR.planifier_recuperations(employee=self.emp)
+        self.assertEqual([j["date"] for j in CR.jours_planifies_a_venir(self.emp)], restants)
+        # Désactiver la règle annule tout ce qui restait à venir.
+        r = CR.enregistrer_regle(self.emp, premier, 1, 5, 0)
+        self.assertEqual(sorted(r["annules"]), sorted(restants))
+        self.assertEqual(CR.jours_planifies_a_venir(self.emp), [])
+        self.assertEqual(frappe.db.get_value("Regle Recuperation", self.emp, "actif"), 0)
+
     def test_recuperation_a_la_main_credite_le_solde(self):
         import frappe
         r = CR.affecter_absence(self.emp, CR.TYPE_RECUP, "2032-03-04", motif="accordée")   # aucune allocation 2032
