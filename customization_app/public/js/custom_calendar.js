@@ -84,6 +84,7 @@ frappe.views.CalendarViewList = class CalendarViewList extends frappe.views.Cale
 			eventRender: function (event, element) {
 				element.attr("title", event.tooltip);
                 if (me.list_view.calendar_name === 'Calendrier de travail') {
+                    if (event.fond) { element.css({ "background-color": "#9ca3af", "opacity": "0.25" }); return; }   // colonne du férié grisée
                     if (event.ferie) {
                         element.css({ "background-color": "#e5e7eb", "border": "1px dashed #9ca3af", "color": "#374151", "font-weight": "700", "cursor": "default" });
                         element.attr("title", "Jour férié : " + (event.subject || ""));

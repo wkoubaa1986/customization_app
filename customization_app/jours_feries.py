@@ -66,10 +66,19 @@ COULEUR_FERIE = "#9ca3af"
 
 
 def evenements_calendrier(debut, fin) -> list:
-    """Les fériés de la période en événements « toute la journée » pour le Calendrier de travail."""
-    return [frappe._dict({
-        # Fin = début : FullCalendar prend la fin d'un « toute la journée » comme EXCLUSIVE (23:59 débordait sur le lendemain).
-        "doctype": "Holiday", "name": "FERIE-%s" % d, "starts_on": "%s 00:00:00" % d, "ends_on": "%s 00:00:00" % d,
-        "all_day": 1, "titre": "🎌 %s" % nom, "color": COULEUR_FERIE, "status": "Open", "ferie": 1,
-        "custom_type_dintervention": _("Jour férié"), "subject": nom,
-    }) for d, nom in feries(debut, fin).items()]
+    """Les fériés de la période pour le Calendrier de travail : une pastille « 🎌 nom » toute la journée, ET un fond gris
+    (`rendering: background` de FullCalendar) qui grise toute la colonne du jour en semaine et la case en vue mois."""
+    out = []
+    for d, nom in feries(debut, fin).items():
+        out.append(frappe._dict({
+            # Fin = début : FullCalendar prend la fin d'un « toute la journée » comme EXCLUSIVE (23:59 débordait sur le lendemain).
+            "doctype": "Holiday", "name": "FERIE-%s" % d, "starts_on": "%s 00:00:00" % d, "ends_on": "%s 00:00:00" % d,
+            "all_day": 1, "titre": "🎌 %s" % nom, "color": COULEUR_FERIE, "status": "Open", "ferie": 1,
+            "custom_type_dintervention": _("Jour férié"), "subject": nom,
+        }))
+        out.append(frappe._dict({
+            "doctype": "Holiday", "name": "FERIE-FOND-%s" % d, "starts_on": "%s 00:00:00" % d,
+            "ends_on": "%s 00:00:00" % frappe.utils.add_days(d, 1), "all_day": 0, "titre": "", "color": COULEUR_FERIE,
+            "status": "Open", "ferie": 1, "fond": 1, "rendering": "background",
+        }))
+    return out

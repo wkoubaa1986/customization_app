@@ -33,7 +33,9 @@ class TestJoursFeries(unittest.TestCase):
     def test_calendrier(self):
         from customization_app.api import get_custom_tache_events
         ev = [e for e in get_custom_tache_events("2026-12-20", "2026-12-31") if e.get("ferie")]
-        self.assertEqual([(e["name"], e["titre"], e["all_day"]) for e in ev], [("FERIE-2026-12-24", "🎌 Férié de test", 1)])
+        self.assertEqual([(e["name"], e["titre"], e["all_day"]) for e in ev],
+                         [("FERIE-2026-12-24", "🎌 Férié de test", 1), ("FERIE-FOND-2026-12-24", "", 0)])
+        self.assertEqual((ev[1]["rendering"], str(ev[1]["ends_on"])), ("background", "2026-12-25 00:00:00"))
 
     def test_avertissement_tache(self):
         import frappe
