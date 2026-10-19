@@ -25,6 +25,11 @@ class ActiviteEmploye(Document):
         if not lignes:
             frappe.throw(_("Affectez l'activité à au moins un employé."))
         self.noms_employes = ", ".join(r.nom for r in lignes)[:140]
+        # Responsable d'étape : un des employés de l'activité, sinon la ligne perd son responsable.
+        for e in self.get("etapes") or []:
+            if e.responsable and e.responsable not in vus:
+                e.responsable = None
+            e.responsable_nom = (frappe.db.get_value("Employee", e.responsable, "employee_name") or e.responsable) if e.responsable else None
 
         if not SA.est_responsable():
             moi = SA.employe_de(frappe.session.user)

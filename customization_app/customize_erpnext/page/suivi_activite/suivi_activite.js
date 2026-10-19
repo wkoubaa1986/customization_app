@@ -192,7 +192,7 @@ class SuiviActivite {
     const meta = [];
     if (total) meta.push(`☑️ ${faites}/${total}`);
     if (a.etapes_retard) meta.push(`<b style="color:#b91c1c">⏰ ${a.etapes_retard} étape${a.etapes_retard > 1 ? "s" : ""} en retard</b>`);
-    else if (a.prochaine && !SA_FERMES.includes(a.statut)) meta.push(`→ ${sa_esc(a.prochaine.libelle)}${a.prochaine.date_prevue ? " · " + sa_esc(sa_jour(a.prochaine.date_prevue) + " " + sa_date(a.prochaine.date_prevue).slice(0, 5)) : ""}`);
+    else if (a.prochaine && !SA_FERMES.includes(a.statut)) meta.push(`→ ${sa_esc(a.prochaine.libelle)}${a.prochaine.responsable_nom ? " · 👤 " + sa_esc(a.prochaine.responsable_nom) : ""}${a.prochaine.date_prevue ? " · " + sa_esc(sa_jour(a.prochaine.date_prevue) + " " + sa_date(a.prochaine.date_prevue).slice(0, 5)) : ""}`);
     if (a.nb_fichiers) meta.push(`📎 ${a.nb_fichiers}`);
     if (a.nb_notes) meta.push(`📝 ${a.nb_notes}`);
     if (a.ia_ameliore) meta.push(`✨`);
@@ -227,7 +227,8 @@ class SuiviActivite {
         const z = d.fields_dict.zone.$wrapper;
         const etapes = z.find(".ia-e:checked").map((_, el) => {
           const i = Number($(el).attr("data-i"));
-          return { libelle: p.etapes[i].libelle, date_prevue: z.find(`.ia-date[data-i="${i}"]`).val() || null };
+          return { libelle: p.etapes[i].libelle, date_prevue: z.find(`.ia-date[data-i="${i}"]`).val() || null,
+                   responsable: z.find(`.ia-resp[data-i="${i}"]`).val() || null, source: p.etapes[i].source || 0 };
         }).get();
         // La date prévisionnelle suit la dernière étape gardée, si l'utilisateur a retouché les dates.
         const derniere = etapes.map((e) => e.date_prevue).filter(Boolean).sort().pop();
@@ -235,6 +236,7 @@ class SuiviActivite {
           titre: z.find("#ia-t").is(":checked") ? p.titre : null,
           description: z.find("#ia-d").is(":checked") ? p.description : null,
           etapes,
+          remplacer_etapes: z.find("#ia-r").length && z.find("#ia-r").is(":checked") ? 1 : 0,
           date_prevue: z.find("#ia-p").is(":checked") ? (derniere || date_prevue) : null,
         });
         d.hide();
@@ -244,9 +246,11 @@ class SuiviActivite {
       ${p.titre ? `<label style="display:block"><input type="checkbox" id="ia-t" checked> <b>Titre :</b> ${sa_esc(p.titre)}</label>` : ""}
       ${p.description ? `<label style="display:block;margin-top:8px"><input type="checkbox" id="ia-d" checked> <b>Description :</b></label>
         <div class="desc">${sa_esc(p.description)}</div>` : ""}
-      ${(p.etapes || []).length ? `<div style="margin-top:8px"><b>Étapes proposées</b> <span class="text-muted small">(à partir du ${sa_esc(sa_date(p.date_debut))} ; retouchez les dates si besoin)</span>${p.etapes.map((e, i) => `
-        <label class="etp"><input type="checkbox" class="ia-e" data-i="${i}" checked> <span>${sa_esc(e.libelle)}</span>
-          <input type="date" class="form-control ia-date" data-i="${i}" value="${sa_esc(e.date_prevue || "")}" title="Prévue le"></label>`).join("")}</div>` : ""}
+      ${(p.etapes || []).length ? `<div style="margin-top:8px"><b>Étapes ${p.remplace ? "restructurées" : "proposées"}</b> <span class="text-muted small">(à partir du ${sa_esc(sa_date(p.date_debut))} ; retouchez dates et responsables si besoin)</span>${p.etapes.map((e, i) => `
+        <div class="etp"><label style="display:contents"><input type="checkbox" class="ia-e" data-i="${i}" checked> <span>${sa_esc(e.libelle)}${e.source ? ` <span class="text-muted small" title="reprend l’étape ${e.source} actuelle">↩ ${e.source}</span>` : ""}</span></label>
+          <span style="display:flex;gap:4px"><select class="form-control ia-resp" data-i="${i}" title="Responsable">${["", ...(appliquer.equipe || [])].map((x) => x === "" ? `<option value="">— resp. —</option>` : `<option value="${sa_esc(x.name)}" ${x.name === e.responsable ? "selected" : ""}>${sa_esc(x.employee_name)}</option>`).join("")}</select>
+          <input type="date" class="form-control ia-date" data-i="${i}" value="${sa_esc(e.date_prevue || "")}" title="Prévue le"></span></div>`).join("")}
+        ${p.remplace ? `<label style="display:block;margin-top:6px"><input type="checkbox" id="ia-r" checked> <b>Remplacer les étapes actuelles</b> par cette liste <span class="text-muted small">(une étape déjà faite reste faite ; décoché = ajoutées à la suite)</span></label>` : ""}</div>` : ""}
       ${date_prevue ? `<label style="display:block;margin-top:8px"><input type="checkbox" id="ia-p" ${appliquer.date_vide ? "checked" : ""}>
         <b>Date prévisionnelle :</b> ${sa_esc(sa_date(date_prevue))} <span class="text-muted">(≈ ${p.duree_jours} j ouvrés)</span></label>` : ""}
     </div>`);
@@ -322,12 +326,19 @@ class SuiviActivite {
         <div class="small text-muted" style="margin-top:4px">Avancement : <b>${a.avancement || 0} %</b>
           ${a.date_fin ? " · terminée le " + sa_esc(sa_date(a.date_fin)) : ""}${a.ia_ameliore ? " · ✨ améliorée par l’IA" : ""}</div>`);
 
-      const etapes = (a.etapes || []).map((e) => {
+      // Responsable d'étape : un des employés de l'activité (liste déroulante discrète), flèches pour l'ordre.
+      const equipeAct = (a.affectations || []).map((r) => ({ name: r.employe, employee_name: r.nom }));
+      const selResp = (e) => `<select class="sa-resp" data-affecter="${sa_esc(e.name)}" title="Responsable de l’étape">
+          <option value="">👤 —</option>${equipeAct.map((x) => `<option value="${sa_esc(x.name)}" ${x.name === e.responsable ? "selected" : ""}>${sa_esc(x.employee_name)}</option>`).join("")}</select>`;
+      const n = (a.etapes || []).length;
+      const etapes = (a.etapes || []).map((e, i) => {
         const dt = sa_date_etape(e);
         return `
         <div class="sa-etape ${e.fait ? "fait" : ""}">
+          <span class="ord"><span data-ordre="monter" data-ligne="${sa_esc(e.name)}" class="${i === 0 ? "off" : ""}" title="Monter">▲</span><span data-ordre="descendre" data-ligne="${sa_esc(e.name)}" class="${i === n - 1 ? "off" : ""}" title="Descendre">▼</span></span>
           <input type="checkbox" data-etape="${sa_esc(e.name)}" ${e.fait ? "checked" : ""}>
           <span class="lib">${sa_esc(e.libelle)}</span>
+          ${selResp(e)}
           <span class="dt ${dt.cls}" data-dater="${sa_esc(e.name)}" data-val="${sa_esc(e.date_prevue || "")}" title="Changer la date">📅 ${sa_esc(dt.txt)}</span>
           ${e.fait && e.fait_le ? `<span class="small text-muted">✓ ${sa_esc(sa_date(e.fait_le))}</span>` : ""}
           <span class="sup" data-sup-etape="${sa_esc(e.name)}" title="Retirer">✕</span></div>`; }).join("");
@@ -338,6 +349,7 @@ class SuiviActivite {
         <div><button type="button" class="btn btn-default btn-sm sa-btn-ia">✨ Améliorer avec l’IA</button></div>
         <div class="sa-section"><h6>☑️ Étapes</h6>${etapes || `<div class="small text-muted">Aucune étape.</div>`}
           <div class="sa-ajout"><input type="text" class="form-control input-sm sa-nouvelle-etape" placeholder="Nouvelle étape puis Entrée…">
+            <select class="form-control input-sm sa-etape-resp" title="Responsable" style="flex:0 0 160px"><option value="">👤 responsable</option>${equipeAct.map((x) => `<option value="${sa_esc(x.name)}">${sa_esc(x.employee_name)}</option>`).join("")}</select>
             <input type="date" class="form-control input-sm sa-etape-date" title="Prévue le"></div></div>
         <div class="sa-section"><h6>📷 Photos et documents
             <button type="button" class="btn btn-default btn-xs sa-btn-fichier">➕ Ajouter</button></h6>
@@ -384,8 +396,10 @@ class SuiviActivite {
       if (e.key !== "Enter") return;
       e.preventDefault();
       const v = $(e.currentTarget).val();
-      if (v && v.trim()) appel("etape", { action: "ajouter", libelle: v.trim(), date: $z.find(".sa-etape-date").val() || null });
+      if (v && v.trim()) appel("etape", { action: "ajouter", libelle: v.trim(), date: $z.find(".sa-etape-date").val() || null, employe: $z.find(".sa-etape-resp").val() || null });
     });
+    $z.on("change", "[data-affecter]", (e) => appel("etape", { action: "affecter", ligne: $(e.currentTarget).attr("data-affecter"), employe: $(e.currentTarget).val() || null }));
+    $z.on("click", "[data-ordre]", (e) => { const $o = $(e.currentTarget); if (!$o.hasClass("off")) appel("etape", { action: $o.attr("data-ordre"), ligne: $o.attr("data-ligne") }); });
     $z.on("click", ".sa-btn-note", () => {
       const v = $z.find(".sa-nouvelle-note").val();
       if (v && v.trim()) appel("ajouter_note", { texte: v.trim() });
@@ -410,7 +424,7 @@ class SuiviActivite {
         if (choix.titre) d.set_value("titre", choix.titre);
         if (choix.description) d.set_value("description", choix.description);
         if (choix.date_prevue) d.set_value("date_prevue", choix.date_prevue);
-        const data = { name: a.name, ia_ameliore: 1, etapes: choix.etapes || [] };
+        const data = { name: a.name, ia_ameliore: 1, etapes: choix.etapes || [], remplacer_etapes: choix.remplacer_etapes ? 1 : 0 };
         if (choix.titre) data.titre = choix.titre;
         if (choix.description) data.description = choix.description;
         if (choix.date_prevue) data.date_prevue = choix.date_prevue;
@@ -419,6 +433,7 @@ class SuiviActivite {
         await recharger();
       };
       appliquer.date_vide = !v.date_prevue;
+      appliquer.equipe = equipe.filter((x) => choisis.has(x.name));
       this.proposer_ia({ titre: v.titre, description: v.description, employes: Array.from(choisis), name: a.name,
                          date_debut: v.date_debut }, appliquer);
     });

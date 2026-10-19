@@ -14,9 +14,10 @@ class TestIA(unittest.TestCase):
                                '"etapes": ["a", " ", "b"], "duree_jours": "3"}\n```')
         self.assertEqual((p["titre"], [e["libelle"] for e in p["etapes"]], p["duree_jours"]), ("Remplacer la membrane", ["a", "b"], 3))
         # Nouveau format : étapes datées par jour ouvré ; duree_jours = au moins le dernier jour.
-        p = SA.lire_reponse_ia('{"titre": "T", "etapes": [{"etape": "Relever", "jour": 1}, {"etape": "Commander", "jour": "3"}, '
-                               '{"etape": "Poser", "jour": "x"}], "duree_jours": 1}')
+        p = SA.lire_reponse_ia('{"titre": "T", "etapes": [{"etape": "Relever", "jour": 1, "responsable": "Akram", "source": 2}, '
+                               '{"etape": "Commander", "jour": "3", "responsable": null}, {"etape": "Poser", "jour": "x", "source": "z"}], "duree_jours": 1}')
         self.assertEqual([(e["libelle"], e["jour"]) for e in p["etapes"]], [("Relever", 1), ("Commander", 3), ("Poser", 0)])
+        self.assertEqual([(e["responsable_nom"], e["source"]) for e in p["etapes"]], [("Akram", 2), (None, 0), (None, 0)])
         self.assertEqual(p["duree_jours"], 3)
         for brut in ("", "null", "[]", "pas du json", '{"etapes": "x", "duree_jours": "beaucoup"}'):
             p = SA.lire_reponse_ia(brut)
@@ -32,8 +33,12 @@ class TestIA(unittest.TestCase):
         self.assertEqual([e["jour"] for e in etapes], [1, 1, 7, 7])                     # jamais de date qui recule
 
     def test_prompt(self):
-        system, user = SA.prompt_amelioration("ranger stock", "", "Akram", ["note 1"], "2026-10-19")
+        system, user = SA.prompt_amelioration("ranger stock", "", "Akram", ["note 1"], "2026-10-19",
+                                              [{"libelle": "Vider", "fait": 1, "responsable_nom": "Akram"}, {"libelle": "Ranger"}], ["Akram", "Sadok"])
         self.assertIn("JSON", system)
+        self.assertIn("RESTRUCTURE", system)
+        self.assertIn("1. Vider [FAITE] [Akram]", user)
+        self.assertIn("Akram | Sadok", user)
         self.assertIn('"jour"', system)
         self.assertIn("ranger stock", user)
         self.assertIn("note 1", user)
@@ -381,3 +386,39 @@ class TestReunions(TestAcces):
         self.assertEqual([frappe.db.get_value(self.RA.DOCTYPE, d.name, "statut") for d in docs], ["Prévue", "Annulée", "Annulée"])
         with self.assertRaises(frappe.ValidationError):
             self.RA.creer(nowdate(), employes=[self.e1], toutes_les=1, jusquau=add_days(nowdate(), -1))
+
+
+class TestEtapesResponsablesOrdre(TestAcces):
+    def test_responsable_ordre_et_restructuration(self):
+        import frappe
+        self._comme(self.ur)
+        name = SA.enregistrer({"titre": "Dashboard", "employes": [self.e1, self.e2],
+                               "etapes": [{"libelle": "A", "responsable": self.e1}, "B", {"libelle": "C", "responsable": self.e2}]})["name"]
+        doc = frappe.get_doc(SA.DOCTYPE, name)
+        self.assertEqual([(e.libelle, e.responsable) for e in doc.etapes], [("A", self.e1), ("B", None), ("C", self.e2)])
+        self.assertTrue(doc.etapes[0].responsable_nom)
+        # affecter / refuser un étranger
+        SA.etape(name, "affecter", ligne=doc.etapes[1].name, employe=self.e2)
+        with self.assertRaises(frappe.ValidationError):
+            SA.etape(name, "affecter", ligne=doc.etapes[1].name, employe=self.er)
+        # ordre : C monte deux fois → C A B ; A descend → C B A
+        SA.etape(name, "monter", ligne=doc.etapes[2].name); SA.etape(name, "monter", ligne=doc.etapes[2].name)
+        SA.etape(name, "monter", ligne=doc.etapes[2].name)                       # déjà en tête : sans effet
+        self.assertEqual([e.libelle for e in frappe.get_doc(SA.DOCTYPE, name).etapes], ["C", "A", "B"])
+        SA.etape(name, "descendre", ligne=doc.etapes[0].name)
+        self.assertEqual([e.libelle for e in frappe.get_doc(SA.DOCTYPE, name).etapes], ["C", "B", "A"])
+        # Un employé retiré de l'activité ne reste pas responsable d'une étape.
+        SA.enregistrer({"name": name, "employes": [self.e1]})
+        self.assertEqual([e.responsable for e in frappe.get_doc(SA.DOCTYPE, name).etapes], [None, None, self.e1])
+        # Restructuration par l'IA : C est faite ; la liste est remplacée, l'étape issue de C (source 1) reste faite.
+        doc = frappe.get_doc(SA.DOCTYPE, name)
+        SA.etape(name, "basculer", ligne=doc.etapes[0].name)
+        SA.enregistrer({"name": name, "remplacer_etapes": 1, "etapes": [
+            {"libelle": "C reformulée", "source": 1, "date_prevue": "2026-10-20"},
+            {"libelle": "A et B regroupées", "source": 3, "responsable": self.e1, "date_prevue": "2026-10-22"},
+            {"libelle": "Contrôle final", "source": 0, "date_prevue": "2026-10-23"}]})
+        doc = frappe.get_doc(SA.DOCTYPE, name)
+        self.assertEqual([(e.libelle, e.fait, e.responsable) for e in doc.etapes],
+                         [("C reformulée", 1, None), ("A et B regroupées", 0, self.e1), ("Contrôle final", 0, None)])
+        self.assertTrue(doc.etapes[0].fait_le)
+        self.assertEqual(doc.avancement, 33)
