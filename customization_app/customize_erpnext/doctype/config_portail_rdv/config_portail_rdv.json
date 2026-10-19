@@ -13,6 +13,7 @@
   "column_break_h1",
   "autoriser_dimanche",
   "employe_dimanche",
+  "accepter_feries",
   "employe_defaut",
   "section_affichage",
   "adresse",
@@ -151,6 +152,13 @@
    "fieldtype": "Link",
    "label": "Employé du dimanche",
    "options": "Employee"
+  },
+  {
+   "fieldname": "accepter_feries",
+   "fieldtype": "Check",
+   "label": "Accepter les jours fériés",
+   "default": "0",
+   "description": "Décoché : aucun créneau n'est proposé un jour férié (liste HRMS de la société). Coché : jour normal."
   },
   {
    "fieldname": "section_secteurs",

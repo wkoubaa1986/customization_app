@@ -586,6 +586,11 @@ def _pool_du_jour(config, liste, taches, jour, conges=frozenset(), contexte=None
 
     En ZONE PARTENAIRE, pas de remplaçant : il n'y a que lui, et le dimanche
     dépend de son propre réglage."""
+    # Jour férié (liste HRMS de la société) : fermé, sauf « Accepter les jours fériés » (19/10/2026).
+    if not cint(config.get("accepter_feries")):
+        from customization_app.jours_feries import est_ferie
+        if est_ferie(jour):
+            return []
     if contexte:
         if jour.weekday() == 6 and not contexte["dimanche"]:
             return []

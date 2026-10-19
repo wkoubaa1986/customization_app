@@ -84,6 +84,11 @@ frappe.views.CalendarViewList = class CalendarViewList extends frappe.views.Cale
 			eventRender: function (event, element) {
 				element.attr("title", event.tooltip);
                 if (me.list_view.calendar_name === 'Calendrier de travail') {
+                    if (event.ferie) {
+                        element.css({ "background-color": "#e5e7eb", "border": "1px dashed #9ca3af", "color": "#374151", "font-weight": "700", "cursor": "default" });
+                        element.attr("title", "Jour férié : " + (event.subject || ""));
+                        return;
+                    }
 
                     let originalColor = event.backgroundColor || '#FF6347'; 
                     element.css({
@@ -185,6 +190,7 @@ frappe.views.CalendarViewList = class CalendarViewList extends frappe.views.Cale
                 }
             },
 			eventClick: function (event) {
+				if (event.ferie) return;                       // jour férié : simple repère
 				// Réunion d'équipe (Suivi d'activité) : on l'ouvre dans sa page, pas dans une fiche.
 				if (event.doctype === "Reunion Activite") {
 					frappe.route_options = { reunion: event.name };
@@ -198,11 +204,12 @@ frappe.views.CalendarViewList = class CalendarViewList extends frappe.views.Cale
 				}
 			},
 			eventDrop: function (event, delta, revertFunc) {
+				if (event.ferie) { revertFunc(); return; }
 				if (event.doctype === "Reunion Activite") { revertFunc(); frappe.show_alert({ message: __("La réunion se modifie depuis Suivi d’activité."), indicator: "orange" }); return; }
 				me.update_event(event, revertFunc);
 			},
 			eventResize: function (event, delta, revertFunc) {
-				if (event.doctype === "Reunion Activite") { revertFunc(); return; }
+				if (event.ferie || event.doctype === "Reunion Activite") { revertFunc(); return; }
 				me.update_event(event, revertFunc);
 			},
             viewRender: function(view, element) {

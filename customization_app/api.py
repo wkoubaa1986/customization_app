@@ -311,6 +311,9 @@ def get_custom_tache_events(start, end, filters=None):
 
     _annoter_aramex(events)
     _ajouter_reunions(events, start, end, filters)
+    # Jours fériés (19/10/2026) : bande grise sur la journée, pour tout le monde.
+    from customization_app.jours_feries import evenements_calendrier
+    events.extend(evenements_calendrier(frappe.utils.getdate(start), frappe.utils.getdate(end)))
     # print(events)
     return events
 
@@ -1306,6 +1309,10 @@ def before_save_tache_de_travail(doc, method=None):
     verifier_photos_cloture(doc)
 
     _fixer_duree_a_la_creation(doc)
+
+    # Jour férié : on prévient, on ne bloque pas (19/10/2026).
+    from customization_app.jours_feries import avertir_ferie
+    avertir_ferie(doc)
 
     # Le nom de l'employé affiché suit TOUJOURS le choix du staff (voir tache_employe.py).
     from customization_app.tache_employe import aligner_nom_employe
