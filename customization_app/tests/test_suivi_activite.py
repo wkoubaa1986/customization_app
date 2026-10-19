@@ -422,3 +422,17 @@ class TestEtapesResponsablesOrdre(TestAcces):
                          [("C reformulée", 1, None), ("A et B regroupées", 0, self.e1), ("Contrôle final", 0, None)])
         self.assertTrue(doc.etapes[0].fait_le)
         self.assertEqual(doc.avancement, 33)
+
+    def test_calendrier_reunion_visible_par_ses_participants(self):
+        import frappe
+        from frappe.utils import nowdate
+        from customization_app.api import get_custom_tache_events
+        from customization_app import reunion_activite as RA
+        self._comme(self.ur)
+        seul = RA.creer(nowdate(), employes=[self.e1])["name"]
+        noms = lambda: [e["name"] for e in get_custom_tache_events(nowdate(), nowdate()) if e.get("doctype") == RA.DOCTYPE]
+        self.assertIn(seul, noms())                     # responsable : tout
+        self._comme(self.u1)
+        self.assertIn(seul, noms())                     # participant : oui
+        self._comme(self.u2)
+        self.assertNotIn(seul, noms())                  # pas participant : non

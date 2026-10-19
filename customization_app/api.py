@@ -339,9 +339,16 @@ def _ajouter_reunions(events, start, end, filters):
     for p in frappe.get_all("Reunion Participant", filters={"parent": ["in", [r.name for r in reunions]], "parenttype": "Reunion Activite"},
                             fields=["parent", "employe", "nom"], order_by="idx"):
         parts.setdefault(p.parent, []).append(p)
+    # Qui voit quoi (19/10/2026) : un responsable du Suivi d'activité voit toutes les réunions ; un employé seulement
+    # celles où il est participant — comme dans la page Suivi d'activité.
+    from customization_app import suivi_activite as SA
+    moi = None if SA.est_responsable() else (SA.employe_de() or "")
     for r in reunions:
         mes = parts.get(r.name, [])
-        if employe and employe not in {p.employe for p in mes}:
+        participants = {p.employe for p in mes}
+        if moi is not None and moi not in participants:
+            continue
+        if employe and employe not in participants:
             continue
         debut = frappe.utils.get_datetime("%s %s" % (r.date, frappe.utils.get_time(r.heure or "09:00:00")))
         fin = frappe.utils.add_to_date(debut, minutes=frappe.utils.cint(r.duree_min) or 45)
