@@ -13,7 +13,10 @@ frappe.pages["suivi-activite"].on_page_load = function (wrapper) {
   wrapper.suivi = new SuiviActivite(wrapper);
 };
 frappe.pages["suivi-activite"].on_page_show = function (wrapper) {
-  if (wrapper.suivi && wrapper.suivi.ctx) wrapper.suivi.charger();
+  // Venu du Calendrier de travail (clic sur une réunion) : frappe.route_options.reunion = REU-…
+  const ro = frappe.route_options || {};
+  if (ro.reunion) { wrapper.suivi.reunion_a_ouvrir = ro.reunion; frappe.route_options = null; }
+  if (wrapper.suivi && wrapper.suivi.ctx) { wrapper.suivi.charger(); wrapper.suivi.ouvrir_reunion_demandee(); }
 };
 
 const SA_API = "customization_app.suivi_activite";
@@ -87,12 +90,21 @@ class SuiviActivite {
     r.find("#sa-config").toggle(!!ctx.peut_configurer).on("click", () => frappe.set_route("Form", "Config Suivi Activite"));
     r.find(".sa-onglet").on("click", (e) => this.onglet($(e.currentTarget).attr("data-onglet")));
     this.reunions = new SuiviReunions(this);
+    this.ouvrir_reunion_demandee();
     r.find("#sa-titre").on("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); this.ajouter(); } });
     r.find("#sa-envoi").on("click", () => this.ajouter());
     r.find("#sa-employe, #sa-fermees").on("change", () => this.charger());
     let t = null;
     r.find("#sa-recherche").on("input", () => { clearTimeout(t); t = setTimeout(() => this.charger(), 300); });
     this.charger();
+  }
+
+  ouvrir_reunion_demandee() {
+    const name = this.reunion_a_ouvrir;
+    if (!name) return;
+    this.reunion_a_ouvrir = null;
+    this.onglet("reunions");
+    this.reunions.ouvrir(name);
   }
 
   onglet(nom) {

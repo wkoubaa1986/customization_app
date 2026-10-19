@@ -310,8 +310,49 @@ def get_custom_tache_events(start, end, filters=None):
             event[field_map.color] = compute_tache_color(event)
 
     _annoter_aramex(events)
+    _ajouter_reunions(events, start, end, filters)
     # print(events)
     return events
+
+
+# Les réunions d'équipe du Suivi d'activité (19/10/2026) s'affichent dans le Calendrier de travail, en lecture :
+# un clic ouvre la réunion dans la page Suivi d'activité (pas la fiche Tache), on ne la déplace pas d'ici.
+COULEUR_REUNION = "#0f6e8c"
+
+
+def _ajouter_reunions(events, start, end, filters):
+    """Ajoute au calendrier les réunions Prévue/Tenue de la période. Si le calendrier est filtré sur un employé
+    (custom_choix_du_staff), seules les réunions où il est participant apparaissent."""
+    if not frappe.db.exists("DocType", "Reunion Activite"):
+        return
+    employe = None
+    for f in filters or []:
+        f = list(f)
+        if len(f) >= 4 and f[-3] == "custom_choix_du_staff" and f[-2] in ("=", "like"):
+            employe = str(f[-1]).strip("%")
+    reunions = frappe.get_all("Reunion Activite", fields=["name", "titre", "date", "heure", "duree_min", "lieu", "lien_visio", "statut"],
+                              filters={"statut": ["in", ["Prévue", "Tenue"]],
+                                       "date": ["between", [str(frappe.utils.getdate(start)), str(frappe.utils.getdate(end))]]})
+    if not reunions:
+        return
+    parts = {}
+    for p in frappe.get_all("Reunion Participant", filters={"parent": ["in", [r.name for r in reunions]], "parenttype": "Reunion Activite"},
+                            fields=["parent", "employe", "nom"], order_by="idx"):
+        parts.setdefault(p.parent, []).append(p)
+    for r in reunions:
+        mes = parts.get(r.name, [])
+        if employe and employe not in {p.employe for p in mes}:
+            continue
+        debut = frappe.utils.get_datetime("%s %s" % (r.date, frappe.utils.get_time(r.heure or "09:00:00")))
+        fin = frappe.utils.add_to_date(debut, minutes=frappe.utils.cint(r.duree_min) or 45)
+        events.append(frappe._dict({
+            "doctype": "Reunion Activite", "name": r.name, "starts_on": debut, "ends_on": fin, "all_day": 0,
+            "titre": "🗓️ %s%s" % (r.titre, " ✅" if r.statut == "Tenue" else ""),
+            "color": COULEUR_REUNION, "status": "Completed" if r.statut == "Tenue" else "Open",
+            "custom_employé": ", ".join(p.nom for p in mes), "custom_type_dintervention": "Réunion d'équipe",
+            "subject": "%s%s" % (r.lieu or "", (" · " + r.lien_visio) if r.lien_visio else ""),
+            "reunion": 1,
+        }))
 
 
 # Le colis Aramex se lit SUR LA TÂCHE (demande 01/09/2026) : quand la commande

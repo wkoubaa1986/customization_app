@@ -185,6 +185,12 @@ frappe.views.CalendarViewList = class CalendarViewList extends frappe.views.Cale
                 }
             },
 			eventClick: function (event) {
+				// Réunion d'équipe (Suivi d'activité) : on l'ouvre dans sa page, pas dans une fiche.
+				if (event.doctype === "Reunion Activite") {
+					frappe.route_options = { reunion: event.name };
+					frappe.set_route("suivi-activite");
+					return;
+				}
 				// edit event description or delete
 				var doctype = event.doctype || me.doctype;
 				if (frappe.model.can_read(doctype)) {
@@ -192,9 +198,11 @@ frappe.views.CalendarViewList = class CalendarViewList extends frappe.views.Cale
 				}
 			},
 			eventDrop: function (event, delta, revertFunc) {
+				if (event.doctype === "Reunion Activite") { revertFunc(); frappe.show_alert({ message: __("La réunion se modifie depuis Suivi d’activité."), indicator: "orange" }); return; }
 				me.update_event(event, revertFunc);
 			},
 			eventResize: function (event, delta, revertFunc) {
+				if (event.doctype === "Reunion Activite") { revertFunc(); return; }
 				me.update_event(event, revertFunc);
 			},
             viewRender: function(view, element) {
