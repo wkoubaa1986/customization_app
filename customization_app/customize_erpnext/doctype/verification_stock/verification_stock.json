@@ -25,6 +25,7 @@
   "termine_le",
   "termine_par",
   "note",
+  "analyse",
   "sec_validation",
   "valide_employe_par",
   "valide_employe_le",
@@ -163,6 +164,12 @@
    "label": "Note"
   },
   {
+   "fieldname": "analyse",
+   "fieldtype": "Small Text",
+   "label": "Analyse des écarts",
+   "read_only": 1
+  },
+  {
    "fieldname": "sec_validation",
    "fieldtype": "Section Break",
    "label": "Double validation"
@@ -219,7 +226,7 @@
   }
  ],
  "links": [],
- "modified": "2026-10-02 12:47:21.872509",
+ "modified": "2026-10-20 20:10:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Verification Stock",

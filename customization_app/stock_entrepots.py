@@ -1264,6 +1264,7 @@ def _resume(v) -> dict:
             "valide_responsable_par": frappe.utils.get_fullname(v.valide_responsable_par) if v.valide_responsable_par else None,
             "valide_responsable_le": str(v.valide_responsable_le or "")[:16],
             "rapprochement": v.rapprochement, "renvois": cint(v.renvois), "rafraichi_le": str(v.rafraichi_le or "")[:16],
+            "analyse": v.get("analyse"),
             "nb_ajustes": sum(1 for l in (v.get("lignes") or []) if l.ajuste),
             "nb_a_recompter": sum(1 for l in (v.get("lignes") or []) if l.a_recompter),
             # Ce que l'utilisateur connecté peut faire sur cette fiche, calculé ici pour que l'écran n'ait rien à deviner.
@@ -1351,6 +1352,12 @@ def detail_verification(name):
         _rafraichir_systeme(v, seulement_si_change=True)
     if v.statut in (A_VALIDER, A_CONFIRMER) and _rafraichir_systeme(v):
         _renvoi_auto(v, [l.item_code for l in v.lignes if l.a_recompter])   # des articles ont bougé : à recompter
+    if v.statut == TERMINEE and cint(v.nb_ecarts) and not any(l.analyse for l in v.lignes):
+        try:
+            _analyser(v)
+            _sauver(v)
+        except Exception:
+            frappe.log_error(frappe.get_traceback(), "Vérification stock : analyse des écarts")
     # ⚠️ Un Float vaut 0 en base, jamais None : « pas compté » se lit sur le drapeau `compte`.
     images = dict(frappe.get_all("Item", filters={"name": ["in", [l.item_code for l in v.lignes] or [""]]},
                                  fields=["name", "image"], as_list=True))
@@ -1361,7 +1368,7 @@ def detail_verification(name):
                                              "a_recompter": cint(l.a_recompter),
                                              "ecart": flt(l.ecart, 6) if l.compte else None, "taux": flt(l.taux, 3),
                                              "valeur_ecart": flt(l.valeur_ecart, 3) if l.compte else None,
-                                             "zones": l.zones, "commentaire": l.commentaire}
+                                             "zones": l.zones, "commentaire": l.commentaire, "analyse": l.analyse}
                                             for l in v.lignes]}
 
 
@@ -1566,11 +1573,192 @@ def _rapprochement(v):
     return doc.name
 
 
+# ── Analyse automatique des écarts (demande du 20/10/2026) ───────────────────
+#
+# À chaque clôture de comptage, chaque écart reçoit une explication lue dans le grand livre de la période
+# (depuis la vérification précédente) : variante substituée (+1 d'un article jamais en stock, −1 d'un voisin),
+# consommé sans document (aucune sortie enregistrée), correction du comptage précédent, manque malgré des
+# sorties, entrée sans document. Les fiches terminées avant cette date sont analysées à leur ouverture.
+
+SUBSTITUTION, SANS_DOCUMENT, CORRECTION, APRES_SORTIES, ENTREE_SANS_DOC = (
+    "substitution", "sans_document", "correction", "apres_sorties", "entree_sans_document")
+JOURS_JAMAIS_VENDU = 90
+
+
+def _prefixe_code(item_code: str) -> str:
+    """« Acc020-A » → « Acc020 » ; trop court (« M-50-FR » → « M ») = pas de préfixe utile."""
+    p = (item_code or "").split("-")[0]
+    return p if len(p) >= 3 else ""
+
+
+def _voisins(a: dict, b: dict) -> bool:
+    """Deux articles « voisins » : même préfixe de code, sinon même groupe d'articles."""
+    pa, pb = _prefixe_code(a["item_code"]), _prefixe_code(b["item_code"])
+    if pa and pb:
+        return pa == pb
+    return bool(a.get("item_group")) and a.get("item_group") == b.get("item_group")
+
+
+def _libelle_pieces(mvts: list[dict], signe: int, limite: int = 3) -> str:
+    noms = []
+    for m in mvts:
+        if (m["qty"] < 0) == (signe < 0) and m["voucher_no"] not in noms:
+            noms.append(m["voucher_no"])
+    extra = f" +{len(noms) - limite}" if len(noms) > limite else ""
+    return ", ".join(noms[:limite]) + extra
+
+
+def diagnostiquer_ecarts(ecarts: list[dict], mouvements: dict[str, list[dict]], precedents: dict[str, float],
+                         depuis: str, ventes_90j: dict[str, int] | None = None) -> dict[str, dict]:
+    """Pour chaque écart, {"code", "texte"}.
+
+    ecarts      : [{item_code, item_name, item_group, ecart, qte_systeme}] (écart ≠ 0 seulement)
+    mouvements  : item_code → [{voucher_type, voucher_no, qty, date}] de la période, hors rapprochements
+    precedents  : item_code → écart constaté au comptage précédent (≠ 0)
+    depuis      : date (texte) du début de période, pour les libellés
+    ventes_90j  : item_code → nombre de sorties par BL sur 90 jours (0 = jamais vendu de ce stock)"""
+    ventes_90j = ventes_90j or {}
+    mvts = {c: [m for m in (mouvements.get(c) or []) if m.get("voucher_type") != "Stock Reconciliation"] for c in {e["item_code"] for e in ecarts}}
+    out: dict[str, dict] = {}
+    plus = [e for e in ecarts if flt(e["ecart"]) > 0]
+    moins = [e for e in ecarts if flt(e["ecart"]) < 0]
+    # 1. substitutions : un + (souvent vendu sans stock) contre un − voisin
+    pris = set()
+    for e in plus:
+        candidats = [m for m in moins if m["item_code"] not in pris and _voisins(e, m)]
+        if not candidats:
+            continue
+        # le voisin le plus proche en quantité, préfixe de code d'abord
+        m = sorted(candidats, key=lambda x: (not (_prefixe_code(x["item_code"]) and _prefixe_code(x["item_code"]) == _prefixe_code(e["item_code"])),
+                                              abs(abs(flt(x["ecart"])) - flt(e["ecart"]))))[0]
+        pris.add(m["item_code"]); pris.add(e["item_code"])
+        bls = _libelle_pieces(mvts.get(e["item_code"], []), -1)
+        sans_stock = flt(e.get("qte_systeme")) <= 0
+        nom_e, nom_m = e.get("item_name") or e["item_code"], m.get("item_name") or m["item_code"]
+        if bls and sans_stock:
+            debut = _("Sorti sur BL {0} alors que ce stock n'en avait pas").format(bls)
+        elif bls:
+            debut = _("Sorti sur BL {0}").format(bls)
+        else:
+            debut = _("Compté en plus sans aucun mouvement")
+        out[e["item_code"]] = {"code": SUBSTITUTION, "avec": m["item_code"],
+                               "texte": debut + " ; " + _("c'est probablement « {0} » qui a été posé à la place").format(nom_m)}
+        out[m["item_code"]] = {"code": SUBSTITUTION, "avec": e["item_code"], "texte":
+            _("Variante substituée : posé à la place de « {0} »{1}").format(nom_e, f" ({bls})" if bls else "")}
+    # 2. le reste
+    for e in ecarts:
+        c = e["item_code"]
+        if c in out:
+            continue
+        prec = flt(precedents.get(c))
+        if prec and (prec > 0) != (flt(e["ecart"]) > 0):
+            out[c] = {"code": CORRECTION, "texte": _("Corrige le comptage précédent ({0} : {1}{2})").format(
+                depuis, "+" if prec > 0 else "", f"{prec:g}")}
+            continue
+        sorties = [m for m in mvts.get(c, []) if m["qty"] < 0]
+        if flt(e["ecart"]) < 0:
+            if not sorties:
+                jamais = c in ventes_90j and ventes_90j.get(c, 0) == 0
+                out[c] = {"code": SANS_DOCUMENT, "texte": _("Aucune sortie enregistrée depuis le {0} : consommé en intervention sans document").format(depuis)
+                          + (_(" ; jamais sorti par BL depuis {0} jours").format(JOURS_JAMAIS_VENDU) if jamais else "")}
+            else:
+                out[c] = {"code": APRES_SORTIES, "texte": _("{0} sortie(s) enregistrée(s) sur la période ({1}) : il manque {2} de plus").format(
+                    len(sorties), _libelle_pieces(sorties, -1), f"{-flt(e['ecart']):g}")}
+        else:
+            out[c] = {"code": ENTREE_SANS_DOC, "texte": _("Entrée sans document : reçu ou rendu sans transfert enregistré")}
+    return out
+
+
+def resume_analyse(diags: dict[str, dict]) -> str:
+    """Une ligne de synthèse : « 2 substitutions, 3 consommés sans document, 1 correction »."""
+    libelles = {SUBSTITUTION: (_("variante substituée"), _("variantes substituées")),
+                SANS_DOCUMENT: (_("consommé sans document"), _("consommés sans document")),
+                CORRECTION: (_("correction du comptage précédent"), _("corrections du comptage précédent")),
+                APRES_SORTIES: (_("manque malgré des sorties"), _("manques malgré des sorties")),
+                ENTREE_SANS_DOC: (_("entrée sans document"), _("entrées sans document"))}
+    comptes: dict[str, int] = {}
+    for d in diags.values():
+        comptes[d["code"]] = comptes.get(d["code"], 0) + 1
+    if SUBSTITUTION in comptes:
+        comptes[SUBSTITUTION] = comptes[SUBSTITUTION] // 2 or 1   # une substitution = deux lignes
+    parts = [f"{n} {libelles[c][0] if n == 1 else libelles[c][1]}" for c, n in comptes.items() if c in libelles]
+    return ", ".join(parts)
+
+
+def _mouvements_periode(entrepot: str, codes: list[str], depuis, jusqu_a) -> dict[str, list[dict]]:
+    if not codes:
+        return {}
+    rows = frappe.db.sql("""
+        SELECT item_code, voucher_type, voucher_no, actual_qty AS qty, posting_date AS date
+        FROM `tabStock Ledger Entry`
+        WHERE warehouse = %(w)s AND is_cancelled = 0 AND item_code IN %(codes)s
+          AND voucher_type != 'Stock Reconciliation'
+          AND TIMESTAMP(posting_date, posting_time) > %(d)s AND TIMESTAMP(posting_date, posting_time) <= %(j)s
+        ORDER BY posting_date, posting_time
+    """, {"w": entrepot, "codes": tuple(codes), "d": depuis, "j": jusqu_a}, as_dict=True)
+    out: dict[str, list[dict]] = {}
+    for r in rows:
+        out.setdefault(r.item_code, []).append({"voucher_type": r.voucher_type, "voucher_no": r.voucher_no,
+                                                "qty": flt(r.qty), "date": str(r.date)})
+    return out
+
+
+def _ventes_90j(entrepot: str, codes: list[str], jusqu_a) -> dict[str, int]:
+    if not codes:
+        return {}
+    rows = frappe.db.sql("""
+        SELECT item_code, COUNT(*) AS n FROM `tabStock Ledger Entry`
+        WHERE warehouse = %(w)s AND is_cancelled = 0 AND item_code IN %(codes)s AND voucher_type = 'Delivery Note'
+          AND actual_qty < 0 AND posting_date >= %(d)s AND posting_date <= %(j)s
+        GROUP BY item_code
+    """, {"w": entrepot, "codes": tuple(codes), "d": add_days(getdate(jusqu_a), -JOURS_JAMAIS_VENDU), "j": getdate(jusqu_a)}, as_dict=True)
+    return {c: 0 for c in codes} | {r.item_code: cint(r.n) for r in rows}
+
+
+def _analyser(v) -> dict[str, dict]:
+    """Pose `analyse` sur chaque ligne en écart et la synthèse sur la fiche. Renvoie les diagnostics."""
+    lignes = [l for l in v.lignes if l.compte and abs(flt(l.ecart, 6)) > 1e-6]
+    fin = v.termine_le or now_datetime()
+    precedente = frappe.get_all(VERIF, filters={"entrepot": v.entrepot, "statut": TERMINEE, "name": ["!=", v.name],
+                                                "termine_le": ["<", fin]},
+                                fields=["name", "termine_le", "date"], order_by="termine_le desc", limit=1)
+    if precedente:
+        depuis_dt, depuis_txt = precedente[0].termine_le, frappe.utils.formatdate(getdate(precedente[0].termine_le))
+        precedents = {l.item_code: flt(l.ecart) for l in frappe.get_all("Verification Stock Ligne",
+                      filters={"parent": precedente[0].name, "compte": 1}, fields=["item_code", "ecart"]) if abs(flt(l.ecart, 6)) > 1e-6}
+    else:
+        depuis_dt, depuis_txt, precedents = add_days(getdate(fin), -30), frappe.utils.formatdate(add_days(getdate(fin), -30)), {}
+    # La période part du DERNIER rapprochement de ce stock (fiche ou non : le 13/10/2026, un rapprochement
+    # hors fiche remettait les compteurs à zéro), s'il est plus récent que la fiche précédente.
+    dernier_rappro = frappe.db.sql("""
+        SELECT MAX(TIMESTAMP(sr.posting_date, sr.posting_time)) FROM `tabStock Reconciliation` sr
+        JOIN `tabStock Reconciliation Item` i ON i.parent = sr.name
+        WHERE sr.docstatus = 1 AND i.warehouse = %s AND sr.name != IFNULL(%s, '') AND TIMESTAMP(sr.posting_date, sr.posting_time) < %s
+    """, (v.entrepot, v.rapprochement, fin))[0][0]
+    if dernier_rappro and get_datetime(dernier_rappro) > get_datetime(depuis_dt):
+        depuis_dt, depuis_txt = dernier_rappro, frappe.utils.formatdate(getdate(dernier_rappro))
+    codes = [l.item_code for l in lignes]
+    groupes = dict(frappe.get_all("Item", filters={"name": ["in", codes or [""]]}, fields=["name", "item_group"], as_list=True))
+    ecarts = [{"item_code": l.item_code, "item_name": l.item_name, "item_group": groupes.get(l.item_code),
+               "ecart": flt(l.ecart, 6), "qte_systeme": flt(l.qte_systeme, 6)} for l in lignes]
+    diags = diagnostiquer_ecarts(ecarts, _mouvements_periode(v.entrepot, codes, depuis_dt, fin), precedents, depuis_txt,
+                                 _ventes_90j(v.entrepot, codes, fin))
+    for l in v.lignes:
+        d = diags.get(l.item_code)
+        l.analyse = d["texte"] if d else None
+    v.analyse = resume_analyse(diags) if diags else None
+    return diags
+
+
 def _cloturer(v):
-    """Les deux validations sont là : rapprochement, fiche terminée, tâches fermées."""
+    """Les deux validations sont là : rapprochement, fiche terminée, tâches fermées, écarts analysés."""
     v.rapprochement = _rapprochement(v)
     v.statut = TERMINEE
     v.termine_le, v.termine_par = now_datetime(), frappe.session.user
+    try:
+        _analyser(v)
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "Vérification stock : analyse des écarts")   # jamais bloquant
     _sauver(v)
     for t in (v.tache_employe, v.tache_responsable):
         if t and frappe.db.get_value("Tache de travail", t, "status") == "Open":

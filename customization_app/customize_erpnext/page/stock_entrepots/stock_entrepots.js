@@ -926,8 +926,8 @@ class StockEntrepots {
       const d = (await frappe.call({ method: SE_API + "detail_verification", args: { name } })).message;
       const ec = d.lignes.filter((l) => l.ecart != null && Math.abs(l.ecart) > 1e-6);
       $d.html((ec.map((l) => `<div><b class="${l.ecart < 0 ? "neg" : "pos"}">${se_signe(l.ecart)}</b> ${se_esc(l.item_name || l.item_code)}
-          <span class="se-note">(système ${se_q(l.qte_systeme)}, compté ${se_q(l.qte_comptee)}, ${se_argent(l.valeur_ecart)})${l.commentaire ? ` — ${se_esc(l.commentaire)}` : ""}</span></div>`).join("")
-        || `<div class="pos">Aucun écart.</div>`) + `<div class="se-note">${se_lien("Verification Stock", d.fiche.name)}${d.fiche.tache_employe ? ` · ${se_lien("Tache de travail", d.fiche.tache_employe, "tâche employé")}` : ""}
+          <span class="se-note">(système ${se_q(l.qte_systeme)}, compté ${se_q(l.qte_comptee)}, ${se_argent(l.valeur_ecart)})${l.commentaire ? ` — ${se_esc(l.commentaire)}` : ""}</span>${l.analyse ? `<div class="se-note" style="margin-left:18px">🔎 ${se_esc(l.analyse)}</div>` : ""}</div>`).join("")
+        || `<div class="pos">Aucun écart.</div>`) + (d.fiche.analyse ? `<div class="se-note" style="margin-top:4px"><b>Analyse :</b> ${se_esc(d.fiche.analyse)}</div>` : "") + `<div class="se-note">${se_lien("Verification Stock", d.fiche.name)}${d.fiche.tache_employe ? ` · ${se_lien("Tache de travail", d.fiche.tache_employe, "tâche employé")}` : ""}
           ${d.fiche.valide_employe_par ? ` · comptage ${se_esc(d.fiche.valide_employe_par)}` : ""}${d.fiche.valide_responsable_par ? ` · validé ${se_esc(d.fiche.valide_responsable_par)}` : ""}
           ${d.fiche.rapprochement ? ` · ${se_lien("Stock Reconciliation", d.fiche.rapprochement, "rapprochement " + d.fiche.rapprochement)}` : " · sans rapprochement (aucun écart)"}</div>`).show();
     });

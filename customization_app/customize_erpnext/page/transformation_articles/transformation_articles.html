@@ -55,7 +55,7 @@
   <div id="ta-main">
     <div class="ta-card">
       <div class="ta-filters">
-        <div class="ta-field"><label>Magasin</label><select id="ta-magasin" class="form-control"></select></div>
+        <div class="ta-field"><label>Magasin de la page</label><select id="ta-magasin" class="form-control" title="Pris pour les articles sans sortie principale ; chaque ligne peut choisir son entrepôt"></select></div>
         <div class="ta-field"><label>Date</label><input type="date" id="ta-date" class="form-control" style="width:160px"></div>
         <div class="ta-field" style="flex:1;min-width:220px"><label>Remarque</label><input type="text" id="ta-remarque" class="form-control" style="width:100%" placeholder="facultatif, reprise sur l’écriture"></div>
         <div class="ta-actions">
@@ -64,7 +64,7 @@
           <button class="btn btn-default btn-sm" data-action="vider">🧹 Vider</button>
         </div>
       </div>
-      <div class="ta-muted" style="font-size:12px;margin-top:8px">Une transformation = une écriture de stock « Reconditionnement » : les articles consommés sortent du magasin, les articles obtenus y entrent, pour la même valeur. Pas de rapprochement.</div>
+      <div class="ta-muted" style="font-size:12px;margin-top:8px">Une transformation = une écriture de stock « Reconditionnement » : les articles consommés sortent de leur entrepôt, les articles obtenus entrent dans le leur, pour la même valeur. Chaque ligne part de la <b>sortie principale</b> de l’article (Zones &amp; sorties), à défaut du magasin de la page ; vous pouvez la changer ligne par ligne. Pas de rapprochement.</div>
     </div>
 
     <div class="ta-cols">
@@ -77,12 +77,12 @@
       <div>
         <div class="ta-card">
           <div class="ta-zone conso">
-            <div class="ta-title" style="margin-bottom:6px">Je consomme <span class="ta-sub">sortent du magasin</span>
+            <div class="ta-title" style="margin-bottom:6px">Je consomme <span class="ta-sub">sortent de leur entrepôt</span>
               <span class="ta-right"><button class="btn btn-default btn-xs" data-action="composants-conso" style="display:none">🧩 Composants du bundle obtenu</button></span></div>
             <div id="ta-conso"></div>
           </div>
           <div class="ta-zone obt">
-            <div class="ta-title" style="margin-bottom:6px">J’obtiens <span class="ta-sub">entrent au magasin</span>
+            <div class="ta-title" style="margin-bottom:6px">J’obtiens <span class="ta-sub">entrent dans leur entrepôt</span>
               <span class="ta-right"><button class="btn btn-default btn-xs" data-action="composants-obt" style="display:none">🧩 Composants du bundle consommé</button></span></div>
             <div id="ta-obt"></div>
           </div>

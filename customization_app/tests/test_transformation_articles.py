@@ -41,6 +41,21 @@ class TestRegles(unittest.TestCase):
         self.assertIsNone(TA.ecart_taux(10, 0))
 
 
+class TestEntrepotParLigne(unittest.TestCase):
+    """Règles pures de l'entrepôt par ligne (demande du 20/10/2026)."""
+
+    def test_resoudre_entrepot(self):
+        self.assertEqual(TA.resoudre_entrepot({"warehouse": "Hall - A&S"}, "Magasins - A&S", "X"), "Hall - A&S")
+        self.assertEqual(TA.resoudre_entrepot({}, "Magasins - A&S", "X"), "Magasins - A&S")
+        self.assertEqual(TA.resoudre_entrepot({"warehouse": "  "}, "", "X"), "X")
+        self.assertEqual(TA.resoudre_entrepot({"warehouse": None}, None, "X"), "X")
+
+    def test_options_entrepot_sans_doublon_et_sans_perte(self):
+        self.assertEqual(TA.options_entrepot(["Magasins - A&S", "Hall - A&S"], "Magasins - A&S", "Stock Hedi - A&S"),
+                         ["Magasins - A&S", "Hall - A&S", "Stock Hedi - A&S"])
+        self.assertEqual(TA.options_entrepot([], "X", None), ["X"])
+
+
 class TestEcriture(unittest.TestCase):
     """Une vraie transformation sur le site, dans un savepoint : 2 unités d'un article
     en stock deviennent 1 unité d'un autre ; l'écriture est soumise puis tout est annulé."""
@@ -67,14 +82,15 @@ class TestEcriture(unittest.TestCase):
     def test_simuler_puis_valider_puis_annuler(self):
         import frappe
         from frappe.utils import flt
-        conso = [{"item_code": self.a.item_code, "qty": 2}]
-        obt = [{"item_code": self.b.item_code, "qty": 1}]
+        # Entrepôt fixé sur chaque ligne : sans cela, un article partirait de sa sortie principale.
+        conso = [{"item_code": self.a.item_code, "qty": 2, "warehouse": TA.MAGASIN_DEFAUT}]
+        obt = [{"item_code": self.b.item_code, "qty": 1, "warehouse": TA.MAGASIN_DEFAUT}]
         sim = TA.simuler(conso, obt, TA.MAGASIN_DEFAUT)
         self.assertTrue(sim["valide"], sim["alertes"])
         self.assertAlmostEqual(sim["total_consomme"], sim["total_obtenu"], places=2)
         self.assertAlmostEqual(sim["obtenus"][0]["taux"], 2 * flt(self.a.valuation_rate), places=1)
         # stock insuffisant → refus
-        self.assertFalse(TA.simuler([{"item_code": self.a.item_code, "qty": flt(self.a.actual_qty) + 1}], obt)["valide"])
+        self.assertFalse(TA.simuler([{"item_code": self.a.item_code, "qty": flt(self.a.actual_qty) + 1, "warehouse": TA.MAGASIN_DEFAUT}], obt)["valide"])
 
         res = TA.valider(conso, obt, TA.MAGASIN_DEFAUT)
         se = frappe.get_doc("Stock Entry", res["name"])
@@ -94,13 +110,55 @@ class TestEcriture(unittest.TestCase):
         self.assertEqual(frappe.db.get_value("Stock Entry", res["name"], "docstatus"), 2)
 
 
+    def test_entrepot_par_ligne_et_sortie_principale(self):
+        """b entre dans le Hall (choisi sur la ligne) ; puis, sans choix, dans sa sortie principale."""
+        import frappe
+        from frappe.utils import flt
+        hall = "Hall - A&S"
+        if not frappe.db.exists("Warehouse", hall):
+            self.skipTest("pas de Hall sur ce site")
+        conso = [{"item_code": self.a.item_code, "qty": 2, "warehouse": TA.MAGASIN_DEFAUT}]
+        obt = [{"item_code": self.b.item_code, "qty": 1, "warehouse": hall}]
+        sim = TA.simuler(conso, obt, TA.MAGASIN_DEFAUT)
+        self.assertEqual((sim["consommes"][0]["warehouse"], sim["obtenus"][0]["warehouse"]), (TA.MAGASIN_DEFAUT, hall))
+        # même article des deux côtés mais entrepôts différents : permis (c'est un transfert valorisé)
+        sim2 = TA.simuler([{"item_code": self.a.item_code, "qty": 1, "warehouse": TA.MAGASIN_DEFAUT}],
+                          [{"item_code": self.a.item_code, "qty": 1, "warehouse": hall}])
+        self.assertTrue(sim2["valide"], sim2["alertes"])
+        qb0 = flt(frappe.db.get_value("Bin", {"item_code": self.b.item_code, "warehouse": hall}, "actual_qty"))
+        res = TA.valider(conso, obt, TA.MAGASIN_DEFAUT)
+        se = frappe.get_doc("Stock Entry", res["name"])
+        self.assertEqual([(d.s_warehouse, d.t_warehouse) for d in se.items], [(TA.MAGASIN_DEFAUT, None), (None, hall)])
+        self.assertAlmostEqual(flt(frappe.db.get_value("Bin", {"item_code": self.b.item_code, "warehouse": hall}, "actual_qty")), qb0 + 1, places=3)
+        self.assertEqual(TA.historique(1)[0]["warehouse"], f"{hall}, {TA.MAGASIN_DEFAUT}")
+        TA.annuler(res["name"])
+        # sortie principale : l'article b réglé sur le Hall y va tout seul, et la recherche le montre
+        from customization_app.zones_magasin import _societe
+        item = frappe.get_doc("Item", self.b.item_code)
+        ligne = next((d for d in item.item_defaults if d.company == _societe()), None)
+        if ligne:
+            ligne.default_warehouse = hall
+        else:
+            item.append("item_defaults", {"company": _societe(), "default_warehouse": hall})
+        item.flags.ignore_permissions = True
+        item.save()
+        sim3 = TA.simuler(conso, [{"item_code": self.b.item_code, "qty": 1}], TA.MAGASIN_DEFAUT)
+        self.assertEqual((sim3["obtenus"][0]["warehouse"], sim3["obtenus"][0]["sortie"]), (hall, hall))
+        trouve = next((r for r in TA.rechercher(self.b.item_code, TA.MAGASIN_DEFAUT) if r["item_code"] == self.b.item_code), None)
+        self.assertIsNotNone(trouve)
+        self.assertEqual((trouve["warehouse"], trouve["sortie"]), (hall, hall))
+        # le choix explicite de la ligne prime sur la sortie principale
+        sim4 = TA.simuler(conso, [{"item_code": self.b.item_code, "qty": 1, "warehouse": TA.MAGASIN_DEFAUT}], TA.MAGASIN_DEFAUT)
+        self.assertEqual(sim4["obtenus"][0]["warehouse"], TA.MAGASIN_DEFAUT)
+
+
 class TestModeles(unittest.TestCase):
     """Modèle unitaire enregistré puis appliqué × N."""
 
     def test_multiplier(self):
-        self.assertEqual(TA.multiplier_lignes([{"item_code": "A", "qty": 1}, {"item_code": "B", "qty": 2.5}], 3),
-                         [{"item_code": "A", "qty": 3.0}, {"item_code": "B", "qty": 7.5}])
-        self.assertEqual(TA.multiplier_lignes([{"item_code": "A", "qty": 1}], 0), [{"item_code": "A", "qty": 1.0}])
+        self.assertEqual(TA.multiplier_lignes([{"item_code": "A", "qty": 1}, {"item_code": "B", "qty": 2.5, "warehouse": "Hall - A&S"}], 3),
+                         [{"item_code": "A", "qty": 3.0, "warehouse": None}, {"item_code": "B", "qty": 7.5, "warehouse": "Hall - A&S"}])
+        self.assertEqual(TA.multiplier_lignes([{"item_code": "A", "qty": 1}], 0), [{"item_code": "A", "qty": 1.0, "warehouse": None}])
 
     def test_enregistrer_puis_appliquer(self):
         import frappe
@@ -113,6 +171,12 @@ class TestModeles(unittest.TestCase):
             self.assertEqual((m["consommes"][0]["qty"], m["obtenus"][0]["qty"]), (2.0, 1.0))
             app = TA.appliquer_modele(nom, 3)
             self.assertEqual((app["consommes"][0]["qty"], app["obtenus"][0]["qty"]), (6.0, 3.0))
+            # l'entrepôt d'une ligne est gardé par le modèle, l'absence aussi
+            if frappe.db.exists("Warehouse", "Hall - A&S"):
+                nom2 = TA.enregistrer_modele("Essai modèle Hall", [{"item_code": a, "qty": 1, "warehouse": "Hall - A&S"}], [{"item_code": b, "qty": 1}])
+                app2 = TA.appliquer_modele(nom2, 2)
+                self.assertEqual((app2["consommes"][0]["warehouse"], app2["obtenus"][0]["warehouse"]), ("Hall - A&S", None))
+                TA.supprimer_modele(nom2)
             # même nom = remplacé, pas dupliqué
             TA.enregistrer_modele("Essai modèle", [{"item_code": a, "qty": 1}], [{"item_code": b, "qty": 1}])
             self.assertEqual(sum(1 for x in TA.modeles() if x["nom"] == "Essai modèle"), 1)

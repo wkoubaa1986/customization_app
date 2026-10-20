@@ -434,3 +434,54 @@ class TestDoubleValidationVerif(unittest.TestCase):
         frappe.set_user(self.AKRAM)
         r = S.confirmer_verification(nom)
         self.assertEqual((r["statut"], r["rapprochement"]), ("Terminée", None))
+
+
+class TestAnalyseEcarts(unittest.TestCase):
+    """Analyse automatique des écarts (20/10/2026) : règles pures, sans base."""
+
+    def _ecart(self, code, ecart, groupe="G", systeme=None, nom=None):
+        return {"item_code": code, "item_name": nom or code, "item_group": groupe, "ecart": ecart,
+                "qte_systeme": systeme if systeme is not None else max(ecart, 0) - 1}
+
+    def test_substitution_variante_vendue_sans_stock(self):
+        # Acc020-B sorti sur BL alors que le stock était à 0 (système −1), Acc020-A manque : paire
+        ecarts = [self._ecart("Acc020-B", +1, systeme=-1), self._ecart("Acc020-A", -1, systeme=2)]
+        mvts = {"Acc020-B": [{"voucher_type": "Delivery Note", "voucher_no": "MAT-DN-1", "qty": -1, "date": "2026-10-19"}]}
+        d = S.diagnostiquer_ecarts(ecarts, mvts, {}, "13/10/2026")
+        self.assertEqual((d["Acc020-B"]["code"], d["Acc020-A"]["code"]), (S.SUBSTITUTION, S.SUBSTITUTION))
+        self.assertEqual((d["Acc020-B"]["avec"], d["Acc020-A"]["avec"]), ("Acc020-A", "Acc020-B"))
+        self.assertIn("MAT-DN-1", d["Acc020-B"]["texte"]); self.assertIn("Acc020-A", d["Acc020-B"]["texte"])
+        self.assertIn("Acc020-B", d["Acc020-A"]["texte"])
+        self.assertEqual(S.resume_analyse(d), "1 variante substituée")
+
+    def test_substitution_par_groupe_sans_prefixe(self):
+        # membranes : préfixe « M » trop court → même groupe d'articles
+        ecarts = [self._ecart("M-75-Pu", +1, "Membranes", systeme=-1), self._ecart("M-50-FR", -1, "Membranes", systeme=9),
+                  self._ecart("Acc004-C", -1, "Raccords", systeme=2)]
+        d = S.diagnostiquer_ecarts(ecarts, {}, {}, "13/10/2026", ventes_90j={"Acc004-C": 0})
+        self.assertEqual(d["M-75-Pu"]["avec"], "M-50-FR")
+        self.assertEqual(d["Acc004-C"]["code"], S.SANS_DOCUMENT)
+        self.assertIn("jamais sorti par BL", d["Acc004-C"]["texte"])
+
+    def test_correction_du_comptage_precedent(self):
+        ecarts = [self._ecart("Acc022-A", +3, systeme=0)]
+        d = S.diagnostiquer_ecarts(ecarts, {}, {"Acc022-A": -3}, "06/10/2026")
+        self.assertEqual(d["Acc022-A"]["code"], S.CORRECTION)
+        self.assertIn("06/10/2026", d["Acc022-A"]["texte"])
+
+    def test_manque_malgre_sorties_et_entree_sans_document(self):
+        ecarts = [self._ecart("M-50-FR", -1, systeme=9), self._ecart("X-1", +2, "Autre", systeme=0)]
+        mvts = {"M-50-FR": [{"voucher_type": "Delivery Note", "voucher_no": f"MAT-DN-{i}", "qty": -1, "date": "2026-10-14"} for i in range(5)]
+                + [{"voucher_type": "Stock Reconciliation", "voucher_no": "MAT-RECO-1", "qty": 0, "date": "2026-10-13"}]}
+        d = S.diagnostiquer_ecarts(ecarts, mvts, {}, "13/10/2026", ventes_90j={"M-50-FR": 35})
+        self.assertEqual(d["M-50-FR"]["code"], S.APRES_SORTIES)
+        self.assertIn("5 sortie(s)", d["M-50-FR"]["texte"]); self.assertIn("+2", d["M-50-FR"]["texte"])   # 3 affichés +2
+        self.assertEqual(d["X-1"]["code"], S.ENTREE_SANS_DOC)
+        self.assertEqual(S.resume_analyse(d), "1 manque malgré des sorties, 1 entrée sans document")
+
+    def test_voisins_et_prefixe(self):
+        self.assertEqual(S._prefixe_code("Acc020-A"), "Acc020")
+        self.assertEqual(S._prefixe_code("M-50-FR"), "")
+        self.assertTrue(S._voisins({"item_code": "Acc020-A", "item_group": "X"}, {"item_code": "Acc020-C", "item_group": "Y"}))
+        self.assertFalse(S._voisins({"item_code": "Acc020-A", "item_group": "X"}, {"item_code": "Acc022-A", "item_group": "X"}))
+        self.assertTrue(S._voisins({"item_code": "M-50-FR", "item_group": "Membranes"}, {"item_code": "M-75-Pu", "item_group": "Membranes"}))

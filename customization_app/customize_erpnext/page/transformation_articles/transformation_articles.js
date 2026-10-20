@@ -6,12 +6,15 @@ frappe.pages["transformation-articles"].on_page_load = function (wrapper) {
 
 // Rendu pur : stocks, taux, répartition de valeur et alertes viennent de
 // customization_app.transformation_articles.simuler ; la page ne fait qu'afficher et saisir.
+// Entrepôt par ligne (20/10/2026) : une ligne porte `warehouse` seulement si l'utilisateur l'a
+// choisi (ou qu'il vient d'un modèle / d'une transformation passée) ; sinon le serveur prend la
+// sortie principale de l'article, à défaut le magasin de la page.
 
 class TransformationArticles {
   constructor(wrapper) {
     this.$root = $(wrapper).find(".ta-page");
-    this.conso = [];   // [{item_code, qty}]
-    this.obt = [];     // [{item_code, qty, taux_fixe}]
+    this.conso = [];   // [{item_code, qty, warehouse|null}]
+    this.obt = [];     // [{item_code, qty, taux_fixe, warehouse|null}]
     this.sim = null;
     this.ctx = null;
     this._bind();
@@ -49,6 +52,11 @@ class TransformationArticles {
       const $b = $(e.currentTarget);
       this._ajouter($b.data("cible"), $b.data("item"), 1);
     });
+    this.$root.on("change", ".ta-wh", (e) => {
+      const $s = $(e.currentTarget);
+      this[$s.data("cible")][$s.data("idx")].warehouse = $s.val() || null;
+      this._simuler();
+    });
     this.$root.on("click", ".ta-del", (e) => {
       const $x = $(e.currentTarget);
       this[$x.data("cible")].splice($x.data("idx"), 1);
@@ -70,9 +78,9 @@ class TransformationArticles {
       this._simuler();
     });
     this.$root.find("[data-action='inverser']").on("click", () => {
-      const c = this.conso.map((l) => ({ item_code: l.item_code, qty: l.qty }));
-      this.conso = this.obt.map((l) => ({ item_code: l.item_code, qty: l.qty }));
-      this.obt = c.map((l) => ({ item_code: l.item_code, qty: l.qty, taux_fixe: null }));
+      const c = this.conso.map((l) => ({ item_code: l.item_code, qty: l.qty, warehouse: l.warehouse || null }));
+      this.conso = this.obt.map((l) => ({ item_code: l.item_code, qty: l.qty, warehouse: l.warehouse || null }));
+      this.obt = c.map((l) => ({ item_code: l.item_code, qty: l.qty, taux_fixe: null, warehouse: l.warehouse || null }));
       this._simuler();
     });
     this.$root.find("[data-action='vider']").on("click", () => { this.conso = []; this.obt = []; this._simuler(); });
@@ -84,8 +92,8 @@ class TransformationArticles {
       const $b = $(e.currentTarget);
       const fois = flt($b.closest("tr").find(".ta-fois").val()) || 1;
       const r = await frappe.call({ method: "customization_app.transformation_articles.appliquer_modele", args: { name: $b.data("name"), facteur: fois } });
-      this.conso = r.message.consommes.map((l) => ({ item_code: l.item_code, qty: l.qty }));
-      this.obt = r.message.obtenus.map((l) => ({ item_code: l.item_code, qty: l.qty, taux_fixe: null }));
+      this.conso = r.message.consommes.map((l) => ({ item_code: l.item_code, qty: l.qty, warehouse: l.warehouse || null }));
+      this.obt = r.message.obtenus.map((l) => ({ item_code: l.item_code, qty: l.qty, taux_fixe: null, warehouse: l.warehouse || null }));
       this._simuler();
       frappe.show_alert({ message: `Modèle « ${r.message.nom} » chargé × ${fois}. Vérifiez puis validez.`, indicator: "blue" });
       $("html, body").animate({ scrollTop: 0 }, 200);
@@ -112,7 +120,8 @@ class TransformationArticles {
         <div style="min-width:0">
           <div class="ta-code">${frappe.utils.escape_html(a.item_code)} ${a.est_bundle ? '<span class="ta-badge">bundle</span>' : ""}${a.modele ? '<span class="ta-badge">modèle</span>' : ""}</div>
           <div class="ta-name" title="${frappe.utils.escape_html(a.item_name || "")}">${frappe.utils.escape_html(a.item_name || "")}</div>
-          <div class="ta-meta">Stock <span class="${a.stock > 0 ? "ta-stock-ok" : "ta-stock-ko"}">${this._fmt(a.stock)}</span> ${frappe.utils.escape_html(a.uom || "")} · taux ${this._fmt(a.taux)}</div>
+          <div class="ta-meta">Stock <span class="${a.stock > 0 ? "ta-stock-ok" : "ta-stock-ko"}">${this._fmt(a.stock)}</span> ${frappe.utils.escape_html(a.uom || "")} · taux ${this._fmt(a.taux)}
+            <span class="ta-muted" title="${a.sortie ? "Sortie principale de l’article" : "Pas de sortie principale : magasin de la page"}">· ${frappe.utils.escape_html(this._court(a.warehouse))}${a.sortie ? "" : " (page)"}</span></div>
         </div>
         <div class="ta-btns">
           <button class="btn btn-default btn-xs ta-add" data-cible="conso" data-item="${frappe.utils.escape_html(a.item_code)}">− Consommer</button>
@@ -125,8 +134,22 @@ class TransformationArticles {
     const liste = this[cible];
     const existant = liste.find((l) => l.item_code === item_code);
     if (existant) existant.qty = flt(existant.qty) + flt(qty);
-    else liste.push(cible === "obt" ? { item_code, qty, taux_fixe: null } : { item_code, qty });
+    else liste.push(cible === "obt" ? { item_code, qty, taux_fixe: null, warehouse: null } : { item_code, qty, warehouse: null });
     this._simuler();
+  }
+
+  // Nom court d'un entrepôt : « Magasins - A&S » → « Magasins ».
+  _court(w) { return (w || "").replace(/\s+-\s+[^-]+$/, ""); }
+
+  // Sélecteur d'entrepôt d'une ligne : sorties autorisées + magasin de la page + l'entrepôt déjà posé.
+  _select_wh(cible, i, l) {
+    const opts = [];
+    [...((this.ctx && this.ctx.sorties) || []), this._magasin(), l.warehouse].forEach((w) => { if (w && !opts.includes(w)) opts.push(w); });
+    const choisi = (this[cible][i] && this[cible][i].warehouse) || "";
+    const titre = choisi ? "Entrepôt choisi sur cette ligne" : (l.sortie ? "Sortie principale de l’article" : "Magasin de la page (l’article n’a pas de sortie principale)");
+    return `<select class="form-control ta-wh" data-cible="${cible}" data-idx="${i}" title="${titre}" style="width:130px;height:26px;padding:2px 6px;font-size:12px">
+      ${opts.map((w) => `<option value="${frappe.utils.escape_html(w)}" ${w === l.warehouse ? "selected" : ""}>${frappe.utils.escape_html(this._court(w))}</option>`).join("")}
+    </select>${choisi ? "" : `<div class="ta-muted" style="font-size:10px">${l.sortie ? "sortie principale" : "magasin de la page"}</div>`}`;
   }
 
   // Composants du bundle présent d'un côté, ajoutés de l'autre côté (× sa quantité).
@@ -156,15 +179,15 @@ class TransformationArticles {
     let h = "";
     if (!s.consommes.length) h = '<div class="ta-empty">Aucun article. Cherchez à gauche puis « − Consommer ».</div>';
     else {
-      h = '<table class="ta-tbl"><thead><tr><th></th><th>Article</th><th class="num">Stock</th><th class="num">Quantité</th><th class="num">Taux</th><th class="num">Valeur</th><th></th></tr></thead><tbody>';
+      h = '<table class="ta-tbl"><thead><tr><th></th><th>Article</th><th>Entrepôt</th><th class="num">Stock</th><th class="num">Quantité</th><th class="num">Taux</th><th class="num">Valeur</th><th></th></tr></thead><tbody>';
       s.consommes.forEach((l, i) => {
         const ko = flt(l.qty) > flt(l.stock);
-        h += `<tr><td>${img(l)}</td><td>${nom(l)}</td><td class="num ${ko ? "ta-stock-ko" : "ta-stock-ok"}">${this._fmt(l.stock)}</td>
+        h += `<tr><td>${img(l)}</td><td>${nom(l)}</td><td>${this._select_wh("conso", i, l)}</td><td class="num ${ko ? "ta-stock-ko" : "ta-stock-ok"}">${this._fmt(l.stock)}</td>
           <td class="num"><input type="number" step="any" min="0" class="form-control ta-qty" data-cible="conso" data-idx="${i}" value="${l.qty}"></td>
           <td class="num">${this._fmt(l.taux)}</td><td class="num"><b>${this._fmt(l.valeur)}</b></td>
           <td><span class="ta-del" data-cible="conso" data-idx="${i}" title="Retirer">✕</span></td></tr>`;
       });
-      h += `<tr class="ta-tot"><td colspan="5">Total consommé</td><td class="num">${this._fmt(s.total_consomme)}</td><td></td></tr></tbody></table>`;
+      h += `<tr class="ta-tot"><td colspan="6">Total consommé</td><td class="num">${this._fmt(s.total_consomme)}</td><td></td></tr></tbody></table>`;
     }
     this.$root.find("#ta-conso").html(h);
 
@@ -172,19 +195,19 @@ class TransformationArticles {
     h = "";
     if (!s.obtenus.length) h = '<div class="ta-empty">Aucun article. Cherchez à gauche puis « + Obtenir ».</div>';
     else {
-      h = '<table class="ta-tbl"><thead><tr><th></th><th>Article</th><th class="num">Stock</th><th class="num">Quantité</th><th class="num">Taux proposé</th><th class="num">Taux habituel</th><th class="num">Valeur</th><th></th></tr></thead><tbody>';
+      h = '<table class="ta-tbl"><thead><tr><th></th><th>Article</th><th>Entrepôt</th><th class="num">Stock</th><th class="num">Quantité</th><th class="num">Taux proposé</th><th class="num">Taux habituel</th><th class="num">Valeur</th><th></th></tr></thead><tbody>';
       s.obtenus.forEach((l, i) => {
         const fixe = this.obt[i] && this.obt[i].taux_fixe;
         const ecart = l.ecart_pct === null || l.ecart_pct === undefined ? "" :
           `<div class="${Math.abs(l.ecart_pct) > 20 ? "ta-neg" : "ta-muted"}" style="font-size:10.5px">${l.ecart_pct > 0 ? "+" : ""}${l.ecart_pct} %</div>`;
-        h += `<tr><td>${img(l)}</td><td>${nom(l)}</td><td class="num">${this._fmt(l.stock)}</td>
+        h += `<tr><td>${img(l)}</td><td>${nom(l)}</td><td>${this._select_wh("obt", i, l)}</td><td class="num">${this._fmt(l.stock)}</td>
           <td class="num"><input type="number" step="any" min="0" class="form-control ta-qty" data-cible="obt" data-idx="${i}" value="${l.qty}"></td>
           <td class="num"><input type="number" step="any" min="0" class="form-control ta-taux" data-idx="${i}" value="${l.taux}" title="Modifier pour fixer ce taux ; le reste de la valeur se répartit sur les autres lignes">
             ${fixe ? `<div style="font-size:10.5px"><a href="#" class="ta-taux-auto" data-idx="${i}">fixé · revenir en auto</a></div>` : ""}</td>
           <td class="num">${this._fmt(l.taux_ref)}${ecart}</td><td class="num"><b>${this._fmt(l.valeur)}</b></td>
           <td><span class="ta-del" data-cible="obt" data-idx="${i}" title="Retirer">✕</span></td></tr>`;
       });
-      h += `<tr class="ta-tot"><td colspan="6">Total obtenu</td><td class="num">${this._fmt(s.total_obtenu)}</td><td></td></tr></tbody></table>`;
+      h += `<tr class="ta-tot"><td colspan="7">Total obtenu</td><td class="num">${this._fmt(s.total_obtenu)}</td><td></td></tr></tbody></table>`;
     }
     this.$root.find("#ta-obt").html(h);
 
@@ -206,7 +229,8 @@ class TransformationArticles {
 
   _valider() {
     const s = this.sim;
-    const msg = `Consommer ${s.consommes.map((l) => `${l.qty} × ${l.item_code}`).join(", ")}<br>Obtenir ${s.obtenus.map((l) => `${l.qty} × ${l.item_code}`).join(", ")}<br>Magasin ${frappe.utils.escape_html(this._magasin())}. Confirmer ?`;
+    const li = (l) => `${l.qty} × ${frappe.utils.escape_html(l.item_code)} <span class="ta-muted">(${frappe.utils.escape_html(this._court(l.warehouse))})</span>`;
+    const msg = `Consommer ${s.consommes.map(li).join(", ")}<br>Obtenir ${s.obtenus.map(li).join(", ")}<br>Confirmer ?`;
     frappe.confirm(msg, async () => {
       const r = await frappe.call({
         method: "customization_app.transformation_articles.valider",
@@ -234,9 +258,9 @@ class TransformationArticles {
   _refaire(name, sens) {
     const t = (this._hist || []).find((x) => x.name === name);
     if (!t) return;
-    const c = t.consommes.map((l) => ({ item_code: l.item_code, qty: l.qty }));
-    const o = t.obtenus.map((l) => ({ item_code: l.item_code, qty: l.qty, taux_fixe: null }));
-    if (sens === "inverse") { this.conso = o.map((l) => ({ item_code: l.item_code, qty: l.qty })); this.obt = c.map((l) => ({ ...l, taux_fixe: null })); }
+    const c = t.consommes.map((l) => ({ item_code: l.item_code, qty: l.qty, warehouse: l.warehouse || null }));
+    const o = t.obtenus.map((l) => ({ item_code: l.item_code, qty: l.qty, taux_fixe: null, warehouse: l.warehouse || null }));
+    if (sens === "inverse") { this.conso = o.map((l) => ({ item_code: l.item_code, qty: l.qty, warehouse: l.warehouse })); this.obt = c.map((l) => ({ ...l, taux_fixe: null })); }
     else { this.conso = c; this.obt = o; }
     this._simuler();
     $("html, body").animate({ scrollTop: 0 }, 200);
@@ -276,7 +300,7 @@ class TransformationArticles {
       this.$root.find("#ta-modeles").html('<div class="ta-muted" style="padding:10px">Aucun modèle. Composez une transformation puis « 💾 Enregistrer comme modèle ».</div>');
       return;
     }
-    const lignes = (ls, cls) => ls.map((l) => `<span class="${cls}">${l.qty} × ${frappe.utils.escape_html(l.item_code)}</span>`).join(", ");
+    const lignes = (ls, cls) => ls.map((l) => `<span class="${cls}">${l.qty} × ${frappe.utils.escape_html(l.item_code)}${l.warehouse ? ` <span class="ta-muted">(${frappe.utils.escape_html(this._court(l.warehouse))})</span>` : ""}</span>`).join(", ");
     let h = '<table class="ta-tbl"><thead><tr><th>Modèle</th><th>Consommé → Obtenu (pour 1)</th><th class="num">Applications</th><th></th></tr></thead><tbody>';
     mods.forEach((m) => {
       h += `<tr><td><b>${frappe.utils.escape_html(m.nom)}</b>${m.remarque ? `<div class="ta-muted" style="font-size:11px">${frappe.utils.escape_html(m.remarque)}</div>` : ""}</td>

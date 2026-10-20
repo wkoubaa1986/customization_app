@@ -15,6 +15,7 @@
   "valeur_ecart",
   "zones",
   "commentaire",
+  "analyse",
   "qte_employe",
   "ajuste",
   "a_recompter"
@@ -95,6 +96,12 @@
    "label": "Commentaire"
   },
   {
+   "fieldname": "analyse",
+   "fieldtype": "Small Text",
+   "label": "Analyse de l’écart",
+   "read_only": 1
+  },
+  {
    "fieldname": "qte_employe",
    "fieldtype": "Float",
    "label": "Compté par l’employé (avant ajustement)",
@@ -114,7 +121,7 @@
   }
  ],
  "links": [],
- "modified": "2026-10-02 12:47:21.872222",
+ "modified": "2026-10-20 20:10:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Verification Stock Ligne",
