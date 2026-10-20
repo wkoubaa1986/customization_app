@@ -757,8 +757,15 @@ def _poser_paiement_attente(so, numero, montant):
     """
     from erpnext.accounts.doctype.payment_entry.payment_entry import get_payment_entry
 
-    pe = get_payment_entry("Sales Order", so.name, party_amount=montant,
-                           ignore_permissions=True)
+    from customization_app.cloture_partenaire import _en_systeme
+
+    # ERPNext >= v15.123 : get_payment_entry n'a plus de parametre ignore_permissions, et il lit
+    # le compte bancaire par defaut de la societe en exigeant le droit de LIRE « Bank Account »,
+    # que seuls les roles comptables ont. On construit donc le brouillon sous l'identite systeme
+    # (meme motif que la cloture partenaire) ; l'insertion et la soumission restent sous
+    # l'identite reelle, pour que la trace dise qui a cree le paiement.
+    with _en_systeme():
+        pe = get_payment_entry("Sales Order", so.name, party_amount=montant)
     pe.mode_of_payment = MODE_PAIEMENT_ATTENTE
     pe.paid_to = COMPTE_ARAMEX
     pe.paid_to_account_currency = frappe.db.get_value("Account", COMPTE_ARAMEX,
