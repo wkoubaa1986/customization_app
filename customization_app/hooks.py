@@ -288,6 +288,9 @@ doc_events = {
             "customization_app.api.on_delivery_note_cancel",
             "customization_app.per_delivered_montant.on_delivery_note_change",
             "customization_app.commande_alertes.on_delivery_note_change",
+            # ERPNext vient de recalculer le statut de livraison de la commande :
+            # une commande FERMÉE doit rester « Closed » (fermeture_commande).
+            "customization_app.fermeture_commande.on_delivery_note_change",
         ],
         "after_cancel": "customization_app.api.on_delivery_note_cancel",
     },
@@ -574,6 +577,12 @@ override_whitelisted_methods = {
     # "NoneType") »). Frappe consulte ce hook AVANT les Server Scripts, l'appel
     # arrive donc sur la version versionnée et protégée, sans toucher aux fixtures.
     "get_customer_booking_info": "customization_app.api.get_customer_booking_info",
+    # Commande fermée sans être entièrement livrée : statut de livraison « Closed »,
+    # recalculé à la réouverture (fiche et action groupée de la liste).
+    "erpnext.selling.doctype.sales_order.sales_order.update_status":
+        "customization_app.fermeture_commande.update_status",
+    "erpnext.selling.doctype.sales_order.sales_order.close_or_unclose_sales_orders":
+        "customization_app.fermeture_commande.close_or_unclose_sales_orders",
 }
 fixtures = [
     # Custom Field de ton module
