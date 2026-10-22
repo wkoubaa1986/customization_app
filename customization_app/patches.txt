@@ -100,3 +100,4 @@ customization_app.patches.renommer_vehicules_flotte_gps
 customization_app.patches.tournees_depassement_defaut
 customization_app.patches.recup_allocations_sans_report
 customization_app.patches.fermer_livraisons_partielles_2025
+customization_app.patches.statut_livraison_coherent

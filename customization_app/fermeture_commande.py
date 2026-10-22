@@ -6,8 +6,8 @@ commande livrée en partie puis fermée restait « Livré en Partie » et contin
 d'apparaître dans ce filtre. Le champ prévoit pourtant la valeur « Closed » —
 ERPNext ne la pose jamais.
 
-La règle : fermée sans être entièrement livrée → « Closed » ; rouverte → le statut
-se recalcule depuis per_delivered. Une commande fermée ENTIÈREMENT livrée garde
+La règle : fermée sans être entièrement livrée → « Closed » ; ouverte (ou rouverte)
+→ le statut suit per_delivered. Une commande fermée ENTIÈREMENT livrée garde
 « Fully Delivered » : c'est l'information juste, il n'y a plus rien à attendre.
 
 Les portes d'ERPNext sont reprises par override_whitelisted_methods — le bouton
@@ -27,15 +27,22 @@ LIVREE = "Fully Delivered"
 
 
 def statut_livraison(status: str, per_delivered, actuel: str) -> str:
-    """Le delivery_status que la commande doit porter."""
+    """Le delivery_status que la commande doit porter.
+
+    Ouverte, il suit per_delivered avec le seuil d'ERPNext (status_updater) : une commande
+    « Régularisée sur le livré » passe à 100 % par update_child_qty_rate, qui ne recalcule PAS
+    delivery_status — SAL-ORD-2026-02915 et 03111 restaient « Livré en Partie » à 100 %.
+    « Not Applicable » (rien à livrer) n'est jamais réécrit.
+    """
     pct = float(per_delivered or 0)
+    complet = pct >= 99.999999
     if status == "Closed":
-        return actuel if pct >= 100 else FERMEE
-    if actuel == FERMEE:
-        if pct >= 100:
-            return LIVREE
-        return "Partly Delivered" if pct > 0 else "Not Delivered"
-    return actuel
+        return LIVREE if complet else FERMEE
+    if actuel == "Not Applicable":
+        return actuel
+    if complet:
+        return LIVREE
+    return "Partly Delivered" if pct > 0 else "Not Delivered"
 
 
 def aligner(noms) -> list:

@@ -17,6 +17,13 @@ class TestStatutLivraison(unittest.TestCase):
     def test_fermee_entierement_livree_garde_son_statut(self):
         self.assertEqual(FC.statut_livraison("Closed", 100, "Fully Delivered"), "Fully Delivered")
 
+    def test_regularisee_sur_le_livre_quitte_livre_en_partie(self):
+        # SAL-ORD-2026-03111 / 02915 : 100 % après update_child_qty_rate, statut resté partiel
+        self.assertEqual(FC.statut_livraison("To Bill", 100, "Partly Delivered"), "Fully Delivered")
+
+    def test_rien_a_livrer_jamais_reecrit(self):
+        self.assertEqual(FC.statut_livraison("To Bill", 0, "Not Applicable"), "Not Applicable")
+
     def test_reouverte_se_recalcule(self):
         self.assertEqual(FC.statut_livraison("To Deliver", 70.8, "Closed"), "Partly Delivered")
         self.assertEqual(FC.statut_livraison("To Deliver and Bill", 0, "Closed"), "Not Delivered")

@@ -585,6 +585,11 @@ def regulariser(sales_order, perte=0):
         r.idx = position
     so.save()
 
+    # update_child_qty_rate a remis per_delivered à 100 sans toucher delivery_status :
+    # sans ceci la commande reste dans le filtre « Livré en Partie ».
+    from customization_app.fermeture_commande import aligner
+    aligner([so.name])
+
     frappe.msgprint(
         _("Commande ramenée à {0} (livré). Dette : {1}. Perte de paiement : {2}. "
           "Lignes retirées : {3}.").format(
