@@ -425,17 +425,67 @@ def fermer_taches_soldees(noms=None):
     Même plancher que les anomalies : les commandes antérieures au 01/07/2026
     ne sont pas touchées. `noms` restreint à quelques commandes (hook paiement)
     ; sans lui, toute la base (resynchronisation nocturne, patch).
+
+    DOUBLON (décision utilisateur, 22/10/2026) : si la commande a déjà une tâche
+    du MÊME type clôturée, la tâche en retard est un reste — elle est ANNULÉE,
+    pas clôturée : la clôture exigerait les photos d'une intervention faite sous
+    un autre numéro (Tache-08149 doublon de Tache-09059, Tache-08155 de 08616).
+
+    Une clôture REFUSÉE par une règle métier (photos, commande ou BL en
+    brouillon) laisse la tâche ouverte, sans trace ni message : elle attend un
+    humain. Avant, chaque paiement de la commande rejouait le refus (43 Error
+    Log depuis le 29/09) et son message s'affichait en pleine validation d'un
+    encaissement, sans rapport avec lui.
     """
+    fermees = 0
+    for nom in _taches_en_retard_soldees(noms):
+        doublon = _doublon_cloture(nom)
+        n_messages = len(frappe.local.message_log)
+        frappe.db.savepoint("fermer_tache_soldee")
+        try:
+            tache = frappe.get_doc("Tache de travail", nom)
+            tache.status = "Cancelled" if doublon else "Completed"
+            # save() déclenche on_tache_change -> recalcul de l'anomalie de la commande.
+            tache.flags.ignore_permissions = True
+            tache.save()
+            if doublon:
+                tache.add_comment("Comment", f"🧹 Annulée automatiquement : doublon de {doublon}, "
+                                             "déjà clôturée, sur une commande soldée.")
+            fermees += 1
+        except frappe.ValidationError:
+            frappe.db.rollback(save_point="fermer_tache_soldee")
+            del frappe.local.message_log[n_messages:]
+        except Exception:
+            frappe.db.rollback(save_point="fermer_tache_soldee")
+            del frappe.local.message_log[n_messages:]
+            _sur_erreur(nom)
+    return fermees
+
+
+def _doublon_cloture(nom):
+    """La tâche du même type, déjà clôturée, sur la même commande que `nom` — ou None."""
+    t = frappe.db.get_value("Tache de travail", nom,
+                            ["commande_client", "custom_type_dintervention"], as_dict=True)
+    if not t or not t.commande_client:
+        return None
+    return frappe.db.get_value("Tache de travail", {
+        "commande_client": t.commande_client,
+        "custom_type_dintervention": t.custom_type_dintervention,
+        "status": "Completed", "name": ("!=", nom)}, "name")
+
+
+def _taches_en_retard_soldees(noms=None):
+    """Tâches ouvertes, en retard, dont la commande est soldée (cf. fermer_taches_soldees)."""
     clause = "so.name = t.commande_client"
     params = _params()
     if noms:
         noms = [n for n in noms if n]
         if not noms:
-            return 0
+            return []
         clause += " AND so.name IN %(noms)s"
         params["noms"] = tuple(noms)
 
-    taches = frappe.db.sql(
+    return [r[0] for r in frappe.db.sql(
         f"""
         SELECT t.name FROM `tabTache de travail` t
         WHERE t.status = 'Open' AND t.starts_on < CURDATE()
@@ -447,20 +497,7 @@ def fermer_taches_soldees(noms=None):
               AND NOT {_PAIEMENT_ATTENTE})
         """,
         params,
-    )
-
-    fermees = 0
-    for (nom,) in taches:
-        try:
-            tache = frappe.get_doc("Tache de travail", nom)
-            tache.status = "Completed"
-            # save() déclenche on_tache_change -> recalcul de l'anomalie de la commande.
-            tache.flags.ignore_permissions = True
-            tache.save()
-            fermees += 1
-        except Exception:
-            _sur_erreur(nom)
-    return fermees
+    )]
 
 
 @frappe.whitelist()
