@@ -16,7 +16,16 @@ frappe.pages["commandes-a-traiter"].on_page_load = function (wrapper) {
   $(wrapper).find(".layout-main-section").html(
     frappe.render_template("commandes_a_traiter", {})
   );
-  new CommandesATraiter(wrapper);
+  wrapper.ct = new CommandesATraiter(wrapper);
+};
+
+// « Ouvrir › » de l'onglet Appels arrive avec frappe.route_options = {vue: …} : la page déjà
+// chargée doit l'appliquer aussi (on_page_load ne repasse pas).
+frappe.pages["commandes-a-traiter"].on_page_show = function (wrapper) {
+  if (wrapper.ct && wrapper.ct._lire_route_options()) {
+    wrapper.ct.start = 0;
+    wrapper.ct._load();
+  }
 };
 
 const CT_PAGE_LENGTH = 50;
@@ -53,9 +62,43 @@ function rendre_articles(articles) {
   }).join("") || `<span class="ct-sub">—</span>`;
 }
 
+/** Le suivi de la commande (posé en un clic) : pastille + les trois boutons.
+ *  Orange quand la date de reprise est atteinte (à reprendre), gris quand elle est à venir. */
+const SUIVI_ICONES = { "Ne répond pas": "📵", "À rappeler": "⏰", "En instance": "⌛" };
+function rendre_suivi(c, avec_boutons) {
+  const esc = frappe.utils.escape_html;
+  let html = "";
+  if (c.suivi) {
+    const quand = c.suivi_le ? `${frappe.datetime.str_to_user(c.suivi_le.slice(0, 10))} ${c.suivi_le.slice(11, 16)}` : "";
+    const libelle = `${SUIVI_ICONES[c.suivi] || ""} ${c.suivi}${quand ? (c.suivi_echu ? " · depuis le " : " · le ") + quand : ""}`;
+    html += `<div><span class="ct-badge ${c.suivi_echu ? "b-warn" : "b-svc"}" style="white-space:normal;text-align:left"
+        title="${esc((c.suivi_note || "") + (c.suivi_par ? " — " + c.suivi_par : ""))}">${esc(libelle)}${c.suivi_note ? " — " + esc(c.suivi_note) : ""}
+        <span class="ct-suivi-x" data-retirer-suivi="${esc(c.name)}" title="Retirer le suivi">✕</span></span></div>`;
+  }
+  if (avec_boutons) {
+    html += `<div class="ct-suivi-btns">
+        <button data-suivi="Ne répond pas" data-cde="${esc(c.name)}" title="Ne répond pas — rappel demain 9 h">📵</button>
+        <button data-suivi="À rappeler" data-cde="${esc(c.name)}" title="À rappeler le…">⏰</button>
+        <button data-suivi="En instance" data-cde="${esc(c.name)}" title="En instance jusqu’au…">⌛</button></div>`;
+  }
+  return html;
+}
+
+/** Ce qui est réellement parti après « annuler et informer » — et non le nombre de commandes :
+ *  un client sans numéro ni e-mail n'est pas « prévenu », et un gros lot part en tâche de fond. */
+function bilan_envoi(envoi, n) {
+  if (!n || !envoi) return __("Aucun client à prévenir.");
+  if (envoi.differe) return __("Envoi lancé en tâche de fond pour {0} commande(s) — une notification arrivera à la fin.", [n]);
+  const sim = envoi.simulation ? " " + __("(SIMULÉ en dev)") : "";
+  return __("{0} SMS et {1} e-mail(s) envoyés pour {2} commande(s), {3} échec(s).",
+    [envoi.sms_envoyes || 0, envoi.emails_envoyes || 0, n, envoi.echecs || 0]) + sim;
+}
+
 /** 💬 Le dernier commentaire écrit sur la commande (commentaires_commande) : texte, date et auteur. */
 function rendre_commentaire(c) {
   if (!c || !c.commentaire) return "";
+  // La trace d'un suivi (📵 ⏰ ⌛) est déjà dite par la pastille de suivi, juste en dessous.
+  if (c.suivi && /^(📵|⏰|⌛)/u.test(c.commentaire)) return "";
   const esc = frappe.utils.escape_html;
   const quand = c.commentaire_le ? `${frappe.datetime.str_to_user(c.commentaire_le.slice(0, 10))} ${c.commentaire_le.slice(11, 16)}` : "";
   return `<div><span class="ct-badge b-info" style="white-space:normal;text-align:left"
@@ -97,8 +140,12 @@ class CommandesATraiter {
       method: "customization_app.commandes_a_traiter.get_filtres",
       callback: (r) => {
         const m = r.message || {};
+        // Types d'anomalie à la suite de « Avec / Sans anomalie » (le nombre s'ajoute après chaque chargement).
+        $("#ct-anomalie").append(
+          (m.anomalies || []).map((a) => `<option value="${frappe.utils.escape_html(a)}" data-libelle="${frappe.utils.escape_html(a)}">${frappe.utils.escape_html(a)}</option>`).join(""));
+        // Statuts traduits (« To Bill » → « À Facturer ») : la valeur reste celle d'ERPNext.
         $("#ct-statut").append(
-          (m.statuts || []).map((s) => `<option value="${s}">${s}</option>`).join(""));
+          (m.statuts || []).map((s) => `<option value="${s}">${__(s)}</option>`).join(""));
         // Secteurs en CASES À COCHER : on travaille souvent sur deux ou trois
         // secteurs voisins à la fois (une tournée), et une liste déroulante
         // obligeait à repasser l'écran secteur par secteur.
@@ -122,13 +169,25 @@ class CommandesATraiter {
           : `<span class="n">Types de clients indisponibles — rechargez la page (Ctrl+Maj+R).</span>`);
         $("#ct-depuis").val(m.depuis_defaut || "2026-07-01");
         $("#ct-jusqua").val(frappe.datetime.get_today());
+        this._lire_route_options();
         this._load();
       },
     });
   }
 
+  /** Applique la vue demandée par un lien (onglet Appels). -> true si quelque chose a changé. */
+  _lire_route_options() {
+    const ro = frappe.route_options || {};
+    if (!ro.vue) return false;
+    $("#ct-vue").val(ro.vue);
+    frappe.route_options = null;
+    return true;
+  }
+
   _filtres() {
     return {
+      vue: $("#ct-vue").val() || "a_traiter",
+      suivi: $("#ct-suivi").val() || "",
       depuis: $("#ct-depuis").val(),
       jusqu_a: $("#ct-jusqua").val(),
       recherche: $("#ct-search").val() || "",
@@ -160,7 +219,7 @@ class CommandesATraiter {
       clearTimeout(timer);
       timer = setTimeout(() => { this.start = 0; this._load(); }, 400);
     });
-    ["#ct-depuis", "#ct-jusqua", "#ct-statut", "#ct-origine", "#ct-dispo",
+    ["#ct-vue", "#ct-suivi", "#ct-depuis", "#ct-jusqua", "#ct-statut", "#ct-origine", "#ct-dispo",
      "#ct-anomalie", "#ct-commentaire", "#ct-tache", "#ct-livraison", "#ct-envoi",
      "#ct-prestation", "#ct-client", "#ct-tri"].forEach((sel) =>
       $(sel).on("change", () => { this.start = 0; this._load(); }));
@@ -170,10 +229,11 @@ class CommandesATraiter {
 
     $("#ct-clear").on("click", () => {
       $("#ct-search").val("");
-      ["#ct-statut", "#ct-origine", "#ct-dispo", "#ct-anomalie", "#ct-commentaire", "#ct-tache",
+      ["#ct-statut", "#ct-suivi", "#ct-origine", "#ct-dispo", "#ct-anomalie", "#ct-commentaire", "#ct-tache",
        "#ct-livraison", "#ct-envoi", "#ct-prestation", "#ct-client"]
         .forEach((s) => $(s).val(""));
       $("#ct-groupes .ct-grp, #ct-secteurs .ct-sect").prop("checked", true);
+      $("#ct-vue").val("a_traiter");
       this.start = 0;
       this._load();
     });
@@ -185,6 +245,22 @@ class CommandesATraiter {
       if (this.data && this.start + CT_PAGE_LENGTH < this.data.total) {
         this.start += CT_PAGE_LENGTH; this._load();
       }
+    });
+
+    // Suivi en un clic (22/10/2026) : 📵 tout de suite ; ⏰ et ⌛ demandent la date de reprise.
+    $(this.wrapper).on("click", ".ct-suivi-btns button", (e) => {
+      e.preventDefault();
+      const b = e.currentTarget;
+      this._poser_suivi(b.dataset.cde, b.dataset.suivi);
+    });
+    $(this.wrapper).on("click", "[data-retirer-suivi]", (e) => {
+      e.preventDefault();
+      const nom = e.currentTarget.dataset.retirerSuivi;
+      frappe.call({
+        method: "customization_app.commandes_a_traiter.retirer_suivi",
+        args: { noms: JSON.stringify([nom]) },
+        callback: () => { frappe.show_alert({ message: __("Suivi retiré — {0}", [nom]), indicator: "blue" }); this._load(); },
+      });
     });
 
     $(this.wrapper).on("change", ".ct-sel", (e) => {
@@ -229,6 +305,7 @@ class CommandesATraiter {
     // ⚠️ RECHARGE SANS VIDER LA SÉLECTION. On actualise justement pour VOIR
     // l'effet de ce qu'on vient de faire sur les commandes cochées : les vider
     // au passage obligerait à tout recocher pour l'action suivante.
+    $("#ct-guide").on("click", () => this._guide());
     $("#ct-refresh").on("click", () => {
       this._load();
       frappe.show_alert({ message: __("Liste actualisée"), indicator: "blue" }, 3);
@@ -260,8 +337,20 @@ class CommandesATraiter {
 
   _rendre() {
     const k = this.data.kpis || {};
+    // Le nombre de commandes de la vue par type d'anomalie, dans le menu « Anomalie ».
+    $("#ct-anomalie option[data-libelle]").each(function () {
+      const n = (k.par_anomalie || {})[this.dataset.libelle] || 0;
+      this.textContent = this.dataset.libelle + (n ? ` (${n})` : " (0)");
+    });
+    // Le même chiffre que l'onglet Appels (calculé côté serveur sur la même définition).
+    const reste = k.reste !== undefined ? k.reste : (k.a_traiter || 0) - (k.traitees_aujourdhui || 0);
     $("#ct-kpis").html([
-      ["Commandes", k.commandes || 0, ""],
+      // Les deux chiffres de l'onglet Appels, sur la même définition (filtres de l'écran non appliqués).
+      ["Reste à faire", reste, reste ? "alerte" : ""],
+      ["Traitées aujourd’hui", k.traitees_aujourdhui || 0, ""],
+      ["Suivis à reprendre", k.a_reprendre || 0, k.a_reprendre ? "alerte" : ""],
+      ["Programmées plus tard", k.programmees || 0, ""],
+      ["Commandes affichées", k.commandes || 0, ""],
       ["Rupture réelle", k.manque_reel || 0, k.manque_reel ? "alerte" : ""],
       ["Stock négatif à corriger", k.stock_negatif || 0, ""],
       ["Sans tâche", k.sans_tache || 0, ""],
@@ -295,14 +384,15 @@ class CommandesATraiter {
               ${this.selection.has(c.name) ? "checked" : ""}></td>
         <td><a href="/app/sales-order/${encodeURIComponent(c.name)}" target="_blank"
               class="ct-cde">${esc(c.name)}</a>
-            <div class="ct-sub">${esc(c.date)} · ${esc(c.statut)}
+            <div class="ct-sub">${esc(c.date)} · ${esc(__(c.statut))}
+              ${c.traitee_aujourdhui ? `<span class="ct-badge b-ok" title="Commentaire, envoi, livraison autorisée ou appel noté aujourd’hui : la commande est sortie du reste à faire">✅ traitée aujourd’hui</span>` : ""}
               ${c.web ? `<span class="ct-badge b-web">🌐 web</span>` : ""}
               ${c.livraison_equipe ? `<span class="ct-badge b-ok" title="Le client peut réserver un créneau de livraison en ligne">🚚 livraison équipe</span>` : ""}</div>
             ${c.envoi ? `<div><span class="ct-badge b-svc"
                  title="${esc(canaux(c.envoi))} — dernier envoi le ${esc(c.envoi.dernier)} par ${esc(c.envoi.par)}"
                  >📨 relancé${c.envoi.n > 1 ? ` ×${c.envoi.n}` : ""} · ${esc(String(c.envoi.dernier).slice(0, 10))}</span></div>`
               : ""}
-            ${rendre_appels(c.appels)}${rendre_commentaire(c)}</td>
+            ${rendre_appels(c.appels)}${rendre_commentaire(c)}${rendre_suivi(c, c.docstatus !== 2)}</td>
         <td><a href="/app/customer/${encodeURIComponent(c.client)}" target="_blank">${esc(c.client_nom)}</a>
             <div class="ct-sub">${c.telephone
               ? `📞 <a href="tel:${esc(c.telephone)}">${esc(c.telephone)}</a>`
@@ -350,6 +440,145 @@ class CommandesATraiter {
       `<b>${n}</b> commande(s) sélectionnée(s)`
       + (caches ? ` <span style="color:#b45309">(dont ${caches} hors de l’écran)</span>` : "")
       + ` <a class="ct-vider" style="cursor:pointer;margin-left:6px">✕ vider</a>`);
+  }
+
+  _poser_suivi(nom, suivi) {
+    const envoyer = (le, note) => frappe.call({
+      method: "customization_app.commandes_a_traiter.poser_suivi",
+      args: { noms: JSON.stringify([nom]), suivi, le: le || "", note: note || "" },
+      callback: (r) => {
+        const x = (r.message || [])[0] || {};
+        frappe.show_alert({ message: `${nom} — ${frappe.utils.escape_html(x.etat || suivi)}`, indicator: "green" }, 6);
+        this._load();
+        if (x.deuxieme_appel) this._proposer_annulation(nom, x);
+      },
+    });
+    if (suivi === "Ne répond pas") return envoyer();
+    const demain = frappe.datetime.add_days(frappe.datetime.get_today(), suivi === "En instance" ? 7 : 1);
+    const d = new frappe.ui.Dialog({
+      title: `${SUIVI_ICONES[suivi]} ${suivi} — ${nom}`,
+      fields: [
+        { fieldtype: "Datetime", fieldname: "le", reqd: 1, default: `${demain} 09:00:00`,
+          label: suivi === "En instance" ? __("En instance jusqu’au") : __("À rappeler le") },
+        { fieldtype: "Data", fieldname: "note", label: __("Note (ce qu’il faut faire à la reprise)") },
+      ],
+      primary_action_label: __("Enregistrer"),
+      primary_action: (v) => { d.hide(); envoyer(v.le, v.note); },
+    });
+    d.show();
+  }
+
+  // ── Guide de l'écran (captures anonymisées, public/images/guide_commandes_a_traiter) ──
+  _guide() {
+    const img = (f, alt) => `<img src="/assets/customization_app/images/guide_commandes_a_traiter/${f}?v=20261022" alt="${alt}" loading="lazy">`;
+    const d = new frappe.ui.Dialog({
+      title: "❓ Commandes à traiter — guide", size: "extra-large",
+      fields: [{ fieldtype: "HTML", fieldname: "zone" }],
+    });
+    d.fields_dict.zone.$wrapper.html(`<div class="ct-guide">
+      <p class="note">Cet écran montre les commandes qui <b>attendent une action</b> : à confirmer, à livrer, ou avec une
+        anomalie. Le chiffre <b>Reste à faire</b> est le même que celui de l’onglet <b>Appels</b>.</p>
+
+      <div class="et"><div class="t">🎯 Le reste à faire</div>
+        ${img("01_compteurs.png", "Compteurs en haut de l’écran")}
+        <ul>
+          <li>Une commande est <b>à traiter</b> si c’est un <b>brouillon</b> (commande web à confirmer, devis du magasin),
+            une commande validée <b>pas encore entièrement livrée</b>, ou une commande ouverte avec une <b>anomalie</b>.</li>
+          <li><b>Reste à faire</b> = à traiter − <b>traitées aujourd’hui</b> − <b>programmées plus tard</b>.</li>
+          <li><b>Traitée aujourd’hui</b> : un commentaire écrit, un suivi (📵 ⏰ ⌛), un message envoyé ou une livraison
+            autorisée. Elle sort du reste à faire jusqu’à demain (badge ✅).</li>
+        </ul>
+        ${img("08_onglet_appels.png", "Le bloc Mes appels par priorité de l’onglet Appels")}
+        <ul><li>Dans l’onglet Appels, <b>Ouvrir ›</b> sur « Commandes à traiter » ouvre directement cet écran sur le reste à faire.</li></ul>
+      </div>
+
+      <div class="et"><div class="t">🔎 La vue et les filtres</div>
+        ${img("02_filtres.png", "La barre de filtres")}
+        <ul>
+          <li><b>Vue</b> : <i>Reste à faire</i> (par défaut) · <i>À traiter</i> (y compris celles déjà traitées aujourd’hui) ·
+            <i>Toutes les commandes</i> (tout l’historique de la période).</li>
+          <li><b>Suivi</b> : <i>À reprendre maintenant</i> (la date de rappel est arrivée) · <i>Programmées plus tard</i> ·
+            par type · <i>Sans suivi</i>.</li>
+          <li><b>Disponibilité</b> : <i>rupture réelle</i> = on n’a pas l’article ; <i>stock négatif</i> = l’inventaire est
+            faux : il faut le corriger, <b>pas</b> annuler la commande.</li>
+          <li><b>Relance</b> : client déjà prévenu ou pas. <b>Effacer</b> remet tous les filtres.</li>
+        </ul>
+      </div>
+
+      <div class="et"><div class="t">📄 Lire une ligne</div>
+        ${img("03_ligne.png", "Une ligne de commande")}
+        <ul>
+          <li><b>Commande</b> : numéro, date, statut, et les badges : ✅ traitée aujourd’hui · 🌐 web · 🚚 livraison équipe ·
+            📨 déjà relancé · 📞 appels sans réponse · 💬 dernier commentaire.</li>
+          <li><b>Client</b> : téléphone (cliquable), type de client, <b>N commandes</b> (toutes ses commandes), <b>📜 Historique</b>.</li>
+          <li><b>Articles & stock</b> : <i>stock N</i> = disponible · <i>manque</i> = rupture · <i>🩺 stock négatif</i> = inventaire
+            à corriger · <i>service</i> = pas de stock (installation, livraison…).</li>
+          <li><b>Tâches</b> et <b>anomalie</b> de la commande.</li>
+        </ul>
+      </div>
+
+      <div class="et"><div class="t">📞 Le suivi en un clic</div>
+        <div class="duo">${img("04_rappeler.png", "Le dialogue À rappeler le")}${img("05_pastille_suivi.png", "La pastille de suivi")}</div>
+        <ul>
+          <li><b>📵 Ne répond pas</b> : un seul clic. La commande revient <b>demain à 9 h</b>.</li>
+          <li><b>⏰ À rappeler le…</b> : date, heure et une note. La commande sort du reste à faire et revient <b>à cette heure-là, en tête</b>.</li>
+          <li><b>⌛ En instance jusqu’au…</b> : pareil, avec un motif (attente de stock, client absent…).</li>
+          <li>La <b>pastille</b> est grise tant que la date n’est pas arrivée, orange quand c’est le moment. <b>✕</b> retire le suivi.</li>
+          <li>Chaque clic écrit un <b>commentaire</b> dans la commande : l’historique est gardé.</li>
+        </ul>
+      </div>
+
+      <div class="et"><div class="t">📵 Deux appels sans réponse</div>
+        ${img("06_deux_appels.png", "Proposition d’annulation après deux appels")}
+        <ul>
+          <li>Au 2ᵉ « Ne répond pas », l’écran propose d’<b>annuler la commande en prévenant le client</b>.</li>
+          <li>Commande saisie (pas web) : <b>vérifie d’abord avec la personne indiquée</b>, qui a créé la commande.</li>
+        </ul>
+        ${img("07_annuler_prevenir.png", "Le message d’annulation pré-rempli")}
+        <ul><li><b>Annuler et prévenir le client</b> ouvre le message avec l’annulation <b>cochée</b> et le motif écrit :
+          choisis un modèle, vérifie, puis <b>Envoyer</b>.</li></ul>
+      </div>
+
+      <div class="et"><div class="t">✉️ Agir sur plusieurs commandes</div>
+        <ul>
+          <li>Coche les commandes : la sélection reste quand tu changes de page ou de filtre.</li>
+          <li><b>📨 Message / remplacement</b> : SMS et e-mail, modèles, article de remplacement, et « Annuler aussi ces commandes ».</li>
+          <li><b>📅 Lien de rendez-vous</b> : le message avec le lien du portail de prise de rendez-vous.</li>
+          <li><b>🚚 Livraison par notre équipe</b> : le client peut réserver un créneau de livraison (secteurs 1 à 7 seulement).</li>
+          <li><b>❌ Annuler</b> : annule la commande (BL, échéancier et tâches suivent). Un <b>brouillon</b> est supprimé définitivement,
+            une copie complète reste sur la fiche du client.</li>
+        </ul>
+        <p class="attention">⚠️ Les SMS et e-mails partent vers de <b>vrais clients</b>.</p>
+      </div>
+    </div>`);
+    d.show();
+  }
+
+  /** Deux appels (ou plus) restés sans réponse : on propose d'annuler la commande en prévenant le
+   *  client — le dialogue de message s'ouvre avec l'annulation cochée et le motif écrit. */
+  _proposer_annulation(nom, x) {
+    const esc = frappe.utils.escape_html;
+    const motif = __("Client injoignable : {0} appels sans réponse", [x.appels]);
+    const d = new frappe.ui.Dialog({
+      title: __("📵 {0} appels sans réponse", [x.appels]),
+      fields: [{
+        fieldtype: "HTML", fieldname: "info",
+        options: `<div style="font-size:13px;line-height:1.5">
+            ${esc(x.client || "")} ne répond pas (<b>${esc(String(x.appels))}</b> appels sans réponse
+            sur <b>${esc(nom)}</b>).<br>Tu peux annuler la commande : le client sera prévenu par SMS / e-mail.
+            ${x.web || !x.createur ? "" : `<div style="margin-top:10px;padding:8px 10px;border-radius:8px;background:#fef3c7;color:#92400e">
+              ⚠️ Vérifie avec <b>${esc(x.createur)}</b> avant d’annuler.</div>`}</div>`,
+      }],
+      primary_action_label: __("Annuler et prévenir le client"),
+      primary_action: () => {
+        d.hide();
+        this.selection = new Set([nom]);
+        this._dialogue_message("annuler", motif);
+      },
+      secondary_action_label: __("Plus tard"),
+      secondary_action: () => d.hide(),
+    });
+    d.show();
   }
 
   _vider_selection() {
@@ -472,7 +701,7 @@ class CommandesATraiter {
 
   // ---------------------------------------------------------------- actions
 
-  _dialogue_message(preset) {
+  _dialogue_message(preset, motif) {
     const noms = this._selection();
     if (!noms) return;
     let modeles = [];
@@ -592,6 +821,11 @@ class CommandesATraiter {
     d.__rafraichir = () => this._apercu(d, noms);
 
     d.show();
+    // Ouvert depuis « 2 appels sans réponse » : l'annulation est déjà cochée, le motif écrit.
+    if (preset === "annuler") {
+      d.set_value("annuler", 1);
+      if (motif) d.set_value("motif", motif);
+    }
     // Visible D'EMBLÉE : tant que la table n'apparaissait qu'après « Appliquer
     // à toutes », personne ne pouvait deviner qu'un choix par commande existait.
     this._rendre_par_commande(d, noms);
@@ -788,7 +1022,7 @@ class CommandesATraiter {
               title: __("Annulation et information"),
               message: (m.annulations || []).map((x) =>
                 `<div><b>${esc(x.commande)}</b> — ${esc(x.etat)}</div>`).join("")
-                + `<div style="margin-top:8px">✉️ ${(m.informes || []).length} client(s) prévenu(s).</div>`,
+                + `<div style="margin-top:8px">✉️ ${esc(bilan_envoi(m.envoi, (m.informes || []).length))}</div>`,
             });
             this._vider_selection();
             this._load();
@@ -888,8 +1122,8 @@ class CommandesATraiter {
           options: `<div style="padding:10px 12px;border-radius:9px;background:#fef3c7;
                       color:#92400e;font-size:12.5px">
                       ⚠️ L'annulation déclenche la cascade habituelle : bons de livraison,
-                      échéancier et tâches liées. Un <b>brouillon</b> n'est pas annulé
-                      (il se supprime, il ne s'annule pas) — il sera signalé.
+                      échéancier et tâches liées. Un <b>brouillon</b> est <b>supprimé
+                      définitivement</b> (une copie complète est gardée sur la fiche client).
                     </div>`,
         },
         {

@@ -271,13 +271,16 @@ def apercu(noms, modele=None, remplacements=None):
 
 
 @frappe.whitelist()
-def envoyer(noms, modele, sujet=None, sms=1, email=1, remplacements=None):
+def envoyer(noms, modele, sujet=None, sms=1, email=1, remplacements=None, lignes=None):
     """Lance l'envoi. Petit lot : tout de suite. Gros lot : EN TÂCHE DE FOND.
 
     ⚠️ Chaque SMS est un appel réseau (~1 s) : 151 commandes en direct dans la
     requête HTTP, c'est « La requête a expiré » et un envoi à moitié fait sans
     que personne ne sache où il s'est arrêté. Au-delà de SEUIL_DIRECT, on
     confie donc la tournée à la file d'attente, et l'écran suit la progression.
+
+    `lignes` : destinataires déjà lus (`_destinataires`) — pour prévenir les clients de
+    brouillons SUPPRIMÉS par « annuler et informer », dont la commande n'existe plus.
     """
     frappe.has_permission("Sales Order", "write", throw=True)
 
@@ -297,19 +300,19 @@ def envoyer(noms, modele, sujet=None, sms=1, email=1, remplacements=None):
 
     if len(noms) <= SEUIL_DIRECT:
         return _executer(noms, modele, sujet, sms, email, frappe.session.user,
-                         remplacements=remplacements)
+                         remplacements=remplacements, lignes=lignes)
 
     frappe.enqueue(
         "customization_app.sms_commandes._executer",
         queue="long", timeout=3600,
         noms=noms, modele=modele, sujet=sujet, sms=sms, email=email,
         utilisateur=frappe.session.user, differe=True, remplacements=remplacements,
-        job_name="envoi_groupe_%s" % frappe.generate_hash(length=8))
+        lignes=lignes, job_name="envoi_groupe_%s" % frappe.generate_hash(length=8))
     return {"differe": True, "commandes": len(noms)}
 
 
 def _executer(noms, modele, sujet, sms, email, utilisateur, differe=False,
-              remplacements=None):
+              remplacements=None, lignes=None):
     """La tournée elle-même. Un échec n'interrompt pas les suivants — chaque
     commande a son verdict, et une trace est posée sur CHAQUE commande touchée :
     six mois plus tard, on doit pouvoir dire ce qui a été envoyé, à qui."""
@@ -328,12 +331,16 @@ def _executer(noms, modele, sujet, sms, email, utilisateur, differe=False,
 
     resultat = {"sms_envoyes": 0, "emails_envoyes": 0, "echecs": 0,
                 "simulation": simulation, "detail": []}
-    lignes = _destinataires(noms)
+    lignes = lignes or _destinataires(noms)
     total = len(lignes)
     for index, ligne in enumerate(lignes, start=1):
         texte = rendre(modele, ligne, remplacements)
         verdict = {"commande": ligne["commande"], "client": ligne["nom_client"],
                    "sms": None, "email": None}
+        # Commande supprimée entre-temps (brouillon annulé) : la trace va sur la fiche client.
+        existe = frappe.db.exists("Sales Order", ligne["commande"])
+        ref_doctype, ref_name = (("Sales Order", ligne["commande"]) if existe
+                                 else ("Customer", ligne["client"]))
 
         if sms and ligne["numeros"] and simulation:
             verdict["sms"] = "SIMULÉ (dev) → %s" % ", ".join(ligne["numeros"])
@@ -358,8 +365,8 @@ def _executer(noms, modele, sujet, sms, email, utilisateur, differe=False,
                     subject=(sujet or "").strip()
                             or _("Aqua World & Servicing — {0}").format(ligne["commande"]),
                     message=frappe.utils.md_to_html(texte),
-                    reference_doctype="Sales Order",
-                    reference_name=ligne["commande"],
+                    reference_doctype=ref_doctype,
+                    reference_name=ref_name,
                     now=True)
                 verdict["email"] = "envoyé → %s" % ", ".join(ligne["emails"])
                 resultat["emails_envoyes"] += len(ligne["emails"])
@@ -372,12 +379,13 @@ def _executer(noms, modele, sujet, sms, email, utilisateur, differe=False,
         if verdict["sms"] or verdict["email"]:
             frappe.get_doc({
                 "doctype": "Comment", "comment_type": "Info",
-                "reference_doctype": "Sales Order",
-                "reference_name": ligne["commande"],
+                "reference_doctype": ref_doctype,
+                "reference_name": ref_name,
                 "content": _("📨 Envoi groupé par {0} — SMS : {1} · E-mail : {2}<br>{3}")
                            .format(frappe.session.user, verdict["sms"] or "—",
                                    verdict["email"] or "—",
-                                   frappe.utils.escape_html(texte)[:500]),
+                                   frappe.utils.escape_html(texte)[:500])
+                           + ("" if existe else _("<br>(commande {0} supprimée)").format(ligne["commande"])),
             }).insert(ignore_permissions=True)
         resultat["detail"].append(verdict)
 

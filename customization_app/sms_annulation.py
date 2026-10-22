@@ -121,6 +121,10 @@ def on_sales_order_cancel(doc, method=None):
     """
     if not doc.get("woocommerce_id"):
         return
+    # « Annuler et informer » (Commandes à traiter) envoie son propre message ; un brouillon
+    # annulé est supprimé l'instant d'après. Dans les deux cas, pas de SMS automatique.
+    if frappe.flags.get("sans_sms_annulation_auto") or doc.flags.get("sans_sms_annulation_auto"):
+        return
 
     frappe.enqueue(
         "customization_app.sms_annulation.envoyer_pour_commande",

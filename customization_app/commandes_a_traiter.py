@@ -24,7 +24,7 @@ import json
 
 import frappe
 from frappe import _
-from frappe.utils import flt, getdate, nowdate
+from frappe.utils import add_days, flt, get_datetime, getdate, now_datetime, nowdate
 
 from customization_app.suivi_appels import CHAMPS as CHAMPS_APPELS, LIBELLES as LIBELLES_APPELS
 from customization_app.traitement_commandes import (
@@ -36,6 +36,112 @@ PAGE_LENGTH = 50
 
 # Statuts qui ne consomment plus de stock : la commande est finie ou morte.
 STATUTS_CLOS = ("Completed", "Closed", "Cancelled")
+# Une commande validée qui attend encore une livraison.
+STATUTS_A_LIVRER = ("To Deliver and Bill", "To Deliver")
+
+# « À TRAITER » — UNE définition, partagée par l'écran, le compteur de l'onglet Appels et son
+# bouton « Ouvrir › » (demande 22/10/2026 : trois définitions différentes désorientaient
+# l'utilisatrice — l'écran montrait 2 329 commandes, le compteur 18). Ce qui attend encore
+# une action humaine :
+#   - un BROUILLON : commande jamais validée (web à confirmer, devis du magasin) ;
+#   - une commande validée pas encore entièrement livrée ;
+#   - une commande ouverte qui porte une ANOMALIE (tâche en retard, tâche annulée…).
+SQL_A_TRAITER = """(so.docstatus = 0 OR (so.docstatus = 1
+    AND so.status NOT IN ('Completed', 'Closed', 'Cancelled')
+    AND (so.status IN ('To Deliver and Bill', 'To Deliver') OR IFNULL(so.custom_anomalie, '') <> '')))"""
+
+# Les vues de l'écran : le RESTE À FAIRE (à traiter, moins ce qui a déjà été traité
+# aujourd'hui — c'est le chiffre de l'onglet Appels), tout l'à-traiter, ou tout l'historique.
+VUE_RESTE, VUE_A_TRAITER, VUE_TOUTES = "a_traiter", "a_traiter_tout", "toutes"
+VUE_DEFAUT = VUE_RESTE
+
+# Traces posées par les actions de l'écran : une commande qui en reçoit une aujourd'hui a été
+# traitée aujourd'hui (et l'onglet Appels le compte en « fait »).
+MARQUEURS_ACTIONS = ("📨 Envoi groupé", "🚚 Livraison par notre équipe",
+                     "❌ Annulée depuis « Commandes à traiter »")
+
+
+# SUIVI d'une commande, posé en un clic depuis l'écran (demande 22/10/2026) : un statut et une
+# DATE DE REPRISE. Tant que la date n'est pas atteinte, la commande sort du reste à faire ; à la
+# date, elle revient en tête. Remplace les commentaires « le client ne répond pas », « en
+# instance », « rappel après-midi » qui ne faisaient jamais revenir la commande.
+SUIVI_NE_REPOND_PAS, SUIVI_A_RAPPELER, SUIVI_EN_INSTANCE = "Ne répond pas", "À rappeler", "En instance"
+SUIVIS = (SUIVI_NE_REPOND_PAS, SUIVI_A_RAPPELER, SUIVI_EN_INSTANCE)
+CHAMPS_SUIVI = ("custom_suivi", "custom_suivi_le", "custom_suivi_note", "custom_suivi_par")
+HEURE_RAPPEL = "09:00:00"           # « ne répond pas » : on rappelle le lendemain matin
+
+
+def _suivis(noms) -> dict:
+    """{commande: {suivi, le, note, par}} — vide tant que les champs n'existent pas (avant le patch)."""
+    noms = [n for n in (noms or []) if n]
+    if not noms or not frappe.db.has_column("Sales Order", "custom_suivi"):
+        return {}
+    return {r.name: r for r in frappe.get_all(
+        "Sales Order", filters={"name": ["in", noms], "custom_suivi": ["is", "set"]},
+        fields=["name"] + list(CHAMPS_SUIVI), limit_page_length=0)}
+
+
+def programmee_plus_tard(suivi_le, maintenant=None) -> bool:
+    """La date de reprise n'est pas encore atteinte : la commande attend, elle n'est pas « à faire »."""
+    return bool(suivi_le) and get_datetime(suivi_le) > (maintenant or now_datetime())
+
+
+def est_a_traiter(docstatus, statut, anomalie) -> bool:
+    """La même règle que SQL_A_TRAITER, pour une commande déjà chargée."""
+    if docstatus == 0:
+        return True
+    if docstatus != 1 or statut in STATUTS_CLOS:
+        return False
+    return statut in STATUTS_A_LIVRER or bool(anomalie)
+
+
+def commentaire_traite(comment_type: str, texte: str) -> bool:
+    """Ce commentaire du jour vaut-il « commande traitée » ? Un commentaire écrit à la main, ou la
+    trace d'une action de l'écran — pas une trace automatique (SMS d'annulation, BL…)."""
+    from customization_app import commentaires_commande as CC
+    from customization_app import historique_client as HC
+
+    t = HC.texte(texte or "", 200)
+    if not t:
+        return False
+    if comment_type == "Info":
+        return t.startswith(MARQUEURS_ACTIONS)
+    return comment_type == "Comment" and not CC.est_automatique(t) and HC.nature_commentaire(t) != "auto"
+
+
+def traitees_aujourdhui(noms) -> set:
+    """Les commandes qui ont déjà reçu un traitement humain AUJOURD'HUI : commentaire écrit, action
+    de l'écran (envoi, livraison autorisée), ou appel de confirmation sans réponse noté."""
+    noms = [n for n in (noms or []) if n]
+    if not noms:
+        return set()
+    jour = nowdate()
+    out = {c.reference_name for c in frappe.db.sql(
+        """SELECT reference_name, comment_type, content FROM `tabComment`
+           WHERE reference_doctype = 'Sales Order' AND reference_name IN %(noms)s
+             AND creation >= %(jour)s AND owner NOT IN ('Administrator', 'Guest')
+             AND comment_type IN ('Comment', 'Info')""",
+        {"noms": tuple(noms), "jour": jour}, as_dict=True)
+        if commentaire_traite(c.comment_type, c.content)}
+    for champ in CHAMPS_APPELS.values():
+        if frappe.db.has_column("Sales Order", champ):
+            out |= set(frappe.db.sql_list(
+                f"SELECT name FROM `tabSales Order` WHERE name IN %(noms)s AND `{champ}` >= %(jour)s",
+                {"noms": tuple(noms), "jour": jour}))
+    return out
+
+
+def reste_a_faire() -> dict:
+    """Le chiffre de l'onglet Appels : {a_traiter, traitees, programmees, reste} — même définition
+    que la vue par défaut de l'écran : à traiter − traitées aujourd'hui − programmées plus tard."""
+    noms = frappe.db.sql_list(
+        f"SELECT so.name FROM `tabSales Order` so WHERE so.transaction_date >= %s AND {SQL_A_TRAITER}",
+        (DEPUIS_DEFAUT,))
+    traitees = traitees_aujourdhui(noms)
+    maintenant = now_datetime()
+    programmees = {n for n, s in _suivis(noms).items() if programmee_plus_tard(s.custom_suivi_le, maintenant)}
+    return {"a_traiter": len(noms), "traitees": len(traitees), "programmees": len(programmees),
+            "reste": len(set(noms) - traitees - programmees)}
 
 # Valeur d'échange pour « fiche client sans groupe » — 353 commandes sur la
 # période : elles ne doivent pas disparaître silencieusement d'un filtre.
@@ -205,25 +311,32 @@ def _prestations(noms):
 
 
 def _reste_a_livrer(noms):
-    """{commande: {article: reste à livrer}} — une commande soldée ne manque de rien."""
+    """{commande: {n° de ligne: reste à livrer}} — une commande soldée ne manque de rien.
+
+    Par LIGNE et non par article : un même article sur deux lignes voyait la seconde écraser
+    la première, et les deux affichaient le même reste."""
     out = {}
     if not noms:
         return out
     for l in frappe.get_all(
             "Sales Order Item", filters={"parent": ["in", noms],
                                          "parenttype": "Sales Order"},
-            fields=["parent", "item_code", "qty", "delivered_qty"],
+            fields=["parent", "idx", "qty", "delivered_qty"],
             limit_page_length=0):
         reste = flt(l.qty) - flt(l.delivered_qty)
-        out.setdefault(l.parent, {})[l.item_code] = max(reste, 0)
+        out.setdefault(l.parent, {})[l.idx] = max(reste, 0)
     return out
 
 
 # ------------------------------------------------------------------ lecture
 
 
-def _enrichir_articles(commande, lignes, contexte):
+def _enrichir_articles(commande, lignes, contexte, vivante=True, brouillon=False):
     """Chaque ligne d'article reçoit son stock et son verdict.
+
+    Une commande MORTE (annulée, fermée, terminée) n'a plus rien à livrer : elle ne manque de
+    rien — elle gonflait « Rupture réelle ». Un BROUILLON n'est pas dans l'engagé (qui ne compte
+    que les commandes validées) : retirer son propre reste surestimait son disponible.
 
     ⚠️ DEUX PROBLÈMES DIFFÉRENTS, à ne jamais confondre (mesuré le 30/08 : sur
     54 commandes signalées, 42 l'étaient à cause de ça et 10 seulement étaient
@@ -241,11 +354,12 @@ def _enrichir_articles(commande, lignes, contexte):
     for a in lignes:
         code = a["code"]
         est_stocke = code in stockes
-        reste = reste_cde.get(code, a["qte"])
+        reste = reste_cde.get(a.get("idx"), a["qte"]) if vivante else 0
         qte_stock = stock.get(code, 0)
-        # L'engagement inclut CETTE commande : on le retire pour ne pas se
-        # concurrencer soi-même.
-        dispo = qte_stock - max(engage.get(code, 0) - reste, 0)
+        # L'engagement inclut CETTE commande quand elle est validée : on le retire
+        # pour ne pas se concurrencer soi-même. Un brouillon n'y est pas.
+        dispo = qte_stock - (engage.get(code, 0) if brouillon
+                             else max(engage.get(code, 0) - reste, 0))
         manque = bool(est_stocke and reste > 0 and dispo < reste)
         negatif = bool(est_stocke and qte_stock < 0)
         if manque:
@@ -288,7 +402,10 @@ def get_filtres():
                       WHERE so.transaction_date >= %s
                       GROUP BY c.customer_group ORDER BY n DESC""",
                    (DEPUIS_DEFAUT,), as_dict=True)]
+    # Les types d'anomalie, dans l'ordre de commande_alertes (le même que le filtre de la liste).
+    from customization_app.commande_alertes import MOTIF_COMMANDE_ANNULEE, MOTIFS
     return {"statuts": statuts, "secteurs": secteurs, "groupes": groupes,
+            "anomalies": list(MOTIFS) + [MOTIF_COMMANDE_ANNULEE],
             "depuis_defaut": DEPUIS_DEFAUT}
 
 
@@ -350,10 +467,15 @@ def get_commandes(depuis=None, jusqu_a=None, recherche=None, statut=None,
                   origine=None, dispo=None, anomalie=None, tache=None,
                   secteur=None, livraison=None, prestation=None, client=None, commentaire=None,
                   groupes=None, envoi=None, tri=None, start=0,
-                  page_length=PAGE_LENGTH):
+                  page_length=PAGE_LENGTH, vue=None, suivi=None):
     """L'arriéré filtré. Tout est calculé sur l'ENSEMBLE puis découpé en pages :
     un filtre « article manquant » doit porter sur toutes les commandes, pas
-    seulement sur celles de la page affichée."""
+    seulement sur celles de la page affichée.
+
+    `vue` : VUE_RESTE (défaut — le reste à faire, le même chiffre que l'onglet Appels),
+    VUE_A_TRAITER (y compris ce qui a déjà été traité aujourd'hui) ou VUE_TOUTES (tout
+    l'historique de la période, l'ancien comportement). Appliquée AVANT les calculs : on ne
+    calcule le stock que de la centaine de commandes à traiter, pas des 2 300 de la période."""
     _lecture()
     start, page_length = frappe.utils.cint(start), frappe.utils.cint(page_length)
 
@@ -366,6 +488,23 @@ def get_commandes(depuis=None, jusqu_a=None, recherche=None, statut=None,
 
     lignes = _commandes(getdate(depuis or DEPUIS_DEFAUT),
                         getdate(jusqu_a or nowdate()))
+    # Combien de commandes ce client a-t-il sur la PÉRIODE ? Compté avant la vue et les
+    # filtres : le badge dit la même chose que la fenêtre « N commandes », qui les liste toutes.
+    par_client = {}
+    for l in lignes:
+        par_client[l.customer] = par_client.get(l.customer, 0) + 1
+
+    vue = vue if vue in (VUE_RESTE, VUE_A_TRAITER, VUE_TOUTES) else VUE_DEFAUT
+    a_traiter = [l for l in lignes if est_a_traiter(l.docstatus, l.status, l.custom_anomalie)]
+    traitees = traitees_aujourdhui([l.name for l in a_traiter])
+    suivis = _suivis([l.name for l in lignes])
+    maintenant = now_datetime()
+    programmees = {l.name for l in a_traiter
+                   if programmee_plus_tard((suivis.get(l.name) or {}).get("custom_suivi_le"), maintenant)}
+    if vue == VUE_RESTE:
+        lignes = [l for l in a_traiter if l.name not in traitees and l.name not in programmees]
+    elif vue == VUE_A_TRAITER:
+        lignes = a_traiter
     noms = [l.name for l in lignes]
     articles = _articles(noms)
     taches = _taches(noms)
@@ -388,7 +527,9 @@ def get_commandes(depuis=None, jusqu_a=None, recherche=None, statut=None,
     out = []
     for l in lignes:
         lot, manquants, reels, negatifs = _enrichir_articles(
-            l.name, articles.get(l.name, []), contexte)
+            l.name, articles.get(l.name, []), contexte,
+            vivante=(l.docstatus != 2 and l.status not in STATUTS_CLOS),
+            brouillon=(l.docstatus == 0))
         out.append({
             "name": l.name,
             "date": str(l.transaction_date),
@@ -429,20 +570,28 @@ def get_commandes(depuis=None, jusqu_a=None, recherche=None, statut=None,
             "bordereau": (bordereaux.get(l.name) or {}).get("bordereau")
                          or l.custom_bordereau_aramex or "",
             "web": bool(l.woocommerce_id),
+            "traitee_aujourdhui": l.name in traitees,
+            **_suivi_de_ligne(suivis.get(l.name), maintenant),
         })
 
-    # Combien de commandes ce client a-t-il sur la période ? Compté sur
-    # l'ENSEMBLE, avant filtrage : le badge doit dire la même chose que je
-    # regarde les ruptures, un secteur, ou tout.
-    par_client = {}
-    for c in out:
-        par_client[c["client"]] = par_client.get(c["client"], 0) + 1
     for c in out:
         c["commandes_client"] = par_client.get(c["client"], 1)
 
+    # Combien de commandes de la VUE portent chaque type d'anomalie (avant les filtres) : le menu
+    # « Anomalie » l'affiche à côté de chaque type.
+    from customization_app.commande_alertes import MOTIF_COMMANDE_ANNULEE
+    par_anomalie = {}
+    for c in out:
+        if c["anomalie"]:
+            cle = MOTIF_COMMANDE_ANNULEE if c["anomalie"].startswith(MOTIF_COMMANDE_ANNULEE) else c["anomalie"]
+            par_anomalie[cle] = par_anomalie.get(cle, 0) + 1
+
     out = _trier(_filtrer(out, recherche, statut, origine, dispo, anomalie,
                           tache, secteur, livraison, prestation, client,
-                          groupes, envoi, commentaire), tri)
+                          groupes, envoi, commentaire, suivi), tri)
+    if vue == VUE_RESTE:
+        # Les commandes dont la date de reprise est arrivée passent devant : on les a promises.
+        out.sort(key=lambda c: 0 if c.get("suivi_echu") else 1)
     total = len(out)
     page = out[start:start + page_length] if page_length else out
     return {
@@ -458,7 +607,17 @@ def get_commandes(depuis=None, jusqu_a=None, recherche=None, statut=None,
                                   if c["commandes_client"] > 1}),
             "anomalies": len([c for c in out if c["anomalie"]]),
             "ttc": round(sum(c["ttc"] for c in out), 3),
+            # Les deux chiffres de l'onglet Appels, sur la même définition, filtres de l'écran
+            # NON appliqués : « reste à faire » = à traiter − traitées aujourd'hui.
+            "a_traiter": len(a_traiter),
+            "traitees_aujourdhui": len(traitees),
+            "programmees": len(programmees),
+            "reste": len({l.name for l in a_traiter} - traitees - programmees),
+            "par_anomalie": par_anomalie,
+            "a_reprendre": len([l for l in a_traiter if l.name not in programmees
+                                and (suivis.get(l.name) or {}).get("custom_suivi")]),
         },
+        "vue": vue,
     }
 
 
@@ -472,11 +631,29 @@ def _trier(lignes, tri):
     return lignes
 
 
+def _suivi_de_ligne(s, maintenant) -> dict:
+    """Le suivi tel que l'écran l'affiche ; `suivi_echu` = la date de reprise est atteinte."""
+    if not s or not s.get("custom_suivi"):
+        return {"suivi": "", "suivi_le": "", "suivi_note": "", "suivi_par": "", "suivi_echu": False}
+    le = s.get("custom_suivi_le")
+    return {"suivi": s.custom_suivi, "suivi_le": str(le or "")[:16], "suivi_note": s.get("custom_suivi_note") or "",
+            "suivi_par": s.get("custom_suivi_par") or "", "suivi_echu": not programmee_plus_tard(le, maintenant)}
+
+
 def _filtrer(lignes, recherche, statut, origine, dispo, anomalie, tache,
              secteur=None, livraison=None, prestation=None, client=None,
-             groupes=None, envoi=None, commentaire=None):
+             groupes=None, envoi=None, commentaire=None, suivi=None):
     def garde(c):
         if statut and c["statut"] != statut:
+            return False
+        # Suivi : à reprendre maintenant (date atteinte), programmé plus tard, un type, ou aucun.
+        if suivi == "echu" and not (c.get("suivi") and c.get("suivi_echu")):
+            return False
+        if suivi == "programme" and not (c.get("suivi") and not c.get("suivi_echu")):
+            return False
+        if suivi == "sans" and c.get("suivi"):
+            return False
+        if suivi in SUIVIS and c.get("suivi") != suivi:
             return False
         # 💬 commenté ou pas (le dernier commentaire humain de la commande).
         if commentaire == "avec" and not c.get("commentaire"):
@@ -506,6 +683,10 @@ def _filtrer(lignes, recherche, statut, origine, dispo, anomalie, tache,
         if anomalie == "avec" and not c["anomalie"]:
             return False
         if anomalie == "sans" and c["anomalie"]:
+            return False
+        # Un TYPE d'anomalie précis. Par préfixe : « Commande annulée avec tâche » porte le nom de
+        # la tâche à la suite (Tache-08055…).
+        if anomalie and anomalie not in ("avec", "sans") and not (c["anomalie"] or "").startswith(anomalie):
             return False
         if tache == "sans" and c["taches"]:
             return False
@@ -614,7 +795,6 @@ def chercher_articles(recherche=None, en_stock=0):
     return lignes
 
 
-@frappe.whitelist()
 def _sauvegarder(doc, motif):
     """Archive la commande AVANT sa disparition : un fichier JSON rouvrable et
     une trace lisible, tous deux attachés à la FICHE CLIENT.
@@ -652,9 +832,13 @@ def _sauvegarder(doc, motif):
     return fichier.file_url
 
 
+@frappe.whitelist()
 def annuler(noms, motif=None):
     """Annule les commandes sélectionnées — la cascade maison (BL, échéancier,
     tâches) se déclenche par les hooks d'`annulation_commande`.
+
+    (Le décorateur avait glissé sur `_sauvegarder`, inséré au-dessus le 30/08 : le bouton
+    « ❌ Annuler » de l'écran était refusé par Frappe, et une fonction interne était exposée.)
 
     Un BROUILLON (commande web jamais validée) suit la chaîne COMPLÈTE demandée
     le 30/08 : valider → annuler → supprimer, après sauvegarde. ERPNext ne sait
@@ -682,6 +866,9 @@ def annuler(noms, motif=None):
                 try:
                     doc.submit()
                     doc.reload()
+                    # Le SMS automatique d'annulation (commandes web) partirait pour une commande
+                    # supprimée l'instant d'après : la tâche échouerait. On ne l'envoie pas.
+                    doc.flags.sans_sms_annulation_auto = True
                     doc.cancel()
                     doc.reload()
                 except Exception as e:
@@ -725,6 +912,92 @@ def annuler(noms, motif=None):
     return resultat
 
 
+def appels_sans_reponse(nom: str) -> int:
+    """Appels restés sans réponse sur cette commande, d'après ses commentaires (📵 et texte libre)."""
+    return frappe.db.sql("""SELECT COUNT(*) FROM `tabComment`
+                            WHERE reference_doctype = 'Sales Order' AND reference_name = %(nom)s
+                              AND comment_type = 'Comment'
+                              AND (content LIKE '%%📵%%' OR LOWER(content) LIKE '%%ne répond pas%%'
+                                   OR LOWER(content) LIKE '%%ne repond pas%%' OR LOWER(content) LIKE '%%injoignable%%')""",
+                         {"nom": nom})[0][0] or 0
+
+
+def _quand(dt) -> str:
+    return frappe.utils.format_datetime(dt, "dd/MM/yyyy HH:mm")
+
+
+@frappe.whitelist()
+def poser_suivi(noms, suivi, le=None, note=None):
+    """Pose le suivi en un clic. « Ne répond pas » : rappel le lendemain 9 h (et, pour une commande
+    web, l'appel sans réponse est horodaté — 1er puis 2e). « À rappeler » / « En instance » : la date
+    de reprise est obligatoire, pour que rien ne reste en attente sans fin. Chaque suivi laisse un
+    commentaire (il devient le 💬 de la commande, et compte en « fait aujourd'hui »)."""
+    from customization_app.suivi_appels import CHAMPS as RANGS, est_commande_web
+
+    frappe.has_permission("Sales Order", "write", throw=True)
+    if suivi not in SUIVIS:
+        frappe.throw(_("Suivi inconnu : {0}").format(suivi))
+    noms = frappe.parse_json(noms) if isinstance(noms, str) else (noms or [])
+    noms = [n for n in noms if n]
+    maintenant = now_datetime()
+    if suivi == SUIVI_NE_REPOND_PAS and not le:
+        le = get_datetime("%s %s" % (add_days(nowdate(), 1), HEURE_RAPPEL))
+    if not le:
+        frappe.throw(_("Choisissez la date de reprise."))
+    le = get_datetime(le)
+    if le < maintenant.replace(hour=0, minute=0, second=0, microsecond=0):
+        frappe.throw(_("La date de reprise est déjà passée."))
+    note = (note or "").strip()[:140]
+
+    resultats = []
+    for nom in noms:
+        if frappe.db.get_value("Sales Order", nom, "docstatus") == 2:
+            resultats.append({"commande": nom, "etat": "annulée — ignorée"})
+            continue
+        frappe.db.set_value("Sales Order", nom, {
+            "custom_suivi": suivi, "custom_suivi_le": le, "custom_suivi_note": note,
+            "custom_suivi_par": frappe.session.user}, update_modified=False)
+        n_appels = 0
+        if suivi == SUIVI_NE_REPOND_PAS:
+            # Le Nᵉ appel sans réponse, TOUTES commandes : les 📵 déjà posés et les anciens
+            # commentaires écrits à la main (« le client ne répond pas », « injoignable »).
+            n_appels = appels_sans_reponse(nom) + 1
+            if est_commande_web(nom):
+                faits = frappe.db.get_value("Sales Order", nom, list(RANGS.values()), as_dict=True) or {}
+                rang = next((r for r in sorted(RANGS) if not faits.get(RANGS[r])), None)
+                if rang:
+                    frappe.db.set_value("Sales Order", nom, RANGS[rang], maintenant, update_modified=False)
+        texte = {
+            SUIVI_NE_REPOND_PAS: "📵 Ne répond pas (%s) — rappel le %s" % (
+                "1er appel sans réponse" if n_appels == 1 else "%de appel sans réponse" % n_appels, _quand(le)),
+            SUIVI_A_RAPPELER: "⏰ À rappeler le %s" % _quand(le),
+            SUIVI_EN_INSTANCE: "⌛ En instance jusqu'au %s" % _quand(le),
+        }[suivi] + ((" — " + note) if note else "")
+        frappe.get_doc({"doctype": "Comment", "comment_type": "Comment", "reference_doctype": "Sales Order",
+                        "reference_name": nom, "content": frappe.utils.escape_html(texte)}).insert(ignore_permissions=True)
+        client, createur = frappe.db.get_value("Sales Order", nom, ["customer_name", "owner"])
+        resultats.append({"commande": nom, "etat": texte, "appels": n_appels, "client": client,
+                          # Au 2ᵉ appel sans réponse, l'écran propose d'annuler en prévenant le client ;
+                          # pour une commande SAISIE (non web), il fait d'abord vérifier avec qui l'a créée
+                          # — elle a pu être conclue autrement (autre numéro, réglée au magasin…).
+                          "deuxieme_appel": n_appels >= 2,
+                          "web": est_commande_web(nom),
+                          "createur": frappe.utils.get_fullname(createur) if createur else ""})
+    frappe.db.commit()
+    return resultats
+
+
+@frappe.whitelist()
+def retirer_suivi(noms):
+    """Retire le suivi : la commande redevient « à faire » tout de suite."""
+    frappe.has_permission("Sales Order", "write", throw=True)
+    noms = frappe.parse_json(noms) if isinstance(noms, str) else (noms or [])
+    for nom in [n for n in noms if n]:
+        frappe.db.set_value("Sales Order", nom, {c: None for c in CHAMPS_SUIVI}, update_modified=False)
+    frappe.db.commit()
+    return {"retires": len(noms)}
+
+
 @frappe.whitelist()
 def autoriser_livraison(noms, autoriser=1):
     """Ouvre (ou retire) la LIVRAISON PAR NOTRE ÉQUIPE sur des commandes.
@@ -756,6 +1029,14 @@ def autoriser_livraison(noms, autoriser=1):
                                  else "adresse sans secteur")})
             continue
         frappe.db.set_value("Sales Order", nom, "custom_livraison_equipe", valeur)
+        # Une trace sur la commande : elle dit qui a ouvert la réservation, et la commande
+        # compte comme traitée aujourd'hui (onglet Appels). Elle n'en laissait aucune.
+        frappe.get_doc({
+            "doctype": "Comment", "comment_type": "Info",
+            "reference_doctype": "Sales Order", "reference_name": nom,
+            "content": (_("🚚 Livraison par notre équipe autorisée par {0} — {1}").format(frappe.session.user, secteur)
+                        if valeur else _("🚚 Livraison par notre équipe retirée par {0}").format(frappe.session.user)),
+        }).insert(ignore_permissions=True)
         faites.append(nom)
         resultats.append({"commande": nom,
                           "etat": ("autorisée — %s" % secteur) if valeur
@@ -779,14 +1060,32 @@ def annuler_et_informer(noms, motif, modele, sujet=None, sms=1, email=1,
     """
     from customization_app import sms_commandes
 
-    annulations = annuler(noms, motif)
+    noms = frappe.parse_json(noms) if isinstance(noms, str) else (noms or [])
+    noms = [n for n in noms if n]
+    # Les BROUILLONS sont supprimés par l'annulation : leurs destinataires (numéros, e-mails,
+    # articles) sont lus AVANT, sinon leurs clients ne seraient jamais prévenus (22/10/2026).
+    brouillons = [n for n in noms if frappe.db.get_value("Sales Order", n, "docstatus") == 0]
+    instantane = {l["commande"]: l for l in sms_commandes._destinataires(brouillons)} if brouillons else {}
+
+    # Le message personnalisé remplace le SMS automatique d'annulation des commandes web :
+    # sinon le client en recevait DEUX.
+    frappe.flags.sans_sms_annulation_auto = True
+    try:
+        annulations = annuler(noms, motif)
+    finally:
+        frappe.flags.sans_sms_annulation_auto = False
+
     faites = [a["commande"] for a in annulations if a["etat"] == "annulée"]
+    supprimes = [a["commande"] for a in annulations
+                 if a["commande"] in instantane and a["etat"].startswith("brouillon")]
     envoi = None
-    if faites:
-        envoi = sms_commandes.envoyer(faites, modele, sujet=sujet,
-                                      sms=sms, email=email,
-                                      remplacements=remplacements)
-    return {"annulations": annulations, "informes": faites, "envoi": envoi}
+    if faites or supprimes:
+        lignes = (sms_commandes._destinataires(faites) if faites else []) \
+            + [instantane[n] for n in supprimes]
+        envoi = sms_commandes.envoyer([l["commande"] for l in lignes], modele, sujet=sujet,
+                                      sms=sms, email=email, remplacements=remplacements,
+                                      lignes=lignes)
+    return {"annulations": annulations, "informes": faites + supprimes, "envoi": envoi}
 
 
 @frappe.whitelist()
@@ -800,7 +1099,7 @@ def get_commandes_client(client, depuis=None, jusqu_a=None):
     juste derrière ne montre pas.
     """
     _lecture()
-    res = get_commandes(depuis=depuis, jusqu_a=jusqu_a, page_length=0)
+    res = get_commandes(depuis=depuis, jusqu_a=jusqu_a, page_length=0, vue=VUE_TOUTES)
     lignes = [l for l in res["lignes"] if l["client"] == client]
     return {
         "client": client,

@@ -106,7 +106,8 @@ def est_son_jour(cle: str, today=None) -> bool:
 RAPPORT_RATTRAPAGE = "Liste Appels Rattrapage"
 #: Où chaque priorité s'ouvre : (route, options) pour frappe.set_route.
 OUVERTURE = {
-    "commandes": (["commandes-a-traiter"], {}),
+    # La vue « reste à faire » de l'écran : la même définition que le compteur (_reste_commandes).
+    "commandes": (["commandes-a-traiter"], {"vue": "a_traiter"}),
     "rattrapage": (["query-report", RAPPORT_RATTRAPAGE], {}),
     "relances": (["relance-paiements"], {}),
     # La retenue à la source s'appelle et se trace DANS SA PAGE (onglet « À réclamer »), pas par une liste.
@@ -249,6 +250,13 @@ def _evenements_commentaires(debut, fin):
             elif c.comment_type == "Info" and t.startswith("📞 Appel"):
                 out.append(("terrain", c.owner, jour, ("tache", c.reference_name)))
             continue
+        # Les actions de l'écran « Commandes à traiter » (envoi, livraison autorisée, annulation)
+        # laissent des traces Info : c'est du travail fait sur la commande.
+        if c.reference_doctype == "Sales Order" and c.comment_type == "Info":
+            from customization_app.commandes_a_traiter import commentaire_traite
+            if commentaire_traite("Info", c.content):
+                out.append(("commandes", c.owner, jour, c.reference_name))
+            continue
         if c.comment_type != "Comment":
             continue
         relance = type_relance(t) if c.reference_doctype == "Customer" else None
@@ -336,11 +344,12 @@ def _restes_listes() -> dict:
 
 
 def _reste_commandes() -> int:
-    """Commandes de la page « Commandes à traiter » (depuis le 01/07/2026) qui restent À LIVRER."""
-    from customization_app.commandes_a_traiter import DEPUIS_DEFAUT
-    return int(frappe.db.sql("""SELECT COUNT(*) FROM `tabSales Order`
-                                WHERE docstatus = 1 AND transaction_date >= %s
-                                  AND status IN ('To Deliver and Bill', 'To Deliver')""", DEPUIS_DEFAUT)[0][0] or 0)
+    """Le RESTE À FAIRE de l'écran « Commandes à traiter » : ce qui attend une action humaine
+    (brouillons, commandes à livrer, anomalies) moins ce qui a déjà été traité aujourd'hui —
+    la même définition que la vue par défaut de l'écran (commandes_a_traiter.SQL_A_TRAITER).
+    Avant le 22/10/2026 : les seules commandes « à livrer », que les appels ne font pas baisser."""
+    from customization_app.commandes_a_traiter import reste_a_faire
+    return reste_a_faire()["reste"]
 
 
 def _reste_rattrapage():

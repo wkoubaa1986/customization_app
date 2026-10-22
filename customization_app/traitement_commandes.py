@@ -86,6 +86,7 @@ def _articles(noms):
             "code": l.item_code,
             "qte": flt(l.qty, PRECISION),
             "montant": flt(l.amount, PRECISION),
+            "idx": l.idx,
         })
     return out
 

@@ -353,12 +353,14 @@ _SQL_MOTIF = """
             WHEN {livraison_partielle}
             THEN %(motif_livraison_partielle)s
 
+            -- Les BL de RETOUR ne comptent pas : un retour vaut livraison (décision 22/10/2026,
+            -- cf. per_delivered_montant). WEB1-007852 restait « non soldée » à 230 − 140 = 90.
             WHEN EXISTS (
                     SELECT 1 FROM `tabTache de travail` t
                     WHERE t.commande_client = so.name AND t.status = 'Completed')
                  AND (so.docstatus = 0 OR COALESCE((
                         SELECT SUM(dn.grand_total) FROM `tabDelivery Note` dn
-                        WHERE dn.docstatus = 1 AND EXISTS (
+                        WHERE dn.docstatus = 1 AND dn.is_return = 0 AND EXISTS (
                             SELECT 1 FROM `tabDelivery Note Item` dni
                             WHERE dni.parent = dn.name AND dni.against_sales_order = so.name)
                      ), 0) < so.grand_total - %(marge)s)

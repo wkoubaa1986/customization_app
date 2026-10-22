@@ -97,5 +97,27 @@ class TestPastilleStockee(unittest.TestCase):
         self.assertEqual(self.frappe.db.get_value("Sales Order", so, CHAMP), "Pas totalement livrée")
 
 
+class TestAnomalieSansRetour(unittest.TestCase):
+    """« Tâche terminée, commande non soldée » ne compte pas les BL de retour (base réelle)."""
+
+    def test_retour_ne_rend_pas_la_commande_non_soldee(self):
+        import frappe
+        from customization_app import commande_alertes as CA
+        if not frappe.db.exists("Sales Order", "WEB1-007852"):
+            self.skipTest("WEB1-007852 absente de cette base")
+        motifs = CA._calculer("so.name IN %(noms)s", {"noms": ("WEB1-007852",)})
+        self.assertNotEqual(motifs.get("WEB1-007852"), CA.MOTIF_NON_SOLDEE)
+
+    def test_bl_inferieur_a_la_commande_reste_signale(self):
+        # SAL-ORD-2026-02501 : commande 35,70 (30 HT + TVA), BL 30 TTC — vrai écart, l'anomalie reste
+        import frappe
+        from customization_app import commande_alertes as CA
+        statut = frappe.db.get_value("Sales Order", "SAL-ORD-2026-02501", "status")
+        if statut in (None, "Closed"):
+            self.skipTest("SAL-ORD-2026-02501 absente ou fermée (une commande fermée n'a plus d'anomalie)")
+        motifs = CA._calculer("so.name IN %(noms)s", {"noms": ("SAL-ORD-2026-02501",)})
+        self.assertEqual(motifs.get("SAL-ORD-2026-02501"), CA.MOTIF_NON_SOLDEE)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -58,6 +58,22 @@
     .ct-groupes-actions a { cursor: pointer; }
 
     .ct-vide { padding: 26px; text-align: center; color: var(--text-muted,#6b7280); }
+    .ct-suivi-btns { margin-top: 4px; display: flex; gap: 4px; }
+    .ct-suivi-btns button { border: 1px solid var(--border-color,#e5e7eb); background: var(--card-bg,#fff);
+                            border-radius: 6px; padding: 1px 6px; font-size: 12px; cursor: pointer; }
+    .ct-suivi-btns button:hover { background: var(--bg-light-gray,#f3f4f6); }
+    .ct-suivi-x { cursor: pointer; margin-left: 4px; opacity: .7; }
+    .ct-guide { font-size: 13px; line-height: 1.55; }
+    .ct-guide .et { border-left: 3px solid #e2e8f0; padding: 4px 0 4px 12px; margin: 14px 0; }
+    .ct-guide .et .t { font-weight: 700; font-size: 14.5px; margin-bottom: 4px; }
+    .ct-guide ul { margin: 6px 0 0 18px; padding: 0; }
+    .ct-guide li { margin: 2px 0; }
+    .ct-guide img { display: block; max-width: 100%; margin: 8px 0; border: 1px solid #e5e7eb;
+                    border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,.06); }
+    .ct-guide .duo { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-start; }
+    .ct-guide .duo img { flex: 1 1 260px; max-width: 48%; }
+    .ct-guide .note { background: #f6f7f9; border-radius: 8px; padding: 8px 10px; }
+    .ct-guide .attention { background: #fef3c7; color: #92400e; border-radius: 8px; padding: 8px 10px; }
     .ct-pager { display: flex; align-items: center; gap: 8px; font-size: 12.5px;
                 color: var(--text-muted,#6b7280); margin-left: auto; }
   </style>
@@ -69,6 +85,22 @@
         <input type="text" class="form-control" id="ct-search"
                placeholder="commande, client, téléphone, article…">
       </div>
+      <div class="ct-field"><label>Vue</label>
+        <select class="form-control" id="ct-vue">
+          <option value="a_traiter" selected>Reste à faire</option>
+          <option value="a_traiter_tout">À traiter (y c. traitées aujourd’hui)</option>
+          <option value="toutes">Toutes les commandes</option>
+        </select></div>
+      <div class="ct-field"><label>Suivi</label>
+        <select class="form-control" id="ct-suivi">
+          <option value="">Tous</option>
+          <option value="echu">À reprendre maintenant</option>
+          <option value="programme">Programmées plus tard</option>
+          <option value="Ne répond pas">📵 Ne répond pas</option>
+          <option value="À rappeler">⏰ À rappeler</option>
+          <option value="En instance">⌛ En instance</option>
+          <option value="sans">Sans suivi</option>
+        </select></div>
       <div class="ct-field"><label>Du</label>
         <input type="date" class="form-control" id="ct-depuis"></div>
       <div class="ct-field"><label>Au</label>
@@ -169,6 +201,8 @@
       <button class="btn btn-sm btn-danger" id="ct-annuler">❌ Annuler</button>
       <button class="btn btn-sm btn-default" id="ct-refresh"
               title="Recharger la liste pour voir l effet des actions faites">🔄 Actualiser</button>
+      <button class="btn btn-sm btn-default" id="ct-guide"
+              title="Comment utiliser cet écran">❓ Guide</button>
       <span class="ct-pager">
         <button class="btn btn-xs btn-default" id="ct-prev">◀</button>
         <span id="ct-range">—</span>
