@@ -462,6 +462,10 @@ def _soumettre(doc):
     rembobine — le script a pu supprimer des dettes et réécrire des échéanciers avant
     de buter, RIEN ne doit rester à moitié écrit — et on nomme les deux.
     """
+    # Le droit est vérifié à l'entrée (`ROLES`) : l'employé de caisse n'a pas, et n'a pas
+    # à avoir, les droits du DocType « Encaissement Paiement », réservé à la comptabilité
+    # (22/10/2026 : « Pas de permission pour Encaissement Paiement » pour Jamel Aloui).
+    doc.flags.ignore_permissions = True
     try:
         doc.submit()
     except frappe.CancelledLinkError as e:
@@ -586,7 +590,7 @@ def encaisser(client, montant=None, mode=None, n_cheque=None, banque=None, dette
                                          if p["mode"] != "Espèces" else "")})
         if i_paiement >= len(file_paiements):
             break
-    doc.insert()
+    doc.insert(ignore_permissions=True)     # cf. _soumettre : le droit, c'est ROLES
 
     from frappe.utils.file_manager import save_file
     for p in lignes_paiement:

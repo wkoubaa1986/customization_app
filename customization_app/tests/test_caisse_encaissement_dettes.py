@@ -802,3 +802,34 @@ class TestDispenseDePhotoDettes(TestModesCarteEtVirement):
             js = f.read()
         appel = js[js.index('method: API + ".encaisser"'):][:700]
         self.assertIn("code_sans_photo: v.code_sans_photo", appel)
+
+
+class TestDroitsDeLaCaisse(unittest.TestCase):
+    """22/10/2026 : Jamel Aloui (Sales Manager + Sales User) refusé — « Pas de permission pour
+    Encaissement Paiement ». Le DocType est réservé à la comptabilité ; à la caisse, le droit
+    est le contrôle d'entrée `ROLES`, pas les permissions du DocType."""
+
+    def test_les_roles_des_caissiers_passent_le_controle_d_entree(self):
+        self.assertTrue({"Sales Manager", "Sales User"} <= set(CED.ROLES))
+
+    def test_le_partenaire_n_encaisse_pas_de_dettes(self):
+        """Décision utilisateur 22/10/2026 : Economiq Aqua Solutions (rôle Partenaire seul) ne doit
+        pas encaisser de dettes à la caisse ; tous les autres employés, oui."""
+        self.assertNotIn("Partenaire", CED.ROLES)
+
+    def test_la_validation_ne_depend_pas_du_droit_sur_le_doctype(self):
+        vu = {}
+
+        class Doc:
+            flags = frappe._dict()
+
+            def submit(self):
+                vu["ignore_permissions"] = self.flags.ignore_permissions
+
+        CED._soumettre(Doc())
+        self.assertTrue(vu["ignore_permissions"])
+
+    def test_la_creation_ne_depend_pas_du_droit_sur_le_doctype(self):
+        source = inspect.getsource(CED.encaisser)
+        self.assertIn("doc.insert(ignore_permissions=True)", source)
+        self.assertNotIn("doc.insert()", source)
