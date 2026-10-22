@@ -61,16 +61,23 @@ def aligner(noms) -> list:
     return modifies
 
 
+def _apres_changement_de_statut(noms):
+    aligner(noms)
+    # la pastille de livraison (filtre de la liste) suit le statut : fermée = plus de pastille
+    from customization_app.commande_alertes import recalculer
+    recalculer(noms)
+
+
 @frappe.whitelist()
 def update_status(status, name):
     _so.update_status(status, name)
-    aligner([name])
+    _apres_changement_de_statut([name])
 
 
 @frappe.whitelist(methods=["POST"])
 def close_or_unclose_sales_orders(names, status):
     _so.close_or_unclose_sales_orders(names, status)
-    aligner(json.loads(names) if isinstance(names, str) else names)
+    _apres_changement_de_statut(json.loads(names) if isinstance(names, str) else names)
 
 
 def on_delivery_note_change(doc, method=None):

@@ -21,6 +21,15 @@ facturation).
 Vérifié sur la base : aucun BL ne sert plusieurs commandes, la somme par
 commande est donc sans double comptage ; 24 commandes sont servies par
 plusieurs BL, d'où la somme sur l'ensemble des BL.
+
+Deuxième règle : un retour vaut livraison (décision utilisateur, 22/10/2026)
+--------------------------------------------------------------------------
+Un BL de retour diminue le livré net : la commande retombait « Livrée en partie »
+pour toujours alors que rien n'est plus à livrer — l'article est revenu, et son
+sort se règle par l'argent (avoir), pas par une livraison. Si CHAQUE ligne est
+livrée ou retournée en entier (livré + retourné ≥ commandé), la commande est
+livrée à 100 %. Cas réels : WEB1-007852 (électrovanne retournée, soldée par
+avoir), SAL-ORD-2026-03713 (cartouche retournée le jour même).
 """
 
 import frappe
@@ -70,9 +79,19 @@ def total_bl_valides(nom_commande):
     )
 
 
+def couverte_par_retours(lignes) -> bool:
+    """Chaque ligne est livrée ou retournée en entier, et au moins une a été retournée."""
+    lignes = list(lignes or [])
+    if not any(float(l.get("returned_qty") or 0) > 0 for l in lignes):
+        return False
+    return all(float(l.get("delivered_qty") or 0) + float(l.get("returned_qty") or 0)
+               >= float(l.get("qty") or 0) for l in lignes)
+
+
 def aligner_commande(nom_commande):
     """
-    Passe la commande à 100 % livré si ses BL validés couvrent son TTC.
+    Passe la commande à 100 % livré si ses BL validés couvrent son TTC, ou si ses
+    retours expliquent tout ce qui n'a pas été livré.
 
     Ne fait rien dans le cas contraire : la valeur calculée par ERPNext reste
     en place, y compris après l'annulation d'un BL, où ERPNext l'a déjà
@@ -103,7 +122,9 @@ def aligner_commande(nom_commande):
     if deja_alignee:
         return False
 
-    if total_bl_valides(nom_commande) < flt(commande.grand_total) - MARGE:
+    if total_bl_valides(nom_commande) < flt(commande.grand_total) - MARGE and not couverte_par_retours(
+            frappe.get_all("Sales Order Item", filters={"parent": nom_commande},
+                           fields=["qty", "delivered_qty", "returned_qty"])):
         return False
 
     doc = frappe.get_doc("Sales Order", nom_commande)

@@ -91,6 +91,19 @@ MOTIF_NON_SOLDEE = "Tâche terminée, commande non soldée"
 MOTIF_ARAMEX_SANS_BORDEREAU = "Livraison Aramex sans bordereau"
 CHAMP_ARAMEX_SB = "custom_aramex_sans_bordereau"
 
+# Deux FAITS de livraison (demande 22/10/2026), calculés À LA LECTURE — aucun champ stocké :
+# ils ne dépendent que des BL, sont donc toujours à jour, et coexistent avec l'anomalie comme
+# « Retour colis ».
+#   bl_a_valider : un BL en brouillon attend sa validation (la sortie n'est pas constatée) ;
+#   partielle    : la commande n'est pas entièrement livrée et AUCUN BL n'est en attente —
+#                  rien en cours ne couvrira le reste.
+STATUTS_HORS_CIRCUIT = ("Closed", "Completed", "Cancelled")
+# Ces deux faits sont AUSSI stockés, pour filtrer la liste (demande 22/10/2026) : même règle que
+# pastilles_livraison, en SQL, recalculée avec l'anomalie (BL, tâche, paiement, commande, nuit).
+CHAMP_PASTILLE_LIVRAISON = "custom_pastille_livraison"
+PASTILLE_BL_A_VALIDER = "BL à valider"
+PASTILLE_PARTIELLE = "Pas totalement livrée"
+
 # L'échéancier qui marque une commande Aramex (même clé que generer_bl.py).
 PAYMENT_TERMS_ARAMEX = "Livraison Aramex"
 
@@ -101,6 +114,104 @@ PAYMENT_TERMS_ARAMEX = "Livraison Aramex"
 # un PRÉFIXE, pas un libellé fermé — la règle SQL le PRÉSERVE au lieu de le recalculer,
 # et la couleur se résout par préfixe des deux côtés (cf. couleur_du_motif et le JS).
 MOTIF_COMMANDE_ANNULEE = "Commande annulée avec tâche"
+
+
+def pastilles_livraison(statut, delivery_status, per_delivered, grand_total, brouillons,
+                        retours=None) -> dict:
+    """Les faits de livraison d'une commande ouverte : BL à valider, ou livrée en partie sans BL.
+
+    Un brouillon de LIVRAISON sur une commande déjà entièrement livrée n'est pas « à valider » :
+    c'est un doublon (SAL-ORD-2026-02990 : BL validé de 354 + brouillon de 354 de la veille ;
+    cf. patch supprimer_bl_brouillons_doublons). Un brouillon de RETOUR compte toujours : la
+    reprise reste à constater, même sur une commande livrée.
+    """
+    if statut in STATUTS_HORS_CIRCUIT:
+        return {}
+    pct = float(per_delivered or 0)
+    complet = pct >= 99.999999
+    a_valider = set(retours or ()) | (set() if complet else set(brouillons or ()))
+    if a_valider:
+        return {"bl_a_valider": sorted(a_valider)}
+    if (float(grand_total or 0) <= 0 or complet
+            or delivery_status in ("Fully Delivered", "Not Applicable", "Closed")):
+        return {}
+    return {"partielle": round(pct)}
+
+
+def _bl_brouillons(noms) -> tuple:
+    """({commande: {BL de livraison en brouillon}}, {commande: {BL de retour en brouillon}}) —
+    par les lignes du BL ou par son champ custom_commande."""
+    livraisons, retours = {}, {}
+    for so, dn, retour in frappe.db.sql(
+            """SELECT DISTINCT dni.against_sales_order, dn.name, dn.is_return
+               FROM `tabDelivery Note Item` dni JOIN `tabDelivery Note` dn ON dn.name = dni.parent
+               WHERE dn.docstatus = 0 AND dni.against_sales_order IN %(noms)s""",
+            {"noms": tuple(noms)}):
+        (retours if retour else livraisons).setdefault(so, set()).add(dn)
+    if frappe.db.has_column("Delivery Note", "custom_commande"):
+        for so, dn, retour in frappe.db.sql(
+                """SELECT custom_commande, name, is_return FROM `tabDelivery Note`
+                   WHERE docstatus = 0 AND custom_commande IN %(noms)s""", {"noms": tuple(noms)}):
+            (retours if retour else livraisons).setdefault(so, set()).add(dn)
+    return livraisons, retours
+
+
+_SQL_PASTILLE_LIVRAISON = """
+    SELECT so.name,
+      CASE
+        WHEN so.docstatus <> 1 OR so.status IN ('Closed', 'Completed', 'Cancelled') THEN ''
+        -- IN (sous-requête) et non EXISTS corrélé : les brouillons sont peu nombreux, MariaDB les
+        -- matérialise une fois ; custom_commande n'est pas indexé (20 s sur 11 000 commandes).
+        -- Brouillon de livraison sur une commande déjà livrée = doublon, pas « à valider » ;
+        -- brouillon de retour = toujours à valider (même règle que pastilles_livraison).
+        WHEN so.name IN (SELECT dni.against_sales_order FROM `tabDelivery Note Item` dni
+                         JOIN `tabDelivery Note` dn ON dn.name = dni.parent
+                         WHERE dn.docstatus = 0 AND dn.is_return = 1)
+             {par_commande_retour}
+             OR (IFNULL(so.per_delivered, 0) < 99.999999 AND (
+                 so.name IN (SELECT dni.against_sales_order FROM `tabDelivery Note Item` dni
+                             JOIN `tabDelivery Note` dn ON dn.name = dni.parent
+                             WHERE dn.docstatus = 0 AND dn.is_return = 0)
+                 {par_commande})) THEN %(bl_a_valider)s
+        WHEN so.grand_total > 0 AND IFNULL(so.per_delivered, 0) < 99.999999
+             AND IFNULL(so.delivery_status, '') NOT IN ('Fully Delivered', 'Not Applicable', 'Closed')
+             THEN %(partielle)s
+        ELSE ''
+      END AS valeur
+    FROM `tabSales Order` so
+    WHERE {clause}
+"""
+
+
+def _calculer_pastille_livraison(clause, extra=None):
+    par_commande = par_commande_retour = ""
+    if frappe.db.has_column("Delivery Note", "custom_commande"):
+        modele = ("OR so.name IN (SELECT dn2.custom_commande FROM `tabDelivery Note` dn2 "
+                  "WHERE dn2.docstatus = 0 AND dn2.is_return = {r} AND dn2.custom_commande IS NOT NULL)")
+        par_commande, par_commande_retour = modele.format(r=0), modele.format(r=1)
+    params = dict(extra or {}, bl_a_valider=PASTILLE_BL_A_VALIDER, partielle=PASTILLE_PARTIELLE)
+    lignes = frappe.db.sql(_SQL_PASTILLE_LIVRAISON.format(
+        clause=clause, par_commande=par_commande, par_commande_retour=par_commande_retour),
+        params, as_dict=True)
+    return {r.name: r.valeur or "" for r in lignes}
+
+
+def _stocker_pastille_livraison(valeurs):
+    """Écrit les pastilles qui ont changé — même mécanique groupée que _stocker_aramex_sb."""
+    if not valeurs or not frappe.db.has_column("Sales Order", CHAMP_PASTILLE_LIVRAISON):
+        return 0
+    actuels = dict(frappe.db.sql(
+        f"SELECT name, COALESCE(`{CHAMP_PASTILLE_LIVRAISON}`, '') FROM `tabSales Order` "
+        "WHERE name IN %(noms)s", {"noms": tuple(valeurs)}))
+    par_valeur = {}
+    for nom, valeur in valeurs.items():
+        if (actuels.get(nom) or "") != valeur:
+            par_valeur.setdefault(valeur, []).append(nom)
+    for valeur, noms in par_valeur.items():
+        frappe.db.sql(
+            f"UPDATE `tabSales Order` SET `{CHAMP_PASTILLE_LIVRAISON}` = %(valeur)s "
+            "WHERE name IN %(noms)s", {"valeur": valeur, "noms": tuple(noms)})
+    return sum(len(v) for v in par_valeur.values())
 
 
 def couleur_du_motif(motif: str) -> str:
@@ -409,6 +520,7 @@ def recalculer(noms):
         return 0
     extra = {"noms": tuple(noms)}
     _stocker_aramex_sb(_calculer_aramex_sb("so.name IN %(noms)s", extra))
+    _stocker_pastille_livraison(_calculer_pastille_livraison("so.name IN %(noms)s", extra))
     return _stocker(_calculer("so.name IN %(noms)s", extra))
 
 
@@ -512,6 +624,7 @@ def resynchroniser():
     frappe.only_for(("System Manager", "Accounts Manager", "Sales Manager"))
     fermees = fermer_taches_soldees()
     _stocker_aramex_sb(_calculer_aramex_sb("so.docstatus < 2"))
+    _stocker_pastille_livraison(_calculer_pastille_livraison("so.docstatus < 2"))
     modifiees = _stocker(_calculer("so.docstatus < 2"))
     frappe.db.commit()
     return {"fermees": fermees, "modifiees": modifiees}
@@ -530,6 +643,7 @@ def recalculer_tout():
     # D'abord les clôtures automatiques : elles changent le motif des commandes.
     fermer_taches_soldees()
     _stocker_aramex_sb(_calculer_aramex_sb("so.docstatus < 2"))
+    _stocker_pastille_livraison(_calculer_pastille_livraison("so.docstatus < 2"))
     modifiees = _stocker(_calculer("so.docstatus < 2"))
     frappe.db.commit()
     return modifiees
@@ -548,6 +662,8 @@ def get_alertes(noms):
                           valeur
       appels              nombre d'appels de confirmation sans réponse, pour
                           les commandes WEB
+      bl_a_valider        BL en brouillon de la commande, en attente de validation
+      partielle           % livré d'une commande ouverte incomplète sans BL en attente
 
     Une commande sans anomalie mais déjà rappelée est donc retournée elle
     aussi. Les commandes sans rien à afficher sont absentes du résultat.
@@ -575,7 +691,8 @@ def get_alertes(noms):
     if aramex_sb:
         colonnes += [f"`{CHAMP_ARAMEX_SB}` AS aramex_sb"]
 
-    colonnes += ["`status` AS statut_so"]
+    colonnes += ["`status` AS statut_so", "`delivery_status` AS statut_livraison",
+                 "`per_delivered` AS pct_livre", "`grand_total` AS ttc"]
     lignes = frappe.db.sql(
         f"""
         SELECT name, {', '.join(colonnes)} FROM `tabSales Order`
@@ -585,9 +702,11 @@ def get_alertes(noms):
         as_dict=True,
     )
 
+    brouillons, retours = _bl_brouillons(noms)
     resultat = {}
     for r in lignes:
-        entree = {}
+        entree = pastilles_livraison(r.statut_so, r.statut_livraison, r.pct_livre, r.ttc,
+                                     brouillons.get(r.name), retours.get(r.name))
         # Une commande FERMÉE est sortie du circuit : ni motif ni fait Aramex —
         # défense d'affichage immédiate, sans attendre que le recalcul (nocturne
         # ou bouton) vide les champs stockés.

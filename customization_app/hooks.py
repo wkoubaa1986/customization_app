@@ -282,6 +282,11 @@ doc_events = {
             # pièce reprise par un BL retour créé et validé ici même.
             "customization_app.retour_echange.on_submit_bl",
         ],
+        # Un BL en BROUILLON créé, modifié ou supprimé change la pastille « BL à
+        # valider » de sa commande (commande_alertes, filtre de la liste).
+        "after_insert": "customization_app.commande_alertes.on_delivery_note_change",
+        "on_update": "customization_app.commande_alertes.on_delivery_note_change",
+        "after_delete": "customization_app.commande_alertes.on_delivery_note_change",
         # Annuler l'échange annule sa reprise ; la reprise ne s'annule pas seule.
         "before_cancel": "customization_app.retour_echange.before_cancel_bl",
         "on_cancel": [

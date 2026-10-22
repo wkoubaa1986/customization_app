@@ -157,6 +157,24 @@ frappe.provide("frappe.views");
                 pastilles.push(`<span class="so-alerte-pastille orange"
                        title="${LIBELLE_ARAMEX_SB}">${LIBELLE_ARAMEX_SB}</span>`);
             }
+            // Faits de livraison (22/10/2026) : un BL en brouillon attend sa validation,
+            // ou la commande n'est pas entièrement livrée sans qu'aucun BL ne soit en cours.
+            const bls = info.bl_a_valider || [];
+            if (bls.length) {
+                const libelle = bls.length > 1
+                    ? __("📝 {0} BL à valider", [bls.length])
+                    : __("📝 BL à valider") + " · " + bls[0];
+                pastilles.push(`<a class="so-alerte-pastille jaune"
+                       href="/app/delivery-note/${encodeURIComponent(bls[0])}"
+                       title="${frappe.utils.escape_html(bls.join(", "))}"
+                       onclick="event.stopPropagation()">${frappe.utils.escape_html(libelle)}</a>`);
+            }
+            if (info.partielle !== undefined) {
+                const libelle = __("📦 Pas totalement livrée") + " · " + info.partielle + " %";
+                pastilles.push(`<span class="so-alerte-pastille orange"
+                       title="${frappe.utils.escape_html(__("Aucun BL en attente ne couvre le reste de la commande"))}">${
+                    frappe.utils.escape_html(libelle)}</span>`);
+            }
             pastilles.push(..._pastilles_infos(nom));
             if (pastilles.length) {
                 // La couleur de fond : l'anomalie d'abord, le retour ou le fait
