@@ -631,6 +631,40 @@ def _remarques_paiements(remarques, regs):
     return remarques
 
 
+_RX_PIECE_BANQUE = re.compile(
+    r"Chq N° (?P<cheque>\d+)"
+    r"|Réglé par carte bancaire"
+    r"|Réglé par virement(?: \| Réf de paiement : (?P<virement>[A-Za-z0-9/\-]+))?")
+
+
+def pieces_bancaires(remarque):
+    """Les règlements PASSÉS PAR LA BANQUE qu'écrit `_remarques_paiements`, dans leur
+    ordre -> [(mode, numéro)]. Fonction pure : c'est aussi l'ordre des lignes créditées
+    sur la banque (`_lignes_credit`), d'où l'appariement ligne à ligne."""
+    out = []
+    for m in _RX_PIECE_BANQUE.finditer(remarque or ""):
+        if m.group("cheque"):
+            out.append(("Chèque", m.group("cheque")))
+        elif m.group(0).startswith("Réglé par carte"):
+            out.append(("Carte de crédit", None))
+        else:
+            out.append(("Virement", m.group("virement")))
+    return out
+
+
+def piece_de_ligne(compte, montant, banque, traites):
+    """(mode, numéro) du règlement porté par une ligne créditée de l'écriture de caisse.
+    `banque` / `traites` sont CONSOMMÉS (une pièce ne sert qu'à une ligne)."""
+    if compte == COMPTE_BANQUE and banque:
+        return banque.pop(0)
+    if compte == COMPTE_DECOUVERT:
+        t = next((t for t in traites if abs(t["montant"] - flt(montant, 3)) < 0.0005), None)
+        if t:
+            traites.remove(t)
+            return (None, t["numero"])
+    return (None, None)
+
+
 def _attacher_cheques(regs, je_nom, dispense=False):
     """Attache la photo de chaque chèque (ou traite) à l'écriture ; trace la dispense."""
     for p in regs:
@@ -1369,6 +1403,59 @@ def _copier_justificatifs(fiche_nom, doctype, name,
                         "file_name": f.file_name, "is_private": f.is_private,
                         "attached_to_doctype": doctype,
                         "attached_to_name": name}).insert(ignore_permissions=True)
+
+
+def _joindre(fichier, doctype, name):
+    """Une pièce jointe de plus pointant le MÊME fichier, sauf si `name` l'a déjà (même URL
+    ou même contenu). `content_hash` recopié : c'est lui qui dit à Frappe que le fichier
+    est partagé et qu'il ne faut pas l'effacer du disque si l'une des pièces disparaît."""
+    if frappe.db.exists("File", {"attached_to_doctype": doctype, "attached_to_name": name,
+                                 "file_url": fichier.file_url}):
+        return False
+    if fichier.content_hash and frappe.db.exists("File", {
+            "attached_to_doctype": doctype, "attached_to_name": name,
+            "content_hash": fichier.content_hash}):
+        return False
+    frappe.get_doc({"doctype": "File", "file_url": fichier.file_url,
+                    "file_name": fichier.file_name, "is_private": fichier.is_private,
+                    "content_hash": fichier.content_hash,
+                    "attached_to_doctype": doctype,
+                    "attached_to_name": name}).insert(ignore_permissions=True)
+    return True
+
+
+def _sauver_pieces_jointes(je_nom, ref_dt, ref_name):
+    """Les pièces jointes de l'écriture de caisse (photo du chèque / de la traite, scans)
+    passent sur la facture d'achat (ou la commande) qu'elle règle — demande utilisateur
+    22/10/2026 — et rend la liste, que l'appelant joint aussi au paiement.
+
+    La pièce est DÉPLACÉE (rattachée à la facture), pas copiée : elle ne pointe plus
+    l'écriture, donc sa suppression ne l'emporte plus. Un document que la facture porte
+    déjà (le scan de la facture, recopié depuis la fiche) n'est pas doublé."""
+    sauves = []
+    for f in frappe.get_all("File",
+                            filters={"attached_to_doctype": "Journal Entry",
+                                     "attached_to_name": je_nom, "is_folder": 0},
+                            fields=["name", "file_url", "file_name", "is_private",
+                                    "content_hash"]):
+        if not f.file_url:
+            continue
+        deja = frappe.db.exists("File", {"attached_to_doctype": ref_dt,
+                                         "attached_to_name": ref_name,
+                                         "file_url": f.file_url}) or (
+            f.content_hash and frappe.db.exists("File", {
+                "attached_to_doctype": ref_dt, "attached_to_name": ref_name,
+                "content_hash": f.content_hash}))
+        if deja:
+            # La facture a déjà ce contenu : la pièce de l'écriture peut partir avec
+            # elle, le fichier reste sur le disque (partagé) — mais le paiement le reçoit.
+            sauves.append(f)
+            continue
+        frappe.db.set_value("File", f.name, {"attached_to_doctype": ref_dt,
+                                             "attached_to_name": ref_name},
+                            update_modified=False)
+        sauves.append(f)
+    return sauves
 
 
 def _fiche_de(doc):
@@ -2118,12 +2205,18 @@ def _avances_en_paiements(fiche_nom, ref_dt, ref_name, total, deja, company):
         remarque = je.get("user_remark") or ""
         je.flags.ignore_permissions = True
         je.flags.ignore_links = True
+        # AVANT la suppression : `delete_doc` emporte les pièces jointes de l'écriture, et le
+        # fichier du disque avec — la photo du chèque était perdue (22/10/2026, ACC-JV-2026-00924).
+        fichiers = _sauver_pieces_jointes(je_nom, ref_dt, ref_name)
         je.cancel()
         frappe.delete_doc("Journal Entry", je_nom, ignore_permissions=True, force=True)
-        a_traiter += [(compte, montant, date, mode, reference, remarque)
+        banque, traites = pieces_bancaires(remarque), parser_traites(remarque)
+        a_traiter += [(compte, montant, date, mode, reference, remarque,
+                       piece_de_ligne(compte, montant, banque, traites), fichiers)
                       for compte, montant in credits]
 
-    for compte_paiement, montant, date, mode, reference, remarque in a_traiter:
+    for (compte_paiement, montant, date, mode, reference, remarque, piece,
+         fichiers) in a_traiter:
         if montant <= 0:
             continue
         alloue = min(montant, restant)
@@ -2139,6 +2232,8 @@ def _avances_en_paiements(fiche_nom, ref_dt, ref_name, total, deja, company):
         # s'il est bancaire, sinon Chèque si l'écriture en portait un, sinon carte.
         if compte_paiement == COMPTE_ESPECES:
             pe.mode_of_payment = "Espèces"
+        elif piece[0]:
+            pe.mode_of_payment = piece[0]
         elif mode in ("Chèque", "Carte de crédit"):
             pe.mode_of_payment = mode
         else:
@@ -2149,9 +2244,15 @@ def _avances_en_paiements(fiche_nom, ref_dt, ref_name, total, deja, company):
         pe.received_amount = montant
         pe.source_exchange_rate = 1
         pe.target_exchange_rate = 1
-        pe.reference_no = reference or ref_name
+        # ⚠️ LE N° DU CHÈQUE (ou de la traite, la référence du virement), PAS LE LIBELLÉ DE
+        # L'ÉCRITURE. Le libellé « Dépense caisse — … » finissait en référence et le n° de
+        # chèque n'était plus nulle part : ERPNext réécrivait aussi la remarque qui le portait
+        # (22/10/2026, ACC-PAY-2026-08004, chèque 4001054). L'identification bancaire cherche
+        # le chèque dans la référence.
+        pe.reference_no = piece[1] or reference or ref_name
         pe.reference_date = date
         pe.remarks = remarque or reference
+        pe.custom_remarks = 1          # sinon ERPNext remplace la remarque par la sienne
         # Une pièce déjà soldée par ailleurs ne peut rien recevoir : le paiement
         # existe quand même (l'argent est sorti), mais il reste non alloué sur le
         # compte du fournisseur au lieu de faire échouer la soumission.
@@ -2163,6 +2264,8 @@ def _avances_en_paiements(fiche_nom, ref_dt, ref_name, total, deja, company):
         pe.insert()
         pe.submit()
         pes.append(pe.name)
+        for fichier in fichiers:
+            _joindre(fichier, "Payment Entry", pe.name)
 
     if not pes:
         return None

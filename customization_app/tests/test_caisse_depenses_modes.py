@@ -315,3 +315,49 @@ class TestMontantsIsolesDuSensArabe(unittest.TestCase):
         self.assertIn("rcj_dt(total_p)", phrase)
         self.assertNotIn("format_currency(", phrase)
         self.assertIn("frappe.confirm(suite", phrase)
+
+
+class TestPaiementQuiRemplaceLEcriture(unittest.TestCase):
+    """22/10/2026, ACC-PAY-2026-08004 : la facture d'achat validée remplace l'écriture de caisse
+    par un paiement dont la référence était le libellé « Dépense caisse — … » — le n° du chèque
+    4001054 n'était plus nulle part, et la photo du chèque partait avec l'écriture supprimée."""
+
+    REMARQUE = ("cuve verticale 500L — CITERNES PLAST — Fact. n°2018\nType : Facture d'achat\n"
+                "Facture n° 2018\nChq N° 4001054 - Bq Banque Zitouna\nSaisie caisse par sadok")
+
+    def test_le_cheque_est_lu_dans_la_remarque(self):
+        self.assertEqual(CD.pieces_bancaires(self.REMARQUE), [("Chèque", "4001054")])
+
+    def test_les_pieces_bancaires_restent_dans_l_ordre_des_lignes(self):
+        regs = [{"mode": "Chèque", "n_cheque": "1111111", "banque": "BIAT", "montant": 100},
+                {"mode": "Carte de crédit", "n_cheque": "", "banque": "", "montant": 50},
+                {"mode": "Virement", "n_cheque": "FT26220ABCDE", "banque": "", "montant": 30}]
+        remarque = "\n".join(CD._remarques_paiements([], regs))
+        self.assertEqual(CD.pieces_bancaires(remarque),
+                         [("Chèque", "1111111"), ("Carte de crédit", None), ("Virement", "FT26220ABCDE")])
+
+    def test_chaque_ligne_banque_prend_sa_piece(self):
+        banque = [("Chèque", "1111111"), ("Chèque", "2222222")]
+        self.assertEqual(CD.piece_de_ligne(CD.COMPTE_BANQUE, 100, banque, []), ("Chèque", "1111111"))
+        self.assertEqual(CD.piece_de_ligne(CD.COMPTE_BANQUE, 50, banque, []), ("Chèque", "2222222"))
+        self.assertEqual(banque, [])
+
+    def test_l_especes_ne_consomme_aucune_piece(self):
+        banque = [("Chèque", "1111111")]
+        self.assertEqual(CD.piece_de_ligne(CD.COMPTE_ESPECES, 20, banque, []), (None, None))
+        self.assertEqual(banque, [("Chèque", "1111111")])
+
+    def test_la_traite_se_reconnait_a_son_montant(self):
+        traites = CD.parser_traites(CD.libelle_traite(
+            {"n_cheque": "123456", "banque": "BNA", "montant": 250.5, "echeance": "2026-12-31"}))
+        self.assertEqual(CD.piece_de_ligne(CD.COMPTE_DECOUVERT, 100, [], list(traites)), (None, None))
+        self.assertEqual(CD.piece_de_ligne(CD.COMPTE_DECOUVERT, 250.5, [], traites), (None, "123456"))
+
+    def test_le_paiement_garde_sa_remarque_et_les_pieces_jointes(self):
+        import inspect
+        source = inspect.getsource(CD._avances_en_paiements)
+        self.assertIn("pe.custom_remarks = 1", source)
+        self.assertIn("pe.reference_no = piece[1] or reference or ref_name", source)
+        # les pièces jointes sont sauvées AVANT que l'écriture soit supprimée
+        self.assertLess(source.index("_sauver_pieces_jointes(je_nom"),
+                        source.index('frappe.delete_doc("Journal Entry"'))
