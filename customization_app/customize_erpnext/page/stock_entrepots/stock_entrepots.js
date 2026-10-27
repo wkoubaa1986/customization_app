@@ -135,6 +135,7 @@ class StockEntrepots {
         <li>Un article qui a bougé entre le comptage et la validation perd son comptage : à recompter (ligne marquée).</li></ul></div>
       ${this.ctx.inventaire ? `<div class="et"><div class="t">📋 Inventaire du Magasin — compter tout le Magasin par emplacement</div><ul>
         <li>Bouton « 📋 Inventaire du Magasin » (Solde). Tous les articles suivis en stock au Magasin, photo et description, <b>une case par emplacement</b> (zones de l’article dans l’espace Magasin — pas le Hall ; « Non rangé » sans zone) : la somme des cases = compté, comparé au système. « ＋ » ajoute un emplacement où l’article a été trouvé : aussitôt ajouté à la fiche article (✕ pour le retirer).</li>
+        <li><b>Inventaire partiel</b> : à l’ouverture, cochez des zones ; seuls leurs articles sont sur la feuille (un article rangé à deux endroits garde toutes ses cases). Plusieurs inventaires partiels peuvent être ouverts en parallèle s’ils ne se recoupent pas ; un inventaire complet exclut les autres. La liste montre, zone par zone, la date du dernier inventaire clôturé.</li>
         <li>Puce « Négatifs » : seuls les articles dont le système est sous zéro (chiffre en rouge). « 📍 Par zone » : les articles groupés par emplacement dans l’ordre des zones, « Non rangé » en dernier — pour faire le tour du magasin rayon par rayon.</li>
         <li>Enregistrement automatique ligne par ligne : plusieurs personnes peuvent compter en même temps, et reprendre plus tard. Filtres : zone, à compter / comptés / écarts.</li>
         <li>« ✅ Clôturer » : aperçu, puis <b>une écriture de stock</b> (Stock Reconciliation) sur le Magasin pour les articles comptés en écart ; un article qui a bougé depuis son comptage reçoit son écart sur le stock du moment. Les non comptés ne bougent pas.</li></ul></div>` : ""}
@@ -1091,27 +1092,47 @@ class StockEntrepots {
     const jeton = (this.jetons.inv = (this.jetons.inv || 0) + 1);
     const res = (await frappe.call({ method: SE_INV + "inventaires_etat" })).message;
     if (jeton !== this.jetons.inv || this.onglet !== "inventaire") return;
-    const $c = this.$r.find("#se-i-contenu"), ec = res.en_cours;
+    const $c = this.$r.find("#se-i-contenu"), ouverts = res.ouverts || [], SANS = res.sans_zone;
     const etat = (v) => (v.statut === "Terminé" ? "✅" : v.statut === "Annulé" ? "✖️" : "📝");
+    const peri = (v) => `<span class="se-badge">📍 ${se_esc(v.perimetre_libelle || "Tout le Magasin")}</span>`;
+    // Historique par zone : en cours / dernier inventaire clôturé / jamais inventoriée.
+    const zh = (res.zones_historique || []).map((z) => `<span class="se-zh ${z.en_cours ? "ec" : z.dernier ? "" : "jamais"}" title="${z.en_cours ? `En cours : ${se_esc(z.en_cours)}` : z.dernier ? `Dernier inventaire clôturé ${se_esc(se_dt(z.dernier))} (${se_esc(z.dernier_inventaire)})` : "Jamais inventoriée"}">${se_esc(z.libelle)}<small>${z.en_cours ? "en cours" : z.dernier ? se_dt(z.dernier) : "jamais"}</small></span>`).join("");
     const hist = res.dernieres.map((v) => `<div class="se-v-h" style="cursor:default">
         <span class="d">${se_dt(v.termine_le || v.date)}</span>
-        <span class="n">${etat(v)} ${v.nb_comptes}/${v.nb_lignes} comptés · <b class="${v.nb_ecarts ? "neg" : "pos"}">${v.nb_ecarts} écart(s)</b>${v.termine_par ? ` · ${se_esc(v.termine_par)}` : ""}
+        <span class="n">${etat(v)} ${peri(v)} ${v.nb_comptes}/${v.nb_lignes} comptés · <b class="${v.nb_ecarts ? "neg" : "pos"}">${v.nb_ecarts} écart(s)</b>${v.termine_par ? ` · ${se_esc(v.termine_par)}` : ""}
           <span class="se-note">${se_lien("Inventaire Magasin", v.name)}${v.rapprochement ? ` · ${se_lien("Stock Reconciliation", v.rapprochement, "écriture " + v.rapprochement)}` : v.statut === "Terminé" ? " · sans écriture (aucun écart)" : ""}</span></span>
         <span class="v ${v.valeur_ecarts < 0 ? "neg" : v.valeur_ecarts > 0 ? "pos" : ""}">${v.nb_ecarts ? se_argent(v.valeur_ecarts) : v.statut === "Terminé" ? "✓" : ""}</span>
         <span class="se-lien" data-voir="${se_esc(v.name)}" style="cursor:pointer">🔍</span></div>`).join("");
     $c.html(`<span class="se-retour" data-retour>← Solde</span>
       <div class="se-card se-v-stock"><div class="t">📋 Inventaire du ${se_esc(res.libelle)}</div>
         <div class="plan">Tous les articles suivis en stock au Magasin, avec photo et description, <b>une case par emplacement</b> (zones de l’article) : la somme des cases est la quantité comptée, comparée au stock système. Le comptage s’enregistre au fil de l’eau ; à la clôture, <b>une écriture de stock</b> (rapprochement) aligne le Magasin sur le compté. Les articles non comptés ne bougent pas.</div>
-        ${ec ? `<div class="plan">📝 En cours depuis le <b>${se_dt(ec.date)}</b>${ec.ouvert_par ? ` (${se_esc(ec.ouvert_par)})` : ""} : <b>${ec.nb_comptes}/${ec.nb_lignes}</b> comptés · <b class="${ec.nb_ecarts ? "neg" : "pos"}">${ec.nb_ecarts} écart(s)</b>${ec.nb_ecarts ? ` · ${se_argent(ec.valeur_ecarts)}` : ""}</div>
-            <button type="button" class="btn btn-primary" data-reprendre="${se_esc(ec.name)}">Reprendre l’inventaire</button>`
-          : `<button type="button" class="btn btn-primary" data-ouvrir>▶ Ouvrir un inventaire du Magasin</button>`}
+        <div class="plan">Inventaire <b>complet</b> ou <b>partiel</b> (quelques zones à la fois, plusieurs en parallèle tant qu’ils ne se recoupent pas) : seuls les articles rangés dans les zones choisies sont sur la feuille.</div>
+        ${ouverts.map((ec) => `<div class="plan">📝 ${peri(ec)} en cours depuis le <b>${se_dt(ec.date)}</b>${ec.ouvert_par ? ` (${se_esc(ec.ouvert_par)})` : ""} : <b>${ec.nb_comptes}/${ec.nb_lignes}</b> comptés · <b class="${ec.nb_ecarts ? "neg" : "pos"}">${ec.nb_ecarts} écart(s)</b>${ec.nb_ecarts ? ` · ${se_argent(ec.valeur_ecarts)}` : ""}
+            <button type="button" class="btn btn-primary btn-sm" data-reprendre="${se_esc(ec.name)}" style="margin-left:8px">Reprendre</button></div>`).join("")}
+        ${ouverts.some((v) => !(v.perimetre || []).length) ? "" : `<button type="button" class="btn btn-primary" data-ouvrir>▶ Ouvrir un inventaire${ouverts.length ? " partiel" : ""}</button>`}
       </div>
+      <div class="se-titre">📍 Zones : dernier inventaire</div>
+      <div class="se-card"><div class="se-zh-grille">${zh || `<span class="se-note">Aucune zone dans l’espace du Magasin.</span>`}</div></div>
       <div class="se-titre">🕘 Derniers inventaires</div>
       <div class="se-card">${hist || `<div class="se-note">Aucun inventaire terminé.</div>`}</div>`);
     $c.find("[data-retour]").on("click", () => this.montrer("solde"));
-    $c.find("[data-ouvrir]").on("click", async () => {
-      const name = (await frappe.call({ method: SE_INV + "ouvrir_inventaire", freeze: true, freeze_message: "Photographie du stock du Magasin…" })).message;
-      this.ouvrirInventaire(name);
+    $c.find("[data-ouvrir]").on("click", () => {
+      // Périmètre : zones cochées = inventaire partiel ; rien de coché = tout le Magasin (refusé si un partiel est ouvert).
+      const prises = {}; ouverts.forEach((v) => (v.perimetre || []).forEach((z) => { prises[z] = v.name; }));
+      const opts = (res.zones || []).filter((z) => !z.est_espace && !prises[z.name]).map((z) => ({ label: z.code, value: z.name }));
+      if (!prises[SANS]) opts.push({ label: "Non rangé (sans zone)", value: SANS });
+      const dlg = new frappe.ui.Dialog({ title: "▶ Ouvrir un inventaire", fields: [
+          { fieldtype: "HTML", fieldname: "aide", options: `<div class="se-note" style="margin-bottom:8px">Cochez les zones à inventorier (<b>inventaire partiel</b>) ; rien de coché = <b>tout le Magasin</b>.${Object.keys(prises).length ? `<br>Déjà en cours (non proposées) : ${Object.keys(prises).map((z) => se_esc(z === SANS ? "Non rangé" : ((res.zones || []).find((x) => x.name === z) || { code: z }).code)).join(", ")}.` : ""}</div>` },
+          { fieldtype: "MultiCheck", fieldname: "zones", label: "Zones", options: opts, columns: 3 }],
+        primary_action_label: "Ouvrir",
+        primary_action: async (v) => {
+          const zones = v.zones || [];
+          if (!zones.length && ouverts.length) { frappe.msgprint("Un inventaire partiel est en cours : clôturez-le avant d’ouvrir un inventaire de tout le Magasin, ou cochez des zones."); return; }
+          dlg.hide();
+          const name = (await frappe.call({ method: SE_INV + "ouvrir_inventaire", args: { zones: JSON.stringify(zones) }, freeze: true, freeze_message: "Photographie du stock du Magasin…" })).message;
+          this.ouvrirInventaire(name);
+        } });
+      dlg.show();
     });
     $c.find("[data-reprendre], [data-voir]").on("click", (e) => this.ouvrirInventaire($(e.currentTarget).attr("data-reprendre") || $(e.currentTarget).attr("data-voir")));
   }
@@ -1153,7 +1174,7 @@ class StockEntrepots {
       return `<option value="">📍 Toutes les zones</option><option value="${SANS}">Non rangé (sans zone)</option>` + Object.keys(g).map((esp) => `<optgroup label="${se_esc(esp)}">${g[esp].map((z) => `<option value="${se_esc(z.name)}">${se_esc(z.est_espace ? `${z.name} (sans rayon)` : z.name)}</option>`).join("")}</optgroup>`).join(""); };
     $c.html(`<span class="se-retour" data-retour>← Inventaires</span>
       <div class="se-card">
-        <div class="se-v-stock"><div class="t">📋 Inventaire ${se_esc(d.fiche.name)} — ${se_dt(d.fiche.date)} ${fini ? `<span class="se-badge">${se_esc(d.fiche.statut)}</span>` : ""}</div>
+        <div class="se-v-stock"><div class="t">📋 Inventaire ${se_esc(d.fiche.name)} — ${se_dt(d.fiche.date)} <span class="se-badge">📍 ${se_esc(d.fiche.perimetre_libelle || "Tout le Magasin")}</span> ${fini ? `<span class="se-badge">${se_esc(d.fiche.statut)}</span>` : ""}</div>
           ${fini ? `<div class="se-note">${d.fiche.termine_par ? `${d.fiche.statut === "Terminé" ? "Clôturé" : "Annulé"} par ${se_esc(d.fiche.termine_par)} le ${se_dthm(d.fiche.termine_le)}` : ""}${d.fiche.rapprochement ? ` · ${se_lien("Stock Reconciliation", d.fiche.rapprochement, "écriture " + d.fiche.rapprochement)}` : ""}${d.fiche.note ? `<br>${se_esc(d.fiche.note)}` : ""}</div>`
             : `<div class="se-note">Une case par emplacement : tapez ce que vous trouvez à chaque endroit, la somme fait le compté. « ＋ » ajoute un emplacement où l’article a été trouvé : il est <b>aussitôt ajouté aux emplacements de l’article</b> (✕ pour le retirer). Enregistrement automatique.</div>`}
           <div class="plan" id="se-i-bilan"></div><div class="se-i-etat" id="se-i-etat"></div></div>

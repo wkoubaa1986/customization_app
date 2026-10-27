@@ -15,6 +15,12 @@ qui manque ou dépasse à cet instant. À la clôture, l'écart de chaque ligne 
 moment (rapproché = système actuel + écart) dans UNE écriture « Stock Reconciliation » sur le Magasin, pour
 les lignes dont l'écart n'est pas nul. Les articles non comptés ne bougent pas.
 
+Inventaires PARTIELS (demande du 27/10, « des fois c'est trop grand ») : à l'ouverture on choisit un périmètre =
+des zones de l'espace (et/ou « Non rangé ») ; la feuille ne contient que les articles rangés dans ces zones (un
+article rangé à deux endroits garde toutes ses cases : le compté reste comparable au système). Sans périmètre =
+tout le Magasin. Plusieurs inventaires peuvent être ouverts en même temps si leurs périmètres ne se recoupent pas ;
+un inventaire complet exclut tous les autres. La liste montre, zone par zone, la date du dernier inventaire clôturé.
+
 Accès : rôle « Inventaire Magasin » (koubaawassim, Nejib Koubaa, Hedi ibidhii — responsable principal du
 magasin — par patch) ou System Manager.
 """
@@ -110,10 +116,15 @@ def _zones_par_article() -> dict[str, list[str]]:
     return out
 
 
-def _articles_magasin(magasin: str) -> list[dict]:
+def _articles_magasin(magasin: str, perimetre: list[str] | None = None) -> list[dict]:
     """Les articles suivis en stock au Magasin : actifs, suivis en stock, avec une ligne de Bin au Magasin
-    (même à zéro) ou rangés dans une zone de l'espace du Magasin. Quantité et taux du moment."""
+    (même à zéro) ou rangés dans une zone de l'espace du Magasin. Quantité et taux du moment.
+    `perimetre` (inventaire partiel) : seuls les articles rangés dans une de ces zones — ou sans zone de l'espace
+    si `SANS_ZONE` en fait partie."""
     zones = _zones_par_article()
+    p = set(perimetre or [])
+    def dedans(code):
+        return not p or bool(set(zones.get(code, [])) & p) or (SANS_ZONE in p and not zones.get(code))
     rows = frappe.db.sql("""select i.name item_code, i.item_name, coalesce(b.actual_qty, 0) actual_qty,
                                    coalesce(b.valuation_rate, 0) valuation_rate, i.valuation_rate taux_article
                             from tabItem i
@@ -124,7 +135,28 @@ def _articles_magasin(magasin: str) -> list[dict]:
     return [{"item_code": r.item_code, "item_name": r.item_name, "qte_systeme": flt(r.actual_qty, 6),
              "taux": flt(r.valuation_rate, 6) or flt(r.taux_article, 6),
              "zones": Z.SEPARATEUR.join(zones.get(r.item_code, [])) or None}
-            for r in rows]
+            for r in rows if dedans(r.item_code)]
+
+
+def _perimetre(v) -> list[str]:
+    return [z for z in (v.get("perimetre") or "").split(Z.SEPARATEUR) if z]
+
+
+def libelle_perimetre(zones: list[str], codes: dict[str, str] | None = None) -> str:
+    """« Tout le Magasin », sinon les codes des zones (« A1, A2, Non rangé »). PURE."""
+    if not zones:
+        return "Tout le Magasin"
+    codes = codes or {}
+    return ", ".join("Non rangé" if z == SANS_ZONE else codes.get(z) or z for z in zones)
+
+
+def _codes_zones() -> dict[str, str]:
+    return {z.name: (z.name if z.est_espace else z.code) for z in zones_de_l_espace()}
+
+
+def perimetres_se_recoupent(a: list[str], b: list[str]) -> bool:
+    """Deux périmètres se recoupent s'ils partagent une zone, ou si l'un est « tout le Magasin ». PURE."""
+    return not a or not b or bool(set(a) & set(b))
 
 
 def _infos_articles(codes: list[str]) -> dict[str, dict]:
@@ -147,11 +179,37 @@ def _resume(v) -> dict:
             "termine_le": str(v.termine_le) if v.termine_le else None,
             "termine_par": frappe.utils.get_fullname(v.termine_par) if v.termine_par else None,
             "rapprochement": v.rapprochement, "note": v.note, "nb_bouges": cint(v.nb_bouges),
-            "nb_zones_ajoutees": cint(v.nb_zones_ajoutees), "nb_sans_taux": cint(v.nb_sans_taux)}
+            "nb_zones_ajoutees": cint(v.nb_zones_ajoutees), "nb_sans_taux": cint(v.nb_sans_taux),
+            "perimetre": _perimetre(v), "perimetre_libelle": libelle_perimetre(_perimetre(v), _codes_zones())}
 
 
 def en_cours():
+    """Le dernier inventaire ouvert (il peut y en avoir plusieurs, partiels : voir `ouverts`)."""
     return frappe.db.get_value(INV, {"statut": EN_COURS}, "name", order_by="creation desc")
+
+
+def ouverts() -> list[str]:
+    return frappe.get_all(INV, filters={"statut": EN_COURS}, pluck="name", order_by="creation")
+
+
+def _historique_zones() -> list[dict]:
+    """Pour chaque zone de l'espace (et « Non rangé ») : l'inventaire ouvert qui la couvre, et le dernier clôturé
+    qui la couvrait (un inventaire complet couvre tout)."""
+    zones = [{"name": z.name, "libelle": z.name if z.est_espace else z.code} for z in zones_de_l_espace()
+             if not z.est_espace] + [{"name": SANS_ZONE, "libelle": "Non rangé"}]
+    termines = frappe.get_all(INV, filters={"statut": TERMINE}, fields=["name", "termine_le", "perimetre"],
+                              order_by="termine_le desc")
+    en_cours_ = frappe.get_all(INV, filters={"statut": EN_COURS}, fields=["name", "perimetre"])
+    def couvre(inv, z):
+        p = [x for x in (inv.perimetre or "").split(Z.SEPARATEUR) if x]
+        return not p or z in p
+    for z in zones:
+        o = next((i for i in en_cours_ if couvre(i, z["name"])), None)
+        t = next((i for i in termines if couvre(i, z["name"])), None)
+        z["en_cours"] = o.name if o else None
+        z["dernier"] = str(t.termine_le) if t else None
+        z["dernier_inventaire"] = t.name if t else None
+    return zones
 
 
 @frappe.whitelist()
@@ -164,7 +222,9 @@ def inventaires_etat():
                                 limit=LIMITE_HISTORIQUE)]
     m = S.magasin()
     return {"magasin": m, "libelle": frappe.db.get_value("Warehouse", m, "warehouse_name") or m,
-            "en_cours": _resume(frappe.get_doc(INV, ouvert)) if ouvert else None, "dernieres": dernieres}
+            "en_cours": _resume(frappe.get_doc(INV, ouvert)) if ouvert else None,
+            "ouverts": [_resume(frappe.get_doc(INV, n)) for n in ouverts()], "dernieres": dernieres,
+            "zones": _zones_choix(), "sans_zone": SANS_ZONE, "zones_historique": _historique_zones()}
 
 
 # ── Écriture ──────────────────────────────────────────────────────────────────
@@ -186,17 +246,30 @@ def _recalculer(v):
 
 
 @frappe.whitelist(methods=["POST"])
-def ouvrir_inventaire():
-    """Ouvre l'inventaire du Magasin (un seul à la fois : l'ouvert est repris)."""
+def ouvrir_inventaire(zones=None):
+    """Ouvre un inventaire du Magasin : complet (`zones` vide) ou PARTIEL (liste de zones de l'espace et/ou
+    `SANS_ZONE`). Un inventaire ouvert au même périmètre est repris ; un périmètre qui recoupe un inventaire
+    ouvert est refusé (un complet exclut tout le reste)."""
     _acces()
-    ouvert = en_cours()
-    if ouvert:
-        return ouvert
+    zones = json.loads(zones) if isinstance(zones, str) else (zones or [])
+    connues = {z.name for z in zones_de_l_espace()} | {SANS_ZONE}
+    inconnues = [z for z in zones if z not in connues]
+    if inconnues:
+        frappe.throw(_("Zone hors de l’espace {0} : {1}").format(espace() or "du Magasin", ", ".join(inconnues)))
+    zones = list(dict.fromkeys(zones))
+    for n in ouverts():
+        p = _perimetre(frappe.get_doc(INV, n))
+        if set(p) == set(zones):
+            return n
+        if perimetres_se_recoupent(p, zones):
+            frappe.throw(_("L’inventaire {0} ({1}) est en cours sur ce périmètre : reprenez-le ou clôturez-le d’abord.")
+                         .format(n, libelle_perimetre(p, _codes_zones())))
     m = S.magasin()
     S._verifier_entrepot(m)
     v = frappe.new_doc(INV)
-    v.update({"entrepot": m, "date": nowdate(), "statut": EN_COURS, "ouvert_par": frappe.session.user})
-    for a in _articles_magasin(m):
+    v.update({"entrepot": m, "date": nowdate(), "statut": EN_COURS, "ouvert_par": frappe.session.user,
+              "perimetre": Z.SEPARATEUR.join(zones) or None})
+    for a in _articles_magasin(m, zones):
         v.append("lignes", a)
     _recalculer(v)
     v.flags.ignore_permissions = True
@@ -225,7 +298,7 @@ def _rafraichir(v) -> bool:
             l.qte_systeme = nouveau
             change = True
     presents = {l.item_code for l in v.lignes}
-    nouveaux = [a for a in _articles_magasin(v.entrepot) if a["item_code"] not in presents]
+    nouveaux = [a for a in _articles_magasin(v.entrepot, _perimetre(v)) if a["item_code"] not in presents]
     if nouveaux:
         change = True
         for a in nouveaux:

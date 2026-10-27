@@ -23,6 +23,14 @@ class TestCalculPur(unittest.TestCase):
         self.assertEqual(I.cases_valides({"Magasin - A1": -2}), {"Magasin - A1": 0})   # jamais négatif
         self.assertEqual(I.cases_valides({I.SANS_ZONE: 0}, set()), {I.SANS_ZONE: 0.0})   # compté 0 = compté
 
+    def test_perimetres(self):
+        self.assertEqual(I.libelle_perimetre([]), "Tout le Magasin")
+        self.assertEqual(I.libelle_perimetre(["Magasin - A1", I.SANS_ZONE], {"Magasin - A1": "A1"}), "A1, Non rangé")
+        self.assertTrue(I.perimetres_se_recoupent([], ["Magasin - A1"]))              # un complet exclut tout
+        self.assertTrue(I.perimetres_se_recoupent(["Magasin - A1"], []))
+        self.assertTrue(I.perimetres_se_recoupent(["Magasin - A1", "Magasin - A2"], ["Magasin - A2"]))
+        self.assertFalse(I.perimetres_se_recoupent(["Magasin - A1"], ["Magasin - B1", I.SANS_ZONE]))
+
     def test_quantite_rapprochee(self):
         self.assertEqual(I.quantite_rapprochee(12, 10, 12), 10)       # rien n'a bougé : le compté
         self.assertEqual(I.quantite_rapprochee(12, 10, 9), 7)         # 3 vendus depuis : l'écart −2 reste
@@ -148,6 +156,54 @@ class TestInventaire(unittest.TestCase):
         self.assertEqual([(x["item_code"], x["qte_rapprochee"]) for x in b["bouges"]], [(i1, s1 - 5)])
         r = I.cloturer_inventaire(name)
         self.assertEqual((r["nb_bouges"], self._stock(i1)), (1, s1 - 5))
+
+    def test_inventaire_partiel_par_zone(self):
+        """Un périmètre = des zones : feuille limitée, inventaires parallèles sans recoupement, un complet exclu
+        tant qu'un partiel est ouvert, historique par zone après clôture."""
+        import frappe
+        i1, i2 = self.items[0], self.items[1]
+        s1 = self._stock(i1)
+        z1 = self.zone
+        z2 = frappe.db.get_value(Z.DOCTYPE_ZONE, {"est_espace": 0, "espace": self.espace, "name": ["!=", z1]}, "name")
+        if Z._ajouter(i1, z1):
+            Z._resynchroniser(i1)
+        for z in Z.zones_de(i2):                                            # i2 hors de z1 pour le test
+            if z == z1:
+                self.skipTest("l'article témoin est rangé dans la zone d'essai")
+        a = I.ouvrir_inventaire(json.dumps([z1]))
+        self.assertEqual(I.ouvrir_inventaire([z1]), a)                      # même périmètre = repris
+        d = I.detail_inventaire(a)
+        self.assertEqual((d["fiche"]["perimetre"], d["fiche"]["statut"]), ([z1], I.EN_COURS))
+        codes = {l["item_code"] for l in d["lignes"]}
+        self.assertIn(i1, codes)
+        self.assertNotIn(i2, codes)
+        self.assertTrue(all(z1 in l["zones"] for l in d["lignes"]))
+        with self.assertRaises(frappe.ValidationError):                     # recoupement : un complet est refusé
+            I.ouvrir_inventaire()
+        with self.assertRaises(frappe.ValidationError):
+            I.ouvrir_inventaire([z1, I.SANS_ZONE])
+        with self.assertRaises(frappe.ValidationError):                     # zone inconnue
+            I.ouvrir_inventaire(["Hall - Nulle part"])
+        b = I.ouvrir_inventaire([I.SANS_ZONE] + ([z2] if z2 else []))      # disjoint : ouvert en parallèle
+        self.assertNotEqual(a, b)
+        etat = I.inventaires_etat()
+        self.assertEqual([v["name"] for v in etat["ouverts"]], [a, b])
+        hz = {z["name"]: z for z in etat["zones_historique"]}
+        self.assertEqual((hz[z1]["en_cours"], hz[I.SANS_ZONE]["en_cours"]), (a, b))
+        self.assertTrue(all(i2 != l["item_code"] or not l["zones"] for l in I.detail_inventaire(b)["lignes"]))
+        I.enregistrer_inventaire(a, json.dumps({i1: {"cases": {z1: s1 - 1}}}))
+        r = I.cloturer_inventaire(a)
+        self.assertEqual((r["nb_rapproches"], self._stock(i1)), (1, s1 - 1))
+        etat = I.inventaires_etat()
+        hz = {z["name"]: z for z in etat["zones_historique"]}
+        self.assertEqual((hz[z1]["en_cours"], hz[z1]["dernier_inventaire"]), (None, a))
+        self.assertEqual([v["name"] for v in etat["ouverts"]], [b])
+        with self.assertRaises(frappe.ValidationError):                     # b toujours ouvert : pas de complet
+            I.ouvrir_inventaire()
+        I.annuler_inventaire(b)
+        c = I.ouvrir_inventaire()
+        self.assertEqual(I.detail_inventaire(c)["fiche"]["perimetre"], [])
+        self.assertIn(i2, {l["item_code"] for l in I.detail_inventaire(c)["lignes"]})
 
     def test_taux_saisi_a_la_cloture(self):
         """Un article sans aucun taux est exclu ; un taux saisi par un responsable l'inclut et prime sur
