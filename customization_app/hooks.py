@@ -335,6 +335,10 @@ doc_events = {
         ],
     },
     # Numérotation auto de la facture (remplace le Server Script « Generation N Facture »).
+    # Devis : mêmes règles de prix que la commande (prix HT sur document exonéré, marge minimale).
+    "Quotation": {
+        "validate": "customization_app.marge_minimale.sales_order_validate",
+    },
     "Sales Invoice": {
         "before_insert": "customization_app.facturation_numbering.set_numero_facture",
         # Lignes composants d'un échange : marque reprise du BL avant le
@@ -843,8 +847,9 @@ doctype_js = {
     # (API Aramex — aramex_expedition.py). woocommerce_fusion a aussi un doctype_js sur
     # Sales Order : Frappe concatène les deux, aucun n'écrase l'autre.
     "Sales Order": ["public/js/sales_order_aramex.js",
-                    # Lignes relevées à la marge minimale : bandeau + ligne orangée (marge_minimale).
+                    # Marge minimale en temps réel + prix HT sur document exonéré (marge_minimale).
                     "public/js/sales_order_marge.js"],
+    "Quotation": "public/js/sales_order_marge.js",
 }
 
 # doctype_js = {

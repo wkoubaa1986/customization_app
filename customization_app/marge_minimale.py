@@ -17,12 +17,24 @@ se mesure donc sur `net_rate` (HT), et le plancher TTC se déduit du rapport rat
 porte la TVA de l'article (7 %, 19 %…). Le coût d'un ensemble (Product Bundle) est la somme des coûts de ses
 composants (`packed_items`).
 
+EN TEMPS RÉEL AUSSI : le formulaire (public/js/sales_order_marge.js) appelle `plancher_ligne` dès qu'un article,
+une quantité, un prix ou une remise change, et relève le prix sous les yeux de l'utilisateur ; le hook `validate`
+reste le filet de sécurité (API, import, script). Même calcul des deux côtés. Le prix relevé est arrondi vers le
+haut au pas réglé (0,5 DT par défaut : 25,99 → 26,00).
+
+DOCUMENT EXONÉRÉ DE TVA (modèle « Vente Exoneration d'impot » : aucune taxe incluse dans le prix) : le prix de
+liste est TTC, le document est HT. Sans rien faire, ERPNext prend le prix TTC pour un prix HT et le client est
+surfacturé ; les commandes exonérées portaient des prix HT tapés à la main, incohérents (S-S25 : 22,4 ou 28 pour
+35 TTC = 29,41 HT). Ici le prix de liste de la ligne devient TTC ÷ (1 + TVA de l'article), sur commande et devis,
+en temps réel et à l'enregistrement (`convertir_prix_ht`). Le plancher de marge est alors HT (facteur TVA = 1).
+
 Jamais relevés : lignes gratuites, lignes à 0 DT (échange, garantie — option), articles sans coût connu
 (services, main d'œuvre), groupes d'articles exclus par le réglage, commandes du site web (option : le client
 a déjà payé le prix affiché en ligne).
 """
 from __future__ import annotations
 
+import json
 import math
 
 import frappe
@@ -37,6 +49,7 @@ BASE_COUT = "Coût d'achat"
 SOURCE_VALO = "Valorisation du stock"
 SOURCE_ACHAT = "Dernier prix d'achat"
 TOLERANCE = 0.0005
+ARRONDI_DEFAUT = 0.5
 
 
 def reglage() -> dict:
@@ -46,9 +59,11 @@ def reglage() -> dict:
     except Exception:
         return {"actif": 0}
     return {"actif": int(c.get("actif") or 0), "taux": flt(c.get("taux") or 0),
+            "arrondi": flt(c.get("arrondi")) if c.get("arrondi") is not None else ARRONDI_DEFAUT,
             "base": c.get("base") or BASE_PRIX, "source_cout": c.get("source_cout") or SOURCE_VALO,
             "ignorer_web": int(c.get("ignorer_web") if c.get("ignorer_web") is not None else 1),
             "ignorer_prix_zero": int(c.get("ignorer_prix_zero") if c.get("ignorer_prix_zero") is not None else 1),
+            "prix_ht_exonere": int(c.get("prix_ht_exonere") if c.get("prix_ht_exonere") is not None else 1),
             "groupes_exclus": {r.item_group for r in (c.get("groupes_exclus") or []) if r.item_group}}
 
 
@@ -77,10 +92,78 @@ def marge(prix_ht: float, cout: float, base: str = BASE_PRIX) -> float | None:
     return (prix_ht - cout) / prix_ht * 100
 
 
-def arrondir_sup(v: float, decimales: int = 3) -> float:
-    """Arrondi vers le haut au millime : le prix relevé ne redescend jamais sous le plancher."""
+def arrondir_sup(v: float, pas: float = 0.0, decimales: int = 3) -> float:
+    """Arrondi vers le haut : au pas donné (0,5 → 25,99 devient 26,00), sinon au millime. Le prix relevé ne
+    redescend jamais sous le plancher."""
+    pas = flt(pas)
+    if pas > 0:
+        return flt(math.ceil(flt(v) / pas - 1e-9) * pas, decimales)
     f = 10 ** decimales
     return math.ceil(flt(v) * f - 1e-9) / f
+
+
+def facteur_tva(item_tax_rate, taxes) -> float:
+    """TTC / HT d'une ligne, comme ERPNext le calcule : les taxes « incluses dans le prix » sur le net, au taux
+    du modèle de taxes de l'article (`item_tax_rate`, JSON) sinon celui de la ligne de taxes. Fonction pure."""
+    try:
+        carte = json.loads(item_tax_rate) if isinstance(item_tax_rate, str) else (item_tax_rate or {})
+    except ValueError:
+        carte = {}
+    total = 0.0
+    for t in taxes or []:
+        t = t if isinstance(t, dict) else t.as_dict()
+        if not t.get("included_in_print_rate") or t.get("charge_type") not in ("On Net Total", None):
+            continue
+        total += flt(carte.get(t.get("account_head"), t.get("rate")))
+    return 1 + total / 100.0
+
+
+def est_exonere(taxes) -> bool:
+    """Le document a des taxes mais aucune n'est incluse dans le prix : document HT (exonération)."""
+    lignes = [t if isinstance(t, dict) else t.as_dict() for t in taxes or []]
+    return bool(lignes) and not any(t.get("included_in_print_rate") for t in lignes)
+
+
+def taux_tva_article(item_code: str, item_tax_rate=None) -> float | None:
+    """La TVA (%) de l'article : d'abord `item_tax_rate` de la ligne (JSON posé par ERPNext), sinon le modèle de
+    taxes de la fiche article. None si inconnue."""
+    try:
+        carte = json.loads(item_tax_rate) if isinstance(item_tax_rate, str) else (item_tax_rate or {})
+    except ValueError:
+        carte = {}
+    if carte:
+        return flt(sum(flt(v) for v in carte.values()))
+    modele = frappe.db.get_value("Item Tax", {"parent": item_code, "parenttype": "Item"}, "item_tax_template", order_by="idx")
+    if not modele:
+        return None
+    return flt(sum(flt(d.tax_rate) for d in frappe.get_cached_doc("Item Tax Template", modele).taxes))
+
+
+def prix_liste(item_code: str, price_list: str, uom: str | None = None) -> float | None:
+    """Le prix de la liste pour l'article (unité de la ligne d'abord, sinon sans unité / unité de stock)."""
+    if not item_code or not price_list:
+        return None
+    prix = frappe.get_all("Item Price", filters={"item_code": item_code, "price_list": price_list, "selling": 1},
+                          fields=["price_list_rate", "uom"], order_by="valid_from desc, modified desc")
+    if not prix:
+        return None
+    pour_uom = [p for p in prix if uom and p.uom == uom]
+    sans = [p for p in prix if not p.uom or p.uom == frappe.get_cached_value("Item", item_code, "stock_uom")]
+    choix = (pour_uom or sans or prix)[0]
+    return flt(choix.price_list_rate)
+
+
+def prix_liste_ht(item_code: str, price_list: str, uom: str | None, item_tax_rate=None, decimales: int = 3) -> float | None:
+    """Prix de liste TTC ramené en HT avec la TVA de l'article. None si prix ou TVA inconnus."""
+    ttc, tva = prix_liste(item_code, price_list, uom), taux_tva_article(item_code, item_tax_rate)
+    if ttc is None or tva is None:
+        return None
+    return flt(ttc / (1 + tva / 100.0), decimales)
+
+
+def plancher_ttc(cout: float, facteur: float, r: dict, decimales: int = 3) -> float:
+    """Le prix TTC minimal d'une ligne : plancher HT × facteur TVA, arrondi vers le haut au pas réglé."""
+    return arrondir_sup(plancher_ht(cout, r["taux"], r["base"]) * flt(facteur or 1), r.get("arrondi", 0), decimales)
 
 
 # ----------------------------------------------------------------- coûts
@@ -117,7 +200,43 @@ def cout_ligne(doc, ligne, source: str) -> float:
 # ----------------------------------------------------------------- hook
 
 def sales_order_validate(doc, method=None):
+    """Commande client et devis : prix HT sur document exonéré, puis marge minimale."""
+    convertir_prix_ht(doc)
     appliquer(doc)
+
+
+def convertir_prix_ht(doc) -> list[dict]:
+    """Document exonéré : chaque ligne prend pour prix de liste le TTC de la liste ÷ (1 + TVA de l'article).
+    Le prix de la ligne suit : remise de règle de prix gardée en %, prix tapé à la main gardé tel quel (c'est
+    déjà un HT voulu), prix de liste pur recalculé. Renvoie les lignes converties."""
+    r = reglage()
+    if not r.get("actif") or not r.get("prix_ht_exonere") or not est_exonere(doc.get("taxes")):
+        return []
+    faites = []
+    for l in doc.get("items") or []:
+        if not l.item_code or flt(l.price_list_rate) <= 0:
+            continue
+        ht = prix_liste_ht(l.item_code, doc.get("selling_price_list"), l.get("uom"), l.get("item_tax_rate"), l.precision("price_list_rate"))
+        if ht is None or abs(flt(l.price_list_rate) - ht) <= TOLERANCE:
+            continue
+        avant_plr, avant_rate = flt(l.price_list_rate), flt(l.rate)
+        # Prix « à la main » : soit incohérent avec liste × remise (posé par l'API ou un script), soit une remise
+        # ou une marge sans règle de prix (tapé à l'écran, ERPNext en a déduit la remise). Il est gardé tel quel.
+        attendu = avant_plr + flt(l.margin_rate_or_amount) if l.get("margin_type") == "Amount" else \
+            avant_plr * (1 - flt(l.discount_percentage) / 100.0)
+        manuel = abs(avant_rate - attendu) > TOLERANCE or \
+            (not l.get("pricing_rules") and (flt(l.discount_percentage) != 0 or l.get("margin_type")))
+        l.price_list_rate = ht
+        if manuel and avant_rate > 0:
+            _relever(l, avant_rate)                   # gardé ; remise / marge refaites sur le HT
+        else:
+            l.margin_type, l.margin_rate_or_amount, l.rate_with_margin = "", 0, 0
+            l.rate = flt(ht * (1 - flt(l.discount_percentage) / 100.0), l.precision("rate"))
+            l.discount_amount = flt(ht - l.rate, l.precision("discount_amount"))
+        faites.append({"item_code": l.item_code, "plr_avant": avant_plr, "plr": ht, "rate": l.rate})
+    if faites:
+        doc.calculate_taxes_and_totals()
+    return faites
 
 
 def appliquer(doc) -> list[dict]:
@@ -141,20 +260,21 @@ def appliquer(doc) -> list[dict]:
         if cout <= 0:
             _oublier(l)
             continue
-        facteur_tva = (flt(l.rate) / flt(l.net_rate)) if flt(l.net_rate) > 0 and flt(l.rate) > 0 else 1.0
-        plancher_ttc = arrondir_sup(plancher_ht(cout, r["taux"], r["base"]) * facteur_tva, l.precision("rate"))
-        if flt(l.rate) + TOLERANCE >= plancher_ttc:
+        facteur = (flt(l.rate) / flt(l.net_rate)) if flt(l.net_rate) > 0 and flt(l.rate) > 0 \
+            else facteur_tva(l.get("item_tax_rate"), doc.get("taxes"))
+        plancher = plancher_ttc(cout, facteur, r, l.precision("rate"))
+        if flt(l.rate) + TOLERANCE >= plancher:
             # Au-dessus du plancher. Si la ligne avait été relevée et qu'on est exactement sur le plancher,
             # c'est notre prix : on garde la trace. Sinon l'utilisateur a mis un prix à lui : trace effacée.
-            if not (l.get(CHAMP_FLAG) and abs(flt(l.rate) - plancher_ttc) <= TOLERANCE):
+            if not (l.get(CHAMP_FLAG) and abs(flt(l.rate) - plancher) <= TOLERANCE):
                 _oublier(l)
             continue
         avant = flt(l.rate)
-        _relever(l, plancher_ttc)
+        _relever(l, plancher)
         if not l.get(CHAMP_FLAG):
             l.set(CHAMP_AVANT, avant)
         l.set(CHAMP_FLAG, 1)
-        corrections.append({"item_code": l.item_code, "item_name": l.item_name, "avant": avant, "apres": plancher_ttc})
+        corrections.append({"item_code": l.item_code, "item_name": l.item_name, "avant": avant, "apres": plancher})
     if corrections:
         avant_total = flt(doc.grand_total)
         doc.calculate_taxes_and_totals()
@@ -218,9 +338,40 @@ def _prevenir(corrections: list[dict], taux: float):
 
 
 @frappe.whitelist()
-def etat_commande(name: str) -> dict:
-    """Pour le formulaire : les lignes relevées d'une commande, et le taux en vigueur."""
+def plancher_ligne(ligne, taxes=None, woocommerce_id=None) -> dict:
+    """Temps réel (formulaire) : le prix TTC minimal d'une ligne telle qu'elle est à l'écran, ou None si la
+    ligne n'est jamais relevée. `ligne` : {item_code, warehouse, qty, conversion_factor, item_tax_rate, item_group,
+    is_free_item, rate, composants: [{item_code, qty, warehouse}] (ensemble)} ; `taxes` : les lignes de taxes du
+    document (account_head, rate, charge_type, included_in_print_rate)."""
+    ligne = json.loads(ligne) if isinstance(ligne, str) else (ligne or {})
+    taxes = json.loads(taxes) if isinstance(taxes, str) else (taxes or [])
     r = reglage()
-    lignes = frappe.get_all("Sales Order Item", filters={"parent": name, CHAMP_FLAG: 1},
+    out = {"actif": r["actif"], "taux": r.get("taux"), "plancher": None, "prix_liste_ht": None,
+           "exonere": est_exonere(taxes)}
+    if not r["actif"] or not ligne.get("item_code"):
+        return out
+    if out["exonere"] and r.get("prix_ht_exonere") and ligne.get("price_list"):
+        out["prix_liste_ht"] = prix_liste_ht(ligne["item_code"], ligne["price_list"], ligne.get("uom"), ligne.get("item_tax_rate"))
+    if r["taux"] <= 0 or (r["ignorer_web"] and woocommerce_id):
+        return out
+    if ligne.get("is_free_item") or (r["ignorer_prix_zero"] and flt(ligne.get("rate")) <= 0):
+        return out
+    groupe = ligne.get("item_group") or frappe.get_cached_value("Item", ligne["item_code"], "item_group")
+    if r["groupes_exclus"] and groupe in r["groupes_exclus"]:
+        return out
+    doc_like = frappe._dict(packed_items=[frappe._dict(c, parent_detail_docname="x") for c in ligne.get("composants") or []])
+    l = frappe._dict(ligne, name="x")
+    cout = cout_ligne(doc_like, l, r["source_cout"])
+    if cout <= 0:
+        return out
+    out["plancher"] = plancher_ttc(cout, facteur_tva(ligne.get("item_tax_rate"), taxes), r)
+    return out
+
+
+@frappe.whitelist()
+def etat_commande(name: str, doctype: str = "Sales Order") -> dict:
+    """Les lignes relevées d'une commande (ou d'un devis), et le taux en vigueur."""
+    r = reglage()
+    lignes = frappe.get_all(doctype + " Item", filters={"parent": name, CHAMP_FLAG: 1},
                             fields=["name", "idx", "item_code", "item_name", "rate", CHAMP_AVANT])
     return {"taux": r.get("taux"), "actif": r.get("actif"), "lignes": lignes}

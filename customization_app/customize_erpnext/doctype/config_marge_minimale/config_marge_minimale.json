@@ -7,13 +7,16 @@
  "field_order": [
   "actif",
   "taux",
+  "arrondi",
   "col_1",
   "base",
   "source_cout",
   "sec_exclusions",
   "ignorer_web",
   "ignorer_prix_zero",
-  "groupes_exclus"
+  "groupes_exclus",
+  "sec_exonere",
+  "prix_ht_exonere"
  ],
  "fields": [
   {
@@ -29,6 +32,14 @@
    "label": "Marge minimale (%)",
    "default": "15",
    "reqd": 1
+  },
+  {
+   "fieldname": "arrondi",
+   "fieldtype": "Currency",
+   "label": "Arrondir le prix relevé au multiple supérieur de",
+   "default": "0.5",
+   "options": "currency",
+   "description": "0,500 : un plancher de 25,990 DT donne 26,000 DT. 0 = au millime, sans arrondi."
   },
   {
    "fieldname": "col_1",
@@ -74,10 +85,22 @@
    "fieldtype": "Table MultiSelect",
    "label": "Groupes d’articles exclus",
    "options": "Config Marge Exclusion"
+  },
+  {
+   "fieldname": "sec_exonere",
+   "fieldtype": "Section Break",
+   "label": "Document exonéré de TVA"
+  },
+  {
+   "fieldname": "prix_ht_exonere",
+   "fieldtype": "Check",
+   "default": "1",
+   "label": "Convertir le prix de liste TTC en HT quand le document n’inclut pas la TVA",
+   "description": "Modèle « Vente Exoneration d'impot » : la liste de prix est TTC, le document est HT. Le prix de liste de chaque ligne devient TTC ÷ (1 + TVA de l’article), sur commande et devis, dès le choix de l’article. La marge minimale s’applique alors sur ce prix HT."
   }
  ],
  "links": [],
- "modified": "2026-10-27 23:00:00.000000",
+ "modified": "2026-10-28 01:30:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Config Marge Minimale",
