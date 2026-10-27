@@ -20,7 +20,9 @@
   "sec_verif",
   "responsable_verification",
   "duree_verification",
-  "verifications"
+  "verifications",
+  "sec_inventaire",
+  "espace_inventaire"
  ],
  "fields": [
   {
@@ -122,10 +124,22 @@
    "label": "Vérifications hebdomadaires",
    "options": "Config Stock Entrepot Verification",
    "description": "Chaque semaine, le jour indiqué, une fiche Vérification Stock est ouverte et deux tâches sont créées : l’employé du stock et le responsable principal."
+  },
+  {
+   "fieldname": "sec_inventaire",
+   "fieldtype": "Section Break",
+   "label": "Inventaire du Magasin"
+  },
+  {
+   "fieldname": "espace_inventaire",
+   "fieldtype": "Link",
+   "label": "Espace des emplacements du Magasin",
+   "options": "Zone Magasin",
+   "description": "Les cases de la feuille d’inventaire sont les zones de cet espace (« Magasin » : A1, B2…). Les zones des autres espaces (Hall…) appartiennent à d’autres entrepôts. Vide = l’espace nommé « Magasin »."
   }
  ],
  "links": [],
- "modified": "2026-10-05 12:00:00.000000",
+ "modified": "2026-10-27 16:00:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Config Stock Entrepot",

@@ -46,9 +46,10 @@ class TestInventaire(unittest.TestCase):
             self.skipTest("pas assez d'articles en stock au Magasin")
         for n in frappe.get_all(I.INV, filters={"statut": I.EN_COURS}, pluck="name"):   # un seul ouvert à la fois
             frappe.db.set_value(I.INV, n, "statut", I.ANNULE)
-        self.zone = frappe.db.get_value(Z.DOCTYPE_ZONE, {"est_espace": 0}, "name")
+        self.espace = I.espace()
+        self.zone = frappe.db.get_value(Z.DOCTYPE_ZONE, {"est_espace": 0, "espace": self.espace}, "name")
         if not self.zone:
-            self.skipTest("aucune zone de magasin")
+            self.skipTest("aucune zone dans l'espace de l'inventaire")
 
     def tearDown(self):
         fin_de_test("inventaire_magasin")
@@ -83,14 +84,16 @@ class TestInventaire(unittest.TestCase):
         l1 = self._ligne(d, i1)
         self.assertEqual(l1["qte_systeme"], s1)
         self.assertIsNone(l1["qte_comptee"])
-        self.assertEqual(l1["zones"], Z.zones_de(i1))                    # une case par emplacement de l'article
+        self.assertEqual(l1["zones"], [z for z in Z.zones_de(i1) if z == self.espace or z.startswith(self.espace + " - ")])
+        self.assertTrue(all(z["name"] == self.espace or z["espace"] == self.espace for z in d["zones"]))   # jamais le Hall
         self.assertIn("image", l1)
         self.assertTrue(d["zones"])
         # i1 : compté en deux emplacements (dont un nouveau), somme = stock − 2 ; i2 : compté juste ; i3 : pas compté.
         nouvelle = self.zone if self.zone not in Z.zones_de(i1) else frappe.db.get_value(
-            Z.DOCTYPE_ZONE, {"est_espace": 0, "name": ["not in", Z.zones_de(i1)]}, "name")
+            Z.DOCTYPE_ZONE, {"est_espace": 0, "espace": self.espace, "name": ["not in", Z.zones_de(i1)]}, "name")
+        hall = frappe.db.get_value(Z.DOCTYPE_ZONE, {"est_espace": 0, "espace": ["!=", self.espace]}, "name")
         r = I.enregistrer_inventaire(name, json.dumps({
-            i1: {"cases": {I.SANS_ZONE: s1 - 3, nouvelle: 1}},
+            i1: {"cases": {I.SANS_ZONE: s1 - 3, nouvelle: 1, hall: 7}},      # une case du Hall est ignorée
             i2: {"cases": {I.SANS_ZONE: s2}, "commentaire": "ras"}}))
         self.assertEqual((r["nb_comptes"], r["nb_ecarts"]), (2, 1))
         d = I.detail_inventaire(name)

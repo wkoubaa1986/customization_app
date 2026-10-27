@@ -3,8 +3,10 @@
 Un inventaire = une fiche « Inventaire Magasin » sur l'entrepôt Magasin du réglage, avec une ligne par article
 suivi en stock au Magasin (une ligne de Bin au Magasin, ou rangé dans une zone), photo et description lues
 sur l'article. Chaque ligne se compte PAR EMPLACEMENT : une case par zone de l'article (« Magasin - A1 »,
-« Hall - C2 »…), la somme des cases est la quantité comptée, comparée à la quantité système. Un article sans
-zone a une seule case « Non rangé » ; une case peut être ajoutée pour un emplacement où l'article a été
+« Magasin - B2 »…), la somme des cases est la quantité comptée, comparée à la quantité système. Seules les zones
+de l'ESPACE du Magasin (réglage `espace_inventaire`, « Magasin » par défaut) font des cases : les zones du Hall
+appartiennent à l'entrepôt Hall, qui a son propre stock. Un article sans zone dans cet espace a une seule case
+« Non rangé » ; une case peut être ajoutée pour un emplacement où l'article a été
 trouvé (la zone est alors ajoutée à l'article à la clôture).
 
 Le comptage s'enregistre au fil de l'eau (lignes modifiées seulement : plusieurs personnes peuvent compter en
@@ -35,6 +37,7 @@ EN_COURS, TERMINE, ANNULE = "En cours", "Terminé", "Annulé"
 SANS_ZONE = "__sans__"          # la case unique d'un article sans zone
 LIMITE_HISTORIQUE = 10
 LONGUEUR_DESCRIPTION = 160
+ESPACE_DEFAUT = "Magasin"
 
 
 # ── Accès ─────────────────────────────────────────────────────────────────────
@@ -81,27 +84,43 @@ def _charger_cases(l) -> dict[str, float]:
 
 # ── Lecture ───────────────────────────────────────────────────────────────────
 
+def espace() -> str | None:
+    """L'espace dont les zones font les cases : réglage, sinon l'espace nommé « Magasin » s'il existe."""
+    e = frappe.db.get_single_value(S.CONFIG, "espace_inventaire")
+    if e and frappe.db.get_value(Z.DOCTYPE_ZONE, e, "est_espace"):
+        return e
+    return ESPACE_DEFAUT if frappe.db.get_value(Z.DOCTYPE_ZONE, ESPACE_DEFAUT, "est_espace") else None
+
+
+def zones_de_l_espace(esp: str | None = None) -> list[dict]:
+    """L'espace lui-même puis ses zones (« Magasin », « Magasin - A1 »…) ; sans espace connu, toutes les zones."""
+    esp = esp or espace()
+    filtres = {"name": ["in", [esp] + frappe.get_all(Z.DOCTYPE_ZONE, filters={"espace": esp}, pluck="name")]} if esp else {}
+    return frappe.get_all(Z.DOCTYPE_ZONE, filters=filtres, fields=["name", "espace", "code", "est_espace"],
+                          order_by="est_espace desc, espace, code")
+
+
 def _zones_par_article() -> dict[str, list[str]]:
+    """Les zones de chaque article DANS l'espace de l'inventaire (les zones du Hall sont ignorées)."""
+    connues = {z.name for z in zones_de_l_espace()}
     out = {}
-    for r in frappe.get_all(Z.DOCTYPE_LIEN, filters={"parenttype": "Item"}, fields=["parent", "zone"],
-                            order_by="parent, idx"):
+    for r in frappe.get_all(Z.DOCTYPE_LIEN, filters={"parenttype": "Item", "zone": ["in", list(connues) or [""]]},
+                            fields=["parent", "zone"], order_by="parent, idx"):
         out.setdefault(r.parent, []).append(r.zone)
     return out
 
 
 def _articles_magasin(magasin: str) -> list[dict]:
     """Les articles suivis en stock au Magasin : actifs, suivis en stock, avec une ligne de Bin au Magasin
-    (même à zéro) ou rangés dans une zone. Quantité et taux du moment."""
-    rows = frappe.db.sql(f"""select i.name item_code, i.item_name, coalesce(b.actual_qty, 0) actual_qty,
-                                    coalesce(b.valuation_rate, 0) valuation_rate, i.valuation_rate taux_article
-                             from tabItem i
-                             left join tabBin b on b.item_code = i.name and b.warehouse = %(m)s
-                             where i.disabled = 0 and i.is_stock_item = 1 and i.has_variants = 0
-                               and (b.name is not null
-                                    or exists(select 1 from `tab{Z.DOCTYPE_LIEN}` z
-                                              where z.parent = i.name and z.parenttype = 'Item'))
-                             order by i.item_name, i.name""", {"m": magasin}, as_dict=True)
+    (même à zéro) ou rangés dans une zone de l'espace du Magasin. Quantité et taux du moment."""
     zones = _zones_par_article()
+    rows = frappe.db.sql("""select i.name item_code, i.item_name, coalesce(b.actual_qty, 0) actual_qty,
+                                   coalesce(b.valuation_rate, 0) valuation_rate, i.valuation_rate taux_article
+                            from tabItem i
+                            left join tabBin b on b.item_code = i.name and b.warehouse = %(m)s
+                            where i.disabled = 0 and i.is_stock_item = 1 and i.has_variants = 0
+                              and (b.name is not null or i.name in %(ranges)s)
+                            order by i.item_name, i.name""", {"m": magasin, "ranges": list(zones) or [""]}, as_dict=True)
     return [{"item_code": r.item_code, "item_name": r.item_name, "qte_systeme": flt(r.actual_qty, 6),
              "taux": flt(r.valuation_rate, 6) or flt(r.taux_article, 6),
              "zones": Z.SEPARATEUR.join(zones.get(r.item_code, [])) or None}
@@ -117,8 +136,7 @@ def _infos_articles(codes: list[str]) -> dict[str, dict]:
 
 def _zones_choix() -> list[dict]:
     return [{"name": z.name, "espace": z.espace, "code": z.code, "est_espace": cint(z.est_espace)}
-            for z in frappe.get_all(Z.DOCTYPE_ZONE, fields=["name", "espace", "code", "est_espace"],
-                                    order_by="est_espace desc, espace, code")]
+            for z in zones_de_l_espace()]
 
 
 def _resume(v) -> dict:
@@ -251,8 +269,8 @@ def detail_inventaire(name):
                        "compte_par": frappe.utils.get_fullname(l.compte_par) if l.compte_par else None,
                        "compte_le": str(l.compte_le) if l.compte_le else None,
                        "zones_ajoutees": l.zones_ajoutees})
-    return {"fiche": _resume(v), "zones": _zones_choix(), "sans_zone": SANS_ZONE, "lignes": lignes,
-            "voir_valeur": S.est_responsable()}
+    return {"fiche": _resume(v), "zones": _zones_choix(), "espace": espace(), "sans_zone": SANS_ZONE,
+            "lignes": lignes, "voir_valeur": S.est_responsable()}
 
 
 @frappe.whitelist(methods=["POST"])
@@ -264,7 +282,7 @@ def enregistrer_inventaire(name, comptes):
     comptes = S._dict_json(comptes)
     if not comptes:
         return _resume(v)
-    zones_connues = set(frappe.get_all(Z.DOCTYPE_ZONE, pluck="name"))
+    zones_connues = {z.name for z in zones_de_l_espace()}      # une case du Hall n'a pas sa place ici
     codes = [l.item_code for l in v.lignes if l.item_code in comptes]
     qtes = S._quantites(codes, [v.entrepot])
     for l in v.lignes:
@@ -300,6 +318,7 @@ def _preparer_cloture(v) -> dict:
     écart du comptage). Rend le bilan de ce qui va se passer — PURE côté base : rien n'est enregistré."""
     qtes = S._quantites([l.item_code for l in v.lignes], [v.entrepot])
     zones_article = _zones_par_article()
+    connues = {z.name for z in zones_de_l_espace()}       # une case hors espace (ancienne feuille) n'est pas ajoutée
     bouges, sans_taux, a_rapprocher, zones_nouvelles = [], [], [], []
     for l in v.lignes:
         if not l.compte:
@@ -320,7 +339,7 @@ def _preparer_cloture(v) -> dict:
             else:
                 a_rapprocher.append(l)
         nouvelles = [z for z, q in _charger_cases(l).items()
-                     if z != SANS_ZONE and flt(q) > 0 and z not in (zones_article.get(l.item_code) or [])]
+                     if z in connues and flt(q) > 0 and z not in (zones_article.get(l.item_code) or [])]
         l.zones_ajoutees = Z.SEPARATEUR.join(nouvelles) or None
         if nouvelles:
             zones_nouvelles.append({"item_code": l.item_code, "item_name": l.item_name, "zones": nouvelles})

@@ -134,7 +134,7 @@ class StockEntrepots {
         <li>Le responsable vérifie, corrige éventuellement, valide → <b>à accepter</b> par l’employé : d’accord → « ✅ Accepter », un <b>rapprochement de stock</b> aligne le véhicule ; pas d’accord → corrigez la quantité, la fiche repart chez le responsable, qui a le dernier mot.</li>
         <li>Un article qui a bougé entre le comptage et la validation perd son comptage : à recompter (ligne marquée).</li></ul></div>
       ${this.ctx.inventaire ? `<div class="et"><div class="t">📋 Inventaire du Magasin — compter tout le Magasin par emplacement</div><ul>
-        <li>Bouton « 📋 Inventaire du Magasin » (Solde). Tous les articles suivis en stock au Magasin, photo et description, <b>une case par emplacement</b> (zones de l’article ; « Non rangé » sans zone) : la somme des cases = compté, comparé au système. « ＋ » ajoute un emplacement où l’article a été trouvé.</li>
+        <li>Bouton « 📋 Inventaire du Magasin » (Solde). Tous les articles suivis en stock au Magasin, photo et description, <b>une case par emplacement</b> (zones de l’article dans l’espace Magasin — pas le Hall ; « Non rangé » sans zone) : la somme des cases = compté, comparé au système. « ＋ » ajoute un emplacement où l’article a été trouvé.</li>
         <li>Enregistrement automatique ligne par ligne : plusieurs personnes peuvent compter en même temps, et reprendre plus tard. Filtres : zone, à compter / comptés / écarts.</li>
         <li>« ✅ Clôturer » : aperçu, puis <b>une écriture de stock</b> (Stock Reconciliation) sur le Magasin pour les articles comptés en écart ; un article qui a bougé depuis son comptage reçoit son écart sur le stock du moment. Les non comptés ne bougent pas.</li></ul></div>` : ""}
       <p class="se-note"><b>Erreurs courantes</b> : transfert envoyé par erreur → « Annuler la demande » tant qu’il n’est pas validé · comptage terminé trop tôt → le responsable « Renvoie au comptage » · réglages (Magasin, trajets permis, seuils, cibles, jours de vérification) : <a href="/app/config-stock-entrepot">Config Stock Entrepot</a>.</p>
@@ -1121,7 +1121,7 @@ class StockEntrepots {
     const d = (await frappe.call({ method: SE_INV + "detail_inventaire", args: { name } })).message;
     const $c = this.$r.find("#se-i-contenu"), fini = d.fiche.statut !== "En cours", SANS = d.sans_zone;
     const zinfo = {}; d.zones.forEach((z) => { zinfo[z.name] = z; });
-    const libZone = (z) => (z === SANS ? "Non rangé" : !zinfo[z] ? z : zinfo[z].est_espace ? z : zinfo[z].espace === "Magasin" ? zinfo[z].code : `${zinfo[z].espace} ${zinfo[z].code}`);
+    const libZone = (z) => (z === SANS ? "Non rangé" : !zinfo[z] ? z : zinfo[z].est_espace ? z : zinfo[z].espace === d.espace ? zinfo[z].code : `${zinfo[z].espace} ${zinfo[z].code}`);
     const r6 = (n) => Math.round(n * 1e6) / 1e6;
     // État de saisie par article : colonnes (zones de l'article, puis celles ajoutées) et valeur de chaque case.
     const etat = {};
@@ -1154,7 +1154,7 @@ class StockEntrepots {
       <div class="se-card">
         <div class="se-v-stock"><div class="t">📋 Inventaire ${se_esc(d.fiche.name)} — ${se_dt(d.fiche.date)} ${fini ? `<span class="se-badge">${se_esc(d.fiche.statut)}</span>` : ""}</div>
           ${fini ? `<div class="se-note">${d.fiche.termine_par ? `${d.fiche.statut === "Terminé" ? "Clôturé" : "Annulé"} par ${se_esc(d.fiche.termine_par)} le ${se_dthm(d.fiche.termine_le)}` : ""}${d.fiche.rapprochement ? ` · ${se_lien("Stock Reconciliation", d.fiche.rapprochement, "écriture " + d.fiche.rapprochement)}` : ""}${d.fiche.note ? `<br>${se_esc(d.fiche.note)}` : ""}</div>`
-            : `<div class="se-note">Une case par emplacement : tapez ce que vous trouvez à chaque endroit, la somme fait le compté. « ＋ » ajoute un emplacement où l’article a été trouvé (il sera ajouté à l’article). Enregistrement automatique.</div>`}
+            : `<div class="se-note">Une case par emplacement : tapez ce que vous trouvez à chaque endroit, la somme fait le compté. « ＋ » ajoute un emplacement où l’article a été trouvé (ajouté à ses emplacements à la clôture). Enregistrement automatique.</div>`}
           <div class="plan" id="se-i-bilan"></div><div class="se-i-etat" id="se-i-etat"></div></div>
         <div class="se-i-filtres"><input type="search" class="form-control se-saisie" id="se-i-filtre" placeholder="🔎 Article (nom, code, description)…">
           <select class="form-control" id="se-i-zone">${optZones()}</select></div>
