@@ -92,6 +92,13 @@ class TestInventaire(unittest.TestCase):
         nouvelle = self.zone if self.zone not in Z.zones_de(i1) else frappe.db.get_value(
             Z.DOCTYPE_ZONE, {"est_espace": 0, "espace": self.espace, "name": ["not in", Z.zones_de(i1)]}, "name")
         hall = frappe.db.get_value(Z.DOCTYPE_ZONE, {"est_espace": 0, "espace": ["!=", self.espace]}, "name")
+        # « ＋ » : l'emplacement est AUSSITÔT sur la fiche article (demande du 27/10) ; une zone du Hall est refusée.
+        with self.assertRaises(frappe.ValidationError):
+            I.ajouter_emplacement(name, i1, hall)
+        r = I.ajouter_emplacement(name, i1, nouvelle)
+        self.assertIn(nouvelle, Z.zones_de(i1))
+        self.assertEqual(r["zones_ajoutees"], [nouvelle])
+        self.assertIn(nouvelle, self._ligne(I.detail_inventaire(name), i1)["zones"])
         r = I.enregistrer_inventaire(name, json.dumps({
             i1: {"cases": {I.SANS_ZONE: s1 - 3, nouvelle: 1, hall: 7}},      # une case du Hall est ignorée
             i2: {"cases": {I.SANS_ZONE: s2}, "commentaire": "ras"}}))
@@ -117,7 +124,7 @@ class TestInventaire(unittest.TestCase):
         self.assertEqual(frappe.db.get_value("Stock Reconciliation", r["rapprochement"], "docstatus"), 1)
         self.assertEqual(self._stock(i1), s1 - 2)                          # le Magasin est aligné sur le compté
         self.assertEqual((self._stock(i2), self._stock(i3)), (s2, s3))     # les non comptés ne bougent pas
-        self.assertIn(nouvelle, Z.zones_de(i1))                            # emplacement découvert → sur l'article
+        self.assertIn(nouvelle, Z.zones_de(i1))                            # toujours sur l'article
         v = frappe.get_doc(I.INV, name)
         self.assertEqual((v.statut, v.note, v.rapprochement), (I.TERMINE, "essai", r["rapprochement"]))
         self.assertIsNone(I.en_cours())
@@ -142,6 +149,22 @@ class TestInventaire(unittest.TestCase):
         r = I.cloturer_inventaire(name)
         self.assertEqual((r["nb_bouges"], self._stock(i1)), (1, s1 - 5))
 
+    def test_retirer_un_emplacement_ajoute_par_erreur(self):
+        import frappe
+        i1 = self.items[0]
+        name = I.ouvrir_inventaire()
+        zone = self.zone if self.zone not in Z.zones_de(i1) else frappe.db.get_value(
+            Z.DOCTYPE_ZONE, {"est_espace": 0, "espace": self.espace, "name": ["not in", Z.zones_de(i1)]}, "name")
+        avant = Z.zones_de(i1)
+        I.ajouter_emplacement(name, i1, zone)
+        I.enregistrer_inventaire(name, json.dumps({i1: {"cases": {zone: 4}}}))
+        r = I.retirer_emplacement(name, i1, zone)
+        self.assertEqual((Z.zones_de(i1), r["zones_ajoutees"]), (avant, []))
+        self.assertIsNone(self._ligne(I.detail_inventaire(name), i1)["qte_comptee"])   # sa case est effacée
+        if avant:                                                          # un emplacement d'origine ne se retire pas ici
+            with self.assertRaises(frappe.ValidationError):
+                I.retirer_emplacement(name, i1, avant[0])
+
     def test_annuler_ne_bouge_rien(self):
         import frappe
         i1 = self.items[0]
@@ -156,5 +179,6 @@ class TestInventaire(unittest.TestCase):
 
     def test_ecritures_en_post_seulement(self):
         import frappe
-        for fn in (I.ouvrir_inventaire, I.enregistrer_inventaire, I.cloturer_inventaire, I.annuler_inventaire):
+        for fn in (I.ouvrir_inventaire, I.enregistrer_inventaire, I.cloturer_inventaire, I.annuler_inventaire,
+                   I.ajouter_emplacement, I.retirer_emplacement):
             self.assertEqual(frappe.allowed_http_methods_for_whitelisted_func.get(fn), ["POST"], fn.__name__)

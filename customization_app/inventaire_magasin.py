@@ -6,8 +6,8 @@ sur l'article. Chaque ligne se compte PAR EMPLACEMENT : une case par zone de l'a
 « Magasin - B2 »…), la somme des cases est la quantité comptée, comparée à la quantité système. Seules les zones
 de l'ESPACE du Magasin (réglage `espace_inventaire`, « Magasin » par défaut) font des cases : les zones du Hall
 appartiennent à l'entrepôt Hall, qui a son propre stock. Un article sans zone dans cet espace a une seule case
-« Non rangé » ; une case peut être ajoutée pour un emplacement où l'article a été
-trouvé (la zone est alors ajoutée à l'article à la clôture).
+« Non rangé » ; une case peut être ajoutée pour un emplacement où l'article a été trouvé : la zone est AUSSITÔT
+ajoutée aux emplacements de l'article (fiche article), et retirable tant que l'inventaire est ouvert.
 
 Le comptage s'enregistre au fil de l'eau (lignes modifiées seulement : plusieurs personnes peuvent compter en
 même temps). La quantité système d'une ligne est relue AU MOMENT où elle est comptée : l'écart mesure ce
@@ -268,7 +268,7 @@ def detail_inventaire(name):
                        "commentaire": l.commentaire, "sans_taux": cint(l.sans_taux),
                        "compte_par": frappe.utils.get_fullname(l.compte_par) if l.compte_par else None,
                        "compte_le": str(l.compte_le) if l.compte_le else None,
-                       "zones_ajoutees": l.zones_ajoutees})
+                       "zones_ajoutees": _zones_ajoutees(l)})
     return {"fiche": _resume(v), "zones": _zones_choix(), "espace": espace(), "sans_zone": SANS_ZONE,
             "lignes": lignes, "voir_valeur": S.est_responsable()}
 
@@ -305,6 +305,62 @@ def enregistrer_inventaire(name, comptes):
     return dict(_resume(v), enregistre_le=str(now_datetime()))
 
 
+def _ligne(v, item_code):
+    l = next((l for l in v.lignes if l.item_code == item_code), None)
+    if not l:
+        frappe.throw(_("Article absent de cette feuille : {0}").format(item_code))
+    return l
+
+
+def _zones_ajoutees(l) -> list[str]:
+    return [z for z in (l.zones_ajoutees or "").split(Z.SEPARATEUR) if z]
+
+
+def _poser_zones(l):
+    """Réécrit les emplacements de la ligne d'après la fiche article (zones de l'espace seulement)."""
+    l.zones = Z.SEPARATEUR.join(_zones_par_article().get(l.item_code, [])) or None
+
+
+@frappe.whitelist(methods=["POST"])
+def ajouter_emplacement(name, item_code, zone):
+    """« ＋ » sur une ligne : la zone est AUSSITÔT ajoutée aux emplacements de l'article (fiche article), et la
+    feuille gagne une case. Zones de l'espace du Magasin seulement."""
+    _acces()
+    v = _ouvert(name)
+    l = _ligne(v, item_code)
+    if zone not in {z.name for z in zones_de_l_espace()}:
+        frappe.throw(_("{0} n’est pas un emplacement de l’espace {1}.").format(zone, espace() or "du Magasin"))
+    if Z._ajouter(item_code, zone):
+        Z._resynchroniser(item_code)
+        l.zones_ajoutees = Z.SEPARATEUR.join(_zones_ajoutees(l) + [zone])
+    _poser_zones(l)
+    _sauver(v)
+    return {"zones": [z for z in (l.zones or "").split(Z.SEPARATEUR) if z], "zones_ajoutees": _zones_ajoutees(l)}
+
+
+@frappe.whitelist(methods=["POST"])
+def retirer_emplacement(name, item_code, zone):
+    """✕ sur une case ajoutée pendant CET inventaire : la zone est retirée de l'article (erreur de « ＋ »)."""
+    _acces()
+    v = _ouvert(name)
+    l = _ligne(v, item_code)
+    if zone not in _zones_ajoutees(l):
+        frappe.throw(_("{0} n’a pas été ajouté pendant cet inventaire : retirez-le depuis la page Zones.").format(zone))
+    Z._retirer(item_code, zone)
+    Z._resynchroniser(item_code)
+    l.zones_ajoutees = Z.SEPARATEUR.join(z for z in _zones_ajoutees(l) if z != zone) or None
+    cases = _charger_cases(l)
+    if zone in cases:
+        del cases[zone]
+        l.comptes = json.dumps(cases, ensure_ascii=False) if cases else None
+        l.compte = 1 if cases else 0
+        l.qte_comptee = sommer_cases(cases) if cases else 0
+    _poser_zones(l)
+    _recalculer(v)
+    _sauver(v)
+    return {"zones": [z for z in (l.zones or "").split(Z.SEPARATEUR) if z], "zones_ajoutees": _zones_ajoutees(l)}
+
+
 def _taux(l) -> float:
     """Le taux pour le rapprochement : celui photographié, sinon la fiche article, sinon le dernier achat."""
     if flt(l.taux, 6) > 0:
@@ -317,8 +373,6 @@ def _preparer_cloture(v) -> dict:
     """Relit le stock du moment et pose, sur chaque ligne comptée, la quantité rapprochée (système actuel +
     écart du comptage). Rend le bilan de ce qui va se passer — PURE côté base : rien n'est enregistré."""
     qtes = S._quantites([l.item_code for l in v.lignes], [v.entrepot])
-    zones_article = _zones_par_article()
-    connues = {z.name for z in zones_de_l_espace()}       # une case hors espace (ancienne feuille) n'est pas ajoutée
     bouges, sans_taux, a_rapprocher, zones_nouvelles = [], [], [], []
     for l in v.lignes:
         if not l.compte:
@@ -338,11 +392,9 @@ def _preparer_cloture(v) -> dict:
                 sans_taux.append({"item_code": l.item_code, "item_name": l.item_name})
             else:
                 a_rapprocher.append(l)
-        nouvelles = [z for z, q in _charger_cases(l).items()
-                     if z in connues and flt(q) > 0 and z not in (zones_article.get(l.item_code) or [])]
-        l.zones_ajoutees = Z.SEPARATEUR.join(nouvelles) or None
-        if nouvelles:
-            zones_nouvelles.append({"item_code": l.item_code, "item_name": l.item_name, "zones": nouvelles})
+    for l in v.lignes:
+        if _zones_ajoutees(l):      # emplacements ajoutés pendant l'inventaire (déjà sur la fiche article)
+            zones_nouvelles.append({"item_code": l.item_code, "item_name": l.item_name, "zones": _zones_ajoutees(l)})
     comptes = [l for l in v.lignes if l.compte]
     return {"nb_lignes": len(v.lignes), "nb_comptes": len(comptes), "nb_non_comptes": len(v.lignes) - len(comptes),
             "nb_ecarts": sum(1 for l in comptes if abs(flt(l.ecart, 6)) > 1e-6),
@@ -384,29 +436,18 @@ def _rapprochement(v, lignes) -> str | None:
     return doc.name
 
 
-def _ajouter_zones(v) -> int:
-    n = 0
-    for l in v.lignes:
-        for z in [z for z in (l.zones_ajoutees or "").split(Z.SEPARATEUR) if z]:
-            if frappe.db.exists(Z.DOCTYPE_ZONE, z) and Z._ajouter(l.item_code, z):
-                n += 1
-        if l.zones_ajoutees:
-            Z._resynchroniser(l.item_code)
-    return n
-
-
 @frappe.whitelist(methods=["POST"])
 def cloturer_inventaire(name, note=None):
     """Clôture : UNE écriture Stock Reconciliation sur le Magasin (lignes comptées dont l'écart n'est pas nul,
-    quantité = système actuel + écart du comptage), zones découvertes ajoutées aux articles, fiche terminée.
-    Les articles non comptés ne bougent pas."""
+    quantité = système actuel + écart du comptage), fiche terminée. Les articles non comptés ne bougent pas
+    (les emplacements ajoutés par « ＋ » sont déjà sur les fiches articles)."""
     _acces()
     v = _ouvert(name)
     bilan = _preparer_cloture(v)
     lignes = [l for l in v.lignes if l.compte and not l.sans_taux
               and abs(flt(l.qte_rapprochee, 6) - flt(l.qte_systeme_cloture, 6)) > 1e-6]
     v.rapprochement = _rapprochement(v, lignes)
-    v.nb_zones_ajoutees = _ajouter_zones(v)
+    v.nb_zones_ajoutees = sum(len(_zones_ajoutees(l)) for l in v.lignes)
     v.nb_bouges = len(bilan["bouges"])
     v.nb_sans_taux = len(bilan["sans_taux"])
     v.statut = TERMINE

@@ -134,7 +134,7 @@ class StockEntrepots {
         <li>Le responsable vérifie, corrige éventuellement, valide → <b>à accepter</b> par l’employé : d’accord → « ✅ Accepter », un <b>rapprochement de stock</b> aligne le véhicule ; pas d’accord → corrigez la quantité, la fiche repart chez le responsable, qui a le dernier mot.</li>
         <li>Un article qui a bougé entre le comptage et la validation perd son comptage : à recompter (ligne marquée).</li></ul></div>
       ${this.ctx.inventaire ? `<div class="et"><div class="t">📋 Inventaire du Magasin — compter tout le Magasin par emplacement</div><ul>
-        <li>Bouton « 📋 Inventaire du Magasin » (Solde). Tous les articles suivis en stock au Magasin, photo et description, <b>une case par emplacement</b> (zones de l’article dans l’espace Magasin — pas le Hall ; « Non rangé » sans zone) : la somme des cases = compté, comparé au système. « ＋ » ajoute un emplacement où l’article a été trouvé.</li>
+        <li>Bouton « 📋 Inventaire du Magasin » (Solde). Tous les articles suivis en stock au Magasin, photo et description, <b>une case par emplacement</b> (zones de l’article dans l’espace Magasin — pas le Hall ; « Non rangé » sans zone) : la somme des cases = compté, comparé au système. « ＋ » ajoute un emplacement où l’article a été trouvé : aussitôt ajouté à la fiche article (✕ pour le retirer).</li>
         <li>Enregistrement automatique ligne par ligne : plusieurs personnes peuvent compter en même temps, et reprendre plus tard. Filtres : zone, à compter / comptés / écarts.</li>
         <li>« ✅ Clôturer » : aperçu, puis <b>une écriture de stock</b> (Stock Reconciliation) sur le Magasin pour les articles comptés en écart ; un article qui a bougé depuis son comptage reçoit son écart sur le stock du moment. Les non comptés ne bougent pas.</li></ul></div>` : ""}
       <p class="se-note"><b>Erreurs courantes</b> : transfert envoyé par erreur → « Annuler la demande » tant qu’il n’est pas validé · comptage terminé trop tôt → le responsable « Renvoie au comptage » · réglages (Magasin, trajets permis, seuils, cibles, jours de vérification) : <a href="/app/config-stock-entrepot">Config Stock Entrepot</a>.</p>
@@ -1130,7 +1130,7 @@ class StockEntrepots {
       Object.keys(l.cases).forEach((z) => { if (!colonnes.includes(z)) colonnes.push(z); });
       if (!colonnes.length) colonnes.push(SANS);
       const cases = {}; colonnes.forEach((z) => { cases[z] = l.cases[z] == null ? null : l.cases[z]; });
-      etat[l.item_code] = { colonnes, cases, commentaire: l.commentaire || "" };
+      etat[l.item_code] = { colonnes, cases, commentaire: l.commentaire || "", ajoutees: l.zones_ajoutees || [] };
     });
     const totalDe = (e) => { let t = null; Object.values(e.cases).forEach((v) => { if (v != null && v !== "") t = (t || 0) + (+v || 0); }); return t == null ? null : r6(t); };
     const ligne = (l) => {
@@ -1141,11 +1141,11 @@ class StockEntrepots {
             <div class="se-code">${se_esc(l.item_code)}${l.groupe ? ` · ${se_esc(l.groupe)}` : ""}${l.uom ? ` · ${se_esc(l.uom)}` : ""}</div>
             ${l.description ? `<div class="se-desc" title="${se_esc(l.description)}">${se_esc(l.description)}</div>` : ""}</div>
           <div class="sys">système<b>${se_q(l.qte_systeme)}</b>${l.bouge ? `<small class="neg">maintenant ${se_q(l.qte_actuelle)}</small>` : ""}</div></div>
-        <div class="cases">${e.colonnes.map((z) => `<label class="case"><span class="z">${se_esc(libZone(z))}</span>
+        <div class="cases">${e.colonnes.map((z) => `<label class="case ${e.ajoutees.includes(z) ? "ajoutee" : ""}"><span class="z">${se_esc(libZone(z))}${e.ajoutees.includes(z) && !fini ? `<span class="x" data-retirer-zone="${se_esc(z)}" title="Retirer cet emplacement de l’article">✕</span>` : ""}</span>
             <input type="number" inputmode="decimal" min="0" step="any" class="form-control" data-zone="${se_esc(z)}" value="${e.cases[z] == null ? "" : se_esc(e.cases[z])}" ${fini ? "disabled" : ""} placeholder="–"></label>`).join("")}
           ${fini ? "" : `<span class="se-bt" data-ajouter-zone title="Ajouter un emplacement">＋</span>`}
           <div class="total">= <b class="tot">${compte ? se_q(total) : "?"}</b><span class="ec ${ecart ? (ecart < 0 ? "neg" : "pos") : ""}">${ecart == null ? "" : se_signe(ecart)}</span></div></div>
-        ${l.compte_par ? `<div class="se-note qui">compté par ${se_esc(l.compte_par)} le ${se_dthm(l.compte_le)}${l.qte_rapprochee != null && fini ? ` · rapproché à <b>${se_q(l.qte_rapprochee)}</b>` : ""}${l.sans_taux ? ` · <span class="neg">sans taux : exclu</span>` : ""}${l.zones_ajoutees ? ` · 📍 ajouté : ${se_esc(l.zones_ajoutees)}` : ""}</div>` : ""}
+        ${l.compte_par ? `<div class="se-note qui">compté par ${se_esc(l.compte_par)} le ${se_dthm(l.compte_le)}${l.qte_rapprochee != null && fini ? ` · rapproché à <b>${se_q(l.qte_rapprochee)}</b>` : ""}${l.sans_taux ? ` · <span class="neg">sans taux : exclu</span>` : ""}${(l.zones_ajoutees || []).length ? ` · 📍 ajouté à l’article : ${se_esc(l.zones_ajoutees.join(", "))}` : ""}</div>` : ""}
       </div>`;
     };
     const optZones = () => { const g = {}; d.zones.forEach((z) => { (g[z.est_espace ? z.name : z.espace] = g[z.est_espace ? z.name : z.espace] || []).push(z); });
@@ -1154,7 +1154,7 @@ class StockEntrepots {
       <div class="se-card">
         <div class="se-v-stock"><div class="t">📋 Inventaire ${se_esc(d.fiche.name)} — ${se_dt(d.fiche.date)} ${fini ? `<span class="se-badge">${se_esc(d.fiche.statut)}</span>` : ""}</div>
           ${fini ? `<div class="se-note">${d.fiche.termine_par ? `${d.fiche.statut === "Terminé" ? "Clôturé" : "Annulé"} par ${se_esc(d.fiche.termine_par)} le ${se_dthm(d.fiche.termine_le)}` : ""}${d.fiche.rapprochement ? ` · ${se_lien("Stock Reconciliation", d.fiche.rapprochement, "écriture " + d.fiche.rapprochement)}` : ""}${d.fiche.note ? `<br>${se_esc(d.fiche.note)}` : ""}</div>`
-            : `<div class="se-note">Une case par emplacement : tapez ce que vous trouvez à chaque endroit, la somme fait le compté. « ＋ » ajoute un emplacement où l’article a été trouvé (ajouté à ses emplacements à la clôture). Enregistrement automatique.</div>`}
+            : `<div class="se-note">Une case par emplacement : tapez ce que vous trouvez à chaque endroit, la somme fait le compté. « ＋ » ajoute un emplacement où l’article a été trouvé : il est <b>aussitôt ajouté aux emplacements de l’article</b> (✕ pour le retirer). Enregistrement automatique.</div>`}
           <div class="plan" id="se-i-bilan"></div><div class="se-i-etat" id="se-i-etat"></div></div>
         <div class="se-i-filtres"><input type="search" class="form-control se-saisie" id="se-i-filtre" placeholder="🔎 Article (nom, code, description)…">
           <select class="form-control" id="se-i-zone">${optZones()}</select></div>
@@ -1221,20 +1221,38 @@ class StockEntrepots {
       $c.find("#se-i-lignes").on("click", "[data-ajouter-zone]", (ev) => {
         const $l = $(ev.currentTarget).closest(".se-i-ligne"), code = $l.attr("data-item"), e = etat[code];
         const dlg = new frappe.ui.Dialog({ title: `📍 ${se_esc(code)} — trouvé à…`, fields: [{ fieldtype: "HTML", fieldname: "z" }],
-          primary_action_label: "Ajouter la case", primary_action: () => {
+          primary_action_label: "Ajouter l’emplacement", primary_action: async () => {
             const z = dlg.fields_dict.z.$wrapper.find("[data-choix]").val();
             dlg.hide();
             if (!z || e.colonnes.includes(z)) return;
+            const r = (await frappe.call({ method: SE_INV + "ajouter_emplacement", args: { name, item_code: code, zone: z }, freeze: true })).message;
+            const l = d.lignes.find((x) => x.item_code === code);
+            l.zones = r.zones; l.zones_ajoutees = r.zones_ajoutees; e.ajoutees = r.zones_ajoutees;
             if (e.colonnes.length === 1 && e.colonnes[0] === SANS && e.cases[SANS] == null) { e.colonnes = []; delete e.cases[SANS]; }
             e.colonnes.push(z); e.cases[z] = null;
-            const l = d.lignes.find((x) => x.item_code === code);
-            $l.replaceWith(ligne(l));
+            frappe.show_alert({ message: `📍 ${se_esc(libZone(z))} ajouté aux emplacements de ${se_esc(code)}`, indicator: "green" }, 3);
+            $c.find(`.se-i-ligne[data-item="${CSS.escape(code)}"]`).replaceWith(ligne(l));
             const inp = $c.find(`.se-i-ligne[data-item="${CSS.escape(code)}"] input[data-zone="${CSS.escape(z)}"]`)[0];
             if (inp) inp.focus();
           } });
-        dlg.fields_dict.z.$wrapper.html(`<div class="se-note" style="margin-bottom:8px">Choisissez l’emplacement où vous avez trouvé cet article : une case s’ajoute pour y compter ; à la clôture, l’emplacement sera ajouté à l’article (s’il y a une quantité).</div>
+        dlg.fields_dict.z.$wrapper.html(`<div class="se-note" style="margin-bottom:8px">Choisissez l’emplacement où vous avez trouvé cet article : il est <b>aussitôt ajouté aux emplacements de l’article</b> et une case s’ajoute pour y compter. Un ✕ sur la case permet de le retirer en cas d’erreur.</div>
           <select class="form-control" style="height:40px" data-choix>${optZones().replace(/<option value="">[^<]*<\/option>/, `<option value="">— choisir —</option>`)}</select>`);
         dlg.show();
+      });
+      $c.find("#se-i-lignes").on("click", "[data-retirer-zone]", (ev) => {
+        ev.preventDefault();
+        const $l = $(ev.currentTarget).closest(".se-i-ligne"), code = $l.attr("data-item"), e = etat[code], z = $(ev.currentTarget).attr("data-retirer-zone");
+        const q = e.cases[z];
+        frappe.confirm(`Retirer <b>${se_esc(libZone(z))}</b> des emplacements de <b>${se_esc(code)}</b> ?${q != null && q !== "" ? `<br>La quantité ${se_esc(q)} comptée dans cette case sera effacée.` : ""}`, async () => {
+          await vider();
+          const r = (await frappe.call({ method: SE_INV + "retirer_emplacement", args: { name, item_code: code, zone: z }, freeze: true })).message;
+          const l = d.lignes.find((x) => x.item_code === code);
+          l.zones = r.zones; l.zones_ajoutees = r.zones_ajoutees; e.ajoutees = r.zones_ajoutees;
+          e.colonnes = e.colonnes.filter((c) => c !== z); delete e.cases[z];
+          if (!e.colonnes.length) { e.colonnes = [SANS]; e.cases[SANS] = null; }
+          $c.find(`.se-i-ligne[data-item="${CSS.escape(code)}"]`).replaceWith(ligne(l));
+          bilan();
+        });
       });
     };
     brancher(); bilan(); peindre();
@@ -1265,7 +1283,7 @@ class StockEntrepots {
           frappe.msgprint({ title: "Inventaire clôturé", indicator: r.nb_ecarts ? "orange" : "green",
             message: `${r.nb_comptes} article(s) comptés, ${r.nb_non_comptes} non comptés (inchangés), <b>${r.nb_ecarts} écart(s)</b>${r.nb_ecarts ? ` · valeur nette ${se_esc(se_argent(r.valeur_ecarts))} · manquants ${se_esc(se_argent(r.valeur_manquants))}` : ""}<br>`
               + (r.rapprochement ? `Écriture de stock : ${se_lien("Stock Reconciliation", r.rapprochement)} (${r.nb_rapproches} article(s)).` : "Aucune écriture : rien à rapprocher.")
-              + (r.nb_zones_ajoutees ? `<br>📍 ${r.nb_zones_ajoutees} emplacement(s) ajouté(s) aux articles.` : "") + (r.nb_sans_taux ? `<br>⚠️ ${r.nb_sans_taux} article(s) sans taux de valorisation : exclus, à régler sur la fiche article puis à rapprocher à la main.` : "") });
+              + (r.nb_zones_ajoutees ? `<br>📍 ${r.nb_zones_ajoutees} emplacement(s) ajouté(s) aux articles pendant l’inventaire.` : "") + (r.nb_sans_taux ? `<br>⚠️ ${r.nb_sans_taux} article(s) sans taux de valorisation : exclus, à régler sur la fiche article puis à rapprocher à la main.` : "") });
           this.chargerInventaire();
         } });
       const li = (x, txt) => `<li>${se_esc(x.item_name || x.item_code)} <span class="se-note">(${se_esc(x.item_code)})</span> ${txt}</li>`;
@@ -1277,7 +1295,7 @@ class StockEntrepots {
         ${b.bouges.length ? `<div class="se-alerte" style="margin-top:6px">⚠️ ${b.bouges.length} article(s) ont bougé entre leur comptage et maintenant : l’écart mesuré au comptage est appliqué au stock du moment (système actuel + écart).</div>
           <ul class="se-tours" style="max-height:160px;overflow:auto">${b.bouges.map((x) => li(x, `compté ${se_q(x.qte_comptee)} quand le système disait ${se_q(x.qte_systeme)} ; maintenant ${se_q(x.qte_actuelle)} → <b>${se_q(x.qte_rapprochee)}</b>`)).join("")}</ul>` : ""}
         ${b.sans_taux.length ? `<div class="se-alerte">⚠️ ${b.sans_taux.length} article(s) sans taux de valorisation : <b>exclus</b> de l’écriture (à régler sur la fiche article).</div><ul class="se-tours">${b.sans_taux.map((x) => li(x, "")).join("")}</ul>` : ""}
-        ${b.zones_nouvelles.length ? `<div class="se-note" style="margin-top:6px">📍 ${b.zones_nouvelles.length} article(s) trouvés à un emplacement nouveau : il sera ajouté à l’article (${b.zones_nouvelles.slice(0, 5).map((x) => `${se_esc(x.item_code)} → ${se_esc(x.zones.join(", "))}`).join(" · ")}${b.zones_nouvelles.length > 5 ? " …" : ""}).</div>` : ""}
+        ${b.zones_nouvelles.length ? `<div class="se-note" style="margin-top:6px">📍 ${b.zones_nouvelles.length} article(s) ont reçu un nouvel emplacement pendant cet inventaire (déjà sur la fiche article) : ${b.zones_nouvelles.slice(0, 5).map((x) => `${se_esc(x.item_code)} → ${se_esc(x.zones.join(", "))}`).join(" · ")}${b.zones_nouvelles.length > 5 ? " …" : ""}.</div>` : ""}
       </div>`);
       dlg.show();
     });
