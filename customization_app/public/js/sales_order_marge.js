@@ -53,7 +53,7 @@
     }
 
     /** Vérifie UNE ligne (après un court délai : ERPNext finit d'abord de poser prix de liste et règle de prix). */
-    function verifier(frm, cdn) {
+    function verifier(frm, cdn, delai = DELAI) {
         if (frm.doc.docstatus !== 0) return;
         const cdt = frm.doctype + " Item";
         clearTimeout(minuteries[cdn]);
@@ -107,7 +107,7 @@
         peindre(frm);
     }
 
-    function verifierTout(frm) { (frm.doc.items || []).forEach((l) => verifier(frm, l.name)); }
+    function verifierTout(frm, delai) { (frm.doc.items || []).forEach((l) => verifier(frm, l.name, delai)); }
 
     const ligne = {};
     ["item_code", "qty", "uom", "conversion_factor", "warehouse", "rate", "price_list_rate", "discount_percentage",
@@ -120,8 +120,18 @@
         ignore_pricing_rule(frm) { verifierTout(frm); },
         // Le modèle de taxes change (exonération ↔ standard) : ERPNext recharge les taxes par un appel serveur,
         // on repasse les lignes quand elles arrivent (événement `taxes`), et à deux reprises par sécurité.
-        taxes_and_charges(frm) { [700, 2500].forEach((ms) => setTimeout(() => { peindre(frm); verifierTout(frm); }, ms)); },
-        taxes(frm) { peindre(frm); verifierTout(frm); },
+        // Les taxes arrivent ~0,5 s après le choix : on repasse les lignes dès qu'elles ont changé (toutes les 150 ms
+        // pendant 3 s), sans le délai habituel, puis une dernière fois par sécurité.
+        taxes_and_charges(frm) {
+            const avant = JSON.stringify((frm.doc.taxes || []).map((t) => [t.account_head, t.included_in_print_rate]));
+            let n = 0;
+            const tic = setInterval(() => {
+                const apres = JSON.stringify((frm.doc.taxes || []).map((t) => [t.account_head, t.included_in_print_rate]));
+                if (apres !== avant || ++n > 20) { clearInterval(tic); peindre(frm); verifierTout(frm, 50); }
+            }, 150);
+            setTimeout(() => { peindre(frm); verifierTout(frm); }, 3000);
+        },
+        taxes(frm) { peindre(frm); verifierTout(frm, 50); },
         customer(frm) { verifierTout(frm); },
         party_name(frm) { verifierTout(frm); },
     };
