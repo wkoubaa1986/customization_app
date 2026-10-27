@@ -248,6 +248,7 @@ def get_solde(entrepot=None, recherche=None, negatifs=0, a_reappro=0):
                 a["seuil"] = seuil["seuil"]
                 a["a_reappro"] = a["qte"] < seuil["seuil"]
                 a["a_transferer"] = flt(max(seuil["cible"] - a["qte"], 0), 6) if a["a_reappro"] else 0
+    _tris_solde(articles, rows, entrepot, voir_valeur)
     out = {"articles": articles, "negatifs": sum(1 for a in articles if a["qte"] < 0),
            "positifs": sum(1 for a in articles if a["qte"] > 0),
            "a_reappro": cint(frappe.db.sql("select count(*) from tabBin where warehouse = %s and actual_qty < %s",
@@ -255,6 +256,42 @@ def get_solde(entrepot=None, recherche=None, negatifs=0, a_reappro=0):
     if voir_valeur:
         out["valeur"] = flt(sum(flt(r.stock_value) for r in rows), 3)
     return out
+
+
+def _tris_solde(articles: list[dict], rows, entrepot, voir_valeur: bool):
+    """Ce qu'il faut à la vue Solde pour trier autrement que par nom (demande du 27/10/2026) : le rang de la
+    première zone de l'article dans l'ordre de l'espace (`zone_rang`, `zone_cle` = cette zone, pour l'en-tête
+    de groupe), la valeur de stock (`valeur`, responsable seulement) et la date du dernier mouvement dans
+    l'entrepôt (`dernier_mvt`, tous les entrepôts si aucun)."""
+    from customization_app.customize_erpnext.doctype.zone_magasin.zone_magasin import SEPARATEUR
+    # Ordre des zones : celles de l'espace qui porte le nom de l'entrepôt affiché d'abord (au Magasin, « Magasin - V2 »
+    # passe devant « Hall - C2 » pour un article rangé aux deux), puis les autres espaces, dans l'ordre des codes.
+    espace_vu = frappe.db.get_value("Warehouse", entrepot, "warehouse_name") if entrepot else None
+    zones_ordre = frappe.get_all("Zone Magasin", fields=["name", "espace", "est_espace"],
+                                 order_by="est_espace desc, espace, code")
+    zones_ordre.sort(key=lambda z: 0 if espace_vu and espace_vu in (z.espace, z.name) else 1)   # tri stable
+    rang = {z.name: i for i, z in enumerate(zones_ordre)}
+    codes = [a["item_code"] for a in articles]
+    valeurs = {}
+    if voir_valeur:
+        for r in rows:
+            valeurs[r.item_code] = flt(valeurs.get(r.item_code, 0) + flt(r.stock_value), 3)
+    derniers = {}
+    if codes:
+        cond, params = "", {"codes": codes, "societe": _societe()}
+        if entrepot:
+            cond, params["entrepot"] = "and warehouse = %(entrepot)s", entrepot
+        derniers = dict(frappe.db.sql(f"""select item_code, max(posting_date) from `tabStock Ledger Entry`
+                                          where is_cancelled = 0 and company = %(societe)s and item_code in %(codes)s {cond}
+                                          group by item_code""", params))
+    for a in articles:
+        zones = [z for z in (a.get("zones") or "").split(SEPARATEUR) if z]
+        premiere = min(zones, key=lambda z: rang.get(z, 10**9), default=None)
+        a["zone_cle"] = premiere
+        a["zone_rang"] = rang.get(premiere, 10**9) if premiere else 10**9
+        a["dernier_mvt"] = str(derniers[a["item_code"]]) if derniers.get(a["item_code"]) else None
+        if voir_valeur:
+            a["valeur"] = valeurs.get(a["item_code"], 0.0)
 
 
 # ── Entrées / Sorties ────────────────────────────────────────────────────────

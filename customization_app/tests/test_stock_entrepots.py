@@ -74,6 +74,39 @@ class TestStockEntrepots(unittest.TestCase):
     def _solde(self, entrepot):
         return {a["item_code"]: a["qte"] for a in S.get_solde(entrepot)["articles"]}
 
+    def test_solde_porte_les_cles_de_tri(self):
+        """Tri de la vue Solde (27/10/2026) : rang de zone (espace de l'entrepôt d'abord), valeur (responsable),
+        date du dernier mouvement dans l'entrepôt."""
+        import frappe
+        i1 = self.items[0]
+        S.creer_transfert(self.magasin, self.essai, json.dumps([{"item_code": i1, "qte": 1}]))
+        par_code = {a["item_code"]: a for a in S.get_solde(self.magasin)["articles"]}
+        a = par_code[i1]
+        for cle in ("zone_rang", "zone_cle", "dernier_mvt", "valeur"):
+            self.assertIn(cle, a)
+        self.assertEqual(a["dernier_mvt"], str(frappe.utils.today()))
+        self.assertGreater(a["valeur"], 0)
+        rangs = [x["zone_rang"] for x in par_code.values() if x["zone_cle"]]
+        sans = [x["zone_rang"] for x in par_code.values() if not x["zone_cle"]]
+        if rangs and sans:
+            self.assertLess(max(rangs), min(sans))                   # « Non rangé » toujours après les zones
+        if frappe.db.exists("Zone Magasin", {"espace": "Magasin"}) and frappe.db.exists("Zone Magasin", {"espace": "Hall"}):
+            # Au Magasin, un article rangé au Hall ET au Magasin est groupé sous sa zone du Magasin.
+            m, h = (frappe.db.get_value("Zone Magasin", {"espace": e}, "name", order_by="code") for e in ("Magasin", "Hall"))
+            from customization_app.customize_erpnext.doctype.zone_magasin.zone_magasin import SEPARATEUR
+            frappe.db.set_value("Item", i1, "custom_emplacement_magasin", SEPARATEUR.join([h, m]))
+            a = {x["item_code"]: x for x in S.get_solde(self.magasin)["articles"]}[i1]
+            self.assertEqual(a["zone_cle"], m)
+            a = {x["item_code"]: x for x in S.get_solde(None)["articles"]}[i1]
+            self.assertEqual(a["zone_cle"], h)                       # sans entrepôt : ordre naturel des zones
+        # Employé non responsable : pas de valeur, mais les autres clés de tri restent.
+        frappe.set_user(EMPLOYE_AVEC_ENTREPOT)
+        wh = frappe.db.get_value("Employee", {"user_id": EMPLOYE_AVEC_ENTREPOT}, "custom_warehouse")
+        if wh:
+            for x in S.get_solde(wh)["articles"]:
+                self.assertNotIn("valeur", x)
+                self.assertIn("zone_rang", x)
+
     def test_transfert_puis_remise_a_zero(self):
         import frappe
         i1, i2 = self.items

@@ -46,6 +46,8 @@ class StockEntrepots {
     this.onglet = "solde";
     this.negatifs = false;
     this.reappro = false;
+    this.tri = "nom";           // vue Solde : nom | zone | qte | valeur | mvt
+    this.triDesc = false;       // 2e clic sur la même puce : sens inversé
     this.selSolde = new Set();
     this.periode = "30j";
     this.sensMvt = "sorties";   // sous-onglet Entrées / Sorties (≠ sens(), le De → Vers du transfert)
@@ -64,7 +66,7 @@ class StockEntrepots {
     else r.find("#se-inv-bouton").on("click", () => this.montrer("inventaire"));
     r.find("#se-s-reappro").on("click", (e) => { this.reappro = !this.reappro; $(e.currentTarget).toggleClass("on", this.reappro); this.chargerSolde(); });
     r.find("#se-s-aucun").on("click", () => { this.selSolde.clear(); this.peindreSolde(); });
-    r.find("#se-s-tout").on("click", () => { (this.solde ? this.solde.articles : []).forEach((a) => this.selSolde.add(a.item_code)); this.peindreSolde(); });
+    r.find("#se-s-tout").on("click", () => { (this.solde ? this.triees() : []).forEach((a) => this.selSolde.add(a.item_code)); this.peindreSolde(); });
     r.find("#se-s-transferer").on("click", () => this.transfererSelection());
     r.find("#se-s-vers-cible").on("click", () => this.ajouterSelectionAuCible());
     r.find("#se-s-cible").on("click", () => this.ouvrirCible());
@@ -75,6 +77,14 @@ class StockEntrepots {
     let t1 = null, t2 = null;
     r.find("#se-s-recherche").on("input", () => { clearTimeout(t1); t1 = setTimeout(() => this.chargerSolde(), 300); });
     r.find("#se-s-negatifs").on("click", (e) => { this.negatifs = !this.negatifs; $(e.currentTarget).toggleClass("on", this.negatifs); this.chargerSolde(); });
+    r.find("#se-s-tris [data-tri]").on("click", (e) => {
+      const t = $(e.currentTarget).attr("data-tri");
+      // Même puce : on inverse le sens. Autre puce : sens naturel (nom A→Z, zone dans l’ordre, quantité /
+      // valeur du plus grand au plus petit, dernier mouvement du plus récent au plus ancien).
+      if (t === this.tri) this.triDesc = !this.triDesc; else { this.tri = t; this.triDesc = false; }
+      this.nSolde = SE_PAGE;
+      if (this.solde) this.peindreSolde();
+    });
     r.find("#se-o-recherche").on("input", () => { clearTimeout(t2); t2 = setTimeout(() => this.chargerSorties(), 300); });
     r.find("#se-periodes .se-chip").on("click", (e) => {
       this.periode = $(e.currentTarget).attr("data-periode");
@@ -115,6 +125,7 @@ class StockEntrepots {
     d.fields_dict.zone.$wrapper.html(`<div class="se-guide">
       <p class="se-note">Le <b>Magasin</b> est la référence ; chaque employé a le stock de son véhicule${mien ? ` (le vôtre : <b>${mien}</b>, affiché en premier)` : ""}. Un transfert qui touche un véhicule (avec le Magasin ou les Articles défectueux) est en <b>double validation</b> : l’employé du véhicule et un responsable magasin doivent être d’accord sur les quantités.</p>
       <div class="et"><div class="t">📦 Solde — ce qu’il y a dans un stock</div><ul>
+        <li>Tri : <b>Nom</b> (A→Z), <b>📍 Zone</b> (groupé par emplacement, dans l’ordre des zones du Magasin puis du Hall, « Non rangé » à la fin), <b>Quantité</b> (du plus grand au plus petit), <b>Valeur</b> (responsable), <b>Dernier mouvement</b> (le plus récent d’abord ; sans mouvement en dernier). Un second clic sur la même puce inverse le sens (↑ / ↓).</li>
         <li>Choisissez un stock (pastilles) ou « Tous » ; cherchez un article ; « ⚠️ Négatifs » montre les quantités en dessous de zéro.</li>
         <li>Toucher un article ouvre ses entrées / sorties.</li>
         ${resp ? `<li>Cochez des articles (Maj + clic = plage) → « 🔁 Transférer depuis le Magasin » vers un véhicule, ou « 🎯 Dans le stock cible ».</li>
@@ -347,32 +358,69 @@ class StockEntrepots {
     this.peindreSolde();
   }
 
+  /** Les articles du solde dans l’ordre de la puce de tri (copie : la réponse du serveur reste par nom). */
+  triees() {
+    const res = this.solde, t = this.tri, desc = this.triDesc;
+    const nom = (a) => (a.item_name || a.item_code).toLocaleLowerCase("fr");
+    const cmpNom = (a, b) => nom(a).localeCompare(nom(b), "fr");
+    const cles = {
+      nom: cmpNom,
+      zone: (a, b) => (a.zone_rang - b.zone_rang) || cmpNom(a, b),
+      qte: (a, b) => (b.qte - a.qte) || cmpNom(a, b),
+      valeur: (a, b) => ((b.valeur || 0) - (a.valeur || 0)) || cmpNom(a, b),
+      // Sans mouvement = le plus ancien : en bas de « récent d’abord », en haut du sens inverse.
+      mvt: (a, b) => ((b.dernier_mvt || "") < (a.dernier_mvt || "") ? -1 : (b.dernier_mvt || "") > (a.dernier_mvt || "") ? 1 : 0) || cmpNom(a, b),
+    };
+    const cmp = cles[t] || cmpNom;
+    return res.articles.slice().sort(desc ? (a, b) => cmp(b, a) : cmp);
+  }
+
+  peindreTris() {
+    const r = this.$r, res = this.solde;
+    r.find("#se-s-tris [data-tri]").each((_, el) => {
+      const $el = $(el), t = $el.attr("data-tri"), on = t === this.tri;
+      $el.toggleClass("on", on).find(".sens").text(on ? (this.triDesc ? " ↑" : " ↓") : "");
+    });
+    r.find('#se-s-tris [data-tri="valeur"]').toggle(!!(res && res.valeur != null));
+  }
+
   peindreSolde() {
     const r = this.$r, res = this.solde, tous = !this.entrepot;
     const coches = !!(this.ctx.responsable && this.entrepot);
+    this.peindreTris();
+    const liste = this.triees(), parZone = this.tri === "zone";
+    let derniereZone;
     r.find("#se-s-info").html(`${res.articles.length} article(s)`
       + (res.negatifs ? ` · <span class="neg">${res.negatifs} négatif(s)</span>` : "")
       + (res.a_reappro ? ` · <span style="color:#c2410c">${res.a_reappro} à réapprovisionner</span>` : "")
       + (res.valeur != null ? ` · valeur ${se_esc(se_argent(res.valeur))}` : "")
       + ` · ${tous ? "tous les entrepôts" : se_esc(this.libelle(this.entrepot))}`);
-    const cartes = res.articles.slice(0, this.nSolde).map((a) => `<div class="se-art ${this.selSolde.has(a.item_code) ? "sel" : ""}" data-item="${se_esc(a.item_code)}">
+    const cartes = liste.slice(0, this.nSolde).map((a) => {
+      let tete = "";
+      if (parZone) {
+        const z = a.zone_cle || "Non rangé";
+        if (z !== derniereZone) { tete = `<div class="se-i-groupe">📍 ${se_esc(z)}</div>`; derniereZone = z; }
+      }
+      return tete + `<div class="se-art ${this.selSolde.has(a.item_code) ? "sel" : ""}" data-item="${se_esc(a.item_code)}">
         ${coches ? `<span class="se-coche ${this.selSolde.has(a.item_code) ? "on" : ""}" data-coche>${this.selSolde.has(a.item_code) ? "✓" : ""}</span>` : ""}
         ${se_img(a.image)}
         <div class="txt"><div class="se-nom">${se_esc(a.item_name || a.item_code)}</div>
           <div class="se-code">${se_esc(a.item_code)}${a.zones ? ` · 📍 ${se_esc(a.zones)}` : ""}</div>
           ${a.a_reappro ? `<span class="se-reappro">🔻 à réapprovisionner · ${a.cible != null ? `cible ${se_q(a.cible)}` : `seuil ${se_q(a.seuil)}`} · manque ${se_q(a.a_transferer)}</span>` : ""}
           ${tous ? `<div class="se-wh">${a.entrepots.map((e) => `<span class="${e.qte < 0 ? "neg" : ""}">${se_esc(e.libelle)} <b>${se_q(e.qte)}</b></span>`).join("")}</div>` : ""}
+          ${this.tri === "mvt" ? `<div class="se-code">🕓 dernier mouvement : ${a.dernier_mvt ? se_dt(a.dernier_mvt) + "/" + a.dernier_mvt.slice(0, 4) : "aucun"}</div>` : ""}
+          ${this.tri === "valeur" && a.valeur != null ? `<div class="se-code">💰 ${se_esc(se_argent(a.valeur))}</div>` : ""}
         </div>
         <div class="se-qte ${a.qte < 0 ? "neg" : ""}">${se_q(a.qte)}<small>${se_esc(a.uom || "")}</small></div>
-      </div>`).join("");
+      </div>`; }).join("");
     r.find("#se-s-liste").html((cartes || `<div class="se-vide">Aucun stock pour ces filtres.</div>`)
-      + (res.articles.length > this.nSolde ? `<button type="button" class="btn btn-default se-plus">Afficher plus (${res.articles.length - this.nSolde})</button>` : ""));
+      + (liste.length > this.nSolde ? `<button type="button" class="btn btn-default se-plus">Afficher plus (${liste.length - this.nSolde})</button>` : ""));
     r.find("#se-s-liste .se-plus").on("click", () => { this.nSolde += SE_PAGE; this.peindreSolde(); });
     r.find("#se-s-liste .se-art").on("click", (e) => this.voirSorties($(e.currentTarget).attr("data-item")));
     r.find("#se-s-liste [data-coche]").on("click", (e) => {
       e.stopPropagation();
       const c = $(e.currentTarget).closest(".se-art").attr("data-item");
-      const visibles = res.articles.slice(0, this.nSolde).map((a) => a.item_code);
+      const visibles = liste.slice(0, this.nSolde).map((a) => a.item_code);
       const idx = visibles.indexOf(c);
       if (e.shiftKey && this.dernierCoche != null && this.dernierCoche !== idx) {
         // Maj + clic : toute la plage entre la dernière case cliquée et celle-ci prend l'état de celle-ci.
