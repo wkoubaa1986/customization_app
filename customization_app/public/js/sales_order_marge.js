@@ -118,10 +118,17 @@
         items_on_form_rendered(frm) { colorer(frm); },
         selling_price_list(frm) { verifierTout(frm); },
         ignore_pricing_rule(frm) { verifierTout(frm); },
-        // Le modèle de taxes change (exonération ↔ standard) : ERPNext recharge les taxes puis on repasse les lignes.
-        taxes_and_charges(frm) { setTimeout(() => { peindre(frm); verifierTout(frm); }, 600); },
+        // Le modèle de taxes change (exonération ↔ standard) : ERPNext recharge les taxes par un appel serveur,
+        // on repasse les lignes quand elles arrivent (événement `taxes`), et à deux reprises par sécurité.
+        taxes_and_charges(frm) { [700, 2500].forEach((ms) => setTimeout(() => { peindre(frm); verifierTout(frm); }, ms)); },
+        taxes(frm) { peindre(frm); verifierTout(frm); },
         customer(frm) { verifierTout(frm); },
         party_name(frm) { verifierTout(frm); },
     };
     DOCTYPES.forEach((dt) => { frappe.ui.form.on(dt + " Item", ligne); frappe.ui.form.on(dt, entete); });
+    // Lignes de taxes ajoutées / retirées à la main : même effet qu'un changement de modèle.
+    frappe.ui.form.on("Sales Taxes and Charges", {
+        taxes_add(frm) { verifierTout(frm); }, taxes_remove(frm) { peindre(frm); verifierTout(frm); },
+        included_in_print_rate(frm) { peindre(frm); verifierTout(frm); },
+    });
 })();
