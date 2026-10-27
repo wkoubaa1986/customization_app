@@ -1122,7 +1122,9 @@ class StockEntrepots {
         <div class="d">${b.commande ? `${se_lien("Sales Order", b.commande, "commande " + b.commande)} · ` : ""}créé par ${se_esc(b.par || "")} le ${se_esc(b.creation || "")}${b.livre_par ? ` · livré par ${se_esc(b.livre_par)}` : ""}${b.remarque ? ` · ${se_esc(b.remarque)}` : ""}${extra || ""}</div>`;
     const tag = (b) => b.verification === "À vérifier" ? `<span class="se-b-tag v">⏳ à vérifier</span>` : b.verification === "Conforme" ? `<span class="se-b-tag c">✅ conforme</span>` : b.verification === "Écart" ? `<span class="se-b-tag e">⚠️ écart</span>` : "";
     const vieux = (b) => (b.age_h != null && b.age_h > 24 ? ` · <b class="neg">depuis ${Math.round(b.age_h / 24)} j</b>` : "");
-    const approuver = e.a_approuver.map((b) => `<div class="se-b-carte attente" data-bl="${se_esc(b.name)}">${entete(b, vieux(b))}${lignes(b)}
+    // Jaune = la commande a encore une tâche ouverte à venir (pas urgent) ; rouge = rien de prévu ou tâche passée.
+    const futur = (b) => b.tache_future ? ` · <b style="color:#b45309">📅 tâche ${se_esc(b.tache_future.type || "")} le ${se_esc(b.tache_future.quand)}${b.tache_future.employe ? ` (${se_esc(b.tache_future.employe)})` : ""}</b>` : "";
+    const approuver = e.a_approuver.map((b) => `<div class="se-b-carte attente ${b.tache_future ? "futur" : ""}" data-bl="${se_esc(b.name)}">${entete(b, (b.tache_future ? futur(b) : vieux(b)))}${lignes(b)}
         <div class="se-b-actions">${P ? `<button type="button" class="btn btn-primary btn-sm" data-approuver="${se_esc(b.name)}">✅ Approuver la sortie</button>
           <button type="button" class="btn btn-default btn-sm" data-rejeter="${se_esc(b.name)}">✖️ Rejeter</button>`
           : `<button type="button" class="btn btn-warning btn-sm" data-exceptionnelle="${se_esc(b.name)}">⚠️ Sortie exceptionnelle (magasinier absent)</button>`}</div></div>`).join("");

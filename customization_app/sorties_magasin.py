@@ -161,6 +161,24 @@ CHAMPS_BL = ["name", "customer", "customer_name", "posting_date", "creation", "o
              CHAMP_VERIFIE_PAR, CHAMP_VERIFIE_LE, CHAMP_NOTE]
 
 
+def _taches_futures(commandes: list[str]) -> dict[str, dict]:
+    """Par commande, sa prochaine tâche OUVERTE dans le futur (starts_on > maintenant) : un BL dont la commande a
+    encore une tâche à venir n'est pas urgent — la carte est jaune, pas rouge (demande du 27/10)."""
+    if not commandes:
+        return {}
+    rows = frappe.get_all("Tache de travail", filters={"commande_client": ["in", commandes], "status": "Open",
+                                                      "starts_on": [">", now_datetime()]},
+                          fields=["name", "commande_client", "starts_on", "custom_choix_du_staff", "custom_type_dintervention"],
+                          order_by="starts_on asc")
+    out = {}
+    for t in rows:
+        if t.commande_client not in out:
+            out[t.commande_client] = {"name": t.name, "quand": str(t.starts_on)[:16], "type": t.custom_type_dintervention,
+                                      "employe": frappe.db.get_value("Employee", t.custom_choix_du_staff, "employee_name")
+                                      if t.custom_choix_du_staff else None}
+    return out
+
+
 def _bls(filtres: dict, order_by: str = "creation asc", limite: int | None = None) -> list[dict]:
     entetes = frappe.get_all("Delivery Note", filters=filtres, fields=CHAMPS_BL, order_by=order_by, limit=limite)
     lignes = _lignes([e.name for e in entetes])
@@ -169,15 +187,20 @@ def _bls(filtres: dict, order_by: str = "creation asc", limite: int | None = Non
         if u and u not in noms:
             noms[u] = frappe.utils.get_fullname(u)
         return noms.get(u)
+    commandes = {e.name: e.custom_commande or next((l["commande"] for l in lignes.get(e.name, []) if l["commande"]), None)
+                 for e in entetes}
+    futures = _taches_futures(list({c for e, c in commandes.items() if c and
+                                    next(x for x in entetes if x.name == e).docstatus == 0})) if entetes else {}
     out = []
     for e in entetes:
         ls = lignes.get(e.name, [])
-        commande = e.custom_commande or next((l["commande"] for l in ls if l["commande"]), None)
+        commande = commandes[e.name]
         livre = frappe.db.get_value("Employee", e.get("custom_livré_par"), "employee_name") if e.get("custom_livré_par") else None
         quand = e.get(CHAMP_SORTI_LE) or e.creation
         out.append({"name": e.name, "client": e.customer_name or e.customer, "date": str(e.posting_date),
                     "creation": str(e.creation)[:16], "par": nom(e.owner), "commande": commande, "livre_par": livre,
                     "statut": e.workflow_state, "docstatus": e.docstatus,
+                    "tache_future": futures.get(commande) if e.docstatus == 0 else None,
                     "lignes": ls, "nb": len(ls), "unites": flt(sum(l["qte"] for l in ls), 6),
                     "verification": e.get(CHAMP_VERIF), "sorti_par": nom(e.get(CHAMP_SORTI_PAR)),
                     "sorti_par_user": e.get(CHAMP_SORTI_PAR), "sorti_le": str(e.get(CHAMP_SORTI_LE) or "")[:16] or None,
@@ -188,7 +211,9 @@ def _bls(filtres: dict, order_by: str = "creation asc", limite: int | None = Non
 
 
 def _en_attente() -> list[dict]:
-    return _bls({"docstatus": 0, "workflow_state": EN_ATTENTE, CHAMP_FLAG: 1, "is_return": 0})
+    """Les BL à approuver : d'abord ceux sans tâche à venir (urgents), puis ceux dont la tâche est encore à venir."""
+    bls = _bls({"docstatus": 0, "workflow_state": EN_ATTENTE, CHAMP_FLAG: 1, "is_return": 0})
+    return sorted(bls, key=lambda b: (1, b["tache_future"]["quand"]) if b.get("tache_future") else (0, b["creation"]))
 
 
 @frappe.whitelist()
