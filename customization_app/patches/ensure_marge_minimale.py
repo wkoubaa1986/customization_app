@@ -24,4 +24,11 @@ def execute():
         for champ, valeur in (("arrondi", M.ARRONDI_DEFAUT), ("prix_ht_exonere", 1)):
             if not frappe.db.exists("Singles", {"doctype": M.CONFIG, "field": champ}):
                 frappe.db.set_single_value(M.CONFIG, champ, valeur)
+    # Le navigateur garde le formulaire (et ses scripts doctype_js) en cache local tant que la date de modification
+    # du DocType n'a pas bougé : un simple rechargement de page ne prend pas le nouveau script (constat du 28/10/2026,
+    # prix pas convertis en HT alors que le dev les convertissait dans un navigateur neuf). On la fait bouger à
+    # chaque migration : chaque poste refait une lecture du DocType, puis repart sur son cache.
+    for dt in ("Sales Order", "Quotation"):
+        frappe.db.set_value("DocType", dt, "modified", frappe.utils.now(), update_modified=False)
+        frappe.clear_cache(doctype=dt)
     frappe.db.commit()
