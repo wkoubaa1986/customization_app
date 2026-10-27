@@ -1112,8 +1112,12 @@ class StockEntrepots {
     const $c = this.$r.find("#se-b-contenu"), P = e.principal;
     const n = e.a_approuver.length + e.a_verifier.length + e.ecarts.length;
     this.$r.find("#se-b-badge").toggle(!!n).text(n);
+    // Stock de l'entrepôt de sortie par article suivi : BL en attente = « stock N → N−q » ; BL validé = « stock après : N ».
+    const stock = (b, l) => !l.suivi || l.stock == null ? "" : b.docstatus === 1
+      ? `<small class="st ${l.stock < 0 ? "neg" : ""}">stock après : <b>${se_q(l.stock)}</b></small>`
+      : `<small class="st ${l.stock - l.qte < 0 ? "neg" : ""}">stock ${se_q(l.stock)} → <b>${se_q(l.stock - l.qte)}</b></small>`;
     const lignes = (b) => b.lignes.map((l) => `<div class="se-b-ligne">${se_img(l.image)}<div style="min-width:0"><div class="se-nom">${se_esc(l.item_name || l.item_code)}</div><div class="se-code">${se_esc(l.item_code)}</div></div>
-        <span class="q">${se_q(l.qte)}<small> ${se_esc(l.uom || "")}</small></span><span class="w">${se_esc(se_court(l.entrepot || ""))}</span></div>`).join("");
+        <span class="q">${se_q(l.qte)}<small> ${se_esc(l.uom || "")}</small></span><span class="w">${se_esc(se_court(l.entrepot || ""))}${stock(b, l)}</span></div>`).join("");
     const entete = (b, extra) => `<div class="t">🧾 ${se_lien("Delivery Note", b.name)} — ${se_esc(b.client)}</div>
         <div class="d">${b.commande ? `${se_lien("Sales Order", b.commande, "commande " + b.commande)} · ` : ""}créé par ${se_esc(b.par || "")} le ${se_esc(b.creation || "")}${b.livre_par ? ` · livré par ${se_esc(b.livre_par)}` : ""}${b.remarque ? ` · ${se_esc(b.remarque)}` : ""}${extra || ""}</div>`;
     const tag = (b) => b.verification === "À vérifier" ? `<span class="se-b-tag v">⏳ à vérifier</span>` : b.verification === "Conforme" ? `<span class="se-b-tag c">✅ conforme</span>` : b.verification === "Écart" ? `<span class="se-b-tag e">⚠️ écart</span>` : "";

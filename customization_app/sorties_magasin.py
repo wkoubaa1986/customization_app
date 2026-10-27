@@ -138,12 +138,21 @@ def _lignes(names: list[str]) -> dict[str, list[dict]]:
     rows = frappe.get_all("Delivery Note Item", filters={"parent": ["in", names]},
                           fields=["parent", "item_code", "item_name", "qty", "uom", "warehouse", "against_sales_order"],
                           order_by="parent, idx")
-    images = S._images(list({r.item_code for r in rows}))
+    codes = list({r.item_code for r in rows})
+    images = S._images(codes)
+    # Stock de l'entrepôt de sortie, pour les articles suivis en stock : « stock après la sortie » (le BL validé a
+    # déjà sorti la quantité ; pour un BL en attente, on montre stock actuel → après).
+    suivis = set(frappe.get_all("Item", filters={"name": ["in", codes], "is_stock_item": 1}, pluck="name"))
+    stocks = {(b.item_code, b.warehouse): flt(b.actual_qty, 6) for b in frappe.get_all(
+        "Bin", filters={"item_code": ["in", list(suivis) or [""]], "warehouse": ["in", list({r.warehouse for r in rows if r.warehouse}) or [""]]},
+        fields=["item_code", "warehouse", "actual_qty"])} if suivis else {}
     out = {}
     for r in rows:
+        suivi = r.item_code in suivis
         out.setdefault(r.parent, []).append({"item_code": r.item_code, "item_name": r.item_name, "qte": flt(r.qty, 6),
                                              "uom": r.uom, "entrepot": r.warehouse, "image": images.get(r.item_code),
-                                             "commande": r.against_sales_order})
+                                             "commande": r.against_sales_order, "suivi": suivi,
+                                             "stock": stocks.get((r.item_code, r.warehouse), 0.0) if suivi else None})
     return out
 
 

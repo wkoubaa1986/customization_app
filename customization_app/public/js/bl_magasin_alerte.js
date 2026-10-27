@@ -7,13 +7,15 @@
   const API = "customization_app.sorties_magasin.compteur";
   let dernier = -1, $b = null, actif = true;
   const style = `<style>
-    .sm-bandeau { position: fixed; top: 0; left: 0; right: 0; z-index: 1035; background: #dc2626; color: #fff; padding: 9px 14px;
+    .sm-bandeau { position: fixed; top: 0; left: 0; right: 0; z-index: 1035; background: #dc2626; color: #fff; height: 42px; box-sizing: border-box; padding: 0 14px;
       font-weight: 700; font-size: 14px; text-align: center; cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,.25);
       animation: sm-pulse 1.6s ease-in-out infinite; display: flex; justify-content: center; align-items: center; gap: 10px; }
     .sm-bandeau .sm-bt { background: #fff; color: #b91c1c; border-radius: 999px; padding: 3px 12px; font-size: 13px; white-space: nowrap; }
     @keyframes sm-pulse { 0%, 100% { background: #dc2626; } 50% { background: #991b1b; } }
-    body.sm-bandeau-actif { padding-top: 42px; }
-    body.sm-bandeau-actif .navbar, body.sm-bandeau-actif header.navbar { top: 42px; }
+    /* Le Desk ancre tout (barre de boutons du formulaire, onglets) sur --navbar-height : on l'augmente de la hauteur
+       du bandeau, et l'en-tête collant (.sticky-top) descend d'autant — sinon les boutons passent sous l'en-tête. */
+    body.sm-bandeau-actif { padding-top: 42px; --navbar-height: 90px; }
+    body.sm-bandeau-actif .sticky-top { top: 42px; }
   </style>`;
   const texte = (c) => {
     const m = [];
