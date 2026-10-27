@@ -108,3 +108,4 @@ customization_app.patches.pastille_livraison_commande
 customization_app.patches.anomalie_sans_bl_retour
 customization_app.patches.suivi_commande_fields
 customization_app.patches.reference_cheque_depense_caisse
+customization_app.patches.attribuer_role_inventaire_magasin

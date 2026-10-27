@@ -10,6 +10,8 @@
  *    touche un véhicule est en double validation (l'employé ↔ un responsable magasin, en va-et-vient).
  *  - À zéro (responsable magasin) : ramène un entrepôt à zéro par transferts avec le Magasin, pour que
  *    l'écart ne reste que sur le Magasin.
+ *  - Inventaire du Magasin (rôle Inventaire Magasin, bouton du Solde) : tous les articles suivis au Magasin,
+ *    une case par emplacement, enregistrement au fil de l'eau, clôture = une écriture Stock Reconciliation.
  * Toute la règle est côté serveur (customization_app.stock_entrepots).
  */
 
@@ -23,6 +25,7 @@ frappe.pages["stock-entrepots"].on_page_show = function (wrapper) {
 };
 
 const SE_API = "customization_app.stock_entrepots.";
+const SE_INV = "customization_app.inventaire_magasin.";
 const SE_PAGE = 80;
 const se_esc = (s) => frappe.utils.escape_html(s == null ? "" : String(s));
 const se_q = (n) => (Math.round((+n || 0) * 1000) / 1000).toLocaleString("fr-FR", { maximumFractionDigits: 3 });
@@ -33,6 +36,8 @@ const se_img = (url) => (url ? `<img class="se-img" src="${se_esc(url)}" loading
 const se_lien = (doctype, name, texte) => `<a class="se-lien" href="${frappe.utils.get_form_link(doctype, name)}">${se_esc(texte || name)}</a>`;
 const se_argent = (v) => `${Math.round(+v || 0).toLocaleString("fr-FR")} DT`;
 const SE_STATUTS = { Completed: "✅", Open: "🕒", Cancelled: "✖️" };
+const se_hm = (dt) => (dt ? String(dt).slice(11, 16) : "");                 // « 2026-10-27 14:40:12 » → 14:40
+const se_dthm = (dt) => (dt ? `${se_dt(dt)} ${se_hm(dt)}` : "");           // → 27/10 14:40
 
 class StockEntrepots {
   constructor(wrapper) {
@@ -54,6 +59,8 @@ class StockEntrepots {
     this.entrepot = ctx.defaut || "";
     if (!ctx.responsable) r.find('[data-onglet="transfert"], [data-onglet="zero"]').remove();
     if (!ctx.verification) r.find('[data-onglet="verif"]').remove();
+    if (!ctx.inventaire) r.find("#se-inv-bouton").remove();
+    else r.find("#se-inv-bouton").on("click", () => this.montrer("inventaire"));
     r.find("#se-s-reappro").on("click", (e) => { this.reappro = !this.reappro; $(e.currentTarget).toggleClass("on", this.reappro); this.chargerSolde(); });
     r.find("#se-s-aucun").on("click", () => { this.selSolde.clear(); this.peindreSolde(); });
     r.find("#se-s-tout").on("click", () => { (this.solde ? this.solde.articles : []).forEach((a) => this.selSolde.add(a.item_code)); this.peindreSolde(); });
@@ -126,6 +133,10 @@ class StockEntrepots {
         <li>« ✅ Terminer le comptage » = votre validation → <b>à valider</b> par un responsable magasin (autre que vous).</li>
         <li>Le responsable vérifie, corrige éventuellement, valide → <b>à accepter</b> par l’employé : d’accord → « ✅ Accepter », un <b>rapprochement de stock</b> aligne le véhicule ; pas d’accord → corrigez la quantité, la fiche repart chez le responsable, qui a le dernier mot.</li>
         <li>Un article qui a bougé entre le comptage et la validation perd son comptage : à recompter (ligne marquée).</li></ul></div>
+      ${this.ctx.inventaire ? `<div class="et"><div class="t">📋 Inventaire du Magasin — compter tout le Magasin par emplacement</div><ul>
+        <li>Bouton « 📋 Inventaire du Magasin » (Solde). Tous les articles suivis en stock au Magasin, photo et description, <b>une case par emplacement</b> (zones de l’article ; « Non rangé » sans zone) : la somme des cases = compté, comparé au système. « ＋ » ajoute un emplacement où l’article a été trouvé.</li>
+        <li>Enregistrement automatique ligne par ligne : plusieurs personnes peuvent compter en même temps, et reprendre plus tard. Filtres : zone, à compter / comptés / écarts.</li>
+        <li>« ✅ Clôturer » : aperçu, puis <b>une écriture de stock</b> (Stock Reconciliation) sur le Magasin pour les articles comptés en écart ; un article qui a bougé depuis son comptage reçoit son écart sur le stock du moment. Les non comptés ne bougent pas.</li></ul></div>` : ""}
       <p class="se-note"><b>Erreurs courantes</b> : transfert envoyé par erreur → « Annuler la demande » tant qu’il n’est pas validé · comptage terminé trop tôt → le responsable « Renvoie au comptage » · réglages (Magasin, trajets permis, seuils, cibles, jours de vérification) : <a href="/app/config-stock-entrepot">Config Stock Entrepot</a>.</p>
     </div>`);
     d.show();
@@ -263,6 +274,7 @@ class StockEntrepots {
   montrer(onglet) {
     this.onglet = onglet;
     if (onglet !== "verif") this.comptage = null;
+    if (onglet !== "inventaire") this.feuilleInv = null;
     const r = this.$r;
     r.find(".se-onglet").each((_, el) => $(el).toggleClass("on", $(el).attr("data-onglet") === onglet));
     r.find(".se-vue").each((_, el) => $(el).toggle($(el).attr("data-vue") === onglet));
@@ -274,7 +286,8 @@ class StockEntrepots {
     ({ solde: () => this.chargerSolde(), sorties: () => this.chargerSorties(),
        transfert: () => { this.chargerHistorique(); this.majQuantitesPanier(); this.majRegle(); },
        zero: () => (this.zeroEntrepot ? this.ouvrirZero(this.zeroEntrepot) : this.chargerZero()),
-       verif: () => (this.comptage ? this.ouvrirComptage(this.comptage) : this.chargerVerif()) })[this.onglet]();
+       verif: () => (this.comptage ? this.ouvrirComptage(this.comptage) : this.chargerVerif()),
+       inventaire: () => (this.feuilleInv ? this.ouvrirInventaire(this.feuilleInv) : this.chargerInventaire()) })[this.onglet]();
     this.majBarreSolde();
   }
 
@@ -1068,5 +1081,206 @@ class StockEntrepots {
           + (r.restant.length ? `<br><br>⚠️ Encore non nul (a bougé pendant l’opération ?) : ${r.restant.map(se_esc).join(", ")}` : "") });
       this.ouvrirZero(res.entrepot);
     });
+  }
+
+  // ── Inventaire du Magasin (rôle Inventaire Magasin) ───────────────────────
+  /** L'inventaire ouvert et les derniers terminés. */
+  async chargerInventaire() {
+    this.feuilleInv = null;
+    const jeton = (this.jetons.inv = (this.jetons.inv || 0) + 1);
+    const res = (await frappe.call({ method: SE_INV + "inventaires_etat" })).message;
+    if (jeton !== this.jetons.inv || this.onglet !== "inventaire") return;
+    const $c = this.$r.find("#se-i-contenu"), ec = res.en_cours;
+    const etat = (v) => (v.statut === "Terminé" ? "✅" : v.statut === "Annulé" ? "✖️" : "📝");
+    const hist = res.dernieres.map((v) => `<div class="se-v-h" style="cursor:default">
+        <span class="d">${se_dt(v.termine_le || v.date)}</span>
+        <span class="n">${etat(v)} ${v.nb_comptes}/${v.nb_lignes} comptés · <b class="${v.nb_ecarts ? "neg" : "pos"}">${v.nb_ecarts} écart(s)</b>${v.termine_par ? ` · ${se_esc(v.termine_par)}` : ""}
+          <span class="se-note">${se_lien("Inventaire Magasin", v.name)}${v.rapprochement ? ` · ${se_lien("Stock Reconciliation", v.rapprochement, "écriture " + v.rapprochement)}` : v.statut === "Terminé" ? " · sans écriture (aucun écart)" : ""}</span></span>
+        <span class="v ${v.valeur_ecarts < 0 ? "neg" : v.valeur_ecarts > 0 ? "pos" : ""}">${v.nb_ecarts ? se_argent(v.valeur_ecarts) : v.statut === "Terminé" ? "✓" : ""}</span>
+        <span class="se-lien" data-voir="${se_esc(v.name)}" style="cursor:pointer">🔍</span></div>`).join("");
+    $c.html(`<span class="se-retour" data-retour>← Solde</span>
+      <div class="se-card se-v-stock"><div class="t">📋 Inventaire du ${se_esc(res.libelle)}</div>
+        <div class="plan">Tous les articles suivis en stock au Magasin, avec photo et description, <b>une case par emplacement</b> (zones de l’article) : la somme des cases est la quantité comptée, comparée au stock système. Le comptage s’enregistre au fil de l’eau ; à la clôture, <b>une écriture de stock</b> (rapprochement) aligne le Magasin sur le compté. Les articles non comptés ne bougent pas.</div>
+        ${ec ? `<div class="plan">📝 En cours depuis le <b>${se_dt(ec.date)}</b>${ec.ouvert_par ? ` (${se_esc(ec.ouvert_par)})` : ""} : <b>${ec.nb_comptes}/${ec.nb_lignes}</b> comptés · <b class="${ec.nb_ecarts ? "neg" : "pos"}">${ec.nb_ecarts} écart(s)</b>${ec.nb_ecarts ? ` · ${se_argent(ec.valeur_ecarts)}` : ""}</div>
+            <button type="button" class="btn btn-primary" data-reprendre="${se_esc(ec.name)}">Reprendre l’inventaire</button>`
+          : `<button type="button" class="btn btn-primary" data-ouvrir>▶ Ouvrir un inventaire du Magasin</button>`}
+      </div>
+      <div class="se-titre">🕘 Derniers inventaires</div>
+      <div class="se-card">${hist || `<div class="se-note">Aucun inventaire terminé.</div>`}</div>`);
+    $c.find("[data-retour]").on("click", () => this.montrer("solde"));
+    $c.find("[data-ouvrir]").on("click", async () => {
+      const name = (await frappe.call({ method: SE_INV + "ouvrir_inventaire", freeze: true, freeze_message: "Photographie du stock du Magasin…" })).message;
+      this.ouvrirInventaire(name);
+    });
+    $c.find("[data-reprendre], [data-voir]").on("click", (e) => this.ouvrirInventaire($(e.currentTarget).attr("data-reprendre") || $(e.currentTarget).attr("data-voir")));
+  }
+
+  /** Feuille d'inventaire : une ligne par article, une case par emplacement ; enregistrement au fil de l'eau. */
+  async ouvrirInventaire(name) {
+    this.feuilleInv = name;
+    const d = (await frappe.call({ method: SE_INV + "detail_inventaire", args: { name } })).message;
+    const $c = this.$r.find("#se-i-contenu"), fini = d.fiche.statut !== "En cours", SANS = d.sans_zone;
+    const zinfo = {}; d.zones.forEach((z) => { zinfo[z.name] = z; });
+    const libZone = (z) => (z === SANS ? "Non rangé" : !zinfo[z] ? z : zinfo[z].est_espace ? z : zinfo[z].espace === "Magasin" ? zinfo[z].code : `${zinfo[z].espace} ${zinfo[z].code}`);
+    const r6 = (n) => Math.round(n * 1e6) / 1e6;
+    // État de saisie par article : colonnes (zones de l'article, puis celles ajoutées) et valeur de chaque case.
+    const etat = {};
+    d.lignes.forEach((l) => {
+      const colonnes = l.zones.slice();
+      Object.keys(l.cases).forEach((z) => { if (!colonnes.includes(z)) colonnes.push(z); });
+      if (!colonnes.length) colonnes.push(SANS);
+      const cases = {}; colonnes.forEach((z) => { cases[z] = l.cases[z] == null ? null : l.cases[z]; });
+      etat[l.item_code] = { colonnes, cases, commentaire: l.commentaire || "" };
+    });
+    const totalDe = (e) => { let t = null; Object.values(e.cases).forEach((v) => { if (v != null && v !== "") t = (t || 0) + (+v || 0); }); return t == null ? null : r6(t); };
+    const ligne = (l) => {
+      const e = etat[l.item_code], total = totalDe(e), compte = total != null, ecart = compte ? r6(total - l.qte_systeme) : null;
+      return `<div class="se-i-ligne ${compte ? "fait" : ""}" data-item="${se_esc(l.item_code)}" data-cle="${se_esc(((l.item_name || "") + " " + l.item_code + " " + (l.description || "")).toLowerCase())}">
+        <div class="haut">${se_img(l.image)}
+          <div class="txt"><div class="se-nom">${se_esc(l.item_name || l.item_code)}</div>
+            <div class="se-code">${se_esc(l.item_code)}${l.groupe ? ` · ${se_esc(l.groupe)}` : ""}${l.uom ? ` · ${se_esc(l.uom)}` : ""}</div>
+            ${l.description ? `<div class="se-desc" title="${se_esc(l.description)}">${se_esc(l.description)}</div>` : ""}</div>
+          <div class="sys">système<b>${se_q(l.qte_systeme)}</b>${l.bouge ? `<small class="neg">maintenant ${se_q(l.qte_actuelle)}</small>` : ""}</div></div>
+        <div class="cases">${e.colonnes.map((z) => `<label class="case"><span class="z">${se_esc(libZone(z))}</span>
+            <input type="number" inputmode="decimal" min="0" step="any" class="form-control" data-zone="${se_esc(z)}" value="${e.cases[z] == null ? "" : se_esc(e.cases[z])}" ${fini ? "disabled" : ""} placeholder="–"></label>`).join("")}
+          ${fini ? "" : `<span class="se-bt" data-ajouter-zone title="Ajouter un emplacement">＋</span>`}
+          <div class="total">= <b class="tot">${compte ? se_q(total) : "?"}</b><span class="ec ${ecart ? (ecart < 0 ? "neg" : "pos") : ""}">${ecart == null ? "" : se_signe(ecart)}</span></div></div>
+        ${l.compte_par ? `<div class="se-note qui">compté par ${se_esc(l.compte_par)} le ${se_dthm(l.compte_le)}${l.qte_rapprochee != null && fini ? ` · rapproché à <b>${se_q(l.qte_rapprochee)}</b>` : ""}${l.sans_taux ? ` · <span class="neg">sans taux : exclu</span>` : ""}${l.zones_ajoutees ? ` · 📍 ajouté : ${se_esc(l.zones_ajoutees)}` : ""}</div>` : ""}
+      </div>`;
+    };
+    const optZones = () => { const g = {}; d.zones.forEach((z) => { (g[z.est_espace ? z.name : z.espace] = g[z.est_espace ? z.name : z.espace] || []).push(z); });
+      return `<option value="">📍 Toutes les zones</option><option value="${SANS}">Non rangé (sans zone)</option>` + Object.keys(g).map((esp) => `<optgroup label="${se_esc(esp)}">${g[esp].map((z) => `<option value="${se_esc(z.name)}">${se_esc(z.est_espace ? `${z.name} (sans rayon)` : z.name)}</option>`).join("")}</optgroup>`).join(""); };
+    $c.html(`<span class="se-retour" data-retour>← Inventaires</span>
+      <div class="se-card">
+        <div class="se-v-stock"><div class="t">📋 Inventaire ${se_esc(d.fiche.name)} — ${se_dt(d.fiche.date)} ${fini ? `<span class="se-badge">${se_esc(d.fiche.statut)}</span>` : ""}</div>
+          ${fini ? `<div class="se-note">${d.fiche.termine_par ? `${d.fiche.statut === "Terminé" ? "Clôturé" : "Annulé"} par ${se_esc(d.fiche.termine_par)} le ${se_dthm(d.fiche.termine_le)}` : ""}${d.fiche.rapprochement ? ` · ${se_lien("Stock Reconciliation", d.fiche.rapprochement, "écriture " + d.fiche.rapprochement)}` : ""}${d.fiche.note ? `<br>${se_esc(d.fiche.note)}` : ""}</div>`
+            : `<div class="se-note">Une case par emplacement : tapez ce que vous trouvez à chaque endroit, la somme fait le compté. « ＋ » ajoute un emplacement où l’article a été trouvé (il sera ajouté à l’article). Enregistrement automatique.</div>`}
+          <div class="plan" id="se-i-bilan"></div><div class="se-i-etat" id="se-i-etat"></div></div>
+        <div class="se-i-filtres"><input type="search" class="form-control se-saisie" id="se-i-filtre" placeholder="🔎 Article (nom, code, description)…">
+          <select class="form-control" id="se-i-zone">${optZones()}</select></div>
+        <div class="se-chips" id="se-i-vues" style="margin-top:6px"><span class="se-chip on" data-vue="tous">Tous</span><span class="se-chip" data-vue="non">À compter</span><span class="se-chip" data-vue="faits">Comptés</span><span class="se-chip" data-vue="ecarts">Écarts</span></div>
+        <div id="se-i-lignes"></div>
+        <button type="button" class="btn btn-default se-plus" id="se-i-plus" style="display:none">Afficher plus</button>
+        ${fini ? "" : `<div class="se-c-barre"><button type="button" class="btn btn-default" data-annuler>✖️ Annuler l’inventaire</button>
+          <button type="button" class="btn btn-primary" data-cloturer>✅ Clôturer et passer l’écriture</button></div>`}
+      </div>`);
+    // ── Filtres et rendu paresseux ──
+    let vue = "tous", zone = "", texte = "", nAff = 100;
+    const visibles = () => d.lignes.filter((l) => {
+      const e = etat[l.item_code], t = totalDe(e);
+      if (vue === "non" && t != null) return false;
+      if (vue === "faits" && t == null) return false;
+      if (vue === "ecarts" && (t == null || Math.abs(t - l.qte_systeme) < 1e-6)) return false;
+      if (zone && !e.colonnes.includes(zone)) return false;
+      if (texte && !((l.item_name || "") + " " + l.item_code + " " + (l.description || "")).toLowerCase().includes(texte)) return false;
+      return true;
+    });
+    const peindre = () => {
+      const v = visibles();
+      $c.find("#se-i-lignes").html(v.slice(0, nAff).map(ligne).join("") || `<div class="se-vide">Aucun article pour ce filtre.</div>`);
+      $c.find("#se-i-plus").toggle(v.length > nAff).text(`Afficher plus (${Math.max(v.length - nAff, 0)} restants)`);
+    };
+    const bilan = () => {
+      let n = 0, e = 0, val = 0;
+      d.lignes.forEach((l) => { const t = totalDe(etat[l.item_code]); if (t == null) return; n++; const ec = r6(t - l.qte_systeme); if (ec) { e++; val += ec * l.taux; } });
+      $c.find("#se-i-bilan").html(`<b>${n}/${d.lignes.length}</b> comptés · <b class="${e ? "neg" : "pos"}">${e} écart(s)</b>${e && d.voir_valeur ? ` · ${se_argent(val)}` : ""}`);
+    };
+    // ── Enregistrement au fil de l'eau : seules les lignes modifiées partent, regroupées ──
+    let sale = {}, minuterie = null, enCours = null;
+    const marquer = (code) => { sale[code] = { cases: etat[code].cases, commentaire: etat[code].commentaire }; $c.find("#se-i-etat").text("✏️ modifications non enregistrées…"); clearTimeout(minuterie); minuterie = setTimeout(envoyer, 1500); };
+    const envoyer = async () => {
+      if (enCours) return enCours;
+      if (!Object.keys(sale).length) return;
+      const envoi = sale; sale = {};
+      $c.find("#se-i-etat").text("⏳ enregistrement…");
+      enCours = frappe.call({ method: SE_INV + "enregistrer_inventaire", args: { name, comptes: JSON.stringify(envoi) } })
+        .then((r) => { $c.find("#se-i-etat").text(`💾 enregistré à ${se_hm((r.message || {}).enregistre_le)}`); })
+        .fail(() => { Object.keys(envoi).forEach((k) => { if (!sale[k]) sale[k] = envoi[k]; }); $c.find("#se-i-etat").html(`<span class="neg">⚠️ non enregistré — réessai dans 5 s</span>`); clearTimeout(minuterie); minuterie = setTimeout(envoyer, 5000); })
+        .always(() => { enCours = null; if (Object.keys(sale).length && !minuterie) minuterie = setTimeout(envoyer, 1500); });
+      return enCours;
+    };
+    const vider = async () => { clearTimeout(minuterie); minuterie = null; await envoyer(); if (Object.keys(sale).length) await envoyer(); };
+    window.onbeforeunload = () => (Object.keys(sale).length || enCours ? "Comptage non enregistré" : undefined);
+    // Gestionnaires DÉLÉGUÉS (posés une fois : les lignes sont repeintes à chaque filtre).
+    const brancher = () => {
+      $c.find("#se-i-lignes").on("input", ".se-i-ligne input[data-zone]", (ev) => {
+        const $l = $(ev.currentTarget).closest(".se-i-ligne"), code = $l.attr("data-item"), e = etat[code], l = d.lignes.find((x) => x.item_code === code);
+        const v = String(ev.currentTarget.value).replace(",", ".");
+        e.cases[$(ev.currentTarget).attr("data-zone")] = v === "" ? null : Math.max(+v || 0, 0);
+        const t = totalDe(e), ec = t == null ? null : r6(t - l.qte_systeme);
+        $l.toggleClass("fait", t != null).find(".tot").text(t == null ? "?" : se_q(t));
+        $l.find(".ec").text(ec == null ? "" : se_signe(ec)).attr("class", "ec " + (ec ? (ec < 0 ? "neg" : "pos") : ""));
+        bilan(); marquer(code);
+      });
+      $c.find("#se-i-lignes").on("keydown", ".se-i-ligne input[data-zone]", (ev) => {   // Entrée = case suivante
+        if (ev.key !== "Enter") return;
+        ev.preventDefault();
+        const tous = $c.find(".se-i-ligne input[data-zone]:enabled").toArray(), i = tous.indexOf(ev.currentTarget);
+        if (i >= 0 && i + 1 < tous.length) { tous[i + 1].focus(); tous[i + 1].select(); }
+      });
+      $c.find("#se-i-lignes").on("click", "[data-ajouter-zone]", (ev) => {
+        const $l = $(ev.currentTarget).closest(".se-i-ligne"), code = $l.attr("data-item"), e = etat[code];
+        const dlg = new frappe.ui.Dialog({ title: `📍 ${se_esc(code)} — trouvé à…`, fields: [{ fieldtype: "HTML", fieldname: "z" }],
+          primary_action_label: "Ajouter la case", primary_action: () => {
+            const z = dlg.fields_dict.z.$wrapper.find("[data-choix]").val();
+            dlg.hide();
+            if (!z || e.colonnes.includes(z)) return;
+            if (e.colonnes.length === 1 && e.colonnes[0] === SANS && e.cases[SANS] == null) { e.colonnes = []; delete e.cases[SANS]; }
+            e.colonnes.push(z); e.cases[z] = null;
+            const l = d.lignes.find((x) => x.item_code === code);
+            $l.replaceWith(ligne(l));
+            const inp = $c.find(`.se-i-ligne[data-item="${CSS.escape(code)}"] input[data-zone="${CSS.escape(z)}"]`)[0];
+            if (inp) inp.focus();
+          } });
+        dlg.fields_dict.z.$wrapper.html(`<div class="se-note" style="margin-bottom:8px">Choisissez l’emplacement où vous avez trouvé cet article : une case s’ajoute pour y compter ; à la clôture, l’emplacement sera ajouté à l’article (s’il y a une quantité).</div>
+          <select class="form-control" style="height:40px" data-choix>${optZones().replace(/<option value="">[^<]*<\/option>/, `<option value="">— choisir —</option>`)}</select>`);
+        dlg.show();
+      });
+    };
+    brancher(); bilan(); peindre();
+    let t = null;
+    $c.find("#se-i-filtre").on("input", (ev) => { clearTimeout(t); t = setTimeout(() => { texte = (ev.target.value || "").toLowerCase().trim(); nAff = 100; peindre(); }, 250); });
+    $c.find("#se-i-zone").on("change", (ev) => { zone = ev.currentTarget.value; nAff = 100; peindre(); });
+    $c.find("#se-i-vues .se-chip").on("click", (ev) => { vue = $(ev.currentTarget).attr("data-vue"); $c.find("#se-i-vues .se-chip").each((_, el) => $(el).toggleClass("on", $(el).attr("data-vue") === vue)); nAff = 100; peindre(); });
+    $c.find("#se-i-plus").on("click", () => { nAff += 100; peindre(); });
+    $c.find("[data-retour]").on("click", async () => { await vider(); window.onbeforeunload = null; this.chargerInventaire(); });
+    $c.find("[data-annuler]").on("click", () => {
+      frappe.prompt({ fieldtype: "Small Text", fieldname: "motif", label: "Motif (facultatif)" }, async (v) => {
+        await vider();
+        await frappe.call({ method: SE_INV + "annuler_inventaire", args: { name, motif: v.motif || null }, freeze: true });
+        window.onbeforeunload = null;
+        frappe.show_alert({ message: "Inventaire annulé — aucun mouvement de stock", indicator: "orange" }, 4);
+        this.chargerInventaire();
+      }, "Annuler l’inventaire (le comptage est conservé, rien ne bouge)", "Confirmer");
+    });
+    $c.find("[data-cloturer]").on("click", async () => {
+      await vider();
+      const b = (await frappe.call({ method: SE_INV + "bilan_cloture", args: { name }, freeze: true })).message;
+      const dlg = new frappe.ui.Dialog({ title: "✅ Clôturer l’inventaire", size: "large", fields: [{ fieldtype: "HTML", fieldname: "b" }, { fieldtype: "Small Text", fieldname: "note", label: "Note (facultatif)" }],
+        primary_action_label: b.a_rapprocher.length ? `Passer l’écriture (${b.a_rapprocher.length} article${b.a_rapprocher.length > 1 ? "s" : ""})` : "Clôturer sans écriture",
+        primary_action: async (v) => {
+          dlg.hide();
+          const r = (await frappe.call({ method: SE_INV + "cloturer_inventaire", args: { name, note: v.note || null }, freeze: true, freeze_message: "Rapprochement du Magasin…" })).message;
+          window.onbeforeunload = null;
+          frappe.msgprint({ title: "Inventaire clôturé", indicator: r.nb_ecarts ? "orange" : "green",
+            message: `${r.nb_comptes} article(s) comptés, ${r.nb_non_comptes} non comptés (inchangés), <b>${r.nb_ecarts} écart(s)</b>${r.nb_ecarts ? ` · valeur nette ${se_esc(se_argent(r.valeur_ecarts))} · manquants ${se_esc(se_argent(r.valeur_manquants))}` : ""}<br>`
+              + (r.rapprochement ? `Écriture de stock : ${se_lien("Stock Reconciliation", r.rapprochement)} (${r.nb_rapproches} article(s)).` : "Aucune écriture : rien à rapprocher.")
+              + (r.nb_zones_ajoutees ? `<br>📍 ${r.nb_zones_ajoutees} emplacement(s) ajouté(s) aux articles.` : "") + (r.nb_sans_taux ? `<br>⚠️ ${r.nb_sans_taux} article(s) sans taux de valorisation : exclus, à régler sur la fiche article puis à rapprocher à la main.` : "") });
+          this.chargerInventaire();
+        } });
+      const li = (x, txt) => `<li>${se_esc(x.item_name || x.item_code)} <span class="se-note">(${se_esc(x.item_code)})</span> ${txt}</li>`;
+      dlg.fields_dict.b.$wrapper.html(`<div class="se-resume">
+        <div><b>${b.nb_comptes}</b> article(s) comptés sur ${b.nb_lignes} · <b>${b.nb_non_comptes}</b> non comptés : <b>ils ne bougent pas</b>.</div>
+        <div><b class="${b.nb_ecarts ? "neg" : "pos"}">${b.nb_ecarts} écart(s)</b>${b.nb_ecarts && d.voir_valeur ? ` · valeur nette ${se_esc(se_argent(b.valeur_ecarts))} · manquants ${se_esc(se_argent(b.valeur_manquants))}` : ""}</div>
+        <div>${b.a_rapprocher.length ? `Une écriture <b>Stock Reconciliation</b> sur le Magasin va rapprocher <b>${b.a_rapprocher.length}</b> article(s) :` : "Aucun article à rapprocher : la clôture ne passe pas d’écriture."}</div>
+        ${b.a_rapprocher.length ? `<ul class="se-tours" style="max-height:220px;overflow:auto">${b.a_rapprocher.map((x) => li(x, `${se_q(x.qte_actuelle)} → <b>${se_q(x.qte_rapprochee)}</b> <span class="${x.ecart < 0 ? "neg" : "pos"}">(${se_signe(x.ecart)})</span>`)).join("")}</ul>` : ""}
+        ${b.bouges.length ? `<div class="se-alerte" style="margin-top:6px">⚠️ ${b.bouges.length} article(s) ont bougé entre leur comptage et maintenant : l’écart mesuré au comptage est appliqué au stock du moment (système actuel + écart).</div>
+          <ul class="se-tours" style="max-height:160px;overflow:auto">${b.bouges.map((x) => li(x, `compté ${se_q(x.qte_comptee)} quand le système disait ${se_q(x.qte_systeme)} ; maintenant ${se_q(x.qte_actuelle)} → <b>${se_q(x.qte_rapprochee)}</b>`)).join("")}</ul>` : ""}
+        ${b.sans_taux.length ? `<div class="se-alerte">⚠️ ${b.sans_taux.length} article(s) sans taux de valorisation : <b>exclus</b> de l’écriture (à régler sur la fiche article).</div><ul class="se-tours">${b.sans_taux.map((x) => li(x, "")).join("")}</ul>` : ""}
+        ${b.zones_nouvelles.length ? `<div class="se-note" style="margin-top:6px">📍 ${b.zones_nouvelles.length} article(s) trouvés à un emplacement nouveau : il sera ajouté à l’article (${b.zones_nouvelles.slice(0, 5).map((x) => `${se_esc(x.item_code)} → ${se_esc(x.zones.join(", "))}`).join(" · ")}${b.zones_nouvelles.length > 5 ? " …" : ""}).</div>` : ""}
+      </div>`);
+      dlg.show();
+    });
+    window.scrollTo({ top: 0 });
   }
 }

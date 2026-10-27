@@ -175,7 +175,14 @@ def get_context():
             "defaut": mien or (m if m in actifs else (liste[0]["name"] if liste else None)),
             "magasin": m, "responsable": est_responsable(), "aujourdhui": nowdate(),
             "seuils": seuils(), "verification": bool(est_responsable() or mien),
-            "cibles": frappe.get_all(CIBLE, pluck="entrepot") if frappe.db.exists("DocType", CIBLE) else []}
+            "cibles": frappe.get_all(CIBLE, pluck="entrepot") if frappe.db.exists("DocType", CIBLE) else [],
+            "inventaire": _inventaire_autorise()}
+
+
+def _inventaire_autorise() -> bool:
+    """Bouton « Inventaire du Magasin » : rôle Inventaire Magasin ou System Manager (module inventaire_magasin)."""
+    from customization_app.inventaire_magasin import est_autorise
+    return est_autorise()
 
 
 # ── Recherche d'articles ─────────────────────────────────────────────────────
