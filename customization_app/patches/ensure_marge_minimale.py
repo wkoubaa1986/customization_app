@@ -1,0 +1,22 @@
+"""Marge minimale de vente : champs de trace sur la ligne de commande (voir customization_app.marge_minimale).
+Rejoué à chaque migration (after_migrate) : sans effet quand tout est en place."""
+
+import frappe
+from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
+
+from customization_app import marge_minimale as M
+
+
+def execute():
+    create_custom_fields({"Sales Order Item": [
+        {"fieldname": M.CHAMP_FLAG, "label": "Prix relevé (marge mini)", "fieldtype": "Check",
+         "insert_after": "rate", "read_only": 1, "no_copy": 1, "allow_on_submit": 0,
+         "description": "Le prix de cette ligne a été relevé à la marge minimale (réglage « Config Marge Minimale »)."},
+        {"fieldname": M.CHAMP_AVANT, "label": "Prix avant marge mini", "fieldtype": "Currency",
+         "insert_after": M.CHAMP_FLAG, "read_only": 1, "no_copy": 1, "options": "currency",
+         "depends_on": "eval:doc.%s" % M.CHAMP_FLAG},
+    ]}, ignore_validate=True, update=True)
+    if frappe.db.exists("DocType", M.CONFIG) and not frappe.db.get_single_value(M.CONFIG, "taux"):
+        frappe.db.set_single_value(M.CONFIG, {"taux": 15, "actif": 1, "base": M.BASE_PRIX,
+                                              "source_cout": M.SOURCE_VALO, "ignorer_web": 1, "ignorer_prix_zero": 1})
+    frappe.db.commit()

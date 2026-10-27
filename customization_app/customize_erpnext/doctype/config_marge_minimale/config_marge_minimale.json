@@ -1,0 +1,100 @@
+{
+ "actions": [],
+ "creation": "2026-10-27 23:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "actif",
+  "taux",
+  "col_1",
+  "base",
+  "source_cout",
+  "sec_exclusions",
+  "ignorer_web",
+  "ignorer_prix_zero",
+  "groupes_exclus"
+ ],
+ "fields": [
+  {
+   "fieldname": "actif",
+   "fieldtype": "Check",
+   "label": "Appliquer la marge minimale aux commandes client",
+   "default": "1",
+   "description": "À l’enregistrement d’une commande, toute ligne vendue sous la marge plancher est relevée au prix qui donne exactement cette marge. Le prix de la liste (et sa règle de prix) reste tel quel au-dessus du plancher."
+  },
+  {
+   "fieldname": "taux",
+   "fieldtype": "Percent",
+   "label": "Marge minimale (%)",
+   "default": "15",
+   "reqd": 1
+  },
+  {
+   "fieldname": "col_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "base",
+   "fieldtype": "Select",
+   "label": "Marge calculée sur",
+   "options": "Prix de vente HT\nCoût d'achat",
+   "default": "Prix de vente HT",
+   "description": "Prix de vente HT : prix mini = coût ÷ (1 − 15 %). Coût d’achat : prix mini = coût × 1,15. Les prix de vente sont TTC : la TVA de l’article est ajoutée au-dessus."
+  },
+  {
+   "fieldname": "source_cout",
+   "fieldtype": "Select",
+   "label": "Coût de l’article",
+   "options": "Valorisation du stock\nDernier prix d'achat",
+   "default": "Valorisation du stock",
+   "description": "Valorisation : le coût moyen du stock (entrepôt de la ligne, sinon l’article), à défaut le dernier prix d’achat. Un ensemble vaut la somme de ses composants."
+  },
+  {
+   "fieldname": "sec_exclusions",
+   "fieldtype": "Section Break",
+   "label": "Jamais relevés"
+  },
+  {
+   "fieldname": "ignorer_web",
+   "fieldtype": "Check",
+   "label": "Commandes du site web (WooCommerce)",
+   "default": "1",
+   "description": "Le client a déjà payé le prix affiché en ligne."
+  },
+  {
+   "fieldname": "ignorer_prix_zero",
+   "fieldtype": "Check",
+   "label": "Lignes à 0 DT",
+   "default": "1",
+   "description": "Échanges, garanties, gestes commerciaux volontaires."
+  },
+  {
+   "fieldname": "groupes_exclus",
+   "fieldtype": "Table MultiSelect",
+   "label": "Groupes d’articles exclus",
+   "options": "Config Marge Exclusion"
+  }
+ ],
+ "links": [],
+ "modified": "2026-10-27 23:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "Config Marge Minimale",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "print": 1,
+   "email": 1,
+   "share": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "issingle": 1
+}

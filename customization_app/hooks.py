@@ -309,6 +309,9 @@ doc_events = {
         # Commande Aramex : ses lignes visent le Magasin (réservation au bon entrepôt) —
         # la sortie principale de l'article ne s'applique pas. Voir aramex_stock.
         "before_validate": "customization_app.aramex_stock.sales_order_before_validate",
+        # Marge minimale : APRÈS le validate d'ERPNext (qui ré-applique la règle de prix et recalcule
+        # le prix), relève les lignes sous la marge plancher et refait les totaux (marge_minimale).
+        "validate": "customization_app.marge_minimale.sales_order_validate",
         # on_update se déclenche à l'enregistrement d'un brouillon ET à la
         # validation : ajouter une ligne de main d'œuvre à un devis non validé
         # met donc aussitôt l'anomalie à jour. on_submit seul l'aurait raté.
@@ -783,6 +786,8 @@ after_migrate = [
     # Graphe « Situation Mensuelle » sur 12 mois + raccourci vers la page de détail (onglet Comptabilité).
     "customization_app.patches.ensure_situation_mensuelle.execute",
     "customization_app.patches.ensure_raccourci_commandes_a_traiter.execute",
+    # Marge minimale de vente : champs de trace sur la ligne de commande + réglage par défaut (15 %).
+    "customization_app.patches.ensure_marge_minimale.execute",
     "customization_app.patches.ensure_raccourci_reparation_osmoseurs.execute",  # "Selling", après "Commandes à traiter"
     # « Rapport Prime » dans l'onglet Banque (workspace importé par bank_retenue_sync).
     "customization_app.patches.ensure_raccourci_rapport_prime.execute",
@@ -837,7 +842,9 @@ doctype_js = {
     # Commande : boutons « Créer le bordereau Aramex » / étiquette / mise en attente
     # (API Aramex — aramex_expedition.py). woocommerce_fusion a aussi un doctype_js sur
     # Sales Order : Frappe concatène les deux, aucun n'écrase l'autre.
-    "Sales Order": "public/js/sales_order_aramex.js",
+    "Sales Order": ["public/js/sales_order_aramex.js",
+                    # Lignes relevées à la marge minimale : bandeau + ligne orangée (marge_minimale).
+                    "public/js/sales_order_marge.js"],
 }
 
 # doctype_js = {
