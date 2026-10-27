@@ -281,11 +281,17 @@ doc_events = {
             # Un BL d'échange (bundle « E-… » à ligne négative) fait rentrer la
             # pièce reprise par un BL retour créé et validé ici même.
             "customization_app.retour_echange.on_submit_bl",
+            # Qui a fait sortir les articles du Magasin : magasinier principal = normal,
+            # quelqu'un d'autre = sortie exceptionnelle « À vérifier » (sorties_magasin).
+            "customization_app.sorties_magasin.delivery_note_on_submit",
         ],
         # Un BL en BROUILLON créé, modifié ou supprimé change la pastille « BL à
         # valider » de sa commande (commande_alertes, filtre de la liste).
-        "after_insert": "customization_app.commande_alertes.on_delivery_note_change",
-        "on_update": "customization_app.commande_alertes.on_delivery_note_change",
+        # Et un BL du Magasin qui ENTRE en attente d'approbation prévient le magasinier principal.
+        "after_insert": ["customization_app.commande_alertes.on_delivery_note_change",
+                         "customization_app.sorties_magasin.delivery_note_on_update"],
+        "on_update": ["customization_app.commande_alertes.on_delivery_note_change",
+                      "customization_app.sorties_magasin.delivery_note_on_update"],
         "after_delete": "customization_app.commande_alertes.on_delivery_note_change",
         # Annuler l'échange annule sa reprise ; la reprise ne s'annule pas seule.
         "before_cancel": "customization_app.retour_echange.before_cancel_bl",
@@ -528,6 +534,7 @@ app_include_js = [_js("customer_quick_entry.js"),
                   _js("tache_photos_cloture.js"),
                   _js("suivi_activite_onglet.js"),  # l'onglet « Suivi d'activité » ouvre l'outil
                   _js("situation_mensuelle_clic.js"),  # graphe Situation Mensuelle → page de détail
+                  _js("bl_magasin_alerte.js"),  # bandeau rouge du magasinier principal : BL à approuver / à vérifier
                   # 📨 SMS / e-mail au client depuis la fiche tâche, avec modèles prédéfinis
                   # (technicien + téléphone injectés automatiquement, commande liée si présente).
                   _js("tache_sms_email.js"),
@@ -683,6 +690,8 @@ scheduler_events = {
         "customization_app.reunion_activite.cron_creer_prochaine",
         # Vérification hebdomadaire des stocks d'employés : fiche + tâches le jour fixé (Config Stock Entrepot).
         "customization_app.stock_entrepots.planifier_verifications",
+        # BL du Magasin en attente / sorties exceptionnelles non vérifiées : rappel au magasinier principal.
+        "customization_app.sorties_magasin.relance_quotidienne",
     ],
 
     "cron": {
@@ -795,6 +804,9 @@ after_migrate = [
     "customization_app.patches.ensure_raccourci_tableau_appels.execute",
     # Bloc « Mes appels par priorité » tout en haut de l'onglet Appels (HTML/CSS/JS dans blocs_html/).
     "customization_app.patches.ensure_bloc_priorites_appels.execute",
+    # Sorties du Magasin : rôle « Magasinier principal » (Hedi, Wassim), champs de vérification du BL, workflow
+    # « Validation Magasin » (Approve/Reject réservés au rôle, « Sortie exceptionnelle » ouverte à tous).
+    "customization_app.patches.ensure_sorties_magasin.execute",
 ]
 
 # after_migrate = ["customization_app.patches.override_get_item_details.execute"]

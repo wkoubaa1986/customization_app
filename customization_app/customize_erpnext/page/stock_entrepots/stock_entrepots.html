@@ -176,6 +176,15 @@
     .se-zh small { font-size: 10px; font-weight: 500; color: #64748b; white-space: nowrap; }
     .se-zh.jamais { border-color: #fca5a5; background: #fef2f2; } .se-zh.jamais small { color: #dc2626; }
     .se-zh.ec { border-color: #93c5fd; background: #eff6ff; } .se-zh.ec small { color: #1d4ed8; }
+    .se-b-carte { border: 1px solid #e2e8f0; border-radius: 12px; padding: 10px 12px; margin-bottom: 8px; background: #fff; }
+    .se-b-carte.attente { border-color: #fca5a5; background: #fff7f7; } .se-b-carte.verif { border-color: #fcd34d; background: #fffbeb; }
+    .se-b-carte.ecart { border-color: #f87171; background: #fef2f2; }
+    .se-b-carte .t { font-weight: 700; font-size: 14px; } .se-b-carte .d { font-size: 12.5px; color: #475569; margin: 2px 0 6px; }
+    .se-b-ligne { display: flex; align-items: center; gap: 8px; padding: 3px 0; font-size: 13px; }
+    .se-b-ligne .q { margin-left: auto; font-weight: 700; white-space: nowrap; } .se-b-ligne .w { font-size: 11px; color: #64748b; white-space: nowrap; }
+    .se-b-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+    .se-b-tag { display: inline-block; border-radius: 999px; padding: 1px 8px; font-size: 11px; font-weight: 700; }
+    .se-b-tag.v { background: #fef3c7; color: #92400e; } .se-b-tag.c { background: #dcfce7; color: #166534; } .se-b-tag.e { background: #fee2e2; color: #991b1b; }
     .se-chip.tri { margin-left: auto; } .se-chip.tri.on { background: #0f766e; border-color: #0f766e; }
     .se-i-ligne .cases { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; margin-top: 8px; }
     .se-i-ligne .case { display: flex; flex-direction: column; gap: 2px; margin: 0; font-weight: normal; }
@@ -208,6 +217,7 @@
     <div class="se-onglet" data-onglet="transfert"><span class="ic">🔁</span>Transfert<span class="se-badge-n" id="se-t-badge" style="display:none"></span></div>
     <div class="se-onglet" data-onglet="zero"><span class="ic">0️⃣</span>À zéro</div>
     <div class="se-onglet" data-onglet="verif"><span class="ic">✅</span>Vérif.<span class="se-badge-n" id="se-v-badge" style="display:none"></span></div>
+    <div class="se-onglet" data-onglet="bl"><span class="ic">🧾</span>BL<span class="se-badge-n" id="se-b-badge" style="display:none"></span></div>
   </div>
 
   <div style="display:flex;justify-content:flex-end;margin:-2px 0 4px"><span class="se-lien" id="se-guide" style="font-size:12.5px;cursor:pointer">❓ Guide</span></div>
@@ -230,6 +240,8 @@
     <div id="se-s-liste"></div>
     </div>
   </div>
+
+  <div class="se-vue" data-vue="bl" style="display:none"><div id="se-b-contenu"></div></div>
 
   <div class="se-vue" data-vue="sorties" style="display:none">
     <div class="se-sous-onglets" id="se-sens">

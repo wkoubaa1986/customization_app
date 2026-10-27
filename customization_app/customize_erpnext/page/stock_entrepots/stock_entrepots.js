@@ -38,6 +38,7 @@ const se_argent = (v) => `${Math.round(+v || 0).toLocaleString("fr-FR")} DT`;
 const SE_STATUTS = { Completed: "✅", Open: "🕒", Cancelled: "✖️" };
 const se_hm = (dt) => (dt ? String(dt).slice(11, 16) : "");                 // « 2026-10-27 14:40:12 » → 14:40
 const se_dthm = (dt) => (dt ? `${se_dt(dt)} ${se_hm(dt)}` : "");           // → 27/10 14:40
+const SE_BL = "customization_app.sorties_magasin.";                            // onglet BL (sorties du Magasin)
 
 class StockEntrepots {
   constructor(wrapper) {
@@ -95,9 +96,14 @@ class StockEntrepots {
     r.find("#se-s-attente").on("click", "[data-valider]", (e) => this.ouvrirValidation($(e.currentTarget).attr("data-valider")));
     r.find("#se-s-attente").on("click", "[data-verif]", (e) => { this.comptage = $(e.currentTarget).attr("data-verif"); this.montrer("verif"); });
     frappe.realtime.on("se_transferts_a_valider", () => { this.chargerAttente(); if (this.onglet === "transfert") this.chargerHistorique(); });
+    frappe.realtime.on("sm_bl_magasin", () => { if (this.onglet === "bl") this.chargerBL(); else this.majBadgeBL(); });
     this.pret = true;
-    this.montrer("solde");
+    // Ouverture directe sur un onglet (bandeau du magasinier : frappe.route_options = { onglet: "bl" }).
+    const onglet = frappe.route_options && frappe.route_options.onglet;
+    if (onglet) frappe.route_options = null;
+    this.montrer(onglet && r.find(`.se-onglet[data-onglet="${onglet}"]`).length ? onglet : "solde");
     await this.chargerAttente();
+    this.majBadgeBL();
     const voulu = frappe.route_options && frappe.route_options.valider;
     if (voulu) { frappe.route_options = null; this.ouvrirValidation(voulu); }
   }
@@ -135,6 +141,7 @@ class StockEntrepots {
         <li>Un article qui a bougé entre le comptage et la validation perd son comptage : à recompter (ligne marquée).</li></ul></div>
       ${this.ctx.inventaire ? `<div class="et"><div class="t">📋 Inventaire du Magasin — compter tout le Magasin par emplacement</div><ul>
         <li>Bouton « 📋 Inventaire du Magasin » (Solde). Tous les articles suivis en stock au Magasin, photo et description, <b>une case par emplacement</b> (zones de l’article dans l’espace Magasin — pas le Hall ; « Non rangé » sans zone) : la somme des cases = compté, comparé au système. « ＋ » ajoute un emplacement où l’article a été trouvé : aussitôt ajouté à la fiche article (✕ pour le retirer).</li>
+        <li><b>Onglet BL</b> : les BL contenant des articles du Magasin attendent l’approbation du <b>magasinier principal</b> (rôle « Magasinier principal » : lui seul approuve ou rejette ; bandeau rouge sur toutes ses pages tant qu’un BL attend). En son absence, « Sortie exceptionnelle » : l’employé valide lui-même, le stock sort, et la sortie est tracée pour vérification (Conforme / Écart) à son retour.</li>
         <li><b>Inventaire partiel</b> : à l’ouverture, cochez des zones ; seuls leurs articles sont sur la feuille (un article rangé à deux endroits garde toutes ses cases). Plusieurs inventaires partiels peuvent être ouverts en parallèle s’ils ne se recoupent pas ; un inventaire complet exclut les autres. La liste montre, zone par zone, la date du dernier inventaire clôturé.</li>
         <li>Puce « Négatifs » : seuls les articles dont le système est sous zéro (chiffre en rouge). « 📍 Par zone » : les articles groupés par emplacement dans l’ordre des zones, « Non rangé » en dernier — pour faire le tour du magasin rayon par rayon.</li>
         <li>Enregistrement automatique ligne par ligne : plusieurs personnes peuvent compter en même temps, et reprendre plus tard. Filtres : zone, à compter / comptés / écarts.</li>
@@ -289,6 +296,7 @@ class StockEntrepots {
        transfert: () => { this.chargerHistorique(); this.majQuantitesPanier(); this.majRegle(); },
        zero: () => (this.zeroEntrepot ? this.ouvrirZero(this.zeroEntrepot) : this.chargerZero()),
        verif: () => (this.comptage ? this.ouvrirComptage(this.comptage) : this.chargerVerif()),
+       bl: () => this.chargerBL(),
        inventaire: () => (this.feuilleInv ? this.ouvrirInventaire(this.feuilleInv) : this.chargerInventaire()) })[this.onglet]();
     this.majBarreSolde();
   }
@@ -1083,6 +1091,69 @@ class StockEntrepots {
           + (r.restant.length ? `<br><br>⚠️ Encore non nul (a bougé pendant l’opération ?) : ${r.restant.map(se_esc).join(", ")}` : "") });
       this.ouvrirZero(res.entrepot);
     });
+  }
+
+  // ── BL du Magasin : approbation par le magasinier principal, sorties exceptionnelles ───────
+  /** Pastille de l'onglet : BL à approuver (+ sorties à vérifier et écarts pour le magasinier principal). */
+  async majBadgeBL() {
+    try {
+      const e = (await frappe.call({ method: SE_BL + "etat" })).message;
+      const n = e.a_approuver.length + e.a_verifier.length + e.ecarts.length;
+      this.$r.find("#se-b-badge").toggle(!!n).text(n);
+    } catch (err) { /* champs absents (patch non joué) : pas de pastille */ }
+  }
+
+  async chargerBL() {
+    const jeton = (this.jetons.bl = (this.jetons.bl || 0) + 1);
+    let e;
+    try { e = (await frappe.call({ method: SE_BL + "etat" })).message; }
+    catch (err) { this.$r.find("#se-b-contenu").html(`<div class="se-vide">Onglet indisponible : lancer la migration (patch ensure_sorties_magasin).</div>`); return; }
+    if (jeton !== this.jetons.bl || this.onglet !== "bl") return;
+    const $c = this.$r.find("#se-b-contenu"), P = e.principal;
+    const n = e.a_approuver.length + e.a_verifier.length + e.ecarts.length;
+    this.$r.find("#se-b-badge").toggle(!!n).text(n);
+    const lignes = (b) => b.lignes.map((l) => `<div class="se-b-ligne">${se_img(l.image)}<div style="min-width:0"><div class="se-nom">${se_esc(l.item_name || l.item_code)}</div><div class="se-code">${se_esc(l.item_code)}</div></div>
+        <span class="q">${se_q(l.qte)}<small> ${se_esc(l.uom || "")}</small></span><span class="w">${se_esc(se_court(l.entrepot || ""))}</span></div>`).join("");
+    const entete = (b, extra) => `<div class="t">🧾 ${se_lien("Delivery Note", b.name)} — ${se_esc(b.client)}</div>
+        <div class="d">${b.commande ? `${se_lien("Sales Order", b.commande, "commande " + b.commande)} · ` : ""}créé par ${se_esc(b.par || "")} le ${se_esc(b.creation || "")}${b.livre_par ? ` · livré par ${se_esc(b.livre_par)}` : ""}${b.remarque ? ` · ${se_esc(b.remarque)}` : ""}${extra || ""}</div>`;
+    const tag = (b) => b.verification === "À vérifier" ? `<span class="se-b-tag v">⏳ à vérifier</span>` : b.verification === "Conforme" ? `<span class="se-b-tag c">✅ conforme</span>` : b.verification === "Écart" ? `<span class="se-b-tag e">⚠️ écart</span>` : "";
+    const vieux = (b) => (b.age_h != null && b.age_h > 24 ? ` · <b class="neg">depuis ${Math.round(b.age_h / 24)} j</b>` : "");
+    const approuver = e.a_approuver.map((b) => `<div class="se-b-carte attente" data-bl="${se_esc(b.name)}">${entete(b, vieux(b))}${lignes(b)}
+        <div class="se-b-actions">${P ? `<button type="button" class="btn btn-primary btn-sm" data-approuver="${se_esc(b.name)}">✅ Approuver la sortie</button>
+          <button type="button" class="btn btn-default btn-sm" data-rejeter="${se_esc(b.name)}">✖️ Rejeter</button>`
+          : `<button type="button" class="btn btn-warning btn-sm" data-exceptionnelle="${se_esc(b.name)}">⚠️ Sortie exceptionnelle (magasinier absent)</button>`}</div></div>`).join("");
+    const verifier = e.a_verifier.map((b) => `<div class="se-b-carte verif">${entete(b, ` · <b>sorti par ${se_esc(b.sorti_par || "")} le ${se_esc(b.sorti_le || "")}</b>${vieux(b)}${b.note ? `<br>📝 ${se_esc(b.note)}` : ""}`)}${lignes(b)}
+        <div class="se-b-actions"><button type="button" class="btn btn-primary btn-sm" data-conforme="${se_esc(b.name)}">✅ Conforme</button>
+          <button type="button" class="btn btn-danger btn-sm" data-ecart="${se_esc(b.name)}">⚠️ Écart constaté</button></div></div>`).join("");
+    const ecarts = e.ecarts.map((b) => `<div class="se-b-carte ecart">${entete(b, ` · sorti par ${se_esc(b.sorti_par || "")} le ${se_esc(b.sorti_le || "")} · écart relevé par ${se_esc(b.verifie_par || "")} le ${se_esc(b.verifie_le || "")}<br>📝 ${se_esc(b.note || "")}`)}${lignes(b)}
+        <div class="se-b-actions"><button type="button" class="btn btn-default btn-sm" data-regle="${se_esc(b.name)}">✅ Écart réglé</button></div></div>`).join("");
+    const histo = (liste) => liste.map((b) => `<div class="se-v-h" style="cursor:default"><span class="d">${se_esc(b.sorti_le || b.creation || "")}</span>
+        <span class="n">${tag(b) || `<span class="se-b-tag c">✅ approuvé</span>`} ${se_lien("Delivery Note", b.name)} · ${se_esc(b.client)} · ${b.nb} art.${b.sorti_par ? ` · ${se_esc(b.sorti_par)}` : ""}${b.verifie_par ? ` · vérifié par ${se_esc(b.verifie_par)}` : ""}${b.note ? `<div class="se-note">📝 ${se_esc(b.note)}</div>` : ""}</span></div>`).join("");
+    $c.html(`<div class="se-card se-v-stock"><div class="t">🧾 BL du Magasin</div>
+        <div class="plan">${P ? `Vous êtes <b>magasinier principal</b> : vous seul approuvez les sorties du Magasin. En votre absence, un employé peut faire une <b>sortie exceptionnelle</b> : elle est tracée ici pour votre vérification.`
+          : `Les BL contenant des articles du Magasin attendent l’approbation du magasinier principal (${se_esc((e.principaux || []).join(", "))}). S’il est absent, vous pouvez faire une <b>sortie exceptionnelle</b> : le stock sort, et la sortie sera vérifiée à son retour.`}</div></div>
+      <div class="se-titre">📥 À approuver (${e.a_approuver.length})</div>
+      ${approuver || `<div class="se-vide">Aucun BL en attente.</div>`}
+      ${P ? `<div class="se-titre">⚠️ Sorties exceptionnelles à vérifier (${e.a_verifier.length})</div>${verifier || `<div class="se-vide">Rien à vérifier.</div>`}
+        ${e.ecarts.length ? `<div class="se-titre">❗ Écarts à régler (${e.ecarts.length})</div>${ecarts}` : ""}
+        <div class="se-titre">🕘 Dernières sorties</div><div class="se-card">${histo(e.historique) || `<div class="se-note">Aucune.</div>`}</div>`
+        : `<div class="se-titre">🕘 Mes sorties exceptionnelles</div><div class="se-card">${histo(e.miennes) || `<div class="se-note">Aucune.</div>`}</div>`}`);
+    const geste = async (method, args, confirmation, apres) => {
+      const faire = async () => { try { await frappe.call({ method: SE_BL + method, args, freeze: true }); frappe.show_alert({ message: apres, indicator: "green" }, 4); } finally { this.chargerBL(); } };
+      confirmation ? frappe.confirm(confirmation, faire) : faire();
+    };
+    $c.find("[data-approuver]").on("click", (ev) => { const name = $(ev.currentTarget).attr("data-approuver"); geste("approuver", { name }, `Approuver la sortie du Magasin pour <b>${se_esc(name)}</b> ? Le stock sort.`, `${name} approuvé`); });
+    $c.find("[data-rejeter]").on("click", (ev) => { const name = $(ev.currentTarget).attr("data-rejeter");
+      frappe.prompt({ fieldtype: "Small Text", fieldname: "motif", label: "Motif du rejet", reqd: 1 }, (v) => geste("rejeter", { name, motif: v.motif }, null, `${name} rejeté`), `Rejeter ${name}`, "Rejeter"); });
+    $c.find("[data-exceptionnelle]").on("click", (ev) => { const name = $(ev.currentTarget).attr("data-exceptionnelle");
+      frappe.prompt({ fieldtype: "Small Text", fieldname: "motif", label: "Pourquoi sans le magasinier ? (facultatif)" },
+        (v) => geste("sortie_exceptionnelle", { name, motif: v.motif || null }, null, `${name} validé — sortie à vérifier par le magasinier`),
+        `⚠️ Sortie exceptionnelle ${name}`, "Valider et faire sortir le stock"); });
+    $c.find("[data-conforme]").on("click", (ev) => { const name = $(ev.currentTarget).attr("data-conforme"); geste("verifier", { name, resultat: "Conforme" }, null, `${name} : conforme`); });
+    $c.find("[data-ecart]").on("click", (ev) => { const name = $(ev.currentTarget).attr("data-ecart");
+      frappe.prompt({ fieldtype: "Small Text", fieldname: "note", label: "Écart constaté (quantités, articles…)", reqd: 1 }, (v) => geste("verifier", { name, resultat: "Écart", note: v.note }, null, `${name} : écart consigné, l’employé est prévenu`), `⚠️ Écart sur ${name}`, "Consigner l’écart"); });
+    $c.find("[data-regle]").on("click", (ev) => { const name = $(ev.currentTarget).attr("data-regle");
+      frappe.prompt({ fieldtype: "Small Text", fieldname: "note", label: "Comment l’écart a été réglé" }, (v) => geste("verifier", { name, resultat: "Conforme", note: v.note || null }, null, `${name} : écart réglé`), `Écart réglé — ${name}`, "Marquer réglé"); });
   }
 
   // ── Inventaire du Magasin (rôle Inventaire Magasin) ───────────────────────
