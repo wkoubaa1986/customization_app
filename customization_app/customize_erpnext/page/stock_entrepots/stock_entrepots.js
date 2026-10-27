@@ -135,6 +135,7 @@ class StockEntrepots {
         <li>Un article qui a bougé entre le comptage et la validation perd son comptage : à recompter (ligne marquée).</li></ul></div>
       ${this.ctx.inventaire ? `<div class="et"><div class="t">📋 Inventaire du Magasin — compter tout le Magasin par emplacement</div><ul>
         <li>Bouton « 📋 Inventaire du Magasin » (Solde). Tous les articles suivis en stock au Magasin, photo et description, <b>une case par emplacement</b> (zones de l’article dans l’espace Magasin — pas le Hall ; « Non rangé » sans zone) : la somme des cases = compté, comparé au système. « ＋ » ajoute un emplacement où l’article a été trouvé : aussitôt ajouté à la fiche article (✕ pour le retirer).</li>
+        <li>Puce « Négatifs » : seuls les articles dont le système est sous zéro (chiffre en rouge). « 📍 Par zone » : les articles groupés par emplacement dans l’ordre des zones, « Non rangé » en dernier — pour faire le tour du magasin rayon par rayon.</li>
         <li>Enregistrement automatique ligne par ligne : plusieurs personnes peuvent compter en même temps, et reprendre plus tard. Filtres : zone, à compter / comptés / écarts.</li>
         <li>« ✅ Clôturer » : aperçu, puis <b>une écriture de stock</b> (Stock Reconciliation) sur le Magasin pour les articles comptés en écart ; un article qui a bougé depuis son comptage reçoit son écart sur le stock du moment. Les non comptés ne bougent pas.</li></ul></div>` : ""}
       <p class="se-note"><b>Erreurs courantes</b> : transfert envoyé par erreur → « Annuler la demande » tant qu’il n’est pas validé · comptage terminé trop tôt → le responsable « Renvoie au comptage » · réglages (Magasin, trajets permis, seuils, cibles, jours de vérification) : <a href="/app/config-stock-entrepot">Config Stock Entrepot</a>.</p>
@@ -1140,7 +1141,7 @@ class StockEntrepots {
           <div class="txt"><div class="se-nom">${se_esc(l.item_name || l.item_code)}</div>
             <div class="se-code">${se_esc(l.item_code)}${l.groupe ? ` · ${se_esc(l.groupe)}` : ""}${l.uom ? ` · ${se_esc(l.uom)}` : ""}</div>
             ${l.description ? `<div class="se-desc" title="${se_esc(l.description)}">${se_esc(l.description)}</div>` : ""}</div>
-          <div class="sys">système<b>${se_q(l.qte_systeme)}</b>${l.bouge ? `<small class="neg">maintenant ${se_q(l.qte_actuelle)}</small>` : ""}</div></div>
+          <div class="sys ${l.qte_systeme < 0 ? "negatif" : ""}">système<b>${se_q(l.qte_systeme)}</b>${l.bouge ? `<small class="neg">maintenant ${se_q(l.qte_actuelle)}</small>` : ""}</div></div>
         <div class="cases">${e.colonnes.map((z) => `<label class="case ${e.ajoutees.includes(z) ? "ajoutee" : ""}"><span class="z">${se_esc(libZone(z))}${e.ajoutees.includes(z) && !fini ? `<span class="x" data-retirer-zone="${se_esc(z)}" title="Retirer cet emplacement de l’article">✕</span>` : ""}</span>
             <input type="number" inputmode="decimal" min="0" step="any" class="form-control" data-zone="${se_esc(z)}" value="${e.cases[z] == null ? "" : se_esc(e.cases[z])}" ${fini ? "disabled" : ""} placeholder="–"></label>`).join("")}
           ${fini ? "" : `<span class="se-bt" data-ajouter-zone title="Ajouter un emplacement">＋</span>`}
@@ -1158,32 +1159,50 @@ class StockEntrepots {
           <div class="plan" id="se-i-bilan"></div><div class="se-i-etat" id="se-i-etat"></div></div>
         <div class="se-i-filtres"><input type="search" class="form-control se-saisie" id="se-i-filtre" placeholder="🔎 Article (nom, code, description)…">
           <select class="form-control" id="se-i-zone">${optZones()}</select></div>
-        <div class="se-chips" id="se-i-vues" style="margin-top:6px"><span class="se-chip on" data-vue="tous">Tous</span><span class="se-chip" data-vue="non">À compter</span><span class="se-chip" data-vue="faits">Comptés</span><span class="se-chip" data-vue="ecarts">Écarts</span></div>
+        <div class="se-chips" id="se-i-vues" style="margin-top:6px"><span class="se-chip on" data-vue="tous">Tous</span><span class="se-chip" data-vue="non">À compter</span><span class="se-chip" data-vue="faits">Comptés</span><span class="se-chip" data-vue="ecarts">Écarts</span><span class="se-chip alerte" data-vue="negatifs">Négatifs</span><span class="se-chip tri" data-tri title="Grouper les articles par emplacement, dans l’ordre des zones">📍 Par zone</span></div>
         <div id="se-i-lignes"></div>
         <button type="button" class="btn btn-default se-plus" id="se-i-plus" style="display:none">Afficher plus</button>
         ${fini ? "" : `<div class="se-c-barre"><button type="button" class="btn btn-default" data-annuler>✖️ Annuler l’inventaire</button>
           <button type="button" class="btn btn-primary" data-cloturer>✅ Clôturer et passer l’écriture</button></div>`}
       </div>`);
     // ── Filtres et rendu paresseux ──
-    let vue = "tous", zone = "", texte = "", nAff = 100;
-    const visibles = () => d.lignes.filter((l) => {
-      const e = etat[l.item_code], t = totalDe(e);
-      if (vue === "non" && t != null) return false;
-      if (vue === "faits" && t == null) return false;
-      if (vue === "ecarts" && (t == null || Math.abs(t - l.qte_systeme) < 1e-6)) return false;
-      if (zone && !e.colonnes.includes(zone)) return false;
-      if (texte && !((l.item_name || "") + " " + l.item_code + " " + (l.description || "")).toLowerCase().includes(texte)) return false;
-      return true;
-    });
+    let vue = "tous", zone = "", texte = "", nAff = 100, parZone = false;
+    // Tri par zone : rang = ordre des zones (espace, puis code) ; « Non rangé » en dernier. Un article rangé à
+    // plusieurs endroits est classé sous sa première zone (ou sous la zone filtrée).
+    const rangZone = {}; d.zones.forEach((z, i) => { rangZone[z.name] = i; });
+    const rang = (z) => (z === SANS || rangZone[z] == null ? 1e9 : rangZone[z]);
+    const cleZone = (l) => { const e = etat[l.item_code]; if (zone && e.colonnes.includes(zone)) return zone; return e.colonnes.slice().sort((a, b) => rang(a) - rang(b))[0] || SANS; };
+    const visibles = () => {
+      const v = d.lignes.filter((l) => {
+        const e = etat[l.item_code], t = totalDe(e);
+        if (vue === "non" && t != null) return false;
+        if (vue === "faits" && t == null) return false;
+        if (vue === "ecarts" && (t == null || Math.abs(t - l.qte_systeme) < 1e-6)) return false;
+        if (vue === "negatifs" && l.qte_systeme >= 0) return false;
+        if (zone && !e.colonnes.includes(zone)) return false;
+        if (texte && !((l.item_name || "") + " " + l.item_code + " " + (l.description || "")).toLowerCase().includes(texte)) return false;
+        return true;
+      });
+      if (!parZone) return v;
+      const nom = (l) => ((l.item_name || l.item_code) + "").toLowerCase();
+      return v.map((l) => ({ l, r: rang(cleZone(l)), n: nom(l) })).sort((a, b) => a.r - b.r || (a.n < b.n ? -1 : a.n > b.n ? 1 : 0)).map((x) => x.l);
+    };
     const peindre = () => {
       const v = visibles();
-      $c.find("#se-i-lignes").html(v.slice(0, nAff).map(ligne).join("") || `<div class="se-vide">Aucun article pour ce filtre.</div>`);
+      let derniere = null;
+      const html = v.slice(0, nAff).map((l) => {
+        if (!parZone) return ligne(l);
+        const z = cleZone(l), tete = z !== derniere ? `<div class="se-i-groupe">📍 ${se_esc(libZone(z))}</div>` : "";
+        derniere = z; return tete + ligne(l);
+      }).join("");
+      $c.find("#se-i-lignes").html(html || `<div class="se-vide">Aucun article pour ce filtre.</div>`);
       $c.find("#se-i-plus").toggle(v.length > nAff).text(`Afficher plus (${Math.max(v.length - nAff, 0)} restants)`);
     };
     const bilan = () => {
       let n = 0, e = 0, val = 0;
       d.lignes.forEach((l) => { const t = totalDe(etat[l.item_code]); if (t == null) return; n++; const ec = r6(t - l.qte_systeme); if (ec) { e++; val += ec * l.taux; } });
-      $c.find("#se-i-bilan").html(`<b>${n}/${d.lignes.length}</b> comptés · <b class="${e ? "neg" : "pos"}">${e} écart(s)</b>${e && d.voir_valeur ? ` · ${se_argent(val)}` : ""}`);
+      const neg = d.lignes.filter((l) => l.qte_systeme < 0).length;
+      $c.find("#se-i-bilan").html(`<b>${n}/${d.lignes.length}</b> comptés · <b class="${e ? "neg" : "pos"}">${e} écart(s)</b>${e && d.voir_valeur ? ` · ${se_argent(val)}` : ""}${neg ? ` · <span class="neg">${neg} en stock négatif</span>` : ""}`);
     };
     // ── Enregistrement au fil de l'eau : seules les lignes modifiées partent, regroupées ──
     let sale = {}, minuterie = null, enCours = null;
@@ -1259,7 +1278,8 @@ class StockEntrepots {
     let t = null;
     $c.find("#se-i-filtre").on("input", (ev) => { clearTimeout(t); t = setTimeout(() => { texte = (ev.target.value || "").toLowerCase().trim(); nAff = 100; peindre(); }, 250); });
     $c.find("#se-i-zone").on("change", (ev) => { zone = ev.currentTarget.value; nAff = 100; peindre(); });
-    $c.find("#se-i-vues .se-chip").on("click", (ev) => { vue = $(ev.currentTarget).attr("data-vue"); $c.find("#se-i-vues .se-chip").each((_, el) => $(el).toggleClass("on", $(el).attr("data-vue") === vue)); nAff = 100; peindre(); });
+    $c.find("#se-i-vues .se-chip[data-vue]").on("click", (ev) => { vue = $(ev.currentTarget).attr("data-vue"); $c.find("#se-i-vues .se-chip[data-vue]").each((_, el) => $(el).toggleClass("on", $(el).attr("data-vue") === vue)); nAff = 100; peindre(); });
+    $c.find("#se-i-vues [data-tri]").on("click", (ev) => { parZone = !parZone; $(ev.currentTarget).toggleClass("on", parZone); nAff = 100; peindre(); });
     $c.find("#se-i-plus").on("click", () => { nAff += 100; peindre(); });
     $c.find("[data-retour]").on("click", async () => { await vider(); window.onbeforeunload = null; this.chargerInventaire(); });
     $c.find("[data-annuler]").on("click", () => {
