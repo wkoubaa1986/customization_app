@@ -9,6 +9,8 @@ from customization_app import sorties_magasin as M
 HEDI = "hedi.ibidhi@gmail.com"
 AKRAM = "morchediakram0@gmail.com"     # Stock User, pas magasinier principal
 SALMA = "salmaaquaworldservicing@gmail.com"
+WASSIM = "koubaawassim@gmail.com"
+S_CONFIG = "Config Stock Entrepot"
 
 
 class TestSortiesMagasin(unittest.TestCase):
@@ -41,10 +43,20 @@ class TestSortiesMagasin(unittest.TestCase):
         return frappe.get_all("Notification Log", filters={"for_user": user, "document_name": name}, pluck="subject")
 
     def test_roles(self):
+        import frappe
         self.assertTrue(M.est_principal(HEDI))
         self.assertFalse(M.est_principal(AKRAM))
         self.assertIn(HEDI, M.principaux())
         self.assertNotIn(AKRAM, M.principaux())
+        # Alertes : le magasinier en titre seulement (réglage responsable magasin) ; les autres principaux approuvent sans bandeau.
+        frappe.db.set_single_value(S_CONFIG, "responsable_verification", frappe.db.get_value("Employee", {"user_id": HEDI}, "name"))
+        self.assertEqual(M.alertes_pour(), [HEDI])
+        if frappe.db.exists("User", WASSIM):
+            frappe.set_user(WASSIM)
+            self.assertTrue(M.est_principal())
+            self.assertIsNone(M.compteur())
+        frappe.set_user(HEDI)
+        self.assertIsNotNone(M.compteur())
 
     def test_transitions_selon_le_role(self):
         """Hedi voit Approve / Reject, jamais la sortie exceptionnelle ; Akram ne voit QUE la sortie exceptionnelle."""

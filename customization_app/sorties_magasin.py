@@ -5,8 +5,10 @@ reste « En attente validation magasin » (workflow « Validation Magasin », en
 Jusqu'ici n'importe qui pouvait approuver (patch workflow_bl_approve_tous du 27/08). Désormais :
 - APPROUVER et REJETER sont réservés au rôle « Magasinier principal » (Hedi ibidhii et Wassim Koubaa, posés par le
   patch ensure_sorties_magasin) ;
-- le magasinier est PRÉVENU de façon intrusive : cloche du Desk, événement temps réel, et un bandeau rouge en haut de
-  toutes ses pages tant qu'un BL attend (public/js/bl_magasin_alerte.js), plus une relance quotidienne ;
+- le magasinier EN TITRE (employé du réglage « responsable magasin », Hedi) est PRÉVENU de façon intrusive : cloche du
+  Desk, événement temps réel, et un bandeau rouge en haut de toutes ses pages tant qu'un BL attend
+  (public/js/bl_magasin_alerte.js), plus une relance quotidienne — les autres magasiniers principaux approuvent sans
+  être alertés ;
 - en son absence, n'importe quel employé peut faire une « Sortie exceptionnelle » (action du workflow ouverte à tous,
   bouton de l'onglet BL de la page Stock) : le BL est validé, le stock sort, et la sortie est TRACÉE sur le BL
   (`custom_sortie_verification` = « À vérifier », sorti par, le). Le magasinier retrouve ces sorties dans l'onglet BL
@@ -51,6 +53,17 @@ def principaux() -> list[str]:
     return frappe.get_all("User", filters={"name": ["in", porteurs], "enabled": 1}, pluck="name", order_by="name")
 
 
+def alertes_pour() -> list[str]:
+    """Qui reçoit le bandeau, la cloche et les relances : le MAGASINIER EN TITRE seulement — l'employé du réglage
+    « responsable magasin » (Config Stock Entrepot, Hedi), s'il porte le rôle. Wassim, lui aussi magasinier principal,
+    garde le droit d'approuver sans être alerté (« pour moi je veux pas avoir ça », 27/10). Réglage vide ou employé
+    sans le rôle : tous les magasiniers principaux."""
+    tous = principaux()
+    emp = frappe.db.get_single_value(S.CONFIG, "responsable_verification")
+    user = frappe.db.get_value("Employee", emp, "user_id") if emp else None
+    return [user] if user and user in tous else tous
+
+
 def est_principal(user: str | None = None) -> bool:
     """Rôle réellement posé sur la fiche User (pas `frappe.get_roles`, qui donne TOUS les rôles à Administrator :
     « seulement Hedi et moi », 27/10) — Administrator est donc un employé comme un autre ici."""
@@ -80,7 +93,7 @@ def delivery_note_on_update(doc, method=None):
     avant = doc.get_doc_before_save() if method == "on_update" else None
     if avant is not None and avant.get("workflow_state") == EN_ATTENTE:
         return
-    _prevenir(principaux(), _("🧾 BL {0} ({1}) à approuver : {2} article(s) du Magasin")
+    _prevenir(alertes_pour(), _("🧾 BL {0} ({1}) à approuver : {2} article(s) du Magasin")
               .format(doc.name, doc.get("customer_name") or doc.customer, len(doc.items)), doc.name)
 
 
@@ -99,7 +112,7 @@ def delivery_note_on_submit(doc, method=None):
     doc.db_set(valeurs, update_modified=False)
     doc.add_comment("Comment", _("Sortie exceptionnelle : BL validé par {0} sans le magasinier principal — à vérifier.")
                     .format(frappe.utils.get_fullname(user)))
-    _prevenir([u for u in principaux() if u != user],
+    _prevenir([u for u in alertes_pour() if u != user],
               _("⚠️ Sortie exceptionnelle {0} par {1} : {2} article(s) à vérifier")
               .format(doc.name, frappe.utils.get_fullname(user), len(doc.items)), doc.name)
 
@@ -171,8 +184,9 @@ def _en_attente() -> list[dict]:
 
 @frappe.whitelist()
 def compteur():
-    """Pour le bandeau d'alerte du magasinier principal (toutes les pages du Desk) ; None pour les autres."""
-    if not est_principal() or not _champs():
+    """Pour le bandeau d'alerte du magasinier EN TITRE (toutes les pages du Desk) ; None pour tous les autres,
+    y compris les autres magasiniers principaux."""
+    if frappe.session.user not in alertes_pour() or not _champs():
         return None
     return {"a_approuver": frappe.db.count("Delivery Note", {"docstatus": 0, "workflow_state": EN_ATTENTE, CHAMP_FLAG: 1,
                                                              "is_return": 0}),
@@ -281,7 +295,7 @@ def relance_quotidienne():
     """Cron daily : ce qui attend le magasinier principal depuis trop longtemps lui est rappelé (cloche + direct)."""
     if not _champs():
         return
-    users = principaux()
+    users = alertes_pour()
     if not users:
         return
     attente = frappe.db.count("Delivery Note", {"docstatus": 0, "workflow_state": EN_ATTENTE, CHAMP_FLAG: 1, "is_return": 0,
