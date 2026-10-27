@@ -149,6 +149,40 @@ class TestInventaire(unittest.TestCase):
         r = I.cloturer_inventaire(name)
         self.assertEqual((r["nb_bouges"], self._stock(i1)), (1, s1 - 5))
 
+    def test_taux_saisi_a_la_cloture(self):
+        """Un article sans aucun taux est exclu ; un taux saisi par un responsable l'inclut et prime sur
+        l'automatique ; l'écriture porte ce taux ; vide = retour à l'automatique."""
+        import frappe
+        i1, i2 = self.items[0], self.items[1]
+        s1, s2 = self._stock(i1), self._stock(i2)
+        name = I.ouvrir_inventaire()
+        I.enregistrer_inventaire(name, json.dumps({i1: {"cases": {I.SANS_ZONE: s1 - 2}}, i2: {"cases": {I.SANS_ZONE: s2 + 1}}}))
+        v = frappe.get_doc(I.INV, name)
+        frappe.db.set_value("Inventaire Magasin Ligne", I._ligne(v, i1).name, "taux", 0)     # plus aucun taux nulle part
+        frappe.db.set_value("Item", i1, {"valuation_rate": 0, "last_purchase_rate": 0})
+        b = I.bilan_cloture(name)
+        self.assertEqual([x["item_code"] for x in b["sans_taux"]], [i1])
+        self.assertEqual([x["item_code"] for x in b["a_rapprocher"]], [i2])
+        taux_auto_i2 = b["a_rapprocher"][0]["taux"]
+        self.assertGreater(taux_auto_i2, 0)
+        with self.assertRaises(frappe.ValidationError):
+            I.definir_taux(name, i1, -1)
+        r = I.definir_taux(name, i1, 12.5)
+        self.assertEqual((r["taux"], r["taux_saisi"], r["valeur_ecart"]), (12.5, 12.5, -25))
+        I.definir_taux(name, i2, 7)                                        # prime sur le taux photographié
+        b = I.bilan_cloture(name)
+        self.assertFalse(b["sans_taux"])
+        self.assertEqual({x["item_code"]: x["taux"] for x in b["a_rapprocher"]}, {i1: 12.5, i2: 7})
+        self.assertEqual(self._ligne(I.detail_inventaire(name), i2)["taux_saisi"], 7)
+        I.definir_taux(name, i2, None)                                     # vide = automatique
+        b = I.bilan_cloture(name)
+        self.assertEqual({x["item_code"]: x["taux"] for x in b["a_rapprocher"]}, {i1: 12.5, i2: taux_auto_i2})
+        r = I.cloturer_inventaire(name)
+        self.assertEqual((r["nb_rapproches"], r["nb_sans_taux"]), (2, 0))
+        taux = {x.item_code: S.flt(x.valuation_rate, 3) for x in frappe.get_doc("Stock Reconciliation", r["rapprochement"]).items}
+        self.assertEqual(taux, {i1: 12.5, i2: taux_auto_i2})
+        self.assertEqual((self._stock(i1), self._stock(i2)), (s1 - 2, s2 + 1))
+
     def test_retirer_un_emplacement_ajoute_par_erreur(self):
         import frappe
         i1 = self.items[0]

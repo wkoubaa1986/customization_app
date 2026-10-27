@@ -1293,9 +1293,10 @@ class StockEntrepots {
     });
     $c.find("[data-cloturer]").on("click", async () => {
       await vider();
-      const b = (await frappe.call({ method: SE_INV + "bilan_cloture", args: { name }, freeze: true })).message;
+      let b = (await frappe.call({ method: SE_INV + "bilan_cloture", args: { name }, freeze: true })).message;
+      const libelle = (b) => b.a_rapprocher.length ? `Passer l’écriture (${b.a_rapprocher.length} article${b.a_rapprocher.length > 1 ? "s" : ""})` : "Clôturer sans écriture";
       const dlg = new frappe.ui.Dialog({ title: "✅ Clôturer l’inventaire", size: "large", fields: [{ fieldtype: "HTML", fieldname: "b" }, { fieldtype: "Small Text", fieldname: "note", label: "Note (facultatif)" }],
-        primary_action_label: b.a_rapprocher.length ? `Passer l’écriture (${b.a_rapprocher.length} article${b.a_rapprocher.length > 1 ? "s" : ""})` : "Clôturer sans écriture",
+        primary_action_label: libelle(b),
         primary_action: async (v) => {
           dlg.hide();
           const r = (await frappe.call({ method: SE_INV + "cloturer_inventaire", args: { name, note: v.note || null }, freeze: true, freeze_message: "Rapprochement du Magasin…" })).message;
@@ -1307,16 +1308,34 @@ class StockEntrepots {
           this.chargerInventaire();
         } });
       const li = (x, txt) => `<li>${se_esc(x.item_name || x.item_code)} <span class="se-note">(${se_esc(x.item_code)})</span> ${txt}</li>`;
-      dlg.fields_dict.b.$wrapper.html(`<div class="se-resume">
+      // Taux de valorisation : affiché et modifiable par les responsables (ceux qui voient les valeurs). Un taux saisi
+      // prime sur l'automatique et sort l'article de « sans taux » ; vide = retour à l'automatique.
+      const taux = (x) => !d.voir_valeur ? "" : `<label class="se-i-taux"><span>taux</span><input type="number" inputmode="decimal" min="0" step="any" class="form-control" data-taux-item="${se_esc(x.item_code)}" value="${x.taux_saisi ? se_esc(x.taux_saisi) : ""}" placeholder="${x.taux ? se_esc(se_q(x.taux)) : "à saisir"}" title="Taux de valorisation (DT) : vide = automatique"></label>${x.taux_saisi ? `<span class="se-note">✏️ saisi</span>` : ""}`;
+      const rendre = (b) => dlg.fields_dict.b.$wrapper.html(`<div class="se-resume">
         <div><b>${b.nb_comptes}</b> article(s) comptés sur ${b.nb_lignes} · <b>${b.nb_non_comptes}</b> non comptés : <b>ils ne bougent pas</b>.</div>
         <div><b class="${b.nb_ecarts ? "neg" : "pos"}">${b.nb_ecarts} écart(s)</b>${b.nb_ecarts && d.voir_valeur ? ` · valeur nette ${se_esc(se_argent(b.valeur_ecarts))} · manquants ${se_esc(se_argent(b.valeur_manquants))}` : ""}</div>
         <div>${b.a_rapprocher.length ? `Une écriture <b>Stock Reconciliation</b> sur le Magasin va rapprocher <b>${b.a_rapprocher.length}</b> article(s) :` : "Aucun article à rapprocher : la clôture ne passe pas d’écriture."}</div>
-        ${b.a_rapprocher.length ? `<ul class="se-tours" style="max-height:220px;overflow:auto">${b.a_rapprocher.map((x) => li(x, `${se_q(x.qte_actuelle)} → <b>${se_q(x.qte_rapprochee)}</b> <span class="${x.ecart < 0 ? "neg" : "pos"}">(${se_signe(x.ecart)})</span>`)).join("")}</ul>` : ""}
+        ${b.a_rapprocher.length ? `<ul class="se-tours" style="max-height:220px;overflow:auto">${b.a_rapprocher.map((x) => li(x, `${se_q(x.qte_actuelle)} → <b>${se_q(x.qte_rapprochee)}</b> <span class="${x.ecart < 0 ? "neg" : "pos"}">(${se_signe(x.ecart)})</span>${d.voir_valeur ? ` · ${se_argent(x.valeur_ecart)}` : ""} ${taux(x)}`)).join("")}</ul>` : ""}
         ${b.bouges.length ? `<div class="se-alerte" style="margin-top:6px">⚠️ ${b.bouges.length} article(s) ont bougé entre leur comptage et maintenant : l’écart mesuré au comptage est appliqué au stock du moment (système actuel + écart).</div>
           <ul class="se-tours" style="max-height:160px;overflow:auto">${b.bouges.map((x) => li(x, `compté ${se_q(x.qte_comptee)} quand le système disait ${se_q(x.qte_systeme)} ; maintenant ${se_q(x.qte_actuelle)} → <b>${se_q(x.qte_rapprochee)}</b>`)).join("")}</ul>` : ""}
-        ${b.sans_taux.length ? `<div class="se-alerte">⚠️ ${b.sans_taux.length} article(s) sans taux de valorisation : <b>exclus</b> de l’écriture (à régler sur la fiche article).</div><ul class="se-tours">${b.sans_taux.map((x) => li(x, "")).join("")}</ul>` : ""}
+        ${b.sans_taux.length ? `<div class="se-alerte">⚠️ ${b.sans_taux.length} article(s) sans taux de valorisation : <b>exclus</b> de l’écriture${d.voir_valeur ? " — saisissez un taux pour les inclure" : " (à régler sur la fiche article)"}.</div><ul class="se-tours">${b.sans_taux.map((x) => li(x, `→ <b>${se_q(x.qte_rapprochee)}</b> ${taux(x)}`)).join("")}</ul>` : ""}
         ${b.zones_nouvelles.length ? `<div class="se-note" style="margin-top:6px">📍 ${b.zones_nouvelles.length} article(s) ont reçu un nouvel emplacement pendant cet inventaire (déjà sur la fiche article) : ${b.zones_nouvelles.slice(0, 5).map((x) => `${se_esc(x.item_code)} → ${se_esc(x.zones.join(", "))}`).join(" · ")}${b.zones_nouvelles.length > 5 ? " …" : ""}.</div>` : ""}
       </div>`);
+      rendre(b);
+      // Saisie d'un taux : enregistrée au changement, puis l'aperçu est recalculé (listes, valeurs, bouton).
+      // Les saisies sont SÉRIALISÉES : deux « change » rapprochés feraient deux sauvegardes concurrentes de la
+      // même fiche (TimestampMismatch 417 constaté sous Playwright).
+      let file = Promise.resolve();
+      dlg.fields_dict.b.$wrapper.on("change", "[data-taux-item]", (ev) => {
+        const code = $(ev.currentTarget).attr("data-taux-item"), val = ev.currentTarget.value;
+        file = file.then(async () => {
+          try {
+            await frappe.call({ method: SE_INV + "definir_taux", args: { name, item_code: code, taux: val === "" ? null : +val }, freeze: true });
+            b = (await frappe.call({ method: SE_INV + "bilan_cloture", args: { name } })).message;
+            rendre(b); dlg.get_primary_btn().text(libelle(b));
+          } catch (e) { frappe.show_alert({ message: "Taux non enregistré", indicator: "red" }); }
+        });
+      });
       dlg.show();
     });
     window.scrollTo({ top: 0 });

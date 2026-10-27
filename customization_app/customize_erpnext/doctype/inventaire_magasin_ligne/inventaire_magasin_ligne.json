@@ -13,6 +13,7 @@
   "qte_comptee",
   "ecart",
   "taux",
+  "taux_saisi",
   "valeur_ecart",
   "zones",
   "comptes",
@@ -26,29 +27,141 @@
   "zones_ajoutees"
  ],
  "fields": [
-  {"fieldname": "item_code", "fieldtype": "Link", "label": "Article", "options": "Item", "reqd": 1, "in_list_view": 1, "columns": 3},
-  {"fieldname": "item_name", "fieldtype": "Data", "label": "Désignation", "fetch_from": "item_code.item_name", "read_only": 1, "in_list_view": 1, "columns": 3},
-  {"fieldname": "qte_systeme", "fieldtype": "Float", "label": "Qté système (au comptage)", "read_only": 1, "in_list_view": 1, "columns": 1,
-   "description": "Relue à l’instant où la ligne est comptée : l’écart mesure ce qui manque ou dépasse à ce moment."},
-  {"fieldname": "compte", "fieldtype": "Check", "label": "Compté", "in_list_view": 1, "columns": 1,
-   "description": "Un Float vaut 0 en base, jamais « vide » : ce drapeau distingue « compté 0 » de « pas compté »."},
-  {"fieldname": "qte_comptee", "fieldtype": "Float", "label": "Qté comptée (somme des emplacements)", "read_only": 1, "in_list_view": 1, "columns": 1},
-  {"fieldname": "ecart", "fieldtype": "Float", "label": "Écart", "read_only": 1, "in_list_view": 1, "columns": 1},
-  {"fieldname": "taux", "fieldtype": "Currency", "label": "Taux de valorisation", "read_only": 1},
-  {"fieldname": "valeur_ecart", "fieldtype": "Currency", "label": "Valeur de l’écart", "read_only": 1, "in_list_view": 1, "columns": 1},
-  {"fieldname": "zones", "fieldtype": "Data", "label": "Emplacements de l’article", "read_only": 1},
-  {"fieldname": "comptes", "fieldtype": "Small Text", "label": "Compté par emplacement (JSON)", "read_only": 1},
-  {"fieldname": "commentaire", "fieldtype": "Data", "label": "Commentaire"},
-  {"fieldname": "compte_par", "fieldtype": "Link", "label": "Compté par", "options": "User", "read_only": 1},
-  {"fieldname": "compte_le", "fieldtype": "Datetime", "label": "Compté le", "read_only": 1},
-  {"fieldname": "qte_systeme_cloture", "fieldtype": "Float", "label": "Qté système (à la clôture)", "read_only": 1},
-  {"fieldname": "qte_rapprochee", "fieldtype": "Float", "label": "Qté rapprochée (système à la clôture + écart)", "read_only": 1},
-  {"fieldname": "bouge", "fieldtype": "Check", "label": "A bougé entre le comptage et la clôture", "read_only": 1},
-  {"fieldname": "sans_taux", "fieldtype": "Check", "label": "Sans taux : exclu du rapprochement", "read_only": 1},
-  {"fieldname": "zones_ajoutees", "fieldtype": "Data", "label": "Emplacements ajoutés à l’article", "read_only": 1}
+  {
+   "fieldname": "item_code",
+   "fieldtype": "Link",
+   "label": "Article",
+   "options": "Item",
+   "reqd": 1,
+   "in_list_view": 1,
+   "columns": 3
+  },
+  {
+   "fieldname": "item_name",
+   "fieldtype": "Data",
+   "label": "Désignation",
+   "fetch_from": "item_code.item_name",
+   "read_only": 1,
+   "in_list_view": 1,
+   "columns": 3
+  },
+  {
+   "fieldname": "qte_systeme",
+   "fieldtype": "Float",
+   "label": "Qté système (au comptage)",
+   "read_only": 1,
+   "in_list_view": 1,
+   "columns": 1,
+   "description": "Relue à l’instant où la ligne est comptée : l’écart mesure ce qui manque ou dépasse à ce moment."
+  },
+  {
+   "fieldname": "compte",
+   "fieldtype": "Check",
+   "label": "Compté",
+   "in_list_view": 1,
+   "columns": 1,
+   "description": "Un Float vaut 0 en base, jamais « vide » : ce drapeau distingue « compté 0 » de « pas compté »."
+  },
+  {
+   "fieldname": "qte_comptee",
+   "fieldtype": "Float",
+   "label": "Qté comptée (somme des emplacements)",
+   "read_only": 1,
+   "in_list_view": 1,
+   "columns": 1
+  },
+  {
+   "fieldname": "ecart",
+   "fieldtype": "Float",
+   "label": "Écart",
+   "read_only": 1,
+   "in_list_view": 1,
+   "columns": 1
+  },
+  {
+   "fieldname": "taux",
+   "fieldtype": "Currency",
+   "label": "Taux de valorisation",
+   "read_only": 1
+  },
+  {
+   "fieldname": "taux_saisi",
+   "fieldtype": "Currency",
+   "label": "Taux saisi à la clôture",
+   "description": "Saisi par un responsable dans l’aperçu de clôture : prime sur le taux photographié.",
+   "read_only": 1
+  },
+  {
+   "fieldname": "valeur_ecart",
+   "fieldtype": "Currency",
+   "label": "Valeur de l’écart",
+   "read_only": 1,
+   "in_list_view": 1,
+   "columns": 1
+  },
+  {
+   "fieldname": "zones",
+   "fieldtype": "Data",
+   "label": "Emplacements de l’article",
+   "read_only": 1
+  },
+  {
+   "fieldname": "comptes",
+   "fieldtype": "Small Text",
+   "label": "Compté par emplacement (JSON)",
+   "read_only": 1
+  },
+  {
+   "fieldname": "commentaire",
+   "fieldtype": "Data",
+   "label": "Commentaire"
+  },
+  {
+   "fieldname": "compte_par",
+   "fieldtype": "Link",
+   "label": "Compté par",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "compte_le",
+   "fieldtype": "Datetime",
+   "label": "Compté le",
+   "read_only": 1
+  },
+  {
+   "fieldname": "qte_systeme_cloture",
+   "fieldtype": "Float",
+   "label": "Qté système (à la clôture)",
+   "read_only": 1
+  },
+  {
+   "fieldname": "qte_rapprochee",
+   "fieldtype": "Float",
+   "label": "Qté rapprochée (système à la clôture + écart)",
+   "read_only": 1
+  },
+  {
+   "fieldname": "bouge",
+   "fieldtype": "Check",
+   "label": "A bougé entre le comptage et la clôture",
+   "read_only": 1
+  },
+  {
+   "fieldname": "sans_taux",
+   "fieldtype": "Check",
+   "label": "Sans taux : exclu du rapprochement",
+   "read_only": 1
+  },
+  {
+   "fieldname": "zones_ajoutees",
+   "fieldtype": "Data",
+   "label": "Emplacements ajoutés à l’article",
+   "read_only": 1
+  }
  ],
  "links": [],
- "modified": "2026-10-27 10:00:00.000000",
+ "modified": "2026-10-27 20:00:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Inventaire Magasin Ligne",

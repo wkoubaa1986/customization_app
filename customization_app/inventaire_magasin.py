@@ -175,8 +175,8 @@ def _sauver(v):
 
 
 def _recalculer(v):
-    lignes = [{"qte_systeme": l.qte_systeme, "qte_comptee": l.qte_comptee if l.compte else None, "taux": l.taux}
-              for l in v.lignes]
+    lignes = [{"qte_systeme": l.qte_systeme, "qte_comptee": l.qte_comptee if l.compte else None,
+               "taux": flt(l.get("taux_saisi"), 6) or l.taux} for l in v.lignes]
     bilan = S.calculer_ecarts(lignes)
     for l, calc in zip(v.lignes, lignes):
         l.ecart = calc["ecart"] or 0
@@ -263,6 +263,7 @@ def detail_inventaire(name):
                        "bouge": abs(flt(actuelle, 6) - flt(l.qte_systeme, 6)) > 1e-6 if l.compte else False,
                        "qte_comptee": flt(l.qte_comptee, 6) if l.compte else None,
                        "ecart": flt(l.ecart, 6) if l.compte else None, "taux": flt(l.taux, 3),
+                       "taux_saisi": flt(l.get("taux_saisi"), 3),
                        "valeur_ecart": flt(l.valeur_ecart, 3) if l.compte else None,
                        "qte_rapprochee": flt(l.qte_rapprochee, 6) if v.statut == TERMINE and l.compte else None,
                        "commentaire": l.commentaire, "sans_taux": cint(l.sans_taux),
@@ -362,7 +363,10 @@ def retirer_emplacement(name, item_code, zone):
 
 
 def _taux(l) -> float:
-    """Le taux pour le rapprochement : celui photographié, sinon la fiche article, sinon le dernier achat."""
+    """Le taux pour le rapprochement : celui saisi à la clôture (`taux_saisi`, la main de l'utilisateur), sinon
+    celui photographié, sinon la fiche article, sinon le dernier achat."""
+    if flt(l.get("taux_saisi"), 6) > 0:
+        return flt(l.taux_saisi, 6)
     if flt(l.taux, 6) > 0:
         return flt(l.taux, 6)
     r = frappe.db.get_value("Item", l.item_code, ["valuation_rate", "last_purchase_rate"], as_dict=True) or {}
@@ -389,7 +393,8 @@ def _preparer_cloture(v) -> dict:
         if abs(flt(l.qte_rapprochee, 6) - flt(actuelle, 6)) > 1e-6:
             if flt(l.qte_rapprochee, 6) > 0 and _taux(l) <= 0:
                 l.sans_taux = 1
-                sans_taux.append({"item_code": l.item_code, "item_name": l.item_name})
+                sans_taux.append({"item_code": l.item_code, "item_name": l.item_name,
+                                  "qte_rapprochee": flt(l.qte_rapprochee, 6)})
             else:
                 a_rapprocher.append(l)
     for l in v.lignes:
@@ -402,8 +407,29 @@ def _preparer_cloture(v) -> dict:
             "valeur_manquants": flt(sum(-flt(l.valeur_ecart) for l in comptes if flt(l.ecart) < 0), 3),
             "a_rapprocher": [{"item_code": l.item_code, "item_name": l.item_name, "qte_actuelle": flt(l.qte_systeme_cloture, 6),
                               "qte_rapprochee": flt(l.qte_rapprochee, 6), "ecart": flt(l.ecart, 6),
-                              "valeur_ecart": flt(l.valeur_ecart, 3)} for l in a_rapprocher],
+                              "valeur_ecart": flt(l.valeur_ecart, 3), "taux": flt(_taux(l), 3),
+                              "taux_saisi": flt(l.get("taux_saisi"), 3)} for l in a_rapprocher],
             "bouges": bouges, "sans_taux": sans_taux, "zones_nouvelles": zones_nouvelles}
+
+
+@frappe.whitelist(methods=["POST"])
+def definir_taux(name, item_code, taux=None):
+    """Donne la main sur le taux de valorisation d'une ligne avant la clôture (demande du 27/10) : il prime sur
+    le taux photographié et sort l'article de la liste « sans taux ». Vide ou 0 = retour à l'automatique.
+    Réservé aux responsables (ceux qui voient les valeurs)."""
+    _acces()
+    if not S.est_responsable():
+        frappe.throw(_("Le taux de valorisation est réservé aux responsables."), frappe.PermissionError)
+    v = _ouvert(name)
+    l = _ligne(v, item_code)
+    t = flt(taux, 6)
+    if t < 0:
+        frappe.throw(_("Le taux de valorisation ne peut pas être négatif."))
+    l.taux_saisi = t
+    _recalculer(v)
+    _sauver(v)
+    return {"item_code": item_code, "taux": flt(_taux(l), 3), "taux_saisi": flt(l.taux_saisi, 3),
+            "valeur_ecart": flt(l.valeur_ecart, 3)}
 
 
 @frappe.whitelist()
