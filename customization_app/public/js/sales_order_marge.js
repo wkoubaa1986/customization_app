@@ -65,7 +65,7 @@
                 rep = await frappe.xcall("customization_app.marge_minimale.plancher_ligne", {
                     ligne: { item_code: l.item_code, warehouse: l.warehouse, qty: l.qty, conversion_factor: l.conversion_factor,
                         item_tax_rate: l.item_tax_rate, item_group: l.item_group, is_free_item: l.is_free_item, rate: l.rate,
-                        price_list: frm.doc.selling_price_list, uom: l.uom, composants: composants(frm, l) },
+                        price_list: frm.doc.selling_price_list, uom: l.uom, price_list_rate: l.price_list_rate, composants: composants(frm, l) },
                     taxes: (frm.doc.taxes || []).map((t) => ({ account_head: t.account_head, rate: t.rate, charge_type: t.charge_type, included_in_print_rate: t.included_in_print_rate })),
                     woocommerce_id: frm.doc.woocommerce_id || null,
                 });
@@ -75,10 +75,15 @@
             // Document exonéré : le prix de liste passe en HT ; le prix de la ligne suit (remise de règle gardée
             // en %, prix tapé à la main gardé), puis le prix de liste déclenche une nouvelle vérification.
             if (rep && rep.prix_liste_ht != null && Math.abs(flt(l2.price_list_rate) - flt(rep.prix_liste_ht)) > TOL) {
-                const manuel = !l2.pricing_rules && (flt(l2.discount_percentage) !== 0 || l2.margin_type);
+                // Un prix relevé par la marge n'est pas un prix manuel : on repart du prix de liste, la marge
+                // le relèvera à nouveau sur la bonne base (HT ou TTC).
+                const releve = !!l2[FLAG];
+                const manuel = !releve && !l2.pricing_rules && (flt(l2.discount_percentage) !== 0 || l2.margin_type);
                 const rateAvant = flt(l2.rate);
+                if (releve) { await frappe.model.set_value(cdt, cdn, FLAG, 0); await frappe.model.set_value(cdt, cdn, AVANT, 0); }
                 await frappe.model.set_value(cdt, cdn, "price_list_rate", flt(rep.prix_liste_ht));
                 if (manuel) await frappe.model.set_value(cdt, cdn, "rate", rateAvant);
+                else if (releve) await frappe.model.set_value(cdt, cdn, "rate", flt(rep.prix_liste_ht));
                 peindre(frm);
                 return;
             }

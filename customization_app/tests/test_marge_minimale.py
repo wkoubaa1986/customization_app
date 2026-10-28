@@ -247,3 +247,31 @@ class TestCommande(unittest.TestCase):
         self.assertAlmostEqual(l.get(M.CHAMP_AVANT), bas, places=3)
         self.assertGreaterEqual(M.marge(l.net_rate, self.cout), 15.0 - 1e-6)
         self.assertEqual(M.etat_commande(doc.name, "Quotation")["lignes"][0]["item_code"], self.item)
+
+    def test_bascule_standard_vers_exonere_et_retour(self):
+        """Une ligne relevée en standard, puis le document passe en exonération : le prix relevé n'est pas un prix
+        manuel, il est recalculé sur la base HT ; retour en standard : le prix de liste TTC revient."""
+        import frappe
+        exo = frappe.db.get_value("Sales Taxes and Charges Template", {"name": ["like", "%xon%"]}, "name")
+        if not exo:
+            self.skipTest("pas de modèle d'exonération")
+        frappe.db.set_single_value(M.CONFIG, "arrondi", 0.5); frappe.clear_cache(doctype=M.CONFIG)
+        ttc = frappe.db.get_value("Item Price", {"item_code": self.item, "price_list": "Vente standard"}, "price_list_rate")
+        tva = M.taux_tva_article(self.item); f = 1 + tva / 100
+        doc = self._commande([{"rate": round(self.cout * f * 1.05, 3)}])               # relevée en standard
+        l = doc.items[0]
+        self.assertEqual(l.get(M.CHAMP_FLAG), 1); releve_ttc = l.rate
+        # Bascule en exonération, comme le formulaire : modèle + lignes de taxes rechargées.
+        doc.taxes_and_charges = exo; doc.set("taxes", []); doc.append_taxes_from_master(); doc.save()
+        l = doc.items[0]
+        self.assertEqual(l.price_list_rate, round(ttc / f, 3))
+        attendu = M.plancher_exonere(self.cout, tva, {"taux": 15, "base": M.BASE_PRIX, "arrondi": 0.5})
+        self.assertEqual(l.rate, max(l.price_list_rate, attendu))                           # recalculé en HT, pas gardé
+        self.assertNotEqual(l.rate, releve_ttc)
+        self.assertEqual(l.get(M.CHAMP_FLAG), 1 if attendu > l.price_list_rate else 0)
+        # Retour en standard : le prix de liste TTC revient, la marge se rejoue sur le TTC.
+        doc.taxes_and_charges = frappe.db.get_value("Sales Taxes and Charges Template", {"is_default": 1}, "name")
+        doc.set("taxes", []); doc.append_taxes_from_master(); doc.save()
+        l = doc.items[0]
+        self.assertEqual(l.price_list_rate, ttc)
+        self.assertEqual(l.rate, max(ttc, M.plancher_ttc(self.cout, f, {"taux": 15, "base": M.BASE_PRIX, "arrondi": 0.5})))

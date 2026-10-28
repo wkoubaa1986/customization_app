@@ -213,35 +213,58 @@ def sales_order_validate(doc, method=None):
     appliquer(doc)
 
 
+def prix_liste_cible(item_code, price_list, uom, item_tax_rate, exonere: bool, plr_actuel: float,
+                     decimales: int = 3) -> float | None:
+    """Le prix de liste que la ligne DOIT porter, ou None si rien à changer.
+    Document exonéré : le HT (TTC ÷ (1 + TVA)). Document standard : le TTC, mais seulement si la ligne porte
+    encore le HT converti (retour exonéré → standard) — jamais sur un prix de liste posé autrement (règle de
+    prix au prix fixe, ancien brouillon dont la liste a changé depuis…)."""
+    ttc, tva = prix_liste(item_code, price_list, uom), taux_tva_article(item_code, item_tax_rate)
+    if ttc is None or tva is None:
+        return None
+    ht = flt(ttc / (1 + tva / 100.0), decimales)
+    cible = ht if exonere else (flt(ttc, decimales) if abs(flt(plr_actuel) - ht) <= TOLERANCE and ht != ttc else None)
+    if cible is None or abs(flt(plr_actuel) - cible) <= TOLERANCE:
+        return None
+    return cible
+
+
 def convertir_prix_ht(doc) -> list[dict]:
-    """Document exonéré : chaque ligne prend pour prix de liste le TTC de la liste ÷ (1 + TVA de l'article).
-    Le prix de la ligne suit : remise de règle de prix gardée en %, prix tapé à la main gardé tel quel (c'est
-    déjà un HT voulu), prix de liste pur recalculé. Renvoie les lignes converties."""
+    """Document exonéré : chaque ligne prend pour prix de liste le TTC de la liste ÷ (1 + TVA de l'article) ;
+    retour en standard : le TTC revient. Le prix de la ligne suit : remise de règle de prix gardée en %, prix
+    tapé à la main gardé tel quel (c'est déjà un HT voulu), prix de liste pur ou prix RELEVÉ PAR LA MARGE
+    recalculé (un prix relevé n'est pas un prix manuel : la marge le relèvera à nouveau, sur la bonne base).
+    Renvoie les lignes converties."""
     r = reglage()
-    if not r.get("actif") or not r.get("prix_ht_exonere") or not est_exonere(doc.get("taxes")):
+    if not r.get("actif") or not r.get("prix_ht_exonere"):
         return []
+    exonere = est_exonere(doc.get("taxes"))
     faites = []
     for l in doc.get("items") or []:
         if not l.item_code or flt(l.price_list_rate) <= 0:
             continue
-        ht = prix_liste_ht(l.item_code, doc.get("selling_price_list"), l.get("uom"), l.get("item_tax_rate"), l.precision("price_list_rate"))
-        if ht is None or abs(flt(l.price_list_rate) - ht) <= TOLERANCE:
+        cible = prix_liste_cible(l.item_code, doc.get("selling_price_list"), l.get("uom"), l.get("item_tax_rate"),
+                                 exonere, flt(l.price_list_rate), l.precision("price_list_rate"))
+        if cible is None:
             continue
         avant_plr, avant_rate = flt(l.price_list_rate), flt(l.rate)
         # Prix « à la main » : soit incohérent avec liste × remise (posé par l'API ou un script), soit une remise
         # ou une marge sans règle de prix (tapé à l'écran, ERPNext en a déduit la remise). Il est gardé tel quel.
         attendu = avant_plr + flt(l.margin_rate_or_amount) if l.get("margin_type") == "Amount" else \
             avant_plr * (1 - flt(l.discount_percentage) / 100.0)
-        manuel = abs(avant_rate - attendu) > TOLERANCE or \
-            (not l.get("pricing_rules") and (flt(l.discount_percentage) != 0 or l.get("margin_type")))
-        l.price_list_rate = ht
+        manuel = not l.get(CHAMP_FLAG) and (abs(avant_rate - attendu) > TOLERANCE or
+            (not l.get("pricing_rules") and (flt(l.discount_percentage) != 0 or l.get("margin_type"))))
+        l.price_list_rate = cible
         if manuel and avant_rate > 0:
-            _relever(l, avant_rate)                   # gardé ; remise / marge refaites sur le HT
+            _relever(l, avant_rate)                   # gardé ; remise / marge refaites sur la nouvelle base
         else:
+            if l.get(CHAMP_FLAG):
+                _oublier(l)                           # relevé sur l'ancienne base : on repart du prix de liste
+                l.discount_percentage = 0
             l.margin_type, l.margin_rate_or_amount, l.rate_with_margin = "", 0, 0
-            l.rate = flt(ht * (1 - flt(l.discount_percentage) / 100.0), l.precision("rate"))
-            l.discount_amount = flt(ht - l.rate, l.precision("discount_amount"))
-        faites.append({"item_code": l.item_code, "plr_avant": avant_plr, "plr": ht, "rate": l.rate})
+            l.rate = flt(cible * (1 - flt(l.discount_percentage) / 100.0), l.precision("rate"))
+            l.discount_amount = flt(cible - l.rate, l.precision("discount_amount"))
+        faites.append({"item_code": l.item_code, "plr_avant": avant_plr, "plr": cible, "rate": l.rate})
     if faites:
         doc.calculate_taxes_and_totals()
     return faites
@@ -362,8 +385,10 @@ def plancher_ligne(ligne, taxes=None, woocommerce_id=None) -> dict:
            "exonere": est_exonere(taxes)}
     if not r["actif"] or not ligne.get("item_code"):
         return out
-    if out["exonere"] and r.get("prix_ht_exonere") and ligne.get("price_list"):
-        out["prix_liste_ht"] = prix_liste_ht(ligne["item_code"], ligne["price_list"], ligne.get("uom"), ligne.get("item_tax_rate"))
+    if r.get("prix_ht_exonere") and ligne.get("price_list"):
+        # `prix_liste_ht` : le prix de liste à poser sur la ligne (HT en exonération, TTC au retour en standard).
+        out["prix_liste_ht"] = prix_liste_cible(ligne["item_code"], ligne["price_list"], ligne.get("uom"),
+                                                ligne.get("item_tax_rate"), out["exonere"], flt(ligne.get("price_list_rate")))
     if r["taux"] <= 0 or (r["ignorer_web"] and woocommerce_id):
         return out
     if ligne.get("is_free_item") or (r["ignorer_prix_zero"] and flt(ligne.get("rate")) <= 0):
