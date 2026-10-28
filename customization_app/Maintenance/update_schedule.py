@@ -411,13 +411,33 @@ def shift_schedule_for_delivery(target_ms, delivery_date, sales_order, famille=N
 # 6) CRÉATION
 # ----------------------------------------------------------------------
 
+def _commande_deja_portee(sales_order) -> str | None:
+    """L'échéancier soumis qui porte déjà cette commande sur une ligne machine, sinon None."""
+    if not sales_order:
+        return None
+    noms = frappe.db.sql_list("""select ms.name from `tabMaintenance Schedule` ms join `tabMaintenance Schedule Item` msi
+                                 on msi.parent = ms.name where msi.sales_order = %s and ms.docstatus = 1 limit 1""",
+                              (sales_order,))
+    return noms[0] if noms else None
+
+
 def _nouvel_echeancier(customer, delivery_date, lignes_items, cfg):
     ms = frappe.new_doc("Maintenance Schedule")
     ms.customer = customer
     ms.transaction_date = delivery_date
     for it in lignes_items:
+        sales_order = it["sales_order"]
+        # ERPNext n'admet qu'UN échéancier soumis par commande (validate_sales_order). Une commande qui crée une
+        # machine (porte-filtre) PUIS fait deviner une autre famille (joint torique → osmoseur) en créait deux :
+        # la seconde levait « Maintenance Schedule … exists against … », la commande entière était annulée et
+        # réessayée chaque nuit (WEB1-008619, 26-27/10/2026). Le second échéancier se crée sans le lien de commande
+        # sur sa ligne machine ; la visite décalée garde le lien (custom_sales_order), la commande reste couverte.
+        deja = _commande_deja_portee(sales_order)
+        if deja:
+            log(f"[LINK] SO {sales_order} déjà portée par {deja} : nouvel échéancier {it['item_code']} sans lien de commande")
+            sales_order = None
         ms.append("items", {"item_code": it["item_code"], "item_name": it["item_name"], "start_date": delivery_date,
-                            "end_date": add_years(getdate(delivery_date), 5), "sales_order": it["sales_order"],
+                            "end_date": add_years(getdate(delivery_date), 5), "sales_order": sales_order,
                             "periodicity": cfg["periodicite_defaut"], "no_of_visits": cfg["nb_visites"], "sales_person": SALES_PERSON})
     ms.flags.ignore_permissions = True
     ms.insert()

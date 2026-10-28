@@ -139,3 +139,31 @@ class TestRattrapage(unittest.TestCase):
         self.assertTrue(U.doublon_sans_histoire_propre(["SO-1", "SO-2"], ["SO-1", "SO-2", "SO-3"]))   # tout déjà porté par l'osmoseur
         self.assertFalse(U.doublon_sans_histoire_propre(["SO-1", "SO-9"], ["SO-1"]))                  # SO-9 n'est que sur le doublon
         self.assertFalse(U.doublon_sans_histoire_propre([""], ["SO-1"]))                               # visite faite à la main
+
+
+class TestUnEcheancierParCommande(unittest.TestCase):
+    """ERPNext n'admet qu'un échéancier soumis par commande : le second (machine puis famille devinée depuis un
+    consommable de la même commande) se crée sans lien de commande sur sa ligne machine (WEB1-008619, 26-27/10/2026)."""
+
+    def setUp(self):
+        frappe.set_user("Administrator")
+        frappe.db.savepoint("un_par_commande")
+
+    def tearDown(self):
+        frappe.db.rollback(save_point="un_par_commande")
+
+    def test_second_echeancier_sans_lien_de_commande(self):
+        cfg = RC.config()
+        client = frappe.db.get_value("Customer", {"disabled": 0, "customer_group": ["not in", list(cfg["groupes_b2b_liste"]) or [""]]}, "name")
+        so = frappe.db.get_value("Sales Order", {"docstatus": 1, "customer": client}, "name") or frappe.db.get_value("Sales Order", {"docstatus": 1}, "name")
+        item = frappe.db.get_value("Item", {"disabled": 0, "is_sales_item": 1}, ["name", "item_name"], as_dict=True)
+        if not (client and so and item):
+            self.skipTest("données absentes")
+        ligne = [{"item_code": item.name, "item_name": item.item_name, "sales_order": so}]
+        premier = U._nouvel_echeancier(client, frappe.utils.nowdate(), ligne, cfg)
+        self.assertEqual(premier.items[0].sales_order, so)
+        self.assertEqual(U._commande_deja_portee(so), premier.name)
+        second = U._nouvel_echeancier(client, frappe.utils.nowdate(), ligne, cfg)      # avant : ValidationError
+        self.assertEqual(second.docstatus, 1)
+        self.assertIsNone(second.items[0].sales_order)
+        self.assertEqual(U._commande_deja_portee(so), premier.name)                     # toujours un seul lien
