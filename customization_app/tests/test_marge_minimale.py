@@ -31,6 +31,9 @@ class TestCalculs(unittest.TestCase):
         r = {"taux": 15, "base": M.BASE_PRIX, "arrondi": 0.5}
         self.assertEqual(M.plancher_ttc(18.565, 1.19, r), 26.0)                           # 18,565 / 0,85 × 1,19 = 25,99 → 26
         self.assertEqual(M.plancher_ttc(18.565, 1.19, dict(r, arrondi=0)), 25.991)
+        self.assertEqual(M.plancher_exonere(3.141, 19, r), 3.782)                         # exonéré : 3,695 × 1,19 → 4,5 → HT 3,782
+        self.assertEqual(M.plancher_exonere(18.565, 19, r), round(26.0 / 1.19, 3))
+        self.assertEqual(M.plancher_exonere(18.565, None, r), 22.0)                      # TVA inconnue : arrondi sur le HT
         with self.assertRaises(ValueError):
             M.plancher_ht(10, 100)
 
@@ -206,16 +209,28 @@ class TestCommande(unittest.TestCase):
         self.assertTrue(M.est_exonere(doc.taxes))
         l1, l2 = doc.items
         self.assertEqual(l1.price_list_rate, ht)
-        self.assertEqual(l1.rate, max(ht, M.arrondir_sup(M.plancher_ht(self.cout, 15))))     # HT, relevé si la liste est sous la marge
+        plancher = M.plancher_exonere(self.cout, tva, {"taux": 15, "base": M.BASE_PRIX, "arrondi": 0})
+        self.assertAlmostEqual(plancher, M.plancher_ht(self.cout, 15), places=2)
+        self.assertEqual(l1.rate, max(ht, plancher))                                         # HT, relevé si la liste est sous la marge
         self.assertEqual(l1.net_rate, l1.rate)                                               # aucune TVA dans le prix
         self.assertEqual(l2.price_list_rate, ht)
-        self.assertEqual(l2.rate, max(round(ttc * 0.9, 3), M.arrondir_sup(M.plancher_ht(self.cout, 15))))   # prix tapé gardé
+        self.assertEqual(l2.rate, max(round(ttc * 0.9, 3), plancher))                        # prix tapé gardé
         self.assertEqual(M.prix_liste_ht(self.item, "Vente standard", l1.uom, l1.item_tax_rate), ht)
         rep = M.plancher_ligne({"item_code": self.item, "price_list": "Vente standard", "uom": l1.uom, "warehouse": self.magasin,
                                 "qty": 1, "conversion_factor": 1, "item_tax_rate": l1.item_tax_rate, "rate": ht},
                                [t.as_dict() for t in doc.taxes])
         self.assertTrue(rep["exonere"]); self.assertEqual(rep["prix_liste_ht"], ht)
-        self.assertEqual(rep["plancher"], M.arrondir_sup(M.plancher_ht(self.cout, 15)))      # facteur TVA = 1
+        self.assertEqual(rep["plancher"], plancher)
+        # Arrondi au demi-dinar : sur le TTC fictif (HT × (1 + TVA)), puis retour en HT.
+        frappe.db.set_single_value(M.CONFIG, "arrondi", 0.5); frappe.clear_cache(doctype=M.CONFIG)
+        rep = M.plancher_ligne({"item_code": self.item, "price_list": "Vente standard", "uom": l1.uom, "warehouse": self.magasin,
+                                "qty": 1, "conversion_factor": 1, "item_tax_rate": l1.item_tax_rate, "rate": ht},
+                               [t.as_dict() for t in doc.taxes])
+        f = 1 + tva / 100
+        self.assertEqual(rep["plancher"], round(M.arrondir_sup(M.plancher_ht(self.cout, 15) * f, 0.5) / f, 3))
+        doc = self._commande([{"rate": 0.01}], taxes_and_charges=exo)
+        self.assertEqual(doc.items[0].rate, rep["plancher"])
+        self.assertAlmostEqual((doc.items[0].rate * f) * 2, round(doc.items[0].rate * f * 2), places=2)   # TTC fictif multiple de 0,5
         # Document standard : pas de conversion.
         doc = self._commande([{}])
         self.assertEqual(doc.items[0].price_list_rate, ttc)

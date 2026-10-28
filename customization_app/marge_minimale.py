@@ -166,6 +166,14 @@ def plancher_ttc(cout: float, facteur: float, r: dict, decimales: int = 3) -> fl
     return arrondir_sup(plancher_ht(cout, r["taux"], r["base"]) * flt(facteur or 1), r.get("arrondi", 0), decimales)
 
 
+def plancher_exonere(cout: float, tva_article: float | None, r: dict, decimales: int = 3) -> float:
+    """Document exonéré (prix HT) : l'arrondi se fait sur le prix TTC qu'aurait la ligne avec la TVA de l'article,
+    puis on redescend en HT — le même client paie la même base, exonéré ou non (demande du 28/10/2026).
+    UDF : plancher HT 3,695 × 1,19 = 4,397 → 4,500 → HT 3,782."""
+    f = 1 + flt(tva_article or 0) / 100.0
+    return flt(plancher_ttc(cout, f, r, decimales) / f, decimales)
+
+
 # ----------------------------------------------------------------- coûts
 
 def _cout_article(item_code: str, warehouse: str | None, source: str) -> float:
@@ -247,6 +255,7 @@ def appliquer(doc) -> list[dict]:
     if r["ignorer_web"] and doc.get("woocommerce_id"):
         return []
     corrections = []
+    exonere = est_exonere(doc.get("taxes"))
     for l in doc.get("items") or []:
         if not l.item_code or l.get("is_free_item"):
             continue
@@ -260,9 +269,12 @@ def appliquer(doc) -> list[dict]:
         if cout <= 0:
             _oublier(l)
             continue
-        facteur = (flt(l.rate) / flt(l.net_rate)) if flt(l.net_rate) > 0 and flt(l.rate) > 0 \
-            else facteur_tva(l.get("item_tax_rate"), doc.get("taxes"))
-        plancher = plancher_ttc(cout, facteur, r, l.precision("rate"))
+        if exonere:
+            plancher = plancher_exonere(cout, taux_tva_article(l.item_code, l.get("item_tax_rate")), r, l.precision("rate"))
+        else:
+            facteur = (flt(l.rate) / flt(l.net_rate)) if flt(l.net_rate) > 0 and flt(l.rate) > 0 \
+                else facteur_tva(l.get("item_tax_rate"), doc.get("taxes"))
+            plancher = plancher_ttc(cout, facteur, r, l.precision("rate"))
         if flt(l.rate) + TOLERANCE >= plancher:
             # Au-dessus du plancher. Si la ligne avait été relevée et qu'on est exactement sur le plancher,
             # c'est notre prix : on garde la trace. Sinon l'utilisateur a mis un prix à lui : trace effacée.
@@ -364,7 +376,10 @@ def plancher_ligne(ligne, taxes=None, woocommerce_id=None) -> dict:
     cout = cout_ligne(doc_like, l, r["source_cout"])
     if cout <= 0:
         return out
-    out["plancher"] = plancher_ttc(cout, facteur_tva(ligne.get("item_tax_rate"), taxes), r)
+    if out["exonere"]:
+        out["plancher"] = plancher_exonere(cout, taux_tva_article(ligne["item_code"], ligne.get("item_tax_rate")), r)
+    else:
+        out["plancher"] = plancher_ttc(cout, facteur_tva(ligne.get("item_tax_rate"), taxes), r)
     return out
 
 
