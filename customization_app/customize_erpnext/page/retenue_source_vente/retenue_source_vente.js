@@ -325,6 +325,17 @@ class RetenueSourceVente {
       const tels = (l.telephones || []).map((t) => `<a href="tel:${esc(t)}">${esc(t)}</a>`).join("") || `<span class="rsv-cust">${__("aucun numéro")}</span>`;
       const dans_factures = (this._data && this._data.invoices || []).some((i) => i.customer === l.customer && !i.attachments.length);
       const BADGE = { a_rectifier: ["st-red", __("Certificat à rectifier")], facture_inconnue: ["st-orange", __("Facture à préciser")], manquant: ["st-neutral", __("Certificat manquant")] };
+      // Ce que la pièce permet d'ouvrir d'un clic (28/10/2026) : le PDF déposé par le client, la facture ou la
+      // commande visée, l'écriture de retenue chez nous, la fiche du certificat.
+      const liens = (p) => {
+        const out = [];
+        if (p.pdf || p.certificat) out.push(`<button type="button" class="btn btn-xs btn-default" data-rec-pdf="${esc(p.pdf || "")}" data-rec-cert="${esc(p.certificat || "")}" data-rec-nom="${esc(p.piece)}">📄 ${p.pdf ? __("PDF") : __("PDF (portail)")}</button>`);
+        if (p.facture) out.push(this._doclink("Sales Invoice", p.facture, `🧾 ${p.facture}`));
+        if (p.commande) out.push(this._doclink("Sales Order", p.commande, `🧾 ${p.commande}`));
+        if (p.ecriture) out.push(this._doclink("Payment Entry", p.ecriture, `💳 ${__("écriture")}`));
+        if (p.certificat) out.push(this._doclink("Retenue Certificate", p.certificat, `🗂 ${__("certificat")}`));
+        return out.length ? `<div class="rsv-rec-liens">${out.join(" ")}</div>` : "";
+      };
       const badges = (l.types || []).map((t) => `<span class="rsv-badge ${(BADGE[t] || BADGE.manquant)[0]}">${(BADGE[t] || BADGE.manquant)[1]}</span>`).join(" ");
       return `<div class="rsv-rec ${l.a_appeler ? "" : "calme"} ${(l.types || []).includes("a_rectifier") ? "erreur" : ""}" data-customer="${esc(l.customer || "")}" data-nom="${esc(l.customer_name)}">
         <div>
@@ -334,7 +345,7 @@ class RetenueSourceVente {
           <div class="rsv-rec-tel">${tels}</div>
           <div class="rsv-rec-last">${last}${l.a_appeler ? "" : ` · <span style="color:var(--rsv-gain)">${__("relancé il y a moins de {0} jours", [m.jours])}</span>`}</div>
         </div>
-        <div><ul>${(l.pieces || []).map((p) => `<li>${esc(p.texte)}</li>`).join("")}</ul></div>
+        <div><ul>${(l.pieces || []).map((p) => `<li>${esc(p.texte)}${liens(p)}</li>`).join("")}</ul></div>
         <div><div class="rsv-rec-total">${this._fmt(l.total)}</div><div class="rsv-cust">${__("de retenue en jeu")}</div></div>
         <div class="rsv-rec-actions">
           ${l.customer ? `<button class="btn btn-sm ${l.a_appeler ? "btn-primary" : "btn-default"}" data-rec="appel">📞 ${__("J'ai appelé")}</button>` : `<span class="rsv-cust">${__("identifier la fiche client d'abord (onglet Certificats TEJ)")}</span>`}
@@ -351,6 +362,20 @@ class RetenueSourceVente {
       </div>
       <p class="rsv-cust" style="margin:-8px 0 12px">${__("Trois raisons d'appeler : <b>certificat à rectifier</b> (le client a déclaré un montant faux, il doit corriger sur le portail), <b>facture à préciser</b> (il a déclaré sur une assiette qui ne correspond à aucune de nos factures), <b>certificat manquant</b> depuis plus de {0} jours (retenue chez nous sans certificat, ou 1 % laissé en dette non déclaré). Appelez, tracez ici : la fiche client garde la trace, le tableau des appels compte l'appel (file du mardi), et le client ne revient pas avant {0} jours.", [m.jours])}</p>
       ${lignes.length ? lignes.map(carte).join("") : `<div class="rsv-empty-state">${__("Aucun certificat manquant depuis plus de {0} jours.", [m.jours])}</div>`}`);
+    $pane.off("click.recpdf").on("click.recpdf", "[data-rec-pdf]", (e) => {
+      const $b = $(e.currentTarget);
+      const nom = `${$b.data("rec-nom")}.pdf`;
+      if ($b.attr("data-rec-pdf")) return this._open_attachment($b.attr("data-rec-pdf"), nom, "pdf");
+      // Pas encore de PDF (certificat en anomalie ou sans pièce) : on le demande au portail, une dizaine de secondes.
+      frappe.call({ method: "bank_retenue_sync.api.certificats.pdf_certificat", args: { certificat: $b.data("rec-cert") },
+                    freeze: true, freeze_message: __("Téléchargement du certificat sur le portail TEJ…") })
+        .then((r) => {
+          const url = r.message && r.message.file_url;
+          if (!url) return frappe.msgprint(__("Le portail n'a pas rendu de PDF pour ce certificat."));
+          $b.attr("data-rec-pdf", url).text(`📄 ${__("PDF")}`);
+          this._open_attachment(url, nom, "pdf");
+        });
+    });
     $pane.off("click.rec").on("click.rec", "[data-rec]", (e) => {
       const $b = $(e.currentTarget);
       const $c = $b.closest(".rsv-rec");
