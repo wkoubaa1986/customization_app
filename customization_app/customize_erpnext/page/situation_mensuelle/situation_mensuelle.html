@@ -17,6 +17,9 @@
     .sm-kpi .s { font-size: 11.5px; color: #94a3b8; margin-top: 2px; }
     .sm-kpi .s.omis { color: #c2410c; font-weight: 600; }
     .sm-kpi.ventes { border-left-color: #2563eb; } .sm-kpi.cout { border-left-color: #f59e0b; }
+    .sm-kpi.mo { border-left-color: #7c3aed; } .sm-kpi .s bdi { unicode-bidi: isolate; }
+    details.sm-compte.ecartee { background: #f8fafc; border-style: dashed; }
+    details.sm-compte.ecartee summary .tot { color: #64748b; text-decoration: line-through; }
     .sm-kpi.charges { border-left-color: #ef4444; } .sm-kpi.tva { border-left-color: #ec4899; }
     .sm-kpi.benefice { border-left-color: #22c55e; } .sm-kpi.benefice.perte { border-left-color: #b91c1c; }
     .sm-kpi.benefice .v { color: #15803d; } .sm-kpi.benefice.perte .v { color: #b91c1c; }
@@ -74,7 +77,8 @@
     .sm-vide { text-align: center; color: #94a3b8; padding: 16px; }
     @media (max-width: 760px) {
       .sm-kpis { grid-template-columns: 1fr 1fr; }
-      .sm-kpi.benefice { grid-column: 1 / -1; }
+      /* Ventes et Bénéfice en pleine largeur : les six autres cartes se rangent par deux, sans case vide. */
+      .sm-kpi.ventes, .sm-kpi.benefice { grid-column: 1 / -1; }
       .sm-titre { margin-left: 0; width: 100%; }
     }
   </style>

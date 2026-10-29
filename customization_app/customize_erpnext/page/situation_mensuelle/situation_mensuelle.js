@@ -2,9 +2,11 @@
  * « Situation mensuelle » — le graphe interactif et son détail.
  *
  * Même calcul que l'ancien rapport « Test » (customization_app.situation_mensuelle). Ici :
- * 12 mois en barres (touchez un mois pour l'afficher), 5 cartes (touchez-en une pour voir ce qui
+ * 12 mois en barres (touchez un mois pour l'afficher), les cartes (touchez-en une pour voir ce qui
  * a été compté, compte par compte puis pièce par pièce), et sur chaque pièce de dépense
  * « Omettre » (en tout ou en partie, avec motif) ou « Rétablir ». Pensé pour le téléphone.
+ * La carte « Main d’œuvre » (26/10/2026) est informative : notre main d’œuvre livrée, sans les BL
+ * des ventes réalisées par le partenaire Economiq ; elle n'entre pas dans le bénéfice.
  */
 
 frappe.pages["situation-mensuelle"].on_page_load = function (wrapper) {
@@ -25,14 +27,18 @@ const SM_API = "customization_app.situation_mensuelle";
 const sm_esc = (s) => frappe.utils.escape_html(s == null ? "" : String(s));
 const sm_dt = (v, dec = 0) => format_currency(v || 0, "TND", dec);
 const SM_IND = [
-  { cle: "ventes", titre: "Ventes" }, { cle: "cout", titre: "Coût marchandise" }, { cle: "charges", titre: "Charges" },
-  { cle: "tva", titre: "TVA achat" }, { cle: "benefice", titre: "Bénéfice" },
+  { cle: "ventes", titre: "Ventes" }, { cle: "mo", titre: "Main d’œuvre" }, { cle: "cout", titre: "Coût marchandise" },
+  { cle: "charges", titre: "Charges" }, { cle: "tva", titre: "TVA achat" }, { cle: "benefice", titre: "Bénéfice" },
   { cle: "marge", titre: "Marge %", pct: true }, { cle: "marge_brute", titre: "Marge brute %", pct: true },
 ];
 const SM_COULEURS_ANNEES = ["#94a3b8", "#f59e0b", "#2563eb", "#16a34a", "#9333ea", "#dc2626"];
 const sm_pct = (v) => (v == null ? "—" : `${(Math.round(v * 10) / 10).toLocaleString("fr-FR")} %`);
+// « Main d’œuvre » : la part de main d’œuvre dans les ventes livrées, SANS les ventes réalisées par le
+// partenaire Economiq (leur BL est une seule ligne de main d’œuvre qui reprend toute la commande).
+const SM_RUB_MO = "Main d’œuvre";
 const SM_CARTES = [
   { cle: "ventes", rubrique: "Ventes", titre: "Ventes livrées" },
+  { cle: "mo", rubrique: SM_RUB_MO, titre: "Main d’œuvre" },
   { cle: "cout", rubrique: "Coût de la marchandise", titre: "Coût marchandise" },
   { cle: "charges", rubrique: "Charges", titre: "Charges" },
   { cle: "tva", rubrique: "TVA Achat", titre: "TVA achat" },
@@ -97,10 +103,15 @@ class SituationMensuelle {
 
     const carte = (k) => {
       const v = k.cle === "ventes" ? c.ventes : c[k.cle].net;
-      const omis = k.cle === "ventes" ? 0 : c[k.cle].omis;
+      const omis = k.cle === "ventes" || k.cle === "mo" ? 0 : c[k.cle].omis;
+      let sous = omis ? `dont ${sm_dt(omis)} omis` : "voir le détail ›";
+      if (k.cle === "mo") {
+        const part = c.mo.partenaire || 0;
+        sous = part ? `dans les ventes · hors Economiq <bdi>${sm_dt(part)}</bdi> (${c.mo.nb_partenaire} BL)` : "dans les ventes livrées ›";
+      }
       return `<div class="sm-kpi ${k.cle}" data-rubrique="${sm_esc(k.rubrique)}">
         <div class="l">${sm_esc(k.titre)}</div><div class="v">${sm_dt(v)}</div>
-        <div class="s ${omis ? "omis" : ""}">${omis ? `dont ${sm_dt(omis)} omis` : "voir le détail ›"}</div></div>`;
+        <div class="s ${omis ? "omis" : ""}">${sous}</div></div>`;
     };
     const extra = [c.initial ? `bénéfice initial ${sm_dt(c.initial)}` : "", c.ajustement ? `ajustements ${sm_dt(c.ajustement)}` : ""].filter(Boolean).join(" · ");
     r.find("#sm-kpis").html(SM_CARTES.map(carte).join("") + `
@@ -195,9 +206,16 @@ class SituationMensuelle {
             <div class="corps">${lignes.map((p) => this.lignePiece(p, rubrique, det.peut_omettre)).join("")}
               ${cpt.reste && cpt.reste.n ? `<div class="sm-aide" style="padding:8px 0">… et ${cpt.reste.n} autre(s) pièce(s) plus petite(s), ${sm_dt(cpt.reste.montant)} au total —
                 tapez un n° de pièce, un nom ou une date dans la recherche pour les retrouver.</div>` : ""}</div></details>`;
-        }).join("") || `<div class="sm-vide">${q ? "Aucune pièce ne correspond à la recherche." : "Rien de compté sur la période."}</div>`}`);
+        }).join("") || (q && det.ecartees && det.ecartees.nb_trouvees ? "" : `<div class="sm-vide">${q ? "Aucune pièce ne correspond à la recherche." : "Rien de compté sur la période."}</div>`)}
+        ${det.ecartees && det.ecartees.nb && (!q || det.ecartees.nb_trouvees) ? `<details class="sm-compte ecartee" data-ci="ec" ${ouverts.has("ec") || q ? "open" : ""}>
+            <summary><span class="nom">${sm_esc(det.ecartees.libelle)}</span><span class="sub" style="font-size:11.5px;color:#64748b">${q ? `${det.ecartees.nb_trouvees} trouvée(s) · ` : ""}${det.ecartees.nb} BL</span>
+              <span class="tot">${sm_dt(det.ecartees.total)}</span></summary>
+            <div class="corps"><div class="sm-aide" style="padding:6px 0">BL d’une seule ligne de main d’œuvre qui reprend toute la commande : les produits sortent du stock du partenaire, pas du nôtre. Non comptés dans la carte.</div>
+              ${det.ecartees.pieces.map((p) => this.lignePiece(p, rubrique, false)).join("")}
+              ${det.ecartees.reste && det.ecartees.reste.n ? `<div class="sm-aide" style="padding:8px 0">… et ${det.ecartees.reste.n} autre(s), ${sm_dt(det.ecartees.reste.montant)} au total.</div>` : ""}</div></details>` : ""}`);
       $w.find("details.sm-compte").on("toggle", (e) => {
-        const ci = Number($(e.currentTarget).attr("data-ci"));
+        const brut = $(e.currentTarget).attr("data-ci");
+        const ci = brut === "ec" ? brut : Number(brut);
         e.currentTarget.open ? ouverts.add(ci) : ouverts.delete(ci);
       });
       let t = null;
@@ -231,11 +249,12 @@ class SituationMensuelle {
     const o = p.omission;
     const classe = o ? (o.mode === "Totale" ? "omise" : "partielle") : "";
     const badge = o ? `<span class="sm-badge omis" title="${sm_esc(o.motif)}">${o.mode === "Totale" ? "omise" : "omis " + sm_dt(o.montant)}</span>` : "";
-    const actions = rubrique === "Ventes" || !peut ? "" : `<div class="act">${o
+    const actions = rubrique === "Ventes" || rubrique === SM_RUB_MO || !peut ? "" : `<div class="act">${o
       ? `<button class="btn btn-xs btn-default" data-retablir="${sm_esc(o.name)}">↩️ Rétablir</button><span class="sub" style="font-size:11.5px;color:#64748b">${sm_esc(o.motif)}</span>`
       : `<button class="btn btn-xs btn-default" data-omettre data-vt="${sm_esc(p.voucher_type)}" data-vn="${sm_esc(p.voucher_no)}" data-contrib="${p.contribution}">🚫 Omettre</button>`}</div>`;
+    const commande = p.commande ? ` <a href="/app/sales-order/${encodeURIComponent(p.commande)}" target="_blank" class="sub">${sm_esc(p.commande)}</a>` : "";
     return `<div class="sm-ligne ${classe}">
-      <div class="lib"><a href="${url}" target="_blank">${sm_esc(p.voucher_no)}</a> ${badge}
+      <div class="lib"><a href="${url}" target="_blank">${sm_esc(p.voucher_no)}</a>${commande} ${badge}
         <div class="sub">${sm_esc(frappe.datetime.str_to_user(p.date))}${p.libelle ? " · " + sm_esc(p.libelle) : ""}</div></div>
       <div class="mt">${sm_dt(p.montant, 3)}</div>${actions}</div>`;
   }

@@ -12,6 +12,11 @@ part du 01/08/2023.
 Ce qui change : les pièces que le rapport excluait par une liste écrite dans son code sont
 désormais des lignes du registre « Exclusion Situation », visibles et réversibles, et l'on peut en
 omettre de nouvelles depuis l'écran — en TOTALITÉ (comme l'ancienne liste) ou en PARTIE.
+
+Carte « Main d’œuvre » (demande du 26/10/2026) : la part de main d’œuvre dans les ventes livrées,
+SANS les ventes réalisées par le partenaire Economiq — leur BL est « transformé » en une seule
+ligne de main d’œuvre qui reprend toute la commande (les produits sortent du stock du partenaire,
+pas du nôtre), ce n'est pas du travail de nos techniciens. Informatif : n'entre pas dans le bénéfice.
 """
 
 from __future__ import annotations
@@ -159,10 +164,136 @@ def ajustements(debut, fin) -> float:
                                 and name in %s and is_opening = 'Yes'""", (debut, fin, AJUSTEMENTS_OUVERTURE))[0][0])
 
 
+# ── Main d’œuvre ─────────────────────────────────────────────────────────────
+
+# U+2019 : c'est le nom exact du groupe en base (comme bank_retenue_sync.partenaire.controle_bl).
+GROUPE_MAIN_D_OEUVRE = "Main d’œuvre"
+RUBRIQUE_MAIN_D_OEUVRE = GROUPE_MAIN_D_OEUVRE
+
+
+def groupes_main_d_oeuvre() -> list[str]:
+    """« Main d’œuvre » et ses éventuels sous-groupes (arbre lft/rgt)."""
+    bornes = frappe.db.get_value("Item Group", GROUPE_MAIN_D_OEUVRE, ["lft", "rgt"], as_dict=True)
+    if not bornes:
+        return [GROUPE_MAIN_D_OEUVRE]
+    return frappe.get_all("Item Group", filters={"lft": [">=", bornes.lft], "rgt": ["<=", bornes.rgt]}, pluck="name")
+
+
+def commandes_du_partenaire() -> set[str]:
+    """Les commandes RÉALISÉES par le partenaire Economiq : la règle de la section « economiq » du
+    bilan (`bilan_vente._split_shared`) — commande partagée avec son compte, et la tâche de travail
+    la plus récemment modifiée affectée à son employé. Pas de borne de période : c'est la date du BL
+    qui place la ligne dans la période, comme pour les ventes. Lue une fois par requête (la série
+    de 12 mois et la comparaison des années rappellent `calculer` des dizaines de fois)."""
+    cache = getattr(frappe.local, "sm_commandes_partenaire", None)
+    if cache is not None:
+        return cache
+    from customization_app.bilan_vente import PARTNER_USER
+
+    employe = frappe.db.get_value("Employee", {"user_id": PARTNER_USER}, "employee_name")
+    if not employe:
+        frappe.local.sm_commandes_partenaire = set()
+        return frappe.local.sm_commandes_partenaire
+    # Même forme que `_split_shared` — SANS `distinct` : MariaDB dédoublonne avant de trier, et la
+    # ligne gardée n'est plus celle de la tâche la plus récente (revue du 26/10/2026).
+    rows = frappe.db.sql("""select commande_client, custom_employé from `tabTache de travail`
+                            where commande_client in (select share_name from `tabDocShare`
+                                                      where share_doctype = 'Sales Order' and user = %s)
+                            order by modified desc""", PARTNER_USER)
+    frappe.local.sm_commandes_partenaire = _commandes_de(rows, employe)
+    return frappe.local.sm_commandes_partenaire
+
+
+def _commandes_de(taches_recentes_d_abord, employe) -> set[str]:
+    """La tâche la plus récente de chaque commande décide (premier vu). Fonction pure."""
+    tache = {}
+    for commande, emp in taches_recentes_d_abord:
+        tache.setdefault(commande, emp)
+    return {so for so, emp in tache.items() if emp == employe}
+
+
+def _tva_par_article(debut, fin) -> dict:
+    """{(BL, article): TVA de la ligne} d'après le détail par article des lignes de taxe « TVA… »
+    (le timbre fiscal, forfaitaire, reste hors main d’œuvre). C'est la TVA réellement appliquée,
+    que le prix soit TTC (nos BL) ou HT + TVA (les BL du partenaire), remise d'entête comprise."""
+    out = {}
+    rows = frappe.db.sql("""select t.parent, t.item_wise_tax_detail from `tabSales Taxes and Charges` t
+                            join `tabDelivery Note` dn on dn.name = t.parent
+                            where t.parenttype = 'Delivery Note' and dn.docstatus = 1
+                              and dn.posting_date between %s and %s and t.account_head like 'TVA%%'
+                              and t.item_wise_tax_detail is not null""", (debut, fin))
+    for parent, detail in rows:
+        try:
+            detail = frappe.parse_json(detail) or {}
+        except Exception:
+            continue
+        for article, valeurs in detail.items():
+            if isinstance(valeurs, (list, tuple)) and len(valeurs) > 1:
+                out[(parent, article)] = out.get((parent, article), 0.0) + flt(valeurs[1])
+    return out
+
+
+def _lignes_main_d_oeuvre(debut, fin) -> list[dict]:
+    """Les lignes de main d’œuvre des BL validés de la période (retours compris, en négatif, comme
+    `ventes`), agrégées par BL × article × commande. Montant TTC = HT de la ligne (`net_amount`)
+    + sa TVA (`_tva_par_article`) : nos BL ont des prix TTC (`amount`), ceux du partenaire des prix
+    HT + TVA — `amount` seul laissait les siens en HT (revue du 26/10/2026). Le groupe est celui de
+    l'article aujourd'hui, repli sur celui de la ligne."""
+    groupes = groupes_main_d_oeuvre()
+    rows = frappe.db.sql("""select dn.name, dn.customer_name, dn.posting_date, dni.item_code,
+                                   coalesce(i.item_name, dni.item_name, dni.item_code) as item_name,
+                                   dni.against_sales_order, dni.qty, dni.net_amount
+                            from `tabDelivery Note Item` dni
+                            join `tabDelivery Note` dn on dn.name = dni.parent
+                            left join `tabItem` i on i.name = dni.item_code
+                            where dn.docstatus = 1 and dn.posting_date between %(d1)s and %(d2)s
+                              and coalesce(i.item_group, dni.item_group) in %(groupes)s
+                            order by dn.posting_date, dn.name, dni.idx""",
+                         {"d1": debut, "d2": fin, "groupes": tuple(groupes)}, as_dict=True)
+    if not rows:
+        return []
+    tva = _tva_par_article(debut, fin)
+    # La TVA est détaillée par article : répartie au prorata du HT si le même article est sur
+    # plusieurs lignes du BL (commandes différentes).
+    ht_article = {}
+    for r in rows:
+        ht_article[(r.name, r.item_code)] = ht_article.get((r.name, r.item_code), 0.0) + flt(r.net_amount)
+    agreg = {}
+    for r in rows:
+        cle = (r.name, r.item_code, r.against_sales_order)
+        ht_total = ht_article[(r.name, r.item_code)]
+        part = flt(r.net_amount) / ht_total if ht_total else 1.0 / max(1, sum(1 for x in rows if (x.name, x.item_code) == (r.name, r.item_code)))
+        montant = flt(r.net_amount) + part * tva.get((r.name, r.item_code), 0.0)
+        if cle in agreg:
+            agreg[cle]["qty"] += flt(r.qty)
+            agreg[cle]["montant"] += montant
+        else:
+            agreg[cle] = frappe._dict(name=r.name, customer_name=r.customer_name, posting_date=r.posting_date,
+                                      item_code=r.item_code, item_name=r.item_name, against_sales_order=r.against_sales_order,
+                                      qty=flt(r.qty), montant=montant)
+    return [frappe._dict(l, montant=flt(l["montant"], 3)) for l in agreg.values()]
+
+
+def _du_partenaire(ligne, commandes: set) -> bool:
+    return bool(ligne.get("against_sales_order")) and ligne["against_sales_order"] in commandes
+
+
+def main_d_oeuvre(debut, fin) -> dict:
+    """{"brut": toute la main d’œuvre livrée TTC, "partenaire": la part réalisée par Economiq,
+    "net": la nôtre, "nb_partenaire": ses BL}."""
+    lignes = _lignes_main_d_oeuvre(debut, fin)
+    cmd = commandes_du_partenaire()
+    brut = sum(flt(l.montant) for l in lignes)
+    du_partenaire = [l for l in lignes if _du_partenaire(l, cmd)]
+    part = sum(flt(l.montant) for l in du_partenaire)
+    return {"brut": brut, "partenaire": part, "net": brut - part, "nb_partenaire": len({l.name for l in du_partenaire})}
+
+
 def calculer(p: dict) -> dict:
     r = {"ventes": ventes(p["debut"], p["fin"])}
     for rub, cle in CLES.items():
         r[cle] = rubrique_totale(rub, p["tva_debut"] if cle == "tva" else p["debut"], p["fin"])
+    r["mo"] = main_d_oeuvre(p["debut"], p["fin"])
     r["initial"] = p["initial"]
     r["ajustement"] = ajustements(p["debut"], p["fin"])
     r["benefice"] = r["ventes"] - r["cout"]["net"] - r["charges"]["net"] - r["tva"]["net"] + r["initial"] + r["ajustement"]
@@ -194,7 +325,7 @@ def serie(fin_mois: str | None = None, nb: int = 12) -> list[dict]:
         out.append({"mois": lib, "court": "%s %s" % (MOIS_COURTS[d.month - 1], str(d.year)[2:]),
                     "ventes": c["ventes"], "cout": c["cout"]["net"], "charges": c["charges"]["net"],
                     "tva": c["tva"]["net"], "benefice": c["benefice"], "marge": c["marge"], "marge_brute": c["marge_brute"],
-                    "omis": c["cout"]["omis"] + c["charges"]["omis"] + c["tva"]["omis"]})
+                    "mo": c["mo"]["net"], "omis": c["cout"]["omis"] + c["charges"]["omis"] + c["tva"]["omis"]})
         d = date(d.year - (d.month == 1), (d.month - 2) % 12 + 1, 1)
     return list(reversed(out))
 
@@ -247,7 +378,8 @@ LIGNES_PAR_COMPTE = 200          # au-delà : « … et N autres », la recherch
 
 
 def _correspond(ligne: dict, q: str) -> bool:
-    return not q or q in " ".join([ligne["voucher_no"], ligne.get("libelle") or "", ligne["date"]]).lower()
+    return not q or q in " ".join([ligne["voucher_no"], ligne.get("libelle") or "", ligne["date"],
+                                   ligne.get("commande") or ""]).lower()
 
 
 def _tronquer(lignes: list[dict], q: str) -> tuple[list[dict], dict]:
@@ -277,6 +409,8 @@ def get_detail(rubrique, mode="mois", mois=None, annee=None, recherche=None):
         return {"rubrique": rubrique, "total": total, "omis": 0, "net": total, "peut_omettre": False,
                 "comptes": [{"compte": "Bons de livraison validés (TTC)", "total": total, "omis": 0, "nb": len(lignes),
                              "pieces": visibles, "reste": reste}]}
+    if rubrique == RUBRIQUE_MAIN_D_OEUVRE:
+        return _detail_main_d_oeuvre(p, q)
     if rubrique not in RUBRIQUES:
         frappe.throw(_("Rubrique inconnue : {0}").format(rubrique))
     debut = p["tva_debut"] if rubrique == "TVA Achat" else p["debut"]
@@ -319,6 +453,40 @@ def get_detail(rubrique, mode="mois", mois=None, annee=None, recherche=None):
     t = rubrique_totale(rubrique, debut, p["fin"])
     return {"rubrique": rubrique, "total": t["brut"], "omis": t["omis"], "net": t["net"], "comptes": sortie,
             "peut_omettre": peut_omettre()}
+
+
+def _detail_main_d_oeuvre(p: dict, q: str) -> dict:
+    """Notre main d’œuvre par prestation (article), BL par BL ; à part, les BL « transformés » des
+    ventes réalisées par Economiq, écartés du total. Rien n'est omissible ici : la carte est
+    informative, elle n'entre pas dans le bénéfice."""
+    cmd = commandes_du_partenaire()
+    par_article, ecartees = {}, []
+    for l in _lignes_main_d_oeuvre(p["debut"], p["fin"]):
+        piece = {"voucher_type": "Delivery Note", "voucher_no": l.name, "date": str(l.posting_date),
+                 "libelle": "%s · %s × %s" % (l.customer_name or "", "%g" % flt(l.qty), l.item_name),
+                 "montant": flt(l.montant), "contribution": flt(l.montant), "omission": None}
+        if _du_partenaire(l, cmd):
+            piece["commande"] = l.against_sales_order
+            ecartees.append(piece)
+        else:
+            par_article.setdefault(l.item_name, []).append(piece)
+    comptes = []
+    for article, lignes in par_article.items():
+        visibles, reste = _tronquer(lignes, q)
+        if q and not visibles:
+            continue
+        comptes.append({"compte": article, "total": sum(x["montant"] for x in lignes), "omis": 0, "nb": len(lignes),
+                        "pieces": visibles, "reste": reste})
+    comptes.sort(key=lambda x: -abs(x["total"]))
+    total = sum(x["montant"] for lignes in par_article.values() for x in lignes)
+    visibles_ec, reste_ec = _tronquer(ecartees, q)
+    return {"rubrique": RUBRIQUE_MAIN_D_OEUVRE, "total": total, "omis": 0, "net": total, "peut_omettre": False,
+            "comptes": comptes,
+            "ecartees": {"libelle": "Réalisée par le partenaire Economiq — écartée",
+                         "total": sum(x["montant"] for x in ecartees),
+                         "nb": len({x["voucher_no"] for x in ecartees}),            # BL distincts, comme la carte
+                         "nb_trouvees": len(visibles_ec) + reste_ec["n"],
+                         "pieces": visibles_ec, "reste": reste_ec}}
 
 
 @frappe.whitelist()
@@ -395,13 +563,13 @@ def periode_du_graphe():
     return {"mode": "mois"}
 
 
-INDICATEURS = ("ventes", "cout", "charges", "tva", "benefice", "marge", "marge_brute")
+INDICATEURS = ("ventes", "cout", "charges", "tva", "benefice", "marge", "marge_brute", "mo")
 
 
 def _valeurs(c: dict) -> dict:
     return {"ventes": c["ventes"], "cout": c["cout"]["net"], "charges": c["charges"]["net"], "tva": c["tva"]["net"],
             "benefice": c["benefice"], "marge": c["marge"], "marge_brute": c["marge_brute"],
-            "cout_ventes": c["cout_ventes"]}
+            "cout_ventes": c["cout_ventes"], "mo": c["mo"]["net"]}
 
 
 @frappe.whitelist()
