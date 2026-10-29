@@ -343,7 +343,12 @@ doc_events = {
         "before_insert": "customization_app.facturation_numbering.set_numero_facture",
         # Lignes composants d'un échange : marque reprise du BL avant le
         # contrôle « Commande client requise » (SalesInvoiceEchange).
-        "before_validate": "customization_app.retour_echange.marquer_composants_facture",
+        "before_validate": [
+            "customization_app.retour_echange.marquer_composants_facture",
+            # Facture d'une commande déjà encaissée : l'échéancier recopié (relevé des paiements de la
+            # caisse) est ramené au reste à payer avant le contrôle d'ERPNext (echeancier_facture).
+            "customization_app.echeancier_facture.aligner_echeancier_avances",
+        ],
         "validate": [
             "customization_app.ristourne_facture.apply_order_discounts",
             # La facture reprend les lignes du BL d'échange : packed items du

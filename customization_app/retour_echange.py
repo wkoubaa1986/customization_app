@@ -59,9 +59,11 @@ Pièges connus, et comment ils sont contournés
   ce contrôle pour les seuls retours d'échange.
 - À l'insertion, le tarif client est repris sur la ligne (33 DT TTC pour un
   robinet) : le prix est remis à 0 après `insert`, avant validation.
-- ERPNext prévient « l'article n'existe pas dans le BL d'origine » : c'est
-  un message, pas une erreur (raise_exception=False pour un BL). On le retire
-  pour ne pas inquiéter l'utilisateur.
+- « L'article n'existe pas dans le BL d'origine » : simple message jusqu'à
+  ERPNext 15.122, ERREUR bloquante pour un BL depuis 15.123 (#59820). Le BL
+  d'origine est donc choisi parmi ceux qui ont livré la pièce reprise
+  (`_candidats_origine`) ; sans aucun, le retour se fait sans référence. Le
+  message résiduel (pièce livrée dans un kit) reste retiré de l'affichage.
 - Le retour est daté comme le BL d'échange ; le BL d'origine doit être
   antérieur ou du même instant, sinon on se passe de référence. Sans
   référence, ERPNext ne sait pas ANNULER le retour (il va chercher le
@@ -242,9 +244,19 @@ def _bundles(codes):
     return out
 
 
-def _candidats_origine(doc):
+def _candidats_origine(doc, codes):
+    """Les BL du client qui ont LIVRÉ les pièces reprises `codes` (en ligne ou dans un kit).
+
+    Depuis ERPNext 15.123 (#59820, déployé le 20/10/2026), un retour dont la pièce n'est pas
+    sur le BL d'origine est REFUSÉ, plus seulement signalé : prendre « le BL le plus récent du
+    client » faisait échouer l'échange dès que sa dernière livraison était autre chose (cas réel
+    MAT-DN-2026-05813 : robinet chromé livré en juillet, osmoseur livré la veille). On ne retient
+    donc que les BL où chaque pièce reprise a été livrée et n'est pas déjà entièrement retournée.
+    """
+    if not codes:
+        return []
     commandes = tuple({r.against_sales_order for r in doc.items if r.against_sales_order}) or ("",)
-    return frappe.db.sql(
+    candidats = frappe.db.sql(
         """SELECT dn.name, TIMESTAMP(dn.posting_date, dn.posting_time) AS instant,
                   EXISTS (SELECT 1 FROM `tabDelivery Note Item` dni
                           WHERE dni.parent = dn.name
@@ -255,6 +267,59 @@ def _candidats_origine(doc):
            ORDER BY dn.posting_date DESC, dn.posting_time DESC
            LIMIT 100""",
         {"commandes": commandes, "client": doc.customer, "moi": doc.name}, as_dict=True)
+    if not candidats:
+        return []
+    livrees = _pieces_livrees([c["name"] for c in candidats], codes)
+    return candidats_ayant_livre(candidats, livrees, codes)
+
+
+def candidats_ayant_livre(candidats, livrees, codes):
+    """Ne garde que les candidats dont `livrees[name]` couvre TOUTES les pièces `codes`."""
+    voulues = set(codes)
+    return [c for c in candidats if voulues <= (livrees.get(c["name"]) or set())]
+
+
+def _pieces_livrees(noms, codes):
+    """{BL: {pièces encore retournables}} parmi `codes`.
+
+    Livré = lignes du BL + articles d'ensemble (packed items) ; déjà repris = retours validés
+    contre ce BL. On ne se fie pas à `returned_qty` / `per_returned` du BL d'origine : ERPNext
+    ne les tient à jour qu'à certaines conditions (en pratique jamais ici, constaté sur les
+    retours saisis à la main), alors que son contrôle « déjà retourné » cumule bien les retours.
+    """
+    livrees = frappe.db.sql(
+        """SELECT parent, item_code, SUM(qty) AS qty FROM `tabDelivery Note Item`
+           WHERE parent IN %(noms)s AND item_code IN %(codes)s GROUP BY parent, item_code
+           UNION ALL
+           SELECT parent, item_code, SUM(qty) FROM `tabPacked Item`
+           WHERE parent IN %(noms)s AND item_code IN %(codes)s GROUP BY parent, item_code""",
+        {"noms": tuple(noms), "codes": tuple(codes)}, as_dict=True)
+    retournees = frappe.db.sql(
+        """SELECT r.return_against AS parent, ri.item_code, SUM(-ri.qty) AS qty
+           FROM `tabDelivery Note` r JOIN `tabDelivery Note Item` ri ON ri.parent = r.name
+           WHERE r.is_return = 1 AND r.docstatus = 1 AND r.return_against IN %(noms)s
+             AND ri.item_code IN %(codes)s
+           GROUP BY r.return_against, ri.item_code""",
+        {"noms": tuple(noms), "codes": tuple(codes)}, as_dict=True)
+    return pieces_encore_retournables(livrees, retournees)
+
+
+def pieces_encore_retournables(livrees, retournees):
+    """{BL: {pièces}} dont la quantité livrée dépasse la quantité déjà reprise.
+    `livrees` / `retournees` : [{"parent", "item_code", "qty"}]."""
+    solde = {}
+    for l in livrees:
+        cle = (l["parent"], l["item_code"])
+        solde[cle] = solde.get(cle, 0.0) + flt(l["qty"])
+    for r in retournees:
+        cle = (r["parent"], r["item_code"])
+        if cle in solde:
+            solde[cle] -= flt(r["qty"])
+    out = {}
+    for (bl, code), reste in solde.items():
+        if reste > TOLERANCE:
+            out.setdefault(bl, set()).add(code)
+    return out
 
 
 def _entrees_deja_faites(nom_bl, codes):
@@ -266,6 +331,18 @@ def _entrees_deja_faites(nom_bl, codes):
            WHERE voucher_no = %s AND is_cancelled = 0 AND actual_qty > 0
              AND item_code IN %s""",
         (nom_bl, tuple(codes)), pluck=True)
+
+
+def _lignes_origine(origine, codes):
+    """{pièce: nom de sa première ligne sur le BL d'origine}. Pièce livrée dans un kit
+    (packed item) : pas de ligne, pas de lien."""
+    out = {}
+    for l in frappe.db.sql(
+        """SELECT name, item_code FROM `tabDelivery Note Item`
+           WHERE parent = %(origine)s AND item_code IN %(codes)s ORDER BY idx""",
+        {"origine": origine, "codes": tuple(codes)}, as_dict=True):
+        out.setdefault(l.item_code, l.name)
+    return out
 
 
 # ── Le BL retour ─────────────────────────────────────────────────────────────
@@ -291,6 +368,11 @@ def creer_retour(doc):
     pieces = pieces_reprises(lignes, _bundles([l["item_code"] for l in lignes]))
     if not pieces:
         return None
+    # Le magasinier peut choisir où la pièce reprise rentre (popup d'échange de la page Stock,
+    # cf. sorties_magasin.approuver) : un robinet usagé va aux Articles défectueux, pas au Magasin.
+    if doc.flags.get("entrepot_reprise"):
+        for p in pieces:
+            p["warehouse"] = doc.flags.entrepot_reprise
 
     codes = [p["item_code"] for p in pieces]
     doublons = _entrees_deja_faites(doc.name, codes)
@@ -299,7 +381,7 @@ def creer_retour(doc):
                        "compterait la pièce deux fois.").format(doc.name, ", ".join(doublons)))
 
     instant = get_datetime(f"{doc.posting_date} {doc.posting_time or nowtime()}")
-    origine = choisir_bl_origine(_candidats_origine(doc), instant)
+    origine = choisir_bl_origine(_candidats_origine(doc, codes), instant)
 
     ret = frappe.new_doc("Delivery Note")
     ret.update({
@@ -319,10 +401,14 @@ def creer_retour(doc):
         CHAMP_ECHANGE: doc.name,
         "remarks": _("Reprise de pièce(s) de l'échange {0}").format(doc.name),
     })
+    lignes_origine = _lignes_origine(origine, codes) if origine else {}
     for p in pieces:
         ret.append("items", {
             "item_code": p["item_code"], "qty": -p["qty"], "warehouse": p["warehouse"],
             "rate": 0, "price_list_rate": 0, "discount_percentage": 0,
+            # La ligne d'origine : ERPNext contrôle alors la quantité retournée LIGNE par ligne
+            # (clé item_code + dn_detail) et le retour garde la trace de ce qu'il reprend.
+            "dn_detail": lignes_origine.get(p["item_code"]),
         })
     ret.flags.ignore_permissions = True
     ret.flags.retour_echange = True

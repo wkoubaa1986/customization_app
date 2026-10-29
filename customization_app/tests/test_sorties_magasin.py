@@ -147,3 +147,37 @@ class TestSortiesMagasin(unittest.TestCase):
         import frappe
         for fn in (M.approuver, M.rejeter, M.sortie_exceptionnelle, M.verifier):
             self.assertEqual(frappe.allowed_http_methods_for_whitelisted_func.get(fn), ["POST"], fn.__name__)
+
+
+class TestEchangeAConfirmer(unittest.TestCase):
+    """Un BL d'échange (pièce reprise) ne s'approuve qu'après confirmation du magasinier (popup de la
+    page Stock : pièce sortie ET pièce reprise). Pur, sans base."""
+
+    def test_un_echange_sans_confirmation_est_refuse(self):
+        self.assertTrue(M.echange_a_confirmer([{"item_code": "Rob-LC", "qte": 1}], 0))
+        self.assertTrue(M.echange_a_confirmer([{"item_code": "Rob-LC", "qte": 1}], None))
+        self.assertTrue(M.echange_a_confirmer([{"item_code": "Rob-LC", "qte": 1}], "0"))
+
+    def test_un_echange_confirme_passe(self):
+        self.assertFalse(M.echange_a_confirmer([{"item_code": "Rob-LC", "qte": 1}], 1))
+        self.assertFalse(M.echange_a_confirmer([{"item_code": "Rob-LC", "qte": 1}], "1"))
+
+    def test_un_bl_sans_reprise_ne_demande_rien(self):
+        self.assertFalse(M.echange_a_confirmer([], 0))
+        self.assertFalse(M.echange_a_confirmer(None, 0))
+
+
+class TestChoixEntrepots(unittest.TestCase):
+    """Entrepôts choisis dans le popup d'échange : vides = ceux du BL ; un nom inconnu ou inactif est refusé."""
+    ACTIFS = {"Magasins - A&S", "Articles defectueux - A&S", "Hall - A&S"}
+
+    def test_vides_gardent_les_entrepots_du_bl(self):
+        self.assertEqual(M.choix_entrepots(None, "", self.ACTIFS), (None, None))
+
+    def test_des_entrepots_actifs_sont_acceptes(self):
+        self.assertEqual(M.choix_entrepots("Hall - A&S", " Articles defectueux - A&S ", self.ACTIFS),
+                         ("Hall - A&S", "Articles defectueux - A&S"))
+
+    def test_un_entrepot_inconnu_est_refuse(self):
+        with self.assertRaises(ValueError):
+            M.choix_entrepots("Magasins - A&S", "Stock Fantome - A&S", self.ACTIFS)

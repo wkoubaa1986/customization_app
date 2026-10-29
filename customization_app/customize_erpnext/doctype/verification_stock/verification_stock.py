@@ -7,8 +7,8 @@ from frappe.utils import cint, cstr, flt, get_datetime
 # drapeau `circuit_verification`) : le statut et les signatures des deux validations, le rapprochement, le
 # comptage ligne à ligne. Le formulaire /app/verification-stock garde note, date, employé, responsable.
 CHAMPS_PROTEGES = ("statut", "rapprochement", "valide_employe_par", "valide_employe_le", "valide_responsable_par",
-                   "valide_responsable_le", "termine_le", "termine_par", "renvois")
-DATES = {"valide_employe_le", "valide_responsable_le", "termine_le"}
+                   "valide_responsable_le", "termine_le", "termine_par", "renvois", "pour_employe", "annule_par", "annule_le")
+DATES = {"valide_employe_le", "valide_responsable_le", "termine_le", "annule_le"}
 
 
 def _norm(champ, valeur):
@@ -16,7 +16,7 @@ def _norm(champ, valeur):
         return None
     if champ in DATES:
         return get_datetime(valeur)
-    if champ == "renvois":
+    if champ in ("renvois", "pour_employe"):
         return cint(valeur)
     return cstr(valeur)
 

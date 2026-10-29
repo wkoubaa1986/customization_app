@@ -13,9 +13,13 @@
   "ecart",
   "taux",
   "valeur_ecart",
+  "prix_vente",
+  "valeur_vente",
   "zones",
   "commentaire",
   "analyse",
+  "verdict",
+  "enquete",
   "qte_employe",
   "ajuste",
   "a_recompter"
@@ -85,6 +89,19 @@
    "columns": 1
   },
   {
+   "fieldname": "prix_vente",
+   "fieldtype": "Currency",
+   "label": "Prix de vente",
+   "read_only": 1,
+   "description": "Tarif standard de l'article au moment de la photographie du stock (Item.standard_rate)."
+  },
+  {
+   "fieldname": "valeur_vente",
+   "fieldtype": "Currency",
+   "label": "Écart au prix de vente",
+   "read_only": 1
+  },
+  {
    "fieldname": "zones",
    "fieldtype": "Data",
    "label": "Zones",
@@ -99,6 +116,20 @@
    "fieldname": "analyse",
    "fieldtype": "Small Text",
    "label": "Analyse de l’écart",
+   "read_only": 1
+  },
+  {
+   "fieldname": "verdict",
+   "fieldtype": "Select",
+   "label": "Verdict",
+   "options": "\nExplicable\nProbable\nInexpliqué",
+   "read_only": 1,
+   "in_list_view": 0
+  },
+  {
+   "fieldname": "enquete",
+   "fieldtype": "Small Text",
+   "label": "Enquête",
    "read_only": 1
   },
   {

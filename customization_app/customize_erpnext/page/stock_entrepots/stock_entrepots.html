@@ -182,6 +182,22 @@
     .se-b-carte.ecart { border-color: #f87171; background: #fef2f2; }
     .se-b-carte .t { font-weight: 700; font-size: 14px; } .se-b-carte .d { font-size: 12.5px; color: #475569; margin: 2px 0 6px; }
     .se-b-ligne { display: flex; align-items: center; gap: 8px; padding: 3px 0; font-size: 13px; }
+    /* Pièce reprise par un échange : rentre en stock par le BL retour créé à l’approbation. */
+    .se-b-ligne.reprise { background: #f0fdf4; border-left: 3px solid #16a34a; border-radius: 4px; padding-left: 6px; }
+    .se-b-ligne.reprise .q { color: #15803d; }
+    .se-ech .bloc { border: 1px solid #e2e8f0; border-radius: 8px; padding: 8px 10px; margin-bottom: 10px; }
+    .se-ech .bloc.sortie { border-color: #fca5a5; background: #fff7f7; } .se-ech .bloc.entree { border-color: #86efac; background: #f0fdf4; }
+    .se-ech .bloc .t { font-weight: 700; margin-bottom: 4px; } .se-ech .bloc .t small { font-weight: 400; color: #64748b; }
+    .se-ech .se-note { margin-top: 2px; }
+    .se-v-h .v .se-vente { display: block; font-size: 10.5px; font-weight: 400; color: #64748b; }
+    .se-bilan { font-size: 12px; color: #334155; background: #f8fafc; border-radius: 6px; padding: 5px 8px; margin: 4px 0 6px; }
+    /* Enquête sur les écarts : verdict par ligne, conclusion IA, dossier repliable */
+    .se-verdict.e b { color: #15803d; } .se-verdict.p b { color: #b45309; } .se-verdict.i b { color: #b91c1c; }
+    .se-conclusion { margin: 6px 0; padding: 8px 10px; border-left: 3px solid #6366f1; background: #eef2ff; border-radius: 6px; font-size: 13px; }
+    .se-dossier { margin: 4px 0 6px; font-size: 12px; } .se-dossier summary { cursor: pointer; color: #475569; }
+    .se-dossier .t { font-weight: 700; margin: 6px 0 2px; } .se-dossier ul { margin: 0 0 4px 16px; padding: 0; } .se-dossier li { margin: 1px 0; }
+    .se-ech .bloc .t { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; } .se-ech .bloc .t .choix { margin-left: auto; font-weight: 400; font-size: 12px; display: flex; align-items: center; gap: 6px; }
+    .se-ech .bloc .t .choix select { width: auto; max-width: 260px; height: 28px; padding: 2px 6px; font-size: 12px; }
     .se-b-ligne .q { margin-left: auto; font-weight: 700; white-space: nowrap; } .se-b-ligne .w { font-size: 11px; color: #64748b; white-space: nowrap; }
     .se-b-ligne .w { display: flex; flex-direction: column; align-items: flex-end; } .se-b-ligne .w .st { font-size: 11px; color: #475569; } .se-b-ligne .w .st.neg b { color: #dc2626; }
     .se-b-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }

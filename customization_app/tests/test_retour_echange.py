@@ -11,7 +11,8 @@ from __future__ import annotations
 import unittest
 from datetime import datetime
 
-from customization_app.retour_echange import choisir_bl_origine, pieces_reprises
+from customization_app.retour_echange import (candidats_ayant_livre, choisir_bl_origine,
+                                               pieces_encore_retournables, pieces_reprises)
 
 BUNDLES = {
     "E-TC-LI": [{"item_code": "Rob-TC", "qty": -1}, {"item_code": "Rob-LI", "qty": 1}],
@@ -85,6 +86,56 @@ class TestChoisirBlOrigine(unittest.TestCase):
     def test_aucun_candidat_valable_donne_none(self):
         self.assertIsNone(choisir_bl_origine([_c("DN-FUTUR", datetime(2026, 10, 2))], self.RETOUR))
         self.assertIsNone(choisir_bl_origine([], self.RETOUR))
+
+
+class TestCandidatsAyantLivre(unittest.TestCase):
+    """Depuis ERPNext 15.123 un retour contre un BL qui n'a pas livré la pièce est refusé :
+    seuls les BL ayant livré TOUTES les pièces reprises restent candidats (cas réel
+    MAT-DN-2026-05813 : le dernier BL du client était un osmoseur, pas le robinet)."""
+    C = [_c("DN-OSMOSEUR", datetime(2026, 10, 27, 9, 0)), _c("DN-ROBINET", datetime(2026, 7, 2, 9, 0))]
+
+    def test_le_bl_qui_n_a_pas_livre_la_piece_est_ecarte(self):
+        livrees = {"DN-OSMOSEUR": {"AP-M"}, "DN-ROBINET": {"Rob-LC"}}
+        self.assertEqual([c["name"] for c in candidats_ayant_livre(self.C, livrees, ["Rob-LC"])],
+                         ["DN-ROBINET"])
+
+    def test_toutes_les_pieces_reprises_doivent_y_etre(self):
+        livrees = {"DN-OSMOSEUR": {"Rob-LC"}, "DN-ROBINET": {"Rob-LC", "C-3.2"}}
+        self.assertEqual([c["name"] for c in candidats_ayant_livre(self.C, livrees, ["Rob-LC", "C-3.2"])],
+                         ["DN-ROBINET"])
+
+    def test_aucun_bl_n_a_livre_la_piece_donne_une_liste_vide(self):
+        self.assertEqual(candidats_ayant_livre(self.C, {"DN-OSMOSEUR": {"AP-M"}}, ["Rob-LC"]), [])
+        self.assertEqual(candidats_ayant_livre(self.C, {}, ["Rob-LC"]), [])
+
+    def test_l_ordre_des_candidats_est_conserve(self):
+        livrees = {"DN-OSMOSEUR": {"Rob-LC"}, "DN-ROBINET": {"Rob-LC"}}
+        self.assertEqual([c["name"] for c in candidats_ayant_livre(self.C, livrees, ["Rob-LC"])],
+                         ["DN-OSMOSEUR", "DN-ROBINET"])
+
+
+class TestPiecesEncoreRetournables(unittest.TestCase):
+    """Livré moins déjà repris par les retours validés — sans se fier à returned_qty."""
+
+    def test_une_piece_livree_et_jamais_reprise_est_retournable(self):
+        self.assertEqual(pieces_encore_retournables([{"parent": "DN-1", "item_code": "Rob-LC", "qty": 1}], []),
+                         {"DN-1": {"Rob-LC"}})
+
+    def test_une_piece_deja_entierement_reprise_ne_l_est_plus(self):
+        livrees = [{"parent": "DN-1", "item_code": "Rob-LC", "qty": 1}]
+        retournees = [{"parent": "DN-1", "item_code": "Rob-LC", "qty": 1}]
+        self.assertEqual(pieces_encore_retournables(livrees, retournees), {})
+
+    def test_livree_deux_fois_reprise_une_fois_reste_retournable(self):
+        livrees = [{"parent": "DN-1", "item_code": "Rob-LC", "qty": 1},
+                   {"parent": "DN-1", "item_code": "Rob-LC", "qty": 1}]   # ligne + kit
+        retournees = [{"parent": "DN-1", "item_code": "Rob-LC", "qty": 1}]
+        self.assertEqual(pieces_encore_retournables(livrees, retournees), {"DN-1": {"Rob-LC"}})
+
+    def test_un_retour_sur_un_autre_bl_ne_compte_pas(self):
+        livrees = [{"parent": "DN-1", "item_code": "Rob-LC", "qty": 1}]
+        retournees = [{"parent": "DN-2", "item_code": "Rob-LC", "qty": 1}]
+        self.assertEqual(pieces_encore_retournables(livrees, retournees), {"DN-1": {"Rob-LC"}})
 
 
 class TestPackedItemsAGarder(unittest.TestCase):

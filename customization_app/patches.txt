@@ -1,7 +1,6 @@
 [pre_model_sync]
 # Patches added in this section will be executed before doctypes are migrated
 # Read docs to understand patches: https://frappeframework.com/docs/v14/user/en/database-migrations
-
 [post_model_sync]
 # Patches added in this section will be executed after doctypes are migrated
 customization_app.patches.override_get_item_details
@@ -39,14 +38,10 @@ customization_app.patches.ensure_raccourci_commandes_a_traiter
 customization_app.patches.ensure_lecture_payment_term
 customization_app.patches.desactiver_server_scripts_annulation_facture
 customization_app.patches.desactiver_server_script_rappel_rdv
-
 customization_app.patches.ensure_ristourne_facture_field
 customization_app.patches.versionner_cron_facturation_mensuelle
-
 customization_app.patches.update_monthly_credits_notifications
-
 customization_app.patches.ensure_reglement_caisse_field
-
 customization_app.patches.propager_google_map_taches_vers_adresses
 customization_app.patches.ensure_etiquette_aramex_field
 customization_app.patches.desactiver_bouton_echeancier_entretien
@@ -109,3 +104,4 @@ customization_app.patches.anomalie_sans_bl_retour
 customization_app.patches.suivi_commande_fields
 customization_app.patches.reference_cheque_depense_caisse
 customization_app.patches.attribuer_role_inventaire_magasin
+customization_app.patches.prix_vente_verifications

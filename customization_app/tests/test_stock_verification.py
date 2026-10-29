@@ -241,7 +241,7 @@ class TestDoubleValidationVerif(unittest.TestCase):
         i1, i2 = self.items
         nom = self._comptage(3, 4)
         self.assertEqual(self._qte(i2), 5)                                      # rien n'a bougé
-        self.assertEqual(S.detail_verification(nom)["fiche"]["actions"], ["valider", "renvoyer"])
+        self.assertEqual(S.detail_verification(nom)["fiche"]["actions"], ["valider", "renvoyer", "annuler"])   # annuler : responsable magasin
         # une sortie ENTRE le comptage et la validation : à la validation les quantités système sont relues,
         # l'article qui a bougé PERD son comptage et la fiche repart au comptage (décision utilisateur 02/10/2026)
         S.ecriture_transfert(self.essai, S.magasin(), [(i1, 1)], "sortie entre comptage et validation", ignore_trajets=True)
@@ -332,6 +332,53 @@ class TestDoubleValidationVerif(unittest.TestCase):
         self.assertEqual((r["statut"], r["changes"]), ("Terminée", []))
         self.assertEqual(self._qte(i2), 4)                                      # écart rapproché
         frappe.set_user("Administrator")
+
+    HEDI = "hedi.ibidhi@gmail.com"      # responsable magasin, autre qu'Administrator
+
+    def _autre_responsable(self):
+        import frappe
+        if not frappe.db.exists("User", self.HEDI) or not S.est_responsable(self.HEDI):
+            self.skipTest("pas de second responsable magasin")
+        return self.HEDI
+
+    def test_un_autre_responsable_accepte_pour_l_employe(self):
+        """Employé absent ou parti (cas réel 29/10/2026 : Akram sorti, fiche du 14/10 bloquée) : un responsable
+        magasin AUTRE que le validateur accepte à sa place, la fiche le dit, le rapprochement passe."""
+        import frappe
+        i1, i2 = self.items
+        hedi = self._autre_responsable()
+        nom = self._comptage(3, 4)
+        r = S.valider_verification(nom)                                         # Administrator valide tel quel
+        self.assertEqual(r["statut"], "À confirmer")
+        self.assertEqual(r["actions"], ["annuler"])                             # le validateur n'accepte pas pour l'employé
+        with self.assertRaises(frappe.PermissionError):
+            S.confirmer_verification(nom, pour_employe=1)
+        frappe.set_user(hedi)
+        self.assertEqual(S.detail_verification(nom)["fiche"]["actions"], ["confirmer_pour_employe", "annuler"])
+        with self.assertRaises(frappe.PermissionError):
+            S.confirmer_verification(nom)                                       # pas l'employé : il faut pour_employe
+        r = S.confirmer_verification(nom, pour_employe=1)
+        self.assertEqual((r["statut"], r["pour_employe"], r["valide_employe_par"]), ("Terminée", 1, "Hedi ibidhii"))
+        self.assertIn("à la place de l’employé", frappe.db.get_value(S.VERIF, nom, "note"))
+        self.assertEqual(self._qte(i2), 4)                                      # écart rapproché (5 → 4)
+        frappe.set_user("Administrator")
+
+    def test_annulation_par_un_responsable(self):
+        import frappe
+        i1, i2 = self.items
+        nom = self._comptage(3, 4)
+        frappe.set_user(self.AKRAM)
+        with self.assertRaises(frappe.PermissionError):
+            S.annuler_verification(nom, "essai")                                # pas responsable
+        frappe.set_user("Administrator")
+        r = S.annuler_verification(nom, "employé parti")
+        self.assertEqual((r["statut"], r["annule_par"], r["motif_annulation"]), ("Annulée", "Administrator", "employé parti"))
+        self.assertEqual(self._qte(i2), 5)                                      # rien rapproché
+        self.assertIsNone(frappe.db.get_value(S.VERIF, {"entrepot": self.essai, "statut": ["in", S.OUVERTS]}, "name"))
+        with self.assertRaises(frappe.ValidationError):
+            S.annuler_verification(nom)                                         # déjà fermée
+        noms = [x["name"] for s_ in S.verifications_etat()["stocks"] if s_["entrepot"] == self.essai for x in s_["dernieres"]]
+        self.assertIn(nom, noms)                                                # visible dans l'historique du stock
 
     def test_patch_reprend_une_fiche_comptee_par_un_responsable(self):
         import frappe

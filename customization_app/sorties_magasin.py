@@ -156,6 +156,47 @@ def _lignes(names: list[str]) -> dict[str, list[dict]]:
     return out
 
 
+def _reprises(entetes, lignes: dict[str, list[dict]]) -> dict[str, list[dict]]:
+    """Par BL EN ATTENTE, les pièces que l'échange reprendra à l'approbation (BL retour automatique,
+    cf. retour_echange) : article, quantité, entrepôt d'ENTRÉE et stock avant → après. Vide sans
+    article d'échange. C'est ce que le magasinier doit voir et confirmer AVANT d'approuver : la pièce
+    remise sort, la pièce reprise rentre, et les deux doivent être physiquement en main (demande du 29/10)."""
+    from customization_app import retour_echange as RE
+    attente = [e.name for e in entetes if e.docstatus == 0]
+    codes = list({l["item_code"] for n in attente for l in lignes.get(n, [])})
+    bundles = RE._bundles(codes) if codes else {}
+    if not RE.bundles_echange(bundles):
+        return {}
+    brut = {n: RE.pieces_reprises([{"item_code": l["item_code"], "qty": l["qte"], "warehouse": l["entrepot"]}
+                                   for l in lignes.get(n, [])], bundles) for n in attente}
+    pieces = list({r["item_code"] for rs in brut.values() for r in rs})
+    if not pieces:
+        return {}
+    infos = {i.name: i for i in frappe.get_all("Item", filters={"name": ["in", pieces]},
+                                               fields=["name", "item_name", "stock_uom", "is_stock_item"])}
+    images = S._images(pieces)
+    entrepots = list({r["warehouse"] for rs in brut.values() for r in rs if r["warehouse"]}) or [""]
+    stocks = {(b.item_code, b.warehouse): flt(b.actual_qty, 6) for b in frappe.get_all(
+        "Bin", filters={"item_code": ["in", pieces], "warehouse": ["in", entrepots]},
+        fields=["item_code", "warehouse", "actual_qty"])}
+    out = {}
+    for n, rs in brut.items():
+        for r in rs:
+            i = infos.get(r["item_code"]) or frappe._dict()
+            suivi = bool(i.get("is_stock_item"))
+            out.setdefault(n, []).append({"item_code": r["item_code"], "item_name": i.get("item_name"),
+                                          "qte": flt(r["qty"], 6), "uom": i.get("stock_uom"), "entrepot": r["warehouse"],
+                                          "image": images.get(r["item_code"]), "suivi": suivi,
+                                          "stock": stocks.get((r["item_code"], r["warehouse"]), 0.0) if suivi else None})
+    return out
+
+
+def echange_a_confirmer(reprises: list[dict] | None, confirme) -> bool:
+    """Vrai quand l'approbation doit être refusée : le BL reprend une pièce et le magasinier n'a pas
+    confirmé (popup de la page Stock : pièce sortie ET pièce reprise)."""
+    return bool(reprises) and not cint(confirme)
+
+
 CHAMPS_BL = ["name", "customer", "customer_name", "posting_date", "creation", "owner", "workflow_state", "docstatus",
              "custom_commande", "custom_livré_par", CHAMP_VERIF, CHAMP_SORTI_PAR, CHAMP_SORTI_LE,
              CHAMP_VERIFIE_PAR, CHAMP_VERIFIE_LE, CHAMP_NOTE]
@@ -182,6 +223,7 @@ def _taches_futures(commandes: list[str]) -> dict[str, dict]:
 def _bls(filtres: dict, order_by: str = "creation asc", limite: int | None = None) -> list[dict]:
     entetes = frappe.get_all("Delivery Note", filters=filtres, fields=CHAMPS_BL, order_by=order_by, limit=limite)
     lignes = _lignes([e.name for e in entetes])
+    reprises = _reprises(entetes, lignes)
     noms = {}
     def nom(u):
         if u and u not in noms:
@@ -202,6 +244,7 @@ def _bls(filtres: dict, order_by: str = "creation asc", limite: int | None = Non
                     "statut": e.workflow_state, "docstatus": e.docstatus,
                     "tache_future": futures.get(commande) if e.docstatus == 0 else None,
                     "lignes": ls, "nb": len(ls), "unites": flt(sum(l["qte"] for l in ls), 6),
+                    "reprises": reprises.get(e.name, []),
                     "verification": e.get(CHAMP_VERIF), "sorti_par": nom(e.get(CHAMP_SORTI_PAR)),
                     "sorti_par_user": e.get(CHAMP_SORTI_PAR), "sorti_le": str(e.get(CHAMP_SORTI_LE) or "")[:16] or None,
                     "verifie_par": nom(e.get(CHAMP_VERIFIE_PAR)), "verifie_le": str(e.get(CHAMP_VERIFIE_LE) or "")[:16] or None,
@@ -262,13 +305,70 @@ def actions_possibles(name) -> list[str]:
     return [t.get("action") for t in get_transitions(frappe.get_doc("Delivery Note", name))]
 
 
+def choix_entrepots(entrepot_sortie, entrepot_reprise, actifs) -> tuple[str | None, str | None]:
+    """Les entrepôts choisis dans le popup d'échange, vérifiés : vides = ceux du BL ; sinon un entrepôt
+    ACTIF de la société, jamais un groupe ni un entrepôt inconnu (ValueError, nom en message)."""
+    out = []
+    for e in (entrepot_sortie, entrepot_reprise):
+        e = (e or "").strip() or None
+        if e and e not in actifs:
+            raise ValueError(e)
+        out.append(e)
+    return out[0], out[1]
+
+
 @frappe.whitelist(methods=["POST"])
-def approuver(name):
-    """Approbation normale par le magasinier principal : le BL est validé, le stock sort, rien à vérifier."""
+def approuver(name, confirme_echange=0, entrepot_sortie=None, entrepot_reprise=None):
+    """Approbation normale par le magasinier principal : le BL est validé, le stock sort, rien à vérifier.
+    Un BL d'ÉCHANGE (une pièce remise, une pièce reprise) exige `confirme_echange` : la page a montré au
+    magasinier ce qui sort, ce qui rentre et dans quel entrepôt, et il a confirmé les deux. Il peut aussi
+    choisir ces entrepôts (`entrepot_sortie` pour les pièces suivies du BL, `entrepot_reprise` pour le BL
+    retour) ; le choix est tracé en commentaire du BL."""
     _principal()
     doc = _en_attente_doc(name)
+    bl = _bls({"name": name})[0]
+    if echange_a_confirmer(bl.get("reprises"), confirme_echange):
+        frappe.throw(_("{0} est un échange : confirmez la pièce sortie et la pièce reprise avant d'approuver "
+                       "(fenêtre « Échange » de la page Stock).").format(name))
+    if bl.get("reprises"):
+        try:
+            sortie, reprise = choix_entrepots(entrepot_sortie, entrepot_reprise, {w["name"] for w in S.entrepots()})
+        except ValueError as e:
+            frappe.throw(_("Entrepôt inconnu ou inactif : {0}").format(e))
+        if sortie and any(r.warehouse != sortie for r in doc.items):
+            # TOUTES les lignes, ligne d'échange « E-… » comprise : retour_echange.poser_composants
+            # recrée la ligne de la pièce remise à l'entrepôt de la ligne d'échange, une ligne seule
+            # déplacée reviendrait au Magasin. Enregistré AVANT le workflow : apply_workflow recharge
+            # le document depuis la base et perdrait une modification en mémoire.
+            for r in doc.items:
+                r.warehouse = sortie
+            doc.set_warehouse = sortie
+            doc.save()
+        # La reprise rentre dans l'entrepôt choisi, sinon dans celui prévu par le BL — même si la
+        # sortie vient d'être déplacée (sans ce flag, le retour suivrait la ligne d'échange).
+        doc.flags.entrepot_reprise = reprise or bl["reprises"][0]["entrepot"]
+        doc.add_comment("Info", _("Échange approuvé par {0} : pièce remise sortie de {1}, pièce reprise rentrée dans {2}.")
+                        .format(frappe.utils.get_fullname(frappe.session.user),
+                                sortie or next((l["entrepot"] for l in bl["lignes"] if l["suivi"]), "?"),
+                                reprise or bl["reprises"][0]["entrepot"]))
     apply_workflow(doc, ACTION_APPROUVER)
     return _bls({"name": name})[0]
+
+
+@frappe.whitelist()
+def stocks_par_entrepot(codes):
+    """{article: {entrepôt: quantité}} sur les entrepôts actifs — pour que le popup d'échange montre le stock
+    avant → après de l'entrepôt CHOISI, pas seulement celui du BL."""
+    _principal()
+    codes = frappe.parse_json(codes) if isinstance(codes, str) else list(codes or [])
+    if not codes:
+        return {}
+    actifs = [w["name"] for w in S.entrepots()]
+    out = {c: {} for c in codes}
+    for b in frappe.get_all("Bin", filters={"item_code": ["in", codes], "warehouse": ["in", actifs or [""]]},
+                            fields=["item_code", "warehouse", "actual_qty"]):
+        out.setdefault(b.item_code, {})[b.warehouse] = flt(b.actual_qty, 6)
+    return out
 
 
 @frappe.whitelist(methods=["POST"])
