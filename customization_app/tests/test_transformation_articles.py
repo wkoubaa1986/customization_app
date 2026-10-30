@@ -54,6 +54,29 @@ class TestRegles(unittest.TestCase):
                                        {"qty": 1, "taux_fixe": None, "taux_ref": 20}])
         self.assertEqual(taux, [5.0, 5.0])
 
+    def test_reprise_de_l_ecriture_du_14_10(self):
+        """Patch reprise_transformation_00171 : mêmes consommés, osmoseur libre vers Magasins,
+        coudes et raccord à leur taux habituel."""
+        import os
+        from customization_app.patches import reprise_transformation_00171 as P
+        rows = [{"item_code": "AP-BF-TDS-5-1200GPD", "qty": 1, "s_warehouse": "Hall - A&S", "t_warehouse": None},
+                {"item_code": "Acc001-F", "qty": 2, "s_warehouse": "Hall - A&S", "t_warehouse": None},
+                {"item_code": "AP-BF-TDS2-5-1500GPD", "qty": 1, "s_warehouse": None, "t_warehouse": "Hall - A&S"},
+                {"item_code": "Acc001-B", "qty": 2, "s_warehouse": None, "t_warehouse": "Hall - A&S"},
+                {"item_code": "Acc008-K", "qty": 1, "s_warehouse": None, "t_warehouse": "Hall - A&S"}]
+        conso, obt = P.lignes_de_reprise(rows)
+        self.assertEqual([(c["item_code"], c["qty"], c["warehouse"]) for c in conso],
+                         [("AP-BF-TDS-5-1200GPD", 1.0, "Hall - A&S"), ("Acc001-F", 2.0, "Hall - A&S")])
+        self.assertEqual(obt, [{"item_code": "AP-BF-TDS2-5-1500GPD", "qty": 1.0, "warehouse": "Magasins - A&S", "taux_fixe": None},
+                               {"item_code": "Acc001-B", "qty": 2.0, "warehouse": "Hall - A&S", "taux_fixe": 0.097},
+                               {"item_code": "Acc008-K", "qty": 1.0, "warehouse": "Hall - A&S", "taux_fixe": 0.001}])
+        taux = TA.repartir_valeur(1224.474, [{"qty": o["qty"], "taux_fixe": o["taux_fixe"], "taux_ref": 5.416} for o in obt])
+        self.assertEqual(taux, [round(1224.474 - 2 * 0.097 - 0.001, 3), 0.097, 0.001])
+        self.assertEqual((P.DATE, P.HEURE), ("2026-10-14", "15:32:28"))
+        base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(base, "patches.txt"), encoding="utf-8") as f:
+            self.assertIn("customization_app.patches.reprise_transformation_00171", f.read())
+
     def test_alertes(self):
         self.assertEqual(TA.alertes_stock([{"item_code": "A", "qty": 2, "stock": 3}]), [])
         self.assertEqual(len(TA.alertes_stock([{"item_code": "A", "qty": 4, "stock": 3}])), 1)

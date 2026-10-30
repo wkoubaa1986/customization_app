@@ -323,8 +323,9 @@ def _assurer_type_ecriture() -> str:
 
 
 @frappe.whitelist()
-def valider(consommes, obtenus, warehouse=None, posting_date=None, remarque=None):
-    """Crée et soumet l'écriture Reconditionnement. Renvoie son nom et le récapitulatif."""
+def valider(consommes, obtenus, warehouse=None, posting_date=None, remarque=None, posting_time=None):
+    """Crée et soumet l'écriture Reconditionnement. Renvoie son nom et le récapitulatif.
+    `posting_time` (optionnel, avec `posting_date`) : heure exacte, pour refaire une écriture à sa place."""
     _verifier_acces()
     warehouse = warehouse or MAGASIN_DEFAUT
     sim = simuler(consommes, obtenus, warehouse)
@@ -336,6 +337,8 @@ def valider(consommes, obtenus, warehouse=None, posting_date=None, remarque=None
         "posting_date": posting_date or nowdate(), "set_posting_time": 1 if posting_date else 0,
         "remarks": f"{MARQUE}" + (f" — {remarque.strip()}" if (remarque or "").strip() else ""),
     })
+    if posting_date and posting_time:
+        doc.posting_time = posting_time
     for l in sim["consommes"]:
         doc.append("items", {"item_code": l["item_code"], "qty": l["qty"], "s_warehouse": l["warehouse"]})
     for l in sim["obtenus"]:
