@@ -188,6 +188,8 @@ doc_events = {
     # Stock par entrepôt : un transfert en attente de la confirmation d'un employé ne se soumet que par
     # la page (valider_transfert) — jamais depuis le formulaire Stock Entry (MAT-STE-2026-00104, 02/10/2026).
     "Stock Entry": {
+        # Reconditionnement : un seul produit fini, pas de taux aberrant (30/10/2026).
+        "validate": "customization_app.stock_reconditionnement.stock_entry_validate",
         "before_submit": "customization_app.stock_entrepots.stock_entry_before_submit",
     },
     # Le stock d'un employé ne se rapproche que par une vérification (page) : jamais depuis le formulaire.
@@ -206,6 +208,8 @@ doc_events = {
     # seule aux vraies factures d'achat : appariement (fournisseur, n°), copie du
     # justificatif scanné, statut « Saisie » à la soumission.
     "Purchase Invoice": {
+        # Les achats se réceptionnent en magasin (30/10/2026).
+        "validate": "customization_app.achats_magasin.forcer_entrepot_magasin",
         # on_update, pas validate : au validate la facture n'existe pas encore et
         # une insertion qui échoue ensuite laisserait un lien vers un fantôme.
         "on_update": "customization_app.caisse_depenses.pi_lier_fiche_caisse",
@@ -215,6 +219,7 @@ doc_events = {
     # BL de caisse -> reçu d'achat : le reçu créé depuis une fiche BL
     # (custom_fiche_caisse) se lie à sa fiche et reçoit le justificatif.
     "Purchase Receipt": {
+        "validate": "customization_app.achats_magasin.forcer_entrepot_magasin",
         "on_update": "customization_app.caisse_depenses.pr_lier_fiche_caisse",
         "on_submit": "customization_app.caisse_depenses.pr_lier_fiche_caisse",
         "on_cancel": "customization_app.caisse_depenses.pr_detacher_fiche_caisse",
@@ -223,6 +228,7 @@ doc_events = {
     # devient un paiement lié à la commande (avance fournisseur native) ; la
     # facture se crée ensuite depuis une ou plusieurs commandes.
     "Purchase Order": {
+        "validate": "customization_app.achats_magasin.forcer_entrepot_magasin",
         "on_update": "customization_app.caisse_depenses.po_lier_fiche_caisse",
         "on_submit": "customization_app.caisse_depenses.po_convertir_avances",
         "on_cancel": "customization_app.caisse_depenses.po_detacher_fiche_caisse",

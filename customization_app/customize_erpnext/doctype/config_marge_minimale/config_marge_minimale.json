@@ -57,7 +57,7 @@
    "fieldname": "source_cout",
    "fieldtype": "Select",
    "label": "Coût de l’article",
-   "options": "Valorisation du stock\nDernier prix d'achat",
+   "options": "Valorisation du stock\nDernier prix d'achat\nValorisation moyenne (tous entrepôts)",
    "default": "Valorisation du stock",
    "description": "Valorisation : le coût moyen du stock (entrepôt de la ligne, sinon l’article), à défaut le dernier prix d’achat. Un ensemble vaut la somme de ses composants."
   },

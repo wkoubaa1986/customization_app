@@ -48,6 +48,11 @@ BASE_PRIX = "Prix de vente HT"
 BASE_COUT = "Coût d'achat"
 SOURCE_VALO = "Valorisation du stock"
 SOURCE_ACHAT = "Dernier prix d'achat"
+#: Valeur totale ÷ quantité totale, TOUS entrepôts confondus (décision utilisateur 30/10/2026) : le
+#: plancher ne dépend plus de l'entrepôt de la ligne — une réception mal valorisée dans un seul
+#: stock (Acc001-B à 5,416 au Hall contre 0,097 ailleurs) ne déclenche plus la marge minimale
+#: différemment d'un stock à l'autre.
+SOURCE_MOYENNE = "Valorisation moyenne (tous entrepôts)"
 TOLERANCE = 0.0005
 ARRONDI_DEFAUT = 0.5
 
@@ -176,11 +181,23 @@ def plancher_exonere(cout: float, tva_article: float | None, r: dict, decimales:
 
 # ----------------------------------------------------------------- coûts
 
+def moyenne_ponderee(bins) -> float:
+    """Valorisation moyenne d'un article sur tous ses entrepôts : Σ valeur ÷ Σ quantité des stocks
+    positifs. 0 si rien en stock. Fonction pure. `bins` : [{actual_qty, stock_value}]."""
+    qte = sum(flt(b.get("actual_qty")) for b in bins or [] if flt(b.get("actual_qty")) > 0)
+    valeur = sum(flt(b.get("stock_value")) for b in bins or [] if flt(b.get("actual_qty")) > 0)
+    return round(valeur / qte, 6) if qte > 0 else 0.0
+
+
 def _cout_article(item_code: str, warehouse: str | None, source: str) -> float:
-    """Coût unitaire HT : valorisation du Bin de l'entrepôt de la ligne, sinon celle de l'article, sinon le
-    dernier prix d'achat (ou l'inverse si la source réglée est le dernier prix d'achat). 0 = inconnu."""
+    """Coût unitaire HT : valorisation du Bin de l'entrepôt de la ligne (ou la moyenne de tous les
+    entrepôts si la source réglée est la moyenne), sinon celle de l'article, sinon le dernier prix
+    d'achat (ou l'inverse si la source réglée est le dernier prix d'achat). 0 = inconnu."""
     valo = 0.0
-    if warehouse:
+    if source == SOURCE_MOYENNE:
+        valo = moyenne_ponderee(frappe.get_all("Bin", filters={"item_code": item_code},
+                                               fields=["actual_qty", "stock_value"]))
+    elif warehouse:
         valo = flt(frappe.db.get_value("Bin", {"item_code": item_code, "warehouse": warehouse}, "valuation_rate"))
     if not valo:
         valo = flt(frappe.db.get_value("Item", item_code, "valuation_rate"))
