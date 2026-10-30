@@ -32,6 +32,15 @@ MODES DE PAIEMENT ET COMPTES :
                        échéance … » = la mémoire de la traite, lue par le rapport ;
   - Pas payé        -> réservé à « Facture d'achat », aucune écriture.
 
+RETENUE À LA SOURCE ACHAT (types facturés, décision utilisateur 30/10/2026) :
+  la fenêtre PART DU PAIEMENT. Pour un chèque ou un virement, l'opérateur voit
+  le net proposé (TTC − retenue, hors timbre) et peut saisir le montant que
+  porte réellement le chèque : la retenue en découle et est contrôlée (elle
+  doit valoir le taux sur une assiette admissible). Une dépense assujettie qui
+  part SANS retenue exige une confirmation explicite (fournisseur non
+  assujetti), tracée dans la remarque. Cas d'origine : chèque 4001060 émis net
+  de 1 %, écriture passée au brut, écart −47,134 à l'identification bancaire.
+
 Les écritures sont SOUMISES, les photos attachées.
 """
 
@@ -79,6 +88,28 @@ def _compte_retenue():
         return R.compte()
     except Exception:
         return COMPTE_RETENUE_ACHAT
+
+
+#: Les types pour lesquels la fenêtre PART DU PAIEMENT : l'opérateur saisit ce que porte le
+#: chèque ou l'ordre de virement, et la retenue en découle (TTC − payé). Décision utilisateur
+#: 30/10/2026 (chèque 4001060 : retenue déduite sur le chèque, écriture passée au brut).
+TYPES_PAIEMENT_NET = ("Dépense avec facture", "Facture d'achat")
+MODES_PAIEMENT_NET = ("Chèque", "Virement")
+
+
+def _controle_retenue(type_depense, montant, retenue=None, paye=None, timbre=0):
+    """La retenue à comptabiliser et ce qu'il faut signaler (cf. `retenue_depense.controle`).
+    Sans bank_retenue_sync : la valeur saisie telle quelle, aucun avertissement."""
+    try:
+        from bank_retenue_sync.achat import retenue_depense as R
+
+        return R.controle(type_depense, montant, retenue=retenue, paye=paye, timbre=timbre)
+    except Exception:
+        r = flt(retenue, 3) if retenue not in (None, "") else 0.0
+        if paye not in (None, "") and 0 < flt(paye) < flt(montant):
+            r = flt(flt(montant) - flt(paye), 3)
+        return {"retenue": r, "net": flt(flt(montant) - r, 3), "origine": "saisie",
+                "assujettie": False, "alerte_sans_retenue": False, "avertissements": []}
 MODES = ("Espèces", "Chèque", "Carte de crédit", "Virement", "Traite bancaire")
 MODE_PAS_PAYE = "Pas payé"
 
@@ -295,6 +326,8 @@ def analyser(photo, type_depense=None):
         "numero": d.get("invoice_no") or "",
         "date": d.get("invoice_date") or "",
         "coherent": bool(d.get("_balanced")),
+        # Le timbre fiscal lu : l'assiette de la retenue l'exclut (cf. retenue_depense).
+        "timbre": flt(d.get("stamp_duty"), 3),
         "compte_suggere": None,
         "description": "",
         "matricule": "",
@@ -729,7 +762,7 @@ def _mode_global(regs):
 
 @frappe.whitelist()
 def proposition_retenue(type_depense=None, montant=0, timbre=0, fournisseur=None,
-                        supplier=None):
+                        supplier=None, paye=None, retenue=None):
     """Ce que la fenêtre doit pré-remplir : la retenue, le net, et ce qui manque pour le
     certificat. N'écrit rien.
 
@@ -740,9 +773,15 @@ def proposition_retenue(type_depense=None, montant=0, timbre=0, fournisseur=None
     """
     frappe.only_for(ROLES)
     montant = flt(montant, 3)
-    retenue = _retenue_proposee(type_depense, montant, flt(timbre, 3))
-    out = {"retenue": retenue, "net": flt(montant - retenue, 3),
-           "compte": _compte_retenue(), "avertissements": [], "supplier": supplier or None}
+    # Le montant PAYÉ (chèque / virement) prime : c'est ce que la banque verra. À défaut, la
+    # retenue corrigée à la main ; à défaut, la proposition de la règle (30/10/2026).
+    ctrl = _controle_retenue(type_depense, montant, retenue=retenue, paye=paye,
+                             timbre=flt(timbre, 3))
+    retenue = ctrl["retenue"]
+    out = {"retenue": retenue, "net": ctrl["net"], "origine": ctrl["origine"],
+           "assujettie": ctrl["assujettie"], "alerte_sans_retenue": ctrl["alerte_sans_retenue"],
+           "compte": _compte_retenue(), "avertissements": list(ctrl["avertissements"]),
+           "supplier": supplier or None}
     if retenue <= 0:
         return out
 
@@ -773,9 +812,19 @@ def creer(type_depense, montant, mode, compte=None, description=None, fournisseu
           n_cheque=None, banque=None, photo_facture=None, photo_facture_nom=None,
           photo_cheque=None, photo_cheque_nom=None, coins_facture=None,
           supplier=None, matricule=None, paiements=None, est_bl=0, numero_bl=None,
-          retenue=None, code_sans_photo=None):
+          retenue=None, code_sans_photo=None, montant_paye=None, timbre=0,
+          sans_retenue_confirme=0, reprise=None):
     """Crée la dépense selon son type (voir l'en-tête du module). Retourne les noms
-    des pièces créées (écriture et/ou fiche de la file des factures d'achat)."""
+    des pièces créées (écriture et/ou fiche de la file des factures d'achat).
+
+    `montant_paye` : ce que porte le chèque ou l'ordre de virement (mono-mode, types facturés).
+    Quand il est là, la retenue en découle (TTC − payé) — c'est le montant que la banque
+    débitera, donc celui que l'identification bancaire retrouvera (30/10/2026).
+    `sans_retenue_confirme` : l'opérateur a confirmé qu'une dépense assujettie part sans
+    retenue (fournisseur non assujetti). Sans cette confirmation, on refuse, et on le dit.
+    `reprise` (interne, cf. `corriger`) : {origine, fiche, depense, dispense} — l'écriture
+    remplace `origine` ; la fiche de la file / la dépense à payer existante est MISE À JOUR au
+    lieu d'être recréée, et la dispense de photo de chèque d'origine est reconduite."""
     frappe.only_for(ROLES)
     montant = flt(montant, 3)
     tva = flt(tva, 3)
@@ -812,11 +861,30 @@ def creer(type_depense, montant, mode, compte=None, description=None, fournisseu
     # ⚠️ LE MONTANT SEUL NE DÉCLENCHE RIEN. Trois des quatre écritures de plus de 1 000 DT
     # passées en caisse depuis le 01/09 sont des primes de salariés : y retenir 1 % serait faux.
     # C'est `retenue_depense.assujettie` qui tranche, sur le TYPE autant que sur le montant.
-    retenue = flt(retenue, 3) if retenue not in (None, "") else _retenue_proposee(type_depense,
-                                                                                 montant)
+    #
+    # Le montant PAYÉ prime (30/10/2026) : il n'a de sens qu'en mono-mode chèque / virement sur
+    # un type facturé — en fractionné, chaque ligne porte déjà son montant.
+    paye = None
+    if (montant_paye not in (None, "") and not (isinstance(paiements, str) and paiements.strip())
+            and type_depense in TYPES_PAIEMENT_NET and mode in MODES_PAIEMENT_NET):
+        paye = flt(montant_paye, 3)
+        if paye <= 0 or paye > montant:
+            frappe.throw(_("Le montant payé ({0}) doit être positif et au plus égal au TTC ({1}).")
+                         .format(paye, montant))
+    ctrl = _controle_retenue(type_depense, montant,
+                             retenue=retenue if retenue not in (None, "") else None,
+                             paye=paye, timbre=flt(timbre, 3))
+    retenue = flt(ctrl["retenue"], 3)
     if retenue < 0 or retenue >= montant:
         frappe.throw(_("La retenue ({0}) doit rester inférieure au montant TTC ({1}).")
                      .format(retenue, montant))
+    # Garde-fou (décision utilisateur 30/10/2026) : une dépense assujettie sans retenue n'est
+    # enregistrée qu'avec la confirmation explicite de l'opérateur — jamais en silence.
+    if ctrl["alerte_sans_retenue"] and not cint(sans_retenue_confirme):
+        frappe.throw(_("Cette dépense de {0} TTC est au-dessus du seuil de retenue à la source "
+                       "et part sans retenue. Saisissez le montant réellement payé (chèque / "
+                       "virement) ou confirmez que le fournisseur n'est pas assujetti.")
+                     .format(montant))
     a_regler = flt(montant - retenue, 3)
     # Les règlements (mono-mode ou fractionnés). Une ligne « Pas payé » dans le
     # fractionné = paiement PARTIEL : la part payée sort de la caisse, le reste
@@ -824,7 +892,8 @@ def creer(type_depense, montant, mode, compte=None, description=None, fournisseu
     # facture d'achat).
     from customization_app import caisse_pieces
 
-    dispense = caisse_pieces.dispense_photo(code_sans_photo)
+    reprise = reprise if isinstance(reprise, dict) else {}
+    dispense = caisse_pieces.dispense_photo(code_sans_photo) or bool(reprise.get("dispense"))
     if mode == MODE_PAS_PAYE:
         regs, paid, unpaid = [], [], a_regler
     else:
@@ -848,9 +917,17 @@ def creer(type_depense, montant, mode, compte=None, description=None, fournisseu
         # « Chq N° » que l'identification bancaire lit déjà.
         remarques.append(_("Retenue à la source achat : {0} sur {1} TTC")
                          .format(retenue, montant))
+        if paye is not None:
+            remarques.append(_("Retenue déduite du montant payé ({0})").format(paye))
+    elif ctrl["alerte_sans_retenue"]:
+        # La trace de la décision : qui a dit « pas de retenue » sur une dépense assujettie.
+        remarques.append(_("Sans retenue à la source : fournisseur non assujetti, confirmé par {0}")
+                         .format(frappe.session.user))
     _remarques_paiements(remarques, paid)
     if unpaid > 0 and paid:
         remarques.append(_("Reste à payer : {0}").format(unpaid))
+    if reprise.get("origine"):
+        remarques.append(_("Corrige l'écriture {0}").format(reprise["origine"]))
     remarques.append(_("Saisie caisse par {0}").format(frappe.session.user))
 
     je = None
@@ -872,8 +949,7 @@ def creer(type_depense, montant, mode, compte=None, description=None, fournisseu
                  "debit_in_account_currency": flt(paid_total + retenue, 3),
                  "cost_center": CC},
             ], description, remarques)
-        fiche = frappe.get_doc({
-            "doctype": "Facture Achat a Saisir",
+        valeurs_fiche = {
             "fournisseur": (fournisseur or "").strip(),
             "supplier": supplier,
             "montant": montant,
@@ -884,12 +960,22 @@ def creer(type_depense, montant, mode, compte=None, description=None, fournisseu
             "mode_paiement": _mode_global(regs) if unpaid == 0 else
                              ("Pas payé" if not paid else "Mixte"),
             "journal_entry": je.name if je else None,
-            "saisi_par": frappe.session.user,
             "description": description,
-        })
-        fiche.insert(ignore_permissions=True)
-        _attacher_scan(photo_facture, "facture-%s" % fiche.name,
-                       "Facture Achat a Saisir", fiche.name, coins=coins_facture)
+        }
+        if reprise.get("fiche"):
+            # Correction : la fiche garde son nom, ses commentaires et son scan ; seule
+            # l'écriture qu'elle désigne change.
+            fiche = frappe.get_doc("Facture Achat a Saisir", reprise["fiche"])
+            fiche.update(dict(valeurs_fiche, journal_entries="", payment_entry="",
+                              payment_entries=""))
+            fiche.flags.ignore_permissions = True
+            fiche.save()
+        else:
+            fiche = frappe.get_doc(dict(valeurs_fiche, doctype="Facture Achat a Saisir",
+                                        saisi_par=frappe.session.user))
+            fiche.insert(ignore_permissions=True)
+            _attacher_scan(photo_facture, "facture-%s" % fiche.name,
+                           "Facture Achat a Saisir", fiche.name, coins=coins_facture)
         if je:
             _attacher_scan(photo_facture, "facture-%s" % fiche.name,
                            "Journal Entry", je.name, coins=coins_facture)
@@ -944,10 +1030,10 @@ def creer(type_depense, montant, mode, compte=None, description=None, fournisseu
         # même payée intégralement (décision utilisateur 24/08) : c'est elle qui
         # rend les dépenses sur BL LISTABLES (la dépense payée cash n'a sinon
         # qu'une écriture, invisible des listes).
-        if unpaid > 0 or (cint(est_bl) and type_depense == "Dépense avec facture"):
+        if unpaid > 0 or (cint(est_bl) and type_depense == "Dépense avec facture") \
+                or reprise.get("depense"):
             paye = unpaid <= 0
-            fiche = frappe.get_doc({
-                "doctype": "Depense A Payer",
+            valeurs_depense = {
                 "statut": "Payée" if paye else "À payer",
                 "description": description,
                 "montant": montant if paye else unpaid,
@@ -962,11 +1048,18 @@ def creer(type_depense, montant, mode, compte=None, description=None, fournisseu
                 "journal_entry": je.name,
                 "reglement_journal_entry": je.name if paye else None,
                 "date_reglement": nowdate() if paye else None,
-                "saisi_par": frappe.session.user,
-            })
-            fiche.insert(ignore_permissions=True)
-            _attacher_scan(photo_facture, "facture-%s" % fiche.name,
-                           "Depense A Payer", fiche.name, coins=coins_facture)
+            }
+            if reprise.get("depense"):
+                fiche = frappe.get_doc("Depense A Payer", reprise["depense"])
+                fiche.update(valeurs_depense)
+                fiche.flags.ignore_permissions = True
+                fiche.save()
+            else:
+                fiche = frappe.get_doc(dict(valeurs_depense, doctype="Depense A Payer",
+                                            saisi_par=frappe.session.user))
+                fiche.insert(ignore_permissions=True)
+                _attacher_scan(photo_facture, "facture-%s" % fiche.name,
+                               "Depense A Payer", fiche.name, coins=coins_facture)
             resultat = {"name": je.name, "fiche": fiche.name,
                         "a_payer": not paye, "reste": unpaid if not paye else 0}
 
@@ -976,7 +1069,13 @@ def creer(type_depense, montant, mode, compte=None, description=None, fournisseu
         if ordres_traites:
             resultat["ordres_traites"] = ordres_traites
     frappe.db.commit()
-    resultat["avertissements"] = _avertissements_pieces(regs) if je else []
+    # Ce que la fenêtre (et la trace d'une correction) veulent relire : la retenue posée et ce
+    # qui est réellement sorti de la caisse ou de la banque.
+    resultat["retenue"] = retenue
+    resultat["paye"] = flt(sum(p["montant"] for p in paid), 3)
+    resultat["avertissements"] = (_avertissements_pieces(regs) if je else []) \
+        + [str(a) for a in ctrl["avertissements"] if not ctrl["alerte_sans_retenue"]
+           or "aucune retenue" not in a]
     return resultat
 
 
@@ -2462,3 +2561,336 @@ def scans_a_saisir(doctype, name=None, fiche=None, bill_no=None, supplier=None):
     for nom in dict.fromkeys(fiches):
         ajouter("Facture Achat a Saisir", nom, _("file d'attente {0}").format(nom))
     return {"scans": out}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════
+# CORRIGER UNE DÉPENSE FACTURÉE A POSTERIORI (décision utilisateur 30/10/2026)
+# ═══════════════════════════════════════════════════════════════════════════════════════════
+# Cas d'origine : ACC-JV-2026-00954, chèque 4001060 émis net de retenue (4 666,266) pour une
+# écriture passée au brut (4 713,400) ; et ACC-JV-2026-00937, chèque 4001056 débité 841,100 pour
+# une écriture de 4 891,000. Jusqu'ici, corriger voulait dire annuler et amender l'écriture à la
+# main — sans que la fiche de la file, la photo, la remarque lue par les certificats ni
+# l'identification bancaire ne suivent.
+#
+# Le bouton « ✏️ Corriger » du rapport rouvre la fenêtre de saisie PRÉ-REMPLIE depuis l'écriture
+# (relue par `lire_saisie`), et `corriger` rejoue `creer` avec les valeurs corrigées : mêmes
+# contrôles de retenue, même remarque, même convention « Chq N° ». L'ancienne écriture est
+# ANNULÉE PUIS SUPPRIMÉE (demande utilisateur 30/10/2026 : trois corrections d'affilée laissaient
+# trois écritures annulées dans la liste) — la trace vit dans la remarque de la nouvelle
+# (« Corrige l'écriture … ») et dans les commentaires de la fiche ; la fiche existante est mise à
+# jour, jamais recréée ; les mouvements bancaires qui désignaient l'ancienne passent sur la nouvelle.
+
+#: Les types que l'outil sait corriger : ceux qui portent une facture et une retenue.
+TYPES_CORRIGEABLES = TYPES_PAIEMENT_NET
+
+_RX_SAISIE_TYPE = re.compile(r"Type : (.+)")
+_RX_SAISIE_FOURNISSEUR = re.compile(r"Fournisseur : (.+)")
+_RX_SAISIE_FACTURE = re.compile(r"Facture n° (\S+)")
+_RX_SAISIE_BL = re.compile(r"BL n° (\S+)")
+_RX_SAISIE_CHEQUE = re.compile(r"Chq N° (?P<numero>\d+)(?: - Bq (?P<banque>[^\n|]+))?")
+_RX_SAISIE_CORRIGE = re.compile(r"Corrige l'écriture (\S+)")
+
+
+def lire_saisie(cheque_no, remarque, lignes) -> dict:
+    """Ce que la fenêtre de saisie a produit, RELU sur l'écriture. Fonction pure.
+
+    `lignes` : [{account, debit, credit}] de l'écriture. Inverse de `creer` pour les champs que
+    la fenêtre connaît : type, description, fournisseur, n° de facture, montant TTC, retenue,
+    montant réellement payé (crédit banque), mode, n° de chèque, banque, TVA, compte de charge.
+    """
+    remarque = remarque or ""
+    cheque_no = cheque_no or ""
+    description = cheque_no
+    for prefixe in (PREFIXE_CAISSE, PREFIXE_A_PAYER):
+        if description.startswith(prefixe):
+            description = description[len(prefixe):]
+    m = _RX_SAISIE_TYPE.search(remarque)
+    out = {"type_depense": m.group(1).strip() if m else "",
+           "description": description.strip(), "fournisseur": "", "numero_facture": "",
+           "numero_bl": "", "est_bl": 0, "corrige": ""}
+    m = _RX_SAISIE_FOURNISSEUR.search(remarque)
+    if m:
+        out["fournisseur"] = m.group(1).strip()
+    m = _RX_SAISIE_FACTURE.search(remarque)
+    if m:
+        out["numero_facture"] = m.group(1).strip()
+    m = _RX_SAISIE_BL.search(remarque)
+    if m:
+        out["numero_bl"], out["est_bl"] = m.group(1).strip(), 1
+    m = _RX_SAISIE_CORRIGE.search(remarque)
+    if m:
+        out["corrige"] = m.group(1).strip()
+
+    compte_retenue = _compte_retenue()
+    credits = [l for l in (lignes or []) if flt(l.get("credit")) > 0]
+    debits = [l for l in (lignes or []) if flt(l.get("debit")) > 0]
+    out["montant"] = flt(sum(flt(l.get("debit")) for l in debits), 3)
+    out["retenue"] = flt(sum(flt(l.get("credit")) for l in credits
+                             if l.get("account") == compte_retenue), 3)
+    out["paye_banque"] = flt(sum(flt(l.get("credit")) for l in credits
+                                 if l.get("account") == COMPTE_BANQUE), 3)
+    out["tva"] = flt(sum(flt(l.get("debit")) for l in debits
+                         if str(l.get("account", "")).startswith("TVA")), 3)
+    out["taux_tva"] = 7 if any(l.get("account") == COMPTE_TVA_7 for l in debits) else 19
+    out["compte"] = next((l.get("account") for l in debits
+                          if not str(l.get("account", "")).startswith("TVA")
+                          and l.get("account") != COMPTE_CREDITEURS), "")
+
+    # Le ou les règlements : une ligne créditée par règlement (hors retenue et découvert).
+    reglements = [l for l in credits if l.get("account") not in (compte_retenue,)]
+    pieces = pieces_bancaires(remarque)
+    traites = parser_traites(remarque)
+    modes = []
+    for l in reglements:
+        compte = l.get("account")
+        if compte == COMPTE_ESPECES:
+            modes.append({"mode": "Espèces", "montant": flt(l.get("credit"), 3)})
+        elif compte == COMPTE_BANQUE:
+            mode, numero = pieces.pop(0) if pieces else ("Carte de crédit", None)
+            modes.append({"mode": mode, "n_cheque": numero or "",
+                          "montant": flt(l.get("credit"), 3)})
+        elif compte == COMPTE_DECOUVERT:
+            t = next((t for t in traites if abs(t["montant"] - flt(l.get("credit"), 3)) < 0.0005), None)
+            if t:
+                traites.remove(t)
+                modes.append({"mode": MODE_TRAITE, "n_cheque": t["numero"], "banque": t["banque"],
+                              "echeance": t["echeance"], "montant": flt(l.get("credit"), 3)})
+            else:
+                modes.append({"mode": MODE_PAS_PAYE, "montant": flt(l.get("credit"), 3)})
+    out["reglements"] = modes
+    out["fractionne"] = 1 if len([r for r in modes if r["mode"] != MODE_PAS_PAYE]) > 1 else 0
+    premier = modes[0] if modes else {"mode": MODE_PAS_PAYE}
+    out["mode"] = premier["mode"]
+    out["n_cheque"] = premier.get("n_cheque", "") or ""
+    out["banque"] = premier.get("banque", "") or ""
+    out["echeance"] = premier.get("echeance", "") or ""
+    m = _RX_SAISIE_CHEQUE.search(remarque)
+    if m and premier["mode"] == "Chèque":
+        out["banque"] = (m.group("banque") or "").strip()
+    out["montant_paye"] = out["paye_banque"] if premier["mode"] in MODES_PAIEMENT_NET \
+        and not out["fractionne"] else 0.0
+    return out
+
+
+def motif_non_corrigeable(infos, fiche=None, depense=None, ordre_traite=False,
+                          certificat_statut=None, docstatus=1, origine=True) -> str:
+    """Pourquoi cette écriture ne se corrige pas ici — "" si elle le peut. Fonction pure.
+
+    On refuse dès qu'une pièce AVAL dépend de l'écriture : facture d'achat saisie par le
+    comptable, règlement passé depuis, ordre de paiement de traite, certificat de retenue
+    déjà émis (TEJ n'accepte pas de correction sans annulation).
+    """
+    if not origine:
+        return _("Cette écriture n'a pas été saisie depuis la caisse.")
+    if docstatus != 1:
+        return _("L'écriture n'est pas validée (ou déjà annulée).")
+    if infos.get("type_depense") not in TYPES_CORRIGEABLES:
+        return _("Seules les dépenses facturées (« Dépense avec facture », « Facture d'achat ») "
+                 "se corrigent ici.")
+    if infos.get("fractionne"):
+        return _("Paiement fractionné : corrigez l'écriture à la main.")
+    if fiche and fiche.get("purchase_invoice"):
+        return _("La facture d'achat {0} a déjà été saisie depuis cette fiche : corrigez-la "
+                 "sur la facture.").format(fiche["purchase_invoice"])
+    if depense and depense.get("reglement_journal_entry") \
+            and depense.get("reglement_journal_entry") != infos.get("name"):
+        return _("Cette dépense a été réglée depuis par {0} : corrigez le règlement.") \
+            .format(depense["reglement_journal_entry"])
+    if ordre_traite:
+        return _("Cette dépense a été réglée par traite : annulez d'abord son ordre de paiement.")
+    if certificat_statut == "Émis":
+        return _("Le certificat de retenue à la source a déjà été émis sur TEJ : il faut "
+                 "l'annuler avant de corriger l'écriture.")
+    return ""
+
+
+def _ecriture_de_caisse(journal_entry):
+    je = frappe.get_doc("Journal Entry", journal_entry)
+    origine = (je.cheque_no or "").startswith((PREFIXE_CAISSE, PREFIXE_A_PAYER))
+    infos = lire_saisie(je.cheque_no, je.user_remark,
+                        [{"account": a.account, "debit": flt(a.debit_in_account_currency),
+                          "credit": flt(a.credit_in_account_currency)} for a in je.accounts])
+    infos["name"] = je.name
+    infos["posting_date"] = str(je.posting_date)
+    fiche = frappe.db.get_value("Facture Achat a Saisir", {"journal_entry": je.name},
+                                ["name", "supplier", "purchase_invoice", "mode_paiement",
+                                 "statut", "date_facture"], as_dict=True)
+    depense = frappe.db.get_value("Depense A Payer",
+                                  {"journal_entry": je.name},
+                                  ["name", "statut", "reglement_journal_entry", "date_facture"],
+                                  as_dict=True)
+    ordre = bool(frappe.db.exists("BRS Ordre de Paiement",
+                                  {"source_regle": SOURCE_ORDRE_TRAITE,
+                                   "periode": ["like", "%s|%%" % je.name]})) \
+        if frappe.db.table_exists("BRS Ordre de Paiement") else False
+    certificat = None
+    try:
+        from bank_retenue_sync.tej import emis_journal as E
+
+        certificat = frappe.db.get_value(E.DOCTYPE, je.name, "statut")
+    except Exception:
+        pass
+    motif = motif_non_corrigeable(infos, fiche, depense, ordre, certificat, je.docstatus, origine)
+    return je, infos, fiche, depense, motif
+
+
+def _pieces_jointes(doctype, name):
+    """[{name, file_name, file_url}] des fichiers attachés à une pièce."""
+    return frappe.get_all("File", filters={"attached_to_doctype": doctype, "attached_to_name": name},
+                          fields=["name", "file_name", "file_url"], order_by="creation")
+
+
+def _data_url(file_name):
+    """Le contenu d'un File en dataURL, tel que la fenêtre l'aurait envoyé."""
+    f = frappe.get_doc("File", file_name)
+    contenu = f.get_content()
+    if isinstance(contenu, str):
+        contenu = contenu.encode("utf-8")
+    mimetype = "application/pdf" if _est_pdf(contenu) else "image/jpeg"
+    return "data:%s;base64,%s" % (mimetype, base64.b64encode(contenu).decode("ascii"))
+
+
+def _photos_de_l_ecriture(je, fiche):
+    """(photo de facture, photo de chèque) à reconduire : chacun en dataURL ou None.
+    La facture est prise sur la fiche de la file quand elle existe (scan déjà cadré), sinon
+    sur l'écriture ; le chèque est le premier fichier de l'écriture qui n'est pas la facture."""
+    facture = cheque = None
+    if fiche:
+        for f in _pieces_jointes("Facture Achat a Saisir", fiche["name"]):
+            if f.file_name.startswith("facture-"):
+                facture = f.name
+                break
+    for f in _pieces_jointes("Journal Entry", je.name):
+        if f.file_name.startswith("facture-"):
+            facture = facture or f.name
+        elif cheque is None:
+            cheque = f.name
+    return (_data_url(facture) if facture else None, _data_url(cheque) if cheque else None)
+
+
+@frappe.whitelist()
+def details_depense(journal_entry):
+    """Ce que le bouton « ✏️ Corriger » doit pré-remplir, et pourquoi il refuserait."""
+    frappe.only_for(ROLES)
+    je, infos, fiche, depense, motif = _ecriture_de_caisse(journal_entry)
+    infos.update({
+        "motif_refus": motif,
+        "fiche": fiche["name"] if fiche else None,
+        "depense": depense["name"] if depense else None,
+        "supplier": fiche["supplier"] if fiche else None,
+        "date_facture": str((fiche or depense or {}).get("date_facture") or "") or None,
+        "fiche_doctype": "Facture Achat a Saisir" if fiche else ("Depense A Payer" if depense else None),
+        "photos": [{"nom": f.file_name, "url": f.file_url}
+                   for f in _pieces_jointes("Journal Entry", je.name)],
+        # Le paiement tel que la banque l'a vu : les mouvements du registre bancaire que
+        # l'identification a rattachés à cette écriture (lien vers la page, montant, écart).
+        "mouvements": frappe.get_all(
+            "BRS Bank Movement", filters={"document_type": "Journal Entry", "document_name": je.name},
+            fields=["name", "date", "operation", "reference", "debit", "credit", "statut", "ecart"],
+            order_by="date desc") if frappe.db.table_exists("BRS Bank Movement") else [],
+    })
+    return infos
+
+
+@frappe.whitelist()
+def corriger(journal_entry, type_depense, montant, mode, compte=None, description=None,
+             fournisseur=None, tva=0, taux_tva=0, numero_facture=None, date_facture=None,
+             n_cheque=None, banque=None, photo_facture=None, photo_facture_nom=None,
+             photo_cheque=None, photo_cheque_nom=None, coins_facture=None, supplier=None,
+             matricule=None, est_bl=0, numero_bl=None, retenue=None, code_sans_photo=None,
+             montant_paye=None, timbre=0, sans_retenue_confirme=0):
+    """Remplace une écriture de caisse facturée par une écriture corrigée.
+
+    Même chemin que `creer` (mêmes contrôles de retenue, même remarque, même convention
+    « Chq N° »), avec : l'ancienne écriture annulée puis SUPPRIMÉE, les photos reconduites quand
+    on n'en reprend pas, la fiche de la file ou la dépense à payer mise à jour, les mouvements
+    bancaires reportés sur la nouvelle écriture, et une trace sur chaque pièce restante."""
+    frappe.only_for(ROLES)
+    je, infos, fiche, depense, motif = _ecriture_de_caisse(journal_entry)
+    if motif:
+        frappe.throw(motif)
+    if type_depense not in TYPES_CORRIGEABLES:
+        frappe.throw(_("Seules les dépenses facturées se corrigent ici."))
+
+    ancienne_facture, ancien_cheque = _photos_de_l_ecriture(je, fiche)
+    if not photo_facture:
+        photo_facture = ancienne_facture
+        coins_facture = None          # scan déjà cadré : on ne recadre pas
+    if not photo_cheque and mode in ("Chèque", MODE_TRAITE):
+        photo_cheque = ancien_cheque
+        photo_cheque_nom = photo_cheque_nom or ("%s-%s.jpg" % (
+            "traite" if mode == MODE_TRAITE else "cheque", (n_cheque or "").strip()))
+    reprise = {"origine": je.name, "fiche": fiche["name"] if fiche else None,
+               "depense": depense["name"] if depense else None,
+               # Sans photo de chèque reconductible : la dispense d'origine est reconduite.
+               "dispense": bool(mode in ("Chèque", MODE_TRAITE) and not photo_cheque)}
+
+    # L'ancienne écriture s'annule d'abord. Si l'exercice est clos, c'est ici que ça s'arrête,
+    # avant toute création. Elle sera supprimée une fois la nouvelle créée (ci-dessous).
+    je.flags.ignore_permissions = True
+    je.flags.ignore_links = True
+    je.cancel()
+    if fiche:
+        frappe.db.set_value("Facture Achat a Saisir", fiche["name"],
+                            {"journal_entry": ""}, update_modified=False)
+    if depense:
+        frappe.db.set_value("Depense A Payer", depense["name"],
+                            {"journal_entry": "", "reglement_journal_entry": ""},
+                            update_modified=False)
+
+    resultat = creer(type_depense, montant, mode, compte=compte, description=description,
+                     fournisseur=fournisseur, tva=tva, taux_tva=taux_tva,
+                     numero_facture=numero_facture, date_facture=date_facture,
+                     n_cheque=n_cheque, banque=banque, photo_facture=photo_facture,
+                     photo_facture_nom=photo_facture_nom, photo_cheque=photo_cheque,
+                     photo_cheque_nom=photo_cheque_nom, coins_facture=coins_facture,
+                     supplier=supplier or (fiche["supplier"] if fiche else None),
+                     matricule=matricule, paiements=None, est_bl=est_bl, numero_bl=numero_bl,
+                     retenue=retenue, code_sans_photo=code_sans_photo,
+                     montant_paye=montant_paye, timbre=timbre,
+                     sans_retenue_confirme=sans_retenue_confirme, reprise=reprise)
+    nouvelle = resultat.get("name")
+
+    # L'ancienne disparaît : sa ligne de file des certificats (jamais « Émis », cf. garde-fous),
+    # puis l'écriture elle-même — comme la bascule « Pas payé », et comme le fait la saisie de
+    # la facture d'achat par le comptable.
+    try:
+        from bank_retenue_sync.tej import emis_journal as E
+
+        if frappe.db.exists(E.DOCTYPE, je.name):
+            frappe.delete_doc(E.DOCTYPE, je.name, ignore_permissions=True, force=True)
+    except ImportError:
+        pass
+    frappe.delete_doc("Journal Entry", je.name, ignore_permissions=True, force=True)
+
+    # L'identification bancaire : ce qui désignait l'ancienne écriture désigne la nouvelle —
+    # le rattachement automatique comme le rattachement manuel.
+    if nouvelle and frappe.db.table_exists("BRS Bank Movement"):
+        frappe.db.sql("""UPDATE `tabBRS Bank Movement` SET document_name = %s
+                         WHERE document_type = 'Journal Entry' AND document_name = %s""",
+                      (nouvelle, je.name))
+        for m in frappe.get_all("BRS Bank Movement", filters={"lien_manuel": 1,
+                                                             "lien_pieces": ["like", "%%%s%%" % je.name]},
+                                fields=["name", "lien_pieces"]):
+            frappe.db.set_value("BRS Bank Movement", m.name,
+                                "lien_pieces", (m.lien_pieces or "").replace(je.name, nouvelle),
+                                update_modified=False)
+
+    trace = _("✏️ Correction par {0} : {1} remplace {2} — avant : {3} TTC, retenue {4}, "
+              "payé {5} ({6} {7}) ; après : {8} TTC, retenue {9}, payé {10}.").format(
+        frappe.session.user, nouvelle or "—", je.name, infos["montant"], infos["retenue"],
+        infos["paye_banque"] or infos["montant"] - infos["retenue"], infos["mode"],
+        infos["n_cheque"] or "", flt(montant, 3), flt(resultat.get("retenue", 0), 3),
+        flt(resultat.get("paye", 0), 3))
+    for dt, nom in (("Journal Entry", nouvelle),
+                    ("Facture Achat a Saisir", fiche["name"] if fiche else None),
+                    ("Depense A Payer", depense["name"] if depense else None)):
+        if nom:
+            try:
+                frappe.get_doc(dt, nom).add_comment("Info", trace)
+            except Exception:
+                pass
+    frappe.db.commit()
+    resultat["ancienne"] = je.name
+    resultat["trace"] = trace
+    return resultat

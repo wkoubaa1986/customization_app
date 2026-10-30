@@ -20,6 +20,29 @@ const RCJ_MODE = {
   "Retenue a la source vente": { bg: "#fff3cd", fg: "#856404" },
   "Perte de paiement":         { bg: "#f5c6cb", fg: "#491217" },
 };
+// Écart (DT) sous lequel le montant LU sur un chèque / une traite est tenu pour égal au montant
+// saisi : la lecture ne se fait pas au millime (4 666,246 lu pour 4 666,266 écrit, 30/10/2026).
+const RCJ_TOLERANCE_LECTURE = 0.05;
+
+// Formule tapée dans un champ Montant -> valeur (3 décimales) ou null si illisible.
+// « 1% » seul = 1 % de `base` ; sinon « 4891*1% », « 4891-1% » (= 4891 − 1 % de 4891),
+// « (4891-1)/100 ». Jamais d'eval libre : seuls chiffres, opérateurs, parenthèses et « % ».
+function rcj_formule_montant(texte, base) {
+  let t = String(texte || "").trim().replace(/\s+/g, "").replace(/,/g, ".");
+  if (!t) return null;
+  if (/^[0-9.]+%$/.test(t)) return flt(flt(base) * parseFloat(t) / 100, 3);
+  // « a-b% » / « a+b% » : b % DE a (usage courant : 4891-1%).
+  t = t.replace(/^([0-9.]+)([-+])([0-9.]+)%$/, (_m, a, op, b) => `${a}${op}(${a}*${b}/100)`);
+  t = t.replace(/([0-9.]+)%/g, "($1/100)");
+  if (!/^[0-9+\-*/().]+$/.test(t)) return null;
+  try {
+    const v = Function('"use strict";return (' + t + ")")();
+    return isFinite(v) ? flt(v, 3) : null;
+  } catch (e) {
+    return null;
+  }
+}
+
 const RCJ_KPI_BG = {
   "Espèces": "#2e9e5b", "Chèque": "#2b6cb0", "Virement": "#12908a", "Carte de crédit": "#4b52b0",
   "Traite bancaire LC": "#7a4bb0", "Dette non payée": "#c0392b",
@@ -1123,7 +1146,7 @@ function rcj_encaissement_dettes(rapport) {
           if (lu.banque) p.banque = lu.banque;
           if (lu.montant && !(p.montant > 0)) p.montant = lu.montant;
           render_paiements();
-        });
+        }, () => flt(p.montant));
       };
       lecteur.readAsDataURL(f);
     });
@@ -1483,7 +1506,7 @@ function rcj_encaissement_aramex(rapport) {
           if (lu.montant && !(flt(p.montant) > 0)) { p.montant = lu.montant; p._suit = false; }
           if (lu.echeance && !p.date) p.date = lu.echeance;
           render_paiements();
-        });
+        }, () => flt(p.montant));
       };
       lecteur.readAsDataURL(f);
     });
@@ -1531,7 +1554,11 @@ function rcj_encaissement_aramex(rapport) {
   charger();
 }
 
-function rcj_apercu_fichier(dataUrl, nom, info_html) {
+// `options.verrou` : la fenêtre ne peut pas être fermée (ni croix, ni Échap, ni clic dehors)
+// tant que l'appelant n'a pas appelé `liberer()` — le temps qu'une lecture automatique aboutisse
+// (demande utilisateur 30/10/2026 : l'aperçu du chèque se fermait avant la fin de la lecture).
+function rcj_apercu_fichier(dataUrl, nom, info_html, options) {
+  options = options || {};
   const virgule = (dataUrl || "").indexOf(",");
   if (virgule < 0) return null;
   const entete = dataUrl.slice(0, virgule);
@@ -1550,16 +1577,29 @@ function rcj_apercu_fichier(dataUrl, nom, info_html) {
   const d = new frappe.ui.Dialog({
     title: nom || __("Justificatif"),
     size: "large",
+    static: !!options.verrou,
     fields: [{ fieldtype: "HTML", fieldname: "zone" }],
     primary_action_label: __("Ouvrir dans un onglet"),
     primary_action: () => window.open(url, "_blank"),
     onhide: () => setTimeout(() => URL.revokeObjectURL(url), 60000),
   });
+  let verrouille = !!options.verrou;
+  const liberer = () => {
+    if (!verrouille) return;
+    verrouille = false;
+    d.get_close_btn().show();
+    try {
+      const m = d.$wrapper.data("bs.modal");
+      if (m && m._config) { m._config.backdrop = true; m._config.keyboard = true; }
+    } catch (e) { /* le bouton Fermer suffit */ }
+    d.set_secondary_action_label(__("Fermer"));
+    d.set_secondary_action(() => d.hide());
+  };
   d.fields_dict.zone.$wrapper.html(`<div class="rcj-apercu-info">${info_html || ""}</div>` + (mt === "application/pdf"
     ? `<iframe src="${url}" style="width:100%;height:70vh;border:1px solid #ddd"></iframe>`
     : `<img src="${url}" style="max-width:100%;max-height:70vh;display:block;margin:0 auto">`));
   d.show();
-  return { dialogue: d, $info: d.fields_dict.zone.$wrapper.find(".rcj-apercu-info") };
+  return { dialogue: d, $info: d.fields_dict.zone.$wrapper.find(".rcj-apercu-info"), liberer };
 }
 
 // ── Photo d'un chèque / d'une traite ajoutée : APERÇU + LECTURE OpenAI ───────
@@ -1573,24 +1613,46 @@ function rcj_apercu_fichier(dataUrl, nom, info_html) {
 // déclenchait RIEN, sans un mot, et la lecture passait pour cassée (constat en prod le
 // 16/09/2026). On lit dès qu'une photo est jointe, quel que soit le mode, et ce qui est lu peut
 // corriger le mode — tant que l'employé n'a pas saisi de numéro à la main.
-function rcj_photo_piece_ajoutee(photo, nom, mode, appliquer) {
+// `attendu()` rend le montant que la ligne / le dialogue porte déjà : s'il est renseigné, le
+// montant LU est confronté (RCJ_TOLERANCE_LECTURE) et l'écart est dit dans l'aperçu, puis posé
+// dans `lu.ecart_montant` pour que l'appelant le montre à sa façon (30/10/2026).
+// ⚠️ UNE LECTURE QUI N'ABOUTIT PAS NE PRÉ-REMPLIT RIEN (décision utilisateur 30/10/2026) : panne,
+// photo illisible ou pièce vide -> la main revient à l'employé, saisie manuelle seule.
+function rcj_photo_piece_ajoutee(photo, nom, mode, appliquer, attendu) {
   const esc = frappe.utils.escape_html;
   const ap = rcj_apercu_fichier(photo, nom,
-    `<div class="text-muted" style="margin-bottom:8px">🤖 ${__("Lecture de la pièce en cours…")}</div>`);
+    `<div class="text-muted" style="margin-bottom:8px">🤖 ${__("Lecture de la pièce en cours… la fenêtre se libère à la fin de la lecture.")}</div>`,
+    { verrou: true });
   const dire = (html) => { if (ap && ap.$info) ap.$info.html(html); };
+  const liberer = () => { if (ap && ap.liberer) ap.liberer(); };
+  const manuel = (texte) => {
+    dire(`<div class="rcj-warn-banner" style="margin-bottom:8px">⚠️ ${esc(texte)} — ${__("saisie manuelle, aucun champ pré-rempli.")}</div>`);
+    liberer();
+    frappe.show_alert({ message: __("Lecture impossible : saisie manuelle."), indicator: "orange" }, 6);
+  };
   frappe.call({
     method: "customization_app.caisse_pieces.lire_piece",
     args: { photo, mode },
     callback: (r) => {
       const lu = r.message || {};
-      if (lu.erreur) {
-        dire(`<div class="rcj-warn-banner" style="margin-bottom:8px">⚠️ ${esc(lu.erreur)}</div>`);
-        return;
-      }
+      if (lu.erreur) return manuel(lu.erreur);
+      if (lu.lisible === false || (!lu.numero && !lu.montant)) return manuel(__("Photo peu lisible."));
       let bascule = "";
       if (lu.type_lu && lu.type_lu !== mode) {
         bascule = lu.type_lu;
         lu.mode_propose = lu.type_lu;   // `appliquer` tranche : il connaît la ligne
+      }
+      // Le montant attendu se lit AVANT d'appliquer : une ligne encore vide prend le montant lu,
+      // elle n'a rien à comparer.
+      const att = typeof attendu === "function" ? flt(attendu()) : 0;
+      let compar = "";
+      if (att > 0 && lu.montant) {
+        lu.ecart_montant = flt(flt(lu.montant) - att, 3);
+        compar = Math.abs(lu.ecart_montant) <= RCJ_TOLERANCE_LECTURE
+          ? `<div style="margin-top:4px">✅ ${__("Le montant lu concorde avec le montant saisi ({0}).", [rcj_dt(att)])}</div>`
+          : `<div class="rcj-warn-banner" style="margin-top:6px">⚠️ ${
+              __("Le montant lu sur la pièce ({0}) diffère du montant saisi ({1}) : écart {2}. Vérifiez la pièce avant d'enregistrer.",
+                 [rcj_dt(lu.montant), rcj_dt(att), rcj_dt(lu.ecart_montant)])}</div>`;
       }
       try { appliquer(lu); } catch (e) { console.error(e); }
       const bouts = [];
@@ -1599,17 +1661,16 @@ function rcj_photo_piece_ajoutee(photo, nom, mode, appliquer) {
       if (lu.banque) bouts.push(`${__("banque")} <b>${esc(lu.banque)}</b>`);
       else if (lu.banque_lue) bouts.push(`${__("banque lue")} « ${esc(lu.banque_lue)} » (${__("hors liste")})`);
       if (lu.echeance) bouts.push(`${__("échéance")} <b>${frappe.datetime.str_to_user(lu.echeance)}</b>`);
-      dire(`<div style="background:${lu.lisible === false ? "#fff8e1" : "#e6f4ea"};border-radius:6px;padding:8px 12px;margin-bottom:8px;font-size:12.5px">
-          ${lu.lisible === false ? "⚠️ " + __("Photo peu lisible.") + " " : "✅ "}
-          ${bouts.length ? __("Lu sur la pièce : {0} — champs pré-remplis, vérifiez avant d'enregistrer.", [bouts.join(", ")])
-                         : __("Rien de lisible sur la pièce : saisie manuelle.")}
+      dire(`<div style="background:#e6f4ea;border-radius:6px;padding:8px 12px;margin-bottom:8px;font-size:12.5px">
+          ✅ ${__("Lu sur la pièce : {0} — champs pré-remplis, vérifiez avant d'enregistrer.", [bouts.join(", ")])}
           ${bascule ? `<div style="margin-top:4px">${
-            __("La pièce est un(e) {0} : le mode de la ligne suit.", [esc(bascule)])}</div>` : ""}</div>`);
+            __("La pièce est un(e) {0} : le mode de la ligne suit.", [esc(bascule)])}</div>` : ""}${compar}</div>`);
+      liberer();
       frappe.show_alert({ message: bascule
         ? __("Pièce lue : {0}, mode corrigé.", [bascule])
         : __("Pièce lue : champs pré-remplis."), indicator: "green" });
     },
-    error: () => dire(`<div class="rcj-warn-banner" style="margin-bottom:8px">⚠️ ${__("Lecture automatique indisponible : saisie manuelle.")}</div>`),
+    error: () => manuel(__("Lecture automatique indisponible.")),
   });
 }
 
@@ -1764,19 +1825,28 @@ function rcj_choisir_fournisseur(m, onChoix) {
 // facture obligatoire dès qu'il y a facture, analyse OpenAI pour préremplir,
 // mode Espèces / Chèque (7 chiffres + photo) / Carte. Le serveur
 // (customization_app.caisse_depenses) fait foi sur toutes les règles.
-function rcj_depense(rapport) {
+// `initial` (facultatif) : la dépense à CORRIGER, relue par caisse_depenses.details_depense —
+// la fenêtre s'ouvre pré-remplie et l'enregistrement passe par `corriger` (30/10/2026).
+function rcj_depense(rapport, initial) {
   const API = "customization_app.caisse_depenses";
+  initial = initial || null;
+  // Types où la fenêtre PART DU PAIEMENT (30/10/2026) : l'opérateur saisit ce que porte le
+  // chèque ou le virement, la retenue en découle. Miroir de caisse_depenses.TYPES_PAIEMENT_NET.
+  const TYPES_PAIEMENT_NET = ["Dépense avec facture", "Facture d'achat"];
+  const MODES_PAIEMENT_NET = ["Chèque", "Virement"];
   let etat = { facture: null, facture_nom: null, facture_coins: null,
-               supplier: null, matricule: null,
+               supplier: null, matricule: null, timbre: 0, assujettie: false,
                cheque: null, cheque_nom: null,
                numero: null, date_facture: null, analyse_faite: false,
                est_bl: false, numero_bl: null,
                paiements: [], banques: [] };
 
   const d = new frappe.ui.Dialog({
-    title: __("Dépense de caisse"),
+    title: initial ? __("✏️ Corriger la dépense {0}", [initial.name]) : __("Dépense de caisse"),
     size: "large",
     fields: [
+      // Correction : l'écriture d'origine, sa fiche, ses pièces et le paiement vu par la banque.
+      { fieldtype: "HTML", fieldname: "zone_correction" },
       {
         fieldtype: "Select", fieldname: "type_depense", label: __("Type de dépense"),
         options: "Dépense non facturée\nDépense avec facture\nFacture d'achat",
@@ -1823,7 +1893,17 @@ function rcj_depense(rapport) {
         fieldtype: "Currency", fieldname: "retenue",
         label: __("Retenue à la source achat"),
         depends_on: 'eval:doc.type_depense!="Dépense non facturée"',
-        description: __("Proposée dès le seuil. Corrigez-la si la facture porte un timbre, ou mettez 0 si le fournisseur n-est pas assujetti."),
+        description: __("Proposée dès le seuil, hors timbre. Formule acceptée : « 1% » (du TTC hors timbre), « 4891*1% », « (4891-1)/100 ». Mettez 0 seulement si le fournisseur n-est pas assujetti : il vous sera demandé de le confirmer."),
+      },
+      {
+        // Ce que porte le CHÈQUE ou l'ordre de VIREMENT : c'est ce que la banque débitera,
+        // donc ce que l'identification bancaire retrouvera. Pré-rempli avec le net ; si
+        // l'opérateur y met le montant réel du chèque, la retenue en découle (30/10/2026 :
+        // chèque 4001060 émis net de 1 %, écriture passée au brut faute de retenue proposée).
+        fieldtype: "Currency", fieldname: "montant_paye",
+        label: __("Montant du chèque / virement (réellement payé)"),
+        depends_on: 'eval:["Dépense avec facture","Facture d\'achat"].includes(doc.type_depense) && ["Chèque","Virement"].includes(doc.mode) && !doc.fractionne',
+        description: __("Pré-rempli avec le net (TTC − retenue). Si le chèque porte un autre montant, saisissez-le : la retenue sera déduite et contrôlée. Formule acceptée : « 4891-1% », « 4891*99% »."),
       },
       { fieldtype: "HTML", fieldname: "zone_retenue" },
       {
@@ -1860,11 +1940,12 @@ function rcj_depense(rapport) {
       { fieldtype: "HTML", fieldname: "zone_paiements" },
       rcj_champ_code_sans_photo('eval:doc.fractionne || ["Chèque","Traite bancaire"].includes(doc.mode)'),
     ],
-    primary_action_label: __("Enregistrer la dépense"),
+    primary_action_label: initial ? __("Enregistrer la correction") : __("Enregistrer la dépense"),
     primary_action(v) {
       const dispense = !!(v.code_sans_photo || "").trim();
       if (v.type_depense !== "Dépense non facturée") {
-        if (!etat.facture) {
+        // En correction, la photo d'origine est reconduite par le serveur si on n'en reprend pas.
+        if (!etat.facture && !initial) {
           frappe.msgprint(__("Prenez la photo de la facture avant d'enregistrer."));
           return;
         }
@@ -1886,7 +1967,7 @@ function rcj_depense(rapport) {
           frappe.msgprint(__("Le numéro de chèque doit comporter exactement 7 chiffres."));
           return;
         }
-        if (!etat.cheque && !dispense) {
+        if (!etat.cheque && !dispense && !initial) {
           frappe.msgprint(__("Prenez la photo du chèque avant d'enregistrer (ou saisissez le code sans photo)."));
           return;
         }
@@ -1907,9 +1988,15 @@ function rcj_depense(rapport) {
                        banque: v.banque || null, echeance: v.echeance,
                        photo_cheque: etat.cheque || null, photo_cheque_nom: etat.cheque_nom || null }];
       }
-      frappe.call({
-        method: API + ".creer",
+      // Le montant payé ne voyage qu'en mono-mode chèque / virement sur un type facturé, et
+      // seulement si l'opérateur l'a saisi : sinon il n'est que l'écho du net proposé.
+      const paye_net = !paiements && paye_touche
+        && TYPES_PAIEMENT_NET.includes(v.type_depense) && MODES_PAIEMENT_NET.includes(v.mode)
+        && flt(v.montant_paye) > 0;
+      const envoyer = (confirme) => frappe.call({
+        method: API + (initial ? ".corriger" : ".creer"),
         args: {
+          journal_entry: initial ? initial.name : undefined,
           type_depense: v.type_depense, montant: v.montant, mode: v.mode,
           compte: v.compte, description: v.description, fournisseur: v.fournisseur,
           tva: v.tva || 0, taux_tva: v.taux_tva || 0,
@@ -1921,15 +2008,28 @@ function rcj_depense(rapport) {
           photo_cheque: !paiements && v.mode === "Chèque" ? etat.cheque : null,
           photo_cheque_nom: etat.cheque_nom,
           paiements: paiements ? JSON.stringify(paiements) : null,
-          retenue: flt(v.retenue || 0),
+          // Vide tant que l'opérateur n'a rien touché : le serveur propose alors lui-même.
+          // Il ne reçoit plus « 0 » par défaut — c'est ce qui a laissé passer le chèque
+          // 4001060 au brut (30/10/2026). En fractionné, les lignes ont été ventilées sur
+          // la retenue affichée : on l'envoie telle quelle.
+          retenue: (retenue_touchee || paye_touche || paiements) ? flt(v.retenue || 0) : null,
+          montant_paye: paye_net ? flt(v.montant_paye) : null,
+          timbre: etat.timbre || 0,
+          sans_retenue_confirme: confirme ? 1 : 0,
           est_bl: v.type_depense !== "Dépense non facturée" && etat.est_bl ? 1 : 0,
           numero_bl: etat.numero_bl || null,
           code_sans_photo: v.code_sans_photo || null,
         },
-        freeze: true, freeze_message: __("Enregistrement de la dépense…"),
+        freeze: true, freeze_message: initial ? __("Correction de la dépense…") : __("Enregistrement de la dépense…"),
         callback: (r) => {
           d.hide();
           rcj_afficher_avertissements(r.message);
+          if (initial) {
+            frappe.show_alert({ message: __("Dépense corrigée : {0} remplace {1}.",
+              [r.message.name || "—", r.message.ancienne || initial.name]), indicator: "green" }, 8);
+            if (rapport && rapport._fetch) rapport._fetch();
+            return;
+          }
           if ((r.message.ordres_traites || []).length) {
             frappe.show_alert({
               message: __("Traite enregistrée sur le compte de découvert — suivie jusqu'à son échéance ({0}).",
@@ -1950,6 +2050,20 @@ function rcj_depense(rapport) {
           if (rapport && rapport._fetch) rapport._fetch();
         },
       });
+      // Garde-fou (30/10/2026) : une dépense assujettie qui part SANS retenue n'est jamais
+      // enregistrée en silence — l'opérateur confirme que le fournisseur n'est pas assujetti,
+      // et l'écriture en garde la trace. Le serveur refuse de toute façon sans confirmation.
+      // (Un montant payé égal au TTC ramène aussi la retenue à 0 : même confirmation.)
+      if (TYPES_PAIEMENT_NET.includes(v.type_depense) && etat.assujettie
+          && flt(v.retenue || 0) <= 0) {
+        frappe.confirm(
+          __("Cette dépense de {0} TTC est au-dessus du seuil de retenue à la source et part SANS retenue.<br><br>"
+             + "Si le chèque ou le virement a été fait net de 1 %, annulez et saisissez le montant réellement payé.<br>"
+             + "Confirmer que le fournisseur n'est PAS assujetti ?", [rcj_dt(v.montant)]),
+          () => envoyer(1));
+        return;
+      }
+      envoyer(0);
     },
   });
 
@@ -1996,39 +2110,53 @@ function rcj_depense(rapport) {
   // recalcule quand le montant, le type ou le fournisseur bougent — et elle DIT ce qui
   // manquerait pour émettre le certificat, sans jamais bloquer la saisie (décision
   // utilisateur 04/09/2026 : on pose la retenue et on signale).
-  let retenue_touchee = false;
+  let retenue_touchee = false;   // la retenue a été corrigée à la main
+  let paye_touche = false;       // le montant payé a été saisi à la main : il prime
+  const paiement_net_visible = () =>
+    TYPES_PAIEMENT_NET.includes(type_depense_courant())
+    && MODES_PAIEMENT_NET.includes(d.get_value("mode")) && !d.get_value("fractionne");
   const maj_retenue = frappe.utils.debounce(async () => {
     const $z = d.fields_dict.zone_retenue.$wrapper;
     const type = type_depense_courant();
     const montant = flt(d.get_value("montant"));
     if (type === "Dépense non facturée" || !montant) {
       $z.empty();
+      etat.assujettie = false;
       return;
     }
+    // Ce que le serveur doit prendre en compte, par priorité : le montant payé saisi, puis
+    // la retenue corrigée, sinon rien (il propose). Il tranche ; l'écran affiche.
+    const paye = paye_touche && paiement_net_visible() ? flt(d.get_value("montant_paye")) : null;
+    const retenue = !paye && retenue_touchee ? flt(d.get_value("retenue") || 0) : null;
     let r;
     try {
       r = (await frappe.call({
         method: `${API}.proposition_retenue`,
-        args: { type_depense: type, montant,
+        args: { type_depense: type, montant, timbre: etat.timbre || 0,
+                paye: paye || null, retenue,
                 fournisseur: d.get_value("fournisseur") || "",
                 supplier: etat.supplier || null },
       })).message;
     } catch (e) {
       return;
     }
+    etat.assujettie = !!r.assujettie;
     // On ne réécrit JAMAIS une valeur que l-opérateur a corrigée à la main : la proposition
-    // sert de point de départ, pas de verdict.
-    if (!retenue_touchee) d.set_value("retenue", r.retenue || 0);
-    if (!r.retenue) {
-      $z.empty();
-      return;
-    }
+    // sert de point de départ, pas de verdict. Le montant payé saisi fait exception dans
+    // l'autre sens : il RECALCULE la retenue.
+    if (!retenue_touchee || paye) d.set_value("retenue", r.retenue || 0);
+    if (!paye_touche) d.set_value("montant_paye", r.net || 0);
     const avert = (r.avertissements || []).map(
       (a) => `<div class="rcj-warn-banner" style="margin-top:6px">⚠️ ${frappe.utils.escape_html(a)}</div>`
     ).join("");
+    if (!r.retenue) {
+      $z.html(avert);
+      return;
+    }
+    const origine = r.origine === "paiement"
+      ? __("retenue déduite du montant payé") : __("la retenue reste due au Trésor et fera l-objet dun certificat");
     $z.html(`<div style="font-size:12.5px;color:var(--text-muted)">
-        Net à régler : <b>${rcj_dt(r.net)}</b>
-        — la retenue reste due au Trésor et fera l-objet dun certificat.</div>${avert}`);
+        Net à régler : <b>${rcj_dt(r.net)}</b> — ${origine}.</div>${avert}`);
   }, 350);
 
   // ⚠️ ENREGISTRER VERROUILLÉ TANT QUE L'ANALYSE N'EST PAS FAITE pour les
@@ -2068,7 +2196,11 @@ function rcj_depense(rapport) {
         if (m.fournisseur) d.set_value("fournisseur", m.fournisseur);
         etat.numero = m.numero || null;
         etat.date_facture = m.date || null;
+        etat.timbre = flt(m.timbre || 0);
         etat.analyse_faite = true;
+        // ⚠️ `set_value` ne déclenche PAS l'événement `change` du champ : sans cet appel, le
+        // montant lu sur la facture ne recalculait jamais la retenue (chèque 4001060, 30/10).
+        maj_retenue();
         // Détection BL : la fiche sera marquée « Bon de livraison » et la
         // facture qui la couvre sera rattachée plus tard (bouton sur la
         // facture d'achat), éventuellement avec d'autres BL du fournisseur.
@@ -2150,7 +2282,32 @@ function rcj_depense(rapport) {
   // remplit toute seule, d-ou l-ecoute sur `change` en plus de la frappe.
   d.fields_dict.montant.$input.on("change input", () => maj_retenue());
   d.fields_dict.fournisseur.$input.on("change input", () => maj_retenue());
-  d.fields_dict.retenue.$input.on("input", () => { retenue_touchee = true; });
+  // Formules : Frappe évalue déjà « 4891*0.01 » dans un champ Montant, mais pas le « % » — il
+  // vide alors le champ. On garde le texte tapé et on l'évalue nous-mêmes au change ; « 1% »
+  // seul = 1 % du TTC hors timbre (demande utilisateur 30/10/2026).
+  const brut = { retenue: "", montant_paye: "" };
+  const base_formule = () => flt(d.get_value("montant")) - flt(etat.timbre || 0);
+  const appliquer_formule = (champ) => {
+    if (!/%/.test(brut[champ])) return false;
+    const v = rcj_formule_montant(brut[champ], base_formule());
+    brut[champ] = "";
+    if (v === null) { frappe.show_alert({ message: __("Formule illisible : saisissez un montant."), indicator: "orange" }); return false; }
+    d.set_value(champ, v);
+    return true;
+  };
+  d.fields_dict.retenue.$input.on("input", (e) => {
+    brut.retenue = $(e.currentTarget).val();
+    retenue_touchee = true;
+    paye_touche = false;            // la retenue corrigée redonne le net à payer
+    maj_retenue();
+  });
+  d.fields_dict.retenue.$input.on("change", () => { appliquer_formule("retenue"); });
+  d.fields_dict.montant_paye.$input.on("input", (e) => {
+    brut.montant_paye = $(e.currentTarget).val();
+    paye_touche = true;
+    maj_retenue();
+  });
+  d.fields_dict.montant_paye.$input.on("change", () => { appliquer_formule("montant_paye"); });
 
   // Chèque : photo obligatoire, même patron que l'encaissement. Traite : la même
   // zone, photo facultative.
@@ -2162,7 +2319,32 @@ function rcj_depense(rapport) {
       if (lu.echeance && d.get_value("mode") === "Traite bancaire" && !d.get_value("echeance")) {
         d.set_value("echeance", lu.echeance);
       }
-    }));
+      // Le chèque dit ce qui sort de la banque. S'il ne porte pas le net à payer affiché, on le
+      // dit ici aussi, et on offre de reprendre le montant lu comme montant payé (la retenue
+      // en découlera). Jamais imposé : la lecture n'est pas au millime (30/10/2026).
+      if (lu.ecart_montant !== undefined && Math.abs(lu.ecart_montant) > RCJ_TOLERANCE_LECTURE) {
+        const $z = d.fields_dict.zone_retenue.$wrapper;
+        const brut = Math.abs(flt(lu.montant) - flt(d.get_value("montant"))) <= RCJ_TOLERANCE_LECTURE
+          && flt(d.get_value("retenue")) > 0;
+        $z.append(`<div class="rcj-warn-banner rcj-ecart-lu" style="margin-top:6px">⚠️ ${
+          __("Le chèque lu porte {0}, le net à payer est {1} (écart {2}).",
+             [rcj_dt(lu.montant), rcj_dt(attendu_piece()), rcj_dt(lu.ecart_montant)])}${
+          brut ? " " + __("Le chèque semble au BRUT : la retenue n'a pas été déduite.") : ""}
+          ${paiement_net_visible() ? `<button type="button" class="btn btn-xs btn-default rcj-reprendre-lu" style="margin-left:8px">${
+            __("Reprendre le montant lu ({0})", [rcj_dt(lu.montant)])}</button>` : ""}</div>`);
+        $z.find(".rcj-reprendre-lu").on("click", () => {
+          d.set_value("montant_paye", flt(lu.montant));
+          paye_touche = true;
+          maj_retenue();
+        });
+      }
+    }, attendu_piece));
+  // Ce que le chèque / le virement doit porter : le montant payé saisi, sinon le net affiché.
+  function attendu_piece() {
+    return paiement_net_visible() && flt(d.get_value("montant_paye")) > 0
+      ? flt(d.get_value("montant_paye"))
+      : flt(d.get_value("montant")) - flt(d.get_value("retenue") || 0);
+  }
   const basculer_cheque = () =>
     $zc.toggle(["Chèque", "Traite bancaire"].includes(d.get_value("mode")) && !d.get_value("fractionne"));
   const maj_libelles_mode = () => {
@@ -2172,14 +2354,14 @@ function rcj_depense(rapport) {
         : mode === "Virement" ? __("Référence du virement (facultatif)")
           : __("N° de chèque (7 chiffres)"));
   };
-  d.fields_dict.mode.$input.on("change", () => { basculer_cheque(); maj_libelles_mode(); });
+  d.fields_dict.mode.$input.on("change", () => { basculer_cheque(); maj_libelles_mode(); maj_retenue(); });
 
   // Paiement fractionné : lignes de règlement rendues dans zone_paiements.
   // « Pas payé » possible par ligne pour les DEUX types facturés (paiement
   // partiel — la part non payée part en dette).
   const rendre_paiements = rcj_zone_paiements(d, etat, () => flt(d.get_value("montant")),
     ["Espèces", "Chèque", "Carte de crédit", "Virement", "Traite bancaire", "Pas payé"]);
-  d.fields_dict.fractionne.$input.on("change", () => { basculer_cheque(); rendre_paiements(); });
+  d.fields_dict.fractionne.$input.on("change", () => { basculer_cheque(); rendre_paiements(); maj_retenue(); });
   d.fields_dict.montant.$input.on("change", rendre_paiements);
 
   frappe.call({
@@ -2188,6 +2370,7 @@ function rcj_depense(rapport) {
       etat.banques = r.message || [];
       d.set_df_property("banque", "options",
         [""].concat(etat.banques).join("\n"));
+      if (initial && initial.banque) d.set_value("banque", initial.banque);
     },
   });
 
@@ -2196,6 +2379,63 @@ function rcj_depense(rapport) {
   basculer_facture();
   basculer_cheque();
   maj_libelles_mode();
+  if (initial) pre_remplir(initial);
+
+  // Correction : tout ce que l'écriture d'origine portait, tel que la fenêtre l'aurait saisi.
+  // La facture est déjà lue (pas de nouvelle analyse exigée) ; sa photo et celle du chèque sont
+  // reconduites par le serveur, sauf si l'opérateur en reprend une.
+  async function pre_remplir(i) {
+    const esc = frappe.utils.escape_html;
+    etat.analyse_faite = true;
+    etat.supplier = i.supplier || null;
+    etat.numero = i.numero_facture || null;
+    etat.date_facture = i.date_facture || null;
+    etat.est_bl = !!i.est_bl;
+    etat.numero_bl = i.numero_bl || null;
+    // ⚠️ `set_value` est asynchrone : sans `await`, `basculer_facture` relisait l'ancien type
+    // (« Dépense non facturée »), cachait la section Facture et remettait le mode à Espèces.
+    await d.set_value("type_depense", i.type_depense);
+    basculer_facture();
+    await d.set_values({ description: i.description || "", montant: i.montant || 0,
+                         fournisseur: i.fournisseur || "", tva: i.tva || 0, taux_tva: i.taux_tva || 0 });
+    if (i.compte) await d.set_value("compte", i.compte);
+    await d.set_value("mode", i.mode || "Espèces");
+    basculer_cheque();
+    maj_libelles_mode();
+    await d.set_value("n_cheque", i.n_cheque || "");
+    if (i.banque) await d.set_value("banque", i.banque);
+    if (i.echeance) await d.set_value("echeance", i.echeance);
+    // La retenue d'origine est tenue pour une saisie (elle ne sera pas écrasée par la
+    // proposition) ; le montant réellement payé d'origine prime, comme à la saisie.
+    retenue_touchee = true;
+    await d.set_value("retenue", i.retenue || 0);
+    if (i.montant_paye) { await d.set_value("montant_paye", i.montant_paye); paye_touche = true; }
+
+    // Le bandeau : ce qu'on corrige, et tout ce qui y est rattaché.
+    const lien = (dt, nom) => nom
+      ? `<a href="/app/${frappe.router.slug(dt)}/${encodeURIComponent(nom)}" target="_blank">${esc(nom)}</a>` : "—";
+    const photos = (i.photos || []).map((p) =>
+      `<a href="#" class="rcj-photo-origine" data-url="${esc(p.url)}">📎 ${esc(p.nom)}</a>`).join(" · ");
+    const mouvements = (i.mouvements || []).map((m) =>
+      `<div>🏦 <a href="/app/identification-bancaire" target="_blank">${esc(m.operation || "")}</a>
+         ${__("du")} ${frappe.datetime.str_to_user(m.date)} — <b>${rcj_dt(flt(m.debit) || flt(m.credit))}</b>
+         (${esc(m.reference || "")}, ${esc(m.statut || "")}${flt(m.ecart) ? ", " + __("écart") + " " + rcj_dt(m.ecart) : ""})</div>`).join("");
+    d.fields_dict.zone_correction.$wrapper.html(`
+      <div class="rcj-recap" style="padding:8px 12px;margin-bottom:8px;font-size:12.5px;background:#f6f7f9;border-radius:6px">
+        <div>✏️ ${__("Écriture corrigée :")} ${lien("Journal Entry", i.name)}
+          ${i.corrige ? `<span class="text-muted">(${__("corrigeait déjà")} ${esc(i.corrige)})</span>` : ""}
+          · ${__("Fiche :")} ${i.fiche_doctype ? lien(i.fiche_doctype, i.fiche || i.depense) : "—"}</div>
+        <div>${__("Pièces :")} ${photos || "—"}</div>
+        ${mouvements || `<div class="text-muted">🏦 ${__("Aucun mouvement bancaire rattaché à cette écriture pour l'instant.")}</div>`}
+      </div>`);
+    d.fields_dict.zone_correction.$wrapper.find(".rcj-photo-origine").on("click", (e) => {
+      e.preventDefault(); rcj_apercu_url($(e.currentTarget).data("url"));
+    });
+    $zf.find(".rcj-ph-nom").html(`<span class="text-muted">✓ ${__("facture d'origine reconduite (bandeau ci-dessus)")}</span>`);
+    $zc.find(".rcj-ph-nom").html(`<span class="text-muted">✓ ${__("photo d'origine reconduite (reprenez-en une si le chèque a changé)")}</span>`);
+    maj_bouton();
+    maj_retenue();
+  }
 }
 
 
@@ -2228,6 +2468,9 @@ RapportCaisseJournaliere.prototype._render_depenses = function () {
         : '<span style="opacity:.25">📎</span>'}</td>
       <td><a href="/app/${frappe.router.slug(l.doctype || "Journal Entry")}/${
         encodeURIComponent(l.name)}" target="_blank">${esc(l.name)}</a></td>
+      <td>${["Dépense avec facture", "Facture d'achat"].includes(l.type) && (l.doctype || "Journal Entry") === "Journal Entry"
+        ? `<button type="button" class="btn btn-xs btn-default rcj-corriger" data-je="${esc(l.name)}" title="${__("Corriger cette dépense (montant, retenue, chèque…)")}">✏️ ${__("Corriger")}</button>`
+        : ""}</td>
     </tr>`;
   }).join("");
 
@@ -2244,7 +2487,7 @@ RapportCaisseJournaliere.prototype._render_depenses = function () {
         <thead><tr><th style="text-align:left">Date</th><th style="text-align:left">Saisie par</th>
           <th style="text-align:left">Type</th><th style="text-align:left">Description</th>
           <th style="text-align:left">Mode</th><th>Montant</th><th>Pièce</th>
-          <th style="text-align:left">Écriture</th></tr></thead>
+          <th style="text-align:left">Écriture</th><th></th></tr></thead>
         <tbody>${body}</tbody>
       </table></div>
     </div>`);
@@ -2255,6 +2498,25 @@ RapportCaisseJournaliere.prototype._render_depenses = function () {
   $c.find(".rcj-piece").on("click", (e) => {
     e.preventDefault();
     rcj_apercu_url($(e.currentTarget).data("url"));
+  });
+  // ✏️ Corriger une dépense facturée a posteriori (30/10/2026) : la fenêtre de saisie se
+  // rouvre pré-remplie depuis l'écriture ; le serveur dit d'abord si la correction est possible.
+  $c.find(".rcj-corriger").on("click", (e) => {
+    const je = $(e.currentTarget).data("je");
+    frappe.call({
+      method: "customization_app.caisse_depenses.details_depense",
+      args: { journal_entry: je },
+      freeze: true, freeze_message: __("Lecture de l'écriture…"),
+      callback: (r) => {
+        const i = r.message || {};
+        if (i.motif_refus) {
+          frappe.msgprint({ title: __("Correction impossible"), indicator: "orange",
+                            message: frappe.utils.escape_html(i.motif_refus) });
+          return;
+        }
+        rcj_depense(this, i);
+      },
+    });
   });
 };
 
@@ -3128,7 +3390,7 @@ function rcj_zone_paiements(d, etat, get_cible, modes_lignes) {
             if (lu.echeance && p.mode === "Traite bancaire" && !p.echeance) p.echeance = lu.echeance;
             if (lu.montant && !(flt(p.montant) > 0)) p.montant = lu.montant;
             rendre();
-          });
+          }, () => flt(p.montant));
         };
         lecteur.readAsDataURL(f);
       };
@@ -3367,7 +3629,7 @@ function rcj_payer_depense(fiche, rapport) {
         if (lu.echeance && d.get_value("mode") === "Traite bancaire" && !d.get_value("echeance")) {
           d.set_value("echeance", lu.echeance);
         }
-      });
+      }, () => flt(d.get_value("montant")));
     };
     lecteur.readAsDataURL(f);
   });
@@ -3884,7 +4146,7 @@ function rcj_reglement_fournisseur(supplier, factures, rapport) {
           if (lu.banque) p.banque = lu.banque;
           if (lu.montant && !(p.montant > 0)) p.montant = lu.montant;
           render_paiements();
-        });
+        }, () => flt(p.montant));
       };
       lecteur.readAsDataURL(f);
     });

@@ -261,7 +261,9 @@ class TestLectureQuelQueSoitLeMode(unittest.TestCase):
     def test_le_garde_par_mode_a_disparu(self):
         with open(DIALOGUE, encoding="utf-8") as f:
             js = f.read()
-        bloc = js[js.index("function rcj_photo_piece_ajoutee"):][:900]
+        # 1 800 caractères : le verrou de l'aperçu et le repli manuel (30/10/2026) précèdent
+        # désormais la lecture du type de pièce dans la fonction.
+        bloc = js[js.index("function rcj_photo_piece_ajoutee"):][:1800]
         self.assertNotIn('if (!["Chèque", "Traite bancaire"].includes(mode)) return;', bloc)
         self.assertIn("lu.type_lu", bloc)
         self.assertIn("mode_propose", bloc)
