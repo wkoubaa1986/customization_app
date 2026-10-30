@@ -107,3 +107,4 @@ customization_app.patches.attribuer_role_inventaire_magasin
 customization_app.patches.prix_vente_verifications
 customization_app.patches.entrepot_achats_magasin
 customization_app.patches.reprise_transformation_00171
+customization_app.patches.sous_traitant_role

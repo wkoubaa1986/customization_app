@@ -119,6 +119,8 @@ frappe.provide("frappe.views");
             });
             w.on("click", "[data-recharger]", () => this.charger());
             w.on("click", "[data-caisse]", () => this._caisse());
+            // Sous-traitant : son stock (page Stock, limitée à SON entrepôt côté serveur).
+            w.on("click", "[data-stock]", () => frappe.set_route("stock-entrepots"));
             // Itinéraire de la journée planifiée (optimiser_tournees.js, chargé sur tout le Desk).
             w.on("click", "[data-itineraire]", () => window.tournees_itineraire
                 && window.tournees_itineraire(this.jour, (this.data || {}).employe || this.employe).catch(() => {}));
@@ -206,6 +208,7 @@ frappe.provide("frappe.views");
                 <button class="btn btn-sm btn-default" data-decaler="1">▶</button>
                 <button class="btn btn-sm btn-primary" data-recharger>🔄 ${__("Actualiser")}</button>
                 <button class="btn btn-sm btn-default" data-caisse>💰 ${__("Ma caisse")}</button>
+                ${m.sous_traitant ? `<button class="btn btn-sm btn-default" data-stock>📦 ${__("Mon stock")}</button>` : ""}
                 <button class="btn btn-sm btn-default" data-itineraire title="${__("Le trajet de la journée : départ, chaque client, retour — km et temps de route mesurés par Google")}">🗺️ ${__("Itinéraire")}</button>
                 ${m.nb_aramex ? `
                 <button class="btn btn-sm btn-default" data-bl-aramex
@@ -688,6 +691,12 @@ frappe.provide("frappe.views");
 
         _terminer(el) {
             const tache = $(el).data("terminer");
+            // Sous-traitant : clôture mobile — articles de son stock + règlement + photos
+            // (cloture_sous_traitant.js), qui crée la commande, le BL et ferme la tâche.
+            if ((this.data || {}).sous_traitant && typeof window.cloture_sous_traitant === "function") {
+                window.cloture_sous_traitant(tache, () => this.charger());
+                return;
+            }
             if (typeof tache_dialogue_cloture !== "function") {
                 frappe.msgprint(__("Le guide de clôture n est pas chargé — rechargez la page."));
                 return;

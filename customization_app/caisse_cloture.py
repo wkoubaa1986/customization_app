@@ -35,7 +35,8 @@ from customization_app.rapport_caisse_journaliere import (
 
 CAISSE_GLOBALE = "Tous les employés"
 ROLES = ("System Manager", "Accounts Manager", "Accounts User",
-         "Sales Manager", "Sales User")
+         "Sales Manager", "Sales User",
+         "Sous-traitant")   # il compte et remet SA caisse (_controler_droits le limite à la sienne)
 
 # ── Rapprochement de la caisse GLOBALE (décision utilisateur 19/08) ──────────
 # Chaque mode a sa nature :

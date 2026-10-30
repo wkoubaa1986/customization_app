@@ -153,9 +153,14 @@ app_license = "mit"
 # jointes), les responsables tout. ⚠️ Une seule affectation de chaque dict dans ce fichier.
 permission_query_conditions = {
     "Activite Employe": "customization_app.suivi_activite.permission_query_conditions",
+    # Sous-traitants : chacun ne lit que SES tâches et SES commandes (sous_traitant.py).
+    "Tache de travail": "customization_app.sous_traitant.permission_query_conditions_tache",
+    "Sales Order": "customization_app.sous_traitant.permission_query_conditions_commande",
 }
 has_permission = {
     "Activite Employe": "customization_app.suivi_activite.has_permission",
+    "Tache de travail": "customization_app.sous_traitant.has_permission_tache",
+    "Sales Order": "customization_app.sous_traitant.has_permission_commande",
 }
 
 # DocType Class
@@ -539,6 +544,11 @@ app_include_js = [_js("customer_quick_entry.js"),
                   _js("aramex_dialogue.js"),
                   _js("taches_gestion_groupe.js"),
                   _js("tache_cloture_partenaire.js"),
+                  # Sous-traitants (30/10/2026) : accueil sur le calendrier + Ma journée, clôture mobile
+                  # (articles de son stock + règlement), création en un geste depuis la liste des employés.
+                  _js("sous_traitant.js"),
+                  _js("cloture_sous_traitant.js"),
+                  _js("sous_traitant_admin.js"),
                   # Coloration des anomalies dans la liste des commandes.
                   # Volontairement en app_include_js et non en doctype_list_js :
                   # woocommerce_fusion réassigne listview_settings["Sales Order"]
@@ -878,3 +888,6 @@ doctype_list_js = {
 website_route_rules = [
     {"from_route": "/suivi/<code>", "to_route": "suivi"},
 ]
+
+# Sous-traitants : `frappe.boot.sous_traitant` (sous_traitant.py).
+boot_session = "customization_app.sous_traitant.boot_session"

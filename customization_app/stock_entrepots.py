@@ -52,7 +52,8 @@ TYPE_TRANSFERT = "Transfer interne"
 PURPOSE = "Material Transfer"
 MARQUE = "Stock par entrepôt"
 RESPONSABLES = {"Responsable magasin", "System Manager"}
-LECTEURS = RESPONSABLES | {"Stock User", "Stock Manager"}
+# « Sous-traitant » (30/10/2026) : il ouvre la page pour SON stock seulement (_acces_verification, verifications_etat).
+LECTEURS = RESPONSABLES | {"Stock User", "Stock Manager", "Sous-traitant"}
 LIMITE_RECHERCHE = 30
 LIMITE_DETAIL = 300
 # Trajet en double validation (Magasin ↔ véhicule, véhicule ↔ défectueux) : l'écriture reste en BROUILLON (le
@@ -1153,10 +1154,21 @@ def _heure(h) -> str:
 
 def config_verification() -> dict:
     cfg = frappe.get_single(CONFIG) if frappe.db.exists("DocType", CONFIG) else None
-    lignes = [{"entrepot": r.entrepot, "jour": r.jour, "heure": _heure(r.heure), "actif": cint(r.actif)}
+    lignes = [{"entrepot": r.entrepot, "jour": r.jour, "heure": _heure(r.heure), "actif": cint(r.actif),
+               "periodicite": r.get("periodicite") or HEBDO}
               for r in (cfg.get("verifications") if cfg else []) or []]
     return {"responsable": cfg.responsable_verification if cfg else None,
             "duree": (cfg.duree_verification if cfg else None) or "1 heure", "lignes": lignes}
+
+
+HEBDO, QUINZAINE = "Chaque semaine", "Toutes les deux semaines"
+
+
+def quinzaine_a_sauter(date_cible, dates_existantes) -> bool:
+    """Toutes les deux semaines : on saute la date cible si une vérification du même stock tombe dans
+    les 13 jours qui la précèdent. PURE."""
+    cible = getdate(date_cible)
+    return any(0 < (cible - getdate(d)).days <= 13 for d in dates_existantes or [])
 
 
 def prochaine_date(jour: str, depuis) -> str:
@@ -1279,6 +1291,10 @@ def planifier_verifications():
         if frappe.db.exists(VERIF, {"entrepot": l["entrepot"], "date": date_cible}):
             continue
         if frappe.db.get_value("Warehouse", l["entrepot"], "disabled") or not _employe_du_stock(l["entrepot"]):
+            continue
+        if l.get("periodicite") == QUINZAINE and quinzaine_a_sauter(
+                date_cible, frappe.get_all(VERIF, filters={"entrepot": l["entrepot"], "statut": ["!=", "Annulée"],
+                                                           "date": [">=", add_days(date_cible, -13)]}, pluck="date")):
             continue
         try:
             crees.append(ouvrir_verification(l["entrepot"], date_cible))

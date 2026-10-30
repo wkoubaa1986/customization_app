@@ -53,6 +53,14 @@ def _employe_de_l_utilisateur():
     return frappe.db.get_value("Employee", {"user_id": frappe.session.user}, "name")
 
 
+def _est_sous_traitant(employe):
+    try:
+        from customization_app.sous_traitant import est_sous_traitant
+        return est_sous_traitant(employe)
+    except Exception:
+        return False
+
+
 def _supervise():
     return bool(set(frappe.get_roles()) & set(ROLES_SUPERVISION))
 
@@ -322,6 +330,9 @@ def ma_journee(date=None, employe=None):
     return {
         "jour": str(jour),
         "employe": cible,
+        # Sous-traitant : l'écran remplace « Clôturer » par la clôture mobile (articles + règlement)
+        # et ajoute « Mon stock ».
+        "sous_traitant": _est_sous_traitant(cible),
         "employe_nom": (frappe.db.get_value("Employee", cible, "employee_name") or cible)
                        if cible else "",
         "sans_employe": not cible,

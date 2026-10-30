@@ -5,17 +5,28 @@
  "doctype": "Page",
  "icon": "package",
  "idx": 0,
- "modified": "2026-10-01 20:00:00.000000",
+ "modified": "2026-10-30 16:33:15.195904",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "stock-entrepots",
  "owner": "Administrator",
  "page_name": "stock-entrepots",
  "roles": [
-  {"role": "System Manager"},
-  {"role": "Stock Manager"},
-  {"role": "Stock User"},
-  {"role": "Responsable magasin"}
+  {
+   "role": "System Manager"
+  },
+  {
+   "role": "Stock Manager"
+  },
+  {
+   "role": "Stock User"
+  },
+  {
+   "role": "Responsable magasin"
+  },
+  {
+   "role": "Sous-traitant"
+  }
  ],
  "script": null,
  "standard": "Yes",
