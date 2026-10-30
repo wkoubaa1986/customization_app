@@ -190,7 +190,7 @@ class TransformationArticles {
       h = '<table class="ta-tbl"><thead><tr><th></th><th>Article</th><th>Entrepôt</th><th class="num">Stock</th><th class="num">Quantité</th><th class="num">Taux</th><th class="num">Valeur</th><th></th></tr></thead><tbody>';
       s.consommes.forEach((l, i) => {
         const ko = flt(l.qty) > flt(l.stock);
-        h += `<tr><td>${img(l)}</td><td>${nom(l)}</td><td>${this._select_wh("conso", i, l)}</td><td class="num ${ko ? "ta-stock-ko" : "ta-stock-ok"}">${this._fmt(l.stock)}</td>
+        h += `<tr><td class="ta-photo">${img(l)}</td><td>${nom(l)}</td><td>${this._select_wh("conso", i, l)}</td><td class="num ${ko ? "ta-stock-ko" : "ta-stock-ok"}">${this._fmt(l.stock)}</td>
           <td class="num"><input type="number" step="any" min="0" class="form-control ta-qty" data-cible="conso" data-idx="${i}" value="${l.qty}"></td>
           <td class="num">${this._fmt(l.taux)}</td><td class="num"><b>${this._fmt(l.valeur)}</b></td>
           <td><span class="ta-del" data-cible="conso" data-idx="${i}" title="Retirer">✕</span></td></tr>`;
@@ -208,7 +208,7 @@ class TransformationArticles {
         const fixe = this.obt[i] && this.obt[i].taux_fixe;
         const ecart = l.ecart_pct === null || l.ecart_pct === undefined ? "" :
           `<div class="${Math.abs(l.ecart_pct) > 20 ? "ta-neg" : "ta-muted"}" style="font-size:10.5px">${l.ecart_pct > 0 ? "+" : ""}${l.ecart_pct} %</div>`;
-        h += `<tr><td>${img(l)}</td><td>${nom(l)}</td><td>${this._select_wh("obt", i, l)}</td><td class="num">${this._fmt(l.stock)}</td>
+        h += `<tr><td class="ta-photo">${img(l)}</td><td>${nom(l)}</td><td>${this._select_wh("obt", i, l)}</td><td class="num">${this._fmt(l.stock)}</td>
           <td class="num"><input type="number" step="any" min="0" class="form-control ta-qty" data-cible="obt" data-idx="${i}" value="${l.qty}"></td>
           <td class="num"><input type="number" step="any" min="0" class="form-control ta-taux" data-idx="${i}" value="${l.taux}" title="Modifier pour fixer ce taux ; le reste de la valeur se répartit sur les autres lignes">
             ${fixe ? `<div style="font-size:10.5px"><a href="#" class="ta-taux-auto" data-idx="${i}">fixé · revenir en auto</a></div>` : ""}</td>
