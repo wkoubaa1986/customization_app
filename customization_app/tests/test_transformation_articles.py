@@ -34,6 +34,26 @@ class TestRegles(unittest.TestCase):
         self.assertEqual(TA.repartir_valeur(100, [{"qty": 1, "taux_fixe": 150, "taux_ref": 1},
                                                   {"qty": 1, "taux_fixe": None, "taux_ref": 1}]), [150.0, 0.0])
 
+    def test_article_nouveau_prend_le_reste_les_connus_gardent_leur_taux(self):
+        """MAT-STE-2026-00171 : osmoseur jamais stocké (référence 0) + 2 coudes à 0,097 + raccord fixé
+        à 6,279, pour 1 224,474 consommés. Avant : coudes à 609,097, osmoseur à 0."""
+        taux = TA.repartir_valeur(1224.474, [
+            {"qty": 1, "taux_fixe": None, "taux_ref": 0},
+            {"qty": 2, "taux_fixe": None, "taux_ref": 0.097},
+            {"qty": 1, "taux_fixe": 6.279, "taux_ref": 6.279},
+        ])
+        self.assertEqual(taux[1:], [0.097, 6.279])
+        self.assertAlmostEqual(taux[0], 1224.474 - 2 * 0.097 - 6.279, places=3)
+        # deux articles nouveaux : le reste à parts égales par unité
+        taux = TA.repartir_valeur(100, [{"qty": 1, "taux_fixe": None, "taux_ref": 0},
+                                        {"qty": 3, "taux_fixe": None, "taux_ref": 0},
+                                        {"qty": 2, "taux_fixe": None, "taux_ref": 5}])
+        self.assertEqual(taux, [22.5, 22.5, 5.0])
+        # pas assez de valeur pour les lignes connues : prorata, l'inconnue au taux moyen connu
+        taux = TA.repartir_valeur(10, [{"qty": 1, "taux_fixe": None, "taux_ref": 0},
+                                       {"qty": 1, "taux_fixe": None, "taux_ref": 20}])
+        self.assertEqual(taux, [5.0, 5.0])
+
     def test_alertes(self):
         self.assertEqual(TA.alertes_stock([{"item_code": "A", "qty": 2, "stock": 3}]), [])
         self.assertEqual(len(TA.alertes_stock([{"item_code": "A", "qty": 4, "stock": 3}])), 1)

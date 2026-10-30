@@ -106,6 +106,14 @@ class TransformationArticles {
       });
     });
     this.$root.on("click", ".ta-annuler", (e) => this._annuler($(e.currentTarget).data("name")));
+    // photo en grand : clic sur une vignette, clic ou Échap pour refermer
+    this.$root.on("click", "img.ta-img", (e) => {
+      e.stopPropagation();
+      const $z = $(`<div class="ta-zoom"><img src="${e.currentTarget.src}"><div class="ta-zoom-nom">${frappe.utils.escape_html(e.currentTarget.alt || "")}</div></div>`).appendTo("body");
+      const fermer = () => { $z.remove(); $(document).off("keydown.ta-zoom"); };
+      $z.on("click", fermer);
+      $(document).on("keydown.ta-zoom", (k) => { if (k.key === "Escape") fermer(); });
+    });
     this.$root.on("click", ".ta-refaire", (e) => this._refaire($(e.currentTarget).data("name"), $(e.currentTarget).data("sens")));
   }
 
@@ -172,7 +180,7 @@ class TransformationArticles {
 
   _render() {
     const s = this.sim;
-    const img = (l) => (l.image ? `<img class="ta-img" src="${l.image}" style="width:34px;height:34px">` : '<span class="ta-img-empty" style="width:34px;height:34px;font-size:14px">📦</span>');
+    const img = (l) => (l.image ? `<img class="ta-img" src="${l.image}" alt="${frappe.utils.escape_html(l.item_code)}" loading="lazy">` : '<span class="ta-img-empty">📦</span>');
     const nom = (l) => `<div class="ta-code">${frappe.utils.escape_html(l.item_code)}${l.est_bundle ? ' <span class="ta-badge">bundle</span>' : ""}</div><div class="ta-name">${frappe.utils.escape_html(l.item_name || "")}</div>`;
 
     // Je consomme

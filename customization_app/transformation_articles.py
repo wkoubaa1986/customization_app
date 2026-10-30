@@ -50,12 +50,43 @@ def repartir_valeur(total: float, lignes: list[dict]) -> list[float]:
     lignes : [{"qty", "taux_fixe" (None si libre), "taux_ref"}]. Les lignes à taux
     fixe gardent leur taux ; le reste de la valeur se répartit sur les lignes
     libres au prorata de qty × taux_ref (à parts égales par unité si aucune
-    référence). Une valeur restante négative donne des taux à 0."""
+    référence). Une valeur restante négative donne des taux à 0.
+
+    ⚠️ Cas mixte (MAT-STE-2026-00171 du 14/10/2026) : un osmoseur jamais stocké (référence 0)
+    obtenu avec deux coudes à 0,097. Au prorata, l'osmoseur pesait 0 et les 1 218 DT sont
+    partis sur les coudes (609 pièce). Désormais, quand au moins une ligne libre n'a PAS de
+    référence, les lignes qui en ont une GARDENT leur taux habituel et tout le reste va aux
+    lignes sans référence (à parts égales par unité) : l'article nouveau est celui qu'on
+    fabrique, c'est lui qui porte la valeur."""
     total = flt(total)
     fixe = sum(flt(l["qty"]) * flt(l["taux_fixe"]) for l in lignes if l.get("taux_fixe") is not None)
     restant = max(total - fixe, 0.0)
     libres = [l for l in lignes if l.get("taux_fixe") is None]
-    poids = [flt(l["qty"]) * flt(l.get("taux_ref")) for l in libres]
+    sans_ref = [l for l in libres if flt(l.get("taux_ref")) <= 0]
+    avec_ref = [l for l in libres if flt(l.get("taux_ref")) > 0]
+    if sans_ref and avec_ref:
+        habituel = sum(flt(l["qty"]) * flt(l["taux_ref"]) for l in avec_ref)
+        if restant > habituel:
+            # les lignes connues valent ce qu'elles valent, l'inconnue prend le reste
+            poids = [0.0 if flt(l.get("taux_ref")) > 0 else flt(l["qty"]) for l in libres]
+            restant_inconnu = restant - habituel
+            somme = sum(poids) or 1.0
+            taux, i = [], 0
+            for l in lignes:
+                if l.get("taux_fixe") is not None:
+                    taux.append(flt(l["taux_fixe"], PRECISION))
+                elif flt(l.get("taux_ref")) > 0:
+                    taux.append(flt(l["taux_ref"], PRECISION))
+                else:
+                    valeur = restant_inconnu * poids[i] / somme
+                    taux.append(flt(valeur / flt(l["qty"]), PRECISION) if flt(l["qty"]) else 0.0)
+                i += 1
+            return taux
+        # pas assez de valeur pour les lignes connues : prorata, l'inconnue pesant le taux moyen connu
+        moyen = habituel / (sum(flt(l["qty"]) for l in avec_ref) or 1.0)
+        poids = [flt(l["qty"]) * (flt(l.get("taux_ref")) or moyen) for l in libres]
+    else:
+        poids = [flt(l["qty"]) * flt(l.get("taux_ref")) for l in libres]
     if libres and sum(poids) <= 0:
         poids = [flt(l["qty"]) for l in libres]
     somme = sum(poids) or 1.0
@@ -261,6 +292,12 @@ def simuler(consommes, obtenus, warehouse=None):
         l["ecart_pct"] = ecart_taux(t, l["taux_ref"])
     total_obt = flt(sum(l["valeur"] for l in obtenus), PRECISION)
     alertes = alertes_stock(consommes)
+    from customization_app.stock_reconditionnement import anomalies_repack
+    refs = {l["item_code"]: flt(l["taux_ref"]) for l in obtenus}
+    alertes += anomalies_repack(
+        [{"item_code": l["item_code"], "qty": l["qty"], "basic_rate": l["taux"],
+          "is_finished_item": 1, "set_basic_rate_manually": 1} for l in obtenus],
+        lambda code: refs.get(code, 0.0), valeur_consommee=total_conso)
     if consommes and not obtenus:
         alertes.append(_("Aucun article obtenu : ajoutez au moins un article dans « J’obtiens »."))
     if obtenus and not consommes:

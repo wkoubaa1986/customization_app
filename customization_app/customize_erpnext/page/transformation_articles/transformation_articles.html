@@ -18,8 +18,13 @@
     .ta-results { max-height: 620px; overflow-y: auto; margin-top: 8px; }
     .ta-res { display: flex; gap: 10px; align-items: center; padding: 6px 4px; border-bottom: 1px solid var(--border-color,#eef1f5); }
     .ta-res:hover { background: rgba(0,0,0,.02); }
-    .ta-img { width: 46px; height: 46px; object-fit: cover; border-radius: 6px; background: #f2f4f7; border: 1px solid var(--border-color,#e4e8ee); flex: none; }
-    .ta-img-empty { display: inline-flex; width: 46px; height: 46px; border-radius: 6px; background: #f2f4f7; align-items: center; justify-content: center; color: #c3cad4; font-size: 18px; flex: none; }
+    .ta-img { width: 56px; height: 56px; object-fit: cover; border-radius: 6px; background: #f2f4f7; border: 1px solid var(--border-color,#e4e8ee); flex: none; cursor: zoom-in; }
+    .ta-img-empty { display: inline-flex; width: 56px; height: 56px; border-radius: 6px; background: #f2f4f7; align-items: center; justify-content: center; color: #c3cad4; font-size: 20px; flex: none; }
+    /* photos des tableaux (demande du 30/10/2026 : trop petites) ; clic = plein écran */
+    .ta-tbl .ta-img, .ta-tbl .ta-img-empty { width: 72px; height: 72px; font-size: 24px; }
+    .ta-zoom { position: fixed; inset: 0; z-index: 1060; background: rgba(20,24,30,.82); display: flex; align-items: center; justify-content: center; cursor: zoom-out; }
+    .ta-zoom img { max-width: 92vw; max-height: 88vh; border-radius: 10px; background: #fff; box-shadow: 0 12px 40px rgba(0,0,0,.5); }
+    .ta-zoom .ta-zoom-nom { position: absolute; bottom: 18px; left: 0; right: 0; text-align: center; color: #fff; font-size: 13px; text-shadow: 0 1px 3px rgba(0,0,0,.8); }
     .ta-res .ta-code { font-weight: 700; font-size: 12.5px; }
     .ta-res .ta-name { font-size: 11.5px; color: var(--text-muted,#6b7280); overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
     .ta-res .ta-meta { font-size: 11px; color: #4b5563; white-space: nowrap; }
