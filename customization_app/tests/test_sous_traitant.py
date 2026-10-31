@@ -123,6 +123,13 @@ class TestVerificationQuinzaine(unittest.TestCase):
         self.assertEqual((SE.HEBDO, SE.QUINZAINE), ("Chaque semaine", "Toutes les deux semaines"))
 
 
+class TestCouleurs(unittest.TestCase):
+    def test_reunion_prevue_rouge_tenue_verte(self):
+        from customization_app import api
+        self.assertEqual(api.COULEUR_REUNION, "#dc2626")
+        self.assertEqual(api.COULEUR_REUNION_TENUE, "#22c55e")
+
+
 class TestCollecteCaisse(unittest.TestCase):
     """31/10/2026 : à la collecte validée, ses paiements quittent son compte et entrent dans la caisse du collecteur."""
 

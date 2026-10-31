@@ -330,7 +330,7 @@ def get_custom_tache_events(start, end, filters=None):
 
 # Les réunions d'équipe du Suivi d'activité (19/10/2026) s'affichent dans le Calendrier de travail, en lecture :
 # un clic ouvre la réunion dans la page Suivi d'activité (pas la fiche Tache), on ne la déplace pas d'ici.
-COULEUR_REUNION = "#0f6e8c"
+COULEUR_REUNION = "#dc2626"            # rouge : une réunion prévue se voit d'un coup d'œil (demande 31/10/2026)
 COULEUR_REUNION_TENUE = "#22c55e"      # clôturée = verte, comme une tâche terminée
 
 
