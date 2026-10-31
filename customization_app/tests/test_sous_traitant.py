@@ -130,6 +130,41 @@ class TestCouleurs(unittest.TestCase):
         self.assertEqual(api.COULEUR_REUNION_TENUE, "#22c55e")
 
 
+class TestEcheancier(unittest.TestCase):
+    """31/10/2026 : moyen de paiement obligatoire sur l'échéancier des VENTES seulement, plus sur les achats."""
+
+    def test_lignes_sans_mode(self):
+        from customization_app import echeancier as E
+        lignes = [{"idx": 1, "mode_of_payment": "Espèces"}, {"idx": 2, "mode_of_payment": None}, {"idx": 3, "mode_of_payment": ""}]
+        self.assertEqual(E.lignes_sans_mode("Sales Order", lignes), [2, 3])
+        self.assertEqual(E.lignes_sans_mode("Sales Invoice", lignes), [2, 3])
+        self.assertEqual(E.lignes_sans_mode("Purchase Invoice", lignes), [])
+        self.assertEqual(E.lignes_sans_mode("Sales Order", []), [])
+
+    def test_cablage(self):
+        with open(os.path.join(BASE, "hooks.py"), encoding="utf-8") as f:
+            self.assertEqual(f.read().count('"customization_app.echeancier.exiger_mode_de_paiement"'), 2)
+        with open(os.path.join(BASE, "patches.txt"), encoding="utf-8") as f:
+            self.assertIn("customization_app.patches.echeancier_mode_achats", f.read())
+        from customization_app.patches import echeancier_mode_achats as P
+        src = inspect.getsource(P.execute)
+        self.assertIn('"reqd", 0', src)
+        self.assertIn('includes(parent.doctype)', src)
+
+
+class TestPiecesJointes(unittest.TestCase):
+    def test_copie_de_scan_sous_identite_systeme(self):
+        """31/10/2026 : un scan déjà joint à une écriture de caisse ne doit pas bloquer l'employé qui saisit la facture."""
+        from customization_app import caisse_depenses as CD
+        for f in (CD._copier_justificatifs, CD._joindre):
+            self.assertIn("_inserer_piece_jointe(", inspect.getsource(f))
+            self.assertNotIn(".insert(ignore_permissions=True)", inspect.getsource(f))
+        src = inspect.getsource(CD._inserer_piece_jointe)
+        self.assertIn('frappe.set_user("Administrator")', src)
+        self.assertIn("finally:", src)
+        self.assertIn('"owner", utilisateur', src)
+
+
 class TestCollecteCaisse(unittest.TestCase):
     """31/10/2026 : à la collecte validée, ses paiements quittent son compte et entrent dans la caisse du collecteur."""
 

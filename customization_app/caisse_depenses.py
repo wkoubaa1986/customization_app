@@ -1498,10 +1498,28 @@ def _copier_justificatifs(fiche_nom, doctype, name,
                 "attached_to_doctype": doctype, "attached_to_name": name,
                 "file_url": f.file_url}):
             continue
-        frappe.get_doc({"doctype": "File", "file_url": f.file_url,
-                        "file_name": f.file_name, "is_private": f.is_private,
-                        "attached_to_doctype": doctype,
-                        "attached_to_name": name}).insert(ignore_permissions=True)
+        _inserer_piece_jointe({"doctype": "File", "file_url": f.file_url,
+                               "file_name": f.file_name, "is_private": f.is_private,
+                               "attached_to_doctype": doctype, "attached_to_name": name})
+
+
+def _inserer_piece_jointe(valeurs: dict):
+    """Insère une pièce jointe qui pointe un fichier DÉJÀ présent, sous identité système.
+
+    Frappe (File.validate_private_file_access) relit la PREMIÈRE pièce portant cette URL et exige que
+    l'utilisateur puisse la lire : quand le scan est aussi joint à l'écriture de caisse (Journal Entry),
+    un employé sans droit comptable est refusé — « You do not have permission to access this file »
+    (Sadok, FAS-1204 → ACC-JV-2026-00973, 31/10/2026). `ignore_permissions` n'y change rien, seule
+    l'identité compte. La pièce reste au nom de l'utilisateur réel."""
+    utilisateur = frappe.session.user
+    frappe.set_user("Administrator")
+    try:
+        doc = frappe.get_doc(valeurs).insert(ignore_permissions=True)
+    finally:
+        frappe.set_user(utilisateur)
+    if utilisateur not in ("Administrator", "Guest"):
+        frappe.db.set_value("File", doc.name, "owner", utilisateur, update_modified=False)
+    return doc
 
 
 def _joindre(fichier, doctype, name):
@@ -1515,11 +1533,10 @@ def _joindre(fichier, doctype, name):
             "attached_to_doctype": doctype, "attached_to_name": name,
             "content_hash": fichier.content_hash}):
         return False
-    frappe.get_doc({"doctype": "File", "file_url": fichier.file_url,
-                    "file_name": fichier.file_name, "is_private": fichier.is_private,
-                    "content_hash": fichier.content_hash,
-                    "attached_to_doctype": doctype,
-                    "attached_to_name": name}).insert(ignore_permissions=True)
+    _inserer_piece_jointe({"doctype": "File", "file_url": fichier.file_url,
+                           "file_name": fichier.file_name, "is_private": fichier.is_private,
+                           "content_hash": fichier.content_hash,
+                           "attached_to_doctype": doctype, "attached_to_name": name})
     return True
 
 
