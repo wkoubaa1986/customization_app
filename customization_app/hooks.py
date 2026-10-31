@@ -216,6 +216,8 @@ doc_events = {
     # seule aux vraies factures d'achat : appariement (fournisseur, n°), copie du
     # justificatif scanné, statut « Saisie » à la soumission.
     "Purchase Invoice": {
+        # Date de comptabilisation = date de la facture du fournisseur tant qu'on n'a pas choisi autrement (31/10/2026).
+        "before_validate": "customization_app.achats_dates.suivre_date_facture",
         # Les achats se réceptionnent en magasin (30/10/2026).
         "validate": "customization_app.achats_magasin.forcer_entrepot_magasin",
         # on_update, pas validate : au validate la facture n'existe pas encore et
@@ -863,7 +865,9 @@ doctype_js = {
     # en attente de leur facture — voir caisse_depenses.bls_en_attente) ; et le panneau qui
     # montre le scan pendant la saisie.
     "Purchase Invoice": ["public/js/purchase_invoice_caisse.js",
-                         "public/js/document_a_saisir.js"],
+                         "public/js/document_a_saisir.js",
+                         # La date de comptabilisation suit la date de la facture du fournisseur (31/10/2026).
+                         "public/js/purchase_invoice_dates.js"],
     # Le scan a été pris en caisse et attaché à la fiche de la file, jamais à la pièce qu'on
     # saisit (demande utilisateur 04/09/2026).
     "Purchase Order": "public/js/document_a_saisir.js",

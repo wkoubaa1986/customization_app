@@ -165,6 +165,29 @@ class TestPiecesJointes(unittest.TestCase):
         self.assertIn('"owner", utilisateur', src)
 
 
+class TestDatesAchats(unittest.TestCase):
+    """31/10/2026 : la date de comptabilisation d'une facture d'achat suit la date de la facture du fournisseur."""
+
+    def test_date_comptabilisation(self):
+        from customization_app.achats_dates import date_comptabilisation as d
+        import datetime
+        self.assertEqual(d("2026-10-26", "2026-10-31", 0), datetime.date(2026, 10, 26))
+        self.assertIsNone(d("2026-10-26", "2026-10-26", 0))        # déjà alignée
+        self.assertIsNone(d("2026-10-26", "2026-10-31", 1))        # date choisie par l'utilisateur
+        self.assertIsNone(d(None, "2026-10-31", 0))                # pas de date de facture
+        self.assertIsNone(d("2026-10-26", "2026-10-31", 0, 1))     # déjà validée
+
+    def test_cablage(self):
+        with open(os.path.join(BASE, "hooks.py"), encoding="utf-8") as f:
+            hooks = f.read()
+        self.assertIn('"before_validate": "customization_app.achats_dates.suivre_date_facture"', hooks)
+        self.assertIn('"public/js/purchase_invoice_dates.js"', hooks)
+        with open(os.path.join(BASE, "public", "js", "purchase_invoice_dates.js"), encoding="utf-8") as f:
+            js = f.read()
+        self.assertIn('frm.set_value("set_posting_time", 1)', js)
+        self.assertIn('frm.set_value("posting_date", frm.doc.bill_date)', js)
+
+
 class TestCollecteCaisse(unittest.TestCase):
     """31/10/2026 : à la collecte validée, ses paiements quittent son compte et entrent dans la caisse du collecteur."""
 
