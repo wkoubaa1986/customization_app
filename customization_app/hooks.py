@@ -325,7 +325,10 @@ doc_events = {
         "before_validate": "customization_app.aramex_stock.sales_order_before_validate",
         # Marge minimale : APRÈS le validate d'ERPNext (qui ré-applique la règle de prix et recalcule
         # le prix), relève les lignes sous la marge plancher et refait les totaux (marge_minimale).
-        "validate": "customization_app.marge_minimale.sales_order_validate",
+        "validate": ["customization_app.marge_minimale.sales_order_validate",
+                     # Échéancier : moyen de paiement obligatoire sur une vente seulement (plus un reqd global
+                     # qui cassait les factures d'achat — 31/10/2026).
+                     "customization_app.echeancier.exiger_mode_de_paiement"],
         # on_update se déclenche à l'enregistrement d'un brouillon ET à la
         # validation : ajouter une ligne de main d'œuvre à un devis non validé
         # met donc aussitôt l'anomalie à jour. on_submit seul l'aurait raté.
@@ -368,6 +371,7 @@ doc_events = {
             # La facture reprend les lignes du BL d'échange : packed items du
             # bundle retirés, lignes composants remises à 0 DT comme sur le BL.
             "customization_app.retour_echange.retirer_pieces_reprises",
+            "customization_app.echeancier.exiger_mode_de_paiement",
         ],
         # Annuler une facture rend le paiement à la ou aux commandes qui l'ont
         # générée, au prorata de leurs lignes. Le plan se calcule AVANT
