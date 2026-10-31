@@ -532,3 +532,20 @@ class TestAnalyseEcarts(unittest.TestCase):
         self.assertTrue(S._voisins({"item_code": "Acc020-A", "item_group": "X"}, {"item_code": "Acc020-C", "item_group": "Y"}))
         self.assertFalse(S._voisins({"item_code": "Acc020-A", "item_group": "X"}, {"item_code": "Acc022-A", "item_group": "X"}))
         self.assertTrue(S._voisins({"item_code": "M-50-FR", "item_group": "Membranes"}, {"item_code": "M-75-Pu", "item_group": "Membranes"}))
+
+
+class TestVerificationsSansObjet(unittest.TestCase):
+    """31/10/2026 : une fiche planifiée d'avance restait au calendrier après la désactivation du réglage ou de
+    l'utilisateur (Stock Akram) — le cron annule désormais ces fiches prévues, et ne planifie plus pour elles."""
+
+    def test_cablage(self):
+        import inspect
+        src = inspect.getsource(S.planifier_verifications)
+        self.assertLess(src.index("annuler_planifiees_sans_objet(aujourd)"), src.index("crees = []"))
+        self.assertIn("if _motif_sans_objet(l):", src)
+        for f in (S.annuler_verification, S.annuler_planifiees_sans_objet):
+            self.assertIn("_annuler(", inspect.getsource(f))
+        src = inspect.getsource(S.annuler_planifiees_sans_objet)
+        for attendu in ('"statut": EN_COURS', '"date": [">=", aujourd]', '"nb_comptes": ["in", [0, None]]'):
+            self.assertIn(attendu, src)
+

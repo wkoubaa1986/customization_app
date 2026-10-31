@@ -1302,21 +1302,58 @@ def ouvrir_verification(entrepot: str, date_prevue, avec_taches: bool = True) ->
     return doc.name
 
 
+def _motif_sans_objet(l) -> str | None:
+    """Pourquoi la vérification planifiée d'un stock n'a plus lieu d'être : réglage désactivé, entrepôt désactivé,
+    plus d'employé actif sur ce stock, ou son utilisateur désactivé. None = elle a lieu d'être."""
+    if not l["actif"]:
+        return "réglage de vérification désactivé"
+    if frappe.db.get_value("Warehouse", l["entrepot"], "disabled"):
+        return "entrepôt désactivé"
+    emp = _employe_du_stock(l["entrepot"])
+    if not emp:
+        return "plus d’employé actif sur ce stock"
+    if emp.user_id and not cint(frappe.db.get_value("User", emp.user_id, "enabled")):
+        return "utilisateur %s désactivé" % emp.user_id
+    return None
+
+
+def annuler_planifiees_sans_objet(aujourd=None) -> list:
+    """Cron : les vérifications PRÉVUES (date à venir, rien compté) d'un stock qui n'a plus lieu d'être vérifié sont
+    annulées avec leurs tâches. Sans cela, une fiche créée d'avance restait au calendrier après la désactivation du
+    réglage ou de l'utilisateur (Stock Akram, VERIF-2026-00017, constaté le 31/10/2026)."""
+    aujourd = getdate(aujourd or nowdate())
+    annulees = []
+    for l in config_verification()["lignes"]:
+        motif = _motif_sans_objet(l)
+        if not motif:
+            continue
+        for nom in frappe.get_all(VERIF, filters={"entrepot": l["entrepot"], "statut": EN_COURS, "date": [">=", aujourd],
+                                                  "nb_comptes": ["in", [0, None]]}, pluck="name"):
+            try:
+                _annuler(frappe.get_doc(VERIF, nom), _("Annulée automatiquement : {0}.").format(motif), "Administrator")
+                annulees.append(nom)
+                frappe.db.commit()
+            except Exception:
+                frappe.db.rollback()
+                frappe.log_error(frappe.get_traceback(), "Annulation vérification %s" % nom[:30])
+    return annulees
+
+
 def planifier_verifications():
     """Cron quotidien : pour chaque stock, la PROCHAINE vérification (dans les 7 jours à venir, aujourd'hui
     compris) existe avec ses deux tâches — les rendez-vous de la semaine à venir sont donc créés d'avance
-    (demande utilisateur 01/10/2026). Idempotent : une fiche par stock et par date."""
+    (demande utilisateur 01/10/2026). Idempotent : une fiche par stock et par date. Les fiches prévues d'un stock
+    qui n'a plus lieu d'être vérifié sont annulées d'abord (`annuler_planifiees_sans_objet`)."""
     if not frappe.db.exists("DocType", VERIF):
         return []
     aujourd = getdate(nowdate())
+    annuler_planifiees_sans_objet(aujourd)
     crees = []
     for l in config_verification()["lignes"]:
-        if not l["actif"]:
+        if _motif_sans_objet(l):
             continue
         date_cible = prochaine_date(l["jour"], aujourd)
         if frappe.db.exists(VERIF, {"entrepot": l["entrepot"], "date": date_cible}):
-            continue
-        if frappe.db.get_value("Warehouse", l["entrepot"], "disabled") or not _employe_du_stock(l["entrepot"]):
             continue
         if l.get("periodicite") == QUINZAINE and quinzaine_a_sauter(
                 date_cible, frappe.get_all(VERIF, filters={"entrepot": l["entrepot"], "statut": ["!=", "Annulée"],
@@ -2037,9 +2074,16 @@ def annuler_verification(name, motif=None):
     _responsable()
     if v.statut not in OUVERTS:
         frappe.throw(_("Cette vérification n’est pas ouverte ({0}).").format(v.statut))
+    _annuler(v, motif, frappe.session.user)
+    return _resume(v)
+
+
+def _annuler(v, motif, par):
+    """Le geste d'annulation lui-même (fiche « Annulée », tâches fermées, employé prévenu) — par un responsable
+    (`annuler_verification`) ou par le cron (`annuler_planifiees_sans_objet`)."""
     v.statut = ANNULEE
-    v.annule_par, v.annule_le = frappe.session.user, now_datetime()
-    v.termine_par, v.termine_le = frappe.session.user, now_datetime()
+    v.annule_par, v.annule_le = par, now_datetime()
+    v.termine_par, v.termine_le = par, now_datetime()
     v.motif_annulation = (motif or "")[:500] or None
     _sauver(v)
     options = (frappe.get_meta("Tache de travail").get_field("status").options or "").split("\n")
@@ -2048,9 +2092,8 @@ def annuler_verification(name, motif=None):
         if t and frappe.db.get_value("Tache de travail", t, "status") == "Open":
             frappe.db.set_value("Tache de travail", t, "status", ferme)
     emp = _employe_du_stock(v.entrepot)
-    if emp and emp.user_id and emp.user_id != frappe.session.user:
-        _prevenir(emp.user_id, _("🧾 Vérification {0} annulée par {1}").format(v.name, frappe.utils.get_fullname(frappe.session.user)), v.name)
-    return _resume(v)
+    if emp and emp.user_id and emp.user_id != par and cint(frappe.db.get_value("User", emp.user_id, "enabled")):
+        _prevenir(emp.user_id, _("🧾 Vérification {0} annulée par {1}").format(v.name, frappe.utils.get_fullname(par)), v.name)
 
 
 @frappe.whitelist(methods=["POST"])
