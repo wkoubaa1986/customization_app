@@ -171,6 +171,12 @@ class TestCablage(unittest.TestCase):
                         "customization_app.sous_traitant.liste", "customization_app.sous_traitant.activer", "Marche à suivre"):
             self.assertIn(attendu, admin)
         self.assertEqual(list(inspect.signature(ST.activer).parameters), ["employe", "actif"])
+        # 31/10/2026 : la pastille du panneau change la couleur et recolore toutes ses tâches ouvertes.
+        self.assertEqual(list(inspect.signature(ST.changer_couleur).parameters), ["employe", "couleur"])
+        self.assertIn("status = 'Open' AND docstatus < 2", inspect.getsource(ST.changer_couleur))
+        self.assertNotIn("frappe.local.__dict__", inspect.getsource(ST))   # werkzeug Local : pas de __dict__
+        for attendu in ("customization_app.sous_traitant.changer_couleur", "[data-couleur]", 'fieldtype: "Color"'):
+            self.assertIn(attendu, admin)
         with open(os.path.join(BASE, "fixtures", "server_script.json"), encoding="utf-8") as f:
             scripts = {s["name"]: s["script"] for s in json.load(f)}
         # le routage (1 lecture + son commentaire) dans chaque script, et la règle de verrou dans le second

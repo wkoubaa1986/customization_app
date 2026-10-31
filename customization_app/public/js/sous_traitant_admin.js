@@ -98,7 +98,8 @@
         const lien = (libelle, route, options) =>
             `<a href="#" data-route='${esc(JSON.stringify(route))}' data-options='${esc(JSON.stringify(options || {}))}'>${libelle}</a>`;
         return `<tr class="${actif ? "" : "text-muted"}">
-            <td><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:${esc(e.couleur)};vertical-align:middle;margin-right:6px"></span>
+            <td><span data-couleur="${esc(e.name)}" data-valeur="${esc(e.couleur)}" title="${__("Changer la couleur du calendrier")}"
+                      style="display:inline-block;width:16px;height:16px;border-radius:4px;background:${esc(e.couleur)};vertical-align:middle;margin-right:6px;cursor:pointer;border:1px solid rgba(0,0,0,.15)"></span>
                 <b>${esc(e.employee_name)}</b><br><small>${esc(e.user_id || "")}${e.cell_number ? " · " + esc(e.cell_number) : ""}</small>
                 ${actif ? "" : `<br><span class="indicator-pill red">${__("Désactivé")}</span>`}</td>
             <td>${e.taches_jour} ${__("aujourd'hui")}<br><small>${e.taches_ouvertes} ${__("ouvertes")}</small></td>
@@ -154,6 +155,21 @@
                 Object.keys(options).forEach((k) => { if (options[k] == null) delete options[k]; });
                 frappe.route_options = options;
                 frappe.set_route(JSON.parse(a.getAttribute("data-route")));
+            });
+            // Pastille → sélecteur de couleur ; enregistrée sur la fiche et appliquée à toutes ses tâches ouvertes.
+            boite.querySelectorAll("[data-couleur]").forEach((sw) => sw.onclick = () => {
+                const d = new frappe.ui.Dialog({
+                    title: __("Couleur du calendrier"),
+                    fields: [{ fieldtype: "Color", fieldname: "couleur", label: __("Couleur"), reqd: 1, default: sw.getAttribute("data-valeur") },
+                             { fieldtype: "HTML", options: `<div class="text-muted">${__("Elle s'applique tout de suite à toutes ses tâches ouvertes du calendrier.")}</div>` }],
+                    primary_action_label: __("Appliquer"),
+                    primary_action: (v) => frappe.call({ method: "customization_app.sous_traitant.changer_couleur",
+                        args: { employe: sw.getAttribute("data-couleur"), couleur: v.couleur }, freeze: true,
+                        callback: (r) => { d.hide(); const n = (r.message || {}).taches_recolorees || 0;
+                            frappe.show_alert({ message: __("Couleur enregistrée : {0} tâche(s) ouverte(s) recolorée(s).", [n]), indicator: "green" }, 5);
+                            rendre(); } }),
+                });
+                d.show();
             });
             boite.querySelectorAll("[data-activer]").forEach((a) => a.onclick = (ev) => {
                 ev.preventDefault();

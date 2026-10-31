@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 
 import frappe
 from frappe import _
@@ -197,7 +198,11 @@ def couleur_calendrier(employe: str):
     seulement ; les employés gardent le barème STAFF_COLORS de api.py."""
     if not employe or not _champs_prets():
         return None
-    cache = frappe.local.__dict__.setdefault("_couleurs_sous_traitants", {})
+    # (werkzeug Local n'a pas de __dict__ : l'ancien setdefault levait, l'erreur était avalée par api.py et la
+    #  tâche naissait GRISE — corrigé le 31/10/2026.)
+    cache = getattr(frappe.local, "_couleurs_sous_traitants", None)
+    if cache is None:
+        cache = frappe.local._couleurs_sous_traitants = {}
     if employe not in cache:
         r = frappe.db.get_value("Employee", employe, [CHAMP_FLAG, CHAMP_COULEUR], as_dict=True)
         cache[employe] = ((r.get(CHAMP_COULEUR) or couleur_par_defaut(employe)) if r and cint(r.get(CHAMP_FLAG)) else None)
@@ -790,6 +795,26 @@ def liste():
                                                      fields=["name", "date", "statut"],
                                                      order_by="date desc", limit=1) or [None])[0] if wh else None
     return emps
+
+
+@frappe.whitelist()
+def changer_couleur(employe, couleur):
+    """Depuis le panneau d'administration : nouvelle couleur de calendrier, appliquée tout de suite à toutes ses
+    tâches OUVERTES (la couleur est stockée sur chaque tâche par api.compute_tache_color) — 31/10/2026."""
+    frappe.only_for("System Manager")
+    couleur = (couleur or "").strip().lower()
+    if not re.fullmatch(r"#[0-9a-f]{6}", couleur):
+        frappe.throw(_("Couleur attendue au format #rrggbb, reçu « {0} »." ).format(couleur))
+    emp = frappe.get_doc("Employee", employe)
+    if not cint(emp.get(CHAMP_FLAG)):
+        frappe.throw(_("{0} n'est pas un sous-traitant.").format(emp.employee_name))
+    emp.db_set(CHAMP_COULEUR, couleur)
+    frappe.local._couleurs_sous_traitants = {}
+    frappe.db.sql("""UPDATE `tabTache de travail` SET color = %s
+                     WHERE custom_choix_du_staff = %s AND status = 'Open' AND docstatus < 2""", (couleur, employe))
+    recolorees = frappe.db.count(DOCTYPE_TACHE, {"custom_choix_du_staff": employe, "status": "Open", "color": couleur})
+    frappe.db.commit()
+    return {"employe": employe, "couleur": couleur, "taches_recolorees": recolorees}
 
 
 @frappe.whitelist()
