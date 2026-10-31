@@ -89,6 +89,20 @@ def _responsable():
         frappe.throw(_("Réservé au responsable magasin."), frappe.PermissionError)
 
 
+def _entrepot_impose() -> str | None:
+    """Sous-traitant (sous_traitant.py) : la page ne parle que de SON entrepôt. Les autres stocks, « Tous », le
+    Magasin, l'onglet BL ne lui sont ni montrés ni servis — décision utilisateur 31/10/2026. Un responsable
+    magasin n'est jamais contraint."""
+    if est_responsable():
+        return None
+    try:
+        from customization_app.sous_traitant import employe_courant
+        emp = employe_courant()
+    except Exception:
+        return None
+    return (emp.custom_warehouse or None) if emp else None
+
+
 # ── Réglage et entrepôts ─────────────────────────────────────────────────────
 
 def magasin() -> str:
@@ -169,6 +183,13 @@ def get_context():
     mien = emp.custom_warehouse if emp and emp.custom_warehouse in actifs else None
     m = magasin()
     t = trajets()
+    impose = _entrepot_impose()
+    if impose:
+        # Sous-traitant : son entrepôt et rien d'autre (pas de Magasin, pas de « Tous », pas de trajets).
+        liste = [w for w in liste if w["name"] == impose]
+        actifs = {w["name"] for w in liste}
+        mien = impose if impose in actifs else None
+        t = None
     return {"entrepots": liste, "mien": mien, "employe": emp.employee_name if emp else None,
             "employe_id": emp.name if emp else None,
             "categories": {w["name"]: categorie(w["name"]) for w in liste},
@@ -176,9 +197,11 @@ def get_context():
             "a_valider": sum(1 for x in transferts_a_valider() if x["a_moi"]) if _champs_validation() else 0,
             "defaut": mien or (m if m in actifs else (liste[0]["name"] if liste else None)),
             "magasin": m, "responsable": est_responsable(), "aujourdhui": nowdate(),
-            "seuils": seuils(), "verification": bool(est_responsable() or mien),
-            "cibles": frappe.get_all(CIBLE, pluck="entrepot") if frappe.db.exists("DocType", CIBLE) else [],
-            "inventaire": _inventaire_autorise()}
+            "seuils": {k: v for k, v in seuils().items() if not impose or k == impose},
+            "verification": bool(est_responsable() or mien),
+            "cibles": (frappe.get_all(CIBLE, pluck="entrepot") if frappe.db.exists("DocType", CIBLE) else []) if not impose else [],
+            "inventaire": _inventaire_autorise() if not impose else False,
+            "sous_traitant": bool(impose)}
 
 
 def _inventaire_autorise() -> bool:
@@ -206,6 +229,7 @@ def get_solde(entrepot=None, recherche=None, negatifs=0, a_reappro=0):
     Avec un entrepôt qui a un seuil (réglage) : chaque article porte `a_reappro` (stock < seuil, les
     articles à zéro compris) et la quantité `a_transferer` (cible − stock) ; `a_reappro=1` ne garde qu'eux."""
     _lecture()
+    entrepot = _entrepot_impose() or entrepot
     valeurs = {"societe": _societe()}
     seuil = seuils().get(entrepot) if entrepot else None
     # Sans le filtre : le stock non nul seulement. Avec « à réapprovisionner » : tout ce qui est sous le
@@ -331,6 +355,7 @@ def get_mouvements(sens=SORTIES, entrepot=None, debut=None, fin=None, recherche=
     """Entrées ou sorties de stock de la période, totalisées par article (le détail se charge à l'ouverture
     d'un article). Quantités toujours positives : le sens dit si elles entrent ou sortent."""
     _lecture()
+    entrepot = _entrepot_impose() or entrepot
     sens = _sens(sens)
     debut, fin = _periode(debut, fin)
     valeurs = {}
@@ -358,6 +383,7 @@ def get_mouvements_article(item_code, sens=SORTIES, entrepot=None, debut=None, f
     """Chaque entrée (ou sortie) de l'article sur la période : pièce, origine (ou destination), commande,
     client, tâches de la commande."""
     _lecture()
+    entrepot = _entrepot_impose() or entrepot
     debut, fin = _periode(debut, fin)
     valeurs = {"item": item_code, "limite": LIMITE_DETAIL}
     conds = _conditions_mouvements(sens, entrepot, debut, fin, valeurs) + ["sle.item_code = %(item)s"]

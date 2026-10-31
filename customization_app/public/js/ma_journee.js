@@ -91,10 +91,11 @@ frappe.provide("frappe.views");
     }
 
     class Journee {
-        constructor() {
+        constructor(jour) {
             poser_css();
             this.data = null;
-            this.jour = frappe.datetime.get_today();
+            // Ouverte sur une date (agenda du sous-traitant, 31/10/2026) ou sur aujourd'hui.
+            this.jour = (typeof jour === "string" && jour) ? jour : frappe.datetime.get_today();
             this.employe = null;
             this.dialog = new frappe.ui.Dialog({
                 title: __("Ma journée"),
@@ -121,6 +122,7 @@ frappe.provide("frappe.views");
             w.on("click", "[data-caisse]", () => this._caisse());
             // Sous-traitant : son stock (page Stock, limitée à SON entrepôt côté serveur).
             w.on("click", "[data-stock]", () => frappe.set_route("stock-entrepots"));
+            w.on("click", "[data-annuler]", (e) => this._annuler($(e.currentTarget).data("annuler")));
             // Itinéraire de la journée planifiée (optimiser_tournees.js, chargé sur tout le Desk).
             w.on("click", "[data-itineraire]", () => window.tournees_itineraire
                 && window.tournees_itineraire(this.jour, (this.data || {}).employe || this.employe).catch(() => {}));
@@ -464,10 +466,14 @@ frappe.provide("frappe.views");
         }
 
         _actions(l, esc) {
-            return `<div class="mj-actions">
-              <a class="btn btn-sm btn-default" target="_blank"
+            // Sous-traitant : pas de fiche à ouvrir — il annule l'intervention depuis la carte (31/10/2026).
+            const ouvrir = (this.data || {}).sous_traitant
+                ? `<button class="btn btn-sm btn-danger" data-annuler="${esc(l.tache)}">❌ ${__("Annuler")}</button>`
+                : `<a class="btn btn-sm btn-default" target="_blank"
                  href="/app/tache-de-travail/${encodeURIComponent(l.tache)}"
-                >${__("Ouvrir la fiche")}</a>
+                >${__("Ouvrir la fiche")}</a>`;
+            return `<div class="mj-actions">
+              ${ouvrir}
               <button class="btn btn-sm btn-primary" data-terminer="${esc(l.tache)}"
                 >✅ ${__("Clôturer")}</button>
             </div>`;
@@ -689,6 +695,37 @@ frappe.provide("frappe.views");
             });
         }
 
+        /** Sous-traitant : annuler SON intervention — même chemin que le bureau (taches_groupe.annuler), avec la
+         *  raison de la fiche et un commentaire ; le client n'est pas prévenu d'ici, c'est le bureau qui décide. */
+        _annuler(tache) {
+            const l = this._ligne(tache);
+            frappe.model.with_doctype("Tache de travail", () => {
+                const champ = (frappe.get_meta("Tache de travail").fields || []).find((f) => f.fieldname === "raison_annulation");
+                const raisons = ((champ && champ.options) || "Autre").split("\n").filter(Boolean);
+                const d = new frappe.ui.Dialog({
+                    title: __("Annuler l'intervention {0}", [tache]),
+                    fields: [
+                        { fieldtype: "HTML", fieldname: "qui", options: `<div style="margin-bottom:8px"><b>${frappe.utils.escape_html(l.client || "")}</b> · ${frappe.utils.escape_html(l.type || "")} · ${frappe.utils.escape_html(l.debut || "")}</div>` },
+                        { fieldtype: "Select", fieldname: "raison", label: __("Raison"), options: raisons.join("\n"), reqd: 1 },
+                        { fieldtype: "Small Text", fieldname: "commentaire", label: __("Commentaire") },
+                    ],
+                    primary_action_label: __("❌ Annuler l'intervention"),
+                    primary_action: (v) => {
+                        if (!v.raison) { frappe.msgprint(__("Choisissez la raison.")); return; }
+                        frappe.confirm(__("Annuler cette intervention ? Le bureau sera informé par la fiche ; le client n'est pas prévenu d'ici."), () => {
+                            frappe.call({
+                                method: "customization_app.sous_traitant.annuler_intervention",
+                                args: { tache, raison: v.raison, commentaire: v.commentaire || null },
+                                freeze: true, freeze_message: __("Annulation…"),
+                                callback: () => { d.hide(); frappe.show_alert({ message: __("Intervention annulée."), indicator: "orange" }); this.charger(); },
+                            });
+                        });
+                    },
+                });
+                d.show();
+            });
+        }
+
         _terminer(el) {
             const tache = $(el).data("terminer");
             // Sous-traitant : clôture mobile — articles de son stock + règlement + photos
@@ -739,7 +776,7 @@ frappe.provide("frappe.views");
     }
 
     // Ouvrable depuis n'importe où (bouton de liste, calendrier, fiche).
-    window.maJournee_ouvrir = () => new Journee();
+    window.maJournee_ouvrir = (jour) => new Journee(jour);
 
     /* ── Le bouton, sur la liste ET le calendrier des tâches ─────────────────
      * ⚠️ PAR LE PROTOTYPE, PAS PAR `frappe.listview_settings` : d'autres

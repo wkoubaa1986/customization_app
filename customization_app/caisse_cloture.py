@@ -23,7 +23,7 @@ attaché au moment de la validation. Une seule clôture par caisse et par jour.
 
 import frappe
 from frappe import _
-from frappe.utils import add_days, flt, getdate, now_datetime
+from frappe.utils import add_days, flt, getdate, now_datetime, nowdate
 
 from customization_app.rapport_caisse_journaliere import (
     CAISSE_ACCOUNTS_LIKE,
@@ -215,9 +215,39 @@ def _controler_droits(caisse):
                      .format(mienne or _("aucune")))
 
 
+def _est_caisse_sous_traitant(caisse) -> bool:
+    if not caisse or caisse == CAISSE_GLOBALE or not frappe.db.has_column("Employee", "custom_sous_traitant"):
+        return False
+    return bool(frappe.db.get_value("Employee", {"employee_name": caisse, "status": "Active"}, "custom_sous_traitant"))
+
+
+def debut_periode(caisse, date):
+    """Le premier jour que couvre la clôture datée `date`. Un employé compte chaque jour : la journée. Un
+    SOUS-TRAITANT compte et remet quand on le voit (chaque semaine, décision utilisateur 31/10/2026) : sa
+    caisse court depuis le lendemain de sa dernière remise (comptée ou validée), ou depuis la date de départ
+    des caisses, ou depuis son arrivée — jamais avant la remise à zéro (Config Caisse)."""
+    date = getdate(date)
+    if not _est_caisse_sous_traitant(caisse):
+        return date
+    from customization_app import caisse_collecte as CC
+    plancher = CC.plancher_report(date, CC.date_depart_pour(caisse, CC.config()))
+    derniere = frappe.db.sql(
+        """SELECT MAX(date_cloture) FROM `tabCloture Caisse`
+           WHERE caisse = %s AND date_cloture < %s AND date_cloture >= %s
+             AND (docstatus = 1 OR (docstatus = 0 AND statut IN %s))""",
+        (caisse, date, plancher or "1900-01-01", tuple(CC.STATUTS_EN_ATTENTE)))
+    if derniere and derniere[0][0]:
+        return min(add_days(getdate(derniere[0][0]), 1), date)
+    arrivee = frappe.db.get_value("Employee", {"employee_name": caisse, "status": "Active"}, "date_of_joining")
+    debut = max(d for d in (plancher, getdate(arrivee) if arrivee else None) if d) if (plancher or arrivee) else date
+    return min(getdate(debut), date)
+
+
 def _mesures(caisse, date):
-    """Les chiffres du jour pour cette caisse, depuis la MÊME source que la page."""
-    data = get_data(str(date), str(date), employe=("" if caisse == CAISSE_GLOBALE else caisse))
+    """Les chiffres de la caisse — la journée, ou la période depuis la dernière remise d'un sous-traitant
+    (`debut_periode`) —, depuis la MÊME source que la page."""
+    debut = debut_periode(caisse, date)
+    data = get_data(str(debut), str(date), employe=("" if caisse == CAISSE_GLOBALE else caisse))
     recap = data.get("recap") or {}
     par_mode = recap.get("par_mode") or {}
     depenses = data.get("depenses") or {}
@@ -230,6 +260,7 @@ def _mesures(caisse, date):
         "total_cheques": cheques,
         "total_autres_modes": autres,
         "depenses_especes": flt(dep_par_mode.get("Espèces"), 3),
+        "debut": str(debut),
         "data": data,
     }
 
@@ -342,14 +373,15 @@ def _controles(data):
     return points
 
 
-def _taches_sans_commande(caisse, date):
+def _taches_sans_commande(caisse, date, debut=None):
     """Les tâches du jour ENCORE OUVERTES et sans commande (Autre, Visite, entretien dont la commande
     n'est pas encore créée…). Le rapport de caisse part des commandes : sans ce contrôle, une tâche
     sans commande restée ouverte ne se voyait jamais (05/10/2026). « Tous les employés » : toutes."""
     from customization_app.rapport_caisse_journaliere import COMPANY
     from customization_app.tournee_optimisation import TYPES_HORS_JOURNEE
     date = getdate(date)
-    filtre, valeurs = "", [COMPANY, "%s 00:00:00" % date, "%s 23:59:59" % date, list(TYPES_HORS_JOURNEE)]
+    debut = getdate(debut) if debut else date
+    filtre, valeurs = "", [COMPANY, "%s 00:00:00" % debut, "%s 23:59:59" % date, list(TYPES_HORS_JOURNEE)]
     if caisse != CAISSE_GLOBALE:
         filtre = "AND e.employee_name = %s"
         valeurs.append(caisse)
@@ -382,10 +414,10 @@ def motifs_du_point(point):
     return MOTIFS[famille] if famille else ["Autre"]
 
 
-def points_controle(caisse, date, data):
+def points_controle(caisse, date, data, debut=None):
     """Tous les points de la clôture de cette caisse, chacun avec la liste de ses motifs."""
     from customization_app import caisse_collecte as CC
-    points = _controles(data) + _taches_sans_commande(caisse, date)
+    points = _controles(data) + _taches_sans_commande(caisse, date, debut)
     if caisse == CAISSE_GLOBALE:
         points += CC.controles_globale(date, data)
     for p in points:
@@ -508,6 +540,21 @@ def valider_bl(bl):
 
 
 @frappe.whitelist()
+def periode_sous_traitant(date=None):
+    """La page Caisse d'un sous-traitant s'ouvre sur SA période : du lendemain de sa dernière remise à
+    aujourd'hui (il remet chaque semaine). None pour tout autre utilisateur."""
+    try:
+        from customization_app.sous_traitant import employe_courant
+        emp = employe_courant()
+    except Exception:
+        emp = None
+    if not emp:
+        return None
+    fin = getdate(date) if date else getdate(nowdate())
+    return {"caisse": emp.employee_name, "debut": str(debut_periode(emp.employee_name, fin)), "fin": str(fin)}
+
+
+@frappe.whitelist()
 def etat(caisse, date):
     """L'état de la caisse pour le dialogue : avant, mouvements, après."""
     frappe.only_for(ROLES)
@@ -537,9 +584,9 @@ def etat(caisse, date):
         en_attente["mienne"] = CC.peut_agir_sur(en_attente)
         en_attente["rouvrable"] = en_attente["mienne"]
         en_attente["justifications_precedentes"] = CC.justifications_depuis_controles(en_attente.get("controles"))
-    points = points_controle(caisse, date, m["data"])
+    points = points_controle(caisse, date, m["data"], m["debut"])
     return {
-        "caisse": caisse, "date": str(date),
+        "caisse": caisse, "date": str(date), "debut": m["debut"],
         "controles": points,
         "en_attente": en_attente,
         "mode_validation": CC.mode_validation(caisse),
@@ -598,7 +645,7 @@ def valider(caisse, date, especes_comptees=None, note=None, justifications=None,
     import json as _json
     justifs = (_json.loads(justifications) if isinstance(justifications, str)
                else (justifications or {}))
-    points = points_controle(caisse, date, m["data"])
+    points = points_controle(caisse, date, m["data"], m["debut"])
     bloquants = [p for p in points if p["bloquant"]]
     if bloquants:
         frappe.throw(_("Validation refusée — bon(s) de livraison à valider d'abord : {0}")

@@ -7,8 +7,10 @@
  * (customization_app.sous_traitant.cloturer_intervention) : commande depuis son stock, bon de
  * livraison, paiements sur son compte, tâche terminée.
  *
- * Si le bureau a déjà lié une commande à la tâche, on ne refait rien : les articles et le
- * règlement sont ceux de la commande, l'écran se limite aux photos et au rapport.
+ * Si le bureau a déjà lié une commande à la tâche : encore en brouillon, elle s'ouvre dans l'écran
+ * (articles, main d'œuvre, règlement) et se modifie — un article retiré reste dans son stock, un
+ * article ajouté en sort ; déjà validée, l'écran la montre et se limite aux photos et au rapport.
+ * Sans commande, la main d'œuvre du type (M-I-OD / M-E-OD / M-R-OD) est proposée d'office (31/10/2026).
  */
 (function () {
     const CSS = `
@@ -22,6 +24,8 @@
     .cst-res { display:flex; align-items:center; gap:10px; padding:8px 4px; border-bottom:1px solid #eef1f5; cursor:pointer; }
     .cst-res:active { background:#f0f9ff; }
     .cst-img { width:48px; height:48px; object-fit:cover; border-radius:8px; background:#f2f4f7; border:1px solid #e4e8ee; flex:none; }
+    .cst-art { display:flex; gap:8px; align-items:center; padding:6px 0; border-bottom:1px solid #eef1f5; }
+    .cst-img-vide { width:48px; height:48px; display:inline-flex; align-items:center; justify-content:center; border-radius:8px; background:#f2f4f7; font-size:20px; flex:none; }
     .cst-ligne { display:grid; grid-template-columns:1fr auto auto auto; gap:6px; align-items:center; padding:8px 0; border-bottom:1px solid #eef1f5; }
     .cst-ligne .qte { display:flex; align-items:center; gap:4px; }
     .cst-ligne .qte button { width:40px; height:40px; font-size:18px; }
@@ -61,7 +65,8 @@
             this.apres = apres || (() => {});
             this.ex = {};
             this.articles = [];          // {item_code, item_name, prix, stock, qty}
-            this.paiements = [];         // {mode, montant, numero, banque}
+            this.paiements = [];         // {mode, montant, numero, banque, motif, commentaire, photo}
+            this.remise = { montant: 0, motif: "", commentaire: "" };   // remise sur le total, justifiée si > 0
             this.d = new frappe.ui.Dialog({
                 title: __("Terminer l'intervention"),
                 size: "large",
@@ -79,17 +84,43 @@
         charger() {
             this.$c.html(`<div class="cst-muted">${__("Chargement…")}</div>`);
             frappe.call({ method: "customization_app.cloture_tache.exigences", args: { tache: this.tache } })
-                .then((r) => { this.ex = r.message || {}; this.rendre(); });
+                .then((r) => {
+                    this.ex = r.message || {};
+                    // La commande préparée par le bureau (à VOIR et, en brouillon, à MODIFIER) et la main d'œuvre
+                    // proposée d'office selon le type d'intervention — décisions utilisateur 31/10/2026.
+                    frappe.call({ method: "customization_app.sous_traitant.commande_liee", args: { tache: this.tache } })
+                        .then((c) => { this.cmd = c.message || {}; this._initialiser(); this.rendre(); });
+                });
+        }
+
+        /** Une seule fois : les lignes de l'écran partent de la commande du bureau (si elle est encore en brouillon)
+         *  ou de la main d'œuvre du type (Installation → M-I-OD, Entretien → M-E-OD, Réparation → M-R-OD). */
+        _initialiser() {
+            if (this.initialise) return;
+            this.initialise = true;
+            const c = this.cmd || {};
+            this.modifiable = !!(c.commande && c.modifiable);
+            if (this.modifiable) {
+                this.articles = (c.lignes || []).map((l) => ({ item_code: l.item_code, item_name: l.item_name, prix: l.prix,
+                    image: l.image, stock: l.stock, service: !!l.service, qty: l.qty }));
+                this.paiements = (c.reglement || []).map((p) => ({ mode: p.mode, montant: p.montant, numero: p.numero || "", banque: p.banque || "",
+                    motif: p.motif || "", commentaire: p.commentaire || "" }));
+                const r = c.remise || {};
+                this.remise = { montant: r.montant || 0, motif: r.motif || "", commentaire: r.commentaire || "" };
+            } else if (!c.commande && c.main_oeuvre) {
+                const m = c.main_oeuvre;
+                this.articles = [{ item_code: m.item_code, item_name: m.item_name, prix: m.prix, image: m.image, stock: null, service: true, qty: 1 }];
+            }
         }
 
         // ------------------------------------------------------------ rendu
         rendre() {
             const ex = this.ex;
-            const commande_liee = !!ex.commande;
+            const commande_liee = !!ex.commande, figee = commande_liee && !this.modifiable;
             this.$c.html(`
               ${this._photos(ex)}
               ${this._position(ex)}
-              ${commande_liee ? this._commande_liee(ex) : this._articles() + this._reglement()}
+              ${figee ? this._commande_liee(ex) : this._articles() + this._remise() + this._reglement()}
               ${this._rapport(ex)}`);
             this.$c.find("#cst-recherche").on("input", frappe.utils.debounce(() => this._chercher(), 250));
             const recherche = this.$c.find("#cst-recherche");
@@ -117,20 +148,36 @@
         }
 
         _commande_liee(ex) {
-            const ci = ex.commande_infos || {};
-            return `<div class="cst-sec"><h5>🧾 ${__("Commande")} <span class="ok">${esc(ex.commande)}</span></h5>
-              <div>${__("Total")} <b>${fmt(ci.total)}</b> · ${__("réglé")} <b>${fmt(ci.total_paye)}</b></div>
+            const ci = ex.commande_infos || {}, c = this.cmd || {};
+            const articles = (c.articles || []).map((a) => `<div class="cst-art">
+                ${a.image ? `<img class="cst-img" src="${esc(a.image)}" alt="" loading="lazy">` : `<span class="cst-img-vide">📦</span>`}
+                <div style="flex:1"><b>${a.qte}×</b> ${esc(a.article || a.code)}
+                  ${(a.configuration || []).length ? `<div class="cst-muted">${(a.configuration || []).map((x) => `${esc(x.attribut)} : <b>${esc(x.valeur)}</b>`).join("<br>")}</div>` : ""}
+                </div></div>`).join("");
+            const reglement = (c.reglement || []).map((p) => `<div>${esc(p.mode || "—")} · <b>${fmt(p.montant)}</b>${p.numero ? ` · n° ${esc(p.numero)}` : ""}</div>`).join("");
+            return `<div class="cst-sec"><h5>🧾 ${__("Commande")} <span class="ok">${esc(ex.commande)}</span>
+                ${c.etat ? `<span class="cst-muted">· ${esc(c.etat)}</span>` : ""}</h5>
+              ${articles ? `<div class="cst-muted" style="margin-top:4px">${__("Articles à poser")}</div>${articles}` : ""}
+              ${reglement ? `<div class="cst-muted" style="margin-top:6px">${__("Règlement prévu")}</div>${reglement}` : ""}
+              <div style="margin-top:6px">${__("Total")} <b>${fmt(c.total != null ? c.total : ci.total)}</b> · ${__("réglé")} <b>${fmt(ci.total_paye)}</b></div>
               <div class="cst-muted">${__("La commande a été préparée par le bureau : articles et règlement y sont déjà. Valider termine l'intervention et sort les articles de votre stock.")}</div>
+              <a class="btn btn-default btn-sm" style="margin-top:6px" target="_blank" href="/app/sales-order/${encodeURIComponent(ex.commande)}">🧾 ${__("Ouvrir la commande")}</a>
             </div>`;
         }
 
         _articles() {
-            const total = this.total();
+            const total = this.total(), c = this.cmd || {};
+            const entete = this.modifiable ? `<div class="cst-muted" style="margin:-4px 0 6px">🧾 ${__("Commande")} <b>${esc(c.commande)}</b> · ${__("préparée par le bureau, modifiable : un article retiré reste dans votre stock, un article ajouté en sort.")}
+                <a target="_blank" href="/app/sales-order/${encodeURIComponent(c.commande)}">${__("Ouvrir")} ↗</a></div>` : "";
             return `<div class="cst-sec"><h5>📦 ${__("Articles posés")} <span class="${this.articles.length ? "ok" : "ko"}">${this.articles.length} ${__("ligne(s)")}</span></h5>
-              <input id="cst-recherche" class="form-control cst-recherche" placeholder="${__("Chercher dans mon stock (nom ou code)…")}" autocomplete="off">
+              ${entete}
+              <input id="cst-recherche" class="form-control cst-recherche" placeholder="${__("Chercher dans mon stock ou la main d'œuvre (nom ou code)…")}" autocomplete="off">
               <div id="cst-resultats"></div>
               <div id="cst-lignes">${this.articles.map((a, i) => `<div class="cst-ligne">
-                  <div><b>${esc(a.item_name)}</b><div class="cst-muted">${esc(a.item_code)} · ${fmt(a.prix)} · ${__("stock")} ${a.stock}</div></div>
+                  <div style="display:flex;gap:8px;align-items:center;min-width:0">
+                    ${a.image ? `<img class="cst-img" src="${esc(a.image)}" alt="" loading="lazy">` : `<span class="cst-img-vide">${a.service ? "🔧" : "📦"}</span>`}
+                    <div style="min-width:0"><b>${esc(a.item_name)}</b><div class="cst-muted">${esc(a.item_code)} · ${fmt(a.prix)} · ${a.service ? __("main d'œuvre") : `${__("stock")} ${a.stock}`}</div></div>
+                  </div>
                   <div class="qte"><button class="btn btn-default" data-moins="${i}">−</button>
                     <input type="number" min="1" step="1" value="${a.qty}" data-qte="${i}">
                     <button class="btn btn-default" data-plus="${i}">+</button></div>
@@ -141,8 +188,28 @@
             </div>`;
         }
 
+        /** Remise sur le total, AVANT le règlement : si elle est utilisée, elle se justifie (motif + commentaire) — 31/10/2026. */
+        _remise() {
+            const c = this.cmd || {}, motifs = c.motifs_remise || [], min = c.commentaire_min || 10, r = this.remise;
+            const montant = parseFloat(r.montant) || 0, manque = montant > 0 && (!r.motif || (r.commentaire || "").trim().length < min);
+            return `<div class="cst-sec"><h5>🏷️ ${__("Remise")} <span class="${montant > 0 ? (manque ? "ko" : "ok") : ""}">${montant > 0 ? `− ${fmt(montant)}` : __("aucune")}</span></h5>
+              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                <input type="number" step="0.001" min="0" class="form-control" style="max-width:140px;font-size:15px" value="${montant || ""}" data-remise-montant placeholder="${__("Montant")}">
+                <span class="cst-muted">${__("Total")} ${fmt(this.total())} → ${__("net à régler")} <b>${fmt(this.net())}</b></span>
+              </div>
+              ${montant > 0 ? `<div style="display:flex;flex-direction:column;gap:6px;margin-top:6px">
+                <select class="form-control" data-remise-motif style="font-size:15px">
+                  <option value="">${__("Pourquoi cette remise ?")}</option>
+                  ${motifs.map((m) => `<option value="${esc(m)}"${m === (r.motif || "") ? " selected" : ""}>${esc(m)}</option>`).join("")}
+                </select>
+                <textarea class="form-control" rows="2" data-remise-commentaire style="font-size:15px" placeholder="${__("Expliquez ({0} caractères minimum)", [min])}">${esc(r.commentaire || "")}</textarea>
+                ${manque ? `<div class="cst-muted" style="color:#b02a37">${__("Motif et commentaire obligatoires pour une remise.")}</div>` : ""}
+              </div>` : ""}
+            </div>`;
+        }
+
         _reglement() {
-            const total = this.total(), regle = this.regle(), reste = Math.round((total - regle) * 1000) / 1000;
+            const total = this.net(), regle = this.regle(), reste = Math.round((total - regle) * 1000) / 1000;
             return `<div class="cst-sec"><h5>💰 ${__("Règlement")} <span class="cst-reste ${Math.abs(reste) < 0.005 && total > 0 ? "ok" : "ko"}">${__("reste")} ${fmt(reste)}</span></h5>
               <div class="cst-modes">${MODES.map((m) => `<button class="btn btn-default" data-mode="${esc(m.v)}">${m.l}</button>`).join("")}</div>
               ${this.paiements.map((p, i) => `<div class="cst-pay">
@@ -150,11 +217,74 @@
                  <input type="number" step="0.001" min="0" class="form-control" value="${p.montant}" data-montant="${i}" placeholder="${__("Montant")}">
                  ${["Chèque", "Traite bancaire LC"].includes(p.mode) ? `
                  <input type="text" class="form-control" value="${esc(p.numero || "")}" data-numero="${i}" placeholder="${__("N°")}">
-                 <select class="form-control" data-banque="${i}">${BANQUES.map((b) => `<option value="${esc(b)}"${b === (p.banque || "") ? " selected" : ""}>${b || __("Banque…")}</option>`).join("")}</select>` : ""}
+                 <select class="form-control" data-banque="${i}">${BANQUES.map((b) => `<option value="${esc(b)}"${b === (p.banque || "") ? " selected" : ""}>${b || __("Banque…")}</option>`).join("")}</select>
+                 <div class="plein" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                   <button class="btn btn-default btn-sm" data-photo-piece="${i}" style="min-height:44px">📷 ${p.photo ? __("Reprendre la photo") : __("Photo de la pièce")}</button>
+                   <input type="file" accept="image/*" capture="environment" style="display:none" data-fichier-piece="${i}">
+                   ${p.photo ? `<img src="${p.photo}" alt="" style="width:56px;height:40px;object-fit:cover;border-radius:6px;border:1px solid #e4e8ee">` : ""}
+                   <span class="cst-muted">${esc(p.lecture || __("La photo est lue automatiquement : n°, banque et montant se pré-remplissent, vérifiez."))}</span>
+                 </div>` : ""}
+                 ${p.mode === "Dette non payée" ? this._dette(p, i) : ""}
                  <button class="btn btn-default btn-sm plein" data-retirer-pay="${i}">✕ ${__("Retirer")}</button>
                </div>`).join("")}
-              <div class="cst-muted">${__("Plusieurs lignes = paiement fractionné. Un règlement dû plus tard = « Dette ».")}</div>
+              <div class="cst-muted">${__("Plusieurs lignes = paiement fractionné. Un règlement dû plus tard = « Dette » : dites pourquoi.")}</div>
             </div>`;
+        }
+
+        /** Photo du chèque / de la traite : gardée sur la ligne (jointe à la commande au serveur) et LUE par OpenAI
+         *  (caisse_pieces.lire_piece, la même lecture que la caisse) pour pré-remplir n°, banque, montant ;
+         *  il vérifie et corrige. Une panne de lecture n'empêche rien (31/10/2026). */
+        _photo_piece(i, fichier) {
+            const p = this.paiements[i];
+            if (!p || !fichier) return;
+            const lecteur = new FileReader();
+            lecteur.onload = () => {
+                p.photo = lecteur.result;
+                p.photo_nom = fichier.name;
+                p.lecture = __("🤖 Lecture de la pièce…");
+                this._memoriser(); this.rendre();
+                frappe.call({
+                    method: "customization_app.caisse_pieces.lire_piece",
+                    args: { photo: p.photo, mode: p.mode === "Traite bancaire LC" ? "Traite bancaire" : "Chèque" },
+                    callback: (r) => {
+                        const lu = r.message || {};
+                        if (lu.erreur || lu.lisible === false || (!lu.numero && !lu.montant)) {
+                            p.lecture = "⚠️ " + (lu.erreur || __("Photo peu lisible : saisie manuelle."));
+                            this.rendre(); return;
+                        }
+                        const bouts = [];
+                        if (lu.numero) { p.numero = lu.numero; bouts.push(`n° ${lu.numero}`); }
+                        if (lu.banque && BANQUES.includes(lu.banque)) { p.banque = lu.banque; bouts.push(lu.banque); }
+                        else if (lu.banque_lue) bouts.push(__("banque lue « {0} » (hors liste)", [lu.banque_lue]));
+                        if (lu.montant) {
+                            if (!(parseFloat(p.montant) > 0)) { p.montant = lu.montant; bouts.push(fmt(lu.montant)); }
+                            else if (Math.abs(parseFloat(p.montant) - lu.montant) > 0.005) bouts.push(__("⚠️ montant lu {0} ≠ saisi {1}", [fmt(lu.montant), fmt(p.montant)]));
+                            else bouts.push(__("montant ✓"));
+                        }
+                        if (lu.type_lu === "Traite bancaire" && p.mode === "Chèque") bouts.push(__("⚠️ la pièce ressemble à une traite"));
+                        if (lu.type_lu === "Chèque" && p.mode === "Traite bancaire LC") bouts.push(__("⚠️ la pièce ressemble à un chèque"));
+                        p.lecture = "✅ " + __("Lu : {0} — vérifiez.", [bouts.join(" · ")]);
+                        this._memoriser(); this.rendre();
+                    },
+                    error: () => { p.lecture = "⚠️ " + __("Lecture indisponible : saisie manuelle."); this.rendre(); },
+                });
+            };
+            lecteur.readAsDataURL(fichier);
+        }
+
+        /** Une dette se justifie : pourquoi (liste du serveur) + un commentaire d'au moins N caractères (31/10/2026). */
+        _dette(p, i) {
+            const c = this.cmd || {}, motifs = c.motifs_dette || [], min = c.commentaire_min || 10;
+            const manque = !p.motif || (p.commentaire || "").trim().length < min;
+            return `<div class="plein" style="display:flex;flex-direction:column;gap:6px">
+                <select class="form-control" data-motif="${i}" style="font-size:15px">
+                  <option value="">${__("Pourquoi c'est une dette ?")}</option>
+                  ${motifs.map((m) => `<option value="${esc(m)}"${m === (p.motif || "") ? " selected" : ""}>${esc(m)}</option>`).join("")}
+                </select>
+                <textarea class="form-control" rows="2" data-commentaire="${i}" style="font-size:15px"
+                  placeholder="${__("Expliquez ({0} caractères minimum)", [min])}">${esc(p.commentaire || "")}</textarea>
+                ${manque ? `<div class="cst-muted" style="color:#b02a37">${__("Motif et commentaire obligatoires pour une dette.")}</div>` : ""}
+              </div>`;
         }
 
         _rapport(ex) {
@@ -164,6 +294,7 @@
         }
 
         total() { return Math.round(this.articles.reduce((s, a) => s + a.qty * a.prix, 0) * 1000) / 1000; }
+        net() { return Math.max(0, Math.round((this.total() - (parseFloat(this.remise.montant) || 0)) * 1000) / 1000); }
         regle() { return Math.round(this.paiements.reduce((s, p) => s + (parseFloat(p.montant) || 0), 0) * 1000) / 1000; }
 
         // ------------------------------------------------------------ actions
@@ -177,13 +308,20 @@
             w.on("change", "[data-qte]", (e) => { const i = $(e.currentTarget).data("qte"); this.articles[i].qty = Math.max(1, parseInt(e.currentTarget.value, 10) || 1); this._memoriser(); this.rendre(); });
             w.on("click", "[data-retirer]", (e) => { this.articles.splice($(e.currentTarget).data("retirer"), 1); this._memoriser(); this.rendre(); });
             w.on("click", "[data-mode]", (e) => {
-                const reste = Math.max(0, Math.round((this.total() - this.regle()) * 1000) / 1000);
-                this.paiements.push({ mode: $(e.currentTarget).data("mode"), montant: reste, numero: "", banque: "" });
+                const reste = Math.max(0, Math.round((this.net() - this.regle()) * 1000) / 1000);
+                this.paiements.push({ mode: $(e.currentTarget).data("mode"), montant: reste, numero: "", banque: "", motif: "", commentaire: "" });
                 this._memoriser(); this.rendre();
             });
             w.on("change", "[data-montant]", (e) => { this.paiements[$(e.currentTarget).data("montant")].montant = parseFloat(e.currentTarget.value) || 0; this._memoriser(); this.rendre(); });
             w.on("change", "[data-numero]", (e) => { this.paiements[$(e.currentTarget).data("numero")].numero = e.currentTarget.value; });
             w.on("change", "[data-banque]", (e) => { this.paiements[$(e.currentTarget).data("banque")].banque = e.currentTarget.value; });
+            w.on("click", "[data-photo-piece]", (e) => this.$c.find(`[data-fichier-piece="${$(e.currentTarget).data("photo-piece")}"]`).trigger("click"));
+            w.on("change", "[data-fichier-piece]", (e) => this._photo_piece($(e.currentTarget).data("fichier-piece"), e.currentTarget.files && e.currentTarget.files[0]));
+            w.on("change", "[data-remise-montant]", (e) => { this.remise.montant = parseFloat(e.currentTarget.value) || 0; this._memoriser(); this.rendre(); });
+            w.on("change", "[data-remise-motif]", (e) => { this.remise.motif = e.currentTarget.value; this._memoriser(); this.rendre(); });
+            w.on("input", "[data-remise-commentaire]", (e) => { this.remise.commentaire = e.currentTarget.value; });
+            w.on("change", "[data-motif]", (e) => { this.paiements[$(e.currentTarget).data("motif")].motif = e.currentTarget.value; this._memoriser(); this.rendre(); });
+            w.on("input", "[data-commentaire]", (e) => { this.paiements[$(e.currentTarget).data("commentaire")].commentaire = e.currentTarget.value; });
             w.on("click", "[data-retirer-pay]", (e) => { this.paiements.splice($(e.currentTarget).data("retirer-pay"), 1); this._memoriser(); this.rendre(); });
             w.on("input", "#cst-rapport", (e) => { this.rapport = e.currentTarget.value; });
         }
@@ -203,9 +341,9 @@
                 this._res = res;
                 $r.html(res.length ? res.map((a, i) => `<div class="cst-res" data-ajouter="${i}">
                     ${a.image ? `<img class="cst-img" src="${a.image}">` : '<span class="cst-img"></span>'}
-                    <div style="flex:1;min-width:0"><b>${esc(a.item_name)}</b><div class="cst-muted">${esc(a.item_code)} · ${__("stock")} ${a.stock}</div></div>
+                    <div style="flex:1;min-width:0"><b>${esc(a.item_name)}</b><div class="cst-muted">${esc(a.item_code)} · ${a.service ? __("main d'œuvre") : `${__("stock")} ${a.stock}`}</div></div>
                     <div><b>${fmt(a.prix)}</b></div></div>`).join("")
-                    : `<div class="cst-muted" style="padding:8px">${__("Rien dans votre stock pour cette recherche.")}</div>`);
+                    : `<div class="cst-muted" style="padding:8px">${__("Rien dans votre stock ni en main d'œuvre pour cette recherche.")}</div>`);
             });
         }
 
@@ -214,7 +352,7 @@
             if (!a) return;
             const existe = this.articles.find((x) => x.item_code === a.item_code);
             if (existe) existe.qty += 1;
-            else this.articles.push({ item_code: a.item_code, item_name: a.item_name, prix: a.prix, stock: a.stock, qty: 1 });
+            else this.articles.push({ item_code: a.item_code, item_name: a.item_name, prix: a.prix, image: a.image, stock: a.stock, service: !!a.service, qty: 1 });
             this.dernier_motif = "";
             this.rendre();
         }
@@ -258,15 +396,23 @@
             const ex = this.ex;
             const rapport = (this.$c.find("#cst-rapport").val() || this.rapport || "").trim();
             if (ex.rapport_requis && !ex.rapport && !rapport) { frappe.msgprint(__("Le rapport d'intervention est obligatoire.")); return; }
-            if (!ex.commande) {
-                if (!this.articles.length) { frappe.msgprint(__("Ajoutez au moins un article de votre stock.")); return; }
-                const reste = Math.round((this.total() - this.regle()) * 1000) / 1000;
-                if (Math.abs(reste) >= 0.005) { frappe.msgprint(__("Le règlement doit couvrir le total : reste {0}.", [fmt(reste)])); return; }
+            if (!ex.commande || this.modifiable) {
+                if (!this.articles.length) { frappe.msgprint(__("Ajoutez au moins un article de votre stock ou une main d'œuvre.")); return; }
+                const min = (this.cmd || {}).commentaire_min || 10, rm = parseFloat(this.remise.montant) || 0;
+                if (rm > this.total() + 0.005) { frappe.msgprint(__("La remise dépasse le total.")); return; }
+                if (rm > 0 && (!this.remise.motif || (this.remise.commentaire || "").trim().length < min)) {
+                    frappe.msgprint(__("Une remise doit être justifiée : choisissez pourquoi et expliquez en commentaire ({0} caractères minimum).", [min])); return;
+                }
+                const reste = Math.round((this.net() - this.regle()) * 1000) / 1000;
+                if (Math.abs(reste) >= 0.005) { frappe.msgprint(__("Le règlement doit couvrir le net à régler : reste {0}.", [fmt(reste)])); return; }
+                const dette = this.paiements.find((p) => p.mode === "Dette non payée" && (!p.motif || (p.commentaire || "").trim().length < min));
+                if (dette) { frappe.msgprint(__("Une dette doit être justifiée : choisissez pourquoi et expliquez en commentaire ({0} caractères minimum).", [min])); return; }
             }
             frappe.call({
                 method: "customization_app.sous_traitant.cloturer_intervention",
                 args: { tache: this.tache, articles: this.articles.map((a) => ({ item_code: a.item_code, qty: a.qty })),
-                        paiements: this.paiements, rapport_visite: rapport || null },
+                        paiements: this.paiements, rapport_visite: rapport || null,
+                        remise: (parseFloat(this.remise.montant) || 0) > 0 ? this.remise : null },
                 freeze: true, freeze_message: __("Commande, bon de livraison, clôture…"),
                 callback: (r) => {
                     const m = r.message || {};

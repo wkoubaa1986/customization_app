@@ -39,6 +39,14 @@ def execute():
          "options": "Account", "insert_after": "custom_sous_traitant", "depends_on": "eval:doc.custom_sous_traitant"},
         {"fieldname": "custom_couleur", "label": "Couleur du calendrier", "fieldtype": "Color",
          "insert_after": "custom_compte_caisse", "depends_on": "eval:doc.custom_sous_traitant"},
+    ], "Sales Order": [
+        # Une remise faite à la clôture mobile se justifie : « motif — commentaire » (31/10/2026).
+        {"fieldname": "custom_justification_remise", "label": "Justification de la remise", "fieldtype": "Small Text",
+         "insert_after": "discount_amount", "read_only": 1, "depends_on": "eval:doc.custom_justification_remise"},
+    ], "Payment Schedule": [
+        # Une dette saisie à la clôture mobile se justifie : « motif — commentaire » (31/10/2026).
+        {"fieldname": "custom_justification_dette", "label": "Justification de la dette", "fieldtype": "Small Text",
+         "insert_after": "custom_banque", "read_only": 1, "depends_on": "eval:doc.custom_justification_dette"},
     ]}, ignore_validate=True, update=True)
     for doctype, types in DROITS.items():
         if not frappe.db.exists("DocType", doctype):

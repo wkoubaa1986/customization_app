@@ -16,7 +16,7 @@ Décisions utilisateur du 30/10/2026
 
 Ce module : la création en un geste (`creer`), la clôture mobile (`cloturer_intervention` : commande
 depuis son stock + règlement + bon de livraison + tâche), la recherche dans son stock, les droits
-(chaque sous-traitant ne lit que ses tâches et ses commandes) et le profil pour l'écran.
+(chaque sous-traitant ne lit que ses tâches, ses vérifications de stock et ses clôtures de caisse ; commandes et BL restent lisibles en entier, il a besoin de l’historique — 31/10/2026) et le profil pour l'écran.
 """
 from __future__ import annotations
 
@@ -34,11 +34,30 @@ CHAMP_COULEUR = "custom_couleur"
 COMPTE_PARENT = "Comptes bancaires - A&S"
 ENTREPOT_PARENT = "Tous les entrepôts - A&S"
 PRIX_LISTE = "Vente standard"
+#: la commande d'un sous-traitant : vente directe, TVA incluse dans ses prix (cf. cloture_tache / api.py)
+TYPE_TRANSACTION = "Vente directe sans BL et Facture"
+TAXES = "Vente Standard Sans Timbre Fiscale - A&S"
 DOCTYPE_TACHE = "Tache de travail"
 
 #: les modes qu'il peut saisir à la clôture — pas de virement, pas de carte (décision 30/10/2026)
 MODES_PERMIS = ("Espèces", "Chèque", "Traite bancaire LC", "Dette non payée")
 MODES_AVEC_PIECE = ("Chèque", "Traite bancaire LC")
+MODE_DETTE = "Dette non payée"
+#: une dette se JUSTIFIE (décision utilisateur 31/10/2026) : un motif de cette liste + un commentaire d'au moins
+#: COMMENTAIRE_MIN caractères, gardés sur la ligne d'échéancier (custom_justification_dette) et en commentaire de la commande.
+MOTIFS_DETTE = ("Le client paiera plus tard (date dans le commentaire)", "Dette accordée par la direction (qui ?)",
+                "Client professionnel : paiement sur facture ou virement", "Litige avec le client", "Autre")
+COMMENTAIRE_MIN = 10
+CHAMP_JUSTIF = "custom_justification_dette"
+#: une REMISE (sur le total de la commande) se justifie de même (décision utilisateur 31/10/2026) ;
+#: gardée sur la commande (custom_justification_remise) et en commentaire.
+MOTIFS_REMISE = ("Geste commercial (client fidèle)", "Remise accordée par la direction (qui ?)", "Promotion en cours",
+                 "Pièce reprise ou défaut constaté", "Autre")
+CHAMP_JUSTIF_REMISE = "custom_justification_remise"
+#: main d'œuvre proposée d'office à la clôture selon le type d'intervention (décision utilisateur 31/10/2026) ;
+#: il peut la retirer ou la changer. Groupe d'articles des prestations (sans stock).
+MAIN_OEUVRE = {"Installation": "M-I-OD", "Entretien": "M-E-OD", "Réparation": "M-R-OD"}
+GROUPE_MAIN_OEUVRE = "Main d’œuvre"
 TOLERANCE = 0.005
 #: couleurs de calendrier attribuées aux sous-traitants sans couleur choisie (lisibles sur texte blanc)
 PALETTE = ("#7C3AED", "#0E7490", "#B45309", "#BE185D", "#4D7C0F", "#1D4ED8", "#9F1239", "#374151")
@@ -60,10 +79,11 @@ def couleur_par_defaut(employe: str) -> str:
     return PALETTE[h % len(PALETTE)]
 
 
-def lignes_articles(articles: list, stock: dict, prix: dict) -> tuple[list, list]:
+def lignes_articles(articles: list, stock: dict, prix: dict, sans_stock=()) -> tuple[list, list]:
     """Les lignes de commande depuis la saisie de l'écran. -> (lignes, erreurs). PURE.
     `articles` : [{item_code, qty}] ; `stock` : {item_code: qté dans SON entrepôt} ;
-    `prix` : {item_code: prix de vente}. Refus : quantité nulle, stock insuffisant, prix inconnu."""
+    `prix` : {item_code: prix de vente} ; `sans_stock` : les codes de prestation (main d'œuvre), jamais
+    comptés dans un stock. Refus : quantité nulle, stock insuffisant, prix inconnu."""
     lignes, erreurs = [], []
     cumul: dict[str, float] = {}
     for a in articles or []:
@@ -74,7 +94,7 @@ def lignes_articles(articles: list, stock: dict, prix: dict) -> tuple[list, list
             erreurs.append(_("{0} : quantité invalide.").format(code))
             continue
         cumul[code] = cumul.get(code, 0.0) + qte
-        if cumul[code] > flt(stock.get(code)) + 1e-9:
+        if code not in sans_stock and cumul[code] > flt(stock.get(code)) + 1e-9:
             erreurs.append(_("{0} : {1} demandé, {2} dans votre stock.").format(code, cumul[code], flt(stock.get(code))))
             continue
         if flt(prix.get(code)) <= 0:
@@ -103,12 +123,22 @@ def lignes_paiement(paiements: list, total: float, jour=None) -> tuple[list, lis
         if mode in MODES_AVEC_PIECE and not numero:
             erreurs.append(_("{0} : le numéro est obligatoire.").format(mode))
             continue
+        motif, commentaire = (p.get("motif") or "").strip(), " ".join((p.get("commentaire") or "").split())
+        if mode == MODE_DETTE:
+            if motif not in MOTIFS_DETTE:
+                erreurs.append(_("Dette : choisissez pourquoi c'est une dette."))
+                continue
+            if len(commentaire) < COMMENTAIRE_MIN:
+                erreurs.append(_("Dette : expliquez en commentaire ({0} caractères minimum).").format(COMMENTAIRE_MIN))
+                continue
         # ERPNext refuse deux échéances à la même date : la 2e ligne d'un fractionné prend J+1, la 3e J+2…
         ligne = {"mode_of_payment": mode, "payment_amount": round(montant, 3),
                  "due_date": str(add_days(getdate(jour), len(lignes))) if jour else None}
         if mode in MODES_AVEC_PIECE:
             ligne["custom__n_chèque__transaction"] = numero
             ligne["custom_banque"] = (p.get("banque") or "").strip()
+        if mode == MODE_DETTE:
+            ligne[CHAMP_JUSTIF] = "%s — %s" % (motif, commentaire)
         lignes.append(ligne)
     somme = round(sum(l["payment_amount"] for l in lignes), 3)
     if not lignes:
@@ -116,6 +146,27 @@ def lignes_paiement(paiements: list, total: float, jour=None) -> tuple[list, lis
     elif abs(somme - flt(total)) > TOLERANCE:
         erreurs.append(_("Les règlements font {0}, la commande {1}.").format(somme, round(flt(total), 3)))
     return lignes, erreurs
+
+
+def remise_valide(remise, total: float) -> tuple[float, str, list]:
+    """La remise saisie à l'écran : {montant, motif, commentaire}. -> (montant, justification, erreurs). PURE.
+    Zéro ou vide = pas de remise. Sinon : un motif de la liste, un commentaire d'au moins COMMENTAIRE_MIN
+    caractères, et jamais plus que le total."""
+    remise = remise or {}
+    montant = round(flt(remise.get("montant")), 3)
+    if montant <= 0:
+        return 0.0, "", []
+    erreurs = []
+    if montant > flt(total) + TOLERANCE:
+        erreurs.append(_("Remise : {0} dépasse le total {1}.").format(montant, round(flt(total), 3)))
+    motif, commentaire = (remise.get("motif") or "").strip(), " ".join((remise.get("commentaire") or "").split())
+    if motif not in MOTIFS_REMISE:
+        erreurs.append(_("Remise : choisissez pourquoi vous faites une remise."))
+    elif len(commentaire) < COMMENTAIRE_MIN:
+        erreurs.append(_("Remise : expliquez en commentaire ({0} caractères minimum).").format(COMMENTAIRE_MIN))
+    if erreurs:
+        return montant, "", erreurs
+    return montant, "%s — %s" % (motif, commentaire), []
 
 
 # --------------------------------------------------------------------------- qui est qui
@@ -170,23 +221,35 @@ def has_permission_tache(doc, user=None, permission_type=None):
     return doc.get("custom_choix_du_staff") == emp.name
 
 
-def permission_query_conditions_commande(user=None):
-    """Ses commandes : celles de SES tâches, et celles qu'il a créées."""
+def permission_query_conditions_verification(user=None):
+    """Ses vérifications de stock : celles de SON entrepôt."""
     emp = employe_courant(user)
     if not emp or _est_supervision():
         return ""
-    return ("(`tabSales Order`.`owner` = {u} or `tabSales Order`.`name` in (select commande_client from "
-            "`tabTache de travail` where custom_choix_du_staff = {e} and ifnull(commande_client, '') != ''))"
-            .format(u=frappe.db.escape(user or frappe.session.user), e=frappe.db.escape(emp.name)))
+    return "`tabVerification Stock`.`entrepot` = %s" % frappe.db.escape(emp.custom_warehouse or "")
 
 
-def has_permission_commande(doc, user=None, permission_type=None):
+def has_permission_verification(doc, user=None, permission_type=None):
     emp = employe_courant(user)
     if not emp or _est_supervision():
         return True
-    if doc.get("owner") == (user or frappe.session.user):
+    return bool(emp.custom_warehouse) and doc.get("entrepot") == emp.custom_warehouse
+
+
+def permission_query_conditions_cloture_caisse(user=None):
+    """Ses clôtures de caisse : la caisse à son nom, ou celles qu'il a faites."""
+    emp = employe_courant(user)
+    if not emp or _est_supervision():
+        return ""
+    return "(`tabCloture Caisse`.`caisse` = {n} or `tabCloture Caisse`.`owner` = {u})".format(
+        n=frappe.db.escape(emp.employee_name), u=frappe.db.escape(user or frappe.session.user))
+
+
+def has_permission_cloture_caisse(doc, user=None, permission_type=None):
+    emp = employe_courant(user)
+    if not emp or _est_supervision():
         return True
-    return bool(frappe.db.exists(DOCTYPE_TACHE, {"commande_client": doc.name, "custom_choix_du_staff": emp.name}))
+    return doc.get("caisse") == emp.employee_name or doc.get("owner") == (user or frappe.session.user)
 
 
 def boot_session(bootinfo):
@@ -207,6 +270,40 @@ def _mon_stock(emp) -> dict:
     return {b.item_code: flt(b.actual_qty)
             for b in frappe.get_all("Bin", filters={"warehouse": emp.custom_warehouse, "actual_qty": [">", 0]},
                                     fields=["item_code", "actual_qty"])}
+
+
+def _main_oeuvre(txt=None) -> list:
+    """Les prestations (groupe Main d'œuvre) : sans stock, au prix de la liste de vente standard."""
+    filtres = {"item_group": GROUPE_MAIN_OEUVRE, "disabled": 0}
+    motif = "%%%s%%" % (txt or "").strip()
+    items = frappe.get_all("Item", filters=filtres,
+                           or_filters={"item_code": ["like", motif], "item_name": ["like", motif]} if txt else None,
+                           fields=["name", "item_name", "image", "stock_uom"], order_by="item_name", limit=50)
+    prix = _prix([i.name for i in items])
+    return [{"item_code": i.name, "item_name": i.item_name, "image": i.image, "uom": i.stock_uom,
+             "stock": None, "service": True, "prix": prix.get(i.name, 0.0)} for i in items]
+
+
+def _justification(texte) -> dict:
+    """« motif — commentaire » gardé sur la ligne → {motif, commentaire} pour l'écran. PURE."""
+    if not texte:
+        return {}
+    motif, _sep, commentaire = str(texte).partition(" — ")
+    return {"motif": motif.strip(), "commentaire": commentaire.strip()}
+
+
+def _codes_main_oeuvre() -> set:
+    return set(frappe.get_all("Item", filters={"item_group": GROUPE_MAIN_OEUVRE}, pluck="name"))
+
+
+def main_oeuvre_par_defaut(type_intervention: str):
+    """La ligne de main d'œuvre proposée d'office pour ce type (M-I-OD / M-E-OD / M-R-OD), ou None."""
+    code = MAIN_OEUVRE.get(type_intervention or "")
+    if not code or not frappe.db.exists("Item", {"name": code, "disabled": 0}):
+        return None
+    i = frappe.db.get_value("Item", code, ["item_name", "image", "stock_uom"], as_dict=True)
+    return {"item_code": code, "item_name": i.item_name, "image": i.image, "uom": i.stock_uom, "stock": None,
+            "service": True, "prix": _prix([code]).get(code, 0.0)}
 
 
 def _prix(codes: list) -> dict:
@@ -239,16 +336,16 @@ def rechercher_articles(txt=None, limite=30):
     """Les articles de SON stock (quantité > 0) qui correspondent au nom ou au code, avec leur prix."""
     emp = _mien_ou_supervision()
     stock = _mon_stock(emp)
-    if not stock:
-        return []
     motif = "%%%s%%" % (txt or "").strip()
-    items = frappe.get_all("Item", filters={"name": ["in", list(stock)], "disabled": 0},
+    items = frappe.get_all("Item", filters={"name": ["in", list(stock) or [""]], "disabled": 0},
                            or_filters={"item_code": ["like", motif], "item_name": ["like", motif]},
                            fields=["name", "item_name", "image", "stock_uom"], limit=cint(limite) or 30,
-                           order_by="item_name")
+                           order_by="item_name") if stock else []
     prix = _prix([i.name for i in items])
-    return [{"item_code": i.name, "item_name": i.item_name, "image": i.image, "uom": i.stock_uom,
-             "stock": stock[i.name], "prix": prix.get(i.name, 0.0)} for i in items]
+    # Son stock d'abord, puis la main d'œuvre (prestations sans stock) qui répond à la recherche.
+    return ([{"item_code": i.name, "item_name": i.item_name, "image": i.image, "uom": i.stock_uom,
+              "stock": stock[i.name], "service": False, "prix": prix.get(i.name, 0.0)} for i in items]
+            + _main_oeuvre(txt))
 
 
 @frappe.whitelist()
@@ -274,7 +371,90 @@ def _tache_a_moi(nom):
     return _ma_tache(nom)
 
 
-def _nouvelle_commande(doc, emp, articles, paiements):
+def _poser_taxes(so):
+    """Les lignes de TVA du modèle, posées d'emblée : sans elles, la première passe calcule hors taxe et la
+    validation suivante ajoute la TVA PAR-DESSUS des prix pourtant TTC (constaté 31/10/2026 avec une remise)."""
+    if so.get("taxes") or not so.taxes_and_charges:
+        return
+    # Lecture du modèle sous identité système : le sous-traitant n'a pas le droit de lire les modèles de taxes.
+    from customization_app.cloture_partenaire import _en_systeme
+    from erpnext.controllers.accounts_controller import get_taxes_and_charges
+    with _en_systeme():
+        lignes = get_taxes_and_charges("Sales Taxes and Charges Template", so.taxes_and_charges) or []
+    for t in lignes:
+        so.append("taxes", t)
+
+
+def _totaux_poses(so):
+    """Les totaux tels qu'ERPNext les aura à l'enregistrement : on joue `validate` une première fois (valeurs
+    manquantes, taxes, règles de prix, remise) AVANT de bâtir l'échéancier — sinon un total recalculé à
+    l'insertion ne colle plus au règlement saisi (« Total Payment Amount … must be equal », 31/10/2026).
+    L'échéancier qu'ERPNext pose par défaut est écarté : celui de l'écran le remplace."""
+    # Sous l'identité système, comme l'insertion : ERPNext vérifie le droit de lire le compte client.
+    from customization_app.cloture_partenaire import _en_systeme
+    so.set("payment_schedule", [])
+    with _en_systeme():
+        so.run_method("validate")
+    so.set("payment_schedule", [])
+
+
+def _appliquer_remise(so, remise):
+    """La remise de l'écran sur le total de la commande (apply_discount_on = Grand Total), justifiée ; les
+    totaux sont recalculés. Sans remise : la commande n'en porte plus (une commande du bureau refaite)."""
+    montant, justification, erreurs = remise_valide(remise, so.grand_total)
+    if erreurs:
+        frappe.throw("<br>".join(erreurs), title=_("Remise"))
+    so.apply_discount_on = "Grand Total"
+    so.additional_discount_percentage = 0
+    so.discount_amount = montant
+    if so.meta.has_field(CHAMP_JUSTIF_REMISE):
+        so.set(CHAMP_JUSTIF_REMISE, justification or None)
+    so.calculate_taxes_and_totals()
+
+
+def _tracer_remise(so):
+    if flt(so.discount_amount) > 0 and so.get(CHAMP_JUSTIF_REMISE):
+        frappe.get_doc({"doctype": "Comment", "comment_type": "Info", "reference_doctype": "Sales Order",
+                        "reference_name": so.name,
+                        "content": _("🏷️ Remise de {0} justifiée par {1} : {2}").format(
+                            frappe.format_value(so.discount_amount, {"fieldtype": "Currency"}),
+                            frappe.session.user, frappe.utils.escape_html(so.get(CHAMP_JUSTIF_REMISE)))}
+                       ).insert(ignore_permissions=True)
+
+
+def _joindre_photos_pieces(so_name: str, paiements: list):
+    """La photo de chaque chèque / traite prise sur le téléphone est jointe à la commande (fichier nommé
+    par la pièce) : la trace reste lisible par le bureau et la caisse. Jamais bloquant."""
+    for p in paiements or []:
+        photo = p.get("photo") or ""
+        if not photo.startswith("data:image/") or "," not in photo:
+            continue
+        try:
+            entete, contenu = photo.split(",", 1)
+            ext = (entete.split("/", 1)[1].split(";", 1)[0] or "jpg").replace("jpeg", "jpg")
+            nom = "%s_%s.%s" % ("traite" if p.get("mode") in MODES_AVEC_PIECE[1:] else "cheque",
+                                (p.get("numero") or "sans-numero").strip() or "sans-numero", ext)
+            frappe.get_doc({"doctype": "File", "file_name": nom, "attached_to_doctype": "Sales Order",
+                            "attached_to_name": so_name, "is_private": 1, "content": contenu, "decode": True}
+                           ).insert(ignore_permissions=True)
+        except Exception:
+            frappe.log_error(title="Sous-traitant : photo de pièce non jointe", message=frappe.get_traceback())
+
+
+def _tracer_dettes(so_name: str, echeances: list):
+    """Chaque dette de l'échéancier laisse sa justification dans le fil de la commande : le bureau et la
+    caisse la lisent sans ouvrir la ligne."""
+    for e in echeances:
+        if e.get(CHAMP_JUSTIF):
+            frappe.get_doc({"doctype": "Comment", "comment_type": "Info", "reference_doctype": "Sales Order",
+                            "reference_name": so_name,
+                            "content": _("⚠️ Dette de {0} justifiée par {1} : {2}").format(
+                                frappe.format_value(e["payment_amount"], {"fieldtype": "Currency"}),
+                                frappe.session.user, frappe.utils.escape_html(e[CHAMP_JUSTIF]))}
+                           ).insert(ignore_permissions=True)
+
+
+def _nouvelle_commande(doc, emp, articles, paiements, remise=None):
     """La commande depuis son stock, en brouillon, sous SON identité (il en est l'auteur)."""
     from customization_app import cloture_tache as C
 
@@ -282,7 +462,7 @@ def _nouvelle_commande(doc, emp, articles, paiements):
         frappe.throw(_("Cette intervention n'a pas de client : demandez au bureau de le renseigner."))
     stock = _mon_stock(emp)
     codes = [(a.get("item_code") or "").strip() for a in articles if a.get("item_code")]
-    lignes, erreurs = lignes_articles(articles, stock, _prix(codes))
+    lignes, erreurs = lignes_articles(articles, stock, _prix(codes), sans_stock=_codes_main_oeuvre())
     if erreurs:
         frappe.throw("<br>".join(erreurs), title=_("Articles"))
     pre = (C.exigences(doc.name) or {}).get("nouvelle_commande") or {}
@@ -291,15 +471,19 @@ def _nouvelle_commande(doc, emp, articles, paiements):
         "customer": doc.custom_client, "transaction_date": nowdate(),
         "delivery_date": pre.get("delivery_date") or nowdate(),
         "set_warehouse": emp.custom_warehouse, "selling_price_list": PRIX_LISTE,
-        "custom_type_de_transaction": pre.get("custom_type_de_transaction"),
-        "taxes_and_charges": pre.get("taxes_and_charges"),
+        # Ses prix sont TTC (liste Vente standard) : le modèle de TVA INCLUSE, quel que soit le type
+        # d'intervention — les défauts du formulaire le laissent vide sur une Installation / Livraison, et
+        # ERPNext ajoutait alors la TVA par-dessus (constaté 31/10/2026).
+        "custom_type_de_transaction": pre.get("custom_type_de_transaction") or TYPE_TRANSACTION,
+        "taxes_and_charges": pre.get("taxes_and_charges") or TAXES,
     })
     for l in lignes:
         so.append("items", {"item_code": l["item_code"], "qty": l["qty"], "rate": l["rate"],
                             "warehouse": emp.custom_warehouse, "delivery_date": so.delivery_date})
     so.flags.ignore_permissions = True
-    so.run_method("set_missing_values")
-    so.calculate_taxes_and_totals()
+    _poser_taxes(so)
+    _totaux_poses(so)
+    _appliquer_remise(so, remise)
     echeances, erreurs = lignes_paiement(paiements, so.grand_total, nowdate())
     if erreurs:
         frappe.throw("<br>".join(erreurs), title=_("Règlement"))
@@ -309,19 +493,64 @@ def _nouvelle_commande(doc, emp, articles, paiements):
         so.append("payment_schedule", e)
     # ⚠️ Sous l'identité système : ERPNext vérifie le droit de LIRE le compte client (Débiteurs) à
     # l'insertion d'une commande, et `ignore_permissions` n'y change rien (cf. cloture_partenaire).
-    # L'auteur reste lui : `owner` est reposé sur l'utilisateur réel, c'est ce qui lui ouvre SES commandes.
+    # L'auteur reste lui : `owner` est reposé sur l'utilisateur réel, c'est ce qui dit qui a fait la commande.
     from customization_app.cloture_partenaire import _en_systeme
     reel = frappe.session.user
     with _en_systeme():
         so.insert()
         frappe.db.set_value("Sales Order", so.name, "owner", reel, update_modified=False)
     frappe.db.set_value(DOCTYPE_TACHE, doc.name, "commande_client", so.name, update_modified=False)
+    _tracer_dettes(so.name, echeances)
+    _joindre_photos_pieces(so.name, paiements)
+    _tracer_remise(so)
+    frappe.db.commit()
+    return so.name
+
+
+def _modifier_commande(doc, emp, articles, paiements, remise=None):
+    """La commande préparée par le bureau, encore en brouillon, refaite depuis le téléphone : les lignes
+    deviennent celles de l'écran (articles de SON stock, main d'œuvre), toutes sur SON entrepôt — un article
+    retiré n'est simplement pas sorti de son stock —, et l'échéancier devient celui qu'il a saisi.
+    Décision utilisateur 31/10/2026."""
+    so = frappe.get_doc("Sales Order", doc.commande_client)
+    if so.docstatus != 0:
+        frappe.throw(_("La commande {0} est déjà validée : elle ne se modifie plus depuis le téléphone.").format(so.name))
+    stock = _mon_stock(emp)
+    codes = [(a.get("item_code") or "").strip() for a in articles if a.get("item_code")]
+    lignes, erreurs = lignes_articles(articles, stock, _prix(codes), sans_stock=_codes_main_oeuvre())
+    if erreurs:
+        frappe.throw("<br>".join(erreurs), title=_("Articles"))
+    so.set_warehouse = emp.custom_warehouse
+    so.selling_price_list = PRIX_LISTE
+    if not so.taxes_and_charges:
+        so.taxes_and_charges = TAXES
+    so.set("items", [])
+    for l in lignes:
+        so.append("items", {"item_code": l["item_code"], "qty": l["qty"], "rate": l["rate"],
+                            "warehouse": emp.custom_warehouse, "delivery_date": so.delivery_date or nowdate()})
+    so.flags.ignore_permissions = True
+    _poser_taxes(so)
+    _totaux_poses(so)
+    _appliquer_remise(so, remise)
+    echeances, erreurs = lignes_paiement(paiements, so.grand_total, nowdate())
+    if erreurs:
+        frappe.throw("<br>".join(erreurs), title=_("Règlement"))
+    so.set("payment_schedule", [])
+    for e in echeances:
+        e["custom_row_uid"] = frappe.generate_hash(length=12)
+        so.append("payment_schedule", e)
+    from customization_app.cloture_partenaire import _en_systeme
+    with _en_systeme():
+        so.save()
+    _tracer_dettes(so.name, echeances)
+    _joindre_photos_pieces(so.name, paiements)
+    _tracer_remise(so)
     frappe.db.commit()
     return so.name
 
 
 @frappe.whitelist()
-def cloturer_intervention(tache, articles=None, paiements=None, rapport_visite=None):
+def cloturer_intervention(tache, articles=None, paiements=None, rapport_visite=None, remise=None):
     """Tout en un depuis le téléphone : commande depuis son stock + règlement, bon de livraison,
     puis la tâche. Si une commande est déjà liée (bureau), on ne la refait pas : on la mène au bout."""
     from customization_app import cloture_partenaire as P
@@ -332,13 +561,18 @@ def cloturer_intervention(tache, articles=None, paiements=None, rapport_visite=N
         frappe.throw(_("Cette intervention ne vous est pas affectée."), frappe.PermissionError)
     articles = json.loads(articles) if isinstance(articles, str) else (articles or [])
     paiements = json.loads(paiements) if isinstance(paiements, str) else (paiements or [])
+    remise = json.loads(remise) if isinstance(remise, str) else (remise or None)
 
     P._verifier_photos_et_position(doc)
     etapes = []
     if not doc.commande_client:
-        nom = _nouvelle_commande(doc, emp, articles, paiements)
+        nom = _nouvelle_commande(doc, emp, articles, paiements, remise)
         doc.reload()
         etapes.append({"quoi": "Commande", "doc": nom, "etat": "créée depuis votre stock"})
+    elif articles and frappe.db.get_value("Sales Order", doc.commande_client, "docstatus") == 0:
+        # La commande du bureau, encore en brouillon : l'écran a pu la modifier (articles, main d'œuvre, règlement).
+        nom = _modifier_commande(doc, emp, articles, paiements, remise)
+        etapes.append({"quoi": "Commande", "doc": nom, "etat": "mise à jour depuis le téléphone"})
     with P._en_systeme():
         nom, etat = P._valider_commande(doc.commande_client)
         etapes.append({"quoi": "Commande", "doc": nom, "etat": etat})
@@ -352,6 +586,67 @@ def cloturer_intervention(tache, articles=None, paiements=None, rapport_visite=N
     frappe.db.commit()
     etapes.append({"quoi": "Intervention", "doc": doc.name, "etat": "terminée"})
     return {"etapes": etapes, "tache": doc.name, "commande": doc.commande_client}
+
+
+# --------------------------------------------------------------------------- commande liée, annulation
+
+@frappe.whitelist()
+def commande_liee(tache):
+    """La commande que le bureau a préparée pour cette intervention, telle que le téléphone doit la montrer :
+    articles (photo, quantité), règlement prévu (échéancier), total, état. Demande utilisateur 31/10/2026."""
+    emp = _mien_ou_supervision()
+    doc = _tache_a_moi(tache)
+    if doc.custom_choix_du_staff != emp.name and not _est_supervision():
+        frappe.throw(_("Cette intervention ne vous est pas affectée."), frappe.PermissionError)
+    base = {"commande": None, "main_oeuvre": main_oeuvre_par_defaut(doc.get("custom_type_dintervention")),
+            "motifs_dette": list(MOTIFS_DETTE), "motifs_remise": list(MOTIFS_REMISE), "commentaire_min": COMMENTAIRE_MIN}
+    if not doc.commande_client:
+        return base
+    from customization_app.planning_employe import _articles
+    so = frappe.get_doc("Sales Order", doc.commande_client)
+    etat = {0: _("en brouillon"), 1: _("validée"), 2: _("annulée")}[cint(so.docstatus)]
+    stock, services = _mon_stock(emp), _codes_main_oeuvre()
+    images = {i.name: i.image for i in frappe.get_all("Item", filters={"name": ["in", [r.item_code for r in so.items] or [""]]},
+                                                      fields=["name", "image"])}
+    base.update({
+        "commande": so.name, "docstatus": cint(so.docstatus), "etat": etat, "total": flt(so.grand_total, 3),
+        "modifiable": cint(so.docstatus) == 0,
+        "articles": _articles(so.name),
+        # Les lignes telles que l'écran les édite : prix de la ligne, stock dans SON entrepôt, prestation ou non.
+        "lignes": [{"item_code": r.item_code, "item_name": r.item_name, "qty": flt(r.qty), "prix": flt(r.rate, 3),
+                    "image": images.get(r.item_code), "service": r.item_code in services,
+                    "stock": None if r.item_code in services else flt(stock.get(r.item_code))} for r in so.items],
+        "reglement": [dict({"mode": p.mode_of_payment, "montant": flt(p.payment_amount, 3),
+                            "numero": p.get("custom__n_chèque__transaction") or "", "banque": p.get("custom_banque") or "",
+                            "date": str(p.due_date or "")}, **_justification(p.get(CHAMP_JUSTIF)))
+                      for p in so.payment_schedule],
+        "paye": flt(sum(flt(p.paid_amount) for p in so.payment_schedule), 3),
+        "remise": dict({"montant": flt(so.discount_amount, 3)}, **_justification(so.get(CHAMP_JUSTIF_REMISE)))})
+    return base
+
+
+@frappe.whitelist()
+def annuler_intervention(tache, raison, commentaire=None):
+    """Annuler SON intervention depuis le téléphone, par le même chemin que le bureau (taches_groupe.annuler :
+    statut Cancelled, commentaire tracé, commande liée signalée) — sans message au client, c'est le bureau
+    qui décide de le prévenir. Demande utilisateur 31/10/2026."""
+    from customization_app import taches_groupe as G
+    emp = _mien_ou_supervision()
+    doc = _tache_a_moi(tache)
+    if doc.custom_choix_du_staff != emp.name and not _est_supervision():
+        frappe.throw(_("Cette intervention ne vous est pas affectée."), frappe.PermissionError)
+    if doc.status != "Open":
+        frappe.throw(_("Cette intervention est déjà {0}.").format(_("terminée") if doc.status == "Completed" else _("annulée")))
+    raison = (raison or "").strip()
+    if not raison:
+        frappe.throw(_("Choisissez la raison de l'annulation."))
+    motif = raison + ((" — " + commentaire.strip()) if (commentaire or "").strip() else "")
+    frappe.db.set_value(DOCTYPE_TACHE, doc.name, "raison_annulation", raison, update_modified=False)
+    res = G.annuler([doc.name], motif=motif, sms=0, email=0)
+    etat = next((r["etat"] for r in res.get("resultats", []) if r["tache"] == doc.name), "?")
+    if etat != "annulée":
+        frappe.throw(_("Annulation impossible : {0}.").format(etat))
+    return {"tache": doc.name, "etat": etat, "commande": doc.commande_client}
 
 
 # --------------------------------------------------------------------------- création
@@ -438,11 +733,79 @@ def creer(nom, email, mot_de_passe, telephone=None, genre="Male", date_naissance
 
 
 @frappe.whitelist()
+def agenda(debut, fin):
+    """Ses tâches entre deux dates, pour l'agenda mobile (jour / semaine / mois) — 31/10/2026.
+    Une plage bornée à 62 jours ; les tâches annulées sont rendues (barrées à l'écran)."""
+    emp = employe_courant()
+    if not emp:
+        return []
+    debut, fin = getdate(debut), getdate(fin)
+    if fin < debut:
+        debut, fin = fin, debut
+    fin = min(fin, add_days(debut, 62))
+    lignes = frappe.get_all(DOCTYPE_TACHE,
+                            filters={"custom_choix_du_staff": emp.name, "docstatus": ["<", 2],
+                                     "starts_on": ["between", [str(debut) + " 00:00:00", str(fin) + " 23:59:59"]]},
+                            fields=["name", "starts_on", "ends_on", "custom_type_dintervention", "custom_client",
+                                    "nom_client", "details_adresse", "google_map", "status", "commande_client",
+                                    "temps", "raison_annulation"],
+                            order_by="starts_on")
+    return [{"name": t.name, "jour": str(getdate(t.starts_on)), "debut": str(t.starts_on)[11:16],
+             "fin": str(t.ends_on)[11:16] if t.ends_on else "", "type": t.custom_type_dintervention or "",
+             "client": t.nom_client or t.custom_client or "", "adresse": (t.details_adresse or "").replace("\n", ", "),
+             "maps": t.google_map or "", "status": t.status, "commande": t.commande_client or "",
+             "duree": t.temps or "", "raison_annulation": t.raison_annulation or ""} for t in lignes]
+
+
+@frappe.whitelist()
 def liste():
-    """Les sous-traitants, pour l'écran d'administration."""
+    """Les sous-traitants et leur situation, pour le panneau d'administration de l'onglet « Sous-traitant »
+    (31/10/2026) : tâches ouvertes, stock, solde de caisse, dernière remise, dernière vérification."""
     frappe.only_for("System Manager")
     if not _champs_prets():
         return []
-    return frappe.get_all("Employee", filters={CHAMP_FLAG: 1},
-                          fields=["name", "employee_name", "user_id", "custom_warehouse", CHAMP_COMPTE, "status"],
-                          order_by="employee_name")
+    from erpnext.accounts.utils import get_balance_on
+
+    jour = nowdate()
+    emps = frappe.get_all("Employee", filters={CHAMP_FLAG: 1},
+                          fields=["name", "employee_name", "user_id", "cell_number", "custom_warehouse",
+                                  CHAMP_COMPTE, CHAMP_COULEUR, "status"],
+                          order_by="status, employee_name")
+    for e in emps:
+        wh, compte = e.get("custom_warehouse"), e.get(CHAMP_COMPTE)
+        e["couleur"] = e.get(CHAMP_COULEUR) or couleur_par_defaut(e.name)
+        e["utilisateur_actif"] = cint(frappe.db.get_value("User", e.user_id, "enabled")) if e.user_id else 0
+        e["taches_ouvertes"] = frappe.db.count(DOCTYPE_TACHE, {"custom_choix_du_staff": e.name, "status": "Open"})
+        e["taches_jour"] = frappe.db.count(DOCTYPE_TACHE, {"custom_choix_du_staff": e.name, "status": ["!=", "Cancelled"],
+                                                           "starts_on": ["between", [jour + " 00:00:00", jour + " 23:59:59"]]})
+        stock = frappe.get_all("Bin", filters={"warehouse": wh, "actual_qty": [">", 0]},
+                               fields=["count(name) as articles", "sum(actual_qty) as unites"])[0] if wh else {}
+        e["stock_articles"] = cint(stock.get("articles"))
+        e["stock_unites"] = flt(stock.get("unites"))
+        e["solde_caisse"] = flt(get_balance_on(compte)) if compte and frappe.db.exists("Account", compte) else None
+        e["derniere_cloture"] = (frappe.get_all("Cloture Caisse", filters={"caisse": e.employee_name},
+                                                fields=["name", "date_cloture", "statut"],
+                                                order_by="date_cloture desc", limit=1) or [None])[0]
+        e["derniere_verification"] = (frappe.get_all("Verification Stock", filters={"entrepot": wh},
+                                                     fields=["name", "date", "statut"],
+                                                     order_by="date desc", limit=1) or [None])[0] if wh else None
+    return emps
+
+
+@frappe.whitelist()
+def activer(employe, actif=1):
+    """Désactiver (statut Left + utilisateur désactivé) ou réactiver un sous-traitant, depuis le panneau."""
+    frappe.only_for("System Manager")
+    emp = frappe.get_doc("Employee", employe)
+    if not cint(emp.get(CHAMP_FLAG)):
+        frappe.throw(_("{0} n'est pas un sous-traitant.").format(emp.employee_name))
+    actif = cint(actif)
+    emp.status = "Active" if actif else "Left"
+    emp.relieving_date = None if actif else nowdate()
+    emp.flags.ignore_permissions = True
+    emp.save()
+    if emp.user_id and frappe.db.exists("User", emp.user_id):
+        frappe.db.set_value("User", emp.user_id, "enabled", actif)
+        frappe.clear_cache(user=emp.user_id)
+    frappe.db.commit()
+    return {"employe": emp.name, "status": emp.status, "utilisateur_actif": actif}

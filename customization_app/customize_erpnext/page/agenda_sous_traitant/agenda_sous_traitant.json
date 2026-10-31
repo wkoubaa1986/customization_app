@@ -1,0 +1,27 @@
+{
+ "content": null,
+ "creation": "2026-10-31 16:00:00.000000",
+ "docstatus": 0,
+ "doctype": "Page",
+ "icon": "calendar",
+ "idx": 0,
+ "modified": "2026-10-31 16:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "agenda-sous-traitant",
+ "owner": "Administrator",
+ "page_name": "agenda-sous-traitant",
+ "roles": [
+  {
+   "role": "Sous-traitant"
+  },
+  {
+   "role": "System Manager"
+  }
+ ],
+ "script": null,
+ "standard": "Yes",
+ "style": null,
+ "system_page": 0,
+ "title": "Mon agenda"
+}

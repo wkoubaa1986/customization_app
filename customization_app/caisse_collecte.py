@@ -320,6 +320,11 @@ def finaliser(doc, mesures=None, rapprochement=None, validation_seule=False):
     pdf = get_pdf(CL._html_instantane(doc, m["data"], rap))
     save_file("caisse-%s-%s.pdf" % (doc.caisse.replace(" ", "_"), doc.date_cloture), pdf,
               "Cloture Caisse", doc.name, is_private=1)
+    # Sous-traitant (31/10/2026) : l'argent change de mains — ses paiements quittent son compte et entrent,
+    # à la date de réception, dans la caisse du collecteur sur nos comptes (après l'instantané PDF).
+    if CL._est_caisse_sous_traitant(doc.caisse):
+        from customization_app import sous_traitant_caisse
+        sous_traitant_caisse.transferer(doc)
     if not validation_seule:
         _prevenir(doc.valide_par, "Caisse %s du %s validée par %s%s" % (
             doc.caisse, doc.date_cloture, doc.collecte_par,

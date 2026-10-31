@@ -81,8 +81,13 @@ class StockEntrepots {
     this.ctx = (await frappe.call(SE_API + "get_context")).message;
     const r = this.$r, ctx = this.ctx;
     this.entrepot = ctx.defaut || "";
+    // Ouverture directe sur un entrepôt (panneau d'administration des sous-traitants : route_options.entrepot).
+    const voulu_wh = frappe.route_options && frappe.route_options.entrepot;
+    if (voulu_wh) { delete frappe.route_options.entrepot; if ((ctx.entrepots || []).some((x) => x.name === voulu_wh)) this.entrepot = voulu_wh; }
     if (!ctx.responsable) r.find('[data-onglet="transfert"], [data-onglet="zero"]').remove();
     if (!ctx.verification) r.find('[data-onglet="verif"]').remove();
+    // Sous-traitant : son stock et rien d'autre — pas d'onglet BL (sorties du Magasin), pas de « Tous ».
+    if (ctx.sous_traitant) r.find('[data-onglet="bl"]').remove();
     if (!ctx.inventaire) r.find("#se-inv-bouton").remove();
     else r.find("#se-inv-bouton").on("click", () => this.montrer("inventaire"));
     r.find("#se-s-reappro").on("click", (e) => { this.reappro = !this.reappro; $(e.currentTarget).toggleClass("on", this.reappro); this.chargerSolde(); });
@@ -347,7 +352,7 @@ class StockEntrepots {
     const liste = ctx.entrepots.slice().sort((a, b) => rang(a) - rang(b));
     this.$r.find("#se-entrepots").html(liste.map((w) => `<span class="se-chip ${w.name === this.entrepot ? "on" : ""}" data-wh="${se_esc(w.name)}">`
         + `${w.name === ctx.mien ? "👤 " : w.magasin ? "🏬 " : ""}${se_esc(w.libelle)}</span>`).join("")
-      + `<span class="se-chip ${this.entrepot ? "" : "on"}" data-wh="">Tous</span>`);
+      + (liste.length > 1 ? `<span class="se-chip ${this.entrepot ? "" : "on"}" data-wh="">Tous</span>` : ""));
     this.$r.find("#se-entrepots .se-chip").on("click", (e) => {
       this.entrepot = $(e.currentTarget).attr("data-wh");
       this.peindreEntrepots();
@@ -1207,6 +1212,7 @@ class StockEntrepots {
   // ── BL du Magasin : approbation par le magasinier principal, sorties exceptionnelles ───────
   /** Pastille de l'onglet : BL à approuver (+ sorties à vérifier et écarts pour le magasinier principal). */
   async majBadgeBL() {
+    if (this.ctx.sous_traitant) return;
     try {
       const e = (await frappe.call({ method: SE_BL + "etat" })).message;
       const n = e.a_approuver.length + e.a_verifier.length + e.ecarts.length;

@@ -153,14 +153,17 @@ app_license = "mit"
 # jointes), les responsables tout. ⚠️ Une seule affectation de chaque dict dans ce fichier.
 permission_query_conditions = {
     "Activite Employe": "customization_app.suivi_activite.permission_query_conditions",
-    # Sous-traitants : chacun ne lit que SES tâches et SES commandes (sous_traitant.py).
+    # Sous-traitants : chacun ne lit que SES tâches, SES vérifications de stock et SES clôtures de caisse
+    # (sous_traitant.py). Commandes et BL restent lisibles en entier : il a besoin de l'historique (31/10/2026).
     "Tache de travail": "customization_app.sous_traitant.permission_query_conditions_tache",
-    "Sales Order": "customization_app.sous_traitant.permission_query_conditions_commande",
+    "Verification Stock": "customization_app.sous_traitant.permission_query_conditions_verification",
+    "Cloture Caisse": "customization_app.sous_traitant.permission_query_conditions_cloture_caisse",
 }
 has_permission = {
     "Activite Employe": "customization_app.suivi_activite.has_permission",
     "Tache de travail": "customization_app.sous_traitant.has_permission_tache",
-    "Sales Order": "customization_app.sous_traitant.has_permission_commande",
+    "Verification Stock": "customization_app.sous_traitant.has_permission_verification",
+    "Cloture Caisse": "customization_app.sous_traitant.has_permission_cloture_caisse",
 }
 
 # DocType Class
@@ -808,6 +811,8 @@ after_migrate = [
     "customization_app.patches.ensure_onglet_suivi_activite.execute",
     # Onglet « Suivi des techniciens » (flotte GPS) : où sont les techniciens, journées par véhicule, réglage.
     "customization_app.patches.ensure_onglet_suivi_terrain.execute",
+    # Onglet « Sous-traitant » : poste d'administration des sous-traitants (System Manager), 31/10/2026.
+    "customization_app.patches.ensure_onglet_sous_traitant.execute",
     # Graphe « Situation Mensuelle » sur 12 mois + raccourci vers la page de détail (onglet Comptabilité).
     "customization_app.patches.ensure_situation_mensuelle.execute",
     "customization_app.patches.ensure_raccourci_commandes_a_traiter.execute",

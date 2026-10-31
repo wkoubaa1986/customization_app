@@ -83,6 +83,27 @@ class RapportCaisseJournaliere {
     const today = frappe.datetime.get_today();
     $("#rcj-d1").val(today);
     $("#rcj-d2").val(today);
+    if (frappe.boot.sous_traitant) this._ecran_sous_traitant();
+  }
+
+  /** Sous-traitant (décision utilisateur 31/10/2026) : SA caisse, rien d'autre — ni suivi des dépenses
+   *  facturées ni des achats fournisseurs, ni chèques impayés, dettes, Aramex, dépense, état des caisses.
+   *  Le détail (chaque vente et ses règlements) reste : c'est le sien, sous le titre « Mes ventes et
+   *  encaissements ». Et sa période court depuis le lendemain de sa dernière remise : il compte et remet
+   *  quand on le voit, chaque semaine. */
+  _ecran_sous_traitant() {
+    $("#rcj-suivi-depenses, #rcj-suivi-achats, #rcj-btn-impayes, #rcj-btn-dettes, #rcj-btn-aramex, #rcj-btn-depense, "
+      + "#rcj-btn-etat, #rcj-btn-config").remove();
+    $(".rcj-section-title").filter((_, el) => $(el).text().includes("Détail par employé"))
+      .text("🧾 " + __("Mes ventes et encaissements"));
+    this._periode_sous_traitant = frappe.call({ method: "customization_app.caisse_cloture.periode_sous_traitant" })
+      .then((r) => {
+        const p = r.message;
+        if (!p) return;
+        $("#rcj-d1").val(p.debut);
+        $("#rcj-d2").val(p.fin);
+        $("#rcj-caisse-nom").text(p.caisse);
+      });
   }
 
   _bind() {
@@ -243,6 +264,7 @@ class RapportCaisseJournaliere {
   }
 
   async _fetch() {
+    if (this._periode_sous_traitant) { await this._periode_sous_traitant; this._periode_sous_traitant = null; }
     const d1 = $("#rcj-d1").val(), d2 = $("#rcj-d2").val();
     if (!d1 || !d2) { frappe.msgprint("Veuillez saisir les dates."); return; }
     this._loading(true);
@@ -271,7 +293,8 @@ class RapportCaisseJournaliere {
   _afficher_cloture() {
     // Bannière « caisse validée » : visible dès l'ouverture, sans passer par le bouton.
     const $b = $("#rcj-cloture-banner").hide().empty();
-    const d1 = $("#rcj-d1").val(), d2 = $("#rcj-d2").val();
+    // Sous-traitant : la clôture est datée du dernier jour de la période affichée (31/10/2026).
+    const d1 = frappe.boot.sous_traitant ? $("#rcj-d2").val() : $("#rcj-d1").val(), d2 = $("#rcj-d2").val();
     if (!d1 || d1 !== d2) return;   // la clôture porte sur une journée
     const caisse = $("#rcj-employe").val() || "Tous les employés";
     frappe.call({
@@ -2585,12 +2608,18 @@ function rcj_aller_caisse(rapport, caisse, date, ensuite) {
 function rcj_cloture(rapport, opts) {
   const API = "customization_app.caisse_cloture";
   opts = opts || {};   // { rouvrir: <nom du brouillon> } : réouverture du comptage de l'employé
-  const d1 = $("#rcj-d1").val(), d2 = $("#rcj-d2").val();
+  // Sous-traitant : la clôture est datée du dernier jour affiché et couvre la période depuis sa dernière
+  // remise (le serveur la calcule : e.debut) — il compte et remet chaque semaine (31/10/2026).
+  const sous_traitant = !!frappe.boot.sous_traitant;
+  const d1 = sous_traitant ? $("#rcj-d2").val() : $("#rcj-d1").val(), d2 = $("#rcj-d2").val();
   if (d1 !== d2) {
     frappe.msgprint(__("La clôture porte sur UNE journée : mettez « De » = « À »."));
     return;
   }
   const caisse = $("#rcj-employe").val() || "Tous les employés";
+  const periode = (e) => (sous_traitant && e.debut && e.debut !== d1
+    ? __("du {0} au {1}", [frappe.datetime.str_to_user(e.debut), frappe.datetime.str_to_user(d1)])
+    : frappe.datetime.str_to_user(d1));
 
   frappe.call({
     method: API + ".etat", args: { caisse, date: d1 },
@@ -2631,8 +2660,8 @@ function rcj_cloture(rapport, opts) {
       const fmt = (v) => rcj_dt(v || 0);
       const d = new frappe.ui.Dialog({
         title: reprise
-          ? __("Rouvrir le comptage — {0} ({1}) — {2}", [caisse, frappe.datetime.str_to_user(d1), reprise.name])
-          : __("Valider la caisse — {0} ({1})", [caisse, frappe.datetime.str_to_user(d1)]),
+          ? __("Rouvrir le comptage — {0} ({1}) — {2}", [caisse, periode(e), reprise.name])
+          : __("Valider la caisse — {0} ({1})", [caisse, periode(e)]),
         fields: [
           { fieldtype: "HTML", fieldname: "controles" },
           { fieldtype: "HTML", fieldname: "etat" },
@@ -2765,9 +2794,9 @@ function rcj_cloture(rapport, opts) {
         <table class="table table-bordered" style="font-size:12.5px">
           <tr><td>${__("Solde d'ouverture (avant)")}</td>
               <td style="text-align:right;font-weight:700">${fmt(e.solde_ouverture)}</td></tr>
-          <tr><td>${__("Encaissements espèces du jour")}</td>
+          <tr><td>${sous_traitant && e.debut !== d1 ? __("Encaissements espèces de la période") : __("Encaissements espèces du jour")}</td>
               <td style="text-align:right">+ ${fmt(e.encaissements_especes)}</td></tr>
-          <tr><td>${__("Dépenses espèces du jour")}</td>
+          <tr><td>${sous_traitant && e.debut !== d1 ? __("Dépenses espèces de la période") : __("Dépenses espèces du jour")}</td>
               <td style="text-align:right">− ${fmt(e.depenses_especes)}</td></tr>
           <tr><td><b>${__("Solde théorique (après)")}</b></td>
               <td style="text-align:right;font-weight:800">${fmt(e.solde_theorique)}</td></tr>
