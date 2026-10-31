@@ -29,6 +29,10 @@ from frappe import _
 from frappe.utils import add_days, cint, flt, getdate, nowdate
 
 ROLE = "Sous-traitant"
+#: qui administre les sous-traitants (onglet, création, couleur, désactivation) et collecte n'importe laquelle de
+#: leurs caisses — décision utilisateur 31/10/2026 (donné à Wassim, Néjib et Jamel par le patch ensure_onglet_sous_traitant)
+ROLE_RESPONSABLE = "Responsable sous-traitant"
+SUPERVISEURS = ("System Manager", ROLE_RESPONSABLE)
 CHAMP_FLAG = "custom_sous_traitant"
 CHAMP_COMPTE = "custom_compte_caisse"
 CHAMP_COULEUR = "custom_couleur"
@@ -700,7 +704,7 @@ def _inscrire_verification(entrepot: str, jour: str, heure: str, periodicite: st
 def creer(nom, email, mot_de_passe, telephone=None, genre="Male", date_naissance=None,
           jour_verification="Lundi", heure_verification="09:00", periodicite="Chaque semaine", couleur=None):
     """Tout en un geste : utilisateur (rôle Sous-traitant), employé, entrepôt, compte, vérification planifiée."""
-    frappe.only_for("System Manager")
+    frappe.only_for(SUPERVISEURS)
     nom = " ".join((nom or "").split())
     email = (email or "").strip().lower()
     if not nom or not email or not mot_de_passe:
@@ -766,7 +770,7 @@ def agenda(debut, fin):
 def liste():
     """Les sous-traitants et leur situation, pour le panneau d'administration de l'onglet « Sous-traitant »
     (31/10/2026) : tâches ouvertes, stock, solde de caisse, dernière remise, dernière vérification."""
-    frappe.only_for("System Manager")
+    frappe.only_for(SUPERVISEURS)
     if not _champs_prets():
         return []
     from erpnext.accounts.utils import get_balance_on
@@ -801,7 +805,7 @@ def liste():
 def changer_couleur(employe, couleur):
     """Depuis le panneau d'administration : nouvelle couleur de calendrier, appliquée tout de suite à toutes ses
     tâches OUVERTES (la couleur est stockée sur chaque tâche par api.compute_tache_color) — 31/10/2026."""
-    frappe.only_for("System Manager")
+    frappe.only_for(SUPERVISEURS)
     couleur = (couleur or "").strip().lower()
     if not re.fullmatch(r"#[0-9a-f]{6}", couleur):
         frappe.throw(_("Couleur attendue au format #rrggbb, reçu « {0} »." ).format(couleur))
@@ -820,7 +824,7 @@ def changer_couleur(employe, couleur):
 @frappe.whitelist()
 def activer(employe, actif=1):
     """Désactiver (statut Left + utilisateur désactivé) ou réactiver un sous-traitant, depuis le panneau."""
-    frappe.only_for("System Manager")
+    frappe.only_for(SUPERVISEURS)
     emp = frappe.get_doc("Employee", employe)
     if not cint(emp.get(CHAMP_FLAG)):
         frappe.throw(_("{0} n'est pas un sous-traitant.").format(emp.employee_name))

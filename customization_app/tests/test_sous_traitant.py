@@ -135,6 +135,19 @@ class TestCollecteCaisse(unittest.TestCase):
         self.assertIsNone(SC.compte_cible(None))
         self.assertEqual(set(SC.COMPTES_CIBLES), set(ST.MODES_PERMIS) - {ST.MODE_DETTE})
 
+    def test_responsable_sous_traitant_collecte_leurs_caisses(self):
+        from customization_app import caisse_collecte as CC
+        # Fonction pure : Config Caisse d'abord, sinon « titulaire » sur la caisse d'un sous-traitant seulement.
+        self.assertEqual(CC._role("x@y", ["x@y"], [], False), "titulaire")
+        for f in (CC.collecter, CC.contester_justifications):
+            src = inspect.getsource(f)
+            self.assertLess(src.index('frappe.get_doc("Cloture Caisse", name)'), src.index("_exiger_collecteur(cl.caisse)"))
+        self.assertIn("perimetre_sous_traitants()", inspect.getsource(CC.a_collecter))
+        self.assertIn("perimetre_sous_traitants(user)", inspect.getsource(CC.resume))
+        self.assertIn("perimetre_sous_traitants(user)", inspect.getsource(CC.peut_agir_sur))
+        from customization_app import caisse_cloture as CL
+        self.assertIn("role_collecte_pour(caisse)", inspect.getsource(CL._controler_droits))
+
     def test_branche_sur_la_collecte_apres_le_pdf(self):
         from customization_app import caisse_collecte as CC
         src = inspect.getsource(CC.finaliser)
@@ -162,13 +175,18 @@ class TestCablage(unittest.TestCase):
         # son bloc HTML délègue au panneau de sous_traitant_admin.js (liste, création, activer/désactiver, marche à suivre).
         self.assertIn('"customization_app.patches.ensure_onglet_sous_traitant.execute"', hooks)
         from customization_app.patches import ensure_onglet_sous_traitant as OST
-        self.assertEqual(OST.ROLES, ("System Manager",))
+        self.assertEqual(OST.ROLES, ("System Manager", "Responsable sous-traitant"))
+        self.assertEqual(ST.SUPERVISEURS, ("System Manager", ST.ROLE_RESPONSABLE))
+        self.assertEqual(OST.RESPONSABLES_USERS, ("koubaawassim@gmail.com", "aquaworld.servicing@gmail.com", "jimmyks007@gmail.com"))
+        for f in (ST.liste, ST.creer, ST.activer, ST.changer_couleur):
+            self.assertIn("frappe.only_for(SUPERVISEURS)", inspect.getsource(f))
         self.assertIn("window.sousTraitant_admin", OST.BLOC_SCRIPT)
         self.assertEqual([r[0] for r in OST.RACCOURCIS][:3], ["Sous-traitants (employés)", "Calendrier de travail", "Stock et transferts"])
         with open(os.path.join(BASE, "public", "js", "sous_traitant_admin.js"), encoding="utf-8") as f:
             admin = f.read()
         for attendu in ("window.sousTraitant_admin = function", "window.sousTraitant_nouveau = dialogue",
-                        "customization_app.sous_traitant.liste", "customization_app.sous_traitant.activer", "Marche à suivre"):
+                        "customization_app.sous_traitant.liste", "customization_app.sous_traitant.activer", "Marche à suivre",
+                        'frappe.user.has_role("Responsable sous-traitant")'):
             self.assertIn(attendu, admin)
         self.assertEqual(list(inspect.signature(ST.activer).parameters), ["employe", "actif"])
         # 31/10/2026 : la pastille du panneau change la couleur et recolore toutes ses tâches ouvertes.

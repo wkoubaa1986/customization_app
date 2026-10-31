@@ -110,6 +110,38 @@ def peut_voir_toutes_les_caisses(user=None):
     return role_collecte(user) is not None
 
 
+def est_responsable_sous_traitant(user=None):
+    from customization_app.sous_traitant import ROLE_RESPONSABLE
+    return ROLE_RESPONSABLE in frappe.get_roles(user or frappe.session.user)
+
+
+def caisses_sous_traitants() -> set:
+    """Les noms de caisse des sous-traitants actifs (= leur nom d'employé)."""
+    if not frappe.db.has_column("Employee", "custom_sous_traitant"):
+        return set()
+    return set(frappe.get_all("Employee", filters={"custom_sous_traitant": 1, "status": "Active"}, pluck="employee_name"))
+
+
+def perimetre_sous_traitants(user=None) -> set:
+    """Les caisses qu'un « Responsable sous-traitant » voit et collecte EN PLUS de la sienne quand il n'est pas
+    collecteur par ailleurs (décision utilisateur 31/10/2026) ; vide sinon."""
+    user = user or frappe.session.user
+    if role_collecte(user) or not est_responsable_sous_traitant(user):
+        return set()
+    return caisses_sous_traitants()
+
+
+def role_collecte_pour(caisse, user=None):
+    """Le rôle de collecte SUR UNE CAISSE. Un Responsable sous-traitant est « titulaire » sur la caisse d'un
+    sous-traitant, quel que soit son rôle de Config Caisse : il valide directement et l'argent entre dans SA caisse
+    du jour par le transfert des encaissements (sous_traitant_caisse) — pas de passation, sinon il remettrait deux
+    fois (passation + sa propre clôture). Ailleurs : le rôle de Config Caisse."""
+    user = user or frappe.session.user
+    if caisse and est_responsable_sous_traitant(user) and CL._est_caisse_sous_traitant(caisse):
+        return "titulaire"
+    return role_collecte(user)
+
+
 def role_collecte(user=None):
     """« titulaire » (le responsable de collecte), « delegue », « direction »
     (collecte comme un délégué : l'argent passe par ses mains, donc passation)
@@ -137,11 +169,12 @@ def _role(user, responsables, delegues, est_direction, hors_periode=()):
     return None
 
 
-def _exiger_collecteur():
-    role = role_collecte()
+def _exiger_collecteur(caisse=None):
+    role = role_collecte_pour(caisse) if caisse else role_collecte()
     if not role:
         frappe.throw(_("La collecte des caisses est réservée au responsable de collecte, "
-                       "à ses délégués et à la direction (Config Caisse)."))
+                       "à ses délégués et à la direction (Config Caisse) — et, pour les caisses des "
+                       "sous-traitants, au Responsable sous-traitant."))
     return role
 
 
@@ -176,6 +209,8 @@ def peut_agir_sur(cl, user=None):
     caisse (même si quelqu'un d'autre a compté pour lui), la direction."""
     user = user or frappe.session.user
     if cl.valide_par == user or CL._est_direction():
+        return True
+    if cl.caisse and cl.caisse in perimetre_sous_traitants(user):
         return True
     return bool(cl.caisse) and cl.caisse == _caisse_de(user)
 
@@ -524,16 +559,19 @@ def _etat(fin=None):
     cfg = config()
     tout_voir = peut_voir_toutes_les_caisses()
     ma_caisse = None if tout_voir else _caisse_de(frappe.session.user)
-    if not tout_voir and not ma_caisse:
+    # Responsable sous-traitant sans autre droit : sa caisse + celles des sous-traitants (31/10/2026).
+    perimetre = set() if tout_voir else perimetre_sous_traitants()
+    if not tout_voir and not ma_caisse and not perimetre:
         return {"restreint": True, "jours": [], "caisses": [], "a_regler": [], "compteurs": {}}
-    departs = ([date_depart_pour(ma_caisse, cfg)] if ma_caisse
+    miennes = ({ma_caisse} if ma_caisse else set()) | perimetre
+    departs = ([date_depart_pour(c, cfg) for c in miennes] if miennes
                else [cfg.get("date_depart")] + list((cfg.get("departs") or {}).values()))
     debut, tronque = bornes_etat(fin, departs)
     jours = [getdate(add_days(debut, i)) for i in range(date_diff(fin, debut) + 1)]
 
     filtres = {"date_cloture": ["between", [debut, fin]], "docstatus": ["<", 2], "caisse": ["!=", CL.CAISSE_GLOBALE]}
-    if ma_caisse:
-        filtres["caisse"] = ma_caisse
+    if miennes:
+        filtres["caisse"] = ["in", sorted(miennes)]
     clotures = {}
     for c in frappe.get_all("Cloture Caisse", filters=filtres, order_by="docstatus asc, creation asc",
                             fields=["name", "caisse", "date_cloture", "statut", "docstatus", "valide_par",
@@ -547,8 +585,8 @@ def _etat(fin=None):
     noms = {c for c, _j in clotures if c in visibles}
     for act in activites.values():
         noms.update(n for n, a in act.items() if caisse_active(a))
-    if ma_caisse:
-        noms = {ma_caisse}
+    if miennes:
+        noms = set(miennes)
     noms.discard(CL.CAISSE_GLOBALE)
 
     caisses, a_regler = [], []
@@ -570,7 +608,7 @@ def _etat(fin=None):
                 a_regler.append(dict(cell, caisse=caisse, date=str(j), depart=str(depart) if depart else None))
                 compteurs["non_comptee" if etat == ETAT_NON_COMPTEE else
                           "a_compter" if etat == ETAT_A_COMPTER else "a_collecter"] += 1
-        if not ma_caisse and all(c["etat"] in (ETAT_AVANT, ETAT_VIDE) for c in cellules.values()):
+        if not miennes and all(c["etat"] in (ETAT_AVANT, ETAT_VIDE) for c in cellules.values()):
             continue
         caisses.append({"caisse": caisse, "depart": str(depart) if depart else None, "cellules": cellules,
                         "non_comptees": sum(1 for c in cellules.values() if c["etat"] == ETAT_NON_COMPTEE),
@@ -624,19 +662,22 @@ def a_collecter(date=None):
     """Les clôtures en attente de collecte (toutes dates ≤ `date`) + les caisses qui ont eu la
     moindre action sans avoir compté, depuis la date de départ."""
     frappe.only_for(CL.ROLES)
-    role = _exiger_collecteur()
+    perimetre = perimetre_sous_traitants()
+    role = "titulaire" if perimetre else _exiger_collecteur()
     date = getdate(date or nowdate())
-    rows = frappe.get_all("Cloture Caisse",
-                          filters={"docstatus": 0, "statut": ["in", STATUTS_EN_ATTENTE],
-                                   "date_cloture": ["<=", date]},
-                          fields=["*"], order_by="date_cloture asc, compte_le asc")
+    filtres = {"docstatus": 0, "statut": ["in", STATUTS_EN_ATTENTE], "date_cloture": ["<=", date]}
+    if perimetre:
+        filtres["caisse"] = ["in", sorted(perimetre)]   # Responsable sous-traitant : leurs caisses seulement
+    rows = frappe.get_all("Cloture Caisse", filters=filtres, fields=["*"], order_by="date_cloture asc, compte_le asc")
     clotures = [_dict_cloture(frappe._dict(r)) for r in rows]
     for c in clotures:
         # Caisse comptée par le collecteur lui-même (pour un employé absent, ou la sienne) :
         #   - délégué / direction : versée telle quelle dans sa passation ;
         #   - titulaire : validation DIRECTE, sans seconde signature (demande 04/10/2026).
-        c["auto_passation"] = c["mienne"] and role != "titulaire"
-        c["validation_directe"] = c["mienne"] and role == "titulaire"
+        role_c = role_collecte_pour(c["caisse"])     # titulaire sur la caisse d'un sous-traitant (31/10/2026)
+        c["auto_passation"] = c["mienne"] and role_c != "titulaire"
+        c["validation_directe"] = c["mienne"] and role_c == "titulaire"
+        c["par_delegation"] = role_c != "titulaire"
         c["collectable"] = True
 
     # Pas comptées : depuis la date de départ, toute caisse qui a eu la moindre action (dette
@@ -644,7 +685,8 @@ def a_collecter(date=None):
     etat = _etat(date)
     non_comptees = [{"caisse": c["caisse"], "date": c["date"], "resume": c["resume"], "depart": c.get("depart"),
                      "aujourdhui": c["etat"] == ETAT_A_COMPTER}
-                    for c in etat["a_regler"] if c["etat"] in (ETAT_NON_COMPTEE, ETAT_A_COMPTER)]
+                    for c in etat["a_regler"] if c["etat"] in (ETAT_NON_COMPTEE, ETAT_A_COMPTER)
+                    and (not perimetre or c["caisse"] in perimetre)]
     return {"role": role, "date": str(date), "clotures": clotures, "non_comptees": non_comptees,
             "debut": etat.get("debut"), "date_depart": etat.get("date_depart"), "departs": etat.get("departs") or {},
             "par_delegation": role != "titulaire"}
@@ -692,8 +734,8 @@ def collecter(name, especes_recues, nb_cheques_recus=0, nb_traites_recus=0, comm
     déclaré -> validée ; différent -> « Écart de remise » renvoyé à l'employé ;
     `forcer` (après au moins un tour d'écart) -> le responsable tranche."""
     frappe.only_for(CL.ROLES)
-    role = _exiger_collecteur()
     cl = frappe.get_doc("Cloture Caisse", name)
+    role = _exiger_collecteur(cl.caisse)
     if cl.docstatus != 0 or cl.statut not in STATUTS_EN_ATTENTE:
         frappe.throw(_("La clôture {0} n'est pas en attente de collecte ({1}).").format(name, cl.statut))
     moi = frappe.session.user
@@ -765,8 +807,8 @@ def contester_justifications(name, commentaire):
     passe « Justification contestée », l'employé est prévenu, rouvre son comptage et les corrige
     (retour « À collecter »). Le collecteur garde le dernier mot : collecter = les accepter."""
     frappe.only_for(CL.ROLES)
-    _exiger_collecteur()
     cl = frappe.get_doc("Cloture Caisse", name)
+    _exiger_collecteur(cl.caisse)
     if cl.docstatus != 0 or cl.statut != STATUT_A_COLLECTER:
         frappe.throw(_("La clôture {0} n'attend pas la collecte ({1}) : rien à contester.").format(name, cl.statut))
     if not (cl.controles or "").strip():
@@ -1003,14 +1045,19 @@ def contexte(date=None):
 
 def resume(user, date=None):
     role = role_collecte(user)
+    perimetre = perimetre_sous_traitants(user)
+    if not role and perimetre:
+        role = "titulaire"      # Responsable sous-traitant : la collecte de LEURS caisses lui est ouverte
     date = getdate(date or nowdate())
     out = {"role": role, "photo_obligatoire": config()["photo_obligatoire"],
            "responsable": config()["responsable"],
            "a_collecter": 0, "mes_ecarts": [], "passations_a_remettre": 0, "passations_a_recevoir": 0}
     if role:
-        out["a_collecter"] = frappe.db.count("Cloture Caisse", {
-            "docstatus": 0, "statut": ["in", STATUTS_EN_ATTENTE], "valide_par": ["!=", user],
-            "date_cloture": ["<=", date]})
+        filtres = {"docstatus": 0, "statut": ["in", STATUTS_EN_ATTENTE], "valide_par": ["!=", user],
+                   "date_cloture": ["<=", date]}
+        if perimetre and not role_collecte(user):
+            filtres["caisse"] = ["in", sorted(perimetre)]
+        out["a_collecter"] = frappe.db.count("Cloture Caisse", filtres)
         out["a_collecter"] += frappe.db.count("Cloture Caisse", {
             "docstatus": 0, "statut": STATUT_A_COLLECTER, "valide_par": user,
             "date_cloture": ["<=", date]}) if role != "titulaire" else 0

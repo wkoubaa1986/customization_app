@@ -187,7 +187,8 @@
     const _after_render = frappe.views.ListView.prototype.after_render;
     frappe.views.ListView.prototype.after_render = function () {
         _after_render.apply(this, arguments);
-        if (this.doctype !== "Employee" || this._st_bouton || !frappe.user.has_role("System Manager")) return;
+        if (this.doctype !== "Employee" || this._st_bouton
+            || !(frappe.user.has_role("System Manager") || frappe.user.has_role("Responsable sous-traitant"))) return;
         try {
             this._st_bouton = true;
             this.page.add_inner_button(__("➕ Nouveau sous-traitant"), dialogue);

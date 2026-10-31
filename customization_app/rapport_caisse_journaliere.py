@@ -769,7 +769,10 @@ def get_data(d1, d2, employe=None):
     # `caisse_vue_complete` (drapeau serveur, jamais venu du navigateur) : l'état des caisses calcule
     # l'activité de toutes les caisses puis ne rend à l'employé que la sienne.
     restreint = not peut_voir_toutes_les_caisses() and not frappe.flags.get("caisse_vue_complete")
-    if restreint:
+    # Responsable sous-traitant sans autre droit : sa caisse + celles des sous-traitants (31/10/2026).
+    from customization_app.caisse_collecte import perimetre_sous_traitants
+    perimetre = perimetre_sous_traitants() if restreint else set()
+    if restreint and employe not in perimetre:
         employe = _ma_caisse(employees, users) or "—"
 
     # La liste déroulante du filtre montre TOUT le monde, même quand on filtre.
@@ -782,7 +785,7 @@ def get_data(d1, d2, employe=None):
         | {u.full_name for u in users if u.full_name and u.name not in emails_employes}
     )
     if restreint:
-        noms_disponibles = [employe] if employe != "—" else []
+        noms_disponibles = sorted(({employe} if employe != "—" else set()) | perimetre)
 
     # ⚠️ ANTI-DOUBLE-COMPTAGE : on traite TOUTES les caisses, même filtré — la
     # liste d'exclusion des « anciennes commandes » doit connaître les paiements

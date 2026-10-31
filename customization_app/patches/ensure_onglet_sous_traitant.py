@@ -1,6 +1,8 @@
 """Onglet « Sous-traitant » de la barre de gauche = le poste d'administration des sous-traitants (31/10/2026).
 
-Réservé aux System Manager (le sous-traitant, lui, a sa barre de navigation en bas de l'écran). Rejoué à
+Réservé aux System Manager et au rôle « Responsable sous-traitant » (créé ici, donné à Wassim, Néjib et Jamel —
+décision utilisateur 31/10/2026 ; ce rôle collecte aussi n'importe quelle caisse de sous-traitant, cf.
+caisse_collecte.role_collecte_pour). Le sous-traitant, lui, a sa barre de navigation en bas de l'écran. Rejoué à
 chaque migrate (after_migrate), idempotent : l'onglet appartient au code, son contenu est réécrit.
 
 Contenu : un bloc HTML « Sous-traitants (administration) » dont le script délègue tout à
@@ -12,10 +14,16 @@ raccourcis vers les listes et pages utiles.
 import json
 
 import frappe
+from frappe.permissions import add_permission, update_permission_property
+
+from customization_app.sous_traitant import ROLE_RESPONSABLE
 
 ESPACE = "Sous-traitant"
 BLOC = "Sous-traitants (administration)"
-ROLES = ("System Manager",)
+ROLES = ("System Manager", ROLE_RESPONSABLE)
+RESPONSABLES_USERS = ("koubaawassim@gmail.com", "aquaworld.servicing@gmail.com", "jimmyks007@gmail.com")
+#: ce que le rôle doit pouvoir ouvrir depuis le panneau (fiche employé, clôtures, vérifications)
+DROITS_RESPONSABLE = {"Employee": ("read", "write"), "Cloture Caisse": ("read",), "Verification Stock": ("read",)}
 #: (libellé, type, cible, couleur, filtre de liste)
 RACCOURCIS = (
     ("Sous-traitants (employés)", "DocType", "Employee", "Blue", [["Employee", "custom_sous_traitant", "=", 1, False]]),
@@ -28,6 +36,25 @@ RACCOURCIS = (
 BLOC_HTML = '<div class="st-admin"><p class="text-muted">Chargement du panneau des sous-traitants…</p></div>'
 BLOC_SCRIPT = """if (window.sousTraitant_admin) { window.sousTraitant_admin(root_element); }
 else { root_element.querySelector('.st-admin').innerHTML = '<p>Le script sous_traitant_admin.js n\\'est pas chargé : lancez <code>bench build --app customization_app</code> puis rechargez.</p>'; }"""
+
+
+def _assurer_role_responsable():
+    if not frappe.db.exists("Role", ROLE_RESPONSABLE):
+        frappe.get_doc({"doctype": "Role", "role_name": ROLE_RESPONSABLE, "desk_access": 1}).insert(ignore_permissions=True)
+    for doctype, types in DROITS_RESPONSABLE.items():
+        if not frappe.db.exists("DocType", doctype):
+            continue
+        if not frappe.db.exists("Custom DocPerm", {"parent": doctype, "role": ROLE_RESPONSABLE, "permlevel": 0}):
+            add_permission(doctype, ROLE_RESPONSABLE, 0)
+        for t in types:
+            update_permission_property(doctype, ROLE_RESPONSABLE, 0, t, 1)
+    for email in RESPONSABLES_USERS:
+        if frappe.db.exists("User", email) and not frappe.db.exists("Has Role", {"parent": email, "parenttype": "User",
+                                                                                 "role": ROLE_RESPONSABLE}):
+            u = frappe.get_doc("User", email)
+            u.append("roles", {"role": ROLE_RESPONSABLE})
+            u.flags.ignore_permissions = True
+            u.save()
 
 
 def _assurer_bloc():
@@ -47,6 +74,7 @@ def _assurer_bloc():
 def execute():
     if not frappe.db.exists("Custom Field", {"dt": "Employee", "fieldname": "custom_sous_traitant"}):
         return  # le patch sous_traitant_role n'est pas encore passé
+    _assurer_role_responsable()
     _assurer_bloc()
     if frappe.db.exists("Workspace", ESPACE):
         ws = frappe.get_doc("Workspace", ESPACE)

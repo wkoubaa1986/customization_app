@@ -198,7 +198,8 @@ def _controler_droits(caisse):
     if frappe.session.user in DIRECTION or "System Manager" in frappe.get_roles():
         return
     from customization_app import caisse_collecte as CC
-    if caisse != CAISSE_GLOBALE and CC.role_collecte() == "titulaire":
+    # (titulaire de la collecte ; ou Responsable sous-traitant sur la caisse d'un sous-traitant — 31/10/2026)
+    if caisse != CAISSE_GLOBALE and CC.role_collecte_pour(caisse) == "titulaire":
         return
     # _ma_caisse a besoin des listes ; on la reconstruit a minima.
     exclus_u, exclus_e = _exclusions()
@@ -957,7 +958,8 @@ def cloture_info(caisse, date):
     frappe.only_for(ROLES)
     caisse = (caisse or "").strip() or CAISSE_GLOBALE
     from customization_app import caisse_collecte as CC
-    if not CC.peut_voir_toutes_les_caisses() and caisse != CC._caisse_de(frappe.session.user):
+    if (not CC.peut_voir_toutes_les_caisses() and caisse != CC._caisse_de(frappe.session.user)
+            and caisse not in CC.perimetre_sous_traitants()):
         return None
     champs = ["name", "valide_par", "solde_theorique", "especes_comptees", "ecart", "statut",
               "especes_remises", "especes_recues", "ecart_remise", "collecte_par", "collecte_le",
