@@ -363,3 +363,15 @@ class TestPaiementQuiRemplaceLEcriture(unittest.TestCase):
         # les pièces jointes sont sauvées AVANT que l'écriture soit supprimée
         self.assertLess(source.index("_sauver_pieces_jointes(je_nom"),
                         source.index('frappe.delete_doc("Journal Entry"'))
+
+
+class TestConversionEcritureEnPaiements(unittest.TestCase):
+    def test_la_ligne_de_retenue_ne_devient_pas_un_paiement(self):
+        """31/10/2026 : ACC-PINV-2026-00121 recevait un « chèque » de 50 DT né de la ligne de retenue de l'écriture."""
+        import inspect
+        from customization_app import caisse_depenses as CD
+        src = inspect.getsource(CD)
+        i = src.index("credits = [(l.account, flt(l.credit_in_account_currency, 3))")
+        self.assertIn("l.account != compte_retenue]", src[i:i + 220])
+        self.assertIn("compte_retenue = _compte_retenue()", src[i - 200:i])
+

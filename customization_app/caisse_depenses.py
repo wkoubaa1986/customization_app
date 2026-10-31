@@ -2311,8 +2311,13 @@ def _avances_en_paiements(fiche_nom, ref_dt, ref_name, total, deja, company):
         je = frappe.get_doc("Journal Entry", je_nom)
         if je.docstatus == 2:
             continue
+        # ⚠️ LA LIGNE DE RETENUE N'EST PAS UN PAIEMENT. Quand la caisse a retenu à la source, l'écriture
+        # crédite aussi le compte de retenue : cette part n'a pas été versée au fournisseur, et la facture
+        # porte sa propre ligne de retenue (bank_retenue_sync). En faire un Payment Entry doublait le
+        # règlement — ACC-PINV-2026-00121, « chèque » de 50 DT en plus du chèque de 4 841 (31/10/2026).
+        compte_retenue = _compte_retenue()
         credits = [(l.account, flt(l.credit_in_account_currency, 3))
-                   for l in je.accounts if flt(l.credit_in_account_currency) > 0]
+                   for l in je.accounts if flt(l.credit_in_account_currency) > 0 and l.account != compte_retenue]
         if not credits:
             continue
         date = je.posting_date
