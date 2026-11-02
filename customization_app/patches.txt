@@ -116,3 +116,4 @@ customization_app.patches.ensure_envoi_email_documents
 customization_app.patches.ensure_compte_biat
 customization_app.patches.rapport_espece_biat
 customization_app.patches.caisse_especes_biat
+customization_app.patches.ensure_assistant_chatgpt
