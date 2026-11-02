@@ -114,3 +114,4 @@ customization_app.patches.ensure_select_account_partenaire #2
 customization_app.patches.reposts_bl_supprimes
 customization_app.patches.ensure_envoi_email_documents
 customization_app.patches.ensure_compte_biat
+customization_app.patches.rapport_espece_biat
