@@ -31,6 +31,7 @@ class TestVerifier(unittest.TestCase):
         s = schema_openapi("https://exemple.tn")
         self.assertEqual(s["servers"][0]["url"], "https://exemple.tn")
         ops = {list(v.values())[0]["operationId"] for v in s["paths"].values()}
-        self.assertEqual(ops, {"moi", "comptes_de_charge", "chercher_fournisseur", "chercher_client", "stock_article", "saisir_depense", "mes_saisies"})
+        self.assertEqual(ops, {"moi", "comptes_de_charge", "chercher_fournisseur", "chercher_client", "stock_article", "saisir_depense", "mes_saisies",
+                               "saisir_depense_euros", "banques", "verser_en_banque", "rendez_vous", "creneaux_rendez_vous", "creer_rendez_vous"})
         dep = s["paths"]["/api/method/customization_app.assistant_chatgpt.saisir_depense"]["post"]
         self.assertEqual(dep["requestBody"]["content"]["application/json"]["schema"]["required"], ["date", "libelle", "montant_ttc", "compte_charge"])

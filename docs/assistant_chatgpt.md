@@ -26,6 +26,11 @@ rôle posés par le patch `ensure_assistant_chatgpt`.
 | `stock_article` | stock par entrepôt et prix de vente standard |
 | `saisir_depense` | écriture de journal selon les règles de la caisse, **brouillon** par défaut, `valider=1` pour soumettre |
 | `mes_saisies` | les dernières écritures passées par l'assistant |
+| `saisir_depense_euros` | dépense payée depuis le compte en euros, taux du jour automatique (même cœur que la page Banque › Dépenses en euros), écriture validée |
+| `banques`, `verser_en_banque` | versement d'espèces d'une caisse (Sabah Espèces par défaut) vers Zitouna ou BIAT, avec la référence, validé par défaut |
+| `rendez_vous` | rendez-vous d'un jour, de plusieurs jours, ou d'un client (passés et à venir) |
+| `creneaux_rendez_vous` | demi-journées disponibles pour un client, par le portail de réservation (secteur, capacité, délais) |
+| `creer_rendez_vous` | réserve comme l'opératrice au téléphone : tâche au calendrier, SMS et e-mail de confirmation au client |
 
 Garde-fous : plafond 5 000 DT par dépense, date dans les 90 jours, compte parmi ceux de la caisse, modes Espèces /
 Carte de crédit / Virement / Chèque. Le rôle « Assistant ChatGPT » n'a aucune permission de doctype : l'API REST
