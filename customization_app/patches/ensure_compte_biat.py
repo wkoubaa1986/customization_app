@@ -9,9 +9,14 @@
 2. « Ayman Fourati - A&S », « Comptes Epargne Attijari - A&S » et « Revolut - A&S » : désactivés depuis longtemps
    mais porteurs d'écritures, donc INDESTRUCTIBLES (ERPNext refuse). Ils sortent de « Comptes bancaires » vers un
    groupe « Comptes fermés - A&S » (même racine), replié par défaut dans le plan comptable.
+3. « Comptes Epargne Attijari - A&S » portait encore un solde créditeur de 496,140 (dernier mouvement 21/09/2024) : il est
+   soldé par une écriture de journal au 31/12/2025, débit Attijari / crédit « Depenses personnelle - A&S » (décision
+   utilisateur 02/11/2026 : « une transaction de la dettes personnelles à ce compte, espèce »), le compte étant
+   réactivé le temps de l'écriture puis désactivé à nouveau. Les trois comptes fermés finissent à zéro.
 Idempotent.
 """
 import frappe
+from frappe.utils import flt
 
 SOCIETE = "Aquaworld & Servicing"
 GROUPE_BANQUES = "Comptes bancaires - A&S"
@@ -19,6 +24,46 @@ GROUPE_FERMES = "Comptes fermés - A&S"
 COMPTE_BIAT = "BIAT - A&S"
 NUMERO_BIAT = "08074023011000320548"
 A_FERMER = ("Ayman Fourati - A&S", "Comptes Epargne Attijari - A&S", "Revolut - A&S")
+COMPTE_ATTIJARI = "Comptes Epargne Attijari - A&S"
+COMPTE_PERSONNEL = "Depenses personnelle - A&S"
+DATE_SOLDE = "2025-12-31"
+REMARQUE_SOLDE = "Clôture du compte Épargne Attijari : solde remis en espèces depuis Dépenses personnelles (02/11/2026)"
+
+
+def _solde(compte) -> float:
+    return flt(frappe.db.sql("select sum(debit) - sum(credit) from `tabGL Entry` where account = %s and is_cancelled = 0",
+                             (compte,))[0][0], 3)
+
+
+def _solder_attijari(fait: list):
+    """Le compte fermé finit à zéro : une écriture au 31/12/2025 contre Dépenses personnelles, montant = son solde."""
+    if not (frappe.db.exists("Account", COMPTE_ATTIJARI) and frappe.db.exists("Account", COMPTE_PERSONNEL)):
+        return
+    if frappe.db.exists("Journal Entry", {"user_remark": REMARQUE_SOLDE, "docstatus": 1}):
+        return
+    solde = _solde(COMPTE_ATTIJARI)
+    if abs(solde) < 0.0005:
+        return
+    montant = abs(solde)
+    # solde créditeur (négatif) → on débite Attijari ; débiteur → on le crédite
+    attijari = {"account": COMPTE_ATTIJARI, ("debit_in_account_currency" if solde < 0 else "credit_in_account_currency"): montant}
+    personnel = {"account": COMPTE_PERSONNEL, ("credit_in_account_currency" if solde < 0 else "debit_in_account_currency"): montant}
+    etait_desactive = frappe.db.get_value("Account", COMPTE_ATTIJARI, "disabled")
+    if etait_desactive:
+        frappe.db.set_value("Account", COMPTE_ATTIJARI, "disabled", 0, update_modified=False)
+        frappe.clear_cache(doctype="Account")
+    try:
+        je = frappe.get_doc({"doctype": "Journal Entry", "voucher_type": "Journal Entry", "company": SOCIETE,
+                             "posting_date": DATE_SOLDE, "cheque_no": "espèce", "cheque_date": DATE_SOLDE,
+                             "user_remark": REMARQUE_SOLDE, "accounts": [attijari, personnel]})
+        je.flags.ignore_permissions = True
+        je.insert()
+        je.submit()
+        fait.append(f"soldé {COMPTE_ATTIJARI} par {je.name} ({montant:.3f})")
+    finally:
+        if etait_desactive:
+            frappe.db.set_value("Account", COMPTE_ATTIJARI, "disabled", 1, update_modified=False)
+            frappe.clear_cache(doctype="Account")
 
 
 def execute():
@@ -59,6 +104,11 @@ def execute():
             doc.flags.ignore_permissions = True
             doc.save()
             fait.append("fermé " + nom)
+    # 3. Attijari à zéro, puis contrôle : les comptes fermés ne doivent plus rien porter.
+    _solder_attijari(fait)
+    for nom in A_FERMER:
+        if frappe.db.exists("Account", nom) and abs(_solde(nom)) >= 0.0005:
+            frappe.log_error(f"{nom} : solde {_solde(nom)}", "ensure_compte_biat : compte fermé non soldé")
     if fait:
         frappe.db.commit()
     return fait
