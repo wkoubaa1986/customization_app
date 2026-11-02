@@ -35,8 +35,8 @@ def traiter(message: dict, appeler) -> dict | None:
     if methode.startswith("notifications/"):
         return None
     if methode == "initialize":
-        res = {"protocolVersion": VERSION_PROTOCOLE, "capabilities": {"tools": {"listChanged": False}},
-               "serverInfo": {"name": NOM_SERVEUR, "version": "1.0.0"},
+        res = {"protocolVersion": VERSION_PROTOCOLE, "capabilities": {"tools": {"listChanged": True}},
+               "serverInfo": {"name": NOM_SERVEUR, "version": "1.2.0"},
                "instructions": A.INSTRUCTIONS_GPT}
     elif methode == "ping":
         res = {}

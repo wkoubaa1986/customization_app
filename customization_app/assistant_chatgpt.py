@@ -88,6 +88,21 @@ def _url(doctype, name):
     return get_url("/app/%s/%s" % (frappe.scrub(doctype).replace("_", "-"), name))
 
 
+def _fiche(je) -> dict:
+    """Ce que ChatGPT doit rapporter tel quel, sans rien deviner : l'écriture telle qu'ERPNext l'a enregistrée."""
+    je = frappe.get_doc("Journal Entry", je) if isinstance(je, str) else je
+    return {"ecriture": je.name, "statut": _("Validée") if je.docstatus == 1 else (_("Annulée") if je.docstatus == 2 else _("Brouillon : à valider")),
+            "date": str(je.posting_date), "reference_libelle": je.cheque_no, "remarque": je.user_remark,
+            "total_dt": flt(je.total_debit, 3), "equilibree": abs(flt(je.total_debit) - flt(je.total_credit)) < 0.0005,
+            "lignes": [{"compte": a.account, "debit": flt(a.debit, 3), "credit": flt(a.credit, 3),
+                        **({"devise": a.account_currency, "montant_devise": flt(a.credit_in_account_currency or a.debit_in_account_currency, 2),
+                            "taux": flt(a.exchange_rate, 6)} if a.account_currency and a.account_currency != "TND" else {})}
+                       for a in je.accounts],
+            "moyen_de_paiement": _("sans objet : écriture de journal (le compte crédité dit d'où sort l'argent)"),
+            "controle": _("Écriture enregistrée dans ERPNext, équilibrée ; rien d'autre à vérifier."),
+            "url": _url("Journal Entry", je.name)}
+
+
 def _mots(texte: str, colonnes: list[str]) -> tuple[str, list]:
     """Condition SQL « chaque mot apparaît dans l'une des colonnes » (ordre libre : « citerne 3.2 » trouve
     « Citerne, 3.2G »). → (sql, valeurs). Pure."""
@@ -181,9 +196,8 @@ def saisir_depense(date, libelle, montant_ttc, compte_charge, mode="Espèces", t
     je.insert()
     if cint(valider):
         je.submit()
-    return {"ecriture": je.name, "statut": _("Validée") if je.docstatus == 1 else _("Brouillon : à valider dans ERPNext"),
-            "date": str(je.posting_date), "libelle": libelle, "montant_ttc": flt(montant_ttc, 3), "tva": flt(tva, 3),
-            "compte_charge": compte_charge, "mode": mode, "credit": CD.compte_credit(mode), "url": _url("Journal Entry", je.name)}
+    return dict(_fiche(je), libelle=libelle, montant_ttc=flt(montant_ttc, 3), tva=flt(tva, 3), compte_charge=compte_charge,
+                mode=mode, credit=CD.compte_credit(mode))
 
 
 @frappe.whitelist()
@@ -252,8 +266,7 @@ def verser_en_banque(date, montant, banque, compte_especes=None, reference=None,
     je.insert()
     if cint(valider):
         je.submit()
-    return {"ecriture": je.name, "statut": _("Validée") if je.docstatus == 1 else _("Brouillon : à valider dans ERPNext"),
-            "date": str(d), "montant": m, "banque": banque, "compte_especes": compte_especes, "url": _url("Journal Entry", je.name)}
+    return dict(_fiche(je), montant=m, banque=banque, compte_especes=compte_especes, reference=(reference or "").strip() or None)
 
 
 # ── Dépenses en euros (page Banque de bank_retenue_sync) ─────────────────────
@@ -280,9 +293,8 @@ def saisir_depense_euros(date, libelle, montant_eur, compte_charge=None, taux=No
     r = DE._creer([{"date": date, "libelle": libelle, "montant_eur": flt(montant_eur, 2), "compte_charge": compte_charge}],
                   taux, DE.COMPTE_EUROS, source, saisi_par="%s par %s" % (MARQUE, frappe.session.user), ignorer_permissions=True)
     c = r["crees"][0]
-    return {"ecriture": c["name"], "statut": _("Validée"), "date": c["date"], "libelle": c["libelle"], "montant_eur": c["eur"],
-            "taux": taux, "source_taux": source, "montant_tnd": c["tnd"], "compte_charge": compte_charge,
-            "credit": DE.COMPTE_EUROS, "url": _url("Journal Entry", c["name"])}
+    return dict(_fiche(c["name"]), libelle=c["libelle"], montant_eur=c["eur"], taux=taux, source_taux=source, montant_tnd=c["tnd"],
+                compte_charge=compte_charge, credit=DE.COMPTE_EUROS)
 
 
 # ── Rendez-vous (calendrier des tâches, portail de réservation) ───────────────
@@ -525,7 +537,7 @@ def valider_ecriture(ecriture, confirmation=None):
     je.flags.ignore_permissions = True
     je.add_comment("Comment", _("Validée via ChatGPT par {0}").format(frappe.session.user))
     je.submit()
-    return {"ecriture": ecriture, "statut": _("Validée"), "apercu": _lecture(je), "url": _url("Journal Entry", ecriture)}
+    return dict(_fiche(je), apercu=_lecture(je))
 
 
 @frappe.whitelist(methods=["POST"])
@@ -768,6 +780,11 @@ def openapi():
 
 
 INSTRUCTIONS_GPT = """Tu es l'assistant ERPNext d'Aqua World & Servicing (Tunisie, dinars TND). Tu parles français.
+LA RÉPONSE D'UN OUTIL FAIT FOI : rapporte-la telle quelle (numéro d'écriture, statut, date, lignes compte/débit/crédit, remarque,
+lien). N'invente aucun contrôle, ne réclame pas un champ que la réponse ne contient pas, ne demande pas de permission pour
+une vérification que tu n'as pas faite. « statut » dit si l'écriture est validée ou en brouillon ; « equilibree » et « controle »
+disent que tout est en ordre. Si on te demande de valider un brouillon, appelle valider_ecriture sans question supplémentaire.
+Les montants s'écrivent en DT avec trois décimales (500,000 DT).
 Quand on t'envoie une photo de facture ou de reçu : lis fournisseur, date, montant TTC, TVA et son taux, numéro de pièce.
 Appelle comptes_de_charge pour choisir le compte exact. Récapitule en une ligne (date, libellé, TTC, TVA, compte, mode) et
 demande confirmation AVANT d'appeler saisir_depense. Mode « Espèces » sauf indication. Laisse en brouillon (valider=0) sauf
