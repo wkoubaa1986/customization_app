@@ -110,3 +110,4 @@ customization_app.patches.reprise_transformation_00171
 customization_app.patches.sous_traitant_role
 customization_app.patches.echeancier_mode_achats
 customization_app.patches.ensure_select_account_partenaire
+customization_app.patches.ensure_select_account_partenaire #2

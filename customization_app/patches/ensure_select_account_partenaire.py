@@ -17,6 +17,11 @@ ont déjà sur Account. Le contractant (rôle Contractor) a « read » depuis 20
 
 ⚠️ CUSTOM DOCPERM, ET NON DOCPERM : Account porte déjà des Custom DocPerm, donc Frappe ignore les
 permissions standard de l'app ; seule une ligne Custom DocPerm compte (cf. ensure_lecture_payment_term).
+
+⚠️ « read » VAUT 1 PAR DÉFAUT sur un Custom DocPerm : la première version (02/11 matin) ne posait que
+`select` et a obtenu read + select, donc la liste et les fiches des comptes. Rejoué (« #2 ») pour forcer
+read = 0 sur la ligne existante : select seul suffit au contrôle d'ERPNext (vérifié en dev, la commande
+brouillon s'enregistre et `frappe.has_permission("Account", "read")` répond faux).
 """
 import frappe
 
@@ -31,7 +36,12 @@ def execute():
     for role in ROLES:
         if not frappe.db.exists("Role", role):
             continue
-        if frappe.db.exists("Custom DocPerm", {"parent": DOCTYPE, "role": role, "permlevel": 0}):
+        existante = frappe.db.get_value("Custom DocPerm", {"parent": DOCTYPE, "role": role, "permlevel": 0},
+                                        ["name", "read", "select"], as_dict=True)
+        if existante:
+            if existante.read or not existante.select:
+                frappe.db.set_value("Custom DocPerm", existante.name, {"read": 0, "select": 1})
+                ajoutes.append(role)
             continue
         frappe.get_doc({
             "doctype": "Custom DocPerm",
@@ -40,6 +50,7 @@ def execute():
             "parentfield": "permissions",
             "role": role,
             "permlevel": 0,
+            "read": 0,
             "select": 1,
         }).insert(ignore_permissions=True)
         ajoutes.append(role)
