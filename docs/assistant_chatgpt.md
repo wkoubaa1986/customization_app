@@ -44,6 +44,7 @@ rôle posés par le patch `ensure_assistant_chatgpt`.
 | `mes_saisies` | les dernières écritures passées par l'assistant |
 | `saisir_depense_euros` | dépense payée depuis le compte en euros, taux du jour automatique (même cœur que la page Banque › Dépenses en euros), écriture validée |
 | `banques`, `verser_en_banque` | versement d'espèces d'une caisse (Sabah Espèces par défaut) vers Zitouna ou BIAT, avec la référence, validé par défaut |
+| `corriger_ecriture`, `annuler_ecriture` | correction (annulation + nouvelle écriture, même état) ou annulation d'une écriture de journal, motif obligatoire. Écriture de l'assistant : direct. Écriture d'un humain : la première demande ne fait rien et renvoie un aperçu + un jeton (10 min) ; seule la seconde demande, avec le jeton après accord explicite, agit. Structure inconnue : annulable seulement |
 | `rendez_vous` | rendez-vous d'un jour, de plusieurs jours, ou d'un client (passés et à venir) |
 | `creneaux_rendez_vous` | demi-journées disponibles pour un client, par le portail de réservation (secteur, capacité, délais) |
 | `creer_rendez_vous` | réserve comme l'opératrice au téléphone : tâche au calendrier, SMS et e-mail de confirmation au client |

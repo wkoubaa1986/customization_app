@@ -110,7 +110,8 @@ def moi():
     return {"utilisateur": frappe.session.user, "societe": CD.COMPANY, "aujourd_hui": nowdate(), "plafond_dt": PLAFOND_DT,
             "modes_de_paiement": list(MODES),
             "actions": ["comptes_de_charge", "chercher_fournisseur", "chercher_client", "stock_article", "saisir_depense", "mes_saisies",
-                        "saisir_depense_euros", "banques", "verser_en_banque", "rendez_vous", "creneaux_rendez_vous", "creer_rendez_vous"]}
+                        "saisir_depense_euros", "banques", "verser_en_banque", "annuler_ecriture", "corriger_ecriture",
+                        "rendez_vous", "creneaux_rendez_vous", "creer_rendez_vous"]}
 
 
 @frappe.whitelist()
@@ -194,6 +195,7 @@ def mes_saisies(limite=20):
                             order by creation desc limit %s""", ("%" + MARQUE + "%", cint(limite) or 20), as_dict=True)
     return [{"ecriture": r.name, "date": str(r.posting_date), "libelle": (r.libelle or "").replace(CD.PREFIXE_CAISSE, ""),
              "montant": flt(r.montant, 3), "statut": _("Validée") if r.docstatus == 1 else _("Brouillon"),
+             "type": TYPE_VERSEMENT if (r.libelle or "").startswith("Versement espèces") else TYPE_DEPENSE,
              "url": _url("Journal Entry", r.name)} for r in rows]
 
 
@@ -383,6 +385,172 @@ def creer_rendez_vous(client, type_intervention, date, demi_journee, adresse=Non
     return r
 
 
+# ── Corriger / annuler ce que l'assistant a lui-même passé ───────────────────
+
+import re as _re
+
+TYPE_VERSEMENT, TYPE_DEPENSE, TYPE_EUROS = "versement", "depense", "depense_euros"
+_RX_MODE = _re.compile(r"\((Espèces|Carte de crédit|Virement|Chèque)(?:, TVA ([0-9.]+) à ([0-9.]+) %)?\)")
+
+
+def lire_ecriture(je: dict) -> dict:
+    """Ce que l'assistant avait saisi, relu sur l'écriture : {type, date, …}. Pure.
+    `je` : {name, docstatus, posting_date, cheque_no, user_remark, accounts: [{account, debit, credit,
+    credit_in_account_currency, exchange_rate, account_currency}]}."""
+    remarque = je.get("user_remark") or ""
+    libelle = (je.get("cheque_no") or "")
+    comptes = je.get("accounts") or []
+    debits = [a for a in comptes if flt(a.get("debit")) > 0]
+    credits = [a for a in comptes if flt(a.get("credit")) > 0]
+    base = {"ecriture": je.get("name"), "statut": "validee" if je.get("docstatus") == 1 else "brouillon",
+            "date": str(je.get("posting_date"))[:10]}
+    banques, caisses = je.get("_banques") or [], je.get("_caisses") or list(COMPTES_ESPECES)
+    base["de_l_assistant"] = MARQUE in remarque
+    if libelle.startswith("Versement espèces") or (len(debits) == 1 and len(credits) == 1
+                                                  and debits[0]["account"] in banques and credits[0]["account"] in caisses):
+        ref = libelle.split(" — réf. ", 1)[1] if " — réf. " in libelle else (None if base["de_l_assistant"] else libelle or None)
+        return dict(base, type=TYPE_VERSEMENT, montant=flt(debits[0]["debit"], 3) if debits else 0,
+                    banque=debits[0]["account"] if debits else None, compte_especes=credits[0]["account"] if credits else None,
+                    reference=ref)
+    if remarque.startswith("Dépense en euros") or any((a.get("account_currency") or "") == "EUR" for a in credits):
+        eur = next((a for a in credits if (a.get("account_currency") or "") == "EUR"), credits[0] if credits else {})
+        return dict(base, type=TYPE_EUROS, libelle=libelle, montant_eur=flt(eur.get("credit_in_account_currency"), 2),
+                    taux=flt(eur.get("exchange_rate"), 6), compte_charge=debits[0]["account"] if debits else None)
+    charges_connues = je.get("_charges")           # comptes de charge (None = non fourni : on devine par exclusion)
+    def est_charge(a):
+        c = a["account"]
+        if c.startswith("TVA") or c in caisses or c in banques:
+            return False
+        return c in charges_connues if charges_connues is not None else True
+    charge = next((a for a in debits if est_charge(a)), None)
+    tva = next((a for a in debits if a["account"].startswith("TVA")), None)
+    m = _RX_MODE.search(remarque)
+    # Structure inconnue (pas de charge, plusieurs charges, ni caisse ni banque au crédit…) : on sait l'annuler, pas la refaire.
+    if not charge or len([a for a in debits if est_charge(a)]) > 1 or len(debits) > 2 or len(credits) != 1 \
+            or (credits[0]["account"] not in caisses and credits[0]["account"] not in banques and credits[0]["account"] != CD.COMPTE_DECOUVERT):
+        return dict(base, type="inconnu", libelle=libelle, montant=flt(sum(flt(a["credit"]) for a in credits), 3),
+                    lignes=[{"compte": a["account"], "debit": flt(a.get("debit"), 3), "credit": flt(a.get("credit"), 3)} for a in comptes])
+    mode_devine = "Espèces" if credits[0]["account"] in caisses else "Carte de crédit"
+    return dict(base, type=TYPE_DEPENSE, libelle=libelle.replace(CD.PREFIXE_CAISSE, "", 1),
+                montant_ttc=flt(sum(flt(a["credit"]) for a in credits), 3), compte_charge=charge["account"] if charge else None,
+                tva=flt(tva["debit"], 3) if tva else 0, taux_tva=7 if tva and "7" in tva["account"] else (19 if tva else 0),
+                mode=m.group(1) if m else mode_devine)
+
+
+JETON_MINUTES = 10
+
+
+def _ecriture(nom):
+    """L'écriture doit exister, ni annulée ni trop ancienne."""
+    if not frappe.db.exists("Journal Entry", nom):
+        frappe.throw(_("Écriture {0} introuvable.").format(nom))
+    je = frappe.get_doc("Journal Entry", nom)
+    if je.docstatus == 2:
+        frappe.throw(_("{0} est déjà annulée.").format(nom))
+    if getdate(je.posting_date) < add_days(getdate(nowdate()), -JOURS_ARRIERE):
+        frappe.throw(_("{0} a plus de {1} jours : à corriger dans ERPNext.").format(nom, JOURS_ARRIERE))
+    return je
+
+
+def _lecture(je) -> dict:
+    d = je.as_dict()
+    d["_banques"], d["_caisses"] = _banques(), list(COMPTES_ESPECES)
+    d["_charges"] = frappe.get_all("Account", filters={"root_type": "Expense", "is_group": 0}, pluck="name")
+    return lire_ecriture(d)
+
+
+def _jeton(action, nom, params, fenetre: int) -> str:
+    """Jeton sans état : empreinte (secret du site, utilisateur, action, écriture, changements, fenêtre de dix minutes).
+    Rien à stocker, rien à expirer : la fenêtre courante et la précédente sont acceptées."""
+    secret = frappe.local.conf.get("encryption_key") or frappe.local.conf.get("secret") or "assistant"
+    return frappe.utils.sha256_hash("%s|%s|%s|%s|%s|%s" % (secret, frappe.session.user, action, nom,
+                                                           json.dumps(params, sort_keys=True, default=str), fenetre))[:12]
+
+
+def _confirmation_humaine(action, je, params, confirmation):
+    """Écriture qui n'est PAS de l'assistant (02/11/2026) : la première demande ne fait RIEN et renvoie l'aperçu avec un
+    jeton valable dix minutes ; seule une seconde demande portant ce jeton (donc après relecture et accord d'un humain
+    dans la conversation) agit. Renvoie la réponse à donner si l'on doit s'arrêter là, None sinon."""
+    apercu = _lecture(je)
+    if apercu["de_l_assistant"]:
+        return None
+    fenetre = int(frappe.utils.now_datetime().timestamp() // (JETON_MINUTES * 60))
+    if confirmation and confirmation in (_jeton(action, je.name, params, fenetre), _jeton(action, je.name, params, fenetre - 1)):
+        return None
+    jeton = _jeton(action, je.name, params, fenetre)
+    return {"confirmation_requise": True, "jeton": jeton, "valable_minutes": JETON_MINUTES, "action": action, "ecriture": je.name,
+            "apercu": apercu, "changements": params,
+            "message": _("Cette écriture n'a pas été passée par l'assistant. Montrez l'aperçu, obtenez l'accord explicite d'un "
+                         "humain, puis rappelez la même action avec ce jeton dans `confirmation`.")}
+
+
+def _retirer(je, motif: str):
+    """Annule une écriture validée (commentaire avec le motif) ou supprime un brouillon."""
+    if je.docstatus == 1:
+        je.add_comment("Comment", _("Annulée via ChatGPT par {0} : {1}").format(frappe.session.user, motif))
+        je.flags.ignore_permissions = True
+        je.cancel()
+        return _("annulée")
+    je.flags.ignore_permissions = True
+    je.delete()
+    return _("brouillon supprimé")
+
+
+@frappe.whitelist(methods=["POST"])
+def annuler_ecriture(ecriture, motif, confirmation=None):
+    """Annule (validée) ou supprime (brouillon) une écriture de journal. Motif obligatoire, gardé en commentaire.
+    Écriture qui n'est pas de l'assistant : aperçu + jeton d'abord, action seulement avec le jeton."""
+    _acces()
+    if len((motif or "").strip()) < 5:
+        frappe.throw(_("Donnez un motif (au moins cinq caractères)."))
+    je = _ecriture(ecriture)
+    arret = _confirmation_humaine("annuler", je, {"motif": motif.strip()}, confirmation)
+    if arret:
+        return arret
+    resume = _lecture(je)
+    return {"ecriture": ecriture, "resultat": _retirer(je, motif.strip()), "etait": resume}
+
+
+@frappe.whitelist(methods=["POST"])
+def corriger_ecriture(ecriture, motif, date=None, montant=None, banque=None, compte_especes=None, reference=None,
+                      libelle=None, compte_charge=None, mode=None, tva=None, taux_tva=None, montant_eur=None, taux=None,
+                      confirmation=None):
+    """Corrige une écriture de journal : l'ancienne est annulée (ou le brouillon supprimé) et une nouvelle est passée avec
+    les valeurs changées, dans le même état. Ne donnez que ce qui change. Écriture qui n'est pas de l'assistant : aperçu +
+    jeton d'abord ; structure inconnue (plusieurs charges…) : seulement annulable."""
+    _acces()
+    if len((motif or "").strip()) < 5:
+        frappe.throw(_("Donnez un motif (au moins cinq caractères)."))
+    je = _ecriture(ecriture)
+    avant = _lecture(je)
+    if avant["type"] == "inconnu":
+        frappe.throw(_("{0} a une structure que l'assistant ne sait pas refaire (lignes : {1}) : annulez-la puis saisissez "
+                       "dans ERPNext, ou corrigez-la dans ERPNext.").format(ecriture, len(avant.get("lignes") or [])))
+    valider = 1 if je.docstatus == 1 else 0
+    nouveau = {k: v for k, v in {"date": date, "montant": montant, "banque": banque, "compte_especes": compte_especes,
+                                 "reference": reference, "libelle": libelle, "compte_charge": compte_charge, "mode": mode,
+                                 "tva": tva, "taux_tva": taux_tva, "montant_eur": montant_eur, "taux": taux}.items()
+               if v not in (None, "")}
+    if not nouveau:
+        frappe.throw(_("Rien à changer : indiquez au moins un champ."))
+    arret = _confirmation_humaine("corriger", je, dict(nouveau, motif=motif.strip()), confirmation)
+    if arret:
+        return arret
+    p = dict(avant, **nouveau)
+    resultat = _retirer(je, motif.strip())
+    if avant["type"] == TYPE_VERSEMENT:
+        r = verser_en_banque(p["date"], p["montant"], p["banque"], p.get("compte_especes"), p.get("reference"), valider=valider)
+    elif avant["type"] == TYPE_EUROS:
+        r = saisir_depense_euros(p["date"], p["libelle"], p["montant_eur"], p.get("compte_charge"), p.get("taux"))
+    else:
+        r = saisir_depense(p["date"], p["libelle"], p["montant_ttc"], p["compte_charge"], p.get("mode") or "Espèces",
+                           p.get("tva") or 0, p.get("taux_tva") or 0, p.get("fournisseur"), p.get("reference"), valider=valider)
+    r["ancienne_ecriture"] = ecriture
+    r["ancienne"] = resultat
+    r["avant"] = avant
+    return r
+
+
 # ── Schéma OpenAPI pour le GPT ───────────────────────────────────────────────
 
 #: Les outils, décrits une seule fois : {nom: (résumé, {param: [type, description]}, POST ?, requis)}. Le schéma OpenAPI
@@ -428,6 +596,21 @@ OUTILS = {
         "client": ["string", "Nom exact du client"], "type_intervention": ["string", "Entretien ou Réparation"],
         "adresse": ["string", "Adresse du client si plusieurs (vide = la principale)"],
     }, False, ["client"]),
+    "annuler_ecriture": ("Annuler (validée) ou supprimer (brouillon) une écriture de journal. Si elle n'est pas de l'assistant, la réponse donne un aperçu et un jeton : montrer l'aperçu, obtenir l'accord humain, rappeler avec `confirmation`", {
+        "ecriture": ["string", "Numéro de l'écriture (ACC-JV-…)"],
+        "motif": ["string", "Pourquoi, cinq caractères au moins (gardé en commentaire)"],
+        "confirmation": ["string", "Jeton reçu à la première demande, après accord explicite de l'humain"],
+    }, True, ["ecriture", "motif"]),
+    "corriger_ecriture": ("Corriger une écriture de journal : l'ancienne est annulée et une nouvelle passée avec les valeurs changées, même état. Pas de l'assistant → aperçu + jeton, puis rappel avec `confirmation`", {
+        "ecriture": ["string", "Numéro de l'écriture à corriger"], "motif": ["string", "Pourquoi, cinq caractères au moins"],
+        "confirmation": ["string", "Jeton reçu à la première demande, après accord explicite de l'humain"],
+        "date": ["string", "Nouvelle date AAAA-MM-JJ"], "montant": ["number", "Nouveau montant (versement)"],
+        "banque": ["string", "Nouvelle banque (versement)"], "compte_especes": ["string", "Nouvelle caisse d'origine (versement)"],
+        "reference": ["string", "Nouvelle référence"], "libelle": ["string", "Nouveau libellé (dépense)"],
+        "compte_charge": ["string", "Nouveau compte de charge (dépense)"], "mode": ["string", "Nouveau mode (dépense)"],
+        "tva": ["number", "Nouvelle TVA (dépense)"], "taux_tva": ["number", "Nouveau taux de TVA (dépense)"],
+        "montant_eur": ["number", "Nouveau montant en euros (dépense en euros)"], "taux": ["number", "Nouveau taux EUR→TND (dépense en euros)"],
+    }, True, ["ecriture", "motif"]),
     "creer_rendez_vous": ("Réserver un rendez-vous pour un client (le client reçoit un SMS de confirmation)", {
         "client": ["string", "Nom exact du client"], "type_intervention": ["string", "Entretien ou Réparation"],
         "date": ["string", "Jour AAAA-MM-JJ parmi les créneaux"], "demi_journee": ["string", "matin ou apres_midi"],
@@ -488,5 +671,9 @@ si on te dit « valide ». Après la saisie, donne le numéro d'écriture et son
 demande. Pour le stock ou un client, utilise stock_article / chercher_client et réponds brièvement.
 Dépense payée en euros (pub Google, abonnement) : saisir_depense_euros, le taux du jour est pris automatiquement.
 Versement d'espèces à la banque : banques pour les comptes, puis verser_en_banque après confirmation (date, montant, banque, référence).
+Pour corriger ou annuler une écriture que tu as passée : mes_saisies pour la retrouver, confirmation, puis corriger_ecriture
+(seuls les champs qui changent) ou annuler_ecriture, toujours avec un motif. Pour une écriture qui n'est PAS de toi, le serveur
+répond d'abord par un aperçu et un jeton : montre l'aperçu, demande un accord explicite, et seulement alors rappelle l'action avec
+le jeton dans `confirmation`. Jamais sans cet accord.
 Rendez-vous : rendez_vous pour voir ceux d'un jour ou d'un client ; pour en prendre un, chercher_client puis
 creneaux_rendez_vous, propose 2 ou 3 demi-journées, et seulement après accord creer_rendez_vous (le client reçoit un SMS)."""
