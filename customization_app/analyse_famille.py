@@ -19,7 +19,13 @@ LES RÈGLES (`suspicions`, pure, testée) repèrent les signatures d'ERREUR DE S
   - bilan de famille : rapprochements qui se compensent entre articles = confusions de codes, pas des pertes.
 Puis l'IA (aquaworld_ia → OpenAI, si clé et plafond) relit le dossier et rédige par article : diagnostic,
 hypothèses classées (erreur de code, de quantité, échange, perte réelle), pièce à vérifier en premier.
-Elle ne tranche pas seule : chaque hypothèse cite la pièce. Résultat gardé 24 h en cache (« Relancer » refait).
+Elle ne tranche pas seule : chaque hypothèse cite la pièce.
+
+EN TÂCHE DE FOND, ENREGISTRÉE (02/11/2026, après une « requête expirée » en prod : l'appel IA dépassait le délai
+de la passerelle). Chaque analyse est une fiche « Analyse Famille Stock » (famille, période, entrepôt, inventaire
+d'origine, qui, quand, statut, résultat JSON, conclusion) : avec IA elle tourne dans la file « long » et l'utilisateur
+est prévenu à la fin (événement temps réel + notification Desk) ; sans IA elle est immédiate. Depuis la feuille
+d'inventaire, les analyses lancées sur cet inventaire se relisent à tout moment.
 """
 from __future__ import annotations
 
@@ -29,7 +35,7 @@ from collections import defaultdict
 
 import frappe
 from frappe import _
-from frappe.utils import add_months, cint, flt, get_datetime, getdate, nowdate
+from frappe.utils import add_months, cint, flt, getdate, now_datetime, nowdate
 
 from customization_app import stock_entrepots as S
 
@@ -38,7 +44,9 @@ MAX_ARTICLES = 40
 MAX_LIGNES = 400
 TOL = 1e-6
 FONCTIONNALITE_IA = "Enquête écarts stock"      # option existante du Select du Journal IA (aquaworld_ia)
-CACHE_SECONDES = 24 * 3600
+DOCTYPE_ANALYSE = "Analyse Famille Stock"
+EVENEMENT = "analyse_famille_terminee"
+STATUT_EN_COURS, STATUT_TERMINEE, STATUT_ECHEC = "En cours", "Terminée", "Échec"
 NATURES = {"Purchase Receipt": "achat", "Purchase Invoice": "achat", "Delivery Note": "vente",
            "Sales Invoice": "vente", "Stock Entry": "transfert", "Stock Reconciliation": "rapprochement"}
 
@@ -402,20 +410,10 @@ def _ia(doss: dict) -> dict | None:
     return {"conclusion": (rep.get("conclusion") or "")[:2500], "articles": arts}
 
 
-# ── Point d'entrée ───────────────────────────────────────────────────────────
+# ── Calcul ───────────────────────────────────────────────────────────────────
 
-def _cle(famille, entrepot, debut, fin) -> str:
-    return "analyse_famille:" + frappe.utils.sha256_hash(f"{famille}|{entrepot}|{debut}|{fin}")[:24]
-
-
-@frappe.whitelist()
-def analyser_famille(groupe=None, articles=None, item_code=None, entrepot=None, mois=None, fin=None, ia=1, relancer=0):
-    """Le dossier d'une famille sur `mois` mois (12 par défaut) jusqu'à `fin` (aujourd'hui), dans `entrepot`
-    (Magasin par défaut ; "*" = tous les entrepôts), les suspicions des règles et, si demandé, la relecture IA.
-    Gardé en cache 24 h (relancer=1 refait tout)."""
-    S._lecture()
-    if not S.est_responsable():
-        frappe.throw(_("L'analyse d'une famille est réservée aux responsables."), frappe.PermissionError)
+def _calculer(groupe=None, articles=None, item_code=None, entrepot=None, mois=None, fin=None) -> dict:
+    """Le dossier complet (règles comprises, sans IA)."""
     items, famille = _articles(groupe, articles, item_code)
     if not items:
         frappe.throw(_("Aucun article de stock dans cette famille."))
@@ -425,12 +423,6 @@ def analyser_famille(groupe=None, articles=None, item_code=None, entrepot=None, 
     fin_d = getdate(fin) if fin else getdate(nowdate())
     debut_d = add_months(fin_d, -cint(mois or PERIODE_MOIS))
     debut, fin_ts = f"{debut_d} 23:59:59", f"{fin_d} 23:59:59"
-    cle = _cle(famille + "|" + ",".join(codes), entrepot, debut, fin_ts) + f"|ia{cint(ia)}"
-    if not cint(relancer):
-        gard = frappe.cache().get_value(cle)
-        if gard:
-            gard["cache"] = True
-            return gard
     mvts = _mouvements(codes, entrepot, debut, fin_ts)
     stocks_debut, stocks_fin = _stocks_a(codes, entrepot, debut), _stocks_a(codes, entrepot, fin_ts)
     mensuel = mensualiser([{"item_code": m.item_code, "date": m.date, "voucher_type": m.voucher_type, "qte": m.qte} for m in mvts])
@@ -446,12 +438,105 @@ def analyser_famille(groupe=None, articles=None, item_code=None, entrepot=None, 
     remarquables = [v for v in ventes if v.get("kit") or flt(v["qte"]) >= max(3, 3 * med_vente.get(v["item_code"], 1))
                     or (flt(v.get("rate")) > 0 and flt(prix.get(v["item_code"])) > 0
                         and abs(flt(v["rate"]) - prix[v["item_code"]]) / prix[v["item_code"]] > 0.2)][:120]
-    doss = {"famille": famille, "periode": {"debut": str(debut_d), "fin": str(fin_d), "mois": cint(mois or PERIODE_MOIS)},
+    return {"famille": famille, "groupe": groupe or (frappe.db.get_value("Item", item_code, "item_group") if item_code else None),
+            "periode": {"debut": str(debut_d), "fin": str(fin_d), "mois": cint(mois or PERIODE_MOIS)},
             "entrepot": entrepot or _("Tous les entrepôts"), "articles": bilans, "mensuel": mensuel,
             "negatifs": negatifs, "achats": achats, "ventes_remarquables": remarquables, "rapprochements": recs,
-            "kits": _kits(codes), "suspicions": susp, "prix_typiques": prix, "nb_ventes": len(ventes),
-            "ia": None, "cache": False}
+            "kits": _kits(codes), "suspicions": susp, "prix_typiques": prix, "nb_ventes": len(ventes), "ia": None}
+
+
+def _notifier(doc, sujet: str):
+    """Prévenir qui a lancé : événement temps réel (page ouverte) + notification Desk (cloche), avec le lien."""
+    try:
+        frappe.get_doc({"doctype": "Notification Log", "for_user": doc.lancee_par, "type": "Alert", "subject": sujet,
+                        "document_type": DOCTYPE_ANALYSE, "document_name": doc.name}).insert(ignore_permissions=True)
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "Analyse famille : notification")
+    frappe.publish_realtime(EVENEMENT, {"name": doc.name, "famille": doc.famille, "statut": doc.statut,
+                                        "inventaire": doc.inventaire, "sujet": sujet}, user=doc.lancee_par, after_commit=True)
+
+
+def executer(name: str):
+    """La tâche : calcul, IA si demandée, résultat enregistré sur la fiche, notification. Relançable."""
+    doc = frappe.get_doc(DOCTYPE_ANALYSE, name)
+    try:
+        doss = _calculer(groupe=doc.groupe, item_code=doc.item_code, entrepot=doc.entrepot or None,
+                         mois=doc.mois, fin=doc.periode_fin)
+        if cint(doc.avec_ia):
+            doss["ia"] = _ia(doss)
+        doc.update({"famille": doss["famille"], "periode_debut": doss["periode"]["debut"], "statut": STATUT_TERMINEE,
+                    "terminee_le": now_datetime(), "erreur": None, "resultat": json.dumps(doss, ensure_ascii=False, default=str),
+                    "conclusion": (doss["ia"] or {}).get("conclusion") if doss.get("ia") else
+                                  _("{0} point(s) à vérifier d'après les règles{1}.").format(
+                                      len(doss["suspicions"]), _(" — l'IA n'a pas répondu") if cint(doc.avec_ia) else "")})
+        doc.save(ignore_permissions=True)
+        _notifier(doc, (_("Analyse IA terminée : {0}") if cint(doc.avec_ia) else _("Analyse terminée : {0}")).format(doc.famille))
+    except Exception:
+        doc.update({"statut": STATUT_ECHEC, "terminee_le": now_datetime(), "erreur": frappe.get_traceback()[-1500:]})
+        doc.save(ignore_permissions=True)
+        frappe.log_error(frappe.get_traceback(), f"Analyse famille {name}")
+        _notifier(doc, _("Analyse de {0} en échec").format(doc.famille))
+    frappe.db.commit()
+    return doc.name
+
+
+def _lire(doc) -> dict:
+    r = json.loads(doc.resultat) if doc.resultat else {}
+    r.update({"analyse": doc.name, "statut": doc.statut, "inventaire": doc.inventaire, "lancee_par": frappe.utils.get_fullname(doc.lancee_par),
+              "lancee_le": str(doc.lancee_le)[:16] if doc.lancee_le else None, "terminee_le": str(doc.terminee_le)[:16] if doc.terminee_le else None,
+              "avec_ia": cint(doc.avec_ia), "erreur": doc.erreur, "famille": doc.famille or r.get("famille")})
+    return r
+
+
+# ── Points d'entrée ──────────────────────────────────────────────────────────
+
+def _acces():
+    S._lecture()
+    if not S.est_responsable():
+        frappe.throw(_("L'analyse d'une famille est réservée aux responsables."), frappe.PermissionError)
+
+
+@frappe.whitelist()
+def analyser_famille(groupe=None, articles=None, item_code=None, entrepot=None, mois=None, fin=None, ia=1, inventaire=None):
+    """Lance une analyse : fiche « Analyse Famille Stock » liée à l'inventaire d'origine. Avec IA → tâche de fond
+    (réponse {"analyse", "en_fond": True}, l'utilisateur est prévenu à la fin) ; sans IA → immédiate, résultat rendu."""
+    _acces()
+    if not (groupe or item_code or articles):
+        frappe.throw(_("Indiquez un groupe d'articles ou un article."))
+    if articles:
+        frappe.throw(_("Donnez un groupe d'articles ou un article de la famille."))
+    if item_code and not groupe:
+        groupe = frappe.db.get_value("Item", item_code, "item_group")
+    entrepot = None if entrepot == "*" else (entrepot or S.magasin())
+    fin_d = getdate(fin) if fin else getdate(nowdate())
+    doc = frappe.get_doc({"doctype": DOCTYPE_ANALYSE, "famille": groupe, "groupe": groupe, "item_code": item_code,
+                          "entrepot": entrepot or "*", "mois": cint(mois or PERIODE_MOIS), "periode_fin": fin_d,
+                          "periode_debut": add_months(fin_d, -cint(mois or PERIODE_MOIS)),
+                          "inventaire": inventaire or None, "avec_ia": 1 if cint(ia) else 0, "statut": STATUT_EN_COURS,
+                          "lancee_par": frappe.session.user, "lancee_le": now_datetime()})
+    doc.insert(ignore_permissions=True)
     if cint(ia):
-        doss["ia"] = _ia(doss)
-    frappe.cache().set_value(cle, doss, expires_in_sec=CACHE_SECONDES)
-    return doss
+        frappe.enqueue("customization_app.analyse_famille.executer", name=doc.name, queue="long", timeout=1500,
+                       enqueue_after_commit=True, job_name=f"analyse_famille {doc.name}")
+        return {"analyse": doc.name, "en_fond": True, "famille": doc.famille}
+    executer(doc.name)
+    return _lire(frappe.get_doc(DOCTYPE_ANALYSE, doc.name))
+
+
+@frappe.whitelist()
+def lire_analyse(name):
+    _acces()
+    return _lire(frappe.get_doc(DOCTYPE_ANALYSE, name))
+
+
+@frappe.whitelist()
+def analyses_de(inventaire):
+    """Les analyses lancées depuis cet inventaire, la plus récente d'abord."""
+    _acces()
+    rows = frappe.get_all(DOCTYPE_ANALYSE, filters={"inventaire": inventaire},
+                          fields=["name", "famille", "item_code", "statut", "avec_ia", "lancee_par", "lancee_le", "terminee_le", "conclusion", "mois"],
+                          order_by="lancee_le desc", limit=20)
+    for r in rows:
+        r.lancee_par = frappe.utils.get_fullname(r.lancee_par)
+        r.lancee_le, r.terminee_le = (str(r.lancee_le)[:16] if r.lancee_le else None), (str(r.terminee_le)[:16] if r.terminee_le else None)
+    return rows

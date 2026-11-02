@@ -133,6 +133,14 @@ class StockEntrepots {
     r.find("#se-s-attente").on("click", "[data-verif]", (e) => { this.comptage = $(e.currentTarget).attr("data-verif"); this.montrer("verif"); });
     frappe.realtime.on("se_transferts_a_valider", () => { this.chargerAttente(); if (this.onglet === "transfert") this.chargerHistorique(); });
     frappe.realtime.on("sm_bl_magasin", () => { if (this.onglet === "bl") this.chargerBL(); else this.majBadgeBL(); });
+    // Analyse de famille terminée en tâche de fond : message clair avec le lien, et la liste de l'inventaire rafraîchie.
+    frappe.realtime.on("analyse_famille_terminee", (m) => {
+      const ok = m.statut === "Terminée";
+      frappe.msgprint({ title: ok ? "🤖 Analyse terminée" : "⚠️ Analyse en échec", indicator: ok ? "green" : "red",
+        message: `${se_esc(m.sujet || "")}<br><br><button type="button" class="btn btn-primary btn-sm se-voir-analyse" data-name="${se_esc(m.name)}">${ok ? "📊 Voir l’analyse" : "Voir le détail"}</button>` });
+      if (m.inventaire && this.feuilleInv === m.inventaire) this.peindreAnalyses(m.inventaire);
+    });
+    $(document).off("click.seAnalyse").on("click.seAnalyse", ".se-voir-analyse", (ev) => { const n = $(ev.currentTarget).attr("data-name"); $(ev.currentTarget).closest(".modal").modal("hide"); this.voirAnalyse(n); });
     this.pret = true;
     // Ouverture directe sur un onglet (bandeau du magasinier : frappe.route_options = { onglet: "bl" }).
     const onglet = frappe.route_options && frappe.route_options.onglet;
@@ -1407,7 +1415,7 @@ class StockEntrepots {
       ${r.historique.length > 1 ? `<div class="se-titre">🕘 Comptages précédents</div><ul class="se-tours">${r.historique.map((h) => `<li>${se_esc(se_dthm(h.date))} · ${se_lien("Inventaire Magasin", h.name)} · système ${se_q(h.qte_systeme)}, compté ${se_q(h.qte_comptee)} → <b class="${h.ecart < 0 ? "neg" : h.ecart > 0 ? "pos" : ""}">${h.ecart ? se_signe(h.ecart) : "sans écart"}</b>${h.par ? ` · ${se_esc(h.par)}` : ""}</li>`).join("")}</ul>` : ""}
     </div>`;
     const d = new frappe.ui.Dialog({ title: `🔎 Écart sur ${r.item_code}`, size: "large", fields: [{ fieldtype: "HTML", fieldname: "corps" }],
-      primary_action_label: "📊 Sa famille sur un an (IA)", primary_action: () => { d.hide(); this.analyserFamille({ item_code: r.item_code }); } });
+      primary_action_label: "📊 Sa famille sur un an (IA)", primary_action: () => { d.hide(); this.analyserFamille({ item_code: r.item_code, inventaire: name }); } });
     d.fields_dict.corps.$wrapper.html(html);
     d.show();
   }
@@ -1424,15 +1432,39 @@ class StockEntrepots {
       { fieldtype: "Check", fieldname: "ia", label: "Relecture par l’IA (quelques centimes)", default: 1 },
     ], primary_action_label: "Analyser", primary_action: async (v) => {
       if (!v.item_code && !v.groupe) { frappe.msgprint("Indiquez un article ou un groupe."); return; }
+      v.inventaire = opts.inventaire || null;
       f.hide(); await this.montrerFamille(v);
     } });
     f.show();
   }
 
-  async montrerFamille(v, relancer = 0) {
+  async montrerFamille(v) {
     const r = (await frappe.call({ method: "customization_app.analyse_famille.analyser_famille",
-      args: { item_code: v.item_code || null, groupe: v.groupe || null, mois: v.mois || 12, entrepot: v.entrepot || null, ia: v.ia ? 1 : 0, relancer },
-      freeze: true, freeze_message: v.ia ? "Lecture des mouvements, achats, ventes et rapprochements, puis relecture IA…" : "Lecture des mouvements, achats, ventes et rapprochements…" })).message;
+      args: { item_code: v.item_code || null, groupe: v.groupe || null, mois: v.mois || 12, entrepot: v.entrepot || null, ia: v.ia ? 1 : 0, inventaire: v.inventaire || null },
+      freeze: true, freeze_message: v.ia ? "Lancement de l’analyse en tâche de fond…" : "Lecture des mouvements, achats, ventes et rapprochements…" })).message;
+    if (r.en_fond) {
+      frappe.msgprint({ title: "🤖 Analyse lancée en tâche de fond", indicator: "blue",
+        message: `L’analyse de la famille <b>${se_esc(r.famille)}</b> (${se_esc(r.analyse)}) tourne en arrière-plan avec la relecture IA : une à trois minutes.<br>Vous serez prévenu ici dès qu’elle est prête, et dans vos notifications 🔔. ${v.inventaire ? "Elle restera consultable depuis l’inventaire " + se_esc(v.inventaire) + "." : ""}` });
+      if (v.inventaire && this.feuilleInv === v.inventaire) this.peindreAnalyses(v.inventaire);
+      return;
+    }
+    this.afficherFamille(r, v);
+  }
+
+  async voirAnalyse(name) {
+    const r = (await frappe.call({ method: "customization_app.analyse_famille.lire_analyse", args: { name }, freeze: true })).message;
+    if (r.statut !== "Terminée") { frappe.msgprint({ title: r.statut, indicator: r.statut === "Échec" ? "red" : "blue", message: r.statut === "Échec" ? `<pre style="white-space:pre-wrap;font-size:11px">${se_esc(r.erreur || "")}</pre>` : "L’analyse est encore en cours." }); return; }
+    this.afficherFamille(r, { item_code: r.articles && r.articles.length ? null : null, groupe: r.groupe, mois: r.periode && r.periode.mois, entrepot: r.entrepot === "Tous les entrepôts" ? "*" : "", ia: r.avec_ia, inventaire: r.inventaire });
+  }
+
+  async peindreAnalyses(inventaire) {
+    const $z = this.$r.find("#se-i-analyses");
+    if (!$z.length) return;
+    const rows = (await frappe.call({ method: "customization_app.analyse_famille.analyses_de", args: { inventaire } })).message || [];
+    $z.html(rows.length ? `<div class="se-titre" style="margin-top:6px">🤖 Analyses de famille lancées depuis cet inventaire</div><ul class="se-tours">${rows.map((a) => `<li>${a.statut === "Terminée" ? "✅" : a.statut === "Échec" ? "❌" : "⏳"} <b>${se_esc(a.famille || "")}</b>${a.item_code ? ` (depuis ${se_esc(a.item_code)})` : ""} · ${a.mois} mois${a.avec_ia ? " · IA" : ""} · ${se_esc(a.lancee_par || "")} le ${se_esc(se_dthm(a.lancee_le))}${a.statut === "En cours" ? " · <i>en cours…</i>" : ` · <button type="button" class="btn btn-xs btn-default se-voir-analyse" data-name="${se_esc(a.name)}">Voir</button>`}${a.conclusion && a.statut === "Terminée" ? `<div class="se-note">${se_esc(a.conclusion.slice(0, 220))}${a.conclusion.length > 220 ? "…" : ""}</div>` : ""}</li>`).join("")}</ul>` : "");
+  }
+
+  afficherFamille(r, v) {
     const q = (n) => (n ? se_q(n) : "·"), sg = (n) => (n ? `<span class="${n < 0 ? "neg" : "pos"}">${se_signe(n)}</span>` : "·");
     const nomsIA = {}; ((r.ia && r.ia.articles) || []).forEach((a) => { nomsIA[a.item_code] = a; });
     const lignes = r.articles.filter((b) => b.mouvements || b.debut || b.fin).map((b) => `<tr>
@@ -1452,7 +1484,7 @@ class StockEntrepots {
           ${a.action ? `<div class="se-note">👉 ${se_esc(a.action)}</div>` : ""}</div>`).join("")}</div>`
       : (v.ia ? `<div class="se-alerte">L’IA n’a pas répondu (clé, plafond ou réponse inutilisable) : l’analyse reste sur les règles.</div>` : "");
     const html = `<div class="se-analyse">
-      <div class="se-note">Famille <b>${se_esc(r.famille)}</b> · ${se_esc(r.entrepot)} · du ${se_esc(frappe.datetime.str_to_user(r.periode.debut))} au ${se_esc(frappe.datetime.str_to_user(r.periode.fin))} · ${r.nb_ventes} ligne(s) de vente, ${r.achats.length} ligne(s) d’achat, ${r.rapprochements.length} rapprochement(s)${r.cache ? " · <i>résultat gardé (moins de 24 h)</i>" : ""}</div>
+      <div class="se-note">Famille <b>${se_esc(r.famille)}</b> · ${se_esc(r.entrepot)} · du ${se_esc(frappe.datetime.str_to_user(r.periode.debut))} au ${se_esc(frappe.datetime.str_to_user(r.periode.fin))} · ${r.nb_ventes} ligne(s) de vente, ${r.achats.length} ligne(s) d’achat, ${r.rapprochements.length} rapprochement(s)${r.lancee_le ? ` · lancée par ${se_esc(r.lancee_par || "")} le ${se_esc(se_dthm(r.lancee_le))}` : ""}${r.inventaire ? ` · inventaire ${se_lien("Inventaire Magasin", r.inventaire)}` : ""}</div>
       <table class="table table-sm se-tbl"><thead><tr><th>Article</th><th style="text-align:right">Début</th><th style="text-align:right">Achats</th><th style="text-align:right">Ventes</th><th style="text-align:right">Transferts</th><th style="text-align:right">Rapproch.</th><th style="text-align:right">Fin</th><th style="text-align:right">Mvts</th></tr></thead><tbody>${lignes || `<tr><td colspan="8" class="se-note">Aucun mouvement sur la période.</td></tr>`}</tbody></table>
       ${ia}
       <div class="se-titre">⚠️ Points à vérifier (règles)</div>${susp ? `<ul class="se-tours">${susp}</ul>` : `<div class="se-note">Rien d’anormal relevé par les règles.</div>`}
@@ -1465,8 +1497,8 @@ class StockEntrepots {
       ${r.ventes_remarquables.length ? `<div class="se-titre">🧾 Ventes remarquables (quantité ou prix inhabituels, kits)</div><div style="max-height:220px;overflow:auto"><table class="table table-sm se-tbl"><thead><tr><th>Date</th><th>BL</th><th>Article</th><th style="text-align:right">Qté</th><th style="text-align:right">Prix</th><th>Client</th></tr></thead><tbody>
         ${r.ventes_remarquables.map((x) => `<tr><td>${se_esc(se_dt(x.date))}</td><td>${se_lien("Delivery Note", x.piece)}</td><td>${se_esc(x.item_code)}${x.kit ? ` <span class="se-badge">kit ${se_esc(x.kit)}</span>` : ""}${x.retour ? ` <span class="se-badge">retour</span>` : ""}</td><td style="text-align:right">${se_q(x.qte)}</td><td style="text-align:right">${se_q(x.rate)}${r.prix_typiques[x.item_code] ? `<br><small class="se-note">hab. ${se_q(r.prix_typiques[x.item_code])}</small>` : ""}</td><td>${se_esc(x.client || "")}</td></tr>`).join("")}</tbody></table></div>` : ""}
     </div>`;
-    const d = new frappe.ui.Dialog({ title: `📊 ${r.famille}`, size: "extra-large", fields: [{ fieldtype: "HTML", fieldname: "corps" }],
-      primary_action_label: "↻ Relancer (sans cache)", primary_action: () => { d.hide(); this.montrerFamille(v, 1); } });
+    const d = new frappe.ui.Dialog({ title: `📊 ${r.famille}${r.analyse ? ` · ${r.analyse}` : ""}`, size: "extra-large", fields: [{ fieldtype: "HTML", fieldname: "corps" }],
+      primary_action_label: "↻ Relancer", primary_action: () => { d.hide(); this.analyserFamille({ groupe: r.groupe || v.groupe, item_code: v.item_code, inventaire: v.inventaire }); } });
     d.fields_dict.corps.$wrapper.html(html);
     d.show();
   }
@@ -1515,7 +1547,7 @@ class StockEntrepots {
         <div class="se-v-stock"><div class="t">📋 Inventaire ${se_esc(d.fiche.name)} — ${se_dt(d.fiche.date)} <span class="se-badge">📍 ${se_esc(d.fiche.perimetre_libelle || "Tout le Magasin")}</span> ${fini ? `<span class="se-badge">${se_esc(d.fiche.statut)}</span>` : ""}</div>
           ${fini ? `<div class="se-note">${d.fiche.termine_par ? `${d.fiche.statut === "Terminé" ? "Clôturé" : "Annulé"} par ${se_esc(d.fiche.termine_par)} le ${se_dthm(d.fiche.termine_le)}` : ""}${d.fiche.rapprochement ? ` · ${se_lien("Stock Reconciliation", d.fiche.rapprochement, "écriture " + d.fiche.rapprochement)}` : ""}${d.fiche.note ? `<br>${se_esc(d.fiche.note)}` : ""}</div>`
             : `<div class="se-note">Une case par emplacement : tapez ce que vous trouvez à chaque endroit, la somme fait le compté. « ＋ » ajoute un emplacement où l’article a été trouvé : il est <b>aussitôt ajouté aux emplacements de l’article</b> (✕ pour le retirer). Enregistrement automatique.</div>`}
-          <div class="plan" id="se-i-bilan"></div><div class="se-i-etat" id="se-i-etat"></div></div>
+          <div class="plan" id="se-i-bilan"></div><div class="se-i-etat" id="se-i-etat"></div><div id="se-i-analyses"></div></div>
         <div class="se-i-filtres"><input type="search" class="form-control se-saisie" id="se-i-filtre" placeholder="🔎 Article (nom, code, description)…">
           <select class="form-control" id="se-i-zone">${optZones()}</select></div>
         <div class="se-chips" id="se-i-vues" style="margin-top:6px"><span class="se-chip on" data-vue="tous">Tous</span><span class="se-chip" data-vue="non">À compter</span><span class="se-chip" data-vue="faits">Comptés</span><span class="se-chip" data-vue="ecarts">Écarts</span><span class="se-chip alerte" data-vue="negatifs">Négatifs</span><span class="se-chip tri" data-tri title="Grouper les articles par emplacement, dans l’ordre des zones">📍 Par zone</span></div>
@@ -1525,6 +1557,7 @@ class StockEntrepots {
           <button type="button" class="btn btn-primary" data-cloturer>✅ Clôturer et passer l’écriture</button></div>`}
       </div>`);
     $c.find("#se-i-lignes").on("click", "[data-analyser]", (ev) => this.analyserEcart(name, $(ev.currentTarget).attr("data-analyser")));
+    if (d.voir_valeur) this.peindreAnalyses(name);
     // Taux de valorisation saisi sur une ligne : enregistré au changement (refusé au-dessus du plafond), ligne repeinte.
     $c.find("#se-i-lignes").on("change", "[data-taux-item]", async (ev) => {
       const code = $(ev.currentTarget).attr("data-taux-item"), val = ev.currentTarget.value, l = d.lignes.find((x) => x.item_code === code);

@@ -1,0 +1,202 @@
+{
+ "doctype": "DocType",
+ "name": "Analyse Famille Stock",
+ "module": "Customize erpnext",
+ "custom": 0,
+ "autoname": "AFS-.YYYY.-.#####",
+ "naming_rule": "Expression (old style)",
+ "creation": "2026-11-02 15:00:00.000000",
+ "modified": "2026-11-02 15:00:00.000000",
+ "modified_by": "Administrator",
+ "owner": "Administrator",
+ "engine": "InnoDB",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "track_changes": 0,
+ "editable_grid": 1,
+ "idx": 0,
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "description": "Analyse d'une famille d'articles sur une période (règles + relecture IA), lancée depuis la page Stock, en tâche de fond. Voir customization_app.analyse_famille.",
+ "field_order": [
+  "famille",
+  "groupe",
+  "item_code",
+  "entrepot",
+  "cb1",
+  "statut",
+  "avec_ia",
+  "mois",
+  "periode_debut",
+  "periode_fin",
+  "sec2",
+  "inventaire",
+  "lancee_par",
+  "cb2",
+  "lancee_le",
+  "terminee_le",
+  "sec3",
+  "conclusion",
+  "erreur",
+  "resultat"
+ ],
+ "fields": [
+  {
+   "fieldname": "famille",
+   "fieldtype": "Data",
+   "label": "Famille",
+   "in_list_view": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "groupe",
+   "fieldtype": "Link",
+   "label": "Groupe d'articles",
+   "options": "Item Group",
+   "read_only": 1
+  },
+  {
+   "fieldname": "item_code",
+   "fieldtype": "Link",
+   "label": "Article de départ",
+   "options": "Item",
+   "read_only": 1
+  },
+  {
+   "fieldname": "entrepot",
+   "fieldtype": "Data",
+   "label": "Entrepôt",
+   "read_only": 1
+  },
+  {
+   "fieldname": "cb1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "statut",
+   "fieldtype": "Select",
+   "label": "Statut",
+   "options": "En cours\nTerminée\nÉchec",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "avec_ia",
+   "fieldtype": "Check",
+   "label": "Relecture IA",
+   "read_only": 1
+  },
+  {
+   "fieldname": "mois",
+   "fieldtype": "Int",
+   "label": "Période (mois)",
+   "read_only": 1
+  },
+  {
+   "fieldname": "periode_debut",
+   "fieldtype": "Date",
+   "label": "Du",
+   "read_only": 1
+  },
+  {
+   "fieldname": "periode_fin",
+   "fieldtype": "Date",
+   "label": "Au",
+   "read_only": 1
+  },
+  {
+   "fieldname": "sec2",
+   "fieldtype": "Section Break",
+   "label": "Lancement"
+  },
+  {
+   "fieldname": "inventaire",
+   "fieldtype": "Link",
+   "label": "Inventaire d'origine",
+   "options": "Inventaire Magasin",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "lancee_par",
+   "fieldtype": "Link",
+   "label": "Lancée par",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "cb2",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "lancee_le",
+   "fieldtype": "Datetime",
+   "label": "Lancée le",
+   "read_only": 1
+  },
+  {
+   "fieldname": "terminee_le",
+   "fieldtype": "Datetime",
+   "label": "Terminée le",
+   "read_only": 1
+  },
+  {
+   "fieldname": "sec3",
+   "fieldtype": "Section Break",
+   "label": "Résultat"
+  },
+  {
+   "fieldname": "conclusion",
+   "fieldtype": "Small Text",
+   "label": "Conclusion",
+   "read_only": 1
+  },
+  {
+   "fieldname": "erreur",
+   "fieldtype": "Small Text",
+   "label": "Erreur",
+   "read_only": 1
+  },
+  {
+   "fieldname": "resultat",
+   "fieldtype": "Long Text",
+   "label": "Résultat (JSON)",
+   "read_only": 1,
+   "hidden": 1
+  }
+ ],
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "print": 1,
+   "email": 1,
+   "share": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "Inventaire Magasin",
+   "read": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "Responsable magasin",
+   "read": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "Stock Manager",
+   "read": 1,
+   "report": 1,
+   "export": 1
+  }
+ ]
+}
