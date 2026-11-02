@@ -177,6 +177,13 @@ def echeances_a_appeler(today, cfg=None):
     for c, d in frappe.db.sql("""select ms.customer, max(d.custom_appelle) from `tabMaintenance Schedule Detail` d
                                  join `tabMaintenance Schedule` ms on ms.name = d.parent where ms.customer in %s and d.custom_appelle is not null group by ms.customer""", (noms,)):
         clients[c]["dernier_appel"] = d
+    # 02/11/2026 : la marque `custom_appelle` manquait sur plus de la moitié des appels (date de visite non retrouvée),
+    # et la règle des `jours_entre_deux_appels` ne voyait rien : des clients « Fait lui-même » rappelés trois fois en un
+    # mois. Les listes validées font foi aussi : le dernier appel = le plus récent des deux.
+    for c, d in frappe.db.sql("""select a.client, max(l.date) from `tabAppelle Client` a join `tabListe Appelle Entretien` l on l.name = a.parent
+                                 where l.docstatus = 1 and a.a_été_appelé = 1 and a.client in %s group by a.client""", (noms,)):
+        if d and (not clients[c].get("dernier_appel") or getdate(d) > getdate(clients[c]["dernier_appel"])):
+            clients[c]["dernier_appel"] = d
     for c in clients.values():
         c.setdefault("nb_appels", 0)
         c.setdefault("dernier_appel", None)

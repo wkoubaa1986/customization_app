@@ -384,71 +384,50 @@ def envoyer_relances_maintenance(dry_run: bool = False):
 #  Partie 1 : Calcul des SMS (SMS1 & SMS2) pour un échéancier
 # ---------------------------------------------------------------------------
 
+def choisir_relances(lignes, today, delai_sms2: int, jours_lassitude: int):
+    """Par article, UN SEUL cycle à la fois (02/11/2026). PURE.
+
+    `lignes` : [{item_code, scheduled_date, custom_sms_1, custom_sms_2, custom_appelle, actual_date, completion_status}].
+    La visite ÉCHUE LA PLUS RÉCENTE de l'article est la seule qui compte : sans SMS1 → SMS1 (sauf lassitude : un SMS ou
+    un appel sur cet article à moins de `jours_lassitude`) ; avec SMS1 sans SMS2 après `delai_sms2` jours → SMS2. Les
+    visites échues plus anciennes sont ignorées — avant, une fois la dernière relancée, le cron remontait aux
+    précédentes et relançait un client tous les 7 jours (MAT-MSH-2023-00602 : 5 SMS en 17 jours).
+    → ({item: scheduled_date} pour SMS1, {item: scheduled_date} pour SMS2)."""
+    today = getdate(today)
+    limite = add_days(today, -int(jours_lassitude or 0))
+    par_item = {}
+    for r in lignes or []:
+        g = r.get if isinstance(r, dict) else (lambda k, _r=r: getattr(_r, k, None))
+        par_item.setdefault(g("item_code"), []).append({k: g(k) for k in ("scheduled_date", "custom_sms_1", "custom_sms_2",
+                                                                            "custom_appelle", "actual_date", "completion_status")})
+    sms1, sms2 = {}, {}
+    for item, rows in par_item.items():
+        echues = sorted((r for r in rows if r["scheduled_date"] and getdate(r["scheduled_date"]) < today
+                         and not r["actual_date"] and r.get("completion_status") != "Fully Completed"),
+                        key=lambda r: getdate(r["scheduled_date"]))
+        if not echues:
+            continue
+        derniere = echues[-1]
+        if not derniere["custom_sms_1"]:
+            recent = any(d and getdate(d) > limite for r in rows for d in (r["custom_sms_1"], r["custom_sms_2"], r["custom_appelle"]))
+            if not recent:
+                sms1[item] = getdate(derniere["scheduled_date"])
+        elif not derniere["custom_sms_2"] and today >= add_days(getdate(derniere["custom_sms_1"]), int(delai_sms2)):
+            sms2[item] = getdate(derniere["scheduled_date"])
+    return sms1, sms2
+
+
 def calculer_sms_pour_maintenance(maint_name, today, relance_date, secteur):
     """
     Retourne deux dict :
         - NewSMS1 : { "item_code*?/*schedule_name*?/*SMS1": [scheduled_date, secteur], ... }
         - NewSMS2 : idem pour SMS2
+    (`relance_date` n'est plus utilisé : la lassitude se règle par `jours_entre_deux_appels`.)
     """
-    date_par_item_sms1 = {}
-    date_par_item_sms2 = {}
-
-    today = getdate(today)
-    relance_date = getdate(relance_date)
-
+    cfg = RC.config()
     maintenance = frappe.get_doc("Maintenance Schedule", maint_name)
-
-    # On trie les lignes pour un comportement cohérent
-    schedules = sorted(maintenance.schedules, key=lambda x: x.scheduled_date or today)
-
-    for item in schedules:
-        # --- SMS1 ---
-        if item.scheduled_date and item.scheduled_date < today:
-            if item.item_code not in date_par_item_sms1 and not item.custom_sms_1:
-                date_par_item_sms1[item.item_code] = item.scheduled_date
-            elif (
-                item.item_code in date_par_item_sms1
-                and item.scheduled_date > date_par_item_sms1[item.item_code]
-                and not item.custom_sms_1
-            ):
-                date_par_item_sms1[item.item_code] = item.scheduled_date
-
-        # Si SMS1 déjà envoyé récemment : on ne relance pas
-        if (
-            item.item_code in date_par_item_sms1
-            and item.custom_sms_1
-            and item.custom_sms_1 >= relance_date
-        ):
-            date_par_item_sms1.pop(item.item_code, None)
-
-        # Si la maintenance a été réalisée : on ne relance pas
-        if item.item_code in date_par_item_sms1 and item.actual_date:
-            date_par_item_sms1.pop(item.item_code, None)
-
-        # --- SMS2 ---
-        if (
-            item.scheduled_date
-            and item.scheduled_date < today
-            and item.custom_sms_1
-            and not item.custom_sms_2
-            and today >= add_days(item.custom_sms_1, RC.config()["delai_sms2_jours"])
-        ):
-            if item.item_code not in date_par_item_sms2:
-                date_par_item_sms2[item.item_code] = item.scheduled_date
-            elif item.scheduled_date > date_par_item_sms2[item.item_code]:
-                date_par_item_sms2[item.item_code] = item.scheduled_date
-
-        # SMS2 déjà envoyé récemment
-        if (
-            item.item_code in date_par_item_sms2
-            and item.custom_sms_2
-            and item.custom_sms_2 >= relance_date
-        ):
-            date_par_item_sms2.pop(item.item_code, None)
-
-        # Maintenance réalisée : pas de SMS2
-        if item.item_code in date_par_item_sms2 and item.actual_date:
-            date_par_item_sms2.pop(item.item_code, None)
+    date_par_item_sms1, date_par_item_sms2 = choisir_relances(maintenance.schedules, today, cfg["delai_sms2_jours"],
+                                                              cfg["jours_entre_deux_appels"])
 
     newsms1 = {}
     for code, date_sched in date_par_item_sms1.items():

@@ -37,6 +37,18 @@ def articles_appeles(detail_articles) -> dict:
         return {}
 
 
+def ligne_a_marquer(rows, date_voulue, today):
+    """La visite à marquer « appelée » pour un article : celle à la date exacte de la liste, sinon la visite ÉCHUE la plus
+    récente non réalisée (la liste porte souvent une date décalée depuis par le cron de nuit : avant, rien n'était marqué,
+    125 appels inscrits sur 280 entre le 15/10 et le 02/11/2026). None si aucune. PURE."""
+    rows = list(rows or [])
+    for r in rows:
+        if r.get("scheduled_date") and getdate(r["scheduled_date"]) == getdate(date_voulue):
+            return r
+    echues = [r for r in rows if r.get("scheduled_date") and getdate(r["scheduled_date"]) <= getdate(today) and not r.get("actual_date")]
+    return max(echues, key=lambda r: getdate(r["scheduled_date"])) if echues else None
+
+
 def synchroniser_appels(doc, method=None):
     """Hook on_update de Liste Appelle Entretien."""
     for ligne in doc.get("clients") or []:
@@ -69,11 +81,16 @@ def _synchroniser_ligne(ligne):
     if not articles:
         return
     aujourd_hui = nowdate()
-    for row in frappe.db.sql("""select d.name, d.item_code, d.scheduled_date, d.custom_appelle, d.custom_1er_appel
-                                from `tabMaintenance Schedule Detail` d join `tabMaintenance Schedule` ms on ms.name = d.parent
-                                where ms.customer = %s and ms.docstatus = 1 and d.item_code in %s""",
-                             (ligne.client, tuple(articles)), as_dict=True):
-        if articles.get(row.item_code) != getdate(row.scheduled_date):
+    rows = frappe.db.sql("""select d.name, d.parent, d.item_code, d.scheduled_date, d.custom_appelle, d.custom_1er_appel, d.actual_date
+                            from `tabMaintenance Schedule Detail` d join `tabMaintenance Schedule` ms on ms.name = d.parent
+                            where ms.customer = %s and ms.docstatus = 1 and d.item_code in %s""",
+                         (ligne.client, tuple(articles)), as_dict=True)
+    par_echeancier_article = {}
+    for r in rows:
+        par_echeancier_article.setdefault((r.parent, r.item_code), []).append(r)
+    for (_ech, item_code), lignes_article in par_echeancier_article.items():
+        row = ligne_a_marquer(lignes_article, articles[item_code], aujourd_hui)
+        if not row:
             continue
         maj = {}
         if not row.custom_appelle:
