@@ -1,5 +1,21 @@
 # Assistant ChatGPT — brancher l'app ChatGPT sur ERPNext
 
+⚠️ OpenAI retire les GPT personnalisés le **11 décembre 2026** et leurs actions ne migrent pas. La voie durable est le
+**plugin** (application MCP) servi par `customization_app/mcp_chatgpt.py` ; le GPT avec actions reste utilisable jusque-là.
+
+## Plugin (application MCP) — la voie durable
+
+1. Clé API de l'utilisateur **assistant.chatgpt@aquaworld.local** (fiche User → API Access → Générer les clés).
+2. Dans ChatGPT : **Paramètres → Sécurité et connexion → Mode développeur** (activer), puis dans la barre de saisie
+   **« + » → Plugins / Applications → Créer** (application MCP distante) :
+   - URL du serveur : `https://aquaworldservicing.opssync.pro/api/method/customization_app.mcp_chatgpt.serveur?cle=<clé>:<secret>`
+   - Authentification : **aucune** (le secret est dans l'URL) ; cocher « Je fais confiance à cette application ».
+3. Dans une conversation, activer le plugin « aqua-world-erp » : les mêmes outils que le GPT (dépense, versement,
+   dépense en euros, comptes, fournisseurs, clients, stock, rendez-vous), avec les consignes intégrées au serveur.
+
+Le protocole : MCP Streamable HTTP, JSON-RPC 2.0 (`initialize`, `tools/list`, `tools/call`, `ping`), sans flux SSE.
+
+
 Module : `customization_app/assistant_chatgpt.py` (actions, schéma OpenAPI, consignes du GPT). Utilisateur technique et
 rôle posés par le patch `ensure_assistant_chatgpt`.
 

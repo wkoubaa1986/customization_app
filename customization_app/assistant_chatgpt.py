@@ -385,6 +385,57 @@ def creer_rendez_vous(client, type_intervention, date, demi_journee, adresse=Non
 
 # ── Schéma OpenAPI pour le GPT ───────────────────────────────────────────────
 
+#: Les outils, décrits une seule fois : {nom: (résumé, {param: [type, description]}, POST ?, requis)}. Le schéma OpenAPI
+#: du GPT et la liste d'outils du plugin MCP (mcp_chatgpt) en découlent — un ajout ici sert les deux.
+OUTILS = {
+    "moi": ("Qui je suis et ce que je peux faire", {}, False, None),
+    "comptes_de_charge": ("Liste des comptes de charge acceptés (à utiliser avant saisir_depense)", {}, False, None),
+    "chercher_fournisseur": ("Chercher un fournisseur par nom ou matricule fiscal", {"texte": ["string", "Nom ou matricule, même partiel"]}, False, None),
+    "chercher_client": ("Chercher un client par nom ou téléphone", {"texte": ["string", "Nom ou numéro, même partiel"]}, False, None),
+    "stock_article": ("Stock d'un article par entrepôt et prix de vente", {"texte": ["string", "Nom ou code d'article, même partiel"]}, False, None),
+    "saisir_depense": ("Enregistrer une dépense (charge) : écriture de journal en brouillon, sauf valider=1", {
+        "date": ["string", "Date de la dépense AAAA-MM-JJ (pas dans le futur, 90 jours au plus)"],
+        "libelle": ["string", "Objet de la dépense, court, avec le fournisseur si connu"],
+        "montant_ttc": ["number", "Montant TTC en dinars"],
+        "compte_charge": ["string", "Nom exact d'un compte renvoyé par comptes_de_charge"],
+        "mode": ["string", "Espèces, Carte de crédit, Virement ou Chèque (Espèces par défaut)"],
+        "tva": ["number", "Montant de TVA inclus dans le TTC, 0 si inconnu"],
+        "taux_tva": ["number", "Taux de TVA : 19 ou 7 (0 si inconnu)"],
+        "fournisseur": ["string", "Nom du fournisseur tel que lu sur la pièce"],
+        "reference": ["string", "Numéro de facture ou de reçu"],
+        "valider": ["integer", "1 pour soumettre tout de suite, 0 (défaut) pour laisser en brouillon"],
+    }, True, ["date", "libelle", "montant_ttc", "compte_charge"]),
+    "mes_saisies": ("Dernières écritures passées par l'assistant", {"limite": ["integer", "Nombre, 20 par défaut"]}, False, []),
+    "banques": ("Comptes bancaires où verser et comptes d'espèces", {}, False, None),
+    "verser_en_banque": ("Versement d'espèces d'une caisse vers une banque (écriture validée par défaut)", {
+        "date": ["string", "Date du versement AAAA-MM-JJ"], "montant": ["number", "Montant en dinars"],
+        "banque": ["string", "Compte bancaire exact renvoyé par banques (ex. BIAT - A&S)"],
+        "compte_especes": ["string", "Caisse d'origine, Sabah Espèces - A&S par défaut"],
+        "reference": ["string", "Référence du bordereau ou de l'opération bancaire"],
+        "valider": ["integer", "1 (défaut) pour valider, 0 pour laisser en brouillon"],
+    }, True, ["date", "montant", "banque"]),
+    "saisir_depense_euros": ("Dépense payée en euros depuis le compte en euros (pub Google, abonnement) : taux du jour automatique, écriture validée", {
+        "date": ["string", "Date AAAA-MM-JJ"], "libelle": ["string", "Objet de la dépense"],
+        "montant_eur": ["number", "Montant en euros"],
+        "compte_charge": ["string", "Compte de charge, Frais de Marketing - A&S par défaut"],
+        "taux": ["number", "Taux EUR→TND à imposer ; vide = taux du jour sur internet"],
+    }, True, ["date", "libelle", "montant_eur"]),
+    "rendez_vous": ("Rendez-vous d'un jour (ou de plusieurs jours), ou tous ceux d'un client", {
+        "date": ["string", "Jour AAAA-MM-JJ (aujourd'hui par défaut)"], "jours": ["integer", "Nombre de jours à partir de la date, 1 par défaut"],
+        "client": ["string", "Nom exact du client (renvoyé par chercher_client) pour ses rendez-vous passés et à venir"],
+    }, False, []),
+    "creneaux_rendez_vous": ("Demi-journées disponibles pour un client avant de réserver", {
+        "client": ["string", "Nom exact du client"], "type_intervention": ["string", "Entretien ou Réparation"],
+        "adresse": ["string", "Adresse du client si plusieurs (vide = la principale)"],
+    }, False, ["client"]),
+    "creer_rendez_vous": ("Réserver un rendez-vous pour un client (le client reçoit un SMS de confirmation)", {
+        "client": ["string", "Nom exact du client"], "type_intervention": ["string", "Entretien ou Réparation"],
+        "date": ["string", "Jour AAAA-MM-JJ parmi les créneaux"], "demi_journee": ["string", "matin ou apres_midi"],
+        "adresse": ["string", "Adresse si plusieurs"], "note": ["string", "Note pour le technicien"],
+    }, True, ["client", "type_intervention", "date", "demi_journee"]),
+}
+
+
 def _op(fn: str, summary: str, params: dict, post: bool = False, requis: list | None = None) -> dict:
     props = {k: {"type": v[0], "description": v[1]} for k, v in params.items()}
     if post:
@@ -399,67 +450,28 @@ def _op(fn: str, summary: str, params: dict, post: bool = False, requis: list | 
 
 
 def schema_openapi(serveur: str) -> dict:
-    """Le schéma à coller dans le GPT (Actions). Pure."""
+    """Le schéma à coller dans le GPT (Actions), généré depuis OUTILS. Pure."""
     base = "/api/method/customization_app.assistant_chatgpt."
     return {
         "openapi": "3.1.0",
-        "info": {"title": "Aqua World ERP — assistant", "version": "1.0.0",
-                 "description": "Actions étroites sur ERPNext d'Aqua World & Servicing : dépenses, comptes de charge, fournisseurs, clients, stock."},
+        "info": {"title": "Aqua World ERP — assistant", "version": "1.1.0",
+                 "description": "Actions étroites sur ERPNext d'Aqua World & Servicing : dépenses, versements, comptes de charge, fournisseurs, clients, stock, rendez-vous."},
         "servers": [{"url": serveur}],
-        "paths": {
-            base + "moi": _op("moi", "Qui je suis et ce que je peux faire", {}),
-            base + "comptes_de_charge": _op("comptes_de_charge", "Liste des comptes de charge acceptés (à utiliser avant saisir_depense)", {}),
-            base + "chercher_fournisseur": _op("chercher_fournisseur", "Chercher un fournisseur par nom ou matricule fiscal",
-                                               {"texte": ["string", "Nom ou matricule, même partiel"]}),
-            base + "chercher_client": _op("chercher_client", "Chercher un client par nom ou téléphone",
-                                          {"texte": ["string", "Nom ou numéro, même partiel"]}),
-            base + "stock_article": _op("stock_article", "Stock d'un article par entrepôt et prix de vente",
-                                        {"texte": ["string", "Nom ou code d'article, même partiel"]}),
-            base + "saisir_depense": _op("saisir_depense", "Enregistrer une dépense (charge) : écriture de journal en brouillon, sauf valider=1", {
-                "date": ["string", "Date de la dépense AAAA-MM-JJ (pas dans le futur, 90 jours au plus)"],
-                "libelle": ["string", "Objet de la dépense, court, avec le fournisseur si connu"],
-                "montant_ttc": ["number", "Montant TTC en dinars"],
-                "compte_charge": ["string", "Nom exact d'un compte renvoyé par comptes_de_charge"],
-                "mode": ["string", "Espèces, Carte de crédit, Virement ou Chèque (Espèces par défaut)"],
-                "tva": ["number", "Montant de TVA inclus dans le TTC, 0 si inconnu"],
-                "taux_tva": ["number", "Taux de TVA : 19 ou 7 (0 si inconnu)"],
-                "fournisseur": ["string", "Nom du fournisseur tel que lu sur la pièce"],
-                "reference": ["string", "Numéro de facture ou de reçu"],
-                "valider": ["integer", "1 pour soumettre tout de suite, 0 (défaut) pour laisser en brouillon"],
-            }, post=True, requis=["date", "libelle", "montant_ttc", "compte_charge"]),
-            base + "mes_saisies": _op("mes_saisies", "Dernières écritures passées par l'assistant", {"limite": ["integer", "Nombre, 20 par défaut"]}, requis=[]),
-            base + "banques": _op("banques", "Comptes bancaires où verser et comptes d'espèces", {}),
-            base + "verser_en_banque": _op("verser_en_banque", "Versement d'espèces d'une caisse vers une banque (écriture validée par défaut)", {
-                "date": ["string", "Date du versement AAAA-MM-JJ"], "montant": ["number", "Montant en dinars"],
-                "banque": ["string", "Compte bancaire exact renvoyé par banques (ex. BIAT - A&S)"],
-                "compte_especes": ["string", "Caisse d'origine, Sabah Espèces - A&S par défaut"],
-                "reference": ["string", "Référence du bordereau ou de l'opération bancaire"],
-                "valider": ["integer", "1 (défaut) pour valider, 0 pour laisser en brouillon"],
-            }, post=True, requis=["date", "montant", "banque"]),
-            base + "saisir_depense_euros": _op("saisir_depense_euros", "Dépense payée en euros depuis le compte en euros (pub Google, abonnement) : taux du jour automatique, écriture validée", {
-                "date": ["string", "Date AAAA-MM-JJ"], "libelle": ["string", "Objet de la dépense"],
-                "montant_eur": ["number", "Montant en euros"],
-                "compte_charge": ["string", "Compte de charge, Frais de Marketing - A&S par défaut"],
-                "taux": ["number", "Taux EUR→TND à imposer ; vide = taux du jour sur internet"],
-            }, post=True, requis=["date", "libelle", "montant_eur"]),
-            base + "rendez_vous": _op("rendez_vous", "Rendez-vous d'un jour (ou de plusieurs jours), ou tous ceux d'un client", {
-                "date": ["string", "Jour AAAA-MM-JJ (aujourd'hui par défaut)"], "jours": ["integer", "Nombre de jours à partir de la date, 1 par défaut"],
-                "client": ["string", "Nom exact du client (renvoyé par chercher_client) pour ses rendez-vous passés et à venir"],
-            }, requis=[]),
-            base + "creneaux_rendez_vous": _op("creneaux_rendez_vous", "Demi-journées disponibles pour un client avant de réserver", {
-                "client": ["string", "Nom exact du client"], "type_intervention": ["string", "Entretien ou Réparation"],
-                "adresse": ["string", "Adresse du client si plusieurs (vide = la principale)"],
-            }, requis=["client"]),
-            base + "creer_rendez_vous": _op("creer_rendez_vous", "Réserver un rendez-vous pour un client (le client reçoit un SMS de confirmation)", {
-                "client": ["string", "Nom exact du client"], "type_intervention": ["string", "Entretien ou Réparation"],
-                "date": ["string", "Jour AAAA-MM-JJ parmi les créneaux"], "demi_journee": ["string", "matin ou apres_midi"],
-                "adresse": ["string", "Adresse si plusieurs"], "note": ["string", "Note pour le technicien"],
-            }, post=True, requis=["client", "type_intervention", "date", "demi_journee"]),
-        },
+        "paths": {base + nom: _op(nom, resume, params, post, requis) for nom, (resume, params, post, requis) in OUTILS.items()},
         "components": {"securitySchemes": {"cleApi": {"type": "apiKey", "in": "header", "name": "Authorization",
                                                        "description": "token <clé>:<secret> de l'utilisateur assistant"}}},
         "security": [{"cleApi": []}],
     }
+
+
+def outils_mcp() -> list[dict]:
+    """La liste d'outils du plugin MCP (name, description, inputSchema), générée depuis OUTILS. Pure."""
+    out = []
+    for nom, (resume, params, _post, requis) in OUTILS.items():
+        out.append({"name": nom, "description": resume,
+                    "inputSchema": {"type": "object", "properties": {k: {"type": v[0], "description": v[1]} for k, v in params.items()},
+                                    "required": list(params) if requis is None else requis}})
+    return out
 
 
 @frappe.whitelist(allow_guest=True)
