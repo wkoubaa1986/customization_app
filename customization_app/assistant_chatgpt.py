@@ -110,7 +110,7 @@ def moi():
     return {"utilisateur": frappe.session.user, "societe": CD.COMPANY, "aujourd_hui": nowdate(), "plafond_dt": PLAFOND_DT,
             "modes_de_paiement": list(MODES),
             "actions": ["comptes_de_charge", "chercher_fournisseur", "chercher_client", "stock_article", "saisir_depense", "mes_saisies",
-                        "saisir_depense_euros", "banques", "verser_en_banque", "annuler_ecriture", "corriger_ecriture",
+                        "saisir_depense_euros", "banques", "verser_en_banque", "valider_ecriture", "annuler_ecriture", "corriger_ecriture",
                         "rendez_vous", "creneaux_rendez_vous", "creer_rendez_vous"]}
 
 
@@ -512,6 +512,23 @@ def annuler_ecriture(ecriture, motif, confirmation=None):
 
 
 @frappe.whitelist(methods=["POST"])
+def valider_ecriture(ecriture, confirmation=None):
+    """Soumet un brouillon d'écriture de journal (par exemple une dépense laissée en brouillon). Brouillon de l'assistant :
+    direct ; brouillon d'un humain : aperçu + jeton d'abord."""
+    _acces()
+    je = _ecriture(ecriture)
+    if je.docstatus != 0:
+        frappe.throw(_("{0} est déjà validée.").format(ecriture))
+    arret = _confirmation_humaine("valider", je, {}, confirmation)
+    if arret:
+        return arret
+    je.flags.ignore_permissions = True
+    je.add_comment("Comment", _("Validée via ChatGPT par {0}").format(frappe.session.user))
+    je.submit()
+    return {"ecriture": ecriture, "statut": _("Validée"), "apercu": _lecture(je), "url": _url("Journal Entry", ecriture)}
+
+
+@frappe.whitelist(methods=["POST"])
 def corriger_ecriture(ecriture, motif, date=None, montant=None, banque=None, compte_especes=None, reference=None,
                       libelle=None, compte_charge=None, mode=None, tva=None, taux_tva=None, montant_eur=None, taux=None,
                       confirmation=None):
@@ -601,6 +618,10 @@ OUTILS = {
         "motif": ["string", "Pourquoi, cinq caractères au moins (gardé en commentaire)"],
         "confirmation": ["string", "Jeton reçu à la première demande, après accord explicite de l'humain"],
     }, True, ["ecriture", "motif"]),
+    "valider_ecriture": ("Valider (soumettre) un brouillon d'écriture de journal. Brouillon d'un humain → aperçu + jeton, puis rappel avec `confirmation`", {
+        "ecriture": ["string", "Numéro du brouillon (ACC-JV-…)"],
+        "confirmation": ["string", "Jeton reçu à la première demande, après accord explicite de l'humain"],
+    }, True, ["ecriture"]),
     "corriger_ecriture": ("Corriger une écriture de journal : l'ancienne est annulée et une nouvelle passée avec les valeurs changées, même état. Pas de l'assistant → aperçu + jeton, puis rappel avec `confirmation`", {
         "ecriture": ["string", "Numéro de l'écriture à corriger"], "motif": ["string", "Pourquoi, cinq caractères au moins"],
         "confirmation": ["string", "Jeton reçu à la première demande, après accord explicite de l'humain"],
@@ -672,7 +693,7 @@ demande. Pour le stock ou un client, utilise stock_article / chercher_client et 
 Dépense payée en euros (pub Google, abonnement) : saisir_depense_euros, le taux du jour est pris automatiquement.
 Versement d'espèces à la banque : banques pour les comptes, puis verser_en_banque après confirmation (date, montant, banque, référence).
 Pour corriger ou annuler une écriture que tu as passée : mes_saisies pour la retrouver, confirmation, puis corriger_ecriture
-(seuls les champs qui changent) ou annuler_ecriture, toujours avec un motif. Pour une écriture qui n'est PAS de toi, le serveur
+(seuls les champs qui changent), annuler_ecriture (motif obligatoire) ou valider_ecriture pour soumettre un brouillon. Pour une écriture qui n'est PAS de toi, le serveur
 répond d'abord par un aperçu et un jeton : montre l'aperçu, demande un accord explicite, et seulement alors rappelle l'action avec
 le jeton dans `confirmation`. Jamais sans cet accord.
 Rendez-vous : rendez_vous pour voir ceux d'un jour ou d'un client ; pour en prendre un, chercher_client puis
