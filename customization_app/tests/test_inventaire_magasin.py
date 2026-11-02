@@ -239,6 +239,29 @@ class TestInventaire(unittest.TestCase):
         self.assertEqual(taux, {i1: 12.5, i2: taux_auto_i2})
         self.assertEqual((self._stock(i1), self._stock(i2)), (s1 - 2, s2 + 1))
 
+    def test_taux_change_sans_ecart_de_quantite(self):
+        """Compté juste, mais taux saisi différent du taux de l'entrepôt : la ligne entre dans l'écriture pour son
+        taux seul, et le stock prend ce taux (demande du 02/11/2026)."""
+        import frappe
+        i1 = self.items[0]
+        s1 = self._stock(i1)
+        taux_avant = S.flt(frappe.db.get_value("Bin", {"item_code": i1, "warehouse": self.magasin}, "valuation_rate"), 6)
+        plafond = (I._plafonds([i1]).get(i1) or {}).get("plafond")
+        nouveau = round(max(min(taux_avant * 0.5, (plafond or 1e9) * 0.9), 0.01), 3)   # différent du taux, sous le plafond
+        name = I.ouvrir_inventaire()
+        I.enregistrer_inventaire(name, json.dumps({i1: {"cases": {I.SANS_ZONE: s1}}}))
+        self.assertFalse(I.bilan_cloture(name)["a_rapprocher"])                 # juste, taux inchangé : rien
+        I.definir_taux(name, i1, nouveau)
+        b = I.bilan_cloture(name)
+        self.assertEqual([(x["item_code"], x["taux_seul"], x["taux"]) for x in b["a_rapprocher"]], [(i1, True, nouveau)])
+        self.assertEqual(b["nb_taux_seuls"], 1)
+        r = I.cloturer_inventaire(name)
+        self.assertEqual(r["nb_rapproches"], 1)
+        sr = frappe.get_doc("Stock Reconciliation", r["rapprochement"])
+        self.assertEqual([(x.item_code, S.flt(x.qty, 6), S.flt(x.valuation_rate, 3)) for x in sr.items], [(i1, s1, nouveau)])
+        self.assertEqual(self._stock(i1), s1)
+        self.assertEqual(S.flt(frappe.db.get_value("Bin", {"item_code": i1, "warehouse": self.magasin}, "valuation_rate"), 3), nouveau)
+
     def test_retirer_un_emplacement_ajoute_par_erreur(self):
         import frappe
         i1 = self.items[0]

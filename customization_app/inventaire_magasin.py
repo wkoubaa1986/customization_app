@@ -511,7 +511,13 @@ def _preparer_cloture(v) -> dict:
     """Relit le stock du moment et pose, sur chaque ligne comptée, la quantité rapprochée (système actuel +
     écart du comptage). Rend le bilan de ce qui va se passer — PURE côté base : rien n'est enregistré."""
     qtes = S._quantites([l.item_code for l in v.lignes], [v.entrepot])
-    bouges, sans_taux, a_rapprocher, zones_nouvelles = [], [], [], []
+    # Taux du moment dans l'entrepôt : une ligne SANS écart de quantité mais au taux saisi différent entre quand
+    # même dans l'écriture (quantité inchangée, nouveau taux) — sinon le taux changé dans l'application ne serait
+    # jamais appliqué au stock (demande du 02/11/2026). ERPNext garde une ligne dont seul le taux change.
+    taux_bin = {r.item_code: flt(r.valuation_rate, 6) for r in
+                frappe.get_all("Bin", filters={"warehouse": v.entrepot, "item_code": ["in", [l.item_code for l in v.lignes]]},
+                               fields=["item_code", "valuation_rate"])}
+    bouges, sans_taux, a_rapprocher, zones_nouvelles, taux_seuls = [], [], [], [], set()
     for l in v.lignes:
         if not l.compte:
             continue
@@ -531,6 +537,10 @@ def _preparer_cloture(v) -> dict:
                                   "qte_rapprochee": flt(l.qte_rapprochee, 6)})
             else:
                 a_rapprocher.append(l)
+        elif (flt(l.get("taux_saisi"), 6) > 0 and flt(actuelle, 6) > 0
+              and abs(flt(l.taux_saisi, 6) - flt(taux_bin.get(l.item_code), 6)) > 1e-6):
+            a_rapprocher.append(l)
+            taux_seuls.add(l.item_code)
     for l in v.lignes:
         if _zones_ajoutees(l):      # emplacements ajoutés pendant l'inventaire (déjà sur la fiche article)
             zones_nouvelles.append({"item_code": l.item_code, "item_name": l.item_name, "zones": _zones_ajoutees(l)})
@@ -542,7 +552,9 @@ def _preparer_cloture(v) -> dict:
             "a_rapprocher": [{"item_code": l.item_code, "item_name": l.item_name, "qte_actuelle": flt(l.qte_systeme_cloture, 6),
                               "qte_rapprochee": flt(l.qte_rapprochee, 6), "ecart": flt(l.ecart, 6),
                               "valeur_ecart": flt(l.valeur_ecart, 3), "taux": flt(_taux(l), 3),
-                              "taux_saisi": flt(l.get("taux_saisi"), 3)} for l in a_rapprocher],
+                              "taux_saisi": flt(l.get("taux_saisi"), 3), "taux_seul": l.item_code in taux_seuls,
+                              "taux_actuel": flt(taux_bin.get(l.item_code), 3)} for l in a_rapprocher],
+            "nb_taux_seuls": len(taux_seuls),
             "bouges": bouges, "sans_taux": sans_taux, "zones_nouvelles": zones_nouvelles}
 
 
@@ -610,8 +622,8 @@ def cloturer_inventaire(name, note=None):
     _acces()
     v = _ouvert(name)
     bilan = _preparer_cloture(v)
-    lignes = [l for l in v.lignes if l.compte and not l.sans_taux
-              and abs(flt(l.qte_rapprochee, 6) - flt(l.qte_systeme_cloture, 6)) > 1e-6]
+    retenus = {x["item_code"] for x in bilan["a_rapprocher"]}     # écart de quantité, ou taux saisi seul
+    lignes = [l for l in v.lignes if l.compte and not l.sans_taux and l.item_code in retenus]
     v.rapprochement = _rapprochement(v, lignes)
     v.nb_zones_ajoutees = sum(len(_zones_ajoutees(l)) for l in v.lignes)
     v.nb_bouges = len(bilan["bouges"])
