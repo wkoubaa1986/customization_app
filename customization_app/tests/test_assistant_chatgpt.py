@@ -32,7 +32,7 @@ class TestVerifier(unittest.TestCase):
         self.assertEqual(s["servers"][0]["url"], "https://exemple.tn")
         ops = {list(v.values())[0]["operationId"] for v in s["paths"].values()}
         self.assertEqual(ops, {"moi", "comptes_de_charge", "chercher_fournisseur", "chercher_client", "stock_article", "saisir_depense", "mes_saisies",
-                               "saisir_depense_euros", "banques", "verser_en_banque", "valider_ecriture", "annuler_ecriture", "corriger_ecriture", "rendez_vous", "creneaux_rendez_vous", "creer_rendez_vous"})
+                               "saisir_depense_euros", "banques", "verser_en_banque", "valider_ecriture", "annuler_ecriture", "corriger_ecriture", "rendez_vous", "creneaux_rendez_vous", "creer_rendez_vous", "deplacer_rendez_vous", "annuler_rendez_vous"})
         dep = s["paths"]["/api/method/customization_app.assistant_chatgpt.saisir_depense"]["post"]
         self.assertEqual(dep["requestBody"]["content"]["application/json"]["schema"]["required"], ["date", "libelle", "montant_ttc", "compte_charge"])
 
@@ -72,3 +72,12 @@ class TestLireEcriture(unittest.TestCase):
         r = self._je("Salaires", "", [{"account": "Salaire - A&S", "debit": 500, "credit": 0}, {"account": "Loyer du Bureau - A&S", "debit": 300, "credit": 0},
                                       {"account": "Espèces - A&S", "debit": 0, "credit": 800}])
         self.assertEqual((r["type"], len(r["lignes"])), ("inconnu", 3))
+
+
+class TestRdvAssistant(unittest.TestCase):
+    def test_marque_du_portail(self):
+        from customization_app.assistant_chatgpt import rdv_de_l_assistant
+        self.assertTrue(rdv_de_l_assistant("RDV magasin (ChatGPT (assistant.chatgpt@aquaworld.local)) — Entretien (matin)"))
+        self.assertFalse(rdv_de_l_assistant("RDV magasin (Salma Ben Saïd) — Entretien (matin)"))
+        self.assertFalse(rdv_de_l_assistant("RDV portail — Réparation (après-midi)"))
+        self.assertFalse(rdv_de_l_assistant(None))

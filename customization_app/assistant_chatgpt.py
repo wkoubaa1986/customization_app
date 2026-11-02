@@ -111,7 +111,7 @@ def moi():
             "modes_de_paiement": list(MODES),
             "actions": ["comptes_de_charge", "chercher_fournisseur", "chercher_client", "stock_article", "saisir_depense", "mes_saisies",
                         "saisir_depense_euros", "banques", "verser_en_banque", "valider_ecriture", "annuler_ecriture", "corriger_ecriture",
-                        "rendez_vous", "creneaux_rendez_vous", "creer_rendez_vous"]}
+                        "rendez_vous", "creneaux_rendez_vous", "creer_rendez_vous", "deplacer_rendez_vous", "annuler_rendez_vous"]}
 
 
 @frappe.whitelist()
@@ -568,6 +568,80 @@ def corriger_ecriture(ecriture, motif, date=None, montant=None, banque=None, com
     return r
 
 
+# ── Déplacer / annuler un rendez-vous ────────────────────────────────────────
+
+def rdv_de_l_assistant(subject: str) -> bool:
+    """Le portail écrit « RDV magasin (<agent>) — … » : l'assistant réserve avec l'agent « ChatGPT (<utilisateur>) ». Pure."""
+    return "ChatGPT (" in (subject or "")
+
+
+def _tache_ouverte(nom):
+    if not frappe.db.exists("Tache de travail", nom):
+        frappe.throw(_("Rendez-vous {0} introuvable.").format(nom))
+    t = frappe.get_doc("Tache de travail", nom)
+    if t.status != "Open":
+        frappe.throw(_("{0} est {1} : il ne se modifie plus.").format(nom, ETATS.get(t.status, t.status).lower()))
+    if not t.custom_client:
+        frappe.throw(_("{0} n'est pas un rendez-vous client.").format(nom))
+    return t
+
+
+def _apercu_tache(t) -> dict:
+    return {"tache": t.name, "debut": str(t.starts_on)[:16], "type": t.custom_type_dintervention, "client": t.custom_client,
+            "nom_client": t.nom_client, "employe": frappe.db.get_value("Employee", t.custom_choix_du_staff, "employee_name") if t.custom_choix_du_staff else None,
+            "secteur": t.secteur, "objet": t.subject, "de_l_assistant": rdv_de_l_assistant(t.subject)}
+
+
+def _confirmation_rdv(action, t, params, confirmation):
+    if rdv_de_l_assistant(t.subject):
+        return None
+    fenetre = int(frappe.utils.now_datetime().timestamp() // (JETON_MINUTES * 60))
+    if confirmation and confirmation in (_jeton(action, t.name, params, fenetre), _jeton(action, t.name, params, fenetre - 1)):
+        return None
+    return {"confirmation_requise": True, "jeton": _jeton(action, t.name, params, fenetre), "valable_minutes": JETON_MINUTES,
+            "action": action, "tache": t.name, "apercu": _apercu_tache(t), "changements": params,
+            "message": _("Ce rendez-vous n'a pas été pris par l'assistant. Montrez l'aperçu, obtenez l'accord explicite d'un "
+                         "humain, puis rappelez la même action avec ce jeton dans `confirmation`.")}
+
+
+@frappe.whitelist(methods=["POST"])
+def deplacer_rendez_vous(tache, date, demi_journee, confirmation=None):
+    """Déplace un rendez-vous ouvert sur une autre demi-journée, par le portail (mêmes règles, SMS au client).
+    Rendez-vous pris par l'assistant : direct ; pris par un humain : aperçu + jeton d'abord."""
+    _acces()
+    t = _tache_ouverte(tache)
+    arret = _confirmation_rdv("deplacer", t, {"date": date, "demi_journee": demi_journee}, confirmation)
+    if arret:
+        return arret
+    from customization_app import portail_rdv as PR
+    seance = _seance_portail(t.custom_client)
+    r = dict(PR.deplacer_rdv(seance["jeton"], tache, date, demi_journee) or {})
+    r["url"] = _url("Tache de travail", tache)
+    return r
+
+
+@frappe.whitelist(methods=["POST"])
+def annuler_rendez_vous(tache, motif, message_client=None, confirmation=None):
+    """Annule un rendez-vous ouvert (statut Annulé, motif en commentaire) ; `message_client` : texte envoyé au client par
+    SMS et e-mail, rien n'est envoyé sans. Rendez-vous d'un humain : aperçu + jeton d'abord."""
+    _acces()
+    if len((motif or "").strip()) < 5:
+        frappe.throw(_("Donnez un motif (au moins cinq caractères)."))
+    t = _tache_ouverte(tache)
+    arret = _confirmation_rdv("annuler", t, {"motif": motif.strip(), "message_client": (message_client or "").strip()}, confirmation)
+    if arret:
+        return arret
+    from customization_app import taches_groupe as TG
+    from customization_app.cloture_partenaire import _en_systeme
+    apercu = _apercu_tache(t)
+    with _en_systeme():          # taches_groupe exige le droit d'écrire les tâches, que l'utilisateur technique n'a pas
+        r = TG.annuler([tache], motif="%s (%s par %s)" % (motif.strip(), MARQUE, apercu and frappe.session.user),
+                       modele=(message_client or "").strip() or None, sms=1 if (message_client or "").strip() else 0,
+                       email=1 if (message_client or "").strip() else 0)
+    return {"tache": tache, "resultat": (r.get("resultats") or [{}])[0].get("etat"), "client_prevenu": bool((message_client or "").strip()),
+            "etait": apercu, "url": _url("Tache de travail", tache)}
+
+
 # ── Schéma OpenAPI pour le GPT ───────────────────────────────────────────────
 
 #: Les outils, décrits une seule fois : {nom: (résumé, {param: [type, description]}, POST ?, requis)}. Le schéma OpenAPI
@@ -632,6 +706,15 @@ OUTILS = {
         "tva": ["number", "Nouvelle TVA (dépense)"], "taux_tva": ["number", "Nouveau taux de TVA (dépense)"],
         "montant_eur": ["number", "Nouveau montant en euros (dépense en euros)"], "taux": ["number", "Nouveau taux EUR→TND (dépense en euros)"],
     }, True, ["ecriture", "motif"]),
+    "deplacer_rendez_vous": ("Déplacer un rendez-vous ouvert sur une autre demi-journée (règles du portail, SMS au client). Pris par un humain → aperçu + jeton, puis rappel avec `confirmation`", {
+        "tache": ["string", "Numéro du rendez-vous (Tache-…), vu dans rendez_vous"], "date": ["string", "Nouveau jour AAAA-MM-JJ"],
+        "demi_journee": ["string", "matin ou apres_midi"], "confirmation": ["string", "Jeton reçu à la première demande, après accord explicite"],
+    }, True, ["tache", "date", "demi_journee"]),
+    "annuler_rendez_vous": ("Annuler un rendez-vous ouvert avec un motif ; message_client = texte envoyé au client (rien sans). Pris par un humain → aperçu + jeton, puis rappel avec `confirmation`", {
+        "tache": ["string", "Numéro du rendez-vous"], "motif": ["string", "Pourquoi, cinq caractères au moins"],
+        "message_client": ["string", "Texte SMS/e-mail au client ; vide = le client n'est pas prévenu"],
+        "confirmation": ["string", "Jeton reçu à la première demande, après accord explicite"],
+    }, True, ["tache", "motif"]),
     "creer_rendez_vous": ("Réserver un rendez-vous pour un client (le client reçoit un SMS de confirmation)", {
         "client": ["string", "Nom exact du client"], "type_intervention": ["string", "Entretien ou Réparation"],
         "date": ["string", "Jour AAAA-MM-JJ parmi les créneaux"], "demi_journee": ["string", "matin ou apres_midi"],
@@ -697,4 +780,6 @@ Pour corriger ou annuler une écriture que tu as passée : mes_saisies pour la r
 répond d'abord par un aperçu et un jeton : montre l'aperçu, demande un accord explicite, et seulement alors rappelle l'action avec
 le jeton dans `confirmation`. Jamais sans cet accord.
 Rendez-vous : rendez_vous pour voir ceux d'un jour ou d'un client ; pour en prendre un, chercher_client puis
-creneaux_rendez_vous, propose 2 ou 3 demi-journées, et seulement après accord creer_rendez_vous (le client reçoit un SMS)."""
+creneaux_rendez_vous, propose 2 ou 3 demi-journées, et seulement après accord creer_rendez_vous (le client reçoit un SMS).
+Déplacer ou annuler un rendez-vous : deplacer_rendez_vous / annuler_rendez_vous ; pour l'annulation, propose un court message
+au client et demande s'il faut l'envoyer. Rendez-vous pris par un humain : même règle du jeton, jamais sans accord explicite."""

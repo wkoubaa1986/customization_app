@@ -48,6 +48,7 @@ rôle posés par le patch `ensure_assistant_chatgpt`.
 | `corriger_ecriture`, `annuler_ecriture` | correction (annulation + nouvelle écriture, même état) ou annulation d'une écriture de journal, motif obligatoire. Écriture de l'assistant : direct. Écriture d'un humain : la première demande ne fait rien et renvoie un aperçu + un jeton (10 min) ; seule la seconde demande, avec le jeton après accord explicite, agit. Structure inconnue : annulable seulement |
 | `rendez_vous` | rendez-vous d'un jour, de plusieurs jours, ou d'un client (passés et à venir) |
 | `creneaux_rendez_vous` | demi-journées disponibles pour un client, par le portail de réservation (secteur, capacité, délais) |
+| `deplacer_rendez_vous`, `annuler_rendez_vous` | déplacement par le portail (SMS au client) ou annulation avec motif et message au client facultatif ; pris par l'assistant : direct, pris par un humain : jeton de confirmation |
 | `creer_rendez_vous` | réserve comme l'opératrice au téléphone : tâche au calendrier, SMS et e-mail de confirmation au client |
 
 Garde-fous : plafond 5 000 DT par dépense, date dans les 90 jours, compte parmi ceux de la caisse, modes Espèces /
