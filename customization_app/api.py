@@ -92,6 +92,8 @@ def partner_finalize_order(task):
          au total HT (sinon ligne M-I-OD non liée).
     Enqueuée par le Server Script « Autorisation Sales order partenaire » à la
     fermeture de la tâche (enqueue_after_commit)."""
+    from customization_app.reposting_bl_supprime import avant_suppression
+
     frappe.set_user("Administrator")
 
     doc = frappe.get_doc("Tache de travail", task)
@@ -147,6 +149,9 @@ def partner_finalize_order(task):
         last_bl = bl
         if bl.docstatus == 1:
             bl.cancel()
+            # Le BL va être supprimé : son repost de valorisation « Transaction » échouerait
+            # (« not found ») ; on le remplace par des reposts par article/entrepôt (reposting_bl_supprime).
+            avant_suppression(bl)
         to_delete.append(bl.name)
 
     # 4) BL consolidé : une ligne au total HT.
