@@ -206,7 +206,21 @@ frappe.views.CalendarViewList = class CalendarViewList extends frappe.views.Cale
 			},
 			eventDrop: function (event, delta, revertFunc) {
 				if (event.ferie) { revertFunc(); return; }
-				if (event.doctype === "Reunion Activite") { revertFunc(); frappe.show_alert({ message: __("La réunion se modifie depuis Suivi d’activité."), indicator: "orange" }); return; }
+				if (event.doctype === "Reunion Activite") {
+					// Réunion du Suivi d'activité : glissée sur un autre jour (ou créneau), elle y est replanifiée (02/11/2026).
+					if (event.status === "Completed") { revertFunc(); frappe.show_alert({ message: __("Une réunion tenue ne se déplace plus."), indicator: "orange" }); return; }
+					const debut = moment(event.start);
+					frappe.call({
+						method: "customization_app.reunion_activite.deplacer",
+						args: { name: event.name, date: debut.format("YYYY-MM-DD"), heure: event.allDay ? null : debut.format("HH:mm:ss") },
+						callback: (r) => {
+							if (r.exc) { revertFunc(); return; }
+							frappe.show_alert({ message: __("Réunion déplacée au {0} à {1}", [debut.format("DD/MM"), (r.message.heure || "").slice(0, 5)]), indicator: "green" }, 5);
+						},
+						error: () => revertFunc(),
+					});
+					return;
+				}
 				me.update_event(event, revertFunc);
 			},
 			eventResize: function (event, delta, revertFunc) {

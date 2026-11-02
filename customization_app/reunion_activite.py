@@ -473,6 +473,22 @@ def modifier(name, data):
 
 
 @frappe.whitelist()
+def deplacer(name, date, heure=None):
+    """Glisser-déposer depuis le Calendrier de travail (demande du 02/11/2026) : la réunion PRÉVUE change de jour
+    (et d'heure si on la lâche sur un créneau). Une réunion tenue ou annulée ne bouge pas. Responsables seulement."""
+    _gerer()
+    doc = frappe.get_doc(DOCTYPE, name)
+    if doc.statut != "Prévue":
+        frappe.throw(_("La réunion {0} est {1} : elle ne se déplace plus.").format(name, doc.statut.lower()))
+    avant = (str(doc.date), str(doc.heure or ""))
+    doc.date = getdate(date)
+    if heure:
+        doc.heure = frappe.utils.get_time(heure)
+    doc.save(ignore_permissions=True)
+    return {"name": doc.name, "date": str(doc.date), "heure": str(doc.heure or ""), "avant": avant}
+
+
+@frappe.whitelist()
 def presence(name, employe, present):
     """Présent / Absent / (vide). Un employé ne marque que lui-même."""
     SA._verifier_acces()
