@@ -180,6 +180,11 @@
     .se-i-taux { display: inline-flex; align-items: center; gap: 4px; margin: 0 0 0 6px; font-weight: normal; vertical-align: middle; }
     .se-i-taux span { font-size: 10.5px; color: #64748b; text-transform: uppercase; }
     .se-i-taux input { width: 84px; height: 30px; font-size: 13px; text-align: right; padding: 2px 6px; }
+    .se-i-valo { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 4px 0 0; font-size: 12px; }
+    .se-i-valo .se-i-taux { margin: 0; }
+    .se-i-valo.hors .se-i-taux input { border-color: #dc2626; }
+    .se-i-valo.modifie .se-i-taux input { border-color: #dc2626; color: #b91c1c; font-weight: 600; background: #fef2f2; }
+    .se-i-valo .se-i-chg { color: #b91c1c; font-size: 11.5px; }
     .se-zh-grille { display: flex; flex-wrap: wrap; gap: 6px; }
     .se-zh { display: inline-flex; flex-direction: column; align-items: center; min-width: 58px; padding: 4px 8px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 12.5px; font-weight: 700; color: #0f172a; }
     .se-zh small { font-size: 10px; font-weight: 500; color: #64748b; white-space: nowrap; }

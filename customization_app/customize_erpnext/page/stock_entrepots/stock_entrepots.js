@@ -1496,6 +1496,11 @@ class StockEntrepots {
             <div class="se-code">${se_esc(l.item_code)}${l.groupe ? ` · ${se_esc(l.groupe)}` : ""}${l.uom ? ` · ${se_esc(l.uom)}` : ""}</div>
             ${l.description ? `<div class="se-desc" title="${se_esc(l.description)}">${se_esc(l.description)}</div>` : ""}</div>
           <div class="sys ${l.qte_systeme < 0 ? "negatif" : ""}">système<b>${se_q(l.qte_systeme)}</b>${l.bouge ? `<small class="neg">maintenant ${se_q(l.qte_actuelle)}</small>` : ""}</div></div>
+        ${d.voir_valeur ? `<div class="se-i-valo ${l.taux_hors_plafond ? "hors" : ""} ${l.taux_saisi && Math.abs(l.taux_saisi - l.taux_actuel) > 1e-6 ? "modifie" : ""}">
+          <label class="se-i-taux"><span>taux</span><input type="number" inputmode="decimal" min="0" step="any" class="form-control" data-taux-item="${se_esc(l.item_code)}" value="${l.taux_saisi ? se_esc(l.taux_saisi) : ""}" placeholder="${l.taux_actuel ? se_esc(se_q(l.taux_actuel)) : "à saisir"}" ${fini ? "disabled" : ""} title="Taux de valorisation (DT HT) dans cet entrepôt : vide = celui du système"></label>
+          ${l.taux_saisi && Math.abs(l.taux_saisi - l.taux_actuel) > 1e-6 ? `<span class="se-i-chg">✏️ valorisation modifiée : ${se_q(l.taux_actuel)} → <b>${se_q(l.taux_saisi)}</b> DT${l.taux_actuel ? ` (${l.taux_saisi > l.taux_actuel ? "+" : ""}${Math.round((l.taux_saisi - l.taux_actuel) / l.taux_actuel * 100)} %)` : ""}${l.compte_par ? ` · l’écart sera valorisé à ce taux` : ""}</span>` : l.taux_saisi ? `<span class="se-note">✏️ saisi = taux système</span>` : ""}
+          ${l.plafond != null ? `<span class="se-note plafond" title="Prix de vente le plus bas ${se_q(l.prix_bas)} DT TTC (${se_esc(l.liste_bas)}) hors TVA ${se_q(l.tva)} %, moins la marge minimale ${se_q(l.marge_min)} %">plafond <b>${se_q(l.plafond)}</b>${l.taux_hors_plafond ? ` · <span class="neg">⚠️ taux au-dessus : marge &lt; ${se_q(l.marge_min)} % au prix ${se_esc(l.liste_bas)}</span>` : ""}</span>` : `<span class="se-note">sans prix de vente : pas de plafond</span>`}
+        </div>` : ""}
         <div class="cases">${e.colonnes.map((z) => `<label class="case ${e.ajoutees.includes(z) ? "ajoutee" : ""}"><span class="z">${se_esc(libZone(z))}${e.ajoutees.includes(z) && !fini ? `<span class="x" data-retirer-zone="${se_esc(z)}" title="Retirer cet emplacement de l’article">✕</span>` : ""}</span>
             <input type="number" inputmode="decimal" min="0" step="any" class="form-control" data-zone="${se_esc(z)}" value="${e.cases[z] == null ? "" : se_esc(e.cases[z])}" ${fini ? "disabled" : ""} placeholder="–"></label>`).join("")}
           ${fini ? "" : `<span class="se-bt" data-ajouter-zone title="Ajouter un emplacement">＋</span>`}
@@ -1520,6 +1525,17 @@ class StockEntrepots {
           <button type="button" class="btn btn-primary" data-cloturer>✅ Clôturer et passer l’écriture</button></div>`}
       </div>`);
     $c.find("#se-i-lignes").on("click", "[data-analyser]", (ev) => this.analyserEcart(name, $(ev.currentTarget).attr("data-analyser")));
+    // Taux de valorisation saisi sur une ligne : enregistré au changement (refusé au-dessus du plafond), ligne repeinte.
+    $c.find("#se-i-lignes").on("change", "[data-taux-item]", async (ev) => {
+      const code = $(ev.currentTarget).attr("data-taux-item"), val = ev.currentTarget.value, l = d.lignes.find((x) => x.item_code === code);
+      try {
+        const r = (await frappe.call({ method: SE_INV + "definir_taux", args: { name, item_code: code, taux: val === "" ? null : +val }, freeze: true })).message;
+        l.taux_saisi = r.taux_saisi; l.taux = r.taux; l.taux_hors_plafond = l.plafond != null && r.taux > l.plafond + 1e-6;
+        if (l.valeur_ecart != null) l.valeur_ecart = r.valeur_ecart;
+        frappe.show_alert({ message: `Taux de ${se_esc(code)} : ${se_q(r.taux)} DT${r.taux_saisi ? " (saisi)" : " (système)"}`, indicator: "green" }, 4);
+      } catch (e) { ev.currentTarget.value = l.taux_saisi || ""; }
+      peindre(); bilan();
+    });
     // ── Filtres et rendu paresseux ──
     let vue = "tous", zone = "", texte = "", nAff = 100, parZone = false;
     // Tri par zone : rang = ordre des zones (espace, puis code) ; « Non rangé » en dernier. Un article rangé à

@@ -46,6 +46,54 @@ LONGUEUR_DESCRIPTION = 160
 ESPACE_DEFAUT = "Magasin"
 
 
+# ── Taux de valorisation : plafond par la marge minimale (demande du 02/11/2026) ───────────────────────────────
+# Sur la feuille, chaque ligne montre le taux de valorisation de l'article DANS L'ENTREPÔT (Bin) et le responsable
+# peut le changer. Un taux saisi ne peut pas dépasser le PLAFOND : le prix de vente le plus bas de nos listes de
+# prix, ramené hors TVA, moins la marge minimale du réglage « Config Marge Minimale » (15 % par défaut). Au-delà,
+# l'article se vendrait sous la marge plancher à ce prix-là. Le taux système au-dessus du plafond est signalé.
+
+def plafond_taux(prix_bas_ttc: float, tva_pct: float, marge_pct: float, base: str = "Prix de vente HT") -> float | None:
+    """Le coût maximal qui laisse la marge `marge_pct` au prix TTC le plus bas. Pure.
+    Marge sur le prix de vente : coût ≤ prix HT × (1 − t) ; marge sur le coût : coût ≤ prix HT ÷ (1 + t)."""
+    prix, t = flt(prix_bas_ttc), flt(marge_pct) / 100.0
+    if prix <= 0 or t < 0:
+        return None
+    prix_ht = prix / (1 + flt(tva_pct) / 100.0)
+    return flt(prix_ht / (1 + t) if base == "Coût d'achat" else prix_ht * (1 - t), 3)
+
+
+def _plafonds(codes: list[str]) -> dict[str, dict]:
+    """item_code → {plafond, prix_bas, liste_bas, tva, marge} d'après le prix de vente le plus bas des listes de
+    vente actives (valide à ce jour, unité de stock ou sans unité) et la TVA de l'article (19 % si inconnue)."""
+    if not codes:
+        return {}
+    from customization_app import marge_minimale as MM
+    r = MM.reglage()
+    marge_pct, base = flt(r.get("taux")) if r.get("actif") else 0.0, r.get("base") or MM.BASE_PRIX
+    rows = frappe.db.sql("""select ip.item_code, ip.price_list, ip.price_list_rate, ip.uom, i.stock_uom
+                            from `tabItem Price` ip join `tabPrice List` pl on pl.name = ip.price_list
+                            join tabItem i on i.name = ip.item_code
+                            where ip.selling = 1 and pl.selling = 1 and pl.enabled = 1 and ip.item_code in %(codes)s
+                              and ip.price_list_rate > 0 and (ip.valid_from is null or ip.valid_from <= %(j)s)
+                              and (ip.valid_upto is null or ip.valid_upto >= %(j)s)
+                            order by ip.price_list_rate""", {"codes": tuple(codes), "j": nowdate()}, as_dict=True)
+    bas = {}
+    for x in rows:
+        if x.uom and x.uom != x.stock_uom:
+            continue
+        bas.setdefault(x.item_code, {"prix_bas": flt(x.price_list_rate, 3), "liste_bas": x.price_list})
+    out = {}
+    for c in codes:
+        b = bas.get(c)
+        if not b:
+            continue
+        tva = MM.taux_tva_article(c)
+        tva = 19.0 if tva is None else flt(tva)
+        out[c] = {"plafond": plafond_taux(b["prix_bas"], tva, marge_pct, base), "prix_bas": b["prix_bas"],
+                  "liste_bas": b["liste_bas"], "tva": tva, "marge": marge_pct}
+    return out
+
+
 # ── Accès ─────────────────────────────────────────────────────────────────────
 
 def est_autorise(user: str | None = None) -> bool:
@@ -323,10 +371,17 @@ def detail_inventaire(name):
         _rafraichir(v)
     infos = _infos_articles([l.item_code for l in v.lignes])
     qtes = S._quantites([l.item_code for l in v.lignes], [v.entrepot]) if v.statut == EN_COURS else {}
+    responsable = S.est_responsable()
+    plafonds = _plafonds([l.item_code for l in v.lignes]) if responsable else {}
+    taux_bin = ({r.item_code: flt(r.valuation_rate, 6) for r in
+                 frappe.get_all("Bin", filters={"warehouse": v.entrepot, "item_code": ["in", [l.item_code for l in v.lignes]]},
+                                fields=["item_code", "valuation_rate"])} if responsable and v.statut == EN_COURS else {})
     lignes = []
     for l in v.lignes:
         i = infos.get(l.item_code) or {}
         cases = _charger_cases(l)
+        pf = plafonds.get(l.item_code) or {}
+        taux_actuel = taux_bin.get(l.item_code, flt(l.taux, 6)) if v.statut == EN_COURS else flt(l.taux, 6)
         actuelle = qtes.get((l.item_code, v.entrepot), flt(l.qte_systeme, 6)) if v.statut == EN_COURS \
             else (flt(l.qte_systeme_cloture, 6) if l.compte else flt(l.qte_systeme, 6))
         lignes.append({"item_code": l.item_code, "item_name": l.item_name, "image": i.get("image"),
@@ -339,7 +394,10 @@ def detail_inventaire(name):
                        "bouge": abs(flt(actuelle, 6) - flt(l.qte_systeme, 6)) > 1e-6 if l.compte else False,
                        "qte_comptee": flt(l.qte_comptee, 6) if l.compte else None,
                        "ecart": flt(l.ecart, 6) if l.compte else None, "taux": flt(l.taux, 3),
-                       "taux_saisi": flt(l.get("taux_saisi"), 3),
+                       "taux_saisi": flt(l.get("taux_saisi"), 3), "taux_actuel": flt(taux_actuel, 3),
+                       "plafond": pf.get("plafond"), "prix_bas": pf.get("prix_bas"), "liste_bas": pf.get("liste_bas"),
+                       "tva": pf.get("tva"), "marge_min": pf.get("marge"),
+                       "taux_hors_plafond": bool(pf.get("plafond") and flt(_taux(l), 6) > flt(pf["plafond"], 6) + 1e-6),
                        "valeur_ecart": flt(l.valeur_ecart, 3) if l.compte else None,
                        "qte_rapprochee": flt(l.qte_rapprochee, 6) if v.statut == TERMINE and l.compte else None,
                        "commentaire": l.commentaire, "sans_taux": cint(l.sans_taux),
@@ -501,6 +559,12 @@ def definir_taux(name, item_code, taux=None):
     t = flt(taux, 6)
     if t < 0:
         frappe.throw(_("Le taux de valorisation ne peut pas être négatif."))
+    pf = _plafonds([item_code]).get(item_code)
+    if t > 0 and pf and pf.get("plafond") is not None and t > flt(pf["plafond"], 6) + 1e-6:
+        frappe.throw(_("Taux {0} refusé : au-dessus du plafond {1} DT. Prix de vente le plus bas {2} DT TTC ({3}), "
+                       "soit {4} DT hors TVA {5} % ; la marge minimale de {6} % n'y serait plus.")
+                     .format(flt(t, 3), pf["plafond"], pf["prix_bas"], pf["liste_bas"],
+                             flt(pf["prix_bas"] / (1 + pf["tva"] / 100.0), 3), flt(pf["tva"]), flt(pf["marge"])))
     l.taux_saisi = t
     _recalculer(v)
     _sauver(v)
