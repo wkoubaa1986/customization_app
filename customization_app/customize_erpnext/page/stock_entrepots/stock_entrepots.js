@@ -1334,12 +1334,21 @@ class StockEntrepots {
     const peri = (v) => `<span class="se-badge">📍 ${se_esc(v.perimetre_libelle || "Tout le Magasin")}</span>`;
     // Historique par zone : en cours / dernier inventaire clôturé / jamais inventoriée.
     const zh = (res.zones_historique || []).map((z) => `<span class="se-zh ${z.en_cours ? "ec" : z.dernier ? "" : "jamais"}" title="${z.en_cours ? `En cours : ${se_esc(z.en_cours)}` : z.dernier ? `Dernier inventaire clôturé ${se_esc(se_dt(z.dernier))} (${se_esc(z.dernier_inventaire)})` : "Jamais inventoriée"}">${se_esc(z.libelle)}<small>${z.en_cours ? "en cours" : z.dernier ? se_dt(z.dernier) : "jamais"}</small></span>`).join("");
-    const hist = res.dernieres.map((v) => `<div class="se-v-h" style="cursor:default">
-        <span class="d">${se_dt(v.termine_le || v.date)}</span>
+    // Tous les inventaires depuis `historique_depuis` (01/10/2026), groupés par jour : les annulés sont repliés
+    // derrière un chip (ils n'apprennent rien), le compte du jour cumule écarts et valeur des terminés.
+    const ligneHist = (v) => `<div class="se-v-h ${v.statut === "Annulé" ? "se-annule" : ""}" style="cursor:default">
+        <span class="d">${se_hm(v.termine_le || v.date) || se_dt(v.date)}</span>
         <span class="n">${etat(v)} ${peri(v)} ${v.nb_comptes}/${v.nb_lignes} comptés · <b class="${v.nb_ecarts ? "neg" : "pos"}">${v.nb_ecarts} écart(s)</b>${v.termine_par ? ` · ${se_esc(v.termine_par)}` : ""}
           <span class="se-note">${se_lien("Inventaire Magasin", v.name)}${v.rapprochement ? ` · ${se_lien("Stock Reconciliation", v.rapprochement, "écriture " + v.rapprochement)}` : v.statut === "Terminé" ? " · sans écriture (aucun écart)" : ""}</span></span>
         <span class="v ${v.valeur_ecarts < 0 ? "neg" : v.valeur_ecarts > 0 ? "pos" : ""}">${v.nb_ecarts ? se_argent(v.valeur_ecarts) : v.statut === "Terminé" ? "✓" : ""}</span>
-        <span class="se-lien" data-voir="${se_esc(v.name)}" style="cursor:pointer">🔍</span></div>`).join("");
+        <span class="se-lien" data-voir="${se_esc(v.name)}" style="cursor:pointer">🔍</span></div>`;
+    const jours = {};
+    res.dernieres.forEach((v) => { const j = (v.termine_le || v.date || "").slice(0, 10); (jours[j] = jours[j] || []).push(v); });
+    const nbTermines = res.dernieres.filter((v) => v.statut === "Terminé").length, nbAnnules = res.dernieres.length - nbTermines;
+    const hist = Object.keys(jours).sort().reverse().map((j) => {
+      const vs = jours[j], t = vs.filter((v) => v.statut === "Terminé"), ec = t.reduce((a, v) => a + (v.nb_ecarts || 0), 0), val = t.reduce((a, v) => a + (v.valeur_ecarts || 0), 0);
+      return `<div class="se-i-groupe">📅 ${se_esc(frappe.datetime.str_to_user(j))} · ${t.length} inventaire${t.length > 1 ? "s" : ""}${vs.length - t.length ? ` (+${vs.length - t.length} annulé${vs.length - t.length > 1 ? "s" : ""})` : ""} · <b class="${ec ? "neg" : "pos"}">${ec} écart(s)</b>${ec ? ` · <span class="${val < 0 ? "neg" : "pos"}">${se_argent(val)}</span>` : ""}</div>` + vs.map(ligneHist).join("");
+    }).join("");
     $c.html(`<span class="se-retour" data-retour>← Solde</span>
       <div class="se-card se-v-stock"><div class="t">📋 Inventaire du ${se_esc(res.libelle)}</div>
         <div class="plan">Tous les articles suivis en stock au Magasin, avec photo et description, <b>une case par emplacement</b> (zones de l’article) : la somme des cases est la quantité comptée, comparée au stock système. Le comptage s’enregistre au fil de l’eau ; à la clôture, <b>une écriture de stock</b> (rapprochement) aligne le Magasin sur le compté. Les articles non comptés ne bougent pas.</div>
@@ -1350,8 +1359,10 @@ class StockEntrepots {
       </div>
       <div class="se-titre">📍 Zones : dernier inventaire</div>
       <div class="se-card"><div class="se-zh-grille">${zh || `<span class="se-note">Aucune zone dans l’espace du Magasin.</span>`}</div></div>
-      <div class="se-titre">🕘 Derniers inventaires</div>
-      <div class="se-card">${hist || `<div class="se-note">Aucun inventaire terminé.</div>`}</div>`);
+      <div class="se-titre">🕘 Inventaires depuis le ${se_esc(frappe.datetime.str_to_user(res.historique_depuis || ""))} <span class="se-note">(${nbTermines} terminé${nbTermines > 1 ? "s" : ""}${nbAnnules ? `, ${nbAnnules} annulé${nbAnnules > 1 ? "s" : ""}` : ""})</span>
+        ${nbAnnules ? `<span class="se-chip" data-annules style="margin-left:8px">Voir les annulés</span>` : ""}</div>
+      <div class="se-card se-hist-inv">${hist || `<div class="se-note">Aucun inventaire depuis cette date.</div>`}</div>`);
+    $c.find("[data-annules]").on("click", (ev) => { const on = $c.find(".se-hist-inv").toggleClass("voir-annules").hasClass("voir-annules"); $(ev.currentTarget).toggleClass("on", on).text(on ? "Masquer les annulés" : "Voir les annulés"); });
     $c.find("[data-retour]").on("click", () => this.montrer("solde"));
     $c.find("[data-ouvrir]").on("click", () => {
       // Périmètre : zones cochées = inventaire partiel ; rien de coché = tout le Magasin (refusé si un partiel est ouvert).
@@ -1375,6 +1386,29 @@ class StockEntrepots {
   }
 
   /** Feuille d'inventaire : une ligne par article, une case par emplacement ; enregistrement au fil de l'eau. */
+  async analyserEcart(name, item_code) {
+    const r = (await frappe.call({ method: "customization_app.inventaire_analyse.analyser_ligne", args: { name, item_code }, freeze: true, freeze_message: "Analyse de l’écart…" })).message;
+    const v = r.verdict === "Expliqué" ? "pos" : r.verdict === "Probable" ? "" : "neg";
+    const mvt = (m) => `<tr><td>${se_esc(se_dt(m.date))} ${se_esc(m.heure || "")}</td><td>${se_lien(m.type, m.piece, m.libelle + " " + m.piece)}${m.kit ? ` <span class="se-badge">kit ${se_esc(m.kit)}</span>` : ""}</td>
+        <td>${se_esc([m.client, m.commande ? "cde " + m.commande : "", m.de && m.vers ? `${m.de} → ${m.vers}` : (m.vers ? "→ " + m.vers : m.de ? "de " + m.de : ""), m.fournisseur, m.par ? "par " + m.par : "", m.demande_par ? "demandé par " + m.demande_par : "", m.valide_par ? "validé par " + m.valide_par : "", m.verification ? "vérif. " + m.verification : "", m.remarque].filter(Boolean).join(" · "))}</td>
+        <td class="${m.qte < 0 ? "neg" : "pos"}" style="text-align:right"><b>${se_signe(m.qte)}</b></td><td style="text-align:right">${se_q(m.apres)}</td></tr>`;
+    const brouillon = (b) => `<li>${se_lien(b.type, b.name)} · ${se_esc(b.etat)} · <b>${se_q(b.qte)}</b>${b.client ? ` · ${se_esc(b.client)}` : ""}${b.vers ? ` · vers ${se_esc(b.vers)}` : ""}${b.par ? ` · ${se_esc(b.par)}` : ""} · ${se_esc(se_dthm(b.le))}</li>`;
+    const html = `<div class="se-analyse">
+      <div class="se-v-stock"><div class="t">${se_img(r.image)} ${se_esc(r.item_name || r.item_code)} <span class="se-code">${se_esc(r.item_code)}</span></div>
+        <div>Système <b>${se_q(r.qte_systeme)}</b> · compté <b>${se_q(r.qte_comptee)}</b> → écart <b class="${r.ecart < 0 ? "neg" : "pos"}">${se_signe(r.ecart)}</b>${r.compte_par ? ` · compté par ${se_esc(r.compte_par)} le ${se_esc(se_dthm(r.compte_le))}` : ""}${Object.keys(r.cases || {}).length ? ` · cases : ${se_esc(Object.keys(r.cases).map((z) => `${z.split(" - ").pop()} = ${se_q(r.cases[z])}`).join(", "))}` : ""}${r.commentaire ? `<br>📝 ${se_esc(r.commentaire)}` : ""}</div></div>
+      <div class="se-card"><div class="se-titre">Verdict : <b class="${v}">${se_esc(r.verdict)}</b></div><ul class="se-tours">${r.phrases.map((p) => `<li>${se_esc(p)}</li>`).join("")}</ul></div>
+      ${r.brouillons.length ? `<div class="se-titre">⏳ Sorti sans écriture validée</div><ul class="se-tours">${r.brouillons.map(brouillon).join("")}</ul>` : ""}
+      ${r.a_livrer.length ? `<div class="se-titre">📦 À livrer (commandes validées sans BL)</div><ul class="se-tours">${r.a_livrer.map((c) => `<li>${se_lien("Sales Order", c.commande)}${c.client ? ` · ${se_esc(c.client)}` : ""} · reste <b>${se_q(c.reste)}</b></li>`).join("")}</ul>` : ""}
+      ${r.ailleurs.length ? `<div class="se-titre">📍 Ailleurs</div><ul class="se-tours">${r.ailleurs.map((a) => `<li>${se_esc(a.entrepot)} : <b>${se_q(a.qte)}</b></li>`).join("")}</ul>` : ""}
+      <div class="se-titre">🔁 Mouvements au Magasin du ${se_esc(se_dthm(r.periode.debut))} au ${se_esc(se_dthm(r.periode.fin))} <span class="se-note">(${r.bilan.n} · +${se_q(r.bilan.entrees)} / −${se_q(r.bilan.sorties)})</span></div>
+      ${r.mouvements.length ? `<div style="max-height:260px;overflow:auto"><table class="table table-sm se-tbl"><thead><tr><th>Date</th><th>Pièce</th><th>Détail</th><th style="text-align:right">Qté</th><th style="text-align:right">Stock après</th></tr></thead><tbody>${r.mouvements.map(mvt).join("")}</tbody></table></div>` : `<div class="se-note">Aucun mouvement enregistré sur la période.</div>`}
+      ${r.historique.length > 1 ? `<div class="se-titre">🕘 Comptages précédents</div><ul class="se-tours">${r.historique.map((h) => `<li>${se_esc(se_dthm(h.date))} · ${se_lien("Inventaire Magasin", h.name)} · système ${se_q(h.qte_systeme)}, compté ${se_q(h.qte_comptee)} → <b class="${h.ecart < 0 ? "neg" : h.ecart > 0 ? "pos" : ""}">${h.ecart ? se_signe(h.ecart) : "sans écart"}</b>${h.par ? ` · ${se_esc(h.par)}` : ""}</li>`).join("")}</ul>` : ""}
+    </div>`;
+    const d = new frappe.ui.Dialog({ title: `🔎 Écart sur ${r.item_code}`, size: "large", fields: [{ fieldtype: "HTML", fieldname: "corps" }] });
+    d.fields_dict.corps.$wrapper.html(html);
+    d.show();
+  }
+
   async ouvrirInventaire(name) {
     this.feuilleInv = name;
     const d = (await frappe.call({ method: SE_INV + "detail_inventaire", args: { name } })).message;
@@ -1403,7 +1437,7 @@ class StockEntrepots {
         <div class="cases">${e.colonnes.map((z) => `<label class="case ${e.ajoutees.includes(z) ? "ajoutee" : ""}"><span class="z">${se_esc(libZone(z))}${e.ajoutees.includes(z) && !fini ? `<span class="x" data-retirer-zone="${se_esc(z)}" title="Retirer cet emplacement de l’article">✕</span>` : ""}</span>
             <input type="number" inputmode="decimal" min="0" step="any" class="form-control" data-zone="${se_esc(z)}" value="${e.cases[z] == null ? "" : se_esc(e.cases[z])}" ${fini ? "disabled" : ""} placeholder="–"></label>`).join("")}
           ${fini ? "" : `<span class="se-bt" data-ajouter-zone title="Ajouter un emplacement">＋</span>`}
-          <div class="total">= <b class="tot">${compte ? se_q(total) : "?"}</b><span class="ec ${ecart ? (ecart < 0 ? "neg" : "pos") : ""}">${ecart == null ? "" : se_signe(ecart)}</span></div></div>
+          <div class="total">= <b class="tot">${compte ? se_q(total) : "?"}</b><span class="ec ${ecart ? (ecart < 0 ? "neg" : "pos") : ""}">${ecart == null ? "" : se_signe(ecart)}</span>${ecart && l.compte ? `<span class="se-bt" data-analyser="${se_esc(l.item_code)}" title="Analyser cet écart : mouvements, pièces non validées, comptages précédents">🔎</span>` : ""}</div></div>
         ${l.compte_par ? `<div class="se-note qui">compté par ${se_esc(l.compte_par)} le ${se_dthm(l.compte_le)}${l.qte_rapprochee != null && fini ? ` · rapproché à <b>${se_q(l.qte_rapprochee)}</b>` : ""}${l.sans_taux ? ` · <span class="neg">sans taux : exclu</span>` : ""}${(l.zones_ajoutees || []).length ? ` · 📍 ajouté à l’article : ${se_esc(l.zones_ajoutees.join(", "))}` : ""}</div>` : ""}
       </div>`;
     };
@@ -1423,6 +1457,7 @@ class StockEntrepots {
         ${fini ? "" : `<div class="se-c-barre"><button type="button" class="btn btn-default" data-annuler>✖️ Annuler l’inventaire</button>
           <button type="button" class="btn btn-primary" data-cloturer>✅ Clôturer et passer l’écriture</button></div>`}
       </div>`);
+    $c.find("#se-i-lignes").on("click", "[data-analyser]", (ev) => this.analyserEcart(name, $(ev.currentTarget).attr("data-analyser")));
     // ── Filtres et rendu paresseux ──
     let vue = "tous", zone = "", texte = "", nAff = 100, parZone = false;
     // Tri par zone : rang = ordre des zones (espace, puis code) ; « Non rangé » en dernier. Un article rangé à

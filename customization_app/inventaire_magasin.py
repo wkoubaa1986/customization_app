@@ -41,7 +41,7 @@ ROLE = "Inventaire Magasin"
 ROLES = {ROLE, "System Manager"}
 EN_COURS, TERMINE, ANNULE = "En cours", "Terminé", "Annulé"
 SANS_ZONE = "__sans__"          # la case unique d'un article sans zone
-LIMITE_HISTORIQUE = 10
+HISTORIQUE_DEPUIS = "2026-10-01"    # la liste montre TOUS les inventaires depuis cette date (demande du 02/11/2026)
 LONGUEUR_DESCRIPTION = 160
 ESPACE_DEFAUT = "Magasin"
 
@@ -214,16 +214,19 @@ def _historique_zones() -> list[dict]:
 
 @frappe.whitelist()
 def inventaires_etat():
-    """L'inventaire ouvert (s'il y en a un) et les derniers terminés / annulés."""
+    """L'inventaire ouvert (s'il y en a un) et TOUS les inventaires terminés / annulés depuis HISTORIQUE_DEPUIS
+    (demande du 02/11/2026 : « au moins tous les inventaires faits sur le Magasin à partir du 1er octobre 2026 » ;
+    la liste s'arrêtait aux dix derniers)."""
     _acces()
     ouvert = en_cours()
     dernieres = [_resume(frappe.get_doc(INV, n)) for n in
-                 frappe.get_all(INV, filters={"statut": ["!=", EN_COURS]}, pluck="name", order_by="creation desc",
-                                limit=LIMITE_HISTORIQUE)]
+                 frappe.get_all(INV, filters={"statut": ["!=", EN_COURS], "date": [">=", HISTORIQUE_DEPUIS]},
+                                pluck="name", order_by="creation desc")]
     m = S.magasin()
     return {"magasin": m, "libelle": frappe.db.get_value("Warehouse", m, "warehouse_name") or m,
             "en_cours": _resume(frappe.get_doc(INV, ouvert)) if ouvert else None,
             "ouverts": [_resume(frappe.get_doc(INV, n)) for n in ouverts()], "dernieres": dernieres,
+            "historique_depuis": HISTORIQUE_DEPUIS,
             "zones": _zones_choix(), "sans_zone": SANS_ZONE, "zones_historique": _historique_zones()}
 
 

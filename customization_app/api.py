@@ -303,6 +303,15 @@ def get_custom_tache_events(start, end, filters=None):
     # Retrieve events from the "Tache de travail" doctype using the filters and fields
     events = frappe.get_list('Tache de travail', fields=fields, filters=filters)
 
+    # Vérification de stock ANNULÉE (fiche annulée par le responsable ou par le planificateur) : sa tâche
+    # disparaît du calendrier au lieu de rester en grisé comme une intervention annulée (demande 02/11/2026).
+    annulees = [e.name for e in events if e.get("status") == "Cancelled"]
+    if annulees:
+        verifs = set(frappe.db.sql_list("""select tache_employe from `tabVerification Stock` where tache_employe in %(t)s
+                                           union select tache_responsable from `tabVerification Stock`
+                                           where tache_responsable in %(t)s""", {"t": annulees}))
+        events = [e for e in events if e.name not in verifs]
+
     # Add the custom logic for checking all-day events
     for event in events:
         # Calculate the duration of the event in hours
