@@ -1356,6 +1356,7 @@ class StockEntrepots {
         ${ouverts.map((ec) => `<div class="plan">📝 ${peri(ec)} en cours depuis le <b>${se_dt(ec.date)}</b>${ec.ouvert_par ? ` (${se_esc(ec.ouvert_par)})` : ""} : <b>${ec.nb_comptes}/${ec.nb_lignes}</b> comptés · <b class="${ec.nb_ecarts ? "neg" : "pos"}">${ec.nb_ecarts} écart(s)</b>${ec.nb_ecarts ? ` · ${se_argent(ec.valeur_ecarts)}` : ""}
             <button type="button" class="btn btn-primary btn-sm" data-reprendre="${se_esc(ec.name)}" style="margin-left:8px">Reprendre</button></div>`).join("")}
         ${ouverts.some((v) => !(v.perimetre || []).length) ? "" : `<button type="button" class="btn btn-primary" data-ouvrir>▶ Ouvrir un inventaire${ouverts.length ? " partiel" : ""}</button>`}
+        ${res.responsable ? `<button type="button" class="btn btn-default" data-famille style="margin-left:6px" title="Une famille d’articles sur une période : entrées, sorties, achats, rapprochements, erreurs de saisie probables, relecture IA">📊 Analyser une famille</button>` : ""}
       </div>
       <div class="se-titre">📍 Zones : dernier inventaire</div>
       <div class="se-card"><div class="se-zh-grille">${zh || `<span class="se-note">Aucune zone dans l’espace du Magasin.</span>`}</div></div>
@@ -1364,6 +1365,7 @@ class StockEntrepots {
       <div class="se-card se-hist-inv">${hist || `<div class="se-note">Aucun inventaire depuis cette date.</div>`}</div>`);
     $c.find("[data-annules]").on("click", (ev) => { const on = $c.find(".se-hist-inv").toggleClass("voir-annules").hasClass("voir-annules"); $(ev.currentTarget).toggleClass("on", on).text(on ? "Masquer les annulés" : "Voir les annulés"); });
     $c.find("[data-retour]").on("click", () => this.montrer("solde"));
+    $c.find("[data-famille]").on("click", () => this.analyserFamille());
     $c.find("[data-ouvrir]").on("click", () => {
       // Périmètre : zones cochées = inventaire partiel ; rien de coché = tout le Magasin (refusé si un partiel est ouvert).
       const prises = {}; ouverts.forEach((v) => (v.perimetre || []).forEach((z) => { prises[z] = v.name; }));
@@ -1404,7 +1406,67 @@ class StockEntrepots {
       ${r.mouvements.length ? `<div style="max-height:260px;overflow:auto"><table class="table table-sm se-tbl"><thead><tr><th>Date</th><th>Pièce</th><th>Détail</th><th style="text-align:right">Qté</th><th style="text-align:right">Stock après</th></tr></thead><tbody>${r.mouvements.map(mvt).join("")}</tbody></table></div>` : `<div class="se-note">Aucun mouvement enregistré sur la période.</div>`}
       ${r.historique.length > 1 ? `<div class="se-titre">🕘 Comptages précédents</div><ul class="se-tours">${r.historique.map((h) => `<li>${se_esc(se_dthm(h.date))} · ${se_lien("Inventaire Magasin", h.name)} · système ${se_q(h.qte_systeme)}, compté ${se_q(h.qte_comptee)} → <b class="${h.ecart < 0 ? "neg" : h.ecart > 0 ? "pos" : ""}">${h.ecart ? se_signe(h.ecart) : "sans écart"}</b>${h.par ? ` · ${se_esc(h.par)}` : ""}</li>`).join("")}</ul>` : ""}
     </div>`;
-    const d = new frappe.ui.Dialog({ title: `🔎 Écart sur ${r.item_code}`, size: "large", fields: [{ fieldtype: "HTML", fieldname: "corps" }] });
+    const d = new frappe.ui.Dialog({ title: `🔎 Écart sur ${r.item_code}`, size: "large", fields: [{ fieldtype: "HTML", fieldname: "corps" }],
+      primary_action_label: "📊 Sa famille sur un an (IA)", primary_action: () => { d.hide(); this.analyserFamille({ item_code: r.item_code }); } });
+    d.fields_dict.corps.$wrapper.html(html);
+    d.show();
+  }
+
+  // ── Analyse d'une famille d'articles sur une période, en bloc, avec relecture IA (02/11/2026) ──
+  analyserFamille(opts = {}) {
+    const moisOpts = ["6", "12", "24"].map((m) => ({ label: `${m} mois`, value: m }));
+    const f = new frappe.ui.Dialog({ title: "📊 Analyser une famille d’articles", fields: [
+      { fieldtype: "Link", options: "Item", fieldname: "item_code", label: "Un article de la famille", default: opts.item_code || "",
+        description: "La famille = son groupe d’articles. Ou choisissez directement un groupe ci-dessous." },
+      { fieldtype: "Link", options: "Item Group", fieldname: "groupe", label: "Groupe d’articles", default: opts.groupe || "", get_query: () => ({ filters: { is_group: 0 } }) },
+      { fieldtype: "Select", fieldname: "mois", label: "Période", options: moisOpts, default: "12" },
+      { fieldtype: "Select", fieldname: "entrepot", label: "Entrepôt", options: [{ label: "Magasin", value: "" }, { label: "Tous les entrepôts", value: "*" }], default: "" },
+      { fieldtype: "Check", fieldname: "ia", label: "Relecture par l’IA (quelques centimes)", default: 1 },
+    ], primary_action_label: "Analyser", primary_action: async (v) => {
+      if (!v.item_code && !v.groupe) { frappe.msgprint("Indiquez un article ou un groupe."); return; }
+      f.hide(); await this.montrerFamille(v);
+    } });
+    f.show();
+  }
+
+  async montrerFamille(v, relancer = 0) {
+    const r = (await frappe.call({ method: "customization_app.analyse_famille.analyser_famille",
+      args: { item_code: v.item_code || null, groupe: v.groupe || null, mois: v.mois || 12, entrepot: v.entrepot || null, ia: v.ia ? 1 : 0, relancer },
+      freeze: true, freeze_message: v.ia ? "Lecture des mouvements, achats, ventes et rapprochements, puis relecture IA…" : "Lecture des mouvements, achats, ventes et rapprochements…" })).message;
+    const q = (n) => (n ? se_q(n) : "·"), sg = (n) => (n ? `<span class="${n < 0 ? "neg" : "pos"}">${se_signe(n)}</span>` : "·");
+    const nomsIA = {}; ((r.ia && r.ia.articles) || []).forEach((a) => { nomsIA[a.item_code] = a; });
+    const lignes = r.articles.filter((b) => b.mouvements || b.debut || b.fin).map((b) => `<tr>
+        <td><b>${se_esc(b.item_code)}</b><br><small class="se-note">${se_esc(b.item_name || "")}</small></td>
+        <td style="text-align:right">${se_q(b.debut)}</td><td style="text-align:right" class="pos">${q(b.achat)}</td>
+        <td style="text-align:right" class="neg">${q(b.vente)}${b.retour_vente ? `<br><small class="pos">+${se_q(b.retour_vente)} retours</small>` : ""}</td>
+        <td style="text-align:right">${b.transfert_in || b.transfert_out ? `<span class="pos">+${se_q(b.transfert_in)}</span> / <span class="neg">−${se_q(b.transfert_out)}</span>` : "·"}</td>
+        <td style="text-align:right">${sg(b.rapprochement)}</td><td style="text-align:right"><b>${se_q(b.fin)}</b></td>
+        <td style="text-align:right">${b.mouvements}</td></tr>`).join("");
+    const lien = (s) => (s.piece && s.piece_type ? se_lien(s.piece_type, s.piece) : "");
+    const susp = r.suspicions.map((s) => `<li class="se-susp g${s.gravite}">${s.gravite === 3 ? "🔴" : s.gravite === 2 ? "🟠" : "🟡"} ${se_esc(s.texte)} ${lien(s)}</li>`).join("");
+    const neg = r.negatifs.map((n) => `<li>${se_esc(n.item_code)} : minimum <b class="neg">${se_q(n.apres)}</b> le ${se_esc(se_dt(n.date))} (${se_lien(n.piece_type, n.piece)})${r.entrepot && !n.entrepot ? "" : ` · ${se_esc(n.entrepot || "")}`}</li>`).join("");
+    const kits = r.kits.map((k) => `<li>${se_esc(k.kit)} = ${se_esc(k.composition)}</li>`).join("");
+    const ia = r.ia ? `<div class="se-card se-ia"><div class="se-titre">🤖 Lecture de l’IA</div><div class="plan">${se_esc(r.ia.conclusion)}</div>
+        ${r.ia.articles.map((a) => `<div class="se-ia-art"><b>${se_esc(a.item_code)}</b> <span class="se-badge">${se_esc(a.confiance || "")}</span> ${se_esc(a.diagnostic)}
+          ${a.hypotheses.length ? `<ul class="se-tours">${a.hypotheses.map((h) => `<li><b>${se_esc(h.type || "")}</b>${h.piece ? ` · ${se_esc(h.piece)}` : ""} — ${se_esc(h.detail)}</li>`).join("")}</ul>` : ""}
+          ${a.action ? `<div class="se-note">👉 ${se_esc(a.action)}</div>` : ""}</div>`).join("")}</div>`
+      : (v.ia ? `<div class="se-alerte">L’IA n’a pas répondu (clé, plafond ou réponse inutilisable) : l’analyse reste sur les règles.</div>` : "");
+    const html = `<div class="se-analyse">
+      <div class="se-note">Famille <b>${se_esc(r.famille)}</b> · ${se_esc(r.entrepot)} · du ${se_esc(frappe.datetime.str_to_user(r.periode.debut))} au ${se_esc(frappe.datetime.str_to_user(r.periode.fin))} · ${r.nb_ventes} ligne(s) de vente, ${r.achats.length} ligne(s) d’achat, ${r.rapprochements.length} rapprochement(s)${r.cache ? " · <i>résultat gardé (moins de 24 h)</i>" : ""}</div>
+      <table class="table table-sm se-tbl"><thead><tr><th>Article</th><th style="text-align:right">Début</th><th style="text-align:right">Achats</th><th style="text-align:right">Ventes</th><th style="text-align:right">Transferts</th><th style="text-align:right">Rapproch.</th><th style="text-align:right">Fin</th><th style="text-align:right">Mvts</th></tr></thead><tbody>${lignes || `<tr><td colspan="8" class="se-note">Aucun mouvement sur la période.</td></tr>`}</tbody></table>
+      ${ia}
+      <div class="se-titre">⚠️ Points à vérifier (règles)</div>${susp ? `<ul class="se-tours">${susp}</ul>` : `<div class="se-note">Rien d’anormal relevé par les règles.</div>`}
+      ${neg ? `<div class="se-titre">📉 Stock passé en négatif</div><ul class="se-tours">${neg}</ul>` : ""}
+      ${kits ? `<div class="se-titre">🧩 Kits qui touchent la famille</div><ul class="se-tours">${kits}</ul>` : ""}
+      ${r.achats.length ? `<div class="se-titre">🛒 Achats</div><div style="max-height:200px;overflow:auto"><table class="table table-sm se-tbl"><thead><tr><th>Date</th><th>Pièce</th><th>Article</th><th style="text-align:right">Qté</th><th>Unité</th><th style="text-align:right">Prix</th><th>Fournisseur</th></tr></thead><tbody>
+        ${r.achats.map((a) => `<tr><td>${se_esc(se_dt(a.date))}</td><td>${se_lien(a.piece_type, a.piece)}</td><td>${se_esc(a.item_code)}</td><td style="text-align:right">${se_q(a.qte)}</td><td>${se_esc(a.uom || "")}${a.conversion && a.conversion !== 1 ? ` ×${se_q(a.conversion)}` : ""}</td><td style="text-align:right">${se_q(a.rate)}</td><td>${se_esc(a.fournisseur || "")}</td></tr>`).join("")}</tbody></table></div>` : ""}
+      ${r.rapprochements.length ? `<div class="se-titre">🧮 Rapprochements d’inventaire</div><div style="max-height:200px;overflow:auto"><table class="table table-sm se-tbl"><thead><tr><th>Date</th><th>Pièce</th><th>Article</th><th style="text-align:right">Système</th><th style="text-align:right">Compté</th><th style="text-align:right">Écart</th></tr></thead><tbody>
+        ${r.rapprochements.map((x) => `<tr><td>${se_esc(se_dt(x.date))}</td><td>${se_lien("Stock Reconciliation", x.piece)}</td><td>${se_esc(x.item_code)}</td><td style="text-align:right">${se_q(x.avant)}</td><td style="text-align:right">${se_q(x.apres)}</td><td style="text-align:right">${sg(x.diff)}</td></tr>`).join("")}</tbody></table></div>` : ""}
+      ${r.ventes_remarquables.length ? `<div class="se-titre">🧾 Ventes remarquables (quantité ou prix inhabituels, kits)</div><div style="max-height:220px;overflow:auto"><table class="table table-sm se-tbl"><thead><tr><th>Date</th><th>BL</th><th>Article</th><th style="text-align:right">Qté</th><th style="text-align:right">Prix</th><th>Client</th></tr></thead><tbody>
+        ${r.ventes_remarquables.map((x) => `<tr><td>${se_esc(se_dt(x.date))}</td><td>${se_lien("Delivery Note", x.piece)}</td><td>${se_esc(x.item_code)}${x.kit ? ` <span class="se-badge">kit ${se_esc(x.kit)}</span>` : ""}${x.retour ? ` <span class="se-badge">retour</span>` : ""}</td><td style="text-align:right">${se_q(x.qte)}</td><td style="text-align:right">${se_q(x.rate)}${r.prix_typiques[x.item_code] ? `<br><small class="se-note">hab. ${se_q(r.prix_typiques[x.item_code])}</small>` : ""}</td><td>${se_esc(x.client || "")}</td></tr>`).join("")}</tbody></table></div>` : ""}
+    </div>`;
+    const d = new frappe.ui.Dialog({ title: `📊 ${r.famille}`, size: "extra-large", fields: [{ fieldtype: "HTML", fieldname: "corps" }],
+      primary_action_label: "↻ Relancer (sans cache)", primary_action: () => { d.hide(); this.montrerFamille(v, 1); } });
     d.fields_dict.corps.$wrapper.html(html);
     d.show();
   }

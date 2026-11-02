@@ -226,7 +226,7 @@ def inventaires_etat():
     return {"magasin": m, "libelle": frappe.db.get_value("Warehouse", m, "warehouse_name") or m,
             "en_cours": _resume(frappe.get_doc(INV, ouvert)) if ouvert else None,
             "ouverts": [_resume(frappe.get_doc(INV, n)) for n in ouverts()], "dernieres": dernieres,
-            "historique_depuis": HISTORIQUE_DEPUIS,
+            "historique_depuis": HISTORIQUE_DEPUIS, "responsable": S.est_responsable(),
             "zones": _zones_choix(), "sans_zone": SANS_ZONE, "zones_historique": _historique_zones()}
 
 
