@@ -824,6 +824,18 @@ def _esc(v):
     return frappe.utils.escape_html(v or "")
 
 
+def _imgs_html(img, ref, label, taille=90):
+    """Cellule image d'une ligne (PDF) : la photo, puis l'image de référence étiquetée si la ligne en a une.
+    `img` / `ref` sont des data URI (ou None). Pur, testé."""
+    out = f'<img src="{img}" style="max-width:{taille}px;max-height:{taille}px;">' if img else ""
+    if ref:
+        out += (f'<div style="margin-top:3px;border:1px solid #91caff;border-radius:4px;padding:2px;'
+                f'display:inline-block;background:#fff;">'
+                f'<img src="{ref}" style="max-width:{taille}px;max-height:{taille}px;display:block;">'
+                f'<div style="font-size:8px;color:#0958d9;text-align:center;">{_esc(label)}</div></div>')
+    return out
+
+
 def _row_adds(row):
     """Articles additionnels embarqués sur une ligne (champ JSON de la ligne)."""
     try:
@@ -875,7 +887,7 @@ EXPORT_LABELS = {
     "Français": {
         "title": "Demande de cotation", "ref": "Référence", "date": "Date",
         "supplier": "Fournisseur", "language": "Langue",
-        "image": "Image", "code": "Code article", "designation": "Désignation",
+        "image": "Image", "reference": "Réf.", "code": "Code article", "designation": "Désignation",
         "description": "Description", "qty": "Quantité", "uom": "UDM",
         "unit_vol": "Volume unitaire (m³)", "line_vol": "Volume ligne (m³)",
         "unit_price": "Prix unitaire", "line_total": "Total",
@@ -887,7 +899,7 @@ EXPORT_LABELS = {
     "English": {
         "title": "Quotation Request", "ref": "Reference", "date": "Date",
         "supplier": "Supplier", "language": "Language",
-        "image": "Image", "code": "Item code", "designation": "Item name",
+        "image": "Image", "reference": "Ref.", "code": "Item code", "designation": "Item name",
         "description": "Description", "qty": "Quantity", "uom": "UOM",
         "unit_vol": "Unit volume (m³)", "line_vol": "Line volume (m³)",
         "unit_price": "Unit price", "line_total": "Total",
@@ -899,7 +911,7 @@ EXPORT_LABELS = {
     "Deutsch": {
         "title": "Angebotsanfrage", "ref": "Referenz", "date": "Datum",
         "supplier": "Lieferant", "language": "Sprache",
-        "image": "Bild", "code": "Artikelnummer", "designation": "Bezeichnung",
+        "image": "Bild", "reference": "Ref.", "code": "Artikelnummer", "designation": "Bezeichnung",
         "description": "Beschreibung", "qty": "Menge", "uom": "Einheit",
         "unit_vol": "Stückvolumen (m³)", "line_vol": "Zeilenvolumen (m³)",
         "unit_price": "Stückpreis", "line_total": "Gesamt",
@@ -911,7 +923,7 @@ EXPORT_LABELS = {
     "العربية": {
         "title": "طلب عرض أسعار", "ref": "المرجع", "date": "التاريخ",
         "supplier": "المورّد", "language": "اللغة",
-        "image": "الصورة", "code": "رمز الصنف", "designation": "التسمية",
+        "image": "الصورة", "reference": "مرجع", "code": "رمز الصنف", "designation": "التسمية",
         "description": "الوصف", "qty": "الكمية", "uom": "الوحدة",
         "unit_vol": "حجم الوحدة (م³)", "line_vol": "حجم السطر (م³)",
         "unit_price": "سعر الوحدة", "line_total": "المجموع",
@@ -923,7 +935,7 @@ EXPORT_LABELS = {
     "Español": {
         "title": "Solicitud de cotización", "ref": "Referencia", "date": "Fecha",
         "supplier": "Proveedor", "language": "Idioma",
-        "image": "Imagen", "code": "Código", "designation": "Denominación",
+        "image": "Imagen", "reference": "Ref.", "code": "Código", "designation": "Denominación",
         "description": "Descripción", "qty": "Cantidad", "uom": "UdM",
         "unit_vol": "Volumen unitario (m³)", "line_vol": "Volumen línea (m³)",
         "unit_price": "Precio unitario", "line_total": "Total",
@@ -965,8 +977,8 @@ def download_pdf(docname):
     adds_map = _adds_map(doc)
     rows_html = ""
     for i, r in enumerate(doc.articles, 1):
-        img = _img_data_uri(r.image)
-        img_html = f'<img src="{img}" style="max-width:90px;max-height:90px;">' if img else ""
+        img_html = _imgs_html(_img_data_uri(r.image), _img_data_uri(getattr(r, "image_reference", None)),
+                              L["reference"])
         name = r.item_name_traduit or r.item_name or ""
         desc = r.description_traduite or _strip_html(r.description)
 
@@ -1080,6 +1092,9 @@ def download_excel(docname):
     header = ["#", L["image"], L["designation"], L["description"],
               L["qty"], L["uom"], L["unit_vol"], L["line_vol"]]
     widths = [4, 14, 36, 58, 10, 8, 12, 12]
+    avec_ref = any(getattr(r, "image_reference", None) for r in doc.articles)
+    if avec_ref:
+        widths[1] = 26  # photo + image de référence côte à côte
     if cible:
         header.append(f'{L["target_price"]} ({devise})')
         widths.append(14)
@@ -1163,6 +1178,8 @@ def download_excel(docname):
 
         # image principale + mini-images des additionnels en dessous
         _embed(r.image, row_no, 64, 2, 2)
+        if getattr(r, "image_reference", None):
+            _embed(r.image_reference, row_no, 64, 72, 2)
         col_off = 2
         for a in adds:
             if a.get("image") and _embed(a["image"], row_no, 32, col_off, 70):

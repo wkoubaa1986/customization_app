@@ -8,7 +8,7 @@ ligne d'origine. Pur : miroir de LCI_CHAMPS_COPIES dans liste_commande_import.js
 from __future__ import annotations
 
 CHAMPS_COPIES = (
-	"item_code", "item_name", "item_group", "qty", "uom", "volume_unitaire_m3", "image", "description",
+	"item_code", "item_name", "item_group", "qty", "uom", "volume_unitaire_m3", "image", "image_reference", "description",
 	"item_name_traduit", "description_traduite", "articles_additionnels", "prix_cible", "moq",
 	"qty_par_carton", "volume_carton_m3", "volume_estime",
 )

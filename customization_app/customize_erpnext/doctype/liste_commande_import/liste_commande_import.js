@@ -641,7 +641,7 @@ async function lci_traduire_puis(frm, exporter) {
   }
 }
 
-function lci_upload_image(frm, row) {
+function lci_upload_image(frm, row, champ = "image") {
   if (frm.is_new()) {
     frappe.msgprint(__("Enregistrez d'abord le document pour joindre des images."));
     return;
@@ -666,7 +666,7 @@ function lci_upload_image(frm, row) {
       const out = await res.json();
       const url = out.message?.file_url;
       if (url) {
-        frappe.model.set_value(row.doctype, row.name, "image", url);
+        frappe.model.set_value(row.doctype, row.name, champ, url);
         lci_render_table(frm);
       }
     } catch (e) {
@@ -921,7 +921,7 @@ function lci_ajouter_texte(frm, rows) {
 }
 
 // miroir de lci_copie.CHAMPS_COPIES : ce que nous avons saisi, jamais la réponse du fournisseur
-const LCI_CHAMPS_COPIES = ["item_code", "item_name", "item_group", "qty", "uom", "volume_unitaire_m3", "image", "description",
+const LCI_CHAMPS_COPIES = ["item_code", "item_name", "item_group", "qty", "uom", "volume_unitaire_m3", "image", "image_reference", "description",
   "item_name_traduit", "description_traduite", "articles_additionnels", "prix_cible", "moq", "qty_par_carton", "volume_carton_m3", "volume_estime"];
 
 function lci_copie_de(row) {
@@ -1039,6 +1039,12 @@ function lci_render_table(frm) {
         <div class="lci-imgbox" data-act="image" title="${__("Changer l'image")}">
           ${r.image ? `<img src="${esc(r.image)}">` : `<span class="lci-noimg">📦</span>`}
         </div>
+        ${r.image_reference
+          ? `<div class="lci-refbox" data-act="imgref" title="${__("Image de référence (montrée au fournisseur dans les PDF et exports) — cliquer pour la changer")}">
+              <img src="${esc(r.image_reference)}">
+              <span class="lci-ref-x" data-act="imgref-del" title="${__("Retirer l'image de référence")}">✕</span>
+              <div class="lci-ref-l">📌 ${__("Réf.")}</div></div>`
+          : `<div class="lci-ref-add" data-act="imgref" title="${__("Ajouter une image de référence : montrée à côté de la photo au fournisseur (PDF et exports)")}">📌 ${__("Réf.")}</div>`}
         ${adds_img.length ? `<div class="lci-addimgs">${adds_img.map((a) =>
           `<img class="lci-addimg" src="${esc(a.image)}" title="${esc(a.item_name || a.item_code)} (ADDITIONNEL)">`).join("")}</div>` : ""}
       </td>`);
@@ -1214,6 +1220,19 @@ function lci_render_table(frm) {
       .lci-imgbox img { max-width: 100%; max-height: 100%; object-fit: contain; }
       .lci-imgbox:hover { box-shadow: 0 0 0 2px #91caff; }
       .lci-noimg { font-size: 22px; color: #c3cad4; }
+      .lci-refbox { position: relative; width: 54px; height: 54px; margin-top: 3px; border-radius: 8px; background: #fff;
+        display: inline-flex; align-items: center; justify-content: center; cursor: pointer;
+        border: 1px solid #91caff; overflow: hidden; }
+      .lci-refbox img { max-width: 100%; max-height: 100%; object-fit: contain; }
+      .lci-refbox:hover { box-shadow: 0 0 0 2px #91caff; }
+      .lci-ref-l { position: absolute; left: 0; right: 0; bottom: 0; font-size: 8.5px; color: #0958d9;
+        background: rgba(230,244,255,.92); line-height: 1.25; }
+      .lci-ref-x { position: absolute; top: 0; right: 3px; font-size: 10px; font-weight: 700; color: #a8071a;
+        cursor: pointer; display: none; }
+      .lci-refbox:hover .lci-ref-x { display: block; }
+      .lci-ref-add { margin-top: 3px; font-size: 9.5px; color: #8c8c8c; cursor: pointer; border: 1px dashed #d9d9d9;
+        border-radius: 6px; padding: 1px 5px; display: inline-block; white-space: nowrap; }
+      .lci-ref-add:hover { color: #0958d9; border-color: #91caff; }
       .lci-code { font-weight: 700; font-size: 11px; }
       .lci-libre { font-size: 10px; color: #ad6800; background: #fff7e6; border: 1px solid #ffd591;
         border-radius: 6px; padding: 1px 6px; }
@@ -1405,6 +1424,12 @@ function lci_render_table(frm) {
   });
 
   $t.find('[data-act="image"]').on("click", (e) => { const r = row_of(e); r && lci_upload_image(frm, r); });
+  $t.find('[data-act="imgref"]').on("click", (e) => { const r = row_of(e); r && lci_upload_image(frm, r, "image_reference"); });
+  $t.find('[data-act="imgref-del"]').on("click", (e) => {
+    e.stopPropagation();
+    const r = row_of(e);
+    if (r) { frappe.model.set_value(r.doctype, r.name, "image_reference", ""); lci_render_table(frm); }
+  });
   $t.find('[data-act="desc"]').on("click", (e) => { const r = row_of(e); r && lci_desc_dialog(frm, r); });
   $t.find('[data-act="marques"]').on("click", (e) => { e.stopPropagation(); lci_marques_articles(frm); });
   // Description du fournisseur (enregistrée à l'application de sa réponse) : en entier, en lecture seule.

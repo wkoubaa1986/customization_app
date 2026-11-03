@@ -29,6 +29,7 @@ from customization_app.liste_commande_import import (
     _esc,
     _guard,
     _img_data_uri,
+    _imgs_html,
     _strip_html,
     _uom_out,
 )
@@ -37,7 +38,7 @@ from customization_app.liste_commande_import import _labels as _labels_export
 LABELS = {
     "English": {"paiements": "Payment plan", "libelle": "Description", "commande_entiere": "Whole order", "total_planifie": "Total scheduled", "reste_planifier": "Remaining to schedule", "paiements_conteneur": "Payments for this container", "legende_type": "TT = telegraphic transfer (bank transfer) · LC = letter of credit", "incomplet": "Not fully loaded (loaded / ordered)", "titre": "Loading plan", "conteneur": "Container", "type": "Type", "depart": "Departure",
                 "a_confirmer": "to be confirmed", "capacite": "Usable capacity", "charge": "Loaded volume",
-                "remplissage": "Fill", "lignes": "Lines", "photo": "Photo", "ref": "Your line",
+                "remplissage": "Fill", "lignes": "Lines", "photo": "Photo", "reference": "Ref.", "ref": "Your line",
                 "description": "Description", "qty": "Qty", "volume": "Volume (m³)", "pu": "Unit price",
                 "montant": "Amount", "total": "Container total", "recap": "Summary",
                 "total_general": "Grand total", "scinde": "{q} of {t} — rest in {autres}",
@@ -45,7 +46,7 @@ LABELS = {
                 "date": "Date", "fournisseur": "Supplier", "conteneurs": "Containers"},
     "Français": {"paiements": "Plan de paiement", "libelle": "Libellé", "commande_entiere": "Toute la commande", "total_planifie": "Total planifié", "reste_planifier": "Reste à planifier", "paiements_conteneur": "Paiements de ce conteneur", "legende_type": "TT = virement bancaire · LC = lettre de crédit", "incomplet": "Pas entièrement chargées (chargé / commandé)", "titre": "Plan de chargement", "conteneur": "Conteneur", "type": "Gabarit", "depart": "Départ",
                  "a_confirmer": "à confirmer", "capacite": "Capacité utile", "charge": "Volume chargé",
-                 "remplissage": "Remplissage", "lignes": "Lignes", "photo": "Photo", "ref": "Votre ligne",
+                 "remplissage": "Remplissage", "lignes": "Lignes", "photo": "Photo", "reference": "Réf.", "ref": "Votre ligne",
                  "description": "Description", "qty": "Qté", "volume": "Volume (m³)", "pu": "Prix unitaire",
                  "montant": "Montant", "total": "Total du conteneur", "recap": "Récapitulatif",
                  "total_general": "Total général", "scinde": "{q} sur {t} — reste dans {autres}",
@@ -53,7 +54,7 @@ LABELS = {
                  "ref_doc": "Réf.", "date": "Date", "fournisseur": "Fournisseur", "conteneurs": "Conteneurs"},
     "Deutsch": {"paiements": "Zahlungsplan", "libelle": "Bezeichnung", "commande_entiere": "Gesamter Auftrag", "total_planifie": "Geplant gesamt", "reste_planifier": "Noch einzuplanen", "paiements_conteneur": "Zahlungen für diesen Container", "legende_type": "TT = Banküberweisung · LC = Akkreditiv", "incomplet": "Nicht vollständig verladen (verladen / bestellt)", "titre": "Ladeplan", "conteneur": "Container", "type": "Typ", "depart": "Abfahrt",
                 "a_confirmer": "noch offen", "capacite": "Nutzbares Volumen", "charge": "Geladenes Volumen",
-                "remplissage": "Auslastung", "lignes": "Positionen", "photo": "Foto", "ref": "Ihre Zeile",
+                "remplissage": "Auslastung", "lignes": "Positionen", "photo": "Foto", "reference": "Ref.", "ref": "Ihre Zeile",
                 "description": "Beschreibung", "qty": "Menge", "volume": "Volumen (m³)", "pu": "Stückpreis",
                 "montant": "Betrag", "total": "Summe Container", "recap": "Übersicht",
                 "total_general": "Gesamtsumme", "scinde": "{q} von {t} — Rest in {autres}",
@@ -61,7 +62,7 @@ LABELS = {
                 "date": "Datum", "fournisseur": "Lieferant", "conteneurs": "Container"},
     "Español": {"paiements": "Plan de pagos", "libelle": "Concepto", "commande_entiere": "Pedido completo", "total_planifie": "Total programado", "reste_planifier": "Pendiente de programar", "paiements_conteneur": "Pagos de este contenedor", "legende_type": "TT = transferencia bancaria · LC = carta de crédito", "incomplet": "No cargadas por completo (cargado / pedido)", "titre": "Plan de carga", "conteneur": "Contenedor", "type": "Tipo", "depart": "Salida",
                 "a_confirmer": "por confirmar", "capacite": "Capacidad útil", "charge": "Volumen cargado",
-                "remplissage": "Llenado", "lignes": "Líneas", "photo": "Foto", "ref": "Su línea",
+                "remplissage": "Llenado", "lignes": "Líneas", "photo": "Foto", "reference": "Ref.", "ref": "Su línea",
                 "description": "Descripción", "qty": "Cant.", "volume": "Volumen (m³)", "pu": "Precio unitario",
                 "montant": "Importe", "total": "Total del contenedor", "recap": "Resumen",
                 "total_general": "Total general", "scinde": "{q} de {t} — resto en {autres}",
@@ -69,7 +70,7 @@ LABELS = {
                 "date": "Fecha", "fournisseur": "Proveedor", "conteneurs": "Contenedores"},
     "العربية": {"paiements": "خطة الدفع", "libelle": "البيان", "commande_entiere": "الطلبية كاملة", "total_planifie": "إجمالي المبرمج", "reste_planifier": "المتبقي للبرمجة", "paiements_conteneur": "دفعات هذه الحاوية", "legende_type": "TT = تحويل بنكي · LC = اعتماد مستندي", "incomplet": "غير محمّلة بالكامل (المحمّل / المطلوب)", "titre": "خطة الشحن", "conteneur": "حاوية", "type": "النوع", "depart": "المغادرة",
                 "a_confirmer": "سيتم التأكيد", "capacite": "السعة المفيدة", "charge": "الحجم المحمّل",
-                "remplissage": "نسبة الملء", "lignes": "البنود", "photo": "صورة", "ref": "سطركم",
+                "remplissage": "نسبة الملء", "lignes": "البنود", "photo": "صورة", "reference": "مرجع", "ref": "سطركم",
                 "description": "الوصف", "qty": "الكمية", "volume": "الحجم (م³)", "pu": "سعر الوحدة",
                 "montant": "المبلغ", "total": "مجموع الحاوية", "recap": "ملخص", "total_general": "المجموع العام",
                 "scinde": "{q} من {t} — الباقي في {autres}", "additionnel": "إضافي",
@@ -387,14 +388,15 @@ def _bloc_conteneur(doc, c, L, LX, par_row, photos, devise, nb_conteneurs, echea
         r = par_row.get(l["row"])
         if not r:
             continue
-        photo = photos.get(r.name) or _img_data_uri(r.image)
+        photo = _imgs_html(photos.get(r.name) or _img_data_uri(r.image),
+                           _img_data_uri(getattr(r, "image_reference", None)), L["reference"], 60)
         scinde = texte_scinde(parts_de(r.repartition_conteneurs), c["no"], qty_retenue(r), L)
         desc = description_html(description_pour_lui(r))
         m_art = marques.get(r.name) if marquage else None
         html += f"""
       <tr>
         <td>{i}</td>
-        <td class="ph">{f'<img src="{photo}" style="max-width:60px;max-height:60px">' if photo else ""}</td>
+        <td class="ph">{photo}</td>
         <td>{desc}
           {f'<div class="split">{_esc(scinde)}</div>' if scinde else ""}</td>
         {(f'<td><b>{_esc(prefixe)} · {_esc(m_art)}</b></td>' if m_art else "<td></td>") if col_marque else ""}

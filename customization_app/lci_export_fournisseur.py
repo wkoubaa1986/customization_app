@@ -50,7 +50,7 @@ from customization_app.liste_commande_import import (
 LABELS = {
     "Français": {
         "qty": "Qté retenue", "prix": "Prix cible", "decision": "Décision",
-        "observation": "Observation", "conteneur": "Conteneur", "photo": "Photo",
+        "observation": "Observation", "conteneur": "Conteneur", "photo": "Photo", "reference": "Réf.",
         "ajoutees": "LIGNES NON COTÉES — merci de les chiffrer",
         "retirees": "LIGNES RETIRÉES DE LA COMMANDE",
         "additionnels": "Articles additionnels",
@@ -63,7 +63,7 @@ LABELS = {
     },
     "English": {
         "qty": "Target qty", "prix": "Target price", "decision": "Decision",
-        "observation": "Remark", "conteneur": "Container", "photo": "Photo",
+        "observation": "Remark", "conteneur": "Container", "photo": "Photo", "reference": "Ref.",
         "ajoutees": "LINES NOT QUOTED — please price them",
         "retirees": "LINES REMOVED FROM THE ORDER",
         "additionnels": "Additional items",
@@ -76,7 +76,7 @@ LABELS = {
     },
     "Deutsch": {
         "qty": "Zielmenge", "prix": "Zielpreis", "decision": "Entscheidung",
-        "observation": "Bemerkung", "conteneur": "Container", "photo": "Foto",
+        "observation": "Bemerkung", "conteneur": "Container", "photo": "Foto", "reference": "Ref.",
         "ajoutees": "NICHT ANGEBOTENE POSITIONEN — bitte bepreisen",
         "retirees": "AUS DER BESTELLUNG GESTRICHENE POSITIONEN",
         "additionnels": "Zusätzliche Artikel",
@@ -89,7 +89,7 @@ LABELS = {
     },
     "Español": {
         "qty": "Cant. objetivo", "prix": "Precio objetivo", "decision": "Decisión",
-        "observation": "Observación", "conteneur": "Contenedor", "photo": "Foto",
+        "observation": "Observación", "conteneur": "Contenedor", "photo": "Foto", "reference": "Ref.",
         "ajoutees": "LÍNEAS NO COTIZADAS — rogamos cotizarlas",
         "retirees": "LÍNEAS RETIRADAS DEL PEDIDO",
         "additionnels": "Artículos adicionales",
@@ -102,7 +102,7 @@ LABELS = {
     },
     "العربية": {
         "qty": "الكمية المعتمدة", "prix": "السعر المستهدف", "decision": "القرار",
-        "observation": "ملاحظة", "conteneur": "الحاوية", "photo": "صورة",
+        "observation": "ملاحظة", "conteneur": "الحاوية", "photo": "صورة", "reference": "مرجع",
         "ajoutees": "بنود غير مسعّرة — يرجى تسعيرها",
         "retirees": "بنود مستبعدة من الطلب",
         "additionnels": "بنود إضافية",
@@ -610,6 +610,8 @@ def download_reponse_annotee(docname):
     colonnes = []
     if col_photo is None and any(getattr(r, "image", None) for r in doc.articles):
         colonnes.append(("photo", L["photo"], 12))
+    if any(getattr(r, "image_reference", None) for r in doc.articles):   # image de référence : toujours à nous
+        colonnes.append(("ref_photo", L["reference"], 12))
     colonnes += [("qty", L["qty"], 13), ("prix", f'{L["prix"]} ({devise})', 15),
                  ("decision", L["decision"], 14), ("observation", L["observation"], 56)]
     if avec_conteneurs:
@@ -651,6 +653,9 @@ def download_reponse_annotee(docname):
             ws.cell(row=xl, column=pos["conteneur"], value=_conteneurs_ligne(r))
         if "photo" in pos and getattr(r, "image", None):
             _poser_photo_article(ws, xl, pos["photo"], r.image)
+            ws.row_dimensions[xl].height = max(ws.row_dimensions[xl].height or 0, HAUTEUR_LIGNE_PHOTO)
+        if "ref_photo" in pos and getattr(r, "image_reference", None):
+            _poser_photo_article(ws, xl, pos["ref_photo"], r.image_reference)
             ws.row_dimensions[xl].height = max(ws.row_dimensions[xl].height or 0, HAUTEUR_LIGNE_PHOTO)
         return cq, cp
 
