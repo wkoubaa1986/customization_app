@@ -646,34 +646,23 @@ function lci_upload_image(frm, row, champ = "image") {
     frappe.msgprint(__("Enregistrez d'abord le document pour joindre des images."));
     return;
   }
-  const input = document.createElement("input");
-  input.type = "file";
-  input.accept = "image/*";
-  input.onchange = async () => {
-    const file = input.files[0];
-    if (!file) return;
-    const fd = new FormData();
-    fd.append("file", file, file.name);
-    fd.append("is_private", "0");
-    fd.append("doctype", frm.doc.doctype);
-    fd.append("docname", frm.doc.name);
-    try {
-      const res = await fetch("/api/method/upload_file", {
-        method: "POST",
-        headers: { "X-Frappe-CSRF-Token": frappe.csrf_token },
-        body: fd,
-      });
-      const out = await res.json();
-      const url = out.message?.file_url;
-      if (url) {
-        frappe.model.set_value(row.doctype, row.name, champ, url);
-        lci_render_table(frm);
-      }
-    } catch (e) {
-      frappe.msgprint(__("Échec de l'upload."));
-    }
-  };
-  input.click();
+  // Uploader Frappe : le recadrage s'ouvre tout de suite (ratio libre) — demande du 03/11/2026,
+  // « rogner un peu l'image de référence en l'entrant ». Un seul fichier, public, attaché à la liste.
+  new frappe.ui.FileUploader({
+    doctype: frm.doc.doctype,
+    docname: frm.doc.name,
+    allow_multiple: false,
+    make_attachments_public: true,
+    disable_file_browser: true,
+    dialog_title: champ === "image_reference" ? __("Image de référence") : __("Image de l'article"),
+    restrictions: { allowed_file_types: ["image/*"], crop_image_aspect_ratio: NaN },
+    on_success: (file) => {
+      const url = file && file.file_url;
+      if (!url) return;
+      frappe.model.set_value(row.doctype, row.name, champ, url);
+      lci_render_table(frm);
+    },
+  });
 }
 
 function lci_desc_dialog(frm, row) {
