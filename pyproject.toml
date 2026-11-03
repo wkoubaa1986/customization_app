@@ -12,7 +12,7 @@ dependencies = [
     # Scan des justificatifs de caisse : détection du quadrilatère de la feuille et
     # redressement de perspective (caisse_depenses._scan_pdf). Entre dans l'image de
     # prod au build (pip install de l'app lit ce fichier).
-    "opencv-python-headless~=4.10",
+    "opencv-contrib-python-headless~=4.10",  # même distribution cv2 que le studio emballage
     # Lecture du conteneur OLE d'un .xls pour en extraire les images (xls_images.py) :
     # xlrd ne lit que les valeurs, les photos du fournisseur disparaissaient à la conversion.
     "olefile~=0.47",
