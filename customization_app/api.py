@@ -196,6 +196,32 @@ def partner_finalize_order(task):
     frappe.db.commit()
 
 
+ICONES_INTERVENTION = {
+    "Entretien": "🔧 ", "Installation": "🔨 ", "Réparation": "🧰 ", "Livraison": "🚐 ", "Visite": "🚗 ",
+    "Autre": "☕ ", "Tournée commerciale": "🧭 ",
+}
+
+
+def composer_titre(doc) -> str:
+    """Le titre affiché sur le calendrier, comme le compose le formulaire (update_title_and_color) :
+    « Secteur 1\\n🔧 Entretien: Client: X\\nJamel Aloui », « Annulé!!! … », « terminé!!! … ».
+    Sans client (tournée commerciale), le sujet tient lieu de client."""
+    genre = doc.get("custom_type_dintervention") or ""
+    icone = ICONES_INTERVENTION.get(genre, "☕ ")
+    client = doc.get("custom_client") or ""
+    if not client and genre == "Tournée commerciale":
+        sujet = (doc.get("subject") or "").split("—", 1)[-1].strip()
+        titre = "%s%s%s\n%s" % (icone, genre, ": " + sujet if sujet else "", doc.get("custom_employé") or "")
+    else:
+        titre = "%s%s: Client: %s\n%s" % (icone, genre, client, doc.get("custom_employé") or "")
+    statut = doc.get("status") or ""
+    if statut == "Cancelled":
+        return "Annulé!!!\n" + titre
+    if statut == "Completed":
+        return "terminé!!!\n" + titre
+    return "%s\n%s" % (doc.get("secteur") or "", titre)
+
+
 def compute_tache_color(doc):
     """Couleur unique d'une Tache de travail.
     Priorité : statut (Completed/Cancelled) > tâche créée par le partenaire (cyan)
@@ -1348,6 +1374,13 @@ def before_save_tache_de_travail(doc, method=None):
 
     # Couleur : seule autorité. Priorité statut > partenaire > staff > défaut.
     doc.color = compute_tache_color(doc)
+
+    # Titre du calendrier : composé par le formulaire (Client Script « Calender View Tache de travail »), donc VIDE
+    # pour toute tâche créée par le serveur — tournée commerciale du tableau Clients B2B, tâche de relance de Ma
+    # Tournée, API… Le calendrier affiche `titre`, pas `subject` : ces tâches y apparaissaient comme un bloc sans
+    # texte (constaté par l'utilisateur le 04/11/2026). Même règle que le formulaire, jamais par-dessus un titre posé.
+    if not (doc.get("titre") or "").strip():
+        doc.titre = composer_titre(doc)
 
     # Détail adresse : garde-fou de dernier recours. Le champ est un Data (140),
     # et plusieurs composeurs d'adresse vivent hors de ce dépôt (Client Scripts en

@@ -547,6 +547,16 @@ def planifier_visites(clients, tournee=None, commercial=None, date_tournee=None,
     doc.nb_visites_prevues = frappe.db.count("Visite Commerciale", {"tournee": doc.name, "statut": ["!=", "Annulée"]})
     doc.flags.ignore_permissions = True
     doc.save(ignore_permissions=True)
+    # La tâche du calendrier suit le nombre de clients ; son titre (ce que le calendrier affiche) est recomposé par
+    # before_save_tache_de_travail quand il est vide.
+    if ajoutes and doc.tache_de_travail:
+        tache = frappe.get_doc("Tache de travail", doc.tache_de_travail)
+        prefixe = _("Tournée commerciale —")
+        if (tache.subject or "").startswith(prefixe):
+            tache.subject = _("Tournée commerciale — {0} client(s) B2B").format(doc.nb_visites_prevues)
+            tache.titre = ""
+            tache.flags.ignore_permissions = True
+            tache.save(ignore_permissions=True)
     return {"tournee": doc.name, "tache": doc.tache_de_travail, "date": str(doc.date_tournee),
             "ajoutes": ajoutes, "deja": sorted(deja & set(clients))}
 
