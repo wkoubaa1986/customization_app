@@ -46,7 +46,58 @@ def est_responsable(user: str | None = None) -> bool:
 
 
 def employe_de(user: str | None = None) -> str | None:
-    return frappe.db.get_value("Employee", {"user_id": user or frappe.session.user}, "name")
+    employee = frappe.db.get_value("Employee", {"user_id": user or frappe.session.user, "status": "Active"}, "name")
+    return employee if employee and employee in employes_actifs([employee]) else None
+
+
+def employes_actifs(noms=None) -> dict:
+    """Employés actifs dont le compte lié est activé (un employé sans compte reste affectable)."""
+    filtres = {"status": "Active"}
+    if noms is not None:
+        noms = list(set(n for n in noms if n))
+        if not noms:
+            return {}
+        filtres["name"] = ["in", noms]
+    rows = frappe.get_all("Employee", filters=filtres, fields=["name", "employee_name", "user_id"])
+    users = [r.user_id for r in rows if r.user_id]
+    actifs = set(frappe.get_all("User", filters={"name": ["in", users], "enabled": 1}, pluck="name")) if users else set()
+    return {r.name: r for r in rows if not r.user_id or r.user_id in actifs}
+
+
+def liste_responsables(value) -> list[str]:
+    """Liste canonique ; accepte aussi un identifiant unique pour les anciens appels."""
+    if isinstance(value, str):
+        if value.lstrip().startswith("["):
+            try:
+                value = json.loads(value)
+            except ValueError:
+                frappe.throw(_("La liste des responsables est invalide."))
+        else:
+            value = [value] if value else []
+    if value is None:
+        return []
+    if not isinstance(value, (list, tuple)) or any(not isinstance(e, str) for e in value):
+        frappe.throw(_("La liste des responsables est invalide."))
+    return list(dict.fromkeys(e.strip() for e in value if e.strip()))
+
+
+def responsables_etape(etape) -> list[str]:
+    if etape.get("responsables") is not None:
+        return liste_responsables(etape.get("responsables"))
+    if etape.get("responsables_json") not in (None, ""):
+        return liste_responsables(etape.get("responsables_json"))
+    return liste_responsables(etape.get("responsable"))
+
+
+def champs_responsables(responsables) -> dict:
+    noms = liste_responsables(responsables)
+    return {"responsables_json": json.dumps(noms), "responsable": noms[0] if noms else None}
+
+
+def verifier_nouvelles_affectations(noms, anciens=()):
+    nouveaux = set(noms) - set(anciens)
+    if nouveaux - set(employes_actifs(nouveaux)):
+        frappe.throw(_("Un employé est inactif ou son compte est désactivé. Choisissez un employé actif."))
 
 
 def employes_parametres() -> list[dict]:
@@ -55,8 +106,9 @@ def employes_parametres() -> list[dict]:
         return []
     rows = frappe.get_all("Config Suivi Activite Employe", filters={"parent": DOCTYPE_CONFIG},
                           fields=["employee", "nom", "responsable"], order_by="idx")
-    return [{"name": r.employee, "employee_name": r.nom or r.employee, "responsable": cint(r.responsable)}
-            for r in rows]
+    actifs = employes_actifs(r.employee for r in rows)
+    return [{"name": r.employee, "employee_name": actifs[r.employee].employee_name, "responsable": cint(r.responsable)}
+            for r in rows if r.employee in actifs]
 
 
 def _verifier_acces():
@@ -167,23 +219,26 @@ def get_activites(employe=None, recherche=None, inclure_fermees=0):
                                             as_list=True)) if noms else {}
     nb_fichiers, nb_notes = compte("Activite Fichier"), compte("Activite Note")
     etapes, vignettes, affectes, etapes_retard, prochaine = {}, {}, {}, {}, {}
+    actifs = employes_actifs()
     aujourdhui = getdate(nowdate())
     for e in (frappe.get_all("Activite Etape", filters={"parent": ["in", noms], "parenttype": DOCTYPE},
-                             fields=["parent", "fait", "libelle", "date_prevue", "responsable_nom"], order_by="parent, idx") if noms else []):
+                             fields=["parent", "fait", "libelle", "date_prevue", "responsable", "responsables_json"], order_by="parent, idx") if noms else []):
         t = etapes.setdefault(e.parent, [0, 0]); t[1] += 1; t[0] += cint(e.fait)
         if not cint(e.fait):
             # Étape datée en retard (seulement tant que l'activité est ouverte, cf. plus bas) ; la première
             # étape non faite est « la prochaine », affichée dans la liste et l'ordre du jour des réunions.
             if e.date_prevue and getdate(e.date_prevue) < aujourdhui:
                 etapes_retard[e.parent] = etapes_retard.get(e.parent, 0) + 1
-            prochaine.setdefault(e.parent, {"libelle": e.libelle, "date_prevue": e.date_prevue, "responsable_nom": e.responsable_nom})
+            responsables = [actifs[n].employee_name for n in responsables_etape(e) if n in actifs]
+            prochaine.setdefault(e.parent, {"libelle": e.libelle, "date_prevue": e.date_prevue, "responsable_nom": ", ".join(responsables)})
     for f in (frappe.get_all("Activite Fichier", filters={"parent": ["in", noms], "parenttype": DOCTYPE,
                                                           "type_fichier": "Photo"},
                              fields=["parent", "fichier"], order_by="idx") if noms else []):
         vignettes.setdefault(f.parent, f.fichier)
     for a in (frappe.get_all("Activite Affectation", filters={"parent": ["in", noms], "parenttype": DOCTYPE},
                              fields=["parent", "employe", "nom"], order_by="idx") if noms else []):
-        affectes.setdefault(a.parent, []).append({"employe": a.employe, "nom": a.nom})
+        if a.employe in actifs:
+            affectes.setdefault(a.parent, []).append({"employe": a.employe, "nom": a.nom})
     for r in rows:
         r["nb_fichiers"] = cint(nb_fichiers.get(r.name))
         r["nb_notes"] = cint(nb_notes.get(r.name))
@@ -218,6 +273,18 @@ def get_activite(name):
     for n in d.get("notes") or []:
         n["auteur_nom"] = libelles.get(n.get("auteur")) or n.get("auteur")
     d["employes"] = [r.employe for r in doc.affectations]
+    actifs = employes_actifs(d["employes"])
+    for r in d["affectations"]:
+        r["actif"] = r["employe"] in actifs
+    disponibles = {e["name"]: e for e in employes_parametres()} if est_responsable() else {}
+    disponibles.update({n: {"name": n, "employee_name": r.employee_name} for n, r in actifs.items()})
+    d["employes_disponibles"] = list(disponibles.values())
+    for e in d["etapes"]:
+        tous = responsables_etape(e)
+        e["responsables"] = [n for n in tous if n in actifs]
+        e["responsables_historique"] = tous
+        if not e["fait"]:
+            e["responsable_nom"] = ", ".join(actifs[n].employee_name for n in e["responsables"])
     d["peut_supprimer"] = est_responsable()
     d["peut_reaffecter"] = est_responsable()
     return d
@@ -272,6 +339,7 @@ def enregistrer(data):
                 o = origine[src - 1]
                 ligne.update({"fait": o.fait, "fait_le": o.fait_le, "fait_par": o.fait_par})
                 ligne.setdefault("responsable", o.responsable)
+                ligne.setdefault("responsables_json", json.dumps(responsables_etape(o)))
             doc.append("etapes", ligne)
     else:
         for e in data.get("etapes") or []:            # étapes proposées par l'IA : « libellé » ou {libelle, date_prevue, responsable}
@@ -297,24 +365,24 @@ def changer_statut(name, statut):
 def _ligne_etape(e) -> dict | None:
     """Une étape reçue de l'écran ou de l'IA : chaîne, ou {libelle, date_prevue}. None si vide."""
     if isinstance(e, dict):
-        libelle, date, resp = e.get("libelle"), e.get("date_prevue"), e.get("responsable")
+        libelle, date, resp = e.get("libelle"), e.get("date_prevue"), responsables_etape(e)
     else:
         libelle, date, resp = e, None, None
     libelle = (libelle or "").strip()
     if not libelle:
         return None
     ligne = {"libelle": libelle[:140], "date_prevue": str(getdate(date)) if date else None}
-    if resp:
-        ligne["responsable"] = resp
+    if resp or (isinstance(e, dict) and any(k in e for k in ("responsable", "responsables", "responsables_json"))):
+        ligne.update(champs_responsables(resp))
     return ligne
 
 
 @frappe.whitelist()
-def etape(name, action, libelle=None, ligne=None, date=None, employe=None):
+def etape(name, action, libelle=None, ligne=None, date=None, employe=None, employes=None):
     """Ajouter / cocher-décocher / dater / affecter (responsable) / monter / descendre / supprimer une étape."""
     doc = _doc(name, "write")
     if action == "ajouter":
-        nouvelle = _ligne_etape({"libelle": libelle, "date_prevue": date, "responsable": employe})
+        nouvelle = _ligne_etape({"libelle": libelle, "date_prevue": date, "responsables": liste_responsables(employes if employes is not None else employe)})
         if not nouvelle:
             frappe.throw(_("Écrivez l'étape."))
         doc.append("etapes", nouvelle)
@@ -331,9 +399,11 @@ def etape(name, action, libelle=None, ligne=None, date=None, employe=None):
         elif action == "dater":
             row.date_prevue = str(getdate(date)) if date else None
         elif action == "affecter":
-            if employe and employe not in {a.employe for a in doc.affectations}:
-                frappe.throw(_("Le responsable d'une étape doit être un employé de l'activité."))
-            row.responsable = employe or None
+            responsables = liste_responsables(employes if employes is not None else employe)
+            if set(responsables) - {a.employe for a in doc.affectations}:
+                frappe.throw(_("Les responsables d'une étape doivent être des employés de l'activité."))
+            verifier_nouvelles_affectations(responsables)
+            row.update(champs_responsables(responsables))
         elif action in ("monter", "descendre"):
             lignes = list(doc.etapes)
             i = lignes.index(row)
@@ -523,7 +593,7 @@ def ameliorer_ia(titre=None, description=None, employes=None, name=None, date_de
     employes = frappe.parse_json(employes) if isinstance(employes, str) and employes.startswith("[") else employes
     if isinstance(employes, str):
         employes = [employes]
-    par_nom = {(frappe.db.get_value("Employee", e, "employee_name") or e): e for e in (employes or [])}
+    par_nom = {r.employee_name: n for n, r in employes_actifs(employes or []).items()}
     noms = ", ".join(par_nom)
     system, user = prompt_amelioration(titre, description, noms or None, notes, date_debut, existantes, list(par_nom))
     from customization_app.liste_commande_import import _model, _openai_client

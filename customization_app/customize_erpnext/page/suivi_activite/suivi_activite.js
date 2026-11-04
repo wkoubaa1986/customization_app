@@ -38,17 +38,6 @@ const SA_FERMES = ["Terminée", "Annulée"];
 const sa_esc = (s) => frappe.utils.escape_html(s == null ? "" : String(s));
 const sa_date = (d) => (d ? frappe.datetime.str_to_user(String(d).slice(0, 10)) : "");
 
-/** Date + n jours ouvrés (dimanche chômé), pour la date prévisionnelle proposée par l'IA. */
-function sa_ajouter_jours_ouvres(depart, n) {
-  let d = frappe.datetime.str_to_obj(depart || frappe.datetime.get_today());
-  let reste = Math.max(0, n || 0);
-  while (reste > 0) {
-    d.setDate(d.getDate() + 1);
-    if (d.getDay() !== 0) reste -= 1;
-  }
-  return frappe.datetime.obj_to_str(d).slice(0, 10);
-}
-
 /** Pastilles d'employés à cocher (une ou plusieurs). `choisis` est un Set modifié sur place. */
 function sa_chips($zone, employes, choisis, on_change) {
   $zone.html(employes.map((e) => `<span class="sa-chip ${choisis.has(e.name) ? "on" : ""}" data-emp="${sa_esc(e.name)}">${sa_esc(e.employee_name)}</span>`).join(""));
@@ -59,6 +48,21 @@ function sa_chips($zone, employes, choisis, on_change) {
     on_change && on_change();
   });
 }
+
+// Même sélecteur à cases à cocher dans une étape et dans la proposition IA.
+frappe.suivi_responsables_html = (equipe, responsables, options = {}) => {
+  const choisis = new Set(responsables || []);
+  const noms = equipe.filter((e) => choisis.has(e.name)).map((e) => e.employee_name);
+  return `<details class="sa-responsables" ${options.ligne ? `data-ligne="${sa_esc(options.ligne)}"` : ""}>
+    <summary><span class="sa-responsables-label">👥 ${sa_esc(noms.join(", ") || "Responsables…")}</span></summary>
+    <div class="sa-responsables-choix">${equipe.map((e) => `<label><input type="checkbox" value="${sa_esc(e.name)}" data-nom="${sa_esc(e.employee_name)}" ${choisis.has(e.name) ? "checked" : ""}> ${sa_esc(e.employee_name)}</label>`).join("") || '<span class="text-muted small">Aucun employé actif affecté à l’activité.</span>'}
+      ${options.appliquer ? '<button type="button" class="btn btn-primary btn-xs sa-appliquer-responsables">Appliquer</button>' : ""}</div></details>`;
+};
+$(document).off("change.sa-responsables").on("change.sa-responsables", ".sa-responsables input[type=checkbox]", (e) => {
+  const $d = $(e.target).closest(".sa-responsables");
+  const noms = $d.find("input:checked").map((_, el) => $(el).attr("data-nom")).get();
+  $d.find(".sa-responsables-label").text("👥 " + (noms.join(", ") || "Responsables…"));
+});
 
 class SuiviActivite {
   constructor(wrapper) {
@@ -93,6 +97,11 @@ class SuiviActivite {
     this.ouvrir_reunion_demandee();
     r.find("#sa-titre").on("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); this.ajouter(); } });
     r.find("#sa-envoi").on("click", () => this.ajouter());
+    r.find("#sa-formaliser").on("click", () => this.formaliser({
+      texte: r.find("#sa-titre").val(), employes: Array.from(this.pour),
+      date_prevue: r.find("#sa-date").val(), priorite: r.find("#sa-prio").val(),
+      on_success: async () => { r.find("#sa-titre").val(""); await this.charger(); },
+    }));
     r.find("#sa-employe, #sa-fermees").on("change", () => this.charger());
     let t = null;
     r.find("#sa-recherche").on("input", () => { clearTimeout(t); t = setTimeout(() => this.charger(), 300); });
@@ -105,6 +114,11 @@ class SuiviActivite {
     this.reunion_a_ouvrir = null;
     this.onglet("reunions");
     this.reunions.ouvrir(name);
+  }
+
+  async formaliser(options) {
+    await frappe.require("/assets/customization_app/js/suivi_activite_ia.js");
+    return window.sa_formaliser_ia({ ctx: this.ctx, ...options });
   }
 
   onglet(nom) {
@@ -212,59 +226,13 @@ class SuiviActivite {
     </div>`;
   }
 
-  // ── IA : proposition à relire, rien n'est enregistré sans accord ──────────────
-  async proposer_ia({ titre, description, employes, name, date_debut }, appliquer) {
-    const r = await frappe.call({ method: SA_API + ".ameliorer_ia", args: { titre, description, employes, name, date_debut },
-                                  freeze: true, freeze_message: "✨ L’IA rédige une proposition…" });
-    const p = r.message || {};
-    const date_prevue = p.date_prevue || (p.duree_jours ? sa_ajouter_jours_ouvres(date_debut, p.duree_jours) : null);
-    const d = new frappe.ui.Dialog({
-      title: "✨ Proposition de l’IA",
-      size: "large",
-      fields: [{ fieldtype: "HTML", fieldname: "zone" }],
-      primary_action_label: "Appliquer la sélection",
-      primary_action: () => {
-        const z = d.fields_dict.zone.$wrapper;
-        const etapes = z.find(".ia-e:checked").map((_, el) => {
-          const i = Number($(el).attr("data-i"));
-          return { libelle: p.etapes[i].libelle, date_prevue: z.find(`.ia-date[data-i="${i}"]`).val() || null,
-                   responsable: z.find(`.ia-resp[data-i="${i}"]`).val() || null, source: p.etapes[i].source || 0 };
-        }).get();
-        // La date prévisionnelle suit la dernière étape gardée, si l'utilisateur a retouché les dates.
-        const derniere = etapes.map((e) => e.date_prevue).filter(Boolean).sort().pop();
-        appliquer({
-          titre: z.find("#ia-t").is(":checked") ? p.titre : null,
-          description: z.find("#ia-d").is(":checked") ? p.description : null,
-          etapes,
-          remplacer_etapes: z.find("#ia-r").length && z.find("#ia-r").is(":checked") ? 1 : 0,
-          date_prevue: z.find("#ia-p").is(":checked") ? (derniere || date_prevue) : null,
-        });
-        d.hide();
-      },
-    });
-    d.fields_dict.zone.$wrapper.html(`<div class="sa-ia">
-      ${p.titre ? `<label style="display:block"><input type="checkbox" id="ia-t" checked> <b>Titre :</b> ${sa_esc(p.titre)}</label>` : ""}
-      ${p.description ? `<label style="display:block;margin-top:8px"><input type="checkbox" id="ia-d" checked> <b>Description :</b></label>
-        <div class="desc">${sa_esc(p.description)}</div>` : ""}
-      ${(p.etapes || []).length ? `<div style="margin-top:8px"><b>Étapes ${p.remplace ? "restructurées" : "proposées"}</b> <span class="text-muted small">(à partir du ${sa_esc(sa_date(p.date_debut))} ; retouchez dates et responsables si besoin)</span>${p.etapes.map((e, i) => `
-        <div class="etp"><label style="display:contents"><input type="checkbox" class="ia-e" data-i="${i}" checked> <span>${sa_esc(e.libelle)}${e.source ? ` <span class="text-muted small" title="reprend l’étape ${e.source} actuelle">↩ ${e.source}</span>` : ""}</span></label>
-          <span style="display:flex;gap:4px"><select class="form-control ia-resp" data-i="${i}" title="Responsable">${["", ...(appliquer.equipe || [])].map((x) => x === "" ? `<option value="">— resp. —</option>` : `<option value="${sa_esc(x.name)}" ${x.name === e.responsable ? "selected" : ""}>${sa_esc(x.employee_name)}</option>`).join("")}</select>
-          <input type="date" class="form-control ia-date" data-i="${i}" value="${sa_esc(e.date_prevue || "")}" title="Prévue le"></span></div>`).join("")}
-        ${p.remplace ? `<label style="display:block;margin-top:6px"><input type="checkbox" id="ia-r" checked> <b>Remplacer les étapes actuelles</b> par cette liste <span class="text-muted small">(une étape déjà faite reste faite ; décoché = ajoutées à la suite)</span></label>` : ""}</div>` : ""}
-      ${date_prevue ? `<label style="display:block;margin-top:8px"><input type="checkbox" id="ia-p" ${appliquer.date_vide ? "checked" : ""}>
-        <b>Date prévisionnelle :</b> ${sa_esc(sa_date(date_prevue))} <span class="text-muted">(≈ ${p.duree_jours} j ouvrés)</span></label>` : ""}
-    </div>`);
-    d.show();
-  }
-
   // ── Fiche détaillée ──────────────────────────────────────────────────────────
-  async ouvrir(name) {
+  async ouvrir(name, apres_modification) {
     const ctx = this.ctx;
     let a = (await frappe.call({ method: SA_API + ".get_activite", args: { name } })).message;
     const choisis = new Set(a.employes || []);
-    // Un employé affecté qui n'est plus dans le réglage reste visible (et retirable) sur sa fiche.
-    const equipe = (ctx.employes || []).slice();
-    (a.affectations || []).forEach((r) => { if (!equipe.some((e) => e.name === r.employe)) equipe.push({ name: r.employe, employee_name: r.nom }); });
+    const equipe = (a.employes_disponibles || ctx.employes || []).slice();
+    (a.affectations || []).filter((r) => r.actif !== false).forEach((r) => { if (!equipe.some((e) => e.name === r.employe)) equipe.push({ name: r.employe, employee_name: r.nom }); });
     const d = new frappe.ui.Dialog({
       title: `${a.name}`,
       size: "extra-large",
@@ -291,6 +259,7 @@ class SuiviActivite {
         frappe.show_alert({ message: "Enregistré", indicator: "green" });
         d.hide();
         this.charger();
+        if (apres_modification) await apres_modification();
       },
     });
     const $pour = d.fields_dict.pour.$wrapper;
@@ -299,7 +268,7 @@ class SuiviActivite {
       sa_chips($pour.find(".sa-chips"), equipe, choisis);
     } else {
       $pour.html(`<label class="control-label" style="font-size:12px">Employés</label>
-        <div>${(a.affectations || []).map((r) => `<span class="sa-pastille">${sa_esc(r.nom)}</span>`).join("")}</div>`);
+        <div>${(a.affectations || []).filter((r) => r.actif !== false).map((r) => `<span class="sa-pastille">${sa_esc(r.nom)}</span>`).join("")}</div>`);
     }
     if (a.peut_supprimer) {
       d.set_secondary_action_label("🗑️ Supprimer");
@@ -313,6 +282,7 @@ class SuiviActivite {
       a = (await frappe.call({ method: SA_API + ".get_activite", args: { name } })).message;
       peindre();
       this.charger();
+      if (apres_modification) await apres_modification();
     };
     const appel = async (methode, args) => {
       await frappe.call({ method: SA_API + "." + methode, args: Object.assign({ name: a.name }, args) });
@@ -326,10 +296,8 @@ class SuiviActivite {
         <div class="small text-muted" style="margin-top:4px">Avancement : <b>${a.avancement || 0} %</b>
           ${a.date_fin ? " · terminée le " + sa_esc(sa_date(a.date_fin)) : ""}${a.ia_ameliore ? " · ✨ améliorée par l’IA" : ""}</div>`);
 
-      // Responsable d'étape : un des employés de l'activité (liste déroulante discrète), flèches pour l'ordre.
-      const equipeAct = (a.affectations || []).map((r) => ({ name: r.employe, employee_name: r.nom }));
-      const selResp = (e) => `<select class="sa-resp" data-affecter="${sa_esc(e.name)}" title="Responsable de l’étape">
-          <option value="">👤 —</option>${equipeAct.map((x) => `<option value="${sa_esc(x.name)}" ${x.name === e.responsable ? "selected" : ""}>${sa_esc(x.employee_name)}</option>`).join("")}</select>`;
+      const equipeAct = (a.affectations || []).filter((r) => r.actif !== false).map((r) => ({ name: r.employe, employee_name: r.nom }));
+      const selResp = (e) => frappe.suivi_responsables_html(equipeAct, e.responsables || (e.responsable ? [e.responsable] : []), { ligne: e.name, appliquer: true });
       const n = (a.etapes || []).length;
       const etapes = (a.etapes || []).map((e, i) => {
         const dt = sa_date_etape(e);
@@ -346,11 +314,13 @@ class SuiviActivite {
       const docs = (a.fichiers || []).filter((f) => !f.photo);
       const notes = (a.notes || []).slice().reverse();
       d.fields_dict.zone.$wrapper.html(`
-        <div><button type="button" class="btn btn-default btn-sm sa-btn-ia">✨ Améliorer avec l’IA</button></div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px"><button type="button" class="btn btn-default btn-sm sa-btn-ia" data-mode="Clarifier ma tâche">✨ Clarifier</button>
+          <button type="button" class="btn btn-default btn-sm sa-btn-ia" data-mode="Répartir le travail">Répartir le travail</button>
+          <button type="button" class="btn btn-default btn-sm sa-btn-ia" data-mode="Vérifier ma tâche">Vérifier</button></div>
         <div class="sa-section"><h6>☑️ Étapes</h6>${etapes || `<div class="small text-muted">Aucune étape.</div>`}
           <div class="sa-ajout"><input type="text" class="form-control input-sm sa-nouvelle-etape" placeholder="Nouvelle étape puis Entrée…">
-            <select class="form-control input-sm sa-etape-resp" title="Responsable" style="flex:0 0 160px"><option value="">👤 responsable</option>${equipeAct.map((x) => `<option value="${sa_esc(x.name)}">${sa_esc(x.employee_name)}</option>`).join("")}</select>
-            <input type="date" class="form-control input-sm sa-etape-date" title="Prévue le"></div></div>
+            <div class="sa-etape-resps">${frappe.suivi_responsables_html(equipeAct, [])}</div>
+            <input type="date" class="form-control input-sm sa-etape-date" title="Prévue le"><button type="button" class="btn btn-default btn-sm sa-ajouter-etape">Ajouter</button></div></div>
         <div class="sa-section"><h6>📷 Photos et documents
             <button type="button" class="btn btn-default btn-xs sa-btn-fichier">➕ Ajouter</button></h6>
           ${photos.length ? `<div class="sa-galerie">${photos.map((f) => `<div class="ph">
@@ -392,13 +362,23 @@ class SuiviActivite {
       $i.on("change", valider).on("keydown", (k) => { if (k.key === "Escape") { fini = true; peindre(); } if (k.key === "Enter") { k.preventDefault(); valider(); } })
         .on("blur", () => { if (!fini) { fini = true; if ($i.val() !== $s.attr("data-val")) appel("etape", { action: "dater", ligne, date: $i.val() || null }); else peindre(); } });
     });
+    const ajouter_etape = () => {
+      const v = $z.find(".sa-nouvelle-etape").val();
+      if (v && v.trim()) return appel("etape", { action: "ajouter", libelle: v.trim(), date: $z.find(".sa-etape-date").val() || null,
+        employes: $z.find(".sa-etape-resps input:checked").map((_, el) => el.value).get() });
+    };
+    $z.on("click", ".sa-ajouter-etape", ajouter_etape);
     $z.on("keydown", ".sa-nouvelle-etape", (e) => {
       if (e.key !== "Enter") return;
       e.preventDefault();
-      const v = $(e.currentTarget).val();
-      if (v && v.trim()) appel("etape", { action: "ajouter", libelle: v.trim(), date: $z.find(".sa-etape-date").val() || null, employe: $z.find(".sa-etape-resp").val() || null });
+      ajouter_etape();
     });
-    $z.on("change", "[data-affecter]", (e) => appel("etape", { action: "affecter", ligne: $(e.currentTarget).attr("data-affecter"), employe: $(e.currentTarget).val() || null }));
+    $z.on("click", ".sa-appliquer-responsables", async (e) => {
+      const $bouton = $(e.currentTarget), $d = $bouton.closest(".sa-responsables");
+      $bouton.prop("disabled", true);
+      try { await appel("etape", { action: "affecter", ligne: $d.attr("data-ligne"), employes: $d.find("input:checked").map((_, el) => el.value).get() }); }
+      finally { $bouton.prop("disabled", false); }
+    });
     $z.on("click", "[data-ordre]", (e) => { const $o = $(e.currentTarget); if (!$o.hasClass("off")) appel("etape", { action: $o.attr("data-ordre"), ligne: $o.attr("data-ligne") }); });
     $z.on("click", ".sa-btn-note", () => {
       const v = $z.find(".sa-nouvelle-note").val();
@@ -418,31 +398,24 @@ class SuiviActivite {
         },
       });
     });
-    $z.on("click", ".sa-btn-ia", () => {
+    $z.on("click", ".sa-btn-ia", (e) => {
       const v = d.get_values(true);
-      const appliquer = async (choix) => {
-        if (choix.titre) d.set_value("titre", choix.titre);
-        if (choix.description) d.set_value("description", choix.description);
-        if (choix.date_prevue) d.set_value("date_prevue", choix.date_prevue);
-        const data = { name: a.name, ia_ameliore: 1, etapes: choix.etapes || [], remplacer_etapes: choix.remplacer_etapes ? 1 : 0 };
-        if (choix.titre) data.titre = choix.titre;
-        if (choix.description) data.description = choix.description;
-        if (choix.date_prevue) data.date_prevue = choix.date_prevue;
-        await frappe.call({ method: SA_API + ".enregistrer", args: { data } });
-        frappe.show_alert({ message: "Proposition appliquée", indicator: "green" });
-        await recharger();
-      };
-      appliquer.date_vide = !v.date_prevue;
-      appliquer.equipe = equipe.filter((x) => choisis.has(x.name));
-      this.proposer_ia({ titre: v.titre, description: v.description, employes: Array.from(choisis), name: a.name,
-                         date_debut: v.date_debut }, appliquer);
+      this.formaliser({ ...v, name: a.name, employes: Array.from(choisis), mode: $(e.currentTarget).attr("data-mode"),
+        on_success: async () => {
+          await recharger();
+          await d.set_values({ titre: a.titre, description: a.description, date_prevue: a.date_prevue });
+        },
+      });
     });
     d.show();
   }
 }
 
 // ── Réunions d'équipe : point d'avancement toutes les N semaines ──────────────
-const RR_STATUT = { "Prévue": "🗓️ Prévue", "Tenue": "✅ Tenue", "Annulée": "🚫 Annulée" };
+const RR_STATUT = { "Prévue": "🗓️ Prévue", "En cours": "▶ En cours", "Terminée": "✅ Terminée", "Tenue": "✅ Terminée", "Annulée": "🚫 Annulée" };
+const rr_etat = (r) => r.statut_affiche || (r.statut === "Tenue" ? "Terminée" : r.statut);
+const rr_ouverte = (r) => ["Prévue", "En cours"].includes(rr_etat(r));
+const rr_badge = (r) => `<span class="sa-badge ${rr_etat(r) === "Terminée" ? "s-terminee" : rr_etat(r) === "Annulée" ? "s-annulee" : "s-encours"}">${RR_STATUT[rr_etat(r)] || sa_esc(rr_etat(r))}</span>`;
 const rr_heure = (h) => { const [hh, mm] = String(h || "").split(":"); return hh === undefined || mm === undefined ? "" : hh.padStart(2, "0") + ":" + mm.padStart(2, "0"); };
 const rr_quand = (r) => `${sa_jour(r.date)} ${sa_date(r.date)} · ${rr_heure(r.heure)}`;
 const rr_tag = (a) => a.statut === "Terminée" ? `<span class="rr-tag done">Terminée ${a.date_fin ? sa_esc(sa_date(a.date_fin).slice(0, 5)) : ""}</span>`
@@ -474,6 +447,11 @@ class SuiviReunions {
     this.parent = parent;
     this.$root = parent.$root;
     this.data = null;
+    this.actualisation = setInterval(() => {
+      if (document.visibilityState === "visible" && frappe.get_route()[0] === "suivi-activite") {
+        this.charger(!this.$root.find("#sa-vue-reunions").is(":visible")).catch(() => {});
+      }
+    }, 60000);
   }
 
   async compteur() {
@@ -487,6 +465,7 @@ class SuiviReunions {
     this.data = res.message || { a_venir: [], passees: [] };
     const n = (this.data.a_venir || []).length;
     this.$root.find("#sa-reu-n").text(n).toggle(n > 0);
+    if (this.actualiser_dialogue) this.actualiser_dialogue(this.data);
     if (!silencieux) this.rendre();
   }
 
@@ -507,13 +486,14 @@ class SuiviReunions {
       <div class="t">${sa_esc(x.titre)}<small>${x.statut === "Prévue" ? `${(x.participants || []).length} participant(s)` : `${x.nb_presents} présent(s)`}
         ${x.toutes_les_semaines ? ` · 🔁 toutes les ${x.toutes_les_semaines} sem.` : ""}${(x.suivies || []).length ? ` · suit ${x.suivies.length} activité(s)` : ""}
         ${x.nb_decisions ? ` · ${x.nb_decisions} décision(s), ${x.nb_decisions_faites} faite(s)` : ""}</small></div>
-      <div class="visio">${x.lien_visio && x.statut === "Prévue" ? `<a href="${sa_esc(x.lien_visio)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">🎥 Rejoindre</a>` : ""}</div>
-      <div><span class="sa-badge ${x.statut === "Tenue" ? "s-terminee" : x.statut === "Annulée" ? "s-annulee" : "s-encours"}">${RR_STATUT[x.statut] || sa_esc(x.statut)}</span></div></div>`;
+      <div class="visio">${x.lien_visio && rr_ouverte(x) ? `<a href="${sa_esc(x.lien_visio)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">🎥 Rejoindre</a>` : ""}</div>
+      <div>${rr_badge(x)}</div></div>`;
     const av = d.a_venir || [], pa = d.passees || [];
+    const historique_ouvert = r.find("#rr-historique").prop("open");
     r.find("#sa-reu-liste").html(
-      `<div class="sa-groupe">À venir — ${av.length}</div>` + (av.length ? av.map((x, i) => ligne(x, i === 0 ? "prochaine" : "")).join("")
+      `<div class="sa-groupe">${av.some((x) => rr_etat(x) === "En cours") ? "À venir et en cours" : "À venir"} — ${av.length}</div>` + (av.length ? av.map((x, i) => ligne(x, i === 0 ? "prochaine" : "")).join("")
         : `<div class="sa-reu-vide">Aucune réunion prévue.${d.peut_gerer ? " Cliquez « Nouvelle réunion », ou activez la création automatique dans le réglage." : ""}</div>`)
-      + (pa.length ? `<div class="sa-groupe">Tenues et annulées — ${pa.length}</div>` + pa.map((x) => ligne(x, "tenue")).join("") : ""));
+      + (pa.length ? `<details id="rr-historique" ${historique_ouvert ? "open" : ""}><summary class="sa-groupe" style="cursor:pointer">Réunions passées et annulées — ${pa.length}${pa.length === 20 ? " dernières" : ""}</summary>` + pa.map((x) => ligne(x, "tenue")).join("") + "</details>" : ""));
     r.find("#sa-reu-liste .sa-reu").on("click", (e) => this.ouvrir($(e.currentTarget).attr("data-name")));
   }
 
@@ -571,10 +551,52 @@ class SuiviReunions {
     const pour = new Set();
     const d = new frappe.ui.Dialog({ title: `${r.name}`, size: "extra-large", fields: [{ fieldtype: "HTML", fieldname: "zone" }] });
     const $z = d.fields_dict.zone.$wrapper;
-    const appel = async (methode, args) => {
-      await frappe.call({ method: RR_API + "." + methode, args: Object.assign({ name: r.name }, args) });
-      r = (await frappe.call({ method: RR_API + ".get_reunion", args: { name } })).message;
+    const actualiser_dialogue = (data) => {
+      if (!d.is_visible) return;
+      const actuelle = [...(data.a_venir || []), ...(data.passees || [])].find((x) => x.name === r.name);
+      if (!actuelle || actuelle.statut_affiche === r.statut_affiche) return;
+      r.statut_affiche = actuelle.statut_affiche;
+      $z.find(".rr-etat-horaire").html(rr_badge(r));
+      $z.find(".rr-visio a, .rr-visio code, #rr-copier").toggle(rr_ouverte(r));
+      if (r.peut_gerer && r.statut === "Prévue") d.get_primary_btn().text(rr_etat(r) === "Terminée" ? "Valider le compte rendu" : "✅ Clôturer la réunion");
+    };
+    this.actualiser_dialogue = actualiser_dialogue;
+    d.$wrapper.on("hidden.bs.modal", () => { if (this.actualiser_dialogue === actualiser_dialogue) this.actualiser_dialogue = null; });
+    const brouillon = { texte: "", date: "", synthese: r.compte_rendu || "" };
+    let synthese_enregistree = brouillon.synthese, sauvegarde = Promise.resolve(), minuteur;
+    const retenir = () => {
+      if ($z.find("#rr-txt").length) brouillon.texte = $z.find("#rr-txt").val();
+      if ($z.find("#rr-date").length) brouillon.date = $z.find("#rr-date").val();
+      if ($z.find("#rr-synth").length) brouillon.synthese = $z.find("#rr-synth").val();
+    };
+    const sauver_synthese = () => {
+      retenir(); clearTimeout(minuteur);
+      sauvegarde = sauvegarde.catch(() => {}).then(async () => {
+        if (!r.peut_gerer || brouillon.synthese === synthese_enregistree) return;
+        const texte = brouillon.synthese;
+        $z.find("#rr-sauvegarde").text("Enregistrement…");
+        try {
+          await frappe.call({ method: RR_API + ".enregistrer_synthese", args: { name: r.name, texte, precedente: synthese_enregistree } });
+          synthese_enregistree = texte;
+          $z.find("#rr-sauvegarde").text(brouillon.synthese === texte ? "Synthèse enregistrée" : "Modifications en attente");
+        } catch (err) { $z.find("#rr-sauvegarde").text("Synthèse non enregistrée — conservez votre brouillon"); throw err; }
+      });
+      return sauvegarde;
+    };
+    const recharger_reunion = async (texte_enregistre) => {
+      const synthese_avant = synthese_enregistree;
+      const nouvelle = (await frappe.call({ method: RR_API + ".get_reunion", args: { name } })).message;
+      retenir(); // Conserve aussi ce qui a été tapé pendant la requête réseau.
+      if (texte_enregistre !== undefined && brouillon.texte.trim() === texte_enregistre.trim()) brouillon.texte = "";
+      r = nouvelle;
+      if (synthese_avant === synthese_enregistree && brouillon.synthese === synthese_enregistree) brouillon.synthese = synthese_enregistree = r.compte_rendu || "";
       peindre(); this.charger(true);
+    };
+    const appel = async (methode, args) => {
+      await sauver_synthese();
+      const resultat = await frappe.call({ method: RR_API + "." + methode, args: Object.assign({ name: r.name }, args) });
+      await recharger_reunion(methode === "noter" ? args.texte : undefined);
+      return resultat.message;
     };
 
     const peindre = () => {
@@ -587,14 +609,14 @@ class SuiviReunions {
       const notes = (r.notes || []).map((n) => `<div class="rr-note"><time>${sa_esc(String(n.date || "").slice(11, 16))}</time>
         ${n.activite ? `<div class="dec"><div>${sa_esc(n.texte)}</div><div class="to">Pour ${sa_esc(n.pour || "")} · <span class="ok" data-act="${sa_esc(n.activite)}">✓ activité ${sa_esc(n.activite)}${n.activite_statut ? " · " + sa_esc(n.activite_statut) + (n.activite_avancement ? " " + n.activite_avancement + " %" : "") : ""}</span></div></div>`
           : `<div>${sa_esc(n.texte)} <span class="small text-muted">· ${sa_esc(n.auteur_nom || "")}</span></div>`}
-        <span class="sup" data-sup-note="${sa_esc(n.name)}" title="Retirer la note">✕</span></div>`).join("");
+        <span>${r.peut_gerer ? `<button type="button" class="btn btn-default btn-xs" data-formaliser-note="${sa_esc(n.name)}">✨ Formaliser</button> ` : ""}<span class="sup" data-sup-note="${sa_esc(n.name)}" title="Retirer la note">✕</span></span></div>`).join("");
       $z.html(`
         <div class="rr-head">
           <div><div style="font-size:16px;font-weight:700">${sa_esc(r.titre)}</div>
             <div class="text-muted">${sa_esc(sa_jour(r.date))} ${sa_esc(sa_date(r.date))} à ${sa_esc(rr_heure(r.heure))} · ${sa_esc(r.duree_min || 45)} min · ${sa_esc(r.lieu || "")}
-              <span class="sa-badge ${r.statut === "Tenue" ? "s-terminee" : r.statut === "Annulée" ? "s-annulee" : "s-encours"}">${RR_STATUT[r.statut]}</span></div></div>
+              <span class="rr-etat-horaire">${rr_badge(r)}</span></div></div>
           <div class="rr-visio" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-            ${r.lien_visio ? `<a class="btn btn-sm" href="${sa_esc(r.lien_visio)}" target="_blank" rel="noopener">🎥 Rejoindre la visio</a>
+            ${r.lien_visio && rr_ouverte(r) ? `<a class="btn btn-sm" href="${sa_esc(r.lien_visio)}" target="_blank" rel="noopener">🎥 Rejoindre la visio</a>
               <code>${sa_esc(r.lien_visio.replace("https://", ""))}</code><button type="button" class="btn btn-default btn-xs" id="rr-copier">Copier</button>` : ""}
             ${r.peut_gerer ? `<button type="button" class="btn btn-default btn-xs" id="rr-modifier">✏️ Modifier</button>` : ""}</div>
         </div>
@@ -615,18 +637,20 @@ class SuiviReunions {
         </div>
         <div class="sa-section"><h6>📝 Compte-rendu</h6>
           ${notes || `<div class="small text-muted">Aucune note pour l’instant.</div>`}
-          ${prevue || r.peut_gerer ? `<div class="rr-write"><input type="text" class="form-control input-sm" id="rr-txt" placeholder="Une note… ou une décision : choisissez à qui elle est confiée ci-dessous, puis Entrée"><button type="button" class="btn btn-default btn-sm" id="rr-add">Ajouter</button></div>
+          ${prevue || r.peut_gerer ? `<div class="rr-write"><textarea class="form-control input-sm" rows="3" id="rr-txt" placeholder="Une note ou une décision de la réunion… Ctrl+Entrée pour ajouter">${sa_esc(brouillon.texte)}</textarea><button type="button" class="btn btn-default btn-sm" id="rr-add">${pour.size ? "Créer une activité" : "Ajouter une note"}</button></div>
           ${r.peut_gerer ? `<div class="rr-write-opts"><span>Décision pour :</span><span class="sa-chips" id="rr-pour"></span><span>prévue le</span><input type="date" class="form-control" id="rr-date"></div>` : ""}` : ""}
-          ${r.peut_gerer ? `<div style="margin-top:10px"><label class="control-label small">Synthèse (facultative)</label><textarea class="form-control" id="rr-synth" rows="2">${sa_esc(r.compte_rendu || "")}</textarea></div>` : (r.compte_rendu ? `<div class="sa-note" style="margin-top:8px"><div class="qui">Synthèse</div><div class="txt">${sa_esc(r.compte_rendu)}</div></div>` : "")}
+          ${r.peut_gerer ? `<button type="button" class="btn btn-default btn-sm" id="rr-formaliser" style="margin-top:8px">✨ Formaliser une décision avec l’IA</button>
+            <div style="margin-top:10px"><label class="control-label small">Synthèse (facultative)</label><textarea class="form-control" id="rr-synth" rows="3">${sa_esc(brouillon.synthese)}</textarea><div class="small text-muted" id="rr-sauvegarde">Sauvegarde automatique de la synthèse</div></div>` : (r.compte_rendu ? `<div class="sa-note" style="margin-top:8px"><div class="qui">Synthèse</div><div class="txt">${sa_esc(r.compte_rendu)}</div></div>` : "")}
         </div>`);
-      if (r.peut_gerer) sa_chips($z.find("#rr-pour"), r.employes || [], pour);
-      d.set_primary_action(r.peut_gerer ? (prevue ? "✅ Clôturer la réunion" : "Enregistrer") : "Fermer", async () => {
+      if (r.peut_gerer) sa_chips($z.find("#rr-pour"), r.employes || [], pour, () => $z.find("#rr-add").text(pour.size ? "Créer une activité" : "Ajouter une note"));
+      $z.find("#rr-date").val(brouillon.date);
+      d.set_primary_action(r.peut_gerer ? (prevue ? (rr_etat(r) === "Terminée" ? "Valider le compte rendu" : "✅ Clôturer la réunion") : "Enregistrer") : "Fermer", async () => {
         if (!r.peut_gerer) return d.hide();
         if (prevue) {
           frappe.confirm("Clôturer la réunion ? Elle passe en « Tenue » ; les décisions restent des activités.", async () => {
-            await appel("changer_statut", { statut: "Tenue", compte_rendu: $z.find("#rr-synth").val() }); d.hide(); this.charger();
+            await appel("changer_statut", { statut: "Tenue" }); d.hide(); this.charger();
           });
-        } else { await appel("modifier", { data: { compte_rendu: $z.find("#rr-synth").val() } }); d.hide(); this.charger(); }
+        } else { await sauver_synthese(); d.hide(); this.charger(); }
       });
       if (r.peut_gerer) {
         d.set_secondary_action_label(prevue ? "🚫 Annuler la réunion" : (r.statut === "Annulée" ? "↩️ Remettre en prévue" : "🗑️ Supprimer"));
@@ -655,7 +679,28 @@ class SuiviReunions {
     $z.on("click", "#rr-copier", () => {
       frappe.utils.copy_to_clipboard(r.lien_visio);
     });
-    $z.on("click", "[data-act]", (e) => { e.stopPropagation(); this.parent.ouvrir($(e.currentTarget).attr("data-act")); });
+    $z.on("input", "#rr-synth", () => {
+      retenir(); clearTimeout(minuteur);
+      $z.find("#rr-sauvegarde").text("Modifications en attente…");
+      minuteur = setTimeout(() => sauver_synthese().catch(() => {}), 800);
+    });
+    d.$wrapper.on("hide.bs.modal", (e) => { if (e.target === d.$wrapper[0]) sauver_synthese().catch(() => {}); });
+    $z.on("click", "[data-act]", async (e) => {
+      e.stopPropagation(); await sauver_synthese();
+      this.parent.ouvrir($(e.currentTarget).attr("data-act"), async () => { retenir(); await recharger_reunion(); });
+    });
+    const formaliser = async (note) => {
+      await sauver_synthese();
+      const texte = note ? note.texte : brouillon.texte;
+      await this.parent.formaliser({ reunion: r.name, note: note && note.name, name: note && note.activite,
+        note_liee: !!(note && note.activite), texte, employes: Array.from(pour), date_prevue: brouillon.date,
+        on_success: async () => {
+          await recharger_reunion(note ? undefined : texte); await this.parent.charger();
+        },
+      });
+    };
+    $z.on("click", "#rr-formaliser", () => formaliser());
+    $z.on("click", "[data-formaliser-note]", (e) => formaliser((r.notes || []).find((n) => n.name === $(e.currentTarget).attr("data-formaliser-note"))));
     const ajouter = async () => {
       const v = ($z.find("#rr-txt").val() || "").trim();
       if (!v) return;
@@ -666,7 +711,7 @@ class SuiviReunions {
       this.parent.charger();
     };
     $z.on("click", "#rr-add", ajouter);
-    $z.on("keydown", "#rr-txt", (e) => { if (e.key === "Enter") { e.preventDefault(); ajouter(); } });
+    $z.on("keydown", "#rr-txt", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); ajouter(); } });
     $z.on("click", "[data-sup-note]", (e) => {
       const ligne = $(e.currentTarget).attr("data-sup-note");
       frappe.confirm("Retirer cette note du compte-rendu ?", () => appel("supprimer_note", { ligne }));
@@ -686,18 +731,28 @@ class SuiviReunions {
       rr_picker_activites(m.fields_dict.acts.$wrapper.find(".rr-acts"), (r.participants || []).map((p) => p.employe), actsChoisies, true);
       m.show();
     });
-    $z.on("click", "#rr-modifier", () => {
-      const choisis = new Set((r.participants || []).map((p) => p.employe));
+    $z.on("click", "#rr-modifier", async () => {
+      await sauver_synthese();
+      await recharger_reunion();
+      const choisis = new Set((r.participants || []).filter((p) => p.actif !== false || !rr_ouverte(r)).map((p) => p.employe));
+      const suivantes = "Celle-ci et les suivantes";
+      const enSerie = "eval:doc.portee === 'Celle-ci et les suivantes'";
       const m = new frappe.ui.Dialog({
         title: "Modifier la réunion",
+        size: "large",
         fields: [
+          { fieldtype: "Select", fieldname: "portee", label: "Appliquer les modifications à", options: ["Cette réunion seulement", suivantes], default: "Cette réunion seulement", hidden: !r.peut_modifier_serie },
+          { fieldtype: "Int", fieldname: "toutes_les_semaines", label: "Répéter toutes les (semaines)", default: r.toutes_les_semaines || 1, depends_on: enSerie },
+          { fieldtype: "HTML", fieldname: "portee_info", depends_on: enSerie,
+            options: `<div class="small text-muted" style="margin-bottom:12px">${sa_esc(r.nb_serie_modifiables || 0)} réunion(s) à venir seront modifiées. Le nombre de réunions est conservé. Si la fréquence change, leurs dates seront recalculées à partir de la date ci-dessous. Les réunions passées ou annulées restent inchangées ; chaque réunion garde son compte rendu et son lien visio.</div>` },
+          { fieldtype: "Section Break" },
           { fieldtype: "Data", fieldname: "titre", label: "Titre", default: r.titre, reqd: 1 },
           { fieldtype: "Date", fieldname: "date", label: "Date", default: r.date, reqd: 1 },
           { fieldtype: "Time", fieldname: "heure", label: "Heure", default: r.heure },
           { fieldtype: "Column Break" },
           { fieldtype: "Int", fieldname: "duree_min", label: "Durée (min)", default: r.duree_min },
           { fieldtype: "Data", fieldname: "lieu", label: "Lieu", default: r.lieu },
-          { fieldtype: "Data", fieldname: "lien_visio", label: "Lien visio", default: r.lien_visio },
+          { fieldtype: "Data", fieldname: "lien_visio", label: "Lien visio", default: r.lien_visio, depends_on: "eval:doc.portee !== 'Celle-ci et les suivantes'" },
           { fieldtype: "Section Break" },
           { fieldtype: "HTML", fieldname: "parts" },
           { fieldtype: "Section Break", label: "Activités à l’ordre du jour" },
@@ -705,7 +760,17 @@ class SuiviReunions {
           { fieldtype: "HTML", fieldname: "acts" },
         ],
         primary_action_label: "Enregistrer",
-        primary_action: async (v) => { await appel("modifier", { data: Object.assign(v, { employes: Array.from(choisis), activites: Array.from(actsChoisies), seulement_suivies: v.seulement_suivies ? 1 : 0 }) }); m.hide(); },
+        primary_action: async (v) => {
+          if (!choisis.size) return frappe.msgprint("Choisissez au moins un participant actif.");
+          const portee = v.portee === suivantes ? "suivantes" : "cette_reunion";
+          if (portee === "suivantes" && (!Number.isInteger(v.toutes_les_semaines) || v.toutes_les_semaines < 1 || v.toutes_les_semaines > 52)) return frappe.msgprint("La fréquence doit être un nombre entier de 1 à 52 semaines.");
+          const data = { ...v, employes: Array.from(choisis), activites: Array.from(actsChoisies), seulement_suivies: v.seulement_suivies ? 1 : 0 };
+          delete data.portee;
+          if (portee === "suivantes") delete data.lien_visio;
+          const resultat = await appel("modifier", { data, portee, modified: r.modified });
+          m.hide();
+          frappe.show_alert({ message: `${(resultat.modifiees || []).length || 1} réunion(s) mise(s) à jour`, indicator: "green" });
+        },
       });
       const actsChoisies = new Set((r.activites_suivies || []).map((x) => x.activite));
       const $a = m.fields_dict.acts.$wrapper;
@@ -713,7 +778,7 @@ class SuiviReunions {
       const peindreActs = () => rr_picker_activites($a.find(".rr-acts"), Array.from(choisis), actsChoisies, true);
       m.fields_dict.parts.$wrapper.html(`<label class="control-label" style="font-size:12px">Participants</label><div class="sa-chips"></div>`);
       const equipe = (r.employes || []).slice();
-      (r.participants || []).forEach((p) => { if (!equipe.some((e) => e.name === p.employe)) equipe.push({ name: p.employe, employee_name: p.nom }); });
+      (r.participants || []).filter((p) => p.actif !== false).forEach((p) => { if (!equipe.some((e) => e.name === p.employe)) equipe.push({ name: p.employe, employee_name: p.nom }); });
       sa_chips(m.fields_dict.parts.$wrapper.find(".sa-chips"), equipe, choisis, peindreActs);
       peindreActs();
       m.show();

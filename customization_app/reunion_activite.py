@@ -15,9 +15,11 @@ jour 08:00) par notification Desk, et par SMS si coché — SIMULÉ en developer
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
+
 import frappe
 from frappe import _
-from frappe.utils import add_days, cint, getdate, now_datetime, nowdate
+from frappe.utils import add_days, cint, get_datetime, get_time, getdate, now_datetime, nowdate
 
 from customization_app import suivi_activite as SA
 
@@ -194,7 +196,10 @@ def rappeler(doc, quand: str, cfg: dict | None = None) -> dict:
     sujet = _("Réunion d'équipe {0} à {1}").format(_("demain") if quand == "veille" else _("aujourd'hui"), heure_hm(doc.heure))
     bilan = {"notifies": 0, "sms": 0, "simule": _sms_simule()}
     numeros = []
+    actifs = SA.employes_actifs(p.employe for p in doc.participants)
     for p in doc.participants:
+        if p.employe not in actifs:
+            continue
         if p.utilisateur:
             frappe.get_doc({"doctype": "Notification Log", "for_user": p.utilisateur, "type": "Alert", "subject": sujet,
                             "email_content": texte, "document_type": DOCTYPE, "document_name": doc.name,
@@ -240,12 +245,43 @@ def _cron_rappel(date, quand):
 
 # ── Lecture ──────────────────────────────────────────────────────────────────
 
+def etat_horaire(reunion, maintenant=None):
+    """État visible d'après l'horaire du site, sans valider le compte rendu ni les présences."""
+    debut = datetime.combine(getdate(reunion.get("date")), get_time(reunion.get("heure") or "09:00:00"))
+    fin = debut + timedelta(minutes=max(1, cint(reunion.get("duree_min")) or DEFAUTS["reunion_duree"]))
+    instant = get_datetime(maintenant) if maintenant is not None else now_datetime()
+    statut = reunion.get("statut")
+    if statut == "Annulée":
+        affiche = "Annulée"
+    elif statut == "Tenue" or instant >= fin:
+        affiche = "Terminée"
+    elif instant >= debut:
+        affiche = "En cours"
+    else:
+        affiche = "Prévue"
+    return {"statut_affiche": affiche, "debut_prevu": str(debut), "fin_prevue": str(fin)}
+
+
 def _acces_reunion(doc):
     """Responsable : tout. Employé : seulement une réunion où il est participant."""
     if SA.est_responsable():
         return
     if frappe.session.user not in {p.utilisateur for p in doc.participants}:
         frappe.throw(_("Vous n'êtes pas participant de cette réunion."), frappe.PermissionError)
+
+
+def participants_visibles(doc, instant=None):
+    """Une réunion à venir/en cours ne propose plus les comptes désactivés ; le passé reste fidèle."""
+    if etat_horaire(doc, instant)["statut_affiche"] not in ("Prévue", "En cours"):
+        return list(doc.participants)
+    actifs = SA.employes_actifs(p.employe for p in doc.participants)
+    return [p for p in doc.participants if p.employe in actifs]
+
+
+def _suite_modifiable(doc, reunions, instant):
+    debut = get_datetime(etat_horaire(doc, instant)["debut_prevu"])
+    return [r for r in reunions if r.statut == "Prévue"
+            and get_datetime(etat_horaire(r, instant)["debut_prevu"]) >= max(debut, instant)]
 
 
 @frappe.whitelist()
@@ -258,17 +294,27 @@ def get_reunions():
     if not SA.est_responsable():
         mes = frappe.get_all("Reunion Participant", filters={"utilisateur": frappe.session.user, "parenttype": DOCTYPE}, pluck="parent")
         filtres = {"name": ["in", mes or [""]]}
-    a_venir = frappe.get_all(DOCTYPE, filters=dict(filtres, statut="Prévue"), fields=champs, order_by="date asc, heure asc")
+    prevues = frappe.get_all(DOCTYPE, filters=dict(filtres, statut="Prévue"), fields=champs, order_by="date asc, heure asc")
     passees = frappe.get_all(DOCTYPE, filters=dict(filtres, statut=["in", ["Tenue", "Annulée"]]), fields=champs,
                              order_by="date desc, heure desc", limit=20)
+    instant = now_datetime()
+    for r in prevues + passees:
+        r.update(etat_horaire(r, instant))
+    a_venir = [r for r in prevues if r.statut_affiche != "Terminée"]
+    passees.extend(r for r in prevues if r.statut_affiche == "Terminée")
+    passees = sorted(passees, key=lambda r: (r.debut_prevu, r.name), reverse=True)[:20]
     noms = [r.name for r in a_venir + passees]
     presences, decisions, suivies = {}, {}, {}
     if noms:
+        actifs = SA.employes_actifs()
+        futures = {r.name for r in a_venir}
         for r in frappe.get_all("Reunion Activite Suivie", filters={"parent": ["in", noms], "parenttype": DOCTYPE},
                                 fields=["parent", "titre"], order_by="idx"):
             suivies.setdefault(r.parent, []).append(r.titre)
         for p in frappe.get_all("Reunion Participant", filters={"parent": ["in", noms], "parenttype": DOCTYPE},
-                                fields=["parent", "nom", "present"], order_by="idx"):
+                                fields=["parent", "employe", "nom", "present"], order_by="idx"):
+            if p.parent in futures and p.employe not in actifs:
+                continue
             presences.setdefault(p.parent, []).append({"nom": p.nom, "present": p.present})
         for n in frappe.get_all("Reunion Note", filters={"parent": ["in", noms], "parenttype": DOCTYPE, "activite": ["is", "set"]},
                                 fields=["parent", "activite"]):
@@ -289,19 +335,20 @@ def get_reunions():
             "prochaine_date": str(prochaine_date(cfg, nowdate(), derniere.date if derniere else None)) if cfg["reunion_active"] else None}
 
 
-def ordre_du_jour(doc) -> dict:
+def ordre_du_jour(doc, participants=None) -> dict:
     """Par participant : ses activités ouvertes (retard d'abord), celles terminées depuis la réunion précédente ;
     plus les décisions de la précédente avec leur état. Rien n'est stocké : c'est l'état au moment de l'ouverture."""
     depuis = None
     if doc.precedente:
         depuis = frappe.db.get_value(DOCTYPE, doc.precedente, "date")
     depuis = getdate(depuis) if depuis else add_days(getdate(doc.date), -14)
-    employes = [p.employe for p in doc.participants]
-    if not employes:
+    participants = participants_visibles(doc) if participants is None else participants
+    employes = [p.employe for p in participants]
+    suivies = [r.activite for r in (doc.get("activites_suivies") or []) if r.activite]
+    if not employes and not suivies:
         return {"employes": [], "kpis": {"retard": 0, "en_cours": 0, "terminees": 0}, "decisions_precedente": [], "depuis": str(depuis)}
     aff = frappe.get_all("Activite Affectation", filters={"employe": ["in", employes], "parenttype": SA.DOCTYPE},
-                         fields=["parent", "employe"])
-    suivies = [r.activite for r in (doc.get("activites_suivies") or []) if r.activite]
+                         fields=["parent", "employe"]) if employes else []
     if suivies and cint(doc.get("seulement_suivies")):
         # La réunion ne parle que d'activités précises (même si un participant en a d'autres).
         aff = [a for a in aff if a.parent in suivies]
@@ -330,7 +377,7 @@ def ordre_du_jour(doc) -> dict:
     kpis = {"retard": 0, "en_cours": 0, "terminees": 0}
     vus_kpi = set()
     sortie = []
-    for p in doc.participants:
+    for p in participants:
         ouvertes, terminees = [], []
         for n in par_emp.get(p.employe, []):
             a = acts.get(n)
@@ -395,7 +442,14 @@ def get_reunion(name):
     SA._verifier_acces()
     doc = frappe.get_doc(DOCTYPE, name)
     _acces_reunion(doc)
+    instant = now_datetime()
     d = doc.as_dict()
+    d.update(etat_horaire(doc, instant))
+    visibles = participants_visibles(doc, instant)
+    d["participants"] = [p.as_dict() for p in visibles]
+    actifs = SA.employes_actifs(p.employe for p in doc.participants)
+    for p in d["participants"]:
+        p["actif"] = p["employe"] in actifs
     noms = {n.auteur for n in doc.notes if n.auteur}
     libelles = dict(frappe.get_all("User", filters={"name": ["in", list(noms)]}, fields=["name", "full_name"], as_list=True)) if noms else {}
     for n in d.get("notes") or []:
@@ -406,9 +460,13 @@ def get_reunion(name):
     for r in d.get("activites_suivies") or []:
         a = frappe.db.get_value(SA.DOCTYPE, r.get("activite"), ["statut", "avancement", "titre"], as_dict=True) or {}
         r.update({"statut": a.get("statut"), "avancement": a.get("avancement"), "titre": a.get("titre") or r.get("titre")})
-    d["ordre_du_jour"] = ordre_du_jour(doc)
+    d["ordre_du_jour"] = ordre_du_jour(doc, visibles)
     if doc.serie:
-        d["serie_reunions"] = frappe.get_all(DOCTYPE, filters={"serie": doc.serie}, fields=["name", "date", "statut"], order_by="date")
+        d["serie_reunions"] = frappe.get_all(DOCTYPE, filters={"serie": doc.serie},
+            fields=["name", "date", "heure", "duree_min", "statut"], order_by="date, heure, name")
+        suite = _suite_modifiable(doc, d["serie_reunions"], instant)
+        d["nb_serie_modifiables"] = len(suite)
+        d["peut_modifier_serie"] = any(r.name == doc.name for r in suite)
     d["peut_gerer"] = SA.est_responsable()
     d["moi"] = SA.employe_de()
     d["employes"] = SA.employes_parametres() if SA.est_responsable() else []
@@ -450,26 +508,78 @@ def creer(date, heure=None, employes=None, titre=None, lieu=None, activites=None
 
 
 @frappe.whitelist()
-def modifier(name, data):
-    """Date, heure, durée, lieu, lien, titre, synthèse ; participants (liste d'employés)."""
+def modifier(name, data, portee="cette_reunion", modified=None):
+    """Modifie une occurrence ou la suite encore à venir d'une série, dans une seule transaction."""
     _gerer()
     data = frappe.parse_json(data) if isinstance(data, str) else data
-    doc = frappe.get_doc(DOCTYPE, name)
+    if not isinstance(data, dict) or portee not in ("cette_reunion", "suivantes"):
+        frappe.throw(_("Modification de réunion invalide."))
+    doc = frappe.get_doc(DOCTYPE, name, for_update=True)
+    if modified and get_datetime(modified) != get_datetime(doc.modified):
+        frappe.throw(_("La réunion a changé. Rouvrez-la avant de modifier la série."), frappe.TimestampMismatchError)
+    if portee == "cette_reunion":
+        _modifier_occurrence(doc, data)
+        return {"name": doc.name, "modifiees": [doc.name]}
+    instant = now_datetime()
+    if not doc.serie or not _suite_modifiable(doc, [doc], instant):
+        frappe.throw(_("Ouvrez une réunion à venir de la série pour modifier celle-ci et les suivantes."))
+    if "compte_rendu" in data:
+        frappe.throw(_("Le compte rendu appartient à une seule réunion."))
+    lignes = frappe.get_all(DOCTYPE, filters={"serie": doc.serie},
+        fields=["name", "date", "heure", "duree_min", "statut"], order_by="date, heure, name")
+    noms = [r.name for r in _suite_modifiable(doc, lignes, instant)]
+    docs = [doc if n == name else frappe.get_doc(DOCTYPE, n, for_update=True) for n in noms]
+    # Recontrôle les occurrences verrouillées : une clôture concurrente ne doit pas être modifiée.
+    docs = _suite_modifiable(doc, docs, instant)
+    semaines = cint(data.get("toutes_les_semaines", doc.toutes_les_semaines or 1))
+    if not 1 <= semaines <= 52 or str(data.get("toutes_les_semaines", semaines)) != str(semaines):
+        frappe.throw(_("La fréquence doit être un nombre entier de 1 à 52 semaines."))
+    nouvelle_date = getdate(data.get("date") or doc.date)
+    decalage = (nouvelle_date - getdate(doc.date)).days
+    nouvelle_frequence = semaines != cint(doc.toutes_les_semaines or 1)
+    changements = []
+    for i, occurrence in enumerate(docs):
+        valeurs = {k: v for k, v in data.items() if k not in ("lien_visio", "compte_rendu")}
+        valeurs["date"] = add_days(nouvelle_date, 7 * semaines * i) if nouvelle_frequence else add_days(occurrence.date, decalage)
+        apercu = frappe._dict(date=valeurs["date"], heure=valeurs.get("heure", occurrence.heure),
+                              duree_min=valeurs.get("duree_min", occurrence.duree_min), statut="Prévue")
+        if get_datetime(etat_horaire(apercu, instant)["debut_prevu"]) < instant:
+            frappe.throw(_("La nouvelle date et l'heure doivent être dans le futur."))
+        changements.append((occurrence, valeurs))
+    frappe.db.savepoint("modifier_serie")
+    try:
+        for occurrence, valeurs in changements:
+            occurrence.toutes_les_semaines = semaines
+            _modifier_occurrence(occurrence, valeurs)
+    except Exception:
+        frappe.db.rollback(save_point="modifier_serie")
+        raise
+    return {"name": doc.name, "modifiees": [d.name for d, _ in changements]}
+
+
+def _modifier_occurrence(doc, data):
     for champ in ("titre", "date", "heure", "duree_min", "lieu", "lien_visio", "compte_rendu"):
         if champ in data:
             doc.set(champ, data.get(champ) or None)
+    if "duree_min" in data and cint(data["duree_min"]) < 1:
+        frappe.throw(_("La durée doit être supérieure à zéro."))
     if data.get("activites") is not None:
         doc.set("activites_suivies", [{"activite": a, "titre": frappe.db.get_value(SA.DOCTYPE, a, "titre")}
                                       for a in data["activites"] if a and frappe.db.exists(SA.DOCTYPE, a)])
     if "seulement_suivies" in data:
         doc.seulement_suivies = 1 if cint(data["seulement_suivies"]) else 0
     if data.get("employes") is not None:
-        presents = {p.employe: p.present for p in doc.participants}
-        doc.set("participants", [{"employe": e, "present": presents.get(e)} for e in data["employes"] if e])
-        prec = _derniere_avec({e for e in data["employes"] if e}, doc.date)
-        doc.precedente = prec.name if prec and prec.name != doc.name else None
+        employes = SA.liste_responsables(data["employes"])
+        if not employes:
+            frappe.throw(_("Choisissez au moins un participant actif."))
+        if etat_horaire(doc)["statut_affiche"] in ("Prévue", "En cours"):
+            SA.verifier_nouvelles_affectations(employes)
+        existants = {p.employe: p for p in doc.participants}
+        doc.set("participants", [existants[e] if e in existants else {"employe": e} for e in employes])
+        if not doc.serie:
+            prec = _derniere_avec(set(employes), doc.date)
+            doc.precedente = prec.name if prec and prec.name != doc.name else None
     doc.save(ignore_permissions=True)
-    return {"name": doc.name}
 
 
 @frappe.whitelist()
@@ -505,6 +615,22 @@ def presence(name, employe, present):
 
 
 @frappe.whitelist()
+def enregistrer_synthese(name, texte, precedente=None):
+    """Sauvegarde du brouillon sans écraser la saisie d'un autre participant."""
+    _gerer()
+    doc = frappe.get_doc(DOCTYPE, name, for_update=True)
+    texte = texte or ""
+    actuelle = doc.compte_rendu or ""
+    if actuelle != (precedente or "") and actuelle != texte:
+        frappe.throw(_("La synthèse a été modifiée ailleurs. Copiez votre brouillon avant de rouvrir la réunion."),
+                     frappe.TimestampMismatchError)
+    if actuelle != texte:
+        doc.compte_rendu = texte
+        doc.save(ignore_permissions=True)
+    return {"compte_rendu": texte}
+
+
+@frappe.whitelist()
 def noter(name, texte, employes=None, date_prevue=None, priorite=None):
     """Une note du compte-rendu. Avec `employes` (responsable) : c'est une DÉCISION, qui devient une activité
     affectée à ces employés, datée — elle apparaît aussitôt dans leur liste et sera relue à la prochaine réunion."""
@@ -525,7 +651,7 @@ def noter(name, texte, employes=None, date_prevue=None, priorite=None):
         act = frappe.new_doc(SA.DOCTYPE)
         act.update({"titre": texte[:140], "priorite": priorite if priorite in SA.PRIORITES else "Normale",
                     "date_debut": nowdate(), "date_prevue": str(getdate(date_prevue)) if date_prevue else None,
-                    "description": _("Décision de la réunion {0} du {1}.").format(doc.name, frappe.utils.formatdate(doc.date, "dd/MM/yyyy"))})
+                    "description": _("Décision de la réunion {0} du {1}.").format(doc.name, frappe.utils.formatdate(doc.date, "dd/MM/yyyy")) + "\n\n" + texte})
         for e in employes:
             act.append("affectations", {"employe": e})
         act.insert(ignore_permissions=True)

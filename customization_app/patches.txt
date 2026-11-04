@@ -117,3 +117,5 @@ customization_app.patches.ensure_compte_biat
 customization_app.patches.rapport_espece_biat
 customization_app.patches.caisse_especes_biat
 customization_app.patches.ensure_assistant_chatgpt
+customization_app.patches.etapes_plusieurs_responsables
+customization_app.patches.reunions_participants_actifs

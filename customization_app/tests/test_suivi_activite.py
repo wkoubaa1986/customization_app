@@ -313,10 +313,70 @@ class TestReunions(TestAcces):
         with self.assertRaises(frappe.PermissionError):
             self.RA.noter(reu.name, "x", employes=[self.e1])
         self.RA.noter(reu.name, "Photos des filtres manquantes")
-        liste = self.RA.get_reunions()                       # (d'autres réunions réelles de la base peuvent s'y trouver)
+        from unittest.mock import patch
+        # L'horaire du test est fixé avant la réunion, quel que soit le moment où la suite tourne.
+        with patch.object(self.RA, "now_datetime", return_value=frappe.utils.get_datetime(nowdate() + " 08:00:00")):
+            liste = self.RA.get_reunions()                   # (d'autres réunions réelles de la base peuvent s'y trouver)
         mienne = next(x for x in liste["a_venir"] if x["name"] == reu.name)
         self.assertEqual(mienne["nb_decisions"], 1)
         self.assertFalse(liste["peut_gerer"])
+
+    def test_etat_horaire_limites_et_reunion_qui_passe_minuit(self):
+        from datetime import timedelta
+        r = {"date": "2031-02-01", "heure": timedelta(hours=23, minutes=30), "duree_min": 90, "statut": "Prévue"}
+        for maintenant, attendu in [("2031-02-01 23:29:59", "Prévue"), ("2031-02-01 23:30:00", "En cours"),
+                                    ("2031-02-02 00:59:59", "En cours"), ("2031-02-02 01:00:00", "Terminée")]:
+            self.assertEqual(self.RA.etat_horaire(r, maintenant)["statut_affiche"], attendu)
+        for statut, attendu in [("Annulée", "Annulée"), ("Tenue", "Terminée")]:
+            r["statut"] = statut
+            self.assertEqual(self.RA.etat_horaire(r, "2031-02-01 20:00:00")["statut_affiche"], attendu)
+
+    def test_ancienne_reunion_classee_terminee_sans_cloturer_compte_rendu(self):
+        import frappe
+        from unittest.mock import patch
+        from frappe.utils import get_datetime
+        self._comme(self.ur)
+        finie = self.RA.creer_reunion("2031-02-01", heure="09:00:00", employes=[self.e1])
+        encours = self.RA.creer_reunion("2031-02-01", heure="10:00:00", employes=[self.e1])
+        future = self.RA.creer_reunion("2031-02-01", heure="14:00:00", employes=[self.e1])
+        annulee = self.RA.creer_reunion("2031-02-01", heure="15:00:00", employes=[self.e1])
+        self.RA.changer_statut(annulee.name, "Annulée")
+        self._comme(self.u1)
+        with patch.object(self.RA, "now_datetime", return_value=get_datetime("2031-02-01 10:15:00")):
+            liste = self.RA.get_reunions()
+            ouvertes = {r.name: r.statut_affiche for r in liste["a_venir"]}
+            passees = {r.name: r.statut_affiche for r in liste["passees"]}
+            self.assertNotIn(finie.name, ouvertes)
+            self.assertEqual(ouvertes[encours.name], "En cours")
+            self.assertEqual(ouvertes[future.name], "Prévue")
+            self.assertEqual(passees[finie.name], "Terminée")
+            self.assertEqual(passees[annulee.name], "Annulée")
+            self.assertEqual(self.RA.get_reunion(finie.name)["statut_affiche"], "Terminée")
+            self._comme(self.u2)
+            autres = self.RA.get_reunions()
+            self.assertNotIn(finie.name, {r.name for r in autres["a_venir"] + autres["passees"]})
+        finie.reload()
+        self.assertEqual(finie.statut, "Prévue")
+        self.assertIsNone(finie.tenue_le)
+        self._comme(self.ur)
+        self.RA.noter(finie.name, "Compte rendu complété après la réunion")
+        self.assertEqual(frappe.get_doc(self.RA.DOCTYPE, finie.name).notes[-1].texte, "Compte rendu complété après la réunion")
+        # Une réunion déplacée dans le futur revient dans la liste à venir.
+        self.RA.deplacer(finie.name, "2031-02-02", "09:00:00")
+        with patch.object(self.RA, "now_datetime", return_value=get_datetime("2031-02-01 10:15:00")):
+            self.assertIn(finie.name, {r.name for r in self.RA.get_reunions()["a_venir"]})
+
+    def test_calendrier_marque_une_reunion_passee_terminee(self):
+        import frappe
+        from unittest.mock import patch
+        from customization_app.api import _ajouter_reunions
+        self._comme(self.ur)
+        reu = self.RA.creer_reunion("2031-02-03", heure="09:00:00", employes=[self.e1])
+        events = []
+        with patch("frappe.utils.now_datetime", return_value=frappe.utils.get_datetime("2031-02-03 10:00:00")):
+            _ajouter_reunions(events, "2031-02-03", "2031-02-03", [])
+        event = next(e for e in events if e.name == reu.name)
+        self.assertEqual((event.status, event.color), ("Completed", "#22c55e"))
 
     def test_rappel_sans_sms(self):
         import frappe
@@ -368,13 +428,14 @@ class TestReunions(TestAcces):
         ouvertes = self.RA.activites_de([self.e1])
         self.assertTrue({a1, a2} <= {x["name"] for x in ouvertes})
         # Série : toutes les 2 semaines, 5 semaines → 3 réunions, chacune précédente de la suivante, un lien chacune.
+        precedente = self.RA._derniere_avec({self.e1}, nowdate())
         r = self.RA.creer(nowdate(), employes=[self.e1], toutes_les=2, jusquau=add_days(nowdate(), 35), activites=[a1, a2])
         self.assertEqual(len(r["noms"]), 3)
         docs = [frappe.get_doc(self.RA.DOCTYPE, n) for n in r["noms"]]
         self.assertEqual([str(d.date) for d in docs], [nowdate(), add_days(nowdate(), 14), add_days(nowdate(), 28)])
         self.assertEqual(len({d.serie for d in docs}), 1)
         self.assertEqual(len({d.lien_visio for d in docs}), 3)
-        self.assertEqual([d.precedente for d in docs], [None, docs[0].name, docs[1].name])
+        self.assertEqual([d.precedente for d in docs], [precedente.name if precedente else None, docs[0].name, docs[1].name])
         self.assertEqual([x.activite for x in docs[0].activites_suivies], [a1, a2])
         self.assertEqual(docs[0].seulement_suivies, 1)
         # L'ordre du jour ne parle que des activités suivies.
@@ -398,8 +459,226 @@ class TestReunions(TestAcces):
         with self.assertRaises(frappe.ValidationError):
             self.RA.creer(nowdate(), employes=[self.e1], toutes_les=1, jusquau=add_days(nowdate(), -1))
 
+    def test_participants_desactives_masques_dans_le_futur_historique_conserve(self):
+        import frappe
+        from frappe.utils import add_days, nowdate
+        future = self.RA.creer_reunion(add_days(nowdate(), 5), employes=[self.e1, self.e2])
+        passee = self.RA.creer_reunion(add_days(nowdate(), -5), employes=[self.e1, self.e2])
+        frappe.db.set_value("User", self.u1, "enabled", 0)
+        for liste, name, attendus in (("a_venir", future.name, {self.e2}), ("passees", passee.name, {self.e1, self.e2})):
+            d = self.RA.get_reunion(name)
+            self.assertEqual({p.employe for p in d["participants"]}, attendus)
+            self.assertEqual({p["employe"] for p in d["ordre_du_jour"]["employes"]}, attendus)
+            resume = next(r for r in self.RA.get_reunions()[liste] if r.name == name)
+            self.assertEqual(len(resume.participants), len(attendus))
+        # La lecture ne réécrit pas les participants enregistrés.
+        self.assertEqual(len(frappe.get_doc(self.RA.DOCTYPE, future.name).participants), 2)
+        frappe.db.set_value("Employee", self.e2, "status", "Inactive")
+        self.assertEqual(self.RA.get_reunion(future.name)["participants"], [])
+        self.assertEqual(self.RA.get_reunion(future.name)["ordre_du_jour"]["employes"], [])
+
+    def test_rappel_ignore_compte_desactive(self):
+        import frappe
+        from frappe.utils import add_days, nowdate
+        reu = self.RA.creer_reunion(add_days(nowdate(), 5), employes=[self.e1, self.e2])
+        frappe.db.set_value("User", self.u1, "enabled", 0)
+        bilan = self.RA.rappeler(reu, "veille", dict(self.RA.config(), reunion_rappel_sms=0))
+        self.assertEqual(bilan["notifies"], 1)
+        self.assertEqual(frappe.get_all("Notification Log", filters={"document_name": reu.name}, pluck="for_user"), [self.u2])
+
+    def test_nettoyage_participants_futurs_persistant_et_idempotent(self):
+        import frappe
+        from frappe.utils import add_days, nowdate
+        from customization_app.patches.reunions_participants_actifs import execute
+        future = self.RA.creer_reunion(add_days(nowdate(), 5), employes=[self.e1, self.e2])
+        seule = self.RA.creer_reunion(add_days(nowdate(), 6), employes=[self.e1])
+        passee = self.RA.creer_reunion(add_days(nowdate(), -5), employes=[self.e1, self.e2])
+        annulee = self.RA.creer_reunion(add_days(nowdate(), 7), employes=[self.e1, self.e2])
+        self.RA.changer_statut(annulee.name, "Annulée")
+        self.RA.noter(future.name, "Note à conserver")
+        hist = {n: frappe.get_doc(self.RA.DOCTYPE, n).as_dict() for n in (passee.name, annulee.name)}
+        frappe.db.set_value("User", self.u1, "enabled", 0)
+        resultats = execute()
+        self.assertTrue({future.name, seule.name} <= {r["reunion"] for r in resultats})
+        corrigee = frappe.get_doc(self.RA.DOCTYPE, future.name)
+        self.assertEqual([p.employe for p in corrigee.participants], [self.e2])
+        self.assertEqual(corrigee.notes[0].texte, "Note à conserver")
+        self.assertEqual(frappe.get_doc(self.RA.DOCTYPE, seule.name).participants, [])
+        for n, original in hist.items():
+            self.assertEqual(frappe.get_doc(self.RA.DOCTYPE, n).as_dict(), original)
+        self.assertEqual(execute(), [])
+
+    def test_sauvegarde_reunion_future_retire_ancienne_affectation_desactivee(self):
+        import frappe
+        from frappe.utils import add_days, nowdate
+        future = self.RA.creer_reunion(add_days(nowdate(), 5), employes=[self.e1, self.e2])
+        frappe.db.set_value("User", self.u1, "enabled", 0)
+        self.RA.noter(future.name, "Mise à jour après désactivation")
+        self.assertEqual([p.employe for p in frappe.get_doc(self.RA.DOCTYPE, future.name).participants], [self.e2])
+        with self.assertRaises(frappe.ValidationError):
+            self.RA.modifier(future.name, {"employes": [self.e1, self.e2]})
+
+    def test_modifier_serie_suite_seulement_et_preserver_historique(self):
+        import frappe
+        from frappe.utils import add_days, nowdate
+        noms = self.RA.creer_serie(add_days(nowdate(), -7), add_days(nowdate(), 35), 1, employes=[self.e1, self.e2])
+        # Inclut une ancienne occurrence encore Prévue, une clôturée et une annulée.
+        self.RA.changer_statut(noms[1], "Tenue", "Compte rendu passé")
+        self.RA.changer_statut(noms[4], "Annulée")
+        avant = {n: frappe.get_doc(self.RA.DOCTYPE, n).as_dict() for n in noms}
+        self.RA.noter(noms[3], "Note propre à cette occurrence")
+        frappe.db.set_value("User", self.u1, "enabled", 0)
+        info = self.RA.get_reunion(noms[2])
+        self.assertTrue(info["peut_modifier_serie"])
+        self.assertEqual(info["nb_serie_modifiables"], 4)
+        a = SA.enregistrer({"titre": "Activité de la nouvelle série", "employes": [self.e2]})["name"]
+        resultat = self.RA.modifier(noms[2], {"titre": "Nouveau point", "date": add_days(nowdate(), 8),
+            "heure": "15:30:00", "duree_min": 60, "lieu": "Bureau", "employes": [self.e2],
+            "activites": [a], "seulement_suivies": 1, "toutes_les_semaines": 2,
+            "lien_visio": "https://example.org/ne-pas-copier"}, portee="suivantes", modified=info["modified"])
+        selection = [noms[i] for i in (2, 3, 5, 6)]
+        self.assertEqual(resultat["modifiees"], selection)
+        for i, n in enumerate(selection):
+            d = frappe.get_doc(self.RA.DOCTYPE, n)
+            self.assertEqual(str(d.date), add_days(nowdate(), 8 + i * 14))
+            self.assertEqual((d.titre, str(d.heure), d.lieu, d.duree_min, d.toutes_les_semaines), ("Nouveau point", "15:30:00", "Bureau", 60, 2))
+            self.assertEqual([p.employe for p in d.participants], [self.e2])
+            self.assertEqual([r.activite for r in d.activites_suivies], [a])
+            self.assertEqual((d.lien_visio, d.precedente), (avant[n].lien_visio, avant[n].precedente))
+        for n in (noms[0], noms[1], noms[4]):
+            self.assertEqual(frappe.get_doc(self.RA.DOCTYPE, n).as_dict(), avant[n])
+        self.assertEqual(frappe.get_doc(self.RA.DOCTYPE, noms[3]).notes[0].texte, "Note propre à cette occurrence")
+
+    def test_modifier_une_occurrence_puis_decaler_la_suite(self):
+        import frappe
+        from frappe.utils import add_days, nowdate
+        noms = self.RA.creer_serie(add_days(nowdate(), 10), add_days(nowdate(), 24), 1, employes=[self.e1])
+        self.RA.modifier(noms[1], {"date": add_days(nowdate(), 18), "titre": "Exception"})
+        self.assertEqual([str(frappe.db.get_value(self.RA.DOCTYPE, n, "date")) for n in noms],
+                         [add_days(nowdate(), j) for j in (10, 18, 24)])
+        self.RA.modifier(noms[0], {"date": add_days(nowdate(), 12), "toutes_les_semaines": 1}, portee="suivantes")
+        # Fréquence inchangée : les exceptions gardent leur décalage.
+        self.assertEqual([str(frappe.db.get_value(self.RA.DOCTYPE, n, "date")) for n in noms],
+                         [add_days(nowdate(), j) for j in (12, 20, 26)])
+        self.assertEqual(frappe.db.get_value(self.RA.DOCTYPE, noms[1], "titre"), "Exception")
+
+    def test_modification_serie_validee_et_reservee_aux_responsables(self):
+        import frappe
+        from frappe.utils import add_days, nowdate
+        noms = self.RA.creer_serie(add_days(nowdate(), -7), add_days(nowdate(), 14), 1, employes=[self.e1])
+        with self.assertRaises(frappe.ValidationError):
+            self.RA.modifier(noms[0], {"titre": "Depuis le passé"}, portee="suivantes")
+        self._comme(self.u1)
+        with self.assertRaises(frappe.PermissionError):
+            self.RA.modifier(noms[2], {"titre": "Sans droit"}, portee="suivantes")
+        self._comme("Administrator")
+        for data in ({"toutes_les_semaines": 0}, {"toutes_les_semaines": 1.5}, {"date": add_days(nowdate(), -1)},
+                     {"employes": []}, {"compte_rendu": "À ne pas dupliquer"}, {"duree_min": 0}):
+            with self.assertRaises(frappe.ValidationError):
+                self.RA.modifier(noms[2], data, portee="suivantes")
+        vieux = self.RA.get_reunion(noms[2])["modified"]
+        self.RA.modifier(noms[2], {"titre": "Déjà modifié"})
+        with self.assertRaises(frappe.TimestampMismatchError):
+            self.RA.modifier(noms[2], {"titre": "Ancien écran"}, portee="suivantes", modified=vieux)
+        frappe.db.set_value("User", self.u1, "enabled", 0)
+        with self.assertRaises(frappe.ValidationError):
+            self.RA.modifier(noms[2], {"employes": [self.e1]}, portee="suivantes")
+
+    def test_modification_serie_annule_tout_si_une_occurrence_echoue(self):
+        import frappe
+        from frappe.utils import add_days, nowdate
+        from unittest.mock import patch
+        noms = self.RA.creer_serie(add_days(nowdate(), 10), add_days(nowdate(), 24), 1, employes=[self.e1])
+        titres = [frappe.db.get_value(self.RA.DOCTYPE, n, "titre") for n in noms]
+        original = self.RA._modifier_occurrence
+        def modifier_ou_echouer(doc, data):
+            if doc.name == noms[1]:
+                raise RuntimeError("Échec simulé")
+            original(doc, data)
+        with patch.object(self.RA, "_modifier_occurrence", side_effect=modifier_ou_echouer):
+            with self.assertRaises(RuntimeError):
+                self.RA.modifier(noms[0], {"titre": "Ne pas garder une série partielle"}, portee="suivantes")
+        self.assertEqual([frappe.db.get_value(self.RA.DOCTYPE, n, "titre") for n in noms], titres)
+
 
 class TestEtapesResponsablesOrdre(TestAcces):
+    def test_plusieurs_responsables_et_compatibilite_ancien_appel(self):
+        import frappe
+        import json
+        self._comme(self.ur)
+        name = SA.enregistrer({"titre": "Comptage à deux", "employes": [self.e1, self.e2], "etapes": [
+            {"libelle": "Compter les filtres", "responsables": [self.e1, self.e2, self.e1], "date_prevue": "2030-01-12"}]})["name"]
+        doc = frappe.get_doc(SA.DOCTYPE, name)
+        ligne = doc.etapes[0].name
+        self.assertEqual(SA.responsables_etape(doc.etapes[0]), [self.e1, self.e2])
+        self.assertEqual(doc.etapes[0].responsable, self.e1)
+        self.assertEqual(SA.get_activite(name)["etapes"][0]["responsables"], [self.e1, self.e2])
+        for employee in [self.e1, self.e2]:
+            self.assertIn(frappe.db.get_value("Employee", employee, "employee_name"), doc.etapes[0].responsable_nom)
+        SA.etape(name, "affecter", ligne=ligne, employes=json.dumps([self.e2, self.e1]))
+        doc.reload()
+        self.assertEqual(SA.responsables_etape(doc.etapes[0]), [self.e2, self.e1])
+        self.assertEqual(str(doc.etapes[0].date_prevue), "2030-01-12")
+        SA.etape(name, "affecter", ligne=ligne, employe=self.e1)
+        self.assertEqual(SA.get_activite(name)["etapes"][0]["responsables"], [self.e1])
+        SA.etape(name, "affecter", ligne=ligne, employes=[])
+        self.assertEqual(SA.get_activite(name)["etapes"][0]["responsables"], [])
+        SA.etape(name, "ajouter", libelle="Vérifier ensemble", employes=[self.e1, self.e2])
+        self.assertEqual(SA.get_activite(name)["etapes"][-1]["responsables"], [self.e1, self.e2])
+
+    def test_reprise_attributions_ancienne_version_idempotente(self):
+        import frappe
+        from customization_app.patches.etapes_plusieurs_responsables import reprendre_attributions
+        self._comme(self.ur)
+        name = SA.enregistrer({"titre": "Anciennes étapes", "employes": [self.e1, self.e2], "etapes": [
+            {"libelle": "Ancienne", "responsable": self.e1}, {"libelle": "Déjà multiple", "responsables": [self.e1, self.e2]}]})["name"]
+        doc = frappe.get_doc(SA.DOCTYPE, name)
+        frappe.db.set_value("Activite Etape", doc.etapes[0].name, "responsables_json", None)
+        doc.reload()
+        self.assertEqual(SA.responsables_etape(doc.etapes[0]), [self.e1])
+        reprendre_attributions()
+        reprendre_attributions()
+        doc.reload()
+        self.assertEqual([SA.responsables_etape(e) for e in doc.etapes], [[self.e1], [self.e1, self.e2]])
+
+    def test_employes_inactifs_et_comptes_desactives_exclus_des_choix(self):
+        import frappe
+        from customization_app import reunion_activite as RA
+        self._comme(self.ur)
+        name = SA.enregistrer({"titre": "Historique conservé", "employes": [self.e1, self.e2], "etapes": [
+            {"libelle": "Travail déjà fait", "responsables": [self.e1, self.e2]}]})["name"]
+        doc = frappe.get_doc(SA.DOCTYPE, name)
+        SA.etape(name, "basculer", ligne=doc.etapes[0].name)
+        reunion = RA.creer_reunion("2032-01-01", employes=[self.e1, self.e2])
+        frappe.db.set_value("User", self.u2, "enabled", 0)
+        frappe.db.set_value("Employee", self.e1, "status", "Inactive")
+        self.assertEqual({e["name"] for e in SA.get_context()["employes"]}, {self.er})
+        d = SA.get_activite(name)
+        self.assertTrue(all(not r["actif"] for r in d["affectations"]))
+        self.assertEqual({e["name"] for e in d["employes_disponibles"]}, {self.er})
+        self.assertEqual(d["etapes"][0]["responsables"], [])
+        self.assertEqual(d["etapes"][0]["responsables_historique"], [self.e1, self.e2])
+        with self.assertRaises(frappe.ValidationError):
+            SA.enregistrer({"titre": "Interdit", "employes": [self.e2]})
+        with self.assertRaises(frappe.ValidationError):
+            SA.etape(name, "affecter", ligne=doc.etapes[0].name, employes=[self.e2])
+        with self.assertRaises(frappe.ValidationError):
+            RA.creer_reunion("2032-01-02", employes=[self.e2])
+        self.assertTrue(all(not p["actif"] for p in RA.get_reunion(reunion.name)["participants"]))
+        SA.enregistrer({"name": name, "description": "Une note modifiée ne supprime pas l'historique"})
+        doc.reload()
+        self.assertEqual(SA.responsables_etape(doc.etapes[0]), [self.e1, self.e2])
+        self.assertTrue(doc.etapes[0].fait)
+
+    def test_responsables_hors_equipe_refuses_par_le_modele(self):
+        import frappe
+        self._comme(self.ur)
+        name = SA.enregistrer({"titre": "Équipe limitée", "employes": [self.e1], "etapes": ["Compter"]})["name"]
+        doc = frappe.get_doc(SA.DOCTYPE, name)
+        doc.etapes[0].update(SA.champs_responsables([self.e1, self.e2]))
+        with self.assertRaises(frappe.ValidationError):
+            doc.save()
+
     def test_responsable_ordre_et_restructuration(self):
         import frappe
         self._comme(self.ur)

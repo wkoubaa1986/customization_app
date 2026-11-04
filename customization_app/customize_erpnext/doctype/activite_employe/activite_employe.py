@@ -14,6 +14,8 @@ class ActiviteEmploye(Document):
     def validate(self):
         from customization_app import suivi_activite as SA
 
+        avant = self.get_doc_before_save()
+        anciennes_affectations = {r.employe for r in avant.affectations} if avant else set()
         vus, lignes = set(), []
         for r in self.get("affectations") or []:
             if r.employe and r.employe not in vus:
@@ -24,18 +26,26 @@ class ActiviteEmploye(Document):
         self.set("affectations", lignes)
         if not lignes:
             frappe.throw(_("Affectez l'activité à au moins un employé."))
+        SA.verifier_nouvelles_affectations(vus, anciennes_affectations)
         self.noms_employes = ", ".join(r.nom for r in lignes)[:140]
-        # Responsable d'étape : un des employés de l'activité, sinon la ligne perd son responsable.
+        anciennes_etapes = {e.name: e for e in avant.etapes} if avant else {}
+        noms = {r.employe: r.nom for r in lignes}
         for e in self.get("etapes") or []:
-            if e.responsable and e.responsable not in vus:
-                e.responsable = None
-            e.responsable_nom = (frappe.db.get_value("Employee", e.responsable, "employee_name") or e.responsable) if e.responsable else None
+            ancienne = anciennes_etapes.get(e.name)
+            precedents = SA.responsables_etape(ancienne) if ancienne else []
+            responsables = SA.responsables_etape(e)
+            if set(responsables) - vus - set(precedents):
+                frappe.throw(_("Les responsables d'une étape doivent appartenir à l'activité."))
+            # Une affectation retirée disparaît des étapes ouvertes ; le travail fait garde son historique.
+            responsables = [n for n in responsables if n in vus or (cint(e.fait) and n in precedents)]
+            SA.verifier_nouvelles_affectations(responsables, precedents)
+            e.update(SA.champs_responsables(responsables))
+            e.responsable_nom = ", ".join(noms.get(n) or frappe.db.get_value("Employee", n, "employee_name") or n for n in responsables)[:140] or None
 
         if not SA.est_responsable():
             moi = SA.employe_de(frappe.session.user)
             if not moi:
                 frappe.throw(_("Votre compte n'est rattaché à aucun employé."))
-            avant = self.get_doc_before_save()
             if avant:
                 if {r.employe for r in avant.affectations} != vus:
                     frappe.throw(_("Seul un responsable peut changer les employés d'une activité."))

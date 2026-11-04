@@ -371,7 +371,9 @@ def _ajouter_reunions(events, start, end, filters):
     # Qui voit quoi (19/10/2026) : un responsable du Suivi d'activité voit toutes les réunions ; un employé seulement
     # celles où il est participant — comme dans la page Suivi d'activité.
     from customization_app import suivi_activite as SA
+    from customization_app.reunion_activite import etat_horaire
     moi = None if SA.est_responsable() else (SA.employe_de() or "")
+    maintenant = frappe.utils.now_datetime()
     for r in reunions:
         mes = parts.get(r.name, [])
         participants = {p.employe for p in mes}
@@ -381,11 +383,12 @@ def _ajouter_reunions(events, start, end, filters):
             continue
         debut = frappe.utils.get_datetime("%s %s" % (r.date, frappe.utils.get_time(r.heure or "09:00:00")))
         fin = frappe.utils.add_to_date(debut, minutes=frappe.utils.cint(r.duree_min) or 45)
+        terminee = etat_horaire(r, maintenant)["statut_affiche"] == "Terminée"
         events.append(frappe._dict({
             "doctype": "Reunion Activite", "name": r.name, "starts_on": debut, "ends_on": fin, "all_day": 0,
-            "titre": "🗓️ %s%s" % (r.titre, " ✅" if r.statut == "Tenue" else ""),
-            "color": COULEUR_REUNION_TENUE if r.statut == "Tenue" else COULEUR_REUNION,
-            "status": "Completed" if r.statut == "Tenue" else "Open",
+            "titre": "🗓️ %s%s" % (r.titre, " ✅" if terminee else ""),
+            "color": COULEUR_REUNION_TENUE if terminee else COULEUR_REUNION,
+            "status": "Completed" if terminee else "Open",
             "custom_employé": ", ".join(p.nom for p in mes), "custom_type_dintervention": "Réunion d'équipe",
             "subject": "%s%s" % (r.lieu or "", (" · " + r.lien_visio) if r.lien_visio else ""),
             "reunion": 1,

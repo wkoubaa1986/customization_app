@@ -87,6 +87,14 @@
     .sa-etape select.sa-resp:hover, .sa-etape select.sa-resp:focus { border-color: #cbd5e1; background: #fff; }
     .sa-ia .etp select { height: 26px; font-size: 12px; padding: 2px 4px; width: 150px; }
     .sa-ajout input[type=date].sa-etape-date { flex: 0 0 140px; }
+    .sa-responsables { position: relative; min-width: 120px; max-width: 250px; font-size: 12px; }
+    .sa-responsables summary { cursor: pointer; padding: 4px 7px; border-radius: 6px; background: var(--control-bg,#f3f4f6); }
+    .sa-responsables-label { overflow-wrap: anywhere; }
+    .sa-responsables-choix { position: absolute; z-index: 20; min-width: 210px; max-width: 290px; max-height: 240px; overflow-y: auto; background: var(--card-bg,#fff); border: 1px solid var(--border-color,#ddd); border-radius: 8px; box-shadow: 0 4px 14px #0002; padding: 8px; }
+    .sa-responsables-choix label { display: flex; align-items: center; gap: 7px; font-weight: normal; margin: 0; padding: 5px; cursor: pointer; }
+    .sa-responsables-choix input[type=checkbox] { flex: 0 0 auto; }
+    .sa-responsables-choix button { margin-top: 6px; }
+    @media(max-width:760px) { .sa-etape,.sa-ajout { flex-wrap: wrap; } .sa-etape .lib { flex: 1 1 70%; } .sa-ajout .sa-nouvelle-etape { flex-basis: 100%; } .sa-responsables-choix { position: static; min-width: 0; } }
 
     .sa-onglets { display: flex; gap: 4px; margin-bottom: 12px; border-bottom: 1px solid var(--border-color,#e4e8ee); }
     .sa-onglet { padding: 8px 14px; font-size: 13.5px; font-weight: 600; color: #64748b; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; }
@@ -163,6 +171,7 @@
       <div id="sa-pour" style="display:none"><span class="lbl">Pour</span> <div class="sa-chips" id="sa-chips" style="display:inline-flex"></div></div>
       <div><span class="lbl">Prévue le</span> <input type="date" class="form-control" id="sa-date" style="display:inline-block"></div>
       <div><span class="lbl">Priorité</span> <select class="form-control" id="sa-prio" style="display:inline-block"></select></div>
+      <button type="button" class="btn btn-default btn-sm" id="sa-formaliser">✨ Formaliser avec l’IA</button>
     </div>
     <div class="sa-aide" id="sa-aide"></div>
   </div>
