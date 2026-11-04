@@ -902,6 +902,11 @@ doctype_js = {
 doctype_list_js = {
     "Item": "public/js/item_list.js",
 }
+# Plan comptable (arbre) : sections en couleur — comptes fermés en rouge, bancaires en bleu,
+# liquidités en vert, liste créance en orange (account_tree.js).
+doctype_tree_js = {
+    "Account": "public/js/account_tree.js",
+}
 # Page publique de suivi d'une intervention (lien envoyé par SMS) : /suivi/<code>
 website_route_rules = [
     {"from_route": "/suivi/<code>", "to_route": "suivi"},
