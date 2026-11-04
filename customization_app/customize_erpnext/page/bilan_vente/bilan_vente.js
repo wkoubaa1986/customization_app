@@ -316,7 +316,7 @@ class BilanVente {
     const t = s.totals;
     const n = s.orders.length;
     const cheques = (s.cheques || [])
-      .map((c) => `${esc(c.reference_no || "—")} : ${this._fmt(c.amount)}`)
+      .map((c) => `${esc(c.reference_no || "—")} : ${this._fmt(c.amount)}${c.en_banque ? " (encaissé)" : ""}`)
       .join(" · ");
     return `
     <div class="bv-section" data-owner="${esc(s.key)}">
@@ -342,6 +342,7 @@ class BilanVente {
           <span>${esc(s.solde.due_by)}</span>
           <span class="amount">${this._fmt(s.solde.amount)}</span>
         </div>
+        ${s.solde.cheques_banque > 0 ? `<div class="bv-cheques">Dont chèques déjà encaissés en banque : ${this._fmt(s.solde.cheques_banque)} (comptés comme les espèces).</div>` : ""}
         ${cheques ? `<div class="bv-cheques"><b>Chèques :</b> ${cheques}</div>` : ""}
         ${this._payments_detail(s)}
       </div>
@@ -367,7 +368,7 @@ class BilanVente {
                 <td>${p.posting_date ? frappe.datetime.str_to_user(p.posting_date) : "—"}</td>
                 <td>${this._doclink("Payment Entry", p.payment_entry)}</td>
                 <td>${this._doclink("Sales Order", p.order)}</td>
-                <td>${esc(p.customer || "")}</td>
+                <td>${p.customer ? this._doclink("Customer", p.customer) : ""}</td>
                 <td><span class="bv-badge ${esc(p.kind)}">${esc(p.mode || "—")}</span></td>
                 <td>${esc(p.paid_to || "—")}</td>
                 <td>${esc(p.reference_no || "")}</td>
@@ -459,7 +460,7 @@ class BilanVente {
       <button class="bv-order-head" type="button">
         <span class="bv-caret">▶</span>
         <span>${this._doclink("Sales Order", o.name, o.name, "bv-so")}</span>
-        <span class="bv-cust">${esc(o.customer)} · ${frappe.datetime.str_to_user(o.delivery_date)}</span>
+        <span class="bv-cust">${o.customer ? this._doclink("Customer", o.customer) : ""} · ${frappe.datetime.str_to_user(o.delivery_date)}</span>
         <span class="bv-num bv-ttc">${this._fmt(o.total_ttc)}</span>
         <span class="bv-num bv-paystate-cell"><span class="bv-paystate ${soldee ? "ok" : "due"}">${soldee ? "Soldée" : "Reste " + this._fmt(t.reste)}</span></span>
         <span class="bv-num bv-chip-cell"><span class="bv-chip ${ben_cls}">${t.benefice >= 0 ? "+" : "−"}${this._fmt(Math.abs(t.benefice))}</span></span>

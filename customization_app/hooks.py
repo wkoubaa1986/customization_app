@@ -264,6 +264,9 @@ doc_events = {
             "customization_app.commande_alertes.on_tache_change",
             # Atelier osmoseurs : la clôture de la dernière tâche liée valide le dossier.
             "customization_app.reparation_osmoseur.on_tache_change",
+            # Tâche affectée au partenaire : un partage manuel (lecture) de la commande passe en écriture
+            # AVANT le Server Script « Autorisation Sales order partenaire » (partage_commande_partenaire).
+            "customization_app.partage_commande_partenaire.on_tache_update",
         ],
         # Tâche supprimée : les simples renvois (ligne d'appel, message GPS, tournée,
         # visite) sont vidés AVANT le contrôle des liens — sinon une liste d'appels
@@ -882,7 +885,9 @@ doctype_js = {
     # Sales Order : Frappe concatène les deux, aucun n'écrase l'autre.
     "Sales Order": ["public/js/sales_order_aramex.js",
                     # Marge minimale en temps réel + prix HT sur document exonéré (marge_minimale).
-                    "public/js/sales_order_marge.js"],
+                    "public/js/sales_order_marge.js",
+                    # Commande en litige : la partager avec le partenaire la fait compter au Bilan Vente.
+                    "public/js/sales_order_partage_partenaire.js"],
     "Quotation": "public/js/sales_order_marge.js",
 }
 

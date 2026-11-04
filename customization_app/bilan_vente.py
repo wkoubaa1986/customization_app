@@ -23,7 +23,8 @@ Règles métier :
 - Paiements d'une commande = paiements alloués à ses factures validées
   + paiements alloués directement à la commande (sans double compte).
 - Solde de section = Espèces encaissées − Total achats TTC ; le signe
-  détermine qui doit à qui.
+  détermine qui doit à qui. Section Aqua World : les chèques DÉJÀ ENCAISSÉS
+  sur un compte bancaire de la société s'y ajoutent (cf. _comptes_banque).
 """
 
 import frappe
@@ -475,6 +476,20 @@ def _payments_by_order(so_names):
 
 # ---------------------------------------------------------------- assemblage
 
+def _comptes_banque() -> set:
+    """Les VRAIS comptes bancaires de la société : ceux des fiches « Bank Account » de la société (Zitouna, BIAT).
+
+    ⚠️ PAS LE TYPE DE COMPTE « Bank ». Il est aussi porté par tous les comptes d'attente (« Chèques - A&S »,
+    « Traite Bancaire », « Dettes », « Livraison Aramex », compte du partenaire…) : un chèque encore en
+    portefeuille y passerait pour encaissé.
+    """
+    cache = getattr(frappe.local, "bv_comptes_banque", None)
+    if cache is None:
+        cache = set(frappe.get_all("Bank Account", filters={"is_company_account": 1}, pluck="account")) - {None, ""}
+        frappe.local.bv_comptes_banque = cache
+    return cache
+
+
 def _classify(mode):
     if mode == "Espèces":
         return "especes"
@@ -483,7 +498,7 @@ def _classify(mode):
     return "autre"
 
 
-def _build_order(so, items, payments, tasks, resolve_price, margin, bons=None):
+def _build_order(so, items, payments, tasks, resolve_price, margin, bons=None, comptes_banque=frozenset()):
     order_items = []
     vente = achat = benefice = 0.0
     for it in items:
@@ -508,16 +523,19 @@ def _build_order(so, items, payments, tasks, resolve_price, margin, bons=None):
         })
 
     order_payments = []
-    especes = cheques = autres = paid = 0.0
+    especes = cheques = cheques_banque = autres = paid = 0.0
     cheques_list = []
     for p in payments:
         amount = flt(p.amount, PRECISION)
         kind = _classify(p.mode_of_payment)
+        en_banque = kind == "cheque" and p.get("paid_to") in comptes_banque
         if kind == "especes":
             especes += amount
         elif kind == "cheque":
             cheques += amount
-            cheques_list.append({"reference_no": p.reference_no, "amount": amount})
+            if en_banque:
+                cheques_banque += amount
+            cheques_list.append({"reference_no": p.reference_no, "amount": amount, "en_banque": en_banque})
         else:
             autres += amount
         paid += amount
@@ -529,6 +547,7 @@ def _build_order(so, items, payments, tasks, resolve_price, margin, bons=None):
             "reference_no": p.reference_no,
             "posting_date": str(p.posting_date) if p.posting_date else None,
             "paid_to": p.paid_to,
+            "en_banque": en_banque,
         })
 
     total_ttc = flt(so.grand_total, PRECISION)
@@ -547,6 +566,7 @@ def _build_order(so, items, payments, tasks, resolve_price, margin, bons=None):
             "benefice": flt(benefice, PRECISION),
             "especes": flt(especes, PRECISION),
             "cheques": flt(cheques, PRECISION),
+            "cheques_banque": flt(cheques_banque, PRECISION),
             "autres": flt(autres, PRECISION),
             "paid": flt(paid, PRECISION),
             "reste": flt(total_ttc - paid, PRECISION),
@@ -555,14 +575,18 @@ def _build_order(so, items, payments, tasks, resolve_price, margin, bons=None):
     }
 
 
-def _build_section(key, company, orders, margin, margin_note, due_pos, due_neg):
+def _build_section(key, company, orders, margin, margin_note, due_pos, due_neg, cheques_banque_dus=False):
+    """`cheques_banque_dus` : les chèques déjà encaissés sur un compte bancaire de la société comptent dans le
+    solde comme les espèces (section Aqua World, demande du 04/11/2026) — l'argent est chez Aqua World, il ne
+    doit pas disparaître de ce qu'elle doit. Un chèque encore en portefeuille ou impayé n'y entre pas."""
     totals = {"vente": 0.0, "achat": 0.0, "benefice": 0.0,
-              "especes": 0.0, "cheques": 0.0, "autres": 0.0, "reste": 0.0}
+              "especes": 0.0, "cheques": 0.0, "cheques_banque": 0.0, "autres": 0.0, "reste": 0.0}
     cheques = []
     payments_detail = []
     for o in orders:
         for field in ("vente", "achat", "benefice", "especes", "cheques", "autres"):
             totals[field] += o["totals"][field]
+        totals["cheques_banque"] += o["totals"].get("cheques_banque", 0.0)
         totals["reste"] += max(0.0, o["totals"]["reste"])
         cheques.extend(o["cheques"])
         for p in o["payments"]:
@@ -570,7 +594,8 @@ def _build_section(key, company, orders, margin, margin_note, due_pos, due_neg):
     totals = {k: flt(v, PRECISION) for k, v in totals.items()}
     payments_detail.sort(key=lambda p: (p["posting_date"] or "", p["payment_entry"]))
 
-    solde = flt(totals["especes"] - totals["achat"], PRECISION)
+    cheques_dans_solde = totals["cheques_banque"] if cheques_banque_dus else 0.0
+    solde = flt(totals["especes"] + cheques_dans_solde - totals["achat"], PRECISION)
     return {
         "key": key,
         "company": company,
@@ -582,6 +607,7 @@ def _build_section(key, company, orders, margin, margin_note, due_pos, due_neg):
         "solde": {
             "due_by": due_pos if solde >= 0 else due_neg,
             "amount": abs(solde),
+            "cheques_banque": flt(cheques_dans_solde, PRECISION),
         },
     }
 
@@ -640,6 +666,8 @@ def _excel_rows(data):
         rows.append(["Espèces", money(t["especes"]), "Chèques", money(t["cheques"]),
                      "Autres modes", money(t["autres"])])
         rows.append([s["solde"]["due_by"], money(s["solde"]["amount"])])
+        if s["solde"].get("cheques_banque"):
+            rows.append(["dont chèques déjà encaissés en banque", money(s["solde"]["cheques_banque"])])
         rows.append([])
         rows.append([f"Détail des paiements — {s['company']}"])
         rows.append(["Date", "Écriture", "Commande", "Client",
@@ -738,11 +766,13 @@ def get_data(month=None, base=None, exclure_ouvertes=None):
         it.item_code for rows in items_map.values() for it in rows
     )
 
+    comptes_banque = _comptes_banque()
+
     def build(orders, margin):
         return [
             _build_order(o, items_map.get(o.name, []), payments_map.get(o.name, []),
                          tasks_map.get(o.name, []), resolve_price, margin,
-                         bons_map.get(o.name, []))
+                         bons_map.get(o.name, []), comptes_banque)
             for o in orders
         ]
 
@@ -752,6 +782,7 @@ def get_data(month=None, base=None, exclure_ouvertes=None):
             0.0, None,
             due_pos=f"Total dû par {HOST_LABEL}",
             due_neg=f"Total dû par {PARTNER_LABEL}",
+            cheques_banque_dus=True,
         ),
         _build_section(
             "economiq", PARTNER_LABEL, build(done_by_partner, PARTNER_MARGIN),
