@@ -5363,5 +5363,63 @@
    }
   ],
   "title": "Appels"
+ },
+ {
+  "charts": [],
+  "content": "[{\"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\"><b>Clients B2B</b></span>\", \"col\": 12}}, {\"type\": \"paragraph\", \"data\": {\"text\": \"Ventes, rythme d\\u2019achat, fiche client et alertes des clients professionnels (Technicien, Quincaillerie, Compte Pro, Pro Grand Rayon).\", \"col\": 12}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Clients B2B (tableau de bord)\", \"col\": 4}}]",
+  "custom_blocks": [],
+  "docstatus": 0,
+  "doctype": "Workspace",
+  "for_user": null,
+  "hide_custom": 0,
+  "icon": "users",
+  "indicator_color": "green",
+  "is_hidden": 0,
+  "label": "Clients Pro",
+  "links": [],
+  "modified": "2026-11-04 19:00:00.000000",
+  "module": "Customize erpnext",
+  "name": "Clients Pro",
+  "number_cards": [],
+  "parent_page": null,
+  "public": 1,
+  "quick_lists": [],
+  "restrict_to_domain": null,
+  "roles": [
+   {
+    "parent": "Clients Pro",
+    "parentfield": "roles",
+    "parenttype": "Workspace",
+    "role": "Responsable B2B"
+   },
+   {
+    "parent": "Clients Pro",
+    "parentfield": "roles",
+    "parenttype": "Workspace",
+    "role": "System Manager"
+   }
+  ],
+  "sequence_id": 3.1,
+  "shortcuts": [
+   {
+    "color": null,
+    "doc_view": null,
+    "format": null,
+    "icon": null,
+    "kanban_board": null,
+    "label": "Clients B2B (tableau de bord)",
+    "link_to": "clients-b2b",
+    "parent": "Clients Pro",
+    "parentfield": "shortcuts",
+    "parenttype": "Workspace",
+    "report_ref_doctype": null,
+    "restrict_to_domain": null,
+    "stats_filter": null,
+    "type": "Page",
+    "url": null,
+    "idx": 1
+   }
+  ],
+  "title": "Clients Pro"
  }
 ]

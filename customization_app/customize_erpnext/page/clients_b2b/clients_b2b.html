@@ -1,0 +1,136 @@
+<div class="b2b-page">
+  <style>
+    .b2b-page { padding: 12px 16px; }
+    .b2b-card { background: var(--card-bg,#fff); border: 1px solid var(--border-color,#e4e8ee); border-radius: 12px;
+                padding: 12px 14px; margin-bottom: 12px; box-shadow: 0 1px 3px rgba(0,0,0,.05); }
+    .b2b-intro { font-size: 12.5px; color: var(--text-muted,#475569); }
+    .b2b-barre { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .b2b-barre select, .b2b-barre input { height: 30px; font-size: 12.5px; }
+    .b2b-barre input { max-width: 260px; }
+    .b2b-chip { display: inline-block; border: 1px solid var(--border-color,#cbd5e1); border-radius: 999px; padding: 3px 11px;
+                font-size: 12px; font-weight: 600; cursor: pointer; user-select: none; background: var(--bg-light-gray,#f8fafc); }
+    .b2b-chip.actif { border-color: #2563eb; background: rgba(37,99,235,.10); color: #1d4ed8; }
+    .b2b-chip .n { opacity: .7; font-weight: 500; margin-left: 4px; }
+    .b2b-aide summary { cursor: pointer; font-weight: 600; font-size: 12.5px; }
+    .b2b-aide-corps { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px; margin-top: 10px; font-size: 12.5px; }
+    .b2b-aide h6 { font-size: 11px; text-transform: uppercase; letter-spacing: .4px; color: var(--text-muted,#64748b); margin: 8px 0 6px; }
+    .b2b-aide ul { padding-left: 18px; margin: 0; }
+    .b2b-aide li { margin-bottom: 4px; line-height: 1.45; }
+    .b2b-aide code { font-size: 11.5px; }
+    .b2b-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 10px; margin-bottom: 12px; }
+    .b2b-kpi { border: 1px solid var(--border-color,#e4e8ee); border-radius: 10px; padding: 10px 12px; cursor: pointer;
+               background: var(--card-bg,#fff); }
+    .b2b-kpi.actif { border-color: #2563eb; box-shadow: 0 0 0 2px rgba(37,99,235,.15); }
+    .b2b-kpi .t { font-size: 11px; color: var(--text-muted,#6b7280); text-transform: uppercase; letter-spacing: .3px; font-weight: 700; }
+    .b2b-kpi .v { font-size: 20px; font-weight: 700; line-height: 1.2; margin: 2px 0; }
+    .b2b-kpi .d { font-size: 11.5px; color: var(--text-muted,#64748b); line-height: 1.5; }
+    .b2b-kpi .d b { color: var(--text-color,#0f172a); }
+    .b2b-kpi .avoir { color: #b45309; font-weight: 700; }
+    .b2b-alertes { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+    .b2b-scroll { overflow-x: auto; }
+    .b2b-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+    .b2b-table th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .3px; color: var(--text-muted,#64748b);
+                    padding: 6px 8px; border-bottom: 1px solid var(--border-color,#e2e8f0); white-space: nowrap; cursor: pointer; }
+    .b2b-table th.tri::after { content: " ▾"; color: #2563eb; }
+    .b2b-table th.tri.asc::after { content: " ▴"; }
+    .b2b-table td { padding: 6px 8px; border-bottom: 1px solid var(--border-color,#f1f5f9); vertical-align: top; }
+    .b2b-table tr.b2b-ligne { cursor: pointer; }
+    .b2b-table tr.b2b-ligne:hover td { background: var(--bg-light-gray,#f8fafc); }
+    .b2b-table .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .b2b-muted { color: var(--text-muted,#94a3b8); font-size: 11px; }
+    .b2b-nom { font-weight: 600; }
+    .b2b-badge { display: inline-block; border-radius: 999px; padding: 1px 8px; font-size: 10.5px; font-weight: 600; white-space: nowrap; }
+    .b2b-badge.groupe { background: #e2e8f0; color: #334155; }
+    .b2b-badge.a3 { background: #fee2e2; color: #991b1b; }
+    .b2b-badge.a2 { background: #ffedd5; color: #9a3412; }
+    .b2b-badge.a1 { background: #f1f5f9; color: #475569; }
+    .b2b-badge.ok { background: #dcfce7; color: #166534; }
+    .b2b-tend.up { color: #15803d; font-weight: 600; }
+    .b2b-tend.down { color: #b91c1c; font-weight: 600; }
+    .b2b-vide { color: var(--text-muted,#94a3b8); font-size: 12.5px; padding: 14px 4px; }
+    .b2b-actions button { margin-left: 2px; }
+    .b2b-table td.coche, .b2b-table th.coche { width: 24px; text-align: center; cursor: default; }
+    .b2b-visite-res { font-size: 11px; color: var(--text-muted,#64748b); }
+    .b2b-table tr.b2b-secteur td { background: var(--bg-light-gray,#f1f5f9); font-weight: 700; font-size: 12px; padding: 7px 8px; }
+    .b2b-table tr.b2b-secteur .desc { font-weight: 400; color: var(--text-muted,#64748b); margin-left: 8px; }
+    .b2b-chip.autour { border-color: #16a34a; background: rgba(22,163,74,.10); color: #166534; }
+    /* fiche (dialogue) */
+    .b2b-fiche { font-size: 12.5px; }
+    .b2b-fiche h5 { font-size: 11px; text-transform: uppercase; letter-spacing: .4px; color: var(--text-muted,#64748b); margin: 14px 0 6px; }
+    .b2b-fiche .grille { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+    .b2b-fiche .case { border: 1px solid var(--border-color,#e4e8ee); border-radius: 8px; padding: 6px 10px; }
+    .b2b-fiche .case .t { font-size: 10.5px; color: var(--text-muted,#64748b); text-transform: uppercase; }
+    .b2b-fiche .case .v { font-size: 15px; font-weight: 700; }
+    .b2b-fiche table { width: 100%; border-collapse: collapse; }
+    .b2b-fiche td, .b2b-fiche th { padding: 4px 6px; border-bottom: 1px solid var(--border-color,#f1f5f9); font-size: 12px; }
+    .b2b-fiche th { text-align: left; color: var(--text-muted,#64748b); font-weight: 600; font-size: 11px; }
+    .b2b-barre-mois { display: inline-block; height: 9px; background: #60a5fa; border-radius: 2px; vertical-align: middle; }
+    .b2b-barre-mois.conn { background: #fbbf24; }
+    .b2b-note { background: #fff7ed; border: 1px solid #fed7aa; border-radius: 8px; padding: 8px 10px; margin: 8px 0; }
+  </style>
+
+  <div class="b2b-card">
+    <div class="b2b-intro" id="b2b-intro">Chargement…</div>
+    <div class="b2b-barre" style="margin-top:8px;">
+      <span id="b2b-groupes"></span>
+      <select class="form-control" id="b2b-commercial" style="width:auto;"><option value="">Tous les commerciaux</option></select>
+      <select class="form-control" id="b2b-periode" style="width:auto;">
+        <option value="12m">12 derniers mois</option>
+        <option value="annee">Depuis le 1er janvier</option>
+      </select>
+      <input class="form-control" id="b2b-recherche" placeholder="Nom, code client, téléphone…">
+      <button class="btn btn-default btn-xs" id="b2b-rafraichir">Rafraîchir</button>
+      <button class="btn btn-primary btn-xs" id="b2b-planifier" disabled>🧭 Mettre en tournée</button>
+      <span class="b2b-muted" id="b2b-selection"></span>
+    </div>
+    <div class="b2b-barre" style="margin-top:8px;">
+      <span class="b2b-muted" style="font-weight:600;">Zone :</span>
+      <span id="b2b-secteurs"></span>
+      <select class="form-control" id="b2b-ville" style="width:auto;"><option value="">Toutes les villes</option></select>
+      <label class="b2b-chip" id="b2b-grouper-lbl" title="Une section par secteur, avec « tout cocher » par secteur"><input type="checkbox" id="b2b-grouper" style="margin:0 5px 0 0;vertical-align:-1px;">Regrouper par secteur</label>
+      <span id="b2b-autour"></span>
+    </div>
+  </div>
+
+  <details class="b2b-card b2b-aide" id="b2b-aide">
+    <summary>📖 Comment lire ce tableau, et qui y a accès</summary>
+    <div class="b2b-aide-corps">
+      <div class="b2b-aide-col">
+        <h6>D’où viennent les chiffres</h6>
+        <ul>
+          <li><b>CA HT, BL, panier</b> : bons de livraison <b>validés</b> sur la période, hors taxes, retours déduits. Jamais les commandes ni les factures.</li>
+          <li><b>Rythme</b> : nombre de jours entre deux achats du client (médiane sur ses 10 derniers jours d’achat). Sous 3 achats, c’est le rythme de son groupe qui sert.</li>
+          <li><b>Dernier BL</b> : la dernière livraison, et depuis combien de jours.</li>
+          <li><b>Tendance 6 m</b> : CA des 6 derniers mois comparé aux 6 mois d’avant.</li>
+          <li><b>Impayé</b> : factures validées non réglées (le seul chiffre lu sur les factures).</li>
+          <li><b>Fiche client</b> : dernière connexion du client à <code>/fiche_client</code>, nombre de connexions sur 90 jours, et ce qu’il y a fait (recherches, photos, listes de prix, PDF, rapport ristourne).</li>
+          <li><b>Ristourne</b> : palier atteint sur le CA HT depuis le 1er janvier, et ce qui manque pour le palier suivant.</li>
+          <li><b>Visite</b> : dernière visite commerciale <b>réalisée dans une tournée</b> (résultat, relance prévue) ou notée à la main (bouton 🤝), et la prochaine visite planifiée.</li>
+        </ul>
+        <h6>Composer une tournée par zone</h6>
+        <p>La ligne <b>Zone</b> filtre par <b>secteur</b> (celui de l’adresse du client : Secteur 1 = Raoued-Marsa-Gammarth…, voir l’info-bulle de chaque pastille) et par <b>ville</b>. <b>Regrouper par secteur</b> affiche une section par secteur avec une case « tout cocher » ; dans le détail d’un client, <b>📍 Autour</b> ne garde que les clients à moins de N km de lui (positions GPS des adresses, géocodées chaque nuit). Un client sans adresse ou sans position apparaît en « Sans secteur ».</p>
+        <h6>Le lien avec les tournées commerciales</h6>
+        <p>Cochez des clients puis <b>🧭 Mettre en tournée</b> : ils rejoignent une tournée existante, ou une nouvelle Tâche de travail « Tournée commerciale » pour un commercial et une date. Le commercial la déroule dans <b>Ma Tournée</b> (photo, GPS, compte rendu, résultat, relance) ; chaque visite clôturée remonte ici : dernière visite, résultat, et l’alerte <span class="b2b-badge a2">Relance dépassée</span> quand la relance promise est passée sans suite.</p>
+      </div>
+      <div class="b2b-aide-col">
+        <h6>Les alertes — qui voir, et pourquoi</h6>
+        <ul>
+          <li><span class="b2b-badge a3">En retard</span> silence plus long que 1,5 × son rythme habituel : à appeler.</li>
+          <li><span class="b2b-badge a3">Perdu ?</span> a déjà acheté, mais rien sur la période : à reconquérir.</li>
+          <li><span class="b2b-badge a3">Connecté sans acheter</span> s’est connecté à sa fiche depuis 2 à 30 jours sans livraison depuis : il cherche quelque chose.</li>
+          <li><span class="b2b-badge a2">CA en baisse</span> au moins 20 % de moins sur 6 mois.</li>
+          <li><span class="b2b-badge a2">Impayé</span> factures non réglées.</li>
+          <li><span class="b2b-badge a1">Jamais connecté</span> accès à la fiche autorisé, jamais utilisé : à lui montrer en visite.</li>
+          <li><span class="b2b-badge a1">Sans commercial</span> personne de rattaché sur sa fiche (bouton 👤).</li>
+        </ul>
+        <p class="b2b-muted">Les lignes sont triées par urgence : d’abord les clients qui cumulent les alertes qui pèsent (rouge, orange). Cliquer sur une pastille filtre le tableau ; cliquer sur une ligne ouvre le détail du client.</p>
+        <h6>Qui a accès</h6>
+        <p>Rôles <b id="b2b-roles">—</b>. Comptes actifs qui voient ce tableau : <span id="b2b-acces">—</span>.</p>
+      </div>
+    </div>
+  </details>
+
+  <div class="b2b-kpis" id="b2b-kpis"></div>
+  <div class="b2b-alertes" id="b2b-alertes"></div>
+  <div class="b2b-card"><div class="b2b-scroll" id="b2b-liste"><div class="b2b-vide">Chargement…</div></div></div>
+</div>

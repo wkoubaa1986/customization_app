@@ -1,0 +1,14 @@
+[
+ {
+  "doctype": "Role",
+  "name": "Responsable B2B",
+  "role_name": "Responsable B2B",
+  "desk_access": 1,
+  "is_custom": 1,
+  "disabled": 0,
+  "two_factor_auth": 0,
+  "restrict_to_domain": null,
+  "docstatus": 0,
+  "modified": "2026-11-04 19:00:00.000000"
+ }
+]

@@ -590,7 +590,8 @@ app_include_js = [_js("customer_quick_entry.js"),
                   # type d'intervention, employé, statut, durée, date planifiée.
                   _js("sales_order_tache_details.js"),
                   # 📜 Historique client + « 🔧 À proposer » : listes d'appels, rattrapage, commandes à traiter.
-                  _js("historique_client.js")]
+                  _js("historique_client.js"),
+                  _js("clients_b2b_onglet.js")]  # l'onglet « Clients B2B » ouvre le tableau de bord
 # Hide filter message shown in the awesomplete dropdown
 app_include_css = ["/assets/customization_app/css/hide_filter_message.css"]
 # doctype_calendar_js = {
@@ -704,7 +705,15 @@ fixtures = [
     {
         "doctype": "Workspace",
         "filters": [
-            ["name", "in", ["Selling", "Accounting", "Partenaire", "Analyse des Articles", "Buying", "Relances et partenaire", "Appels"]],
+            ["name", "in", ["Selling", "Accounting", "Partenaire", "Analyse des Articles", "Buying", "Relances et partenaire", "Appels",
+                            "Clients Pro"]],  # « Clients Pro » : l'onglet du tableau de bord clients-b2b (ensure_onglet_clients_b2b)
+        ],
+    },
+    # Rôle du responsable B2B : seul accès (avec System Manager) à la page clients-b2b et à l'onglet « Clients Pro ».
+    {
+        "doctype": "Role",
+        "filters": [
+            ["name", "in", ["Responsable B2B"]],
         ],
     },
     {
@@ -822,6 +831,10 @@ after_migrate = [
     "customization_app.patches.ensure_onglet_suivi_terrain.execute",
     # Onglet « Sous-traitant » : poste d'administration des sous-traitants (System Manager), 31/10/2026.
     "customization_app.patches.ensure_onglet_sous_traitant.execute",
+    # Onglet « Clients Pro » (tableau de bord clients-b2b) + rôle Responsable B2B, 04/11/2026.
+    "customization_app.patches.ensure_onglet_clients_b2b.execute",
+    # Le Server Script « renommer tournee » cassait toute création de Tournee Commerciale (champs disparus), 04/11/2026.
+    "customization_app.patches.desactiver_script_renommer_tournee.execute",
     # Graphe « Situation Mensuelle » sur 12 mois + raccourci vers la page de détail (onglet Comptabilité).
     "customization_app.patches.ensure_situation_mensuelle.execute",
     "customization_app.patches.ensure_raccourci_commandes_a_traiter.execute",
