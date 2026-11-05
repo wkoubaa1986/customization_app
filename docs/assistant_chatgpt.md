@@ -3,6 +3,9 @@
 ⚠️ OpenAI retire les GPT personnalisés le **11 décembre 2026** et leurs actions ne migrent pas. La voie durable est le
 **plugin** (application MCP) servi par `customization_app/mcp_chatgpt.py` ; le GPT avec actions reste utilisable jusque-là.
 
+> Un **second plugin, séparé**, gère la base article (création, modification, prix, images, groupes, ensembles) :
+> `docs/assistant_articles.md` (`customization_app.mcp_articles.serveur`, utilisateur `articles.chatgpt@aquaworld.local`).
+
 ## Plugin (application MCP) — la voie durable
 
 1. Clé API de l'utilisateur **assistant.chatgpt@aquaworld.local** (fiche User → API Access → Générer les clés).
@@ -18,6 +21,27 @@ Le protocole : MCP Streamable HTTP, JSON-RPC 2.0 (`initialize`, `tools/list`, `t
 
 Module : `customization_app/assistant_chatgpt.py` (actions, schéma OpenAPI, consignes du GPT). Utilisateur technique et
 rôle posés par le patch `ensure_assistant_chatgpt`.
+
+## Verrou par code (plugin MCP, écritures seulement)
+
+Pour qu'un téléphone avec ChatGPT ouvert ne suffise pas à passer une dépense : les neuf outils d'écriture (dépense,
+versement, dépense en euros, validation, correction, annulation, création / déplacement / annulation de rendez-vous)
+exigent un **jeton**. Les lectures restent libres. Module `customization_app/verrou_chatgpt.py`.
+
+```bash
+bench --site <site> execute customization_app.verrou_chatgpt.definir_code --kwargs "{'code': '4821', 'minutes': 10}"
+bench --site <site> execute customization_app.verrou_chatgpt.etat
+bench --site <site> execute customization_app.verrou_chatgpt.retirer_code
+```
+
+- Le code est stocké **haché** dans `site_config.json` (`assistant_chatgpt_code`) ; sans code posé, pas de verrou.
+- Déroulé : une écriture sans jeton répond « Verrouillé … » et rien n'est écrit ; ChatGPT demande le code, appelle
+  `deverrouiller(code)`, reçoit un jeton valable `minutes` (10 par défaut), et le repasse de lui-même dans `jeton` à
+  chaque écriture de la conversation. Jeton expiré → ChatGPT redemande le code. `minutes: 0` = pas de jeton, le code
+  lui-même est exigé à chaque écriture (le code en clair est toujours accepté à la place du jeton).
+- Cinq codes faux de suite bloquent le déverrouillage quinze minutes.
+- Limite : le code transite par la conversation ChatGPT. Le verrou protège contre un téléphone entre d'autres mains,
+  pas contre OpenAI. Le GPT personnalisé (actions REST) n'est pas couvert ; il disparaît le 11/12/2026.
 
 ## Côté ERPNext (une fois, en prod)
 

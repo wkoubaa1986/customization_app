@@ -124,7 +124,8 @@ def moi():
     _acces()
     return {"utilisateur": frappe.session.user, "societe": CD.COMPANY, "aujourd_hui": nowdate(), "plafond_dt": PLAFOND_DT,
             "modes_de_paiement": list(MODES),
-            "actions": ["comptes_de_charge", "chercher_fournisseur", "chercher_client", "stock_article", "saisir_depense", "mes_saisies",
+            "verrou": bool(frappe.conf.get("assistant_chatgpt_code")),
+            "actions": ["deverrouiller", "comptes_de_charge", "chercher_fournisseur", "chercher_client", "stock_article", "saisir_depense", "mes_saisies",
                         "saisir_depense_euros", "banques", "verser_en_banque", "valider_ecriture", "annuler_ecriture", "corriger_ecriture",
                         "rendez_vous", "creneaux_rendez_vous", "creer_rendez_vous", "deplacer_rendez_vous", "annuler_rendez_vous"]}
 
@@ -198,6 +199,14 @@ def saisir_depense(date, libelle, montant_ttc, compte_charge, mode="Espèces", t
         je.submit()
     return dict(_fiche(je), libelle=libelle, montant_ttc=flt(montant_ttc, 3), tva=flt(tva, 3), compte_charge=compte_charge,
                 mode=mode, credit=CD.compte_credit(mode))
+
+
+@frappe.whitelist(methods=["POST"])
+def deverrouiller(code):
+    """Déverrouille les écritures du plugin avec le code de l'utilisateur (verrou_chatgpt) : renvoie le jeton à repasser."""
+    _acces()
+    from customization_app import verrou_chatgpt as V
+    return V.deverrouiller(code)
 
 
 @frappe.whitelist()
@@ -676,6 +685,8 @@ OUTILS = {
         "reference": ["string", "Numéro de facture ou de reçu"],
         "valider": ["integer", "1 pour soumettre tout de suite, 0 (défaut) pour laisser en brouillon"],
     }, True, ["date", "libelle", "montant_ttc", "compte_charge"]),
+    "deverrouiller": ("Déverrouiller les écritures avec le code de l'utilisateur : renvoie un jeton à passer dans `jeton` à chaque écriture (dépense, versement, validation, correction, annulation, rendez-vous)", {
+        "code": ["string", "Le code de déverrouillage donné par l'utilisateur"]}, True, None),
     "mes_saisies": ("Dernières écritures passées par l'assistant", {"limite": ["integer", "Nombre, 20 par défaut"]}, False, []),
     "banques": ("Comptes bancaires où verser et comptes d'espèces", {}, False, None),
     "verser_en_banque": ("Versement d'espèces d'une caisse vers une banque (écriture validée par défaut)", {
@@ -763,13 +774,14 @@ def schema_openapi(serveur: str) -> dict:
     }
 
 
-def outils_mcp() -> list[dict]:
-    """La liste d'outils du plugin MCP (name, description, inputSchema), générée depuis OUTILS. Pure."""
+def outils_mcp(outils: dict | None = None) -> list[dict]:
+    """La liste d'outils du plugin MCP (name, description, inputSchema), générée depuis OUTILS (ou un autre catalogue
+    de même forme ; un troisième élément dans [type, description, complément] s'ajoute au schéma du paramètre). Pure."""
     out = []
-    for nom, (resume, params, _post, requis) in OUTILS.items():
+    for nom, (resume, params, _post, requis) in (outils if outils is not None else OUTILS).items():
+        props = {k: dict({"type": v[0], "description": v[1]}, **(v[2] if len(v) > 2 else {})) for k, v in params.items()}
         out.append({"name": nom, "description": resume,
-                    "inputSchema": {"type": "object", "properties": {k: {"type": v[0], "description": v[1]} for k, v in params.items()},
-                                    "required": list(params) if requis is None else requis}})
+                    "inputSchema": {"type": "object", "properties": props, "required": list(params) if requis is None else requis}})
     return out
 
 
@@ -785,6 +797,9 @@ lien). N'invente aucun contrôle, ne réclame pas un champ que la réponse ne co
 une vérification que tu n'as pas faite. « statut » dit si l'écriture est validée ou en brouillon ; « equilibree » et « controle »
 disent que tout est en ordre. Si on te demande de valider un brouillon, appelle valider_ecriture sans question supplémentaire.
 Les montants s'écrivent en DT avec trois décimales (500,000 DT).
+VERROU : si une écriture répond « Verrouillé », demande à l'utilisateur son code de déverrouillage (jamais tu ne le devines ni ne le
+proposes), appelle deverrouiller(code), puis rappelle l'écriture avec le jeton reçu dans `jeton`. Garde ce jeton pour les écritures
+suivantes de la conversation ; s'il a expiré, redemande le code. Ne redemande pas le code pour une lecture.
 Quand on t'envoie une photo de facture ou de reçu : lis fournisseur, date, montant TTC, TVA et son taux, numéro de pièce.
 Appelle comptes_de_charge pour choisir le compte exact. Récapitule en une ligne (date, libellé, TTC, TVA, compte, mode) et
 demande confirmation AVANT d'appeler saisir_depense. Mode « Espèces » sauf indication. Laisse en brouillon (valider=0) sauf
