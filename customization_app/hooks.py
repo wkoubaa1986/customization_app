@@ -573,7 +573,7 @@ app_include_js = [_js("customer_quick_entry.js"),
                   # Clôture guidée des tâches : photos obligatoires + code superviseur.
                   _js("tache_photos_cloture.js"),
                   _js("suivi_activite_onglet.js"),  # l'onglet « Suivi d'activité » ouvre l'outil
-                  _js("situation_mensuelle_clic.js"),  # graphe Situation Mensuelle → page de détail
+                  _js("situation_mensuelle_clic.js"),  # graphes Situation Mensuelle et Pertes et Profits → page de détail
                   _js("bl_magasin_alerte.js"),  # bandeau rouge du magasinier principal : BL à approuver / à vérifier
                   # 📨 SMS / e-mail au client depuis la fiche tâche, avec modèles prédéfinis
                   # (technicien + téléphone injectés automatiquement, commande liée si présente).
@@ -837,6 +837,8 @@ after_migrate = [
     "customization_app.patches.desactiver_script_renommer_tournee.execute",
     # Graphe « Situation Mensuelle » sur 12 mois + raccourci vers la page de détail (onglet Comptabilité).
     "customization_app.patches.ensure_situation_mensuelle.execute",
+    # Raccourci « Pertes et Profits (détail) » : choisir ce qui compte dans le graphique Pertes et Profits (05/11/2026).
+    "customization_app.patches.ensure_page_pertes_profits.execute",
     "customization_app.patches.ensure_raccourci_commandes_a_traiter.execute",
     # Marge minimale de vente : champs de trace sur la ligne de commande + réglage par défaut (15 %).
     "customization_app.patches.ensure_marge_minimale.execute",

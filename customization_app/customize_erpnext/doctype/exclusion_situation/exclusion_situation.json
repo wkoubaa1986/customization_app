@@ -11,6 +11,7 @@
   "rubrique",
   "mode",
   "montant_exclu",
+  "portee",
   "column_break_1",
   "voucher_type",
   "voucher_no",
@@ -27,7 +28,7 @@
    "reqd": 1,
    "in_list_view": 1,
    "in_standard_filter": 1,
-   "options": "Coût de la marchandise\nCharges\nTVA Achat"
+   "options": "Coût de la marchandise\nCharges\nTVA Achat\nVentes H.T"
   },
   {
    "fieldname": "mode",
@@ -44,6 +45,17 @@
    "label": "Montant omis",
    "in_list_view": 1,
    "description": "Pour une omission totale : la contribution de la pièce au moment de l'omission (affichage)."
+  },
+  {
+   "fieldname": "portee",
+   "fieldtype": "Select",
+   "label": "Écran",
+   "reqd": 1,
+   "default": "Situation mensuelle",
+   "options": "Situation mensuelle\nPertes et Profits",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "description": "L'écran où la pièce cesse de compter : la situation mensuelle, ou Pertes et Profits (onglet Comptabilité). Chacun gère les siennes."
   },
   {
    "fieldname": "column_break_1",
@@ -90,7 +102,7 @@
   }
  ],
  "links": [],
- "modified": "2026-10-01 21:00:00.000000",
+ "modified": "2026-11-05 18:00:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Exclusion Situation",

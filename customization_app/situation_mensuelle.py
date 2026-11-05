@@ -29,6 +29,12 @@ from frappe import _
 from frappe.utils import cint, flt, getdate, nowdate
 
 DOCTYPE_EXCLUSION = "Exclusion Situation"
+#: À quel écran appartient une omission (champ `portee`, 05/11/2026) : cette page, ou la page Pertes et Profits
+#: (customization_app.pertes_profits). Chaque écran ne voit et ne gère QUE les siennes : omettre une pièce de Pertes
+#: et Profits ne change rien ici, et inversement. Vide = « Situation mensuelle » (omissions d'avant le champ).
+PORTEE_SITUATION, PORTEE_PNL = "Situation mensuelle", "Pertes et Profits"
+PORTEES = (PORTEE_SITUATION, PORTEE_PNL)
+VUE_SITUATION, VUE_PNL = "situation", "pnl"
 RUBRIQUES = {                       # rubrique -> (compte parent, débits seulement ?)
     "Coût de la marchandise": ("Charges de Stock - A&S", False),
     "Charges": ("Charges Indirectes - A&S", False),
@@ -130,6 +136,11 @@ def _pieces(rubrique: str, debut, fin) -> dict:
     return {(vt, vn): flt(d) if debit_seul else flt(d) - flt(c) for vt, vn, d, c in rows}
 
 
+def compte_dans(portee: str | None, vue: str) -> bool:
+    """L'omission appartient-elle à cet écran (« situation » ou « pnl ») ? Pure."""
+    return (portee or PORTEE_SITUATION) == (PORTEE_PNL if vue == VUE_PNL else PORTEE_SITUATION)
+
+
 def _part_omise(exclusion, contribution: float) -> float:
     if exclusion.mode == "Totale":
         return contribution
@@ -137,13 +148,16 @@ def _part_omise(exclusion, contribution: float) -> float:
     return signe * min(flt(exclusion.montant_exclu), abs(contribution))
 
 
-def _exclusions(rubrique: str, pieces) -> dict:
+def _exclusions(rubrique: str, pieces, vue: str = VUE_SITUATION) -> dict:
+    """Les omissions de la rubrique, propres à l'écran `vue`, qui touchent ces pièces."""
     if not pieces:
         return {}
     # Le registre est petit : on le lit en entier plutôt que de filtrer sur des milliers de pièces (vue « Total »).
     rows = frappe.get_all(DOCTYPE_EXCLUSION, filters={"rubrique": rubrique},
-                          fields=["name", "voucher_type", "voucher_no", "mode", "montant_exclu", "motif", "owner", "creation"])
-    return {(r.voucher_type, r.voucher_no): r for r in rows if (r.voucher_type, r.voucher_no) in pieces}
+                          fields=["name", "voucher_type", "voucher_no", "mode", "montant_exclu", "motif", "owner", "creation",
+                                  "portee"])
+    return {(r.voucher_type, r.voucher_no): r for r in rows
+            if (r.voucher_type, r.voucher_no) in pieces and compte_dans(r.portee, vue)}
 
 
 def rubrique_totale(rubrique: str, debut, fin) -> dict:
@@ -511,10 +525,12 @@ def omettre(rubrique, voucher_type, voucher_no, mode="Totale", montant=None, mot
             frappe.throw(_("Montant à omettre entre 0 et {0}.").format(frappe.format(abs(contribution), {"fieldtype": "Currency"})))
     else:
         mode, montant = "Totale", abs(contribution)
-    nom = frappe.db.get_value(DOCTYPE_EXCLUSION, {"rubrique": rubrique, "voucher_type": voucher_type, "voucher_no": voucher_no})
+    nom = frappe.db.get_value(DOCTYPE_EXCLUSION, {"rubrique": rubrique, "voucher_type": voucher_type, "voucher_no": voucher_no,
+                                                  "portee": PORTEE_SITUATION})
     doc = frappe.get_doc(DOCTYPE_EXCLUSION, nom) if nom else frappe.new_doc(DOCTYPE_EXCLUSION)
     doc.update({"rubrique": rubrique, "voucher_type": voucher_type, "voucher_no": voucher_no, "mode": mode,
-                "montant_exclu": montant, "motif": motif.strip(), "date_piece": r[0], "montant_piece": contribution})
+                "montant_exclu": montant, "motif": motif.strip(), "date_piece": r[0], "montant_piece": contribution,
+                "portee": PORTEE_SITUATION})
     doc.save()
     return {"name": doc.name}
 
@@ -531,9 +547,10 @@ def retablir(name):
 def get_omissions(mode="mois", mois=None, annee=None):
     _lecture()
     p = periode(mode, mois, annee)
-    rows = frappe.get_all(DOCTYPE_EXCLUSION, filters={"date_piece": ["between", [p["tva_debut"], p["fin"]]]},
+    rows = frappe.get_all(DOCTYPE_EXCLUSION, filters={"date_piece": ["between", [p["tva_debut"], p["fin"]]],
+                                                      "portee": PORTEE_SITUATION},
                           fields=["name", "rubrique", "voucher_type", "voucher_no", "mode", "montant_exclu", "montant_piece",
-                                  "motif", "owner", "date_piece"], order_by="date_piece desc")
+                                  "motif", "owner", "date_piece", "portee"], order_by="date_piece desc")
     noms = dict(frappe.get_all("User", filters={"name": ["in", list({r.owner for r in rows})]},
                                fields=["name", "full_name"], as_list=True)) if rows else {}
     for r in rows:
