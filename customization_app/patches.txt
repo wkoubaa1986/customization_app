@@ -121,3 +121,4 @@ customization_app.patches.etapes_plusieurs_responsables
 customization_app.patches.reunions_participants_actifs
 customization_app.patches.ensure_assistant_articles
 customization_app.patches.pertes_profits_rapport
+customization_app.patches.reposer_partages_taches_partenaire

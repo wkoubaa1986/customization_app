@@ -402,9 +402,11 @@ doc_events = {
     # par patch) ne pouvaient pas faire : un Maintenance Manager ne validait plus.
     "Liste Appelle Entretien": {
         # Le partage automatique avec le compte partenaire (after_insert → partage_partenaire.partager) est RETIRÉ le
-        # 03/10/2026 : le partenaire n'appelle pas nos clients, il exécute les tâches qu'on lui affecte. Le retrait à la
-        # validation reste, pour nettoyer les partages des listes encore ouvertes.
-        "on_submit": "customization_app.partage_partenaire.retirer_partages",
+        # 03/10/2026 : le partenaire n'appelle pas nos clients, il exécute les tâches qu'on lui affecte.
+        # Le retrait à la validation (on_submit → retirer_partages) est RETIRÉ le 06/11/2026 : plus aucune liste ne
+        # partageait rien, il ne supprimait donc QUE les partages posés par les tâches partenaire encore ouvertes
+        # (Server Script « Autorisation Sales order partenaire ») — le partenaire perdait l'accès au client de sa
+        # tâche (Tache-09310). Réparation : patches/reposer_partages_taches_partenaire.
         # Lignes « a été appelé » → cases du client + visites marquées appelées (remplace le Server Script « update donnee appelle »).
         "on_update": "customization_app.liste_appels.synchroniser_appels",
     },

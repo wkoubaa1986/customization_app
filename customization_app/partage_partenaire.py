@@ -15,6 +15,11 @@ passaient ; Salma (Maintenance Manager) prenait « Vous devez avoir
 l'autorisation de "Partager" » à la validation (29/09/2026). Ici les partages
 sont posés et retirés avec `ignore_share_permission` : c'est une règle métier
 de la liste, pas un geste de l'utilisateur.
+
+⚠️ PLUS BRANCHÉ (cf. hooks.py, « Liste Appelle Entretien ») : `partager` depuis
+le 03/10/2026, `retirer_partages` depuis le 06/11/2026. Le retrait ne distingue
+pas un partage posé par la liste de celui posé par une TÂCHE partenaire ouverte
+pour le même client : ne pas le rebrancher sans ce tri.
 """
 
 import frappe
