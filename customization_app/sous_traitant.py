@@ -34,6 +34,10 @@ ROLE = "Sous-traitant"
 ROLE_RESPONSABLE = "Responsable sous-traitant"
 SUPERVISEURS = ("System Manager", ROLE_RESPONSABLE)
 CHAMP_FLAG = "custom_sous_traitant"
+#: l'ÉCRAN SIMPLIFIÉ du téléphone (Ma journée, agenda, mon stock, ma caisse, clôture mobile) sans les règles
+#: d'argent du sous-traitant : un technicien interne coché ici a le même écran, mais sa caisse et son stock
+#: restent ceux d'un employé (décision utilisateur 10/11/2026, arrivee_employe.py).
+CHAMP_ECRAN = "custom_ecran_simplifie"
 CHAMP_COMPTE = "custom_compte_caisse"
 CHAMP_COULEUR = "custom_couleur"
 COMPTE_PARENT = "Comptes bancaires - A&S"
@@ -180,13 +184,28 @@ def _champs_prets() -> bool:
     return frappe.db.has_column("Employee", CHAMP_FLAG)
 
 
-def employe_courant(user=None):
-    """La fiche employé SOUS-TRAITANT de l'utilisateur, ou None."""
+def sous_traitant_courant(user=None):
+    """La fiche employé SOUS-TRAITANT de l'utilisateur, ou None — pour les règles d'ARGENT et de DROITS
+    (caisse à son compte, période hebdomadaire, ses tâches seulement)."""
     user = user or frappe.session.user
     if not _champs_prets():
         return None
     return frappe.db.get_value("Employee", {"user_id": user, "status": "Active", CHAMP_FLAG: 1},
                                ["name", "employee_name", "custom_warehouse", CHAMP_COMPTE], as_dict=True)
+
+
+def employe_courant(user=None):
+    """La fiche employé de l'utilisateur qui a l'ÉCRAN SIMPLIFIÉ : sous-traitant, ou technicien coché
+    « écran simplifié » (10/11/2026). Pour l'écran (Ma journée, mon stock, clôture mobile) — jamais pour l'argent."""
+    user = user or frappe.session.user
+    if not _champs_prets():
+        return None
+    filtres = {"user_id": user, "status": "Active"}
+    champs = ["name", "employee_name", "custom_warehouse", CHAMP_COMPTE]
+    st = frappe.db.get_value("Employee", dict(filtres, **{CHAMP_FLAG: 1}), champs, as_dict=True)
+    if st or not frappe.db.has_column("Employee", CHAMP_ECRAN):
+        return st
+    return frappe.db.get_value("Employee", dict(filtres, **{CHAMP_ECRAN: 1}), champs, as_dict=True)
 
 
 def est_sous_traitant(employe: str) -> bool:
@@ -217,14 +236,14 @@ def couleur_calendrier(employe: str):
 
 def permission_query_conditions_tache(user=None):
     """Un sous-traitant ne liste que SES tâches (calendrier, liste, Ma journée). Les autres : rien de changé."""
-    emp = employe_courant(user)
+    emp = sous_traitant_courant(user)
     if not emp or _est_supervision():
         return ""
     return "`tabTache de travail`.`custom_choix_du_staff` = %s" % frappe.db.escape(emp.name)
 
 
 def has_permission_tache(doc, user=None, permission_type=None):
-    emp = employe_courant(user)
+    emp = sous_traitant_courant(user)
     if not emp or _est_supervision():
         return True
     return doc.get("custom_choix_du_staff") == emp.name
@@ -232,14 +251,14 @@ def has_permission_tache(doc, user=None, permission_type=None):
 
 def permission_query_conditions_verification(user=None):
     """Ses vérifications de stock : celles de SON entrepôt."""
-    emp = employe_courant(user)
+    emp = sous_traitant_courant(user)
     if not emp or _est_supervision():
         return ""
     return "`tabVerification Stock`.`entrepot` = %s" % frappe.db.escape(emp.custom_warehouse or "")
 
 
 def has_permission_verification(doc, user=None, permission_type=None):
-    emp = employe_courant(user)
+    emp = sous_traitant_courant(user)
     if not emp or _est_supervision():
         return True
     return bool(emp.custom_warehouse) and doc.get("entrepot") == emp.custom_warehouse
@@ -247,7 +266,7 @@ def has_permission_verification(doc, user=None, permission_type=None):
 
 def permission_query_conditions_cloture_caisse(user=None):
     """Ses clôtures de caisse : la caisse à son nom, ou celles qu'il a faites."""
-    emp = employe_courant(user)
+    emp = sous_traitant_courant(user)
     if not emp or _est_supervision():
         return ""
     return "(`tabCloture Caisse`.`caisse` = {n} or `tabCloture Caisse`.`owner` = {u})".format(
@@ -255,20 +274,25 @@ def permission_query_conditions_cloture_caisse(user=None):
 
 
 def has_permission_cloture_caisse(doc, user=None, permission_type=None):
-    emp = employe_courant(user)
+    emp = sous_traitant_courant(user)
     if not emp or _est_supervision():
         return True
     return doc.get("caisse") == emp.employee_name or doc.get("owner") == (user or frappe.session.user)
 
 
 def boot_session(bootinfo):
-    """`frappe.boot.sous_traitant` : l'écran sait d'emblée s'il parle à un sous-traitant."""
+    """`frappe.boot.sous_traitant` : l'écran sait d'emblée s'il parle à un sous-traitant (caisse, période).
+    `frappe.boot.ecran_simplifie` : sous-traitant OU technicien à écran simplifié (navigation du téléphone)."""
     try:
+        st = sous_traitant_courant()
+        bootinfo.sous_traitant = ({"employe": st.name, "nom": st.employee_name, "entrepot": st.custom_warehouse}
+                                  if st else None)
         emp = employe_courant()
-        bootinfo.sous_traitant = ({"employe": emp.name, "nom": emp.employee_name, "entrepot": emp.custom_warehouse}
-                                  if emp else None)
+        bootinfo.ecran_simplifie = ({"employe": emp.name, "nom": emp.employee_name, "entrepot": emp.custom_warehouse,
+                                     "sous_traitant": bool(st)} if emp else None)
     except Exception:
         bootinfo.sous_traitant = None
+        bootinfo.ecran_simplifie = None
 
 
 # --------------------------------------------------------------------------- son stock
@@ -329,7 +353,7 @@ def _prix(codes: list) -> dict:
 def _mien_ou_supervision():
     emp = employe_courant()
     if not emp:
-        frappe.throw(_("Réservé aux sous-traitants."), frappe.PermissionError)
+        frappe.throw(_("Réservé aux sous-traitants et aux techniciens à écran simplifié."), frappe.PermissionError)
     return emp
 
 

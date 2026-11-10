@@ -8,7 +8,8 @@
  * écrans : Ma journée, Agenda (jour / semaine / mois, agenda_sous_traitant.js), Mon stock, Ma caisse.
  */
 (function () {
-    const st = frappe.boot && frappe.boot.sous_traitant;
+    // Sous-traitant, ou technicien interne à « écran simplifié » (10/11/2026) : même navigation du téléphone.
+    const st = frappe.boot && (frappe.boot.ecran_simplifie || frappe.boot.sous_traitant);
     if (!st) return;
 
     const ACCUEIL = new Set(["", "home", "workspaces", "workspace", "app"]);
@@ -26,7 +27,7 @@
         .st-nav { position: fixed; left: 0; right: 0; bottom: 0; z-index: 1030; display: flex;
                   background: #fff; border-top: 1px solid var(--border-color, #e4e8ee);
                   box-shadow: 0 -2px 8px rgba(0,0,0,.06); padding-bottom: env(safe-area-inset-bottom); }
-        .st-nav button { flex: 1 1 25%; min-height: 56px; border: none; background: none; font-size: 11.5px;
+        .st-nav button { flex: 1 1 0; min-height: 56px; border: none; background: none; font-size: 11.5px;
                          font-weight: 600; color: var(--text-muted, #6b7280); display: flex; flex-direction: column;
                          align-items: center; justify-content: center; gap: 2px; cursor: pointer; }
         .st-nav button .ic { font-size: 20px; line-height: 1; }
@@ -41,6 +42,11 @@
         { cle: "stock",      ic: "📦", libelle: __("Mon stock"),   aller: () => frappe.set_route("stock-entrepots") },
         { cle: "caisse",     ic: "💰", libelle: __("Ma caisse"),   aller: () => frappe.set_route("caisse-journaliere") },
     ];
+    // Technicien interne (pas sous-traitant) : il reste un employé — son libre-service RH (congés, présences)
+    // est à portée de pouce, dans l'application RH du téléphone (demande utilisateur 10/11/2026).
+    if (st.sous_traitant === false) {
+        ECRANS.push({ cle: "rh", ic: "🏖️", libelle: __("RH / Congés"), aller: () => { window.location.href = "/hrms"; } });
+    }
 
     function ecran_courant() {
         const r = frappe.get_route() || [];

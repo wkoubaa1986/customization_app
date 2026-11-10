@@ -421,6 +421,11 @@ def _ouvrir_verification_finale(emp, date_depart, journal: list[str]) -> str | N
     if not responsable:
         frappe.throw(_("Réglez le responsable principal du magasin (Config Stock Entrepot › vérifications) : "
                        "c'est lui qui fait la vérification finale du stock."))
+    # La vérification HEBDOMADAIRE de ce stock n'a plus lieu d'être : sa ligne sort du réglage tout de suite.
+    # (Le réglage refuse toute sauvegarde tant qu'une ligne vise un stock sans employé actif — constaté le
+    #  10/11/2026 à la création d'un technicien après le départ de Mohamed Hedi.) Le seuil reste jusqu'à la
+    # fermeture de l'entrepôt (`_fermer_entrepot`).
+    _retirer_planning_verification(entrepot, journal)
     nom = SE.ouvrir_verification(entrepot, date_depart, avec_taches=False)
     v = frappe.get_doc(SE.VERIF, nom)
     quand = frappe.utils.get_datetime("%s 09:00:00" % date_depart)
@@ -433,6 +438,20 @@ def _ouvrir_verification_finale(emp, date_depart, journal: list[str]) -> str | N
     journal.append(_("vérification finale du stock {0} ouverte ({1}) : tâche au responsable {2}").format(
         entrepot, nom, frappe.db.get_value("Employee", responsable, "employee_name")))
     return nom
+
+
+def _retirer_planning_verification(entrepot: str, journal: list[str]):
+    from customization_app import stock_entrepots as SE
+    if not frappe.db.exists("DocType", SE.CONFIG):
+        return
+    cfg = frappe.get_single(SE.CONFIG)
+    avant = cfg.get("verifications") or []
+    apres = [r for r in avant if r.get("entrepot") != entrepot]
+    if len(apres) != len(avant):
+        cfg.set("verifications", apres)
+        cfg.flags.ignore_permissions = True
+        cfg.save()
+        journal.append(_("vérification hebdomadaire de {0} retirée du planning").format(entrepot))
 
 
 def _fermer_entrepot(entrepot: str, journal: list[str]):

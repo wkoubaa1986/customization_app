@@ -1,0 +1,225 @@
+"""Arrivée d'un technicien (décision utilisateur 10/11/2026) — le miroir du départ (depart_employe.py).
+
+Un nouveau technicien interne se créait à la main : utilisateur et rôles, fiche Employé, entrepôt
+« Stock Prénom Nom » et sa vérification hebdomadaire, puis une ligne dans chaque réglage (portail de
+rendez-vous, prise de rendez-vous ERPNext, suivi d'activité, primes, responsable réparation, caisse,
+véhicule GPS, domicile pour les tournées), la règle de récupération… Un oubli, et il n'apparaît pas
+dans le portail ou n'a pas de caisse.
+
+UN BOUTON sur la liste des employés (« Nouveau technicien »), réservé à la direction :
+  - l'utilisateur avec les rôles du PROFIL TECHNICIEN (`ROLES_TECHNICIEN` : ceux de Mohamed Hedi, plus
+    « Technicien » qui ouvre l'agenda du téléphone) — Raven crée son compte de messagerie tout seul ;
+  - la fiche Employé, son entrepôt, la vérification de stock planifiée et le seuil de réapprovisionnement ;
+  - l'ÉCRAN SIMPLIFIÉ du téléphone (`custom_ecran_simplifie`) : le même que le sous-traitant — Ma journée,
+    agenda, mon stock, ma caisse, clôture mobile — SANS ses règles d'argent (sa caisse et son stock restent
+    ceux d'un employé : comptage quotidien, espèces de la société) ;
+  - une ligne à son nom dans chaque réglage (`REGLAGES`) ; le véhicule GPS seulement s'il est donné ; le
+    domicile (lien Google Maps) alimente les tournées par le hook existant (domicile_employe.py) ;
+  - la date de départ de sa caisse (jour d'entrée) et, si un premier jour est donné, la règle de
+    récupération par quinzaine ;
+  - un journal sur sa fiche, la direction prévenue.
+
+Les réglages se posent chacun dans leur propre point de reprise : un réglage qui refuse la ligne est
+signalé dans le journal, les autres passent, la création ne tombe pas pour autant.
+"""
+from __future__ import annotations
+
+import frappe
+from frappe import _
+from frappe.utils import cint, getdate, nowdate
+
+ROLES = ("System Manager", "HR Manager", "Congés RH")
+ROLE_TECHNICIEN = "Technicien"
+#: le profil : les rôles de Mohamed Hedi Chouchane (relevés le 10/11/2026) + « Technicien »
+ROLES_TECHNICIEN = ("Employee", "Maintenance Manager", "POS Manager", "Raven User", "Sales Manager", "Sales User",
+                    "Stock User", ROLE_TECHNICIEN)
+CHAMP_ECRAN = "custom_ecran_simplifie"
+SEUIL_DEFAUT = 1.0
+MODE_PRIME_DEFAUT = "Ventes"
+#: (réglage unique, table enfant, valeurs par ligne — fonction (emp, user) → dict, ou None pour sauter)
+REGLAGES = (
+    ("Config Portail RDV", "Portail RDV Employe", lambda emp, user, p: {"employe": emp.name, "nom_employe": emp.employee_name}),
+    ("Appointment Booking Settings", "Assignment Rule User", lambda emp, user, p: {"user": user} if user else None),
+    ("Config Suivi Activite", "Config Suivi Activite Employe",
+     lambda emp, user, p: {"employee": emp.name, "nom": emp.employee_name, "utilisateur": user, "responsable": 0}),
+    ("Config Prime", "Config Prime Employe",
+     lambda emp, user, p: {"employee": emp.name, "employee_name": emp.employee_name, "mode": MODE_PRIME_DEFAUT}),
+    ("Config Reparation Osmoseur", "Config Reparation Responsable",
+     lambda emp, user, p: {"employee": emp.name, "nom": emp.employee_name}),
+    ("Config Caisse", "Config Caisse Depart",
+     lambda emp, user, p: {"caisse": emp.employee_name, "date_depart": p["date_entree"]}),
+    ("Config Flotte GPS", "Config Flotte GPS Vehicule",
+     lambda emp, user, p: {"vehicule": p["vehicule"], "cbox": p["cbox"], "employe": emp.name,
+                           "employe_nom": emp.employee_name, "actif": 1} if p.get("vehicule") and p.get("cbox") else None),
+)
+
+
+# ── Logique pure ─────────────────────────────────────────────────────────────
+
+def decouper_nom(nom: str) -> tuple[str, str | None]:
+    """« Prénom Nom Composé » → (prénom, reste). PURE."""
+    nom = " ".join((nom or "").split())
+    prenom, _sep, reste = nom.partition(" ")
+    return prenom, (reste or None)
+
+
+def ligne_existe(lignes: list[dict], valeurs: dict, cles: tuple[str, ...]) -> bool:
+    """Une ligne de réglage qui porte déjà les mêmes valeurs sur `cles`. PURE."""
+    return any(all((l.get(c) or "") == (valeurs.get(c) or "") for c in cles) for l in lignes)
+
+
+def cles_identite(valeurs: dict) -> tuple[str, ...]:
+    """Les champs qui identifient une ligne de réglage : le lien employé / utilisateur, ou le nom de caisse. PURE."""
+    for c in ("employe", "employee", "user", "utilisateur", "caisse"):
+        if c in valeurs:
+            return (c,)
+    return tuple(valeurs)
+
+
+# ── Création ─────────────────────────────────────────────────────────────────
+
+def _champ_table(single: str, enfant: str) -> str | None:
+    meta = frappe.get_meta(single)
+    return next((f.fieldname for f in meta.get_table_fields() if f.options == enfant), None)
+
+
+def _ajouter_ligne(single: str, enfant: str, valeurs: dict) -> str:
+    """Ajoute une ligne au réglage unique si elle n'y est pas. -> « ajouté » / « déjà là » / « sans table »."""
+    if not frappe.db.exists("DocType", single) or not frappe.db.exists("DocType", enfant):
+        return "sans table"
+    champ = _champ_table(single, enfant)
+    if not champ:
+        return "sans table"
+    doc = frappe.get_single(single)
+    lignes = [r.as_dict() for r in (doc.get(champ) or [])]
+    if ligne_existe(lignes, valeurs, cles_identite(valeurs)):
+        return "déjà là"
+    doc.append(champ, valeurs)
+    doc.flags.ignore_permissions = True
+    doc.save()
+    return "ajouté"
+
+
+def _poser_reglages(emp, user: str | None, params: dict, journal: list[str]):
+    for single, enfant, fabrique in REGLAGES:
+        valeurs = fabrique(emp, user, params)
+        if not valeurs:
+            continue
+        point = "arrivee_%s" % frappe.generate_hash(length=6)
+        frappe.db.savepoint(point)
+        try:
+            etat = _ajouter_ligne(single, enfant, valeurs)
+            if etat == "ajouté":
+                journal.append(_("ajouté à {0}").format(_(single)))
+        except Exception as e:
+            frappe.db.rollback(save_point=point)
+            journal.append(_("⚠️ {0} a refusé la ligne : {1}").format(_(single), str(e)[:120]))
+
+
+def _seuil_stock(entrepot: str, journal: list[str]):
+    from customization_app import stock_entrepots as SE
+    if not frappe.db.exists("DocType", SE.CONFIG):
+        return
+    cfg = frappe.get_single(SE.CONFIG)
+    if any(r.entrepot == entrepot for r in (cfg.get("seuils") or [])):
+        return
+    cfg.append("seuils", {"entrepot": entrepot, "seuil": SEUIL_DEFAUT, "cible": SEUIL_DEFAUT})
+    cfg.flags.ignore_permissions = True
+    cfg.save()
+    journal.append(_("seuil de réapprovisionnement {0} posé sur {1}").format(SEUIL_DEFAUT, entrepot))
+
+
+def _assurer_role_technicien():
+    if not frappe.db.exists("Role", ROLE_TECHNICIEN):
+        frappe.get_doc({"doctype": "Role", "role_name": ROLE_TECHNICIEN, "desk_access": 1}).insert(ignore_permissions=True)
+
+
+def _direction() -> list[str]:
+    from customization_app.depart_employe import _direction
+    return _direction()
+
+
+@frappe.whitelist(methods=["POST"])
+def creer_technicien(nom, email, mot_de_passe, telephone=None, date_entree=None, genre="Male", date_naissance=None,
+                     domicile_lien=None, vehicule=None, cbox=None, jour_verification="Lundi", heure_verification="09:00",
+                     periodicite="Chaque semaine", premier_jour_recup=None, ecran_simplifie=1) -> dict:
+    """Tout en un geste : utilisateur (profil Technicien), employé, entrepôt + vérification + seuil, réglages,
+    caisse, récupération, écran simplifié. Rend {employe, utilisateur, entrepot, journal}."""
+    from customization_app import sous_traitant as ST
+
+    frappe.only_for(ROLES)
+    nom = " ".join((nom or "").split())
+    email = (email or "").strip().lower()
+    if not nom or not email or not mot_de_passe:
+        frappe.throw(_("Nom, e-mail et mot de passe sont obligatoires."))
+    if frappe.db.exists("User", email):
+        frappe.throw(_("L'utilisateur {0} existe déjà.").format(email))
+    if frappe.db.exists("Employee", {"employee_name": nom, "status": "Active"}):
+        frappe.throw(_("Un employé actif s'appelle déjà {0}.").format(nom))
+    date_entree = getdate(date_entree or nowdate())
+    params = {"date_entree": str(date_entree), "vehicule": (vehicule or "").strip(), "cbox": (cbox or "").strip()}
+    journal: list[str] = []
+
+    _assurer_role_technicien()
+    prenom, reste = decouper_nom(nom)
+    user = frappe.get_doc({"doctype": "User", "email": email, "first_name": prenom, "last_name": reste,
+                           "send_welcome_email": 0, "enabled": 1, "user_type": "System User",
+                           "new_password": mot_de_passe, "mobile_no": telephone or None})
+    user.flags.ignore_permissions = True
+    user.insert()
+    user.add_roles(*ROLES_TECHNICIEN)
+    journal.append(_("utilisateur {0} créé avec le profil Technicien ({1} rôles)").format(email, len(ROLES_TECHNICIEN)))
+
+    entrepot = ST._nouvel_entrepot(nom)
+    valeurs = {
+        "doctype": "Employee", "first_name": prenom, "last_name": reste, "employee_name": nom,
+        "gender": genre or "Male", "date_of_birth": date_naissance or "1990-01-01", "date_of_joining": date_entree,
+        "company": ST._societe(), "status": "Active", "user_id": email, "cell_number": telephone or None,
+        "custom_warehouse": entrepot, "create_user_permission": 1,
+    }
+    if frappe.db.has_column("Employee", CHAMP_ECRAN):
+        valeurs[CHAMP_ECRAN] = cint(ecran_simplifie)
+    if domicile_lien and frappe.db.has_column("Employee", "custom_domicile_lien"):
+        valeurs["custom_domicile_lien"] = domicile_lien.strip()     # → point de départ des tournées (hook domicile)
+    emp = frappe.get_doc(valeurs)
+    emp.flags.ignore_permissions = True
+    emp.insert()
+    journal.append(_("fiche {0} créée, entrepôt {1}").format(emp.name, entrepot))
+    if domicile_lien:
+        journal.append(_("domicile posé : point de départ des tournées"))
+    if cint(ecran_simplifie):
+        journal.append(_("écran simplifié du téléphone activé"))
+
+    ST._inscrire_verification(entrepot, jour_verification or "Lundi", heure_verification or "09:00",
+                              periodicite or "Chaque semaine")
+    journal.append(_("vérification du stock planifiée : {0}, {1}").format(jour_verification or "Lundi",
+                                                                            periodicite or "Chaque semaine"))
+    _seuil_stock(entrepot, journal)
+    _poser_reglages(emp, email, params, journal)
+
+    if premier_jour_recup:
+        from customization_app import conges_recuperations as CR
+        try:
+            CR.enregistrer_regle(emp.name, str(getdate(premier_jour_recup)), periodicite_semaines=2, horizon_semaines=8,
+                                 actif=1, planifier=1)
+            journal.append(_("règle de récupération par quinzaine à partir du {0}").format(
+                frappe.utils.formatdate(premier_jour_recup)))
+        except Exception as e:
+            journal.append(_("⚠️ règle de récupération non posée : {0}").format(str(e)[:120]))
+
+    frappe.get_doc({"doctype": "Comment", "comment_type": "Info", "reference_doctype": "Employee",
+                    "reference_name": emp.name,
+                    "content": _("🆕 Arrivée traitée par {0} :<br>{1}").format(
+                        frappe.utils.get_fullname(frappe.session.user),
+                        "<br>".join(frappe.utils.escape_html(j) for j in journal))}).insert(ignore_permissions=True)
+    for u in _direction():
+        if u == frappe.session.user:
+            continue
+        try:
+            frappe.get_doc({"doctype": "Notification Log", "for_user": u, "type": "Alert",
+                            "subject": _("🆕 Nouveau technicien : {0}").format(nom),
+                            "document_type": "Employee", "document_name": emp.name}).insert(ignore_permissions=True)
+        except Exception:
+            frappe.log_error(frappe.get_traceback(), "arrivee_employe: notification")
+    frappe.db.commit()
+    return {"employe": emp.name, "utilisateur": email, "entrepot": entrepot, "journal": journal}

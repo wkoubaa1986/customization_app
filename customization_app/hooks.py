@@ -927,6 +927,8 @@ doctype_js = {
 # Item (vue liste) : bouton "Vérification base article"
 doctype_list_js = {
     "Item": "public/js/item_list.js",
+    # Liste des employés : « Nouveau technicien » — utilisateur, rôles, fiche, stock, réglages en un geste.
+    "Employee": "public/js/employee_list_arrivee.js",
 }
 # Plan comptable (arbre) : sections en couleur — comptes fermés en rouge, bancaires en bleu,
 # liquidités en vert, liste créance en orange (account_tree.js).

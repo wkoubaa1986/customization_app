@@ -545,8 +545,8 @@ def periode_sous_traitant(date=None):
     """La page Caisse d'un sous-traitant s'ouvre sur SA période : du lendemain de sa dernière remise à
     aujourd'hui (il remet chaque semaine). None pour tout autre utilisateur."""
     try:
-        from customization_app.sous_traitant import employe_courant
-        emp = employe_courant()
+        from customization_app.sous_traitant import sous_traitant_courant
+        emp = sous_traitant_courant()
     except Exception:
         emp = None
     if not emp:
