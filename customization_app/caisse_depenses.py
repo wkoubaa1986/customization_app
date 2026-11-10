@@ -937,19 +937,18 @@ def creer(type_depense, montant, mode, compte=None, description=None, fournisseu
         remarques.append(_("Corrige l'écriture {0}").format(reprise["origine"]))
     remarques.append(_("Saisie caisse par {0}").format(frappe.session.user))
 
-    # PART MISE EN STOCK (10/11/2026) : la dépense ne porte que le reste ; l'avance et la
-    # commande d'achat de la part stock se créent après la fiche de dépense.
+    # PART MISE EN STOCK (10/11/2026) : la dépense reste ENTIÈRE (tout le HT, toute la TVA, un seul
+    # paiement) ; la commande d'achat sans TVA et son avance financée par le compte de charge se
+    # créent après la fiche de dépense (caisse_stock_partiel).
     stock = None
     if type_depense == "Dépense avec facture" and articles_stock:
         from customization_app import caisse_stock_partiel as S
         if reprise:
             frappe.throw(_("Une dépense avec part en stock ne se corrige pas ici : annulez la "
                            "commande d'achat et ressaisissez."))
-        stock = S.preparer(articles_stock, montant, tva, taux_tva, paid, unpaid, mode, regs)
+        stock = S.preparer(articles_stock, montant, tva)
         if stock:
-            remarques_total = list(remarques)
             remarques.append(S.remarque(stock, len(stock["lignes"])))
-            paid, montant, tva = stock["regs_depense"], stock["depense_ttc"], stock["depense_tva"]
 
     je = None
     if type_depense == "Facture d'achat":
@@ -1086,18 +1085,19 @@ def creer(type_depense, montant, mode, compte=None, description=None, fournisseu
             if stock:
                 part = S.creer_part_stock(stock, {
                     "fournisseur": fournisseur, "matricule": matricule, "supplier": supplier,
-                    "description": description, "remarques": remarques_total,
+                    "description": description, "remarques": [description, _("Type : {0}").format(type_depense)],
+                    "compte": compte, "est_bl": cint(est_bl),
                     "numero_facture": numero_facture, "date_facture": date_facture,
                     "numero_bl": numero_bl, "photo": photo_facture, "coins": coins_facture,
-                    "dispense": dispense, "depense": fiche.name,
+                    "depense": fiche.name,
                 })
                 frappe.db.set_value("Depense A Payer", fiche.name, {
                     "purchase_order": part["purchase_order"], "fiche_achat": part["fiche_achat"],
-                    "part_stock_ht": stock["stock_ht"], "part_stock_tva": stock["stock_tva"],
+                    "part_stock_ht": stock["stock_ht"], "part_stock_tva": 0,
                     "articles_stock": json.dumps(stock["lignes"], ensure_ascii=False),
                 }, update_modified=False)
                 resultat.update(part)
-                resultat["part_stock"] = stock["stock_ttc"]
+                resultat["part_stock"] = stock["stock_ht"]
 
     if je:
         _attacher_cheques(regs, je.name, dispense=dispense)
@@ -2134,8 +2134,11 @@ def po_convertir_avances(doc, method=None):
     d'achat est généré dans la foulée (la marchandise du BL est déjà livrée)."""
     po_lier_fiche_caisse(doc)
     total = flt(doc.get("rounded_total") or doc.grand_total, 3)
+    from customization_app import caisse_stock_partiel as S
     for nom in frappe.get_all("Facture Achat a Saisir",
                               filters={"purchase_order": doc.name}, pluck="name"):
+        if S.avance_en_journal(nom):
+            continue   # part stock d'une dépense : l'avance est une écriture SUR la commande
         deja = flt(frappe.db.sql("""
             select sum(allocated_amount) from `tabPayment Entry Reference`
             where reference_doctype = 'Purchase Order' and reference_name = %s
@@ -2482,9 +2485,22 @@ def pi_marquer_fiche_saisie(doc, method=None):
     pi_lier_fiche_caisse(doc)
     # TOUTES les fiches rattachées — la fiche « facture » ET les BL couverts par
     # cette facture : chacune passe « Saisie », chaque avance devient un paiement.
+    from customization_app import caisse_stock_partiel as S
     for nom in _fiches_de(doc):
         frappe.db.set_value("Facture Achat a Saisir", nom, "statut", "Saisie",
                             update_modified=False)
+        if S.avance_en_journal(nom):
+            # Part stock d'une dépense : l'avance (écriture sur la commande) s'est imputée par
+            # `set_advances`. La facture finale pose son numéro sur la dépense du BL.
+            dap = frappe.db.get_value("Facture Achat a Saisir", nom, "depense_a_payer")
+            if dap and frappe.db.exists("Depense A Payer", dap) and doc.get("bill_no"):
+                frappe.db.set_value("Depense A Payer", dap, {"numero_facture": doc.bill_no,
+                                                              "date_facture": doc.get("bill_date")},
+                                    update_modified=False)
+                frappe.get_doc("Depense A Payer", dap).add_comment(
+                    "Comment", _("🧾 Facture d'achat {0} (n° {1}) — couvre la part stock de ce BL.")
+                    .format(doc.name, doc.bill_no))
+            continue
         _remplacer_avance_par_paiement(doc, nom)
 
 

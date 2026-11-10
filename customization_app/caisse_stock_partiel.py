@@ -3,19 +3,22 @@
 Le technicien achète sur bon de livraison (ou facture) des pièces dont certaines vont en stock et
 le reste est consommé ou n'est pas un article. Le fournisseur facture au mois. À la caisse, il
 saisit la pièce comme une « Dépense avec facture », coche les articles qui partent en stock, et
-paie le tout en une fois. Le paiement se répartit :
+paie le tout en une fois. Comptablement (règle utilisateur, 10/11/2026 au soir) :
 
-  · la part des articles cochés devient une AVANCE sur une COMMANDE d'achat créée pour eux
-    (fiche « Facture Achat a Saisir » + écriture d'avance, exactement le circuit des BL
-    « Facture d'achat ») ; la commande est soumise, le reçu entre le stock, et l'avance devient
-    un paiement de la commande (hooks de caisse_depenses) ;
-  · le reste part en DÉPENSE sur le compte de charge, avec sa TVA, comme toute dépense facturée.
+  · UNE SEULE écriture de paiement, au montant payé : Cr caisse / banque, Dr TVA (TOUTE la TVA),
+    Dr compte de charge (TOUT le HT) — la dépense est entière, ses calculs et ceux du dossier
+    comptable restent ceux d'une dépense ;
+  · la part stock est VALORISÉE HT : une commande d'achat SANS TVA pour les articles cochés, et
+    une écriture « le compte de charge finance la commande » : Dr Créditeurs (avance sur la
+    commande, au sens ERPNext) / Cr compte de charge, pour le HT des articles. La commande est
+    soumise, le reçu entre le stock ; l'avance s'impute sur la facture d'achat finale ;
+  · si la pièce est déjà une FACTURE (pas un BL), la facture d'achat (HT, sans TVA) se crée et se
+    soumet dans la foulée depuis le reçu : rien ne reste « à saisir ». Un BL, lui, attend la
+    facture mensuelle (« Rattacher des BL » sur la facture d'achat, qui pose aussi son numéro sur
+    la dépense).
 
-La facture mensuelle du fournisseur se crée ensuite depuis les reçus (« Rattacher des BL ») pour
-les parts stock, et s'agrafe aux parts dépense (« Rattacher une facture aux BL »). Le contrôle
-scan/saisie de la facture d'achat (bank_retenue_sync) déduit les parts dépense des totaux lus.
-
-Les fonctions de calcul sont pures ; la création des pièces s'appuie sur caisse_depenses.
+Le contrôle scan/saisie de la facture d'achat (bank_retenue_sync) déduit les parts dépense
+(HT hors stock, toute la TVA) des totaux lus. Les fonctions de calcul sont pures.
 """
 from __future__ import annotations
 
@@ -44,64 +47,29 @@ def lignes_valides(articles) -> list:
     return out
 
 
-def taux_effectif(montant, tva, taux_tva) -> float:
-    """Le taux de TVA à appliquer à la part stock : celui lu (7, 13, 19) sinon celui que les
-    totaux impliquent, 0 si la pièce ne porte pas de TVA. Pure."""
-    if flt(tva) <= 0:
-        return 0.0
-    if flt(taux_tva) > 0:
-        return flt(taux_tva)
-    ht = flt(montant) - flt(tva)
-    return round(100.0 * flt(tva) / ht, PRECISION) if ht > 0 else 0.0
+def ventiler_stock(montant, tva, lignes) -> dict:
+    """La part stock (HT des articles cochés) et ce que la facture d'achat ne portera pas. Pure.
 
-
-def ventiler_stock(montant, tva, taux_tva, lignes) -> dict:
-    """Ce qui part en stock et ce qui reste en dépense, HT / TVA / TTC. Pure.
-
-    La TVA de la part stock ne dépasse jamais la TVA de la pièce ; le reste absorbe les centimes.
+    La dépense reste ENTIÈRE (tout le HT, toute la TVA) ; `depense_*` est ce qu'il faut déduire du
+    scan de la facture finale pour retrouver la facture d'achat (HT du stock, sans TVA).
     """
     stock_ht = round(sum(l["qty"] * l["rate"] for l in lignes), PRECISION)
-    taux = taux_effectif(montant, tva, taux_tva)
-    stock_tva = min(round(stock_ht * taux / 100.0, PRECISION), flt(tva)) if taux else 0.0
-    stock_ttc = round(stock_ht + stock_tva, PRECISION)
-    depense_ttc = round(flt(montant) - stock_ttc, PRECISION)
-    depense_tva = round(flt(tva) - stock_tva, PRECISION)
-    return {"stock_ht": stock_ht, "stock_tva": stock_tva, "stock_ttc": stock_ttc, "taux": taux,
-            "depense_ht": round(depense_ttc - depense_tva, PRECISION),
-            "depense_tva": depense_tva, "depense_ttc": depense_ttc}
-
-
-def partager_regs(regs, avance) -> tuple:
-    """Les règlements payés, coupés en deux listes : ce qui couvre l'avance (part stock), puis le
-    reste (part dépense). Un règlement à cheval figure dans les deux, avec le même chèque. Pure."""
-    reste = round(flt(avance), PRECISION)
-    pour_avance, pour_depense = [], []
-    for r in regs or []:
-        m = round(flt(r.get("montant")), PRECISION)
-        if reste <= 0:
-            pour_depense.append(dict(r))
-            continue
-        part = min(m, reste)
-        pour_avance.append(dict(r, montant=part))
-        if m - part > 0.0005:
-            pour_depense.append(dict(r, montant=round(m - part, PRECISION)))
-        reste = round(reste - part, PRECISION)
-    return pour_avance, pour_depense
+    ht_total = round(flt(montant) - flt(tva), PRECISION)
+    return {"stock_ht": stock_ht, "ht_total": ht_total,
+            "depense_ht": round(ht_total - stock_ht, PRECISION),
+            "depense_tva": round(flt(tva), PRECISION),
+            "depense_ttc": round(flt(montant) - stock_ht, PRECISION)}
 
 
 def remarque(v: dict, nb_lignes: int) -> str:
-    return ("Part mise en stock : %s HT + %s TVA = %s TTC (%d article(s), avance sur commande d'achat) ; "
-            "part dépense : %s HT + %s TVA = %s TTC"
-            % (v["stock_ht"], v["stock_tva"], v["stock_ttc"], nb_lignes,
-               v["depense_ht"], v["depense_tva"], v["depense_ttc"]))
+    return ("Part mise en stock : %s HT (%d article(s)) — commande d'achat sans TVA, financée par "
+            "le compte de charge ; la dépense porte tout le HT (%s) et toute la TVA (%s)"
+            % (v["stock_ht"], nb_lignes, v["ht_total"], v["depense_tva"]))
 
 
 # ----------------------------------------------------------------------------- préparation
-def preparer(articles_stock, montant, tva, taux_tva, paid, unpaid, mode, regs) -> dict | None:
-    """Contrôle et ventile. -> dict (voir ventiler_stock + regs_avance / regs_depense / lignes),
-    ou None si aucun article n'est coché."""
-    from customization_app import caisse_depenses as C
-
+def preparer(articles_stock, montant, tva) -> dict | None:
+    """Contrôle et ventile. -> dict (ventiler_stock + lignes), ou None si rien n'est coché."""
     lignes = lignes_valides(articles_stock)
     if not lignes:
         return None
@@ -111,48 +79,42 @@ def preparer(articles_stock, montant, tva, taux_tva, paid, unpaid, mode, regs) -
             frappe.throw(_("L'article {0} n'existe pas.").format(l["item_code"]))
         if not cint(est_stock):
             frappe.throw(_("L'article {0} n'est pas un article de stock.").format(l["item_code"]))
-    if mode == C.MODE_PAS_PAYE or flt(unpaid) > 0:
-        frappe.throw(_("Une part mise en stock exige un paiement complet : l'avance sur la commande "
-                       "d'achat se prélève sur ce qui est payé aujourd'hui."))
-    if any(r.get("mode") == C.MODE_TRAITE for r in regs or []):
-        frappe.throw(_("Une part mise en stock ne se règle pas par traite : la traite ne se partage "
-                       "pas entre l'avance et la dépense."))
-    v = ventiler_stock(montant, tva, taux_tva, lignes)
-    if v["stock_ttc"] <= 0:
+    v = ventiler_stock(montant, tva, lignes)
+    if v["stock_ht"] <= 0:
         return None
-    if v["stock_ttc"] >= flt(montant) - 0.0005:
-        frappe.throw(_("Tout le montant part en stock ({0} sur {1}) : saisissez la pièce en "
-                       "« Facture d'achat », pas en dépense.").format(v["stock_ttc"], montant))
-    regs_avance, regs_depense = partager_regs(paid, v["stock_ttc"])
-    v.update({"lignes": lignes, "regs_avance": regs_avance, "regs_depense": regs_depense})
+    if v["stock_ht"] >= v["ht_total"] - 0.0005:
+        frappe.throw(_("Tout le HT part en stock ({0} sur {1}) : saisissez la pièce en "
+                       "« Facture d'achat », pas en dépense.").format(v["stock_ht"], v["ht_total"]))
+    v["lignes"] = lignes
     return v
+
+
+def avance_en_journal(fiche_nom) -> bool:
+    """Vrai quand l'avance de cette fiche est déjà une écriture d'avance SUR la commande (part
+    stock d'une dépense) : les hooks ne doivent pas la transformer en paiement."""
+    return bool(fiche_nom and frappe.db.get_value("Facture Achat a Saisir", fiche_nom, "depense_a_payer"))
 
 
 # ----------------------------------------------------------------------------- création
 def creer_part_stock(stock: dict, ctx: dict) -> dict:
-    """L'avance, la fiche d'achat et la commande pour la part stock. -> {fiche_achat, journal_entry,
-    purchase_order, purchase_receipt}. Appelé par caisse_depenses.creer, dans sa transaction."""
+    """La commande (sans TVA), l'avance financée par le compte de charge, la fiche d'achat ; et la
+    facture d'achat si la pièce en est une. Appelé par caisse_depenses.creer, dans sa transaction."""
     from customization_app import achats_magasin, caisse_depenses as C
 
     supplier = C._supplier(ctx.get("fournisseur"), matricule=ctx.get("matricule"), supplier=ctx.get("supplier"))
     if not supplier:
         frappe.throw(_("Le fournisseur est obligatoire pour mettre des articles en stock."))
     description = (ctx["description"] + " — part stock")[:140]
-    remarques = list(ctx["remarques"]) + [_("Avance sur commande d'achat (part stock) : {0}").format(stock["stock_ttc"])]
-    C._remarques_paiements(remarques, stock["regs_avance"])
-    je = C._ecriture(C._lignes_credit(stock["regs_avance"]) + [
-        {"account": C.COMPTE_CREDITEURS, "party_type": "Supplier", "party": supplier,
-         "debit_in_account_currency": stock["stock_ttc"], "cost_center": C.CC},
-    ], description, remarques)
+    est_bl = cint(ctx.get("est_bl"))
+
     fiche = frappe.get_doc({
         "doctype": "Facture Achat a Saisir",
         "fournisseur": (ctx.get("fournisseur") or "").strip(), "supplier": supplier,
-        "montant": stock["stock_ttc"],
+        "montant": stock["stock_ht"],
         "numero_facture": (ctx.get("numero_facture") or "").strip(),
         "date_facture": ctx.get("date_facture") or None,
-        "est_bl": 1, "numero_bl": (ctx.get("numero_bl") or "").strip(),
-        "mode_paiement": C._mode_global(stock["regs_avance"]),
-        "journal_entry": je.name, "description": description,
+        "est_bl": est_bl, "numero_bl": (ctx.get("numero_bl") or "").strip(),
+        "mode_paiement": "Pas payé", "description": description,
         "saisi_par": frappe.session.user,
         "depense_a_payer": ctx.get("depense"),
         "part_depense_ht": stock["depense_ht"], "part_depense_tva": stock["depense_tva"],
@@ -161,8 +123,6 @@ def creer_part_stock(stock: dict, ctx: dict) -> dict:
     fiche.insert(ignore_permissions=True)
     if ctx.get("photo"):
         C._attacher_scan(ctx["photo"], "facture-%s" % fiche.name, "Facture Achat a Saisir", fiche.name, coins=ctx.get("coins"))
-        C._attacher_scan(ctx["photo"], "facture-%s" % fiche.name, "Journal Entry", je.name, coins=ctx.get("coins"))
-    C._attacher_cheques(stock["regs_avance"], je.name, dispense=ctx.get("dispense", False))
 
     po = frappe.new_doc("Purchase Order")
     po.supplier = supplier
@@ -172,19 +132,95 @@ def creer_part_stock(stock: dict, ctx: dict) -> dict:
     po.custom_fiche_caisse = fiche.name
     po.set_warehouse = achats_magasin.ENTREPOT_ACHATS
     for l in stock["lignes"]:
+        # SANS TVA : la part stock est valorisée HT, toute la TVA est dans la dépense. Un modèle de
+        # taxe d'article ou de fournisseur ajouterait une ligne de TVA tout seul : on le neutralise.
         po.append("items", {"item_code": l["item_code"], "qty": l["qty"], "rate": l["rate"],
-                            "schedule_date": nowdate(), "warehouse": achats_magasin.ENTREPOT_ACHATS})
-    if stock["taux"] > 0:
-        compte_tva = C.COMPTE_TVA_7 if flt(stock["taux"]) == 7 else C.COMPTE_TVA_19
-        po.append("taxes", {"charge_type": "On Net Total", "account_head": compte_tva,
-                            "rate": stock["taux"], "description": "TVA %s%%" % flt(stock["taux"]),
-                            "cost_center": C.CC})
+                            "schedule_date": nowdate(), "warehouse": achats_magasin.ENTREPOT_ACHATS,
+                            "item_tax_template": "", "item_tax_rate": "{}"})
+    _sans_taxes(po)
     po.flags.ignore_permissions = True
     po.insert()
-    po.submit()   # hooks : lien fiche, avance -> paiement de la commande, reçu automatique
+    if flt(po.grand_total) != flt(po.net_total):
+        _sans_taxes(po)
+        po.save()
+    if flt(po.grand_total) != flt(po.net_total):
+        frappe.throw(_("La commande de la part stock porte encore une taxe ({0} pour {1} HT) : "
+                       "vérifiez le modèle de taxe du fournisseur {2}.").format(po.grand_total, po.net_total, supplier))
+    po.submit()   # hooks : lien fiche + reçu automatique (l'avance n'est pas convertie : cf. avance_en_journal)
+
+    # Le compte de charge finance la commande : avance ERPNext sur la commande, imputée à la facture.
+    remarques = list(ctx["remarques"]) + [
+        _("Part stock de la dépense {0} : le compte de charge finance la commande {1} ({2} HT)")
+        .format(ctx.get("depense") or "", po.name, stock["stock_ht"])]
+    je = C._ecriture([
+        {"account": C.COMPTE_CREDITEURS, "party_type": "Supplier", "party": supplier,
+         "debit_in_account_currency": stock["stock_ht"], "is_advance": "Yes",
+         "reference_type": "Purchase Order", "reference_name": po.name, "cost_center": C.CC},
+        {"account": ctx["compte"], "credit_in_account_currency": stock["stock_ht"], "cost_center": C.CC},
+    ], description, remarques)
+    frappe.db.set_value("Facture Achat a Saisir", fiche.name, "journal_entry", je.name, update_modified=False)
+    if ctx.get("photo"):
+        C._attacher_scan(ctx["photo"], "facture-%s" % fiche.name, "Journal Entry", je.name, coins=ctx.get("coins"))
+
     recu = frappe.db.get_value("Facture Achat a Saisir", fiche.name, "purchase_receipt")
-    return {"fiche_achat": fiche.name, "journal_entry": je.name, "purchase_order": po.name,
-            "purchase_receipt": recu}
+    out = {"fiche_achat": fiche.name, "journal_entry": je.name, "purchase_order": po.name,
+           "purchase_receipt": recu, "purchase_invoice": None, "facture_en_brouillon": False}
+    if not est_bl:
+        out.update(_facture_immediate(fiche.name, po.name, recu, ctx))
+    return out
+
+
+def _sans_taxes(doc) -> None:
+    """Aucune TVA sur la pièce d'achat de la part stock (toute la TVA est dans la dépense) : les
+    modèles de taxe d'article et de fournisseur sont neutralisés, puis les totaux recalculés."""
+    doc.taxes_and_charges = ""
+    doc.set("taxes", [])
+    for it in doc.items:
+        it.item_tax_template, it.item_tax_rate = "", "{}"
+    doc.calculate_taxes_and_totals()
+
+
+def _facture_immediate(fiche_nom, po_nom, recu, ctx) -> dict:
+    """La pièce est une facture : la facture d'achat (HT, sans TVA) naît du reçu et se soumet.
+    Si la validation refuse (contrôles bank_retenue_sync), elle reste en brouillon, rattachée."""
+    from erpnext.buying.doctype.purchase_order.purchase_order import make_purchase_invoice as pi_depuis_commande
+    from erpnext.stock.doctype.purchase_receipt.purchase_receipt import make_purchase_invoice as pi_depuis_recu
+    from customization_app import caisse_depenses as C
+
+    if recu and frappe.db.get_value("Purchase Receipt", recu, "docstatus") == 1:
+        pi = pi_depuis_recu(recu)
+    else:
+        pi = pi_depuis_commande(po_nom)
+    pi.bill_no = (ctx.get("numero_facture") or "").strip() or None
+    pi.bill_date = ctx.get("date_facture") or None
+    pi.run_method("set_missing_values")
+    _sans_taxes(pi)
+    pi.set("payment_schedule", [])
+    pi.append("payment_schedule", {"due_date": pi.due_date or nowdate(), "invoice_portion": 100,
+                                   "payment_amount": flt(pi.rounded_total or pi.grand_total, 3),
+                                   "mode_of_payment": "Espèces"})
+    try:
+        pi.set_advances()
+    except Exception:
+        pass
+    pi.flags.ignore_permissions = True
+    pi.insert()
+    if flt(pi.grand_total) != flt(pi.net_total):
+        _sans_taxes(pi)
+        pi.save()
+    frappe.db.set_value("Facture Achat a Saisir", fiche_nom, "purchase_invoice", pi.name, update_modified=False)
+    C._copier_justificatifs(fiche_nom, "Purchase Invoice", pi.name)
+    try:
+        pi.reload()
+        pi.flags.ignore_permissions = True
+        pi.submit()
+        return {"purchase_invoice": pi.name, "facture_en_brouillon": False}
+    except Exception:
+        frappe.log_error(title="Caisse : facture d'achat de la part stock non validée",
+                         message=frappe.get_traceback())
+        frappe.msgprint(_("La facture d'achat {0} de la part stock est restée en brouillon : "
+                          "ouvrez-la pour la valider.").format(pi.name), indicator="orange", alert=True)
+        return {"purchase_invoice": pi.name, "facture_en_brouillon": True}
 
 
 # ----------------------------------------------------------------------------- lecture photo

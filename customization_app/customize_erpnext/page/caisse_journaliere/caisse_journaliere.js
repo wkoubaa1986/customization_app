@@ -1882,17 +1882,16 @@ function rcj_rendre_articles(d, etat, $z) {
     $z.html(`<div class="text-muted" style="font-size:12px">${__("Aucune ligne d'article lue sur la pièce : tout part en dépense.")}</div>`);
     return;
   }
-  const taux = flt(d.get_value("taux_tva")) || (flt(d.get_value("tva")) > 0 && flt(d.get_value("montant")) > flt(d.get_value("tva"))
-    ? 100 * flt(d.get_value("tva")) / (flt(d.get_value("montant")) - flt(d.get_value("tva"))) : 0);
+  // La part stock est valorisée HT : commande d'achat sans TVA, financée par le compte de charge.
+  // La dépense, elle, reste entière (tout le HT, toute la TVA, un seul paiement).
   const totaux = () => {
     const ht = rcj_articles_coches(etat).reduce((s, a) => s + a.qty * a.rate, 0);
-    const tva = Math.min(ht * taux / 100, flt(d.get_value("tva")));
-    const ttc = ht + tva;
     const montant = flt(d.get_value("montant"));
-    $z.find(".rcj-art-totaux").html(ttc > 0
-      ? `📦 ${__("Part stock")} : <b>${rcj_dt(ttc)}</b> TTC (${rcj_dt(ht)} HT) → ${__("avance sur commande d'achat")} ·
-         💸 ${__("Part dépense")} : <b>${rcj_dt(montant - ttc)}</b> TTC${ttc >= montant - 0.0005
-           ? ` <span class="text-danger">— ${__("tout part en stock : utilisez « Facture d'achat »")}</span>` : ""}`
+    const ht_total = montant - flt(d.get_value("tva"));
+    $z.find(".rcj-art-totaux").html(ht > 0
+      ? `📦 ${__("Part stock")} : <b>${rcj_dt(ht)}</b> HT → ${__("commande d'achat sans TVA, financée par le compte de charge")} ·
+         💸 ${__("Dépense")} : <b>${rcj_dt(montant)}</b> TTC ${__("en une écriture")} (${__("dont")} ${rcj_dt(ht_total - ht)} HT ${__("hors stock")})${ht >= ht_total - 0.0005
+           ? ` <span class="text-danger">— ${__("tout le HT part en stock : utilisez « Facture d'achat »")}</span>` : ""}`
       : `<span class="text-muted">${__("Rien de coché : tout part en dépense.")}</span>`);
   };
   const rows = etat.articles.map((a, i) => `<tr data-i="${i}">
@@ -2167,11 +2166,15 @@ function rcj_depense(rapport, initial) {
           }
           if (r.message.purchase_order) {
             frappe.show_alert({
-              message: __("📦 Part stock {0} DT : commande {1} créée{2}, avance posée ; le reste en dépense.",
+              message: __("📦 Part stock {0} HT : commande {1}{2}{3}.",
                 [rcj_dt(r.message.part_stock), r.message.purchase_order,
-                 r.message.purchase_receipt ? __(" et reçu {0} entré", [r.message.purchase_receipt]) : ""]),
-              indicator: "blue",
-            }, 10);
+                 r.message.purchase_receipt ? __(", reçu {0} entré", [r.message.purchase_receipt]) : "",
+                 r.message.purchase_invoice
+                   ? (r.message.facture_en_brouillon ? __(", facture d'achat {0} EN BROUILLON à valider", [r.message.purchase_invoice])
+                                                     : __(", facture d'achat {0} validée", [r.message.purchase_invoice]))
+                   : __(" — en attente de la facture du fournisseur")]),
+              indicator: r.message.facture_en_brouillon ? "orange" : "blue",
+            }, 12);
           }
           if (r.message.a_payer) {
             frappe.show_alert({

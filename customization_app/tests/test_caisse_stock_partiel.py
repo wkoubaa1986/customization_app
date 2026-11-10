@@ -16,34 +16,18 @@ class TestVentilation(unittest.TestCase):
         self.assertEqual(lignes, [{"item_code": "A", "qty": 2.0, "rate": 10.5, "designation": "x"}])
         self.assertEqual(S.lignes_valides(None), [])
 
-    def test_taux(self):
-        self.assertEqual(S.taux_effectif(119, 19, 19), 19.0)
-        self.assertEqual(S.taux_effectif(119, 19, 0), 19.0)      # déduit des totaux
-        self.assertEqual(S.taux_effectif(100, 0, 19), 0.0)       # pièce sans TVA
-
-    def test_ventiler(self):
-        v = S.ventiler_stock(1191.0, 190.0, 19, [{"qty": 2, "rate": 100}, {"qty": 1, "rate": 50}])
-        self.assertEqual((v["stock_ht"], v["stock_tva"], v["stock_ttc"]), (250.0, 47.5, 297.5))
-        self.assertEqual((v["depense_ht"], v["depense_tva"], v["depense_ttc"]), (751.0, 142.5, 893.5))
-        self.assertEqual(v["stock_ttc"] + v["depense_ttc"], 1191.0)
-
-    def test_la_tva_stock_ne_depasse_pas_celle_de_la_piece(self):
-        v = S.ventiler_stock(300.0, 10.0, 19, [{"qty": 1, "rate": 200}])
-        self.assertEqual((v["stock_tva"], v["depense_tva"]), (10.0, 0.0))
-
-    def test_partage_des_reglements(self):
-        regs = [{"mode": "Chèque", "montant": 200.0, "n_cheque": "1234567"}, {"mode": "Espèces", "montant": 100.0}]
-        avance, depense = S.partager_regs(regs, 250.0)
-        self.assertEqual([(r["mode"], r["montant"]) for r in avance], [("Chèque", 200.0), ("Espèces", 50.0)])
-        self.assertEqual([(r["mode"], r["montant"]) for r in depense], [("Espèces", 50.0)])
-        avance, depense = S.partager_regs(regs, 120.0)
-        self.assertEqual([r["montant"] for r in avance], [120.0])
-        self.assertEqual([(r["mode"], r["montant"], r.get("n_cheque")) for r in depense], [("Chèque", 80.0, "1234567"), ("Espèces", 100.0, None)])
-        self.assertEqual(S.partager_regs([], 10), ([], []))
+    def test_ventiler_la_depense_reste_entiere_le_stock_est_ht(self):
+        v = S.ventiler_stock(1191.0, 190.0, [{"qty": 2, "rate": 100}, {"qty": 1, "rate": 50}])
+        self.assertEqual((v["stock_ht"], v["ht_total"]), (250.0, 1001.0))
+        # ce que la facture d'achat finale ne portera pas : le HT hors stock et TOUTE la TVA
+        self.assertEqual((v["depense_ht"], v["depense_tva"], v["depense_ttc"]), (751.0, 190.0, 941.0))
+        self.assertEqual(v["ht_total"] - v["depense_ht"], v["stock_ht"])
 
     def test_remarque(self):
-        v = S.ventiler_stock(119.0, 19.0, 19, [{"qty": 1, "rate": 50}])
-        self.assertIn("Part mise en stock : 50 HT + 9.5 TVA = 59.5 TTC (1 article(s)", S.remarque(v, 1))
+        v = S.ventiler_stock(119.0, 19.0, [{"qty": 1, "rate": 50}])
+        r = S.remarque(v, 1)
+        self.assertIn("Part mise en stock : 50 HT (1 article(s))", r)
+        self.assertIn("tout le HT (100.0) et toute la TVA (19.0)", r)
 
 
 class TestCablage(unittest.TestCase):
@@ -59,10 +43,26 @@ class TestCablage(unittest.TestCase):
         from customization_app import caisse_depenses as C
         src = inspect.getsource(C.creer)
         self.assertIn("articles_stock=None", src)
-        self.assertIn("S.preparer(articles_stock", src)
+        self.assertIn("S.preparer(articles_stock, montant, tva)", src)
         self.assertIn("S.creer_part_stock(stock", src)
         self.assertIn('"purchase_order": part["purchase_order"]', src)
         self.assertIn("or stock:", src)
+        # la dépense reste entière : ni montant, ni TVA, ni paiement ne sont réduits par la part stock
+        self.assertNotIn("regs_depense", src)
+        self.assertNotIn("stock_ttc", src)
+
+    def test_la_commande_est_sans_tva_et_l_avance_est_une_ecriture_sur_la_commande(self):
+        src = inspect.getsource(S.creer_part_stock)
+        self.assertNotIn('po.append("taxes"', src)
+        self.assertEqual(src.count("_sans_taxes(po)"), 2)
+        self.assertEqual(inspect.getsource(S._facture_immediate).count("_sans_taxes(pi)"), 2)
+        self.assertIn('"is_advance": "Yes"', src)
+        self.assertIn('"reference_type": "Purchase Order"', src)
+        self.assertIn('{"account": ctx["compte"], "credit_in_account_currency": stock["stock_ht"]', src)
+        self.assertIn("if not est_bl:", src)
+        from customization_app import caisse_depenses as C
+        self.assertIn("S.avance_en_journal(nom)", inspect.getsource(C.po_convertir_avances))
+        self.assertIn("S.avance_en_journal(nom)", inspect.getsource(C.pi_marquer_fiche_saisie))
 
     def test_fiches(self):
         import json
