@@ -1853,10 +1853,13 @@ function rcj_articles_coches(etat) {
     .map((a) => ({ item_code: a.item_code, qty: flt(a.qty), rate: flt(a.rate), designation: a.designation }));
 }
 
-function rcj_zone_articles(d, etat, API, lire) {
+function rcj_zone_articles(d, etat, API, lire, apres) {
   const $z = d.fields_dict.zone_articles && d.fields_dict.zone_articles.$wrapper;
   if (!$z) return;
-  if (!lire) { $z.empty(); return; }
+  const fini = () => { etat.lecture_articles = false; if (apres) apres(); };
+  if (!lire) { $z.empty(); fini(); return; }
+  etat.lecture_articles = true;
+  if (apres) apres();
   $z.html(`<div class="text-muted" style="font-size:12px;padding:6px 0">🔎 ${__("Lecture des articles de la pièce…")}</div>`);
   frappe.call({
     method: API.replace("caisse_depenses", "caisse_stock_partiel") + ".lire_articles",
@@ -1864,8 +1867,12 @@ function rcj_zone_articles(d, etat, API, lire) {
     callback: (r) => {
       etat.articles = (r.message || []).map((a) => ({ ...a, coche: false }));
       rcj_rendre_articles(d, etat, $z);
+      fini();
     },
-    error: () => { $z.html(`<div class="text-muted" style="font-size:12px">${__("Lignes d'articles illisibles : rien ne part en stock.")}</div>`); },
+    error: () => {
+      $z.html(`<div class="text-muted" style="font-size:12px">${__("Lignes d'articles illisibles : rien ne part en stock.")}</div>`);
+      fini();
+    },
   });
 }
 
@@ -1952,7 +1959,7 @@ function rcj_depense(rapport, initial) {
                est_bl: false, numero_bl: null,
                paiements: [], banques: [],
                // Part mise en stock (10/11/2026) : les lignes lues sur la pièce, cochées ou non.
-               articles: [], fournisseur_candidats: null };
+               articles: [], fournisseur_candidats: null, lecture_articles: false };
 
   const d = new frappe.ui.Dialog({
     title: initial ? __("✏️ Corriger la dépense {0}", [initial.name]) : __("Dépense de caisse"),
@@ -2291,10 +2298,14 @@ function rcj_depense(rapport, initial) {
   // ⚠️ ENREGISTRER VERROUILLÉ TANT QUE L'ANALYSE N'EST PAS FAITE pour les
   // types facturés (décision utilisateur 24/08) — le msgprint ne suffisait pas.
   const maj_bouton = () => {
-    const bloque = type_depense_courant() !== "Dépense non facturée"
-      && !etat.analyse_faite;
-    d.get_primary_btn().prop("disabled", bloque)
-      .attr("title", bloque ? __("Analysez d'abord la facture (bouton 🤖).") : "");
+    const type = type_depense_courant();
+    const bloque = type !== "Dépense non facturée" && !etat.analyse_faite;
+    // Dépense avec facture : tant que les lignes d'articles ne sont pas lues, on ne sait pas
+    // encore ce qui part en stock — enregistrer attend (demande utilisateur 10/11/2026).
+    const lecture = type === "Dépense avec facture" && etat.lecture_articles;
+    d.get_primary_btn().prop("disabled", bloque || lecture)
+      .attr("title", bloque ? __("Analysez d'abord la facture (bouton 🤖).")
+        : (lecture ? __("Lecture des articles de la pièce en cours…") : ""));
   };
 
   // Facture : photo + bouton d'analyse OpenAI (préremplit, l'employé confirme).
@@ -2304,7 +2315,7 @@ function rcj_depense(rapport, initial) {
       etat.analyse_faite = false;   // nouvelle photo -> nouvelle analyse exigée
       etat.facture_coins = null;
       etat.articles = [];
-      rcj_zone_articles(d, etat, API, false);
+      rcj_zone_articles(d, etat, API, false, maj_bouton);
       $zf.find(".rcj-analyser").prop("disabled", false);
       maj_bouton();
       // Cadrage à valider AVANT tout : les coins retenus font foi pour le scan.
@@ -2368,7 +2379,7 @@ function rcj_depense(rapport, initial) {
         // Dépense avec facture : les lignes d'articles, pour cocher ce qui part en stock.
         etat.articles = [];
         if (d.get_value("type_depense") === "Dépense avec facture") {
-          rcj_zone_articles(d, etat, API, true);
+          rcj_zone_articles(d, etat, API, true, maj_bouton);
         }
         if (d.get_value("type_depense") === "Facture d'achat") {
           if (m.fournisseur_certain) {

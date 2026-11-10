@@ -1497,14 +1497,36 @@ def _attacher_scan(photo, nom_base, doctype, name, coins=None):
     contenu, _mt = _decoder(photo)
     pdf = _scan_pdf(contenu, coins=coins)
     if pdf:
+        _restaurer_fichier_absent(pdf)
         save_file("%s.pdf" % nom_base, pdf, doctype, name, is_private=1)
     else:
+        _restaurer_fichier_absent(contenu)
         save_file("%s.jpg" % nom_base, contenu, doctype, name, is_private=1)
+
+
+def _restaurer_fichier_absent(contenu: bytes) -> None:
+    """Frappe réutilise l'enregistrement d'un fichier au contenu identique (même hash) sans rien
+    réécrire sur le disque ; si ce fichier n'y est plus — copie de base sans les fichiers, ménage —,
+    l'insertion de la nouvelle pièce jointe relit un fichier absent et tout s'écroule (10/11/2026,
+    scan d'une facture déjà connue). On remet le fichier à sa place avant de laisser Frappe faire."""
+    import os
+    from frappe.core.doctype.file.utils import get_content_hash
+
+    for url in frappe.get_all("File", filters={"content_hash": get_content_hash(contenu), "is_private": 1},
+                              pluck="file_url", distinct=True):
+        if not url or not url.startswith("/private/files/"):
+            continue
+        chemin = frappe.get_site_path(url.lstrip("/"))
+        if not os.path.exists(chemin):
+            os.makedirs(os.path.dirname(chemin), exist_ok=True)
+            with open(chemin, "wb") as fh:
+                fh.write(contenu)
 
 
 def _attacher(photo, nom, doctype, name):
     from frappe.utils.file_manager import save_file
     contenu, _mt = _decoder(photo)
+    _restaurer_fichier_absent(contenu)
     save_file(nom, contenu, doctype, name, is_private=1)
 
 
