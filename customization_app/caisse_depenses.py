@@ -1540,9 +1540,18 @@ def _copier_justificatifs(fiche_nom, doctype, name,
                 "attached_to_doctype": doctype, "attached_to_name": name,
                 "file_url": f.file_url}):
             continue
-        _inserer_piece_jointe({"doctype": "File", "file_url": f.file_url,
-                               "file_name": f.file_name, "is_private": f.is_private,
-                               "attached_to_doctype": doctype, "attached_to_name": name})
+        try:
+            _inserer_piece_jointe({"doctype": "File", "file_url": f.file_url,
+                                   "file_name": f.file_name, "is_private": f.is_private,
+                                   "attached_to_doctype": doctype, "attached_to_name": name})
+        except (FileNotFoundError, OSError):
+            # Le fichier n'est plus sur le disque (copie de base sans les fichiers, ménage) : la
+            # pièce se crée quand même, le justificatif manque dessus et on le dit — un scan absent
+            # ne doit pas empêcher une commande ou un reçu de naître (10/11/2026).
+            frappe.log_error(title="Caisse : justificatif introuvable sur le disque",
+                             message="%s -> %s %s : %s" % (fiche_nom, doctype, name, f.file_url))
+            frappe.msgprint(_("Justificatif {0} introuvable sur le disque : non recopié sur {1}.")
+                            .format(f.file_name, name), indicator="orange", alert=True)
 
 
 def _inserer_piece_jointe(valeurs: dict):
