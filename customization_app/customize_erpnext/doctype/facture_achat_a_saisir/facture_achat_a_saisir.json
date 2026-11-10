@@ -26,7 +26,13 @@
   "payment_entries",
   "column_break_2",
   "saisi_par",
-  "description"
+  "description",
+  "sec_depense",
+  "depense_a_payer",
+  "col_depense",
+  "part_depense_ht",
+  "part_depense_tva",
+  "part_depense_ttc"
  ],
  "fields": [
   {
@@ -64,8 +70,8 @@
   {
    "fieldname": "numero_facture",
    "fieldtype": "Data",
-   "label": "N° de facture",
-   "in_list_view": 1
+   "in_list_view": 1,
+   "label": "N° de facture"
   },
   {
    "fieldname": "date_facture",
@@ -120,28 +126,28 @@
    "description": "Commande d'achat créée depuis ce BL — à sa soumission, l'avance de caisse devient un paiement lié à la commande ; la facture se crée ensuite depuis une ou plusieurs commandes.",
    "fieldname": "purchase_order",
    "fieldtype": "Link",
+   "in_standard_filter": 1,
    "label": "Commande d'achat",
    "options": "Purchase Order",
-   "read_only": 1,
-   "in_standard_filter": 1
+   "read_only": 1
   },
   {
    "description": "Reçu d'achat créé depuis ce BL (le comptable y saisit les articles) — la facture se crée ensuite depuis un ou plusieurs reçus.",
    "fieldname": "purchase_receipt",
    "fieldtype": "Link",
+   "in_standard_filter": 1,
    "label": "Reçu d'achat",
    "options": "Purchase Receipt",
-   "read_only": 1,
-   "in_standard_filter": 1
+   "read_only": 1
   },
   {
    "fieldname": "purchase_invoice",
    "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
    "label": "Facture d'achat créée",
    "options": "Purchase Invoice",
-   "read_only": 1,
-   "in_list_view": 1,
-   "in_standard_filter": 1
+   "read_only": 1
   },
   {
    "fieldname": "payment_entry",
@@ -173,6 +179,42 @@
    "fieldname": "description",
    "fieldtype": "Small Text",
    "label": "Description"
+  },
+  {
+   "collapsible": 1,
+   "depends_on": "eval:doc.depense_a_payer",
+   "fieldname": "sec_depense",
+   "fieldtype": "Section Break",
+   "label": "Part comptabilisée en dépense"
+  },
+  {
+   "fieldname": "depense_a_payer",
+   "fieldtype": "Link",
+   "label": "Dépense (reste du BL)",
+   "options": "Depense A Payer",
+   "read_only": 1
+  },
+  {
+   "fieldname": "col_depense",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "part_depense_ht",
+   "fieldtype": "Currency",
+   "label": "Part dépense HT",
+   "read_only": 1
+  },
+  {
+   "fieldname": "part_depense_tva",
+   "fieldtype": "Currency",
+   "label": "Part dépense TVA",
+   "read_only": 1
+  },
+  {
+   "fieldname": "part_depense_ttc",
+   "fieldtype": "Currency",
+   "label": "Part dépense TTC",
+   "read_only": 1
   }
  ],
  "index_web_pages_for_search": 0,
@@ -228,6 +270,6 @@
  "sort_field": "modified",
  "sort_order": "DESC",
  "states": [],
- "track_changes": 1,
- "title_field": "fournisseur"
+ "title_field": "fournisseur",
+ "track_changes": 1
 }

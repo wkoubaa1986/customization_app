@@ -1843,6 +1843,94 @@ function rcj_choisir_fournisseur(m, onChoix) {
 }
 
 
+// ── Part mise en stock d'une dépense (10/11/2026) ────────────────────────────
+// Les lignes lues sur la pièce ; l'employé coche celles qui partent en stock et confirme
+// l'article, la quantité, le prix HT. Le serveur (caisse_stock_partiel) ventile, crée l'avance
+// et la commande d'achat pour la part cochée ; le reste est la dépense.
+function rcj_articles_coches(etat) {
+  return (etat.articles || [])
+    .filter((a) => a.coche && a.item_code && flt(a.qty) > 0)
+    .map((a) => ({ item_code: a.item_code, qty: flt(a.qty), rate: flt(a.rate), designation: a.designation }));
+}
+
+function rcj_zone_articles(d, etat, API, lire) {
+  const $z = d.fields_dict.zone_articles && d.fields_dict.zone_articles.$wrapper;
+  if (!$z) return;
+  if (!lire) { $z.empty(); return; }
+  $z.html(`<div class="text-muted" style="font-size:12px;padding:6px 0">🔎 ${__("Lecture des articles de la pièce…")}</div>`);
+  frappe.call({
+    method: API.replace("caisse_depenses", "caisse_stock_partiel") + ".lire_articles",
+    args: { photo: etat.facture },
+    callback: (r) => {
+      etat.articles = (r.message || []).map((a) => ({ ...a, coche: false }));
+      rcj_rendre_articles(d, etat, $z);
+    },
+    error: () => { $z.html(`<div class="text-muted" style="font-size:12px">${__("Lignes d'articles illisibles : rien ne part en stock.")}</div>`); },
+  });
+}
+
+function rcj_rendre_articles(d, etat, $z) {
+  const esc = frappe.utils.escape_html;
+  if (!(etat.articles || []).length) {
+    $z.html(`<div class="text-muted" style="font-size:12px">${__("Aucune ligne d'article lue sur la pièce : tout part en dépense.")}</div>`);
+    return;
+  }
+  const taux = flt(d.get_value("taux_tva")) || (flt(d.get_value("tva")) > 0 && flt(d.get_value("montant")) > flt(d.get_value("tva"))
+    ? 100 * flt(d.get_value("tva")) / (flt(d.get_value("montant")) - flt(d.get_value("tva"))) : 0);
+  const totaux = () => {
+    const ht = rcj_articles_coches(etat).reduce((s, a) => s + a.qty * a.rate, 0);
+    const tva = Math.min(ht * taux / 100, flt(d.get_value("tva")));
+    const ttc = ht + tva;
+    const montant = flt(d.get_value("montant"));
+    $z.find(".rcj-art-totaux").html(ttc > 0
+      ? `📦 ${__("Part stock")} : <b>${rcj_dt(ttc)}</b> TTC (${rcj_dt(ht)} HT) → ${__("avance sur commande d'achat")} ·
+         💸 ${__("Part dépense")} : <b>${rcj_dt(montant - ttc)}</b> TTC${ttc >= montant - 0.0005
+           ? ` <span class="text-danger">— ${__("tout part en stock : utilisez « Facture d'achat »")}</span>` : ""}`
+      : `<span class="text-muted">${__("Rien de coché : tout part en dépense.")}</span>`);
+  };
+  const rows = etat.articles.map((a, i) => `<tr data-i="${i}">
+      <td><input type="checkbox" class="rcj-art-coche" ${a.coche ? "checked" : ""}></td>
+      <td style="max-width:220px">${esc(a.designation || "")}</td>
+      <td class="rcj-art-item"></td>
+      <td><input type="number" step="any" class="form-control input-sm rcj-art-qty" style="width:70px" value="${a.qty || 1}"></td>
+      <td><input type="number" step="any" class="form-control input-sm rcj-art-rate" style="width:90px" value="${a.rate || 0}"></td>
+      <td class="rcj-art-ht text-right">${rcj_dt((a.qty || 0) * (a.rate || 0))}</td>
+    </tr>`).join("");
+  $z.html(`<div style="font-size:12px;margin-bottom:4px"><b>📦 ${__("Articles à mettre en stock")}</b>
+      <span class="text-muted">— ${__("cochez ce qui entre en stock ; le reste est la dépense")}</span></div>
+    <table class="table table-bordered table-sm" style="font-size:12px;margin-bottom:6px">
+      <thead><tr><th></th><th>${__("Sur la pièce")}</th><th>${__("Article ERPNext")}</th><th>${__("Qté")}</th><th>${__("PU HT")}</th><th>${__("HT")}</th></tr></thead>
+      <tbody>${rows}</tbody></table>
+    <div class="rcj-art-totaux" style="font-size:12.5px"></div>`);
+  etat.articles.forEach((a, i) => {
+    const $tr = $z.find(`tr[data-i="${i}"]`);
+    const ctrl = frappe.ui.form.make_control({
+      df: { fieldtype: "Link", options: "Item", fieldname: "item_" + i, placeholder: __("Article"),
+            get_query: () => ({ filters: { is_stock_item: 1, disabled: 0 } }) },
+      parent: $tr.find(".rcj-art-item"), render_input: true,
+    });
+    ctrl.$wrapper.find(".control-label").hide();
+    if (a.item_code) ctrl.set_value(a.item_code);
+    ctrl.$input.on("change blur", () => {
+      a.item_code = ctrl.get_value() || null;
+      if (a.item_code && !a.coche) { a.coche = true; $tr.find(".rcj-art-coche").prop("checked", true); }
+      totaux();
+    });
+    $tr.find(".rcj-art-coche").on("change", (e) => {
+      a.coche = e.currentTarget.checked;
+      if (a.coche && !a.item_code) frappe.show_alert({ message: __("Choisissez l'article ERPNext de cette ligne."), indicator: "orange" });
+      // Un fournisseur est nécessaire pour la commande : s'il est ambigu, on le fait choisir ici.
+      if (a.coche && !etat.supplier && etat.fournisseur_candidats) {
+        rcj_choisir_fournisseur(etat.fournisseur_candidats, (choix) => { etat.supplier = choix; });
+      }
+      totaux();
+    });
+    $tr.find(".rcj-art-qty").on("change input", (e) => { a.qty = flt(e.currentTarget.value); $tr.find(".rcj-art-ht").text(rcj_dt(a.qty * flt(a.rate))); totaux(); });
+    $tr.find(".rcj-art-rate").on("change input", (e) => { a.rate = flt(e.currentTarget.value); $tr.find(".rcj-art-ht").text(rcj_dt(flt(a.qty) * a.rate)); totaux(); });
+  });
+  totaux();
+}
+
 // ── Dépenses de caisse ───────────────────────────────────────────────────────
 // Trois types (non facturée / avec facture / facture d'achat), photo de la
 // facture obligatoire dès qu'il y a facture, analyse OpenAI pour préremplir,
@@ -1862,7 +1950,9 @@ function rcj_depense(rapport, initial) {
                cheque: null, cheque_nom: null,
                numero: null, date_facture: null, analyse_faite: false,
                est_bl: false, numero_bl: null,
-               paiements: [], banques: [] };
+               paiements: [], banques: [],
+               // Part mise en stock (10/11/2026) : les lignes lues sur la pièce, cochées ou non.
+               articles: [], fournisseur_candidats: null };
 
   const d = new frappe.ui.Dialog({
     title: initial ? __("✏️ Corriger la dépense {0}", [initial.name]) : __("Dépense de caisse"),
@@ -1907,6 +1997,12 @@ function rcj_depense(rapport, initial) {
       {
         fieldtype: "HTML", fieldname: "zone_facture",
         depends_on: 'eval:doc.type_depense!="Dépense non facturée"',
+      },
+      // Les articles de la pièce qui partent EN STOCK : leur part devient une avance sur une
+      // commande d'achat, le reste est la dépense (décision utilisateur 10/11/2026).
+      {
+        fieldtype: "HTML", fieldname: "zone_articles",
+        depends_on: 'eval:doc.type_depense=="Dépense avec facture"',
       },
       { fieldtype: "Section Break", label: __("Paiement") },
       {
@@ -2042,6 +2138,8 @@ function rcj_depense(rapport, initial) {
           est_bl: v.type_depense !== "Dépense non facturée" && etat.est_bl ? 1 : 0,
           numero_bl: etat.numero_bl || null,
           code_sans_photo: v.code_sans_photo || null,
+          articles_stock: v.type_depense === "Dépense avec facture"
+            ? JSON.stringify(rcj_articles_coches(etat)) : null,
         },
         freeze: true, freeze_message: initial ? __("Correction de la dépense…") : __("Enregistrement de la dépense…"),
         callback: (r) => {
@@ -2059,6 +2157,14 @@ function rcj_depense(rapport, initial) {
                 [r.message.ordres_traites.join(", ")]),
               indicator: "blue",
             }, 8);
+          }
+          if (r.message.purchase_order) {
+            frappe.show_alert({
+              message: __("📦 Part stock {0} DT : commande {1} créée{2}, avance posée ; le reste en dépense.",
+                [rcj_dt(r.message.part_stock), r.message.purchase_order,
+                 r.message.purchase_receipt ? __(" et reçu {0} entré", [r.message.purchase_receipt]) : ""]),
+              indicator: "blue",
+            }, 10);
           }
           if (r.message.a_payer) {
             frappe.show_alert({
@@ -2197,6 +2303,8 @@ function rcj_depense(rapport, initial) {
     () => {
       etat.analyse_faite = false;   // nouvelle photo -> nouvelle analyse exigée
       etat.facture_coins = null;
+      etat.articles = [];
+      rcj_zone_articles(d, etat, API, false);
       $zf.find(".rcj-analyser").prop("disabled", false);
       maj_bouton();
       // Cadrage à valider AVANT tout : les coins retenus font foi pour le scan.
@@ -2256,6 +2364,12 @@ function rcj_depense(rapport, initial) {
         // le seul type qui rattache ou crée une fiche fournisseur.
         etat.matricule = m.matricule || null;
         etat.supplier = m.fournisseur_certain || null;
+        etat.fournisseur_candidats = (m.fournisseur_candidats || []).length ? m : null;
+        // Dépense avec facture : les lignes d'articles, pour cocher ce qui part en stock.
+        etat.articles = [];
+        if (d.get_value("type_depense") === "Dépense avec facture") {
+          rcj_zone_articles(d, etat, API, true);
+        }
         if (d.get_value("type_depense") === "Facture d'achat") {
           if (m.fournisseur_certain) {
             frappe.show_alert({

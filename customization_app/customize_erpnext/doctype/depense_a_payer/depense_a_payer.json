@@ -25,31 +25,38 @@
   "reglement_journal_entry",
   "column_break_3",
   "date_reglement",
-  "saisi_par"
+  "saisi_par",
+  "sec_stock",
+  "purchase_order",
+  "fiche_achat",
+  "col_stock",
+  "part_stock_ht",
+  "part_stock_tva",
+  "articles_stock"
  ],
  "fields": [
   {
+   "default": "À payer",
    "fieldname": "statut",
    "fieldtype": "Select",
-   "label": "Statut",
-   "options": "À payer\nPayée",
-   "default": "À payer",
    "in_list_view": 1,
-   "in_standard_filter": 1
+   "in_standard_filter": 1,
+   "label": "Statut",
+   "options": "À payer\nPayée"
   },
   {
    "fieldname": "description",
    "fieldtype": "Small Text",
+   "in_list_view": 1,
    "label": "Description",
-   "reqd": 1,
-   "in_list_view": 1
+   "reqd": 1
   },
   {
    "fieldname": "montant",
    "fieldtype": "Currency",
+   "in_list_view": 1,
    "label": "Montant TTC",
-   "precision": "3",
-   "in_list_view": 1
+   "precision": "3"
   },
   {
    "fieldname": "column_break_1",
@@ -126,10 +133,10 @@
   {
    "fieldname": "reglement_journal_entry",
    "fieldtype": "Link",
+   "in_list_view": 1,
    "label": "Écriture de règlement",
    "options": "Journal Entry",
-   "read_only": 1,
-   "in_list_view": 1
+   "read_only": 1
   },
   {
    "fieldname": "column_break_3",
@@ -147,6 +154,50 @@
    "label": "Saisi par",
    "options": "User",
    "read_only": 1
+  },
+  {
+   "collapsible": 1,
+   "depends_on": "eval:doc.purchase_order",
+   "fieldname": "sec_stock",
+   "fieldtype": "Section Break",
+   "label": "Part mise en stock"
+  },
+  {
+   "fieldname": "purchase_order",
+   "fieldtype": "Link",
+   "label": "Commande d'achat (part stock)",
+   "options": "Purchase Order",
+   "read_only": 1
+  },
+  {
+   "fieldname": "fiche_achat",
+   "fieldtype": "Link",
+   "label": "Fiche d'achat (avance)",
+   "options": "Facture Achat a Saisir",
+   "read_only": 1
+  },
+  {
+   "fieldname": "col_stock",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "part_stock_ht",
+   "fieldtype": "Currency",
+   "label": "Part stock HT",
+   "read_only": 1
+  },
+  {
+   "fieldname": "part_stock_tva",
+   "fieldtype": "Currency",
+   "label": "Part stock TVA",
+   "read_only": 1
+  },
+  {
+   "fieldname": "articles_stock",
+   "fieldtype": "Small Text",
+   "hidden": 1,
+   "label": "Articles mis en stock (JSON)",
+   "read_only": 1
   }
  ],
  "index_web_pages_for_search": 0,
@@ -158,23 +209,44 @@
  "owner": "Administrator",
  "permissions": [
   {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
    "role": "System Manager",
-   "read": 1, "write": 1, "create": 1, "delete": 1,
-   "print": 1, "email": 1, "export": 1, "report": 1, "share": 1
+   "share": 1,
+   "write": 1
   },
   {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
    "role": "Accounts Manager",
-   "read": 1, "write": 1, "create": 1, "delete": 1,
-   "print": 1, "email": 1, "export": 1, "report": 1, "share": 1
+   "share": 1,
+   "write": 1
   },
   {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
    "role": "Accounts User",
-   "read": 1, "write": 1, "create": 1,
-   "print": 1, "email": 1, "export": 1, "report": 1, "share": 1
+   "share": 1,
+   "write": 1
   },
   {
-   "role": "Sales User",
-   "read": 1, "create": 1
+   "create": 1,
+   "read": 1,
+   "role": "Sales User"
   }
  ],
  "sort_field": "modified",

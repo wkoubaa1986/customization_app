@@ -375,7 +375,9 @@ def analyser(photo, type_depense=None):
         morceaux.append(_("Fact. n°{0}").format(out["numero"]))
     out["description"] = " — ".join(morceaux)
 
-    if type_depense == "Facture d'achat" and out["fournisseur"]:
+    # Aussi pour la dépense avec facture (10/11/2026) : une part mise en stock crée une commande
+    # d'achat, donc exige la fiche fournisseur ; l'écran ne fait choisir que si un article est coché.
+    if type_depense in ("Facture d'achat", "Dépense avec facture") and out["fournisseur"]:
         r = _rapprocher_fournisseur(out["fournisseur"], out["matricule"])
         out["fournisseur_certain"] = r["certain"]
         out["fournisseur_motif"] = r["motif"]
@@ -813,9 +815,14 @@ def creer(type_depense, montant, mode, compte=None, description=None, fournisseu
           photo_cheque=None, photo_cheque_nom=None, coins_facture=None,
           supplier=None, matricule=None, paiements=None, est_bl=0, numero_bl=None,
           retenue=None, code_sans_photo=None, montant_paye=None, timbre=0,
-          sans_retenue_confirme=0, reprise=None):
+          sans_retenue_confirme=0, reprise=None, articles_stock=None):
     """Crée la dépense selon son type (voir l'en-tête du module). Retourne les noms
     des pièces créées (écriture et/ou fiche de la file des factures d'achat).
+
+    `articles_stock` (« Dépense avec facture » seulement, décision utilisateur 10/11/2026) : les
+    articles de la pièce qui partent EN STOCK, [{item_code, qty, rate}]. Leur part devient une
+    avance sur une commande d'achat créée dans la foulée ; le reste est la dépense. Voir
+    caisse_stock_partiel.
 
     `montant_paye` : ce que porte le chèque ou l'ordre de virement (mono-mode, types facturés).
     Quand il est là, la retenue en découle (TTC − payé) — c'est le montant que la banque
@@ -930,6 +937,20 @@ def creer(type_depense, montant, mode, compte=None, description=None, fournisseu
         remarques.append(_("Corrige l'écriture {0}").format(reprise["origine"]))
     remarques.append(_("Saisie caisse par {0}").format(frappe.session.user))
 
+    # PART MISE EN STOCK (10/11/2026) : la dépense ne porte que le reste ; l'avance et la
+    # commande d'achat de la part stock se créent après la fiche de dépense.
+    stock = None
+    if type_depense == "Dépense avec facture" and articles_stock:
+        from customization_app import caisse_stock_partiel as S
+        if reprise:
+            frappe.throw(_("Une dépense avec part en stock ne se corrige pas ici : annulez la "
+                           "commande d'achat et ressaisissez."))
+        stock = S.preparer(articles_stock, montant, tva, taux_tva, paid, unpaid, mode, regs)
+        if stock:
+            remarques_total = list(remarques)
+            remarques.append(S.remarque(stock, len(stock["lignes"])))
+            paid, montant, tva = stock["regs_depense"], stock["depense_ttc"], stock["depense_tva"]
+
     je = None
     if type_depense == "Facture d'achat":
         supplier = _supplier(fournisseur, matricule=matricule, supplier=supplier)
@@ -1031,7 +1052,7 @@ def creer(type_depense, montant, mode, compte=None, description=None, fournisseu
         # rend les dépenses sur BL LISTABLES (la dépense payée cash n'a sinon
         # qu'une écriture, invisible des listes).
         if unpaid > 0 or (cint(est_bl) and type_depense == "Dépense avec facture") \
-                or reprise.get("depense"):
+                or reprise.get("depense") or stock:
             paye = unpaid <= 0
             valeurs_depense = {
                 "statut": "Payée" if paye else "À payer",
@@ -1062,6 +1083,21 @@ def creer(type_depense, montant, mode, compte=None, description=None, fournisseu
                                "Depense A Payer", fiche.name, coins=coins_facture)
             resultat = {"name": je.name, "fiche": fiche.name,
                         "a_payer": not paye, "reste": unpaid if not paye else 0}
+            if stock:
+                part = S.creer_part_stock(stock, {
+                    "fournisseur": fournisseur, "matricule": matricule, "supplier": supplier,
+                    "description": description, "remarques": remarques_total,
+                    "numero_facture": numero_facture, "date_facture": date_facture,
+                    "numero_bl": numero_bl, "photo": photo_facture, "coins": coins_facture,
+                    "dispense": dispense, "depense": fiche.name,
+                })
+                frappe.db.set_value("Depense A Payer", fiche.name, {
+                    "purchase_order": part["purchase_order"], "fiche_achat": part["fiche_achat"],
+                    "part_stock_ht": stock["stock_ht"], "part_stock_tva": stock["stock_tva"],
+                    "articles_stock": json.dumps(stock["lignes"], ensure_ascii=False),
+                }, update_modified=False)
+                resultat.update(part)
+                resultat["part_stock"] = stock["stock_ttc"]
 
     if je:
         _attacher_cheques(regs, je.name, dispense=dispense)
@@ -1176,6 +1212,12 @@ def attacher_facture_bl(fiches, numero_facture, date_facture=None,
                             {"numero_facture": numero_facture,
                              "date_facture": date_facture or None},
                             update_modified=False)
+        fiche_achat = frappe.db.get_value("Depense A Payer", nom, "fiche_achat")
+        if fiche_achat and frappe.db.exists("Facture Achat a Saisir", fiche_achat):
+            frappe.db.set_value("Facture Achat a Saisir", fiche_achat,
+                                {"numero_facture": numero_facture,
+                                 "date_facture": date_facture or None},
+                                update_modified=False)
         if photo_facture:
             _attacher_scan(photo_facture, "facture-%s-%s" % (numero_facture, nom),
                            "Depense A Payer", nom, coins=coins_facture)
@@ -2831,6 +2873,10 @@ def corriger(journal_entry, type_depense, montant, mode, compte=None, descriptio
     je, infos, fiche, depense, motif = _ecriture_de_caisse(journal_entry)
     if motif:
         frappe.throw(motif)
+    if depense and frappe.db.get_value("Depense A Payer", depense["name"], "purchase_order"):
+        frappe.throw(_("Cette dépense a une part mise en stock (commande {0}) : annulez la "
+                       "commande d'achat, puis ressaisissez la dépense.").format(
+                           frappe.db.get_value("Depense A Payer", depense["name"], "purchase_order")))
     if type_depense not in TYPES_CORRIGEABLES:
         frappe.throw(_("Seules les dépenses facturées se corrigent ici."))
 
