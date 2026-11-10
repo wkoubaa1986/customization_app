@@ -96,10 +96,12 @@ def _enrich_result(result):
         ]
         # doublons internes aux factures générées
         internal = set(n for n in gen_nums if gen_nums.count(n) > 1)
-        # collisions avec des factures déjà en base sur la période (hors générées)
+        # collisions avec des factures déjà en base, QUEL QUE SOIT LEUR MOIS (hors générées) :
+        # limité à la période, ce contrôle a laissé passer 19 doublons le 07/10/2026 (numéros
+        # de septembre repris sur des factures d'octobre saisies à la main).
         collisions = set()
-        if ds and de and gen_nums:
-            params = [ds, de]
+        if gen_nums:
+            params = [min(gen_nums), max(gen_nums)]
             not_in = ""
             if gen_names:
                 not_in = " AND name NOT IN (%s)" % ", ".join(["%s"] * len(gen_names))
@@ -107,8 +109,8 @@ def _enrich_result(result):
             existing = frappe.db.sql(
                 """SELECT DISTINCT CAST(custom_numero_facture AS UNSIGNED) AS n
                    FROM `tabSales Invoice`
-                   WHERE docstatus = 1 AND custom_numero_facture REGEXP '^[0-9]+$'
-                     AND posting_date BETWEEN %s AND %s""" + not_in,
+                   WHERE docstatus IN (0, 1) AND custom_numero_facture REGEXP '^[0-9]+$'
+                     AND CAST(custom_numero_facture AS UNSIGNED) BETWEEN %s AND %s""" + not_in,
                 params,
                 as_dict=True,
             )

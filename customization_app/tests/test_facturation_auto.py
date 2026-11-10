@@ -48,3 +48,61 @@ class TestScriptFacturationAuto(unittest.TestCase):
         self.assertIn("CUS.customer_name AS Customer_Name", s)
         for cle in ('"customer_group"', '"customer_name"', '"excluded"'):
             self.assertIn(cle, s[s.index("def payment_row"):s.index("STATISTIQUES PAIEMENTS AVANT TRAITEMENT")])
+
+
+def _fonctions_numerotation(script):
+    """Les fonctions pures de numérotation du script, exécutées hors Frappe."""
+    def bloc(debut, fin):
+        return script[script.index(debut):script.index(fin)]
+    ns = {}
+    exec(bloc("def pget(", "def to_bool("), ns)
+    exec(bloc("def left_invoices(", "def get_invoice_number("), ns)
+    return ns
+
+
+class TestNumerosPrisParDAutresMois(unittest.TestCase):
+    """07/10/2026 : la génération de septembre a redonné 2397-2417 à des factures du 30/09 alors que
+    des factures d'octobre, saisies du 2 au 7, les portaient déjà (19 doublons). Le script ne lisait
+    que les factures datées du mois visé."""
+
+    def setUp(self):
+        self.script = _script()
+
+    def test_cablage(self):
+        s = self.script
+        self.assertIn("def get_reserved_numbers_outside_month(", s)
+        self.assertIn("posting_date NOT BETWEEN %s AND %s", s)
+        self.assertIn("docstatus IN (0, 1)", s)
+        self.assertLess(s.index("RESERVED_OUTSIDE_MONTH = get_reserved_numbers_outside_month("),
+                        s.index("initial_gaps = left_invoices("))
+        self.assertIn('"reserved_outside_month_count"', s[s.index("if PREVIEW:"):])
+        self.assertIn('SCRIPT_VERSION = "v9-', s)
+
+    def test_ni_trou_ni_suite(self):
+        ns = _fonctions_numerotation(self.script)
+        # Septembre : série 2168..2396 ; octobre porte déjà 2397-2402 et 2405-2417.
+        ns["RESERVED_OUTSIDE_MONTH"] = set(range(2397, 2403)) | set(range(2405, 2418))
+        serie = [{"Fac_num": n, "Date": None} for n in (2390, 2391, 2393, 2396)]
+        self.assertEqual(ns["left_invoices"](serie, 2389), {2392, 2394, 2395})
+        self.assertEqual(ns["get_next_invoice_number"](serie, 2389), 2403)
+        serie.append({"Fac_num": 2403, "Date": None})
+        self.assertEqual(ns["get_next_invoice_number"](serie, 2389), 2404)
+        serie.append({"Fac_num": 2404, "Date": None})
+        self.assertEqual(ns["get_next_invoice_number"](serie, 2389), 2418)
+        # Avec une cible manuelle, les numéros d'octobre ne deviennent pas des trous non plus.
+        self.assertEqual(ns["left_invoices"](serie, 2389, 2406), {2392, 2394, 2395})
+
+    def test_sans_autre_mois_rien_ne_change(self):
+        ns = _fonctions_numerotation(self.script)
+        ns["RESERVED_OUTSIDE_MONTH"] = set()
+        serie = [{"Fac_num": 10, "Date": None}, {"Fac_num": 12, "Date": None}]
+        self.assertEqual(ns["left_invoices"](serie, 9), {11})
+        self.assertEqual(ns["get_next_invoice_number"](serie, 9), 13)
+
+    def test_le_bilan_cherche_les_doublons_dans_toute_la_base(self):
+        import inspect
+        src = inspect.getsource(FA._enrich_result)
+        bloc = src[src.index("collisions = set()"):src.index("existing_set = ")]
+        self.assertNotIn("posting_date", bloc)
+        self.assertIn("docstatus IN (0, 1)", bloc)
+        self.assertIn("CAST(custom_numero_facture AS UNSIGNED) BETWEEN %s AND %s", bloc)
