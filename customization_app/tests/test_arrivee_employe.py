@@ -78,6 +78,20 @@ class TestCablage(unittest.TestCase):
         self.assertIn("Request Leave,Demander un congé", self._lire("translations", "fr.csv"))
         self.assertIn("Leave Allocation", src)
 
+    def test_couleur_du_calendrier(self):
+        """La couleur se choisit à l'arrivée et vaut pour tout employé : la fiche passe avant le barème."""
+        from customization_app import api, sous_traitant as ST
+        self.assertIn("custom_couleur", inspect.getsource(A.creer_technicien))
+        self.assertIn("couleur_libre", inspect.getsource(A.options_arrivee))
+        src = inspect.getsource(api.compute_tache_color)
+        self.assertLess(src.index("couleur_calendrier(employe)"), src.index("STAFF_COLORS.get(employe"))
+        self.assertNotIn("if employe not in STAFF_COLORS", src)
+        self.assertIn("couleur_par_defaut(employe) if cint(r.get(CHAMP_FLAG)) else None", inspect.getsource(ST.couleur_calendrier))
+        js = self._lire("public", "js", "employee_list_arrivee.js")
+        self.assertIn('fieldtype: "Color", fieldname: "couleur"', js)
+        self.assertIn('"new-password"', js)
+        self.assertIn("customization_app.patches.couleur_calendrier_employe", self._lire("patches.txt"))
+
     def test_ecran_rh(self):
         """« Congés / Paie » : notre page, dans la barre du téléphone — on en revient d'un pouce."""
         js = self._lire("public", "js", "sous_traitant.js")

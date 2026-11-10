@@ -217,8 +217,9 @@ def _est_supervision() -> bool:
 
 
 def couleur_calendrier(employe: str):
-    """Couleur réglée sur la fiche (`custom_couleur`), sinon celle de la palette — pour un sous-traitant
-    seulement ; les employés gardent le barème STAFF_COLORS de api.py."""
+    """Couleur réglée sur la fiche (`custom_couleur`) — pour TOUT employé (choisie à l'arrivée d'un technicien,
+    10/11/2026) ; à défaut celle de la palette pour un sous-traitant seulement, les employés sans couleur de
+    fiche gardant le barème STAFF_COLORS de api.py."""
     if not employe or not _champs_prets():
         return None
     # (werkzeug Local n'a pas de __dict__ : l'ancien setdefault levait, l'erreur était avalée par api.py et la
@@ -228,7 +229,7 @@ def couleur_calendrier(employe: str):
         cache = frappe.local._couleurs_sous_traitants = {}
     if employe not in cache:
         r = frappe.db.get_value("Employee", employe, [CHAMP_FLAG, CHAMP_COULEUR], as_dict=True)
-        cache[employe] = ((r.get(CHAMP_COULEUR) or couleur_par_defaut(employe)) if r and cint(r.get(CHAMP_FLAG)) else None)
+        cache[employe] = (r.get(CHAMP_COULEUR) or (couleur_par_defaut(employe) if cint(r.get(CHAMP_FLAG)) else None)) if r else None
     return cache[employe]
 
 

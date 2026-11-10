@@ -124,3 +124,4 @@ customization_app.patches.pertes_profits_rapport
 customization_app.patches.reposer_partages_taches_partenaire
 customization_app.patches.depart_employe_champs
 customization_app.patches.arrivee_technicien
+customization_app.patches.couleur_calendrier_employe

@@ -90,6 +90,15 @@ def cles_identite(valeurs: dict) -> tuple[str, ...]:
 
 # ── Création ─────────────────────────────────────────────────────────────────
 
+def couleur_libre() -> str:
+    """Une couleur de la palette que personne d'actif n'a encore (fiche ou barème), sinon la première."""
+    from customization_app.api import STAFF_COLORS
+    from customization_app.sous_traitant import PALETTE
+    actifs = frappe.get_all("Employee", filters={"status": "Active"}, fields=["name", "custom_couleur"])
+    prises = {(e.custom_couleur or STAFF_COLORS.get(e.name) or "").lower() for e in actifs}
+    return next((c for c in PALETTE if c.lower() not in prises), PALETTE[0])
+
+
 def _champ_table(single: str, enfant: str) -> str | None:
     meta = frappe.get_meta(single)
     return next((f.fieldname for f in meta.get_table_fields() if f.options == enfant), None)
@@ -170,6 +179,7 @@ def options_arrivee() -> dict:
                            if frappe.db.get_value("User", r.parent, "enabled") and not r.parent.startswith("agent-ia")
                            and r.parent != "Administrator"})
     return {"approbateurs": [{"value": u, "label": frappe.utils.get_fullname(u) or u} for u in approbateurs],
+            "couleur_proposee": couleur_libre(),
             "employes": [{"value": e.name, "label": e.employee_name}
                          for e in frappe.get_all("Employee", filters={"status": "Active"}, fields=["name", "employee_name"],
                                                  order_by="employee_name")]}
@@ -179,7 +189,7 @@ def options_arrivee() -> dict:
 def creer_technicien(nom, email, mot_de_passe, telephone=None, date_entree=None, genre="Male", date_naissance=None,
                      domicile_lien=None, vehicule=None, cbox=None, jour_verification="Lundi", heure_verification="09:00",
                      periodicite="Chaque semaine", premier_jour_recup=None, ecran_simplifie=1, leave_approver=None,
-                     calendrier_visible_par=None, voit_calendrier_de=None, conges_payes=None) -> dict:
+                     calendrier_visible_par=None, voit_calendrier_de=None, conges_payes=None, couleur=None) -> dict:
     """Tout en un geste : utilisateur (profil Technicien), employé, entrepôt + vérification + seuil, réglages,
     caisse, récupération, écran simplifié, approbateur de congés, visibilité des calendriers.
     `calendrier_visible_par` : les EMPLOYÉS (leurs utilisateurs) qui voient son calendrier ;
@@ -234,6 +244,8 @@ def creer_technicien(nom, email, mot_de_passe, telephone=None, date_entree=None,
         valeurs["custom_domicile_lien"] = domicile_lien.strip()     # → point de départ des tournées (hook domicile)
     if leave_approver and frappe.get_meta("Employee").has_field("leave_approver"):
         valeurs["leave_approver"] = leave_approver
+    if frappe.db.has_column("Employee", "custom_couleur"):
+        valeurs["custom_couleur"] = (couleur or "").strip() or couleur_libre()    # sa couleur dans le calendrier
     # Jours fériés (application RH du téléphone, présences) : la liste de la société.
     liste_feries = frappe.db.get_value("Company", valeurs["company"], "default_holiday_list")
     if liste_feries:
@@ -257,6 +269,8 @@ def creer_technicien(nom, email, mot_de_passe, telephone=None, date_entree=None,
         journal.append(_("il voit le calendrier de {0} employé(s)").format(m))
     if cint(ecran_simplifie):
         journal.append(_("écran simplifié du téléphone activé"))
+    if valeurs.get("custom_couleur"):
+        journal.append(_("couleur dans le calendrier : {0}").format(valeurs["custom_couleur"]))
 
     ST._inscrire_verification(entrepot, jour_verification or "Lundi", heure_verification or "09:00",
                               periodicite or "Chaque semaine")

@@ -31,6 +31,8 @@ function rcj_dialogue_technicien(listview, opts) {
       { fieldtype: "Select", fieldname: "genre", label: __("Genre"), options: "Male\nFemale", default: "Male" },
       { fieldtype: "Date", fieldname: "date_naissance", label: __("Date de naissance") },
       { fieldtype: "Check", fieldname: "ecran_simplifie", label: __("Écran simplifié du téléphone (Ma journée, agenda, mon stock, ma caisse, clôture mobile)"), default: 1 },
+      { fieldtype: "Color", fieldname: "couleur", label: __("Sa couleur dans le calendrier"), default: opts.couleur_proposee || "",
+        description: __("Proposée : une couleur que personne n'a. Modifiable ensuite sur sa fiche.") },
       { fieldtype: "Section Break", label: __("RH et calendrier") },
       { fieldtype: "Select", fieldname: "leave_approver", label: __("Approbateur de ses congés"), reqd: 1,
         options: approbateurs.map((a) => a.value).join("\n"), default: approbateurs.length ? approbateurs[0].value : "",
@@ -68,7 +70,8 @@ function rcj_dialogue_technicien(listview, opts) {
                 ecran_simplifie: v.ecran_simplifie ? 1 : 0, leave_approver: v.leave_approver || null,
                 calendrier_visible_par: JSON.stringify(d.get_value("calendrier_visible_par") || []),
                 voit_calendrier_de: JSON.stringify(d.get_value("voit_calendrier_de") || []),
-                conges_payes: (v.conges_payes === undefined || v.conges_payes === null || v.conges_payes === "") ? null : v.conges_payes },
+                conges_payes: (v.conges_payes === undefined || v.conges_payes === null || v.conges_payes === "") ? null : v.conges_payes,
+                couleur: v.couleur || null },
         freeze: true, freeze_message: __("Création en cours…"),
         callback: (r) => {
           d.hide();
@@ -86,4 +89,10 @@ function rcj_dialogue_technicien(listview, opts) {
     },
   });
   d.show();
+  // Le navigateur remplissait e-mail et mot de passe avec CEUX DE L'UTILISATEUR CONNECTÉ (vu le 10/11/2026) :
+  // ce sont les identifiants du NOUVEAU technicien, jamais à pré-remplir.
+  ["email", "mot_de_passe"].forEach((f) => {
+    const $i = d.fields_dict[f] && d.fields_dict[f].$input;
+    if ($i) { $i.attr("autocomplete", "new-password").val(""); d.set_value(f, ""); }
+  });
 }

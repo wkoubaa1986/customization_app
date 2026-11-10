@@ -239,15 +239,15 @@ def compute_tache_color(doc):
     if doc.get("owner") == PARTNER_USER:
         return PARTNER_COLOR
     employe = doc.get("custom_choix_du_staff")
-    if employe not in STAFF_COLORS:
-        # Sous-traitant : couleur de sa fiche ou de la palette (sous_traitant.py), jamais le gris partagé.
-        try:
-            from customization_app.sous_traitant import couleur_calendrier
-            couleur = couleur_calendrier(employe)
-            if couleur:
-                return couleur
-        except Exception:
-            pass
+    # Couleur de la FICHE (choisie à l'arrivée d'un technicien, 10/11/2026) avant le barème ; pour un
+    # sous-traitant sans couleur, celle de la palette (sous_traitant.py) — jamais le gris partagé.
+    try:
+        from customization_app.sous_traitant import couleur_calendrier
+        couleur = couleur_calendrier(employe)
+        if couleur:
+            return couleur
+    except Exception:
+        pass
     return STAFF_COLORS.get(employe, STAFF_COLOR_DEFAULT)
 
 
