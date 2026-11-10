@@ -101,7 +101,7 @@ class ZonesMagasin {
   voirEnTableau(zone) {
     this.$root.find("#zm-filtre-zone").val(zone);
     this.$root.find("#zm-recherche").val("");
-    this.$root.find("#zm-stockes").prop("checked", false);
+    this.$root.find("#zm-stockes").prop("checked", true);
     this.montrerVue("articles");
     this.charger();
   }
@@ -206,6 +206,7 @@ class ZonesMagasin {
             <span class="zm-act" data-z-supprimer title="Supprimer">🗑️ Supprimer</span>` : ""}</div>
         ${modif ? `
           <input type="search" class="form-control zm-saisie" id="zm-z-recherche" placeholder="➕ Ajouter un article : tapez son nom ou son code…">
+          <div class="zm-aide">Articles suivis en stock uniquement, même à quantité nulle.</div>
           <div id="zm-z-trouves">${trouves.map((a) => ligne(a, ids.has(a.item_code)
               ? `<span class="bt fait" title="Déjà dans la zone">✓</span>`
               : `<span class="bt ajout" data-ajouter="${zm_esc(a.item_code)}" title="Ajouter">＋</span>`)).join("")}</div>` : ""}
@@ -214,7 +215,7 @@ class ZonesMagasin {
           || `<div class="zm-aide">Aucun article pour l’instant.</div>`}</div>`);
     };
     const chargerMembres = async () => {
-      membres = (await frappe.call({ method: ZM_API + ".get_articles", args: { zone, stockes: 0, limite: 200 } })).message.articles;
+      membres = (await frappe.call({ method: ZM_API + ".get_articles", args: { zone, stockes: 1, limite: 200 } })).message.articles;
       peindre();
     };
     let t = null, saisie = "";
@@ -223,7 +224,7 @@ class ZonesMagasin {
       clearTimeout(t);
       t = setTimeout(async () => {
         trouves = saisie.trim().length < 2 ? [] : (await frappe.call({ method: ZM_API + ".get_articles",
-          args: { recherche: saisie.trim(), stockes: 0, limite: 15 } })).message.articles;
+          args: { recherche: saisie.trim(), stockes: 1, limite: 15 } })).message.articles;
         peindre();
         $w.find("#zm-z-recherche").val(saisie).focus();
       }, 250);
@@ -328,7 +329,7 @@ class ZonesMagasin {
     const stock = (a.stocks || []).map((s) => `${zm_esc(zm_court(s.entrepot))} <b>${s.qte}</b>`).join("<br>") || `<span style="color:#cbd5e1">—</span>`;
     const connue = !a.sortie || ctx.entrepots.some((e) => e.name === a.sortie);
     const zones = (a.zones || []).map((z) => `<span class="zm-zchip">${zm_esc(z)}${modif ? `<span class="x" data-retirer-zone="${zm_esc(z)}" title="Retirer">✕</span>` : ""}</span>`).join("")
-      || `<span class="zm-zchip aucune">aucune zone</span>`;
+      || `<span class="zm-zchip aucune">${a.is_stock_item ? "aucune zone" : "non suivi en stock"}</span>`;
     return `<tr class="${sel ? "sel" : ""}" data-item="${zm_esc(a.item_code)}">
       <td class="c-sel">${modif ? `<input type="checkbox" data-coche ${sel ? "checked" : ""}>` : ""}</td>
       <td class="c-art"><div class="zm-art-cell">${zm_img(a.image)}<div>
@@ -336,7 +337,7 @@ class ZonesMagasin {
         <div class="zm-code">${zm_esc(a.item_code)}</div></div></div></td>
       <td class="c-grp">${zm_esc(a.item_group || "")}</td>
       <td class="c-stock">${stock}</td>
-      <td class="c-zones"><div class="zm-zchips">${zones}${modif ? `<span class="zm-zchip plus" data-zones>＋ zone</span>` : ""}</div></td>
+      <td class="c-zones"><div class="zm-zchips">${zones}${modif && a.is_stock_item ? `<span class="zm-zchip plus" data-zones>＋ zone</span>` : ""}</div></td>
       <td class="c-sortie"><select class="form-control" data-sortie ${modif ? "" : "disabled"}>
         ${connue ? "" : `<option value="${zm_esc(a.sortie)}" selected>⚠️ ${zm_esc(zm_court(a.sortie))} (non autorisée)</option>`}
         ${a.sortie ? "" : `<option value="" selected>— non définie —</option>`}

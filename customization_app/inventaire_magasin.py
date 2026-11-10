@@ -167,6 +167,8 @@ def _zones_par_article() -> dict[str, list[str]]:
 def _articles_magasin(magasin: str, perimetre: list[str] | None = None) -> list[dict]:
     """Les articles suivis en stock au Magasin : actifs, suivis en stock, avec une ligne de Bin au Magasin
     (même à zéro) ou rangés dans une zone de l'espace du Magasin. Quantité et taux du moment.
+    Les modèles sont inclus : Aqua World autorise leur stock propre (CustomStockLedgerEntry).
+    Les ensembles non stockés restent exclus ; leur stock est porté par leurs composants.
     `perimetre` (inventaire partiel) : seuls les articles rangés dans une de ces zones — ou sans zone de l'espace
     si `SANS_ZONE` en fait partie."""
     zones = _zones_par_article()
@@ -177,7 +179,7 @@ def _articles_magasin(magasin: str, perimetre: list[str] | None = None) -> list[
                                    coalesce(b.valuation_rate, 0) valuation_rate, i.valuation_rate taux_article
                             from tabItem i
                             left join tabBin b on b.item_code = i.name and b.warehouse = %(m)s
-                            where i.disabled = 0 and i.is_stock_item = 1 and i.has_variants = 0
+                            where i.disabled = 0 and i.is_stock_item = 1
                               and (b.name is not null or i.name in %(ranges)s)
                             order by i.item_name, i.name""", {"m": magasin, "ranges": list(zones) or [""]}, as_dict=True)
     return [{"item_code": r.item_code, "item_name": r.item_name, "qte_systeme": flt(r.actual_qty, 6),

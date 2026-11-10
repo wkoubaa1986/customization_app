@@ -115,14 +115,14 @@ def item_validate(doc, method=None):
 # ── Lecture ──────────────────────────────────────────────────────────────────
 
 def _zones() -> list[dict]:
-    """Toutes les zones (espaces compris), avec leur nombre d'articles actifs, espaces d'abord.
+    """Toutes les zones (espaces compris), avec leur nombre d'articles actifs suivis en stock, espaces d'abord.
     Un espace porte aussi `total` : ses articles, directement ou dans l'une de ses zones (sans doublon)."""
     comptes = dict(frappe.db.sql(f"""select l.zone, count(distinct l.parent) from `tab{DOCTYPE_LIEN}` l
-                                     join tabItem i on i.name = l.parent and i.disabled = 0
+                                     join tabItem i on i.name = l.parent and i.disabled = 0 and i.is_stock_item = 1
                                      where l.parenttype = 'Item' group by l.zone"""))
     totaux = dict(frappe.db.sql(f"""select coalesce(z.espace, z.name), count(distinct l.parent) from `tab{DOCTYPE_LIEN}` l
                                     join `tab{DOCTYPE_ZONE}` z on z.name = l.zone
-                                    join tabItem i on i.name = l.parent and i.disabled = 0
+                                    join tabItem i on i.name = l.parent and i.disabled = 0 and i.is_stock_item = 1
                                     where l.parenttype = 'Item' group by coalesce(z.espace, z.name)"""))
     return [{"name": z.name, "code": z.code, "espace": z.espace, "est_espace": cint(z.est_espace),
              "articles": cint(comptes.get(z.name)), "total": cint(totaux.get(z.name)) if z.est_espace else None}
@@ -166,7 +166,9 @@ def get_context():
 def _filtres(recherche, groupe, zone, sortie, stockes):
     """Clause SQL des filtres de la vue « Par article » (alias i = Item, d = Item Default de la société)."""
     conditions, valeurs = ["i.disabled = 0"], {"societe": _societe()}
-    if cint(stockes):
+    # Les zones concernent le stock physique, même si un ancien client passe stockes=0.
+    # La vue générale peut toujours afficher les non-stockés pour gérer leur sortie principale.
+    if cint(stockes) or zone:
         conditions.append("i.is_stock_item = 1")
     if recherche:
         conditions.append("(i.name like %(q)s or i.item_name like %(q)s)")
@@ -213,7 +215,7 @@ def get_articles(recherche=None, groupe=None, zone=None, sortie=None, stockes=1,
         return {"codes": codes}
     total = frappe.db.sql(f"select count(*) {base}", valeurs)[0][0]
     valeurs.update({"start": cint(start), "page": min(cint(limite) or PAGE, 200)})
-    rows = frappe.db.sql(f"""select i.name as item_code, i.item_name, i.item_group, i.image, i.stock_uom,
+    rows = frappe.db.sql(f"""select i.name as item_code, i.item_name, i.item_group, i.image, i.stock_uom, i.is_stock_item,
                                     d.default_warehouse as sortie
                              {base} order by i.item_name limit %(page)s offset %(start)s""", valeurs, as_dict=True)
     codes = [r.item_code for r in rows]
@@ -324,14 +326,19 @@ def supprimer_zone(zone):
 
 # ── Affectations ─────────────────────────────────────────────────────────────
 
-def _liste(items) -> list[str]:
+def _liste(items, stockes=False) -> list[str]:
     items = frappe.parse_json(items) if isinstance(items, str) else items
     items = list(dict.fromkeys(i for i in (items or []) if i))
     if not items:
         frappe.throw(_("Sélectionnez au moins un article."))
-    inconnus = set(items) - set(frappe.get_all("Item", filters={"name": ["in", items]}, pluck="name"))
+    articles = frappe.get_all("Item", filters={"name": ["in", items]}, fields=["name", "is_stock_item"])
+    inconnus = set(items) - {a.name for a in articles}
     if inconnus:
         frappe.throw(_("Articles introuvables : {0}").format(", ".join(sorted(inconnus))))
+    non_stockes = sorted(a.name for a in articles if not a.is_stock_item) if stockes else []
+    if non_stockes:
+        frappe.throw(_("Les zones sont réservées aux articles suivis en stock. Articles non stockés : {0}.")
+                     .format(", ".join(non_stockes)))
     return items
 
 
@@ -345,7 +352,7 @@ def ajouter_a_zone(zone, items):
     """Depuis la zone (ou la barre de lot) : range ces articles AUSSI dans la zone."""
     _ecriture()
     _zone_existante(zone)
-    items = _liste(items)
+    items = _liste(items, stockes=True)
     ajoutes = [i for i in items if _ajouter(i, zone)]
     for i in ajoutes:
         _resynchroniser(i)
@@ -367,9 +374,10 @@ def retirer_de_zone(zone, items):
 def definir_zones(item, zones):
     """Depuis l'article : fixe exactement ses zones (une, plusieurs ou aucune), dans l'ordre donné."""
     _ecriture()
-    item = _liste([item])[0]
     zones = frappe.parse_json(zones) if isinstance(zones, str) else (zones or [])
     zones = list(dict.fromkeys(z for z in zones if z))
+    # Autoriser le retrait d'anciennes affectations d'un article devenu non stocké.
+    item = _liste([item], stockes=bool(zones))[0]
     for z in zones:
         _zone_existante(z)
     frappe.db.delete(DOCTYPE_LIEN, {"parent": item, "parenttype": "Item"})
