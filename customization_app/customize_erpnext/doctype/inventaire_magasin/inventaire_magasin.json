@@ -29,7 +29,9 @@
   "termine_le",
   "termine_par",
   "col3",
-  "rapprochement"
+  "rapprochement",
+  "sortie_stock",
+  "entree_stock"
  ],
  "fields": [
   {
@@ -179,10 +181,24 @@
    "label": "Écriture de stock (rapprochement)",
    "options": "Stock Reconciliation",
    "read_only": 1
+  },
+  {
+   "fieldname": "sortie_stock",
+   "fieldtype": "Link",
+   "label": "Ajustement des manquants (sortie)",
+   "options": "Stock Entry",
+   "read_only": 1
+  },
+  {
+   "fieldname": "entree_stock",
+   "fieldtype": "Link",
+   "label": "Ajustement des manquants (entrée)",
+   "options": "Stock Entry",
+   "read_only": 1
   }
  ],
  "links": [],
- "modified": "2026-10-27 21:00:00.000000",
+ "modified": "2026-11-10 14:30:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Inventaire Magasin",

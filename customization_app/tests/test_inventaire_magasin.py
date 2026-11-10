@@ -1,5 +1,5 @@
 """Inventaire du Magasin (bouton de la page « Stock par entrepôt ») : feuille par emplacement, enregistrement
-partiel, clôture = une Stock Reconciliation sur le Magasin. Vrais articles dans un savepoint : tout est annulé."""
+partiel, clôture = rapprochement ou mouvement de stock négatif. Vrais articles dans un savepoint : tout est annulé."""
 from __future__ import annotations
 
 import json
@@ -15,12 +15,41 @@ EMPLOYE_SANS_ROLE = "morchediakram0@gmail.com"     # Akram : Stock User, pas le 
 
 
 class TestCalculPur(unittest.TestCase):
+    def test_repartition_premiere_zone_et_total_depot(self):
+        import copy
+        c = {"total_compte": -4, "zones": [
+            {"zone": "F2", "libelle": "F2", "qte": 3},
+            {"zone": "Osmoseurs", "libelle": "Osmoseurs", "qte": -7}]}
+        original = copy.deepcopy(c)
+        zones = [{"zone": z["zone"], "libelle": z["libelle"]} for z in c["zones"]]
+        for total, premiere in ((-5, 2), (-1, 6), (0, 7), (-9, -2)):
+            with self.subTest(stock=total):
+                r = S.repartir_solde_zones(c, total, zones)
+                self.assertEqual([z["qte"] for z in r["zones"]], [premiere, -7])
+                self.assertEqual(S.flt(sum(z["qte"] for z in r["zones"]), 6), total)
+                self.assertEqual(r["zone_mouvements"], "F2")
+        self.assertEqual(c, original)                  # le comptage reste une photographie
+        # L'ordre de l'article prime : pas de choix alphabétique ni de préférence pour une quantité positive.
+        r = S.repartir_solde_zones(c, -5, list(reversed(zones)))
+        self.assertEqual([z["qte"] for z in r["zones"]], [-8, 3])
+        self.assertEqual(r["zone_mouvements"], "Osmoseurs")
+        # Une zone retirée disparaît de la répartition, son solde revient à la première zone actuelle.
+        r = S.repartir_solde_zones(c, 13, [{"zone": "Nouvelle", "libelle": "Nouvelle"}])
+        self.assertEqual(r["zones"][0]["qte"], 13)
+        self.assertIsNone(r["zones"][0]["qte_comptee"])
+        # Cases inconnues : zéro conventionnel hors première zone, explicitement distinct d'un comptage.
+        r = S.repartir_solde_zones(c, 0.123456, zones + [{"zone": "Inconnue", "libelle": "Inconnue"}])
+        self.assertEqual([z["qte"] for z in r["zones"]], [7.123456, -7, 0])
+        self.assertIsNone(r["zones"][2]["qte_comptee"])
+        self.assertEqual(S.flt(sum(z["qte"] for z in r["zones"]), 6), 0.123456)
+
     def test_cases_valides_et_somme(self):
         cases = I.cases_valides({"Magasin - A1": "3", "Hall - C2": 2.5, "Magasin - Z9": 1, I.SANS_ZONE: "", "": 4},
                                 {"Magasin - A1", "Hall - C2"})
         self.assertEqual(cases, {"Magasin - A1": 3.0, "Hall - C2": 2.5})      # zone inconnue et vide ignorées
         self.assertEqual(I.sommer_cases(cases), 5.5)
-        self.assertEqual(I.cases_valides({"Magasin - A1": -2}), {"Magasin - A1": 0})   # jamais négatif
+        self.assertEqual(I.cases_valides({"Magasin - A1": -2}), {"Magasin - A1": -2})
+        self.assertEqual(I.sommer_cases(I.cases_valides({"F2": 3, "Osmoseurs": -7})), -4)
         self.assertEqual(I.cases_valides({I.SANS_ZONE: 0}, set()), {I.SANS_ZONE: 0.0})   # compté 0 = compté
 
     def test_perimetres(self):
@@ -34,7 +63,8 @@ class TestCalculPur(unittest.TestCase):
     def test_quantite_rapprochee(self):
         self.assertEqual(I.quantite_rapprochee(12, 10, 12), 10)       # rien n'a bougé : le compté
         self.assertEqual(I.quantite_rapprochee(12, 10, 9), 7)         # 3 vendus depuis : l'écart −2 reste
-        self.assertEqual(I.quantite_rapprochee(5, 0, 2), 0)           # jamais négatif
+        self.assertEqual(I.quantite_rapprochee(5, 0, 2), -3)
+        self.assertEqual(I.quantite_rapprochee(3, -4, 2), -5)        # une sortie depuis le comptage
 
 
 class TestInventaire(unittest.TestCase):
@@ -68,6 +98,294 @@ class TestInventaire(unittest.TestCase):
 
     def _ligne(self, d, item):
         return next(l for l in d["lignes"] if l["item_code"] == item)
+
+    def test_manquants_negatifs_et_osmoseurs_separes_par_employe(self):
+        """3 disponibles, -7 manquants = -4, même à la clôture. Les appareils restent à 3."""
+        import frappe
+        porte_filtre, osmoseur, autre = self.items
+        stock_autre = self._stock(autre)
+        autre_zone = frappe.db.get_value(Z.DOCTYPE_ZONE,
+            {"espace": self.espace, "est_espace": 0, "name": ["!=", self.zone]}, "name")
+        Z.definir_zones(porte_filtre, [self.zone, autre_zone])
+        Z.definir_zones(osmoseur, [autre_zone])
+        frappe.set_user("hedi.ibidhi@gmail.com")
+        self.assertIn(I.ROLE, frappe.get_roles())
+        with self.subTest(utilisateur=frappe.session.user):
+            name = I.ouvrir_inventaire([self.zone, autre_zone])
+            I.enregistrer_inventaire(name, {
+                porte_filtre: {"cases": {self.zone: 3, autre_zone: -7}},
+                osmoseur: {"cases": {autre_zone: 3}}})
+            d = I.detail_inventaire(name)
+            self.assertEqual(self._ligne(d, porte_filtre)["cases"], {self.zone: 3, autre_zone: -7})
+            self.assertEqual(self._ligne(d, porte_filtre)["qte_comptee"], -4)
+            b = I.bilan_cloture(name)
+            self.assertEqual(b["nb_ajustements_negatifs"], 1)
+            r = I.cloturer_inventaire(name)
+            self.assertEqual(self._stock(porte_filtre), -4)
+            self.assertEqual(self._stock(osmoseur), 3)
+            self.assertEqual(self._stock(autre), stock_autre)
+            self.assertEqual(len(r["ecritures"]), 2)
+            v = frappe.get_doc(I.INV, name)
+            self.assertTrue(v.sortie_stock)
+            self.assertEqual(v.termine_par, "hedi.ibidhi@gmail.com")
+            self.assertEqual(frappe.db.get_value("Stock Entry", v.sortie_stock, "docstatus"), 1)
+            sortie = frappe.get_doc("Stock Entry", v.sortie_stock)
+            self.assertEqual(sortie.purpose, "Material Issue")
+            self.assertEqual(sortie.items[0].item_code, porte_filtre)
+            self.assertEqual(sortie.items[0].expense_account,
+                             frappe.db.get_value("Company", S._societe(), "stock_adjustment_account"))
+            self.assertEqual(self._ligne(I.detail_inventaire(name), porte_filtre)["qte_rapprochee"], -4)
+            with self.assertRaises(frappe.ValidationError):
+                I.cloturer_inventaire(name)                        # aucune écriture en double
+            # Résorber une partie du manque laisse le stock négatif et passe une entrée.
+            suivant = I.ouvrir_inventaire([self.zone])
+            I.enregistrer_inventaire(suivant, {porte_filtre: {"cases": {self.zone: 3, autre_zone: -5}}})
+            r = I.cloturer_inventaire(suivant)
+            self.assertEqual(self._stock(porte_filtre), -2)
+            self.assertEqual(len(r["ecritures"]), 1)
+            entree = frappe.get_doc("Stock Entry", r["ecritures"][0]["name"])
+            self.assertEqual((entree.purpose, entree.items[0].qty), ("Material Receipt", 2))
+            # Le manque est inchangé : aucune écriture ; puis le retour à zéro reste possible.
+            suivant = I.ouvrir_inventaire([self.zone])
+            I.enregistrer_inventaire(suivant, {porte_filtre: {"cases": {self.zone: 3, autre_zone: -5}}})
+            self.assertEqual(I.cloturer_inventaire(suivant)["ecritures"], [])
+            suivant = I.ouvrir_inventaire([self.zone])
+            I.enregistrer_inventaire(suivant, {porte_filtre: {"cases": {self.zone: 3, autre_zone: -3}}})
+            self.assertTrue(I.cloturer_inventaire(suivant)["rapprochement"])
+            self.assertEqual(self._stock(porte_filtre), 0)
+
+    def test_ajouter_article_dans_perimetre_sans_perdre_comptages(self):
+        import frappe
+        from unittest.mock import patch
+        existant, nouveau, modele = self.items
+        Z.definir_zones(existant, [self.zone])
+        for code in (nouveau, modele):
+            Z.definir_zones(code, [])
+        frappe.db.set_value("Item", modele, "has_variants", 1)
+        frappe.clear_document_cache("Item", modele)
+        self.addCleanup(frappe.clear_document_cache, "Item", modele)
+        name = I.ouvrir_inventaire([self.zone])
+        I.enregistrer_inventaire(name, {existant: {"cases": {self.zone: 3}}})
+        avant = self._ligne(I.detail_inventaire(name), existant)
+        frappe.set_user("hedi.ibidhi@gmail.com")
+        with patch.object(frappe, "get_roles", return_value=[I.ROLE]):
+            for code in (nouveau, modele):
+                resultats = I.rechercher_articles("Item", code, "name", 0, 20, {"inventaire": name})
+                self.assertIn(code, [r[0] for r in resultats])
+                I.ajouter_article(name, code, self.zone)
+            d = I.detail_inventaire(name)
+            for champ in ("cases", "qte_systeme", "qte_comptee", "compte_par", "compte_le", "compte"):
+                self.assertEqual(self._ligne(d, existant)[champ], avant[champ], champ)
+            self.assertEqual(self._ligne(d, nouveau)["compte"], 0)
+            self.assertEqual(self._ligne(d, nouveau)["zones_ajoutees"], [self.zone])
+            self.assertIn(self.zone, Z.zones_de(nouveau))
+            I.enregistrer_inventaire(name, {nouveau: {"cases": {self.zone: -7}}})
+            I.ajouter_article(name, nouveau, self.zone)
+            apres = I.detail_inventaire(name)
+            self.assertEqual(len(d["lignes"]), len(apres["lignes"]))
+            self.assertEqual(self._ligne(apres, nouveau)["qte_comptee"], -7)
+            with self.assertRaises(frappe.ValidationError):
+                I.ajouter_article(name, nouveau, self.espace)       # hors périmètre
+            I.annuler_inventaire(name)
+            with self.assertRaises(frappe.ValidationError):
+                I.ajouter_article(name, nouveau, self.zone)
+
+    def test_ajout_et_recherche_refusent_non_stockes_et_sans_role(self):
+        import frappe
+        code = self.items[0]
+        name = I.ouvrir_inventaire([self.zone])
+        for champ in ("is_stock_item", "disabled"):
+            frappe.db.set_value("Item", code, champ, 0 if champ == "is_stock_item" else 1)
+            with self.assertRaises(frappe.ValidationError):
+                I.ajouter_article(name, code, self.zone)
+            self.assertNotIn(code, [r[0] for r in I.rechercher_articles("Item", code, "name", 0, 20, {"inventaire": name})])
+            frappe.db.set_value("Item", code, champ, 1 if champ == "is_stock_item" else 0)
+        frappe.set_user(EMPLOYE_SANS_ROLE)
+        with self.assertRaises(frappe.PermissionError):
+            I.ajouter_article(name, code, self.zone)
+        with self.assertRaises(frappe.PermissionError):
+            I.rechercher_articles("Item", code, "name", 0, 20, {"inventaire": name})
+
+    def test_saisie_invalide_et_negatif_non_autorise(self):
+        import frappe
+        code = self.items[0]
+        name = I.ouvrir_inventaire()
+        for q in ("NaN", "inf", "abc"):
+            with self.assertRaises(frappe.ValidationError):
+                I.enregistrer_inventaire(name, {code: {"cases": {I.SANS_ZONE: q}}})
+        I.enregistrer_inventaire(name, {code: {"cases": {I.SANS_ZONE: -4}}})
+        frappe.db.set_single_value("Stock Settings", "allow_negative_stock", 0)
+        frappe.db.set_value("Item", code, "allow_negative_stock", 0)
+        frappe.clear_document_cache("Stock Settings", "Stock Settings")
+        frappe.clear_document_cache("Item", code)
+        self.addCleanup(frappe.clear_document_cache, "Item", code)
+        with self.assertRaises(frappe.ValidationError):
+            I.cloturer_inventaire(name)
+        self.assertEqual(frappe.db.get_value(I.INV, name, "statut"), I.EN_COURS)
+
+    def test_manquant_et_sortie_apres_comptage(self):
+        import frappe
+        code = self.items[0]
+        name = I.ouvrir_inventaire()
+        I.enregistrer_inventaire(name, {code: {"cases": {I.SANS_ZONE: -4}}})
+        # Une sortie réelle entre le comptage et la clôture reste prise en compte.
+        S.ecriture_transfert(self.magasin, self.essai, [(code, 1)], "test inventaire négatif")
+        b = I.bilan_cloture(name)
+        cible = next(l for l in b["a_rapprocher"] if l["item_code"] == code)
+        self.assertEqual(cible["qte_rapprochee"], -5)
+        self.assertEqual(b["bouges"][0]["item_code"], code)
+        I.cloturer_inventaire(name)
+        self.assertEqual(self._stock(code), -5)
+
+    def test_manquant_refuse_pour_article_serialise(self):
+        import frappe
+        code = self.items[0]
+        name = I.ouvrir_inventaire()
+        I.enregistrer_inventaire(name, {code: {"cases": {I.SANS_ZONE: -4}}})
+        for champ in ("has_serial_no", "has_batch_no"):
+            frappe.db.set_value("Item", code, champ, 1)
+            with self.assertRaisesRegex(frappe.ValidationError, "numéro de série ou lot"):
+                I.bilan_cloture(name)
+            frappe.db.set_value("Item", code, champ, 0)
+        self.assertEqual(frappe.db.get_value(I.INV, name, "statut"), I.EN_COURS)
+
+    def test_solde_mouvements_affectes_premiere_zone_et_comptage_conserve(self):
+        import frappe
+        code = self.items[0]
+        autre_zone = frappe.db.get_value(Z.DOCTYPE_ZONE,
+            {"espace": self.espace, "est_espace": 0, "name": ["!=", self.zone]}, "name")
+        Z.definir_zones(code, [self.zone, autre_zone])
+        name = I.ouvrir_inventaire([self.zone])
+        I.enregistrer_inventaire(name, {code: {"cases": {self.zone: 3, autre_zone: -7}}})
+        I.cloturer_inventaire(name)
+
+        def solde():
+            return next(a for a in S.get_solde(self.magasin, recherche=code)["articles"] if a["item_code"] == code)
+
+        a = solde()
+        c = a["entrepots"][0]["comptage_zones"]
+        self.assertEqual(a["qte"], -4)
+        self.assertEqual(c["inventaire"], name)
+        self.assertEqual({z["zone"]: z["qte"] for z in c["zones"]}, {self.zone: 3, autre_zone: -7})
+        self.assertTrue(c["compte_le"])
+        self.assertEqual(c["variation_stock"], 0)
+        self.assertEqual(c["zone_mouvements"], self.zone)
+        cases_origine = self._ligne(I.detail_inventaire(name), code)["cases"]
+        # Le comptage suivant n'est pas encore clôturé : il ne remplace pas la photographie validée.
+        ouvert = I.ouvrir_inventaire([self.zone])
+        I.enregistrer_inventaire(ouvert, {code: {"cases": {self.zone: 9}}})
+        self.assertEqual(solde()["entrepots"][0]["comptage_zones"], c)
+        I.annuler_inventaire(ouvert)
+        self.assertEqual(solde()["entrepots"][0]["comptage_zones"], c)
+        # Une sortie de 1 va sur la première zone, jamais sur les manquants de la seconde.
+        S.ecriture_transfert(self.magasin, self.essai, [(code, 1)], "test détail par zone")
+        a = solde()
+        self.assertEqual(a["qte"], -5)
+        apres = a["entrepots"][0]["comptage_zones"]
+        self.assertEqual({z["zone"]: z["qte"] for z in apres["zones"]}, {self.zone: 2, autre_zone: -7})
+        self.assertEqual(apres["variation_stock"], -1)
+        self.assertEqual(sum(z["qte"] for z in apres["zones"]), a["qte"])
+        self.assertEqual(self._ligne(I.detail_inventaire(name), code)["cases"], cases_origine)
+        # Le même article à l'autre dépôt n'hérite jamais du comptage du Magasin.
+        ailleurs = S.get_solde(self.essai, recherche=code)["articles"][0]
+        self.assertNotIn("comptage_zones", ailleurs["entrepots"][0])
+        tous = next(a for a in S.get_solde(recherche=code)["articles"] if a["item_code"] == code)
+        depots = {e["entrepot"]: e for e in tous["entrepots"]}
+        self.assertEqual(depots[self.magasin]["comptage_zones"], apres)
+        self.assertNotIn("comptage_zones", depots[self.essai])
+        # Les entrées suivent la même règle et ne modifient pas le compte clôturé.
+        S.ecriture_transfert(self.essai, self.magasin, [(code, 2)], "test entrée première zone")
+        a = solde()
+        self.assertEqual(a["qte"], -3)
+        self.assertEqual([z["qte"] for z in a["entrepots"][0]["comptage_zones"]["zones"]], [4, -7])
+        self.assertEqual(self._ligne(I.detail_inventaire(name), code)["cases"], cases_origine)
+        # L'ordre actuel de l'article fait foi, même si la zone du Hall arrive avant celles du Magasin.
+        hall = frappe.db.get_value(Z.DOCTYPE_ZONE, {"est_espace": 0, "espace": ["!=", self.espace]}, "name")
+        Z.definir_zones(code, ([hall] if hall else []) + [autre_zone, self.zone])
+        a = solde()
+        repartition = a["entrepots"][0]["comptage_zones"]
+        self.assertEqual(repartition["zone_mouvements"], autre_zone)
+        self.assertEqual([z["qte"] for z in repartition["zones"]], [-6, 3])
+        self.assertEqual(sum(z["qte"] for z in repartition["zones"]), a["qte"])
+        self.assertNotIn(hall, [z["zone"] for z in repartition["zones"]])
+
+    def test_comptages_zones_date_par_article_depot_et_cases_inconnues(self):
+        import frappe
+        from frappe.utils import add_to_date, now_datetime
+        code, jamais_compte = self.items[:2]
+        # Isoler les photographies des articles de test ; le savepoint restaure tout l'historique.
+        frappe.db.delete("Inventaire Magasin Ligne", {"item_code": ["in", [code, jamais_compte]]})
+        instant = now_datetime()
+
+        def photographie(depot, age, cases, statut=I.TERMINE, compte=1, cloture=0):
+            v = frappe.new_doc(I.INV)
+            v.update({"entrepot": depot, "date": frappe.utils.nowdate(), "statut": statut,
+                      "termine_le": add_to_date(instant, seconds=cloture)})
+            v.append("lignes", {"item_code": code, "item_name": code, "compte": compte,
+                                "compte_le": add_to_date(instant, seconds=age),
+                                "comptes": json.dumps(cases), "zones": Z.SEPARATEUR.join([self.zone, self.espace])})
+            v.insert(ignore_permissions=True)
+            return v.name
+
+        photographie(self.magasin, -60, {self.zone: 99}, cloture=60)  # clôturé après, mais compté avant
+        dernier = photographie(self.magasin, -30, {self.zone: 0})
+        photographie(self.magasin, 0, {self.zone: 100}, statut=I.EN_COURS)
+        photographie(self.magasin, 0, {self.zone: 100}, statut=I.ANNULE)
+        photographie(self.magasin, 0, {self.zone: 100}, compte=0)
+        autre = photographie(self.essai, -30, {I.SANS_ZONE: 7})
+        d = I.derniers_comptages_par_zone([code, jamais_compte], [self.magasin, self.essai])
+        self.assertEqual(d[(code, self.magasin)]["inventaire"], dernier)
+        self.assertEqual({z["zone"]: z["qte"] for z in d[(code, self.magasin)]["zones"]},
+                         {self.zone: 0, self.espace: None})  # une case vide ne devient pas zéro
+        self.assertEqual(d[(code, self.essai)]["inventaire"], autre)
+        self.assertEqual(d[(code, self.essai)]["total_compte"], 7)
+        self.assertNotIn((jamais_compte, self.magasin), d)
+        self.assertNotIn((jamais_compte, self.essai), d)
+
+    def test_filtre_jamais_comptes_par_depot_et_cumul_avec_negatifs(self):
+        import frappe
+        compte, en_cours, non_compte = self.items
+        frappe.db.delete("Inventaire Magasin Ligne", {"item_code": ["in", self.items]})
+
+        def inventaire(statut, code, coche=1):
+            v = frappe.new_doc(I.INV)
+            v.update({"entrepot": self.magasin, "date": frappe.utils.nowdate(), "statut": statut})
+            v.append("lignes", {"item_code": code, "item_name": code, "compte": coche,
+                                "comptes": json.dumps({I.SANS_ZONE: 0}), "qte_comptee": 0,
+                                "compte_le": frappe.utils.now_datetime()})
+            v.insert(ignore_permissions=True)
+
+        inventaire(I.TERMINE, compte)                   # un comptage à zéro est bien un comptage
+        inventaire(I.EN_COURS, en_cours)
+        inventaire(I.ANNULE, en_cours)                  # un inventaire annulé ne valide pas le comptage
+        inventaire(I.TERMINE, non_compte, coche=0)      # présent sur la feuille, mais jamais compté
+        visibles = {a["item_code"] for a in S.get_solde(self.magasin, jamais_comptes="1")["articles"]}
+        self.assertEqual(visibles & set(self.items), {en_cours, non_compte})
+        sans_filtre = {a["item_code"] for a in S.get_solde(self.magasin)["articles"]}
+        self.assertTrue(set(self.items) <= sans_filtre)
+
+        # Compté au Magasin, jamais dans le second dépôt : ne pas exclure globalement l'article.
+        S.ecriture_transfert(self.magasin, self.essai, [(compte, 1)], "test filtre jamais comptés")
+        r = S.get_solde(jamais_comptes=1, recherche=compte)
+        article = next(a for a in r["articles"] if a["item_code"] == compte)
+        self.assertEqual([e["entrepot"] for e in article["entrepots"]], [self.essai])
+        self.assertEqual(article["qte"], 1)
+        valeur = frappe.db.get_value("Bin", {"item_code": compte, "warehouse": self.essai}, "stock_value")
+        self.assertEqual(article["valeur"], S.flt(valeur, 3))
+        self.assertEqual(r["valeur"], S.flt(sum(a["valeur"] for a in r["articles"]), 3))
+
+        # La combinaison avec Négatifs et la recherche ne doit garder que leur intersection.
+        S.ecriture_transfert(self.magasin, self.essai, [(en_cours, self._stock(en_cours) + 1)], "test négatif jamais compté")
+        r = S.get_solde(self.magasin, jamais_comptes=1, negatifs=1, recherche=en_cours)
+        self.assertIn(en_cours, {a["item_code"] for a in r["articles"]})
+        self.assertTrue(all(a["qte"] < 0 for a in r["articles"]))
+        self.assertEqual(r["negatifs"], len(r["articles"]))
+        self.assertEqual(r["positifs"], 0)
+        self.assertTrue(all(not e.get("comptage_zones") for a in r["articles"] for e in a["entrepots"]))
+        # Une fois un comptage clôturé, l'article quitte le filtre.
+        inventaire(I.TERMINE, en_cours)
+        visibles = {a["item_code"] for a in S.get_solde(self.magasin, jamais_comptes=1, negatifs=1)["articles"]}
+        self.assertNotIn(en_cours, visibles)
 
     def test_modeles_stockes_et_reprise_sans_perdre_le_comptage(self):
         """Les modèles stockés sont comptables, y compris à zéro et lors de la reprise d'une feuille.
@@ -331,5 +649,5 @@ class TestInventaire(unittest.TestCase):
     def test_ecritures_en_post_seulement(self):
         import frappe
         for fn in (I.ouvrir_inventaire, I.enregistrer_inventaire, I.cloturer_inventaire, I.annuler_inventaire,
-                   I.ajouter_emplacement, I.retirer_emplacement):
+                   I.ajouter_article, I.ajouter_emplacement, I.retirer_emplacement):
             self.assertEqual(frappe.allowed_http_methods_for_whitelisted_func.get(fn), ["POST"], fn.__name__)
