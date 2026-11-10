@@ -114,7 +114,14 @@ frappe.pages["agenda-sous-traitant"].on_page_show = function (wrapper) {
             while (iso(d) <= fin) { this.cache[iso(d)] = []; d.add(1, "day"); }
             this.feries = this.feries || {};
             (r.message || []).forEach((t) => {
-                if (t.ferie) { this.feries[t.jour] = t.client; return; }      // jour férié : repère, pas une tâche
+                // Férié, dimanche, congé, récupération : un jour grisé avec son libellé, pas une tâche.
+                // Un congé l'emporte sur « Dimanche », un férié sur les deux.
+                if (t.ferie) {
+                    const avant = this.feries[t.jour];
+                    const rang = t.repos ? 1 : t.absence ? 2 : 3;
+                    if (!avant || rang >= avant.rang) this.feries[t.jour] = { nom: t.client, rang, icone: t.repos ? "💤" : t.absence ? "🏖️" : "🎌" };
+                    return;
+                }
                 (this.cache[t.jour] = this.cache[t.jour] || []).push(t);
             });
             this.charges.add(cle);
@@ -146,11 +153,12 @@ frappe.pages["agenda-sous-traitant"].on_page_show = function (wrapper) {
 
         _classe(t) { return t.status === "Completed" ? "faite" : t.status === "Cancelled" ? "annulee" : ""; }
 
-        _ferie(j) { return (this.feries || {})[j]; }
+        _ferie(j) { const f = (this.feries || {})[j]; return f ? f.nom : null; }
+        _icone(j) { const f = (this.feries || {})[j]; return f ? f.icone : ""; }
 
         _jour() {
             const taches = this.cache[this.jour] || [];
-            const ferie = this._ferie(this.jour) ? `<div class="ag-ferie">🎌 ${__("Jour férié")} : ${esc(this._ferie(this.jour))}</div>` : "";
+            const ferie = this._ferie(this.jour) ? `<div class="ag-ferie">${this._icone(this.jour)} ${esc(this._ferie(this.jour))}</div>` : "";
             const liste = ferie + (taches.length ? taches.map((t) => `
                 <div class="ag-tache ${this._classe(t)}" data-journee="${esc(this.jour)}">
                   <div class="ag-heure">${esc(t.debut)}</div>
@@ -174,7 +182,7 @@ frappe.pages["agenda-sous-traitant"].on_page_show = function (wrapper) {
                 lignes.push(`
                   <div class="ag-sem-jour ${j === auj ? "auj" : ""} ${this._ferie(j) ? "ferie" : ""}" data-jour="${j}">
                     <div class="ag-sem-date">${JOURS[i]}<small>${d.format("D/M")}</small></div>
-                    <div class="ag-sem-liste">${this._ferie(j) ? `<div class="ag-ferie">🎌 ${esc(this._ferie(j))}</div>` : ""}${taches.length ? taches.map((t) =>
+                    <div class="ag-sem-liste">${this._ferie(j) ? `<div class="ag-ferie">${this._icone(j)} ${esc(this._ferie(j))}</div>` : ""}${taches.length ? taches.map((t) =>
                         `<div class="ag-sem-ligne ${this._classe(t)}"><b>${esc(t.debut)}</b> ${ICONES[t.type] || "📌"} ${esc(t.type)} · ${esc(t.client)}</div>`).join("")
                         : `<span class="ag-muted">—</span>`}</div>
                   </div>`);
@@ -193,12 +201,12 @@ frappe.pages["agenda-sous-traitant"].on_page_show = function (wrapper) {
                 const ouv = taches.filter((t) => t.status === "Open").length, ok = taches.filter((t) => t.status === "Completed").length;
                 cases.push(`<div class="ag-case ${d.month() !== mois ? "hors" : ""} ${j === auj ? "auj" : ""} ${this._ferie(j) ? "ferie" : ""}" data-jour="${j}"${
                     this._ferie(j) ? ` title="${esc(this._ferie(j))}"` : ""}>
-                    <div class="n">${d.date()}${this._ferie(j) ? " 🎌" : ""}</div>
+                    <div class="n">${d.date()}${this._ferie(j) ? " " + this._icone(j) : ""}</div>
                     ${ouv ? `<span class="ag-pastille ouv">${ouv}</span>` : ""}${ok ? `<span class="ag-pastille ok">${ok}</span>` : ""}</div>`);
                 d = d.add(1, "day");
             }
             return `<div class="ag-grille">${cases.join("")}</div>
-                    <div class="ag-muted" style="margin-top:8px">${__("Pastilles : à faire (orange), terminées (vert). 🎌 et fond gris : jour férié. Touchez un jour pour le détail.")}</div>`;
+                    <div class="ag-muted" style="margin-top:8px">${__("Pastilles : à faire (orange), terminées (vert). Fond gris : 🎌 férié, 💤 dimanche, 🏖️ congé ou récupération. Touchez un jour pour le détail.")}</div>`;
         }
     }
 

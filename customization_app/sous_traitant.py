@@ -47,6 +47,8 @@ PRIX_LISTE = "Vente standard"
 TYPE_TRANSACTION = "Vente directe sans BL et Facture"
 TAXES = "Vente Standard Sans Timbre Fiscale - A&S"
 DOCTYPE_TACHE = "Tache de travail"
+#: congés et récupérations : dans l'agenda du téléphone, des jours grisés, pas des interventions
+TYPES_ABSENCE = ("Congé", "Jour de récupération")
 
 #: les modes qu'il peut saisir à la clôture — pas de virement, pas de carte (décision 30/10/2026)
 MODES_PERMIS = ("Espèces", "Chèque", "Traite bancaire LC", "Dette non payée")
@@ -784,16 +786,27 @@ def agenda(debut, fin):
                                     "nom_client", "details_adresse", "google_map", "status", "commande_client",
                                     "temps", "raison_annulation"],
                             order_by="starts_on")
-    out = [{"name": t.name, "jour": str(getdate(t.starts_on)), "debut": str(t.starts_on)[11:16],
-            "fin": str(t.ends_on)[11:16] if t.ends_on else "", "type": t.custom_type_dintervention or "",
-            "client": t.nom_client or t.custom_client or "", "adresse": (t.details_adresse or "").replace("\n", ", "),
-            "maps": t.google_map or "", "status": t.status, "commande": t.commande_client or "",
-            "duree": t.temps or "", "raison_annulation": t.raison_annulation or ""} for t in lignes]
-    # Jours fériés de SA liste (sinon celle de la société), comme le calendrier du bureau (demande 10/11/2026).
+    out = []
+    for t in lignes:
+        jour = str(getdate(t.starts_on))
+        if (t.custom_type_dintervention or "") in TYPES_ABSENCE and t.status != "Cancelled":
+            # Congé / jour de récupération : un jour grisé dans son agenda, pas une intervention (10/11/2026).
+            out.append({"name": t.name, "jour": jour, "ferie": 1, "absence": 1, "type": t.custom_type_dintervention,
+                        "client": t.custom_type_dintervention, "debut": "", "fin": "", "status": t.status})
+            continue
+        out.append({"name": t.name, "jour": jour, "debut": str(t.starts_on)[11:16],
+                    "fin": str(t.ends_on)[11:16] if t.ends_on else "", "type": t.custom_type_dintervention or "",
+                    "client": t.nom_client or t.custom_client or "", "adresse": (t.details_adresse or "").replace("\n", ", "),
+                    "maps": t.google_map or "", "status": t.status, "commande": t.commande_client or "",
+                    "duree": t.temps or "", "raison_annulation": t.raison_annulation or ""})
+    # Jours fériés et repos hebdomadaires (dimanches) de SA liste, sinon celle de la société — grisés comme
+    # dans le calendrier du bureau (demande 10/11/2026).
     try:
-        from customization_app.jours_feries import feries
+        from customization_app.jours_feries import feries, repos_hebdomadaires
         out += [{"name": "FERIE-%s" % j, "jour": str(j), "ferie": 1, "type": _("Jour férié"), "client": nom,
                  "debut": "", "fin": "", "status": "Ferie"} for j, nom in feries(debut, fin, emp.name).items()]
+        out += [{"name": "REPOS-%s" % j, "jour": str(j), "ferie": 1, "repos": 1, "type": _("Repos"), "client": nom,
+                 "debut": "", "fin": "", "status": "Ferie"} for j, nom in repos_hebdomadaires(debut, fin, emp.name).items()]
     except Exception:
         frappe.log_error(frappe.get_traceback(), "agenda : jours fériés")
     return out

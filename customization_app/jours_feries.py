@@ -34,6 +34,18 @@ def feries(debut, fin, employee: str | None = None) -> dict[str, str]:
             if not cint(r.weekly_off) or (r.description or "").strip().lower().endswith("(dimanche)")}
 
 
+def repos_hebdomadaires(debut, fin, employee: str | None = None) -> dict[str, str]:
+    """{ 'AAAA-MM-JJ': description } des REPOS hebdomadaires (dimanches) de la liste de l'employé, sinon de la
+    société, entre `debut` et `fin` — pour l'agenda du téléphone, qui grise ces jours (10/11/2026)."""
+    liste = (frappe.db.get_value("Employee", employee, "holiday_list") if employee else None) or liste_par_defaut()
+    if not liste:
+        return {}
+    rows = frappe.get_all("Holiday", filters={"parent": liste, "parenttype": "Holiday List", "weekly_off": 1,
+                                              "holiday_date": ["between", [str(getdate(debut)), str(getdate(fin))]]},
+                          fields=["holiday_date", "description"], order_by="holiday_date")
+    return {str(r.holiday_date): (r.description or _("Repos")).strip() for r in rows}
+
+
 def est_ferie(jour, employee: str | None = None) -> str | None:
     """Le nom du férié ce jour-là, sinon None."""
     jour = getdate(jour)
