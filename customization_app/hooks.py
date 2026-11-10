@@ -181,7 +181,12 @@ has_permission = {
 doc_events = {
     # Domicile des employés : la fiche Employé et « Points de départ particuliers » (Config Optimisation Tournees) sont
     # une seule valeur, synchronisée dans les deux sens. Voir domicile_employe.py.
-    "Employee": {"on_update": "customization_app.domicile_employe.depuis_employe"},
+    "Employee": {"on_update": "customization_app.domicile_employe.depuis_employe",
+                 # Départ d'un employé : « Left » sans le bouton de la fiche est refusé tant qu'il reste des
+                 # rendez-vous, des réglages ou du stock à son nom (depart_employe.py, 10/11/2026).
+                 "validate": "customization_app.depart_employe.employee_validate"},
+    # Vérification FINALE du stock d'un employé parti terminée → stock restant au magasin, entrepôt fermé.
+    "Verification Stock": {"on_update": "customization_app.depart_employe.stock_apres_verification"},
     "Config Optimisation Tournees": {"on_update": "customization_app.domicile_employe.depuis_config"},
     # Congés & récupérations : chaque jour d'absence approuvé = une Tâche de travail « toute la
     # journée » dans le calendrier (remplace le Server Script « Generer » sur Attendance), retirée
@@ -743,6 +748,8 @@ scheduler_events = {
         "customization_app.stock_entrepots.planifier_verifications",
         # BL du Magasin en attente / sorties exceptionnelles non vérifiées : rappel au magasinier principal.
         "customization_app.sorties_magasin.relance_quotidienne",
+        # Rendez-vous à venir sur un employé inactif, vérification finale de départ qui traîne : la direction.
+        "customization_app.depart_employe.alerte_quotidienne",
     ],
 
     "cron": {
@@ -906,6 +913,8 @@ doctype_js = {
                     # Commande en litige : la partager avec le partenaire la fait compter au Bilan Vente.
                     "public/js/sales_order_partage_partenaire.js"],
     "Quotation": "public/js/sales_order_marge.js",
+    # Fiche Employé : « Départ : transférer son travail » (depart_employe.py).
+    "Employee": "public/js/employee_depart.js",
 }
 
 # doctype_js = {
