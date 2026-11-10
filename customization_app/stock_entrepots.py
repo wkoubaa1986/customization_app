@@ -224,10 +224,12 @@ def _filtre_mots(texte: str | None, valeurs: dict, prefixe: str = "i") -> str:
 # ── Solde ────────────────────────────────────────────────────────────────────
 
 @frappe.whitelist()
-def get_solde(entrepot=None, recherche=None, negatifs=0, a_reappro=0):
+def get_solde(entrepot=None, recherche=None, negatifs=0, a_reappro=0, jamais_comptes=0):
     """Stock non nul, par article. Sans entrepôt : tous les entrepôts, la quantité de chacun sous l'article.
     Avec un entrepôt qui a un seuil (réglage) : chaque article porte `a_reappro` (stock < seuil, les
-    articles à zéro compris) et la quantité `a_transferer` (cible − stock) ; `a_reappro=1` ne garde qu'eux."""
+    articles à zéro compris) et la quantité `a_transferer` (cible − stock) ; `a_reappro=1` ne garde qu'eux.
+    `jamais_comptes=1` : aucun comptage dans un inventaire clôturé pour ce couple article/dépôt.
+    Dans « Tous », seuls les dépôts sans comptage entrent dans les quantités et valeurs affichées."""
     _lecture()
     entrepot = _entrepot_impose() or entrepot
     valeurs = {"societe": _societe()}
@@ -242,6 +244,15 @@ def get_solde(entrepot=None, recherche=None, negatifs=0, a_reappro=0):
         valeurs["entrepot"] = entrepot
     if cint(negatifs):
         conds.append("b.actual_qty < 0")
+    if cint(jamais_comptes):
+        from customization_app.inventaire_magasin import TERMINE
+        valeurs["inventaire_termine"] = TERMINE
+        conds.append("""not exists (
+            select 1 from `tabInventaire Magasin Ligne` il
+            join `tabInventaire Magasin` inv on inv.name = il.parent
+            where il.item_code = b.item_code and inv.entrepot = b.warehouse
+              and il.compte = 1 and inv.statut = %(inventaire_termine)s
+        )""")
     mots = _filtre_mots(recherche, valeurs)
     if mots:
         conds.append(mots)
@@ -275,6 +286,7 @@ def get_solde(entrepot=None, recherche=None, negatifs=0, a_reappro=0):
                 a["a_reappro"] = a["qte"] < seuil["seuil"]
                 a["a_transferer"] = flt(max(seuil["cible"] - a["qte"], 0), 6) if a["a_reappro"] else 0
     _tris_solde(articles, rows, entrepot, voir_valeur)
+    _comptages_zones_solde(articles)
     out = {"articles": articles, "negatifs": sum(1 for a in articles if a["qte"] < 0),
            "positifs": sum(1 for a in articles if a["qte"] > 0),
            "a_reappro": cint(frappe.db.sql("select count(*) from tabBin where warehouse = %s and actual_qty < %s",
@@ -282,6 +294,45 @@ def get_solde(entrepot=None, recherche=None, negatifs=0, a_reappro=0):
     if voir_valeur:
         out["valeur"] = flt(sum(flt(r.stock_value) for r in rows), 3)
     return out
+
+
+def repartir_solde_zones(comptage: dict, quantite: float, zones: list[dict]) -> dict:
+    """Répartition calculée, sans réécrire l'inventaire : les autres zones gardent leur comptage
+    (zéro si inconnu), la PREMIÈRE reçoit le reste du stock actuel. Aucun écrêtage à zéro.
+    L'ordre vient des emplacements de l'article dans ce dépôt, pas du tri de la vue Solde."""
+    comptees = {z["zone"]: z["qte"] for z in comptage["zones"]}
+    repartition = [dict(z, qte_comptee=comptees.get(z["zone"]), qte=flt(comptees.get(z["zone"]), 6))
+                   for z in zones]
+    autres = flt(sum(z["qte"] for z in repartition[1:]), 6)
+    repartition[0]["qte"] = flt(flt(quantite, 6) - autres, 6)
+    return dict(comptage, zones=repartition, zone_mouvements=repartition[0]["zone"],
+                total_autres_zones=autres, variation_stock=flt(quantite - comptage["total_compte"], 6))
+
+
+def _comptages_zones_solde(articles: list[dict]):
+    """Appliquer au Solde la règle demandée : toute variation va sur la première zone du dépôt."""
+    from customization_app import inventaire_magasin as I
+
+    comptages = I.derniers_comptages_par_zone(
+        [a["item_code"] for a in articles],
+        list({e["entrepot"] for a in articles for e in a["entrepots"]}))
+    if not comptages:
+        return
+    magasin_ = magasin()
+    zones_actuelles = I._zones_par_article()
+    libelles = I._codes_zones()
+    for a in articles:
+        for e in a["entrepots"]:
+            c = comptages.get((a["item_code"], e["entrepot"]))
+            if c:
+                # Le Magasin possède un espace explicite : exclure les zones du Hall et suivre l'ordre
+                # actuel des lignes Article Zone Magasin. Une zone retirée ne garde pas un stock fictif.
+                if e["entrepot"] == magasin_:
+                    noms = zones_actuelles.get(a["item_code"], []) or [I.SANS_ZONE]
+                    zones = [{"zone": z, "libelle": "Non rangé" if z == I.SANS_ZONE else libelles.get(z, z)} for z in noms]
+                else:
+                    zones = [{"zone": z["zone"], "libelle": z["libelle"]} for z in c["zones"]]
+                e["comptage_zones"] = repartir_solde_zones(c, e["qte"], zones)
 
 
 def _tris_solde(articles: list[dict], rows, entrepot, voir_valeur: bool):

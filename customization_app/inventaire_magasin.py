@@ -12,8 +12,9 @@ ajoutée aux emplacements de l'article (fiche article), et retirable tant que l'
 Le comptage s'enregistre au fil de l'eau (lignes modifiées seulement : plusieurs personnes peuvent compter en
 même temps). La quantité système d'une ligne est relue AU MOMENT où elle est comptée : l'écart mesure ce
 qui manque ou dépasse à cet instant. À la clôture, l'écart de chaque ligne comptée est appliqué au stock du
-moment (rapproché = système actuel + écart) dans UNE écriture « Stock Reconciliation » sur le Magasin, pour
-les lignes dont l'écart n'est pas nul. Les articles non comptés ne bougent pas.
+moment (rapproché = système actuel + écart). Les totaux positifs ou nuls passent par « Stock Reconciliation » ;
+les totaux négatifs par une sortie ou entrée de stock, car ERPNext refuse un rapprochement négatif.
+Les cases négatives représentent des pièces manquantes dans un appareil. Les articles non comptés ne bougent pas.
 
 Inventaires PARTIELS (demande du 27/10, « des fois c'est trop grand ») : à l'ouverture on choisit un périmètre =
 des zones de l'espace (et/ou « Non rangé ») ; la feuille ne contient que les articles rangés dans ces zones (un
@@ -28,6 +29,7 @@ magasin — par patch) ou System Manager.
 from __future__ import annotations
 
 import json
+import math
 
 import frappe
 from frappe import _
@@ -108,7 +110,7 @@ def _acces():
 # ── Calcul pur ────────────────────────────────────────────────────────────────
 
 def cases_valides(cases, zones_connues: set[str] | None = None) -> dict[str, float]:
-    """{zone: quantité} des cases renseignées (vides ignorées, jamais négatif). `zones_connues` : les zones
+    """{zone: quantité} des cases renseignées (vides ignorées, négatif = pièces manquantes). `zones_connues` : les zones
     acceptées (SANS_ZONE toujours)."""
     out = {}
     for zone, q in (cases or {}).items():
@@ -116,7 +118,13 @@ def cases_valides(cases, zones_connues: set[str] | None = None) -> dict[str, flo
             continue
         if zones_connues is not None and zone != SANS_ZONE and zone not in zones_connues:
             continue
-        out[zone] = max(flt(q, 6), 0)
+        try:
+            quantite = float(q)
+        except (TypeError, ValueError, OverflowError):
+            frappe.throw(_("Quantité invalide pour la zone {0}.").format(zone))
+        if not math.isfinite(quantite):
+            frappe.throw(_("Quantité invalide pour la zone {0}.").format(zone))
+        out[zone] = flt(quantite, 6)
     return out
 
 
@@ -125,8 +133,8 @@ def sommer_cases(cases: dict[str, float]) -> float:
 
 
 def quantite_rapprochee(qte_systeme_comptage: float, qte_comptee: float, qte_systeme_actuelle: float) -> float:
-    """L'écart mesuré au comptage (compté − système d'alors) s'applique au stock du moment ; jamais négatif."""
-    return max(flt(qte_systeme_actuelle + (qte_comptee - qte_systeme_comptage), 6), 0)
+    """L'écart mesuré au comptage s'applique au stock du moment, y compris un manque négatif."""
+    return flt(qte_systeme_actuelle + (qte_comptee - qte_systeme_comptage), 6)
 
 
 def _charger_cases(l) -> dict[str, float]:
@@ -204,6 +212,37 @@ def _codes_zones() -> dict[str, str]:
     return {z.name: (z.name if z.est_espace else z.code) for z in zones_de_l_espace()}
 
 
+def derniers_comptages_par_zone(codes: list[str], entrepots: list[str]) -> dict[tuple[str, str], dict]:
+    """Photographie du dernier comptage clôturé, par article ET entrepôt, pour la vue Solde.
+    Une case non renseignée reste inconnue (pas zéro). Les mouvements ne portent pas de zone :
+    ces quantités sont datées, elles ne constituent pas un stock permanent par emplacement."""
+    if not codes or not entrepots:
+        return {}
+    rows = frappe.db.sql("""select * from (
+        select l.item_code, v.entrepot, v.name inventaire, l.compte_le, l.comptes, l.zones,
+               row_number() over (partition by l.item_code, v.entrepot
+                                  order by l.compte_le desc, v.termine_le desc, l.name desc) rang
+        from `tabInventaire Magasin Ligne` l join `tabInventaire Magasin` v on v.name = l.parent
+        where l.compte = 1 and v.statut = %(statut)s
+          and l.item_code in %(codes)s and v.entrepot in %(entrepots)s
+        ) comptages where rang = 1""",
+        {"statut": TERMINE, "codes": codes, "entrepots": entrepots}, as_dict=True)
+    libelles = _codes_zones()
+    out = {}
+    for r in rows:
+        cases = _charger_cases(r)
+        if not cases:
+            continue
+        zones = list(dict.fromkeys([z for z in (r.zones or "").split(Z.SEPARATEUR) if z] + list(cases)))
+        out[(r.item_code, r.entrepot)] = {
+            "inventaire": r.inventaire, "compte_le": str(r.compte_le) if r.compte_le else None,
+            "total_compte": sommer_cases(cases),
+            "zones": [{"zone": z, "libelle": "Non rangé" if z == SANS_ZONE else libelles.get(z, z),
+                       "qte": cases.get(z)} for z in zones],
+        }
+    return out
+
+
 def perimetres_se_recoupent(a: list[str], b: list[str]) -> bool:
     """Deux périmètres se recoupent s'ils partagent une zone, ou si l'un est « tout le Magasin ». PURE."""
     return not a or not b or bool(set(a) & set(b))
@@ -221,6 +260,12 @@ def _zones_choix() -> list[dict]:
             for z in zones_de_l_espace()]
 
 
+def _ecritures(v) -> list[dict]:
+    return [{"doctype": dt, "name": v.get(champ)} for champ, dt in (
+        ("rapprochement", "Stock Reconciliation"), ("sortie_stock", "Stock Entry"),
+        ("entree_stock", "Stock Entry")) if v.get(champ)]
+
+
 def _resume(v) -> dict:
     return {"name": v.name, "entrepot": v.entrepot, "date": str(v.date), "statut": v.statut,
             "ouvert_par": frappe.utils.get_fullname(v.ouvert_par) if v.ouvert_par else None,
@@ -228,7 +273,7 @@ def _resume(v) -> dict:
             "valeur_ecarts": flt(v.valeur_ecarts, 3), "valeur_manquants": flt(v.valeur_manquants, 3),
             "termine_le": str(v.termine_le) if v.termine_le else None,
             "termine_par": frappe.utils.get_fullname(v.termine_par) if v.termine_par else None,
-            "rapprochement": v.rapprochement, "note": v.note, "nb_bouges": cint(v.nb_bouges),
+            "rapprochement": v.rapprochement, "ecritures": _ecritures(v), "note": v.note, "nb_bouges": cint(v.nb_bouges),
             "nb_zones_ajoutees": cint(v.nb_zones_ajoutees), "nb_sans_taux": cint(v.nb_sans_taux),
             "perimetre": _perimetre(v), "perimetre_libelle": libelle_perimetre(_perimetre(v), _codes_zones())}
 
@@ -458,6 +503,53 @@ def _poser_zones(l):
     l.zones = Z.SEPARATEUR.join(_zones_par_article().get(l.item_code, [])) or None
 
 
+@frappe.whitelist()
+@frappe.validate_and_sanitize_search_inputs
+def rechercher_articles(doctype, txt, searchfield, start, page_len, filters):
+    """Recherche pour le comptage : articles actifs stockés, y compris modèles et stock nul."""
+    _acces()
+    _ouvert(S._dict_json(filters).get("inventaire"))
+    if doctype != "Item":
+        frappe.throw(_("Cette recherche est réservée aux articles."))
+    return frappe.db.sql("""select name, item_name from tabItem
+        where disabled = 0 and is_stock_item = 1
+          and (name like %(txt)s or item_name like %(txt)s or description like %(txt)s)
+        order by item_name, name limit %(limit)s offset %(start)s""",
+        {"txt": f"%{txt or ''}%", "limit": min(max(cint(page_len), 1), 50), "start": max(cint(start), 0)})
+
+
+@frappe.whitelist(methods=["POST"])
+def ajouter_article(name, item_code, zone):
+    """Ajoute un article existant et son emplacement dans le périmètre, sans toucher aux comptages."""
+    _acces()
+    v = _ouvert(name)
+    i = frappe.db.get_value("Item", item_code, ["item_name", "disabled", "is_stock_item", "valuation_rate"], as_dict=True)
+    if not i or i.disabled or not i.is_stock_item:
+        frappe.throw(_("Choisissez un article actif suivi en stock."))
+    connues = {z.name for z in zones_de_l_espace()} | {SANS_ZONE}
+    if zone not in connues or (_perimetre(v) and zone not in _perimetre(v)):
+        frappe.throw(_("Choisissez une zone du périmètre de cet inventaire."))
+    if zone == SANS_ZONE and _zones_par_article().get(item_code):
+        frappe.throw(_("Cet article possède déjà un emplacement : choisissez sa zone."))
+    l = next((l for l in v.lignes if l.item_code == item_code), None)
+    if l is None:
+        b = frappe.db.get_value("Bin", {"item_code": item_code, "warehouse": v.entrepot},
+                                ["actual_qty", "valuation_rate"], as_dict=True) or {}
+        l = v.append("lignes", {"item_code": item_code, "item_name": i.item_name,
+                                "qte_systeme": flt(b.get("actual_qty"), 6),
+                                "taux": flt(b.get("valuation_rate"), 6) or flt(i.valuation_rate, 6)})
+    if zone != SANS_ZONE and Z._ajouter(item_code, zone):
+        Z._resynchroniser(item_code)
+        l.zones_ajoutees = Z.SEPARATEUR.join(_zones_ajoutees(l) + [zone])
+    _poser_zones(l)
+    v.lignes.sort(key=lambda ligne: ((ligne.item_name or ligne.item_code or "").lower(), ligne.item_code))
+    for idx, ligne in enumerate(v.lignes, 1):
+        ligne.idx = idx
+    _recalculer(v)
+    _sauver(v)
+    return {"item_code": item_code, "zones": (l.zones or "").split(Z.SEPARATEUR) if l.zones else []}
+
+
 @frappe.whitelist(methods=["POST"])
 def ajouter_emplacement(name, item_code, zone):
     """« ＋ » sur une ligne : la zone est AUSSITÔT ajoutée aux emplacements de l'article (fiche article), et la
@@ -533,7 +625,7 @@ def _preparer_cloture(v) -> dict:
                            "qte_rapprochee": flt(l.qte_rapprochee, 6)})
         l.sans_taux = 0
         if abs(flt(l.qte_rapprochee, 6) - flt(actuelle, 6)) > 1e-6:
-            if flt(l.qte_rapprochee, 6) > 0 and _taux(l) <= 0:
+            if flt(l.qte_rapprochee, 6) != 0 and _taux(l) <= 0:
                 l.sans_taux = 1
                 sans_taux.append({"item_code": l.item_code, "item_name": l.item_name,
                                   "qte_rapprochee": flt(l.qte_rapprochee, 6)})
@@ -547,6 +639,17 @@ def _preparer_cloture(v) -> dict:
         if _zones_ajoutees(l):      # emplacements ajoutés pendant l'inventaire (déjà sur la fiche article)
             zones_nouvelles.append({"item_code": l.item_code, "item_name": l.item_name, "zones": _zones_ajoutees(l)})
     comptes = [l for l in v.lignes if l.compte]
+    negatifs = [l for l in a_rapprocher if flt(l.qte_rapprochee, 6) < 0]
+    if negatifs:
+        from erpnext.stock.stock_ledger import is_negative_stock_allowed
+        for l in negatifs:
+            suivi = frappe.db.get_value("Item", l.item_code, ["has_serial_no", "has_batch_no"], as_dict=True)
+            if suivi.has_serial_no or suivi.has_batch_no:
+                frappe.throw(_("{0} : un stock négatif n’est pas permis pour un article suivi par numéro de série ou lot.")
+                             .format(l.item_code))
+            if not is_negative_stock_allowed(item_code=l.item_code):
+                frappe.throw(_("{0} : le stock négatif doit être autorisé dans les réglages de stock ou sur l’article.")
+                             .format(l.item_code))
     return {"nb_lignes": len(v.lignes), "nb_comptes": len(comptes), "nb_non_comptes": len(v.lignes) - len(comptes),
             "nb_ecarts": sum(1 for l in comptes if abs(flt(l.ecart, 6)) > 1e-6),
             "valeur_ecarts": flt(sum(flt(l.valeur_ecart) for l in comptes), 3),
@@ -557,6 +660,9 @@ def _preparer_cloture(v) -> dict:
                               "taux_saisi": flt(l.get("taux_saisi"), 3), "taux_seul": l.item_code in taux_seuls,
                               "taux_actuel": flt(taux_bin.get(l.item_code), 3)} for l in a_rapprocher],
             "nb_taux_seuls": len(taux_seuls),
+            "nb_negatifs": sum(1 for l in comptes
+                               if flt(l.qte_systeme_cloture if l.sans_taux else l.qte_rapprochee, 6) < 0),
+            "nb_ajustements_negatifs": len(negatifs),
             "bouges": bouges, "sans_taux": sans_taux, "zones_nouvelles": zones_nouvelles}
 
 
@@ -616,17 +722,48 @@ def _rapprochement(v, lignes) -> str | None:
     return doc.name
 
 
+def _ajuster_negatifs(v, lignes, entree=False) -> str | None:
+    """Les rapprochements ERPNext refusent qty < 0. Appliquer le delta par mouvement standard,
+    dans le même entrepôt et sur le compte d'ajustement, sans changer les autorisations de stock."""
+    if not lignes:
+        return None
+    societe = S._societe()
+    purpose = "Material Receipt" if entree else "Material Issue"
+    type_ecriture = frappe.db.get_value("Stock Entry Type", {"purpose": purpose}, "name")
+    if not type_ecriture:
+        # Certains sites ne conservent que Transfert/Reconditionnement parmi les types ERPNext.
+        type_ecriture = "Inventaire - entrée" if entree else "Inventaire - sortie"
+        frappe.get_doc({"doctype": "Stock Entry Type", "name": type_ecriture,
+                        "purpose": purpose}).insert(ignore_permissions=True)
+    doc = frappe.new_doc("Stock Entry")
+    doc.update({"stock_entry_type": type_ecriture, "purpose": purpose, "company": societe,
+                "remarks": _("Inventaire {0} : ajustement des pièces manquantes, stock final négatif.").format(v.name)})
+    for l in lignes:
+        doc.append("items", {"item_code": l.item_code,
+                             "qty": abs(flt(l.qte_rapprochee - l.qte_systeme_cloture, 6)),
+                             "t_warehouse" if entree else "s_warehouse": v.entrepot,
+                             "basic_rate": _taux(l),
+                             "expense_account": frappe.db.get_value("Company", societe, "stock_adjustment_account"),
+                             "cost_center": frappe.db.get_value("Company", societe, "cost_center")})
+    doc.flags.ignore_permissions = True
+    doc.insert()
+    doc.submit()
+    return doc.name
+
+
 @frappe.whitelist(methods=["POST"])
 def cloturer_inventaire(name, note=None):
-    """Clôture : UNE écriture Stock Reconciliation sur le Magasin (lignes comptées dont l'écart n'est pas nul,
-    quantité = système actuel + écart du comptage), fiche terminée. Les articles non comptés ne bougent pas
-    (les emplacements ajoutés par « ＋ » sont déjà sur les fiches articles)."""
+    """Clôture : rapprochement des quantités non négatives, mouvements pour les manques négatifs.
+    Toutes les écritures et la fiche sont enregistrées dans la même transaction."""
     _acces()
     v = _ouvert(name)
     bilan = _preparer_cloture(v)
     retenus = {x["item_code"] for x in bilan["a_rapprocher"]}     # écart de quantité, ou taux saisi seul
     lignes = [l for l in v.lignes if l.compte and not l.sans_taux and l.item_code in retenus]
-    v.rapprochement = _rapprochement(v, lignes)
+    v.rapprochement = _rapprochement(v, [l for l in lignes if l.qte_rapprochee >= 0])
+    negatifs = [l for l in lignes if l.qte_rapprochee < 0]
+    v.sortie_stock = _ajuster_negatifs(v, [l for l in negatifs if l.qte_rapprochee < l.qte_systeme_cloture])
+    v.entree_stock = _ajuster_negatifs(v, [l for l in negatifs if l.qte_rapprochee > l.qte_systeme_cloture], entree=True)
     v.nb_zones_ajoutees = sum(len(_zones_ajoutees(l)) for l in v.lignes)
     v.nb_bouges = len(bilan["bouges"])
     v.nb_sans_taux = len(bilan["sans_taux"])
@@ -635,7 +772,7 @@ def cloturer_inventaire(name, note=None):
     if note:
         v.note = note
     _sauver(v)
-    return {"name": v.name, "rapprochement": v.rapprochement, "nb_rapproches": len(lignes),
+    return {"name": v.name, "rapprochement": v.rapprochement, "ecritures": _ecritures(v), "nb_rapproches": len(lignes),
             "nb_comptes": bilan["nb_comptes"], "nb_non_comptes": bilan["nb_non_comptes"], "nb_ecarts": bilan["nb_ecarts"],
             "valeur_ecarts": bilan["valeur_ecarts"], "valeur_manquants": bilan["valeur_manquants"],
             "nb_bouges": v.nb_bouges, "nb_sans_taux": v.nb_sans_taux, "nb_zones_ajoutees": v.nb_zones_ajoutees}

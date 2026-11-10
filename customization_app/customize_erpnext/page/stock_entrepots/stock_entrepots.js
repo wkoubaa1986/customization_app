@@ -11,7 +11,7 @@
  *  - À zéro (responsable magasin) : ramène un entrepôt à zéro par transferts avec le Magasin, pour que
  *    l'écart ne reste que sur le Magasin.
  *  - Inventaire du Magasin (rôle Inventaire Magasin, bouton du Solde) : tous les articles suivis au Magasin,
- *    une case par emplacement, enregistrement au fil de l'eau, clôture = une écriture Stock Reconciliation.
+ *    une case par emplacement (manques négatifs possibles), enregistrement au fil de l'eau et ajustements de stock à la clôture.
  * Toute la règle est côté serveur (customization_app.stock_entrepots).
  */
 
@@ -29,6 +29,7 @@ const SE_INV = "customization_app.inventaire_magasin.";
 const SE_PAGE = 80;
 const se_esc = (s) => frappe.utils.escape_html(s == null ? "" : String(s));
 const se_q = (n) => (Math.round((+n || 0) * 1000) / 1000).toLocaleString("fr-FR", { maximumFractionDigits: 3 });
+const se_q_stock = (n) => (Math.round((+n || 0) * 1e6) / 1e6).toLocaleString("fr-FR", { maximumFractionDigits: 6 });
 const se_signe = (n) => (n > 0 ? "+" : "") + se_q(n);
 const se_dt = (d) => (d ? `${d.slice(8, 10)}/${d.slice(5, 7)}` : "");
 const se_court = (wh) => String(wh || "").replace(/ - [^-]+$/, "");
@@ -66,6 +67,7 @@ class StockEntrepots {
     this.$r = $(wrapper).find(".se-page");
     this.onglet = "solde";
     this.negatifs = false;
+    this.jamaisComptes = false;
     this.reappro = false;
     this.tri = "nom";           // vue Solde : nom | zone | qte | valeur | mvt
     this.triDesc = false;       // 2e clic sur la même puce : sens inversé
@@ -103,6 +105,11 @@ class StockEntrepots {
     let t1 = null, t2 = null;
     r.find("#se-s-recherche").on("input", () => { clearTimeout(t1); t1 = setTimeout(() => this.chargerSolde(), 300); });
     r.find("#se-s-negatifs").on("click", (e) => { this.negatifs = !this.negatifs; $(e.currentTarget).toggleClass("on", this.negatifs); this.chargerSolde(); });
+    r.find("#se-s-jamais-comptes").on("click", (e) => {
+      this.jamaisComptes = !this.jamaisComptes;
+      $(e.currentTarget).toggleClass("on", this.jamaisComptes).attr("aria-pressed", String(this.jamaisComptes));
+      this.chargerSolde();
+    });
     r.find("#se-s-tris [data-tri]").on("click", (e) => {
       const t = $(e.currentTarget).attr("data-tri");
       // Même puce : on inverse le sens. Autre puce : sens naturel (nom A→Z, zone dans l’ordre, quantité /
@@ -161,6 +168,7 @@ class StockEntrepots {
       <div class="et"><div class="t">📦 Solde — ce qu’il y a dans un stock</div><ul>
         <li>Tri : <b>Nom</b> (A→Z), <b>📍 Zone</b> (groupé par emplacement, dans l’ordre des zones du Magasin puis du Hall, « Non rangé » à la fin), <b>Quantité</b> (du plus grand au plus petit), <b>Valeur</b> (responsable), <b>Dernier mouvement</b> (le plus récent d’abord ; sans mouvement en dernier). Un second clic sur la même puce inverse le sens (↑ / ↓).</li>
         <li>Choisissez un stock (pastilles) ou « Tous » ; cherchez un article ; « ⚠️ Négatifs » montre les quantités en dessous de zéro.</li>
+        <li>« 📋 Jamais comptés » garde les articles sans comptage dans un inventaire clôturé pour ce dépôt. Il se combine avec la recherche et « Négatifs ». Dans « Tous », seuls les dépôts jamais comptés sont inclus.</li>
         <li>Toucher un article ouvre ses entrées / sorties.</li>
         ${resp ? `<li>Cochez des articles (Maj + clic = plage) → « 🔁 Transférer depuis le Magasin » vers un véhicule, ou « 🎯 Dans le stock cible ».</li>
         <li>« 🎯 Stock cible » : ce que le véhicule doit contenir ; « 🔻 À réappro. » liste ce qui manque ; « Réassort » prépare le transfert en un geste.</li>` : ""}
@@ -384,7 +392,8 @@ class StockEntrepots {
     if (!seuil) this.reappro = false;
     r.find("#se-s-reappro").toggleClass("on", this.reappro);
     const res = await this.appel("solde", "get_solde", { entrepot: this.entrepot || null,
-      recherche: r.find("#se-s-recherche").val() || null, negatifs: this.negatifs ? 1 : 0, a_reappro: this.reappro ? 1 : 0 });
+      recherche: r.find("#se-s-recherche").val() || null, negatifs: this.negatifs ? 1 : 0,
+      a_reappro: this.reappro ? 1 : 0, jamais_comptes: this.jamaisComptes ? 1 : 0 });
     if (!res) return;
     this.solde = res;
     this.nSolde = SE_PAGE;
@@ -418,6 +427,19 @@ class StockEntrepots {
     r.find('#se-s-tris [data-tri="valeur"]').toggle(!!(res && res.valeur != null));
   }
 
+  comptagesZones(a, tous) {
+    const blocs = a.entrepots.filter((e) => e.comptage_zones).map((e) => {
+      const c = e.comptage_zones, premiere = c.zones[0];
+      const date = c.compte_le ? `${se_dt(c.compte_le)}/${c.compte_le.slice(0, 4)} ${se_hm(c.compte_le)}` : "date inconnue";
+      return `<div class="se-z-comptage" title="${se_esc(c.inventaire)}">
+        <div class="se-code">Répartition calculée${tous ? ` · ${se_esc(e.libelle)}` : ""} · base comptée le ${se_esc(date)}</div>
+        <div class="se-z-quantites">${c.zones.map((z, i) => `<span title="${i === 0 ? "Première zone : reçoit les mouvements" : z.qte_comptee == null ? "Zone non comptée : zéro retenu pour le calcul" : "Quantité du dernier comptage"}">${se_esc(z.libelle)} : <b class="${z.qte < 0 ? "neg" : ""}">${se_q_stock(z.qte)}</b>${i > 0 && z.qte_comptee == null ? " (non comptée)" : ""}</span>`).join("")}</div>
+        <div class="se-z-calcul">${se_esc(premiere.libelle)} = stock ${se_q_stock(e.qte)} − autres zones (${se_q_stock(c.total_autres_zones)}) = <b>${se_q_stock(premiere.qte)}</b></div>
+      </div>`;
+    });
+    return blocs.join("") || (a.zones ? `<div class="se-code">Quantités par zone : aucun comptage clôturé disponible.</div>` : "");
+  }
+
   peindreSolde() {
     const r = this.$r, res = this.solde, tous = !this.entrepot;
     const coches = !!(this.ctx.responsable && this.entrepot);
@@ -428,7 +450,10 @@ class StockEntrepots {
       + (res.negatifs ? ` · <span class="neg">${res.negatifs} négatif(s)</span>` : "")
       + (res.a_reappro ? ` · <span style="color:#c2410c">${res.a_reappro} à réapprovisionner</span>` : "")
       + (res.valeur != null ? ` · valeur ${se_esc(se_argent(res.valeur))}` : "")
-      + ` · ${tous ? "tous les entrepôts" : se_esc(this.libelle(this.entrepot))}`);
+      + ` · ${tous ? "tous les entrepôts" : se_esc(this.libelle(this.entrepot))}`
+      + (this.jamaisComptes ? `<div class="se-note">Sans comptage dans un inventaire clôturé${tous ? " : seuls les dépôts jamais comptés sont inclus." : " pour ce dépôt."}</div>` : "")
+      + (res.articles.some((a) => a.entrepots.some((e) => e.comptage_zones))
+        ? `<div class="se-note">Les mouvements sont affectés à la première zone de l’article dans ce dépôt. Les autres gardent leur dernier comptage (0 si non comptées).</div>` : ""));
     const cartes = liste.slice(0, this.nSolde).map((a) => {
       let tete = "";
       if (parZone) {
@@ -440,12 +465,13 @@ class StockEntrepots {
         ${se_img(a.image)}
         <div class="txt"><div class="se-nom">${se_esc(a.item_name || a.item_code)}</div>
           <div class="se-code">${se_esc(a.item_code)}${a.zones ? ` · 📍 ${se_esc(a.zones)}` : ""}</div>
+          ${this.comptagesZones(a, tous)}
           ${a.a_reappro ? `<span class="se-reappro">🔻 à réapprovisionner · ${a.cible != null ? `cible ${se_q(a.cible)}` : `seuil ${se_q(a.seuil)}`} · manque ${se_q(a.a_transferer)}</span>` : ""}
-          ${tous ? `<div class="se-wh">${a.entrepots.map((e) => `<span class="${e.qte < 0 ? "neg" : ""}">${se_esc(e.libelle)} <b>${se_q(e.qte)}</b></span>`).join("")}</div>` : ""}
+          ${tous ? `<div class="se-wh">${a.entrepots.map((e) => `<span class="${e.qte < 0 ? "neg" : ""}">${se_esc(e.libelle)} <b>${se_q_stock(e.qte)}</b></span>`).join("")}</div>` : ""}
           ${this.tri === "mvt" ? `<div class="se-code">🕓 dernier mouvement : ${a.dernier_mvt ? se_dt(a.dernier_mvt) + "/" + a.dernier_mvt.slice(0, 4) : "aucun"}</div>` : ""}
           ${this.tri === "valeur" && a.valeur != null ? `<div class="se-code">💰 ${se_esc(se_argent(a.valeur))}</div>` : ""}
         </div>
-        <div class="se-qte ${a.qte < 0 ? "neg" : ""}">${se_q(a.qte)}<small>${se_esc(a.uom || "")}</small></div>
+        <div class="se-qte ${a.qte < 0 ? "neg" : ""}">${se_q_stock(a.qte)}<small>${se_esc(a.uom || "")}</small></div>
       </div>`; }).join("");
     r.find("#se-s-liste").html((cartes || `<div class="se-vide">Aucun stock pour ces filtres.</div>`)
       + (liste.length > this.nSolde ? `<button type="button" class="btn btn-default se-plus">Afficher plus (${liste.length - this.nSolde})</button>` : ""));
@@ -1347,7 +1373,7 @@ class StockEntrepots {
     const ligneHist = (v) => `<div class="se-v-h ${v.statut === "Annulé" ? "se-annule" : ""}" style="cursor:default">
         <span class="d">${se_hm(v.termine_le || v.date) || se_dt(v.date)}</span>
         <span class="n">${etat(v)} ${peri(v)} ${v.nb_comptes}/${v.nb_lignes} comptés · <b class="${v.nb_ecarts ? "neg" : "pos"}">${v.nb_ecarts} écart(s)</b>${v.termine_par ? ` · ${se_esc(v.termine_par)}` : ""}
-          <span class="se-note">${se_lien("Inventaire Magasin", v.name)}${v.rapprochement ? ` · ${se_lien("Stock Reconciliation", v.rapprochement, "écriture " + v.rapprochement)}` : v.statut === "Terminé" ? " · sans écriture (aucun écart)" : ""}</span></span>
+          <span class="se-note">${se_lien("Inventaire Magasin", v.name)}${(v.ecritures || []).length ? v.ecritures.map((e) => ` · ${se_lien(e.doctype, e.name, "écriture " + e.name)}`).join("") : v.statut === "Terminé" ? " · sans écriture (aucun écart)" : ""}</span></span>
         <span class="v ${v.valeur_ecarts < 0 ? "neg" : v.valeur_ecarts > 0 ? "pos" : ""}">${v.nb_ecarts ? se_argent(v.valeur_ecarts) : v.statut === "Terminé" ? "✓" : ""}</span>
         <span class="se-lien" data-voir="${se_esc(v.name)}" style="cursor:pointer">🔍</span></div>`;
     const jours = {};
@@ -1359,7 +1385,7 @@ class StockEntrepots {
     }).join("");
     $c.html(`<span class="se-retour" data-retour>← Solde</span>
       <div class="se-card se-v-stock"><div class="t">📋 Inventaire du ${se_esc(res.libelle)}</div>
-        <div class="plan">Tous les articles suivis en stock au Magasin, avec photo et description, <b>une case par emplacement</b> (zones de l’article) : la somme des cases est la quantité comptée, comparée au stock système. Le comptage s’enregistre au fil de l’eau ; à la clôture, <b>une écriture de stock</b> (rapprochement) aligne le Magasin sur le compté. Les articles non comptés ne bougent pas.</div>
+        <div class="plan">Tous les articles suivis en stock au Magasin, avec photo et description, <b>une case par emplacement</b> (zones de l’article) : la somme des cases est la quantité comptée, comparée au stock système. Le comptage s’enregistre au fil de l’eau ; à la clôture, <b>les écritures de stock</b> alignent le Magasin sur le compté. Les articles non comptés ne bougent pas.</div>
         <div class="plan">Inventaire <b>complet</b> ou <b>partiel</b> (quelques zones à la fois, plusieurs en parallèle tant qu’ils ne se recoupent pas) : seuls les articles rangés dans les zones choisies sont sur la feuille.</div>
         ${ouverts.map((ec) => `<div class="plan">📝 ${peri(ec)} en cours depuis le <b>${se_dt(ec.date)}</b>${ec.ouvert_par ? ` (${se_esc(ec.ouvert_par)})` : ""} : <b>${ec.nb_comptes}/${ec.nb_lignes}</b> comptés · <b class="${ec.nb_ecarts ? "neg" : "pos"}">${ec.nb_ecarts} écart(s)</b>${ec.nb_ecarts ? ` · ${se_argent(ec.valeur_ecarts)}` : ""}
             <button type="button" class="btn btn-primary btn-sm" data-reprendre="${se_esc(ec.name)}" style="margin-left:8px">Reprendre</button></div>`).join("")}
@@ -1534,7 +1560,7 @@ class StockEntrepots {
           ${l.plafond != null ? `<span class="se-note plafond" title="Prix de vente le plus bas ${se_q(l.prix_bas)} DT TTC (${se_esc(l.liste_bas)}) hors TVA ${se_q(l.tva)} %, moins la marge minimale ${se_q(l.marge_min)} %">plafond <b>${se_q(l.plafond)}</b>${l.taux_hors_plafond ? ` · <span class="neg">⚠️ taux au-dessus : marge &lt; ${se_q(l.marge_min)} % au prix ${se_esc(l.liste_bas)}</span>` : ""}</span>` : `<span class="se-note">sans prix de vente : pas de plafond</span>`}
         </div>` : ""}
         <div class="cases">${e.colonnes.map((z) => `<label class="case ${e.ajoutees.includes(z) ? "ajoutee" : ""}"><span class="z">${se_esc(libZone(z))}${e.ajoutees.includes(z) && !fini ? `<span class="x" data-retirer-zone="${se_esc(z)}" title="Retirer cet emplacement de l’article">✕</span>` : ""}</span>
-            <input type="number" inputmode="decimal" min="0" step="any" class="form-control" data-zone="${se_esc(z)}" value="${e.cases[z] == null ? "" : se_esc(e.cases[z])}" ${fini ? "disabled" : ""} placeholder="–"></label>`).join("")}
+            <input type="number" inputmode="text" step="any" class="form-control" data-zone="${se_esc(z)}" value="${e.cases[z] == null ? "" : se_esc(e.cases[z])}" ${fini ? "disabled" : ""} placeholder="–"></label>`).join("")}
           ${fini ? "" : `<span class="se-bt" data-ajouter-zone title="Ajouter un emplacement">＋</span>`}
           <div class="total">= <b class="tot">${compte ? se_q(total) : "?"}</b><span class="ec ${ecart ? (ecart < 0 ? "neg" : "pos") : ""}">${ecart == null ? "" : se_signe(ecart)}</span>${ecart && l.compte ? `<span class="se-bt" data-analyser="${se_esc(l.item_code)}" title="Analyser cet écart : mouvements, pièces non validées, comptages précédents">🔎</span>` : ""}</div></div>
         ${l.compte_par ? `<div class="se-note qui">compté par ${se_esc(l.compte_par)} le ${se_dthm(l.compte_le)}${l.qte_rapprochee != null && fini ? ` · rapproché à <b>${se_q(l.qte_rapprochee)}</b>` : ""}${l.sans_taux ? ` · <span class="neg">sans taux : exclu</span>` : ""}${(l.zones_ajoutees || []).length ? ` · 📍 ajouté à l’article : ${se_esc(l.zones_ajoutees.join(", "))}` : ""}</div>` : ""}
@@ -1545,12 +1571,13 @@ class StockEntrepots {
     $c.html(`<span class="se-retour" data-retour>← Inventaires</span>
       <div class="se-card">
         <div class="se-v-stock"><div class="t">📋 Inventaire ${se_esc(d.fiche.name)} — ${se_dt(d.fiche.date)} <span class="se-badge">📍 ${se_esc(d.fiche.perimetre_libelle || "Tout le Magasin")}</span> ${fini ? `<span class="se-badge">${se_esc(d.fiche.statut)}</span>` : ""}</div>
-          ${fini ? `<div class="se-note">${d.fiche.termine_par ? `${d.fiche.statut === "Terminé" ? "Clôturé" : "Annulé"} par ${se_esc(d.fiche.termine_par)} le ${se_dthm(d.fiche.termine_le)}` : ""}${d.fiche.rapprochement ? ` · ${se_lien("Stock Reconciliation", d.fiche.rapprochement, "écriture " + d.fiche.rapprochement)}` : ""}${d.fiche.note ? `<br>${se_esc(d.fiche.note)}` : ""}</div>`
-            : `<div class="se-note">Une case par emplacement : tapez ce que vous trouvez à chaque endroit, la somme fait le compté. « ＋ » ajoute un emplacement où l’article a été trouvé : il est <b>aussitôt ajouté aux emplacements de l’article</b> (✕ pour le retirer). Enregistrement automatique.</div>`}
+          ${fini ? `<div class="se-note">${d.fiche.termine_par ? `${d.fiche.statut === "Terminé" ? "Clôturé" : "Annulé"} par ${se_esc(d.fiche.termine_par)} le ${se_dthm(d.fiche.termine_le)}` : ""}${(d.fiche.ecritures || []).map((e) => ` · ${se_lien(e.doctype, e.name, "écriture " + e.name)}`).join("")}${d.fiche.note ? `<br>${se_esc(d.fiche.note)}` : ""}</div>`
+            : `<div class="se-note">Une case par emplacement : tapez ce que vous trouvez à chaque endroit, la somme fait le compté. <b>Un nombre négatif indique des pièces manquantes dans cette zone</b> (ex. 3 disponibles et −7 manquantes = −4 au total). « ＋ » ajoute un emplacement où l’article a été trouvé : il est <b>aussitôt ajouté aux emplacements de l’article</b> (✕ pour le retirer). Enregistrement automatique.</div>`}
           <div class="plan" id="se-i-bilan"></div><div class="se-i-etat" id="se-i-etat"></div><div id="se-i-analyses"></div></div>
         <div class="se-i-filtres"><input type="search" class="form-control se-saisie" id="se-i-filtre" placeholder="🔎 Article (nom, code, description)…">
           <select class="form-control" id="se-i-zone">${optZones()}</select></div>
         <div class="se-chips" id="se-i-vues" style="margin-top:6px"><span class="se-chip on" data-vue="tous">Tous</span><span class="se-chip" data-vue="non">À compter</span><span class="se-chip" data-vue="faits">Comptés</span><span class="se-chip" data-vue="ecarts">Écarts</span><span class="se-chip alerte" data-vue="negatifs">Négatifs</span><span class="se-chip tri" data-tri title="Grouper les articles par emplacement, dans l’ordre des zones">📍 Par zone</span></div>
+        ${fini ? "" : `<button type="button" class="btn btn-default" data-ajouter-article style="margin:8px 0">＋ Ajouter un article</button>`}
         <div id="se-i-lignes"></div>
         <button type="button" class="btn btn-default se-plus" id="se-i-plus" style="display:none">Afficher plus</button>
         ${fini ? "" : `<div class="se-c-barre"><button type="button" class="btn btn-default" data-annuler>✖️ Annuler l’inventaire</button>
@@ -1582,7 +1609,7 @@ class StockEntrepots {
         if (vue === "non" && t != null) return false;
         if (vue === "faits" && t == null) return false;
         if (vue === "ecarts" && (t == null || Math.abs(t - l.qte_systeme) < 1e-6)) return false;
-        if (vue === "negatifs" && l.qte_systeme >= 0) return false;
+        if (vue === "negatifs" && l.qte_systeme >= 0 && !Object.values(e.cases).some((q) => q < 0)) return false;
         if (zone && !e.colonnes.includes(zone)) return false;
         if (texte && !((l.item_name || "") + " " + l.item_code + " " + (l.description || "")).toLowerCase().includes(texte)) return false;
         return true;
@@ -1623,13 +1650,38 @@ class StockEntrepots {
       return enCours;
     };
     const vider = async () => { clearTimeout(minuterie); minuterie = null; await envoyer(); if (Object.keys(sale).length) await envoyer(); };
+    $c.find("[data-ajouter-article]").on("click", () => {
+      const perimetre = d.fiche.perimetre || [];
+      const choix = d.zones.filter((z) => !perimetre.length || perimetre.includes(z.name))
+        .map((z) => ({ label: libZone(z.name), value: z.name }));
+      if (!perimetre.length || perimetre.includes(SANS)) choix.push({ label: "Non rangé", value: SANS });
+      const dlg = new frappe.ui.Dialog({ title: "Ajouter un article à l’inventaire", fields: [
+        { fieldtype: "Link", fieldname: "item_code", label: "Article existant", options: "Item", reqd: 1,
+          only_select: 1, get_query: () => ({ query: SE_INV + "rechercher_articles", filters: { inventaire: name } }) },
+        { fieldtype: "Select", fieldname: "zone", label: "Zone où compter l’article", options: choix, reqd: 1,
+          default: choix.some((z) => z.value === zone) ? zone : choix[0]?.value },
+        { fieldtype: "HTML", options: "L’article sera ajouté à cette zone et à la feuille, sans modifier les quantités déjà comptées." }
+      ], primary_action_label: "Ajouter", primary_action: async (v) => {
+        dlg.get_primary_btn().prop("disabled", true);
+        try {
+          await vider();
+          if (Object.keys(sale).length) frappe.throw("Le comptage doit être enregistré avant d’ajouter un article.");
+          await frappe.call({ method: SE_INV + "ajouter_article", args: { name, ...v }, freeze: true });
+          dlg.hide();
+          await this.ouvrirInventaire(name);
+          this.$r.find("#se-i-filtre").val(v.item_code).trigger("input");
+        } finally { dlg.get_primary_btn().prop("disabled", false); }
+      } });
+      dlg.show();
+    });
     window.onbeforeunload = () => (Object.keys(sale).length || enCours ? "Comptage non enregistré" : undefined);
     // Gestionnaires DÉLÉGUÉS (posés une fois : les lignes sont repeintes à chaque filtre).
     const brancher = () => {
       $c.find("#se-i-lignes").on("input", ".se-i-ligne input[data-zone]", (ev) => {
         const $l = $(ev.currentTarget).closest(".se-i-ligne"), code = $l.attr("data-item"), e = etat[code], l = d.lignes.find((x) => x.item_code === code);
         const v = String(ev.currentTarget.value).replace(",", ".");
-        e.cases[$(ev.currentTarget).attr("data-zone")] = v === "" ? null : Math.max(+v || 0, 0);
+        if (ev.currentTarget.validity.badInput || (v !== "" && !Number.isFinite(+v))) return;
+        e.cases[$(ev.currentTarget).attr("data-zone")] = v === "" ? null : +v;
         const t = totalDe(e), ec = t == null ? null : r6(t - l.qte_systeme);
         $l.toggleClass("fait", t != null).find(".tot").text(t == null ? "?" : se_q(t));
         $l.find(".ec").text(ec == null ? "" : se_signe(ec)).attr("class", "ec " + (ec ? (ec < 0 ? "neg" : "pos") : ""));
@@ -1707,7 +1759,7 @@ class StockEntrepots {
           window.onbeforeunload = null;
           frappe.msgprint({ title: "Inventaire clôturé", indicator: r.nb_ecarts ? "orange" : "green",
             message: `${r.nb_comptes} article(s) comptés, ${r.nb_non_comptes} non comptés (inchangés), <b>${r.nb_ecarts} écart(s)</b>${r.nb_ecarts ? ` · valeur nette ${se_esc(se_argent(r.valeur_ecarts))} · manquants ${se_esc(se_argent(r.valeur_manquants))}` : ""}<br>`
-              + (r.rapprochement ? `Écriture de stock : ${se_lien("Stock Reconciliation", r.rapprochement)} (${r.nb_rapproches} article(s)).` : "Aucune écriture : rien à rapprocher.")
+              + ((r.ecritures || []).length ? `Écritures de stock : ${r.ecritures.map((e) => se_lien(e.doctype, e.name)).join(" · ")} (${r.nb_rapproches} article(s)).` : "Aucune écriture : rien à rapprocher.")
               + (r.nb_zones_ajoutees ? `<br>📍 ${r.nb_zones_ajoutees} emplacement(s) ajouté(s) aux articles pendant l’inventaire.` : "") + (r.nb_sans_taux ? `<br>⚠️ ${r.nb_sans_taux} article(s) sans taux de valorisation : exclus, à régler sur la fiche article puis à rapprocher à la main.` : "") });
           this.chargerInventaire();
         } });
@@ -1718,7 +1770,8 @@ class StockEntrepots {
       const rendre = (b) => dlg.fields_dict.b.$wrapper.html(`<div class="se-resume">
         <div><b>${b.nb_comptes}</b> article(s) comptés sur ${b.nb_lignes} · <b>${b.nb_non_comptes}</b> non comptés : <b>ils ne bougent pas</b>.</div>
         <div><b class="${b.nb_ecarts ? "neg" : "pos"}">${b.nb_ecarts} écart(s)</b>${b.nb_ecarts && d.voir_valeur ? ` · valeur nette ${se_esc(se_argent(b.valeur_ecarts))} · manquants ${se_esc(se_argent(b.valeur_manquants))}` : ""}</div>
-        <div>${b.a_rapprocher.length ? `Une écriture <b>Stock Reconciliation</b> sur le Magasin va rapprocher <b>${b.a_rapprocher.length}</b> article(s) :` : "Aucun article à rapprocher : la clôture ne passe pas d’écriture."}</div>
+        ${b.nb_negatifs ? `<div class="se-alerte">${b.nb_negatifs} article(s) resteront en stock négatif après clôture pour suivre les pièces manquantes.${b.nb_ajustements_negatifs ? " Leurs écarts seront enregistrés par des mouvements de stock." : ""}</div>` : ""}
+        <div>${b.a_rapprocher.length ? `Les écritures de stock sur le Magasin vont ajuster <b>${b.a_rapprocher.length}</b> article(s) :` : "Aucun article à rapprocher : la clôture ne passe pas d’écriture."}</div>
         ${b.a_rapprocher.length ? `<ul class="se-tours" style="max-height:220px;overflow:auto">${b.a_rapprocher.map((x) => li(x, x.taux_seul ? `quantité inchangée (${se_q(x.qte_actuelle)}) · <span class="neg">taux ${se_q(x.taux_actuel)} → <b>${se_q(x.taux)}</b> DT</span> ${taux(x)}` : `${se_q(x.qte_actuelle)} → <b>${se_q(x.qte_rapprochee)}</b> <span class="${x.ecart < 0 ? "neg" : "pos"}">(${se_signe(x.ecart)})</span>${d.voir_valeur ? ` · ${se_argent(x.valeur_ecart)}` : ""}${x.taux_saisi && Math.abs(x.taux_saisi - x.taux_actuel) > 1e-6 ? ` · <span class="neg">taux ${se_q(x.taux_actuel)} → ${se_q(x.taux)}</span>` : ""} ${taux(x)}`)).join("")}</ul>` : ""}
         ${b.nb_taux_seuls ? `<div class="se-note">${b.nb_taux_seuls} article(s) sans écart de quantité entrent dans l’écriture pour leur <b>nouveau taux de valorisation</b> seulement.</div>` : ""}
         ${b.bouges.length ? `<div class="se-alerte" style="margin-top:6px">⚠️ ${b.bouges.length} article(s) ont bougé entre leur comptage et maintenant : l’écart mesuré au comptage est appliqué au stock du moment (système actuel + écart).</div>
