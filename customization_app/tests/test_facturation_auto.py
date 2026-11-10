@@ -106,3 +106,26 @@ class TestNumerosPrisParDAutresMois(unittest.TestCase):
         self.assertNotIn("posting_date", bloc)
         self.assertIn("docstatus IN (0, 1)", bloc)
         self.assertIn("CAST(custom_numero_facture AS UNSIGNED) BETWEEN %s AND %s", bloc)
+
+
+class TestDernierRempart(unittest.TestCase):
+    """Quel que soit le script qui choisit le numéro, une facture de l'année ne peut pas en porter un déjà pris."""
+
+    def test_cablage(self):
+        import inspect
+        from customization_app import facturation_numbering as N
+        hooks = open(os.path.join(os.path.dirname(os.path.dirname(FIXTURE)), "hooks.py"), encoding="utf-8").read()
+        bloc = hooks[hooks.index('"Sales Invoice": {'):]
+        bloc = bloc[:bloc.index("},")]
+        self.assertIn('"customization_app.facturation_numbering.refuser_numero_en_double"', bloc)
+        self.assertIn('"validate": [', bloc)
+        src = inspect.getsource(N.autre_facture_avec_le_numero)
+        self.assertIn("docstatus < 2", src)
+        self.assertIn("YEAR(posting_date) = YEAR(%s)", src)
+        self.assertIn("name != %s", src)
+
+    def test_un_numero_vide_ou_non_numerique_ne_bloque_rien(self):
+        from customization_app import facturation_numbering as N
+        self.assertIsNone(N.autre_facture_avec_le_numero("", "2026-10-01"))
+        self.assertIsNone(N.autre_facture_avec_le_numero("2397-bis", "2026-10-01"))
+        self.assertIsNone(N.autre_facture_avec_le_numero("2397", None))

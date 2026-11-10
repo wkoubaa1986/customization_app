@@ -273,3 +273,43 @@ def set_numero_facture(doc, method=None):
     except Exception:
         # Ne jamais bloquer la création d'une facture à cause de la numérotation auto.
         frappe.log_error(frappe.get_traceback(), "set_numero_facture")
+
+
+def autre_facture_avec_le_numero(numero, posting_date, name=None):
+    """Le nom d'une autre facture (brouillon ou validée) portant `numero` la même année, sinon None.
+
+    L'année de la date de pièce fait la frontière : la série a repris à 1 au 1er janvier 2025,
+    puis s'est poursuivie en 2026 ; un numéro de 2024 n'a jamais gêné 2025.
+    """
+    numero = str(numero or "").strip()
+    if not numero.isdigit() or not posting_date:
+        return None
+    rows = frappe.db.sql(
+        """SELECT name FROM `tabSales Invoice`
+           WHERE docstatus < 2 AND name != %s
+             AND custom_numero_facture REGEXP '^[0-9]+$'
+             AND CAST(custom_numero_facture AS UNSIGNED) = %s
+             AND YEAR(posting_date) = YEAR(%s)
+           LIMIT 1""",
+        (name or "", int(numero), getdate(posting_date)),
+    )
+    return rows[0][0] if rows else None
+
+
+def refuser_numero_en_double(doc, method=None):
+    """Hook `validate` sur Sales Invoice : dernier rempart contre un numéro déjà pris.
+
+    Les scripts (Facturation Auto, facturation mensuelle, numérotation manuelle) choisissent
+    chacun leur numéro avec leur propre lecture de la base ; le 07/10/2026 l'un d'eux a redonné
+    2397-2417 à des factures du 30/09 alors que des factures d'octobre les portaient. Quoi qu'ils
+    décident, la facture ne passe pas si une autre facture de l'année a déjà ce numéro.
+    """
+    if getattr(doc, "is_opening", None) == "Yes":
+        return
+    autre = autre_facture_avec_le_numero(getattr(doc, "custom_numero_facture", None), doc.posting_date, doc.name)
+    if autre:
+        frappe.throw(
+            frappe._("Le numéro de facture {0} est déjà porté par {1} (même année) : choisissez un autre numéro.")
+            .format(doc.custom_numero_facture, autre),
+            title=frappe._("Numéro de facture en double"),
+        )

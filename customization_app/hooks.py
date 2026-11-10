@@ -382,6 +382,9 @@ doc_events = {
             # bundle retirés, lignes composants remises à 0 DT comme sur le BL.
             "customization_app.retour_echange.retirer_pieces_reprises",
             "customization_app.echeancier.exiger_mode_de_paiement",
+            # Dernier rempart : un numéro de facture déjà porté par une autre facture de l'année
+            # est refusé, quel que soit le script qui l'a choisi (19 doublons le 07/10/2026).
+            "customization_app.facturation_numbering.refuser_numero_en_double",
         ],
         # Annuler une facture rend le paiement à la ou aux commandes qui l'ont
         # générée, au prorata de leurs lignes. Le plan se calcule AVANT
