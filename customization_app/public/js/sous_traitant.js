@@ -38,7 +38,7 @@
     // ── La barre de navigation.
     const ECRANS = [
         { cle: "journee",    ic: "☀️", libelle: __("Ma journée"),  aller: () => window.maJournee_ouvrir && window.maJournee_ouvrir() },
-        { cle: "calendrier", ic: "📅", libelle: __("Agenda"),      aller: () => frappe.set_route(...FOND) },
+        { cle: "calendrier", ic: "📅", libelle: __("Mon agenda"),  aller: () => frappe.set_route(...FOND) },
         { cle: "stock",      ic: "📦", libelle: __("Mon stock"),   aller: () => frappe.set_route("stock-entrepots") },
         { cle: "caisse",     ic: "💰", libelle: __("Ma caisse"),   aller: () => frappe.set_route("caisse-journaliere") },
     ];

@@ -119,8 +119,11 @@ frappe.pages["agenda-sous-traitant"].on_page_show = function (wrapper) {
             try { await this._charger(debut, fin); }
             catch (e) { this.$c.html(`<div class="ag-vide">${__("Impossible de lire l'agenda.")}</div>`); return; }
             const d = this._debut();
-            const titre = this.vue === "jour" ? d.format("dddd D MMMM") : this.vue === "semaine"
-                ? `${d.format("D MMM")} → ${d.clone().add(6, "day").format("D MMM")}` : `${MOIS[d.month()]} ${d.year()}`;
+            // Jours et mois en français quelle que soit la locale de moment (le titre sortait « Tuesday 10 November »).
+            const JOURS_LONGS = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"];
+            const fr = (mo) => `${mo.date()} ${MOIS[mo.month()].slice(0, 4)}${MOIS[mo.month()].length > 4 ? "." : ""}`;
+            const titre = this.vue === "jour" ? `${JOURS_LONGS[d.isoWeekday() - 1]} ${d.date()} ${MOIS[d.month()]}` : this.vue === "semaine"
+                ? `${fr(d)} → ${fr(d.clone().add(6, "day"))}` : `${MOIS[d.month()]} ${d.year()}`;
             const corps = this.vue === "jour" ? this._jour() : this.vue === "semaine" ? this._semaine() : this._mois();
             this.$c.html(`
                 <div class="ag-vues">${["jour", "semaine", "mois"].map((v) =>
