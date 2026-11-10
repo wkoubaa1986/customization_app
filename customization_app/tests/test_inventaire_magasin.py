@@ -69,6 +69,44 @@ class TestInventaire(unittest.TestCase):
     def _ligne(self, d, item):
         return next(l for l in d["lignes"] if l["item_code"] == item)
 
+    def test_modeles_stockes_et_reprise_sans_perdre_le_comptage(self):
+        """Les modèles stockés sont comptables, y compris à zéro et lors de la reprise d'une feuille.
+        Un ensemble non stocké reste exclu ; l'ajout d'une ligne ne modifie pas un comptage déjà saisi."""
+        import frappe
+        modele, modele_zero, ensemble = self.items
+        for code in self.items:
+            self.addCleanup(frappe.clear_document_cache, "Item", code)
+        for code in (modele, modele_zero):
+            frappe.db.set_value("Item", code, "has_variants", 1)
+            frappe.clear_document_cache("Item", code)
+        frappe.db.set_value("Bin", {"item_code": modele_zero, "warehouse": self.magasin}, "actual_qty", 0)
+        Z.definir_zones(modele, [self.zone])
+        Z.definir_zones(modele_zero, [])
+        Z.definir_zones(ensemble, [self.zone])
+        frappe.db.set_value("Item", ensemble, "is_stock_item", 0)  # ancienne affectation devenue non stockée
+
+        name = I.ouvrir_inventaire([self.zone])
+        lignes = {l.item_code for l in frappe.get_doc(I.INV, name).lignes}
+        self.assertIn(modele, lignes)
+        self.assertNotIn(modele_zero, lignes)
+        self.assertNotIn(ensemble, lignes)
+        I.enregistrer_inventaire(name, {modele: {"cases": {self.zone: self._stock(modele) + 1}}})
+        avant = self._ligne(I.detail_inventaire(name), modele)
+
+        Z.ajouter_a_zone(self.zone, [modele_zero])
+        self.assertEqual(I.ouvrir_inventaire([self.zone]), name)
+        detail = I.detail_inventaire(name)
+        self.assertEqual(self._ligne(detail, modele), avant)
+        nouvelle = self._ligne(detail, modele_zero)
+        self.assertEqual(nouvelle["qte_systeme"], 0)
+        self.assertEqual(nouvelle["compte"], 0)
+        self.assertIsNone(nouvelle["qte_comptee"])
+        self.assertNotIn(ensemble, {l["item_code"] for l in detail["lignes"]})
+        resultat = I.cloturer_inventaire(name)
+        self.assertEqual(resultat["nb_rapproches"], 1)
+        self.assertEqual(self._stock(modele), avant["qte_systeme"] + 1)
+        self.assertEqual(self._stock(modele_zero), 0)
+
     def test_acces(self):
         import frappe
         frappe.set_user(EMPLOYE_SANS_ROLE)

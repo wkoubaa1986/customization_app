@@ -80,8 +80,8 @@ class TestZones(unittest.TestCase):
     def test_renommer_fusionner_et_supprimer(self):
         import frappe
         i0, i1 = self.items[:2]
-        ZM.ajouter_a_zone("TESTESP - A1", [i0])
-        ZM.ajouter_a_zone("TESTESP - A2", [i1])
+        ZM.definir_zones(i0, ["TESTESP - A1"])
+        ZM.definir_zones(i1, ["TESTESP - A2"])
         # fusion : A1 renommée en « a2 » -> rejoint A2
         r = ZM.renommer_zone("TESTESP - A1", "a2")
         self.assertTrue(r["fusion"])
@@ -95,6 +95,33 @@ class TestZones(unittest.TestCase):
         r = ZM.supprimer_zone("TESTDEP")
         self.assertEqual((r["liberes"], r["supprimees"]), (2, 2))
         self.assertEqual(self._zones(i0), ([], None))
+
+    def test_zones_reservees_aux_articles_suivis_en_stock(self):
+        import frappe
+        stocke, non_stocke = self.items[:2]
+        zone, autre = "TESTESP - A1", "TESTESP - A2"
+        for item in (stocke, non_stocke):
+            ZM.definir_zones(item, [zone])
+        # Simuler un ancien lien conservé après passage de l'article en non-stocké.
+        frappe.db.set_value("Item", non_stocke, "is_stock_item", 0)
+        frappe.db.set_value("Item", stocke, "has_variants", 1)  # un modèle stocké reste admissible
+        ZM.ajouter_a_zone(zone, [stocke])
+        zones = {z["name"]: z for z in ZM._zones()}
+        self.assertEqual(zones[zone]["articles"], 1)
+        self.assertEqual(zones["TESTESP"]["total"], 1)
+        for filtre in (zone, ZM.TOUT_ESPACE + "TESTESP"):
+            self.assertEqual(ZM.get_articles(zone=filtre, stockes=0)["total"], 1)
+            self.assertEqual(ZM.get_articles(zone=filtre, stockes=0, codes_seulement=1)["codes"], [stocke])
+        self.assertNotIn(non_stocke, ZM.get_articles(recherche=non_stocke, stockes=1, codes_seulement=1)["codes"])
+        self.assertIn(non_stocke, ZM.get_articles(recherche=non_stocke, stockes=0, codes_seulement=1)["codes"])
+        with self.assertRaises(frappe.ValidationError):
+            ZM.ajouter_a_zone(autre, [stocke, non_stocke])
+        self.assertNotIn(autre, ZM.zones_de(stocke))  # aucun ajout partiel d'un lot refusé
+        with self.assertRaises(frappe.ValidationError):
+            ZM.definir_zones(non_stocke, [autre])
+        self.assertEqual(ZM.zones_de(non_stocke), [zone])
+        ZM.definir_zones(non_stocke, [])
+        self.assertEqual(self._zones(non_stocke), ([], None))
 
     def test_fiche_article_reecrit_le_texte(self):
         import frappe
