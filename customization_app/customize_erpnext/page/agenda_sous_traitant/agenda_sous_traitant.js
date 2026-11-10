@@ -38,6 +38,9 @@ frappe.pages["agenda-sous-traitant"].on_page_show = function (wrapper) {
         .ag-tache.faite { border-color:#86efac; background:#f0fdf4; }
         .ag-tache.annulee { opacity:.55; text-decoration:line-through; }
         .ag-heure { font-weight:700; min-width:48px; font-size:15px; }
+        .ag-ferie { background:#f3f4f6; color:#374151; border-radius:10px; padding:8px 12px; margin-bottom:8px; font-weight:600; font-size:13px; }
+        .ag-sem-jour.ferie, .ag-case.ferie { background:#f3f4f6; }
+        .ag-sem-liste .ag-ferie { padding:2px 6px; margin:0 0 4px; font-size:12px; display:inline-block; }
         .ag-client { font-weight:600; }
         .ag-muted { color:#6b7280; font-size:12.5px; }
         .ag-vide { color:#6b7280; text-align:center; padding:24px 0; }
@@ -109,7 +112,11 @@ frappe.pages["agenda-sous-traitant"].on_page_show = function (wrapper) {
             const r = await frappe.call({ method: "customization_app.sous_traitant.agenda", args: { debut, fin } });
             let d = m(debut);
             while (iso(d) <= fin) { this.cache[iso(d)] = []; d.add(1, "day"); }
-            (r.message || []).forEach((t) => { (this.cache[t.jour] = this.cache[t.jour] || []).push(t); });
+            this.feries = this.feries || {};
+            (r.message || []).forEach((t) => {
+                if (t.ferie) { this.feries[t.jour] = t.client; return; }      // jour férié : repère, pas une tâche
+                (this.cache[t.jour] = this.cache[t.jour] || []).push(t);
+            });
             this.charges.add(cle);
         }
 
@@ -139,9 +146,12 @@ frappe.pages["agenda-sous-traitant"].on_page_show = function (wrapper) {
 
         _classe(t) { return t.status === "Completed" ? "faite" : t.status === "Cancelled" ? "annulee" : ""; }
 
+        _ferie(j) { return (this.feries || {})[j]; }
+
         _jour() {
             const taches = this.cache[this.jour] || [];
-            const liste = taches.length ? taches.map((t) => `
+            const ferie = this._ferie(this.jour) ? `<div class="ag-ferie">🎌 ${__("Jour férié")} : ${esc(this._ferie(this.jour))}</div>` : "";
+            const liste = ferie + (taches.length ? taches.map((t) => `
                 <div class="ag-tache ${this._classe(t)}" data-journee="${esc(this.jour)}">
                   <div class="ag-heure">${esc(t.debut)}</div>
                   <div style="flex:1">
@@ -151,7 +161,7 @@ frappe.pages["agenda-sous-traitant"].on_page_show = function (wrapper) {
                         : t.status === "Cancelled" ? "❌ " + __("Annulée") + (t.raison_annulation ? " (" + esc(t.raison_annulation) + ")" : "")
                         : "🕒 " + __("À faire")}${t.commande ? " · 🧾 " + __("commande préparée") : ""}</div>
                   </div>
-                </div>`).join("") : `<div class="ag-vide">${__("Aucune intervention ce jour.")}</div>`;
+                </div>`).join("") : `<div class="ag-vide">${__("Aucune intervention ce jour.")}</div>`);
             return liste + `<button class="btn btn-primary ag-jour-ouvrir" data-journee="${esc(this.jour)}">☀️ ${__("Ouvrir Ma journée du")} ${frappe.datetime.str_to_user(this.jour)}</button>`;
         }
 
@@ -162,9 +172,9 @@ frappe.pages["agenda-sous-traitant"].on_page_show = function (wrapper) {
             for (let i = 0; i < 7; i++) {
                 const j = iso(d), taches = this.cache[j] || [];
                 lignes.push(`
-                  <div class="ag-sem-jour ${j === auj ? "auj" : ""}" data-jour="${j}">
+                  <div class="ag-sem-jour ${j === auj ? "auj" : ""} ${this._ferie(j) ? "ferie" : ""}" data-jour="${j}">
                     <div class="ag-sem-date">${JOURS[i]}<small>${d.format("D/M")}</small></div>
-                    <div class="ag-sem-liste">${taches.length ? taches.map((t) =>
+                    <div class="ag-sem-liste">${this._ferie(j) ? `<div class="ag-ferie">🎌 ${esc(this._ferie(j))}</div>` : ""}${taches.length ? taches.map((t) =>
                         `<div class="ag-sem-ligne ${this._classe(t)}"><b>${esc(t.debut)}</b> ${ICONES[t.type] || "📌"} ${esc(t.type)} · ${esc(t.client)}</div>`).join("")
                         : `<span class="ag-muted">—</span>`}</div>
                   </div>`);
@@ -181,13 +191,14 @@ frappe.pages["agenda-sous-traitant"].on_page_show = function (wrapper) {
             while (iso(d) <= fin) {
                 const j = iso(d), taches = this.cache[j] || [];
                 const ouv = taches.filter((t) => t.status === "Open").length, ok = taches.filter((t) => t.status === "Completed").length;
-                cases.push(`<div class="ag-case ${d.month() !== mois ? "hors" : ""} ${j === auj ? "auj" : ""}" data-jour="${j}">
-                    <div class="n">${d.date()}</div>
+                cases.push(`<div class="ag-case ${d.month() !== mois ? "hors" : ""} ${j === auj ? "auj" : ""} ${this._ferie(j) ? "ferie" : ""}" data-jour="${j}"${
+                    this._ferie(j) ? ` title="${esc(this._ferie(j))}"` : ""}>
+                    <div class="n">${d.date()}${this._ferie(j) ? " 🎌" : ""}</div>
                     ${ouv ? `<span class="ag-pastille ouv">${ouv}</span>` : ""}${ok ? `<span class="ag-pastille ok">${ok}</span>` : ""}</div>`);
                 d = d.add(1, "day");
             }
             return `<div class="ag-grille">${cases.join("")}</div>
-                    <div class="ag-muted" style="margin-top:8px">${__("Pastilles : à faire (orange), terminées (vert). Touchez un jour pour le détail.")}</div>`;
+                    <div class="ag-muted" style="margin-top:8px">${__("Pastilles : à faire (orange), terminées (vert). 🎌 et fond gris : jour férié. Touchez un jour pour le détail.")}</div>`;
         }
     }
 

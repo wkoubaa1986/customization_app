@@ -783,11 +783,19 @@ def agenda(debut, fin):
                                     "nom_client", "details_adresse", "google_map", "status", "commande_client",
                                     "temps", "raison_annulation"],
                             order_by="starts_on")
-    return [{"name": t.name, "jour": str(getdate(t.starts_on)), "debut": str(t.starts_on)[11:16],
-             "fin": str(t.ends_on)[11:16] if t.ends_on else "", "type": t.custom_type_dintervention or "",
-             "client": t.nom_client or t.custom_client or "", "adresse": (t.details_adresse or "").replace("\n", ", "),
-             "maps": t.google_map or "", "status": t.status, "commande": t.commande_client or "",
-             "duree": t.temps or "", "raison_annulation": t.raison_annulation or ""} for t in lignes]
+    out = [{"name": t.name, "jour": str(getdate(t.starts_on)), "debut": str(t.starts_on)[11:16],
+            "fin": str(t.ends_on)[11:16] if t.ends_on else "", "type": t.custom_type_dintervention or "",
+            "client": t.nom_client or t.custom_client or "", "adresse": (t.details_adresse or "").replace("\n", ", "),
+            "maps": t.google_map or "", "status": t.status, "commande": t.commande_client or "",
+            "duree": t.temps or "", "raison_annulation": t.raison_annulation or ""} for t in lignes]
+    # Jours fériés de SA liste (sinon celle de la société), comme le calendrier du bureau (demande 10/11/2026).
+    try:
+        from customization_app.jours_feries import feries
+        out += [{"name": "FERIE-%s" % j, "jour": str(j), "ferie": 1, "type": _("Jour férié"), "client": nom,
+                 "debut": "", "fin": "", "status": "Ferie"} for j, nom in feries(debut, fin, emp.name).items()]
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "agenda : jours fériés")
+    return out
 
 
 @frappe.whitelist()
