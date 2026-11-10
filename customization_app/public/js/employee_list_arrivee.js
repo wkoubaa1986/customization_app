@@ -13,7 +13,12 @@ frappe.listview_settings["Employee"] = frappe.listview_settings["Employee"] || {
 })();
 
 function rcj_nouveau_technicien(listview) {
+  frappe.call({ method: "customization_app.arrivee_employe.options_arrivee", callback: (r) => rcj_dialogue_technicien(listview, r.message || {}) });
+}
+
+function rcj_dialogue_technicien(listview, opts) {
   const JOURS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
+  const approbateurs = opts.approbateurs || [];
   const d = new frappe.ui.Dialog({
     title: __("Nouveau technicien"),
     fields: [
@@ -26,6 +31,17 @@ function rcj_nouveau_technicien(listview) {
       { fieldtype: "Select", fieldname: "genre", label: __("Genre"), options: "Male\nFemale", default: "Male" },
       { fieldtype: "Date", fieldname: "date_naissance", label: __("Date de naissance") },
       { fieldtype: "Check", fieldname: "ecran_simplifie", label: __("Écran simplifié du téléphone (Ma journée, agenda, mon stock, ma caisse, clôture mobile)"), default: 1 },
+      { fieldtype: "Section Break", label: __("RH et calendrier") },
+      { fieldtype: "Select", fieldname: "leave_approver", label: __("Approbateur de ses congés"), reqd: 1,
+        options: approbateurs.map((a) => a.value).join("\n"), default: approbateurs.length ? approbateurs[0].value : "",
+        description: approbateurs.map((a) => `${a.label} (${a.value})`).join(" · ") },
+      { fieldtype: "Column Break" },
+      { fieldtype: "MultiCheck", fieldname: "calendrier_visible_par", label: __("Son calendrier est visible par"), columns: 2,
+        options: (opts.employes || []).map((e) => ({ label: e.label, value: e.value, checked: false })),
+        description: __("Les collègues qui verront ses tâches. La direction voit tout ; lui-même toujours.") },
+      { fieldtype: "MultiCheck", fieldname: "voit_calendrier_de", label: __("Il voit le calendrier de"), columns: 2,
+        options: (opts.employes || []).map((e) => ({ label: e.label, value: e.value, checked: false })),
+        description: __("Ne cochez personne : il ne voit que ses propres tâches.") },
       { fieldtype: "Section Break", label: __("Stock et tournées") },
       { fieldtype: "Select", fieldname: "jour_verification", label: __("Vérification du stock, le"), options: JOURS.join("\n"), default: "Lundi" },
       { fieldtype: "Select", fieldname: "periodicite", label: __("Périodicité"), options: "Chaque semaine\nToutes les deux semaines", default: "Chaque semaine" },
@@ -46,7 +62,9 @@ function rcj_nouveau_technicien(listview) {
         args: { nom: v.nom, email: v.email, mot_de_passe: v.mot_de_passe, telephone: v.telephone, date_entree: v.date_entree,
                 genre: v.genre, date_naissance: v.date_naissance, domicile_lien: v.domicile_lien, vehicule: v.vehicule, cbox: v.cbox,
                 jour_verification: v.jour_verification, periodicite: v.periodicite, premier_jour_recup: v.premier_jour_recup,
-                ecran_simplifie: v.ecran_simplifie ? 1 : 0 },
+                ecran_simplifie: v.ecran_simplifie ? 1 : 0, leave_approver: v.leave_approver || null,
+                calendrier_visible_par: JSON.stringify(d.get_value("calendrier_visible_par") || []),
+                voit_calendrier_de: JSON.stringify(d.get_value("voit_calendrier_de") || []) },
         freeze: true, freeze_message: __("Création en cours…"),
         callback: (r) => {
           d.hide();

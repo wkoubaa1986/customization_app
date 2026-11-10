@@ -360,6 +360,18 @@ def _retirer_activites_reunions(employe: str, journal: list[str]):
         journal.append(_("retiré de {0} réunion(s) à venir").format(m))
 
 
+def _retirer_permissions_utilisateur(employe: str, user: str | None, journal: list[str]):
+    """Qui voit le calendrier de qui = les « permissions utilisateur » sur Employé (mécanisme standard, tenu à la
+    main depuis 2023). Le partant sort des listes des autres, et sa propre liste est vidée."""
+    noms = frappe.get_all("User Permission", filters={"allow": "Employee", "for_value": employe}, pluck="name")
+    if user:
+        noms += frappe.get_all("User Permission", filters={"user": user}, pluck="name")
+    for n in set(noms):
+        frappe.delete_doc("User Permission", n, ignore_permissions=True, force=True)
+    if noms:
+        journal.append(_("{0} permission(s) utilisateur retirée(s) (visibilité des calendriers)").format(len(set(noms))))
+
+
 def _reaffecter_reparations(employe: str, vers: str | None, journal: list[str]):
     if not frappe.db.exists("DocType", "Machine Reparation"):
         return
@@ -520,6 +532,7 @@ def executer(employe: str, remplacant: str = None, remplacant_portail: str = Non
     _retirer_portail_defaut(employe, remplacant_portail, journal)
     _retirer_des_reglages(inv["reglages"], journal)
     _retirer_activites_reunions(employe, journal)
+    _retirer_permissions_utilisateur(employe, emp.user_id, journal)
     _reaffecter_reparations(employe, remplacant or inv.get("responsable_stock"), journal)
     _annuler_verifications(inv["verifications_ouvertes"], nom, journal)
     verif = _ouvrir_verification_finale(emp, date_depart, journal)

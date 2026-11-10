@@ -57,8 +57,20 @@ class TestCablage(unittest.TestCase):
 
     def test_bouton(self):
         js = self._lire("public", "js", "employee_list_arrivee.js")
-        for morceau in ("arrivee_employe.creer_technicien", "ecran_simplifie", "premier_jour_recup", "domicile_lien"):
+        for morceau in ("arrivee_employe.creer_technicien", "options_arrivee", "ecran_simplifie", "premier_jour_recup",
+                        "domicile_lien", "leave_approver", "calendrier_visible_par", "voit_calendrier_de", "MultiCheck"):
             self.assertIn(morceau, js, morceau)
+
+    def test_visibilite_par_permissions_utilisateur(self):
+        """Qui voit le calendrier de qui = User Permission sur Employé (mécanisme standard déjà en usage) :
+        pas de table maison. Le départ retire le partant de ces listes."""
+        from customization_app import depart_employe as D
+        src = inspect.getsource(A.creer_technicien)
+        self.assertIn("_permission_employe", src)
+        self.assertIn("holiday_list", src)
+        self.assertIn('"doctype": "User Permission"', inspect.getsource(A._permission_employe))
+        self.assertIn("_retirer_permissions_utilisateur", inspect.getsource(D.executer))
+        self.assertIn("Request Leave,Demander un congé", self._lire("translations", "fr.csv"))
 
     def test_ecran_simplifie_decouple_de_l_argent(self):
         """Les droits et la caisse ne regardent que le sous-traitant ; l'écran regarde les deux."""

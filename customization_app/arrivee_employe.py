@@ -129,6 +129,16 @@ def _seuil_stock(entrepot: str, journal: list[str]):
     journal.append(_("seuil de réapprovisionnement {0} posé sur {1}").format(SEUIL_DEFAUT, entrepot))
 
 
+def _permission_employe(user: str | None, employe: str) -> int:
+    """La permission utilisateur « Employé = employe » pour `user`, si elle manque. -> 1 si créée."""
+    if not user or not frappe.db.exists("User", user) or frappe.db.exists(
+            "User Permission", {"user": user, "allow": "Employee", "for_value": employe}):
+        return 0
+    frappe.get_doc({"doctype": "User Permission", "user": user, "allow": "Employee", "for_value": employe,
+                    "apply_to_all_doctypes": 1}).insert(ignore_permissions=True)
+    return 1
+
+
 def _assurer_role_technicien():
     if not frappe.db.exists("Role", ROLE_TECHNICIEN):
         frappe.get_doc({"doctype": "Role", "role_name": ROLE_TECHNICIEN, "desk_access": 1}).insert(ignore_permissions=True)
@@ -139,15 +149,43 @@ def _direction() -> list[str]:
     return _direction()
 
 
+@frappe.whitelist()
+def options_arrivee() -> dict:
+    """Ce que le dialogue propose : les approbateurs de congés possibles et les employés actifs (calendrier)."""
+    frappe.only_for(ROLES)
+    approbateurs = sorted({r.parent for r in frappe.get_all("Has Role", filters={"role": "Leave Approver", "parenttype": "User"},
+                                                            fields=["parent"])
+                           if frappe.db.get_value("User", r.parent, "enabled") and not r.parent.startswith("agent-ia")
+                           and r.parent != "Administrator"})
+    return {"approbateurs": [{"value": u, "label": frappe.utils.get_fullname(u) or u} for u in approbateurs],
+            "employes": [{"value": e.name, "label": e.employee_name}
+                         for e in frappe.get_all("Employee", filters={"status": "Active"}, fields=["name", "employee_name"],
+                                                 order_by="employee_name")]}
+
+
 @frappe.whitelist(methods=["POST"])
 def creer_technicien(nom, email, mot_de_passe, telephone=None, date_entree=None, genre="Male", date_naissance=None,
                      domicile_lien=None, vehicule=None, cbox=None, jour_verification="Lundi", heure_verification="09:00",
-                     periodicite="Chaque semaine", premier_jour_recup=None, ecran_simplifie=1) -> dict:
+                     periodicite="Chaque semaine", premier_jour_recup=None, ecran_simplifie=1, leave_approver=None,
+                     calendrier_visible_par=None, voit_calendrier_de=None) -> dict:
     """Tout en un geste : utilisateur (profil Technicien), employé, entrepôt + vérification + seuil, réglages,
-    caisse, récupération, écran simplifié. Rend {employe, utilisateur, entrepot, journal}."""
+    caisse, récupération, écran simplifié, approbateur de congés, visibilité des calendriers.
+    `calendrier_visible_par` : les EMPLOYÉS (leurs utilisateurs) qui voient son calendrier ;
+    `voit_calendrier_de` : les employés dont il voit le calendrier. Lui-même toujours.
+    Rend {employe, utilisateur, entrepot, journal}."""
+    import json
+
     from customization_app import sous_traitant as ST
 
     frappe.only_for(ROLES)
+    if isinstance(calendrier_visible_par, str):
+        calendrier_visible_par = json.loads(calendrier_visible_par or "[]")
+    if isinstance(voit_calendrier_de, str):
+        voit_calendrier_de = json.loads(voit_calendrier_de or "[]")
+    calendrier_visible_par = [e for e in (calendrier_visible_par or []) if e]
+    voit_calendrier_de = [e for e in (voit_calendrier_de or []) if e]
+    if leave_approver and "Leave Approver" not in frappe.get_roles(leave_approver):
+        frappe.throw(_("{0} n'a pas le rôle « Leave Approver » : il ne peut pas approuver les congés.").format(leave_approver))
     nom = " ".join((nom or "").split())
     email = (email or "").strip().lower()
     if not nom or not email or not mot_de_passe:
@@ -181,12 +219,29 @@ def creer_technicien(nom, email, mot_de_passe, telephone=None, date_entree=None,
         valeurs[CHAMP_ECRAN] = cint(ecran_simplifie)
     if domicile_lien and frappe.db.has_column("Employee", "custom_domicile_lien"):
         valeurs["custom_domicile_lien"] = domicile_lien.strip()     # → point de départ des tournées (hook domicile)
+    if leave_approver and frappe.get_meta("Employee").has_field("leave_approver"):
+        valeurs["leave_approver"] = leave_approver
+    # Jours fériés (application RH du téléphone, présences) : la liste de la société.
+    liste_feries = frappe.db.get_value("Company", valeurs["company"], "default_holiday_list")
+    if liste_feries:
+        valeurs["holiday_list"] = liste_feries
     emp = frappe.get_doc(valeurs)
     emp.flags.ignore_permissions = True
     emp.insert()
     journal.append(_("fiche {0} créée, entrepôt {1}").format(emp.name, entrepot))
     if domicile_lien:
         journal.append(_("domicile posé : point de départ des tournées"))
+    if leave_approver:
+        journal.append(_("approbateur de congés : {0}").format(frappe.utils.get_fullname(leave_approver)))
+    # Qui voit le calendrier de qui = les « permissions utilisateur » sur Employé (mécanisme standard d'ERPNext,
+    # tenu à la main depuis 2023 : chaque utilisateur porte la liste des employés dont il voit les documents —
+    # tâches, présences, fiches de paie). La fiche crée déjà la sienne (`create_user_permission`).
+    n = sum(_permission_employe(frappe.db.get_value("Employee", e, "user_id"), emp.name) for e in calendrier_visible_par)
+    if n:
+        journal.append(_("son calendrier est visible par {0} employé(s)").format(n))
+    m = sum(_permission_employe(email, e) for e in voit_calendrier_de if e != emp.name)
+    if m:
+        journal.append(_("il voit le calendrier de {0} employé(s)").format(m))
     if cint(ecran_simplifie):
         journal.append(_("écran simplifié du téléphone activé"))
 
