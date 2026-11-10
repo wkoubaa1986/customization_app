@@ -170,9 +170,38 @@ class TestPartenaires(unittest.TestCase):
     def test_l_etat_ecarte_le_partenaire(self):
         import inspect
         src = inspect.getsource(CC._etat)
-        self.assertIn("noms -= caisses_partenaires()", src)
+        self.assertIn("noms -= caisses_partenaires() | CAISSES_TECHNIQUES", src)
         # Après la restriction à « mes caisses » : même le partenaire connecté ne voit rien à compter.
         self.assertLess(src.index("noms = set(miennes)"), src.index("noms -= caisses_partenaires()"))
+
+    def test_les_robots_ecrivent_sous_administrator(self):
+        """Les pièces recréées par la synchronisation TEJ changent d'auteur : pas de caisse fantôme."""
+        self.assertIn("Administrator", CC.CAISSES_TECHNIQUES)
+
+
+class TestComptageNegatif(unittest.TestCase):
+    """Solde théorique négatif (dépense d'un collègue saisie ici) : on compte ce qu'il y a, jamais un
+    montant négatif — et le dialogue ne pré-remplit plus −76 DT (Hedi, 09/11/2026)."""
+
+    def test_comptage_negatif_refuse_remise_nulle_acceptee(self):
+        with self.assertRaises(ValueError):
+            CC.controler_remise(-76.001, 0)
+        CC.controler_remise(0, 0)       # ne lève pas
+
+    def test_le_dialogue_part_de_zero_et_explique(self):
+        import inspect
+        import os
+
+        import customization_app
+        base = os.path.join(os.path.dirname(inspect.getfile(customization_app)),
+                            "customize_erpnext", "page", "caisse_journaliere")
+        with open(os.path.join(base, "caisse_journaliere.js"), encoding="utf-8") as fh:
+            js = fh.read()
+        self.assertIn("const negatif = (e.solde_theorique || 0) < -0.0005;", js)
+        self.assertIn("const defaut = negatif ? 0 : e.solde_theorique;", js)
+        self.assertIn("reprise ? reprise.especes_comptees : defaut", js)
+        self.assertIn("reprise ? reprise.especes_remises : defaut", js)
+        self.assertIn("Solde théorique négatif", js)
 
 
 class TestCablage(unittest.TestCase):

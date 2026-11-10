@@ -660,6 +660,11 @@ def valider(caisse, date, especes_comptees=None, note=None, justifications=None,
     theorique = flt(ouverture + m["encaissements_especes"] - m["depenses_especes"], 3)
     comptees = flt(especes_comptees, 3) if especes_comptees not in (None, "") else None
     remises = flt(especes_remises, 3) if especes_remises not in (None, "") else None
+    if comptees is not None and comptees < 0:
+        # Un solde théorique négatif (dépense d'un collègue saisie ici) rendait le dialogue inutilisable :
+        # pré-rempli à −76 DT, la remise négative était refusée sans explication (Hedi, 09/11/2026).
+        frappe.throw(_("Les espèces comptées ne peuvent pas être négatives : comptez ce qu'il y a "
+                       "réellement dans la caisse (0 si rien) ; l'écart s'explique dans la note."))
     if mode == "double":
         try:
             CC.controler_remise(comptees, remises)

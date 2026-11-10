@@ -2658,6 +2658,11 @@ function rcj_cloture(rapport, opts) {
         return;
       }
       const fmt = (v) => rcj_dt(v || 0);
+      // Solde théorique négatif (une dépense dépasse les encaissements : saisie pour un collègue, le plus
+      // souvent) : on ne pré-remplit jamais un montant négatif — la remise négative était refusée sans
+      // explication et le comptage semblait impossible (Hedi, 09/11/2026). On part de 0 et on explique.
+      const negatif = (e.solde_theorique || 0) < -0.0005;
+      const defaut = negatif ? 0 : e.solde_theorique;
       const d = new frappe.ui.Dialog({
         title: reprise
           ? __("Rouvrir le comptage — {0} ({1}) — {2}", [caisse, periode(e), reprise.name])
@@ -2668,7 +2673,7 @@ function rcj_cloture(rapport, opts) {
           {
             fieldtype: "Currency", fieldname: "comptees",
             label: __("Espèces comptées (physique)"),
-            default: reprise ? reprise.especes_comptees : e.solde_theorique,
+            default: reprise ? reprise.especes_comptees : defaut,
             onchange: () => {
               const ecart = (d.get_value("comptees") || 0) - e.solde_theorique;
               d.fields_dict.etat.$wrapper.find(".rcj-clo-ecart")
@@ -2680,7 +2685,7 @@ function rcj_cloture(rapport, opts) {
             { fieldtype: "Section Break", fieldname: "sb_remise", label: __("Remise au responsable de collecte") },
             {
               fieldtype: "Currency", fieldname: "remises", label: __("Espèces remises au responsable"),
-              default: reprise ? reprise.especes_remises : e.solde_theorique, reqd: 1,
+              default: reprise ? reprise.especes_remises : defaut, reqd: 1,
               description: __("Ce que vous donnez ce soir. Le reste est votre fond de caisse pour demain."),
               onchange: () => {
                 const fond = (d.get_value("comptees") || 0) - (d.get_value("remises") || 0);
@@ -2790,7 +2795,12 @@ function rcj_cloture(rapport, opts) {
           });
         });
       }
-      d.fields_dict.etat.$wrapper.html(`
+      d.fields_dict.etat.$wrapper.html(`${negatif ? `
+        <div class="alert alert-warning" style="font-size:12.5px;padding:8px 10px;margin-bottom:8px">
+          <b>${__("Solde théorique négatif ({0})", [fmt(e.solde_theorique)])}</b> — ${
+          __("une dépense dépasse les encaissements de cette caisse : le plus souvent, une dépense payée par un collègue a été saisie ici.")} ${
+          __("Comptez ce qu'il y a réellement dans la caisse (0 si rien) : l'écart sera positif, expliquez-le dans la note.")}
+        </div>` : ""}
         <table class="table table-bordered" style="font-size:12.5px">
           <tr><td>${__("Solde d'ouverture (avant)")}</td>
               <td style="text-align:right;font-weight:700">${fmt(e.solde_ouverture)}</td></tr>
@@ -2802,7 +2812,7 @@ function rcj_cloture(rapport, opts) {
               <td style="text-align:right;font-weight:800">${fmt(e.solde_theorique)}</td></tr>
           <tr><td>${__("Écart (compté − théorique)")}</td>
               <td style="text-align:right;font-weight:700" ><span class="rcj-clo-ecart"
-                  style="color:#1d6f42">${fmt(0)}</span></td></tr>
+                  style="color:${negatif ? "#c0392b" : "#1d6f42"}">${fmt(negatif ? -e.solde_theorique : 0)}</span></td></tr>
           ${e.mode_validation === "double" ? `
           <tr><td>${__("Fond de caisse conservé (compté − remis)")}</td>
               <td style="text-align:right;font-weight:700"><span class="rcj-clo-fond">${fmt(0)}</span></td></tr>` : ""}

@@ -122,6 +122,12 @@ def caisses_sous_traitants() -> set:
     return set(frappe.get_all("Employee", filters={"custom_sous_traitant": 1, "status": "Active"}, pluck="employee_name"))
 
 
+# Comptes TECHNIQUES : les robots (synchronisation TEJ, régénération des paiements d'une commande…)
+# écrivent sous « Administrator ». Une pièce recréée par un robot change d'auteur et tomberait dans une
+# caisse fantôme « Administrator » (constaté le 22/10/2026 : traite SCPS de Néjib) — on ne la montre pas.
+CAISSES_TECHNIQUES = {"Administrator"}
+
+
 def caisses_partenaires() -> set:
     """Les caisses des PARTENAIRES (Economiq) : leurs encaissements vont sur LEUR compte (« Economiq Aqua
     Solution - A&S »), jamais dans un tiroir de la société — rien à compter ni à collecter (décision
@@ -247,6 +253,9 @@ def controler_remise(comptees, remises):
     """La remise ne peut ni être négative ni dépasser le comptage."""
     if comptees is None:
         raise ValueError("Comptez d'abord les espèces (montant obligatoire).")
+    if float(comptees) < 0:
+        raise ValueError("Les espèces comptées ne peuvent pas être négatives : comptez ce qu'il y a "
+                         "réellement dans la caisse (0 si rien), l'écart s'explique dans la note.")
     if remises is None:
         raise ValueError("Indiquez les espèces remises au responsable (0 si rien).")
     if float(remises) < 0:
@@ -599,7 +608,7 @@ def _etat(fin=None):
     if miennes:
         noms = set(miennes)
     noms.discard(CL.CAISSE_GLOBALE)
-    noms -= caisses_partenaires()      # un partenaire n'a rien à compter (10/11/2026)
+    noms -= caisses_partenaires() | CAISSES_TECHNIQUES   # partenaire, robots : rien à compter (10/11/2026)
 
     caisses, a_regler = [], []
     compteurs = {"non_comptee": 0, "a_collecter": 0, "a_compter": 0}
