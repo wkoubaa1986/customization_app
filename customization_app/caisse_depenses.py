@@ -2231,6 +2231,9 @@ def creer_facture_depuis_commandes(fiches):
     # update_stock : la politique BRS (corriger_stock) tranche — coché quand la
     # facture entre la marchandise (pas de reçu), décoché si des reçus existent.
     pi.run_method("set_missing_values")
+    # Sans arrondi (10/11/2026) : une avance de 71,116 sur une facture arrondie à 71,000 se coupait
+    # en deux lignes, 71,000 sur la facture et 0,116 laissés sur la commande.
+    pi.disable_rounded_total = 1
     pi.calculate_taxes_and_totals()
     # échéancier obligatoire sur ce site (Payment Schedule.mode_of_payment reqd)
     pi.set("payment_schedule", [])

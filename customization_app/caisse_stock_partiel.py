@@ -12,10 +12,16 @@ paie le tout en une fois. Comptablement (règle utilisateur, 10/11/2026 au soir)
     une écriture « le compte de charge finance la commande » : Dr Créditeurs (avance sur la
     commande, au sens ERPNext) / Cr compte de charge, pour le HT des articles. La commande est
     soumise, le reçu entre le stock ; l'avance s'impute sur la facture d'achat finale ;
-  · si la pièce est déjà une FACTURE (pas un BL), la facture d'achat (HT, sans TVA) se crée et se
-    soumet dans la foulée depuis le reçu : rien ne reste « à saisir ». Un BL, lui, attend la
-    facture mensuelle (« Rattacher des BL » sur la facture d'achat, qui pose aussi son numéro sur
-    la dépense).
+  · AUCUNE facture d'achat n'est créée ici (décision utilisateur 10/11/2026, confirmée).
+    - BL : la fiche d'achat attend la facture mensuelle (« Achats BL » de la caisse, ou
+      « Rattacher des BL » sur une facture d'achat), seule ou avec d'autres BL du fournisseur ;
+      l'écriture est une AVANCE sur la commande (Dr Créditeurs), elle s'impute sur cette facture,
+      dont le numéro se pose sur la dépense.
+    - FACTURE : la dépense EST la facture, rien ne reste à saisir : la commande est fermée après
+      réception, la fiche passe « Saisie », et l'écriture solde directement « Stock reçus mais non
+      facturés » (crédité par le reçu) contre le compte de charge — aucun en-cours fournisseur.
+  · sans arrondi : commande et facture gardent les millimes (71,116 et non 71,000), sinon l'avance
+    se coupe en deux lignes.
 
 Le contrôle scan/saisie de la facture d'achat (bank_retenue_sync) déduit les parts dépense
 (HT hors stock, toute la TVA) des totaux lus. Les fonctions de calcul sont pures.
@@ -96,6 +102,15 @@ def avance_en_journal(fiche_nom) -> bool:
 
 
 # ----------------------------------------------------------------------------- création
+def compte_stock_recu_non_facture() -> str:
+    """Le compte « Stock Reçus Mais Non Facturés » de la société (réglage ERPNext)."""
+    from customization_app import caisse_depenses as C
+    compte = frappe.db.get_value("Company", C.COMPANY, "stock_received_but_not_billed")
+    if not compte:
+        frappe.throw(_("Le compte « Stock reçus mais non facturés » n'est pas défini sur la société."))
+    return compte
+
+
 def creer_part_stock(stock: dict, ctx: dict) -> dict:
     """La commande (sans TVA), l'avance financée par le compte de charge, la fiche d'achat ; et la
     facture d'achat si la pièce en est une. Appelé par caisse_depenses.creer, dans sa transaction."""
@@ -131,6 +146,7 @@ def creer_part_stock(stock: dict, ctx: dict) -> dict:
     po.schedule_date = nowdate()
     po.custom_fiche_caisse = fiche.name
     po.set_warehouse = achats_magasin.ENTREPOT_ACHATS
+    po.disable_rounded_total = 1
     for l in stock["lignes"]:
         # SANS TVA : la part stock est valorisée HT, toute la TVA est dans la dépense. Un modèle de
         # taxe d'article ou de fournisseur ajouterait une ligne de TVA tout seul : on le neutralise.
@@ -148,26 +164,34 @@ def creer_part_stock(stock: dict, ctx: dict) -> dict:
                        "vérifiez le modèle de taxe du fournisseur {2}.").format(po.grand_total, po.net_total, supplier))
     po.submit()   # hooks : lien fiche + reçu automatique (l'avance n'est pas convertie : cf. avance_en_journal)
 
-    # Le compte de charge finance la commande : avance ERPNext sur la commande, imputée à la facture.
+    # Le compte de charge finance la commande.
     remarques = list(ctx["remarques"]) + [
         _("Part stock de la dépense {0} : le compte de charge finance la commande {1} ({2} HT)")
         .format(ctx.get("depense") or "", po.name, stock["stock_ht"])]
-    je = C._ecriture([
-        {"account": C.COMPTE_CREDITEURS, "party_type": "Supplier", "party": supplier,
-         "debit_in_account_currency": stock["stock_ht"], "is_advance": "Yes",
-         "reference_type": "Purchase Order", "reference_name": po.name, "cost_center": C.CC},
-        {"account": ctx["compte"], "credit_in_account_currency": stock["stock_ht"], "cost_center": C.CC},
-    ], description, remarques)
+    if est_bl:
+        # BL : avance ERPNext sur la commande, imputée à la facture mensuelle.
+        debit = {"account": C.COMPTE_CREDITEURS, "party_type": "Supplier", "party": supplier,
+                 "debit_in_account_currency": stock["stock_ht"], "is_advance": "Yes",
+                 "reference_type": "Purchase Order", "reference_name": po.name, "cost_center": C.CC}
+    else:
+        # Facture : la dépense est la facture ; on solde le compte crédité par le reçu.
+        debit = {"account": compte_stock_recu_non_facture(), "debit_in_account_currency": stock["stock_ht"],
+                 "cost_center": C.CC}
+        remarques.append(_("Pièce déjà facturée : commande fermée, stock reçu soldé contre la charge"))
+    je = C._ecriture([debit, {"account": ctx["compte"], "credit_in_account_currency": stock["stock_ht"],
+                              "cost_center": C.CC}], description, remarques)
     frappe.db.set_value("Facture Achat a Saisir", fiche.name, "journal_entry", je.name, update_modified=False)
+    if not est_bl:
+        po.reload()
+        po.flags.ignore_permissions = True
+        po.update_status("Closed")
+        frappe.db.set_value("Facture Achat a Saisir", fiche.name, "statut", "Saisie", update_modified=False)
     if ctx.get("photo"):
         C._attacher_scan(ctx["photo"], "facture-%s" % fiche.name, "Journal Entry", je.name, coins=ctx.get("coins"))
 
     recu = frappe.db.get_value("Facture Achat a Saisir", fiche.name, "purchase_receipt")
-    out = {"fiche_achat": fiche.name, "journal_entry": je.name, "purchase_order": po.name,
-           "purchase_receipt": recu, "purchase_invoice": None, "facture_en_brouillon": False}
-    if not est_bl:
-        out.update(_facture_immediate(fiche.name, po.name, recu, ctx))
-    return out
+    return {"fiche_achat": fiche.name, "journal_entry": je.name, "purchase_order": po.name,
+            "purchase_receipt": recu}
 
 
 def _sans_taxes(doc) -> None:
@@ -178,49 +202,6 @@ def _sans_taxes(doc) -> None:
     for it in doc.items:
         it.item_tax_template, it.item_tax_rate = "", "{}"
     doc.calculate_taxes_and_totals()
-
-
-def _facture_immediate(fiche_nom, po_nom, recu, ctx) -> dict:
-    """La pièce est une facture : la facture d'achat (HT, sans TVA) naît du reçu et se soumet.
-    Si la validation refuse (contrôles bank_retenue_sync), elle reste en brouillon, rattachée."""
-    from erpnext.buying.doctype.purchase_order.purchase_order import make_purchase_invoice as pi_depuis_commande
-    from erpnext.stock.doctype.purchase_receipt.purchase_receipt import make_purchase_invoice as pi_depuis_recu
-    from customization_app import caisse_depenses as C
-
-    if recu and frappe.db.get_value("Purchase Receipt", recu, "docstatus") == 1:
-        pi = pi_depuis_recu(recu)
-    else:
-        pi = pi_depuis_commande(po_nom)
-    pi.bill_no = (ctx.get("numero_facture") or "").strip() or None
-    pi.bill_date = ctx.get("date_facture") or None
-    pi.run_method("set_missing_values")
-    _sans_taxes(pi)
-    pi.set("payment_schedule", [])
-    pi.append("payment_schedule", {"due_date": pi.due_date or nowdate(), "invoice_portion": 100,
-                                   "payment_amount": flt(pi.rounded_total or pi.grand_total, 3),
-                                   "mode_of_payment": "Espèces"})
-    try:
-        pi.set_advances()
-    except Exception:
-        pass
-    pi.flags.ignore_permissions = True
-    pi.insert()
-    if flt(pi.grand_total) != flt(pi.net_total):
-        _sans_taxes(pi)
-        pi.save()
-    frappe.db.set_value("Facture Achat a Saisir", fiche_nom, "purchase_invoice", pi.name, update_modified=False)
-    C._copier_justificatifs(fiche_nom, "Purchase Invoice", pi.name)
-    try:
-        pi.reload()
-        pi.flags.ignore_permissions = True
-        pi.submit()
-        return {"purchase_invoice": pi.name, "facture_en_brouillon": False}
-    except Exception:
-        frappe.log_error(title="Caisse : facture d'achat de la part stock non validée",
-                         message=frappe.get_traceback())
-        frappe.msgprint(_("La facture d'achat {0} de la part stock est restée en brouillon : "
-                          "ouvrez-la pour la valider.").format(pi.name), indicator="orange", alert=True)
-        return {"purchase_invoice": pi.name, "facture_en_brouillon": True}
 
 
 # ----------------------------------------------------------------------------- lecture photo

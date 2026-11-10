@@ -55,11 +55,16 @@ class TestCablage(unittest.TestCase):
         src = inspect.getsource(S.creer_part_stock)
         self.assertNotIn('po.append("taxes"', src)
         self.assertEqual(src.count("_sans_taxes(po)"), 2)
-        self.assertEqual(inspect.getsource(S._facture_immediate).count("_sans_taxes(pi)"), 2)
+        self.assertIn("po.disable_rounded_total = 1", src)
+        self.assertFalse(hasattr(S, "_facture_immediate"))      # aucune facture d'achat automatique
+        self.assertNotIn("Purchase Invoice", src)
         self.assertIn('"is_advance": "Yes"', src)
         self.assertIn('"reference_type": "Purchase Order"', src)
+        # pièce déjà facturée : commande fermée, fiche « Saisie », stock reçu soldé contre la charge
+        self.assertIn('po.update_status("Closed")', src)
+        self.assertIn('"statut", "Saisie"', src)
+        self.assertIn('{"account": compte_stock_recu_non_facture()', src)
         self.assertIn('{"account": ctx["compte"], "credit_in_account_currency": stock["stock_ht"]', src)
-        self.assertIn("if not est_bl:", src)
         from customization_app import caisse_depenses as C
         self.assertIn("S.avance_en_journal(nom)", inspect.getsource(C.po_convertir_avances))
         self.assertIn("S.avance_en_journal(nom)", inspect.getsource(C.pi_marquer_fiche_saisie))

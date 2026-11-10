@@ -2166,14 +2166,10 @@ function rcj_depense(rapport, initial) {
           }
           if (r.message.purchase_order) {
             frappe.show_alert({
-              message: __("📦 Part stock {0} HT : commande {1}{2}{3}.",
+              message: __("📦 Part stock {0} HT : commande {1}{2}, payée par le compte de charge — la facture d'achat se crée depuis « Achats BL » quand vous voulez.",
                 [rcj_dt(r.message.part_stock), r.message.purchase_order,
-                 r.message.purchase_receipt ? __(", reçu {0} entré", [r.message.purchase_receipt]) : "",
-                 r.message.purchase_invoice
-                   ? (r.message.facture_en_brouillon ? __(", facture d'achat {0} EN BROUILLON à valider", [r.message.purchase_invoice])
-                                                     : __(", facture d'achat {0} validée", [r.message.purchase_invoice]))
-                   : __(" — en attente de la facture du fournisseur")]),
-              indicator: r.message.facture_en_brouillon ? "orange" : "blue",
+                 r.message.purchase_receipt ? __(", reçu {0} (stock entré)", [r.message.purchase_receipt]) : ""]),
+              indicator: "blue",
             }, 12);
           }
           if (r.message.a_payer) {
