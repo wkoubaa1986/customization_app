@@ -122,6 +122,17 @@ def caisses_sous_traitants() -> set:
     return set(frappe.get_all("Employee", filters={"custom_sous_traitant": 1, "status": "Active"}, pluck="employee_name"))
 
 
+def caisses_partenaires() -> set:
+    """Les caisses des PARTENAIRES (Economiq) : leurs encaissements vont sur LEUR compte (« Economiq Aqua
+    Solution - A&S »), jamais dans un tiroir de la société — rien à compter ni à collecter (décision
+    utilisateur 10/11/2026). Reconnus par IDENTIFIANT comme pour la visibilité, pas par nom : Economiq a
+    deux orthographes (fiche Employé et compte utilisateur), on écarte les deux."""
+    from customization_app.rapport_caisse_journaliere import ECONOMIQ_EMPLOYE, ECONOMIQ_UTILISATEUR
+    noms = {frappe.db.get_value("Employee", ECONOMIQ_EMPLOYE, "employee_name"),
+            frappe.db.get_value("User", ECONOMIQ_UTILISATEUR, "full_name")}
+    return {n for n in noms if n}
+
+
 def perimetre_sous_traitants(user=None) -> set:
     """Les caisses qu'un « Responsable sous-traitant » voit et collecte EN PLUS de la sienne quand il n'est pas
     collecteur par ailleurs (décision utilisateur 31/10/2026) ; vide sinon."""
@@ -588,6 +599,7 @@ def _etat(fin=None):
     if miennes:
         noms = set(miennes)
     noms.discard(CL.CAISSE_GLOBALE)
+    noms -= caisses_partenaires()      # un partenaire n'a rien à compter (10/11/2026)
 
     caisses, a_regler = [], []
     compteurs = {"non_comptee": 0, "a_collecter": 0, "a_compter": 0}

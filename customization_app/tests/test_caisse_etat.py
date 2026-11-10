@@ -150,6 +150,31 @@ class TestCommentaire(unittest.TestCase):
         self.assertEqual(CL.documents_du_point(p[0]), [("Sales Order", "SO1"), ("Tache de travail", "Tache-9")])
 
 
+class TestPartenaires(unittest.TestCase):
+    """Un PARTENAIRE (Economiq) encaisse sur son propre compte : sa caisse ne doit jamais ressortir
+    « à compter » ni « non comptée » (10/11/2026). Reconnu par identifiant, les deux orthographes écartées."""
+
+    def test_les_deux_noms_du_partenaire_sans_les_vides(self):
+        from unittest import mock
+        from customization_app.rapport_caisse_journaliere import ECONOMIQ_EMPLOYE, ECONOMIQ_UTILISATEUR
+
+        def get_value(doctype, nom, champ):
+            return {("Employee", ECONOMIQ_EMPLOYE): "Economic Aqua Solution",
+                    ("User", ECONOMIQ_UTILISATEUR): "Economiq Aqua Solutions"}.get((doctype, nom))
+
+        with mock.patch.object(frappe, "db", mock.Mock(get_value=get_value)):
+            self.assertEqual(CC.caisses_partenaires(), {"Economic Aqua Solution", "Economiq Aqua Solutions"})
+        with mock.patch.object(frappe, "db", mock.Mock(get_value=lambda *a: None)):
+            self.assertEqual(CC.caisses_partenaires(), set())
+
+    def test_l_etat_ecarte_le_partenaire(self):
+        import inspect
+        src = inspect.getsource(CC._etat)
+        self.assertIn("noms -= caisses_partenaires()", src)
+        # Après la restriction à « mes caisses » : même le partenaire connecté ne voit rien à compter.
+        self.assertLess(src.index("noms = set(miennes)"), src.index("noms -= caisses_partenaires()"))
+
+
 class TestCablage(unittest.TestCase):
 
     def test_page_branche_l_etat(self):
