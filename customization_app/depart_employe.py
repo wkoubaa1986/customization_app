@@ -51,6 +51,32 @@ RAISON_ANNULATION = "Autre"
 
 # ── Logique pure ─────────────────────────────────────────────────────────────
 
+def _normaliser(texte: str) -> list[str]:
+    import unicodedata
+    t = unicodedata.normalize("NFKD", texte or "").encode("ascii", "ignore").decode().lower()
+    return [m for m in "".join(c if c.isalnum() else " " for c in t).split() if len(m) >= 3]
+
+
+def lignes_salaire_de(nom_employe: str, lignes: list[dict]) -> list[dict]:
+    """Les dépenses récurrentes de type « Salaire » (application banque) qui portent le NOM DE FAMILLE de
+    l'employé, à l'accent et à une lettre près (« Chouchène » / « Chouchane »). Le prénom seul ne suffit pas :
+    « Hedi » désigne deux personnes. PURE."""
+    from difflib import SequenceMatcher
+    mots = _normaliser(nom_employe)
+    if not mots:
+        return []
+    famille = mots[-1]
+    out = []
+    for l in lignes:
+        if l.get("type") != "Salaire":
+            continue
+        for m in _normaliser(l.get("libelle") or ""):
+            if m == famille or SequenceMatcher(None, m, famille).ratio() >= 0.85:
+                out.append(l)
+                break
+    return out
+
+
 def classer_taches(taches: list[dict], aujourdhui) -> dict:
     """Répartit les tâches OUVERTES d'un employé : {a_venir, passees, absences}.
     `absences` = congés / jours de récupération (tout horizon à venir) ; `a_venir` = rendez-vous clients et
@@ -360,6 +386,29 @@ def _retirer_activites_reunions(employe: str, journal: list[str]):
         journal.append(_("retiré de {0} réunion(s) à venir").format(m))
 
 
+def _couper_salaire_banque(nom: str, journal: list[str]):
+    """Application banque (bank_retenue_sync) : la dépense récurrente « Salaire » du partant est désactivée,
+    sinon le virement attendu chaque fin de mois serait signalé manquant (décision utilisateur 10/11/2026)."""
+    if "bank_retenue_sync" not in frappe.get_installed_apps() or not frappe.db.exists("DocType", "BRS Depense Recurrente"):
+        return
+    cfg = frappe.get_single("Bank Retenue Sync Settings")
+    lignes = [r for r in (cfg.get("depenses_recurrentes") or []) if cint(r.get("actif"))]
+    touchees = lignes_salaire_de(nom, [r.as_dict() for r in lignes])
+    noms = {t["name"] for t in touchees}
+    if not noms:
+        journal.append(_("⚠️ application banque : aucun salaire actif reconnu pour {0} — à vérifier à la main").format(nom))
+        return
+    for r in lignes:
+        if r.name in noms:
+            r.actif = 0
+            r.notes = ((r.notes + "\n") if r.notes else "") + _("Désactivé le {0} : départ de {1}.").format(
+                frappe.utils.formatdate(nowdate()), nom)
+    cfg.flags.ignore_permissions = True
+    cfg.save()
+    journal.append(_("application banque : salaire désactivé ({0})").format(
+        ", ".join(t.get("libelle") or t["name"] for t in touchees)))
+
+
 def _retirer_permissions_utilisateur(employe: str, user: str | None, journal: list[str]):
     """Qui voit le calendrier de qui = les « permissions utilisateur » sur Employé (mécanisme standard, tenu à la
     main depuis 2023). Le partant sort des listes des autres, et sa propre liste est vidée."""
@@ -533,6 +582,7 @@ def executer(employe: str, remplacant: str = None, remplacant_portail: str = Non
     _retirer_des_reglages(inv["reglages"], journal)
     _retirer_activites_reunions(employe, journal)
     _retirer_permissions_utilisateur(employe, emp.user_id, journal)
+    _couper_salaire_banque(nom, journal)
     _reaffecter_reparations(employe, remplacant or inv.get("responsable_stock"), journal)
     _annuler_verifications(inv["verifications_ouvertes"], nom, journal)
     verif = _ouvrir_verification_finale(emp, date_depart, journal)

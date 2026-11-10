@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import frappe
 from frappe import _
-from frappe.utils import cint, getdate, nowdate
+from frappe.utils import cint, flt, getdate, nowdate
 
 ROLES = ("System Manager", "HR Manager", "Congés RH")
 ROLE_TECHNICIEN = "Technicien"
@@ -54,7 +54,19 @@ REGLAGES = (
 )
 
 
+TYPE_CONGE_PAYE = "Congé (Vacances)"
+JOURS_CONGE_PAR_MOIS = 1.5      # 18 jours par an (décision utilisateur, usage de l'entreprise)
+
+
 # ── Logique pure ─────────────────────────────────────────────────────────────
+
+def jours_conges_payes(date_entree) -> float:
+    """Le droit à congé payé jusqu'au 31/12 de l'année d'entrée : 1,5 jour par mois restant, mois d'entrée
+    compris, arrondi au demi-jour (Hedi Ibidhi entré en octobre : 4,5). PURE."""
+    d = getdate(date_entree)
+    mois = 12 - d.month + 1
+    return round(mois * JOURS_CONGE_PAR_MOIS * 2) / 2
+
 
 def decouper_nom(nom: str) -> tuple[str, str | None]:
     """« Prénom Nom Composé » → (prénom, reste). PURE."""
@@ -167,11 +179,12 @@ def options_arrivee() -> dict:
 def creer_technicien(nom, email, mot_de_passe, telephone=None, date_entree=None, genre="Male", date_naissance=None,
                      domicile_lien=None, vehicule=None, cbox=None, jour_verification="Lundi", heure_verification="09:00",
                      periodicite="Chaque semaine", premier_jour_recup=None, ecran_simplifie=1, leave_approver=None,
-                     calendrier_visible_par=None, voit_calendrier_de=None) -> dict:
+                     calendrier_visible_par=None, voit_calendrier_de=None, conges_payes=None) -> dict:
     """Tout en un geste : utilisateur (profil Technicien), employé, entrepôt + vérification + seuil, réglages,
     caisse, récupération, écran simplifié, approbateur de congés, visibilité des calendriers.
     `calendrier_visible_par` : les EMPLOYÉS (leurs utilisateurs) qui voient son calendrier ;
     `voit_calendrier_de` : les employés dont il voit le calendrier. Lui-même toujours.
+    `conges_payes` : jours de congé payé jusqu'au 31/12 (None = 1,5 j/mois restant ; 0 = rien).
     Rend {employe, utilisateur, entrepot, journal}."""
     import json
 
@@ -251,6 +264,16 @@ def creer_technicien(nom, email, mot_de_passe, telephone=None, date_entree=None,
                                                                             periodicite or "Chaque semaine"))
     _seuil_stock(entrepot, journal)
     _poser_reglages(emp, email, params, journal)
+
+    jours = jours_conges_payes(date_entree) if conges_payes in (None, "") else flt(conges_payes)
+    if jours > 0 and frappe.db.exists("Leave Type", TYPE_CONGE_PAYE):
+        alloc = frappe.get_doc({"doctype": "Leave Allocation", "employee": emp.name, "leave_type": TYPE_CONGE_PAYE,
+                                "from_date": date_entree, "to_date": "%s-12-31" % date_entree.year,
+                                "new_leaves_allocated": jours})
+        alloc.flags.ignore_permissions = True
+        alloc.insert()
+        alloc.submit()
+        journal.append(_("{0} jour(s) de {1} attribués jusqu'au 31/12/{2}").format(jours, TYPE_CONGE_PAYE, date_entree.year))
 
     if premier_jour_recup:
         from customization_app import conges_recuperations as CR

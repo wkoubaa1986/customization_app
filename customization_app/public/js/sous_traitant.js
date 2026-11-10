@@ -42,10 +42,10 @@
         { cle: "stock",      ic: "📦", libelle: __("Mon stock"),   aller: () => frappe.set_route("stock-entrepots") },
         { cle: "caisse",     ic: "💰", libelle: __("Ma caisse"),   aller: () => frappe.set_route("caisse-journaliere") },
     ];
-    // Technicien interne (pas sous-traitant) : il reste un employé — son libre-service RH (congés, présences)
-    // est à portée de pouce, dans l'application RH du téléphone (demande utilisateur 10/11/2026).
+    // Technicien interne (pas sous-traitant) : il reste un employé — ses congés et ses fiches de paie, sur
+    // NOTRE page (rh-technicien), dans la même barre : il en revient d'un pouce (demande utilisateur 10/11/2026).
     if (st.sous_traitant === false) {
-        ECRANS.push({ cle: "rh", ic: "🏖️", libelle: __("RH / Congés"), aller: () => { window.location.href = "/hrms"; } });
+        ECRANS.push({ cle: "rh", ic: "🏖️", libelle: __("Congés / Paie"), aller: () => frappe.set_route("rh-technicien") });
     }
 
     function ecran_courant() {
@@ -54,6 +54,7 @@
         if (r[0] === "agenda-sous-traitant") return "calendrier";
         if (r[0] === "stock-entrepots") return "stock";
         if (r[0] === "caisse-journaliere") return "caisse";
+        if (r[0] === "rh-technicien") return "rh";
         return "";
     }
 

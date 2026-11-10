@@ -31,6 +31,22 @@ class TestClassement(unittest.TestCase):
         self.assertEqual(D.lignes_a_retirer(lignes, "employe", None), [])
 
 
+class TestSalaireBanque(unittest.TestCase):
+    LIGNES = [{"name": "a", "type": "Salaire", "libelle": "Salaire Med Hédi Chouchène"},
+              {"name": "b", "type": "Salaire", "libelle": "Salaire Akram"},
+              {"name": "c", "type": "Salaire", "libelle": "Salaire Koubaâ Néjib"},
+              {"name": "d", "type": "Loyer", "libelle": "Loyer Akram"}]
+
+    def test_nom_de_famille_a_l_accent_pres(self):
+        self.assertEqual([l["name"] for l in D.lignes_salaire_de("Mohamed Hedi Chouchane", self.LIGNES)], ["a"])
+        self.assertEqual([l["name"] for l in D.lignes_salaire_de("Akram", self.LIGNES)], ["b"])
+        self.assertEqual([l["name"] for l in D.lignes_salaire_de("Nejib Koubaa", self.LIGNES)], ["c"])
+
+    def test_le_prenom_seul_ne_suffit_pas(self):
+        self.assertEqual(D.lignes_salaire_de("Hedi ibidhii", self.LIGNES), [])
+        self.assertEqual(D.lignes_salaire_de("", self.LIGNES), [])
+
+
 class TestReste(unittest.TestCase):
 
     def test_rien(self):
@@ -82,3 +98,4 @@ class TestCablage(unittest.TestCase):
         self.assertIn("emp.flags.depart_employe = True", src)
         self.assertIn('emp.status = "Left"', src)
         self.assertIn("user.enabled = 0", src)
+        self.assertIn("_couper_salaire_banque", src)

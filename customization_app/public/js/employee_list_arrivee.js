@@ -50,7 +50,10 @@ function rcj_dialogue_technicien(listview, opts) {
         description: __("Facultatif : collez un lien Google Maps ouvert sur le lieu.") },
       { fieldtype: "Data", fieldname: "vehicule", label: __("Véhicule GPS (immatriculation et modèle)"), description: __("Facultatif") },
       { fieldtype: "Data", fieldname: "cbox", label: __("Boîtier GPS (cbox)") },
-      { fieldtype: "Section Break", label: __("Récupération") },
+      { fieldtype: "Section Break", label: __("Congés et récupération") },
+      { fieldtype: "Float", fieldname: "conges_payes", label: __("Congés payés jusqu'au 31/12 (jours)"),
+        description: __("Vide : 1,5 jour par mois restant, mois d'entrée compris. 0 : rien pour l'instant.") },
+      { fieldtype: "Column Break" },
       { fieldtype: "Date", fieldname: "premier_jour_recup", label: __("Premier jour de récupération (puis toutes les deux semaines)"),
         description: __("Facultatif : laissez vide pour régler la règle plus tard dans Congés & récupérations.") },
     ],
@@ -64,7 +67,8 @@ function rcj_dialogue_technicien(listview, opts) {
                 jour_verification: v.jour_verification, periodicite: v.periodicite, premier_jour_recup: v.premier_jour_recup,
                 ecran_simplifie: v.ecran_simplifie ? 1 : 0, leave_approver: v.leave_approver || null,
                 calendrier_visible_par: JSON.stringify(d.get_value("calendrier_visible_par") || []),
-                voit_calendrier_de: JSON.stringify(d.get_value("voit_calendrier_de") || []) },
+                voit_calendrier_de: JSON.stringify(d.get_value("voit_calendrier_de") || []),
+                conges_payes: (v.conges_payes === undefined || v.conges_payes === null || v.conges_payes === "") ? null : v.conges_payes },
         freeze: true, freeze_message: __("Création en cours…"),
         callback: (r) => {
           d.hide();

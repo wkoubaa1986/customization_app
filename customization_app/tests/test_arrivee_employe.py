@@ -23,6 +23,11 @@ class TestPur(unittest.TestCase):
         self.assertEqual(A.cles_identite({"caisse": "Sadok", "date_depart": "2026-11-10"}), ("caisse",))
         self.assertEqual(A.cles_identite({"user": "x@y.z", "weight": 1}), ("user",))
 
+    def test_conges_payes_au_prorata(self):
+        self.assertEqual(A.jours_conges_payes("2026-10-05"), 4.5)     # Hedi Ibidhi, entré en octobre
+        self.assertEqual(A.jours_conges_payes("2026-01-15"), 18.0)
+        self.assertEqual(A.jours_conges_payes("2026-12-01"), 1.5)
+
     def test_profil_technicien(self):
         """Les rôles de Mohamed Hedi Chouchane (relevés le 10/11/2026) + Technicien, pas de rôle d'administration."""
         for r in ("Employee", "Maintenance Manager", "POS Manager", "Raven User", "Sales Manager", "Sales User", "Stock User",
@@ -71,6 +76,18 @@ class TestCablage(unittest.TestCase):
         self.assertIn('"doctype": "User Permission"', inspect.getsource(A._permission_employe))
         self.assertIn("_retirer_permissions_utilisateur", inspect.getsource(D.executer))
         self.assertIn("Request Leave,Demander un congé", self._lire("translations", "fr.csv"))
+        self.assertIn("Leave Allocation", src)
+
+    def test_ecran_rh(self):
+        """« Congés / Paie » : notre page, dans la barre du téléphone — on en revient d'un pouce."""
+        js = self._lire("public", "js", "sous_traitant.js")
+        self.assertIn('frappe.set_route("rh-technicien")', js)
+        self.assertNotIn("/hrms", js)
+        page = self._lire("customize_erpnext", "page", "rh_technicien", "rh_technicien.js")
+        self.assertIn('const API = "customization_app.rh_technicien"', page)
+        for m in ('".etat"', '".demander_conge"', '".annuler_demande"', "Mes fiches de paie", "Demander un congé"):
+            self.assertIn(m, page, m)
+        self.assertIn('"role": "Employee"', self._lire("customize_erpnext", "page", "rh_technicien", "rh_technicien.json"))
 
     def test_ecran_simplifie_decouple_de_l_argent(self):
         """Les droits et la caisse ne regardent que le sous-traitant ; l'écran regarde les deux."""
