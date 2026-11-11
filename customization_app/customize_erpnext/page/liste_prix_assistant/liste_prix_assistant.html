@@ -1,0 +1,107 @@
+<div class="lpa-page">
+  <style>
+    .lpa-page { padding: 12px 16px 90px; }
+    .lpa-card { background: var(--card-bg,#fff); border: 1px solid var(--border-color,#e4e8ee); border-radius: 12px;
+                padding: 12px 14px; margin-bottom: 12px; box-shadow: 0 1px 3px rgba(0,0,0,.05); }
+    .lpa-titre { font-weight: 700; font-size: 14px; margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
+    .lpa-num { display: inline-flex; width: 22px; height: 22px; border-radius: 50%; background: #2563eb; color: #fff;
+               font-size: 12px; align-items: center; justify-content: center; flex: none; }
+    .lpa-muted { color: var(--text-muted,#64748b); font-size: 12px; }
+    .lpa-qui { display: flex; flex-wrap: wrap; gap: 18px; align-items: flex-start; }
+    .lpa-qui .lpa-client { width: 320px; max-width: 100%; }
+    .lpa-qui .frappe-control { margin-bottom: 0; }
+    .lpa-label { font-size: 12px; color: var(--text-muted,#64748b); margin-bottom: 5px; }
+    .lpa-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+    .lpa-chip { border: 1px solid var(--border-color,#cbd5e1); border-radius: 999px; padding: 5px 13px; font-size: 12.5px;
+                font-weight: 600; cursor: pointer; user-select: none; background: var(--bg-light-gray,#f8fafc); }
+    .lpa-chip.actif { border-color: #2563eb; background: #2563eb; color: #fff; }
+    .lpa-cols { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); gap: 12px; align-items: start; }
+    @media (max-width: 1000px) { .lpa-cols { grid-template-columns: minmax(0, 1fr); } }
+    .lpa-recherche { position: relative; margin-bottom: 8px; }
+    .lpa-recherche input { height: 38px; font-size: 14px; padding-right: 34px; }
+    .lpa-recherche .lpa-x { position: absolute; right: 8px; top: 7px; cursor: pointer; font-size: 16px; color: #94a3b8; display: none; }
+    .lpa-defile { max-height: 62vh; overflow-y: auto; margin: 0 -6px; padding: 0 6px; }
+    .lpa-entete-vue { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; font-size: 12.5px; }
+    .lpa-entete-vue b { font-size: 13px; }
+    .lpa-fam { display: flex; align-items: center; gap: 6px; padding: 5px 6px; border-radius: 6px; font-size: 13px; }
+    .lpa-fam:hover { background: var(--bg-light-gray,#f1f5f9); }
+    .lpa-fam .nom { flex: 1; cursor: pointer; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .lpa-fam.n0 .nom { font-weight: 700; }
+    .lpa-fam .nb { color: var(--text-muted,#64748b); font-size: 11.5px; }
+    .lpa-art { display: flex; align-items: center; gap: 9px; padding: 6px; border-bottom: 1px solid var(--border-color,#eef2f6); }
+    .lpa-art.sous { padding-left: 26px; }
+    .lpa-art img, .lpa-art .sansimg { width: 40px; height: 40px; object-fit: contain; border-radius: 6px; flex: none;
+                                      background: var(--bg-light-gray,#f1f5f9); }
+    .lpa-art .txt { flex: 1; min-width: 0; }
+    .lpa-art .nom { font-size: 12.5px; font-weight: 600; line-height: 1.3; }
+    .lpa-art .code { font-size: 11px; color: var(--text-muted,#64748b); }
+    .lpa-art .prix { text-align: right; white-space: nowrap; font-size: 12.5px; font-weight: 700; }
+    .lpa-art .prix s { font-weight: 400; color: #94a3b8; font-size: 11px; }
+    .lpa-art .prix .rem { color: #166534; font-size: 11px; }
+    .lpa-plus { min-width: 86px; }
+    .lpa-plus.ajoute { background: #dcfce7; border-color: #86efac; color: #166534; }
+    .lpa-modele { background: var(--bg-light-gray,#f8fafc); border-radius: 8px; margin: 6px 0; }
+    .lpa-modele > .lpa-art { border-bottom: none; }
+    .lpa-groupe { display: flex; align-items: center; gap: 8px; background: var(--bg-light-gray,#f1f5f9); padding: 5px 8px;
+                  border-radius: 6px; font-weight: 700; font-size: 12.5px; margin-top: 8px; }
+    .lpa-groupe .nb { font-weight: 400; color: var(--text-muted,#64748b); }
+    .lpa-sel-ligne { display: grid; grid-template-columns: 40px minmax(0, 1fr) 128px 64px 104px 26px; gap: 8px; align-items: center;
+                     padding: 5px 4px; border-bottom: 1px solid var(--border-color,#eef2f6); font-size: 12.5px; }
+    .lpa-sel-ligne img, .lpa-sel-ligne .sansimg { width: 40px; height: 40px; object-fit: contain; border-radius: 6px;
+                                                  background: var(--bg-light-gray,#f1f5f9); }
+    .lpa-sel-ligne .nom { font-weight: 600; line-height: 1.3; }
+    .lpa-sel-ligne .code, .lpa-sel-ligne .pal { font-size: 11px; color: var(--text-muted,#64748b); }
+    .lpa-sel-ligne .pal.ok { color: #166534; font-weight: 600; }
+    .lpa-sel-ligne .num { text-align: right; white-space: nowrap; }
+    .lpa-sel-ligne .num s { color: #94a3b8; font-size: 11px; }
+    .lpa-sel-ligne .rem { color: #166534; font-size: 11px; }
+    .lpa-sel-ligne input { height: 28px; padding: 2px 6px; text-align: center; }
+    .lpa-suppr { cursor: pointer; color: #94a3b8; font-size: 15px; text-align: center; }
+    .lpa-suppr:hover { color: #dc2626; }
+    .lpa-colonnes { display: grid; grid-template-columns: 40px minmax(0, 1fr) 128px 64px 104px 26px; gap: 8px; font-size: 11px;
+                    color: var(--text-muted,#64748b); text-transform: uppercase; letter-spacing: .3px; padding: 0 4px 4px; }
+    .lpa-colonnes .num { text-align: right; }
+    .lpa-vide { text-align: center; color: var(--text-muted,#64748b); padding: 36px 12px; font-size: 13px; }
+    .lpa-alerte { background: #fef3c7; border: 1px solid #fcd34d; color: #92400e; border-radius: 8px; padding: 7px 10px;
+                  font-size: 12.5px; margin-bottom: 8px; }
+    .lpa-pied { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 10px; padding-top: 10px;
+                border-top: 1px solid var(--border-color,#e4e8ee); }
+    .lpa-pied .total { flex: 1; font-size: 13px; }
+    .lpa-pied .total b { font-size: 16px; }
+  </style>
+
+  <div class="lpa-card">
+    <div class="lpa-titre"><span class="lpa-num">1</span> Pour qui est cette liste ?</div>
+    <div class="lpa-qui">
+      <div class="lpa-client">
+        <div id="lpa-client"></div>
+        <div class="lpa-muted" id="lpa-info-client">Facultatif. Avec un client, sa liste de prix est choisie toute seule.</div>
+      </div>
+      <div>
+        <div class="lpa-label">Liste de prix</div>
+        <div class="lpa-chips" id="lpa-listes"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="lpa-cols">
+    <div class="lpa-card">
+      <div class="lpa-titre"><span class="lpa-num">2</span> Ajouter des articles</div>
+      <div class="lpa-recherche">
+        <input type="text" class="form-control" id="lpa-q" placeholder="Rechercher : nom, code, marque… ou choisir une famille ci-dessous" autocomplete="off">
+        <span class="lpa-x" id="lpa-q-x" title="Effacer">✕</span>
+      </div>
+      <div id="lpa-gauche"></div>
+    </div>
+    <div class="lpa-card">
+      <div class="lpa-titre"><span class="lpa-num">3</span> <span id="lpa-titre-liste">Votre liste</span></div>
+      <div id="lpa-alertes"></div>
+      <div id="lpa-selection"></div>
+      <div class="lpa-pied">
+        <div class="total" id="lpa-total"></div>
+        <button class="btn btn-default btn-sm" id="lpa-vider">Vider</button>
+        <button class="btn btn-primary" id="lpa-creer">Créer la liste de prix</button>
+      </div>
+    </div>
+  </div>
+</div>

@@ -585,6 +585,7 @@ app_include_js = [_js("customer_quick_entry.js"),
                   _js("suivi_activite_onglet.js"),  # l'onglet « Suivi d'activité » ouvre l'outil
                   _js("situation_mensuelle_clic.js"),  # graphes Situation Mensuelle et Pertes et Profits → page de détail
                   _js("bl_magasin_alerte.js"),  # bandeau rouge du magasinier principal : BL à approuver / à vérifier
+                  _js("liste_prix_documents_list.js"),  # liste des listes de prix : bouton vers l'assistant
                   # 📨 SMS / e-mail au client depuis la fiche tâche, avec modèles prédéfinis
                   # (technicien + téléphone injectés automatiquement, commande liée si présente).
                   _js("tache_sms_email.js"),
