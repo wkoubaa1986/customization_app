@@ -7,7 +7,9 @@ trois gestes : pour qui (client ou liste de prix), quoi (recherche ou famille en
 Rien n'est recalculé ici : la recherche, les prix, la TVA, les remises par quantité et la forme des
 lignes viennent de `booking_ristourne.catalogue_client`, le module de la fiche client — une liste
 faite par un employé et une liste faite par le client depuis sa fiche sont donc identiques.
-Le document créé est soumis et s'imprime avec « Liste prix client » ou « Liste des prix ».
+Les promotions (prix TTC minimum, textes des règles) viennent du Server Script `gener_list_prix`, celui du
+bouton « Obtenir Articles ». Le document créé est soumis et s'imprime avec « Liste prix client » ou
+« Liste des prix ».
 """
 from __future__ import annotations
 
@@ -23,6 +25,7 @@ ARTICLES_MAX = 1500          # la plus grosse liste faite à la main à ce jour 
 RESULTATS_MAX = 40
 BRANCHE_EXCLUE = "Services & Interventions"
 FORMATS = ["Liste prix client", "Liste des prix"]
+SCRIPT_PROMOTIONS = "gener_list_prix"   # Server Script API : le calcul des promotions du formulaire
 PROMO_VIDE = {"group_rules": [], "item_rules": [], "group_descriptions": [], "item_descriptions": [],
               "multi_item_rules": [], "multi_item_sets": []}
 
@@ -96,7 +99,13 @@ def ligne_apercu(fiche: dict, ligne: dict) -> dict:
         "qte": ligne["custom_quantite"],
         "palier": ligne["custom_remise_quantite"], "prochain": ligne["custom_prochain_palier"],
         "total": flt(ligne["custom_total_ttc"]) if ligne["custom_total_ttc"] != "" else None,
+        "prix_promo": flt(ligne["prix_ttc_promo"]) if ligne.get("prix_ttc_promo") else None,
     }
+
+
+def articles_pour_promotions(fiches: list) -> list:
+    """Les fiches prix sous la forme que lit le script « gener_list_prix » : item_code, item_group, price."""
+    return [{"item_code": f["item_code"], "item_group": f["item_group"], "price": f["prix_ttc"]} for f in fiches]
 
 
 # ── Lecture ──────────────────────────────────────────────────────────────────
@@ -132,6 +141,37 @@ def _fiches(codes: list, price_list: str) -> list:
     return sorted(fiches, key=lambda f: ordre[f["item_group"] or ""])
 
 
+def _promotions(fiches: list, price_list: str) -> tuple:
+    """(promo_json, {code: prix TTC minimum avec promotion}) — le calcul du bouton « Obtenir Articles ».
+
+    Ce calcul (règles de prix par article, par famille et par familles parentes ; chaque règle essayée
+    seule sur le prix de la liste, la plus basse gagne) vit dans le Server Script API `gener_list_prix`.
+    On ne le recopie pas : on charge ses fonctions et on les appelle, pour qu'une liste faite ici porte
+    exactement les promotions d'une liste faite par le formulaire ou par la génération de nuit.
+    Script absent, désactivé ou modifié au point de ne plus offrir ces fonctions : pas de promotion
+    (liste créée quand même), et l'erreur est journalisée."""
+    if not fiches:
+        return dict(PROMO_VIDE), {}
+    try:
+        from frappe.utils.safe_exec import safe_exec
+
+        script = frappe.db.get_value("Server Script", {"api_method": SCRIPT_PROMOTIONS, "disabled": 0}, "script")
+        if not script:
+            raise frappe.ValidationError("Server Script API « %s » introuvable ou désactivé" % SCRIPT_PROMOTIONS)
+        # Exécuté sans `list_group_item` : le script ne lit alors aucun article, il ne fait que définir
+        # ses fonctions. La réponse HTTP qu'il pose est écrasée par la nôtre.
+        reponse = frappe.response.get("message")
+        espace, _locaux = safe_exec(script, script_filename="server script %s" % SCRIPT_PROMOTIONS)
+        frappe.response["message"] = reponse
+        items = articles_pour_promotions(fiches)
+        info = espace["get_pricing_rules_for_items"](items, price_list)
+        espace["inject_min_promo_price_on_items"](items, info)
+        return info, {i["item_code"]: i["prix_ttc_promo"] for i in items if i.get("prix_ttc_promo")}
+    except Exception:
+        frappe.log_error(title="Assistant liste de prix : promotions non calculées", message=frappe.get_traceback())
+        return dict(PROMO_VIDE), {}
+
+
 def _calcul(articles, price_list: str) -> dict:
     """Les lignes de document pour ces articles : {fiches, lignes, quantites, sans_prix}."""
     C = _catalogue()
@@ -141,8 +181,11 @@ def _calcul(articles, price_list: str) -> dict:
     fiches = [f for f in fiches if f["prix_ttc"] is not None]
     cumuls = C._cumuls_mixtes(fiches, quantites)
     lignes = [C._ligne_document(f, quantites[f["item_code"]], cumuls) for f in fiches]
+    promo_json, prix_promo = _promotions(fiches, price_list)
+    for f, l in zip(fiches, lignes):
+        l["prix_ttc_promo"] = C._fmt_nombre(prix_promo[f["item_code"]]) if f["item_code"] in prix_promo else ""
     connus = {f["item_code"] for f in fiches} | set(sans_prix)
-    return {"fiches": fiches, "lignes": lignes, "quantites": quantites, "sans_prix": sans_prix,
+    return {"fiches": fiches, "lignes": lignes, "quantites": quantites, "sans_prix": sans_prix, "promo_json": promo_json,
             "introuvables": [c for c in quantites if c not in connus]}
 
 
@@ -264,7 +307,7 @@ def creer(articles, price_list: str, client: str = None) -> dict:
         "custom_client": client,
         "référant": _referant(),
         "génrer_automatique": 0,
-        "promo_json": json.dumps(PROMO_VIDE),
+        "promo_json": json.dumps(c["promo_json"], default=str),
         "group_articles": [{"goup_articles": g} for g in groupes],
         "liste_articles": lignes,
     })

@@ -40,6 +40,14 @@ class TestLigneApercu(unittest.TestCase):
         l = A.ligne_apercu(fiche, ligne)
         self.assertEqual((l["qte"], l["total"], l["palier"], l["item_group"], l["remise_pct"]), (3, 28.5, "-5 % dès 3", "", 20.0))
         self.assertIsNone(A.ligne_apercu(fiche, {**ligne, "custom_total_ttc": ""})["total"])
+        self.assertIsNone(l["prix_promo"])
+        self.assertEqual(A.ligne_apercu(fiche, {**ligne, "prix_ttc_promo": "8.5"})["prix_promo"], 8.5)
+        self.assertIsNone(A.ligne_apercu(fiche, {**ligne, "prix_ttc_promo": ""})["prix_promo"])
+
+    def test_articles_pour_promotions(self):
+        # la forme que lit le Server Script « gener_list_prix » : le prix est celui de la liste, TTC
+        self.assertEqual(A.articles_pour_promotions([{"item_code": "A", "item_group": "G", "prix_ttc": 10.0, "image": "x"}]),
+                         [{"item_code": "A", "item_group": "G", "price": 10.0}])
 
     def test_url_pdf(self):
         u = A.url_pdf("Liste prix -11-11-2026-00001", "Liste prix client")

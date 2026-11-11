@@ -340,7 +340,8 @@ class ListePrixAssistant {
           ${lpa_img(l.image)}
           <div><div class="nom">${lpa_esc(l.item_name)}</div><div class="code">${lpa_esc(l.item_code)}</div>${palier}</div>
           <div class="num"><b>${lpa_dt(l.prix_ttc)}</b>${l.remise_pct > 0 && l.prix_standard_ttc
-            ? `<br><s>${lpa_dt(l.prix_standard_ttc)}</s> <span class="rem">-${l.remise_pct} %</span>` : ""}</div>
+            ? `<br><s>${lpa_dt(l.prix_standard_ttc)}</s> <span class="rem">-${l.remise_pct} %</span>` : ""}${
+            l.prix_promo != null ? `<br><span class="promo" title="Prix TTC minimum avec promotion">promo ${lpa_dt(l.prix_promo)}</span>` : ""}</div>
           <input type="number" min="1" step="1" class="form-control lpa-qte" data-code="${lpa_esc(l.item_code)}" value="${l.qte}">
           <div class="num">${lpa_dt(l.total)}</div>
           <span class="lpa-suppr" data-code="${lpa_esc(l.item_code)}" title="Retirer">✕</span>
