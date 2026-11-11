@@ -21,19 +21,47 @@ const lpa_dt = (v) => (v == null ? "—"
   : Number(v).toLocaleString("fr-FR", { minimumFractionDigits: 3, maximumFractionDigits: 3 }) + " DT");
 const lpa_img = (src) => (src ? `<img src="${lpa_esc(src)}" loading="lazy" alt="">` : `<div class="sansimg"></div>`);
 
+const LPA_TRIS = [
+  ["prix_asc", "Prix croissant"], ["prix_desc", "Prix décroissant"],
+  ["variantes", "Par variante"], ["variantes_prix", "Par variante et par prix"],
+];
+const lpa_code = (a, b) => String(a.item_code).localeCompare(String(b.item_code));
+
 /**
  * Codes de la liste dans le nouvel ordre : les familles gardent leur place, les articles de `groupe`
- * (de toutes les familles si null) sont triés par prix TTC, à prix égal par code. Fonction pure.
+ * (de toutes les familles si null) sont réordonnés selon `mode`. Fonction pure.
+ *  - prix_asc / prix_desc : par prix TTC, à prix égal par code ;
+ *  - variantes : les variantes d'un même modèle se suivent, dans l'ordre de leurs attributs ; les modèles et
+ *    les articles simples gardent leur ordre d'arrivée ;
+ *  - variantes_prix : les blocs (article simple, ou modèle avec ses variantes) du moins cher au plus cher —
+ *    un modèle vaut sa variante la moins chère — et, dans un modèle, les variantes par prix croissant.
  */
-function lpa_ordre_par_prix(lignes, groupe, croissant) {
+function lpa_ordre(lignes, groupe, mode) {
   const familles = [];
   lignes.forEach((l) => { if (!familles.includes(l.item_group)) familles.push(l.item_group); });
   const out = [];
   familles.forEach((f) => {
     let bloc = lignes.filter((l) => l.item_group === f);
     if (groupe == null || f === groupe) {
-      bloc = bloc.slice().sort((a, b) => ((a.prix_ttc - b.prix_ttc) * (croissant ? 1 : -1))
-        || String(a.item_code).localeCompare(String(b.item_code)));
+      if (mode === "prix_asc" || mode === "prix_desc") {
+        const s = mode === "prix_asc" ? 1 : -1;
+        bloc = bloc.slice().sort((a, b) => (a.prix_ttc - b.prix_ttc) * s || lpa_code(a, b));
+      } else {
+        const blocs = [];                       // [{cle, lignes}] : un article simple, ou un modèle
+        bloc.forEach((l) => {
+          const cle = l.modele ? "m:" + l.modele : "s:" + l.item_code;
+          let b = blocs.find((x) => x.cle === cle);
+          if (!b) { b = { cle, lignes: [] }; blocs.push(b); }
+          b.lignes.push(l);
+        });
+        const par_prix = mode === "variantes_prix";
+        blocs.forEach((b) => b.lignes.sort((x, y) => (par_prix ? x.prix_ttc - y.prix_ttc : 0) || (x.rang - y.rang) || lpa_code(x, y)));
+        if (par_prix) {
+          const mini = (b) => Math.min(...b.lignes.map((l) => l.prix_ttc));
+          blocs.sort((x, y) => mini(x) - mini(y) || x.cle.localeCompare(y.cle));
+        }
+        bloc = [].concat(...blocs.map((b) => b.lignes));
+      }
     }
     bloc.forEach((l) => out.push(l.item_code));
   });
@@ -91,9 +119,11 @@ class ListePrixAssistant {
     });
     // Tri par prix, famille par famille ou pour toute la liste (demande utilisateur 11/11/2026).
     // L'ordre affiché est celui du document et du PDF : on réordonne la sélection elle-même.
-    this.sens_tri = {};              // famille -> dernier sens appliqué (true = croissant)
-    this.$root.on("click", ".lpa-tri[data-groupe]", (e) => this.trier_par_prix(String($(e.currentTarget).data("groupe"))));
-    this.$root.find("#lpa-trier").on("click", () => this.trier_par_prix(null));
+    this.tris = {};                  // famille (ou "*" pour toute la liste) -> dernier tri appliqué
+    this.$root.on("change", ".lpa-tri", (e) => {
+      const $s = $(e.currentTarget), g = $s.data("groupe");
+      if ($s.val()) this.trier(g === undefined ? null : String(g), $s.val());
+    });
     this.$root.on("change", ".lpa-qte", (e) => {
       const code = String($(e.currentTarget).data("code"));
       const q = Math.max(1, parseInt($(e.currentTarget).val(), 10) || 1);
@@ -330,18 +360,26 @@ class ListePrixAssistant {
     this.maj_selection();
   }
 
-  /** Trie par prix TTC les articles d'une famille (ou de toutes si `groupe` est null) ; un second clic inverse. */
-  trier_par_prix(groupe) {
-    const cle = groupe == null ? "*" : groupe;
-    const croissant = this.sens_tri[cle] === undefined ? true : !this.sens_tri[cle];
-    if (groupe == null) this.sens_tri = {};
-    this.sens_tri[cle] = croissant;
-    const ordre = lpa_ordre_par_prix(this.lignes, groupe, croissant);
+  /** Réordonne une famille (ou toute la liste si `groupe` est null) selon `mode` (cf. lpa_ordre). */
+  trier(groupe, mode) {
+    if (groupe == null) this.tris = { "*": mode }; else this.tris[groupe] = mode;
+    const ordre = lpa_ordre(this.lignes, groupe, mode);
     const sel = new Map();
     ordre.forEach((c) => { if (this.sel.has(c)) sel.set(c, this.sel.get(c)); });
     this.sel.forEach((q, c) => { if (!sel.has(c)) sel.set(c, q); });   // sans prix / pas encore relus : à la fin
     this.sel = sel;
     this.maj_selection();
+  }
+
+  /** Le menu de tri d'une famille (ou global) ; les tris « par variante » n'apparaissent que s'il y en a. */
+  html_tri(groupe, lignes) {
+    const variantes = lignes.some((l) => l.modele);
+    const actuel = this.tris[groupe == null ? "*" : groupe] || (groupe == null ? "" : this.tris["*"]) || "";
+    return `<select class="lpa-tri" ${groupe == null ? "" : `data-groupe="${lpa_esc(groupe)}"`} title="Ordre des articles${groupe == null ? " de toute la liste" : " de cette famille"}">
+        <option value="">↕ Trier…</option>
+        ${LPA_TRIS.filter(([m]) => variantes || !m.startsWith("variantes"))
+          .map(([m, t]) => `<option value="${m}" ${m === actuel ? "selected" : ""}>${t}</option>`).join("")}
+      </select>`;
   }
 
   articles() {
@@ -377,7 +415,7 @@ class ListePrixAssistant {
     this.$root.find("#lpa-titre-liste").html(`Votre liste <span class="lpa-muted">— ${n} article(s) · ${lpa_esc(this.liste || "")}</span>`);
     this.$root.find("#lpa-creer").prop("disabled", !n);
     this.$root.find("#lpa-vider").toggle(!!this.sel.size);
-    this.$root.find("#lpa-trier").toggle(n > 1);
+    this.$root.find("#lpa-trier").html(n > 1 ? this.html_tri(null, a.lignes) : "");
     this.$root.find("#lpa-total").html(n ? `Total TTC pour ces quantités : <b>${lpa_dt(a.total)}</b>` : "");
     const ecartes = (a.sans_prix || []).concat(a.introuvables || []);
     this.$root.find("#lpa-alertes").html(ecartes.length
@@ -398,8 +436,7 @@ class ListePrixAssistant {
         groupe = l.item_group;
         const nb = a.lignes.filter((x) => x.item_group === groupe).length;
         html += `<div class="lpa-groupe"><span style="flex:1">${lpa_esc(groupe || "Sans famille")} <span class="nb">· ${nb}</span></span>
-          ${nb > 1 ? `<button class="btn btn-xs btn-default lpa-tri" data-groupe="${lpa_esc(groupe)}" title="Trier cette famille par prix (recliquer pour inverser)">${
-            this.sens_tri[groupe] === undefined && this.sens_tri["*"] === undefined ? "↕" : ((this.sens_tri[groupe] ?? this.sens_tri["*"]) ? "↑" : "↓")} Prix</button>` : ""}
+          ${nb > 1 ? this.html_tri(groupe, a.lignes.filter((x) => x.item_group === groupe)) : ""}
           <span class="lpa-suppr" data-groupe="${lpa_esc(groupe)}" title="Retirer toute la famille">✕</span></div>`;
       }
       const palier = l.palier ? `<div class="pal ok">${lpa_esc(l.palier)}</div>`

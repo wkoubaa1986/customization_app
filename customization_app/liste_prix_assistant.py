@@ -100,7 +100,35 @@ def ligne_apercu(fiche: dict, ligne: dict) -> dict:
         "palier": ligne["custom_remise_quantite"], "prochain": ligne["custom_prochain_palier"],
         "total": flt(ligne["custom_total_ttc"]) if ligne["custom_total_ttc"] != "" else None,
         "prix_promo": flt(ligne["prix_ttc_promo"]) if ligne.get("prix_ttc_promo") else None,
+        # Variante : son modèle et son rang parmi les variantes du modèle (ordre des attributs), pour le tri.
+        "modele": fiche.get("modele"), "rang": fiche.get("rang") or 0,
     }
+
+
+def rangs_variantes(variantes: dict, attributs: list, ordre_valeurs: dict) -> dict:
+    """{code: rang} — la place de chaque variante parmi celles de son modèle, dans l'ordre des attributs
+    de la fiche (1er attribut, puis 2e…) et, pour chaque attribut, dans l'ordre de ses valeurs (liste de
+    l'attribut ; valeur numérique pour un attribut numérique ; sinon alphabétique). Fonction pure.
+    `variantes` : {code: modèle} ; `attributs` : [{parent, attribute, attribute_value, idx}] ;
+    `ordre_valeurs` : {(attribut, valeur): position}."""
+    par_code: dict = {}
+    for a in sorted(attributs, key=lambda a: a.get("idx") or 0):
+        valeur = a.get("attribute_value")
+        position = ordre_valeurs.get((a.get("attribute"), valeur))
+        if position is None:
+            try:
+                position = float(str(valeur).replace(",", "."))
+            except (TypeError, ValueError):
+                position = float("inf")
+        par_code.setdefault(a["parent"], []).append((position, str(valeur or "")))
+    par_modele: dict = {}
+    for code, modele in variantes.items():
+        par_modele.setdefault(modele, []).append(code)
+    rangs = {}
+    for codes in par_modele.values():
+        for i, code in enumerate(sorted(codes, key=lambda c: (par_code.get(c, []), c))):
+            rangs[code] = i
+    return rangs
 
 
 def articles_pour_promotions(fiches: list) -> list:
@@ -135,6 +163,18 @@ def _fiches(codes: list, price_list: str) -> list:
     tva = C._taux_tva(codes)
     remises = C._remises_quantite([{"item_code": c, "item_group": par_code[c].item_group} for c in codes], price_list)
     fiches = [C._fiche_prix(par_code[c], prix_liste, prix_standard, tva, remises) for c in codes]
+    variantes = {c: par_code[c].variant_of for c in codes if par_code[c].variant_of}
+    if variantes:
+        attributs = frappe.get_all("Item Variant Attribute", filters={"parent": ["in", list(variantes)], "parenttype": "Item"},
+                                   fields=["parent", "attribute", "attribute_value", "idx"], limit_page_length=0)
+        noms = sorted({a.attribute for a in attributs})
+        ordre_valeurs = {(v.parent, v.attribute_value): v.idx for v in frappe.get_all(
+            "Item Attribute Value", filters={"parent": ["in", noms]}, fields=["parent", "attribute_value", "idx"],
+            limit_page_length=0)} if noms else {}
+        rangs = rangs_variantes(variantes, attributs, ordre_valeurs)
+        for f in fiches:
+            if f["item_code"] in variantes:
+                f["modele"], f["rang"] = variantes[f["item_code"]], rangs.get(f["item_code"], 0)
     ordre = {}
     for f in fiches:
         ordre.setdefault(f["item_group"] or "", len(ordre))
