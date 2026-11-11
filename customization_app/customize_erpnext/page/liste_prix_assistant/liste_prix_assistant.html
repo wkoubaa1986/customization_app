@@ -8,7 +8,7 @@
                font-size: 12px; align-items: center; justify-content: center; flex: none; }
     .lpa-muted { color: var(--text-muted,#64748b); font-size: 12px; }
     .lpa-qui { display: flex; flex-wrap: wrap; gap: 18px; align-items: flex-start; }
-    .lpa-qui .lpa-client { width: 320px; max-width: 100%; }
+    .lpa-qui .lpa-client { width: 250px; max-width: 100%; }
     .lpa-qui .frappe-control { margin-bottom: 0; }
     .lpa-label { font-size: 12px; color: var(--text-muted,#64748b); margin-bottom: 5px; }
     .lpa-chips { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -81,6 +81,10 @@
       <div>
         <div class="lpa-label">Liste de prix</div>
         <div class="lpa-chips" id="lpa-listes"></div>
+      </div>
+      <div class="lpa-client">
+        <div id="lpa-contact"></div>
+        <div class="lpa-muted" id="lpa-info-contact"></div>
       </div>
     </div>
   </div>

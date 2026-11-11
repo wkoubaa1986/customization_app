@@ -206,7 +206,7 @@ def contexte() -> dict:
     return {"listes": listes, "defaut": _catalogue().PRIX_STANDARD,
             "familles": cumuler_familles(groupes, directs),
             "formats": [f for f in FORMATS if frappe.db.exists("Print Format", f)],
-            "maximum": ARTICLES_MAX}
+            "maximum": ARTICLES_MAX, "contact": _referant()}
 
 
 @frappe.whitelist()
@@ -268,8 +268,21 @@ def apercu(articles, price_list: str) -> dict:
 # ── Création ─────────────────────────────────────────────────────────────────
 
 def _referant() -> str | None:
+    """Le contact proposé d'office : l'employé de l'utilisateur, sinon celui des réglages AquaWorld."""
     employe = frappe.db.get_value("Employee", {"user_id": frappe.session.user, "status": "Active"})
     return employe or frappe.db.get_single_value("AquaWorld Settings", "employee") or None
+
+
+@frappe.whitelist()
+def contact(employe: str = None) -> dict | None:
+    """Ce que le PDF catalogue imprime du contact (le « Référant » du document) : nom, fonction, mobile."""
+    _garde()
+    employe = (employe or "").strip() or _referant()
+    if not employe:
+        return None
+    e = frappe.db.get_value("Employee", {"name": employe, "status": "Active"},
+                            ["name", "employee_name", "designation", "cell_number"], as_dict=True)
+    return dict(e) if e else None
 
 
 def url_pdf(name: str, format_impression: str) -> str:
@@ -278,7 +291,7 @@ def url_pdf(name: str, format_impression: str) -> str:
 
 
 @frappe.whitelist(methods=["POST"])
-def creer(articles, price_list: str, client: str = None) -> dict:
+def creer(articles, price_list: str, client: str = None, referant: str = None) -> dict:
     """Crée et soumet la « Liste prix documents ». Les articles sans prix dans la liste sont écartés
     (et nommés dans la réponse) : une ligne sans prix n'a rien à faire sur une liste de prix."""
     _garde()
@@ -287,6 +300,9 @@ def creer(articles, price_list: str, client: str = None) -> dict:
     client = (client or "").strip() or None
     if client:
         frappe.has_permission("Customer", "read", client, throw=True)
+    referant = (referant or "").strip() or _referant()
+    if referant and not frappe.db.get_value("Employee", {"name": referant, "status": "Active"}):
+        frappe.throw(_("Le contact choisi n'est pas un employé actif."))
     c = _calcul(articles, price_list)
     if not c["lignes"]:
         frappe.throw(_("Aucun de ces articles n'a de prix dans la liste « {0} ».").format(price_list))
@@ -305,7 +321,7 @@ def creer(articles, price_list: str, client: str = None) -> dict:
         "naming_series": C.NAMING_SERIES,
         "liste_des_prix": price_list,
         "custom_client": client,
-        "référant": _referant(),
+        "référant": referant,
         "génrer_automatique": 0,
         "promo_json": json.dumps(c["promo_json"], default=str),
         "group_articles": [{"goup_articles": g} for g in groupes],

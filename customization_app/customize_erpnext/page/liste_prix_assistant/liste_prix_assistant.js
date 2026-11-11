@@ -40,6 +40,15 @@ class ListePrixAssistant {
             placeholder: "Aucun client (liste générale)", change: () => this.client_change() },
       parent: this.$root.find("#lpa-client"), render_input: true,
     });
+    // Le contact imprimé sur le PDF catalogue (champ « Référant » du document) : proposé d'office,
+    // modifiable (demande utilisateur 11/11/2026).
+    this.contact = null;
+    this.ctrl_contact = frappe.ui.form.make_control({
+      df: { fieldtype: "Link", options: "Employee", fieldname: "contact", label: "Contact sur la liste",
+            placeholder: "Employé à contacter", get_query: () => ({ filters: { status: "Active" } }),
+            change: () => this.contact_change() },
+      parent: this.$root.find("#lpa-contact"), render_input: true,
+    });
     this.page.add_inner_button("Toutes les listes", () => frappe.set_route("List", "Liste prix documents"));
 
     const $q = this.$root.find("#lpa-q");
@@ -75,6 +84,7 @@ class ListePrixAssistant {
     frappe.call({ method: LPA_API + ".contexte" }).then((r) => {
       this.ctx = r.message;
       this.reprendre_brouillon();
+      if (!this.ctrl_contact.get_value() && this.ctx.contact) this.ctrl_contact.set_value(this.ctx.contact);
       if (!this.liste) this.liste = this.ctx.listes.includes(this.ctx.defaut) ? this.ctx.defaut : this.ctx.listes[0];
       this.rendre_listes();
       this.rendre_gauche();
@@ -107,6 +117,22 @@ class ListePrixAssistant {
       const m = r.message;
       $info.html(`${lpa_esc(m.nom)} — sa liste de prix : <b>${lpa_esc(m.liste)}</b>`);
       this.choisir_liste(m.liste);
+    });
+  }
+
+  contact_change() {
+    const c = this.ctrl_contact.get_value() || null;
+    if (c === this.contact) return;
+    this.contact = c;
+    this.sauver();
+    const $info = this.$root.find("#lpa-info-contact");
+    if (!c) { $info.text("Sans choix, le contact habituel est repris."); return; }
+    frappe.call({ method: LPA_API + ".contact", args: { employe: c } }).then((r) => {
+      if (this.contact !== c) return;
+      const m = r.message;
+      $info.html(m ? `${lpa_esc(m.employee_name)}${m.designation ? " — " + lpa_esc(m.designation) : ""}${
+        m.cell_number ? " · " + lpa_esc(m.cell_number) : ""}<br>Imprimé sur le PDF catalogue.`
+        : `<span class="text-danger">Cet employé n’est pas actif.</span>`);
     });
   }
 
@@ -286,7 +312,7 @@ class ListePrixAssistant {
 
   sauver() {
     try {
-      localStorage.setItem(LPA_BROUILLON, JSON.stringify({ client: this.client, liste: this.liste, articles: this.articles() }));
+      localStorage.setItem(LPA_BROUILLON, JSON.stringify({ client: this.client, liste: this.liste, contact: this.contact, articles: this.articles() }));
     } catch (e) { /* stockage indisponible : la liste vit le temps de la page */ }
   }
 
@@ -296,6 +322,7 @@ class ListePrixAssistant {
     if (!b) return;
     if (b.liste && this.ctx.listes.includes(b.liste)) this.liste = b.liste;
     (b.articles || []).forEach((a) => { if (a && a.item_code) this.sel.set(String(a.item_code), Math.max(1, parseInt(a.qte, 10) || 1)); });
+    if (b.contact) this.ctrl_contact.set_value(b.contact);
     if (b.client) this.ctrl_client.set_value(b.client);   // relit aussi la liste de prix du client
   }
 
@@ -354,7 +381,7 @@ class ListePrixAssistant {
     if (!this.sel.size) return;
     frappe.call({
       method: LPA_API + ".creer", type: "POST",
-      args: { articles: JSON.stringify(this.articles()), price_list: this.liste, client: this.client },
+      args: { articles: JSON.stringify(this.articles()), price_list: this.liste, client: this.client, referant: this.contact },
       freeze: true, freeze_message: "Création de la liste de prix…",
     }).then((r) => {
       const m = r.message;
