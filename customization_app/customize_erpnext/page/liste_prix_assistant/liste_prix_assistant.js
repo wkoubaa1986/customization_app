@@ -27,16 +27,48 @@ const LPA_TRIS = [
 ];
 const lpa_code = (a, b) => String(a.item_code).localeCompare(String(b.item_code));
 
+const LPA_PRIX = "__prix";      // le critère « prix » dans la liste des critères d'un tri par variante
+
+/** Les noms d'attributs des variantes de ces lignes, dans l'ordre où on les rencontre. Fonction pure. */
+function lpa_attributs(lignes) {
+  const out = [];
+  lignes.forEach((l) => (l.attributs || []).forEach((a) => { if (!out.includes(a.nom)) out.push(a.nom); }));
+  return out;
+}
+
+/**
+ * Critères par défaut d'un tri par variante. « variantes » : les attributs dans l'ordre de la fiche.
+ * « variantes_prix » : un seul attribut -> le prix d'abord (les variantes du moins cher au plus cher) ;
+ * plusieurs -> le 1er attribut, puis le prix, puis les autres (regroupé par 1er attribut, classé par prix).
+ */
+function lpa_criteres_defaut(lignes, mode) {
+  const noms = lpa_attributs(lignes);
+  if (mode !== "variantes_prix") return noms;
+  return noms.length > 1 ? [noms[0], LPA_PRIX].concat(noms.slice(1)) : [LPA_PRIX].concat(noms);
+}
+
+/** Compare deux variantes sur un critère : le prix, ou la valeur d'un attribut (ordre de la liste de
+ * l'attribut, valeur numérique, sinon alphabétique ; une variante sans cet attribut passe après). */
+function lpa_comparer(x, y, critere) {
+  if (critere === LPA_PRIX) return x.prix_ttc - y.prix_ttc;
+  const a = (x.attributs || []).find((t) => t.nom === critere), b = (y.attributs || []).find((t) => t.nom === critere);
+  if (!a || !b) return (a ? 0 : 1) - (b ? 0 : 1);
+  if (a.pos != null && b.pos != null && a.pos !== b.pos) return a.pos - b.pos;
+  if ((a.pos == null) !== (b.pos == null)) return a.pos == null ? 1 : -1;
+  return String(a.valeur).localeCompare(String(b.valeur), "fr", { numeric: true });
+}
+
 /**
  * Codes de la liste dans le nouvel ordre : les familles gardent leur place, les articles de `groupe`
  * (de toutes les familles si null) sont réordonnés selon `mode`. Fonction pure.
  *  - prix_asc / prix_desc : par prix TTC, à prix égal par code ;
- *  - variantes : les variantes d'un même modèle se suivent, dans l'ordre de leurs attributs ; les modèles et
- *    les articles simples gardent leur ordre d'arrivée ;
- *  - variantes_prix : les blocs (article simple, ou modèle avec ses variantes) du moins cher au plus cher —
- *    un modèle vaut sa variante la moins chère — et, dans un modèle, les variantes par prix croissant.
+ *  - variantes / variantes_prix : les variantes d'un même modèle se suivent, classées selon `criteres`
+ *    (noms d'attributs et, éventuellement, LPA_PRIX, dans l'ordre choisi ; défaut : lpa_criteres_defaut).
+ *    « variantes » : modèles et articles simples gardent leur ordre d'arrivée. « variantes_prix » : les
+ *    blocs (article simple, ou modèle) vont du moins cher au plus cher — un modèle vaut sa variante la
+ *    moins chère.
  */
-function lpa_ordre(lignes, groupe, mode) {
+function lpa_ordre(lignes, groupe, mode, criteres) {
   const familles = [];
   lignes.forEach((l) => { if (!familles.includes(l.item_group)) familles.push(l.item_group); });
   const out = [];
@@ -47,6 +79,7 @@ function lpa_ordre(lignes, groupe, mode) {
         const s = mode === "prix_asc" ? 1 : -1;
         bloc = bloc.slice().sort((a, b) => (a.prix_ttc - b.prix_ttc) * s || lpa_code(a, b));
       } else {
+        const crit = criteres || lpa_criteres_defaut(bloc, mode);
         const blocs = [];                       // [{cle, lignes}] : un article simple, ou un modèle
         bloc.forEach((l) => {
           const cle = l.modele ? "m:" + l.modele : "s:" + l.item_code;
@@ -54,9 +87,11 @@ function lpa_ordre(lignes, groupe, mode) {
           if (!b) { b = { cle, lignes: [] }; blocs.push(b); }
           b.lignes.push(l);
         });
-        const par_prix = mode === "variantes_prix";
-        blocs.forEach((b) => b.lignes.sort((x, y) => (par_prix ? x.prix_ttc - y.prix_ttc : 0) || (x.rang - y.rang) || lpa_code(x, y)));
-        if (par_prix) {
+        blocs.forEach((b) => b.lignes.sort((x, y) => {
+          for (const c of crit) { const d = lpa_comparer(x, y, c); if (d) return d; }
+          return (x.rang - y.rang) || lpa_code(x, y);
+        }));
+        if (mode === "variantes_prix") {
           const mini = (b) => Math.min(...b.lignes.map((l) => l.prix_ttc));
           blocs.sort((x, y) => mini(x) - mini(y) || x.cle.localeCompare(y.cle));
         }
@@ -360,15 +395,81 @@ class ListePrixAssistant {
     this.maj_selection();
   }
 
-  /** Réordonne une famille (ou toute la liste si `groupe` est null) selon `mode` (cf. lpa_ordre). */
+  /**
+   * Réordonne une famille (ou toute la liste si `groupe` est null) selon `mode` (cf. lpa_ordre).
+   * Tri par variante avec plusieurs attributs : l'utilisateur choisit d'abord lequel passe en premier,
+   * en deuxième… (demande utilisateur 11/11/2026) ; son choix est repris la fois suivante.
+   */
   trier(groupe, mode) {
-    if (groupe == null) this.tris = { "*": mode }; else this.tris[groupe] = mode;
-    const ordre = lpa_ordre(this.lignes, groupe, mode);
-    const sel = new Map();
-    ordre.forEach((c) => { if (this.sel.has(c)) sel.set(c, this.sel.get(c)); });
-    this.sel.forEach((q, c) => { if (!sel.has(c)) sel.set(c, q); });   // sans prix / pas encore relus : à la fin
-    this.sel = sel;
-    this.maj_selection();
+    const cle = groupe == null ? "*" : groupe;
+    const lignes = groupe == null ? this.lignes : this.lignes.filter((l) => l.item_group === groupe);
+    const appliquer = (criteres) => {
+      if (groupe == null) this.tris = { "*": mode }; else this.tris[groupe] = mode;
+      const ordre = lpa_ordre(this.lignes, groupe, mode, criteres);
+      const sel = new Map();
+      ordre.forEach((c) => { if (this.sel.has(c)) sel.set(c, this.sel.get(c)); });
+      this.sel.forEach((q, c) => { if (!sel.has(c)) sel.set(c, q); });   // sans prix / pas encore relus : à la fin
+      this.sel = sel;
+      this.maj_selection();
+    };
+    if (!mode.startsWith("variantes") || lpa_attributs(lignes).length < 2) { appliquer(null); return; }
+    this.choisir_criteres(lignes, mode, cle, appliquer);
+  }
+
+  /** La fenêtre « dans quel ordre ? » : une ligne par attribut (et le prix), à cocher et à monter / descendre. */
+  choisir_criteres(lignes, mode, cle, appliquer) {
+    const noms = lpa_attributs(lignes);
+    const possibles = noms.concat(mode === "variantes_prix" ? [LPA_PRIX] : []);
+    const memo = ((this.criteres || {})[cle + "|" + mode] || []).filter((c) => possibles.includes(c.nom));
+    let liste = memo.length ? memo.slice() : lpa_criteres_defaut(lignes, mode).map((nom) => ({ nom, actif: true }));
+    possibles.forEach((nom) => { if (!liste.some((c) => c.nom === nom)) liste.push({ nom, actif: true }); });
+    const libelle = (nom) => (nom === LPA_PRIX ? "Prix (croissant)" : nom);
+    const exemple = (nom) => {
+      if (nom === LPA_PRIX) return "";
+      const vus = [];
+      lignes.forEach((l) => (l.attributs || []).forEach((a) => { if (a.nom === nom && !vus.includes(a.valeur)) vus.push(a.valeur); }));
+      return vus.slice(0, 4).join(", ") + (vus.length > 4 ? "…" : "");
+    };
+    const d = new frappe.ui.Dialog({
+      title: mode === "variantes_prix" ? "Trier par variante et par prix" : "Trier par variante",
+      fields: [{ fieldtype: "HTML", fieldname: "corps" }],
+      primary_action_label: "Trier",
+      primary_action: () => {
+        this.criteres = this.criteres || {};
+        this.criteres[cle + "|" + mode] = liste.map((c) => ({ ...c }));
+        const actifs = liste.filter((c) => c.actif).map((c) => c.nom);
+        d.hide();
+        appliquer(actifs.length ? actifs : null);
+      },
+    });
+    const $c = d.fields_dict.corps.$wrapper;
+    const rendre = () => {
+      let rang = 0;
+      $c.html(`<p class="text-muted" style="font-size:12.5px">Les variantes d’un même modèle sont classées d’abord selon la 1<sup>re</sup> ligne,
+          puis la 2<sup>e</sup>, etc. Montez ou descendez une ligne pour changer l’ordre ; décochez-la pour l’ignorer.</p>
+        ${liste.map((c, i) => `<div class="lpa-crit" data-i="${i}" style="display:flex;align-items:center;gap:10px;padding:7px 8px;border:1px solid var(--border-color,#e2e8f0);border-radius:8px;margin-bottom:6px;${c.actif ? "" : "opacity:.55"}">
+            <span style="width:22px;height:22px;border-radius:50%;background:${c.actif ? "#2563eb" : "#cbd5e1"};color:#fff;font-size:12px;display:inline-flex;align-items:center;justify-content:center">${c.actif ? ++rang : "–"}</span>
+            <input type="checkbox" class="lpa-crit-actif" ${c.actif ? "checked" : ""} style="margin:0">
+            <span style="flex:1"><b>${lpa_esc(libelle(c.nom))}</b>${exemple(c.nom) ? ` <span class="text-muted" style="font-size:11.5px">— ${lpa_esc(exemple(c.nom))}</span>` : ""}</span>
+            <button type="button" class="btn btn-xs btn-default lpa-crit-haut" ${i === 0 ? "disabled" : ""}>↑</button>
+            <button type="button" class="btn btn-xs btn-default lpa-crit-bas" ${i === liste.length - 1 ? "disabled" : ""}>↓</button>
+          </div>`).join("")}`);
+    };
+    $c.on("click", ".lpa-crit-haut, .lpa-crit-bas", (e) => {
+      const i = Number($(e.currentTarget).closest(".lpa-crit").data("i"));
+      const j = i + ($(e.currentTarget).hasClass("lpa-crit-haut") ? -1 : 1);
+      if (j < 0 || j >= liste.length) return;
+      [liste[i], liste[j]] = [liste[j], liste[i]];
+      rendre();
+    });
+    $c.on("change", ".lpa-crit-actif", (e) => {
+      liste[Number($(e.currentTarget).closest(".lpa-crit").data("i"))].actif = e.currentTarget.checked;
+      rendre();
+    });
+    rendre();
+    // Fenêtre fermée sans trier : le menu revient à l'ordre en place.
+    d.onhide = () => this.rendre_selection(this.dernier_apercu || { lignes: this.lignes, total: 0 });
+    d.show();
   }
 
   /** Le menu de tri d'une famille (ou global) ; les tris « par variante » n'apparaissent que s'il y en a. */
@@ -411,6 +512,7 @@ class ListePrixAssistant {
   }
 
   rendre_selection(a) {
+    this.dernier_apercu = a;
     const n = a.lignes.length;
     this.$root.find("#lpa-titre-liste").html(`Votre liste <span class="lpa-muted">— ${n} article(s) · ${lpa_esc(this.liste || "")}</span>`);
     this.$root.find("#lpa-creer").prop("disabled", !n);
@@ -443,7 +545,9 @@ class ListePrixAssistant {
         : (l.prochain ? `<div class="pal">prochain palier : ${lpa_esc(l.prochain)}</div>` : "");
       html += `<div class="lpa-sel-ligne">
           ${lpa_img(l.image)}
-          <div><div class="nom">${lpa_esc(l.item_name)}</div><div class="code">${lpa_esc(l.item_code)}</div>${palier}</div>
+          <div><div class="nom">${lpa_esc(l.item_name)}</div>${
+            (l.attributs || []).length ? `<div class="attr">${l.attributs.map((t) => `${lpa_esc(t.nom)} : ${lpa_esc(t.valeur)}`).join(" · ")}</div>` : ""}
+            <div class="code">${lpa_esc(l.item_code)}</div>${palier}</div>
           <div class="num"><b>${lpa_dt(l.prix_ttc)}</b>${l.remise_pct > 0 && l.prix_standard_ttc
             ? `<br><s>${lpa_dt(l.prix_standard_ttc)}</s> <span class="rem">-${l.remise_pct} %</span>` : ""}${
             l.prix_promo != null ? `<br><span class="promo" title="Prix TTC minimum avec promotion">promo ${lpa_dt(l.prix_promo)}</span>` : ""}</div>

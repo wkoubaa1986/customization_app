@@ -102,7 +102,45 @@ def ligne_apercu(fiche: dict, ligne: dict) -> dict:
         "prix_promo": flt(ligne["prix_ttc_promo"]) if ligne.get("prix_ttc_promo") else None,
         # Variante : son modèle et son rang parmi les variantes du modèle (ordre des attributs), pour le tri.
         "modele": fiche.get("modele"), "rang": fiche.get("rang") or 0,
+        # Ses attributs dans l'ordre de la fiche : l'écran les affiche et laisse choisir l'ordre du tri.
+        "attributs": fiche.get("attributs") or [],
     }
+
+
+def position_valeur(attribut, valeur, ordre_valeurs: dict):
+    """La place d'une valeur d'attribut : son rang dans la liste de l'attribut, sinon sa valeur numérique
+    (attribut numérique), sinon None (ordre alphabétique côté écran)."""
+    position = ordre_valeurs.get((attribut, valeur))
+    if position is not None:
+        return position
+    try:
+        return float(str(valeur).replace(",", "."))
+    except (TypeError, ValueError):
+        return None
+
+
+def attributs_variantes(attributs: list, ordre_valeurs: dict) -> dict:
+    """{code: [{nom, valeur, pos}]} dans l'ordre des attributs de la fiche. Fonction pure."""
+    out: dict = {}
+    for a in sorted(attributs, key=lambda a: a.get("idx") or 0):
+        out.setdefault(a["parent"], []).append({
+            "nom": a.get("attribute"), "valeur": a.get("attribute_value"),
+            "pos": position_valeur(a.get("attribute"), a.get("attribute_value"), ordre_valeurs)})
+    return out
+
+
+def ancetre_commun(chemins: list) -> str | None:
+    """La famille la plus basse qui contient toutes les autres. `chemins` : pour chaque famille des
+    lignes, sa lignée de la racine jusqu'à elle. Une seule famille -> elle-même. Fonction pure."""
+    chemins = [c for c in chemins if c]
+    if not chemins:
+        return None
+    commun = None
+    for niveau in zip(*chemins):
+        if len(set(niveau)) != 1:
+            break
+        commun = niveau[0]
+    return commun
 
 
 def rangs_variantes(variantes: dict, attributs: list, ordre_valeurs: dict) -> dict:
@@ -172,9 +210,11 @@ def _fiches(codes: list, price_list: str) -> list:
             "Item Attribute Value", filters={"parent": ["in", noms]}, fields=["parent", "attribute_value", "idx"],
             limit_page_length=0)} if noms else {}
         rangs = rangs_variantes(variantes, attributs, ordre_valeurs)
+        par_variante = attributs_variantes(attributs, ordre_valeurs)
         for f in fiches:
             if f["item_code"] in variantes:
                 f["modele"], f["rang"] = variantes[f["item_code"]], rangs.get(f["item_code"], 0)
+                f["attributs"] = par_variante.get(f["item_code"], [])
     ordre = {}
     for f in fiches:
         ordre.setdefault(f["item_group"] or "", len(ordre))
@@ -307,6 +347,15 @@ def apercu(articles, price_list: str) -> dict:
 
 # ── Création ─────────────────────────────────────────────────────────────────
 
+def _lignee(item_group: str) -> list:
+    """La lignée d'une famille, de la racine jusqu'à elle."""
+    bornes = frappe.db.get_value("Item Group", item_group, ["lft", "rgt"], as_dict=True)
+    if not bornes:
+        return []
+    return frappe.get_all("Item Group", filters={"lft": ["<=", bornes.lft], "rgt": [">=", bornes.rgt]},
+                          pluck="name", order_by="lft", limit_page_length=0)
+
+
 def _referant() -> str | None:
     """Le contact proposé d'office : l'employé de l'utilisateur, sinon celui des réglages AquaWorld."""
     employe = frappe.db.get_value("Employee", {"user_id": frappe.session.user, "status": "Active"})
@@ -347,10 +396,17 @@ def creer(articles, price_list: str, client: str = None, referant: str = None) -
     if not c["lignes"]:
         frappe.throw(_("Aucun de ces articles n'a de prix dans la liste « {0} ».").format(price_list))
 
-    groupes = []
+    # UNE seule ligne dans « Group Articles » : la famille qui contient toutes celles des lignes. Le format
+    # « Liste des prix » imprime un en-tête complet ET toute la liste d'articles pour CHAQUE ligne de ce
+    # tableau : une ligne par sous-famille réimprimait donc toute la liste autant de fois (constaté le
+    # 11/11/2026 : 4 articles de 2 familles = 5 pages). Les sous-familles restent visibles : le format les
+    # annonce au fil des lignes.
+    familles = []
     for f in c["fiches"]:
-        if f["item_group"] and f["item_group"] not in groupes:
-            groupes.append(f["item_group"])
+        if f["item_group"] and f["item_group"] not in familles:
+            familles.append(f["item_group"])
+    groupe = ancetre_commun([_lignee(g) for g in familles])
+    groupes = [groupe] if groupe else []
     lignes = []
     for f, l in zip(c["fiches"], c["lignes"]):
         # `rem` : la remise face au prix standard, lue par le format « Liste des prix ».

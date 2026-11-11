@@ -75,6 +75,25 @@ class TestLigneApercu(unittest.TestCase):
         self.assertEqual(A.rangs_variantes(variantes, attributs, ordre),
                          {"M-50-R": 0, "M-50-B": 1, "M-75-B": 2, "N-2": 0, "N-10": 1})
 
+    def test_attributs_variantes(self):
+        attributs = [
+            {"parent": "V", "attribute": "Couleur", "attribute_value": "Bleu", "idx": 2},
+            {"parent": "V", "attribute": "Débit", "attribute_value": "75 GPD", "idx": 1},
+            {"parent": "W", "attribute": "Longueur", "attribute_value": "2,5", "idx": 1},
+            {"parent": "W", "attribute": "Finition", "attribute_value": "Mat", "idx": 2},
+        ]
+        a = A.attributs_variantes(attributs, {("Débit", "75 GPD"): 2, ("Couleur", "Bleu"): 1})
+        self.assertEqual(a["V"], [{"nom": "Débit", "valeur": "75 GPD", "pos": 2}, {"nom": "Couleur", "valeur": "Bleu", "pos": 1}])
+        # attribut numérique : sa valeur ; texte hors liste : None (alphabétique à l'écran)
+        self.assertEqual(a["W"], [{"nom": "Longueur", "valeur": "2,5", "pos": 2.5}, {"nom": "Finition", "valeur": "Mat", "pos": None}])
+
+    def test_ancetre_commun(self):
+        self.assertEqual(A.ancetre_commun([["Racine", "Pompes", "Surface", "Inox"]]), "Inox")
+        self.assertEqual(A.ancetre_commun([["Racine", "Pompes", "Surface", "Inox"], ["Racine", "Pompes", "Doseuses"]]), "Pompes")
+        self.assertEqual(A.ancetre_commun([["Racine", "Pompes", "Surface"], ["Racine", "Pompes"]]), "Pompes")
+        self.assertEqual(A.ancetre_commun([["Racine", "Pompes"], ["Racine", "Chimie"]]), "Racine")
+        self.assertIsNone(A.ancetre_commun([]))
+
     def test_url_pdf(self):
         u = A.url_pdf("Liste prix -11-11-2026-00001", "Liste prix client")
         self.assertIn("doctype=Liste+prix+documents", u)
