@@ -21,6 +21,25 @@ const lpa_dt = (v) => (v == null ? "—"
   : Number(v).toLocaleString("fr-FR", { minimumFractionDigits: 3, maximumFractionDigits: 3 }) + " DT");
 const lpa_img = (src) => (src ? `<img src="${lpa_esc(src)}" loading="lazy" alt="">` : `<div class="sansimg"></div>`);
 
+/**
+ * Codes de la liste dans le nouvel ordre : les familles gardent leur place, les articles de `groupe`
+ * (de toutes les familles si null) sont triés par prix TTC, à prix égal par code. Fonction pure.
+ */
+function lpa_ordre_par_prix(lignes, groupe, croissant) {
+  const familles = [];
+  lignes.forEach((l) => { if (!familles.includes(l.item_group)) familles.push(l.item_group); });
+  const out = [];
+  familles.forEach((f) => {
+    let bloc = lignes.filter((l) => l.item_group === f);
+    if (groupe == null || f === groupe) {
+      bloc = bloc.slice().sort((a, b) => ((a.prix_ttc - b.prix_ttc) * (croissant ? 1 : -1))
+        || String(a.item_code).localeCompare(String(b.item_code)));
+    }
+    bloc.forEach((l) => out.push(l.item_code));
+  });
+  return out;
+}
+
 class ListePrixAssistant {
   constructor(wrapper) {
     this.page = wrapper.page;
@@ -70,6 +89,11 @@ class ListePrixAssistant {
       const g = String($(e.currentTarget).data("groupe"));
       this.retirer(this.lignes.filter((l) => l.item_group === g).map((l) => l.item_code));
     });
+    // Tri par prix, famille par famille ou pour toute la liste (demande utilisateur 11/11/2026).
+    // L'ordre affiché est celui du document et du PDF : on réordonne la sélection elle-même.
+    this.sens_tri = {};              // famille -> dernier sens appliqué (true = croissant)
+    this.$root.on("click", ".lpa-tri[data-groupe]", (e) => this.trier_par_prix(String($(e.currentTarget).data("groupe"))));
+    this.$root.find("#lpa-trier").on("click", () => this.trier_par_prix(null));
     this.$root.on("change", ".lpa-qte", (e) => {
       const code = String($(e.currentTarget).data("code"));
       const q = Math.max(1, parseInt($(e.currentTarget).val(), 10) || 1);
@@ -306,6 +330,20 @@ class ListePrixAssistant {
     this.maj_selection();
   }
 
+  /** Trie par prix TTC les articles d'une famille (ou de toutes si `groupe` est null) ; un second clic inverse. */
+  trier_par_prix(groupe) {
+    const cle = groupe == null ? "*" : groupe;
+    const croissant = this.sens_tri[cle] === undefined ? true : !this.sens_tri[cle];
+    if (groupe == null) this.sens_tri = {};
+    this.sens_tri[cle] = croissant;
+    const ordre = lpa_ordre_par_prix(this.lignes, groupe, croissant);
+    const sel = new Map();
+    ordre.forEach((c) => { if (this.sel.has(c)) sel.set(c, this.sel.get(c)); });
+    this.sel.forEach((q, c) => { if (!sel.has(c)) sel.set(c, q); });   // sans prix / pas encore relus : à la fin
+    this.sel = sel;
+    this.maj_selection();
+  }
+
   articles() {
     return Array.from(this.sel, ([item_code, qte]) => ({ item_code, qte }));
   }
@@ -339,6 +377,7 @@ class ListePrixAssistant {
     this.$root.find("#lpa-titre-liste").html(`Votre liste <span class="lpa-muted">— ${n} article(s) · ${lpa_esc(this.liste || "")}</span>`);
     this.$root.find("#lpa-creer").prop("disabled", !n);
     this.$root.find("#lpa-vider").toggle(!!this.sel.size);
+    this.$root.find("#lpa-trier").toggle(n > 1);
     this.$root.find("#lpa-total").html(n ? `Total TTC pour ces quantités : <b>${lpa_dt(a.total)}</b>` : "");
     const ecartes = (a.sans_prix || []).concat(a.introuvables || []);
     this.$root.find("#lpa-alertes").html(ecartes.length
@@ -359,6 +398,8 @@ class ListePrixAssistant {
         groupe = l.item_group;
         const nb = a.lignes.filter((x) => x.item_group === groupe).length;
         html += `<div class="lpa-groupe"><span style="flex:1">${lpa_esc(groupe || "Sans famille")} <span class="nb">· ${nb}</span></span>
+          ${nb > 1 ? `<button class="btn btn-xs btn-default lpa-tri" data-groupe="${lpa_esc(groupe)}" title="Trier cette famille par prix (recliquer pour inverser)">${
+            this.sens_tri[groupe] === undefined && this.sens_tri["*"] === undefined ? "↕" : ((this.sens_tri[groupe] ?? this.sens_tri["*"]) ? "↑" : "↓")} Prix</button>` : ""}
           <span class="lpa-suppr" data-groupe="${lpa_esc(groupe)}" title="Retirer toute la famille">✕</span></div>`;
       }
       const palier = l.palier ? `<div class="pal ok">${lpa_esc(l.palier)}</div>`
