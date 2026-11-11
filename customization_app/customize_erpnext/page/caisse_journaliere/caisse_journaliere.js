@@ -1853,25 +1853,71 @@ function rcj_articles_coches(etat) {
     .map((a) => ({ item_code: a.item_code, qty: flt(a.qty), rate: flt(a.rate), designation: a.designation }));
 }
 
-function rcj_zone_articles(d, etat, API, lire, apres) {
+// Le partage n'est JAMAIS lancé d'office (demande utilisateur 11/11/2026) : une fois la facture
+// analysée, l'employé choisit « Seulement dépense » ou « En partie achat ». C'est ce second bouton
+// qui lance la lecture des lignes d'articles ; « Enregistrer » reste verrouillé tant que le choix
+// n'est pas fait (cf. maj_bouton). `etat.choix_stock` : null (pas choisi) | "depense" | "achat".
+function rcj_zone_articles(d, etat, API, apres) {
   const $z = d.fields_dict.zone_articles && d.fields_dict.zone_articles.$wrapper;
   if (!$z) return;
-  const fini = () => { etat.lecture_articles = false; if (apres) apres(); };
-  if (!lire) { $z.empty(); fini(); return; }
+  const maj = () => { if (apres) apres(); };
+  const redessiner = () => rcj_zone_articles(d, etat, API, apres);
+  // Hors « Dépense avec facture » analysée (et en correction : une part stock ne se corrige pas),
+  // il n'y a rien à choisir.
+  if (etat.sans_choix_stock || !etat.analyse_faite
+      || (d.get_value("type_depense") || "") !== "Dépense avec facture") {
+    $z.empty(); maj(); return;
+  }
+  const changer = `<button type="button" class="btn btn-xs btn-default rcj-choix-changer" style="margin-left:8px">${__("Changer")}</button>`;
+  const brancher_changer = () => $z.find(".rcj-choix-changer").on("click", () => {
+    etat.choix_stock = null; etat.articles = []; etat.lecture_articles = false; redessiner();
+  });
+  if (!etat.choix_stock) {
+    $z.html(`<div style="font-size:12.5px;margin:6px 0 4px"><b>${__("Cette pièce est-elle…")}</b>
+        <span class="text-muted">— ${__("choisissez pour pouvoir enregistrer")}</span></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:6px">
+        <button type="button" class="btn btn-default btn-sm rcj-choix-depense">💸 ${__("Seulement dépense")}</button>
+        <button type="button" class="btn btn-default btn-sm rcj-choix-achat">📦 ${__("En partie achat (articles en stock)")}</button>
+      </div>`);
+    $z.find(".rcj-choix-depense").on("click", () => { etat.choix_stock = "depense"; redessiner(); });
+    $z.find(".rcj-choix-achat").on("click", () => { etat.choix_stock = "achat"; etat.articles = []; etat.articles_lus = false; redessiner(); });
+    maj(); return;
+  }
+  if (etat.choix_stock === "depense") {
+    $z.html(`<div style="font-size:12.5px;margin:6px 0">💸 <b>${__("Seulement dépense")}</b>
+      <span class="text-muted">— ${__("rien ne part en stock")}</span>${changer}</div>`);
+    brancher_changer(); maj(); return;
+  }
+  // « En partie achat » : lecture des lignes de la pièce, lancée par ce choix.
+  $z.html(`<div style="font-size:12.5px;margin:6px 0">📦 <b>${__("En partie achat")}</b>${changer}</div>
+    <div class="rcj-art-liste"></div>`);
+  brancher_changer();
+  const $l = $z.find(".rcj-art-liste");
+  if (etat.articles_lus) { rcj_rendre_articles(d, etat, $l); maj(); return; }
   etat.lecture_articles = true;
-  if (apres) apres();
-  $z.html(`<div class="text-muted" style="font-size:12px;padding:6px 0">🔎 ${__("Lecture des articles de la pièce…")}</div>`);
+  maj();
+  $l.html(`<div class="text-muted" style="font-size:12px;padding:6px 0">🔎 ${__("Lecture des articles de la pièce…")}</div>`);
+  const photo = etat.facture;
+  // Réponse périmée (choix changé ou photo reprise entre-temps) : on l'ignore.
+  const perime = () => etat.choix_stock !== "achat" || etat.facture !== photo || !$l.closest("body").length;
   frappe.call({
     method: API.replace("caisse_depenses", "caisse_stock_partiel") + ".lire_articles",
-    args: { photo: etat.facture },
+    args: { photo },
     callback: (r) => {
+      if (perime()) return;
       etat.articles = (r.message || []).map((a) => ({ ...a, coche: false }));
-      rcj_rendre_articles(d, etat, $z);
-      fini();
+      etat.articles_lus = true;
+      etat.lecture_articles = false;
+      rcj_rendre_articles(d, etat, $l);
+      maj();
     },
     error: () => {
-      $z.html(`<div class="text-muted" style="font-size:12px">${__("Lignes d'articles illisibles : rien ne part en stock.")}</div>`);
-      fini();
+      if (perime()) return;
+      etat.lecture_articles = false;
+      $l.html(`<div class="text-danger" style="font-size:12px">${__("Lignes d'articles illisibles. Choisissez « Seulement dépense », ou relancez la lecture.")}
+        <button type="button" class="btn btn-xs btn-default rcj-art-relire" style="margin-left:8px">${__("Relire")}</button></div>`);
+      $l.find(".rcj-art-relire").on("click", redessiner);
+      maj();
     },
   });
 }
@@ -1879,7 +1925,7 @@ function rcj_zone_articles(d, etat, API, lire, apres) {
 function rcj_rendre_articles(d, etat, $z) {
   const esc = frappe.utils.escape_html;
   if (!(etat.articles || []).length) {
-    $z.html(`<div class="text-muted" style="font-size:12px">${__("Aucune ligne d'article lue sur la pièce : tout part en dépense.")}</div>`);
+    $z.html(`<div class="text-muted" style="font-size:12px">${__("Aucune ligne d'article lue sur la pièce : choisissez « Seulement dépense ».")}</div>`);
     return;
   }
   // La part stock est valorisée HT : commande d'achat sans TVA, financée par le compte de charge.
@@ -1892,7 +1938,7 @@ function rcj_rendre_articles(d, etat, $z) {
       ? `📦 ${__("Part stock")} : <b>${rcj_dt(ht)}</b> HT → ${__("commande d'achat sans TVA, financée par le compte de charge")} ·
          💸 ${__("Dépense")} : <b>${rcj_dt(montant)}</b> TTC ${__("en une écriture")} (${__("dont")} ${rcj_dt(ht_total - ht)} HT ${__("hors stock")})${ht >= ht_total - 0.0005
            ? ` <span class="text-danger">— ${__("tout le HT part en stock : utilisez « Facture d'achat »")}</span>` : ""}`
-      : `<span class="text-muted">${__("Rien de coché : tout part en dépense.")}</span>`);
+      : `<span class="text-muted">${__("Rien de coché : cochez au moins un article, ou choisissez « Seulement dépense ».")}</span>`);
   };
   const rows = etat.articles.map((a, i) => `<tr data-i="${i}">
       <td><input type="checkbox" class="rcj-art-coche" ${a.coche ? "checked" : ""}></td>
@@ -1921,6 +1967,7 @@ function rcj_rendre_articles(d, etat, $z) {
       a.item_code = ctrl.get_value() || null;
       if (a.item_code && !a.coche) { a.coche = true; $tr.find(".rcj-art-coche").prop("checked", true); }
       totaux();
+      if (d.rcj_maj_bouton) d.rcj_maj_bouton();
     });
     $tr.find(".rcj-art-coche").on("change", (e) => {
       a.coche = e.currentTarget.checked;
@@ -1930,8 +1977,9 @@ function rcj_rendre_articles(d, etat, $z) {
         rcj_choisir_fournisseur(etat.fournisseur_candidats, (choix) => { etat.supplier = choix; });
       }
       totaux();
+      if (d.rcj_maj_bouton) d.rcj_maj_bouton();
     });
-    $tr.find(".rcj-art-qty").on("change input", (e) => { a.qty = flt(e.currentTarget.value); $tr.find(".rcj-art-ht").text(rcj_dt(a.qty * flt(a.rate))); totaux(); });
+    $tr.find(".rcj-art-qty").on("change input", (e) => { a.qty = flt(e.currentTarget.value); $tr.find(".rcj-art-ht").text(rcj_dt(a.qty * flt(a.rate))); totaux(); if (d.rcj_maj_bouton) d.rcj_maj_bouton(); });
     $tr.find(".rcj-art-rate").on("change input", (e) => { a.rate = flt(e.currentTarget.value); $tr.find(".rcj-art-ht").text(rcj_dt(flt(a.qty) * a.rate)); totaux(); });
   });
   totaux();
@@ -1958,7 +2006,9 @@ function rcj_depense(rapport, initial) {
                est_bl: false, numero_bl: null,
                paiements: [], banques: [],
                // Part mise en stock (10/11/2026) : les lignes lues sur la pièce, cochées ou non.
-               articles: [], fournisseur_candidats: null, lecture_articles: false };
+               articles: [], fournisseur_candidats: null, lecture_articles: false,
+               // Choix explicite « Seulement dépense » / « En partie achat » (11/11/2026).
+               choix_stock: null, articles_lus: false, sans_choix_stock: !!initial };
 
   const d = new frappe.ui.Dialog({
     title: initial ? __("✏️ Corriger la dépense {0}", [initial.name]) : __("Dépense de caisse"),
@@ -2144,7 +2194,7 @@ function rcj_depense(rapport, initial) {
           est_bl: v.type_depense !== "Dépense non facturée" && etat.est_bl ? 1 : 0,
           numero_bl: etat.numero_bl || null,
           code_sans_photo: v.code_sans_photo || null,
-          articles_stock: v.type_depense === "Dépense avec facture"
+          articles_stock: v.type_depense === "Dépense avec facture" && etat.choix_stock === "achat"
             ? JSON.stringify(rcj_articles_coches(etat)) : null,
         },
         freeze: true, freeze_message: initial ? __("Correction de la dépense…") : __("Enregistrement de la dépense…"),
@@ -2302,9 +2352,21 @@ function rcj_depense(rapport, initial) {
     // Dépense avec facture : tant que les lignes d'articles ne sont pas lues, on ne sait pas
     // encore ce qui part en stock — enregistrer attend (demande utilisateur 10/11/2026).
     const lecture = type === "Dépense avec facture" && etat.lecture_articles;
-    d.get_primary_btn().prop("disabled", bloque || lecture)
+    // Le partage se décide par un choix explicite (demande utilisateur 11/11/2026) : tant que
+    // l'employé n'a pas dit « Seulement dépense » ou « En partie achat », on n'enregistre pas ;
+    // et « En partie achat » sans aucun article coché n'est pas un choix abouti.
+    const avec_choix = type === "Dépense avec facture" && !etat.sans_choix_stock;
+    const sans_choix = avec_choix && !etat.choix_stock;
+    const rien_coche = avec_choix && etat.choix_stock === "achat" && !rcj_articles_coches(etat).length;
+    d.get_primary_btn().prop("disabled", bloque || lecture || sans_choix || rien_coche)
       .attr("title", bloque ? __("Analysez d'abord la facture (bouton 🤖).")
-        : (lecture ? __("Lecture des articles de la pièce en cours…") : ""));
+        : sans_choix ? __("Choisissez d'abord « Seulement dépense » ou « En partie achat ».")
+        : lecture ? __("Lecture des articles de la pièce en cours…")
+        : rien_coche ? __("Cochez au moins un article à mettre en stock, ou choisissez « Seulement dépense ».") : "");
+  };
+  d.rcj_maj_bouton = maj_bouton;
+  const raz_choix_stock = () => {
+    etat.choix_stock = null; etat.articles = []; etat.articles_lus = false; etat.lecture_articles = false;
   };
 
   // Facture : photo + bouton d'analyse OpenAI (préremplit, l'employé confirme).
@@ -2313,10 +2375,9 @@ function rcj_depense(rapport, initial) {
     () => {
       etat.analyse_faite = false;   // nouvelle photo -> nouvelle analyse exigée
       etat.facture_coins = null;
-      etat.articles = [];
-      rcj_zone_articles(d, etat, API, false, maj_bouton);
+      raz_choix_stock();
+      rcj_zone_articles(d, etat, API, maj_bouton);
       $zf.find(".rcj-analyser").prop("disabled", false);
-      maj_bouton();
       // Cadrage à valider AVANT tout : les coins retenus font foi pour le scan.
       rcj_cadrage(etat.facture, (coins) => { etat.facture_coins = coins; });
     });
@@ -2375,11 +2436,10 @@ function rcj_depense(rapport, initial) {
         etat.matricule = m.matricule || null;
         etat.supplier = m.fournisseur_certain || null;
         etat.fournisseur_candidats = (m.fournisseur_candidats || []).length ? m : null;
-        // Dépense avec facture : les lignes d'articles, pour cocher ce qui part en stock.
-        etat.articles = [];
-        if (d.get_value("type_depense") === "Dépense avec facture") {
-          rcj_zone_articles(d, etat, API, true, maj_bouton);
-        }
+        // Dépense avec facture : l'employé choisit « Seulement dépense » ou « En partie achat » ;
+        // la lecture des lignes d'articles ne part que sur ce second choix.
+        raz_choix_stock();
+        rcj_zone_articles(d, etat, API, maj_bouton);
         if (d.get_value("type_depense") === "Facture d'achat") {
           if (m.fournisseur_certain) {
             frappe.show_alert({
@@ -2421,7 +2481,8 @@ function rcj_depense(rapport, initial) {
     if (type === "Dépense non facturée" && !d.get_value("compte")) {
       d.set_value("compte", "Dépenses non déclarées - A&S");
     }
-    maj_bouton();
+    // Le choix du partage n'existe que pour « Dépense avec facture » : la zone suit le type.
+    rcj_zone_articles(d, etat, API, maj_bouton);
     maj_retenue();
   };
   d.fields_dict.type_depense.$input.on("change", basculer_facture);
