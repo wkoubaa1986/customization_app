@@ -115,6 +115,11 @@ class RapportCaisseJournaliere {
     $("#rcj-btn-impayes").on("click", () => customization_app.encaisser_impaye({on_success: () => this._fetch()}));
     $("#rcj-btn-dettes").on("click", () => rcj_encaissement_dettes(this));
     $("#rcj-btn-aramex").on("click", () => rcj_encaissement_aramex(this));
+    // Bordereaux de remise (16/11/2026) : le caissier range ici le scan du bordereau remis à la banque (BIAT ou
+    // Zitouna) ; l'identification bancaire s'en sert ensuite. Le bouton n'apparaît que si l'app bancaire est là.
+    if (frappe.model.can_create("BRS Bordereau Remise")) {
+      $("#rcj-btn-bordereaux").show().on("click", () => rcj_bordereaux());
+    }
     $("#rcj-btn-depense").on("click", () => rcj_depense(this));
     $("#rcj-btn-a-payer").on("click", () => rcj_depenses_a_payer(this));
     $("#rcj-btn-bl").on("click", () => rcj_depenses_bl(this));
@@ -1266,6 +1271,77 @@ function rcj_encaissement_dettes(rapport) {
 // ce qui manque devient une DETTE RESTANTE du client, ce qui dépasse un AVOIR
 // CLIENT (paiement non affecté). Chaque colis garde son montant ; son paiement
 // d'attente est remplacé, l'échéancier de la commande suit.
+// ── Bordereaux de remise ─────────────────────────────────────────────────────
+// Demande du 16/11/2026 : « un truc qui collecte les bordereaux de remise, pour BIAT ou Zitouna ; l'accès peut se
+// faire de ma caisse ; juste collecter ». On range le scan avec sa banque, son numéro et sa date — rien n'est lu
+// ni rapproché ici (app bank_retenue_sync, DocType « BRS Bordereau Remise »).
+function rcj_bordereaux() {
+  const API = "bank_retenue_sync.api.bordereaux";
+  const esc = frappe.utils.escape_html;
+  const d = new frappe.ui.Dialog({
+    title: __("Bordereaux de remise"),
+    size: "large",
+    fields: [
+      { fieldtype: "Attach", fieldname: "fichier", label: __("Scan ou photo du bordereau"), reqd: 1,
+        description: __("Un nom du type « Ordre de versement Chèques Bq BIAT-7473685-du 09-11-2026.pdf » remplit les champs ci-dessous."),
+        onchange: () => lire_nom() },
+      { fieldtype: "Section Break" },
+      { fieldtype: "Select", fieldname: "banque", label: __("Banque"), options: "\nBIAT\nZitouna", reqd: 1 },
+      { fieldtype: "Select", fieldname: "nature", label: __("Nature"), options: "Chèques\nTraites\nEspèces", default: "Chèques", reqd: 1 },
+      { fieldtype: "Column Break" },
+      { fieldtype: "Data", fieldname: "numero", label: __("N° du bordereau"), reqd: 1,
+        description: __("Le numéro imprimé sur le bordereau.") },
+      { fieldtype: "Date", fieldname: "date_remise", label: __("Date de la remise"), reqd: 1, default: frappe.datetime.get_today() },
+      { fieldtype: "Column Break" },
+      { fieldtype: "Currency", fieldname: "montant_total", label: __("Montant total (facultatif)") },
+      { fieldtype: "Int", fieldname: "nombre", label: __("Nombre de pièces (facultatif)") },
+      { fieldtype: "Section Break", label: __("Derniers bordereaux collectés") },
+      { fieldtype: "HTML", fieldname: "liste" },
+    ],
+    primary_action_label: __("Collecter ce bordereau"),
+    primary_action: (v) => {
+      frappe.call({ method: API + ".ajouter", args: v, freeze: true, freeze_message: __("Enregistrement…") }).then((r) => {
+        const m = r.message || {};
+        frappe.show_alert({
+          message: m.deja ? __("Ce bordereau était déjà collecté : {0}", [m.name]) : __("Bordereau collecté : {0}", [m.name]),
+          indicator: m.deja ? "orange" : "green",
+        });
+        ["fichier", "numero", "montant_total", "nombre"].forEach((champ) => d.set_value(champ, ""));
+        liste();
+      });
+    },
+  });
+  // Le nom du fichier dit souvent tout : on complète les champs encore vides, sans écraser une saisie.
+  const lire_nom = () => {
+    const url = d.get_value("fichier");
+    if (!url) return;
+    const nom = decodeURIComponent(String(url).split("/").pop());
+    frappe.call({ method: API + ".lire_nom", args: { nom } }).then((r) => {
+      const lu = r.message || {};
+      if (lu.banque && !d.get_value("banque")) d.set_value("banque", lu.banque);
+      if (lu.numero && !d.get_value("numero")) d.set_value("numero", lu.numero);
+      if (lu.nature) d.set_value("nature", lu.nature);
+      if (lu.date_remise) d.set_value("date_remise", lu.date_remise);
+    });
+  };
+  const liste = () => {
+    frappe.call({ method: API + ".recents" }).then((r) => {
+      const lignes = (r.message || []).map((b) => `<tr>
+          <td>${esc(frappe.datetime.str_to_user(b.date_remise) || "")}</td><td>${esc(b.banque)}</td><td>${esc(b.nature)}</td>
+          <td><a href="/app/brs-bordereau-remise/${encodeURIComponent(b.name)}" target="_blank">${esc(b.numero)}</a></td>
+          <td style="text-align:right">${b.montant_total ? rcj_dt(b.montant_total) : ""}</td>
+          <td>${b.fichier ? `<a href="${esc(b.fichier)}" target="_blank">📎 ${__("ouvrir")}</a>` : ""}</td></tr>`).join("");
+      d.fields_dict.liste.$wrapper.html(lignes
+        ? `<table class="table table-bordered" style="font-size:12px;margin:0"><thead><tr><th>${__("Date")}</th><th>${__("Banque")}</th><th>${
+            __("Nature")}</th><th>${__("N° du bordereau")}</th><th style="text-align:right">${__("Montant")}</th><th>${__("Scan")}</th></tr></thead><tbody>${lignes}</tbody></table>
+           <div style="margin-top:6px"><a href="/app/brs-bordereau-remise" target="_blank">${__("Voir tous les bordereaux")}</a></div>`
+        : `<div class="rcj-muted">${__("Aucun bordereau collecté pour l'instant.")}</div>`);
+    });
+  };
+  liste();
+  d.show();
+}
+
 function rcj_encaissement_aramex(rapport) {
   const API = "customization_app.caisse_encaissement_aramex";
   const esc = frappe.utils.escape_html;
