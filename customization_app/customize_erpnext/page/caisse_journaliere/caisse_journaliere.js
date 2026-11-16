@@ -1280,7 +1280,7 @@ function rcj_bordereaux() {
   const esc = frappe.utils.escape_html;
   const d = new frappe.ui.Dialog({
     title: __("Bordereaux de remise"),
-    size: "large",
+    size: "extra-large",
     fields: [
       { fieldtype: "Attach", fieldname: "fichier", label: __("Scan ou photo du bordereau"), reqd: 1,
         description: __("Un nom du type « Ordre de versement Chèques Bq BIAT-7473685-du 09-11-2026.pdf » remplit les champs ci-dessous."),
@@ -1297,16 +1297,21 @@ function rcj_bordereaux() {
       { fieldtype: "Int", fieldname: "nombre", label: __("Nombre de pièces (facultatif)") },
       { fieldtype: "Section Break", label: __("Derniers bordereaux collectés") },
       { fieldtype: "HTML", fieldname: "liste" },
+      { fieldtype: "HTML", fieldname: "detail" },
     ],
     primary_action_label: __("Collecter ce bordereau"),
     primary_action: (v) => {
       frappe.call({ method: API + ".ajouter", args: v, freeze: true, freeze_message: __("Enregistrement…") }).then((r) => {
         const m = r.message || {};
         frappe.show_alert({
-          message: m.deja ? __("Ce bordereau était déjà collecté : {0}", [m.name]) : __("Bordereau collecté : {0}", [m.name]),
+          message: m.deja ? __("Ce bordereau était déjà collecté : {0}", [m.name])
+            : m.lecture ? __("Bordereau collecté : {0}. L’IA lit les pièces en arrière-plan, vous pouvez continuer.", [m.name])
+            : __("Bordereau collecté : {0}", [m.name]),
           indicator: m.deja ? "orange" : "green",
         });
         ["fichier", "numero", "montant_total", "nombre"].forEach((champ) => d.set_value(champ, ""));
+        // Le détail du bordereau s'ouvre : la lecture de l'IA s'y affichera d'elle-même, sans rien bloquer.
+        ouvert = m.name || ouvert;
         liste();
       });
     },
@@ -1324,20 +1329,105 @@ function rcj_bordereaux() {
       if (lu.date_remise) d.set_value("date_remise", lu.date_remise);
     });
   };
+
+  // ── Lecture par l'IA : ce que dit chaque bordereau, et le détail de celui qu'on ouvre ──────────────
+  const COULEUR = { "Trouvé": "#1a7f37", "À vérifier": "#b35900", "Introuvable": "#c0392b" };
+  let ouvert = null;      // le bordereau dont le détail est affiché
+  let veille = null;      // relance tant qu'une lecture est en cours
+  const pastille = (b) => {
+    if (b.nature === "Espèces") return `<span class="rcj-muted">—</span>`;
+    if (b.lecture_statut === "En attente") return `<span style="color:#666">⏳ ${__("lecture par l’IA…")}</span>`;
+    if (b.lecture_statut === "Échec") return `<span style="color:#c0392b">✖ ${__("lecture impossible")}</span>`;
+    if (b.lecture_statut !== "Lue") return `<span class="rcj-muted">${__("non lu")}</span>`;
+    const resume = b.lecture_resume || "";
+    const couleur = /introuvable/.test(resume) ? COULEUR["Introuvable"] : /vérifier|aucune/.test(resume) ? COULEUR["À vérifier"] : COULEUR["Trouvé"];
+    const signe = couleur === COULEUR["Trouvé"] ? "✔" : "⚠";
+    return `<span style="color:${couleur};font-weight:600">${signe} ${esc(resume)}</span>`;
+  };
   const liste = () => {
     frappe.call({ method: API + ".recents" }).then((r) => {
-      const lignes = (r.message || []).map((b) => `<tr>
+      const recus = r.message || [];
+      const lignes = recus.map((b) => `<tr${b.name === ouvert ? ' style="background:#f4f8ff"' : ""}>
           <td>${esc(frappe.datetime.str_to_user(b.date_remise) || "")}</td><td>${esc(b.banque)}</td><td>${esc(b.nature)}</td>
           <td><a href="/app/brs-bordereau-remise/${encodeURIComponent(b.name)}" target="_blank">${esc(b.numero)}</a></td>
-          <td style="text-align:right">${b.montant_total ? rcj_dt(b.montant_total) : ""}</td>
+          <td style="text-align:right">${(b.montant_total || b.total_lu) ? rcj_dt(b.montant_total || b.total_lu) : ""}</td>
+          <td><a href="#" data-bordereau="${esc(b.name)}">${pastille(b)}</a></td>
           <td>${b.fichier ? `<a href="${esc(b.fichier)}" target="_blank">📎 ${__("ouvrir")}</a>` : ""}</td></tr>`).join("");
       d.fields_dict.liste.$wrapper.html(lignes
         ? `<table class="table table-bordered" style="font-size:12px;margin:0"><thead><tr><th>${__("Date")}</th><th>${__("Banque")}</th><th>${
-            __("Nature")}</th><th>${__("N° du bordereau")}</th><th style="text-align:right">${__("Montant")}</th><th>${__("Scan")}</th></tr></thead><tbody>${lignes}</tbody></table>
-           <div style="margin-top:6px"><a href="/app/brs-bordereau-remise" target="_blank">${__("Voir tous les bordereaux")}</a></div>`
+            __("Nature")}</th><th>${__("N° du bordereau")}</th><th style="text-align:right">${__("Montant")}</th><th>${
+            __("Pièces dans ERPNext")}</th><th>${__("Scan")}</th></tr></thead><tbody>${lignes}</tbody></table>
+           <div style="margin-top:6px" class="rcj-muted">${__("Cliquez sur le résultat d’un bordereau pour voir ses chèques ou ses traites.")}
+             · <a href="/app/brs-bordereau-remise" target="_blank">${__("Voir tous les bordereaux")}</a></div>`
         : `<div class="rcj-muted">${__("Aucun bordereau collecté pour l'instant.")}</div>`);
+      if (ouvert) detail(ouvert);
+      // Tant qu'une lecture est en cours, on regarde à nouveau dans quelques secondes (le signal temps réel
+      // suffit d'ordinaire ; ceci couvre une connexion coupée).
+      clearTimeout(veille);
+      if (recus.some((b) => b.lecture_statut === "En attente") && d.display) veille = setTimeout(liste, 5000);
     });
   };
+  const detail = (name) => {
+    frappe.call({ method: API + ".detail", args: { name } }).then((r) => {
+      const b = r.message;
+      if (!b || name !== ouvert) return;
+      const $z = d.fields_dict.detail.$wrapper;
+      const boutons = b.modifiable && b.nature !== "Espèces" ? `
+          <button class="btn btn-xs btn-default" data-action="verifier">${__("Revérifier dans ERPNext")}</button>
+          <button class="btn btn-xs btn-default" data-action="relire">${__("Relire avec l’IA")}</button>` : "";
+      let corps;
+      if (b.nature === "Espèces") {
+        corps = `<div class="rcj-muted">${__("Un versement d’espèces n’a pas de pièces à lire.")}</div>`;
+      } else if (b.lecture_statut === "En attente") {
+        corps = `<div style="color:#666">⏳ ${__("L’IA lit le bordereau et cherche ses pièces dans ERPNext… (une vingtaine de secondes). Vous pouvez continuer à travailler : le résultat s’affichera ici.")}</div>`;
+      } else if (b.lecture_statut === "Échec") {
+        corps = `<div style="color:#c0392b">✖ ${__("Lecture impossible")} : ${esc(b.lecture_message || "")}</div>
+                 <div class="rcj-muted">${__("Le bordereau reste collecté. Vous pouvez relancer la lecture.")}</div>`;
+      } else if (!(b.pieces || []).length) {
+        corps = `<div class="rcj-muted">${b.lecture_statut === "Lue" ? __("Aucune pièce lue sur ce scan.") : __("Ce bordereau n’a pas encore été lu par l’IA.")}</div>`;
+      } else {
+        const lignes = b.pieces.map((p) => `<tr>
+            <td>${esc(p.numero || "")}${p.doute ? ` <span title="${__("L’IA hésite sur un chiffre de cette ligne")}" style="color:#b35900">?</span>` : ""}</td>
+            <td>${esc(p.banque || "")}</td><td>${esc(p.tireur || "")}</td>
+            <td style="text-align:right">${p.montant != null ? rcj_dt(p.montant) : ""}</td>
+            <td style="color:${COULEUR[p.etat] || "#666"};font-weight:600;white-space:nowrap">${esc(p.etat || "")}</td>
+            <td>${p.paiement ? `<a href="/app/payment-entry/${encodeURIComponent(p.paiement)}" target="_blank">${esc(p.paiement)}</a>` : ""}</td>
+            <td>${esc(p.client || "")}</td>
+            <td style="text-align:right">${p.montant_erp != null && p.paiement ? rcj_dt(p.montant_erp) : ""}</td>
+            <td style="font-size:11px">${esc(p.remarque || "")}</td></tr>`).join("");
+        const remarques = (b.lecture_message || "").split("\n").filter(Boolean)
+          .map((l) => `<div style="color:#b35900">⚠ ${esc(l)}</div>`).join("");
+        corps = `${remarques}
+          <table class="table table-bordered" style="font-size:12px;margin:6px 0 0"><thead><tr>
+            <th colspan="4" style="text-align:center;background:#fafafa">${__("Lu sur le bordereau")}</th>
+            <th colspan="5" style="text-align:center;background:#fafafa">${__("Dans ERPNext")}</th></tr><tr>
+            <th>${__("N°")}</th><th>${__("Banque")}</th><th>${__("Tireur")}</th><th style="text-align:right">${__("Montant")}</th>
+            <th>${__("Résultat")}</th><th>${__("Paiement")}</th><th>${__("Client")}</th><th style="text-align:right">${__("Montant")}</th>
+            <th>${__("Remarque")}</th></tr></thead><tbody>${lignes}</tbody></table>
+          <div class="rcj-muted" style="margin-top:4px">${__("Contrôle indicatif : rien n’est comptabilisé. Pour corriger un chiffre mal lu, ouvrez la fiche du bordereau.")}</div>`;
+      }
+      $z.html(`<div style="margin-top:12px;border:1px solid #d1d8dd;border-radius:6px;padding:10px">
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px">
+            <b>${esc(b.banque)} — ${esc(b.nature)} — ${__("bordereau n° {0}", [esc(b.numero)])}</b>
+            <span>${pastille(b)}</span><span style="flex:1"></span>${boutons}
+            <a class="btn btn-xs btn-default" href="/app/brs-bordereau-remise/${encodeURIComponent(b.name)}" target="_blank">${__("Ouvrir la fiche")}</a>
+            <button class="btn btn-xs btn-default" data-action="fermer">✕</button>
+          </div>${corps}</div>`);
+    });
+  };
+  d.fields_dict.liste.$wrapper.on("click", "[data-bordereau]", (e) => {
+    e.preventDefault();
+    ouvert = $(e.currentTarget).attr("data-bordereau");
+    liste();
+  });
+  d.fields_dict.detail.$wrapper.on("click", "[data-action]", (e) => {
+    const action = $(e.currentTarget).attr("data-action");
+    if (action === "fermer") { ouvert = null; d.fields_dict.detail.$wrapper.empty(); liste(); return; }
+    frappe.call({ method: `${API}.${action}`, args: { name: ouvert }, freeze: action === "verifier" }).then(() => liste());
+  });
+  const signal = () => { if (d.display) liste(); };
+  frappe.realtime.on("brs_bordereau_lu", signal);
+  d.onhide = () => { clearTimeout(veille); frappe.realtime.off("brs_bordereau_lu", signal); };
   liste();
   d.show();
 }
