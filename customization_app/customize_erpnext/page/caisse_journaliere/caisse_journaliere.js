@@ -1480,7 +1480,7 @@ function rcj_bordereaux() {
             <td>${b.fichier ? `<a href="${esc(b.fichier)}" target="_blank">📎 ${__("ouvrir")}</a>` : ""}</td></tr>`).join("");
         html = `<table class="table table-bordered" style="font-size:12px;margin:0"><thead><tr><th>${__("Date")}</th><th>${__("Banque")}</th><th>${
             __("Nature")}</th><th>${__("N° du bordereau")}</th><th style="text-align:right">${__("Montant")}</th><th>${
-            __("Pièces dans ERPNext")}</th><th>${__("Scan")}</th></tr></thead><tbody>${lignes}</tbody></table>
+            __("Pièces dans ERPNext")}</th><th>${__("Bordereau")}</th></tr></thead><tbody>${lignes}</tbody></table>
           <div style="margin-top:6px" class="rcj-muted">${__("Cliquez sur le résultat d’un bordereau pour voir ses chèques ou ses traites.")}
             · <a href="/app/brs-bordereau-remise" target="_blank">${__("Voir tous les bordereaux")}</a></div>`;
       }
@@ -1548,7 +1548,7 @@ function rcj_bordereaux() {
             <b>${esc(b.banque)} — ${esc(b.nature)} — ${__("bordereau n° {0}", [esc(b.numero)])}</b>
             <span class="rcj-muted">${esc(frappe.datetime.str_to_user(b.date_remise) || "")}</span>
             <span style="flex:1"></span>${boutons}
-            ${b.fichier ? `<a class="btn btn-xs btn-default" href="${esc(b.fichier)}" target="_blank">📎 ${__("Scan")}</a>` : ""}
+            ${b.fichier ? `<a class="btn btn-xs btn-default" href="${esc(b.fichier)}" target="_blank">📎 ${__("Voir le bordereau")}</a>` : ""}
             <a class="btn btn-xs btn-default" href="/app/brs-bordereau-remise/${encodeURIComponent(b.name)}" target="_blank">${__("Fiche")}</a>
             <button class="btn btn-xs btn-default" data-action="fermer">✕</button>
           </div>
