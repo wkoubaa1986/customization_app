@@ -60,6 +60,26 @@ def _fonctions_numerotation(script):
     return ns
 
 
+class TestLesDeuxBanques(unittest.TestCase):
+    """16/11/2026 : un paiement encaissé à la BIAT se facture comme un paiement Zitouna."""
+
+    def test_le_script_et_la_numerotation_lisent_les_memes_comptes(self):
+        import re
+
+        from customization_app import facturation_numbering as FN
+
+        self.assertEqual(FN.COMPTES_BANCAIRES, ("STE430127B - Zitouna - A&S", "BIAT - A&S"))
+        script = _script()
+        requete = script[script.index("payments_of_the_month = frappe.db.sql("):]
+        liste = re.search(r"PE\.paid_to IN \(([^)]*)\)", requete)
+        self.assertIsNotNone(liste, "la requête des paiements ne filtre plus sur la liste des banques")
+        self.assertEqual(tuple(re.findall(r"'([^']+)'", liste.group(1))), FN.COMPTES_BANCAIRES)
+        # Plus aucun filtre sur le seul compte Zitouna, ni dans le script ni dans la numérotation.
+        self.assertNotIn("paid_to = 'STE430127B - Zitouna - A&S'", script)
+        import inspect
+        self.assertNotIn("%(zitouna)s", inspect.getsource(FN))
+
+
 class TestNumerosPrisParDAutresMois(unittest.TestCase):
     """07/10/2026 : la génération de septembre a redonné 2397-2417 à des factures du 30/09 alors que
     des factures d'octobre, saisies du 2 au 7, les portaient déjà (19 doublons). Le script ne lisait

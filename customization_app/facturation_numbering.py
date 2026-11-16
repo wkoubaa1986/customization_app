@@ -33,6 +33,12 @@ from frappe.utils import getdate, nowdate, get_first_day, add_months, flt
 
 # --- Constantes métier (nommées et commentées) -------------------------------
 ZITOUNA_ACCOUNT = "STE430127B - Zitouna - A&S"
+# LES COMPTES BANCAIRES (16/11/2026) : la société a deux banques. Un paiement encaissé à la BIAT — chèque,
+# traite ou virement — est de l'argent entré en banque comme un paiement Zitouna : il se facture de même
+# (décision utilisateur : « il faut ajouter la BIAT bien sûr, pour les chèques, virements et traites »).
+# Sans cela il sortait du compte des paiements en attente et sa commande repassait en PASSAGER.
+# ⚠️ Même liste dans le Server Script « Facturation Auto » (requête `payments_of_the_month`).
+COMPTES_BANCAIRES = (ZITOUNA_ACCOUNT, "BIAT - A&S")
 # Client exclu de la facturation mensuelle sauf exception explicite (aligné Facturation Auto).
 SPECIAL_INCLUDED_CUSTOMER = "Ayman Belguith"
 
@@ -84,7 +90,7 @@ def free_slots_below_max(used):
 
 
 def eligible_pending_payments(since):
-    """Paiements Zitouna éligibles NON encore facturés (aligné « Facturation Auto »).
+    """Paiements BANCAIRES (Zitouna ou BIAT) éligibles NON encore facturés (aligné « Facturation Auto »).
 
     Commandes livrées (Fully Delivered ou BL réconcilié), non-Compte-Pro mensuel,
     encaissées sur le compte Zitouna, sans facture liée. Pas de borne supérieure de
@@ -101,7 +107,7 @@ def eligible_pending_payments(since):
             INNER JOIN `tabSales Order` AS SO ON SO.name = PER.reference_name
             INNER JOIN `tabCustomer` AS CUS ON SO.customer = CUS.name
         WHERE
-            PE.paid_to = %(zitouna)s
+            PE.paid_to IN %(banques)s
             AND PE.docstatus = 1
             AND PE.posting_date >= %(since)s
             AND PER.reference_doctype = 'Sales Order'
@@ -129,7 +135,7 @@ def eligible_pending_payments(since):
                 )
             )
         """,
-        {"zitouna": ZITOUNA_ACCOUNT, "since": since, "special": SPECIAL_INCLUDED_CUSTOMER},
+        {"banques": COMPTES_BANCAIRES, "since": since, "special": SPECIAL_INCLUDED_CUSTOMER},
         as_dict=True,
     )
 
@@ -164,7 +170,7 @@ def unbilled_delivered_sales(today):
                   INNER JOIN `tabPayment Entry` pe ON pe.name = per.parent
               WHERE per.reference_doctype = 'Sales Order'
                 AND per.reference_name = so.name
-                AND pe.paid_to = %(zitouna)s
+                AND pe.paid_to IN %(banques)s
                 AND pe.docstatus = 1
                 AND pe.name NOT IN (
                     SELECT DISTINCT per2.parent
@@ -173,7 +179,7 @@ def unbilled_delivered_sales(today):
                 )
           )
         """,
-        {"first_day": first_day, "last_day": last_day, "zitouna": ZITOUNA_ACCOUNT},
+        {"first_day": first_day, "last_day": last_day, "banques": COMPTES_BANCAIRES},
         as_dict=True,
     )
     return flt(rows[0]["total"]) if rows and rows[0].get("total") else 0.0
