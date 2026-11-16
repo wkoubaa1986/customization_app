@@ -1311,9 +1311,9 @@ function rcj_bordereaux() {
       if (manque.length) { frappe.msgprint(__("Il manque : {0}.", [manque.join(", ")])); return; }
       frappe.call({ method: API + ".ajouter", args: v, freeze: true, freeze_message: __("Enregistrement…") }).then((r) => {
         const m = r.message || {};
-        message(m.deja ? "orange" : "vert", m.deja ? __("Ce bordereau était déjà collecté.") : __("Bordereau collecté."));
+        message(m.deja ? "orange" : "vert", m.deja ? __("Ce bordereau était déjà enregistré.")
+          : __("Bordereau enregistré. La vérification se fait en arrière-plan : le résultat s’affichera dans la liste."));
         manuel(false);
-        ouvert = m.name || ouvert; montrer = true;
         liste();
       });
     },
@@ -1328,7 +1328,7 @@ function rcj_bordereaux() {
       <input type="file" data-entree="photo" accept="image/*" capture="environment" style="display:none">
       <input type="file" data-entree="fichier" accept="image/jpeg,image/png,application/pdf" style="display:none">
     </div>
-    <div class="rcj-muted" style="margin-top:6px;font-size:12px">${__("Donnez seulement le bordereau (chèques, traites ou espèces, BIAT ou Zitouna) : l’IA lit la banque, le numéro, la date et les pièces, puis cherche chaque chèque ou traite dans ERPNext.")}
+    <div class="rcj-muted" style="margin-top:6px;font-size:12px">${__("Donnez seulement le bordereau (chèques, traites ou espèces) : il est enregistré et vérifié tout seul, et l’écran vous dit si tout est bon.")}
       <a href="#" data-depot="manuel">${__("Saisir à la main")}</a></div>
     <div data-zone="message" style="margin-top:8px"></div>`);
   const TEINTES = { vert: ["#eaf7ee", "#9bd3a8", "#1a7f37"], orange: ["#fff6e9", "#f0c58a", "#b35900"],
@@ -1386,7 +1386,7 @@ function rcj_bordereaux() {
     message("bleu", `⏫ ${__("Envoi du bordereau…")}`);
     alleger(fichier).then(televerser).then((adresse) => {
       depose = adresse;
-      message("bleu", `⏳ ${__("L’IA lit le bordereau : banque, numéro, date, pièces… (une vingtaine de secondes). Vous pouvez fermer cette fenêtre : il apparaîtra dans la liste.")}`);
+      message("bleu", `⏳ ${__("Vérification du bordereau… (une vingtaine de secondes). Vous pouvez fermer cette fenêtre : il apparaîtra dans la liste.")}`);
       return frappe.call({ method: API + ".deposer", args: { fichier: adresse } });
     }).then(() => suivre()).catch((e) => {
       message("rouge", `✖ ${esc((e && e.message) || __("Envoi impossible."))}`);
@@ -1404,9 +1404,12 @@ function rcj_bordereaux() {
     if (fichier !== depose || !m.etat || m.etat === "en_cours" || m.etat === "inconnu") return false;
     depose = null; clearTimeout(garde);
     if (m.etat === "collecte" || m.etat === "deja") {
-      message(m.etat === "deja" ? "orange" : "vert", m.etat === "deja"
-        ? `⚠ ${__("Ce bordereau était déjà collecté : le voici.")}` : `✔ ${__("Bordereau collecté. Ses pièces sont ci-dessous.")}`);
-      ouvert = m.name; montrer = true;
+      const deja = m.etat === "deja" ? `<div style="margin-bottom:4px">${__("Ce bordereau était déjà enregistré.")}</div>` : "";
+      frappe.call({ method: API + ".detail", args: { name: m.name } }).then((r) => {
+        const [teinte, html] = verdict(r.message || {});
+        message(teinte, deja + html);
+        $depot[0].scrollIntoView({ behavior: "smooth", block: "start" });
+      });
       liste();
     } else {
       // L'IA n'a pas pu l'identifier (ou n'a pas répondu) : on complète à la main, rien n'est perdu.
@@ -1446,15 +1449,34 @@ function rcj_bordereaux() {
   let montrer = false;    // faire descendre l'écran jusqu'au détail au prochain affichage
   let veille = null;      // relance tant qu'une lecture est en cours
   const etroit = () => window.innerWidth < 768;
+  // LE VERDICT. La personne qui remet le bordereau n'a qu'une chose à savoir : tout est bon, ou il y a
+  // quelque chose à signaler. Le détail (pièce par pièce, écarts tolérés) est réservé au contrôle.
+  const signalements = (b) => (b.a_signaler || "").split("\n").filter(Boolean);
+  const bon = (b) => b.nature === "Espèces" || (b.lecture_statut === "Lue" && !signalements(b).length);
+  const combien = (b) => {
+    const n = b.nombre_lu || (b.pieces || []).length;
+    const mot = b.nature === "Traites" ? __("traite") : __("chèque");
+    const total = b.montant_total || b.total_lu;
+    return [n ? `${n} ${mot}${n > 1 ? "s" : ""}` : "", total ? rcj_dt(total) : ""].filter(Boolean).join(" · ");
+  };
   const pastille = (b) => {
-    if (b.nature === "Espèces") return `<span class="rcj-muted">${__("espèces")}</span>`;
-    if (b.lecture_statut === "En attente") return `<span style="color:#666">⏳ ${__("lecture par l’IA…")}</span>`;
-    if (b.lecture_statut === "Échec") return `<span style="color:#c0392b">✖ ${__("lecture impossible")}</span>`;
-    if (b.lecture_statut !== "Lue") return `<span class="rcj-muted">${__("non lu")}</span>`;
-    const resume = b.lecture_resume || "";
-    const couleur = /introuvable/.test(resume) ? COULEUR["Introuvable"] : /vérifier|aucune/.test(resume) ? COULEUR["À vérifier"] : COULEUR["Trouvé"];
-    const signe = couleur === COULEUR["Trouvé"] ? "✔" : "⚠";
-    return `<span style="color:${couleur};font-weight:600">${signe} ${esc(resume)}</span>`;
+    if (b.nature === "Espèces") return `<span style="color:#1a7f37;font-weight:600">✔ ${__("Enregistré")}</span>`;
+    if (b.lecture_statut === "En attente") return `<span style="color:#666">⏳ ${__("vérification en cours…")}</span>`;
+    if (b.lecture_statut === "Échec") return `<span style="color:#b35900;font-weight:600">⚠ ${__("Non vérifié")}</span>`;
+    if (b.lecture_statut !== "Lue") return `<span class="rcj-muted">${__("non vérifié")}</span>`;
+    return bon(b) ? `<span style="color:#1a7f37;font-weight:600">✔ ${__("Tout est bon")}</span>`
+      : `<span style="color:#b35900;font-weight:600">⚠ ${__("À signaler")}</span>`;
+  };
+  // Le verdict en clair, pour le bandeau et pour le détail.
+  const verdict = (b) => {
+    if (b.nature === "Espèces") return ["vert", `✔ <b>${__("Bordereau enregistré.")}</b>`];
+    if (b.lecture_statut === "En attente") return ["bleu", `⏳ ${__("Vérification en cours… (une vingtaine de secondes)")}`];
+    if (b.lecture_statut === "Échec" || b.lecture_statut !== "Lue") {
+      return ["orange", `⚠ <b>${__("Bordereau enregistré, mais pas vérifié.")}</b> ${__("L’IA n’a pas pu le lire : signalez-le à votre responsable.")}`];
+    }
+    if (bon(b)) return ["vert", `✔ <b>${__("Tout est bon.")}</b> ${esc(combien(b))} — ${__("tout est retrouvé dans ERPNext.")}`];
+    return ["orange", `⚠ <b>${__("Bordereau enregistré. À signaler à votre responsable :")}</b>
+        <ul style="margin:4px 0 0;padding-left:18px">${signalements(b).map((l) => `<li>${esc(l)}</li>`).join("")}</ul>`];
   };
   const liste = () => {
     frappe.call({ method: API + ".recents" }).then((r) => {
@@ -1476,13 +1498,12 @@ function rcj_bordereaux() {
             <td>${esc(frappe.datetime.str_to_user(b.date_remise) || "")}</td><td>${esc(b.banque)}</td><td>${esc(b.nature)}</td>
             <td><a href="/app/brs-bordereau-remise/${encodeURIComponent(b.name)}" target="_blank">${esc(b.numero)}</a></td>
             <td style="text-align:right">${montant(b)}</td>
-            <td><a href="#" data-bordereau="${esc(b.name)}">${pastille(b)}</a></td>
+            <td><a href="#" data-bordereau="${esc(b.name)}" style="text-decoration:none">${pastille(b)}</a></td>
             <td>${b.fichier ? `<a href="${esc(b.fichier)}" target="_blank">📎 ${__("ouvrir")}</a>` : ""}</td></tr>`).join("");
         html = `<table class="table table-bordered" style="font-size:12px;margin:0"><thead><tr><th>${__("Date")}</th><th>${__("Banque")}</th><th>${
             __("Nature")}</th><th>${__("N° du bordereau")}</th><th style="text-align:right">${__("Montant")}</th><th>${
-            __("Pièces dans ERPNext")}</th><th>${__("Bordereau")}</th></tr></thead><tbody>${lignes}</tbody></table>
-          <div style="margin-top:6px" class="rcj-muted">${__("Cliquez sur le résultat d’un bordereau pour voir ses chèques ou ses traites.")}
-            · <a href="/app/brs-bordereau-remise" target="_blank">${__("Voir tous les bordereaux")}</a></div>`;
+            __("Vérification")}</th><th>${__("Bordereau")}</th></tr></thead><tbody>${lignes}</tbody></table>
+          <div style="margin-top:6px"><a href="/app/brs-bordereau-remise" target="_blank">${__("Voir tous les bordereaux")}</a></div>`;
       }
       d.fields_dict.liste.$wrapper.html(html);
       if (ouvert) detail(ouvert);
@@ -1492,67 +1513,51 @@ function rcj_bordereaux() {
       if (recus.some((b) => b.lecture_statut === "En attente") && d.display) veille = setTimeout(liste, 5000);
     });
   };
+  // Le contrôle (comptabilité, direction) peut déplier le détail pièce par pièce ; la personne qui remet
+  // le bordereau ne voit que le verdict.
+  const CONTROLE = ["System Manager", "Accounts Manager", "Accounts User"].some((role) => frappe.user.has_role(role));
+  let deplie = false;
+  const pieces_html = (b) => {
+    if (!(b.pieces || []).length) return "";
+    const remarques = (b.lecture_message || "").split("\n").filter(Boolean)
+      .map((l) => `<div class="rcj-muted" style="font-size:11px">• ${esc(l)}</div>`).join("");
+    const cartes = b.pieces.map((p) => `<div style="border:1px solid #e2e6e9;border-left:4px solid ${COULEUR[p.etat] || "#999"};border-radius:6px;padding:8px;margin-top:6px;font-size:12px">
+        <div style="display:flex;justify-content:space-between;gap:8px"><b>${__("N° {0}", [esc(p.numero || "?")])}</b>
+          <b>${p.montant != null ? rcj_dt(p.montant) : ""}</b></div>
+        <div class="rcj-muted">${esc([p.banque, p.tireur].filter(Boolean).join(" · "))}</div>
+        <div style="margin-top:4px"><span style="color:${COULEUR[p.etat] || "#666"};font-weight:600">${esc(p.etat || "")}</span>
+          ${p.paiement ? ` · <a href="/app/payment-entry/${encodeURIComponent(p.paiement)}" target="_blank">${esc(p.paiement)}</a> · ${esc(p.client || "")} · ${rcj_dt(p.montant_erp)}` : ""}</div>
+        ${p.remarque ? `<div style="font-size:11px" class="rcj-muted">${esc(p.remarque)}</div>` : ""}</div>`).join("");
+    return `<div style="${etroit() ? "" : "display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:0 8px"}">${cartes}</div>
+      <div style="margin-top:6px">${remarques}</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
+        ${b.modifiable ? `<button class="btn btn-xs btn-default" data-action="verifier">${__("Revérifier dans ERPNext")}</button>
+        <button class="btn btn-xs btn-default" data-action="relire">${__("Relire avec l’IA")}</button>` : ""}
+        <a class="btn btn-xs btn-default" href="/app/brs-bordereau-remise/${encodeURIComponent(b.name)}" target="_blank">${__("Ouvrir la fiche")}</a>
+      </div>`;
+  };
   const detail = (name) => {
     frappe.call({ method: API + ".detail", args: { name } }).then((r) => {
       const b = r.message;
       if (!b || name !== ouvert) return;
       const $z = d.fields_dict.detail.$wrapper;
-      const boutons = b.modifiable && b.nature !== "Espèces" ? `
-          <button class="btn btn-xs btn-default" data-action="verifier">${__("Revérifier dans ERPNext")}</button>
-          <button class="btn btn-xs btn-default" data-action="relire">${__("Relire avec l’IA")}</button>` : "";
-      let corps;
-      if (b.nature === "Espèces") {
-        corps = `<div class="rcj-muted">${__("Versement d’espèces")}${b.montant_total ? " : " + rcj_dt(b.montant_total) : ""}. ${__("Pas de pièces à chercher.")}</div>`;
-      } else if (b.lecture_statut === "En attente") {
-        corps = `<div style="color:#666">⏳ ${__("L’IA lit le bordereau et cherche ses pièces dans ERPNext… (une vingtaine de secondes). Vous pouvez continuer à travailler : le résultat s’affichera ici.")}</div>`;
-      } else if (b.lecture_statut === "Échec") {
-        corps = `<div style="color:#c0392b">✖ ${__("Lecture impossible")} : ${esc(b.lecture_message || "")}</div>
-                 <div class="rcj-muted">${__("Le bordereau reste collecté. Vous pouvez relancer la lecture.")}</div>`;
-      } else if (!(b.pieces || []).length) {
-        corps = `<div class="rcj-muted">${b.lecture_statut === "Lue" ? __("Aucune pièce lue sur ce scan.") : __("Ce bordereau n’a pas encore été lu par l’IA.")}</div>`;
-      } else {
-        const remarques = (b.lecture_message || "").split("\n").filter(Boolean)
-          .map((l) => `<div style="color:#b35900;font-size:12px">⚠ ${esc(l)}</div>`).join("");
-        if (etroit()) {
-          // Sur téléphone, un tableau de neuf colonnes ne se lit pas : une carte par pièce.
-          const cartes = b.pieces.map((p) => `<div style="border:1px solid #e2e6e9;border-left:4px solid ${COULEUR[p.etat] || "#999"};border-radius:6px;padding:8px;margin-top:6px;font-size:12px">
-              <div style="display:flex;justify-content:space-between;gap:8px"><b>${__("N° {0}", [esc(p.numero || "?")])}${p.doute ? " ?" : ""}</b>
-                <b>${p.montant != null ? rcj_dt(p.montant) : ""}</b></div>
-              <div class="rcj-muted">${esc([p.banque, p.tireur].filter(Boolean).join(" · "))}</div>
-              <div style="margin-top:4px;color:${COULEUR[p.etat] || "#666"};font-weight:600">${esc(p.etat || "")}</div>
-              ${p.paiement ? `<div><a href="/app/payment-entry/${encodeURIComponent(p.paiement)}" target="_blank">${esc(p.paiement)}</a> · ${esc(p.client || "")} · ${rcj_dt(p.montant_erp)}</div>` : ""}
-              ${p.remarque ? `<div style="font-size:11px">${esc(p.remarque)}</div>` : ""}</div>`).join("");
-          corps = `${remarques}${cartes}<div class="rcj-muted" style="margin-top:6px;font-size:11px">${__("Contrôle indicatif : rien n’est comptabilisé.")}</div>`;
-        } else {
-          const lignes = b.pieces.map((p) => `<tr>
-              <td>${esc(p.numero || "")}${p.doute ? ` <span title="${__("L’IA hésite sur un chiffre de cette ligne")}" style="color:#b35900">?</span>` : ""}</td>
-              <td>${esc(p.banque || "")}</td><td>${esc(p.tireur || "")}</td>
-              <td style="text-align:right">${p.montant != null ? rcj_dt(p.montant) : ""}</td>
-              <td style="color:${COULEUR[p.etat] || "#666"};font-weight:600;white-space:nowrap">${esc(p.etat || "")}</td>
-              <td>${p.paiement ? `<a href="/app/payment-entry/${encodeURIComponent(p.paiement)}" target="_blank">${esc(p.paiement)}</a>` : ""}</td>
-              <td>${esc(p.client || "")}</td>
-              <td style="text-align:right">${p.montant_erp != null && p.paiement ? rcj_dt(p.montant_erp) : ""}</td>
-              <td style="font-size:11px">${esc(p.remarque || "")}</td></tr>`).join("");
-          corps = `${remarques}
-            <table class="table table-bordered" style="font-size:12px;margin:6px 0 0"><thead><tr>
-              <th colspan="4" style="text-align:center;background:#fafafa">${__("Lu sur le bordereau")}</th>
-              <th colspan="5" style="text-align:center;background:#fafafa">${__("Dans ERPNext")}</th></tr><tr>
-              <th>${__("N°")}</th><th>${__("Banque")}</th><th>${__("Tireur")}</th><th style="text-align:right">${__("Montant")}</th>
-              <th>${__("Résultat")}</th><th>${__("Paiement")}</th><th>${__("Client")}</th><th style="text-align:right">${__("Montant")}</th>
-              <th>${__("Remarque")}</th></tr></thead><tbody>${lignes}</tbody></table>
-            <div class="rcj-muted" style="margin-top:4px">${__("Contrôle indicatif : rien n’est comptabilisé. Pour corriger un chiffre mal lu, ouvrez la fiche du bordereau.")}</div>`;
-        }
-      }
+      const [teinte, html] = verdict(b);
+      const [fond, bord, texte] = TEINTES[teinte];
+      const controle = CONTROLE && b.nature !== "Espèces" && b.lecture_statut !== "En attente";
       $z.html(`<div style="margin-top:12px;border:1px solid #d1d8dd;border-radius:6px;padding:10px">
-          <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:6px">
+          <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
             <b>${esc(b.banque)} — ${esc(b.nature)} — ${__("bordereau n° {0}", [esc(b.numero)])}</b>
             <span class="rcj-muted">${esc(frappe.datetime.str_to_user(b.date_remise) || "")}</span>
-            <span style="flex:1"></span>${boutons}
+            <span style="flex:1"></span>
             ${b.fichier ? `<a class="btn btn-xs btn-default" href="${esc(b.fichier)}" target="_blank">📎 ${__("Voir le bordereau")}</a>` : ""}
-            <a class="btn btn-xs btn-default" href="/app/brs-bordereau-remise/${encodeURIComponent(b.name)}" target="_blank">${__("Fiche")}</a>
             <button class="btn btn-xs btn-default" data-action="fermer">✕</button>
           </div>
-          <div style="margin-bottom:4px">${pastille(b)}</div>${corps}</div>`);
+          <div style="background:${fond};border:1px solid ${bord};color:${texte};border-radius:6px;padding:8px 10px;font-size:13px">${html}</div>
+          ${controle ? `<div style="margin-top:8px"><a href="#" data-action="deplier">${deplie ? "▾ " + __("Masquer le détail") : "▸ " + __("Détail pour le contrôle")}</a></div>
+            ${deplie ? (pieces_html(b) || `<div class="rcj-muted" style="margin-top:6px">${esc(b.lecture_message || __("Aucune pièce lue."))}</div>
+              <div style="margin-top:8px">${b.modifiable ? `<button class="btn btn-xs btn-default" data-action="relire">${__("Relire avec l’IA")}</button>` : ""}
+              <a class="btn btn-xs btn-default" href="/app/brs-bordereau-remise/${encodeURIComponent(b.name)}" target="_blank">${__("Ouvrir la fiche")}</a></div>`) : ""}` : ""}
+        </div>`);
       if (montrer) {
         montrer = false;
         $z[0].scrollIntoView({ behavior: "smooth", block: "start" });
@@ -1568,6 +1573,7 @@ function rcj_bordereaux() {
   d.fields_dict.detail.$wrapper.on("click", "[data-action]", (e) => {
     const action = $(e.currentTarget).attr("data-action");
     if (action === "fermer") { ouvert = null; d.fields_dict.detail.$wrapper.empty(); liste(); return; }
+    if (action === "deplier") { e.preventDefault(); deplie = !deplie; detail(ouvert); return; }
     frappe.call({ method: `${API}.${action}`, args: { name: ouvert }, freeze: action === "verifier" }).then(() => liste());
   });
   const signal = (m) => {
