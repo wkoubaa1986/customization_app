@@ -1276,50 +1276,157 @@ function rcj_encaissement_dettes(rapport) {
 // faire de ma caisse ; juste collecter ». On range le scan avec sa banque, son numéro et sa date — rien n'est lu
 // ni rapproché ici (app bank_retenue_sync, DocType « BRS Bordereau Remise »).
 function rcj_bordereaux() {
+  // On donne le scan — photo ou fichier — et c'est tout : l'IA y lit la banque, le numéro, la date, la
+  // nature et les pièces, collecte le bordereau et cherche ses chèques ou ses traites dans ERPNext, en
+  // arrière-plan. La saisie à la main n'est que le repli, quand l'IA ne peut pas identifier le bordereau.
   const API = "bank_retenue_sync.api.bordereaux";
   const esc = frappe.utils.escape_html;
+  const MANUEL = ["sb_manuel", "fichier", "banque", "nature", "numero", "date_remise", "montant_total", "nombre"];
   const d = new frappe.ui.Dialog({
     title: __("Bordereaux de remise"),
     size: "extra-large",
     fields: [
-      { fieldtype: "Attach", fieldname: "fichier", label: __("Scan ou photo du bordereau"), reqd: 1,
-        description: __("Un nom du type « Ordre de versement Chèques Bq BIAT-7473685-du 09-11-2026.pdf » remplit les champs ci-dessous."),
-        onchange: () => { lire_nom(); etape(); } },
-      { fieldtype: "HTML", fieldname: "etape" },
-      { fieldtype: "Section Break" },
-      { fieldtype: "Select", fieldname: "banque", label: __("Banque"), options: "\nBIAT\nZitouna", reqd: 1 },
-      { fieldtype: "Select", fieldname: "nature", label: __("Nature"), options: "Chèques\nTraites\nEspèces", default: "Chèques", reqd: 1 },
+      { fieldtype: "HTML", fieldname: "depot" },
+      { fieldtype: "Section Break", fieldname: "sb_manuel", label: __("Saisie à la main"), hidden: 1 },
+      { fieldtype: "Attach", fieldname: "fichier", label: __("Scan ou photo du bordereau"), hidden: 1,
+        onchange: () => lire_nom() },
+      { fieldtype: "Select", fieldname: "banque", label: __("Banque"), options: "\nBIAT\nZitouna", hidden: 1 },
+      { fieldtype: "Select", fieldname: "nature", label: __("Nature"), options: "Chèques\nTraites\nEspèces", default: "Chèques", hidden: 1 },
       { fieldtype: "Column Break" },
-      { fieldtype: "Data", fieldname: "numero", label: __("N° du bordereau"), reqd: 1,
+      { fieldtype: "Data", fieldname: "numero", label: __("N° du bordereau"), hidden: 1,
         description: __("Le numéro imprimé sur le bordereau.") },
-      { fieldtype: "Date", fieldname: "date_remise", label: __("Date de la remise"), reqd: 1, default: frappe.datetime.get_today() },
+      { fieldtype: "Date", fieldname: "date_remise", label: __("Date de la remise"), default: frappe.datetime.get_today(), hidden: 1 },
       { fieldtype: "Column Break" },
-      { fieldtype: "Currency", fieldname: "montant_total", label: __("Montant total (facultatif)") },
-      { fieldtype: "Int", fieldname: "nombre", label: __("Nombre de pièces (facultatif)") },
+      { fieldtype: "Currency", fieldname: "montant_total", label: __("Montant total (facultatif)"), hidden: 1 },
+      { fieldtype: "Int", fieldname: "nombre", label: __("Nombre de pièces (facultatif)"), hidden: 1 },
       { fieldtype: "Section Break", label: __("Derniers bordereaux collectés") },
       { fieldtype: "HTML", fieldname: "liste" },
       { fieldtype: "HTML", fieldname: "detail" },
     ],
     primary_action_label: __("Collecter ce bordereau"),
-    primary_action: (v) => {
+    primary_action: () => {
+      const v = d.get_values(true) || {};
+      const manque = [["fichier", __("le scan")], ["banque", __("la banque")], ["numero", __("le numéro du bordereau")],
+                      ["date_remise", __("la date")]].filter(([champ]) => !v[champ]).map(([, nom]) => nom);
+      if (manque.length) { frappe.msgprint(__("Il manque : {0}.", [manque.join(", ")])); return; }
       frappe.call({ method: API + ".ajouter", args: v, freeze: true, freeze_message: __("Enregistrement…") }).then((r) => {
         const m = r.message || {};
-        frappe.show_alert({
-          message: m.deja ? __("Ce bordereau était déjà collecté : {0}", [m.name])
-            : m.lecture ? __("Bordereau collecté : {0}. L’IA lit les pièces en arrière-plan, vous pouvez continuer.", [m.name])
-            : __("Bordereau collecté : {0}", [m.name]),
-          indicator: m.deja ? "orange" : "green",
-        });
-        ["fichier", "numero", "montant_total", "nombre"].forEach((champ) => d.set_value(champ, ""));
-        // Le détail du bordereau s'ouvre : la lecture de l'IA s'y affichera d'elle-même, sans rien bloquer.
-        ouvert = m.name || ouvert;
-        montrer = true;      // … et l'écran y descend : sur téléphone il est sous le formulaire, hors de vue
-        etape();
+        message(m.deja ? "orange" : "vert", m.deja ? __("Ce bordereau était déjà collecté.") : __("Bordereau collecté."));
+        manuel(false);
+        ouvert = m.name || ouvert; montrer = true;
         liste();
       });
     },
   });
-  // Le nom du fichier dit souvent tout : on complète les champs encore vides, sans écraser une saisie.
+
+  // ── Le dépôt : deux gros boutons, et ce qui se passe ensuite ────────────────────────────────────
+  const $depot = d.fields_dict.depot.$wrapper;
+  $depot.html(`
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+      <button class="btn btn-primary btn-lg" data-depot="photo" style="flex:1 1 230px;white-space:normal">📷 ${__("Prendre une photo")}</button>
+      <button class="btn btn-default btn-lg" data-depot="fichier" style="flex:1 1 230px;white-space:normal">📎 ${__("Choisir un fichier")}</button>
+      <input type="file" data-entree="photo" accept="image/*" capture="environment" style="display:none">
+      <input type="file" data-entree="fichier" accept="image/jpeg,image/png,application/pdf" style="display:none">
+    </div>
+    <div class="rcj-muted" style="margin-top:6px;font-size:12px">${__("Donnez seulement le bordereau (chèques, traites ou espèces, BIAT ou Zitouna) : l’IA lit la banque, le numéro, la date et les pièces, puis cherche chaque chèque ou traite dans ERPNext.")}
+      <a href="#" data-depot="manuel">${__("Saisir à la main")}</a></div>
+    <div data-zone="message" style="margin-top:8px"></div>`);
+  const TEINTES = { vert: ["#eaf7ee", "#9bd3a8", "#1a7f37"], orange: ["#fff6e9", "#f0c58a", "#b35900"],
+                    rouge: ["#fdecea", "#f1a9a0", "#c0392b"], bleu: ["#eef6ff", "#b6d4fe", "#1f4e8c"] };
+  const message = (teinte, html) => {
+    const [fond, bord, texte] = TEINTES[teinte] || TEINTES.bleu;
+    $depot.find("[data-zone=message]").html(html
+      ? `<div style="background:${fond};border:1px solid ${bord};color:${texte};border-radius:6px;padding:8px 10px;font-size:13px">${html}</div>` : "");
+  };
+  const manuel = (oui, valeurs) => {
+    MANUEL.forEach((champ) => { if (d.fields_dict[champ]) d.set_df_property(champ, "hidden", oui ? 0 : 1); });
+    d.get_primary_btn().toggle(!!oui);
+    if (!oui) { ["fichier", "numero", "montant_total", "nombre"].forEach((champ) => d.set_value(champ, "")); return; }
+    Object.entries(valeurs || {}).forEach(([champ, valeur]) => {
+      if (valeur != null && valeur !== "" && d.fields_dict[champ]) d.set_value(champ, valeur);
+    });
+  };
+
+  // Une photo de téléphone pèse 5 à 10 Mo : on la ramène à 2600 px avant l'envoi (largement de quoi lire
+  // l'écriture), pour ne pas attendre sur une connexion mobile. Un PDF, ou une image que le navigateur
+  // ne sait pas ouvrir, part tel quel.
+  const alleger = (fichier) => new Promise((ok) => {
+    if (!/^image\//.test(fichier.type) || fichier.size < 1500000) return ok(fichier);
+    const adresse = URL.createObjectURL(fichier);
+    const image = new Image();
+    image.onerror = () => { URL.revokeObjectURL(adresse); ok(fichier); };
+    image.onload = () => {
+      const echelle = Math.min(1, 2600 / Math.max(image.width, image.height));
+      const toile = document.createElement("canvas");
+      toile.width = Math.round(image.width * echelle); toile.height = Math.round(image.height * echelle);
+      toile.getContext("2d").drawImage(image, 0, 0, toile.width, toile.height);
+      URL.revokeObjectURL(adresse);
+      toile.toBlob((blob) => ok(blob ? new File([blob], fichier.name.replace(/\.\w+$/, "") + ".jpg", { type: "image/jpeg" }) : fichier),
+                   "image/jpeg", 0.9);
+    };
+    image.src = adresse;
+  });
+  const televerser = (fichier) => {
+    const envoi = new FormData();
+    envoi.append("file", fichier, fichier.name);
+    envoi.append("is_private", "1");
+    envoi.append("folder", "Home/Attachments");
+    return fetch("/api/method/upload_file", { method: "POST", body: envoi,
+        headers: { "X-Frappe-CSRF-Token": frappe.csrf_token, Accept: "application/json" } })
+      .then((r) => r.json().catch(() => ({})).then((j) => {
+        if (!r.ok || !j.message || !j.message.file_url) throw new Error(__("Le fichier n’a pas pu être envoyé."));
+        return j.message.file_url;
+      }));
+  };
+
+  let depose = null;      // l'adresse du scan que l'IA est en train de lire
+  let garde = null;       // relance de l'état du dépôt
+  const deposer = (fichier) => {
+    manuel(false);
+    message("bleu", `⏫ ${__("Envoi du bordereau…")}`);
+    alleger(fichier).then(televerser).then((adresse) => {
+      depose = adresse;
+      message("bleu", `⏳ ${__("L’IA lit le bordereau : banque, numéro, date, pièces… (une vingtaine de secondes). Vous pouvez fermer cette fenêtre : il apparaîtra dans la liste.")}`);
+      return frappe.call({ method: API + ".deposer", args: { fichier: adresse } });
+    }).then(() => suivre()).catch((e) => {
+      message("rouge", `✖ ${esc((e && e.message) || __("Envoi impossible."))}`);
+    });
+  };
+  const suivre = () => {
+    clearTimeout(garde);
+    if (!depose || !d.display) return;
+    frappe.call({ method: API + ".etat_depot", args: { fichier: depose } }).then((r) => {
+      if (!resultat(depose, r.message || {})) garde = setTimeout(suivre, 4000);
+    });
+  };
+  // Ce que l'IA a rendu pour le scan déposé. -> vrai quand c'est fini.
+  const resultat = (fichier, m) => {
+    if (fichier !== depose || !m.etat || m.etat === "en_cours" || m.etat === "inconnu") return false;
+    depose = null; clearTimeout(garde);
+    if (m.etat === "collecte" || m.etat === "deja") {
+      message(m.etat === "deja" ? "orange" : "vert", m.etat === "deja"
+        ? `⚠ ${__("Ce bordereau était déjà collecté : le voici.")}` : `✔ ${__("Bordereau collecté. Ses pièces sont ci-dessous.")}`);
+      ouvert = m.name; montrer = true;
+      liste();
+    } else {
+      // L'IA n'a pas pu l'identifier (ou n'a pas répondu) : on complète à la main, rien n'est perdu.
+      message(m.etat === "echec" ? "rouge" : "orange", `⚠ ${esc(m.message || __("Complétez puis collectez."))}`);
+      manuel(true, Object.assign({}, m.propose || {}, { fichier }));
+    }
+    return true;
+  };
+  $depot.on("click", "[data-depot]", (e) => {
+    e.preventDefault();
+    const quoi = $(e.currentTarget).attr("data-depot");
+    if (quoi === "manuel") { message(null, ""); manuel(true); return; }
+    $depot.find(`[data-entree=${quoi}]`).val("").trigger("click");
+  });
+  $depot.on("change", "[data-entree]", (e) => {
+    const fichier = e.currentTarget.files && e.currentTarget.files[0];
+    if (fichier) deposer(fichier);
+  });
+
+  // Saisie à la main : le nom du fichier dit souvent tout, on complète les champs encore vides.
   const lire_nom = () => {
     const url = d.get_value("fichier");
     if (!url) return;
@@ -1333,22 +1440,14 @@ function rcj_bordereaux() {
     });
   };
 
-  // ── Lecture par l'IA : ce que dit chaque bordereau, et le détail de celui qu'on ouvre ──────────────
+  // ── Les bordereaux collectés : ce que l'IA y a lu, et le détail de celui qu'on ouvre ──────────────
   const COULEUR = { "Trouvé": "#1a7f37", "À vérifier": "#b35900", "Introuvable": "#c0392b" };
   let ouvert = null;      // le bordereau dont le détail est affiché
   let montrer = false;    // faire descendre l'écran jusqu'au détail au prochain affichage
-  const etroit = () => window.innerWidth < 768;
-  // Tant que le scan est joint mais pas collecté, on dit ce qui reste à faire : joindre le fichier ne
-  // lance rien, c'est « Collecter ce bordereau » qui range le bordereau et déclenche la lecture de l'IA.
-  const etape = () => {
-    d.fields_dict.etape.$wrapper.html(d.get_value("fichier")
-      ? `<div style="background:#eef6ff;border:1px solid #b6d4fe;border-radius:6px;padding:8px 10px;margin-bottom:8px;font-size:12px">
-           ${__("Scan joint. Vérifiez la banque, le numéro et la date, puis touchez <b>Collecter ce bordereau</b> : l’IA lira alors les chèques ou les traites et les cherchera dans ERPNext (une vingtaine de secondes, sans rien bloquer).")}</div>`
-      : "");
-  };
   let veille = null;      // relance tant qu'une lecture est en cours
+  const etroit = () => window.innerWidth < 768;
   const pastille = (b) => {
-    if (b.nature === "Espèces") return `<span class="rcj-muted">—</span>`;
+    if (b.nature === "Espèces") return `<span class="rcj-muted">${__("espèces")}</span>`;
     if (b.lecture_statut === "En attente") return `<span style="color:#666">⏳ ${__("lecture par l’IA…")}</span>`;
     if (b.lecture_statut === "Échec") return `<span style="color:#c0392b">✖ ${__("lecture impossible")}</span>`;
     if (b.lecture_statut !== "Lue") return `<span class="rcj-muted">${__("non lu")}</span>`;
@@ -1360,19 +1459,32 @@ function rcj_bordereaux() {
   const liste = () => {
     frappe.call({ method: API + ".recents" }).then((r) => {
       const recus = r.message || [];
-      const lignes = recus.map((b) => `<tr${b.name === ouvert ? ' style="background:#f4f8ff"' : ""}>
-          <td>${esc(frappe.datetime.str_to_user(b.date_remise) || "")}</td><td>${esc(b.banque)}</td><td>${esc(b.nature)}</td>
-          <td><a href="/app/brs-bordereau-remise/${encodeURIComponent(b.name)}" target="_blank">${esc(b.numero)}</a></td>
-          <td style="text-align:right">${(b.montant_total || b.total_lu) ? rcj_dt(b.montant_total || b.total_lu) : ""}</td>
-          <td><a href="#" data-bordereau="${esc(b.name)}">${pastille(b)}</a></td>
-          <td>${b.fichier ? `<a href="${esc(b.fichier)}" target="_blank">📎 ${__("ouvrir")}</a>` : ""}</td></tr>`).join("");
-      d.fields_dict.liste.$wrapper.html(lignes
-        ? `<div style="overflow-x:auto"><table class="table table-bordered" style="font-size:12px;margin:0"><thead><tr><th>${__("Date")}</th><th>${__("Banque")}</th><th>${
+      const montant = (b) => ((b.montant_total || b.total_lu) ? rcj_dt(b.montant_total || b.total_lu) : "");
+      let html;
+      if (!recus.length) {
+        html = `<div class="rcj-muted">${__("Aucun bordereau collecté pour l'instant.")}</div>`;
+      } else if (etroit()) {
+        // Sur téléphone, un tableau de sept colonnes déborde : une carte par bordereau, qu'on touche pour l'ouvrir.
+        html = recus.map((b) => `<div data-bordereau="${esc(b.name)}" style="cursor:pointer;border:1px solid ${b.name === ouvert ? "#8fb4f0" : "#e2e6e9"};
+              background:${b.name === ouvert ? "#f4f8ff" : "#fff"};border-radius:6px;padding:8px 10px;margin-bottom:6px;font-size:12px">
+            <div style="display:flex;justify-content:space-between;gap:8px"><b>${esc(b.banque)} · ${esc(b.nature)} · n° ${esc(b.numero)}</b><b>${montant(b)}</b></div>
+            <div style="display:flex;justify-content:space-between;gap:8px;margin-top:2px">
+              <span>${pastille(b)}</span><span class="rcj-muted" style="white-space:nowrap">${esc(frappe.datetime.str_to_user(b.date_remise) || "")}</span></div>
+          </div>`).join("") + `<div><a href="/app/brs-bordereau-remise" target="_blank">${__("Voir tous les bordereaux")}</a></div>`;
+      } else {
+        const lignes = recus.map((b) => `<tr${b.name === ouvert ? ' style="background:#f4f8ff"' : ""}>
+            <td>${esc(frappe.datetime.str_to_user(b.date_remise) || "")}</td><td>${esc(b.banque)}</td><td>${esc(b.nature)}</td>
+            <td><a href="/app/brs-bordereau-remise/${encodeURIComponent(b.name)}" target="_blank">${esc(b.numero)}</a></td>
+            <td style="text-align:right">${montant(b)}</td>
+            <td><a href="#" data-bordereau="${esc(b.name)}">${pastille(b)}</a></td>
+            <td>${b.fichier ? `<a href="${esc(b.fichier)}" target="_blank">📎 ${__("ouvrir")}</a>` : ""}</td></tr>`).join("");
+        html = `<table class="table table-bordered" style="font-size:12px;margin:0"><thead><tr><th>${__("Date")}</th><th>${__("Banque")}</th><th>${
             __("Nature")}</th><th>${__("N° du bordereau")}</th><th style="text-align:right">${__("Montant")}</th><th>${
-            __("Pièces dans ERPNext")}</th><th>${__("Scan")}</th></tr></thead><tbody>${lignes}</tbody></table></div>
-           <div style="margin-top:6px" class="rcj-muted">${__("Cliquez sur le résultat d’un bordereau pour voir ses chèques ou ses traites.")}
-             · <a href="/app/brs-bordereau-remise" target="_blank">${__("Voir tous les bordereaux")}</a></div>`
-        : `<div class="rcj-muted">${__("Aucun bordereau collecté pour l'instant.")}</div>`);
+            __("Pièces dans ERPNext")}</th><th>${__("Scan")}</th></tr></thead><tbody>${lignes}</tbody></table>
+          <div style="margin-top:6px" class="rcj-muted">${__("Cliquez sur le résultat d’un bordereau pour voir ses chèques ou ses traites.")}
+            · <a href="/app/brs-bordereau-remise" target="_blank">${__("Voir tous les bordereaux")}</a></div>`;
+      }
+      d.fields_dict.liste.$wrapper.html(html);
       if (ouvert) detail(ouvert);
       // Tant qu'une lecture est en cours, on regarde à nouveau dans quelques secondes (le signal temps réel
       // suffit d'ordinaire ; ceci couvre une connexion coupée).
@@ -1390,7 +1502,7 @@ function rcj_bordereaux() {
           <button class="btn btn-xs btn-default" data-action="relire">${__("Relire avec l’IA")}</button>` : "";
       let corps;
       if (b.nature === "Espèces") {
-        corps = `<div class="rcj-muted">${__("Un versement d’espèces n’a pas de pièces à lire.")}</div>`;
+        corps = `<div class="rcj-muted">${__("Versement d’espèces")}${b.montant_total ? " : " + rcj_dt(b.montant_total) : ""}. ${__("Pas de pièces à chercher.")}</div>`;
       } else if (b.lecture_statut === "En attente") {
         corps = `<div style="color:#666">⏳ ${__("L’IA lit le bordereau et cherche ses pièces dans ERPNext… (une vingtaine de secondes). Vous pouvez continuer à travailler : le résultat s’affichera ici.")}</div>`;
       } else if (b.lecture_statut === "Échec") {
@@ -1399,42 +1511,48 @@ function rcj_bordereaux() {
       } else if (!(b.pieces || []).length) {
         corps = `<div class="rcj-muted">${b.lecture_statut === "Lue" ? __("Aucune pièce lue sur ce scan.") : __("Ce bordereau n’a pas encore été lu par l’IA.")}</div>`;
       } else {
-        const lignes = b.pieces.map((p) => `<tr>
-            <td>${esc(p.numero || "")}${p.doute ? ` <span title="${__("L’IA hésite sur un chiffre de cette ligne")}" style="color:#b35900">?</span>` : ""}</td>
-            <td>${esc(p.banque || "")}</td><td>${esc(p.tireur || "")}</td>
-            <td style="text-align:right">${p.montant != null ? rcj_dt(p.montant) : ""}</td>
-            <td style="color:${COULEUR[p.etat] || "#666"};font-weight:600;white-space:nowrap">${esc(p.etat || "")}</td>
-            <td>${p.paiement ? `<a href="/app/payment-entry/${encodeURIComponent(p.paiement)}" target="_blank">${esc(p.paiement)}</a>` : ""}</td>
-            <td>${esc(p.client || "")}</td>
-            <td style="text-align:right">${p.montant_erp != null && p.paiement ? rcj_dt(p.montant_erp) : ""}</td>
-            <td style="font-size:11px">${esc(p.remarque || "")}</td></tr>`).join("");
         const remarques = (b.lecture_message || "").split("\n").filter(Boolean)
-          .map((l) => `<div style="color:#b35900">⚠ ${esc(l)}</div>`).join("");
-        // Sur téléphone, un tableau de neuf colonnes ne se lit pas : une carte par pièce.
-        const cartes = b.pieces.map((p) => `<div style="border:1px solid #e2e6e9;border-left:4px solid ${COULEUR[p.etat] || "#999"};border-radius:6px;padding:8px;margin-top:6px;font-size:12px">
-            <div style="display:flex;justify-content:space-between;gap:8px"><b>${__("N° {0}", [esc(p.numero || "?")])}${p.doute ? " ?" : ""}</b>
-              <b>${p.montant != null ? rcj_dt(p.montant) : ""}</b></div>
-            <div class="rcj-muted">${esc([p.banque, p.tireur].filter(Boolean).join(" · "))}</div>
-            <div style="margin-top:4px;color:${COULEUR[p.etat] || "#666"};font-weight:600">${esc(p.etat || "")}</div>
-            ${p.paiement ? `<div><a href="/app/payment-entry/${encodeURIComponent(p.paiement)}" target="_blank">${esc(p.paiement)}</a> · ${esc(p.client || "")} · ${rcj_dt(p.montant_erp)}</div>` : ""}
-            ${p.remarque ? `<div style="font-size:11px">${esc(p.remarque)}</div>` : ""}</div>`).join("");
-        corps = etroit() ? `${remarques}${cartes}
-          <div class="rcj-muted" style="margin-top:6px">${__("Contrôle indicatif : rien n’est comptabilisé.")}</div>` : `${remarques}
-          <table class="table table-bordered" style="font-size:12px;margin:6px 0 0"><thead><tr>
-            <th colspan="4" style="text-align:center;background:#fafafa">${__("Lu sur le bordereau")}</th>
-            <th colspan="5" style="text-align:center;background:#fafafa">${__("Dans ERPNext")}</th></tr><tr>
-            <th>${__("N°")}</th><th>${__("Banque")}</th><th>${__("Tireur")}</th><th style="text-align:right">${__("Montant")}</th>
-            <th>${__("Résultat")}</th><th>${__("Paiement")}</th><th>${__("Client")}</th><th style="text-align:right">${__("Montant")}</th>
-            <th>${__("Remarque")}</th></tr></thead><tbody>${lignes}</tbody></table>
-          <div class="rcj-muted" style="margin-top:4px">${__("Contrôle indicatif : rien n’est comptabilisé. Pour corriger un chiffre mal lu, ouvrez la fiche du bordereau.")}</div>`;
+          .map((l) => `<div style="color:#b35900;font-size:12px">⚠ ${esc(l)}</div>`).join("");
+        if (etroit()) {
+          // Sur téléphone, un tableau de neuf colonnes ne se lit pas : une carte par pièce.
+          const cartes = b.pieces.map((p) => `<div style="border:1px solid #e2e6e9;border-left:4px solid ${COULEUR[p.etat] || "#999"};border-radius:6px;padding:8px;margin-top:6px;font-size:12px">
+              <div style="display:flex;justify-content:space-between;gap:8px"><b>${__("N° {0}", [esc(p.numero || "?")])}${p.doute ? " ?" : ""}</b>
+                <b>${p.montant != null ? rcj_dt(p.montant) : ""}</b></div>
+              <div class="rcj-muted">${esc([p.banque, p.tireur].filter(Boolean).join(" · "))}</div>
+              <div style="margin-top:4px;color:${COULEUR[p.etat] || "#666"};font-weight:600">${esc(p.etat || "")}</div>
+              ${p.paiement ? `<div><a href="/app/payment-entry/${encodeURIComponent(p.paiement)}" target="_blank">${esc(p.paiement)}</a> · ${esc(p.client || "")} · ${rcj_dt(p.montant_erp)}</div>` : ""}
+              ${p.remarque ? `<div style="font-size:11px">${esc(p.remarque)}</div>` : ""}</div>`).join("");
+          corps = `${remarques}${cartes}<div class="rcj-muted" style="margin-top:6px;font-size:11px">${__("Contrôle indicatif : rien n’est comptabilisé.")}</div>`;
+        } else {
+          const lignes = b.pieces.map((p) => `<tr>
+              <td>${esc(p.numero || "")}${p.doute ? ` <span title="${__("L’IA hésite sur un chiffre de cette ligne")}" style="color:#b35900">?</span>` : ""}</td>
+              <td>${esc(p.banque || "")}</td><td>${esc(p.tireur || "")}</td>
+              <td style="text-align:right">${p.montant != null ? rcj_dt(p.montant) : ""}</td>
+              <td style="color:${COULEUR[p.etat] || "#666"};font-weight:600;white-space:nowrap">${esc(p.etat || "")}</td>
+              <td>${p.paiement ? `<a href="/app/payment-entry/${encodeURIComponent(p.paiement)}" target="_blank">${esc(p.paiement)}</a>` : ""}</td>
+              <td>${esc(p.client || "")}</td>
+              <td style="text-align:right">${p.montant_erp != null && p.paiement ? rcj_dt(p.montant_erp) : ""}</td>
+              <td style="font-size:11px">${esc(p.remarque || "")}</td></tr>`).join("");
+          corps = `${remarques}
+            <table class="table table-bordered" style="font-size:12px;margin:6px 0 0"><thead><tr>
+              <th colspan="4" style="text-align:center;background:#fafafa">${__("Lu sur le bordereau")}</th>
+              <th colspan="5" style="text-align:center;background:#fafafa">${__("Dans ERPNext")}</th></tr><tr>
+              <th>${__("N°")}</th><th>${__("Banque")}</th><th>${__("Tireur")}</th><th style="text-align:right">${__("Montant")}</th>
+              <th>${__("Résultat")}</th><th>${__("Paiement")}</th><th>${__("Client")}</th><th style="text-align:right">${__("Montant")}</th>
+              <th>${__("Remarque")}</th></tr></thead><tbody>${lignes}</tbody></table>
+            <div class="rcj-muted" style="margin-top:4px">${__("Contrôle indicatif : rien n’est comptabilisé. Pour corriger un chiffre mal lu, ouvrez la fiche du bordereau.")}</div>`;
+        }
       }
       $z.html(`<div style="margin-top:12px;border:1px solid #d1d8dd;border-radius:6px;padding:10px">
-          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px">
+          <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:6px">
             <b>${esc(b.banque)} — ${esc(b.nature)} — ${__("bordereau n° {0}", [esc(b.numero)])}</b>
-            <span>${pastille(b)}</span><span style="flex:1"></span>${boutons}
-            <a class="btn btn-xs btn-default" href="/app/brs-bordereau-remise/${encodeURIComponent(b.name)}" target="_blank">${__("Ouvrir la fiche")}</a>
+            <span class="rcj-muted">${esc(frappe.datetime.str_to_user(b.date_remise) || "")}</span>
+            <span style="flex:1"></span>${boutons}
+            ${b.fichier ? `<a class="btn btn-xs btn-default" href="${esc(b.fichier)}" target="_blank">📎 ${__("Scan")}</a>` : ""}
+            <a class="btn btn-xs btn-default" href="/app/brs-bordereau-remise/${encodeURIComponent(b.name)}" target="_blank">${__("Fiche")}</a>
             <button class="btn btn-xs btn-default" data-action="fermer">✕</button>
-          </div>${corps}</div>`);
+          </div>
+          <div style="margin-bottom:4px">${pastille(b)}</div>${corps}</div>`);
       if (montrer) {
         montrer = false;
         $z[0].scrollIntoView({ behavior: "smooth", block: "start" });
@@ -1442,8 +1560,9 @@ function rcj_bordereaux() {
     });
   };
   d.fields_dict.liste.$wrapper.on("click", "[data-bordereau]", (e) => {
+    if ($(e.target).closest("a[target]").length) return;      // un vrai lien (fiche, scan) s'ouvre normalement
     e.preventDefault();
-    ouvert = $(e.currentTarget).attr("data-bordereau");
+    ouvert = $(e.currentTarget).attr("data-bordereau"); montrer = etroit();
     liste();
   });
   d.fields_dict.detail.$wrapper.on("click", "[data-action]", (e) => {
@@ -1451,9 +1570,14 @@ function rcj_bordereaux() {
     if (action === "fermer") { ouvert = null; d.fields_dict.detail.$wrapper.empty(); liste(); return; }
     frappe.call({ method: `${API}.${action}`, args: { name: ouvert }, freeze: action === "verifier" }).then(() => liste());
   });
-  const signal = () => { if (d.display) liste(); };
+  const signal = (m) => {
+    if (!d.display) return;
+    if (m && m.fichier) { resultat(m.fichier, m); return; }
+    liste();
+  };
   frappe.realtime.on("brs_bordereau_lu", signal);
-  d.onhide = () => { clearTimeout(veille); frappe.realtime.off("brs_bordereau_lu", signal); };
+  d.onhide = () => { clearTimeout(veille); clearTimeout(garde); frappe.realtime.off("brs_bordereau_lu", signal); };
+  d.get_primary_btn().hide();
   liste();
   d.show();
 }
