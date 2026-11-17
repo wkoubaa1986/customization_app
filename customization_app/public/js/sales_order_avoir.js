@@ -13,6 +13,12 @@
  */
 
 frappe.ui.form.on("Sales Order", {
+  // Sur une commande NEUVE, l'avoir du client s'annonce dès que le client est choisi (17/11/2026 :
+  // « lorsque j'ouvre un client MH2C j'ai pas son avoir ») — c'est le moment où le vendeur décide
+  // du mode de paiement.
+  customer(frm) {
+    if (frm.is_new()) charger_contexte_avoir(frm);
+  },
   refresh(frm) {
     charger_contexte_avoir(frm);
 
@@ -32,7 +38,27 @@ frappe.ui.form.on("Sales Order", {
 function charger_contexte_avoir(frm) {
   const $ancien = frm.layout.wrapper.find(".so-avoir-bandeau");
   if (frm.is_new()) {
-    $ancien.remove();
+    // Commande pas encore enregistrée : on ne peut rien imputer, mais on DIT ce que le client a.
+    const client = frm.doc.customer;
+    if (!client) {
+      $ancien.remove();
+      return;
+    }
+    frappe.call({
+      method: "customization_app.avoir_client.avoirs_disponibles",
+      args: { customer: client },
+      callback: (r) => {
+        if (!frm.is_new() || frm.doc.customer !== client) return;   // le client a changé entre-temps
+        frm.layout.wrapper.find(".so-avoir-bandeau").remove();
+        const a = r.message;
+        if (!a || flt(a.disponible) <= 0) return;
+        afficher_bandeau_avoir(frm, {
+          disponible: a.disponible, cree: a.cree, utilise: a.utilise, ecritures: a.ecritures,
+          imputable: false,
+          empechement: __("Enregistrez et validez la commande : vous pourrez alors l'utiliser avec « Avoir > Utiliser un avoir ». Prévoyez une échéance « Dette non payée », chèque ou traite du montant à déduire."),
+        });
+      },
+    });
     return;
   }
   const commande = frm.doc.name;
