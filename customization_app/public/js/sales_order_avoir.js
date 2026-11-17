@@ -62,9 +62,11 @@ function afficher_bandeau_avoir(frm, ctx) {
   const esc = frappe.utils.escape_html;
   const ecritures = (ctx.ecritures || [])
     .map(
-      (e) => `<a href="/app/journal-entry/${encodeURIComponent(e.journal_entry)}"
-                 style="font-weight:700;">${esc(e.journal_entry)}</a>
-              <span style="color:#6b7280;">(${esc(frappe.datetime.str_to_user(e.date) || e.date)} ·
+      // Un avoir classique est une écriture de journal ; un avoir né d'une retenue à la source est
+      // porté par le règlement du client (e.doctype / e.name), et on le dit.
+      (e) => `<a href="/app/${e.journal_entry ? "journal-entry" : frappe.router.slug(e.doctype || "Journal Entry")}/${encodeURIComponent(e.journal_entry || e.name)}"
+                 style="font-weight:700;">${esc(e.journal_entry || e.name)}</a>
+              <span style="color:#6b7280;">(${e.libelle ? esc(e.libelle) + " · " : ""}${esc(frappe.datetime.str_to_user(e.date) || e.date)} ·
               ${format_currency(e.montant, frm.doc.currency)})</span>`
     )
     .join(" &nbsp;·&nbsp; ");

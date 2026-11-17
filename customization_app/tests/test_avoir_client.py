@@ -600,3 +600,71 @@ class TestTableauDeBordClient(unittest.TestCase):
         self.assertEqual(groupes["Orders"], ["Sales Order", "Delivery Note", "Sales Invoice"])
         self.assertEqual(groupes["Payments"][0], "Payment Entry")
         self.assertEqual(data["fieldname"], "customer")
+
+
+class TestAvoirNeDUneRetenue(unittest.TestCase):
+    """17/11/2026 : la part d'un règlement restée « non affectée » après la régularisation d'une retenue à la
+    source est un avoir du client (MH2C : 40,040 sur une traite de 4 005,000). Elle est notée sur le
+    certificat par bank_retenue_sync et comptée ici ; aucune autre avance non affectée ne devient un avoir."""
+
+    @staticmethod
+    def _sans_blancs(texte):
+        return " ".join(texte.split())
+
+    def test_la_fiche_client_et_le_bandeau_lisent_la_meme_requete(self):
+        import json
+        import os
+
+        chemin = os.path.join(os.path.dirname(os.path.dirname(__file__)), "fixtures", "server_script.json")
+        with open(chemin, encoding="utf-8") as f:
+            script = next(s for s in json.load(f) if s["name"] == "get customer information")["script"]
+        self.assertIn(self._sans_blancs(avoir_client.REQUETE_AVOIRS_RETENUE), self._sans_blancs(script))
+        # et la fiche client l'ajoute bien aux avoirs créés
+        self.assertIn("for r in retenue_avoirs:", script)
+
+    def test_la_requete_ne_prend_que_ce_qui_est_note_et_encore_non_affecte(self):
+        requete = self._sans_blancs(avoir_client.REQUETE_AVOIRS_RETENUE)
+        self.assertIn("c.avoir_retenue > 0", requete)                       # noté par la régularisation, jamais déduit
+        self.assertIn("LEAST(c.avoir_retenue, pe.unallocated_amount)", requete)   # plafonné à ce qui reste non affecté
+        self.assertIn("pe.docstatus = 1", requete)                          # règlement validé seulement
+        self.assertIn("pe.unallocated_amount > 0", requete)
+
+    def test_sans_bank_retenue_sync_aucun_avoir_de_retenue(self):
+        class _Absente:
+            @staticmethod
+            def has_column(doctype, colonne):
+                raise Exception("table absente")
+
+        class _PasMigree:
+            @staticmethod
+            def has_column(doctype, colonne):
+                return False
+
+        for base in (_Absente, _PasMigree):
+            with patch.object(avoir_client.frappe, "db", base):
+                self.assertEqual(avoir_client.avoirs_de_retenue("Client"), [])
+
+    def test_les_avoirs_de_retenue_s_ajoutent_aux_avoirs_crees(self):
+        retenues = [{"reglement": "PE-1", "posting_date": date(2026, 11, 16), "amount": 40.04}]
+        reponses = iter([[{"journal_entry": "JV-1", "date": date(2026, 9, 1), "montant": 60.0}], [{"montant": 60.0}]])
+
+        class _Base:
+            @staticmethod
+            def sql(*a, **k):
+                return next(reponses)
+
+        flags_absents = not hasattr(frappe.local, "flags")
+        if flags_absents:
+            frappe.local.flags = frappe._dict(in_test=False)
+        try:
+            with patch.object(avoir_client.frappe, "has_permission", lambda *a, **k: True), \
+                    patch.object(avoir_client.frappe, "db", _Base), \
+                    patch.object(avoir_client, "avoirs_de_retenue", lambda client: retenues):
+                r = avoir_client.avoirs_disponibles("Client")
+        finally:
+            if flags_absents:
+                del frappe.local.flags
+        self.assertEqual((r["cree"], r["utilise"], r["disponible"]), (100.04, 60.0, 40.04))
+        self.assertEqual(r["ecritures"][0]["journal_entry"], "JV-1")
+        self.assertEqual(r["ecritures"][1], {"journal_entry": None, "doctype": "Payment Entry", "name": "PE-1",
+                                             "libelle": "retenue à la source", "date": "2026-11-16", "montant": 40.04})

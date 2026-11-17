@@ -40,6 +40,41 @@ DEFAULT_DEBIT_ACCOUNT = "Compte temporaire - compte  d'overture - A&S"
 MODE_AVOIR = "Avoir client"
 MODE_DETTE = "Dette non payée"
 
+# ── L'avoir né d'une retenue à la source (17/11/2026).
+# Un client règle le TTC entier (traite, chèque, espèces) PUIS déclare une retenue de 1 % : la
+# régularisation (bank_retenue_sync, `tej/paiements.ajuster`) loge la retenue dans la facture et
+# libère d'autant le règlement. S'il ne doit rien d'autre, cette part reste « non affectée » sur le
+# règlement : un vrai crédit, que rien ne nommait. La régularisation le note sur le certificat
+# (`avoir_retenue`, `avoir_reglement`) ; il compte ici comme un avoir CRÉÉ.
+#   - plafonné à ce qui reste réellement non affecté sur le règlement : si l'avance a depuis été
+#     affectée à une autre facture, l'avoir disparaît avec elle ;
+#   - seulement pour un règlement validé ;
+#   - AUCUNE autre avance non affectée ne devient un avoir (acomptes sur commande, etc.).
+# L'utilisation ne change pas : l'écriture « Avoir client » débite le client SANS référence, ce qui
+# compense exactement la part non affectée du règlement.
+# ⚠️ Même requête dans le Server Script « get customer information » (`get_avoir`) : la fiche
+#    client et le bandeau de la commande doivent dire le même montant.
+REQUETE_AVOIRS_RETENUE = """
+        SELECT c.name AS certificat, c.avoir_reglement AS reglement, pe.posting_date AS posting_date,
+               LEAST(c.avoir_retenue, pe.unallocated_amount) AS amount
+        FROM `tabRetenue Certificate` c
+        JOIN `tabPayment Entry` pe ON pe.name = c.avoir_reglement
+        WHERE c.customer = %s AND c.avoir_retenue > 0
+          AND pe.docstatus = 1 AND pe.unallocated_amount > 0
+        ORDER BY pe.posting_date
+    """
+
+
+def avoirs_de_retenue(customer):
+    """Les avoirs nés d'une retenue à la source, pour ce client. [] si bank_retenue_sync n'est pas
+    installé, ou pas encore migré (la colonne n'existe pas) : l'avoir classique ne doit jamais en pâtir."""
+    try:
+        if not frappe.db.has_column("Retenue Certificate", "avoir_retenue"):
+            return []
+    except Exception:
+        return []
+    return frappe.db.sql(REQUETE_AVOIRS_RETENUE, (customer,), as_dict=True)
+
 # Quelles échéances un avoir a le droit de remplacer (arbitrage du gérant,
 # ticket #23) : ce qui n'est pas encore de l'argent reçu.
 #   - « Dette non payée » : le client doit encore la somme ;
@@ -191,7 +226,9 @@ def avoirs_disponibles(customer):
           AND jea.reference_name IS NOT NULL AND jea.reference_name != ''
     """, (customer, RECEIVABLE_ACCOUNT, MODE_AVOIR), as_dict=True)
 
-    cree = _millimes(sum(flt(f.get("montant")) for f in flottants))
+    retenues = avoirs_de_retenue(customer)
+    cree = _millimes(sum(flt(f.get("montant")) for f in flottants)
+                     + sum(flt(r.get("amount")) for r in retenues))
     utilise = _millimes(utilises[0].get("montant") if utilises else 0)
     return {
         "cree": cree,
@@ -201,7 +238,15 @@ def avoirs_disponibles(customer):
             "journal_entry": f.get("journal_entry"),
             "date": str(f.get("date") or ""),
             "montant": _millimes(f.get("montant")),
-        } for f in flottants],
+        } for f in flottants] + [{
+            # Pas d'écriture de journal : l'avoir est porté par le règlement lui-même.
+            "journal_entry": None,
+            "doctype": "Payment Entry",
+            "name": r.get("reglement"),
+            "libelle": "retenue à la source",
+            "date": str(r.get("posting_date") or ""),
+            "montant": _millimes(r.get("amount")),
+        } for r in retenues],
     }
 
 
