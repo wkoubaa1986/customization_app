@@ -545,6 +545,8 @@ app_include_js = [_js("customer_quick_entry.js"),
                   _js("stock_item_query_override.js"),
                   _js("calendrier_rdv_button.js"),
                   _js("sales_order_avoir.js"),
+                  # La case « Appliquer Ristourne » doublée dans « Termes de paiement », liée à celle d'en haut.
+                  _js("sales_order_ristourne_miroir.js"),
                   # Livraison partielle : bandeau livré / réglé / dette réelle et bouton
                   # « Régulariser sur le livré » (livraison_partielle.py).
                   _js("sales_order_livraison_partielle.js"),
