@@ -37,8 +37,11 @@ ZITOUNA_ACCOUNT = "STE430127B - Zitouna - A&S"
 # traite ou virement — est de l'argent entré en banque comme un paiement Zitouna : il se facture de même
 # (décision utilisateur : « il faut ajouter la BIAT bien sûr, pour les chèques, virements et traites »).
 # Sans cela il sortait du compte des paiements en attente et sa commande repassait en PASSAGER.
+# CARTES (17/11/2026) : un paiement reçu par carte attend dans « Cartes à encaisser - A&S » que la banque verse
+# la remise du terminal (bank_retenue_sync, `bank/monetique.py`). Avant, il était posé directement sur Zitouna et
+# se facturait donc tout de suite : il continue — la banque a autorisé la carte, l'argent est acquis.
 # ⚠️ Même liste dans le Server Script « Facturation Auto » (requête `payments_of_the_month`).
-COMPTES_BANCAIRES = (ZITOUNA_ACCOUNT, "BIAT - A&S")
+COMPTES_BANCAIRES = (ZITOUNA_ACCOUNT, "BIAT - A&S", "Cartes à encaisser - A&S")
 # Client exclu de la facturation mensuelle sauf exception explicite (aligné Facturation Auto).
 SPECIAL_INCLUDED_CUSTOMER = "Ayman Belguith"
 

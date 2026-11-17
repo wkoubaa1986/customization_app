@@ -68,7 +68,9 @@ class TestLesDeuxBanques(unittest.TestCase):
 
         from customization_app import facturation_numbering as FN
 
-        self.assertEqual(FN.COMPTES_BANCAIRES, ("STE430127B - Zitouna - A&S", "BIAT - A&S"))
+        # 17/11/2026 : un paiement par carte attend la remise du terminal dans « Cartes à encaisser » ; il se
+        # facture comme avant, quand il était posé directement sur Zitouna.
+        self.assertEqual(FN.COMPTES_BANCAIRES, ("STE430127B - Zitouna - A&S", "BIAT - A&S", "Cartes à encaisser - A&S"))
         script = _script()
         requete = script[script.index("payments_of_the_month = frappe.db.sql("):]
         liste = re.search(r"PE\.paid_to IN \(([^)]*)\)", requete)
