@@ -338,7 +338,11 @@ doc_events = {
         "validate": ["customization_app.marge_minimale.sales_order_validate",
                      # Échéancier : moyen de paiement obligatoire sur une vente seulement (plus un reqd global
                      # qui cassait les factures d'achat — 31/10/2026).
-                     "customization_app.echeancier.exiger_mode_de_paiement"],
+                     "customization_app.echeancier.exiger_mode_de_paiement",
+                     # Une ligne « Avoir client » ne dépasse jamais l'avoir utilisable du client (17/11/2026).
+                     "customization_app.avoir_client.verifier_avoir_echeancier"],
+        # Même contrôle quand l'échéancier d'une commande DÉJÀ validée est modifié (validate n'y passe pas).
+        "before_update_after_submit": "customization_app.avoir_client.verifier_avoir_echeancier",
         # on_update se déclenche à l'enregistrement d'un brouillon ET à la
         # validation : ajouter une ligne de main d'œuvre à un devis non validé
         # met donc aussitôt l'anomalie à jour. on_submit seul l'aurait raté.

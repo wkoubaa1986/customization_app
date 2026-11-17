@@ -668,3 +668,85 @@ class TestAvoirNeDUneRetenue(unittest.TestCase):
         self.assertEqual(r["ecritures"][0]["journal_entry"], "JV-1")
         self.assertEqual(r["ecritures"][1], {"journal_entry": None, "doctype": "Payment Entry", "name": "PE-1",
                                              "libelle": "retenue à la source", "date": "2026-11-16", "montant": 40.04})
+
+
+class TestCreditUtilisable(unittest.TestCase):
+    """17/11/2026 : la case « Paiement avec Avoir » lit UN chiffre — avoirs disponibles + avances nettes — et une
+    ligne « Avoir client » qui le dépasse est refusée à l'enregistrement."""
+
+    def test_un_seul_chiffre_jamais_negatif(self):
+        self.assertEqual(avoir_client.montant_utilisable(35.04, 0), 35.04)          # avoir né d'une retenue (MH2C)
+        self.assertEqual(avoir_client.montant_utilisable(0, 176.63), 176.63)        # avance par écriture de journal
+        self.assertEqual(avoir_client.montant_utilisable(-166.0, 166.0), 0.0)       # avance déjà consommée : plus rien
+        self.assertEqual(avoir_client.montant_utilisable(10.0, -25.0), 0.0)         # il doit plus qu'il n'a
+
+    def test_somme_des_lignes_d_avoir(self):
+        lignes = [{"mode_of_payment": "Dette non payée", "payment_amount": 33.96},
+                  {"mode_of_payment": "Avoir client", "payment_amount": 35.04},
+                  frappe._dict(mode_of_payment="Avoir client", payment_amount=5.0)]
+        self.assertEqual(avoir_client.somme_avoir(lignes), 40.04)
+        self.assertEqual(avoir_client.somme_avoir([]), 0.0)
+        self.assertEqual(avoir_client.somme_avoir(None), 0.0)
+
+    def test_ce_qu_un_enregistrement_consomme(self):
+        # commande pas encore validée : tout l'échéancier reste à trouver, même déjà enregistré en brouillon
+        self.assertEqual(avoir_client.besoin_d_avoir(35.04, 0.0, False), 35.04)
+        self.assertEqual(avoir_client.besoin_d_avoir(35.04, 35.04, False), 35.04)
+        # commande déjà validée : seulement l'augmentation
+        self.assertEqual(avoir_client.besoin_d_avoir(35.04, 35.04, True), 0.0)
+        self.assertEqual(avoir_client.besoin_d_avoir(40.0, 35.04, True), 4.96)
+        self.assertEqual(avoir_client.besoin_d_avoir(20.0, 35.04, True), 0.0)
+
+    def _commande(self, lignes, avant=None, neuve=True):
+        doc = frappe._dict(customer="Client", payment_schedule=lignes)
+        doc.get = lambda cle, defaut=None: dict.get(doc, cle, defaut)
+        doc.is_new = lambda: neuve
+        doc.get_doc_before_save = lambda: avant
+        return doc
+
+    def test_le_garde_fou(self):
+        erreurs = []
+
+        def lever(message, **k):
+            erreurs.append(message)
+            raise frappe.ValidationError(message)
+
+        avoir = [{"mode_of_payment": "Avoir client", "payment_amount": 69.0}]
+        with patch.object(avoir_client, "credit_utilisable", lambda client: 35.04), \
+                patch.object(avoir_client.frappe, "throw", lever), patch.object(avoir_client, "_", lambda t: t):
+            with self.assertRaises(frappe.ValidationError):                       # 69 demandés, 35,04 utilisables
+                avoir_client.verifier_avoir_echeancier(self._commande(avoir))
+            self.assertIn("35,040", erreurs[0])
+            # dans la limite : rien
+            avoir_client.verifier_avoir_echeancier(self._commande([{"mode_of_payment": "Avoir client", "payment_amount": 35.04}]))
+            # aucune ligne d'avoir : le client n'est même pas lu
+            avoir_client.verifier_avoir_echeancier(self._commande([{"mode_of_payment": "Espèces", "payment_amount": 69.0}]))
+        # commande déjà validée, enregistrée de nouveau sans rien changer : jamais bloquée, même sans avoir restant
+        avant = frappe._dict(docstatus=1, payment_schedule=avoir)
+        avant.get = lambda cle, defaut=None: dict.get(avant, cle, defaut)
+        with patch.object(avoir_client, "credit_utilisable", lambda client: 0.0), \
+                patch.object(avoir_client.frappe, "throw", lever), patch.object(avoir_client, "_", lambda t: t):
+            avoir_client.verifier_avoir_echeancier(self._commande(avoir, avant=avant, neuve=False))
+
+    def test_le_script_de_la_fiche_rend_le_meme_chiffre(self):
+        import json
+        import os
+
+        chemin = os.path.join(os.path.dirname(os.path.dirname(__file__)), "fixtures", "server_script.json")
+        with open(chemin, encoding="utf-8") as f:
+            script = next(s for s in json.load(f) if s["name"] == "get customer information")["script"]
+        self.assertIn("Final_result['Avoir utilisable'] = round(max(0, Av['avoir_available'] + avance - dette), 3)", script)
+
+    def test_le_correctif_de_la_case(self):
+        from customization_app.patches import case_paiement_avec_avoir as P
+
+        ancien = ("let a = final_result['Total des avances du client'];\r\n"
+                  "frm.add_child('payment_schedule', {\r\n    due_date: frappe.datetime.now_date(),\r\n});\r\n")
+        nouveau, fait = P.corriger(ancien)
+        self.assertEqual(fait, "modifié")
+        self.assertIn("let a = avoir_utilisable(final_result);", nouveau)
+        self.assertIn("due_date: date_libre_avoir(frm),", nouveau)
+        self.assertIn("function avoir_utilisable(final_result)", nouveau)
+        self.assertNotIn("\n", nouveau.replace("\r\n", ""))                      # les fins de ligne du script sont gardées
+        self.assertEqual(P.corriger(nouveau), (nouveau, "déjà fait"))             # rejouable sans effet
+        self.assertEqual(P.corriger("autre script")[1], "jeton introuvable")

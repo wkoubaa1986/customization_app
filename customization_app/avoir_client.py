@@ -187,6 +187,89 @@ def _millimes(valeur):
     return round(flt(valeur), 3)
 
 
+# ── Le crédit UTILISABLE d'un client, et la case « Paiement avec Avoir » (17/11/2026).
+# La commande porte depuis longtemps une case « Paiement avec Avoir » qui ajuste l'échéancier toute seule
+# (Client Script « Verification Sales order », en base). Elle lisait « Total des avances du client » : les
+# crédits d'écritures de journal SANS référence, hors avoirs. Ce chiffre ne baissait jamais quand on
+# l'utilisait (les deux lignes de l'écriture « Avoir client » en sont exclues) et ignorait les avoirs
+# créés par « Créer un avoir » comme ceux nés d'une retenue à la source. Résultat : la case ne s'affichait
+# que pour 2 clients, dont un qui avait déjà tout consommé, et pour aucun des 5 qui avaient un avoir.
+#
+#     crédit utilisable = avoirs disponibles (créés − utilisés) + avances nettes (écritures sans référence)
+#
+# UN SEUL chiffre, qui baisse quand on s'en sert. Le Server Script « get customer information » le rend sous
+# « Avoir utilisable » (même formule), la case le lit, et `verifier_avoir_echeancier` refuse à
+# l'enregistrement une ligne « Avoir client » qui le dépasse — jusque-là rien ne l'empêchait.
+REQUETE_AVANCES_NETTES = """
+        SELECT COALESCE(SUM(CASE WHEN jea.credit > 0 AND NOT EXISTS (
+                                     SELECT 1 FROM `tabJournal Entry Account` j2
+                                     WHERE j2.parent = je.name AND j2.account = %s)
+                                 THEN jea.credit ELSE 0 END), 0)
+             - COALESCE(SUM(CASE WHEN jea.credit = 0 AND IFNULL(je.mode_of_payment, '') != %s
+                                 THEN jea.debit ELSE 0 END), 0)
+        FROM `tabJournal Entry Account` jea
+        JOIN `tabJournal Entry` je ON je.name = jea.parent
+        WHERE je.docstatus = 1 AND jea.party_type = 'Customer' AND jea.party = %s AND jea.account = %s
+          AND (jea.reference_name IS NULL OR jea.reference_name = '')
+    """
+
+
+def avances_nettes(customer):
+    """« Total des avances du client » de la fiche : crédits d'écritures sans référence (hors avoirs
+    flottants) moins débits sans référence (hors écritures « Avoir client »). Peut être négatif."""
+    if not customer:
+        return 0.0
+    valeur = frappe.db.sql(REQUETE_AVANCES_NETTES, (DEFAULT_DEBIT_ACCOUNT, MODE_AVOIR, customer, RECEIVABLE_ACCOUNT))
+    return _millimes(valeur[0][0] if valeur and valeur[0] else 0)
+
+
+def montant_utilisable(disponible, avances):
+    """Le crédit qu'un client peut encore poser sur une commande. Pur. Jamais négatif."""
+    return max(0.0, _millimes(flt(disponible) + flt(avances)))
+
+
+def credit_utilisable(customer):
+    """Avoirs disponibles + avances nettes : ce que la case « Paiement avec Avoir » propose."""
+    return montant_utilisable(_calcul_avoirs(customer)["disponible"], avances_nettes(customer))
+
+
+def somme_avoir(lignes):
+    """Le total des lignes « Avoir client » d'un échéancier."""
+    return _millimes(sum(flt(getattr(l, "payment_amount", None) if not isinstance(l, dict) else l.get("payment_amount"))
+                         for l in (lignes or [])
+                         if (getattr(l, "mode_of_payment", None) if not isinstance(l, dict) else l.get("mode_of_payment")) == MODE_AVOIR))
+
+
+def besoin_d_avoir(demande, ancienne, deja_validee):
+    """Combien d'avoir cet enregistrement consomme EN PLUS. Pur.
+
+    Commande pas encore validée : tout ce que porte l'échéancier (rien n'est consommé avant la
+    validation, donc tout reste à trouver). Commande déjà validée : seulement l'augmentation —
+    l'ancienne part a déjà son écriture."""
+    demande, ancienne = _millimes(demande), _millimes(ancienne)
+    return max(0.0, _millimes(demande - ancienne)) if deja_validee else demande
+
+
+def verifier_avoir_echeancier(doc, method=None):
+    """Sales Order, `validate` et `before_update_after_submit` : une ligne « Avoir client » ne peut pas
+    dépasser ce que le client a réellement. Sans ce contrôle, une commande entière pouvait être réglée
+    par un avoir qui n'existe pas (essai du 17/11/2026 : 69,000 acceptés avec 0 disponible)."""
+    demande = somme_avoir(doc.get("payment_schedule"))
+    if demande <= TOLERANCE:
+        return
+    avant = doc.get_doc_before_save() if not doc.is_new() else None
+    besoin = besoin_d_avoir(demande, somme_avoir(avant.get("payment_schedule")) if avant else 0.0,
+                            bool(avant and avant.docstatus == 1))
+    if besoin <= TOLERANCE:
+        return
+    utilisable = credit_utilisable(doc.customer)
+    if besoin > utilisable + TOLERANCE:
+        frappe.throw(_("L'échéancier porte {0} en « Avoir client », mais {1} n'a que {2} d'avoir utilisable. "
+                       "Diminuez la ligne « Avoir client » ou choisissez un autre moyen de paiement.").format(
+                           montant_lisible(besoin), doc.customer, montant_lisible(utilisable)),
+                     title=_("Avoir insuffisant"))
+
+
 @frappe.whitelist()
 def avoirs_disponibles(customer):
     """Avoirs d'un client : créés (flottants), utilisés (imputés), disponible.
@@ -202,6 +285,14 @@ def avoirs_disponibles(customer):
     # Le solde d'avoir est une donnée du client : on ne le livre qu'à qui a le
     # droit de lire sa fiche.
     frappe.has_permission("Customer", "read", doc=customer, throw=True)
+    return _calcul_avoirs(customer)
+
+
+def _calcul_avoirs(customer):
+    """Le calcul, sans contrôle de droit : pour l'écran (après contrôle) et pour le garde-fou de la commande,
+    qui doit tenir quel que soit l'utilisateur ou le script qui enregistre."""
+    if not customer:
+        return {"cree": 0.0, "utilise": 0.0, "disponible": 0.0, "ecritures": []}
 
     flottants = frappe.db.sql("""
         SELECT je.name AS journal_entry, je.posting_date AS date,
