@@ -244,7 +244,7 @@ def _lire_dict(valeur) -> dict:
     return valeur if isinstance(valeur, dict) else {}
 
 
-def _commande(doc, emp, lignes: list, remise=None):
+def _commande(doc, emp, lignes: list, remise=None, justifiee: bool = True):
     """La commande telle que le formulaire la poserait : client et date d'office, ses articles depuis SON entrepôt,
     les lignes « hors de mon stock » depuis le magasin. ERPNext pose la liste de prix du client, les prix et la TVA."""
     from customization_app import cloture_tache as C
@@ -267,11 +267,23 @@ def _commande(doc, emp, lignes: list, remise=None):
     if not so.get("taxes") and so.get("taxes_and_charges"):
         so.append_taxes_from_master()
     so.calculate_taxes_and_totals()
-    if remise and flt((remise or {}).get("montant")) > 0:
-        # La même règle que la clôture mobile du sous-traitant : sur le total, jamais plus que lui, motif et
-        # commentaire obligatoires — gardés sur la commande.
+    montant = round(flt((remise or {}).get("montant")), 3)
+    if montant > 0:
         from customization_app import sous_traitant as ST
-        ST._appliquer_remise(so, remise)
+        if justifiee:
+            # Pour ENREGISTRER : la même règle que la clôture mobile du sous-traitant — sur le total, jamais plus
+            # que lui, motif et précision obligatoires, gardés sur la commande.
+            ST._appliquer_remise(so, remise)
+        else:
+            # Pour l'APERÇU : le total baisse dès que le montant est tapé (« je n'ai pas l'impression qu'elle
+            # diminue le total », 18/11/2026) ; le motif sera exigé au moment de valider.
+            if montant > flt(so.grand_total) + TOLERANCE:
+                frappe.throw(_("Remise : {0} dépasse le total {1}.").format(_nombre(montant), _nombre(so.grand_total)),
+                             title=_("Remise"))
+            so.apply_discount_on = "Grand Total"
+            so.additional_discount_percentage = 0
+            so.discount_amount = montant
+            so.calculate_taxes_and_totals()
     return so
 
 
@@ -330,7 +342,7 @@ def apercu(tache, articles=None, remise=None, paiements=None):
     remise = _lire_dict(remise)
     frappe.db.savepoint("apercu_commande_technicien")
     try:
-        so = _commande(doc, emp, lignes, remise)
+        so = _commande(doc, emp, lignes, remise, justifiee=False)
         base = flt(so.grand_total, 3)
         # Une vente s'enregistre avec un moyen de paiement : à défaut de règlement complet, tout en espèces.
         _poser_echeancier(so, echeances_apercu(_lire(paiements), base)

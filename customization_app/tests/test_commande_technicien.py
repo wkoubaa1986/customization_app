@@ -167,13 +167,31 @@ class TestEcran(unittest.TestCase):
     def test_le_reglement_se_calcule_tout_seul(self):
         """« Dans règlement, fais le calcul automatique lorsqu'il ajoute plusieurs règlements. »"""
         js = self._lire("public", "js", "commande_technicien.js")
-        self.assertIn("p.saisi = true;", js)                                        # ce qu'il tape ne bouge pas
-        self.assertIn("libres.forEach((p, i) => { p.montant = i === 0 ? Math.max(0, r3(base - fixe)) : 0; });", js)
-        self.assertIn("if (this.paiements.length === 1) { this.paiements[0].montant = r3(base);", js)   # une ligne suit le total
+        # « Les règlements doivent être tout le temps égaux au total : changer une ligne change l'autre, et ainsi de suite. »
+        self.assertIn("equilibrer(depuis) {", js)
+        self.assertIn("if (l.length === 1) { l[0].montant = r3(base); return; }", js)                 # une ligne suit le total
+        self.assertIn("if (ecart > 0) { l[ordre[0]].montant = r3((l[ordre[0]].montant || 0) + ecart); return; }", js)
+        self.assertIn("const retire = Math.min(l[i].montant || 0, -ecart);", js)                      # et ainsi de suite
+        self.assertIn('this.reglement_change(Number($(e.currentTarget).closest("[data-pi]").attr("data-pi")));', js)
+        self.assertNotIn("p.saisi", js)
         self.assertIn('value="${p.montant ? r3(p.montant + sa_maj) : ""}"', js)       # la carte affiche part + majoration
         self.assertIn("n3(r.base + maj)", js)                                         # le total à payer inclut la majoration
         self.assertIn("Tapez au moins {0} lettres", js)
         self.assertIn('data-r="montant"', js)                                         # la case remise
+
+    def test_apres_un_ajout_la_recherche_se_vide_et_revient_a_mon_stock(self):
+        js = self._lire("public", "js", "commande_technicien.js")
+        bloc = js.split("        ajouter(a, silencieux) {", 1)[1].split("        quantite(i, delta, valeur) {", 1)[0]
+        self.assertIn('this.$c.find(".ct-rech").val("");', bloc)
+        self.assertIn("this.choisir_source(false);", bloc)
+
+    def test_la_remise_baisse_le_total_des_la_saisie_mais_se_justifie_pour_valider(self):
+        """« La remise, je n'ai pas l'impression qu'elle diminue le total à payer. »"""
+        js = self._lire("public", "js", "commande_technicien.js")
+        self.assertIn("remise: JSON.stringify({ montant: this.remise.montant || 0 })", js)            # aperçu : le montant seul
+        self.assertIn("if (this.remise_manque()) return frappe.msgprint(", js)                         # validation : justifiée
+        self.assertIn("justifiee=False", inspect.getsource(K.apercu))
+        self.assertIn("_commande(doc, emp, lignes, _lire_dict(remise))", inspect.getsource(K.creer))   # création : règle complète
 
 
 if __name__ == "__main__":

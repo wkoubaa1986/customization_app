@@ -102,12 +102,7 @@
               <div class="ct-sec"><h5>💰 ${__("Règlement")}</h5><div class="ct-reglement"></div></div>
               <div style="text-align:center;margin:4px 0 2px"><a href="#" class="ct-complet ct-muted">${__("Client avec ristourne ou avoir ? Ouvrir le formulaire complet")}</a></div>`);
             const $c = this.$c;
-            $c.on("click", ".ct-chip[data-hors]", (e) => {
-                this.hors = $(e.currentTarget).attr("data-hors") === "1";
-                $c.find(".ct-chip[data-hors]").each((_, x) => $(x).toggleClass("on", ($(x).attr("data-hors") === "1") === this.hors));
-                $c.find(".ct-alerte-hors").toggle(this.hors);
-                this.chercher();
-            });
+            $c.on("click", ".ct-chip[data-hors]", (e) => this.choisir_source($(e.currentTarget).attr("data-hors") === "1"));
             $c.on("input", ".ct-rech", frappe.utils.debounce(() => this.chercher(), 300));
             $c.on("click", ".ct-res", (e) => this.ajouter(this.resultats[Number($(e.currentTarget).attr("data-i"))]));
             $c.on("click", ".ct-plus-res", () => this.chercher(true));
@@ -120,11 +115,10 @@
                 const p = this.paiements[Number($(e.currentTarget).closest("[data-pi]").attr("data-pi"))];
                 const cle = $(e.currentTarget).attr("data-p");
                 if (cle === "montant") {
-                    // Le montant tapé est la PART de la commande réglée par ce moyen ; il est « saisi » : les autres
-                    // lignes, elles, s'ajustent toutes seules.
+                    // Le montant tapé est la PART de la commande réglée par ce moyen ; les autres lignes s'ajustent
+                    // toutes seules pour que le règlement fasse toujours le total.
                     p.montant = Math.max(0, r3(String($(e.currentTarget).val()).replace(",", ".")));
-                    p.saisi = true;
-                    this.reglement_change();
+                    this.reglement_change(Number($(e.currentTarget).closest("[data-pi]").attr("data-pi")));
                 } else {
                     p[cle] = $(e.currentTarget).val();
                 }
@@ -134,13 +128,26 @@
             $c.on("change", "[data-r]", (e) => {
                 const cle = $(e.currentTarget).attr("data-r");
                 this.remise[cle] = cle === "montant" ? Math.max(0, r3(String($(e.currentTarget).val()).replace(",", "."))) : $(e.currentTarget).val();
-                this.change();
+                if (cle === "montant") this.change(); else this.peindre_panier();
+            });
+            $c.on("input", "[data-r='commentaire']", (e) => {
+                this.remise.commentaire = $(e.currentTarget).val();
+                const manque = this.remise_manque();
+                $(e.currentTarget).siblings(".ct-alerte").text(manque).toggle(!!manque);
             });
             $c.on("click", ".ct-complet", (e) => { e.preventDefault(); this.d.hide(); if (this.opts.formulaire) this.opts.formulaire(); });
             this.peindre_panier(); this.peindre_reglement();
         }
 
         // ── articles
+        /** « Mon stock » ou « Hors de mon stock » : allume le bon bouton, montre l'avertissement, relance la recherche. */
+        choisir_source(hors) {
+            this.hors = !!hors;
+            this.$c.find(".ct-chip[data-hors]").each((_, x) => $(x).toggleClass("on", ($(x).attr("data-hors") === "1") === this.hors));
+            this.$c.find(".ct-alerte-hors").toggle(this.hors);
+            this.chercher();
+        }
+
         chercher(suite) {
             const tour = ++this.tour;
             const texte = String(this.$c.find(".ct-rech").val() || "").trim();
@@ -178,7 +185,20 @@
             if (deja) deja.qty += 1;
             else this.panier.push({ item_code: a.item_code, item_name: a.item_name, image: a.image, qty: 1, prix: a.prix,
                                     hors_stock: !!a.hors_stock && !a.service, service: !!a.service, stock: a.stock });
-            if (!silencieux) { frappe.show_alert({ message: __("{0} ajouté", [a.item_name]), indicator: "green" }, 2); this.change(); }
+            if (silencieux) return;
+            frappe.show_alert({ message: __("{0} ajouté", [a.item_name]), indicator: "green" }, 2);
+            // La recherche se vide tout de suite (demande du 18/11/2026) : prête pour l'article suivant. Le panier,
+            // au-dessus, vient de grandir : on garde le champ de recherche à la même place à l'écran.
+            const champ = this.$c.find(".ct-rech").get(0);
+            const avant = champ ? champ.getBoundingClientRect().top : 0;
+            this.$c.find(".ct-rech").val("");
+            this.choisir_source(false);                 // …et l'on revient à « Mon stock » : le hors stock reste l'exception
+            this.change();
+            if (champ) {
+                const delta = champ.getBoundingClientRect().top - avant;
+                const zone = [this.d.$wrapper.find(".modal-body").get(0), this.d.$wrapper.get(0)].find((z) => z && z.scrollHeight > z.clientHeight + 2);
+                if (zone && Math.abs(delta) > 1) zone.scrollTop += delta;
+            }
         }
 
         quantite(i, delta, valeur) {
@@ -215,7 +235,7 @@
                 ${rm.montant > 0 ? `<select class="plein" data-r="motif"><option value="">${esc(__("Pourquoi cette remise ? *"))}</option>${
                     (c.motifs_remise || []).map((m) => `<option ${m === rm.motif ? "selected" : ""}>${esc(m)}</option>`).join("")}</select>
                   <input class="plein" data-r="commentaire" placeholder="${esc(__("Précisez ({0} caractères minimum) *", [c.commentaire_min || 10]))}" value="${esc(rm.commentaire || "")}">
-                  ${this.remise_complete() ? "" : `<div class="plein ct-alerte" style="margin:0">${__("La remise s’appliquera une fois le motif choisi et précisé.")}</div>`}` : ""}
+                  ${this.remise_manque() ? `<div class="plein ct-alerte" style="margin:0">${esc(this.remise_manque())}</div>` : ""}` : ""}
               </div>`;
             this.$c.find(".ct-totaux").html(!this.panier.length ? "" : case_remise + (r
                 ? `${r.remise > 0 ? `<div class="ct-sous"><span>${__("Remise")}</span><span>− ${n3(r.remise)}</span></div>` : ""}
@@ -235,7 +255,8 @@
                 const n = ++this.calcul;
                 const envoyes = this.cle_reglement();
                 frappe.call({ method: API + "apercu",
-                    args: { tache: this.tache, articles: JSON.stringify(this.envoi()), remise: JSON.stringify(this.remise_envoyee()),
+                    // la remise baisse le total dès que le montant est tapé ; son motif n'est exigé qu'à la validation
+                    args: { tache: this.tache, articles: JSON.stringify(this.envoi()), remise: JSON.stringify({ montant: this.remise.montant || 0 }),
                             paiements: JSON.stringify(this.paiements.map((p) => ({ mode: p.mode, montant: p.montant }))) },
                     error: (xhr) => {
                         if (n !== this.calcul) return;
@@ -249,7 +270,7 @@
                     this.resume = r.message;
                     this.perime = false;
                     this.resume.pour = envoyes;           // le règlement pour lequel la majoration a été calculée
-                    if (base_avant !== this.resume.base) this.equilibrer();
+                    if (base_avant !== this.resume.base) this.equilibrer();      // le total a changé : le règlement suit
                     this.peindre_panier(); this.peindre_reglement();
                     // le total a changé le règlement (une seule ligne, ou des lignes libres) : la majoration est à refaire
                     if (this.a_une_carte() && this.cle_reglement() !== envoyes) this.calculer();
@@ -257,12 +278,14 @@
             }, 500);
         }
 
-        // Une remise ne compte que justifiée (motif + précision) : tant qu'elle ne l'est pas, le total se calcule sans.
-        remise_complete() {
+        // Ce qui manque encore pour valider une remise — « » si elle est justifiée (ou s'il n'y en a pas).
+        remise_manque() {
             const rm = this.remise, mini = this.ctx.commentaire_min || 10;
-            return rm.montant > 0 && !!rm.motif && String(rm.commentaire || "").trim().length >= mini;
+            if (!(rm.montant > 0)) return "";
+            if (!rm.motif) return __("Pour valider : choisissez pourquoi vous faites cette remise.");
+            const n = String(rm.commentaire || "").trim().length;
+            return n >= mini ? "" : __("Pour valider : précisez en {0} caractères au moins (encore {1}).", [mini, mini - n]);
         }
-        remise_envoyee() { return this.remise_complete() ? this.remise : {}; }
 
         envoi() { return this.panier.map((l) => ({ item_code: l.item_code, qty: l.qty, hors_stock: l.hors_stock ? 1 : 0 })); }
 
@@ -285,36 +308,39 @@
             return r.pour === this.cle_reglement() && r.majoration > 0 ? r.majoration : this.majoration_estimee(this.part_carte());
         }
 
-        /** Le calcul automatique : ce qu'il a TAPÉ ne bouge pas ; le reste de la commande va sur les lignes qu'il n'a
-         *  pas touchées (la première prend tout). Une seule ligne suit toujours le total. */
-        equilibrer() {
-            const base = (this.resume || {}).base;
-            if (base == null || !this.paiements.length) return;
-            if (this.paiements.length === 1) { this.paiements[0].montant = r3(base); this.paiements[0].saisi = false; return; }
-            const libres = this.paiements.filter((p) => !p.saisi);
-            if (!libres.length) return;
-            const fixe = this.paiements.filter((p) => p.saisi).reduce((s, p) => s + (p.montant || 0), 0);
-            libres.forEach((p, i) => { p.montant = i === 0 ? Math.max(0, r3(base - fixe)) : 0; });
+        /** Le règlement fait TOUJOURS le total de la commande (demande du 18/11/2026 : « changer une ligne change
+         *  l'autre, et ainsi de suite »). `depuis` : la ligne qu'il vient de modifier — elle garde sa valeur (plafonnée
+         *  au total) et l'écart passe sur la ligne suivante, puis la suivante… Sans `depuis` (le total a changé, une
+         *  ligne a été retirée) : l'écart va sur la première ligne, puis les suivantes. */
+        equilibrer(depuis) {
+            const base = (this.resume || {}).base, l = this.paiements;
+            if (base == null || !l.length) return;
+            if (l.length === 1) { l[0].montant = r3(base); return; }
+            const fixe = depuis != null && l[depuis] ? depuis : -1;
+            if (fixe >= 0) l[fixe].montant = Math.min(Math.max(0, r3(l[fixe].montant)), r3(base));
+            const ordre = [];
+            for (let k = 1; k <= l.length; k++) { const i = (fixe + k + l.length) % l.length; if (i !== fixe) ordre.push(i); }
+            let ecart = r3(base - l.reduce((t, p) => t + (p.montant || 0), 0));     // > 0 : il manque ; < 0 : il y a trop
+            if (ecart > 0) { l[ordre[0]].montant = r3((l[ordre[0]].montant || 0) + ecart); return; }
+            for (const i of ordre) {
+                if (ecart >= 0) break;
+                const retire = Math.min(l[i].montant || 0, -ecart);
+                l[i].montant = r3((l[i].montant || 0) - retire);
+                ecart = r3(ecart + retire);
+            }
         }
 
-        reglement_change() {
-            this.equilibrer();
+        reglement_change(depuis) {
+            this.equilibrer(depuis);
             this.peindre_panier(); this.peindre_reglement();
             // La majoration carte s'applique à la COMMANDE (prix relevés) : le serveur la recalcule pour ce règlement.
             if (this.a_une_carte() || ((this.resume || {}).majoration > 0)) this.calculer();
         }
 
         ajouter_paiement(mode) {
-            // La nouvelle ligne est « libre » : elle prend ce qui reste, ou attend qu'il tape son montant.
-            this.paiements.push({ mode, montant: 0, numero: "", banque: "", saisi: false });
-            const base = (this.resume || {}).base || 0;
-            const pris = this.paiements.filter((p) => p.saisi).reduce((s, p) => s + (p.montant || 0), 0);
-            if (this.paiements.length > 1 && this.paiements.filter((p) => !p.saisi).length > 1) {
-                // deux lignes libres : la plus ancienne garde le reste, la nouvelle part de zéro jusqu'à ce qu'il tape
-                this.paiements[this.paiements.length - 1].montant = 0;
-            } else if (this.paiements.length > 1) {
-                this.paiements[this.paiements.length - 1].montant = Math.max(0, r3(base - pris));
-            }
+            // La nouvelle ligne part de zéro : le règlement fait déjà le total ; dès qu'il y tape un montant, les
+            // autres lignes baissent d'autant. La toute première ligne prend le total.
+            this.paiements.push({ mode, montant: 0, numero: "", banque: "" });
             this.reglement_change();
         }
 
@@ -331,7 +357,7 @@
                 // la majoration de CETTE ligne : sa part de la majoration totale (une seule carte : tout)
                 const sa_maj = est_carte ? (carte > 0 ? r3(maj * p.montant / carte) : 0) : 0;
                 return `<div class="ct-pay" data-pi="${i}">
-                  <div class="mode">${esc(COURT[p.mode] || p.mode)}${!p.saisi && this.paiements.length > 1 ? ` <span class="ct-muted">· ${__("auto")}</span>` : ""}</div>
+                  <div class="mode">${esc(COURT[p.mode] || p.mode)}</div>
                   <div style="display:flex;gap:4px;align-items:center"><input type="number" inputmode="decimal" step="0.001" data-p="montant"
                       ${est_carte ? `data-part="${p.montant}"` : ""} value="${p.montant ? r3(p.montant + sa_maj) : ""}">
                     <button type="button" class="ct-x" data-oter="${i}">✕</button></div>
@@ -352,10 +378,10 @@
             if (!this.panier.length) return frappe.msgprint(__("Ajoutez au moins un article."));
             if (!this.resume || this.perime) return frappe.msgprint(this.erreur ? this.erreur : __("Le total est en cours de calcul, réessayez dans un instant."));
             if (!this.paiements.length) return frappe.msgprint(__("Choisissez comment le client règle."));
-            if (this.remise.montant > 0 && !this.remise_complete()) return frappe.msgprint(__("Remise : choisissez le motif et précisez-le, ou remettez la remise à 0."));
+            if (this.remise_manque()) return frappe.msgprint(__("Remise de {0} : {1}", [n3(this.remise.montant), this.remise_manque()]));
             frappe.call({ method: API + "creer", type: "POST", freeze: true, freeze_message: __("Enregistrement de la commande…"),
                 args: { tache: this.tache, articles: JSON.stringify(this.envoi()), paiements: JSON.stringify(this.paiements),
-                        remise: JSON.stringify(this.remise_envoyee()) } }).then((r) => {
+                        remise: JSON.stringify(this.remise.montant > 0 ? this.remise : {}) } }).then((r) => {
                 const m = r.message;
                 if (!m || !m.name) return;
                 this.d.hide();
