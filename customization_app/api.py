@@ -543,6 +543,11 @@ def get_customer_booking_info(customer_name=None, task_name=None):
     # rester hors du try : un refus de droit ne se transforme pas en bandeau vide.
     if not frappe.has_permission("Tache de travail", "read"):
         frappe.throw(_("Accès non autorisé aux rendez-vous"), frappe.PermissionError)
+    # Une tâche PAS ENCORE ENREGISTRÉE porte un nom provisoire (« new-tache-de-travail-… ») : il n'y a rien à
+    # protéger, et demander son droit de lecture faisait chercher un document inexistant — « Pas trouvé » dès que
+    # l'on choisissait le client d'une nouvelle tâche (constaté le 18/11/2026, tout compte sauf Administrator).
+    if task_name and not frappe.db.exists("Tache de travail", task_name):
+        task_name = None
     if task_name and not frappe.has_permission("Tache de travail", "read", doc=task_name):
         frappe.throw(_("Accès non autorisé à la tâche {0}").format(task_name),
                      frappe.PermissionError)
