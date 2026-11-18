@@ -392,7 +392,9 @@
                   options: 'Entretien\nInstallation\nRéparation\nLivraison\nVisite\nAutre', reqd: 1 },
                 { fieldtype: 'Section Break' },
                 { fieldname: 'custom_choix_du_staff', fieldtype: 'Link',
-                  label: 'Choix du Staff', options: 'Employee', reqd: 1 },
+                  label: 'Choix du Staff', options: 'Employee', reqd: 1,
+                  // Seuls les employés en poste : un employé parti ou inactif ne se choisit plus (18/11/2026).
+                  get_query: () => ({ filters: { status: 'Active' } }) },
                 { fieldtype: 'Column Break' },
                 { fieldname: 'starts_on', fieldtype: 'Datetime', label: 'Commence le', reqd: 1 },
                 { fieldtype: 'Section Break' },

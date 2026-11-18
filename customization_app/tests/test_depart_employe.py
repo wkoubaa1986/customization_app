@@ -73,6 +73,18 @@ class TestCablage(unittest.TestCase):
         with open(os.path.join(self.base, *chemin), encoding="utf-8") as fh:
             return fh.read()
 
+    def test_une_tache_ne_se_confie_qu_a_un_employe_actif(self):
+        """18/11/2026 : « en tâche de travail, le choix du staff doit se faire que sur les employés actifs » — la
+        fiche (filtre du champ) et le dialogue de rendez-vous du calendrier. Les anciennes tâches gardent leur
+        employé parti : seul le CHOIX est filtré."""
+        import json
+        doctype = json.loads(self._lire("customize_erpnext", "doctype", "tache_de_travail", "tache_de_travail.json"))
+        champ = [f for f in doctype["fields"] if f["fieldname"] == "custom_choix_du_staff"][0]
+        self.assertEqual(json.loads(champ["link_filters"]), [["Employee", "status", "=", "Active"]])
+        dialogue = self._lire("public", "js", "calendrier_rdv_button.js")
+        bloc = dialogue.split("fieldname: 'custom_choix_du_staff'", 1)[1].split("{ fieldtype: 'Column Break' }", 1)[0]
+        self.assertIn("get_query: () => ({ filters: { status: 'Active' } })", bloc)
+
     def test_hooks(self):
         hooks = self._lire("hooks.py")
         for morceau in ('"validate": "customization_app.depart_employe.employee_validate"',
