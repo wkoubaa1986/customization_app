@@ -164,6 +164,12 @@
     function ecrire(frm, m) {
         const t = total(frm), st = etat(frm);
         st.prov = new Map(m);
+        // L'avoir reste la DERNIÈRE ligne, quel que soit l'ordre dans lequel les paiements ont été ajoutés.
+        const rangees = lignes(frm);
+        if (rangees.some(estAvoir) && !estAvoir(rangees[rangees.length - 1]) || rangees.filter(estAvoir).length > 1) {
+            frm.doc.payment_schedule = rangees.filter((r) => !estAvoir(r)).concat(rangees.filter(estAvoir));
+        }
+        lignes(frm).forEach((r, i) => { r.idx = i + 1; });
         lignes(frm).forEach((r) => {
             const v = estCarte(r) ? avecMajoration(frm, m.get(r.name)) : arrondi(m.get(r.name));
             r.payment_amount = v; r.base_payment_amount = v; r.outstanding = v;
@@ -328,7 +334,17 @@
             const r = ligne || frm.add_child("payment_schedule", { mode_of_payment: AVOIR, due_date: jourDuPaiement(frm),
                 payment_amount: 0, invoice_portion: 0, description: "Montant réglé par l’avoir client" });
             m.set(r.name, voulu);
+            // Il reste à payer et il n'y a plus d'autre paiement (la commande a grossi après que l'avoir a tout
+            // couvert) : le paiement d'avant l'avoir revient pour prendre le reste. Sans lui l'avoir, seul sur le
+            // tableau, prenait TOUT le total — 106,083 pour un avoir de 78,000 (constat du 18/11/2026).
+            const avant = st.avantAvoir || st.dernierPaiement;       // le paiement retiré, sinon le dernier que le bloc a montré
+            if (cible - voulu >= 0.001 && avant && !lignes(frm).some((x) => !estAvoir(x))) {
+                const p = frm.add_child("payment_schedule", Object.assign({ due_date: jourDuPaiement(frm), payment_amount: 0, invoice_portion: 0 }, avant));
+                m.set(p.name, 0);
+                st.avantAvoir = null;
+            }
             equilibrer(frm, m, cible, r.name);
+            m.set(r.name, voulu);                                // jamais plus que l'avoir utilisable, quoi qu'il reste
             // Un paiement entièrement couvert par l'avoir disparaît (comme le fait le script d'origine) ; on retient
             // son moyen pour le rétablir si l'avoir est retiré.
             lignes(frm).filter((x) => !estAvoir(x) && flt(m.get(x.name)) < 0.001).forEach((x) => {
@@ -630,6 +646,8 @@
         if (!st.application) st.dernierTotal = t;                 // ce total-là est affiché : la veille repart de lui
         st.signature = signature(frm);
         st.signatureChoix = signatureChoix(frm);
+        const vrai = rs.find((r) => !estAvoir(r) && r.mode_of_payment);
+        if (vrai) st.dernierPaiement = { mode_of_payment: vrai.mode_of_payment, [PIECE]: vrai[PIECE], [BANQUE]: vrai[BANQUE] };
         const somme = arrondi(rs.reduce((s, r) => s + flt(r.payment_amount), 0)), ecart = arrondi(t - somme);
         const verdict = !rs.length ? "" : st.attente ? `<span class="sp-note">calcul…</span>`
             : Math.abs(ecart) < 0.001 ? `<span class="sp-ok">✓ Tout est réparti</span>`

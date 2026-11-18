@@ -97,6 +97,19 @@ class TestLeBloc(unittest.TestCase):
         motif = self.js[self.js.index("texte.match(/") + len("texte.match(/"):self.js.index("/);", self.js.index("texte.match(/"))]
         self.assertEqual(re.search(motif, texte).group(1), "37.917")
 
+    def test_l_avoir_ne_depasse_jamais_l_avoir_utilisable(self):
+        """Constat du 18/11/2026 (ECONOMIQ) : la commande démarre petite, l'avoir la couvre et le paiement disparaît ;
+        elle grossit, et l'avoir — seul sur le tableau — prenait tout le total (106,083 pour 78,000 d'avoir). Le
+        paiement d'avant revient prendre le reste, et l'avoir est remis à son montant après l'équilibrage."""
+        corps = self.js[self.js.index("function ajusterAvoir(frm) {"):self.js.index("/** La case « Paiement avec Avoir » ou le client a changé")]
+        self.assertIn("const avant = st.avantAvoir || st.dernierPaiement;", corps)
+        self.assertIn("if (cible - voulu >= 0.001 && avant && !lignes(frm).some((x) => !estAvoir(x))) {", corps)
+        self.assertLess(corps.index("equilibrer(frm, m, cible, r.name);"), corps.index("m.set(r.name, voulu);                                // jamais plus"))
+
+    def test_l_avoir_reste_la_derniere_ligne(self):
+        """Demande du 18/11/2026 : « mets l'avoir tout le temps en dernière ligne lorsqu'on ajoute d'autres paiements »."""
+        self.assertIn("frm.doc.payment_schedule = rangees.filter((r) => !estAvoir(r)).concat(rangees.filter(estAvoir));", self.js)
+
     def test_l_avoir_ne_sert_jamais_a_equilibrer_et_un_doublon_est_fusionne(self):
         self.assertIn("const autres = noms.filter((n) => n !== garde && !avoirs.has(n));", self.js)
         self.assertIn("avoirs.slice(1).forEach((r) => { m.delete(r.name); oterLigne(frm, r.name); });", self.js)
