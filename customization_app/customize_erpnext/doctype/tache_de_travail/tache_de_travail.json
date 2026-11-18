@@ -263,11 +263,11 @@
    "options": "\nClient non joignable\nClient a oublié son rendez vous\nRetard Aqua World\nL'intervention est chère\nAutre"
   },
   {
-   "depends_on": "eval:((doc.status == \"Completed\" & (doc.custom_type_dintervention ==\"Entretien\" | doc.custom_type_dintervention ==\"Réparation\" |  doc.custom_type_dintervention == \"Installation\" |  doc.custom_type_dintervention == \"Visite\")) | (doc.status == \"Cancelled\" & doc.raison_annulation == \"Autre\" ))",
+   "depends_on": "eval:((doc.status == \"Completed\" & (doc.custom_type_dintervention ==\"Entretien\" | doc.custom_type_dintervention ==\"Réparation\" |  doc.custom_type_dintervention == \"Installation\" |  doc.custom_type_dintervention == \"Visite\" |  doc.custom_type_dintervention == \"Autre\")) | (doc.status == \"Cancelled\" & doc.raison_annulation == \"Autre\" ))",
    "fieldname": "rapport_visite",
    "fieldtype": "Small Text",
    "label": "Rapport Intervention",
-   "mandatory_depends_on": "eval:((doc.status == \"Completed\" & (doc.custom_type_dintervention ==\"Entretien\" | doc.custom_type_dintervention ==\"Réparation\" |  doc.custom_type_dintervention == \"Installation\" |  doc.custom_type_dintervention == \"Visite\")) | (doc.status == \"Cancelled\" & doc.raison_annulation == \"Autre\" ))"
+   "mandatory_depends_on": "eval:((doc.status == \"Completed\" & (doc.custom_type_dintervention ==\"Entretien\" | doc.custom_type_dintervention ==\"Réparation\" |  doc.custom_type_dintervention == \"Installation\" |  doc.custom_type_dintervention == \"Visite\" |  doc.custom_type_dintervention == \"Autre\")) | (doc.status == \"Cancelled\" & doc.raison_annulation == \"Autre\" ))"
   },
   {
    "default": "0",
@@ -379,7 +379,7 @@
    "link_fieldname": "tache_de_travail"
   }
  ],
- "modified": "2026-11-19 00:30:00.000000",
+ "modified": "2026-11-19 01:00:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Tache de travail",

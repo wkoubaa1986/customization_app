@@ -131,6 +131,8 @@ def exigence_du_doc(doc):
 # transporteur qui livre — donc pas de position à exiger. Réparation : souvent
 # au local (dans_local), on ne l'exige pas.
 TYPES_GMAP = {"Installation", "Visite", "Entretien", "Livraison"}
+#: types dont la clôture exige le compte rendu — MIROIR du mandatory_depends_on de `rapport_visite` (tache_de_travail.json)
+TYPES_RAPPORT = ("Entretien", "Réparation", "Installation", "Visite", "Autre")
 
 
 def gmap_requis(doc):
@@ -311,7 +313,8 @@ def exigences(tache):
     # La case « Afficher Commande » ne fait plus que MONTRER le champ (05/10/2026) : sur une tâche « Autre », elle
     # rendait la commande obligatoire — impossible d'enlever une commande rattachée par erreur (Tache-08720).
     commande_requise = type_i in ("Installation", "Livraison", "Entretien", "Réparation")
-    rapport_requis = type_i in ("Entretien", "Réparation", "Installation", "Visite")
+    # « Autre » aussi depuis le 18/11/2026 : « pour clôturer il faut le compte rendu comme obligatoire ».
+    rapport_requis = type_i in TYPES_RAPPORT
 
     # Résumé financier et logistique de la commande liée, pour le dialogue :
     # les paiements reçus (alloués à la commande OU à ses factures — le flux
