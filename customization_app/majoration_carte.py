@@ -119,6 +119,13 @@ def taux_regle() -> float:
         return 0.0
 
 
+@frappe.whitelist()
+def taux_pour_ecran() -> float:
+    """Le taux réglé, pour l'écran : le bloc de paiement affiche tout de suite le montant de la carte majoration
+    comprise, avant même la réponse de l'aperçu."""
+    return taux_regle()
+
+
 def _champs_presents(doc) -> bool:
     return bool(doc.meta.has_field(CHAMP_MONTANT)) and bool(doc.meta.get_field("items")) and \
         frappe.get_meta(doc.doctype + " Item").has_field(CHAMP_AVANT)

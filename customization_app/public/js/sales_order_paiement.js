@@ -27,8 +27,10 @@
 // peut le prendre. Sur une commande neuve, « Vente directe sans BL et Facture » est le choix par défaut
 // (patch type_transaction_defaut) et le modèle de taxes sans timbre est posé d'emblée.
 //
-// Montants : pour une ligne par carte, on saisit la PART DE LA COMMANDE réglée par carte ; le montant à
-// passer sur le terminal (part + majoration) est affiché à côté, et c'est lui que porte le tableau.
+// Montants : la ligne par carte affiche et reçoit le montant MAJORATION COMPRISE — celui qui passe sur le
+// terminal, et celui que porte le tableau (demande du 18/11/2026 : « la part réglée par carte doit prendre
+// en compte la majoration, tout le temps actualisée »). Le bloc en déduit la part de la commande que la
+// carte règle (montant ÷ 1,02) pour équilibrer les autres lignes.
 (() => {
     const CARTE = "Carte de crédit", ARAMEX = "Livraison Aramex", CLASSE = "so-paiement", TOL = 0.0005, DELAI = 450;
     const PIECE = "custom__n_chèque__transaction", BANQUE = "custom_banque";
@@ -64,12 +66,38 @@
 
     /** {nom de ligne -> part de la commande} : pour la carte, le montant porté moins sa part de majoration. */
     function parts(frm) {
-        const rs = lignes(frm), maj = majoration(frm);
+        const rs = lignes(frm), maj = majoration(frm), st = etat(frm);
+        // Entre un geste et la réponse du serveur, la carte porte un montant PROVISOIRE (part + majoration
+        // estimée) alors que les prix n'ont pas encore bougé : les parts écrites par le geste font foi.
+        if (st.prov && rs.length === st.prov.size && rs.every((r) => st.prov.has(r.name))) return new Map(st.prov);
         const carte = rs.filter(estCarte).reduce((s, r) => s + flt(r.payment_amount), 0);
         const m = new Map();
         rs.forEach((r) => m.set(r.name, arrondi(estCarte(r) && carte > 0
             ? flt(r.payment_amount) - maj * flt(r.payment_amount) / carte : flt(r.payment_amount))));
         return m;
+    }
+
+    // Le taux réglé (%), demandé une fois au serveur ; 0 tant qu'il n'est pas connu ou pour une commande du site web.
+    let tauxRegle = null;
+    function taux(frm) {
+        if (frm.doc.woocommerce_id) return 0;
+        if (tauxRegle === null) {
+            tauxRegle = 0;
+            frappe.xcall("customization_app.majoration_carte.taux_pour_ecran").then((t) => { tauxRegle = flt(t); rendre(frm); }).catch(() => {});
+        }
+        return tauxRegle || flt(frm.doc.custom_majoration_carte_taux);
+    }
+    /** Ce que la carte encaisse pour une part de commande : part + majoration (au millime, comme le serveur). */
+    const avecMajoration = (frm, part) => arrondi(flt(part) + arrondi(flt(part) * taux(frm) / 100));
+    /** L'inverse : la part de la commande réglée quand la carte encaisse `montant`. */
+    function sansMajoration(frm, montant) {
+        const t = taux(frm);
+        if (t <= 0) return arrondi(montant);
+        let part = arrondi(flt(montant) / (1 + t / 100));
+        for (const pas of [0, 0.001, -0.001]) {                    // l'arrondi au millime peut décaler d'un cran
+            if (Math.abs(avecMajoration(frm, part + pas) - flt(montant)) < 0.0005) return arrondi(part + pas);
+        }
+        return part;
     }
 
     /** Ramène la somme des parts à `cible` : `garde` ne bouge pas, les lignes tapées à la main passent en dernier. */
@@ -88,11 +116,12 @@
         if (Math.abs(ecart) >= 0.001 && garde) m.set(garde, Math.max(arrondi(flt(m.get(garde)) - ecart), 0));
     }
 
-    /** Écrit les parts dans le tableau (la carte garde provisoirement sa part : le serveur y ajoute la majoration). */
+    /** Écrit les parts dans le tableau ; la carte porte aussitôt part + majoration (le serveur confirme au millime). */
     function ecrire(frm, m) {
-        const t = total(frm);
+        const t = total(frm), st = etat(frm);
+        st.prov = new Map(m);
         lignes(frm).forEach((r) => {
-            const v = arrondi(m.get(r.name));
+            const v = estCarte(r) ? avecMajoration(frm, m.get(r.name)) : arrondi(m.get(r.name));
             r.payment_amount = v; r.base_payment_amount = v; r.outstanding = v;
             r.invoice_portion = t ? v / t * 100 : 0;
         });
@@ -134,6 +163,7 @@
             if (moi !== st.tour || frm.doc.docstatus !== 0) return;        // une demande plus récente est partie
             st.attente = false; st.apercu = e;
             if (e && e.change && st.suite < 4) { st.suite += 1; await appliquer(frm, e); }
+            if (e) st.prov = null;                               // l'écran porte l'état confirmé : il refait foi
             rendre(frm);
         }, delai);
     }
@@ -165,11 +195,19 @@
 
     // ------------------------------------------------------------------ gestes
 
-    function apresGeste(frm) { etat(frm).suite = 0; carteEnJeu(frm) ? demander(frm, 150) : rendre(frm); }
+    function apresGeste(frm) {
+        const st = etat(frm);
+        st.suite = 0;
+        if (carteEnJeu(frm)) demander(frm, 150);
+        else { st.prov = null; rendre(frm); }
+    }
 
     function saisirMontant(frm, nom, texte) {
         const st = etat(frm), m = parts(frm), cible = totalBase(frm);
-        const v = Math.min(Math.max(flt(String(texte).replace(/\s/g, "").replace(",", "."), 3), 0), cible);
+        const r = lignes(frm).find((x) => x.name === nom);
+        let v = Math.max(flt(String(texte).replace(/\s/g, "").replace(",", "."), 3), 0);
+        if (r && estCarte(r)) v = sansMajoration(frm, v);          // carte : le montant tapé comprend la majoration
+        v = Math.min(v, cible);
         m.set(nom, v); st.fixes.add(nom);
         equilibrer(frm, m, cible, nom);
         ecrire(frm, m); apresGeste(frm);
@@ -332,10 +370,11 @@
         let carte = "";
         if (estCarte(r)) {
             const maj = arrondi(flt(r.payment_amount) - part);
-            carte = st.attente ? `<div class="sp-carte">💳 Calcul de la majoration…</div>`
-                : maj > 0 ? `<div class="sp-carte">💳 Majoration carte de ${String(flt(frm.doc.custom_majoration_carte_taux)).replace(".", ",")} % :
-                    <b>+ ${nombre(maj)}</b>, répartie sur les prix des articles —
-                    montant à passer sur le terminal : <b class="sp-terminal">${nombre(r.payment_amount)}</b></div>` : "";
+            const t = flt(frm.doc.custom_majoration_carte_taux) || taux(frm);
+            carte = maj > 0 ? `<div class="sp-carte">💳 Majoration carte de ${String(t).replace(".", ",")} % comprise :
+                    <b>+ ${nombre(maj)}</b> (${nombre(part)} sans la carte), répartie sur les prix des articles —
+                    montant à passer sur le terminal : <b class="sp-terminal">${nombre(r.payment_amount)}</b>
+                    ${st.attente ? `<span class="sp-note"> · mise à jour des prix…</span>` : ""}</div>` : "";
         }
         return `<div class="sp-ligne" data-ligne="${esc(r.name)}">
             <div class="sp-champ sp-mode"><label>Moyen de paiement</label>
@@ -343,8 +382,8 @@
                 ${r.mode_of_payment ? "" : `<option value=""></option>`}
                 ${modes.map((x) => `<option value="${esc(x)}" ${x === r.mode_of_payment ? "selected" : ""}>${esc(COURT[x] || x)}</option>`).join("")}
               </select></div>
-            <div class="sp-champ sp-montant"><label>${estCarte(r) ? "Part réglée par carte" : "Montant"}</label>
-              <input type="text" inputmode="decimal" class="form-control sp-in-montant" value="${format_number(part, null, 3)}" ${seule ? `title="Un seul paiement : il règle toute la commande"` : ""}></div>
+            <div class="sp-champ sp-montant"><label>${estCarte(r) ? "Montant par carte" : "Montant"}</label>
+              <input type="text" inputmode="decimal" class="form-control sp-in-montant" value="${format_number(estCarte(r) ? flt(r.payment_amount) : part, null, 3)}" ${seule ? `title="Un seul paiement : il règle toute la commande"` : ""}></div>
             ${libPiece ? `<div class="sp-champ sp-piece"><label>${esc(libPiece)}</label>
               <input type="text" class="form-control sp-in-piece ${d.piece ? "sp-rouge" : ""}" value="${esc(r[PIECE] || "")}">
               ${d.piece ? `<span class="sp-erreur">${esc(d.piece)}</span>` : ""}</div>` : ""}
@@ -444,8 +483,8 @@
         [TYPE](frm) { rendre(frm); if (frm.doc.docstatus === 0) suivreLeTimbre(frm); },
         // L'échéancier du modèle arrive par un appel serveur : on repart de lui, plus rien n'est « tapé à la main ».
         payment_terms_template(frm) {
-            const st = etat(frm); st.fixes.clear(); st.suite = 0;
-            setTimeout(() => { rendre(frm); suivreLeTotal(frm); }, 900);
+            const st = etat(frm); st.fixes.clear(); st.suite = 0; st.prov = null;
+            setTimeout(() => { st.prov = null; rendre(frm); suivreLeTotal(frm); }, 900);
         },
         discount_amount(frm) { plusTard(frm); },
         additional_discount_percentage(frm) { plusTard(frm); },
@@ -464,10 +503,10 @@
     });
     frappe.ui.form.on("Payment Schedule", {
         // Tableau standard modifié à la main (« Afficher le tableau ») : le bloc suit.
-        mode_of_payment(frm) { if (frm.doctype === "Sales Order" && !etat(frm).application) apresGeste(frm); },
-        payment_amount(frm) { if (frm.doctype === "Sales Order" && !etat(frm).application) apresGeste(frm); },
-        payment_schedule_add(frm) { if (frm.doctype === "Sales Order" && !etat(frm).application) rendre(frm); },
-        payment_schedule_remove(frm) { if (frm.doctype === "Sales Order" && !etat(frm).application) apresGeste(frm); },
+        mode_of_payment(frm) { if (frm.doctype === "Sales Order" && !etat(frm).application) { etat(frm).prov = null; apresGeste(frm); } },
+        payment_amount(frm) { if (frm.doctype === "Sales Order" && !etat(frm).application) { etat(frm).prov = null; apresGeste(frm); } },
+        payment_schedule_add(frm) { if (frm.doctype === "Sales Order" && !etat(frm).application) { etat(frm).prov = null; rendre(frm); } },
+        payment_schedule_remove(frm) { if (frm.doctype === "Sales Order" && !etat(frm).application) { etat(frm).prov = null; apresGeste(frm); } },
     });
     const ligne = {};
     ["item_code", "qty", "rate", "discount_percentage", "discount_amount", "price_list_rate", "uom"]

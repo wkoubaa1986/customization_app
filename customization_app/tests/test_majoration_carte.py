@@ -118,6 +118,18 @@ class TestBranchements(unittest.TestCase):
         self.assertIn('etat["lignes"] = ', apercu)
         self.assertIn('etat["echeances"] = ', apercu)
 
+    def test_la_ligne_carte_affiche_le_montant_majoration_comprise(self):
+        """Demande du 18/11/2026 : « la part réglée par carte doit prendre en compte la majoration, tout le temps
+        actualisée ». Le champ montre ce que porte le tableau (part + majoration), et le montant tapé est compris
+        de la même façon."""
+        js = self.lire("public", "js", "sales_order_paiement.js")
+        self.assertIn('estCarte(r) ? "Montant par carte" : "Montant"', js)
+        self.assertIn("format_number(estCarte(r) ? flt(r.payment_amount) : part, null, 3)", js)
+        self.assertIn("if (r && estCarte(r)) v = sansMajoration(frm, v);", js)
+        self.assertIn("estCarte(r) ? avecMajoration(frm, m.get(r.name)) : arrondi(m.get(r.name))", js)
+        self.assertIn('"customization_app.majoration_carte.taux_pour_ecran"', js)
+        self.assertEqual(M.taux_pour_ecran.__name__, "taux_pour_ecran")
+
     def test_le_bloc_ecrit_dans_le_tableau_standard(self):
         """Aucune donnée de plus : le bloc lit et écrit `payment_schedule`, que tout le reste du système lit."""
         js = self.lire("public", "js", "sales_order_paiement.js")
