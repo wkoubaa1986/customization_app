@@ -27,6 +27,16 @@
 // peut le prendre. Sur une commande neuve, « Vente directe sans BL et Facture » est le choix par défaut
 // (patch type_transaction_defaut) et le modèle de taxes sans timbre est posé d'emblée.
 //
+// AVOIR DU CLIENT (18/11/2026) : ce n'est PAS un moyen de paiement à choisir. La case « Paiement avec Avoir »
+// (Oui / Non, au-dessus du bloc) décide ; le bloc pose alors lui-même la ligne « Avoir du client » — le plus petit
+// de l'avoir utilisable et du total — et diminue les autres paiements d'autant, tout de suite. La ligne n'est ni
+// modifiable ni supprimable ; elle se recale seule quand le total change (ristourne appliquée ou retirée,
+// article ajouté…). « Non » la retire et rend son montant au premier paiement. Le Client Script « Verification
+// Sales order » faisait le même ajustement de son côté, après un appel serveur : avec la carte (montants en
+// cours de recalcul) il ne voyait pas l'avoir déjà posé et en posait un SECOND. Il laisse désormais la main au
+// bloc (patch avoir_bloc_paiement : il s'arrête quand `window.__so_paiement_bloc` existe), et le bloc fusionne
+// de toute façon deux lignes d'avoir en une.
+//
 // Montants : la majoration ne s'ajoute QUE sur la ligne par carte (demande du 18/11/2026). On y tape la part de
 // la commande réglée par carte (200,000) ; les autres lignes ne voient que cette part (espèces = total − 200),
 // et la ligne carte affiche aussitôt la part + sa majoration (204,000), le montant à passer sur le terminal.
@@ -35,6 +45,9 @@
 (() => {
     const CARTE = "Carte de crédit", ARAMEX = "Livraison Aramex", CLASSE = "so-paiement", TOL = 0.0005, DELAI = 450;
     const PIECE = "custom__n_chèque__transaction", BANQUE = "custom_banque";
+    const AVOIR = "Avoir client", CHOIX_AVOIR = "custom_paiement_avec_avoir";
+    // Vu par le Client Script « Verification Sales order » : c'est le bloc qui ajuste l'avoir, pas lui.
+    window.__so_paiement_bloc = true;
     const TYPE = "custom_type_de_transaction", DIRECTE = "Vente directe sans BL et Facture";
     const TAXES_AVEC = "Vente Standard avec Timbre Fiscal - A&S", TAXES_SANS = "Vente Standard Sans Timbre Fiscale - A&S";
     const TYPE_LIBELLE = { [DIRECTE]: "Vente directe sans BL et Facture — sans timbre fiscal", "Autre": "Autre — avec timbre fiscal" };
@@ -61,6 +74,9 @@
     }
     const lignes = (frm) => frm.doc.payment_schedule || [];
     const estCarte = (r) => r.mode_of_payment === CARTE;
+    const estAvoir = (r) => r.mode_of_payment === AVOIR;
+    /** Les noms des lignes d'avoir : elles ne servent jamais à équilibrer (ajustement automatique, montant imposé). */
+    const nomsAvoir = (frm) => new Set(lignes(frm).filter(estAvoir).map((r) => r.name));
     const total = (frm) => (cint(frm.doc.disable_rounded_total) ? 0 : flt(frm.doc.rounded_total)) || flt(frm.doc.grand_total);
     const majoration = (frm) => flt(frm.doc.custom_majoration_carte, 3);
     const totalBase = (frm) => arrondi(total(frm) - majoration(frm));
@@ -108,7 +124,8 @@
         const st = etat(frm), noms = lignes(frm).map((r) => r.name);
         let ecart = arrondi(noms.reduce((s, n) => s + flt(m.get(n)), 0) - cible);      // > 0 : il y a trop
         if (Math.abs(ecart) < 0.001) return;
-        const autres = noms.filter((n) => n !== garde);
+        const avoirs = nomsAvoir(frm);
+        const autres = noms.filter((n) => n !== garde && !avoirs.has(n));
         const ordre = autres.filter((n) => !st.fixes.has(n)).concat(autres.filter((n) => st.fixes.has(n)));
         for (const n of ordre) {
             if (Math.abs(ecart) < 0.001) break;
@@ -243,11 +260,82 @@
         ecrire(frm, m); apresGeste(frm);
     }
 
+    // ------------------------------------------------------------------ avoir du client : ajustement automatique
+
+    /** L'avoir utilisable du client (même source que la case « Paiement avec Avoir »), lu une fois par client. */
+    async function chargerAvoir(frm) {
+        const st = etat(frm), client = frm.doc.customer;
+        if (!client) { st.avoir = 0; st.avoirClient = null; return 0; }
+        if (st.avoirClient === client && st.avoir != null) return st.avoir;
+        let v = 0;
+        try {
+            const r = await frappe.call({ method: "get_customer_info", args: { customer_name: client } });
+            const infos = r && (r.result || r.message), fiche = infos && infos[0];
+            v = fiche ? fiche["Avoir utilisable"] : 0;
+            if (v === undefined || v === null) v = fiche ? fiche["Total des avances du client"] : 0;
+        } catch (e) { v = 0; }
+        if (frm.doc.customer !== client) return 0;                 // le client a changé pendant l'appel
+        st.avoirClient = client; st.avoir = flt(v, 3);
+        return st.avoir;
+    }
+
+    function oterLigne(frm, nom) {
+        frm.doc.payment_schedule = lignes(frm).filter((r) => r.name !== nom);
+        frm.doc.payment_schedule.forEach((r, i) => { r.idx = i + 1; });
+        if (locals["Payment Schedule"]) delete locals["Payment Schedule"][nom];
+        etat(frm).fixes.delete(nom);
+    }
+
+    /** Met la ligne « Avoir du client » au montant voulu par la case (Oui : le plus petit de l'avoir et du total ;
+        Non : rien) et équilibre les autres paiements. -> true si quelque chose a changé (à l'appelant de redessiner). */
+    function ajusterAvoir(frm) {
+        const st = etat(frm);
+        if (frm.doc.docstatus !== 0 || !frm.fields_dict[CHOIX_AVOIR]) return false;
+        const oui = frm.doc[CHOIX_AVOIR] === "Oui";
+        if (oui && (st.avoir == null || st.avoirClient !== frm.doc.customer)) return false;      // pas encore lu
+        const m = parts(frm), cible = totalBase(frm);
+        const avoirs = lignes(frm).filter(estAvoir), ligne = avoirs[0];
+        const voulu = oui ? arrondi(Math.max(Math.min(flt(st.avoir), cible), 0)) : 0;
+        const actuel = avoirs.reduce((x, r) => x + flt(m.get(r.name)), 0);
+        if (avoirs.length <= 1 && Math.abs(voulu - actuel) < 0.001 && !(ligne && voulu <= 0)) return false;
+        // Une seule ligne d'avoir : les doublons (posés par un autre script) sont retirés avant d'équilibrer.
+        avoirs.slice(1).forEach((r) => { m.delete(r.name); oterLigne(frm, r.name); });
+        if (voulu > 0) {
+            const r = ligne || frm.add_child("payment_schedule", { mode_of_payment: AVOIR, due_date: jourDuPaiement(frm),
+                payment_amount: 0, invoice_portion: 0, description: "Montant réglé par l’avoir client" });
+            m.set(r.name, voulu);
+            equilibrer(frm, m, cible, r.name);
+            // Un paiement entièrement couvert par l'avoir disparaît (comme le fait le script d'origine) ; on retient
+            // son moyen pour le rétablir si l'avoir est retiré.
+            lignes(frm).filter((x) => !estAvoir(x) && flt(m.get(x.name)) < 0.001).forEach((x) => {
+                if (!st.avantAvoir) st.avantAvoir = { mode_of_payment: x.mode_of_payment, [PIECE]: x[PIECE], [BANQUE]: x[BANQUE] };
+                m.delete(x.name); oterLigne(frm, x.name);
+            });
+        } else {
+            m.delete(ligne.name); oterLigne(frm, ligne.name);
+            if (!lignes(frm).length && cible > 0) {              // l'avoir couvrait tout : le paiement d'avant revient
+                const r = frm.add_child("payment_schedule", Object.assign({ due_date: jourDuPaiement(frm), payment_amount: 0, invoice_portion: 0 },
+                    st.avantAvoir || { mode_of_payment: "Dette non payée" }));
+                m.set(r.name, 0);
+            }
+            st.avantAvoir = null;
+            versLePremier(frm, m, cible);
+        }
+        ecrire(frm, m);
+        return true;
+    }
+
+    /** La case « Paiement avec Avoir » ou le client a changé : on lit l'avoir, puis les lignes suivent. */
+    function suivreAvoir(frm) {
+        if (frm.doc.docstatus !== 0) return;
+        chargerAvoir(frm).then(() => { if (ajusterAvoir(frm)) apresGeste(frm); else rendre(frm); });
+    }
+
     /** Ajoute (ou retire) l'écart sur le PREMIER paiement qui peut le prendre ; s'il ne suffit pas, le suivant. */
     function versLePremier(frm, m, cible) {
-        const noms = lignes(frm).map((r) => r.name);
+        const noms = lignes(frm).map((r) => r.name), avoirs = nomsAvoir(frm);
         let ecart = arrondi(cible - noms.reduce((s, n) => s + flt(m.get(n)), 0));      // > 0 : à ajouter
-        for (const n of noms) {
+        for (const n of noms.filter((x) => !avoirs.has(x))) {
             if (Math.abs(ecart) < 0.001) break;
             if (ecart > 0) { m.set(n, arrondi(flt(m.get(n)) + ecart)); ecart = 0; break; }
             const pris = Math.min(flt(m.get(n)), -ecart);
@@ -264,6 +352,8 @@
         const st = etat(frm), rs = lignes(frm);
         if (frm.doc.docstatus !== 0 || st.application) return;
         st.dernierTotal = total(frm);
+        // Le total a bougé (ristourne, article…) : l'avoir se recale d'abord, les autres paiements prennent le reste.
+        if (ajusterAvoir(frm)) { apresGeste(frm); return; }
         if (!rs.length) { rendre(frm); return; }                 // pas encore de paiement : le total affiché suit quand même
         if (st.timbreJusqua && Date.now() < st.timbreJusqua) {
             // Timbre fiscal ajouté ou retiré : l'écart (1 dinar) va au premier paiement, carte comprise —
@@ -280,10 +370,12 @@
         const t = total(frm), somme = arrondi(rs.reduce((s, r) => s + flt(r.payment_amount), 0));
         if (Math.abs(somme - t) < 0.001) { rendre(frm); return; }
         const m = parts(frm);
-        if (!st.fixes.size && somme > 0) {                                      // rien de tapé : mêmes proportions
-            let reste = t;
-            rs.forEach((r, i) => {
-                const v = i === rs.length - 1 ? arrondi(reste) : arrondi(flt(r.payment_amount) * t / somme);
+        const libres = rs.filter((r) => !estAvoir(r)), avoir = arrondi(somme - libres.reduce((x, r) => x + flt(r.payment_amount), 0));
+        const sommeLibre = arrondi(somme - avoir);
+        if (!st.fixes.size && sommeLibre > 0) {                                 // rien de tapé : mêmes proportions (hors avoir)
+            let reste = arrondi(t - avoir);
+            libres.forEach((r, i) => {
+                const v = i === libres.length - 1 ? arrondi(reste) : arrondi(flt(r.payment_amount) * (t - avoir) / sommeLibre);
                 m.set(r.name, v); reste -= v;
             });
         } else equilibrer(frm, m, t, null);
@@ -329,6 +421,8 @@
               .${CLASSE} .sp-mode{flex:1 1 170px} .${CLASSE} .sp-montant{flex:0 1 130px}
               .${CLASSE} .sp-piece{flex:1 1 190px} .${CLASSE} .sp-banque{flex:1 1 150px}
               .${CLASSE} .sp-montant .form-control{text-align:right;font-weight:600}
+              .${CLASSE} .sp-avoir{background:#f0fdf4}
+              .${CLASSE} .sp-fixe{height:32px;display:flex;align-items:center;gap:6px;font-size:13px;font-weight:600;color:#14532d}
               .${CLASSE} .sp-rouge{border:2px solid #dc2626 !important}
               .${CLASSE} .sp-erreur{font-size:11px;color:#b91c1c}
               .${CLASSE} .sp-suppr{align-self:center;border:0;background:none;color:#9ca3af;font-size:18px;line-height:1;padding:4px 6px;cursor:pointer}
@@ -368,6 +462,15 @@
     }
 
     function htmlLigne(frm, r, part, seule) {
+        if (estAvoir(r)) {
+            // Ajustement automatique : ni moyen à choisir, ni montant à taper, ni ✕ — c'est la case du haut qui décide.
+            return `<div class="sp-ligne sp-avoir" data-ligne="${esc(r.name)}">
+                <div class="sp-champ sp-mode"><label>Ajustement automatique</label>
+                  <div class="sp-fixe">🧾 Avoir du client <span class="sp-note">— « Paiement avec Avoir » : Oui</span></div></div>
+                <div class="sp-champ sp-montant"><label>Montant</label>
+                  <input type="text" class="form-control" value="${format_number(part, null, 3)}" disabled></div>
+              </div>`;
+        }
         const regle = REGLES[r.mode_of_payment] || {}, d = defauts(frm, r), st = etat(frm);
         const modes = MODES.includes(r.mode_of_payment) || !r.mode_of_payment ? MODES : MODES.concat([r.mode_of_payment]);
         const aramex = frm.doc.payment_terms_template === ARAMEX && r.mode_of_payment !== "Chèque";
@@ -423,12 +526,15 @@
         $b.removeClass("sp-lecture").show();
         champ.$wrapper.toggle(!!st.tableau);
         if (!st.application) st.dernierTotal = t;                 // ce total-là est affiché : la veille repart de lui
+        st.signature = signature(frm);
         const somme = arrondi(rs.reduce((s, r) => s + flt(r.payment_amount), 0)), ecart = arrondi(t - somme);
         const verdict = !rs.length ? "" : st.attente ? `<span class="sp-note">calcul…</span>`
             : Math.abs(ecart) < 0.001 ? `<span class="sp-ok">✓ Tout est réparti</span>`
             : ecart > 0 ? `<span class="sp-ko">⚠ Il reste ${nombre(ecart)} à répartir</span>`
             : `<span class="sp-ko">⚠ ${nombre(-ecart)} de trop par rapport au total</span>`;
         const m = parts(frm);
+        const avoirPose = arrondi(rs.filter(estAvoir).reduce((x, r) => x + flt(r.payment_amount), 0));
+        const paiements = rs.filter((r) => !estAvoir(r)).length;
         const types = String((frappe.meta.get_docfield("Sales Order", TYPE, frm.doc.name) || {}).options || "").split("\n").filter((x) => x);
         const type = frm.fields_dict[TYPE] && types.length ? `<div class="sp-type">
             <label>Type de transaction</label>
@@ -439,10 +545,11 @@
         const tete = `<div class="sp-tete">
             <span class="sp-total">Total à régler : ${nombre(t)}</span>
             ${maj > 0 ? `<span class="sp-note">dont majoration carte ${nombre(maj)} (commande sans carte : ${nombre(totalBase(frm))})</span>` : ""}
+            ${avoirPose > 0 ? `<span class="sp-note">avoir du client : ${nombre(avoirPose)} — reste à payer : <b>${nombre(t - avoirPose)}</b></span>` : ""}
             ${verdict}
             ${!frm.doc.payment_terms_template && st.modele && rs.length
                 ? `<span class="sp-note">Paiement personnalisé (modèle de départ : ${esc(st.modele)})</span>` : ""}</div>`;
-        const corps = rs.length ? rs.map((r) => htmlLigne(frm, r, flt(m.get(r.name)), rs.length === 1)).join("")
+        const corps = rs.length ? rs.map((r) => htmlLigne(frm, r, flt(m.get(r.name)), paiements === 1)).join("")
             : `<div class="sp-ligne sp-note">Choisissez un modèle de termes de paiement ci-dessus, ou ajoutez un paiement.</div>`;
         const pied = `<div class="sp-pied"><span class="sp-note">Ajouter un paiement :</span>
             ${MODES.map((x) => `<button type="button" class="sp-ajout" data-mode="${esc(x)}">＋ ${esc(COURT[x] || x)}</button>`).join("")}
@@ -462,13 +569,21 @@
     // par seconde, le bloc compare donc le total de la commande ouverte à celui qu'il a affiché, et se remet à
     // jour s'il a bougé — y compris quand aucun paiement n'est encore saisi (constat du 18/11/2026 : le
     // « Total à régler » restait sur l'ancienne valeur après le passage à « Autre — avec timbre fiscal »).
+    const signature = (frm) => lignes(frm).map((r) => `${r.name}|${r.mode_of_payment}|${flt(r.payment_amount, 3)}`).join(";");
+
     function veiller() {
         const frm = window.cur_frm;
         if (!frm || frm.doctype !== "Sales Order" || !frm.doc || frm.doc.docstatus !== 0) return;
         if (!frm.fields_dict.payment_schedule || frappe.get_route()[0] !== "Form") return;
         const st = etat(frm), t = total(frm);
         if (st.dernierTotal === undefined) { st.dernierTotal = t; return; }
-        if (!st.application && Math.abs(t - st.dernierTotal) >= 0.001) suivreLeTotal(frm);
+        if (!st.application && Math.abs(t - st.dernierTotal) >= 0.001) { suivreLeTotal(frm); return; }
+        // L'échéancier a été modifié ailleurs (le script de l'avoir, un modèle rechargé, le tableau) : le bloc suit.
+        if (!st.application && !st.attente && st.signature !== undefined && signature(frm) !== st.signature) {
+            st.prov = null;
+            ajusterAvoir(frm);
+            apresGeste(frm);
+        }
     }
     if (!window.__so_paiement_veille) window.__so_paiement_veille = setInterval(veiller, 500);
 
@@ -487,8 +602,11 @@
                 if (frm.doc[TYPE] === DIRECTE && frm.doc.taxes_and_charges === TAXES_AVEC) frm.set_value("taxes_and_charges", TAXES_SANS);
             }
             rendre(frm);
-            if (frm.doc.docstatus === 0) plusTard(frm, 300);
+            if (frm.doc.docstatus === 0) { plusTard(frm, 300); if (frm.doc[CHOIX_AVOIR] === "Oui") suivreAvoir(frm); }
         },
+        // « Paiement avec Avoir » : Oui pose la ligne d'avoir et diminue les autres paiements, Non la retire.
+        [CHOIX_AVOIR](frm) { suivreAvoir(frm); },
+        customer(frm) { const st = etat(frm); st.avoir = null; st.avoirClient = null; setTimeout(() => suivreAvoir(frm), 1500); },
         // Type de transaction changé (en haut ou dans le bloc) : le miroir suit, puis le dinar de timbre.
         [TYPE](frm) { rendre(frm); if (frm.doc.docstatus === 0) suivreLeTimbre(frm); },
         // L'échéancier du modèle arrive par un appel serveur : on repart de lui, plus rien n'est « tapé à la main ».
