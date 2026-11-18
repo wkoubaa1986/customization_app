@@ -86,7 +86,8 @@ frappe.pages["agenda-sous-traitant"].on_page_show = function (wrapper) {
             w.on("click", "[data-jour]", (e) => { this.jour = $(e.currentTarget).data("jour"); this.vue = "jour"; this.rendre(); });
             w.on("click", "[data-journee]", (e) => {
                 e.stopPropagation();
-                if (window.maJournee_ouvrir) window.maJournee_ouvrir($(e.currentTarget).data("journee"));
+                // Clic sur une intervention (18/11/2026) : « Ma journée » s'ouvre centrée sur elle, la carte en gris.
+                if (window.maJournee_ouvrir) window.maJournee_ouvrir($(e.currentTarget).data("journee"), $(e.currentTarget).attr("data-tache") || null);
             });
         }
 
@@ -160,7 +161,7 @@ frappe.pages["agenda-sous-traitant"].on_page_show = function (wrapper) {
             const taches = this.cache[this.jour] || [];
             const ferie = this._ferie(this.jour) ? `<div class="ag-ferie">${this._icone(this.jour)} ${esc(this._ferie(this.jour))}</div>` : "";
             const liste = ferie + (taches.length ? taches.map((t) => `
-                <div class="ag-tache ${this._classe(t)}" data-journee="${esc(this.jour)}">
+                <div class="ag-tache ${this._classe(t)}" data-journee="${esc(this.jour)}" data-tache="${esc(t.tache || t.name || "")}">
                   <div class="ag-heure">${esc(t.debut)}</div>
                   <div style="flex:1">
                     <div><span>${ICONES[t.type] || "📌"}</span> <b>${esc(t.type)}</b> · <span class="ag-client">${esc(t.client)}</span></div>
@@ -183,7 +184,7 @@ frappe.pages["agenda-sous-traitant"].on_page_show = function (wrapper) {
                   <div class="ag-sem-jour ${j === auj ? "auj" : ""} ${this._ferie(j) ? "ferie" : ""}" data-jour="${j}">
                     <div class="ag-sem-date">${JOURS[i]}<small>${d.format("D/M")}</small></div>
                     <div class="ag-sem-liste">${this._ferie(j) ? `<div class="ag-ferie">${this._icone(j)} ${esc(this._ferie(j))}</div>` : ""}${taches.length ? taches.map((t) =>
-                        `<div class="ag-sem-ligne ${this._classe(t)}"><b>${esc(t.debut)}</b> ${ICONES[t.type] || "📌"} ${esc(t.type)} · ${esc(t.client)}</div>`).join("")
+                        `<div class="ag-sem-ligne ${this._classe(t)}" data-journee="${j}" data-tache="${esc(t.tache || t.name || "")}" style="cursor:pointer"><b>${esc(t.debut)}</b> ${ICONES[t.type] || "📌"} ${esc(t.type)} · ${esc(t.client)}</div>`).join("")
                         : `<span class="ag-muted">—</span>`}</div>
                   </div>`);
                 d = d.add(1, "day");

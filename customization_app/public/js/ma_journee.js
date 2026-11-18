@@ -40,6 +40,9 @@ frappe.provide("frappe.views");
         .mj-carte.faite { border-color:#86efac; background:#f0fdf4; }
         .mj-carte.faite .mj-tete { border-bottom-color:#bbf7d0; }
         .mj-carte.faite .mj-heure { color:#166534; }
+        /* L'intervention cliquée dans « Mon agenda » : en gris, pour la retrouver d'un coup d'œil. */
+        .mj-carte.mj-cible, .mj-carte.faite.mj-cible { background:#e9ecf0; border-color:#6b7280; box-shadow:0 0 0 2px rgba(107,114,128,.35); }
+        .mj-carte.mj-cible .mj-tete { border-bottom-color:#cbd0d8; }
         .mj-tete { display:flex; align-items:center; gap:7px; padding:9px 11px;
                    border-bottom:1px solid var(--border-color,#eef1f5); flex-wrap:wrap; }
         .mj-heure { font-weight:700; font-size:15px; }
@@ -91,11 +94,14 @@ frappe.provide("frappe.views");
     }
 
     class Journee {
-        constructor(jour) {
+        constructor(jour, tache) {
             poser_css();
             this.data = null;
             // Ouverte sur une date (agenda du sous-traitant, 31/10/2026) ou sur aujourd'hui.
             this.jour = (typeof jour === "string" && jour) ? jour : frappe.datetime.get_today();
+            // L'intervention cliquée dans l'agenda : sa carte est grisée, et la fenêtre s'y place une fois.
+            this.cible = (typeof tache === "string" && tache) ? tache : null;
+            this.cible_montree = false;
             this.employe = null;
             this.dialog = new frappe.ui.Dialog({
                 title: __("Ma journée"),
@@ -229,13 +235,27 @@ frappe.provide("frappe.views");
               ${corps}`);
             // « 🔧 À proposer » des clients de la journée, en un appel (historique_client.js).
             if (window.historique_remplir_pieces) window.historique_remplir_pieces(this.$corps);
+            this._montrer_cible();
+        }
+
+        /** L'intervention cliquée dans « Mon agenda » : la fenêtre s'y place, UNE fois (un rechargement après
+         *  une action ne doit pas faire sauter l'écran) ; sa carte reste grisée tant que la fenêtre est ouverte. */
+        _montrer_cible() {
+            if (!this.cible || this.cible_montree) return;
+            const carte = this.$corps.find(".mj-carte.mj-cible").get(0);
+            if (!carte) return;
+            this.cible_montree = true;
+            // après l'ouverture de la fenêtre et le remplissage des « pièces à proposer », qui déplacent les cartes
+            [150, 700].forEach((delai) => setTimeout(() => {
+                try { carte.scrollIntoView({ block: "center", behavior: delai > 200 ? "auto" : "smooth" }); } catch (e) { carte.scrollIntoView(); }
+            }, delai));
         }
 
         _carte(l, esc) {
             const faite = l.statut !== "Open";
             const st = { "Open": ["att", __("à faire")],
                          "Completed": ["ok", __("terminée")] }[l.statut] || ["gris", l.statut];
-            return `<div class="mj-carte ${faite ? "faite" : ""}">
+            return `<div class="mj-carte ${faite ? "faite" : ""} ${this.cible && this.cible === l.tache ? "mj-cible" : ""}" data-carte="${esc(l.tache)}">
               <div class="mj-tete">
                 <span class="mj-heure">${esc(l.debut)}</span>
                 <span class="mj-badge inf">${ICONES[l.type] || "📌"} ${esc(l.type || "?")}</span>
@@ -776,7 +796,8 @@ frappe.provide("frappe.views");
     }
 
     // Ouvrable depuis n'importe où (bouton de liste, calendrier, fiche).
-    window.maJournee_ouvrir = (jour) => new Journee(jour);
+    // `tache` (facultatif) : l'intervention sur laquelle centrer la fenêtre — clic dans « Mon agenda » (18/11/2026).
+    window.maJournee_ouvrir = (jour, tache) => new Journee(jour, tache);
 
     /* ── Le bouton, sur la liste ET le calendrier des tâches ─────────────────
      * ⚠️ PAR LE PROTOTYPE, PAS PAR `frappe.listview_settings` : d'autres

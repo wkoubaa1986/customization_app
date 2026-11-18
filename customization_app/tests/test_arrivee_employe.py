@@ -114,6 +114,21 @@ class TestCablage(unittest.TestCase):
         self.assertIn("window.location.pathname", bloc)
         self.assertIn('chemin === "/app"', bloc)
 
+    def test_un_clic_dans_l_agenda_ouvre_ma_journee_sur_la_tache(self):
+        """18/11/2026 : « lorsque je clique sur un entretien de mon agenda en simplifié, elle m'ouvre Ma journée
+        centrée sur la tâche sur laquelle j'ai cliqué, avec la tâche en gris »."""
+        agenda = self._lire("customize_erpnext", "page", "agenda_sous_traitant", "agenda_sous_traitant.js")
+        self.assertIn('window.maJournee_ouvrir($(e.currentTarget).data("journee"), $(e.currentTarget).attr("data-tache") || null)', agenda)
+        self.assertIn('class="ag-tache ${this._classe(t)}" data-journee="${esc(this.jour)}" data-tache=', agenda)   # vue jour
+        self.assertIn('class="ag-sem-ligne ${this._classe(t)}" data-journee="${j}" data-tache=', agenda)            # vue semaine
+        journee = self._lire("public", "js", "ma_journee.js")
+        self.assertIn("window.maJournee_ouvrir = (jour, tache) => new Journee(jour, tache);", journee)
+        self.assertIn('this.cible = (typeof tache === "string" && tache) ? tache : null;', journee)   # un clic de bouton passe un événement
+        self.assertIn('this.cible === l.tache ? "mj-cible" : ""', journee)
+        self.assertIn('scrollIntoView({ block: "center"', journee)
+        self.assertIn("if (!this.cible || this.cible_montree) return;", journee)                      # une seule fois
+        self.assertIn(".mj-carte.mj-cible, .mj-carte.faite.mj-cible { background:#e9ecf0;", journee)   # en gris
+
     def test_la_liste_d_articles_du_technicien(self):
         """18/11/2026 : « barre de recherche (nom, code) ; l'image avec le code, le nom, la description et le prix
         en Vente standard »."""
