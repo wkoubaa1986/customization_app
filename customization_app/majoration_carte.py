@@ -83,16 +83,40 @@ def montant_majoration(part_carte: float, taux: float, pas: float = PAS_ARRONDI)
     return arrondir_au_pas(part_carte * taux / 100.0, pas)
 
 
+def tolerance_prix(prix: float) -> float:
+    """L'écart en deçà duquel un prix est « le même » : 5 millimes, ou 0,002 % du prix s'il est élevé.
+
+    Pas le millime : sur une ligne à règle de prix, ERPNext ne garde pas le prix mais la REMISE EN %, arrondie à
+    trois décimales, et recalcule le prix à partir d'elle — un osmoseur à 650 avec 5 % de remise, majoré à
+    629,812, revient à 629,811. Avec une tolérance au millime, ce prix passait pour « retapé à la main », devenait
+    le nouveau prix de base, et la commande était majorée une seconde fois (constat du 18/11/2026 : une commande
+    à prix ronds affichait 368,597 « sans carte »)."""
+    return max(0.005, abs(float(prix or 0)) * 2e-5)
+
+
 def prix_de_base(prix: float, avant: float, avec: float) -> float:
     """Le prix d'une ligne AVANT majoration.
 
     La ligne garde son prix de base (`avant`) et le prix majoré qu'on y a posé (`avec`). Tant que le prix
-    affiché est l'un des deux, la base est `avant`. S'il est autre, quelqu'un a retapé le prix : c'est lui
-    la nouvelle base."""
+    affiché est l'un des deux (à `tolerance_prix` près), la base est `avant`. S'il est autre, quelqu'un a
+    retapé le prix : c'est lui la nouvelle base."""
     prix, avant, avec = float(prix or 0), float(avant or 0), float(avec or 0)
-    if avant and (abs(prix - avec) <= TOL or abs(prix - avant) <= TOL):
+    if avant and (abs(prix - avec) <= tolerance_prix(avec) or abs(prix - avant) <= tolerance_prix(avant)):
         return avant
     return prix
+
+
+def prix_tenable(prix: float, prix_liste: float, decimales_remise: int = 3) -> float:
+    """Le prix qu'ERPNext GARDERA sur une ligne à règle de prix, au plus près de `prix`.
+
+    Sur ces lignes ERPNext recalcule : prix = prix de liste × (1 − remise %), la remise étant arrondie à
+    `decimales_remise` décimales. On prend donc tout de suite ce prix-là pour faire les comptes : sinon la
+    majoration posée et la majoration obtenue diffèrent de quelques millimes."""
+    prix, prix_liste = float(prix or 0), float(prix_liste or 0)
+    if prix_liste <= 0 or prix > prix_liste:
+        return _r(prix)
+    remise = round((1 - prix / prix_liste) * 100 + 0.0, decimales_remise)
+    return _r(prix_liste * (1 - remise / 100.0))
 
 
 #: Écart maximal (en millimes par unité) qu'une ligne peut prendre pour que le total tombe juste.
@@ -100,7 +124,8 @@ RETOUCHE_MAX = 60
 
 
 def repartir(lignes: list, majoration: float) -> list:
-    """Les prix majorés de `lignes` ([{base, qty}]), dans le même ordre.
+    """Les prix majorés de `lignes` ([{base, qty}], plus `prix_liste` et `regle` pour une ligne à règle de
+    prix), dans le même ordre.
 
     Répartition LINÉAIRE : chaque prix est multiplié par le même coefficient (1 + majoration ÷ total des
     lignes). Un prix s'arrondit au millime et se multiplie par une quantité : le total obtenu peut manquer
@@ -108,8 +133,9 @@ def repartir(lignes: list, majoration: float) -> list:
     demi-dinar, la carte doit encaisser un montant rond) :
       1. sur UNE ligne dont la quantité divise l'écart (à l'unité : toujours) ;
       2. sinon sur DEUX lignes, de quelques millimes par unité chacune (`_retoucher_deux_lignes`).
-    Quand aucune combinaison n'existe — un seul article en 34 exemplaires : 4,000 ne se divise pas par 34 au
-    millime — l'écart reste, au plus près. Sans majoration ou sans total positif : les prix de base."""
+    Une ligne à RÈGLE DE PRIX ne prend que les prix qu'ERPNext sait garder (`prix_tenable`) et ne sert pas aux
+    retouches. Quand aucune combinaison n'existe — un seul article en 34 exemplaires : 4,000 ne se divise pas
+    par 34 au millime — l'écart reste, au plus près. Sans majoration ou sans total positif : les prix de base."""
     bases = [float(l.get("base") or 0) for l in lignes]
     qtes = [float(l.get("qty") or 0) for l in lignes]
     total = _r(sum(_r(b * q) for b, q in zip(bases, qtes)))
@@ -118,9 +144,14 @@ def repartir(lignes: list, majoration: float) -> list:
         return bases
     coefficient = 1 + majoration / total
     prix = [_r(b * coefficient) for b in bases]
+    figees = set()
+    for i, l in enumerate(lignes):
+        if l.get("regle") and float(l.get("prix_liste") or 0) > 0:
+            prix[i] = prix_tenable(prix[i], l["prix_liste"], int(l.get("decimales_remise") or 3))
+            figees.add(i)
     reste = _r(total + majoration - sum(_r(p * q) for p, q in zip(prix, qtes)))
     if abs(reste) >= 0.001:
-        ordre = sorted(range(len(lignes)), key=lambda i: -abs(prix[i] * qtes[i]))
+        ordre = [i for i in sorted(range(len(lignes)), key=lambda i: -abs(prix[i] * qtes[i])) if i not in figees]
         for i in ordre:
             if qtes[i] <= 0:
                 continue
@@ -248,7 +279,10 @@ def appliquer(doc, prevenir: bool = True) -> dict:
     # 3. Répartition sur les articles.
     participantes = [(l, b) for l, b in zip(lignes, bases) if abs(b) > TOL and flt(l.qty)]
     if majoration > 0 and participantes:
-        prix = repartir([{"base": b, "qty": flt(l.qty)} for l, b in participantes], majoration)
+        prix = repartir([{"base": b, "qty": flt(l.qty), "prix_liste": flt(l.price_list_rate),
+                          "regle": bool(_a_une_regle(l)) and flt(l.discount_percentage) > 0,
+                          "decimales_remise": l.precision("discount_percentage") or 3}
+                         for l, b in participantes], majoration)
         for (l, b), p in zip(participantes, prix):
             if abs(flt(l.rate) - p) > TOL:
                 _poser(l, p)
@@ -278,6 +312,12 @@ def appliquer(doc, prevenir: bool = True) -> dict:
     if prevenir and abs(majoration - avant_montant) >= 0.001:
         _prevenir(etat, avant_montant)
     return etat
+
+
+def _a_une_regle(ligne) -> bool:
+    """La ligne porte-t-elle une règle de prix (champ `pricing_rules` : JSON d'une liste, vide ou non) ?"""
+    brut = (ligne.get("pricing_rules") or "").strip()
+    return bool(brut) and brut not in ("[]", "null")
 
 
 def _photo(doc) -> tuple:

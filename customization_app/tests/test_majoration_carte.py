@@ -54,9 +54,45 @@ class TestPrixDeBase(unittest.TestCase):
         """ERPNext a ré-appliqué la règle de prix : le prix affiché est redevenu celui d'avant majoration."""
         self.assertEqual(M.prix_de_base(105.0, 105.0, 107.114), 105.0)
 
+    def test_prix_majore_recalcule_par_erpnext_a_un_millime_pres(self):
+        """Constat du 18/11/2026. Ligne à règle de prix : ERPNext garde la remise en % (3 décimales) et recalcule le
+        prix — un osmoseur à 650 avec 5 % de remise, majoré à 629,812, revient à 629,811. Ce n'est PAS un prix
+        retapé : la base reste 617,500, sinon la commande est majorée deux fois."""
+        remise = round((1 - 629.812 / 650.0) * 100, 3)
+        recalcule = round(650.0 * (1 - remise / 100), 3)
+        self.assertEqual(recalcule, 629.811)
+        self.assertEqual(M.prix_de_base(recalcule, 617.5, 629.812), 617.5)
+        self.assertEqual(M.prix_de_base(629.816, 617.5, 629.812), 617.5)      # jusqu'à 5 millimes (ou 0,002 %)
+        self.assertEqual(M.prix_de_base(2000.03, 1960.0, 2000.0), 1960.0)     # prix élevé : 0,002 % = 0,040
+
     def test_prix_retape_a_la_main(self):
         """Ni la base ni le prix majoré : quelqu'un a retapé le prix, c'est la nouvelle base."""
         self.assertEqual(M.prix_de_base(120.0, 105.0, 107.114), 120.0)
+
+
+class TestPrixTenable(unittest.TestCase):
+    """Sur une ligne à règle de prix, on ne pose que les prix qu'ERPNext sait garder (remise en %, 3 décimales)."""
+
+    def test_le_prix_tenable_est_celui_qu_erpnext_recalcule(self):
+        self.assertEqual(M.prix_tenable(629.812, 650.0), 629.811)
+        self.assertEqual(M.prix_tenable(28.558, 35.0), 28.558)              # déjà tenable
+        self.assertEqual(M.prix_tenable(M.prix_tenable(629.812, 650.0), 650.0), 629.811)   # point fixe
+
+    def test_au_dessus_du_prix_de_liste_rien_a_faire(self):
+        """Au-dessus du prix de liste, le prix est posé en marge (montant) : pas de remise en %, pas d'arrondi."""
+        self.assertEqual(M.prix_tenable(662.962, 650.0), 662.962)
+        self.assertEqual(M.prix_tenable(10.0, 0), 10.0)
+
+    def test_la_repartition_tombe_juste_avec_une_ligne_a_regle_de_prix(self):
+        lignes = [{"base": 393.49, "qty": 3, "prix_liste": 414.2, "regle": True},      # 5 % de remise (règle)
+                  {"base": 305.9, "qty": 5, "prix_liste": 322.0, "regle": True},
+                  {"base": 105.0, "qty": 1}, {"base": 4.0, "qty": 20}]
+        base = total(lignes, [l["base"] for l in lignes])
+        majoration = M.montant_majoration(base, 2)
+        prix = M.repartir(lignes, majoration)
+        self.assertEqual(total(lignes, prix), round(base + majoration, 3))
+        for l, p in zip(lignes[:2], prix[:2]):
+            self.assertEqual(p, M.prix_tenable(p, l["prix_liste"]))          # ERPNext ne les bougera pas
 
 
 class TestRepartition(unittest.TestCase):
