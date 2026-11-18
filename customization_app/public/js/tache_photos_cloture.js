@@ -602,7 +602,7 @@ function tache_dialogue_cloture(frm, exigences) {
 
     rendre();
     d.show();
-    tache_bouton_nouvelle_commande(d, ex);
+    tache_bouton_nouvelle_commande(d, ex, frm.docname || (frm.doc && frm.doc.name));
 }
 
 // « ➕ Créer une nouvelle commande » sous le champ Commande du dialogue :
@@ -610,7 +610,7 @@ function tache_dialogue_cloture(frm, exigences) {
 // reste derrière), pré-remplie avec le client de la tâche et le MAGASIN de
 // l'employé affecté. À la fermeture, la commande créée est reprise dans le
 // champ automatiquement.
-function tache_bouton_nouvelle_commande(d, ex) {
+function tache_bouton_nouvelle_commande(d, ex, tache) {
     const ctrl = d.fields_dict && d.fields_dict.commande;
     if (!ctrl || !ctrl.$wrapper) return;
 
@@ -628,8 +628,27 @@ function tache_bouton_nouvelle_commande(d, ex) {
             ➕ ${__("Créer une nouvelle commande")}</button>`
     ).appendTo(ctrl.$wrapper);
 
+    // Technicien en écran simplifié (18/11/2026) : une commande en trois gestes — ses articles, le total, le
+    // règlement (commande_technicien.js) — à la place du formulaire complet, qui reste accessible depuis cet écran.
+    const simple = frappe.boot && frappe.boot.ecran_simplifie;
+    const en_simple = !!(tache && simple && simple.sous_traitant === false && typeof window.commande_technicien === "function");
+
     $btn.on("click", (e) => {
         e.preventDefault();
+        if (en_simple) {
+            window.commande_technicien(tache, {
+                cree: (nom) => {
+                    d.set_value("commande", nom);
+                    frappe.show_alert({ message: __("Commande {0} liée à la clôture", [nom]), indicator: "green" });
+                },
+                formulaire: () => formulaire_complet(),
+            });
+            return;
+        }
+        formulaire_complet();
+    });
+
+    const formulaire_complet = () => {
         derniere_commande().then((avant) => {
             const qs = new URLSearchParams(ex.nouvelle_commande || {}).toString();
             frappe
@@ -675,5 +694,5 @@ function tache_bouton_nouvelle_commande(d, ex) {
                     }
                 });
         });
-    });
+    };
 }

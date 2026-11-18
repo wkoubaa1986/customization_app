@@ -585,6 +585,9 @@ app_include_js = [_js("customer_quick_entry.js"),
                   _js("tache_position.js"),
                   # Fiche tâche d'un employé hors de ma liste : ouverte à tous, mais en consultation seule (tache_lecture.py).
                   _js("tache_lecture.js"),
+                  # Technicien en écran simplifié : la commande en trois gestes depuis la clôture — ses articles
+                  # (son stock, ou hors stock marqué), le total, le règlement (commande_technicien.py).
+                  _js("commande_technicien.js"),
                   _js("tache_cloture_partenaire.js"),
                   # Sous-traitants (30/10/2026) : accueil sur le calendrier + Ma journée, clôture mobile
                   # (articles de son stock + règlement), création en un geste depuis la liste des employés.
