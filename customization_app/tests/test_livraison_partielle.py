@@ -178,8 +178,8 @@ class TestPlanEcheancier(unittest.TestCase):
         self.assertEqual(neuve["mode_of_payment"], MODE_DETTE)
         self.assertEqual(neuve["payment_amount"], 100.0)
         self.assertEqual(neuve["invoice_portion"], 0)
-        # Le 1er et le 2 sont pris : la première date libre est le 3.
-        self.assertEqual(neuve["due_date"], date(2026, 9, 3))
+        # Datée du jour, même si une autre ligne porte déjà ce jour (echeances_meme_jour) : plus de décalage.
+        self.assertEqual(neuve["due_date"], date(2026, 9, 1))
 
     def test_deux_lignes_de_dette_la_premiere_reste_l_autre_part(self):
         lignes = [_ligne(100, MODE_DETTE, 1, "D1"), _ligne(200, MODE_DETTE, 2, "D2"), _ligne(50, jour=3)]
@@ -225,18 +225,18 @@ class TestPlanEcheancierPerte(unittest.TestCase):
             + sum(n["payment_amount"] for n in plan["nouvelles"])
         self.assertEqual(total, 1910.0)
 
-    def test_la_perte_evite_la_date_de_la_dette_conservee(self):
-        # La dette est datée du 1er ; une perte « du 1er » se décale au 8 (2 à 7 pris aussi).
+    def test_la_perte_porte_le_jour_meme_comme_la_dette_conservee(self):
+        # La dette est datée du 1er ; la perte « du 1er » garde le 1er (plusieurs paiements le même jour sont permis).
         plan = plan_echeancier(ECHEANCIER_03111, 1910, aujourd_hui=date(2026, 9, 1), perte=50)
-        self.assertEqual(plan["nouvelles"][0]["due_date"], date(2026, 9, 8))
+        self.assertEqual(plan["nouvelles"][0]["due_date"], date(2026, 9, 1))
 
     def test_sans_ligne_de_dette_partage_cree_deux_lignes_neuves(self):
         lignes = [_ligne(500, jour=1), _ligne(300, jour=2)]
         plan = plan_echeancier(lignes, 900, aujourd_hui=date(2026, 9, 1), perte=40)
         self.assertIsNone(plan["ligne_dette"])
         modes = [(n["mode_of_payment"], n["payment_amount"], n["due_date"]) for n in plan["nouvelles"]]
-        self.assertEqual(modes, [(MODE_DETTE, 60.0, date(2026, 9, 3)),
-                                 (MODE_PERTE, 40.0, date(2026, 9, 4))])
+        self.assertEqual(modes, [(MODE_DETTE, 60.0, date(2026, 9, 1)),
+                                 (MODE_PERTE, 40.0, date(2026, 9, 1))])
 
     def test_sans_ligne_de_dette_tout_en_perte_cree_une_ligne_de_perte(self):
         lignes = [_ligne(500, jour=1), _ligne(300, jour=2)]

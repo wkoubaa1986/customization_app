@@ -14,3 +14,16 @@ def _apply_get_item_details_override():
 
 _apply_get_item_details_override()
 from customization_app.monkey_patches import item_variant
+
+# Plusieurs paiements le même jour sur une commande / facture de vente : le refus d'ERPNext
+# (« duplicate due dates ») est levé, plus aucune échéance n'est décalée (echeances_meme_jour).
+def _apply_echeances_meme_jour():
+    try:
+        from customization_app.echeances_meme_jour import appliquer
+        appliquer()
+    except Exception as e:
+        import sys
+        print("[customization_app] échéances du même jour : surcharge non appliquée : %s" % e, file=sys.stderr)
+
+
+_apply_echeances_meme_jour()

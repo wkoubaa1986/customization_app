@@ -142,9 +142,10 @@ def lignes_paiement(paiements: list, total: float, jour=None) -> tuple[list, lis
             if len(commentaire) < COMMENTAIRE_MIN:
                 erreurs.append(_("Dette : expliquez en commentaire ({0} caractères minimum).").format(COMMENTAIRE_MIN))
                 continue
-        # ERPNext refuse deux échéances à la même date : la 2e ligne d'un fractionné prend J+1, la 3e J+2…
+        # Toutes les lignes d'un paiement fractionné portent le jour J : plusieurs paiements le même jour
+        # sont permis depuis le 18/11/2026 (echeances_meme_jour), plus de J+1, J+2…
         ligne = {"mode_of_payment": mode, "payment_amount": round(montant, 3),
-                 "due_date": str(add_days(getdate(jour), len(lignes))) if jour else None}
+                 "due_date": str(getdate(jour)) if jour else None}
         if mode in MODES_AVEC_PIECE:
             ligne["custom__n_chèque__transaction"] = numero
             ligne["custom_banque"] = (p.get("banque") or "").strip()

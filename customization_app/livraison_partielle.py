@@ -314,8 +314,8 @@ def plan_echeancier(lignes, nouveau_total, aujourd_hui=None, perte=0):
         dates.append(neuve["due_date"])
 
     if dette and perte:
-        # Reste dû partagé : la perte prend une ligne à part, datée du jour
-        # (ERPNext refuse deux échéances à la même date).
+        # Reste dû partagé : la perte prend une ligne à part, datée du jour — le même jour que la
+        # dette, ce qui est permis depuis le 18/11/2026 (echeances_meme_jour).
         plan["nouvelles"].append(_ligne_neuve(MODE_PERTE, perte, date_echeance_libre(dates, jour())))
     return plan
 

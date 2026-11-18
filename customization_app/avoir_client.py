@@ -488,13 +488,13 @@ def index_ligne_a_reduire(lignes):
 
 
 def date_echeance_libre(dates_prises, depart):
-    """ERPNext refuse deux échéances à la même date : on décale d'un jour
-    jusqu'à en trouver une de libre."""
-    prises = {getdate(d) for d in dates_prises if d}
-    jour = getdate(depart)
-    while jour in prises:
-        jour = getdate(add_days(jour, 1))
-    return jour
+    """La date d'échéance d'une ligne ajoutée : le jour de départ, tel quel.
+
+    Jusqu'au 18/11/2026 on décalait d'un jour tant que la date était prise, parce qu'ERPNext refusait deux
+    échéances à la même date. Ce refus est levé pour les documents de vente (echeances_meme_jour) : plusieurs
+    paiements peuvent porter le même jour, et l'échéance n'est plus jamais décalée. `dates_prises` est gardé
+    pour les appelants, sans effet."""
+    return getdate(depart)
 
 
 def plan_application_avoir(lignes, index, montant, date_commande=None):

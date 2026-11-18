@@ -175,19 +175,17 @@ class TestLigneAReduire(unittest.TestCase):
 
 
 class TestDateEcheanceLibre(unittest.TestCase):
-    """ERPNext refuse deux échéances à la même date."""
+    """Plusieurs paiements le même jour sont permis (echeances_meme_jour) : l'échéance n'est plus décalée."""
 
     def test_une_date_libre_est_gardee(self):
         self.assertEqual(
             date_echeance_libre([date(2026, 9, 1)], date(2026, 9, 5)), date(2026, 9, 5))
 
-    def test_une_date_prise_est_decalee_au_jour_suivant(self):
+    def test_une_date_deja_prise_est_gardee_aussi(self):
         self.assertEqual(
-            date_echeance_libre([date(2026, 9, 5)], date(2026, 9, 5)), date(2026, 9, 6))
-
-    def test_le_decalage_saute_les_jours_deja_pris(self):
+            date_echeance_libre([date(2026, 9, 5)], date(2026, 9, 5)), date(2026, 9, 5))
         prises = [date(2026, 9, 5), date(2026, 9, 6), date(2026, 9, 7)]
-        self.assertEqual(date_echeance_libre(prises, date(2026, 9, 5)), date(2026, 9, 8))
+        self.assertEqual(date_echeance_libre(prises, date(2026, 9, 5)), date(2026, 9, 5))
 
     def test_les_dates_vides_n_empechent_rien(self):
         self.assertEqual(
@@ -218,10 +216,11 @@ class TestPlanApplicationAvoir(unittest.TestCase):
         plan = plan_application_avoir(lignes, 1, 300)
         self.assertEqual(plan["ligne_avoir"]["due_date"], date(2026, 9, 2))
 
-    def test_la_ligne_conservee_pousse_l_avoir_au_jour_suivant(self):
+    def test_l_avoir_garde_le_jour_de_la_ligne_qu_il_reduit(self):
+        """Plusieurs paiements le même jour sont permis (echeances_meme_jour) : plus de décalage au lendemain."""
         lignes = [_ligne(700, "Espèces", 1), _ligne(300, MODE_DETTE, 2)]
         plan = plan_application_avoir(lignes, 1, 120)
-        self.assertEqual(plan["ligne_avoir"]["due_date"], date(2026, 9, 3))
+        self.assertEqual(plan["ligne_avoir"]["due_date"], date(2026, 9, 2))
 
     def test_la_portion_est_partagee_au_prorata_des_montants(self):
         """ERPNext recalcule payment_amount depuis invoice_portion à chaque

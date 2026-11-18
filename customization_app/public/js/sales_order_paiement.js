@@ -8,11 +8,13 @@
 // seule vérité : Server Scripts de paiement, contrôles ERPNext, impression n'y voient aucune différence). Le
 // tableau est replié sous « Afficher le tableau » tant que la commande est en brouillon.
 //
-//   - une ligne par paiement : moyen, montant, échéance, et la pièce que le moyen exige (n° de chèque à
+//   - une ligne par paiement : moyen, montant, et la pièce que le moyen exige (n° de chèque à
 //     7 chiffres + banque, n° de transaction de la carte, référence Aramex) — en rouge tant qu'elle manque ;
 //   - on tape un montant : les autres lignes s'ajustent pour que la somme reste le total (la ligne qu'on
 //     vient de taper ne bouge pas ; celles déjà tapées à la main sont touchées en dernier) ;
 //   - « ＋ Carte », « ＋ Chèque »… ajoute un paiement ; ✕ le retire et rend son montant aux autres ;
+//   - pas de champ « échéance » : un paiement ajouté porte le jour de la commande, et plusieurs paiements
+//     peuvent porter le même jour (customization_app.echeances_meme_jour) — la date n'est jamais décalée ;
 //   - le total de la commande change (article ajouté, quantité…) : les montants suivent ;
 //   - PAIEMENT PAR CARTE : la majoration (customization_app.majoration_carte) est demandée au serveur à
 //     chaque changement et APPLIQUÉE TOUT DE SUITE à l'écran — prix des articles, total, montant de la
@@ -86,12 +88,11 @@
         frm.dirty();
     }
 
-    function dateLibre(frm) {
-        const prises = lignes(frm).map((r) => r.due_date);
-        let jour = frm.doc.transaction_date && frm.doc.transaction_date > frappe.datetime.now_date()
-            ? frm.doc.transaction_date : frappe.datetime.now_date();
-        while (prises.includes(jour)) jour = frappe.datetime.add_days(jour, 1);     // ERPNext refuse deux échéances le même jour
-        return jour;
+    /** L'échéance d'un paiement ajouté : le jour de la commande (ou aujourd'hui). Plusieurs paiements le même
+        jour sont permis (customization_app.echeances_meme_jour) : la date n'est jamais décalée. */
+    function jourDuPaiement(frm) {
+        const auj = frappe.datetime.now_date();
+        return frm.doc.transaction_date && frm.doc.transaction_date > auj ? frm.doc.transaction_date : auj;
     }
 
     /** Le moyen de paiement ne suit plus le modèle choisi : le modèle est vidé (sauf Aramex, qui pilote la livraison). */
@@ -164,7 +165,7 @@
 
     function ajouter(frm, mode) {
         const st = etat(frm), m = parts(frm), vide = !lignes(frm).length;
-        const r = frm.add_child("payment_schedule", { mode_of_payment: mode, due_date: dateLibre(frm), payment_amount: 0, invoice_portion: 0 });
+        const r = frm.add_child("payment_schedule", { mode_of_payment: mode, due_date: jourDuPaiement(frm), payment_amount: 0, invoice_portion: 0 });
         m.set(r.name, vide ? totalBase(frm) : 0);
         if (!vide) quitterLeModele(frm);
         ecrire(frm, m); st.focus = r.name; apresGeste(frm);
@@ -242,7 +243,7 @@
               .${CLASSE} .sp-champ{display:flex;flex-direction:column;gap:2px;min-width:120px}
               .${CLASSE} .sp-champ label{font-size:11px;color:var(--text-muted,#6b7280);margin:0}
               .${CLASSE} .sp-champ .form-control{height:32px;font-size:13px}
-              .${CLASSE} .sp-mode{flex:1 1 170px} .${CLASSE} .sp-montant{flex:0 1 130px} .${CLASSE} .sp-date{flex:0 1 150px}
+              .${CLASSE} .sp-mode{flex:1 1 170px} .${CLASSE} .sp-montant{flex:0 1 130px}
               .${CLASSE} .sp-piece{flex:1 1 190px} .${CLASSE} .sp-banque{flex:1 1 150px}
               .${CLASSE} .sp-montant .form-control{text-align:right;font-weight:600}
               .${CLASSE} .sp-rouge{border:2px solid #dc2626 !important}
@@ -262,11 +263,10 @@
         }
         $b.on("change", "select.sp-in-mode", function () { changerMode(frm, $(this).closest("[data-ligne]").attr("data-ligne"), $(this).val()); });
         $b.on("change", "input.sp-in-montant", function () { saisirMontant(frm, $(this).closest("[data-ligne]").attr("data-ligne"), $(this).val()); });
-        $b.on("change", "input.sp-in-date, input.sp-in-piece, select.sp-in-banque", function () {
+        $b.on("change", "input.sp-in-piece, select.sp-in-banque", function () {
             const r = lignes(frm).find((x) => x.name === $(this).closest("[data-ligne]").attr("data-ligne"));
             if (!r) return;
-            const champ2 = $(this).hasClass("sp-in-date") ? "due_date" : $(this).hasClass("sp-in-piece") ? PIECE : BANQUE;
-            r[champ2] = $(this).val().trim ? $(this).val().trim() : $(this).val();
+            r[$(this).hasClass("sp-in-piece") ? PIECE : BANQUE] = String($(this).val() || "").trim();
             frm.refresh_field("payment_schedule"); frm.dirty(); rendre(frm);
         });
         $b.on("click", ".sp-suppr", function () { retirer(frm, $(this).closest("[data-ligne]").attr("data-ligne")); });
@@ -297,8 +297,6 @@
               </select></div>
             <div class="sp-champ sp-montant"><label>${estCarte(r) ? "Part réglée par carte" : "Montant"}</label>
               <input type="text" inputmode="decimal" class="form-control sp-in-montant" value="${format_number(part, null, 3)}" ${seule ? `title="Un seul paiement : il règle toute la commande"` : ""}></div>
-            <div class="sp-champ sp-date"><label>Échéance</label>
-              <input type="date" class="form-control sp-in-date" value="${esc(r.due_date || "")}"></div>
             ${libPiece ? `<div class="sp-champ sp-piece"><label>${esc(libPiece)}</label>
               <input type="text" class="form-control sp-in-piece ${d.piece ? "sp-rouge" : ""}" value="${esc(r[PIECE] || "")}">
               ${d.piece ? `<span class="sp-erreur">${esc(d.piece)}</span>` : ""}</div>` : ""}

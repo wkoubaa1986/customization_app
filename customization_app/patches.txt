@@ -127,3 +127,4 @@ customization_app.patches.arrivee_technicien
 customization_app.patches.couleur_calendrier_employe
 customization_app.patches.case_paiement_avec_avoir
 customization_app.patches.majoration_carte
+customization_app.patches.echeances_meme_jour

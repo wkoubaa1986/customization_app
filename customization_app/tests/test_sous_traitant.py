@@ -52,10 +52,10 @@ class TestReglement(unittest.TestCase):
                                           {"mode": "Chèque", "montant": 60.5, "numero": "123", "banque": "BIAT"}],
                                          100.5, "2026-10-30")
         self.assertEqual(err, [])
-        self.assertEqual(lignes[1], {"mode_of_payment": "Chèque", "payment_amount": 60.5, "due_date": "2026-10-31",
+        self.assertEqual(lignes[1], {"mode_of_payment": "Chèque", "payment_amount": 60.5, "due_date": "2026-10-30",
                                      "custom__n_chèque__transaction": "123", "custom_banque": "BIAT"})
         self.assertNotIn("custom__n_chèque__transaction", lignes[0])
-        self.assertEqual(lignes[0]["due_date"], "2026-10-30")      # fractionné : J, J+1… (ERPNext refuse deux échéances le même jour)
+        self.assertEqual(lignes[0]["due_date"], "2026-10-30")      # fractionné : toutes les lignes le jour J (echeances_meme_jour)
 
     def test_refus_virement_carte_cheque_sans_numero_et_ecart(self):
         _, err = ST.lignes_paiement([{"mode": "Virement", "montant": 10}, {"mode": "Carte de crédit", "montant": 10},
