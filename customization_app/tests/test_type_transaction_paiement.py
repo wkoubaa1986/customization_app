@@ -32,9 +32,17 @@ class TestTypeDeTransaction(unittest.TestCase):
         self.assertIn("function versLePremier(frm, m, cible)", self.js)
         self.assertIn("suivreLeTimbre(frm)", self.js)
         # la carte comprise : le serveur refait la majoration sur la nouvelle part
-        corps = self.js[self.js.index("if (st.timbre) {"):self.js.index("if (carteEnJeu(frm)) { st.suite = 0; demander(frm); return; }")]
+        corps = self.js[self.js.index("if (st.timbreJusqua && Date.now() < st.timbreJusqua) {"):
+                        self.js.index("if (carteEnJeu(frm)) { st.suite = 0; demander(frm); return; }")]
         self.assertIn("versLePremier(frm, m, cible);", corps)
         self.assertIn("apresGeste(frm);", corps)
+
+    def test_le_total_affiche_suit_la_commande_meme_sans_paiement(self):
+        """Constat du 18/11/2026 : sans paiement saisi, « Total à régler » restait sur l'ancienne valeur après le
+        passage à « Autre — avec timbre fiscal ». Le bloc veille le total de la commande et se redessine."""
+        self.assertIn("window.__so_paiement_veille = setInterval(veiller, 500)", self.js)
+        self.assertIn("if (!rs.length) { rendre(frm); return; }", self.js)
+        self.assertIn("if (!st.application && Math.abs(t - st.dernierTotal) >= 0.001) suivreLeTotal(frm);", self.js)
 
     def test_l_etat_du_bloc_ne_passe_pas_d_une_commande_a_l_autre(self):
         self.assertIn("frm.__paiement.commande !== frm.doc.name", self.js)

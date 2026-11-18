@@ -160,7 +160,7 @@
             }
             frm.refresh_field("payment_schedule");
             frm.dirty();
-        } finally { st.application = false; }
+        } finally { st.application = false; st.dernierTotal = total(frm); }
     }
 
     // ------------------------------------------------------------------ gestes
@@ -216,34 +216,25 @@
         }
     }
 
-    /** Le type de transaction vient de changer : dès que le timbre fiscal a bougé le total, le premier paiement suit. */
-    function suivreLeTimbre(frm) {
-        const st = etat(frm), avant = total(frm);
-        st.timbre = true;
-        let n = 0;
-        clearInterval(st.guetTimbre);
-        st.guetTimbre = setInterval(() => {
-            if (Math.abs(total(frm) - avant) >= 0.001 || ++n > 20) {
-                clearInterval(st.guetTimbre);
-                suivreLeTotal(frm);
-                st.timbre = false;
-            }
-        }, 300);
-    }
+    /** Le type de transaction vient de changer : le prochain mouvement du total (dans les 15 s) est le timbre fiscal,
+        et il ira au premier paiement. C'est la veille du total (`veiller`) qui s'en aperçoit. */
+    function suivreLeTimbre(frm) { etat(frm).timbreJusqua = Date.now() + 15000; }
 
     /** Le total de la commande a bougé (article, quantité, remise…) : les montants suivent. */
     function suivreLeTotal(frm) {
         const st = etat(frm), rs = lignes(frm);
-        if (frm.doc.docstatus !== 0 || st.application || !rs.length) return;
-        if (st.timbre) {
+        if (frm.doc.docstatus !== 0 || st.application) return;
+        st.dernierTotal = total(frm);
+        if (!rs.length) { rendre(frm); return; }                 // pas encore de paiement : le total affiché suit quand même
+        if (st.timbreJusqua && Date.now() < st.timbreJusqua) {
             // Timbre fiscal ajouté ou retiré : l'écart (1 dinar) va au premier paiement, carte comprise —
             // le serveur refait ensuite la majoration sur la nouvelle part carte.
             const m = parts(frm), cible = totalBase(frm);
             if (Math.abs(cible - rs.reduce((s, r) => s + flt(m.get(r.name)), 0)) >= 0.001) {
                 versLePremier(frm, m, cible);
-                ecrire(frm, m); st.timbre = false;
+                ecrire(frm, m); st.timbreJusqua = 0;
                 apresGeste(frm);
-            }
+            } else rendre(frm);
             return;
         }
         if (carteEnJeu(frm)) { st.suite = 0; demander(frm); return; }           // le serveur recale tout, carte comprise
@@ -382,6 +373,7 @@
         }
         $b.removeClass("sp-lecture").show();
         champ.$wrapper.toggle(!!st.tableau);
+        if (!st.application) st.dernierTotal = t;                 // ce total-là est affiché : la veille repart de lui
         const somme = arrondi(rs.reduce((s, r) => s + flt(r.payment_amount), 0)), ecart = arrondi(t - somme);
         const verdict = !rs.length ? "" : st.attente ? `<span class="sp-note">calcul…</span>`
             : Math.abs(ecart) < 0.001 ? `<span class="sp-ok">✓ Tout est réparti</span>`
@@ -415,6 +407,21 @@
     }
 
     // ------------------------------------------------------------------ branchements
+
+    // LA VEILLE DU TOTAL. ERPNext recalcule le total de la commande sans prévenir personne (article, quantité,
+    // remise, taxes qui arrivent du serveur après un changement de type…) : aucun événement à écouter. Deux fois
+    // par seconde, le bloc compare donc le total de la commande ouverte à celui qu'il a affiché, et se remet à
+    // jour s'il a bougé — y compris quand aucun paiement n'est encore saisi (constat du 18/11/2026 : le
+    // « Total à régler » restait sur l'ancienne valeur après le passage à « Autre — avec timbre fiscal »).
+    function veiller() {
+        const frm = window.cur_frm;
+        if (!frm || frm.doctype !== "Sales Order" || !frm.doc || frm.doc.docstatus !== 0) return;
+        if (!frm.fields_dict.payment_schedule || frappe.get_route()[0] !== "Form") return;
+        const st = etat(frm), t = total(frm);
+        if (st.dernierTotal === undefined) { st.dernierTotal = t; return; }
+        if (!st.application && Math.abs(t - st.dernierTotal) >= 0.001) suivreLeTotal(frm);
+    }
+    if (!window.__so_paiement_veille) window.__so_paiement_veille = setInterval(veiller, 500);
 
     let minuterieTotal = null;
     const plusTard = (frm, delai = 700) => { clearTimeout(minuterieTotal); minuterieTotal = setTimeout(() => suivreLeTotal(frm), delai); };
