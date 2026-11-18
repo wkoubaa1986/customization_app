@@ -40,6 +40,14 @@ frappe.provide("frappe.views");
         .mj-carte.faite { border-color:#86efac; background:#f0fdf4; }
         .mj-carte.faite .mj-tete { border-bottom-color:#bbf7d0; }
         .mj-carte.faite .mj-heure { color:#166534; }
+        /* Nouvelle depuis 8h30 : rouge clair. Heure ou type modifié depuis 8h30 : orange clair. */
+        .mj-carte.mj-nouvelle { background:#fef2f2; border-color:#fca5a5; }
+        .mj-carte.mj-modifiee { background:#fff7ed; border-color:#fdba74; }
+        .mj-alerte { display:flex; flex-wrap:wrap; align-items:center; gap:6px 10px; padding:7px 11px; font-size:12.5px; }
+        .mj-alerte.nouvelle { background:#fee2e2; color:#991b1b; }
+        .mj-alerte.modifiee { background:#ffedd5; color:#9a3412; }
+        .mj-alerte .pastille { font-weight:800; border-radius:999px; padding:2px 10px; background:#fff; }
+        .mj-alerte .quand { opacity:.85; }
         /* L'intervention cliquée dans « Mon agenda » : en gris, pour la retrouver d'un coup d'œil. */
         .mj-carte.mj-cible, .mj-carte.faite.mj-cible { background:#e9ecf0; border-color:#6b7280; box-shadow:0 0 0 2px rgba(107,114,128,.35); }
         .mj-carte.mj-cible .mj-tete { border-bottom-color:#cbd0d8; }
@@ -255,7 +263,15 @@ frappe.provide("frappe.views");
             const faite = l.statut !== "Open";
             const st = { "Open": ["att", __("à faire")],
                          "Completed": ["ok", __("terminée")] }[l.statut] || ["gris", l.statut];
-            return `<div class="mj-carte ${faite ? "faite" : ""} ${this.cible && this.cible === l.tache ? "mj-cible" : ""}" data-carte="${esc(l.tache)}">
+            // Créée, confiée ou modifiée le jour même après 8h30 (18/11/2026) : rouge clair « nouvelle tâche à faire »,
+            // orange clair avec ce qui a changé. Décidé par le serveur (tache_changement.alerte).
+            const al = l.alerte || null;
+            const bandeau = al ? `<div class="mj-alerte ${al.genre === "nouvelle" ? "nouvelle" : "modifiee"}">
+                <span class="pastille">${al.genre === "nouvelle" ? "🆕" : "✏️"} ${esc(al.texte)}</span>
+                ${al.detail ? `<span class="quand">${esc(al.detail)}</span>` : ""}</div>` : "";
+            return `<div class="mj-carte ${faite ? "faite" : ""} ${al ? "mj-" + (al.genre === "nouvelle" ? "nouvelle" : "modifiee") : ""} ${
+                this.cible && this.cible === l.tache ? "mj-cible" : ""}" data-carte="${esc(l.tache)}">
+              ${bandeau}
               <div class="mj-tete">
                 <span class="mj-heure">${esc(l.debut)}</span>
                 <span class="mj-badge inf">${ICONES[l.type] || "📌"} ${esc(l.type || "?")}</span>

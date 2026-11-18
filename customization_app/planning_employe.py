@@ -249,6 +249,22 @@ def _a_manifester(lignes) -> list:
             and not (l.get("colis") or {}).get("manifeste")]
 
 
+def _alerte_du_jour(t, jour, employe):
+    """Nouvelle / modifiée depuis le départ du matin — seulement pour une tâche encore à faire."""
+    if t.status != "Open":
+        return None
+    try:
+        from customization_app import tache_changement as TC
+
+        marque = (TC.lire(frappe.db.get_value(DOCTYPE_TACHE, t.name, TC.CHAMP))
+                  if frappe.db.has_column(DOCTYPE_TACHE, TC.CHAMP) else {})
+        avant = (marque.get("employe") or {}).get("avant")
+        noms = {avant: frappe.db.get_value("Employee", avant, "employee_name")} if avant else {}
+        return TC.alerte(jour, t.creation, marque, employe, noms)
+    except Exception:
+        return None
+
+
 @frappe.whitelist()
 def ma_journee(date=None, employe=None):
     """Les interventions de la journée, avec tout ce qu'il faut pour les mener."""
@@ -264,7 +280,7 @@ def ma_journee(date=None, employe=None):
         filters={"custom_choix_du_staff": cible,
                  "status": ["!=", "Cancelled"],
                  "starts_on": ["between", ["%s 00:00:00" % jour, "%s 23:59:59" % jour]]},
-        fields=["name", "status", "custom_type_dintervention", "starts_on", "ends_on",
+        fields=["name", "status", "custom_type_dintervention", "starts_on", "ends_on", "creation",
                 "custom_client", "nom_client", "tel", "details_adresse", "google_map",
                 "secteur", "commande_client", "subject", "rapport_visite",
                 "dispense_photos", "dans_local",
@@ -296,6 +312,8 @@ def ma_journee(date=None, employe=None):
         lignes.append({
             "tache": t.name,
             "statut": t.status,
+            # Créée, confiée ou modifiée le jour même après 8h30 : la carte le signale (tache_changement).
+            "alerte": _alerte_du_jour(t, jour, cible),
             "type": t.custom_type_dintervention,
             "debut": str(t.starts_on)[11:16] if t.starts_on else "",
             "fin": str(t.ends_on)[11:16] if t.ends_on else "",

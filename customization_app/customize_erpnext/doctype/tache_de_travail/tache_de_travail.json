@@ -51,7 +51,8 @@
   "ar_client",
   "ar_adresse",
   "ar_sujet",
-  "ar_hash"
+  "ar_hash",
+  "changement_du_jour"
  ],
  "fields": [
   {
@@ -356,6 +357,16 @@
    "hidden": 1,
    "label": "AR Hash",
    "read_only": 1
+  },
+  {
+   "description": "Rempli automatiquement : heure, type ou employé changés le jour même après 8h30 (Ma journée).",
+   "fieldname": "changement_du_jour",
+   "fieldtype": "Small Text",
+   "hidden": 1,
+   "label": "Changement du jour (suivi)",
+   "no_copy": 1,
+   "print_hide": 1,
+   "read_only": 1
   }
  ],
  "grid_page_length": 50,
@@ -368,7 +379,7 @@
    "link_fieldname": "tache_de_travail"
   }
  ],
- "modified": "2026-11-18 23:00:00.000000",
+ "modified": "2026-11-19 00:30:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Tache de travail",

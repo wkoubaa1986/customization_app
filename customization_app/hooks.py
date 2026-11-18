@@ -253,7 +253,10 @@ doc_events = {
         "validate": "customization_app.zones_magasin.item_validate",
     },
     "Tache de travail": {
-        "before_save": "customization_app.api.before_save_tache_de_travail",
+        "before_save": ["customization_app.api.before_save_tache_de_travail",
+                        # Heure, type ou employé changés le jour même après 8h30 : noté sur la tâche, pour que
+                        # « Ma journée » la signale au technicien (tache_changement.py).
+                        "customization_app.tache_changement.noter"],
         # ATTENTION : « after_save » n'est pas un événement Frappe — le
         # framework ne l'appelle jamais. Ce hook est donc inactif depuis sa
         # mise en place. Laissé en l'état : l'activer ferait tourner pour la
