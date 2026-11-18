@@ -502,9 +502,27 @@ def creer(date, heure=None, employes=None, titre=None, lieu=None, activites=None
             frappe.throw(_("Une réunion avec exactement ces participants est déjà prévue ce jour-là ({0}).").format(n))
     if cint(toutes_les) and jusquau:
         noms = creer_serie(date, jusquau, cint(toutes_les), heure, employes, titre, lieu, activites)
-        return {"name": noms[0], "noms": noms}
+        return {"name": noms[0], "noms": noms, "lien_visio": frappe.db.get_value(DOCTYPE, noms[0], "lien_visio")}
     doc = creer_reunion(date, heure, employes=employes, titre=titre, lieu=lieu, activites=activites)
-    return {"name": doc.name, "noms": [doc.name]}
+    return {"name": doc.name, "noms": [doc.name], "lien_visio": doc.lien_visio}
+
+
+@frappe.whitelist()
+def preparer_creation():
+    """Ce qu'il faut au dialogue « Nouvelle réunion » ouvert HORS de la page du Suivi d'activité — le bouton
+    « 👥 Réunion » du calendrier des tâches (demande du 18/11/2026 : « je veux qu'il crée une réunion comme à partir
+    de l'onglet Réunion, avec lien, comme en suivi d'activité »). Mêmes valeurs par défaut que l'onglet : l'équipe
+    du réglage, l'heure, le lieu, la prochaine date. Ne lève pas : `peut_gerer` dit si ce compte peut créer."""
+    if not SA.est_responsable():
+        return {"peut_gerer": False}
+    cfg = config()
+    derniere = _derniere()
+    return {"peut_gerer": True,
+            "employes": [{"name": e["name"], "employee_name": e["employee_name"]} for e in SA.employes_parametres()],
+            "heure": str(cfg["reunion_heure"] or "09:00:00"), "lieu": cfg["reunion_lieu"] or "",
+            "duree": cint(cfg["reunion_duree"]), "visio": cint(cfg["reunion_visio"]),
+            "prochaine_date": (str(prochaine_date(cfg, nowdate(), derniere.date if derniere else None))
+                               if cfg["reunion_active"] else None)}
 
 
 @frappe.whitelist()
