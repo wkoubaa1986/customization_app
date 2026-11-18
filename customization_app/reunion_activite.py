@@ -180,6 +180,11 @@ def heure_hm(h) -> str:
     return "%02d:%02d" % (cint(parts[0]), cint(parts[1]))
 
 
+def meme_creneau(heure_a, heure_b) -> bool:
+    """Deux réunions du même jour commencent-elles à la même heure (à la minute) ? PURE."""
+    return heure_hm(heure_a) == heure_hm(heure_b)
+
+
 def texte_rappel(doc, quand: str) -> str:
     from customization_app.sms_annulation import sans_accents
     heure = heure_hm(doc.heure)
@@ -487,8 +492,8 @@ def _gerer():
 def creer(date, heure=None, employes=None, titre=None, lieu=None, activites=None, toutes_les=0, jusquau=None):
     """Réunion à la date voulue pour les employés cochés (tous par défaut), qui suit éventuellement des activités
     précises. Avec `toutes_les` (semaines) et `jusquau` : une SÉRIE, une réunion par occurrence, un lien visio chacune.
-    Plusieurs réunions le même jour sont possibles (équipes différentes) ; refusée seulement si la même liste de
-    participants a déjà une réunion prévue ce jour."""
+    Plusieurs réunions le même jour sont possibles (équipes différentes, ou les mêmes personnes à une autre heure) ;
+    refusée seulement si la même liste de participants a déjà une réunion prévue ce jour À LA MÊME HEURE."""
     _gerer()
     activites = frappe.parse_json(activites) if isinstance(activites, str) and activites.startswith("[") else (activites or [])
     employes = frappe.parse_json(employes) if isinstance(employes, str) and employes.startswith("[") else employes
@@ -497,9 +502,16 @@ def creer(date, heure=None, employes=None, titre=None, lieu=None, activites=None
     employes = [e for e in (employes or []) if e] or [e["name"] for e in SA.employes_parametres()]
     if not employes:
         frappe.throw(_("Choisissez au moins un participant."))
-    for n in frappe.get_all(DOCTYPE, filters={"date": str(getdate(date)), "statut": "Prévue"}, pluck="name"):
-        if set(frappe.get_all("Reunion Participant", filters={"parent": n, "parenttype": DOCTYPE}, pluck="employe")) == set(employes):
-            frappe.throw(_("Une réunion avec exactement ces participants est déjà prévue ce jour-là ({0}).").format(n))
+    # Seul un vrai doublon est refusé : mêmes participants, même jour ET même heure (un double clic, une série déjà
+    # créée). Une deuxième réunion des mêmes personnes à une autre heure du jour est permise (18/11/2026 : « des fois
+    # je veux créer une nouvelle réunion » — Salma avait déjà son point de 14:00, celui de 09:00 était refusé).
+    voulue = heure_hm(heure or config()["reunion_heure"])
+    for r in frappe.get_all(DOCTYPE, filters={"date": str(getdate(date)), "statut": "Prévue"}, fields=["name", "heure"]):
+        if not meme_creneau(voulue, r.heure):
+            continue
+        if set(frappe.get_all("Reunion Participant", filters={"parent": r.name, "parenttype": DOCTYPE}, pluck="employe")) == set(employes):
+            frappe.throw(_("Une réunion avec exactement ces participants est déjà prévue ce jour-là à {0} ({1}). "
+                           "Changez l'heure pour en créer une autre.").format(voulue, r.name))
     if cint(toutes_les) and jusquau:
         noms = creer_serie(date, jusquau, cint(toutes_les), heure, employes, titre, lieu, activites)
         return {"name": noms[0], "noms": noms, "lien_visio": frappe.db.get_value(DOCTYPE, noms[0], "lien_visio")}

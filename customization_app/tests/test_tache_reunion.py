@@ -62,6 +62,27 @@ class TestService(unittest.TestCase):
         self.assertTrue(getattr(R.preparer_creation, "__wrapped__", None) or R.preparer_creation in frappe_whitelisted())
 
 
+class TestMemesParticipantsLeMemeJour(unittest.TestCase):
+    """18/11/2026 : « pourquoi j'ai ça ? des fois je veux créer une nouvelle réunion » — Salma avait déjà son point
+    de 14:00 (REU-2026-00006), une réunion avec elle seule à 09:00 était refusée."""
+
+    def test_une_autre_heure_du_meme_jour_n_est_pas_un_doublon(self):
+        from datetime import timedelta
+        self.assertFalse(R.meme_creneau("09:00:00", timedelta(seconds=50400)))           # 09:00 demandé, 14:00 en base
+        self.assertFalse(R.meme_creneau("09:00", "09:30:00"))
+
+    def test_la_meme_heure_reste_un_doublon(self):
+        from datetime import timedelta
+        self.assertTrue(R.meme_creneau("14:00:00", timedelta(seconds=50400)))
+        self.assertTrue(R.meme_creneau("9:00", "09:00:00"))
+
+    def test_la_creation_ne_refuse_que_le_meme_creneau(self):
+        source = inspect.getsource(R.creer)
+        self.assertIn("if not meme_creneau(voulue, r.heure):", source)
+        self.assertIn('voulue = heure_hm(heure or config()["reunion_heure"])', source)   # sans heure : celle du réglage
+        self.assertIn("Changez l'heure pour en créer une autre.", source)
+
+
 def frappe_whitelisted():
     import frappe
     return frappe.whitelisted
