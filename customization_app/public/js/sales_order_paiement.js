@@ -21,11 +21,20 @@
 //     carte. Le vendeur lit le montant exact à passer sur le terminal avant d'enregistrer, et
 //     l'enregistrement retrouve la commande déjà dans son état final.
 //
+// TYPE DE TRANSACTION (18/11/2026) : le choix du haut de la commande est RÉPÉTÉ en tête de ce bloc, les deux
+// sont liés (le bloc n'écrit que dans le champ du haut, qui fait le reste : modèle de taxes avec ou sans
+// timbre fiscal). Le dinar de timbre qui apparaît ou disparaît est ajouté ou retiré du PREMIER paiement qui
+// peut le prendre. Sur une commande neuve, « Vente directe sans BL et Facture » est le choix par défaut
+// (patch type_transaction_defaut) et le modèle de taxes sans timbre est posé d'emblée.
+//
 // Montants : pour une ligne par carte, on saisit la PART DE LA COMMANDE réglée par carte ; le montant à
 // passer sur le terminal (part + majoration) est affiché à côté, et c'est lui que porte le tableau.
 (() => {
     const CARTE = "Carte de crédit", ARAMEX = "Livraison Aramex", CLASSE = "so-paiement", TOL = 0.0005, DELAI = 450;
     const PIECE = "custom__n_chèque__transaction", BANQUE = "custom_banque";
+    const TYPE = "custom_type_de_transaction", DIRECTE = "Vente directe sans BL et Facture";
+    const TAXES_AVEC = "Vente Standard avec Timbre Fiscal - A&S", TAXES_SANS = "Vente Standard Sans Timbre Fiscale - A&S";
+    const TYPE_LIBELLE = { [DIRECTE]: "Vente directe sans BL et Facture — sans timbre fiscal", "Autre": "Autre — avec timbre fiscal" };
     const MODES = ["Espèces", "Chèque", CARTE, "Virement", "Traite bancaire LC", "Dette non payée"];
     const COURT = { "Espèces": "Espèces", "Chèque": "Chèque", [CARTE]: "Carte", "Virement": "Virement",
         "Traite bancaire LC": "Traite", "Dette non payée": "Dette (à payer plus tard)" };
@@ -40,8 +49,11 @@
     const nombre = (v) => `<span dir="ltr">${format_number(flt(v, 3), null, 3)}</span>`;
     const arrondi = (v) => flt(v, 3);
 
+    /** L'état du bloc, propre à UNE commande : Frappe réutilise le même formulaire d'une commande à l'autre. */
     function etat(frm) {
-        if (!frm.__paiement) frm.__paiement = { fixes: new Set(), application: false, tour: 0, suite: 0, tableau: false };
+        if (!frm.__paiement || frm.__paiement.commande !== frm.doc.name) {
+            frm.__paiement = { commande: frm.doc.name, fixes: new Set(), application: false, tour: 0, suite: 0, tableau: false };
+        }
         return frm.__paiement;
     }
     const lignes = (frm) => frm.doc.payment_schedule || [];
@@ -192,10 +204,48 @@
         ecrire(frm, m); apresGeste(frm);
     }
 
+    /** Ajoute (ou retire) l'écart sur le PREMIER paiement qui peut le prendre ; s'il ne suffit pas, le suivant. */
+    function versLePremier(frm, m, cible) {
+        const noms = lignes(frm).map((r) => r.name);
+        let ecart = arrondi(cible - noms.reduce((s, n) => s + flt(m.get(n)), 0));      // > 0 : à ajouter
+        for (const n of noms) {
+            if (Math.abs(ecart) < 0.001) break;
+            if (ecart > 0) { m.set(n, arrondi(flt(m.get(n)) + ecart)); ecart = 0; break; }
+            const pris = Math.min(flt(m.get(n)), -ecart);
+            m.set(n, arrondi(flt(m.get(n)) - pris)); ecart = arrondi(ecart + pris);
+        }
+    }
+
+    /** Le type de transaction vient de changer : dès que le timbre fiscal a bougé le total, le premier paiement suit. */
+    function suivreLeTimbre(frm) {
+        const st = etat(frm), avant = total(frm);
+        st.timbre = true;
+        let n = 0;
+        clearInterval(st.guetTimbre);
+        st.guetTimbre = setInterval(() => {
+            if (Math.abs(total(frm) - avant) >= 0.001 || ++n > 20) {
+                clearInterval(st.guetTimbre);
+                suivreLeTotal(frm);
+                st.timbre = false;
+            }
+        }, 300);
+    }
+
     /** Le total de la commande a bougé (article, quantité, remise…) : les montants suivent. */
     function suivreLeTotal(frm) {
         const st = etat(frm), rs = lignes(frm);
         if (frm.doc.docstatus !== 0 || st.application || !rs.length) return;
+        if (st.timbre) {
+            // Timbre fiscal ajouté ou retiré : l'écart (1 dinar) va au premier paiement, carte comprise —
+            // le serveur refait ensuite la majoration sur la nouvelle part carte.
+            const m = parts(frm), cible = totalBase(frm);
+            if (Math.abs(cible - rs.reduce((s, r) => s + flt(m.get(r.name)), 0)) >= 0.001) {
+                versLePremier(frm, m, cible);
+                ecrire(frm, m); st.timbre = false;
+                apresGeste(frm);
+            }
+            return;
+        }
         if (carteEnJeu(frm)) { st.suite = 0; demander(frm); return; }           // le serveur recale tout, carte comprise
         const t = total(frm), somme = arrondi(rs.reduce((s, r) => s + flt(r.payment_amount), 0));
         if (Math.abs(somme - t) < 0.001) { rendre(frm); return; }
@@ -237,6 +287,9 @@
             $("head").append(`<style id="so-paiement-css">
               .${CLASSE}{margin:0 0 14px;border:1px solid var(--border-color,#e2e6e9);border-radius:10px;background:var(--card-bg,#fff)}
               .${CLASSE} .sp-tete{display:flex;flex-wrap:wrap;gap:6px 18px;align-items:baseline;padding:12px 14px;border-bottom:1px solid var(--border-color,#e2e6e9)}
+              .${CLASSE} .sp-type{display:flex;flex-wrap:wrap;gap:6px 12px;align-items:center;padding:10px 14px;border-bottom:1px solid var(--border-color,#e2e6e9);background:var(--subtle-fg,#f8f9fa);border-radius:10px 10px 0 0}
+              .${CLASSE} .sp-type label{margin:0;font-size:12.5px;font-weight:600}
+              .${CLASSE} .sp-type select{flex:1 1 260px;max-width:440px;height:32px;font-size:13px}
               .${CLASSE} .sp-total{font-size:15px;font-weight:600}
               .${CLASSE} .sp-ok{color:#15803d;font-weight:600} .${CLASSE} .sp-ko{color:#b91c1c;font-weight:600}
               .${CLASSE} .sp-ligne{display:flex;flex-wrap:wrap;gap:8px 10px;align-items:flex-start;padding:10px 14px;border-bottom:1px solid var(--border-color,#eef0f2)}
@@ -268,6 +321,10 @@
             if (!r) return;
             r[$(this).hasClass("sp-in-piece") ? PIECE : BANQUE] = String($(this).val() || "").trim();
             frm.refresh_field("payment_schedule"); frm.dirty(); rendre(frm);
+        });
+        // Le miroir n'écrit que dans le champ du haut : c'est lui qui pose le modèle de taxes (avec ou sans timbre).
+        $b.on("change", "select.sp-in-type", function () {
+            if (frm.doc[TYPE] !== $(this).val()) frm.set_value(TYPE, $(this).val());
         });
         $b.on("click", ".sp-suppr", function () { retirer(frm, $(this).closest("[data-ligne]").attr("data-ligne")); });
         $b.on("click", ".sp-ajout", function () { ajouter(frm, $(this).attr("data-mode")); });
@@ -331,6 +388,13 @@
             : ecart > 0 ? `<span class="sp-ko">⚠ Il reste ${nombre(ecart)} à répartir</span>`
             : `<span class="sp-ko">⚠ ${nombre(-ecart)} de trop par rapport au total</span>`;
         const m = parts(frm);
+        const types = String((frappe.meta.get_docfield("Sales Order", TYPE, frm.doc.name) || {}).options || "").split("\n").filter((x) => x);
+        const type = frm.fields_dict[TYPE] && types.length ? `<div class="sp-type">
+            <label>Type de transaction</label>
+            <select class="form-control sp-in-type ${frm.doc[TYPE] ? "" : "sp-rouge"}">
+              ${frm.doc[TYPE] ? "" : `<option value=""></option>`}
+              ${types.map((x) => `<option value="${esc(x)}" ${x === frm.doc[TYPE] ? "selected" : ""}>${esc(TYPE_LIBELLE[x] || x)}</option>`).join("")}
+            </select></div>` : "";
         const tete = `<div class="sp-tete">
             <span class="sp-total">Total à régler : ${nombre(t)}</span>
             ${maj > 0 ? `<span class="sp-note">dont majoration carte ${nombre(maj)} (commande sans carte : ${nombre(totalBase(frm))})</span>` : ""}
@@ -342,7 +406,7 @@
         const pied = `<div class="sp-pied"><span class="sp-note">Ajouter un paiement :</span>
             ${MODES.map((x) => `<button type="button" class="sp-ajout" data-mode="${esc(x)}">＋ ${esc(COURT[x] || x)}</button>`).join("")}
             <span class="sp-lien">${st.tableau ? "Masquer le tableau" : "Afficher le tableau"}</span></div>`;
-        $b.html(tete + corps + pied);
+        $b.html(type + tete + corps + pied);
         if (st.focus) {
             const $i = $b.find(`[data-ligne="${st.focus}"] input.sp-in-montant`);
             st.focus = null;
@@ -356,7 +420,21 @@
     const plusTard = (frm, delai = 700) => { clearTimeout(minuterieTotal); minuterieTotal = setTimeout(() => suivreLeTotal(frm), delai); };
 
     frappe.ui.form.on("Sales Order", {
-        refresh(frm) { etat(frm).suite = 0; rendre(frm); if (frm.doc.docstatus === 0) plusTard(frm, 300); },
+        refresh(frm) {
+            const st = etat(frm);
+            st.suite = 0;
+            // Commande NEUVE : le type par défaut est la vente directe, donc SANS timbre — le modèle de taxes par
+            // défaut de la société (avec timbre) est remplacé une fois, à l'ouverture. Un autre modèle (exonération…)
+            // n'est pas touché.
+            if (frm.is_new() && !st.typeAligne) {
+                st.typeAligne = true;
+                if (frm.doc[TYPE] === DIRECTE && frm.doc.taxes_and_charges === TAXES_AVEC) frm.set_value("taxes_and_charges", TAXES_SANS);
+            }
+            rendre(frm);
+            if (frm.doc.docstatus === 0) plusTard(frm, 300);
+        },
+        // Type de transaction changé (en haut ou dans le bloc) : le miroir suit, puis le dinar de timbre.
+        [TYPE](frm) { rendre(frm); if (frm.doc.docstatus === 0) suivreLeTimbre(frm); },
         // L'échéancier du modèle arrive par un appel serveur : on repart de lui, plus rien n'est « tapé à la main ».
         payment_terms_template(frm) {
             const st = etat(frm); st.fixes.clear(); st.suite = 0;
