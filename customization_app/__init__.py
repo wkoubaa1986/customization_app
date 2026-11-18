@@ -27,3 +27,17 @@ def _apply_echeances_meme_jour():
 
 
 _apply_echeances_meme_jour()
+
+
+# L'avoir d'une commande n'est plus refusé pour un écart de virgule flottante (206,133 + 78 « > » 284,133) :
+# le contrôle d'ERPNext sur l'avance garde une tolérance d'un demi-millime (avance_arrondie).
+def _apply_avance_arrondie():
+    try:
+        from customization_app.avance_arrondie import appliquer
+        appliquer()
+    except Exception as e:
+        import sys
+        print("[customization_app] avance arrondie : surcharge non appliquée : %s" % e, file=sys.stderr)
+
+
+_apply_avance_arrondie()
