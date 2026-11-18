@@ -332,17 +332,26 @@ doc_events = {
     "Sales Order": {
         # Commande Aramex : ses lignes visent le Magasin (réservation au bon entrepôt) —
         # la sortie principale de l'article ne s'applique pas. Voir aramex_stock.
-        "before_validate": "customization_app.aramex_stock.sales_order_before_validate",
+        "before_validate": ["customization_app.aramex_stock.sales_order_before_validate",
+                            # Majoration carte : les échéances telles qu'elles arrivent de l'écran, gardées de
+                            # côté avant qu'ERPNext ne les recalcule depuis leurs parts (majoration_carte).
+                            "customization_app.majoration_carte.memoriser_echeancier"],
         # Marge minimale : APRÈS le validate d'ERPNext (qui ré-applique la règle de prix et recalcule
         # le prix), relève les lignes sous la marge plancher et refait les totaux (marge_minimale).
         "validate": ["customization_app.marge_minimale.sales_order_validate",
+                     # Paiement par carte : la part réglée par carte est majorée du taux réglé (2 %), la
+                     # majoration répartie sur les prix de tous les articles — APRÈS la marge minimale, dont
+                     # le prix relevé sert de base (majoration_carte, 18/11/2026).
+                     "customization_app.majoration_carte.sales_order_validate",
                      # Échéancier : moyen de paiement obligatoire sur une vente seulement (plus un reqd global
                      # qui cassait les factures d'achat — 31/10/2026).
                      "customization_app.echeancier.exiger_mode_de_paiement",
                      # Une ligne « Avoir client » ne dépasse jamais l'avoir utilisable du client (17/11/2026).
                      "customization_app.avoir_client.verifier_avoir_echeancier"],
         # Même contrôle quand l'échéancier d'une commande DÉJÀ validée est modifié (validate n'y passe pas).
-        "before_update_after_submit": "customization_app.avoir_client.verifier_avoir_echeancier",
+        "before_update_after_submit": ["customization_app.avoir_client.verifier_avoir_echeancier",
+                                       # Carte choisie APRÈS validation : les prix ne bougent plus, on le dit.
+                                       "customization_app.majoration_carte.avertir_apres_validation"],
         # on_update se déclenche à l'enregistrement d'un brouillon ET à la
         # validation : ajouter une ligne de main d'œuvre à un devis non validé
         # met donc aussitôt l'anomalie à jour. on_submit seul l'aurait raté.
@@ -636,7 +645,10 @@ app_ready = "customization_app.patches.override_get_item_details.apply"
 # bl_sous_garantie : utilisée par « Aqua World BL » pour décider d'imprimer la
 # mention de garantie. Un helper plutôt que du Jinja inline, pour résoudre la
 # descendance des groupes d'articles en une seule requête.
-jinja = {"methods": ["customization_app.jinja_methods.bl_sous_garantie"]}
+jinja = {"methods": ["customization_app.jinja_methods.bl_sous_garantie",
+                     # majoration_carte(doc) : la mention « dont majoration pour paiement par carte » en bas
+                     # de « Aqua World BC » et « Aqua World BL » (majoration_carte.mention).
+                     "customization_app.jinja_methods.majoration_carte"]}
 
 override_whitelisted_methods = {
     "erpnext.stock.get_item_details.get_item_details": "customization_app.get_item_details.get_item_details",
@@ -920,6 +932,8 @@ doctype_js = {
     "Sales Order": ["public/js/sales_order_aramex.js",
                     # Marge minimale en temps réel + prix HT sur document exonéré (marge_minimale).
                     "public/js/sales_order_marge.js",
+                    # Paiement par carte : le message de majoration dans « Termes de paiement » (majoration_carte).
+                    "public/js/sales_order_majoration_carte.js",
                     # Commande en litige : la partager avec le partenaire la fait compter au Bilan Vente.
                     "public/js/sales_order_partage_partenaire.js"],
     "Quotation": "public/js/sales_order_marge.js",

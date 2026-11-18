@@ -52,3 +52,16 @@ def bl_sous_garantie(doc):
             {"codes": tuple(codes)},
         )
     )
+
+
+def majoration_carte(doc):
+    """
+    La majoration pour paiement par carte que porte ce document, ou None :
+    {"montant", "taux", "taux_txt"}.
+
+    Utilisé en bas des print formats « Aqua World BC » (commande) et
+    « Aqua World BL » (bon de livraison) — voir customization_app.majoration_carte.
+    """
+    from customization_app import majoration_carte as M
+
+    return M.mention(doc)
