@@ -69,6 +69,30 @@ class TestCablage(unittest.TestCase):
         self.assertIn("Technicien", [r["role"] for r in page["roles"]])
         self.assertGreater(page["modified"], "2026-11-10")      # date de l'ajout du rôle : la page doit être plus récente
 
+    def test_accueil_du_technicien_clients_articles_factures_seulement(self):
+        """18/11/2026 : « une page d'accueil pour lui (mode simple technicien), dans laquelle il peut voir les
+        listes — client, article, facture — seulement »."""
+        import json
+        import re
+        page = json.loads(self._lire("customize_erpnext", "page", "accueil_technicien", "accueil_technicien.json"))
+        self.assertEqual((page["name"], page["title"]), ("accueil-technicien", "Accueil"))
+        # le technicien, pas le sous-traitant (qui ne doit voir que SES choses)
+        self.assertEqual(sorted(r["role"] for r in page["roles"]), ["System Manager", "Technicien"])
+        js = self._lire("customize_erpnext", "page", "accueil_technicien", "accueil_technicien.js")
+        self.assertIn('frappe.pages["accueil-technicien"].on_page_load', js)
+        self.assertEqual(re.findall(r'doctype: "([^"]+)"', js), ["Customer", "Item", "Sales Invoice"])   # ces trois-là, seulement
+        self.assertIn('frappe.set_route("List", l.doctype)', js)
+        self.assertNotIn("frappe.call", js)                      # aucun droit accordé ici : des liens, rien d'autre
+
+    def test_la_barre_du_technicien_mene_a_son_accueil(self):
+        nav = self._lire("public", "js", "sous_traitant.js")
+        self.assertIn('const TECHNICIEN = st.sous_traitant === false;', nav)
+        self.assertIn('const FOND = TECHNICIEN ? ["accueil-technicien"] : AGENDA;', nav)        # sous-traitant : l'agenda, comme avant
+        self.assertIn('ECRANS.unshift({ cle: "accueil"', nav)
+        self.assertIn('new Set(["Customer", "Item", "Sales Invoice"])', nav)                    # « Accueil » reste allumé dans ses listes
+        self.assertIn('libelle: __("Mon agenda"),  aller: () => frappe.set_route(...AGENDA)', nav)
+        self.assertIn('if (r[0] === "tache-de-travail" && r[1] !== "Form") { frappe.set_route(...AGENDA); return; }', nav)
+
     def test_bouton(self):
         js = self._lire("public", "js", "employee_list_arrivee.js")
         for morceau in ("arrivee_employe.creer_technicien", "options_arrivee", "ecran_simplifie", "premier_jour_recup",

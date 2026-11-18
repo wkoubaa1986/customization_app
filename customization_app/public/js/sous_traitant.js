@@ -6,6 +6,10 @@
  * s'ouvre sur l'accueil ou un espace de travail, on l'amène sur la liste de ses tâches (filtrée par le
  * serveur) et on ouvre « Ma journée ». Une barre fixe en bas de l'écran le fait circuler entre ses quatre
  * écrans : Ma journée, Agenda (jour / semaine / mois, agenda_sous_traitant.js), Mon stock, Ma caisse.
+ *
+ * Technicien interne en écran simplifié (18/11/2026) : il a en plus une page « Accueil » (accueil-technicien) —
+ * clients, articles, factures, seulement — qui devient sa page de fond ; « Mon agenda » reste dans la barre.
+ * Le sous-traitant, lui, ne voit que SES choses : pas d'accueil, son fond reste l'agenda.
  */
 (function () {
     // Sous-traitant, ou technicien interne à « écran simplifié » (10/11/2026) : même navigation du téléphone.
@@ -15,7 +19,12 @@
     const ACCUEIL = new Set(["", "home", "workspaces", "workspace", "app"]);
     // Sa page de fond : « Mon agenda » (page agenda-sous-traitant, jour / semaine / mois). « Ma journée »
     // s'ouvre par-dessus. La liste et le calendrier des tâches du Desk ne lui sont jamais montrés (31/10/2026).
-    const FOND = ["agenda-sous-traitant"];
+    const AGENDA = ["agenda-sous-traitant"];
+    // Technicien interne : sa page de fond est son accueil (clients, articles, factures) ; sous-traitant : l'agenda.
+    const TECHNICIEN = st.sous_traitant === false;
+    const FOND = TECHNICIEN ? ["accueil-technicien"] : AGENDA;
+    // Les listes ouvertes depuis l'accueil (et leurs fiches) : « Accueil » reste allumé dans la barre.
+    const ACCUEIL_LISTES = new Set(["Customer", "Item", "Sales Invoice"]);
     let deja = false;
 
     // ── Son écran : pas de barre latérale (espaces de travail, filtres de liste), la page prend toute la largeur.
@@ -32,19 +41,21 @@
                          align-items: center; justify-content: center; gap: 2px; cursor: pointer; }
         .st-nav button .ic { font-size: 20px; line-height: 1; }
         .st-nav button.on { color: #2490ef; }
+        .st-nav.st-six button { font-size: 10.5px; padding: 0 2px; }
         .modal.mj-modal .modal-content { padding-bottom: 64px; }`;
     document.head.appendChild(style);
 
     // ── La barre de navigation.
     const ECRANS = [
         { cle: "journee",    ic: "☀️", libelle: __("Ma journée"),  aller: () => window.maJournee_ouvrir && window.maJournee_ouvrir() },
-        { cle: "calendrier", ic: "📅", libelle: __("Mon agenda"),  aller: () => frappe.set_route(...FOND) },
+        { cle: "calendrier", ic: "📅", libelle: __("Mon agenda"),  aller: () => frappe.set_route(...AGENDA) },
         { cle: "stock",      ic: "📦", libelle: __("Mon stock"),   aller: () => frappe.set_route("stock-entrepots") },
         { cle: "caisse",     ic: "💰", libelle: __("Ma caisse"),   aller: () => frappe.set_route("caisse-journaliere") },
     ];
     // Technicien interne (pas sous-traitant) : il reste un employé — ses congés et ses fiches de paie, sur
     // NOTRE page (rh-technicien), dans la même barre : il en revient d'un pouce (demande utilisateur 10/11/2026).
-    if (st.sous_traitant === false) {
+    if (TECHNICIEN) {
+        ECRANS.unshift({ cle: "accueil", ic: "🏠", libelle: __("Accueil"), aller: () => frappe.set_route(...FOND) });
         ECRANS.push({ cle: "rh", ic: "🏖️", libelle: __("Congés / Paie"), aller: () => frappe.set_route("rh-technicien") });
     }
 
@@ -55,6 +66,8 @@
         if (r[0] === "stock-entrepots") return "stock";
         if (r[0] === "caisse-journaliere") return "caisse";
         if (r[0] === "rh-technicien") return "rh";
+        if (TECHNICIEN && (r[0] === "accueil-technicien"
+            || ((r[0] === "List" || r[0] === "Form") && ACCUEIL_LISTES.has(r[1])))) return "accueil";
         return "";
     }
 
@@ -64,6 +77,7 @@
             $nav = $(`<div class="st-nav">${ECRANS.map((e) =>
                 `<button type="button" data-ecran="${e.cle}"><span class="ic">${e.ic}</span>${e.libelle}</button>`).join("")}</div>`)
                 .appendTo(document.body);
+            $nav.toggleClass("st-six", ECRANS.length > 5);
             $nav.on("click", "button", (ev) => {
                 const e = ECRANS.find((x) => x.cle === $(ev.currentTarget).attr("data-ecran"));
                 // Les fenêtres ouvertes (Ma journée, agenda, clôture) se ferment : on change d'écran.
@@ -79,7 +93,7 @@
         peindre();
         const r = frappe.get_route() || [];
         // Liste, calendrier ou rapport des tâches : pas pour lui — l'app lui montre ses tâches dans l'agenda.
-        if (r[0] === "tache-de-travail" && r[1] !== "Form") { frappe.set_route(...FOND); return; }
+        if (r[0] === "tache-de-travail" && r[1] !== "Form") { frappe.set_route(...AGENDA); return; }
         if (deja) return;
         if (!ACCUEIL.has((r[0] || "").toLowerCase()) && !(r[0] === "Workspaces")) return;
         deja = true;
