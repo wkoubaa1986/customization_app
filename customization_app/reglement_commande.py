@@ -19,6 +19,11 @@ toute la commande s'imprime comme elle ; un BL partiel dit « Ce BL fait partie 
 du règlement (« Avoir client utilisé 78,000 ») ; la ristourne — la remise supplémentaire de la commande quand
 « Appliquer Ristourne » est à Oui — est dite à part (`ristourne_txt`), elle est déjà déduite du total.
 
+Place sur la page (18/11/2026, « pourquoi c'est devenu divisé en deux en PDF ») : le pied de ces modèles tient tout
+juste sur une page — le tableau des articles est complété par des lignes vides jusqu'à 7. Trois lignes de texte
+en plus faisaient passer tout le pied sur une deuxième page. `hauteur` estime le nombre de lignes imprimées du
+bloc ; le modèle retire autant de lignes VIDES du tableau (jamais une ligne d'article) : la page garde sa hauteur.
+
 Lecture seule ; ne lève jamais (une impression ne doit pas échouer pour un bloc d'information).
 """
 from __future__ import annotations
@@ -35,6 +40,9 @@ LIBELLES = {
     "Retenue a la source vente": "Retenue à la source",
     "Avoir client": "Avoir client utilisé",
 }
+#: Caractères par ligne imprimée au bas de la page (11 px, texte aligné à droite) — estimation PRUDENTE : compter
+#: une ligne de trop retire une ligne vide de plus, sans dommage ; en compter une de moins ferait déborder.
+LARGEUR_LIGNE = 95
 CHAMP_PIECE = "custom__n_chèque__transaction"
 CHAMP_BANQUE = "custom_banque"
 
@@ -74,6 +82,24 @@ def lignes_de_reglement(echeances: list, majoration: float = 0.0, taux: float = 
         out.append({"mode": mode, "libelle": LIBELLES.get(mode, mode or "Paiement"), "montant": round(montant, 3),
                     "montant_txt": nombre(montant), "detail": " ; ".join(details)})
     return out
+
+
+def texte_reglement(titre: str, lignes: list) -> str:
+    """Le règlement tel qu'il s'imprime, en texte : « Règlement : Espèces 50.000 · Chèque 40.000 (n° …) ». PURE."""
+    morceaux = [("%s %s" % (l["libelle"], l["montant_txt"])) + ((" (%s)" % l["detail"]) if l.get("detail") else "")
+                for l in (lignes or [])]
+    return ("%s : %s" % (titre, " · ".join(morceaux))) if morceaux else ""
+
+
+def lignes_imprimees(texte: str, largeur: int = LARGEUR_LIGNE) -> int:
+    """Nombre de lignes qu'occupe un texte au bas de la page (0 s'il est vide). PURE."""
+    n = len((texte or "").strip())
+    return 0 if not n else -(-n // max(1, int(largeur)))
+
+
+def hauteur(titre: str, lignes: list, texte_ristourne: str = "") -> int:
+    """Lignes imprimées du bloc : le règlement (replié sur la largeur) + la ligne de ristourne. PURE."""
+    return lignes_imprimees(texte_reglement(titre, lignes)) + lignes_imprimees(texte_ristourne)
 
 
 def ristourne_appliquee(choix, remise) -> float:
@@ -117,8 +143,8 @@ def _commandes_du_document(doc) -> list:
 
 
 def resume(doc) -> list:
-    """[{commande, entier, titre, lignes, total_txt, ristourne_txt, titre_ristourne, note_ristourne}] — une entrée
-    par commande ; [] s'il n'y a rien à dire."""
+    """[{commande, entier, titre, lignes, total_txt, ristourne_txt, titre_ristourne, note_ristourne, hauteur}] — une
+    entrée par commande ; [] s'il n'y a rien à dire."""
     try:
         out = []
         commandes = [c for c in _commandes_du_document(doc) if c.docstatus != 2]
@@ -134,10 +160,12 @@ def resume(doc) -> list:
                 continue
             total = round(sum(l["montant"] for l in lignes), 3)
             ristourne = ristourne_appliquee(commande.get("custom_appliquer_ristourne"), commande.get("discount_amount"))
+            t = titres(commande.name, commande.get("grand_total"), entier)
+            ristourne_txt = nombre(ristourne) if ristourne else ""
+            phrase_ristourne = ("%s : %s (%s)" % (t["titre_ristourne"], ristourne_txt, t["note_ristourne"])) if ristourne else ""
             out.append({"commande": commande.name, "entier": entier, "lignes": lignes, "total": total,
-                        "total_txt": nombre(total), "ristourne": ristourne,
-                        "ristourne_txt": nombre(ristourne) if ristourne else "",
-                        **titres(commande.name, commande.get("grand_total"), entier)})
+                        "total_txt": nombre(total), "ristourne": ristourne, "ristourne_txt": ristourne_txt,
+                        "hauteur": hauteur(t["titre"], lignes, phrase_ristourne), **t})
         return out
     except Exception:
         return []

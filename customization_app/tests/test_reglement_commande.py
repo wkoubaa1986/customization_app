@@ -99,6 +99,51 @@ class TestBonDeLivraison(unittest.TestCase):
         self.assertEqual([(l["libelle"], l["montant_txt"]) for l in r[0]["lignes"]], [("Espèces", "50.000")])
 
 
+class TestPlaceSurLaPage(unittest.TestCase):
+    """18/11/2026 : trois lignes en plus faisaient passer le pied de la commande sur une deuxième page. Le bloc dit
+    combien de lignes il occupe ; le modèle retire autant de lignes vides du tableau des articles."""
+
+    def test_le_reglement_de_la_commande_04740_occupe_deux_lignes_plus_la_ristourne(self):
+        l = R.lignes_de_reglement([ech("Dette non payée", 84.083), ech("Carte de crédit", 102.0, "xxxxxxx"), ech("Avoir client", 78.0)], 2.0, 2.0)
+        texte = R.texte_reglement("Règlement", l)
+        self.assertEqual(texte, "Règlement : Reste à payer 84.083 · Carte bancaire 102.000 (100.000 + majoration de 2 % : 2.000 ; "
+                                "n° xxxxxxx) · Avoir client utilisé 78.000")
+        self.assertEqual(R.lignes_imprimees(texte), 2)
+        self.assertEqual(R.hauteur("Règlement", l, "Ristourne appliquée : 37.917 (déjà déduite du total)"), 3)
+
+    def test_un_reglement_simple_tient_sur_une_ligne(self):
+        self.assertEqual(R.hauteur("Règlement", R.lignes_de_reglement([ech("Espèces", 25.5)])), 1)
+
+    def test_rien_a_imprimer_ne_prend_aucune_ligne(self):
+        self.assertEqual(R.hauteur("Règlement", []), 0)
+        self.assertEqual(R.lignes_imprimees(""), 0)
+        self.assertEqual(R.lignes_imprimees(None), 0)
+
+    def test_l_estimation_est_prudente(self):
+        """Mesuré sur le PDF : ~118 caractères par ligne à 11 px. On compte plus court : jamais une ligne de moins."""
+        self.assertLess(R.LARGEUR_LIGNE, 110)
+        self.assertEqual(R.lignes_imprimees("x" * R.LARGEUR_LIGNE), 1)
+        self.assertEqual(R.lignes_imprimees("x" * (R.LARGEUR_LIGNE + 1)), 2)
+
+    def test_la_commande_rend_sa_hauteur(self):
+        doc = _Doc(doctype="Sales Order", name="C1", docstatus=1, grand_total=50.0, custom_appliquer_ristourne="Oui",
+                   discount_amount=5.0, payment_schedule=[_Doc(mode_of_payment="Espèces", payment_amount=50.0)])
+        self.assertEqual(R.resume(doc)[0]["hauteur"], 2)
+
+    def test_le_modele_retire_des_lignes_vides_jamais_des_articles(self):
+        chemin = os.path.join(APPS, "booking_ristourne", "booking_ristourne", "fixtures", "print_format.json")
+        if not os.path.exists(chemin):
+            self.skipTest("booking_ristourne absent")
+        with open(chemin, encoding="utf-8") as f:
+            formats = {d["name"]: (d.get("html") or "") for d in json.load(f)}
+        for nom in ("Aqua World BC", "Aqua World BL"):
+            h = formats[nom]
+            self.assertIn("{% for i in range(max(7 - rgh.n, rows|length)) %}", h, nom)
+            self.assertEqual(h.count("{% set reglements = "), 1, nom)
+            self.assertLess(h.index("{% set reglements = "), h.index("{% for i in range(max(7 - rgh.n"), nom)   # calculé avant le tableau
+        self.assertIn("{% for i in range(max(7, rows|length)) %}", formats["Aqua World Facture"])            # facture inchangée
+
+
 class _Doc(dict):
     """Un document minimal : attributs et .get() comme un document Frappe."""
     __getattr__ = dict.get
