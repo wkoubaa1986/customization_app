@@ -128,6 +128,10 @@ class TestCablage(unittest.TestCase):
         self.assertIn('scrollIntoView({ block: "center"', journee)
         self.assertIn("if (!this.cible || this.cible_montree) return;", journee)                      # une seule fois
         self.assertIn(".mj-carte.mj-cible, .mj-carte.faite.mj-cible { background:#e9ecf0;", journee)   # en gris
+        # « Dès que je scroll, ça s'enlève » : le gris part au premier défilement de sa main, et ne revient pas.
+        self.assertIn('["wheel", "touchmove", "scroll"].forEach((ev) => racine.addEventListener(ev, oter, { capture: true, passive: true }));', journee)
+        self.assertIn('this.$corps.find(".mj-carte.mj-cible").removeClass("mj-cible");', journee)
+        self.assertIn("this.cible = null;", journee)
 
     def test_la_liste_d_articles_du_technicien(self):
         """18/11/2026 : « barre de recherche (nom, code) ; l'image avec le code, le nom, la description et le prix

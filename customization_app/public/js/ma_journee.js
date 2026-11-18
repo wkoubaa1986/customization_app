@@ -257,6 +257,17 @@ frappe.provide("frappe.views");
             [150, 700].forEach((delai) => setTimeout(() => {
                 try { carte.scrollIntoView({ block: "center", behavior: delai > 200 ? "auto" : "smooth" }); } catch (e) { carte.scrollIntoView(); }
             }, delai));
+            // Le gris sert à trouver la tâche à l'ouverture : dès qu'il fait défiler lui-même, il s'enlève
+            // (demande du 18/11/2026). Écoute posée après le placement automatique, qui est aussi un défilement.
+            setTimeout(() => {
+                const racine = this.dialog.$wrapper.get(0);
+                const oter = () => {
+                    ["wheel", "touchmove", "scroll"].forEach((ev) => racine.removeEventListener(ev, oter, true));
+                    this.cible = null;
+                    this.$corps.find(".mj-carte.mj-cible").removeClass("mj-cible");
+                };
+                ["wheel", "touchmove", "scroll"].forEach((ev) => racine.addEventListener(ev, oter, { capture: true, passive: true }));
+            }, 1500);
         }
 
         _carte(l, esc) {
