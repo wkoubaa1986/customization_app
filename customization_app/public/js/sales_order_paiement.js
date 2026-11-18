@@ -27,10 +27,11 @@
 // peut le prendre. Sur une commande neuve, « Vente directe sans BL et Facture » est le choix par défaut
 // (patch type_transaction_defaut) et le modèle de taxes sans timbre est posé d'emblée.
 //
-// Montants : la ligne par carte affiche et reçoit le montant MAJORATION COMPRISE — celui qui passe sur le
-// terminal, et celui que porte le tableau (demande du 18/11/2026 : « la part réglée par carte doit prendre
-// en compte la majoration, tout le temps actualisée »). Le bloc en déduit la part de la commande que la
-// carte règle (montant ÷ 1,02) pour équilibrer les autres lignes.
+// Montants : la majoration ne s'ajoute QUE sur la ligne par carte (demande du 18/11/2026). On y tape la part de
+// la commande réglée par carte (200,000) ; les autres lignes ne voient que cette part (espèces = total − 200),
+// et la ligne carte affiche aussitôt la part + sa majoration (204,000), le montant à passer sur le terminal.
+// En reprenant le champ, on retrouve la part tapée. La majoration est arrondie au demi-dinar (pas rendu par
+// le serveur avec le taux).
 (() => {
     const CARTE = "Carte de crédit", ARAMEX = "Livraison Aramex", CLASSE = "so-paiement", TOL = 0.0005, DELAI = 450;
     const PIECE = "custom__n_chèque__transaction", BANQUE = "custom_banque";
@@ -77,28 +78,30 @@
         return m;
     }
 
-    // Le taux réglé (%), demandé une fois au serveur ; 0 tant qu'il n'est pas connu ou pour une commande du site web.
-    let tauxRegle = null;
+    // Le taux réglé (%) et le pas d'arrondi de la majoration, demandés une fois au serveur ; taux 0 tant qu'il
+    // n'est pas connu ou pour une commande du site web.
+    let reglage = null;
     function taux(frm) {
         if (frm.doc.woocommerce_id) return 0;
-        if (tauxRegle === null) {
-            tauxRegle = 0;
-            frappe.xcall("customization_app.majoration_carte.taux_pour_ecran").then((t) => { tauxRegle = flt(t); rendre(frm); }).catch(() => {});
+        if (reglage === null) {
+            reglage = { taux: 0, pas: 0.5 };
+            frappe.xcall("customization_app.majoration_carte.taux_pour_ecran")
+                .then((r) => { reglage = { taux: flt(r && r.taux), pas: flt(r && r.pas) }; rendre(frm); }).catch(() => {});
         }
-        return tauxRegle || flt(frm.doc.custom_majoration_carte_taux);
+        return reglage.taux || flt(frm.doc.custom_majoration_carte_taux);
     }
-    /** Ce que la carte encaisse pour une part de commande : part + majoration (au millime, comme le serveur). */
-    const avecMajoration = (frm, part) => arrondi(flt(part) + arrondi(flt(part) * taux(frm) / 100));
-    /** L'inverse : la part de la commande réglée quand la carte encaisse `montant`. */
-    function sansMajoration(frm, montant) {
-        const t = taux(frm);
-        if (t <= 0) return arrondi(montant);
-        let part = arrondi(flt(montant) / (1 + t / 100));
-        for (const pas of [0, 0.001, -0.001]) {                    // l'arrondi au millime peut décaler d'un cran
-            if (Math.abs(avecMajoration(frm, part + pas) - flt(montant)) < 0.0005) return arrondi(part + pas);
-        }
-        return part;
+    /** La majoration d'une part de commande réglée par carte : part × taux, au demi-dinar le plus proche (comme le serveur). */
+    function majorationDe(frm, part) {
+        const brut = flt(part) * taux(frm) / 100, pas = reglage ? reglage.pas : 0.5;
+        return pas > 0 ? arrondi(Math.floor(brut / pas + 0.5 + 1e-9) * pas) : arrondi(brut);
     }
+    /** La majoration tombe-t-elle sur un multiple du pas (demi-dinar) ? */
+    function rond(maj) {
+        const pas = reglage && reglage.pas > 0 ? reglage.pas : 0.5, n = flt(maj) / pas;
+        return Math.abs(n - Math.round(n)) < 0.0005;
+    }
+    /** Ce que la carte encaisse pour une part de commande : la part + sa majoration. */
+    const avecMajoration = (frm, part) => arrondi(flt(part) + majorationDe(frm, part));
 
     /** Ramène la somme des parts à `cible` : `garde` ne bouge pas, les lignes tapées à la main passent en dernier. */
     function equilibrer(frm, m, cible, garde) {
@@ -204,10 +207,8 @@
 
     function saisirMontant(frm, nom, texte) {
         const st = etat(frm), m = parts(frm), cible = totalBase(frm);
-        const r = lignes(frm).find((x) => x.name === nom);
-        let v = Math.max(flt(String(texte).replace(/\s/g, "").replace(",", "."), 3), 0);
-        if (r && estCarte(r)) v = sansMajoration(frm, v);          // carte : le montant tapé comprend la majoration
-        v = Math.min(v, cible);
+        // Carte comprise : le montant tapé est la PART de la commande ; la majoration s'ajoute sur la ligne carte seule.
+        const v = Math.min(Math.max(flt(String(texte).replace(/\s/g, "").replace(",", "."), 3), 0), cible);
         m.set(nom, v); st.fixes.add(nom);
         equilibrer(frm, m, cible, nom);
         ecrire(frm, m); apresGeste(frm);
@@ -344,6 +345,11 @@
             </style>`);
         }
         $b.on("change", "select.sp-in-mode", function () { changerMode(frm, $(this).closest("[data-ligne]").attr("data-ligne"), $(this).val()); });
+        // Ligne carte : le champ montre part + majoration ; quand on le reprend, il montre la part à modifier.
+        $b.on("focusin", "input.sp-in-montant[data-part]", function () { this.value = $(this).attr("data-part"); this.select(); });
+        $b.on("focusout", "input.sp-in-montant[data-part]", function () {
+            if (this.value === $(this).attr("data-part")) this.value = $(this).attr("data-affiche");
+        });
         $b.on("change", "input.sp-in-montant", function () { saisirMontant(frm, $(this).closest("[data-ligne]").attr("data-ligne"), $(this).val()); });
         $b.on("change", "input.sp-in-piece, select.sp-in-banque", function () {
             const r = lignes(frm).find((x) => x.name === $(this).closest("[data-ligne]").attr("data-ligne"));
@@ -371,10 +377,12 @@
         if (estCarte(r)) {
             const maj = arrondi(flt(r.payment_amount) - part);
             const t = flt(frm.doc.custom_majoration_carte_taux) || taux(frm);
-            carte = maj > 0 ? `<div class="sp-carte">💳 Majoration carte de ${String(t).replace(".", ",")} % comprise :
-                    <b>+ ${nombre(maj)}</b> (${nombre(part)} sans la carte), répartie sur les prix des articles —
+            carte = maj > 0 ? `<div class="sp-carte">💳 ${nombre(part)} de la commande + majoration carte de ${String(t).replace(".", ",")} % :
+                    <b>+ ${nombre(maj)}</b> (${rond(maj) ? "arrondie au demi-dinar" : "au plus près du demi-dinar : le prix à l’unité ne permet pas de tomber juste"}, répartie sur les prix des articles) —
                     montant à passer sur le terminal : <b class="sp-terminal">${nombre(r.payment_amount)}</b>
-                    ${st.attente ? `<span class="sp-note"> · mise à jour des prix…</span>` : ""}</div>` : "";
+                    ${st.attente ? `<span class="sp-note"> · mise à jour des prix…</span>` : ""}</div>`
+                : (t > 0 && part > 0 && !st.attente) ? `<div class="sp-carte">💳 Pas de majoration sur ce montant :
+                    ${String(t).replace(".", ",")} % de ${nombre(part)} arrondis au demi-dinar donnent 0.</div>` : "";
         }
         return `<div class="sp-ligne" data-ligne="${esc(r.name)}">
             <div class="sp-champ sp-mode"><label>Moyen de paiement</label>
@@ -383,7 +391,9 @@
                 ${modes.map((x) => `<option value="${esc(x)}" ${x === r.mode_of_payment ? "selected" : ""}>${esc(COURT[x] || x)}</option>`).join("")}
               </select></div>
             <div class="sp-champ sp-montant"><label>${estCarte(r) ? "Montant par carte" : "Montant"}</label>
-              <input type="text" inputmode="decimal" class="form-control sp-in-montant" value="${format_number(estCarte(r) ? flt(r.payment_amount) : part, null, 3)}" ${seule ? `title="Un seul paiement : il règle toute la commande"` : ""}></div>
+              <input type="text" inputmode="decimal" class="form-control sp-in-montant" value="${format_number(estCarte(r) ? flt(r.payment_amount) : part, null, 3)}"
+                ${estCarte(r) ? `data-part="${format_number(part, null, 3)}" data-affiche="${format_number(flt(r.payment_amount), null, 3)}"
+                  title="Tapez la part de la commande réglée par carte : la majoration s’ajoute sur cette ligne seulement"` : ""} ${seule ? `title="Un seul paiement : il règle toute la commande"` : ""}></div>
             ${libPiece ? `<div class="sp-champ sp-piece"><label>${esc(libPiece)}</label>
               <input type="text" class="form-control sp-in-piece ${d.piece ? "sp-rouge" : ""}" value="${esc(r[PIECE] || "")}">
               ${d.piece ? `<span class="sp-erreur">${esc(d.piece)}</span>` : ""}</div>` : ""}

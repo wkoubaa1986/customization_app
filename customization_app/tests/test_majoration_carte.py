@@ -15,11 +15,26 @@ def total(lignes, prix):
 
 
 class TestMontant(unittest.TestCase):
-    def test_deux_pour_cent_de_la_part_carte(self):
-        self.assertEqual(M.montant_majoration(285.0, 2), 5.7)
+    """2 % de la part carte, arrondis au demi-dinar le plus proche (demande du 18/11/2026)."""
+
+    def test_deux_pour_cent_arrondis_au_demi_dinar(self):
+        self.assertEqual(M.montant_majoration(200.0, 2), 4.0)                # 4,000 tombe juste
         self.assertEqual(M.montant_majoration(1000.0, 2), 20.0)
-        self.assertEqual(M.montant_majoration(185.0, 2), 3.7)
-        self.assertEqual(M.montant_majoration(276.962, 2), 5.539)          # au millime
+        self.assertEqual(M.montant_majoration(285.0, 2), 5.5)                # 5,700 -> 5,500
+        self.assertEqual(M.montant_majoration(185.0, 2), 3.5)                # 3,700 -> 3,500
+        self.assertEqual(M.montant_majoration(20.0, 2), 0.5)                 # 0,400 -> 0,500
+        self.assertEqual(M.montant_majoration(140.0, 2), 3.0)                # 2,800 -> 3,000
+        self.assertEqual(M.montant_majoration(276.962, 2), 5.5)              # 5,539 -> 5,500
+
+    def test_la_moitie_monte(self):
+        self.assertEqual(M.arrondir_au_pas(0.25), 0.5)
+        self.assertEqual(M.arrondir_au_pas(0.75), 1.0)
+        self.assertEqual(M.arrondir_au_pas(0.249), 0.0)
+        self.assertEqual(M.montant_majoration(12.5, 2), 0.5)                 # 0,250 -> 0,500
+        self.assertEqual(M.montant_majoration(12.0, 2), 0.0)                 # petite part : pas de majoration
+
+    def test_sans_pas_le_millime(self):
+        self.assertEqual(M.montant_majoration(285.0, 2, pas=0), 5.7)
 
     def test_rien_a_majorer(self):
         self.assertEqual(M.montant_majoration(0, 2), 0.0)
@@ -68,6 +83,23 @@ class TestRepartition(unittest.TestCase):
     def test_sans_majoration_les_prix_de_base(self):
         self.assertEqual(M.repartir(self.COMMANDE, 0), [l["base"] for l in self.COMMANDE])
         self.assertEqual(M.repartir([{"base": 0.0, "qty": 1}], 5.0), [0.0])  # rien sur quoi répartir
+
+    def test_deux_lignes_se_partagent_les_millimes_quand_aucune_ne_suffit(self):
+        """Quantités 3 et 7, majoration de 1,500 : aucune des deux ne divise l'écart, mais ensemble elles tombent juste."""
+        lignes = [{"base": 20.0, "qty": 3}, {"base": 10.0, "qty": 7}]
+        prix = M.repartir(lignes, 1.5)
+        self.assertEqual(total(lignes, prix), 131.5)                         # 130 + 1,5, au millime
+        for l, p in zip(lignes, prix):
+            self.assertAlmostEqual(p / l["base"], 1 + 1.5 / 130.0, places=2)   # reste proportionnel, à quelques millimes
+
+    def test_majoration_ronde_sur_la_commande_reelle(self):
+        """285,000 par carte : majoration arrondie à 5,500, total des articles 289,500 exactement."""
+        self.assertEqual(total(self.COMMANDE, M.repartir(self.COMMANDE, 5.5)), 289.5)
+
+    def test_un_seul_article_en_34_exemplaires_reste_au_plus_pres(self):
+        """4,000 ne se divise pas par 34 au millime : impossible de tomber juste avec un prix unitaire."""
+        lignes = [{"base": 10.0, "qty": 34}]
+        self.assertLessEqual(abs(total(lignes, M.repartir(lignes, 4.0)) - 344.0), 0.017)
 
     def test_une_seule_ligne_en_plusieurs_exemplaires(self):
         """Quantité 3 : un reste d'un millime ne se divise pas par 3, le total approche la cible au millime."""
@@ -118,17 +150,18 @@ class TestBranchements(unittest.TestCase):
         self.assertIn('etat["lignes"] = ', apercu)
         self.assertIn('etat["echeances"] = ', apercu)
 
-    def test_la_ligne_carte_affiche_le_montant_majoration_comprise(self):
-        """Demande du 18/11/2026 : « la part réglée par carte doit prendre en compte la majoration, tout le temps
-        actualisée ». Le champ montre ce que porte le tableau (part + majoration), et le montant tapé est compris
-        de la même façon."""
+    def test_la_majoration_ne_s_ajoute_que_sur_la_ligne_carte(self):
+        """Demandes du 18/11/2026 : « la part réglée par carte doit prendre en compte la majoration », puis « la
+        majoration doit s'ajouter que sur la ligne carte, pas espèces ». On tape la PART de la commande (200) : les
+        autres lignes ne voient que cette part, et la ligne carte affiche part + majoration (204)."""
         js = self.lire("public", "js", "sales_order_paiement.js")
         self.assertIn('estCarte(r) ? "Montant par carte" : "Montant"', js)
         self.assertIn("format_number(estCarte(r) ? flt(r.payment_amount) : part, null, 3)", js)
-        self.assertIn("if (r && estCarte(r)) v = sansMajoration(frm, v);", js)
         self.assertIn("estCarte(r) ? avecMajoration(frm, m.get(r.name)) : arrondi(m.get(r.name))", js)
+        self.assertNotIn("sansMajoration", js)                    # le montant tapé n'est plus « majoration comprise »
+        self.assertIn('data-part="${format_number(part, null, 3)}"', js)   # en reprenant le champ : la part tapée
         self.assertIn('"customization_app.majoration_carte.taux_pour_ecran"', js)
-        self.assertEqual(M.taux_pour_ecran.__name__, "taux_pour_ecran")
+        self.assertIn("Math.floor(brut / pas + 0.5 + 1e-9) * pas", js)     # même arrondi au demi-dinar que le serveur
 
     def test_le_bloc_ecrit_dans_le_tableau_standard(self):
         """Aucune donnée de plus : le bloc lit et écrit `payment_schedule`, que tout le reste du système lit."""

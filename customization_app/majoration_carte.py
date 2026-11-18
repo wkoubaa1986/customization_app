@@ -9,7 +9,7 @@ CE QUE FAIT LE MODULE, À CHAQUE ENREGISTREMENT D'UNE COMMANDE EN BROUILLON (hoo
 minimale) :
   1. il retrouve le prix DE BASE de chaque ligne (celui d'avant la majoration, gardé sur la ligne) ;
   2. il mesure la part carte : total de base − les échéances qui ne sont pas par carte ;
-  3. majoration = part carte × taux, au millime ;
+  3. majoration = part carte × taux, arrondie au demi-dinar le plus proche ;
   4. il la RÉPARTIT sur tous les articles, dans la même proportion (aucune ligne « frais » à part) : chaque
      prix est multiplié par le même coefficient, et les millimes d'arrondi vont sur une seule ligne pour que
      le total tombe juste ;
@@ -17,7 +17,9 @@ minimale) :
 Si la carte est retirée des termes de paiement, les prix de base reviennent tout seuls.
 
 Exemple réel (SAL-ORD-2026-04724) : articles 284,000 + timbre 1,000 = 285,000, tout par carte. Majoration
-5,700 ; les articles passent à 289,700, le timbre reste à 1,000, la carte encaisse 290,700.
+5,700 arrondie à 5,500 ; les articles passent à 289,500, le timbre reste à 1,000, la carte encaisse 290,500.
+Paiement mixte : la majoration ne s'ajoute QUE sur l'échéance par carte — 341,000 dont 200,000 par carte
+donnent espèces 141,000 et carte 204,000.
 
 POURQUOI À L'ENREGISTREMENT ET PAS APRÈS : le prix d'une ligne ne se change plus une fois la commande
 validée. Une commande validée qu'on bascule ensuite en carte n'est donc PAS majorée — elle le dit
@@ -40,6 +42,7 @@ Les fonctions de calcul sont pures (pas de base, pas de `flt` : il vaut 0 hors s
 from __future__ import annotations
 
 import json
+import math
 
 import frappe
 from frappe import _
@@ -53,6 +56,9 @@ CHAMP_TAUX = "custom_majoration_carte_taux"
 CHAMP_AVANT = "custom_prix_avant_carte"
 CHAMP_AVEC = "custom_prix_avec_carte"
 TOL = 0.0005
+#: La majoration est arrondie au demi-dinar le plus proche (demande du 18/11/2026) : 5,700 -> 5,500 ;
+#: 0,400 -> 0,500 ; 4,000 -> 4,000. Une part carte de moins de 12,500 à 2 % n'est donc pas majorée.
+PAS_ARRONDI = 0.5
 
 
 # ----------------------------------------------------------------- calcul (fonctions pures)
@@ -61,12 +67,20 @@ def _r(v, decimales: int = 3) -> float:
     return round(float(v or 0) + 0.0, decimales)
 
 
-def montant_majoration(part_carte: float, taux: float) -> float:
-    """Ce qu'on ajoute pour `part_carte` réglés par carte, au millime. 0 s'il n'y a rien à majorer."""
+def arrondir_au_pas(v: float, pas: float = PAS_ARRONDI) -> float:
+    """`v` au multiple de `pas` le plus proche (la moitié monte : 0,250 -> 0,500). Pas nul : au millime."""
+    if not pas or pas <= 0:
+        return _r(v)
+    return _r(math.floor(float(v or 0) / pas + 0.5 + 1e-9) * pas)
+
+
+def montant_majoration(part_carte: float, taux: float, pas: float = PAS_ARRONDI) -> float:
+    """Ce qu'on ajoute pour `part_carte` réglés par carte : part × taux, arrondi au demi-dinar le plus proche.
+    0 s'il n'y a rien à majorer."""
     part_carte, taux = float(part_carte or 0), float(taux or 0)
     if part_carte <= TOL or taux <= 0:
         return 0.0
-    return _r(part_carte * taux / 100.0)
+    return arrondir_au_pas(part_carte * taux / 100.0, pas)
 
 
 def prix_de_base(prix: float, avant: float, avec: float) -> float:
@@ -81,13 +95,21 @@ def prix_de_base(prix: float, avant: float, avec: float) -> float:
     return prix
 
 
+#: Écart maximal (en millimes par unité) qu'une ligne peut prendre pour que le total tombe juste.
+RETOUCHE_MAX = 60
+
+
 def repartir(lignes: list, majoration: float) -> list:
     """Les prix majorés de `lignes` ([{base, qty}]), dans le même ordre.
 
     Répartition LINÉAIRE : chaque prix est multiplié par le même coefficient (1 + majoration ÷ total des
     lignes). Un prix s'arrondit au millime et se multiplie par une quantité : le total obtenu peut manquer
-    la cible de quelques millimes, qu'on reporte alors sur UNE ligne (la plus grosse dont la quantité
-    permet de tomber juste — à l'unité, toujours). Sans majoration ou sans total positif : les prix de base."""
+    la cible de quelques millimes. On les rattrape, pour que la majoration tombe JUSTE (elle est arrondie au
+    demi-dinar, la carte doit encaisser un montant rond) :
+      1. sur UNE ligne dont la quantité divise l'écart (à l'unité : toujours) ;
+      2. sinon sur DEUX lignes, de quelques millimes par unité chacune (`_retoucher_deux_lignes`).
+    Quand aucune combinaison n'existe — un seul article en 34 exemplaires : 4,000 ne se divise pas par 34 au
+    millime — l'écart reste, au plus près. Sans majoration ou sans total positif : les prix de base."""
     bases = [float(l.get("base") or 0) for l in lignes]
     qtes = [float(l.get("qty") or 0) for l in lignes]
     total = _r(sum(_r(b * q) for b, q in zip(bases, qtes)))
@@ -103,10 +125,39 @@ def repartir(lignes: list, majoration: float) -> list:
             if qtes[i] <= 0:
                 continue
             pas = reste / qtes[i]
-            if abs(pas * 1000 - round(pas * 1000)) < 1e-6:        # un nombre entier de millimes
+            if abs(pas * 1000 - round(pas * 1000)) < 1e-6 and abs(pas) * 1000 <= RETOUCHE_MAX + 1e-6:
                 prix[i] = _r(prix[i] + pas)
-                break
+                return prix
+        _retoucher_deux_lignes(prix, qtes, reste, ordre)
     return prix
+
+
+def _retoucher_deux_lignes(prix: list, qtes: list, reste: float, ordre: list) -> bool:
+    """Rattrape `reste` en retouchant DEUX lignes de a et b millimes par unité : a × q1 + b × q2 = reste.
+    Lignes à quantité entière seulement, les plus grosses d'abord, et la retouche la plus petite possible.
+    Modifie `prix` en place ; -> True si une combinaison a été trouvée."""
+    cible = int(round(reste * 1000))
+    entieres = [i for i in ordre if qtes[i] > 0 and abs(qtes[i] - round(qtes[i])) < 1e-9][:8]
+    meilleur = None
+    for x, i in enumerate(entieres):
+        for j in entieres[x + 1:]:
+            qi, qj = int(round(qtes[i])), int(round(qtes[j]))
+            for a in range(-RETOUCHE_MAX, RETOUCHE_MAX + 1):
+                restant = cible - a * qi
+                if restant % qj:
+                    continue
+                b = restant // qj
+                if abs(b) > RETOUCHE_MAX:
+                    continue
+                cout = abs(a) + abs(b)
+                if meilleur is None or cout < meilleur[0]:
+                    meilleur = (cout, i, a, j, b)
+    if not meilleur:
+        return False
+    _cout, i, a, j, b = meilleur
+    prix[i] = _r(prix[i] + a / 1000.0)
+    prix[j] = _r(prix[j] + b / 1000.0)
+    return True
 
 
 # ----------------------------------------------------------------- réglage
@@ -120,10 +171,10 @@ def taux_regle() -> float:
 
 
 @frappe.whitelist()
-def taux_pour_ecran() -> float:
-    """Le taux réglé, pour l'écran : le bloc de paiement affiche tout de suite le montant de la carte majoration
-    comprise, avant même la réponse de l'aperçu."""
-    return taux_regle()
+def taux_pour_ecran() -> dict:
+    """Le taux réglé et le pas d'arrondi, pour l'écran : le bloc de paiement affiche tout de suite le montant de
+    la carte majoration comprise, avant même la réponse de l'aperçu."""
+    return {"taux": taux_regle(), "pas": PAS_ARRONDI}
 
 
 def _champs_presents(doc) -> bool:
