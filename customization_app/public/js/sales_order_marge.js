@@ -5,11 +5,11 @@
 //  2. Document EXONÉRÉ de TVA (aucune taxe incluse dans le prix) : le prix de liste TTC devient HT
 //     (TTC ÷ (1 + TVA de l'article)) dès le choix de l'article ; un prix tapé à la main est gardé.
 //  3. Mise en évidence des lignes relevées : bandeau orange sous le titre + fond orangé + puce « ⬆ marge ».
-//  4. (18/11/2026) Le plancher compte la REMISE GLOBALE (ristourne), et il est calculé pour TOUTE la commande d'un
-//     coup par le serveur (marge_minimale.planchers_commande — le même calcul que l'enregistrement) : le résultat
-//     ne dépend plus de l'ordre de saisie. Le formulaire applique ce qu'il rend, ligne par ligne : « relever »,
-//     « retablir » (le plancher est repassé sous le prix d'origine : ristourne retirée…), « oublier ». La marge
-//     raisonne sur le prix HORS majoration carte, qui se refait par-dessus.
+//  4. (18/11/2026) Le plancher est calculé pour TOUTE la commande d'un coup par le serveur
+//     (marge_minimale.planchers_commande — le même calcul que l'enregistrement). Le formulaire applique ce qu'il
+//     rend, ligne par ligne : « relever », « retablir », « oublier ». La RISTOURNE N'ENTRE PAS dans le calcul
+//     (règle de l'utilisateur : elle se déduit après, une fois la marge assurée sur les prix). La marge raisonne
+//     sur le prix HORS majoration carte, qui se refait par-dessus.
 (() => {
     const FLAG = "custom_marge_corrigee", AVANT = "custom_prix_avant_marge", POSE = "custom_prix_plancher_pose", TOL = 0.0005, DELAI = 450;
     const minuteries = {};
@@ -76,7 +76,6 @@
                 rep = await frappe.xcall("customization_app.marge_minimale.plancher_ligne", {
                     ligne: { item_code: l.item_code, warehouse: l.warehouse, qty: l.qty, conversion_factor: l.conversion_factor,
                         item_tax_rate: l.item_tax_rate, item_group: l.item_group, is_free_item: l.is_free_item, rate: l.rate,
-                        net_rate: l.net_rate,           // porte la TVA ET la remise globale (ristourne), comme à l'enregistrement
                         price_list: frm.doc.selling_price_list, uom: l.uom, price_list_rate: l.price_list_rate, composants: composants(frm, l) },
                     taxes: (frm.doc.taxes || []).map((t) => ({ account_head: t.account_head, rate: t.rate, charge_type: t.charge_type, included_in_print_rate: t.included_in_print_rate })),
                     woocommerce_id: frm.doc.woocommerce_id || null,
@@ -101,8 +100,8 @@
             }
             if (!rep) return;
             if (rep.plancher == null && rep.exonere) { if (l2[FLAG]) oublier(frm, l2); return; }
-            // Document standard : le plancher dépend de TOUTE la commande (la remise globale se répartit sur les
-            // lignes) — un seul calcul, côté serveur. Document exonéré : le plancher de la ligne suffit.
+            // Document standard : un seul calcul pour toute la commande, côté serveur (le même que l'enregistrement).
+            // Document exonéré : le plancher de la ligne, rendu par l'appel ci-dessus.
             if (!rep.exonere) { verifierCommande(frm); return; }
             const prix = prixHorsCarte(l2), plancher = flt(rep.plancher);
             const parNous = !!l2[FLAG] && (!flt(l2[POSE]) || Math.abs(prix - flt(l2[POSE])) <= TOL);
@@ -119,7 +118,7 @@
         const prix = prixHorsCarte(l);
         if (c.action === "oublier") { if (l[FLAG]) oublier(frm, l); return; }
         if (c.action === "retablir") {
-            // Le plancher est repassé sous le prix d'origine (ristourne retirée…) : ce prix revient.
+            // Le plancher est repassé sous le prix d'origine : ce prix revient.
             frappe.model.set_value(l.doctype, l.name, FLAG, 0);
             frappe.model.set_value(l.doctype, l.name, AVANT, 0);
             l[POSE] = 0;
@@ -173,15 +172,11 @@
     const ligne = {};
     ["item_code", "qty", "uom", "conversion_factor", "warehouse", "rate", "price_list_rate", "discount_percentage",
      "discount_amount", "margin_rate_or_amount", "item_tax_template"].forEach((f) => { ligne[f] = (frm, cdt, cdn) => verifier(frm, cdn); });
-    ligne.items_remove = (frm) => { peindre(frm); if (!exonere(frm)) verifierCommande(frm); };   // la remise se répartit autrement
+    ligne.items_remove = (frm) => peindre(frm);
     const entete = {
         refresh(frm) { peindre(frm); },
         items_on_form_rendered(frm) { colorer(frm); },
         selling_price_list(frm) { verifierTout(frm); },
-        // Remise globale posée ou retirée (ristourne) : le prix net de chaque ligne change, le plancher aussi.
-        discount_amount(frm) { if (!exonere(frm)) verifierCommande(frm); },
-        additional_discount_percentage(frm) { if (!exonere(frm)) verifierCommande(frm); },
-        apply_discount_on(frm) { if (!exonere(frm)) verifierCommande(frm); },
         ignore_pricing_rule(frm) { verifierTout(frm); },
         // Le modèle de taxes change (exonération ↔ standard) : ERPNext recharge les taxes par un appel serveur,
         // on repasse les lignes quand elles arrivent (événement `taxes`), et à deux reprises par sécurité.

@@ -28,21 +28,19 @@ surfacturé ; les commandes exonérées portaient des prix HT tapés à la main,
 35 TTC = 29,41 HT). Ici le prix de liste de la ligne devient TTC ÷ (1 + TVA de l'article), sur commande et devis,
 en temps réel et à l'enregistrement (`convertir_prix_ht`). Le plancher de marge est alors HT (facteur TVA = 1).
 
-REMISE GLOBALE (RISTOURNE) : la marge se mesure sur ce que le client paie VRAIMENT. Une ristourne posée en remise
-supplémentaire est répartie par ERPNext sur toutes les lignes, au prorata de leur montant : chaque ligne ne garde que
-(1 − remise ÷ total des lignes) de son prix. Le plancher d'une ligne dépend donc du total de la commande… qui dépend
-des prix relevés. `prix_cibles` résout cela d'un coup, pour toute la commande : il cherche le total pour lequel
-chaque ligne, une fois la remise répartie, garde exactement sa marge plancher. Le résultat ne dépend que des prix
-de base, des quantités, des coûts et de la remise — plus de l'ordre dans lequel on a saisi (18/11/2026 : l'ancienne
-estimation, faite sur le prix du moment, donnait 16,500 ou 17,000 pour 10 filtres à 12,000 avec 37,917 de
-ristourne, selon que la quantité arrivait avant ou après la ristourne ; le bon prix est 15,500).
-Le formulaire appelle le même calcul (`planchers_commande`) à chaque changement : ce qu'on voit est ce qui sera
-enregistré.
+LA RISTOURNE NE COMPTE PAS (règle fixée par l'utilisateur le 18/11/2026 : « la ristourne s'applique comme réduction
+sur les prix après avoir assuré la marge ») : la marge plancher se vérifie sur les PRIX des lignes, TVA déduite,
+sans regarder la remise supplémentaire de la commande. La ristourne vient ensuite en réduction, même si le client
+finit sous le plancher — c'est un avantage qu'il a gagné. Jusque-là le calcul passait par le prix net de la ligne,
+qui porte la remise répartie par ERPNext : une ristourne faisait relever les prix (12,000 -> 13,500 pour 20
+filtres), le client dépensait son quota sans presque rien y gagner, et le résultat dépendait de l'ordre de saisie.
+Le même calcul (`analyser`) sert au hook et au formulaire (`planchers_commande`) : ce qu'on voit à l'écran est ce
+qui sera enregistré.
 
 LE PRIX POSÉ EST RETENU (`custom_prix_plancher_pose`) : c'est ce qui dit si une ligne relevée l'est toujours par
 nous (son prix est celui qu'on a posé) ou si quelqu'un a retapé un prix. Une ligne relevée par nous repart de son
-prix d'origine à chaque calcul : elle suit donc le plancher dans les deux sens (ristourne retirée, le prix
-d'origine revient). Un prix retapé devient le nouveau prix d'origine.
+prix d'origine à chaque calcul : elle suit donc le plancher dans les deux sens (le coût baisse, le prix d'origine
+revient). Un prix retapé devient le nouveau prix d'origine.
 
 MAJORATION CARTE (customization_app.majoration_carte) : elle passe APRÈS la marge et augmente les prix d'un même
 coefficient. La marge raisonne donc sur le prix HORS majoration (`prix_hors_carte`) ; quand elle relève un prix,
@@ -200,65 +198,29 @@ def plancher_exonere(cout: float, tva_article: float | None, r: dict, decimales:
     return flt(plancher_ttc(cout, f, r, decimales) / f, decimales)
 
 
-def prix_cibles(lignes: list, remise: float = 0.0, pourcentage: float = 0.0, pas: float = 0.0,
-                decimales: int = 3, sur_net: bool = False) -> list:
-    """Le prix TTC que chaque ligne doit porter pour garder sa marge plancher APRÈS la remise globale. PURE.
+def prix_cibles(lignes: list, pas: float = 0.0, decimales: int = 3) -> list:
+    """Le prix TTC que chaque ligne doit porter pour garder sa marge plancher. PURE.
 
     `lignes` : [{base (prix TTC d'origine), qty, plancher_ht (prix HT minimal par unité ; 0 = ligne jamais
-    relevée), tva (1,19…)}]. `remise` : le montant de la remise supplémentaire (répartie au prorata des montants
-    TTC, ou des montants HT si `sur_net`) ; `pourcentage` : la même remise donnée en % (elle suit alors le total).
-
-    Avec une remise en montant, la part que garde chaque ligne est (1 − remise ÷ S), S étant le total des lignes —
-    lui-même fait des prix cherchés. S est trouvé par dichotomie : « total obtenu avec les prix qu'exige S » décroît
-    quand S croît, le point où ils se rejoignent est unique. On garde le côté prudent (total obtenu ≥ total
-    supposé) : la marge réelle n'est jamais sous le plancher. Les prix relevés sont arrondis vers le haut au pas."""
-    bases = [float(l.get("base") or 0) for l in lignes]
-    qtes = [float(l.get("qty") or 0) for l in lignes]
-    planchers = [float(l.get("plancher_ht") or 0) for l in lignes]
-    tvas = [float(l.get("tva") or 1) or 1.0 for l in lignes]
-
+    relevée), tva (1,19…)}]. Le plancher TTC est le plancher HT × TVA, arrondi vers le haut au pas ; la ligne
+    garde son prix d'origine s'il est au-dessus. La remise supplémentaire de la commande (ristourne) n'entre PAS
+    dans le calcul : elle se déduit après, une fois la marge assurée sur les prix."""
     millime = 10 ** -decimales
-
-    def prix(part_gardee: float) -> list:
-        out = []
-        for b, ph, t in zip(bases, planchers, tvas):
-            if ph > 0 and part_gardee > 0:
-                besoin = arrondir_sup(ph * t / part_gardee, pas, decimales)
-                # ERPNext arrondit le prix net HT au millime : sur un article à quelques centaines de millimes,
-                # cet arrondi peut suffire à passer sous le plancher. On monte d'un millime tant que c'est le cas.
-                for _ in range(5):
-                    if round(besoin * part_gardee / t, decimales) + 1e-9 >= ph:
-                        break
-                    besoin = round(besoin + millime, decimales)
-                out.append(max(b, besoin))
-            else:
-                out.append(b)
-        return out
-
-    def total(ps: list) -> float:
-        return sum(p * q / (t if sur_net else 1.0) for p, q, t in zip(ps, qtes, tvas))
-
-    if pourcentage > 0:
-        return prix(max(1 - min(pourcentage, 99.0) / 100.0, 0.01))
-    remise = float(remise or 0)
-    if remise <= 0:
-        return prix(1.0)
-    if remise >= total(bases) - 1e-6:
-        # La remise couvre TOUTE la commande à ses prix d'origine (petite commande, ristourne plafonnée au total) :
-        # le client ne paie rien, il dépense sa ristourne. Relever les prix ne ferait que gonfler la commande pour
-        # lui en faire dépenser davantage (un filtre à 12,000 affiché 46,500). On s'en tient au plancher sans remise.
-        return prix(1.0)
-    bas = max(total(bases), remise * 1.0001, 1e-6)
-    if total(prix(1 - remise / bas)) <= bas + 1e-9:
-        return prix(1 - remise / bas)                     # aux prix d'origine, tout le monde garde sa marge
-    haut = total(prix(1 - remise / bas))
-    for _ in range(60):
-        milieu = (bas + haut) / 2
-        if total(prix(1 - remise / milieu)) > milieu:
-            bas = milieu
-        else:
-            haut = milieu
-    return prix(1 - remise / bas)
+    out = []
+    for l in lignes:
+        base, ph, tva = float(l.get("base") or 0), float(l.get("plancher_ht") or 0), float(l.get("tva") or 1) or 1.0
+        if ph <= 0:
+            out.append(base)
+            continue
+        besoin = arrondir_sup(ph * tva, pas, decimales)
+        # ERPNext arrondit le prix net HT au millime : sur un article à quelques centaines de millimes, cet
+        # arrondi peut suffire à passer sous le plancher. On monte d'un millime tant que c'est le cas.
+        for _ in range(5):
+            if round(besoin / tva, decimales) + 1e-9 >= ph:
+                break
+            besoin = round(besoin + millime, decimales)
+        out.append(max(base, besoin))
+    return out
 
 
 # ----------------------------------------------------------------- coûts
@@ -402,11 +364,10 @@ def analyser(doc, r: dict | None = None) -> list[dict]:
             fiche["plancher_ht"] = plancher_ht(cout, r["taux"], r["base"])
             fiche["tva"] = facteur_tva(l.get("item_tax_rate"), doc.get("taxes"))
     if not exonere:
-        # Toutes les lignes entrent dans le total que la remise se partage, relevables ou non.
+        # La remise supplémentaire de la commande (ristourne) n'entre pas dans le calcul : la marge d'abord.
         cibles = prix_cibles([{"base": f["base"] if f["eligible"] else f["prix"], "qty": flt(f["ligne"].qty),
                                "plancher_ht": f["plancher_ht"], "tva": f["tva"]} for f in fiches],
-                             remise=flt(doc.get("discount_amount")), pourcentage=flt(doc.get("additional_discount_percentage")),
-                             pas=r.get("arrondi", 0), sur_net=doc.get("apply_discount_on") == "Net Total")
+                             pas=r.get("arrondi", 0))
         for f, c in zip(fiches, cibles):
             if f["eligible"]:
                 f["cible"] = c
@@ -576,11 +537,8 @@ def plancher_ligne(ligne, taxes=None, woocommerce_id=None) -> dict:
     if out["exonere"]:
         out["plancher"] = plancher_exonere(cout, taux_tva_article(ligne["item_code"], ligne.get("item_tax_rate")), r)
     else:
-        # Comme le hook : prix / prix net HT, qui porte la TVA ET la remise globale (ristourne). Le formulaire
-        # envoie `net_rate` ; sans lui (ligne pas encore calculée), la TVA seule.
-        prix, net = flt(ligne.get("rate")), flt(ligne.get("net_rate"))
-        facteur = (prix / net) if prix > 0 and net > 0 else facteur_tva(ligne.get("item_tax_rate"), taxes)
-        out["plancher"] = plancher_ttc(cout, facteur, r)
+        # La TVA seule : la remise supplémentaire de la commande (ristourne) ne compte pas dans la marge.
+        out["plancher"] = plancher_ttc(cout, facteur_tva(ligne.get("item_tax_rate"), taxes), r)
     return out
 
 
