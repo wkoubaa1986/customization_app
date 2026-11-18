@@ -117,6 +117,30 @@ class TestRemiseEtRecherche(unittest.TestCase):
         self.assertIn("(i.item_code like %s or i.item_name like %s)", source)                          # par code ET par nom
 
 
+class TestListeDePrixDuClient(unittest.TestCase):
+    """18/11/2026 : « le prix de la commande doit être en fonction de la liste de prix du client, non ? » — un client
+    « Compte Pro » voyait « prix Compte Pro » en tête mais payait le prix public (640,000 au lieu de 396,500)."""
+
+    def test_la_commande_porte_la_liste_du_client(self):
+        source = inspect.getsource(K._commande)
+        self.assertIn('"selling_price_list": _liste_de_prix(doc.custom_client)', source)
+        self.assertLess(source.index('"selling_price_list": _liste_de_prix'), source.index('so.run_method("set_missing_values")'))
+
+    def test_la_liste_vient_de_la_fiche_puis_du_groupe_puis_du_reglage(self):
+        source = inspect.getsource(K._liste_de_prix)
+        fiche = 'frappe.db.get_value("Customer", client, "default_price_list")'
+        groupe = 'frappe.db.get_value("Customer Group", groupe, "default_price_list")'
+        reglage = 'frappe.db.get_single_value("Selling Settings", "selling_price_list")'
+        for morceau in (fiche, groupe, reglage):
+            self.assertIn(morceau, source)
+        self.assertLess(source.index(fiche), source.index(groupe))
+        self.assertLess(source.index(groupe), source.index(reglage))
+
+    def test_l_ecran_et_la_recherche_lisent_la_meme_liste(self):
+        self.assertIn("liste = _liste_de_prix(doc.custom_client)", inspect.getsource(K.preparer))
+        self.assertIn("_prix(codes, _liste_de_prix(doc.custom_client))", inspect.getsource(K.articles))
+
+
 class TestService(unittest.TestCase):
     def test_reserve_au_technicien_sur_ses_interventions(self):
         source = inspect.getsource(K._contexte)

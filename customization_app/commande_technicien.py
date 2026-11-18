@@ -149,8 +149,13 @@ def _magasin() -> str:
 
 
 def _liste_de_prix(client: str) -> str:
-    return (frappe.db.get_value("Customer", client, "default_price_list")
-            or frappe.db.get_single_value("Selling Settings", "selling_price_list") or "Vente standard")
+    """La liste de prix du CLIENT, comme ERPNext la choisit dans le formulaire : celle de sa fiche, sinon celle de
+    son groupe de clients, sinon la liste de vente par défaut."""
+    liste = frappe.db.get_value("Customer", client, "default_price_list")
+    if not liste:
+        groupe = frappe.db.get_value("Customer", client, "customer_group")
+        liste = frappe.db.get_value("Customer Group", groupe, "default_price_list") if groupe else None
+    return liste or frappe.db.get_single_value("Selling Settings", "selling_price_list") or "Vente standard"
 
 
 def _prix(codes: list, liste: str) -> dict:
@@ -253,7 +258,11 @@ def _commande(doc, emp, lignes: list, remise=None, justifiee: bool = True):
     jour = nowdate()
     so = frappe.new_doc("Sales Order")
     so.update({"customer": doc.custom_client, "transaction_date": jour, "delivery_date": jour,
-               "company": frappe.defaults.get_global_default("company")})
+               "company": frappe.defaults.get_global_default("company"),
+               # ⚠️ La liste de prix du CLIENT, posée ici : une commande créée par programme naît avec la liste par
+               # défaut (« Vente standard ») et ERPNext ne la remplace pas — un client « Compte Pro » payait le prix
+               # public (constaté le 18/11/2026 : 640,000 au lieu de 396,500).
+               "selling_price_list": _liste_de_prix(doc.custom_client)})
     for champ in ("custom_type_de_transaction", "taxes_and_charges"):
         if pre.get(champ):
             so.set(champ, pre[champ])
