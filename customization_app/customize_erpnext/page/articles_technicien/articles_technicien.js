@@ -3,6 +3,8 @@
  * une barre de recherche (nom ou code), puis pour chaque article son image, son code, son nom, sa description
  * et son prix dans la liste « Vente standard ». Lecture seule : aucune fiche à ouvrir, aucun bouton d’action.
  * Tout vient du serveur (customization_app.accueil_technicien.articles), par pages de 30.
+ * Filtre par groupe d'articles et tri par nom, par groupe ou par prix (18/11/2026) : décidés par le serveur, qui
+ * connaît le prix du jour de chaque article.
  */
 (function () {
     const METHODE = "customization_app.accueil_technicien.articles";
@@ -17,6 +19,13 @@
         .art-barre { position: sticky; top: var(--navbar-height, 48px); z-index: 5; background: var(--bg-color, #f8f9fa); padding: 6px 0 10px; }
         .art-barre input { width: 100%; min-height: 48px; font-size: 16px; padding: 10px 14px; border-radius: 12px;
                            border: 1px solid var(--border-color, #d1d8dd); background: #fff; }
+        .art-choix { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 6px; }
+        .art-choix select { width: 100%; min-height: 44px; font-size: 14px; padding: 0 10px; border-radius: 10px;
+                            border: 1px solid var(--border-color, #d1d8dd); background: #fff; }
+        .art-intertitre { grid-column: 1 / -1; font-weight: 800; font-size: 13px; text-transform: uppercase; letter-spacing: .3px;
+                          color: #374151; padding: 10px 2px 2px; border-bottom: 2px solid var(--border-color, #e4e8ee); }
+        .art-etq { font-family: var(--font-stack, sans-serif); font-size: 11px; background: #eef2f7; color: #4b5563;
+                   border-radius: 999px; padding: 1px 7px; margin-left: 4px; white-space: nowrap; }
         .art-compte { color: var(--text-muted, #6b7280); font-size: 12.5px; padding: 6px 2px 0; }
         .art-liste { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 10px; }
         .art { display: flex; gap: 12px; background: #fff; border: 1px solid var(--border-color, #e4e8ee);
@@ -44,6 +53,15 @@
             this.$el = $(`<div>
                 <div class="art-barre">
                     <input type="search" inputmode="search" autocomplete="off" placeholder="${esc(__("Chercher par nom ou par code…"))}">
+                    <div class="art-choix">
+                        <select class="art-groupe" title="${esc(__("Groupe d’articles"))}"><option value="">${esc(__("Tous les groupes"))}</option></select>
+                        <select class="art-tri" title="${esc(__("Trier"))}">
+                            <option value="nom">${esc(__("Tri : nom"))}</option>
+                            <option value="groupe">${esc(__("Tri : groupe"))}</option>
+                            <option value="prix_croissant">${esc(__("Tri : prix croissant"))}</option>
+                            <option value="prix_decroissant">${esc(__("Tri : prix décroissant"))}</option>
+                        </select>
+                    </div>
                     <div class="art-compte"></div>
                 </div>
                 <div class="art-liste"></div>
@@ -54,7 +72,14 @@
             this.$plus = this.$el.find(".art-plus");
             this.$compte = this.$el.find(".art-compte");
             this.tour = 0;
+            this.$groupe = this.$el.find(".art-groupe");
+            this.$tri = this.$el.find(".art-tri");
             this.$champ.on("input", frappe.utils.debounce(() => this.charger(true), 300));
+            this.$groupe.add(this.$tri).on("change", () => this.charger(true));
+            frappe.call({ method: "customization_app.accueil_technicien.groupes" }).then((r) => {
+                (r.message || []).forEach((g) => this.$groupe.append(
+                    `<option value="${esc(g.groupe)}">${esc(g.groupe)} (${g.nombre})</option>`));
+            });
             this.$plus.on("click", () => this.charger(false));
             this.$liste.on("click", ".art-img:not(.vide)", (ev) => this.agrandir($(ev.currentTarget)));
             this.charger(true);
@@ -63,11 +88,20 @@
         charger(depuis_le_debut) {
             if (depuis_le_debut) this.charges = 0;
             const tour = ++this.tour;   // une réponse en retard (frappe rapide) ne doit pas écraser la suivante
-            frappe.call({ method: METHODE, args: { recherche: this.$champ.val(), debut: this.charges } }).then((r) => {
+            if (depuis_le_debut) this.dernier_groupe = null;
+            frappe.call({ method: METHODE, args: { recherche: this.$champ.val(), debut: this.charges,
+                                                   groupe: this.$groupe.val() || "", tri: this.$tri.val() || "nom" } }).then((r) => {
                 if (tour !== this.tour) return;
                 const m = r.message || {};
                 if (depuis_le_debut) this.$liste.empty();
-                (m.articles || []).forEach((a) => this.$liste.append(this.carte(a, m.liste_prix)));
+                (m.articles || []).forEach((a) => {
+                    // Trié par groupe : un intertitre à chaque changement de groupe.
+                    if (m.tri === "groupe" && a.groupe !== this.dernier_groupe) {
+                        this.dernier_groupe = a.groupe;
+                        this.$liste.append(`<div class="art-intertitre">${esc(a.groupe || __("Sans groupe"))}</div>`);
+                    }
+                    this.$liste.append(this.carte(a, m.liste_prix, m.tri));
+                });
                 this.charges += (m.articles || []).length;
                 this.$plus.toggle(!!m.suite);
                 this.$compte.text(m.total ? __("{0} article(s) — prix {1}", [m.total, m.liste_prix]) : "");
@@ -75,7 +109,7 @@
             });
         }
 
-        carte(a, liste) {
+        carte(a, liste, tri) {
             const image = a.image
                 ? `<div class="art-img" data-src="${esc(a.image)}" data-nom="${esc(a.nom)}"><img loading="lazy" src="${esc(a.image)}" alt=""></div>`
                 : `<div class="art-img vide">📦</div>`;
@@ -83,7 +117,8 @@
                 ? `<div class="art-prix sans">${esc(__("Pas de prix en {0}", [liste]))}</div>`
                 : `<div class="art-prix">${prix(a.prix)} <small>DT${a.unite ? " / " + esc(a.unite) : ""}</small></div>`;
             return `<div class="art">${image}<div class="art-txt">
-                <div class="art-nom">${esc(a.nom)}</div><div class="art-code">${esc(a.code)}</div>
+                <div class="art-nom">${esc(a.nom)}</div><div class="art-code">${esc(a.code)}${
+                    a.groupe && tri !== "groupe" ? ` <span class="art-etq">${esc(a.groupe)}</span>` : ""}</div>
                 ${a.description ? `<div class="art-desc">${esc(a.description)}</div>` : ""}${p}</div></div>`;
         }
 

@@ -168,6 +168,28 @@ class TestCablage(unittest.TestCase):
             self.assertIn(attendu, js)
         self.assertNotIn("set_route", js)                         # lecture seule : aucune fiche à ouvrir
 
+    def test_les_articles_se_filtrent_par_groupe_et_se_trient(self):
+        """18/11/2026 : « dans article, ajoute filtre par groupe d'article et tri par groupe et par prix »."""
+        from customization_app import accueil_technicien as A
+        self.assertEqual(A.TRIS, ("nom", "groupe", "prix_croissant", "prix_decroissant"))
+        l = [{"code": "B", "nom": "Bride", "groupe": "Tuyauterie", "prix": 5.0}, {"code": "A", "nom": "Adoucisseur", "groupe": "Traitement", "prix": 900.0},
+             {"code": "C", "nom": "Coude", "groupe": "Tuyauterie", "prix": None}, {"code": "D", "nom": "Douille", "groupe": "Accessoires", "prix": 12.0}]
+        codes = lambda tri: [x["code"] for x in A.trier(l, tri)]
+        self.assertEqual(codes("nom"), ["A", "B", "C", "D"])
+        self.assertEqual(codes("groupe"), ["D", "A", "B", "C"])                  # Accessoires, Traitement, Tuyauterie (Bride, Coude)
+        self.assertEqual(codes("prix_croissant"), ["B", "D", "A", "C"])          # l'article sans prix à la fin
+        self.assertEqual(codes("prix_decroissant"), ["A", "D", "B", "C"])        # …à la fin dans les deux sens
+        self.assertEqual(codes("n'importe quoi"), ["A", "B", "C", "D"])
+        import inspect
+        source = inspect.getsource(A.articles)
+        self.assertIn('conditions.append("i.item_group = %s")', source)
+        self.assertIn("tri = tri if tri in TRIS else \"nom\"", source)
+        self.assertIn('frappe.has_permission("Item", "read", throw=True)', inspect.getsource(A.groupes))
+        js = self._lire("customize_erpnext", "page", "articles_technicien", "articles_technicien.js")
+        for attendu in ('class="art-groupe"', 'class="art-tri"', 'value="prix_croissant"', 'value="prix_decroissant"', 'value="groupe"',
+                        '"customization_app.accueil_technicien.groupes"', "art-intertitre"):
+            self.assertIn(attendu, js)
+
     def test_la_caisse_du_technicien_sans_les_suivis_ni_les_boutons_du_bureau(self):
         """18/11/2026 : « pour les employés avec la fonction technicien, ne montre pas [les suivis des dépenses
         facturées et des achats fournisseurs] dans la caisse, et ne montre pas ces boutons »."""

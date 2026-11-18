@@ -59,35 +59,74 @@ def prix_du_jour(lignes: list, unite_stock: str = "", jour=None):
     return float(bons[-1][2].get("price_list_rate") or 0)
 
 
+TRIS = ("nom", "groupe", "prix_croissant", "prix_decroissant")
+
+
+def trier(lignes: list, tri: str = "nom") -> list:
+    """Les articles dans l'ordre demandé. PURE. `lignes` : [{nom, code, groupe, prix}].
+
+    « nom » : par nom ; « groupe » : par groupe puis par nom ; « prix_croissant » / « prix_decroissant » : par prix,
+    les articles SANS prix toujours à la fin."""
+    nom = lambda l: ((l.get("nom") or "").lower(), l.get("code") or "")
+    if tri == "groupe":
+        return sorted(lignes, key=lambda l: ((l.get("groupe") or "").lower(),) + nom(l))
+    if tri in ("prix_croissant", "prix_decroissant"):
+        avec = [l for l in lignes if l.get("prix") is not None]
+        sans = sorted((l for l in lignes if l.get("prix") is None), key=nom)
+        signe = -1 if tri == "prix_decroissant" else 1
+        return sorted(avec, key=lambda l: (signe * float(l["prix"]),) + nom(l)) + sans
+    return sorted(lignes, key=nom)
+
+
 @frappe.whitelist()
-def articles(recherche=None, debut=0):
-    """{articles: [{code, nom, description, image, prix, unite}], total, suite, liste_prix}."""
+def groupes():
+    """Les groupes d'articles qui ont au moins un article vendable, avec leur nombre — pour le filtre de la page."""
+    frappe.has_permission("Item", "read", throw=True)
+    return [{"groupe": g, "nombre": n} for g, n in frappe.db.sql(
+        """select i.item_group, count(*) from `tabItem` i
+           where i.disabled = 0 and i.has_variants = 0 and i.is_sales_item = 1 and ifnull(i.item_group, '') != ''
+           group by i.item_group order by i.item_group""")]
+
+
+@frappe.whitelist()
+def articles(recherche=None, debut=0, groupe=None, tri=None):
+    """{articles: [{code, nom, groupe, description, image, prix, unite}], total, suite, liste_prix, tri}.
+
+    `groupe` : un groupe d'articles (filtre) ; `tri` : nom (défaut), groupe, prix_croissant, prix_decroissant.
+    Le prix du jour n'est pas une colonne : pour trier par prix il faut le connaître pour TOUS les articles qui
+    correspondent — ils sont un millier au plus, tout se trie ici puis la page demandée est rendue."""
     frappe.has_permission("Item", "read", throw=True)
     debut = max(0, cint(debut))
+    tri = tri if tri in TRIS else "nom"
     conditions, valeurs = ["i.disabled = 0", "i.has_variants = 0", "i.is_sales_item = 1"], []
     for mot in mots(recherche):
         motif = "%" + mot.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
         conditions.append("(i.item_code like %s or i.item_name like %s)")
         valeurs += [motif, motif]
-    ou = " and ".join(conditions)
-    total = frappe.db.sql("select count(*) from `tabItem` i where " + ou, valeurs)[0][0]
-    lignes = frappe.db.sql(
-        "select i.name, i.item_name, i.description, i.image, i.stock_uom from `tabItem` i where " + ou
-        + " order by i.item_name, i.name limit %s offset %s", valeurs + [PAR_PAGE, debut], as_dict=True)
+    if groupe:
+        conditions.append("i.item_group = %s")
+        valeurs.append(groupe)
+    tous = frappe.db.sql(
+        "select i.name, i.item_name, i.item_group, i.description, i.image, i.stock_uom from `tabItem` i where "
+        + " and ".join(conditions), valeurs, as_dict=True)
 
     prix = {}
-    if lignes:
+    if tous:
         for p in frappe.get_all("Item Price", filters={"price_list": LISTE_PRIX, "selling": 1,
-                                                       "item_code": ["in", [l.name for l in lignes]]},
-                                fields=["item_code", "price_list_rate", "uom", "valid_from", "valid_upto", "customer"]):
+                                                       "item_code": ["in", [l.name for l in tous]]},
+                                fields=["item_code", "price_list_rate", "uom", "valid_from", "valid_upto", "customer"],
+                                limit_page_length=0):
             prix.setdefault(p.item_code, []).append(p)
     jour = str(getdate(nowdate()))
-    sortie = []
-    for l in lignes:
-        description = texte_brut(l.description)
-        if description.lower() in ((l.item_name or "").lower(), (l.name or "").lower()):
-            description = ""                      # une description qui répète le nom n'apprend rien
+    lignes = []
+    for l in tous:
         p = prix_du_jour(prix.get(l.name), l.stock_uom, jour)
-        sortie.append({"code": l.name, "nom": l.item_name or l.name, "description": description,
-                       "image": l.image or "", "prix": flt(p, 3) if p is not None else None, "unite": l.stock_uom or ""})
-    return {"articles": sortie, "total": total, "suite": debut + len(lignes) < total, "liste_prix": LISTE_PRIX}
+        lignes.append({"code": l.name, "nom": l.item_name or l.name, "groupe": l.item_group or "",
+                       "_description": l.description, "image": l.image or "",
+                       "prix": flt(p, 3) if p is not None else None, "unite": l.stock_uom or ""})
+    page = trier(lignes, tri)[debut:debut + PAR_PAGE]
+    for l in page:
+        description = texte_brut(l.pop("_description", None))
+        # une description qui répète le nom n'apprend rien
+        l["description"] = "" if description.lower() in (l["nom"].lower(), l["code"].lower()) else description
+    return {"articles": page, "total": len(lignes), "suite": debut + len(page) < len(lignes), "liste_prix": LISTE_PRIX, "tri": tri}
