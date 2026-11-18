@@ -348,8 +348,10 @@ def avertir_apres_validation(doc, method=None):
 @frappe.whitelist()
 def apercu(doc) -> dict:
     """La majoration que l'enregistrement posera sur la commande telle qu'elle est À L'ÉCRAN, sans rien
-    enregistrer : même calcul que le hook, sur une copie. Le vendeur lit ainsi le montant exact à passer
-    sur le terminal avant d'enregistrer."""
+    enregistrer : même calcul que le hook, sur une copie. Rend l'état (`_etat`) plus `lignes` et `echeances` :
+    les prix et les montants à poser à l'écran. Le formulaire les applique aussitôt
+    (public/js/sales_order_paiement.js) : le vendeur voit les prix et le total augmenter dès qu'il choisit la
+    carte, et lit le montant exact à passer sur le terminal avant d'enregistrer."""
     donnees = json.loads(doc) if isinstance(doc, str) else dict(doc or {})
     if donnees.get("doctype") != "Sales Order":
         frappe.throw(_("Aperçu réservé à la commande client."))
@@ -358,7 +360,14 @@ def apercu(doc) -> dict:
     if copie.docstatus != 0:
         return _etat(copie)
     copie.calculate_taxes_and_totals()
-    return appliquer(copie, prevenir=False)
+    etat = appliquer(copie, prevenir=False)
+    # Ce que l'écran doit porter pour être déjà dans l'état que l'enregistrement posera : le formulaire
+    # l'applique tout de suite (prix des lignes, échéances), l'augmentation se voit donc EN TEMPS RÉEL.
+    etat["lignes"] = [{"name": l.name, "rate": flt(l.rate, 3), "avant": flt(l.get(CHAMP_AVANT), 3),
+                       "avec": flt(l.get(CHAMP_AVEC), 3)} for l in (copie.get("items") or [])]
+    etat["echeances"] = [{"name": e.name, "payment_amount": flt(e.payment_amount, 3),
+                          "invoice_portion": flt(e.invoice_portion)} for e in (copie.get("payment_schedule") or [])]
+    return etat
 
 
 def mention(doc) -> dict | None:

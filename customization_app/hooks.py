@@ -932,8 +932,9 @@ doctype_js = {
     "Sales Order": ["public/js/sales_order_aramex.js",
                     # Marge minimale en temps réel + prix HT sur document exonéré (marge_minimale).
                     "public/js/sales_order_marge.js",
-                    # Paiement par carte : le message de majoration dans « Termes de paiement » (majoration_carte).
-                    "public/js/sales_order_majoration_carte.js",
+                    # Le paiement en un bloc interactif dans « Termes de paiement » : une ligne par moyen, les
+                    # montants qui s'équilibrent, et la majoration carte appliquée en temps réel (majoration_carte).
+                    "public/js/sales_order_paiement.js",
                     # Commande en litige : la partager avec le partenaire la fait compter au Bilan Vente.
                     "public/js/sales_order_partage_partenaire.js"],
     "Quotation": "public/js/sales_order_marge.js",

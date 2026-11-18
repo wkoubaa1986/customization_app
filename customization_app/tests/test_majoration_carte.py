@@ -96,7 +96,7 @@ class TestBranchements(unittest.TestCase):
         self.assertIn('"customization_app.majoration_carte.memoriser_echeancier"', hooks)
         self.assertIn('"customization_app.majoration_carte.avertir_apres_validation"', hooks)
         self.assertIn('"customization_app.jinja_methods.majoration_carte"', hooks)
-        self.assertIn('"public/js/sales_order_majoration_carte.js"', hooks)
+        self.assertIn('"public/js/sales_order_paiement.js"', hooks)
 
     def test_le_taux_vient_du_reglage_bancaire(self):
         self.assertEqual((M.REGLAGE, M.CHAMP_TAUX_REGLAGE), ("Bank Retenue Sync Settings", "majoration_carte_taux"))
@@ -108,10 +108,24 @@ class TestBranchements(unittest.TestCase):
             self.assertIn('"fieldname": "%s"' % champ, patch)
         self.assertIn("customization_app.patches.majoration_carte", self.lire("patches.txt"))
 
-    def test_l_ecran_demande_l_apercu_au_serveur(self):
-        js = self.lire("public", "js", "sales_order_majoration_carte.js")
+    def test_l_ecran_demande_l_apercu_au_serveur_et_l_applique(self):
+        js = self.lire("public", "js", "sales_order_paiement.js")
         self.assertIn('"customization_app.majoration_carte.apercu"', js)
         self.assertIn("montant à passer sur le terminal", js)
+        # temps réel : les prix rendus par l'aperçu sont posés sur les lignes, sans attendre l'enregistrement
+        self.assertIn('frappe.model.set_value(ligne.doctype, ligne.name, "rate", l.rate)', js)
+        apercu = self.lire("majoration_carte.py")
+        self.assertIn('etat["lignes"] = ', apercu)
+        self.assertIn('etat["echeances"] = ', apercu)
+
+    def test_le_bloc_ecrit_dans_le_tableau_standard(self):
+        """Aucune donnée de plus : le bloc lit et écrit `payment_schedule`, que tout le reste du système lit."""
+        js = self.lire("public", "js", "sales_order_paiement.js")
+        self.assertIn('frm.add_child("payment_schedule"', js)
+        self.assertIn('frm.refresh_field("payment_schedule")', js)
+        for regle in ("7 chiffres", "Banque à choisir", "Référence de la transaction par carte à indiquer",
+                      "Référence de la livraison Aramex à indiquer"):
+            self.assertIn(regle, js)
 
 
 if __name__ == "__main__":
