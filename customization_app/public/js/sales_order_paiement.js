@@ -118,10 +118,18 @@
     }
 
     // Le taux réglé (%) et le pas d'arrondi de la majoration, demandés une fois au serveur ; taux 0 tant qu'il
-    // n'est pas connu ou pour une commande du site web.
+    // n'est pas connu ou pour une commande du site web payée en ligne.
     let reglage = null;
+    // Commande du site PAYÉE EN LIGNE : pas de majoration. En « Paiement à la livraison » (toutes celles de 2026), rien
+    // n'est payé : une carte au magasin est majorée comme sur n'importe quelle commande (majoration_carte.payee_en_ligne).
+    const A_LA_LIVRAISON = ["paiement à la livraison", "paiement a la livraison", "cash on delivery", "cod"];
+    function payeeEnLigne(frm) {
+        if (!frm.doc.woocommerce_id) return false;
+        const moyen = String(frm.doc.woocommerce_payment_method || "").toLowerCase().split(/\s+/).filter(Boolean).join(" ");
+        return !!moyen && !A_LA_LIVRAISON.includes(moyen);
+    }
     function taux(frm) {
-        if (frm.doc.woocommerce_id) return 0;
+        if (payeeEnLigne(frm)) return 0;
         if (reglage === null) {
             reglage = { taux: 0, pas: 0.1, superieur: true };
             frappe.xcall("customization_app.majoration_carte.taux_pour_ecran")

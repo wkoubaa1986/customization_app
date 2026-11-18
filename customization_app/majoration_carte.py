@@ -220,6 +220,23 @@ def arrondi_regle() -> tuple:
     return pas, (lus.get(CHAMP_SENS_REGLAGE) or SENS_SUPERIEUR) == SENS_SUPERIEUR
 
 
+#: Sur le site web, ces moyens se règlent À LA LIVRAISON (ou au magasin) : rien n'a été payé en ligne.
+PAIEMENTS_SITE_A_LA_LIVRAISON = ("paiement à la livraison", "paiement a la livraison", "cash on delivery", "cod")
+
+
+def payee_en_ligne(woocommerce_id, moyen_du_site) -> bool:
+    """Une commande du site DÉJÀ PAYÉE en ligne (au prix affiché) : la seule que la majoration ne touche pas. PURE.
+
+    Une commande du site en « Paiement à la livraison » — toutes celles de 2026 — n'est pas payée : si le client
+    règle finalement par carte au magasin, la banque prend sa commission comme pour n'importe quelle commande, et
+    la majoration s'applique (18/11/2026 : « j'ai changé la dette en carte mais la majoration ne s'est pas
+    déclenchée », commande WEB1-008729). Avant, toute commande du site était exclue."""
+    if not woocommerce_id:
+        return False
+    moyen = " ".join(str(moyen_du_site or "").lower().split())
+    return bool(moyen) and moyen not in PAIEMENTS_SITE_A_LA_LIVRAISON
+
+
 def majoration_reglee(part_carte: float, taux: float) -> float:
     """La majoration d'une part carte, avec l'arrondi du réglage."""
     pas, superieur = arrondi_regle()
@@ -276,8 +293,8 @@ def appliquer(doc, prevenir: bool = True) -> dict:
     par_carte = [e for e in echeances if e.mode_of_payment == MODE_CARTE]
     lignes = _lignes_majorables(doc)
     deja = flt(doc.get(CHAMP_MONTANT)) or any(flt(l.get(CHAMP_AVANT)) for l in (doc.get("items") or []))
-    # Commande du site web : le client a déjà payé en ligne le prix affiché, on n'y touche pas.
-    taux = 0.0 if doc.get("woocommerce_id") else taux_regle()
+    # Commande du site web PAYÉE EN LIGNE : le client a déjà payé le prix affiché, on n'y touche pas.
+    taux = 0.0 if payee_en_ligne(doc.get("woocommerce_id"), doc.get("woocommerce_payment_method")) else taux_regle()
     if not deja and (not par_carte or taux <= 0):
         return _etat(doc, taux=0)                      # le cas de presque toutes les commandes : rien à faire
 
@@ -443,7 +460,8 @@ def avertir_apres_validation(doc, method=None):
       - une part passe à la carte : sa majoration n'est PAS appliquée ;
       - la carte est retirée d'une commande majorée : la majoration RESTE dans les prix.
     Seulement quand la part carte vient de changer : pas de message à chaque enregistrement de la commande."""
-    if doc.doctype != "Sales Order" or doc.get("woocommerce_id") or not doc.meta.has_field(CHAMP_MONTANT):
+    if doc.doctype != "Sales Order" or not doc.meta.has_field(CHAMP_MONTANT) \
+            or payee_en_ligne(doc.get("woocommerce_id"), doc.get("woocommerce_payment_method")):
         return
     avant, apres = _part_carte(doc.get_doc_before_save()), _part_carte(doc)
     deja = flt(doc.get(CHAMP_MONTANT), 3)

@@ -225,5 +225,39 @@ class TestBranchements(unittest.TestCase):
             self.assertIn(regle, js)
 
 
+class TestCommandeDuSiteWeb(unittest.TestCase):
+    """18/11/2026 : « j'ai changé la dette en carte mais la majoration ne s'est pas déclenchée » (WEB1-008729). Toute
+    commande du site était exclue ; seules celles DÉJÀ PAYÉES en ligne le restent."""
+
+    def test_paiement_a_la_livraison_est_une_commande_comme_une_autre(self):
+        from customization_app import majoration_carte as M
+        self.assertFalse(M.payee_en_ligne("8729", "Paiement à la livraison"))
+        self.assertFalse(M.payee_en_ligne("8729", "  paiement à la  livraison "))
+        self.assertFalse(M.payee_en_ligne("8729", "Cash on delivery"))
+        self.assertFalse(M.payee_en_ligne("8729", None))                 # moyen inconnu : rien ne dit qu'elle est payée
+
+    def test_une_commande_payee_en_ligne_reste_sans_majoration(self):
+        from customization_app import majoration_carte as M
+        self.assertTrue(M.payee_en_ligne("9001", "Carte bancaire (paiement en ligne)"))
+        self.assertTrue(M.payee_en_ligne("9001", "Virement bancaire"))
+
+    def test_une_commande_du_bureau_n_est_pas_concernee(self):
+        from customization_app import majoration_carte as M
+        self.assertFalse(M.payee_en_ligne(None, "Carte bancaire"))
+        self.assertFalse(M.payee_en_ligne("", ""))
+
+    def test_les_trois_endroits_suivent_la_meme_regle(self):
+        import inspect
+        import os
+        from customization_app import majoration_carte as M
+        self.assertIn('payee_en_ligne(doc.get("woocommerce_id"), doc.get("woocommerce_payment_method"))', inspect.getsource(M.appliquer))
+        self.assertIn('payee_en_ligne(doc.get("woocommerce_id"), doc.get("woocommerce_payment_method"))', inspect.getsource(M.avertir_apres_validation))
+        js = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "public", "js", "sales_order_paiement.js"), encoding="utf-8").read()
+        self.assertIn("if (payeeEnLigne(frm)) return 0;", js)
+        self.assertNotIn("if (frm.doc.woocommerce_id) return 0;", js)
+        for moyen in M.PAIEMENTS_SITE_A_LA_LIVRAISON:
+            self.assertIn('"%s"' % moyen, js)
+
+
 if __name__ == "__main__":
     unittest.main()
