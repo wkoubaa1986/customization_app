@@ -42,7 +42,7 @@ class TestTypeDeTransaction(unittest.TestCase):
         passage à « Autre — avec timbre fiscal ». Le bloc veille le total de la commande et se redessine."""
         self.assertIn("window.__so_paiement_veille = setInterval(veiller, 500)", self.js)
         self.assertIn("if (!rs.length) { rendre(frm); return; }", self.js)
-        self.assertIn("if (!st.application && Math.abs(t - st.dernierTotal) >= 0.001) suivreLeTotal(frm);", self.js)
+        self.assertIn("if (!st.application && Math.abs(t - st.dernierTotal) >= 0.001) { suivreLeTotal(frm); return; }", self.js)
 
     def test_l_etat_du_bloc_ne_passe_pas_d_une_commande_a_l_autre(self):
         self.assertIn("frm.__paiement.commande !== frm.doc.name", self.js)
