@@ -30,7 +30,9 @@
 // LES CHOIX DU CLIENT, DANS LE BLOC (18/11/2026) : « Paiement avec Avoir » et « Appliquer Ristourne » s'affichent
 // comme des lignes du bloc, sous « Type de transaction », seulement quand le client a un avoir ou une ristourne.
 // Ce sont des MIROIRS : ils n'écrivent que dans les champs d'origine (`custom_paiement_avec_avoir`,
-// `custom_appliquer_ristourne`), qui gardent tout leur comportement. Tant que le bloc est affiché (commande en
+// `custom_appliquer_ristourne`), qui gardent tout leur comportement. Sur une commande NEUVE, un avoir utilisable
+// ou une ristourne disponible met le choix sur « Oui » d'emblée (demande du 18/11/2026) — une seule fois par
+// client : un « Non » choisi ensuite est respecté, et une commande déjà enregistrée n'est jamais retouchée. Tant que le bloc est affiché (commande en
 // brouillon), le champ d'avoir et le miroir de ristourne posés au-dessus du bloc sont masqués — une seule place.
 //
 // AVOIR DU CLIENT (18/11/2026) : ce n'est PAS un moyen de paiement à choisir. La case « Paiement avec Avoir »
@@ -75,7 +77,8 @@
     /** L'état du bloc, propre à UNE commande : Frappe réutilise le même formulaire d'une commande à l'autre. */
     function etat(frm) {
         if (!frm.__paiement || frm.__paiement.commande !== frm.doc.name) {
-            frm.__paiement = { commande: frm.doc.name, fixes: new Set(), application: false, tour: 0, suite: 0, tableau: false };
+            frm.__paiement = { commande: frm.doc.name, fixes: new Set(), application: false, tour: 0, suite: 0, tableau: false,
+                clientDepuis: Date.now() };
         }
         return frm.__paiement;
     }
@@ -458,6 +461,27 @@
         return out.join("");
     }
 
+    /** Commande NEUVE : « Oui » par défaut quand le client a un avoir utilisable, et quand il a une ristourne
+        disponible. Une fois par client — le vendeur peut repasser à « Non », on n'y revient pas. On attend que les
+        informations du client soient arrivées (l'avoir est lu, la note de ristourne est celle de CE client). */
+    function choixParDefaut(frm) {
+        if (frm.doc.docstatus !== 0 || !frm.is_new() || !frm.doc.customer) return;
+        const st = etat(frm), client = frm.doc.customer;
+        if (st.defautAvoir !== client && st.avoirClient === client && st.avoir != null) {
+            st.defautAvoir = client;
+            if (flt(st.avoir) > 0 && frm.fields_dict[CHOIX_AVOIR] && ouiNon(frm.doc[CHOIX_AVOIR]) !== "Oui") frm.set_value(CHOIX_AVOIR, "Oui");
+        }
+        // La ristourne est calculée par son propre script, après un appel serveur : on laisse 2,5 s après le choix
+        // du client, pour ne pas lire la note du client précédent.
+        if (st.defautRistourne !== client && Date.now() - (st.clientDepuis || 0) > 2500) {
+            const r = ristourne(frm);
+            if (r.visible && r.detail) {
+                st.defautRistourne = client;
+                if (!r.lecture && flt(r.disponible) > 0 && r.valeur !== "Oui") frm.set_value(CHOIX_RISTOURNE, "Oui");
+            }
+        }
+    }
+
     /** Ce dont dépendent les deux lignes : si ça change (le script de la ristourne répond après coup), on redessine. */
     function signatureChoix(frm) {
         const r = ristourne(frm);
@@ -655,6 +679,7 @@
         if (!frm || frm.doctype !== "Sales Order" || !frm.doc || frm.doc.docstatus !== 0) return;
         if (!frm.fields_dict.payment_schedule || frappe.get_route()[0] !== "Form") return;
         const st = etat(frm), t = total(frm);
+        if (!st.application) choixParDefaut(frm);
         if (st.dernierTotal === undefined) { st.dernierTotal = t; return; }
         if (!st.application && Math.abs(t - st.dernierTotal) >= 0.001) { suivreLeTotal(frm); return; }
         // L'échéancier a été modifié ailleurs (le script de l'avoir, un modèle rechargé, le tableau) : le bloc suit.
@@ -692,7 +717,11 @@
         },
         // « Paiement avec Avoir » : Oui pose la ligne d'avoir et diminue les autres paiements, Non la retire.
         [CHOIX_AVOIR](frm) { suivreAvoir(frm); },
-        customer(frm) { const st = etat(frm); st.avoir = null; st.avoirClient = null; setTimeout(() => suivreAvoir(frm), 1500); },
+        customer(frm) {
+            const st = etat(frm);
+            st.avoir = null; st.avoirClient = null; st.clientDepuis = Date.now();
+            setTimeout(() => suivreAvoir(frm), 1500);
+        },
         // Type de transaction changé (en haut ou dans le bloc) : le miroir suit, puis le dinar de timbre.
         [TYPE](frm) { rendre(frm); if (frm.doc.docstatus === 0) suivreLeTimbre(frm); },
         // L'échéancier du modèle arrive par un appel serveur : on repart de lui, plus rien n'est « tapé à la main ».

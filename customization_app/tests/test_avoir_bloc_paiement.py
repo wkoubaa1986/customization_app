@@ -78,6 +78,19 @@ class TestLeBloc(unittest.TestCase):
         self.assertIn('.${ACTIF} .frappe-control[data-fieldname="${CHOIX_AVOIR}"], .${ACTIF} .so-ristourne-miroir{display:none !important}', self.js)
         self.assertIn("$(frm.layout.wrapper).toggleClass(ACTIF, frm.doc.docstatus === 0);", self.js)
 
+    def test_oui_par_defaut_sur_une_commande_neuve_quand_le_client_en_a(self):
+        """Demande du 18/11/2026 : « lorsque le client a une ristourne disponible ou un avoir disponible, merci de le
+        faire par défaut sur oui ». Commande neuve seulement, une fois par client : un « Non » choisi ensuite reste."""
+        corps = self.js[self.js.index("function choixParDefaut(frm) {"):self.js.index("/** Ce dont dépendent les deux lignes")]
+        self.assertIn("!frm.is_new()", corps)                                 # jamais sur une commande enregistrée
+        self.assertIn('flt(st.avoir) > 0', corps)
+        self.assertIn('frm.set_value(CHOIX_AVOIR, "Oui")', corps)
+        self.assertIn('flt(r.disponible) > 0', corps)
+        self.assertIn('frm.set_value(CHOIX_RISTOURNE, "Oui")', corps)
+        self.assertIn("st.defautAvoir = client;", corps)                      # une seule fois par client
+        self.assertIn("st.defautRistourne = client;", corps)
+        self.assertIn("if (!st.application) choixParDefaut(frm);", self.js)
+
     def test_le_montant_de_ristourne_disponible_est_lu_derriere_le_symbole_du_dinar(self):
         import re
         texte = "Déjà utilisé : د.ت 291.777 Disponible à ce jour (non plafonné) : د.ت 37.917"
