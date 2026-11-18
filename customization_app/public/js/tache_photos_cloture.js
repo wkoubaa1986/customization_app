@@ -251,7 +251,8 @@ function tache_dialogue_cloture(frm, exigences) {
                         : Promise.resolve();
                 enregistrer.then(() => {
                     d.hide();
-                    frm.reload_doc().then(() => {
+                    // Promise.resolve : un formulaire rend une promesse, la façade de « Ma journée » pouvait ne rien rendre.
+                    Promise.resolve(frm.reload_doc()).then(() => {
                         frm.set_value("status", "Completed");
                         frm.save();
                     });

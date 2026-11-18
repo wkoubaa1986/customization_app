@@ -30,6 +30,26 @@ class TestCompteRenduAutre(unittest.TestCase):
             self.assertNotIn('"Livraison"', champ[cle])                    # la livraison n'en demande toujours pas
 
 
+class TestClotureDepuisMaJournee(unittest.TestCase):
+    """18/11/2026 : « pour Autre, j'ai ajouté le rapport et clôturé, et la tâche est restée la même dans Ma journée ».
+    Le dialogue enchaîne sur `reload_doc().then(…)` ; la façade de Ma journée ne rendait pas de promesse, l'enchaînement
+    cassait en silence et la clôture n'était jamais demandée au serveur."""
+
+    def _lire(self, *chemin):
+        with open(os.path.join(BASE, *chemin), encoding="utf-8") as f:
+            return f.read()
+
+    def test_la_facade_rend_une_promesse(self):
+        js = self._lire("public", "js", "ma_journee.js")
+        self.assertIn("reload_doc: () => Promise.resolve(moi.charger()),", js)
+        self.assertNotIn("reload_doc: () => moi.charger(),", js)
+
+    def test_le_dialogue_ne_depend_plus_de_ce_que_rend_le_rechargement(self):
+        js = self._lire("public", "js", "tache_photos_cloture.js")
+        self.assertIn("Promise.resolve(frm.reload_doc()).then(() => {", js)
+        self.assertNotIn("\n                    frm.reload_doc().then(() => {", js)
+
+
 class TestNouvelleTache(unittest.TestCase):
     def test_une_tache_non_enregistree_ne_demande_pas_de_droit(self):
         source = inspect.getsource(api.get_customer_booking_info)

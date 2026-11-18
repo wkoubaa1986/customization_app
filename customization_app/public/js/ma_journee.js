@@ -806,7 +806,11 @@ frappe.provide("frappe.views");
                 doctype: "Tache de travail",
                 docname: tache,
                 doc: { name: tache },
-                reload_doc: () => moi.charger(),
+                // Le dialogue de clôture ENCHAÎNE sur le rechargement (`reload_doc().then(…)`) : il lui faut une
+                // promesse, comme celle d'un vrai formulaire. Sans elle l'enchaînement cassait en silence et la
+                // tâche restait ouverte (constaté le 18/11/2026 sur une tâche « Autre » : rapport saisi, rien ne
+                // se passait).
+                reload_doc: () => Promise.resolve(moi.charger()),
                 set_value: (champ, valeur) => { attente[champ] = valeur; },
                 save: () => frappe.call({
                     method: "customization_app.planning_employe.cloturer",
