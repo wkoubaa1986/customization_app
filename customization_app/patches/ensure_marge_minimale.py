@@ -15,6 +15,10 @@ def execute():
         {"fieldname": M.CHAMP_AVANT, "label": "Prix avant marge mini", "fieldtype": "Currency",
          "insert_after": M.CHAMP_FLAG, "read_only": 1, "no_copy": 1, "options": "currency",
          "depends_on": "eval:doc.%s" % M.CHAMP_FLAG},
+        # Le prix que la marge a posé (18/11/2026) : dit si la ligne est toujours au prix relevé par nous, ou si
+        # quelqu'un a retapé un prix depuis. Technique, jamais affiché.
+        {"fieldname": M.CHAMP_POSE, "label": "Prix plancher posé", "fieldtype": "Currency",
+         "insert_after": M.CHAMP_AVANT, "read_only": 1, "hidden": 1, "no_copy": 1, "options": "currency", "print_hide": 1},
     ]
     create_custom_fields({"Sales Order Item": champs, "Quotation Item": champs}, ignore_validate=True, update=True)
     if frappe.db.exists("DocType", M.CONFIG) and not frappe.db.get_single_value(M.CONFIG, "taux"):

@@ -38,6 +38,56 @@ class TestCalculs(unittest.TestCase):
             M.plancher_ht(10, 100)
 
 
+class TestRemiseGlobale(unittest.TestCase):
+    """Le plancher avec une remise globale (ristourne) : calculé pour toute la commande, exact, et indépendant de
+    l'ordre de saisie (18/11/2026). Cas réel : ECONOMIQ, filtre PF-10'-PP-UDF-CTO à 12,000 (coût moyen 8,111),
+    ristourne de 37,917."""
+
+    COUT, REMISE = 8.111281, 37.916555
+
+    def cible(self, qty, remise=None, pas=0.5):
+        ph = M.plancher_ht(self.COUT, 15)
+        return M.prix_cibles([{"base": 12.0, "qty": qty, "plancher_ht": ph, "tva": 1.19}],
+                             remise=self.REMISE if remise is None else remise, pas=pas)[0]
+
+    def marge_reelle(self, prix, qty):
+        net = (prix * qty - self.REMISE) / qty / 1.19
+        return (net - self.COUT) / net * 100
+
+    def test_le_prix_depend_de_la_quantite_pas_de_l_ordre_de_saisie(self):
+        self.assertEqual(self.cible(20), 13.5)          # le prix « d'avant », qui tombait juste par hasard
+        self.assertEqual(self.cible(10), 15.5)          # l'ancienne estimation donnait 16,500 ou 17,000
+        self.assertEqual(self.cible(40), 12.5)
+        self.assertEqual(self.cible(100), 12.0)         # la ristourne pèse peu : le prix d'origine suffit
+
+    def test_la_marge_reelle_n_est_jamais_sous_le_plancher(self):
+        for qty in (4, 5, 7, 10, 13, 20, 33, 40, 100):
+            self.assertGreaterEqual(self.marge_reelle(self.cible(qty), qty), 15.0 - 1e-6, qty)
+            # et jamais plus d'un pas (0,5 TTC) au-dessus de ce qu'il fallait
+            self.assertLess(self.marge_reelle(self.cible(qty) - 0.5, qty), 15.0, qty)
+
+    def test_sans_remise_le_plancher_habituel(self):
+        self.assertEqual(self.cible(10, remise=0), 12.0)                      # 11,356 -> 11,500 : sous le prix de 12
+        self.assertEqual(M.prix_cibles([{"base": 10.0, "qty": 3, "plancher_ht": M.plancher_ht(self.COUT, 15), "tva": 1.19}], pas=0.5), [11.5])
+
+    def test_une_commande_entierement_couverte_par_la_ristourne_n_est_pas_gonflee(self):
+        """1 filtre à 12,000, ristourne plafonnée à 12,000 : le client ne paie rien. Pas de prix à 46,500."""
+        self.assertEqual(self.cible(1, remise=12.0), 12.0)
+        self.assertEqual(self.cible(3, remise=36.0), 12.0)
+
+    def test_les_lignes_non_relevables_partagent_la_remise_sans_bouger(self):
+        ph = M.plancher_ht(self.COUT, 15)
+        prix = M.prix_cibles([{"base": 12.0, "qty": 10, "plancher_ht": ph, "tva": 1.19},
+                              {"base": 105.0, "qty": 2, "plancher_ht": 0, "tva": 1.19}], remise=self.REMISE, pas=0.5)
+        self.assertEqual(prix[1], 105.0)                                     # ligne sans coût connu : jamais relevée
+        self.assertEqual(prix[0], 13.0)                                      # la remise se partage : moins à rattraper
+
+    def test_remise_en_pourcentage(self):
+        ph = M.plancher_ht(self.COUT, 15)
+        prix = M.prix_cibles([{"base": 12.0, "qty": 10, "plancher_ht": ph, "tva": 1.19}], pourcentage=10, pas=0.5)[0]
+        self.assertEqual(prix, 13.0)                                         # 11,356 / 0,9 = 12,618 -> 13,000
+
+
 class TestCommande(unittest.TestCase):
     def setUp(self):
         import frappe

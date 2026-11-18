@@ -5,10 +5,21 @@
 //  2. Document EXONÉRÉ de TVA (aucune taxe incluse dans le prix) : le prix de liste TTC devient HT
 //     (TTC ÷ (1 + TVA de l'article)) dès le choix de l'article ; un prix tapé à la main est gardé.
 //  3. Mise en évidence des lignes relevées : bandeau orange sous le titre + fond orangé + puce « ⬆ marge ».
+//  4. (18/11/2026) Le plancher compte la REMISE GLOBALE (ristourne), et il est calculé pour TOUTE la commande d'un
+//     coup par le serveur (marge_minimale.planchers_commande — le même calcul que l'enregistrement) : le résultat
+//     ne dépend plus de l'ordre de saisie. Le formulaire applique ce qu'il rend, ligne par ligne : « relever »,
+//     « retablir » (le plancher est repassé sous le prix d'origine : ristourne retirée…), « oublier ». La marge
+//     raisonne sur le prix HORS majoration carte, qui se refait par-dessus.
 (() => {
-    const FLAG = "custom_marge_corrigee", AVANT = "custom_prix_avant_marge", TOL = 0.0005, DELAI = 450;
+    const FLAG = "custom_marge_corrigee", AVANT = "custom_prix_avant_marge", POSE = "custom_prix_plancher_pose", TOL = 0.0005, DELAI = 450;
     const minuteries = {};
     const DOCTYPES = ["Sales Order", "Quotation"];
+
+    /** Le prix de la ligne SANS la majoration pour paiement par carte (elle se refait par-dessus, après la marge). */
+    function prixHorsCarte(l) {
+        const avant = flt(l.custom_prix_avant_carte), avec = flt(l.custom_prix_avec_carte);
+        return avant && Math.abs(flt(l.rate) - avec) <= Math.max(0.005, Math.abs(avec) * 2e-5) ? avant : flt(l.rate);
+    }
 
     function exonere(frm) { return !!(frm.doc.taxes || []).length && !(frm.doc.taxes || []).some((t) => t.included_in_print_rate); }
 
@@ -65,6 +76,7 @@
                 rep = await frappe.xcall("customization_app.marge_minimale.plancher_ligne", {
                     ligne: { item_code: l.item_code, warehouse: l.warehouse, qty: l.qty, conversion_factor: l.conversion_factor,
                         item_tax_rate: l.item_tax_rate, item_group: l.item_group, is_free_item: l.is_free_item, rate: l.rate,
+                        net_rate: l.net_rate,           // porte la TVA ET la remise globale (ristourne), comme à l'enregistrement
                         price_list: frm.doc.selling_price_list, uom: l.uom, price_list_rate: l.price_list_rate, composants: composants(frm, l) },
                     taxes: (frm.doc.taxes || []).map((t) => ({ account_head: t.account_head, rate: t.rate, charge_type: t.charge_type, included_in_print_rate: t.included_in_print_rate })),
                     woocommerce_id: frm.doc.woocommerce_id || null,
@@ -87,28 +99,72 @@
                 peindre(frm);
                 return;
             }
-            if (!rep || rep.plancher == null) { if (l2[FLAG] && rep && rep.plancher == null) { oublier(frm, l2); } return; }
-            const rate = flt(l2.rate), plancher = flt(rep.plancher);
-            if (rate + TOL >= plancher) {
-                // Au-dessus du plancher : la trace reste si on est exactement sur le prix relevé, sinon elle s'efface.
-                if (l2[FLAG] && Math.abs(rate - plancher) > TOL) oublier(frm, l2);
-                return;
-            }
-            // Sous le plancher : on relève. set_value("rate") laisse ERPNext poser remise / marge et refaire les totaux.
-            if (!l2[FLAG]) frappe.model.set_value(l2.doctype, l2.name, AVANT, rate);
-            frappe.model.set_value(l2.doctype, l2.name, FLAG, 1);
-            frappe.model.set_value(l2.doctype, l2.name, "rate", plancher).then(() => {
-                peindre(frm);
-                frappe.show_alert({ indicator: "orange",
-                    message: __("⬆ {0} : prix relevé de {1} à {2} (marge minimale {3} %)",
-                        [l2.item_name || l2.item_code, format_currency(rate, frm.doc.currency), format_currency(plancher, frm.doc.currency), rep.taux]) }, 6);
-            });
+            if (!rep) return;
+            if (rep.plancher == null && rep.exonere) { if (l2[FLAG]) oublier(frm, l2); return; }
+            // Document standard : le plancher dépend de TOUTE la commande (la remise globale se répartit sur les
+            // lignes) — un seul calcul, côté serveur. Document exonéré : le plancher de la ligne suffit.
+            if (!rep.exonere) { verifierCommande(frm); return; }
+            const prix = prixHorsCarte(l2), plancher = flt(rep.plancher);
+            const parNous = !!l2[FLAG] && (!flt(l2[POSE]) || Math.abs(prix - flt(l2[POSE])) <= TOL);
+            const base = parNous && flt(l2[AVANT]) > 0 ? flt(l2[AVANT]) : prix;
+            const cible = Math.max(base, plancher);
+            if (cible > base + TOL) appliquer(frm, l2, { action: l2[FLAG] && Math.abs(prix - cible) <= TOL ? "rien" : "relever", cible, base }, rep.taux);
+            else if (parNous && prix > base + TOL) appliquer(frm, l2, { action: "retablir", cible: base, base }, rep.taux);
+            else if (l2[FLAG]) appliquer(frm, l2, { action: "oublier" }, rep.taux);
         }, DELAI);
+    }
+
+    /** Applique à une ligne ce que le calcul a décidé : {action, cible, base}. */
+    function appliquer(frm, l, c, taux) {
+        const prix = prixHorsCarte(l);
+        if (c.action === "oublier") { if (l[FLAG]) oublier(frm, l); return; }
+        if (c.action === "retablir") {
+            // Le plancher est repassé sous le prix d'origine (ristourne retirée…) : ce prix revient.
+            frappe.model.set_value(l.doctype, l.name, FLAG, 0);
+            frappe.model.set_value(l.doctype, l.name, AVANT, 0);
+            l[POSE] = 0;
+            frappe.model.set_value(l.doctype, l.name, "rate", c.cible).then(() => {
+                peindre(frm);
+                frappe.show_alert({ indicator: "blue",
+                    message: __("↩ {0} : le prix d’origine {1} revient (la marge minimale est respectée)",
+                        [l.item_name || l.item_code, format_currency(c.cible, frm.doc.currency)]) }, 6);
+            });
+            return;
+        }
+        if (c.action !== "relever") { if (l[FLAG] && !flt(l[POSE])) l[POSE] = prix; return; }
+        // Sous le plancher : on relève. set_value("rate") laisse ERPNext poser remise / marge et refaire les totaux.
+        frappe.model.set_value(l.doctype, l.name, AVANT, c.base);
+        frappe.model.set_value(l.doctype, l.name, FLAG, 1);
+        l[POSE] = c.cible;
+        if (Math.abs(prix - c.cible) <= TOL) { peindre(frm); return; }
+        frappe.model.set_value(l.doctype, l.name, "rate", c.cible).then(() => {
+            peindre(frm);
+            frappe.show_alert({ indicator: "orange",
+                message: __("⬆ {0} : prix relevé de {1} à {2} (marge minimale {3} %)",
+                    [l.item_name || l.item_code, format_currency(c.base, frm.doc.currency), format_currency(c.cible, frm.doc.currency), taux]) }, 6);
+        });
+    }
+
+    // Le calcul de TOUTE la commande (document standard) : une seule demande à la fois, la plus récente gagne.
+    let minuterieCommande = null, tourCommande = 0;
+    function verifierCommande(frm, delai = DELAI) {
+        if (frm.doc.docstatus !== 0) return;
+        clearTimeout(minuterieCommande);
+        const moi = ++tourCommande;
+        minuterieCommande = setTimeout(async () => {
+            let rep;
+            try { rep = await frappe.xcall("customization_app.marge_minimale.planchers_commande", { doc: frm.doc }); } catch (e) { return; }
+            if (moi !== tourCommande || frm.doc.docstatus !== 0 || !rep || !rep.actif) return;
+            const cdt = frm.doctype + " Item";
+            (rep.lignes || []).forEach((c) => { const l = locals[cdt] && locals[cdt][c.name]; if (l) appliquer(frm, l, c, rep.taux); });
+            peindre(frm);
+        }, delai);
     }
 
     function oublier(frm, l) {
         frappe.model.set_value(l.doctype, l.name, FLAG, 0);
         frappe.model.set_value(l.doctype, l.name, AVANT, 0);
+        l[POSE] = 0;
         peindre(frm);
     }
 
@@ -117,11 +173,15 @@
     const ligne = {};
     ["item_code", "qty", "uom", "conversion_factor", "warehouse", "rate", "price_list_rate", "discount_percentage",
      "discount_amount", "margin_rate_or_amount", "item_tax_template"].forEach((f) => { ligne[f] = (frm, cdt, cdn) => verifier(frm, cdn); });
-    ligne.items_remove = (frm) => peindre(frm);
+    ligne.items_remove = (frm) => { peindre(frm); if (!exonere(frm)) verifierCommande(frm); };   // la remise se répartit autrement
     const entete = {
         refresh(frm) { peindre(frm); },
         items_on_form_rendered(frm) { colorer(frm); },
         selling_price_list(frm) { verifierTout(frm); },
+        // Remise globale posée ou retirée (ristourne) : le prix net de chaque ligne change, le plancher aussi.
+        discount_amount(frm) { if (!exonere(frm)) verifierCommande(frm); },
+        additional_discount_percentage(frm) { if (!exonere(frm)) verifierCommande(frm); },
+        apply_discount_on(frm) { if (!exonere(frm)) verifierCommande(frm); },
         ignore_pricing_rule(frm) { verifierTout(frm); },
         // Le modèle de taxes change (exonération ↔ standard) : ERPNext recharge les taxes par un appel serveur,
         // on repasse les lignes quand elles arrivent (événement `taxes`), et à deux reprises par sécurité.

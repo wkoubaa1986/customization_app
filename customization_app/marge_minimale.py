@@ -28,6 +28,26 @@ surfacturé ; les commandes exonérées portaient des prix HT tapés à la main,
 35 TTC = 29,41 HT). Ici le prix de liste de la ligne devient TTC ÷ (1 + TVA de l'article), sur commande et devis,
 en temps réel et à l'enregistrement (`convertir_prix_ht`). Le plancher de marge est alors HT (facteur TVA = 1).
 
+REMISE GLOBALE (RISTOURNE) : la marge se mesure sur ce que le client paie VRAIMENT. Une ristourne posée en remise
+supplémentaire est répartie par ERPNext sur toutes les lignes, au prorata de leur montant : chaque ligne ne garde que
+(1 − remise ÷ total des lignes) de son prix. Le plancher d'une ligne dépend donc du total de la commande… qui dépend
+des prix relevés. `prix_cibles` résout cela d'un coup, pour toute la commande : il cherche le total pour lequel
+chaque ligne, une fois la remise répartie, garde exactement sa marge plancher. Le résultat ne dépend que des prix
+de base, des quantités, des coûts et de la remise — plus de l'ordre dans lequel on a saisi (18/11/2026 : l'ancienne
+estimation, faite sur le prix du moment, donnait 16,500 ou 17,000 pour 10 filtres à 12,000 avec 37,917 de
+ristourne, selon que la quantité arrivait avant ou après la ristourne ; le bon prix est 15,500).
+Le formulaire appelle le même calcul (`planchers_commande`) à chaque changement : ce qu'on voit est ce qui sera
+enregistré.
+
+LE PRIX POSÉ EST RETENU (`custom_prix_plancher_pose`) : c'est ce qui dit si une ligne relevée l'est toujours par
+nous (son prix est celui qu'on a posé) ou si quelqu'un a retapé un prix. Une ligne relevée par nous repart de son
+prix d'origine à chaque calcul : elle suit donc le plancher dans les deux sens (ristourne retirée, le prix
+d'origine revient). Un prix retapé devient le nouveau prix d'origine.
+
+MAJORATION CARTE (customization_app.majoration_carte) : elle passe APRÈS la marge et augmente les prix d'un même
+coefficient. La marge raisonne donc sur le prix HORS majoration (`prix_hors_carte`) ; quand elle relève un prix,
+elle pose le prix hors carte et la majoration se refait par-dessus.
+
 Jamais relevés : lignes gratuites, lignes à 0 DT (échange, garantie — option), articles sans coût connu
 (services, main d'œuvre), groupes d'articles exclus par le réglage, commandes du site web (option : le client
 a déjà payé le prix affiché en ligne).
@@ -44,6 +64,7 @@ from frappe.utils import flt
 CONFIG = "Config Marge Minimale"
 CHAMP_FLAG = "custom_marge_corrigee"
 CHAMP_AVANT = "custom_prix_avant_marge"
+CHAMP_POSE = "custom_prix_plancher_pose"
 BASE_PRIX = "Prix de vente HT"
 BASE_COUT = "Coût d'achat"
 SOURCE_VALO = "Valorisation du stock"
@@ -179,6 +200,67 @@ def plancher_exonere(cout: float, tva_article: float | None, r: dict, decimales:
     return flt(plancher_ttc(cout, f, r, decimales) / f, decimales)
 
 
+def prix_cibles(lignes: list, remise: float = 0.0, pourcentage: float = 0.0, pas: float = 0.0,
+                decimales: int = 3, sur_net: bool = False) -> list:
+    """Le prix TTC que chaque ligne doit porter pour garder sa marge plancher APRÈS la remise globale. PURE.
+
+    `lignes` : [{base (prix TTC d'origine), qty, plancher_ht (prix HT minimal par unité ; 0 = ligne jamais
+    relevée), tva (1,19…)}]. `remise` : le montant de la remise supplémentaire (répartie au prorata des montants
+    TTC, ou des montants HT si `sur_net`) ; `pourcentage` : la même remise donnée en % (elle suit alors le total).
+
+    Avec une remise en montant, la part que garde chaque ligne est (1 − remise ÷ S), S étant le total des lignes —
+    lui-même fait des prix cherchés. S est trouvé par dichotomie : « total obtenu avec les prix qu'exige S » décroît
+    quand S croît, le point où ils se rejoignent est unique. On garde le côté prudent (total obtenu ≥ total
+    supposé) : la marge réelle n'est jamais sous le plancher. Les prix relevés sont arrondis vers le haut au pas."""
+    bases = [float(l.get("base") or 0) for l in lignes]
+    qtes = [float(l.get("qty") or 0) for l in lignes]
+    planchers = [float(l.get("plancher_ht") or 0) for l in lignes]
+    tvas = [float(l.get("tva") or 1) or 1.0 for l in lignes]
+
+    millime = 10 ** -decimales
+
+    def prix(part_gardee: float) -> list:
+        out = []
+        for b, ph, t in zip(bases, planchers, tvas):
+            if ph > 0 and part_gardee > 0:
+                besoin = arrondir_sup(ph * t / part_gardee, pas, decimales)
+                # ERPNext arrondit le prix net HT au millime : sur un article à quelques centaines de millimes,
+                # cet arrondi peut suffire à passer sous le plancher. On monte d'un millime tant que c'est le cas.
+                for _ in range(5):
+                    if round(besoin * part_gardee / t, decimales) + 1e-9 >= ph:
+                        break
+                    besoin = round(besoin + millime, decimales)
+                out.append(max(b, besoin))
+            else:
+                out.append(b)
+        return out
+
+    def total(ps: list) -> float:
+        return sum(p * q / (t if sur_net else 1.0) for p, q, t in zip(ps, qtes, tvas))
+
+    if pourcentage > 0:
+        return prix(max(1 - min(pourcentage, 99.0) / 100.0, 0.01))
+    remise = float(remise or 0)
+    if remise <= 0:
+        return prix(1.0)
+    if remise >= total(bases) - 1e-6:
+        # La remise couvre TOUTE la commande à ses prix d'origine (petite commande, ristourne plafonnée au total) :
+        # le client ne paie rien, il dépense sa ristourne. Relever les prix ne ferait que gonfler la commande pour
+        # lui en faire dépenser davantage (un filtre à 12,000 affiché 46,500). On s'en tient au plancher sans remise.
+        return prix(1.0)
+    bas = max(total(bases), remise * 1.0001, 1e-6)
+    if total(prix(1 - remise / bas)) <= bas + 1e-9:
+        return prix(1 - remise / bas)                     # aux prix d'origine, tout le monde garde sa marge
+    haut = total(prix(1 - remise / bas))
+    for _ in range(60):
+        milieu = (bas + haut) / 2
+        if total(prix(1 - remise / milieu)) > milieu:
+            bas = milieu
+        else:
+            haut = milieu
+    return prix(1 - remise / bas)
+
+
 # ----------------------------------------------------------------- coûts
 
 def moyenne_ponderee(bins) -> float:
@@ -287,52 +369,123 @@ def convertir_prix_ht(doc) -> list[dict]:
     return faites
 
 
+def analyser(doc, r: dict | None = None) -> list[dict]:
+    """Une fiche par ligne de la commande, dans l'ordre : {ligne, prix (hors carte), base (prix d'origine), cible
+    (prix à porter), action}. Actions : « relever » (poser `cible`, garder la trace), « retablir » (le prix
+    d'origine revient, la trace s'efface), « oublier » (trace à effacer, prix inchangé), « rien ».
+    Ne modifie rien : le hook et le formulaire appliquent."""
+    r = r or reglage()
+    exonere = est_exonere(doc.get("taxes"))
+    fiches = []
+    for l in doc.get("items") or []:
+        prix = prix_hors_carte(l)
+        releve, pose, avant = bool(l.get(CHAMP_FLAG)), flt(l.get(CHAMP_POSE)), flt(l.get(CHAMP_AVANT))
+        par_nous = releve and (not pose or abs(prix - pose) <= TOLERANCE)
+        fiche = {"ligne": l, "prix": prix, "releve": releve, "par_nous": par_nous,
+                 "base": avant if (par_nous and avant > 0) else prix,
+                 "plancher_ht": 0.0, "tva": 1.0, "cible": None, "eligible": False}
+        fiches.append(fiche)
+        if not l.item_code or l.get("is_free_item"):
+            continue
+        if r["ignorer_prix_zero"] and flt(l.rate) <= 0:
+            continue
+        if r["groupes_exclus"] and l.get("item_group") in r["groupes_exclus"]:
+            continue
+        cout = cout_ligne(doc, l, r["source_cout"])
+        if cout <= 0:
+            continue
+        fiche["eligible"] = True
+        if exonere:
+            fiche["cible"] = max(fiche["base"], plancher_exonere(
+                cout, taux_tva_article(l.item_code, l.get("item_tax_rate")), r, l.precision("rate") or 3))
+        else:
+            fiche["plancher_ht"] = plancher_ht(cout, r["taux"], r["base"])
+            fiche["tva"] = facteur_tva(l.get("item_tax_rate"), doc.get("taxes"))
+    if not exonere:
+        # Toutes les lignes entrent dans le total que la remise se partage, relevables ou non.
+        cibles = prix_cibles([{"base": f["base"] if f["eligible"] else f["prix"], "qty": flt(f["ligne"].qty),
+                               "plancher_ht": f["plancher_ht"], "tva": f["tva"]} for f in fiches],
+                             remise=flt(doc.get("discount_amount")), pourcentage=flt(doc.get("additional_discount_percentage")),
+                             pas=r.get("arrondi", 0), sur_net=doc.get("apply_discount_on") == "Net Total")
+        for f, c in zip(fiches, cibles):
+            if f["eligible"]:
+                f["cible"] = c
+    for f in fiches:
+        if not f["eligible"]:
+            f["cible"], f["action"] = f["prix"], ("oublier" if f["releve"] else "rien")
+        elif f["cible"] > f["base"] + TOLERANCE:              # sous le plancher à son prix d'origine
+            deja = f["releve"] and abs(f["prix"] - f["cible"]) <= TOLERANCE
+            f["action"] = "rien" if deja else "relever"
+        elif f["par_nous"] and f["prix"] > f["base"] + TOLERANCE:
+            f["cible"], f["action"] = f["base"], "retablir"   # le plancher est repassé sous le prix d'origine
+        else:
+            f["cible"], f["action"] = f["prix"], ("oublier" if f["releve"] else "rien")
+    return fiches
+
+
 def appliquer(doc) -> list[dict]:
-    """Relève les lignes sous la marge plancher ; renvoie les corrections faites (pour le message)."""
+    """Relève les lignes sous la marge plancher (et rétablit celles qui n'en ont plus besoin) ; renvoie les
+    relèvements faits (pour le message)."""
     r = reglage()
     if not r["actif"] or r["taux"] <= 0:
         return []
     if r["ignorer_web"] and doc.get("woocommerce_id"):
         return []
-    corrections = []
-    exonere = est_exonere(doc.get("taxes"))
-    for l in doc.get("items") or []:
-        if not l.item_code or l.get("is_free_item"):
-            continue
-        if r["ignorer_prix_zero"] and flt(l.rate) <= 0:
+    corrections, change = [], False
+    for f in analyser(doc, r):
+        l = f["ligne"]
+        if f["action"] == "oublier":
             _oublier(l)
-            continue
-        if r["groupes_exclus"] and l.get("item_group") in r["groupes_exclus"]:
+        elif f["action"] == "retablir":
+            _relever(l, f["cible"])
             _oublier(l)
-            continue
-        cout = cout_ligne(doc, l, r["source_cout"])
-        if cout <= 0:
-            _oublier(l)
-            continue
-        if exonere:
-            plancher = plancher_exonere(cout, taux_tva_article(l.item_code, l.get("item_tax_rate")), r, l.precision("rate"))
-        else:
-            facteur = (flt(l.rate) / flt(l.net_rate)) if flt(l.net_rate) > 0 and flt(l.rate) > 0 \
-                else facteur_tva(l.get("item_tax_rate"), doc.get("taxes"))
-            plancher = plancher_ttc(cout, facteur, r, l.precision("rate"))
-        if flt(l.rate) + TOLERANCE >= plancher:
-            # Au-dessus du plancher. Si la ligne avait été relevée et qu'on est exactement sur le plancher,
-            # c'est notre prix : on garde la trace. Sinon l'utilisateur a mis un prix à lui : trace effacée.
-            if not (l.get(CHAMP_FLAG) and abs(flt(l.rate) - plancher) <= TOLERANCE):
-                _oublier(l)
-            continue
-        avant = flt(l.rate)
-        _relever(l, plancher)
-        if not l.get(CHAMP_FLAG):
-            l.set(CHAMP_AVANT, avant)
-        l.set(CHAMP_FLAG, 1)
-        corrections.append({"item_code": l.item_code, "item_name": l.item_name, "avant": avant, "apres": plancher})
-    if corrections:
+            change = True
+        elif f["action"] == "relever":
+            _relever(l, f["cible"])
+            l.set(CHAMP_FLAG, 1)
+            l.set(CHAMP_AVANT, f["base"])
+            l.set(CHAMP_POSE, f["cible"])
+            change = True
+            if abs(f["prix"] - f["cible"]) > TOLERANCE:
+                corrections.append({"item_code": l.item_code, "item_name": l.item_name, "avant": f["base"], "apres": f["cible"]})
+        elif f["releve"] and f["eligible"] and not flt(l.get(CHAMP_POSE)):
+            l.set(CHAMP_POSE, f["prix"])                      # ligne relevée avant que le prix posé ne soit retenu
+    if change:
         avant_total = flt(doc.grand_total)
         doc.calculate_taxes_and_totals()
         _realigner_echeancier(doc, flt(doc.grand_total) - avant_total)
+    if corrections:
         _prevenir(corrections, r["taux"])
     return corrections
+
+
+@frappe.whitelist()
+def planchers_commande(doc) -> dict:
+    """Temps réel (formulaire) : pour la commande ou le devis TEL QU'À L'ÉCRAN, ce que la marge minimale ferait à
+    l'enregistrement — même calcul que le hook, sur une copie, rien n'est enregistré. Rend {actif, taux, lignes :
+    [{name, action, cible, base}]}."""
+    donnees = json.loads(doc) if isinstance(doc, str) else dict(doc or {})
+    if donnees.get("doctype") not in ("Sales Order", "Quotation"):
+        frappe.throw(_("Réservé à la commande client et au devis."))
+    frappe.has_permission(donnees["doctype"], "read", throw=True)
+    r = reglage()
+    out = {"actif": r["actif"], "taux": r.get("taux"), "lignes": []}
+    if not r["actif"] or r["taux"] <= 0 or (r["ignorer_web"] and donnees.get("woocommerce_id")):
+        return out
+    copie = frappe.get_doc(donnees)
+    out["lignes"] = [{"name": f["ligne"].name, "action": f["action"], "cible": flt(f["cible"], 3), "base": flt(f["base"], 3)}
+                     for f in analyser(copie, r)]
+    return out
+
+
+def prix_hors_carte(l) -> float:
+    """Le prix de la ligne SANS la majoration pour paiement par carte : quand la ligne est encore au prix majoré
+    que la majoration a posé, c'est son prix d'avant (voir customization_app.majoration_carte). Sinon son prix."""
+    get = l.get if hasattr(l, "get") else (lambda k: None)
+    prix, avant, avec = flt(get("rate")), flt(get("custom_prix_avant_carte")), flt(get("custom_prix_avec_carte"))
+    if avant and abs(prix - avec) <= max(0.005, abs(avec) * 2e-5):
+        return avant
+    return prix
 
 
 def _realigner_echeancier(doc, delta: float):
@@ -353,9 +506,11 @@ def _realigner_echeancier(doc, delta: float):
 
 
 def _oublier(l):
-    if l.get(CHAMP_FLAG) or l.get(CHAMP_AVANT):
+    if l.get(CHAMP_FLAG) or l.get(CHAMP_AVANT) or l.get(CHAMP_POSE):
         l.set(CHAMP_FLAG, 0)
         l.set(CHAMP_AVANT, 0)
+        if l.meta.has_field(CHAMP_POSE):
+            l.set(CHAMP_POSE, 0)
 
 
 def _relever(l, prix: float):
@@ -421,7 +576,11 @@ def plancher_ligne(ligne, taxes=None, woocommerce_id=None) -> dict:
     if out["exonere"]:
         out["plancher"] = plancher_exonere(cout, taux_tva_article(ligne["item_code"], ligne.get("item_tax_rate")), r)
     else:
-        out["plancher"] = plancher_ttc(cout, facteur_tva(ligne.get("item_tax_rate"), taxes), r)
+        # Comme le hook : prix / prix net HT, qui porte la TVA ET la remise globale (ristourne). Le formulaire
+        # envoie `net_rate` ; sans lui (ligne pas encore calculée), la TVA seule.
+        prix, net = flt(ligne.get("rate")), flt(ligne.get("net_rate"))
+        facteur = (prix / net) if prix > 0 and net > 0 else facteur_tva(ligne.get("item_tax_rate"), taxes)
+        out["plancher"] = plancher_ttc(cout, facteur, r)
     return out
 
 
