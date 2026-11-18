@@ -39,6 +39,7 @@ REGLES = {
 CHAMP_PIECE, CHAMP_BANQUE = "custom__n_chèque__transaction", "custom_banque"
 TOLERANCE = 0.005
 PAR_PAGE = 30
+RECHERCHE_MIN = 2            # lettres à taper avant que la liste d'articles s'affiche (demande du 18/11/2026)
 
 
 # ── Règles pures ─────────────────────────────────────────────────────────────
@@ -111,6 +112,16 @@ def echeances_demandees(paiements: list, total: float) -> tuple[list, list]:
     return lignes, erreurs
 
 
+def echeances_apercu(paiements: list, total: float) -> list:
+    """Le règlement en cours de saisie, s'il couvre déjà la commande — pour montrer le total EXACT avec la majoration
+    carte avant même que les numéros de pièce soient saisis. Sinon [] (l'aperçu se fait alors tout en espèces). PURE."""
+    lignes = [{"mode_of_payment": str(p.get("mode") or "").strip(), "payment_amount": round(flt(p.get("montant")), 3)}
+              for p in (paiements or []) if str(p.get("mode") or "").strip() in MODES and flt(p.get("montant")) > 0]
+    if not lignes or abs(sum(l["payment_amount"] for l in lignes) - flt(total)) > TOLERANCE:
+        return []
+    return lignes
+
+
 def _nombre(v) -> str:
     return ("%.3f" % flt(v)).rstrip("0").rstrip(".").replace(".", ",") or "0"
 
@@ -173,6 +184,8 @@ def preparer(tache):
             "date": nowdate(), "type": doc.get("custom_type_dintervention") or "", "entrepot": emp.custom_warehouse or "",
             "liste_prix": liste, "modes": list(MODES), "regles": REGLES, "mode_carte": MODE_CARTE,
             "carte": MC.taux_pour_ecran(), "main_oeuvre": mo,
+            # une remise se justifie, comme sur la clôture mobile du sous-traitant (mêmes motifs, même règle)
+            "motifs_remise": list(ST.MOTIFS_REMISE), "commentaire_min": ST.COMMENTAIRE_MIN, "recherche_min": RECHERCHE_MIN,
             # les banques proposées : celles du champ de l'échéancier de la commande
             "banques": [b for b in (frappe.get_meta("Payment Schedule").get_field(CHAMP_BANQUE).options or "").split("\n") if b]
                        if frappe.get_meta("Payment Schedule").has_field(CHAMP_BANQUE) else []}
@@ -185,6 +198,8 @@ def articles(tache, txt=None, hors_stock=0, debut=0):
     from customization_app.accueil_technicien import mots
 
     doc, emp = _contexte(tache)
+    if len(str(txt or "").strip()) < RECHERCHE_MIN:
+        return {"suite": False, "articles": [], "trop_court": True}     # la liste ne s'affiche qu'à partir de 2 lettres
     stock = ST._mon_stock(emp)
     hors = bool(cint(hors_stock))
     conditions, valeurs = ["i.disabled = 0", "i.has_variants = 0", "i.is_sales_item = 1"], []
@@ -224,7 +239,12 @@ def _lire(valeur) -> list:
     return (json.loads(valeur) if isinstance(valeur, str) else valeur) or []
 
 
-def _commande(doc, emp, lignes: list):
+def _lire_dict(valeur) -> dict:
+    valeur = (json.loads(valeur) if isinstance(valeur, str) and valeur.strip() else valeur) or {}
+    return valeur if isinstance(valeur, dict) else {}
+
+
+def _commande(doc, emp, lignes: list, remise=None):
     """La commande telle que le formulaire la poserait : client et date d'office, ses articles depuis SON entrepôt,
     les lignes « hors de mon stock » depuis le magasin. ERPNext pose la liste de prix du client, les prix et la TVA."""
     from customization_app import cloture_tache as C
@@ -247,6 +267,11 @@ def _commande(doc, emp, lignes: list):
     if not so.get("taxes") and so.get("taxes_and_charges"):
         so.append_taxes_from_master()
     so.calculate_taxes_and_totals()
+    if remise and flt((remise or {}).get("montant")) > 0:
+        # La même règle que la clôture mobile du sous-traitant : sur le total, jamais plus que lui, motif et
+        # commentaire obligatoires — gardés sur la commande.
+        from customization_app import sous_traitant as ST
+        ST._appliquer_remise(so, remise)
     return so
 
 
@@ -270,8 +295,11 @@ def _lignes_valides(doc, emp, articles) -> list:
 
 def _resume(so, lignes: list) -> dict:
     hors = {l["item_code"] for l in lignes if l["hors_stock"]}
+    majoration = flt(so.get("custom_majoration_carte"), 3)
     return {"total": flt(so.grand_total, 3), "ht": flt(so.net_total, 3),
-            "taxes": flt(so.total_taxes_and_charges, 3), "majoration": flt(so.get("custom_majoration_carte"), 3),
+            # `base` : le total SANS la majoration carte — c'est lui que les règlements saisis doivent couvrir.
+            "base": flt(flt(so.grand_total) - majoration, 3), "remise": flt(so.get("discount_amount"), 3),
+            "taxes": flt(so.total_taxes_and_charges, 3), "majoration": majoration,
             "lignes": [{"item_code": i.item_code, "item_name": i.item_name, "qty": flt(i.qty), "prix": flt(i.rate, 3),
                         "montant": flt(i.amount, 3), "hors_stock": i.item_code in hors} for i in so.items],
             "echeances": [{"mode": e.mode_of_payment, "montant": flt(e.payment_amount, 3)} for e in so.payment_schedule]}
@@ -292,16 +320,21 @@ def _messages() -> list:
 
 
 @frappe.whitelist()
-def apercu(tache, articles=None):
+def apercu(tache, articles=None, remise=None, paiements=None):
     """Le total EXACT du panier : la commande est enregistrée en brouillon puis défaite dans la même transaction
-    (point de reprise) — toutes les règles ont joué (prix du client, marge minimale, TVA), rien ne reste."""
+    (point de reprise) — toutes les règles ont joué (prix du client, marge minimale, TVA, remise), rien ne reste.
+    Si le règlement saisi couvre déjà la commande, il est posé aussi : la majoration carte s'applique alors à la
+    commande comme dans le formulaire (prix relevés, total augmenté) et l'écran montre le vrai montant."""
     doc, emp = _contexte(tache)
     lignes = _lignes_valides(doc, emp, articles)
+    remise = _lire_dict(remise)
     frappe.db.savepoint("apercu_commande_technicien")
     try:
-        so = _commande(doc, emp, lignes)
-        # Une vente s'enregistre avec un moyen de paiement : pour mesurer le total, tout en espèces (pas de majoration).
-        _poser_echeancier(so, [{"mode_of_payment": "Espèces", "payment_amount": flt(so.grand_total, 3)}])
+        so = _commande(doc, emp, lignes, remise)
+        base = flt(so.grand_total, 3)
+        # Une vente s'enregistre avec un moyen de paiement : à défaut de règlement complet, tout en espèces.
+        _poser_echeancier(so, echeances_apercu(_lire(paiements), base)
+                          or [{"mode_of_payment": "Espèces", "payment_amount": base}])
         so.insert()
         resume = _resume(so, lignes)
     finally:
@@ -311,14 +344,14 @@ def apercu(tache, articles=None):
 
 
 @frappe.whitelist(methods=["POST"])
-def creer(tache, articles=None, paiements=None):
+def creer(tache, articles=None, paiements=None, remise=None):
     """La commande, VALIDÉE (une tâche ne se clôture pas sur un brouillon), liée à la tâche. Sous l'identité du
     technicien : les paiements naissent comme pour toute commande d'un employé."""
     doc, emp = _contexte(tache)
     if doc.get("commande_client") and frappe.db.get_value("Sales Order", doc.commande_client, "docstatus") != 2:
         frappe.throw(_("Cette intervention a déjà une commande : {0}.").format(doc.commande_client))
     lignes = _lignes_valides(doc, emp, articles)
-    so = _commande(doc, emp, lignes)
+    so = _commande(doc, emp, lignes, _lire_dict(remise))
     echeances, erreurs = echeances_demandees(_lire(paiements), so.grand_total)
     if erreurs:
         frappe.throw("<br>".join(erreurs), title=_("Règlement"))
@@ -335,6 +368,8 @@ def creer(tache, articles=None, paiements=None):
                             frappe.utils.escape_html(emp.employee_name),
                             ", ".join("%s × %s" % (frappe.utils.escape_html(l["item_code"]), _nombre(l["qty"])) for l in hors))
                         }).insert(ignore_permissions=True)
+    from customization_app import sous_traitant as ST
+    ST._tracer_remise(so)
     so.reload()
     resume = _resume(so, lignes)
     resume.update({"name": so.name, "notes": _messages()})

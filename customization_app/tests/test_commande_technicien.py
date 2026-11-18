@@ -80,6 +80,43 @@ class TestReglement(unittest.TestCase):
         self.assertEqual(K.MODES, ("Espèces", "Chèque", "Carte de crédit", "Virement", "Traite bancaire LC", "Dette non payée"))
 
 
+class TestApercuDuReglement(unittest.TestCase):
+    """18/11/2026 : « la règle du paiement par carte doit être comme dans la commande normale, où l'augmentation
+    s'applique sur la commande » — l'aperçu pose le règlement en cours pour que la majoration relève les prix."""
+
+    def test_un_reglement_complet_est_pose_meme_sans_numero_de_piece(self):
+        r = K.echeances_apercu([{"mode": "Espèces", "montant": 72}, {"mode": "Carte de crédit", "montant": 100}], 172)
+        self.assertEqual(r, [{"mode_of_payment": "Espèces", "payment_amount": 72.0}, {"mode_of_payment": "Carte de crédit", "payment_amount": 100.0}])
+
+    def test_un_reglement_incomplet_ne_l_est_pas(self):
+        self.assertEqual(K.echeances_apercu([{"mode": "Espèces", "montant": 50}, {"mode": "Carte de crédit", "montant": 100}], 172), [])
+        self.assertEqual(K.echeances_apercu([], 172), [])
+        self.assertEqual(K.echeances_apercu([{"mode": "Avoir client", "montant": 172}], 172), [])      # moyen non permis
+
+    def test_les_lignes_a_zero_sont_ignorees(self):
+        r = K.echeances_apercu([{"mode": "Espèces", "montant": 172}, {"mode": "Chèque", "montant": 0}], 172)
+        self.assertEqual(len(r), 1)
+
+    def test_l_apercu_pose_le_reglement_et_rend_la_base(self):
+        source = inspect.getsource(K.apercu)
+        self.assertIn("echeances_apercu(_lire(paiements), base)", source)
+        self.assertIn('"base": flt(flt(so.grand_total) - majoration, 3)', inspect.getsource(K._resume))
+
+
+class TestRemiseEtRecherche(unittest.TestCase):
+    def test_la_remise_suit_la_regle_du_sous_traitant(self):
+        """Sur le total, jamais plus que lui, motif et commentaire obligatoires, tracée sur la commande."""
+        self.assertIn("ST._appliquer_remise(so, remise)", inspect.getsource(K._commande))
+        self.assertIn("ST._tracer_remise(so)", inspect.getsource(K.creer))
+        self.assertIn('"motifs_remise": list(ST.MOTIFS_REMISE)', inspect.getsource(K.preparer))
+
+    def test_la_liste_d_articles_attend_deux_lettres(self):
+        self.assertEqual(K.RECHERCHE_MIN, 2)
+        source = inspect.getsource(K.articles)
+        self.assertIn("if len(str(txt or \"\").strip()) < RECHERCHE_MIN:", source)
+        self.assertIn("(i.item_code like %s or i.item_name like %s)", source)                          # par code ET par nom
+
+
 class TestService(unittest.TestCase):
     def test_reserve_au_technicien_sur_ses_interventions(self):
         source = inspect.getsource(K._contexte)
@@ -126,6 +163,17 @@ class TestEcran(unittest.TestCase):
         for attendu in ('API + "preparer"', 'API + "articles"', 'API + "apercu"', 'API + "creer"', "ct-img", "ct-qte",
                         'data-hors="1"', "hors de mon stock", "ct-reglement", "de majoration", "Ouvrir le formulaire complet"):
             self.assertIn(attendu, js)
+
+    def test_le_reglement_se_calcule_tout_seul(self):
+        """« Dans règlement, fais le calcul automatique lorsqu'il ajoute plusieurs règlements. »"""
+        js = self._lire("public", "js", "commande_technicien.js")
+        self.assertIn("p.saisi = true;", js)                                        # ce qu'il tape ne bouge pas
+        self.assertIn("libres.forEach((p, i) => { p.montant = i === 0 ? Math.max(0, r3(base - fixe)) : 0; });", js)
+        self.assertIn("if (this.paiements.length === 1) { this.paiements[0].montant = r3(base);", js)   # une ligne suit le total
+        self.assertIn('value="${p.montant ? r3(p.montant + sa_maj) : ""}"', js)       # la carte affiche part + majoration
+        self.assertIn("n3(r.base + maj)", js)                                         # le total à payer inclut la majoration
+        self.assertIn("Tapez au moins {0} lettres", js)
+        self.assertIn('data-r="montant"', js)                                         # la case remise
 
 
 if __name__ == "__main__":
