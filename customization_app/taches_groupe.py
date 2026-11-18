@@ -1,4 +1,4 @@
-"""Actions groupées sur les tâches de travail — décaler ou annuler, en prévenant.
+"""Actions groupées sur les tâches de travail — décaler, transférer ou annuler, en prévenant.
 
 Le besoin (31/08/2026) : un technicien absent, un jour férié tombé tard, une
 tournée qui saute — il faut décaler ou annuler d'un coup une série de tâches,
@@ -10,6 +10,10 @@ L'ORDRE compte, et il n'est pas le même dans les deux cas :
   - ANNULER : on annule D'ABORD, puis on n'écrit qu'aux clients dont la tâche a
     réellement été annulée. Annoncer une annulation qui a échoué serait un
     mensonge que personne ne rattrape.
+
+TRANSFÉRER (18/11/2026) : les tâches cochées passent à un autre employé ACTIF — une absence, un nouveau
+technicien qui reprend un secteur. Le créneau ne bouge pas ; le client n'est prévenu que si un message est écrit.
+Les filtres de l'écran acceptent plusieurs types et plusieurs employés, et ne proposent que les employés actifs.
 
 Les envois repassent par `sms_taches` : mêmes modèles, mêmes balises, mêmes
 traces en commentaire sur la tâche, même garde-fou de développement.
@@ -27,6 +31,8 @@ from frappe import _
 from frappe.utils import add_days, cint, get_datetime
 
 DOCTYPE = "Tache de travail"
+#: une absence n'est pas une intervention : elle ne se confie pas à quelqu'un d'autre
+TYPES_ABSENCE = ("Congé", "Jour de récupération")
 
 
 def _ecriture():
@@ -48,6 +54,34 @@ def _modifiable(doc):
     return None
 
 
+def plusieurs(valeur) -> list:
+    """Un filtre à choix multiple tel qu'il arrive de l'écran : une liste, le JSON d'une liste, ou une seule
+    valeur (ancien appel). -> la liste des valeurs non vides, sans doublon, dans l'ordre. PURE."""
+    if isinstance(valeur, str):
+        v = valeur.strip()
+        if v.startswith("["):
+            try:
+                valeur = frappe.parse_json(v)
+            except Exception:
+                valeur = [v]
+        else:
+            valeur = [v]
+    return list(dict.fromkeys(str(x) for x in (valeur or []) if x))
+
+
+def refus_transfert(statut, type_intervention, actuel, vers):
+    """Pourquoi une tâche ne se transfère pas — ou None si elle se transfère. PURE."""
+    if statut == "Completed":
+        return "déjà terminée"
+    if statut == "Cancelled":
+        return "déjà annulée"
+    if type_intervention in TYPES_ABSENCE:
+        return "congé ou récupération : ne se transfère pas"
+    if actuel and actuel == vers:
+        return "déjà confiée à cet employé"
+    return None
+
+
 @frappe.whitelist()
 def get_filtres() -> dict:
     """Les valeurs proposées à l'écran — lues du réel, pas écrites en dur."""
@@ -56,15 +90,13 @@ def get_filtres() -> dict:
         "SELECT DISTINCT custom_type_dintervention FROM `tab%s` "
         "WHERE IFNULL(custom_type_dintervention,'') != '' "
         "ORDER BY custom_type_dintervention" % DOCTYPE)
-    employes = frappe.db.sql(
-        """SELECT DISTINCT t.custom_choix_du_staff, e.employee_name
-           FROM `tab%s` t JOIN tabEmployee e ON e.name = t.custom_choix_du_staff
-           WHERE IFNULL(t.custom_choix_du_staff,'') != ''
-           ORDER BY e.employee_name""" % DOCTYPE, as_dict=True)
+    # Les employés ACTIFS seulement (18/11/2026) : un employé parti ne se choisit plus, ni comme filtre ni comme
+    # destinataire d'un transfert. Tous les actifs, même sans tâche encore : un nouveau technicien doit pouvoir
+    # en recevoir. (Sans filtre d'employé, les tâches restées à un employé parti s'affichent toujours.)
+    employes = frappe.get_all("Employee", filters={"status": "Active"}, fields=["name", "employee_name"],
+                              order_by="employee_name")
     return {"types": types,
-            "employes": [{"valeur": e.custom_choix_du_staff,
-                          "libelle": e.employee_name or e.custom_choix_du_staff}
-                         for e in employes]}
+            "employes": [{"valeur": e.name, "libelle": e.employee_name or e.name} for e in employes]}
 
 
 @frappe.whitelist()
@@ -85,10 +117,11 @@ def rechercher(date_from=None, date_to=None, employe=None, type_intervention=Non
         filtres["starts_on"] = [">=", date_from + " 00:00:00"]
     elif date_to:
         filtres["starts_on"] = ["<=", date_to + " 23:59:59"]
-    if employe:
-        filtres["custom_choix_du_staff"] = employe
-    if type_intervention:
-        filtres["custom_type_dintervention"] = type_intervention
+    employes, types = plusieurs(employe), plusieurs(type_intervention)      # un ou plusieurs (choix multiple)
+    if employes:
+        filtres["custom_choix_du_staff"] = ["in", employes]
+    if types:
+        filtres["custom_type_dintervention"] = ["in", types]
     if statut:
         filtres["status"] = statut
     if client:
@@ -110,6 +143,7 @@ def rechercher(date_from=None, date_to=None, employe=None, type_intervention=Non
         "statut": l.status,
         "quand": str(l.starts_on)[:16] if l.starts_on else "",
         "employe": noms_rh.get(l.custom_choix_du_staff) or l.custom_choix_du_staff or "",
+        "matricule": l.custom_choix_du_staff or "",
         "secteur": l.secteur or "",
     } for l in lignes], "total": len(lignes)}
 
@@ -195,6 +229,59 @@ def decaler(taches, jours=None, nouvelle_date=None, modele=None, sujet=None,
 
     envoi = _prevenir(faites, modele, sujet, sms, email)
     return {"resultats": resultats, "prevenus": faites, "envoi": envoi}
+
+
+@frappe.whitelist()
+def transferer(taches, vers=None, modele=None, sujet=None, sms=1, email=1):
+    """Confie les tâches à un autre employé ACTIF. Le créneau ne change pas.
+
+    Refusées, une par une et sans bloquer les autres : une tâche terminée ou annulée, un congé / une
+    récupération, une tâche déjà à cet employé. Le nom affiché sur la tâche suit le choix du staff (hook
+    before_save) ; une trace est laissée en commentaire. Le client n'est prévenu que si un message est écrit.
+    """
+    _ecriture()
+    noms = _liste(taches)
+    cible = frappe.db.get_value("Employee", vers, ["name", "employee_name", "status"], as_dict=True) if vers else None
+    if not cible:
+        frappe.throw(_("Choisissez l'employé à qui transférer les tâches."))
+    if cible.status != "Active":
+        frappe.throw(_("{0} n'est plus un employé actif : on ne lui transfère pas de tâche.").format(cible.employee_name))
+    nom_vers = cible.employee_name or cible.name
+
+    faites, resultats = [], []
+    for nom in noms:
+        doc = frappe.get_doc(DOCTYPE, nom)
+        refus = refus_transfert(doc.status, doc.get("custom_type_dintervention"), doc.get("custom_choix_du_staff"), cible.name)
+        if refus:
+            resultats.append({"tache": nom, "etat": refus})
+            continue
+        try:
+            ancien = doc.get("custom_choix_du_staff")
+            nom_de = (frappe.db.get_value("Employee", ancien, "employee_name") if ancien else None) or ancien or "—"
+            doc.custom_choix_du_staff = cible.name
+            doc.flags.ignore_permissions = True
+            try:
+                # save() et NON db_set : mêmes raisons que pour décaler (hooks de la commande liée, nom affiché).
+                doc.save()
+            except frappe.ValidationError:
+                # Tâche ancienne qui porte une valeur de liste périmée : la sauvegarde complète la refuse, on
+                # écrit le strict nécessaire (comme depart_employe._transferer_taches).
+                frappe.db.set_value(DOCTYPE, nom, {"custom_choix_du_staff": cible.name, "custom_employé": nom_vers},
+                                    update_modified=True)
+            frappe.get_doc({
+                "doctype": "Comment", "comment_type": "Info",
+                "reference_doctype": DOCTYPE, "reference_name": nom,
+                "content": _("🔁 Transférée par {0} : {1} → {2}").format(
+                    frappe.session.user, frappe.utils.escape_html(nom_de), frappe.utils.escape_html(nom_vers)),
+            }).insert(ignore_permissions=True)
+            faites.append(nom)
+            resultats.append({"tache": nom, "etat": "transférée de %s à %s" % (nom_de, nom_vers)})
+        except Exception as e:
+            resultats.append({"tache": nom, "etat": "échec : %s" % str(e)[:120]})
+    frappe.db.commit()
+
+    envoi = _prevenir(faites, modele, sujet, sms, email)
+    return {"resultats": resultats, "prevenus": faites if envoi else [], "transferees": faites, "envoi": envoi}
 
 
 @frappe.whitelist()
