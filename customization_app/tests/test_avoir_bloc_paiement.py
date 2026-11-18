@@ -65,6 +65,25 @@ class TestLeBloc(unittest.TestCase):
         # le total change (ristourne, article) : l'avoir se recale d'abord
         self.assertIn("if (ajusterAvoir(frm)) { apresGeste(frm); return; }", self.js)
 
+    def test_avoir_et_ristourne_sont_des_lignes_du_bloc_sous_le_type_de_transaction(self):
+        """Demande du 18/11/2026 : « même en termes visuels, appliquer la ristourne et paiement avec avoir,
+        lorsqu'ils existent, s'intègrent dans des lignes en dessous de type de transaction »."""
+        self.assertIn("$b.html(type + htmlChoix(frm) + tete + corps + pied);", self.js)
+        self.assertIn('if (avoirVisible(frm)) {', self.js)                    # seulement si le client a un avoir
+        self.assertIn('if (r.visible) {', self.js)                            # seulement si le client a une ristourne
+        # des miroirs : ils n'écrivent que dans les champs d'origine
+        self.assertIn("frm.set_value(CHOIX_AVOIR, $(this).val());", self.js)
+        self.assertIn("frm.set_value(CHOIX_RISTOURNE, $(this).val());", self.js)
+        # une seule place : les champs posés au-dessus du bloc sont masqués tant que le bloc est affiché
+        self.assertIn('.${ACTIF} .frappe-control[data-fieldname="${CHOIX_AVOIR}"], .${ACTIF} .so-ristourne-miroir{display:none !important}', self.js)
+        self.assertIn("$(frm.layout.wrapper).toggleClass(ACTIF, frm.doc.docstatus === 0);", self.js)
+
+    def test_le_montant_de_ristourne_disponible_est_lu_derriere_le_symbole_du_dinar(self):
+        import re
+        texte = "Déjà utilisé : د.ت 291.777 Disponible à ce jour (non plafonné) : د.ت 37.917"
+        motif = self.js[self.js.index("texte.match(/") + len("texte.match(/"):self.js.index("/);", self.js.index("texte.match(/"))]
+        self.assertEqual(re.search(motif, texte).group(1), "37.917")
+
     def test_l_avoir_ne_sert_jamais_a_equilibrer_et_un_doublon_est_fusionne(self):
         self.assertIn("const autres = noms.filter((n) => n !== garde && !avoirs.has(n));", self.js)
         self.assertIn("avoirs.slice(1).forEach((r) => { m.delete(r.name); oterLigne(frm, r.name); });", self.js)

@@ -15,26 +15,30 @@ def total(lignes, prix):
 
 
 class TestMontant(unittest.TestCase):
-    """2 % de la part carte, arrondis au demi-dinar le plus proche (demande du 18/11/2026)."""
+    """2 % de la part carte, arrondis AU DIXIÈME DE DINAR SUPÉRIEUR par défaut (demande du 18/11/2026) ; le pas et
+    le sens de l'arrondi sont des réglages."""
 
-    def test_deux_pour_cent_arrondis_au_demi_dinar(self):
+    def test_deux_pour_cent_au_dixieme_superieur(self):
         self.assertEqual(M.montant_majoration(200.0, 2), 4.0)                # 4,000 tombe juste
-        self.assertEqual(M.montant_majoration(1000.0, 2), 20.0)
-        self.assertEqual(M.montant_majoration(285.0, 2), 5.5)                # 5,700 -> 5,500
-        self.assertEqual(M.montant_majoration(185.0, 2), 3.5)                # 3,700 -> 3,500
-        self.assertEqual(M.montant_majoration(20.0, 2), 0.5)                 # 0,400 -> 0,500
-        self.assertEqual(M.montant_majoration(140.0, 2), 3.0)                # 2,800 -> 3,000
-        self.assertEqual(M.montant_majoration(276.962, 2), 5.5)              # 5,539 -> 5,500
+        self.assertEqual(M.montant_majoration(285.0, 2), 5.7)                # 5,700 tombe juste
+        self.assertEqual(M.montant_majoration(368.597, 2), 7.4)              # 7,372 -> 7,400
+        self.assertEqual(M.montant_majoration(276.962, 2), 5.6)              # 5,539 -> 5,600
+        self.assertEqual(M.montant_majoration(365.05, 2), 7.4)               # 7,301 -> 7,400 : toujours vers le haut
+        self.assertEqual(M.montant_majoration(12.0, 2), 0.3)                 # 0,240 -> 0,300
+        self.assertEqual(M.montant_majoration(20.0, 2), 0.4)
 
-    def test_la_moitie_monte(self):
-        self.assertEqual(M.arrondir_au_pas(0.25), 0.5)
-        self.assertEqual(M.arrondir_au_pas(0.75), 1.0)
-        self.assertEqual(M.arrondir_au_pas(0.249), 0.0)
-        self.assertEqual(M.montant_majoration(12.5, 2), 0.5)                 # 0,250 -> 0,500
-        self.assertEqual(M.montant_majoration(12.0, 2), 0.0)                 # petite part : pas de majoration
+    def test_une_valeur_deja_ronde_ne_monte_pas(self):
+        for v in (0.1, 0.2, 0.3, 0.7, 1.1, 5.7, 40.0, 58.5):
+            self.assertEqual(M.arrondir_au_pas(v), v)
+        self.assertEqual(M.arrondir_au_pas(0.101), 0.2)
 
-    def test_sans_pas_le_millime(self):
-        self.assertEqual(M.montant_majoration(285.0, 2, pas=0), 5.7)
+    def test_les_autres_reglages(self):
+        self.assertEqual(M.montant_majoration(285.0, 2, pas=0.5, superieur=False), 5.5)   # demi-dinar le plus proche
+        self.assertEqual(M.montant_majoration(285.0, 2, pas=0.5, superieur=True), 6.0)    # demi-dinar supérieur
+        self.assertEqual(M.montant_majoration(365.05, 2, pas=0.1, superieur=False), 7.3)  # dixième le plus proche
+        self.assertEqual(M.montant_majoration(368.597, 2, pas=1, superieur=True), 8.0)    # dinar supérieur
+        self.assertEqual(M.montant_majoration(368.597, 2, pas=0), 7.372)                  # pas d'arrondi : au millime
+        self.assertEqual(M.arrondir_au_pas(0.25, 0.5, superieur=False), 0.5)              # la moitié monte
 
     def test_rien_a_majorer(self):
         self.assertEqual(M.montant_majoration(0, 2), 0.0)
@@ -128,9 +132,10 @@ class TestRepartition(unittest.TestCase):
         for l, p in zip(lignes, prix):
             self.assertAlmostEqual(p / l["base"], 1 + 1.5 / 130.0, places=2)   # reste proportionnel, à quelques millimes
 
-    def test_majoration_ronde_sur_la_commande_reelle(self):
-        """285,000 par carte : majoration arrondie à 5,500, total des articles 289,500 exactement."""
-        self.assertEqual(total(self.COMMANDE, M.repartir(self.COMMANDE, 5.5)), 289.5)
+    def test_majoration_sur_la_commande_reelle(self):
+        """285,000 par carte : majoration de 5,700, total des articles 289,700 exactement."""
+        self.assertEqual(M.montant_majoration(285.0, 2), 5.7)
+        self.assertEqual(total(self.COMMANDE, M.repartir(self.COMMANDE, 5.7)), 289.7)
 
     def test_un_seul_article_en_34_exemplaires_reste_au_plus_pres(self):
         """4,000 ne se divise pas par 34 au millime : impossible de tomber juste avec un prix unitaire."""
@@ -166,8 +171,10 @@ class TestBranchements(unittest.TestCase):
         self.assertIn('"customization_app.jinja_methods.majoration_carte"', hooks)
         self.assertIn('"public/js/sales_order_paiement.js"', hooks)
 
-    def test_le_taux_vient_du_reglage_bancaire(self):
+    def test_le_taux_et_l_arrondi_viennent_du_reglage_bancaire(self):
         self.assertEqual((M.REGLAGE, M.CHAMP_TAUX_REGLAGE), ("Bank Retenue Sync Settings", "majoration_carte_taux"))
+        self.assertEqual((M.CHAMP_PAS_REGLAGE, M.CHAMP_SENS_REGLAGE), ("majoration_carte_arrondi", "majoration_carte_arrondi_sens"))
+        self.assertEqual((M.PAS_ARRONDI, M.SENS_SUPERIEUR), (0.1, "Supérieur"))      # à défaut de réglage
         self.assertEqual(M.MODE_CARTE, "Carte de crédit")
 
     def test_le_patch_cree_les_champs(self):
@@ -197,7 +204,8 @@ class TestBranchements(unittest.TestCase):
         self.assertNotIn("sansMajoration", js)                    # le montant tapé n'est plus « majoration comprise »
         self.assertIn('data-part="${format_number(part, null, 3)}"', js)   # en reprenant le champ : la part tapée
         self.assertIn('"customization_app.majoration_carte.taux_pour_ecran"', js)
-        self.assertIn("Math.floor(brut / pas + 0.5 + 1e-9) * pas", js)     # même arrondi au demi-dinar que le serveur
+        self.assertIn("Math.ceil(crans - 1e-9)", js)                       # même arrondi (supérieur) que le serveur
+        self.assertIn("reglage.superieur === false", js)                   # ... ou au plus proche, selon le réglage
 
     def test_le_bloc_ecrit_dans_le_tableau_standard(self):
         """Aucune donnée de plus : le bloc lit et écrit `payment_schedule`, que tout le reste du système lit."""

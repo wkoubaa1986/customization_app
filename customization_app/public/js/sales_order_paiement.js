@@ -27,6 +27,12 @@
 // peut le prendre. Sur une commande neuve, « Vente directe sans BL et Facture » est le choix par défaut
 // (patch type_transaction_defaut) et le modèle de taxes sans timbre est posé d'emblée.
 //
+// LES CHOIX DU CLIENT, DANS LE BLOC (18/11/2026) : « Paiement avec Avoir » et « Appliquer Ristourne » s'affichent
+// comme des lignes du bloc, sous « Type de transaction », seulement quand le client a un avoir ou une ristourne.
+// Ce sont des MIROIRS : ils n'écrivent que dans les champs d'origine (`custom_paiement_avec_avoir`,
+// `custom_appliquer_ristourne`), qui gardent tout leur comportement. Tant que le bloc est affiché (commande en
+// brouillon), le champ d'avoir et le miroir de ristourne posés au-dessus du bloc sont masqués — une seule place.
+//
 // AVOIR DU CLIENT (18/11/2026) : ce n'est PAS un moyen de paiement à choisir. La case « Paiement avec Avoir »
 // (Oui / Non, au-dessus du bloc) décide ; le bloc pose alors lui-même la ligne « Avoir du client » — le plus petit
 // de l'avoir utilisable et du total — et diminue les autres paiements d'autant, tout de suite. La ligne n'est ni
@@ -40,12 +46,13 @@
 // Montants : la majoration ne s'ajoute QUE sur la ligne par carte (demande du 18/11/2026). On y tape la part de
 // la commande réglée par carte (200,000) ; les autres lignes ne voient que cette part (espèces = total − 200),
 // et la ligne carte affiche aussitôt la part + sa majoration (204,000), le montant à passer sur le terminal.
-// En reprenant le champ, on retrouve la part tapée. La majoration est arrondie au demi-dinar (pas rendu par
-// le serveur avec le taux).
+// En reprenant le champ, on retrouve la part tapée. La majoration est arrondie selon le réglage — par défaut au
+// dixième de dinar supérieur (le pas et le sens sont rendus par le serveur avec le taux).
 (() => {
     const CARTE = "Carte de crédit", ARAMEX = "Livraison Aramex", CLASSE = "so-paiement", TOL = 0.0005, DELAI = 450;
     const PIECE = "custom__n_chèque__transaction", BANQUE = "custom_banque";
     const AVOIR = "Avoir client", CHOIX_AVOIR = "custom_paiement_avec_avoir";
+    const CHOIX_RISTOURNE = "custom_appliquer_ristourne", NOTE_RISTOURNE = "custom_ristourne_disponible", ACTIF = "so-paiement-actif";
     // Vu par le Client Script « Verification Sales order » : c'est le bloc qui ajuste l'avoir, pas lui.
     window.__so_paiement_bloc = true;
     const TYPE = "custom_type_de_transaction", DIRECTE = "Vente directe sans BL et Facture";
@@ -100,21 +107,35 @@
     function taux(frm) {
         if (frm.doc.woocommerce_id) return 0;
         if (reglage === null) {
-            reglage = { taux: 0, pas: 0.5 };
+            reglage = { taux: 0, pas: 0.1, superieur: true };
             frappe.xcall("customization_app.majoration_carte.taux_pour_ecran")
-                .then((r) => { reglage = { taux: flt(r && r.taux), pas: flt(r && r.pas) }; rendre(frm); }).catch(() => {});
+                .then((r) => { reglage = { taux: flt(r && r.taux), pas: flt(r && r.pas), superieur: !(r && r.superieur === false) }; rendre(frm); })
+                .catch(() => {});
         }
         return reglage.taux || flt(frm.doc.custom_majoration_carte_taux);
     }
-    /** La majoration d'une part de commande réglée par carte : part × taux, au demi-dinar le plus proche (comme le serveur). */
+    /** La majoration d'une part de commande réglée par carte : part × taux, arrondie comme le serveur (réglage :
+        pas de 0,1 vers le haut par défaut ; pas de 0 : au millime). */
     function majorationDe(frm, part) {
-        const brut = flt(part) * taux(frm) / 100, pas = reglage ? reglage.pas : 0.5;
-        return pas > 0 ? arrondi(Math.floor(brut / pas + 0.5 + 1e-9) * pas) : arrondi(brut);
+        const brut = flt(part) * taux(frm) / 100, pas = reglage ? reglage.pas : 0.1;
+        if (!(pas > 0)) return arrondi(brut);
+        const crans = brut / pas;
+        return arrondi((reglage && reglage.superieur === false ? Math.floor(crans + 0.5 + 1e-9) : Math.ceil(crans - 1e-9)) * pas);
     }
-    /** La majoration tombe-t-elle sur un multiple du pas (demi-dinar) ? */
+    /** La majoration tombe-t-elle sur un multiple du pas réglé ? (Sans pas : toujours.) */
     function rond(maj) {
-        const pas = reglage && reglage.pas > 0 ? reglage.pas : 0.5, n = flt(maj) / pas;
+        const pas = reglage ? reglage.pas : 0.1;
+        if (!(pas > 0)) return true;
+        const n = flt(maj) / pas;
         return Math.abs(n - Math.round(n)) < 0.0005;
+    }
+    /** « au dixième de dinar supérieur », « au demi-dinar le plus proche »… : l'arrondi réglé, en clair. */
+    function arrondiEnClair() {
+        const pas = reglage ? reglage.pas : 0.1;
+        if (!(pas > 0)) return "au millime";
+        const quoi = Math.abs(pas - 0.1) < 1e-9 ? "au dixième de dinar" : Math.abs(pas - 0.5) < 1e-9 ? "au demi-dinar"
+            : Math.abs(pas - 1) < 1e-9 ? "au dinar" : `à ${format_number(pas, null, 3)} près`;
+        return `${quoi} ${reglage && reglage.superieur === false ? "le plus proche" : "supérieur"}`;
     }
     /** Ce que la carte encaisse pour une part de commande : la part + sa majoration. */
     const avecMajoration = (frm, part) => arrondi(flt(part) + majorationDe(frm, part));
@@ -397,6 +418,52 @@
         return out;
     }
 
+    // ------------------------------------------------------------------ les choix du client (avoir, ristourne)
+
+    const ouiNon = (v) => (v === 1 || v === true || v === "Oui" || v === "Yes" ? "Oui" : "Non");
+
+    /** La ristourne telle que l'application booking_ristourne la présente en haut de la commande :
+        {visible, valeur, lecture, disponible, detail} — rien n'est recalculé ici. */
+    function ristourne(frm) {
+        const champ = frm.fields_dict[CHOIX_RISTOURNE], note = frm.fields_dict[NOTE_RISTOURNE];
+        if (!champ) return { visible: false };
+        // La note vit dans `df.options` (c'est là que le script de la ristourne l'écrit, comme le lit son miroir).
+        const texte = $("<div>").html(note && note.df ? note.df.options || "" : "").text().replace(/\s+/g, " ").trim();
+        // « Disponible à ce jour (non plafonné) : د.ت 37.917 » — le symbole du dinar précède le montant.
+        const trouve = texte.match(/Disponible à ce jour[^:]*:[^\d]*(\d[\d.,]*)/);
+        return { visible: !champ.df.hidden, valeur: ouiNon(frm.doc[CHOIX_RISTOURNE]), lecture: !!champ.df.read_only,
+            disponible: trouve ? trouve[1].trim() : "", detail: texte };
+    }
+
+    /** L'avoir : la ligne existe si le client a un avoir utilisable (ou si la case est déjà à « Oui »). */
+    function avoirVisible(frm) {
+        return !!frm.fields_dict[CHOIX_AVOIR] && (flt(etat(frm).avoir) > 0 || frm.doc[CHOIX_AVOIR] === "Oui");
+    }
+
+    function htmlChoix(frm) {
+        const st = etat(frm), r = ristourne(frm), out = [];
+        const select = (classe, valeur, lecture) => `<select class="form-control ${classe}" ${lecture ? "disabled" : ""}>
+            <option value="Non" ${valeur === "Oui" ? "" : "selected"}>Non</option><option value="Oui" ${valeur === "Oui" ? "selected" : ""}>Oui</option></select>`;
+        if (avoirVisible(frm)) {
+            out.push(`<div class="sp-type sp-choix"><label>Paiement avec l’avoir du client</label>
+                ${select("sp-in-avoir", ouiNon(frm.doc[CHOIX_AVOIR]), false)}
+                <span class="sp-note">avoir utilisable : <b>${nombre(st.avoir)}</b></span></div>`);
+        }
+        if (r.visible) {
+            out.push(`<div class="sp-type sp-choix" title="${esc(r.detail)}"><label>Appliquer la ristourne</label>
+                ${select("sp-in-ristourne", r.valeur, r.lecture)}
+                ${r.disponible ? `<span class="sp-note">disponible à ce jour : <b dir="ltr">${esc(r.disponible)}</b></span>` : ""}
+                ${flt(frm.doc.discount_amount) > 0 && r.valeur === "Oui" ? `<span class="sp-note">remise appliquée : <b>${nombre(frm.doc.discount_amount)}</b></span>` : ""}</div>`);
+        }
+        return out.join("");
+    }
+
+    /** Ce dont dépendent les deux lignes : si ça change (le script de la ristourne répond après coup), on redessine. */
+    function signatureChoix(frm) {
+        const r = ristourne(frm);
+        return [avoirVisible(frm), frm.doc[CHOIX_AVOIR], flt(etat(frm).avoir), r.visible, r.valeur, r.lecture, r.disponible, flt(frm.doc.discount_amount, 3)].join("|");
+    }
+
     // ------------------------------------------------------------------ affichage
 
     function bloc(frm) {
@@ -410,7 +477,10 @@
               .${CLASSE}{margin:0 0 14px;border:1px solid var(--border-color,#e2e6e9);border-radius:10px;background:var(--card-bg,#fff)}
               .${CLASSE} .sp-tete{display:flex;flex-wrap:wrap;gap:6px 18px;align-items:baseline;padding:12px 14px;border-bottom:1px solid var(--border-color,#e2e6e9)}
               .${CLASSE} .sp-type{display:flex;flex-wrap:wrap;gap:6px 12px;align-items:center;padding:10px 14px;border-bottom:1px solid var(--border-color,#e2e6e9);background:var(--subtle-fg,#f8f9fa);border-radius:10px 10px 0 0}
-              .${CLASSE} .sp-type label{margin:0;font-size:12.5px;font-weight:600}
+              .${CLASSE} .sp-type + .sp-type{border-radius:0}
+              .${CLASSE} .sp-type label{margin:0;font-size:12.5px;font-weight:600;flex:0 0 190px}
+              .${ACTIF} .frappe-control[data-fieldname="${CHOIX_AVOIR}"], .${ACTIF} .so-ristourne-miroir{display:none !important}
+              @media (max-width:575px){.${CLASSE} .sp-type label{flex:1 1 100%}}
               .${CLASSE} .sp-type select{flex:1 1 260px;max-width:440px;height:32px;font-size:13px}
               .${CLASSE} .sp-total{font-size:15px;font-weight:600}
               .${CLASSE} .sp-ok{color:#15803d;font-weight:600} .${CLASSE} .sp-ko{color:#b91c1c;font-weight:600}
@@ -455,6 +525,13 @@
         $b.on("change", "select.sp-in-type", function () {
             if (frm.doc[TYPE] !== $(this).val()) frm.set_value(TYPE, $(this).val());
         });
+        // Avoir et ristourne : des miroirs — ils n'écrivent que dans les champs d'origine, qui font le reste.
+        $b.on("change", "select.sp-in-avoir", function () {
+            if (ouiNon(frm.doc[CHOIX_AVOIR]) !== $(this).val()) frm.set_value(CHOIX_AVOIR, $(this).val());
+        });
+        $b.on("change", "select.sp-in-ristourne", function () {
+            if (ouiNon(frm.doc[CHOIX_RISTOURNE]) !== $(this).val()) frm.set_value(CHOIX_RISTOURNE, $(this).val());
+        });
         $b.on("click", ".sp-suppr", function () { retirer(frm, $(this).closest("[data-ligne]").attr("data-ligne")); });
         $b.on("click", ".sp-ajout", function () { ajouter(frm, $(this).attr("data-mode")); });
         $b.on("click", ".sp-lien", function () { etat(frm).tableau = !etat(frm).tableau; rendre(frm); });
@@ -481,11 +558,11 @@
             const maj = arrondi(flt(r.payment_amount) - part);
             const t = flt(frm.doc.custom_majoration_carte_taux) || taux(frm);
             carte = maj > 0 ? `<div class="sp-carte">💳 ${nombre(part)} de la commande + majoration carte de ${String(t).replace(".", ",")} % :
-                    <b>+ ${nombre(maj)}</b> (${rond(maj) ? "arrondie au demi-dinar" : "au plus près du demi-dinar : le prix à l’unité ne permet pas de tomber juste"}, répartie sur les prix des articles) —
+                    <b>+ ${nombre(maj)}</b> (${rond(maj) ? `arrondie ${arrondiEnClair()}` : "au plus près de l’arrondi voulu : le prix à l’unité ne permet pas de tomber juste"}, répartie sur les prix des articles) —
                     montant à passer sur le terminal : <b class="sp-terminal">${nombre(r.payment_amount)}</b>
                     ${st.attente ? `<span class="sp-note"> · mise à jour des prix…</span>` : ""}</div>`
                 : (t > 0 && part > 0 && !st.attente) ? `<div class="sp-carte">💳 Pas de majoration sur ce montant :
-                    ${String(t).replace(".", ",")} % de ${nombre(part)} arrondis au demi-dinar donnent 0.</div>` : "";
+                    ${String(t).replace(".", ",")} % de ${nombre(part)}, arrondis ${arrondiEnClair()}, donnent 0.</div>` : "";
         }
         return `<div class="sp-ligne" data-ligne="${esc(r.name)}">
             <div class="sp-champ sp-mode"><label>Moyen de paiement</label>
@@ -514,6 +591,7 @@
         const $b = bloc(frm), champ = frm.fields_dict.payment_schedule, st = etat(frm);
         if (!$b.length) return;
         const rs = lignes(frm), maj = majoration(frm), t = total(frm);
+        $(frm.layout.wrapper).toggleClass(ACTIF, frm.doc.docstatus === 0);      // brouillon : avoir et ristourne vivent dans le bloc
         if (frm.doc.docstatus !== 0) {
             // Commande validée ou annulée : le tableau standard, et le rappel de la majoration qu'elle porte.
             champ.$wrapper.show();
@@ -527,6 +605,7 @@
         champ.$wrapper.toggle(!!st.tableau);
         if (!st.application) st.dernierTotal = t;                 // ce total-là est affiché : la veille repart de lui
         st.signature = signature(frm);
+        st.signatureChoix = signatureChoix(frm);
         const somme = arrondi(rs.reduce((s, r) => s + flt(r.payment_amount), 0)), ecart = arrondi(t - somme);
         const verdict = !rs.length ? "" : st.attente ? `<span class="sp-note">calcul…</span>`
             : Math.abs(ecart) < 0.001 ? `<span class="sp-ok">✓ Tout est réparti</span>`
@@ -554,7 +633,7 @@
         const pied = `<div class="sp-pied"><span class="sp-note">Ajouter un paiement :</span>
             ${MODES.map((x) => `<button type="button" class="sp-ajout" data-mode="${esc(x)}">＋ ${esc(COURT[x] || x)}</button>`).join("")}
             <span class="sp-lien">${st.tableau ? "Masquer le tableau" : "Afficher le tableau"}</span></div>`;
-        $b.html(type + tete + corps + pied);
+        $b.html(type + htmlChoix(frm) + tete + corps + pied);
         if (st.focus) {
             const $i = $b.find(`[data-ligne="${st.focus}"] input.sp-in-montant`);
             st.focus = null;
@@ -583,6 +662,13 @@
             st.prov = null;
             ajusterAvoir(frm);
             apresGeste(frm);
+            return;
+        }
+        // Avoir ou ristourne apparus, disparus ou changés (leurs scripts répondent après coup) : les lignes de choix
+        // suivent — sauf pendant qu'on tape dans le bloc, pour ne pas retirer le champ sous les doigts.
+        if (!st.application && !st.attente && st.signatureChoix !== undefined && signatureChoix(frm) !== st.signatureChoix) {
+            const $b = bloc(frm);
+            if (!($b.length && document.activeElement && $b[0].contains(document.activeElement))) rendre(frm);
         }
     }
     if (!window.__so_paiement_veille) window.__so_paiement_veille = setInterval(veiller, 500);
@@ -602,7 +688,7 @@
                 if (frm.doc[TYPE] === DIRECTE && frm.doc.taxes_and_charges === TAXES_AVEC) frm.set_value("taxes_and_charges", TAXES_SANS);
             }
             rendre(frm);
-            if (frm.doc.docstatus === 0) { plusTard(frm, 300); if (frm.doc[CHOIX_AVOIR] === "Oui") suivreAvoir(frm); }
+            if (frm.doc.docstatus === 0) { plusTard(frm, 300); if (frm.doc.customer) suivreAvoir(frm); }
         },
         // « Paiement avec Avoir » : Oui pose la ligne d'avoir et diminue les autres paiements, Non la retire.
         [CHOIX_AVOIR](frm) { suivreAvoir(frm); },

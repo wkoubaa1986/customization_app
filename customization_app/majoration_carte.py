@@ -9,7 +9,7 @@ CE QUE FAIT LE MODULE, À CHAQUE ENREGISTREMENT D'UNE COMMANDE EN BROUILLON (hoo
 minimale) :
   1. il retrouve le prix DE BASE de chaque ligne (celui d'avant la majoration, gardé sur la ligne) ;
   2. il mesure la part carte : total de base − les échéances qui ne sont pas par carte ;
-  3. majoration = part carte × taux, arrondie au demi-dinar le plus proche ;
+  3. majoration = part carte × taux, arrondie selon le réglage (par défaut : au dixième de dinar supérieur) ;
   4. il la RÉPARTIT sur tous les articles, dans la même proportion (aucune ligne « frais » à part) : chaque
      prix est multiplié par le même coefficient, et les millimes d'arrondi vont sur une seule ligne pour que
      le total tombe juste ;
@@ -17,7 +17,8 @@ minimale) :
 Si la carte est retirée des termes de paiement, les prix de base reviennent tout seuls.
 
 Exemple réel (SAL-ORD-2026-04724) : articles 284,000 + timbre 1,000 = 285,000, tout par carte. Majoration
-5,700 arrondie à 5,500 ; les articles passent à 289,500, le timbre reste à 1,000, la carte encaisse 290,500.
+5,700 ; les articles passent à 289,700, le timbre reste à 1,000, la carte encaisse 290,700. Sur 368,597, la
+majoration de 7,372 est arrondie à 7,400 (dixième supérieur).
 Paiement mixte : la majoration ne s'ajoute QUE sur l'échéance par carte — 341,000 dont 200,000 par carte
 donnent espèces 141,000 et carte 204,000.
 
@@ -56,9 +57,12 @@ CHAMP_TAUX = "custom_majoration_carte_taux"
 CHAMP_AVANT = "custom_prix_avant_carte"
 CHAMP_AVEC = "custom_prix_avec_carte"
 TOL = 0.0005
-#: La majoration est arrondie au demi-dinar le plus proche (demande du 18/11/2026) : 5,700 -> 5,500 ;
-#: 0,400 -> 0,500 ; 4,000 -> 4,000. Une part carte de moins de 12,500 à 2 % n'est donc pas majorée.
-PAS_ARRONDI = 0.5
+CHAMP_PAS_REGLAGE = "majoration_carte_arrondi"
+CHAMP_SENS_REGLAGE = "majoration_carte_arrondi_sens"
+SENS_SUPERIEUR = "Supérieur"
+#: L'arrondi de la majoration quand le réglage ne le dit pas : au dixième de dinar SUPÉRIEUR (demande du
+#: 18/11/2026, « c'est plus simple ») — 7,372 -> 7,400 ; 5,700 -> 5,700 ; 0,240 -> 0,300.
+PAS_ARRONDI = 0.1
 
 
 # ----------------------------------------------------------------- calcul (fonctions pures)
@@ -67,20 +71,22 @@ def _r(v, decimales: int = 3) -> float:
     return round(float(v or 0) + 0.0, decimales)
 
 
-def arrondir_au_pas(v: float, pas: float = PAS_ARRONDI) -> float:
-    """`v` au multiple de `pas` le plus proche (la moitié monte : 0,250 -> 0,500). Pas nul : au millime."""
+def arrondir_au_pas(v: float, pas: float = PAS_ARRONDI, superieur: bool = True) -> float:
+    """`v` arrondi à un multiple de `pas` : vers le HAUT (`superieur`), sinon au plus proche (la moitié monte).
+    Une valeur déjà sur un multiple ne bouge pas. Pas nul : au millime."""
     if not pas or pas <= 0:
         return _r(v)
-    return _r(math.floor(float(v or 0) / pas + 0.5 + 1e-9) * pas)
+    crans = float(v or 0) / pas
+    return _r((math.ceil(crans - 1e-9) if superieur else math.floor(crans + 0.5 + 1e-9)) * pas)
 
 
-def montant_majoration(part_carte: float, taux: float, pas: float = PAS_ARRONDI) -> float:
-    """Ce qu'on ajoute pour `part_carte` réglés par carte : part × taux, arrondi au demi-dinar le plus proche.
-    0 s'il n'y a rien à majorer."""
+def montant_majoration(part_carte: float, taux: float, pas: float = PAS_ARRONDI, superieur: bool = True) -> float:
+    """Ce qu'on ajoute pour `part_carte` réglés par carte : part × taux, arrondi selon le réglage (par défaut au
+    dixième de dinar supérieur). 0 s'il n'y a rien à majorer."""
     part_carte, taux = float(part_carte or 0), float(taux or 0)
     if part_carte <= TOL or taux <= 0:
         return 0.0
-    return arrondir_au_pas(part_carte * taux / 100.0, pas)
+    return arrondir_au_pas(part_carte * taux / 100.0, pas, superieur)
 
 
 def tolerance_prix(prix: float) -> float:
@@ -129,8 +135,8 @@ def repartir(lignes: list, majoration: float) -> list:
 
     Répartition LINÉAIRE : chaque prix est multiplié par le même coefficient (1 + majoration ÷ total des
     lignes). Un prix s'arrondit au millime et se multiplie par une quantité : le total obtenu peut manquer
-    la cible de quelques millimes. On les rattrape, pour que la majoration tombe JUSTE (elle est arrondie au
-    demi-dinar, la carte doit encaisser un montant rond) :
+    la cible de quelques millimes. On les rattrape, pour que la majoration tombe JUSTE (elle est arrondie, la
+    carte doit encaisser le montant annoncé) :
       1. sur UNE ligne dont la quantité divise l'écart (à l'unité : toujours) ;
       2. sinon sur DEUX lignes, de quelques millimes par unité chacune (`_retoucher_deux_lignes`).
     Une ligne à RÈGLE DE PRIX ne prend que les prix qu'ERPNext sait garder (`prix_tenable`) et ne sert pas aux
@@ -201,11 +207,31 @@ def taux_regle() -> float:
         return 0.0
 
 
+def arrondi_regle() -> tuple:
+    """(pas, superieur) : l'arrondi de la majoration choisi dans le réglage ; (0,1 ; supérieur) tant que les
+    champs n'existent pas ou n'ont jamais été enregistrés. Un pas de 0 est un choix : pas d'arrondi."""
+    # Lecture directe : `get_single_value` rend 0 pour un champ jamais enregistré, ce qui se lirait « pas d'arrondi ».
+    try:
+        lus = dict(frappe.db.sql("select field, value from tabSingles where doctype = %s and field in (%s, %s)",
+                                 (REGLAGE, CHAMP_PAS_REGLAGE, CHAMP_SENS_REGLAGE)))
+    except Exception:
+        return PAS_ARRONDI, True
+    pas = max(flt(lus[CHAMP_PAS_REGLAGE]), 0.0) if lus.get(CHAMP_PAS_REGLAGE) not in (None, "") else PAS_ARRONDI
+    return pas, (lus.get(CHAMP_SENS_REGLAGE) or SENS_SUPERIEUR) == SENS_SUPERIEUR
+
+
+def majoration_reglee(part_carte: float, taux: float) -> float:
+    """La majoration d'une part carte, avec l'arrondi du réglage."""
+    pas, superieur = arrondi_regle()
+    return montant_majoration(part_carte, taux, pas, superieur)
+
+
 @frappe.whitelist()
 def taux_pour_ecran() -> dict:
     """Le taux réglé et le pas d'arrondi, pour l'écran : le bloc de paiement affiche tout de suite le montant de
     la carte majoration comprise, avant même la réponse de l'aperçu."""
-    return {"taux": taux_regle(), "pas": PAS_ARRONDI}
+    pas, superieur = arrondi_regle()
+    return {"taux": taux_regle(), "pas": pas, "superieur": superieur}
 
 
 def _champs_presents(doc) -> bool:
@@ -274,7 +300,7 @@ def appliquer(doc, prevenir: bool = True) -> dict:
             e.payment_amount = montant
     autres = flt(sum(flt(e.payment_amount) for e in echeances if e.mode_of_payment != MODE_CARTE), 3)
     part_carte = flt(total_base - autres, 3) if par_carte else 0.0
-    majoration = montant_majoration(part_carte, taux)
+    majoration = majoration_reglee(part_carte, taux)
 
     # 3. Répartition sur les articles.
     participantes = [(l, b) for l, b in zip(lignes, bases) if abs(b) > TOL and flt(l.qty)]
@@ -423,7 +449,7 @@ def avertir_apres_validation(doc, method=None):
     deja = flt(doc.get(CHAMP_MONTANT), 3)
     if apres > avant + 0.005:
         taux = taux_regle()
-        manque = montant_majoration(apres - avant, taux)
+        manque = majoration_reglee(apres - avant, taux)
         if manque >= 0.01:
             frappe.msgprint(
                 _("Cette commande est déjà validée : ses prix ne peuvent plus être augmentés. La majoration de "
