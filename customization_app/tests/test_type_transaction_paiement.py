@@ -33,7 +33,7 @@ class TestTypeDeTransaction(unittest.TestCase):
         self.assertIn("suivreLeTimbre(frm)", self.js)
         # la carte comprise : le serveur refait la majoration sur la nouvelle part
         corps = self.js[self.js.index("if (st.timbreJusqua && Date.now() < st.timbreJusqua) {"):
-                        self.js.index("if (carteEnJeu(frm)) { st.suite = 0; demander(frm); return; }")]
+                        self.js.index("if (carteEnJeu(frm)) {\n            // Le total a bougé")]
         self.assertIn("versLePremier(frm, m, cible);", corps)
         self.assertIn("apresGeste(frm);", corps)
 
