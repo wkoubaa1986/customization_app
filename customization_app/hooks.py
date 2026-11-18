@@ -648,7 +648,10 @@ app_ready = "customization_app.patches.override_get_item_details.apply"
 jinja = {"methods": ["customization_app.jinja_methods.bl_sous_garantie",
                      # majoration_carte(doc) : la mention « dont majoration pour paiement par carte » en bas
                      # de « Aqua World BC » et « Aqua World BL » (majoration_carte.mention).
-                     "customization_app.jinja_methods.majoration_carte"]}
+                     "customization_app.jinja_methods.majoration_carte",
+                     # reglement_commande(doc) : comment la commande est payée (moyens, pièces, majoration sur le
+                     # paiement par carte) — bas de la commande et du BL (reglement_commande.resume).
+                     "customization_app.jinja_methods.reglement_commande"]}
 
 override_whitelisted_methods = {
     "erpnext.stock.get_item_details.get_item_details": "customization_app.get_item_details.get_item_details",

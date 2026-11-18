@@ -65,3 +65,15 @@ def majoration_carte(doc):
     from customization_app import majoration_carte as M
 
     return M.mention(doc)
+
+
+def reglement_commande(doc):
+    """
+    Comment la commande est payée, pour le bas de « Aqua World BC » (la commande
+    elle-même) et de « Aqua World BL » (la commande à laquelle le bon est lié) :
+    une liste de {titre, lignes: [{libelle, montant_txt, detail}], total_txt}.
+    Voir customization_app.reglement_commande.
+    """
+    from customization_app import reglement_commande as R
+
+    return R.resume(doc)
