@@ -195,14 +195,24 @@ class TestInterventionsPassees(unittest.TestCase):
         for cle in ('"commande_statut"', '"commande_total"', '"sujet"', '"rapport"', '"raison_annulation"', '"employe"', '"type"'):
             self.assertIn(cle, source)
 
+    def test_les_interventions_a_venir_ont_la_meme_carte(self):
+        """« Aussi, interventions à venir dans l'historique doit être mobile friendly » (18/11/2026)."""
+        js = self._js()
+        a_venir = js.split("  function a_venir(h) {", 1)[1].split("  function appels(h) {", 1)[0]
+        self.assertIn("carte_intervention(t, pastille, false)", a_venir)
+        self.assertNotIn("<table>", a_venir)
+        passees = js.split("  function interventions(h) {", 1)[1].split("  function echeancier(h) {", 1)[0]
+        self.assertIn("carte_intervention(t, pill(t.status), true)", passees)
+        self.assertNotIn("<table>", passees)
+
     def test_une_carte_par_intervention_avec_ses_liens(self):
         js = self._js()
-        bloc = js.split("  function interventions(h) {", 1)[1].split("  function echeancier(h) {", 1)[0]
+        bloc = js.split("  function carte_intervention(t, pastille, passee) {", 1)[1].split("  function a_venir(h) {", 1)[0]
         self.assertIn('lien("Tache de travail", t.name)', bloc)
         self.assertIn('lien("Sales Order", t.commande)', bloc)
         for attendu in ('bloc("Sujet", t.sujet)', 'bloc("Rapport", t.rapport)', "t.raison_annulation", "t.employe", "pill(t.status)",
                         "STATUTS_CMD[st]", "t.commande_total"):
-            self.assertIn(attendu, bloc)
+            self.assertIn(attendu.replace("pill(t.status)", "${pastille}"), bloc)
         self.assertNotIn("<table>", bloc)                         # plus de tableau à sept colonnes, coupé à droite
         self.assertIn('"To Bill": "À facturer"', js)              # le statut de la commande se lit en français
 
