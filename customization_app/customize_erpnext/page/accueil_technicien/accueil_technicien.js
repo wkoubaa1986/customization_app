@@ -1,20 +1,23 @@
 /**
  * « 🏠 Accueil » — la page d’accueil du technicien en écran simplifié (demande du 18/11/2026) :
- * « une page d’accueil pour lui, dans laquelle il peut voir les listes — client, article, facture — seulement ».
+ * « une page d’accueil pour lui, dans laquelle il peut voir les listes — client, article, facture — seulement »,
+ * puis « ajoute aussi commandes client ».
  *
- * Trois grands boutons, rien d’autre : chacun ouvre la liste standard (ses droits de lecture sont ceux de son
- * profil, rien n’est accordé ici). La barre de navigation de l’écran simplifié (sous_traitant.js) reste en bas :
- * « Accueil » y reste allumé tant qu’il est dans l’une de ces trois listes ou sur une de leurs fiches.
+ * Quatre grands boutons, rien d’autre : clients, commandes et factures ouvrent la liste standard (ses droits
+ * sont ceux de son profil, rien n’est accordé ici) ; les articles ouvrent SA liste (page articles-technicien). La barre de navigation de l’écran simplifié (sous_traitant.js) reste en bas :
+ * « Accueil » y reste allumé tant qu’il est dans l’une de ces listes ou sur une de leurs fiches.
  *
  * Pour ajouter ou retirer un lien : la liste LIENS ci-dessous, et ACCUEIL_LISTES dans sous_traitant.js.
  */
 frappe.pages["accueil-technicien"].on_page_load = function (wrapper) {
     frappe.ui.make_app_page({ parent: wrapper, title: __("Accueil"), single_column: true });
 
+    // `route` : la page ou la liste ouverte. Les articles ont leur propre page (recherche, image, prix Vente standard).
     const LIENS = [
-        { doctype: "Customer",      ic: "👤", libelle: __("Clients"),  aide: __("Chercher un client, voir sa fiche") },
-        { doctype: "Item",          ic: "📦", libelle: __("Articles"), aide: __("Chercher un article, voir son prix") },
-        { doctype: "Sales Invoice", ic: "🧾", libelle: __("Factures"), aide: __("Voir les factures de vente") },
+        { route: ["List", "Customer"],      ic: "👤", libelle: __("Clients"),          aide: __("Chercher un client, voir sa fiche") },
+        { route: ["articles-technicien"],   ic: "📦", libelle: __("Articles"),         aide: __("Chercher un article, voir son prix") },
+        { route: ["List", "Sales Order"],   ic: "🛒", libelle: __("Commandes client"), aide: __("Voir les commandes des clients") },
+        { route: ["List", "Sales Invoice"], ic: "🧾", libelle: __("Factures"),         aide: __("Voir les factures de vente") },
     ];
 
     if (!document.getElementById("at-css")) {
@@ -39,6 +42,6 @@ frappe.pages["accueil-technicien"].on_page_load = function (wrapper) {
         $(`<button type="button" class="at-lien"><span class="ic">${l.ic}</span>
                <span><b>${esc(l.libelle)}</b><small>${esc(l.aide)}</small></span><span class="fl">›</span></button>`)
             .appendTo($el)
-            .on("click", () => frappe.set_route("List", l.doctype));
+            .on("click", () => frappe.set_route(...l.route));
     });
 };

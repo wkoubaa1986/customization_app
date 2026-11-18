@@ -83,7 +83,19 @@ class RapportCaisseJournaliere {
     const today = frappe.datetime.get_today();
     $("#rcj-d1").val(today);
     $("#rcj-d2").val(today);
+    const simple = frappe.boot.ecran_simplifie;
     if (frappe.boot.sous_traitant) this._ecran_sous_traitant();
+    else if (simple && simple.sous_traitant === false) this._ecran_technicien();
+  }
+
+  /** Technicien interne en écran simplifié (demande du 18/11/2026) : dans SA caisse, ni le suivi des dépenses
+   *  facturées, ni le suivi des achats fournisseurs, ni les boutons du bureau — chèque impayé, encaissement
+   *  des dettes, encaissement Aramex, bordereaux de remise, état des caisses, réglages. Il garde ce qui est à
+   *  lui : sa dépense, et compter / remettre sa caisse. Retirés du document (pas seulement cachés) : rien ne
+   *  peut les réafficher ensuite. */
+  _ecran_technicien() {
+    $("#rcj-suivi-depenses, #rcj-suivi-achats, #rcj-btn-impayes, #rcj-btn-dettes, #rcj-btn-aramex, "
+      + "#rcj-btn-bordereaux, #rcj-btn-etat, #rcj-btn-config").remove();
   }
 
   /** Sous-traitant (décision utilisateur 31/10/2026) : SA caisse, rien d'autre — ni suivi des dépenses

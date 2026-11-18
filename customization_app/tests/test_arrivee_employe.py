@@ -69,9 +69,9 @@ class TestCablage(unittest.TestCase):
         self.assertIn("Technicien", [r["role"] for r in page["roles"]])
         self.assertGreater(page["modified"], "2026-11-10")      # date de l'ajout du rôle : la page doit être plus récente
 
-    def test_accueil_du_technicien_clients_articles_factures_seulement(self):
+    def test_accueil_du_technicien_ses_quatre_liens_seulement(self):
         """18/11/2026 : « une page d'accueil pour lui (mode simple technicien), dans laquelle il peut voir les
-        listes — client, article, facture — seulement »."""
+        listes — client, article, facture — seulement », puis « ajoute aussi commandes client »."""
         import json
         import re
         page = json.loads(self._lire("customize_erpnext", "page", "accueil_technicien", "accueil_technicien.json"))
@@ -80,8 +80,9 @@ class TestCablage(unittest.TestCase):
         self.assertEqual(sorted(r["role"] for r in page["roles"]), ["System Manager", "Technicien"])
         js = self._lire("customize_erpnext", "page", "accueil_technicien", "accueil_technicien.js")
         self.assertIn('frappe.pages["accueil-technicien"].on_page_load', js)
-        self.assertEqual(re.findall(r'doctype: "([^"]+)"', js), ["Customer", "Item", "Sales Invoice"])   # ces trois-là, seulement
-        self.assertIn('frappe.set_route("List", l.doctype)', js)
+        self.assertEqual(re.findall(r"route: (\[[^\]]+\])", js), ['["List", "Customer"]', '["articles-technicien"]',
+                                                                 '["List", "Sales Order"]', '["List", "Sales Invoice"]'])
+        self.assertIn("frappe.set_route(...l.route)", js)
         self.assertNotIn("frappe.call", js)                      # aucun droit accordé ici : des liens, rien d'autre
 
     def test_la_barre_du_technicien_mene_a_son_accueil(self):
@@ -89,9 +90,65 @@ class TestCablage(unittest.TestCase):
         self.assertIn('const TECHNICIEN = st.sous_traitant === false;', nav)
         self.assertIn('const FOND = TECHNICIEN ? ["accueil-technicien"] : AGENDA;', nav)        # sous-traitant : l'agenda, comme avant
         self.assertIn('ECRANS.unshift({ cle: "accueil"', nav)
-        self.assertIn('new Set(["Customer", "Item", "Sales Invoice"])', nav)                    # « Accueil » reste allumé dans ses listes
+        self.assertIn('new Set(["Customer", "Sales Order", "Sales Invoice"])', nav)             # « Accueil » reste allumé dans ses listes
+        self.assertIn('r[0] === "accueil-technicien" || r[0] === "articles-technicien"', nav)
         self.assertIn('libelle: __("Mon agenda"),  aller: () => frappe.set_route(...AGENDA)', nav)
         self.assertIn('if (r[0] === "tache-de-travail" && r[1] !== "Form") { frappe.set_route(...AGENDA); return; }', nav)
+
+    def test_le_logo_noir_ramene_toujours_a_la_page_de_fond(self):
+        """18/11/2026 : « lorsqu'il appuie sur le truc noir, il revient à l'accueil ». Avant, seule la première
+        arrivée était redirigée : le logo menait ensuite à un espace de travail du Desk."""
+        nav = self._lire("public", "js", "sous_traitant.js")
+        self.assertNotIn("if (deja) return;", nav)
+        self.assertIn("const premiere = !deja;", nav)
+        self.assertIn("if (premiere) setTimeout(() => { if (window.maJournee_ouvrir) window.maJournee_ouvrir(); }, 900);", nav)
+
+    def test_la_liste_d_articles_du_technicien(self):
+        """18/11/2026 : « barre de recherche (nom, code) ; l'image avec le code, le nom, la description et le prix
+        en Vente standard »."""
+        import json
+        from customization_app import accueil_technicien as A
+        self.assertEqual(A.LISTE_PRIX, "Vente standard")
+        self.assertEqual(A.mots("  pompe   QB60 "), ["pompe", "QB60"])
+        self.assertEqual(A.mots(None), [])
+        # la description : texte d'une ligne, sans balises, coupée sur un mot
+        self.assertEqual(A.texte_brut("<div><p>Luxe&nbsp;Inox</p><p>Ø 63&nbsp;mm</p></div>"), "Luxe Inox Ø 63 mm")
+        long = A.texte_brut("mot " * 100, 40)
+        self.assertTrue(long.endswith("…") and len(long) <= 41 and not long.endswith(" …"))
+        self.assertEqual(A.texte_brut(None), "")
+        # le prix : celui en vigueur (l'ancien, périmé, est écarté), jamais un prix réservé à un client
+        prix = [{"price_list_rate": 425, "uom": "Pièce", "valid_from": "2025-09-01", "valid_upto": "2026-08-29"},
+                {"price_list_rate": 455, "uom": "Pièce", "valid_from": "2026-08-30", "valid_upto": None}]
+        self.assertEqual(A.prix_du_jour(prix, "Pièce", "2026-11-18"), 455.0)
+        self.assertEqual(A.prix_du_jour(prix, "Pièce", "2026-08-01"), 425.0)
+        self.assertEqual(A.prix_du_jour([{"price_list_rate": 10, "customer": "X"}], "Pièce", "2026-11-18"), None)
+        self.assertEqual(A.prix_du_jour([{"price_list_rate": 90, "uom": "Carton"}, {"price_list_rate": 10, "uom": "Pièce"}],
+                                        "Pièce", "2026-11-18"), 10.0)                                   # l'unité de stock d'abord
+        self.assertEqual(A.prix_du_jour([], "Pièce", "2026-11-18"), None)
+        import inspect
+        source = inspect.getsource(A.articles)
+        self.assertIn('frappe.has_permission("Item", "read", throw=True)', source)
+        for filtre in ("i.disabled = 0", "i.has_variants = 0", "i.is_sales_item = 1"):
+            self.assertIn(filtre, source)
+        page = json.loads(self._lire("customize_erpnext", "page", "articles_technicien", "articles_technicien.json"))
+        self.assertEqual((page["name"], sorted(r["role"] for r in page["roles"])), ("articles-technicien", ["System Manager", "Technicien"]))
+        js = self._lire("customize_erpnext", "page", "articles_technicien", "articles_technicien.js")
+        for attendu in ('"customization_app.accueil_technicien.articles"', 'type="search"', "art-code", "art-desc", "art-prix",
+                        'frappe.pages["articles-technicien"].on_page_load'):
+            self.assertIn(attendu, js)
+        self.assertNotIn("set_route", js)                         # lecture seule : aucune fiche à ouvrir
+
+    def test_la_caisse_du_technicien_sans_les_suivis_ni_les_boutons_du_bureau(self):
+        """18/11/2026 : « pour les employés avec la fonction technicien, ne montre pas [les suivis des dépenses
+        facturées et des achats fournisseurs] dans la caisse, et ne montre pas ces boutons »."""
+        js = self._lire("customize_erpnext", "page", "caisse_journaliere", "caisse_journaliere.js")
+        self.assertIn("else if (simple && simple.sous_traitant === false) this._ecran_technicien();", js)
+        bloc = js.split("_ecran_technicien() {", 1)[1].split("}", 1)[0]
+        for retire in ("#rcj-suivi-depenses", "#rcj-suivi-achats", "#rcj-btn-impayes", "#rcj-btn-dettes", "#rcj-btn-aramex",
+                       "#rcj-btn-bordereaux", "#rcj-btn-etat"):
+            self.assertIn(retire, bloc)
+        for garde in ("#rcj-btn-depense", "#rcj-btn-cloture"):    # ce qui est à lui : sa dépense, compter et remettre
+            self.assertNotIn(garde, bloc)
 
     def test_bouton(self):
         js = self._lire("public", "js", "employee_list_arrivee.js")

@@ -24,7 +24,7 @@
     const TECHNICIEN = st.sous_traitant === false;
     const FOND = TECHNICIEN ? ["accueil-technicien"] : AGENDA;
     // Les listes ouvertes depuis l'accueil (et leurs fiches) : « Accueil » reste allumé dans la barre.
-    const ACCUEIL_LISTES = new Set(["Customer", "Item", "Sales Invoice"]);
+    const ACCUEIL_LISTES = new Set(["Customer", "Sales Order", "Sales Invoice"]);
     let deja = false;
 
     // ── Son écran : pas de barre latérale (espaces de travail, filtres de liste), la page prend toute la largeur.
@@ -66,7 +66,7 @@
         if (r[0] === "stock-entrepots") return "stock";
         if (r[0] === "caisse-journaliere") return "caisse";
         if (r[0] === "rh-technicien") return "rh";
-        if (TECHNICIEN && (r[0] === "accueil-technicien"
+        if (TECHNICIEN && (r[0] === "accueil-technicien" || r[0] === "articles-technicien"
             || ((r[0] === "List" || r[0] === "Form") && ACCUEIL_LISTES.has(r[1])))) return "accueil";
         return "";
     }
@@ -94,11 +94,14 @@
         const r = frappe.get_route() || [];
         // Liste, calendrier ou rapport des tâches : pas pour lui — l'app lui montre ses tâches dans l'agenda.
         if (r[0] === "tache-de-travail" && r[1] !== "Form") { frappe.set_route(...AGENDA); return; }
-        if (deja) return;
+        // L'accueil du Desk ou un espace de travail — à l'ouverture, ou plus tard par le logo noir en haut à gauche
+        // et le fil d'Ariane (18/11/2026) : toujours ramené à SA page de fond. « Ma journée » ne s'ouvre d'elle-même
+        // qu'à la première arrivée.
         if (!ACCUEIL.has((r[0] || "").toLowerCase()) && !(r[0] === "Workspaces")) return;
+        const premiere = !deja;
         deja = true;
         frappe.set_route(...FOND).then(() => {
-            setTimeout(() => { if (window.maJournee_ouvrir) window.maJournee_ouvrir(); }, 900);
+            if (premiere) setTimeout(() => { if (window.maJournee_ouvrir) window.maJournee_ouvrir(); }, 900);
         });
     }
 
