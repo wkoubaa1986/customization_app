@@ -125,9 +125,11 @@ def entete(client: str) -> dict:
 def _taches(client: str) -> list:
     return frappe.db.sql(
         """SELECT t.name, t.custom_type_dintervention AS type, t.status, t.starts_on, t.commande_client,
-                  COALESCE(e.employee_name, t.custom_employé) AS employe, t.rapport_visite, t.raison_annulation, t.subject
+                  COALESCE(e.employee_name, t.custom_employé) AS employe, t.rapport_visite, t.raison_annulation, t.subject,
+                  so.status AS commande_statut, so.grand_total AS commande_total
            FROM `tabTache de travail` t
            LEFT JOIN `tabEmployee` e ON e.name = t.custom_choix_du_staff
+           LEFT JOIN `tabSales Order` so ON so.name = t.commande_client
            WHERE t.custom_client = %(c)s AND IFNULL(t.custom_type_dintervention, '') NOT IN %(hors)s
            ORDER BY t.starts_on DESC""",
         {"c": client, "hors": TYPES_HORS_CLIENT}, as_dict=True)
@@ -143,7 +145,10 @@ def interventions(taches: list) -> tuple[list, list]:
             rapport = ""
         ligne = {"name": t.name, "type": t.type or "", "status": t.status, "date": str(t.starts_on or ""),
                  "commande": t.commande_client or "", "employe": t.employe or "", "rapport": texte(rapport, 400),
-                 "raison_annulation": t.raison_annulation or "", "sujet": texte(t.subject or "", 200)}
+                 "raison_annulation": t.raison_annulation or "", "sujet": texte(t.subject or "", 200),
+                 # la commande liée, dite en clair sur la carte (18/11/2026) : son statut et son montant
+                 "commande_statut": t.get("commande_statut") or "",
+                 "commande_total": float(t.get("commande_total") or 0) if t.get("commande_client") else None}
         if t.status == "Open" and t.starts_on and get_datetime(t.starts_on) >= maintenant:
             a_venir.append(ligne)
         else:

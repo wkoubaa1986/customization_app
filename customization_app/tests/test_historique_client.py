@@ -176,6 +176,48 @@ class TestHistorique(unittest.TestCase):
         self.assertEqual(H.texte("Test note d&apos;appel &lt;b&gt;gras&lt;/b&gt;"), "Test note d'appel <b>gras</b>")
 
 
+class TestInterventionsPassees(unittest.TestCase):
+    """18/11/2026 : « en interventions passées, le rendre plus beau, avec rapport, sujet, type, technicien, commande,
+    statut, et des liens » ; et « pièces à proposer : pas trop user friendly » (tableau coupé sur le téléphone)."""
+
+    def _js(self):
+        import os
+        chemin = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "public", "js", "historique_client.js")
+        with open(chemin, encoding="utf-8") as f:
+            return f.read()
+
+    def test_le_serveur_rend_le_statut_et_le_montant_de_la_commande_liee(self):
+        import inspect
+        from customization_app import historique_client as H
+        self.assertIn("so.status AS commande_statut, so.grand_total AS commande_total", inspect.getsource(H._taches))
+        self.assertIn("LEFT JOIN `tabSales Order` so ON so.name = t.commande_client", inspect.getsource(H._taches))
+        source = inspect.getsource(H.interventions)
+        for cle in ('"commande_statut"', '"commande_total"', '"sujet"', '"rapport"', '"raison_annulation"', '"employe"', '"type"'):
+            self.assertIn(cle, source)
+
+    def test_une_carte_par_intervention_avec_ses_liens(self):
+        js = self._js()
+        bloc = js.split("  function interventions(h) {", 1)[1].split("  function echeancier(h) {", 1)[0]
+        self.assertIn('lien("Tache de travail", t.name)', bloc)
+        self.assertIn('lien("Sales Order", t.commande)', bloc)
+        for attendu in ('bloc("Sujet", t.sujet)', 'bloc("Rapport", t.rapport)', "t.raison_annulation", "t.employe", "pill(t.status)",
+                        "STATUTS_CMD[st]", "t.commande_total"):
+            self.assertIn(attendu, bloc)
+        self.assertNotIn("<table>", bloc)                         # plus de tableau à sept colonnes, coupé à droite
+        self.assertIn('"To Bill": "À facturer"', js)              # le statut de la commande se lit en français
+
+    def test_les_pieces_a_proposer_en_cartes(self):
+        js = self._js()
+        bloc = js.split("  function pieces(h) {", 1)[1].split("  function a_venir(h) {", 1)[0]
+        self.assertNotIn("<table>", bloc)
+        for attendu in ("Dernier changement", "À changer le", "x.intervalle_mois", "x.message", "x.libelle", "hc-pcs"):
+            self.assertIn(attendu, bloc)
+
+    def test_l_echeancier_defile_au_lieu_d_etre_coupe(self):
+        self.assertIn('<div class="hc-x"><table>${tete_t}', self._js())
+        self.assertIn(".hc-wrap .hc-x{overflow-x:auto}", self._js())
+
+
 class TestAcces(unittest.TestCase):
     def _avec(self, roles, lecture=True):
         from unittest.mock import patch

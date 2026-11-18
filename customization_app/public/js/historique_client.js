@@ -45,7 +45,31 @@
         border-radius:6px;padding:4px 7px;background:var(--control-bg);color:var(--text-color)}
       .hc-wrap .hc-pill{display:inline-block;padding:0 6px;border-radius:9px;font-size:11px;white-space:nowrap}
       .hc-wrap .hc-scroll{max-height:320px;overflow:auto;border:1px solid var(--border-color);border-radius:6px}
-      .hc-wrap details summary{cursor:pointer;color:var(--text-muted);font-size:11.5px;margin:4px 0}`;
+      .hc-wrap details summary{cursor:pointer;color:var(--text-muted);font-size:11.5px;margin:4px 0}
+      .hc-wrap .hc-x{overflow-x:auto}
+      .hc-wrap .hc-pcs{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:6px}
+      .hc-wrap .hc-pc{background:var(--card-bg,#fff);border:1px solid var(--border-color);border-left-width:3px;border-radius:8px;padding:7px 10px}
+      .hc-wrap .hc-pc.hc-r-bord{border-left-color:#c0392b}.hc-wrap .hc-pc.hc-b-bord{border-left-color:#e67e22}
+      .hc-wrap .hc-pc.hc-ok-bord{border-left-color:#28a745}.hc-wrap .hc-pc.hc-a-bord{border-left-color:#9aa0a6}
+      .hc-wrap .hc-pc-t{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:3px}
+      .hc-wrap .hc-pc-t b{font-size:13px}
+      .hc-wrap .hc-pc-l{display:flex;flex-direction:column;margin-top:3px}
+      .hc-wrap .hc-pc-l .k{font-size:10.5px;text-transform:uppercase;color:var(--text-muted);font-weight:600}
+      .hc-wrap .hc-pc-msg{margin-top:5px;padding-top:5px;border-top:1px dashed var(--border-color);font-size:11.5px;color:var(--text-muted)}
+      .hc-wrap .hc-ints{max-height:440px;padding:6px;background:var(--control-bg);display:flex;flex-direction:column;gap:6px}
+      .hc-wrap .hc-int{background:var(--card-bg,#fff);border:1px solid var(--border-color);border-radius:8px;padding:8px 10px}
+      .hc-wrap .hc-int-t{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px}
+      .hc-wrap .hc-int-t b{font-size:13px}
+      .hc-wrap .hc-int-type{font-weight:600}
+      .hc-wrap .hc-int-ref{margin-left:auto;font-size:12px;white-space:nowrap}
+      .hc-wrap .hc-int-m{display:flex;flex-wrap:wrap;gap:4px 16px;margin-top:4px;color:var(--text-color)}
+      .hc-wrap .hc-int-m:empty{display:none}
+      .hc-wrap .hc-int-l{display:inline-flex;flex-wrap:wrap;align-items:center;gap:5px}
+      .hc-wrap .hc-int-b{display:flex;gap:8px;margin-top:5px;padding-top:5px;border-top:1px dashed var(--border-color)}
+      .hc-wrap .hc-int-b .k{flex:0 0 62px;font-size:10.5px;text-transform:uppercase;color:var(--text-muted);font-weight:600;padding-top:1px}
+      .hc-wrap .hc-int-b .v{flex:1;white-space:pre-wrap;word-break:break-word}
+      .hc-wrap .hc-int-r .v{color:#a35a00}
+      .hc-wrap .hc-int a{font-weight:600}`;
     $("<style id='hc-style'>").text(css).appendTo("head");
   }
 
@@ -167,17 +191,19 @@
       il achète pour son stock.</div>`;
     const lignes = p.pieces || [];
     if (!lignes.length) return `<h5>🔧 Pièces à proposer</h5><div class="hc-vide">Aucune machine ni pièce connue chez ce client.</div>`;
-    return `<h5>🔧 Pièces à proposer</h5><table><thead><tr><th>Pièce</th><th>État</th><th>Dernier changement</th>
-      <th>Échéance</th><th>Rythme</th><th></th></tr></thead><tbody>${lignes.map((x) => {
+    // Une carte par pièce (18/11/2026) : sur le téléphone, le tableau à six colonnes coupait l'échéance et le conseil.
+    return `<h5>🔧 Pièces à proposer</h5><div class="hc-pcs">${lignes.map((x) => {
         const [cls, lib] = STATUT[x.statut] || STATUT.ok;
         const etat = x.statut === "retard" && x.retard_jours >= 30 ? `${lib} · ${Math.floor(x.retard_jours / 30)} mois` : lib;
-        return `<tr><td><b>${esc(x.libelle)}</b></td><td><span class="hc-pill ${cls}">${esc(etat)}</span></td>
-          <td class="nw">${jour(x.depuis)} <span class="m">${x.origine === "pose" ? "posée avec" : "achat"}
-            ${esc(x.article_depart || "")}</span></td>
-          <td class="nw">${jour(x.echeance)}</td>
-          <td class="nw m">${x.intervalle_mois} mois${x.appris ? " (son rythme)" : ""}</td>
-          <td class="m" style="font-size:11.5px">${esc(x.message || "")}</td></tr>`;
-      }).join("")}</tbody></table>`;
+        return `<div class="hc-pc ${cls}-bord">
+          <div class="hc-pc-t"><b>${esc(x.libelle)}</b><span class="hc-pill ${cls}">${esc(etat)}</span></div>
+          <div class="hc-pc-l"><span class="k">Dernier changement</span><span>${jour(x.depuis) || "—"}
+            <span class="m">· ${x.origine === "pose" ? "posée avec" : "achat"} ${esc(x.article_depart || "")}</span></span></div>
+          <div class="hc-pc-l"><span class="k">À changer le</span><span><b>${jour(x.echeance) || "—"}</b>
+            <span class="m">· tous les ${esc(x.intervalle_mois)} mois${x.appris ? " (son rythme)" : ""}</span></span></div>
+          ${x.message ? `<div class="hc-pc-msg">${esc(x.message)}</div>` : ""}
+        </div>`;
+      }).join("")}</div>`;
   }
 
   function a_venir(h) {
@@ -206,17 +232,46 @@
         ${l.length ? "" : '<div class="hc-vide" style="padding:6px">Aucun appel ni commentaire.</div>'}</div>`;
   }
 
+  // Interventions passées : une carte par intervention (18/11/2026 — « plus beau, avec rapport, sujet, type,
+  // technicien, commande, statut, et des liens »). Le tableau à sept colonnes coupait le rapport et les liens à droite.
+  const TYPES_INT = { "Entretien": "🔧", "Installation": "🛠", "Réparation": "🧰", "Livraison": "📦", "Visite": "👁", "Autre": "📌" };
+  const STATUTS_CMD = { "Draft": "Brouillon", "On Hold": "En attente", "To Deliver and Bill": "À livrer et facturer",
+                        "To Bill": "À facturer", "To Deliver": "À livrer", "Completed": "Terminée", "Cancelled": "Annulée",
+                        "Closed": "Clôturée" };
+  const montant = (v) => Number(v).toLocaleString("fr-FR", { minimumFractionDigits: 3, maximumFractionDigits: 3 });
+
   function interventions(h) {
     const l = h.interventions || [];
     if (!l.length) return `<h5>🛠 Interventions passées</h5><div class="hc-vide">Aucune.</div>`;
     const pill = (s) => `<span class="hc-pill ${s === "Completed" ? "hc-ok" : s === "Cancelled" ? "hc-a" : "hc-r"}">${
       esc(s === "Completed" ? "Faite" : s === "Cancelled" ? "Annulée" : s)}</span>`;
-    return `<h5>🛠 Interventions passées</h5><div class="hc-scroll"><table><thead><tr><th>Date</th><th>Type</th>
-      <th>Statut</th><th>Technicien</th><th>Rapport / raison</th><th>Tâche</th><th>Commande</th></tr></thead>
-      <tbody>${l.map((t) => `<tr><td class="nw">${jour(t.date)}</td><td>${esc(t.type)}</td><td>${pill(t.status)}</td>
-        <td class="nw">${esc(t.employe)}</td><td>${esc(t.rapport || t.raison_annulation || "")}</td>
-        <td class="nw">${lien("Tache de travail", t.name)}</td><td class="nw">${lien("Sales Order", t.commande)}</td></tr>`).join("")}
-      </tbody></table></div>`;
+    const commande = (t) => {
+      if (!t.commande) return "";
+      const st = t.commande_statut;
+      const cls = st === "Completed" ? "hc-ok" : st === "Cancelled" || st === "Closed" ? "hc-a" : "hc-b";
+      return `<span class="hc-int-l">🧾 ${lien("Sales Order", t.commande)}
+        ${st ? `<span class="hc-pill ${cls}">${esc(STATUTS_CMD[st] || st)}</span>` : ""}
+        ${t.commande_total ? `<span class="m">${montant(t.commande_total)} DT</span>` : ""}</span>`;
+    };
+    const bloc = (titre, texte, cls) => texte
+      ? `<div class="hc-int-b ${cls || ""}"><span class="k">${titre}</span><span class="v">${esc(texte)}</span></div>` : "";
+    return `<h5>🛠 Interventions passées <span class="m" style="text-transform:none;letter-spacing:0">— ${l.length}</span></h5>
+      <div class="hc-scroll hc-ints">${l.map((t) => `<div class="hc-int">
+        <div class="hc-int-t">
+          <b class="nw">${jour(t.date)}${heure(t.date)}</b>
+          <span class="hc-int-type">${TYPES_INT[t.type] || "📌"} ${esc(t.type || "—")}</span>
+          ${pill(t.status)}
+          <span class="hc-int-ref">${lien("Tache de travail", t.name)}</span>
+        </div>
+        <div class="hc-int-m">
+          ${t.employe ? `<span class="hc-int-l">👤 ${esc(t.employe)}</span>` : ""}
+          ${commande(t)}
+        </div>
+        ${bloc("Sujet", t.sujet)}
+        ${bloc("Rapport", t.rapport)}
+        ${bloc("Raison de l’annulation", t.raison_annulation, "hc-int-r")}
+        ${!t.rapport && !t.raison_annulation && t.status === "Completed" ? `<div class="hc-int-b"><span class="k">Rapport</span><span class="v m">aucun rapport saisi</span></div>` : ""}
+      </div>`).join("")}</div>`;
   }
 
   function echeancier(h) {
@@ -236,10 +291,10 @@
       const tete_t = `<thead><tr><th>Prévue</th><th>Machine</th><th>État</th><th>SMS 1</th><th>SMS 2</th><th>1er appel</th>
         <th>Appelé</th><th>Réalisée</th></tr></thead>`;
       const plus = vis.length > recentes.length
-        ? `<details><summary>${vis.length - recentes.length} visite(s) plus ancienne(s)</summary><table>${tete_t}<tbody>${
-            lignes(vis.slice(0, vis.length - recentes.length))}</tbody></table></details>` : "";
+        ? `<details><summary>${vis.length - recentes.length} visite(s) plus ancienne(s)</summary><div class="hc-x"><table>${tete_t}<tbody>${
+            lignes(vis.slice(0, vis.length - recentes.length))}</tbody></table></div></details>` : "";
       return `<div style="margin:6px 0 10px"><div>${lien("Maintenance Schedule", m.name)} <span class="m">· ${machines}</span></div>
-        ${plus}<table>${tete_t}<tbody>${lignes(recentes)}</tbody></table></div>`;
+        ${plus}<div class="hc-x"><table>${tete_t}<tbody>${lignes(recentes)}</tbody></table></div></div>`;
     }).join("");
     const journal = (e.journal || []).length
       ? `<details><summary>Journal de l’échéancier (${e.journal.length})</summary><table><tbody>${e.journal.map((j) =>
