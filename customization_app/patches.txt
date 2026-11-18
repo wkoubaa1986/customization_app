@@ -129,3 +129,4 @@ customization_app.patches.case_paiement_avec_avoir
 customization_app.patches.majoration_carte
 customization_app.patches.echeances_meme_jour
 customization_app.patches.type_transaction_defaut
+customization_app.patches.taxes_repliables_commande

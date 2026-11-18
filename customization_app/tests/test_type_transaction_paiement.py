@@ -50,3 +50,20 @@ class TestTypeDeTransaction(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTaxesRepliables(unittest.TestCase):
+    """Commande : la partie « Taxes » est repliable ; le tableau et le total des taxes (sections sans titre)
+    se replient avec elle (18/11/2026)."""
+
+    def test_le_reglage_et_le_script_sont_branches(self):
+        from customization_app.patches import taxes_repliables_commande as T
+        self.assertEqual(T.SECTION, "taxes_section")
+        with open(os.path.join(RACINE, "patches.txt"), encoding="utf-8") as f:
+            self.assertIn("customization_app.patches.taxes_repliables_commande", f.read())
+        with open(os.path.join(RACINE, "hooks.py"), encoding="utf-8") as f:
+            self.assertIn('"public/js/sales_order_taxes_repliables.js"', f.read())
+        with open(os.path.join(RACINE, "public", "js", "sales_order_taxes_repliables.js"), encoding="utf-8") as f:
+            js = f.read()
+        self.assertIn('const TETE = "taxes_section", SUITE = ["section_break_40", "section_break_43"];', js)
+        self.assertIn("$(s.wrapper).toggle(!fermee)", js)
