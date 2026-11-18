@@ -308,7 +308,7 @@ class TestCablage(unittest.TestCase):
         with open(os.path.join(dossier, "agenda_sous_traitant.js"), encoding="utf-8") as f:
             agenda = f.read()
         for attendu in ('frappe.pages["agenda-sous-traitant"].on_page_load', "customization_app.sous_traitant.agenda",
-                        'data-vue="${v}"', "startOf(\"isoWeek\")", "window.maJournee_ouvrir($(e.currentTarget).data(\"journee\"))",
+                        'data-vue="${v}"', "startOf(\"isoWeek\")", "window.maJournee_ouvrir($(e.currentTarget).data(\"journee\"), $(e.currentTarget).attr(\"data-tache\") || null)",
                         "rafraichir()"):
             self.assertIn(attendu, agenda)
         self.assertNotIn("frappe.ui.Dialog", agenda)
