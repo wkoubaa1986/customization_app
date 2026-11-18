@@ -103,6 +103,17 @@ class TestCablage(unittest.TestCase):
         self.assertIn("const premiere = !deja;", nav)
         self.assertIn("if (premiere) setTimeout(() => { if (window.maJournee_ouvrir) window.maJournee_ouvrir(); }, 900);", nav)
 
+    def test_une_fiche_ouverte_dans_un_nouvel_onglet_n_est_pas_prise_pour_l_accueil(self):
+        """18/11/2026 : « lorsqu'il ouvre la tâche, il y a Ma journée qui s'ouvre ». Au chargement d'un lien direct
+        la route est encore vide ; elle était prise pour l'accueil. Tant qu'elle est vide, l'adresse fait foi."""
+        nav = self._lire("public", "js", "sous_traitant.js")
+        self.assertIn("function sur_l_accueil(r) {", nav)
+        self.assertIn("if (!sur_l_accueil(r)) return;", nav)
+        bloc = nav.split("function sur_l_accueil(r) {", 1)[1].split("function accueillir() {", 1)[0]
+        self.assertIn('if (tete !== "") return true;', bloc)
+        self.assertIn("window.location.pathname", bloc)
+        self.assertIn('chemin === "/app"', bloc)
+
     def test_la_liste_d_articles_du_technicien(self):
         """18/11/2026 : « barre de recherche (nom, code) ; l'image avec le code, le nom, la description et le prix
         en Vente standard »."""

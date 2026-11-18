@@ -89,6 +89,19 @@
         $nav.find("button").each((_, b) => $(b).toggleClass("on", $(b).attr("data-ecran") === courant));
     }
 
+    // Est-on sur l'accueil du Desk (ou un espace de travail) ? Au chargement d'un lien direct — une fiche ouverte
+    // dans un nouvel onglet depuis l'historique — la route n'est pas encore connue (frappe.get_route() vide) : la
+    // prendre pour l'accueil renvoyait vers la page de fond et ouvrait « Ma journée » par-dessus la fiche
+    // (18/11/2026). Tant que la route est vide, c'est l'ADRESSE qui fait foi.
+    function sur_l_accueil(r) {
+        if (r[0] === "Workspaces") return true;
+        const tete = (r[0] || "").toLowerCase();
+        if (!ACCUEIL.has(tete)) return false;
+        if (tete !== "") return true;
+        const chemin = window.location.pathname.replace(/\/+$/, "").toLowerCase();
+        return chemin === "/app" || chemin === "/desk" || chemin === "/app/home";
+    }
+
     function accueillir() {
         peindre();
         const r = frappe.get_route() || [];
@@ -97,7 +110,7 @@
         // L'accueil du Desk ou un espace de travail — à l'ouverture, ou plus tard par le logo noir en haut à gauche
         // et le fil d'Ariane (18/11/2026) : toujours ramené à SA page de fond. « Ma journée » ne s'ouvre d'elle-même
         // qu'à la première arrivée.
-        if (!ACCUEIL.has((r[0] || "").toLowerCase()) && !(r[0] === "Workspaces")) return;
+        if (!sur_l_accueil(r)) return;
         const premiere = !deja;
         deja = true;
         frappe.set_route(...FOND).then(() => {
