@@ -15,7 +15,9 @@
 //   - « ＋ Carte », « ＋ Chèque »… ajoute un paiement ; ✕ le retire et rend son montant aux autres ;
 //   - pas de champ « échéance » : un paiement ajouté porte le jour de la commande, et plusieurs paiements
 //     peuvent porter le même jour (customization_app.echeances_meme_jour) — la date n'est jamais décalée ;
-//   - le total de la commande change (article ajouté, quantité…) : les montants suivent ;
+//   - le total de la commande change (article ajouté, quantité, ristourne…) : les montants suivent — la différence
+//     va aux paiements qu'on n'a pas tapés à la main, dans l'ordre ; un montant tapé (carte comprise) ne bouge pas
+//     tant qu'un autre paiement peut prendre la différence ;
 //   - PAIEMENT PAR CARTE : la majoration (customization_app.majoration_carte) est demandée au serveur à
 //     chaque changement et APPLIQUÉE TOUT DE SUITE à l'écran — prix des articles, total, montant de la
 //     carte. Le vendeur lit le montant exact à passer sur le terminal avant d'enregistrer, et
@@ -89,7 +91,18 @@
     const nomsAvoir = (frm) => new Set(lignes(frm).filter(estAvoir).map((r) => r.name));
     const total = (frm) => (cint(frm.doc.disable_rounded_total) ? 0 : flt(frm.doc.rounded_total)) || flt(frm.doc.grand_total);
     const majoration = (frm) => flt(frm.doc.custom_majoration_carte, 3);
-    const totalBase = (frm) => arrondi(total(frm) - majoration(frm));
+    /** La majoration que portent les PRIX des lignes, aux quantités de l'écran : pour chaque ligne encore à son prix
+        majoré, (prix majoré − prix d'avant) × quantité. Ce n'est pas le champ de la commande, qui date du dernier
+        calcul : dès qu'une quantité change, les unités ajoutées portent elles aussi la majoration dans leur prix. */
+    function majorationDansLesPrix(frm) {
+        return arrondi((frm.doc.items || []).reduce((s, l) => {
+            const avant = flt(l.custom_prix_avant_carte), avec = flt(l.custom_prix_avec_carte);
+            if (!avant || Math.abs(flt(l.rate) - avec) > Math.max(0.005, Math.abs(avec) * 2e-5)) return s;
+            return s + arrondi(flt(l.rate) * flt(l.qty)) - arrondi(avant * flt(l.qty));
+        }, 0));
+    }
+    /** Le total de la commande SANS la majoration carte (celui que les paiements hors carte se partagent). */
+    const totalBase = (frm) => arrondi(total(frm) - majorationDansLesPrix(frm));
 
     /** {nom de ligne -> part de la commande} : pour la carte, le montant porté moins sa part de majoration. */
     function parts(frm) {
@@ -406,7 +419,18 @@
             } else rendre(frm);
             return;
         }
-        if (carteEnJeu(frm)) { st.suite = 0; demander(frm); return; }           // le serveur recale tout, carte comprise
+        if (carteEnJeu(frm)) {
+            // Le total a bougé (ristourne retirée, article ajouté…) alors qu'une carte est en jeu : la différence va
+            // aux paiements qu'on n'a pas tapés à la main, dans l'ordre — PAS d'office à la carte (constat du
+            // 18/11/2026 : ristourne retirée, les 37,917 partaient sur la carte tapée à 105 au lieu de la dette).
+            // Le serveur refait ensuite la majoration sur la part carte, qui n'a pas changé.
+            const m = parts(frm), cible = totalBase(frm);
+            if (Math.abs(cible - rs.reduce((x, r) => x + flt(m.get(r.name)), 0)) >= 0.001) {
+                equilibrer(frm, m, cible, null);
+                ecrire(frm, m);
+            }
+            st.suite = 0; demander(frm); return;
+        }
         const t = total(frm), somme = arrondi(rs.reduce((s, r) => s + flt(r.payment_amount), 0));
         if (Math.abs(somme - t) < 0.001) { rendre(frm); return; }
         const m = parts(frm);

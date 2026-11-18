@@ -207,6 +207,14 @@ class TestBranchements(unittest.TestCase):
         self.assertIn("Math.ceil(crans - 1e-9)", js)                       # même arrondi (supérieur) que le serveur
         self.assertIn("reglage.superieur === false", js)                   # ... ou au plus proche, selon le réglage
 
+    def test_le_total_change_la_difference_ne_part_pas_d_office_sur_la_carte(self):
+        """Constat du 18/11/2026 : ristourne retirée (+ 37,917), carte tapée à 105 : la différence allait à la carte.
+        Elle va aux paiements non tapés à la main (la dette), la carte garde sa part."""
+        js = self.lire("public", "js", "sales_order_paiement.js")
+        corps = js[js.index("if (carteEnJeu(frm)) {\n            // Le total a bougé"):js.index("const t = total(frm), somme = arrondi(rs.reduce((s, r) => s + flt(r.payment_amount), 0));")]
+        self.assertIn("equilibrer(frm, m, cible, null);", corps)
+        self.assertLess(corps.index("equilibrer(frm, m, cible, null);"), corps.index("demander(frm);"))
+
     def test_le_bloc_ecrit_dans_le_tableau_standard(self):
         """Aucune donnée de plus : le bloc lit et écrit `payment_schedule`, que tout le reste du système lit."""
         js = self.lire("public", "js", "sales_order_paiement.js")
