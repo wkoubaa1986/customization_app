@@ -60,6 +60,15 @@ class TestCablage(unittest.TestCase):
         self.assertIn("customization_app.patches.arrivee_technicien", self._lire("patches.txt"))
         self.assertIn('"role": "Technicien"', self._lire("customize_erpnext", "page", "agenda_sous_traitant", "agenda_sous_traitant.json"))
 
+    def test_la_page_agenda_est_reimportee_avec_le_role_technicien(self):
+        """18/11/2026 : le premier technicien créé (Radhouan) recevait « Pas permis » sur « Mon agenda ». Le rôle
+        avait été ajouté au fichier sans changer sa date `modified` : Frappe ne réimporte une page que si cette
+        date diffère de celle en base, la prod gardait donc l'ancienne liste de rôles."""
+        import json
+        page = json.loads(self._lire("customize_erpnext", "page", "agenda_sous_traitant", "agenda_sous_traitant.json"))
+        self.assertIn("Technicien", [r["role"] for r in page["roles"]])
+        self.assertGreater(page["modified"], "2026-11-10")      # date de l'ajout du rôle : la page doit être plus récente
+
     def test_bouton(self):
         js = self._lire("public", "js", "employee_list_arrivee.js")
         for morceau in ("arrivee_employe.creer_technicien", "options_arrivee", "ecran_simplifie", "premier_jour_recup",
