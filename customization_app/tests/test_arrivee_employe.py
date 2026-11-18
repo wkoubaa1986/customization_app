@@ -175,9 +175,10 @@ class TestCablage(unittest.TestCase):
         self.assertIn("else if (simple && simple.sous_traitant === false) this._ecran_technicien();", js)
         bloc = js.split("_ecran_technicien() {", 1)[1].split("}", 1)[0]
         for retire in ("#rcj-suivi-depenses", "#rcj-suivi-achats", "#rcj-btn-impayes", "#rcj-btn-dettes", "#rcj-btn-aramex",
-                       "#rcj-btn-bordereaux", "#rcj-btn-etat"):
+                       "#rcj-btn-etat"):
             self.assertIn(retire, bloc)
-        for garde in ("#rcj-btn-depense", "#rcj-btn-cloture"):    # ce qui est à lui : sa dépense, compter et remettre
+        # ce qui est à lui : sa dépense, compter et remettre — et les bordereaux de remise, remis à sa demande
+        for garde in ("#rcj-btn-depense", "#rcj-btn-cloture", "#rcj-btn-bordereaux"):
             self.assertNotIn(garde, bloc)
 
     def test_bouton(self):

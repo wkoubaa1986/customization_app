@@ -90,12 +90,12 @@ class RapportCaisseJournaliere {
 
   /** Technicien interne en écran simplifié (demande du 18/11/2026) : dans SA caisse, ni le suivi des dépenses
    *  facturées, ni le suivi des achats fournisseurs, ni les boutons du bureau — chèque impayé, encaissement
-   *  des dettes, encaissement Aramex, bordereaux de remise, état des caisses, réglages. Il garde ce qui est à
-   *  lui : sa dépense, et compter / remettre sa caisse. Retirés du document (pas seulement cachés) : rien ne
+   *  des dettes, encaissement Aramex, état des caisses, réglages. Il garde ce qui est à lui : sa dépense,
+   *  compter / remettre sa caisse, et les bordereaux de remise (remis le 18/11/2026 au soir, à sa demande). Retirés du document (pas seulement cachés) : rien ne
    *  peut les réafficher ensuite. */
   _ecran_technicien() {
     $("#rcj-suivi-depenses, #rcj-suivi-achats, #rcj-btn-impayes, #rcj-btn-dettes, #rcj-btn-aramex, "
-      + "#rcj-btn-bordereaux, #rcj-btn-etat, #rcj-btn-config").remove();
+      + "#rcj-btn-etat, #rcj-btn-config").remove();
   }
 
   /** Sous-traitant (décision utilisateur 31/10/2026) : SA caisse, rien d'autre — ni suivi des dépenses
