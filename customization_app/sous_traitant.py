@@ -239,18 +239,24 @@ def couleur_calendrier(employe: str):
 # --------------------------------------------------------------------------- droits
 
 def permission_query_conditions_tache(user=None):
-    """Un sous-traitant ne liste que SES tâches (calendrier, liste, Ma journée). Les autres : rien de changé."""
+    """Un sous-traitant ne liste que SES tâches (calendrier, liste, Ma journée). Les autres : les tâches des
+    employés de leur liste, comme Frappe le faisait (tache_lecture — le champ est dispensé des Permissions
+    utilisateur depuis le 18/11/2026 pour que la LECTURE d'une tâche soit ouverte à tous)."""
     emp = sous_traitant_courant(user)
-    if not emp or _est_supervision():
-        return ""
-    return "`tabTache de travail`.`custom_choix_du_staff` = %s" % frappe.db.escape(emp.name)
+    if emp and not _est_supervision():
+        return "`tabTache de travail`.`custom_choix_du_staff` = %s" % frappe.db.escape(emp.name)
+    from customization_app import tache_lecture
+    return tache_lecture.condition_liste_pour(user)
 
 
-def has_permission_tache(doc, user=None, permission_type=None):
+def has_permission_tache(doc, user=None, ptype=None, permission_type=None):
+    """Sous-traitant : SES tâches seulement, lecture comprise. Les autres : lire toute tâche, écrire seulement
+    celles des employés de leur liste (tache_lecture). `ptype` est le nom que Frappe transmet."""
     emp = sous_traitant_courant(user)
-    if not emp or _est_supervision():
-        return True
-    return doc.get("custom_choix_du_staff") == emp.name
+    if emp and not _est_supervision():
+        return doc.get("custom_choix_du_staff") == emp.name
+    from customization_app import tache_lecture
+    return tache_lecture.autorise(doc, user, ptype if ptype is not None else permission_type)
 
 
 def permission_query_conditions_verification(user=None):

@@ -583,6 +583,8 @@ app_include_js = [_js("customer_quick_entry.js"),
                   # Fiche tâche : un lien « Maps » cliquable sous « Lien Google Map » — le lien de la tâche, sinon
                   # celui de l'adresse, sinon sa position (dite approximative quand elle l'est) — tache_position.py.
                   _js("tache_position.js"),
+                  # Fiche tâche d'un employé hors de ma liste : ouverte à tous, mais en consultation seule (tache_lecture.py).
+                  _js("tache_lecture.js"),
                   _js("tache_cloture_partenaire.js"),
                   # Sous-traitants (30/10/2026) : accueil sur le calendrier + Ma journée, clôture mobile
                   # (articles de son stock + règlement), création en un geste depuis la liste des employés.

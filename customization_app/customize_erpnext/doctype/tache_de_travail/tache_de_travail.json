@@ -79,6 +79,7 @@
    "allow_in_quick_entry": 1,
    "fieldname": "custom_choix_du_staff",
    "fieldtype": "Link",
+   "ignore_user_permissions": 1,
    "label": "Choix du Staff",
    "link_filters": "[[\"Employee\",\"status\",\"=\",\"Active\"]]",
    "options": "Employee",
@@ -367,7 +368,7 @@
    "link_fieldname": "tache_de_travail"
   }
  ],
- "modified": "2026-11-18 22:00:00.000000",
+ "modified": "2026-11-18 23:00:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Tache de travail",
