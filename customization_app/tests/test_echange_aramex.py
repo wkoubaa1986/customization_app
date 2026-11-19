@@ -45,6 +45,23 @@ class TestBonDeLivraison(unittest.TestCase):
         self.assertEqual(len(E.ecarts_avec_le_bl([{"item_code": "Acc010-A", "qty": 1}], du_bl)), 1)  # pas sur ce bon
 
 
+class TestEntrepotDOrigine(unittest.TestCase):
+    """Ce qui revient est proposé dans l'entrepôt d'où il était sorti sur son bon de livraison d'origine."""
+
+    BL = [("Acc020-B", "Magasins - A&S"), ("Liv", "Magasins - A&S"), ("T33", "Hall - A&S")]
+
+    def test_l_entrepot_du_bon_d_origine(self):
+        self.assertEqual(E.entrepot_d_origine(self.BL, ["Acc020-B"]), "Magasins - A&S")
+        self.assertEqual(E.entrepot_d_origine(self.BL, ["T33"]), "Hall - A&S")
+
+    def test_plusieurs_entrepots_on_ne_devine_pas(self):
+        self.assertEqual(E.entrepot_d_origine(self.BL, ["Acc020-B", "T33"]), "")
+
+    def test_article_absent_du_bon_ou_bon_inconnu(self):
+        self.assertEqual(E.entrepot_d_origine(self.BL, ["Acc010-A"]), "")
+        self.assertEqual(E.entrepot_d_origine([], ["Acc020-B"]), "")
+
+
 class TestDateDeValidation(unittest.TestCase):
     """La sortie de stock est datée de la VALIDATION de la commande (docstatus 0 → 1 dans son historique)."""
 
@@ -70,6 +87,24 @@ class TestDateDeValidation(unittest.TestCase):
 
     def test_un_historique_illisible_est_ignore(self):
         self.assertIsNone(E.date_de_validation([{"creation": "2026-11-14 08:00:00", "data": "pas du json"}]))
+
+
+class TestReprise(unittest.TestCase):
+    """Le patch de reprise ne touche la correction manuelle du 18/11 que si elle est exactement celle qu'on connaît."""
+
+    def setUp(self):
+        from customization_app.patches import reprise_echange_warghui_photo_nabil as P
+        self.P = P
+
+    def test_la_correction_connue(self):
+        self.assertTrue(self.P.correction_attendue([("Acc020-A", 3.0, "Hall - A&S", None), ("Acc020-B", 3, None, "Hall - A&S")]))
+        self.assertTrue(self.P.correction_attendue([("Acc020-B", 3, "", "Hall - A&S"), ("Acc020-A", 3, "Hall - A&S", "")]))
+
+    def test_une_ecriture_modifiee_n_est_pas_touchee(self):
+        self.assertFalse(self.P.correction_attendue([("Acc020-A", 2.0, "Hall - A&S", None), ("Acc020-B", 3, None, "Hall - A&S")]))
+        self.assertFalse(self.P.correction_attendue([("Acc020-A", 3.0, "Magasins - A&S", None), ("Acc020-B", 3, None, "Hall - A&S")]))
+        self.assertFalse(self.P.correction_attendue([("Acc020-A", 3.0, "Hall - A&S", None), ("Acc020-B", 3, None, "Hall - A&S"), ("T33", 1, "Hall - A&S", None)]))
+        self.assertFalse(self.P.correction_attendue([]))
 
 
 class TestRetard(unittest.TestCase):

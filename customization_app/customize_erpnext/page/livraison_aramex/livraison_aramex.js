@@ -617,9 +617,12 @@ class LivraisonAramex {
       fields: [
         { fieldtype: "HTML", fieldname: "info" },
         { fieldtype: "HTML", fieldname: "photo_zone" },
-        // Où ranger ce qui revient : l'entrepôt de départ d'office, mais c'est ici qu'on choisit.
+        // Où ranger ce qui revient : d'office l'entrepôt d'où ces articles étaient sortis sur leur bon de livraison
+        // d'origine (ils retournent à leur place), mais c'est ici qu'on choisit.
         { fieldtype: "Link", fieldname: "entrepot", label: __("Entrepôt où rentrent les articles"), options: "Warehouse",
-          default: e.entrepot || "", reqd: 1, get_query: () => ({ filters: { is_group: 0, disabled: 0 } }) },
+          default: e.entrepot_retour || e.entrepot || "", reqd: 1,
+          description: e.bl_origine && e.entrepot_retour ? __("Proposé : l’entrepôt d’où ils étaient sortis sur le bon de livraison {0}.", [e.bl_origine]) : "",
+          get_query: () => ({ filters: { is_group: 0, disabled: 0 } }) },
         { fieldtype: "Small Text", fieldname: "note", label: __("Note (facultatif)") },
       ],
       primary_action_label: __("Rentrer en stock"),
