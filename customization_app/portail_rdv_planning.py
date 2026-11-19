@@ -761,59 +761,33 @@ def _candidats(config, jour, demi, secteur, contexte, employe, exclure):
     return pool, taches
 
 
-# Le pas des heures proposées au magasin (« Heure fixe »). 30 minutes, pas 15 (demande du 19/11/2026) : c'est la
-# durée d'un entretien et celle du battement — une heure fixée sur cette grille laisse autour d'elle des espaces
-# où d'autres rendez-vous tiennent encore. Au quart d'heure, « 17:15 » découpait la demi-journée en miettes.
-PAS_HEURE = 30
+def heures_possibles(entree, jour, demi, secteur, duree, config=None, gouvernorat=None):
+    """Les heures que le magasin peut fixer pour cet employé sur cette demi-journée. -> [datetime]. PURE (hors
+    lecture des fenêtres).
 
-
-def _places_restantes(intervalles, jour, demi, duree=None):
-    """Combien d'interventions COURTES (un entretien, par défaut) tiennent encore dans la demi-journée, posées au plus
-    tôt l'une après l'autre avec leur battement. C'est la mesure de ce qu'une heure fixe coûte. PURE (hors fenêtres)."""
-    duree = duree or min(DUREES.values())
-    pris, n = list(intervalles or []), 0
+    RÈGLE (demande du 19/11/2026) : on ne propose que les heures qui NE FONT PERDRE AUCUN CRÉNEAU — celles où l'app
+    aurait posé elle-même les rendez-vous l'un après l'autre : 30 min de battement après la dernière intervention (ou
+    le début de la fenêtre), puis de « durée + 30 min » en « durée + 30 min » selon le type. Un entretien :
+    13:30, 14:30, 15:30… ; une installation : 13:30, 15:15, 17:00. Fixer 14:00 pour un entretien aurait fermé la
+    place de 13:30 sans en ouvrir une autre : la demi-journée tombait de 5 à 4.
+    C'est le créneau automatique (`_premier_creneau`) rejoué jusqu'à ce que la demi-journée soit pleine : la première
+    heure proposée est toujours celle que l'app aurait prise seule."""
+    if _demi_faisable(entree, jour, demi, secteur, duree, config, gouvernorat) is None:
+        return []
+    pris = list((entree or {}).get(demi) or [])
+    out = []
     while True:
         h = _premier_creneau(pris, jour, demi, duree)
         if h is None:
-            return n
+            return out
+        out.append(h)
         pris.append((h, h + datetime.timedelta(minutes=duree)))
-        n += 1
-
-
-def cout_des_heures(entree, jour, demi, duree, heures):
-    """{heure: nombre de créneaux PERDUS en plus} — certaines heures fixes ferment la place d'un autre rendez-vous
-    (l'après-midi, 14:00 n'en laisse que 3 derrière quand 14:30 en laisse 4 autour). 0 = l'heure ne coûte rien de
-    plus que la meilleure. PURE (hors fenêtres)."""
-    pris = (entree or {}).get(demi) or []
-    reste = {h: _places_restantes(pris + [(h, h + datetime.timedelta(minutes=duree))], jour, demi) for h in heures}
-    mieux = max(reste.values(), default=0)
-    return {h: mieux - r for h, r in reste.items()}
-
-
-def heures_possibles(entree, jour, demi, secteur, duree, config=None, gouvernorat=None):
-    """Toutes les heures de début possibles pour cet employé sur cette demi-journée, par pas de 30 min — mêmes règles
-    que le créneau automatique : le secteur doit être permis, l'intervention tient dans la fenêtre, et il reste
-    30 min de battement avec chaque intervention déjà posée. -> [datetime]. PURE (hors lecture des fenêtres)."""
-    if _demi_faisable(entree, jour, demi, secteur, duree, config, gouvernorat) is None:
-        return []
-    debut_f, fin_f = fenetres()[demi]
-    fin = get_datetime("%s %s" % (jour, fin_f))
-    pas = datetime.timedelta(minutes=duree)
-    battement = datetime.timedelta(minutes=BATTEMENT)
-    pris = (entree or {}).get(demi) or []
-    out, h = [], get_datetime("%s %s" % (jour, debut_f))
-    while h + pas <= fin:
-        if all(h + pas + battement <= d or h >= f + battement for d, f in pris):
-            out.append(h)
-        h += datetime.timedelta(minutes=PAS_HEURE)
-    return out
 
 
 def heures_du_creneau(config, jour, demi, secteur, type_intervention, exclure=None,
                       contexte=None, gouvernorat=None, employe=None):
-    """Les heures que le magasin peut fixer sur cette demi-journée, chacune avec le technicien qui la prendrait (le
-    premier de l'ordre d'affectation qui peut) et ce qu'elle coûte en créneaux perdus chez lui.
-    -> [(datetime, employe, perte)], triées."""
+    """Les heures que le magasin peut fixer sur cette demi-journée, chacune avec le technicien qui la prendrait
+    (le premier de l'ordre d'affectation qui peut). -> [(datetime, employe)], triées."""
     duree = DUREES.get(type_intervention)
     if not duree or demi not in DEMIS:
         return []
@@ -822,12 +796,10 @@ def heures_du_creneau(config, jour, demi, secteur, type_intervention, exclure=No
     pool, taches = _candidats(config, jour, demi, secteur, contexte, employe, exclure)
     out = {}
     for qui in pool:
-        entree = taches.get((qui, jour))
-        possibles = heures_possibles(entree, jour, demi, secteur, duree, config, gouvernorat if contexte else None)
-        couts = cout_des_heures(entree, jour, demi, duree, possibles)
-        for h in possibles:
-            out.setdefault(h, (qui, couts[h]))
-    return [(h, qui, perte) for h, (qui, perte) in sorted(out.items())]
+        for h in heures_possibles(taches.get((qui, jour)), jour, demi, secteur, duree, config,
+                                  gouvernorat if contexte else None):
+            out.setdefault(h, qui)
+    return sorted(out.items())
 
 
 def placer(config, jour, demi, secteur, type_intervention, exclure=None,
