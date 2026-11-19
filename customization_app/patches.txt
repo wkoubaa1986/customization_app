@@ -134,3 +134,4 @@ customization_app.patches.avoir_bloc_paiement
 customization_app.patches.renommer_onglet_relances
 customization_app.patches.ordre_techniciens_portail_rdv
 customization_app.patches.reprise_echange_warghui_photo_nabil
+customization_app.patches.defaire_retour_nabil_inoubli
