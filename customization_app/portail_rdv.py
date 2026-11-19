@@ -761,9 +761,11 @@ def heures(jeton, adresse, type_intervention, date, demi_journee, employe=None):
     possibles = planning.heures_du_creneau(
         config, jour, demi_journee, doc_adresse.get("custom_secteur"), type_intervention,
         contexte=contexte, gouvernorat=gouvernorat, employe=employe)
-    noms = dict(frappe.get_all("Employee", filters={"name": ["in", list({e for _h, e in possibles}) or [""]]},
+    noms = dict(frappe.get_all("Employee", filters={"name": ["in", list({e for _h, e, _p in possibles}) or [""]]},
                                fields=["name", "employee_name"], as_list=True))
-    return {"heures": [{"heure": h.strftime("%H:%M"), "employe": noms.get(e) or e} for h, e in possibles]}
+    # `perte` : créneaux qu'un autre client ne pourra plus prendre si cette heure est fixée (0 = aucune).
+    return {"heures": [{"heure": h.strftime("%H:%M"), "employe": noms.get(e) or e, "perte": perte}
+                       for h, e, perte in possibles]}
 
 
 @frappe.whitelist(allow_guest=True, methods=["POST"])

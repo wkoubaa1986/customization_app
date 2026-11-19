@@ -37,18 +37,16 @@ class TestHeuresPossibles(AvecFenetres):
     def heures(self, entree, demi, duree, secteur="Secteur 1"):
         return [x.strftime("%H:%M") for x in PL.heures_possibles(entree, JOUR, demi, secteur, duree, CONFIG)]
 
-    def test_matin_vide_un_entretien_tous_les_quarts_d_heure_jusqu_a_midi(self):
-        v = self.heures(None, "matin", 30)
-        self.assertEqual((v[0], v[1], v[-1]), ("09:30", "09:45", "12:00"))
-        self.assertEqual(len(v), 11)
+    def test_matin_vide_un_entretien_toutes_les_demi_heures_jusqu_a_midi(self):
+        self.assertEqual(self.heures(None, "matin", 30), ["09:30", "10:00", "10:30", "11:00", "11:30", "12:00"])
 
     def test_une_installation_doit_finir_dans_la_fenetre(self):
-        self.assertEqual(self.heures(None, "matin", 75)[-1], "11:15")       # 11:15 + 75 min = 12:30
+        self.assertEqual(self.heures(None, "matin", 75)[-1], "11:00")       # 11:00 + 75 min = 12:15 ; 11:30 déborde
 
     def test_trente_minutes_de_battement_autour_d_une_intervention(self):
         entree = journee(matin=[(h(10, 30), h(11, 0))], secteurs_matin=["Secteur 1"])
         # avant : finir à 10:00 au plus tard → 09:30 seulement ; après : pas avant 11:30
-        self.assertEqual(self.heures(entree, "matin", 30), ["09:30", "11:30", "11:45", "12:00"])
+        self.assertEqual(self.heures(entree, "matin", 30), ["09:30", "11:30", "12:00"])
 
     def test_la_premiere_heure_proposee_est_celle_du_creneau_automatique(self):
         entree = journee(matin=[(h(9, 30), h(10, 0))], secteurs_matin=["Secteur 1"])
@@ -62,6 +60,30 @@ class TestHeuresPossibles(AvecFenetres):
 
     def test_journee_entiere_prise_aucune_heure(self):
         self.assertEqual(self.heures(journee(jour_entier=True), "matin", 30), [])
+
+
+class TestCoutDUneHeureFixe(AvecFenetres):
+    """Une heure fixe ne doit pas fermer la place d'un autre rendez-vous sans qu'on le sache."""
+
+    def couts(self, entree, demi, duree=30):
+        heures = PL.heures_possibles(entree, JOUR, demi, "Secteur 1", duree, CONFIG)
+        return {x.strftime("%H:%M"): p for x, p in PL.cout_des_heures(entree, JOUR, demi, duree, heures).items()}
+
+    def test_une_demi_journee_vide_contient_3_entretiens_le_matin_et_5_l_apres_midi(self):
+        self.assertEqual(PL._places_restantes([], JOUR, "matin"), 3)
+        self.assertEqual(PL._places_restantes([], JOUR, "apres_midi"), 5)
+
+    def test_le_matin_aucune_heure_ne_coute_de_creneau(self):
+        self.assertEqual(set(self.couts(None, "matin").values()), {0})
+
+    def test_l_apres_midi_les_heures_piles_coutent_un_creneau(self):
+        c = self.couts(None, "apres_midi")
+        self.assertEqual([h for h, p in c.items() if p], ["14:00", "15:00", "16:00", "17:00"])
+        self.assertEqual((c["13:30"], c["14:30"], c["17:30"]), (0, 0, 0))
+
+    def test_quand_il_ne_reste_qu_un_trou_aucune_heure_n_est_penalisee(self):
+        entree = journee(apres_midi=[(h(13, 30), h(16, 30))], secteurs_apres_midi=["Secteur 1"])
+        self.assertEqual(self.couts(entree, "apres_midi"), {"17:00": 0, "17:30": 0})
 
 
 class TestTechnicienImpose(AvecFenetres):

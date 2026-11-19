@@ -1447,11 +1447,16 @@
       if (!creneau_choisi || creneau_choisi.date + "|" + creneau_choisi.demi !== voulu) return;
       const liste = res.heures || [];
       sel.innerHTML = `<option value="">Demi-journée seulement — l’heure sera confirmée la veille</option>`
-        + liste.map((h) => `<option value="${h.heure}">${h.heure} — ${echapper(h.employe)}</option>`).join("");
+        + liste.map((h) => `<option value="${h.heure}">${h.heure} — ${echapper(h.employe)}${
+            h.perte ? ` · fait perdre ${h.perte} créneau${h.perte > 1 ? "x" : ""}` : ""}</option>`).join("");
+      const pertes = Object.fromEntries(liste.map((h) => [h.heure, h.perte || 0]));
       if (garder && liste.some((h) => h.heure === garder)) { sel.value = garder; heure_fixe = garder; }
       const maj = () => {
         aide.textContent = heure_fixe
-          ? "Heure fixe : annoncée au client dans son SMS (« vers » cette heure), l’optimisation des tournées ne la déplacera pas."
+          ? (pertes[heure_fixe]
+              ? "⚠️ Cette heure empêche de placer un autre rendez-vous dans la demi-journée : proposez plutôt une heure sans cette mention. "
+              : "")
+            + "Heure fixe : annoncée au client dans son SMS (« vers » cette heure), l’optimisation des tournées ne la déplacera pas."
           : "Sans heure choisie, l’app pose le premier créneau libre et l’heure reste ajustable.";
       };
       sel.onchange = () => { heure_fixe = sel.value; maj(); };

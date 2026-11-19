@@ -761,11 +761,37 @@ def _candidats(config, jour, demi, secteur, contexte, employe, exclure):
     return pool, taches
 
 
-PAS_HEURE = 15      # minutes : le pas des heures proposées au magasin (« Heure fixe »)
+# Le pas des heures proposées au magasin (« Heure fixe »). 30 minutes, pas 15 (demande du 19/11/2026) : c'est la
+# durée d'un entretien et celle du battement — une heure fixée sur cette grille laisse autour d'elle des espaces
+# où d'autres rendez-vous tiennent encore. Au quart d'heure, « 17:15 » découpait la demi-journée en miettes.
+PAS_HEURE = 30
+
+
+def _places_restantes(intervalles, jour, demi, duree=None):
+    """Combien d'interventions COURTES (un entretien, par défaut) tiennent encore dans la demi-journée, posées au plus
+    tôt l'une après l'autre avec leur battement. C'est la mesure de ce qu'une heure fixe coûte. PURE (hors fenêtres)."""
+    duree = duree or min(DUREES.values())
+    pris, n = list(intervalles or []), 0
+    while True:
+        h = _premier_creneau(pris, jour, demi, duree)
+        if h is None:
+            return n
+        pris.append((h, h + datetime.timedelta(minutes=duree)))
+        n += 1
+
+
+def cout_des_heures(entree, jour, demi, duree, heures):
+    """{heure: nombre de créneaux PERDUS en plus} — certaines heures fixes ferment la place d'un autre rendez-vous
+    (l'après-midi, 14:00 n'en laisse que 3 derrière quand 14:30 en laisse 4 autour). 0 = l'heure ne coûte rien de
+    plus que la meilleure. PURE (hors fenêtres)."""
+    pris = (entree or {}).get(demi) or []
+    reste = {h: _places_restantes(pris + [(h, h + datetime.timedelta(minutes=duree))], jour, demi) for h in heures}
+    mieux = max(reste.values(), default=0)
+    return {h: mieux - r for h, r in reste.items()}
 
 
 def heures_possibles(entree, jour, demi, secteur, duree, config=None, gouvernorat=None):
-    """Toutes les heures de début possibles pour cet employé sur cette demi-journée, au quart d'heure — mêmes règles
+    """Toutes les heures de début possibles pour cet employé sur cette demi-journée, par pas de 30 min — mêmes règles
     que le créneau automatique : le secteur doit être permis, l'intervention tient dans la fenêtre, et il reste
     30 min de battement avec chaque intervention déjà posée. -> [datetime]. PURE (hors lecture des fenêtres)."""
     if _demi_faisable(entree, jour, demi, secteur, duree, config, gouvernorat) is None:
@@ -785,8 +811,9 @@ def heures_possibles(entree, jour, demi, secteur, duree, config=None, gouvernora
 
 def heures_du_creneau(config, jour, demi, secteur, type_intervention, exclure=None,
                       contexte=None, gouvernorat=None, employe=None):
-    """Les heures que le magasin peut promettre sur cette demi-journée, chacune avec le technicien qui la prendrait
-    (le premier de l'ordre d'affectation qui peut). -> [(datetime, employe)], triées."""
+    """Les heures que le magasin peut fixer sur cette demi-journée, chacune avec le technicien qui la prendrait (le
+    premier de l'ordre d'affectation qui peut) et ce qu'elle coûte en créneaux perdus chez lui.
+    -> [(datetime, employe, perte)], triées."""
     duree = DUREES.get(type_intervention)
     if not duree or demi not in DEMIS:
         return []
@@ -795,10 +822,12 @@ def heures_du_creneau(config, jour, demi, secteur, type_intervention, exclure=No
     pool, taches = _candidats(config, jour, demi, secteur, contexte, employe, exclure)
     out = {}
     for qui in pool:
-        for h in heures_possibles(taches.get((qui, jour)), jour, demi, secteur, duree, config,
-                                  gouvernorat if contexte else None):
-            out.setdefault(h, qui)
-    return sorted(out.items())
+        entree = taches.get((qui, jour))
+        possibles = heures_possibles(entree, jour, demi, secteur, duree, config, gouvernorat if contexte else None)
+        couts = cout_des_heures(entree, jour, demi, duree, possibles)
+        for h in possibles:
+            out.setdefault(h, (qui, couts[h]))
+    return [(h, qui, perte) for h, (qui, perte) in sorted(out.items())]
 
 
 def placer(config, jour, demi, secteur, type_intervention, exclure=None,
