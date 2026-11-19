@@ -131,3 +131,4 @@ customization_app.patches.echeances_meme_jour
 customization_app.patches.type_transaction_defaut
 customization_app.patches.taxes_repliables_commande
 customization_app.patches.avoir_bloc_paiement
+customization_app.patches.renommer_onglet_relances

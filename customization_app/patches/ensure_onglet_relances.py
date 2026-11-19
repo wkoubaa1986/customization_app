@@ -5,7 +5,7 @@ donc c'est ici que la restriction est garantie. L'attribution du rôle aux compt
 import frappe
 
 ROLE = "Relances"
-WORKSPACE = "Relances et partenaire"
+WORKSPACE = "Relances, partenaires et réglages"   # renommé le 19/11/2026 (patch renommer_onglet_relances)
 
 
 def execute():

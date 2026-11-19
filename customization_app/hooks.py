@@ -748,7 +748,7 @@ fixtures = [
     {
         "doctype": "Workspace",
         "filters": [
-            ["name", "in", ["Selling", "Accounting", "Partenaire", "Analyse des Articles", "Buying", "Relances et partenaire", "Appels",
+            ["name", "in", ["Selling", "Accounting", "Partenaire", "Analyse des Articles", "Buying", "Relances, partenaires et réglages", "Appels",
                             "Clients Pro"]],  # « Clients Pro » : l'onglet du tableau de bord clients-b2b (ensure_onglet_clients_b2b)
         ],
     },
@@ -900,8 +900,11 @@ after_migrate = [
     "customization_app.patches.ensure_ensembles_produits.execute",
     # « Congés & récupérations » dans l'onglet HR + type de congé « Récupération (quinzaine) ».
     "customization_app.patches.ensure_conges_recuperations.execute",
-    # Onglet « Relances & partenaire » : réservé au rôle « Relances » (attribué par patch restreindre_onglet_relances).
+    # Onglet « Relances, partenaires et réglages » (ex « Relances et partenaire », renommé le 19/11/2026) : réservé au
+    # rôle « Relances » (attribué par patch restreindre_onglet_relances).
     "customization_app.patches.ensure_onglet_relances.execute",
+    # Bloc « Rendez-vous pris » en tête de cet onglet : calendrier à la main / app par un utilisateur / app par le client.
+    "customization_app.patches.ensure_bloc_rdv_pris.execute",
     # Onglet « Appels » (poste de Salma) : réservé au rôle « Appels » (attribué par patch attribuer_onglet_appels).
     "customization_app.patches.ensure_onglet_appels.execute",
     # « Tableau des appels » (appels et rendez-vous par utilisateur et par jour) dans l'onglet Appels.

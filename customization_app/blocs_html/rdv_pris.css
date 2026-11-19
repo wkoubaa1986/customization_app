@@ -1,0 +1,18 @@
+.rp{font-size:13px;color:var(--text-color);--rp-manuel:#2a78d6;--rp-app_magasin:#eb6834;--rp-app_client:#1baf7a}
+.rp.sombre{--rp-manuel:#3987e5;--rp-app_magasin:#d95926;--rp-app_client:#199e70}
+.rp-tete{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:10px;flex-wrap:wrap}
+.rp-titre{font-size:15px;font-weight:600}
+.rp-resume{color:var(--text-muted);font-size:12.5px;margin-top:2px}
+.rp-actions{display:flex;gap:6px;flex-wrap:wrap}
+.rp-btn{border:1px solid var(--border-color);background:var(--card-bg);border-radius:6px;padding:3px 10px;font-size:12px;cursor:pointer;color:var(--text-color)}
+.rp-btn:hover{background:var(--subtle-fg)}
+.rp-cartes{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px}
+.rp-carte{border:1px solid var(--border-color);border-radius:8px;background:var(--card-bg);padding:9px 12px;cursor:pointer}
+.rp-carte:hover{background:var(--subtle-fg)}
+.rp-carte .l{font-size:12px;color:var(--text-muted);display:flex;align-items:center;gap:6px}
+.rp-carte .v{font-size:24px;font-weight:600;line-height:1.2;margin-top:2px}
+.rp-carte .v small{font-size:13px;font-weight:500;color:var(--text-muted);margin-left:6px}
+.rp-carte .s{font-size:11.5px;color:var(--text-muted)}
+.rp-pastille{display:inline-block;width:10px;height:10px;border-radius:3px;flex:none}
+.rp-part{display:flex;gap:2px;height:12px;margin-top:10px}
+.rp-part div{border-radius:3px;min-width:2px}
