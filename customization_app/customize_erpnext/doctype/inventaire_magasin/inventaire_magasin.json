@@ -1,7 +1,7 @@
 {
  "actions": [],
  "autoname": "INV-.YYYY.-.#####",
- "creation": "2026-10-27 10:00:00.000000",
+ "creation": "2026-10-27 10:00:00",
  "doctype": "DocType",
  "editable_grid": 1,
  "engine": "InnoDB",
@@ -12,6 +12,7 @@
   "col1",
   "ouvert_par",
   "perimetre",
+  "articles",
   "note",
   "sec_lignes",
   "lignes",
@@ -37,26 +38,26 @@
   {
    "fieldname": "entrepot",
    "fieldtype": "Link",
-   "label": "Entrepôt",
-   "options": "Warehouse",
-   "reqd": 1,
    "in_list_view": 1,
-   "read_only": 1
+   "label": "Entrep\u00f4t",
+   "options": "Warehouse",
+   "read_only": 1,
+   "reqd": 1
   },
   {
    "fieldname": "date",
    "fieldtype": "Date",
-   "label": "Date",
-   "in_list_view": 1
+   "in_list_view": 1,
+   "label": "Date"
   },
   {
+   "default": "En cours",
    "fieldname": "statut",
    "fieldtype": "Select",
-   "label": "Statut",
-   "options": "En cours\nTerminé\nAnnulé",
-   "default": "En cours",
    "in_list_view": 1,
    "in_standard_filter": 1,
+   "label": "Statut",
+   "options": "En cours\nTermin\u00e9\nAnnul\u00e9",
    "read_only": 1
   },
   {
@@ -71,10 +72,10 @@
    "read_only": 1
   },
   {
+   "description": "Inventaire partiel : zones de l\u2019espace s\u00e9par\u00e9es par \u00ab | \u00bb (vide = tout le Magasin).",
    "fieldname": "perimetre",
    "fieldtype": "Small Text",
-   "label": "Périmètre (zones)",
-   "description": "Inventaire partiel : zones de l’espace séparées par « | » (vide = tout le Magasin).",
+   "label": "P\u00e9rim\u00e8tre (zones)",
    "read_only": 1
   },
   {
@@ -108,21 +109,21 @@
   {
    "fieldname": "nb_comptes",
    "fieldtype": "Int",
-   "label": "Comptés",
-   "read_only": 1,
-   "in_list_view": 1
+   "in_list_view": 1,
+   "label": "Compt\u00e9s",
+   "read_only": 1
   },
   {
    "fieldname": "nb_ecarts",
    "fieldtype": "Int",
-   "label": "Écarts",
-   "read_only": 1,
-   "in_list_view": 1
+   "in_list_view": 1,
+   "label": "\u00c9carts",
+   "read_only": 1
   },
   {
    "fieldname": "nb_bouges",
    "fieldtype": "Int",
-   "label": "Articles qui ont bougé entre comptage et clôture",
+   "label": "Articles qui ont boug\u00e9 entre comptage et cl\u00f4ture",
    "read_only": 1
   },
   {
@@ -132,7 +133,7 @@
   {
    "fieldname": "valeur_ecarts",
    "fieldtype": "Currency",
-   "label": "Valeur nette des écarts",
+   "label": "Valeur nette des \u00e9carts",
    "read_only": 1
   },
   {
@@ -150,24 +151,24 @@
   {
    "fieldname": "nb_zones_ajoutees",
    "fieldtype": "Int",
-   "label": "Emplacements ajoutés aux articles",
+   "label": "Emplacements ajout\u00e9s aux articles",
    "read_only": 1
   },
   {
    "fieldname": "sec_cloture",
    "fieldtype": "Section Break",
-   "label": "Clôture"
+   "label": "Cl\u00f4ture"
   },
   {
    "fieldname": "termine_le",
    "fieldtype": "Datetime",
-   "label": "Clôturé le",
+   "label": "Cl\u00f4tur\u00e9 le",
    "read_only": 1
   },
   {
    "fieldname": "termine_par",
    "fieldtype": "Link",
-   "label": "Clôturé par",
+   "label": "Cl\u00f4tur\u00e9 par",
    "options": "User",
    "read_only": 1
   },
@@ -178,7 +179,7 @@
   {
    "fieldname": "rapprochement",
    "fieldtype": "Link",
-   "label": "Écriture de stock (rapprochement)",
+   "label": "\u00c9criture de stock (rapprochement)",
    "options": "Stock Reconciliation",
    "read_only": 1
   },
@@ -192,53 +193,61 @@
   {
    "fieldname": "entree_stock",
    "fieldtype": "Link",
-   "label": "Ajustement des manquants (entrée)",
+   "label": "Ajustement des manquants (entr\u00e9e)",
    "options": "Stock Entry",
+   "read_only": 1
+  },
+  {
+   "description": "Inventaire PAR ARTICLES : les codes des articles choisis \u00e0 l\u2019ouverture. Vide = inventaire par zones (ou de tout le Magasin).",
+   "fieldname": "articles",
+   "fieldtype": "Small Text",
+   "label": "Articles choisis",
    "read_only": 1
   }
  ],
  "links": [],
- "modified": "2026-11-10 14:30:00.000000",
+ "modified": "2026-11-19 17:56:34.386079",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Inventaire Magasin",
- "naming_rule": "Expression (old style)",
+ "naming_rule": "Expression",
  "owner": "Administrator",
  "permissions": [
   {
-   "role": "System Manager",
-   "read": 1,
-   "write": 1,
    "create": 1,
    "delete": 1,
-   "print": 1,
    "email": 1,
-   "share": 1,
-   "report": 1,
-   "export": 1
-  },
-  {
-   "role": "Inventaire Magasin",
-   "read": 1,
-   "write": 1,
-   "create": 1,
+   "export": 1,
    "print": 1,
-   "report": 1,
-   "export": 1
-  },
-  {
-   "role": "Responsable magasin",
    "read": 1,
    "report": 1,
-   "export": 1
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
   },
   {
-   "role": "Stock Manager",
+   "create": 1,
+   "export": 1,
+   "print": 1,
    "read": 1,
    "report": 1,
-   "export": 1
+   "role": "Inventaire Magasin",
+   "write": 1
+  },
+  {
+   "export": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Responsable magasin"
+  },
+  {
+   "export": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Stock Manager"
   }
  ],
+ "row_format": "Dynamic",
  "sort_field": "modified",
  "sort_order": "DESC",
  "states": [],

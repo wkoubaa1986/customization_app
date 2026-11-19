@@ -60,6 +60,19 @@ class TestCalculPur(unittest.TestCase):
         self.assertTrue(I.perimetres_se_recoupent(["Magasin - A1", "Magasin - A2"], ["Magasin - A2"]))
         self.assertFalse(I.perimetres_se_recoupent(["Magasin - A1"], ["Magasin - B1", I.SANS_ZONE]))
 
+    def test_inventaire_par_articles_libelle_et_conflits(self):
+        """Inventaire PAR ARTICLES (19/11/2026) : son libellé, ce qu'est un inventaire complet, et la règle
+        « un article n'est jamais sur deux feuilles ouvertes »."""
+        self.assertEqual(I.libelle_perimetre([], None, ["Acc020-A", "Acc020-B"]), "Articles : Acc020-A, Acc020-B")
+        self.assertEqual(I.libelle_perimetre([], None, ["A", "B", "C", "D", "E", "F"]), "Articles : A, B, C, D (+2)")
+        self.assertEqual(I.libelle_perimetre([]), "Tout le Magasin")
+        self.assertTrue(I.est_complet([], []))
+        self.assertFalse(I.est_complet([], ["Acc020-A"]))
+        self.assertFalse(I.est_complet(["Magasin - A1"], []))
+        self.assertEqual(I.articles_deja_en_cours(["A", "B"], {"INV-1": ["X", "B"], "INV-2": ["A"]}), ("INV-1", ["B"]))
+        self.assertEqual(I.articles_deja_en_cours(["A"], {"INV-1": ["X"]}), (None, []))
+        self.assertEqual(I.articles_deja_en_cours([], {"INV-1": ["X"]}), (None, []))
+
     def test_quantite_rapprochee(self):
         self.assertEqual(I.quantite_rapprochee(12, 10, 12), 10)       # rien n'a bougé : le compté
         self.assertEqual(I.quantite_rapprochee(12, 10, 9), 7)         # 3 vendus depuis : l'écart −2 reste
@@ -512,6 +525,50 @@ class TestInventaire(unittest.TestCase):
         self.assertEqual([(x["item_code"], x["qte_rapprochee"]) for x in b["bouges"]], [(i1, s1 - 5)])
         r = I.cloturer_inventaire(name)
         self.assertEqual((r["nb_bouges"], self._stock(i1)), (1, s1 - 5))
+
+    def test_inventaire_par_articles(self):
+        """On choisit des articles : la feuille ne contient qu'eux, avec leurs zones ; un article n'est jamais sur
+        deux feuilles ouvertes ; un tel inventaire ne couvre aucune zone et n'est pas « tout le Magasin »."""
+        import frappe
+        i1, i2, i3 = self.items
+        z1 = self.zone
+        if Z._ajouter(i1, z1):
+            Z._resynchroniser(i1)
+        a = I.ouvrir_inventaire(articles=json.dumps([i1, i2]))
+        self.assertEqual(I.ouvrir_inventaire(articles=[i2, i1]), a)            # mêmes articles = repris
+        d = I.detail_inventaire(a)
+        self.assertEqual({l["item_code"] for l in d["lignes"]}, {i1, i2})
+        self.assertIn(z1, self._ligne(d, i1)["zones"])                         # on voit où il est rangé
+        fiche = d["fiche"]
+        self.assertEqual((sorted(fiche["articles"]), fiche["perimetre"], fiche["complet"]), (sorted([i1, i2]), [], False))
+        self.assertTrue(fiche["perimetre_libelle"].startswith("Articles : "))
+        with self.assertRaises(frappe.ValidationError):                        # i1 déjà en cours : sa zone est refusée
+            I.ouvrir_inventaire([z1])
+        with self.assertRaises(frappe.ValidationError):                        # ... et un autre choix qui le contient
+            I.ouvrir_inventaire(articles=[i1, i3])
+        with self.assertRaises(frappe.ValidationError):                        # tout le Magasin : refusé aussi
+            I.ouvrir_inventaire()
+        with self.assertRaises(frappe.ValidationError):                        # zones ET articles : il faut choisir
+            I.ouvrir_inventaire([z1], [i3])
+        with self.assertRaises(frappe.ValidationError):
+            I.ouvrir_inventaire(articles=["ARTICLE-QUI-N-EXISTE-PAS"])
+        b = I.ouvrir_inventaire(articles=[i3])                                 # un autre article : en parallèle
+        self.assertNotEqual(a, b)
+        etat = I.inventaires_etat()
+        self.assertEqual([v["name"] for v in etat["ouverts"]], [a, b])
+        self.assertFalse(any(v["complet"] for v in etat["ouverts"]))
+        hz = {z["name"]: z for z in etat["zones_historique"]}
+        self.assertIsNone(hz[z1]["en_cours"])                                  # il ne « couvre » pas la zone
+        pris = {x["code"]: x["en_cours"] for x in I.apercu_ouverture()["articles"]}
+        self.assertEqual((pris[i1], pris[i2], pris[i3]), (a, a, b))
+        # Le comptage et la clôture sont ceux de tout inventaire.
+        s1 = self._stock(i1)
+        I.enregistrer_inventaire(a, json.dumps({i1: {"cases": {zone: (s1 - 1 if k == 0 else 0)
+                                                              for k, zone in enumerate(self._ligne(d, i1)["zones"])}}}))
+        I.cloturer_inventaire(a)
+        self.assertEqual(self._stock(i1), s1 - 1)
+        apres = {z["name"]: z for z in I.inventaires_etat()["zones_historique"]}
+        self.assertNotEqual(apres[z1]["dernier_inventaire"], a)                # clôturé, il ne date pas la zone
 
     def test_inventaire_partiel_par_zone(self):
         """Un périmètre = des zones : feuille limitée, inventaires parallèles sans recoupement, un complet exclu

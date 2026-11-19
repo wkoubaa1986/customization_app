@@ -22,6 +22,12 @@ article rangé à deux endroits garde toutes ses cases : le compté reste compar
 tout le Magasin. Plusieurs inventaires peuvent être ouverts en même temps si leurs périmètres ne se recoupent pas ;
 un inventaire complet exclut tous les autres. La liste montre, zone par zone, la date du dernier inventaire clôturé.
 
+Inventaires PAR ARTICLES (demande du 19/11/2026) : au lieu de zones, on choisit des articles ; la feuille ne contient
+qu'eux, avec toutes leurs cases (on voit où chacun est rangé). Champ `articles` de la fiche. Un tel inventaire ne
+« couvre » aucune zone (l'historique par zone l'ignore) et ne reçoit pas les articles arrivés au Magasin entre-temps.
+RÈGLE COMMUNE : un article n'est jamais sur deux feuilles ouvertes à la fois — un inventaire par zones qui contient un
+article en cours d'inventaire par articles est refusé, et inversement.
+
 Accès : rôle « Inventaire Magasin » (koubaawassim, Nejib Koubaa, Hedi ibidhii — responsable principal du
 magasin — par patch) ou System Manager.
 """
@@ -200,12 +206,41 @@ def _perimetre(v) -> list[str]:
     return [z for z in (v.get("perimetre") or "").split(Z.SEPARATEUR) if z]
 
 
-def libelle_perimetre(zones: list[str], codes: dict[str, str] | None = None) -> str:
-    """« Tout le Magasin », sinon les codes des zones (« A1, A2, Non rangé »). PURE."""
+def _articles_choisis(v) -> list[str]:
+    """Les articles d'un inventaire PAR ARTICLES (vide pour un inventaire par zones ou complet)."""
+    return [a for a in (v.get("articles") or "").split(Z.SEPARATEUR) if a]
+
+
+MAX_ARTICLES_LIBELLE = 4
+
+
+def libelle_perimetre(zones: list[str], codes: dict[str, str] | None = None, articles: list[str] | None = None) -> str:
+    """« Tout le Magasin », les codes des zones (« A1, A2, Non rangé »), ou les articles choisis
+    (« Articles : Acc020-A, Acc020-B (+3) »). PURE."""
+    if articles:
+        debut = ", ".join(articles[:MAX_ARTICLES_LIBELLE])
+        reste = len(articles) - MAX_ARTICLES_LIBELLE
+        return "Articles : %s%s" % (debut, " (+%d)" % reste if reste > 0 else "")
     if not zones:
         return "Tout le Magasin"
     codes = codes or {}
     return ", ".join("Non rangé" if z == SANS_ZONE else codes.get(z) or z for z in zones)
+
+
+def est_complet(zones: list[str], articles: list[str]) -> bool:
+    """Ni zones ni articles choisis = l'inventaire de TOUT le Magasin. PURE."""
+    return not zones and not articles
+
+
+def articles_deja_en_cours(voulus, feuilles_ouvertes: dict) -> tuple:
+    """Un article n'est jamais sur deux feuilles ouvertes. -> (inventaire, [articles communs]) du premier conflit,
+    ou (None, []). `feuilles_ouvertes` : {inventaire: articles de sa feuille}. PURE."""
+    voulus = set(voulus or [])
+    for nom, presents in (feuilles_ouvertes or {}).items():
+        communs = sorted(voulus & set(presents or []))
+        if communs:
+            return nom, communs
+    return None, []
 
 
 def _codes_zones() -> dict[str, str]:
@@ -275,7 +310,9 @@ def _resume(v) -> dict:
             "termine_par": frappe.utils.get_fullname(v.termine_par) if v.termine_par else None,
             "rapprochement": v.rapprochement, "ecritures": _ecritures(v), "note": v.note, "nb_bouges": cint(v.nb_bouges),
             "nb_zones_ajoutees": cint(v.nb_zones_ajoutees), "nb_sans_taux": cint(v.nb_sans_taux),
-            "perimetre": _perimetre(v), "perimetre_libelle": libelle_perimetre(_perimetre(v), _codes_zones())}
+            "perimetre": _perimetre(v), "articles": _articles_choisis(v),
+            "complet": est_complet(_perimetre(v), _articles_choisis(v)),
+            "perimetre_libelle": libelle_perimetre(_perimetre(v), _codes_zones(), _articles_choisis(v))}
 
 
 def en_cours():
@@ -292,10 +329,12 @@ def _historique_zones() -> list[dict]:
     qui la couvrait (un inventaire complet couvre tout)."""
     zones = [{"name": z.name, "libelle": z.name if z.est_espace else z.code} for z in zones_de_l_espace()
              if not z.est_espace] + [{"name": SANS_ZONE, "libelle": "Non rangé"}]
-    termines = frappe.get_all(INV, filters={"statut": TERMINE}, fields=["name", "termine_le", "perimetre"],
+    termines = frappe.get_all(INV, filters={"statut": TERMINE}, fields=["name", "termine_le", "perimetre", "articles"],
                               order_by="termine_le desc")
-    en_cours_ = frappe.get_all(INV, filters={"statut": EN_COURS}, fields=["name", "perimetre"])
+    en_cours_ = frappe.get_all(INV, filters={"statut": EN_COURS}, fields=["name", "perimetre", "articles"])
     def couvre(inv, z):
+        if (inv.articles or "").strip():        # inventaire par articles : quelques articles, aucune zone entière
+            return False
         p = [x for x in (inv.perimetre or "").split(Z.SEPARATEUR) if x]
         return not p or z in p
     for z in zones:
@@ -343,36 +382,100 @@ def _recalculer(v):
     v.nb_lignes = len(v.lignes)
 
 
+def _ligne_article(magasin: str, code: str) -> dict | None:
+    """La ligne de feuille d'un article actif suivi en stock, même s'il n'a encore ni stock ni zone au Magasin."""
+    i = frappe.db.get_value("Item", code, ["item_name", "disabled", "is_stock_item", "valuation_rate"], as_dict=True)
+    if not i or i.disabled or not i.is_stock_item:
+        return None
+    b = frappe.db.get_value("Bin", {"item_code": code, "warehouse": magasin}, ["actual_qty", "valuation_rate"], as_dict=True) or {}
+    return {"item_code": code, "item_name": i.item_name, "qte_systeme": flt(b.get("actual_qty"), 6),
+            "taux": flt(b.get("valuation_rate"), 6) or flt(i.valuation_rate, 6),
+            "zones": Z.SEPARATEUR.join(_zones_par_article().get(code, [])) or None}
+
+
 @frappe.whitelist(methods=["POST"])
-def ouvrir_inventaire(zones=None):
-    """Ouvre un inventaire du Magasin : complet (`zones` vide) ou PARTIEL (liste de zones de l'espace et/ou
-    `SANS_ZONE`). Un inventaire ouvert au même périmètre est repris ; un périmètre qui recoupe un inventaire
-    ouvert est refusé (un complet exclut tout le reste)."""
+def ouvrir_inventaire(zones=None, articles=None):
+    """Ouvre un inventaire du Magasin : complet (rien de choisi), PARTIEL par zones (liste de zones de l'espace et/ou
+    `SANS_ZONE`) ou PAR ARTICLES (liste de codes). Un inventaire ouvert au même périmètre est repris ; un périmètre
+    qui recoupe un inventaire ouvert est refusé (un complet exclut tout le reste ; un article n'est jamais sur deux
+    feuilles ouvertes)."""
     _acces()
     zones = json.loads(zones) if isinstance(zones, str) else (zones or [])
+    articles = json.loads(articles) if isinstance(articles, str) else (articles or [])
+    zones, articles = list(dict.fromkeys(zones)), list(dict.fromkeys(a for a in articles if a))
+    if zones and articles:
+        frappe.throw(_("Choisissez des zones OU des articles, pas les deux dans le même inventaire."))
     connues = {z.name for z in zones_de_l_espace()} | {SANS_ZONE}
     inconnues = [z for z in zones if z not in connues]
     if inconnues:
         frappe.throw(_("Zone hors de l’espace {0} : {1}").format(espace() or "du Magasin", ", ".join(inconnues)))
-    zones = list(dict.fromkeys(zones))
+    m = S.magasin()
+    S._verifier_entrepot(m)
+
+    # La feuille que cet inventaire aurait : par articles, les articles choisis ; sinon ceux du périmètre.
+    if articles:
+        du_magasin = {a["item_code"]: a for a in _articles_magasin(m)}
+        lignes = []
+        for code in articles:
+            ligne = du_magasin.get(code) or _ligne_article(m, code)
+            if not ligne:
+                frappe.throw(_("{0} n’est pas un article actif suivi en stock.").format(code))
+            lignes.append(ligne)
+        lignes.sort(key=lambda l: ((l["item_name"] or l["item_code"] or "").lower(), l["item_code"]))
+    else:
+        lignes = _articles_magasin(m, zones)
+
+    feuilles_par_articles = {}
     for n in ouverts():
-        p = _perimetre(frappe.get_doc(INV, n))
+        doc = frappe.get_doc(INV, n)
+        p, arts = _perimetre(doc), _articles_choisis(doc)
+        if arts:
+            if articles and set(arts) == set(articles):
+                return n
+            if est_complet(zones, articles):
+                frappe.throw(_("L’inventaire {0} ({1}) est en cours : clôturez-le avant d’ouvrir un inventaire de tout le Magasin.")
+                             .format(n, libelle_perimetre(p, None, arts)))
+            feuilles_par_articles[n] = [l.item_code for l in doc.lignes]
+            continue
+        if articles:
+            if est_complet(p, arts):
+                frappe.throw(_("L’inventaire {0} de tout le Magasin est en cours : reprenez-le ou clôturez-le d’abord.").format(n))
+            feuilles_par_articles[n] = [l.item_code for l in doc.lignes]      # un partiel par zones : ses articles sont pris
+            continue
         if set(p) == set(zones):
             return n
         if perimetres_se_recoupent(p, zones):
             frappe.throw(_("L’inventaire {0} ({1}) est en cours sur ce périmètre : reprenez-le ou clôturez-le d’abord.")
                          .format(n, libelle_perimetre(p, _codes_zones())))
-    m = S.magasin()
-    S._verifier_entrepot(m)
+    autre, communs = articles_deja_en_cours([l["item_code"] for l in lignes], feuilles_par_articles)
+    if autre:
+        frappe.throw(_("{0} {1} déjà en cours d’inventaire dans {2} : clôturez-le d’abord, ou retirez {3} de votre choix.").format(
+            ", ".join(communs[:5]) + (" (+%d)" % (len(communs) - 5) if len(communs) > 5 else ""),
+            "est" if len(communs) == 1 else "sont", autre, "cet article" if len(communs) == 1 else "ces articles"))
+
     v = frappe.new_doc(INV)
     v.update({"entrepot": m, "date": nowdate(), "statut": EN_COURS, "ouvert_par": frappe.session.user,
-              "perimetre": Z.SEPARATEUR.join(zones) or None})
-    for a in _articles_magasin(m, zones):
+              "perimetre": Z.SEPARATEUR.join(zones) or None, "articles": Z.SEPARATEUR.join(articles) or None})
+    for a in lignes:
         v.append("lignes", a)
     _recalculer(v)
     v.flags.ignore_permissions = True
     v.insert()
     return v.name
+
+
+@frappe.whitelist()
+def apercu_ouverture():
+    """Ce que le dialogue « Ouvrir un inventaire » montre AVANT d'ouvrir : chaque article du Magasin avec son stock et
+    ses zones (l'écran en déduit les articles de chaque zone), et l'inventaire ouvert qui le porte déjà."""
+    _acces()
+    pris = {}
+    for n in ouverts():
+        for l in frappe.get_doc(INV, n).lignes:
+            pris[l.item_code] = n
+    return {"articles": [{"code": a["item_code"], "nom": a["item_name"], "qte": a["qte_systeme"],
+                          "zones": [z for z in (a["zones"] or "").split(Z.SEPARATEUR) if z],
+                          "en_cours": pris.get(a["item_code"])} for a in _articles_magasin(S.magasin())]}
 
 
 def _ouvert(name):
@@ -396,7 +499,9 @@ def _rafraichir(v) -> bool:
             l.qte_systeme = nouveau
             change = True
     presents = {l.item_code for l in v.lignes}
-    nouveaux = [a for a in _articles_magasin(v.entrepot, _perimetre(v)) if a["item_code"] not in presents]
+    # Un inventaire PAR ARTICLES garde les articles choisis : les nouveaux venus du Magasin ne le concernent pas.
+    nouveaux = [] if _articles_choisis(v) else [
+        a for a in _articles_magasin(v.entrepot, _perimetre(v)) if a["item_code"] not in presents]
     if nouveaux:
         change = True
         for a in nouveaux:
@@ -542,6 +647,9 @@ def ajouter_article(name, item_code, zone):
         Z._resynchroniser(item_code)
         l.zones_ajoutees = Z.SEPARATEUR.join(_zones_ajoutees(l) + [zone])
     _poser_zones(l)
+    # Inventaire par articles : l'article ajouté en cours de route rejoint la liste des articles choisis.
+    if _articles_choisis(v) and item_code not in _articles_choisis(v):
+        v.articles = Z.SEPARATEUR.join(_articles_choisis(v) + [item_code])
     v.lignes.sort(key=lambda ligne: ((ligne.item_name or ligne.item_code or "").lower(), ligne.item_code))
     for idx, ligne in enumerate(v.lignes, 1):
         ligne.idx = idx

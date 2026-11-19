@@ -1389,7 +1389,7 @@ class StockEntrepots {
         <div class="plan">Inventaire <b>complet</b> ou <b>partiel</b> (quelques zones à la fois, plusieurs en parallèle tant qu’ils ne se recoupent pas) : seuls les articles rangés dans les zones choisies sont sur la feuille.</div>
         ${ouverts.map((ec) => `<div class="plan">📝 ${peri(ec)} en cours depuis le <b>${se_dt(ec.date)}</b>${ec.ouvert_par ? ` (${se_esc(ec.ouvert_par)})` : ""} : <b>${ec.nb_comptes}/${ec.nb_lignes}</b> comptés · <b class="${ec.nb_ecarts ? "neg" : "pos"}">${ec.nb_ecarts} écart(s)</b>${ec.nb_ecarts ? ` · ${se_argent(ec.valeur_ecarts)}` : ""}
             <button type="button" class="btn btn-primary btn-sm" data-reprendre="${se_esc(ec.name)}" style="margin-left:8px">Reprendre</button></div>`).join("")}
-        ${ouverts.some((v) => !(v.perimetre || []).length) ? "" : `<button type="button" class="btn btn-primary" data-ouvrir>▶ Ouvrir un inventaire${ouverts.length ? " partiel" : ""}</button>`}
+        ${ouverts.some((v) => v.complet) ? "" : `<button type="button" class="btn btn-primary" data-ouvrir>▶ Ouvrir un inventaire${ouverts.length ? " partiel" : ""}</button>`}
         ${res.responsable ? `<button type="button" class="btn btn-default" data-famille style="margin-left:6px" title="Une famille d’articles sur une période : entrées, sorties, achats, rapprochements, erreurs de saisie probables, relecture IA">📊 Analyser une famille</button>` : ""}
       </div>
       <div class="se-titre">📍 Zones : dernier inventaire</div>
@@ -1400,25 +1400,149 @@ class StockEntrepots {
     $c.find("[data-annules]").on("click", (ev) => { const on = $c.find(".se-hist-inv").toggleClass("voir-annules").hasClass("voir-annules"); $(ev.currentTarget).toggleClass("on", on).text(on ? "Masquer les annulés" : "Voir les annulés"); });
     $c.find("[data-retour]").on("click", () => this.montrer("solde"));
     $c.find("[data-famille]").on("click", () => this.analyserFamille());
-    $c.find("[data-ouvrir]").on("click", () => {
-      // Périmètre : zones cochées = inventaire partiel ; rien de coché = tout le Magasin (refusé si un partiel est ouvert).
-      const prises = {}; ouverts.forEach((v) => (v.perimetre || []).forEach((z) => { prises[z] = v.name; }));
-      const opts = (res.zones || []).filter((z) => !z.est_espace && !prises[z.name]).map((z) => ({ label: z.code, value: z.name }));
-      if (!prises[SANS]) opts.push({ label: "Non rangé (sans zone)", value: SANS });
-      const dlg = new frappe.ui.Dialog({ title: "▶ Ouvrir un inventaire", fields: [
-          { fieldtype: "HTML", fieldname: "aide", options: `<div class="se-note" style="margin-bottom:8px">Cochez les zones à inventorier (<b>inventaire partiel</b>) ; rien de coché = <b>tout le Magasin</b>.${Object.keys(prises).length ? `<br>Déjà en cours (non proposées) : ${Object.keys(prises).map((z) => se_esc(z === SANS ? "Non rangé" : ((res.zones || []).find((x) => x.name === z) || { code: z }).code)).join(", ")}.` : ""}</div>` },
-          { fieldtype: "MultiCheck", fieldname: "zones", label: "Zones", options: opts, columns: 3 }],
-        primary_action_label: "Ouvrir",
-        primary_action: async (v) => {
-          const zones = v.zones || [];
-          if (!zones.length && ouverts.length) { frappe.msgprint("Un inventaire partiel est en cours : clôturez-le avant d’ouvrir un inventaire de tout le Magasin, ou cochez des zones."); return; }
-          dlg.hide();
-          const name = (await frappe.call({ method: SE_INV + "ouvrir_inventaire", args: { zones: JSON.stringify(zones) }, freeze: true, freeze_message: "Photographie du stock du Magasin…" })).message;
-          this.ouvrirInventaire(name);
-        } });
-      dlg.show();
-    });
+    $c.find("[data-ouvrir]").on("click", () => this.dialogueOuvrirInventaire(res, ouverts));
     $c.find("[data-reprendre], [data-voir]").on("click", (e) => this.ouvrirInventaire($(e.currentTarget).attr("data-reprendre") || $(e.currentTarget).attr("data-voir")));
+  }
+
+  /**
+   * « ▶ Ouvrir un inventaire » : deux façons de choisir ce qu'on compte (demande du 19/11/2026).
+   *  - PAR ZONES : une ligne par zone, avec le nombre d'articles et leur liste dépliable — on voit ce qu'on va compter
+   *    avant d'ouvrir. Rien de coché = tout le Magasin.
+   *  - PAR ARTICLES : on cherche des articles, chacun montre les zones où il est rangé ; la feuille ne contient qu'eux.
+   * Un article déjà sur une feuille ouverte est signalé : il ne peut pas être compté deux fois en même temps.
+   */
+  async dialogueOuvrirInventaire(res, ouverts) {
+    const SANS = res.sans_zone;
+    const ap = (await frappe.call({ method: SE_INV + "apercu_ouverture", freeze: true, freeze_message: "Lecture du Magasin…" })).message || {};
+    const articles = ap.articles || [];
+    const prises = {}; ouverts.forEach((v) => (v.perimetre || []).forEach((z) => { prises[z] = v.name; }));
+    const hist = {}; (res.zones_historique || []).forEach((z) => { hist[z.name] = z; });
+    const codeZone = {}; (res.zones || []).forEach((z) => { codeZone[z.name] = z.est_espace ? z.name : z.code; });
+    const libZone = (n) => (n === SANS ? "Non rangé" : codeZone[n] || n);
+    const parZone = {};
+    articles.forEach((a) => (a.zones.length ? a.zones : [SANS]).forEach((z) => (parZone[z] = parZone[z] || []).push(a)));
+    const zones = (res.zones || []).filter((z) => !z.est_espace).map((z) => z.name).concat([SANS]);
+    const choisies = new Set(), arts = new Set();
+    let onglet = "zones";
+    const pluriel = (n, mot) => `${n} ${mot}${n > 1 ? "s" : ""}`;
+
+    const dlg = new frappe.ui.Dialog({ title: "▶ Ouvrir un inventaire", size: "large",
+      fields: [{ fieldtype: "HTML", fieldname: "corps" }],
+      primary_action_label: "Ouvrir",
+      primary_action: async () => {
+        const args = {};
+        if (onglet === "articles") {
+          if (!arts.size) { frappe.msgprint("Choisissez au moins un article à inventorier."); return; }
+          args.articles = JSON.stringify([...arts]);
+        } else {
+          if (!choisies.size && ouverts.length) { frappe.msgprint("Un inventaire est en cours : clôturez-le avant d’ouvrir un inventaire de tout le Magasin, ou cochez des zones."); return; }
+          args.zones = JSON.stringify([...choisies]);
+        }
+        const name = (await frappe.call({ method: SE_INV + "ouvrir_inventaire", args, freeze: true, freeze_message: "Photographie du stock du Magasin…" })).message;
+        dlg.hide();
+        this.ouvrirInventaire(name);
+      } });
+    const $b = dlg.fields_dict.corps.$wrapper;
+    const ligneArticle = (a) => `<div class="se-oi-art"><b>${se_esc(a.code)}</b> <span>${se_esc(a.nom || "")}</span><span class="q">${se_q(a.qte)}</span></div>`;
+    const ligneZone = (z) => {
+      const liste = parZone[z] || [], h = hist[z] || {}, prise = prises[z];
+      const quand = prise ? `<span class="se-oi-prise">en cours (${se_esc(prise)})</span>` : h.dernier ? `dernier inventaire ${se_esc(se_dt(h.dernier))}` : `<span class="se-oi-jamais">jamais inventoriée</span>`;
+      return `<div class="se-oi-zone ${prise ? "prise" : ""}" data-zone="${se_esc(z)}">
+        <div class="tete">
+          <label><input type="checkbox" data-coche ${prise ? "disabled" : ""}> <b>${se_esc(libZone(z))}</b></label>
+          <span class="se-note">${pluriel(liste.length, "article")} · ${quand}</span>
+          ${liste.length ? `<span class="se-oi-voir" data-deplier>▾ voir les articles</span>` : ""}
+        </div><div class="se-oi-liste" style="display:none"></div></div>`;
+    };
+    $b.html(`<style>
+        .se-oi-onglets{display:flex;gap:6px;margin-bottom:10px}
+        .se-oi-onglets button{flex:1;padding:8px 6px;font-weight:600;font-size:13px;border:1.5px solid var(--border-color);border-radius:8px;background:var(--card-bg);cursor:pointer;color:var(--text-muted)}
+        .se-oi-onglets button.on{border-color:var(--primary);color:var(--primary);background:var(--subtle-accent,var(--subtle-fg))}
+        .se-oi-zones,.se-oi-resultats{max-height:52vh;overflow:auto;border:1px solid var(--border-color);border-radius:8px}
+        .se-oi-zone{border-bottom:1px solid var(--border-color);padding:7px 10px}
+        .se-oi-zone:last-child{border-bottom:0} .se-oi-zone.prise{opacity:.6}
+        .se-oi-zone .tete{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+        .se-oi-zone label{margin:0;min-width:120px;cursor:pointer;display:flex;align-items:center;gap:8px}
+        .se-oi-voir{margin-left:auto;font-size:12px;color:var(--primary);cursor:pointer;white-space:nowrap}
+        .se-oi-liste{margin:6px 0 2px 26px;border-left:2px solid var(--border-color);padding-left:10px}
+        .se-oi-art{display:flex;gap:8px;font-size:12.5px;padding:2px 0;align-items:baseline}
+        .se-oi-art span{color:var(--text-muted);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .se-oi-art .q{flex:none;font-weight:600;color:var(--text-color)}
+        .se-oi-prise{color:var(--orange-600,#c2410c);font-weight:600} .se-oi-jamais{color:var(--red-500,#dc2626)}
+        .se-oi-choisis{display:flex;flex-wrap:wrap;gap:5px;margin:8px 0}
+        .se-oi-choisis span{background:var(--subtle-accent,var(--subtle-fg));border:1px solid var(--primary);border-radius:14px;padding:2px 9px;font-size:12px;cursor:pointer}
+        .se-oi-res{display:flex;gap:9px;align-items:flex-start;padding:7px 10px;border-bottom:1px solid var(--border-color);cursor:pointer;margin:0;font-weight:400}
+        .se-oi-res:last-child{border-bottom:0} .se-oi-res.pris{opacity:.55;cursor:not-allowed}
+        .se-oi-res .t{flex:1;min-width:0} .se-oi-res .n{font-size:12.5px;color:var(--text-muted)}
+        .se-oi-res .z{font-size:12px;margin-top:2px} .se-oi-res .z b{background:var(--subtle-fg);border-radius:10px;padding:1px 8px;margin-right:4px;font-weight:600}
+        .se-oi-res .q{font-weight:600;white-space:nowrap}
+      </style>
+      <div class="se-oi-onglets"><button type="button" data-onglet="zones" class="on">📍 Par zones</button><button type="button" data-onglet="articles">📦 Par articles</button></div>
+      <div data-panneau="zones">
+        <div class="se-note" style="margin-bottom:8px">Cochez les zones à inventorier (<b>inventaire partiel</b>) ; rien de coché = <b>tout le Magasin</b>. « Voir les articles » montre ce que la zone contient.</div>
+        <div class="se-oi-zones">${zones.map(ligneZone).join("")}</div>
+      </div>
+      <div data-panneau="articles" style="display:none">
+        <div class="se-note" style="margin-bottom:8px">Cherchez les articles à compter : chacun montre <b>les zones où il est rangé</b>. La feuille ne contiendra que ces articles, avec toutes leurs cases.</div>
+        <input type="text" class="form-control" data-recherche placeholder="Chercher un article : code ou nom…">
+        <div class="se-oi-choisis"></div>
+        <div class="se-oi-resultats"></div>
+      </div>`);
+
+    const majBouton = () => dlg.get_primary_btn().text(onglet === "articles"
+      ? (arts.size ? `Ouvrir — ${pluriel(arts.size, "article")}` : "Ouvrir")
+      : (choisies.size ? `Ouvrir — ${pluriel(choisies.size, "zone")}` : "Ouvrir — tout le Magasin"));
+
+    // ── Par zones ──
+    $b.on("change", "[data-coche]", (e) => {
+      const z = $(e.currentTarget).closest("[data-zone]").attr("data-zone");
+      e.currentTarget.checked ? choisies.add(z) : choisies.delete(z);
+      majBouton();
+    });
+    $b.on("click", "[data-deplier]", (e) => {
+      const $z = $(e.currentTarget).closest("[data-zone]"), $l = $z.find(".se-oi-liste");
+      if (!$l.children().length) $l.html((parZone[$z.attr("data-zone")] || []).map(ligneArticle).join(""));   // rendu au premier dépliage
+      const ouvert = $l.toggle().is(":visible");
+      $(e.currentTarget).text(ouvert ? "▴ masquer" : "▾ voir les articles");
+    });
+
+    // ── Par articles ──
+    const norm = (t) => (t || "").toString().toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+    const index = articles.map((a) => ({ a, t: norm(a.code + " " + (a.nom || "")) }));
+    const MAX = 40;
+    const rendreArticles = () => {
+      const mots = norm($b.find("[data-recherche]").val()).split(/\s+/).filter(Boolean);
+      $b.find(".se-oi-choisis").html([...arts].map((c) => `<span data-retirer="${se_esc(c)}" title="Retirer">${se_esc(c)} ✕</span>`).join(""));
+      const trouves = mots.length ? index.filter((x) => mots.every((m) => x.t.includes(m))).map((x) => x.a)
+                                  : articles.filter((a) => arts.has(a.code));
+      const $r = $b.find(".se-oi-resultats");
+      if (!trouves.length) { $r.html(`<div class="se-note" style="padding:14px;text-align:center">${mots.length ? "Aucun article ne correspond." : `Tapez un code ou un nom pour chercher parmi ${articles.length} articles.`}</div>`); return; }
+      $r.html(trouves.slice(0, MAX).map((a) => `<label class="se-oi-res ${a.en_cours ? "pris" : ""}">
+          <input type="checkbox" data-article="${se_esc(a.code)}" ${arts.has(a.code) ? "checked" : ""} ${a.en_cours ? "disabled" : ""}>
+          <span class="t"><b>${se_esc(a.code)}</b> <span class="n">${se_esc(a.nom || "")}</span>
+            <div class="z">📍 ${a.zones.length ? a.zones.map((z) => `<b>${se_esc(libZone(z))}</b>`).join("") : `<span class="se-oi-jamais">Non rangé</span>`}
+              ${a.en_cours ? `<span class="se-oi-prise">· déjà en cours dans ${se_esc(a.en_cours)}</span>` : ""}</div></span>
+          <span class="q">${se_q(a.qte)}</span></label>`).join("")
+        + (trouves.length > MAX ? `<div class="se-note" style="padding:8px 10px">… ${trouves.length - MAX} autres : précisez la recherche.</div>` : ""));
+    };
+    $b.on("input", "[data-recherche]", rendreArticles);
+    $b.on("change", "[data-article]", (e) => {
+      const c = $(e.currentTarget).attr("data-article");
+      e.currentTarget.checked ? arts.add(c) : arts.delete(c);
+      $b.find(".se-oi-choisis").html([...arts].map((x) => `<span data-retirer="${se_esc(x)}" title="Retirer">${se_esc(x)} ✕</span>`).join(""));
+      majBouton();
+    });
+    $b.on("click", "[data-retirer]", (e) => { arts.delete($(e.currentTarget).attr("data-retirer")); rendreArticles(); majBouton(); });
+
+    $b.on("click", "[data-onglet]", (e) => {
+      onglet = $(e.currentTarget).attr("data-onglet");
+      $b.find("[data-onglet]").removeClass("on"); $(e.currentTarget).addClass("on");
+      $b.find("[data-panneau]").hide(); $b.find(`[data-panneau="${onglet}"]`).show();
+      if (onglet === "articles") { rendreArticles(); $b.find("[data-recherche]").trigger("focus"); }
+      majBouton();
+    });
+    dlg.show();
+    majBouton();
   }
 
   /** Feuille d'inventaire : une ligne par article, une case par emplacement ; enregistrement au fil de l'eau. */
