@@ -63,7 +63,7 @@ def _fetch_items(search=None, item_group=None, start=0, page_length=None,
     items = frappe.get_all(
         "Item",
         fields=["name", "item_name", "item_group", "description", "image",
-                "valuation_rate", "stock_uom", "is_stock_item"],
+                "valuation_rate", "stock_uom", "is_stock_item", "variant_of", "has_variants"],
         order_by=f"`tabItem`.`{field}` {direction}",
         limit_start=int(start or 0),
         limit_page_length=page_length or 0,
@@ -262,6 +262,9 @@ def build_item_row(item, ctx):
         "tva": tva,
         "val_ttc": val_ttc,
         "is_bundle": code in ctx["bundles"],
+        # Variantes : le modèle dont l'article est une variante, et le modèle lui-même — pour les regrouper au tri.
+        "variant_of": item.get("variant_of") or None,
+        "has_variants": 1 if item.get("has_variants") else 0,
         "prices": {},
     }
 
@@ -334,14 +337,55 @@ def _filtre_marge(rows, marge):
     return rows
 
 
+TRI_FAMILLE_PRIX = "famille_prix"
+
+
+def trier_famille_prix(rows, liste, sens="asc"):
+    """Les lignes rangées par FAMILLE, puis par PRIX (demande du 19/11/2026). PURE.
+
+    - Les familles (groupes d'article) dans l'ordre alphabétique.
+    - Dans une famille, les VARIANTES d'un même modèle restent ensemble : le bloc se place d'après son prix le plus
+      bas (tri croissant) ou le plus haut (tri décroissant) ; à l'intérieur, le modèle d'abord, puis ses variantes
+      par prix. Un article sans variante est un bloc à lui seul.
+    - `liste` : la liste de prix qui sert de référence. Sans prix dans cette liste : en dernier, toujours."""
+    descendant = str(sens).lower() == "desc"
+
+    def prix(r):
+        return (r.get("prices", {}).get(liste) or {}).get("pv_ttc")
+
+    def cle_prix(p):
+        # (sans prix en dernier, prix dans le sens voulu)
+        return (1, 0.0) if p is None else (0, -flt(p) if descendant else flt(p))
+
+    blocs = {}
+    for r in rows:
+        modele = r.get("variant_of") or (r["item_code"] if r.get("has_variants") else None)
+        blocs.setdefault((r.get("item_group") or "", modele or "\0" + r["item_code"]), []).append(r)
+
+    def cle_bloc(element):
+        (famille, _nom), lignes = element
+        connus = [flt(prix(l)) for l in lignes if prix(l) is not None]
+        repere = None if not connus else (max(connus) if descendant else min(connus))
+        return (famille.lower(), cle_prix(repere), lignes[0]["item_code"])
+
+    resultat = []
+    for (_cle, lignes) in sorted(blocs.items(), key=cle_bloc):
+        resultat += sorted(lignes, key=lambda l: (0 if l.get("has_variants") else 1, cle_prix(prix(l)), l["item_code"]))
+    return resultat
+
+
 def compute_analysis(search=None, item_group=None, start=None, page_length=None,
-                     order_by="item_code", order_dir="asc", marge=None):
-    if marge:
-        # la marge est une valeur calculée : on construit tout, on filtre,
-        # puis on pagine en mémoire
+                     order_by="item_code", order_dir="asc", marge=None, prix_liste=None):
+    if marge or order_by == TRI_FAMILLE_PRIX:
+        # la marge et le prix sont des valeurs calculées : on construit tout, on filtre,
+        # on trie, puis on pagine en mémoire
         complet = compute_analysis(search, item_group, None, None,
-                                   order_by, order_dir)
-        rows = _filtre_marge(complet["rows"], marge)
+                                   "item_code" if order_by == TRI_FAMILLE_PRIX else order_by, order_dir)
+        rows = _filtre_marge(complet["rows"], marge) if marge else complet["rows"]
+        if order_by == TRI_FAMILLE_PRIX:
+            listes = [pl["name"] for pl in complet["price_lists"]]
+            reference = prix_liste if prix_liste in listes else (listes[0] if listes else None)
+            rows = trier_famille_prix(rows, reference, order_dir)
         debut = int(start or 0)
         fin = debut + page_length if page_length else None
         return {"total": len(rows), "start": debut, "page_length": page_length,
@@ -405,13 +449,13 @@ def get_filters():
 
 @frappe.whitelist()
 def get_analysis(search=None, item_group=None, start=0, page_length=PAGE_LENGTH,
-                 order_by="item_code", order_dir="asc", marge=None):
+                 order_by="item_code", order_dir="asc", marge=None, prix_liste=None):
     _guard()
     return compute_analysis(search=search or None, item_group=item_group or None,
                             start=frappe.utils.cint(start),
                             page_length=frappe.utils.cint(page_length) or PAGE_LENGTH,
                             order_by=order_by, order_dir=order_dir,
-                            marge=marge or None)
+                            marge=marge or None, prix_liste=prix_liste or None)
 
 
 @frappe.whitelist()

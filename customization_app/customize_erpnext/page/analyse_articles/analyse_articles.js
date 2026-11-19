@@ -54,7 +54,28 @@ class AnalyseArticles {
       });
       window.open(`/api/method/customization_app.analyse_articles.download_excel?${params}`);
     });
+    // ── Tri par famille puis prix (19/11/2026) ──────────────────────────────────────────────────────────
+    // Les variantes d'un même modèle restent ensemble ; le prix est celui de la liste choisie à côté.
+    // Posé ici et non dans le gabarit .html : une apostrophe droite y casse toute la page.
+    $("#aa-marge").closest(".aa-field").after(`
+      <div class="aa-field"><label>Tri</label>
+        <select id="aa-tri" class="form-control" style="width:230px">
+          <option value="">Code article</option>
+          <option value="asc">Famille, puis prix croissant</option>
+          <option value="desc">Famille, puis prix décroissant</option>
+        </select></div>
+      <div class="aa-field" id="aa-tri-liste-zone" style="display:none"><label>Prix de la liste</label>
+        <select id="aa-tri-liste" class="form-control" style="width:170px"></select></div>`);
+    $("#aa-tri").on("change", () => {
+      const sens = $("#aa-tri").val();
+      $("#aa-tri-liste-zone").toggle(!!sens);
+      if (sens) { this.order_by = "famille_prix"; this.order_dir = sens; }
+      else { this.order_by = "item_code"; this.order_dir = "asc"; }
+      this.start = 0; this._load();
+    });
+    $("#aa-tri-liste").on("change", () => { this.start = 0; this._load(); });
     $(this.wrapper).on("click", "th.sortable", (e) => {
+      $("#aa-tri").val(""); $("#aa-tri-liste-zone").hide();      // un clic d'en-tête reprend le tri simple
       const f = $(e.currentTarget).data("field");
       if (this.order_by === f) {
         this.order_dir = this.order_dir === "asc" ? "desc" : "asc";
@@ -100,6 +121,10 @@ class AnalyseArticles {
     const r = await frappe.call({ method: "customization_app.analyse_articles.get_filters" });
     const f = r.message || {};
     const $g = $("#aa-group");
+    (f.price_lists || []).forEach((pl) => {
+      $("#aa-tri-liste").append(`<option value="${frappe.utils.escape_html(pl.name)}">${frappe.utils.escape_html(pl.name)}</option>`);
+    });
+    if ((f.price_lists || []).some((pl) => pl.name === "Vente standard")) $("#aa-tri-liste").val("Vente standard");
     (f.item_groups || []).forEach((g) => {
       const indent = "  ".repeat(g.depth || 0);
       const label = indent + (g.is_group ? "📁 " : "") + g.name;
@@ -120,6 +145,7 @@ class AnalyseArticles {
           page_length: AA_PAGE_LENGTH,
           order_by: this.order_by,
           order_dir: this.order_dir,
+          prix_liste: $("#aa-tri-liste").val() || "",
         },
       });
       this.data = r.message;
@@ -183,7 +209,25 @@ class AnalyseArticles {
     });
     head += "</tr>";
 
-    const body = d.rows.map((r) => this._render_row(r, pls)).join("");
+    // Tri par famille : un titre à chaque changement de famille, et un sous-titre par modèle à variantes.
+    const par_famille = this.order_by === "famille_prix";
+    const colonnes = 8 + pls.length * 2;
+    let famille = null, modele = null;
+    const body = d.rows.map((r) => {
+      let titres = "";
+      if (par_famille) {
+        if (r.item_group !== famille) {
+          famille = r.item_group; modele = null;
+          titres += `<tr class="aa-famille"><td colspan="${colonnes}" style="background:var(--subtle-fg);font-weight:700;padding:7px 10px">📁 ${this._esc(famille || "Sans famille")}</td></tr>`;
+        }
+        const m = r.variant_of || (r.has_variants ? r.item_code : null);
+        if (m !== modele) {
+          modele = m;
+          if (m) titres += `<tr class="aa-modele"><td colspan="${colonnes}" style="padding:5px 10px 5px 26px;font-weight:600;color:var(--text-muted)">↳ Modèle ${this._esc(m)} et ses variantes</td></tr>`;
+        }
+      }
+      return titres + this._render_row(r, pls);
+    }).join("");
     $("#aa-table").html(`<table class="aa-tbl"><thead>${head}</thead><tbody>${body}</tbody></table>`);
     this._maj_libelle_bloc();
   }
