@@ -268,10 +268,18 @@ class AnalyseArticles {
       <td class="num">${this._money(b ? b.cout_ttc : r.val_ttc)}</td>`;
     pls.forEach((pl) => {
       const p = r.prices[pl] || {};
+      // Sous le prix : l'écart avec la Vente standard (ce que cette liste « remise » par rapport à la vente).
+      const ecart = p.ecart_ref == null ? "" : `<div class="aa-ecart" title="Écart avec le prix Vente standard"
+          style="font-size:11px;color:${p.ecart_ref > 0 ? "#b45309" : "var(--text-muted)"}">${p.ecart_ref > 0 ? "+" : p.ecart_ref < 0 ? "−" : ""}${format_number(Math.abs(p.ecart_ref), null, 1)} % / vente</div>`;
+      // Les réductions applicables (règles de prix sur l'article ou sa famille) : prix remisé, et SA marge en face.
+      const remises = p.remises || [];
+      const prixRemises = remises.map((x) => `<div class="aa-remise" title="${this._esc(x.titre)}"
+          style="font-size:11px;white-space:nowrap;margin-top:2px"><span style="background:#fef3c7;color:#92400e;border-radius:8px;padding:0 6px;font-weight:600">🏷 ${this._esc(x.libelle)}${x.palier ? " " + this._esc(x.palier) : ""}</span> ${this._money(x.prix)}</div>`).join("");
+      const margesRemises = remises.map((x) => `<div style="font-size:11px;margin-top:2px" title="Marge au prix remisé">${this._marge(x.marge)}</div>`).join("");
       cells += `<td class="num pl-first aa-pv" style="cursor:pointer" title="Cliquer pour modifier ce prix"
                     data-item="${this._esc(r.item_code)}" data-pl="${this._esc(pl)}"
-                    data-pv="${p.pv_ttc == null ? "" : p.pv_ttc}">${this._money(p.pv_ttc)} <span class="aa-muted">✏️</span></td>
-                <td class="num">${this._marge(p.marge)}</td>`;
+                    data-pv="${p.pv_ttc == null ? "" : p.pv_ttc}">${this._money(p.pv_ttc)} <span class="aa-muted">✏️</span>${ecart}${prixRemises}</td>
+                <td class="num">${this._marge(p.marge)}${ecart ? '<div style="font-size:11px">&nbsp;</div>' : ""}${margesRemises}</td>`;
     });
     let html = `<tr>${cells}</tr>`;
     if (b) html += this._render_bundle_detail(r, pls);

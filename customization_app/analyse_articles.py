@@ -113,9 +113,112 @@ def _exclus_parmi(codes, regle) -> set:
 
 # ---------------------------------------------------------------- fetchers bulk
 
+#: L'ordre des colonnes de prix (demande du 19/11/2026) : la vente d'abord, puis les listes professionnelles.
+#: Une liste créée plus tard se range après, par ordre alphabétique.
+ORDRE_LISTES = ("Vente standard", "Technicien", "Quincaillerie", "Compte Pro", "Pro Grand Rayon")
+LISTE_REFERENCE = "Vente standard"
+
+
+def ordonner_listes(noms) -> list:
+    """Les listes de prix dans l'ordre voulu à l'écran. PURE."""
+    rang = {n: i for i, n in enumerate(ORDRE_LISTES)}
+    return sorted(noms, key=lambda n: (rang.get(n, len(ORDRE_LISTES)), n))
+
+
 def _selling_price_lists():
-    return frappe.get_all("Price List", filters={"selling": 1, "enabled": 1},
-                          fields=["name", "currency"], order_by="name")
+    listes = frappe.get_all("Price List", filters={"selling": 1, "enabled": 1},
+                            fields=["name", "currency"], order_by="name")
+    ordre = ordonner_listes([l.name for l in listes])
+    return sorted(listes, key=lambda l: ordre.index(l.name))
+
+
+# ---------------------------------------------------------------- réductions (règles de prix)
+#
+# Demande du 19/11/2026 : « s'il y a une réduction applicable sur un article directement ou un groupe, par rapport à
+# n'importe quelle liste de prix, l'afficher avec sa marge ». Ce sont les « Pricing Rule » d'ERPNext : actives, de
+# vente, de type prix (remise en % ou en montant), valides aujourd'hui, posées sur un article (ou son modèle) ou sur
+# une famille (sous-familles comprises), pour une liste de prix précise ou pour toutes. Les paliers de quantité
+# (« dès 8 », « de 8 à 14 ») sont affichés tels quels : chaque palier a son prix remisé et SA marge.
+
+def prix_remise(pv, regle):
+    """Le prix après la remise d'une règle (jamais négatif). None si pas de prix. PURE."""
+    if pv is None:
+        return None
+    if regle.get("type") == "pct":
+        return max(round(flt(pv) * (1 - flt(regle.get("valeur")) / 100), 3), 0.0)
+    return max(round(flt(pv) - flt(regle.get("valeur")), 3), 0.0)
+
+
+def remises_applicables(code, modele, famille, liste, regles) -> list:
+    """Les règles qui s'appliquent à cet article sur cette liste de prix, du plus petit palier au plus grand. PURE.
+    `regles` : [{"articles": set, "familles": set (dépliées), "liste": nom | None, "min_qty", "max_qty", …}]."""
+    out = [r for r in regles or []
+           if (not r.get("liste") or r["liste"] == liste)
+           and (code in r.get("articles", ()) or (modele and modele in r.get("articles", ()))
+                or (famille and famille in r.get("familles", ())))]
+    return sorted(out, key=lambda r: (flt(r.get("min_qty")), -flt(r.get("valeur"))))
+
+
+def libelle_palier(regle) -> str:
+    """« dès 8 », « de 8 à 14 », « jusqu'à 14 », ou « » sans palier. PURE."""
+    mini, maxi = flt(regle.get("min_qty")), flt(regle.get("max_qty"))
+    if mini > 1 and maxi:
+        return "de %g à %g" % (mini, maxi)
+    if mini > 1:
+        return "dès %g" % mini
+    if maxi:
+        return "jusqu'à %g" % maxi
+    return ""
+
+
+def _regles_remise() -> list:
+    """Les règles de prix de vente actives et valides aujourd'hui, prêtes pour `remises_applicables`."""
+    today = getdate(nowdate())
+    regles = frappe.get_all("Pricing Rule", filters={"selling": 1, "disable": 0, "price_or_product_discount": "Price"},
+                            fields=["name", "title", "apply_on", "rate_or_discount", "discount_percentage",
+                                    "discount_amount", "for_price_list", "min_qty", "max_qty", "valid_from",
+                                    "valid_upto", "coupon_code_based", "applicable_for"])
+    regles = [r for r in regles
+              if r.rate_or_discount in ("Discount Percentage", "Discount Amount") and not r.coupon_code_based
+              and (not r.valid_from or getdate(r.valid_from) <= today)
+              and (not r.valid_upto or getdate(r.valid_upto) >= today)]
+    if not regles:
+        return []
+    noms = [r.name for r in regles]
+    articles, familles = {}, {}
+    for l in frappe.get_all("Pricing Rule Item Code", filters={"parent": ["in", noms]}, fields=["parent", "item_code"]):
+        articles.setdefault(l.parent, set()).add(l.item_code)
+    arbre = {g.name: (g.lft, g.rgt) for g in frappe.get_all("Item Group", fields=["name", "lft", "rgt"])}
+    for l in frappe.get_all("Pricing Rule Item Group", filters={"parent": ["in", noms]}, fields=["parent", "item_group"]):
+        bornes = arbre.get(l.item_group)
+        if bornes:      # la famille et toutes ses sous-familles
+            familles.setdefault(l.parent, set()).update(n for n, (lft, rgt) in arbre.items()
+                                                        if lft >= bornes[0] and rgt <= bornes[1])
+    return [{"name": r.name, "titre": r.title or r.name,
+             "type": "pct" if r.rate_or_discount == "Discount Percentage" else "montant",
+             "valeur": flt(r.discount_percentage if r.rate_or_discount == "Discount Percentage" else r.discount_amount),
+             "liste": r.for_price_list or None, "min_qty": flt(r.min_qty), "max_qty": flt(r.max_qty),
+             "pour": r.applicable_for or "", "articles": articles.get(r.name, set()),
+             "familles": familles.get(r.name, set())} for r in regles]
+
+
+def _cellule_prix(code, modele, famille, liste, pv, cout_ttc, ctx) -> dict:
+    """Ce qu'une cellule de prix montre : le prix, sa marge, l'écart avec la liste de référence, et les réductions
+    applicables avec le prix remisé et la marge de chacune."""
+    reference = ctx["prices"].get((code, LISTE_REFERENCE))
+    ecart = None
+    if liste != LISTE_REFERENCE and pv is not None and reference:
+        ecart = round((flt(pv) - flt(reference)) / flt(reference) * 100, 1)
+    remises = []
+    for r in remises_applicables(code, modele, famille, liste, ctx.get("regles")):
+        remise = prix_remise(pv, r)
+        if remise is None:
+            continue
+        remises.append({"regle": r["name"], "titre": r["titre"], "palier": libelle_palier(r),
+                        "libelle": ("−%g %%" % r["valeur"]) if r["type"] == "pct" else ("−%g" % r["valeur"]),
+                        "prix": remise, "marge": _marge(remise, cout_ttc)})
+    return {"pv_ttc": pv, "marge": _marge(pv, cout_ttc), "ecart_ref": ecart, "remises": remises}
+
 
 
 def _fetch_items(search=None, item_group=None, start=0, page_length=None,
@@ -401,11 +504,13 @@ def build_item_row(item, ctx):
         # sur la ligne principale : la marge du bundle s'appuie sur son coût calculé
         for pl in ctx["price_lists"]:
             own = ctx["prices"].get((code, pl["name"]))
-            row["prices"][pl["name"]] = {"pv_ttc": own, "marge": _marge(own, cout_ttc)}
+            row["prices"][pl["name"]] = _cellule_prix(code, item.get("variant_of"), item.get("item_group"),
+                                                      pl["name"], own, cout_ttc, ctx)
     else:
         for pl in ctx["price_lists"]:
             pv = ctx["prices"].get((code, pl["name"]))
-            row["prices"][pl["name"]] = {"pv_ttc": pv, "marge": _marge(pv, val_ttc)}
+            row["prices"][pl["name"]] = _cellule_prix(code, item.get("variant_of"), item.get("item_group"),
+                                                      pl["name"], pv, val_ttc, ctx)
     return row
 
 
@@ -504,6 +609,7 @@ def compute_analysis(search=None, item_group=None, start=None, page_length=None,
     regle = regle_ensembles() if component_codes else {}
     ctx = {"price_lists": price_lists, "valuation": valuation, "taxes": taxes,
            "prices": prices, "bundles": bundles, "item_info": item_info,
+           "regles": _regles_remise(),        # les réductions (Pricing Rule) valides aujourd'hui
            # les composants que la règle sort du prix des ensembles
            "exclus": {c for c in component_codes
                       if est_exclu(c, item_info.get(c, {}).get("item_name"), item_info.get(c, {}).get("item_group"), regle)}}
