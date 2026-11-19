@@ -30,6 +30,87 @@ def _guard():
         frappe.throw(_("Accès réservé."), frappe.PermissionError)
 
 
+# ---------------------------------------------------------------- règle de prix des ensembles
+#
+# Demande du 19/11/2026 : « le prix de vente d'un ensemble = la somme de ses composants, MAIS j'enlève le prix de
+# quelques articles comme les accessoires ». Ce qu'on enlève se désigne de trois façons (réglage « Config Analyse
+# Articles », modifiable depuis la page) : par FAMILLE (sous-familles comprises), par DÉBUT DE CODE, ou par un mot
+# que le code ou le nom CONTIENT. Le même réglage porte l'interrupteur du recalcul automatique.
+# Sans aucune exclusion, la règle est l'ancienne : la somme de tous les composants.
+
+CONFIG = "Config Analyse Articles"
+
+
+def _sans_accent(texte) -> str:
+    import unicodedata
+    return "".join(c for c in unicodedata.normalize("NFD", str(texte or "").lower()) if unicodedata.category(c) != "Mn")
+
+
+def _lignes(texte) -> list:
+    """Les valeurs d'un champ « une par ligne » (les virgules et points-virgules séparent aussi). PURE."""
+    import re
+    return [x.strip() for x in re.split(r"[\n,;]+", texte or "") if x.strip()]
+
+
+def est_exclu(code, nom, famille, regle) -> bool:
+    """Ce composant est-il hors du prix de l'ensemble ? PURE.
+    `regle` : {"familles": set de familles (sous-familles déjà dépliées), "debuts": [...], "contient": [...]}."""
+    regle = regle or {}
+    if famille and famille in (regle.get("familles") or ()):
+        return True
+    c, n = _sans_accent(code), _sans_accent(nom)
+    if any(c.startswith(_sans_accent(d)) for d in regle.get("debuts") or () if d):
+        return True
+    return any(_sans_accent(m) in c or _sans_accent(m) in n for m in regle.get("contient") or () if m)
+
+
+def prix_ensemble(composants, prix, exclus=()) -> tuple:
+    """Le prix d'un ensemble selon la règle. -> (total | None, incomplet). PURE.
+    `composants` : [{item_code, qty}] ; `prix` : {item_code: prix TTC | None} ; `exclus` : codes non comptés.
+    Un composant COMPTÉ sans prix rend l'ensemble « incomplet » (on n'y touche pas) ; un composant exclu n'a pas
+    besoin de prix ; un ensemble dont TOUS les composants sont exclus n'est pas touché non plus."""
+    total, comptes = 0.0, 0
+    for c in composants or []:
+        if c["item_code"] in exclus:
+            continue
+        p = prix.get(c["item_code"])
+        if p is None:
+            return None, True
+        total += flt(p) * flt(c["qty"])
+        comptes += 1
+    if not comptes:
+        # Un ensemble fait UNIQUEMENT de composants non comptés (un kit d'accessoires) : la règle lui donnerait
+        # un prix de 0. Elle ne s'applique pas à lui — son prix reste celui qu'on lui a donné.
+        return None, True
+    return round(total, 3), False
+
+
+def regle_ensembles() -> dict:
+    """La règle du réglage, prête à l'emploi : familles dépliées (sous-familles), débuts de code, mots contenus."""
+    if not frappe.db.exists("DocType", CONFIG):
+        return {"auto": 0, "familles": set(), "familles_saisies": [], "debuts": [], "contient": []}
+    v = frappe.db.get_singles_dict(CONFIG) or {}
+    saisies = _lignes(v.get("familles_exclues"))
+    familles = set()
+    for f in saisies:
+        bornes = frappe.db.get_value("Item Group", f, ["lft", "rgt"])
+        if bornes:
+            familles |= set(frappe.get_all("Item Group", pluck="name",
+                                           filters={"lft": [">=", bornes[0]], "rgt": ["<=", bornes[1]]}))
+    return {"auto": frappe.utils.cint(v.get("ensembles_auto")), "familles": familles, "familles_saisies": saisies,
+            "debuts": _lignes(v.get("codes_debut")), "contient": _lignes(v.get("contient"))}
+
+
+def _exclus_parmi(codes, regle) -> set:
+    """Les codes que la règle sort du prix des ensembles (lecture des noms et familles en une requête)."""
+    codes = [c for c in set(codes or []) if c]
+    if not codes or not (regle.get("familles") or regle.get("debuts") or regle.get("contient")):
+        return set()
+    return {i.name for i in frappe.get_all("Item", filters={"name": ["in", codes]},
+                                           fields=["name", "item_name", "item_group"])
+            if est_exclu(i.name, i.item_name, i.item_group, regle)}
+
+
 # ---------------------------------------------------------------- fetchers bulk
 
 def _selling_price_lists():
@@ -283,6 +364,7 @@ def build_item_row(item, ctx):
             comp_rows.append({
                 "item_code": c_code,
                 "item_name": info.get("item_name"),
+                "exclu": c_code in ctx.get("exclus", ()),       # hors du prix de l'ensemble (règle)
                 "qty": qty,
                 "val_ht": round(c_ht, 3),
                 "tva": c_tva,
@@ -303,11 +385,17 @@ def build_item_row(item, ctx):
                     break
                 calc += flt(p) * flt(c["qty"])
             calc_ttc = round(calc, 3) if complete else None
+            # Le prix SELON LA RÈGLE : la somme sans les composants exclus (= la somme entière sans exclusion).
+            regle_ttc, _incomplet = prix_ensemble(
+                components, {c["item_code"]: ctx["prices"].get((c["item_code"], pl_name)) for c in components},
+                ctx.get("exclus", ()))
             bundle["prices"][pl_name] = {
                 "own_ttc": own,
                 "own_marge": _marge(own, cout_ttc),
                 "calc_ttc": calc_ttc,
                 "calc_marge": _marge(calc_ttc, cout_ttc),
+                "regle_ttc": regle_ttc,
+                "regle_marge": _marge(regle_ttc, cout_ttc),
             }
         row["bundle"] = bundle
         # sur la ligne principale : la marge du bundle s'appuie sur son coût calculé
@@ -413,8 +501,12 @@ def compute_analysis(search=None, item_group=None, start=None, page_length=None,
     taxes = _tax_rate_map(needed, [item_info.get(c, {}).get("item_group") for c in needed])
     prices = _price_map(needed, [pl["name"] for pl in price_lists])
 
+    regle = regle_ensembles() if component_codes else {}
     ctx = {"price_lists": price_lists, "valuation": valuation, "taxes": taxes,
-           "prices": prices, "bundles": bundles, "item_info": item_info}
+           "prices": prices, "bundles": bundles, "item_info": item_info,
+           # les composants que la règle sort du prix des ensembles
+           "exclus": {c for c in component_codes
+                      if est_exclu(c, item_info.get(c, {}).get("item_name"), item_info.get(c, {}).get("item_group"), regle)}}
     return {
         "total": total,
         "start": int(start or 0),
@@ -556,10 +648,15 @@ def _resoudre_changements(cible):
         pls = cible.get("price_lists") or (
             [cible["price_list"]] if cible.get("price_list") else [])
         operation, valeur = cible.get("operation"), flt(cible.get("valeur"))
-        if not pls or operation not in ("pct", "montant", "fixe"):
+        if not pls or operation not in ("pct", "montant", "fixe", "ensemble"):
             frappe.throw(_("Liste de prix et opération requises."))
         selection = cible.get("item_codes") or []
-        if selection:
+        if cible.get("tous_ensembles"):
+            # « Aperçu sur tous les ensembles » du réglage : chaque ensemble actif, quel que soit le filtre.
+            codes_ensembles = frappe.get_all("Product Bundle", filters={"disabled": 0}, pluck="new_item_code")
+            items = frappe.get_all("Item", filters={"name": ["in", codes_ensembles or [""]], "disabled": 0},
+                                   fields=["name", "item_name"])
+        elif selection:
             items = frappe.get_all("Item", filters={"name": ["in", selection]},
                                    fields=["name", "item_name"])
         elif cible.get("marge"):
@@ -574,8 +671,22 @@ def _resoudre_changements(cible):
                                          page_length=0)
         codes = [i.name for i in items]
         noms_dict = {i.name: i.item_name for i in items}
-        prix = _price_map(codes, pls)
         changements = []
+        if operation == "ensemble":
+            # Prix de l'ensemble = somme de ses composants selon la règle (exclusions du réglage). Les articles qui
+            # ne sont pas des ensembles sont ignorés ; un ensemble « incomplet » (composant compté sans prix) aussi.
+            ensembles = _bundle_map(codes)
+            composants = list({c["item_code"] for comps in ensembles.values() for c in comps})
+            exclus = _exclus_parmi(composants, regle_ensembles())
+            prix = _price_map(composants + list(ensembles), pls)
+            for pl in pls:
+                for code, comps in ensembles.items():
+                    nouveau, incomplet = prix_ensemble(comps, {c["item_code"]: prix.get((c["item_code"], pl)) for c in comps}, exclus)
+                    if not incomplet:
+                        changements.append({"item_code": code, "price_list": pl,
+                                            "ancien": prix.get((code, pl)), "nouveau": nouveau})
+            pls = []            # tout est fait : la boucle des variations ne s'applique pas
+        prix = _price_map(codes, pls) if pls else {}
         for pl in pls:
             for code in codes:
                 ancien = prix.get((code, pl))
@@ -629,25 +740,24 @@ def _cascade_bundles(changements):
     noms = dict(frappe.get_all("Item", filters={"name": ["in", list(bundles)]},
                                fields=["name", "item_name"], as_list=True))
     directs = {(c["item_code"], c["price_list"]) for c in changements}
+    exclus = _exclus_parmi(tous_composants, regle_ensembles())      # hors du prix des ensembles (règle)
 
     for pl, nouveaux in par_liste.items():
         prix = _price_map(tous_composants + list(bundles), [pl])
         for bundle_code, comps in bundles.items():
             if (bundle_code, pl) in directs:
                 continue        # prix du bundle changé explicitement : il prime
-            total, incomplet = 0.0, False
-            for comp in comps:
-                p = nouveaux.get(comp["item_code"], prix.get((comp["item_code"], pl)))
-                if p is None:
-                    incomplet = True
-                    break
-                total += flt(p) * comp["qty"]
+            if not any(comp["item_code"] in nouveaux and comp["item_code"] not in exclus for comp in comps):
+                continue        # seul un composant NON compté a changé : le prix de l'ensemble ne bouge pas
+            total, incomplet = prix_ensemble(
+                comps, {comp["item_code"]: nouveaux.get(comp["item_code"], prix.get((comp["item_code"], pl)))
+                        for comp in comps}, exclus)
             resultat.append({
                 "bundle": bundle_code,
                 "item_name": noms.get(bundle_code) or bundle_code,
                 "price_list": pl,
                 "ancien": prix.get((bundle_code, pl)),
-                "nouveau": None if incomplet else round(total, 3),
+                "nouveau": None if incomplet else total,
                 "incomplet": incomplet,
             })
     return resultat
@@ -706,15 +816,87 @@ def appliquer_prix(cible, maj_bundles=1, bundles_exclus=None):
                  else (bundles_exclus or []))
     bundles = [b for b in bundles if b["bundle"] not in exclus]
 
-    for c in changements:
-        _poser_prix(c["item_code"], c["price_list"], c["nouveau"])
-    faits_bundles = 0
-    for b in bundles:
-        if b["nouveau"] is None:
-            continue
-        _poser_prix(b["bundle"], b["price_list"], b["nouveau"])
-        faits_bundles += 1
+    # L'écran vient de montrer les ensembles concernés, et l'utilisateur a pu en décocher : le recalcul automatique
+    # (`prix_change`) ne doit pas repasser derrière lui.
+    frappe.flags.aa_recalcul = True
+    try:
+        for c in changements:
+            _poser_prix(c["item_code"], c["price_list"], c["nouveau"])
+        faits_bundles = 0
+        for b in bundles:
+            if b["nouveau"] is None:
+                continue
+            _poser_prix(b["bundle"], b["price_list"], b["nouveau"])
+            faits_bundles += 1
+    finally:
+        frappe.flags.aa_recalcul = False
     frappe.db.commit()
     return {"articles": len(changements), "bundles": faits_bundles,
             "bundles_incomplets": [b["bundle"] for b in bundles if b["incomplet"]],
             "changements": changements, "detail_bundles": bundles}
+
+
+# ---------------------------------------------------------------- réglage de la règle des ensembles
+
+@frappe.whitelist()
+def get_regle_ensembles():
+    _guard()
+    r = regle_ensembles()
+    return {"auto": r["auto"], "familles": r["familles_saisies"], "debuts": r["debuts"], "contient": r["contient"]}
+
+
+@frappe.whitelist(methods=["POST"])
+def enregistrer_regle_ensembles(familles=None, debuts=None, contient=None, auto=0):
+    """Enregistre ce qui n'est pas compté dans le prix d'un ensemble, et l'interrupteur du recalcul automatique."""
+    _guard()
+
+    def liste(v):
+        """Une liste JSON, une liste, ou un texte « un par ligne » -> liste propre, sans doublon."""
+        if isinstance(v, str) and v.strip().startswith("["):
+            v = frappe.parse_json(v)
+        valeurs = _lignes("\n".join(str(x) for x in v)) if isinstance(v, (list, tuple)) else _lignes(v)
+        return list(dict.fromkeys(valeurs))
+
+    familles = liste(familles)
+    inconnues = [f for f in familles if not frappe.db.exists("Item Group", f)]
+    if inconnues:
+        frappe.throw(_("Famille inconnue : {0}").format(", ".join(inconnues)))
+    doc = frappe.get_single(CONFIG)
+    doc.update({"familles_exclues": "\n".join(familles), "codes_debut": "\n".join(liste(debuts)),
+                "contient": "\n".join(liste(contient)), "ensembles_auto": 1 if frappe.utils.cint(auto) else 0})
+    doc.flags.ignore_permissions = True
+    doc.save()
+    frappe.db.commit()
+    return get_regle_ensembles()
+
+
+def prix_change(doc, method=None):
+    """Item Price enregistré (formulaire, import, autre écran) : si le réglage le demande, les ensembles qui
+    contiennent cet article suivent, sur la même liste de prix. Jamais bloquant — un prix doit toujours pouvoir
+    s'enregistrer — et sans effet quand c'est cette page qui pose les prix (elle gère ses ensembles elle-même)."""
+    if frappe.flags.aa_recalcul or not getattr(doc, "selling", 0) or frappe.flags.in_install or frappe.flags.in_migrate:
+        return
+    try:
+        regle = regle_ensembles()
+        if not regle["auto"]:
+            return
+        ensembles = _bundles_contenant([doc.item_code])
+        if not ensembles:
+            return
+        composants = list({c["item_code"] for comps in ensembles.values() for c in comps})
+        exclus = _exclus_parmi(composants, regle)
+        if doc.item_code in exclus:
+            return              # un composant non compté : aucun prix d'ensemble n'en dépend
+        prix = _price_map(composants + list(ensembles), [doc.price_list])
+        frappe.flags.aa_recalcul = True
+        try:
+            for code, comps in ensembles.items():
+                nouveau, incomplet = prix_ensemble(comps, {c["item_code"]: prix.get((c["item_code"], doc.price_list)) for c in comps}, exclus)
+                ancien = prix.get((code, doc.price_list))
+                if incomplet or (ancien is not None and round(flt(ancien), 3) == nouveau):
+                    continue
+                _poser_prix(code, doc.price_list, nouveau)
+        finally:
+            frappe.flags.aa_recalcul = False
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "Analyse Articles : recalcul automatique des ensembles")

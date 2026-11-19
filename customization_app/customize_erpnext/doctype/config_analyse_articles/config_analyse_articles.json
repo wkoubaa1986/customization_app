@@ -1,0 +1,72 @@
+{
+ "actions": [],
+ "creation": "2026-11-19 18:42:22.220870",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "section_ensembles",
+  "ensembles_auto",
+  "familles_exclues",
+  "codes_debut",
+  "contient"
+ ],
+ "fields": [
+  {
+   "fieldname": "section_ensembles",
+   "fieldtype": "Section Break",
+   "label": "Prix des ensembles"
+  },
+  {
+   "default": "0",
+   "description": "Le prix de l\u2019ensemble suit alors la r\u00e8gle ci-dessous, sur la m\u00eame liste de prix. D\u00e9coch\u00e9 : rien ne bouge sans vous.",
+   "fieldname": "ensembles_auto",
+   "fieldtype": "Check",
+   "label": "Recalculer automatiquement le prix d\u2019un ensemble quand un de ses composants change de prix"
+  },
+  {
+   "description": "Une famille (groupe d\u2019article) par ligne ; ses sous-familles sont comprises. Ex. : Coudes.",
+   "fieldname": "familles_exclues",
+   "fieldtype": "Small Text",
+   "label": "Familles non compt\u00e9es dans le prix d\u2019un ensemble"
+  },
+  {
+   "description": "Un d\u00e9but de code par ligne. Ex. : Acc0",
+   "fieldname": "codes_debut",
+   "fieldtype": "Small Text",
+   "label": "Codes non compt\u00e9s : commencent par"
+  },
+  {
+   "description": "Un mot par ligne, sans tenir compte des majuscules ni des accents. Ex. : clip",
+   "fieldname": "contient",
+   "fieldtype": "Small Text",
+   "label": "Non compt\u00e9s : le code ou le nom contient"
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "issingle": 1,
+ "links": [],
+ "modified": "2026-11-19 18:42:22.220870",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "Config Analyse Articles",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "row_format": "Dynamic",
+ "rows_threshold_for_grid_search": 20,
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

@@ -179,6 +179,10 @@ has_permission = {
 # Hook on document methods and events
 
 doc_events = {
+    # Prix des ensembles : quand un composant change de prix, l'ensemble suit SI le réglage de la page Analyse
+    # Articles le demande (« Config Analyse Articles », recalcul automatique). Jamais bloquant.
+    "Item Price": {"after_insert": "customization_app.analyse_articles.prix_change",
+                   "on_update": "customization_app.analyse_articles.prix_change"},
     # Domicile des employés : la fiche Employé et « Points de départ particuliers » (Config Optimisation Tournees) sont
     # une seule valeur, synchronisée dans les deux sens. Voir domicile_employe.py.
     "Employee": {"on_update": "customization_app.domicile_employe.depuis_employe",
