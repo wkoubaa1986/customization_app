@@ -38,12 +38,15 @@
           table("attendus", __("Le client me renvoie"), (p.attendus || []).map((l) => ({ item_code: l.item_code, qty: l.qty })),
                 p.bl_origine ? __("Prérempli avec sa dernière livraison ({0} du {1}) : corrigez si besoin.",
                                   [p.bl_origine, frappe.datetime.str_to_user(p.date_origine)]) : ""),
-          table("envoyes", __("J’envoie au client"), [], __("Ces articles sortent du stock dès que vous déclarez l’échange.")),
+          table("envoyes", __("J’envoie au client"), [],
+                p.date_sortie ? __("Ces articles sortent du stock à la date de validation de la commande : le {0}.", [frappe.datetime.str_to_user(p.date_sortie)])
+                              : __("Ces articles sortent du stock dès que vous déclarez l’échange.")),
           { fieldtype: "Link", fieldname: "entrepot", label: __("Entrepôt (d’où ça part, où ça revient)"), options: "Warehouse",
             default: p.entrepot, reqd: 1, get_query: () => ({ filters: { is_group: 0, disabled: 0 } }) },
           { fieldtype: "Small Text", fieldname: "note", label: __("Note (facultatif)") },
         ],
-        primary_action_label: __("Déclarer l’échange — le stock sort maintenant"),
+        primary_action_label: p.date_sortie ? __("Déclarer l’échange — sortie de stock au {0}", [frappe.datetime.str_to_user(p.date_sortie.slice(0, 10))])
+                                            : __("Déclarer l’échange — le stock sort maintenant"),
         primary_action: (v) => {
           const lignes = (t) => (t || []).filter((l) => l.item_code && flt(l.qty) > 0).map((l) => ({ item_code: l.item_code, qty: flt(l.qty) }));
           frappe.call({
@@ -54,16 +57,16 @@
               d.hide();
               const m = rr.message || {};
               frappe.msgprint({ title: __("Échange déclaré"), indicator: "green",
-                message: __("Échange {0} : les articles envoyés sont sortis du stock (écriture {1}). Quand la pochette revient, cliquez « Échange reçu » en haut de l’écran {2}.",
+                message: __("Échange {0} : les articles envoyés sont sortis du stock (écriture {1}, datée du {3}). Quand la pochette revient, cliquez « Échange reçu » en haut de l’écran {2}.",
                   [`<a href="/app/echange-aramex/${encodeURIComponent(m.echange)}">${esc(m.echange)}</a>`, esc(m.sortie_stock || ""),
-                   `<a href="/app/livraison-aramex">${__("Livraisons Aramex")}</a>`]) });
+                   `<a href="/app/livraison-aramex">${__("Livraisons Aramex")}</a>`, esc(frappe.datetime.str_to_user(m.date_sortie || ""))]) });
               frm.reload_doc();
             },
           });
         },
       });
       d.fields_dict.intro.$wrapper.html(`<div class="text-muted" style="font-size:12.5px;margin-bottom:8px">
-        ${__("Le client a reçu le mauvais article : vous lui envoyez le bon, il vous renvoie l’autre. La facturation ne change pas — seul le stock bouge : ce que vous envoyez sort maintenant, ce qui revient rentrera quand vous cliquerez « Échange reçu ».")}
+        ${__("Le client a reçu le mauvais article : vous lui envoyez le bon, il vous renvoie l’autre. La facturation ne change pas — seul le stock bouge : ce que vous envoyez sort à la date de validation de la commande, ce qui revient rentrera quand vous cliquerez « Échange reçu ».")}
         ${p.bordereau ? "" : `<br>${__("Cette commande n’a pas encore de bordereau Aramex : il sera repris tout seul quand vous le créerez.")}`}
       </div>`);
       d.show();

@@ -9,7 +9,8 @@ sans aucun document (stock faux pendant 4 jours), une correction de stock à la 
 LA RÈGLE (ses mots : « à l'échange tu sors directement ce qui est échangé, et au retour tu fais entrer ce qui
 rentre ») :
   1. DÉCLARER l'échange depuis la commande (bouton « 🔁 Échange d'articles ») : ce que j'envoie, ce que le client me
-     renvoie. Ce que j'envoie SORT du stock tout de suite (écriture « Échange - envoi »).
+     renvoie. Ce que j'envoie SORT du stock (écriture « Échange - envoi »), à la date de VALIDATION de la commande :
+     c'est ce jour-là que le colis a été préparé, même si l'échange est déclaré après coup.
   2. Tant que la pochette n'est pas revenue, l'échange est en tête de l'écran Livraisons Aramex — « retour attendu »,
      en alerte s'il traîne après la livraison.
   3. « 📦 Échange reçu » : la photo de la pochette est VÉRIFIÉE (IA + API Aramex, comme un retour de colis :
@@ -20,7 +21,7 @@ Des écritures de stock, pas des bons de livraison : un BL de retour contre la c
 « retournée » et fausserait ce qui reste à facturer. Les échanges faits SUR PLACE avec un article « E-… » restent
 l'affaire de `retour_echange`.
 
-`lignes_propres`, `texte_lignes`, `jours_de_retard` sont PURES (testées sans site).
+`lignes_propres`, `texte_lignes`, `jours_de_retard`, `date_de_validation` sont PURES (testées sans site).
 """
 from __future__ import annotations
 
@@ -71,7 +72,34 @@ def jours_de_retard(livre_le, aujourd_hui, tolerance=JOURS_ALERTE) -> int:
     return max(ecart, 0)
 
 
+def date_de_validation(versions):
+    """Le moment où la commande a été VALIDÉE, lu dans son historique (docstatus 0 → 1). -> « AAAA-MM-JJ HH:MM:SS »
+    ou None. `versions` : [{"creation", "data"}] ; la première validation fait foi (une commande annulée puis
+    refaite porte un autre nom). PURE."""
+    for v in sorted(versions or [], key=lambda x: str(x.get("creation"))):
+        try:
+            changes = json.loads(v.get("data") or "{}").get("changed") or []
+        except Exception:
+            continue
+        if any(len(c) >= 3 and c[0] == "docstatus" and cint(c[1]) == 0 and cint(c[2]) == 1 for c in changes):
+            return str(v.get("creation"))[:19]
+    return None
+
+
 # ── Outils ────────────────────────────────────────────────────────────────────
+
+def _date_de_sortie(commande):
+    """La date de la sortie de stock = celle de la VALIDATION de la commande (décision du 19/11/2026) : c'est ce
+    jour-là que le colis a été préparé. Un échange déclaré après coup ne date donc pas la sortie d'aujourd'hui.
+    Commande encore en brouillon, ou validation introuvable dans l'historique : maintenant."""
+    if frappe.db.get_value("Sales Order", commande, "docstatus") != 1:
+        return None
+    versions = frappe.db.sql("""SELECT creation, data FROM `tabVersion` WHERE ref_doctype = 'Sales Order'
+                                AND docname = %s AND data LIKE '%%docstatus%%' ORDER BY creation""", (commande,), as_dict=True)
+    le = date_de_validation(versions)
+    # jamais dans le futur (horloge, fuseau) : une écriture de stock datée de demain serait refusée
+    return le if le and le <= str(now_datetime())[:19] else None
+
 
 def _type_ecriture(nom_et_but) -> str:
     """Le type d'écriture de stock dédié, créé une fois : les échanges se retrouvent ainsi d'un filtre."""
@@ -104,12 +132,15 @@ def _verifier_articles(lignes, entrepot=None):
                 entrepot, l["item_code"], "%g" % _stock(l["item_code"], entrepot), "%g" % l["qty"]))
 
 
-def _ecriture_stock(type_ecriture, lignes, entrepot, remarque):
-    """Une écriture de stock soumise : sortie (« envoi ») ou entrée (« retour ») des lignes dans l'entrepôt."""
+def _ecriture_stock(type_ecriture, lignes, entrepot, remarque, le=None):
+    """Une écriture de stock soumise : sortie (« envoi ») ou entrée (« retour ») des lignes dans l'entrepôt.
+    `le` (« AAAA-MM-JJ HH:MM:SS ») : la date à lui donner ; sinon maintenant."""
     nom, but = type_ecriture
     doc = frappe.new_doc("Stock Entry")
     doc.update({"stock_entry_type": _type_ecriture(type_ecriture), "purpose": but, "remarks": remarque,
                 "company": frappe.db.get_value("Warehouse", entrepot, "company")})
+    if le:
+        doc.update({"set_posting_time": 1, "posting_date": le[:10], "posting_time": le[11:19] or "00:00:00"})
     sortie = but == "Material Issue"
     for l in lignes:
         ligne = {"item_code": l["item_code"], "qty": l["qty"]}
@@ -183,6 +214,8 @@ def proposer(commande):
     return {
         "commande": so.name, "client": so.customer_name or so.customer, "bordereau": so.custom_bordereau_aramex or "",
         "existant": existant, "entrepot": _entrepot_defaut(),
+        # La sortie de stock portera la date de validation de la commande : l'écran le dit avant de déclarer.
+        "date_sortie": _date_de_sortie(commande),
         # Le dernier bon de livraison du client : c'est presque toujours lui qu'on corrige.
         "attendus": [{"item_code": r.item_code, "item_name": r.item_name, "qty": flt(r.qty)} for r in recus if r.bl == dernier],
         "commande_origine": (recus[0].commande if recus else None), "bl_origine": dernier,
@@ -211,22 +244,25 @@ def declarer(commande, envoyes, attendus, entrepot=None, commande_origine=None, 
     _verifier_articles(attendus)
     _verifier_articles(envoyes, entrepot)
 
+    le = _date_de_sortie(commande)
     doc = frappe.get_doc({
         "doctype": DOCTYPE, "statut": ATTENDU, "commande": commande, "client": so.customer,
         "nom_client": so.customer_name or so.customer, "bordereau": so.custom_bordereau_aramex or None,
         "commande_origine": commande_origine or None, "entrepot": entrepot, "note": (note or "").strip() or None,
-        "envoyes": envoyes, "attendus": attendus, "envoye_le": now_datetime(), "envoye_par": frappe.session.user,
+        "envoyes": envoyes, "attendus": attendus, "envoye_le": le or now_datetime(), "envoye_par": frappe.session.user,
     })
     doc.flags.ignore_permissions = True
     doc.insert()
     sortie = _ecriture_stock(TYPE_ENVOI, envoyes, entrepot,
-                             "Échange %s — %s (commande %s) : envoyé au client" % (doc.name, doc.nom_client, commande))
+                             "Échange %s — %s (commande %s) : envoyé au client" % (doc.name, doc.nom_client, commande),
+                             le=le)
     doc.db_set("sortie_stock", sortie, update_modified=False)
     _commenter("Sales Order", commande, _(
-        "🔁 Échange {0} déclaré par {1} : envoyé {2} (sorti de {3}, écriture {4}) — retour attendu : {5}.").format(
-        doc.name, frappe.session.user, texte_lignes(envoyes), entrepot, sortie, texte_lignes(attendus)))
+        "🔁 Échange {0} déclaré par {1} : envoyé {2} (sorti de {3}, écriture {4} datée du {5}) — retour attendu : {6}.").format(
+        doc.name, frappe.session.user, texte_lignes(envoyes), entrepot, sortie,
+        (le or str(now_datetime()))[:16], texte_lignes(attendus)))
     frappe.db.commit()
-    return {"echange": doc.name, "sortie_stock": sortie}
+    return {"echange": doc.name, "sortie_stock": sortie, "date_sortie": (le or str(now_datetime()))[:16]}
 
 
 # ── Le bordereau de retour : le numéro de la pochette ─────────────────────────
