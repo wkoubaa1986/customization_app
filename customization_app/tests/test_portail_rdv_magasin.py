@@ -130,5 +130,48 @@ class TestEmployesFixables(unittest.TestCase):
             self.assertEqual(PL.employes_fixables({}), ["A", "B"])
 
 
+class TestResumeHistorique(unittest.TestCase):
+    """L'historique court montré à l'utilisateur qui prend le rendez-vous."""
+
+    def resume(self, **k):
+        from customization_app.portail_rdv_agent import resume_historique
+        base = dict(a_venir=[], passees=[], appels=[], echeanciers=[], achats=[], pieces={})
+        base.update(k)
+        return resume_historique(**base)
+
+    def test_client_sans_rien(self):
+        r = self.resume()
+        self.assertIsNone(r["derniere"])
+        self.assertIsNone(r["prochaine_visite"])
+        self.assertEqual((r["interventions"], r["pieces"], r["nb_interventions"]), ([], [], 0))
+
+    def test_la_derniere_intervention_est_la_derniere_REALISEE(self):
+        passees = [{"date": "2026-11-01 10:00:00", "type": "Entretien", "status": "Cancelled", "employe": "A"},
+                   {"date": "2026-10-05 15:20:00", "type": "Réparation", "status": "Completed", "employe": "Akram"}]
+        r = self.resume(passees=passees)
+        self.assertEqual(r["derniere"], {"date": "2026-10-05 15:20:00", "type": "Réparation", "employe": "Akram"})
+        self.assertEqual(r["nb_interventions"], 2)
+
+    def test_l_entretien_du_passe_avant_celui_a_venir(self):
+        ech = [{"machines": [{"item_code": "AP-7", "item_name": "Osmoseur 7 stages", "depuis": "2024-06-14"}],
+                "visites": [{"item_code": "AP-7", "prevue": "2026-02-21", "etat": "réalisée"},
+                            {"item_code": "AP-7", "prevue": "2027-02-20", "etat": "à venir"},
+                            {"item_code": "AP-7", "prevue": "2026-08-21", "etat": "en attente"}]}]
+        r = self.resume(echeanciers=ech)
+        self.assertEqual(r["prochaine_visite"], {"prevue": "2026-08-21", "etat": "en attente", "machine": "Osmoseur 7 stages"})
+        self.assertEqual(r["machines"], [{"nom": "Osmoseur 7 stages", "depuis": "2024-06-14"}])
+
+    def test_seules_les_pieces_dues_ou_bientot_dues_sont_proposees(self):
+        pieces = {"pieces": [{"libelle": "Membrane", "statut": "retard", "echeance": "2026-06-14", "retard_jours": 158},
+                             {"libelle": "Pack filtres", "statut": "ok", "echeance": "2027-04-05"},
+                             {"libelle": "T33", "statut": "bientot", "echeance": "2026-12-01"}]}
+        self.assertEqual([p["libelle"] for p in self.resume(pieces=pieces)["pieces"]], ["Membrane", "T33"])
+
+    def test_les_listes_sont_courtes_mais_le_total_est_dit(self):
+        passees = [{"date": "2026-01-%02d 10:00:00" % j, "type": "Entretien", "status": "Completed"} for j in range(20, 0, -1)]
+        r = self.resume(passees=passees)
+        self.assertEqual((len(r["interventions"]), r["nb_interventions"]), (8, 20))
+
+
 if __name__ == "__main__":
     unittest.main()

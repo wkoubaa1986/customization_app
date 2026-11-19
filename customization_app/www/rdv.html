@@ -108,6 +108,24 @@
   .rdv-magasin .m-titre { font-size: 12.5px; font-weight: 700; color: #92400e; margin-top: 8px; }
   .rdv-magasin .m-aide { font-size: 11.5px; color: #92400e; margin-top: 5px; line-height: 1.4; }
   .rdv-magasin select { background: #fff; }
+  /* Historique du client : pour l'utilisateur seulement, dans la colonne de gauche. */
+  .rdv-historique { margin-top: 14px; border: 1px solid #e2e8f0; border-radius: 10px; background: #f8fafc;
+                    font-size: 12.5px; color: #334155; }
+  .rdv-historique > summary { padding: 9px 12px; font-weight: 700; font-size: 13px; color: #0f172a; cursor: pointer; }
+  .rdv-historique .h-corps { padding: 0 12px 10px; }
+  .rdv-historique .h-ligne { padding: 3px 0; line-height: 1.45; }
+  .rdv-historique .h-ligne b { color: #0f172a; }
+  .rdv-historique .h-alerte { color: #b45309; font-weight: 600; }
+  .rdv-historique details { border-top: 1px solid #e2e8f0; margin-top: 8px; padding-top: 6px; }
+  .rdv-historique details > summary { font-weight: 700; cursor: pointer; color: #0f172a; padding: 2px 0; }
+  .rdv-historique .h-item { padding: 6px 0; border-bottom: 1px dashed #e2e8f0; }
+  .rdv-historique .h-item:last-child { border-bottom: 0; }
+  .rdv-historique .h-sous { color: #64748b; font-size: 11.5px; }
+  .rdv-historique .h-etat { font-size: 10.5px; font-weight: 700; padding: 1px 7px; border-radius: 9px;
+                            background: #e2e8f0; color: #334155; white-space: nowrap; }
+  .rdv-historique .h-etat.ok { background: #dcfce7; color: #15803d; }
+  .rdv-historique .h-etat.non { background: #fee2e2; color: #991b1b; }
+  .rdv-historique a { color: #0e7490; font-weight: 600; text-decoration: none; }
   .rdv-fin-detail { margin-top: 10px; font-size: 13.5px; color: #334155; line-height: 1.6; }
   /* Sur un écran de bureau, l'utilisateur est au téléphone avec le client : tout doit tenir sans défiler —
      à gauche QUI / OÙ / QUOI, à droite QUAND et la confirmation. Le client, lui, garde l'écran étroit. */
@@ -397,6 +415,11 @@
            facturée : la découvrir à l'arrivée du technicien, c'est un litige. -->
       <div id="avis-cout" style="display:none;margin-top:8px;padding:9px 11px;
            border-radius:9px;background:#fef3c7;color:#92400e;font-size:12.5px"></div>
+      <!-- MAGASIN SEULEMENT : l'historique du client, pour savoir à qui l'on parle sans quitter l'app. -->
+      <details id="magasin-historique" class="rdv-historique" style="display:none">
+        <summary>📜 Historique du client <span id="hist-compte" class="h-sous" style="font-weight:500"></span></summary>
+        <div class="h-corps" id="hist-corps"></div>
+      </details>
       </div><div class="rdv-col">
       <!-- MAGASIN SEULEMENT : imposer le technicien (parmi ceux du réglage). Jamais montré au client, et le
            serveur le refuse hors séance ouverte par un utilisateur. -->
@@ -565,6 +588,7 @@
       $("rdv-salut").textContent = "Rendez-vous pour";
       $("rdv-coucou").textContent = "";
       employe_fixe = ""; heure_fixe = "";
+      charger_historique();
     }
     rendre_bandeau_agent();
     montrer("etape-rdv");
@@ -1403,6 +1427,94 @@
     btn.addEventListener("click", () => { montres += 4; maj(); });
     lignes[lignes.length - 1].after(btn);
     maj();
+  }
+
+  // ── Magasin : l'historique du client, en version courte ──────────────────
+  //
+  // Une synthèse d'abord (dernière intervention, entretien dû, pièces à proposer), le détail replié dessous.
+  // Sur un écran de bureau le bloc s'ouvre tout seul dans la colonne de gauche ; sur un téléphone il reste
+  // replié pour ne pas repousser les créneaux.
+  const ETATS_HIST = { Completed: ["Réalisée", "ok"], Cancelled: ["Annulée", "non"],
+                       "Non réalisée": ["Non réalisée", "non"], Open: ["Prévue", ""] };
+  const date_heure = (t) => {
+    const s = String(t || "");
+    return s.length >= 16 && s.slice(11, 16) !== "00:00" ? jolie_date(s.slice(0, 10)) + " " + s.slice(11, 16)
+                                                           : jolie_date(s.slice(0, 10));
+  };
+  function il_y_a(iso) {
+    const jours = Math.round((Date.now() - new Date(String(iso).slice(0, 10) + "T00:00:00")) / 86400000);
+    if (isNaN(jours) || jours < 0) return "";
+    if (jours < 1) return "aujourd’hui";
+    if (jours < 60) return "il y a " + jours + " j";
+    const mois = Math.round(jours / 30.4);
+    return mois < 24 ? "il y a " + mois + " mois" : "il y a " + Math.round(mois / 12) + " ans";
+  }
+
+  async function charger_historique() {
+    const bloc = $("magasin-historique");
+    bloc.style.display = "none";
+    if (!jeton_agent || !jeton) return;
+    const pour = jeton;
+    let h;
+    try {
+      h = await appeler("historique", { jeton: jeton_agent, seance: jeton }, null, API_AGENT);
+    } catch (e) { message(null); return; }      // l'historique est un confort : jamais un blocage
+    if (pour !== jeton || !h || !h.autorise) return;
+
+    const lignes = [];
+    if (h.derniere) {
+      lignes.push(`<div class="h-ligne">🔧 Dernière intervention : <b>${echapper(h.derniere.type)}</b> le
+        <b>${jolie_date(h.derniere.date.slice(0, 10))}</b>${h.derniere.employe ? " — " + echapper(h.derniere.employe) : ""}
+        <span class="h-sous">(${il_y_a(h.derniere.date)})</span></div>`);
+    } else {
+      lignes.push(`<div class="h-ligne">🆕 Aucune intervention réalisée chez ce client.</div>`);
+    }
+    (h.a_venir || []).forEach((r) => lignes.push(`<div class="h-ligne h-alerte">📅 Déjà prévu : ${echapper(r.type)} le
+        ${date_heure(r.date)}${r.employe ? " — " + echapper(r.employe) : ""}</div>`));
+    (h.machines || []).forEach((m) => lignes.push(`<div class="h-ligne">💧 ${echapper(m.nom)}${
+        m.depuis ? ` <span class="h-sous">(depuis le ${jolie_date(m.depuis)})</span>` : ""}</div>`));
+    if (h.prochaine_visite) {
+      const v = h.prochaine_visite, due = v.etat === "en attente";
+      lignes.push(`<div class="h-ligne ${due ? "h-alerte" : ""}">🗓️ Entretien ${due ? "dû depuis le" : "prévu le"}
+        <b>${jolie_date(v.prevue)}</b></div>`);
+    }
+    if ((h.pieces || []).length) {
+      lignes.push(`<div class="h-ligne">🧩 Pièces à proposer : ${h.pieces.map((p) => `<b>${echapper(p.libelle)}</b>${
+        p.statut === "retard" ? ` <span class="h-alerte">(en retard${p.retard_jours ? " de " + p.retard_jours + " j" : ""})</span>`
+                              : ` <span class="h-sous">(bientôt)</span>`}`).join(", ")}</div>`);
+    }
+
+    const interventions = (h.interventions || []).map((i) => {
+      const [libelle, classe] = ETATS_HIST[i.status] || [i.status, ""];
+      // « Rs » = rapport vide saisi par habitude ; sujet et rapport répètent parfois la même phrase.
+      const notes = [...new Set([i.sujet, i.rapport, i.raison ? "Annulation : " + i.raison : ""]
+        .map((x) => String(x || "").trim()).filter((x) => x && x !== "Rs"))];
+      return `<div class="h-item"><b>${date_heure(i.date)}</b> · ${echapper(i.type)}
+          <span class="h-etat ${classe}">${echapper(libelle)}</span>
+          ${i.employe ? `<span class="h-sous"> · ${echapper(i.employe)}</span>` : ""}
+          ${notes.map((n) => `<div class="h-sous">${echapper(n)}</div>`).join("")}</div>`;
+    }).join("");
+    const appels = (h.appels || []).map((a) => `<div class="h-item"><b>${jolie_date(a.date.slice(0, 10))}</b> ·
+        ${echapper(a.titre)}${a.par ? `<span class="h-sous"> · ${echapper(a.par)}</span>` : ""}
+        ${[a.texte, a.detail].filter(Boolean).map((n) => `<div class="h-sous">${echapper(n)}</div>`).join("")}</div>`).join("");
+    const achats = (h.achats || []).map((c) => `<div class="h-item"><b>${jolie_date(String(c.date).slice(0, 10))}</b> ·
+        ${Number(c.total || 0).toFixed(3)} DT <span class="h-sous">· ${echapper(c.name)}</span>
+        <div class="h-sous">${c.articles.map(echapper).join(" · ")}${
+          c.nb_articles > c.articles.length ? " · +" + (c.nb_articles - c.articles.length) : ""}</div></div>`).join("");
+    const section = (titre, n, montres, corps, ouverte) => (corps
+      ? `<details ${ouverte ? "open" : ""}><summary>${titre} (${n})</summary>${corps}${
+          n > montres ? `<div class="h-sous" style="padding-top:4px">… et ${n - montres} de plus dans la fiche client.</div>` : ""}</details>`
+      : "");
+
+    $("hist-corps").innerHTML = lignes.join("")
+      + section("Interventions", h.nb_interventions, (h.interventions || []).length, interventions, true)
+      + section("Appels et commentaires", h.nb_appels, (h.appels || []).length, appels, false)
+      + section("Achats", h.nb_achats, (h.achats || []).length, achats, false)
+      + `<div class="h-ligne" style="margin-top:8px"><a href="${echapper(h.fiche)}" target="_blank" rel="noopener">Ouvrir la fiche client ↗</a></div>`;
+    $("hist-compte").textContent = h.nb_interventions
+      ? `— ${h.nb_interventions} intervention${h.nb_interventions > 1 ? "s" : ""}` : "";
+    bloc.open = window.matchMedia("(min-width: 900px)").matches;
+    bloc.style.display = "block";
   }
 
   // ── Magasin : technicien imposé, heure promise ───────────────────────────

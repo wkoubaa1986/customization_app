@@ -263,3 +263,77 @@ def _seance(client, entete):
     # pouvoir vérifier qu'il travaille sur la bonne fiche.
     seance["telephone"] = _telephone(client)
     return seance
+
+
+# ------------------------------------------------------------------ historique du client
+#
+# Demande du 19/11/2026 : l'utilisateur qui prend le rendez-vous au téléphone doit voir d'un coup d'œil À QUI il
+# parle — dernière intervention, entretien dû, pièces à proposer, ce qui s'est dit aux derniers appels — sans quitter
+# l'app. Les données sont celles du panneau « 📜 Historique client » du Desk (`historique_client`) : une seule source,
+# ici en version courte. Lecture seule. Le client, lui, ne voit jamais ce bloc.
+
+LIMITE_INTERVENTIONS, LIMITE_APPELS, LIMITE_ACHATS, LIMITE_PIECES = 8, 6, 4, 4
+
+
+def resume_historique(a_venir, passees, appels, echeanciers, achats, pieces) -> dict:
+    """La version courte de l'historique, prête pour l'écran. PURE.
+
+    -> {derniere, machines, prochaine_visite, pieces, a_venir, interventions, nb_interventions, appels, achats}."""
+    derniere = next((i for i in passees if i.get("status") == "Completed"), None)
+    machines, visites = [], []
+    for e in echeanciers or []:
+        noms = {m.get("item_code"): m.get("item_name") or m.get("item_code") for m in e.get("machines") or []}
+        machines += [{"nom": m.get("item_name") or m.get("item_code"), "depuis": m.get("depuis") or ""}
+                     for m in e.get("machines") or []]
+        visites += [{"prevue": v.get("prevue"), "etat": v.get("etat"), "machine": noms.get(v.get("item_code")) or ""}
+                    for v in e.get("visites") or [] if v.get("etat") in ("en attente", "à venir") and v.get("prevue")]
+    # « En attente » (date dépassée, pas faite) passe avant « à venir » : c'est elle qu'il faut proposer au client.
+    visites.sort(key=lambda v: (v["etat"] != "en attente", v["prevue"]))
+    return {
+        "derniere": ({"date": derniere["date"], "type": derniere["type"], "employe": derniere.get("employe") or ""}
+                     if derniere else None),
+        "machines": machines[:3],
+        "prochaine_visite": visites[0] if visites else None,
+        "pieces": [{"libelle": p.get("libelle"), "statut": p.get("statut"), "echeance": str(p.get("echeance") or ""),
+                    "retard_jours": p.get("retard_jours") or 0}
+                   for p in (pieces or {}).get("pieces") or [] if p.get("statut") in ("retard", "bientot")][:LIMITE_PIECES],
+        "a_venir": [{"date": i["date"], "type": i["type"], "employe": i.get("employe") or ""} for i in a_venir][:5],
+        "interventions": [{"date": i["date"], "type": i["type"], "status": i["status"], "employe": i.get("employe") or "",
+                           "rapport": i.get("rapport") or "", "sujet": i.get("sujet") or "",
+                           "raison": i.get("raison_annulation") or ""} for i in passees[:LIMITE_INTERVENTIONS]],
+        "nb_interventions": len(passees),
+        "appels": [{"date": a["date"], "titre": a.get("titre") or "", "par": a.get("par") or "",
+                    "texte": a.get("texte") or "", "detail": a.get("detail") or ""} for a in (appels or [])[:LIMITE_APPELS]],
+        "nb_appels": len(appels or []),
+        "achats": [{"name": c["name"], "date": c.get("date") or "", "total": c.get("total") or 0,
+                    "articles": [x.get("nom") or x.get("code") for x in c.get("articles") or []][:3],
+                    "nb_articles": len(c.get("articles") or [])} for c in (achats or [])[:LIMITE_ACHATS]],
+        "nb_achats": len(achats or []),
+    }
+
+
+@frappe.whitelist()
+def historique(jeton, seance):
+    """L'historique court du client de la séance en cours. -> {autorise: 0} pour un compte qui n'y a pas droit
+    (le partenaire exécute des tâches chez nos clients, leur historique reste à nous)."""
+    _verifier_agent()
+    _ticket(jeton)
+    from customization_app import historique_client as HC
+    from customization_app import pieces_a_changer as PC
+    from customization_app.portail_rdv import _session
+
+    session = _session(seance)
+    if not session.get("agent"):
+        frappe.throw(_("Historique réservé au magasin."), frappe.PermissionError)
+    if not HC._autorise():
+        return {"autorise": 0}
+    client = session["client"]
+    taches = HC._taches(client)
+    a_venir, passees = HC.interventions(taches)
+    achats = HC.achats(client)
+    commandes = frappe.get_all("Sales Order", filters={"customer": client, "docstatus": ["<", 2]}, pluck="name")
+    appels = HC.appels_et_commentaires(client, commandes or [c["name"] for c in achats], [t.name for t in taches])
+    resume = resume_historique(a_venir, passees, appels, HC.echeancier(client)["echeanciers"], achats,
+                               PC.pour_clients([client]).get(client) or {})
+    resume.update({"autorise": 1, "client": client, "fiche": "/app/customer/" + frappe.utils.quote(client)})
+    return resume
