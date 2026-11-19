@@ -394,10 +394,14 @@ class LivraisonAramex {
   // Photo obligatoire -> BL de retour (stock rentre) + suppression du paiement
   // dette + commande fermée et marquée « Retour colis ». Une facture validée
   // BLOQUE : l'avoir se traite à la main.
+  //
+  // LA PHOTO EST VÉRIFIÉE DÈS QU'ELLE EST PRISE (19/11/2026) : l'IA lit l'étiquette, l'API Aramex fait la
+  // correspondance avec le bordereau. Le 18/11, un retour avait été constaté avec la photo du colis d'un autre
+  // client. Tant que le verdict n'est pas bon, le bouton reste éteint — et le serveur refuserait de toute façon.
   _retour(pe) {
     const c = (this._data.colis || []).find((x) => x.payment_entry === pe) || {};
     const esc = frappe.utils.escape_html;
-    let photo = null, photo_nom = null;
+    let photo = null, photo_nom = null, verif = null, tour = 0;
     const d = new frappe.ui.Dialog({
       title: __("Retour reçu — {0} ({1})", [
         esc(c.customer_name || ""), format_currency(c.montant || 0, "TND")]),
@@ -412,9 +416,14 @@ class LivraisonAramex {
           frappe.msgprint(__("Prenez la photo du colis retourné : c'est la preuve du retour."));
           return;
         }
+        const forcer = d.$wrapper.find(".ala-forcer").is(":checked") ? 1 : 0;
+        if (forcer && !(v.note || "").trim()) {
+          frappe.msgprint(__("Écrivez dans la note pourquoi vous constatez ce retour malgré la vérification."));
+          return;
+        }
         frappe.call({
           method: "customization_app.retour_aramex.constater_retour",
-          args: { payment_entry: pe, photo, photo_nom, note: v.note },
+          args: { payment_entry: pe, photo, photo_nom, note: v.note, forcer },
           freeze: true, freeze_message: __("BL de retour, paiement dette, commande…"),
           callback: (r) => {
             d.hide();
@@ -438,13 +447,75 @@ class LivraisonAramex {
       </div>
       <div class="text-muted" style="font-size:11.5px;margin-bottom:8px">
         ${__("Le stock rentre par un BL de retour, le paiement dette Aramex est supprimé (avec trace sur la commande), la commande est fermée. Une facture validée bloque : avoir à traiter à la main.")}
+      </div>
+      <div class="text-muted" style="font-size:11.5px;margin-bottom:8px">
+        📷 ${__("Photographiez l’étiquette Aramex du colis, entière et nette : elle est lue et comparée à ce bordereau avant d’enregistrer.")}
       </div>`);
     const $z = d.fields_dict.photo_zone.$wrapper;
     $z.html(`
       <button type="button" class="btn btn-default btn-sm ala-photo-btn">📷 ${__("Photo du colis retourné")}</button>
       <span class="ala-photo-nom text-muted" style="margin-left:8px"></span>
-      <input type="file" accept="image/*" capture="environment" style="display:none">`);
-    const $input = $z.find("input[type=file]");
+      <input type="file" accept="image/*" capture="environment" style="display:none">
+      <div class="ala-verdict" style="margin-top:10px"></div>`);
+    const $input = $z.find("input[type=file]"), $verdict = $z.find(".ala-verdict");
+    const $ok = d.get_primary_btn();
+    const boite = (couleur, fond, html) => $verdict.html(
+      `<div style="border:1px solid ${couleur};background:${fond};border-radius:8px;padding:9px 11px;font-size:12.5px;line-height:1.5">${html}</div>`);
+    const qui = esc(c.customer_name || __("ce client"));
+
+    // Un seul verdict, dit en clair ; le détail (ce qui a été lu) reste en petit dessous.
+    const afficher = (v) => {
+      const lu = v.lu || {}, at = v.attendu || {}, autre = v.autre || {};
+      const lecture = [lu.bordereau && __("bordereau lu : {0}", [esc(lu.bordereau)]),
+                       lu.reference_expediteur && __("réf. expéditeur : {0}", [esc(lu.reference_expediteur)])]
+        .filter(Boolean).join(" · ");
+      const petit = lecture ? `<div class="text-muted" style="font-size:11px;margin-top:4px">${lecture}</div>` : "";
+      const aramex = at.retour_livre === true ? __("Selon Aramex, le retour de {0} a bien été livré chez vous.", [qui])
+        : at.retour_livre === false ? __("Selon Aramex, le retour de {0} n’est PAS encore arrivé chez vous ({1}).", [qui, esc(at.retour_statut || __("en route"))])
+        : "";
+      let autorise = false;
+      if (v.verdict === "ok") {
+        autorise = true;
+        boite("var(--green-500)", "var(--green-50, #f0fdf4)", `✅ <b>${__("C’est bien le colis de {0}", [qui])}</b> — ${__("bordereau {0}", [esc(c.reference || "")])}.${petit}`);
+      } else if (v.verdict === "autre") {
+        const a_qui = autre.destinataire || autre.client;
+        boite("var(--red-500)", "var(--red-50, #fef2f2)", `❌ <b>${__("Ce n’est pas le colis de {0}.", [qui])}</b><br>` +
+          (a_qui ? __(autre.sur === false ? "L’étiquette semble être celle de <b>{0}</b> — commande {1}, bordereau {2} ({3})."
+                                          : "L’étiquette est celle de <b>{0}</b> — commande {1}, bordereau {2} ({3}).",
+                      [esc(a_qui), esc(autre.commande || "?"), esc(autre.reference || ""), esc(autre.statut || "")])
+                 : __("L’étiquette porte un autre bordereau, inconnu de nos envois.")) +
+          (autre.etiquette_date ? "<br>" + __("Ce colis-là vous a été remis le {0}.", [esc(autre.etiquette_date)]) : "") +
+          (aramex ? "<br>" + aramex : "") +
+          `<br><b>${__("Rien n’est enregistré : reprenez la photo du bon colis.")}</b>${petit}`);
+      } else if (v.verdict === "illisible") {
+        boite("var(--orange-500)", "var(--orange-50, #fff7ed)", `⚠️ <b>${__("Je ne lis pas l’étiquette Aramex.")}</b> ${__("Reprenez la photo : étiquette entière, nette, sans reflet.")}${petit}`);
+      } else {
+        autorise = at.retour_livre === true;
+        boite("var(--orange-500)", "var(--orange-50, #fff7ed)", `⚠️ <b>${__("La lecture automatique de l’étiquette ne répond pas.")}</b><br>` +
+          (autorise ? aramex + " " + __("Vous pouvez constater le retour.")
+                    : (aramex || __("Aramex n’annonce pas ce retour comme livré.")) + " " + __("Réessayez dans un instant.")));
+      }
+      // Un responsable peut passer outre (colis sans étiquette…) : c'est écrit sur la commande, avec sa note.
+      if (!autorise && v.peut_forcer) {
+        $verdict.append(`<label style="display:block;margin-top:8px;font-size:12px;font-weight:500">
+          <input type="checkbox" class="ala-forcer"> ${__("Constater quand même (responsable) — la note devient obligatoire")}</label>`);
+        $verdict.find(".ala-forcer").on("change", function () { $ok.prop("disabled", !this.checked); });
+      }
+      $ok.prop("disabled", !autorise);
+    };
+
+    const verifier = () => {
+      const moi = ++tour;
+      verif = null;
+      $ok.prop("disabled", true);
+      boite("var(--border-color)", "var(--subtle-fg)", `🔎 ${__("Lecture de l’étiquette et vérification chez Aramex… (quelques secondes)")}`);
+      frappe.call({ method: "customization_app.retour_aramex.verifier_photo", args: { payment_entry: pe, photo } })
+        .then((r) => { if (moi === tour) { verif = r.message || {}; afficher(verif); } })
+        .catch(() => { if (moi === tour) boite("var(--orange-500)", "var(--orange-50, #fff7ed)",
+          `⚠️ ${__("La vérification n’a pas abouti : reprenez la photo ou réessayez.")}`); });
+    };
+
+    $ok.prop("disabled", true);
     $z.find(".ala-photo-btn").on("click", () => $input.trigger("click"));
     $input.on("change", function () {
       const f = this.files && this.files[0];
@@ -454,8 +525,11 @@ class LivraisonAramex {
         photo = lecteur.result;
         photo_nom = f.name;
         $z.find(".ala-photo-nom").text("✓ " + f.name);
+        $z.find(".ala-photo-btn").text("📷 " + __("Reprendre la photo"));
+        verifier();
       };
       lecteur.readAsDataURL(f);
+      this.value = "";       // la même photo peut être rechoisie après une reprise
     });
     d.show();
   }
