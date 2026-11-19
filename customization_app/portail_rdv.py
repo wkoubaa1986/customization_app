@@ -570,6 +570,50 @@ def _ouvrir_session(numero, entree, agent=None, origine=None):
     }
 
 
+# ── Options du MAGASIN : technicien imposé, heure imposée (19/11/2026) ─────────────────────────────────────────
+#
+# Demande : quand c'est un utilisateur qui prend le rendez-vous (« RDV avec l'app »), il doit pouvoir faire ce
+# qu'il fait sur une tâche de travail — fixer l'heure promise et/ou le technicien. Ce sont les deux cases que
+# l'optimisation des tournées respecte déjà (`custom_tournee_fixe` : l'heure ne bouge pas ; `custom_employe_fixe` :
+# le technicien ne change pas). Le client, lui, ne voit jamais ces options et le serveur les refuse hors séance
+# ouverte par le magasin : le navigateur ne fait pas foi.
+CHAMP_HEURE_FIXE, CHAMP_EMPLOYE_FIXE = "custom_tournee_fixe", "custom_employe_fixe"
+
+
+def _options_magasin(session, config, contexte, employe=None, heure=None):
+    """-> (employe, heure) validés, ou (None, None). Refus si ce n'est pas le magasin qui réserve."""
+    from customization_app import portail_rdv_planning as planning
+
+    employe = (employe or "").strip() or None
+    heure = (heure or "").strip()[:5] or None
+    if not employe and not heure:
+        return None, None
+    if not session.get("agent") or frappe.session.user in (None, "", "Guest"):
+        frappe.throw(_("Le choix du technicien et de l'heure est réservé au magasin."), frappe.PermissionError)
+    if employe and employe not in planning.employes_fixables(config, contexte):
+        frappe.throw(_("Ce technicien n'est pas dans le réglage des rendez-vous pour cette adresse."))
+    if heure and not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", heure):
+        frappe.throw(_("Heure invalide."))
+    return employe, heure
+
+
+def _employes_fixables(config, contexte):
+    """[{employe, nom}] — les techniciens du réglage encore ACTIFS, dans l'ordre du réglage."""
+    from customization_app import portail_rdv_planning as planning
+
+    ids = planning.employes_fixables(config, contexte)
+    if not ids:
+        return []
+    noms = dict(frappe.get_all("Employee", filters={"name": ["in", ids], "status": "Active"},
+                               fields=["name", "employee_name"], as_list=True))
+    return [{"employe": e, "nom": noms[e] or e} for e in ids if e in noms]
+
+
+def _employe_fixe_de(doc):
+    """Le technicien d'une tâche marquée « Employé fixe », sinon None : un déplacement le garde."""
+    return doc.get("custom_choix_du_staff") if cint(doc.get(CHAMP_EMPLOYE_FIXE)) else None
+
+
 def _rdv_verrouille(starts_on):
     """Le verrou ne vaut QUE pour la journée en cours (décision 29/08) : un RDV
     d'aujourd'hui dont l'heure est passée ne se touche plus (le technicien est
@@ -649,15 +693,17 @@ def assistant(jeton, question, historique=None):
 
 
 @frappe.whitelist(allow_guest=True, methods=["POST"])
-def disponibilites(jeton, adresse=None, type_intervention=None, tache=None):
+def disponibilites(jeton, adresse=None, type_intervention=None, tache=None, employe=None):
     """La grille des demi-journées faisables — pour une NOUVELLE réservation
     (adresse + type), ou pour DÉPLACER un rendez-vous existant (tache : son
-    type et son secteur sont repris, et il ne compte pas contre lui-même)."""
+    type et son secteur sont repris, et il ne compte pas contre lui-même).
+    `employe` (magasin seulement) : la grille de CE technicien, imposé."""
     from customization_app import portail_rdv_planning as planning
 
     config = _config()
     session = _session(jeton)
     exclure = None
+    doc = None
     if tache:
         doc = _rdv_deplacable(session, tache)
         type_intervention = doc.get("custom_type_dintervention")
@@ -670,7 +716,13 @@ def disponibilites(jeton, adresse=None, type_intervention=None, tache=None):
         gouvernorat = doc_adresse.get("custom_state_s") or doc_adresse.get("state")
     contexte = planning.contexte_partenaire(config, gouvernorat)
     hors = (not secteur or secteur == planning.HORS_SECTEUR) and not contexte
+    # Un rendez-vous « Employé fixe » se déplace chez le MÊME technicien, que ce soit le client ou le magasin qui
+    # le déplace ; une nouvelle réservation ne reçoit un technicien imposé que du magasin.
+    employe = _employe_fixe_de(doc) if doc else _options_magasin(session, config, contexte, employe)[0]
+    magasin = {"employes": _employes_fixables(config, contexte), "employe": employe or ""} \
+        if session.get("agent") and not hors else {}
     return {
+        **magasin,
         "secteur": secteur or "",
         "hors_secteur": hors,
         # Zone partenaire : le délai minimum est plus long, l'écran le dit.
@@ -683,8 +735,35 @@ def disponibilites(jeton, adresse=None, type_intervention=None, tache=None):
         # grille vide sans explication.
         "ouvert_le": _ouverture_a_annoncer(config, contexte, type_intervention),
         "jours": [] if hors else planning.disponibilites(
-            config, secteur, type_intervention, exclure=exclure, contexte=contexte, gouvernorat=gouvernorat),
+            config, secteur, type_intervention, exclure=exclure, contexte=contexte, gouvernorat=gouvernorat,
+            employe=employe),
     }
+
+
+@frappe.whitelist(allow_guest=True, methods=["POST"])
+def heures(jeton, adresse, type_intervention, date, demi_journee, employe=None):
+    """MAGASIN SEULEMENT — les heures que l'on peut promettre sur une demi-journée (« Heure fixe »), chacune avec
+    le technicien qui la prendrait. Mêmes règles que le créneau automatique : rien n'est proposé ici que la
+    réservation refuserait."""
+    from customization_app import portail_rdv_planning as planning
+
+    config = _config()
+    session = _session(jeton)
+    if not session.get("agent") or frappe.session.user in (None, "", "Guest"):
+        frappe.throw(_("Le choix de l'heure est réservé au magasin."), frappe.PermissionError)
+    doc_adresse = _adresse_du_client(session["client"], adresse)
+    gouvernorat = doc_adresse.get("custom_state_s") or doc_adresse.get("state")
+    contexte = planning.contexte_partenaire(config, gouvernorat)
+    employe = _options_magasin(session, config, contexte, employe)[0]
+    jour = getdate(date)
+    if jour < planning.premier_jour(config, contexte, type_intervention):
+        return {"heures": []}
+    possibles = planning.heures_du_creneau(
+        config, jour, demi_journee, doc_adresse.get("custom_secteur"), type_intervention,
+        contexte=contexte, gouvernorat=gouvernorat, employe=employe)
+    noms = dict(frappe.get_all("Employee", filters={"name": ["in", list({e for _h, e in possibles}) or [""]]},
+                               fields=["name", "employee_name"], as_list=True))
+    return {"heures": [{"heure": h.strftime("%H:%M"), "employe": noms.get(e) or e} for h, e in possibles]}
 
 
 @frappe.whitelist(allow_guest=True, methods=["POST"])
@@ -716,7 +795,12 @@ def deplacer_rdv(jeton, tache, date, demi_journee):
     with _verrou_placement():
         employe, starts_on, duree = planning.placer(
             config, jour, demi_journee, doc.get("secteur"), type_i,
-            exclure=doc.name, contexte=contexte, gouvernorat=_gouvernorat_adresse(doc.get("select_address")))
+            exclure=doc.name, contexte=contexte, gouvernorat=_gouvernorat_adresse(doc.get("select_address")),
+            employe=_employe_fixe_de(doc))
+        # L'heure promise ne vaut plus : le rendez-vous change de jour, l'app en pose une nouvelle — qui redevient
+        # un simple ancrage. « Employé fixe », lui, est respecté ci-dessus.
+        if cint(doc.get(CHAMP_HEURE_FIXE)):
+            doc.set(CHAMP_HEURE_FIXE, 0)
 
         import datetime as _dt
         nom_employe = frappe.db.get_value("Employee", employe, "employee_name") or employe
@@ -984,7 +1068,7 @@ def commande_details(jeton, commande):
 @frappe.whitelist(allow_guest=True, methods=["POST"])
 def reserver(jeton, type_intervention, date, demi_journee, adresse=None,
              commande=None, note=None, contact_nom=None, contact_tel=None,
-             confirmer_second=0):
+             confirmer_second=0, employe=None, heure=None):
     """Étape 3 : la réservation. Crée la tâche FERME au calendrier — SUR une
     adresse choisie du client (décision 27/08 : l'adresse d'abord, la
     sectorisation suit sur la tâche)."""
@@ -1017,7 +1101,8 @@ def reserver(jeton, type_intervention, date, demi_journee, adresse=None,
     from customization_app import portail_rdv_planning as planning
     contexte = planning.contexte_partenaire(
         config, doc_adresse.get("custom_state_s") or doc_adresse.get("state"))
-    delai = (contexte or {}).get("delai_jours") or planning.delai_standard(config)
+    # Technicien et heure imposés : acceptés du magasin seulement, et seulement dans le réglage.
+    employe_fixe, heure_fixe = _options_magasin(session, config, contexte, employe, heure)
     jour = getdate(date)
     ouvert_le = planning.premier_jour(config, contexte, type_intervention)
     if jour < ouvert_le or jour > add_days(getdate(nowdate()), HORIZON_JOURS):
@@ -1057,7 +1142,8 @@ def reserver(jeton, type_intervention, date, demi_journee, adresse=None,
         employe, starts_on, duree = planning.placer(
             config, jour, demi_journee,
             doc_adresse.get("custom_secteur"), type_intervention, contexte=contexte,
-            gouvernorat=doc_adresse.get("custom_state_s") or doc_adresse.get("state"))
+            gouvernorat=doc_adresse.get("custom_state_s") or doc_adresse.get("state"),
+            employe=employe_fixe, heure=heure_fixe)
 
         libelle_demi = _("matin") if demi_journee == "matin" else _("après-midi")
         # Le TITRE du calendrier est composé côté FICHE par le Client Script
@@ -1107,6 +1193,11 @@ def reserver(jeton, type_intervention, date, demi_journee, adresse=None,
                 (" — " + str(note).strip()[:200]) if note and str(note).strip() else ""),
         })
         tache.temps = planning.TEMPS_LIBELLE.get(type_intervention)
+        # Les deux épingles de la tâche de travail : l'optimisation des tournées ne déplacera pas l'heure promise,
+        # ne changera pas le technicien imposé.
+        for champ, pose in ((CHAMP_HEURE_FIXE, heure_fixe), (CHAMP_EMPLOYE_FIXE, employe_fixe)):
+            if pose and frappe.db.has_column(DOCTYPE_TACHE, champ):
+                tache.set(champ, 1)
         tache.flags.ignore_permissions = True
         tache.insert()
         # Le hook de création fixe ends_on par SA table de durées (Réparation 120') —
@@ -1116,22 +1207,30 @@ def reserver(jeton, type_intervention, date, demi_journee, adresse=None,
                      update_modified=False)
         frappe.db.commit()
 
+    # Heure PROMISE par le magasin : le client la lit dans son message — lui écrire « nous vous confirmerons
+    # l'heure » alors qu'on vient de la lui donner au téléphone le ferait douter de son rendez-vous.
+    quand = "à %s" % starts_on.strftime("%H:%M") if heure_fixe else libelle_demi
     _prevenir(
         session,
-        "Aqua World : votre rendez-vous %s du %s (%s) est enregistré. "
-        "Nous vous confirmerons l'heure exacte." % (
-            type_intervention, jour.strftime("%d/%m/%Y"), libelle_demi),
+        ("Aqua World : votre rendez-vous %s du %s %s est enregistré." if heure_fixe else
+         "Aqua World : votre rendez-vous %s du %s (%s) est enregistré. "
+         "Nous vous confirmerons l'heure exacte.") % (
+            type_intervention, jour.strftime("%d/%m/%Y"), quand),
         "Votre rendez-vous %s du %s" % (type_intervention, jour.strftime("%d/%m/%Y")),
         _corps_email("Votre rendez-vous est enregistré ✅", [
             "Intervention : <b>%s</b>" % frappe.utils.escape_html(type_intervention),
-            "Date : <b>%s</b> — %s" % (jour.strftime("%d/%m/%Y"), libelle_demi),
+            "Date : <b>%s</b> — %s" % (jour.strftime("%d/%m/%Y"), quand),
             "Adresse : %s" % frappe.utils.escape_html(", ".join(filter(None, [
                 doc_adresse.address_line1, doc_adresse.city]))),
-            "Nous vous confirmerons l'heure exacte la veille.",
-        ]))
+        ] + ([] if heure_fixe else ["Nous vous confirmerons l'heure exacte la veille."])))
 
-    return {"tache": tache.name, "date": str(jour), "demi_journee": libelle_demi,
-            "type": type_intervention, "origine": _lier_origine(session, tache.name)}
+    retour = {"tache": tache.name, "date": str(jour), "demi_journee": libelle_demi,
+              "type": type_intervention, "origine": _lier_origine(session, tache.name)}
+    if session.get("agent"):
+        # Le magasin voit ce que l'app a décidé : qui, à quelle heure, et ce qui est épinglé.
+        retour.update({"employe": nom_employe, "heure": starts_on.strftime("%H:%M"),
+                       "heure_fixe": bool(heure_fixe), "employe_fixe": bool(employe_fixe)})
+    return retour
 
 
 def _lier_origine(session, tache):

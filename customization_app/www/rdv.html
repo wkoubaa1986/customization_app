@@ -102,6 +102,23 @@
   .rdv-art .a-qte { color: #64748b; font-size: 12px; }
   .rdv-art .a-prix { font-weight: 700; white-space: nowrap; }
 
+  /* ── Mode magasin : options réservées aux utilisateurs, et écran large ─── */
+  .rdv-magasin { margin-top: 12px; padding: 4px 12px 12px; border-radius: 10px;
+                 background: #fffbeb; border: 1px solid #fcd34d; }
+  .rdv-magasin .m-titre { font-size: 12.5px; font-weight: 700; color: #92400e; margin-top: 8px; }
+  .rdv-magasin .m-aide { font-size: 11.5px; color: #92400e; margin-top: 5px; line-height: 1.4; }
+  .rdv-magasin select { background: #fff; }
+  .rdv-fin-detail { margin-top: 10px; font-size: 13.5px; color: #334155; line-height: 1.6; }
+  /* Sur un écran de bureau, l'utilisateur est au téléphone avec le client : tout doit tenir sans défiler —
+     à gauche QUI / OÙ / QUOI, à droite QUAND et la confirmation. Le client, lui, garde l'écran étroit. */
+  .rdv-page.magasin #agent-changer { max-width: 230px !important; margin: 8px 0 0 !important;
+                                     padding: 7px 10px; font-size: 13.5px; }
+  @media (min-width: 900px) {
+    .rdv-page.magasin { max-width: 980px; }
+    .rdv-page.magasin .rdv-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 0 32px;
+                                  align-items: start; }
+  }
+
   /* ── Assistant : widget de chat flottant ─────────────────────────────── */
   .ia-fab { position: fixed; right: 16px; bottom: 16px; z-index: 60;
             width: 64px; height: 64px; border-radius: 50%; border: none; padding: 0;
@@ -320,7 +337,7 @@
           <div class="ia-note">Assistant automatique. Pour les créneaux, fiez-vous à la grille.</div>
         </div>
       </div>
-      <h2>Bonjour <span id="rdv-nom"></span> 👋</h2>
+      <h2><span id="rdv-salut">Bonjour</span> <span id="rdv-nom"></span> <span id="rdv-coucou">👋</span></h2>
       <div class="rdv-onglets">
         <button type="button" class="actif" data-onglet="panneau-reserver">📅 Réserver</button>
         <button type="button" data-onglet="panneau-commandes">🧾 Commandes</button>
@@ -334,6 +351,7 @@
       <div id="rappel-rdv" style="display:none;margin-bottom:10px;padding:10px 12px;
            border-radius:10px;background:#e0f2fe;color:#075985;font-size:13px">
       </div>
+      <div class="rdv-cols"><div class="rdv-col">
       <label>Adresse d'intervention</label>
       <div id="rdv-adresses"></div>
       <button type="button" class="rdv-btn secondaire" id="btn-ajouter-adresse"
@@ -379,8 +397,22 @@
            facturée : la découvrir à l'arrivée du technicien, c'est un litige. -->
       <div id="avis-cout" style="display:none;margin-top:8px;padding:9px 11px;
            border-radius:9px;background:#fef3c7;color:#92400e;font-size:12.5px"></div>
+      </div><div class="rdv-col">
+      <!-- MAGASIN SEULEMENT : imposer le technicien (parmi ceux du réglage). Jamais montré au client, et le
+           serveur le refuse hors séance ouverte par un utilisateur. -->
+      <div id="magasin-employe" class="rdv-magasin" style="display:none">
+        <div class="m-titre">🏪 Technicien</div>
+        <select id="mag-employe"><option value="">Choisi par l’app (recommandé)</option></select>
+        <div class="m-aide" id="mag-employe-aide"></div>
+      </div>
       <label>Créneaux disponibles</label>
       <div id="rdv-grille"><div class="rdv-vide">Choisissez votre adresse et le type de rendez-vous.</div></div>
+      <!-- MAGASIN SEULEMENT : promettre une heure précise dans la demi-journée choisie. -->
+      <div id="magasin-heure" class="rdv-magasin" style="display:none">
+        <div class="m-titre">🏪 Heure du rendez-vous</div>
+        <select id="mag-heure"><option value="">Demi-journée seulement — l’heure sera confirmée la veille</option></select>
+        <div class="m-aide" id="mag-heure-aide"></div>
+      </div>
       <label>Personne à contacter à l'arrivée</label>
       <input type="text" id="rdv-contact-nom" maxlength="80"
              placeholder="Ex. : Mme Ben Salah (ou « moi-même »)">
@@ -390,6 +422,7 @@
       <textarea id="rdv-note" rows="2" maxlength="200"
         placeholder="Ex. : fuite sous l'évier, appareil qui siffle…"></textarea>
       <button class="rdv-btn" id="btn-reserver">Confirmer le rendez-vous</button>
+      </div></div>
       </div>
     </div>
 
@@ -399,7 +432,8 @@
         <div class="coche">✅</div>
         <div class="quoi" id="fin-quoi"></div>
         <div class="quand" id="fin-quand"></div>
-        <p style="color:#64748b;font-size:13.5px;margin-top:14px">
+        <div class="rdv-fin-detail" id="fin-detail" style="display:none"></div>
+        <p style="color:#64748b;font-size:13.5px;margin-top:14px" id="fin-texte">
           Un SMS de confirmation vous a été envoyé.<br>
           Notre équipe vous confirmera l'heure exacte.</p>
         <button class="rdv-btn secondaire" onclick="location.reload()">Prendre un autre rendez-vous</button>
@@ -418,6 +452,8 @@
   let jeton = null, seance = null, type_choisi = null, creneau_choisi = null;
   // Mode magasin : jeton d'agent lu dans l'URL. Nul pour un vrai client.
   let jeton_agent = null, agent_commande = null;
+  // Options du magasin : technicien imposé et heure promise (vides = l'app décide, comme pour un client).
+  let employe_fixe = "", heure_fixe = "";
 
   const $ = (id) => document.getElementById(id);
   const montrer = (etape) => {
@@ -521,7 +557,15 @@
     rendre_commandes_installables();
     rendre_adresses();
     rendre_historique();
-    if (seance.assistant) { $("ia-bloc").style.display = "block"; ia_inviter(); }
+    // L'assistant guide un CLIENT ; devant un utilisateur du magasin il encombre l'écran (et coûte un appel
+    // à chaque question). Même chose pour le « Bonjour » : on ne salue pas le client à sa place.
+    if (seance.assistant && !jeton_agent) { $("ia-bloc").style.display = "block"; ia_inviter(); }
+    if (jeton_agent) {
+      document.querySelector(".rdv-page").classList.add("magasin");
+      $("rdv-salut").textContent = "Rendez-vous pour";
+      $("rdv-coucou").textContent = "";
+      employe_fixe = ""; heure_fixe = "";
+    }
     rendre_bandeau_agent();
     montrer("etape-rdv");
   }
@@ -997,8 +1041,8 @@
           <span>${a.adresse === adresse_choisie ? "🔘" : "⚪"}</span>
           <span class="a-texte">${echapper(a.ligne || a.ville)}
             <div class="a-sous">${echapper(a.ville)}${a.gouvernorat ? " · " + echapper(a.gouvernorat) : ""}${a.secteur ? " · " + echapper(a.secteur) : ""}</div>
-            ${a.rdv_en_cours ? `<div class="a-sous" style="color:#075985;font-weight:600">
-              📅 ${echapper(a.rdv_en_cours.type || "RDV")} prévu le ${echapper(a.rdv_en_cours.date)}</div>` : ""}</span>
+            ${Object.values(a.rdv_en_cours || {}).map((r) => `<div class="a-sous" style="color:#075985;font-weight:600">
+              📅 ${echapper(r.type || "RDV")} prévu le ${echapper(r.date)}</div>`).join("")}</span>
           <button type="button" class="a-modif" data-modif="${echapper(a.adresse)}" title="Modifier">✏️</button>
         </div>`).join("")
       : `<div class="rdv-vide">Aucune adresse — ajoutez-en une.</div>`;
@@ -1361,20 +1405,79 @@
     maj();
   }
 
+  // ── Magasin : technicien imposé, heure promise ───────────────────────────
+  //
+  // Les deux options de la tâche de travail (« Employé fixe », « Heure fixe »), offertes ICI seulement quand
+  // c'est un utilisateur qui réserve. Le technicien se choisit AVANT la grille (elle devient la sienne) ;
+  // l'heure se choisit APRÈS le créneau (elle dépend de la demi-journée et de qui la prend).
+  function rendre_choix_employe(liste) {
+    const bloc = $("magasin-employe");
+    if (!jeton_agent || !liste || !liste.length) { bloc.style.display = "none"; return; }
+    if (!liste.some((e) => e.employe === employe_fixe)) employe_fixe = "";
+    const sel = $("mag-employe");
+    sel.innerHTML = `<option value="">Choisi par l’app (recommandé)</option>`
+      + liste.map((e) => `<option value="${echapper(e.employe)}">${echapper(e.nom)}</option>`).join("");
+    sel.value = employe_fixe;
+    $("mag-employe-aide").textContent = employe_fixe
+      ? "Employé fixe : les créneaux ci-dessous sont les siens, et l’optimisation des tournées ne changera pas de technicien."
+      : "L’app choisit le technicien selon le réglage. Choisissez-en un seulement si le client le demande.";
+    bloc.style.display = "block";
+  }
+  $("mag-employe").addEventListener("change", (ev) => {
+    employe_fixe = ev.target.value;
+    charger_grille();
+  });
+
+  function masquer_heures() {
+    heure_fixe = "";
+    $("magasin-heure").style.display = "none";
+  }
+
+  // `garder` : l'heure à re-sélectionner si elle existe encore (relecture périodique de la grille).
+  async function charger_heures(garder) {
+    if (!jeton_agent || !creneau_choisi) { masquer_heures(); return; }
+    const voulu = creneau_choisi.date + "|" + creneau_choisi.demi;
+    const sel = $("mag-heure"), aide = $("mag-heure-aide");
+    heure_fixe = "";
+    try {
+      const res = await appeler("heures", {
+        jeton, adresse: adresse_choisie, type_intervention: type_choisi,
+        date: creneau_choisi.date, demi_journee: creneau_choisi.demi, employe: employe_fixe || null,
+      }, null);
+      if (!creneau_choisi || creneau_choisi.date + "|" + creneau_choisi.demi !== voulu) return;
+      const liste = res.heures || [];
+      sel.innerHTML = `<option value="">Demi-journée seulement — l’heure sera confirmée la veille</option>`
+        + liste.map((h) => `<option value="${h.heure}">${h.heure} — ${echapper(h.employe)}</option>`).join("");
+      if (garder && liste.some((h) => h.heure === garder)) { sel.value = garder; heure_fixe = garder; }
+      const maj = () => {
+        aide.textContent = heure_fixe
+          ? "Heure fixe : promise au client (elle est écrite dans son SMS), l’optimisation des tournées ne la déplacera pas."
+          : "Sans heure choisie, l’app pose le premier créneau libre et l’heure reste ajustable.";
+      };
+      sel.onchange = () => { heure_fixe = sel.value; maj(); };
+      maj();
+      $("magasin-heure").style.display = "block";
+    } catch (e) { masquer_heures(); }
+  }
+
   async function charger_grille() {
     creneau_choisi = null;
+    masquer_heures();
     const zone = $("rdv-grille");
     if (!adresse_choisie || !type_choisi) {
       zone.innerHTML = `<div class="rdv-vide">Choisissez votre adresse et le type de rendez-vous.</div>`;
+      $("magasin-employe").style.display = "none";
       return;
     }
     const mien = ++jeton_grille;
     zone.innerHTML = `<div class="rdv-vide">Recherche des créneaux…</div>`;
     try {
       const res = await appeler("disponibilites",
-        { jeton, adresse: adresse_choisie, type_intervention: type_choisi }, null);
+        { jeton, adresse: adresse_choisie, type_intervention: type_choisi,
+          employe: jeton_agent ? employe_fixe || null : null }, null);
       if (mien !== jeton_grille) return;
       if (res.hors_secteur) { apres_choix_adresse(); return; }
+      rendre_choix_employe(res.employes);
       // Zone partenaire (Sousse, Monastir…) : le délai est plus long, on le dit
       // plutôt que de laisser le client chercher pourquoi les 2 premiers jours
       // manquent.
@@ -1418,8 +1521,10 @@
           b.classList.add("actif");
           const [date, demi] = b.getAttribute("data-cren").split("|");
           creneau_choisi = { date, demi };
+          charger_heures("");
         }));
-      appliquer_voir_plus(zone, 4);
+      // Le magasin compare des dates au téléphone : il en voit deux fois plus d'emblée.
+      appliquer_voir_plus(zone, jeton_agent ? 8 : 4);
     } catch (e) {
       if (mien === jeton_grille) zone.innerHTML = `<div class="rdv-vide">${echapper(e.message)}</div>`;
     }
@@ -1435,6 +1540,7 @@
     if (!adresse_choisie || !type_choisi) return;
     if ($("etape-rdv") && !$("etape-rdv").classList.contains("courante")) return;
     const garde = creneau_choisi;   // ne pas perdre la sélection en cours
+    const garde_heure = heure_fixe;
     charger_grille().then(() => {
       if (!garde) return;
       const bouton = $("rdv-grille").querySelector(
@@ -1442,6 +1548,7 @@
       if (bouton && !bouton.disabled) {
         bouton.classList.add("actif");
         creneau_choisi = garde;
+        charger_heures(garde_heure);
       } else {
         info("Le créneau que vous aviez choisi vient d'être pris — choisissez-en un autre.");
       }
@@ -1663,9 +1770,23 @@
         contact_nom: $("rdv-contact-nom").value,
         contact_tel: $("rdv-contact-tel").value,
         confirmer_second: seconds_confirmes[adresse_choisie + "|" + type_choisi] ? 1 : 0,
+        employe: jeton_agent ? employe_fixe || null : null,
+        heure: jeton_agent ? heure_fixe || null : null,
       }, $("btn-reserver"));
       $("fin-quoi").textContent = "Rendez-vous " + res.type + " enregistré";
-      $("fin-quand").textContent = "Le " + res.date + " — " + res.demi_journee;
+      $("fin-quand").textContent = "Le " + jolie_date(res.date) + " — " + res.demi_journee;
+      if (jeton_agent && res.employe) {
+        // Le magasin lit ce que l'app a décidé, pour le dire au client encore en ligne.
+        $("fin-detail").style.display = "block";
+        $("fin-detail").innerHTML =
+          `👤 Technicien : <b>${echapper(res.employe)}</b>${res.employe_fixe ? " (employé fixe)" : ""}<br>`
+          + (res.heure_fixe
+              ? `🕘 Heure promise : <b>${echapper(res.heure)}</b> (heure fixe)`
+              : `🕘 Heure posée par l’app : ${echapper(res.heure)} — ajustable, à confirmer la veille`);
+        $("fin-texte").innerHTML = seance.telephone
+          ? "Le client reçoit un SMS de confirmation" + (res.heure_fixe ? ", avec l’heure." : ".")
+          : "Pas de téléphone au dossier : le client ne reçoit pas de SMS.";
+      }
       montrer("etape-fin");
     } catch (e) { message(e.message); }
   });

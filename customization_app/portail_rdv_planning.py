@@ -210,6 +210,12 @@ def contexte_partenaire(config, gouvernorat):
     return None
 
 
+def employes_fixables(config, contexte=None):
+    """Les techniciens que le magasin peut IMPOSER pour une adresse (« Employé fixe ») : ceux du réglage, rien
+    d'autre — la liste « Employés disponibles », ou le partenaire de la zone quand l'adresse est chez lui."""
+    return list(contexte["employes"]) if contexte else _liste_employes(config)
+
+
 def _nb_actifs(config, liste):
     nb = cint(config.get("nb_employes"))
     return min(nb, len(liste)) if nb else len(liste)
@@ -581,7 +587,7 @@ def _employe_bloque_jour(entree, jour):
                for d in DEMIS)
 
 
-def _pool_du_jour(config, liste, taches, jour, conges=frozenset(), contexte=None):
+def _pool_du_jour(config, liste, taches, jour, conges=frozenset(), contexte=None, employe=None):
     """Les N premiers employés NON bloqués ce jour-là — le suivant de la liste
     remplace un employé dont la journée est pleine OU qui est en congé /
     récupération (Leave Application approuvée).
@@ -593,6 +599,19 @@ def _pool_du_jour(config, liste, taches, jour, conges=frozenset(), contexte=None
         from customization_app.jours_feries import est_ferie
         if est_ferie(jour):
             return []
+    if employe:
+        # TECHNICIEN IMPOSÉ PAR LE MAGASIN (« Employé fixe », 19/11/2026). C'est une décision humaine : ni l'ordre de
+        # la liste ni le plafond de personnes ne s'appliquent — on a choisi QUI. Ce qui reste vrai, c'est ce qu'il ne
+        # peut pas faire : travailler un dimanche fermé, pendant un congé, ou une journée déjà pleine. Les règles de
+        # secteur et de place se vérifient ensuite comme pour tout le monde (`_demi_faisable`).
+        if jour.weekday() == 6:
+            dimanche = contexte["dimanche"] if contexte else (
+                cint(config.get("autoriser_dimanche")) and config.get("employe_dimanche") == employe)
+            if not dimanche:
+                return []
+        if (employe, jour) in conges or _employe_bloque_jour(taches.get((employe, jour)), jour):
+            return []
+        return [employe]
     if contexte:
         if jour.weekday() == 6 and not contexte["dimanche"]:
             return []
@@ -673,7 +692,7 @@ def _quota_lointain_ok(lointains, jour, secteur):
 
 
 def disponibilites(config, secteur, type_intervention, horizon=HORIZON_PLANNING,
-                   exclure=None, contexte=None, gouvernorat=None):
+                   exclure=None, contexte=None, gouvernorat=None, employe=None):
     """La grille des demi-journées faisables. -> [{date, matin, apres_midi}].
 
     `contexte` : zone partenaire (employé dédié, délai propre, dimanche) — la
@@ -684,7 +703,8 @@ def disponibilites(config, secteur, type_intervention, horizon=HORIZON_PLANNING,
     if not contexte and (not secteur or secteur == HORS_SECTEUR):
         return []
 
-    liste = contexte["employes"] if contexte else _liste_employes(config)
+    # `employe` : technicien imposé par le magasin — la grille est alors LA SIENNE, et seulement la sienne.
+    liste = [employe] if employe else (contexte["employes"] if contexte else _liste_employes(config))
     if not liste:
         return []
     debut = premier_jour(config, contexte, type_intervention)
@@ -706,8 +726,8 @@ def disponibilites(config, secteur, type_intervention, horizon=HORIZON_PLANNING,
         # Le quota « une journée par semaine » ne concerne QUE les secteurs
         # lointains de Tunis : la zone partenaire a son propre employé.
         if contexte or _quota_lointain_ok(lointains, jour, secteur):
-            for employe in _pool_du_jour(config, liste, taches, jour, conges, contexte):
-                entree = taches.get((employe, jour))
+            for qui in _pool_du_jour(config, liste, taches, jour, conges, contexte, employe):
+                entree = taches.get((qui, jour))
                 gouv = gouvernorat if contexte else None     # un gouvernorat par jour : zone partenaire seulement
                 if not matin and _demi_faisable(entree, jour, "matin", secteur,
                                                 duree, config, gouv) is not None:
@@ -722,10 +742,73 @@ def disponibilites(config, secteur, type_intervention, horizon=HORIZON_PLANNING,
     return jours
 
 
+def _candidats(config, jour, demi, secteur, contexte, employe, exclure):
+    """Qui peut prendre ce rendez-vous, dans l'ordre où l'app les essaie, et leurs tâches du jour.
+    -> (employés, tâches). Lève si le secteur a déjà sa journée de la semaine ailleurs."""
+    liste = [employe] if employe else (contexte["employes"] if contexte else _liste_employes(config))
+    tout_le_monde = liste + ([] if contexte or employe else ([config.get("employe_dimanche")]
+                                                             if config.get("employe_dimanche") else []))
+    taches = _taches_periode(tout_le_monde, jour, jour, exclure=exclure)
+    conges = _jours_conges(tout_le_monde, jour, jour)
+    lointains = {} if contexte else _jours_secteurs_lointains(jour, jour)
+    if not contexte and not _quota_lointain_ok(lointains, jour, secteur):
+        frappe.throw(_("Ce secteur a déjà sa journée cette semaine-là — "
+                       "choisissez un autre créneau proposé."))
+    pool = _pool_du_jour(config, liste, taches, jour, conges, contexte, employe)
+    if _repartir(config) and not employe:
+        # Le tri est STABLE : à charge égale, l'ordre de la liste reprend la main.
+        pool = sorted(pool, key=lambda e: _charge_demi(taches.get((e, jour)), demi))
+    return pool, taches
+
+
+PAS_HEURE = 15      # minutes : le pas des heures proposées au magasin (« Heure fixe »)
+
+
+def heures_possibles(entree, jour, demi, secteur, duree, config=None, gouvernorat=None):
+    """Toutes les heures de début possibles pour cet employé sur cette demi-journée, au quart d'heure — mêmes règles
+    que le créneau automatique : le secteur doit être permis, l'intervention tient dans la fenêtre, et il reste
+    30 min de battement avec chaque intervention déjà posée. -> [datetime]. PURE (hors lecture des fenêtres)."""
+    if _demi_faisable(entree, jour, demi, secteur, duree, config, gouvernorat) is None:
+        return []
+    debut_f, fin_f = fenetres()[demi]
+    fin = get_datetime("%s %s" % (jour, fin_f))
+    pas = datetime.timedelta(minutes=duree)
+    battement = datetime.timedelta(minutes=BATTEMENT)
+    pris = (entree or {}).get(demi) or []
+    out, h = [], get_datetime("%s %s" % (jour, debut_f))
+    while h + pas <= fin:
+        if all(h + pas + battement <= d or h >= f + battement for d, f in pris):
+            out.append(h)
+        h += datetime.timedelta(minutes=PAS_HEURE)
+    return out
+
+
+def heures_du_creneau(config, jour, demi, secteur, type_intervention, exclure=None,
+                      contexte=None, gouvernorat=None, employe=None):
+    """Les heures que le magasin peut promettre sur cette demi-journée, chacune avec le technicien qui la prendrait
+    (le premier de l'ordre d'affectation qui peut). -> [(datetime, employe)], triées."""
+    duree = DUREES.get(type_intervention)
+    if not duree or demi not in DEMIS:
+        return []
+    if not contexte and (not secteur or secteur == HORS_SECTEUR):
+        return []
+    pool, taches = _candidats(config, jour, demi, secteur, contexte, employe, exclure)
+    out = {}
+    for qui in pool:
+        for h in heures_possibles(taches.get((qui, jour)), jour, demi, secteur, duree, config,
+                                  gouvernorat if contexte else None):
+            out.setdefault(h, qui)
+    return sorted(out.items())
+
+
 def placer(config, jour, demi, secteur, type_intervention, exclure=None,
-           contexte=None, gouvernorat=None):
+           contexte=None, gouvernorat=None, employe=None, heure=None):
     """Choisit l'employé (ordre de la liste = priorité) et l'heure de début.
-    -> (employe, starts_on, duree_minutes) ou lève."""
+    -> (employe, starts_on, duree_minutes) ou lève.
+
+    `employe` et `heure` viennent du MAGASIN seulement (« Employé fixe », « Heure fixe ») : le technicien imposé est
+    le seul essayé, l'heure imposée est prise telle quelle si elle respecte les règles — sinon refus, jamais un
+    créneau « à peu près »."""
     duree = DUREES.get(type_intervention)
     if not duree:
         frappe.throw(_("Type de rendez-vous inconnu."))
@@ -735,34 +818,23 @@ def placer(config, jour, demi, secteur, type_intervention, exclure=None,
     if demi not in DEMIS:
         frappe.throw(_("Choisissez matin ou après-midi."))
 
-    liste = contexte["employes"] if contexte else _liste_employes(config)
-    tout_le_monde = liste + ([] if contexte else ([config.get("employe_dimanche")]
-                                                 if config.get("employe_dimanche") else []))
-    taches = _taches_periode(tout_le_monde, jour, jour, exclure=exclure)
-    conges = _jours_conges(tout_le_monde, jour, jour)
-    lointains = {} if contexte else _jours_secteurs_lointains(jour, jour)
-    if not contexte and not _quota_lointain_ok(lointains, jour, secteur):
-        frappe.throw(_("Ce secteur a déjà sa journée cette semaine-là — "
-                       "choisissez un autre créneau proposé."))
+    pool, taches = _candidats(config, jour, demi, secteur, contexte, employe, exclure)
+    gouv = gouvernorat if contexte else None
 
-    # QUI PREND LE RENDEZ-VOUS : réglage « Affectation des rendez-vous »
-    # (Config Portail RDV), demande du 02/09/2026.
-    #   - « Priorité à l'ordre de la liste » (historique) : le premier employé
-    #     éligible prend, et on ne descend qu'une fois sa journée pleine. C'est
-    #     un EMPILEMENT — le 14/09, Akram en avait 7 quand Sadok en avait 2.
-    #   - « Répartition sur les disponibles » : le MOINS CHARGÉ de la
-    #     demi-journée prend ; l'ordre de la liste ne départage plus qu'à
-    #     égalité. C'est ce que veut dire « dispatcher aux 3 disponibles ».
-    pool = _pool_du_jour(config, liste, taches, jour, conges, contexte)
-    if _repartir(config):
-        # Le tri est STABLE : à charge égale, l'ordre de la liste reprend la
-        # main, donc le réglage historique reste le comportement par défaut de
-        # départage — on ne perd pas la priorité, on ne l'applique qu'ensuite.
-        pool = sorted(pool, key=lambda e: _charge_demi(taches.get((e, jour)), demi))
-    for employe in pool:
-        starts_on = _demi_faisable(taches.get((employe, jour)), jour, demi,
-                                   secteur, duree, config, gouvernorat if contexte else None)
+    # QUI PREND LE RENDEZ-VOUS : réglage « Affectation des rendez-vous » (Config Portail RDV), demande du 02/09/2026.
+    #   - « Priorité à l'ordre de la liste » (historique) : le premier employé éligible prend, et on ne descend
+    #     qu'une fois sa journée pleine. C'est un EMPILEMENT — le 14/09, Akram en avait 7 quand Sadok en avait 2.
+    #   - « Répartition sur les disponibles » : le MOINS CHARGÉ de la demi-journée prend ; l'ordre de la liste ne
+    #     départage plus qu'à égalité (tri fait dans `_candidats`).
+    if heure:
+        cible = get_datetime("%s %s" % (jour, heure))
+        for qui in pool:
+            if cible in heures_possibles(taches.get((qui, jour)), jour, demi, secteur, duree, config, gouv):
+                return qui, cible, duree
+        frappe.throw(_("Cette heure n'est plus libre — choisissez-en une autre."))
+    for qui in pool:
+        starts_on = _demi_faisable(taches.get((qui, jour)), jour, demi, secteur, duree, config, gouv)
         if starts_on is not None:
-            return employe, starts_on, duree
+            return qui, starts_on, duree
 
     frappe.throw(_("Ce créneau vient d'être pris — choisissez-en un autre."))
