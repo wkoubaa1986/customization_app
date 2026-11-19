@@ -54,7 +54,7 @@
           table("envoyes", __("J’envoie au client"), [],
                 p.date_sortie ? __("Ces articles sortent du stock à la date de validation de la commande : le {0}.", [frappe.datetime.str_to_user(p.date_sortie)])
                               : __("Ces articles sortent du stock dès que vous déclarez l’échange.")),
-          { fieldtype: "Link", fieldname: "entrepot", label: __("Entrepôt (d’où ça part, où ça revient)"), options: "Warehouse",
+          { fieldtype: "Link", fieldname: "entrepot", label: __("Entrepôt d’où partent les articles envoyés"), options: "Warehouse",
             default: p.entrepot, reqd: 1, get_query: () => ({ filters: { is_group: 0, disabled: 0 } }) },
           { fieldtype: "Small Text", fieldname: "note", label: __("Note (facultatif)") },
         ],

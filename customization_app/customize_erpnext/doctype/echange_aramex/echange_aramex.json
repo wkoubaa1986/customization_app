@@ -18,6 +18,7 @@
   "commande_origine",
   "bl_origine",
   "entrepot",
+  "entrepot_retour",
   "section_articles",
   "envoyes",
   "attendus",
@@ -91,7 +92,7 @@
   {
    "fieldname": "entrepot",
    "fieldtype": "Link",
-   "label": "Entrep\u00f4t (d\u00e9part et retour)",
+   "label": "Entrep\u00f4t de d\u00e9part",
    "options": "Warehouse",
    "read_only": 1
   },
@@ -212,12 +213,21 @@
    "label": "Bon de livraison d\u2019origine",
    "options": "Delivery Note",
    "read_only": 1
+  },
+  {
+   "description": "Choisi au moment de recevoir la pochette.",
+   "fieldname": "entrepot_retour",
+   "fieldtype": "Link",
+   "label": "Entrep\u00f4t d\u2019entr\u00e9e (au retour)",
+   "no_copy": 1,
+   "options": "Warehouse",
+   "read_only": 1
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-11-19 17:34:44.534920",
+ "modified": "2026-11-19 17:43:27.255669",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Echange Aramex",

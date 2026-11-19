@@ -403,12 +403,18 @@ def verifier_photo(echange, photo):
 
 
 @frappe.whitelist(methods=["POST"])
-def recevoir(echange, photo, photo_nom=None, note=None, forcer=0):
-    """La pochette est revenue : photo VÉRIFIÉE, puis ce que le client renvoie ENTRE en stock."""
+def recevoir(echange, photo, photo_nom=None, note=None, forcer=0, entrepot=None):
+    """La pochette est revenue : photo VÉRIFIÉE, puis ce que le client renvoie ENTRE en stock — dans l'entrepôt
+    choisi à la réception (`entrepot`), à défaut celui d'où l'envoi était parti."""
     frappe.only_for(ROLES)
     from customization_app import retour_aramex as R
 
     doc = _echange_attendu(echange)
+    # Où ranger ce qui revient se décide en le recevant : l'article renvoyé n'a pas forcément sa place là d'où
+    # l'autre est parti (demande du 19/11/2026).
+    entrepot = (entrepot or "").strip() or doc.entrepot
+    if not frappe.db.exists("Warehouse", {"name": entrepot, "is_group": 0, "disabled": 0}):
+        frappe.throw(_("Entrepôt inconnu ou désactivé : {0}").format(entrepot))
     if not (photo or "").strip():
         frappe.throw(_("La photo de la pochette revenue est obligatoire."))
     reference = _bordereau(doc)
@@ -436,7 +442,7 @@ def recevoir(echange, photo, photo_nom=None, note=None, forcer=0):
     frappe.cache().delete_value(_cle(echange))
 
     attendus = [{"item_code": l.item_code, "qty": flt(l.qty)} for l in doc.attendus]
-    entree = _ecriture_stock(TYPE_RETOUR, attendus, doc.entrepot,
+    entree = _ecriture_stock(TYPE_RETOUR, attendus, entrepot,
                              "Échange %s — %s (commande %s) : revenu du client" % (doc.name, doc.nom_client, doc.commande))
 
     from frappe.utils.file_manager import save_file
@@ -447,15 +453,16 @@ def recevoir(echange, photo, photo_nom=None, note=None, forcer=0):
 
     resume = R._resume_verification(verification, force) if reference else "Échange sans bordereau Aramex : photo non comparée."
     frappe.db.set_value(DOCTYPE, doc.name, {
-        "statut": RECU, "retour_stock": entree, "recu_le": now_datetime(), "recu_par": frappe.session.user,
+        "statut": RECU, "retour_stock": entree, "entrepot_retour": entrepot,
+        "recu_le": now_datetime(), "recu_par": frappe.session.user,
         "bordereau": reference or None, "verification": resume,
         "note": " — ".join(filter(None, [doc.note, (note or "").strip()])) or None})
     _commenter("Sales Order", doc.commande, _(
         "📦 Échange {0} reçu le {1} par {2} : {3} rentré(s) dans {4} (écriture {5}). {6}{7}").format(
-        doc.name, str(now_datetime())[:16], frappe.session.user, texte_lignes(attendus), doc.entrepot, entree, resume,
+        doc.name, str(now_datetime())[:16], frappe.session.user, texte_lignes(attendus), entrepot, entree, resume,
         (" Note : %s" % note.strip()) if (note or "").strip() else ""))
     frappe.db.commit()
-    return {"echange": doc.name, "retour_stock": entree, "entrepot": doc.entrepot, "articles": texte_lignes(attendus),
+    return {"echange": doc.name, "retour_stock": entree, "entrepot": entrepot, "articles": texte_lignes(attendus),
             "photo": fichier.file_url}
 
 
@@ -501,7 +508,7 @@ def en_cours() -> list:
             "name": e.name, "commande": e.commande, "client": e.nom_client, "bordereau": reference,
             "envoyes": texte_lignes([{"item_code": l.item_code, "qty": l.qty} for l in doc.envoyes]),
             "attendus": texte_lignes([{"item_code": l.item_code, "qty": l.qty} for l in doc.attendus]),
-            "declare_le": str(e.envoye_le or "")[:10],
+            "declare_le": str(e.envoye_le or "")[:10], "entrepot": e.entrepot or "",
             "bordereau_retour": e.bordereau_retour or "", "retour_suivi": e.retour_suivi or "",
             "suivi": (suivi.statut if suivi else ""), "livre": bool(suivi and cint(suivi.livre)),
             "retard": jours_de_retard(livre_le, nowdate()),
