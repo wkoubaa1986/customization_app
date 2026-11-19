@@ -473,9 +473,14 @@ def apercu_ouverture():
     for n in ouverts():
         for l in frappe.get_doc(INV, n).lignes:
             pris[l.item_code] = n
+    articles = _articles_magasin(S.magasin())
+    # La photo de l'article : on reconnaît une pièce à l'œil bien plus vite qu'à son code.
+    images = dict(frappe.get_all("Item", filters={"name": ["in", [a["item_code"] for a in articles] or [""]]},
+                                 fields=["name", "image"], as_list=True))
     return {"articles": [{"code": a["item_code"], "nom": a["item_name"], "qte": a["qte_systeme"],
                           "zones": [z for z in (a["zones"] or "").split(Z.SEPARATEUR) if z],
-                          "en_cours": pris.get(a["item_code"])} for a in _articles_magasin(S.magasin())]}
+                          "image": images.get(a["item_code"]) or "",
+                          "en_cours": pris.get(a["item_code"])} for a in articles]}
 
 
 def _ouvert(name):

@@ -1443,7 +1443,9 @@ class StockEntrepots {
         this.ouvrirInventaire(name);
       } });
     const $b = dlg.fields_dict.corps.$wrapper;
-    const ligneArticle = (a) => `<div class="se-oi-art"><b>${se_esc(a.code)}</b> <span>${se_esc(a.nom || "")}</span><span class="q">${se_q(a.qte)}</span></div>`;
+    // La photo de l'article (chargée seulement quand elle arrive à l'écran) ; sans photo, un cadre vide de même taille.
+    const photo = (a) => (a.image ? `<img class="se-oi-photo" loading="lazy" src="${se_esc(a.image)}" alt="">` : `<span class="se-oi-photo vide">📦</span>`);
+    const ligneArticle = (a) => `<div class="se-oi-art">${photo(a)}<b>${se_esc(a.code)}</b> <span>${se_esc(a.nom || "")}</span><span class="q">${se_q(a.qte)}</span></div>`;
     const ligneZone = (z) => {
       const liste = parZone[z] || [], h = hist[z] || {}, prise = prises[z];
       const quand = prise ? `<span class="se-oi-prise">en cours (${se_esc(prise)})</span>` : h.dernier ? `dernier inventaire ${se_esc(se_dt(h.dernier))}` : `<span class="se-oi-jamais">jamais inventoriée</span>`;
@@ -1465,7 +1467,9 @@ class StockEntrepots {
         .se-oi-zone label{margin:0;min-width:120px;cursor:pointer;display:flex;align-items:center;gap:8px}
         .se-oi-voir{margin-left:auto;font-size:12px;color:var(--primary);cursor:pointer;white-space:nowrap}
         .se-oi-liste{margin:6px 0 2px 26px;border-left:2px solid var(--border-color);padding-left:10px}
-        .se-oi-art{display:flex;gap:8px;font-size:12.5px;padding:2px 0;align-items:baseline}
+        .se-oi-art{display:flex;gap:8px;font-size:12.5px;padding:3px 0;align-items:center}
+        .se-oi-photo{width:40px;height:40px;flex:none;object-fit:contain;border-radius:6px;border:1px solid var(--border-color);background:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:18px}
+        .se-oi-photo.vide{opacity:.35}
         .se-oi-art span{color:var(--text-muted);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
         .se-oi-art .q{flex:none;font-weight:600;color:var(--text-color)}
         .se-oi-prise{color:var(--orange-600,#c2410c);font-weight:600} .se-oi-jamais{color:var(--red-500,#dc2626)}
@@ -1519,6 +1523,7 @@ class StockEntrepots {
       if (!trouves.length) { $r.html(`<div class="se-note" style="padding:14px;text-align:center">${mots.length ? "Aucun article ne correspond." : `Tapez un code ou un nom pour chercher parmi ${articles.length} articles.`}</div>`); return; }
       $r.html(trouves.slice(0, MAX).map((a) => `<label class="se-oi-res ${a.en_cours ? "pris" : ""}">
           <input type="checkbox" data-article="${se_esc(a.code)}" ${arts.has(a.code) ? "checked" : ""} ${a.en_cours ? "disabled" : ""}>
+          ${photo(a)}
           <span class="t"><b>${se_esc(a.code)}</b> <span class="n">${se_esc(a.nom || "")}</span>
             <div class="z">📍 ${a.zones.length ? a.zones.map((z) => `<b>${se_esc(libZone(z))}</b>`).join("") : `<span class="se-oi-jamais">Non rangé</span>`}
               ${a.en_cours ? `<span class="se-oi-prise">· déjà en cours dans ${se_esc(a.en_cours)}</span>` : ""}</div></span>
