@@ -213,6 +213,7 @@ class LivraisonAramex {
     );
 
     this._rendre_echanges();
+    this._suivre_echanges();
     this.$root.find("[data-role='sms-auto']").prop("checked", !!d.sms_auto);
 
     const tous = d.colis || [];
@@ -389,7 +390,8 @@ class LivraisonAramex {
     }
     if (r.possible) {
       return `<button class="btn btn-xs btn-danger" style="margin-top:4px"
-        data-act="retour" data-pe="${esc(c.payment_entry)}">📦 ${__("Retour reçu")}</button>`;
+        data-act="retour" data-pe="${esc(c.payment_entry)}">📦 ${__("Retour reçu")}</button>
+        ${(r.bordereaux || []).length ? `<div class="ala-menu">${__("Bordereau de retour : {0}", [esc(r.bordereaux.join(", "))])}</div>` : ""}`;
     }
     return "";
   }
@@ -445,7 +447,8 @@ class LivraisonAramex {
     });
     d.fields_dict.info.$wrapper.html(`
       <div style="font-size:12px;margin-bottom:6px">
-        ${__("Bordereau")} <b>${esc(c.reference || "")}</b> ·
+        ${__("Bordereau")} <b>${esc(c.reference || "")}</b>
+        ${((c.retour || {}).bordereaux || []).length ? ` · ${__("bordereau de retour")} <b>${esc(c.retour.bordereaux.join(", "))}</b>` : ""} ·
         ${(c.pieces || []).map((p) => esc(`${p.doctype === "Sales Order" ? "Cde" : p.doctype === "Delivery Note" ? "BL" : "Fac"} ${p.name}`)).join(" · ")}
       </div>
       <div class="text-muted" style="font-size:11.5px;margin-bottom:8px">
@@ -484,8 +487,12 @@ class LivraisonAramex {
     // Un seul verdict, dit en clair ; le détail (ce qui a été lu) reste en petit dessous.
     const afficher = (v) => {
       const lu = v.lu || {}, at = v.attendu || {}, autre = v.autre || {};
-      const lecture = [lu.bordereau && __("bordereau lu : {0}", [esc(lu.bordereau)]),
-                       lu.reference_expediteur && __("réf. expéditeur : {0}", [esc(lu.reference_expediteur)])]
+      // Ce qu'Aramex annonce (le bordereau de retour, imprimé sur l'étiquette du colis qui revient) à côté de ce
+      // que la photo montre : l'employé voit lui-même que les deux numéros sont les mêmes — ou pas.
+      const attendu_retour = (at.retours || []).join(", ");
+      const lecture = [attendu_retour && __("bordereau de retour annoncé par Aramex : <b>{0}</b>", [esc(attendu_retour)]),
+                       lu.bordereau && __("lu sur la photo : <b>{0}</b>", [esc(lu.bordereau)]),
+                       lu.reference_expediteur && __("réf. expéditeur lue : {0}", [esc(lu.reference_expediteur)])]
         .filter(Boolean).join(" · ");
       const petit = lecture ? `<div class="text-muted" style="font-size:11px;margin-top:4px">${lecture}</div>` : "";
       const aramex = at.retour_livre === true ? __("Selon Aramex, le retour de {0} a bien été livré chez vous.", [qui])
@@ -574,13 +581,31 @@ class LivraisonAramex {
           <span class="ala-menu"> · <a href="/app/sales-order/${encodeURIComponent(e.commande)}">${esc(e.commande)}</a>
             · <a href="/app/echange-aramex/${encodeURIComponent(e.name)}">${esc(e.name)}</a></span>
           <div>${__("Envoyé : <b>{0}</b> — attendu en retour : <b>{1}</b>", [esc(e.envoyes), esc(e.attendus)])}</div>
-          <div class="ala-menu">${e.bordereau ? __("Bordereau {0}", [esc(e.bordereau)]) + (e.suivi ? " · " + esc(e.suivi) : "")
-                                              : __("Pas encore de bordereau Aramex")}
+          <div class="ala-menu">${e.bordereau ? __("Bordereau d’envoi {0}", [esc(e.bordereau)]) + (e.suivi ? " · " + esc(e.suivi) : "")
+                                              : __("Pas encore de bordereau Aramex")}</div>
+          <div class="ala-menu">${e.bordereau_retour
+              ? `📮 ${__("Bordereau de retour (pochette) : <b>{0}</b>", [esc(e.bordereau_retour)])}${e.retour_suivi ? " — " + esc(e.retour_suivi) : ""}`
+              : (!e.bordereau ? "" : (this._data || {})._retours_recus ? __("Bordereau de retour : pas encore annoncé par Aramex")
+                                                                      : "🔎 " + __("Bordereau de retour : demande à Aramex…"))}
             ${e.retard ? ` · <span style="color:var(--ala-loss);font-weight:600">⏰ ${__("livré au client, pochette en retard de {0} j", [e.retard])}</span>` : ""}</div>
         </div>
         <button class="btn btn-xs btn-danger" data-act="echange-recu" data-echange="${esc(e.name)}">📦 ${__("Échange reçu")}</button>
         <button class="btn btn-xs btn-default" data-act="echange-annuler" data-echange="${esc(e.name)}">${__("Annuler l’échange")}</button>
       </div>`).join("")}</div>`);
+  }
+
+  // Le bordereau de la pochette se demande à Aramex APRÈS l'affichage : l'écran s'ouvre sans attendre le
+  // transporteur, la ligne se complète quelques secondes plus tard. Une fois par chargement des données.
+  _suivre_echanges() {
+    const d = this._data || {};
+    if (d._retours_demandes || !(d.echanges || []).some((e) => e.bordereau)) return;
+    d._retours_demandes = true;
+    frappe.call({ method: "customization_app.echange_aramex.suivre_retours" }).then((r) => {
+      if (this._data !== d || !r.message) return;
+      d.echanges = r.message;
+      d._retours_recus = true;
+      this._rendre_echanges();
+    });
   }
 
   _echange_recu(nom) {
@@ -626,6 +651,8 @@ class LivraisonAramex {
       <div class="text-muted" style="font-size:11.5px;margin-bottom:8px">
         📷 ${__("Photographiez l’étiquette Aramex de la pochette : elle est comparée au bordereau de cet échange, puis les articles rentrent en stock.")}
       </div>`);
+    d.fields_dict.info.$wrapper.append(e.bordereau_retour
+      ? `<div style="font-size:12.5px;margin-bottom:8px">📮 ${__("Bordereau de retour attendu sur l’étiquette : <b>{0}</b>", [esc(e.bordereau_retour)])}${e.retour_suivi ? ` <span class="text-muted">— ${esc(e.retour_suivi)}</span>` : ""}</div>` : "");
     zone = this._zone_photo(d, {
       bouton: __("Photo de la pochette revenue"), qui: esc(e.client || __("ce client")), quoi: __("la pochette"),
       reference: e.bordereau || "",

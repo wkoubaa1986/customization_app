@@ -13,6 +13,8 @@
   "nom_client",
   "column_break_1",
   "bordereau",
+  "bordereau_retour",
+  "retour_suivi",
   "commande_origine",
   "entrepot",
   "section_articles",
@@ -185,12 +187,28 @@
    "label": "V\u00e9rification de la photo",
    "no_copy": 1,
    "read_only": 1
+  },
+  {
+   "description": "Le num\u00e9ro qu\u2019Aramex donne \u00e0 la pochette qui revient : c\u2019est lui qui est imprim\u00e9 sur son \u00e9tiquette.",
+   "fieldname": "bordereau_retour",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Bordereau de retour (pochette)",
+   "no_copy": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "retour_suivi",
+   "fieldtype": "Data",
+   "label": "Suivi de la pochette",
+   "no_copy": 1,
+   "read_only": 1
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-11-19 17:14:18.098067",
+ "modified": "2026-11-19 17:22:42.632160",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Echange Aramex",

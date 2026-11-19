@@ -672,7 +672,7 @@ def get_data(from_date=None, to_date=None):
 
     # Le retour physique du colis : le bouton « 📦 Retour reçu » ne se montre
     # que sur un suivi qui annonce un retour, et se tait une fois constaté.
-    from customization_app.retour_aramex import _MOTS_RETOUR
+    from customization_app.retour_aramex import _MOTS_RETOUR, numeros_de_retour
     retours = {r.name: r for r in frappe.get_all(
         DOCTYPE_SUIVI,
         filters={"name": ("in", [c["reference"] for c in colis if c["reference"]])},
@@ -689,6 +689,9 @@ def get_data(from_date=None, to_date=None):
                         and any(m in texte for m in _MOTS_RETOUR),
             "constate": str(r.retour_recu_le) if (r and r.retour_recu_le) else None,
             "bl": (r.retour_bl if r else None),
+            # Le bordereau de RETOUR annoncé par Aramex (« Rtn HAWB … ») : celui de l'étiquette du colis qui
+            # revient, que la photo doit montrer.
+            "bordereaux": sorted(numeros_de_retour(s)),
         }
 
     # Les échanges d'articles dont la pochette n'est pas revenue : toujours en tête de l'écran, quelle que soit la

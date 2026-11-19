@@ -229,6 +229,47 @@ def declarer(commande, envoyes, attendus, entrepot=None, commande_origine=None, 
     return {"echange": doc.name, "sortie_stock": sortie}
 
 
+# ── Le bordereau de retour : le numéro de la pochette ─────────────────────────
+#
+# La pochette qui revient ne porte PAS le bordereau de notre envoi : Aramex lui en donne un nouveau, annoncé dans le
+# suivi de notre colis (« Rtn HAWB 55087851044 »). C'est ce numéro-là qui est imprimé sur son étiquette — donc celui
+# que l'employé peut comparer de ses yeux, et que la lecture de la photo retrouve. On le garde sur l'échange.
+
+def _noter_retour(nom, numeros, statut="", date=""):
+    """Garde sur l'échange le bordereau de retour annoncé et où il en est. Sans effet s'il n'y en a pas."""
+    numeros = sorted(n for n in (numeros or []) if n)
+    if not numeros:
+        return
+    suivi = " ".join(filter(None, [statut, ("le %s" % date) if date and statut else date]))
+    frappe.db.set_value(DOCTYPE, nom, {"bordereau_retour": ", ".join(numeros), "retour_suivi": suivi[:140] or None},
+                        update_modified=False)
+
+
+@frappe.whitelist()
+def suivre_retours():
+    """Demande à Aramex, pour chaque échange en attente, le bordereau de la pochette et s'il nous a été livré.
+    Appelé APRÈS l'affichage de l'écran (qui s'ouvre sans attendre le transporteur). -> la liste à jour."""
+    frappe.only_for(ROLES)
+    from customization_app import retour_aramex as R
+
+    for nom in frappe.get_all(DOCTYPE, filters={"statut": ATTENDU}, pluck="name"):
+        try:
+            reference = _bordereau(frappe.get_doc(DOCTYPE, nom))
+            if not reference:
+                continue
+            numeros = R.numeros_de_retour(R._suivi_frais(reference, timeout=20))
+            statut, date = "", ""
+            for numero in sorted(numeros):
+                etat = R._suivi_frais(numero, timeout=20)
+                statut = ("Livré chez nous" if etat.get("livre") else etat.get("statut")) or statut
+                date = ((etat.get("evenements") or [{}])[0].get("date") or "") or date
+            _noter_retour(nom, numeros, statut, date)
+        except Exception:
+            frappe.log_error(frappe.get_traceback(), "Échange Aramex : suivi de la pochette")
+    frappe.db.commit()
+    return en_cours()
+
+
 # ── Recevoir ──────────────────────────────────────────────────────────────────
 
 def _echange_attendu(echange):
@@ -255,6 +296,10 @@ def verifier_photo(echange, photo):
         resultat = {"verdict": "sans_bordereau", "lu": {}, "attendu": {}, "autre": None}
     else:
         resultat = R.verifier(reference, photo)
+        attendu = resultat.get("attendu") or {}
+        _noter_retour(doc.name, attendu.get("retours"),
+                      "Livré chez nous" if attendu.get("retour_livre") else attendu.get("retour_statut") or "",
+                      attendu.get("retour_date") or "")
     resultat["empreinte"] = hashlib.sha1((photo or "").encode()).hexdigest()
     resultat["peut_forcer"] = bool(set(frappe.get_roles()) & set(R.ROLES_FORCER))
     frappe.cache().set_value(_cle(echange), resultat, expires_in_sec=VERIFICATION_TTL)
@@ -349,7 +394,8 @@ def en_cours() -> list:
 
     out = []
     for e in frappe.get_all(DOCTYPE, filters={"statut": ATTENDU}, order_by="envoye_le asc",
-                            fields=["name", "commande", "nom_client", "bordereau", "envoye_le", "entrepot"]):
+                            fields=["name", "commande", "nom_client", "bordereau", "envoye_le", "entrepot",
+                                    "bordereau_retour", "retour_suivi"]):
         doc = frappe.get_doc(DOCTYPE, e.name)
         reference = _bordereau(doc)
         suivi = frappe.db.get_value(DOCTYPE_SUIVI, reference, ["statut", "livre", "derniere_date", "livre_notifie_le"],
@@ -360,6 +406,7 @@ def en_cours() -> list:
             "envoyes": texte_lignes([{"item_code": l.item_code, "qty": l.qty} for l in doc.envoyes]),
             "attendus": texte_lignes([{"item_code": l.item_code, "qty": l.qty} for l in doc.attendus]),
             "declare_le": str(e.envoye_le or "")[:10],
+            "bordereau_retour": e.bordereau_retour or "", "retour_suivi": e.retour_suivi or "",
             "suivi": (suivi.statut if suivi else ""), "livre": bool(suivi and cint(suivi.livre)),
             "retard": jours_de_retard(livre_le, nowdate()),
         })

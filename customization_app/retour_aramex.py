@@ -330,14 +330,18 @@ def verifier(reference, photo) -> dict:
     # La correspondance par l'API : le numéro de retour de NOTRE bordereau, puis l'état de ce retour.
     suivi = _suivi_frais(reference)
     retours = numeros_de_retour(suivi, doc.get("derniere_description"))
-    retour_livre, retour_statut = None, ""
+    retour_livre, retour_statut, retour_date = None, "", ""
     for numero in sorted(retours):
         etat = _suivi_frais(numero, timeout=20)
         if etat:
             retour_livre = bool(etat.get("livre")) or bool(retour_livre)
             retour_statut = etat.get("statut") or retour_statut
+            retour_date = ((etat.get("evenements") or [{}])[0].get("date") or "") or retour_date
+    # `retours` : le bordereau de RETOUR annoncé par Aramex — c'est le numéro imprimé sur l'étiquette du colis qui
+    # revient, donc celui que la lecture de la photo doit retrouver. L'écran le montre à côté de ce qui a été lu.
     attendu = {"reference": reference, "retours": sorted(retours), "retour_livre": retour_livre,
-               "retour_statut": retour_statut, "destinataire": doc.get("destinataire") or ""}
+               "retour_statut": retour_statut, "retour_date": retour_date,
+               "destinataire": doc.get("destinataire") or ""}
 
     lu = lire_etiquette(photo)
     if lu.get("erreur"):
