@@ -116,6 +116,9 @@ def _ajouter_ligne(single: str, enfant: str, valeurs: dict) -> str:
     if ligne_existe(lignes, valeurs, cles_identite(valeurs)):
         return "déjà là"
     doc.append(champ, valeurs)
+    # Rangs remis de 1 à N : après un retrait fait par le code, la ligne ajoutée prendrait un rang déjà pris.
+    for rang, ligne in enumerate(doc.get(champ) or [], start=1):
+        ligne.idx = rang
     doc.flags.ignore_permissions = True
     doc.save()
     return "ajouté"

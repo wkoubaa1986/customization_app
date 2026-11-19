@@ -132,3 +132,4 @@ customization_app.patches.type_transaction_defaut
 customization_app.patches.taxes_repliables_commande
 customization_app.patches.avoir_bloc_paiement
 customization_app.patches.renommer_onglet_relances
+customization_app.patches.ordre_techniciens_portail_rdv

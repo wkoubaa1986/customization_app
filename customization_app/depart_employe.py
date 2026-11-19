@@ -334,6 +334,10 @@ def _retirer_des_reglages(lignes: list[dict], journal: list[str]):
         noms = {l["name"] for l in ls}
         for champ in {l["parentfield"] for l in ls}:
             doc.set(champ, [r for r in (doc.get(champ) or []) if r.name not in noms])
+            # Frappe ne renumérote pas les lignes restantes : sans cela un rang manque, et la prochaine ligne ajoutée
+            # par le code prend un rang déjà pris (portail de rendez-vous : ordre des techniciens indéterminé).
+            for rang, ligne in enumerate(doc.get(champ) or [], start=1):
+                ligne.idx = rang
         doc.flags.ignore_permissions = True
         doc.save()
         journal.append(_("retiré de {0} ({1} ligne(s))").format(_(parent), len(noms)))

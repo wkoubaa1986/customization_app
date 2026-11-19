@@ -110,7 +110,9 @@ def _liste_employes(config):
     lignes = frappe.get_all(
         "Portail RDV Employe",
         filters={"parent": "Config Portail RDV", "parenttype": "Config Portail RDV"},
-        fields=["employe"], order_by="idx")
+        # « creation » départage deux lignes de même rang : un retrait puis un ajout faits par le code (départ puis
+        # arrivée d'un employé) ont laissé Jamel et Radhouan tous deux au rang 3 — ordre indéterminé (19/11/2026).
+        fields=["employe"], order_by="idx, creation")
     liste = [l.employe for l in lignes if l.employe]
     if not liste and config.get("employe_defaut"):
         liste = [config.get("employe_defaut")]
