@@ -530,6 +530,27 @@ def annuler(echange, motif):
 
 # ── Ce que l'écran Livraisons Aramex affiche ──────────────────────────────────
 
+JOURS_RECENTS = 30
+
+
+def recus_recemment() -> list:
+    """Les échanges REÇUS depuis 30 jours : l'écran les rappelle sous ceux en attente — un échange terminé ne doit
+    pas disparaître sans laisser d'adresse où le retrouver (19/11/2026 : celui repris par le patch en prod était
+    introuvable depuis l'écran)."""
+    if not frappe.db.table_exists(DOCTYPE):
+        return []
+    out = []
+    for e in frappe.get_all(DOCTYPE, filters={"statut": RECU, "recu_le": [">=", frappe.utils.add_days(nowdate(), -JOURS_RECENTS)]},
+                            fields=["name", "commande", "nom_client", "recu_le", "entrepot_retour", "bordereau_retour"],
+                            order_by="recu_le desc", limit=20):
+        doc = frappe.get_doc(DOCTYPE, e.name)
+        out.append({"name": e.name, "commande": e.commande, "client": e.nom_client, "recu_le": str(e.recu_le or "")[:10],
+                    "entrepot": e.entrepot_retour or "", "bordereau_retour": e.bordereau_retour or "",
+                    "envoyes": texte_lignes([{"item_code": l.item_code, "qty": l.qty} for l in doc.envoyes]),
+                    "attendus": texte_lignes([{"item_code": l.item_code, "qty": l.qty} for l in doc.attendus])})
+    return out
+
+
 def en_cours() -> list:
     """Les échanges dont la pochette n'est pas encore revenue, les plus anciens d'abord."""
     if not frappe.db.table_exists(DOCTYPE):

@@ -571,10 +571,19 @@ class LivraisonAramex {
     const liste = (this._data || {}).echanges || [];
     let $bloc = this.$root.find("[data-role='echanges']");
     if (!$bloc.length) $bloc = $(`<div data-role="echanges"></div>`).insertBefore(this.$root.find("[data-role='kpis']"));
-    if (!liste.length) { $bloc.empty(); return; }
+    // Les échanges reçus depuis 30 jours restent rappelés dessous, repliés : un échange terminé garde une adresse.
+    const recus = (this._data || {}).echanges_recus || [];
+    if (!liste.length && !recus.length) { $bloc.empty(); return; }
+    const lignesRecus = recus.map((e) => `<div style="padding:7px 14px;border-top:1px solid var(--border-color);font-size:12.5px">
+        ✅ <b>${esc(e.client || "")}</b> <span class="ala-menu">· <a href="/app/sales-order/${encodeURIComponent(e.commande)}">${esc(e.commande)}</a>
+          · <a href="/app/echange-aramex/${encodeURIComponent(e.name)}">${esc(e.name)}</a></span>
+        — ${__("envoyé {0}, revenu {1} le {2}", [esc(e.envoyes), esc(e.attendus), frappe.datetime.str_to_user(e.recu_le)])}${e.entrepot ? ` <span class="ala-menu">→ ${esc(e.entrepot)}</span>` : ""}</div>`).join("");
+    const piedRecus = recus.length ? `<details ${liste.length ? "" : "open"} style="border-top:1px solid var(--border-color)">
+        <summary style="padding:8px 14px;font-size:12.5px;cursor:pointer;color:var(--text-muted)">${__("Échanges reçus depuis 30 jours")} (${recus.length})
+          · <a href="/app/echange-aramex">${__("tous les échanges")}</a></summary>${lignesRecus}</details>` : "";
     $bloc.html(`<div class="ala-liste" style="margin-bottom:16px;border-color:var(--ala-accent)">
       <div style="padding:9px 14px;font-weight:700;font-size:13px;border-bottom:1px solid var(--border-color)">
-        🔁 ${__("Échanges d’articles — pochette attendue")} (${liste.length})</div>
+        🔁 ${liste.length ? __("Échanges d’articles — pochette attendue") + ` (${liste.length})` : __("Échanges d’articles — aucune pochette attendue")}</div>
       ${liste.map((e) => `<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:10px 14px;border-bottom:1px solid var(--border-color);font-size:12.5px">
         <div style="flex:1;min-width:230px">
           <b>${esc(e.client || "")}</b>
@@ -591,7 +600,7 @@ class LivraisonAramex {
         </div>
         <button class="btn btn-xs btn-danger" data-act="echange-recu" data-echange="${esc(e.name)}">📦 ${__("Échange reçu")}</button>
         <button class="btn btn-xs btn-default" data-act="echange-annuler" data-echange="${esc(e.name)}">${__("Annuler l’échange")}</button>
-      </div>`).join("")}</div>`);
+      </div>`).join("")}${piedRecus}</div>`);
   }
 
   // Le bordereau de la pochette se demande à Aramex APRÈS l'affichage : l'écran s'ouvre sans attendre le
