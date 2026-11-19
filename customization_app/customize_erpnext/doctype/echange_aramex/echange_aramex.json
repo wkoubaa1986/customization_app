@@ -16,6 +16,7 @@
   "bordereau_retour",
   "retour_suivi",
   "commande_origine",
+  "bl_origine",
   "entrepot",
   "section_articles",
   "envoyes",
@@ -203,12 +204,20 @@
    "label": "Suivi de la pochette",
    "no_copy": 1,
    "read_only": 1
+  },
+  {
+   "description": "Le bon de livraison dont les articles reviennent.",
+   "fieldname": "bl_origine",
+   "fieldtype": "Link",
+   "label": "Bon de livraison d\u2019origine",
+   "options": "Delivery Note",
+   "read_only": 1
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-11-19 17:22:42.632160",
+ "modified": "2026-11-19 17:34:44.534920",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Echange Aramex",

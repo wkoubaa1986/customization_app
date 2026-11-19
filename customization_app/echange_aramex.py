@@ -21,7 +21,8 @@ Des écritures de stock, pas des bons de livraison : un BL de retour contre la c
 « retournée » et fausserait ce qui reste à facturer. Les échanges faits SUR PLACE avec un article « E-… » restent
 l'affaire de `retour_echange`.
 
-`lignes_propres`, `texte_lignes`, `jours_de_retard`, `date_de_validation` sont PURES (testées sans site).
+`lignes_propres`, `texte_lignes`, `jours_de_retard`, `date_de_validation`, `livraisons_du_client`,
+`ecarts_avec_le_bl` sont PURES (testées sans site).
 """
 from __future__ import annotations
 
@@ -70,6 +71,35 @@ def jours_de_retard(livre_le, aujourd_hui, tolerance=JOURS_ALERTE) -> int:
         return 0
     ecart = (getdate(aujourd_hui) - getdate(livre_le)).days - tolerance
     return max(ecart, 0)
+
+
+def livraisons_du_client(lignes) -> list:
+    """Les bons de livraison récents d'un client, du plus récent au plus ancien, chacun avec ses articles :
+    [{"bl", "date", "commande", "articles": [{item_code, item_name, qty}], "resume"}]. PURE.
+    `lignes` : une ligne par (BL, article), dans l'ordre voulu des BL."""
+    par_bl = {}
+    for l in lignes or []:
+        bl = par_bl.setdefault(l["bl"], {"bl": l["bl"], "date": str(l.get("posting_date") or ""),
+                                         "commande": l.get("commande") or "", "articles": []})
+        bl["articles"].append({"item_code": l["item_code"], "item_name": l.get("item_name") or "", "qty": flt(l.get("qty"))})
+    for bl in par_bl.values():
+        bl["resume"] = texte_lignes(bl["articles"])
+    return list(par_bl.values())
+
+
+def ecarts_avec_le_bl(attendus, articles_du_bl) -> list:
+    """Ce que le client ne peut PAS renvoyer de ce bon de livraison : un article qui n'y est pas, ou plus que ce
+    qu'il a reçu. -> liste de phrases (vide = tout est cohérent). PURE."""
+    livre = {}
+    for a in articles_du_bl or []:
+        livre[a["item_code"]] = livre.get(a["item_code"], 0) + flt(a.get("qty"))
+    out = []
+    for l in attendus or []:
+        if l["item_code"] not in livre:
+            out.append("%s n'est pas sur ce bon de livraison" % l["item_code"])
+        elif flt(l["qty"]) > livre[l["item_code"]]:
+            out.append("%s : %g à renvoyer pour %g livré(s)" % (l["item_code"], flt(l["qty"]), livre[l["item_code"]]))
+    return out
 
 
 def date_de_validation(versions):
@@ -190,6 +220,28 @@ def bordereau_enregistre(commande, numero):
 
 # ── Déclarer ──────────────────────────────────────────────────────────────────
 
+JOURS_LIVRAISONS = 180       # jusqu'où remonter pour proposer le bon de livraison à corriger
+MAX_LIVRAISONS = 15
+
+
+def _livraisons(client, sauf_commande=None, bl=None) -> list:
+    """Les bons de livraison validés du client (articles suivis en stock seulement — « Livraison » n'en est pas),
+    hors la commande de l'échange elle-même. `bl` : celui-là seulement, sans limite de date."""
+    lignes = frappe.db.sql(
+        """SELECT dn.name AS bl, dn.posting_date, MAX(dni.against_sales_order) AS commande, dni.item_code,
+                  MAX(dni.item_name) AS item_name, SUM(dni.qty) AS qty
+           FROM `tabDelivery Note` dn JOIN `tabDelivery Note Item` dni ON dni.parent = dn.name
+           JOIN `tabItem` i ON i.name = dni.item_code AND i.is_stock_item = 1
+           WHERE dn.customer = %(c)s AND dn.docstatus = 1 AND dn.is_return = 0
+             AND (%(bl)s <> '' AND dn.name = %(bl)s
+                  OR %(bl)s = '' AND dn.posting_date >= DATE_SUB(CURDATE(), INTERVAL %(jours)s DAY))
+             AND IFNULL(dni.against_sales_order, '') <> %(so)s
+           GROUP BY dn.name, dni.item_code
+           ORDER BY dn.posting_date DESC, dn.name DESC, MIN(dni.idx)""",
+        {"c": client, "so": sauf_commande or "", "bl": bl or "", "jours": JOURS_LIVRAISONS}, as_dict=True)
+    return livraisons_du_client(lignes)[:MAX_LIVRAISONS]
+
+
 @frappe.whitelist()
 def proposer(commande):
     """Ce que le dialogue de la commande doit savoir : l'échange déjà déclaré s'il y en a un, sinon ce que le client
@@ -200,32 +252,27 @@ def proposer(commande):
     if not so:
         frappe.throw(_("Commande introuvable."))
     existant = frappe.db.get_value(DOCTYPE, {"commande": commande, "statut": ["!=", ANNULE]}, ["name", "statut"], as_dict=True)
-    recus = frappe.db.sql(
-        """SELECT dn.name AS bl, dn.posting_date, dni.against_sales_order AS commande, dni.item_code, dni.item_name,
-                  SUM(dni.qty) AS qty
-           FROM `tabDelivery Note` dn JOIN `tabDelivery Note Item` dni ON dni.parent = dn.name
-           JOIN `tabItem` i ON i.name = dni.item_code AND i.is_stock_item = 1
-           WHERE dn.customer = %(c)s AND dn.docstatus = 1 AND dn.is_return = 0
-             AND dn.posting_date >= DATE_SUB(CURDATE(), INTERVAL 120 DAY)
-             AND IFNULL(dni.against_sales_order, '') <> %(so)s
-           GROUP BY dn.name, dni.item_code ORDER BY dn.posting_date DESC, dn.name DESC, dni.idx""",
-        {"c": so.customer, "so": commande}, as_dict=True)
-    dernier = recus[0].bl if recus else None
+    livraisons = _livraisons(so.customer, sauf_commande=commande)
+    dernier = livraisons[0] if livraisons else None
     return {
         "commande": so.name, "client": so.customer_name or so.customer, "bordereau": so.custom_bordereau_aramex or "",
         "existant": existant, "entrepot": _entrepot_defaut(),
         # La sortie de stock portera la date de validation de la commande : l'écran le dit avant de déclarer.
         "date_sortie": _date_de_sortie(commande),
-        # Le dernier bon de livraison du client : c'est presque toujours lui qu'on corrige.
-        "attendus": [{"item_code": r.item_code, "item_name": r.item_name, "qty": flt(r.qty)} for r in recus if r.bl == dernier],
-        "commande_origine": (recus[0].commande if recus else None), "bl_origine": dernier,
-        "date_origine": str(recus[0].posting_date) if recus else None,
+        # Les bons de livraison du client : l'utilisateur choisit celui que l'échange corrige. Le dernier est
+        # proposé d'office — c'est presque toujours lui.
+        "livraisons": livraisons,
+        "attendus": dernier["articles"] if dernier else [],
+        "commande_origine": dernier["commande"] if dernier else None,
+        "bl_origine": dernier["bl"] if dernier else None,
+        "date_origine": dernier["date"] if dernier else None,
     }
 
 
 @frappe.whitelist(methods=["POST"])
-def declarer(commande, envoyes, attendus, entrepot=None, commande_origine=None, note=None):
-    """Déclare l'échange : ce qui part SORT du stock maintenant ; ce qui revient est attendu."""
+def declarer(commande, envoyes, attendus, entrepot=None, commande_origine=None, note=None, bl_origine=None):
+    """Déclare l'échange : ce qui part SORT du stock ; ce qui revient est attendu.
+    `bl_origine` : le bon de livraison que l'échange corrige — ce qui revient doit en venir."""
     frappe.only_for(ROLES)
     so = frappe.db.get_value("Sales Order", commande, ["name", "customer", "customer_name", "docstatus",
                                                        "custom_bordereau_aramex"], as_dict=True)
@@ -243,12 +290,24 @@ def declarer(commande, envoyes, attendus, entrepot=None, commande_origine=None, 
         frappe.throw(_("Entrepôt inconnu : {0}").format(entrepot))
     _verifier_articles(attendus)
     _verifier_articles(envoyes, entrepot)
+    bl_origine = (bl_origine or "").strip() or None
+    if bl_origine:
+        # Le bon de livraison choisi est bien celui de CE client, et ce qui revient en vient vraiment.
+        du_bl = _livraisons(so.customer, sauf_commande=commande, bl=bl_origine)
+        if not du_bl:
+            frappe.throw(_("Le bon de livraison {0} n'est pas un bon validé de ce client.").format(bl_origine))
+        ecarts = ecarts_avec_le_bl(attendus, du_bl[0]["articles"])
+        if ecarts:
+            frappe.throw(_("Ce que le client renvoie ne correspond pas au bon de livraison {0} : {1}.")
+                         .format(bl_origine, " ; ".join(ecarts)))
+        commande_origine = du_bl[0]["commande"] or commande_origine
 
     le = _date_de_sortie(commande)
     doc = frappe.get_doc({
         "doctype": DOCTYPE, "statut": ATTENDU, "commande": commande, "client": so.customer,
         "nom_client": so.customer_name or so.customer, "bordereau": so.custom_bordereau_aramex or None,
-        "commande_origine": commande_origine or None, "entrepot": entrepot, "note": (note or "").strip() or None,
+        "commande_origine": commande_origine or None, "bl_origine": bl_origine,
+        "entrepot": entrepot, "note": (note or "").strip() or None,
         "envoyes": envoyes, "attendus": attendus, "envoye_le": le or now_datetime(), "envoye_par": frappe.session.user,
     })
     doc.flags.ignore_permissions = True
@@ -258,9 +317,10 @@ def declarer(commande, envoyes, attendus, entrepot=None, commande_origine=None, 
                              le=le)
     doc.db_set("sortie_stock", sortie, update_modified=False)
     _commenter("Sales Order", commande, _(
-        "🔁 Échange {0} déclaré par {1} : envoyé {2} (sorti de {3}, écriture {4} datée du {5}) — retour attendu : {6}.").format(
+        "🔁 Échange {0} déclaré par {1} : envoyé {2} (sorti de {3}, écriture {4} datée du {5}) — retour attendu : {6}{7}.").format(
         doc.name, frappe.session.user, texte_lignes(envoyes), entrepot, sortie,
-        (le or str(now_datetime()))[:16], texte_lignes(attendus)))
+        (le or str(now_datetime()))[:16], texte_lignes(attendus),
+        (" (du bon de livraison %s)" % bl_origine) if bl_origine else ""))
     frappe.db.commit()
     return {"echange": doc.name, "sortie_stock": sortie, "date_sortie": (le or str(now_datetime()))[:16]}
 

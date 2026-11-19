@@ -35,9 +35,22 @@
         size: "large",
         fields: [
           { fieldtype: "HTML", fieldname: "intro" },
-          table("attendus", __("Le client me renvoie"), (p.attendus || []).map((l) => ({ item_code: l.item_code, qty: l.qty })),
-                p.bl_origine ? __("Prérempli avec sa dernière livraison ({0} du {1}) : corrigez si besoin.",
-                                  [p.bl_origine, frappe.datetime.str_to_user(p.date_origine)]) : ""),
+          // Le bon de livraison que l'échange corrige : le dernier du client d'office, mais c'est un CHOIX — un
+          // client livré deux fois dans le mois ne renvoie pas forcément ce qu'il a reçu en dernier.
+          { fieldtype: "Select", fieldname: "bl_origine", label: __("Bon de livraison à corriger"),
+            options: [{ label: __("— aucun : je saisis les articles moi-même —"), value: "" }].concat((p.livraisons || []).map((l) => ({
+              value: l.bl, label: `${l.bl} — ${frappe.datetime.str_to_user(l.date)} — ${l.resume}` }))),
+            default: p.bl_origine || "",
+            description: __("Les articles de ce bon remplissent « Le client me renvoie » : gardez seulement ceux qui reviennent."),
+            onchange: () => {
+              const choisi = (p.livraisons || []).find((l) => l.bl === d.get_value("bl_origine"));
+              const lignes = choisi ? choisi.articles.map((a) => ({ item_code: a.item_code, qty: a.qty })) : [];
+              const champ = d.fields_dict.attendus;
+              champ.df.data = lignes;
+              champ.grid.df.data = lignes;
+              champ.grid.refresh();
+            } },
+          table("attendus", __("Le client me renvoie"), (p.attendus || []).map((l) => ({ item_code: l.item_code, qty: l.qty })), ""),
           table("envoyes", __("J’envoie au client"), [],
                 p.date_sortie ? __("Ces articles sortent du stock à la date de validation de la commande : le {0}.", [frappe.datetime.str_to_user(p.date_sortie)])
                               : __("Ces articles sortent du stock dès que vous déclarez l’échange.")),
@@ -52,7 +65,7 @@
           frappe.call({
             method: M + "declarer", type: "POST", freeze: true, freeze_message: __("Sortie de stock…"),
             args: { commande: frm.doc.name, envoyes: lignes(v.envoyes), attendus: lignes(v.attendus), entrepot: v.entrepot,
-                    commande_origine: p.commande_origine || null, note: v.note },
+                    bl_origine: v.bl_origine || null, note: v.note },
             callback: (rr) => {
               d.hide();
               const m = rr.message || {};

@@ -23,6 +23,28 @@ class TestLignes(unittest.TestCase):
                          "3 × Acc020-A, 1.5 × T33")
 
 
+class TestBonDeLivraison(unittest.TestCase):
+    """L'utilisateur choisit le bon de livraison que l'échange corrige."""
+
+    LIGNES = [{"bl": "MAT-DN-2", "posting_date": "2026-11-07", "commande": "WEB1-008697", "item_code": "Acc020-B", "item_name": "Robinet", "qty": 3},
+              {"bl": "MAT-DN-1", "posting_date": "2026-10-01", "commande": "WEB1-008500", "item_code": "T33", "item_name": "T33", "qty": 1},
+              {"bl": "MAT-DN-1", "posting_date": "2026-10-01", "commande": "WEB1-008500", "item_code": "Membrane", "item_name": "Membrane", "qty": 2}]
+
+    def test_un_bloc_par_bon_dans_l_ordre_recu(self):
+        r = E.livraisons_du_client(self.LIGNES)
+        self.assertEqual([x["bl"] for x in r], ["MAT-DN-2", "MAT-DN-1"])
+        self.assertEqual(r[0]["resume"], "3 × Acc020-B")
+        self.assertEqual(r[1]["resume"], "1 × T33, 2 × Membrane")
+        self.assertEqual(r[0]["commande"], "WEB1-008697")
+
+    def test_ce_qui_revient_doit_venir_du_bon_choisi(self):
+        du_bl = E.livraisons_du_client(self.LIGNES)[0]["articles"]
+        self.assertEqual(E.ecarts_avec_le_bl([{"item_code": "Acc020-B", "qty": 3}], du_bl), [])
+        self.assertEqual(E.ecarts_avec_le_bl([{"item_code": "Acc020-B", "qty": 2}], du_bl), [])      # une partie seulement
+        self.assertEqual(len(E.ecarts_avec_le_bl([{"item_code": "Acc020-B", "qty": 4}], du_bl)), 1)  # plus que livré
+        self.assertEqual(len(E.ecarts_avec_le_bl([{"item_code": "Acc010-A", "qty": 1}], du_bl)), 1)  # pas sur ce bon
+
+
 class TestDateDeValidation(unittest.TestCase):
     """La sortie de stock est datée de la VALIDATION de la commande (docstatus 0 → 1 dans son historique)."""
 
