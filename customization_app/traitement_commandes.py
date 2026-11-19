@@ -482,6 +482,10 @@ def _definir_bordereau(commande, bordereau, origine=None):
         frappe.db.get_value("Sales Order", commande, "custom_bordereau_aramex"))
     frappe.db.set_value("Sales Order", commande, "custom_bordereau_aramex", numero,
                         update_modified=False)
+    # Un échange d'articles déclaré sur cette commande retient le bordereau : c'est par lui que la pochette
+    # revenue sera reconnue (echange_aramex). Jamais bloquant.
+    from customization_app.echange_aramex import bordereau_enregistre
+    bordereau_enregistre(commande, numero)
 
     # Aligner la ligne « Dette non payée » du calendrier de paiement : son champ « N: Chèque /
     # Transaction » est ce que les Server Scripts « Generation payement » / « re-generate

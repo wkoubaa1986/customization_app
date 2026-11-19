@@ -619,6 +619,9 @@ app_include_js = [_js("customer_quick_entry.js"),
                   # d'onglets de la fiche, et calendrier des tâches depuis la liste.
                   # ⚠️ APRÈS calendrier_rdv_button.js, dont il appelle `rdvLibre_openOverlay`.
                   _js("sales_order_rdv.js"),
+                  # « 🔁 Échange d'articles » sur la commande : ce qu'on envoie sort du stock, ce qui revient est
+                  # attendu sur l'écran Livraisons Aramex (echange_aramex).
+                  _js("sales_order_echange.js"),
                   # Annuler une commande sans le dialogue « Annuler tous les
                   # documents » : la cascade serveur (annulation_commande.py)
                   # gère déjà BL, échéancier, calendrier, paiements.

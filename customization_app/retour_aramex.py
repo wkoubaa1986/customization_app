@@ -285,6 +285,9 @@ def _fiche_colis(reference, sur=True) -> dict:
     colis["retour_recu_le"] = str(colis.get("retour_recu_le") or "")[:16]
     if colis.get("commande"):
         colis["client"] = frappe.db.get_value("Sales Order", colis["commande"], "customer_name") or ""
+        # La pochette d'un ÉCHANGE d'articles : l'écran renvoie alors vers « Échange reçu », le bon geste.
+        from customization_app.echange_aramex import echange_ouvert_de
+        colis["echange"] = echange_ouvert_de(colis["commande"]) or ""
     return colis
 
 

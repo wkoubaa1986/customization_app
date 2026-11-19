@@ -691,7 +691,12 @@ def get_data(from_date=None, to_date=None):
             "bl": (r.retour_bl if r else None),
         }
 
-    return {"periode": {"from": str(depuis), "to": str(jusqu_a)},
+    # Les échanges d'articles dont la pochette n'est pas revenue : toujours en tête de l'écran, quelle que soit la
+    # période — c'est LÀ qu'on clique quand elle arrive (le 18/11/2026, faute de cette ligne, on a cliqué
+    # « Retour reçu » sur le colis d'un autre client).
+    from customization_app.echange_aramex import en_cours as echanges_en_cours
+
+    return {"periode": {"from": str(depuis), "to": str(jusqu_a)}, "echanges": echanges_en_cours(),
             "compte": COMPTE_ARAMEX, "colis": colis, "kpis": kpis(colis),
             "peut_voir_paiement": peut_voir_paiement(), "sms_auto": sms_actif()}
 

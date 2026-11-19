@@ -44,6 +44,8 @@ class LivraisonAramex {
       const $p = $(e.currentTarget);
       this._ouvrir($p.data("doctype"), $p.data("name"));
     });
+    this.$root.on("click", "[data-act='echange-recu']", (e) => this._echange_recu($(e.currentTarget).data("echange")));
+    this.$root.on("click", "[data-act='echange-annuler']", (e) => this._echange_annuler($(e.currentTarget).data("echange")));
     this.$root.on("click", "[data-act='retour']", (e) =>
       this._retour($(e.currentTarget).data("pe"))
     );
@@ -210,6 +212,7 @@ class LivraisonAramex {
       ].join("")
     );
 
+    this._rendre_echanges();
     this.$root.find("[data-role='sms-auto']").prop("checked", !!d.sms_auto);
 
     const tous = d.colis || [];
@@ -401,7 +404,7 @@ class LivraisonAramex {
   _retour(pe) {
     const c = (this._data.colis || []).find((x) => x.payment_entry === pe) || {};
     const esc = frappe.utils.escape_html;
-    let photo = null, photo_nom = null, verif = null, tour = 0;
+    let zone = null;
     const d = new frappe.ui.Dialog({
       title: __("Retour reçu — {0} ({1})", [
         esc(c.customer_name || ""), format_currency(c.montant || 0, "TND")]),
@@ -412,18 +415,18 @@ class LivraisonAramex {
       ],
       primary_action_label: __("Constater le retour"),
       primary_action: (v) => {
-        if (!photo) {
+        if (!zone.photo()) {
           frappe.msgprint(__("Prenez la photo du colis retourné : c'est la preuve du retour."));
           return;
         }
-        const forcer = d.$wrapper.find(".ala-forcer").is(":checked") ? 1 : 0;
+        const forcer = zone.forcer();
         if (forcer && !(v.note || "").trim()) {
           frappe.msgprint(__("Écrivez dans la note pourquoi vous constatez ce retour malgré la vérification."));
           return;
         }
         frappe.call({
           method: "customization_app.retour_aramex.constater_retour",
-          args: { payment_entry: pe, photo, photo_nom, note: v.note, forcer },
+          args: { payment_entry: pe, photo: zone.photo(), photo_nom: zone.nom(), note: v.note, forcer },
           freeze: true, freeze_message: __("BL de retour, paiement dette, commande…"),
           callback: (r) => {
             d.hide();
@@ -451,9 +454,24 @@ class LivraisonAramex {
       <div class="text-muted" style="font-size:11.5px;margin-bottom:8px">
         📷 ${__("Photographiez l’étiquette Aramex du colis, entière et nette : elle est lue et comparée à ce bordereau avant d’enregistrer.")}
       </div>`);
+    zone = this._zone_photo(d, {
+      bouton: __("Photo du colis retourné"), qui: esc(c.customer_name || __("ce client")), quoi: __("le colis"),
+      reference: c.reference || "",
+      methode: "customization_app.retour_aramex.verifier_photo", args: { payment_entry: pe },
+    });
+    d.show();
+  }
+
+  // ── La photo, vérifiée dès qu'elle est prise ────────────────────────────────────────────────────────────
+  // Commun au « Retour reçu » d'un colis et à l'« Échange reçu » d'une pochette : un bouton photo, un verdict
+  // dit en clair, et le bouton principal du dialogue éteint tant que le verdict n'est pas bon.
+  // -> { photo(), nom(), forcer() }
+  _zone_photo(d, o) {
+    const esc = frappe.utils.escape_html;
+    let photo = null, photo_nom = null, tour = 0;
     const $z = d.fields_dict.photo_zone.$wrapper;
     $z.html(`
-      <button type="button" class="btn btn-default btn-sm ala-photo-btn">📷 ${__("Photo du colis retourné")}</button>
+      <button type="button" class="btn btn-default btn-sm ala-photo-btn">📷 ${o.bouton}</button>
       <span class="ala-photo-nom text-muted" style="margin-left:8px"></span>
       <input type="file" accept="image/*" capture="environment" style="display:none">
       <div class="ala-verdict" style="margin-top:10px"></div>`);
@@ -461,7 +479,7 @@ class LivraisonAramex {
     const $ok = d.get_primary_btn();
     const boite = (couleur, fond, html) => $verdict.html(
       `<div style="border:1px solid ${couleur};background:${fond};border-radius:8px;padding:9px 11px;font-size:12.5px;line-height:1.5">${html}</div>`);
-    const qui = esc(c.customer_name || __("ce client"));
+    const qui = o.qui;
 
     // Un seul verdict, dit en clair ; le détail (ce qui a été lu) reste en petit dessous.
     const afficher = (v) => {
@@ -476,29 +494,34 @@ class LivraisonAramex {
       let autorise = false;
       if (v.verdict === "ok") {
         autorise = true;
-        boite("var(--green-500)", "var(--green-50, #f0fdf4)", `✅ <b>${__("C’est bien le colis de {0}", [qui])}</b> — ${__("bordereau {0}", [esc(c.reference || "")])}.${petit}`);
+        boite("var(--green-500)", "var(--green-50, #f0fdf4)", `✅ <b>${__("C’est bien {0} de {1}", [o.quoi, qui])}</b> — ${__("bordereau {0}", [esc(o.reference)])}.${petit}`);
+      } else if (v.verdict === "sans_bordereau") {
+        autorise = true;
+        boite("var(--border-color)", "var(--subtle-fg)", `ℹ️ ${__("Cet échange n’a pas de bordereau Aramex : la photo est gardée comme preuve, sans comparaison.")}`);
       } else if (v.verdict === "autre") {
         const a_qui = autre.destinataire || autre.client;
-        boite("var(--red-500)", "var(--red-50, #fef2f2)", `❌ <b>${__("Ce n’est pas le colis de {0}.", [qui])}</b><br>` +
+        boite("var(--red-500)", "var(--red-50, #fef2f2)", `❌ <b>${__("Ce n’est pas {0} de {1}.", [o.quoi, qui])}</b><br>` +
           (a_qui ? __(autre.sur === false ? "L’étiquette semble être celle de <b>{0}</b> — commande {1}, bordereau {2} ({3})."
                                           : "L’étiquette est celle de <b>{0}</b> — commande {1}, bordereau {2} ({3}).",
                       [esc(a_qui), esc(autre.commande || "?"), esc(autre.reference || ""), esc(autre.statut || "")])
                  : __("L’étiquette porte un autre bordereau, inconnu de nos envois.")) +
           (autre.etiquette_date ? "<br>" + __("Ce colis-là vous a été remis le {0}.", [esc(autre.etiquette_date)]) : "") +
+          // La pochette d'un échange d'articles a sa propre ligne, en haut de l'écran : on y renvoie.
+          (autre.echange ? "<br>🔁 " + __("C’est la pochette de l’<b>échange {0}</b> : fermez ce dialogue et utilisez « Échange reçu » en haut de l’écran.", [esc(autre.echange)]) : "") +
           (aramex ? "<br>" + aramex : "") +
-          `<br><b>${__("Rien n’est enregistré : reprenez la photo du bon colis.")}</b>${petit}`);
+          `<br><b>${__("Rien n’est enregistré.")}${autre.echange ? "" : " " + __("Reprenez la photo du bon colis.")}</b>${petit}`);
       } else if (v.verdict === "illisible") {
         boite("var(--orange-500)", "var(--orange-50, #fff7ed)", `⚠️ <b>${__("Je ne lis pas l’étiquette Aramex.")}</b> ${__("Reprenez la photo : étiquette entière, nette, sans reflet.")}${petit}`);
       } else {
         autorise = at.retour_livre === true;
         boite("var(--orange-500)", "var(--orange-50, #fff7ed)", `⚠️ <b>${__("La lecture automatique de l’étiquette ne répond pas.")}</b><br>` +
-          (autorise ? aramex + " " + __("Vous pouvez constater le retour.")
+          (autorise ? aramex + " " + __("Vous pouvez continuer.")
                     : (aramex || __("Aramex n’annonce pas ce retour comme livré.")) + " " + __("Réessayez dans un instant.")));
       }
       // Un responsable peut passer outre (colis sans étiquette…) : c'est écrit sur la commande, avec sa note.
       if (!autorise && v.peut_forcer) {
         $verdict.append(`<label style="display:block;margin-top:8px;font-size:12px;font-weight:500">
-          <input type="checkbox" class="ala-forcer"> ${__("Constater quand même (responsable) — la note devient obligatoire")}</label>`);
+          <input type="checkbox" class="ala-forcer"> ${__("Enregistrer quand même (responsable) — la note devient obligatoire")}</label>`);
         $verdict.find(".ala-forcer").on("change", function () { $ok.prop("disabled", !this.checked); });
       }
       $ok.prop("disabled", !autorise);
@@ -506,11 +529,10 @@ class LivraisonAramex {
 
     const verifier = () => {
       const moi = ++tour;
-      verif = null;
       $ok.prop("disabled", true);
       boite("var(--border-color)", "var(--subtle-fg)", `🔎 ${__("Lecture de l’étiquette et vérification chez Aramex… (quelques secondes)")}`);
-      frappe.call({ method: "customization_app.retour_aramex.verifier_photo", args: { payment_entry: pe, photo } })
-        .then((r) => { if (moi === tour) { verif = r.message || {}; afficher(verif); } })
+      frappe.call({ method: o.methode, args: Object.assign({}, o.args, { photo }) })
+        .then((r) => { if (moi === tour) afficher(r.message || {}); })
         .catch(() => { if (moi === tour) boite("var(--orange-500)", "var(--orange-50, #fff7ed)",
           `⚠️ ${__("La vérification n’a pas abouti : reprenez la photo ou réessayez.")}`); });
     };
@@ -531,6 +553,95 @@ class LivraisonAramex {
       lecteur.readAsDataURL(f);
       this.value = "";       // la même photo peut être rechoisie après une reprise
     });
+    return { photo: () => photo, nom: () => photo_nom,
+             forcer: () => (d.$wrapper.find(".ala-forcer").is(":checked") ? 1 : 0) };
+  }
+
+  // ── Échanges d'articles : la pochette attendue ──────────────────────────────────────────────────────────
+  // En tête de l'écran tant qu'elle n'est pas revenue : c'est ICI qu'on clique quand elle arrive.
+  _rendre_echanges() {
+    const esc = frappe.utils.escape_html;
+    const liste = (this._data || {}).echanges || [];
+    let $bloc = this.$root.find("[data-role='echanges']");
+    if (!$bloc.length) $bloc = $(`<div data-role="echanges"></div>`).insertBefore(this.$root.find("[data-role='kpis']"));
+    if (!liste.length) { $bloc.empty(); return; }
+    $bloc.html(`<div class="ala-liste" style="margin-bottom:16px;border-color:var(--ala-accent)">
+      <div style="padding:9px 14px;font-weight:700;font-size:13px;border-bottom:1px solid var(--border-color)">
+        🔁 ${__("Échanges d’articles — pochette attendue")} (${liste.length})</div>
+      ${liste.map((e) => `<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:10px 14px;border-bottom:1px solid var(--border-color);font-size:12.5px">
+        <div style="flex:1;min-width:230px">
+          <b>${esc(e.client || "")}</b>
+          <span class="ala-menu"> · <a href="/app/sales-order/${encodeURIComponent(e.commande)}">${esc(e.commande)}</a>
+            · <a href="/app/echange-aramex/${encodeURIComponent(e.name)}">${esc(e.name)}</a></span>
+          <div>${__("Envoyé : <b>{0}</b> — attendu en retour : <b>{1}</b>", [esc(e.envoyes), esc(e.attendus)])}</div>
+          <div class="ala-menu">${e.bordereau ? __("Bordereau {0}", [esc(e.bordereau)]) + (e.suivi ? " · " + esc(e.suivi) : "")
+                                              : __("Pas encore de bordereau Aramex")}
+            ${e.retard ? ` · <span style="color:var(--ala-loss);font-weight:600">⏰ ${__("livré au client, pochette en retard de {0} j", [e.retard])}</span>` : ""}</div>
+        </div>
+        <button class="btn btn-xs btn-danger" data-act="echange-recu" data-echange="${esc(e.name)}">📦 ${__("Échange reçu")}</button>
+        <button class="btn btn-xs btn-default" data-act="echange-annuler" data-echange="${esc(e.name)}">${__("Annuler l’échange")}</button>
+      </div>`).join("")}</div>`);
+  }
+
+  _echange_recu(nom) {
+    const e = ((this._data || {}).echanges || []).find((x) => x.name === nom) || {};
+    const esc = frappe.utils.escape_html;
+    let zone = null;
+    const d = new frappe.ui.Dialog({
+      title: __("Échange reçu — {0}", [esc(e.client || "")]),
+      fields: [
+        { fieldtype: "HTML", fieldname: "info" },
+        { fieldtype: "HTML", fieldname: "photo_zone" },
+        { fieldtype: "Small Text", fieldname: "note", label: __("Note (facultatif)") },
+      ],
+      primary_action_label: __("Rentrer en stock"),
+      primary_action: (v) => {
+        if (!zone.photo()) { frappe.msgprint(__("Prenez la photo de la pochette revenue.")); return; }
+        const forcer = zone.forcer();
+        if (forcer && !(v.note || "").trim()) {
+          frappe.msgprint(__("Écrivez dans la note pourquoi vous recevez cet échange malgré la vérification."));
+          return;
+        }
+        frappe.call({
+          method: "customization_app.echange_aramex.recevoir", type: "POST",
+          args: { echange: nom, photo: zone.photo(), photo_nom: zone.nom(), note: v.note, forcer },
+          freeze: true, freeze_message: __("Entrée en stock…"),
+          callback: (r) => {
+            d.hide();
+            const m = r.message || {};
+            frappe.msgprint({ title: __("Échange reçu"), indicator: "green",
+              message: __("{0} rentré(s) dans {1} (écriture {2}). L’échange {3} est terminé.",
+                [esc(m.articles || ""), esc(m.entrepot || ""), esc(m.retour_stock || ""), esc(m.echange || "")]) });
+            this.refresh();
+          },
+        });
+      },
+    });
+    d.fields_dict.info.$wrapper.html(`
+      <div style="font-size:12.5px;margin-bottom:6px">
+        ${__("Le client renvoie : <b>{0}</b>", [esc(e.attendus || "")])}<br>
+        <span class="text-muted">${__("Envoyé le {0} : {1}", [frappe.datetime.str_to_user(e.declare_le || ""), esc(e.envoyes || "")])}
+          ${e.bordereau ? " · " + __("bordereau {0}", [esc(e.bordereau)]) : ""}</span>
+      </div>
+      <div class="text-muted" style="font-size:11.5px;margin-bottom:8px">
+        📷 ${__("Photographiez l’étiquette Aramex de la pochette : elle est comparée au bordereau de cet échange, puis les articles rentrent en stock.")}
+      </div>`);
+    zone = this._zone_photo(d, {
+      bouton: __("Photo de la pochette revenue"), qui: esc(e.client || __("ce client")), quoi: __("la pochette"),
+      reference: e.bordereau || "",
+      methode: "customization_app.echange_aramex.verifier_photo", args: { echange: nom },
+    });
     d.show();
+  }
+
+  _echange_annuler(nom) {
+    frappe.prompt(
+      [{ fieldtype: "Small Text", fieldname: "motif", reqd: 1, label: __("Pourquoi l’échange est-il annulé ?") }],
+      (v) => frappe.call({
+        method: "customization_app.echange_aramex.annuler", type: "POST", args: { echange: nom, motif: v.motif },
+        freeze: true,
+        callback: () => { frappe.show_alert({ message: __("Échange annulé : les articles envoyés sont rentrés en stock."), indicator: "green" }); this.refresh(); },
+      }),
+      __("Annuler l’échange {0}", [nom]), __("Annuler l’échange"));
   }
 }

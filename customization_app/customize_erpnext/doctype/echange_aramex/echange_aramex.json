@@ -1,0 +1,291 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "autoname": "ECH-.YYYY.-.#####",
+ "creation": "2026-11-19 17:13:04.563585",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "statut",
+  "commande",
+  "client",
+  "nom_client",
+  "column_break_1",
+  "bordereau",
+  "commande_origine",
+  "entrepot",
+  "section_articles",
+  "envoyes",
+  "attendus",
+  "section_stock",
+  "sortie_stock",
+  "envoye_le",
+  "envoye_par",
+  "column_break_2",
+  "retour_stock",
+  "recu_le",
+  "recu_par",
+  "section_notes",
+  "note",
+  "verification"
+ ],
+ "fields": [
+  {
+   "default": "Retour attendu",
+   "fieldname": "statut",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Statut",
+   "options": "Retour attendu\nRe\u00e7u\nAnnul\u00e9",
+   "read_only": 1
+  },
+  {
+   "description": "La commande (souvent une seule ligne \u00ab Livraison \u00bb) qui porte le colis envoy\u00e9 au client.",
+   "fieldname": "commande",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Commande de l\u2019\u00e9change",
+   "options": "Sales Order",
+   "reqd": 1,
+   "set_only_once": 1
+  },
+  {
+   "fieldname": "client",
+   "fieldtype": "Link",
+   "in_standard_filter": 1,
+   "label": "Client",
+   "options": "Customer",
+   "read_only": 1
+  },
+  {
+   "fieldname": "nom_client",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Nom du client",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "bordereau",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Bordereau Aramex",
+   "read_only": 1
+  },
+  {
+   "description": "La commande dont les articles reviennent.",
+   "fieldname": "commande_origine",
+   "fieldtype": "Link",
+   "label": "Commande d\u2019origine",
+   "options": "Sales Order",
+   "read_only": 1
+  },
+  {
+   "fieldname": "entrepot",
+   "fieldtype": "Link",
+   "label": "Entrep\u00f4t (d\u00e9part et retour)",
+   "options": "Warehouse",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_articles",
+   "fieldtype": "Section Break",
+   "label": "Articles"
+  },
+  {
+   "fieldname": "envoyes",
+   "fieldtype": "Table",
+   "label": "J\u2019envoie au client",
+   "options": "Echange Aramex Ligne",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "fieldname": "attendus",
+   "fieldtype": "Table",
+   "label": "Le client me renvoie",
+   "options": "Echange Aramex Ligne",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "fieldname": "section_stock",
+   "fieldtype": "Section Break",
+   "label": "Stock et suivi"
+  },
+  {
+   "fieldname": "sortie_stock",
+   "fieldtype": "Link",
+   "label": "Sortie de stock (\u00e0 l\u2019envoi)",
+   "no_copy": 1,
+   "options": "Stock Entry",
+   "read_only": 1
+  },
+  {
+   "fieldname": "envoye_le",
+   "fieldtype": "Datetime",
+   "label": "Sorti du stock le",
+   "no_copy": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "envoye_par",
+   "fieldtype": "Link",
+   "label": "D\u00e9clar\u00e9 par",
+   "no_copy": 1,
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_2",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "retour_stock",
+   "fieldtype": "Link",
+   "label": "Entr\u00e9e de stock (au retour)",
+   "no_copy": 1,
+   "options": "Stock Entry",
+   "read_only": 1
+  },
+  {
+   "fieldname": "recu_le",
+   "fieldtype": "Datetime",
+   "label": "Re\u00e7u le",
+   "no_copy": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "recu_par",
+   "fieldtype": "Link",
+   "label": "Re\u00e7u par",
+   "no_copy": 1,
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_notes",
+   "fieldtype": "Section Break",
+   "label": "Notes"
+  },
+  {
+   "fieldname": "note",
+   "fieldtype": "Small Text",
+   "label": "Note",
+   "read_only": 1
+  },
+  {
+   "fieldname": "verification",
+   "fieldtype": "Small Text",
+   "label": "V\u00e9rification de la photo",
+   "no_copy": 1,
+   "read_only": 1
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-11-19 17:14:18.098067",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "Echange Aramex",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Sales Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Sales User",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Stock Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Stock User",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Accounts Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Accounts User",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "row_format": "Dynamic",
+ "rows_threshold_for_grid_search": 20,
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "nom_client",
+ "track_changes": 1
+}
