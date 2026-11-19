@@ -199,7 +199,7 @@ class AnalyseArticles {
     const pls = d.price_lists.map((p) => p.name);
     let head = `<tr>
       <th style="width:26px"><input type="checkbox" id="aa-chk-all" title="Tout cocher (page)"></th>
-      <th></th>
+      <th style="width:58px;min-width:58px"></th>
       <th class="sortable" data-field="item_code">Code article${this._sort_icon("item_code")}</th>
       <th class="sortable" data-field="item_name">Désignation${this._sort_icon("item_name")}</th>
       <th class="sortable" data-field="item_group">Groupe${this._sort_icon("item_group")}</th>
@@ -246,7 +246,7 @@ class AnalyseArticles {
 
   _render_row(r, pls) {
     const img = r.image
-      ? `<img class="aa-img" src="${this._esc(r.image)}" loading="lazy">`
+      ? `<img class="aa-img" src="${this._esc(r.image)}" loading="lazy" style="min-width:38px">`
       : `<span class="aa-img-empty">🖼</span>`;
     const b = r.bundle;
     const toggle = b ? `<span class="aa-toggle">▸</span>` : "";
@@ -257,7 +257,7 @@ class AnalyseArticles {
     let cells = `
       <td><input type="checkbox" class="aa-sel" data-item="${this._esc(r.item_code)}"
            ${this.selection.has(r.item_code) ? "checked" : ""}></td>
-      <td>${img}</td>
+      <td style="width:58px;min-width:58px">${img}</td>
       <td>${toggle}<span class="aa-code">${this._esc(r.item_code)}</span>${badge}</td>
       <td>${this._esc(r.item_name)}${desc}</td>
       <td>${this._esc(r.item_group)}</td>
