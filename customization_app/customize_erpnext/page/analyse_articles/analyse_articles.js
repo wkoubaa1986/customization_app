@@ -128,7 +128,9 @@ class AnalyseArticles {
         <input type="checkbox" class="aa-zone-liste" value="${frappe.utils.escape_html(pl.name)}" ${i === 0 ? "checked" : ""}> ${frappe.utils.escape_html(pl.name)}</label>`).join("")
       + `<a href="#" id="aa-zone-toutes" style="font-size:12px">toutes</a>`);
     (f.item_groups || []).forEach((g) => {
-      $("#aa-regle-famille").append(`<option value="${frappe.utils.escape_html(g.name)}">${frappe.utils.escape_html("  ".repeat(g.depth || 0) + g.name)}</option>`);
+      // L'arborescence : un retrait par niveau (espaces insécables — les espaces ordinaires sont avalés dans une
+      // liste déroulante) et un dossier devant les familles qui en contiennent d'autres.
+      $("#aa-regle-famille").append(`<option value="${frappe.utils.escape_html(g.name)}">${"\u00a0\u00a0\u00a0\u00a0".repeat(g.depth || 0)}${g.is_group ? "📁 " : ""}${frappe.utils.escape_html(g.name)}</option>`);
     });
     this._charger_regle();
     (f.item_groups || []).forEach((g) => {
