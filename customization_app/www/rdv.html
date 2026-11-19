@@ -407,7 +407,7 @@
       </div>
       <label>Créneaux disponibles</label>
       <div id="rdv-grille"><div class="rdv-vide">Choisissez votre adresse et le type de rendez-vous.</div></div>
-      <!-- MAGASIN SEULEMENT : promettre une heure précise dans la demi-journée choisie. -->
+      <!-- MAGASIN SEULEMENT : fixer une heure dans la demi-journée choisie. -->
       <div id="magasin-heure" class="rdv-magasin" style="display:none">
         <div class="m-titre">🏪 Heure du rendez-vous</div>
         <select id="mag-heure"><option value="">Demi-journée seulement — l’heure sera confirmée la veille</option></select>
@@ -1451,7 +1451,7 @@
       if (garder && liste.some((h) => h.heure === garder)) { sel.value = garder; heure_fixe = garder; }
       const maj = () => {
         aide.textContent = heure_fixe
-          ? "Heure fixe : promise au client (elle est écrite dans son SMS), l’optimisation des tournées ne la déplacera pas."
+          ? "Heure fixe : annoncée au client dans son SMS (« vers » cette heure), l’optimisation des tournées ne la déplacera pas."
           : "Sans heure choisie, l’app pose le premier créneau libre et l’heure reste ajustable.";
       };
       sel.onchange = () => { heure_fixe = sel.value; maj(); };
@@ -1781,7 +1781,7 @@
         $("fin-detail").innerHTML =
           `👤 Technicien : <b>${echapper(res.employe)}</b>${res.employe_fixe ? " (employé fixe)" : ""}<br>`
           + (res.heure_fixe
-              ? `🕘 Heure promise : <b>${echapper(res.heure)}</b> (heure fixe)`
+              ? `🕘 Heure annoncée : <b>vers ${echapper(res.heure)}</b> (heure fixe)`
               : `🕘 Heure posée par l’app : ${echapper(res.heure)} — ajustable, à confirmer la veille`);
         $("fin-texte").innerHTML = seance.telephone
           ? "Le client reçoit un SMS de confirmation" + (res.heure_fixe ? ", avec l’heure." : ".")

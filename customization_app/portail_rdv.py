@@ -1207,9 +1207,11 @@ def reserver(jeton, type_intervention, date, demi_journee, adresse=None,
                      update_modified=False)
         frappe.db.commit()
 
-    # Heure PROMISE par le magasin : le client la lit dans son message — lui écrire « nous vous confirmerons
+    # Heure fixée par le magasin : le client la lit dans son message — lui écrire « nous vous confirmerons
     # l'heure » alors qu'on vient de la lui donner au téléphone le ferait douter de son rendez-vous.
-    quand = "à %s" % starts_on.strftime("%H:%M") if heure_fixe else libelle_demi
+    # « VERS », jamais « à » (décision du 19/11/2026) : même fixe, une heure garde sa part d'aléa sur la route,
+    # et le rappel de la veille dit lui aussi « vers … horaire indicatif ».
+    quand = "vers %s" % starts_on.strftime("%H:%M") if heure_fixe else libelle_demi
     _prevenir(
         session,
         ("Aqua World : votre rendez-vous %s du %s %s est enregistré." if heure_fixe else
