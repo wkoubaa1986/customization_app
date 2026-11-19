@@ -391,7 +391,7 @@ class LivraisonAramex {
     if (r.possible) {
       return `<button class="btn btn-xs btn-danger" style="margin-top:4px"
         data-act="retour" data-pe="${esc(c.payment_entry)}">📦 ${__("Retour reçu")}</button>
-        ${(r.bordereaux || []).length ? `<div class="ala-menu">${__("Bordereau de retour : {0}", [esc(r.bordereaux.join(", "))])}</div>` : ""}`;
+        ${(r.bordereaux || []).length ? `<div class="ala-menu" style="color:#dc2626;font-weight:700">${__("Bordereau de retour : {0}", [esc(r.bordereaux.join(", "))])}</div>` : ""}`;
     }
     return "";
   }
@@ -448,7 +448,7 @@ class LivraisonAramex {
     d.fields_dict.info.$wrapper.html(`
       <div style="font-size:12px;margin-bottom:6px">
         ${__("Bordereau")} <b>${esc(c.reference || "")}</b>
-        ${((c.retour || {}).bordereaux || []).length ? ` · ${__("bordereau de retour")} <b>${esc(c.retour.bordereaux.join(", "))}</b>` : ""} ·
+        ${((c.retour || {}).bordereaux || []).length ? ` · <span style="color:#dc2626;font-weight:700">${__("bordereau de retour")} ${esc(c.retour.bordereaux.join(", "))}</span>` : ""} ·
         ${(c.pieces || []).map((p) => esc(`${p.doctype === "Sales Order" ? "Cde" : p.doctype === "Delivery Note" ? "BL" : "Fac"} ${p.name}`)).join(" · ")}
       </div>
       <div class="text-muted" style="font-size:11.5px;margin-bottom:8px">
@@ -584,7 +584,7 @@ class LivraisonAramex {
           <div class="ala-menu">${e.bordereau ? __("Bordereau d’envoi {0}", [esc(e.bordereau)]) + (e.suivi ? " · " + esc(e.suivi) : "")
                                               : __("Pas encore de bordereau Aramex")}</div>
           <div class="ala-menu">${e.bordereau_retour
-              ? `📮 ${__("Bordereau de retour (pochette) : <b>{0}</b>", [esc(e.bordereau_retour)])}${e.retour_suivi ? " — " + esc(e.retour_suivi) : ""}`
+              ? `<span style="color:#dc2626;font-weight:700">📮 ${__("Bordereau de retour (pochette) : {0}", [esc(e.bordereau_retour)])}</span>${e.retour_suivi ? " — " + esc(e.retour_suivi) : ""}`
               : (!e.bordereau ? "" : (this._data || {})._retours_recus ? __("Bordereau de retour : pas encore annoncé par Aramex")
                                                                       : "🔎 " + __("Bordereau de retour : demande à Aramex…"))}
             ${e.retard ? ` · <span style="color:var(--ala-loss);font-weight:600">⏰ ${__("livré au client, pochette en retard de {0} j", [e.retard])}</span>` : ""}</div>
@@ -652,7 +652,7 @@ class LivraisonAramex {
         📷 ${__("Photographiez l’étiquette Aramex de la pochette : elle est comparée au bordereau de cet échange, puis les articles rentrent en stock.")}
       </div>`);
     d.fields_dict.info.$wrapper.append(e.bordereau_retour
-      ? `<div style="font-size:12.5px;margin-bottom:8px">📮 ${__("Bordereau de retour attendu sur l’étiquette : <b>{0}</b>", [esc(e.bordereau_retour)])}${e.retour_suivi ? ` <span class="text-muted">— ${esc(e.retour_suivi)}</span>` : ""}</div>` : "");
+      ? `<div style="font-size:12.5px;margin-bottom:8px"><span style="color:#dc2626;font-weight:700">📮 ${__("Bordereau de retour attendu sur l’étiquette : {0}", [esc(e.bordereau_retour)])}</span>${e.retour_suivi ? ` <span class="text-muted">— ${esc(e.retour_suivi)}</span>` : ""}</div>` : "");
     zone = this._zone_photo(d, {
       bouton: __("Photo de la pochette revenue"), qui: esc(e.client || __("ce client")), quoi: __("la pochette"),
       reference: e.bordereau || "",
