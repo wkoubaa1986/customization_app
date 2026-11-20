@@ -3,6 +3,12 @@
 // Heures d'arrivée / départ à Aquaworld et lieux de nuit du véhicule (Journee Flotte GPS, customization_app.flotte_presence) ;
 // domiciles détectés d'après les nuits, à régler d'un clic dans le réglage des tournées.
 
+// Une erreur du SERVEUR est déjà affichée par Frappe (sa fenêtre « Message ») : la redire donnait « [object Object] »
+// dessous (20/11/2026). On ne dit donc que les erreurs du navigateur.
+const pa_erreur = (e) => (e instanceof Error ? e.message : "");
+const pa_dire = (e) => { const m = pa_erreur(e); if (m) frappe.msgprint(m); };
+const PA_DIRECT_MAX_J = 62;          // au-delà, le recalcul d'une période part en arrière-plan (une lecture GPS par jour)
+
 const PA_LIEU = { Domicile: ["dom", "🏠 domicile"], Magasin: ["mag", "🏢 Magasin"], Autre: ["autre", "❓ autre"] };
 
 class PresenceAquaworld {
@@ -62,7 +68,7 @@ class PresenceAquaworld {
     <label class="pa-dim">au</label> <input type="date" id="pa-au">
     <select id="pa-employe"><option value="">Tous les techniciens</option></select>
     <button class="btn btn-default btn-sm" data-action="refresh">🔄 Actualiser</button>
-    <button class="btn btn-default btn-sm" data-action="recalculer" title="Relit la plateforme GPS jour par jour (au plus deux mois)">🧮 Recalculer la période</button>
+    <button class="btn btn-default btn-sm" data-action="recalculer" title="Relit la plateforme GPS jour par jour ; au-delà de deux mois, le calcul part en arrière-plan">🧮 Recalculer la période</button>
     <button class="btn btn-default btn-sm" data-action="tout" title="Après un changement de domicile, d'équipage ou de règle : refait présence, sorties de circuit et appariement des tâches sur toute la période du réglage, en arrière-plan">♻️ Tout recalculer</button>
     <span class="pa-info" id="pa-info"></span>
     <span class="pa-info" id="pa-rattrapage"></span>
@@ -119,7 +125,7 @@ class PresenceAquaworld {
       $e.val(cur || "");
       this._render();
     } catch (e) {
-      $r.find("#pa-liste").html(`<div class="pa-vide">${frappe.utils.escape_html(String(e.message || e))}</div>`);
+      $r.find("#pa-liste").html(`<div class="pa-vide">${frappe.utils.escape_html(pa_erreur(e) || "Lecture impossible — voir le message affiché.")}</div>`);
     }
   }
 
@@ -287,22 +293,25 @@ class PresenceAquaworld {
       frappe.show_alert({ message: __("Réglages enregistrés"), indicator: "green" });
       this.$root.find("#pa-du").val("");                           // la période par défaut repart du réglage
       this.charger();
-    } catch (e) { frappe.msgprint(String(e.message || e)); }
+    } catch (e) { pa_dire(e); }
   }
 
-  async rattraper(tout) {
-    if (tout) {
+  // `periode` = {du, au} : « Recalculer la période » sur plus de deux mois — le même travail de fond, borné à ces dates.
+  async rattraper(tout, periode) {
+    if (tout && !periode) {
       const ok = await new Promise((res) => frappe.confirm(__("Tout recalculer depuis la date de début des statistiques jusqu'à hier : présence, sorties de circuit et appariement des tâches (qui conduisait quoi), avec les domiciles et équipages d'aujourd'hui ? Les justifications des sorties de circuit sont conservées. Une lecture de la plateforme par jour, en arrière-plan."), () => res(true), () => res(false)));
       if (!ok) return;
     }
     try {
-      const r = await frappe.call({ method: "customization_app.flotte_presence.rattraper", args: { au: this.$root.find("#pa-au").val(), tout: tout ? 1 : 0 }, freeze: true });
+      const args = { au: this.$root.find("#pa-au").val(), tout: tout ? 1 : 0 };
+      if (periode) Object.assign(args, periode);
+      const r = await frappe.call({ method: "customization_app.flotte_presence.rattraper", args, freeze: true });
       const b = r.message || {};
       if (b.deja) frappe.show_alert({ message: __("Un rattrapage tourne déjà"), indicator: "orange" });
       else if (!b.jours) frappe.show_alert({ message: __("Rien à rattraper"), indicator: "green" });
       else frappe.show_alert({ message: __("{0} jour(s) en cours de calcul en arrière-plan (présence + sorties de circuit)", [b.jours]), indicator: "blue" });
       this.suivre_rattrapage(true);
-    } catch (e) { frappe.msgprint(String(e.message || e)); }
+    } catch (e) { pa_dire(e); }
   }
 
   // Avancement du rattrapage (tâche de fond) : lu toutes les 8 s tant qu'il tourne, puis la période est rechargée.
@@ -333,12 +342,20 @@ class PresenceAquaworld {
         await frappe.call({ method: "customization_app.flotte_presence.fixer_domicile", args: { employe, lat, lng }, freeze: true });
         frappe.show_alert({ message: __("Domicile de {0} réglé", [nom]), indicator: "green" });
         this.charger();
-      } catch (e) { frappe.msgprint(String(e.message || e)); }
+      } catch (e) { pa_dire(e); }
     });
   }
 
   recalculer() {
     const du = this.$root.find("#pa-du").val(), au = this.$root.find("#pa-au").val();
+    // Plus de deux mois : le serveur refusait (« Au plus deux mois à la fois ») alors qu'on voulait tout recalculer
+    // (20/11/2026). On propose le calcul en arrière-plan sur CETTE période au lieu de refuser.
+    const jours = frappe.datetime.get_day_diff(au, du) + 1;
+    if (jours > PA_DIRECT_MAX_J) {
+      frappe.confirm(__("La période fait {0} jours : trop pour un calcul direct (une lecture de la plateforme GPS par jour). Tout recalculer du {1} au {2} en arrière-plan — présence, sorties de circuit et appariement des tâches, avec les domiciles et équipages d'aujourd'hui ? Les justifications des sorties de circuit sont conservées ; l'avancement s'affiche ici.",
+        [jours, frappe.datetime.str_to_user(du), frappe.datetime.str_to_user(au)]), () => this.rattraper(true, { du, au }));
+      return;
+    }
     frappe.confirm(__("Relire la plateforme GPS du {0} au {1} et recalculer les présences ?", [frappe.datetime.str_to_user(du), frappe.datetime.str_to_user(au)]), async () => {
       try {
         const r = await frappe.call({ method: "customization_app.flotte_presence.recalculer", args: { du, au }, freeze: true, freeze_message: __("Lecture de la plateforme GPS, jour par jour…") });
@@ -347,7 +364,7 @@ class PresenceAquaworld {
         if (b.erreurs && b.erreurs.length) frappe.msgprint(b.erreurs.join("<br>"));
         this.charger();
       } catch (e) {
-        frappe.msgprint(String(e.message || e));
+        pa_dire(e);
       }
     });
   }

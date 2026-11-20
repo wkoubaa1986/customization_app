@@ -533,5 +533,5 @@ def recalculer(du, au):
     _garde()
     du, au = getdate(du), getdate(au)
     if (au - du).days > 62:
-        frappe.throw("Au plus deux mois à la fois")
+        frappe.throw("Au plus deux mois à la fois en calcul direct : pour une période plus longue, « Tout recalculer » (onglet Présence Aquaworld) le fait en arrière-plan.")
     return calculer_periode(du, au)

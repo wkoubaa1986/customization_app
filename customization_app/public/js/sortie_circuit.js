@@ -1,6 +1,11 @@
 // Sorties de circuit — bloc partagé : page /app/sortie-circuit et onglet « Sorties de circuit » du suivi terrain.
 // Chargé par `frappe.require("/assets/customization_app/js/sortie_circuit.js")`. Rôle « Sortie Circuit » (Wassim, Néjib).
 
+// Une erreur du SERVEUR est déjà affichée par Frappe : la redire donnait « [object Object] » dessous (20/11/2026).
+const sc_erreur = (e) => (e instanceof Error ? e.message : "");
+const sc_dire = (e) => { const m = sc_erreur(e); if (m) frappe.msgprint(m); };
+const SC_DIRECT_MAX_J = 62;          // au-delà, le recalcul part en arrière-plan (flotte_presence.rattraper)
+
 const SC_TYPE = { "Arrêt inexpliqué": ["arret", "🅿️ arrêt inexpliqué"], "Hors horaires": ["horaires", "🌙 hors horaires"], "Détour": ["detour", "↪️ détour"] };
 
 class SortieCircuit {
@@ -48,7 +53,7 @@ class SortieCircuit {
       <option value="anomalies">Anomalies confirmées</option>
     </select>
     <button class="btn btn-default btn-sm" data-action="refresh">🔄 Actualiser</button>
-    <button class="btn btn-default btn-sm" data-action="recalculer" title="Relit la plateforme GPS jour par jour (au plus deux mois)">🧮 Recalculer la période</button>
+    <button class="btn btn-default btn-sm" data-action="recalculer" title="Relit la plateforme GPS jour par jour ; au-delà de deux mois, le calcul part en arrière-plan">🧮 Recalculer la période</button>
     <span class="sc-info" id="sc-info"></span>
   </div>
   <div class="sc-intro" id="sc-intro"></div>
@@ -104,7 +109,7 @@ class SortieCircuit {
       $e.val(cur || "");
       this._render();
     } catch (e) {
-      $r.find("#sc-liste").html(`<div class="sc-vide">${frappe.utils.escape_html(String(e.message || e))}</div>`);
+      $r.find("#sc-liste").html(`<div class="sc-vide">${frappe.utils.escape_html(sc_erreur(e) || "Lecture impossible — voir le message affiché.")}</div>`);
     }
   }
 
@@ -255,12 +260,25 @@ class SortieCircuit {
       this._render();
       frappe.show_alert({ message: justification ? __("Justifié : {0}", [justification]) : __("Remis « à regarder »"), indicator: "green" });
     } catch (e) {
-      frappe.msgprint(String(e.message || e));
+      sc_dire(e);
     }
   }
 
   recalculer() {
     const du = this.$root.find("#sc-du").val(), au = this.$root.find("#sc-au").val();
+    // Plus de deux mois : en arrière-plan (le même travail que « Tout recalculer » de l'onglet Présence), au lieu d'un refus.
+    const jours = frappe.datetime.get_day_diff(au, du) + 1;
+    if (jours > SC_DIRECT_MAX_J) {
+      frappe.confirm(__("La période fait {0} jours : trop pour un calcul direct (une lecture de la plateforme GPS par jour). Tout recalculer du {1} au {2} en arrière-plan — présence, sorties de circuit et appariement des tâches ? Les justifications sont conservées.",
+        [jours, frappe.datetime.str_to_user(du), frappe.datetime.str_to_user(au)]), async () => {
+        try {
+          const r = await frappe.call({ method: "customization_app.flotte_presence.rattraper", args: { du, au, tout: 1 }, freeze: true });
+          const b = r.message || {};
+          frappe.show_alert({ message: b.deja ? __("Un rattrapage tourne déjà") : __("{0} jour(s) en cours de calcul en arrière-plan — l'avancement se lit dans l'onglet « Présence Aquaworld »", [b.jours || 0]), indicator: b.deja ? "orange" : "blue" }, 10);
+        } catch (e) { sc_dire(e); }
+      });
+      return;
+    }
     frappe.confirm(__("Relire la plateforme GPS du {0} au {1} et recalculer les écarts ? Les justifications sont conservées.", [frappe.datetime.str_to_user(du), frappe.datetime.str_to_user(au)]), async () => {
       try {
         const r = await frappe.call({ method: "customization_app.flotte_circuit.recalculer", args: { du, au }, freeze: true, freeze_message: __("Lecture de la plateforme GPS, jour par jour…") });
@@ -269,7 +287,7 @@ class SortieCircuit {
         if (b.erreurs && b.erreurs.length) frappe.msgprint(b.erreurs.join("<br>"));
         this.charger();
       } catch (e) {
-        frappe.msgprint(String(e.message || e));
+        sc_dire(e);
       }
     });
   }
