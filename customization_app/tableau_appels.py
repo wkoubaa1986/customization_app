@@ -61,6 +61,10 @@ JOURS_MAX = 93
 PRIORITES = (
     ("urgence", "Urgence"),
     ("commandes", "Commandes à traiter"),
+    # 20/11/2026 : les machines de l'atelier qui attendent une réponse (réparées et pas rendues, reçues sans
+    # technicien, livraisons pas clôturées). File RÉSERVÉE : seules la personne du suivi des restitutions et celle
+    # de la relance la voient (cf. FILES_RESERVEES) ; peu de dossiers, à ne pas laisser derrière les listes d'appels.
+    ("atelier", "Machines de l’atelier (à rendre, à vérifier)"),
     ("normal", "Normal"),
     ("rattrapage", "Rattrapage"),
     ("relance_liste", "2e appel (Relance)"),
@@ -112,7 +116,11 @@ OUVERTURE = {
     "relances": (["relance-paiements"], {}),
     # La retenue à la source s'appelle et se trace DANS SA PAGE (onglet « À réclamer »), pas par une liste.
     "ras": (["retenue-source-vente"], {"tab": "reclamer"}),
+    # L'écran Réparation osmoseurs, sur ce qui attend depuis trop longtemps.
+    "atelier": (["reparation-osmoseurs"], {"verifier": 1}),
 }
+#: Files visibles seulement de ceux qu'elles concernent (les autres gardent leur liste, numérotée sans trou).
+FILES_RESERVEES = ("atelier",)
 for _type, _cle in TYPES_LISTE.items():
     OUVERTURE[_cle] = (["List", "Liste Appelle Entretien"], {"docstatus": 0, "type_liste": _type})
 
@@ -306,8 +314,26 @@ def _evenements_activite(debut, fin):
                                       WHERE date >= %s AND date < %s AND IFNULL(auteur, '') <> ''""", (debut, fin), as_dict=True)]
 
 
+def _evenements_atelier(debut, fin):
+    """Une machine de l'atelier à laquelle quelqu'un a RÉPONDU : rendue, sortie sans réparation, « toujours au
+    magasin », client prévenu par SMS, technicien affecté — chaque geste laisse sa trace sur le dossier
+    (reparation_osmoseur.REPERES_REPONSE). Une machine ne compte qu'une fois par personne et par jour."""
+    if not frappe.db.exists("DocType", "Machine Reparation"):
+        return []
+    from customization_app.reparation_osmoseur import REPERES_REPONSE
+    out = []
+    for c in frappe.db.sql("""SELECT reference_name, content, owner, creation FROM `tabComment`
+                              WHERE reference_doctype = 'Machine Reparation' AND comment_type IN ('Comment', 'Info')
+                                AND creation >= %s AND creation < %s AND owner NOT IN ('Administrator', 'Guest')""",
+                           (debut, fin), as_dict=True):
+        if HC.texte(c.content or "", 200).startswith(REPERES_REPONSE):
+            out.append(("atelier", c.owner, str(c.creation)[:10], c.reference_name))
+    return out
+
+
 def _evenements(debut, fin, web=True):
     return (_evenements_listes(debut, fin) + _clients_des_taches(_evenements_commentaires(debut, fin))
+            + _evenements_atelier(debut, fin)
             + _evenements_rattrapage_traites(debut, fin) + _evenements_activite(debut, fin)
             + (_evenements_web(debut, fin) if web else []))
 
@@ -389,7 +415,25 @@ def restes() -> dict:
     out["rattrapage"] = _reste_rattrapage()
     out["relances"] = _reste_relances() if est_son_jour("relances") else 0
     out["ras"] = _reste_ras() if est_son_jour("ras") else 0
+    out["atelier"] = _reste_atelier()
     return out
+
+
+def _reste_atelier(user=None):
+    """Machines de l'atelier qui attendent une réponse. Sans `user` : toutes (vue de supervision) ; avec : celles
+    que CETTE personne doit regarder — None si la file ne la concerne pas."""
+    try:
+        from customization_app import reparation_osmoseur as RO
+        if user:
+            machines = RO.machines_a_regarder(user)
+            return None if machines is None else len(machines)
+        cfg = RO.config()
+        ouverts = frappe.get_all(RO.DOCTYPE, fields=RO.CHAMPS_ATTENTE,
+                                 filters={"statut": ["in", [RO.S_RECEPTIONNEE, RO.S_REPAREE, RO.S_PRETE, RO.S_LIVRAISON]]})
+        return sum(1 for m in ouverts if RO.a_verifier(m, getdate(nowdate()), cfg["rappel_jours"]))
+    except Exception:
+        frappe.log_error(title="Tableau des appels : machines de l'atelier", message=frappe.get_traceback())
+        return None
 
 
 def _reste_ras():
@@ -423,11 +467,17 @@ def get_priorites():
     rdv = origines_rdv([r for r in _rendez_vous(debut, fin) if r["par"] == moi], evenements)
     case = agreger(evenements, rdv).get((moi, jour)) or {}
     reste = restes()
+    # Les files réservées : ce que MOI je dois regarder, ou rien du tout si elles ne me concernent pas.
+    miennes = {"atelier": _reste_atelier(moi)}
+    cachees = {c for c in FILES_RESERVEES if miennes.get(c) is None}
+    reste.update({c: (0 if c in cachees else miennes[c]) for c in FILES_RESERVEES})
     suivante = prochaine_priorite(reste)
     files = []
-    for rang, (cle, libelle) in enumerate(PRIORITES, start=1):
+    for cle, libelle in PRIORITES:
+        if cle in cachees:
+            continue
         route, options = OUVERTURE[cle]
-        files.append({"rang": rang, "cle": cle, "libelle": libelle, "reste": reste.get(cle), "fait": case.get(cle, 0),
+        files.append({"rang": len(files) + 1, "cle": cle, "libelle": libelle, "reste": reste.get(cle), "fait": case.get(cle, 0),
                       "rdv": case.get("rdv_" + cle, 0), "route": route, "options": options, "suivante": cle == suivante})
     autres = [{"cle": c, "libelle": l, "fait": case.get(c, 0)} for c, l in AUTRES if case.get(c)]
     return {"jour": jour, "files": files, "autres": autres, "total": case.get("total", 0), "rdv": case.get("rdv", 0),

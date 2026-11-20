@@ -615,6 +615,9 @@ app_include_js = [_js("customer_quick_entry.js"),
                   # Réparation osmoseurs : « la machine est réparée — et maintenant ? » posé à celui qui clôture la
                   # réparation, dialogue « Rendre au client » partagé, bandeau sur la commande / le BL du client.
                   _js("reparation_osmoseur_sortie.js"),
+                  # … et le rappel qui s'impose à l'écran de la personne du suivi des restitutions : fenêtre devant
+                  # tout + pastille permanente, tant que des machines de l'atelier attendent une réponse.
+                  _js("reparation_osmoseur_rappel.js"),
                   _js("suivi_activite_onglet.js"),  # l'onglet « Suivi d'activité » ouvre l'outil
                   _js("situation_mensuelle_clic.js"),  # graphes Situation Mensuelle et Pertes et Profits → page de détail
                   _js("bl_magasin_alerte.js"),  # bandeau rouge du magasinier principal : BL à approuver / à vérifier

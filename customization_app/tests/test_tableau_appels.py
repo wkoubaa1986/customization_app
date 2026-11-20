@@ -44,8 +44,11 @@ class TestPriorites(unittest.TestCase):
     def test_ordre_decide_le_13_10_revu_le_14_10(self):
         """14/10 : le Rattrapage passe AVANT le 2e appel, la Requalification AVANT la Zone partenaire, et la relance
         paiements (1×/semaine) ferme la marche."""
-        self.assertEqual(T.CLES_PRIORITES, ("urgence", "commandes", "normal", "rattrapage", "relance_liste", "requalif",
+        # 20/11 : les machines de l'atelier qui attendent une réponse, juste après les commandes (file réservée)
+        self.assertEqual(T.CLES_PRIORITES, ("urgence", "commandes", "atelier", "normal", "rattrapage", "relance_liste", "requalif",
                                             "zone", "relances", "ras", "hors_secteur"))    # 15/10 : RAS puis Hors secteur ferment la marche
+        self.assertEqual(T.FILES_RESERVEES, ("atelier",))
+        self.assertEqual(T.OUVERTURE["atelier"], (["reparation-osmoseurs"], {"verifier": 1}))
 
     def test_type_de_liste(self):
         self.assertEqual(T.priorite_de_liste("Urgence"), "urgence")

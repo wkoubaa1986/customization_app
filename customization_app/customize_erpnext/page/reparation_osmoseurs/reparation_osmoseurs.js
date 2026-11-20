@@ -22,7 +22,10 @@ frappe.pages["reparation-osmoseurs"].on_page_load = function (wrapper) {
 // Le lien du rappel du matin (…/reparation-osmoseurs?verifier=1) ouvre directement les machines qui attendent.
 frappe.pages["reparation-osmoseurs"].on_page_show = function (wrapper) {
   if (!wrapper.ro) return;
-  if (frappe.utils.get_query_params().verifier && !wrapper.ro.verifier) {
+  // … comme le bouton « Ouvrir » de la file « Machines de l'atelier » (Mes appels par priorité), par route_options.
+  const demande = (frappe.route_options || {}).verifier || frappe.utils.get_query_params().verifier;
+  if ((frappe.route_options || {}).verifier) frappe.route_options = null;
+  if (demande && !wrapper.ro.verifier) {
     wrapper.ro.verifier = true; wrapper.ro.vue = null;
     wrapper.ro.charger();
   }
@@ -45,7 +48,9 @@ class ReparationOsmoseurs {
   constructor(wrapper) {
     this.$root = $(wrapper).find(".ro-page");
     this.vue = null;                 // un des trois groupes, ou tout ce qui n'est pas rendu
-    this.verifier = !!frappe.utils.get_query_params().verifier;   // seulement ce qui attend depuis trop longtemps
+    // seulement ce qui attend depuis trop longtemps (lien du rappel, ou file « Machines de l'atelier »)
+    this.verifier = !!(frappe.utils.get_query_params().verifier || (frappe.route_options || {}).verifier);
+    if ((frappe.route_options || {}).verifier) frappe.route_options = null;
     this.data = null;
     this._bind();
     this.charger();
@@ -77,6 +82,7 @@ class ReparationOsmoseurs {
     });
     this.data = res.message || { machines: [], groupes: [], statuts: [] };
     this.rendre();
+    if (window.ro_rappel_actualiser) window.ro_rappel_actualiser();     // la pastille du rappel suit les réponses
   }
 
   rendre() {

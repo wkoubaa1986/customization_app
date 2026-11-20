@@ -595,6 +595,45 @@ class TestSortie(unittest.TestCase):
         RO.rendre(nom, motif="Geste commercial", code="bon")
         self.assertNotIn(nom, [x.name for x in RO.machines_du_client(client)])
 
+    def test_la_file_de_l_atelier_dans_mes_appels_par_priorite(self):
+        """20/11/2026 : le rappel sort dans « Mes appels par priorité » de la personne du suivi — et d'elle seule."""
+        import frappe
+        from customization_app import tableau_appels as T
+        suivi = frappe.db.get_value("Has Role", {"role": "Appels", "parenttype": "User", "parent": ["not in", ["Administrator", "Guest"]]}, "parent")
+        autre = frappe.db.get_value("Has Role", {"role": "Appels", "parenttype": "User", "parent": ["not in", ["Administrator", "Guest", suivi]]}, "parent")
+        if not suivi or not autre:
+            self.skipTest("il faut deux utilisateurs du rôle Appels")
+        frappe.db.set_single_value(RO.DOCTYPE_CONFIG, {"suivi_restitutions": suivi, "relance_a": None, "rappel_jours": 3})
+        frappe.clear_document_cache(RO.DOCTYPE_CONFIG, RO.DOCTYPE_CONFIG)
+        client = frappe.db.get_value("Customer", {"disabled": 0}, "name")
+        nom = self._dossier(client, date_reparee="2031-01-01 10:00:00")           # (2031 : pas encore en attente)
+        frappe.db.set_value(RO.DOCTYPE, nom, "date_reparee", frappe.utils.add_days(frappe.utils.now_datetime(), -5))
+        try:
+            frappe.set_user(suivi)
+            r = RO.mon_rappel()
+            self.assertEqual(r["role"], "suivi")
+            self.assertIn(nom, [m["name"] for m in r["machines"]])
+            self.assertEqual([m["texte"] for m in r["machines"] if m["name"] == nom], ["réparée, chez nous depuis 5 j"])
+            p = T.get_priorites()
+            file = [f for f in p["files"] if f["cle"] == "atelier"][0]
+            self.assertEqual((file["rang"], file["reste"], file["route"], file["options"]), (3, r["n"], ["reparation-osmoseurs"], {"verifier": 1}))
+            self.assertEqual([f["rang"] for f in p["files"]], list(range(1, len(T.PRIORITES) + 1)))
+            fait = file["fait"]
+            RO.toujours_la(nom)                                                   # une réponse : comptée, et la file baisse
+            p = T.get_priorites()
+            file = [f for f in p["files"] if f["cle"] == "atelier"][0]
+            self.assertEqual((file["fait"], file["reste"]), (fait + 1, r["n"] - 1))
+            self.assertNotIn(nom, [m["name"] for m in RO.mon_rappel()["machines"]])
+            # quelqu'un d'autre : ni alerte, ni file — et sa liste reste numérotée sans trou
+            frappe.set_user(autre)
+            self.assertIsNone(RO.mon_rappel())
+            p = T.get_priorites()
+            self.assertNotIn("atelier", [f["cle"] for f in p["files"]])
+            self.assertEqual([f["rang"] for f in p["files"]], list(range(1, len(T.PRIORITES))))
+        finally:
+            frappe.set_user("Administrator")
+            frappe.clear_document_cache(RO.DOCTYPE_CONFIG, RO.DOCTYPE_CONFIG)
+
 
 class TestRattachement(unittest.TestCase):
     """Une tâche Réparation déjà au calendrier se rattache au dossier (02/10/2026)."""

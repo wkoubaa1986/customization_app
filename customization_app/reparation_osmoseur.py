@@ -79,6 +79,9 @@ PAGE = "/app/reparation-osmoseurs"
 MOTIFS_SANS_REPARATION = ("Le client reprend sa machine", "Réparation impossible ou pas rentable", "Devis refusé",
                           "Réception par erreur", "Autre")
 MOTIFS_NON_FACTUREE = ("Geste commercial", "Rien à réparer", "Autre")
+#: Ce qui RÉPOND à un rappel laisse une trace sur le dossier, commençant par un de ces repères : c'est ce que la file
+#: « Machines de l'atelier » de « Mes appels par priorité » compte comme fait aujourd'hui (tableau_appels).
+REPERES_REPONSE = ("✅ Rendue", "🔓 Rendue", "↪️ Sortie sans réparation", "📍 Toujours au magasin", "📲 SMS", "📅 Technicien affecté")
 
 
 def groupe_de(statut) -> str:
@@ -595,7 +598,7 @@ def cloturer_reception(machine, code=None):
     doc.statut = S_RECEPTIONNEE
     doc.date_cloture_reception = now_datetime()
     doc.save()
-    affectation = planifier(machine)
+    affectation = planifier(machine, trace=0)
     return {"name": doc.name, "statut": frappe.db.get_value(DOCTYPE, machine, "statut"),
             "avertissement": avertissement, **affectation}
 
@@ -787,7 +790,7 @@ def _creer_tache(doc, employee: str, jour, rang: int, cfg: dict) -> str:
 
 
 @frappe.whitelist()
-def planifier(machine, a_partir=None):
+def planifier(machine, a_partir=None, trace=1):
     """Crée la tâche de réparation du dossier selon la règle du lendemain.
 
     Idempotent : un dossier qui a déjà une tâche ouverte n'en reçoit pas une seconde.
@@ -812,6 +815,10 @@ def planifier(machine, a_partir=None):
                                             .format(cfg["horizon_jours"])}
     nom = _creer_tache(doc, choix["employee"], choix["jour"], choix["rang"], cfg)
     synchroniser(machine)
+    if cint(trace):      # demandé depuis l'écran (pas la suite automatique d'une réception) : une réponse au rappel
+        doc.add_comment("Info", _("📅 Technicien affecté — {0}, le {1} ({2})").format(
+            frappe.db.get_value("Employee", choix["employee"], "employee_name") or choix["employee"],
+            frappe.format(choix["jour"], {"fieldtype": "Date"}), frappe.utils.get_fullname(frappe.session.user)))
     return {"tache": nom, "employee": choix["employee"], "jour": str(choix["jour"]),
             "employe": frappe.db.get_value("Employee", choix["employee"], "employee_name"),
             "message": _("Tâche {0} créée pour le {1}").format(nom, frappe.format(choix["jour"], {"fieldtype": "Date"}))}
@@ -897,6 +904,9 @@ def affecter_tache(machine, employee, date, heure="09:00"):
     cfg = dict(config(), creneaux=[heure or "09:00"])
     nom = _creer_tache(doc, employee, getdate(date), 0, cfg)
     synchroniser(machine)
+    doc.add_comment("Info", _("📅 Technicien affecté — {0}, le {1} ({2})").format(
+        frappe.db.get_value("Employee", employee, "employee_name") or employee,
+        frappe.format(getdate(date), {"fieldtype": "Date"}), frappe.utils.get_fullname(frappe.session.user)))
     return {"tache": nom}
 
 
@@ -1144,6 +1154,9 @@ def _exiger_code(code, machine: str, raison: str):
 
 
 def _fermer(doc, rendu_a, remarque, reglement: str, motif=None, sans_reparation=0):
+    doc.add_comment("Info", (_("↪️ Sortie sans réparation — {0}").format((motif or "").strip()) if sans_reparation
+                             else _("✅ Rendue au client — {0}").format(reglement or ""))
+                    + " (" + frappe.utils.get_fullname(frappe.session.user) + ")")
     doc.statut = S_RENDUE
     doc.date_rendue = now_datetime()
     doc.rendue_par = frappe.utils.get_fullname(frappe.session.user)[:140]
@@ -1264,6 +1277,41 @@ def machines_du_client(client):
 
 LIBELLES_ATTENTE = {"a_rendre": "réparée, chez nous depuis {0} j", "sans_technicien": "reçue, sans technicien depuis {0} j",
                     "livraison": "livraison prévue il y a {0} j, pas clôturée"}
+
+
+def role_suivi(user=None, cfg=None):
+    """« suivi » pour la personne qui reçoit le rappel, « relance » pour celle qu'on relance, None pour les autres."""
+    cfg = cfg or config()
+    user = user or frappe.session.user
+    return "suivi" if user and user == cfg["suivi"] else "relance" if user and user == cfg["relance"] else None
+
+
+def machines_a_regarder(user=None) -> list | None:
+    """Les dossiers que CET utilisateur doit regarder, les plus anciens d'abord : pour la personne du suivi, tout ce
+    qui attend depuis trop longtemps ; pour la personne relancée, ce qui est resté sans réponse. None : pas concerné."""
+    cfg = config()
+    role = role_suivi(user, cfg)
+    if not role:
+        return None
+    machines = frappe.get_all(DOCTYPE, filters={"statut": ["in", [S_RECEPTIONNEE, S_REPAREE, S_PRETE, S_LIVRAISON]]},
+                              fields=CHAMPS_ATTENTE, order_by="creation")
+    tri = a_rappeler(machines, getdate(nowdate()), cfg["rappel_jours"], cfg["relance_jours"])
+    return tri["rappel"] if role == "suivi" else tri["relance"]
+
+
+@frappe.whitelist()
+def mon_rappel():
+    """Pour l'alerte à l'écran et la file « Machines de l'atelier » de « Mes appels par priorité » : ce que
+    l'utilisateur connecté doit regarder. null pour qui n'est ni la personne du suivi ni celle de la relance."""
+    machines = machines_a_regarder()
+    if machines is None:
+        return None
+    cfg = config()
+    return {"role": role_suivi(cfg=cfg), "n": len(machines), "rappel_jours": cfg["rappel_jours"],
+            "suivi": frappe.utils.get_fullname(cfg["suivi"]) if cfg["suivi"] else "",
+            "machines": [{"name": m["name"], "client": m.get("nom_client") or m.get("client") or "",
+                          "jours": m["attente"]["jours"], "motif": m["attente"]["motif"],
+                          "texte": LIBELLES_ATTENTE[m["attente"]["motif"]].format(m["attente"]["jours"])} for m in machines]}
 
 
 def composer_rappel(machines, url, relance_de=None) -> str:
