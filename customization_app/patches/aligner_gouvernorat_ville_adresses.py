@@ -12,11 +12,14 @@ Ce que fait ce patch, une fois :
    l'adresse » (remplacé par adresse_sectorisation.valider — l'ancien plante sur un couple inconnu) ;
 2. remplit les champs de la fiche VIDES depuis les champs standard, graphie officielle quand elle se reconnaît
    (« ARIANA » -> « Ariana ») — et l'inverse pour les rares adresses où seul le champ de la fiche est rempli ;
-3. pose le secteur là où il manque et où la table le connaît (« Hors Secteur » hors Tunisie).
+3. pose le secteur là où il manque et où la table le connaît (« Hors Secteur » hors Tunisie) ;
+4. là où les deux jeux de champs sont remplis et se contredisent (12 adresses sur la copie du 18/11/2026), prend
+   les champs standard — ceux que la fiche client affiche (sa décision du 20/11/2026 : « pour ces cas prends les
+   valeurs de la fiche client ») ; le secteur suit quand il avait été déduit de l'ancienne valeur de la fiche. Ces
+   adresses sont listées, avant / après, dans la sortie de la migration.
 
-Ce qu'il ne fait PAS : trancher les adresses où les deux jeux de champs sont remplis et se contredisent (12 sur la
-copie du 18/11/2026) — elles sont listées dans la sortie de la migration, à corriger à la main. Rien n'est écrasé :
-seuls des champs vides sont remplis, et une graphie ramenée à l'officielle. `modified` n'est pas touché.
+Hors ces contradictions rien n'est écrasé : seuls des champs vides sont remplis, et une graphie ramenée à
+l'officielle. `modified` n'est pas touché.
 """
 import frappe
 
@@ -56,19 +59,23 @@ def _desactiver_scripts():
 def corrections(a) -> dict:
     """Ce qu'il faut poser sur UNE adresse (dict des champs). PURE.
 
-    Pour le gouvernorat puis la ville : si le champ de la fiche et le champ standard sont remplis et différents, on
-    n'y touche pas. Sinon la valeur connue remplit le champ vide ; en Tunisie elle est ramenée à la graphie
-    officielle quand elle la rejoint (« ARIANA », espace insécable) — dans les DEUX champs, pour qu'ils restent
-    identiques et que la liste de la fiche retrouve sa valeur."""
+    Pour le gouvernorat puis la ville : la valeur connue remplit le champ vide ; si le champ de la fiche et le champ
+    standard sont remplis et différents, le STANDARD fait foi (c'est lui que la fiche client affiche). En Tunisie la
+    valeur est ramenée à la graphie officielle quand elle la rejoint (« ARIANA », espace insécable) — dans les DEUX
+    champs, pour qu'ils restent identiques et que la liste de la fiche retrouve sa valeur.
+
+    Secteur : posé s'il manque ; après une contradiction tranchée, recalculé s'il avait été déduit de l'ancienne
+    valeur de la fiche (un secteur choisi à la main, qui ne correspond à aucune des deux, reste)."""
     out = {}
     tunisie = a.get("country") == TUNISIE
     c_gouv, c_ville = ("custom_state_s", "custom_villes_s") if tunisie else ("custom_state_d", "custom_villes_d")
+    tranche = []
 
     def paire(std, fiche, officielle):
         s, f = (a.get(std) or "").strip(), (a.get(fiche) or "").strip()
         if s and f and s != f:
-            return None
-        valeur = f or s
+            tranche.append(fiche)
+        valeur = s or f
         valeur = (officielle(valeur) or valeur) if valeur and tunisie else valeur
         for champ in (std, fiche):
             if valeur and (a.get(champ) or "") != valeur:
@@ -76,11 +83,13 @@ def corrections(a) -> dict:
         return valeur
 
     gouv = paire("state", c_gouv, gouvernorat_officiel)
-    paire("city", c_ville, lambda v: ville_officielle(gouv, v) if gouv else None)
-    if _vide(a.get("custom_secteur")):
-        secteur = secteur_attendu(out.get("state", a.get("state")), out.get("city", a.get("city"))) if tunisie else HORS_SECTEUR
-        if secteur:
-            out["custom_secteur"] = secteur
+    ville = paire("city", c_ville, lambda v: ville_officielle(gouv, v) if gouv else None)
+    actuel = (a.get("custom_secteur") or "").strip()
+    attendu = secteur_attendu(gouv, ville) if tunisie else HORS_SECTEUR
+    if attendu and attendu != actuel:
+        deduit_de_la_fiche = tunisie and tranche and actuel == secteur_attendu(a.get(c_gouv), a.get(c_ville))
+        if not actuel or deduit_de_la_fiche:
+            out["custom_secteur"] = attendu
     return out
 
 
@@ -99,6 +108,7 @@ def execute():
     secteurs = set(frappe.get_all("Secteur geographique", pluck="name"))
     champs = ["name", "country", "state", "city", "custom_state_s", "custom_villes_s", "custom_state_d", "custom_villes_d", "custom_secteur"]
     n = 0
+    avant = {r.name: r for r in contradictoires()}
     for a in frappe.get_all("Address", fields=champs, limit_page_length=0):
         valeurs = corrections(a)
         if valeurs.get("custom_secteur") and valeurs["custom_secteur"] not in secteurs:
@@ -107,8 +117,9 @@ def execute():
             frappe.db.set_value("Address", a.name, valeurs, update_modified=False)
             n += 1
     print("  adresses complétées : %d" % n)
-    restes = contradictoires()
-    if restes:
-        print("  %d adresse(s) où la fiche et les champs standard se contredisent — non modifiées, à corriger à la main :" % len(restes))
-        for r in restes:
-            print("    %s : fiche %s / %s — standard %s / %s — %s" % (r.name, r.custom_state_s, r.custom_villes_s, r.state, r.city, r.custom_secteur))
+    if avant:
+        print("  %d adresse(s) où la fiche Adresse contredisait la fiche client — la fiche client fait foi :" % len(avant))
+        for nom, r in avant.items():
+            v = frappe.db.get_value("Address", nom, ["state", "city", "custom_secteur"], as_dict=True)
+            print("    %s : %s / %s (%s) -> %s / %s (%s)" % (nom, r.custom_state_s, r.custom_villes_s, r.custom_secteur or "sans secteur",
+                                                           v.state, v.city, v.custom_secteur or "sans secteur"))

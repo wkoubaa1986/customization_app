@@ -28,8 +28,8 @@
   const avec = (liste, valeur) => [""].concat(liste, valeur && !liste.includes(valeur) ? [valeur] : []);
   const CHAMPS = ["custom_state_s", "custom_villes_s", "custom_state_d", "custom_villes_d"];
 
-  // Les champs de la fiche vides alors que Gouvernorat / Ville sont remplis (adresse créée par la saisie rapide,
-  // la tournée, un import) : on les montre. Écrit dans le document sans passer par set_value : la fiche ne devient
+  // Les champs de la fiche vides (ou en désaccord) alors que Gouvernorat / Ville sont remplis (adresse créée par la
+  // saisie rapide, la tournée, un import) : on les montre. Écrit dans le document sans passer par set_value : la fiche ne devient
   // pas « non enregistrée » pour autant, et rien ne part au serveur tant que l'utilisateur ne modifie rien.
   // Seulement sur une fiche telle qu'elle vient du serveur : dès que l'utilisateur a touché quelque chose, un champ
   // vide est SON choix. Sans cette garde, après un enregistrement refusé (gouvernorat changé, ville pas encore
@@ -37,12 +37,14 @@
   function reprendre(frm) {
     const d = frm.doc;
     if (frm.is_new() || frm.is_dirty()) return;
+    // Gouvernorat / Ville standard remplis : ce sont eux que la fiche montre, même si le champ de la fiche disait
+    // autre chose — c'est ce qu'affiche la fiche client, et c'est elle qui fait foi (décision du 20/11/2026).
     if (tunisie(frm)) {
-      if (!d.custom_state_s && d.state) d.custom_state_s = officiel(gouvernorats(), d.state) || d.state;
-      if (!d.custom_villes_s && d.city) d.custom_villes_s = officiel(villes(d.custom_state_s), d.city) || d.city;
+      if (d.state) d.custom_state_s = officiel(gouvernorats(), d.state) || d.state;
+      if (d.city) d.custom_villes_s = officiel(villes(d.custom_state_s), d.city) || d.city;
     } else {
-      if (!d.custom_state_d && d.state) d.custom_state_d = d.state;
-      if (!d.custom_villes_d && d.city) d.custom_villes_d = d.city;
+      if (d.state) d.custom_state_d = d.state;
+      if (d.city) d.custom_villes_d = d.city;
     }
   }
 

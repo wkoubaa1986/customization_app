@@ -71,9 +71,12 @@ class TestAlignerPure(unittest.TestCase):
         apres = dict(avant, state="Tunis", city="La Marsa")
         self.assertEqual(S.aligner(apres, avant), {"custom_state_s": "Tunis", "custom_villes_s": "La Marsa"})
 
-    def test_contradiction_ancienne_non_tranchee(self):
+    def test_contradiction_ancienne_la_fiche_client_fait_foi(self):
+        """Personne n'a touché ni l'un ni l'autre : le standard, celui que la fiche client affiche (20/11/2026)."""
         avant = adr(state="Nabeul", city="Hammamet", custom_state_s="Tunis", custom_villes_s="Tunis")
-        self.assertEqual(S.aligner(dict(avant), avant), {})
+        self.assertEqual(S.aligner(dict(avant), avant), {"custom_state_s": "Nabeul", "custom_villes_s": "Hammamet"})
+        # ...mais si la fiche vient de choisir autre chose, c'est ce choix qui compte
+        self.assertEqual(S.aligner(dict(avant, custom_villes_s="La Marsa"), avant), {"custom_state_s": "Nabeul", "city": "La Marsa"})
 
     def test_rien_a_faire(self):
         avant = adr(state="Ariana", city="Soukra", custom_state_s="Ariana", custom_villes_s="Soukra")
@@ -145,11 +148,21 @@ class TestRattrapagePure(unittest.TestCase):
         a = adr(state="Ariana", city="Soukra", custom_state_s="Ariana", custom_villes_s="Soukra", custom_secteur="Secteur 1")
         self.assertEqual(P.corrections(a), {})
 
-    def test_contradiction_laissee(self):
+    def test_contradiction_la_fiche_client_fait_foi(self):
+        """« Pour ces cas prends les valeurs de la fiche client » : le standard, et le secteur qui en découle."""
         a = adr(state="Nabeul", city="Hammamet", custom_state_s="Tunis", custom_villes_s="Tunis", custom_secteur="Secteur 4")
-        self.assertEqual(P.corrections(a), {})
-        # la ville seule se contredit : le gouvernorat, lui, n'a rien à corriger non plus
+        self.assertEqual(P.corrections(a), {"custom_state_s": "Nabeul", "custom_villes_s": "Hammamet", "custom_secteur": "Secteur 9"})
+        a = adr(state="Medenine", city="Zarzis", custom_state_s="Tunis", custom_villes_s="Tunis", custom_secteur="Secteur 4")
+        self.assertEqual(P.corrections(a), {"custom_state_s": "Medenine", "custom_villes_s": "Zarzis", "custom_secteur": "Hors Secteur"})
+        # la ville seule se contredit, même secteur : seul le champ de la fiche change
         a = adr(state="Sousse", city="Kalaa Kebira", custom_state_s="Sousse", custom_villes_s="Sousse Medina", custom_secteur="Hors Secteur")
+        self.assertEqual(P.corrections(a), {"custom_villes_s": "Kalaa Kebira"})
+        # un secteur choisi à la main, qui ne vient ni de l'un ni de l'autre, reste
+        a = adr(state="Nabeul", city="Hammamet", custom_state_s="Tunis", custom_villes_s="Tunis", custom_secteur="Secteur 7")
+        self.assertEqual(P.corrections(a), {"custom_state_s": "Nabeul", "custom_villes_s": "Hammamet"})
+
+    def test_secteur_a_la_main_sans_contradiction_reste(self):
+        a = adr(state="Tunis", city="Le Bardo", custom_state_s="Tunis", custom_villes_s="Le Bardo", custom_secteur="Secteur 4")   # table : Secteur 3
         self.assertEqual(P.corrections(a), {})
 
     def test_graphie_et_secteur_manquant(self):
@@ -246,15 +259,21 @@ class TestDocument(unittest.TestCase):
 
     def test_patch_sur_la_base(self):
         """Le patch, rejoué sur la copie : plus aucune adresse tunisienne avec un champ de la fiche vide alors que
-        le standard est rempli, et les anciennes contradictions intactes."""
+        le standard est rempli, plus aucune contradiction, et les champs standard n'ont pas bougé."""
         f = self.frappe
-        avant = {r.name: (r.state, r.custom_state_s, r.city, r.custom_villes_s) for r in P.contradictoires()}
+        f.db.set_value("Address", self._creer(state="Nabeul", city="Hammamet").name,
+                       {"custom_state_s": "Tunis", "custom_villes_s": "Tunis", "custom_secteur": "Secteur 4"}, update_modified=False)
+        avant = {r.name: (r.state, r.city) for r in P.contradictoires()}
+        self.assertTrue(avant)
         P.execute()
         reste = f.db.sql("""select count(*) from tabAddress where country = %s and
             ((ifnull(custom_state_s, '') = '' and ifnull(state, '') <> '') or (ifnull(custom_villes_s, '') = '' and ifnull(city, '') <> ''))""", TN)[0][0]
         self.assertEqual(reste, 0)
-        apres = {r.name: (r.state, r.custom_state_s, r.city, r.custom_villes_s) for r in P.contradictoires()}
-        self.assertEqual(apres, avant)
+        self.assertEqual(P.contradictoires(), [])
+        for nom, (gouv, ville) in avant.items():
+            a = f.db.get_value("Address", nom, ["state", "city", "custom_state_s", "custom_villes_s", "custom_secteur"], as_dict=True)
+            self.assertEqual((a.state, a.city, a.custom_state_s, a.custom_villes_s), (gouv, ville, gouv, ville), nom)
+            self.assertEqual(a.custom_secteur, S.secteur_attendu(gouv, ville), nom)
         self.assertFalse(f.db.get_value("Client Script", P.CLIENT_SCRIPT, "enabled"))
         self.assertTrue(f.db.get_value("Server Script", P.SERVER_SCRIPT, "disabled"))
 

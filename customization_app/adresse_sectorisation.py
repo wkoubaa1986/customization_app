@@ -17,8 +17,9 @@ chose :
 Ici, à chaque enregistrement et QUEL QUE SOIT le chemin (fiche, saisie rapide, portail, tournée, import) :
 
 1. les deux jeux de champs sont alignés (`aligner`) : celui qui vient d'être modifié fait foi ; à la création, le
-   champ de la fiche s'il est rempli, sinon le champ standard ; deux valeurs contradictoires que personne ne vient de
-   toucher ne sont PAS tranchées à l'aveugle ;
+   champ de la fiche s'il est rempli, sinon le champ standard ; devant deux valeurs contradictoires que personne ne
+   vient de toucher, c'est le champ standard — celui qu'affiche la fiche client — qui fait foi (sa décision du
+   20/11/2026 : « pour ces cas prends les valeurs de la fiche client ») ;
 2. en Tunisie, les noms sont ramenés à leur graphie officielle quand ils la rejoignent (« ARIANA », espace
    insécable…) — sinon la liste de la fiche ne retrouve pas sa valeur ;
 3. le secteur est calculé s'il manque, et recalculé quand la ville change sans que le secteur ait été choisi à la
@@ -83,7 +84,7 @@ def aligner(valeurs: dict, avant: dict | None = None) -> dict:
     - seul le standard vient d'être modifié : lui (un programme) ;
     - le pays change : les champs visibles du nouveau pays s'ils sont renseignés, sinon on garde le standard ;
     - l'un des deux est vide : l'autre le remplit (adresses créées avant ce module) ;
-    - les deux sont remplis, différents, et personne n'y a touché : on ne tranche pas.
+    - les deux sont remplis, différents, et personne n'y a touché : le standard, celui qu'affiche la fiche client.
     Au changement de pays, les champs de l'ancien pays sont vidés — ils décrivaient un autre endroit."""
     pays = valeurs.get("country")
     paires = champs_actifs(pays)
@@ -100,12 +101,9 @@ def aligner(valeurs: dict, avant: dict | None = None) -> dict:
             gagnant = s
         elif pays_change:
             gagnant = v if visibles_remplis else s
-        elif not v or not s:
-            gagnant = v or s
         else:
-            gagnant = None
-        if gagnant is not None:
-            out[std], out[vis] = gagnant, gagnant
+            gagnant = s or v
+        out[std], out[vis] = gagnant, gagnant
         if pays_change and _t(valeurs.get(masque)):
             out[masque] = ""
     if pays == TUNISIE:
