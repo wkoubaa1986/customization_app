@@ -5,6 +5,8 @@
  "editable_grid": 1,
  "engine": "InnoDB",
  "field_order": [
+  "section_marge",
+  "marge_min",
   "section_ensembles",
   "ensembles_auto",
   "familles_exclues",
@@ -12,6 +14,17 @@
   "contient"
  ],
  "fields": [
+  {
+   "fieldname": "section_marge",
+   "fieldtype": "Section Break",
+   "label": "Marge minimale garantie"
+  },
+  {
+   "fieldname": "marge_min",
+   "fieldtype": "Percent",
+   "label": "Marge minimale garantie (% du prix de vente)",
+   "description": "Tout prix pos\u00e9 depuis la page Analyse Articles (variation, prix fixe, r\u00e8gle des ensembles, recalcul automatique) est relev\u00e9 au plus petit prix qui garde cette marge, m\u00eame \u00e0 la remise la plus forte. 0 : aucune garantie."
+  },
   {
    "fieldname": "section_ensembles",
    "fieldtype": "Section Break",
@@ -47,7 +60,7 @@
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2026-11-19 18:42:22.220870",
+ "modified": "2026-11-20 10:00:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Config Analyse Articles",

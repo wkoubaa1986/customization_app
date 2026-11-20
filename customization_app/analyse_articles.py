@@ -88,7 +88,7 @@ def prix_ensemble(composants, prix, exclus=()) -> tuple:
 def regle_ensembles() -> dict:
     """La règle du réglage, prête à l'emploi : familles dépliées (sous-familles), débuts de code, mots contenus."""
     if not frappe.db.exists("DocType", CONFIG):
-        return {"auto": 0, "familles": set(), "familles_saisies": [], "debuts": [], "contient": []}
+        return {"auto": 0, "marge_min": 0.0, "familles": set(), "familles_saisies": [], "debuts": [], "contient": []}
     v = frappe.db.get_singles_dict(CONFIG) or {}
     saisies = _lignes(v.get("familles_exclues"))
     familles = set()
@@ -97,7 +97,8 @@ def regle_ensembles() -> dict:
         if bornes:
             familles |= set(frappe.get_all("Item Group", pluck="name",
                                            filters={"lft": [">=", bornes[0]], "rgt": ["<=", bornes[1]]}))
-    return {"auto": frappe.utils.cint(v.get("ensembles_auto")), "familles": familles, "familles_saisies": saisies,
+    return {"auto": frappe.utils.cint(v.get("ensembles_auto")), "marge_min": flt(v.get("marge_min")),
+            "familles": familles, "familles_saisies": saisies,
             "debuts": _lignes(v.get("codes_debut")), "contient": _lignes(v.get("contient"))}
 
 
@@ -109,6 +110,71 @@ def _exclus_parmi(codes, regle) -> set:
     return {i.name for i in frappe.get_all("Item", filters={"name": ["in", codes]},
                                            fields=["name", "item_name", "item_group"])
             if est_exclu(i.name, i.item_name, i.item_group, regle)}
+
+
+# ---------------------------------------------------------------- marge minimale garantie
+#
+# Demande du 20/11/2026 : « dans les règles, assurer une marge minimale à la vente, en tenant compte même des promos ;
+# la marge est toujours sur le prix de vente ». Le réglage porte un taux (0 = pas de garantie). Le PRIX PLANCHER d'un
+# article sur une liste est le plus petit prix de liste qui garde cette marge MÊME à la remise la plus forte qui
+# s'y applique (tous les paliers de quantité comptent) :
+#     seuil = coût TTC ÷ (1 − taux)          → sous ce prix, la marge est insuffisante
+#     plancher = le plus grand de : seuil ; seuil ÷ (1 − remise %) ; seuil + remise en montant
+# Le coût est celui que la page affiche (valorisation TTC ; un ensemble = la somme de TOUS ses composants). Sans
+# coût connu (service, main-d'œuvre), pas de plancher : on ne sait rien garantir.
+# Tout prix POSÉ par la page (variation, prix fixe, règle des ensembles, recalcul automatique) est relevé au
+# plancher quand il passerait dessous ; l'aperçu le montre ligne par ligne. Rien ne baisse jamais à cause d'elle.
+# À ne pas confondre avec « Config Marge Minimale », qui relève les LIGNES d'une commande au moment de la vente.
+
+TOLERANCE_PRIX = 0.0006          # un demi-millime d'arrondi, de chaque côté
+
+
+def seuil_marge(cout_ttc, taux):
+    """Le prix TTC sous lequel la marge sur le prix de vente tombe sous `taux` (%). None sans coût ou sans taux. PURE."""
+    cout, t = flt(cout_ttc), flt(taux) / 100.0
+    if cout <= 0 or t <= 0 or t >= 1:
+        return None
+    return cout / (1 - t)
+
+
+def prix_plancher(cout_ttc, taux, remises=()):
+    """Le plus petit prix de liste TTC qui garde la marge `taux` même à la remise la plus forte. PURE.
+    `remises` : les règles applicables ({"type": "pct" | "montant", "valeur"}). Arrondi au millime SUPÉRIEUR."""
+    import math
+    seuil = seuil_marge(cout_ttc, taux)
+    if seuil is None:
+        return None
+    besoin = seuil
+    for r in remises or ():
+        v = flt(r.get("valeur"))
+        if r.get("type") == "pct":
+            if v < 100:                      # une remise de 100 % : aucun prix ne tient, on ne la compte pas
+                besoin = max(besoin, seuil / (1 - v / 100.0))
+        else:
+            besoin = max(besoin, seuil + v)
+    return math.ceil(besoin * 1000 - 1e-6) / 1000.0
+
+
+def sous_le_seuil(prix, seuil) -> bool:
+    """Ce prix laisse-t-il moins que la marge minimale ? (à l'arrondi du millime près). PURE."""
+    return prix is not None and seuil is not None and flt(prix) < flt(seuil) - TOLERANCE_PRIX
+
+
+def garantir(changements, planchers, actif=True, cle="item_code") -> list:
+    """Relève au plancher les prix qui passeraient dessous. PURE (modifie et renvoie `changements`).
+    `planchers` : {(code, liste): plancher}. Une ligne relevée garde le prix calculé avant (`calcule`) ; si la
+    garantie est coupée (`actif` faux), la ligne est seulement signalée (`sous_min`). Chaque ligne porte `plancher`."""
+    for c in changements:
+        plancher = planchers.get((c[cle], c["price_list"]))
+        if plancher is None or c.get("nouveau") is None or flt(c["nouveau"]) <= 0:
+            continue                         # pas de plancher connu, ensemble incomplet, ou prix à 0 voulu (offert)
+        c["plancher"] = plancher
+        if flt(c["nouveau"]) < plancher - 0.0005:
+            if actif:
+                c["calcule"], c["nouveau"] = c["nouveau"], plancher
+            else:
+                c["sous_min"] = 1
+    return changements
 
 
 # ---------------------------------------------------------------- fetchers bulk
@@ -209,15 +275,27 @@ def _cellule_prix(code, modele, famille, liste, pv, cout_ttc, ctx) -> dict:
     ecart = None
     if liste != LISTE_REFERENCE and pv is not None and reference:
         ecart = round((flt(pv) - flt(reference)) / flt(reference) * 100, 1)
+    # Marge minimale garantie : le seuil (sans promo) dit quelles marges sont insuffisantes ; le plancher est le
+    # prix de liste qui les remettrait toutes au-dessus, promos comprises.
+    applicables = remises_applicables(code, modele, famille, liste, ctx.get("regles"))
+    taux = flt(ctx.get("marge_min"))
+    seuil = seuil_marge(cout_ttc, taux)
+    plancher = prix_plancher(cout_ttc, taux, applicables)
     remises = []
-    for r in remises_applicables(code, modele, famille, liste, ctx.get("regles")):
+    for r in applicables:
         remise = prix_remise(pv, r)
         if remise is None:
             continue
         remises.append({"regle": r["name"], "titre": r["titre"], "palier": libelle_palier(r),
                         "libelle": ("−%g %%" % r["valeur"]) if r["type"] == "pct" else ("−%g" % r["valeur"]),
-                        "prix": remise, "marge": _marge(remise, cout_ttc)})
-    return {"pv_ttc": pv, "marge": _marge(pv, cout_ttc), "ecart_ref": ecart, "remises": remises}
+                        "prix": remise, "marge": _marge(remise, cout_ttc),
+                        "sous_min": 1 if sous_le_seuil(remise, seuil) else 0})
+    return {"pv_ttc": pv, "marge": _marge(pv, cout_ttc), "ecart_ref": ecart, "remises": remises,
+            "plancher": plancher,
+            # sous le plancher : le prix lui-même, ou une de ses promos, laisse moins que la marge minimale
+            # (un prix à 0 n'est pas un prix trop bas : c'est un article offert ou sans tarif sur cette liste)
+            "sous_min": 1 if (pv is not None and flt(pv) > 0 and plancher is not None and flt(pv) < plancher - 0.0005) else 0,
+            "sous_min_prix": 1 if (pv is not None and flt(pv) > 0 and sous_le_seuil(pv, seuil)) else 0}
 
 
 
@@ -500,6 +578,13 @@ def build_item_row(item, ctx):
                 "regle_ttc": regle_ttc,
                 "regle_marge": _marge(regle_ttc, cout_ttc),
             }
+            # La règle ne descend jamais sous la marge minimale garantie : le prix qu'elle poserait vraiment.
+            plancher = prix_plancher(cout_ttc, ctx.get("marge_min"),
+                                     remises_applicables(code, item.get("variant_of"), item.get("item_group"),
+                                                         pl_name, ctx.get("regles")))
+            if regle_ttc is not None and plancher is not None and regle_ttc < plancher - 0.0005:
+                bundle["prices"][pl_name].update({"regle_calcule": regle_ttc, "regle_ttc": plancher,
+                                                  "regle_marge": _marge(plancher, cout_ttc)})
         row["bundle"] = bundle
         # sur la ligne principale : la marge du bundle s'appuie sur son coût calculé
         for pl in ctx["price_lists"]:
@@ -522,6 +607,9 @@ def _filtre_marge(rows, marge):
     if marge == "sans_prix":
         return [r for r in rows
                 if all(p.get("pv_ttc") is None for p in r["prices"].values())]
+    if marge == "sous_min":
+        # au moins un prix sous le plancher de la marge minimale garantie (promos comprises)
+        return [r for r in rows if any(p.get("sous_min") for p in r["prices"].values())]
     if marge.startswith("lt:"):
         seuil = flt(marge.split(":", 1)[1])
         return [r for r in rows
@@ -568,12 +656,14 @@ def trier_famille_prix(rows, liste, sens="asc"):
 
 
 def compute_analysis(search=None, item_group=None, start=None, page_length=None,
-                     order_by="item_code", order_dir="asc", marge=None, prix_liste=None):
+                     order_by="item_code", order_dir="asc", marge=None, prix_liste=None, marge_min=None):
+    """`marge_min` : un taux à essayer à la place de celui du réglage (aperçu de l'impact avant d'enregistrer)."""
     if marge or order_by == TRI_FAMILLE_PRIX:
         # la marge et le prix sont des valeurs calculées : on construit tout, on filtre,
         # on trie, puis on pagine en mémoire
         complet = compute_analysis(search, item_group, None, None,
-                                   "item_code" if order_by == TRI_FAMILLE_PRIX else order_by, order_dir)
+                                   "item_code" if order_by == TRI_FAMILLE_PRIX else order_by, order_dir,
+                                   marge_min=marge_min)
         rows = _filtre_marge(complet["rows"], marge) if marge else complet["rows"]
         if order_by == TRI_FAMILLE_PRIX:
             listes = [pl["name"] for pl in complet["price_lists"]]
@@ -582,7 +672,7 @@ def compute_analysis(search=None, item_group=None, start=None, page_length=None,
         debut = int(start or 0)
         fin = debut + page_length if page_length else None
         return {"total": len(rows), "start": debut, "page_length": page_length,
-                "price_lists": complet["price_lists"], "rows": rows[debut:fin]}
+                "price_lists": complet["price_lists"], "marge_min": complet.get("marge_min"), "rows": rows[debut:fin]}
 
     items, total = _fetch_items(search, item_group, start or 0, page_length,
                                 order_by, order_dir)
@@ -606,9 +696,10 @@ def compute_analysis(search=None, item_group=None, start=None, page_length=None,
     taxes = _tax_rate_map(needed, [item_info.get(c, {}).get("item_group") for c in needed])
     prices = _price_map(needed, [pl["name"] for pl in price_lists])
 
-    regle = regle_ensembles() if component_codes else {}
+    regle = regle_ensembles()
     ctx = {"price_lists": price_lists, "valuation": valuation, "taxes": taxes,
            "prices": prices, "bundles": bundles, "item_info": item_info,
+           "marge_min": flt(regle.get("marge_min")) if marge_min is None else flt(marge_min),
            "regles": _regles_remise(),        # les réductions (Pricing Rule) valides aujourd'hui
            # les composants que la règle sort du prix des ensembles
            "exclus": {c for c in component_codes
@@ -618,6 +709,7 @@ def compute_analysis(search=None, item_group=None, start=None, page_length=None,
         "start": int(start or 0),
         "page_length": page_length,
         "price_lists": price_lists,
+        "marge_min": ctx["marge_min"],
         "rows": [build_item_row(i, ctx) for i in items],
     }
 
@@ -740,22 +832,62 @@ def _bundles_contenant(item_codes):
     return out
 
 
+def _planchers(codes, listes, taux) -> dict:
+    """{(code, liste): prix plancher} pour la marge minimale `taux`, promos comprises. Même coût que l'écran :
+    valorisation TTC de l'article, ou somme de TOUS les composants pour un ensemble. Sans coût : pas de plancher."""
+    codes = [c for c in dict.fromkeys(codes or []) if c]
+    if not codes or not listes or flt(taux) <= 0:
+        return {}
+    champs = ["name", "item_group", "variant_of", "valuation_rate"]
+    infos = {i.name: i for i in frappe.get_all("Item", filters={"name": ["in", codes]}, fields=champs)}
+    ensembles = _bundle_map(codes)
+    composants = sorted({c["item_code"] for comps in ensembles.values() for c in comps} - set(infos))
+    if composants:
+        infos.update({i.name: i for i in frappe.get_all("Item", filters={"name": ["in", composants]}, fields=champs)})
+    connus = list(infos)
+    valo = _valuation_map(connus, {c: infos[c].get("valuation_rate") for c in connus})
+    taxes = _tax_rate_map(connus, [infos[c].get("item_group") for c in connus])
+
+    def ttc(code):
+        return _val_ttc(flt(valo.get(code)), (taxes.get(code) or {}).get("tva") or 0)
+
+    regles = _regles_remise()
+    out = {}
+    for code in codes:
+        if code not in infos:
+            continue
+        cout = (round(sum(ttc(c["item_code"]) * flt(c["qty"]) for c in ensembles[code]), 3)
+                if code in ensembles else ttc(code))
+        for liste in listes:
+            plancher = prix_plancher(cout, taux, remises_applicables(
+                code, infos[code].get("variant_of"), infos[code].get("item_group"), liste, regles))
+            if plancher is not None:
+                out[(code, liste)] = plancher
+    return out
+
+
 def _resoudre_changements(cible):
     """-> [{item_code, item_name, price_list, ancien, nouveau}] depuis la cible :
     - mode « liste »  : changements explicites [{item_code, price_list, nouveau}] ;
     - mode « bloc »   : les articles COCHÉS (item_codes) ou, sans sélection,
       tout le filtre courant (search/groupe) ; une ou plusieurs listes de prix
       (price_lists, ou price_list seule), une opération (« pct » ±x %,
-      « montant » ±x, « fixe » = x)."""
+      « montant » ±x, « fixe » = x, « ensemble » = règle des ensembles, « plancher » = relever les prix qui sont
+      sous la marge minimale garantie).
+    Marge minimale garantie (réglage) : tout prix qui passerait sous son plancher y est relevé, sauf
+    `garantir: 0` dans la cible — la ligne est alors seulement signalée."""
     cible = frappe.parse_json(cible) if isinstance(cible, str) else cible
     noms_dict = {}
+    taux_min = flt(regle_ensembles().get("marge_min"))
 
     if cible.get("mode") == "bloc":
         pls = cible.get("price_lists") or (
             [cible["price_list"]] if cible.get("price_list") else [])
         operation, valeur = cible.get("operation"), flt(cible.get("valeur"))
-        if not pls or operation not in ("pct", "montant", "fixe", "ensemble"):
+        if not pls or operation not in ("pct", "montant", "fixe", "ensemble", "plancher"):
             frappe.throw(_("Liste de prix et opération requises."))
+        if operation == "plancher" and taux_min <= 0:
+            frappe.throw(_("Indiquez d'abord la marge minimale garantie dans les règles de prix, puis enregistrez."))
         selection = cible.get("item_codes") or []
         if cible.get("tous_ensembles"):
             # « Aperçu sur tous les ensembles » du réglage : chaque ensemble actif, quel que soit le filtre.
@@ -792,6 +924,16 @@ def _resoudre_changements(cible):
                         changements.append({"item_code": code, "price_list": pl,
                                             "ancien": prix.get((code, pl)), "nouveau": nouveau})
             pls = []            # tout est fait : la boucle des variations ne s'applique pas
+        if operation == "plancher":
+            # Seuls les prix SOUS leur plancher bougent, et ils y montent : rien ne baisse.
+            prix, planchers = _price_map(codes, pls), _planchers(codes, pls, taux_min)
+            for pl in pls:
+                for code in codes:
+                    ancien, plancher = prix.get((code, pl)), planchers.get((code, pl))
+                    if ancien is not None and flt(ancien) > 0 and plancher is not None and flt(ancien) < plancher - 0.0005:
+                        changements.append({"item_code": code, "price_list": pl, "ancien": ancien,
+                                            "nouveau": plancher, "plancher": plancher})
+            pls = []
         prix = _price_map(codes, pls) if pls else {}
         for pl in pls:
             for code in codes:
@@ -825,14 +967,19 @@ def _resoudre_changements(cible):
 
     for c in changements:
         c["item_name"] = noms_dict.get(c["item_code"]) or c["item_code"]
+    if taux_min > 0 and changements:
+        garantir(changements, _planchers([c["item_code"] for c in changements],
+                                         list({c["price_list"] for c in changements}), taux_min),
+                 actif=frappe.utils.cint(cible.get("garantir", 1)))
     # Ne garder que les vrais changements
     return [c for c in changements
             if c["ancien"] is None or round(flt(c["ancien"]), 3) != round(c["nouveau"], 3)]
 
 
-def _cascade_bundles(changements):
+def _cascade_bundles(changements, garantie=True):
     """-> [{bundle, item_name, price_list, ancien, nouveau, incomplet}] : le
-    nouveau prix propre (= prix calculé) des bundles actifs touchés."""
+    nouveau prix propre (= prix calculé) des bundles actifs touchés. La marge minimale garantie s'y applique
+    aussi (`garantie` faux : l'ensemble sous son plancher est seulement signalé)."""
     par_liste = {}
     for c in changements:
         par_liste.setdefault(c["price_list"], {})[c["item_code"]] = c["nouveau"]
@@ -866,6 +1013,9 @@ def _cascade_bundles(changements):
                 "nouveau": None if incomplet else total,
                 "incomplet": incomplet,
             })
+    taux_min = flt(regle_ensembles().get("marge_min"))
+    if taux_min > 0 and resultat:
+        garantir(resultat, _planchers(list(bundles), list(par_liste), taux_min), actif=garantie, cle="bundle")
     return resultat
 
 
@@ -897,14 +1047,19 @@ def _poser_prix(item_code, price_list, nouveau):
     return doc.name
 
 
+def _garantie_demandee(cible) -> bool:
+    cible = frappe.parse_json(cible) if isinstance(cible, str) else (cible or {})
+    return bool(frappe.utils.cint(cible.get("garantir", 1)))
+
+
 @frappe.whitelist()
 def apercu_prix(cible, maj_bundles=1):
     """Ce qui VA changer — avant d'appliquer. Rendu article par article, plus
     la cascade sur les bundles actifs concernés."""
     _guard()
     changements = _resoudre_changements(cible)
-    bundles = _cascade_bundles(changements) if frappe.utils.cint(maj_bundles) else []
-    return {"changements": changements, "bundles": bundles}
+    bundles = _cascade_bundles(changements, _garantie_demandee(cible)) if frappe.utils.cint(maj_bundles) else []
+    return {"changements": changements, "bundles": bundles, "marge_min": flt(regle_ensembles().get("marge_min"))}
 
 
 @frappe.whitelist()
@@ -917,7 +1072,7 @@ def appliquer_prix(cible, maj_bundles=1, bundles_exclus=None):
     changements = _resoudre_changements(cible)
     if not changements:
         frappe.throw(_("Aucun changement de prix à appliquer."))
-    bundles = _cascade_bundles(changements) if frappe.utils.cint(maj_bundles) else []
+    bundles = _cascade_bundles(changements, _garantie_demandee(cible)) if frappe.utils.cint(maj_bundles) else []
     exclus = set(frappe.parse_json(bundles_exclus) if isinstance(bundles_exclus, str)
                  else (bundles_exclus or []))
     bundles = [b for b in bundles if b["bundle"] not in exclus]
@@ -948,13 +1103,20 @@ def appliquer_prix(cible, maj_bundles=1, bundles_exclus=None):
 def get_regle_ensembles():
     _guard()
     r = regle_ensembles()
-    return {"auto": r["auto"], "familles": r["familles_saisies"], "debuts": r["debuts"], "contient": r["contient"]}
+    # `marge_commande` : le plancher que la commande client applique déjà à ses lignes (rappel affiché à côté).
+    commande = (frappe.db.get_singles_dict("Config Marge Minimale") or {}) if frappe.db.exists("DocType", "Config Marge Minimale") else {}
+    return {"auto": r["auto"], "marge_min": r["marge_min"], "familles": r["familles_saisies"], "debuts": r["debuts"],
+            "contient": r["contient"],
+            "marge_commande": flt(commande.get("taux")) if frappe.utils.cint(commande.get("actif")) else 0}
 
 
 @frappe.whitelist(methods=["POST"])
-def enregistrer_regle_ensembles(familles=None, debuts=None, contient=None, auto=0):
-    """Enregistre ce qui n'est pas compté dans le prix d'un ensemble, et l'interrupteur du recalcul automatique."""
+def enregistrer_regle_ensembles(familles=None, debuts=None, contient=None, auto=0, marge_min=None):
+    """Enregistre ce qui n'est pas compté dans le prix d'un ensemble, l'interrupteur du recalcul automatique, et la
+    marge minimale garantie (`marge_min` absent : inchangée)."""
     _guard()
+    if marge_min is not None and not (0 <= flt(marge_min) < 100):
+        frappe.throw(_("La marge minimale est un pourcentage du prix de vente : entre 0 et 99."))
 
     def liste(v):
         """Une liste JSON, une liste, ou un texte « un par ligne » -> liste propre, sans doublon."""
@@ -970,10 +1132,37 @@ def enregistrer_regle_ensembles(familles=None, debuts=None, contient=None, auto=
     doc = frappe.get_single(CONFIG)
     doc.update({"familles_exclues": "\n".join(familles), "codes_debut": "\n".join(liste(debuts)),
                 "contient": "\n".join(liste(contient)), "ensembles_auto": 1 if frappe.utils.cint(auto) else 0})
+    if marge_min is not None:
+        doc.marge_min = flt(marge_min)
     doc.flags.ignore_permissions = True
     doc.save()
     frappe.db.commit()
     return get_regle_ensembles()
+
+
+@frappe.whitelist()
+def impact_marge_min(taux=None):
+    """Combien de prix sont sous le plancher pour ce taux (celui du réglage par défaut) — pour voir l'effet d'un taux
+    AVANT de l'enregistrer. -> {taux, prix, sous, dont_promo, articles, par_liste: {liste: nombre}}."""
+    _guard()
+    taux = flt(regle_ensembles().get("marge_min")) if taux in (None, "") else flt(taux)
+    out = {"taux": taux, "prix": 0, "sous": 0, "dont_promo": 0, "articles": 0, "par_liste": {}}
+    if not (0 < taux < 100):
+        return out
+    for r in compute_analysis(marge_min=taux)["rows"]:
+        touche = False
+        for liste, p in r["prices"].items():
+            if p.get("plancher") is None or p.get("pv_ttc") is None:
+                continue
+            out["prix"] += 1
+            if p.get("sous_min"):
+                touche = True
+                out["sous"] += 1
+                out["par_liste"][liste] = out["par_liste"].get(liste, 0) + 1
+                if not p.get("sous_min_prix"):
+                    out["dont_promo"] += 1          # le prix tient, c'est une promo qui passe dessous
+        out["articles"] += 1 if touche else 0
+    return out
 
 
 def prix_change(doc, method=None):
@@ -994,10 +1183,13 @@ def prix_change(doc, method=None):
         if doc.item_code in exclus:
             return              # un composant non compté : aucun prix d'ensemble n'en dépend
         prix = _price_map(composants + list(ensembles), [doc.price_list])
+        planchers = _planchers(list(ensembles), [doc.price_list], regle.get("marge_min"))     # marge minimale garantie
         frappe.flags.aa_recalcul = True
         try:
             for code, comps in ensembles.items():
                 nouveau, incomplet = prix_ensemble(comps, {c["item_code"]: prix.get((c["item_code"], doc.price_list)) for c in comps}, exclus)
+                if not incomplet:
+                    nouveau = max(nouveau, planchers.get((code, doc.price_list), 0))
                 ancien = prix.get((code, doc.price_list))
                 if incomplet or (ancien is not None and round(flt(ancien), 3) == nouveau):
                     continue

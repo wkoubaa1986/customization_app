@@ -26,6 +26,7 @@ class AnalyseArticles {
     this.order_dir = "asc";
     this.data = null;
     this.selection = new Set();
+    this.marge_min = 0;            // marge minimale garantie ENREGISTRÉE (0 = aucune)
     // Colonnes repliées (« groupe », « valo », « pl:<liste> ») : retenues sur ce navigateur.
     this.cols_off = new Set((() => {
       try { return JSON.parse(localStorage.getItem("aa_cols_off") || "[]"); } catch (e) { return []; }
@@ -70,6 +71,7 @@ class AnalyseArticles {
         </select></div>
       <div class="aa-field" id="aa-tri-liste-zone" style="display:none"><label>Prix de la liste</label>
         <select id="aa-tri-liste" class="form-control" style="width:170px"></select></div>`);
+    $("#aa-marge option[value='lt:0']").after('<option value="sous_min">⚠️ Sous la marge minimale garantie (promos comprises)</option>');
     $("#aa-tri").on("change", () => {
       const sens = $("#aa-tri").val();
       $("#aa-tri-liste-zone").toggle(!!sens);
@@ -189,9 +191,10 @@ class AnalyseArticles {
     return format_number(v, null, 3);
   }
 
-  _marge(v) {
+  // `sous_min` : la marge est positive mais sous la marge minimale garantie (orange ; le rouge reste la perte).
+  _marge(v, sous_min) {
     if (v == null) return '<span class="aa-muted">—</span>';
-    const cls = v < 0 ? "aa-marge-bad" : "aa-marge-pos";
+    const cls = v < 0 ? "aa-marge-bad" : sous_min ? "aa-marge-min" : "aa-marge-pos";
     return `<span class="${cls}">${format_number(v, null, 1)}%</span>`;
   }
 
@@ -304,11 +307,13 @@ class AnalyseArticles {
       const remises = p.remises || [];
       const prixRemises = remises.map((x) => `<div class="aa-remise" title="${this._esc(x.titre)}"
           style="font-size:11px;white-space:nowrap;margin-top:2px"><span style="background:#fef3c7;color:#92400e;border-radius:8px;padding:0 6px;font-weight:600">🏷 ${this._esc(x.libelle)}${x.palier ? " " + this._esc(x.palier) : ""}</span> ${this._money(x.prix)}</div>`).join("");
-      const margesRemises = remises.map((x) => `<div style="font-size:11px;margin-top:2px" title="Marge au prix remisé">${this._marge(x.marge)}</div>`).join("");
+      const margesRemises = remises.map((x) => `<div style="font-size:11px;margin-top:2px" title="${x.sous_min ? "Sous la marge minimale garantie" : "Marge au prix remisé"}">${this._marge(x.marge, x.sous_min)}</div>`).join("");
+      // Sous la marge minimale garantie (le prix lui-même ou une de ses promos) : le prix qui la rétablirait.
+      const mini = p.sous_min ? `<div class="aa-mini" title="Le plus petit prix de liste qui garde ${format_number(this.data.marge_min, null, 1)} % de marge, même à la remise la plus forte">⚠ mini ${format_number(p.plancher, null, 3)}</div>` : "";
       cells += `<td class="num pl-first aa-pv" style="cursor:pointer" title="Cliquer pour modifier ce prix"
                     data-item="${this._esc(r.item_code)}" data-pl="${this._esc(pl)}"
-                    data-pv="${p.pv_ttc == null ? "" : p.pv_ttc}">${this._money(p.pv_ttc)} <span class="aa-muted">✏️</span>${ecart}${prixRemises}</td>
-                <td class="num">${this._marge(p.marge)}${ecart ? '<div style="font-size:11px">&nbsp;</div>' : ""}${margesRemises}</td>`;
+                    data-pv="${p.pv_ttc == null ? "" : p.pv_ttc}">${this._money(p.pv_ttc)} <span class="aa-muted">✏️</span>${ecart}${prixRemises}${mini}</td>
+                <td class="num">${this._marge(p.marge, p.sous_min_prix)}${ecart ? '<div style="font-size:11px">&nbsp;</div>' : ""}${margesRemises}</td>`;
     });
     let html = `<tr>${cells}</tr>`;
     if (b) html += this._render_bundle_detail(r, pls);
@@ -330,7 +335,8 @@ class AnalyseArticles {
         <td class="num">${this._marge(p.own_marge)}</td>
         <td class="num">${calc}</td>
         <td class="num">${this._marge(p.calc_marge)}</td>
-        <td class="num"><b>${p.regle_ttc == null ? '<span class="aa-incomplet">incomplet</span>' : this._money(p.regle_ttc)}</b></td>
+        <td class="num"><b>${p.regle_ttc == null ? '<span class="aa-incomplet">incomplet</span>' : this._money(p.regle_ttc)}</b>${
+          p.regle_calcule == null ? "" : `<div class="aa-mini" title="La somme selon la règle donnerait ${format_number(p.regle_calcule, null, 3)} : relevé pour garder la marge minimale garantie">relevé de ${format_number(p.regle_calcule, null, 3)}</div>`}</td>
         <td class="num">${this._marge(p.regle_marge)}</td>
       </tr>`;
     }).join("");
@@ -379,12 +385,14 @@ class AnalyseArticles {
           default: pv_actuel || 0 },
         { fieldtype: "Check", fieldname: "maj_bundles", default: 1,
           label: __("Mettre à jour les bundles contenant cet article (prix recalculé)") },
+        { fieldtype: "Check", fieldname: "garantir", default: 1, hidden: this.marge_min > 0 ? 0 : 1,
+          label: __("Garantir la marge minimale de {0} % (promos comprises)", [format_number(this.marge_min, null, 1)]) },
       ],
       primary_action_label: __("Aperçu"),
       primary_action: (v) => {
         d.hide();
         this._apercu_et_appliquer(
-          { mode: "liste", changements: [{ item_code, price_list, nouveau: v.nouveau }] },
+          { mode: "liste", changements: [{ item_code, price_list, nouveau: v.nouveau }], garantir: v.garantir ? 1 : 0 },
           v.maj_bundles ? 1 : 0);
       },
     });
@@ -416,16 +424,28 @@ class AnalyseArticles {
                 <option value="montant">Variation en montant (ex. 2.5 ou -1)</option>
                 <option value="fixe">Prix fixe pour tous</option>
                 <option value="ensemble">Ensembles : somme des composants (selon la règle)</option>
+                <option value="plancher">Relever les prix sous la marge minimale garantie (promos comprises)</option>
               </select></div>
             <div id="aa-zone-valeur-zone"><div class="aa-zone-lbl">Valeur</div>
               <input type="number" step="any" id="aa-zone-valeur" class="form-control" style="width:120px"></div>
             <label id="aa-zone-cascade-zone" style="margin:0 0 7px;font-weight:400">
               <input type="checkbox" id="aa-zone-cascade" checked> Réaligner les ensembles qui contiennent ces articles</label>
+            <label id="aa-zone-garantir-zone" style="margin:0 0 7px;font-weight:400;display:none">
+              <input type="checkbox" id="aa-zone-garantir" checked> Garantir la marge minimale (<span id="aa-zone-garantir-taux"></span> %)</label>
             <button class="btn btn-primary btn-sm" id="aa-zone-apercu" style="margin-bottom:2px">Aperçu avant d’appliquer</button>
           </div>
           <div id="aa-zone-aide" style="font-size:12px;color:var(--text-muted);margin-top:8px"></div>
           <details id="aa-regle" style="margin-top:12px;border-top:1px solid var(--border-color);padding-top:10px">
-            <summary style="cursor:pointer;font-weight:600">⚙️ Règle de prix des ensembles <span id="aa-regle-resume" style="font-weight:400;font-size:12.5px;color:var(--text-muted)"></span></summary>
+            <summary style="cursor:pointer;font-weight:600">⚙️ Règles de prix <span id="aa-regle-resume" style="font-weight:400;font-size:12.5px;color:var(--text-muted)"></span></summary>
+            <div style="font-weight:600;margin-top:12px">🛡️ Marge minimale garantie</div>
+            <div style="font-size:12.5px;color:var(--text-muted);margin:6px 0 8px">Aucun prix posé depuis cette page ne laisse moins que cette marge, <b>même à la remise la plus forte</b> (tous les paliers de quantité comptent) : variation, prix fixe, règle des ensembles et recalcul automatique sont relevés au plus petit prix qui la garde. La marge se mesure sur le <b>prix de vente</b>. Rien ne baisse à cause d’elle.</div>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+              <input type="number" id="aa-regle-marge" class="form-control" min="0" max="99" step="any" placeholder="aucune" style="width:100px">
+              <span>% du prix de vente</span>
+              <span id="aa-regle-commande" style="font-size:12px;color:var(--text-muted)"></span>
+            </div>
+            <div id="aa-regle-impact" style="font-size:12.5px;margin-top:8px"></div>
+            <div style="font-weight:600;margin-top:16px;border-top:1px solid var(--border-color);padding-top:10px">📦 Prix des ensembles</div>
             <div style="font-size:12.5px;color:var(--text-muted);margin:8px 0">Le prix d’un ensemble = la somme de ses composants, <b>sans compter</b> ceux que vous désignez ici (accessoires offerts, par exemple). Trois façons de les désigner, qui s’additionnent.<br>La <b>valorisation</b> de l’ensemble (son coût de revient) compte toujours <b>tous</b> ses composants : la marge affichée reste la vraie.</div>
             <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px">
               <div><div class="aa-zone-lbl">Par famille (sous-familles comprises)</div>
@@ -441,7 +461,7 @@ class AnalyseArticles {
             <label style="margin:12px 0 0;font-weight:400;display:block">
               <input type="checkbox" id="aa-regle-auto"> <b>Calcul automatique</b> : quand un composant change de prix (ici ou ailleurs), le prix des ensembles qui le contiennent suit tout seul</label>
             <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
-              <button class="btn btn-default btn-sm" id="aa-regle-enregistrer">Enregistrer la règle</button>
+              <button class="btn btn-default btn-sm" id="aa-regle-enregistrer">Enregistrer les règles</button>
               <button class="btn btn-default btn-sm" id="aa-regle-tous">Aperçu : appliquer la règle à tous les ensembles</button>
             </div>
           </details>
@@ -449,6 +469,7 @@ class AnalyseArticles {
       </div>
       <style>.aa-zone-lbl{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.03em;color:var(--text-muted);margin-bottom:3px}
         .aa-chip-famille{background:var(--subtle-fg);border:1px solid var(--border-color);border-radius:14px;padding:2px 9px;font-size:12px;cursor:pointer}
+        .aa-marge-min{color:#c2410c;font-weight:700} .aa-mini{font-size:11px;font-weight:600;color:#c2410c;white-space:nowrap;margin-top:2px}
         .aa-exclu td{color:var(--text-muted)} .aa-exclu .aa-nc{background:#fef3c7;color:#92400e;border-radius:9px;padding:0 7px;font-size:10.5px;font-weight:700;margin-left:6px}</style>`);
 
     $("#aa-zone-tete").on("click", () => {
@@ -462,14 +483,30 @@ class AnalyseArticles {
       $(".aa-zone-liste").prop("checked", !toutes);
     });
     const maj_action = () => {
-      const ensemble = $("#aa-zone-action").val() === "ensemble";
-      $("#aa-zone-valeur-zone, #aa-zone-cascade-zone").toggle(!ensemble);
+      const action = $("#aa-zone-action").val();
+      const ensemble = action === "ensemble", plancher = action === "plancher";
+      $("#aa-zone-valeur-zone").toggle(!ensemble && !plancher);
+      $("#aa-zone-cascade-zone").toggle(!ensemble);
+      // La case de la garantie n'a de sens que si une marge minimale est enregistrée ; « Relever » la porte d'office.
+      $("#aa-zone-garantir-zone").toggle(this.marge_min > 0 && !plancher);
+      $("#aa-zone-garantir-taux").text(format_number(this.marge_min, null, 1));
       $("#aa-zone-aide").text(ensemble
         ? "Seuls les ensembles parmi les articles visés sont touchés : leur prix devient la somme de leurs composants selon la règle ci-dessous. Un ensemble dont un composant compté n’a pas de prix est laissé tel quel."
+        : plancher
+        ? "Seuls les prix qui sont sous leur plancher bougent, et ils y montent : le plus petit prix qui garde la marge minimale même à la remise la plus forte. Les articles sans coût connu sont laissés tels quels."
         : "Les articles sans prix sur une liste y sont ignorés (sauf « Prix fixe »). L’ancien prix est clos à hier, le nouveau prend effet aujourd’hui : les commandes déjà passées gardent leur tarif.");
     };
+    this._maj_action = maj_action;
     $("#aa-zone-action").on("change", maj_action);
     maj_action();
+    // L'effet d'un taux se voit pendant qu'on le tape, avant d'enregistrer.
+    let minuterie = null;
+    $("#aa-regle-marge").on("input", () => { clearTimeout(minuterie); minuterie = setTimeout(() => this._impact_marge(), 450); });
+    $(this.wrapper).on("click", "#aa-regle-voir", async (e) => {
+      e.preventDefault();
+      await this._enregistrer_regle(true);
+      $("#aa-marge").val("sous_min"); this.start = 0; this._load();
+    });
     $("#aa-zone-apercu").on("click", () => this._apercu_zone(false));
 
     // ── la règle des ensembles ──
@@ -494,7 +531,25 @@ class AnalyseArticles {
 
   _resumer_regle(r) {
     const n = (r.familles || []).length + (r.debuts || []).length + (r.contient || []).length;
-    $("#aa-regle-resume").text(`— ${n ? n + " exclusion(s)" : "aucune exclusion : somme de tous les composants"} · calcul automatique ${r.auto ? "ACTIVÉ" : "désactivé"}`);
+    $("#aa-regle-resume").text(`— marge minimale ${r.marge_min > 0 ? format_number(r.marge_min, null, 1) + " %" : "non garantie"} · ensembles : ${n ? n + " exclusion(s)" : "somme de tous les composants"} · calcul automatique ${r.auto ? "ACTIVÉ" : "désactivé"}`);
+    this.marge_min = r.marge_min > 0 ? r.marge_min : 0;
+    if (this._maj_action) this._maj_action();
+  }
+
+  // Combien de prix passeraient sous le plancher au taux TAPÉ (pas encore enregistré) : la règle montre son effet.
+  async _impact_marge() {
+    const taux = parseFloat($("#aa-regle-marge").val());
+    const $z = $("#aa-regle-impact");
+    if (!(taux > 0 && taux < 100)) { $z.html('<span style="color:var(--text-muted)">Aucune marge minimale garantie : les prix ne sont pas surveillés.</span>'); return; }
+    const jeton = (this._jeton_impact = (this._jeton_impact || 0) + 1);
+    const m = (await frappe.call({ method: "customization_app.analyse_articles.impact_marge_min", args: { taux } })).message || {};
+    if (jeton !== this._jeton_impact) return;            // une frappe plus récente a déjà répondu
+    const t = format_number(taux, null, 1);
+    if (!m.sous) { $z.html(`<span class="aa-marge-pos">✓ À ${t} % : les ${m.prix} prix dont on connaît le coût tiennent tous, promos comprises.</span>`); return; }
+    const listes = Object.keys(m.par_liste || {}).map((l) => `${this._esc(l)} ${m.par_liste[l]}`).join(" · ");
+    $z.html(`<span class="aa-marge-min">⚠ À ${t} % : ${m.sous} prix sur ${m.prix} sont sous le minimum</span>
+      (${m.articles} article(s)${m.dont_promo ? `, dont ${m.dont_promo} seulement à cause d’une promo` : ""}) —
+      <span style="color:var(--text-muted)">${listes}</span> · <a href="#" id="aa-regle-voir">enregistrer et voir ces articles</a>`);
   }
 
   async _charger_regle() {
@@ -504,18 +559,23 @@ class AnalyseArticles {
     $("#aa-regle-debuts").val((r.debuts || []).join(", "));
     $("#aa-regle-contient").val((r.contient || []).join(", "));
     $("#aa-regle-auto").prop("checked", !!r.auto);
+    $("#aa-regle-marge").val(r.marge_min > 0 ? r.marge_min : "");
+    $("#aa-regle-commande").text(r.marge_commande > 0
+      ? `(à la vente, la commande client relève déjà ses lignes sous ${format_number(r.marge_commande, null, 1)} %)` : "");
     this._resumer_regle(r);
+    this._impact_marge();
   }
 
   async _enregistrer_regle(silencieux) {
     const r = (await frappe.call({
       method: "customization_app.analyse_articles.enregistrer_regle_ensembles", type: "POST",
       args: { familles: JSON.stringify(this.regle_familles), debuts: $("#aa-regle-debuts").val() || "",
-              contient: $("#aa-regle-contient").val() || "", auto: $("#aa-regle-auto").is(":checked") ? 1 : 0 },
+              contient: $("#aa-regle-contient").val() || "", auto: $("#aa-regle-auto").is(":checked") ? 1 : 0,
+              marge_min: parseFloat($("#aa-regle-marge").val()) || 0 },
     })).message || {};
     this._resumer_regle(r);
     if (!silencieux) {
-      frappe.show_alert({ message: __("Règle des ensembles enregistrée"), indicator: "green" }, 5);
+      frappe.show_alert({ message: __("Règles de prix enregistrées"), indicator: "green" }, 5);
       this._load();           // le détail des ensembles montre aussitôt le prix selon la nouvelle règle
     }
   }
@@ -526,8 +586,13 @@ class AnalyseArticles {
     if (!listes.length) { frappe.msgprint(__("Cochez au moins une liste de prix.")); return; }
     const operation = tous_les_ensembles ? "ensemble" : $("#aa-zone-action").val();
     const valeur = parseFloat($("#aa-zone-valeur").val());
-    if (operation !== "ensemble" && isNaN(valeur)) { frappe.msgprint(__("Indiquez la valeur.")); return; }
-    const cible = { mode: "bloc", price_lists: listes, operation, valeur: isNaN(valeur) ? 0 : valeur };
+    const sans_valeur = operation === "ensemble" || operation === "plancher";
+    if (!sans_valeur && isNaN(valeur)) { frappe.msgprint(__("Indiquez la valeur.")); return; }
+    if (operation === "plancher" && !(this.marge_min > 0)) {
+      frappe.msgprint(__("Indiquez d’abord la marge minimale garantie dans « Règles de prix », puis enregistrez.")); return;
+    }
+    const cible = { mode: "bloc", price_lists: listes, operation, valeur: isNaN(valeur) ? 0 : valeur,
+                    garantir: $("#aa-zone-garantir").is(":checked") ? 1 : 0 };
     if (tous_les_ensembles) cible.tous_ensembles = 1;
     else if (this.selection.size) cible.item_codes = Array.from(this.selection);
     else {
@@ -551,16 +616,22 @@ class AnalyseArticles {
     }
     const esc = frappe.utils.escape_html;
     const fmt = (v) => (v == null ? "—" : format_number(v, null, 3));
+    // Marge minimale garantie : un prix relevé au plancher le dit (avec le prix qu'il aurait eu) ; garantie
+    // coupée, le prix qui passe dessous est signalé.
+    const note = (c) => c.calcule != null ? `<div class="aa-mini">relevé de ${fmt(c.calcule)} (marge mini)</div>`
+      : c.sous_min ? `<div class="aa-mini">⚠ sous la marge mini — plancher ${fmt(c.plancher)}</div>` : "";
+    const releves = m.changements.filter((c) => c.calcule != null).length + m.bundles.filter((b) => b.calcule != null).length;
+    const signales = m.changements.filter((c) => c.sous_min).length + m.bundles.filter((b) => b.sous_min).length;
     const lignes = m.changements.slice(0, 400).map((c) =>
       `<tr><td>${esc(c.item_code)}</td><td>${esc(c.item_name)}</td>
        <td>${esc(c.price_list)}</td><td class="num">${fmt(c.ancien)}</td>
-       <td class="num"><b>${fmt(c.nouveau)}</b></td></tr>`).join("");
+       <td class="num"><b>${fmt(c.nouveau)}</b>${note(c)}</td></tr>`).join("");
     const bundles = m.bundles.map((b, i) =>
       `<tr><td><input type="checkbox" class="aa-b-chk" data-b="${esc(b.bundle)}"
             ${b.incomplet ? "disabled" : "checked"}></td>
        <td>${esc(b.bundle)}</td><td>${esc(b.item_name)}</td>
        <td>${esc(b.price_list)}</td><td class="num">${fmt(b.ancien)}</td>
-       <td class="num">${b.incomplet ? '<span style="color:#b45309">incomplet — non touché</span>' : "<b>" + fmt(b.nouveau) + "</b>"}</td></tr>`).join("");
+       <td class="num">${b.incomplet ? '<span style="color:#b45309">incomplet — non touché</span>' : "<b>" + fmt(b.nouveau) + "</b>" + note(b)}</td></tr>`).join("");
 
     const d = new frappe.ui.Dialog({
       title: __("Aperçu — {0} article(s), {1} bundle(s)", [m.changements.length, m.bundles.length]),
@@ -588,7 +659,9 @@ class AnalyseArticles {
         this._load();
       },
     });
-    d.fields_dict.zone.$wrapper.html(`
+    const bandeau = releves ? `<div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;padding:8px 12px;margin-bottom:10px;font-size:12.5px">🛡️ <b>${releves}</b> prix relevé(s) à leur plancher pour garder <b>${format_number(m.marge_min, null, 1)} %</b> de marge, promos comprises.</div>`
+      : signales ? `<div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;padding:8px 12px;margin-bottom:10px;font-size:12.5px">⚠ <b>${signales}</b> prix passeraient sous la marge minimale de <b>${format_number(m.marge_min, null, 1)} %</b> (garantie décochée).</div>` : "";
+    d.fields_dict.zone.$wrapper.html(`${bandeau}
       <div class="aa-sub-title">Articles (${m.changements.length}${m.changements.length > 400 ? ", 400 affichés" : ""})</div>
       <div style="max-height:260px;overflow:auto"><table class="aa-sub">
         <thead><tr><th>Code</th><th>Désignation</th><th>Liste</th>
