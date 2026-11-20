@@ -161,7 +161,9 @@ def _lignes_reglages(employe: str, user: str | None) -> list[dict]:
         for l in frappe.get_all(t["table"], filters={"parenttype": t["parent"], t["champ"]: valeur},
                                 fields=["name", "parent", "parentfield"]):
             out.append({"parent": t["parent"], "table": t["table"], "champ": t["champ"], "name": l.name,
-                        "parentfield": l.parentfield, "libelle": "%s › %s" % (_(t["parent"]), _(t["table"]))})
+                        "parentfield": l.parentfield,
+                        "libelle": "%s › %s" % (_(t["parent"]), _(t["table"]))
+                                   + (" (ligne gardée, employé effacé)" if t["table"] in LIGNES_A_GARDER else "")})
     # La caisse cite l'employé par son NOM de caisse (Config Caisse › dates de départ).
     nom = frappe.db.get_value("Employee", employe, "employee_name")
     if frappe.db.exists("DocType", "Config Caisse Depart"):
@@ -324,8 +326,31 @@ def _nettoyer_calendrier(employe: str, conges: list[dict], journal: list[str]):
         journal.append(_("{0} jour(s) d'absence retiré(s) du calendrier").format(len(orphelines)))
 
 
+#: Lignes de réglage qui décrivent AUTRE CHOSE que l'employé : on y efface son nom, on ne supprime pas la ligne.
+#: Un véhicule suivi par GPS reste un véhicule quand son conducteur s'en va — le 10/11/2026, le départ d'Akram et de
+#: Mohamed Hedi a retiré de Config Flotte GPS la 261 TU 3647 et la 261 TU 3554 : plus de position, plus de journées,
+#: plus de statistiques pour ces deux voitures pendant dix jours, et « pas de véhicule suivi » pour leur successeur.
+LIGNES_A_GARDER = {"Config Flotte GPS Vehicule": ("employe", "employe_nom")}
+
+
+def separer_lignes(lignes: list[dict]) -> tuple[list[dict], list[dict]]:
+    """(à supprimer, à garder en effaçant l'employé). PURE."""
+    garder = [l for l in lignes if l.get("table") in LIGNES_A_GARDER]
+    return [l for l in lignes if l.get("table") not in LIGNES_A_GARDER], garder
+
+
 def _retirer_des_reglages(lignes: list[dict], journal: list[str]):
-    """Supprime les lignes de réglage (regroupées par réglage unique, une sauvegarde chacun)."""
+    """Supprime les lignes de réglage (regroupées par réglage unique, une sauvegarde chacun). Les lignes de
+    `LIGNES_A_GARDER` restent : seul le nom de l'employé en est effacé."""
+    lignes, a_garder = separer_lignes(lignes)
+    for l in a_garder:
+        frappe.db.set_value(l["table"], l["name"], {c: None for c in LIGNES_A_GARDER[l["table"]]}, update_modified=False)
+        frappe.clear_document_cache(l["parent"], l["parent"])
+        if l["table"] == "Config Flotte GPS Vehicule":
+            journal.append(_("véhicule {0} : reste suivi par GPS, sans conducteur habituel")
+                           .format(frappe.db.get_value(l["table"], l["name"], "vehicule") or ""))
+        else:
+            journal.append(_("{0} : ligne gardée, employé effacé").format(_(l["parent"])))
     par_parent: dict[str, list[dict]] = {}
     for l in lignes:
         par_parent.setdefault(l["parent"], []).append(l)

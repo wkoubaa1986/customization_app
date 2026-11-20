@@ -100,6 +100,17 @@ class TestCablage(unittest.TestCase):
                         "custom_depart_verification"):
             self.assertIn(morceau, js, morceau)
 
+    def test_un_vehicule_suivi_reste_au_depart_de_son_conducteur(self):
+        """20/11/2026 : le départ d'Akram et de Mohamed Hedi avait retiré deux véhicules du suivi GPS."""
+        lignes = [{"table": "Config Flotte GPS Vehicule", "parent": "Config Flotte GPS", "name": "v1"},
+                  {"table": "Config Prime Employe", "parent": "Config Prime", "name": "p1"},
+                  {"table": "Portail RDV Employe", "parent": "Config Portail RDV", "name": "r1"}]
+        supprimer, garder = D.separer_lignes(lignes)
+        self.assertEqual([l["name"] for l in supprimer], ["p1", "r1"])
+        self.assertEqual([l["name"] for l in garder], ["v1"])
+        self.assertEqual(D.LIGNES_A_GARDER["Config Flotte GPS Vehicule"], ("employe", "employe_nom"))
+        self.assertEqual(D.separer_lignes([]), ([], []))
+
     def test_les_reglages_sont_retires_pas_remplaces(self):
         src = inspect.getsource(D._retirer_des_reglages)
         self.assertIn("if r.name not in noms", src)
