@@ -612,6 +612,9 @@ app_include_js = [_js("customer_quick_entry.js"),
                   _js("sales_order_sms_groupe.js"),
                   # Clôture guidée des tâches : photos obligatoires + code superviseur.
                   _js("tache_photos_cloture.js"),
+                  # Réparation osmoseurs : « la machine est réparée — et maintenant ? » posé à celui qui clôture la
+                  # réparation, dialogue « Rendre au client » partagé, bandeau sur la commande / le BL du client.
+                  _js("reparation_osmoseur_sortie.js"),
                   _js("suivi_activite_onglet.js"),  # l'onglet « Suivi d'activité » ouvre l'outil
                   _js("situation_mensuelle_clic.js"),  # graphes Situation Mensuelle et Pertes et Profits → page de détail
                   _js("bl_magasin_alerte.js"),  # bandeau rouge du magasinier principal : BL à approuver / à vérifier
@@ -822,6 +825,10 @@ scheduler_events = {
         "0 20 * * *": [
             "customization_app.rappel_rdv.cron_du_soir",
         ],
+
+        # Réparation osmoseurs, lundi–samedi à 08:30 : les machines qui attendent depuis trop longtemps (réparées et
+        # pas rendues, reçues sans technicien, livraisons pas clôturées) sont rappelées à la personne du réglage.
+        "30 8 * * 1-6": ["customization_app.reparation_osmoseur.rappel_quotidien"],
 
         # Réunion d'équipe (Suivi d'activité) : rappel aux participants la veille à 18:00 et le jour à 08:00.
         "0 18 * * *": ["customization_app.reunion_activite.cron_rappel_veille"],

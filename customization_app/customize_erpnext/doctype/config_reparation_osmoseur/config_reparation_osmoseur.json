@@ -9,7 +9,13 @@
   "machines_par_jour",
   "duree_minutes",
   "creneaux",
-  "horizon_jours"
+  "horizon_jours",
+  "section_suivi",
+  "suivi_restitutions",
+  "rappel_jours",
+  "column_break_suivi",
+  "relance_a",
+  "relance_jours"
  ],
  "fields": [
   {
@@ -43,11 +49,45 @@
    "fieldtype": "Int",
    "label": "Horizon de recherche (jours)",
    "default": "30"
+  },
+  {
+   "fieldname": "section_suivi",
+   "fieldtype": "Section Break",
+   "label": "Suivi des restitutions"
+  },
+  {
+   "fieldname": "suivi_restitutions",
+   "fieldtype": "Link",
+   "options": "User",
+   "label": "Qui reçoit le rappel du matin",
+   "description": "Chaque matin (lundi–samedi), un seul message liste les machines qui attendent depuis trop longtemps : réparées et pas rendues, reçues sans technicien, livraisons pas clôturées. Vide : aucun rappel."
+  },
+  {
+   "default": "3",
+   "fieldname": "rappel_jours",
+   "fieldtype": "Int",
+   "label": "Rappeler après (jours d’attente)"
+  },
+  {
+   "fieldname": "column_break_suivi",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "relance_a",
+   "fieldtype": "Link",
+   "options": "User",
+   "label": "Relancer (si le rappel reste sans réponse)"
+  },
+  {
+   "default": "3",
+   "fieldname": "relance_jours",
+   "fieldtype": "Int",
+   "label": "Relancer après (jours sans réponse)"
   }
  ],
  "issingle": 1,
  "links": [],
- "modified": "2026-10-01 10:00:00.000000",
+ "modified": "2026-11-20 16:00:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Config Reparation Osmoseur",

@@ -104,6 +104,8 @@ class TestCycleDeVie(unittest.TestCase):
         cfg.save(ignore_permissions=True)
         frappe.clear_cache(doctype=RO.DOCTYPE_CONFIG)
 
+        self._code = RO._verifier_code
+        RO._verifier_code = lambda code: code == "bon"
         self._lecteur = RO.LECTEUR_IA
         def lecteur_parfait(a, p):
             """Un modèle qui lit exactement ce que le dossier attend."""
@@ -116,6 +118,7 @@ class TestCycleDeVie(unittest.TestCase):
     def tearDown(self):
         import frappe
         RO.LECTEUR_IA = self._lecteur
+        RO._verifier_code = self._code
         frappe.db.rollback(save_point="osm")
         frappe.clear_cache(doctype=RO.DOCTYPE_CONFIG)
 
@@ -238,7 +241,12 @@ class TestCycleDeVie(unittest.TestCase):
         m = frappe.db.get_value(RO.DOCTYPE, nom, ["statut", "date_reparee"], as_dict=True)
         self.assertEqual(m.statut, RO.S_REPAREE)
         self.assertTrue(m.date_reparee)
-        self.assertEqual(RO.rendre(nom)["statut"], RO.S_RENDUE)
+        # Hors garantie et aucune vente liée : ni sans motif, ni sans le code superviseur (20/11/2026)
+        with self.assertRaises(frappe.ValidationError):
+            RO.rendre(nom)
+        with self.assertRaises(frappe.ValidationError):
+            RO.rendre(nom, motif="Geste commercial", code="faux")
+        self.assertEqual(RO.rendre(nom, motif="Geste commercial", code="bon")["statut"], RO.S_RENDUE)
         # Une machine rendue ne redescend jamais, même si une tâche bouge
         RO.synchroniser(nom)
         self.assertEqual(frappe.db.get_value(RO.DOCTYPE, nom, "statut"), RO.S_RENDUE)
@@ -272,9 +280,12 @@ class TestRestitution(unittest.TestCase):
         nom = RO.creer_reception(self.client, note="essai restitution", garantie="Hors garantie", tel="20123456")["name"]
         frappe.db.set_value(RO.DOCTYPE, nom, {"statut": RO.S_REPAREE, "date_reparee": frappe.utils.now_datetime()})
         self.nom = nom
+        self._code = RO._verifier_code
+        RO._verifier_code = lambda code: code == "bon"
 
     def tearDown(self):
         import frappe
+        RO._verifier_code = self._code
         frappe.set_user("Administrator")
         frappe.db.rollback(save_point="osm_rest")
 
@@ -293,7 +304,8 @@ class TestRestitution(unittest.TestCase):
         with self.assertRaises(frappe.ValidationError):
             RO.restituer_magasin(self.nom)                                       # déjà au magasin
         RO.enregistrer_photo(self.nom, "remise", "/files/remise.jpg")
-        self.assertEqual(RO.rendre(self.nom, rendu_a="Son frère", remarque="règlement espèces")["statut"], RO.S_RENDUE)
+        self.assertEqual(RO.rendre(self.nom, rendu_a="Son frère", remarque="règlement espèces",
+                                   motif="Geste commercial", code="bon")["statut"], RO.S_RENDUE)
         m = frappe.db.get_value(RO.DOCTYPE, self.nom, ["rendu_a", "mode_restitution", "photo_remise", "date_rendue"], as_dict=True)
         self.assertEqual((m.rendu_a, m.mode_restitution, m.photo_remise), ("Son frère", "Retrait au magasin", "/files/remise.jpg"))
         self.assertTrue(m.date_rendue)
@@ -344,7 +356,244 @@ class TestRestitution(unittest.TestCase):
         self.assertFalse(frappe.db.exists(RO.DOCTYPE_TACHE, r["tache"]))
 
     def test_rendre_directement_depuis_reparee_reste_possible(self):
-        self.assertEqual(RO.rendre(self.nom, rendu_a="Le client")["statut"], RO.S_RENDUE)
+        self.assertEqual(RO.rendre(self.nom, rendu_a="Le client", motif="Rien à réparer", code="bon")["statut"], RO.S_RENDUE)
+
+
+class TestReglesPures(unittest.TestCase):
+    """Simplification du 20/11/2026 : trois groupes, « rendue » séparée du règlement, ce qui traîne. Sans la base."""
+
+    def test_trois_groupes_pour_sept_statuts(self):
+        self.assertEqual([RO.groupe_de(s) for s in RO.STATUTS],
+                         ["À réparer", "À réparer", "À réparer", "À rendre", "À rendre", "À rendre", "Rendue"])
+
+    def test_une_dette_non_payee_n_est_pas_un_paiement(self):
+        # commande de 95 : un Payment Entry « Dette non payée » la fait paraître payée à ERPNext, rien n'est encaissé
+        self.assertEqual(RO.etat_reglement(95, regle=0, dette=95, hors_dette=0), {"total": 95.0, "reste": 95.0, "etat": "du"})
+        self.assertEqual(RO.etat_reglement(104, regle=104, dette=0, hors_dette=104)["etat"], "payee")
+        self.assertEqual(RO.etat_reglement(200, regle=120, dette=80, hors_dette=120), {"total": 200.0, "reste": 80.0, "etat": "du"})
+        # payée par un avoir : aucun encaissement, mais l'échéancier la couvre
+        self.assertEqual(RO.etat_reglement(50, regle=0, dette=0, hors_dette=50)["etat"], "payee")
+        # ni règlement ni échéancier : tout reste dû ; commande à 0 DT (garantie) : rien à encaisser
+        self.assertEqual(RO.etat_reglement(70, 0, 0, 0)["reste"], 70.0)
+        self.assertEqual(RO.etat_reglement(0, 0, 0, 0)["etat"], "zero")
+
+    def test_ce_qu_il_faut_pour_fermer(self):
+        r = RO.regle_sortie
+        # une commande liée : libre, payée ou non
+        self.assertEqual(r(True, "Hors garantie", True, False), {"cas": "commande", "motif": False, "code": False})
+        self.assertEqual(r(True, "Sous garantie", True, False)["cas"], "commande")        # garantie facturée (OSM-0009)
+        # sous garantie : libre avec la commande d'origine, code superviseur sans elle
+        self.assertEqual(r(True, "Sous garantie", False, True), {"cas": "garantie", "motif": False, "code": False})
+        self.assertEqual(r(True, "Sous garantie", False, False), {"cas": "garantie_sans_preuve", "motif": False, "code": True})
+        # hors garantie sans aucune vente : motif + code
+        self.assertEqual(r(True, "Hors garantie", False, False), {"cas": "non_facturee", "motif": True, "code": True})
+        # machine reprise sans réparation : un motif, pas de code
+        self.assertEqual(r(False, "Hors garantie", False, False), {"cas": "sans_reparation", "motif": True, "code": False})
+
+    def test_la_phrase_gardee_sur_le_dossier(self):
+        self.assertEqual(RO.libelle_reglement({"etat": "du", "reste": 95.0, "total": 95.0, "commande": "SO-1"}, "Hors garantie"),
+                         "reste dû 95.000 DT sur 95.000 (commande SO-1)")
+        self.assertEqual(RO.libelle_reglement({"etat": "payee", "reste": 0, "total": 104.0, "commande": "SO-2"}, "Hors garantie"),
+                         "payée — 104.000 DT (commande SO-2)")
+        self.assertEqual(RO.libelle_reglement(None, "Sous garantie"), "garantie — rien à facturer")
+        self.assertEqual(RO.libelle_reglement(None, "Hors garantie"), "non facturée")
+
+    def test_depuis_combien_de_jours_un_dossier_attend(self):
+        jour = getdate("2026-11-20")
+        a = RO.attente({"statut": RO.S_REPAREE, "date_reparee": "2026-11-16 16:55:00"}, jour)
+        self.assertEqual(a, {"motif": "a_rendre", "jours": 4})
+        # « toujours au magasin » remet le compteur à zéro
+        a = RO.attente({"statut": RO.S_PRETE, "date_reparee": "2026-10-20 11:02:00", "toujours_la_le": "2026-11-19 09:00:00"}, jour)
+        self.assertEqual(a["jours"], 1)
+        a = RO.attente({"statut": RO.S_RECEPTIONNEE, "date_reception": "2026-10-30 17:00:00", "date_cloture_reception": "2026-10-30 17:02:00"}, jour)
+        self.assertEqual(a, {"motif": "sans_technicien", "jours": 21})
+        # une livraison n'attend que si sa date est passée
+        self.assertIsNone(RO.attente({"statut": RO.S_LIVRAISON, "date_livraison_prevue": "2026-11-20"}, jour))
+        self.assertEqual(RO.attente({"statut": RO.S_LIVRAISON, "date_livraison_prevue": "2026-11-18"}, jour), {"motif": "livraison", "jours": 2})
+        # planifiée chez un technicien, ou rendue : rien à signaler
+        self.assertIsNone(RO.attente({"statut": RO.S_PLANIFIEE, "date_reception": "2026-10-01"}, jour))
+        self.assertIsNone(RO.attente({"statut": RO.S_RENDUE, "date_reparee": "2026-10-01"}, jour))
+
+    def test_le_tri_du_matin(self):
+        jour = getdate("2026-11-20")
+        machines = [
+            {"name": "A", "statut": RO.S_REPAREE, "date_reparee": "2026-11-19"},                                # 1 j : trop tôt
+            {"name": "B", "statut": RO.S_REPAREE, "date_reparee": "2026-11-16"},                                # 4 j : rappel
+            {"name": "C", "statut": RO.S_PRETE, "date_reparee": "2026-10-20", "rappel_depuis": "2026-11-15"},   # sans réponse 5 j
+            {"name": "D", "statut": RO.S_RECEPTIONNEE, "date_reception": "2026-10-30", "rappel_depuis": "2026-11-19"},
+            {"name": "E", "statut": RO.S_LIVRAISON, "date_livraison_prevue": "2026-11-19"},                     # 1 j de retard
+            {"name": "F", "statut": RO.S_PLANIFIEE, "date_reception": "2026-09-01"},
+        ]
+        tri = RO.a_rappeler(machines, jour, rappel_jours=3, relance_jours=3)
+        self.assertEqual([m["name"] for m in tri["rappel"]], ["C", "D", "B", "E"])      # les plus anciens d'abord
+        self.assertEqual([m["name"] for m in tri["relance"]], ["C"])
+        texte = RO.composer_rappel(tri["rappel"], "https://x/app/reparation-osmoseurs?verifier=1")
+        self.assertIn("4 machine(s) attendent une réponse", texte)
+        self.assertIn("**B** ·  — réparée, chez nous depuis 4 j", texte)
+        self.assertIn("**D** ·  — reçue, sans technicien depuis 21 j", texte)
+        self.assertIn("**E** ·  — livraison prévue il y a 1 j, pas clôturée", texte)
+        self.assertIn("sans réponse de Salma", RO.composer_rappel(tri["relance"], "u", relance_de="Salma"))
+
+    def test_les_photos_du_dossier_dans_l_ordre_de_sa_vie(self):
+        self.assertEqual(RO.photos_de('📁 "/private/files/a.png"\n\n📁 "/files/b.jpg"\nn importe quoi'),
+                         ["/private/files/a.png", "/files/b.jpg"])
+        m = {"photo_arrivee": "/files/1.jpg", "photo_post_it": "/files/2.jpg", "photo_remise": "/files/5.jpg", "tache_livraison": "T2"}
+        taches = [{"name": "T1", "photos_avant": ["/files/3.jpg"], "photos_apres": ["/files/4.jpg"]},
+                  {"name": "T2", "photos_avant": [], "photos_apres": ["/files/6.jpg"]}]
+        p = RO.photos_du_dossier(m, taches)
+        self.assertEqual([x["url"] for x in p], ["/files/1.jpg", "/files/2.jpg", "/files/3.jpg", "/files/4.jpg", "/files/6.jpg", "/files/5.jpg"])
+        self.assertEqual([x["titre"] for x in p][2:5], ["Réparation — pièces enlevées", "Réparation — appareil réparé", "Livraison"])
+        self.assertEqual(RO.photos_du_dossier({}, []), [])
+
+
+class TestSortie(unittest.TestCase):
+    """La sortie d'une machine (20/11/2026) : commande liée et règlement réel, garantie, sans réparation, rappel."""
+
+    def setUp(self):
+        import frappe
+        frappe.db.savepoint("osm_sortie")
+        frappe.set_user("Administrator")
+        self.emp = frappe.db.get_value("Employee", {"status": "Active"}, "name")
+        self._code = RO._verifier_code
+        RO._verifier_code = lambda code: code == "bon"
+
+    def tearDown(self):
+        import frappe
+        RO._verifier_code = self._code
+        frappe.set_user("Administrator")
+        frappe.db.rollback(save_point="osm_sortie")
+
+    def _dossier(self, client, garantie="Hors garantie", statut=None, **champs):
+        import frappe
+        nom = RO.creer_reception(client, note="essai sortie", garantie=garantie, tel="20123456")["name"]
+        frappe.db.set_value(RO.DOCTYPE, nom, dict({"statut": statut or RO.S_REPAREE, "date_reparee": frappe.utils.now_datetime()}, **champs))
+        return nom
+
+    def _commande(self, dette: bool):
+        """Une vraie commande validée, avec ou sans ligne « Dette non payée » à l'échéancier."""
+        import frappe
+        r = frappe.db.sql("""select so.name, so.customer from `tabSales Order` so
+            where so.docstatus = 1 and so.grand_total > 0 and so.per_billed = 0 and %s exists (
+                select 1 from `tabPayment Schedule` ps where ps.parent = so.name and ps.parenttype = 'Sales Order'
+                and ps.mode_of_payment = 'Dette non payée')
+            and exists (select 1 from `tabPayment Schedule` ps where ps.parent = so.name and ps.parenttype = 'Sales Order')
+            order by so.transaction_date desc limit 1""" % ("" if dette else "not"), as_dict=True)
+        if not r:
+            self.skipTest("pas de commande %s dette" % ("avec" if dette else "sans"))
+        return r[0]
+
+    def test_commande_avec_dette_la_machine_sort_et_le_reste_du_est_garde(self):
+        import frappe
+        so = self._commande(dette=True)
+        reg = RO.reglements([so.name])[so.name]
+        self.assertEqual(reg["etat"], "du")
+        self.assertGreater(reg["reste"], 0)
+        nom = self._dossier(so.customer)
+        s = RO.situation_sortie(nom)
+        self.assertTrue(s["repare"])
+        self.assertEqual(s["regle"]["cas"], "non_facturee")                       # rien de lié pour l'instant
+        r = RO.rendre(nom, rendu_a="Le client", commande=so.name)                 # ni motif ni code : la commande suffit
+        self.assertEqual((r["statut"], r["cas"]), (RO.S_RENDUE, "commande"))
+        m = frappe.db.get_value(RO.DOCTYPE, nom, ["commande_client", "reglement_sortie", "rendue_par", "sans_reparation"], as_dict=True)
+        self.assertEqual(m.commande_client, so.name)
+        self.assertTrue(m.reglement_sortie.startswith("reste dû"), m.reglement_sortie)
+        self.assertTrue(m.rendue_par)
+        self.assertEqual(m.sans_reparation, 0)
+        # l'écran montre le reste dû d'aujourd'hui à côté de la machine rendue
+        ligne = [x for x in RO.get_data(vue="Rendue")["machines"] if x.name == nom][0]
+        self.assertEqual((ligne["groupe"], ligne["reglement"]["etat"]), ("Rendue", "du"))
+
+    def test_commande_payee_et_commande_d_un_autre_client(self):
+        import frappe
+        so = self._commande(dette=False)
+        if RO.reglements([so.name])[so.name]["etat"] != "payee":
+            self.skipTest("commande sans dette mais pas soldée")
+        nom = self._dossier(so.customer)
+        autre = frappe.db.get_value("Sales Order", {"docstatus": 1, "customer": ["!=", so.customer]}, "name")
+        with self.assertRaises(frappe.ValidationError):
+            RO.rendre(nom, commande=autre)                                        # pas celle de ce client
+        r = RO.rendre(nom, commande=so.name)
+        self.assertTrue(r["reglement"].startswith("payée"), r["reglement"])
+
+    def test_garantie_libre_avec_la_commande_d_origine_code_sinon(self):
+        import frappe
+        so = self._commande(dette=False)
+        nom = self._dossier(so.customer, garantie="Sous garantie")
+        with self.assertRaises(frappe.ValidationError):
+            RO.rendre(nom)                                                        # sous garantie, sans preuve, sans code
+        self.assertEqual(frappe.db.get_value(RO.DOCTYPE, nom, "statut"), RO.S_REPAREE)
+        r = RO.rendre(nom, commande_garantie=so.name)                             # la commande d'origine suffit
+        self.assertEqual((r["cas"], r["reglement"]), ("garantie", "garantie — rien à facturer"))
+        self.assertFalse(frappe.db.get_value(RO.DOCTYPE, nom, "commande_client"))
+        nom2 = self._dossier(so.customer, garantie="Sous garantie")
+        self.assertEqual(RO.rendre(nom2, code="bon")["cas"], "garantie_sans_preuve")
+
+    def test_sortie_sans_reparation_ferme_le_dossier_et_retire_les_taches(self):
+        import frappe
+        client = frappe.db.get_value("Customer", {"disabled": 0}, "name")
+        nom = self._dossier(client, statut=RO.S_RECEPTIONNEE, date_reparee=None)
+        t = RO.affecter_tache(nom, self.emp, "2031-07-07", "09:00")["tache"]
+        self.assertEqual(frappe.db.get_value(RO.DOCTYPE, nom, "statut"), RO.S_PLANIFIEE)
+        with self.assertRaises(frappe.ValidationError):
+            RO.sortir_sans_reparation(nom, motif="")                              # le motif est obligatoire
+        with self.assertRaises(frappe.ValidationError):
+            RO.rendre(nom, motif="x", code="bon")                                 # pas réparée : pas une remise normale
+        r = RO.sortir_sans_reparation(nom, motif="Le client reprend sa machine", rendu_a="Son fils")
+        self.assertEqual(r["statut"], RO.S_RENDUE)
+        self.assertFalse(frappe.db.exists(RO.DOCTYPE_TACHE, t))                   # la tâche ouverte n'a jamais eu lieu
+        m = frappe.db.get_value(RO.DOCTYPE, nom, ["statut", "sans_reparation", "motif_sortie", "reglement_sortie", "rendu_a"], as_dict=True)
+        self.assertEqual((m.statut, m.sans_reparation, m.motif_sortie, m.reglement_sortie, m.rendu_a),
+                         (RO.S_RENDUE, 1, "Le client reprend sa machine", "sans réparation", "Son fils"))
+        # clic par erreur : le dossier redevient ouvert, sans technicien
+        self.assertEqual(RO.annuler_sortie(nom)["statut"], RO.S_RECEPTIONNEE)
+        m = frappe.db.get_value(RO.DOCTYPE, nom, ["sans_reparation", "motif_sortie", "date_rendue"], as_dict=True)
+        self.assertEqual((m.sans_reparation, m.motif_sortie, m.date_rendue), (0, None, None))
+
+    def test_une_tache_retypee_reste_la_reparation_du_dossier(self):
+        import frappe
+        client = frappe.db.get_value("Customer", {"disabled": 0}, "name")
+        nom = self._dossier(client, statut=RO.S_RECEPTIONNEE, date_reparee=None)
+        t = frappe.get_doc(RO.DOCTYPE_TACHE, RO.affecter_tache(nom, self.emp, "2031-07-08", "09:00")["tache"])
+        t.custom_type_dintervention = "Livraison"                                # OSM-2026-0012 : retypée par quelqu'un
+        t.dispense_photos = 1
+        t.rapport_visite = "partie haute pression changée"
+        t.status = "Completed"
+        t.flags.ignore_permissions = True
+        t.save()
+        m = frappe.db.get_value(RO.DOCTYPE, nom, ["statut", "date_reparee", "tache_livraison"], as_dict=True)
+        self.assertEqual((m.statut, m.tache_livraison), (RO.S_REPAREE, None))     # à rendre, et non « à affecter »
+        # le nom affiché est bien celui du technicien de la tâche
+        self.assertEqual(frappe.db.get_value(RO.DOCTYPE, nom, "nom_responsable"), frappe.db.get_value("Employee", self.emp, "employee_name"))
+        self.assertTrue(m.date_reparee)
+        # une tâche annulée, elle, laisse le dossier sans technicien — d'où il sort « sans réparation »
+        nom2 = self._dossier(client, statut=RO.S_RECEPTIONNEE, date_reparee=None)
+        t2 = frappe.get_doc(RO.DOCTYPE_TACHE, RO.affecter_tache(nom2, self.emp, "2031-07-09", "09:00")["tache"])
+        t2.status = "Cancelled"
+        t2.rapport_visite = "le client reprend sa machine"
+        t2.flags.ignore_permissions = True
+        t2.save()
+        self.assertEqual(frappe.db.get_value(RO.DOCTYPE, nom2, "statut"), RO.S_RECEPTIONNEE)
+        self.assertEqual(RO.sortir_sans_reparation(nom2, motif="Le client reprend sa machine")["statut"], RO.S_RENDUE)
+
+    def test_toujours_au_magasin_bandeau_et_tri_du_rappel(self):
+        import frappe
+        client = frappe.db.get_value("Customer", {"disabled": 0}, "name")
+        nom = self._dossier(client, date_reparee="2031-01-01 10:00:00")
+        frappe.db.set_value(RO.DOCTYPE, nom, "rappel_depuis", "2031-01-05")
+        self.assertIn(nom, [x.name for x in RO.machines_du_client(client)])       # le bandeau de sa commande la signale
+        ligne = [x for x in RO.get_data(vue="À rendre")["machines"] if x.name == nom][0]
+        self.assertEqual((ligne["groupe"], ligne["attente"]["motif"], ligne["photos"]), ("À rendre", "a_rendre", []))
+        RO.toujours_la(nom)
+        m = frappe.db.get_value(RO.DOCTYPE, nom, ["toujours_la_le", "rappel_depuis", "statut"], as_dict=True)
+        self.assertTrue(m.toujours_la_le)
+        self.assertIsNone(m.rappel_depuis)
+        self.assertEqual(m.statut, RO.S_REPAREE)                                  # rien d'autre ne bouge
+        # le tri du matin, sans rien envoyer
+        tri = RO.rappel_quotidien(envoyer=0)
+        self.assertEqual(tri["envoyes"], [])
+        self.assertTrue(set(tri["relance"]) <= set(tri["rappel"]))
+        RO.rendre(nom, motif="Geste commercial", code="bon")
+        self.assertNotIn(nom, [x.name for x in RO.machines_du_client(client)])
 
 
 class TestRattachement(unittest.TestCase):
@@ -373,7 +622,9 @@ class TestRattachement(unittest.TestCase):
     def test_rattacher_puis_detacher(self):
         import frappe
         cands = RO.taches_candidates(self.nom)
-        self.assertEqual((cands[0]["name"], cands[0]["meme_client"]), (self.tache.name, True))     # celle du client en tête
+        # celles du client en tête (il peut en avoir une autre, réelle, sur la copie de prod)
+        self.assertTrue(cands[0]["meme_client"])
+        self.assertIn(self.tache.name, [c["name"] for c in cands if c["meme_client"]])
         r = RO.rattacher_tache(self.nom, self.tache.name)
         self.assertEqual((r["statut"], frappe.db.get_value(RO.DOCTYPE, self.nom, "statut")), (RO.S_PLANIFIEE, RO.S_PLANIFIEE))
         t = frappe.get_doc(RO.DOCTYPE_TACHE, self.tache.name)

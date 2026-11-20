@@ -27,6 +27,28 @@
     table.ro-tbl td { padding: 8px 9px; border-bottom: 1px solid var(--border-color,#eef1f5); vertical-align: top; }
     table.ro-tbl tr:hover > td { background: rgba(0,0,0,.02); }
     table.ro-tbl tr.retard > td { background: rgba(249,115,22,.07); }
+    /* Photos du dossier : toujours carrees, jamais ecrasees par la largeur de la colonne. */
+    td.ro-col-photos { width: 100px; min-width: 100px; }
+    td.ro-col-etat { min-width: 200px; }
+    td.ro-col-etat .ro-badge { margin-bottom: 3px; }
+    .ro-photo { width: 92px; height: 92px; min-width: 92px; object-fit: cover; border-radius: 10px; border: 1px solid #e4e8ee;
+                background: #f1f5f9; display: block; cursor: zoom-in; }
+    .ro-photo.vide { display: flex; align-items: center; justify-content: center; color: #94a3b8; font-size: 28px; cursor: default; }
+    .ro-minis { display: grid; grid-template-columns: repeat(3, 28px); gap: 4px; margin-top: 4px; }
+    .ro-mini { width: 28px; height: 28px; object-fit: cover; border-radius: 5px; border: 1px solid #e4e8ee; background: #f1f5f9;
+               cursor: zoom-in; display: block; }
+    .ro-mini.plus { display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: #475569; }
+    .ro-galerie { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
+    .ro-galerie figure { margin: 0; }
+    .ro-galerie img { width: 100%; aspect-ratio: 1 / 1; object-fit: cover; border-radius: 10px; border: 1px solid #e4e8ee; background: #f1f5f9; }
+    .ro-galerie figcaption { font-size: 12px; color: var(--text-muted,#6b7280); margin-top: 4px; text-align: center; }
+    .b-reparer { background: #dbeafe; color: #1e40af; }
+    .b-rendre { background: #ffedd5; color: #9a3412; }
+    .b-garantie { background: #dcfce7; color: #166534; }
+    .ro-du { color: #c2410c; font-weight: 600; font-size: 12px; }
+    .ro-ok { color: #166534; font-weight: 600; font-size: 12px; }
+    .ro-kpi.alerte { border-color: #fdba74; background: #fff7ed; }
+    .ro-kpi.alerte .v { color: #c2410c; }
     .ro-vignette { width: 120px; height: 80px; object-fit: cover; border-radius: 10px; border: 1px solid #e4e8ee;
                    background: #f1f5f9; display: block; }
     .ro-vignette.vide { display: flex; align-items: center; justify-content: center; color: #94a3b8; font-size: 28px; }
@@ -53,6 +75,7 @@
     .ro-tache .st.ok { color: #166534; } .ro-tache .st.open { color: #1e40af; } .ro-tache .st.ko { color: #991b1b; }
     .ro-btns { display: flex; flex-direction: column; gap: 3px; align-items: flex-start; }
     /* Meme largeur pour tous, etroite : la colonne ne suit plus le libelle le plus long. */
+    .ro-btns .btn-primary { font-weight: 600; }
     .ro-btns .btn { width: 190px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: center;
       font-size: 11.5px; padding: 2px 8px; line-height: 1.5; border-radius: 6px; }
     .ro-vide { text-align: center; color: #94a3b8; padding: 24px; }
@@ -101,7 +124,7 @@
   <div class="ro-card ro-table-wrap">
     <table class="ro-tbl">
       <thead><tr>
-        <th></th><th>Dossier</th><th>Client</th><th>Note</th><th>Statut</th><th>Réparation</th><th>Tâches</th><th></th>
+        <th>Photos</th><th>Dossier</th><th>Client</th><th>Note</th><th>État</th><th>Tâches</th><th></th>
       </tr></thead>
       <tbody id="ro-corps"></tbody>
     </table>

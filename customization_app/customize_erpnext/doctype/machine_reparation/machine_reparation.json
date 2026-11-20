@@ -41,7 +41,15 @@
   "column_break_restitution",
   "rendu_a",
   "photo_remise",
-  "remarque_restitution"
+  "remarque_restitution",
+  "section_sortie",
+  "rendue_par",
+  "reglement_sortie",
+  "sans_reparation",
+  "motif_sortie",
+  "column_break_sortie",
+  "toujours_la_le",
+  "rappel_depuis"
  ],
  "fields": [
   {
@@ -253,11 +261,59 @@
    "fieldname": "remarque_restitution",
    "fieldtype": "Small Text",
    "label": "Remarque de restitution"
+  },
+  {
+   "fieldname": "section_sortie",
+   "fieldtype": "Section Break",
+   "label": "Sortie"
+  },
+  {
+   "fieldname": "rendue_par",
+   "fieldtype": "Data",
+   "label": "Sortie enregistrée par",
+   "read_only": 1
+  },
+  {
+   "fieldname": "reglement_sortie",
+   "fieldtype": "Data",
+   "label": "Règlement constaté à la sortie",
+   "read_only": 1,
+   "description": "Payée, reste dû (la dette reste sur le compte du client), garantie ou non facturée — tel que constaté au moment où la machine est sortie."
+  },
+  {
+   "default": "0",
+   "fieldname": "sans_reparation",
+   "fieldtype": "Check",
+   "label": "Sortie sans réparation",
+   "read_only": 1
+  },
+  {
+   "fieldname": "motif_sortie",
+   "fieldtype": "Small Text",
+   "label": "Motif (sans réparation ou non facturée)",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_sortie",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "toujours_la_le",
+   "fieldtype": "Datetime",
+   "label": "« Toujours au magasin » confirmé le",
+   "read_only": 1
+  },
+  {
+   "fieldname": "rappel_depuis",
+   "fieldtype": "Date",
+   "label": "Rappelée depuis le",
+   "read_only": 1,
+   "description": "Premier rappel resté sans réponse (rendre, toujours au magasin, affecter)."
   }
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-10-02 14:32:35.648825",
+ "modified": "2026-11-20 16:00:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Machine Reparation",
