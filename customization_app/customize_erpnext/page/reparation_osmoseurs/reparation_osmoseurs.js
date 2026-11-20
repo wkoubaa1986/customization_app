@@ -138,7 +138,7 @@ class ReparationOsmoseurs {
 
     const corps = r.find("#ro-corps");
     if (!d.machines.length) {
-      corps.html(`<tr><td colspan="7" class="ro-vide">${this.verifier ? "Rien n’attend depuis trop longtemps. 👍" : "Aucun dossier" + (this.vue ? " « " + esc(this.vue) + " »" : "") + "."}</td></tr>`);
+      corps.html(`<tr><td colspan="8" class="ro-vide">${this.verifier ? "Rien n’attend depuis trop longtemps. 👍" : "Aucun dossier" + (this.vue ? " « " + esc(this.vue) + " »" : "") + "."}</td></tr>`);
       return;
     }
     corps.html(d.machines.map((m) => this.ligne(m)).join(""));
@@ -146,6 +146,18 @@ class ReparationOsmoseurs {
       const b = $(e.currentTarget);
       this.action(b.attr("data-action"), b.attr("data-machine"));
     });
+    // Commentaire de suivi : s'enregistre tout seul en quittant la case, sans recharger le tableau.
+    corps.find(".ro-suivi").on("change", async (e) => {
+      const $t = $(e.currentTarget), machine = $t.attr("data-machine");
+      const x = (await frappe.call({ method: RO_API + ".enregistrer_commentaire", args: { machine, texte: $t.val() } })).message || {};
+      if (!x.change) return;
+      const m = (this.data.machines || []).find((y) => y.name === machine);
+      if (m) Object.assign(m, { commentaire_suivi: $t.val().trim(), commentaire_suivi_par: x.par, commentaire_suivi_le: x.le });
+      $t.siblings(".ro-suivi-qui").text(x.par ? `${x.par} · ${ro_datetime(x.le)}` : "");
+      frappe.show_alert({ message: `${machine} : commentaire enregistré`, indicator: "green" }, 3);
+    }).on("input", (e) => { e.currentTarget.style.height = "auto"; e.currentTarget.style.height = e.currentTarget.scrollHeight + 2 + "px"; })
+      // Deux lignes quand la case est vide, la hauteur du texte sinon (le Desk donne 120 px à toute zone de texte).
+      .each((_, el) => { el.style.height = "46px"; el.style.height = Math.max(46, el.scrollHeight + 2) + "px"; });
     corps.find("[data-photo]").on("click", (e) => {
       const b = $(e.currentTarget);
       this.galerie(b.attr("data-machine"), Number(b.attr("data-photo")));
@@ -270,6 +282,10 @@ class ReparationOsmoseurs {
              : m.garantie ? `<div class="ro-sub">Hors garantie</div>` : `<div class="ro-sub" style="color:#c2410c">garantie non décidée</div>`}
           <div class="ro-note">${esc(m.note_reception || "")}</div></td>
       <td class="ro-col-etat"><span class="ro-badge ${RO_GROUPES[m.groupe] || ""}">${esc(m.groupe)}</span>${detail}</td>
+      <td class="ro-col-suivi">
+        <textarea class="ro-suivi form-control" rows="2" maxlength="1000" data-machine="${esc(m.name)}"
+                  placeholder="Où en est-on ?" title="Commentaire de suivi : client appelé, viendra samedi… Il s’enregistre tout seul en quittant la case.">${esc(m.commentaire_suivi || "")}</textarea>
+        <div class="ro-sub ro-suivi-qui">${m.commentaire_suivi ? esc(m.commentaire_suivi_par || "") + " · " + esc(ro_datetime(m.commentaire_suivi_le)) : ""}</div></td>
       <td>${taches}</td>
       <td><div class="ro-btns">${boutons.join("")}</div></td>
     </tr>`;

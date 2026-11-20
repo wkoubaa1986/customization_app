@@ -81,7 +81,8 @@ MOTIFS_SANS_REPARATION = ("Le client reprend sa machine", "Réparation impossibl
 MOTIFS_NON_FACTUREE = ("Geste commercial", "Rien à réparer", "Autre")
 #: Ce qui RÉPOND à un rappel laisse une trace sur le dossier, commençant par un de ces repères : c'est ce que la file
 #: « Machines de l'atelier » de « Mes appels par priorité » compte comme fait aujourd'hui (tableau_appels).
-REPERES_REPONSE = ("✅ Rendue", "🔓 Rendue", "↪️ Sortie sans réparation", "📍 Toujours au magasin", "📲 SMS", "📅 Technicien affecté")
+REPERES_REPONSE = ("✅ Rendue", "🔓 Rendue", "↪️ Sortie sans réparation", "📍 Toujours au magasin", "📲 SMS", "📅 Technicien affecté",
+                   "💬 Suivi")
 
 
 def groupe_de(statut) -> str:
@@ -383,7 +384,8 @@ def get_data(statut=None, client=None, responsable=None, recherche=None, inclure
     or_filtres = None
     if recherche:
         motif = f"%{recherche}%"
-        or_filtres = [["name", "like", motif], ["nom_client", "like", motif], ["tel", "like", motif]]
+        or_filtres = [["name", "like", motif], ["nom_client", "like", motif], ["tel", "like", motif],
+                      ["commentaire_suivi", "like", motif]]
     machines = frappe.get_all(DOCTYPE, filters=filtres, or_filters=or_filtres, limit_page_length=500,
                               fields=["name", "client", "nom_client", "tel", "statut", "date_reception", "note_reception", "photo_arrivee",
                                       "photo_post_it", "dispense_post_it", "date_cloture_reception",
@@ -391,7 +393,8 @@ def get_data(statut=None, client=None, responsable=None, recherche=None, inclure
                                       "date_rendue", "commande_client", "modified", "mode_restitution", "sms_pret_le", "tache_livraison",
                                       "date_livraison_prevue", "rendu_a", "photo_remise", "remarque_restitution",
                                       "sans_reparation", "motif_sortie", "reglement_sortie", "rendue_par",
-                                      "toujours_la_le", "rappel_depuis"],
+                                      "toujours_la_le", "rappel_depuis",
+                                      "commentaire_suivi", "commentaire_suivi_par", "commentaire_suivi_le"],
                               order_by="creation desc")
     cfg = config()
     taches = _taches_par_machine([m.name for m in machines])
@@ -1261,6 +1264,25 @@ def toujours_la(machine):
     frappe.db.set_value(DOCTYPE, machine, {"toujours_la_le": now_datetime(), "rappel_depuis": None})
     doc.add_comment("Info", _("📍 Toujours au magasin — confirmé par {0}").format(frappe.utils.get_fullname(frappe.session.user)))
     return {"ok": True}
+
+
+@frappe.whitelist()
+def enregistrer_commentaire(machine, texte=None):
+    """Le commentaire de suivi de la ligne (20/11/2026) : où en est le dossier, écrit par la personne qui le suit.
+    Le dernier texte reste sur la ligne, avec son auteur et son heure ; chaque version est gardée au fil du dossier
+    (« 💬 Suivi — … »), et compte comme un geste fait dans « Mes appels par priorité ». Il ne répond PAS au rappel :
+    la machine attend toujours d'être rendue, confirmée au magasin ou affectée."""
+    _ecriture(machine)
+    texte = (texte or "").strip()[:1000]
+    ancien = (frappe.db.get_value(DOCTYPE, machine, "commentaire_suivi") or "").strip()
+    if texte == ancien:
+        return {"change": False}
+    par, le = frappe.utils.get_fullname(frappe.session.user)[:140], now_datetime()
+    frappe.db.set_value(DOCTYPE, machine, {"commentaire_suivi": texte or None, "commentaire_suivi_par": par if texte else None,
+                                           "commentaire_suivi_le": le if texte else None})
+    frappe.get_doc(DOCTYPE, machine).add_comment("Info", _("💬 Suivi — {0}").format(texte) if texte
+                                                 else _("💬 Suivi effacé (il disait : {0})").format(ancien))
+    return {"change": True, "par": par if texte else "", "le": str(le) if texte else ""}
 
 
 @frappe.whitelist()

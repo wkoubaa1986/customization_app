@@ -595,6 +595,24 @@ class TestSortie(unittest.TestCase):
         RO.rendre(nom, motif="Geste commercial", code="bon")
         self.assertNotIn(nom, [x.name for x in RO.machines_du_client(client)])
 
+    def test_commentaire_de_suivi_garde_son_auteur_et_son_histoire(self):
+        import frappe
+        client = frappe.db.get_value("Customer", {"disabled": 0}, "name")
+        nom = self._dossier(client, date_reparee="2031-01-01 10:00:00")
+        r = RO.enregistrer_commentaire(nom, "  client appelé, viendra samedi ")
+        self.assertTrue(r["change"] and r["par"] and r["le"])
+        m = frappe.db.get_value(RO.DOCTYPE, nom, ["commentaire_suivi", "commentaire_suivi_par", "statut", "toujours_la_le"], as_dict=True)
+        self.assertEqual((m.commentaire_suivi, m.statut), ("client appelé, viendra samedi", RO.S_REPAREE))
+        self.assertIsNone(m.toujours_la_le)                                      # un commentaire ne répond pas au rappel
+        self.assertFalse(RO.enregistrer_commentaire(nom, "client appelé, viendra samedi")["change"])   # rien de neuf : rien d'écrit
+        ligne = [x for x in RO.get_data(recherche="viendra samedi")["machines"] if x.name == nom][0]   # et il se cherche
+        self.assertEqual(ligne["commentaire_suivi"], "client appelé, viendra samedi")
+        RO.enregistrer_commentaire(nom, "")
+        self.assertIsNone(frappe.db.get_value(RO.DOCTYPE, nom, "commentaire_suivi"))
+        traces = [frappe.utils.strip_html(c) for c in frappe.get_all("Comment", filters={"reference_doctype": RO.DOCTYPE, "reference_name": nom}, pluck="content", order_by="creation")]
+        self.assertEqual([t for t in traces if t.startswith("💬")],
+                         ["💬 Suivi — client appelé, viendra samedi", "💬 Suivi effacé (il disait : client appelé, viendra samedi)"])
+
     def test_la_file_de_l_atelier_dans_mes_appels_par_priorite(self):
         """20/11/2026 : le rappel sort dans « Mes appels par priorité » de la personne du suivi — et d'elle seule."""
         import frappe

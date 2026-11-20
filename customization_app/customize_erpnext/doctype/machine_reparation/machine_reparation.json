@@ -49,7 +49,12 @@
   "motif_sortie",
   "column_break_sortie",
   "toujours_la_le",
-  "rappel_depuis"
+  "rappel_depuis",
+  "section_suivi",
+  "commentaire_suivi",
+  "column_break_suivi",
+  "commentaire_suivi_par",
+  "commentaire_suivi_le"
  ],
  "fields": [
   {
@@ -309,11 +314,38 @@
    "label": "Rappelée depuis le",
    "read_only": 1,
    "description": "Premier rappel resté sans réponse (rendre, toujours au magasin, affecter)."
+  },
+  {
+   "fieldname": "section_suivi",
+   "fieldtype": "Section Break",
+   "label": "Suivi"
+  },
+  {
+   "fieldname": "commentaire_suivi",
+   "fieldtype": "Small Text",
+   "label": "Commentaire de suivi",
+   "description": "Où en est ce dossier, en clair : client appelé, pièce attendue, viendra samedi… Se remplit depuis l’écran Réparation osmoseurs."
+  },
+  {
+   "fieldname": "column_break_suivi",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "commentaire_suivi_par",
+   "fieldtype": "Data",
+   "label": "Commentaire écrit par",
+   "read_only": 1
+  },
+  {
+   "fieldname": "commentaire_suivi_le",
+   "fieldtype": "Datetime",
+   "label": "Commentaire écrit le",
+   "read_only": 1
   }
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-11-20 16:00:00.000000",
+ "modified": "2026-11-20 19:00:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Machine Reparation",
