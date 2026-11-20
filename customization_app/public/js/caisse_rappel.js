@@ -22,6 +22,11 @@
   const sur_la_caisse = () => (frappe.get_route() || [])[0] === "caisse-journaliere";
   const compter = (r, date) => {
     frappe.route_options = { compter_caisse: r.caisse, compter_date: date };
+    // Déjà sur la caisse journalière (c'est là que la pastille se clique) : aller sur la même page ne déclenche
+    // rien — on demande directement à la page de se placer sur ce jour et d'ouvrir le comptage (20/11/2026 : « le
+    // bouton rouge ne m'envoie pas vers la caisse »).
+    const page = frappe.pages["caisse-journaliere"];
+    if (sur_la_caisse() && page && page.rcj) { page.rcj._depuis_rappel(); return; }
     frappe.set_route("caisse-journaliere");
   };
   const jour_en_clair = (d) => {

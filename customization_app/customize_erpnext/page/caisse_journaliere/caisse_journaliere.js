@@ -3300,6 +3300,9 @@ function rcj_cloture(rapport, opts) {
                   ? __("Comptage enregistré : {0} — remettez la caisse au responsable, qui confirmera la réception.", [lien])
                   : __("Caisse validée : {0} — le PDF instantané est attaché.", [lien]));
               if (rapport && rapport._fetch) rapport._fetch();
+              // Le rappel « caisses non comptées » suit tout de suite : la pastille rouge affiche les jours qui restent
+              // (ou disparaît), sans attendre un changement d'écran.
+              if (window.caisse_rappel_actualiser) window.caisse_rappel_actualiser();
             },
           });
         },
