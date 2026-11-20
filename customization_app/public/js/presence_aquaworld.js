@@ -67,6 +67,7 @@ class PresenceAquaworld {
     <label class="pa-dim">Du</label> <input type="date" id="pa-du">
     <label class="pa-dim">au</label> <input type="date" id="pa-au">
     <select id="pa-employe"><option value="">Tous les techniciens</option></select>
+    <label class="pa-dim" style="display:inline-flex;align-items:center;gap:4px;margin:0;cursor:pointer" title="Akram, Mohamed Hedi… : les employés qui ont quitté sont masqués des statistiques. Cochez pour les revoir ; rien n’est effacé."><input type="checkbox" id="pa-anciens" style="margin:0"> Anciens employés</label>
     <button class="btn btn-default btn-sm" data-action="refresh">🔄 Actualiser</button>
     <button class="btn btn-default btn-sm" data-action="recalculer" title="Relit la plateforme GPS jour par jour ; au-delà de deux mois, le calcul part en arrière-plan">🧮 Recalculer la période</button>
     <button class="btn btn-default btn-sm" data-action="tout" title="Après un changement de domicile, d'équipage ou de règle : refait présence, sorties de circuit et appariement des tâches sur toute la période du réglage, en arrière-plan">♻️ Tout recalculer</button>
@@ -95,6 +96,13 @@ class PresenceAquaworld {
     const $r = this.$root;
     $r.find("[data-action='refresh'], #pa-du, #pa-au, #pa-employe").on("change click", (e) => { if (e.type === "click" && e.currentTarget.tagName !== "BUTTON") return; this.charger(); });
     $r.find("[data-action='recalculer']").on("click", () => this.recalculer());
+    // « Anciens employés » : masqués par défaut ; le même choix pour les trois onglets du suivi terrain.
+    let anciens = false;
+    try { anciens = localStorage.getItem("st_anciens") === "1"; } catch (e) { /* stockage indisponible */ }
+    $r.find("#pa-anciens").prop("checked", anciens).on("change", (e) => {
+      try { localStorage.setItem("st_anciens", e.target.checked ? "1" : "0"); } catch (err) { /* ignoré */ }
+      this.charger();
+    });
     $r.on("click", "[data-action='equipages']", () => this.definir_equipages());
     $r.on("click", "[data-action='rattraper']", () => this.rattraper(false));
     $r.find("[data-action='tout']").on("click", () => this.rattraper(true));
@@ -115,7 +123,7 @@ class PresenceAquaworld {
     const $r = this.$root;
     try {
       const r = await frappe.call({ method: "customization_app.flotte_presence.presence",
-        args: { du: $r.find("#pa-du").val(), au: $r.find("#pa-au").val(), employe: $r.find("#pa-employe").val() || null }, freeze: true });
+        args: { du: $r.find("#pa-du").val(), au: $r.find("#pa-au").val(), employe: $r.find("#pa-employe").val() || null, anciens: $r.find("#pa-anciens").is(":checked") ? 1 : 0 }, freeze: true });
       this.data = r.message;
       $r.find("#pa-du").val(this.data.du);
       $r.find("#pa-au").val(this.data.au);
@@ -144,7 +152,7 @@ class PresenceAquaworld {
     if (!d) return;
     $r.find("#pa-intro").html(`Tout vient du <b>véhicule</b> : la nuit d'avant (l'arrêt qui chevauche minuit) donne le <b>départ du matin</b> et où il a dormi ; le premier arrêt à moins de ${d.seuils.rayon_m} m du Magasin donne l'<b>arrivée à Aquaworld</b>, le dernier le <b>départ d'Aquaworld</b> ; la nuit d'après donne le <b>retour du soir</b>. Un véhicule qui dort au Magasin ne dit pas quand son technicien arrive. Le lieu d'une nuit se lit contre les domiciles du réglage des tournées : régler un domicile requalifie tout l'historique. Calculé chaque soir à 21 h avec l'appariement.`);
     const n = d.lignes.length;                                   // les journées calculées (coéquipiers hérités compris) ; les non calculées sont à part
-    $r.find("#pa-info").html(`${n} journée${n > 1 ? "s" : ""} du ${frappe.datetime.str_to_user(d.du)} au ${frappe.datetime.str_to_user(d.au)}${d.stats_depuis && d.stats_depuis === d.du ? ` <span class="pa-dim">(réglage)</span>` : ""}${d.non_calculees ? ` · ${d.non_calculees} sans présence calculée` : ""}${d.jours_manquants ? ` · <b>${d.jours_manquants} jour${d.jours_manquants > 1 ? "s" : ""} sans calcul</b> <button class="btn btn-xs btn-default" data-action="rattraper">⏳ Rattraper les jours manquants</button>` : ""}`);
+    $r.find("#pa-info").html(`${n} journée${n > 1 ? "s" : ""} du ${frappe.datetime.str_to_user(d.du)} au ${frappe.datetime.str_to_user(d.au)}${d.stats_depuis && d.stats_depuis === d.du ? ` <span class="pa-dim">(réglage)</span>` : ""}${d.non_calculees ? ` · ${d.non_calculees} sans présence calculée` : ""}${d.anciens_masques ? ` · ${d.anciens_masques} ancien${d.anciens_masques > 1 ? "s" : ""} employé${d.anciens_masques > 1 ? "s" : ""} masqué${d.anciens_masques > 1 ? "s" : ""}` : ""}${d.jours_manquants ? ` · <b>${d.jours_manquants} jour${d.jours_manquants > 1 ? "s" : ""} sans calcul</b> <button class="btn btn-xs btn-default" data-action="rattraper">⏳ Rattraper les jours manquants</button>` : ""}`);
     this.suivre_rattrapage(false);
 
     this._render_trajets();

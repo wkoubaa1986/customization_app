@@ -706,10 +706,11 @@ def _qualifier(l: dict, depot: tuple, departs: dict) -> dict:
 
 
 @frappe.whitelist()
-def presence(du=None, au=None, employe=None):
+def presence(du=None, au=None, employe=None, anciens=0):
     """Les journées d'une période (heures, nuits qualifiées, coéquipiers hérités), statistiques et trajets par employé,
-    domiciles détectés."""
+    domiciles détectés. Les employés partis sont masqués (fg.employes_partis), sauf `anciens` ou si on en choisit un."""
     _garde()
+    partis = set() if cint(anciens) or employe else fg.employes_partis()
     au = getdate(au or nowdate())
     depuis = fg.stats_depuis()
     du = getdate(du) if du else (depuis if depuis and depuis <= au else add_days(au, -29))
@@ -722,14 +723,17 @@ def presence(du=None, au=None, employe=None):
     lignes = [_qualifier(l, depot, departs) for l in lignes]
     suivies = [l for l in lignes if l.get("nuit_avant_lat") or l.get("nuit_lat") or l.get("arrivee_aquaworld")]
     nuits = []
-    for l in suivies:
+    for l in fg.masquer_partis(suivies, partis):
         for k in ("nuit_avant", "nuit"):
             if l.get(k + "_lat"):
                 nuits.append({"employe": l["employe"], "employe_nom": l["employe_nom"], "vehicule": l.get("vehicule"),
                               "lat": l[k + "_lat"], "lng": l[k + "_lng"], "date": l["date"]})
     groupes = equipages()
     periodes = {e.name: (e.date_of_joining, e.relieving_date) for e in frappe.get_all("Employee", fields=["name", "date_of_joining", "relieving_date"], limit_page_length=0)}
+    # Après l'héritage des coéquipiers (un passager encore en poste garde les journées du véhicule d'un conducteur parti).
     toutes = heriter_pure(suivies, groupes, noms, periodes)
+    masques = {l.get("employe") for l in toutes} & partis               # ceux qui avaient des journées sur la période
+    toutes = fg.masquer_partis(toutes, partis)
     toutes.sort(key=lambda l: (str(l["date"]), l.get("employe_nom") or "", l.get("vehicule") or ""), reverse=True)
     if employe:
         toutes = [l for l in toutes if l.get("employe") == employe]
@@ -737,6 +741,7 @@ def presence(du=None, au=None, employe=None):
     # Techniciens proposés pour « Définir comme domicile » : conducteurs du réglage, membres d'équipage, employés des journées
     cfg_g = fg.config()
     techniciens = {e for e in cfg_g["employe_cbox"]} | {m for g in groupes for m in g} | {e for e, _ in employes} | set(departs)
+    techniciens -= partis
     return {"du": str(du), "au": str(au), "stats_depuis": str(depuis) if depuis else None, "jours_manquants": len(jours_manquants(du, au)),
             "lignes": toutes, "non_calculees": len(lignes) - len(suivies),
             "stats": statistiques_pure(toutes), "trajets": trajets_pure(toutes, depot=depot),
@@ -745,7 +750,7 @@ def presence(du=None, au=None, employe=None):
             "techniciens": sorted(({"employe": e, "nom": noms.get(e, e)} for e in techniciens if e in noms), key=lambda x: x["nom"]),
             "equipages": [[noms.get(m, m) for m in g] for g in groupes],
             "covoiturage": (frappe.db.get_single_value(fg.CONFIG, "covoiturage") or "") if _a_covoiturage() else "",
-            "employes": [{"employe": e, "nom": n} for e, n in employes], "depot": list(depot),
+            "employes": [{"employe": e, "nom": n} for e, n in employes], "depot": list(depot), "anciens_masques": len(masques),
             "seuils": {"rayon_m": RAYON_LIEU_M, "lieu_m": LIEU_M, "nuits_min": NUITS_MIN_DOMICILE, "trajet_max_min": TRAJET_MAX_MIN,
                        "arret_trajet_min": ARRET_TRAJET_MIN, "rayon_nuit_m": fg.RAYON_NUIT_M}}
 

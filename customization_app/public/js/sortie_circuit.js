@@ -47,6 +47,7 @@ class SortieCircuit {
     <label class="sc-dim">Du</label> <input type="date" id="sc-du">
     <label class="sc-dim">au</label> <input type="date" id="sc-au">
     <select id="sc-employe"><option value="">Tous les techniciens</option></select>
+    <label class="sc-dim" style="display:inline-flex;align-items:center;gap:4px;margin:0;cursor:pointer" title="Akram, Mohamed Hedi… : les employés qui ont quitté sont masqués des statistiques. Cochez pour les revoir ; rien n’est effacé."><input type="checkbox" id="sc-anciens" style="margin:0"> Anciens employés</label>
     <select id="sc-filtre">
       <option value="a_voir">À regarder (non justifiés)</option>
       <option value="tous">Tous les écarts</option>
@@ -83,6 +84,13 @@ class SortieCircuit {
       this._render();
     });
     $r.find("[data-action='recalculer']").on("click", () => this.recalculer());
+    // « Anciens employés » : masqués par défaut ; le même choix pour les trois onglets du suivi terrain.
+    let anciens = false;
+    try { anciens = localStorage.getItem("st_anciens") === "1"; } catch (e) { /* stockage indisponible */ }
+    $r.find("#sc-anciens").prop("checked", anciens).on("change", (e) => {
+      try { localStorage.setItem("st_anciens", e.target.checked ? "1" : "0"); } catch (err) { /* ignoré */ }
+      this.charger();
+    });
     $r.on("change", "[data-just]", (e) => {
       const $s = $(e.currentTarget), name = $s.attr("data-just");
       const note = $r.find(`[data-note='${name}']`).val() || "";
@@ -99,7 +107,7 @@ class SortieCircuit {
     const $r = this.$root;
     try {
       const r = await frappe.call({ method: "customization_app.flotte_circuit.sorties",
-        args: { du: $r.find("#sc-du").val(), au: $r.find("#sc-au").val(), employe: $r.find("#sc-employe").val() || null }, freeze: true });
+        args: { du: $r.find("#sc-du").val(), au: $r.find("#sc-au").val(), employe: $r.find("#sc-employe").val() || null, anciens: $r.find("#sc-anciens").is(":checked") ? 1 : 0 }, freeze: true });
       this.data = r.message;
       $r.find("#sc-du").val(this.data.du);
       $r.find("#sc-au").val(this.data.au);
@@ -122,7 +130,7 @@ class SortieCircuit {
     if (!d) return;
     const s = d.seuils;
     $r.find("#sc-intro").html(`Le circuit = les clients planifiés du jour (+ Magasin et domicile). Un écart est un fait à <b>regarder</b>, pas une faute : fournisseur, client non planifié, course Aramex, pause… justifiez-le et il sort de la liste. Seuils : arrêt ≥ ${s.arret_min} min à plus de ${s.distance_km} km de tout client (${s.distance_approx_km} km si la position du client est approchée) · trajet 2 h avant / 3 h après les horaires ou un dimanche · km réels ≥ ${String(s.ratio_detour).replace(".", ",")} × le circuit et + ${s.km_detour_min} km. Calculé chaque soir à 21 h 10.`);
-    $r.find("#sc-info").html(`${d.lignes.length} écart${d.lignes.length > 1 ? "s" : ""} du ${frappe.datetime.str_to_user(d.du)} au ${frappe.datetime.str_to_user(d.au)}${d.stats_depuis && d.stats_depuis === d.du ? ` <span class="sc-dim">(réglage)</span>` : ""}`);
+    $r.find("#sc-info").html(`${d.lignes.length} écart${d.lignes.length > 1 ? "s" : ""} du ${frappe.datetime.str_to_user(d.du)} au ${frappe.datetime.str_to_user(d.au)}${d.stats_depuis && d.stats_depuis === d.du ? ` <span class="sc-dim">(réglage)</span>` : ""}${d.anciens_masques ? ` · ${d.anciens_masques} ancien${d.anciens_masques > 1 ? "s" : ""} employé${d.anciens_masques > 1 ? "s" : ""} masqué${d.anciens_masques > 1 ? "s" : ""}` : ""}`);
     // Statistiques par technicien
     let html = `<div class="t">📊 Par technicien <span class="sc-dim">— km et jours d'après les journées GPS, écarts d'après ce calcul</span></div>`;
     if (!d.stats.length) html += `<div class="sc-vide">Aucune journée GPS ni écart sur la période. Cliquez « Recalculer la période » si les journées existent.</div>`;
@@ -255,7 +263,7 @@ class SortieCircuit {
       const l = this.data.lignes.find((x) => x.name === name);
       if (l) { l.justification = justification; l.note = note; l.justifie_par = justification ? frappe.session.user : null; l.justifie_le = justification ? frappe.datetime.now_datetime() : null; }
       // Les compteurs « à regarder / justifiés » suivent sans relire
-      const r = await frappe.call({ method: "customization_app.flotte_circuit.sorties", args: { du: this.data.du, au: this.data.au, employe: this.$root.find("#sc-employe").val() || null } });
+      const r = await frappe.call({ method: "customization_app.flotte_circuit.sorties", args: { du: this.data.du, au: this.data.au, employe: this.$root.find("#sc-employe").val() || null, anciens: this.$root.find("#sc-anciens").is(":checked") ? 1 : 0 } });
       this.data = r.message;
       this._render();
       frappe.show_alert({ message: justification ? __("Justifié : {0}", [justification]) : __("Remis « à regarder »"), indicator: "green" });

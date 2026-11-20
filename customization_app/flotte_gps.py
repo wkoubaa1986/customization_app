@@ -95,6 +95,18 @@ def stats_depuis():
     return d if d and d.year >= 2020 else None
 
 
+def employes_partis() -> set:
+    """Les employés qui ont quitté (statut « Left ») : leurs statistiques sont masquées par défaut dans les onglets
+    Statistiques, Sorties de circuit et Présence Aquaworld (case « Anciens employés » pour les revoir) — demande du
+    20/11/2026 après le départ d'Akram et de Mohamed Hedi. Rien n'est effacé."""
+    return set(frappe.get_all("Employee", filters={"status": "Left"}, pluck="name"))
+
+
+def masquer_partis(lignes: list, partis: set, champ: str = "employe") -> list:
+    """Les lignes dont l'employé n'est pas parti (une ligne sans employé reste). PURE."""
+    return [l for l in lignes if not l.get(champ) or l.get(champ) not in partis]
+
+
 def defaut_du_jour(cfg: dict, jour) -> dict:
     """Le conducteur habituel de chaque véhicule (réglage), mais seulement les employés en poste ce jour-là : avant la date
     d'embauche (Akram : 29/07/2026 — 50 journées et 18 écarts de juin-juillet lui étaient attribués par défaut) ou après la
@@ -1097,10 +1109,12 @@ def _bucket(ecart, tol) -> str:
 
 
 @frappe.whitelist()
-def statistiques(du=None, au=None, employe=None):
+def statistiques(du=None, au=None, employe=None, anciens=0):
     """Sur les tâches clôturées déjà appariées (custom_gps_statut) : par employé et par type, durées réelles vs standard,
-    ponctualité, passages manquants ; par jour, km et amplitude depuis Journee Flotte GPS."""
+    ponctualité, passages manquants ; par jour, km et amplitude depuis Journee Flotte GPS.
+    Les employés partis sont masqués, sauf `anciens` ou quand on en choisit un (`employe`)."""
     _garde_direction()
+    partis = set() if cint(anciens) or employe else employes_partis()
     au = getdate(au or nowdate())
     depuis = stats_depuis()                             # réglage « Statistiques depuis le » : même date pour les trois onglets
     du = getdate(du) if du else (depuis if depuis and depuis <= au else add_days(au, -29))
@@ -1114,6 +1128,8 @@ def statistiques(du=None, au=None, employe=None):
                                                           "starts_on", "ends_on", "status", "nom_client", "custom_gps_statut",
                                                           "custom_gps_arrivee", "custom_gps_depart", "custom_gps_duree", "custom_gps_ecart",
                                                           "custom_gps_vehicule"], order_by="starts_on", limit_page_length=0)
+    masques = {r.custom_choix_du_staff for r in rows} & partis          # ceux qui avaient des tâches sur la période
+    rows = masquer_partis(rows, partis, "custom_choix_du_staff")
     par_emp, par_type, manquants, buckets = {}, {}, [], {"avance": 0, "à l’heure": 0, "retard": 0}
     for r in rows:
         e = par_emp.setdefault(r.custom_choix_du_staff, {"employe": r.custom_choix_du_staff, "nom": r["custom_employé"] or r.custom_choix_du_staff,
@@ -1170,13 +1186,17 @@ def statistiques(du=None, au=None, employe=None):
                                                            "minutes_arrets", "nb_arrets", "premiere_sortie", "dernier_retour",
                                                            "nb_taches", "nb_passages", "minutes_chez_clients"],
                               order_by="date desc, vehicule", limit_page_length=0)
+    # Les kilomètres d'un véhicule restent ceux du véhicule, quel que soit le conducteur ; seul le NOM d'un employé parti
+    # disparaît (le conducteur affiché est le dernier encore en poste), ainsi que ses journées dans la liste.
     par_vehicule = {}
     for jr in journees:
-        v = par_vehicule.setdefault(jr.vehicule, {"vehicule": jr.vehicule, "employe_nom": jr.employe_nom, "jours": 0, "km": 0.0,
+        v = par_vehicule.setdefault(jr.vehicule, {"vehicule": jr.vehicule, "employe_nom": None, "jours": 0, "km": 0.0,
                                                    "minutes_conduite": 0, "minutes_chez_clients": 0, "nb_taches": 0, "nb_passages": 0,
                                                    "sorties": [], "retours": []})
         v["jours"] += 1
         v["km"] += flt(jr.km)
+        if not v["employe_nom"] and jr.employe and jr.employe not in partis:
+            v["employe_nom"] = jr.employe_nom
         v["minutes_conduite"] += cint(jr.minutes_conduite)
         v["minutes_chez_clients"] += cint(jr.minutes_chez_clients)
         v["nb_taches"] += cint(jr.nb_taches)
@@ -1191,6 +1211,8 @@ def statistiques(du=None, au=None, employe=None):
         v["sortie_moyenne"] = round(statistics.mean(v["sorties"])) if v["sorties"] else None
         v["retour_moyen"] = round(statistics.mean(v["retours"])) if v["retours"] else None
         v.pop("sorties"), v.pop("retours")
+    masques |= {jr.employe for jr in journees} & partis
+    journees = masquer_partis(journees, partis)
     # Détail tâche par tâche (pour un technicien, ou tout le monde sur une courte période) et vue par jour.
     detail = [{"tache": r.name, "date": str(r.starts_on)[:10], "annonce": str(r.starts_on)[11:16], "fin_annoncee": str(r.ends_on)[11:16] if r.ends_on else "",
                "employe": r["custom_employé"] or r.custom_choix_du_staff, "client": r.nom_client, "type": r.custom_type_dintervention,
@@ -1266,4 +1288,4 @@ def statistiques(du=None, au=None, employe=None):
             "confirmes": sum(e["confirmes"] for e in par_emp.values()), "buckets": buckets,
             "employes": sorted(par_emp.values(), key=lambda e: e["nom"]), "types": sorted(par_type.values(), key=lambda t: -t["taches"]),
             "manquants": manquants[-60:], "vehicules": sorted(par_vehicule.values(), key=lambda v: v["vehicule"]),
-            "journees": journees[:120], "standard": to.DUREE_TYPE, "terrain": DUREE_TERRAIN, "par_mois": par_mois, "lignes": lignes}
+            "anciens_masques": len(masques), "journees": journees[:120], "standard": to.DUREE_TYPE, "terrain": DUREE_TERRAIN, "par_mois": par_mois, "lignes": lignes}

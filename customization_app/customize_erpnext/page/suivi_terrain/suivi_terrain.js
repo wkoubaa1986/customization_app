@@ -56,6 +56,13 @@ class SuiviTerrain {
     $r.find("[data-action='reglages']").on("click", () => frappe.set_route("Form", "Config Flotte GPS"));
     $r.find("[data-action='apparier']").on("click", () => this.apparier());
     $r.find("[data-action='stats']").on("click", () => this.stats());
+    // « Anciens employés » : le même choix pour les trois onglets (Statistiques, Sorties de circuit, Présence).
+    let anciens = false;
+    try { anciens = localStorage.getItem("st_anciens") === "1"; } catch (e) { /* stockage indisponible */ }
+    $r.find("#st-anciens").prop("checked", anciens).on("change", (e) => {
+      try { localStorage.setItem("st_anciens", e.target.checked ? "1" : "0"); } catch (err) { /* ignoré */ }
+      this.stats();
+    });
     $r.find("[data-action='backfill']").on("click", () => this.backfill());
     $r.find("[data-action='apercu']").on("click", () => this.apercu_messages());
     $r.find("[data-action='simuler']").on("click", () => this.simuler_messages());
@@ -76,7 +83,12 @@ class SuiviTerrain {
       const t = $(e.currentTarget).attr("data-tab");
       $r.find(".st-tab").removeClass("active"); $(e.currentTarget).addClass("active");
       $r.find(".st-panel").removeClass("active"); $r.find(`.st-panel[data-panel='${t}']`).addClass("active");
-      if (t === "stats" && !this._stats_faites) this.stats();
+      // « Anciens employés » : le même choix partout — l'onglet qu'on rouvre suit la case cochée dans un autre.
+      let voulu = false, relu = false;
+      try { voulu = localStorage.getItem("st_anciens") === "1"; } catch (err) { /* stockage indisponible */ }
+      const $case = $r.find(`.st-panel[data-panel='${t}']`).find("#st-anciens, #pa-anciens, #sc-anciens");
+      if ($case.length && $case.is(":checked") !== voulu) { $case.prop("checked", voulu).trigger("change"); relu = true; }
+      if (t === "stats" && !this._stats_faites && !relu) this.stats();
       if (t === "circuit" && !this.circuit) {
         frappe.require("/assets/customization_app/js/sortie_circuit.js", () => {
           const $p = $r.find(".st-panel[data-panel='circuit']");
@@ -656,12 +668,15 @@ class SuiviTerrain {
   }
 
   async stats() {
-    const args = { du: this.$root.find("#st-du").val(), au: this.$root.find("#st-au").val(), employe: this.$root.find("#st-emp").val() || null };
+    const args = { du: this.$root.find("#st-du").val(), au: this.$root.find("#st-au").val(), employe: this.$root.find("#st-emp").val() || null,
+                   anciens: this.$root.find("#st-anciens").is(":checked") ? 1 : 0 };
     const r = await frappe.call({ method: "customization_app.flotte_gps.statistiques", args, freeze: true });
     this._stats_faites = true;
     this.$root.find("#st-du").val(r.message.du);
     this.$root.find("#st-au").val(r.message.au);
     this.$root.find("#st-periode").html(r.message.stats_depuis && r.message.stats_depuis === r.message.du ? `depuis le ${frappe.datetime.str_to_user(r.message.du)} <span title="Réglage « Statistiques depuis le » (Config Flotte GPS), commun aux onglets Statistiques, Sorties de circuit et Présence Aquaworld">(réglage)</span>` : "");
+    const nm = r.message.anciens_masques;
+    if (nm) this.$root.find("#st-periode").append(` <span class="st-dim">· ${nm} ancien${nm > 1 ? "s" : ""} employé${nm > 1 ? "s" : ""} masqué${nm > 1 ? "s" : ""}</span>`);
     this._render_stats(r.message);
   }
 
@@ -670,7 +685,11 @@ class SuiviTerrain {
   _render_stats(s) {
     const esc = frappe.utils.escape_html, $out = this.$root.find("#st-stats");
     const $sel = this.$root.find("#st-emp"), cur = $sel.val();
-    if ($sel.find("option").length <= 1) for (const e of s.employes) $sel.append(`<option value="${esc(e.employe)}">${esc(e.nom)}</option>`);
+    // Sans technicien choisi, la liste suit le résultat (les anciens employés y entrent ou en sortent avec leur case).
+    if (!cur) {
+      $sel.find("option:not(:first)").remove();
+      for (const e of s.employes) $sel.append(`<option value="${esc(e.employe)}">${esc(e.nom)}</option>`);
+    }
     $sel.val(cur);
     if (!s.taches) { $out.html(`<div class="st-empty">Aucune tâche appariée sur la période : lancer « Apparier ce jour » ou « Reprendre la période ».</div>`); return; }
     const pc = (n, d) => (d ? Math.round((n / d) * 100) + " %" : "–");

@@ -472,10 +472,12 @@ def journee_travail_pure(journees: list) -> list:
 
 
 @frappe.whitelist()
-def sorties(du=None, au=None, employe=None):
+def sorties(du=None, au=None, employe=None, anciens=0):
     """Les écarts d'une période + statistiques par employé + journées suivies. Sans `du`, la période part du réglage
-    « Statistiques depuis le » (Config Flotte GPS), sinon des 30 derniers jours."""
+    « Statistiques depuis le » (Config Flotte GPS), sinon des 30 derniers jours.
+    Les employés partis sont masqués (fg.employes_partis), sauf `anciens` ou si on en choisit un."""
     _garde()
+    partis = set() if cint(anciens) or employe else fg.employes_partis()
     au = getdate(au or nowdate())
     depuis = fg.stats_depuis()
     du = getdate(du) if du else (depuis if depuis and depuis <= au else add_days(au, -29))
@@ -494,6 +496,8 @@ def sorties(du=None, au=None, employe=None):
     if a_journee:
         champs_j += list(CHAMPS_JOURNEE)
     journees = frappe.get_all(fg.JOURNEE, filters=fj, fields=champs_j, order_by="date desc, employe_nom asc", limit_page_length=0)
+    masques = ({l["employe"] for l in lignes} | {j["employe"] for j in journees}) & partis
+    lignes, journees = fg.masquer_partis(lignes, partis), fg.masquer_partis(journees, partis)
     employes = sorted({(l["employe"], l["employe_nom"]) for l in lignes} | {(j["employe"], j["employe_nom"]) for j in journees},
                       key=lambda x: x[1] or "")
     travail = journee_travail_pure(journees) if a_journee else []
@@ -510,6 +514,7 @@ def sorties(du=None, au=None, employe=None):
             "stats": statistiques_pure(lignes, journees), "lieux": lieux_recurrents(lignes),
             "travail": travail, "jours_travail": jours_travail[:120], "plage_jour": list(PLAGE_JOUR),
             "employes": [{"employe": e, "nom": n} for e, n in employes if e], "justifications": list(JUSTIFICATIONS),
+            "anciens_masques": len(masques),
             "types": list(TYPES), "seuils": {"arret_min": ARRET_MIN, "distance_km": DISTANCE_KM, "distance_approx_km": DISTANCE_APPROX_KM,
                                               "ratio_detour": RATIO_DETOUR, "km_detour_min": KM_DETOUR_MIN}}
 

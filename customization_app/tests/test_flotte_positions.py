@@ -170,5 +170,17 @@ class TestSuiviApresChangement(unittest.TestCase):
         self.assertEqual(self._oublies(self.Doc(avant, custom_choix_du_staff="A", starts_on="2026-11-20 13:00:00", status="Open", titre="y")), [])
 
 
+
+class TestEmployesPartis(unittest.TestCase):
+    """Akram et Mohamed Hedi ont quitté le 10/11/2026 : leurs statistiques sont masquées par défaut (20/11/2026)."""
+
+    def test_masquer_partis(self):
+        lignes = [{"employe": "AKRAM", "km": 10}, {"employe": "SADOK", "km": 20}, {"employe": None, "km": 5}]
+        self.assertEqual(fg.masquer_partis(lignes, {"AKRAM"}), [{"employe": "SADOK", "km": 20}, {"employe": None, "km": 5}])
+        self.assertEqual(fg.masquer_partis(lignes, set()), lignes)                        # case « Anciens employés » cochée
+        taches = [{"custom_choix_du_staff": "AKRAM"}, {"custom_choix_du_staff": "SADOK"}]
+        self.assertEqual(fg.masquer_partis(taches, {"AKRAM"}, "custom_choix_du_staff"), [{"custom_choix_du_staff": "SADOK"}])
+
+
 if __name__ == "__main__":
     unittest.main()
