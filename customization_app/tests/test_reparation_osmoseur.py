@@ -329,8 +329,9 @@ class TestRestitution(unittest.TestCase):
         self.assertEqual((t.ends_on - t.starts_on).total_seconds(), 30 * 60)
         self.assertIn("hors garantie", t.subject)
         self.assertIn("appeler avant", t.subject)
-        m = frappe.db.get_value(RO.DOCTYPE, self.nom, ["tache_livraison", "date_livraison_prevue", "mode_restitution"], as_dict=True)
+        m = frappe.db.get_value(RO.DOCTYPE, self.nom, ["tache_livraison", "date_livraison_prevue", "mode_restitution", "date_reparee"], as_dict=True)
         self.assertEqual((m.tache_livraison, str(m.date_livraison_prevue), m.mode_restitution), (t.name, "2031-04-04", "Livraison"))
+        self.assertTrue(m.date_reparee)                                          # créer la livraison ne l'efface plus
         with self.assertRaises(frappe.ValidationError):
             RO.rendre(self.nom)                                                  # pas de remise à la main pendant une livraison
         # un mouvement sur la tâche de RÉPARATION ne touche pas au statut de restitution
@@ -362,9 +363,9 @@ class TestRestitution(unittest.TestCase):
 class TestReglesPures(unittest.TestCase):
     """Simplification du 20/11/2026 : trois groupes, « rendue » séparée du règlement, ce qui traîne. Sans la base."""
 
-    def test_trois_groupes_pour_sept_statuts(self):
+    def test_trois_groupes_pour_huit_statuts(self):
         self.assertEqual([RO.groupe_de(s) for s in RO.STATUTS],
-                         ["À réparer", "À réparer", "À réparer", "À rendre", "À rendre", "À rendre", "Rendue"])
+                         ["À réparer", "À réparer", "À réparer", "À rendre", "À rendre", "À rendre", "À réparer", "Rendue"])
 
     def test_une_dette_non_payee_n_est_pas_un_paiement(self):
         # commande de 95 : un Payment Entry « Dette non payée » la fait paraître payée à ERPNext, rien n'est encaissé
@@ -797,6 +798,78 @@ class TestRattachement(unittest.TestCase):
         if not limite:
             self.skipTest("aucun compte limité par employé")
         self.assertTrue(frappe.has_permission(RO.DOCTYPE, "write", doc=self.nom, user=limite[0][0]))
+
+    def test_machine_abandonnee_une_tache_la_fait_demonter(self):
+        """20/11/2026 : « si un client ne veut plus reprendre sa machine : machine à démonter, jeter le reste,
+        avec une tâche pour faire ça »."""
+        import frappe
+        reparation = RO.affecter_tache(self.nom, self.emp, "2031-07-07", "09:00")["tache"]         # elle n'aura pas lieu
+        p = RO.preparer_demontage(self.nom)
+        self.assertEqual((p["ouvertes"], p["repare"], p["numeros"]), (1, False, ["20123456"]))
+        with self.assertRaises(frappe.ValidationError):
+            RO.planifier_demontage(self.nom, " ", self.emp, "2031-07-09")                            # le motif est obligatoire
+        r = RO.planifier_demontage(self.nom, "Le client ne veut plus la reprendre : au téléphone le 20/11",
+                                   self.emp, "2031-07-09", heure="10:15", sms=1)
+        self.assertEqual(r["statut"], RO.S_DEMONTAGE)
+        self.assertTrue(r["sms"]["simule"] and "demonte le 09/07/2031" in r["sms"]["texte"])
+        # la réparation prévue est sortie du calendrier (son numéro, libéré, peut resservir à la tâche de démontage)
+        self.assertEqual(frappe.get_all(RO.DOCTYPE_TACHE, filters={RO.CHAMP_TACHE: self.nom}, pluck="name"), [r["tache"]])
+        self.assertTrue(reparation)
+        t = frappe.get_doc(RO.DOCTYPE_TACHE, r["tache"])
+        self.assertEqual((t.custom_type_dintervention, t.get(RO.CHAMP_TACHE), t.custom_choix_du_staff, str(t.starts_on)[:16], t.dans_local),
+                         (RO.TYPE_DEMONTAGE, self.nom, self.emp, "2031-07-09 10:15", "Oui"))
+        self.assertEqual((t.ends_on - t.starts_on).total_seconds(), RO.DUREE_DEMONTAGE * 60)
+        self.assertIn("garder les pièces réutilisables, jeter le reste", t.subject)
+        self.assertIn("au téléphone le 20/11", t.subject)
+        m = RO.get_data(recherche=self.nom)["machines"][0]
+        self.assertEqual((m["statut"], m["groupe"], m["tache_demontage"], str(m["date_prevue"]), m["sans_reparation"]),
+                         (RO.S_DEMONTAGE, RO.G_REPARER, t.name, "2031-07-09", 1))
+        self.assertTrue(m["motif_sortie"].startswith("Abandonnée — Le client ne veut plus"))
+        self.assertFalse(frappe.db.get_value(RO.DOCTYPE, self.nom, "sms_pret_le"))                  # pas « machine prête »
+        for refuse in (lambda: RO.rendre(self.nom, code="bon"), lambda: RO.detacher_tache(self.nom, t.name),
+                       lambda: RO.planifier_demontage(self.nom, "encore", self.emp, "2031-07-10")):
+            with self.assertRaises(frappe.ValidationError):
+                refuse()
+        # la clôture de la tâche ferme le dossier, et on ne revient pas dessus
+        t.rapport_visite = "pompe et transformateur gardés, le reste jeté"
+        t.status = "Completed"
+        t.flags.ignore_permissions = True
+        t.save()
+        m = frappe.db.get_value(RO.DOCTYPE, self.nom, ["statut", "date_rendue", "reglement_sortie", "sans_reparation", "rendue_par"], as_dict=True)
+        self.assertEqual((m.statut, m.reglement_sortie, m.sans_reparation), (RO.S_RENDUE, "machine démontée", 1))
+        self.assertTrue(m.date_rendue and m.rendue_par)
+        with self.assertRaises(frappe.ValidationError):
+            RO.annuler_sortie(self.nom)
+
+    def test_annuler_le_demontage_rend_le_dossier_a_son_etat(self):
+        import frappe
+        # pas encore réparée : redevient « sans technicien »
+        r = RO.planifier_demontage(self.nom, "Client injoignable : 3 appels sans réponse", self.emp, "2031-07-09")
+        self.assertEqual(RO.annuler_demontage(self.nom)["statut"], RO.S_RECEPTIONNEE)
+        self.assertFalse(frappe.db.exists(RO.DOCTYPE_TACHE, r["tache"]))
+        m = frappe.db.get_value(RO.DOCTYPE, self.nom, ["tache_demontage", "motif_sortie", "sans_reparation", "responsable"], as_dict=True)
+        self.assertEqual((m.tache_demontage, m.motif_sortie, m.sans_reparation, m.responsable), (None, None, 0, None))
+        # déjà réparée : la tâche de démontage supprimée au calendrier la rend « à rendre », date de réparation gardée
+        rep = frappe.get_doc(RO.DOCTYPE_TACHE, RO.affecter_tache(self.nom, self.emp, "2031-07-07", "09:00")["tache"])
+        rep.update({"dispense_photos": 1, "rapport_visite": "réparée", "status": "Completed"})
+        rep.flags.ignore_permissions = True
+        rep.save()
+        reparee = frappe.db.get_value(RO.DOCTYPE, self.nom, ["statut", "date_reparee"], as_dict=True)
+        self.assertEqual(reparee.statut, RO.S_REPAREE)
+        r = RO.planifier_demontage(self.nom, "Le client ne veut plus la reprendre : passé au magasin", self.emp, "2031-07-11")
+        self.assertEqual(frappe.db.get_value(RO.DOCTYPE, self.nom, "sans_reparation"), 0)
+        frappe.delete_doc(RO.DOCTYPE_TACHE, r["tache"], ignore_permissions=True, force=True)
+        m = frappe.db.get_value(RO.DOCTYPE, self.nom, ["statut", "date_reparee", "tache_demontage"], as_dict=True)
+        self.assertEqual((m.statut, m.date_reparee, m.tache_demontage), (RO.S_REPAREE, reparee.date_reparee, None))
+
+    def test_un_demontage_en_retard_est_rappele(self):
+        jour = getdate("2026-11-20")
+        self.assertIsNone(RO.attente({"statut": RO.S_DEMONTAGE, "date_prevue": "2026-11-20"}, jour))
+        a = RO.attente({"statut": RO.S_DEMONTAGE, "date_prevue": "2026-11-18"}, jour)
+        self.assertEqual(a, {"motif": "demontage", "jours": 2})
+        self.assertTrue(RO.a_verifier({"statut": RO.S_DEMONTAGE, "date_prevue": "2026-11-19"}, jour, 3))
+        self.assertEqual(RO.LIBELLES_ATTENTE["demontage"].format(2), "démontage prévu il y a 2 j, pas clôturé")
+        self.assertEqual(RO.groupe_de(RO.S_DEMONTAGE), RO.G_REPARER)
 
     def test_refus_type_et_statut(self):
         import frappe

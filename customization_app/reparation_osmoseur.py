@@ -40,6 +40,12 @@ Le processus, tel que demandé le 01/10/2026 :
    états (`envoyer_sms_client`) ; le champ Responsable est dispensé des permissions par employé (un dossier dont le
    technicien a quitté était refusé — « pas permis » — à qui n'a plus cet employé dans sa liste).
 
+7. MACHINE ABANDONNÉE (20/11/2026) : le client ne la reprend plus → `planifier_demontage` pose une tâche « Autre » au
+   technicien (garder les pièces réutilisables, jeter le reste) et le dossier passe « À démonter » (huitième statut,
+   groupe « À réparer »). La clôture de `tache_demontage` ferme le dossier pour de bon ; sa suppression ou
+   `annuler_demontage` le rend à l'état que disent ses tâches de réparation. Un démontage en retard est rappelé
+   comme une livraison en retard.
+
 Toute la décision est ici, côté serveur ; l'écran n'invente rien.
 """
 
@@ -67,14 +73,17 @@ S_PLANIFIEE = "Planifiée"
 S_REPAREE = "Réparée"                     # = à rendre
 S_PRETE = "Prête au magasin"              # le client vient la chercher
 S_LIVRAISON = "Livraison planifiée"       # une tâche Livraison la ramène
-S_RENDUE = "Rendue au client"
-STATUTS = [S_RECEPTION, S_RECEPTIONNEE, S_PLANIFIEE, S_REPAREE, S_PRETE, S_LIVRAISON, S_RENDUE]
+S_DEMONTAGE = "À démonter"                # le client ne la reprend plus : une tâche la démonte (pièces gardées, reste jeté)
+S_RENDUE = "Rendue au client"             # sortie : rendue, reprise sans réparation, ou démontée
+STATUTS = [S_RECEPTION, S_RECEPTIONNEE, S_PLANIFIEE, S_REPAREE, S_PRETE, S_LIVRAISON, S_DEMONTAGE, S_RENDUE]
+#: Les dossiers ouverts qui peuvent attendre quelqu'un (rappel du matin, tuile « À vérifier », file de l'atelier).
+EN_ATTENTE = (S_RECEPTIONNEE, S_REPAREE, S_PRETE, S_LIVRAISON, S_DEMONTAGE)
 EN_RESTITUTION = (S_PRETE, S_LIVRAISON)
 REPAREE = (S_REPAREE, S_PRETE)            # réparée, encore chez nous : on peut la rendre
 
 # Ce que l'écran montre (20/11/2026) : trois groupes, pas sept statuts.
 G_REPARER, G_RENDRE, G_RENDUE = "À réparer", "À rendre", "Rendue"
-GROUPES = {G_REPARER: (S_RECEPTION, S_RECEPTIONNEE, S_PLANIFIEE), G_RENDRE: (S_REPAREE, S_PRETE, S_LIVRAISON),
+GROUPES = {G_REPARER: (S_RECEPTION, S_RECEPTIONNEE, S_PLANIFIEE, S_DEMONTAGE), G_RENDRE: (S_REPAREE, S_PRETE, S_LIVRAISON),
            G_RENDUE: (S_RENDUE,)}
 RAPPEL_JOURS_DEFAUT = 3                  # une machine qui attend depuis 3 jours est rappelée
 RELANCE_JOURS_DEFAUT = 3                 # sans réponse 3 jours après le premier rappel : la seconde personne
@@ -87,7 +96,7 @@ MOTIFS_NON_FACTUREE = ("Geste commercial", "Rien à réparer", "Autre")
 #: Ce qui RÉPOND à un rappel laisse une trace sur le dossier, commençant par un de ces repères : c'est ce que la file
 #: « Machines de l'atelier » de « Mes appels par priorité » compte comme fait aujourd'hui (tableau_appels).
 REPERES_REPONSE = ("✅ Rendue", "🔓 Rendue", "↪️ Sortie sans réparation", "📍 Toujours au magasin", "📲 SMS", "📅 Technicien affecté",
-                   "💬 Suivi")
+                   "💬 Suivi", "🧩 Démontage")
 
 
 def groupe_de(statut) -> str:
@@ -107,6 +116,13 @@ SMS_A_REPRENDRE = ("Bonjour {nom}, votre appareil ({ref}) vous attend au magasin
                    "recuperer. Pour toute question : {tel}.")
 SMS_RAPPELER = "Bonjour {nom}, au sujet de votre appareil ({ref}) depose chez Aquaworld : merci de nous rappeler au {tel}."
 SMS_LIBRE = "Bonjour {nom}, au sujet de votre appareil ({ref}) : \nAquaworld {tel}"
+# Machine abandonnée (20/11/2026) : le client est prévenu du démontage, avec une dernière date pour se manifester.
+SMS_DEMONTAGE = ("Bonjour {nom}, votre appareil ({ref}) depose chez Aquaworld ne sera pas repris : il sera demonte le {date}. "
+                 "Si vous souhaitez le recuperer, appelez-nous avant cette date au {tel}.")
+MOTIFS_ABANDON = ("Le client ne veut plus la reprendre", "Client injoignable", "Autre")
+CONSIGNE_DEMONTAGE = "Démonter la machine : garder les pièces réutilisables, jeter le reste. Noter dans le rapport ce qui a été gardé."
+TYPE_DEMONTAGE = "Autre"                 # ni commande ni photos exigées à la clôture : seulement le rapport
+DUREE_DEMONTAGE = 60
 SMS_MAX = 459                            # 3 SMS enchaînés de 153 caractères : au-delà, on téléphone
 GARANTIES = ("Sous garantie", "Hors garantie")
 MOIS_HISTORIQUE = 13                     # la dernière année + 1 mois (décision 01/10/2026)
@@ -279,11 +295,12 @@ def photos_du_dossier(m, taches) -> list:
     if m.get("photo_post_it"):
         out.append({"url": m["photo_post_it"], "titre": "Avec son post-it"})
     for t in taches or []:
-        livraison = t.get("name") and t.get("name") == m.get("tache_livraison")
+        autre = ("Livraison" if t.get("name") and t.get("name") == m.get("tache_livraison")
+                 else "Démontage" if t.get("name") and t.get("name") == m.get("tache_demontage") else None)
         for url in t.get("photos_avant") or []:
-            out.append({"url": url, "titre": "Livraison" if livraison else "Réparation — pièces enlevées"})
+            out.append({"url": url, "titre": autre or "Réparation — pièces enlevées"})
         for url in t.get("photos_apres") or []:
-            out.append({"url": url, "titre": "Livraison" if livraison else "Réparation — appareil réparé"})
+            out.append({"url": url, "titre": autre or "Réparation — appareil réparé"})
     if m.get("photo_remise"):
         out.append({"url": m["photo_remise"], "titre": "À la remise"})
     return out
@@ -354,7 +371,7 @@ def regle_sortie(repare: bool, garantie, commande: bool, commande_garantie: bool
 
 def attente(m, aujourdhui) -> dict | None:
     """Depuis combien de jours ce dossier attend quelqu'un, et pour quoi. PURE. None : rien à signaler.
-    -> {"motif": "a_rendre" | "sans_technicien" | "livraison", "jours": n}.
+    -> {"motif": "a_rendre" | "sans_technicien" | "livraison" | "demontage", "jours": n}.
     « Toujours au magasin » (`toujours_la_le`) remet le compteur à zéro."""
     def jours(*dates):
         connues = [getdate(d) for d in dates if d]
@@ -370,13 +387,16 @@ def attente(m, aujourdhui) -> dict | None:
     if statut == S_LIVRAISON and m.get("date_livraison_prevue"):
         j = (aujourdhui - getdate(m["date_livraison_prevue"])).days
         return {"motif": "livraison", "jours": j} if j > 0 else None
+    if statut == S_DEMONTAGE and m.get("date_prevue"):
+        j = (aujourdhui - getdate(m["date_prevue"])).days
+        return {"motif": "demontage", "jours": j} if j > 0 else None
     return None
 
 
 def a_verifier(m, aujourdhui, rappel_jours) -> bool:
-    """Ce dossier attend depuis trop longtemps (une livraison : dès le lendemain de sa date). PURE."""
+    """Ce dossier attend depuis trop longtemps (une livraison, un démontage : dès le lendemain de sa date). PURE."""
     a = attente(m, aujourdhui)
-    return bool(a) and (a["motif"] == "livraison" or a["jours"] >= rappel_jours)
+    return bool(a) and (a["motif"] in ("livraison", "demontage") or a["jours"] >= rappel_jours)
 
 
 def a_rappeler(machines, aujourdhui, rappel_jours, relance_jours) -> dict:
@@ -393,7 +413,7 @@ def a_rappeler(machines, aujourdhui, rappel_jours, relance_jours) -> dict:
 
 
 CHAMPS_ATTENTE = ["name", "statut", "nom_client", "client", "date_reception", "date_cloture_reception", "date_reparee",
-                  "toujours_la_le", "date_livraison_prevue", "rappel_depuis"]
+                  "toujours_la_le", "date_livraison_prevue", "date_prevue", "rappel_depuis"]
 
 
 @frappe.whitelist()
@@ -422,7 +442,7 @@ def get_data(statut=None, client=None, responsable=None, recherche=None, inclure
                                       "photo_post_it", "dispense_post_it", "date_cloture_reception",
                                       "controle_ia_ok", "controle_ia_resultat", "garantie", "commande_garantie", "responsable", "nom_responsable", "date_prevue", "date_reparee",
                                       "date_rendue", "commande_client", "modified", "mode_restitution", "sms_pret_le", "tache_livraison",
-                                      "date_livraison_prevue", "rendu_a", "photo_remise", "remarque_restitution",
+                                      "tache_demontage", "date_livraison_prevue", "rendu_a", "photo_remise", "remarque_restitution",
                                       "sans_reparation", "motif_sortie", "reglement_sortie", "rendue_par",
                                       "toujours_la_le", "rappel_depuis",
                                       "commentaire_suivi", "commentaire_suivi_par", "commentaire_suivi_le"],
@@ -446,7 +466,7 @@ def get_data(statut=None, client=None, responsable=None, recherche=None, inclure
     if cint(verifier):
         machines = [m for m in machines if m["a_verifier"]]
     compteurs = dict(frappe.get_all(DOCTYPE, fields=["statut", "count(name) as n"], group_by="statut", as_list=True))
-    ouverts = frappe.get_all(DOCTYPE, filters={"statut": ["in", [S_RECEPTIONNEE, S_REPAREE, S_PRETE, S_LIVRAISON]]},
+    ouverts = frappe.get_all(DOCTYPE, filters={"statut": ["in", list(EN_ATTENTE)]},
                              fields=CHAMPS_ATTENTE)
     return {
         "machines": machines,
@@ -927,6 +947,8 @@ def detacher_tache(machine, tache):
         frappe.throw(_("{0} est clôturée : elle reste la preuve de la réparation.").format(tache))
     if tache == frappe.db.get_value(DOCTYPE, machine, "tache_livraison"):
         frappe.throw(_("{0} est la livraison de retour : utilisez « Annuler la livraison ».").format(tache))
+    if tache == frappe.db.get_value(DOCTYPE, machine, "tache_demontage"):
+        frappe.throw(_("{0} est la tâche de démontage : utilisez « Annuler le démontage ».").format(tache))
     qui = "%s, le %s" % (frappe.db.get_value("Employee", t.custom_choix_du_staff, "employee_name") or t.get("custom_employé") or "—",
                          frappe.format(getdate(t.starts_on), {"fieldtype": "Date"}) if t.starts_on else "—")
     supprimee = tache in _taches_sans_trace([t.as_dict()])
@@ -971,6 +993,8 @@ def synchroniser(machine: str) -> str:
         return courant
     if courant in EN_RESTITUTION:
         return _synchroniser_livraison(machine, courant)
+    if courant == S_DEMONTAGE:
+        return _synchroniser_demontage(machine)
     # Toute tâche liée au dossier est SA réparation, quel que soit son type : une tâche retypée « Livraison » ou
     # « Autre » puis clôturée laissait le dossier « à affecter » (OSM-2026-0012). Seule la livraison de retour
     # posée par `planifier_livraison` (`tache_livraison`) ne dit rien de l'état de la réparation.
@@ -1004,6 +1028,27 @@ def synchroniser(machine: str) -> str:
     return nouveau
 
 
+def _synchroniser_demontage(machine: str) -> str:
+    """Dossier « À démonter » : la tâche de démontage clôturée FERME le dossier (la machine n'existe plus) ;
+    supprimée ou annulée, le dossier reprend l'état que disent ses tâches de réparation."""
+    m = frappe.db.get_value(DOCTYPE, machine, ["tache_demontage", "date_reparee"], as_dict=True)
+    etat = (frappe.db.get_value(DOCTYPE_TACHE, m.tache_demontage, ["status", "custom_choix_du_staff", "starts_on"], as_dict=True)
+            if m.tache_demontage else None)
+    if etat and etat.status == "Completed":
+        nom = frappe.db.get_value("Employee", etat.custom_choix_du_staff, "employee_name") or etat.custom_choix_du_staff or ""
+        frappe.db.set_value(DOCTYPE, machine, {"statut": S_RENDUE, "date_rendue": now_datetime(), "rendue_par": nom[:140],
+                                               "reglement_sortie": "machine démontée", "rappel_depuis": None})
+        frappe.get_doc(DOCTYPE, machine).add_comment("Info", _("🧩 Machine démontée — tâche {0} clôturée par {1}").format(m.tache_demontage, nom))
+        return S_RENDUE
+    if not etat or etat.status == "Cancelled":
+        frappe.db.set_value(DOCTYPE, machine, {"statut": S_REPAREE if m.date_reparee else S_RECEPTIONNEE, "tache_demontage": None,
+                                               "motif_sortie": None, "sans_reparation": 0})
+        return synchroniser(machine)
+    frappe.db.set_value(DOCTYPE, machine, {"responsable": etat.custom_choix_du_staff, "date_prevue": getdate(etat.starts_on),
+                                           "nom_responsable": frappe.db.get_value("Employee", etat.custom_choix_du_staff, "employee_name")})
+    return S_DEMONTAGE
+
+
 def _proposer_suite(machine: str):
     """Le dossier vient de passer « à rendre » : celui qui clôture la réparation est encore devant son écran, on lui
     demande tout de suite ce que devient la machine (le client est là / elle attend / à livrer). Un événement temps
@@ -1019,12 +1064,25 @@ def _proposer_suite(machine: str):
 def on_tache_change(doc, method=None):
     """Hook on_update / after_delete de la Tache de travail : la clôture valide le dossier."""
     machine = doc.get(CHAMP_TACHE)
-    if not machine:
+    if not machine or frappe.flags.get("osm_tache_en_creation") == machine:
         return
     try:
         synchroniser(machine)
     except Exception:
         frappe.log_error(frappe.get_traceback(), "reparation_osmoseur.on_tache_change")
+
+
+def _inserer_tache_annexe(tache, machine: str):
+    """Crée la tâche de livraison ou de démontage d'un dossier SANS que sa création ne recalcule le dossier : il ne la
+    connaît pas encore comme telle, il la prendrait pour une réparation à faire (une machine réparée redevenait
+    « planifiée » et perdait sa date de réparation). Celui qui l'appelle pose l'état du dossier juste après."""
+    tache.flags.ignore_permissions = True
+    tache.flags.duree_fixee = True
+    frappe.flags.osm_tache_en_creation = machine
+    try:
+        tache.insert()
+    finally:
+        frappe.flags.osm_tache_en_creation = None
 
 
 def _synchroniser_livraison(machine: str, courant: str) -> str:
@@ -1191,9 +1249,7 @@ def planifier_livraison(machine, employee, date, heure="09:00", adresse=None, no
         "secteur": a.custom_secteur if a else None, "google_map": (a.custom_lien_google_map if a else "") or "",
         "commande_client": doc.get("commande_garantie") if garantie else None,
     })
-    tache.flags.ignore_permissions = True
-    tache.flags.duree_fixee = True
-    tache.insert()
+    _inserer_tache_annexe(tache, machine)
     fin = frappe.utils.add_to_date(frappe.utils.get_datetime(tache.starts_on), minutes=DUREE_LIVRAISON)
     frappe.db.set_value(DOCTYPE_TACHE, tache.name, "ends_on", fin, update_modified=False)
     doc.reload()
@@ -1332,6 +1388,98 @@ def sortir_sans_reparation(machine, motif, rendu_a=None, remarque=None):
     return {"statut": doc.statut}
 
 
+# ── Machine abandonnée : à démonter ──────────────────────────────────────────
+
+DEMONTABLE = (S_RECEPTIONNEE, S_PLANIFIEE, S_REPAREE, S_PRETE)
+
+
+@frappe.whitelist()
+def preparer_demontage(machine):
+    """Ce que montre le dialogue « à démonter » : le technicien et le jour proposés (la règle des réparations : le
+    premier responsable disponible, à partir de demain), les motifs, la consigne, le numéro qui recevra le SMS."""
+    from customization_app.customize_erpnext.doctype.compagne_sms.compagne_sms import traiter_numero_tel
+
+    _lecture()
+    m = frappe.db.get_value(DOCTYPE, machine, ["name", "nom_client", "client", "tel", "statut"], as_dict=True)
+    if not m:
+        frappe.throw(_("Dossier introuvable."))
+    cfg = config()
+    choix = choisir_creneau(add_days(getdate(nowdate()), 1), cfg)
+    return {"machine": m, "repare": m.statut in REPAREE, "motifs": list(MOTIFS_ABANDON), "consigne": CONSIGNE_DEMONTAGE,
+            "numeros": traiter_numero_tel(m.tel or ""),
+            "ouvertes": frappe.db.count(DOCTYPE_TACHE, {CHAMP_TACHE: machine, "status": "Open"}),
+            "proposition": ({"employee": choix["employee"], "date": str(choix["jour"]),
+                             "heure": cfg["creneaux"][min(choix["rang"], len(cfg["creneaux"]) - 1)]} if choix else None)}
+
+
+@frappe.whitelist(methods=["POST"])
+def planifier_demontage(machine, motif, employee, date, heure="09:00", consigne=None, sms=0):
+    """Le client ne reprend plus sa machine (demande du 20/11/2026) : une tâche au calendrier la fait DÉMONTER —
+    pièces réutilisables gardées, le reste jeté. Le dossier passe « À démonter » ; la clôture de la tâche le ferme,
+    son annulation le rend à son état d'avant. Le motif (qui l'a dit, quand) est obligatoire : on détruit la machine
+    d'un client. Les tâches de réparation encore ouvertes sont retirées du calendrier : elles n'auront pas lieu."""
+    from customization_app.sms_annulation import telephone_contact
+
+    _ecriture(machine)
+    doc = frappe.get_doc(DOCTYPE, machine)
+    if doc.statut not in DEMONTABLE:
+        frappe.throw(_("Un dossier « {0} » ne peut pas partir au démontage.").format(doc.statut))
+    motif = (motif or "").strip()
+    if not motif:
+        frappe.throw(_("Indiquez pourquoi le client ne reprend pas sa machine."))
+    if not frappe.db.exists("Employee", {"name": employee, "status": "Active"}):
+        frappe.throw(_("Employé inconnu ou inactif : {0}").format(employee))
+    jour, heure = getdate(date), str(heure or "09:00")[:5]
+    for t in frappe.get_all(DOCTYPE_TACHE, filters={CHAMP_TACHE: machine, "status": "Open"}, pluck="name"):
+        frappe.delete_doc(DOCTYPE_TACHE, t, ignore_permissions=True, force=True)
+    nom_emp = frappe.db.get_value("Employee", employee, "employee_name") or employee
+    tache = frappe.get_doc({
+        "doctype": DOCTYPE_TACHE, "custom_type_dintervention": TYPE_DEMONTAGE,
+        "custom_choix_du_staff": employee, "custom_employé": nom_emp,
+        "custom_client": doc.client, "nom_client": doc.nom_client, "tel": doc.tel,
+        "starts_on": "%s %s:00" % (jour, heure),
+        "titre": "🧩 Démontage atelier: %s\nClient: %s\n%s" % (doc.name, doc.nom_client or doc.client, nom_emp),
+        "subject": "Démontage de l'osmoseur %s — le client ne le reprend pas (%s)\n%s" % (
+            doc.name, motif[:200], (consigne or "").strip()[:400] or CONSIGNE_DEMONTAGE),
+        "temps": "1 heure", "dans_local": "Oui", "status": "Open", CHAMP_TACHE: doc.name,
+    })
+    _inserer_tache_annexe(tache, machine)
+    fin = frappe.utils.add_to_date(frappe.utils.get_datetime(tache.starts_on), minutes=DUREE_DEMONTAGE)
+    frappe.db.set_value(DOCTYPE_TACHE, tache.name, "ends_on", fin, update_modified=False)
+    doc.reload()
+    repare = bool(doc.date_reparee) and doc.statut in REPAREE
+    doc.statut, doc.tache_demontage = S_DEMONTAGE, tache.name
+    doc.responsable, doc.nom_responsable, doc.date_prevue = employee, nom_emp, jour
+    doc.motif_sortie = ("Abandonnée — " + motif)[:300]
+    doc.sans_reparation = 0 if repare else 1
+    doc.mode_restitution, doc.rappel_depuis = None, None
+    if not repare:
+        doc.date_reparee = None
+    doc.save()
+    doc.add_comment("Info", _("🧩 Démontage planifié — {0} — {1}, le {2} ({3})").format(
+        motif, nom_emp, frappe.format(jour, {"fieldtype": "Date"}), frappe.utils.get_fullname(frappe.session.user)))
+    out = {"statut": doc.statut, "tache": tache.name, "employe": nom_emp, "date": str(jour), "sms": None}
+    if cint(sms):
+        out["sms"] = _envoyer_sms(doc, SMS_DEMONTAGE.format(nom=doc.nom_client or doc.client, ref=doc.name, tel=telephone_contact(),
+                                                            date=frappe.utils.formatdate(jour, "dd/MM/yyyy")), "démontage", pret=False)
+    return out
+
+
+@frappe.whitelist()
+def annuler_demontage(machine):
+    """Le client la reprend finalement, ou clic par erreur : la tâche de démontage encore ouverte est supprimée et
+    le dossier reprend l'état que disent ses tâches de réparation (à affecter, ou réparée — à rendre)."""
+    _ecriture(machine)
+    doc = frappe.get_doc(DOCTYPE, machine)
+    if doc.statut != S_DEMONTAGE:
+        frappe.throw(_("Le dossier {0} n'est pas en attente de démontage ({1}).").format(machine, doc.statut))
+    if doc.tache_demontage and frappe.db.exists(DOCTYPE_TACHE, doc.tache_demontage):
+        frappe.delete_doc(DOCTYPE_TACHE, doc.tache_demontage, ignore_permissions=True, force=True)
+    statut = synchroniser(machine)             # la suppression l'a déjà fait (hook) ; sans tâche, on le fait ici
+    frappe.get_doc(DOCTYPE, machine).add_comment("Info", _("↩️ Démontage annulé par {0}").format(frappe.utils.get_fullname(frappe.session.user)))
+    return {"statut": statut}
+
+
 @frappe.whitelist()
 def annuler_sortie(machine):
     """« Rendue » cliqué par erreur : le dossier reprend l'état que disent ses tâches. Une livraison clôturée,
@@ -1342,6 +1490,8 @@ def annuler_sortie(machine):
         frappe.throw(_("Le dossier {0} n'est pas rendu ({1}).").format(machine, doc.statut))
     if doc.tache_livraison and frappe.db.get_value(DOCTYPE_TACHE, doc.tache_livraison, "status") == "Completed":
         frappe.throw(_("La livraison {0} est clôturée : la machine a bien été rendue.").format(doc.tache_livraison))
+    if doc.get("tache_demontage") and frappe.db.get_value(DOCTYPE_TACHE, doc.tache_demontage, "status") == "Completed":
+        frappe.throw(_("Le démontage {0} est clôturé : la machine n'existe plus.").format(doc.tache_demontage))
     doc.statut = S_REPAREE if doc.date_reparee and not doc.sans_reparation else S_RECEPTIONNEE
     doc.update({"date_rendue": None, "rendu_a": None, "rendue_par": None, "reglement_sortie": None, "motif_sortie": None,
                 "sans_reparation": 0, "mode_restitution": None, "toujours_la_le": now_datetime()})
@@ -1394,7 +1544,8 @@ def machines_du_client(client):
 # ── Rappel du matin ──────────────────────────────────────────────────────────
 
 LIBELLES_ATTENTE = {"a_rendre": "réparée, chez nous depuis {0} j", "sans_technicien": "reçue, sans technicien depuis {0} j",
-                    "livraison": "livraison prévue il y a {0} j, pas clôturée"}
+                    "livraison": "livraison prévue il y a {0} j, pas clôturée",
+                    "demontage": "démontage prévu il y a {0} j, pas clôturé"}
 
 
 def role_suivi(user=None, cfg=None):
@@ -1414,7 +1565,7 @@ def machines_a_regarder(user=None, tout=False) -> list | None:
     role = role_suivi(user, cfg)
     if not role:
         return None
-    machines = frappe.get_all(DOCTYPE, filters={"statut": ["in", [S_RECEPTIONNEE, S_REPAREE, S_PRETE, S_LIVRAISON]]},
+    machines = frappe.get_all(DOCTYPE, filters={"statut": ["in", list(EN_ATTENTE)]},
                               fields=CHAMPS_ATTENTE, order_by="creation")
     tri = a_rappeler(machines, getdate(nowdate()), cfg["rappel_jours"], cfg["relance_jours"])
     return tri["rappel"] if role == "suivi" or tout else tri["relance"]
@@ -1472,7 +1623,7 @@ def rappel_quotidien(envoyer=1):
     Sans destinataire réglé : rien. `envoyer=0` : seulement le tri (essai). En developer_mode rien ne part."""
     cfg = config()
     aujourdhui = getdate(nowdate())
-    machines = frappe.get_all(DOCTYPE, filters={"statut": ["in", [S_RECEPTIONNEE, S_REPAREE, S_PRETE, S_LIVRAISON]]},
+    machines = frappe.get_all(DOCTYPE, filters={"statut": ["in", list(EN_ATTENTE)]},
                               fields=CHAMPS_ATTENTE, order_by="creation")
     tri = a_rappeler(machines, aujourdhui, cfg["rappel_jours"], cfg["relance_jours"])
     out = {"rappel": [m["name"] for m in tri["rappel"]], "relance": [m["name"] for m in tri["relance"]],

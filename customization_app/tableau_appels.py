@@ -430,7 +430,7 @@ def _reste_atelier(user=None):
             return None if machines is None else len(machines)
         cfg = RO.config()
         ouverts = frappe.get_all(RO.DOCTYPE, fields=RO.CHAMPS_ATTENTE,
-                                 filters={"statut": ["in", [RO.S_RECEPTIONNEE, RO.S_REPAREE, RO.S_PRETE, RO.S_LIVRAISON]]})
+                                 filters={"statut": ["in", list(RO.EN_ATTENTE)]})
         return sum(1 for m in ouverts if RO.a_verifier(m, getdate(nowdate()), cfg["rappel_jours"]))
     except Exception:
         frappe.log_error(title="Tableau des appels : machines de l'atelier", message=frappe.get_traceback())

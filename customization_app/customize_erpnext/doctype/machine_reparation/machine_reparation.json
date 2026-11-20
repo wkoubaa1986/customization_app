@@ -37,6 +37,7 @@
   "mode_restitution",
   "sms_pret_le",
   "tache_livraison",
+  "tache_demontage",
   "date_livraison_prevue",
   "column_break_restitution",
   "rendu_a",
@@ -92,7 +93,7 @@
    "fieldname": "statut",
    "fieldtype": "Select",
    "label": "Statut",
-   "options": "Réception en cours\nRéceptionnée\nPlanifiée\nRéparée\nPrête au magasin\nLivraison planifiée\nRendue au client",
+   "options": "Réception en cours\nRéceptionnée\nPlanifiée\nRéparée\nPrête au magasin\nLivraison planifiée\nÀ démonter\nRendue au client",
    "default": "Réception en cours",
    "in_list_view": 1,
    "in_standard_filter": 1,
@@ -244,6 +245,13 @@
    "read_only": 1
   },
   {
+   "fieldname": "tache_demontage",
+   "fieldtype": "Link",
+   "label": "Tâche de démontage",
+   "options": "Tache de travail",
+   "read_only": 1
+  },
+  {
    "fieldname": "date_livraison_prevue",
    "fieldtype": "Date",
    "label": "Livraison prévue le",
@@ -346,7 +354,7 @@
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-11-21 09:00:00.000000",
+ "modified": "2026-11-21 10:00:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Machine Reparation",

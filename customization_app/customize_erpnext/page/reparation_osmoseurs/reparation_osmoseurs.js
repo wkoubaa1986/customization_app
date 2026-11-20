@@ -93,7 +93,7 @@ class ReparationOsmoseurs {
     // Trois tuiles = les trois groupes (clic = filtre), plus ce qui attend depuis trop longtemps.
     const precision = (g) => {
       const x = g.detail || {};
-      if (g.nom === "À réparer") return [x["Réceptionnée"] ? `${x["Réceptionnée"]} sans technicien` : "", x["Planifiée"] ? `${x["Planifiée"]} planifiée(s)` : "",
+      if (g.nom === "À réparer") return [x["Réceptionnée"] ? `${x["Réceptionnée"]} sans technicien` : "", x["Planifiée"] ? `${x["Planifiée"]} planifiée(s)` : "", x["À démonter"] ? `${x["À démonter"]} à démonter` : "",
                                           x["Réception en cours"] ? `${x["Réception en cours"]} réception(s) à finir` : ""].filter(Boolean).join(" · ");
       if (g.nom === "À rendre") return [(x["Réparée"] || 0) + (x["Prête au magasin"] || 0) ? `${(x["Réparée"] || 0) + (x["Prête au magasin"] || 0)} chez nous` : "",
                                          x["Livraison planifiée"] ? `${x["Livraison planifiée"]} en livraison` : ""].filter(Boolean).join(" · ");
@@ -106,7 +106,7 @@ class ReparationOsmoseurs {
           <div class="ro-sub">${esc(precision(g)) || "&nbsp;"}</div>
         </div>`).join("") + `
         <div class="ro-kpi ${d.a_verifier ? "alerte" : ""} ${this.verifier ? "actif" : ""}" data-verifier="1"
-             title="Réparées et pas rendues, reçues sans technicien, livraisons pas clôturées — celles du rappel du matin">
+             title="Réparées et pas rendues, reçues sans technicien, livraisons ou démontages pas clôturés — celles du rappel du matin">
           <div class="v">⏳ ${d.a_verifier || 0}</div><div class="l">À vérifier</div>
           <div class="ro-sub">en attente depuis ${d.rappel_jours} j ou plus${d.suivi ? " · rappelées à " + esc(d.suivi) : ""}</div>
         </div>`
@@ -230,7 +230,7 @@ class ReparationOsmoseurs {
       const cls = t.status === "Completed" ? "ok" : t.status === "Cancelled" ? "ko" : "open";
       const st = t.status === "Completed" ? "clôturée" : t.status === "Cancelled" ? "annulée" : "ouverte";
       return `<a class="ro-tache" href="/app/tache-de-travail/${encodeURIComponent(t.name)}" target="_blank"
-                 title="${esc(t.rapport || "")}">${t.name === m.tache_livraison ? "🚚" : "🛠️"} ${esc(ro_date(t.starts_on))} · ${esc(t.employe || "")}
+                 title="${esc(t.rapport || "")}">${t.name === m.tache_livraison ? "🚚" : t.name === m.tache_demontage ? "🧩" : "🛠️"} ${esc(ro_date(t.starts_on))} · ${esc(t.employe || "")}
                  · <span class="st ${cls}">${st}</span></a>${t.status === "Cancelled" && t.rapport ? `<div class="ro-sub" style="max-width:240px">« ${esc(strip_html(t.rapport).trim().slice(0, 90))} »</div>` : ""}${t.status === "Open" && (m.statut === "Planifiée" || m.statut === "Réceptionnée")
                  ? ` <span class="ro-sub" style="cursor:pointer" title="${t.vierge ? "Retirer l’affectation : la tâche, vide, est supprimée du calendrier" : "Retirer l’affectation : la tâche reste au calendrier, détachée du dossier"}" data-detacher="${esc(t.name)}" data-machine="${esc(m.name)}" data-vierge="${t.vierge ? 1 : 0}" data-qui="${esc((t.employe || "") + " du " + ro_date(t.starts_on))}">✕ retirer</span>` : ""}`;
     }).join("") || `<span class="ro-sub">—</span>`;
@@ -252,8 +252,14 @@ class ReparationOsmoseurs {
     } else if (m.statut === "Livraison planifiée") {
       detail = `<div class="${m.a_verifier ? "ro-du" : ""}">🚚 livraison le ${esc(ro_date(m.date_livraison_prevue))}${a ? ` — pas clôturée (${a.jours} j)` : ""}</div>
                 <div class="ro-sub">sa clôture ferme le dossier</div>`;
+    } else if (m.statut === "À démonter") {
+      // Le client ne la reprend plus : elle attend d'être démontée par le technicien de la tâche.
+      detail = `<div class="${m.a_verifier ? "ro-du" : ""}">le client ne la reprend plus${a ? ` — démontage pas clôturé (${a.jours} j)` : ""}</div>
+                <div class="ro-sub">à démonter par ${esc(m.nom_responsable || "le technicien")} le ${esc(ro_date(m.date_prevue))}</div>
+                ${m.motif_sortie ? `<div class="ro-sub">${esc(m.motif_sortie)}</div>` : ""}
+                <div class="ro-sub">la clôture de sa tâche ferme le dossier</div>`;
     } else if (m.statut === "Rendue au client") {
-      detail = `<div>${m.sans_reparation ? "↪️ sans réparation" : "✔"} le ${esc(ro_datetime(m.date_rendue))}</div>
+      detail = `<div>${m.tache_demontage ? "🧩 démontée" : m.sans_reparation ? "↪️ sans réparation" : "✔"} le ${esc(ro_datetime(m.date_rendue))}</div>
                 <div class="ro-sub">${m.rendu_a ? "à " + esc(m.rendu_a) : ""}${m.rendue_par ? " · par " + esc(m.rendue_par) : ""}${m.mode_restitution === "Livraison" ? " · livraison" : ""}</div>
                 ${m.motif_sortie ? `<div class="ro-sub">motif : ${esc(m.motif_sortie)}</div>` : ""}`;
     }
@@ -285,7 +291,7 @@ class ReparationOsmoseurs {
       <td>${m.garantie === "Sous garantie" ? `<div><span class="ro-badge b-garantie">🆓 Sous garantie</span>${m.commande_garantie ? ` <a class="ro-sub" href="/app/sales-order/${encodeURIComponent(m.commande_garantie)}" target="_blank">${esc(m.commande_garantie)}</a>` : ""}</div>`
              : m.garantie ? `<div class="ro-sub">Hors garantie</div>` : `<div class="ro-sub" style="color:#c2410c">garantie non décidée</div>`}
           <div class="ro-note">${esc(m.note_reception || "")}</div></td>
-      <td class="ro-col-etat"><span class="ro-badge ${RO_GROUPES[m.groupe] || ""}">${esc(m.groupe)}</span>${detail}</td>
+      <td class="ro-col-etat"><span class="ro-badge ${RO_GROUPES[m.groupe] || ""}">${m.statut === "À démonter" ? "🧩 À démonter" : esc(m.groupe)}</span>${detail}</td>
       <td class="ro-col-suivi">
         <textarea class="ro-suivi form-control" rows="2" maxlength="1000" data-machine="${esc(m.name)}"
                   placeholder="Où en est-on ?" title="Commentaire de suivi : client appelé, viendra samedi… Il s’enregistre tout seul en quittant la case.">${esc(m.commentaire_suivi || "")}</textarea>
@@ -315,6 +321,9 @@ class ReparationOsmoseurs {
       a.push(["rouvrir", "↩️ Rouvrir la réception"]);
     }
     if (s === "Livraison planifiée") a.push(["annuler-restitution", "↩️ Annuler la livraison"]);
+    // Machine abandonnée : une tâche la fait démonter (pièces gardées, le reste jeté) ; sa clôture ferme le dossier.
+    if (s === "Réceptionnée" || s === "Planifiée" || s === "Réparée" || s === "Prête au magasin") a.push(["demonter", "🧩 Le client ne la reprend plus : machine à démonter (pièces gardées, le reste jeté)"]);
+    if (s === "À démonter") a.push(["annuler-demontage", "↩️ Annuler le démontage (le client la reprend finalement)"]);
     if (s === "Rendue au client") a.push(["annuler-sortie", "↩️ Annuler la sortie (clic par erreur)"]);
     a.push(["ouvrir", "📄 Ouvrir la fiche du dossier"]);
     return a;
@@ -350,6 +359,14 @@ class ReparationOsmoseurs {
       return this.charger();
     }
     if (action === "sms") return this.dialogue_sms(machine);
+    if (action === "demonter") return this.dialogue_demontage(machine);
+    if (action === "annuler-demontage") {
+      frappe.confirm(`Annuler le démontage de ${machine} ? La tâche de démontage est supprimée du calendrier et le dossier redevient ouvert.`, async () => {
+        await frappe.call({ method: RO_API + ".annuler_demontage", args: { machine } });
+        this.charger();
+      });
+      return;
+    }
     if (action === "annuler-restitution") {
       frappe.confirm(`Annuler la livraison de ${machine} ? La tâche de livraison est supprimée et la machine reste à rendre.`, async () => {
         await frappe.call({ method: RO_API + ".annuler_restitution", args: { machine } });
@@ -538,6 +555,7 @@ class ReparationOsmoseurs {
       <div class="et"><span class="ro-badge b-rendre">⏳ À vérifier</span><b>Rappel du matin</b>
         <ul><li>Une machine réparée et pas rendue, reçue sans technicien, ou dont la livraison n’est pas clôturée est rappelée chaque matin à la personne du réglage, puis relancée à une seconde personne.</li>
         <li>La réponse se donne sur la ligne : « ✅ Rendre au client », « 📍 Toujours au magasin » (le rappel repart de zéro), « 📅 Affecter » ou « ↪️ Sortie sans réparation ».</li></ul></div>
+      <p class="ro-sub"><b>Machine abandonnée</b> : le client ne la reprend plus → « Autres actions », « machine à démonter ». Une tâche est posée au technicien (garder les pièces réutilisables, jeter le reste) ; sa clôture ferme le dossier, « Annuler le démontage » le rouvre tant qu’elle n’est pas faite.</p>
       <p class="ro-sub"><b>Erreurs courantes</b> : réception clôturée trop tôt → « Rouvrir la réception » · technicien affecté par erreur → le ✕ à côté de sa tâche (vide, elle est supprimée du calendrier) · sortie cliquée par erreur → « Annuler la sortie » · un mot au client → « Autres actions », « SMS au client » · code superviseur : réglage « Config Cloture Tache ».</p>
     </div>`);
     d.show();
@@ -627,6 +645,49 @@ class ReparationOsmoseurs {
     $texte().attr("rows", 5).css("height", "auto").on("input", compter);
     d.show();
     poser(0);
+  }
+
+  // ── 🧩 Machine abandonnée : une tâche la fait démonter ───────────────────────
+  async dialogue_demontage(machine) {
+    const esc = frappe.utils.escape_html;
+    const p = (await frappe.call({ method: RO_API + ".preparer_demontage", args: { machine } })).message;
+    const m = p.machine, prop = p.proposition || {};
+    const d = new frappe.ui.Dialog({
+      title: `🧩 Machine à démonter — ${machine}`,
+      fields: [
+        { fieldtype: "HTML", fieldname: "haut" },
+        { fieldtype: "Select", fieldname: "motif", label: "Pourquoi le client ne la reprend pas", reqd: 1, options: [""].concat(p.motifs) },
+        { fieldtype: "Data", fieldname: "precision", label: "Qui l’a dit, et quand", reqd: 1,
+          description: "Exemple : « M. Attia au téléphone le 20/11, il n’en veut plus ». Gardé sur le dossier." },
+        { fieldtype: "Section Break", label: "Tâche de démontage" },
+        { fieldtype: "Link", fieldname: "employee", label: "Technicien", options: "Employee", reqd: 1,
+          default: prop.employee, get_query: () => ({ filters: { status: "Active" } }) },
+        { fieldtype: "Column Break" },
+        { fieldtype: "Date", fieldname: "date", label: "Date", reqd: 1, default: prop.date || frappe.datetime.add_days(frappe.datetime.get_today(), 1) },
+        { fieldtype: "Time", fieldname: "heure", label: "Heure", default: (prop.heure || "09:00") + ":00" },
+        { fieldtype: "Section Break" },
+        { fieldtype: "Small Text", fieldname: "consigne", label: "Consigne pour le technicien", default: p.consigne },
+        { fieldtype: "Check", fieldname: "sms", default: p.numeros.length ? 1 : 0, read_only: p.numeros.length ? 0 : 1,
+          label: p.numeros.length ? `Prévenir le client par SMS (« votre appareil sera démonté le … : appelez-nous avant si vous voulez le récupérer ») — ${p.numeros.join(", ")}`
+                                  : "Pas de SMS : aucun numéro mobile valide sur le dossier" },
+      ],
+      primary_action_label: "Créer la tâche de démontage",
+      primary_action: async (v) => {
+        try {
+          const x = (await frappe.call({ method: RO_API + ".planifier_demontage", type: "POST", freeze: true, args: {
+            machine, motif: v.motif + " : " + v.precision, employee: v.employee, date: v.date,
+            heure: String(v.heure || "09:00").slice(0, 5), consigne: v.consigne || null, sms: v.sms ? 1 : 0 } })).message || {};
+          d.hide();
+          const sms = x.sms ? ` · ${x.sms.simule ? "SMS SIMULÉ (dev)" : "SMS envoyé"} → ${x.sms.numeros.join(", ")}` : "";
+          frappe.show_alert({ message: `${machine} à démonter — tâche ${x.tache} pour ${x.employe}, le ${frappe.datetime.str_to_user(x.date)}${sms}`, indicator: "green" }, 8);
+          this.charger();
+        } catch (e) { /* message déjà affiché par frappe.call */ }
+      },
+    });
+    d.fields_dict.haut.$wrapper.html(`
+      <div style="margin-bottom:6px">Client : <b>${esc(m.nom_client || m.client)}</b> · ${esc(m.tel || "")}${p.repare ? " · machine <b>déjà réparée</b>" : ""}</div>
+      <div class="ro-sub" style="margin-bottom:8px">Une tâche est posée au technicien : il garde les pièces réutilisables et jette le reste. La clôture de sa tâche ferme le dossier — on ne revient pas dessus.${p.ouvertes ? ` Les ${p.ouvertes} tâche(s) de réparation encore ouverte(s) sont retirées du calendrier.` : ""}</div>`);
+    d.show();
   }
 
   // ── Tâche à la main (technicien + date choisis) ─────────────────────────────
