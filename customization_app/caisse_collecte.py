@@ -644,6 +644,114 @@ def _etat(fin=None):
             "caisses": caisses, "a_regler": a_regler, "compteurs": compteurs}
 
 
+# ── Rappel à l'écran : « comptez vos caisses non comptées » (20/11/2026) ─────
+#
+# Demande : « je vois des utilisateurs qui n'ont pas compté leur caisse, je veux un message intrusif dans leur
+# session disant de compter les caisses non comptées ». La règle est celle de la grille « état des caisses »
+# (❌ Pas comptée) : un jour PASSÉ, depuis la date de départ de la caisse, où elle a eu la moindre action et
+# aucun comptage. Aujourd'hui n'est pas un retard. Chacun n'est rappelé que pour SA caisse. Ne sont jamais
+# rappelés : les partenaires et les comptes techniques (rien à compter — la grille les écarte déjà), ni les
+# sous-traitants (ils comptent et remettent par période, quand on les voit : leurs jours passés ne sont pas des
+# oublis).
+#
+# POURQUOI UNE TÂCHE DE FOND : la grille relit le rapport de caisse de CHAQUE jour depuis la date de départ
+# (0,7 s par jour, 34 s pour 48 jours quand rien n'est en mémoire). L'alerte est demandée par chaque session, à
+# chaque ouverture : la calculer là occuperait un serveur pendant une demi-minute par personne, tous ensemble le
+# matin. Une tâche (`calculer_rappels`, toutes les heures) fait donc le calcul UNE fois pour toutes les caisses —
+# la grille elle-même, vue par la direction — et le range en mémoire ; la session ne fait que lire. Un comptage
+# qui naît retire son jour tout de suite, sans recalcul.
+
+CLE_RAPPELS = "caisse_non_comptees_tout"
+CLE_VERROU_RAPPELS = "caisse_non_comptees_calcul"
+RAPPELS_PERIMES_H = 3            # au-delà, la session redemande un calcul (et sert l'ancien en attendant)
+
+
+def non_comptees_par_caisse(a_regler, exclues=()) -> dict:
+    """{caisse: [{date, resume}]} depuis les lignes « à régler » de la grille : seulement les jours PASSÉS jamais
+    comptés, les plus anciens d'abord, sans les caisses écartées. Fonction pure."""
+    par = {}
+    for x in sorted(a_regler or [], key=lambda x: x["date"]):
+        if x.get("etat") == ETAT_NON_COMPTEE and x.get("caisse") not in exclues:
+            par.setdefault(x["caisse"], []).append({"date": x["date"], "resume": x.get("resume") or ""})
+    return par
+
+
+def calculer_rappels():
+    """Tâche de fond (toutes les heures) : les jours non comptés de TOUTES les caisses, d'après la grille « état des
+    caisses » telle que la direction la voit. Rangé en mémoire pour `mes_caisses_non_comptees`."""
+    # La grille ENTIÈRE, et telle que la direction la voit : certaines pièces (Economiq) ne sortent du rapport que
+    # pour elle, et font pourtant un jour « non compté » (constaté : Wassim Koubaa, 16/11/2026, une traite). La
+    # tâche tourne donc au nom d'un membre actif de la direction ; à défaut, Administrator.
+    avant = frappe.session.user
+    direction = next((u for u in CL.DIRECTION if frappe.db.get_value("User", u, "enabled")), None)
+    frappe.set_user(direction or "Administrator")
+    try:
+        etat = _etat()
+    finally:
+        frappe.set_user(avant)
+    par = non_comptees_par_caisse(etat.get("a_regler"), caisses_sous_traitants())
+    frappe.cache().set_value(CLE_RAPPELS, {"le": str(now_datetime()), "jour": nowdate(), "caisses": par},
+                             expires_in_sec=26 * 3600)
+    frappe.cache().delete_value(CLE_VERROU_RAPPELS)
+    return {"caisses": len(par), "jours": sum(len(v) for v in par.values())}
+
+
+def _demander_calcul():
+    """Lance le calcul en tâche de fond, une seule fois à la fois. Jamais dans la requête de l'utilisateur."""
+    cache = frappe.cache()
+    if cache.get_value(CLE_VERROU_RAPPELS):
+        return
+    cache.set_value(CLE_VERROU_RAPPELS, 1, expires_in_sec=600)
+    try:
+        frappe.enqueue("customization_app.caisse_collecte.calculer_rappels", queue="long",
+                       job_id="caisse_rappels_non_comptees", deduplicate=True)
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "caisse_collecte : rappel des caisses non comptées")
+
+
+def rappels_perimes(etat, maintenant, jour) -> bool:
+    """Faut-il redemander un calcul ? Rien en mémoire, calcul d'un autre jour, ou trop vieux. Fonction pure."""
+    if not etat or etat.get("jour") != str(jour):
+        return True
+    return (frappe.utils.get_datetime(maintenant) - frappe.utils.get_datetime(etat["le"])).total_seconds() > RAPPELS_PERIMES_H * 3600
+
+
+@frappe.whitelist()
+def mes_caisses_non_comptees():
+    """Pour l'alerte qui s'impose à l'écran : les jours où MA caisse n'a pas été comptée.
+    -> {caisse, n, jours: [{date, resume}]} ; null pour qui n'a pas de caisse à compter (l'écran ne redemande plus).
+    Ne calcule rien : lit ce que la tâche de fond a rangé (et la relance si c'est vide ou trop vieux)."""
+    user = frappe.session.user
+    if user in ("Guest", "Administrator") or not set(frappe.get_roles(user)) & set(CL.ROLES):
+        return None
+    caisse = _caisse_de(user)
+    if not caisse or caisse in caisses_partenaires() | CAISSES_TECHNIQUES | caisses_sous_traitants():
+        return None
+    etat = frappe.cache().get_value(CLE_RAPPELS)
+    if rappels_perimes(etat, now_datetime(), nowdate()):
+        _demander_calcul()
+    jours = ((etat or {}).get("caisses") or {}).get(caisse) or []
+    return {"caisse": caisse, "n": len(jours), "jours": jours}
+
+
+def oublier_rappels(doc=None, method=None):
+    """Hook de la Clôture Caisse. Un comptage vient de NAÎTRE : son jour sort tout de suite du rappel de sa caisse,
+    sans recalcul. Un comptage SUPPRIMÉ : le jour redevient peut-être « non compté » — on redemande le calcul."""
+    try:
+        cache = frappe.cache()
+        if method == "after_insert" and doc is not None:
+            etat = cache.get_value(CLE_RAPPELS)
+            jours = ((etat or {}).get("caisses") or {}).get(doc.caisse)
+            if jours:
+                etat["caisses"][doc.caisse] = [j for j in jours if j["date"] != str(getdate(doc.date_cloture))]
+                cache.set_value(CLE_RAPPELS, etat, expires_in_sec=26 * 3600)
+        else:
+            cache.delete_value(CLE_VERROU_RAPPELS)
+            _demander_calcul()
+    except Exception:
+        pass
+
+
 @frappe.whitelist()
 def etat_caisses(date=None):
     """La grille « état des caisses » : chaque caisse, chaque jour depuis la date de départ, jusqu'à

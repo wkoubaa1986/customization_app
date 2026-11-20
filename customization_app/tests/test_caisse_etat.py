@@ -272,3 +272,34 @@ class TestPublication(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestRappelNonComptees(unittest.TestCase):
+    """Le rappel « comptez vos caisses non comptées » (20/11/2026) : les mêmes jours que le ❌ de la grille."""
+
+    A_REGLER = [
+        {"caisse": "Jamel", "date": "2026-11-16", "etat": "non_comptee", "resume": "100,000 DT Espèces"},
+        {"caisse": "Jamel", "date": "2026-11-12", "etat": "non_comptee", "resume": "8 commande(s)"},
+        {"caisse": "Jamel", "date": "2026-11-20", "etat": "a_compter", "resume": "aujourd'hui"},       # pas un retard
+        {"caisse": "Sadok", "date": "2026-11-17", "etat": "a_collecter", "resume": "comptée, à collecter"},
+        {"caisse": "Sadok", "date": "2026-11-16", "etat": "non_comptee", "resume": "4 commande(s)"},
+        {"caisse": "Sous-traitant X", "date": "2026-11-10", "etat": "non_comptee", "resume": "2 commande(s)"},
+    ]
+
+    def test_seuls_les_jours_passes_jamais_comptes_les_plus_anciens_d_abord(self):
+        par = CC.non_comptees_par_caisse(self.A_REGLER, exclues={"Sous-traitant X"})
+        self.assertEqual(par, {"Jamel": [{"date": "2026-11-12", "resume": "8 commande(s)"},
+                                         {"date": "2026-11-16", "resume": "100,000 DT Espèces"}],
+                               "Sadok": [{"date": "2026-11-16", "resume": "4 commande(s)"}]})
+
+    def test_un_sous_traitant_compte_par_periode_il_n_est_pas_rappele(self):
+        self.assertIn("Sous-traitant X", CC.non_comptees_par_caisse(self.A_REGLER))
+        self.assertNotIn("Sous-traitant X", CC.non_comptees_par_caisse(self.A_REGLER, exclues={"Sous-traitant X"}))
+        self.assertEqual(CC.non_comptees_par_caisse([]), {})
+
+    def test_quand_redemander_le_calcul(self):
+        frais = {"le": "2026-11-20 09:05:00", "jour": "2026-11-20", "caisses": {}}
+        self.assertFalse(CC.rappels_perimes(frais, "2026-11-20 10:00:00", "2026-11-20"))
+        self.assertTrue(CC.rappels_perimes(frais, "2026-11-20 12:30:00", "2026-11-20"))      # plus de 3 heures
+        self.assertTrue(CC.rappels_perimes(frais, "2026-11-21 00:10:00", "2026-11-21"))      # un autre jour
+        self.assertTrue(CC.rappels_perimes(None, "2026-11-20 10:00:00", "2026-11-20"))       # rien en mémoire

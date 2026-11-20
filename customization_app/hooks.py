@@ -217,6 +217,9 @@ doc_events = {
     # collecte du responsable (caisse_collecte), une passation que par sa réception — jamais depuis le formulaire.
     "Cloture Caisse": {
         "before_submit": "customization_app.caisse_collecte.cloture_caisse_before_submit",
+        # Le rappel « caisses non comptées » de chacun se recalcule dès qu'un comptage naît ou disparaît.
+        "after_insert": "customization_app.caisse_collecte.oublier_rappels",
+        "on_trash": "customization_app.caisse_collecte.oublier_rappels",
     },
     "Passation Caisse": {
         "before_submit": "customization_app.caisse_collecte.passation_caisse_before_submit",
@@ -618,6 +621,9 @@ app_include_js = [_js("customer_quick_entry.js"),
                   # … et le rappel qui s'impose à l'écran de la personne du suivi des restitutions : fenêtre devant
                   # tout + pastille permanente, tant que des machines de l'atelier attendent une réponse.
                   _js("reparation_osmoseur_rappel.js"),
+                  # Caisse : « comptez vos caisses non comptées » — fenêtre devant tout + pastille rouge, pour chacun,
+                  # sur SA caisse, tant qu'un jour passé reste sans comptage (caisse_collecte.mes_caisses_non_comptees).
+                  _js("caisse_rappel.js"),
                   _js("suivi_activite_onglet.js"),  # l'onglet « Suivi d'activité » ouvre l'outil
                   _js("situation_mensuelle_clic.js"),  # graphes Situation Mensuelle et Pertes et Profits → page de détail
                   _js("bl_magasin_alerte.js"),  # bandeau rouge du magasinier principal : BL à approuver / à vérifier
@@ -828,6 +834,10 @@ scheduler_events = {
         "0 20 * * *": [
             "customization_app.rappel_rdv.cron_du_soir",
         ],
+
+        # Caisse, toutes les heures : les jours non comptés de chaque caisse, rangés en mémoire pour le rappel qui
+        # s'impose à l'écran de chacun (le calcul relit le rapport de chaque jour : jamais dans une session).
+        "5 * * * *": ["customization_app.caisse_collecte.calculer_rappels"],
 
         # Réparation osmoseurs, lundi–samedi à 08:30 : les machines qui attendent depuis trop longtemps (réparées et
         # pas rendues, reçues sans technicien, livraisons pas clôturées) sont rappelées à la personne du réglage.

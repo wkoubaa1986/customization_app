@@ -7,7 +7,12 @@ frappe.pages["caisse-journaliere"].on_page_load = function (wrapper) {
   $(wrapper).find(".layout-main-section").html(
     frappe.render_template("caisse_journaliere", {})
   );
-  new RapportCaisseJournaliere(wrapper);
+  wrapper.rcj = new RapportCaisseJournaliere(wrapper);
+};
+
+// Le rappel « caisses non comptées » (public/js/caisse_rappel.js) ouvre la page sur le jour à compter.
+frappe.pages["caisse-journaliere"].on_page_show = function (wrapper) {
+  if (wrapper.rcj) wrapper.rcj._depuis_rappel();
 };
 
 const RCJ_MODE = {
@@ -75,7 +80,17 @@ class RapportCaisseJournaliere {
     this._all_collapsed = false;
     this._init_defaults();
     this._bind();
-    this._fetch();
+    if (!this._depuis_rappel()) this._fetch();
+  }
+
+  /** Venu du rappel « caisses non comptées » : la page se place sur CETTE caisse, CE jour, et ouvre le comptage.
+   *  -> true si la demande a été prise (elle charge la page elle-même). */
+  _depuis_rappel() {
+    const o = frappe.route_options || {};
+    if (!o.compter_caisse || !o.compter_date) return false;
+    frappe.route_options = null;
+    rcj_aller_caisse(this, o.compter_caisse, o.compter_date, () => rcj_cloture(this));
+    return true;
   }
 
   _init_defaults() {
