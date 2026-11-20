@@ -265,13 +265,22 @@ class ReparationOsmoseurs {
     }
     detail += this.reglement(m);
 
-    const btn = (action, libelle, cls = "btn-default") =>
-      `<button class="btn btn-xs ${cls}" data-action="${action}" data-machine="${esc(m.name)}">${libelle}</button>`;
-    // UN bouton principal : ce que le dossier attend. Le reste est derrière « Autres actions ».
+    const btn = (action, libelle, cls = "btn-default", titre = "") =>
+      `<button class="btn btn-xs ${cls}" data-action="${action}" data-machine="${esc(m.name)}"${titre ? ` title="${esc(titre)}"` : ""}>${libelle}</button>`;
+    // UN bouton principal : ce que le dossier attend, et juste dessous l'autre issue courante du même état (sa
+    // demande du 20/11/2026) : livrer chez le client au lieu de le voir venir ; débarrasser la machine d'un client
+    // qui ne répond plus au lieu de la faire réparer. Le reste est derrière « Autres actions ».
     const boutons = [];
     if (m.statut === "Réception en cours") boutons.push(btn("photos", "📷 Photos et clôture", "btn-primary"));
-    if (m.statut === "Réceptionnée") boutons.push(btn("planifier", "📅 Affecter un technicien", "btn-primary"));
-    if (m.statut === "Réparée" || m.statut === "Prête au magasin") boutons.push(btn("rendre", "✅ Rendre au client", "btn-primary"));
+    if (m.statut === "Réceptionnée") {
+      boutons.push(btn("planifier", "📅 Affecter un technicien", "btn-primary"));
+      boutons.push(btn("demonter-injoignable", "🧩 Client ne répond plus", "btn-default",
+        "Le client ne répond plus : débarrasser la machine — une tâche « Démontage et débarras » est posée à un technicien (pièces gardées, le reste jeté)"));
+    }
+    if (m.statut === "Réparée" || m.statut === "Prête au magasin") {
+      boutons.push(btn("rendre", "✅ Rendre au client", "btn-primary"));
+      boutons.push(btn("livraison", "🚚 Livraison chez le client", "btn-default", "Planifier une livraison chez le client : une tâche Livraison est posée, sa clôture ferme le dossier"));
+    }
     // La réponse au rappel, en un clic, quand le dossier attend depuis trop longtemps.
     if (m.a_verifier && m.statut === "Réceptionnée") boutons.push(btn("sans-reparation", "↪️ Sortie sans réparation"));
     if (m.a_verifier && (m.statut === "Réparée" || m.statut === "Prête au magasin" || m.statut === "Réceptionnée")) boutons.push(btn("toujours-la", "📍 Toujours au magasin"));
@@ -310,7 +319,6 @@ class ReparationOsmoseurs {
       ? (m.sms_pret_le ? "📲 Renvoyer un SMS au client (« votre appareil est prêt », ou votre texte)" : "📲 Prévenir le client par SMS (« votre appareil est prêt », ou votre texte)")
       : "📲 Envoyer un SMS au client (votre texte)"]);
     if (s === "Réparée" || s === "Prête au magasin") {
-      a.push(["livraison", "🚚 Planifier une livraison chez le client"]);
       a.push(["toujours-la", "📍 Toujours au magasin (le rappel repart de zéro)"]);
       a.push(["tache", "➕ Nouvelle tâche de réparation (à reprendre)"]);
     }
@@ -322,7 +330,8 @@ class ReparationOsmoseurs {
     }
     if (s === "Livraison planifiée") a.push(["annuler-restitution", "↩️ Annuler la livraison"]);
     // Machine abandonnée : une tâche la fait démonter (pièces gardées, le reste jeté) ; sa clôture ferme le dossier.
-    if (s === "Réceptionnée" || s === "Planifiée" || s === "Réparée" || s === "Prête au magasin") a.push(["demonter", "🧩 Le client ne la reprend plus : machine à démonter (pièces gardées, le reste jeté)"]);
+    // (« Réceptionnée » a son bouton sur la ligne, « 🧩 Client ne répond plus ».)
+    if (s === "Planifiée" || s === "Réparée" || s === "Prête au magasin") a.push(["demonter", "🧩 Le client ne la reprend plus : machine à démonter (pièces gardées, le reste jeté)"]);
     if (s === "À démonter") a.push(["annuler-demontage", "↩️ Annuler le démontage (le client la reprend finalement)"]);
     if (s === "Rendue au client") a.push(["annuler-sortie", "↩️ Annuler la sortie (clic par erreur)"]);
     a.push(["ouvrir", "📄 Ouvrir la fiche du dossier"]);
@@ -360,6 +369,7 @@ class ReparationOsmoseurs {
     }
     if (action === "sms") return this.dialogue_sms(machine);
     if (action === "demonter") return this.dialogue_demontage(machine);
+    if (action === "demonter-injoignable") return this.dialogue_demontage(machine, "Client injoignable");
     if (action === "annuler-demontage") {
       frappe.confirm(`Annuler le démontage de ${machine} ? La tâche de démontage est supprimée du calendrier et le dossier redevient ouvert.`, async () => {
         await frappe.call({ method: RO_API + ".annuler_demontage", args: { machine } });
@@ -549,13 +559,13 @@ class ReparationOsmoseurs {
         <li><b>Sous garantie</b> : rien à facturer si la commande d’origine de l’appareil est indiquée ; sinon le code superviseur.</li>
         <li><b>Hors garantie sans aucune vente</b> : un motif et le code superviseur.</li>
         <li>Le même bouton apparaît en bandeau sur la commande et le BL du client.</li>
-        <li>Livraison : la clôture de la tâche Livraison ferme le dossier toute seule.</li></ul></div>
+        <li>« 🚚 Livraison chez le client », juste sous « Rendre au client » : une tâche Livraison est posée, sa clôture ferme le dossier toute seule.</li></ul></div>
       <div class="et"><span class="ro-badge b-rendue">3 · Rendue</span><b>Terminé</b>
         <ul><li>Date, personne, règlement constaté et photos restent sur le dossier. La tuile « Rendue » ou la case « Afficher les machines rendues » les montre.</li></ul></div>
       <div class="et"><span class="ro-badge b-rendre">⏳ À vérifier</span><b>Rappel du matin</b>
         <ul><li>Une machine réparée et pas rendue, reçue sans technicien, ou dont la livraison n’est pas clôturée est rappelée chaque matin à la personne du réglage, puis relancée à une seconde personne.</li>
         <li>La réponse se donne sur la ligne : « ✅ Rendre au client », « 📍 Toujours au magasin » (le rappel repart de zéro), « 📅 Affecter » ou « ↪️ Sortie sans réparation ».</li></ul></div>
-      <p class="ro-sub"><b>Machine abandonnée</b> : le client ne la reprend plus → « Autres actions », « machine à démonter ». Une tâche « Démontage et débarras » est posée au technicien (garder les pièces réutilisables, débarrasser le reste) ; sa clôture ferme le dossier, « Annuler le démontage » le rouvre tant qu’elle n’est pas faite.</p>
+      <p class="ro-sub"><b>Machine abandonnée</b> : le client ne répond plus ou ne la reprend plus → « 🧩 Client ne répond plus » sous « Affecter un technicien » (dans les autres états : « Autres actions », « machine à démonter »). Une tâche « Démontage et débarras » est posée au technicien (garder les pièces réutilisables, débarrasser le reste) ; sa clôture ferme le dossier, « Annuler le démontage » le rouvre tant qu’elle n’est pas faite.</p>
       <p class="ro-sub"><b>Erreurs courantes</b> : réception clôturée trop tôt → « Rouvrir la réception » · technicien affecté par erreur → le ✕ à côté de sa tâche (vide, elle est supprimée du calendrier) · sortie cliquée par erreur → « Annuler la sortie » · un mot au client → « Autres actions », « SMS au client » · code superviseur : réglage « Config Cloture Tache ».</p>
     </div>`);
     d.show();
@@ -648,15 +658,18 @@ class ReparationOsmoseurs {
   }
 
   // ── 🧩 Machine abandonnée : une tâche la fait démonter ───────────────────────
-  async dialogue_demontage(machine) {
+  // `motif` : le motif coché d'avance (le bouton « 🧩 Client ne répond plus » de la ligne).
+  async dialogue_demontage(machine, motif) {
     const esc = frappe.utils.escape_html;
     const p = (await frappe.call({ method: RO_API + ".preparer_demontage", args: { machine } })).message;
     const m = p.machine, prop = p.proposition || {};
+    let preciser = () => {};      // posé après le dialogue ; le Select peut appeler onchange dès sa construction
     const d = new frappe.ui.Dialog({
       title: `🧩 Machine à démonter — ${machine}`,
       fields: [
         { fieldtype: "HTML", fieldname: "haut" },
-        { fieldtype: "Select", fieldname: "motif", label: "Pourquoi le client ne la reprend pas", reqd: 1, options: [""].concat(p.motifs) },
+        { fieldtype: "Select", fieldname: "motif", label: "Pourquoi le client ne la reprend pas", reqd: 1, options: [""].concat(p.motifs),
+          default: p.motifs.includes(motif) ? motif : "", onchange: () => preciser() },
         { fieldtype: "Data", fieldname: "precision", label: "Qui l’a dit, et quand", reqd: 1,
           description: "Exemple : « M. Attia au téléphone le 20/11, il n’en veut plus ». Gardé sur le dossier." },
         { fieldtype: "Section Break", label: "Tâche « Démontage et débarras »" },
@@ -684,6 +697,14 @@ class ReparationOsmoseurs {
         } catch (e) { /* message déjà affiché par frappe.call */ }
       },
     });
+    // Client injoignable : personne n'a rien « dit » — on note les appels restés sans réponse.
+    preciser = () => {
+      const injoignable = d.get_value("motif") === "Client injoignable";
+      d.set_df_property("precision", "label", injoignable ? "Appels restés sans réponse (combien, le dernier quand)" : "Qui l’a dit, et quand");
+      d.set_df_property("precision", "description", injoignable ? "Exemple : « appelé 3 fois sans réponse, dernier appel le 20/11 ». Gardé sur le dossier."
+                                                                : "Exemple : « M. Attia au téléphone le 20/11, il n’en veut plus ». Gardé sur le dossier.");
+    };
+    preciser();
     d.fields_dict.haut.$wrapper.html(`
       <div style="margin-bottom:6px">Client : <b>${esc(m.nom_client || m.client)}</b> · ${esc(m.tel || "")}${p.repare ? " · machine <b>déjà réparée</b>" : ""}</div>
       <div class="ro-sub" style="margin-bottom:8px">Une tâche « Démontage et débarras » est posée au technicien : il garde les pièces réutilisables et débarrasse le reste. La clôture de sa tâche ferme le dossier — on ne revient pas dessus.${p.ouvertes ? ` Les ${p.ouvertes} tâche(s) de réparation encore ouverte(s) sont retirées du calendrier.` : ""}</div>`);
