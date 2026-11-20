@@ -274,12 +274,14 @@ class ReparationOsmoseurs {
     if (m.statut === "Réception en cours") boutons.push(btn("photos", "📷 Photos et clôture", "btn-primary"));
     if (m.statut === "Réceptionnée") {
       boutons.push(btn("planifier", "📅 Affecter un technicien", "btn-primary"));
-      boutons.push(btn("demonter-injoignable", "🧩 Client ne répond plus", "btn-default",
-        "Le client ne répond plus : débarrasser la machine — une tâche « Démontage et débarras » est posée à un technicien (pièces gardées, le reste jeté)"));
+      // Rouge : on détruit la machine. Le libellé couvre les deux cas (ne répond plus / n'en veut plus), le motif
+      // se choisit dans le dialogue.
+      boutons.push(btn("demonter", "🧩 Machine abandonnée", "ro-rouge",
+        "Le client ne répond plus ou ne veut plus son appareil : une tâche « Démontage et débarras » est posée à un technicien (pièces gardées, le reste jeté)"));
     }
     if (m.statut === "Réparée" || m.statut === "Prête au magasin") {
       boutons.push(btn("rendre", "✅ Rendre au client", "btn-primary"));
-      boutons.push(btn("livraison", "🚚 Livraison chez le client", "btn-default", "Planifier une livraison chez le client : une tâche Livraison est posée, sa clôture ferme le dossier"));
+      boutons.push(btn("livraison", "🚚 Livraison chez le client", "ro-vert", "Planifier une livraison chez le client : une tâche Livraison est posée, sa clôture ferme le dossier"));
     }
     // La réponse au rappel, en un clic, quand le dossier attend depuis trop longtemps.
     if (m.a_verifier && m.statut === "Réceptionnée") boutons.push(btn("sans-reparation", "↪️ Sortie sans réparation"));
@@ -330,7 +332,7 @@ class ReparationOsmoseurs {
     }
     if (s === "Livraison planifiée") a.push(["annuler-restitution", "↩️ Annuler la livraison"]);
     // Machine abandonnée : une tâche la fait démonter (pièces gardées, le reste jeté) ; sa clôture ferme le dossier.
-    // (« Réceptionnée » a son bouton sur la ligne, « 🧩 Client ne répond plus ».)
+    // (« Réceptionnée » a son bouton sur la ligne, « 🧩 Machine abandonnée ».)
     if (s === "Planifiée" || s === "Réparée" || s === "Prête au magasin") a.push(["demonter", "🧩 Le client ne la reprend plus : machine à démonter (pièces gardées, le reste jeté)"]);
     if (s === "À démonter") a.push(["annuler-demontage", "↩️ Annuler le démontage (le client la reprend finalement)"]);
     if (s === "Rendue au client") a.push(["annuler-sortie", "↩️ Annuler la sortie (clic par erreur)"]);
@@ -369,7 +371,6 @@ class ReparationOsmoseurs {
     }
     if (action === "sms") return this.dialogue_sms(machine);
     if (action === "demonter") return this.dialogue_demontage(machine);
-    if (action === "demonter-injoignable") return this.dialogue_demontage(machine, "Client injoignable");
     if (action === "annuler-demontage") {
       frappe.confirm(`Annuler le démontage de ${machine} ? La tâche de démontage est supprimée du calendrier et le dossier redevient ouvert.`, async () => {
         await frappe.call({ method: RO_API + ".annuler_demontage", args: { machine } });
@@ -559,13 +560,13 @@ class ReparationOsmoseurs {
         <li><b>Sous garantie</b> : rien à facturer si la commande d’origine de l’appareil est indiquée ; sinon le code superviseur.</li>
         <li><b>Hors garantie sans aucune vente</b> : un motif et le code superviseur.</li>
         <li>Le même bouton apparaît en bandeau sur la commande et le BL du client.</li>
-        <li>« 🚚 Livraison chez le client », juste sous « Rendre au client » : une tâche Livraison est posée, sa clôture ferme le dossier toute seule.</li></ul></div>
+        <li>Le bouton vert « 🚚 Livraison chez le client », juste sous « Rendre au client » : une tâche Livraison est posée, sa clôture ferme le dossier toute seule.</li></ul></div>
       <div class="et"><span class="ro-badge b-rendue">3 · Rendue</span><b>Terminé</b>
         <ul><li>Date, personne, règlement constaté et photos restent sur le dossier. La tuile « Rendue » ou la case « Afficher les machines rendues » les montre.</li></ul></div>
       <div class="et"><span class="ro-badge b-rendre">⏳ À vérifier</span><b>Rappel du matin</b>
         <ul><li>Une machine réparée et pas rendue, reçue sans technicien, ou dont la livraison n’est pas clôturée est rappelée chaque matin à la personne du réglage, puis relancée à une seconde personne.</li>
         <li>La réponse se donne sur la ligne : « ✅ Rendre au client », « 📍 Toujours au magasin » (le rappel repart de zéro), « 📅 Affecter » ou « ↪️ Sortie sans réparation ».</li></ul></div>
-      <p class="ro-sub"><b>Machine abandonnée</b> : le client ne répond plus ou ne la reprend plus → « 🧩 Client ne répond plus » sous « Affecter un technicien » (dans les autres états : « Autres actions », « machine à démonter »). Une tâche « Démontage et débarras » est posée au technicien (garder les pièces réutilisables, débarrasser le reste) ; sa clôture ferme le dossier, « Annuler le démontage » le rouvre tant qu’elle n’est pas faite.</p>
+      <p class="ro-sub"><b>Machine abandonnée</b> : le client ne répond plus ou ne la reprend plus → le bouton rouge « 🧩 Machine abandonnée » sous « Affecter un technicien » (dans les autres états : « Autres actions », « machine à démonter »). Une tâche « Démontage et débarras » est posée au technicien (garder les pièces réutilisables, débarrasser le reste) ; sa clôture ferme le dossier, « Annuler le démontage » le rouvre tant qu’elle n’est pas faite.</p>
       <p class="ro-sub"><b>Erreurs courantes</b> : réception clôturée trop tôt → « Rouvrir la réception » · technicien affecté par erreur → le ✕ à côté de sa tâche (vide, elle est supprimée du calendrier) · sortie cliquée par erreur → « Annuler la sortie » · un mot au client → « Autres actions », « SMS au client » · code superviseur : réglage « Config Cloture Tache ».</p>
     </div>`);
     d.show();
@@ -658,7 +659,7 @@ class ReparationOsmoseurs {
   }
 
   // ── 🧩 Machine abandonnée : une tâche la fait démonter ───────────────────────
-  // `motif` : le motif coché d'avance (le bouton « 🧩 Client ne répond plus » de la ligne).
+  // `motif` : un motif coché d'avance, si l'appelant le connaît déjà.
   async dialogue_demontage(machine, motif) {
     const esc = frappe.utils.escape_html;
     const p = (await frappe.call({ method: RO_API + ".preparer_demontage", args: { machine } })).message;

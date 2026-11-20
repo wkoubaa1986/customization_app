@@ -88,6 +88,11 @@
     .ro-btns { display: flex; flex-direction: column; gap: 3px; align-items: flex-start; }
     /* Meme largeur pour tous, etroite : la colonne ne suit plus le libelle le plus long. */
     .ro-btns .btn-primary { font-weight: 600; }
+    /* Sous le bouton principal : vert = livrer chez le client, rouge = machine abandonnee (on la demonte). */
+    .ro-btns .btn.ro-vert { background: #16a34a; border-color: #16a34a; color: #fff; font-weight: 600; }
+    .ro-btns .btn.ro-vert:hover { background: #15803d; border-color: #15803d; color: #fff; }
+    .ro-btns .btn.ro-rouge { background: #dc2626; border-color: #dc2626; color: #fff; font-weight: 600; }
+    .ro-btns .btn.ro-rouge:hover { background: #b91c1c; border-color: #b91c1c; color: #fff; }
     .ro-btns .btn { width: 172px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: center;
       font-size: 11.5px; padding: 2px 8px; line-height: 1.5; border-radius: 6px; }
     .ro-vide { text-align: center; color: #94a3b8; padding: 24px; }
