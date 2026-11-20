@@ -30,12 +30,14 @@ def journee(jour, employes: list[str] | None = None) -> dict:
     taches = frappe.get_all(T.TACHE, filters=filtres, order_by="starts_on asc", limit_page_length=0,
                             fields=["name", "custom_choix_du_staff", "custom_type_dintervention", "starts_on", "ends_on", "temps",
                                     "status", "custom_client", "nom_client", "select_address", "google_map", "secteur", "details_adresse",
-                                    "commande_client"])
+                                    "commande_client", "dans_local"])
     commandes = {t.commande_client for t in taches if t.commande_client and t.custom_type_dintervention == "Livraison"}
     aramex = set(frappe.get_all("Sales Order", filters={"name": ["in", list(commandes)], "payment_terms_template": PAYMENT_TERMS_ARAMEX},
                                 pluck="name")) if commandes else set()
     centres = T._centres_secteurs()
     par_employe, hors = {}, {}
+    controle_position = T.controle_localisation_actif()
+    positions_a_verifier = []
     for t in taches:
         if t.custom_type_dintervention in T.TYPES_HORS_JOURNEE:
             continue
@@ -48,6 +50,12 @@ def journee(jour, employes: list[str] | None = None) -> dict:
         duree = int((get_datetime(t.ends_on) - d).total_seconds() // 60) if t.ends_on else 0
         service = duree if 5 <= duree <= 600 else T._duree(t)
         pos = T.coordonnees_tache(t, centres)
+        if controle_position and T.intervention_terrain(t, cfg) and not pos:
+            positions_a_verifier.append({"tache": t.name, "client": nom_client, "adresse": t.select_address,
+                                        "motif": T.motif_position_a_verifier(t, pos)})
+            hors.setdefault(t.custom_choix_du_staff, []).append({"tache": t.name, "client": nom_client,
+                                                                "motif": _("position à vérifier sur la fiche Adresse")})
+            continue
         if not pos:
             if not (cfg["debut"] - 60 <= debut <= cfg["fin"] + 60):
                 continue                     # une tâche sans lieu hors journée (« Autre » à minuit) : pas une étape
@@ -62,6 +70,10 @@ def journee(jour, employes: list[str] | None = None) -> dict:
             "tache": t.name, "client": nom_client, "type": t.custom_type_dintervention or "",
             "statut": t.status, "debut_min": debut, "original_min": debut, "service": service, "mobile": False, "fenetre": None,
             "debut": T._hm(debut), "fin": T._hm(debut + service), "lat": pos[0], "lng": pos[1], "position": pos[2]})
+    if positions_a_verifier:
+        return {"date": str(jour), "employes": [], "depot": cfg["depot"], "hors_itineraire": hors,
+                "positions_a_verifier": positions_a_verifier,
+                "message": _("Confirmez les positions indiquées avant de calculer les trajets.")}
     if not par_employe:
         return {"date": str(jour), "employes": [], "depot": cfg["depot"], "hors_itineraire": hors}
     noms = {e.name: e.employee_name for e in frappe.get_all("Employee", filters={"name": ["in", list(par_employe)]},

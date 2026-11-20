@@ -216,23 +216,20 @@ class TestSolveur(unittest.TestCase):
         self.assertEqual(heures[0], heures[1])
         self.assertEqual(heures[0][1], 810)                                             # 13:30, juste après le créneau
 
-    def test_equilibre_rapproche_les_fins_de_journee(self):
-        # Six interventions d'une heure, voisines ; deux employés, le second pris 11:01–13:20 par des tâches hors
-        # tournée (deux créneaux qui se chevauchent). Sans équilibrage le premier travaille jusqu'à 17:05 et le second
-        # finit à 10:00 ; avec, le second reçoit l'après-midi et les deux finissent à moins d'1 h 30 l'un de l'autre.
-        pts = [(36.87, 10.19)] + [(36.87 + 0.004 * i, 10.19 + 0.004 * (i % 3)) for i in range(1, 7)]
-        mn, km, _s = T.matrice_haversine(pts)
-        arrets = [{"service": 60, "fenetre": None, "vehicule": None} for _ in range(6)]
-        fins = {}
-        for eq in (0, 1):
-            sol = T.resoudre(mn, arrets, 2, 510, 1080, equilibre=eq, limite_s=2, premiere=540, marge=15, pause=(750, 810),
-                             occupations={1: [(661, 781), (680, 800)]})
-            self.assertEqual(sol["non_places"], [])
-            fins[eq] = [max((t + 60 for _n, t in r), default=510) for r in sol["routes"]]
-            if eq:
-                self.assertGreaterEqual(len([t for _n, t in sol["routes"][1] if t >= 800]), 2, sol["routes"])
-        self.assertGreater(abs(fins[0][0] - fins[0][1]), 180, fins)                   # sans : très déséquilibré
-        self.assertLessEqual(abs(fins[1][0] - fins[1][1]), 90, fins)                  # avec : fins voisines
+    def test_equilibre_charge_sans_compter_attente(self):
+        # Une visite imposée à 15 h fait finir le premier technicien plus tard.
+        # Cette attente ne remplace pas du travail : chacun reçoit 60 min
+        # d'intervention même si les heures de fin sont très différentes.
+        mn = [[0] * 5 for _ in range(5)]
+        arrets = [{"service": 30, "fenetre": (900, 900), "vehicule": 0}]
+        arrets += [{"service": 30, "fenetre": None, "vehicule": None} for _ in range(3)]
+        sol = T.resoudre(mn, arrets, 2, 480, 1080, equilibre=5,
+                         vehicules_equilibres=[0, 1], limite_s=1)
+        self.assertEqual(sol["non_places"], [])
+        self.assertEqual([len(r) * 30 for r in sol["routes"]], [60, 60])
+        self.assertIn((1, 900), sol["routes"][0])
+        fins = [max(t + 30 for _n, t in r) for r in sol["routes"]]
+        self.assertGreater(fins[0] - fins[1], 180)
 
     def test_horaires_par_vehicule(self):
         # véhicule 1 commence à 10:00 : son arrêt (le seul proche de lui) ne peut pas être avant 10:10 + marge.
@@ -281,7 +278,7 @@ class TestJournee(unittest.TestCase):
         # Un réglage FIXE, quel que soit celui enregistré sur le site (heures, exclus, départs).
         self._config = T.config
         T.config = lambda: {"depot": T.DEPOT_DEFAUT, "departs": {}, "debut": 8 * 60, "premiere": 9 * 60, "fin": 17 * 60,
-                            "types": list(T.TYPES_MOBILES_DEFAUT), "osrm": T.OSRM_DEFAUT, "equilibre": 1, "exclus": set(),
+                            "types": list(T.TYPES_MOBILES_DEFAUT), "osrm": T.OSRM_DEFAUT, "equilibre": 0, "exclus": set(),
                             "pause": None, "marge": 0, "rangement": 0, "coef": 1.0, "fenetre": 0, "horaires": {}, "pointes": [],
                             "prevenir": {"sms": 1, "email": 0, "seuil": 15, "plage": 60, "sujet": T.SUJET_EMAIL_DEFAUT,
                                          "sms_texte": T.MODELE_SMS_DEFAUT, "email_texte": ""}}
@@ -291,6 +288,11 @@ class TestJournee(unittest.TestCase):
         if len(emps) < 2:
             self.skipTest("pas deux employés")
         self.e1, self.e2 = emps
+        # Les scénarios historiques comparent les trajets sans équilibrage de charge.
+        # Deux techniciens simulés ; aucun rôle réel n'est modifié.
+        from unittest.mock import patch
+        roles = patch.object(T, "employes_techniciens", return_value={self.e1, self.e2})
+        roles.start(); self.addCleanup(roles.stop)
         client = frappe.db.get_value("Customer", {"disabled": 0}, "name")
         # est (A, B) et ouest (C, D) ; tout est d'abord mal réparti : e1 a A et C, e2 a B et D.
         self.taches = {}
@@ -319,8 +321,49 @@ class TestJournee(unittest.TestCase):
         frappe.set_user("Administrator")
         frappe.db.rollback(save_point="tournee")
 
+    def test_position_introuvable_ne_fait_pas_disparaitre_les_taches_et_preserve_employe(self):
+        from unittest.mock import patch
+        coordonnees = T.coordonnees_tache
+        with patch.object(T, "controle_localisation_actif", return_value=True), \
+                patch.object(T, "coordonnees_tache", side_effect=lambda t, c: None if t.name == self.taches["C"] else coordonnees(t, c)):
+            p = T.proposer(self.JOUR)
+        self.assertNotIn("positions_a_verifier", p)
+        self.assertEqual({a["tache"] for a in p["conservees_sans_position"]}, {self.taches["A"], self.taches["C"]})
+        self.assertEqual([e["employe"] for e in p["employes"]], [self.e2])
+        self.assertEqual({a["tache"] for e in p["employes"] for a in e["apres"]["arrets"]},
+                         {self.taches["B"], self.taches["D"], self.taches["V"]})
+
+    def test_non_techniciens_conservent_leurs_taches_et_leurs_parcours_sont_optimises(self):
+        from unittest.mock import patch
+        for techniciens in (set(), {self.e1}):
+            with patch.object(T, "employes_techniciens", return_value=techniciens):
+                p = T.proposer(self.JOUR, fenetre=120)
+            self.assertEqual(p["deplacees"], 0)
+            self.assertFalse(p["equilibrage"]["actif"])
+            for e in p["employes"]:
+                self.assertEqual({a["tache"] for a in e["avant"]["arrets"]}, {a["tache"] for a in e["apres"]["arrets"]})
+                self.assertIn("charge", e["apres"])
+                self.assertTrue(all(abs(a["ecart_min"]) <= 120 for a in e["apres"]["arrets"]))
+
+    def test_changement_role_refuse_transfert_avant_application(self):
+        import frappe
+        from unittest.mock import patch
+        p = T.proposer(self.JOUR)
+        c = self._arrets(p)[self.taches["C"]]
+        self.assertTrue(c["deplace"])
+        plan = [{"tache": c["tache"], "employe": c["employe"], "starts_on": c["starts_on"], "ends_on": c["ends_on"]}]
+        avant = frappe.db.get_value(T.TACHE, c["tache"], ["starts_on", "custom_choix_du_staff"])
+        with patch.object(T, "employes_techniciens", return_value={self.e1}):
+            with self.assertRaises(frappe.ValidationError):
+                T.appliquer(self.JOUR, plan, fenetre=0)
+        self.assertEqual(frappe.db.get_value(T.TACHE, c["tache"], ["starts_on", "custom_choix_du_staff"]), avant)
+
     def test_proposition_puis_application(self):
         import frappe
+        # Deux techniciens : le mode équilibré garde deux tournées. Avec le seul
+        # coût des trajets, une tournée unique peut être légèrement plus courte.
+        cfg = T.config()
+        T.config = lambda: dict(cfg, equilibre=5)
         p = T.proposer(self.JOUR)
         self.assertEqual([e["employe"] for e in p["employes"]], sorted([self.e1, self.e2]))
         self.assertEqual(p["source"], "vol d’oiseau")
@@ -420,6 +463,48 @@ class TestJournee(unittest.TestCase):
         self.assertTrue(e["horaires"]["depasse"], e["horaires"])
         self.assertEqual(e["depassement_autorise"], 0)                       # l'écran garde le dépassement DEMANDÉ
         self.assertEqual(p["depassement"], 0)
+
+    def test_fenetre_120_reste_stricte_sur_toutes_les_passes_et_apres_trafic(self):
+        from unittest.mock import patch
+        cfg = T.config()
+        T.config = lambda: dict(cfg, marge=250)
+        solveur = T.resoudre
+        fenetres = []
+
+        def espion(minutes, arrets, *args, **kwargs):
+            fenetres.extend(a["fenetre"] for a in arrets)
+            return solveur(minutes, arrets, *args, **kwargs)
+
+        with patch.object(T, "resoudre", side_effect=espion):
+            p = T.proposer(self.JOUR, fenetre=120, employes=[{"employe": self.e1, "depart": "magasin"}], depassement=0)
+        self.assertTrue(fenetres)
+        self.assertTrue(all(f is not None and f[1] - f[0] <= 240 for f in fenetres))
+        arrets = self._arrets(p)
+        self.assertEqual(set(arrets), {self.taches["A"], self.taches["C"]})
+        self.assertTrue(all(abs(a["ecart_min"]) <= 120 for a in arrets.values()))
+        self.assertTrue(p["non_places"])
+        self.assertFalse(any("Fenêtre élargie" in w for w in p["avertissements"]))
+
+    def test_appliquer_refuse_tout_le_plan_avant_ecriture_si_une_ligne_depasse(self):
+        import frappe
+        cfg = T.config()
+        T.config = lambda: dict(cfg, fenetre=120)
+        avant = {c: frappe.db.get_value(T.TACHE, n, "starts_on") for c, n in self.taches.items()}
+        plan = [{"tache": self.taches["A"], "employe": self.e1, "starts_on": self.JOUR + " 10:00:00", "ends_on": self.JOUR + " 10:30:00"},
+                {"tache": self.taches["C"], "employe": self.e1, "starts_on": self.JOUR + " 15:00:00", "ends_on": self.JOUR + " 15:30:00"}]
+        # Un ancien écran ne fournit pas fenetre : le réglage du serveur protège aussi ce cas.
+        with self.assertRaises(frappe.ValidationError):
+            T.appliquer(self.JOUR, plan)
+        self.assertEqual({c: frappe.db.get_value(T.TACHE, n, "starts_on") for c, n in self.taches.items()}, avant)
+        # Une fenêtre plus courte choisie dans le dialogue est contrôlée elle aussi.
+        plan[0]["starts_on"] = self.JOUR + " 10:30:00"
+        with self.assertRaises(frappe.ValidationError):
+            T.appliquer(self.JOUR, plan[:1], fenetre=60)
+        self.assertEqual(frappe.db.get_value(T.TACHE, self.taches["A"], "starts_on"), avant["A"])
+        # Exactement +2 h reste autorisé.
+        plan[0].update(starts_on=self.JOUR + " 11:00:00", ends_on=self.JOUR + " 11:30:00")
+        r = T.appliquer(self.JOUR, plan[:1], fenetre=120)
+        self.assertEqual(r["modifiees"], [self.taches["A"]])
 
     def _epingler(self, code, heure=0, employe=0):
         import frappe

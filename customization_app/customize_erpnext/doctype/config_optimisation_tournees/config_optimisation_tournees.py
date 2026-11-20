@@ -8,6 +8,12 @@ from frappe.model.document import Document
 class ConfigOptimisationTournees(Document):
     def validate(self):
         from customization_app.tournee_optimisation import resoudre_lien
+        from customization_app.geocodage_adresses import url_nominatim
+
+        try:
+            url_nominatim(self.get("nominatim_prive_url"))
+        except ValueError as e:
+            frappe.throw(str(e))
 
         if self.depot_lien and not (self.depot_latitude and self.depot_longitude):
             c = resoudre_lien(self.depot_lien)

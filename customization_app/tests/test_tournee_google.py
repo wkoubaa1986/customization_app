@@ -22,11 +22,12 @@ class TestRecaler(unittest.TestCase):
     def test_depart_marges_rangement_retour(self):
         # 1re tâche prévue à 09:30 : départ 09:30 − 10 (stationnement) − 20 (trajet) = 09:00.
         # Fin 10:00 → +5 rangement → 10:05 + 20 + 10 = 10:35 ; fixe à 10:30 : 5 min de retard.
-        # Fin 11:00 → 11:05 + 20 + 10 = 11:35 (déplaçable : prend 11:35). Fin 12:05 → retour 12:10 + 20 = 12:30.
+        # Le rendez-vous fixe garde 10:30, mais finit réellement à 11:05 avec les 5 min de retard.
+        # Départ 11:10 → visite suivante 11:40 ; fin 12:10 → retour 12:35.
         r = G.recaler(DEPOT, [etape(1, 570), etape(2, 630, mobile=False), etape(3, 800)], vingt_minutes,
                       marge=10, rangement=5, debut_jour=480, fin_jour=1080, premiere=540)
-        self.assertEqual((r["depart"], r["retour"], r["trajets"], r["km"]), (540, 750, 80, 40.0))
-        self.assertEqual([(x["debut"], x["retard"]) for x in r["arrets"]], [(570, 0), (630, 5), (695, 0)])
+        self.assertEqual((r["depart"], r["retour"], r["trajets"], r["km"]), (540, 755, 80, 40.0))
+        self.assertEqual([(x["debut"], x["retard"]) for x in r["arrets"]], [(570, 0), (630, 5), (700, 0)])
         self.assertEqual(r["retards"], 1)
 
     def test_heure_fixe_jamais_decalee_par_le_trafic(self):
@@ -136,7 +137,7 @@ class TestGoogle(unittest.TestCase):
         a = emps[0]["apres"]["arrets"]
         self.assertEqual((a[0]["debut"], a[0]["trajet_source"], a[0]["decale"], a[0]["ecart_min"]), ("09:30", "google", True, -30))
         self.assertEqual((a[1]["debut"], a[1]["retard"]), ("10:30", 5))          # 10:05 + 20 + 10 = 10:35 pour 10:30
-        self.assertEqual((emps[0]["horaires"]["depart"], emps[0]["horaires"]["retour"]), ("09:00", "11:25"))
+        self.assertEqual((emps[0]["horaires"]["depart"], emps[0]["horaires"]["retour"]), ("09:00", "11:30"))  # retard réel propagé
         self.assertEqual(r["coef"], 1.06)                                        # 0,7 × 1 + 0,3 × (54 min Google ÷ 45 min OSRM)
 
     def test_sans_cle_ou_jour_passe_osrm_corrige(self):

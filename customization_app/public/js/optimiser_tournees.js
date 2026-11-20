@@ -2,7 +2,7 @@
  * « 🗺️ Optimiser la journée » — calendrier des tâches (demande du 02/10/2026).
  *
  * Pour le jour affiché, redistribue et réordonne les tâches de terrain entre les employés qui travaillent
- * ce jour-là, pour que chacun roule moins (règle et calcul : customization_app.tournee_optimisation).
+ * ce jour-là, pour réduire les trajets. Les transferts et l’équilibrage de charge sont réservés aux techniciens.
  * La proposition se lit d'abord — par employé, avant / après, tâches déplacées ou décalées, itinéraire
  * Google Maps — et ne s'écrit qu'au bouton « Appliquer ».
  *
@@ -13,6 +13,27 @@
   const esc = (s) => frappe.utils.escape_html(s == null ? "" : String(s));
   const ROLES = ["System Manager", "Responsable magasin", "Appels"];   // même liste que tournee_optimisation.ROLES
   const API = "customization_app.tournee_optimisation.";
+  const positionEstimee = source => ["secteur", "grossière", "Google Maps estimé", "texte estimé"].includes(source);
+  const positionsConservees = p => (p.conservees_sans_position || []).length ? `<div class="alert alert-warning" data-opt-conservees>
+    <b>Tâches conservées dans leur planning actuel</b><p>Une position reste introuvable dans leur tournée. Aucun nouvel arrêt n’y est ajouté.</p>
+    ${(p.conservees_sans_position || []).map(a => `<div>${lienTache(a.tache, esc(a.client || a.tache))}</div>`).join("")}</div>` : "";
+  if (!document.getElementById("optimisation-dialogue-style")) {
+    const style = document.createElement("style");
+    style.id = "optimisation-dialogue-style";
+    style.textContent = `.opt-dialogue .modal-dialog { width:calc(100% - 32px);max-width:1320px;margin:16px auto; }
+      .opt-dialogue .modal-content { max-height:calc(100vh - 32px);max-height:calc(100dvh - 32px);display:flex; }
+      .opt-dialogue .modal-header,.opt-dialogue .modal-footer { flex-shrink:0; }
+      .opt-dialogue .modal-body { overflow-y:auto;min-height:0; }
+      .opt-dialogue .opt-positions { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-top:14px; }
+      .opt-dialogue .opt-position { border:1px solid var(--border-color,#e2e8f0);border-radius:9px;padding:14px;background:var(--fg-color,#fff); }
+      .opt-dialogue .opt-actions-position { display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:12px; }
+      .opt-dialogue [data-emp] { flex-wrap:wrap; }
+      @media(max-width:760px) { .opt-dialogue .opt-positions { grid-template-columns:1fr; }
+        .opt-dialogue .modal-dialog { width:calc(100% - 16px);margin:8px auto; }
+        .opt-dialogue .modal-content { max-height:calc(100dvh - 16px); }
+        .opt-dialogue [data-emp] label { min-width:0!important;flex-basis:100%; } }`;
+    document.head.appendChild(style);
+  }
 
   function dateAffichee() {
     try {
@@ -58,6 +79,12 @@
   const nomEtape = (a) => a.client || `${a.type || "Tâche"} · ${a.tache}`;      // une tâche sans client : son type
   function dessinerCarte(p, el, ancienne) {
     if (ancienne) { try { ancienne.remove(); } catch (e) { /* ancienne carte déjà retirée de la page */ } }
+    if ((p.employes || []).some(e => (e.apres?.arrets || []).some(a => (a.position || "").startsWith("Google Maps")))) {
+      el.innerHTML = `<div style="padding:20px"><b>Google Maps</b><p>Consultez les parcours avec les positions retenues pour le calcul :</p>
+        ${(p.employes || []).map(e => `<p>${esc(e.nom || e.employe)} : ${itineraires(e.depart_point || p.depot, e.apres?.arrets || []).liens.map(l =>
+          `<a target="_blank" rel="noopener" href="${esc(l.url)}">Ouvrir le parcours ${esc(l.de)}–${esc(l.a)}</a>`).join(" · ")}</p>`).join("")}</div>`;
+      return null;
+    }
     let carte = null;
     if (!document.getElementById("opt-carte-style")) {
       const st = document.createElement("style");
@@ -83,7 +110,7 @@
       e.apres.arrets.forEach((a) => {
         if (!(a.lat && a.lng)) return;
         trace.push(point(a.lat, a.lng));
-        const approx = a.position === "secteur", lettre = it.numeros[a.tache] || "";
+        const approx = positionEstimee(a.position), lettre = it.numeros[a.tache] || "";
         L.marker([a.lat, a.lng], { icon: L.divIcon({ className: "", iconSize: [24, 24], iconAnchor: [12, 12],
           html: `<div style="width:24px;height:24px;border-radius:12px;background:${c};color:#fff;font-weight:700;font-size:11px;display:flex;align-items:center;justify-content:center;border:2px ${approx ? "dashed" : "solid"} #fff;box-shadow:0 0 0 1px ${c}">${esc(lettre)}</div>` }) })
           .bindTooltip(`${esc(lettre)} · ${esc(nomEtape(a))} <span style="color:#64748b">${esc(a.debut)}</span>${approx ? " ≈" : ""}`, { permanent: true, direction: "right", offset: [12, 0], className: "opt-etiquette" })
@@ -136,7 +163,7 @@
   }
 
   function rendre(p) {
-    if (!p.employes.length) return `<div class="text-muted" style="padding:16px">${esc(p.message || "Rien à optimiser.")}</div>`;
+    if (!p.employes.length) return `<div class="text-muted" style="padding:16px">${esc(p.message || "Rien à optimiser.")}</div>${positionsConservees(p)}`;
     const t = p.total, gain = t.avant_min - t.apres_min;
     const depassePermis = (e) => e.horaires && e.horaires.depassement_autorise && e.horaires.depassement_min <= e.horaires.depassement_autorise;
     // 📌 rien ne bouge (deux cases, type ou statut non déplaçable) ; ⏸ pas de place dans la tournée, gardée telle quelle ;
@@ -146,7 +173,7 @@
     const epingles = (a) => (a.non_place ? pastille("⏸ pas de place", "Pas de place dans la tournée optimisée : gardée telle quelle (même employé, même heure)", "#b91c1c", "#fee2e2")
       : a.heure_fixe && a.employe_fixe ? pastille("📌 heure et employé fixes", "Les deux cases sont cochées sur la tâche : elle ne bouge pas", "#475569", "#e2e8f0")
       : a.fixe ? pastille("📌 fixe", "Type non déplaçable, réparation au local ou tâche terminée : elle ne bouge pas", "#475569", "#e2e8f0")
-      : a.heure_fixe ? pastille("🕘 heure fixe", "« Heure fixe » cochée sur la tâche : l’heure promise est gardée, un autre employé peut la faire", "#9a3412", "#ffedd5")
+      : a.heure_fixe ? pastille("🕘 heure fixe", "L’heure promise est gardée ; le changement d’employé reste réservé aux transferts entre techniciens", "#9a3412", "#ffedd5")
       : a.employe_fixe ? pastille("👤 employé fixe", "« Employé fixe » coché sur la tâche : le technicien est gardé, l’heure peut bouger", "#1e40af", "#dbeafe") : "");
     const ligneAvant = (a) => `<div style="font-size:12.5px;padding:2px 0;${a.fixe ? "color:#64748b" : ""}">${esc(a.debut)}–${esc(a.fin)} · ${lienTache(a.tache, esc(a.client))} <span class="text-muted">${esc(a.type)}</span>${epingles(a)}</div>`;
     // Le trajet qui MÈNE à l'arrêt (🚗 Google, ≈ OSRM corrigé), puis ce qui cloche : retard sur une heure fixe, attente.
@@ -158,13 +185,16 @@
     const ligneApres = (a, lettre = "") => `<div style="font-size:12.5px;padding:2px 0;${a.deplace ? "background:#fef3c7;border-radius:4px" : a.decale ? "background:#eff6ff;border-radius:4px" : ""}${a.fixe ? ";color:#64748b" : ""}">
         ${lettre}${trajetAvant(a)}${esc(a.debut)}–${esc(a.fin)} · ${lienTache(a.tache, `<b>${esc(a.client)}</b>`)} <span class="text-muted">${esc(a.type)}</span>${epingles(a)}${marques(a)}
         ${a.deplace ? `<span style="color:#b45309;font-size:11px"> ↔ venait de ${esc(a.de_nom)}</span>` : ""}${a.decale ? `<span style="color:#1d4ed8;font-size:11px"> ⏱ était à ${esc(a.ancien_debut)} (${decalage(a.ecart_min)})</span>` : ""}${a.non_place ? `<span style="color:#b91c1c;font-size:11px"> ⏸ pas de place dans la tournée : gardée telle quelle (même employé, même heure)</span>` : ""}
-        ${a.position === "secteur" ? `<span style="color:#b91c1c;font-size:11px"> ≈ secteur</span>` : ""}</div>`;
+        ${positionEstimee(a.position) ? `<span style="color:#b91c1c;font-size:11px"> ≈ position estimée</span>` : ""}</div>`;
     const cartes = p.employes.map((e, i) => { const it = itineraires(e.depart_point || p.depot, e.apres.arrets), coul = COULEURS[i % COULEURS.length]; return `<div style="border:1px solid #e2e8f0;border-radius:10px;padding:10px 12px;margin-bottom:10px">
         <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px">
-          <b>👤 ${esc(e.nom)}</b> <span class="text-muted" style="font-size:11.5px">départ ${esc(e.depart)} · journée ${esc((e.journee || [])[0] || "")}–${esc((e.journee || [])[1] || "")}</span>
+          <b>👤 ${esc(e.nom)}</b> <span class="text-muted" data-opt-mode style="font-size:11.5px">${e.technicien ? (e.equilibrage_charge ? "Technicien · équilibrage de charge" : "Technicien") : "Parcours individuel · tâches conservées"}</span>
+          <span class="text-muted" style="font-size:11.5px">départ ${esc(e.depart)} · journée ${esc((e.journee || [])[0] || "")}–${esc((e.journee || [])[1] || "")}</span>
           <span style="font-size:12.5px">${e.avant.km} km · ${e.avant.minutes} min → <b>${e.apres.km} km · ${e.apres.minutes} min</b>
             ${it.liens.map((l, n) => ` · <a href="${l.url}" target="_blank" rel="noopener" title="Dans Google Maps, les clients apparaissent dans l’ordre des numéros de la page">🗺️ itinéraire${it.liens.length > 1 ? ` ${n + 1}/${it.liens.length} (clients ${l.de} à ${l.a})` : ""}</a>`).join("")}</span>
-          ${e.avant.fin ? `<span class="text-muted" style="font-size:11.5px;flex-basis:100%">⏱ interventions ${e.avant.interventions} min · fin ${esc(e.avant.fin)} → <b>interventions ${e.apres.interventions} min · fin ${esc(e.apres.fin)}</b> <span style="font-size:11px">(l’équilibrage rapproche les fins de journée)</span></span>` : ""}
+          ${e.avant.fin ? `<span class="text-muted" style="font-size:11.5px;flex-basis:100%">⏱ interventions ${e.avant.interventions} min · fin ${esc(e.avant.fin)} → <b>interventions ${e.apres.interventions} min · fin ${esc(e.apres.fin)}</b></span>` : ""}
+          ${e.apres.charge ? `<div data-opt-charge style="font-size:12px;flex-basis:100%"><b>Charge de travail : ${duree(e.avant.charge.total)} → ${duree(e.apres.charge.total)}</b>
+            <span class="text-muted"> · interventions ${duree(e.apres.charge.interventions)} + trajets ${duree(e.apres.charge.trajets)} + stationnement ${duree(e.apres.charge.stationnement)} + rangement ${duree(e.apres.charge.rangement)}</span></div>` : ""}
         </div>
         ${e.horaires && e.horaires.depart ? `<div style="font-size:12.5px;margin-top:6px;padding:6px 10px;border-radius:8px;background:${(e.horaires.depasse && !depassePermis(e)) || e.horaires.retards ? "#fef2f2" : e.horaires.depasse ? "#fff7ed" : "#f0fdf4"}">
           🕘 <b>Départ ${esc(e.depart)} ${esc(e.horaires.depart)}</b> → <b>retour ${esc(e.horaires.retour)}</b>${!e.horaires.depasse ? ""
@@ -176,10 +206,14 @@
           <div class="col-sm-6"><div class="text-muted" style="font-size:11px;text-transform:uppercase">Actuel (${e.avant.arrets.length})</div>${e.avant.arrets.map(ligneAvant).join("") || `<div class="text-muted" style="font-size:12px">—</div>`}</div>
           <div class="col-sm-6"><div class="text-muted" style="font-size:11px;text-transform:uppercase">Proposé (${e.apres.arrets.length})</div>${e.apres.arrets.map((a) => ligneApres(a, pastille(it.numeros[a.tache], coul))).join("") || `<div class="text-muted" style="font-size:12px">—</div>`}</div>
         </div></div>`; }).join("");
-    return `<div style="font-size:13px;margin-bottom:8px">
+    return `${(p.positions_estimees || []).length ? `<div class="alert alert-info" data-opt-estimations>
+        <b>Calcul automatique terminé</b> · ${p.positions_estimees.length} position(s) estimée(s) utilisée(s).
+        <div>${p.positions_estimees.map(a => esc(a.client || a.tache)).join(" · ")}</div>
+        <small>Les distances et les temps de trajet vers ces positions sont approximatifs.</small>
+      </div>` : ""}${positionsConservees(p)}<div style="font-size:13px;margin-bottom:8px">
         <b>${t.avant_km} km · ${t.avant_min} min</b> de route aujourd’hui → <b>${t.apres_km} km · ${t.apres_min} min</b>
         <span style="color:${gain > 0 ? "#15803d" : "#b45309"};font-weight:700"> (${gain > 0 ? "−" : "+"}${Math.abs(gain)} min)</span>
-        · ${p.deplacees} tâche(s) changent d’employé · ${p.decalees} changent d’heure · départ ${esc(p.journee[0])}, visites dès ${esc(p.premiere)}, retour ${esc(p.journee[1])}${p.pause ? `, pause ${esc(p.pause[0])}–${esc(p.pause[1])}` : ""} · stationnement ${p.marge} min + rangement ${p.rangement} min par arrêt${(p.pointes || []).length ? ` · pointes ${p.pointes.map(esc).join(", ")}` : ""} · ${p.fenetre ? `heures gardées à ± ${p.fenetre} min` : "heures libres"} · ${p.depassement ? `dépassement de la fin de journée permis jusqu’à ${duree(p.depassement)}` : "fin de journée stricte"} (<a href="/app/config-optimisation-tournees">réglages</a>)
+        · ${p.deplacees} tâche(s) changent d’employé · ${p.decalees} changent d’heure · départ ${esc(p.journee[0])}, visites dès ${esc(p.premiere)}, retour ${esc(p.journee[1])}${p.pause ? `, pause ${esc(p.pause[0])}–${esc(p.pause[1])}` : ""} · stationnement ${p.marge} min + rangement ${p.rangement} min par arrêt${(p.pointes || []).length ? ` · pointes ${p.pointes.map(esc).join(", ")}` : ""} · ${p.fenetre ? `déplacement maximal ± ${p.fenetre} min (strict)` : "heures libres"} · ${p.depassement ? `dépassement de la fin de journée permis jusqu’à ${duree(p.depassement)}` : "fin de journée stricte"} (<a href="/app/config-optimisation-tournees">réglages</a>)
         · distances : ${esc(p.source)}</div>
       <div style="margin-bottom:8px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         ${blocRecalage(p)}
@@ -226,19 +260,29 @@
 
   function ouvrir() {
     let proposition = null;
+    let revision = 0, calculEnCours = false, chargementEnCours = true, chargementId = 0, ferme = false, parametresTouches = false;
+    const masquerApplication = () => d.get_secondary_btn().addClass("hide").prop("disabled", true).off("click");
+    const actualiserBouton = () => d.get_primary_btn().prop("disabled", calculEnCours || chargementEnCours || !d.get_value("date"))
+      .text(calculEnCours ? "Calcul en cours…" : chargementEnCours ? "Chargement…" : !d.get_value("date") ? "Choisir une date" : "Calculer");
+    const invalider = (message = "Paramètres modifiés. Cliquez sur Calculer pour actualiser la proposition.") => {
+      revision += 1;
+      proposition = null;
+      masquerApplication();
+      d.fields_dict.resultat.$wrapper.html(`<div class="text-muted" data-opt-attente style="padding:12px 0">${esc(message)}</div>`);
+    };
     const d = new frappe.ui.Dialog({
       title: "🗺️ Optimiser la journée",
       size: "extra-large",
       fields: [
         { fieldtype: "Date", fieldname: "date", label: "Jour", default: dateAffichee(), reqd: 1 },
-        { fieldtype: "Check", fieldname: "proche", label: "Garder les heures proches de l’actuel", default: 1,
-          description: "Chaque tâche déplaçable reste à ± la fenêtre ci-dessous autour de son heure actuelle" },
-        { fieldtype: "Int", fieldname: "fenetre", label: "Fenêtre (± minutes)", default: 60 },
+        { fieldtype: "Check", fieldname: "proche", label: "Limiter le déplacement des rendez-vous", default: 1,
+          description: "Chaque rendez-vous peut avancer ou reculer de la durée ci-dessous au maximum. Cette limite reste stricte après le calcul des trajets." },
+        { fieldtype: "Int", fieldname: "fenetre", label: "Déplacement maximal (± minutes)", default: 60 },
         { fieldtype: "Int", fieldname: "depassement", label: "Dépassement autorisé de la fin de journée (min)", default: 60,
           description: "Si tout ne tient pas, la journée peut finir jusqu’à autant plus tard (seulement si nécessaire). 0 = fin stricte ; une fin saisie pour un employé reste stricte." },
         { fieldtype: "Column Break" },
         { fieldtype: "HTML", fieldname: "aide", options: `<div style="margin-top:26px;display:flex;gap:12px;align-items:flex-start">
-          <div class="text-muted" style="font-size:12px;flex:1">Seuls les employés qui ont des tâches ce jour-là sont utilisés. Sur la tâche, « Heure fixe » garde l’heure (l’employé peut changer), « Employé fixe » garde l’employé (l’heure peut bouger) ; les deux cochées, elle ne bouge pas. Rien n’est écrit avant « Appliquer ».</div>
+          <div class="text-muted" style="font-size:12px;flex:1">Seuls les employés qui ont des tâches ce jour-là participent. La redistribution se fait uniquement entre employés ayant le rôle Technicien ; les autres gardent leurs tâches. L’équilibrage porte sur les interventions, trajets, stationnement et rangement, hors attente et pause. « Heure fixe » garde l’heure ; « Employé fixe » garde l’employé. Le planning change uniquement après « Appliquer ».</div>
           <a class="btn btn-default btn-xs" href="/app/config-optimisation-tournees" target="_blank" title="Magasin, heures, pause, stationnement, heures de pointe, types, exclus, domiciles" style="white-space:nowrap">⚙️ Réglages</a></div>` },
         { fieldtype: "Section Break", label: "Employés du jour" },
         { fieldtype: "HTML", fieldname: "employes" },
@@ -247,6 +291,10 @@
       ],
       primary_action_label: "Calculer",
       primary_action: async (v) => {
+        if (calculEnCours || chargementEnCours) return;
+        // Une réponse tardive des réglages par défaut ne doit pas changer les paramètres de ce calcul.
+        parametresTouches = true;
+        masquerApplication();
         const choix = [];
         d.fields_dict.employes.$wrapper.find("[data-emp]").each((_, el) => {
           const $e = $(el);
@@ -257,10 +305,16 @@
             fin: $e.find("input[data-fin]").attr("data-modifie") ? $e.find("input[data-fin]").val() || null : null });
         });
         if (!choix.length) { frappe.msgprint("Cochez au moins un employé."); return; }
+        const demande = ++revision;
+        proposition = null;
+        calculEnCours = true;
+        actualiserBouton();
         d.fields_dict.resultat.$wrapper.html(`<div class="text-muted" style="padding:16px">Calcul des distances et des tournées…</div>`);
-        d.set_secondary_action_label("");
-        proposition = (await frappe.call({ method: API + "proposer", args: { date: v.date, fenetre: v.proche ? (v.fenetre || 60) : 0, employes: choix,
-          depassement: v.depassement == null ? null : v.depassement }, freeze: true, freeze_message: "Optimisation, puis heures calculées avec Google…" })).message;
+        try {
+        const reponse = (await frappe.call({ method: API + "proposer", args: { date: v.date, fenetre: v.proche ? (v.fenetre ?? 60) : 0, employes: choix,
+          depassement: v.depassement == null ? null : v.depassement } })).message;
+        if (ferme || demande !== revision) return;
+        proposition = reponse;
         if ((proposition.sans_domicile || []).length) frappe.show_alert({ message: `Pas de domicile réglé pour ${esc(proposition.sans_domicile.join(", "))} : départ du Magasin. (Réglages → Points de départ particuliers)`, indicator: "orange" }, 8);
         d.fields_dict.resultat.$wrapper.html(rendre(proposition));
         d.fields_dict.resultat.$wrapper.find("#opt-carte-btn").on("click", (ev) => {
@@ -277,45 +331,73 @@
         const n = proposition.deplacees + proposition.decalees;
         if (n) {
           d.set_secondary_action_label(`✅ Appliquer (${n} tâche(s))`);
+          d.get_secondary_btn().prop("disabled", false);
           d.set_secondary_action(() => {
+            if (demande !== revision || proposition !== reponse) return;
             const plan = [], notifs = new Set((proposition.notifications || []).map((x) => x.tache));
             const prevenir = d.fields_dict.resultat.$wrapper.find("#opt-prevenir").is(":checked") ? 1 : 0;
             proposition.employes.forEach((e) => e.apres.arrets.forEach((a) => { if (a.deplace || a.decale) plan.push({ tache: a.tache, employe: a.employe, starts_on: a.starts_on, ends_on: a.ends_on, prevenir: notifs.has(a.tache) ? 1 : 0 }); }));
             const nb = prevenir ? notifs.size : 0;
             frappe.confirm(`Appliquer la proposition : <b>${proposition.deplacees}</b> tâche(s) changent d’employé, <b>${proposition.decalees}</b> changent d’heure ?<br>Un commentaire sera posé sur chaque tâche modifiée.${nb ? `<br><b>📨 ${nb} client(s)</b> recevront le message de changement d’horaire.` : ""}`, async () => {
-              const r = (await frappe.call({ method: API + "appliquer", args: { date: proposition.date, plan, prevenir }, freeze: true, freeze_message: "Application…" })).message;
+              if (demande !== revision || proposition !== reponse) { frappe.msgprint("La proposition a changé. Relancez le calcul."); return; }
+              const r = (await frappe.call({ method: API + "appliquer", args: { date: proposition.date, plan, prevenir, fenetre: proposition.fenetre }, freeze: true, freeze_message: "Application…" })).message;
               d.hide();
               frappe.show_alert({ message: `🗺️ ${r.modifiees.length} tâche(s) mise(s) à jour${r.prevenus ? ` · 📨 ${r.prevenus} client(s) prévenus en arrière-plan` : ""}`, indicator: "green" }, 6);
               if (window.cur_list && cur_list.refresh) cur_list.refresh();
             });
           });
         }
+        d.fields_dict.resultat.$wrapper[0].scrollIntoView({behavior: "smooth", block: "nearest"});
+        } catch (_) {
+          if (!ferme && demande === revision) {
+            proposition = null;
+            masquerApplication();
+            d.fields_dict.resultat.$wrapper.html('<div class="alert alert-danger">Le calcul n’a pas abouti. Vous pouvez réessayer avec les paramètres conservés.</div>');
+          }
+        } finally {
+          calculEnCours = false;
+          if (!ferme) actualiserBouton();
+        }
       },
     });
+    d.$wrapper.addClass("opt-dialogue");
+    masquerApplication();
+    d.onhide = () => { ferme = true; revision += 1; };
     // Les tâches d'un employé sous sa ligne : heure, type, client, adresse ; grisée si elle ne peut pas bouger (et pourquoi).
     const ligneTaches = (liste) => liste.length ? `<table style="width:100%;font-size:12px;border-collapse:collapse">${liste.map((t) => `
         <tr style="${t.mobile ? "" : "color:#94a3b8"}">
           <td style="padding:1px 8px 1px 0;white-space:nowrap">${esc(t.debut)}${t.fin ? "–" + esc(t.fin) : ""}</td>
           <td style="padding:1px 8px 1px 0;white-space:nowrap">${lienTache(t.tache, esc(t.type))}</td>
           <td style="padding:1px 8px 1px 0">${lienTache(t.tache, `<b>${esc(t.client)}</b>`)}</td>
-          <td style="padding:1px 8px 1px 0">${esc(t.adresse)}${t.secteur ? ` <span class="text-muted">· ${esc(t.secteur)}</span>` : ""}${t.position === "secteur" ? ' <span title="Position approchée par le centre du secteur">≈</span>' : ""}</td>
+          <td style="padding:1px 8px 1px 0">${esc(t.adresse)}${t.secteur ? ` <span class="text-muted">· ${esc(t.secteur)}</span>` : ""}${positionEstimee(t.position) ? ' <span title="Position estimée automatiquement">≈</span>' : ""}</td>
           <td style="padding:1px 0;white-space:nowrap;text-align:right">${t.mobile ? (t.contrainte ? esc(t.contrainte) : "🔀 déplaçable") : esc(t.motif)}</td>
         </tr>`).join("")}</table>` : `<span class="text-muted">Aucune tâche.</span>`;
     const chargerEmployes = async () => {
       const date = d.get_value("date");
-      if (!date) return;
+      if (!date) {
+        chargementId += 1;
+        chargementEnCours = false;
+        d.fields_dict.employes.$wrapper.empty();
+        d.get_primary_btn().prop("disabled", true).text("Choisir une date");
+        return;
+      }
+      const demande = ++chargementId;
+      chargementEnCours = true;
+      actualiserBouton();
       // L'ancienne liste ne doit pas rester affichée pendant le chargement du nouveau jour.
       d.fields_dict.employes.$wrapper.html(`<div class="text-muted" style="font-size:12px;padding:6px 0">⏳ Chargement des tâches du ${esc(frappe.datetime.str_to_user(date))}…</div>`);
+      try {
       const liste = (await frappe.call({ method: API + "employes_du_jour", args: { date } })).message || [];
-      if (d.get_value("date") !== date) return;      // une autre date a été choisie entre-temps : sa réponse fera foi
+      if (ferme || demande !== chargementId || d.get_value("date") !== date) return;
       d.fields_dict.employes.$wrapper.html(liste.length ? `<div class="text-muted" style="font-size:12px;margin-bottom:4px">Cochez qui entre dans l’optimisation et d’où chacun part et revient. Un employé décoché garde ses tâches telles quelles.</div>
         ${liste.map((e) => `<div data-emp="${esc(e.employe)}" style="display:flex;align-items:center;gap:10px;padding:4px 0;border-bottom:1px solid #f1f5f9">
           <label style="margin:0;display:flex;align-items:center;gap:6px;min-width:220px"><input type="checkbox" ${e.exclu ? "" : "checked"}> <b>${esc(e.nom)}</b> <span class="text-muted" style="font-size:11.5px">${e.taches} tâche(s), ${e.mobiles} déplaçable(s)${e.exclu ? " · exclu par le réglage" : ""}</span></label>
+          <span class="text-muted" style="font-size:11.5px">${e.technicien ? "Technicien · redistribution possible" : "Parcours individuel"}</span>
           <select class="form-control input-xs" style="width:auto;height:26px;padding:0 6px;font-size:12px">
             <option value="magasin">🏬 Départ et retour : Magasin</option>
             <option value="domicile" ${e.domicile ? "" : "disabled"}>🏠 Départ et retour : domicile${e.domicile ? "" : " (non réglé)"}</option>
           </select>
-          <span style="font-size:11.5px;white-space:nowrap" title="Heures de ce calcul. Si vous les modifiez, la journée s’arrête à l’heure saisie et ce qui ne tient pas va à un autre employé ; sinon elle s’étend au travail déjà planifié.">🕘 <input type="time" data-debut value="${esc(e.debut)}" style="height:26px;font-size:12px;width:92px"> → <input type="time" data-fin value="${esc(e.fin)}" style="height:26px;font-size:12px;width:92px"></span>
+          <span style="font-size:11.5px;white-space:nowrap" title="Heures de ce calcul. Si vous les modifiez, la journée s’arrête à l’heure saisie et une tâche peut changer d’employé uniquement entre techniciens ; sinon elle s’étend au travail déjà planifié.">🕘 <input type="time" data-debut value="${esc(e.debut)}" style="height:26px;font-size:12px;width:92px"> → <input type="time" data-fin value="${esc(e.fin)}" style="height:26px;font-size:12px;width:92px"></span>
           <a href="#" data-memoriser="${esc(e.employe)}" data-nom="${esc(e.nom)}" title="Enregistrer ces heures comme horaires habituels de cet employé" style="font-size:11.5px;white-space:nowrap">${e.horaire_propre ? "💾 horaires mémorisés" : "💾 mémoriser"}</a>
           <a href="#" data-regler="${esc(e.employe)}" data-nom="${esc(e.nom)}" style="font-size:11.5px;white-space:nowrap">${e.domicile ? "📍 changer le domicile" : "📍 régler le domicile"}</a>
           <a href="#" data-plier style="font-size:11.5px;white-space:nowrap;margin-left:auto" title="Voir les tâches de la journée">▸ tâches</a></div>
@@ -348,28 +430,45 @@
           frappe.show_alert({ message: r.domicile ? `Domicile de ${esc(nom)} enregistré` : `${esc(nom)} repart du Magasin`, indicator: "green" }, 4);
           await chargerEmployes();
           if (r.domicile) d.fields_dict.employes.$wrapper.find(`[data-emp="${CSS.escape(emp)}"] select`).val("domicile");
+          invalider("Point de départ modifié. Relancez le calcul.");
         }, `📍 Domicile de ${nom}`, "Enregistrer");
       });
+      } catch (_) {
+        if (!ferme && demande === chargementId) d.fields_dict.employes.$wrapper.html('<div class="alert alert-danger">Impossible de charger les employés de cette date. Sélectionnez à nouveau la date pour réessayer.</div>');
+      } finally {
+        if (demande === chargementId) { chargementEnCours = false; if (!ferme) actualiserBouton(); }
+      }
     };
-    d.fields_dict.date.$input.on("change", () => setTimeout(chargerEmployes, 200));
+    d.fields_dict.date.$input.on("change", () => {
+      invalider("Nouvelle date sélectionnée. Cliquez sur Calculer pour vérifier cette journée.");
+      chargementEnCours = true;
+      actualiserBouton();
+      setTimeout(chargerEmployes, 0);
+    });
+    ["proche", "fenetre", "depassement"].forEach(nom => d.fields_dict[nom].$input.on("change", () => {
+      parametresTouches = true;
+      invalider();
+    }));
+    d.fields_dict.employes.$wrapper.on("change", "input,select", () => invalider());
     d.$wrapper.on("click", "[data-ouvrir-tache]", (ev) => {
       if (ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.button === 1) return;        // nouvel onglet, comme avant
       // Le routeur de Frappe (router.js, sur body) suit sinon le lien /app/… et quitte la page.
       ev.preventDefault();
       ev.stopPropagation();
       ouvrirTache($(ev.currentTarget).attr("data-ouvrir-tache"), () => {
+        invalider("Tâche modifiée. Relancez le calcul pour actualiser la proposition.");
         chargerEmployes();
-        if (proposition) frappe.show_alert({ message: "Tâche modifiée : relancez « Calculer » pour une proposition à jour.", indicator: "orange" }, 6);
       });
     });
     d.show();
     d.set_value("proche", 1);        // le `default` d'une case à cocher n'est pas appliqué par le dialogue
     // Les valeurs du réglage, pas des constantes : la fenêtre restait à ± 60 quand le réglage disait ± 120 (12/10/2026).
     frappe.call({ method: API + "reglages_calcul" }).then((r) => {
-      if (!r.message) return;
-      d.set_value("fenetre", r.message.fenetre || 60);
+      if (!r.message || ferme || parametresTouches || calculEnCours) return;
+      d.set_value("fenetre", r.message.fenetre ?? 60);
       d.set_value("depassement", r.message.depassement);
-    });
+    }).catch(() => {});
+    invalider("Choisissez les employés et les paramètres, puis cliquez sur Calculer.");
     chargerEmployes();
   }
 
@@ -400,14 +499,17 @@
       fields: [{ fieldtype: "HTML", fieldname: "corps" }] });
     let carteIti = null;
     if (!e) {
-      d.fields_dict.corps.$wrapper.html(`<div class="text-muted" style="padding:12px">Aucune tâche à conduire ce jour-là.</div>`);
+      d.fields_dict.corps.$wrapper.html(`<div class="text-muted" style="padding:12px">${esc(r.message || "Aucune tâche à conduire ce jour-là.")}
+        ${(r.positions_a_verifier || []).length ? `<ul>${r.positions_a_verifier.map(a => `<li>${lienTache(a.tache, esc(a.client || a.tache))}
+          ${a.motif ? ` — ${esc(a.motif)}` : ""}
+          ${a.adresse ? ` — <a href="/app/address/${encodeURIComponent(a.adresse)}" target="_blank" rel="noopener">Vérifier l’adresse</a>` : ""}</li>`).join("")}</ul>` : ""}</div>`);
       d.show();
       return;
     }
     const it = itineraires(e.depart_point || r.depot, e.apres.arrets), h = e.horaires || {}, coul = COULEURS[0];
     const lignes = e.apres.arrets.map((a) => `<div style="font-size:13px;padding:5px 0;border-bottom:1px solid #f1f5f9">
         ${pastille(it.numeros[a.tache], coul)}${a.trajet != null ? `<span class="text-muted" style="font-size:11.5px">${a.trajet_source === "sur place" ? "📍 sur place" : `${a.trajet_source === "google" ? "🚗" : "≈"} ${duree(a.trajet)}${a.trajet_km ? ` · ${a.trajet_km} km` : ""}`} → </span>` : ""}
-        <b>${esc(a.debut)}</b>–${esc(a.fin)} · ${lienTache(a.tache, `<b>${esc(nomEtape(a))}</b>`)} <span class="text-muted">${esc(a.type)}</span>${a.position === "secteur" ? ` <span style="color:#b91c1c;font-size:11px">≈ position approchée</span>` : ""}
+        <b>${esc(a.debut)}</b>–${esc(a.fin)} · ${lienTache(a.tache, `<b>${esc(nomEtape(a))}</b>`)} <span class="text-muted">${esc(a.type)}</span>${positionEstimee(a.position) ? ` <span style="color:#b91c1c;font-size:11px">≈ position approchée</span>` : ""}
         ${a.retard ? `<div style="color:#b91c1c;font-size:11.5px;font-weight:600;margin-left:24px">⚠️ arrivée prévue ${a.retard} min après l’heure du rendez-vous</div>` : ""}</div>`).join("");
     d.fields_dict.corps.$wrapper.html(`
       <div style="font-size:13px;padding:8px 12px;border-radius:8px;background:${h.retards || h.depasse ? "#fef2f2" : "#f0fdf4"}">${resumeJournee(e)}</div>

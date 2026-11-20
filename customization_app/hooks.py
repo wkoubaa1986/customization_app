@@ -180,8 +180,9 @@ has_permission = {
 
 doc_events = {
     # Gouvernorat / ville / secteur : les champs de la fiche et les champs standard restent alignés, quel que soit
-    # le chemin de création (adresse_sectorisation).
-    "Address": {"validate": ["customization_app.adresse_sectorisation.valider"]},
+    # le chemin de création (adresse_sectorisation) — AVANT le géocodage, qui compare la ville à l'ancienne.
+    "Address": {"validate": ["customization_app.adresse_sectorisation.valider",
+                             "customization_app.geocodage_adresses.adresse_modifiee"]},
     # Prix des ensembles : quand un composant change de prix, l'ensemble suit SI le réglage de la page Analyse
     # Articles le demande (« Config Analyse Articles », recalcul automatique). Jamais bloquant.
     "Item Price": {"after_insert": "customization_app.analyse_articles.prix_change",
@@ -593,6 +594,7 @@ app_include_js = [_js("customer_quick_entry.js"),
                   # et « Coller une liste » pour saisir des dizaines de lignes en un bloc.
                   _js("stock_cible_liste.js"),
                   # Calendrier des tâches : « 🗺️ Optimiser la journée » (tournee_optimisation.py).
+                  _js("geocodage_positions.js"),
                   _js("optimiser_tournees.js"),
                   # Le dialogue de création d'un bordereau Aramex, partagé par la fiche
                   # commande et « Ma journée » (aramex_expedition / planning_employe).
@@ -905,6 +907,7 @@ scheduler_events = {
 # modification était retombée à celle du fichier. Un patch ne se rejoue pas :
 # il faut donc le reposer à chaque migration. La fonction est idempotente.
 after_migrate = [
+    "customization_app.patches.ensure_geocodage_qualite.execute",
     # Onglet « Suivi d'activité » + rôles Suivi Activité / Responsable Activité.
     "customization_app.patches.ensure_onglet_suivi_activite.execute",
     # Onglet « Suivi des techniciens » (flotte GPS) : où sont les techniciens, journées par véhicule, réglage.
@@ -961,7 +964,7 @@ after_migrate = [
 # dictionnaire, jamais dans un second.
 doctype_js = {
     # Fiche Adresse : listes gouvernorat / ville chargées à chaque ouverture (remplace le Client Script en base).
-    "Address": ["public/js/address_sectorisation.js"],
+    "Address": ["public/js/address_sectorisation.js", "public/js/address_geocodage.js"],
     # Fiche client : bandeau « géré par le partenaire » + bouton pour (dé)marquer (partenaire_clients).
     "Customer": "public/js/customer_partenaire.js",
     # Facture d'achat : bouton « 📦 Rattacher des BL » (bons de livraison capturés en caisse,

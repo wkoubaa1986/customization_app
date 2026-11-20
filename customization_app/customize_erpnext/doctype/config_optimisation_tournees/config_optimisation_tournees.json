@@ -46,7 +46,15 @@
   "google_routes_max_jour",
   "coef_osrm",
   "google_compte_jour",
-  "google_compte"
+  "google_compte",
+  "sec_essais_geocodage",
+  "geoapify_cle",
+  "locationiq_cle",
+  "col_essais_geocodage",
+  "google_geocoding_cle",
+  "sec_geocodage_qualite",
+  "geocodage_texte_actif",
+  "nominatim_prive_url"
  ],
  "fields": [
   {
@@ -132,9 +140,9 @@
   {
    "fieldname": "equilibre",
    "fieldtype": "Int",
-   "label": "Équilibrage des journées (0 = km minimum seulement)",
+   "label": "Équilibrage de la charge des techniciens (0 = trajets minimum)",
    "default": "1",
-   "description": "Plus il est haut, plus les journées des employés sont de longueur voisine, au prix de quelques km."
+   "description": "Entre employés actifs dont le compte lié possède le rôle Technicien : équilibre interventions + trajets + stationnement + rangement, hors attente et pause. Plus la valeur est élevée, plus la charge compte dans le choix de la tournée. Les autres employés gardent leurs propres tâches."
   },
   {
    "fieldname": "marge_minutes",
@@ -301,6 +309,53 @@
    "hidden": 1,
    "read_only": 1,
    "no_copy": 1
+  },
+  {
+   "fieldname": "sec_essais_geocodage",
+   "fieldtype": "Section Break",
+   "label": "Essayer les services de recherche d’adresse",
+   "description": "Enregistrez les clés, puis utilisez « Comparer les géocodeurs ». Échantillon de 50 adresses maximum, 200 appels d’essai par jour au total. Les essais ne remplacent aucune position et ne changent aucune tournée. Résultats conservés 24 heures."
+  },
+  {
+   "fieldname": "geoapify_cle",
+   "fieldtype": "Password",
+   "label": "Clé Geoapify — essais",
+   "description": "Créer un compte gratuit sur https://myprojects.geoapify.com/ puis copier la clé du projet. La clé reste chiffrée côté serveur."
+  },
+  {
+   "fieldname": "locationiq_cle",
+   "fieldtype": "Password",
+   "label": "Clé LocationIQ — essais",
+   "description": "Créer un compte gratuit sur https://my.locationiq.com/ puis copier le jeton d’accès. Prévoir l’attribution LocationIQ pour l’usage commercial."
+  },
+  {
+   "fieldname": "col_essais_geocodage",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "google_geocoding_cle",
+   "fieldtype": "Password",
+   "label": "Clé Google Geocoding",
+   "description": "Utilisée pour les essais et, après activation explicite ci-dessous, pour localiser les adresses. Vide : utilise la clé Google Routes. Activer Geocoding API dans le projet de cette clé."
+  },
+  {
+   "fieldname": "sec_geocodage_qualite",
+   "fieldtype": "Section Break",
+   "label": "Localisation des adresses clients",
+   "description": "Les positions GPS connues sont conservées. Le calcul utilise automatiquement la meilleure position disponible et signale les estimations. La correction sur la fiche Adresse reste facultative. Aucune moyenne de coordonnées."
+  },
+  {
+   "fieldname": "geocodage_texte_actif",
+   "fieldtype": "Check",
+   "label": "Autoriser la recherche des adresses clients avec Google et Nominatim privé",
+   "default": "0",
+   "description": "Désactivé par défaut. Après activation, les textes postaux des adresses nécessaires aux tournées ou au traitement quotidien peuvent être transmis aux services configurés. Plafond partagé avec les essais : 200 recherches réseau par jour."
+  },
+  {
+   "fieldname": "nominatim_prive_url",
+   "fieldtype": "Data",
+   "label": "URL Nominatim privé (facultative)",
+   "description": "Adresse de votre serveur Nominatim ou de votre hébergeur, avec ou sans /search. Vide : Google seul. Le service public nominatim.openstreetmap.org n’est pas utilisé pour le géocodage automatique des clients."
   }
  ],
  "index_web_pages_for_search": 0,

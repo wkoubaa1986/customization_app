@@ -23,7 +23,6 @@ import hashlib
 import math
 import re
 import statistics
-import time
 
 import frappe
 import requests
@@ -260,50 +259,21 @@ def _resoudre_par_le_reseau(url: str, timeout: float):
     return None
 
 
-NOMINATIM = "https://nominatim.openstreetmap.org/search"
 MARQUE_LIEN_MORT = "lien mort"
 
 
-TEXTE_CACHE = "tournee_texte:"
-TEXTE_CACHE_INCONNU = 7 * 24 * 3600     # Nominatim a bien répondu : l'adresse lui est inconnue
-TEXTE_CACHE_REFUS = 3600                 # refus / limite de débit / réseau : on réessaiera dans une heure
+def controle_localisation_actif():
+    from customization_app.geocodage_adresses import reglages
+    return reglages()["actif"]
 
 
 def geocoder_texte(adresse_texte: str, ville: str | None = None):
-    """Nominatim (OpenStreetMap, gratuit, 1 requête/s) sur le texte de l'adresse : une position APPROCHÉE
-    (le quartier, la rue), mieux que rien quand le lien est mort ou absent. None sans réseau ou sans résultat.
-
-    ⚠️ MÉMORISÉ, échecs compris : un texte introuvable était recherché à nouveau à CHAQUE affichage, avec
-    1,1 s de pause entre deux requêtes — 2 à 3 s d'attente pour trois adresses (05/10/2026)."""
+    """Compatibilité : seul un résultat jugé fiable est utilisable comme point."""
     if frappe.flags.get("tournee_sans_reseau") or not (adresse_texte or ville):
         return None
-    cle = TEXTE_CACHE + hashlib.sha1(("%s|%s" % (adresse_texte or "", ville or "")).encode()).hexdigest()
-    deja = frappe.cache().get_value(cle, expires=True)
-    if deja is not None:
-        return tuple(deja) if deja else None
-    c, repondu = _geocoder_texte_reseau(adresse_texte, ville)
-    frappe.cache().set_value(cle, list(c) if c else [],
-                             expires_in_sec=LIEN_CACHE_OK if c else (TEXTE_CACHE_INCONNU if repondu else TEXTE_CACHE_REFUS))
-    return c
-
-
-def _geocoder_texte_reseau(adresse_texte: str, ville: str | None):
-    """(coordonnées ou None, Nominatim a-t-il vraiment répondu ?). Un refus (429, 403…) arrête tout de suite :
-    inutile d'attendre pour une seconde requête qui serait refusée aussi."""
-    try:
-        for i, q in enumerate(([x for x in (adresse_texte, ville, "Tunisia") if x], [x for x in (ville, "Tunisia") if x])):
-            if i:
-                time.sleep(1.1)                  # règle de Nominatim : une requête par seconde
-            r = requests.get(NOMINATIM, params={"q": ", ".join(q), "format": "json", "limit": 1, "countrycodes": "tn"},
-                             headers={"User-Agent": "aquaworld-erpnext (koubaawassim@gmail.com)"}, timeout=10)
-            if not r.ok:
-                return None, False
-            d = r.json()
-            if d:
-                return (float(d[0]["lat"]), float(d[0]["lon"])), True
-    except Exception:
-        return None, False
-    return None, True
+    from customization_app.geocodage_adresses import rechercher
+    r = rechercher({"address_line1": adresse_texte, "city": ville, "country": "Tunisia"})
+    return tuple(r["point"]) if r.get("point") else None
 
 
 PLAUSIBLE_KM = 30.0                      # un point lu dans le texte à plus de 30 km du centre de son secteur est faux
@@ -323,39 +293,20 @@ def plausible(c, secteur: str | None, centres: dict | None = None, max_km: float
 
 
 def _geocoder_adresse(nom: str, texte: bool = True):
-    """Coordonnées mémorisées sur l'adresse, sinon résolues depuis son lien (puis son texte) et mémorisées.
-    Un lien mort est marqué pour ne pas être réessayé à chaque proposition."""
+    """Point fiable/validé ; les anciens points texte restent approximatifs tant que
+    le nouveau contrôle n'est pas activé. Aucun repli réseau sur un centre de ville."""
     if not nom:
         return None
-    a = frappe.db.get_value("Address", nom, ["custom_latitude", "custom_longitude", "custom_lien_google_map",
-                                             "custom_geocode_source", "address_line1", "city", "custom_secteur"], as_dict=True)
-    if not a:
-        return None
-    if a.custom_latitude and a.custom_longitude:
-        c = (flt(a.custom_latitude), flt(a.custom_longitude))
-        if (a.custom_geocode_source or "").startswith("texte") and not plausible(c, a.custom_secteur):
-            # Mémorisé avant le contrôle (16/10/2026) : on l'oublie, le centre du secteur fera mieux
-            if not frappe.flags.get("tournee_sans_reseau") and frappe.db.has_column("Address", "custom_geocode_source"):
-                frappe.db.set_value("Address", nom, {"custom_latitude": 0, "custom_longitude": 0, "custom_geocode_source": TEXTE_HORS_SECTEUR}, update_modified=False)
-            return None
-        return c
-    if a.custom_lien_google_map and not (a.custom_geocode_source or "").startswith(MARQUE_LIEN_MORT):
-        c = resoudre_lien(a.custom_lien_google_map)
-        if c:
-            _memoriser(nom, c, "lien adresse")
-            return c
-        if not frappe.flags.get("tournee_sans_reseau") and frappe.db.has_column("Address", "custom_geocode_source"):
-            frappe.db.set_value("Address", nom, "custom_geocode_source", "%s %s" % (MARQUE_LIEN_MORT, frappe.utils.nowdate()), update_modified=False)
-    if texte and not (a.custom_geocode_source or "").startswith("texte"):
-        c = geocoder_texte(a.address_line1, a.city)
-        if c and not plausible(c, a.custom_secteur):
-            if frappe.db.has_column("Address", "custom_geocode_source"):
-                frappe.db.set_value("Address", nom, "custom_geocode_source", TEXTE_HORS_SECTEUR, update_modified=False)
-            return None
-        if c:
-            _memoriser(nom, c, "texte ≈")
-            return c
-    return None
+    from customization_app.geocodage_adresses import resoudre_adresse
+    if not controle_localisation_actif():
+        a = frappe.db.get_value("Address", nom,
+            ["custom_latitude", "custom_longitude", "custom_geocode_source", "custom_geocode_statut", "custom_secteur"], as_dict=True)
+        if a and not a.custom_geocode_statut and (a.custom_geocode_source or "").startswith("texte"):
+            c = (flt(a.custom_latitude), flt(a.custom_longitude))
+            if c[0] and c[1] and plausible(c, a.custom_secteur):
+                return c
+    r = resoudre_adresse(nom, texte=texte, reseau=not frappe.flags.get("tournee_sans_reseau"))
+    return tuple(r["point"]) if r.get("point") else None
 
 
 def reprendre_liens_sans_coordonnees(limite: int = 500, ecrire: bool = True) -> dict:
@@ -392,57 +343,36 @@ def reprendre_liens_sans_coordonnees(limite: int = 500, ecrire: bool = True) -> 
 
 
 def geocoder_adresses(limite: int = 500) -> dict:
-    """Tâche de fond : géocode les adresses sans position — par leur lien, sinon par leur texte. Idempotent :
-    les liens morts et les textes déjà essayés sont marqués. → {liens, textes, morts, restantes}."""
-    if not frappe.db.has_column("Address", "custom_latitude"):
-        return {}
-    bilan = {"liens": 0, "textes": 0, "morts": 0, "restantes": 0}
-    adresses = frappe.db.sql("""select name, custom_lien_google_map, custom_geocode_source, address_line1, city
-                                from tabAddress
-                                where disabled = 0 and ifnull(custom_latitude, 0) = 0
-                                  and (custom_lien_google_map like 'http%%' or ifnull(city, '') != '')
-                                  and ifnull(custom_geocode_source, '') not like 'texte introuvable%%'
-                                order by (custom_lien_google_map like 'http%%') desc, modified desc
-                                limit %(n)s""", {"n": cint(limite) or 500}, as_dict=True)
-    for a in adresses:
-        src = a.custom_geocode_source or ""
-        if a.custom_lien_google_map and not src.startswith(MARQUE_LIEN_MORT):
-            c = resoudre_lien(a.custom_lien_google_map)
-            if c:
-                _memoriser(a.name, c, "lien adresse")
-                bilan["liens"] += 1
-                continue
-            frappe.db.set_value("Address", a.name, "custom_geocode_source", "%s %s" % (MARQUE_LIEN_MORT, frappe.utils.nowdate()), update_modified=False)
-            bilan["morts"] += 1
-            src = MARQUE_LIEN_MORT
-        if not src.startswith("texte"):
-            c = geocoder_texte(a.address_line1, a.city)
-            if c:
-                # Le lien mort reste visible dans la source : c'est lui qu'il faut corriger sur l'adresse.
-                if not plausible(c, frappe.db.get_value("Address", a.name, "custom_secteur")):
-                    frappe.db.set_value("Address", a.name, "custom_geocode_source", TEXTE_HORS_SECTEUR, update_modified=False)
-                    continue
-                _memoriser(a.name, c, "texte ≈ (lien mort)" if src.startswith(MARQUE_LIEN_MORT) else "texte ≈")
-                bilan["textes"] += 1
-            else:
-                frappe.db.set_value("Address", a.name, "custom_geocode_source", "texte introuvable %s" % frappe.utils.nowdate(), update_modified=False)
-            time.sleep(1.1)       # politesse Nominatim : 1 requête par seconde
+    """Traitement borné, sans remplacer les positions connues par une approximation."""
+    from customization_app.geocodage_adresses import resoudre_adresse, purger_expirees
+    purger_expirees()
+    bilan = {"liens": 0, "textes": 0, "morts": 0, "restantes": 0, "a_verifier": 0}
+    if not controle_localisation_actif():
+        return dict(bilan, desactive=True)
+    adresses = frappe.get_list("Address", filters={"disabled": 0, "country": "Tunisia"},
+        or_filters={"custom_latitude": ["=", 0], "custom_geocode_source": ["like", "texte%"],
+                    "custom_geocode_statut": ["in", ["À vérifier", "Introuvable", "Indisponible"]]},
+        pluck="name", order_by="modified desc", limit_page_length=max(1, min(cint(limite) or 500, 1000)))
+    for nom in adresses:
+        r = resoudre_adresse(nom)
+        if r.get("point"):
+            bilan["textes" if r.get("choix") else "liens"] += 1
+        else:
+            bilan["a_verifier"] += 1
         frappe.db.commit()
-    bilan["restantes"] = frappe.db.sql("""select count(*) from tabAddress where disabled = 0 and ifnull(custom_latitude, 0) = 0
-                                          and custom_lien_google_map like 'http%%' and ifnull(custom_geocode_source, '') not like 'lien mort%%'""")[0][0]
+        if "Plafond" in (r.get("motif") or ""):
+            break
+    bilan["restantes"] = frappe.db.count("Address", {"disabled": 0, "custom_geocode_statut": "À vérifier"})
     return bilan
 
 
 def geocodage_quotidien():
-    """Cron : les adresses nouvelles ou modifiées depuis la veille (lien collé, adresse créée), puis les positions
-    des tâches des 14 prochains jours mises en mémoire — la première ouverture d'un jour dans « Optimiser la
-    journée » est alors immédiate, comme les suivantes."""
+    """Actualise uniquement les positions des tâches ouvertes des 14 prochains jours."""
     try:
-        geocoder_adresses(limite=300)
-    except Exception:
-        frappe.log_error(frappe.get_traceback(), "tournées : géocodage quotidien")
-    try:
-        prechauffer_positions(jours=14)
+        from customization_app.geocodage_adresses import purger_expirees
+        purger_expirees()
+        if controle_localisation_actif():
+            prechauffer_positions(jours=14)
     except Exception:
         frappe.log_error(frappe.get_traceback(), "tournées : positions des tâches à venir")
 
@@ -475,6 +405,8 @@ def etat_geocodage():
 def lancer_geocodage(limite=500):
     """Bouton du réglage : géocodage en tâche de fond (quelques minutes pour des centaines d'adresses)."""
     _superviseur()
+    if not controle_localisation_actif():
+        frappe.throw("Activez explicitement la recherche des adresses clients dans les réglages avant de lancer ce traitement.")
     frappe.enqueue("customization_app.tournee_optimisation.geocoder_adresses", queue="long", timeout=3600,
                    limite=cint(limite) or 500, enqueue_after_commit=True)
     return etat_geocodage()
@@ -482,8 +414,15 @@ def lancer_geocodage(limite=500):
 
 def _memoriser(adresse: str, c, source: str):
     if adresse and frappe.db.has_column("Address", "custom_latitude"):
-        frappe.db.set_value("Address", adresse, {"custom_latitude": c[0], "custom_longitude": c[1], "custom_geocode_source": source},
-                            update_modified=False)
+        if frappe.flags.get("tournee_sans_reseau"):
+            return
+        from customization_app.geocodage_adresses import signature
+        a = frappe.get_doc("Address", adresse)
+        valeurs = {"custom_latitude": c[0], "custom_longitude": c[1], "custom_geocode_source": source}
+        if frappe.db.has_column("Address", "custom_geocode_statut"):
+            valeurs.update(custom_geocode_statut="Validée", custom_geocode_signature=signature(a),
+                           custom_geocode_expire_le=None, custom_geocode_motif="Position issue d’un lien.", custom_geocode_valide_par=None)
+        frappe.db.set_value("Address", adresse, valeurs, update_modified=False)
 
 
 def _centres_secteurs() -> dict:
@@ -529,10 +468,25 @@ def coordonnees_tache(t, centres: dict):
     « grossière » : un lien de tâche (ou mémorisé depuis un lien de tâche) sur la grille 1/37° — position réseau du
     téléphone, à 1-3 km du client ; on la donne comme approchée, et on ne la mémorise jamais sur l'adresse
     (13 des 16 tâches à lien grossier finissaient « aucun passage », 15/10/2026)."""
-    c = resoudre_lien(t.get("google_map"))
-    if c:
-        if position_grossiere(c):
-            return c[0], c[1], GROSSIERE
+    from customization_app import geocodage_adresses as A
+    from customization_app.geocodage_liens import resoudre_lien as lire_lien, lien_google
+    a = frappe.get_doc("Address", t.select_address) if t.get("select_address") else None
+    if a and (a.get("custom_geocode_valide_par") or not t.get("google_map")
+              or t.get("google_map") == a.get("custom_lien_google_map")):
+        c = A.position_memorisee(a)
+        if c:
+            return c[0], c[1], "Google Maps" if A.source_google(a.get("custom_geocode_source")) else "adresse"
+    reseau = not frappe.flags.get("tournee_sans_reseau")
+    detail = lire_lien(t.get("google_map"), reseau=reseau)
+    c = detail.get("point") if detail else None
+    if c and (detail.get("choix") or {}).get("service") == "google":
+        if a and reseau and t.get("google_map") == a.get("custom_lien_google_map"):
+            A._memoriser(a, detail)
+        return c[0], c[1], "Google Maps"
+    if not c and not lien_google(t.get("google_map")):
+        c = resoudre_lien(t.get("google_map"))
+    grossiere = c if c and position_grossiere(c) else None
+    if c and not grossiere:
         if t.get("select_address") and frappe.db.has_column("Address", "custom_latitude"):
             lat, src = frappe.db.get_value("Address", t.select_address, ["custom_latitude", "custom_geocode_source"]) or (None, None)
             # Vide, ou seulement approchée d'après le texte (Faleh Wajdi : « Cité Ennasr 2 » lu à Mateur, 55 km, 09/10/2026),
@@ -541,16 +495,53 @@ def coordonnees_tache(t, centres: dict):
             if not lat or (src or "").startswith("texte") or (src == "lien tâche" and position_grossiere((lat, 0))):
                 _memoriser(t.select_address, c, "lien tâche")
         return c[0], c[1], "tâche"
-    c = _geocoder_adresse(t.get("select_address"))
+    if a and controle_localisation_actif():
+        r = A.resoudre_pour_tournee(a.name, reseau=reseau, secteur=t.get("secteur"), centres=centres)
+        if r.get("point"):
+            google = A.source_google(r.get("source")) or (r.get("choix") or {}).get("service") == "google"
+            source = ("Google Maps estimé" if google else "texte estimé") if r.get("estimee") else ("Google Maps" if google else "adresse")
+            return r["point"][0], r["point"][1], source
+        c = None
+    else:
+        c = _geocoder_adresse(t.get("select_address"))
     if c:
         src = frappe.db.get_value("Address", t.select_address, "custom_geocode_source") or ""
         if src == "lien tâche" and position_grossiere(c):
             return c[0], c[1], GROSSIERE
-        return c[0], c[1], ("secteur" if src.startswith("texte") else "adresse")   # texte = approché, dit comme tel
+        statut = frappe.db.get_value("Address", t.select_address, "custom_geocode_statut") or ""
+        if A.source_google(src) and statut in ("Fiable", "Validée"):
+            return c[0], c[1], "Google Maps"
+        return c[0], c[1], ("secteur" if src.startswith("texte") and statut not in ("Fiable", "Validée") else "adresse")
+    if grossiere:
+        return grossiere[0], grossiere[1], GROSSIERE
     if t.get("secteur") in centres:
         c = centres[t.secteur]
         return c[0], c[1], "secteur"
     return None
+
+
+def intervention_terrain(t, cfg):
+    return t.get("custom_type_dintervention") in cfg["types"] and not (
+        t.get("custom_type_dintervention") == "Réparation" and (t.get("dans_local") or "") == "Oui")
+
+
+def position_estimee(source):
+    return source in ("secteur", GROSSIERE, "Google Maps estimé", "texte estimé")
+
+
+def position_a_verifier(t, pos, cfg):
+    """Qualité indicative ; une estimation ne bloque plus le calcul automatique."""
+    return intervention_terrain(t, cfg) and (not pos or position_estimee(pos[2]))
+
+
+def motif_position_a_verifier(t, pos=None):
+    """Explique le blocage avec le diagnostic déjà enregistré, sans appel réseau."""
+    if pos and pos[2] == GROSSIERE:
+        return "Position du téléphone trop approximative : renseignez un point GPS confirmé."
+    if not t.get("select_address"):
+        return "Aucune fiche Adresse associée : renseignez l’adresse ou un lien GPS sur la tâche."
+    motif = frappe.db.get_value("Address", t.select_address, "custom_geocode_motif")
+    return motif or "Position absente ou approximative : confirmez le point sur la fiche Adresse."
 
 
 # ── Distances ───────────────────────────────────────────────────────────────
@@ -648,7 +639,8 @@ def resoudre(minutes: list, arrets: list, nb_vehicules: int, debut: int, fin: in
              limite_s: int = 5, premiere: int | None = None, depots: list | None = None,
              marge: int = 0, pause: tuple | None = None, occupations: dict | None = None,
              debuts: list | None = None, fins: list | None = None, rangement: int = 0,
-             depassements: list | None = None) -> dict:
+             depassements: list | None = None, vehicules_equilibres: list | None = None,
+             charges_fixes: list | None = None) -> dict:
     """Tournées à fenêtres de temps (OR-Tools). `minutes` couvre tous les nœuds : les dépôts (nœud 0 = Magasin,
     puis les points de départ particuliers) et les arrêts, qui occupent les DERNIERS nœuds. `arrets[i]` :
     {service: min, fenetre: (a, b) | None, vehicule: idx | None}. `depots[v]` = nœud de départ ET de retour du
@@ -685,24 +677,31 @@ def resoudre(minutes: list, arrets: list, nb_vehicules: int, debut: int, fin: in
     horizon = max(fin_max, max((a["fenetre"][1] + cint(a.get("service")) for a in arrets if a.get("fenetre")), default=fin)) + 1
     routing.AddDimension(cb, horizon, horizon, False, "Temps")
     temps = routing.GetDimensionOrDie("Temps")
-    # Équilibrage : c'est la fin de journée LA PLUS TARDIVE, toutes tournées confondues, qui coûte — chaque minute
-    # vaut 2 × equilibre minutes de route. Charger un employé n'a d'intérêt que tant que sa journée reste plus
-    # courte que celle du plus chargé : les fins de journée se rapprochent d'elles-mêmes.
-    # (Historique : une borne souple « part équitable + 1 h » par véhicule ne voyait pas qu'un employé occupé par
-    # des tâches sorties du modèle restait libre après, et laissait tout l'après-midi au collègue déjà le plus
-    # chargé — Akram 13:20 / Mohamed Hedi 17:25, 03/10/2026. Une somme des amplitudes chargeait tout sur un seul.)
-    # Un seul véhicule : rien à équilibrer — ce coût ne ferait que préférer « finir tôt » (10 min de route pour 1 min de
-    # journée avec équilibre 5) au détriment des km, alors que la fin est de toute façon dictée par les rendez-vous fixes
-    # et la pause (18/10/2026 : Sidi Bou Saïd → Lac → Manouba → El Omrane, 116 km, au lieu d'ouest en est).
-    if equilibre and nb_vehicules > 1:
-        temps.SetGlobalSpanCostCoefficient(2 * cint(equilibre))
+    # Charge active : intervention + route + stationnement + rangement, sans
+    # attente ni pause. Les autres employés ont un coût d'équilibrage nul.
+    groupes = set(range(nb_vehicules) if vehicules_equilibres is None else vehicules_equilibres)
+    if equilibre > 0 and len(groupes) > 1:
+        fixes = charges_fixes if charges_fixes is not None else [
+            sum(max(0, f - d) for d, f in (occupations or {}).get(v, [])) for v in range(nb_vehicules)]
+        zero = routing.RegisterTransitCallback(lambda i, j: 0)
+        evaluateurs = []
+        for v in range(nb_vehicules):
+            if v not in groupes:
+                evaluateurs.append(zero)
+                continue
+            def charge(i, j, v=v):
+                return transit(i, j) + (cint(fixes[v]) if routing.IsStart(i) else 0)
+            evaluateurs.append(routing.RegisterTransitCallback(charge))
+        capacite = sum(service) + sum(marges) + sum(rangements) + sum(fixes) + n * max(max(ligne) for ligne in minutes) + 1
+        routing.AddDimensionWithVehicleTransits(evaluateurs, 0, int(capacite), True, "Charge")
+        routing.GetDimensionOrDie("Charge").SetGlobalSpanCostCoefficient(2 * cint(equilibre))
     # Créneaux où un véhicule est OCCUPÉ hors tournée (tâche qu'on n'a pas pu placer, gardée telle quelle) :
     # des pauses imposées, pour que les autres arrêts ne viennent pas se poser dessus.
     visites = [service[manager.IndexToNode(i)] for i in range(routing.Size())]
     for v in range(nb_vehicules):
         occ = fusionner_intervalles([(cint(d), cint(f)) for d, f in (occupations or {}).get(v, []) if f > d])
-        # Sa journée finit au plus tôt à la fin de son dernier créneau occupé : c'est sur cette base que son
-        # amplitude est comparée aux autres (sinon un employé pris jusqu'à 13:20 paraît fini à 10:30).
+        # Sa journée finit au plus tôt à la fin de son dernier créneau occupé.
+        # Cette amplitude reste distincte de sa charge de travail active.
         fin_min = max(debuts[v], occ[-1][1] if occ else debuts[v])
         temps.CumulVar(routing.Start(v)).SetRange(debuts[v], debuts[v])
         fin_v = max(fins[v], fin_min)
@@ -718,14 +717,22 @@ def resoudre(minutes: list, arrets: list, nb_vehicules: int, debut: int, fin: in
     for k, a in enumerate(arrets):
         idx = manager.NodeToIndex(nb_depots + k)
         fen = a.get("fenetre") or (max(debut, premiere or debut), fin_max)       # pas de visite libre avant « première »
-        temps.CumulVar(idx).SetRange(cint(fen[0]), cint(fen[1]))
-        if pause and not a.get("fixe_pause"):
+        impossible = cint(fen[0]) > cint(fen[1])
+        if impossible:
+            # Aucune intersection entre la fenêtre promise et les heures de visite.
+            # L'arrêt reste non placé, sans élargir sa fenêtre ni casser le solveur.
+            routing.ActiveVar(idx).SetValue(0)
+        else:
+            temps.CumulVar(idx).SetRange(cint(fen[0]), cint(fen[1]))
+        if pause and not a.get("fixe_pause") and not impossible:
             # Pas d'intervention à cheval sur la pause : elle finit avant, ou commence après.
             temps.CumulVar(idx).RemoveInterval(max(cint(pause[0]) - cint(a.get("service")) + 1, cint(fen[0])), cint(pause[1]) - 1)
         if a.get("vehicule") is not None:
             # Le véhicule imposé, ET −1 (« non desservi ») pour rester compatible avec la disjonction
             # ci-dessous — sans −1, le modèle est insoluble dès qu'une tâche est fixée.
             routing.VehicleVar(idx).SetValues([-1, int(a["vehicule"])])
+        elif a.get("vehicules") is not None:
+            routing.VehicleVar(idx).SetValues([-1] + [int(v) for v in a["vehicules"]])
         # On préfère laisser une tâche de côté (et le dire) plutôt que rendre le problème insoluble.
         routing.AddDisjunction([idx], 100000 if a.get("vehicule") is None else 1000000)
     params = pywrapcp.DefaultRoutingSearchParameters()
@@ -865,6 +872,27 @@ def _route_actuelle(arrets_emp: list, mn: list, km: list, depot: int = 0) -> tup
             round(sum(km[ordre[i]][ordre[i + 1]] for i in range(len(ordre) - 1)), 1))
 
 
+def employes_techniciens(employes):
+    """Rôle effectif du compte lié, sans déduire le métier du nom ou de l'intitulé."""
+    noms = tuple(sorted({e for e in employes if e}))
+    if not noms:
+        return set()
+    return {r[0] for r in frappe.db.sql("""select distinct e.name
+        from tabEmployee e join tabUser u on u.name=e.user_id and u.enabled=1
+        join `tabHas Role` r on r.parent=u.name and r.parenttype='User' and r.role='Technicien'
+        where e.status='Active' and e.name in %(employes)s""", {"employes": noms})}
+
+
+def charge_travail(arrets, trajets, marge, rangement):
+    """Minutes de travail prévues, indépendantes des heures de départ/fin et de l'attente."""
+    interventions = sum(cint(a.get("service")) for a in arrets)
+    visites = sum(a.get("position") != "dépôt" for a in arrets)
+    resultat = {"interventions": interventions, "trajets": cint(trajets),
+                "stationnement": visites * cint(marge), "rangement": visites * cint(rangement)}
+    resultat["total"] = sum(resultat.values())
+    return resultat
+
+
 @frappe.whitelist()
 def reglages_calcul():
     """Les valeurs du réglage que la fenêtre d'optimisation propose par défaut (fenêtre ±, dépassement permis)."""
@@ -889,7 +917,9 @@ def employes_du_jour(date):
                          {"d": "%s 00:00:00" % jour, "f": "%s 23:59:59" % jour, "types": tuple(cfg["types"]), "hors": TYPES_HORS_JOURNEE}, as_dict=True)
     noms = {e.name: e.employee_name for e in frappe.get_all("Employee", filters={"name": ["in", [r.employe for r in rows] or [""]]}, fields=["name", "employee_name"])}
     detail = _taches_par_employe(jour, cfg)
+    techniciens = employes_techniciens([r.employe for r in rows])
     out = [{"employe": r.employe, "nom": noms.get(r.employe, r.employe), "taches": cint(r.n), "mobiles": cint(r.mobiles),
+            "technicien": r.employe in techniciens,
             "exclu": r.employe in cfg["exclus"], "domicile": r.employe in cfg["departs"],
             "debut": _hm(cfg["horaires"].get(r.employe, (cfg["debut"], cfg["fin"]))[0]),
             "fin": _hm(cfg["horaires"].get(r.employe, (cfg["debut"], cfg["fin"]))[1]),
@@ -1001,8 +1031,21 @@ def proposer(date, fenetre=None, employes=None, depassement=None):
     centres = _centres_secteurs()
     base = jour.strftime("%Y-%m-%d")
     points, arrets, avert = [cfg["depot"]], [], []
+    controle_position = controle_localisation_actif()
+    candidates = [t for t in taches if t.custom_type_dintervention not in TYPES_HORS_JOURNEE
+                  and t.custom_choix_du_staff not in cfg["exclus"]]
+    positions = {t.name: coordonnees_tache(t, centres) for t in candidates}
+    # Sans aucun point (ni lien, ni géocodage, ni secteur), conserver la journée
+    # de l'employé : on ne peut pas calculer ses trajets ni lui ajouter des visites.
+    sans_position = {t.custom_choix_du_staff for t in candidates
+                     if controle_position and intervention_terrain(t, cfg) and not positions[t.name]}
+    conservees = [{"tache": t.name, "client": t.nom_client or t.custom_client or "", "employe": t.custom_choix_du_staff}
+                 for t in candidates if t.custom_choix_du_staff in sans_position]
+    if conservees:
+        avert.append(_("{0} tâche(s) conservées aux heures et employés actuels : une position est introuvable dans leur tournée. Les autres tournées sont optimisées.").format(len(conservees)))
+    estimees = []
     for t in taches:
-        if t.custom_type_dintervention in TYPES_HORS_JOURNEE or t.custom_choix_du_staff in cfg["exclus"]:
+        if t.custom_type_dintervention in TYPES_HORS_JOURNEE or t.custom_choix_du_staff in cfg["exclus"] or t.custom_choix_du_staff in sans_position:
             continue
         debut = get_datetime(t.starts_on)
         dmin = debut.hour * 60 + debut.minute
@@ -1010,7 +1053,9 @@ def proposer(date, fenetre=None, employes=None, depassement=None):
         heure_fixe, employe_fixe = bool(cint(t.get(HEURE_FIXE))), bool(cint(t.get(EMPLOYE_FIXE)))
         mobile = (t.custom_type_dintervention in cfg["types"] and t.status == "Open" and not (heure_fixe and employe_fixe)
                   and not (t.custom_type_dintervention == "Réparation" and (t.dans_local or "") == "Oui"))
-        pos = coordonnees_tache(t, centres)
+        pos = positions[t.name]
+        if pos and position_estimee(pos[2]):
+            estimees.append({"tache": t.name, "client": t.nom_client or t.custom_client or "", "source": pos[2]})
         if not pos:
             if mobile:
                 avert.append(_("{0} ({1}) : pas de position connue — gardée telle quelle").format(t.name, t.nom_client or t.custom_client or ""))
@@ -1022,17 +1067,21 @@ def proposer(date, fenetre=None, employes=None, depassement=None):
             # « secteur » couvre deux cas : le centre du secteur (aucune position), ou le point trouvé d'après le TEXTE
             # de l'adresse (OpenStreetMap, rue ou quartier) — le dire tel quel.
             d_ou = (_("par le centre du {0}").format(t.secteur) if centres.get(t.secteur) == (pos[0], pos[1])
-                    else _("d’après le texte de l’adresse (OpenStreetMap : rue ou quartier)"))
+                    else _("d’après une ancienne approximation de l’adresse"))
             avert.append(_("{0} ({1}) : position approchée {2}").format(t.name, t.nom_client or t.custom_client or "", d_ou))
         points.append((pos[0], pos[1]))
         arrets.append({"noeud": len(points) - 1, "tache": t.name, "client": t.nom_client or t.custom_client or "", "type": t.custom_type_dintervention,
-                       "employe": t.custom_choix_du_staff, "debut": dmin, "service": service, "mobile": mobile, "statut": t.status,
+                       "employe": t.custom_choix_du_staff, "debut": dmin, "debut_exact": dmin + debut.second / 60,
+                       "service": service, "mobile": mobile, "statut": t.status,
                        "heure_fixe": heure_fixe, "employe_fixe": employe_fixe,
                        "position": pos[2], "lat": pos[0], "lng": pos[1], "adresse": t.details_adresse or "", "secteur": t.secteur or ""})
     employes = sorted({a["employe"] for a in arrets})
     if not employes:
-        return {"date": str(jour), "employes": [], "message": _("Aucun employé n’a de tâche de terrain ce jour-là.")}
+        return {"date": str(jour), "employes": [], "deplacees": 0, "decalees": 0, "conservees_sans_position": conservees,
+                "message": avert[0] if conservees else _("Aucun employé n’a de tâche de terrain ce jour-là.")}
     noms = {e.name: e.employee_name for e in frappe.get_all("Employee", filters={"name": ["in", employes]}, fields=["name", "employee_name"])}
+    techniciens = employes_techniciens(employes)
+    vehicules_techniciens = [v for v, e in enumerate(employes) if e in techniciens]
     for a, b in chevauchements(arrets):
         avert.append(_("{0} : {1} ({2}) et {3} ({4}) se chevauchent déjà dans le planning actuel").format(
             noms.get(a["employe"], a["employe"]), a["client"], _hm(a["debut"]), b["client"], _hm(b["debut"])))
@@ -1055,7 +1104,7 @@ def proposer(date, fenetre=None, employes=None, depassement=None):
         refaire = False
         for n in hors_route(ecarts, sorted(par_n)):
             a = par_n[n]
-            centre = centres.get(a["secteur"]) if a["position"] in ("secteur", GROSSIERE) else None
+            centre = centres.get(a["secteur"]) if position_estimee(a["position"]) else None
             if centre and centre != (a["lat"], a["lng"]):
                 points[n] = centre
                 a["lat"], a["lng"], a["position"] = centre[0], centre[1], "secteur"
@@ -1098,23 +1147,26 @@ def proposer(date, fenetre=None, employes=None, depassement=None):
     # seul employé prenait 1 min 30 : jusqu'à 12 résolutions).
     limite = max(2, min(5, len(arrets) // 3))
     fenetre = cint(cfg["fenetre"]) if fenetre is None else cint(fenetre)
-    fenetre_courante = fenetre
+    if fenetre < 0:
+        frappe.throw(_("Le déplacement maximal ne peut pas être négatif."))
 
     def _noeud(a):
         if not a["mobile"]:
             return {"service": a["service"], "fenetre": (a["debut"], a["debut"]), "vehicule": employes.index(a["employe"]), "fixe_pause": True,
                     "sans_marge": a["position"] == "dépôt"}
-        vehicule = employes.index(a["employe"]) if a["employe_fixe"] else None      # « Employé fixe »
+        vehicule = employes.index(a["employe"]) if a["employe_fixe"] or a["employe"] not in techniciens else None
         if a["heure_fixe"]:
-            # « Heure fixe » : l'heure promise, chez n'importe quel employé (sauf s'il est fixe aussi).
+            # « Heure fixe » : l'heure promise ; redistribution entre techniciens seulement.
             a["fenetre"] = (a["debut"], a["debut"])
-            return {"service": a["service"], "fenetre": a["fenetre"], "vehicule": vehicule, "fixe_pause": True}
-        # Déplaçable : libre dans la journée, ou dans ± fenêtre autour de son heure actuelle (défaut) — fenêtre
-        # élargie automatiquement si rien ne tient (voir _passes).
-        fen = None if not fenetre_courante else (max(cfg["premiere"], a["debut"] - fenetre_courante),
-                                                 min(fin_j + max(deps), max(a["debut"] + fenetre_courante, cfg["premiere"])))
+            return {"service": a["service"], "fenetre": a["fenetre"], "vehicule": vehicule,
+                    "vehicules": vehicules_techniciens, "fixe_pause": True}
+        # La fenêtre demandée est une limite stricte. Arrondir ses bornes vers
+        # l'intérieur évite que l'arrondi final à 5 min dépasse la borne supérieure.
+        fen = None if not fenetre else (
+            int(math.ceil(max(cfg["premiere"], a["debut_exact"] - fenetre) / PAS_MIN) * PAS_MIN),
+            int(math.floor(min(fin_j + max(deps), a["debut_exact"] + fenetre) / PAS_MIN) * PAS_MIN))
         a["fenetre"] = fen
-        return {"service": a["service"], "fenetre": fen, "vehicule": vehicule}
+        return {"service": a["service"], "fenetre": fen, "vehicule": vehicule, "vehicules": vehicules_techniciens}
 
     par_noeud = {a["noeud"]: a for a in arrets}
     # L'état de départ de chaque calcul. ⚠️ Les passes FIGENT les tâches qu'elles n'arrivent pas à placer (mobile=False,
@@ -1125,33 +1177,20 @@ def proposer(date, fenetre=None, employes=None, depassement=None):
     for a in arrets:
         a["fixe_initial"] = not a["mobile"]          # pour la colonne « Actuel » : les vraies épingles, pas les abandons
 
-    elargie, surcharge, courant = {"fait": False}, {"fait": False}, {"avert": []}
+    surcharge, courant = {"fait": False}, {"avert": []}
 
     def _passes(mn_x):
-        """Les passes (fenêtre réglée → fenêtre doublée → libre ; puis non placées fixées → non placées en créneaux
-        occupés) sur une matrice donnée.
-        ÉLARGISSEMENT AUTOMATIQUE (16/10/2026) : à ± 2 h, la journée de Mohamed Hedi du 17/10 ne tenait pas (Hatem à heure
-        fixe 12:00, pause, marges) et le repli figeait Mariem et Nabil à leurs heures qui se chevauchent, avec des retards
-        partout ; en fenêtre libre, les 7 tâches tenaient, retour 16:40, 29 km au lieu de 44. Mieux vaut bouger une heure
-        que laisser une tâche sans place : on essaie la fenêtre réglée, puis le double, puis libre, et on le dit."""
-        nonlocal fin_j, fenetre_courante
-        deps[:] = deps_depart                              # le 2e calcul (pointes) repart du dépassement demandé
-        candidats = [fenetre] if not fenetre else [fenetre, fenetre * 2, 0]
-        sans_place = 0                                     # combien ne tenaient pas à la fenêtre réglée
-        for k, fen_k in enumerate(candidats):
-            fenetre_courante = fen_k
-            for a in arrets:
-                a["mobile"] = mobiles_depart[a["noeud"]]
-            fins[:] = fins_depart
-            fin_j = max(fins)
-            noeuds = [_noeud(a) for a in arrets]
-            sol = resoudre(mn_x, noeuds, len(employes), debut_j, fin_j, cfg["equilibre"], premiere=cfg["premiere"], depots=depots,
-                           marge=cfg["marge"], pause=cfg["pause"], debuts=debuts, fins=fins,
-                           rangement=cfg["rangement"], depassements=deps, limite_s=limite)
-            if k == 0:
-                sans_place = len(sol["non_places"])
-            if not sol["non_places"]:
-                break
+        """Fenêtre demandée stricte, puis conservation des tâches impossibles à placer."""
+        nonlocal fin_j
+        deps[:] = deps_depart
+        for a in arrets:
+            a["mobile"] = mobiles_depart[a["noeud"]]
+        fins[:] = fins_depart
+        fin_j = max(fins)
+        noeuds = [_noeud(a) for a in arrets]
+        sol = resoudre(mn_x, noeuds, len(employes), debut_j, fin_j, cfg["equilibre"], premiere=cfg["premiere"], depots=depots,
+                       marge=cfg["marge"], pause=cfg["pause"], debuts=debuts, fins=fins,
+                       rangement=cfg["rangement"], depassements=deps, limite_s=limite, vehicules_equilibres=vehicules_techniciens)
         if sol["non_places"]:
             # DERNIER RECOURS avant de figer quoi que ce soit (18/10/2026, journée de Mohamed Hedi du 19/10 : 8 entretiens,
             # un rendez-vous à heure fixe à 16:30, la pause et les marges ne tenaient pas avant 18:00). Figer les tâches
@@ -1159,40 +1198,31 @@ def proposer(date, fenetre=None, employes=None, depassement=None):
             # comme si elles n'existaient pas (La Marsa à 09:45 puis Manouba à 10:30 à 40 min de route), avec des retards
             # partout, et chaque tâche figée en chassait une autre (6 figées sur 8 en fenêtre libre). Mieux vaut une
             # tournée complète et cohérente qui finit plus tard — dite en rouge — que ce chaos : on relâche la fin de
-            # journée (sauf une fin SAISIE dans la fenêtre, voulue) et on réessaie, fenêtre réglée puis libre.
+            # journée (sauf une fin SAISIE dans la fenêtre, voulue) et on réessaie en conservant la fenêtre stricte des rendez-vous.
             sans_limite = [0 if voulues[v] else max(deps_depart[v], DEPASSEMENT_SANS_LIMITE) for v in range(len(employes))]
             if sans_limite != deps_depart:
                 deps[:] = sans_limite
                 meilleure = sol
-                for fen_k in candidats:
-                    fenetre_courante = fen_k
-                    for a in arrets:
-                        a["mobile"] = mobiles_depart[a["noeud"]]
-                    fins[:] = fins_depart
-                    fin_j = max(fins)
-                    noeuds = [_noeud(a) for a in arrets]
-                    essai = resoudre(mn_x, noeuds, len(employes), debut_j, fin_j, cfg["equilibre"], premiere=cfg["premiere"], depots=depots,
-                                     marge=cfg["marge"], pause=cfg["pause"], debuts=debuts, fins=fins,
-                                     rangement=cfg["rangement"], depassements=deps, limite_s=limite)
-                    if len(essai["non_places"]) < len(meilleure["non_places"]):
-                        meilleure = essai
-                    if not essai["non_places"]:
-                        break
+                for a in arrets:
+                    a["mobile"] = mobiles_depart[a["noeud"]]
+                fins[:] = fins_depart
+                fin_j = max(fins)
+                noeuds = [_noeud(a) for a in arrets]
+                essai = resoudre(mn_x, noeuds, len(employes), debut_j, fin_j, cfg["equilibre"], premiere=cfg["premiere"], depots=depots,
+                                 marge=cfg["marge"], pause=cfg["pause"], debuts=debuts, fins=fins,
+                                 rangement=cfg["rangement"], depassements=deps, limite_s=limite, vehicules_equilibres=vehicules_techniciens)
+                if len(essai["non_places"]) < len(meilleure["non_places"]):
+                    meilleure = essai
                 if meilleure is not sol:
                     sol = meilleure
                     if not surcharge["fait"]:
                         surcharge["fait"] = True
-                        courant["avert"].append(_("Journée trop chargée : même en heures libres, tout ne tient pas avant la fin de journée{0}. "
+                        courant["avert"].append(_("Journée trop chargée : avec les contraintes demandées, tout ne tient pas avant la fin de journée{0}. "
                                        "La tournée proposée finit plus tard (retour en rouge) : déplacez une tâche à un autre jour, "
                                        "ou cochez un employé de plus.").format(
                             _(" (+{0} min permis)").format(dep_calcul) if dep_calcul else ""))
                 else:
                     deps[:] = deps_depart
-        if fenetre_courante != fenetre and not elargie["fait"]:
-            elargie["fait"] = True
-            courant["avert"].append(_("Fenêtre élargie à {0} : à ± {1}, {2} tâche(s) ne tenaient pas dans la tournée").format(
-                _("libre dans la journée") if not fenetre_courante else "± " + _hm(fenetre_courante).lstrip("0").replace(":", " h "),
-                _hm(fenetre).lstrip("0").replace(":", " h "), sans_place))
         if sol["non_places"]:
             # Ce qui n'a pas trouvé place reste où c'est (employé, heure) et la tournée se recalcule autour,
             # pour que la proposition soit complète et comparable à l'existant.
@@ -1205,7 +1235,7 @@ def proposer(date, fenetre=None, employes=None, depassement=None):
             noeuds = [_noeud(a) for a in arrets]
             sol = resoudre(mn_x, noeuds, len(employes), debut_j, fin_j, cfg["equilibre"], premiere=cfg["premiere"], depots=depots,
                            marge=cfg["marge"], pause=cfg["pause"], debuts=debuts, fins=fins,
-                       rangement=cfg["rangement"], depassements=deps, limite_s=limite)
+                       rangement=cfg["rangement"], depassements=deps, limite_s=limite, vehicules_equilibres=vehicules_techniciens)
         bloques = set()
         for _tour in range(6):
             if not sol["non_places"]:
@@ -1229,9 +1259,11 @@ def proposer(date, fenetre=None, employes=None, depassement=None):
             garder = list(range(nb_depots)) + [a["noeud"] for a in restants]
             mn2 = [[mn_x[i][j] for j in garder] for i in garder]
             noeuds = [_noeud(a) for a in restants]
+            charges_fixes = [charge_travail([par_noeud[n] for n in bloques if par_noeud[n]["employe"] == e],
+                                            0, cfg["marge"], cfg["rangement"])["total"] for e in employes]
             sol2 = resoudre(mn2, noeuds, len(employes), debut_j, fin_j, cfg["equilibre"], premiere=cfg["premiere"], depots=depots,
                             marge=cfg["marge"], pause=cfg["pause"], occupations=occupations, debuts=debuts, fins=fins,
-                            rangement=cfg["rangement"], depassements=deps, limite_s=limite)
+                            rangement=cfg["rangement"], depassements=deps, limite_s=limite, vehicules_equilibres=vehicules_techniciens, charges_fixes=charges_fixes)
             inverse = {nb_depots + i: a["noeud"] for i, a in enumerate(restants)}    # retour aux nœuds d'origine
             sol = {"routes": [[(inverse[n], t) for n, t in r] for r in sol2["routes"]],
                    "non_places": sorted({inverse[n] for n in sol2["non_places"]} - bloques), "cout": sol2["cout"]}
@@ -1242,7 +1274,7 @@ def proposer(date, fenetre=None, employes=None, depassement=None):
     def _calcul(mn_base, pointes: bool):
         """Un calcul complet : les passes sur la matrice donnée, puis (si demandé) sur la matrice majorée aux heures de
         pointe lues dans la 1re solution. → (solution, matrice des heures, messages des passes)."""
-        elargie["fait"] = surcharge["fait"] = False
+        surcharge["fait"] = False
         courant["avert"] = []
         sol = _passes(mn_base)
         mn_x = mn_base
@@ -1286,10 +1318,12 @@ def proposer(date, fenetre=None, employes=None, depassement=None):
                               "position": a["position"], "lat": a["lat"], "lng": a["lng"], "adresse": a["adresse"],
                               "noeud": n, "mobile": a["mobile"], "service": a["service"], "debut_min": deb, "original_min": a["debut"],
                               "fenetre": a.get("fenetre") if a["mobile"] else None})
-            out.append({"employe": e, "nom": noms.get(e, e), "depart": "domicile" if dep else "Magasin", "depart_point": points[dep],
+            out.append({"employe": e, "nom": noms.get(e, e), "technicien": e in techniciens,
+                        "equilibrage_charge": e in techniciens and len(techniciens) > 1 and cfg["equilibre"] > 0, "depart": "domicile" if dep else "Magasin", "depart_point": points[dep],
                         "depot_noeud": dep, "journee_min": [debuts[v], fins[v]], "depassement_autorise": deps[v],
                         "journee": [_hm(debuts[v]), _hm(fins[v])],
                         "avant": {"minutes": m_av, "km": k_av, "interventions": sum(a["service"] for a in actuels),
+                                  "charge": charge_travail(actuels, m_av, cfg["marge"], cfg["rangement"]),
                                   "fin": _hm(max((a["debut"] + a["service"] for a in actuels), default=debuts[v])),
                                   "arrets": [{"tache": a["tache"], "client": a["client"], "type": a["type"],
                                               "debut": _hm(a["debut"]), "fin": _hm(a["debut"] + a["service"]),
@@ -1302,10 +1336,15 @@ def proposer(date, fenetre=None, employes=None, depassement=None):
         return out, non_places, {"avant_min": tot_av, "apres_min": tot_ap, "avant_km": round(km_av, 1), "apres_km": round(km_ap, 1)}
 
     def _bilan(out, non_places) -> tuple:
-        """Ce qu'on veut petit : tâches sans place, minutes de retard (rendez-vous fixes manqués, heures hors fenêtre), retour le plus tardif."""
+        """Priorité aux tâches placées et ponctuelles, puis trajets et charge des techniciens."""
         retards = sum(cint(a.get("retard")) + (30 if a.get("hors_fenetre") else 0) for e in out for a in e["apres"]["arrets"])
         retour = max((_minutes((e.get("horaires") or {}).get("retour"), 0) for e in out), default=0)
-        return (len(non_places), retards, retour)
+        travail = [charge_travail(e["apres"]["arrets"], (e.get("horaires") or {}).get("trajets", e["apres"]["minutes"]),
+                                  cfg["marge"], cfg["rangement"])["total"] for e in out if e["employe"] in techniciens]
+        score = sum((e.get("horaires") or {}).get("trajets", e["apres"]["minutes"]) for e in out)
+        if len(travail) > 1 and cfg["equilibre"] > 0:
+            score += 2 * cfg["equilibre"] * max(travail)
+        return (len(non_places), retards, score, retour)
 
     sol, mn_ap, avert_calcul = _calcul(mn, pointes=True)
     # La tournée ACTUELLE, majorée aux heures où elle roule vraiment : comparable à la proposition.
@@ -1316,38 +1355,73 @@ def proposer(date, fenetre=None, employes=None, depassement=None):
     # Les heures de la tournée choisie sont recalculées trajet par trajet avec Google (trafic habituel à l'heure de chaque
     # départ), avec stationnement et rangement : départ du Magasin, chaque tâche, retour (05/10/2026).
     from customization_app.tournee_google import recaler_proposition
-    recalage = recaler_proposition(out, jour, cfg, mn_brut, mn, km)
+    nouveaux_appels = 0
+
+    def _recaler(proposition):
+        nonlocal nouveaux_appels
+        r = recaler_proposition(proposition, jour, cfg, mn_brut, mn, km)
+        nouveaux_appels += cint(r.get("nouveaux_appels"))
+        return r
+
+    recalage = _recaler(out)
     mesures = recalage.pop("mesures", None) or {}
-    if mesures and any(a.get("retard") or a.get("hors_fenetre") for e in out for a in e["apres"]["arrets"]):
+    if mesures and ((len(techniciens) > 1 and cfg["equilibre"] > 0)
+                    or any(a.get("retard") or a.get("hors_fenetre") for e in out for a in e["apres"]["arrets"])):
         # SECOND TOUR avec les temps de Google (18/10/2026) : l'ordre était choisi sur OSRM × coef, puis les heures recalées
         # avec Google SANS re-planifier. Quand Google allonge un trajet, la tâche suivante peut basculer après la pause et
         # tout glisser : le 19/10, Sté L.K.X. passait à 16:50 et Noura Elouaer (16:30, heure fixe) prenait 93 min de retard.
         # On réinjecte les trajets mesurés dans la matrice (déjà avec trafic : pas de majoration de pointe) et on refait le
-        # calcul ; on garde le meilleur des deux (sans place, retards, retour).
+        # calcul ; on garde le meilleur des deux (sans place, retards, trajets et charge).
         mn_g = [ligne[:] for ligne in mn_ap]
         for (i, j), m in mesures.items():
             if 0 <= i < len(mn_g) and 0 <= j < len(mn_g):
                 mn_g[i][j] = cint(m)
         sol2, mn_ap2, avert2 = _calcul(mn_g, pointes=False)
         out2, non_places2, total2 = _construire(sol2, mn_ap2)
-        recalage2 = recaler_proposition(out2, jour, cfg, mn_brut, mn, km)
+        recalage2 = _recaler(out2)
         recalage2.pop("mesures", None)
         if _bilan(out2, non_places2) < _bilan(out, non_places):
             out, non_places, total, recalage, avert_calcul = out2, non_places2, total2, recalage2, avert2
             recalage["second_tour"] = True
+            mn_ap = mn_ap2
+    retablis, dernier_recalage = retablir_limite_horaire(out, fenetre, _recaler)
+    if retablis:
+        second_tour = recalage.get("second_tour")
+        recalage = dernier_recalage
+        recalage.pop("mesures", None)
+        if second_tour:
+            recalage["second_tour"] = True
+        recalage["limite_horaire_appliquee"] = True
+        non_places = list({a["tache"]: a for a in non_places + retablis}.values())
+        avert_calcul.append(_("Limite stricte de ± {0} minutes : {1} rendez-vous gardé(s) à leur heure et chez leur employé initiaux après le recalcul des trajets.").format(fenetre, len(retablis)))
+        # Le repli peut rendre une tâche à un autre employé : actualiser les bilans
+        # de distance/temps de la matrice dans l'ordre effectivement affiché.
+        for e in out:
+            ordre = [e["depot_noeud"]] + [a["noeud"] for a in e["apres"]["arrets"]] + [e["depot_noeud"]]
+            e["apres"]["minutes"] = sum(mn_ap[i][j] for i, j in zip(ordre, ordre[1:]))
+            e["apres"]["km"] = round(sum(km[i][j] for i, j in zip(ordre, ordre[1:])), 1)
+            e["apres"]["interventions"] = sum(a["service"] for a in e["apres"]["arrets"])
+        total["apres_min"] = sum(e["apres"]["minutes"] for e in out)
+        total["apres_km"] = round(sum(e["apres"]["km"] for e in out), 1)
+    recalage["nouveaux_appels"] = nouveaux_appels
     avert.extend(avert_calcul)
     for e in out:
         h = e.get("horaires") or {}
         # Retour après la fin de journée : de combien, et est-ce dans le dépassement permis (affiché en orange, pas en rouge) ?
         h["depassement_min"] = max(0, _minutes(h["retour"], 0) - e["journee_min"][1]) if h.get("retour") else 0
         h["depassement_autorise"] = e["depassement_autorise"]
+        e["apres"]["charge"] = charge_travail(e["apres"]["arrets"], h.get("trajets", e["apres"]["minutes"]),
+                                                cfg["marge"], cfg["rangement"])
     return {"date": str(jour), "employes": out, "depot": cfg["depot"], "source": source, "recalage": recalage,
             "depassement": dep_calcul,
+            "equilibrage": {"techniciens": sorted(techniciens), "actif": len(techniciens) > 1 and cfg["equilibre"] > 0,
+                            "critere": "interventions + trajets + stationnement + rangement"},
             "rangement": cfg["rangement"], "coef": cfg["coef"],
             "total": total,
             "deplacees": sum(1 for e in out for a in e["apres"]["arrets"] if a["deplace"]),
             "decalees": sum(1 for e in out for a in e["apres"]["arrets"] if a["decale"] and not a["deplace"]),
-            "non_places": non_places, "avertissements": avert, "journee": [_hm(debut_j), _hm(fin_j)], "premiere": _hm(cfg["premiere"]),
+            "non_places": non_places, "avertissements": avert, "positions_estimees": estimees, "conservees_sans_position": conservees,
+            "journee": [_hm(debut_j), _hm(fin_j)], "premiere": _hm(cfg["premiere"]),
             "fenetre": fenetre, "marge": cfg["marge"], "pause": [_hm(cfg["pause"][0]), _hm(cfg["pause"][1])] if cfg["pause"] else None,
             "pointes": ["%s–%s +%d %%" % (_hm(d), _hm(f), pct) for d, f, pct in cfg["pointes"]],
             "sans_domicile": [noms.get(e, e) for e, p in choix.items() if p == "domicile" and e not in cfg["departs"] and e in noms],
@@ -1367,14 +1441,97 @@ def reaffecter_titre(titre, anciens_noms, nouveau_nom):
     return "\n".join(lignes)
 
 
+def retablir_limite_horaire(employes, fenetre, recalculer):
+    """Après le trafic, remet les visites hors limite à leur heure et employé initiaux.
+
+    Chaque passage fige au moins une visite supplémentaire. Recalculer tous les
+    trajets après ces déplacements évite de garder les durées d'un ancien ordre.
+    Les retards éventuels restent affichés, sans changer l'heure promise.
+    """
+    if not fenetre:
+        return [], None
+    par_emp = {e["employe"]: e for e in employes}
+    retablis, dernier = {}, None
+    while True:
+        depassements = [(e, a) for e in employes for a in e["apres"]["arrets"]
+                        if abs(_minutes(a["debut"], 0) - a["original_min"]) > fenetre]
+        if not depassements:
+            return list(retablis.values()), dernier
+        for e, a in depassements:
+            if a["tache"] in retablis:
+                frappe.throw(_("Le recalcul n’a pas respecté la limite horaire. Aucune modification n’a été appliquée."))
+            retablis[a["tache"]] = {"tache": a["tache"], "client": a["client"],
+                                    "employe": par_emp[a["de"]]["nom"], "motif": "limite horaire stricte"}
+            e["apres"]["arrets"].remove(a)
+            a.update(employe=a["de"], debut_min=a["original_min"], mobile=False, fixe=True,
+                     non_place=True, deplace=False, decale=False, ecart_min=0,
+                     fenetre=(a["original_min"], a["original_min"]), motif_non_place="limite horaire stricte")
+            par_emp[a["de"]]["apres"]["arrets"].append(a)
+        for e in employes:
+            e["apres"]["arrets"].sort(key=lambda a: (a["debut_min"], a["tache"]))
+        dernier = recalculer(employes)
+
+
+def verifier_limite_application(doc, ligne, date, fenetre):
+    """Vérification de tout le plan avant la première écriture (anciens écrans inclus)."""
+    if doc.status != "Open" or str(getdate(doc.starts_on)) != str(getdate(date)):
+        return
+    # Une heure devenue fixe prime toujours sur la proposition reçue.
+    if cint(doc.get(HEURE_FIXE)):
+        return
+    debut = get_datetime(ligne["starts_on"])
+    if getdate(debut) != getdate(date):
+        frappe.throw(_("{0} : le rendez-vous doit rester le jour sélectionné.").format(doc.name))
+    if fenetre and abs((debut - get_datetime(doc.starts_on)).total_seconds()) > fenetre * 60:
+        frappe.throw(_("{0} : déplacement supérieur à ± {1} minutes. Relancez le calcul avec la limite demandée.").format(doc.name, fenetre))
+
+
+def verifier_redistribution(doc, ligne, techniciens):
+    """Une tâche ne peut changer d'employé qu'entre deux techniciens actifs."""
+    if doc.status != "Open" or cint(doc.get(EMPLOYE_FIXE)):
+        return
+    origine = doc.custom_choix_du_staff
+    cible = ligne.get("employe") or origine
+    if cible != origine and not {origine, cible} <= techniciens:
+        frappe.throw(_("{0} : redistribution autorisée uniquement entre employés ayant le rôle Technicien. Relancez le calcul.").format(doc.name))
+
+
 @frappe.whitelist(methods=["POST"])
-def appliquer(date, plan, prevenir=0):
+def appliquer(date, plan, prevenir=0, fenetre=None):
     """Écrit la proposition : employé, heures de chaque tâche listée. plan : [{tache, employe, starts_on, ends_on, prevenir}].
     Un commentaire sur chaque tâche modifiée ; la tâche garde son statut, ses photos, sa commande.
     `prevenir` : les clients des tâches marquées `prevenir` dans le plan reçoivent le SMS / e-mail du réglage
     (plage horaire centrée sur la nouvelle heure), en tâche de fond, verdict en commentaire sur la tâche."""
     _superviseur()
     plan = frappe.parse_json(plan) if isinstance(plan, str) else (plan or [])
+    cfg_application = config()
+    limite_horaire = cint(cfg_application.get("fenetre", 60)) if fenetre is None else cint(fenetre)
+    if limite_horaire < 0:
+        frappe.throw(_("Le déplacement maximal ne peut pas être négatif."))
+    # Verrouiller en ordre stable et contrôler toutes les lignes avant d'écrire :
+    # une erreur sur la dernière tâche ne doit pas laisser un plan partiel.
+    for nom in sorted({p["tache"] for p in plan}):
+        frappe.db.sql("select name from `tabTache de travail` where name=%s for update", (nom,))
+    documents = {p["tache"]: frappe.get_doc(TACHE, p["tache"]) for p in plan}
+    transferts = [p for p in plan if (p.get("employe") or documents[p["tache"]].custom_choix_du_staff) != documents[p["tache"]].custom_choix_du_staff
+                  and not cint(documents[p["tache"]].get(EMPLOYE_FIXE))]
+    techniciens = employes_techniciens({e for p in transferts for e in (p.get("employe"), documents[p["tache"]].custom_choix_du_staff)})
+    for ligne in plan:
+        doc = documents[ligne["tache"]]
+        verifier_limite_application(doc, ligne, date, limite_horaire)
+        verifier_redistribution(doc, ligne, techniciens)
+    if controle_localisation_actif():
+        cfg_position = config()
+        centres_position = _centres_secteurs()
+        ancien_sans_reseau = frappe.flags.get("tournee_sans_reseau")
+        frappe.flags.tournee_sans_reseau = True
+        try:
+            for ligne in plan:
+                t = frappe.get_doc(TACHE, ligne["tache"])
+                if intervention_terrain(t, cfg_position) and not coordonnees_tache(t, centres_position):
+                    frappe.throw(_("La position de {0} n’est plus disponible. Relancez le calcul pour actualiser la tournée.").format(t.name))
+        finally:
+            frappe.flags.tournee_sans_reseau = ancien_sans_reseau
     cfg_pv = config()["prevenir"]
     noms = {}
     modifiees, a_prevenir_ = [], {}

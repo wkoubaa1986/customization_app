@@ -147,7 +147,9 @@ def recaler(depot: dict, arrets: list, mesure, marge: int, rangement: int, debut
         out.append({"debut": debut, "fin": fin, "trajet": m["minutes"], "km": m.get("km", 0), "source": m["source"],
                     "attente": max(0, debut - arrivee), "retard": max(0, arrivee - debut) if not libre_heure else 0,
                     "hors_fenetre": bool(libre_heure and a.get("fenetre") and debut > a["fenetre"][1])})
-        libre = fin + (0 if a.get("sans_lieu") else cint(rangement))
+        # Garder l'heure promise d'un arrêt fixe n'efface pas le retard réel.
+        # Sa durée doit encore être effectuée après l'arrivée effective.
+        libre = max(fin, arrivee + a["service"]) + (0 if a.get("sans_lieu") else cint(rangement))
         pos = a
     if libre is None:
         return {"arrets": [], "depart": None, "retour": None, "trajets": 0, "km": 0, "retards": 0, "depasse": False}
