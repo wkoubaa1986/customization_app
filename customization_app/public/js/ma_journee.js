@@ -646,6 +646,7 @@ frappe.provide("frappe.views");
                 method: "customization_app.planning_employe.tracer_appel",
                 args: { tache, numero },
             });
+            if (window.flotte_position_capturer) window.flotte_position_capturer("appel", "Tache de travail", tache);
         }
 
         /** La photo du bordereau, prise DEPUIS le bloc Aramex.
@@ -662,6 +663,7 @@ frappe.provide("frappe.views");
          *  seule : c'est la suite évidente.
          */
         _photo_bordereau(tache) {
+            if (window.flotte_position_capturer) window.flotte_position_capturer("photo", "Tache de travail", tache);
             new frappe.ui.FileUploader({
                 doctype: "Tache de travail", docname: tache, folder: "Home/Attachments",
                 allow_multiple: false,
@@ -812,7 +814,9 @@ frappe.provide("frappe.views");
                 // se passait).
                 reload_doc: () => Promise.resolve(moi.charger()),
                 set_value: (champ, valeur) => { attente[champ] = valeur; },
-                save: () => frappe.call({
+                save: () => {
+                    if (window.flotte_position_capturer) window.flotte_position_capturer("clôture", "Tache de travail", tache);
+                    return frappe.call({
                     method: "customization_app.planning_employe.cloturer",
                     args: { tache, rapport_visite: attente.rapport_visite || null },
                     freeze: true,
@@ -821,7 +825,8 @@ frappe.provide("frappe.views");
                                             indicator: "green" }, 4);
                         moi.charger();
                     },
-                }),
+                });
+                },
             };
         }
     }

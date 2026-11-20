@@ -580,6 +580,8 @@ app_include_js = [_js("customer_quick_entry.js"),
                   # interventions du jour, depuis la liste ou le calendrier des
                   # tâches. Une FENÊTRE et non une page — elle sert sur le
                   # téléphone, entre deux interventions.
+                  # Position du téléphone relevée à chaque action (clôture, photo, appel, caisse) : suivi terrain.
+                  _js("flotte_position.js"),
                   _js("ma_journee.js"),
                   # Stock cible (réglage + fiche véhicule) : articles suivis seulement,
                   # et « Coller une liste » pour saisir des dizaines de lignes en un bloc.

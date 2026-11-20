@@ -370,6 +370,7 @@
                 allow_multiple: !!slot.multiple, restrictions: { allowed_file_types: ["image/*"] },
                 on_success: (file) => {
                     const fichiers = Array.isArray(file) ? file : [file];
+                    if (window.flotte_position_capturer) window.flotte_position_capturer("photo", "Tache de travail", this.tache);
                     Promise.all(fichiers.map((f) => frappe.call({
                         method: "customization_app.cloture_tache.enregistrer_photo",
                         args: { tache: this.tache, champ: slot.champ, file_url: f.file_url },

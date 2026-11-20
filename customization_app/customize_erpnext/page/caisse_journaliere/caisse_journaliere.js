@@ -3281,6 +3281,7 @@ function rcj_cloture(rapport, opts) {
               frappe.msgprint(__("La photo de la remise est obligatoire.")); return;
             }
           }
+          if (window.flotte_position_capturer) window.flotte_position_capturer("caisse", null, null);
           frappe.call({
             method: API + ".valider",
             args: { caisse, date: d1, especes_comptees: v.comptees, note: v.note,

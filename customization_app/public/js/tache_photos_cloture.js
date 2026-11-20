@@ -242,6 +242,7 @@ function tache_dialogue_cloture(frm, exigences) {
             // en base par db_set : le formulaire, lui, garde les champs chargés
             // à l'ouverture — sauver tel quel renverrait les valeurs périmées.
             const cloturer = () => {
+                if (window.flotte_position_capturer) window.flotte_position_capturer("clôture", "Tache de travail", frm.docname);
                 const enregistrer =
                     v.commande || (v.rapport || "").trim()
                         ? frappe.call({
@@ -563,6 +564,7 @@ function tache_dialogue_cloture(frm, exigences) {
                 restrictions: { allowed_file_types: ["image/*"] },
                 on_success: (file) => {
                     const fichiers = Array.isArray(file) ? file : [file];
+                    if (window.flotte_position_capturer) window.flotte_position_capturer("photo", "Tache de travail", frm.docname);
                     Promise.all(
                         fichiers.map((f) =>
                             frappe.call({

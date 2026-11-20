@@ -1,0 +1,50 @@
+{
+ "actions": [],
+ "autoname": "hash",
+ "creation": "2026-11-20 23:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "employe",
+  "employe_nom",
+  "user",
+  "horodatage",
+  "action",
+  "column_break_1",
+  "lat",
+  "lng",
+  "precision",
+  "reference_doctype",
+  "reference_name"
+ ],
+ "fields": [
+  {"fieldname": "employe", "fieldtype": "Link", "options": "Employee", "label": "Employé", "reqd": 1, "in_list_view": 1},
+  {"fieldname": "employe_nom", "fieldtype": "Data", "label": "Nom", "fetch_from": "employe.employee_name", "read_only": 1},
+  {"fieldname": "user", "fieldtype": "Link", "options": "User", "label": "Utilisateur", "read_only": 1},
+  {"fieldname": "horodatage", "fieldtype": "Datetime", "label": "Relevée le", "reqd": 1, "in_list_view": 1},
+  {"fieldname": "action", "fieldtype": "Data", "label": "Action", "in_list_view": 1,
+   "description": "Ce que l’employé faisait dans l’app au moment du relevé : clôture, photo, appel, caisse…"},
+  {"fieldname": "column_break_1", "fieldtype": "Column Break"},
+  {"fieldname": "lat", "fieldtype": "Float", "label": "Latitude", "precision": "6", "reqd": 1},
+  {"fieldname": "lng", "fieldtype": "Float", "label": "Longitude", "precision": "6", "reqd": 1},
+  {"fieldname": "precision", "fieldtype": "Int", "label": "Précision (m)", "in_list_view": 1,
+   "description": "Rayon d’incertitude donné par le téléphone. Au-delà de 200 m le relevé n’est pas enregistré."},
+  {"fieldname": "reference_doctype", "fieldtype": "Link", "options": "DocType", "label": "Document"},
+  {"fieldname": "reference_name", "fieldtype": "Dynamic Link", "options": "reference_doctype", "label": "Référence", "in_list_view": 1}
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-11-20 23:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "Position Employe",
+ "owner": "Administrator",
+ "permissions": [
+  {"role": "System Manager", "read": 1, "write": 1, "create": 1, "delete": 1, "export": 1, "report": 1},
+  {"role": "Direction Suivi Terrain", "read": 1, "export": 1, "report": 1}
+ ],
+ "sort_field": "horodatage",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 0
+}
