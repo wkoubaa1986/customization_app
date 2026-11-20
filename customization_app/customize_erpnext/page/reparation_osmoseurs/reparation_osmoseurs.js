@@ -555,7 +555,7 @@ class ReparationOsmoseurs {
       <div class="et"><span class="ro-badge b-rendre">⏳ À vérifier</span><b>Rappel du matin</b>
         <ul><li>Une machine réparée et pas rendue, reçue sans technicien, ou dont la livraison n’est pas clôturée est rappelée chaque matin à la personne du réglage, puis relancée à une seconde personne.</li>
         <li>La réponse se donne sur la ligne : « ✅ Rendre au client », « 📍 Toujours au magasin » (le rappel repart de zéro), « 📅 Affecter » ou « ↪️ Sortie sans réparation ».</li></ul></div>
-      <p class="ro-sub"><b>Machine abandonnée</b> : le client ne la reprend plus → « Autres actions », « machine à démonter ». Une tâche est posée au technicien (garder les pièces réutilisables, jeter le reste) ; sa clôture ferme le dossier, « Annuler le démontage » le rouvre tant qu’elle n’est pas faite.</p>
+      <p class="ro-sub"><b>Machine abandonnée</b> : le client ne la reprend plus → « Autres actions », « machine à démonter ». Une tâche « Démontage et débarras » est posée au technicien (garder les pièces réutilisables, débarrasser le reste) ; sa clôture ferme le dossier, « Annuler le démontage » le rouvre tant qu’elle n’est pas faite.</p>
       <p class="ro-sub"><b>Erreurs courantes</b> : réception clôturée trop tôt → « Rouvrir la réception » · technicien affecté par erreur → le ✕ à côté de sa tâche (vide, elle est supprimée du calendrier) · sortie cliquée par erreur → « Annuler la sortie » · un mot au client → « Autres actions », « SMS au client » · code superviseur : réglage « Config Cloture Tache ».</p>
     </div>`);
     d.show();
@@ -659,7 +659,7 @@ class ReparationOsmoseurs {
         { fieldtype: "Select", fieldname: "motif", label: "Pourquoi le client ne la reprend pas", reqd: 1, options: [""].concat(p.motifs) },
         { fieldtype: "Data", fieldname: "precision", label: "Qui l’a dit, et quand", reqd: 1,
           description: "Exemple : « M. Attia au téléphone le 20/11, il n’en veut plus ». Gardé sur le dossier." },
-        { fieldtype: "Section Break", label: "Tâche de démontage" },
+        { fieldtype: "Section Break", label: "Tâche « Démontage et débarras »" },
         { fieldtype: "Link", fieldname: "employee", label: "Technicien", options: "Employee", reqd: 1,
           default: prop.employee, get_query: () => ({ filters: { status: "Active" } }) },
         { fieldtype: "Column Break" },
@@ -671,7 +671,7 @@ class ReparationOsmoseurs {
           label: p.numeros.length ? `Prévenir le client par SMS (« votre appareil sera démonté le … : appelez-nous avant si vous voulez le récupérer ») — ${p.numeros.join(", ")}`
                                   : "Pas de SMS : aucun numéro mobile valide sur le dossier" },
       ],
-      primary_action_label: "Créer la tâche de démontage",
+      primary_action_label: "Créer la tâche « Démontage et débarras »",
       primary_action: async (v) => {
         try {
           const x = (await frappe.call({ method: RO_API + ".planifier_demontage", type: "POST", freeze: true, args: {
@@ -686,7 +686,7 @@ class ReparationOsmoseurs {
     });
     d.fields_dict.haut.$wrapper.html(`
       <div style="margin-bottom:6px">Client : <b>${esc(m.nom_client || m.client)}</b> · ${esc(m.tel || "")}${p.repare ? " · machine <b>déjà réparée</b>" : ""}</div>
-      <div class="ro-sub" style="margin-bottom:8px">Une tâche est posée au technicien : il garde les pièces réutilisables et jette le reste. La clôture de sa tâche ferme le dossier — on ne revient pas dessus.${p.ouvertes ? ` Les ${p.ouvertes} tâche(s) de réparation encore ouverte(s) sont retirées du calendrier.` : ""}</div>`);
+      <div class="ro-sub" style="margin-bottom:8px">Une tâche « Démontage et débarras » est posée au technicien : il garde les pièces réutilisables et débarrasse le reste. La clôture de sa tâche ferme le dossier — on ne revient pas dessus.${p.ouvertes ? ` Les ${p.ouvertes} tâche(s) de réparation encore ouverte(s) sont retirées du calendrier.` : ""}</div>`);
     d.show();
   }
 

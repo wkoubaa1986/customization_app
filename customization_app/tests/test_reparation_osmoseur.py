@@ -819,7 +819,9 @@ class TestRattachement(unittest.TestCase):
         self.assertEqual((t.custom_type_dintervention, t.get(RO.CHAMP_TACHE), t.custom_choix_du_staff, str(t.starts_on)[:16], t.dans_local),
                          (RO.TYPE_DEMONTAGE, self.nom, self.emp, "2031-07-09 10:15", "Oui"))
         self.assertEqual((t.ends_on - t.starts_on).total_seconds(), RO.DUREE_DEMONTAGE * 60)
-        self.assertIn("garder les pièces réutilisables, jeter le reste", t.subject)
+        self.assertTrue(t.titre.startswith("🧩 Démontage et débarras: %s" % self.nom))
+        self.assertTrue(t.subject.startswith("Démontage et débarras de l'osmoseur %s" % self.nom))
+        self.assertIn("garder les pièces réutilisables, débarrasser le reste", t.subject)
         self.assertIn("au téléphone le 20/11", t.subject)
         m = RO.get_data(recherche=self.nom)["machines"][0]
         self.assertEqual((m["statut"], m["groupe"], m["tache_demontage"], str(m["date_prevue"]), m["sans_reparation"]),

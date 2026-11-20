@@ -120,7 +120,8 @@ SMS_LIBRE = "Bonjour {nom}, au sujet de votre appareil ({ref}) : \nAquaworld {te
 SMS_DEMONTAGE = ("Bonjour {nom}, votre appareil ({ref}) depose chez Aquaworld ne sera pas repris : il sera demonte le {date}. "
                  "Si vous souhaitez le recuperer, appelez-nous avant cette date au {tel}.")
 MOTIFS_ABANDON = ("Le client ne veut plus la reprendre", "Client injoignable", "Autre")
-CONSIGNE_DEMONTAGE = "Démonter la machine : garder les pièces réutilisables, jeter le reste. Noter dans le rapport ce qui a été gardé."
+CONSIGNE_DEMONTAGE = "Démonter la machine : garder les pièces réutilisables, débarrasser le reste (à jeter). Noter dans le rapport ce qui a été gardé."
+NOM_DEMONTAGE = "Démontage et débarras"   # le nom de la tâche au calendrier (sa demande du 20/11/2026)
 TYPE_DEMONTAGE = "Autre"                 # ni commande ni photos exigées à la clôture : seulement le rapport
 DUREE_DEMONTAGE = 60
 SMS_MAX = 459                            # 3 SMS enchaînés de 153 caractères : au-delà, on téléphone
@@ -1438,9 +1439,9 @@ def planifier_demontage(machine, motif, employee, date, heure="09:00", consigne=
         "custom_choix_du_staff": employee, "custom_employé": nom_emp,
         "custom_client": doc.client, "nom_client": doc.nom_client, "tel": doc.tel,
         "starts_on": "%s %s:00" % (jour, heure),
-        "titre": "🧩 Démontage atelier: %s\nClient: %s\n%s" % (doc.name, doc.nom_client or doc.client, nom_emp),
-        "subject": "Démontage de l'osmoseur %s — le client ne le reprend pas (%s)\n%s" % (
-            doc.name, motif[:200], (consigne or "").strip()[:400] or CONSIGNE_DEMONTAGE),
+        "titre": "🧩 %s: %s\nClient: %s\n%s" % (NOM_DEMONTAGE, doc.name, doc.nom_client or doc.client, nom_emp),
+        "subject": "%s de l'osmoseur %s — le client ne le reprend pas (%s)\n%s" % (
+            NOM_DEMONTAGE, doc.name, motif[:200], (consigne or "").strip()[:400] or CONSIGNE_DEMONTAGE),
         "temps": "1 heure", "dans_local": "Oui", "status": "Open", CHAMP_TACHE: doc.name,
     })
     _inserer_tache_annexe(tache, machine)
