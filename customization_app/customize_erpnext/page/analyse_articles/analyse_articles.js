@@ -31,6 +31,10 @@ class AnalyseArticles {
     this.cols_off = new Set((() => {
       try { return JSON.parse(localStorage.getItem("aa_cols_off") || "[]"); } catch (e) { return []; }
     })());
+    // Largeurs réglées à la main ({colonne: pixels}) : retenues sur ce navigateur, comme les colonnes repliées.
+    this.cols_w = (() => {
+      try { return JSON.parse(localStorage.getItem("aa_cols_w") || "{}") || {}; } catch (e) { return {}; }
+    })();
     this._bind();
     this._load_filters().then(() => this._load());
   }
@@ -81,6 +85,7 @@ class AnalyseArticles {
     });
     $("#aa-tri-liste").on("change", () => { this.start = 0; this._load(); });
     $(this.wrapper).on("click", "th.sortable", (e) => {
+      if (Date.now() - (this._rz_fin || 0) < 350) return;       // on vient de lâcher une poignée de largeur : pas un tri
       $("#aa-tri").val(""); $("#aa-tri-liste-zone").hide();      // un clic d'en-tête reprend le tri simple
       const f = $(e.currentTarget).data("field");
       if (this.order_by === f) {
@@ -112,6 +117,45 @@ class AnalyseArticles {
         else this.selection.delete(code);
       });
       this._maj_libelle_bloc();
+    });
+    // ── Largeur des colonnes : on tire le bord droit d'un en-tête ; double-clic = largeur par défaut ──
+    const noter_largeurs = () => {
+      try { localStorage.setItem("aa_cols_w", JSON.stringify(this.cols_w)); } catch (err) { /* stockage refusé : sans effet */ }
+      $("#aa-cols-w-raz").toggle(Object.keys(this.cols_w).length > 0);
+    };
+    $(this.wrapper).on("mousedown", ".aa-rz", (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const cle = $(e.currentTarget).closest("th").attr("data-ck");
+      this._figer_largeurs();                                   // chaque colonne prend sa largeur du moment, en pixels
+      const table = $("#aa-table table.aa-tbl")[0];
+      const col = Array.from(table.querySelectorAll("colgroup col")).find((c) => c.getAttribute("data-ck") === cle);
+      if (!col) return;
+      const depart = parseFloat(col.style.width), total = parseFloat(table.style.width), x0 = e.pageX;
+      $("body").css({ cursor: "col-resize", "user-select": "none" });
+      $(document).on("mousemove.aarz", (ev) => {
+        const w = Math.max(40, depart + ev.pageX - x0);
+        col.style.width = w + "px";
+        table.style.width = (total + w - depart) + "px";
+      }).on("mouseup.aarz", () => {
+        $(document).off(".aarz");
+        $("body").css({ cursor: "", "user-select": "" });
+        this.cols_w[cle] = Math.round(parseFloat(col.style.width));
+        this._rz_fin = Date.now();
+        noter_largeurs();
+      });
+    });
+    $(this.wrapper).on("click", ".aa-rz", (e) => e.stopPropagation());
+    $(this.wrapper).on("dblclick", ".aa-rz", (e) => {
+      e.stopPropagation();
+      delete this.cols_w[$(e.currentTarget).closest("th").attr("data-ck")];
+      noter_largeurs();
+      if (this.data) this._render();
+    });
+    $(this.wrapper).on("click", "#aa-cols-w-raz", (e) => {
+      e.preventDefault();
+      this.cols_w = {};
+      noter_largeurs();
+      if (this.data) this._render();
     });
     // Colonnes repliables : la pastille au-dessus du tableau, ou le ⊟ de l'en-tête.
     $(this.wrapper).on("click", ".aa-col-chip, .aa-col-x", (e) => {
@@ -228,21 +272,27 @@ class AnalyseArticles {
       .map(([col, nom]) => `<span class="aa-col-chip${off.has(col) ? " off" : ""}" data-col="${this._esc(col)}"
           title="${off.has(col) ? "Afficher" : "Replier"} cette colonne">${off.has(col) ? "＋" : "✓"} ${this._esc(nom)}</span>`).join("");
     const barre = `<div class="aa-cols"><span>Colonnes :</span>${pastilles}${
-      off.size ? '<a href="#" class="aa-col-x" data-col="*" style="opacity:1;font-size:12px">tout afficher</a>' : ""}</div>`;
+      off.size ? '<a href="#" class="aa-col-x" data-col="*" style="opacity:1;font-size:12px">tout afficher</a>' : ""}
+      <a href="#" id="aa-cols-w-raz" style="margin-left:7px;${Object.keys(this.cols_w).length ? "" : "display:none"}">largeurs par défaut</a></div>`;
+    // Chaque colonne réelle a une clé (sa largeur se règle et se retient) et une poignée sur son bord droit.
+    const poignee = '<span class="aa-rz" title="Tirer pour élargir ou rétrécir — double-clic : largeur par défaut"></span>';
+    const cles = ["art", "des"].concat(voir_groupe ? ["groupe"] : [], voir_valo ? ["valo_ht", "tva", "valo_ttc"] : []);
+    pls_vis.forEach((pl) => cles.push("pv:" + pl, "mg:" + pl));
+    const colgroup = `<colgroup><col data-ck="chk">${cles.map((k) => `<col data-ck="${this._esc(k)}">`).join("")}</colgroup>`;
 
     let head = `<tr>
       <th rowspan="2" style="width:26px"><input type="checkbox" id="aa-chk-all" title="Tout cocher (page)"></th>
-      <th rowspan="2" class="sortable" data-field="item_code">Code article${this._sort_icon("item_code")}</th>
-      <th rowspan="2" class="sortable" data-field="item_name">Désignation${this._sort_icon("item_name")}</th>`;
-    if (voir_groupe) head += `<th rowspan="2" class="sortable" data-field="item_group">Groupe${this._sort_icon("item_group")}${replier("groupe")}</th>`;
+      <th rowspan="2" class="sortable" data-field="item_code" data-ck="art">Code article${this._sort_icon("item_code")}${poignee}</th>
+      <th rowspan="2" class="sortable" data-field="item_name" data-ck="des">Désignation${this._sort_icon("item_name")}${poignee}</th>`;
+    if (voir_groupe) head += `<th rowspan="2" class="sortable" data-field="item_group" data-ck="groupe">Groupe${this._sort_icon("item_group")}${replier("groupe")}${poignee}</th>`;
     if (voir_valo) head += `<th class="num pl-head" colspan="3">Valorisation${replier("valo")}</th>`;
     pls_vis.forEach((pl) => {
       head += `<th class="num pl-head" colspan="2">${this._esc(pl)}${replier("pl:" + pl)}</th>`;
     });
     head += "</tr><tr>";
-    if (voir_valo) head += `<th class="num pl-head">Valo. HT</th><th class="num">TVA %</th><th class="num">Valo. TTC</th>`;
-    pls_vis.forEach(() => {
-      head += `<th class="num pl-head">PV TTC</th><th class="num">Marge</th>`;
+    if (voir_valo) head += `<th class="num pl-head" data-ck="valo_ht">Valo. HT${poignee}</th><th class="num" data-ck="tva">TVA %${poignee}</th><th class="num" data-ck="valo_ttc">Valo. TTC${poignee}</th>`;
+    pls_vis.forEach((pl) => {
+      head += `<th class="num pl-head" data-ck="${this._esc("pv:" + pl)}">PV TTC${poignee}</th><th class="num" data-ck="${this._esc("mg:" + pl)}">Marge${poignee}</th>`;
     });
     head += "</tr>";
 
@@ -265,8 +315,27 @@ class AnalyseArticles {
       }
       return titres + this._render_row(r, pls);
     }).join("");
-    $("#aa-table").html(`${barre}<table class="aa-tbl"><thead>${head}</thead><tbody>${body}</tbody></table>`);
+    $("#aa-table").html(`${barre}<table class="aa-tbl">${colgroup}<thead>${head}</thead><tbody>${body}</tbody></table>`);
+    if (Object.keys(this.cols_w).length) this._figer_largeurs();
     this._maj_libelle_bloc();
+  }
+
+  // Passe le tableau en largeurs fixes : chaque colonne garde sa largeur naturelle du moment, sauf celles réglées
+  // à la main, qui prennent la largeur retenue. Sans aucun réglage, le tableau reste en largeurs automatiques.
+  _figer_largeurs() {
+    const table = $("#aa-table table.aa-tbl")[0];
+    if (!table || table.classList.contains("aa-fixe")) return;
+    const entetes = {};
+    table.querySelectorAll("thead th[data-ck]").forEach((th) => { entetes[th.getAttribute("data-ck")] = th; });
+    const cols = Array.from(table.querySelectorAll("colgroup col"));
+    const largeurs = cols.map((c) => {
+      const cle = c.getAttribute("data-ck");
+      const th = cle === "chk" ? table.querySelector("thead th") : entetes[cle];
+      return this.cols_w[cle] || (th ? th.getBoundingClientRect().width : 60);
+    });
+    cols.forEach((c, i) => { c.style.width = largeurs[i] + "px"; });
+    table.style.width = largeurs.reduce((a, b) => a + b, 0) + "px";
+    table.classList.add("aa-fixe");
   }
 
   _maj_libelle_bloc() {
