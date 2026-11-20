@@ -14,6 +14,9 @@ L'ORDRE compte, et il n'est pas le même dans les deux cas :
 TRANSFÉRER (18/11/2026) : les tâches cochées passent à un autre employé ACTIF — une absence, un nouveau
 technicien qui reprend un secteur. Le créneau ne bouge pas ; le client n'est prévenu que si un message est écrit.
 Les filtres de l'écran acceptent plusieurs types et plusieurs employés, et ne proposent que les employés actifs.
+Depuis le 20/11/2026 l'écran montre les deux agendas côte à côte, jour par jour ; une tâche « Employé fixe »
+(`custom_employe_fixe`, la même case que respecte l'optimisation des tournées) ne se transfère pas ; un employé
+parti qui garde des tâches ouvertes est proposé comme ORIGINE d'un transfert (jamais comme destinataire).
 
 Les envois repassent par `sms_taches` : mêmes modèles, mêmes balises, mêmes
 traces en commentaire sur la tâche, même garde-fou de développement.
@@ -69,14 +72,17 @@ def plusieurs(valeur) -> list:
     return list(dict.fromkeys(str(x) for x in (valeur or []) if x))
 
 
-def refus_transfert(statut, type_intervention, actuel, vers):
-    """Pourquoi une tâche ne se transfère pas — ou None si elle se transfère. PURE."""
+def refus_transfert(statut, type_intervention, actuel, vers, fixe=False):
+    """Pourquoi une tâche ne se transfère pas — ou None si elle se transfère. PURE.
+    `fixe` : la case « Employé fixe » de la tâche — ce client, cette intervention, c'est CET employé."""
     if statut == "Completed":
         return "déjà terminée"
     if statut == "Cancelled":
         return "déjà annulée"
     if type_intervention in TYPES_ABSENCE:
         return "congé ou récupération : ne se transfère pas"
+    if fixe:
+        return "employé fixe : ne se transfère pas"
     if actuel and actuel == vers:
         return "déjà confiée à cet employé"
     return None
@@ -95,8 +101,20 @@ def get_filtres() -> dict:
     # en recevoir. (Sans filtre d'employé, les tâches restées à un employé parti s'affichent toujours.)
     employes = frappe.get_all("Employee", filters={"status": "Active"}, fields=["name", "employee_name"],
                               order_by="employee_name")
+    # Un employé parti qui garde des tâches ouvertes : on peut les lui REPRENDRE (origine d'un transfert), avec la
+    # période qui les couvre — elles sont souvent anciennes, hors de la semaine affichée.
+    anciens = frappe.db.sql(
+        """SELECT e.name AS valeur, e.employee_name AS libelle, COUNT(*) AS ouvertes,
+                  DATE(MIN(t.starts_on)) AS du, DATE(MAX(t.starts_on)) AS au
+           FROM `tab%s` t JOIN `tabEmployee` e ON e.name = t.custom_choix_du_staff
+           WHERE e.status != 'Active' AND t.status = 'Open' AND t.starts_on IS NOT NULL
+             AND IFNULL(t.custom_type_dintervention, '') NOT IN %%(absences)s
+           GROUP BY e.name, e.employee_name ORDER BY e.employee_name""" % DOCTYPE,
+        {"absences": TYPES_ABSENCE}, as_dict=True)
     return {"types": types,
-            "employes": [{"valeur": e.name, "libelle": e.employee_name or e.name} for e in employes]}
+            "employes": [{"valeur": e.name, "libelle": e.employee_name or e.name} for e in employes],
+            "anciens": [{"valeur": a.valeur, "libelle": a.libelle or a.valeur, "ouvertes": cint(a.ouvertes),
+                         "du": str(a.du), "au": str(a.au)} for a in anciens]}
 
 
 @frappe.whitelist()
@@ -130,7 +148,8 @@ def rechercher(date_from=None, date_to=None, employe=None, type_intervention=Non
     lignes = frappe.get_all(
         DOCTYPE, filters=filtres,
         fields=["name", "custom_client", "custom_type_dintervention", "status",
-                "starts_on", "custom_choix_du_staff", "secteur"],
+                "starts_on", "ends_on", "custom_choix_du_staff", "secteur"]
+               + (["custom_employe_fixe"] if frappe.db.has_column(DOCTYPE, "custom_employe_fixe") else []),
         order_by="starts_on asc", limit_page_length=cint(limite) or 200)
     matricules = {l.custom_choix_du_staff for l in lignes if l.custom_choix_du_staff}
     noms_rh = dict(frappe.get_all(
@@ -142,6 +161,8 @@ def rechercher(date_from=None, date_to=None, employe=None, type_intervention=Non
         "type": l.custom_type_dintervention or "",
         "statut": l.status,
         "quand": str(l.starts_on)[:16] if l.starts_on else "",
+        "fin": str(l.ends_on)[:16] if l.ends_on else "",
+        "fixe": cint(l.get("custom_employe_fixe")),
         "employe": noms_rh.get(l.custom_choix_du_staff) or l.custom_choix_du_staff or "",
         "matricule": l.custom_choix_du_staff or "",
         "secteur": l.secteur or "",
@@ -236,7 +257,7 @@ def transferer(taches, vers=None, modele=None, sujet=None, sms=1, email=1):
     """Confie les tâches à un autre employé ACTIF. Le créneau ne change pas.
 
     Refusées, une par une et sans bloquer les autres : une tâche terminée ou annulée, un congé / une
-    récupération, une tâche déjà à cet employé. Le nom affiché sur la tâche suit le choix du staff (hook
+    récupération, une tâche « Employé fixe », une tâche déjà à cet employé. Le nom affiché sur la tâche suit le choix du staff (hook
     before_save) ; une trace est laissée en commentaire. Le client n'est prévenu que si un message est écrit.
     """
     _ecriture()
@@ -251,7 +272,8 @@ def transferer(taches, vers=None, modele=None, sujet=None, sms=1, email=1):
     faites, resultats = [], []
     for nom in noms:
         doc = frappe.get_doc(DOCTYPE, nom)
-        refus = refus_transfert(doc.status, doc.get("custom_type_dintervention"), doc.get("custom_choix_du_staff"), cible.name)
+        refus = refus_transfert(doc.status, doc.get("custom_type_dintervention"), doc.get("custom_choix_du_staff"), cible.name,
+                                fixe=cint(doc.get("custom_employe_fixe")))
         if refus:
             resultats.append({"tache": nom, "etat": refus})
             continue
