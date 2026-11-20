@@ -425,7 +425,8 @@ def _reste_atelier(user=None):
     try:
         from customization_app import reparation_osmoseur as RO
         if user:
-            machines = RO.machines_a_regarder(user)
+            # Tout ce qui attend, pour la personne du suivi comme pour celle de la relance.
+            machines = RO.machines_a_regarder(user, tout=True)
             return None if machines is None else len(machines)
         cfg = RO.config()
         ouverts = frappe.get_all(RO.DOCTYPE, fields=RO.CHAMPS_ATTENTE,

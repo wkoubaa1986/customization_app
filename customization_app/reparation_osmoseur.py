@@ -1286,9 +1286,12 @@ def role_suivi(user=None, cfg=None):
     return "suivi" if user and user == cfg["suivi"] else "relance" if user and user == cfg["relance"] else None
 
 
-def machines_a_regarder(user=None) -> list | None:
+def machines_a_regarder(user=None, tout=False) -> list | None:
     """Les dossiers que CET utilisateur doit regarder, les plus anciens d'abord : pour la personne du suivi, tout ce
-    qui attend depuis trop longtemps ; pour la personne relancée, ce qui est resté sans réponse. None : pas concerné."""
+    qui attend depuis trop longtemps ; pour la personne relancée, ce qui est resté sans réponse. None : pas concerné.
+    `tout` : la personne relancée voit elle aussi TOUT ce qui attend — c'est le compte de sa file « Machines de
+    l'atelier » (elle y lisait 0 tant qu'aucun rappel n'était resté sans réponse, alors que 11 machines attendaient) ;
+    l'alerte qui s'impose à son écran, elle, reste limitée à ce qui est resté sans réponse."""
     cfg = config()
     role = role_suivi(user, cfg)
     if not role:
@@ -1296,7 +1299,7 @@ def machines_a_regarder(user=None) -> list | None:
     machines = frappe.get_all(DOCTYPE, filters={"statut": ["in", [S_RECEPTIONNEE, S_REPAREE, S_PRETE, S_LIVRAISON]]},
                               fields=CHAMPS_ATTENTE, order_by="creation")
     tri = a_rappeler(machines, getdate(nowdate()), cfg["rappel_jours"], cfg["relance_jours"])
-    return tri["rappel"] if role == "suivi" else tri["relance"]
+    return tri["rappel"] if role == "suivi" or tout else tri["relance"]
 
 
 @frappe.whitelist()
@@ -1358,15 +1361,18 @@ def rappel_quotidien(envoyer=1):
            "suivi": cfg["suivi"], "relance_a": cfg["relance"], "envoyes": []}
     if not cint(envoyer) or not cfg["suivi"] or not tri["rappel"]:
         return out
+    # Le premier rappel est daté ici : à partir de lui, la machine restée sans réponse passe à la personne relancée
+    # (file, alerte et message). Daté même quand l'envoi est muet : la relance ne dépend pas du canal.
+    for m in tri["rappel"]:
+        if not m.get("rappel_depuis"):
+            frappe.db.set_value(DOCTYPE, m["name"], "rappel_depuis", aujourdhui, update_modified=False)
     if _sms_simule() and cint(envoyer) != 2:
         # Le dev est une copie de la prod, avec ses vrais comptes Raven : on n'y écrit à personne de soi-même
         # (même règle que les SMS). `envoyer=2` force l'envoi, pour un essai voulu.
         out["simule"] = True
+        frappe.db.commit()
         return out
     url = frappe.utils.get_url(PAGE + "?verifier=1")
-    for m in tri["rappel"]:
-        if not m.get("rappel_depuis"):
-            frappe.db.set_value(DOCTYPE, m["name"], "rappel_depuis", aujourdhui, update_modified=False)
     sujet = "⏳ Réparation osmoseurs : %d machine(s) attendent une réponse" % len(tri["rappel"])
     out["envoyes"].append((cfg["suivi"], _notifier(cfg["suivi"], composer_rappel(tri["rappel"], url), sujet)))
     if tri["relance"] and cfg["relance"] and cfg["relance"] != cfg["suivi"]:

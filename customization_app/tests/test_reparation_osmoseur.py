@@ -630,6 +630,19 @@ class TestSortie(unittest.TestCase):
             p = T.get_priorites()
             self.assertNotIn("atelier", [f["cle"] for f in p["files"]])
             self.assertEqual([f["rang"] for f in p["files"]], list(range(1, len(T.PRIORITES))))
+            # la personne RELANCÉE voit dans sa file tout ce qui attend (et non 0) ; son alerte, elle, ne porte que
+            # sur ce qui est resté sans réponse
+            frappe.set_user("Administrator")
+            frappe.db.set_single_value(RO.DOCTYPE_CONFIG, "relance_a", autre)
+            frappe.clear_document_cache(RO.DOCTYPE_CONFIG, RO.DOCTYPE_CONFIG)
+            frappe.set_user(suivi)
+            total = RO.mon_rappel()["n"]
+            frappe.set_user(autre)
+            file = [f for f in T.get_priorites()["files"] if f["cle"] == "atelier"][0]
+            self.assertEqual(file["reste"], total)
+            r = RO.mon_rappel()
+            self.assertEqual(r["role"], "relance")
+            self.assertLessEqual(r["n"], total)
         finally:
             frappe.set_user("Administrator")
             frappe.clear_document_cache(RO.DOCTYPE_CONFIG, RO.DOCTYPE_CONFIG)
