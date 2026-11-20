@@ -262,7 +262,10 @@ class ReparationOsmoseurs {
           ${m.dispense_post_it ? `<div class="ro-sub" title="Clôturée au code superviseur">🔓 sans post-it</div>` : ""}
           ${m.controle_ia_resultat ? `<div class="ro-sub" title="${esc(m.controle_ia_resultat)}">${m.controle_ia_ok ? "🤖 ✅ photos conformes" : "🤖 " + esc(m.controle_ia_resultat.split("\n")[0].slice(0, 60))}</div>` : ""}</td>
       <td><a href="/app/customer/${encodeURIComponent(m.client)}" target="_blank">${esc(m.nom_client || m.client)}</a>
-          <div class="ro-sub">${esc(m.tel || "")}</div></td>
+          <div class="ro-sub">${esc(m.tel || "")}</div>
+          ${/* 📜 l'historique du client (appels, commentaires, interventions, échéancier) : le panneau commun aux
+               écrans d'appel — public/js/historique_client.js, ouvert par son gestionnaire de clic global. */ ""}
+          <div style="margin-top:5px">${window.historique_bouton_html ? window.historique_bouton_html(m.client) : ""}</div></td>
       <td>${m.garantie === "Sous garantie" ? `<div><span class="ro-badge b-garantie">🆓 Sous garantie</span>${m.commande_garantie ? ` <a class="ro-sub" href="/app/sales-order/${encodeURIComponent(m.commande_garantie)}" target="_blank">${esc(m.commande_garantie)}</a>` : ""}</div>`
              : m.garantie ? `<div class="ro-sub">Hors garantie</div>` : `<div class="ro-sub" style="color:#c2410c">garantie non décidée</div>`}
           <div class="ro-note">${esc(m.note_reception || "")}</div></td>
