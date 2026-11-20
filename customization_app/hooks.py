@@ -282,6 +282,8 @@ doc_events = {
             # Tâche affectée au partenaire : un partage manuel (lecture) de la commande passe en écriture
             # AVANT le Server Script « Autorisation Sales order partenaire » (partage_commande_partenaire).
             "customization_app.partage_commande_partenaire.on_tache_update",
+            # Suivi terrain : employé, heure, statut ou position changés → la page se recharge tout de suite.
+            "customization_app.flotte_gps.on_tache_change",
         ],
         # Tâche supprimée : les simples renvois (ligne d'appel, message GPS, tournée,
         # visite) sont vidés AVANT le contrôle des liens — sinon une liste d'appels
@@ -290,6 +292,7 @@ doc_events = {
         "after_delete": [
             "customization_app.commande_alertes.on_tache_change",
             "customization_app.reparation_osmoseur.on_tache_change",
+            "customization_app.flotte_gps.on_tache_change",
         ],
     },
     "Delivery Note": {

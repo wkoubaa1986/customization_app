@@ -268,6 +268,8 @@ def transferer(taches, vers=None, modele=None, sujet=None, sms=1, email=1):
                 # écrit le strict nécessaire (comme depart_employe._transferer_taches).
                 frappe.db.set_value(DOCTYPE, nom, {"custom_choix_du_staff": cible.name, "custom_employé": nom_vers},
                                     update_modified=True)
+                from customization_app import flotte_gps
+                flotte_gps.oublier_suivi(doc.get("starts_on"))          # écriture directe : pas de hook on_update
             frappe.get_doc({
                 "doctype": "Comment", "comment_type": "Info",
                 "reference_doctype": DOCTYPE, "reference_name": nom,

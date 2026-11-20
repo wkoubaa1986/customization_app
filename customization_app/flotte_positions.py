@@ -16,8 +16,6 @@ Les fonctions du haut sont pures (sans site) : tests/test_flotte_positions.py.
 """
 from __future__ import annotations
 
-from datetime import timedelta
-
 import frappe
 from frappe.utils import cint, flt, get_datetime, getdate, now_datetime
 
@@ -40,13 +38,35 @@ def acceptable(lat, lng, precision) -> tuple[bool, str]:
     return True, ""
 
 
-def position_telephone(releves: list, tache: str, precision_max: int = PRECISION_CLIENT):
+ACCORD_M = 150               # m — deux relevés d'une même tâche plus éloignés que ça ne désignent pas un seul endroit
+
+
+def _metres(a, b) -> float:
+    from math import asin, cos, radians, sin, sqrt
+    la1, lo1, la2, lo2 = map(radians, (a[0], a[1], b[0], b[1]))
+    h = sin((la2 - la1) / 2) ** 2 + cos(la1) * cos(la2) * sin((lo2 - lo1) / 2) ** 2
+    return 2 * 6371000 * asin(sqrt(h))
+
+
+def position_telephone(releves: list, tache: str, precision_max: int = PRECISION_CLIENT, jour=None, lieux: list = (),
+                       rayon_lieu_m: float = 200, accord_m: float = ACCORD_M):
     """Le meilleur relevé pris SUR cette tâche (clôture, photo) et assez précis pour positionner le client :
-    (lat, lng) ou None. PURE. `releves` : [{reference_name, lat, lng, precision}]."""
+    (lat, lng) ou None. PURE. `releves` : [{reference_name, lat, lng, precision, heure}].
+
+    Le technicien ne clôture pas toujours chez le client (rejoué sur un mois : la 1re photo part pendant le bon arrêt
+    77 fois sur 100). Un point faux deviendrait un « passage confirmé » au mauvais endroit, donc on ne le prend pas :
+    - pris un autre jour que la tâche (`jour`) : clôture du lendemain ;
+    - pris au Magasin ou à un domicile (`lieux`, ≤ rayon_lieu_m) : clôture faite en rentrant ;
+    - quand les relevés de la tâche se contredisent (plus de accord_m entre eux) : on ne sait pas lequel est le client."""
     bons = [r for r in releves or [] if r.get("reference_name") == tache and 0 < cint(r.get("precision")) <= precision_max]
+    if jour:
+        bons = [r for r in bons if r.get("heure") and r["heure"].date() == getdate(jour)]
+    bons = [r for r in bons if not any(lieu and _metres((r["lat"], r["lng"]), lieu) <= rayon_lieu_m for lieu in lieux or ())]
     if not bons:
         return None
     r = min(bons, key=lambda r: cint(r.get("precision")))
+    if any(_metres((r["lat"], r["lng"]), (x["lat"], x["lng"])) > accord_m for x in bons):
+        return None
     return (flt(r["lat"]), flt(r["lng"]))
 
 
@@ -90,15 +110,12 @@ def du_jour(jour) -> list:
              if r.reference_doctype == "Tache de travail" else None} for r in rows]
 
 
-def autour(jour, marge_h: int = 12) -> list:
-    """Comme `du_jour`, élargi de part et d'autre (une clôture tardive, après minuit)."""
-    if not frappe.db.exists("DocType", DOCTYPE):
-        return []
-    d0 = get_datetime("%s 00:00:00" % getdate(jour)) - timedelta(hours=marge_h)
-    d1 = get_datetime("%s 23:59:59" % getdate(jour)) + timedelta(hours=marge_h)
-    rows = frappe.get_all(DOCTYPE, filters={"horodatage": ["between", [d0, d1]]},
-                          fields=["employe", "horodatage", "lat", "lng", "precision", "action", "reference_doctype", "reference_name"],
-                          order_by="horodatage", limit_page_length=0)
-    return [{"employe": r.employe, "heure": get_datetime(r.horodatage), "lat": flt(r.lat), "lng": flt(r.lng),
-             "precision": cint(r.precision), "action": r.action, "reference_name": r.reference_name
-             if r.reference_doctype == "Tache de travail" else None} for r in rows]
+def derniers(jour) -> dict:
+    """{employé: {heure, lat, lng, precision, action, n, lien}} — le dernier relevé du jour de chacun et leur nombre,
+    pour la page Suivi terrain (direction seulement : flotte_gps.suivi)."""
+    out = {}
+    for r in du_jour(jour):
+        out[r["employe"]] = {"heure": r["heure"], "lat": r["lat"], "lng": r["lng"], "precision": r["precision"],
+                             "action": r["action"], "tache": r["reference_name"], "n": out.get(r["employe"], {}).get("n", 0) + 1,
+                             "lien": "https://www.google.com/maps?q=%.6f,%.6f" % (r["lat"], r["lng"])}
+    return out

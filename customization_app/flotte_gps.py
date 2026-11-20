@@ -340,6 +340,7 @@ def principal_par_cbox(emp_cbox: dict) -> dict:
 
 
 POIDS_PHOTO, POIDS_POSITION = 1, 2
+SEUIL_PASSAGER = 2                                  # points d'indices pour monter dans un véhicule sans autre preuve (vehicules_du_jour)
 
 
 def indices_vehicule(indices: list, journaux: dict, rayon_m: float, lieux_communs: list = ()) -> dict:
@@ -348,10 +349,12 @@ def indices_vehicule(indices: list, journaux: dict, rayon_m: float, lieux_commun
     `indices` : [{employe, heure, lat?, lng?}] — l'heure de la première photo de clôture d'une tâche (sans position),
     ou un relevé de position du téléphone (flotte_positions). Pour chacun, les véhicules À L'ARRÊT à cet instant
     (`_photo_vs_arret` : pendant l'arrêt, ou dans l'heure qui suit sa fin) ; avec une position, seuls ceux arrêtés à
-    ≤ rayon_m du téléphone ; sans position, hors des lieux communs (Magasin, domiciles : tout le monde s'y arrête).
-    Un seul véhicule possible → l'indice compte (photo : 1, position : 2) ; plusieurs → l'indice ne départage pas.
+    ≤ rayon_m du téléphone ; dans les deux cas hors des lieux communs (Magasin, domiciles : tout le monde s'y arrête,
+    et une voiture y est toujours garée). Un seul véhicule possible → l'indice compte (photo : 1, position : 2) ;
+    plusieurs → l'indice ne départage pas.
     Mesuré sur 18 jours (19/10 → 07/11/2026, 157 interventions) : l'heure de la photo désigne un seul véhicule 84 fois,
-    d'accord avec l'attribution par les tâches 84 fois sur 89, et confirme 39 passages de plus (61 % → 85 %)."""
+    d'accord avec l'attribution par les tâches 84 fois sur 89. Elle dit QUI est dans QUEL véhicule ; elle ne confirme
+    pas un passage (il faut la position du client) — voir `vehicules_du_jour` pour ce qu'on en fait."""
     scores = {}
     for ind in indices or []:
         emp, heure = ind.get("employe"), ind.get("heure")
@@ -369,10 +372,11 @@ def indices_vehicule(indices: list, journaux: dict, rayon_m: float, lieux_commun
                 if not quoi or (not point and a.get("minutes", 0) < ARRET_PROBABLE_MIN):
                     continue
                 ici = (a["lat"], a["lng"])
-                if point:
-                    if _m(ici, point) <= rayon_m:
-                        possibles.add(cb)
-                elif not any(_m(ici, lieu) <= RAYON_LIEU_M + rayon_m for lieu in lieux_communs):
+                # Au Magasin ou devant un domicile, être à côté d'une voiture garée ne dit pas qu'on la conduit
+                # (qui compte sa caisse au Magasin a toujours une voiture garée à 50 m) : jamais un indice.
+                if any(lieu and _m(ici, lieu) <= RAYON_LIEU_M + rayon_m for lieu in lieux_communs):
+                    continue
+                if not point or _m(ici, point) <= rayon_m:
                     possibles.add(cb)
         if len(possibles) == 1:
             cb = next(iter(possibles))
@@ -395,9 +399,16 @@ def vehicules_du_jour(taches: list, journaux: dict, defaut: dict, rayon_m: float
     - `priorite="nuit"` (présence : départ de chez soi, retour) : la NUIT d'abord, puis les tâches.
     Ensuite le véhicule habituel s'il est libre, puis l'ÉQUIPAGE (`groupes`, Config Flotte GPS « Qui rentre avec qui ») :
     un coéquipier sans véhicule reçoit celui de son équipage (mêmes arrêts pour ses tâches, même présence).
-    `indices` : les actions de l'employé (heure des photos, position du téléphone — `indices_vehicule`), comptées avec
-    les tâches : elles désignent un véhicule même sans position de client, même à deux dans la même voiture."""
-    scores = dict(indices_vehicule(indices, journaux, rayon_m, lieux_communs))
+    `indices` : les actions de l'employé (`indices_vehicule`), en deux temps (rejoué le 20/11/2026 sur 18 jours) :
+    - la POSITION DU TÉLÉPHONE à côté d'un véhicule arrêté est une preuve directe : elle compte avec les tâches ;
+    - l'HEURE DES PHOTOS est un indice plus faible (bon 94 fois sur 100) : comptée avec les tâches, elle retirait son
+      véhicule à un conducteur habituel sans preuve du jour (Sadok, 31/10 : un passage confirmé perdu) pour un gain nul
+      (95 passages confirmés avant, 94 après). Elle ne sert donc qu'À LA FIN, à qui n'a toujours aucun véhicule, et
+      le véhicule peut alors être PARTAGÉ (Hedi ibidhii monte avec un autre : 41 interventions « pas de véhicule »
+      sur 41 → 15, aucun passage confirmé perdu, aucun « aucun passage » de plus). Il faut SEUIL_PASSAGER points :
+      deux photos concordantes ou un relevé du téléphone — une seule photo donnait deux « aucun passage » douteux."""
+    avec_position = [i for i in indices or [] if i.get("lat") and i.get("lng")]
+    scores = dict(indices_vehicule(avec_position, journaux, rayon_m, lieux_communs))
     for t in taches:
         if not (t.get("lat") and t.get("lng")) or t.get("statut") == "Cancelled" or not t.get("employe"):
             continue
@@ -431,6 +442,10 @@ def vehicules_du_jour(taches: list, journaux: dict, defaut: dict, rayon_m: float
         if e not in out and cb not in pris and cb in journaux:
             out[e] = cb
             pris.add(cb)
+    # Qui n'a toujours rien : le véhicule que ses actions désignent, même déjà pris (il y est passager).
+    for (e, cb), n in sorted(indices_vehicule(indices, journaux, rayon_m, lieux_communs).items(), key=lambda kv: (-kv[1], kv[0])):
+        if e not in out and n >= SEUIL_PASSAGER:
+            out[e] = cb
     return partager_equipage_pure(out, groupes or [])
 
 
@@ -568,10 +583,13 @@ def _lieux_communs(cfg_t: dict | None = None) -> list:
 
 # ── Tâches du jour ───────────────────────────────────────────────────────────
 
-def _taches(jour, releves: list | None = None) -> list:
-    """`releves` : les positions du téléphone du jour (flotte_positions.autour) — un relevé précis pris sur la tâche
-    (clôture, photo) vaut position exacte quand le client n'en a pas de meilleure."""
+def _taches(jour, releves: list | None = None, lieux: list | None = None) -> list:
+    """`releves` : les positions du téléphone du jour (flotte_positions.du_jour) — un relevé précis pris sur la tâche
+    (clôture, photo) vaut position exacte quand le client n'en a pas de meilleure, sauf au Magasin ou à un domicile
+    (`lieux` : une clôture faite en rentrant placerait le client au Magasin, et l'arrêt du soir « confirmerait »)."""
     from customization_app import flotte_positions as FP
+    if releves and lieux is None:
+        lieux = _lieux_communs()
     rows = frappe.get_all(TACHE, filters={"starts_on": ["between", ["%s 00:00:00" % jour, "%s 23:59:59" % jour]]},
                           fields=["name", "custom_choix_du_staff", "custom_employé", "custom_type_dintervention", "starts_on",
                                   "ends_on", "status", "custom_client", "nom_client", "select_address", "google_map", "secteur",
@@ -584,7 +602,7 @@ def _taches(jour, releves: list | None = None) -> list:
         pos = to.coordonnees_tache(r, centres) if r.custom_type_dintervention not in TYPES_HORS else None
         approx = approx_src = None
         if releves and (not pos or pos[2] in ("secteur", to.GROSSIERE)) and r.custom_type_dintervention not in TYPES_HORS:
-            tel = FP.position_telephone(releves, r.name)
+            tel = FP.position_telephone(releves, r.name, jour=jour, lieux=lieux or (), rayon_lieu_m=RAYON_LIEU_M)
             if tel:
                 pos = (tel[0], tel[1], "téléphone")
         if pos and pos[2] in ("secteur", to.GROSSIERE):
@@ -613,11 +631,14 @@ def _taches(jour, releves: list | None = None) -> list:
     return out
 
 
-def _indices(taches: list, photos: dict, releves: list) -> list:
+def _indices(taches: list, photos: dict, releves: list, jour=None) -> list:
     """Les actions qui désignent un véhicule (`indices_vehicule`) : l'heure de la 1re photo de chaque tâche (par son
-    employé), et chaque relevé de position du téléphone. PURE."""
+    employé), et chaque relevé de position du téléphone. Avec `jour`, seulement les actions de CE jour : une photo
+    envoyée le lendemain matin tomberait pendant l'arrêt de nuit d'un véhicule. PURE."""
     out = [{"employe": t["employe"], "heure": photos.get(t["name"])} for t in taches if t.get("employe") and photos.get(t["name"])]
     out += [{"employe": r["employe"], "heure": r["heure"], "lat": r["lat"], "lng": r["lng"]} for r in releves or [] if r.get("employe")]
+    if jour:
+        out = [i for i in out if i["heure"].date() == getdate(jour)]
     return out
 
 
@@ -672,15 +693,15 @@ def apparier(jour=None, ecrire: bool = True, journaux: dict | None = None) -> di
     jour = getdate(jour or nowdate())
     cfg = config()
     from customization_app import flotte_positions as FP
-    releves = FP.autour(jour)
-    taches = _taches(jour, releves)
+    cfg_t = to.config()
+    releves = FP.du_jour(jour)
+    taches = _taches(jour, releves, _lieux_communs(cfg_t))
     cboxes = cfg["cboxes"]
     if journaux is None:
         journaux = lire_journal(jour, cboxes, cfg=cfg) if cboxes else {}
-    cfg_t = to.config()
     emp_cbox = vehicules_du_jour(taches, journaux, defaut_du_jour(cfg, jour), cfg["rayon"], _lieux_communs(cfg_t),
                                  nuits={cb: point_de_nuit(jour, j) for cb, j in journaux.items()}, domiciles=cfg_t["departs"], depot=cfg_t["depot"],
-                                 groupes=equipages(), indices=_indices(taches, _premieres_photos([t["name"] for t in taches]), releves))
+                                 groupes=equipages(), indices=_indices(taches, _premieres_photos([t["name"] for t in taches]), releves, jour))
     cbox_emp = principal_par_cbox(emp_cbox)                  # la journée véhicule porte le conducteur principal
     resultat = apparier_pure(taches, journaux, emp_cbox, cfg["rayon"])
     bilan = {"jour": str(jour), "taches": len(taches), "vehicules": len(cboxes), CONFIRME: 0, AUCUN: 0, SANS_POS: 0,
@@ -844,7 +865,41 @@ def fixer_position(tache, lat, lng):
 def suivi(jour=None):
     """Page Suivi terrain : où en est chaque employé par rapport à son planning (voir _suivi)."""
     _garde()
-    return _suivi(jour)
+    out = _suivi(jour)
+    if DIRECTION in frappe.get_roles():
+        # Où le téléphone de chacun a été vu en dernier (relevé à une action) : pour la direction seulement, et hors
+        # du cache partagé avec les autres employés.
+        from customization_app import flotte_positions as FP
+        out = dict(out, telephones=FP.derniers(out["jour"]))
+    return out
+
+
+def oublier_suivi(*jours):
+    """Le suivi en direct est gardé CACHE_SUIVI_S : après un changement qui se voit (tâche transférée, décalée,
+    clôturée…), on l'oublie et les pages ouvertes se rechargent tout de suite."""
+    for jour in {str(getdate(j)) for j in jours if j}:
+        try:
+            cle = "flotte_gps:suivi:%s" % jour
+            frappe.cache().delete_value(cle)
+            # … et encore APRÈS l'écriture en base : une page qui recalcule entre les deux relirait l'ancienne
+            # tâche et la garderait 45 s de plus.
+            frappe.db.after_commit.add(lambda cle=cle: frappe.cache().delete_value(cle))
+            frappe.publish_realtime("suivi_terrain_maj", {"jour": jour}, after_commit=True)
+        except Exception:
+            pass
+
+
+CHAMPS_SUIVIS = ("custom_choix_du_staff", "starts_on", "ends_on", "status", "custom_type_dintervention", "google_map",
+                 "select_address", "dans_local")
+
+
+def on_tache_change(doc, method=None):
+    """Tâche créée ou modifiée : si ce que montre le Suivi terrain a changé (employé, heure, statut, type, position),
+    la page suit sans attendre le cache (20/11/2026 : « le suivi ne voit pas le changement d'affectation »)."""
+    avant = doc.get_doc_before_save()
+    if avant and not any(doc.get(c) != avant.get(c) for c in CHAMPS_SUIVIS):
+        return
+    oublier_suivi(doc.get("starts_on"), avant.get("starts_on") if avant else None)
 
 
 CACHE_SUIVI_S = 45          # le live est partagé entre la page (60 s), le moteur de messages (2 min) et la page client
@@ -872,8 +927,8 @@ def _suivi_calcul(jour) -> dict:
     cfg = config()
     cfg_t = to.config()
     from customization_app import flotte_positions as FP
-    releves = FP.autour(jour)
-    taches = _taches(jour, releves)
+    releves = FP.du_jour(jour)
+    taches = _taches(jour, releves, _lieux_communs(cfg_t))
     employes = {}
     for t in taches:
         if t["employe"]:
@@ -890,7 +945,7 @@ def _suivi_calcul(jour) -> dict:
     photos_jour = _premieres_photos([t["name"] for t in taches])
     emp_cbox = vehicules_du_jour(taches, journaux, defaut_du_jour(cfg, jour), cfg["rayon"], _lieux_communs(cfg_t),
                                  nuits={cb: point_de_nuit(jour, j) for cb, j in journaux.items()}, domiciles=cfg_t["departs"], depot=cfg_t["depot"],
-                                 groupes=equipages(), indices=_indices(taches, photos_jour, releves))
+                                 groupes=equipages(), indices=_indices(taches, photos_jour, releves, jour))
     resultat = apparier_pure(taches, journaux, emp_cbox, cfg["rayon"])
     messages = {}
     if frappe.db.exists("DocType", "Message Client GPS"):

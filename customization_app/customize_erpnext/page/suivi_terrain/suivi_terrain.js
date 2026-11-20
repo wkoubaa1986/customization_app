@@ -40,6 +40,13 @@ class SuiviTerrain {
     this.$root.find("#st-au").val(frappe.datetime.get_today());
     this._bind();
     this.charger();
+    // Une tâche du jour affiché vient de changer (transférée, décalée, clôturée…) : on recharge sans attendre la
+    // minute — une rafale (7 tâches transférées d'un coup) ne fait qu'un rechargement.
+    frappe.realtime.on("suivi_terrain_maj", (m) => {
+      if ((frappe.get_route() || [])[0] !== "suivi-terrain" || !m || m.jour !== this.$root.find("#st-jour").val()) return;
+      clearTimeout(this._maj);
+      this._maj = setTimeout(() => this.charger(true), 1500);
+    });
   }
 
   _bind() {
@@ -198,9 +205,11 @@ class SuiviTerrain {
       else if (!e.cbox) { etat = "pas de véhicule suivi"; }
       else { etat = "pas de données aujourd’hui"; }
       const pos = e.position ? `<a href="${e.position.lien}" target="_blank" rel="noopener">📍 position</a> ${e.position.age_min != null ? "(il y a " + this._min(e.position.age_min) + ")" : ""}${e.position.en_ligne ? "" : " · boîtier hors ligne"}` : "";
+      const tel = (d.telephones || {})[e.employe];
+      const vu = tel ? `<span title="Position du téléphone relevée à sa dernière action dans l’app (${tel.n} relevé${tel.n > 1 ? "s" : ""} ce jour)">📱 <a href="${tel.lien}" target="_blank" rel="noopener">téléphone</a> vu à ${this._h(tel.heure)} · ${esc(tel.action || "action")} · ±${tel.precision} m</span>` : "";
       html += `<div class="st-card"><div class="st-card-head"><span class="st-nom">${esc(e.nom)}</span><span class="st-veh">${esc(e.vehicule || "")}${e.vehicule_detecte ? " <span title=\"Véhicule reconnu d’après les arrêts du jour, différent du véhicule habituel\">(reconnu)</span>" : ""}</span>
         <span class="st-etat ${cls}">${etat}</span><span class="st-prog">${e.faites}/${e.total} faites</span></div>
-        <div class="st-sub">${pos ? `<span>${pos}</span>` : ""}${e.km != null ? `<span>🛣 ${e.km} km</span>` : ""}${e.premiere_sortie ? `<span>départ ${this._h(e.premiere_sortie)}</span>` : ""}${e.dernier_mouvement && !d.aujourdhui ? `<span>retour ${this._h(e.dernier_mouvement)}</span>` : ""}</div>`;
+        <div class="st-sub">${pos ? `<span>${pos}</span>` : ""}${vu}${e.km != null ? `<span>🛣 ${e.km} km</span>` : ""}${e.premiere_sortie ? `<span>départ ${this._h(e.premiere_sortie)}</span>` : ""}${e.dernier_mouvement && !d.aujourdhui ? `<span>retour ${this._h(e.dernier_mouvement)}</span>` : ""}</div>`;
       const prochaine = e.taches.find((t) => ["sur place", "en route", "à venir", "en retard"].includes(t.etape));
       if (prochaine && d.aujourdhui) html += `<div class="st-msg" title="Cliquer pour copier">💬 ${esc(this._phrase(e, prochaine, d))}</div>`;
       if (e.taches.length) {
@@ -520,6 +529,16 @@ class SuiviTerrain {
           .bindTooltip(`<b>${esc(e.nom)}</b> · ${esc(e.vehicule || "")}<br>${esc(e.etat)}${e.lieu ? " " + esc(e.lieu) : ""}${p.vitesse ? " · " + p.vitesse + " km/h" : ""}${age}`, { permanent: true, direction: "top", offset: [0, -18], className: "st-etiq" })
           .addTo(this.couches);
       }
+    });
+    // Dernier relevé du téléphone de chacun (direction) : où il était à sa dernière action, même sans véhicule suivi.
+    d.employes.forEach((e, i) => {
+      const tel = (d.telephones || {})[e.employe];
+      if (!tel) return;
+      const c = ST_COULEURS[i % ST_COULEURS.length];
+      L.marker(pt(tel.lat, tel.lng), { zIndexOffset: 950, icon: L.divIcon({ className: "", iconSize: [26, 26], iconAnchor: [13, 13],
+        html: `<div style="width:26px;height:26px;border-radius:7px;background:#fff;border:3px solid ${c};display:flex;align-items:center;justify-content:center;font-size:14px;box-shadow:0 1px 4px rgba(0,0,0,.4)">📱</div>` }) })
+        .bindTooltip(`<b>${esc(e.nom)}</b> · téléphone vu à ${this._h(tel.heure)}<br>${esc(tel.action || "action")} · ±${tel.precision} m`, { direction: "top", offset: [0, -14] })
+        .addTo(this.couches);
     });
     // Véhicules sans conducteur reconnu : en gris, avec leur trace du jour.
     libres.forEach((v) => {
