@@ -26,6 +26,10 @@ class AnalyseArticles {
     this.order_dir = "asc";
     this.data = null;
     this.selection = new Set();
+    // Colonnes repliées (« groupe », « valo », « pl:<liste> ») : retenues sur ce navigateur.
+    this.cols_off = new Set((() => {
+      try { return JSON.parse(localStorage.getItem("aa_cols_off") || "[]"); } catch (e) { return []; }
+    })());
     this._bind();
     this._load_filters().then(() => this._load());
   }
@@ -106,6 +110,17 @@ class AnalyseArticles {
         else this.selection.delete(code);
       });
       this._maj_libelle_bloc();
+    });
+    // Colonnes repliables : la pastille au-dessus du tableau, ou le ⊟ de l'en-tête.
+    $(this.wrapper).on("click", ".aa-col-chip, .aa-col-x", (e) => {
+      e.stopPropagation();                                      // pas de tri quand on replie « Groupe »
+      e.preventDefault();
+      const col = $(e.currentTarget).attr("data-col");
+      if (col === "*") this.cols_off.clear();
+      else if (this.cols_off.has(col)) this.cols_off.delete(col);
+      else this.cols_off.add(col);
+      try { localStorage.setItem("aa_cols_off", JSON.stringify(Array.from(this.cols_off))); } catch (err) { /* stockage refusé : sans effet */ }
+      if (this.data) this._render();
     });
     $(this.wrapper).on("click", ".aa-toggle", (e) => {
       e.stopPropagation();
@@ -199,27 +214,38 @@ class AnalyseArticles {
     }
 
     const pls = d.price_lists.map((p) => p.name);
+    // Colonnes repliables : Groupe, Valorisation (HT / TVA / TTC) et chaque liste de prix.
+    const off = this.cols_off;
+    const voir_groupe = !off.has("groupe"), voir_valo = !off.has("valo");
+    const pls_vis = pls.filter((pl) => !off.has("pl:" + pl));
+    this.vue = { voir_groupe, voir_valo, pls_vis,
+                 colonnes: 3 + (voir_groupe ? 1 : 0) + (voir_valo ? 3 : 0) + pls_vis.length * 2 };
+    const replier = (col) => `<span class="aa-col-x" data-col="${this._esc(col)}" title="Replier cette colonne">⊟</span>`;
+    const pastilles = [["groupe", "Groupe"], ["valo", "Valorisation"]].concat(pls.map((pl) => ["pl:" + pl, pl]))
+      .map(([col, nom]) => `<span class="aa-col-chip${off.has(col) ? " off" : ""}" data-col="${this._esc(col)}"
+          title="${off.has(col) ? "Afficher" : "Replier"} cette colonne">${off.has(col) ? "＋" : "✓"} ${this._esc(nom)}</span>`).join("");
+    const barre = `<div class="aa-cols"><span>Colonnes :</span>${pastilles}${
+      off.size ? '<a href="#" class="aa-col-x" data-col="*" style="opacity:1;font-size:12px">tout afficher</a>' : ""}</div>`;
+
     let head = `<tr>
-      <th style="width:26px"><input type="checkbox" id="aa-chk-all" title="Tout cocher (page)"></th>
-      <th style="width:58px;min-width:58px"></th>
-      <th class="sortable" data-field="item_code">Code article${this._sort_icon("item_code")}</th>
-      <th class="sortable" data-field="item_name">Désignation${this._sort_icon("item_name")}</th>
-      <th class="sortable" data-field="item_group">Groupe${this._sort_icon("item_group")}</th>
-      <th class="num">Valo. HT</th>
-      <th class="num">TVA %</th>
-      <th class="num">Valo. TTC</th>`;
-    pls.forEach((pl) => {
-      head += `<th class="num pl-head" colspan="2">${this._esc(pl)}</th>`;
+      <th rowspan="2" style="width:26px"><input type="checkbox" id="aa-chk-all" title="Tout cocher (page)"></th>
+      <th rowspan="2" class="sortable" data-field="item_code">Code article${this._sort_icon("item_code")}</th>
+      <th rowspan="2" class="sortable" data-field="item_name">Désignation${this._sort_icon("item_name")}</th>`;
+    if (voir_groupe) head += `<th rowspan="2" class="sortable" data-field="item_group">Groupe${this._sort_icon("item_group")}${replier("groupe")}</th>`;
+    if (voir_valo) head += `<th class="num pl-head" colspan="3">Valorisation${replier("valo")}</th>`;
+    pls_vis.forEach((pl) => {
+      head += `<th class="num pl-head" colspan="2">${this._esc(pl)}${replier("pl:" + pl)}</th>`;
     });
-    head += "</tr><tr><th colspan='8'></th>";
-    pls.forEach(() => {
+    head += "</tr><tr>";
+    if (voir_valo) head += `<th class="num pl-head">Valo. HT</th><th class="num">TVA %</th><th class="num">Valo. TTC</th>`;
+    pls_vis.forEach(() => {
       head += `<th class="num pl-head">PV TTC</th><th class="num">Marge</th>`;
     });
     head += "</tr>";
 
     // Tri par famille : un titre à chaque changement de famille, et un sous-titre par modèle à variantes.
     const par_famille = this.order_by === "famille_prix";
-    const colonnes = 8 + pls.length * 2;
+    const colonnes = this.vue.colonnes;
     let famille = null, modele = null;
     const body = d.rows.map((r) => {
       let titres = "";
@@ -236,7 +262,7 @@ class AnalyseArticles {
       }
       return titres + this._render_row(r, pls);
     }).join("");
-    $("#aa-table").html(`<table class="aa-tbl"><thead>${head}</thead><tbody>${body}</tbody></table>`);
+    $("#aa-table").html(`${barre}<table class="aa-tbl"><thead>${head}</thead><tbody>${body}</tbody></table>`);
     this._maj_libelle_bloc();
   }
 
@@ -248,25 +274,28 @@ class AnalyseArticles {
 
   _render_row(r, pls) {
     const img = r.image
-      ? `<img class="aa-img" src="${this._esc(r.image)}" loading="lazy" style="min-width:38px">`
+      ? `<img class="aa-img" src="${this._esc(r.image)}" loading="lazy">`
       : `<span class="aa-img-empty">🖼</span>`;
     const b = r.bundle;
     const toggle = b ? `<span class="aa-toggle">▸</span>` : "";
-    const badge = b ? ` <span class="aa-badge">BUNDLE</span>` : "";
+    const badge = b ? `<span class="aa-badge">BUNDLE</span>` : "";
     const desc = r.description
       ? `<div class="aa-desc">${this._esc(strip_html(r.description))}</div>` : "";
 
+    // L'article : la photo, et son code juste dessous (une seule colonne) ; la désignation vient ensuite.
+    const v = this.vue;
     let cells = `
       <td><input type="checkbox" class="aa-sel" data-item="${this._esc(r.item_code)}"
            ${this.selection.has(r.item_code) ? "checked" : ""}></td>
-      <td style="width:58px;min-width:58px">${img}</td>
-      <td>${toggle}<span class="aa-code">${this._esc(r.item_code)}</span>${badge}</td>
-      <td>${this._esc(r.item_name)}${desc}</td>
-      <td>${this._esc(r.item_group)}</td>
-      <td class="num">${this._money(b ? b.cout_ht : r.val_ht)}</td>
+      <td class="aa-art"><div class="aa-art-in">${img}
+        <div>${toggle}<span class="aa-code">${this._esc(r.item_code)}</span></div>${badge}</div></td>
+      <td class="aa-des">${this._esc(r.item_name)}${desc}</td>`;
+    if (v.voir_groupe) cells += `<td>${this._esc(r.item_group)}</td>`;
+    if (v.voir_valo) cells += `
+      <td class="num pl-first">${this._money(b ? b.cout_ht : r.val_ht)}</td>
       <td class="num">${r.tva == null ? '<span class="aa-muted">—</span>' : format_number(r.tva, null, 1)}</td>
       <td class="num">${this._money(b ? b.cout_ttc : r.val_ttc)}</td>`;
-    pls.forEach((pl) => {
+    v.pls_vis.forEach((pl) => {
       const p = r.prices[pl] || {};
       // Sous le prix : l'écart avec la Vente standard (ce que cette liste « remise » par rapport à la vente).
       const ecart = p.ecart_ref == null ? "" : `<div class="aa-ecart" title="Écart avec le prix Vente standard"
@@ -288,7 +317,7 @@ class AnalyseArticles {
 
   _render_bundle_detail(r, pls) {
     const b = r.bundle;
-    const colspan = 8 + pls.length * 2;
+    const colspan = this.vue.colonnes;
 
     // prix propre vs prix calculé par liste
     let plRows = pls.map((pl) => {
