@@ -164,8 +164,12 @@ class ReparationOsmoseurs {
     });
     corps.find("[data-detacher]").on("click", (e) => {
       const b = $(e.currentTarget);
-      frappe.confirm(`Détacher ${b.attr("data-detacher")} du dossier ${b.attr("data-machine")} ? La tâche reste au calendrier.`, async () => {
-        await frappe.call({ method: RO_API + ".detacher_tache", args: { machine: b.attr("data-machine"), tache: b.attr("data-detacher") } });
+      const vierge = b.attr("data-vierge") === "1", qui = frappe.utils.escape_html(b.attr("data-qui") || "");
+      frappe.confirm(vierge
+        ? `Retirer l’affectation de <b>${qui}</b> ? Rien n’a été fait sur cette tâche : elle est <b>supprimée du calendrier</b>.`
+        : `Retirer l’affectation de <b>${qui}</b> ? La tâche ${frappe.utils.escape_html(b.attr("data-detacher"))} porte déjà quelque chose (rapport, photo, commentaire, ou elle existait avant le dossier) : elle <b>reste au calendrier</b>, détachée du dossier.`, async () => {
+        const r = (await frappe.call({ method: RO_API + ".detacher_tache", args: { machine: b.attr("data-machine"), tache: b.attr("data-detacher") } })).message || {};
+        frappe.show_alert({ message: r.supprimee ? "Affectation retirée — tâche supprimée du calendrier" : "Affectation retirée — la tâche reste au calendrier, sans dossier", indicator: r.supprimee ? "green" : "orange" }, 6);
         this.charger();
       });
     });
@@ -228,7 +232,7 @@ class ReparationOsmoseurs {
       return `<a class="ro-tache" href="/app/tache-de-travail/${encodeURIComponent(t.name)}" target="_blank"
                  title="${esc(t.rapport || "")}">${t.name === m.tache_livraison ? "🚚" : "🛠️"} ${esc(ro_date(t.starts_on))} · ${esc(t.employe || "")}
                  · <span class="st ${cls}">${st}</span></a>${t.status === "Cancelled" && t.rapport ? `<div class="ro-sub" style="max-width:240px">« ${esc(strip_html(t.rapport).trim().slice(0, 90))} »</div>` : ""}${t.status === "Open" && (m.statut === "Planifiée" || m.statut === "Réceptionnée")
-                 ? ` <span class="ro-sub" style="cursor:pointer" title="Détacher cette tâche du dossier (elle reste au calendrier)" data-detacher="${esc(t.name)}" data-machine="${esc(m.name)}">✕</span>` : ""}`;
+                 ? ` <span class="ro-sub" style="cursor:pointer" title="${t.vierge ? "Retirer l’affectation : la tâche, vide, est supprimée du calendrier" : "Retirer l’affectation : la tâche reste au calendrier, détachée du dossier"}" data-detacher="${esc(t.name)}" data-machine="${esc(m.name)}" data-vierge="${t.vierge ? 1 : 0}" data-qui="${esc((t.employe || "") + " du " + ro_date(t.starts_on))}">✕ retirer</span>` : ""}`;
     }).join("") || `<span class="ro-sub">—</span>`;
 
     // L'état, en clair : le groupe, puis ce qui se passe et depuis quand.
@@ -295,8 +299,11 @@ class ReparationOsmoseurs {
   autres_actions(m) {
     const a = [];
     const s = m.statut;
+    // Le SMS au client existe dans tous les états : texte proposé selon l'état, corrigé ou écrit par la personne.
+    if (s !== "Réception en cours") a.push(["sms", s === "Réparée" || s === "Prête au magasin"
+      ? (m.sms_pret_le ? "📲 Renvoyer un SMS au client (« votre appareil est prêt », ou votre texte)" : "📲 Prévenir le client par SMS (« votre appareil est prêt », ou votre texte)")
+      : "📲 Envoyer un SMS au client (votre texte)"]);
     if (s === "Réparée" || s === "Prête au magasin") {
-      a.push(["sms", m.sms_pret_le ? "📲 Renvoyer le SMS « votre appareil est prêt »" : "📲 Prévenir le client par SMS (« votre appareil est prêt »)"]);
       a.push(["livraison", "🚚 Planifier une livraison chez le client"]);
       a.push(["toujours-la", "📍 Toujours au magasin (le rappel repart de zéro)"]);
       a.push(["tache", "➕ Nouvelle tâche de réparation (à reprendre)"]);
@@ -342,17 +349,7 @@ class ReparationOsmoseurs {
       frappe.show_alert({ message: `${machine} : toujours au magasin, noté`, indicator: "green" }, 5);
       return this.charger();
     }
-    if (action === "sms") {
-      frappe.confirm(`Envoyer le SMS « votre appareil est prêt » au ${frappe.utils.escape_html(m.tel || "numéro du dossier")} ?`, async () => {
-        const r = m.statut === "Réparée"
-          ? ((await frappe.call({ method: RO_API + ".restituer_magasin", args: { machine, sms: 1 } })).message || {}).sms
-          : (await frappe.call({ method: RO_API + ".envoyer_sms_pret", args: { machine } })).message;
-        const x = r || { numeros: [] };
-        frappe.show_alert({ message: x.simule ? `SMS SIMULÉ (dev) → ${x.numeros.join(", ")}` : `SMS envoyé à ${x.numeros.join(", ")}`, indicator: x.simule ? "orange" : "green" }, 6);
-        this.charger();
-      });
-      return;
-    }
+    if (action === "sms") return this.dialogue_sms(machine);
     if (action === "annuler-restitution") {
       frappe.confirm(`Annuler la livraison de ${machine} ? La tâche de livraison est supprimée et la machine reste à rendre.`, async () => {
         await frappe.call({ method: RO_API + ".annuler_restitution", args: { machine } });
@@ -541,7 +538,7 @@ class ReparationOsmoseurs {
       <div class="et"><span class="ro-badge b-rendre">⏳ À vérifier</span><b>Rappel du matin</b>
         <ul><li>Une machine réparée et pas rendue, reçue sans technicien, ou dont la livraison n’est pas clôturée est rappelée chaque matin à la personne du réglage, puis relancée à une seconde personne.</li>
         <li>La réponse se donne sur la ligne : « ✅ Rendre au client », « 📍 Toujours au magasin » (le rappel repart de zéro), « 📅 Affecter » ou « ↪️ Sortie sans réparation ».</li></ul></div>
-      <p class="ro-sub"><b>Erreurs courantes</b> : réception clôturée trop tôt → « Rouvrir la réception » · sortie cliquée par erreur → « Annuler la sortie » · code superviseur : réglage « Config Cloture Tache ».</p>
+      <p class="ro-sub"><b>Erreurs courantes</b> : réception clôturée trop tôt → « Rouvrir la réception » · technicien affecté par erreur → le ✕ à côté de sa tâche (vide, elle est supprimée du calendrier) · sortie cliquée par erreur → « Annuler la sortie » · un mot au client → « Autres actions », « SMS au client » · code superviseur : réglage « Config Cloture Tache ».</p>
     </div>`);
     d.show();
   }
@@ -583,13 +580,62 @@ class ReparationOsmoseurs {
     d.show();
   }
 
+  // ── 📲 SMS au client : un modèle selon l'état du dossier, ou son propre texte ─
+  async dialogue_sms(machine) {
+    const esc = frappe.utils.escape_html;
+    const p = (await frappe.call({ method: RO_API + ".preparer_sms", args: { machine } })).message;
+    if (!p.numeros.length) {
+      frappe.msgprint({ title: "Pas de numéro mobile", indicator: "orange",
+                        message: `Le dossier ${esc(machine)} n’a aucun numéro mobile tunisien valide (${esc(p.tel || "aucun numéro")}). Corrigez le téléphone sur la fiche du dossier.` });
+      return;
+    }
+    const d = new frappe.ui.Dialog({
+      title: `📲 SMS au client — ${machine}`,
+      fields: [
+        { fieldtype: "HTML", fieldname: "haut" },
+        { fieldtype: "Small Text", fieldname: "texte", label: "Message", reqd: 1 },
+        { fieldtype: "HTML", fieldname: "bas" },
+      ],
+      primary_action_label: "Envoyer le SMS",
+      primary_action: async (v) => {
+        try {
+          const x = (await frappe.call({ method: RO_API + ".envoyer_sms_client", type: "POST", freeze: true, args: { machine, texte: v.texte } })).message || { numeros: [] };
+          d.hide();
+          frappe.show_alert({ message: x.simule ? `SMS SIMULÉ (dev) → ${x.numeros.join(", ")}` : `SMS envoyé à ${x.numeros.join(", ")}`, indicator: x.simule ? "orange" : "green" }, 6);
+          this.charger();
+        } catch (e) { /* message déjà affiché par frappe.call */ }
+      },
+    });
+    const $texte = () => d.fields_dict.texte.$input;
+    // Le compte suit ce qui partira vraiment : sans accents (un seul accent triple le nombre de SMS).
+    const compter = () => {
+      const n = String(d.get_value("texte") || "").normalize("NFKD").replace(/[\u0300-\u036f]/g, "").trim().length;
+      const sms = n <= 160 ? 1 : Math.ceil(n / 153);
+      d.fields_dict.bas.$wrapper.html(`<div class="ro-sub" style="${n > p.max ? "color:#c2410c;font-weight:600" : ""}">${n} caractère${n > 1 ? "s" : ""} · ${n > p.max ? "trop long (" + p.max + " au plus)" : sms + " SMS"} — les accents sont retirés à l’envoi${p.repare ? " · le dossier notera « client prévenu »" : ""}${p.simule ? " · <b>dev : envoi simulé</b>" : ""}</div>`);
+    };
+    d.fields_dict.haut.$wrapper.html(`
+      <div style="margin-bottom:8px">À : <b>${esc(p.client)}</b> · ${p.numeros.map(esc).join(" et ")}</div>
+      <div class="ro-sub" style="margin-bottom:4px">Partir d’un modèle, puis corriger :</div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px">${p.modeles.map((x, i) =>
+        `<button type="button" class="btn btn-xs btn-default" data-modele="${i}">${esc(x.libelle)}</button>`).join("")}</div>`);
+    const poser = (i) => {
+      d.set_value("texte", p.modeles[i].texte).then(() => { compter(); $texte().trigger("focus"); });
+      d.fields_dict.haut.$wrapper.find("[data-modele]").removeClass("btn-primary").addClass("btn-default")
+        .filter(`[data-modele="${i}"]`).removeClass("btn-default").addClass("btn-primary");
+    };
+    d.fields_dict.haut.$wrapper.find("[data-modele]").on("click", (e) => poser(Number($(e.currentTarget).attr("data-modele"))));
+    $texte().attr("rows", 5).css("height", "auto").on("input", compter);
+    d.show();
+    poser(0);
+  }
+
   // ── Tâche à la main (technicien + date choisis) ─────────────────────────────
   dialogue_tache(machine, m) {
     const d = new frappe.ui.Dialog({
       title: `Tâche de réparation — ${machine}`,
       fields: [
         { fieldtype: "Link", fieldname: "employee", label: "Technicien", options: "Employee", reqd: 1,
-          default: m && m.responsable, get_query: () => ({ filters: { status: "Active" } }) },
+          default: m && m.responsable_actif, get_query: () => ({ filters: { status: "Active" } }) },
         { fieldtype: "Date", fieldname: "date", label: "Date", reqd: 1, default: frappe.datetime.add_days(frappe.datetime.get_today(), 1) },
         { fieldtype: "Time", fieldname: "heure", label: "Heure", default: "09:00:00" },
       ],

@@ -190,7 +190,7 @@
       title: `🚚 Livraison — ${machine}`,
       fields: [
         { fieldtype: "Link", fieldname: "employee", label: "Livreur", options: "Employee", reqd: 1,
-          default: m && m.responsable, get_query: () => ({ filters: { status: "Active" } }) },
+          default: m && m.responsable_actif, get_query: () => ({ filters: { status: "Active" } }) },
         { fieldtype: "Date", fieldname: "date", label: "Date", reqd: 1, default: frappe.datetime.add_days(frappe.datetime.get_today(), 1) },
         { fieldtype: "Time", fieldname: "heure", label: "Heure", default: "09:00:00" },
         { fieldtype: "Select", fieldname: "adresse", label: "Adresse de livraison", reqd: adresses.length ? 1 : 0,

@@ -35,6 +35,11 @@ Le processus, tel que demandé le 01/10/2026 :
      « Livraison », clôturée, dossier resté « à affecter ») ; seule `tache_livraison` est la livraison de retour.
    - Rappel du matin à la personne du réglage (« Suivi des restitutions »), relance à une seconde si rien ne bouge.
 
+6. RETOURS DU 20/11/2026 : retirer une affectation (le ✕ d'une tâche ouverte) SUPPRIME la tâche du calendrier quand
+   rien n'y a été fait — elle y restait, sans dossier ; un SMS au texte choisi par la personne existe dans tous les
+   états (`envoyer_sms_client`) ; le champ Responsable est dispensé des permissions par employé (un dossier dont le
+   technicien a quitté était refusé — « pas permis » — à qui n'a plus cet employé dans sa liste).
+
 Toute la décision est ici, côté serveur ; l'écran n'invente rien.
 """
 
@@ -96,6 +101,13 @@ SMS_PRET = ("Bonjour {nom}, votre appareil ({ref}) est repare et vous attend au 
             "Pour toute question : {tel}.")
 SMS_LIVRAISON = ("Bonjour {nom}, votre appareil ({ref}) est repare : nous vous le livrons le {date} ({employe}).{garantie} "
                  "Pour toute question : {tel}.")
+# Le SMS « spécifique » (20/11/2026) : le texte est écrit par la personne, à partir d'un de ces modèles. Ceux d'une
+# machine pas encore réparée ne disent jamais « réparé ».
+SMS_A_REPRENDRE = ("Bonjour {nom}, votre appareil ({ref}) vous attend au magasin Aquaworld (Soukra) : merci de passer le "
+                   "recuperer. Pour toute question : {tel}.")
+SMS_RAPPELER = "Bonjour {nom}, au sujet de votre appareil ({ref}) depose chez Aquaworld : merci de nous rappeler au {tel}."
+SMS_LIBRE = "Bonjour {nom}, au sujet de votre appareil ({ref}) : \nAquaworld {tel}"
+SMS_MAX = 459                            # 3 SMS enchaînés de 153 caractères : au-delà, on téléphone
 GARANTIES = ("Sous garantie", "Hors garantie")
 MOIS_HISTORIQUE = 13                     # la dernière année + 1 mois (décision 01/10/2026)
 NOTE_GARANTIE = "🆓 SOUS GARANTIE — réparation GRATUITE, ne rien facturer au client"
@@ -213,6 +225,7 @@ def _taches_par_machine(noms: list[str]) -> dict[str, list[dict]]:
                                   "starts_on", "custom_type_dintervention", "rapport_visite",
                                   "liste_photos_avant", "liste_photos_apres"],
                           order_by="starts_on")
+    a_supprimer = _taches_sans_trace(rows)
     noms_emp = {r.custom_choix_du_staff for r in rows if r.custom_choix_du_staff}
     libelles = dict(frappe.get_all("Employee", filters={"name": ["in", list(noms_emp)]},
                                    fields=["name", "employee_name"], as_list=True)) if noms_emp else {}
@@ -220,12 +233,30 @@ def _taches_par_machine(noms: list[str]) -> dict[str, list[dict]]:
     for r in rows:
         out.setdefault(r[CHAMP_TACHE], []).append({
             "name": r.name, "status": r.status, "type": r.custom_type_dintervention,
+            "vierge": r.name in a_supprimer,
             "employee": r.custom_choix_du_staff,
             "employe": libelles.get(r.custom_choix_du_staff) or r.get("custom_employé") or "",
             "starts_on": r.starts_on, "rapport": r.rapport_visite,
             "photos_avant": photos_de(r.liste_photos_avant), "photos_apres": photos_de(r.liste_photos_apres),
         })
     return out
+
+
+def tache_vierge(t) -> bool:
+    """Rien n'a été fait sur cette tâche : encore ouverte, ni rapport ni photo. PURE."""
+    return (t.get("status") == "Open" and not (t.get("rapport_visite") or "").strip()
+            and not photos_de(t.get("liste_photos_avant")) and not photos_de(t.get("liste_photos_apres")))
+
+
+def _taches_sans_trace(taches) -> set:
+    """Celles qu'un retrait d'affectation SUPPRIME du calendrier : vierges et sans aucun commentaire. Une tâche qui
+    existait au calendrier avant d'être rattachée au dossier porte le commentaire « 🔗 Rattachée… » : elle y reste."""
+    vierges = [t["name"] for t in taches if tache_vierge(t)]
+    if not vierges:
+        return set()
+    commentees = frappe.get_all("Comment", filters={"reference_doctype": DOCTYPE_TACHE, "reference_name": ["in", vierges],
+                                                    "comment_type": "Comment"}, pluck="reference_name")
+    return set(vierges) - set(commentees)
 
 
 def photos_de(texte) -> list:
@@ -400,8 +431,11 @@ def get_data(statut=None, client=None, responsable=None, recherche=None, inclure
     taches = _taches_par_machine([m.name for m in machines])
     regs = reglements([m.commande_client for m in machines])
     aujourdhui = getdate(nowdate())
+    actifs = set(frappe.get_all("Employee", filters={"status": "Active"}, pluck="name"))
     for m in machines:
         m["taches"] = taches.get(m.name, [])
+        # Le technicien proposé d'office dans les dialogues : jamais quelqu'un qui a quitté.
+        m["responsable_actif"] = m.responsable if m.responsable in actifs else None
         ref = getdate(m.date_reparee) if m.date_reparee else getdate(m.date_reception or m.modified)
         m["age_jours"] = (aujourdhui - ref).days
         m["groupe"] = groupe_de(m.statut)
@@ -881,18 +915,33 @@ def rattacher_tache(machine, tache):
 
 @frappe.whitelist()
 def detacher_tache(machine, tache):
-    """Rattachement par erreur : la tâche reste au calendrier, sans dossier."""
+    """Le ✕ d'une tâche ouverte : l'affectation est retirée. Une tâche sur laquelle RIEN n'a été fait (ni rapport,
+    ni photo, ni commentaire) est SUPPRIMÉE du calendrier (demande du 20/11/2026 : « la tâche reste sur le calendrier,
+    il faut la supprimer s'il n'y a rien » — elle y restait, sans dossier, au nom du technicien). Celle qui porte
+    quelque chose, ou qui existait au calendrier avant d'être rattachée ici, y reste, détachée du dossier."""
     _ecriture(machine)
     t = frappe.get_doc(DOCTYPE_TACHE, tache)
     if t.get(CHAMP_TACHE) != machine:
         frappe.throw(_("{0} n'est pas rattachée à {1}.").format(tache, machine))
     if t.status == "Completed":
         frappe.throw(_("{0} est clôturée : elle reste la preuve de la réparation.").format(tache))
-    t.set(CHAMP_TACHE, None)
-    t.flags.ignore_permissions = True
-    t.save()
-    t.add_comment("Comment", _("🔗 Détachée du dossier de réparation {0}").format(machine))
-    return {"statut": synchroniser(machine)}
+    if tache == frappe.db.get_value(DOCTYPE, machine, "tache_livraison"):
+        frappe.throw(_("{0} est la livraison de retour : utilisez « Annuler la livraison ».").format(tache))
+    qui = "%s, le %s" % (frappe.db.get_value("Employee", t.custom_choix_du_staff, "employee_name") or t.get("custom_employé") or "—",
+                         frappe.format(getdate(t.starts_on), {"fieldtype": "Date"}) if t.starts_on else "—")
+    supprimee = tache in _taches_sans_trace([t.as_dict()])
+    if supprimee:
+        frappe.delete_doc(DOCTYPE_TACHE, tache, ignore_permissions=True, force=True)
+    else:
+        t.set(CHAMP_TACHE, None)
+        t.flags.ignore_permissions = True
+        t.save()
+        t.add_comment("Comment", _("🔗 Détachée du dossier de réparation {0}").format(machine))
+    statut = synchroniser(machine)
+    frappe.get_doc(DOCTYPE, machine).add_comment("Info", _("🗑️ Affectation retirée — {0} : {1} ({2})").format(
+        qui, _("tâche supprimée du calendrier") if supprimee else _("la tâche {0} reste au calendrier, sans dossier").format(tache),
+        frappe.utils.get_fullname(frappe.session.user)))
+    return {"statut": statut, "supprimee": supprimee}
 
 
 @frappe.whitelist()
@@ -1002,8 +1051,9 @@ def _sms_simule() -> bool:
     return bool(cint(frappe.conf.get("developer_mode"))) and not cint(frappe.conf.get("sms_reel_en_dev"))
 
 
-def _envoyer_sms(doc, texte: str, libelle: str) -> dict:
-    """Un SMS au(x) numéro(s) du dossier, tracé en commentaire ; simulé en dev."""
+def _envoyer_sms(doc, texte: str, libelle: str, pret: bool = True) -> dict:
+    """Un SMS au(x) numéro(s) du dossier, tracé en commentaire ; simulé en dev. `pret` : ce SMS prévient le client
+    que sa machine réparée l'attend ou arrive (« client prévenu le … » à l'écran)."""
     from customization_app.customize_erpnext.doctype.compagne_sms.compagne_sms import _send_sms_with_fallback, traiter_numero_tel
     from customization_app.sms_annulation import sans_accents
 
@@ -1014,7 +1064,8 @@ def _envoyer_sms(doc, texte: str, libelle: str) -> dict:
     simule = _sms_simule()
     if not simule:
         _send_sms_with_fallback(["216%s" % n for n in numeros], texte)
-    doc.db_set("sms_pret_le", now_datetime(), update_modified=False)
+    if pret:
+        doc.db_set("sms_pret_le", now_datetime(), update_modified=False)
     doc.add_comment("Comment", _("📲 SMS « {0} » {1} à {2} : {3}")
                     .format(libelle, _("SIMULÉ (dev)") if simule else _("envoyé"), ", ".join(numeros), texte))
     return {"numeros": numeros, "simule": simule, "texte": texte}
@@ -1023,15 +1074,60 @@ def _envoyer_sms(doc, texte: str, libelle: str) -> dict:
 @frappe.whitelist()
 def envoyer_sms_pret(machine):
     """SMS « votre appareil est réparé, à retirer au magasin » au(x) numéro(s) du dossier."""
-    from customization_app.sms_annulation import telephone_contact
-
     _ecriture(machine)
     doc = frappe.get_doc(DOCTYPE, machine)
     if doc.statut not in (S_REPAREE, S_PRETE):
         frappe.throw(_("Le SMS « machine prête » ne s'envoie que pour une machine réparée ({0}).").format(doc.statut))
-    return _envoyer_sms(doc, SMS_PRET.format(nom=doc.nom_client or doc.client, ref=doc.name, tel=telephone_contact(),
-                                             garantie=" Reparation hors garantie : a regler au retrait." if doc.garantie == "Hors garantie" else ""),
-                        "machine prête")
+    return _envoyer_sms(doc, SMS_PRET.format(**_valeurs_sms(doc)), "machine prête")
+
+
+def _valeurs_sms(doc) -> dict:
+    from customization_app.sms_annulation import telephone_contact
+    return {"nom": doc.nom_client or doc.client, "ref": doc.name, "tel": telephone_contact(),
+            "garantie": " Reparation hors garantie : a regler au retrait." if doc.garantie == "Hors garantie" else ""}
+
+
+@frappe.whitelist()
+def preparer_sms(machine):
+    """Ce que montre le dialogue « SMS au client » : les numéros qui le recevront et les modèles de texte de l'état du
+    dossier, déjà remplis (nom, référence, notre numéro) — la personne choisit, corrige, ou écrit le sien."""
+    from customization_app.customize_erpnext.doctype.compagne_sms.compagne_sms import traiter_numero_tel
+    from customization_app.sms_annulation import sans_accents
+
+    _lecture()
+    doc = frappe.get_doc(DOCTYPE, machine)
+    v = _valeurs_sms(doc)
+    repare = doc.statut in REPAREE
+    modeles = ([("Votre appareil est prêt", SMS_PRET)] if repare else
+               [("Venez reprendre votre appareil", SMS_A_REPRENDRE)] if doc.statut != S_RENDUE else [])
+    modeles += [("Merci de nous rappeler", SMS_RAPPELER), ("Texte libre", SMS_LIBRE)]
+    return {"numeros": traiter_numero_tel(doc.tel or ""), "tel": doc.tel or "", "client": v["nom"], "repare": repare,
+            "max": SMS_MAX, "simule": _sms_simule(),
+            "modeles": [{"libelle": lib, "texte": sans_accents(t.format(**v))} for lib, t in modeles]}
+
+
+@frappe.whitelist(methods=["POST"])
+def envoyer_sms_client(machine, texte):
+    """Un SMS au texte CHOISI par la personne, au(x) numéro(s) du dossier, quel que soit son état (demande du
+    20/11/2026 : « un SMS spécifique au client », y compris avant toute réparation). Le texte part tel quel, sans
+    accents (un seul accent triple le nombre de SMS), et reste écrit au fil du dossier avec son auteur.
+    Machine réparée : c'est le client qu'on prévient — « client prévenu le … », et elle attend au magasin."""
+    from customization_app.sms_annulation import sans_accents
+
+    _ecriture(machine)
+    doc = frappe.get_doc(DOCTYPE, machine)
+    texte = sans_accents(re.sub(r"[ \t]+", " ", (texte or "")).strip())
+    if len(texte) < 10 or texte == sans_accents(SMS_LIBRE.format(**_valeurs_sms(doc))).strip():
+        frappe.throw(_("Écrivez le message à envoyer au client."))
+    if len(texte) > SMS_MAX:
+        frappe.throw(_("Message trop long ({0} caractères, {1} au plus).").format(len(texte), SMS_MAX))
+    repare = doc.statut in REPAREE
+    if doc.statut == S_REPAREE:
+        doc.statut, doc.mode_restitution = S_PRETE, "Retrait au magasin"
+        doc.save()
+    out = _envoyer_sms(doc, texte, _("message de {0}").format(frappe.utils.get_fullname(frappe.session.user)), pret=repare)
+    out["statut"] = doc.statut
+    return out
 
 
 @frappe.whitelist()

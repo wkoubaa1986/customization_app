@@ -709,6 +709,95 @@ class TestRattachement(unittest.TestCase):
         self.assertEqual(RO.detacher_tache(self.nom, self.tache.name)["statut"], RO.S_RECEPTIONNEE)
         self.assertFalse(frappe.db.get_value(RO.DOCTYPE_TACHE, self.tache.name, RO.CHAMP_TACHE))
 
+    def test_retirer_une_affectation_supprime_la_tache_vide(self):
+        """20/11/2026 : « j'affecte un technicien, j'enlève l'affectation, la tâche reste sur le calendrier »."""
+        import frappe
+        t = RO.affecter_tache(self.nom, self.emp, "2031-07-07", "09:00")["tache"]
+        ligne = next(x for x in RO.get_data(recherche=self.nom)["machines"][0]["taches"] if x["name"] == t)
+        self.assertTrue(ligne["vierge"])                                                         # l'écran l'annonce
+        r = RO.detacher_tache(self.nom, t)
+        self.assertEqual((r["supprimee"], r["statut"]), (True, RO.S_RECEPTIONNEE))
+        self.assertFalse(frappe.db.exists(RO.DOCTYPE_TACHE, t))                                  # plus rien au calendrier
+        self.assertFalse(frappe.db.get_value(RO.DOCTYPE, self.nom, "responsable"))
+        traces = frappe.get_all("Comment", filters={"reference_doctype": RO.DOCTYPE, "reference_name": self.nom}, pluck="content")
+        self.assertTrue(any("Affectation retirée" in c and "supprimée du calendrier" in c for c in traces))
+
+    def test_retirer_une_affectation_garde_la_tache_qui_porte_quelque_chose(self):
+        import frappe
+        # un rapport déjà écrit : la tâche reste au calendrier, détachée
+        t = RO.affecter_tache(self.nom, self.emp, "2031-07-08", "09:00")["tache"]
+        frappe.db.set_value(RO.DOCTYPE_TACHE, t, "rapport_visite", "pompe démontée, pièce commandée")
+        r = RO.detacher_tache(self.nom, t)
+        self.assertEqual((r["supprimee"], r["statut"]), (False, RO.S_RECEPTIONNEE))
+        self.assertTrue(frappe.db.exists(RO.DOCTYPE_TACHE, t))
+        self.assertFalse(frappe.db.get_value(RO.DOCTYPE_TACHE, t, RO.CHAMP_TACHE))
+        # une tâche qui existait au calendrier avant le dossier y retourne
+        RO.rattacher_tache(self.nom, self.tache.name)
+        ligne = next(x for x in RO.get_data(recherche=self.nom)["machines"][0]["taches"] if x["name"] == self.tache.name)
+        self.assertFalse(ligne["vierge"])
+        self.assertFalse(RO.detacher_tache(self.nom, self.tache.name)["supprimee"])
+        self.assertTrue(frappe.db.exists(RO.DOCTYPE_TACHE, self.tache.name))
+
+    def test_tache_vierge(self):
+        self.assertTrue(RO.tache_vierge({"status": "Open", "rapport_visite": " ", "liste_photos_avant": None}))
+        self.assertFalse(RO.tache_vierge({"status": "Open", "rapport_visite": "fait"}))
+        self.assertFalse(RO.tache_vierge({"status": "Open", "liste_photos_apres": '📁 "/files/a.jpg"'}))
+        self.assertFalse(RO.tache_vierge({"status": "Cancelled"}))
+
+    def test_sms_au_texte_choisi_avant_toute_reparation(self):
+        """20/11/2026 : « un SMS spécifique au client », aussi quand la machine attend un technicien."""
+        import frappe
+        p = RO.preparer_sms(self.nom)
+        self.assertEqual(p["numeros"], ["20123456"])
+        self.assertFalse(p["repare"])
+        self.assertEqual([m["libelle"] for m in p["modeles"]], ["Venez reprendre votre appareil", "Merci de nous rappeler", "Texte libre"])
+        self.assertFalse(any("repare" in m["texte"] for m in p["modeles"]))                      # jamais « réparé » ici
+        self.assertTrue(all(self.nom in m["texte"] for m in p["modeles"]))
+        with self.assertRaises(frappe.ValidationError):
+            RO.envoyer_sms_client(self.nom, "  ")
+        with self.assertRaises(frappe.ValidationError):
+            RO.envoyer_sms_client(self.nom, p["modeles"][-1]["texte"])                           # le modèle libre, rien d'écrit
+        with self.assertRaises(frappe.ValidationError):
+            RO.envoyer_sms_client(self.nom, "x" * (RO.SMS_MAX + 1))
+        r = RO.envoyer_sms_client(self.nom, "Bonjour, la pièce   arrive mardi : réparation prévue mercredi. Aquaworld")
+        self.assertTrue(r["simule"])                                                             # dev : jamais un vrai SMS
+        self.assertEqual(r["texte"], "Bonjour, la piece arrive mardi : reparation prevue mercredi. Aquaworld")
+        self.assertEqual(r["statut"], RO.S_RECEPTIONNEE)                                         # l'état ne bouge pas
+        self.assertFalse(frappe.db.get_value(RO.DOCTYPE, self.nom, "sms_pret_le"))               # pas « client prévenu »
+        traces = frappe.get_all("Comment", filters={"reference_doctype": RO.DOCTYPE, "reference_name": self.nom}, pluck="content")
+        self.assertTrue(any(c.startswith("📲 SMS") and "piece arrive mardi" in c for c in traces))
+
+    def test_sms_au_texte_choisi_machine_reparee(self):
+        import frappe
+        frappe.db.set_value(RO.DOCTYPE, self.nom, {"statut": RO.S_REPAREE, "date_reparee": frappe.utils.now_datetime()})
+        p = RO.preparer_sms(self.nom)
+        self.assertTrue(p["repare"])
+        self.assertEqual(p["modeles"][0]["libelle"], "Votre appareil est prêt")
+        r = RO.envoyer_sms_client(self.nom, p["modeles"][0]["texte"] + " Ouvert samedi matin.")
+        self.assertEqual(r["statut"], RO.S_PRETE)
+        self.assertTrue(frappe.db.get_value(RO.DOCTYPE, self.nom, "sms_pret_le"))
+
+    def test_un_dossier_d_un_employe_parti_reste_accessible(self):
+        """Salma (20/11/2026) : « pas permis » sur les dossiers dont le technicien a quitté — ses permissions par
+        employé s'appliquaient au champ Responsable. Le champ en est dispensé, et un parti n'est plus proposé."""
+        import frappe, json
+        from pathlib import Path
+        champs = json.loads((Path(RO.__file__).parent / "customize_erpnext/doctype/machine_reparation/machine_reparation.json").read_text())["fields"]
+        self.assertEqual(next(f for f in champs if f["fieldname"] == "responsable").get("ignore_user_permissions"), 1)
+        self.assertEqual(frappe.get_meta(RO.DOCTYPE).get_field("responsable").ignore_user_permissions, 1)
+        parti = frappe.db.get_value("Employee", {"status": "Left"}, "name")
+        if not parti:
+            self.skipTest("aucun employé parti")
+        frappe.db.set_value(RO.DOCTYPE, self.nom, "responsable", parti)
+        m = RO.get_data(recherche=self.nom)["machines"][0]
+        self.assertEqual((m["responsable"], m["responsable_actif"]), (parti, None))
+        limite = frappe.db.sql("""select up.user from `tabUser Permission` up join tabUser u on u.name = up.user and u.enabled = 1
+                                  where up.allow = 'Employee' and up.user in (select parent from `tabHas Role` where role = 'Sales User')
+                                  limit 1""")
+        if not limite:
+            self.skipTest("aucun compte limité par employé")
+        self.assertTrue(frappe.has_permission(RO.DOCTYPE, "write", doc=self.nom, user=limite[0][0]))
+
     def test_refus_type_et_statut(self):
         import frappe
         livraison = frappe.get_doc({"doctype": RO.DOCTYPE_TACHE, "custom_type_dintervention": "Livraison", "custom_choix_du_staff": self.emp,
