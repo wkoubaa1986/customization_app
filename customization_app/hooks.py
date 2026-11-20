@@ -179,6 +179,9 @@ has_permission = {
 # Hook on document methods and events
 
 doc_events = {
+    # Gouvernorat / ville / secteur : les champs de la fiche et les champs standard restent alignés, quel que soit
+    # le chemin de création (adresse_sectorisation).
+    "Address": {"validate": ["customization_app.adresse_sectorisation.valider"]},
     # Prix des ensembles : quand un composant change de prix, l'ensemble suit SI le réglage de la page Analyse
     # Articles le demande (« Config Analyse Articles », recalcul automatique). Jamais bloquant.
     "Item Price": {"after_insert": "customization_app.analyse_articles.prix_change",
@@ -957,6 +960,8 @@ after_migrate = [
 # ligne de `purchase_invoice_caisse`. Tout tient donc ici, et les ajouts se font DANS ce
 # dictionnaire, jamais dans un second.
 doctype_js = {
+    # Fiche Adresse : listes gouvernorat / ville chargées à chaque ouverture (remplace le Client Script en base).
+    "Address": ["public/js/address_sectorisation.js"],
     # Fiche client : bandeau « géré par le partenaire » + bouton pour (dé)marquer (partenaire_clients).
     "Customer": "public/js/customer_partenaire.js",
     # Facture d'achat : bouton « 📦 Rattacher des BL » (bons de livraison capturés en caisse,
