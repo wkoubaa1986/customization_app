@@ -1140,7 +1140,7 @@ def tache_journalier_nizar():
                 "custom_type_dintervention": "Autre",
                 "titre":                     "Vérification Stock nizar",
                 "starts_on":                 today + " 08:45:00",
-                "ends_on":                   today + " 09:30:00",
+                "ends_on":                   today + " 09:45:00",    # une heure à partir de 8 h 45 (20/11/2026)
                 "subject":                   "Vérification Stock nizar",
             }).insert(ignore_permissions=True)
             frappe.db.commit()

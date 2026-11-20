@@ -20,7 +20,8 @@ class TestRegles(unittest.TestCase):
         self.assertEqual(S._heure(datetime.timedelta(hours=9)), "09:00")           # Time lu en base
         self.assertEqual(S._heure(datetime.timedelta(hours=10, minutes=30)), "10:30")
         self.assertEqual(S._heure("9:00:00"), "09:00")
-        self.assertEqual(S._heure(None), "09:00")
+        self.assertEqual(S._heure(None), "08:45")                                   # une heure à partir de 8 h 45 (20/11/2026)
+        self.assertEqual((S.HEURE_VERIFICATION, S.DUREES_MIN[S.DUREE_VERIFICATION]), ("08:45", 60))
 
     def test_ecarts(self):
         lignes = [{"qte_systeme": 10, "qte_comptee": 8, "taux": 2.5},      # −2 × 2,5 = −5 (manquant)

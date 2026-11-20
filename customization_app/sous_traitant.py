@@ -736,7 +736,7 @@ def _inscrire_verification(entrepot: str, jour: str, heure: str, periodicite: st
 
 @frappe.whitelist()
 def creer(nom, email, mot_de_passe, telephone=None, genre="Male", date_naissance=None,
-          jour_verification="Lundi", heure_verification="09:00", periodicite="Chaque semaine", couleur=None):
+          jour_verification="Lundi", heure_verification="08:45", periodicite="Chaque semaine", couleur=None):
     """Tout en un geste : utilisateur (rôle Sous-traitant), employé, entrepôt, compte, vérification planifiée."""
     frappe.only_for(SUPERVISEURS)
     nom = " ".join((nom or "").split())
@@ -769,7 +769,7 @@ def creer(nom, email, mot_de_passe, telephone=None, genre="Male", date_naissance
     })
     emp.flags.ignore_permissions = True
     emp.insert()
-    _inscrire_verification(entrepot, jour_verification, heure_verification or "09:00", periodicite)
+    _inscrire_verification(entrepot, jour_verification, heure_verification or "08:45", periodicite)
     frappe.db.commit()
     return {"utilisateur": email, "employe": emp.name, "entrepot": entrepot, "compte": compte,
             "couleur": couleur or couleur_par_defaut(emp.name)}

@@ -1220,12 +1220,19 @@ def _acces_verification(entrepot: str):
                      .format(entrepot), frappe.PermissionError)
 
 
+# Sa demande du 20/11/2026 : « la vérification de stock dure une heure à partir de 8 h 45 ». Ce sont les valeurs
+# de départ — l'heure se règle toujours stock par stock et la durée dans Config Stock Entrepot ; le patch
+# verification_stock_8h45_une_heure y a remis le réglage existant et les tâches encore ouvertes.
+HEURE_VERIFICATION = "08:45"
+DUREE_VERIFICATION = "1 heure"
+
+
 def _heure(h) -> str:
     """« HH:MM » depuis un champ Time (timedelta en base, chaîne « 9:00:00 » ou « 09:00 »)."""
     if hasattr(h, "total_seconds"):
         total = int(h.total_seconds())
         return "%02d:%02d" % (total // 3600, (total % 3600) // 60)
-    parts = str(h or "09:00").split(":")
+    parts = str(h or HEURE_VERIFICATION).split(":")
     return "%02d:%02d" % (int(parts[0] or 0), int(parts[1] or 0) if len(parts) > 1 else 0)
 
 
@@ -1235,7 +1242,7 @@ def config_verification() -> dict:
                "periodicite": r.get("periodicite") or HEBDO}
               for r in (cfg.get("verifications") if cfg else []) or []]
     return {"responsable": cfg.responsable_verification if cfg else None,
-            "duree": (cfg.duree_verification if cfg else None) or "1 heure", "lignes": lignes}
+            "duree": (cfg.duree_verification if cfg else None) or DUREE_VERIFICATION, "lignes": lignes}
 
 
 HEBDO, QUINZAINE = "Chaque semaine", "Toutes les deux semaines"
@@ -1341,7 +1348,7 @@ def ouvrir_verification(entrepot: str, date_prevue, avec_taches: bool = True) ->
                           "employe": emp.name if emp else None, "responsable": cfg["responsable"]})
     if avec_taches:
         libelle = frappe.db.get_value("Warehouse", entrepot, "warehouse_name") or entrepot
-        heure = next((l["heure"] for l in cfg["lignes"] if l["entrepot"] == entrepot), "09:00")
+        heure = next((l["heure"] for l in cfg["lignes"] if l["entrepot"] == entrepot), HEURE_VERIFICATION)
         quand = get_datetime("%s %s:00" % (date_prevue, heure))
         if emp:
             doc.tache_employe = _creer_tache(emp.name, libelle, quand, cfg["duree"], "employé du stock")

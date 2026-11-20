@@ -26,7 +26,7 @@
                   description: __("Vide : une couleur de la palette lui est attribuée.") },
                 { fieldtype: "Section Break", label: __("Vérification de stock planifiée") },
                 { fieldtype: "Select", fieldname: "jour_verification", label: __("Jour"), options: JOURS.join("\n"), default: "Lundi" },
-                { fieldtype: "Time", fieldname: "heure_verification", label: __("Heure"), default: "09:00:00" },
+                { fieldtype: "Time", fieldname: "heure_verification", label: __("Heure"), default: "08:45:00" },
                 { fieldtype: "Select", fieldname: "periodicite", label: __("Périodicité"),
                   options: "Chaque semaine\nToutes les deux semaines", default: "Chaque semaine" },
             ],
@@ -37,7 +37,7 @@
                     args: { nom: v.nom, email: v.email, mot_de_passe: v.mot_de_passe, telephone: v.telephone,
                             genre: v.genre, date_naissance: v.date_naissance, couleur: v.couleur,
                             jour_verification: v.jour_verification,
-                            heure_verification: (v.heure_verification || "09:00").slice(0, 5),
+                            heure_verification: (v.heure_verification || "08:45").slice(0, 5),
                             periodicite: v.periodicite },
                     freeze: true,
                     callback: (r) => {

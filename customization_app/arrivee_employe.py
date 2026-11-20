@@ -190,7 +190,7 @@ def options_arrivee() -> dict:
 
 @frappe.whitelist(methods=["POST"])
 def creer_technicien(nom, email, mot_de_passe, telephone=None, date_entree=None, genre="Male", date_naissance=None,
-                     domicile_lien=None, vehicule=None, cbox=None, jour_verification="Lundi", heure_verification="09:00",
+                     domicile_lien=None, vehicule=None, cbox=None, jour_verification="Lundi", heure_verification="08:45",
                      periodicite="Chaque semaine", premier_jour_recup=None, ecran_simplifie=1, leave_approver=None,
                      calendrier_visible_par=None, voit_calendrier_de=None, conges_payes=None, couleur=None) -> dict:
     """Tout en un geste : utilisateur (profil Technicien), employé, entrepôt + vérification + seuil, réglages,
@@ -275,7 +275,7 @@ def creer_technicien(nom, email, mot_de_passe, telephone=None, date_entree=None,
     if valeurs.get("custom_couleur"):
         journal.append(_("couleur dans le calendrier : {0}").format(valeurs["custom_couleur"]))
 
-    ST._inscrire_verification(entrepot, jour_verification or "Lundi", heure_verification or "09:00",
+    ST._inscrire_verification(entrepot, jour_verification or "Lundi", heure_verification or "08:45",
                               periodicite or "Chaque semaine")
     journal.append(_("vérification du stock planifiée : {0}, {1}").format(jour_verification or "Lundi",
                                                                             periodicite or "Chaque semaine"))
