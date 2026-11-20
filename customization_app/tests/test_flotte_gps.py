@@ -263,3 +263,39 @@ class TestFixerPosition(unittest.TestCase):
         self.assertTrue(trace and (not ancien or ancien in trace[0]))
         with self.assertRaises(frappe.ValidationError):
             fg.fixer_position(self.tache, 48.85, 2.35)                   # hors de Tunisie
+
+
+class TestVehiculesLibres(unittest.TestCase):
+    """20/11/2026 : « je vois deux voitures, il y en a trois ». Un véhicule suivi qu'aucun technicien n'a ce jour-là
+    n'apparaissait nulle part (la page est rangée par technicien)."""
+
+    def journaux(self):
+        from datetime import datetime
+        h = lambda hh, mm: datetime(2026, 11, 20, hh, mm)                      # noqa: E731
+        base = {"erreur": None, "km": 12.5, "trace": [[36.8, 10.2, "09:00"]],
+                "arrets": [{"arr": h(9, 30), "dep": h(10, 0), "lat": 36.8, "lng": 10.2, "minutes": 30}],
+                "trajets": [{"debut": h(9, 0), "fin": h(9, 30), "minutes": 30, "km": 12.5, "vmax": 60}]}
+        pos = {"lat": 36.81, "lng": 10.21, "vitesse": 0, "heure": h(10, 20), "moteur": False, "mouvement": False, "en_ligne": True}
+        return {"A": dict(base, position=pos), "B": dict(base, position=dict(pos, vitesse=42)),
+                "C": {"erreur": "journal illisible", "km": 0.0, "trace": [], "arrets": [], "trajets": [], "position": None}}, h(10, 30)
+
+    def test_seuls_les_vehicules_sans_technicien_sortent(self):
+        journaux, maintenant = self.journaux()
+        libres = fg.vehicules_libres(journaux, {"A"}, {"A": "Fiorino", "B": "Cenntro", "C": "Changan"}, maintenant)
+        self.assertEqual([v["vehicule"] for v in libres], ["Cenntro", "Changan"])
+        cenntro, changan = libres
+        self.assertEqual((cenntro["etat"], cenntro["position"]["age_min"], cenntro["km"]), ("en mouvement", 10, 12.5))
+        self.assertIn("google.com/maps?q=36.810000,10.210000", cenntro["position"]["lien"])
+        self.assertEqual((changan["erreur"], changan["position"], changan["etat"]), ("journal illisible", None, ""))
+
+    def test_a_l_arret_depuis_son_dernier_arret(self):
+        journaux, maintenant = self.journaux()
+        v = fg.vehicules_libres({"A": journaux["A"]}, set(), {"A": "Fiorino"}, maintenant)[0]
+        self.assertEqual((v["etat"], str(v["arret_depuis"])[11:16], str(v["premiere_sortie"])[11:16]), ("à l’arrêt", "09:30", "09:00"))
+
+    def test_tous_attribues_ou_jour_passe(self):
+        journaux, maintenant = self.journaux()
+        self.assertEqual(fg.vehicules_libres(journaux, {"A", "B", "C"}, {}, maintenant), [])
+        passe = fg.vehicules_libres({"A": journaux["A"]}, set(), {"A": "Fiorino"}, maintenant, aujourdhui=False)[0]
+        self.assertEqual((passe["etat"], passe["position"]), ("journée terminée", None))
+

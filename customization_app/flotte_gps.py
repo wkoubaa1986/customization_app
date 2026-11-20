@@ -932,11 +932,42 @@ def _suivi_calcul(jour) -> dict:
             t["messages"] = messages.get(t["name"], [])
         sortie.append(e)
     return {"jour": str(jour), "aujourdhui": aujourdhui, "maintenant": maintenant, "employes": sortie, "erreur": erreur,
+            "vehicules_libres": vehicules_libres(journaux, set(emp_cbox.values()), cfg["cbox_vehicule"], maintenant, aujourdhui),
             "depot": list(cfg_t["depot"]),
             "rayon": cfg["rayon"], "tolerance": cfg["tolerance"], "configure": bool(cfg["utilisateur"] and cfg["vehicules"])}
 
 
 # ── Statistiques du réalisé ──────────────────────────────────────────────────
+
+def vehicules_libres(journaux: dict, pris: set, noms: dict, maintenant, aujourdhui: bool = True) -> list:
+    """Les véhicules suivis qu'AUCUN technicien n'a ce jour-là (ni arrêt chez un de ses clients, ni nuit chez lui, ni
+    conducteur habituel) : la page est rangée par technicien, ils n'y apparaissaient donc pas du tout — trois
+    véhicules au réglage, deux sur la carte (20/11/2026). Ils sont montrés à part, avec leur position et leur état.
+    PURE. `journaux` : sortie de `lire_journal` ; `pris` : boîtiers attribués ; `noms` : {boîtier: libellé}."""
+    out = []
+    for cbox, j in (journaux or {}).items():
+        if cbox in pris:
+            continue
+        v = {"cbox": cbox, "vehicule": noms.get(cbox) or cbox, "erreur": j.get("erreur"), "km": j.get("km"), "etat": "",
+             "position": None, "arret_depuis": None, "trace": j.get("trace") or [],
+             "premiere_sortie": j["trajets"][0]["debut"] if j.get("trajets") else None}
+        if not j.get("erreur"):
+            arrets, trajets = j.get("arrets") or [], j.get("trajets") or []
+            dernier = arrets[-1] if arrets and (not trajets or arrets[-1]["arr"] > trajets[-1]["debut"]) else None
+            pos = j.get("position")
+            if aujourdhui and pos:
+                v["position"] = dict(pos, age_min=int((maintenant - pos["heure"]).total_seconds() // 60) if pos.get("heure") else None,
+                                     lien="https://www.google.com/maps?q=%.6f,%.6f" % (pos["lat"], pos["lng"]))
+                if pos.get("vitesse", 0) > 3 or (pos.get("mouvement") and not dernier):
+                    v["etat"] = "en mouvement"
+                else:
+                    v["etat"] = "à l’arrêt"
+                    v["arret_depuis"] = dernier["arr"] if dernier else None
+            elif not aujourdhui and trajets:
+                v["etat"] = "journée terminée"
+        out.append(v)
+    return sorted(out, key=lambda v: v["vehicule"])
+
 
 def _bucket(ecart, tol) -> str:
     if ecart is None:

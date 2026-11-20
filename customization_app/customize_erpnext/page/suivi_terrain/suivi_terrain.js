@@ -186,7 +186,8 @@ class SuiviTerrain {
     let html = "";
     if (!d.configure) html += `<div class="st-alert">Plateforme GPS non configurée : renseigner l’utilisateur, le mot de passe et les véhicules dans <a href="/app/config-flotte-gps">Config Flotte GPS</a>.</div>`;
     if (d.erreur) html += `<div class="st-alert">Plateforme GPS injoignable : ${esc(d.erreur)}</div>`;
-    if (!d.employes.length) { $out.html(html + `<div class="st-empty">Aucune tâche ni véhicule ce jour.</div>`); return; }
+    const libres = d.vehicules_libres || [];
+    if (!d.employes.length && !libres.length) { $out.html(html + `<div class="st-empty">Aucune tâche ni véhicule ce jour.</div>`); return; }
     html += `<div class="st-grid">`;
     for (const e of d.employes) {
       let etat = "", cls = "off";
@@ -219,6 +220,20 @@ class SuiviTerrain {
         html += `</tbody></table>`;
       } else html += `<div class="st-sub">Aucune tâche planifiée.</div>`;
       html += `</div>`;
+    }
+    // Les véhicules suivis qu'aucun technicien n'a aujourd'hui : la page est rangée par technicien, ils n'y
+    // apparaissaient pas du tout (trois véhicules au réglage, deux à l'écran — 20/11/2026).
+    for (const v of libres) {
+      let etat = "pas de données aujourd’hui", cls = "off";
+      if (v.erreur) etat = "journal indisponible";
+      else if (v.etat === "en mouvement") { etat = `🚗 en mouvement${v.position ? " · " + v.position.vitesse + " km/h" : ""}`; cls = "mouv"; }
+      else if (v.etat === "à l’arrêt") { etat = `⏸ à l’arrêt${v.arret_depuis ? " depuis " + this._h(v.arret_depuis) : ""}`; cls = "arret"; }
+      else if (v.etat === "journée terminée") { etat = "journée terminée"; cls = "fin"; }
+      const pos = v.position ? `<a href="${v.position.lien}" target="_blank" rel="noopener">📍 position</a> ${v.position.age_min != null ? "(il y a " + this._min(v.position.age_min) + ")" : ""}${v.position.en_ligne ? "" : " · boîtier hors ligne"}` : "";
+      html += `<div class="st-card"><div class="st-card-head"><span class="st-nom">🚗 ${esc(v.vehicule)}</span>
+        <span class="st-veh">sans conducteur reconnu</span><span class="st-etat ${cls}">${etat}</span></div>
+        <div class="st-sub">${pos ? `<span>${pos}</span>` : ""}${v.km != null ? `<span>🛣 ${v.km} km</span>` : ""}${v.premiere_sortie ? `<span>départ ${this._h(v.premiere_sortie)}</span>` : ""}</div>
+        <div class="st-sub">Aucun technicien n’est reconnu sur ce véhicule aujourd’hui : aucun arrêt chez un de ses clients pour l’instant, et pas de conducteur habituel dans <a href="/app/config-flotte-gps">Config Flotte GPS</a>.</div></div>`;
     }
     $out.html(html + `</div>`);
     this._render_carte();
@@ -443,7 +458,8 @@ class SuiviTerrain {
   // ── Carte : véhicules en live, itinéraire prévu, trajet réel, clients numérotés ─────────────────────────
   _render_carte() {
     const d = this.data, el = this.$root.find("#st-carte")[0], esc = frappe.utils.escape_html;
-    if (!this.carte_visible || !window.L || !d.employes.some((e) => e.taches.length || e.position)) {
+    const libres = (d.vehicules_libres || []).filter((v) => v.position);
+    if (!this.carte_visible || !window.L || !(d.employes.some((e) => e.taches.length || e.position) || libres.length)) {
       $(el).hide(); return;
     }
     $(el).show();
@@ -504,6 +520,15 @@ class SuiviTerrain {
           .bindTooltip(`<b>${esc(e.nom)}</b> · ${esc(e.vehicule || "")}<br>${esc(e.etat)}${e.lieu ? " " + esc(e.lieu) : ""}${p.vitesse ? " · " + p.vitesse + " km/h" : ""}${age}`, { permanent: true, direction: "top", offset: [0, -18], className: "st-etiq" })
           .addTo(this.couches);
       }
+    });
+    // Véhicules sans conducteur reconnu : en gris, avec leur trace du jour.
+    libres.forEach((v) => {
+      const p = v.position, age = p.age_min != null ? ` · il y a ${this._min(p.age_min)}` : "";
+      if ((v.trace || []).length > 1) L.polyline(v.trace.map((t) => [t[0], t[1]]), { color: "#6b7280", weight: 3, opacity: 0.55, dashArray: "4 6" }).addTo(this.couches);
+      L.marker(pt(p.lat, p.lng), { zIndexOffset: 900, icon: L.divIcon({ className: "", iconSize: [34, 34], iconAnchor: [17, 17],
+        html: `<div style="width:34px;height:34px;border-radius:17px;background:#fff;border:3px dashed #6b7280;display:flex;align-items:center;justify-content:center;font-size:18px;box-shadow:0 1px 4px rgba(0,0,0,.4)">🚗</div>` }) })
+        .bindTooltip(`<b>${esc(v.vehicule)}</b><br>sans conducteur reconnu · ${esc(v.etat)}${p.vitesse ? " · " + p.vitesse + " km/h" : ""}${age}`, { permanent: true, direction: "top", offset: [0, -18], className: "st-etiq" })
+        .addTo(this.couches);
     });
     if (!bornes.length) bornes.push(...bornes_approx);
     if (bornes.length && !this.carte_cadree) { this.carte.fitBounds(bornes, { padding: [30, 30] }); this.carte_cadree = d.jour; }
