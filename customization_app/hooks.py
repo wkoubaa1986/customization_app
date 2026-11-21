@@ -189,7 +189,9 @@ doc_events = {
                    "on_update": "customization_app.analyse_articles.prix_change"},
     # Domicile des employés : la fiche Employé et « Points de départ particuliers » (Config Optimisation Tournees) sont
     # une seule valeur, synchronisée dans les deux sens. Voir domicile_employe.py.
-    "Employee": {"on_update": "customization_app.domicile_employe.depuis_employe",
+    "Employee": {"on_update": ["customization_app.domicile_employe.depuis_employe",
+                               # La couleur de la fiche change : ses tâches ouvertes la prennent tout de suite (22/11/2026).
+                               "customization_app.couleur_employe.apres_fiche"],
                  # Départ d'un employé : « Left » sans le bouton de la fiche est refusé tant qu'il reste des
                  # rendez-vous, des réglages ou du stock à son nom (depart_employe.py, 10/11/2026).
                  "validate": "customization_app.depart_employe.employee_validate"},
