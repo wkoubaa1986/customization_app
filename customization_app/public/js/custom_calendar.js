@@ -491,13 +491,29 @@ function _load_employees(dialog) {
                 method: "customization_app.tournee_itineraire.itineraires_du_jour",
                 args: { date, employes: employees.map((e) => e.employee) },
                 callback: (r2) => {
+                    const rep = r2.message || {};
                     const parEmp = {};
-                    ((r2.message || {}).employes || []).forEach((x) => { parEmp[x.employe] = x; });
+                    (rep.employes || []).forEach((x) => { parEmp[x.employe] = x; });
                     employees.forEach((emp, idx) => {
                         const x = parEmp[emp.employee], $l = $wrap.find(`.genbl-iti[data-emp="${idx}"]`);
                         if (!x || !window.tournees_resume || !window.tournees_resume(x)) { $l.remove(); return; }
                         $l.html(window.tournees_resume(x) + ` · <a href="#" data-iti="${idx}">🗺️ voir</a>`);
                     });
+                    // Trajets NON calculés (22/11/2026 : « pourquoi je n'ai plus la tournée par employé en km ? ») :
+                    // une seule tâche du jour sans position connue suffit à suspendre le calcul pour tout le monde
+                    // (tournee_itineraire.journee), et les lignes disparaissaient sans un mot. On dit pourquoi, et
+                    // quelles tâches corriger. Rien pour un non-superviseur (réponse vide, sans message).
+                    const aVerifier = rep.positions_a_verifier || [];
+                    if (!(rep.employes || []).length && (rep.message || aVerifier.length)) {
+                        const esc = frappe.utils.escape_html;
+                        $wrap.prepend(`<div class="genbl-iti-absent" style="border:1px solid #fcd34d;background:#fffbeb;color:#92400e;
+                                border-radius:6px;padding:8px 10px;margin-bottom:10px;font-size:12.5px">
+                            <b>🚗 Kilomètres et itinéraires non calculés pour ce jour.</b> ${esc(rep.message || "")}
+                            ${aVerifier.length ? `<ul style="margin:6px 0 0 18px;padding:0">${aVerifier.map((a) =>
+                                `<li><a href="/app/tache-de-travail/${encodeURIComponent(a.tache)}" target="_blank">${esc(a.tache)}</a>${
+                                    a.client ? " — " + esc(a.client) : ""} : ${esc(a.motif || "position à vérifier")}</li>`).join("")}</ul>` : ""}
+                        </div>`);
+                    }
                 },
                 error: () => $wrap.find(".genbl-iti").remove(),
             });
