@@ -246,6 +246,9 @@ def deplacer(name, debut=None, fin=None, jours=None, employe=None) -> dict:
             frappe.throw(_("Employé introuvable."))
         if cible.status != "Active":
             frappe.throw(_("{0} n'est plus un employé actif : on ne lui confie pas de tâche.").format(cible.employee_name))
+        from customization_app import taches_groupe
+        if not taches_groupe.employe_permis(cible.name, taches_groupe._liste_du_compte()):
+            frappe.throw(_("{0} n'est pas dans la liste des employés de votre compte.").format(cible.employee_name), frappe.PermissionError)
         refus = refus_transfert(doc.status, doc.get("custom_type_dintervention"), ancien, cible.name,
                                 fixe=cint(doc.get("custom_employe_fixe")))
         if refus:

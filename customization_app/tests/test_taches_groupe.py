@@ -162,5 +162,20 @@ class TestEcran(unittest.TestCase):
             self.assertIn("customization_app.gestion_taches.ouvrir(coches, periode);", f.read())
 
 
+
+class TestEmployePermis(unittest.TestCase):
+    """Les actions groupées respectent la liste d'employés du compte (22/11/2026)."""
+
+    def test_un_compte_sans_limite_agit_pour_tout_le_monde(self):
+        from customization_app.taches_groupe import employe_permis
+        self.assertTrue(employe_permis("HR-EMP-00001", None))
+
+    def test_un_compte_limite_n_agit_que_pour_les_employes_de_sa_liste(self):
+        from customization_app.taches_groupe import employe_permis
+        self.assertTrue(employe_permis("HR-EMP-00012", ["HR-EMP-00012"]))
+        self.assertFalse(employe_permis("HR-EMP-00001", ["HR-EMP-00012"]))
+        self.assertFalse(employe_permis("HR-EMP-00001", []))
+
+
 if __name__ == "__main__":
     unittest.main()

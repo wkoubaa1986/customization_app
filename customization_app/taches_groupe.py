@@ -42,6 +42,34 @@ def _ecriture():
     frappe.has_permission(DOCTYPE, "write", throw=True)
 
 
+# ── Les autorisations par employé (22/11/2026) ───────────────────────────────
+# « En décaler, lorsqu'un utilisateur l'utilise il ne voit que les tâches des employés dont il a accès, non ? » Ce
+# n'était pas le cas : l'écran lisait les tâches par get_all (sans les droits) et agissait en ignore_permissions après
+# un simple contrôle « a le droit d'écrire des tâches ». Un compte limité à quelques employés (Permissions utilisateur
+# sur « Employé »), le partenaire ou un sous-traitant y voyaient donc — et pouvaient décaler, transférer, annuler —
+# les tâches de TOUT le monde. Désormais : la liste passe par get_list (mêmes règles que le calendrier), chaque
+# action vérifie le droit d'écrire sur CETTE tâche, et les employés proposés sont ceux de sa liste.
+NON_AUTORISEE = "non autorisée pour ce compte"
+
+
+def _permise(doc) -> bool:
+    """Ce compte peut-il modifier CETTE tâche ? (rôles + règles par employé : hooks has_permission de la tâche)"""
+    return bool(frappe.has_permission(DOCTYPE, "write", doc=doc))
+
+
+def employe_permis(employe, permis, strict: bool = False) -> bool:
+    """Cet employé est-il dans la liste du compte ? `permis` : sa liste, ou None s'il n'a aucune limite. PURE."""
+    from customization_app.tache_lecture import peut
+
+    return peut("write", employe, permis, strict, False)
+
+
+def _liste_du_compte():
+    from customization_app import tache_lecture
+
+    return tache_lecture.employes_permis(frappe.session.user)
+
+
 def _liste(taches):
     taches = frappe.parse_json(taches) if isinstance(taches, str) else (taches or [])
     return [t for t in taches if t]
@@ -111,6 +139,10 @@ def get_filtres() -> dict:
              AND IFNULL(t.custom_type_dintervention, '') NOT IN %%(absences)s
            GROUP BY e.name, e.employee_name ORDER BY e.employee_name""" % DOCTYPE,
         {"absences": TYPES_ABSENCE}, as_dict=True)
+    permis = _liste_du_compte()
+    if permis is not None:
+        employes = [e for e in employes if e.name in set(permis)]
+        anciens = [a for a in anciens if a.valeur in set(permis)]
     return {"types": types,
             "employes": [{"valeur": e.name, "libelle": e.employee_name or e.name} for e in employes],
             "anciens": [{"valeur": a.valeur, "libelle": a.libelle or a.valeur, "ouvertes": cint(a.ouvertes),
@@ -145,7 +177,8 @@ def rechercher(date_from=None, date_to=None, employe=None, type_intervention=Non
     if client:
         filtres["custom_client"] = ["like", "%" + client + "%"]
 
-    lignes = frappe.get_all(
+    # get_list, et non get_all : les règles par employé s'appliquent, comme dans le calendrier
+    lignes = frappe.get_list(
         DOCTYPE, filters=filtres,
         fields=["name", "custom_client", "custom_type_dintervention", "status",
                 "starts_on", "ends_on", "custom_choix_du_staff", "secteur"]
@@ -175,6 +208,8 @@ def apercu(taches, modele=None):
     from customization_app import sms_taches
 
     noms = _liste(taches)
+    visibles = set(frappe.get_list(DOCTYPE, filters={"name": ["in", noms]}, pluck="name", limit_page_length=0)) if noms else set()
+    noms = [n for n in noms if n in visibles]
     vue = sms_taches.apercu(noms, modele)
     etats = {d.name: d for d in frappe.get_all(
         DOCTYPE, filters={"name": ["in", noms]},
@@ -211,6 +246,9 @@ def decaler(taches, jours=None, nouvelle_date=None, modele=None, sujet=None,
     faites, resultats = [], []
     for nom in noms:
         doc = frappe.get_doc(DOCTYPE, nom)
+        if not _permise(doc):
+            resultats.append({"tache": nom, "etat": NON_AUTORISEE})
+            continue
         refus = _modifiable(doc)
         if refus:
             resultats.append({"tache": nom, "etat": refus})
@@ -268,10 +306,15 @@ def transferer(taches, vers=None, modele=None, sujet=None, sms=1, email=1):
     if cible.status != "Active":
         frappe.throw(_("{0} n'est plus un employé actif : on ne lui transfère pas de tâche.").format(cible.employee_name))
     nom_vers = cible.employee_name or cible.name
+    if not employe_permis(cible.name, _liste_du_compte()):
+        frappe.throw(_("{0} n'est pas dans la liste des employés de votre compte.").format(nom_vers), frappe.PermissionError)
 
     faites, resultats = [], []
     for nom in noms:
         doc = frappe.get_doc(DOCTYPE, nom)
+        if not _permise(doc):
+            resultats.append({"tache": nom, "etat": NON_AUTORISEE})
+            continue
         refus = refus_transfert(doc.status, doc.get("custom_type_dintervention"), doc.get("custom_choix_du_staff"), cible.name,
                                 fixe=cint(doc.get("custom_employe_fixe")))
         if refus:
@@ -321,6 +364,9 @@ def annuler(taches, motif=None, modele=None, sujet=None, sms=1, email=1):
     faites, resultats = [], []
     for nom in noms:
         doc = frappe.get_doc(DOCTYPE, nom)
+        if not _permise(doc):
+            resultats.append({"tache": nom, "etat": NON_AUTORISEE})
+            continue
         refus = _modifiable(doc)
         if refus:
             resultats.append({"tache": nom, "etat": refus})
