@@ -76,13 +76,25 @@ function ce_titre(titre) {
   return String(titre || "").split("\n").map((l) => l.replace(/:\s*Client:\s*/, ": ").replace(/:\s*$/, "").trim()).filter(Boolean);
 }
 
-/** L'épingle de l'optimisation des tournées : [signe, explication] ou null. Pure. */
+/**
+ * Le signe de l'optimisation des tournées : [signe, explication, classe, libellé court] ou null. Pure.
+ * 🕘 heure fixe, 👤 employé fixe, 📌 les deux.
+ */
 function ce_epingle(p) {
   const h = cint(p.heure_fixe), e = cint(p.employe_fixe);
-  if (h && e) return ["📌", "Heure et employé fixes : l’optimisation des tournées ne la bouge pas"];
-  if (h) return ["🕘", "Heure fixe : l’optimisation des tournées garde l’heure (l’employé peut changer)"];
-  if (e) return ["👤", "Employé fixe : l’optimisation des tournées garde l’employé (l’heure peut bouger)"];
+  if (h && e) return ["📌", "Heure et employé fixes : l’optimisation des tournées ne la bouge pas", "t", "Heure et employé fixes"];
+  if (h) return ["🕘", "Heure fixe : l’optimisation des tournées garde l’heure (l’employé peut changer)", "h", "Heure fixe"];
+  if (e) return ["👤", "Employé fixe : l’optimisation des tournées garde l’employé (l’heure peut bouger)", "e", "Employé fixe"];
   return null;
+}
+
+/**
+ * Le signe dans une pastille blanche cerclée (22/11/2026 : « le sigle d'employé fixe ou temps fixe n'apparaît pas,
+ * il n'y a que lorsque les deux sont fixes ») : 🕘 et 👤 sont de petits pictogrammes sombres, illisibles posés à même
+ * le fond coloré d'une tuile — seule l'épingle rouge se voyait. `coin` : posée en haut à droite de la tuile. Pure.
+ */
+function ce_pastille(ep, coin) {
+  return ep ? `<span class="ce-fixe ${ep[2]}${coin ? " coin" : ""}" title="${ce_esc(ep[1])}">${ep[0]}</span>` : "";
 }
 
 /**
@@ -120,7 +132,7 @@ function ce_fiche(p, debut, fin, journee) {
     rubrique("⛔", "Annulation", p.raison_annulation);
     if (p.rapport_visite && p.rapport_visite.trim() !== RAPPORT_VIDE) rubrique("📋", "Rapport", p.rapport_visite);
     const ep = p.genre === "tache" ? ce_epingle(p) : null;
-    if (ep) rubrique(ep[0], "Tournée", ep[1]);
+    if (ep) rubrique(ep[0], ep[3], ep[1].split(" : ")[1]);
     if (cint(p.reservation_app) === 1) rubrique("📱", "Origine", "Rendez-vous pris par le client dans l’app");
   }
   return `<div class="ce-f-tete" style="background:${ce_esc(plein)};color:${ce_texte(plein)}">
@@ -260,6 +272,13 @@ class CalendrierEquipe {
       .ce-f-n { flex: 0 0 104px; color: var(--text-muted, #6b7280); font-size: 12px; white-space: nowrap; }
       .ce-f-v { flex: 1; min-width: 0; word-break: break-word; }
       .ce-f-v.fort { font-weight: 700; font-size: 14px; }
+      /* les signes de l'optimisation : pastille blanche cerclée — orange = heure fixe, violet = employé fixe, rouge = les deux */
+      .ce-fixe { display: inline-flex; align-items: center; justify-content: center; width: 17px; height: 17px; border-radius: 50%;
+                 background: #fff; border: 2px solid #f59e0b; font-size: 10px; line-height: 1; vertical-align: middle;
+                 box-shadow: 0 1px 2px rgba(0,0,0,.28); text-decoration: none; }
+      .ce-fixe.e { border-color: #7c3aed; }
+      .ce-fixe.t { border-color: #dc2626; }
+      .ce-fixe.coin { position: absolute; top: 2px; right: 3px; z-index: 1; }
       .ce-legende { display: inline-flex; flex-wrap: wrap; gap: 10px; align-items: center; font-size: 11px;
                     color: var(--text-muted, #6b7280); margin-left: auto; }
       .ce-legende span { display: inline-flex; align-items: center; gap: 4px; }
@@ -346,7 +365,10 @@ class CalendrierEquipe {
       <span><i style="background:${ce_pastel("#32CD32", 0.30)};border-left:4px solid #32CD32"></i>Terminée</span>
       <span><i style="background:#f3f4f6;border-left:4px solid #9ca3af"></i>Annulée</span>
       <span><i style="background:#eef2f7;background-image:repeating-linear-gradient(45deg, rgba(0,0,0,.22) 0, rgba(0,0,0,.22) 1px, transparent 1px, transparent 4px)"></i>Hachures : prise par le client dans l’app</span>
-      <span>📌 🕘 👤 fixe pour l’optimisation</span></span>`);
+      <span title="L’optimisation des tournées peut changer l’employé, pas l’heure">${ce_pastille(ce_epingle({ heure_fixe: 1 }))} Heure fixe</span>
+      <span title="L’optimisation des tournées peut changer l’heure, pas l’employé">${ce_pastille(ce_epingle({ employe_fixe: 1 }))} Employé fixe</span>
+      <span title="L’optimisation des tournées ne touche pas à cette tâche">${ce_pastille(ce_epingle({ heure_fixe: 1, employe_fixe: 1 }))} Heure et employé fixes</span>
+      <span>— l’optimisation des tournées les respecte</span></span>`);
   }
 
   /** Les colonnes affichées : celles des employés cochés, sinon toutes. */
@@ -562,9 +584,13 @@ class CalendrierEquipe {
     const p = info.event.extendedProps || {};
     if (p.genre === "fond") return { html: "" };
     const ep = p.genre === "tache" ? ce_epingle(p) : null;
-    const epingle = ep ? `<span title="${ce_esc(ep[1])}">${ep[0]} </span>` : "";
     const lignes = ce_titre(p.titre).map(ce_esc);
     const mois = info.view.type === "dayGridMonth";
+    // vues Mois et Liste : la pastille dans la ligne ; grilles horaires : dans le coin de la tuile, la 1re ligne lui laisse la place
+    const enLigne = mois || String(info.view.type || "").startsWith("list");
+    const epingle = enLigne ? (ep ? ce_pastille(ep, false) + " " : "") : "";
+    const coin = enLigne ? "" : ce_pastille(ep, true);
+    const place = coin ? ' style="padding-right:19px"' : "";
     const debut = info.event.allDay ? "" : moment(info.event.start).format("HH:mm");
     const heure = info.event.allDay ? "" : `<span class="ce-ev-h">${debut}–${moment(info.event.end).format("HH:mm")}</span> `;
     if (p.genre === "tache" && p.client) {
@@ -576,7 +602,7 @@ class CalendrierEquipe {
       }
       const aramex = lignes.filter((l) => l.startsWith("📦"));
       const employe = info.view.type !== "resourceTimeGridDay" && p["custom_employé"] ? ce_esc(p["custom_employé"]) : "";
-      return { html: `<div class="ce-ev"><div class="ce-ev-2">${heure}${epingle}<b class="ce-ev-s">${etat}${ce_esc(p.secteur || "")}</b></div>
+      return { html: `<div class="ce-ev">${coin}<div class="ce-ev-2"${place}>${heure}${epingle}<b class="ce-ev-s">${etat}${ce_esc(p.secteur || "")}</b></div>
         <div class="ce-ev-2">${genre}${genre ? ": " : ""}<b class="ce-ev-c">${ce_esc(p.client)}</b></div>
         ${aramex.length ? `<div class="ce-ev-2">${aramex.join("<br>")}</div>` : ""}${employe ? `<div class="ce-ev-2">${employe}</div>` : ""}</div>` };
     }
@@ -584,7 +610,7 @@ class CalendrierEquipe {
       // vue Mois : une seule ligne par tâche, pour en voir plusieurs dans la case du jour
       return { html: `<div class="ce-ev ce-ev-mois">${debut ? `<b>${debut}</b> ` : ""}${epingle}${lignes.join(" · ")}</div>` };
     }
-    return { html: `<div class="ce-ev"><div class="ce-ev-1">${heure}${epingle}${lignes[0] || ""}</div>${
+    return { html: `<div class="ce-ev">${coin}<div class="ce-ev-1"${place}>${heure}${epingle}${lignes[0] || ""}</div>${
       lignes.length > 1 ? `<div class="ce-ev-2">${lignes.slice(1).join("<br>")}</div>` : ""}</div>` };
   }
 
