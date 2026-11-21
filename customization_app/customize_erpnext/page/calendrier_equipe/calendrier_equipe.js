@@ -27,11 +27,17 @@ frappe.pages["calendrier-equipe"].on_page_show = function (wrapper) {
 const CE_API = "customization_app.calendrier_equipe";
 const CE_LIB = "/assets/customization_app/js/lib/event-calendar/event-calendar.min";
 const CE_MEMO = "calendrier_equipe_v1";
-const CE_VUES = ["resourceTimeGridDay", "timeGridWeek", "dayGridMonth", "listWeek"];
+const CE_VUES = ["resourceTimeGridDay", "timeGridDay", "timeGridWeek", "dayGridMonth", "listWeek"];
 const CE_ANCIEN = "/app/tache-de-travail/view/calendar/Calendrier%20de%20travail";
 const ce_esc = (s) => frappe.utils.escape_html(s == null ? "" : String(s));
 const ce_fmt = (d) => moment(d).format("YYYY-MM-DD HH:mm:ss");
 const ce_etroit = () => window.innerWidth < 768;
+// Fuseau : la base garde les heures dans le fuseau du SYSTÈME, Frappe les montre dans celui de l'UTILISATEUR (fiche,
+// ancien calendrier). On fait de même, pour que le calendrier et la fiche disent la même heure à un compte réglé sur
+// un autre fuseau (Administrator). Pour tous les comptes de l'entreprise les deux fuseaux sont égaux : rien ne bouge.
+const ce_decale = () => { const z = frappe.boot.time_zone || {}; return !!(z.system && z.user && z.system !== z.user); };
+const ce_vers_utilisateur = (texte) => (texte && ce_decale() ? frappe.datetime.convert_to_user_tz(texte, true) : texte);
+const ce_vers_systeme = (d) => (ce_decale() ? frappe.datetime.convert_to_system_tz(ce_fmt(d), true) : ce_fmt(d));
 
 /** #rrggbb (ou #rgb) -> rgba(r, g, b, a). Fonction pure. */
 function ce_rgba(hex, a) {
@@ -62,6 +68,14 @@ function ce_texte(couleur) {
   return (mix(r) * 299 + mix(g) * 587 + mix(b) * 114) / 1000 >= 128 ? "#111827" : "#ffffff";
 }
 
+/**
+ * Les lignes du titre d'une tâche, sans le mot « Client: » : « 🔧 Entretien: Client: X » -> « 🔧 Entretien: X »,
+ * « ☕ Autre: Client: » (sans client) -> « ☕ Autre » (22/11/2026). Le titre enregistré, lui, ne change pas. Pure.
+ */
+function ce_titre(titre) {
+  return String(titre || "").split("\n").map((l) => l.replace(/:\s*Client:\s*/, ": ").replace(/:\s*$/, "").trim()).filter(Boolean);
+}
+
 /** L'épingle de l'optimisation des tournées : [signe, explication] ou null. Pure. */
 function ce_epingle(p) {
   const h = cint(p.heure_fixe), e = cint(p.employe_fixe);
@@ -81,7 +95,7 @@ function ce_fiche(p, debut, fin, journee) {
   const texte = (v) => ce_esc(v).replace(/\n/g, "<br>");
   const annulee = p.statut === "Cancelled", terminee = p.statut === "Completed";
   const plein = p.genre === "ferie" ? "#6b7280" : annulee ? "#9ca3af" : (p.couleur || "#FF6347");
-  const lignes = String(p.titre || "").split("\n").filter((l) => l.trim());
+  const lignes = ce_titre(p.titre);
   let quand = "";
   if (debut) {
     // le jour en français quelle que soit la langue du compte
@@ -121,7 +135,9 @@ function ce_fiche(p, debut, fin, journee) {
  * `colonnes` : les id des colonnes affichées (un jour férié s'étend sur toutes) ; `ecrire` : droit de modifier.
  */
 function ce_evenement(e, colonnes, ecrire) {
-  const out = { id: e.id, start: e.debut, end: e.fin, allDay: !!e.journee, title: e.titre || "", extendedProps: e,
+  const horaire = !e.journee && (e.genre === "tache" || e.genre === "reunion");      // jours entiers et fériés : pas de fuseau
+  const out = { id: e.id, start: horaire ? ce_vers_utilisateur(e.debut) : e.debut, end: horaire ? ce_vers_utilisateur(e.fin) : e.fin,
+                allDay: !!e.journee, title: e.titre || "", extendedProps: e,
                 resourceIds: e.employes || [], editable: false };
   if (e.genre === "fond") {
     return Object.assign(out, { display: "background", resourceIds: colonnes, backgroundColor: "rgba(156, 163, 175, 0.25)" });
@@ -138,10 +154,10 @@ function ce_evenement(e, colonnes, ecrire) {
   const fond = annulee ? "#f3f4f6" : ce_pastel(plein, terminee ? 0.30 : 0.24);
   const styles = [`--ce-plein:${plein}`, `border:1px solid ${ce_rgba(plein, 0.45)}`, `border-left:5px solid ${plein}`];
   if (cint(e.reservation_app) === 1) {
-    // Rendez-vous pris par le client dans l'app : les hachures de l'ancien calendrier, mais en BANDE à droite —
-    // posées sur toute la tâche, elles passaient sous le texte des entretiens et le brouillaient (22/11/2026).
-    styles.push("background-image:repeating-linear-gradient(45deg, rgba(0,0,0,.28) 0, rgba(0,0,0,.28) 2px, transparent 2px, transparent 6px)",
-      "background-size:9px 100%", "background-position:right top", "background-repeat:no-repeat", "padding-right:11px");
+    // Rendez-vous pris par le client dans l'app : les hachures de l'ancien calendrier, sur toute la tuile, mais
+    // LÉGÈRES (22/11/2026 : « garde le barré, mais barre plus légèrement dans le texte ») — traits fins et pâles,
+    // bien espacés : on voit que la tuile est hachurée, le texte reste net.
+    styles.push("background-image:repeating-linear-gradient(45deg, rgba(0,0,0,.075) 0, rgba(0,0,0,.075) 1px, transparent 1px, transparent 8px)");
   }
   const classes = ["ce-e"];
   if (annulee) classes.push("ce-annulee");
@@ -215,9 +231,9 @@ class CalendrierEquipe {
       .ce-ev { font-size: 10.5px; line-height: 1.2; overflow: hidden; overflow-wrap: anywhere; }
       .ce-cal .ec-title { font-size: 20px; }
       .ce-ev-h { font-weight: 600; opacity: .8; white-space: nowrap; }
-      .ce-ev-1 { font-weight: 700; }
+      .ce-ev-1 { font-weight: 800; font-size: 11px; }
       .ce-ev-mois { white-space: nowrap; text-overflow: ellipsis; font-weight: 500; }
-      .ce-ev-2 { font-weight: 600; }
+      .ce-ev-2 { font-weight: 500; }
       .ce-annulee .ce-ev-1, .ce-annulee .ce-ev-2 { text-decoration: line-through; }
       .ce-annulee { opacity: .85; }
       /* vue Liste : pas de cadre par ligne, la pastille porte la couleur pleine */
@@ -261,10 +277,10 @@ class CalendrierEquipe {
     const d = this.ctx.droits, $a = this.$root.find(".ce-actions").empty();
     const bouton = (libelle, couleur, titre, clic) => $(`<button class="ce-btn" type="button"></button>`)
       .text(libelle).attr("title", titre).css("background", couleur).on("click", clic).appendTo($a);
-    if (d.creer) bouton("➕ Nouvelle tâche", "#1d4ed8", "Créer une tâche de travail", () => frappe.new_doc("Tache de travail"));
+    if (d.creer) bouton("➕ Nouvelle tâche", "#1d4ed8", "Créer une tâche de travail", () => this.fenetre_nouvelle({}));
     if (window.maJournee_ouvrir) {
       bouton("☀️ Ma journée", "#2490ef", "Mes interventions du jour affiché",
-        () => window.maJournee_ouvrir(this.vue === "resourceTimeGridDay" && this.periode ? this.periode.from : undefined));
+        () => window.maJournee_ouvrir(["resourceTimeGridDay", "timeGridDay"].includes(this.vue) && this.periode ? this.periode.from : undefined));
     }
     if (d.generer_bl && typeof _open_generer_bl_dialog === "function") {
       bouton("🚚 Générer BL", "#dc2626", "Générer et imprimer les bons de livraison du jour", () => _open_generer_bl_dialog());
@@ -274,7 +290,8 @@ class CalendrierEquipe {
         () => window.optimiserTournees_ouvrir());
     }
     if (d.ecrire && window.customization_app && customization_app.gestion_taches) {
-      bouton("🗓️ Gérer les interventions", "#0ea5e9", "Décaler, transférer ou annuler plusieurs interventions, en prévenant les clients",
+      // « Décaler / annuler » : le libellé du bouton de l'ancien calendrier — c'est le même écran (Gérer les interventions)
+      bouton("🗓️ Décaler / annuler", "#0ea5e9", "Gérer les interventions : décaler, transférer ou annuler plusieurs tâches, en prévenant les clients",
         () => customization_app.gestion_taches.ouvrir(null, this.periode));
     }
     if (window.customization_app && customization_app.reunion) {
@@ -322,7 +339,7 @@ class CalendrierEquipe {
     $f.append(`<span class="ce-legende">
       <span><i style="background:${ce_pastel("#32CD32", 0.30)};border-left:4px solid #32CD32"></i>Terminée</span>
       <span><i style="background:#f3f4f6;border-left:4px solid #9ca3af"></i>Annulée</span>
-      <span><i style="background:#e5e7eb;background-image:repeating-linear-gradient(45deg, rgba(0,0,0,.3) 0, rgba(0,0,0,.3) 2px, transparent 2px, transparent 5px);background-size:6px 100%;background-position:right;background-repeat:no-repeat"></i>Bande hachurée : prise par le client dans l’app</span>
+      <span><i style="background:#eef2f7;background-image:repeating-linear-gradient(45deg, rgba(0,0,0,.22) 0, rgba(0,0,0,.22) 1px, transparent 1px, transparent 4px)"></i>Hachures : prise par le client dans l’app</span>
       <span>📌 🕘 👤 fixe pour l’optimisation</span></span>`);
   }
 
@@ -368,7 +385,7 @@ class CalendrierEquipe {
     const d = this.ctx.droits, etroit = ce_etroit();
     const $cal = this.$root.find(".ce-cal").empty();
     const textes = (suivant, precedent) => (t) => Object.assign({}, t, { today: "Aujourd’hui", resourceTimeGridDay: "Équipe",
-      timeGridWeek: "Semaine", dayGridMonth: "Mois", listWeek: "Liste", next: suivant, prev: precedent, close: "Fermer" });
+      timeGridDay: "Jour", timeGridWeek: "Semaine", dayGridMonth: "Mois", listWeek: "Liste", next: suivant, prev: precedent, close: "Fermer" });
     this.ec = EventCalendar.create($cal[0], {
       view: this.vue,
       locale: "fr",
@@ -378,6 +395,7 @@ class CalendrierEquipe {
       buttonText: textes("Suivant", "Précédent"),
       views: {
         resourceTimeGridDay: { buttonText: textes("Jour suivant", "Jour précédent"), columnWidth: etroit ? "170px" : undefined },
+        timeGridDay: { buttonText: textes("Jour suivant", "Jour précédent") },
         timeGridWeek: { buttonText: textes("Semaine suivante", "Semaine précédente"), columnWidth: etroit ? "130px" : undefined },
         dayGridMonth: { buttonText: textes("Mois suivant", "Mois précédent") },
         listWeek: { buttonText: textes("Semaine suivante", "Semaine précédente") },
@@ -514,24 +532,50 @@ class CalendrierEquipe {
   }
 
   /**
-   * Ce qui s'écrit sur la tuile : LE TITRE DE LA TÂCHE, tel que l'ancien calendrier (« Secteur 6 / 🔧 Entretien:
-   * Client: … / employé ») — demande du 22/11/2026 : « garde le nom de la tâche comme avant mais fais en sorte qu'il
-   * apparaisse ». Il était coupé sur une intervention d'une demi-heure : l'heure prenait une ligne à elle seule et
-   * la ligne du client débordait. Maintenant l'heure et la première ligne du titre partagent une ligne, le reste
-   * passe à la ligne au lieu d'être rogné, et les créneaux sont un peu plus hauts (slotHeight).
+   * Ce qui s'écrit sur la tuile (22/11/2026). Disposition choisie APRÈS MESURE sur les 141 tâches à client de deux
+   * semaines réelles, colonnes de 165 px, interventions d'une demi-heure (3 lignes utiles) — part des tuiles où le
+   * nom du client se lit en entier / l'employé :
+   *   titre d'avant « Secteur / 🔧 Entretien: Client: X / employé », heure longue ........ 65–72 % /  1–2 %
+   *   le même sans « Client: », heure compacte .......................................... 69–78 % / 35–38 %
+   *   heure · type / secteur · client / employé (heure longue : la 1re ligne déborde) .... 40–44 % / 12–13 %
+   *   la même avec l'heure compacte ..................................................... 73–83 % / 21–23 %
+   *   heure type: / CLIENT / secteur · employé  ← retenue ............................... 82–92 % / 61–63 %
+   * Ce qui fait la différence : « 09:30 – 10:00 » avec ses espaces ne laisse pas la place au type sur la même
+   * ligne, et un client qui partage sa ligne avec le secteur ou le type passe à la ligne dès que son nom est long.
+   * D'où : l'heure compacte « 09:30–10:00 », et le client SEUL sur sa ligne, en gras. On lit « 🔧 Entretien: » puis
+   * le nom (« Entretien: nom du client », sans le mot « Client: »).
+   * Terminée = ✓, annulée = ✕ (la couleur et la fiche au survol le disent aussi). En vue Équipe la colonne nomme
+   * déjà l'employé : la 3e ligne ne porte que le secteur. Sans client (congé, réunion, vérification de stock, jour
+   * férié) : le titre de l'ancien calendrier, heure compacte sur sa première ligne.
    */
   contenu(info) {
     const p = info.event.extendedProps || {};
     if (p.genre === "fond") return { html: "" };
     const ep = p.genre === "tache" ? ce_epingle(p) : null;
     const epingle = ep ? `<span title="${ce_esc(ep[1])}">${ep[0]} </span>` : "";
-    const lignes = String(p.titre || "").split("\n").map((l) => l.trim()).filter(Boolean).map(ce_esc);
-    if (info.view.type === "dayGridMonth") {
-      // vue Mois : une seule ligne par tâche, pour en voir plusieurs dans la case du jour
-      const debut = info.event.allDay ? "" : `<b>${ce_esc(moment(info.event.start).format("HH:mm"))}</b> `;
-      return { html: `<div class="ce-ev ce-ev-mois">${debut}${epingle}${lignes.join(" · ")}</div>` };
+    const lignes = ce_titre(p.titre).map(ce_esc);
+    const mois = info.view.type === "dayGridMonth";
+    const debut = info.event.allDay ? "" : moment(info.event.start).format("HH:mm");
+    const heure = info.event.allDay ? "" : `<span class="ce-ev-h">${debut}–${moment(info.event.end).format("HH:mm")}</span> `;
+    if (p.genre === "tache" && p.client) {
+      const type = p.custom_type_dintervention || "", icone = (this.ctx.icones || {})[type] || "";
+      const genre = ce_esc((icone + " " + type).trim());
+      const etat = p.statut === "Completed" ? "✓ " : p.statut === "Cancelled" ? "✕ " : "";
+      if (mois) {
+        return { html: `<div class="ce-ev ce-ev-mois">${debut ? `<b>${debut}</b> ` : ""}${epingle}${etat}${genre}${genre ? ": " : ""}<b>${ce_esc(p.client)}</b></div>` };
+      }
+      const aramex = lignes.filter((l) => l.startsWith("📦"));
+      const bas = [];
+      if (p.secteur) bas.push(ce_esc(p.secteur));
+      if (info.view.type !== "resourceTimeGridDay" && p["custom_employé"]) bas.push(ce_esc(p["custom_employé"]));
+      return { html: `<div class="ce-ev"><div class="ce-ev-2">${heure}${epingle}${etat}${genre}${genre ? ":" : ""}</div>
+        <div class="ce-ev-1">${ce_esc(p.client)}</div>${aramex.length ? `<div class="ce-ev-2">${aramex.join("<br>")}</div>` : ""}
+        ${bas.length ? `<div class="ce-ev-2">${bas.join(" · ")}</div>` : ""}</div>` };
     }
-    const heure = !info.event.allDay && info.timeText ? `<span class="ce-ev-h">${ce_esc(info.timeText)}</span> · ` : "";
+    if (mois) {
+      // vue Mois : une seule ligne par tâche, pour en voir plusieurs dans la case du jour
+      return { html: `<div class="ce-ev ce-ev-mois">${debut ? `<b>${debut}</b> ` : ""}${epingle}${lignes.join(" · ")}</div>` };
+    }
     return { html: `<div class="ce-ev"><div class="ce-ev-1">${heure}${epingle}${lignes[0] || ""}</div>${
       lignes.length > 1 ? `<div class="ce-ev-2">${lignes.slice(1).join("<br>")}</div>` : ""}</div>` };
   }
@@ -544,19 +588,84 @@ class CalendrierEquipe {
       frappe.set_route("suivi-activite");
       return;
     }
-    if (frappe.model.can_read(p.doctype)) frappe.set_route("Form", p.doctype, p.name);
+    // La fiche complète de la tâche, dans une fenêtre au-dessus du calendrier (22/11/2026).
+    if (frappe.model.can_read(p.doctype)) this.fenetre_tache(p.name);
   }
 
-  /** Un créneau sélectionné à la souris : nouvelle tâche à ces heures — et pour cet employé en vue Équipe. */
+  /** Un créneau cliqué ou sélectionné : nouvelle tâche à ces heures — et pour cet employé en vue Équipe. */
   nouvelle(info) {
     const unJour = info.end - info.start <= 864e5;
     if (info.view.type === "dayGridMonth" && unJour) { this.ec.unselect(); return; }
-    const doc = frappe.model.get_new_doc("Tache de travail");
-    doc.starts_on = ce_fmt(info.start);
-    doc.ends_on = ce_fmt(info.allDay ? moment(info.end).subtract(1, "second") : info.end);
-    if (info.resource && info.resource.id !== this.ctx.sans_employe) doc.custom_choix_du_staff = info.resource.id;
+    const valeurs = info.allDay ? { starts_on: ce_fmt(info.start), ends_on: ce_fmt(moment(info.end).subtract(1, "second")) }
+      : { starts_on: ce_vers_systeme(info.start), ends_on: ce_vers_systeme(info.end) };
+    if (info.resource && info.resource.id !== this.ctx.sans_employe) valeurs.custom_choix_du_staff = info.resource.id;
     this.ec.unselect();
-    frappe.set_route("Form", "Tache de travail", doc.name);
+    this.fenetre_nouvelle(valeurs);
+  }
+
+  /**
+   * La fiche d'une tâche dans une fenêtre au-dessus du calendrier (22/11/2026 : « je veux que la tâche s'ouvre en
+   * popup dans le calendrier », la nouvelle comme l'existante, « avec tout le doctype »). C'est la VRAIE fiche, dans
+   * un cadre : ses listes, ses boutons, ses contrôles et le titre qu'elle compose restent ceux du formulaire (même
+   * procédé que la tâche ouverte depuis l'optimisation des tournées). À la fermeture, le calendrier est relu.
+   * ⚠️ Le cadre porte un NOM : le Client Script « Tache de travail RDV Prefill » renvoie toute nouvelle tâche ouverte
+   * dans un cadre à la page du dessus (prise de rendez-vous depuis la liste d'appels) puis revient en arrière — sans
+   * ce nom, qu'il reconnaît, la fiche se vidait et le calendrier avec.
+   * `apres_chargement(cadre)` : appelé à chaque seconde tant que la fenêtre est ouverte (fermeture automatique).
+   */
+  fenetre(titre, adresse, surveiller) {
+    const p = new frappe.ui.Dialog({ title: titre, size: "extra-large", fields: [{ fieldtype: "HTML", fieldname: "fiche" }] });
+    p.fields_dict.fiche.$wrapper.html(`<div class="text-muted" data-chargement style="padding:12px">Ouverture de la fiche…</div>
+      <iframe name="calendrier-equipe-tache" src="${ce_esc(adresse)}" style="width:100%;height:80vh;border:0;display:block;visibility:hidden"></iframe>`);
+    p.$wrapper.find(".modal-dialog").css({ "max-width": "min(1400px, 96vw)", width: "96vw" });
+    const $if = p.fields_dict.fiche.$wrapper.find("iframe");
+    $if.on("load", () => {
+      try {
+        // sans la barre du Desk ni le fil Raven : la fiche seule
+        const doc = $if[0].contentDocument, st = doc.createElement("style");
+        st.textContent = ":root { --navbar-height: 0px !important; } header.navbar, .navbar { display: none !important; }"
+          + " .raven-chat { display: none !important; } body { padding-top: 0 !important; } .page-head { top: 0 !important; }";
+        doc.head.appendChild(st);
+      } catch (e) { /* fiche affichée telle quelle */ }
+      p.fields_dict.fiche.$wrapper.find("[data-chargement]").remove();
+      $if.css("visibility", "visible");
+    });
+    const veille = surveiller ? setInterval(() => {
+      try { surveiller($if[0].contentWindow, p); } catch (e) { /* cadre pas encore prêt */ }
+    }, 700) : null;
+    p.onhide = () => {
+      if (veille) clearInterval(veille);
+      // une fenêtre Frappe fermée reste dans le document : on retire le cadre, sinon la fiche continue de vivre derrière
+      setTimeout(() => p.$wrapper.remove(), 400);
+      this.recharger();
+    };
+    p.show();
+    return p;
+  }
+
+  /** Une tâche existante : sa fiche complète. La fenêtre reste ouverte après un enregistrement — on la ferme soi-même. */
+  fenetre_tache(nom) {
+    this.fenetre("🗂️ " + nom, "/app/tache-de-travail/" + encodeURIComponent(nom));
+  }
+
+  /**
+   * Une NOUVELLE tâche. `valeurs` préremplit la fiche par l'adresse (/app/tache-de-travail/new?champ=valeur). Une
+   * fois la tâche enregistrée (la fiche n'est plus « nouvelle », rien en attente, aucun message ouvert dedans), la
+   * fenêtre se ferme seule.
+   */
+  fenetre_nouvelle(valeurs) {
+    const adresse = "/app/tache-de-travail/new?" + Object.keys(valeurs || {}).map((k) => encodeURIComponent(k) + "=" + encodeURIComponent(valeurs[k])).join("&");
+    let vue_enregistree = 0;
+    this.fenetre("➕ Nouvelle tâche", adresse, (w, p) => {
+      const f = w && w.cur_frm;
+      const prete = f && f.doctype === "Tache de travail" && !f.is_new() && !f.is_dirty() && !w.document.querySelector(".modal.show");
+      vue_enregistree = prete ? vue_enregistree + 1 : 0;
+      if (vue_enregistree >= 2) {
+        const nom = f.doc.name;
+        p.hide();
+        frappe.show_alert({ message: "Tâche créée : " + nom, indicator: "green" }, 5);
+      }
+    });
   }
 
   /** Une tâche glissée (ou étirée) : le serveur décide, on revient en arrière s'il refuse. */
@@ -566,7 +675,7 @@ class CalendrierEquipe {
     if (p.genre === "reunion") {
       if (etiree || info.newResource) { dire("Une réunion change de jour ou d’heure ici ; ses participants et sa durée se règlent dans sa page."); return annuler(); }
       if (p.statut === "Completed") { dire("Une réunion tenue ne se déplace plus."); return annuler(); }
-      const debut = moment(ev.start);
+      const debut = moment(ev.allDay ? ce_fmt(ev.start) : ce_vers_systeme(ev.start));
       frappe.xcall("customization_app.reunion_activite.deplacer",
         { name: p.name, date: debut.format("YYYY-MM-DD"), heure: ev.allDay ? null : debut.format("HH:mm:ss") })
         .then((r) => {
@@ -585,8 +694,8 @@ class CalendrierEquipe {
       if (etiree) { dire("La durée d’une tâche « toute la journée » se règle dans sa fiche."); return annuler(); }
       args.jours = Math.round((ev.start - info.oldEvent.start) / 864e5);
     } else {
-      args.debut = ce_fmt(ev.start);
-      args.fin = ce_fmt(ev.end);
+      args.debut = ce_vers_systeme(ev.start);
+      args.fin = ce_vers_systeme(ev.end);
     }
     const envoyer = () => frappe.xcall(CE_API + ".deplacer", args).then((r) => {
       frappe.show_alert({ message: (r || {}).transferee ? "Tâche confiée et enregistrée" : "Tâche déplacée", indicator: "green" }, 4);

@@ -55,6 +55,11 @@ class TestVersCalendrier(unittest.TestCase):
         self.assertEqual(ev["nom_client"], "Carlo")
         self.assertNotIn("tel", ev)                      # rubrique vide : pas dans l'info-bulle
 
+    def test_le_client_s_ecrit_sur_la_tuile_nom_sinon_fiche_et_manque_sans_client(self):
+        self.assertEqual(vers_calendrier(self.TACHE)["client"], "Carlo")
+        self.assertEqual(vers_calendrier(dict(self.TACHE, nom_client="", custom_client="CUST-1"))["client"], "CUST-1")
+        self.assertNotIn("client", vers_calendrier(dict(self.TACHE, nom_client=" ", custom_client=None)))
+
     def test_une_tache_sans_employe_va_dans_non_affecte(self):
         ev = vers_calendrier(dict(self.TACHE, custom_choix_du_staff=None))
         self.assertEqual(ev["employes"], [SANS_EMPLOYE])

@@ -96,6 +96,10 @@ def vers_calendrier(e: dict, participants: list | None = None) -> dict | None:
     }
     if genre == "tache":
         out["employes"] = [e.get("custom_choix_du_staff") or SANS_EMPLOYE]
+        # le nom du client, écrit sur la tuile avec le secteur
+        client = (e.get("nom_client") or e.get("custom_client") or "").strip()
+        if client:
+            out["client"] = client
     elif genre == "reunion":
         out["employes"] = [p for p in (participants or []) if p]
     for champ in CHAMPS_BULLE:
@@ -161,6 +165,8 @@ def contexte() -> dict:
     return {
         "employes": _actifs(),
         "types": types,
+        # les icônes des titres de tâche (api.composer_titre), pour la ligne « 09:30 – 10:00 · 🔧 Entretien »
+        "icones": {k: v.strip() for k, v in api.ICONES_INTERVENTION.items()},
         "sans_employe": SANS_EMPLOYE,
         "droits": {
             "ecrire": bool(frappe.has_permission(DOCTYPE, "write")),
