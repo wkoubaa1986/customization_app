@@ -48,6 +48,24 @@ def _types_avec_modele():
 
 
 @frappe.whitelist()
+def vehicules() -> list:
+    """La liste « Véhicule » de la fenêtre Générer les BL : les voitures de l'entreprise D'ABORD (case « Véhicule de
+    l'entreprise » de la fiche, 22/11/2026), puis les autres. [{name, model, entreprise}]"""
+    champs = ["name", "license_plate", "model"]
+    marque = frappe.get_meta("Vehicle").has_field("custom_vehicule_entreprise")
+    if marque:
+        champs.append("custom_vehicule_entreprise")
+    lignes = frappe.get_list("Vehicle", fields=champs, order_by="name asc", limit_page_length=0)
+    return trier_vehicules([{"name": v.name, "model": v.model or "",
+                             "entreprise": 1 if marque and v.get("custom_vehicule_entreprise") else 0} for v in lignes])
+
+
+def trier_vehicules(lignes: list) -> list:
+    """Les véhicules de l'entreprise en tête, chaque groupe par immatriculation. PURE."""
+    return sorted(lignes, key=lambda v: (0 if v.get("entreprise") else 1, str(v.get("name") or "")))
+
+
+@frappe.whitelist()
 def get_taches_par_date(date):
     """
     Retourne les employés ayant au moins une tâche imprimable à cette date, avec

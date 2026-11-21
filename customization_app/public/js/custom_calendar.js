@@ -532,20 +532,28 @@ function _load_employees(dialog) {
                 });
             });
 
-            // Charger les options véhicule pour chaque employé
-            frappe.db.get_list("Vehicle", {
-                fields: ["name", "license_plate", "model"],
-                limit: 50,
-            }).then(vehicles => {
+            // La liste « Véhicule » de chaque employé : les voitures de l'ENTREPRISE d'abord (case « Véhicule de
+            // l'entreprise » de la fiche Véhicule, 22/11/2026), puis les autres — la liste mêlait les 25 véhicules
+            // enregistrés, ceux des clients et des transporteurs compris.
+            frappe.call({ method: "customization_app.generer_bl.vehicules" }).then((rv) => {
+                const vehicles = rv.message || [];
+                const groupes = [["Véhicules de l’entreprise", vehicles.filter((v) => v.entreprise)],
+                                 ["Autres véhicules", vehicles.filter((v) => !v.entreprise)]];
                 employees.forEach((emp, idx) => {
                     const sel = $wrap.find(`.genbl-vehicle-sel[data-emp="${idx}"]`)[0];
                     if (!sel) return;
-                    vehicles.forEach(v => {
-                        const opt = document.createElement("option");
-                        opt.value = v.name;
-                        opt.textContent = `${v.name} - ${v.model || ""}`;
-                        if (v.name === emp.default_vehicle) opt.selected = true;
-                        sel.appendChild(opt);
+                    groupes.forEach(([titre, liste]) => {
+                        if (!liste.length) return;
+                        // un seul groupe (aucune case cochée) : la liste simple d'avant
+                        const cible = groupes[0][1].length ? document.createElement("optgroup") : sel;
+                        if (cible !== sel) { cible.label = titre; sel.appendChild(cible); }
+                        liste.forEach((v) => {
+                            const opt = document.createElement("option");
+                            opt.value = v.name;
+                            opt.textContent = `${v.name} - ${v.model || ""}`;
+                            if (v.name === emp.default_vehicle) opt.selected = true;
+                            cible.appendChild(opt);
+                        });
                     });
                 });
             });
