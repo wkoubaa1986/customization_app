@@ -76,7 +76,11 @@
   // Une couleur par employé ; chaque étape porte sa lettre Google et le nom du client ; ≈ = position approchée
   // (contour en pointillés) ; un clic ouvre la tâche. Les traits sont droits : le vrai chemin est dans le lien Google.
   let carte = null;                          // la carte du résultat de l'optimisation
-  const nomEtape = (a) => a.client || `${a.type || "Tâche"} · ${a.tache}`;      // une tâche sans client : son type
+  // Une tâche sans client : la première ligne de son titre (« 🧾 Vérification stock »), sinon son type.
+  const nomEtape = (a) => a.client || a.libelle || `${a.type || "Tâche"} · ${a.tache}`;
+  // Une étape sans adresse est comptée AU MAGASIN (tournee_itineraire) : on le dit, sinon le trajet affiché depuis le
+  // domicile fait croire à un déplacement chez un client inconnu (22/11/2026).
+  const lieuEtape = (a) => (a.position === "dépôt" ? ` <span class="text-muted">— au Magasin</span>` : "");
   function dessinerCarte(p, el, ancienne) {
     if (ancienne) { try { ancienne.remove(); } catch (e) { /* ancienne carte déjà retirée de la page */ } }
     if ((p.employes || []).some(e => (e.apres?.arrets || []).some(a => (a.position || "").startsWith("Google Maps")))) {
@@ -509,7 +513,7 @@
     const it = itineraires(e.depart_point || r.depot, e.apres.arrets), h = e.horaires || {}, coul = COULEURS[0];
     const lignes = e.apres.arrets.map((a) => `<div style="font-size:13px;padding:5px 0;border-bottom:1px solid #f1f5f9">
         ${pastille(it.numeros[a.tache], coul)}${a.trajet != null ? `<span class="text-muted" style="font-size:11.5px">${a.trajet_source === "sur place" ? "📍 sur place" : `${a.trajet_source === "google" ? "🚗" : "≈"} ${duree(a.trajet)}${a.trajet_km ? ` · ${a.trajet_km} km` : ""}`} → </span>` : ""}
-        <b>${esc(a.debut)}</b>–${esc(a.fin)} · ${lienTache(a.tache, `<b>${esc(nomEtape(a))}</b>`)} <span class="text-muted">${esc(a.type)}</span>${positionEstimee(a.position) ? ` <span style="color:#b91c1c;font-size:11px">≈ position approchée</span>` : ""}
+        <b>${esc(a.debut)}</b>–${esc(a.fin)} · ${lienTache(a.tache, `<b>${esc(nomEtape(a))}</b>`)}${lieuEtape(a)} <span class="text-muted">${esc(a.type)}</span>${positionEstimee(a.position) ? ` <span style="color:#b91c1c;font-size:11px">≈ position approchée</span>` : ""}
         ${a.retard ? `<div style="color:#b91c1c;font-size:11.5px;font-weight:600;margin-left:24px">⚠️ arrivée prévue ${a.retard} min après l’heure du rendez-vous</div>` : ""}</div>`).join("");
     d.fields_dict.corps.$wrapper.html(`
       <div style="font-size:13px;padding:8px 12px;border-radius:8px;background:${h.retards || h.depasse ? "#fef2f2" : "#f0fdf4"}">${resumeJournee(e)}</div>

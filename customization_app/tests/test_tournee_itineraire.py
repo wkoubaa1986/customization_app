@@ -47,3 +47,18 @@ class TestItineraire(unittest.TestCase):
         with self.assertRaises(frappe.PermissionError):
             I.itineraire_employe(self.jour, autre)
         self.assertEqual(I.itineraires_du_jour(self.jour)["employes"], [])                       # résumé BL : superviseurs
+
+
+class TestLibelleSansClient(unittest.TestCase):
+    """Le nom d'une étape sans client dans l'itinéraire : la première ligne utile de son titre."""
+
+    def test_une_verification_de_stock_porte_son_nom(self):
+        self.assertEqual(I.libelle_sans_client("🧾 Vérification stock\nStock Sadok Bouziri\nSadok Bouziri"), "🧾 Vérification stock")
+
+    def test_le_mot_client_et_le_statut_ne_sont_pas_un_nom(self):
+        self.assertEqual(I.libelle_sans_client("\n☕ Autre: Client: \nSalma Ben Saïd"), "☕ Autre")
+        self.assertEqual(I.libelle_sans_client("terminé!!!\n☕ Autre: Client: \nHedi"), "☕ Autre")
+
+    def test_sans_titre_rien(self):
+        self.assertEqual(I.libelle_sans_client(None), "")
+        self.assertEqual(I.libelle_sans_client("  \n "), "")

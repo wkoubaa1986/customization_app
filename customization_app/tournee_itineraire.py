@@ -21,6 +21,19 @@ from customization_app.planning_employe import _employe_demande, _supervise
 LOIN_KM = 150                                # au-delà, pas une étape conduite (expédition, erreur d'adresse…)
 
 
+def libelle_sans_client(titre) -> str:
+    """Le nom d'une étape SANS client : la première ligne de son titre (« 🧾 Vérification stock », « ☕ Autre »…). PURE.
+    L'itinéraire écrivait « Autre · Tache-09488 » pour une vérification de stock : on ne savait ni ce que c'était, ni
+    qu'elle se passe au Magasin (22/11/2026)."""
+    for ligne in str(titre or "").split("\n"):
+        ligne = ligne.strip()
+        # « ☕ Autre: Client: » (titre d'une tâche sans client) -> « ☕ Autre »
+        ligne = ligne.replace(": Client:", "").strip().rstrip(":").strip()
+        if ligne and ligne not in ("terminé!!!", "Annulé!!!"):
+            return ligne
+    return ""
+
+
 def journee(jour, employes: list[str] | None = None) -> dict:
     """L'itinéraire planifié de chaque employé (tous ceux qui ont des tâches ce jour-là, ou ceux demandés)."""
     jour = getdate(jour)
@@ -30,7 +43,7 @@ def journee(jour, employes: list[str] | None = None) -> dict:
     taches = frappe.get_all(T.TACHE, filters=filtres, order_by="starts_on asc", limit_page_length=0,
                             fields=["name", "custom_choix_du_staff", "custom_type_dintervention", "starts_on", "ends_on", "temps",
                                     "status", "custom_client", "nom_client", "select_address", "google_map", "secteur", "details_adresse",
-                                    "commande_client", "dans_local"])
+                                    "commande_client", "dans_local", "titre"])
     commandes = {t.commande_client for t in taches if t.commande_client and t.custom_type_dintervention == "Livraison"}
     aramex = set(frappe.get_all("Sales Order", filters={"name": ["in", list(commandes)], "payment_terms_template": PAYMENT_TERMS_ARAMEX},
                                 pluck="name")) if commandes else set()
@@ -67,8 +80,8 @@ def journee(jour, employes: list[str] | None = None) -> dict:
                                                                  "motif": _("à {0} km du départ").format(int(loin))})
             continue
         par_employe.setdefault(t.custom_choix_du_staff, []).append({
-            "tache": t.name, "client": nom_client, "type": t.custom_type_dintervention or "",
-            "statut": t.status, "debut_min": debut, "original_min": debut, "service": service, "mobile": False, "fenetre": None,
+            "tache": t.name, "client": nom_client, "libelle": "" if nom_client else libelle_sans_client(t.titre),
+            "type": t.custom_type_dintervention or "", "statut": t.status, "debut_min": debut, "original_min": debut, "service": service, "mobile": False, "fenetre": None,
             "debut": T._hm(debut), "fin": T._hm(debut + service), "lat": pos[0], "lng": pos[1], "position": pos[2]})
     if positions_a_verifier:
         return {"date": str(jour), "employes": [], "depot": cfg["depot"], "hors_itineraire": hors,
