@@ -119,5 +119,14 @@ class TestDecalerJours(unittest.TestCase):
         self.assertEqual((str(d), str(f)), ("2026-11-15 08:00:00", "2026-11-16 17:00:00"))
 
 
+
+class TestRaccourci(unittest.TestCase):
+    def test_seuls_les_raccourcis_vers_l_ancien_calendrier_basculent(self):
+        from customization_app.patches.calendrier_equipe_raccourci import a_basculer
+        lignes = [("a", "/app/tache-de-travail/view/calendar/Calendrier%20de%20travail"), ("b", None),
+                  ("c", "/app/calendrier-equipe"), ("d", "/app/tache-de-travail/view/calendar/Calendrier de travail")]
+        self.assertEqual(a_basculer(lignes), ["a", "d"])
+
+
 if __name__ == "__main__":
     unittest.main()

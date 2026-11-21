@@ -154,6 +154,16 @@ def _actifs() -> list:
     return out
 
 
+def _exterieur() -> bool:
+    """Le partenaire ou un sous-traitant : ils ne lisent que LEURS tâches (hooks de permission de la tâche) ; on ne
+    leur montre donc pas non plus la liste de tous les employés en colonnes — seulement ceux de ce qu'ils voient."""
+    from customization_app import api, sous_traitant
+
+    if frappe.session.user == api.PARTNER_USER:
+        return True
+    return bool(sous_traitant.sous_traitant_courant(frappe.session.user)) and not sous_traitant._est_supervision()
+
+
 @frappe.whitelist()
 def contexte() -> dict:
     """Ce que la page doit savoir avant d'afficher : les droits de l'utilisateur et les listes des filtres."""
@@ -167,7 +177,7 @@ def contexte() -> dict:
     except Exception:
         roles_optimiser = ()
     return {
-        "employes": _actifs(),
+        "employes": [] if _exterieur() else _actifs(),
         "types": types,
         # les icônes des titres de tâche (api.composer_titre), pour la ligne « 09:30 – 10:00 · 🔧 Entretien »
         "icones": {k: v.strip() for k, v in api.ICONES_INTERVENTION.items()},
@@ -201,6 +211,9 @@ def evenements(start, end) -> dict:
         if ev:
             out.append(ev)
     actifs = _actifs()
+    if _exterieur():
+        presents = {emp for ev in out if ev["genre"] == "tache" for emp in ev["employes"]}
+        actifs = [a for a in actifs if a["id"] in presents]
     connus = {a["id"] for a in actifs}
     autres = {emp for ev in out if ev["genre"] == "tache" for emp in ev["employes"]} - connus - {SANS_EMPLOYE}
     noms = {}

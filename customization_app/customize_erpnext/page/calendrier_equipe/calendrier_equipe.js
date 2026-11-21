@@ -248,6 +248,8 @@ class CalendrierEquipe {
       .ce-puce.on { background: #1d4ed8; border-color: #1d4ed8; color: #fff; }
       .ce-puce i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
       .ce-sep { width: 1px; height: 20px; background: var(--border-color, #d1d5db); margin: 0 4px; }
+      .ce-saut { flex-basis: 100%; height: 0; }
+      .ce-titre-filtre { min-width: 68px; }
       .ce-titre-filtre { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted, #6b7280); }
       .ce-cal { height: calc(100vh - 250px); min-height: 460px; }
       .ce-cal .ec { height: 100%; font-size: 12px; }
@@ -365,7 +367,8 @@ class CalendrierEquipe {
     $f.append(`<span class="ce-titre-filtre">Employés</span>`);
     this.colonnes.forEach((c) => puce(c.nom + (c.actif || c.id === this.ctx.sans_employe ? "" : " (parti)"),
       f.employes.has(c.id), basculer(f.employes, c.id), c.couleur));
-    $f.append(`<span class="ce-sep"></span><span class="ce-titre-filtre">Types</span>`);
+    // « Types » sur sa propre ligne (22/11/2026) : employés en haut, types dessous, on s'y retrouve d'un coup d'œil
+    $f.append(`<span class="ce-saut"></span><span class="ce-titre-filtre">Types</span>`);
     (this.ctx.types || []).forEach((t) => puce(t, f.types.has(t), basculer(f.types, t)));
     $f.append(`<span class="ce-sep"></span>`);
     puce(f.annulees ? "Annulées visibles" : "Annulées masquées", !f.annulees, () => {

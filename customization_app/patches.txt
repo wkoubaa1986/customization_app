@@ -140,3 +140,4 @@ customization_app.patches.retablir_vehicules_flotte_gps
 customization_app.patches.aligner_gouvernorat_ville_adresses
 customization_app.patches.verification_stock_8h45_une_heure
 customization_app.patches.vehicules_entreprise
+customization_app.patches.calendrier_equipe_raccourci
