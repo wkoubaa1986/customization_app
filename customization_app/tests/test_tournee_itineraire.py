@@ -62,3 +62,27 @@ class TestLibelleSansClient(unittest.TestCase):
     def test_sans_titre_rien(self):
         self.assertEqual(I.libelle_sans_client(None), "")
         self.assertEqual(I.libelle_sans_client("  \n "), "")
+
+
+class TestPassageMagasin(unittest.TestCase):
+    """Domicile → Magasin → clients → Magasin → domicile, pour qui garde la voiture chez lui (22/11/2026)."""
+
+    def test_matin_et_soir_autour_de_la_tournee(self):
+        # il quitte le Magasin à 09:06 pour le 1er client et y revient à 17:46 ; 25 min / 16,6 km de chez lui, 28 min / 17,6 km pour rentrer
+        p = I.passage_magasin(9 * 60 + 6, 17 * 60 + 46, False, False, (25, 16.6), (28, 17.6), 15, 10)
+        self.assertEqual((p["arrivee_magasin"], p["depart_domicile"]), (8 * 60 + 51, 8 * 60 + 26))     # 15 min sur place
+        self.assertEqual((p["fin_magasin"], p["retour_domicile"]), (17 * 60 + 56, 18 * 60 + 24))       # 10 min sur place
+        self.assertEqual((p["aller_km"], p["rentree_km"], p["sur_place_matin"], p["sur_place_soir"]), (16.6, 17.6, 15, 10))
+
+    def test_la_premiere_tache_au_magasin_ne_rajoute_pas_de_temps_sur_place(self):
+        # vérification de stock à 08:45 au Magasin : il y arrive pour 08:45, pas un quart d'heure avant
+        p = I.passage_magasin(8 * 60 + 45, 17 * 60 + 4, True, False, (25, 16.6), (28, 17.6), 15, 10)
+        self.assertEqual((p["arrivee_magasin"], p["depart_domicile"], p["sur_place_matin"]), (8 * 60 + 45, 8 * 60 + 20, 0))
+        p = I.passage_magasin(9 * 60, 17 * 60, False, True, (20, 10), (20, 10), 15, 10)
+        self.assertEqual((p["fin_magasin"], p["sur_place_soir"]), (17 * 60, 0))                        # la dernière aussi
+
+    def test_la_majoration_des_heures_de_pointe_s_applique_au_depart_de_chaque_trajet(self):
+        pointe = lambda minute: 1.3 if 7 * 60 + 30 <= minute < 9 * 60 + 30 else 1.0
+        p = I.passage_magasin(9 * 60, 15 * 60, False, False, (20, 10), (20, 10), 15, 10, pointe)
+        self.assertEqual((p["aller_min"], p["rentree_min"]), (26, 20))                                 # matin en pointe, soir non
+        self.assertEqual(p["depart_domicile"], 9 * 60 - 15 - 26)

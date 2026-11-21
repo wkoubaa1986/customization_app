@@ -12,6 +12,9 @@
   "depot_latitude",
   "depot_longitude",
   "departs",
+  "magasin_matin",
+  "col_magasin",
+  "magasin_soir",
   "sec_journee",
   "heure_debut",
   "heure_premiere",
@@ -90,6 +93,24 @@
    "label": "Points de départ particuliers (sinon : le Magasin)",
    "options": "Config Optimisation Tournees Depart",
    "description": "Un employé qui part de chez lui (et y revient) : son lien Google Maps. Les autres partent du Magasin et y reviennent. Ce sont aussi les DOMICILES du suivi GPS (Config Flotte GPS → Domiciles) : nuits « au domicile », arrêts non comptés en sortie de circuit, et un véhicule qui dort à moins de 500 m de chez un technicien lui est attribué ce jour-là. Se règle ici ou depuis l'onglet Présence Aquaworld du suivi terrain."
+  },
+  {
+   "fieldname": "magasin_matin",
+   "fieldtype": "Int",
+   "label": "Passage au Magasin le matin (minutes sur place)",
+   "default": "15",
+   "description": "Pour un employé coché « Passe par le Magasin » : le temps qu'il y reste avant de partir chez le premier client. Non compté quand sa première tâche est au Magasin (vérification de stock)."
+  },
+  {
+   "fieldname": "col_magasin",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "magasin_soir",
+   "fieldtype": "Int",
+   "label": "Passage au Magasin le soir (minutes sur place)",
+   "default": "10",
+   "description": "Le temps qu'il y reste après le dernier client, avant de rentrer chez lui."
   },
   {
    "fieldname": "sec_journee",
@@ -360,7 +381,7 @@
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-10-16 14:00:00.000000",
+ "modified": "2026-11-22 14:00:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Config Optimisation Tournees",

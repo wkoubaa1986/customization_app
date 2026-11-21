@@ -34,6 +34,54 @@ def libelle_sans_client(titre) -> str:
     return ""
 
 
+def _minutes(hm) -> int:
+    """« 08:45 » -> 525. PURE."""
+    h, m = str(hm).split(":")[:2]
+    return int(h) * 60 + int(m)
+
+
+def passage_magasin(depart, retour, premier_sur_place: bool, dernier_sur_place: bool, aller: tuple, rentree: tuple,
+                    matin: int, soir: int, majoration=None) -> dict:
+    """Le domicile autour d'une tournée qui part du Magasin et y revient (22/11/2026). PURE.
+
+    Demande : « j'ai l'impression qu'il calcule de là où habite l'employé, ça doit être du magasin, non ? » puis « oui
+    mais généralement il passe au magasin le matin et après avoir fini la journée ». La tournée des clients se calcule
+    donc Magasin → clients → Magasin, et on ajoute ce qui l'entoure : domicile → Magasin le matin (`matin` minutes sur
+    place avant de partir), Magasin → domicile le soir (`soir` minutes sur place avant de rentrer).
+
+    `depart` / `retour` : minutes où il quitte le Magasin pour le premier arrêt, et où il y revient après le dernier.
+    `premier_sur_place` / `dernier_sur_place` : la première (dernière) tâche est AU Magasin (vérification de stock) — il
+    y est déjà, pas de temps ajouté. `aller` / `rentree` : (minutes, km) domicile → Magasin et Magasin → domicile, hors
+    heure de pointe ; `majoration(minute)` : le facteur d'un trajet qui démarre à cette minute (défaut : 1)."""
+    majoration = majoration or (lambda minute: 1.0)
+    sur_place_matin = 0 if premier_sur_place else max(0, int(matin))
+    arrivee = depart - sur_place_matin
+    aller_min = int(round(aller[0] * majoration(arrivee - aller[0])))
+    sur_place_soir = 0 if dernier_sur_place else max(0, int(soir))
+    fin = retour + sur_place_soir
+    rentree_min = int(round(rentree[0] * majoration(fin)))
+    return {"depart_domicile": arrivee - aller_min, "arrivee_magasin": arrivee, "depart_magasin": depart, "sur_place_matin": sur_place_matin,
+            "aller_min": aller_min, "aller_km": round(aller[1], 1),
+            "retour_magasin": retour, "fin_magasin": fin, "sur_place_soir": sur_place_soir,
+            "rentree_min": rentree_min, "rentree_km": round(rentree[1], 1), "retour_domicile": fin + rentree_min}
+
+
+def _google(origine, destination, minute: int, jour):
+    """(minutes, km) d'un trajet mesuré par Google à cette heure, ou None s'il ne peut pas l'être (pas de clé, essai sans
+    réseau, plafond du jour, erreur, heure déjà passée — Google n'estime que l'avenir)."""
+    from customization_app import tournee_google as G
+
+    cle_api = G.cle()
+    quand = get_datetime("%s %s:00" % (getdate(jour), T._hm(max(0, min(int(minute), 24 * 60 - 1)))))
+    if not cle_api or frappe.flags.get("tournee_sans_reseau") or quand <= frappe.utils.now_datetime():
+        return None
+    try:
+        g = G.mesurer(tuple(origine), tuple(destination), G.heure_utc(jour, minute - minute % G.PAS, frappe.utils.get_system_timezone()), cle_api)
+    except Exception:
+        return None
+    return (int(g["minutes"]), float(g["km"]))
+
+
 def journee(jour, employes: list[str] | None = None) -> dict:
     """L'itinéraire planifié de chaque employé (tous ceux qui ont des tâches ce jour-là, ou ceux demandés)."""
     jour = getdate(jour)
@@ -49,6 +97,8 @@ def journee(jour, employes: list[str] | None = None) -> dict:
                                 pluck="name")) if commandes else set()
     centres = T._centres_secteurs()
     par_employe, hors = {}, {}
+    # Ceux qui gardent la voiture chez eux mais passent par le Magasin matin et soir : leur tournée part du Magasin.
+    via_magasin = cfg.get("via_magasin") or set()
     controle_position = T.controle_localisation_actif()
     positions_a_verifier = []
     for t in taches:
@@ -73,7 +123,7 @@ def journee(jour, employes: list[str] | None = None) -> dict:
             if not (cfg["debut"] - 60 <= debut <= cfg["fin"] + 60):
                 continue                     # une tâche sans lieu hors journée (« Autre » à minuit) : pas une étape
             pos = (cfg["depot"][0], cfg["depot"][1], "dépôt")
-        depart = cfg["departs"].get(t.custom_choix_du_staff, cfg["depot"])
+        depart = cfg["depot"] if t.custom_choix_du_staff in via_magasin else cfg["departs"].get(t.custom_choix_du_staff, cfg["depot"])
         loin = T.haversine_km(depart, pos[:2])
         if loin > LOIN_KM:
             hors.setdefault(t.custom_choix_du_staff, []).append({"tache": t.name, "client": nom_client,
@@ -92,9 +142,13 @@ def journee(jour, employes: list[str] | None = None) -> dict:
     noms = {e.name: e.employee_name for e in frappe.get_all("Employee", filters={"name": ["in", list(par_employe)]},
                                                             fields=["name", "employee_name"])}
     # Les nœuds de la matrice : le Magasin, les domiciles réglés, puis toutes les étapes.
-    points, depot_de = [cfg["depot"]], {}
+    points, depot_de, domicile_de = [cfg["depot"]], {}, {}
     for e in par_employe:
-        if e in cfg["departs"]:
+        if e in via_magasin:
+            depot_de[e] = 0                       # tournée Magasin → clients → Magasin ; le domicile s'ajoute autour
+            domicile_de[e] = len(points)
+            points.append(cfg["departs"][e])
+        elif e in cfg["departs"]:
             depot_de[e] = len(points)
             points.append(cfg["departs"][e])
         else:
@@ -115,6 +169,34 @@ def journee(jour, employes: list[str] | None = None) -> dict:
     from customization_app.tournee_google import recaler_proposition
     recalage = recaler_proposition(out, jour, cfg, mn_brut, mn, km)
     recalage.pop("mesures", None)                 # clés tuples : pas pour le JSON
+    for e in out:
+        n, h = domicile_de.get(e["employe"]), e.get("horaires") or {}
+        if n is None or not h.get("depart") or not h.get("retour"):
+            continue
+        arrets = e["apres"]["arrets"]
+        bornes = (_minutes(h["depart"]), _minutes(h["retour"]), arrets[0]["position"] == "dépôt", arrets[-1]["position"] == "dépôt")
+        temps = (cfg.get("magasin_matin", 15), cfg.get("magasin_soir", 10))
+        p = passage_magasin(*bornes, (mn[n][0], km[n][0]), (mn[0][n], km[0][n]), *temps,
+                            lambda minute: T.facteur_pointe(minute, cfg["pointes"]))
+        source = "osrm"
+        # Les deux trajets du domicile mesurés par Google à leur heure (trafic compris), comme le reste de la tournée ;
+        # sans clé, sans réseau, plafond atteint ou jour passé : l'estimation OSRM corrigée ci-dessus reste.
+        g_aller = _google(points[n], points[0], p["depart_domicile"], jour)
+        g_rentree = _google(points[0], points[n], p["fin_magasin"], jour) if g_aller else None
+        if g_aller and g_rentree:
+            p, source = passage_magasin(*bornes, g_aller, g_rentree, *temps), "google"
+        # Le résumé parle de la journée ENTIÈRE (départ et retour au domicile, route et km compris) ; `magasin` détaille
+        # les deux passages. Le dépassement de fin de journée reste jugé sur le retour au Magasin, comme pour les autres.
+        h["magasin"] = {"arrivee": T._hm(p["arrivee_magasin"]), "depart": h["depart"], "sur_place_matin": p["sur_place_matin"],
+                        "aller_min": p["aller_min"], "aller_km": p["aller_km"], "source": source,
+                        "retour": h["retour"], "fin": T._hm(p["fin_magasin"]), "sur_place_soir": p["sur_place_soir"],
+                        "retour_trajet": h.get("retour_trajet"), "retour_source": h.get("retour_source"),
+                        "rentree_min": p["rentree_min"], "rentree_km": p["rentree_km"]}
+        h.update({"depart": T._hm(p["depart_domicile"]), "retour": T._hm(p["retour_domicile"]),
+                  "trajets": (h.get("trajets") or 0) + p["aller_min"] + p["rentree_min"],
+                  "km": round((h.get("km") or 0) + p["aller_km"] + p["rentree_km"], 1),
+                  "retour_trajet": p["rentree_min"], "retour_source": source})
+        e["depart"], e["domicile_point"] = "domicile", points[n]
     for e in out:
         for a in e["apres"]["arrets"]:
             for interne in ("noeud", "debut_min", "original_min", "mobile", "fenetre", "decale", "ecart_min"):

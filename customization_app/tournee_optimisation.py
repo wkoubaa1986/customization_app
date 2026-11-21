@@ -103,7 +103,21 @@ def config() -> dict:
     pointes = [(_minutes(r.heure_debut, 0), _minutes(r.heure_fin, 0), cint(r.majoration)) for r in frappe.get_all(
         "Config Optimisation Tournees Pointe", filters={"parent": CONFIG, "parenttype": CONFIG}, fields=["heure_debut", "heure_fin", "majoration"])
         if cint(r.majoration) > 0] if frappe.db.exists("DocType", "Config Optimisation Tournees Pointe") else []
+    # Passage par le Magasin (22/11/2026) : un employé qui a un point de départ particulier garde la voiture chez lui mais
+    # « passe au magasin le matin et après avoir fini la journée » — case par employé, cochée par défaut. `departs` ne
+    # change PAS de sens (ce sont aussi les domiciles du suivi GPS) : `via_magasin` dit seulement qui passe par le Magasin,
+    # et l'itinéraire (tournee_itineraire.journee) en tient compte. Avant la migration : personne, rien ne change.
+    via_magasin = set(frappe.get_all("Config Optimisation Tournees Depart", filters={"parent": CONFIG, "parenttype": CONFIG, "passe_magasin": 1},
+                                     pluck="employe")) & set(departs) \
+        if departs and frappe.db.has_column("Config Optimisation Tournees Depart", "passe_magasin") else set()
+
+    def minutes_magasin(champ, defaut):
+        # champ jamais enregistré : son défaut (get_single_value rendrait 0)
+        connu = enregistre and frappe.db.sql("select 1 from tabSingles where doctype = %s and field = %s limit 1", (CONFIG, champ))
+        return max(0, cint(v(champ))) if connu else defaut
+
     return {"depot": (lat, lng) if lat and lng else DEPOT_DEFAUT, "departs": departs, "horaires": horaires, "pointes": pointes,
+            "via_magasin": via_magasin, "magasin_matin": minutes_magasin("magasin_matin", 15), "magasin_soir": minutes_magasin("magasin_soir", 10),
             "debut": _minutes(v("heure_debut"), 8 * 60), "fin": _minutes(v("heure_fin"), 17 * 60),
             "premiere": _minutes(v("heure_premiere"), 9 * 60),
             "pause": (_minutes(v("pause_debut"), 0), _minutes(v("pause_fin"), 0)) if v("pause_debut") and v("pause_fin") else None,

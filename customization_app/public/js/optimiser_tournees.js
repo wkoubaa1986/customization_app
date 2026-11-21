@@ -484,7 +484,9 @@
   const resumeJournee = (e) => {
     const h = (e && e.horaires) || {};
     if (!h.depart) return "";
-    return `🕘 Départ ${esc(e.depart)} <b>${esc(h.depart)}</b> → retour <b>${esc(h.retour)}</b> · route <b>${duree(h.trajets)}</b> · <b>${h.km} km</b>`
+    // Il garde la voiture chez lui mais passe par le Magasin matin et soir (22/11/2026) : on le dit, avec les heures.
+    const via = h.magasin ? ` · via le Magasin (${esc(h.magasin.arrivee)} et ${esc(h.magasin.retour)})` : "";
+    return `🕘 Départ ${esc(e.depart)} <b>${esc(h.depart)}</b> → retour <b>${esc(h.retour)}</b>${via} · route <b>${duree(h.trajets)}</b> · <b>${h.km} km</b>`
       + (h.retards ? ` · <b style="color:#b91c1c">⚠️ ${h.retards} arrivée(s) en retard</b>` : "")
       + (h.depasse ? ` <b style="color:#b91c1c">(après la fin de journée ${esc(h.fin_journee)})</b>` : "");
   };
@@ -511,6 +513,12 @@
       return;
     }
     const it = itineraires(e.depart_point || r.depot, e.apres.arrets), h = e.horaires || {}, coul = COULEURS[0];
+    // Passage par le Magasin d'un employé qui part de chez lui (h.magasin) : une ligne avant les étapes, une après.
+    const mg = h.magasin, ligneMagasin = (texte) => `<div style="font-size:13px;padding:5px 0;border-bottom:1px solid #f1f5f9;background:#f8fafc">${texte}</div>`;
+    const matin = mg ? ligneMagasin(`🏬 <span class="text-muted" style="font-size:11.5px">${mg.source === "google" ? "🚗" : "≈"} ${duree(mg.aller_min || 0)}${mg.aller_km ? ` · ${mg.aller_km} km` : ""} → </span><b>${esc(mg.arrivee)}</b> · <b>Magasin</b>`
+      + (mg.sur_place_matin ? ` <span class="text-muted">${mg.sur_place_matin} min sur place, départ ${esc(mg.depart)}</span>` : ` <span class="text-muted">la première tâche s’y passe</span>`)) : "";
+    const soir = mg ? ligneMagasin(`🏬 <span class="text-muted" style="font-size:11.5px">${mg.retour_source === "google" ? "🚗" : "≈"} ${duree(mg.retour_trajet || 0)} → </span><b>${esc(mg.retour)}</b> · <b>Magasin</b>`
+      + (mg.sur_place_soir ? ` <span class="text-muted">${mg.sur_place_soir} min sur place, départ ${esc(mg.fin)}</span>` : "")) : "";
     const lignes = e.apres.arrets.map((a) => `<div style="font-size:13px;padding:5px 0;border-bottom:1px solid #f1f5f9">
         ${pastille(it.numeros[a.tache], coul)}${a.trajet != null ? `<span class="text-muted" style="font-size:11.5px">${a.trajet_source === "sur place" ? "📍 sur place" : `${a.trajet_source === "google" ? "🚗" : "≈"} ${duree(a.trajet)}${a.trajet_km ? ` · ${a.trajet_km} km` : ""}`} → </span>` : ""}
         <b>${esc(a.debut)}</b>–${esc(a.fin)} · ${lienTache(a.tache, `<b>${esc(nomEtape(a))}</b>`)}${lieuEtape(a)} <span class="text-muted">${esc(a.type)}</span>${positionEstimee(a.position) ? ` <span style="color:#b91c1c;font-size:11px">≈ position approchée</span>` : ""}
@@ -520,8 +528,8 @@
       <div class="text-muted" style="font-size:11.5px;margin:4px 2px 8px">${sourceTemps(r)} · stationnement ${esc(r.marge)} min + rangement ${esc(r.rangement)} min par arrêt</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:6px">${it.liens.map((l, n) => `<a class="btn btn-sm btn-primary" href="${l.url}" target="_blank" rel="noopener">🗺️ Ouvrir dans Google Maps${it.liens.length > 1 ? ` ${n + 1}/${it.liens.length} (clients ${l.de} à ${l.a})` : ""}</a>`).join("")}</div>
       <div class="text-muted" style="font-size:11.5px;margin-bottom:6px">Dans Google Maps, les clients sont dans l’ordre des numéros ci-dessous (Google les nomme d’après le lieu le plus proche).</div>
-      ${lignes}
-      ${h.retour ? `<div style="font-size:13px;padding:5px 0"><span class="text-muted" style="font-size:11.5px">${h.retour_source === "google" ? "🚗" : "≈"} ${duree(h.retour_trajet || 0)} → </span><b>${esc(h.retour)}</b> · retour ${esc(e.depart)}</div>` : ""}
+      ${matin}${lignes}${soir}
+      ${h.retour ? `<div style="font-size:13px;padding:5px 0"><span class="text-muted" style="font-size:11.5px">${h.retour_source === "google" ? "🚗" : "≈"} ${duree(h.retour_trajet || 0)}${mg && mg.rentree_km ? ` · ${mg.rentree_km} km` : ""} → </span><b>${esc(h.retour)}</b> · retour ${esc(e.depart)}</div>` : ""}
       ${(e.hors_itineraire || []).length ? `<div class="text-muted" style="font-size:12px;margin-top:6px">Hors itinéraire : ${e.hors_itineraire.map((x) => `${esc(x.client || x.tache)} (${esc(x.motif)})`).join(" · ")}</div>` : ""}
       <div data-carte-iti style="height:320px;border-radius:10px;margin-top:10px;border:1px solid #e2e8f0"></div>`);
     d.$wrapper.on("click", "[data-ouvrir-tache]", (ev) => {
