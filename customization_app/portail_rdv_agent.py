@@ -62,7 +62,7 @@ def _ticket(jeton):
     """Le jeton d'entrée, et il DOIT appartenir à l'utilisateur connecté."""
     donnees = frappe.cache().get_value("rdv_agent:%s" % (jeton or "")) or None
     if not donnees:
-        frappe.throw(_("Lien expiré — rouvrez « RDV avec l'app » depuis la "
+        frappe.throw(_("Lien expiré — rouvrez « RDV par l'app » depuis la "
                        "commande ou la liste."), frappe.AuthenticationError)
     if donnees.get("utilisateur") != frappe.session.user:
         frappe.throw(_("Ce lien a été ouvert par un autre utilisateur."),

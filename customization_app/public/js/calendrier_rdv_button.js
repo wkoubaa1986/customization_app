@@ -228,8 +228,12 @@
 
         const body = $('<div>').css({ flex: '1', overflow: 'hidden', position: 'relative' });
 
+        // Le NOUVEAU calendrier (22/11/2026), en « mode créneau » : son cadre porte ce nom, il envoie lui-même le
+        // créneau choisi (message rdv_new_doc) — plus besoin de bricoler FullCalendar depuis ici. L'ancien calendrier
+        // reste pris en charge plus bas, au cas où l'on y reviendrait.
         const iframe = $('<iframe>').attr({
-            src: '/app/tache-de-travail/view/calendar/Calendrier%20de%20travail',
+            src: '/app/calendrier-equipe',
+            name: 'calendrier-equipe-creneau',
             frameborder: '0',
         }).css({ width: '100%', height: '100%', border: 'none', display: 'block' });
 
@@ -246,6 +250,8 @@
                     s.textContent = '[class*="raven"],[id*="raven"]{display:none!important}';
                     idoc.head.appendChild(s);
                 }
+                if ((iw.location.pathname || '').indexOf('calendrier-equipe') !== -1) return;   // nouveau calendrier : rien à poser
+
                 function hideGenererBL() {
                     idoc.querySelectorAll('button').forEach(function(b) {
                         if (b.textContent && b.textContent.includes('BL')) {
@@ -510,6 +516,8 @@
             (prefill && prefill.custom_type_dintervention)
             || d.custom_type_dintervention || 'Entretien');
         if (d.starts_on) dlg.set_value('starts_on', d.starts_on);
+        // Créneau choisi dans la colonne d'un employé (vue « Équipe » du nouveau calendrier) : il est proposé.
+        if (d.custom_choix_du_staff) dlg.set_value('custom_choix_du_staff', d.custom_choix_du_staff);
         // Secteur + addresses set before show (Data fields render fine before show)
         if (prefill && prefill.custom_client) {
             dlg.set_value('secteur', _secteur);

@@ -36,13 +36,16 @@ frappe.provide("frappe.views");
         style.textContent = `
             .${CLASSE_ITEM} { margin-left: auto; display: flex; align-items: center;
                               gap: 6px; padding-right: 8px; }
-            .so-rdv-app { background: #0ea5e9; }
-            .so-rdv-app:hover { background: #0284c7; }
             .so-rdv-btn { background: #dc2626; color: #fff; border: none; border-radius: 6px;
                           padding: 4px 12px; font-size: 12px; font-weight: 600; cursor: pointer;
                           white-space: nowrap; }
             .so-rdv-btn:hover { background: #b91c1c; }
             .so-rdv-btn[disabled] { opacity: .6; cursor: progress; }
+            /* Mêmes noms et mêmes couleurs que dans la liste d'appels (22/11/2026) : « RDV au calendrier » en rouge,
+               « RDV par l'app » en bleu. La règle bleue était écrite AVANT la rouge et perdait : les deux boutons
+               sortaient rouges. */
+            .so-rdv-btn.so-rdv-app { background: #0ea5e9; }
+            .so-rdv-btn.so-rdv-app:hover { background: #0284c7; }
         `;
         document.head.appendChild(style);
     }
@@ -157,15 +160,16 @@ frappe.provide("frappe.views");
             // renommée par une version de Frappe — le bouton disparaîtrait sans que rien ne le
             // dise, et la fonction serait réputée cassée alors qu'elle marche. Il reprend alors
             // sa place ordinaire dans la barre d'actions.
-            frm.add_custom_button(__("📅 Prendre RDV"), () => ouvrir_calendrier(frm.doc.name));
+            frm.add_custom_button(__("📅 RDV au calendrier"), () => ouvrir_calendrier(frm.doc.name));
             if (peut_poser_rdv()) {
-                frm.add_custom_button(__("📱 RDV avec l'app"), () => ouvrir_app(frm.doc.name));
+                frm.add_custom_button(__("📱 RDV par l'app"), () => ouvrir_app(frm.doc.name));
             }
             return;
         }
         $tabs.find("." + CLASSE_ITEM).remove(); // un seul, même après plusieurs rendus
         const $btn = $(
-            `<button type="button" class="so-rdv-btn">📅 ${__("Prendre RDV")}</button>`
+            `<button type="button" class="so-rdv-btn"
+                     title="${__("Choisir vous-même le créneau dans le calendrier d’équipe")}">📅 ${__("RDV au calendrier")}</button>`
         ).on("click", () => ouvrir_calendrier(frm.doc.name, $btn));
         // Le client est déjà connu : l'app s'ouvre directement sur SA fiche, sans code SMS,
         // et présélectionne cette commande dès qu'une installation ou une livraison est
@@ -175,7 +179,7 @@ frappe.provide("frappe.views");
             const $app = $(
                 `<button type="button" class="so-rdv-btn so-rdv-app"
                          title="${__("Ouvrir l'application de rendez-vous pour ce client, sans code SMS")}"
-                 >📱 ${__("RDV avec l'app")}</button>`
+                 >📱 ${__("RDV par l'app")}</button>`
             ).on("click", () => ouvrir_app(frm.doc.name, $app));
             $item.append($app);
         }
@@ -199,13 +203,13 @@ frappe.provide("frappe.views");
         if (this.doctype !== "Sales Order" || this._so_rdv_bouton) return;
         try {
             this._so_rdv_bouton = true;
-            this.page.add_inner_button(__("📅 Calendrier des tâches"), () =>
+            this.page.add_inner_button(__("📅 RDV au calendrier"), () =>
                 ouvrir_calendrier(null)
             );
             // Sans commande de départ : l'app s'ouvre sur une recherche de client (nom ou
             // téléphone), puis déroule le parcours normal.
             if (peut_poser_rdv()) {
-                this.page.add_inner_button(__("📱 RDV avec l'app"), () => ouvrir_app(null));
+                this.page.add_inner_button(__("📱 RDV par l'app"), () => ouvrir_app(null));
             }
         } catch (e) {
             this._so_rdv_bouton = false;

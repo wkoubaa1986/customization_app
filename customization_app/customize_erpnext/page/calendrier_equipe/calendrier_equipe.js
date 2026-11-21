@@ -32,6 +32,16 @@ const CE_ANCIEN = "/app/tache-de-travail/view/calendar/Calendrier%20de%20travail
 const ce_esc = (s) => frappe.utils.escape_html(s == null ? "" : String(s));
 const ce_fmt = (d) => moment(d).format("YYYY-MM-DD HH:mm:ss");
 const ce_etroit = () => window.innerWidth < 768;
+// MODE CRÉNEAU (22/11/2026 : « les boutons de prendre rdv doivent utiliser le nouveau calendrier aussi »). La prise de
+// rendez-vous (commande client, compte partenaire, liste d'appels) ouvre le calendrier dans un cadre plein écran pour
+// y CHOISIR un créneau ; la page du dessus ouvre ensuite son propre dialogue de rendez-vous. Avec l'ancien calendrier,
+// ces fenêtres bricolaient FullCalendar de l'extérieur. Ici la page le fait elle-même quand son cadre porte l'un de
+// ces noms : elle envoie le créneau choisi au-dessus (message « rdv_new_doc », le même qu'avant) et ne propose ni
+// boutons d'action ni fenêtre de tâche. « -appels » : la liste d'appels, qui attend toujours une heure de fin et a un
+// mode « modifier » (la tâche à déplacer, notée dans le localStorage par la liste).
+const CE_CADRES_CRENEAU = ["calendrier-equipe-creneau", "calendrier-equipe-creneau-appels"];
+const ce_mode_creneau = () => window.parent !== window && CE_CADRES_CRENEAU.includes(window.name);
+const ce_tache_a_deplacer = () => { try { return localStorage.getItem("rdv_edit_task") || ""; } catch (e) { return ""; } };
 // Fuseau : la base garde les heures dans le fuseau du SYSTÈME, Frappe les montre dans celui de l'UTILISATEUR (fiche,
 // ancien calendrier). On fait de même, pour que le calendrier et la fiche disent la même heure à un compte réglé sur
 // un autre fuseau (Administrator). Pour tous les comptes de l'entreprise les deux fuseaux sont égaux : rien ne bouge.
@@ -207,9 +217,13 @@ class CalendrierEquipe {
     this.cache = null;              // {cle, evenements} : la dernière période lue
     this.colonnes = [];             // toutes les colonnes possibles pour la période
     this.periode = null;
-    const memo = this.lire_memo();
+    this.creneau = ce_mode_creneau();
+    this.creneau_appels = this.creneau && window.name === "calendrier-equipe-creneau-appels";
+    const memo = this.creneau ? {} : this.lire_memo();      // le mode créneau ne lit ni n'écrit les préférences
     this.filtres = { employes: new Set(memo.employes || []), types: new Set(memo.types || []), annulees: memo.annulees !== false };
-    this.vue = CE_VUES.includes(memo.vue) ? memo.vue : (ce_etroit() ? "listWeek" : "resourceTimeGridDay");
+    this.vue = this.creneau ? "timeGridWeek"                // comme avant : la semaine, pour voir où il reste de la place
+      : CE_VUES.includes(memo.vue) ? memo.vue : (ce_etroit() ? "listWeek" : "resourceTimeGridDay");
+    if (this.creneau) document.body.classList.add("ce-mode-creneau");
     this.poser_css();
     this.$root = $(`<div class="ce-page"><div class="ce-actions"></div><div class="ce-filtres"></div>
       <div class="ce-cal"><div class="text-muted" style="padding:24px">Chargement du calendrier…</div></div></div>`)
@@ -224,6 +238,7 @@ class CalendrierEquipe {
   }
 
   sauver_memo() {
+    if (this.creneau) return;
     try {
       localStorage.setItem(CE_MEMO, JSON.stringify({ vue: this.vue, employes: [...this.filtres.employes],
         types: [...this.filtres.types], annulees: this.filtres.annulees }));
@@ -236,6 +251,13 @@ class CalendrierEquipe {
     s.id = "ce-style";
     s.textContent = `
       .ce-page { padding: 8px 4px 0; }
+      /* mode créneau : le calendrier seul, sans la barre du Desk ni le titre de la page */
+      body.ce-mode-creneau .navbar, body.ce-mode-creneau .page-head, body.ce-mode-creneau .raven-chat { display: none !important; }
+      body.ce-mode-creneau { --navbar-height: 0px; padding-top: 0 !important; }
+      body.ce-mode-creneau .ce-cal { height: calc(100vh - 150px); }
+      .ce-consigne { background: #eff6ff; border: 1px solid #bfdbfe; color: #1e3a8a; border-radius: 8px; padding: 7px 12px; font-size: 13px; font-weight: 600; flex: 1; }
+      .ce-consigne.modifier { background: #fef2f2; border-color: #fecaca; color: #991b1b; }
+      .ce-cal .ec-event.ce-a-deplacer { background-color: #fecaca !important; outline: 3px solid #dc2626; outline-offset: -1px; z-index: 3; }
       .ce-actions, .ce-filtres { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 8px; }
       .ce-btn { border: none; border-radius: 6px; padding: 6px 12px; font-weight: 700; font-size: 13px; cursor: pointer;
                 color: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.2); white-space: nowrap; }
@@ -317,6 +339,14 @@ class CalendrierEquipe {
   // ── Boutons : les mêmes fenêtres que l'ancien calendrier ───────────────────
   poser_actions() {
     const d = this.ctx.droits, $a = this.$root.find(".ce-actions").empty();
+    if (this.creneau) {
+      const modifier = !!ce_tache_a_deplacer();
+      $(`<div class="ce-consigne${modifier ? " modifier" : ""}"></div>`).text(modifier
+        ? "✏️ La tâche encadrée en rouge est celle à déplacer : glissez-la, ou cliquez sur son nouveau créneau."
+        : "📅 Cliquez sur un créneau pour y placer le rendez-vous — ou glissez sur plusieurs créneaux pour fixer sa durée. La vue « Équipe » permet de choisir aussi l’employé.").appendTo($a);
+      $(`<button class="ce-btn clair" type="button" title="Relire les tâches">↻</button>`).on("click", () => this.recharger()).appendTo($a);
+      return;
+    }
     const bouton = (libelle, couleur, titre, clic) => $(`<button class="ce-btn" type="button"></button>`)
       .text(libelle).attr("title", titre).css("background", couleur).on("click", clic).appendTo($a);
     if (d.creer) bouton("➕ Nouvelle tâche", "#1d4ed8", "Créer une tâche de travail", () => this.fenetre_nouvelle({}));
@@ -404,6 +434,27 @@ class CalendrierEquipe {
       extendedProps: { nom: c.nom } }));
   }
 
+  /**
+   * La grille va de 07:00 à 20:00 ; une tâche plus tôt ou plus tard l'élargit, par HEURES ENTIÈRES. (L'option de la
+   * bibliothèque qui le fait seule calait la grille sur la minute de la tâche — une tâche à 02:05 donnait une
+   * échelle « 02:27, 03:27… » — d'où ce calcul à la main, le 22/11/2026.) Fonction sans effet si rien ne change.
+   */
+  caler_heures(evenements) {
+    let debut = 7, fin = 20;
+    (evenements || []).forEach((ev) => {
+      if (ev.allDay || ev.display === "background" || !ev.start) return;
+      const d = moment(ev.start), f = moment(ev.end || ev.start);
+      debut = Math.min(debut, d.hour());
+      fin = Math.max(fin, f.isSame(d, "day") ? f.hour() + (f.minute() ? 1 : 0) : 24);
+    });
+    const cle = debut + "-" + fin;
+    if (!this.ec || cle === this._heures) return;
+    this._heures = cle;
+    const hh = (n) => String(n).padStart(2, "0") + ":00:00";
+    this.ec.setOption("slotMinTime", hh(debut));
+    this.ec.setOption("slotMaxTime", hh(Math.min(24, fin)));
+  }
+
   /** L'événement passe-t-il les filtres ? Les jours fériés passent toujours. */
   visible(e) {
     const f = this.filtres;
@@ -449,7 +500,6 @@ class CalendrierEquipe {
       },
       slotMinTime: "07:00:00",
       slotMaxTime: "20:00:00",
-      flexibleSlotTimeLimits: true,          // une tâche à 6 h ou à 21 h élargit la grille d'elle-même
       scrollTime: "07:30:00",
       slotDuration: "00:30:00",
       slotHeight: 50,                        // une demi-heure laisse lire l'heure + secteur, puis le client sur deux lignes
@@ -462,8 +512,8 @@ class CalendrierEquipe {
       dayMaxEvents: true,
       pointer: true,
       lazyFetching: false,
-      editable: !!d.ecrire,
-      selectable: !!d.creer,
+      editable: this.creneau ? !!ce_tache_a_deplacer() : !!d.ecrire,      // mode créneau : on ne déplace que « la tâche à modifier »
+      selectable: this.creneau ? true : !!d.creer,
       longPressDelay: 500,
       noEventsContent: "Aucune tâche sur cette période",
       moreLinkContent: (info) => "+ " + info.num + " autres",
@@ -474,7 +524,15 @@ class CalendrierEquipe {
       eventMouseLeave: () => this.cacher_fiche(),
       eventDragStart: () => this.cacher_fiche(),
       eventResizeStart: () => this.cacher_fiche(),
-      eventClick: (info) => { this.cacher_fiche(); this.ouvrir(info.event); },
+      eventClick: (info) => {
+        this.cacher_fiche();
+        if (this.creneau) {
+          // mode « modifier » de la liste d'appels : cliquer la tâche garde ses heures actuelles
+          if (ce_tache_a_deplacer() && !info.event.allDay) this.envoyer_creneau(info.event.start, info.event.end || moment(info.event.start).add(1, "hour").toDate());
+          return;
+        }
+        this.ouvrir(info.event);
+      },
       eventDrop: (info) => this.deposer(info, false),
       eventResize: (info) => this.deposer(info, true),
       select: (info) => this.nouvelle(info),
@@ -487,7 +545,14 @@ class CalendrierEquipe {
         }
         // Dans la grille horaire, un simple clic sur un créneau vide crée la tâche, comme l'ancien calendrier :
         // une demi-heure à partir du quart d'heure cliqué (la durée du type d'intervention la remplace à la saisie).
-        if (!d.creer || String(info.view.type).startsWith("list")) return;
+        if (String(info.view.type).startsWith("list")) return;
+        if (this.creneau) {
+          // Un clic n'est pas une durée voulue : sans heure de fin, le dialogue de rendez-vous la calcule d'après le
+          // type d'intervention (la liste d'appels, elle, attend toujours une fin : une demi-heure).
+          if (!info.allDay) this.envoyer_creneau(info.date, this.creneau_appels ? moment(info.date).add(30, "minutes").toDate() : null, info.resource);
+          return;
+        }
+        if (!d.creer) return;
         const fin = info.allDay ? moment(info.date).add(1, "day") : moment(info.date).add(30, "minutes");
         this.nouvelle({ start: info.date, end: fin.toDate(), allDay: info.allDay, resource: info.resource, view: info.view });
       },
@@ -556,13 +621,16 @@ class CalendrierEquipe {
     const cle = ce_fmt(info.start) + "|" + ce_fmt(info.end);
     const rendre = () => {
       const ids = this.colonnes_affichees().map((c) => c.id);
+      const a_deplacer = this.creneau ? ce_tache_a_deplacer() : "";
       const out = [];
       this.cache.evenements.filter((e) => this.visible(e)).forEach((e) => {
-        const ev = ce_evenement(e, ids, this.ctx.droits.ecrire);
+        const ev = ce_evenement(e, ids, this.creneau ? !!a_deplacer : this.ctx.droits.ecrire);
+        if (a_deplacer && e.name === a_deplacer) ev.classNames = (ev.classNames || []).concat("ce-a-deplacer");
         out.push(ev);
         // jour férié : la vue Mois ne montre un fond que s'il est « toute la journée » — on donne les deux
         if (e.genre === "fond") out.push(Object.assign({}, ev, { id: ev.id + "|jour", allDay: true }));
       });
+      this.caler_heures(out);
       return out;
     };
     if (this.cache && this.cache.cle === cle) return Promise.resolve(rendre());
@@ -645,8 +713,30 @@ class CalendrierEquipe {
     if (frappe.model.can_read(p.doctype)) this.fenetre_tache(p.name);
   }
 
+  /**
+   * Mode créneau : le créneau choisi part à la page du dessus, qui ouvre son dialogue de rendez-vous. Le message est
+   * celui des anciennes fenêtres — `rdv_new_doc`, avec le préremplissage laissé dans le localStorage (liste
+   * d'appels) et les heures dans le fuseau du système. En vue Équipe, l'employé de la colonne l'accompagne.
+   */
+  envoyer_creneau(debut, fin, colonne) {
+    let depose = {};
+    try { depose = JSON.parse(localStorage.getItem("rdv_prefill") || "{}") || {}; } catch (e) { depose = {}; }
+    const creneau = { starts_on: ce_vers_systeme(debut) };
+    if (fin) creneau.ends_on = ce_vers_systeme(fin);
+    if (colonne && colonne.id && colonne.id !== this.ctx.sans_employe) creneau.custom_choix_du_staff = colonne.id;
+    window.parent.postMessage({ type: "rdv_new_doc", doc: Object.assign({}, depose, creneau) }, window.location.origin);
+  }
+
   /** Un créneau cliqué ou sélectionné : nouvelle tâche à ces heures — et pour cet employé en vue Équipe. */
   nouvelle(info) {
+    if (this.creneau) {
+      this.ec.unselect();
+      if (info.allDay || info.view.type === "dayGridMonth") return;
+      // une sélection de plus d'une demi-heure est une durée voulue ; en dessous, c'est un clic qui a glissé
+      const voulue = info.end - info.start > 30 * 60000;
+      this.envoyer_creneau(info.start, voulue || this.creneau_appels ? info.end : null, info.resource);
+      return;
+    }
     const unJour = info.end - info.start <= 864e5;
     if (info.view.type === "dayGridMonth" && unJour) { this.ec.unselect(); return; }
     const valeurs = info.allDay ? { starts_on: ce_fmt(info.start), ends_on: ce_fmt(moment(info.end).subtract(1, "second")) }
@@ -741,6 +831,13 @@ class CalendrierEquipe {
   /** Une tâche glissée (ou étirée) : le serveur décide, on revient en arrière s'il refuse. */
   deposer(info, etiree) {
     const ev = info.event, p = ev.extendedProps || {}, annuler = () => info.revert();
+    if (this.creneau) {
+      // mode « modifier » : la tâche glissée donne le nouveau créneau, rien n'est enregistré ici
+      const debut = ev.start, fin = ev.end || moment(ev.start).add(1, "hour").toDate();
+      annuler();
+      if (!etiree && ce_tache_a_deplacer() && !ev.allDay) this.envoyer_creneau(debut, fin, info.newResource);
+      return;
+    }
     const dire = (message) => frappe.show_alert({ message, indicator: "orange" }, 6);
     if (p.genre === "reunion") {
       if (etiree || info.newResource) { dire("Une réunion change de jour ou d’heure ici ; ses participants et sa durée se règlent dans sa page."); return annuler(); }
