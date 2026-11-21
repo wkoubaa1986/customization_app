@@ -71,23 +71,49 @@ function ce_epingle(p) {
   return null;
 }
 
-/** Le texte de l'info-bulle — les mêmes rubriques que l'ancien calendrier. Pure. */
-function ce_bulle(p) {
-  if (p.genre === "ferie") return "Jour férié : " + (p.subject || p.titre || "");
-  const parts = [], ep = ce_epingle(p);
+/**
+ * La fiche d'information d'un événement, montrée au survol (22/11/2026, « améliore la visibilité du tip ») : les
+ * mêmes rubriques que l'info-bulle de l'ancien calendrier, mais dans une carte lisible — bandeau de la couleur de la
+ * tâche avec l'heure, puis une ligne par rubrique, le libellé à gauche. Rend du HTML déjà échappé. Pure.
+ */
+function ce_fiche(p, debut, fin, journee) {
   const RAPPORT_VIDE = "Indiquez vos remarques sur l'intervention et le client:";
-  if (ep) parts.push("Optimisation des tournées : " + ep[1]);
-  if (p.titre) parts.push(p.titre);
-  if (p.custom_type_dintervention) parts.push("Type d’intervention :\n" + p.custom_type_dintervention);
-  if (p["custom_employé"]) parts.push("Employé(e) :\n" + p["custom_employé"]);
-  if (p.nom_client) parts.push("Client :\n" + p.nom_client);
-  if (p.tel) parts.push("Téléphones :\n" + p.tel);
-  if (p.info_secteur) parts.push("Secteur :\n" + (p.secteur || "") + "\n" + p.info_secteur);
-  if (p.details_adresse) parts.push("Adresse :\n" + p.details_adresse + (p.google_map ? "\n" + p.google_map : ""));
-  if (p.subject) parts.push("Sujet :\n" + p.subject);
-  if (p.raison_annulation) parts.push("Raison de l’annulation :\n" + p.raison_annulation);
-  if (p.rapport_visite && p.rapport_visite.trim() !== RAPPORT_VIDE) parts.push("Rapport de visite :\n" + p.rapport_visite);
-  return parts.join("\n\n");
+  const texte = (v) => ce_esc(v).replace(/\n/g, "<br>");
+  const annulee = p.statut === "Cancelled", terminee = p.statut === "Completed";
+  const plein = p.genre === "ferie" ? "#6b7280" : annulee ? "#9ca3af" : (p.couleur || "#FF6347");
+  const lignes = String(p.titre || "").split("\n").filter((l) => l.trim());
+  let quand = "";
+  if (debut) {
+    // le jour en français quelle que soit la langue du compte
+    const d = moment(debut), f = fin ? moment(fin) : null;
+    const jour = ["Dimanche", "Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi"][d.day()] + " " + d.format("DD/MM");
+    quand = journee ? jour + " · toute la journée" : jour + " · " + d.format("HH:mm") + (f ? " – " + f.format("HH:mm") : "");
+  }
+  const etat = p.genre === "ferie" ? "Jour férié" : annulee ? "Annulée" : terminee ? "Terminée" : p.genre === "reunion" ? "Réunion" : "";
+  const rubriques = [];
+  const rubrique = (icone, libelle, valeur, fort) => {
+    if (valeur == null || String(valeur).trim() === "") return;
+    rubriques.push(`<div class="ce-f-l"><span class="ce-f-n">${icone} ${ce_esc(libelle)}</span><span class="ce-f-v${fort ? " fort" : ""}">${texte(valeur)}</span></div>`);
+  };
+  if (p.genre !== "ferie") {
+    rubrique("👤", "Client", p.nom_client, true);
+    rubrique("📞", "Téléphone", p.tel, true);
+    rubrique("🛠️", "Type", p.custom_type_dintervention);
+    rubrique("👷", p.genre === "reunion" ? "Participants" : "Employé", p["custom_employé"]);
+    rubrique("📍", "Adresse", p.details_adresse);
+    rubrique("🧭", "Secteur", [p.secteur, p.info_secteur].filter(Boolean).join(" — "));
+    rubrique("📝", "Sujet", p.subject);
+    rubrique("⛔", "Annulation", p.raison_annulation);
+    if (p.rapport_visite && p.rapport_visite.trim() !== RAPPORT_VIDE) rubrique("📋", "Rapport", p.rapport_visite);
+    const ep = p.genre === "tache" ? ce_epingle(p) : null;
+    if (ep) rubrique(ep[0], "Tournée", ep[1]);
+    if (cint(p.reservation_app) === 1) rubrique("📱", "Origine", "Rendez-vous pris par le client dans l’app");
+  }
+  return `<div class="ce-f-tete" style="background:${ce_esc(plein)};color:${ce_texte(plein)}">
+      <div class="ce-f-quand">${ce_esc(quand)}${etat ? `<span class="ce-f-etat">${ce_esc(etat)}</span>` : ""}</div>
+      <div class="ce-f-titre">${ce_esc(lignes[0] || "")}</div>
+      ${lignes.length > 1 ? `<div class="ce-f-sous">${lignes.slice(1).map(ce_esc).join("<br>")}</div>` : ""}
+    </div>${rubriques.length ? `<div class="ce-f-corps">${rubriques.join("")}</div>` : ""}`;
 }
 
 /**
@@ -112,8 +138,10 @@ function ce_evenement(e, colonnes, ecrire) {
   const fond = annulee ? "#f3f4f6" : ce_pastel(plein, terminee ? 0.30 : 0.24);
   const styles = [`--ce-plein:${plein}`, `border:1px solid ${ce_rgba(plein, 0.45)}`, `border-left:5px solid ${plein}`];
   if (cint(e.reservation_app) === 1) {
-    // rendez-vous pris par le client dans l'app : hachures fines, comme avant
-    styles.push("background-image:repeating-linear-gradient(45deg, rgba(0,0,0,.09) 0, rgba(0,0,0,.09) 2px, transparent 2px, transparent 7px)");
+    // Rendez-vous pris par le client dans l'app : les hachures de l'ancien calendrier, mais en BANDE à droite —
+    // posées sur toute la tâche, elles passaient sous le texte des entretiens et le brouillaient (22/11/2026).
+    styles.push("background-image:repeating-linear-gradient(45deg, rgba(0,0,0,.28) 0, rgba(0,0,0,.28) 2px, transparent 2px, transparent 6px)",
+      "background-size:9px 100%", "background-position:right top", "background-repeat:no-repeat", "padding-right:11px");
   }
   const classes = ["ce-e"];
   if (annulee) classes.push("ce-annulee");
@@ -184,18 +212,33 @@ class CalendrierEquipe {
       .ce-cal .ec-toolbar { flex-wrap: wrap; gap: 6px; }
       .ce-cal .ec-event { border-radius: 6px; cursor: pointer; box-shadow: 0 1px 2px rgba(15,23,42,.10); }
       .ce-cal .ec-event:hover { box-shadow: 0 2px 6px rgba(15,23,42,.22); filter: brightness(.97); }
-      .ce-ev { font-size: 10.5px; line-height: 1.25; overflow: hidden; }
+      .ce-ev { font-size: 10.5px; line-height: 1.2; overflow: hidden; overflow-wrap: anywhere; }
       .ce-cal .ec-title { font-size: 20px; }
-      .ce-ev-h { font-weight: 700; font-size: 10px; opacity: .8; }
+      .ce-ev-h { font-weight: 600; opacity: .8; white-space: nowrap; }
       .ce-ev-1 { font-weight: 700; }
       .ce-ev-mois { white-space: nowrap; text-overflow: ellipsis; font-weight: 500; }
-      .ce-ev-2 { font-weight: 500; }
+      .ce-ev-2 { font-weight: 600; }
       .ce-annulee .ce-ev-1, .ce-annulee .ce-ev-2 { text-decoration: line-through; }
       .ce-annulee { opacity: .85; }
       /* vue Liste : pas de cadre par ligne, la pastille porte la couleur pleine */
       .ce-cal .ec-list .ec-event { border: none !important; border-bottom: 1px solid var(--border-color, #e5e7eb) !important;
                                    border-radius: 0; box-shadow: none; background-image: none !important; }
       .ce-cal .ec-list .ec-event-tag { background-color: var(--ce-plein, #9ca3af) !important; }
+      /* la fiche d'information au survol */
+      .ce-fiche { position: fixed; z-index: 1040; display: none; width: 340px; max-width: calc(100vw - 16px); pointer-events: none;
+                  background: var(--card-bg, #fff); color: var(--text-color, #1f2937); border-radius: 10px; overflow: hidden;
+                  border: 1px solid var(--border-color, #d1d5db); box-shadow: 0 10px 30px rgba(15,23,42,.28); font-size: 13px; line-height: 1.4; }
+      .ce-f-tete { padding: 9px 12px 10px; }
+      .ce-f-quand { font-size: 12px; font-weight: 600; opacity: .9; display: flex; justify-content: space-between; gap: 8px; }
+      .ce-f-etat { background: rgba(255,255,255,.85); color: #111827; border-radius: 999px; padding: 0 8px; font-size: 11px; font-weight: 700; }
+      .ce-f-titre { font-size: 15px; font-weight: 800; margin-top: 2px; }
+      .ce-f-sous { font-size: 12.5px; font-weight: 500; margin-top: 1px; }
+      .ce-f-corps { padding: 6px 12px 10px; max-height: 60vh; overflow: hidden; }
+      .ce-f-l { display: flex; gap: 10px; padding: 4px 0; border-bottom: 1px solid var(--border-color, #eef0f3); }
+      .ce-f-l:last-child { border-bottom: none; }
+      .ce-f-n { flex: 0 0 104px; color: var(--text-muted, #6b7280); font-size: 12px; white-space: nowrap; }
+      .ce-f-v { flex: 1; min-width: 0; word-break: break-word; }
+      .ce-f-v.fort { font-weight: 700; font-size: 14px; }
       .ce-legende { display: inline-flex; flex-wrap: wrap; gap: 10px; align-items: center; font-size: 11px;
                     color: var(--text-muted, #6b7280); margin-left: auto; }
       .ce-legende span { display: inline-flex; align-items: center; gap: 4px; }
@@ -279,7 +322,7 @@ class CalendrierEquipe {
     $f.append(`<span class="ce-legende">
       <span><i style="background:${ce_pastel("#32CD32", 0.30)};border-left:4px solid #32CD32"></i>Terminée</span>
       <span><i style="background:#f3f4f6;border-left:4px solid #9ca3af"></i>Annulée</span>
-      <span><i style="background:#e5e7eb;background-image:repeating-linear-gradient(45deg, rgba(0,0,0,.25) 0, rgba(0,0,0,.25) 2px, transparent 2px, transparent 5px)"></i>Prise par le client dans l’app</span>
+      <span><i style="background:#e5e7eb;background-image:repeating-linear-gradient(45deg, rgba(0,0,0,.3) 0, rgba(0,0,0,.3) 2px, transparent 2px, transparent 5px);background-size:6px 100%;background-position:right;background-repeat:no-repeat"></i>Bande hachurée : prise par le client dans l’app</span>
       <span>📌 🕘 👤 fixe pour l’optimisation</span></span>`);
   }
 
@@ -344,7 +387,7 @@ class CalendrierEquipe {
       flexibleSlotTimeLimits: true,          // une tâche à 6 h ou à 21 h élargit la grille d'elle-même
       scrollTime: "07:30:00",
       slotDuration: "00:30:00",
-      slotHeight: 42,                        // une intervention d'une demi-heure laisse lire l'heure et deux lignes
+      slotHeight: 50,                        // une demi-heure laisse lire l'heure + secteur, puis le client sur deux lignes
       snapDuration: "00:15:00",              // on glisse, on étire et on sélectionne par quart d'heure
       slotEventOverlap: false,               // deux tâches à la même heure : côte à côte, pas l'une sur l'autre
       allDayContent: "Journée",
@@ -362,8 +405,11 @@ class CalendrierEquipe {
       resources: this.ressources(),
       eventSources: [{ events: (info) => this.lire(info) }],
       eventContent: (info) => this.contenu(info),
-      eventDidMount: (info) => { info.el.title = ce_bulle(info.event.extendedProps || {}); },
-      eventClick: (info) => this.ouvrir(info.event),
+      eventMouseEnter: (info) => this.montrer_fiche(info),
+      eventMouseLeave: () => this.cacher_fiche(),
+      eventDragStart: () => this.cacher_fiche(),
+      eventResizeStart: () => this.cacher_fiche(),
+      eventClick: (info) => { this.cacher_fiche(); this.ouvrir(info.event); },
       eventDrop: (info) => this.deposer(info, false),
       eventResize: (info) => this.deposer(info, true),
       select: (info) => this.nouvelle(info),
@@ -381,6 +427,7 @@ class CalendrierEquipe {
         this.nouvelle({ start: info.date, end: fin.toDate(), allDay: info.allDay, resource: info.resource, view: info.view });
       },
       datesSet: (info) => {
+        this.cacher_fiche();
         this.vue = info.view.type;
         const fin = moment(info.view.currentEnd).subtract(1, "day");
         this.periode = { from: moment(info.view.currentStart).format("YYYY-MM-DD"), to: fin.format("YYYY-MM-DD") };
@@ -402,6 +449,32 @@ class CalendrierEquipe {
 
   actif() {
     return (frappe.get_route() || [])[0] === "calendrier-equipe";
+  }
+
+  /** La fiche d'information au survol, posée à côté de la tâche (à droite, sinon à gauche), jamais hors de l'écran. */
+  montrer_fiche(info) {
+    const p = info.event.extendedProps || {};
+    if (p.genre === "fond" || !info.el) return;
+    clearTimeout(this._fiche_attente);
+    this._fiche_attente = setTimeout(() => {
+      if (!document.body.contains(info.el)) return;
+      let $f = $("#ce-fiche");
+      if (!$f.length) $f = $(`<div id="ce-fiche" class="ce-fiche"></div>`).appendTo(document.body);
+      // un jour férié, une réunion : heures de l'événement ; une journée entière : le jour seul
+      const fin = info.event.allDay ? null : info.event.end;
+      $f.html(ce_fiche(p, info.event.start, fin, info.event.allDay)).css({ left: 0, top: 0, display: "block" });
+      const r = info.el.getBoundingClientRect(), l = $f.outerWidth(), h = $f.outerHeight(), marge = 8;
+      let x = r.right + marge;
+      if (x + l > window.innerWidth - marge) x = r.left - l - marge;
+      if (x < marge) x = Math.max(marge, window.innerWidth - l - marge);
+      const y = Math.max(marge, Math.min(r.top, window.innerHeight - h - marge));
+      $f.css({ left: x + "px", top: y + "px" });
+    }, 180);
+  }
+
+  cacher_fiche() {
+    clearTimeout(this._fiche_attente);
+    $("#ce-fiche").hide();
   }
 
   revenir() {
@@ -440,19 +513,27 @@ class CalendrierEquipe {
     });
   }
 
+  /**
+   * Ce qui s'écrit sur la tuile : LE TITRE DE LA TÂCHE, tel que l'ancien calendrier (« Secteur 6 / 🔧 Entretien:
+   * Client: … / employé ») — demande du 22/11/2026 : « garde le nom de la tâche comme avant mais fais en sorte qu'il
+   * apparaisse ». Il était coupé sur une intervention d'une demi-heure : l'heure prenait une ligne à elle seule et
+   * la ligne du client débordait. Maintenant l'heure et la première ligne du titre partagent une ligne, le reste
+   * passe à la ligne au lieu d'être rogné, et les créneaux sont un peu plus hauts (slotHeight).
+   */
   contenu(info) {
     const p = info.event.extendedProps || {};
     if (p.genre === "fond") return { html: "" };
     const ep = p.genre === "tache" ? ce_epingle(p) : null;
-    const lignes = String(p.titre || "").split("\n").map(ce_esc);
-    const heure = !info.event.allDay && info.timeText ? `<div class="ce-ev-h">${ce_esc(info.timeText)}</div>` : "";
+    const epingle = ep ? `<span title="${ce_esc(ep[1])}">${ep[0]} </span>` : "";
+    const lignes = String(p.titre || "").split("\n").map((l) => l.trim()).filter(Boolean).map(ce_esc);
     if (info.view.type === "dayGridMonth") {
       // vue Mois : une seule ligne par tâche, pour en voir plusieurs dans la case du jour
       const debut = info.event.allDay ? "" : `<b>${ce_esc(moment(info.event.start).format("HH:mm"))}</b> `;
-      return { html: `<div class="ce-ev ce-ev-mois">${debut}${ep ? ep[0] + " " : ""}${lignes.join(" · ")}</div>` };
+      return { html: `<div class="ce-ev ce-ev-mois">${debut}${epingle}${lignes.join(" · ")}</div>` };
     }
-    return { html: `<div class="ce-ev">${heure}<div class="ce-ev-1">${ep ? `<span title="${ce_esc(ep[1])}">${ep[0]} </span>` : ""}${
-      lignes[0] || ""}</div>${lignes.length > 1 ? `<div class="ce-ev-2">${lignes.slice(1).join("<br>")}</div>` : ""}</div>` };
+    const heure = !info.event.allDay && info.timeText ? `<span class="ce-ev-h">${ce_esc(info.timeText)}</span> · ` : "";
+    return { html: `<div class="ce-ev"><div class="ce-ev-1">${heure}${epingle}${lignes[0] || ""}</div>${
+      lignes.length > 1 ? `<div class="ce-ev-2">${lignes.slice(1).join("<br>")}</div>` : ""}</div>` };
   }
 
   ouvrir(ev) {
