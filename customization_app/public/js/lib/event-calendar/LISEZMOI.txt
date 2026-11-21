@@ -1,0 +1,8 @@
+EventCalendar v5.18.1 — https://github.com/vkurko/calendar
+Paquet npm : @event-calendar/build@5.18.1 (dist/event-calendar.min.js et dist/event-calendar.min.css).
+Licence MIT, (c) Vladimir Kurko.
+
+Copié tel quel le 21/11/2026 pour la page /app/calendrier-equipe ; seule la dernière ligne
+« //# sourceMappingURL=... » a été retirée (la carte des sources n'est pas livrée).
+Pour changer de version : remplacer les deux fichiers par ceux de la nouvelle version, relire le
+journal des changements (les options de la page sont dans customize_erpnext/page/calendrier_equipe).
