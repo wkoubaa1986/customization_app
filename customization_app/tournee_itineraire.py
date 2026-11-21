@@ -191,7 +191,9 @@ def journee(jour, employes: list[str] | None = None) -> dict:
                         "aller_min": p["aller_min"], "aller_km": p["aller_km"], "source": source,
                         "retour": h["retour"], "fin": T._hm(p["fin_magasin"]), "sur_place_soir": p["sur_place_soir"],
                         "retour_trajet": h.get("retour_trajet"), "retour_source": h.get("retour_source"),
-                        "rentree_min": p["rentree_min"], "rentree_km": p["rentree_km"]}
+                        "rentree_min": p["rentree_min"], "rentree_km": p["rentree_km"],
+                        # la tournée seule, de Magasin à Magasin (« et la distance magasin to magasin ? »)
+                        "km": h.get("km") or 0, "trajets": h.get("trajets") or 0}
         h.update({"depart": T._hm(p["depart_domicile"]), "retour": T._hm(p["retour_domicile"]),
                   "trajets": (h.get("trajets") or 0) + p["aller_min"] + p["rentree_min"],
                   "km": round((h.get("km") or 0) + p["aller_km"] + p["rentree_km"], 1),

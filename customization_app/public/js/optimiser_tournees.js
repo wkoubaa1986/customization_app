@@ -486,7 +486,9 @@
     if (!h.depart) return "";
     // Il garde la voiture chez lui mais passe par le Magasin matin et soir (22/11/2026) : on le dit, avec les heures.
     const via = h.magasin ? ` · via le Magasin (${esc(h.magasin.arrivee)} et ${esc(h.magasin.retour)})` : "";
-    return `🕘 Départ ${esc(e.depart)} <b>${esc(h.depart)}</b> → retour <b>${esc(h.retour)}</b>${via} · route <b>${duree(h.trajets)}</b> · <b>${h.km} km</b>`
+    // … et la distance de la tournée seule, de Magasin à Magasin, à côté du total qui compte le domicile.
+    const tournee = h.magasin && h.magasin.km != null ? ` <span class="text-muted">dont Magasin → Magasin : <b>${h.magasin.km} km</b>, ${duree(h.magasin.trajets || 0)} de route</span>` : "";
+    return `🕘 Départ ${esc(e.depart)} <b>${esc(h.depart)}</b> → retour <b>${esc(h.retour)}</b>${via} · route <b>${duree(h.trajets)}</b> · <b>${h.km} km</b>${tournee}`
       + (h.retards ? ` · <b style="color:#b91c1c">⚠️ ${h.retards} arrivée(s) en retard</b>` : "")
       + (h.depasse ? ` <b style="color:#b91c1c">(après la fin de journée ${esc(h.fin_journee)})</b>` : "");
   };
