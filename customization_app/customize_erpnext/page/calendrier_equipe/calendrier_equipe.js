@@ -651,9 +651,26 @@ class CalendrierEquipe {
     return p;
   }
 
-  /** Une tâche existante : sa fiche complète. La fenêtre reste ouverte après un enregistrement — on la ferme soi-même. */
+  /**
+   * Une tâche existante : sa fiche complète. Dès qu'elle est enregistrée (sa date de modification a changé, plus rien
+   * en attente, aucun message ouvert dans la fiche), la fenêtre se referme seule (22/11/2026). Le Client Script
+   * « Calender View Tache de travail » renvoyait après chaque enregistrement à l'ANCIEN calendrier — dans le cadre,
+   * on se retrouvait avec l'ancien calendrier dans la fenêtre ; il reconnaît le nom du cadre et ne le fait plus ici.
+   * Si la fiche part ailleurs (un bouton qui ouvre la commande, par exemple), la fenêtre reste ouverte.
+   */
   fenetre_tache(nom) {
-    this.fenetre("🗂️ " + nom, "/app/tache-de-travail/" + encodeURIComponent(nom));
+    let depart = null, vue_enregistree = 0;
+    this.fenetre("🗂️ " + nom, "/app/tache-de-travail/" + encodeURIComponent(nom), (w, p) => {
+      const f = w && w.cur_frm;
+      if (!f || f.doctype !== "Tache de travail" || f.doc.name !== nom) { vue_enregistree = 0; return; }
+      if (depart === null) { if (!f.is_dirty()) depart = f.doc.modified; return; }
+      const enregistree = f.doc.modified !== depart && !f.is_dirty() && !w.document.querySelector(".modal.show");
+      vue_enregistree = enregistree ? vue_enregistree + 1 : 0;
+      if (vue_enregistree >= 2) {
+        p.hide();
+        frappe.show_alert({ message: "Tâche enregistrée : " + nom, indicator: "green" }, 5);
+      }
+    });
   }
 
   /**
