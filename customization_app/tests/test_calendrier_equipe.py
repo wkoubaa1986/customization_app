@@ -60,6 +60,11 @@ class TestVersCalendrier(unittest.TestCase):
         self.assertEqual(vers_calendrier(dict(self.TACHE, nom_client="", custom_client="CUST-1"))["client"], "CUST-1")
         self.assertNotIn("client", vers_calendrier(dict(self.TACHE, nom_client=" ", custom_client=None)))
 
+    def test_une_livraison_aramex_est_marquee(self):
+        titre = "Secteur 2\n📦 Aramex 55087934495 · Imed\n🚐 Livraison: Client: Imed\nHedi"
+        self.assertEqual(vers_calendrier(dict(self.TACHE, titre=titre))["aramex"], 1)
+        self.assertNotIn("aramex", vers_calendrier(self.TACHE))
+
     def test_une_tache_sans_employe_va_dans_non_affecte(self):
         ev = vers_calendrier(dict(self.TACHE, custom_choix_du_staff=None))
         self.assertEqual(ev["employes"], [SANS_EMPLOYE])

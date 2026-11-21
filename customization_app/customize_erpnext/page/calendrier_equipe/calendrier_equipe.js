@@ -93,8 +93,22 @@ function ce_epingle(p) {
  * il n'y a que lorsque les deux sont fixes ») : 🕘 et 👤 sont de petits pictogrammes sombres, illisibles posés à même
  * le fond coloré d'une tuile — seule l'épingle rouge se voyait. `coin` : posée en haut à droite de la tuile. Pure.
  */
-function ce_pastille(ep, coin) {
-  return ep ? `<span class="ce-fixe ${ep[2]}${coin ? " coin" : ""}" title="${ce_esc(ep[1])}">${ep[0]}</span>` : "";
+function ce_pastille(ep) {
+  return ep ? `<span class="ce-fixe ${ep[2]}" title="${ce_esc(ep[1])}">${ep[0]}</span>` : "";
+}
+
+/** Le signe d'une livraison confiée à Aramex (22/11/2026 : « ajoute un tampon aussi pour les livraisons Aramex »). */
+const CE_ARAMEX = ["📦", "Livraison Aramex : le colis part par transporteur", "a", "Livraison Aramex"];
+
+/** Les pastilles d'une tâche : optimisation des tournées (heure / employé fixes), puis Aramex. Pure. */
+function ce_pastilles(p) {
+  const out = [];
+  if (p.genre === "tache") {
+    const ep = ce_epingle(p);
+    if (ep) out.push(ep);
+    if (cint(p.aramex)) out.push(CE_ARAMEX);
+  }
+  return out;
 }
 
 /**
@@ -278,7 +292,8 @@ class CalendrierEquipe {
                  box-shadow: 0 1px 2px rgba(0,0,0,.28); text-decoration: none; }
       .ce-fixe.e { border-color: #7c3aed; }
       .ce-fixe.t { border-color: #dc2626; }
-      .ce-fixe.coin { position: absolute; top: 2px; right: 3px; z-index: 1; }
+      .ce-fixe.a { border-color: #c2410c; }
+      .ce-coin { position: absolute; top: 2px; right: 3px; z-index: 1; display: inline-flex; gap: 2px; }
       .ce-legende { display: inline-flex; flex-wrap: wrap; gap: 10px; align-items: center; font-size: 11px;
                     color: var(--text-muted, #6b7280); margin-left: auto; }
       .ce-legende span { display: inline-flex; align-items: center; gap: 4px; }
@@ -368,7 +383,8 @@ class CalendrierEquipe {
       <span title="L’optimisation des tournées peut changer l’employé, pas l’heure">${ce_pastille(ce_epingle({ heure_fixe: 1 }))} Heure fixe</span>
       <span title="L’optimisation des tournées peut changer l’heure, pas l’employé">${ce_pastille(ce_epingle({ employe_fixe: 1 }))} Employé fixe</span>
       <span title="L’optimisation des tournées ne touche pas à cette tâche">${ce_pastille(ce_epingle({ heure_fixe: 1, employe_fixe: 1 }))} Heure et employé fixes</span>
-      <span>— l’optimisation des tournées les respecte</span></span>`);
+      <span>— l’optimisation des tournées les respecte</span>
+      <span title="${ce_esc(CE_ARAMEX[1])}">${ce_pastille(CE_ARAMEX)} Livraison Aramex</span></span>`);
   }
 
   /** Les colonnes affichées : celles des employés cochés, sinon toutes. */
@@ -583,14 +599,14 @@ class CalendrierEquipe {
   contenu(info) {
     const p = info.event.extendedProps || {};
     if (p.genre === "fond") return { html: "" };
-    const ep = p.genre === "tache" ? ce_epingle(p) : null;
+    const signes = ce_pastilles(p).map((x) => ce_pastille(x)).join("");
     const lignes = ce_titre(p.titre).map(ce_esc);
     const mois = info.view.type === "dayGridMonth";
     // vues Mois et Liste : la pastille dans la ligne ; grilles horaires : dans le coin de la tuile, la 1re ligne lui laisse la place
     const enLigne = mois || String(info.view.type || "").startsWith("list");
-    const epingle = enLigne ? (ep ? ce_pastille(ep, false) + " " : "") : "";
-    const coin = enLigne ? "" : ce_pastille(ep, true);
-    const place = coin ? ' style="padding-right:19px"' : "";
+    const epingle = enLigne && signes ? signes + " " : "";
+    const coin = !enLigne && signes ? `<span class="ce-coin">${signes}</span>` : "";
+    const place = coin ? ` style="padding-right:${19 * ce_pastilles(p).length}px"` : "";
     const debut = info.event.allDay ? "" : moment(info.event.start).format("HH:mm");
     const heure = info.event.allDay ? "" : `<span class="ce-ev-h">${debut}–${moment(info.event.end).format("HH:mm")}</span> `;
     if (p.genre === "tache" && p.client) {

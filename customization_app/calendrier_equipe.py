@@ -100,6 +100,10 @@ def vers_calendrier(e: dict, participants: list | None = None) -> dict | None:
         client = (e.get("nom_client") or e.get("custom_client") or "").strip()
         if client:
             out["client"] = client
+        # Livraison confiée à Aramex : `api._annoter_aramex` a glissé la ligne « 📦 Aramex <bordereau> · client » dans le
+        # titre — la page en fait une pastille sur la tuile (22/11/2026).
+        if any(ligne.strip().startswith("📦 Aramex") for ligne in str(e.get("titre") or "").split("\n")):
+            out["aramex"] = 1
     elif genre == "reunion":
         out["employes"] = [p for p in (participants or []) if p]
     for champ in CHAMPS_BULLE:
