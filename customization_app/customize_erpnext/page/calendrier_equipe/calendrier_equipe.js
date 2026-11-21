@@ -232,6 +232,7 @@ class CalendrierEquipe {
       .ce-cal .ec-title { font-size: 20px; }
       .ce-ev-h { font-weight: 600; opacity: .8; white-space: nowrap; }
       .ce-ev-1 { font-weight: 800; font-size: 11px; }
+      .ce-ev-s, .ce-ev-c { font-weight: 800; font-size: 11px; }
       .ce-ev-mois { white-space: nowrap; text-overflow: ellipsis; font-weight: 500; }
       .ce-ev-2 { font-weight: 500; }
       .ce-annulee .ce-ev-1, .ce-annulee .ce-ev-2 { text-decoration: line-through; }
@@ -539,13 +540,16 @@ class CalendrierEquipe {
    *   le même sans « Client: », heure compacte .......................................... 69–78 % / 35–38 %
    *   heure · type / secteur · client / employé (heure longue : la 1re ligne déborde) .... 40–44 % / 12–13 %
    *   la même avec l'heure compacte ..................................................... 73–83 % / 21–23 %
-   *   heure type: / CLIENT / secteur · employé  ← retenue ............................... 82–92 % / 61–63 %
+   *   heure type: / CLIENT / secteur · employé .......................................... 82–92 % / 61–63 %
+   * SA DÉCISION, le même jour, après avoir vu la dernière : « le secteur en gras après le temps est très important,
+   * sinon le reste est bien — temps, secteur, après intervention, nom du client ». D'où la disposition en place :
+   *   heure SECTEUR / type: CLIENT / employé   (la 2e du tableau, 69–78 % : il la préfère en connaissance de cause)
    * Ce qui fait la différence : « 09:30 – 10:00 » avec ses espaces ne laisse pas la place au type sur la même
    * ligne, et un client qui partage sa ligne avec le secteur ou le type passe à la ligne dès que son nom est long.
-   * D'où : l'heure compacte « 09:30–10:00 », et le client SEUL sur sa ligne, en gras. On lit « 🔧 Entretien: » puis
-   * le nom (« Entretien: nom du client », sans le mot « Client: »).
-   * Terminée = ✓, annulée = ✕ (la couleur et la fiche au survol le disent aussi). En vue Équipe la colonne nomme
-   * déjà l'employé : la 3e ligne ne porte que le secteur. Sans client (congé, réunion, vérification de stock, jour
+   * On garde donc l'heure compacte « 09:30–10:00 », suivie du secteur en gras ; puis « 🔧 Entretien: nom du client »
+   * (sans le mot « Client: »), le nom en gras, qui passe à la ligne s'il est long ; puis l'employé.
+   * Terminée = ✓, annulée = ✕ devant le secteur (la couleur et la fiche au survol le disent aussi). En vue Équipe la
+   * colonne nomme déjà l'employé : pas de 3e ligne. Sans client (congé, réunion, vérification de stock, jour
    * férié) : le titre de l'ancien calendrier, heure compacte sur sa première ligne.
    */
   contenu(info) {
@@ -565,12 +569,10 @@ class CalendrierEquipe {
         return { html: `<div class="ce-ev ce-ev-mois">${debut ? `<b>${debut}</b> ` : ""}${epingle}${etat}${genre}${genre ? ": " : ""}<b>${ce_esc(p.client)}</b></div>` };
       }
       const aramex = lignes.filter((l) => l.startsWith("📦"));
-      const bas = [];
-      if (p.secteur) bas.push(ce_esc(p.secteur));
-      if (info.view.type !== "resourceTimeGridDay" && p["custom_employé"]) bas.push(ce_esc(p["custom_employé"]));
-      return { html: `<div class="ce-ev"><div class="ce-ev-2">${heure}${epingle}${etat}${genre}${genre ? ":" : ""}</div>
-        <div class="ce-ev-1">${ce_esc(p.client)}</div>${aramex.length ? `<div class="ce-ev-2">${aramex.join("<br>")}</div>` : ""}
-        ${bas.length ? `<div class="ce-ev-2">${bas.join(" · ")}</div>` : ""}</div>` };
+      const employe = info.view.type !== "resourceTimeGridDay" && p["custom_employé"] ? ce_esc(p["custom_employé"]) : "";
+      return { html: `<div class="ce-ev"><div class="ce-ev-2">${heure}${epingle}<b class="ce-ev-s">${etat}${ce_esc(p.secteur || "")}</b></div>
+        <div class="ce-ev-2">${genre}${genre ? ": " : ""}<b class="ce-ev-c">${ce_esc(p.client)}</b></div>
+        ${aramex.length ? `<div class="ce-ev-2">${aramex.join("<br>")}</div>` : ""}${employe ? `<div class="ce-ev-2">${employe}</div>` : ""}</div>` };
     }
     if (mois) {
       // vue Mois : une seule ligne par tâche, pour en voir plusieurs dans la case du jour
