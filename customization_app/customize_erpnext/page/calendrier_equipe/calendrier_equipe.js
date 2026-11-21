@@ -41,6 +41,15 @@ function ce_rgba(hex, a) {
   return `rgba(${parseInt(h.slice(0, 2), 16)}, ${parseInt(h.slice(2, 4), 16)}, ${parseInt(h.slice(4, 6), 16)}, ${a})`;
 }
 
+/** La couleur mélangée au blanc : `part` de couleur (0 à 1), le reste de blanc -> #rrggbb opaque. Fonction pure. */
+function ce_pastel(hex, part) {
+  let h = String(hex || "").replace("#", "");
+  if (h.length === 3) h = h.split("").map((c) => c + c).join("");
+  if (!/^[0-9a-f]{6}$/i.test(h)) return hex || "#e5e7eb";
+  const c = (i) => Math.round(255 + (parseInt(h.slice(i, i + 2), 16) - 255) * part).toString(16).padStart(2, "0");
+  return "#" + c(0) + c(2) + c(4);
+}
+
 /** Texte sombre ou blanc selon la couleur réellement affichée (l'alpha est mélangé au blanc de la page). Pure. */
 function ce_texte(couleur) {
   let r = 255, g = 255, b = 255, a = 1;
@@ -93,16 +102,23 @@ function ce_evenement(e, colonnes, ecrire) {
   }
   if (e.genre === "ferie") {
     return Object.assign(out, { resourceIds: colonnes, backgroundColor: "#e5e7eb", textColor: "#374151",
-      styles: ["border:1px dashed #9ca3af", "font-weight:700", "cursor:default"] });
+      styles: ["--ce-plein:#9ca3af", "border:1px dashed #9ca3af", "font-weight:700", "cursor:default"], classNames: ["ce-e"] });
   }
-  const plein = e.couleur || "#FF6347";
-  const fond = ce_rgba(plein, ["Completed", "Cancelled"].includes(e.statut) ? 0.8 : 0.55);
-  const styles = [`border:3px solid ${plein}`, "font-weight:600"];
+  // Coloriage (21/11/2026, « améliore le coloriage ») : la couleur reste celle de l'ancien calendrier — l'employé,
+  // ou le statut pour une tâche terminée / annulée — mais posée autrement : un fond pastel OPAQUE (le texte se lit,
+  // deux tâches qui se touchent ne se mélangent plus) et une barre à gauche dans la couleur pleine.
+  const annulee = e.statut === "Cancelled", terminee = e.statut === "Completed";
+  const plein = annulee ? "#9ca3af" : (e.couleur || "#FF6347");
+  const fond = annulee ? "#f3f4f6" : ce_pastel(plein, terminee ? 0.30 : 0.24);
+  const styles = [`--ce-plein:${plein}`, `border:1px solid ${ce_rgba(plein, 0.45)}`, `border-left:5px solid ${plein}`];
   if (cint(e.reservation_app) === 1) {
-    styles.push("background-image:linear-gradient(45deg, rgba(128,128,128,.2) 25%, transparent 25%, transparent 50%, "
-      + "rgba(128,128,128,.2) 50%, rgba(128,128,128,.2) 75%, transparent 75%, transparent)", "background-size:6px 6px");
+    // rendez-vous pris par le client dans l'app : hachures fines, comme avant
+    styles.push("background-image:repeating-linear-gradient(45deg, rgba(0,0,0,.09) 0, rgba(0,0,0,.09) 2px, transparent 2px, transparent 7px)");
   }
-  Object.assign(out, { backgroundColor: fond, textColor: ce_texte(fond), styles });
+  const classes = ["ce-e"];
+  if (annulee) classes.push("ce-annulee");
+  if (terminee) classes.push("ce-terminee");
+  Object.assign(out, { backgroundColor: fond, textColor: annulee ? "#6b7280" : ce_texte(fond), styles, classNames: classes });
   if (e.genre === "reunion") {
     // une réunion prévue se glisse sur un autre jour ou une autre heure ; sa durée et ses participants, non
     out.startEditable = !!ecrire && e.statut !== "Completed";
@@ -166,10 +182,24 @@ class CalendrierEquipe {
       .ce-cal { height: calc(100vh - 250px); min-height: 460px; }
       .ce-cal .ec { height: 100%; font-size: 12px; }
       .ce-cal .ec-toolbar { flex-wrap: wrap; gap: 6px; }
-      .ce-cal .ec-event { border-radius: 5px; cursor: pointer; }
+      .ce-cal .ec-event { border-radius: 6px; cursor: pointer; box-shadow: 0 1px 2px rgba(15,23,42,.10); }
+      .ce-cal .ec-event:hover { box-shadow: 0 2px 6px rgba(15,23,42,.22); filter: brightness(.97); }
       .ce-ev { font-size: 10.5px; line-height: 1.25; overflow: hidden; }
       .ce-cal .ec-title { font-size: 20px; }
-      .ce-ev-h { font-weight: 700; opacity: .85; }
+      .ce-ev-h { font-weight: 700; font-size: 10px; opacity: .8; }
+      .ce-ev-1 { font-weight: 700; }
+      .ce-ev-mois { white-space: nowrap; text-overflow: ellipsis; font-weight: 500; }
+      .ce-ev-2 { font-weight: 500; }
+      .ce-annulee .ce-ev-1, .ce-annulee .ce-ev-2 { text-decoration: line-through; }
+      .ce-annulee { opacity: .85; }
+      /* vue Liste : pas de cadre par ligne, la pastille porte la couleur pleine */
+      .ce-cal .ec-list .ec-event { border: none !important; border-bottom: 1px solid var(--border-color, #e5e7eb) !important;
+                                   border-radius: 0; box-shadow: none; background-image: none !important; }
+      .ce-cal .ec-list .ec-event-tag { background-color: var(--ce-plein, #9ca3af) !important; }
+      .ce-legende { display: inline-flex; flex-wrap: wrap; gap: 10px; align-items: center; font-size: 11px;
+                    color: var(--text-muted, #6b7280); margin-left: auto; }
+      .ce-legende span { display: inline-flex; align-items: center; gap: 4px; }
+      .ce-legende i { width: 16px; height: 11px; border-radius: 3px; display: inline-block; border: 1px solid rgba(0,0,0,.18); }
       .ce-col { display: inline-flex; align-items: center; gap: 6px; font-weight: 700; }
       .ce-col i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
       .ce-col small { font-weight: 400; color: var(--text-muted, #6b7280); }
@@ -246,6 +276,11 @@ class CalendrierEquipe {
         f.employes.clear(); f.types.clear(); this.sauver_memo(); this.poser_filtres(); this.appliquer_filtres();
       }).appendTo($f);
     }
+    $f.append(`<span class="ce-legende">
+      <span><i style="background:${ce_pastel("#32CD32", 0.30)};border-left:4px solid #32CD32"></i>Terminée</span>
+      <span><i style="background:#f3f4f6;border-left:4px solid #9ca3af"></i>Annulée</span>
+      <span><i style="background:#e5e7eb;background-image:repeating-linear-gradient(45deg, rgba(0,0,0,.25) 0, rgba(0,0,0,.25) 2px, transparent 2px, transparent 5px)"></i>Prise par le client dans l’app</span>
+      <span>📌 🕘 👤 fixe pour l’optimisation</span></span>`);
   }
 
   /** Les colonnes affichées : celles des employés cochés, sinon toutes. */
@@ -310,6 +345,8 @@ class CalendrierEquipe {
       scrollTime: "07:30:00",
       slotDuration: "00:30:00",
       slotHeight: 42,                        // une intervention d'une demi-heure laisse lire l'heure et deux lignes
+      snapDuration: "00:15:00",              // on glisse, on étire et on sélectionne par quart d'heure
+      slotEventOverlap: false,               // deux tâches à la même heure : côte à côte, pas l'une sur l'autre
       allDayContent: "Journée",
       slotLabelFormat: { hour: "2-digit", minute: "2-digit", hour12: false },
       eventTimeFormat: { hour: "2-digit", minute: "2-digit", hour12: false },
@@ -321,6 +358,7 @@ class CalendrierEquipe {
       selectable: !!d.creer,
       longPressDelay: 500,
       noEventsContent: "Aucune tâche sur cette période",
+      moreLinkContent: (info) => "+ " + info.num + " autres",
       resources: this.ressources(),
       eventSources: [{ events: (info) => this.lire(info) }],
       eventContent: (info) => this.contenu(info),
@@ -331,9 +369,16 @@ class CalendrierEquipe {
       select: (info) => this.nouvelle(info),
       dateClick: (info) => {
         // en vue Mois, un clic sur un jour ouvre ce jour en vue Équipe
-        if (info.view.type !== "dayGridMonth") return;
-        this.ec.setOption("view", "resourceTimeGridDay");
-        this.ec.setOption("date", info.date);
+        if (info.view.type === "dayGridMonth") {
+          this.ec.setOption("view", "resourceTimeGridDay");
+          this.ec.setOption("date", info.date);
+          return;
+        }
+        // Dans la grille horaire, un simple clic sur un créneau vide crée la tâche, comme l'ancien calendrier :
+        // une demi-heure à partir du quart d'heure cliqué (la durée du type d'intervention la remplace à la saisie).
+        if (!d.creer || String(info.view.type).startsWith("list")) return;
+        const fin = info.allDay ? moment(info.date).add(1, "day") : moment(info.date).add(30, "minutes");
+        this.nouvelle({ start: info.date, end: fin.toDate(), allDay: info.allDay, resource: info.resource, view: info.view });
       },
       datesSet: (info) => {
         this.vue = info.view.type;
@@ -399,10 +444,15 @@ class CalendrierEquipe {
     const p = info.event.extendedProps || {};
     if (p.genre === "fond") return { html: "" };
     const ep = p.genre === "tache" ? ce_epingle(p) : null;
-    const lignes = String(p.titre || "").split("\n").map(ce_esc).join("<br>");
-    const liste = String(info.view.type || "").startsWith("list");
-    const heure = !info.event.allDay && !liste && info.timeText ? `<div class="ce-ev-h">${ce_esc(info.timeText)}</div>` : "";
-    return { html: `<div class="ce-ev">${heure}<div>${ep ? `<b title="${ce_esc(ep[1])}">${ep[0]} </b>` : ""}${lignes}</div></div>` };
+    const lignes = String(p.titre || "").split("\n").map(ce_esc);
+    const heure = !info.event.allDay && info.timeText ? `<div class="ce-ev-h">${ce_esc(info.timeText)}</div>` : "";
+    if (info.view.type === "dayGridMonth") {
+      // vue Mois : une seule ligne par tâche, pour en voir plusieurs dans la case du jour
+      const debut = info.event.allDay ? "" : `<b>${ce_esc(moment(info.event.start).format("HH:mm"))}</b> `;
+      return { html: `<div class="ce-ev ce-ev-mois">${debut}${ep ? ep[0] + " " : ""}${lignes.join(" · ")}</div>` };
+    }
+    return { html: `<div class="ce-ev">${heure}<div class="ce-ev-1">${ep ? `<span title="${ce_esc(ep[1])}">${ep[0]} </span>` : ""}${
+      lignes[0] || ""}</div>${lignes.length > 1 ? `<div class="ce-ev-2">${lignes.slice(1).join("<br>")}</div>` : ""}</div>` };
   }
 
   ouvrir(ev) {
