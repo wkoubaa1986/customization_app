@@ -484,11 +484,17 @@
   const resumeJournee = (e) => {
     const h = (e && e.horaires) || {};
     if (!h.depart) return "";
-    // Il garde la voiture chez lui mais passe par le Magasin matin et soir (22/11/2026) : on le dit, avec les heures.
-    const via = h.magasin ? ` · via le Magasin (${esc(h.magasin.arrivee)} et ${esc(h.magasin.retour)})` : "";
-    // … et la distance de la tournée seule, de Magasin à Magasin, à côté du total qui compte le domicile.
-    const tournee = h.magasin && h.magasin.km != null ? ` <span class="text-muted">dont Magasin → Magasin : <b>${h.magasin.km} km</b>, ${duree(h.magasin.trajets || 0)} de route</span>` : "";
-    return `🕘 Départ ${esc(e.depart)} <b>${esc(h.depart)}</b> → retour <b>${esc(h.retour)}</b>${via} · route <b>${duree(h.trajets)}</b> · <b>${h.km} km</b>${tournee}`
+    // Il garde la voiture chez lui mais passe par le Magasin matin et soir (22/11/2026). Ce qui compte pour l'entreprise
+    // — et pour choisir le véhicule — c'est la tournée de Magasin à Magasin : c'est elle qu'on annonce d'abord, en gras
+    // (« montre ça magasin to magasin ici, route et distance »). Le domicile vient ensuite, en plus petit, avec le total.
+    if (h.magasin && h.magasin.km != null) {
+      const m = h.magasin;
+      return `🏬 Magasin <b>${esc(m.depart)}</b> → <b>${esc(m.retour)}</b> · route <b>${duree(m.trajets || 0)}</b> · <b>${m.km} km</b>`
+        + (h.retards ? ` · <b style="color:#b91c1c">⚠️ ${h.retards} arrivée(s) en retard</b>` : "")
+        + (h.depasse ? ` <b style="color:#b91c1c">(après la fin de journée ${esc(h.fin_journee)})</b>` : "")
+        + ` <span class="text-muted">— 🏠 avec le domicile : départ ${esc(h.depart)}, retour ${esc(h.retour)}, ${duree(h.trajets)} et ${h.km} km au total</span>`;
+    }
+    return `🕘 Départ ${esc(e.depart)} <b>${esc(h.depart)}</b> → retour <b>${esc(h.retour)}</b> · route <b>${duree(h.trajets)}</b> · <b>${h.km} km</b>`
       + (h.retards ? ` · <b style="color:#b91c1c">⚠️ ${h.retards} arrivée(s) en retard</b>` : "")
       + (h.depasse ? ` <b style="color:#b91c1c">(après la fin de journée ${esc(h.fin_journee)})</b>` : "");
   };
