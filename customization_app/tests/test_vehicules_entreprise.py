@@ -19,7 +19,7 @@ class TestVehiculesEntreprise(unittest.TestCase):
     def test_le_patch_ne_coche_que_les_fiches_qui_existent(self):
         self.assertEqual(a_cocher(["232 TU 5957", "102 TU 6718"]), ["232 TU 5957"])
         self.assertEqual(a_cocher([]), [])
-        self.assertEqual(set(VEHICULES), {"3554 TU 261", "232 TU 5957"})
+        self.assertEqual(set(VEHICULES), {"3554 TU 261", "232 TU 5957", "261 TU 3647"})
 
 
 if __name__ == "__main__":

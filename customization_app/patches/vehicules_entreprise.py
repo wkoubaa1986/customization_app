@@ -1,8 +1,8 @@
-"""Véhicules de l'entreprise : une case sur la fiche Véhicule, cochée pour les deux voitures de la société.
+"""Véhicules de l'entreprise : une case sur la fiche Véhicule, cochée pour les trois voitures de la société.
 
 Demande du 22/11/2026 : dans « Générer les BL », la liste « Véhicule » proposait les 25 véhicules enregistrés (ceux
 des clients et des transporteurs compris) — « mes voitures d'entreprise sont la Cenntro et la Fiat Fiorino, est-ce que
-tu peux shortlister les voitures pour la sélection ? ». La case « Véhicule de l'entreprise » les fait passer en tête
+tu peux shortlister les voitures pour la sélection ? », puis « Changan New Star aussi ». La case « Véhicule de l'entreprise » les fait passer en tête
 de la liste ; les autres restent proposés dessous. Elle se coche ou se décoche ensuite à la main sur la fiche.
 
 Le champ est aussi dans fixtures/custom_field.json ; on le crée ici parce que les patchs passent AVANT les fixtures.
@@ -11,9 +11,10 @@ import frappe
 from frappe.custom.doctype.custom_field.custom_field import create_custom_field
 
 CHAMP = "custom_vehicule_entreprise"
-#: les deux voitures de la société, par leur immatriculation (le nom de la fiche Véhicule)
+#: les voitures de la société, par leur immatriculation (le nom de la fiche Véhicule)
 VEHICULES = ("3554 TU 261",      # Cenntro LS 100
-             "232 TU 5957")      # Fiat Fiorino
+             "232 TU 5957",      # Fiat Fiorino
+             "261 TU 3647")      # Changan New Star (ajoutée le même jour : « c'est aussi un véhicule entreprise »)
 
 DEFINITION = {
     "fieldname": CHAMP, "label": "Véhicule de l'entreprise", "fieldtype": "Check", "insert_after": "model", "default": "0",
