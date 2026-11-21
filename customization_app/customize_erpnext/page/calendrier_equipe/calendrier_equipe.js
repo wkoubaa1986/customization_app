@@ -225,6 +225,10 @@ class CalendrierEquipe {
       .ce-titre-filtre { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted, #6b7280); }
       .ce-cal { height: calc(100vh - 250px); min-height: 460px; }
       .ce-cal .ec { height: 100%; font-size: 12px; }
+      /* Vue Mois : la hauteur de la fenêtre ne suffit pas — sur un écran ordinaire les cases faisaient 75 à 100 px et
+         toutes les tâches se repliaient derrière « + N autres » (22/11/2026). Le mois prend la place qu'il lui faut
+         (au moins 165 px par semaine, 5 à 6 tâches visibles par jour) et c'est la page qui défile. */
+      .ce-cal.ce-mois { height: max(calc(100vh - 250px), 1040px); }
       .ce-cal .ec-toolbar { flex-wrap: wrap; gap: 6px; }
       .ce-cal .ec-event { border-radius: 6px; cursor: pointer; box-shadow: 0 1px 2px rgba(15,23,42,.10); }
       .ce-cal .ec-event:hover { box-shadow: 0 2px 6px rgba(15,23,42,.22); filter: brightness(.97); }
@@ -265,6 +269,7 @@ class CalendrierEquipe {
       .ce-col small { font-weight: 400; color: var(--text-muted, #6b7280); }
       @media (max-width: 767px) {
         .ce-cal { height: 78vh; }
+        .ce-cal.ce-mois { height: max(78vh, 900px); }
         .ce-cal .ec-title { font-size: 16px; }
         .ce-actions { gap: 5px; }
         .ce-btn { padding: 8px 10px; }
@@ -448,6 +453,7 @@ class CalendrierEquipe {
       datesSet: (info) => {
         this.cacher_fiche();
         this.vue = info.view.type;
+        this.$root.find(".ce-cal").toggleClass("ce-mois", this.vue === "dayGridMonth");
         const fin = moment(info.view.currentEnd).subtract(1, "day");
         this.periode = { from: moment(info.view.currentStart).format("YYYY-MM-DD"), to: fin.format("YYYY-MM-DD") };
         this.sauver_memo();
