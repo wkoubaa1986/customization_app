@@ -46,6 +46,16 @@ Le processus, tel que demandé le 01/10/2026 :
    `annuler_demontage` le rend à l'état que disent ses tâches de réparation. Un démontage en retard est rappelé
    comme une livraison en retard.
 
+8. MACHINE REPRISE CHEZ LE CLIENT (23/11/2026 : « il y avait un entretien que le technicien n'a pas pu faire, donc
+   il devait reprendre la machine — cet état doit être pris en compte par Réparation osmoseurs ») : depuis « Ma
+   journée », `reprendre_machine` crée le dossier tout de suite (photo prise chez le client = photo d'arrivée,
+   `tache_origine` = l'intervention non terminée) et ferme cette intervention avec la raison « Machine reprise à
+   l'atelier » — ni terminée, ni une annulation ordinaire : le calendrier et Ma journée l'affichent comme un état
+   à part, avec l'état du dossier. Le dossier reste « Réception en cours » : il est « en route vers le magasin »
+   tant que la photo avec post-it n'y est pas prise (la réception du magasin ne change pas : garantie, post-it,
+   contrôle des photos, technicien). Pas réceptionné le lendemain : il sort dans le rappel. Le retour d'une machine
+   reprise pendant un entretien se planifie comme un ENTRETIEN (celui qui n'a pas été fait), pas une livraison.
+
 Toute la décision est ici, côté serveur ; l'écran n'invente rien.
 """
 
@@ -106,6 +116,13 @@ def groupe_de(statut) -> str:
 CHAMPS_PHOTO = {"arrivee": "photo_arrivee", "post_it": "photo_post_it", "remise": "photo_remise"}
 TYPE_LIVRAISON = "Livraison"
 DUREE_LIVRAISON = 30
+# Machine reprise chez le client pendant une intervention (23/11/2026) : la raison posée sur l'intervention fermée.
+RAISON_REPRISE = "Machine reprise à l'atelier"
+TYPES_REPRISE = ("Entretien", "Réparation", "Visite")
+CHAMP_ORIGINE = "tache_origine"              # sur le dossier : l'intervention pendant laquelle la machine a été reprise
+TYPE_ENTRETIEN = "Entretien"
+ICONE_ENTRETIEN = "🔧"
+TEMPS_ENTRETIEN = {30: "30 min", 45: "45 min", 60: "1 heure", 75: "1 heure, 15 min", 90: "1 heure, 30 min"}
 SMS_PRET = ("Bonjour {nom}, votre appareil ({ref}) est repare et vous attend au magasin Aquaworld (Soukra).{garantie} "
             "Pour toute question : {tel}.")
 SMS_LIVRAISON = ("Bonjour {nom}, votre appareil ({ref}) est repare : nous vous le livrons le {date} ({employe}).{garantie} "
@@ -372,13 +389,16 @@ def regle_sortie(repare: bool, garantie, commande: bool, commande_garantie: bool
 
 def attente(m, aujourdhui) -> dict | None:
     """Depuis combien de jours ce dossier attend quelqu'un, et pour quoi. PURE. None : rien à signaler.
-    -> {"motif": "a_rendre" | "sans_technicien" | "livraison" | "demontage", "jours": n}.
+    -> {"motif": "a_rendre" | "sans_technicien" | "livraison" | "demontage" | "en_route", "jours": n}.
     « Toujours au magasin » (`toujours_la_le`) remet le compteur à zéro."""
     def jours(*dates):
         connues = [getdate(d) for d in dates if d]
         return (aujourdhui - max(connues)).days if connues else None
 
     statut = m.get("statut")
+    if est_en_route(m):
+        j = jours(m.get("date_reception"))
+        return None if j is None else {"motif": "en_route", "jours": j}
     if statut in REPAREE:
         j = jours(m.get("date_reparee"), m.get("toujours_la_le"))
         return None if j is None else {"motif": "a_rendre", "jours": j}
@@ -397,6 +417,8 @@ def attente(m, aujourdhui) -> dict | None:
 def a_verifier(m, aujourdhui, rappel_jours) -> bool:
     """Ce dossier attend depuis trop longtemps (une livraison, un démontage : dès le lendemain de sa date). PURE."""
     a = attente(m, aujourdhui)
+    if a and a["motif"] == "en_route":
+        return a["jours"] >= 1          # reprise chez le client, toujours pas réceptionnée au magasin le lendemain
     return bool(a) and (a["motif"] in ("livraison", "demontage") or a["jours"] >= rappel_jours)
 
 
@@ -414,7 +436,55 @@ def a_rappeler(machines, aujourdhui, rappel_jours, relance_jours) -> dict:
 
 
 CHAMPS_ATTENTE = ["name", "statut", "nom_client", "client", "date_reception", "date_cloture_reception", "date_reparee",
-                  "toujours_la_le", "date_livraison_prevue", "date_prevue", "rappel_depuis"]
+                  "toujours_la_le", "date_livraison_prevue", "date_prevue", "rappel_depuis", CHAMP_ORIGINE]
+
+
+def est_en_route(m) -> bool:
+    """Reprise chez le client, pas encore réceptionnée au magasin (pas de photo avec post-it). PURE."""
+    return m.get("statut") == S_RECEPTION and bool(m.get(CHAMP_ORIGINE))
+
+
+def etat_court(statut, en_route=False) -> str:
+    """L'état du dossier en quelques mots, pour la tuile du calendrier et la carte de Ma journée. PURE."""
+    if statut == S_RECEPTION:
+        return "en route vers le magasin" if en_route else "réception en cours"
+    return {S_RECEPTIONNEE: "au magasin, à affecter", S_PLANIFIEE: "réparation planifiée", S_REPAREE: "réparée, à rendre",
+            S_PRETE: "réparée, à rendre", S_LIVRAISON: "retour chez le client planifié", S_DEMONTAGE: "à démonter",
+            S_RENDUE: "rendue au client"}.get(statut, statut or "")
+
+
+def refus_reprise(t, sous_traitant=False) -> str | None:
+    """Pourquoi cette intervention ne peut pas donner lieu à une reprise de machine. PURE. None : elle le peut."""
+    if t.get("status") != "Open":
+        return "l'intervention n'est plus ouverte"
+    if t.get("custom_type_dintervention") not in TYPES_REPRISE:
+        return "une machine ne se reprend que pendant un entretien, une réparation ou une visite"
+    if not t.get("custom_client"):
+        return "l'intervention n'a pas de client"
+    if t.get(CHAMP_TACHE):
+        return "l'intervention est déjà celle d'un dossier de réparation (%s)" % t.get(CHAMP_TACHE)
+    if sous_traitant:
+        return "les sous-traitants ne déposent pas de machine au magasin"
+    return None
+
+
+def dossiers_en_attente() -> list:
+    """Les dossiers ouverts que le rappel regarde : ceux qui attendent quelqu'un, et les machines reprises chez un
+    client qui ne sont pas encore réceptionnées au magasin."""
+    rows = frappe.get_all(DOCTYPE, filters={"statut": ["in", list(EN_ATTENTE) + [S_RECEPTION]]},
+                          fields=CHAMPS_ATTENTE, order_by="creation")
+    return [m for m in rows if m.statut != S_RECEPTION or m.get(CHAMP_ORIGINE)]
+
+
+def reprises_des_taches(taches) -> dict:
+    """{intervention: {"dossier", "statut", "etat"}} pour les interventions pendant lesquelles une machine a été
+    reprise (calendrier d'équipe, Ma journée)."""
+    noms = [t for t in (taches or []) if t]
+    if not noms:
+        return {}
+    return {m[CHAMP_ORIGINE]: {"dossier": m.name, "statut": m.statut, "etat": etat_court(m.statut, est_en_route(m))}
+            for m in frappe.get_all(DOCTYPE, filters={CHAMP_ORIGINE: ["in", noms]}, fields=["name", "statut", CHAMP_ORIGINE],
+                                    order_by="creation")}
 
 
 @frappe.whitelist()
@@ -445,7 +515,7 @@ def get_data(statut=None, client=None, responsable=None, recherche=None, inclure
                                       "date_rendue", "commande_client", "modified", "mode_restitution", "sms_pret_le", "tache_livraison",
                                       "tache_demontage", "date_livraison_prevue", "rendu_a", "photo_remise", "remarque_restitution",
                                       "sans_reparation", "motif_sortie", "reglement_sortie", "rendue_par",
-                                      "toujours_la_le", "rappel_depuis",
+                                      "toujours_la_le", "rappel_depuis", CHAMP_ORIGINE,
                                       "commentaire_suivi", "commentaire_suivi_par", "commentaire_suivi_le"],
                               order_by="creation desc")
     cfg = config()
@@ -453,8 +523,12 @@ def get_data(statut=None, client=None, responsable=None, recherche=None, inclure
     regs = reglements([m.commande_client for m in machines])
     aujourdhui = getdate(nowdate())
     actifs = set(frappe.get_all("Employee", filters={"status": "Active"}, pluck="name"))
+    origines = _origines([m.get(CHAMP_ORIGINE) for m in machines])
     for m in machines:
         m["taches"] = taches.get(m.name, [])
+        # Reprise chez le client : de quelle intervention elle vient, et si elle est encore en route.
+        m["origine"] = origines.get(m.get(CHAMP_ORIGINE))
+        m["en_route"] = est_en_route(m)
         # Le technicien proposé d'office dans les dialogues : jamais quelqu'un qui a quitté.
         m["responsable_actif"] = m.responsable if m.responsable in actifs else None
         ref = getdate(m.date_reparee) if m.date_reparee else getdate(m.date_reception or m.modified)
@@ -467,8 +541,7 @@ def get_data(statut=None, client=None, responsable=None, recherche=None, inclure
     if cint(verifier):
         machines = [m for m in machines if m["a_verifier"]]
     compteurs = dict(frappe.get_all(DOCTYPE, fields=["statut", "count(name) as n"], group_by="statut", as_list=True))
-    ouverts = frappe.get_all(DOCTYPE, filters={"statut": ["in", list(EN_ATTENTE)]},
-                             fields=CHAMPS_ATTENTE)
+    ouverts = dossiers_en_attente()
     return {
         "machines": machines,
         "kpis": {s: cint(compteurs.get(s)) for s in STATUTS},
@@ -577,9 +650,11 @@ def enregistrer_photo(machine, champ, file_url):
 def etat_reception(machine):
     _lecture()
     m = frappe.db.get_value(DOCTYPE, machine, ["name", "client", "nom_client", "tel", "statut", "photo_arrivee",
-                                               "photo_post_it", "dispense_post_it", "note_reception"], as_dict=True)
+                                               "photo_post_it", "dispense_post_it", "note_reception",
+                                               "garantie", "commande_garantie", CHAMP_ORIGINE], as_dict=True)
     if not m:
         frappe.throw(_("Dossier introuvable."))
+    m["origine"] = _origines([m.get(CHAMP_ORIGINE)]).get(m.get(CHAMP_ORIGINE))
     m["peut_cloturer"] = bool(m.photo_arrivee) and bool(m.photo_post_it or m.dispense_post_it)
     m["post_it"] = texte_post_it(m)
     return m
@@ -659,6 +734,103 @@ def cloturer_reception(machine, code=None):
     affectation = planifier(machine, trace=0)
     return {"name": doc.name, "statut": frappe.db.get_value(DOCTYPE, machine, "statut"),
             "avertissement": avertissement, **affectation}
+
+
+# ── Machine reprise chez le client pendant une intervention ──────────────────
+
+def _origines(taches) -> dict:
+    """{intervention: {tache, type, date, employe}} — d'où vient une machine reprise chez le client."""
+    noms = [t for t in (taches or []) if t]
+    if not noms:
+        return {}
+    return {t.name: {"tache": t.name, "type": t.custom_type_dintervention or "", "date": str(t.starts_on or "")[:16],
+                     "employe": t.get("custom_employé") or ""}
+            for t in frappe.get_all(DOCTYPE_TACHE, filters={"name": ["in", noms]},
+                                    fields=["name", "custom_type_dintervention", "starts_on", "custom_employé"])}
+
+
+@frappe.whitelist()
+def reprendre_machine(tache, photo, probleme):
+    """Le technicien n'a pas pu finir chez le client et repart avec la machine (« Ma journée »). Le dossier de
+    réparation naît tout de suite, avec la photo prise chez le client ; l'intervention est fermée avec la raison
+    « Machine reprise à l'atelier ». La réception se termine au magasin (post-it, garantie), comme pour une machine
+    déposée par son client."""
+    from customization_app import planning_employe as P
+
+    t = P._ma_tache(tache)
+    refus = refus_reprise(t.as_dict(), sous_traitant=P._est_sous_traitant(t.custom_choix_du_staff))
+    if refus:
+        frappe.throw(_("Reprise impossible : {0}.").format(refus))
+    probleme = (probleme or "").strip()
+    if len(probleme) < 3:
+        frappe.throw(_("Dites en une phrase ce qui ne va pas sur la machine."))
+    if not (photo or "").startswith(("/files/", "/private/files/")):
+        frappe.throw(_("La photo de la machine est obligatoire."))
+    deja = frappe.db.get_value(DOCTYPE, {CHAMP_ORIGINE: t.name}, "name")
+    if deja:
+        frappe.throw(_("Le dossier {0} existe déjà pour cette intervention.").format(deja))
+    nom_emp = frappe.db.get_value("Employee", t.custom_choix_du_staff, "employee_name") or t.get("custom_employé") or ""
+    quand = frappe.format(getdate(t.starts_on), {"fieldtype": "Date"}) if t.starts_on else ""
+    doc = frappe.get_doc({
+        "doctype": DOCTYPE, "client": t.custom_client, "tel": t.tel, "statut": S_RECEPTION, "date_reception": now_datetime(),
+        "photo_arrivee": photo, CHAMP_ORIGINE: t.name,
+        "note_reception": _("Reprise chez le client par {0} — {1} du {2} non terminé ({3}) : {4}").format(
+            nom_emp or _("le technicien"), (t.custom_type_dintervention or "").lower(), quand, t.name, probleme)[:1000],
+    })
+    doc.flags.ignore_permissions = True          # le droit se lit sur l'intervention : c'est la sienne
+    doc.insert()
+    try:
+        # La photo a été téléversée sur l'intervention : une seconde fiche Fichier l'attache aussi au dossier,
+        # pour que le magasin la voie même si elle est privée.
+        frappe.get_doc({"doctype": "File", "file_url": photo, "attached_to_doctype": DOCTYPE, "attached_to_name": doc.name,
+                        "is_private": cint(photo.startswith("/private/")), "folder": "Home/Attachments"}).insert(ignore_permissions=True)
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "reparation_osmoseur.reprendre_machine : photo")
+    t.raison_annulation = RAISON_REPRISE
+    t.status = "Cancelled"
+    t.flags.ignore_permissions = True
+    t.save()
+    t.add_comment("Info", _("🔧 Machine reprise à l'atelier — dossier {0} ({1}) : {2}").format(
+        doc.name, frappe.utils.get_fullname(frappe.session.user), frappe.utils.escape_html(probleme)))
+    return {"machine": doc.name, "tache": t.name, "client": doc.nom_client or doc.client,
+            "message": _("Dossier {0} créé. Déposez la machine au magasin : la réception s'y termine (post-it).").format(doc.name)}
+
+
+@frappe.whitelist()
+def annuler_reprise(machine):
+    """Reprise déclarée par erreur : le dossier, encore en route (pas de photo avec post-it), est supprimé et
+    l'intervention d'origine redevient ouverte."""
+    _ecriture(machine)
+    doc = frappe.get_doc(DOCTYPE, machine)
+    if not est_en_route(doc.as_dict()):
+        frappe.throw(_("Le dossier {0} n'est plus une reprise en route ({1}).").format(machine, doc.statut))
+    if doc.photo_post_it:
+        frappe.throw(_("La machine est déjà au magasin (photo avec post-it) : clôturez la réception, ou « Sortie sans réparation »."))
+    origine = doc.get(CHAMP_ORIGINE)
+    if origine and frappe.db.exists(DOCTYPE_TACHE, origine):
+        t = frappe.get_doc(DOCTYPE_TACHE, origine)
+        if t.status == "Cancelled" and t.raison_annulation == RAISON_REPRISE:
+            t.status, t.raison_annulation = "Open", None
+            t.flags.ignore_permissions = True
+            t.save()
+            t.add_comment("Info", _("↩️ Reprise de la machine annulée par {0} : l'intervention est de nouveau ouverte.")
+                          .format(frappe.utils.get_fullname(frappe.session.user)))
+    frappe.delete_doc(DOCTYPE, machine, ignore_permissions=True, force=True)
+    return {"tache": origine}
+
+
+@frappe.whitelist()
+def decider_garantie(machine, garantie, commande_garantie=None):
+    """La garantie d'une machine reprise chez le client se décide au magasin, à la réception (le technicien ne la
+    décide pas sur place)."""
+    _ecriture(machine)
+    doc = frappe.get_doc(DOCTYPE, machine)
+    if doc.statut != S_RECEPTION:
+        frappe.throw(_("Ce dossier n'est plus en réception ({0}).").format(doc.statut))
+    _verifier_garantie(garantie, commande_garantie, doc.client)
+    doc.update({"garantie": garantie, "commande_garantie": commande_garantie or None})
+    doc.save()
+    return etat_reception(machine)
 
 
 # ── Contrôle IA des photos ───────────────────────────────────────────────────
@@ -1220,6 +1392,31 @@ def adresses_client(client):
     return out
 
 
+def duree_entretien(debut, fin) -> int:
+    """La durée de l'entretien à refaire, en minutes : celle de l'entretien d'origine, entre 30 et 90. PURE."""
+    try:
+        minutes = int((frappe.utils.get_datetime(fin) - frappe.utils.get_datetime(debut)).total_seconds() // 60) if debut and fin else 0
+    except Exception:
+        minutes = 0
+    return min((m for m in sorted(TEMPS_ENTRETIEN) if m >= minutes), default=90) if minutes > 0 else DUREE_LIVRAISON
+
+
+def entretien_a_refaire(tache_origine) -> dict | None:
+    """L'entretien pendant lequel la machine a été reprise : il n'a pas été fait, le retour de la machine le refait.
+    None si le dossier ne vient pas d'un entretien. -> {tache, date, minutes, commande}."""
+    if not tache_origine:
+        return None
+    t = frappe.db.get_value(DOCTYPE_TACHE, tache_origine, ["name", "custom_type_dintervention", "status", "raison_annulation",
+                                                          "starts_on", "ends_on", "commande_client"], as_dict=True)
+    if not t or t.custom_type_dintervention != TYPE_ENTRETIEN or t.status != "Cancelled" or t.raison_annulation != RAISON_REPRISE:
+        return None
+    commande = t.commande_client
+    if commande and frappe.db.get_value("Sales Order", commande, "docstatus") != 1:
+        commande = None
+    return {"tache": t.name, "date": frappe.format(getdate(t.starts_on), {"fieldtype": "Date"}) if t.starts_on else "",
+            "minutes": duree_entretien(t.starts_on, t.ends_on), "commande": commande}
+
+
 @frappe.whitelist()
 def planifier_livraison(machine, employee, date, heure="09:00", adresse=None, note=None, sms=0):
     """Une tâche Livraison au calendrier ramène la machine chez le client ; sa clôture rend le dossier.
@@ -1237,28 +1434,35 @@ def planifier_livraison(machine, employee, date, heure="09:00", adresse=None, no
     nom_emp = frappe.db.get_value("Employee", employee, "employee_name") or employee
     garantie = doc.garantie == "Sous garantie"
     sujet = "Retour de l'osmoseur réparé %s%s" % (doc.name, " — " + NOTE_GARANTIE if garantie else " — hors garantie : encaisser la réparation à la livraison")
+    # Machine reprise pendant un ENTRETIEN qui n'a pas été fait : le retour EST cet entretien (ses photos de
+    # clôture le prouvent), avec la commande de l'entretien d'origine si le retour n'en porte pas.
+    entretien = entretien_a_refaire(doc.get(CHAMP_ORIGINE))
+    if entretien:
+        sujet += "\n🔧 ENTRETIEN À FAIRE à la remise : celui du %s (%s) n'a pas été fait" % (entretien["date"], entretien["tache"])
     if note:
         sujet += "\n" + note.strip()[:300]
+    duree = entretien["minutes"] if entretien else DUREE_LIVRAISON
     tache = frappe.get_doc({
-        "doctype": DOCTYPE_TACHE, "custom_type_dintervention": TYPE_LIVRAISON,
+        "doctype": DOCTYPE_TACHE, "custom_type_dintervention": TYPE_ENTRETIEN if entretien else TYPE_LIVRAISON,
         "custom_choix_du_staff": employee, "custom_employé": nom_emp,
         "custom_client": doc.client, "nom_client": doc.nom_client, "tel": doc.tel,
         "starts_on": "%s %s:00" % (getdate(date), str(heure or "09:00")[:5]),
-        "titre": "%s\n🚚 Livraison: Client: %s\n%s" % ((a.custom_secteur if a and a.custom_secteur else ""), doc.nom_client or doc.client, nom_emp),
-        "subject": sujet, "temps": "30 min", "status": "Open", CHAMP_TACHE: doc.name,
+        "titre": "%s\n%s: Client: %s\n%s" % ((a.custom_secteur if a and a.custom_secteur else ""),
+                                               (ICONE_ENTRETIEN + " Entretien") if entretien else "🚚 Livraison", doc.nom_client or doc.client, nom_emp),
+        "subject": sujet, "temps": TEMPS_ENTRETIEN.get(duree, "30 min"), "status": "Open", CHAMP_TACHE: doc.name,
         "select_address": a.name if a else None, "details_adresse": (a.libelle if a else "")[:140],
         "secteur": a.custom_secteur if a else None, "google_map": (a.custom_lien_google_map if a else "") or "",
-        "commande_client": doc.get("commande_garantie") if garantie else None,
+        "commande_client": (doc.get("commande_garantie") if garantie else None) or (entretien or {}).get("commande"),
     })
     _inserer_tache_annexe(tache, machine)
-    fin = frappe.utils.add_to_date(frappe.utils.get_datetime(tache.starts_on), minutes=DUREE_LIVRAISON)
+    fin = frappe.utils.add_to_date(frappe.utils.get_datetime(tache.starts_on), minutes=duree)
     frappe.db.set_value(DOCTYPE_TACHE, tache.name, "ends_on", fin, update_modified=False)
     doc.reload()
     doc.statut, doc.mode_restitution = S_LIVRAISON, "Livraison"
     doc.tache_livraison, doc.date_livraison_prevue = tache.name, getdate(date)
     doc.save()
     out = {"statut": doc.statut, "tache": tache.name, "employe": nom_emp, "date": str(getdate(date)),
-           "adresse": a.libelle if a else None, "sms": None}
+           "adresse": a.libelle if a else None, "sms": None, "entretien": bool(entretien)}
     if cint(sms):
         out["sms"] = _envoyer_sms(doc, SMS_LIVRAISON.format(
             nom=doc.nom_client or doc.client, ref=doc.name, date=frappe.utils.formatdate(getdate(date), "dd/MM/yyyy"),
@@ -1273,9 +1477,10 @@ def situation_sortie(machine):
     leur règlement réel (c'est parmi elles qu'on désigne celle de la réparation), et ce qu'il faut pour fermer."""
     _lecture()
     m = frappe.db.get_value(DOCTYPE, machine, ["name", "client", "nom_client", "tel", "statut", "garantie", "commande_garantie",
-                                               "commande_client", "date_reception", "photo_remise"], as_dict=True)
+                                               "commande_client", "date_reception", "photo_remise", CHAMP_ORIGINE], as_dict=True)
     if not m:
         frappe.throw(_("Dossier introuvable."))
+    m["origine"] = _origines([m.get(CHAMP_ORIGINE)]).get(m.get(CHAMP_ORIGINE))      # un retour qui refait l'entretien
     commandes = []
     if frappe.has_permission("Sales Order", "read"):
         commandes = frappe.get_all("Sales Order", filters={"customer": m.client, "docstatus": 1,
@@ -1545,6 +1750,7 @@ def machines_du_client(client):
 # ── Rappel du matin ──────────────────────────────────────────────────────────
 
 LIBELLES_ATTENTE = {"a_rendre": "réparée, chez nous depuis {0} j", "sans_technicien": "reçue, sans technicien depuis {0} j",
+                    "en_route": "reprise chez le client il y a {0} j, pas encore réceptionnée au magasin",
                     "livraison": "livraison prévue il y a {0} j, pas clôturée",
                     "demontage": "démontage prévu il y a {0} j, pas clôturé"}
 
@@ -1566,8 +1772,7 @@ def machines_a_regarder(user=None, tout=False) -> list | None:
     role = role_suivi(user, cfg)
     if not role:
         return None
-    machines = frappe.get_all(DOCTYPE, filters={"statut": ["in", list(EN_ATTENTE)]},
-                              fields=CHAMPS_ATTENTE, order_by="creation")
+    machines = dossiers_en_attente()
     tri = a_rappeler(machines, getdate(nowdate()), cfg["rappel_jours"], cfg["relance_jours"])
     return tri["rappel"] if role == "suivi" or tout else tri["relance"]
 
@@ -1624,8 +1829,7 @@ def rappel_quotidien(envoyer=1):
     Sans destinataire réglé : rien. `envoyer=0` : seulement le tri (essai). En developer_mode rien ne part."""
     cfg = config()
     aujourdhui = getdate(nowdate())
-    machines = frappe.get_all(DOCTYPE, filters={"statut": ["in", list(EN_ATTENTE)]},
-                              fields=CHAMPS_ATTENTE, order_by="creation")
+    machines = dossiers_en_attente()
     tri = a_rappeler(machines, aujourdhui, cfg["rappel_jours"], cfg["relance_jours"])
     out = {"rappel": [m["name"] for m in tri["rappel"]], "relance": [m["name"] for m in tri["relance"]],
            "suivi": cfg["suivi"], "relance_a": cfg["relance"], "envoyes": []}

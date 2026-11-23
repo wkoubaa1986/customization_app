@@ -33,6 +33,7 @@ from frappe import _
 from frappe.utils import add_days, cint, getdate, nowdate
 
 from customization_app import historique_client as HC
+from customization_app.reparation_osmoseur import RAISON_REPRISE
 
 ROLES = ("Relances", "System Manager")
 CANAUX = (
@@ -145,9 +146,12 @@ def _lignes(du, au, base: str) -> list:
     """Les rendez-vous dont la date retenue (`base`) tombe entre `du` et `au` inclus."""
     colonne = BASES[base]      # liste blanche : jamais une valeur venue de l'écran dans la requête
     return [{"date": str(r.jour)[:10], "auteur": r.owner, "app": r.app, "sujet": r.subject, "type": r.type_i,
-             "annule": r.status == "Cancelled"}
+             # Une intervention fermée parce que le technicien est reparti avec la machine (23/11/2026) n'est pas un
+             # rendez-vous annulé : la machine suit son dossier dans Réparation osmoseurs.
+             "annule": r.status == "Cancelled" and r.raison != RAISON_REPRISE}
             for r in frappe.db.sql(
                 """SELECT t.{c} AS jour, t.owner, IFNULL(t.custom_reservation_app, 0) AS app, t.subject, t.status,
+                          t.raison_annulation AS raison,
                           t.custom_type_dintervention AS type_i
                    FROM `tabTache de travail` t
                    WHERE t.{c} >= %s AND t.{c} < %s AND IFNULL(t.custom_client, '') <> ''

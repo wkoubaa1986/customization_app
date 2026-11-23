@@ -21,7 +21,11 @@ frappe.pages["stock-entrepots"].on_page_load = function (wrapper) {
   wrapper.se = new StockEntrepots(wrapper);
 };
 frappe.pages["stock-entrepots"].on_page_show = function (wrapper) {
-  if (wrapper.se && wrapper.se.pret) wrapper.se.rafraichir();
+  if (!(wrapper.se && wrapper.se.pret)) return;
+  // Page déjà ouverte : un lien « ?verif=… » (Ma journée) mène quand même à la vérification.
+  const verif = frappe.route_options && frappe.route_options.verif;
+  if (verif) { frappe.route_options = null; wrapper.se.comptage = verif; wrapper.se.montrer("verif"); return; }
+  wrapper.se.rafraichir();
 };
 
 const SE_API = "customization_app.stock_entrepots.";
@@ -157,6 +161,9 @@ class StockEntrepots {
     this.majBadgeBL();
     const voulu = frappe.route_options && frappe.route_options.valider;
     if (voulu) { frappe.route_options = null; this.ouvrirValidation(voulu); }
+    // Ouverture directe sur une vérification (Ma journée : la tâche du calendrier ne se clôture pas à la main).
+    const verif = frappe.route_options && frappe.route_options.verif;
+    if (verif) { frappe.route_options = null; this.comptage = verif; this.montrer("verif"); }
   }
 
   // ── Guide d'utilisation (lisible sur téléphone, selon le rôle) ─────────────

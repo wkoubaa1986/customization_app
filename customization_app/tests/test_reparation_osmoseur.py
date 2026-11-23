@@ -886,6 +886,155 @@ class TestRattachement(unittest.TestCase):
             RO.rattacher_tache(self.nom, self.tache.name)
 
 
+class TestRepriseReglesPures(unittest.TestCase):
+    """Machine reprise chez le client pendant une intervention (23/11/2026) : les règles, sans base."""
+
+    def test_en_route_seulement_si_reprise_et_pas_receptionnee(self):
+        self.assertTrue(RO.est_en_route({"statut": RO.S_RECEPTION, "tache_origine": "T1"}))
+        self.assertFalse(RO.est_en_route({"statut": RO.S_RECEPTION, "tache_origine": None}))      # déposée par son client
+        self.assertFalse(RO.est_en_route({"statut": RO.S_PLANIFIEE, "tache_origine": "T1"}))       # déjà au magasin
+
+    def test_rappel_des_le_lendemain(self):
+        m = {"name": "OSM-1", "statut": RO.S_RECEPTION, "tache_origine": "T1", "date_reception": "2026-11-23 10:30:00"}
+        self.assertEqual(RO.attente(m, getdate("2026-11-23")), {"motif": "en_route", "jours": 0})
+        self.assertFalse(RO.a_verifier(m, getdate("2026-11-23"), 3))        # le jour même : elle est en route
+        self.assertTrue(RO.a_verifier(m, getdate("2026-11-24"), 3))         # le lendemain, sans attendre les 3 jours
+        # une réception ordinaire en cours n'est pas rappelée
+        self.assertIsNone(RO.attente({"statut": RO.S_RECEPTION, "date_reception": "2026-11-20 10:00:00"}, getdate("2026-11-24")))
+        tri = RO.a_rappeler([m], getdate("2026-11-25"), 3, 3)
+        self.assertEqual([x["attente"]["motif"] for x in tri["rappel"]], ["en_route"])
+        self.assertIn("pas encore réceptionnée", RO.composer_rappel(tri["rappel"], "http://x"))
+
+    def test_etat_court(self):
+        self.assertEqual(RO.etat_court(RO.S_RECEPTION, True), "en route vers le magasin")
+        self.assertEqual(RO.etat_court(RO.S_RECEPTION, False), "réception en cours")
+        self.assertEqual(RO.etat_court(RO.S_REPAREE), RO.etat_court(RO.S_PRETE))
+        for statut in RO.STATUTS:
+            self.assertTrue(RO.etat_court(statut))                           # chaque statut a ses mots
+
+    def test_refus_reprise(self):
+        t = {"status": "Open", "custom_type_dintervention": "Entretien", "custom_client": "C1"}
+        self.assertIsNone(RO.refus_reprise(t))
+        self.assertIsNone(RO.refus_reprise(dict(t, custom_type_dintervention="Visite")))
+        self.assertTrue(RO.refus_reprise(dict(t, status="Completed")))
+        self.assertTrue(RO.refus_reprise(dict(t, custom_type_dintervention="Livraison")))
+        self.assertTrue(RO.refus_reprise(dict(t, custom_client=None)))
+        self.assertTrue(RO.refus_reprise(dict(t, machine_reparation="OSM-2026-0001")))    # déjà la tâche d'un dossier
+        self.assertTrue(RO.refus_reprise(t, sous_traitant=True))
+
+    def test_duree_de_l_entretien_a_refaire(self):
+        self.assertEqual(RO.duree_entretien("2026-11-23 10:00:00", "2026-11-23 10:30:00"), 30)
+        self.assertEqual(RO.duree_entretien("2026-11-23 10:00:00", "2026-11-23 10:40:00"), 45)    # arrondi au cran du dessus
+        self.assertEqual(RO.duree_entretien("2026-11-23 10:00:00", "2026-11-23 13:00:00"), 90)    # jamais plus de 1 h 30
+        self.assertEqual(RO.duree_entretien("2026-11-23 10:00:00", None), RO.DUREE_LIVRAISON)
+        self.assertIn(RO.RAISON_REPRISE, "Machine reprise à l'atelier")
+
+
+class TestReprise(unittest.TestCase):
+    """Reprise chez le client → dossier en route → réception au magasin → retour qui refait l'entretien. Savepoint."""
+
+    def setUp(self):
+        import frappe
+        from customization_app import planning_employe as P
+        if not getattr(frappe.local, "db", None):
+            self.skipTest("sans site : ce circuit se joue sur de vrais documents")
+        frappe.set_user("Administrator")
+        frappe.db.savepoint("osm_reprise")
+        if RO.RAISON_REPRISE not in (frappe.get_meta(RO.DOCTYPE_TACHE).get_field("raison_annulation").options or ""):
+            self.skipTest("raison « Machine reprise à l'atelier » pas encore migrée")
+        self.client = frappe.db.get_value("Customer", {"disabled": 0}, "name")
+        self.emp = next((e for e in frappe.get_all("Employee", filters={"status": "Active"}, pluck="name")
+                         if not P._est_sous_traitant(e)), None)
+        if not self.client or not self.emp:
+            self.skipTest("pas de client / employé")
+        self.tache = frappe.get_doc({
+            "doctype": RO.DOCTYPE_TACHE, "custom_type_dintervention": "Entretien", "custom_choix_du_staff": self.emp,
+            "custom_client": self.client, "starts_on": "2030-01-07 10:00:00", "ends_on": "2030-01-07 10:45:00",
+            "status": "Open", "temps": "45 min", "subject": "essai reprise"})
+        self.tache.flags.ignore_permissions = True
+        self.tache.flags.duree_fixee = True
+        self.tache.insert()
+        cfg = frappe.get_doc(RO.DOCTYPE_CONFIG)
+        cfg.set("responsables", [{"employee": self.emp}])
+        cfg.machines_par_jour, cfg.horizon_jours = 3, 30
+        cfg.save(ignore_permissions=True)
+        frappe.clear_cache(doctype=RO.DOCTYPE_CONFIG)
+        self._code = RO._verifier_code
+        RO._verifier_code = lambda code: code == "bon"
+
+    def tearDown(self):
+        import frappe
+        RO._verifier_code = self._code
+        frappe.set_user("Administrator")
+        frappe.db.rollback(save_point="osm_reprise")
+        frappe.clear_cache(doctype=RO.DOCTYPE_CONFIG)
+
+    def _reprendre(self):
+        return RO.reprendre_machine(self.tache.name, "/files/essai-reprise.jpg", "fuite sur le réservoir")["machine"]
+
+    def test_la_reprise_cree_le_dossier_et_ferme_l_intervention(self):
+        import frappe
+        with self.assertRaises(frappe.ValidationError):
+            RO.reprendre_machine(self.tache.name, "/files/essai-reprise.jpg", " ")           # la phrase est obligatoire
+        with self.assertRaises(frappe.ValidationError):
+            RO.reprendre_machine(self.tache.name, "", "fuite")                               # la photo aussi
+        nom = self._reprendre()
+        m = frappe.get_doc(RO.DOCTYPE, nom)
+        self.assertEqual((m.statut, m.client, m.tache_origine, m.photo_arrivee), (RO.S_RECEPTION, self.client, self.tache.name, "/files/essai-reprise.jpg"))
+        self.assertIn("fuite sur le réservoir", m.note_reception)
+        self.assertFalse(m.garantie)                                                         # décidée au magasin
+        t = frappe.db.get_value(RO.DOCTYPE_TACHE, self.tache.name, ["status", "raison_annulation"])
+        self.assertEqual(t, ("Cancelled", RO.RAISON_REPRISE))
+        self.assertEqual(RO.reprises_des_taches([self.tache.name])[self.tache.name],
+                         {"dossier": nom, "statut": RO.S_RECEPTION, "etat": "en route vers le magasin"})
+        self.assertIn(nom, [x.name for x in RO.dossiers_en_attente()])
+        ligne = next(x for x in RO.get_data(recherche=nom)["machines"] if x["name"] == nom)
+        self.assertTrue(ligne["en_route"])
+        self.assertEqual(ligne["origine"]["tache"], self.tache.name)
+        with self.assertRaises(frappe.ValidationError):
+            self._reprendre()                                                                # une seule fois
+
+    def test_annuler_la_reprise_rouvre_l_intervention(self):
+        import frappe
+        nom = self._reprendre()
+        RO.annuler_reprise(nom)
+        self.assertFalse(frappe.db.exists(RO.DOCTYPE, nom))
+        self.assertEqual(frappe.db.get_value(RO.DOCTYPE_TACHE, self.tache.name, ["status", "raison_annulation"]), ("Open", None))
+        self.assertEqual(RO.reprises_des_taches([self.tache.name]), {})
+
+    def test_reception_au_magasin_puis_retour_en_entretien(self):
+        import frappe
+        nom = self._reprendre()
+        RO.enregistrer_photo(nom, "post_it", "/files/essai-post-it.jpg")
+        with self.assertRaises(frappe.ValidationError):
+            RO.cloturer_reception(nom, code="bon")                                           # la garantie d'abord
+        etat = RO.decider_garantie(nom, "Hors garantie")
+        self.assertEqual((etat["garantie"], etat["origine"]["tache"]), ("Hors garantie", self.tache.name))
+        r = RO.cloturer_reception(nom, code="bon")
+        self.assertEqual(r["statut"], RO.S_PLANIFIEE)
+        with self.assertRaises(frappe.ValidationError):
+            RO.annuler_reprise(nom)                                                          # elle est au magasin
+        self.assertEqual(RO.reprises_des_taches([self.tache.name])[self.tache.name]["etat"], "réparation planifiée")
+        for t in frappe.get_all(RO.DOCTYPE_TACHE, filters={RO.CHAMP_TACHE: nom, "status": "Open"}, pluck="name"):
+            frappe.db.set_value(RO.DOCTYPE_TACHE, t, "status", "Completed")
+        self.assertEqual(RO.synchroniser(nom), RO.S_REPAREE)
+        liv = RO.planifier_livraison(nom, self.emp, "2030-01-10", "10:00")
+        self.assertTrue(liv["entretien"])
+        retour = frappe.get_doc(RO.DOCTYPE_TACHE, liv["tache"])
+        self.assertEqual((retour.custom_type_dintervention, retour.temps), ("Entretien", "45 min"))   # l'entretien non fait, sa durée
+        self.assertEqual(str(retour.ends_on)[11:16], "10:45")
+        self.assertIn(self.tache.name, retour.subject)
+        self.assertEqual(frappe.db.get_value(RO.DOCTYPE, nom, ["statut", "tache_livraison"]), (RO.S_LIVRAISON, retour.name))
+        # la clôture de ce retour ferme le dossier, comme une livraison
+        frappe.db.set_value(RO.DOCTYPE_TACHE, retour.name, "status", "Completed")
+        self.assertEqual(RO.synchroniser(nom), RO.S_RENDUE)
+        self.assertEqual(RO.reprises_des_taches([self.tache.name])[self.tache.name]["etat"], "rendue au client")
+
+    def test_une_machine_deposee_par_son_client_se_livre_toujours_en_livraison(self):
+        self.assertIsNone(RO.entretien_a_refaire(None))
+        self.assertIsNone(RO.entretien_a_refaire(self.tache.name))          # l'entretien est ouvert : rien à refaire
+
+
 class TestGabarit(unittest.TestCase):
     def test_pas_d_apostrophe_droite(self):
         """Le .html d'une page Desk finit dans une chaîne JS entre apostrophes : une seule ' casse la page (vécu le 02/10/2026)."""

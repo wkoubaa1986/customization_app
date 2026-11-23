@@ -429,8 +429,7 @@ def _reste_atelier(user=None):
             machines = RO.machines_a_regarder(user, tout=True)
             return None if machines is None else len(machines)
         cfg = RO.config()
-        ouverts = frappe.get_all(RO.DOCTYPE, fields=RO.CHAMPS_ATTENTE,
-                                 filters={"statut": ["in", list(RO.EN_ATTENTE)]})
+        ouverts = RO.dossiers_en_attente()
         return sum(1 for m in ouverts if RO.a_verifier(m, getdate(nowdate()), cfg["rappel_jours"]))
     except Exception:
         frappe.log_error(title="Tableau des appels : machines de l'atelier", message=frappe.get_traceback())

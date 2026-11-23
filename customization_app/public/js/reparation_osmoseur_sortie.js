@@ -186,10 +186,16 @@
   // ── 🚚 Planifier la livraison de retour ─────────────────────────────────────
   async function livraison(machine, m, opts = {}) {
     const adresses = (await frappe.call({ method: API + ".adresses_client", args: { client: m.client } })).message || [];
+    // Machine reprise pendant un entretien qui n'a pas été fait : son retour EST cet entretien (23/11/2026).
+    const o = (m && m.origine) || null;
+    const entretien = !!(o && o.type === "Entretien");
     const d = new frappe.ui.Dialog({
-      title: `🚚 Livraison — ${machine}`,
+      title: entretien ? `🔧 Retour avec entretien — ${machine}` : `🚚 Livraison — ${machine}`,
       fields: [
-        { fieldtype: "Link", fieldname: "employee", label: "Livreur", options: "Employee", reqd: 1,
+        ...(entretien ? [{ fieldtype: "HTML", fieldname: "info", options: `<div class="text-muted" style="font-size:12px;margin-bottom:8px">
+          La machine a été reprise pendant l’entretien du ${frappe.utils.escape_html(frappe.datetime.str_to_user(String(o.date || "").slice(0, 10)))}, qui n’a pas été fait :
+          la tâche créée est un <b>entretien</b> (avec ses photos de clôture), et sa clôture ferme aussi le dossier.</div>` }] : []),
+        { fieldtype: "Link", fieldname: "employee", label: entretien ? "Technicien" : "Livreur", options: "Employee", reqd: 1,
           default: m && m.responsable_actif, get_query: () => ({ filters: { status: "Active" } }) },
         { fieldtype: "Date", fieldname: "date", label: "Date", reqd: 1, default: frappe.datetime.add_days(frappe.datetime.get_today(), 1) },
         { fieldtype: "Time", fieldname: "heure", label: "Heure", default: "09:00:00" },
@@ -199,14 +205,14 @@
         { fieldtype: "Small Text", fieldname: "note", label: "Note pour le livreur" },
         { fieldtype: "Check", fieldname: "sms", label: "Prévenir le client par SMS (« nous vous le livrons le … »)", default: 1 },
       ],
-      primary_action_label: "Créer la livraison",
+      primary_action_label: entretien ? "Créer le retour avec entretien" : "Créer la livraison",
       primary_action: async (v) => {
         try {
           const r = await frappe.call({ method: API + ".planifier_livraison",
                                         args: { machine, employee: v.employee, date: v.date, heure: String(v.heure || "09:00").slice(0, 5), adresse: v.adresse || null, note: v.note || null, sms: v.sms ? 1 : 0 } });
           d.hide();
           const x = r.message || {};
-          frappe.show_alert({ message: alerte_sms(x.sms, `Livraison ${x.tache} créée le ${x.date} — ${x.employe}${x.adresse ? " · " + x.adresse : ""}`), indicator: "green" }, 8);
+          frappe.show_alert({ message: alerte_sms(x.sms, `${x.entretien ? "Entretien et retour" : "Livraison"} ${x.tache} créé${x.entretien ? "" : "e"} le ${x.date} — ${x.employe}${x.adresse ? " · " + x.adresse : ""}`), indicator: "green" }, 8);
           if (opts.apres) opts.apres();
         } catch (e) { /* message déjà affiché */ }
       },

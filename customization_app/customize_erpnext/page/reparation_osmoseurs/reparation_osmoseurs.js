@@ -29,7 +29,17 @@ frappe.pages["reparation-osmoseurs"].on_page_show = function (wrapper) {
     wrapper.ro.verifier = true; wrapper.ro.vue = null;
     wrapper.ro.charger();
   }
+  // Lien d'une tuile du calendrier ou d'une carte de Ma journée (machine reprise chez le client) : ce dossier seul.
+  const dossier = ro_dossier_demande();
+  if (dossier) wrapper.ro.montrer_dossier(dossier);
 };
+
+/** Le dossier demandé par l'adresse (…/reparation-osmoseurs?dossier=OSM-2026-0015) ou par route_options. */
+function ro_dossier_demande() {
+  const d = (frappe.route_options || {}).dossier || frappe.utils.get_query_params().dossier;
+  if ((frappe.route_options || {}).dossier) frappe.route_options = null;
+  return d ? String(d) : "";
+}
 
 const RO_API = "customization_app.reparation_osmoseur";
 // Trois groupes à l'écran (20/11/2026) ; les sept statuts restent en base et précisent la ligne.
@@ -53,6 +63,17 @@ class ReparationOsmoseurs {
     if ((frappe.route_options || {}).verifier) frappe.route_options = null;
     this.data = null;
     this._bind();
+    const dossier = ro_dossier_demande();
+    if (dossier) this.montrer_dossier(dossier); else this.charger();
+  }
+
+  // Un seul dossier, quel que soit son état (rendu compris) : la recherche est remplie avec son numéro.
+  montrer_dossier(dossier) {
+    const r = this.$root;
+    if (r.find("#ro-recherche").val() === dossier) return;
+    this.vue = null; this.verifier = false;
+    r.find("#ro-recherche").val(dossier);
+    r.find("#ro-rendues").prop("checked", true);
     this.charger();
   }
 
@@ -238,7 +259,13 @@ class ReparationOsmoseurs {
     // L'état, en clair : le groupe, puis ce qui se passe et depuis quand.
     const depuis = a ? ` depuis ${a.jours} j` : "";
     let detail = "";
-    if (m.statut === "Réception en cours") detail = `<div>📷 réception à terminer (photos)</div>`;
+    // Reprise chez le client pendant une intervention : elle est « en route » tant que le post-it n'est pas photographié.
+    const o = m.origine;
+    const origine = o ? `<div class="ro-sub">reprise pendant ${esc((o.type || "l’intervention").toLowerCase())} du ${esc(ro_date(o.date))}${o.employe ? " par " + esc(o.employe) : ""}
+        · <a href="/app/tache-de-travail/${encodeURIComponent(o.tache)}" target="_blank">${esc(o.tache)}</a></div>` : "";
+    if (m.en_route) detail = `<div class="${m.a_verifier ? "ro-du" : ""}">🚚 en route vers le magasin${a && a.jours ? ` depuis ${a.jours} j` : ""}</div>
+        <div class="ro-sub">à réceptionner : post-it + photo</div>${origine}`;
+    else if (m.statut === "Réception en cours") detail = `<div>📷 réception à terminer (photos)</div>`;
     else if (m.statut === "Réceptionnée") detail = `<div class="${m.a_verifier ? "ro-du" : ""}">sans technicien${depuis}</div>`;
     else if (m.statut === "Planifiée") {
       // Le technicien de la tâche OUVERTE (lu sur la tâche : le nom gardé sur le dossier peut dater).
@@ -263,6 +290,7 @@ class ReparationOsmoseurs {
                 <div class="ro-sub">${m.rendu_a ? "à " + esc(m.rendu_a) : ""}${m.rendue_par ? " · par " + esc(m.rendue_par) : ""}${m.mode_restitution === "Livraison" ? " · livraison" : ""}</div>
                 ${m.motif_sortie ? `<div class="ro-sub">motif : ${esc(m.motif_sortie)}</div>` : ""}`;
     }
+    if (o && !m.en_route) detail += origine;
     detail += this.reglement(m);
 
     const btn = (action, libelle, cls = "btn-default", titre = "") =>
@@ -271,7 +299,8 @@ class ReparationOsmoseurs {
     // demande du 20/11/2026) : livrer chez le client au lieu de le voir venir ; débarrasser la machine d'un client
     // qui ne répond plus au lieu de la faire réparer. Le reste est derrière « Autres actions ».
     const boutons = [];
-    if (m.statut === "Réception en cours") boutons.push(btn("photos", "📷 Photos et clôture", "btn-primary"));
+    if (m.en_route) boutons.push(btn("photos", "📷 Réceptionner au magasin", "btn-primary", "La machine est arrivée : garantie, post-it collé et photographié, puis un technicien est affecté"));
+    else if (m.statut === "Réception en cours") boutons.push(btn("photos", "📷 Photos et clôture", "btn-primary"));
     if (m.statut === "Réceptionnée") {
       boutons.push(btn("planifier", "📅 Affecter un technicien", "btn-primary"));
       // Rouge : on détruit la machine. Le libellé couvre les deux cas (ne répond plus / n'en veut plus), le motif
@@ -320,6 +349,7 @@ class ReparationOsmoseurs {
     if (s !== "Réception en cours") a.push(["sms", s === "Réparée" || s === "Prête au magasin"
       ? (m.sms_pret_le ? "📲 Renvoyer un SMS au client (« votre appareil est prêt », ou votre texte)" : "📲 Prévenir le client par SMS (« votre appareil est prêt », ou votre texte)")
       : "📲 Envoyer un SMS au client (votre texte)"]);
+    if (m.en_route) a.push(["annuler-reprise", "↩️ Annuler la reprise (déclarée par erreur : l’intervention redevient ouverte)"]);
     if (s === "Réparée" || s === "Prête au magasin") {
       a.push(["toujours-la", "📍 Toujours au magasin (le rappel repart de zéro)"]);
       a.push(["tache", "➕ Nouvelle tâche de réparation (à reprendre)"]);
@@ -371,6 +401,14 @@ class ReparationOsmoseurs {
     }
     if (action === "sms") return this.dialogue_sms(machine);
     if (action === "demonter") return this.dialogue_demontage(machine);
+    if (action === "annuler-reprise") {
+      frappe.confirm(`Annuler la reprise ${machine} ? Le dossier est supprimé et l’intervention ${(m.origine || {}).tache || ""} redevient ouverte au calendrier.`, async () => {
+        await frappe.call({ method: RO_API + ".annuler_reprise", args: { machine } });
+        frappe.show_alert({ message: `Reprise ${machine} annulée`, indicator: "orange" }, 5);
+        this.charger();
+      });
+      return;
+    }
     if (action === "annuler-demontage") {
       frappe.confirm(`Annuler le démontage de ${machine} ? La tâche de démontage est supprimée du calendrier et le dossier redevient ouvert.`, async () => {
         await frappe.call({ method: RO_API + ".annuler_demontage", args: { machine } });
@@ -482,10 +520,17 @@ class ReparationOsmoseurs {
   async dialogue_photos(machine) {
     const esc = frappe.utils.escape_html;
     let etat = (await frappe.call({ method: RO_API + ".etat_reception", args: { machine } })).message;
+    const reprise = !!etat.tache_origine;       // reprise chez le client : la 1re photo y a été prise, la garantie reste à décider
     const d = new frappe.ui.Dialog({
-      title: `Réception ${machine} — étape 2 / 2`,
+      title: reprise ? `Réception au magasin — ${machine}` : `Réception ${machine} — étape 2 / 2`,
       fields: [
         { fieldtype: "HTML", fieldname: "zone" },
+        { fieldtype: "Select", fieldname: "garantie", label: "Garantie", options: ["", "Sous garantie", "Hors garantie"],
+          hidden: reprise ? 0 : 1, default: etat.garantie || "",
+          description: "Sous garantie = réparation gratuite, notée en tête de la tâche du technicien." },
+        { fieldtype: "Link", fieldname: "commande_garantie", label: "Commande justifiant la garantie", options: "Sales Order",
+          hidden: reprise ? 0 : 1, default: etat.commande_garantie || "", depends_on: "eval:doc.garantie=='Sous garantie'",
+          get_query: () => ({ filters: { customer: etat.client || "", docstatus: 1 } }) },
         { fieldtype: "Section Break", label: "Sans photo post-it ?" },
         { fieldtype: "Password", fieldname: "code", label: "Code superviseur",
           description: "Dispense de la photo avec post-it uniquement. La photo à l’arrivée reste obligatoire." },
@@ -493,6 +538,13 @@ class ReparationOsmoseurs {
       primary_action_label: "Clôturer la réception",
       primary_action: async (v) => {
         try {
+          if (reprise) {
+            if (!v.garantie) { frappe.msgprint("Choisissez d’abord : sous garantie ou hors garantie."); return; }
+            if (v.garantie !== (etat.garantie || "") || (v.commande_garantie || "") !== (etat.commande_garantie || "")) {
+              etat = (await frappe.call({ method: RO_API + ".decider_garantie",
+                                          args: { machine, garantie: v.garantie, commande_garantie: v.commande_garantie || null } })).message || etat;
+            }
+          }
           const r = await frappe.call({ method: RO_API + ".cloturer_reception",
                                         args: { machine, code: v.code || null } });
           d.hide();
@@ -509,7 +561,7 @@ class ReparationOsmoseurs {
     const rendre = () => {
       const pi = etat.post_it || {};
       const slots = [
-        { champ: "arrivee", label: "Machine à l’arrivée", url: etat.photo_arrivee, obligatoire: true },
+        { champ: "arrivee", label: reprise ? "Machine chez le client (prise par le technicien)" : "Machine à l’arrivée", url: etat.photo_arrivee, obligatoire: true },
         { champ: "post_it", label: `Machine avec son post-it`, url: etat.photo_post_it,
           obligatoire: !etat.dispense_post_it,
           aide: `Écrivez sur un post-it collé sur la machine :
@@ -519,6 +571,7 @@ class ReparationOsmoseurs {
       d.fields_dict.zone.$wrapper.html(`
         <div class="ro-sub" style="margin-bottom:6px">Client : <b>${esc(etat.nom_client || "")}</b>
           ${etat.note_reception ? "— " + esc(etat.note_reception) : ""}</div>
+        ${reprise ? `<div class="ro-sub" style="margin-bottom:8px">🚚 Machine reprise chez le client : collez le post-it, photographiez-la, choisissez la garantie, puis clôturez.</div>` : ""}
         ${slots.map((s, i) => `
           <div class="ro-slot">
             ${s.url ? `<a href="${esc(s.url)}" target="_blank"><img src="${esc(s.url)}"></a>` : `<div class="ro-vignette vide">📷</div>`}
@@ -553,6 +606,7 @@ class ReparationOsmoseurs {
         <ul><li>« 📷 Nouvelle réception » : client, téléphone, note sur la panne, et la <b>garantie</b> — cliquer la commande qui couvre l’appareil (🛡️) ou choisir « Hors garantie ».</li>
         <li>Post-it <b>nom + téléphone + n° de dossier</b> collé sur la machine, puis « 📷 Photos et clôture » : l’IA relit le post-it et compare l’appareil.</li>
         <li>À la clôture, une tâche de réparation est créée pour le lendemain (responsables dans l’ordre du réglage, 3 machines par jour). Personne de libre → « sans technicien » : « 📅 Affecter un technicien ».</li>
+        <li><b>Machine reprise chez le client</b> : le technicien qui ne peut pas finir sur place touche « 🔧 Machine reprise » dans Ma journée (une phrase, une photo). Le dossier arrive ici « 🚚 en route vers le magasin » ; à l’arrivée, « 📷 Réceptionner au magasin » : garantie, post-it, photo. Au calendrier, son intervention reste en orange avec l’état du dossier. Si c’était un entretien, le retour de la machine se planifie comme cet entretien.</li>
         <li>Le client reprend sa machine sans réparation, devis refusé, réception par erreur → « ↪️ Sortie sans réparation » : le dossier se ferme avec son motif.</li></ul></div>
       <div class="et"><span class="ro-badge b-rendre">2 · À rendre</span><b>Celui qui remet la machine</b>
         <ul><li>Quand le technicien clôture sa tâche, la question lui est posée tout de suite : <b>le client est là</b> (je la rends), <b>elle attend au magasin</b> (SMS au client) ou <b>à livrer</b>.</li>
@@ -564,7 +618,7 @@ class ReparationOsmoseurs {
       <div class="et"><span class="ro-badge b-rendue">3 · Rendue</span><b>Terminé</b>
         <ul><li>Date, personne, règlement constaté et photos restent sur le dossier. La tuile « Rendue » ou la case « Afficher les machines rendues » les montre.</li></ul></div>
       <div class="et"><span class="ro-badge b-rendre">⏳ À vérifier</span><b>Rappel du matin</b>
-        <ul><li>Une machine réparée et pas rendue, reçue sans technicien, ou dont la livraison n’est pas clôturée est rappelée chaque matin à la personne du réglage, puis relancée à une seconde personne.</li>
+        <ul><li>Une machine réparée et pas rendue, reçue sans technicien, reprise chez un client et pas réceptionnée le lendemain, ou dont la livraison n’est pas clôturée est rappelée chaque matin à la personne du réglage, puis relancée à une seconde personne.</li>
         <li>La réponse se donne sur la ligne : « ✅ Rendre au client », « 📍 Toujours au magasin » (le rappel repart de zéro), « 📅 Affecter » ou « ↪️ Sortie sans réparation ».</li></ul></div>
       <p class="ro-sub"><b>Machine abandonnée</b> : le client ne répond plus ou ne la reprend plus → le bouton rouge « 🧩 Machine abandonnée » sous « Affecter un technicien » (dans les autres états : « Autres actions », « machine à démonter »). Une tâche « Démontage et débarras » est posée au technicien (garder les pièces réutilisables, débarrasser le reste) ; sa clôture ferme le dossier, « Annuler le démontage » le rouvre tant qu’elle n’est pas faite.</p>
       <p class="ro-sub"><b>Erreurs courantes</b> : réception clôturée trop tôt → « Rouvrir la réception » · technicien affecté par erreur → le ✕ à côté de sa tâche (vide, elle est supprimée du calendrier) · sortie cliquée par erreur → « Annuler la sortie » · un mot au client → « Autres actions », « SMS au client » · code superviseur : réglage « Config Cloture Tache ».</p>

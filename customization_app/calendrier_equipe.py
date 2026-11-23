@@ -192,6 +192,40 @@ def contexte() -> dict:
     }
 
 
+def poser_annotations(evenements: list, etapes: dict, reprises: dict) -> list:
+    """Pose sur les tâches ce que deux autres outils savent d'elles. PURE.
+    `etapes` : {tâche: {...}} — où en est la vérification de stock que porte la tâche (elle n'est verte qu'à
+    l'accord de l'employé et du responsable). `reprises` : {tâche: {...}} — le dossier de réparation né de cette
+    intervention, quand le technicien est reparti avec la machine : ce n'est pas une annulation ordinaire."""
+    for ev in evenements:
+        if ev.get("genre") != "tache":
+            continue
+        if ev.get("statut") == "Open" and ev.get("name") in etapes:
+            ev["verification"] = etapes[ev["name"]]
+        if ev.get("statut") == "Cancelled" and ev.get("name") in reprises:
+            ev["reprise"] = reprises[ev["name"]]
+    return evenements
+
+
+def annoter(evenements: list) -> list:
+    """Les annotations lues en base : vérifications de stock ouvertes et machines reprises à l'atelier. Jamais
+    bloquant : le calendrier s'affiche même si l'un des deux outils échoue."""
+    ouvertes = [ev["name"] for ev in evenements if ev.get("genre") == "tache" and ev.get("statut") == "Open"]
+    annulees = [ev["name"] for ev in evenements if ev.get("genre") == "tache" and ev.get("statut") == "Cancelled"]
+    etapes, reprises = {}, {}
+    try:
+        from customization_app import stock_entrepots
+        etapes = stock_entrepots.etapes_des_taches(ouvertes)
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "calendrier_equipe : étapes des vérifications")
+    try:
+        from customization_app import reparation_osmoseur
+        reprises = reparation_osmoseur.reprises_des_taches(annulees)
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "calendrier_equipe : machines reprises")
+    return poser_annotations(evenements, etapes, reprises)
+
+
 @frappe.whitelist()
 def evenements(start, end) -> dict:
     """Les événements de la période et les colonnes de la vue « Équipe »."""
@@ -210,6 +244,7 @@ def evenements(start, end) -> dict:
         ev = vers_calendrier(e, participants.get(e.get("name")))
         if ev:
             out.append(ev)
+    annoter(out)
     actifs = _actifs()
     if _exterieur():
         presents = {emp for ev in out if ev["genre"] == "tache" for emp in ev["employes"]}

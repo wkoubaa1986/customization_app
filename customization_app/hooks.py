@@ -267,6 +267,9 @@ doc_events = {
     },
     "Tache de travail": {
         "before_save": ["customization_app.api.before_save_tache_de_travail",
+                        # La tâche d'une vérification de stock ne se clôture pas à la main : elle passe au vert
+                        # quand l'employé et le responsable ont accepté les mêmes quantités (23/11/2026).
+                        "customization_app.stock_entrepots.tache_avant_enregistrement",
                         # Heure, type ou employé changés le jour même après 8h30 : noté sur la tâche, pour que
                         # « Ma journée » la signale au technicien (tache_changement.py).
                         "customization_app.tache_changement.noter"],

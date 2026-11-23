@@ -34,6 +34,23 @@ class TestRegles(unittest.TestCase):
         self.assertEqual([l["ecart"] for l in lignes], [-2, 1, 0, None, None])
 
 
+class TestEtapeSurLaTache(unittest.TestCase):
+    """Ce que la tâche du calendrier écrit tant que la vérification n'est pas acceptée par les deux."""
+
+    def test_libelle_etape(self):
+        self.assertEqual(S.libelle_etape("En cours", "Sadok", "Hedi"), "à compter par Sadok")
+        self.assertEqual(S.libelle_etape("En cours"), "à compter")
+        self.assertEqual(S.libelle_etape("À valider", "Sadok", "Hedi"), "comptée — à valider par Hedi")
+        self.assertEqual(S.libelle_etape("À valider", "Sadok", ""), "comptée — à valider par le responsable")
+        self.assertEqual(S.libelle_etape("À confirmer", "Sadok", "Hedi"), "validée — à confirmer par Sadok")
+        self.assertEqual(S.libelle_etape("Terminée", "Sadok", "Hedi"), "")          # terminée : plus d'étape, la tâche est verte
+        self.assertEqual(S.libelle_etape("Annulée", "Sadok", "Hedi"), "")
+
+    def test_sans_tache(self):
+        self.assertEqual(S.etapes_des_taches([]), {})
+        self.assertEqual(S.etapes_des_taches([None, ""]), {})
+
+
 class TestModeleCible(unittest.TestCase):
     def test_fusion(self):
         existant = {"A": 2.0, "B": 5.0}
@@ -87,15 +104,30 @@ class TestCircuit(unittest.TestCase):
         frappe.set_user("Administrator")
         self.assertEqual(r["statut"], "À valider")                              # 1re validation : le comptage
         self.assertAlmostEqual(r["valeur_ecarts"], round(2 * l1.taux, 3), places=3)
-        self.assertEqual(frappe.db.get_value("Tache de travail", v.tache_employe, "status"), "Completed")
+        # La tâche du calendrier reste OUVERTE tant que les deux n'ont pas accepté (23/11/2026) : elle dit l'étape,
+        # et elle ne se clôture pas à la main.
+        self.assertEqual(frappe.db.get_value("Tache de travail", v.tache_employe, "status"), "Open")
+        etape = S.etapes_des_taches([v.tache_employe])[v.tache_employe]
+        self.assertEqual((etape["verification"], etape["statut"]), (nom, "À valider"))
+        self.assertTrue(etape["etape"].startswith("comptée — à valider par "))
+        tache = frappe.get_doc("Tache de travail", v.tache_employe)
+        tache.status = "Completed"
+        with self.assertRaises(frappe.ValidationError):
+            tache.save(ignore_permissions=True)
         # le stock ne bouge PAS avant la validation du responsable
         self.assertEqual(frappe.db.get_value("Bin", {"item_code": l1.item_code, "warehouse": self.ENTREPOT}, "actual_qty"), stock_avant)
         r = S.valider_verification(nom)                                         # validation du responsable
         self.assertEqual(r["statut"], "À confirmer")
+        self.assertEqual(frappe.db.get_value("Tache de travail", v.tache_employe, "status"), "Open")
+        self.assertTrue(S.etapes_des_taches([v.tache_employe])[v.tache_employe]["etape"].startswith("validée — à confirmer par "))
         frappe.set_user(emp)
         r = S.confirmer_verification(nom)                                       # accord de l'employé : rapprochement
         frappe.set_user("Administrator")
         self.assertEqual(r["statut"], "Terminée")
+        # l'accord des deux : la tâche est terminée, EN VERT, et ne porte plus d'étape
+        from customization_app.api import STATUS_COLORS
+        self.assertEqual(frappe.db.get_value("Tache de travail", v.tache_employe, ["status", "color"]), ("Completed", STATUS_COLORS["Completed"]))
+        self.assertEqual(S.etapes_des_taches([v.tache_employe]), {})
         self.assertTrue(r["rapprochement"])
         self.assertEqual(frappe.db.get_value("Bin", {"item_code": l1.item_code, "warehouse": self.ENTREPOT}, "actual_qty"), stock_avant + 2)
         self.assertEqual([h["name"] for h in S.historique_verifications(self.ENTREPOT)][0], nom)

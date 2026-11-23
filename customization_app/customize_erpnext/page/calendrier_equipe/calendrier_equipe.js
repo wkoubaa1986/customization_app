@@ -110,6 +110,15 @@ function ce_pastille(ep) {
 /** Le signe d'une livraison confiée à Aramex (22/11/2026 : « ajoute un tampon aussi pour les livraisons Aramex »). */
 const CE_ARAMEX = ["📦", "Livraison Aramex : le colis part par transporteur", "a", "Livraison Aramex"];
 
+/**
+ * Machine reprise à l'atelier (23/11/2026) : le technicien n'a pas pu finir et est reparti avec la machine. La tâche
+ * est fermée, mais ce n'est pas une annulation ordinaire : orange, pas barrée, avec l'état du dossier de réparation.
+ */
+const CE_REPRISE = "#ea580c";
+const ce_reprise = (p) => (p && p.statut === "Cancelled" && p.reprise ? p.reprise : null);
+/** « 🔧 Reprise atelier · OSM-2026-0015 · en route vers le magasin ». Pure, déjà échappé. */
+const ce_reprise_texte = (r) => `🔧 Reprise atelier · ${ce_esc(r.dossier)}${r.etat ? " · " + ce_esc(r.etat) : ""}`;
+
 /** Les pastilles d'une tâche : optimisation des tournées (heure / employé fixes), puis Aramex. Pure. */
 function ce_pastilles(p) {
   const out = [];
@@ -129,8 +138,9 @@ function ce_pastilles(p) {
 function ce_fiche(p, debut, fin, journee) {
   const RAPPORT_VIDE = "Indiquez vos remarques sur l'intervention et le client:";
   const texte = (v) => ce_esc(v).replace(/\n/g, "<br>");
-  const annulee = p.statut === "Cancelled", terminee = p.statut === "Completed";
-  const plein = p.genre === "ferie" ? "#6b7280" : annulee ? "#9ca3af" : (p.couleur || "#FF6347");
+  const reprise = ce_reprise(p);
+  const annulee = p.statut === "Cancelled" && !reprise, terminee = p.statut === "Completed";
+  const plein = p.genre === "ferie" ? "#6b7280" : reprise ? CE_REPRISE : annulee ? "#9ca3af" : (p.couleur || "#FF6347");
   const lignes = ce_titre(p.titre);
   let quand = "";
   if (debut) {
@@ -139,7 +149,8 @@ function ce_fiche(p, debut, fin, journee) {
     const jour = ["Dimanche", "Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi"][d.day()] + " " + d.format("DD/MM");
     quand = journee ? jour + " · toute la journée" : jour + " · " + d.format("HH:mm") + (f ? " – " + f.format("HH:mm") : "");
   }
-  const etat = p.genre === "ferie" ? "Jour férié" : annulee ? "Annulée" : terminee ? "Terminée" : p.genre === "reunion" ? "Réunion" : "";
+  const etat = p.genre === "ferie" ? "Jour férié" : reprise ? "Reprise atelier" : annulee ? "Annulée" : terminee ? "Terminée"
+    : p.genre === "reunion" ? "Réunion" : p.verification ? "Vérification en cours" : "";
   const rubriques = [];
   const rubrique = (icone, libelle, valeur, fort) => {
     if (valeur == null || String(valeur).trim() === "") return;
@@ -153,7 +164,10 @@ function ce_fiche(p, debut, fin, journee) {
     rubrique("📍", "Adresse", p.details_adresse);
     rubrique("🧭", "Secteur", [p.secteur, p.info_secteur].filter(Boolean).join(" — "));
     rubrique("📝", "Sujet", p.subject);
-    rubrique("⛔", "Annulation", p.raison_annulation);
+    if (reprise) rubrique("🔧", "Machine reprise", `Dossier ${reprise.dossier} — ${reprise.etat || ""}\n(un clic ouvre le dossier de réparation)`, true);
+    else rubrique("⛔", "Annulation", p.raison_annulation);
+    // Vérification de stock : la tâche ne devient verte qu'à l'accord de l'employé et du responsable.
+    if (p.verification) rubrique("🧾", "Vérification", `${p.verification.verification} — ${p.verification.etape}\nTerminée (verte) quand les deux ont accepté les quantités`, true);
     if (p.rapport_visite && p.rapport_visite.trim() !== RAPPORT_VIDE) rubrique("📋", "Rapport", p.rapport_visite);
     const ep = p.genre === "tache" ? ce_epingle(p) : null;
     if (ep) rubrique(ep[0], ep[3], ep[1].split(" : ")[1]);
@@ -185,8 +199,9 @@ function ce_evenement(e, colonnes, ecrire) {
   // Coloriage (21/11/2026, « améliore le coloriage ») : la couleur reste celle de l'ancien calendrier — l'employé,
   // ou le statut pour une tâche terminée / annulée — mais posée autrement : un fond pastel OPAQUE (le texte se lit,
   // deux tâches qui se touchent ne se mélangent plus) et une barre à gauche dans la couleur pleine.
-  const annulee = e.statut === "Cancelled", terminee = e.statut === "Completed";
-  const plein = annulee ? "#9ca3af" : (e.couleur || "#FF6347");
+  const reprise = ce_reprise(e);
+  const annulee = e.statut === "Cancelled" && !reprise, terminee = e.statut === "Completed";
+  const plein = reprise ? CE_REPRISE : annulee ? "#9ca3af" : (e.couleur || "#FF6347");
   const fond = annulee ? "#f3f4f6" : ce_pastel(plein, terminee ? 0.30 : 0.24);
   const styles = [`--ce-plein:${plein}`, `border:1px solid ${ce_rgba(plein, 0.45)}`, `border-left:5px solid ${plein}`];
   if (cint(e.reservation_app) === 1) {
@@ -198,14 +213,16 @@ function ce_evenement(e, colonnes, ecrire) {
   const classes = ["ce-e"];
   if (annulee) classes.push("ce-annulee");
   if (terminee) classes.push("ce-terminee");
+  if (reprise) classes.push("ce-reprise");
   Object.assign(out, { backgroundColor: fond, textColor: annulee ? "#6b7280" : ce_texte(fond), styles, classNames: classes });
   if (e.genre === "reunion") {
     // une réunion prévue se glisse sur un autre jour ou une autre heure ; sa durée et ses participants, non
     out.startEditable = !!ecrire && e.statut !== "Completed";
     out.durationEditable = false;
   } else {
-    out.startEditable = !!ecrire;
-    out.durationEditable = !!ecrire && !e.journee;
+    // une intervention fermée par une reprise de machine ne se déplace pas : elle dit ce qui s'est passé ce jour-là
+    out.startEditable = !!ecrire && !reprise;
+    out.durationEditable = !!ecrire && !e.journee && !reprise;
   }
   return out;
 }
@@ -291,6 +308,7 @@ class CalendrierEquipe {
       .ce-ev-2 { font-weight: 500; }
       .ce-annulee .ce-ev-1, .ce-annulee .ce-ev-2 { text-decoration: line-through; }
       .ce-annulee { opacity: .85; }
+      .ce-ev-r { font-weight: 700; }
       /* vue Liste : pas de cadre par ligne, la pastille porte la couleur pleine */
       .ce-cal .ec-list .ec-event { border: none !important; border-bottom: 1px solid var(--border-color, #e5e7eb) !important;
                                    border-radius: 0; box-shadow: none; background-image: none !important; }
@@ -412,6 +430,7 @@ class CalendrierEquipe {
     $f.append(`<span class="ce-legende">
       <span><i style="background:${ce_pastel("#32CD32", 0.30)};border-left:4px solid #32CD32"></i>Terminée</span>
       <span><i style="background:#f3f4f6;border-left:4px solid #9ca3af"></i>Annulée</span>
+      <span title="Le technicien n’a pas pu finir et est reparti avec la machine : elle suit son dossier dans Réparation osmoseurs"><i style="background:${ce_pastel(CE_REPRISE, 0.24)};border-left:4px solid ${CE_REPRISE}"></i>🔧 Machine reprise à l’atelier</span>
       <span><i style="background:#eef2f7;background-image:repeating-linear-gradient(45deg, rgba(0,0,0,.22) 0, rgba(0,0,0,.22) 1px, transparent 1px, transparent 4px)"></i>Hachures : prise par le client dans l’app</span>
       <span title="L’optimisation des tournées peut changer l’employé, pas l’heure">${ce_pastille(ce_epingle({ heure_fixe: 1 }))} Heure fixe</span>
       <span title="L’optimisation des tournées peut changer l’heure, pas l’employé">${ce_pastille(ce_epingle({ employe_fixe: 1 }))} Employé fixe</span>
@@ -459,7 +478,7 @@ class CalendrierEquipe {
   visible(e) {
     const f = this.filtres;
     if (e.genre === "ferie" || e.genre === "fond") return true;
-    if (!f.annulees && e.statut === "Cancelled") return false;
+    if (!f.annulees && e.statut === "Cancelled" && !ce_reprise(e)) return false;
     if (f.types.size && !f.types.has(e.custom_type_dintervention)) return false;
     if (f.employes.size) {
       // des employés cochés qui n'ont plus de colonne dans cette période ne masquent pas tout
@@ -683,21 +702,25 @@ class CalendrierEquipe {
     if (p.genre === "tache" && p.client) {
       const type = p.custom_type_dintervention || "", icone = (this.ctx.icones || {})[type] || "";
       const genre = ce_esc((icone + " " + type).trim());
-      const etat = p.statut === "Completed" ? "✓ " : p.statut === "Cancelled" ? "✕ " : "";
+      const reprise = ce_reprise(p);
+      const etat = p.statut === "Completed" ? "✓ " : reprise ? "🔧 " : p.statut === "Cancelled" ? "✕ " : "";
       if (mois) {
-        return { html: `<div class="ce-ev ce-ev-mois">${debut ? `<b>${debut}</b> ` : ""}${epingle}${etat}${genre}${genre ? ": " : ""}<b>${ce_esc(p.client)}</b></div>` };
+        return { html: `<div class="ce-ev ce-ev-mois">${debut ? `<b>${debut}</b> ` : ""}${epingle}${etat}${genre}${genre ? ": " : ""}<b>${ce_esc(p.client)}</b>${reprise ? " · " + ce_esc(reprise.dossier) : ""}</div>` };
       }
       const aramex = lignes.filter((l) => l.startsWith("📦"));
       const employe = info.view.type !== "resourceTimeGridDay" && p["custom_employé"] ? ce_esc(p["custom_employé"]) : "";
       return { html: `<div class="ce-ev">${coin}<div class="ce-ev-2"${place}>${heure}${epingle}<b class="ce-ev-s">${etat}${ce_esc(p.secteur || "")}</b></div>
         <div class="ce-ev-2">${genre}${genre ? ": " : ""}<b class="ce-ev-c">${ce_esc(p.client)}</b></div>
-        ${aramex.length ? `<div class="ce-ev-2">${aramex.join("<br>")}</div>` : ""}${employe ? `<div class="ce-ev-2">${employe}</div>` : ""}</div>` };
+        ${reprise ? `<div class="ce-ev-2 ce-ev-r">${ce_reprise_texte(reprise)}</div>` : ""}${aramex.length ? `<div class="ce-ev-2">${aramex.join("<br>")}</div>` : ""}${employe ? `<div class="ce-ev-2">${employe}</div>` : ""}</div>` };
     }
+    // Vérification de stock encore ouverte : l'étape, et qui doit faire le geste suivant (verte à l'accord des deux).
+    const etape = p.genre === "tache" && p.verification && p.verification.etape ? "⏳ " + ce_esc(p.verification.etape) : "";
     if (mois) {
       // vue Mois : une seule ligne par tâche, pour en voir plusieurs dans la case du jour
-      return { html: `<div class="ce-ev ce-ev-mois">${debut ? `<b>${debut}</b> ` : ""}${epingle}${lignes.join(" · ")}</div>` };
+      return { html: `<div class="ce-ev ce-ev-mois">${debut ? `<b>${debut}</b> ` : ""}${epingle}${lignes.concat(etape ? [etape] : []).join(" · ")}</div>` };
     }
     return { html: `<div class="ce-ev">${coin}<div class="ce-ev-1"${place}>${heure}${epingle}${lignes[0] || ""}</div>${
+      etape ? `<div class="ce-ev-2 ce-ev-r">${etape}</div>` : ""}${
       lignes.length > 1 ? `<div class="ce-ev-2">${lignes.slice(1).join("<br>")}</div>` : ""}</div>` };
   }
 
@@ -707,6 +730,12 @@ class CalendrierEquipe {
     if (p.genre === "reunion") {
       frappe.route_options = { reunion: p.name };
       frappe.set_route("suivi-activite");
+      return;
+    }
+    // Machine reprise à l'atelier : la suite se passe dans Réparation osmoseurs, on y ouvre le dossier.
+    const reprise = ce_reprise(p);
+    if (reprise && frappe.model.can_read("Machine Reparation")) {
+      window.open("/app/reparation-osmoseurs?dossier=" + encodeURIComponent(reprise.dossier), "_blank");
       return;
     }
     // La fiche complète de la tâche, dans une fenêtre au-dessus du calendrier (22/11/2026).

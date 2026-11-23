@@ -23,6 +23,7 @@
   "photo_post_it",
   "dispense_post_it",
   "date_cloture_reception",
+  "tache_origine",
   "controle_ia_ok",
   "controle_ia_resultat",
   "section_reparation",
@@ -245,6 +246,16 @@
    "read_only": 1
   },
   {
+   "description": "Machine reprise chez le client pendant cette intervention (Ma journée) : tant que la photo avec post-it n'est pas prise au magasin, le dossier est « en route ».",
+   "fieldname": "tache_origine",
+   "fieldtype": "Link",
+   "label": "Reprise pendant l'intervention",
+   "no_copy": 1,
+   "options": "Tache de travail",
+   "read_only": 1,
+   "search_index": 1
+  },
+  {
    "fieldname": "tache_demontage",
    "fieldtype": "Link",
    "label": "Tâche de démontage",
@@ -354,7 +365,7 @@
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-11-21 10:00:00.000000",
+ "modified": "2026-11-23 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Machine Reparation",

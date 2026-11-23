@@ -3,6 +3,7 @@ import datetime
 import unittest
 
 from customization_app.calendrier_equipe import SANS_EMPLOYE, bornes, colonnes, decaler_jours, vers_calendrier
+from customization_app import calendrier_equipe as C
 
 
 class TestBornes(unittest.TestCase):
@@ -109,6 +110,29 @@ class TestColonnes(unittest.TestCase):
     def test_les_participants_d_une_reunion_ne_creent_pas_de_colonne(self):
         cols = colonnes(self.ACTIFS, [{"genre": "reunion", "employes": ["E7"]}])
         self.assertEqual([c["id"] for c in cols], ["E1", "E2"])
+
+
+class TestAnnotations(unittest.TestCase):
+    """Vérification de stock en cours et machine reprise à l'atelier, posées sur les tuiles (23/11/2026)."""
+
+    def test_etape_seulement_sur_une_tache_ouverte(self):
+        etapes = {"T1": {"verification": "VERIF-1", "etape": "comptée — à valider par Hedi"},
+                  "T2": {"verification": "VERIF-2", "etape": "à compter"}}
+        evs = [{"genre": "tache", "name": "T1", "statut": "Open"}, {"genre": "tache", "name": "T2", "statut": "Completed"},
+               {"genre": "reunion", "name": "T1", "statut": "Open"}]
+        out = C.poser_annotations(evs, etapes, {})
+        self.assertEqual(out[0]["verification"]["etape"], "comptée — à valider par Hedi")
+        self.assertNotIn("verification", out[1])        # terminée (verte) : plus d'étape
+        self.assertNotIn("verification", out[2])        # une réunion n'est pas une tâche
+
+    def test_reprise_seulement_sur_une_tache_fermee_par_la_reprise(self):
+        reprises = {"T1": {"dossier": "OSM-2026-0017", "etat": "en route vers le magasin"}}
+        evs = [{"genre": "tache", "name": "T1", "statut": "Cancelled"}, {"genre": "tache", "name": "T1b", "statut": "Cancelled"},
+               {"genre": "tache", "name": "T1", "statut": "Open"}]
+        out = C.poser_annotations(evs, {}, reprises)
+        self.assertEqual(out[0]["reprise"]["dossier"], "OSM-2026-0017")
+        self.assertNotIn("reprise", out[1])             # une annulation ordinaire reste une annulation
+        self.assertNotIn("reprise", out[2])             # reprise annulée, tâche rouverte : rien
 
 
 class TestDecalerJours(unittest.TestCase):

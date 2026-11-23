@@ -40,6 +40,11 @@ frappe.provide("frappe.views");
         .mj-carte.faite { border-color:#86efac; background:#f0fdf4; }
         .mj-carte.faite .mj-tete { border-bottom-color:#bbf7d0; }
         .mj-carte.faite .mj-heure { color:#166534; }
+        /* Machine reprise à l'atelier : ni terminée (vert) ni à faire — orange, avec l'état du dossier. */
+        .mj-carte.reprise { border-color:#fdba74; background:#fff7ed; }
+        .mj-carte.reprise .mj-tete { border-bottom-color:#fed7aa; }
+        .mj-carte.reprise .mj-heure { color:#9a3412; }
+        .mj-badge.rep { background:#ffedd5; color:#9a3412; }
         /* Nouvelle depuis 8h30 : rouge clair. Heure ou type modifié depuis 8h30 : orange clair. */
         .mj-carte.mj-nouvelle { background:#fef2f2; border-color:#fca5a5; }
         .mj-carte.mj-modifiee { background:#fff7ed; border-color:#fdba74; }
@@ -137,6 +142,7 @@ frappe.provide("frappe.views");
             // Sous-traitant : son stock (page Stock, limitée à SON entrepôt côté serveur).
             w.on("click", "[data-stock]", () => frappe.set_route("stock-entrepots"));
             w.on("click", "[data-annuler]", (e) => this._annuler($(e.currentTarget).data("annuler")));
+            w.on("click", "[data-reprise]", (e) => this._reprise($(e.currentTarget).data("reprise")));
             // Itinéraire de la journée planifiée (optimiser_tournees.js, chargé sur tout le Desk).
             w.on("click", "[data-itineraire]", () => window.tournees_itineraire
                 && window.tournees_itineraire(this.jour, (this.data || {}).employe || this.employe).catch(() => {}));
@@ -272,15 +278,19 @@ frappe.provide("frappe.views");
 
         _carte(l, esc) {
             const faite = l.statut !== "Open";
-            const st = { "Open": ["att", __("à faire")],
-                         "Completed": ["ok", __("terminée")] }[l.statut] || ["gris", l.statut];
+            // Machine reprise à l'atelier (23/11/2026) : l'intervention est fermée sans être faite, la machine suit
+            // son dossier dans Réparation osmoseurs — la carte reste dans la journée et dit où en est le dossier.
+            const reprise = l.reprise || null;
+            const st = reprise ? ["rep", "🔧 " + __("machine reprise")]
+                : { "Open": ["att", __("à faire")],
+                    "Completed": ["ok", __("terminée")] }[l.statut] || ["gris", l.statut];
             // Créée, confiée ou modifiée le jour même après 8h30 (18/11/2026) : rouge clair « nouvelle tâche à faire »,
             // orange clair avec ce qui a changé. Décidé par le serveur (tache_changement.alerte).
             const al = l.alerte || null;
             const bandeau = al ? `<div class="mj-alerte ${al.genre === "nouvelle" ? "nouvelle" : "modifiee"}">
                 <span class="pastille">${al.genre === "nouvelle" ? "🆕" : "✏️"} ${esc(al.texte)}</span>
                 ${al.detail ? `<span class="quand">${esc(al.detail)}</span>` : ""}</div>` : "";
-            return `<div class="mj-carte ${faite ? "faite" : ""} ${al ? "mj-" + (al.genre === "nouvelle" ? "nouvelle" : "modifiee") : ""} ${
+            return `<div class="mj-carte ${reprise ? "reprise" : faite ? "faite" : ""} ${al ? "mj-" + (al.genre === "nouvelle" ? "nouvelle" : "modifiee") : ""} ${
                 this.cible && this.cible === l.tache ? "mj-cible" : ""}" data-carte="${esc(l.tache)}">
               ${bandeau}
               <div class="mj-tete">
@@ -298,6 +308,12 @@ frappe.provide("frappe.views");
                 ${this._tel(l, esc)}${this._adresse(l, esc)}${this._articles(l, esc)}
                 ${l.note ? `<div class="mj-l"><span class="k">${__("Note")}</span>
                     <span>${esc(l.note)}</span></div>` : ""}
+                ${reprise ? `<div class="mj-l"><span class="k">${__("Atelier")}</span><span>
+                    <a href="/app/reparation-osmoseurs?dossier=${encodeURIComponent(reprise.dossier)}" target="_blank"><b>${esc(reprise.dossier)}</b></a>
+                    · ${esc(reprise.etat || "")}</span></div>` : ""}
+                ${l.verification ? `<div class="mj-l"><span class="k">${__("Vérification")}</span><span>
+                    <span class="mj-badge att">⏳ ${esc(l.verification.etape || "")}</span>
+                    <div class="mj-conf">${__("La tâche passe au vert toute seule quand les deux ont accepté les quantités.")}</div></span></div>` : ""}
                 ${this._aramex_bloc(l, esc)}${this._cloture(l, esc)}${this._reglement(l, esc)}
                 ${this._photos(l, esc)}
               </div>
@@ -417,7 +433,7 @@ frappe.provide("frappe.views");
 
         /** Ce qu'il reste à faire — dit AVANT que « Terminer » n'échoue. */
         _cloture(l, esc) {
-            if (l.statut !== "Open") return "";
+            if (l.statut !== "Open" || l.verification) return "";
             const e = l.exigences || {};
             // Le VERDICT vient de la fiche (`tache_exigences_completes`) : deux
             // juges pour une même clôture finiraient par se contredire.
@@ -519,8 +535,22 @@ frappe.provide("frappe.views");
                 : `<a class="btn btn-sm btn-default" target="_blank"
                  href="/app/tache-de-travail/${encodeURIComponent(l.tache)}"
                 >${__("Ouvrir la fiche")}</a>`;
+            // Vérification de stock : pas de clôture à la main — le geste se fait dans Stock › Vérification.
+            if (l.verification) {
+                return `<div class="mj-actions">
+                  ${ouvrir}
+                  <a class="btn btn-sm btn-primary" href="/app/stock-entrepots?verif=${encodeURIComponent(l.verification.verification)}"
+                    >🧾 ${__("Ouvrir la vérification")}</a>
+                </div>`;
+            }
+            // Il n'a pas pu finir et repart avec la machine : troisième sortie, à côté de la clôture.
+            const reprise = l.reprise_possible
+                ? `<button class="btn btn-sm btn-default" data-reprise="${esc(l.tache)}"
+                     title="${__("Vous ne pouvez pas finir sur place et vous repartez avec la machine : un dossier de réparation est créé")}"
+                    >🔧 ${__("Machine reprise")}</button>` : "";
             return `<div class="mj-actions">
               ${ouvrir}
+              ${reprise}
               <button class="btn btn-sm btn-primary" data-terminer="${esc(l.tache)}"
                 >✅ ${__("Clôturer")}</button>
             </div>`;
@@ -773,6 +803,45 @@ frappe.provide("frappe.views");
                 });
                 d.show();
             });
+        }
+
+        /** Le technicien n'a pas pu finir et repart avec la machine (23/11/2026). Une phrase sur le problème, puis la
+         *  photo : c'est son dépôt qui fait tout (dossier de réparation créé, intervention fermée « machine reprise »).
+         *  Le post-it et la garantie se font au magasin, à la réception — pas chez le client. */
+        _reprise(tache) {
+            const l = this._ligne(tache) || {};
+            const esc = frappe.utils.escape_html;
+            const d = new frappe.ui.Dialog({
+                title: "🔧 " + __("Machine reprise à l'atelier"),
+                fields: [
+                    { fieldtype: "HTML", fieldname: "qui", options: `<div style="margin-bottom:6px"><b>${esc(l.client || "")}</b> · ${esc(l.type || "")} · ${esc(l.debut || "")}</div>
+                        <div class="text-muted" style="font-size:12px;margin-bottom:8px">${__("Vous ne pouvez pas finir sur place et vous repartez avec la machine. Un dossier de réparation est créé tout de suite ; au magasin, il restera à coller le post-it et à le photographier.")}</div>` },
+                    { fieldtype: "Small Text", fieldname: "probleme", label: __("Qu'est-ce qui ne va pas sur la machine ?"), reqd: 1 },
+                ],
+                primary_action_label: "📷 " + __("Photo de la machine et valider"),
+                primary_action: (v) => {
+                    const probleme = (v.probleme || "").trim();
+                    if (probleme.length < 3) { frappe.msgprint(__("Dites en une phrase ce qui ne va pas sur la machine.")); return; }
+                    if (window.flotte_position_capturer) window.flotte_position_capturer("photo", "Tache de travail", tache);
+                    new frappe.ui.FileUploader({
+                        doctype: "Tache de travail", docname: tache, folder: "Home/Attachments",
+                        allow_multiple: false,
+                        restrictions: { allowed_file_types: ["image/*"] },
+                        on_success: (file) => frappe.call({
+                            method: "customization_app.reparation_osmoseur.reprendre_machine",
+                            args: { tache, photo: file.file_url, probleme },
+                            freeze: true, freeze_message: __("Création du dossier de réparation…"),
+                            callback: (r) => {
+                                const m = r.message || {};
+                                d.hide();
+                                frappe.msgprint({ title: "🔧 " + (m.machine || ""), indicator: "orange", message: esc(m.message || "") });
+                                this.charger();
+                            },
+                        }),
+                    });
+                },
+            });
+            d.show();
         }
 
         _terminer(el) {

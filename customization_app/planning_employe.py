@@ -278,14 +278,20 @@ def ma_journee(date=None, employe=None):
         # n'appellent aucune action et allongent une liste qu'on parcourt au
         # pouce, entre deux interventions.
         filters={"custom_choix_du_staff": cible,
-                 "status": ["!=", "Cancelled"],
                  "starts_on": ["between", ["%s 00:00:00" % jour, "%s 23:59:59" % jour]]},
-        fields=["name", "status", "custom_type_dintervention", "starts_on", "ends_on", "creation",
+        fields=["name", "status", "raison_annulation", "machine_reparation",
+                "custom_type_dintervention", "starts_on", "ends_on", "creation",
                 "custom_client", "nom_client", "tel", "details_adresse", "google_map",
                 "secteur", "commande_client", "subject", "rapport_visite",
                 "dispense_photos", "dans_local",
                 "liste_photos_avant", "liste_photos_apres"],
         order_by="starts_on asc", limit_page_length=0)
+
+    # Une annulée ne remonte pas — sauf celle pendant laquelle le technicien est reparti avec la machine (23/11/2026) :
+    # ce n'est pas une annulation ordinaire, la carte dit où en est le dossier de réparation.
+    reprises, etapes = _reprises_et_etapes(taches)
+    taches = [t for t in taches if t.status != "Cancelled" or t.name in reprises]
+    sous_traitant = _est_sous_traitant(cible)
 
     try:
         from customization_app import aramex_api
@@ -343,6 +349,12 @@ def ma_journee(date=None, employe=None):
             "photos": _photos_de(t),
             "reglement": _reglement((exig or {}).get("commande_infos"), bordereau),
             "exigences": exig,
+            # Machine reprise à l'atelier pendant cette intervention : {dossier, statut, etat}.
+            "reprise": reprises.get(t.name),
+            # Le bouton « Machine reprise » : seulement là où une machine peut être reprise.
+            "reprise_possible": _reprise_possible(t, sous_traitant),
+            # Vérification de stock que porte la tâche : elle se termine toute seule à l'accord des deux.
+            "verification": etapes.get(t.name),
         })
 
     return {
@@ -453,6 +465,32 @@ def manifeste_du_jour(date=None, employe=None):
 
     res = generer(bordereaux)
     return {"name": res["name"], "bordereaux": bordereaux}
+
+
+def _reprises_et_etapes(taches):
+    """Ce que deux autres outils savent des tâches de la journée : ({tâche: dossier de réparation né d'une reprise},
+    {tâche: étape de sa vérification de stock}). Jamais bloquant pour l'affichage de la journée."""
+    reprises, etapes = {}, {}
+    try:
+        from customization_app import reparation_osmoseur as RO
+        annulees = [t.name for t in taches if t.status == "Cancelled" and t.get("raison_annulation") == RO.RAISON_REPRISE]
+        reprises = RO.reprises_des_taches(annulees)
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "ma_journee : machines reprises")
+    try:
+        from customization_app import stock_entrepots as S
+        etapes = S.etapes_des_taches([t.name for t in taches if t.status == "Open"])
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "ma_journee : vérifications de stock")
+    return reprises, etapes
+
+
+def _reprise_possible(t, sous_traitant) -> bool:
+    try:
+        from customization_app import reparation_osmoseur as RO
+        return RO.refus_reprise(t, sous_traitant=sous_traitant) is None
+    except Exception:
+        return False
 
 
 def _ma_tache(tache):

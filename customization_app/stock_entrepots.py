@@ -1309,6 +1309,72 @@ DUREES_MIN = {"15 min": 15, "30 min": 30, "45 min": 45, "1 heure": 60, "1 heure,
               "1 heure, 45 min": 105, ">=2 heures": 120}
 
 
+def _statut_tache(tache: str, statut: str) -> None:
+    """Le statut de la tâche du calendrier ET sa couleur. La couleur est une colonne de la tâche, calculée à
+    l'enregistrement : posée par `set_value`, une tâche terminée gardait la couleur de l'employé au lieu du vert."""
+    from customization_app.api import compute_tache_color
+
+    t = frappe.db.get_value("Tache de travail", tache, ["custom_choix_du_staff", "owner"], as_dict=True)
+    if not t:
+        return
+    maj = {"status": statut}
+    try:
+        maj["color"] = compute_tache_color({"status": statut, "custom_choix_du_staff": t.custom_choix_du_staff, "owner": t.owner})
+    except Exception:
+        pass
+    frappe.db.set_value("Tache de travail", tache, maj)
+
+
+def libelle_etape(statut: str, employe: str = "", responsable: str = "") -> str:
+    """Où en est la vérification, écrit sur la tâche du calendrier tant qu'elle n'est pas terminée. PURE.
+    `employe` / `responsable` : les prénoms, pour dire QUI doit faire le geste suivant."""
+    if statut == EN_COURS:
+        return "à compter" + (" par " + employe if employe else "")
+    if statut == A_VALIDER:
+        return "comptée — à valider par " + (responsable or "le responsable")
+    if statut == A_CONFIRMER:
+        return "validée — à confirmer par " + (employe or "l’employé")
+    return ""
+
+
+def etapes_des_taches(taches) -> dict:
+    """{tâche: {"verification", "statut", "etape", "entrepot"}} pour les tâches du calendrier qui portent une
+    vérification encore OUVERTE (calendrier d'équipe, Ma journée)."""
+    noms = [t for t in (taches or []) if t]
+    if not noms:
+        return {}
+    rows = frappe.db.sql("""select name, statut, entrepot, tache_employe, tache_responsable from `tabVerification Stock`
+                            where statut in %(ouverts)s and (tache_employe in %(t)s or tache_responsable in %(t)s)""",
+                         {"ouverts": list(OUVERTS), "t": noms}, as_dict=True)
+    if not rows:
+        return {}
+    prenom = lambda nom: (nom or "").split(" ")[0]
+    cfg = config_verification()
+    resp = prenom(frappe.db.get_value("Employee", cfg["responsable"], "employee_name")) if cfg.get("responsable") else ""
+    out = {}
+    for r in rows:
+        emp = _employe_du_stock(r.entrepot)
+        info = {"verification": r.name, "statut": r.statut, "entrepot": se_court(r.entrepot),
+                "etape": libelle_etape(r.statut, prenom(emp.employee_name if emp else ""), resp)}
+        for t in (r.tache_employe, r.tache_responsable):
+            if t in noms:
+                out[t] = info
+    return out
+
+
+def tache_avant_enregistrement(doc, method=None):
+    """Hook before_save de la Tache de travail : la tâche d'une vérification de stock ne se clôture pas à la main.
+    Elle se termine toute seule quand l'employé et le responsable ont accepté les mêmes quantités — sinon le
+    calendrier dirait « terminée » d'une vérification qui attend encore une signature."""
+    if doc.get("status") != "Completed" or doc.is_new() or not doc.has_value_changed("status"):
+        return
+    etape = etapes_des_taches([doc.name]).get(doc.name)
+    if etape:
+        frappe.throw(_("Cette tâche se termine toute seule quand la vérification {0} est acceptée par les deux "
+                       "(elle est {1}). Ouvrez Stock › Vérification pour continuer.").format(etape["verification"], etape["etape"]),
+                     title=_("Vérification de stock en cours"))
+
+
 def _creer_tache(employe: str, entrepot_libelle: str, quand, duree: str, role: str) -> str:
     """Tâche de vérification : titre lisible dans le calendrier (il affichait « null ») et une vraie durée
     (fin = début + durée du réglage, 1 heure par défaut) — demande utilisateur 01/10/2026."""
@@ -1699,8 +1765,9 @@ def terminer_verification(name, comptes=None, note=None):
     v.valide_employe_par, v.valide_employe_le = frappe.session.user, now_datetime()
     v.valide_responsable_par = v.valide_responsable_le = None
     _sauver(v)
-    if v.tache_employe and frappe.db.get_value("Tache de travail", v.tache_employe, "status") == "Open":
-        frappe.db.set_value("Tache de travail", v.tache_employe, "status", "Completed")
+    # La tâche du calendrier reste OUVERTE : elle ne passe au vert qu'à l'accord des deux (`_cloturer`). Elle était
+    # fermée ici, dès la fin du comptage, avant toute validation (demande du 23/11/2026 : « lorsqu'ils terminent
+    # les deux et acceptent mutuellement la vérification, ça doit devenir vert »).
     cfg = config_verification()
     resp = frappe.db.get_value("Employee", cfg["responsable"], "user_id") if cfg["responsable"] else None
     if resp and resp != frappe.session.user:
@@ -1772,7 +1839,7 @@ def _renvoi_auto(v, bouges: list[str]) -> dict:
     v.note = ((v.note + "\n") if v.note else "") + _("Renvoi automatique : {0} article(s) ont bougé depuis le comptage, à recompter.").format(len(bouges))
     _sauver(v)
     if v.tache_employe and frappe.db.get_value("Tache de travail", v.tache_employe, "status") == "Completed":
-        frappe.db.set_value("Tache de travail", v.tache_employe, "status", "Open")
+        _statut_tache(v.tache_employe, "Open")
     emp = _employe_du_stock(v.entrepot)
     if emp and emp.user_id and emp.user_id != frappe.session.user:
         _prevenir(emp.user_id, _("🧾 Vérification {0} : {1} article(s) ont bougé depuis votre comptage, à recompter")
@@ -2022,7 +2089,7 @@ def _cloturer(v):
     _sauver(v)
     for t in (v.tache_employe, v.tache_responsable):
         if t and frappe.db.get_value("Tache de travail", t, "status") == "Open":
-            frappe.db.set_value("Tache de travail", t, "status", "Completed")
+            _statut_tache(t, "Completed")
     if cint(v.nb_ecarts):
         # Enquête (actions de l'employé, BL hors stock, brouillons, balance des kits, relecture IA) en tâche de
         # fond après commit : elle appelle OpenAI, la clôture ne doit pas l'attendre. Relançable depuis la fiche.
@@ -2148,7 +2215,7 @@ def _annuler(v, motif, par):
     ferme = "Cancelled" if "Cancelled" in options else "Completed"
     for t in (v.tache_employe, v.tache_responsable):
         if t and frappe.db.get_value("Tache de travail", t, "status") == "Open":
-            frappe.db.set_value("Tache de travail", t, "status", ferme)
+            _statut_tache(t, ferme)
     emp = _employe_du_stock(v.entrepot)
     if emp and emp.user_id and emp.user_id != par and cint(frappe.db.get_value("User", emp.user_id, "enabled")):
         _prevenir(emp.user_id, _("🧾 Vérification {0} annulée par {1}").format(v.name, frappe.utils.get_fullname(par)), v.name)
@@ -2173,7 +2240,7 @@ def renvoyer_verification(name, motif=None):
         v.note = ((v.note + "\n") if v.note else "") + _("Renvoi par {0} : {1}").format(frappe.utils.get_fullname(frappe.session.user), motif[:300])
     _sauver(v)
     if v.tache_employe and frappe.db.get_value("Tache de travail", v.tache_employe, "status") == "Completed":
-        frappe.db.set_value("Tache de travail", v.tache_employe, "status", "Open")
+        _statut_tache(v.tache_employe, "Open")
     emp = _employe_du_stock(v.entrepot)
     if emp and emp.user_id and emp.user_id != frappe.session.user:
         _prevenir(emp.user_id, _("🧾 Vérification {0} renvoyée au comptage par {1}").format(v.name, frappe.utils.get_fullname(frappe.session.user)), v.name)
