@@ -45,6 +45,9 @@ frappe.provide("frappe.views");
         .mj-carte.reprise .mj-tete { border-bottom-color:#fed7aa; }
         .mj-carte.reprise .mj-heure { color:#9a3412; }
         .mj-badge.rep { background:#ffedd5; color:#9a3412; }
+        /* Le bouton « Machine reprise » : le même orange que la tuile du calendrier (sa demande du 23/11/2026). */
+        .mj-actions .btn.mj-btn-reprise, .mj-actions .btn.mj-btn-reprise:focus { background:#ea580c; border-color:#ea580c; color:#fff; }
+        .mj-actions .btn.mj-btn-reprise:hover, .mj-actions .btn.mj-btn-reprise:active { background:#c2410c; border-color:#c2410c; color:#fff; }
         /* Nouvelle depuis 8h30 : rouge clair. Heure ou type modifié depuis 8h30 : orange clair. */
         .mj-carte.mj-nouvelle { background:#fef2f2; border-color:#fca5a5; }
         .mj-carte.mj-modifiee { background:#fff7ed; border-color:#fdba74; }
@@ -545,7 +548,7 @@ frappe.provide("frappe.views");
             }
             // Il n'a pas pu finir et repart avec la machine : troisième sortie, à côté de la clôture.
             const reprise = l.reprise_possible
-                ? `<button class="btn btn-sm btn-default" data-reprise="${esc(l.tache)}"
+                ? `<button class="btn btn-sm mj-btn-reprise" data-reprise="${esc(l.tache)}"
                      title="${__("Vous ne pouvez pas finir sur place et vous repartez avec la machine : un dossier de réparation est créé")}"
                     >🔧 ${__("Machine reprise")}</button>` : "";
             return `<div class="mj-actions">
