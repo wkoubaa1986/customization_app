@@ -779,7 +779,12 @@ def reprendre_machine(tache, photo, probleme):
     déposée par son client."""
     from customization_app import planning_employe as P
 
-    t = P._ma_tache(tache)
+    # Qui peut la déclarer : le technicien de l'intervention (Ma journée), un superviseur, ou quiconque a le droit
+    # de MODIFIER cette tâche (bouton de la fiche : le bureau la déclare pour un technicien qui l'appelle).
+    t = frappe.get_doc(DOCTYPE_TACHE, tache)
+    if (t.custom_choix_du_staff != P._employe_de_l_utilisateur() and not P._supervise()
+            and not frappe.has_permission(DOCTYPE_TACHE, "write", doc=t)):
+        frappe.throw(_("Cette intervention ne vous est pas affectée."), frappe.PermissionError)
     refus = refus_reprise(t.as_dict(), sous_traitant=P._est_sous_traitant(t.custom_choix_du_staff))
     if refus:
         frappe.throw(_("Reprise impossible : {0}.").format(refus))

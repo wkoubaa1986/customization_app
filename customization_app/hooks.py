@@ -630,6 +630,8 @@ app_include_js = [_js("customer_quick_entry.js"),
                   _js("sales_order_sms_groupe.js"),
                   # Clôture guidée des tâches : photos obligatoires + code superviseur.
                   _js("tache_photos_cloture.js"),
+                  # « 🔧 Machine reprise » : le dialogue commun à Ma journée et à la fiche de la tâche (bouton orange).
+                  _js("tache_machine_reprise.js"),
                   # Réparation osmoseurs : « la machine est réparée — et maintenant ? » posé à celui qui clôture la
                   # réparation, dialogue « Rendre au client » partagé, bandeau sur la commande / le BL du client.
                   _js("reparation_osmoseur_sortie.js"),

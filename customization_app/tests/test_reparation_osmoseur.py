@@ -1015,6 +1015,28 @@ class TestReprise(unittest.TestCase):
         RO.cloturer_reception(nom, code="bon")
         self.assertFalse([p for p in CL._machines_a_receptionner(caisse, "2030-01-08") if p["machine"] == nom])
 
+    def test_qui_peut_declarer_la_reprise(self):
+        """Le technicien de l'intervention, un superviseur, ou qui a le droit de modifier la tâche (fiche)."""
+        import frappe
+        frappe.set_user("Guest")
+        try:
+            with self.assertRaises(frappe.PermissionError):
+                self._reprendre()
+        finally:
+            frappe.set_user("Administrator")
+        self.assertEqual(frappe.db.get_value(RO.DOCTYPE_TACHE, self.tache.name, "status"), "Open")
+
+    def test_le_bouton_de_la_fiche_suit_la_regle_du_serveur(self):
+        from pathlib import Path
+        racine = Path(__file__).parents[1]
+        js = (racine / "public/js/tache_machine_reprise.js").read_text()
+        for t in RO.TYPES_REPRISE:
+            self.assertIn('"%s"' % t, js)
+        self.assertIn('const TMR_RAISON = "%s";' % RO.RAISON_REPRISE, js)
+        self.assertIn("customization_app.reparation_osmoseur.reprendre_machine", js)
+        self.assertIn('_js("tache_machine_reprise.js")', (racine / "hooks.py").read_text())
+        self.assertIn("window.machine_reprise_dialogue", (racine / "public/js/ma_journee.js").read_text())
+
     def test_annuler_la_reprise_rouvre_l_intervention(self):
         import frappe
         nom = self._reprendre()

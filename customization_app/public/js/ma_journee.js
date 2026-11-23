@@ -817,43 +817,15 @@ frappe.provide("frappe.views");
             });
         }
 
-        /** Le technicien n'a pas pu finir et repart avec la machine (23/11/2026). Une phrase sur le problème, puis la
-         *  photo : c'est son dépôt qui fait tout (dossier de réparation créé, intervention fermée « machine reprise »).
-         *  Le post-it et la garantie se font au magasin, à la réception — pas chez le client. */
+        /** Le technicien n'a pas pu finir et repart avec la machine (23/11/2026) : le dialogue commun à la fiche de
+         *  la tâche (public/js/tache_machine_reprise.js) — une phrase, puis la photo, dont le dépôt fait tout. */
         _reprise(tache) {
             const l = this._ligne(tache) || {};
-            const esc = frappe.utils.escape_html;
-            const d = new frappe.ui.Dialog({
-                title: "🔧 " + __("Machine reprise à l'atelier"),
-                fields: [
-                    { fieldtype: "HTML", fieldname: "qui", options: `<div style="margin-bottom:6px"><b>${esc(l.client || "")}</b> · ${esc(l.type || "")} · ${esc(l.debut || "")}</div>
-                        <div class="text-muted" style="font-size:12px;margin-bottom:8px">${__("Vous ne pouvez pas finir sur place et vous repartez avec la machine. Un dossier de réparation est créé tout de suite ; au magasin, il restera à coller le post-it et à le photographier.")}</div>` },
-                    { fieldtype: "Small Text", fieldname: "probleme", label: __("Qu'est-ce qui ne va pas sur la machine ?"), reqd: 1 },
-                ],
-                primary_action_label: "📷 " + __("Photo de la machine et valider"),
-                primary_action: (v) => {
-                    const probleme = (v.probleme || "").trim();
-                    if (probleme.length < 3) { frappe.msgprint(__("Dites en une phrase ce qui ne va pas sur la machine.")); return; }
-                    if (window.flotte_position_capturer) window.flotte_position_capturer("photo", "Tache de travail", tache);
-                    new frappe.ui.FileUploader({
-                        doctype: "Tache de travail", docname: tache, folder: "Home/Attachments",
-                        allow_multiple: false,
-                        restrictions: { allowed_file_types: ["image/*"] },
-                        on_success: (file) => frappe.call({
-                            method: "customization_app.reparation_osmoseur.reprendre_machine",
-                            args: { tache, photo: file.file_url, probleme },
-                            freeze: true, freeze_message: __("Création du dossier de réparation…"),
-                            callback: (r) => {
-                                const m = r.message || {};
-                                d.hide();
-                                frappe.msgprint({ title: "🔧 " + (m.machine || ""), indicator: "orange", message: esc(m.message || "") });
-                                this.charger();
-                            },
-                        }),
-                    });
-                },
-            });
-            d.show();
+            if (typeof window.machine_reprise_dialogue !== "function") {
+                frappe.msgprint(__("Le dialogue de reprise n est pas chargé — rechargez la page."));
+                return;
+            }
+            window.machine_reprise_dialogue({ tache, client: l.client, type: l.type, debut: l.debut, apres: () => this.charger() });
         }
 
         _terminer(el) {
