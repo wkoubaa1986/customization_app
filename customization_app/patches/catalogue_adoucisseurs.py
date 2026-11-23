@@ -11,6 +11,8 @@ jour de la génération (lignes brutes des articles à créer ; pour les article
 de prod et la valeur du dev).
 
 Règles :
+- un article renommé sur le dev est renommé ici par le renommage de Frappe (le code change sur toutes les commandes,
+  le stock, les prix), avant tout le reste ;
 - rien n'est écrasé : un article, un prix, un attribut déjà présent est laissé tel quel ;
 - un champ d'un article existant n'est posé que si la prod porte encore la valeur relevée à la génération — si
   quelqu'un l'a changé en prod entre-temps, la valeur de prod reste et le bilan le dit ;
@@ -88,6 +90,36 @@ def pareil(a, b):
         return float(a) == float(b)
     except (TypeError, ValueError):
         return False
+
+
+# ── 0. Articles renommés ─────────────────────────────────────────────────────
+def renommer(d, bilan):
+    """Le code de l'article change partout (commandes, stock, prix, historique) : c'est le renommage de Frappe, le
+    même que celui fait sur le dev. La fiche garde sa date : les retouches qui suivent la comparent à celle du dev."""
+    for r in d.get("renommages", []):
+        de, vers = r["de"], r["vers"]
+        if existe("tabItem", vers):
+            bilan.note("article déjà renommé")
+            if existe("tabItem", de):
+                bilan.alerte("Renommage %s → %s : les deux articles existent, rien n'est fusionné" % (de, vers))
+            continue
+        if not existe("tabItem", de):
+            bilan.alerte("Renommage %s → %s : l'article %s n'existe pas ici" % (de, vers, de))
+            continue
+        date = frappe.db.sql("select modified, modified_by from tabItem where name=%s", (de,))[0]
+        frappe.db.savepoint("catalogue_renommage")
+        try:
+            frappe.rename_doc("Item", de, vers, force=True, show_alert=False, rebuild_search=False)
+            frappe.db.sql("update tabItem set modified=%s, modified_by=%s where name=%s", (date[0], date[1], vers))
+            bilan.note("article renommé")
+        except Exception as e:
+            frappe.db.rollback(save_point="catalogue_renommage")
+            frappe.clear_messages()
+            bilan.note("renommage refusé")
+            bilan.alerte("Renommage %s → %s : refusé (%s) — à faire à la main, les retouches de cet article ne sont pas posées"
+                         % (de, vers, str(e)[:300]))
+    if d.get("renommages"):
+        frappe.local.document_cache = {}
 
 
 # ── 1. Attributs et groupes, avant les articles qui s'y réfèrent ─────────────
@@ -311,6 +343,7 @@ def appliquer(d, dossier=DOSSIER):
     if manquants:
         bilan.alerte("Rien n'a été fait : des fiches citées par les nouveaux articles n'existent pas ici : " + ", ".join(manquants))
         return bilan
+    renommer(d, bilan)                 # d'abord : tout le reste parle des articles sous leur nouveau code
     creer_attributs(d, bilan)
     creer_groupes(d, bilan)
     creer_articles(d, bilan)

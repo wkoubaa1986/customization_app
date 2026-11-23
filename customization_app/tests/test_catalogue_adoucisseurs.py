@@ -40,7 +40,7 @@ class TestDonnees(unittest.TestCase):
             cls.d = json.load(f)
 
     def test_rubriques(self):
-        for cle in ("attributs", "groupes", "articles_a_creer", "articles_a_modifier", "a_desactiver", "prix_a_creer",
+        for cle in ("renommages", "attributs", "groupes", "articles_a_creer", "articles_a_modifier", "a_desactiver", "prix_a_creer",
                     "prix_a_modifier", "fichiers", "commentaires", "transformations", "liens", "genere_le", "prod_lue_le"):
             self.assertIn(cle, self.d, cle)
 
@@ -49,6 +49,15 @@ class TestDonnees(unittest.TestCase):
         self.assertEqual(len(crees), len(self.d["articles_a_creer"]))
         self.assertFalse(crees & {a["name"] for a in self.d["articles_a_modifier"]})
         self.assertFalse(crees & set(self.d["a_desactiver"]))
+
+    def test_un_article_renomme_n_est_pas_recree(self):
+        """Renommé = la même fiche sous un nouveau code : ses retouches se lisent sous le nouveau code."""
+        crees = {a["name"] for a in self.d["articles_a_creer"]}
+        for r in self.d["renommages"]:
+            self.assertNotEqual(r["de"], r["vers"])
+            self.assertNotIn(r["vers"], crees, r)
+            self.assertNotIn(r["de"], crees, r)
+            self.assertNotIn(r["de"], {a["name"] for a in self.d["articles_a_modifier"]}, r)
 
     def test_la_desactivation_ne_passe_que_par_sa_rubrique(self):
         """« disabled » d'un article existant n'est posé qu'à la fin, après la transformation de stock."""
