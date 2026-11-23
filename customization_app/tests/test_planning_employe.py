@@ -215,3 +215,64 @@ class TestAManifester(unittest.TestCase):
              "colis": {"manifeste": "MAN-2026-00001"}},
         ]
         self.assertEqual(_a_manifester(lignes), ["111"])
+
+
+class TestHeureFixe(unittest.TestCase):
+    """Heure fixe = heure promise au client (demande du 23/11/2026) : pastille pleine sur la carte, rappel en haut de
+    la journée, alerte quand l'heure approche. La règle d'affichage est dans ma_journee.js (elle avance toute seule,
+    minute par minute) ; elle est rejouée ici avec node."""
+
+    @classmethod
+    def setUpClass(cls):
+        import os
+        with open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "public", "js", "ma_journee.js"),
+                  encoding="utf-8") as f:
+            cls.js = f.read()
+
+    def _etat(self, debut, maintenant, ouverte=True, avant=30):
+        import json
+        import shutil
+        import subprocess
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node absent")
+        regle = self.js.split("// mj_heure_fixe_etat:debut")[1].split("// mj_heure_fixe_etat:fin")[0]
+        code = regle + "; console.log(JSON.stringify(mj_heure_fixe_etat(%s, %s, %s, %s)))" % (
+            json.dumps(debut), json.dumps(maintenant), json.dumps(ouverte), json.dumps(avant))
+        return json.loads(subprocess.run([node, "-e", code], capture_output=True, text=True, check=True).stdout)
+
+    def test_minutes_du_jour(self):
+        self.assertEqual(P.minutes_du_jour("2026-11-23 15:00:00"), 900)
+        self.assertEqual(P.minutes_du_jour("2026-11-23 09:45:30.123456"), 585)
+        self.assertIsNone(P.minutes_du_jour(None))
+        self.assertIsNone(P.minutes_du_jour("2026-11-23"))
+
+    def test_rien_tant_que_l_heure_est_loin(self):
+        self.assertIsNone(self._etat(900, 869))          # 31 minutes avant
+
+    def test_l_heure_approche(self):
+        self.assertEqual(self._etat(900, 870), {"genre": "proche", "texte": "dans 30 min"})
+        self.assertEqual(self._etat(900, 899), {"genre": "proche", "texte": "dans 1 min"})
+        self.assertEqual(self._etat(900, 900), {"genre": "proche", "texte": "maintenant"})
+
+    def test_en_retard_tant_que_la_tache_est_a_faire(self):
+        self.assertEqual(self._etat(900, 910), {"genre": "retard", "texte": "en retard de 10 min"})
+        self.assertEqual(self._etat(900, 975), {"genre": "retard", "texte": "en retard de 1 h 15"})
+        self.assertIsNone(self._etat(900, 975, ouverte=False))        # clôturée : plus d'alerte
+
+    def test_pas_d_alerte_un_autre_jour(self):
+        """Hors aujourd'hui le serveur ne donne pas d'heure : la pastille reste, sans compte à rebours."""
+        self.assertIsNone(self._etat(900, None))
+
+    def test_l_ecran_porte_les_trois_signes(self):
+        self.assertIn('class="mj-heure mj-fixe" data-fixe="${l.debut_min}"', self.js)       # la pastille sur la carte
+        self.assertIn('<div class="mj-fixes">', self.js)                                    # le rappel en haut
+        self.assertIn("setInterval(() => this._maj_heures_fixes(), 30000)", self.js)        # l'alerte qui avance seule
+        self.assertIn("this.decalage_min", self.js)                                         # sur l'heure du site
+
+    def test_le_serveur_transmet_la_case_et_l_heure_du_site(self):
+        import inspect
+        source = inspect.getsource(P.ma_journee)
+        for attendu in ('"heure_fixe":', '"debut_min":', '"maintenant_min":', '"heure_fixe_avant": HEURE_FIXE_AVANT', "CHAMP_HEURE_FIXE"):
+            self.assertIn(attendu, source, attendu)
+        self.assertEqual((P.CHAMP_HEURE_FIXE, P.HEURE_FIXE_AVANT), ("custom_tournee_fixe", 30))

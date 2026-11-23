@@ -29,7 +29,7 @@ import re
 
 import frappe
 from frappe import _
-from frappe.utils import cint, getdate, nowdate
+from frappe.utils import cint, getdate, now_datetime, nowdate
 
 DOCTYPE_TACHE = "Tache de travail"
 
@@ -265,6 +265,22 @@ def _alerte_du_jour(t, jour, employe):
         return None
 
 
+# Heure fixe (23/11/2026 : « lorsque l'heure est fixe, bien la signaler au technicien ») : la case « Heure fixe » de la
+# tâche = une heure promise au client (prise de rendez-vous, ou cochée à la main). La carte la montre dans une
+# pastille pleine, un rappel en haut de la journée la liste, et la pastille passe au rouge HEURE_FIXE_AVANT minutes
+# avant, puis compte le retard tant que la tâche n'est pas clôturée (règle d'affichage : ma_journee.js).
+CHAMP_HEURE_FIXE = "custom_tournee_fixe"
+HEURE_FIXE_AVANT = 30
+
+
+def minutes_du_jour(quand) -> int | None:
+    """Minutes depuis minuit d'une date-heure (ou de son texte « AAAA-MM-JJ HH:MM:SS »), None sans heure."""
+    texte = str(quand or "")[11:16]
+    if len(texte) != 5 or texte[2] != ":":
+        return None
+    return int(texte[:2]) * 60 + int(texte[3:])
+
+
 @frappe.whitelist()
 def ma_journee(date=None, employe=None):
     """Les interventions de la journée, avec tout ce qu'il faut pour les mener."""
@@ -284,7 +300,8 @@ def ma_journee(date=None, employe=None):
                 "custom_client", "nom_client", "tel", "details_adresse", "google_map",
                 "secteur", "commande_client", "subject", "rapport_visite",
                 "dispense_photos", "dans_local",
-                "liste_photos_avant", "liste_photos_apres"],
+                "liste_photos_avant", "liste_photos_apres"]
+               + ([CHAMP_HEURE_FIXE] if frappe.db.has_column(DOCTYPE_TACHE, CHAMP_HEURE_FIXE) else []),
         order_by="starts_on asc", limit_page_length=0)
 
     # Une annulée ne remonte pas — sauf celle pendant laquelle le technicien est reparti avec la machine (23/11/2026) :
@@ -323,6 +340,9 @@ def ma_journee(date=None, employe=None):
             "type": t.custom_type_dintervention,
             "debut": str(t.starts_on)[11:16] if t.starts_on else "",
             "fin": str(t.ends_on)[11:16] if t.ends_on else "",
+            # Heure promise au client : pastille pleine sur la carte, rappel en haut, alerte quand l'heure approche.
+            "heure_fixe": bool(cint(t.get(CHAMP_HEURE_FIXE))) and bool(t.starts_on),
+            "debut_min": minutes_du_jour(t.starts_on),
             "client": t.nom_client or t.custom_client,
             "client_id": t.custom_client,
             "telephones": _numeros(t.tel),
@@ -359,6 +379,10 @@ def ma_journee(date=None, employe=None):
 
     return {
         "jour": str(jour),
+        # L'heure du serveur (celle du site), seulement pour aujourd'hui : l'alerte « heure fixe » ne dépend pas de
+        # l'horloge du téléphone. Un autre jour : pas d'alerte.
+        "maintenant_min": minutes_du_jour(now_datetime()) if jour == getdate(nowdate()) else None,
+        "heure_fixe_avant": HEURE_FIXE_AVANT,
         "employe": cible,
         # Sous-traitant : l'écran remplace « Clôturer » par la clôture mobile (articles + règlement)
         # et ajoute « Mon stock ».

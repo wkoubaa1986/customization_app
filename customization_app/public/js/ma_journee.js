@@ -23,6 +23,27 @@ frappe.provide("frappe.views");
         "Livraison": "🚚", "Visite": "👋", "Autre": "☕",
     };
 
+    /**
+     * Heure fixe = heure promise au client (case « Heure fixe » de la tâche). Où en est-on ? Pure.
+     * - tâche clôturée, ou jour autre qu'aujourd'hui (pas d'heure du site) : rien à signaler ;
+     * - plus de `avant` minutes devant soi : rien ;
+     * - sinon « dans 20 min », puis « maintenant », puis « en retard de 10 min » tant que la tâche est à faire.
+     * Renvoie null ou { genre: "proche" | "retard", texte }.
+     */
+    // mj_heure_fixe_etat:debut
+    function mj_heure_fixe_etat(debutMin, maintenantMin, ouverte, avant) {
+        if (!ouverte || debutMin === null || debutMin === undefined
+            || maintenantMin === null || maintenantMin === undefined) return null;
+        const reste = debutMin - maintenantMin;
+        if (reste > avant) return null;
+        const duree = (n) => (n < 60 ? n + " min" : Math.floor(n / 60) + " h " + String(n % 60).padStart(2, "0"));
+        if (reste > 0) return { genre: "proche", texte: "dans " + duree(reste) };
+        if (reste === 0) return { genre: "proche", texte: "maintenant" };
+        return { genre: "retard", texte: "en retard de " + duree(-reste) };
+    }
+    // mj_heure_fixe_etat:fin
+    window.mj_heure_fixe_etat = mj_heure_fixe_etat;
+
     function poser_css() {
         if (document.getElementById("mj-css")) return;
         const style = document.createElement("style");
@@ -62,6 +83,25 @@ frappe.provide("frappe.views");
         .mj-tete { display:flex; align-items:center; gap:7px; padding:9px 11px;
                    border-bottom:1px solid var(--border-color,#eef1f5); flex-wrap:wrap; }
         .mj-heure { font-weight:700; font-size:15px; }
+        /* Heure fixe = heure promise au client (23/11/2026) : pastille pleine bleu foncé, une couleur qu'aucun autre
+           état n'utilise ; rouge quand l'heure approche ou est dépassée ; verte une fois la tâche faite. */
+        .mj-heure.mj-fixe, .mj-carte.faite .mj-heure.mj-fixe, .mj-carte.reprise .mj-heure.mj-fixe {
+            display:inline-flex; align-items:center; flex-wrap:wrap; gap:3px 7px; color:#fff; background:#1e3a8a;
+            border-radius:999px; padding:3px 12px; }
+        .mj-carte.faite .mj-heure.mj-fixe { background:#166534; }
+        .mj-carte.reprise .mj-heure.mj-fixe { background:#9a3412; }
+        .mj-heure.mj-fixe.proche, .mj-heure.mj-fixe.retard { background:#dc2626; }
+        .mj-fixe-lib { font-size:11px; font-weight:600; opacity:.92; }
+        .mj-fixe-etat { font-size:12px; font-weight:800; background:#fff; color:#b91c1c; border-radius:999px; padding:0 8px; }
+        .mj-fixe-etat:empty { display:none; }
+        /* Le rappel en haut de la journée. */
+        .mj-fixes { border:1px solid #1e3a8a; background:#eff6ff; border-radius:12px; padding:9px 12px; margin:0 0 10px; }
+        .mj-fixes .t { font-weight:700; color:#1e3a8a; }
+        .mj-fixes a { display:inline-block; margin:6px 8px 0 0; padding:5px 12px; border-radius:14px; line-height:1.3;
+                      background:#fff; border:1px solid #bfdbfe; color:#1e3a8a; font-size:13px; font-weight:600; text-decoration:none; }
+        .mj-fixes a.faite { color:#166534; border-color:#bbf7d0; font-weight:500; }
+        .mj-fixes a.proche, .mj-fixes a.retard { background:#dc2626; border-color:#dc2626; color:#fff; }
+        .mj-fixes a .e:empty { display:none; }
         .mj-client { font-weight:600; }
         .mj-corps { padding:9px 11px; display:grid; gap:8px; }
         .mj-l { display:flex; gap:8px; align-items:flex-start; font-size:13px; }
@@ -129,6 +169,9 @@ frappe.provide("frappe.views");
             this._bind();
             this.dialog.show();
             this.charger();
+            // Heure fixe : la pastille compte les minutes sans recharger la journée.
+            this._minuterie = setInterval(() => this._maj_heures_fixes(), 30000);
+            this.dialog.$wrapper.on("hidden.bs.modal", () => clearInterval(this._minuterie));
         }
 
         _bind() {
@@ -141,6 +184,12 @@ frappe.provide("frappe.views");
                 this.charger();
             });
             w.on("click", "[data-recharger]", () => this.charger());
+            // Rappel des heures fixes : un appui descend à la carte.
+            w.on("click", "[data-vers-carte]", (e) => {
+                e.preventDefault();
+                const carte = this.$corps.find(`[data-carte="${$(e.currentTarget).data("vers-carte")}"]`)[0];
+                if (carte) carte.scrollIntoView({ behavior: "smooth", block: "start" });
+            });
             w.on("click", "[data-caisse]", () => this._caisse());
             // Sous-traitant : son stock (page Stock, limitée à SON entrepôt côté serveur).
             w.on("click", "[data-stock]", () => frappe.set_route("stock-entrepots"));
@@ -169,7 +218,13 @@ frappe.provide("frappe.views");
             frappe.call({
                 method: "customization_app.planning_employe.ma_journee",
                 args: { date: this.jour, employe: this.employe },
-                callback: (r) => { this.data = r.message || {}; this._rendre(); },
+                callback: (r) => {
+                    this.data = r.message || {};
+                    // L'heure du SITE (pas celle du téléphone) : on garde l'écart avec l'horloge locale pour avancer seul.
+                    const m = this.data.maintenant_min;
+                    this.decalage_min = (m === null || m === undefined) ? null : m - this._minutes_locales();
+                    this._rendre();
+                },
                 // ⚠️ ON MONTRE LE MESSAGE DU SERVEUR. Un « indisponible » générique
                 // cachait la vraie cause — « aucune fiche employé rattachée » —
                 // et laissait chercher un bug qui n'existait pas.
@@ -233,6 +288,15 @@ frappe.provide("frappe.views");
                 ${bouts_caisse.map((b) => `<div style="font-size:12.5px;color:#78350f;margin-top:2px">${b}</div>`).join("")}
                 <a class="btn btn-sm btn-primary" style="margin-top:8px" href="/app/caisse-journaliere">${__("Ouvrir la caisse")}</a>
               </div>` : "";
+            // Heures fixes : le rappel en haut, pour organiser la tournée autour dès le matin.
+            const fixes = m.sans_employe ? [] : lignes.filter((l) => l.heure_fixe && !l.reprise);
+            const rappel_fixes = fixes.length ? `
+              <div class="mj-fixes">
+                <div class="t">🕘 ${fixes.length} ${__("rendez-vous à heure fixe")} — ${__("heure promise au client")}</div>
+                ${fixes.map((l) => `<a href="#" data-vers-carte="${esc(l.tache)}" data-fixe-resume="${l.debut_min}"
+                    data-ouverte="${l.statut === "Open" ? 1 : 0}" class="${l.statut === "Open" ? "" : "faite"}"
+                    >${l.statut === "Open" ? "" : "✓ "}${esc(l.debut)} · ${esc(l.client || "")}<span class="e"></span></a>`).join("")}
+              </div>` : "";
             this.$corps.html(`
               ${bandeau}${bandeau_machines}${bandeau_caisse}
               <div class="mj-bar">
@@ -258,10 +322,33 @@ frappe.provide("frappe.views");
                     : `<b>${esc(m.employe_nom || "")}</b> · ${lignes.length} ${
                         __("intervention(s)")}, ${restant} ${__("à faire")}`}</span>
               </div>
+              ${rappel_fixes}
               ${corps}`);
             // « 🔧 À proposer » des clients de la journée, en un appel (historique_client.js).
             if (window.historique_remplir_pieces) window.historique_remplir_pieces(this.$corps);
+            this._maj_heures_fixes();
             this._montrer_cible();
+        }
+
+        _minutes_locales() {
+            const d = new Date();
+            return d.getHours() * 60 + d.getMinutes();
+        }
+
+        /** Heure fixe : « dans 20 min » / « en retard de 10 min » sur la pastille de la carte et dans le rappel du haut.
+         *  Rejoué toutes les 30 secondes ; rien un autre jour qu'aujourd'hui (pas d'heure du site). */
+        _maj_heures_fixes() {
+            if (!this.$corps || !this.data) return;
+            const maintenant = (this.decalage_min === null || this.decalage_min === undefined)
+                ? null : this._minutes_locales() + this.decalage_min;
+            const avant = this.data.heure_fixe_avant || 30;
+            this.$corps.find("[data-fixe], [data-fixe-resume]").each((i, el) => {
+                const $el = $(el);
+                const debut = parseInt($el.attr("data-fixe") || $el.attr("data-fixe-resume"), 10);
+                const etat = mj_heure_fixe_etat(isNaN(debut) ? null : debut, maintenant, $el.attr("data-ouverte") === "1", avant);
+                $el.removeClass("proche retard").addClass(etat ? etat.genre : "");
+                $el.find(".mj-fixe-etat, .e").text(etat ? ($el.is("[data-fixe-resume]") ? " · " : "") + etat.texte : "");
+            });
         }
 
         /** L'intervention cliquée dans « Mon agenda » : la fenêtre s'y place, UNE fois (un rechargement après
@@ -306,7 +393,11 @@ frappe.provide("frappe.views");
                 this.cible && this.cible === l.tache ? "mj-cible" : ""}" data-carte="${esc(l.tache)}">
               ${bandeau}
               <div class="mj-tete">
-                <span class="mj-heure">${esc(l.debut)}</span>
+                ${l.heure_fixe
+                    ? `<span class="mj-heure mj-fixe" data-fixe="${l.debut_min}" data-ouverte="${l.statut === "Open" ? 1 : 0}"
+                         title="${__("Heure fixe : cette heure a été promise au client")}">🕘 ${esc(l.debut)}
+                         <span class="mj-fixe-lib">${__("heure promise au client")}</span><span class="mj-fixe-etat"></span></span>`
+                    : `<span class="mj-heure">${esc(l.debut)}</span>`}
                 <span class="mj-badge inf">${ICONES[l.type] || "📌"} ${esc(l.type || "?")}</span>
                 <span class="mj-client">${esc(l.client || "")}</span>
                 ${window.historique_bouton_html && l.client_id ? window.historique_bouton_html(l.client_id) : ""}
