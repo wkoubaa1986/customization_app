@@ -32,6 +32,40 @@ class TestRegles(unittest.TestCase):
         self.assertIn("! Prix X : laissé", b.texte())
 
 
+class TestImages(unittest.TestCase):
+    """En prod les images n'existent pas encore sur le disque : le patch les copie depuis ses données."""
+
+    def _jouer(self, deja_sur_le_site=None):
+        import tempfile
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            dossier, site = os.path.join(tmp, "donnees"), os.path.join(tmp, "site")
+            os.makedirs(os.path.join(dossier, "fichiers", "public", "files"))
+            with open(os.path.join(dossier, "fichiers", "public", "files", "a.png"), "wb") as f:
+                f.write(b"image du patch")
+            if deja_sur_le_site is not None:
+                os.makedirs(os.path.join(site, "public", "files"))
+                with open(os.path.join(site, "public", "files", "a.png"), "wb") as f:
+                    f.write(deja_sur_le_site)
+            bilan = P.Bilan()
+            d = {"fichiers": [{"ligne": {"name": "f1", "file_name": "a.png"}, "chemin": "public/files/a.png"}]}
+            with mock.patch.object(P.frappe, "get_site_path", return_value=site), mock.patch.object(P, "existe", return_value=True):
+                P.remettre_fichiers(d, bilan, dossier)
+            with open(os.path.join(site, "public", "files", "a.png"), "rb") as f:
+                return bilan, f.read()
+
+    def test_image_copiee_quand_elle_manque(self):
+        bilan, contenu = self._jouer()
+        self.assertEqual(contenu, b"image du patch")
+        self.assertEqual(bilan.comptes.get("image copiée"), 1)
+
+    def test_image_deja_la_jamais_ecrasee(self):
+        bilan, contenu = self._jouer(deja_sur_le_site=b"une autre image, plus longue")
+        self.assertEqual(contenu, b"une autre image, plus longue")
+        self.assertEqual(bilan.comptes.get("image déjà sur le disque"), 1)
+        self.assertEqual(len(bilan.alertes), 1)
+
+
 @unittest.skipUnless(os.path.isfile(DONNEES), "données du patch pas encore générées")
 class TestDonnees(unittest.TestCase):
     @classmethod

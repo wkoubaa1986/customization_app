@@ -375,3 +375,7 @@ def execute():
     print(texte)
     frappe.log_error(title=TITRE_BILAN, message=texte)
     frappe.clear_cache()
+    try:        # les articles insérés en lignes brutes ne sont pas dans la recherche générale : on la refait pour les articles
+        frappe.enqueue("frappe.utils.global_search.rebuild_for_doctype", doctype="Item", enqueue_after_commit=True)
+    except Exception:
+        pass
