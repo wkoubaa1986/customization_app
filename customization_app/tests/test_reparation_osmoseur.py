@@ -1030,6 +1030,31 @@ class TestReprise(unittest.TestCase):
         self.assertEqual(RO.synchroniser(nom), RO.S_RENDUE)
         self.assertEqual(RO.reprises_des_taches([self.tache.name])[self.tache.name]["etat"], "rendue au client")
 
+    def test_lier_apres_coup_un_dossier_ouvert_a_part(self):
+        """OSM-2026-0016 : entretien annulé « Autre », dossier ouvert deux jours plus tard au magasin."""
+        import frappe
+        frappe.db.set_value(RO.DOCTYPE_TACHE, self.tache.name, {"status": "Cancelled", "raison_annulation": "Autre",
+                                                                "rapport_visite": "<p>Machine transportée au magasin</p>"})
+        nom = RO.creer_reception(self.client, garantie="Hors garantie")["name"]
+        autre_client = frappe.db.get_value("Customer", {"disabled": 0, "name": ["!=", self.client]}, "name")
+        ailleurs = RO.creer_reception(autre_client, garantie="Hors garantie")["name"]
+        self.assertIn("même client", RO.lier_reprise(ailleurs, self.tache.name))
+        self.assertIn("introuvable", RO.lier_reprise("OSM-0000-0000", self.tache.name))
+        self.assertIsNone(RO.lier_reprise(nom, self.tache.name))
+        m = frappe.db.get_value(RO.DOCTYPE, nom, ["tache_origine", "note_reception", "statut"], as_dict=True)
+        self.assertEqual((m.tache_origine, m.statut), (self.tache.name, RO.S_RECEPTION))
+        self.assertIn("Machine transportée au magasin", m.note_reception)
+        self.assertEqual(frappe.db.get_value(RO.DOCTYPE_TACHE, self.tache.name, ["status", "raison_annulation"]), ("Cancelled", RO.RAISON_REPRISE))
+        self.assertEqual(RO.reprises_des_taches([self.tache.name])[self.tache.name]["dossier"], nom)
+        self.assertIsNone(RO.lier_reprise(nom, self.tache.name))                              # rejouable sans effet
+        self.assertEqual(frappe.db.count("Comment", {"reference_name": nom, "content": ["like", "🔗 Relié après coup%"]}), 1)
+        second = RO.creer_reception(self.client, garantie="Hors garantie")["name"]           # même client, autre dossier
+        self.assertIn("déjà l'origine", RO.lier_reprise(second, self.tache.name))
+        # une intervention ouverte ou terminée ne se relie pas
+        frappe.db.set_value(RO.DOCTYPE, nom, "tache_origine", None)
+        frappe.db.set_value(RO.DOCTYPE_TACHE, self.tache.name, "status", "Completed")
+        self.assertIn("n'est pas fermée", RO.lier_reprise(nom, self.tache.name))
+
     def test_une_machine_deposee_par_son_client_se_livre_toujours_en_livraison(self):
         self.assertIsNone(RO.entretien_a_refaire(None))
         self.assertIsNone(RO.entretien_a_refaire(self.tache.name))          # l'entretien est ouvert : rien à refaire

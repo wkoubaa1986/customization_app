@@ -819,6 +819,49 @@ def annuler_reprise(machine):
     return {"tache": origine}
 
 
+def lier_reprise(machine, tache) -> str | None:
+    """Relie APRÈS COUP un dossier à l'intervention pendant laquelle la machine a été reprise — pour les reprises
+    d'avant le bouton « Machine reprise » de Ma journée (OSM-2026-0016 : entretien du 21/11/2026 annulé avec la raison
+    « Autre » et le rapport « la machine a été transportée vers le magasin », dossier ouvert à part le 23/11).
+    L'intervention garde son statut et prend la raison « Machine reprise à l'atelier » ; rien d'autre ne bouge.
+    Rend None quand le lien est en place (ou l'était déjà), sinon la raison du refus. Écritures directes : utilisable
+    dans un patch (aucun hook, aucun script serveur)."""
+    m = frappe.db.get_value(DOCTYPE, machine, ["name", "client", "note_reception", CHAMP_ORIGINE], as_dict=True)
+    t = frappe.db.get_value(DOCTYPE_TACHE, tache, ["name", "status", "custom_client", "custom_type_dintervention", "raison_annulation",
+                                                   "starts_on", "custom_employé", "rapport_visite"], as_dict=True)
+    if not m or not t:
+        return "dossier ou intervention introuvable"
+    if m.get(CHAMP_ORIGINE) == tache and t.raison_annulation == RAISON_REPRISE:
+        return None
+    if m.get(CHAMP_ORIGINE) and m.get(CHAMP_ORIGINE) != tache:
+        return "le dossier vient déjà de l'intervention %s" % m.get(CHAMP_ORIGINE)
+    if m.client != t.custom_client:
+        return "le dossier et l'intervention ne sont pas du même client"
+    if t.status != "Cancelled":
+        return "l'intervention n'est pas fermée sans avoir été faite (%s)" % t.status
+    if t.custom_type_dintervention not in TYPES_REPRISE:
+        return "une machine ne se reprend que pendant un entretien, une réparation ou une visite"
+    autre = frappe.db.get_value(DOCTYPE, {CHAMP_ORIGINE: tache, "name": ["!=", machine]}, "name")
+    if autre:
+        return "l'intervention est déjà l'origine du dossier %s" % autre
+    maj = {CHAMP_ORIGINE: tache}
+    if not (m.note_reception or "").strip():
+        rapport = frappe.utils.strip_html(t.rapport_visite or "").strip()
+        maj["note_reception"] = ("Reprise chez le client par %s — %s du %s non terminé (%s)%s" % (
+            t.get("custom_employé") or "le technicien", (t.custom_type_dintervention or "").lower(),
+            frappe.format(getdate(t.starts_on), {"fieldtype": "Date"}) if t.starts_on else "", tache,
+            " : " + rapport if rapport else ""))[:1000]
+    frappe.db.set_value(DOCTYPE, machine, maj, update_modified=False)
+    frappe.db.set_value(DOCTYPE_TACHE, tache, "raison_annulation", RAISON_REPRISE, update_modified=False)
+    for doctype, nom, texte in (
+            (DOCTYPE_TACHE, tache, "🔧 Machine reprise à l'atelier — reliée après coup au dossier %s (raison d'annulation d'avant : %s)"
+             % (machine, t.raison_annulation or "aucune")),
+            (DOCTYPE, machine, "🔗 Relié après coup à l'intervention %s, pendant laquelle la machine a été reprise chez le client" % tache)):
+        frappe.get_doc({"doctype": "Comment", "comment_type": "Info", "reference_doctype": doctype, "reference_name": nom,
+                        "content": texte}).insert(ignore_permissions=True)
+    return None
+
+
 @frappe.whitelist()
 def decider_garantie(machine, garantie, commande_garantie=None):
     """La garantie d'une machine reprise chez le client se décide au magasin, à la réception (le technicien ne la

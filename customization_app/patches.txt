@@ -142,3 +142,4 @@ customization_app.patches.verification_stock_8h45_une_heure
 customization_app.patches.vehicules_entreprise
 customization_app.patches.calendrier_equipe_raccourci
 customization_app.patches.verification_stock_tache_verte_a_l_accord
+customization_app.patches.lier_reprise_osm_2026_0016
