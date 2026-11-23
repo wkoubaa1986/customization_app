@@ -476,6 +476,28 @@ def dossiers_en_attente() -> list:
     return [m for m in rows if m.statut != S_RECEPTION or m.get(CHAMP_ORIGINE)]
 
 
+def machines_a_receptionner(employe_nom: str | None = None, jusqu_au=None) -> list:
+    """Les machines reprises chez un client par cet employé et PAS ENCORE réceptionnées au magasin (dossier toujours
+    « en route »), reprises au plus tard le jour `jusqu_au`. Sert à la caisse du technicien : il ne la compte pas
+    tant qu'une machine qu'il a reprise n'est pas réceptionnée (demande du 23/11/2026). `employe_nom` : le nom de
+    l'employé, qui est aussi le nom de sa caisse ; None = tous."""
+    filtres, valeurs = "", [S_RECEPTION]
+    if employe_nom:
+        filtres += " AND e.employee_name = %s"
+        valeurs.append(employe_nom)
+    if jusqu_au:
+        filtres += " AND m.date_reception <= %s"
+        valeurs.append("%s 23:59:59" % getdate(jusqu_au))
+    return frappe.db.sql(
+        f"""SELECT m.name AS machine, m.nom_client AS client, m.date_reception AS reprise_le, t.name AS tache,
+                   t.custom_type_dintervention AS type_i, e.name AS employe, e.employee_name
+            FROM `tabMachine Reparation` m
+            INNER JOIN `tabTache de travail` t ON t.name = m.{CHAMP_ORIGINE}
+            INNER JOIN `tabEmployee` e ON e.name = t.custom_choix_du_staff
+            WHERE m.statut = %s AND IFNULL(m.{CHAMP_ORIGINE}, '') <> '' {filtres}
+            ORDER BY m.date_reception""", tuple(valeurs), as_dict=True)
+
+
 def reprises_des_taches(taches) -> dict:
     """{intervention: {"dossier", "statut", "etat"}} pour les interventions pendant lesquelles une machine a été
     reprise (calendrier d'équipe, Ma journée)."""

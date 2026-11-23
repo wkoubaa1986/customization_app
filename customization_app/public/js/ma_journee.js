@@ -208,6 +208,15 @@ frappe.provide("frappe.views");
                 ${transferts.map((t) => `<div style="font-size:12.5px;color:#78350f;margin-top:2px">${esc(t.name)} · ${esc(String(t.de || "").replace(/ - [^-]+$/, ""))} → ${esc(String(t.vers || "").replace(/ - [^-]+$/, ""))} · ${t.articles} ${__("article(s)")} · ${esc(t.par)} · ${esc(t.quand)}</div>`).join("")}
                 <a class="btn btn-sm btn-primary" style="margin-top:8px" href="/app/stock-entrepots?valider=${encodeURIComponent(transferts[0].name)}">✅ ${__("Vérifier les quantités et valider")}</a>
               </div>` : "";
+            // Machines reprises chez un client, pas encore réceptionnées au magasin : sa caisse les attend.
+            const machines = (m.machines_a_receptionner || []);
+            const bandeau_machines = machines.length ? `
+              <div class="mj-machines" style="border:1px solid #ea580c;background:#fff7ed;border-radius:12px;padding:10px 12px;margin:6px 0 10px">
+                <div style="font-weight:700;color:#9a3412">🚚 ${machines.length} ${__("machine(s) reprise(s) à réceptionner au magasin")}</div>
+                <div style="font-size:12.5px;color:#7c2d12;margin-top:2px">${__("Déposez-la au magasin, collez le post-it et photographiez-la. Votre caisse ne peut pas être comptée avant.")}</div>
+                ${machines.map((x) => `<a class="btn btn-sm btn-default" style="margin:8px 6px 0 0" target="_blank"
+                    href="/app/reparation-osmoseurs?dossier=${encodeURIComponent(x.machine)}">📷 ${esc(x.machine)} · ${esc(x.client)}</a>`).join("")}
+              </div>` : "";
             const cc = m.caisse_collecte || {};
             const bouts_caisse = [];
             if (cc.a_collecter) bouts_caisse.push(`📥 <b>${cc.a_collecter}</b> ${__("caisse(s) à collecter")}`);
@@ -225,7 +234,7 @@ frappe.provide("frappe.views");
                 <a class="btn btn-sm btn-primary" style="margin-top:8px" href="/app/caisse-journaliere">${__("Ouvrir la caisse")}</a>
               </div>` : "";
             this.$corps.html(`
-              ${bandeau}${bandeau_caisse}
+              ${bandeau}${bandeau_machines}${bandeau_caisse}
               <div class="mj-bar">
                 <input type="date" class="form-control" data-jour value="${esc(this.jour)}">
                 ${selecteur}

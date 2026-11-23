@@ -994,6 +994,27 @@ class TestReprise(unittest.TestCase):
         with self.assertRaises(frappe.ValidationError):
             self._reprendre()                                                                # une seule fois
 
+    def test_la_caisse_du_technicien_attend_la_reception(self):
+        import frappe
+        from customization_app import caisse_cloture as CL
+        caisse = frappe.db.get_value("Employee", self.emp, "employee_name")
+        avant = len(CL._machines_a_receptionner(caisse, "2030-01-07"))
+        nom = self._reprendre()
+        frappe.db.set_value(RO.DOCTYPE, nom, "date_reception", "2030-01-07 10:20:00")
+        points = [p for p in CL._machines_a_receptionner(caisse, "2030-01-07") if p["machine"] == nom]
+        self.assertEqual([(p["type"], p["bloquant"], p["tache"]) for p in points], [("machine_a_receptionner", 1, self.tache.name)])
+        self.assertEqual(len(CL._machines_a_receptionner(caisse, "2030-01-07")), avant + 1)
+        # la caisse d'un jour d'AVANT la reprise n'est pas bloquée ; celle des jours suivants l'est toujours
+        self.assertFalse([p for p in CL._machines_a_receptionner(caisse, "2030-01-06") if p["machine"] == nom])
+        self.assertTrue([p for p in CL._machines_a_receptionner(caisse, "2030-01-08") if p["machine"] == nom])
+        # la caisse d'un autre n'est pas concernée
+        self.assertFalse([p for p in CL._machines_a_receptionner("Personne de ce nom", "2030-01-08") if p["machine"] == nom])
+        # réceptionnée au magasin : la caisse se compte
+        RO.enregistrer_photo(nom, "post_it", "/files/essai-post-it.jpg")
+        RO.decider_garantie(nom, "Hors garantie")
+        RO.cloturer_reception(nom, code="bon")
+        self.assertFalse([p for p in CL._machines_a_receptionner(caisse, "2030-01-08") if p["machine"] == nom])
+
     def test_annuler_la_reprise_rouvre_l_intervention(self):
         import frappe
         nom = self._reprendre()

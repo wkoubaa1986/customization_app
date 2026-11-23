@@ -382,6 +382,9 @@ def ma_journee(date=None, employe=None):
         # Les transferts du Magasin vers SON stock qu'il doit confirmer (page Stock, double validation) :
         # ceux de l'utilisateur connecté seulement — un superviseur ne valide pas à la place d'un autre.
         "transferts_a_valider": _transferts_a_valider(cible),
+        # Les machines qu'il a reprises chez un client et qui ne sont pas encore réceptionnées au magasin : sa
+        # caisse ne se compte pas tant qu'il en reste (caisse_cloture._machines_a_receptionner).
+        "machines_a_receptionner": _machines_a_receptionner(cible),
         # Caisse : caisses à collecter (responsable / délégué), remises contestées, passations — pour MOI.
         "caisse_collecte": _caisse_collecte(),
     }
@@ -465,6 +468,19 @@ def manifeste_du_jour(date=None, employe=None):
 
     res = generer(bordereaux)
     return {"name": res["name"], "bordereaux": bordereaux}
+
+
+def _machines_a_receptionner(employe):
+    try:
+        from customization_app import reparation_osmoseur as RO
+        nom = frappe.db.get_value("Employee", employe, "employee_name") if employe else None
+        if not nom:
+            return []
+        return [{"machine": m.machine, "client": m.client or "", "reprise_le": str(m.reprise_le or "")[:16]}
+                for m in RO.machines_a_receptionner(nom)]
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "ma_journee : machines à réceptionner")
+        return []
 
 
 def _reprises_et_etapes(taches):

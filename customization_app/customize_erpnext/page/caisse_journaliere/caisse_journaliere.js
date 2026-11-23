@@ -3243,7 +3243,10 @@ function rcj_cloture(rapport, opts) {
         primary_action(v) {
           // Un BL en brouillon bloque ; chaque autre point exige sa justification.
           if ((e.controles || []).some((c) => c.bloquant)) {
-            frappe.msgprint(__("Validez d'abord le(s) bon(s) de livraison signalés en rouge."));
+            // Machine reprise chez un client et pas encore réceptionnée au magasin (23/11/2026) : la caisse attend.
+            frappe.msgprint((e.controles || []).some((c) => c.bloquant && c.machine)
+              ? __("Réceptionnez d'abord au magasin la ou les machines reprises, signalées en rouge (post-it et photo), puis revenez compter votre caisse.")
+              : __("Validez d'abord le(s) bon(s) de livraison signalés en rouge."));
             return;
           }
           // Chaque point : un motif de SA liste + un commentaire d'au moins 10 caractères (05/10/2026).
@@ -3310,7 +3313,15 @@ function rcj_cloture(rapport, opts) {
       });
       const pts = e.controles || [];
       if (pts.length) {
-        const lignes = pts.map((c) => c.bloquant
+        const lignes = pts.map((c) => c.bloquant && c.machine
+          ? `<div style="border:1px solid #e0b4b4;background:#fdecea;border-radius:6px;
+                padding:8px 10px;margin-bottom:6px">
+               <b style="color:#a93226">⛔ ${frappe.utils.escape_html(c.libelle)}</b>
+               <div style="font-size:12px;color:#7b241c;margin:4px 0 6px">${__("Déposez la machine au magasin, collez le post-it et photographiez-la : la caisse se compte ensuite.")}</div>
+               <a class="btn btn-xs btn-danger" target="_blank"
+                  href="/app/reparation-osmoseurs?dossier=${encodeURIComponent(c.machine)}">📷 ${__("Réceptionner la machine")}</a>
+             </div>`
+          : c.bloquant
           ? `<div style="border:1px solid #e0b4b4;background:#fdecea;border-radius:6px;
                 padding:8px 10px;margin-bottom:6px">
                <b style="color:#a93226">⛔ ${frappe.utils.escape_html(c.libelle)}</b>

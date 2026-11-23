@@ -410,6 +410,44 @@ def _taches_sans_commande(caisse, date, debut=None):
     return points
 
 
+def libelle_machine_a_receptionner(m) -> str:
+    """« Machine reprise chez X (OSM-…) le 23/11 à 12:52, pas encore réceptionnée au magasin ». PURE."""
+    quand = str(m.get("reprise_le") or "")
+    le = (" le %s/%s à %s" % (quand[8:10], quand[5:7], quand[11:16])) if len(quand) >= 16 else ""
+    return "Machine reprise chez %s (%s)%s, pas encore réceptionnée au magasin — pendant %s %s" % (
+        m.get("client") or "le client", m.get("machine"), le, (m.get("type_i") or "l'intervention").lower(), m.get("tache") or "")
+
+
+def _machines_a_receptionner(caisse, date):
+    """Le technicien est reparti de chez un client avec une machine (Ma journée › « Machine reprise ») : il ne compte
+    pas sa caisse tant qu'elle n'est pas RÉCEPTIONNÉE au magasin (demande du 23/11/2026 : « il l'oblige à faire la
+    réception de la machine avant de fermer sa caisse »). BLOQUANT, comme un BL en brouillon. La caisse globale n'est
+    pas concernée : elle n'est celle d'aucun technicien."""
+    if caisse == CAISSE_GLOBALE:
+        return []
+    try:
+        from customization_app import reparation_osmoseur as RO
+        machines = RO.machines_a_receptionner(caisse, date)
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "caisse : machines reprises à réceptionner")
+        return []
+    return [{"cle": "machine_a_receptionner:%s" % m.machine, "type": "machine_a_receptionner", "bloquant": 1,
+             "machine": m.machine, "tache": m.tache, "client": m.client,
+             "libelle": libelle_machine_a_receptionner(m)} for m in machines]
+
+
+def message_bloquants(points) -> str:
+    """Ce qui empêche de compter la caisse, dit en clair. PURE."""
+    bls = [p["bl"] for p in points if p.get("bloquant") and p.get("bl")]
+    machines = [p["machine"] for p in points if p.get("bloquant") and p.get("machine")]
+    bouts = []
+    if bls:
+        bouts.append("bon(s) de livraison à valider d'abord : %s" % ", ".join(bls))
+    if machines:
+        bouts.append("machine(s) reprise(s) à réceptionner au magasin d'abord : %s" % ", ".join(machines))
+    return "Validation refusée — " + " ; ".join(bouts or ["un point bloquant reste à régler"])
+
+
 def motifs_du_point(point):
     famille = FAMILLE_DU_POINT.get(point.get("type"))
     return MOTIFS[famille] if famille else ["Autre"]
@@ -418,7 +456,7 @@ def motifs_du_point(point):
 def points_controle(caisse, date, data, debut=None):
     """Tous les points de la clôture de cette caisse, chacun avec la liste de ses motifs."""
     from customization_app import caisse_collecte as CC
-    points = _controles(data) + _taches_sans_commande(caisse, date, debut)
+    points = _machines_a_receptionner(caisse, date) + _controles(data) + _taches_sans_commande(caisse, date, debut)
     if caisse == CAISSE_GLOBALE:
         points += CC.controles_globale(date, data)
     for p in points:
@@ -649,8 +687,7 @@ def valider(caisse, date, especes_comptees=None, note=None, justifications=None,
     points = points_controle(caisse, date, m["data"], m["debut"])
     bloquants = [p for p in points if p["bloquant"]]
     if bloquants:
-        frappe.throw(_("Validation refusée — bon(s) de livraison à valider d'abord : {0}")
-                     .format(", ".join(p["bl"] for p in bloquants)))
+        frappe.throw(message_bloquants(bloquants))
     controles_txt, erreurs = verifier_justifications(points, justifs)
     if erreurs:
         frappe.throw(_("Justification incomplète :<br>• {0}")

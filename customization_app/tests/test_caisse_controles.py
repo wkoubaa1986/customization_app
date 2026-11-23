@@ -57,6 +57,34 @@ class TestDettes(unittest.TestCase):
         self.assertEqual([(x["type"], x["bloquant"]) for x in p], [("bl_non_valide", 1)])
 
 
+class TestMachineReprise(unittest.TestCase):
+    """Une machine reprise chez un client et pas encore réceptionnée au magasin bloque la caisse (23/11/2026)."""
+
+    def test_libelle(self):
+        t = CL.libelle_machine_a_receptionner({"machine": "OSM-2026-0017", "client": "Haykel Gharbi", "tache": "Tache-09462",
+                                               "type_i": "Entretien", "reprise_le": "2026-11-23 12:52:03.567109"})
+        self.assertEqual(t, "Machine reprise chez Haykel Gharbi (OSM-2026-0017) le 23/11 à 12:52, pas encore réceptionnée "
+                            "au magasin — pendant entretien Tache-09462")
+
+    def test_message_dit_ce_qui_bloque(self):
+        bl = {"bloquant": 1, "bl": "BL1"}
+        machine = {"bloquant": 1, "machine": "OSM-2026-0017"}
+        self.assertEqual(CL.message_bloquants([bl]), "Validation refusée — bon(s) de livraison à valider d'abord : BL1")
+        self.assertIn("machine(s) reprise(s) à réceptionner au magasin d'abord : OSM-2026-0017", CL.message_bloquants([machine]))
+        les_deux = CL.message_bloquants([bl, machine, {"bloquant": 0, "bl": "BL2"}])
+        self.assertIn("BL1", les_deux)
+        self.assertIn("OSM-2026-0017", les_deux)
+        self.assertNotIn("BL2", les_deux)
+
+    def test_la_caisse_globale_n_est_pas_concernee(self):
+        self.assertEqual(CL._machines_a_receptionner(CL.CAISSE_GLOBALE, "2026-11-23"), [])
+
+    def test_le_point_est_rejoue_a_la_validation(self):
+        import inspect
+        self.assertIn("_machines_a_receptionner(caisse, date)", inspect.getsource(CL.points_controle))
+        self.assertIn("message_bloquants(bloquants)", inspect.getsource(CL.valider))
+
+
 class TestJustifications(unittest.TestCase):
 
     def setUp(self):
