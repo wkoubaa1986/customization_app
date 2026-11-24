@@ -129,7 +129,7 @@ class ReparationOsmoseurs {
         <div class="ro-kpi ${d.a_verifier ? "alerte" : ""} ${this.verifier ? "actif" : ""}" data-verifier="1"
              title="Réparées et pas rendues, reçues sans technicien, livraisons ou démontages pas clôturés — celles du rappel du matin">
           <div class="v">⏳ ${d.a_verifier || 0}</div><div class="l">À vérifier</div>
-          <div class="ro-sub">en attente depuis ${d.rappel_jours} j ou plus${d.suivi ? " · rappelées à " + esc(d.suivi) : ""}</div>
+          <div class="ro-sub">client à rappeler, réparation en retard, sans technicien…${d.suivi ? " · rappelées à " + esc(d.suivi) : ""}</div>
         </div>`
     );
     r.find("#ro-kpis .ro-kpi").on("click", (e) => {
@@ -270,10 +270,14 @@ class ReparationOsmoseurs {
     else if (m.statut === "Planifiée") {
       // Le technicien de la tâche OUVERTE (lu sur la tâche : le nom gardé sur le dossier peut dater).
       const ouverte = (m.taches || []).find((t) => t.status === "Open");
-      detail = `<div>chez ${esc((ouverte && ouverte.employe) || m.nom_responsable || "le technicien")}</div><div class="ro-sub">prévue le ${esc(ro_date(m.date_prevue))}</div>`;
+      const tech = (ouverte && ouverte.employe) || m.nom_responsable || "le technicien";
+      detail = `<div>chez ${esc(tech)}</div><div class="${m.a_verifier ? "ro-du" : "ro-sub"}">prévue le ${esc(ro_date(m.date_prevue))}</div>`;
+      // Date dépassée sans réparation (24/11/2026) : rappeler le technicien et reprogrammer sa tâche.
+      if (m.a_verifier && a) detail += `<div class="ro-du">🛠️ pas faite (${a.jours} j de retard) : rappeler ${esc(tech)} et reprogrammer sa tâche</div>`;
     }
     else if (m.statut === "Réparée" || m.statut === "Prête au magasin") {
       detail = `<div class="${m.a_verifier ? "ro-du" : ""}">🏬 chez nous${depuis}</div>
+                ${m.a_verifier ? `<div class="ro-du">📞 client à rappeler</div>` : ""}
                 <div class="ro-sub">réparée le ${esc(ro_datetime(m.date_reparee))}</div>
                 <div class="ro-sub">${m.sms_pret_le ? "📲 client prévenu le " + esc(ro_datetime(m.sms_pret_le)) : "📲 client pas encore prévenu"}</div>`;
     } else if (m.statut === "Livraison planifiée") {

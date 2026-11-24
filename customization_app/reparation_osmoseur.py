@@ -96,6 +96,9 @@ G_REPARER, G_RENDRE, G_RENDUE = "À réparer", "À rendre", "Rendue"
 GROUPES = {G_REPARER: (S_RECEPTION, S_RECEPTIONNEE, S_PLANIFIEE, S_DEMONTAGE), G_RENDRE: (S_REPAREE, S_PRETE, S_LIVRAISON),
            G_RENDUE: (S_RENDUE,)}
 RAPPEL_JOURS_DEFAUT = 3                  # une machine qui attend depuis 3 jours est rappelée
+# « À rendre » : 2 jours après la réparation OU le dernier commentaire de suivi sans être rendue, le client est à
+# rappeler (sa règle du 24/11/2026 ; avant : 3 jours depuis la réparation, le commentaire ne comptait pas).
+A_RENDRE_JOURS = 2
 RELANCE_JOURS_DEFAUT = 3                 # sans réponse 3 jours après le premier rappel : la seconde personne
 EVENEMENT_SUITE = "osm_a_rendre"         # temps réel : « la machine est réparée — et maintenant ? »
 BOT = "Magasin Bot"                      # le bot Raven qui porte le rappel du matin
@@ -400,8 +403,13 @@ def attente(m, aujourdhui) -> dict | None:
         j = jours(m.get("date_reception"))
         return None if j is None else {"motif": "en_route", "jours": j}
     if statut in REPAREE:
-        j = jours(m.get("date_reparee"), m.get("toujours_la_le"))
+        j = jours(m.get("date_reparee"), m.get("toujours_la_le"), m.get("commentaire_suivi_le"))
         return None if j is None else {"motif": "a_rendre", "jours": j}
+    if statut == S_PLANIFIEE and m.get("date_prevue"):
+        # Réparation prévue, date dépassée d'un jour sans être faite (sa règle du 24/11/2026) : rappeler le
+        # technicien qui avait la tâche et la reprogrammer.
+        j = (aujourdhui - getdate(m["date_prevue"])).days
+        return {"motif": "reparation_en_retard", "jours": j} if j > 0 else None
     if statut == S_RECEPTIONNEE:
         j = jours(m.get("date_cloture_reception") or m.get("date_reception"), m.get("toujours_la_le"))
         return None if j is None else {"motif": "sans_technicien", "jours": j}
@@ -419,7 +427,9 @@ def a_verifier(m, aujourdhui, rappel_jours) -> bool:
     a = attente(m, aujourdhui)
     if a and a["motif"] == "en_route":
         return a["jours"] >= 1          # reprise chez le client, toujours pas réceptionnée au magasin le lendemain
-    return bool(a) and (a["motif"] in ("livraison", "demontage") or a["jours"] >= rappel_jours)
+    if a and a["motif"] == "a_rendre":
+        return a["jours"] >= A_RENDRE_JOURS
+    return bool(a) and (a["motif"] in ("livraison", "demontage", "reparation_en_retard") or a["jours"] >= rappel_jours)
 
 
 def a_rappeler(machines, aujourdhui, rappel_jours, relance_jours) -> dict:
@@ -436,7 +446,8 @@ def a_rappeler(machines, aujourdhui, rappel_jours, relance_jours) -> dict:
 
 
 CHAMPS_ATTENTE = ["name", "statut", "nom_client", "client", "date_reception", "date_cloture_reception", "date_reparee",
-                  "toujours_la_le", "date_livraison_prevue", "date_prevue", "rappel_depuis", CHAMP_ORIGINE]
+                  "toujours_la_le", "date_livraison_prevue", "date_prevue", "rappel_depuis", CHAMP_ORIGINE,
+                  "commentaire_suivi_le", "responsable", "nom_responsable"]
 
 
 def est_en_route(m) -> bool:
@@ -471,7 +482,8 @@ def refus_reprise(t, sous_traitant=False) -> str | None:
 def dossiers_en_attente() -> list:
     """Les dossiers ouverts que le rappel regarde : ceux qui attendent quelqu'un, et les machines reprises chez un
     client qui ne sont pas encore réceptionnées au magasin."""
-    rows = frappe.get_all(DOCTYPE, filters={"statut": ["in", list(EN_ATTENTE) + [S_RECEPTION]]},
+    # + les réparations planifiées : une date dépassée sans réparation se rappelle (24/11/2026).
+    rows = frappe.get_all(DOCTYPE, filters={"statut": ["in", list(EN_ATTENTE) + [S_RECEPTION, S_PLANIFIEE]]},
                           fields=CHAMPS_ATTENTE, order_by="creation")
     return [m for m in rows if m.statut != S_RECEPTION or m.get(CHAMP_ORIGINE)]
 
@@ -1819,10 +1831,19 @@ def machines_du_client(client):
 
 # ── Rappel du matin ──────────────────────────────────────────────────────────
 
-LIBELLES_ATTENTE = {"a_rendre": "réparée, chez nous depuis {0} j", "sans_technicien": "reçue, sans technicien depuis {0} j",
+LIBELLES_ATTENTE = {"a_rendre": "📞 client à rappeler — réparée, sans nouvelle depuis {0} j",
+                    "reparation_en_retard": "🛠️ réparation prévue il y a {0} j, pas faite — rappeler {technicien} qui avait "
+                                            "la tâche et reprogrammer sa tâche",
+                    "sans_technicien": "reçue, sans technicien depuis {0} j",
                     "en_route": "reprise chez le client il y a {0} j, pas encore réceptionnée au magasin",
                     "livraison": "livraison prévue il y a {0} j, pas clôturée",
                     "demontage": "démontage prévu il y a {0} j, pas clôturé"}
+
+
+def texte_attente(m) -> str:
+    """Le message sous le client (fenêtre d'alerte, message du matin). PURE. `m` enrichi de `attente`."""
+    a = m["attente"]
+    return LIBELLES_ATTENTE[a["motif"]].format(a["jours"], technicien=m.get("nom_responsable") or "le technicien")
 
 
 def role_suivi(user=None, cfg=None):
@@ -1859,7 +1880,7 @@ def mon_rappel():
             "suivi": frappe.utils.get_fullname(cfg["suivi"]) if cfg["suivi"] else "",
             "machines": [{"name": m["name"], "client": m.get("nom_client") or m.get("client") or "",
                           "jours": m["attente"]["jours"], "motif": m["attente"]["motif"],
-                          "texte": LIBELLES_ATTENTE[m["attente"]["motif"]].format(m["attente"]["jours"])} for m in machines]}
+                          "texte": texte_attente(m)} for m in machines]}
 
 
 def composer_rappel(machines, url, relance_de=None) -> str:
@@ -1867,10 +1888,10 @@ def composer_rappel(machines, url, relance_de=None) -> str:
     n = len(machines)
     tete = ("🔁 **Réparation osmoseurs — %d machine(s) sans réponse%s**" % (n, " de " + relance_de if relance_de else "")
             if relance_de is not None else "⏳ **Réparation osmoseurs — %d machine(s) attendent une réponse**" % n)
-    lignes = ["- **%s** · %s — %s" % (m["name"], m.get("nom_client") or m.get("client") or "",
-                                       LIBELLES_ATTENTE[m["attente"]["motif"]].format(m["attente"]["jours"]))
+    lignes = ["- **%s** · %s — %s" % (m["name"], m.get("nom_client") or m.get("client") or "", texte_attente(m))
               for m in machines]
-    pied = "Pour chacune : « Rendre », « Toujours au magasin » ou « Affecter » → [ouvrir l'écran](%s)" % url
+    pied = ("Pour chacune : « Rendre », « Toujours au magasin », « Affecter » ou reprogrammer la réparation avec le "
+            "technicien → [ouvrir l'écran](%s)" % url)
     return "\n".join([tete, ""] + lignes + ["", pied])
 
 

@@ -56,7 +56,7 @@
     d.fields_dict.zone.$wrapper.html(`
       <div style="background:#fff7ed;border:1px solid #fdba74;color:#9a3412;border-radius:10px;padding:10px 12px;margin-bottom:10px;font-size:13px">
         Chaque machine attend une réponse : <b>la rendre</b>, confirmer qu’elle est <b>toujours au magasin</b>,
-        <b>affecter un technicien</b> ou la <b>sortir sans réparation</b>.</div>
+        <b>affecter un technicien</b>, <b>reprogrammer sa réparation</b> avec le technicien, ou la <b>sortir sans réparation</b>.</div>
       <div style="max-height:46vh;overflow:auto">${r.machines.map((m) => `
         <div style="display:flex;gap:10px;align-items:baseline;padding:7px 2px;border-bottom:1px solid var(--border-color,#eef1f5)">
           <b style="white-space:nowrap">${esc(m.name)}</b>

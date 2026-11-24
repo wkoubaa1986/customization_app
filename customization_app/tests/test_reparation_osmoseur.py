@@ -415,6 +415,29 @@ class TestReglesPures(unittest.TestCase):
         self.assertIsNone(RO.attente({"statut": RO.S_PLANIFIEE, "date_reception": "2026-10-01"}, jour))
         self.assertIsNone(RO.attente({"statut": RO.S_RENDUE, "date_reparee": "2026-10-01"}, jour))
 
+    def test_reparation_planifiee_en_retard_rappeler_le_technicien(self):
+        # Sa règle du 24/11/2026 : date de réparation dépassée d'un jour, pas faite → dans la liste de Salma, avec le
+        # technicien qui avait la tâche à rappeler et la tâche à reprogrammer.
+        m = {"statut": RO.S_PLANIFIEE, "date_prevue": "2026-11-23", "nom_responsable": "Radhouan Sifi"}
+        self.assertIsNone(RO.attente(m, getdate("2026-11-23")))                     # le jour même : rien
+        a = RO.attente(m, getdate("2026-11-24"))
+        self.assertEqual(a, {"motif": "reparation_en_retard", "jours": 1})
+        self.assertTrue(RO.a_verifier(m, getdate("2026-11-24"), 3))                 # dès le lendemain, sans attendre 3 j
+        texte = RO.texte_attente(dict(m, attente=a))
+        self.assertIn("rappeler Radhouan Sifi", texte)
+        self.assertIn("reprogrammer sa tâche", texte)
+        self.assertIsNone(RO.attente({"statut": RO.S_PLANIFIEE, "date_reception": "2026-10-01"}, getdate("2026-11-24")))
+
+    def test_a_rendre_client_a_rappeler_deux_jours_apres_le_dernier_commentaire(self):
+        # Sa règle du 24/11/2026 : 2 jours après la réparation OU le dernier commentaire de suivi, sans être rendue.
+        m = {"statut": RO.S_REPAREE, "date_reparee": "2026-11-10 10:00:00", "commentaire_suivi_le": "2026-11-19 16:00:00"}
+        self.assertEqual(RO.attente(m, getdate("2026-11-20")), {"motif": "a_rendre", "jours": 1})
+        self.assertFalse(RO.a_verifier(m, getdate("2026-11-20"), 3))                # commentée hier : pas encore
+        self.assertTrue(RO.a_verifier(m, getdate("2026-11-21"), 3))                 # 2 jours : client à rappeler
+        self.assertIn("client à rappeler", RO.texte_attente(dict(m, attente=RO.attente(m, getdate("2026-11-21")))))
+        sans = {"statut": RO.S_PRETE, "date_reparee": "2026-11-18 09:00:00"}
+        self.assertTrue(RO.a_verifier(sans, getdate("2026-11-20"), 3))              # 2 jours après la réparation
+
     def test_le_tri_du_matin(self):
         jour = getdate("2026-11-20")
         machines = [
@@ -430,7 +453,7 @@ class TestReglesPures(unittest.TestCase):
         self.assertEqual([m["name"] for m in tri["relance"]], ["C"])
         texte = RO.composer_rappel(tri["rappel"], "https://x/app/reparation-osmoseurs?verifier=1")
         self.assertIn("4 machine(s) attendent une réponse", texte)
-        self.assertIn("**B** ·  — réparée, chez nous depuis 4 j", texte)
+        self.assertIn("**B** ·  — 📞 client à rappeler — réparée, sans nouvelle depuis 4 j", texte)
         self.assertIn("**D** ·  — reçue, sans technicien depuis 21 j", texte)
         self.assertIn("**E** ·  — livraison prévue il y a 1 j, pas clôturée", texte)
         self.assertIn("sans réponse de Salma", RO.composer_rappel(tri["relance"], "u", relance_de="Salma"))
@@ -632,7 +655,7 @@ class TestSortie(unittest.TestCase):
             r = RO.mon_rappel()
             self.assertEqual(r["role"], "suivi")
             self.assertIn(nom, [m["name"] for m in r["machines"]])
-            self.assertEqual([m["texte"] for m in r["machines"] if m["name"] == nom], ["réparée, chez nous depuis 5 j"])
+            self.assertEqual([m["texte"] for m in r["machines"] if m["name"] == nom], ["📞 client à rappeler — réparée, sans nouvelle depuis 5 j"])
             p = T.get_priorites()
             file = [f for f in p["files"] if f["cle"] == "atelier"][0]
             self.assertEqual((file["rang"], file["reste"], file["route"], file["options"]), (3, r["n"], ["reparation-osmoseurs"], {"verifier": 1}))
