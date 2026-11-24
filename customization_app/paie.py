@@ -284,6 +284,8 @@ def installer():
 # (une mise à jour de HRMS peut réécrire l'espace).
 ESPACE_RH = "HR"
 RACCOURCIS_RH = [("Mes congés et ma paie", "rh-technicien", "Green", "rhMaPaie"),
+                 # Ouvre la demande de congé tout de suite (même page) — demande du 24/11/2026.
+                 ("Demander un congé", "/app/rh-technicien?demander=1", "Blue", "rhDemanderConge"),
                  ("Contrôle de la paie", "controle-paie", "Orange", "rhControlePaie")]
 
 
@@ -294,21 +296,36 @@ def _raccourcis():
     espace = frappe.get_doc("Workspace", ESPACE_RH)
     blocs = json.loads(espace.content or "[]")
     change = False
-    for libelle, page, couleur, bloc_id in reversed(RACCOURCIS_RH):
-        if not frappe.db.exists("Page", page):
+    index_bloc = lambda nom: next((i for i, b in enumerate(blocs) if b.get("type") == "shortcut"
+                                   and (b.get("data") or {}).get("shortcut_name") == nom), None)
+    precedent = None
+    for libelle, cible, couleur, bloc_id in RACCOURCIS_RH:
+        url = cible.startswith("/")          # « /app/page?… » : raccourci URL (ouvre la page avec une option)
+        if not frappe.db.exists("Page", cible.split("?")[0].replace("/app/", "") if url else cible):
             continue
-        if not any(s.link_to == page for s in espace.shortcuts or []):
-            espace.append("shortcuts", {"type": "Page", "label": libelle, "link_to": page, "color": couleur})
+        if not any((s.url == cible) if url else (s.link_to == cible) for s in espace.shortcuts or []):
+            espace.append("shortcuts", {"type": "URL", "url": cible, "label": libelle, "color": couleur} if url
+                          else {"type": "Page", "link_to": cible, "label": libelle, "color": couleur})
             change = True
-        if not any(b.get("type") == "shortcut" and (b.get("data") or {}).get("shortcut_name") == libelle for b in blocs):
+        if index_bloc(libelle) is None:
+            # Juste après le raccourci précédent de la liste ; le premier, en tête des raccourcis.
+            apres = index_bloc(precedent) if precedent else None
             premiers = [i for i, b in enumerate(blocs) if b.get("type") == "shortcut"]
-            blocs.insert(premiers[0] if premiers else len(blocs),
-                         {"id": bloc_id, "type": "shortcut", "data": {"shortcut_name": libelle, "col": 3}})
+            position = apres + 1 if apres is not None else (premiers[0] if premiers else len(blocs))
+            blocs.insert(position, {"id": bloc_id, "type": "shortcut", "data": {"shortcut_name": libelle, "col": 3}})
             change = True
+        precedent = libelle
     if change:
         espace.content = json.dumps(blocs)
         espace.flags.ignore_permissions = True
-        espace.save()
+        # En mode développeur, enregistrer un espace public hors migration le RÉÉCRIT dans l'app qui le livre
+        # (apps/hrms/…/hr.json, vu le 24/11/2026) : on enregistre toujours comme pendant une migration.
+        en_migration = frappe.flags.in_migrate
+        frappe.flags.in_migrate = True
+        try:
+            espace.save()
+        finally:
+            frappe.flags.in_migrate = en_migration
         frappe.clear_cache()
 
 

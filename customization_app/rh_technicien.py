@@ -100,8 +100,12 @@ def _etat_de(emp) -> dict:
         f["pdf"] = "/api/method/frappe.utils.print_format.download_pdf?doctype=Salary%%20Slip&name=%s&format=%s&no_letterhead=0" % (
             frappe.utils.quote(f["name"]), frappe.utils.quote(fmt))
     feries = []
-    if emp.holiday_list:
-        feries = frappe.get_all("Holiday", filters={"parent": emp.holiday_list, "holiday_date": [">=", nowdate()],
+    # Sans liste de fériés sur la fiche Employé, HRMS prend celle de la société pour compter les congés : la page fait
+    # de même (Salma et Hedi ne voyaient aucun jour férié à venir, 24/11/2026).
+    from erpnext.setup.doctype.employee.employee import get_holiday_list_for_employee
+    liste_feries = emp.holiday_list or get_holiday_list_for_employee(emp.name, raise_exception=False)
+    if liste_feries:
+        feries = frappe.get_all("Holiday", filters={"parent": liste_feries, "holiday_date": [">=", nowdate()],
                                                     "weekly_off": 0}, fields=["holiday_date", "description"],
                                 order_by="holiday_date", limit_page_length=5)
     return {"employe": emp.name, "nom": emp.employee_name,

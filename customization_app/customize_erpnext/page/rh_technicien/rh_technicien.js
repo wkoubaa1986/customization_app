@@ -4,11 +4,18 @@
  * Tout vient du serveur (customization_app.rh_technicien) ; la barre de navigation de l'écran simplifié reste là.
  */
 frappe.pages["rh-technicien"].on_page_load = function (wrapper) {
-    frappe.ui.make_app_page({ parent: wrapper, title: __("Mes congés et ma paie"), single_column: true });
-    wrapper.rh = new RhTechnicien($(wrapper).find(".layout-main-section"));
+    const page = frappe.ui.make_app_page({ parent: wrapper, title: __("Mes congés et ma paie"), single_column: true });
+    wrapper.rh = new RhTechnicien($(wrapper).find(".layout-main-section"), page);
 };
 frappe.pages["rh-technicien"].on_page_show = function (wrapper) {
-    if (wrapper.rh) wrapper.rh.rafraichir();
+    // Raccourci « Demander un congé » de l'espace HR (24/11/2026) : /app/rh-technicien?demander=1 ouvre la demande
+    // dès que la page est chargée.
+    const demander = frappe.route_options && frappe.route_options.demander;
+    if (demander) frappe.route_options = null;
+    if (wrapper.rh) {
+        if (demander) wrapper.rh.ouvrir_demande = true;
+        wrapper.rh.rafraichir();
+    }
 };
 
 (function () {
@@ -43,8 +50,9 @@ frappe.pages["rh-technicien"].on_page_show = function (wrapper) {
     }
 
     class RhTechnicien {
-        constructor($parent) {
+        constructor($parent, page) {
             poser_css();
+            this.page = page;
             this.$el = $('<div class="rh"></div>').appendTo($parent);
             this.apercu = null;      // « Voir comme » : l'employé dont le responsable regarde la page
             this.rafraichir();
@@ -71,6 +79,16 @@ frappe.pages["rh-technicien"].on_page_show = function (wrapper) {
 
         peindre(e) {
             this.etat = e;
+            const peut_demander = !e.apercu && !e.sans_employe;
+            // « Demander un congé » aussi en haut de la page, toujours visible (demande du 24/11/2026).
+            if (this.page) {
+                if (peut_demander) this.page.set_primary_action(__("➕ Demander un congé"), () => this.demander());   // sans icône : sinon, sur téléphone, Frappe n’affiche que « + »
+                else this.page.clear_primary_action();
+            }
+            if (this.ouvrir_demande && peut_demander) {
+                this.ouvrir_demande = false;
+                setTimeout(() => this.demander(), 0);
+            }
             const barre = this.barre_apercu(e);
             const lier = () => this.$el.find(".rh-voir").on("change", (ev) => { this.apercu = ev.currentTarget.value || null; this.rafraichir(); });
             if (e.sans_employe) {
