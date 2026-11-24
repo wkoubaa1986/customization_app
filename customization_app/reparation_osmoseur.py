@@ -1245,9 +1245,40 @@ def affecter_tache(machine, employee, date, heure="09:00"):
 
 # ── Cycle de vie ─────────────────────────────────────────────────────────────
 
+def commande_depuis_taches(machine: str) -> str | None:
+    """La commande de la réparation, lue sur ses tâches (24/11/2026) : OSM-2026-0008 affichait « aucune commande liée »
+    alors que sa tâche Tache-09002 portait SAL-ORD-2026-04205 — rien ne la recopiait. La plus récente tâche non annulée
+    (hors livraison de retour) qui porte une commande VALIDÉE du même client ; None sinon."""
+    d = frappe.db.get_value(DOCTYPE, machine, ["client", "tache_livraison"], as_dict=True)
+    if not d:
+        return None
+    for t in frappe.get_all(DOCTYPE_TACHE, filters={CHAMP_TACHE: machine, "status": ["!=", "Cancelled"],
+                                                     "commande_client": ["is", "set"]},
+                            fields=["name", "commande_client"], order_by="starts_on desc"):
+        if t.name == d.tache_livraison:
+            continue
+        so = frappe.db.get_value("Sales Order", t.commande_client, ["customer", "docstatus"], as_dict=True)
+        if so and so.docstatus == 1 and so.customer == d.client:
+            return t.commande_client
+    return None
+
+
+def rattacher_commande(machine: str) -> str | None:
+    """Dossier sans commande : il prend celle de sa tâche de réparation. Une commande déjà choisie n'est jamais
+    remplacée. -> la commande posée, ou None."""
+    if frappe.db.get_value(DOCTYPE, machine, "commande_client"):
+        return None
+    commande = commande_depuis_taches(machine)
+    if commande:
+        frappe.db.set_value(DOCTYPE, machine, "commande_client", commande, update_modified=False)
+    return commande
+
+
 def synchroniser(machine: str) -> str:
     """Recalcule le statut du dossier depuis ses tâches. Ne redescend jamais une machine rendue."""
     courant = frappe.db.get_value(DOCTYPE, machine, "statut")
+    if courant and courant != S_RECEPTION:
+        rattacher_commande(machine)
     if not courant or courant in (S_RECEPTION, S_RENDUE):
         return courant
     if courant in EN_RESTITUTION:
