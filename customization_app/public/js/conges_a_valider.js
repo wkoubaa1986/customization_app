@@ -13,10 +13,15 @@
       display: flex; justify-content: center; align-items: center; gap: 10px; white-space: nowrap; overflow: hidden; }
     .cg-bandeau .cg-txt { overflow: hidden; text-overflow: ellipsis; }
     .cg-bandeau .cg-bt { background: #fff; color: #b45309; border-radius: 999px; padding: 3px 12px; font-size: 13px; }
-    body.cg-bandeau-actif { padding-top: 40px; --navbar-height: 88px; }
+    /* Le contenu descend de la hauteur de la barre : marge sur .main-section (celle du <body> n'a aucun effet dans le
+       Desk — l'en-tête de page recouvrait les filtres de la liste des commandes, 24/11/2026) ; les éléments collants
+       du Desk (en-tête, onglets d'un formulaire) se calent sur --navbar-height. */
+    body.cg-bandeau-actif { --navbar-height: 88px; }
+    body.cg-bandeau-actif .main-section { padding-top: 40px; }
     body.cg-bandeau-actif .sticky-top { top: 40px; }
     body.sm-bandeau-actif .cg-bandeau { top: 42px; }
-    body.sm-bandeau-actif.cg-bandeau-actif { padding-top: 82px; --navbar-height: 130px; }
+    body.sm-bandeau-actif.cg-bandeau-actif { --navbar-height: 130px; }
+    body.sm-bandeau-actif.cg-bandeau-actif .main-section { padding-top: 82px; }
     body.sm-bandeau-actif.cg-bandeau-actif .sticky-top { top: 82px; }
     @media (max-width: 768px) { .cg-bandeau { font-size: 13px; } .cg-bandeau .cg-detail { display: none; } }
   </style>`;

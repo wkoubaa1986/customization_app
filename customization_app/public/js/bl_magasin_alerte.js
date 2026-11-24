@@ -14,7 +14,10 @@
     @keyframes sm-pulse { 0%, 100% { background: #dc2626; } 50% { background: #991b1b; } }
     /* Le Desk ancre tout (barre de boutons du formulaire, onglets) sur --navbar-height : on l'augmente de la hauteur
        du bandeau, et l'en-tête collant (.sticky-top) descend d'autant — sinon les boutons passent sous l'en-tête. */
-    body.sm-bandeau-actif { padding-top: 42px; --navbar-height: 90px; }
+    body.sm-bandeau-actif { --navbar-height: 90px; }
+    /* La marge du <body> n'a aucun effet dans le Desk : l'en-tête de page recouvrait le haut de la liste (BL,
+       commandes…), signalé le 24/11/2026. C'est .main-section qui descend. */
+    body.sm-bandeau-actif .main-section { padding-top: 42px; }
     body.sm-bandeau-actif .sticky-top { top: 42px; }
   </style>`;
   const texte = (c) => {
