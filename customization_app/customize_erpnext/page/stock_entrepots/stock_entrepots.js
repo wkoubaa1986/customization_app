@@ -25,6 +25,10 @@ frappe.pages["stock-entrepots"].on_page_show = function (wrapper) {
   // Page déjà ouverte : un lien « ?verif=… » (Ma journée) mène quand même à la vérification.
   const verif = frappe.route_options && frappe.route_options.verif;
   if (verif) { frappe.route_options = null; wrapper.se.comptage = verif; wrapper.se.montrer("verif"); return; }
+  // Idem pour « ?valider=… » (transfert à valider, bandeau de Ma journée) : seule l'ouverture initiale le lisait,
+  // le bouton « Vérifier les quantités et valider » ne faisait rien si la page avait déjà été ouverte (24/11/2026).
+  const valider = frappe.route_options && frappe.route_options.valider;
+  if (valider) { frappe.route_options = null; wrapper.se.ouvrirValidation(valider); return; }
   wrapper.se.rafraichir();
 };
 

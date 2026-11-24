@@ -193,6 +193,11 @@ frappe.provide("frappe.views");
             w.on("click", "[data-caisse]", () => this._caisse());
             // Sous-traitant : son stock (page Stock, limitée à SON entrepôt côté serveur).
             w.on("click", "[data-stock]", () => frappe.set_route("stock-entrepots"));
+            // Transfert à valider / vérification à traiter : la page Stock ouverte sur la bonne fiche.
+            w.on("click", "[data-vers-stock]", (e) => {
+                const $b = $(e.currentTarget);
+                this._vers_stock({ [$b.attr("data-vers-stock")]: $b.attr("data-nom") });
+            });
             w.on("click", "[data-annuler]", (e) => this._annuler($(e.currentTarget).data("annuler")));
             w.on("click", "[data-reprise]", (e) => this._reprise($(e.currentTarget).data("reprise")));
             // Itinéraire de la journée planifiée (optimiser_tournees.js, chargé sur tout le Desk).
@@ -261,7 +266,7 @@ frappe.provide("frappe.views");
               <div class="mj-transferts" style="border:1px solid #f59e0b;background:#fffbeb;border-radius:12px;padding:10px 12px;margin:6px 0 10px">
                 <div style="font-weight:700;color:#92400e">📥 ${transferts.length} ${__("transfert(s) à valider")}</div>
                 ${transferts.map((t) => `<div style="font-size:12.5px;color:#78350f;margin-top:2px">${esc(t.name)} · ${esc(String(t.de || "").replace(/ - [^-]+$/, ""))} → ${esc(String(t.vers || "").replace(/ - [^-]+$/, ""))} · ${t.articles} ${__("article(s)")} · ${esc(t.par)} · ${esc(t.quand)}</div>`).join("")}
-                <a class="btn btn-sm btn-primary" style="margin-top:8px" href="/app/stock-entrepots?valider=${encodeURIComponent(transferts[0].name)}">✅ ${__("Vérifier les quantités et valider")}</a>
+                <button type="button" class="btn btn-sm btn-primary" style="margin-top:8px" data-vers-stock="valider" data-nom="${esc(transferts[0].name)}">✅ ${__("Vérifier les quantités et valider")}</button>
               </div>` : "";
             // Vérifications de stock qui attendent SON geste (accepter, recompter, valider) — 24/11/2026.
             const verifs = (m.verifications_a_traiter || []);
@@ -271,7 +276,7 @@ frappe.provide("frappe.views");
               <div class="mj-verifs" style="border:1px solid #dc2626;background:#fef2f2;border-radius:12px;padding:10px 12px;margin:6px 0 10px">
                 <div style="font-weight:700;color:#991b1b">🧾 ${__("Vérification")} ${esc(v.libelle)} — ${esc(titre_verif[v.geste] || v.geste)}</div>
                 <div style="font-size:12.5px;color:#7f1d1d;margin-top:2px">${esc(v.texte)}</div>
-                <a class="btn btn-sm btn-primary" style="margin-top:8px" href="/app/stock-entrepots?verif=${encodeURIComponent(v.name)}">${bouton_verif[v.geste] || "🔍 " + __("Ouvrir")}</a>
+                <button type="button" class="btn btn-sm btn-primary" style="margin-top:8px" data-vers-stock="verif" data-nom="${esc(v.name)}">${bouton_verif[v.geste] || "🔍 " + __("Ouvrir")}</button>
               </div>`).join("");
             // Machines reprises chez un client, pas encore réceptionnées au magasin : sa caisse les attend.
             const machines = (m.machines_a_receptionner || []);
@@ -641,6 +646,18 @@ frappe.provide("frappe.views");
               </span></div>`;
         }
 
+        /** Ouvre la page Stock sur un transfert (`valider`) ou une vérification (`verif`). Un simple lien
+         *  « /app/stock-entrepots?valider=… » ne faisait RIEN quand la page Stock était déjà affichée derrière la
+         *  fenêtre (le routeur de Frappe ignore un lien vers le même chemin) : fenêtre restée ouverte, aucun
+         *  transfert ouvert — signalé le 24/11/2026 sur la journée de Radhouan. */
+        _vers_stock(opts) {
+            this.dialog.hide();
+            frappe.route_options = opts;
+            const p = frappe.pages["stock-entrepots"];
+            if (frappe.get_route()[0] === "stock-entrepots" && p && p.on_page_show) p.on_page_show(p);
+            else frappe.set_route("stock-entrepots");
+        }
+
         _actions(l, esc) {
             // Sous-traitant : pas de fiche à ouvrir — il annule l'intervention depuis la carte (31/10/2026).
             const ouvrir = (this.data || {}).sous_traitant
@@ -652,8 +669,8 @@ frappe.provide("frappe.views");
             if (l.verification) {
                 return `<div class="mj-actions">
                   ${ouvrir}
-                  <a class="btn btn-sm btn-primary" href="/app/stock-entrepots?verif=${encodeURIComponent(l.verification.verification)}"
-                    >🧾 ${__("Ouvrir la vérification")}</a>
+                  <button type="button" class="btn btn-sm btn-primary" data-vers-stock="verif" data-nom="${esc(l.verification.verification)}"
+                    >🧾 ${__("Ouvrir la vérification")}</button>
                 </div>`;
             }
             // Il n'a pas pu finir et repart avec la machine : troisième sortie, à côté de la clôture.
