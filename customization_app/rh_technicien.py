@@ -14,6 +14,8 @@ from frappe import _
 from frappe.utils import cint, flt, getdate, nowdate
 
 PAGE = "rh-technicien"
+# Le format par défaut du Salary Slip (« Aqua World Fiche de paie » depuis le 24/11/2026, paie.py) : le même PDF
+# que l'application RH et la page « Contrôle de la paie ».
 FORMAT_FICHE = "Salary Slip Standard"
 
 
@@ -41,14 +43,34 @@ def soldes(employe: str, date=None) -> list[dict]:
 
 @frappe.whitelist()
 def etat() -> dict:
+    # Raccourci « Mes congés et ma paie » de l'espace HR (24/11/2026) : un compte sans fiche employé (direction,
+    # comptes techniques) voit un message, pas une erreur.
+    if not frappe.db.exists("Employee", {"user_id": frappe.session.user, "status": "Active"}):
+        return {"sans_employe": True}
     emp = _mon_employe()
-    demandes = frappe.get_all("Leave Application", filters={"employee": emp.name, "docstatus": ["<", 2]},
-                              fields=["name", "leave_type", "from_date", "to_date", "total_leave_days", "status", "docstatus",
-                                      "description", "half_day"], order_by="from_date desc", limit_page_length=12)
+    # Ordre (24/11/2026) : ses demandes en attente, puis les congés à venir (les plus proches d'abord), puis les
+    # derniers passés. Trié du plus lointain au plus proche, l'écran commençait par les récupérations planifiées
+    # jusqu'en 2028 et ne montrait plus ni l'attente ni le passé.
+    champs = ["name", "leave_type", "from_date", "to_date", "total_leave_days", "status", "docstatus", "description", "half_day"]
+    base = {"employee": emp.name, "docstatus": ["<", 2]}
+    aujourd = nowdate()
+    en_attente = frappe.get_all("Leave Application", filters=dict(base, status="Open"), fields=champs, order_by="from_date asc")
+    a_venir = frappe.get_all("Leave Application", filters=dict(base, status=["!=", "Open"], to_date=[">=", aujourd]),
+                             fields=champs, order_by="from_date asc", limit_page_length=6)
+    passees = frappe.get_all("Leave Application", filters=dict(base, status=["!=", "Open"], to_date=["<", aujourd]),
+                             fields=champs, order_by="from_date desc", limit_page_length=6)
+    for groupe, liste in (("attente", en_attente), ("avenir", a_venir), ("passe", passees)):
+        for d in liste:
+            d["groupe"] = groupe
+    demandes = en_attente + a_venir + passees
     fiches = frappe.get_all("Salary Slip", filters={"employee": emp.name, "docstatus": 1},
-                            fields=["name", "start_date", "end_date", "net_pay", "gross_pay"], order_by="start_date desc",
-                            limit_page_length=12)
-    fmt = FORMAT_FICHE if frappe.db.exists("Print Format", FORMAT_FICHE) else "Standard"
+                            fields=["name", "start_date", "end_date", "net_pay", "rounded_total", "gross_pay"],
+                            order_by="start_date desc", limit_page_length=12)
+    for f in fiches:
+        f["net_pay"] = f.rounded_total or f.net_pay      # le net À PAYER, celui du virement et du PDF
+    fmt = frappe.get_meta("Salary Slip").default_print_format or FORMAT_FICHE
+    if not frappe.db.exists("Print Format", fmt):
+        fmt = "Standard"
     for f in fiches:
         f["pdf"] = "/api/method/frappe.utils.print_format.download_pdf?doctype=Salary%%20Slip&name=%s&format=%s&no_letterhead=0" % (
             frappe.utils.quote(f["name"]), frappe.utils.quote(fmt))

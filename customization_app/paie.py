@@ -12,9 +12,11 @@ d'octobre 2026 du comptable).
   Les User Permission sur Employee (posées pour les tâches) ne donnent plus accès à la paie des collègues.
 - Aucune écriture comptable : seulement les fiches. Paiement par virement.
 """
+from datetime import date, timedelta
+
 import frappe
 from frappe import _
-from frappe.utils import add_days, flt, get_first_day, getdate, nowdate
+from frappe.utils import flt, get_first_day, getdate, nowdate
 
 from customization_app import paie_calcul as P
 
@@ -269,10 +271,45 @@ def installer():
     _composants_et_structures()
     _droits()
     _format()
+    _raccourcis()
     frappe.db.set_single_value("Payroll Settings", "email_salary_slip_to_employee", 0)   # PDF par mail : non
     for societe in frappe.get_all("Company", filters={"custom_cnss_employeur": ["is", "not set"]}, pluck="name"):
         # N° employeur imprimé sur les bulletins du comptable ; modifiable sur la fiche Société.
         frappe.db.set_value("Company", societe, "custom_cnss_employeur", "00651087-23", update_modified=False)
+
+
+# Espace « HR » (demande du 24/11/2026) : chaque employé y a « Mes congés et ma paie » (sa page : congés, demandes,
+# fiches de paie) ; le responsable a en plus « Contrôle de la paie ». Frappe n'affiche un raccourci de Page qu'à ceux
+# qui ont un rôle de la page : un employé ne voit pas le contrôle. En tête des raccourcis ; rejoué à chaque migrate
+# (une mise à jour de HRMS peut réécrire l'espace).
+ESPACE_RH = "HR"
+RACCOURCIS_RH = [("Mes congés et ma paie", "rh-technicien", "Green", "rhMaPaie"),
+                 ("Contrôle de la paie", "controle-paie", "Orange", "rhControlePaie")]
+
+
+def _raccourcis():
+    import json
+    if not frappe.db.exists("Workspace", ESPACE_RH):
+        return
+    espace = frappe.get_doc("Workspace", ESPACE_RH)
+    blocs = json.loads(espace.content or "[]")
+    change = False
+    for libelle, page, couleur, bloc_id in reversed(RACCOURCIS_RH):
+        if not frappe.db.exists("Page", page):
+            continue
+        if not any(s.link_to == page for s in espace.shortcuts or []):
+            espace.append("shortcuts", {"type": "Page", "label": libelle, "link_to": page, "color": couleur})
+            change = True
+        if not any(b.get("type") == "shortcut" and (b.get("data") or {}).get("shortcut_name") == libelle for b in blocs):
+            premiers = [i for i, b in enumerate(blocs) if b.get("type") == "shortcut"]
+            blocs.insert(premiers[0] if premiers else len(blocs),
+                         {"id": bloc_id, "type": "shortcut", "data": {"shortcut_name": libelle, "col": 3}})
+            change = True
+    if change:
+        espace.content = json.dumps(blocs)
+        espace.flags.ignore_permissions = True
+        espace.save()
+        frappe.clear_cache()
 
 
 def _role():
@@ -408,3 +445,102 @@ def _format():
     from frappe.custom.doctype.property_setter.property_setter import make_property_setter
     make_property_setter("Salary Slip", None, "default_print_format", FORMAT, "Data", for_doctype=True,
                          validate_fields_for_doctype=False)
+
+
+# ── Page « Contrôle de la paie » (raccourci de l'espace HR, rôle Responsable paie) ────────────────────────────────
+
+def _exiger_responsable():
+    if not est_responsable():
+        frappe.throw(_("Réservé au responsable de la paie."), frappe.PermissionError)
+
+
+def _montant(doc, composant):
+    return sum(flt(r.amount) for r in doc.get("earnings") + doc.get("deductions") if r.salary_component == composant)
+
+
+def _ligne_controle(doc) -> dict:
+    return {"fiche": doc.name, "docstatus": doc.docstatus, "jours": flt(doc.get("custom_jours_payes")),
+            "absences": flt(doc.get("custom_jours_absence")), "brut": flt(doc.gross_pay, 3),
+            "cnss": _montant(doc, "Retenue CNSS"), "irpp": _montant(doc, "Impôt sur le revenu"),
+            "css": _montant(doc, "Contribution sociale de solidarité"),
+            "prime": _montant(doc, "Prime exceptionnelle"), "avance": _montant(doc, "Avance sur salaire"),
+            "net": flt(doc.net_pay, 3), "a_payer": flt(doc.rounded_total or doc.net_pay, 3)}
+
+
+@frappe.whitelist()
+def controle(mois=None) -> dict:
+    """Le mois vu par le responsable : une ligne par employé paramétré, les totaux, ce qui manque."""
+    _exiger_responsable()
+    aujourd_hui = getdate(nowdate())
+    premier = get_first_day(getdate(mois) if mois else aujourd_hui)
+    fin = P.fin_du_mois(premier)
+    lignes, a_parametrer, sans_contrat = [], [], []
+    for e in frappe.get_all("Employee", filters={"status": ["!=", "Inactive"]}, order_by="employee_name",
+                            fields=["name", "employee_name", "status", "relieving_date", "custom_paie_profil",
+                                    "custom_paie_debut", "custom_paie_base", "custom_paie_matricule", "custom_paie_cnss",
+                                    "custom_paie_qualification"]):
+        parti = e.status == "Left" and e.relieving_date and getdate(e.relieving_date) < premier
+        if not e.custom_paie_profil:
+            if e.status == "Active":
+                sans_contrat.append({"employe": e.name, "nom": e.employee_name})
+            continue
+        manque = [lib for champ, lib in (("custom_paie_debut", "date de début"), ("custom_paie_base", "salaire de base"),
+                                         ("custom_paie_matricule", "matricule"), ("custom_paie_cnss", "N° CNSS"),
+                                         ("custom_paie_qualification", "qualification"))
+                  if not e.get(champ) and not (e.custom_paie_profil == P.CIVP and champ == "custom_paie_cnss")]
+        if manque and e.status == "Active":
+            a_parametrer.append({"employe": e.name, "nom": e.employee_name, "profil": e.custom_paie_profil, "manque": manque})
+        nom = frappe.db.get_value("Salary Slip", {"employee": e.name, "start_date": premier, "docstatus": ["<", 2]})
+        if not nom and (parti or not e.custom_paie_debut or getdate(e.custom_paie_debut) > fin):
+            continue
+        ligne = {"employe": e.name, "nom": e.employee_name, "profil": e.custom_paie_profil, "base": flt(e.custom_paie_base),
+                 "parti": e.status == "Left"}
+        ligne.update(_ligne_controle(frappe.get_doc("Salary Slip", nom)) if nom else {"fiche": None})
+        lignes.append(ligne)
+    avec = [l for l in lignes if l.get("fiche")]
+    totaux = {k: flt(sum(flt(l.get(k)) for l in avec), 3) for k in ("brut", "cnss", "irpp", "css", "net", "a_payer")}
+    validation = P.fin_du_mois(premier) - timedelta(days=P.JOURS_AVANT_FIN)
+    return {"mois": str(premier), "libelle": libelle_mois(premier), "validation_le": str(validation),
+            "passe": validation <= aujourd_hui, "brouillons": sum(1 for l in avec if l["docstatus"] == 0),
+            "validees": sum(1 for l in avec if l["docstatus"] == 1), "lignes": lignes, "totaux": totaux,
+            "a_parametrer": a_parametrer, "sans_contrat": sans_contrat,
+            "mois_possibles": [str(m) for m in P.mois_a_traiter(date(2026, 1, 1), aujourd_hui)]}
+
+
+@frappe.whitelist(methods=["POST"])
+def modifier_fiche(fiche, absences=0, prime=0, avance=0) -> dict:
+    """Brouillon seulement : jours d'absence non payés (sur 26), prime exceptionnelle (soumise), avance (après impôt)."""
+    _exiger_responsable()
+    doc = frappe.get_doc("Salary Slip", fiche)
+    if doc.docstatus != 0:
+        frappe.throw(_("Cette fiche est déjà validée : annulez-la puis modifiez la copie pour la corriger."))
+    doc.custom_jours_absence = max(0.0, min(flt(absences), P.JOURS_MOIS))
+    for table, composant, montant in (("earnings", "Prime exceptionnelle", flt(prime)), ("deductions", "Avance sur salaire", flt(avance))):
+        doc.set(table, [r for r in doc.get(table) if r.salary_component != composant])
+        if montant > 0:
+            doc.append(table, {"salary_component": composant, "amount": montant})
+    doc.save()
+    return _ligne_controle(doc)
+
+
+@frappe.whitelist(methods=["POST"])
+def recalculer() -> dict:
+    """Comme la tâche de la nuit : fiches manquantes créées, brouillons recalculés, validation si c'est le moment."""
+    _exiger_responsable()
+    return generer()
+
+
+@frappe.whitelist(methods=["POST"])
+def valider_mois(mois) -> list:
+    """Valide tout de suite les brouillons du mois (sans attendre les 4 derniers jours) et prévient chacun."""
+    _exiger_responsable()
+    premier = get_first_day(getdate(mois))
+    valides = {}
+    for nom in frappe.get_all("Salary Slip", filters={"start_date": premier, "docstatus": 0}, pluck="name"):
+        doc = frappe.get_doc("Salary Slip", nom)
+        doc.save()
+        doc.submit()
+        valides.setdefault(doc.employee, []).append((premier, doc.name))
+    for emp, liste in valides.items():
+        _prevenir(emp, liste)
+    return [frappe.db.get_value("Employee", e, "employee_name") for e in valides]

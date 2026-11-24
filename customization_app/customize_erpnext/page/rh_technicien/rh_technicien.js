@@ -17,6 +17,11 @@ frappe.pages["rh-technicien"].on_page_show = function (wrapper) {
     const dt = (d) => (d ? frappe.datetime.str_to_user(d) : "");
     const nb = (v) => (v == null ? "—" : (Math.round(v * 10) / 10).toString().replace(".", ","));
     const STATUTS = { Open: ["En attente", "#b45309"], Approved: ["Approuvé", "#15803d"], Rejected: ["Refusé", "#b91c1c"], Cancelled: ["Annulé", "#6b7280"] };
+    // Mois et montants en français, quelle que soit la langue du navigateur (« October 2026 », « 1,450.000 د.ت »).
+    const MOIS = ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre", "novembre", "décembre"];
+    const mois_fr = (iso) => { const [a, m] = String(iso).split("-"); return MOIS[+m - 1] + " " + a; };
+    const dinars = (v) => (Math.round((v || 0) * 1000) / 1000).toLocaleString("fr-FR", { minimumFractionDigits: 3, maximumFractionDigits: 3 }) + " DT";
+    const GROUPES = { attente: "En attente", avenir: "À venir", passe: "Passées" };
 
     function poser_css() {
         if (document.getElementById("rh-css")) return;
@@ -50,14 +55,22 @@ frappe.pages["rh-technicien"].on_page_show = function (wrapper) {
 
         peindre(e) {
             this.etat = e;
+            if (e.sans_employe) {
+                this.$el.html(`<div class="rh-bloc"><div class="rh-vide">${__("Votre compte n’est lié à aucune fiche employé active : rien à afficher ici.")}</div></div>`);
+                return;
+            }
             const soldes = (e.soldes || []).map((s) => `
                 <div class="rh-solde"><span>${esc(s.type)}${s.sans_solde ? ` <span class="text-muted">(${__("sans solde")})</span>` : ""}</span>
                     ${s.sans_solde ? "" : `<span><b>${nb(s.restants)}</b> <span class="text-muted">/ ${nb(s.alloues)} ${__("j.")}${
                         s.en_attente ? ` · ${nb(s.en_attente)} ${__("en attente")}` : ""}</span></span>`}
                 </div>`).join("") || `<div class="rh-vide">${__("Aucun droit à congé attribué pour le moment.")}</div>`;
+            let groupe_prec = null;
             const demandes = (e.demandes || []).map((d) => {
                 const [lib, couleur] = STATUTS[d.status] || [d.status, "#6b7280"];
-                return `<div class="rh-ligne">
+                const titre = d.groupe && d.groupe !== groupe_prec
+                    ? `<div class="text-muted" style="font-size:11.5px;font-weight:700;text-transform:uppercase;margin-top:8px">${__(GROUPES[d.groupe])}</div>` : "";
+                groupe_prec = d.groupe;
+                return `${titre}<div class="rh-ligne">
                     <div><div><b>${esc(d.leave_type)}</b> · ${nb(d.total_leave_days)} ${__("j.")}</div>
                          <div class="text-muted" style="font-size:12px">${dt(d.from_date)}${d.to_date !== d.from_date ? " → " + dt(d.to_date) : ""}${d.half_day ? " · " + __("demi-journée") : ""}</div></div>
                     <div style="display:flex;gap:6px;align-items:center"><span class="rh-pastille" style="background:${couleur}">${__(lib)}</span>
@@ -66,8 +79,8 @@ frappe.pages["rh-technicien"].on_page_show = function (wrapper) {
             }).join("") || `<div class="rh-vide">${__("Aucune demande.")}</div>`;
             const fiches = (e.fiches || []).map((f) => `
                 <a class="rh-ligne" href="${f.pdf}" target="_blank" rel="noopener" style="color:inherit;text-decoration:none">
-                    <div><b>${esc(moment(f.start_date).format("MMMM YYYY"))}</b><div class="text-muted" style="font-size:12px">${dt(f.start_date)} → ${dt(f.end_date)}</div></div>
-                    <div><b>${format_currency(f.net_pay || 0, "TND")}</b> <span class="text-muted">📄</span></div>
+                    <div><b>${esc(mois_fr(f.start_date))}</b><div class="text-muted" style="font-size:12px">${__("net à payer")} · PDF</div></div>
+                    <div><b>${dinars(f.net_pay)}</b> <span class="text-muted">📄</span></div>
                 </a>`).join("") || `<div class="rh-vide">${__("Aucune fiche de paie disponible.")}</div>`;
             const feries = (e.feries || []).map((f) => `<span class="text-muted" style="font-size:12px">${dt(f.date)} ${esc(f.libelle)}</span>`).join(" · ");
             this.$el.html(`
