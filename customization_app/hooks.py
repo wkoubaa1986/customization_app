@@ -216,6 +216,14 @@ doc_events = {
     # Congés & récupérations : chaque jour d'absence approuvé = une Tâche de travail « toute la
     # journée » dans le calendrier (remplace le Server Script « Generer » sur Attendance), retirée
     # à l'annulation. Voir conges_recuperations.py.
+    # Barre « réunion qui approche » des participants (24/11/2026) : réunion déplacée → « entré » effacé ; tout
+    # changement → les barres se mettent à jour (reunion_activite.py).
+    "Reunion Activite": {
+        "validate": "customization_app.reunion_activite.reunion_validate",
+        "after_insert": "customization_app.reunion_activite.signaler_reunion",
+        "on_update": "customization_app.reunion_activite.signaler_reunion",
+        "on_trash": "customization_app.reunion_activite.signaler_reunion",
+    },
     "Leave Application": {
         "on_submit": ["customization_app.conges_recuperations.leave_application_on_submit",
                       "customization_app.conges_recuperations.signaler_changement"],
@@ -666,6 +674,8 @@ app_include_js = [_js("customer_quick_entry.js"),
                   _js("situation_mensuelle_clic.js"),  # graphes Situation Mensuelle et Pertes et Profits → page de détail
                   _js("bl_magasin_alerte.js"),  # bandeau rouge du magasinier principal : BL à approuver / à vérifier
                   _js("conges_a_valider.js"),  # barre orange des valideurs de congés (Congés RH) : demandes à valider
+                  # barre jaune puis rouge des participants d'une réunion (1 h avant) ; empile aussi les autres barres.
+                  _js("reunion_barre.js"),
                   _js("liste_prix_documents_list.js"),  # liste des listes de prix : bouton vers l'assistant
                   # 📨 SMS / e-mail au client depuis la fiche tâche, avec modèles prédéfinis
                   # (technicien + téléphone injectés automatiquement, commande liée si présente).

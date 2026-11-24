@@ -9,7 +9,8 @@
   "nom",
   "utilisateur",
   "present",
-  "rappel_envoye"
+  "rappel_envoye",
+  "entre_le"
  ],
  "fields": [
   {
@@ -50,10 +51,17 @@
    "fieldtype": "Datetime",
    "label": "Rappel envoyé le",
    "read_only": 1
+  },
+  {
+   "fieldname": "entre_le",
+   "fieldtype": "Datetime",
+   "label": "Entré dans la réunion le",
+   "read_only": 1,
+   "description": "Clic sur « Rejoindre » de la barre de réunion, ou réunion ouverte dans l’heure qui précède : la barre disparaît pour lui. Remis à zéro si la réunion est déplacée."
   }
  ],
  "links": [],
- "modified": "2026-10-19 10:00:00.000000",
+ "modified": "2026-11-24 16:00:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Reunion Participant",

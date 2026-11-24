@@ -448,6 +448,9 @@ def get_reunion(name):
     doc = frappe.get_doc(DOCTYPE, name)
     _acces_reunion(doc)
     instant = now_datetime()
+    # Un participant qui ouvre la réunion dans l'heure qui précède (ou pendant) y est « entré » : sa barre disparaît.
+    if _dans_le_creneau_barre(doc, instant) and _marquer_entree(doc):
+        doc.reload()
     d = doc.as_dict()
     d.update(etat_horaire(doc, instant))
     visibles = participants_visibles(doc, instant)
@@ -765,3 +768,79 @@ def annuler_serie_suivantes(name):
         d.statut = "Annulée"
         d.save(ignore_permissions=True)
     return {"annulees": noms}
+
+
+# ── Barre « réunion qui approche » (demande du 24/11/2026) ──────────────────────────────────────────────────────────
+# Chaque participant voit une barre 1 h avant le début : jaune, puis ROUGE dans le dernier quart d'heure (et pendant la
+# réunion). Elle disparaît quand il entre dans la réunion (« Rejoindre » de la barre, ou réunion ouverte dans ce
+# créneau, ou marqué présent), quand la réunion est close (Tenue) ou annulée, ou quand l'heure de fin est passée.
+# Réunion déplacée : tout se recalcule sur le nouvel horaire, et les entrées déjà notées sont effacées.
+BARRE_AVANT_MIN = 60
+BARRE_ROUGE_MIN = 15
+
+
+def _dans_le_creneau_barre(reunion, instant) -> bool:
+    h = etat_horaire(reunion, instant)
+    return get_datetime(h["debut_prevu"]) - timedelta(minutes=BARRE_AVANT_MIN) <= instant < get_datetime(h["fin_prevue"])
+
+
+@frappe.whitelist()
+def barre_reunions():
+    """Les réunions PRÉVUES d'aujourd'hui (et des jours voisins) où l'utilisateur est participant et pas encore entré :
+    le navigateur affiche la barre dans le créneau (−1 h → fin) et passe au rouge à −15 min, à l'heure du serveur."""
+    user = frappe.session.user
+    if not user or user == "Guest":
+        return None
+    instant = now_datetime()
+    jour = getdate(instant)
+    lignes = frappe.db.sql("""
+        select r.name, r.titre, r.date, r.heure, r.duree_min, r.lieu, r.lien_visio, r.statut
+        from `tabReunion Activite` r
+        join `tabReunion Participant` p on p.parent = r.name and p.parenttype = 'Reunion Activite'
+        where r.statut = 'Prévue' and p.utilisateur = %(u)s and r.date between %(d1)s and %(d2)s
+          and p.entre_le is null and ifnull(p.present, '') != 'Présent'
+    """, {"u": user, "d1": add_days(jour, -1), "d2": add_days(jour, 1)}, as_dict=True)
+    out = []
+    for r in lignes:
+        h = etat_horaire(r, instant)
+        if get_datetime(h["fin_prevue"]) <= instant:
+            continue
+        out.append({"name": r.name, "titre": r.titre or _("Réunion"), "debut": h["debut_prevu"], "fin": h["fin_prevue"],
+                    "lieu": r.lieu, "visio": r.lien_visio})
+    out.sort(key=lambda x: x["debut"])
+    return {"maintenant": instant.strftime("%Y-%m-%d %H:%M:%S"), "avant_min": BARRE_AVANT_MIN,
+            "rouge_min": BARRE_ROUGE_MIN, "reunions": out}
+
+
+def _marquer_entree(doc, user=None) -> bool:
+    user = user or frappe.session.user
+    row = next((p for p in doc.participants if p.utilisateur == user), None)
+    if not row or row.entre_le:
+        return False
+    frappe.db.set_value("Reunion Participant", row.name, "entre_le", now_datetime(), update_modified=False)
+    frappe.publish_realtime("reunion_barre", {}, user=user, after_commit=True)
+    return True
+
+
+@frappe.whitelist(methods=["POST"])
+def entrer(name):
+    """« Rejoindre » de la barre : l'employé entre dans la réunion — sa barre disparaît ; rend le lien visio."""
+    doc = frappe.get_doc(DOCTYPE, name)
+    if not any(p.utilisateur == frappe.session.user for p in doc.participants):
+        frappe.throw(_("Vous n'êtes pas participant de cette réunion."), frappe.PermissionError)
+    _marquer_entree(doc)
+    return {"name": doc.name, "lien_visio": doc.lien_visio}
+
+
+def reunion_validate(doc, method=None):
+    """Réunion déplacée (jour ou heure) : la barre repart de zéro sur le nouvel horaire — les « entré » sont effacés."""
+    if doc.is_new():
+        return
+    if doc.has_value_changed("date") or doc.has_value_changed("heure"):
+        for p in doc.participants:
+            p.entre_le = None
+
+
+def signaler_reunion(doc, method=None):
+    """Créée, déplacée, close, annulée, supprimée : les barres des participants se mettent à jour tout de suite."""
+    frappe.publish_realtime("reunion_barre", {}, after_commit=True)
