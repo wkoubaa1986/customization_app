@@ -60,6 +60,41 @@ def anciennete(entrees, sorties_total, jour):
     return None, 0
 
 
+def montant_recu(cloture) -> float:
+    """Ce que le collecteur a reçu d'une clôture collectée. Validée par lui-même (« validation directe » de la caisse
+    d'un absent, ou sa propre caisse) : « espèces reçues » n'est pas rempli, l'argent remis est chez lui quand même
+    (2 480,688 DT oubliés avant le 24/11/2026). Fonction pure."""
+    if flt(cloture.get("especes_recues")):
+        return flt(cloture.get("especes_recues"), 3)
+    return flt(cloture.get("especes_remises"), 3) if cloture.get("validation_seule") else 0.0
+
+
+def fond_de(cloture) -> float:
+    """Le fond qu'une clôture laisse à la suivante (même règle que caisse_cloture._ouverture). Fonction pure."""
+    if cloture.get("fond_conserve") is not None:
+        return flt(cloture.get("fond_conserve"), 3)
+    base = cloture.get("especes_comptees") if cloture.get("especes_comptees") is not None else cloture.get("solde_theorique")
+    return flt(flt(base) - flt(cloture.get("especes_remises")), 3)
+
+
+def sauts_de_chaine(clotures) -> list:
+    """Les clôtures dont l'ouverture n'est pas le fond de la clôture précédente de la même caisse (ordre des dates).
+    Arrive quand un jour est compté AVANT la veille (l'ouverture ne lit que les clôtures déjà validées) : CLO-1055 du
+    20/10/2026 ouvrait à 2 003,782 DT en ignorant le 19/10 (−3 289,218 DT), +5 293 DT apparus chez Nejib Koubaa.
+    `clotures` : dans l'ordre (caisse, date, création). Fonction pure."""
+    sauts, precedente = [], {}
+    for c in clotures:
+        p = precedente.get(c["caisse"])
+        attendu = fond_de(p) if p else 0.0
+        if abs(flt(c.get("solde_ouverture")) - attendu) > 0.0005:
+            sauts.append({"caisse": c["caisse"], "date": str(c["date_cloture"]), "cloture": c["name"],
+                          "precedente": p["name"] if p else None, "date_precedente": str(p["date_cloture"]) if p else None,
+                          "attendu": attendu, "ouverture": flt(c.get("solde_ouverture"), 3),
+                          "saut": flt(flt(c.get("solde_ouverture")) - attendu, 3)})
+        precedente[c["caisse"]] = c
+    return sauts
+
+
 def reference(remarque, cheque_no=None) -> str:
     """« Ref : TT263168Q77X » ou « réf. TT26306750847374 » dans la remarque d'un versement. Fonction pure."""
     m = re.search(r"r[ée]f\.?\s*:?\s*([A-Z0-9][A-Z0-9-]{5,})", remarque or "", re.I)
@@ -131,13 +166,14 @@ def _collecteurs(jour, cfg):
     for u in (cfg.get("responsables") or []) + (cfg.get("delegues") or []):
         c(u)
     for r in frappe.db.sql(
-            """SELECT collecte_par, collecte_le, especes_recues FROM `tabCloture Caisse`
+            """SELECT collecte_par, collecte_le, especes_recues, especes_remises, validation_seule FROM `tabCloture Caisse`
                WHERE docstatus = 1 AND IFNULL(collecte_par, '') != '' AND date_cloture >= %s AND collecte_le <= %s
                  AND IFNULL(passation, '') = '' ORDER BY collecte_le""", (depart, fin), as_dict=True):
-        if flt(r.especes_recues):
+        recu = montant_recu(r)
+        if recu:
             x = c(r.collecte_par)
-            x["recu"] += flt(r.especes_recues)
-            x["_entrees"].append((getdate(r.collecte_le), flt(r.especes_recues)))
+            x["recu"] += recu
+            x["_entrees"].append((getdate(r.collecte_le), recu))
     # Passations : le délégué a collecté (ses clôtures portent la passation), le responsable reçoit à la validation.
     for r in frappe.db.sql(
             """SELECT delegue, responsable, validee_le, especes_recues FROM `tabPassation Caisse`
@@ -250,6 +286,81 @@ def _jour_par_jour(jour):
     return [jours[k] for k in sorted(jours, reverse=True)]
 
 
+def _rapprochement(jour, cfg, employes, collecteurs):
+    """Pourquoi l'argent reconstitué n'est pas le solde du compte Espèces. Décomposition EXACTE de l'écart :
+    reconstitué − mouvements du compte depuis le départ
+      = (encaissé selon les clôtures − entré au compte par paiements)
+      − (dépensé selon les clôtures − sorti du compte en dépenses)
+      + écarts de comptage + écarts de remise + sauts de chaîne + pas encore compté (+ reste, ≈ 0).
+    Les transferts (Sabah, banque, perso) sont les mêmes des deux côtés et s'annulent."""
+    from customization_app import caisse_collecte as CC
+    from customization_app.caisse_cloture import CAISSE_GLOBALE
+    depart = getdate(cfg.get("date_depart") or jour)
+    gl = lambda cond, *v: flt(frappe.db.sql(  # noqa: E731
+        "SELECT SUM(debit - credit) FROM `tabGL Entry` WHERE account = %s AND is_cancelled = 0 AND " + cond,
+        (COMPTE_ESPECES,) + v)[0][0], 3)
+    avant = gl("posting_date < %s", depart)
+    au_jour = gl("posting_date <= %s", jour)
+    pe = frappe.db.sql("""SELECT SUM(debit), SUM(credit) FROM `tabGL Entry` WHERE account = %s AND is_cancelled = 0
+                          AND voucher_type = 'Payment Entry' AND posting_date BETWEEN %s AND %s""", (COMPTE_ESPECES, depart, jour))[0]
+    dep_caisse = flt(frappe.db.sql(
+        """SELECT SUM(g.credit - g.debit) FROM `tabGL Entry` g JOIN `tabJournal Entry` je ON je.name = g.voucher_no
+           WHERE g.account = %s AND g.is_cancelled = 0 AND g.voucher_type = 'Journal Entry'
+             AND je.cheque_no LIKE 'Dépense caisse%%' AND g.posting_date BETWEEN %s AND %s""", (COMPTE_ESPECES, depart, jour))[0][0], 3)
+    entre_paiements, sorti_paiements = flt(pe[0], 3), flt(pe[1], 3)
+    mouvements = flt(au_jour - avant, 3)
+    # Les clôtures de chaque caisse depuis SA date de départ.
+    departs = {}
+    clotures = []
+    for c in frappe.db.sql(
+            """SELECT name, caisse, date_cloture, solde_ouverture, encaissements_especes, depenses_especes, ecart,
+                      especes_comptees, especes_remises, fond_conserve, solde_theorique, especes_recues, validation_seule,
+                      docstatus, IFNULL(collecte_par, '') AS collecte_par
+               FROM `tabCloture Caisse` WHERE docstatus < 2 AND caisse != %s AND date_cloture BETWEEN %s AND %s
+               ORDER BY caisse, date_cloture, creation""", (CAISSE_GLOBALE, depart, jour), as_dict=True):
+        if c.caisse not in departs:
+            departs[c.caisse] = getdate(CC.date_depart_pour(c.caisse, cfg) or depart)
+        if getdate(c.date_cloture) >= departs[c.caisse]:
+            clotures.append(c)
+    encaisse = flt(sum(flt(c.encaissements_especes) for c in clotures), 3)
+    depense = flt(sum(flt(c.depenses_especes) for c in clotures), 3)
+    ecarts_comptage = flt(sum(flt(c.ecart) for c in clotures), 3)
+    ecarts_remise = flt(sum(montant_recu(c) - flt(c.especes_remises) for c in clotures
+                            if c.docstatus == 1 and c.collecte_par), 3)
+    sauts = sauts_de_chaine(clotures)
+    total_sauts = flt(sum(s["saut"] for s in sauts), 3)
+    non_compte = flt(sum(flt(e["non_compte"]) for e in employes), 3)
+    reconstitue = flt(sum(flt(e["total"]) for e in employes) + sum(flt(x["detient"]) for x in collecteurs), 3)
+    termes = {
+        "encaisse": flt(encaisse - entre_paiements, 3),
+        "depense": flt(-(depense - sorti_paiements - dep_caisse), 3),
+        "ecarts_comptage": ecarts_comptage, "ecarts_remise": ecarts_remise, "sauts": total_sauts, "non_compte": non_compte,
+    }
+    ecart = flt(reconstitue - mouvements, 3)
+    mal_comptabilises = [{"name": r.name, "date": str(r.posting_date), "compte": (r.paid_to or "").replace(" - A&S", ""),
+                          "montant": flt(r.paid_amount, 3), "saisi_par": frappe.utils.get_fullname(r.owner)}
+                         for r in frappe.db.sql(
+                             """SELECT name, posting_date, paid_to, paid_amount, owner FROM `tabPayment Entry`
+                                WHERE docstatus = 1 AND payment_type = 'Receive' AND mode_of_payment = 'Espèces'
+                                  AND paid_to != %s AND posting_date BETWEEN %s AND %s ORDER BY posting_date""",
+                             (COMPTE_ESPECES, depart, jour), as_dict=True)]
+    # Paiements en espèces saisis depuis le départ mais DATÉS d'avant : la caisse les compte le jour de la saisie, la
+    # comptabilité les range avant la période (17 paiements, 3 511,301 DT au 24/11/2026).
+    antidates = frappe.db.sql("""SELECT COUNT(*), SUM(paid_amount) FROM `tabPayment Entry` WHERE docstatus = 1
+                                 AND payment_type = 'Receive' AND paid_to = %s AND posting_date < %s AND creation >= %s""",
+                              (COMPTE_ESPECES, depart, depart))[0]
+    return {
+        "antidates_avant_depart": {"nb": int(antidates[0] or 0), "total": flt(antidates[1], 3)},
+        "depart": str(depart), "solde_avant": avant, "solde_jour": au_jour, "mouvements": mouvements,
+        "entre_paiements": entre_paiements, "sorti_paiements": sorti_paiements, "depenses_caisse": dep_caisse,
+        "transferts": flt(mouvements - (entre_paiements - sorti_paiements - dep_caisse), 3),
+        "encaisse_clotures": encaisse, "depense_clotures": depense, "nb_clotures": len(clotures),
+        "reconstitue": reconstitue, "ecart": ecart, "termes": termes,
+        "reste": flt(ecart - sum(termes.values()), 3),
+        "sauts": sauts, "mal_comptabilises": mal_comptabilises,
+    }
+
+
 @frappe.whitelist()
 def situation(date=None):
     from customization_app import caisse_collecte as CC
@@ -273,4 +384,5 @@ def situation(date=None):
                    "comptable_especes": _solde(COMPTE_ESPECES, jour)},
         "employes": employes, "collecteurs": collecteurs, "versements": versements,
         "jours": _jour_par_jour(jour),
+        "rapprochement": _rapprochement(jour, cfg, employes, collecteurs),
     }

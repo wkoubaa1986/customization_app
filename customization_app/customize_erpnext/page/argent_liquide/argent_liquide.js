@@ -69,6 +69,16 @@ class ArgentLiquide {
       .al-etape .v { font-size: 21px; font-weight: 800; white-space: nowrap; margin: 2px 0; }
       .al-etape .d { font-size: 12px; color: var(--text-muted); line-height: 1.35; }
       .al-fleche { display: flex; align-items: center; font-size: 20px; color: var(--text-muted); }
+      .al-etape .periode { font-size: 11.5px; margin-top: 6px; font-weight: 600; color: var(--text-color); }
+      /* Rapprochement avec la comptabilité */
+      .al-rap { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+      .al-rap .bloc { border: 1px solid var(--border-color); border-radius: 12px; padding: 10px 14px; background: var(--card-bg); }
+      .al-rap .bloc table td { border-bottom: none; padding: 3px 0; }
+      .al-rap .bloc tr.res td { border-top: 1px solid var(--border-color); font-weight: 800; padding-top: 6px; }
+      .al-causes td { vertical-align: top; } .al-causes .indice { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+      .al-causes tr.fort td { background: #fff7ed; } [data-theme="dark"] .al-causes tr.fort td { background: #2b1d0e; }
+      .al-liens { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+      @media (max-width: 768px) { .al-rap { grid-template-columns: 1fr; } }
       /* Répartition : la barre segmentée */
       .al-barre { display: flex; gap: 2px; height: 30px; margin: 6px 0 8px; }
       .al-seg { height: 100%; min-width: 3px; cursor: default; transition: filter .1s; }
@@ -201,22 +211,30 @@ class ArgentLiquide {
         <li><span class="al-pastille" style="background:var(--p-non_compte)"></span><b>${__("Encaissé, pas encore compté")}</b> : ${__("espèces encaissées moins espèces dépensées depuis le dernier comptage — la journée en cours, ou des jours oubliés (alors « sur N jours »).")}</li>
         <li><span class="al-pastille" style="background:var(--p-collecte)"></span><b>${__("Chez le collecteur")}</b> : ${__("ce qu’il a reçu aux collectes, moins ce qu’il a déjà sorti du compte Espèces (vers Sabah, la banque, des dépenses personnelles).")}</li>
         <li><span class="al-pastille" style="background:var(--p-sabah)"></span><b>${__("Sabah Espèces")}</b> : ${__("le solde du compte comptable où l’argent collecté est mis de côté.")}</li>
+        <li><b>${__("Périodes")}</b> : ${__("« chez les employés » est une photo au soir choisi (depuis leur dernier comptage) ; « chez les collecteurs » est un cumul depuis la date de départ des caisses ; Sabah est un solde comptable ; la banque, les 30 derniers jours. Chaque case l’écrit en bas.")}</li>
+        <li><b>${__("Et le compte comptable « Espèces » ?")}</b> : ${__("il ne dit pas qui tient l’argent. La section « Rapprochement avec la comptabilité », en bas, montre son solde, le compare à l’argent reconstitué ici et chiffre chaque cause d’écart, avec des liens vers le grand livre.")}</li>
         <li>${__("Cliquez sur une personne pour lire son explication en une phrase, sur une case du chemin pour aller au détail, sur un jour du graphique pour voir qui tenait l’argent ce soir-là. Survolez une couleur pour son montant.")}</li>
       </ul></details>`;
 
     // ── Le chemin de l'argent ──
-    const etape = (cible, c, titre, v, detail) => `<div class="al-etape" tabindex="0" data-cible="${cible}" style="--al-c:${c}">
-        <div class="t">${titre}</div><div class="v">${dt(v, false)}</div><div class="d">${detail}</div></div>`;
+    const etape = (cible, c, titre, v, detail, periode) => `<div class="al-etape" tabindex="0" data-cible="${cible}" style="--al-c:${c}">
+        <div class="t">${titre}</div><div class="v">${dt(v, false)}</div><div class="d">${detail}</div>
+        <div class="periode">🕒 ${periode}</div></div>`;
+    const il_y_a_30 = frappe.datetime.add_days(s.date, -30);
     const chez_employes = poches.fond + poches.a_remettre + poches.non_compte;
     const chemin = `<div class="al-chemin">
       ${etape("al-personnes", "var(--p-non_compte)", "👥 " + __("Chez les employés"), chez_employes,
-              __("fond gardé {0} · pas remis {1} · pas compté {2}", [txt(poches.fond), txt(poches.a_remettre), txt(poches.non_compte)]))}
+              __("fond gardé {0} · pas remis {1} · pas compté {2}", [txt(poches.fond), txt(poches.a_remettre), txt(poches.non_compte)]),
+              __("au soir du {0}, depuis leur dernier comptage", [jour(s.date)]))}
       <div class="al-fleche">→</div>
-      ${etape("al-collecteurs", "var(--p-collecte)", "📥 " + __("Chez les collecteurs"), poches.collecte, __("reçu aux collectes, pas encore versé"))}
+      ${etape("al-collecteurs", "var(--p-collecte)", "📥 " + __("Chez les collecteurs"), poches.collecte, __("reçu aux collectes, pas encore versé"),
+              __("cumul du {0} (départ des caisses) au {1}", [jour(s.date_depart), jour(s.date)]))}
       <div class="al-fleche">→</div>
-      ${etape("al-jours", "var(--p-sabah)", "🔒 " + __("Sabah Espèces"), poches.sabah, __("argent collecté mis de côté"))}
+      ${etape("al-rapprochement", "var(--p-sabah)", "🔒 " + __("Sabah Espèces"), poches.sabah, __("argent collecté mis de côté"),
+              __("solde comptable au {0}", [jour(s.date)]))}
       <div class="al-fleche">→</div>
-      ${etape("al-banque", "var(--text-muted)", "🏦 " + __("Versé en banque"), verse_banque, __("sur les 30 derniers jours (déjà sorti du liquide)"))}
+      ${etape("al-banque", "var(--text-muted)", "🏦 " + __("Versé en banque"), verse_banque, __("déjà sorti du liquide"),
+              __("du {0} au {1}", [jour(il_y_a_30), jour(s.date)]))}
     </div>`;
 
     // ── Répartition du total ──
@@ -318,6 +336,7 @@ class ArgentLiquide {
       <div class="al-graph" id="al-graph"></div>
       <details style="margin-top:6px"><summary class="muet" style="cursor:pointer">${__("Voir les chiffres en tableau")}</summary><div class="al-defile" id="al-table-jours"></div></details>
       <h4 id="al-banque">🏦 ${__("Versements en banque (30 derniers jours)")}</h4>${versements}
+      ${this.html_rapprochement(dt, txt, jour, esc)}
       <div class="al-note">${__("Méthode : toutes les caisses partagent un seul compte comptable « Espèces », qui ne dit pas qui tient les billets (son solde le {0} : {1}). La page reconstruit donc qui détient quoi à partir des comptages, des collectes et des écritures depuis la date de départ des caisses ({2}). Une écriture de sortie saisie par quelqu’un qui n’est pas collecteur est comptée chez le responsable titulaire. Alerte au-delà de {3} ou après {4} jours sans versement (Config Caisse).",
         [jour(s.date), txt(t.comptable_especes), jour(s.date_depart), txt(s.plafond), s.jours_max])}</div>
     </div>`);
@@ -333,8 +352,74 @@ class ArgentLiquide {
     });
     $al.find("tr.al-ligne").on("click", function () { $al.find(`tr.al-phrase[data-pour="${$(this).attr("data-i")}"]`).toggle(); });
     $al.find(".al-vides").on("click", () => { this.voir_vides = !this.voir_vides; this.rendre(); });
+    $al.find("[data-grand-livre]").on("click", function () {
+      frappe.route_options = { company: frappe.defaults.get_user_default("Company"), account: [$(this).attr("data-grand-livre")],
+                               from_date: $(this).attr("data-du"), to_date: $(this).attr("data-au"),
+                               group_by: "Group by Voucher (Consolidated)" };
+      frappe.set_route("query-report", "General Ledger");
+    });
     this.brancher_bulles($al);
     this.dessiner_jours();
+  }
+
+  // ── Rapprochement avec le compte comptable Espèces (24/11/2026) : son solde, l'argent reconstitué, et l'écart
+  //    décomposé cause par cause (la décomposition est exacte : le « reste » vaut 0 quand rien n'a bougé après coup).
+  html_rapprochement(dt, txt, jour, esc) {
+    const r = this.s.rapprochement;
+    if (!r) return "";
+    const veille = frappe.datetime.add_days(r.depart, -1);
+    const t = r.termes || {};
+    const flux = (Number(t.encaisse) || 0) + (Number(t.depense) || 0) + (Number(t.non_compte) || 0);
+    const signe = (v) => (v > 0.0005 ? "+ " + txt(v) : v < -0.0005 ? "− " + txt(-v) : txt(0));
+    const mal = r.mal_comptabilises || [];
+    const total_mal = mal.reduce((a, m) => a + (Number(m.montant) || 0), 0);
+    const ad = r.antidates_avant_depart || {};
+    const lien_gl = (compte, libelle) => `<button class="btn btn-xs btn-default" data-grand-livre="${esc(compte)}" data-du="${r.depart}" data-au="${this.s.date}">📒 ${libelle}</button>`;
+    const causes = [
+      { lib: __("Encaissé et dépensé : les caisses ne comptent pas comme le compte"), v: flux, fort: Math.abs(flux) > 100,
+        indice: [__("encaissé selon les {0} clôtures {1} contre {2} entrés au compte par paiements ; dépensé {3} contre {4} sortis en dépenses ; plus le pas-encore-compté ({5}), déjà au compte mais pas encore dans une clôture.",
+                    [r.nb_clotures, txt(r.encaisse_clotures), txt(r.entre_paiements), txt(r.depense_clotures), txt((Number(r.sorti_paiements) || 0) + (Number(r.depenses_caisse) || 0)), txt(t.non_compte)]),
+                 ad.nb ? __("piste : {0} paiements en espèces saisis après le {1} mais datés d’avant ({2}) — comptés par les caisses, rangés avant la période par la comptabilité.", [ad.nb, jour(r.depart), txt(ad.total)]) : "",
+                 mal.length ? __("piste : {0} paiements saisis « Espèces » mais enregistrés sur un autre compte ({1}) — voir la liste ci-dessous.", [mal.length, txt(total_mal)]) : ""] },
+      { lib: __("Écarts de comptage (compté − attendu)"), v: t.ecarts_comptage, indice: [__("ce que les employés ont compté en plus (ou en moins) du montant attendu.")] },
+      { lib: __("Écarts de remise (reçu − remis)"), v: t.ecarts_remise, indice: [__("différence entre ce que l’employé a remis et ce que le collecteur a reçu.")] },
+      { lib: __("Sauts dans la chaîne des clôtures"), v: t.sauts, fort: Math.abs(Number(t.sauts) || 0) > 0.0005,
+        indice: (r.sauts || []).map((x) => __("{0}, le {1} : la clôture {2} s’ouvre à {3} au lieu de {4} (fond de {5} du {6}) — un jour compté avant la veille.",
+          [esc(x.caisse), jour(x.date), `<a href="/app/cloture-caisse/${encodeURIComponent(x.cloture)}">${esc(x.cloture)}</a>`, txt(x.ouverture), txt(x.attendu),
+           x.precedente ? `<a href="/app/cloture-caisse/${encodeURIComponent(x.precedente)}">${esc(x.precedente)}</a>` : "—", jour(x.date_precedente)])) },
+      { lib: __("Reste : pièces modifiées après le comptage"), v: r.reste, indice: [__("paiements ou dépenses saisis, datés ou corrigés après que la caisse du jour a été comptée.")] },
+    ];
+    return `<h4 id="al-rapprochement">🧾 ${__("Rapprochement avec la comptabilité")}</h4>
+      <div class="al-sous">${__("Le compte comptable « Espèces » regroupe toutes les caisses : il ne dit pas qui tient l’argent. Voici son solde, l’argent reconstitué par cette page sur la même période, et ce qui explique la différence.")}</div>
+      <div class="al-rap">
+        <div class="bloc"><b>${__("Compte « Espèces » (comptabilité)")}</b><table>
+          <tr><td>${__("Solde au {0} (avant le départ des caisses)", [jour(veille)])}</td><td class="n">${txt(r.solde_avant)}</td></tr>
+          <tr><td>+ ${__("Entré par paiements de clients")}</td><td class="n">${txt(r.entre_paiements)}</td></tr>
+          <tr><td>− ${__("Sorti par paiements")}</td><td class="n">${txt(r.sorti_paiements)}</td></tr>
+          <tr><td>− ${__("Dépenses de caisse")}</td><td class="n">${txt(r.depenses_caisse)}</td></tr>
+          <tr><td>± ${__("Transferts (Sabah, banque, perso, autres)")}</td><td class="n">${signe(r.transferts)}</td></tr>
+          <tr class="res"><td>= ${__("Solde au {0}", [jour(this.s.date)])}</td><td class="n">${txt(r.solde_jour)}</td></tr>
+        </table>
+        <div class="al-liens">${lien_gl("Espèces - A&S", __("Grand livre Espèces"))}${lien_gl("Sabah Espèces - A&S", __("Grand livre Sabah Espèces"))}</div></div>
+        <div class="bloc"><b>${__("Argent reconstitué par cette page")}</b><table>
+          <tr><td>${__("Chez les employés")}</td><td class="n">${txt(this.s.totaux.employes)}</td></tr>
+          <tr><td>${__("Chez les collecteurs (y compris un éventuel négatif)")}</td><td class="n">${txt(r.reconstitue - this.s.totaux.employes)}</td></tr>
+          <tr class="res"><td>${__("Total reconstitué depuis le {0}", [jour(r.depart)])}</td><td class="n">${txt(r.reconstitue)}</td></tr>
+          <tr><td>${__("Mouvements du compte sur la même période")}</td><td class="n">${signe(r.mouvements)}</td></tr>
+          <tr class="res"><td>${__("Écart à expliquer")}</td><td class="n">${signe(r.ecart)}</td></tr>
+        </table>
+        <div class="muet" style="margin-top:6px">${__("Les caisses sont reparties de zéro le {0} : les {1} déjà sur le compte à cette date n’y entrent pas.", [jour(r.depart), txt(r.solde_avant)])}</div></div>
+      </div>
+      <div class="al-defile" style="margin-top:10px"><table class="al-causes">
+        <tr><th>${__("D’où vient l’écart")}</th><th class="n">${__("Montant")}</th></tr>
+        ${causes.map((c) => `<tr class="${c.fort ? "fort" : ""}"><td>${c.fort ? "⚠️ " : ""}<b>${c.lib}</b>${(c.indice || []).filter(Boolean).map((i) => `<div class="indice">${i}</div>`).join("")}</td>
+          <td class="n">${signe(Number(c.v) || 0)}</td></tr>`).join("")}
+        <tr class="pied"><td>${__("Total = écart à expliquer")}</td><td class="n">${signe(r.ecart)}</td></tr>
+      </table></div>
+      ${mal.length ? `<details style="margin-top:6px"><summary class="muet" style="cursor:pointer">${__("Paiements saisis « Espèces » enregistrés sur un autre compte ({0})", [mal.length])}</summary>
+        <div class="al-defile"><table><tr><th>${__("Date")}</th><th>${__("Paiement")}</th><th>${__("Compte utilisé")}</th><th>${__("Saisi par")}</th><th class="n">${__("Montant")}</th></tr>
+        ${mal.map((m) => `<tr><td>${jour(m.date)}</td><td><a href="/app/payment-entry/${encodeURIComponent(m.name)}">${esc(m.name)}</a></td><td>${esc(m.compte)}</td><td>${esc(m.saisi_par)}</td><td class="n">${txt(m.montant)}</td></tr>`).join("")}
+        </table></div></details>` : ""}`;
   }
 
   // ── Les 14 derniers jours : barres groupées (SVG), une colonne cliquable par jour ──

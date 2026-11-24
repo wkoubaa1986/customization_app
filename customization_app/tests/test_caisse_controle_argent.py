@@ -70,6 +70,25 @@ class TestArgentLiquide(unittest.TestCase):
         self.assertEqual(AL.anciennete(entrees, 120, date(2026, 11, 24)), (date(2026, 11, 20), 4))   # en partie couvert
         self.assertEqual(AL.anciennete(entrees, 180, date(2026, 11, 24)), (None, 0))
 
+    def test_montant_recu(self):
+        self.assertEqual(AL.montant_recu({"especes_recues": 50, "especes_remises": 50}), 50)
+        self.assertEqual(AL.montant_recu({"especes_recues": 0, "especes_remises": 521, "validation_seule": 1}), 521)  # directe
+        self.assertEqual(AL.montant_recu({"especes_recues": 0, "especes_remises": 521, "validation_seule": 0}), 0)
+
+    def test_saut_de_chaine_nejib_20_10(self):
+        """CLO-1055 (20/10) compté avant CLO-1056 (19/10) : son ouverture ignore le 19/10 → +5 293 DT."""
+        c = [
+            {"caisse": "N", "name": "CLO-0993", "date_cloture": "2026-10-17", "solde_ouverture": 2006.782, "fond_conserve": 2003.782},
+            {"caisse": "N", "name": "CLO-1056", "date_cloture": "2026-10-19", "solde_ouverture": 2003.782, "fond_conserve": -3289.218},
+            {"caisse": "N", "name": "CLO-1055", "date_cloture": "2026-10-20", "solde_ouverture": 2003.782, "fond_conserve": 1988.782},
+            {"caisse": "S", "name": "CLO-2", "date_cloture": "2026-10-20", "solde_ouverture": 0, "especes_comptees": 30,
+             "especes_remises": 30, "fond_conserve": None},
+            {"caisse": "S", "name": "CLO-3", "date_cloture": "2026-10-21", "solde_ouverture": 0, "fond_conserve": 0},
+        ]
+        sauts = AL.sauts_de_chaine(c)
+        self.assertEqual([(s["cloture"], s["saut"]) for s in sauts], [("CLO-0993", 2006.782), ("CLO-1055", 5293.0)])
+        self.assertEqual(AL.fond_de({"especes_comptees": 30, "especes_remises": 30, "fond_conserve": None}), 0)
+
     def test_reference(self):
         self.assertEqual(AL.reference("Ref : TT263168Q77X"), "TT263168Q77X")
         self.assertEqual(AL.reference("Versement espèces BIAT — réf. TT26306750847374\nSaisie via ChatGPT"), "TT26306750847374")
