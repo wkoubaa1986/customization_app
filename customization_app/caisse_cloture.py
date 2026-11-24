@@ -383,6 +383,11 @@ def _controles(data):
     return points
 
 
+# Les absences ne sont pas des interventions : une tâche « Congé » (générée depuis Congés & récupérations) ne doit
+# jamais devenir un point « tâche ouverte sans commande » à la caisse (Tache-09568, Salma, 24/11/2026).
+TYPES_ABSENCE = ("Congé", "Jour de récupération")
+
+
 def _taches_sans_commande(caisse, date, debut=None):
     """Les tâches du jour ENCORE OUVERTES et sans commande (Autre, Visite, entretien dont la commande
     n'est pas encore créée…). Le rapport de caisse part des commandes : sans ce contrôle, une tâche
@@ -391,7 +396,8 @@ def _taches_sans_commande(caisse, date, debut=None):
     from customization_app.tournee_optimisation import TYPES_HORS_JOURNEE
     date = getdate(date)
     debut = getdate(debut) if debut else date
-    filtre, valeurs = "", [COMPANY, "%s 00:00:00" % debut, "%s 23:59:59" % date, list(TYPES_HORS_JOURNEE)]
+    hors = sorted(set(TYPES_HORS_JOURNEE) | set(TYPES_ABSENCE))
+    filtre, valeurs = "", [COMPANY, "%s 00:00:00" % debut, "%s 23:59:59" % date, hors]
     if caisse != CAISSE_GLOBALE:
         filtre = "AND e.employee_name = %s"
         valeurs.append(caisse)

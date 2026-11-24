@@ -188,6 +188,7 @@ class TestTachesSansCommande(unittest.TestCase):
         self._tache("ESSAI-CAISSE-2", emp.name, "Jour de récupération")          # hors journée
         self._tache("ESSAI-CAISSE-3", emp.name, "Visite", status="Completed")     # fermée
         self._tache("ESSAI-CAISSE-4", emp.name, "Entretien", commande="SAL-ORD-ESSAI")   # suivie par le rapport
+        self._tache("ESSAI-CAISSE-5", emp.name, "Congé", heure="08:00:00")       # absence (24/11/2026), pas une intervention
         with mock.patch.object(CL, "_exclusions", return_value=(set(), set())):
             sa_caisse = [p for p in CL._taches_sans_commande(emp.employee_name, "2031-03-04") if p["tache"].startswith("ESSAI-")]
             globale = [p for p in CL._taches_sans_commande(CL.CAISSE_GLOBALE, "2031-03-04") if p["tache"].startswith("ESSAI-")]
