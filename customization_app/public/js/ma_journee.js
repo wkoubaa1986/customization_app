@@ -263,6 +263,16 @@ frappe.provide("frappe.views");
                 ${transferts.map((t) => `<div style="font-size:12.5px;color:#78350f;margin-top:2px">${esc(t.name)} · ${esc(String(t.de || "").replace(/ - [^-]+$/, ""))} → ${esc(String(t.vers || "").replace(/ - [^-]+$/, ""))} · ${t.articles} ${__("article(s)")} · ${esc(t.par)} · ${esc(t.quand)}</div>`).join("")}
                 <a class="btn btn-sm btn-primary" style="margin-top:8px" href="/app/stock-entrepots?valider=${encodeURIComponent(transferts[0].name)}">✅ ${__("Vérifier les quantités et valider")}</a>
               </div>` : "";
+            // Vérifications de stock qui attendent SON geste (accepter, recompter, valider) — 24/11/2026.
+            const verifs = (m.verifications_a_traiter || []);
+            const titre_verif = { accepter: __("à accepter"), recompter: __("à recompter"), valider: __("à valider"), accepter_pour: __("à accepter à sa place") };
+            const bouton_verif = { accepter: "🔍 " + __("Voir et accepter"), recompter: "🔁 " + __("Recompter"), valider: "🔍 " + __("Vérifier et valider"), accepter_pour: "🔍 " + __("Voir") };
+            const bandeau_verifs = verifs.map((v) => `
+              <div class="mj-verifs" style="border:1px solid #dc2626;background:#fef2f2;border-radius:12px;padding:10px 12px;margin:6px 0 10px">
+                <div style="font-weight:700;color:#991b1b">🧾 ${__("Vérification")} ${esc(v.libelle)} — ${esc(titre_verif[v.geste] || v.geste)}</div>
+                <div style="font-size:12.5px;color:#7f1d1d;margin-top:2px">${esc(v.texte)}</div>
+                <a class="btn btn-sm btn-primary" style="margin-top:8px" href="/app/stock-entrepots?verif=${encodeURIComponent(v.name)}">${bouton_verif[v.geste] || "🔍 " + __("Ouvrir")}</a>
+              </div>`).join("");
             // Machines reprises chez un client, pas encore réceptionnées au magasin : sa caisse les attend.
             const machines = (m.machines_a_receptionner || []);
             const bandeau_machines = machines.length ? `
@@ -298,7 +308,7 @@ frappe.provide("frappe.views");
                     >${l.statut === "Open" ? "" : "✓ "}${esc(l.debut)} · ${esc(l.client || "")}<span class="e"></span></a>`).join("")}
               </div>` : "";
             this.$corps.html(`
-              ${bandeau}${bandeau_machines}${bandeau_caisse}
+              ${bandeau_verifs}${bandeau}${bandeau_machines}${bandeau_caisse}
               <div class="mj-bar">
                 <input type="date" class="form-control" data-jour value="${esc(this.jour)}">
                 ${selecteur}

@@ -406,6 +406,9 @@ def ma_journee(date=None, employe=None):
         # Les transferts du Magasin vers SON stock qu'il doit confirmer (page Stock, double validation) :
         # ceux de l'utilisateur connecté seulement — un superviseur ne valide pas à la place d'un autre.
         "transferts_a_valider": _transferts_a_valider(cible),
+        # Les vérifications de stock qui attendent SON geste (accepter, recompter, valider pour un responsable) :
+        # jusqu'ici, seul un badge gris dans la carte de la tâche — et seulement le jour de la tâche — le disait.
+        "verifications_a_traiter": _verifications_a_traiter(cible),
         # Les machines qu'il a reprises chez un client et qui ne sont pas encore réceptionnées au magasin : sa
         # caisse ne se compte pas tant qu'il en reste (caisse_cloture._machines_a_receptionner).
         "machines_a_receptionner": _machines_a_receptionner(cible),
@@ -435,6 +438,21 @@ def _transferts_a_valider(employe):
                 for t in transferts_a_valider() if t.get("employe") == employe and t.get("a_moi")]
     except Exception:
         frappe.log_error(frappe.get_traceback(), "ma_journee: transferts à valider")
+        return []
+
+
+def _verifications_a_traiter(employe):
+    """Comme les transferts : seulement sur SA journée (le 24/11/2026, Radhouan Sifi n'a vu ni l'acceptation
+    demandée par Hedi, ni le renvoi de 2 articles à recompter — rien en haut de Ma journée)."""
+    try:
+        from customization_app.stock_entrepots import _mon_employe, verifications_a_traiter
+        mien = _mon_employe()
+        if not employe or not mien or mien.name != employe:
+            return []
+        return [{"name": v["name"], "libelle": v["libelle"], "geste": v["geste"], "texte": v["texte"]}
+                for v in verifications_a_traiter()]
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "ma_journee: vérifications à traiter")
         return []
 
 
