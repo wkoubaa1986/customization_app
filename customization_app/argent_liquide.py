@@ -22,6 +22,9 @@ import frappe
 from frappe import _
 from frappe.utils import add_days, date_diff, flt, get_datetime, getdate, nowdate
 
+# Les comptes des partenaires : l'argent qu'ils encaissent pour nous (une seule liste, celle des avoirs).
+from customization_app.avoir_client import COMPTES_PARTENAIRE
+
 COMPTE_ESPECES = "Espèces - A&S"
 COMPTE_SABAH = "Sabah Espèces - A&S"
 # Les mêmes que le Server Script « get caisse situation api » (BANQUE_ACCOUNTS, patch caisse_especes_biat).
@@ -107,9 +110,12 @@ def _employes(jour, cfg):
     from customization_app.rapport_caisse_journaliere import get_data
     # Employés partis : leur caisse n'encaisse plus, on ne recalcule pas un mois de « non compté » pour rien.
     partis = set(frappe.get_all("Employee", filters={"status": ["!=", "Active"]}, pluck="employee_name"))
+    # Partenaires (Economic Aqua Solution) : ils encaissent sur LEUR compte, leur caisse ne se compte pas (demande du
+    # 24/11/2026) — ce qui part chez eux est montré à part (_partenaires).
+    partenaires = CC.caisses_partenaires()
     caisses = []
     for caisse in CC.noms_caisses():
-        if caisse == CL.CAISSE_GLOBALE:
+        if caisse == CL.CAISSE_GLOBALE or caisse in partenaires:
             continue
         depart = getdate(CC.date_depart_pour(caisse, cfg) or cfg.get("date_depart") or jour)
         derniere = frappe.db.sql(
@@ -342,8 +348,9 @@ def _rapprochement(jour, cfg, employes, collecteurs):
                          for r in frappe.db.sql(
                              """SELECT name, posting_date, paid_to, paid_amount, owner FROM `tabPayment Entry`
                                 WHERE docstatus = 1 AND payment_type = 'Receive' AND mode_of_payment = 'Espèces'
-                                  AND paid_to != %s AND posting_date BETWEEN %s AND %s ORDER BY posting_date""",
-                             (COMPTE_ESPECES, depart, jour), as_dict=True)]
+                                  AND paid_to != %s AND paid_to NOT IN %s AND posting_date BETWEEN %s AND %s
+                                ORDER BY posting_date""",
+                             (COMPTE_ESPECES, COMPTES_PARTENAIRE, depart, jour), as_dict=True)]
     # Paiements en espèces saisis depuis le départ mais DATÉS d'avant : la caisse les compte le jour de la saisie, la
     # comptabilité les range avant la période (17 paiements, 3 511,301 DT au 24/11/2026).
     antidates = frappe.db.sql("""SELECT COUNT(*), SUM(paid_amount) FROM `tabPayment Entry` WHERE docstatus = 1
@@ -359,6 +366,28 @@ def _rapprochement(jour, cfg, employes, collecteurs):
         "reste": flt(ecart - sum(termes.values()), 3),
         "sauts": sauts, "mal_comptabilises": mal_comptabilises,
     }
+
+
+def _partenaires(jour, cfg):
+    """Ce qui est parti chez les partenaires (Economic Aqua Solution) : les paiements de nos clients encaissés sur LEUR
+    compte, depuis la date de départ des caisses. Ce n'est pas de l'argent liquide chez nous : à part du total."""
+    depart = getdate(cfg.get("date_depart") or jour)
+    lignes = frappe.db.sql(
+        """SELECT name, posting_date, paid_to, paid_amount, mode_of_payment, party_name, owner FROM `tabPayment Entry`
+           WHERE docstatus = 1 AND payment_type = 'Receive' AND paid_to IN %s AND posting_date BETWEEN %s AND %s
+           ORDER BY posting_date DESC, creation DESC""", (COMPTES_PARTENAIRE, depart, jour), as_dict=True)
+    par_compte = {}
+    for l in lignes:
+        x = par_compte.setdefault(l.paid_to, {"compte": l.paid_to, "nom": l.paid_to.replace(" - A&S", ""), "total": 0.0,
+                                              "especes": 0.0, "nb": 0, "derniers": []})
+        x["total"] = flt(x["total"] + flt(l.paid_amount), 3)
+        x["nb"] += 1
+        if (l.mode_of_payment or "") == "Espèces":
+            x["especes"] = flt(x["especes"] + flt(l.paid_amount), 3)
+        if len(x["derniers"]) < 10:
+            x["derniers"].append({"name": l.name, "date": str(l.posting_date), "montant": flt(l.paid_amount, 3),
+                                  "mode": l.mode_of_payment or "", "client": l.party_name or ""})
+    return {"depart": str(depart), "comptes": sorted(par_compte.values(), key=lambda x: -x["total"])}
 
 
 @frappe.whitelist()
@@ -385,4 +414,5 @@ def situation(date=None):
         "employes": employes, "collecteurs": collecteurs, "versements": versements,
         "jours": _jour_par_jour(jour),
         "rapprochement": _rapprochement(jour, cfg, employes, collecteurs),
+        "partenaires": _partenaires(jour, cfg),
     }

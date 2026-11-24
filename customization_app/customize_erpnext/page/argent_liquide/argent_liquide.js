@@ -198,6 +198,8 @@ class ArgentLiquide {
     const total = Object.values(poches).reduce((a, b) => a + b, 0);
     const pct = (v) => (total ? Math.round((v / total) * 1000) / 10 : 0).toLocaleString("fr-FR") + " %";
     const verse_banque = (s.versements || []).reduce((a, v) => a + (Number(v.montant) || 0), 0);
+    const partenaires = (s.partenaires || {}).comptes || [];
+    const partenaires_total = partenaires.reduce((a, x) => a + (Number(x.total) || 0), 0);
 
     // ── Mode d'emploi ──
     let replie = false;
@@ -212,6 +214,7 @@ class ArgentLiquide {
         <li><span class="al-pastille" style="background:var(--p-collecte)"></span><b>${__("Chez le collecteur")}</b> : ${__("ce qu’il a reçu aux collectes, moins ce qu’il a déjà sorti du compte Espèces (vers Sabah, la banque, des dépenses personnelles).")}</li>
         <li><span class="al-pastille" style="background:var(--p-sabah)"></span><b>${__("Sabah Espèces")}</b> : ${__("le solde du compte comptable où l’argent collecté est mis de côté.")}</li>
         <li><b>${__("Périodes")}</b> : ${__("« chez les employés » est une photo au soir choisi (depuis leur dernier comptage) ; « chez les collecteurs » est un cumul depuis la date de départ des caisses ; Sabah est un solde comptable ; la banque, les 30 derniers jours. Chaque case l’écrit en bas.")}</li>
+        <li><b>${__("Le partenaire (Economic Aqua Solution)")}</b> : ${__("il encaisse sur son propre compte ; sa caisse ne se compte pas. La section « Parti chez le partenaire » dit seulement ce qui est parti de son côté.")}</li>
         <li><b>${__("Et le compte comptable « Espèces » ?")}</b> : ${__("il ne dit pas qui tient l’argent. La section « Rapprochement avec la comptabilité », en bas, montre son solde, le compare à l’argent reconstitué ici et chiffre chaque cause d’écart, avec des liens vers le grand livre.")}</li>
         <li>${__("Cliquez sur une personne pour lire son explication en une phrase, sur une case du chemin pour aller au détail, sur un jour du graphique pour voir qui tenait l’argent ce soir-là. Survolez une couleur pour son montant.")}</li>
       </ul></details>`;
@@ -235,7 +238,9 @@ class ArgentLiquide {
       <div class="al-fleche">→</div>
       ${etape("al-banque", "var(--text-muted)", "🏦 " + __("Versé en banque"), verse_banque, __("déjà sorti du liquide"),
               __("du {0} au {1}", [jour(il_y_a_30), jour(s.date)]))}
-    </div>`;
+    </div>
+    ${partenaires_total ? `<div class="al-sous" style="margin-top:8px">🤝 ${__("Hors de nos caisses : {0} encaissés par le partenaire sur son propre compte depuis le {1}.", [txt(partenaires_total), jour((s.partenaires || {}).depart)])}
+      <button class="al-bouton-lien al-aller" data-cible="al-partenaires">${__("Voir ce qui est parti de son côté")}</button></div>` : ""}`;
 
     // ── Répartition du total ──
     const segments = AL_POCHES.filter((p) => poches[p.cle] > 0.0005).map((p) =>
@@ -330,6 +335,18 @@ class ArgentLiquide {
       <h4 id="al-collecteurs">📥 ${__("Chez les collecteurs")}</h4>
       <div class="al-sous">${__("Le calcul : ce qu’il a reçu des employés, moins ce qu’il a déjà sorti. Le résultat est l’argent encore entre ses mains.")}</div>
       ${collecteurs || `<div class="muet">${__("Rien de collecté depuis la date de départ.")}</div>`}
+      ${partenaires.length ? `<h4 id="al-partenaires">🤝 ${__("Parti chez le partenaire")}</h4>
+        <div class="al-sous">${__("Le partenaire encaisse certains de nos clients sur son propre compte : sa caisse ne se compte pas et cet argent n’est pas dans nos tiroirs. Voici ce qui est parti de son côté depuis le {0}.", [jour(s.partenaires.depart)])}</div>
+        ${partenaires.map((x) => `<div class="al-coll">
+          <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap">
+            <b style="font-size:15px">${esc(x.nom)}</b>
+            <span><b>${txt(x.total)}</b> ${__("encaissés pour nous")} · ${__("{0} paiement(s), dont {1} en espèces", [x.nb, txt(x.especes)])}</span></div>
+          <div class="al-liens"><button class="btn btn-xs btn-default" data-grand-livre="${esc(x.compte)}" data-du="${s.partenaires.depart}" data-au="${s.date}">📒 ${__("Grand livre du partenaire")}</button></div>
+          <details><summary>${__("Voir les 10 derniers paiements")}</summary><div class="al-defile"><table>
+            <tr><th>${__("Date")}</th><th>${__("Paiement")}</th><th>${__("Client")}</th><th>${__("Mode")}</th><th class="n">${__("Montant")}</th></tr>
+            ${x.derniers.map((m) => `<tr><td>${jour(m.date)}</td><td><a href="/app/payment-entry/${encodeURIComponent(m.name)}">${esc(m.name)}</a></td>
+              <td>${esc(m.client)}</td><td>${esc(m.mode)}</td><td class="n">${txt(m.montant)}</td></tr>`).join("")}
+          </table></div></details></div>`).join("")}` : ""}
       <h4 id="al-jours">📅 ${__("Les 14 derniers jours")}</h4>
       <div class="al-sous">${__("Chaque jour : ce que les employés ont encaissé en espèces, ce que le collecteur a reçu, ce qui a été mis sur Sabah ou versé en banque. Survolez un jour pour les montants ; cliquez pour voir qui tenait l’argent ce soir-là.")}</div>
       <div class="al-legende" id="al-legende-jours"></div>
@@ -344,6 +361,11 @@ class ArgentLiquide {
     const $al = this.$c.find(".al");
     $al.find(".al-aide").on("toggle", function () {
       try { localStorage.setItem("al-aide-replie", this.open ? "0" : "1"); } catch (e) { /* stockage indisponible */ }
+    });
+    $al.find(".al-aller").on("click", function (e) {
+      e.preventDefault();
+      const cible = document.getElementById($(this).attr("data-cible"));
+      if (cible) cible.scrollIntoView({ behavior: "smooth", block: "start" });
     });
     $al.find(".al-etape").on("click keydown", function (e) {
       if (e.type === "keydown" && e.key !== "Enter") return;
