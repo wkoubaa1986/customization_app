@@ -1,0 +1,106 @@
+{#- Fiche de paie (format « Aqua World Fiche de paie », par défaut du Salary Slip : c'est aussi le PDF de l'application
+    RH). En-tête, marges et pied communs aux devis (AquaWorld Settings › Identité & impression) ; tableau repris des
+    bulletins du comptable (codes SBASE / 001 / 002 / SBRUT / CNSS / SIMPC / IRPP / CSS / SNET / NETAP). -#}
+{%- set ident = aqua_identite() -%}
+{%- set emp = frappe.db.get_value("Employee", doc.employee, ["employee_name", "custom_paie_matricule", "custom_paie_cnss",
+      "custom_paie_qualification", "custom_paie_enfants", "marital_status", "designation", "bank_name", "bank_ac_no", "iban"], as_dict=True) or {} -%}
+{%- set societe = frappe.db.get_value("Company", doc.company, ["company_name", "tax_id", "custom_cnss_employeur"], as_dict=True) or {} -%}
+{%- set mois = ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre", "novembre", "décembre"] -%}
+{%- set ds = (doc.start_date | string).split("-") -%}
+{%- set debut = {"year": ds[0] | int, "month": ds[1] | int} -%}
+{#- Salaire de base du contrat (S.B. du comptable) : la ligne SBASE, elle, est au prorata des jours payés. -#}
+{%- set sb = frappe.db.get_value("Salary Structure Assignment", {"employee": doc.employee, "salary_structure": doc.salary_structure,
+      "docstatus": 1, "from_date": ["<=", doc.end_date]}, "base", order_by="from_date desc") -%}
+{%- set codes = {"Salaire de base": "SBASE", "Prime de présence": "001", "Prime de transport": "002",
+                 "Retenue CNSS": "CNSS", "Impôt sur le revenu": "IRPP", "Contribution sociale de solidarité": "CSS"} -%}
+{%- macro dt(x) -%}{{ "{:,.3f}".format((x or 0)|float).replace(",", " ") }}{%- endmacro -%}
+{%- macro nb(x) -%}{{ "{:.2f}".format((x or 0)|float).replace(".", ",") }}{%- endmacro -%}
+{%- set situation = ("Marié(e)" if emp.marital_status == "Married" else "Célibataire" if emp.marital_status == "Single"
+                     else "Divorcé(e)" if emp.marital_status == "Divorced" else "Veuf(ve)" if emp.marital_status == "Widowed" else "—") -%}
+{%- set retenues_hors = doc.deductions | rejectattr("salary_component", "in", codes) | list -%}
+{%- set gains_hors = doc.earnings | rejectattr("salary_component", "in", codes) | list -%}
+{%- set cnss = (doc.deductions | selectattr("salary_component", "equalto", "Retenue CNSS") | map(attribute="amount") | sum) -%}
+{%- set irpp = (doc.deductions | selectattr("salary_component", "equalto", "Impôt sur le revenu") | map(attribute="amount") | sum) -%}
+{%- set css = (doc.deductions | selectattr("salary_component", "equalto", "Contribution sociale de solidarité") | map(attribute="amount") | sum) -%}
+{%- set imposable = doc.custom_salaire_imposable or (doc.gross_pay - cnss) -%}
+<style>
+  .fp { font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #111; }
+  .fp h2 { font-size: 16px; text-align: center; margin: 10px 0 2px; letter-spacing: .5px; }
+  .fp .periode { text-align: center; font-size: 12px; margin-bottom: 8px; }
+  .fp table { width: 100%; border-collapse: collapse; }
+  .fp .blocs td { width: 50%; vertical-align: top; border: 1px solid #777; border-radius: 6px; padding: 6px 8px; }
+  .fp .blocs .t { font-weight: bold; text-transform: uppercase; font-size: 10px; color: #444; margin-bottom: 3px; }
+  .fp .blocs p { margin: 1px 0; }
+  .fp .lignes { margin-top: 8px; }
+  .fp .lignes th { border: 1px solid #777; background: #f2f2f2; padding: 4px; font-size: 10.5px; }
+  .fp .lignes td { border-left: 1px solid #777; border-right: 1px solid #777; padding: 3px 5px; }
+  .fp .lignes tr.tot td { font-weight: bold; }
+  .fp .lignes tr.fin td { border-bottom: 1px solid #777; }
+  .fp .n { text-align: right; white-space: nowrap; }
+  .fp .c { text-align: center; }
+  .fp .bas td { vertical-align: top; }
+  .fp .jours th, .fp .jours td { border: 1px solid #777; text-align: center; padding: 2px 8px; font-size: 10.5px; }
+  .fp .jours th { color: #15803d; }
+  .fp .net { border: 2px solid #111; border-radius: 6px; padding: 6px 10px; font-size: 14px; font-weight: bold; text-align: right; }
+  .fp .note { font-size: 10px; color: #444; margin-top: 4px; }
+</style>
+{{ aqua_marges_css("Aqua World Fiche de paie") }}
+{{ aqua_pied_page() }}
+<div class="fp">
+  {% include "templates/print/aqua_entete.html" %}
+  <h2>BULLETIN DE PAIE</h2>
+  <div class="periode">Mois : <b>{{ "%02d" % debut.month }} / {{ debut.year }}</b> ({{ mois[debut.month - 1] }} {{ debut.year }}) · Régime : mensuel</div>
+  <table class="blocs"><tr>
+    <td>
+      <div class="t">Employeur</div>
+      <p><b>{{ (societe.company_name or doc.company) | upper }}</b></p>
+      <p>{{ ident.adresse_une_ligne }}</p>
+      {% if societe.tax_id %}<p>Matricule fiscal : {{ societe.tax_id }}</p>{% endif %}
+      {% if societe.custom_cnss_employeur %}<p>N° CNSS employeur : {{ societe.custom_cnss_employeur }}</p>{% endif %}
+    </td>
+    <td>
+      <div class="t">Salarié</div>
+      <p><b>{{ (emp.employee_name or doc.employee_name) | upper }}</b></p>
+      <p>Matricule : {{ emp.custom_paie_matricule or "—" }} · N° CNSS : {{ emp.custom_paie_cnss or "—" }}</p>
+      <p>Qualification : {{ emp.custom_paie_qualification or emp.designation or "—" }}</p>
+      <p>Contrat : {{ doc.custom_paie_profil or "—" }} · {{ situation }} · enfants : {{ emp.custom_paie_enfants or 0 }}</p>
+      <p>Salaire de base (S.B.) : {{ dt(sb) }}</p>
+    </td>
+  </tr></table>
+
+  <table class="lignes">
+    <thead><tr><th style="width:11%">Code</th><th>Libellé</th><th style="width:10%">Nombre</th><th style="width:16%">Sal / Prime</th><th style="width:16%">Retenues</th></tr></thead>
+    <tbody>
+      {%- for r in doc.earnings if r.salary_component in codes %}
+      <tr><td>{{ codes[r.salary_component] }}</td><td>{{ r.salary_component | upper }}</td>
+          <td class="n">{{ nb(doc.custom_jours_payes) if codes[r.salary_component] == "SBASE" else "" }}</td><td class="n">{{ dt(r.amount) }}</td><td></td></tr>
+      {%- endfor %}
+      {%- for r in gains_hors %}
+      <tr><td>—</td><td>{{ r.salary_component | upper }}</td><td></td><td class="n">{{ dt(r.amount) }}</td><td></td></tr>
+      {%- endfor %}
+      <tr class="tot"><td>SBRUT</td><td>SALAIRE BRUT</td><td></td><td class="n">{{ dt(doc.gross_pay) }}</td><td></td></tr>
+      <tr><td>CNSS</td><td>RETENUE CNSS</td><td></td><td></td><td class="n">{{ dt(cnss) }}</td></tr>
+      <tr class="tot"><td>SIMPC</td><td>SALAIRE IMPOSABLE</td><td></td><td class="n">{{ dt(imposable) }}</td><td></td></tr>
+      <tr><td>IRPP</td><td>IMPÔT SUR LE REVENU</td><td></td><td></td><td class="n">{{ dt(irpp) }}</td></tr>
+      <tr><td>CSS</td><td>CONTRIBUTION SOCIALE DE SOLIDARITÉ</td><td></td><td></td><td class="n">{{ dt(css) }}</td></tr>
+      {%- for r in retenues_hors %}
+      <tr><td>—</td><td>{{ r.salary_component | upper }}</td><td></td><td></td><td class="n">{{ dt(r.amount) }}</td></tr>
+      {%- endfor %}
+      <tr class="tot"><td>SNET</td><td>SALAIRE NET</td><td></td><td class="n">{{ dt(doc.net_pay) }}</td><td></td></tr>
+      <tr class="tot fin"><td>NETAP</td><td>NET À PAYER</td><td></td><td class="n">{{ dt(doc.rounded_total or doc.net_pay) }}</td><td></td></tr>
+    </tbody>
+  </table>
+
+  <table class="bas" style="margin-top:10px"><tr>
+    <td style="width:45%">
+      <table class="jours" style="width:auto"><tr><th>JT</th><th>Nb heures</th><th>JC</th><th>JF</th></tr>
+        <tr><td>{{ nb(doc.custom_jours_payes) }}</td><td>0,00</td><td>0,00</td><td>0,00</td></tr></table>
+      <div class="note">JT : jours payés sur 26 · JC : congés · JF : jours fériés</div>
+    </td>
+    <td style="width:55%">
+      <div class="net">Net à payer : {{ dt(doc.rounded_total or doc.net_pay) }} DT</div>
+      <div class="note" style="text-align:right">Mode de paiement : <b>virement bancaire</b>{% if emp.bank_name or emp.iban or emp.bank_ac_no %} — {{ emp.bank_name or "" }} {{ emp.iban or emp.bank_ac_no or "" }}{% endif %}</div>
+    </td>
+  </tr></table>
+  <div style="margin-top:18px; width:45%; border-top:1px solid #777; padding-top:3px; font-size:10px; text-align:center">Émargement</div>
+</div>

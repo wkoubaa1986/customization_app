@@ -158,12 +158,22 @@ permission_query_conditions = {
     "Tache de travail": "customization_app.sous_traitant.permission_query_conditions_tache",
     "Verification Stock": "customization_app.sous_traitant.permission_query_conditions_verification",
     "Cloture Caisse": "customization_app.sous_traitant.permission_query_conditions_cloture_caisse",
+    # Paie (24/11/2026) : chacun ne lit QUE sa fiche validée ; « Responsable paie » voit tout (paie.py). Les
+    # User Permission sur Employee (posées pour les tâches) n'ouvrent plus la paie d'un collègue.
+    "Salary Slip": "customization_app.paie.pqc_fiche",
+    "Salary Structure Assignment": "customization_app.paie.pqc_reserve",
+    "Additional Salary": "customization_app.paie.pqc_reserve",
+    "Payroll Entry": "customization_app.paie.pqc_reserve",
 }
 has_permission = {
     "Activite Employe": "customization_app.suivi_activite.has_permission",
     "Tache de travail": "customization_app.sous_traitant.has_permission_tache",
     "Verification Stock": "customization_app.sous_traitant.has_permission_verification",
     "Cloture Caisse": "customization_app.sous_traitant.has_permission_cloture_caisse",
+    "Salary Slip": "customization_app.paie.hp_fiche",
+    "Salary Structure Assignment": "customization_app.paie.hp_reserve",
+    "Additional Salary": "customization_app.paie.hp_reserve",
+    "Payroll Entry": "customization_app.paie.hp_reserve",
 }
 
 # DocType Class
@@ -191,10 +201,15 @@ doc_events = {
     # une seule valeur, synchronisée dans les deux sens. Voir domicile_employe.py.
     "Employee": {"on_update": ["customization_app.domicile_employe.depuis_employe",
                                # La couleur de la fiche change : ses tâches ouvertes la prennent tout de suite (22/11/2026).
-                               "customization_app.couleur_employe.apres_fiche"],
+                               "customization_app.couleur_employe.apres_fiche",
+                               # Onglet « Paie » : affectation de salaire HRMS + génération des fiches (paie.py).
+                               "customization_app.paie.employe_on_update"],
                  # Départ d'un employé : « Left » sans le bouton de la fiche est refusé tant qu'il reste des
                  # rendez-vous, des réglages ou du stock à son nom (depart_employe.py, 10/11/2026).
-                 "validate": "customization_app.depart_employe.employee_validate"},
+                 "validate": ["customization_app.depart_employe.employee_validate",
+                              "customization_app.paie.employe_validate"]},
+    # Fiche de paie : règles tunisiennes (CNSS, IRPP, CSS, 26 jours) posées APRÈS le calcul HRMS (paie.py).
+    "Salary Slip": {"validate": "customization_app.paie.calculer_fiche"},
     # Vérification FINALE du stock d'un employé parti terminée → stock restant au magasin, entrepôt fermé.
     "Verification Stock": {"on_update": "customization_app.depart_employe.stock_apres_verification"},
     "Config Optimisation Tournees": {"on_update": "customization_app.domicile_employe.depuis_config"},
@@ -822,6 +837,8 @@ scheduler_events = {
         "customization_app.sorties_magasin.relance_quotidienne",
         # Rendez-vous à venir sur un employé inactif, vérification finale de départ qui traîne : la direction.
         "customization_app.depart_employe.alerte_quotidienne",
+        # Fiches de paie : créées chaque mois, validées toutes seules 4 jours avant la fin du mois (paie.py).
+        "customization_app.paie.tache_quotidienne",
     ],
 
     "cron": {
@@ -914,6 +931,8 @@ scheduler_events = {
 # modification était retombée à celle du fichier. Un patch ne se rejoue pas :
 # il faut donc le reposer à chaque migration. La fonction est idempotente.
 after_migrate = [
+    # Fiches de paie : rôle, champs, composants et structures CDI / CIVP / Gérant, droits, format d'impression.
+    "customization_app.paie.installer",
     "customization_app.patches.ensure_geocodage_qualite.execute",
     # Onglet « Suivi d'activité » + rôles Suivi Activité / Responsable Activité.
     "customization_app.patches.ensure_onglet_suivi_activite.execute",
