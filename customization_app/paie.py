@@ -345,10 +345,9 @@ def _champs():
             dict(fieldname="custom_paie_matricule", label="Matricule (paie)", fieldtype="Data",
                  insert_after="custom_col_paie", **p),
             dict(fieldname="custom_paie_cnss", label="N° CNSS", fieldtype="Data", insert_after="custom_paie_matricule", **p),
-            dict(fieldname="custom_paie_qualification", label="Qualification (imprimée)", fieldtype="Data",
-                 insert_after="custom_paie_cnss", **p),
+            # La qualification imprimée est la Désignation de la fiche (sa demande du 24/11/2026) : pas de champ à part.
             dict(fieldname="custom_paie_enfants", label="Enfants à charge", fieldtype="Int",
-                 insert_after="custom_paie_qualification", **p),
+                 insert_after="custom_paie_cnss", **p),
         ],
         "Salary Slip": [
             dict(fieldname="custom_jours_absence", label="Jours d’absence non payés", fieldtype="Float",
@@ -478,7 +477,7 @@ def controle(mois=None) -> dict:
     for e in frappe.get_all("Employee", filters={"status": ["!=", "Inactive"]}, order_by="employee_name",
                             fields=["name", "employee_name", "status", "relieving_date", "custom_paie_profil",
                                     "custom_paie_debut", "custom_paie_base", "custom_paie_matricule", "custom_paie_cnss",
-                                    "custom_paie_qualification"]):
+                                    "designation"]):
         parti = e.status == "Left" and e.relieving_date and getdate(e.relieving_date) < premier
         if not e.custom_paie_profil:
             if e.status == "Active":
@@ -486,7 +485,7 @@ def controle(mois=None) -> dict:
             continue
         manque = [lib for champ, lib in (("custom_paie_debut", "date de début"), ("custom_paie_base", "salaire de base"),
                                          ("custom_paie_matricule", "matricule"), ("custom_paie_cnss", "N° CNSS"),
-                                         ("custom_paie_qualification", "qualification"))
+                                         ("designation", "désignation (qualification imprimée)"))
                   if not e.get(champ) and not (e.custom_paie_profil == P.CIVP and champ == "custom_paie_cnss")]
         if manque and e.status == "Active":
             a_parametrer.append({"employe": e.name, "nom": e.employee_name, "profil": e.custom_paie_profil, "manque": manque})

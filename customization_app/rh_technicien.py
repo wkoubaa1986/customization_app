@@ -41,13 +41,38 @@ def soldes(employe: str, date=None) -> list[dict]:
     return out
 
 
+CHAMPS_EMPLOYE = ["name", "employee_name", "leave_approver", "holiday_list"]
+
+
+def _employes_pour_apercu() -> list[dict] | None:
+    """« Voir comme » (sa demande du 24/11/2026 : « comment je peux voir ce que les employés voient ») : réservé au
+    rôle Responsable paie, qui voit déjà toutes les fiches de paie. None pour les autres."""
+    from customization_app.paie import est_responsable
+    if not est_responsable():
+        return None
+    return frappe.get_all("Employee", filters={"status": "Active", "user_id": ["is", "set"]},
+                          fields=["name", "employee_name"], order_by="employee_name")
+
+
 @frappe.whitelist()
-def etat() -> dict:
+def etat(employe=None) -> dict:
+    employes = _employes_pour_apercu()
+    if employe:
+        # Aperçu en lecture seule de la page d'un employé : les mêmes données, calculées pour lui.
+        if employes is None:
+            frappe.throw(_("Réservé au responsable de la paie."), frappe.PermissionError)
+        emp = frappe.db.get_value("Employee", employe, CHAMPS_EMPLOYE, as_dict=True)
+        if not emp:
+            frappe.throw(_("Employé introuvable."))
+        return dict(_etat_de(emp), apercu=True, employes=employes)
     # Raccourci « Mes congés et ma paie » de l'espace HR (24/11/2026) : un compte sans fiche employé (direction,
     # comptes techniques) voit un message, pas une erreur.
     if not frappe.db.exists("Employee", {"user_id": frappe.session.user, "status": "Active"}):
-        return {"sans_employe": True}
-    emp = _mon_employe()
+        return {"sans_employe": True, "employes": employes}
+    return dict(_etat_de(_mon_employe()), employes=employes)
+
+
+def _etat_de(emp) -> dict:
     # Ordre (24/11/2026) : ses demandes en attente, puis les congés à venir (les plus proches d'abord), puis les
     # derniers passés. Trié du plus lointain au plus proche, l'écran commençait par les récupérations planifiées
     # jusqu'en 2028 et ne montrait plus ni l'attente ni le passé.

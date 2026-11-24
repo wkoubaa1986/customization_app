@@ -5,7 +5,7 @@
     CSS / SNET / NETAP). -#}
 {%- set ident = aqua_identite() -%}
 {%- set emp = frappe.db.get_value("Employee", doc.employee, ["employee_name", "custom_paie_matricule", "custom_paie_cnss",
-      "custom_paie_qualification", "custom_paie_enfants", "marital_status", "designation", "bank_name", "bank_ac_no", "iban"], as_dict=True) or {} -%}
+      "custom_paie_enfants", "marital_status", "designation", "bank_name", "bank_ac_no", "iban"], as_dict=True) or {} -%}
 {%- set societe = frappe.db.get_value("Company", doc.company, ["company_name", "tax_id", "custom_cnss_employeur"], as_dict=True) or {} -%}
 {%- set mois = ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre", "novembre", "décembre"] -%}
 {%- set ds = (doc.start_date | string).split("-") -%}
@@ -25,32 +25,46 @@
 {%- set irpp = (doc.deductions | selectattr("salary_component", "equalto", "Impôt sur le revenu") | map(attribute="amount") | sum) -%}
 {%- set css = (doc.deductions | selectattr("salary_component", "equalto", "Contribution sociale de solidarité") | map(attribute="amount") | sum) -%}
 {%- set imposable = doc.custom_salaire_imposable or (doc.gross_pay - cnss) -%}
+{#- Le tableau des lignes fait au moins 13 lignes de 22 px (complétées par une ligne vide) : la fiche remplit la page
+    quel que soit le contrat (sa demande du 24/11/2026). Une prime et une avance en plus y tiennent sans l'allonger ;
+    au-delà, chaque ligne ajoute ~23 pt et la fiche reste sur UNE page jusqu'à 14 lignes (mesuré sur le dev : CDI
+    753 pt, CIVP 730, prime + avance 766, pied de page à 801). wkhtmltopdf ne descend pas une ligne sous ~22 px. -#}
+{%- set n_lignes = (doc.earnings | selectattr("salary_component", "in", codes) | list | length) + (gains_hors | length)
+      + (retenues_hors | length) + 7 -%}
+{%- set hauteur = 286 -%}
+{%- set rang = 22 -%}
+{%- set bourrage = [hauteur - n_lignes * rang, 0] | max -%}
 <style>
-  .fp { font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #111; }
+  .fp { font-family: Arial, Helvetica, sans-serif; font-size: 12px; color: #111; }
+  .fp table { width: 100%; border-collapse: collapse; }
   .fp .entete td { vertical-align: middle; border: none; }
   .fp .entete .titre { text-align: right; }
-  .fp .entete .titre div:first-child { font-size: 26px; font-weight: bold; letter-spacing: 1.5px; color: #0b3d7a; line-height: 1.1; }
-  .fp .entete .titre div + div { font-size: 13px; margin-top: 6px; }
-  .fp .filet { border-top: 2px solid #0b3d7a; margin: 8px 0 10px; }
-  .fp .signatures td { width: 50%; vertical-align: top; text-align: center; font-size: 10px; padding-top: 3px; }
-  .fp .signatures .trait { border-top: 1px solid #777; padding-top: 3px; }
-  .fp .signatures img { height: 95px; width: auto; margin-top: 4px; }
-  .fp table { width: 100%; border-collapse: collapse; }
-  .fp .blocs td { width: 50%; vertical-align: top; border: 1px solid #777; border-radius: 6px; padding: 6px 8px; }
-  .fp .blocs .t { font-weight: bold; text-transform: uppercase; font-size: 10px; color: #444; margin-bottom: 3px; }
-  .fp .blocs p { margin: 1px 0; }
-  .fp .lignes { margin-top: 8px; }
-  .fp .lignes th { border: 1px solid #777; background: #f2f2f2; padding: 4px; font-size: 10.5px; }
-  .fp .lignes td { border-left: 1px solid #777; border-right: 1px solid #777; padding: 3px 5px; }
+  .fp .entete .titre div:first-child { font-size: 28px; font-weight: bold; letter-spacing: 1.5px; color: #0b3d7a; line-height: 1.1; }
+  .fp .entete .titre div + div { font-size: 13.5px; margin-top: 8px; }
+  .fp .filet { border-top: 2px solid #0b3d7a; margin: 8px 0 12px; }
+  /* Employeur : rectangle arrondi bleu très clair ; salarié : gris léger (sa demande du 24/11/2026). */
+  /* Les deux cadres sont des cases de la même ligne : toujours la même hauteur, même si le poste tient sur 2 lignes. */
+  .fp table.blocs { border-collapse: separate; border-spacing: 0; }
+  .fp .blocs td.cadre { width: 49%; vertical-align: top; border-radius: 10px; padding: 8px 12px; }
+  .fp .blocs td.espace { width: 2%; padding: 0; border: none; }
+  .fp .cadre.employeur { background: #eef5fd; border: 1px solid #c8dcf4; }
+  .fp .cadre.salarie { background: #f3f4f6; border: 1px solid #dcdfe4; }
+  .fp .cadre .t { font-weight: bold; text-transform: uppercase; font-size: 10.5px; color: #44546a; margin-bottom: 5px; letter-spacing: .5px; }
+  .fp .cadre p { margin: 2px 0; }
+  .fp .lignes { margin-top: 10px; }
+  .fp .lignes th { border: 1px solid #777; background: #f2f2f2; padding: 6px 5px; font-size: 11.5px; }
+  .fp .lignes td { border-left: 1px solid #777; border-right: 1px solid #777; padding: 0 6px; height: {{ '%.1f' % rang }}px; }
   .fp .lignes tr.tot td { font-weight: bold; }
   .fp .lignes tr.fin td { border-bottom: 1px solid #777; }
   .fp .n { text-align: right; white-space: nowrap; }
-  .fp .c { text-align: center; }
   .fp .bas td { vertical-align: top; }
-  .fp .jours th, .fp .jours td { border: 1px solid #777; text-align: center; padding: 2px 8px; font-size: 10.5px; }
+  .fp .jours th, .fp .jours td { border: 1px solid #777; text-align: center; padding: 4px 10px; font-size: 11.5px; }
   .fp .jours th { color: #15803d; }
-  .fp .net { border: 2px solid #111; border-radius: 6px; padding: 6px 10px; font-size: 14px; font-weight: bold; text-align: right; }
-  .fp .note { font-size: 10px; color: #444; margin-top: 4px; }
+  .fp .net { border: 2px solid #111; border-radius: 8px; padding: 9px 12px; font-size: 16px; font-weight: bold; text-align: right; }
+  .fp .note { font-size: 10.5px; color: #444; margin-top: 5px; }
+  .fp .bas .haut { height: 66px; }
+  .fp .bas .trait { border-top: 1px solid #777; padding-top: 4px; text-align: center; font-size: 11px; }
+  .fp .bas img.cachet { height: 130px; width: auto; margin-top: 6px; }
 </style>
 {{ aqua_marges_css("Aqua World Fiche de paie") }}
 {{ aqua_pied_page() }}
@@ -65,20 +79,22 @@
   </tr></table>
   <div class="filet"></div>
   <table class="blocs"><tr>
-    <td>
+    <td class="cadre employeur">
       <div class="t">Employeur</div>
       <p><b>{{ (societe.company_name or doc.company) | upper }}</b></p>
       <p>{{ ident.adresse_une_ligne }}</p>
       {% if societe.tax_id %}<p>Matricule fiscal : {{ societe.tax_id }}</p>{% endif %}
       {% if societe.custom_cnss_employeur %}<p>N° CNSS employeur : {{ societe.custom_cnss_employeur }}</p>{% endif %}
     </td>
-    <td>
+    <td class="espace"></td>
+    <td class="cadre salarie">
       <div class="t">Salarié</div>
       <p><b>{{ (emp.employee_name or doc.employee_name) | upper }}</b></p>
       <p>Matricule : {{ emp.custom_paie_matricule or "—" }} · N° CNSS : {{ emp.custom_paie_cnss or "—" }}</p>
-      <p>Qualification : {{ emp.custom_paie_qualification or emp.designation or "—" }}</p>
-      <p>Contrat : {{ doc.custom_paie_profil or "—" }} · {{ situation }} · enfants : {{ emp.custom_paie_enfants or 0 }}</p>
-      <p>Salaire de base (S.B.) : {{ dt(sb) }}</p>
+      {#- Qualification = la Désignation de la fiche Employé (sa demande du 24/11/2026). -#}
+      <p>Qualification : {{ emp.designation or doc.designation or "—" }}</p>
+      <p>Contrat : {{ doc.custom_paie_profil or "—" }}{% if situation != "—" %} · {{ situation }}{% endif %} · enfants : {{ emp.custom_paie_enfants or 0 }}</p>
+      <p>Salaire de base (S.B.) : {{ dt(sb) }} · Salaire brut : <b>{{ dt(doc.gross_pay) }}</b></p>
     </td>
   </tr></table>
 
@@ -101,26 +117,24 @@
       <tr><td>—</td><td>{{ r.salary_component | upper }}</td><td></td><td></td><td class="n">{{ dt(r.amount) }}</td></tr>
       {%- endfor %}
       <tr class="tot"><td>SNET</td><td>SALAIRE NET</td><td></td><td class="n">{{ dt(doc.net_pay) }}</td><td></td></tr>
-      <tr class="tot fin"><td>NETAP</td><td>NET À PAYER</td><td></td><td class="n">{{ dt(doc.rounded_total or doc.net_pay) }}</td><td></td></tr>
+      <tr class="tot"><td>NETAP</td><td>NET À PAYER</td><td></td><td class="n">{{ dt(doc.rounded_total or doc.net_pay) }}</td><td></td></tr>
+      <tr class="fin"><td style="height:{{ '%.1f' % bourrage }}px; padding:0"></td><td></td><td></td><td></td><td></td></tr>
     </tbody>
   </table>
 
-  <table class="bas" style="margin-top:10px"><tr>
-    <td style="width:45%">
-      <table class="jours" style="width:auto"><tr><th>JT</th><th>Nb heures</th><th>JC</th><th>JF</th></tr>
-        <tr><td>{{ nb(doc.custom_jours_payes) }}</td><td>0,00</td><td>0,00</td><td>0,00</td></tr></table>
-      <div class="note">JT : jours payés sur 26 · JC : congés · JF : jours fériés</div>
+  {#- Bas de page en deux colonnes alignées : jours puis émargement du salarié ; net à payer puis cachet et signature
+      de l'employeur, en grand (sa demande du 24/11/2026 ; image d'AquaWorld Settings › Identité & impression). -#}
+  <table class="bas" style="margin-top:12px"><tr>
+    <td style="width:45%; padding-right:14px">
+      <div class="haut"><table class="jours" style="width:auto"><tr><th>JT</th><th>Nb heures</th><th>JC</th><th>JF</th></tr>
+        <tr><td>{{ nb(doc.custom_jours_payes) }}</td><td>0,00</td><td>0,00</td><td>0,00</td></tr></table></div>
+      <div class="trait">Émargement du salarié</div>
     </td>
     <td style="width:55%">
-      <div class="net">Net à payer : {{ dt(doc.rounded_total or doc.net_pay) }} DT</div>
-      <div class="note" style="text-align:right">Mode de paiement : <b>virement bancaire</b>{% if emp.bank_name or emp.iban or emp.bank_ac_no %} — {{ emp.bank_name or "" }} {{ emp.iban or emp.bank_ac_no or "" }}{% endif %}</div>
+      <div class="haut"><div class="net">Net à payer : {{ dt(doc.rounded_total or doc.net_pay) }} DT</div>
+        <div class="note" style="text-align:right">Mode de paiement : <b>virement bancaire</b>{% if emp.bank_name or emp.iban or emp.bank_ac_no %} — {{ emp.bank_name or "" }} {{ emp.iban or emp.bank_ac_no or "" }}{% endif %}</div></div>
+      <div class="trait">Cachet et signature de l’employeur</div>
+      {% if ident.cachet %}<div style="text-align:center"><img class="cachet" src="{{ ident.cachet_url }}" alt="cachet"></div>{% endif %}
     </td>
-  </tr></table>
-  {#- Émargement du salarié à gauche ; cachet et signature de l'employeur à droite (sa demande du 24/11/2026), l'image
-      d'AquaWorld Settings › Identité & impression, la même que sur les devis et bons de commande. -#}
-  <table class="signatures" style="margin-top:18px"><tr>
-    <td><div class="trait">Émargement du salarié</div></td>
-    <td><div class="trait">Cachet et signature de l’employeur</div>
-      {% if ident.cachet %}<img src="{{ ident.cachet_url }}" alt="cachet">{% endif %}</td>
   </tr></table>
 </div>
