@@ -23,7 +23,7 @@ attaché au moment de la validation. Une seule clôture par caisse et par jour.
 
 import frappe
 from frappe import _
-from frappe.utils import add_days, flt, getdate, now_datetime, nowdate
+from frappe.utils import add_days, flt, get_datetime, getdate, now_datetime, nowdate
 
 from customization_app.rapport_caisse_journaliere import (
     CAISSE_ACCOUNTS_LIKE,
@@ -840,6 +840,89 @@ def valider(caisse, date, especes_comptees=None, note=None, justifications=None,
     return {"name": doc.name, "statut": doc.statut, "mode": mode, "rouverte": bool(existante)}
 
 
+# Le PDF de clôture (refondu le 24/11/2026 : « améliore le rendu pdf des caisses ») — en-tête de l'entreprise, verdict
+# en tête, noms au lieu des e-mails, dates jj/mm/aaaa, montants « 1 315,500 DT » (le symbole د.ت renversait les
+# cellules), une ligne par commande, points de contrôle lisibles, validations et pagination en pied.
+OPTIONS_PDF = {"margin-top": "10mm", "margin-bottom": "16mm", "margin-left": "12mm", "margin-right": "12mm"}
+
+# Les couleurs des modes de la page « Rapport Caisse Journalière » (RCJ_MODE), pour retrouver les mêmes pastilles.
+COULEURS_MODES = {
+    "Espèces": ("#d4edda", "#155724"),
+    "Chèque": ("#cce5ff", "#004085"),
+    "Virement": ("#d1f2f0", "#0c5460"),
+    "Carte de crédit": ("#dfe2ff", "#2b2f77"),
+    "Traite bancaire LC": ("#e2d4f0", "#4a235a"),
+    "Dette non payée": ("#f8d7da", "#721c24"),
+    "Retenue a la source vente": ("#fff3cd", "#856404"),
+    "Perte de paiement": ("#f5c6cb", "#491217"),
+}
+JOURS = ("lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche")
+STATUTS_TACHE = {"Open": "ouverte", "Completed": "terminée", "Cancelled": "annulée"}
+
+# Le <style> reste HORS formatage % : le CSS est truffé de « % » littéraux.
+CSS_PDF = """
+<style>
+  body { font-family: "Noto Sans", "DejaVu Sans", sans-serif; font-size: 10.5px; color: #222; }
+  table { border-collapse: collapse; width: 100%; font-size: inherit; }
+  thead { display: table-header-group; }
+  tr { page-break-inside: avoid; }
+  .n { text-align: right; white-space: nowrap; }
+  .nw { white-space: nowrap; }
+  .gris { color: #777; }
+  .petit { font-size: 9px; }
+  .entete td { vertical-align: middle; }
+  .entete .titre { text-align: right; }
+  .entete .titre .t1 { font-size: 24px; font-weight: bold; letter-spacing: 1.2px; color: #0b3d7a; line-height: 1.1; }
+  .entete .titre .t2 { font-size: 14px; margin-top: 6px; }
+  .entete .titre .t3 { font-size: 11px; color: #555; margin-top: 2px; }
+  .verdict { margin: 12px 0 10px; padding: 9px 12px; border-radius: 6px; border: 1px solid; }
+  .verdict .v1 { font-size: 14px; font-weight: bold; }
+  .verdict .v2 { margin-top: 3px; font-size: 10.5px; }
+  .ok { background: #eaf6ee; border-color: #9fd3ad; color: #155724; }
+  .ko { background: #fdecec; border-color: #f1a9a9; color: #8a1f1f; }
+  .neutre { background: #f3f5f8; border-color: #cfd6df; color: #333; }
+  .deux > tbody > tr > td, .deux > tr > td { vertical-align: top; width: 50%; padding: 0; }
+  .bloc { border: 1px solid #d5dbe3; border-radius: 6px; padding: 7px 10px; }
+  .bloc.bleu { background: #f2f7fd; border-color: #c9dcf2; }
+  .bloc.gris { background: #f7f7f7; border-color: #dcdcdc; color: #222; }
+  .bloc h3 { margin: 0 0 4px; font-size: 11.5px; color: #0b3d7a; }
+  .bloc td { padding: 2.5px 0; border: none; }
+  .bloc tr.total td { border-top: 1px solid #b9c6d6; font-weight: bold; padding-top: 4px; }
+  .bloc tr.fort td { font-weight: bold; }
+  .ecart-ok { color: #1d6f42; } .ecart-ko { color: #c0392b; }
+  h2 { font-size: 12.5px; color: #0b3d7a; margin: 16px 0 5px; padding-bottom: 3px; border-bottom: 2px solid #0b3d7a; }
+  h2 .droite { float: right; font-weight: normal; color: #555; font-size: 10.5px; }
+  .liste { table-layout: fixed; }
+  .liste th { background: #eef2f7; color: #334; font-weight: 600; text-align: left; padding: 4px 6px;
+    border-bottom: 1px solid #c9d3df; font-size: 9.5px; }
+  .liste td { padding: 4px 6px; border-bottom: 1px solid #e6e9ee; vertical-align: top; }
+  .liste th.n { text-align: right; }
+  .liste tr.pied td { font-weight: bold; border-top: 1.5px solid #9aa8b8; border-bottom: none; }
+  .liste tr.alerte td { border-bottom: 1px solid #e6e9ee; padding-top: 0; }
+  .liste tr.sans-trait td { border-bottom: none; }
+  .liste tr.exclu td { color: #999; text-decoration: line-through; }
+  .pastille { display: inline-block; padding: 1px 6px; border-radius: 9px; font-size: 9px; font-weight: 600;
+    white-space: nowrap; }
+  .pmt + .pmt { margin-top: 3px; }
+  .warn { color: #a93226; font-size: 9.5px; }
+  .flag { color: #7a5d10; font-size: 9px; }
+  .modes td { width: 25%; padding: 5px 8px; border: 1px solid #e1e5eb; vertical-align: top; }
+  .modes .mt { font-size: 12px; font-weight: bold; margin-top: 3px; white-space: nowrap; }
+  .modes .tot { background: #f2f7fd; }
+  .garde { page-break-inside: avoid; }
+  .point { padding: 5px 0 6px; border-bottom: 1px solid #e6e9ee; page-break-inside: avoid; }
+  .point .rep { margin-top: 2px; color: #333; }
+  .motif { display: inline-block; background: #eef2f7; border: 1px solid #d5dbe3; border-radius: 9px;
+    padding: 0 6px; font-size: 9.5px; }
+  .texte { white-space: pre-wrap; background: #fafafa; border: 1px solid #e6e9ee; border-radius: 6px;
+    padding: 6px 9px; }
+  .signatures { margin-top: 18px; page-break-inside: avoid; }
+  .signatures td { width: 50%; vertical-align: top; padding: 0; }
+  .signatures .bloc { min-height: 48px; }
+  .signatures .qui { font-size: 12px; font-weight: bold; margin-top: 2px; }
+</style>"""
+
+
 def _html_instantane(doc, data, rap=None):
     """Le PDF FIGÉ de la clôture = le rapport COMPLET du jour (décision
     utilisateur 19/08) : état espèces, rapprochement (globale), récap par mode
@@ -847,221 +930,326 @@ def _html_instantane(doc, data, rap=None):
     avances), paiements sur anciennes commandes, dépenses, portefeuille
     chèques/traites restant, contrôles justifiés et note."""
     esc = frappe.utils.escape_html
-    fmt = lambda v: frappe.utils.fmt_money(flt(v), 3, "TND")  # noqa: E731
-
     recap = data.get("recap") or {}
     depenses = data.get("depenses") or {}
+    globale = doc.caisse == CAISSE_GLOBALE
+    seule = bool(doc.get("validation_seule"))
 
-    # ── État espèces (avant / mouvements / après) ────────────────────────────
-    # Le <style> reste HORS formatage % : le CSS est truffé de « % » littéraux.
-    html = ["""
-    <style>
-      body { font-family: sans-serif; font-size: 11px; color: #222; }
-      h1 { font-size: 18px; margin-bottom: 2px; } .sous { color: #666; margin-bottom: 14px; }
-      table { border-collapse: collapse; width: 100%; margin: 6px 0 12px; }
-      th, td { border: 1px solid #ccc; padding: 4px 7px; text-align: left; vertical-align: top; }
-      th { background: #f2f2f2; } td.n, th.n { text-align: right; }
-      .etat td { font-size: 12.5px; } .etat .val { font-weight: 700; text-align: right; }
-      h2 { font-size: 14px; margin: 16px 0 2px; border-bottom: 2px solid #444; padding-bottom: 2px; }
-      h3 { font-size: 12.5px; margin: 10px 0 2px; }
-      .warn { color: #a93226; font-size: 10.5px; }
-      .flag { color: #7a5d10; font-size: 10px; }
-      .muted { color: #777; }
-      .exclu td { color: #999; text-decoration: line-through; }
-      .pmts { margin: 0; width: 100%; } .pmts td { border: none; border-top: 1px dotted #ddd;
-        padding: 2px 6px; font-size: 10.5px; }
-    </style>"""]
+    def mt(v):
+        return _fmt_montant(v)
+
+    def dt_(v):
+        return "<span class='nw'>%s&nbsp;DT</span>" % mt(v)
+
+    def jour(v):
+        return getdate(v).strftime("%d/%m/%Y") if v else ""
+
+    def heure(v):
+        if not v:
+            return ""
+        v = get_datetime(v)
+        return "%s à %s" % (v.strftime("%d/%m/%Y"), v.strftime("%H:%M"))
+
+    def nom(user):
+        if user and "@" in str(user):
+            return frappe.utils.get_fullname(user) or user
+        return user or "?"
+
+    def pastille(mode):
+        fond, texte = COULEURS_MODES.get(mode or "", ("#eceff3", "#333"))
+        return "<span class='pastille' style='background:%s;color:%s'>%s</span>" % (fond, texte, esc(mode or "—"))
+
+    def ecart_txt(v):
+        v = flt(v, 3)
+        if abs(v) < 0.0005:
+            return "<span class='ecart-ok'>0,000&nbsp;DT</span>"
+        return "<span class='ecart-ko'>%s%s&nbsp;DT</span>" % ("+" if v > 0 else "−", mt(abs(v)))
+
+    def section(titre, colonnes, unites, vide="aucun"):
+        """Un titre et son tableau. Le titre part avec la première ligne (jamais seul en bas de page) ; la suite est un
+        second tableau aux mêmes largeurs de colonnes (disposition fixe), libre de se couper entre deux pages."""
+        cols = "<colgroup>%s</colgroup>" % "".join("<col style='width:%s%%'>" % c[1] for c in colonnes)
+        tete = "<thead><tr>%s</tr></thead>" % "".join(
+            "<th%s>%s</th>" % (" class='n'" if len(c) > 2 and c[2] else "", c[0]) for c in colonnes)
+        unites = list(unites) or ["<tr><td colspan='%s' class='gris'>%s</td></tr>" % (len(colonnes), vide)]
+        bloc = "<div class='garde'><h2>%s</h2><table class='liste'>%s%s%s</table></div>" % (titre, cols, tete, unites[0])
+        if len(unites) > 1:
+            bloc += "<table class='liste'>%s%s</table>" % (cols, "".join(unites[1:]))
+        return bloc
+
+    def sans_emails(texte):
+        """Le journal des échanges écrit « [2026-11-23 09:22] ↩ x@y.com … » : noms et dates jj/mm/aaaa."""
+        import re
+        texte = re.sub(r"\[(\d{4})-(\d{2})-(\d{2})( \d{2}:\d{2})?[^\]]*\]",
+                       lambda m: "[%s/%s/%s%s]" % (m.group(3), m.group(2), m.group(1), m.group(4) or ""), texte or "")
+        return re.sub(r"[\w.+-]+@[\w-]+(\.[\w-]+)+", lambda m: nom(m.group(0)), texte)
+
+    html = [CSS_PDF]
+
+    # ── Pied de page : rappel du document + pagination (frappe remplit .page / .topage) ──────────────────────────
     html.append(
-        "<h1>Clôture de caisse — %s</h1>"
-        "<div class='sous'>%s · %s · %s · %s</div>"
-        % (esc(doc.caisse), esc(str(doc.date_cloture)),
-           esc(("validée seule par %s" % doc.valide_par) if doc.get("validation_seule")
-               else "comptée par %s · collectée par %s%s" % (
-                   doc.valide_par, doc.get("collecte_par") or "?",
-                   " (par délégation, passation %s)" % doc.passation if doc.get("par_delegation") else "")),
-           esc(str(now_datetime())[:19]), esc(doc.name)))
+        "<div id='footer-html'><div class='letter-head-footer'><div style='font-size:8.5px;color:#888;"
+        "border-top:1px solid #ddd;padding-top:3px'>"
+        "<span style='float:right'>page <span class='page'></span> / <span class='topage'></span></span>"
+        "Clôture de caisse %s · %s · journée du %s</div></div></div>" % (
+            esc(doc.name), esc(doc.caisse), jour(doc.date_cloture)))
 
-    html.append("""
-    <h2>État des espèces</h2>
-    <table class="etat">
-      <tr><td>Solde d'ouverture (avant)</td><td class="val">%s</td></tr>
-      <tr><td>Encaissements espèces du jour</td><td class="val">+ %s</td></tr>
-      <tr><td>Dépenses espèces du jour</td><td class="val">− %s</td></tr>
-      <tr><td><b>Solde théorique (après)</b></td><td class="val">%s</td></tr>
-      <tr><td>Espèces comptées</td><td class="val">%s</td></tr>
-      <tr><td><b>Écart</b></td><td class="val">%s</td></tr>
-    </table>""" % (
-        fmt(doc.solde_ouverture), fmt(doc.encaissements_especes),
-        fmt(doc.depenses_especes), fmt(doc.solde_theorique),
-        (fmt(doc.especes_comptees) if doc.especes_comptees is not None else "—"),
-        fmt(doc.ecart)))
+    # ── En-tête : logo de l'entreprise + titre ───────────────────────────────────────────────────────────────────
+    logo = ""
+    try:
+        from booking_ristourne.impression import aqua_identite
+        logo = "<img src='%s' style='width:100%%;height:auto'>" % esc(aqua_identite().logo_url)
+    except Exception:
+        frappe.log_error(title="Clôture de caisse : logo introuvable pour le PDF")
+    d = getdate(doc.date_cloture)
+    html.append(
+        "<table class='entete'><tr><td style='width:42%%'><div style='width:88%%'>%s</div></td>"
+        "<td class='titre'><div class='t1'>CLÔTURE DE CAISSE</div>"
+        "<div class='t2'>%s</div><div class='t3'>Journée du %s %s · %s</div></td></tr></table>" % (
+            logo, ("Toutes les caisses" if globale else "Caisse de <b>%s</b>" % esc(doc.caisse)),
+            JOURS[d.weekday()], jour(d), esc(doc.name)))
 
-    # ── Remise au responsable de collecte (double validation) ────────────────
-    if not doc.get("validation_seule") and doc.get("collecte_par"):
-        html.append("""
-        <h2>Remise au responsable de collecte</h2>
-        <table class="etat">
-          <tr><td>Espèces remises (déclarées par %s)</td><td class="val">%s</td></tr>
-          <tr><td>Fond de caisse conservé</td><td class="val">%s</td></tr>
-          <tr><td>Chèques / traites remis (nombre)</td><td class="val">%s / %s</td></tr>
-          <tr><td>Espèces reçues (comptées par %s)</td><td class="val">%s</td></tr>
-          <tr><td>Chèques / traites reçus (nombre)</td><td class="val">%s / %s</td></tr>
-          <tr><td><b>Écart de remise (reçu − remis)</b></td><td class="val">%s</td></tr>
-          <tr><td>Collectée le</td><td class="val">%s</td></tr>
-        </table>""" % (
-            esc(doc.valide_par), fmt(doc.especes_remises), fmt(doc.fond_conserve),
-            doc.get("nb_cheques_remis") or 0, doc.get("nb_traites_remis") or 0,
-            esc(doc.collecte_par), fmt(doc.especes_recues),
-            doc.get("nb_cheques_recus") or 0, doc.get("nb_traites_recus") or 0,
-            fmt(doc.ecart_remise), esc(str(doc.collecte_le or "")[:16])))
-        if doc.get("echanges"):
-            html.append("<h3>Échanges sur la remise</h3><pre style='font-size:10.5px'>%s</pre>"
-                        % esc(doc.echanges))
+    # ── Verdict : la caisse est-elle juste, et l'argent a-t-il changé de mains ? ─────────────────────────────────
+    comptees = doc.especes_comptees
+    ecart = flt(doc.ecart, 3)
+    ecart_remise = flt(doc.get("ecart_remise"), 3)
+    collectee = not seule and doc.get("collecte_par")
+    if comptees is None:
+        classe, titre = "neutre", "Caisse sans comptage d'espèces"
+    elif abs(ecart) < 0.0005:
+        classe, titre = "ok", "✔ Caisse juste — %s comptés pour %s attendus" % (dt_(comptees), dt_(doc.solde_theorique))
+    else:
+        classe = "ko"
+        titre = "⚠ %s de caisse : %s — %s comptés pour %s attendus" % (
+            "Excédent" if ecart > 0 else "Manque", ecart_txt(ecart), dt_(comptees), dt_(doc.solde_theorique))
+    if collectee:
+        detail = "%s remis par %s, %s reçus par %s le %s" % (
+            dt_(doc.especes_remises), esc(nom(doc.valide_par)), dt_(doc.get("especes_recues")),
+            esc(nom(doc.collecte_par)), heure(doc.get("collecte_le")))
+        if doc.get("par_delegation"):
+            detail += " (par délégation, passation %s)" % esc(doc.get("passation") or "")
+        if abs(ecart_remise) >= 0.0005:
+            classe = "ko"
+            detail += " — <b>écart de remise %s</b>" % ecart_txt(ecart_remise)
+        if flt(doc.get("fond_conserve")):
+            detail += " · fond de caisse conservé %s" % dt_(doc.fond_conserve)
+    elif seule:
+        detail = "Validée seule par %s le %s" % (esc(nom(doc.valide_par)), heure(doc.get("compte_le") or doc.modified))
+    else:
+        detail = "Comptée par %s — en attente de collecte" % esc(nom(doc.valide_par))
+    html.append("<div class='verdict %s'><div class='v1'>%s</div><div class='v2'>%s</div></div>"
+                % (classe, titre, detail))
 
-    # ── Rapprochement (caisse globale) ───────────────────────────────────────
+    # ── Deux blocs : les espèces de la journée | la remise (ou les modes si validée seule) ──────────────────────
+    bloc_especes = (
+        "<div class='bloc bleu'><h3>Espèces de la journée</h3><table>"
+        "<tr><td>Solde d'ouverture</td><td class='n'>%s</td></tr>"
+        "<tr><td>+ Encaissements en espèces</td><td class='n'>%s</td></tr>"
+        "<tr><td>− Dépenses en espèces</td><td class='n'>%s</td></tr>"
+        "<tr class='total'><td>= Attendu en caisse</td><td class='n'>%s</td></tr>"
+        "<tr><td>Compté</td><td class='n'>%s</td></tr>"
+        "<tr class='fort'><td>Écart</td><td class='n'>%s</td></tr>"
+        "</table></div>" % (
+            dt_(doc.solde_ouverture), dt_(doc.encaissements_especes), dt_(doc.depenses_especes),
+            dt_(doc.solde_theorique), (dt_(comptees) if comptees is not None else "—"),
+            (ecart_txt(ecart) if comptees is not None else "—")))
+    if collectee:
+        bloc_droite = (
+            "<div class='bloc gris'><h3>Remise à la collecte</h3><table>"
+            "<tr><td>Remis par %s</td><td class='n'>%s</td></tr>"
+            "<tr><td>Reçu et recompté par %s</td><td class='n'>%s</td></tr>"
+            "<tr class='fort'><td>Écart de remise</td><td class='n'>%s</td></tr>"
+            "<tr><td>Fond de caisse conservé</td><td class='n'>%s</td></tr>"
+            "<tr><td>Chèques / traites remis</td><td class='n'>%s / %s</td></tr>"
+            "<tr><td>Chèques / traites reçus</td><td class='n'>%s / %s</td></tr>"
+            "</table></div>" % (
+                esc(nom(doc.valide_par)), dt_(doc.especes_remises),
+                esc(nom(doc.collecte_par)), dt_(doc.get("especes_recues")),
+                ecart_txt(ecart_remise), dt_(doc.get("fond_conserve")),
+                doc.get("nb_cheques_remis") or 0, doc.get("nb_traites_remis") or 0,
+                doc.get("nb_cheques_recus") or 0, doc.get("nb_traites_recus") or 0))
+    else:
+        bloc_droite = (
+            "<div class='bloc gris'><h3>Validation</h3><table>"
+            "<tr><td>Comptée par</td><td class='n'>%s</td></tr>"
+            "<tr><td>Le</td><td class='n'>%s</td></tr>"
+            "<tr><td>Chèques / traites</td><td class='n'>%s / %s</td></tr>"
+            "</table></div>" % (esc(nom(doc.valide_par)), heure(doc.get("compte_le") or doc.modified),
+                                doc.get("nb_cheques_remis") or 0, doc.get("nb_traites_remis") or 0))
+    html.append("<table class='deux'><tr><td style='padding-right:6px'>%s</td><td style='padding-left:6px'>%s</td>"
+                "</tr></table>" % (bloc_especes, bloc_droite))
+    if doc.get("echanges"):
+        html.append("<h2>Échanges sur la remise</h2><div class='texte'>%s</div>" % esc(sans_emails(doc.echanges)))
+
+    # ── Encaissements du jour par mode : pastilles, 4 par ligne, total en dernier ───────────────────────────────
+    cases = ["<div>%s</div><div class='mt'>%s</div>" % (pastille(m), dt_(v))
+             for m, v in (recap.get("par_mode") or {}).items() if flt(v)]
+    cases.append("<div class='gris'>Total encaissé</div><div class='mt'>%s</div>" % dt_(recap.get("grand_total")))
+    rangees = []
+    for i in range(0, len(cases), 4):
+        bout = cases[i:i + 4]
+        cellules = ["<td%s>%s</td>" % (" class='tot'" if i + j == len(cases) - 1 else "", c)
+                    for j, c in enumerate(bout)]
+        cellules += ["<td style='border:none'></td>"] * (4 - len(bout))
+        rangees.append("<tr>%s</tr>" % "".join(cellules))
+    html.append("<h2>Encaissements du jour par mode</h2><table class='modes'>%s</table>" % "".join(rangees))
+
+    # ── Rapprochement (caisse globale) ───────────────────────────────────────────────────────────────────────────
     if rap:
-        html.append("""
-        <h2>Rapprochement — chèques, traites, dettes</h2>
-        <table>
-          <tr><th></th><th class="n">Avant</th><th class="n">+ Entrées</th>
-              <th class="n">− Sorties</th><th class="n">= Après</th></tr>
-          <tr><td>Chèques en portefeuille</td><td class="n">%s</td><td class="n">%s</td>
-              <td class="n">%s</td><td class="n"><b>%s</b></td></tr>
-          <tr><td>Traites en portefeuille</td><td class="n">%s</td><td class="n">%s</td>
-              <td class="n">%s</td><td class="n"><b>%s</b></td></tr>
-          <tr><td>Encours dettes (comptable)</td><td class="n">%s</td>
-              <td class="n" colspan="2">variation %s</td><td class="n"><b>%s</b></td></tr>
-        </table>""" % (
-            fmt(rap["cheques"]["avant"]), fmt(rap["cheques"]["recus"]),
-            fmt(rap["cheques"]["remis"]), fmt(rap["cheques"]["apres"]),
-            fmt(rap["traites"]["avant"]), fmt(rap["traites"]["recus"]),
-            fmt(rap["traites"]["remis"]), fmt(rap["traites"]["apres"]),
-            fmt(rap["dettes"]["avant"]), fmt(rap["dettes"]["variation"]),
-            fmt(rap["dettes"]["apres"])))
-
+        html.append(section(
+            "Rapprochement — chèques, traites, dettes",
+            [("", 32), ("Avant", 17, 1), ("+ Entrées", 17, 1), ("− Sorties", 17, 1), ("= Après", 17, 1)],
+            ["<tr><td>Chèques en portefeuille</td><td class='n'>%s</td><td class='n'>%s</td><td class='n'>%s</td>"
+             "<td class='n'><b>%s</b></td></tr>" % (
+                 mt(rap["cheques"]["avant"]), mt(rap["cheques"]["recus"]), mt(rap["cheques"]["remis"]),
+                 mt(rap["cheques"]["apres"])),
+             "<tr><td>Traites en portefeuille</td><td class='n'>%s</td><td class='n'>%s</td><td class='n'>%s</td>"
+             "<td class='n'><b>%s</b></td></tr>" % (
+                 mt(rap["traites"]["avant"]), mt(rap["traites"]["recus"]), mt(rap["traites"]["remis"]),
+                 mt(rap["traites"]["apres"])),
+             "<tr><td>Encours dettes (comptable)</td><td class='n'>%s</td><td class='n' colspan='2'>variation %s</td>"
+             "<td class='n'><b>%s</b></td></tr>" % (
+                 mt(rap["dettes"]["avant"]), mt(rap["dettes"]["variation"]), mt(rap["dettes"]["apres"]))]))
         pieces = (rap["cheques"]["liste"] or []) + (rap["traites"]["liste"] or [])
         if pieces:
-            lignes = "".join(
-                "<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td>"
-                "<td class='n'>%s</td></tr>" % (
-                    esc(pc["name"]), esc(pc["mode"]), esc(pc["date"]),
-                    esc(pc["client"]), esc(pc["reference_no"]), fmt(pc["montant"]))
-                for pc in sorted(pieces, key=lambda x: (x["date"], x["name"])))
-            html.append("""
-            <h3>Pièces en portefeuille à la clôture (à compter physiquement)</h3>
-            <table><tr><th>Paiement</th><th>Mode</th><th>Reçu le</th><th>Client</th>
-              <th>N° / Référence</th><th class="n">Montant</th></tr>%s</table>""" % lignes)
+            html.append(section(
+                "Pièces en portefeuille à la clôture <span class='droite'>à compter physiquement</span>",
+                [("Reçu le", 14), ("Mode", 16), ("Client", 34), ("N° / référence", 20), ("Montant (DT)", 16, 1)],
+                ["<tr><td>%s</td><td>%s</td><td>%s</td><td>%s<div class='gris petit'>%s</div></td>"
+                 "<td class='n'>%s</td></tr>" % (
+                     jour(pc["date"]), pastille(pc["mode"]), esc(pc["client"] or ""), esc(pc["reference_no"] or ""),
+                     esc(pc["name"]), mt(pc["montant"]))
+                 for pc in sorted(pieces, key=lambda x: (x["date"], x["name"]))]))
 
-    # ── Récap par mode / par employé ─────────────────────────────────────────
-    lignes_modes = "".join(
-        "<tr><td>%s</td><td class='n'>%s</td></tr>" % (esc(m), fmt(v))
-        for m, v in (recap.get("par_mode") or {}).items() if flt(v))
-    html.append("<h2>Encaissements du jour par mode</h2>"
-                "<table><tr><th>Mode</th><th class='n'>Montant</th></tr>%s"
-                "<tr><td><b>Total</b></td><td class='n'><b>%s</b></td></tr></table>"
-                % (lignes_modes or "<tr><td colspan='2'>aucun</td></tr>",
-                   fmt(recap.get("grand_total"))))
+    if globale and (recap.get("par_employe") or []):
+        html.append(section(
+            "Par employé", [("Employé", 50), ("dont anciennes commandes (DT)", 25, 1), ("Total (DT)", 25, 1)],
+            ["<tr><td>%s</td><td class='n'>%s</td><td class='n'><b>%s</b></td></tr>" % (
+                esc(e["employe"]), mt(e.get("anciens")), mt(e["total"])) for e in recap["par_employe"]]))
 
-    if doc.caisse == CAISSE_GLOBALE and (recap.get("par_employe") or []):
-        lignes_emp = "".join(
-            "<tr><td>%s</td><td class='n'>%s</td><td class='n'>%s</td></tr>" % (
-                esc(e["employe"]), fmt(e.get("anciens")), fmt(e["total"]))
-            for e in recap["par_employe"])
-        html.append("<h3>Par employé</h3><table><tr><th>Employé</th>"
-                    "<th class='n'>dont anciennes commandes</th><th class='n'>Total</th></tr>%s</table>"
-                    % lignes_emp)
-
-    # ── DÉTAIL par employé : commandes, paiements, avertissements ────────────
-    def _ligne_paiement(p):
-        drapeaux = []
+    # ── Commandes du jour, une ligne par commande ────────────────────────────────────────────────────────────────
+    def _paiement(p, sales_order):
+        bits = ["%s <b>%s</b>" % (pastille(p.get("mode")), mt(p.get("amount")))]
+        ref = (p.get("reference_no") or "").strip()
+        sous = [esc(p.get("name") or "")]
+        if ref and ref != sales_order:
+            sous.append("réf. %s" % esc(ref))
+        if p.get("date") and getdate(p["date"]) != d:
+            sous.append("du %s" % jour(p["date"]))
+        bits.append("<span class='gris petit'>%s</span>" % " · ".join(sous))
         if p.get("hors_periode"):
-            drapeaux.append("⏪ avance hors période — non comptée")
+            bits.append("<span class='flag'>⏪ avance hors période — non comptée</span>")
         elif p.get("antidate"):
-            drapeaux.append("⚠ antidaté (saisi le %s)" % esc(p.get("creation_date") or ""))
-        return ("<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td>"
-                "<td class='n'>%s</td><td class='flag'>%s</td></tr>" % (
-                    esc(p.get("name") or ""), esc(p.get("date") or ""),
-                    esc(p.get("mode") or ""), esc(p.get("reference_no") or ""),
-                    fmt(p.get("amount")), " · ".join(drapeaux)))
+            bits.append("<span class='flag'>⚠ antidaté (saisi le %s)</span>" % jour(p.get("creation_date")))
+        return "<div class='pmt'>%s</div>" % " ".join(bits)
 
     for e in (data.get("employees") or []):
-        html.append("<h2>Caisse — %s <span class='muted'>(%s commande(s) · %s)</span></h2>"
-                    % (esc(e["employe"]), e.get("nb_commandes") or 0, fmt(e.get("total"))))
-        blocs = []
+        unites = []
         for o in e.get("orders") or []:
-            tache = o.get("tache_status") or "—"
-            entetes = ("<tr><th colspan='6'>%s — %s · %s · TTC %s · %s · "
-                       "intervention : %s · tâche : %s · payé : %s</th></tr>" % (
-                           esc(o["sales_order"]), esc(o.get("customer") or ""),
-                           esc(o.get("date") or ""), fmt(o.get("grand_total")),
-                           esc(o.get("status") or ""), esc(o.get("intervention") or "—"),
-                           esc(tache), fmt(o.get("total_paid"))))
-            lignes = [entetes]
+            so = o["sales_order"]
+            sous_cmd = [esc(o.get("status") or "")]
+            if o.get("date") and getdate(o["date"]) != d:
+                sous_cmd.append("du %s" % jour(o["date"]))
+            sous_client = []
+            if o.get("intervention"):
+                sous_client.append("intervention %s" % esc(o["intervention"]))
+            if o.get("tache_status"):
+                sous_client.append("tâche %s" % esc(STATUTS_TACHE.get(o["tache_status"], o["tache_status"])))
+            paye = ""
+            if abs(flt(o.get("total_paid")) - flt(o.get("grand_total"))) >= 0.0005:
+                paye = "<div class='gris petit'>payé %s</div>" % mt(o.get("total_paid"))
+            alertes = []
             avance = o.get("avance_anterieure") or {}
             if flt(avance.get("total")):
-                lignes.append("<tr><td colspan='6' class='flag'>⏪ Avance reçue avant la "
-                              "période : %s (%s) — hors totaux du jour</td></tr>"
-                              % (fmt(avance["total"]), esc(", ".join(avance.get("modes") or []))))
+                alertes.append("<div class='flag'>⏪ Avance reçue avant la période : %s (%s) — hors totaux du jour</div>"
+                               % (dt_(avance["total"]), esc(", ".join(avance.get("modes") or []))))
             for w in o.get("warnings") or []:
-                lignes.append("<tr><td colspan='6' class='warn'>⚠ %s</td></tr>"
-                              % esc(w.get("message") or ""))
-            pmts = o.get("payments") or []
-            if pmts:
-                lignes.append("<tr><td class='muted'>Paiement</td><td class='muted'>Date</td>"
-                              "<td class='muted'>Mode</td><td class='muted'>Référence</td>"
-                              "<td class='muted n'>Montant</td><td></td></tr>")
-                lignes += [_ligne_paiement(p) for p in pmts]
-            else:
-                lignes.append("<tr><td colspan='6' class='muted'>aucun paiement</td></tr>")
-            blocs.append("".join(lignes))
-        html.append("<table>%s</table>" % "".join(blocs))
+                alertes.append("<div class='warn'>⚠ %s</div>" % esc(w.get("message") or ""))
+            pmts = "".join(_paiement(p, so) for p in (o.get("payments") or [])) or \
+                "<span class='gris'>aucun paiement</span>"
+            unite = ("<tr%s><td><b class='nw'>%s</b><div class='gris petit'>%s</div></td><td>%s%s</td>"
+                     "<td class='n'>%s%s</td><td>%s</td></tr>" % (
+                         " class='sans-trait'" if alertes else "", esc(so), " · ".join(sous_cmd),
+                         esc(o.get("customer") or ""),
+                         ("<div class='gris petit'>%s</div>" % " · ".join(sous_client)) if sous_client else "",
+                         mt(o.get("grand_total")), paye, pmts))
+            if alertes:
+                unite += "<tr class='alerte'><td colspan='4'>%s</td></tr>" % "".join(alertes)
+            unites.append(unite)
+        html.append(section(
+            "Commandes du jour — %s <span class='droite'>%s commande(s) · %s</span>"
+            % (esc(e["employe"]), e.get("nb_commandes") or 0, dt_(e.get("total"))),
+            [("Commande", 23), ("Client", 27), ("TTC (DT)", 12, 1), ("Paiements (DT)", 38)],
+            unites, vide="aucune commande"))
 
-    # ── Paiements sur anciennes commandes ────────────────────────────────────
+    # ── Paiements sur anciennes commandes ────────────────────────────────────────────────────────────────────────
     anciens = data.get("anciens") or {}
     if anciens.get("paiements"):
-        lignes = []
+        unites = []
         for p in anciens["paiements"]:
-            pieces_txt = ", ".join("%s (%s)" % (pc["name"], pc["date"])
-                                   for pc in (p.get("pieces") or []))
+            pieces_txt = ", ".join("%s (%s)" % (esc(pc["name"]), jour(pc["date"])) for pc in (p.get("pieces") or []))
             flags = []
             if p.get("antidate"):
-                flags.append("⚠ antidaté (saisi le %s)" % esc(p.get("creation_date") or ""))
+                flags.append("⚠ antidaté (saisi le %s)" % jour(p.get("creation_date")))
             if p.get("exclu"):
                 flags.append("EXCLU de la caisse")
-            lignes.append(
-                "<tr%s><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td>"
-                "<td class='n'>%s</td><td>%s</td><td class='flag'>%s</td></tr>" % (
-                    " class='exclu'" if p.get("exclu") else "",
-                    esc(p.get("date") or ""), esc(p.get("saisi_par") or ""),
-                    esc(p.get("customer_name") or ""), esc(p.get("mode") or ""),
-                    esc(p.get("reference_no") or ""), fmt(p.get("amount")),
-                    esc(pieces_txt), " · ".join(flags)))
-        html.append("""
-        <h2>Paiements sur anciennes commandes — %s</h2>
-        <table><tr><th>Date</th><th>Saisi par</th><th>Client</th><th>Mode</th>
-          <th>Référence</th><th class="n">Montant</th><th>Pièce(s) d'origine</th><th></th></tr>
-        %s</table>""" % (fmt(anciens.get("total")), "".join(lignes)))
+            unites.append(
+                "<tr%s><td>%s</td><td>%s<div class='gris petit'>saisi par %s</div></td><td>%s</td>"
+                "<td>%s<div class='gris petit'>%s</div></td><td class='n'>%s</td><td class='flag'>%s</td></tr>" % (
+                    " class='exclu'" if p.get("exclu") else "", jour(p.get("date")),
+                    esc(p.get("customer_name") or ""), esc(p.get("saisi_par") or ""), pastille(p.get("mode")),
+                    pieces_txt, esc(p.get("name") or ""), mt(p.get("amount")), " · ".join(flags)))
+        html.append(section(
+            "Paiements sur anciennes commandes <span class='droite'>%s</span>" % dt_(anciens.get("total")),
+            [("Date", 12), ("Client", 23), ("Mode", 13), ("Commande d'origine", 25), ("Montant (DT)", 12, 1),
+             ("", 15)], unites))
 
-    # ── Dépenses de la caisse ────────────────────────────────────────────────
+    # ── Dépenses de la caisse ────────────────────────────────────────────────────────────────────────────────────
     if depenses.get("lignes"):
-        lignes_dep = "".join(
-            "<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td>"
-            "<td class='n'>%s</td></tr>" % (
-                esc(l["date"]), esc(l["saisi_par"]), esc(l["type"]),
-                esc(l["description"]), esc(l.get("mode") or ""), fmt(l["montant"]))
-            for l in depenses["lignes"])
-        html.append("""
-        <h2>Dépenses de la caisse — %s</h2>
-        <table><tr><th>Date</th><th>Saisie par</th><th>Type</th><th>Description</th>
-          <th>Mode</th><th class="n">Montant</th></tr>%s</table>"""
-                    % (fmt(depenses.get("total")), lignes_dep))
+        unites = []
+        for l in depenses["lignes"]:
+            qui = esc(l.get("saisi_par") or "")
+            if l.get("payee_par_collegue") and l.get("caisse"):
+                qui += "<div class='flag'>payée de la caisse de %s</div>" % esc(l["caisse"])
+            unites.append(
+                "<tr><td>%s</td><td>%s<div class='gris petit'>%s</div></td><td>%s</td><td>%s</td>"
+                "<td class='n'>%s</td></tr>" % (
+                    jour(l.get("date")), esc(l.get("description") or ""), esc(l.get("type") or ""), qui,
+                    pastille(l.get("mode")), mt(l.get("montant"))))
+        html.append(section(
+            "Dépenses de la caisse <span class='droite'>%s</span>" % dt_(depenses.get("total")),
+            [("Date", 12), ("Description", 44), ("Saisie par", 18), ("Mode", 12), ("Montant (DT)", 14, 1)], unites))
 
-    # ── Contrôles justifiés + note ───────────────────────────────────────────
+    # ── Points de contrôle justifiés : « libellé » puis « → motif — commentaire » ───────────────────────────────
     if doc.get("controles"):
-        html.append("<h2>Points de contrôle justifiés</h2>"
-                    "<pre style='font-size:10.5px'>%s</pre>" % esc(doc.controles))
+        points = []
+        for ligne in (doc.controles or "").splitlines():
+            if ligne.strip().startswith("→") and points:
+                motif, _sep, commentaire = ligne.strip()[1:].strip().partition(" — ")
+                points[-1][1].append("<div class='rep'>↳ <span class='motif'>%s</span>%s</div>" % (
+                    esc(motif), (" — <i>%s</i>" % esc(commentaire)) if commentaire else ""))
+            elif ligne.strip():
+                points.append([ligne.strip(), []])
+        blocs = ["<div class='point'>%s%s</div>" % (esc(lib), "".join(reps)) for lib, reps in points]
+        titre_pts = "<h2>Points de contrôle justifiés <span class='droite'>%s point%s</span></h2>" % (
+            len(points), "s" if len(points) > 1 else "")
+        # Le titre part avec le premier point : jamais seul en bas de page.
+        html.append("<div class='garde'>%s%s</div>%s" % (titre_pts, blocs[0] if blocs else "", "".join(blocs[1:])))
     if doc.note:
-        html.append("<h2>Note</h2><p>%s</p>" % esc(doc.note))
+        html.append("<h2>Note</h2><div class='texte'>%s</div>" % esc(doc.note))
+
+    # ── Validations (électroniques, horodatées) ──────────────────────────────────────────────────────────────────
+    gauche = ("<div class='bloc'><div class='gris petit'>%s</div><div class='qui'>%s</div>"
+              "<div class='gris petit'>le %s</div></div>" % (
+                  "Validée seule par" if seule else "Comptée et remise par", esc(nom(doc.valide_par)),
+                  heure(doc.get("compte_le") or doc.modified)))
+    droite = ""
+    if collectee:
+        droite = ("<div class='bloc'><div class='gris petit'>Reçue et recomptée par</div><div class='qui'>%s</div>"
+                  "<div class='gris petit'>le %s</div></div>" % (esc(nom(doc.collecte_par)), heure(doc.get("collecte_le"))))
+    html.append("<table class='signatures'><tr><td style='padding-right:6px'>%s</td><td style='padding-left:6px'>%s</td>"
+                "</tr></table><div class='gris petit' style='margin-top:4px'>Validations faites dans ERPNext, "
+                "horodatées ; document figé au moment de la collecte.</div>" % (gauche, droite))
 
     return "".join(html)
 

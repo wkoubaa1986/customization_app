@@ -372,7 +372,7 @@ def finaliser(doc, mesures=None, rapprochement=None, validation_seule=False):
         rap = CL._rapprochement(doc.date_cloture)
     from frappe.utils.pdf import get_pdf
     from frappe.utils.file_manager import save_file
-    pdf = get_pdf(CL._html_instantane(doc, m["data"], rap))
+    pdf = get_pdf(CL._html_instantane(doc, m["data"], rap), dict(CL.OPTIONS_PDF))
     save_file("caisse-%s-%s.pdf" % (doc.caisse.replace(" ", "_"), doc.date_cloture), pdf,
               "Cloture Caisse", doc.name, is_private=1)
     # Sous-traitant (31/10/2026) : l'argent change de mains — ses paiements quittent son compte et entrent,
