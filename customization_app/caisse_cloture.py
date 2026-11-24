@@ -885,9 +885,28 @@ def points_du_texte(controles):
     return points
 
 
+def compte_commande(order):
+    """Ce que la caisse du jour compte pour une commande, par mode : tous ses paiements sauf l'avance reçue avant la
+    période — la règle du rapport (rapport_caisse_journaliere : totaux_par_mode). Fonction pure."""
+    compte = {}
+    for p in order.get("payments") or []:
+        if p.get("hors_periode"):
+            continue
+        m = p.get("mode") or "—"
+        compte[m] = flt(flt(compte.get(m)) + flt(p.get("amount")), 3)
+    return compte
+
+
+def ordre_modes(modes):
+    """Les modes dans l'ordre de la page caisse (Espèces d'abord), les autres ensuite par ordre alphabétique."""
+    connus = list(COULEURS_MODES)
+    return sorted(modes, key=lambda m: (connus.index(m) if m in connus else len(connus), m or ""))
+
+
 def _texte_trace(contenu, noms):
     """Un commentaire du fil d'une pièce, en une ligne lisible : sans HTML, e-mails remplacés par les noms."""
-    texte = RE_EMOJI.sub("", unescape(frappe.utils.strip_html(contenu or ""))).replace("د.ت", "DT")
+    contenu = re.sub(r"<(?:br|/p|/div|/li)[^>]*>", " ", contenu or "")    # « sel3a</div><div>Justifié » : un espace
+    texte = RE_EMOJI.sub("", unescape(frappe.utils.strip_html(contenu))).replace("د.ت", "DT")
     texte = RE_EMAIL.sub(lambda m: noms(m.group(0)), " ".join(texte.split()))
     return texte if len(texte) <= TRACE_LONGUEUR_MAX else texte[:TRACE_LONGUEUR_MAX - 1].rstrip() + "…"
 
@@ -960,7 +979,7 @@ def _traces(orders, debut, fin, date_cloture):
             if r.docstatus == 1 and dans(r.modified):
                 ev[so].append((get_datetime(r.modified), nom(r.modified_by), "BL %s validé" % r.name))
     # Les justifications de CETTE clôture (« 💵 Caisse du jj/mm/aaaa — … ») sont affichées à part, sous la commande.
-    propre = "💵 Caisse du %s" % getdate(date_cloture).strftime("%d/%m/%Y")
+    propre = "Caisse du %s" % getdate(date_cloture).strftime("%d/%m/%Y")      # après retrait de l'emoji 💵
     vus = set()
     for c in frappe.db.sql("""select reference_doctype, reference_name, comment_type, owner, creation, content
                               from `tabComment`
@@ -1046,8 +1065,12 @@ CSS_PDF = """
     margin: 0 0 7px; page-break-inside: avoid; }
   .inter.alerte { border-left-color: #c0392b; }
   .itete td { padding: 0; vertical-align: top; }
-  .ipmts { margin-top: 4px; }
-  .ipmts .p { display: block; margin-top: 2px; }
+  .calc { margin-top: 5px; table-layout: fixed; }
+  .calc th { font-size: 8.5px; color: #777; font-weight: normal; text-align: left; padding: 0 0 2px;
+    border-bottom: 1px solid #e6e9ee; }
+  .calc th.n { text-align: right; }
+  .calc td { padding: 2px 0; vertical-align: top; }
+  .calc tr.tot td { border-top: 1px solid #c9d3df; font-weight: bold; padding-top: 3px; }
   .garde .inter { page-break-inside: auto; }   /* imbriqué dans un bloc insécable : wkhtmltopdf trace des traits */
   .ijustif { margin-top: 5px; background: #fff8e1; border: 1px solid #f3dc9a; border-radius: 4px; padding: 4px 7px; }
   .trace { margin-top: 5px; table-layout: fixed; }
@@ -1295,19 +1318,42 @@ def _html_instantane(doc, data, rap=None):
     def moment(t):
         return t.strftime("%H:%M") if t.date() == d else t.strftime("%d/%m %H:%M")
 
-    def _paiement(p, trace_so):
-        deja_trace = any(p.get("name") and p["name"] in t for _m, _q, t in trace_so)
-        bits = ["%s <b>%s</b>" % (pastille(p.get("mode")), mt(p.get("amount")))]
-        if not deja_trace:
+    def _calcul(o):
+        """Ce que la caisse compte pour cette commande, paiement par paiement puis par mode (demande du 24/11/2026)."""
+        so = o["sales_order"]
+        lignes = []
+        for p in o.get("payments") or []:
+            ref = (p.get("reference_no") or "").strip()
             sous = [esc(p.get("name") or "")]
+            if ref and ref != so:
+                sous.append("réf. %s" % esc(ref))
             if p.get("date") and getdate(p["date"]) != d:
                 sous.append("du %s" % jour(p["date"]))
-            bits.append("<span class='gris petit'>%s</span>" % " · ".join(sous))
-        if p.get("hors_periode"):
-            bits.append("<span class='flag'>⏪ avance hors période — non comptée</span>")
-        elif p.get("antidate"):
-            bits.append("<span class='flag'>⚠ antidaté (saisi le %s)</span>" % jour(p.get("creation_date")))
-        return "<span class='p'>%s</span>" % " ".join(bits)
+            drapeau = ""
+            if p.get("antidate") and not p.get("hors_periode"):
+                drapeau = " <span class='flag'>⚠ antidaté (saisi le %s)</span>" % jour(p.get("creation_date"))
+            compte_txt = ("<td class='flag' style='text-align:right'>non compté<br>avance d'avant la période</td>"
+                          if p.get("hors_periode") else "<td class='n'><b>%s</b></td>" % mt(p.get("amount")))
+            lignes.append("<tr><td>%s <span class='gris petit'>%s</span>%s</td><td class='n'>%s</td>%s</tr>" % (
+                pastille(p.get("mode")), " · ".join(sous), drapeau, mt(p.get("amount")), compte_txt))
+        if not lignes:
+            lignes.append("<tr><td class='gris' colspan='3'>aucun paiement — rien de compté</td></tr>")
+        compte = compte_commande(o)
+        if len(compte) > 1:
+            detail = " : " + " · ".join("%s %s" % (esc(m), mt(v)) for m, v in compte.items())
+        elif compte:
+            detail = " (%s)" % esc(next(iter(compte)))
+        else:
+            detail = ""
+        lignes.append("<tr class='tot'><td>Compté dans la caisse pour cette commande%s</td><td></td>"
+                      "<td class='n'>%s</td></tr>" % (detail, dt_(sum(compte.values()))))
+        reste = flt(o.get("grand_total")) - flt(o.get("total_paid"))
+        if reste > 0.0005:
+            lignes.append("<tr><td class='warn'>Reste dû sur la commande</td><td></td><td class='n warn'>%s</td></tr>"
+                          % dt_(reste))
+        return ("<table class='calc'><colgroup><col style='width:58%%'><col style='width:17%%'><col style='width:25%%'>"
+                "</colgroup><thead><tr><th>Paiement</th><th class='n'>Montant</th>"
+                "<th class='n'>Compté dans la caisse</th></tr></thead>%s</table>" % "".join(lignes))
 
     def _fiche(o):
         so = o["sales_order"]
@@ -1326,14 +1372,7 @@ def _html_instantane(doc, data, rap=None):
             droite += "<div class='gris petit'>payé %s</div>" % dt_(o.get("total_paid"))
         morceaux = ["<table class='itete'><tr><td><b>%s</b> · %s<div class='gris petit'>%s</div></td>"
                     "<td class='n'>%s</td></tr></table>" % (esc(so), esc(o.get("customer") or ""), " · ".join(sous),
-                                                           droite)]
-        pmts = o.get("payments") or []
-        morceaux.append("<div class='ipmts'>%s</div>" % (
-            "".join(_paiement(p, trace_so) for p in pmts) or "<span class='gris'>aucun paiement</span>"))
-        avance = o.get("avance_anterieure") or {}
-        if flt(avance.get("total")):
-            morceaux.append("<div class='flag'>⏪ Avance reçue avant la période : %s (%s) — hors totaux du jour</div>"
-                            % (dt_(avance["total"]), esc(", ".join(avance.get("modes") or []))))
+                                                           droite), _calcul(o)]
         for w in o.get("warnings") or []:
             morceaux.append("<div class='warn'>⚠ %s</div>" % esc(w.get("message") or ""))
         pts = points_commande.get(so) or []
@@ -1349,7 +1388,46 @@ def _html_instantane(doc, data, rap=None):
         alerte = bool(o.get("warnings") or pts)
         return "<div class='inter%s'>%s</div>" % (" alerte" if alerte else "", "".join(morceaux))
 
+    # Les paiements sur anciennes commandes comptent dans la caisse de celui qui les a SAISIS (rapport du jour).
+    anciens_par_caisse = {}
+    for p in (data.get("anciens") or {}).get("paiements") or []:
+        if p.get("exclu"):
+            continue
+        a = anciens_par_caisse.setdefault(p.get("saisi_par") or "—", {})
+        a[p.get("mode") or "—"] = flt(a.get(p.get("mode") or "—")) + flt(p.get("amount"))
+
+    def _matrice(e):
+        """Le calcul de la caisse : une ligne par commande, une colonne par mode ; la ligne Total retombe sur les
+        encaissements du jour par mode de cette caisse."""
+        orders = e.get("orders") or []
+        anc = anciens_par_caisse.get(e["employe"]) or {}
+        comptes = [(o, compte_commande(o)) for o in orders]
+        modes = ordre_modes(set(m for _o, c in comptes for m in c) | set(anc))
+        if not modes:
+            return ""
+        larg = round(58.0 / (len(modes) + 1), 1)
+        cols = [("Commande", 21), ("Client", 21)] + [(m, larg, 1) for m in modes] + [("Total", larg, 1)]
+
+        def cellules(par_mode, gras=False):
+            fmt_ = (lambda v: "<b>%s</b>" % mt(v)) if gras else mt
+            return "".join("<td class='n'>%s</td>" % (fmt_(par_mode[m]) if flt(par_mode.get(m)) else "<span class='gris'>—</span>")
+                           for m in modes) + "<td class='n'><b>%s</b></td>" % mt(sum(par_mode.values()))
+
+        unites = ["<tr><td class='nw'>%s</td><td>%s</td>%s</tr>" % (esc(o["sales_order"]), esc(o.get("customer") or ""),
+                                                                    cellules(c)) for o, c in comptes]
+        if anc:
+            unites.append("<tr><td colspan='2'>Paiements sur anciennes commandes</td>%s</tr>" % cellules(anc))
+        total = {m: sum(flt(c.get(m)) for _o, c in comptes) + flt(anc.get(m)) for m in modes}
+        unites.append("<tr class='pied'><td colspan='2'>Total compté dans la caisse</td>%s</tr>" % cellules(total, True))
+        note = ""
+        if not globale and "Espèces" in total and abs(flt(total["Espèces"]) - flt(doc.encaissements_especes)) < 0.0005:
+            note = ("<div class='gris petit' style='margin-top:3px'>La colonne Espèces (%s) est le « + Encaissements "
+                    "en espèces » de la journée.</div>" % dt_(total["Espèces"]))
+        return section("Calcul de la caisse — %s <span class='droite'>compté par commande et par mode (DT)</span>"
+                       % esc(e["employe"]), cols, unites) + note
+
     for e in (data.get("employees") or []):
+        html.append(_matrice(e))
         fiches = [_fiche(o) for o in (e.get("orders") or [])] or ["<div class='gris'>aucune commande</div>"]
         html.append("<div class='garde'><h2>Commandes du jour — %s <span class='droite'>%s commande(s) · %s</span></h2>"
                     "%s</div>%s" % (esc(e["employe"]), e.get("nb_commandes") or 0, dt_(e.get("total")), fiches[0],

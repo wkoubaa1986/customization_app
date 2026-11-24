@@ -73,6 +73,30 @@ class TestPdfCloture(unittest.TestCase):
         self.assertEqual(t, "Transférée par Jamel Aloui : A&S → B (3,800 DT)")
         self.assertTrue(CL._texte_trace("a" * 500, noms).endswith("…"))
 
+    def test_compte_par_commande_et_par_mode(self):
+        o = {"payments": [{"mode": "Espèces", "amount": 826, "hors_periode": True},
+                          {"mode": "Espèces", "amount": 394}, {"mode": "Carte de crédit", "amount": 10.5},
+                          {"mode": "Espèces", "amount": 0.25}]}
+        self.assertEqual(CL.compte_commande(o), {"Espèces": 394.25, "Carte de crédit": 10.5})   # avance exclue
+        self.assertEqual(CL.compte_commande({}), {})
+        self.assertEqual(CL.ordre_modes({"Dette non payée", "Zzz", "Espèces"}), ["Espèces", "Dette non payée", "Zzz"])
+
+    def test_calcul_dans_le_pdf(self):
+        donnees = dict(DONNEES, anciens={"paiements": [
+            {"saisi_par": "Caisse Essai", "mode": "Espèces", "amount": 112, "name": "ACC-PAY-2", "date": "2026-11-21"},
+            {"saisi_par": "Caisse Essai", "mode": "Espèces", "amount": 50, "exclu": True, "name": "ACC-PAY-3"}],
+            "total": 112})
+        donnees["employees"] = [dict(DONNEES["employees"][0], orders=[dict(
+            DONNEES["employees"][0]["orders"][0], payments=[
+                {"name": "ACC-PAY-0", "mode": "Espèces", "amount": 826, "hors_periode": True, "date": "2026-11-01"},
+                {"name": "ACC-PAY-1", "mode": "Espèces", "amount": 20, "date": "2026-11-23"}])])]
+        html = CL._html_instantane(_cloture(), donnees)
+        self.assertIn("Calcul de la caisse — Caisse Essai", html)
+        self.assertIn("non compté<br>avance d'avant la période", html)
+        self.assertIn("Compté dans la caisse pour cette commande (Espèces)", html)
+        self.assertIn("Paiements sur anciennes commandes</td>", html)
+        self.assertIn("<b>132,000</b>", html)      # total Espèces = 20 + 112 (l'avance et l'exclu ne comptent pas)
+
     def test_validee_seule(self):
         html = CL._html_instantane(_cloture(validation_seule=1, collecte_par=None), DONNEES)
         self.assertIn("Validée seule par Essai Caissier", html)
