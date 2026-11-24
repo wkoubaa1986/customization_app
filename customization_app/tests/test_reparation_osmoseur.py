@@ -403,8 +403,10 @@ class TestReglesPures(unittest.TestCase):
         jour = getdate("2026-11-20")
         a = RO.attente({"statut": RO.S_REPAREE, "date_reparee": "2026-11-16 16:55:00"}, jour)
         self.assertEqual(a, {"motif": "a_rendre", "jours": 4})
-        # « toujours au magasin » remet le compteur à zéro
+        # à rendre : seul le dernier commentaire de suivi remet le compteur à zéro (24/11/2026) — plus « toujours au magasin »
         a = RO.attente({"statut": RO.S_PRETE, "date_reparee": "2026-10-20 11:02:00", "toujours_la_le": "2026-11-19 09:00:00"}, jour)
+        self.assertEqual(a["jours"], 31)
+        a = RO.attente({"statut": RO.S_PRETE, "date_reparee": "2026-10-20 11:02:00", "commentaire_suivi_le": "2026-11-19 09:00:00"}, jour)
         self.assertEqual(a["jours"], 1)
         a = RO.attente({"statut": RO.S_RECEPTIONNEE, "date_reception": "2026-10-30 17:00:00", "date_cloture_reception": "2026-10-30 17:02:00"}, jour)
         self.assertEqual(a, {"motif": "sans_technicien", "jours": 21})
@@ -661,10 +663,17 @@ class TestSortie(unittest.TestCase):
             self.assertEqual((file["rang"], file["reste"], file["route"], file["options"]), (3, r["n"], ["reparation-osmoseurs"], {"verifier": 1}))
             self.assertEqual([f["rang"] for f in p["files"]], list(range(1, len(T.PRIORITES) + 1)))
             fait = file["fait"]
-            RO.toujours_la(nom)                                                   # une réponse : comptée, et la file baisse
+            # « Toujours au magasin » : un geste compté aujourd'hui, mais le client reste à rappeler (règle du 24/11/2026)
+            RO.toujours_la(nom)
             p = T.get_priorites()
             file = [f for f in p["files"] if f["cle"] == "atelier"][0]
-            self.assertEqual((file["fait"], file["reste"]), (fait + 1, r["n"] - 1))
+            self.assertEqual((file["fait"], file["reste"]), (fait + 1, r["n"]))
+            self.assertIn(nom, [m["name"] for m in RO.mon_rappel()["machines"]])
+            # le commentaire de suivi (client appelé) la sort de la liste pour 2 jours
+            RO.enregistrer_commentaire(nom, "client appelé, passe jeudi")
+            p = T.get_priorites()
+            file = [f for f in p["files"] if f["cle"] == "atelier"][0]
+            self.assertEqual(file["reste"], r["n"] - 1)
             self.assertNotIn(nom, [m["name"] for m in RO.mon_rappel()["machines"]])
             # quelqu'un d'autre : ni alerte, ni file — et sa liste reste numérotée sans trou
             frappe.set_user(autre)

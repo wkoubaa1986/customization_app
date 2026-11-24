@@ -97,7 +97,8 @@ GROUPES = {G_REPARER: (S_RECEPTION, S_RECEPTIONNEE, S_PLANIFIEE, S_DEMONTAGE), G
            G_RENDUE: (S_RENDUE,)}
 RAPPEL_JOURS_DEFAUT = 3                  # une machine qui attend depuis 3 jours est rappelée
 # « À rendre » : 2 jours après la réparation OU le dernier commentaire de suivi sans être rendue, le client est à
-# rappeler (sa règle du 24/11/2026 ; avant : 3 jours depuis la réparation, le commentaire ne comptait pas).
+# rappeler (sa règle du 24/11/2026 ; avant : 3 jours depuis la réparation ou « toujours au magasin », le commentaire
+# ne comptait pas).
 A_RENDRE_JOURS = 2
 RELANCE_JOURS_DEFAUT = 3                 # sans réponse 3 jours après le premier rappel : la seconde personne
 EVENEMENT_SUITE = "osm_a_rendre"         # temps réel : « la machine est réparée — et maintenant ? »
@@ -403,7 +404,10 @@ def attente(m, aujourdhui) -> dict | None:
         j = jours(m.get("date_reception"))
         return None if j is None else {"motif": "en_route", "jours": j}
     if statut in REPAREE:
-        j = jours(m.get("date_reparee"), m.get("toujours_la_le"), m.get("commentaire_suivi_le"))
+        # Sa règle du 24/11/2026, à la lettre : la date de clôture (réparation) ou le dernier COMMENTAIRE de suivi.
+        # « Toujours au magasin » ne remet plus le compteur à zéro ici : il ne dit pas que le client a été appelé
+        # (OSM-2026-0008, « NE REPOND PAS » le 20/11, « toujours au magasin » le 23/11 : elle restait cachée).
+        j = jours(m.get("date_reparee"), m.get("commentaire_suivi_le"))
         return None if j is None else {"motif": "a_rendre", "jours": j}
     if statut == S_PLANIFIEE and m.get("date_prevue"):
         # Réparation prévue, date dépassée d'un jour sans être faite (sa règle du 24/11/2026) : rappeler le
@@ -1804,8 +1808,9 @@ def toujours_la(machine):
 def enregistrer_commentaire(machine, texte=None):
     """Le commentaire de suivi de la ligne (20/11/2026) : où en est le dossier, écrit par la personne qui le suit.
     Le dernier texte reste sur la ligne, avec son auteur et son heure ; chaque version est gardée au fil du dossier
-    (« 💬 Suivi — … »), et compte comme un geste fait dans « Mes appels par priorité ». Il ne répond PAS au rappel :
-    la machine attend toujours d'être rendue, confirmée au magasin ou affectée."""
+    (« 💬 Suivi — … »), et compte comme un geste fait dans « Mes appels par priorité ». Pour une machine À RENDRE,
+    sa date relance le délai de 2 jours avant « client à rappeler » (règle du 24/11/2026) ; il ne touche pas aux
+    autres attentes (sans technicien, réparation en retard…), ni à la relance (`rappel_depuis`)."""
     _ecriture(machine)
     texte = (texte or "").strip()[:1000]
     ancien = (frappe.db.get_value(DOCTYPE, machine, "commentaire_suivi") or "").strip()
