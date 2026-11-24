@@ -132,6 +132,21 @@
     .rcj-cc-saisie .form-control { font-size: 16px; }
     .rcj-cc-deux { display: flex; gap: 10px; } .rcj-cc-deux > div { flex: 1; }
     .rcj-cc-attente { font-size: 12.5px; color: #6b7280; margin-top: 8px; }
+    /* Revue des dépenses à la collecte (24/11/2026) : chaque dépense vue ou contestée */
+    .rcj-rv { margin: 8px 0 4px; padding: 8px 10px; border-radius: 10px; border: 1px solid #d5dbe3; background: #f8fafc; }
+    .rcj-rv-titre { font-size: 12.5px; font-weight: 700; margin-bottom: 4px; display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+    .rcj-rv-ligne { padding: 7px 8px; border-radius: 8px; margin-top: 6px; background: #fff; border: 1px solid #e4e8ee; }
+    .rcj-rv-ligne.rcj-rv-ok { background: #eef8f1; border-color: #b7dfc3; }
+    .rcj-rv-ligne.rcj-rv-ko { background: #fdf0ef; border-color: #e8b4b0; }
+    .rcj-rv-haut { display: flex; gap: 8px; align-items: flex-start; }
+    .rcj-rv-photo { width: 46px; height: 46px; object-fit: cover; border-radius: 6px; border: 1px solid #ddd; flex: none; }
+    .rcj-rv-sansphoto { width: 46px; height: 46px; border-radius: 6px; border: 1px dashed #cbd5e1; flex: none; display: flex; align-items: center; justify-content: center; color: #9aa5b1; font-size: 18px; }
+    .rcj-rv-info { flex: 1; min-width: 0; font-size: 12.5px; }
+    .rcj-rv-info .rcj-rv-mt { font-size: 15px; font-weight: 800; }
+    .rcj-rv-sig { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 999px; margin: 3px 4px 0 0; }
+    .rcj-rv-sig-rouge { background: #fdecea; color: #a93226; } .rcj-rv-sig-orange { background: #ffedd5; color: #9a3412; } .rcj-rv-sig-gris { background: #eef1f4; color: #5b6470; }
+    .rcj-rv-btns { display: flex; flex-direction: column; gap: 4px; flex: none; }
+    .rcj-rv-comm { margin-top: 6px; font-size: 14px; }
     .rcj-cc-controles { margin: 8px 0 4px; padding: 8px 12px; border-radius: 10px; background: #fffbe9; border: 1px solid #e6d9a8; font-size: 12.5px; }
     .rcj-cc-controles-titre { font-weight: 700; color: #7a5d10; margin-bottom: 4px; }
     .rcj-cc-controle { padding: 4px 0; border-top: 1px dashed #e6d9a8; } .rcj-cc-controle:first-of-type { border-top: 0; }

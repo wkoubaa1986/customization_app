@@ -1032,6 +1032,12 @@ def creer(type_depense, montant, mode, compte=None, description=None, fournisseu
         paid, unpaid = _partage_paiements(regs)
     if unpaid > 0 and type_depense == "Dépense non facturée":
         frappe.throw(_("« Pas payé » est réservé aux dépenses facturées."))
+    # ACCORD PRÉALABLE (24/11/2026) : au-delà du seuil de Config Caisse, la part ESPÈCES attend l'accord d'un
+    # responsable ; sans accord, refus (AccordDepenseRequis) et la page propose de le demander. Pas pour une correction.
+    accord = None
+    if not reprise:
+        from customization_app import caisse_accord
+        accord = caisse_accord.exiger(sum(flt(p["montant"]) for p in paid if p["mode"] == "Espèces"))
 
     remarques = [description, _("Type : {0}").format(type_depense)]
     if fournisseur:
@@ -1239,6 +1245,8 @@ def creer(type_depense, montant, mode, compte=None, description=None, fournisseu
         ordres_traites = _ordres_traites(regs, je, description, fournisseur)
         if ordres_traites:
             resultat["ordres_traites"] = ordres_traites
+    if accord:
+        caisse_accord.utiliser(accord, resultat.get("name"))
     frappe.db.commit()
     # Ce que la fenêtre (et la trace d'une correction) veulent relire : la retenue posée et ce
     # qui est réellement sorti de la caisse ou de la banque.

@@ -30,6 +30,7 @@ from frappe import _
 from frappe.utils import add_days, cint, date_diff, flt, getdate, now_datetime, nowdate
 
 from customization_app import caisse_cloture as CL
+from customization_app import caisse_revue as CR
 
 STATUT_A_COLLECTER = "À collecter"
 STATUT_ECART = "Écart de remise"
@@ -782,6 +783,8 @@ def _dict_cloture(c):
         # Les points de contrôle et leurs justifications : le collecteur les LIT avant de confirmer.
         "controles": controles_en_liste(c.controles),
         "justif_contestee": c.statut == STATUT_JUSTIF,
+        # Revue des dépenses déjà faite par le collecteur (24/11/2026) : {pièce: {verdict, commentaire, par, le}}.
+        "revue": CR.lire_revue(c.get("revue_depenses")),
     }
     d["forcable"] = cint(c.tours_ecart) >= 1 and c.statut == STATUT_A_COLLECTER
     return d
@@ -809,6 +812,8 @@ def a_collecter(date=None):
         c["validation_directe"] = c["mienne"] and role_c == "titulaire"
         c["par_delegation"] = role_c != "titulaire"
         c["collectable"] = True
+        # Revue des dépenses (24/11/2026) : celles de la caisse, à voir ou contester — sauf sa propre caisse.
+        c["depenses"] = [] if c["caisse"] == _caisse_de(frappe.session.user) else CR.depenses_a_revoir(c["caisse"], c["date"])
 
     # Pas comptées : depuis la date de départ, toute caisse qui a eu la moindre action (dette
     # comprise) sans comptage — les jours passés d'abord (06/10/2026 ; avant : le jour même, espèces seules).
@@ -859,7 +864,7 @@ def _verser_dans_passation(cl, delegue):
 
 
 @frappe.whitelist()
-def collecter(name, especes_recues, nb_cheques_recus=0, nb_traites_recus=0, commentaire=None, forcer=0):
+def collecter(name, especes_recues, nb_cheques_recus=0, nb_traites_recus=0, commentaire=None, forcer=0, revue=None):
     """Le responsable (ou un délégué) saisit ce qu'il a REÇU. Identique au
     déclaré -> validée ; différent -> « Écart de remise » renvoyé à l'employé ;
     `forcer` (après au moins un tour d'écart) -> le responsable tranche."""
@@ -870,6 +875,9 @@ def collecter(name, especes_recues, nb_cheques_recus=0, nb_traites_recus=0, comm
         frappe.throw(_("La clôture {0} n'est pas en attente de collecte ({1}).").format(name, cl.statut))
     moi = frappe.session.user
     auto = cl.valide_par == moi or cl.caisse == _caisse_de(moi)
+    # Revue des dépenses (24/11/2026) : chacune vue ou contestée avant de recevoir l'argent — sauf sa propre caisse.
+    if cl.caisse != _caisse_de(moi):
+        CR.appliquer_revue(cl, revue, moi)
     if auto and role == "titulaire":
         # Le responsable a compté lui-même (employé absent) : il valide DIRECTEMENT, une seule
         # signature, tracée comme telle — la remise n'a pas de sens, l'argent est déjà chez lui.

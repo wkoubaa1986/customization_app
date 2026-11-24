@@ -57,7 +57,8 @@
   "ecart_remise",
   "tours_ecart",
   "column_break_6",
-  "echanges"
+  "echanges",
+  "revue_depenses"
  ],
  "fields": [
   {
@@ -395,11 +396,20 @@
    "fieldtype": "Long Text",
    "label": "Échanges sur la remise",
    "read_only": 1
+  },
+  {
+   "fieldname": "revue_depenses",
+   "fieldtype": "Long Text",
+   "label": "Revue des dépenses à la collecte",
+   "read_only": 1,
+   "hidden": 1,
+   "no_copy": 1,
+   "description": "JSON {pièce: {verdict: vu|conteste, commentaire, par, le}} — revue faite par le collecteur."
   }
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-10-05 19:00:00.000000",
+ "modified": "2026-11-24 21:00:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Cloture Caisse",

@@ -122,3 +122,91 @@
     frappe.router.on("change", () => { if ((connu && connu.n) || Date.now() - dernier_appel > 60000) charger(); });
   });
 })();
+
+/**
+ * Caisse — accords de dépense à donner (24/11/2026). Pour les responsables de collecte (Config Caisse : titulaire et
+ * co-titulaires) : tant qu'une demande « Accord Depense Caisse » est En attente, une carte bleue en bas à GAUCHE (les
+ * pastilles de caisse et d'atelier sont à droite ; au-dessus de la barre de discussion Raven) ; un clic ouvre la liste, « Accorder » ou « Refuser » (motif). Un
+ * employé attend souvent devant le fournisseur : notification du navigateur à chaque nouvelle demande. Rafraîchie par
+ * l'événement temps réel `caisse_accord` et toutes les 2 minutes. Pour les autres, l'API renvoie [] : rien.
+ */
+(() => {
+  const API = "customization_app.caisse_accord";
+  let $carte = null, dernier = -1, liste = [];
+  const fmt = (v) => (Number(v) || 0).toLocaleString("fr-FR", { minimumFractionDigits: 3, maximumFractionDigits: 3 }) + " DT";
+  const esc = (s) => frappe.utils.escape_html(s || "");
+  const notifier = (txt) => {
+    try {
+      if (!("Notification" in window)) return;
+      if (Notification.permission === "default") Notification.requestPermission();
+      if (Notification.permission === "granted") new Notification("💰 Accord de dépense", { body: txt, tag: "caisse-accord", renotify: true });
+    } catch (e) { /* ignoré */ }
+  };
+  const ouvrir = () => {
+    const d = new frappe.ui.Dialog({ title: __("Dépenses en espèces à accorder"), size: "large",
+                                     fields: [{ fieldtype: "HTML", fieldname: "corps" }] });
+    const rendre = () => {
+      if (!liste.length) { d.hide(); return; }
+      d.fields_dict.corps.$wrapper.html(liste.map((a) => `
+        <div style="border:1px solid #dbe3ee;border-radius:10px;padding:10px 12px;margin-bottom:10px" data-name="${esc(a.name)}">
+          <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap">
+            <div><div style="font-size:20px;font-weight:800">${fmt(a.montant)}</div>
+              <div style="font-size:13.5px">${esc(a.objet)}${a.fournisseur ? " — " + esc(a.fournisseur) : ""}</div>
+              <div style="font-size:12px;color:#6b7280">${__("demandé par")} <b>${esc(a.demandeur_nom)}</b> · ${__("caisse de")} ${esc(a.caisse)} · ${esc(String(a.demande_le || "").slice(0, 16))} · ${esc(a.name)}</div></div>
+            <div style="display:flex;gap:6px;align-items:center">
+              <button class="btn btn-success acd-oui">✅ ${__("Accorder")}</button>
+              <button class="btn btn-default acd-non">❌ ${__("Refuser")}</button></div>
+          </div>
+        </div>`).join(""));
+      const decider = (name, accorder, commentaire) => frappe.call({
+        method: API + ".decider", args: { name, accorder: accorder ? 1 : 0, commentaire: commentaire || "" }, freeze: true,
+        callback: () => {
+          frappe.show_alert({ message: accorder ? __("Dépense accordée : l'employé est prévenu.") : __("Dépense refusée : l'employé est prévenu."),
+                              indicator: accorder ? "green" : "orange" });
+          liste = liste.filter((x) => x.name !== name);
+          peindre(); rendre();
+        },
+      });
+      d.fields_dict.corps.$wrapper.find(".acd-oui").on("click", function () { decider($(this).closest("[data-name]").attr("data-name"), true); });
+      d.fields_dict.corps.$wrapper.find(".acd-non").on("click", function () {
+        const name = $(this).closest("[data-name]").attr("data-name");
+        frappe.prompt([{ fieldtype: "Small Text", fieldname: "commentaire", reqd: 1, label: __("Pourquoi ? (l'employé le lira, 10 caractères minimum)") }],
+          (v) => decider(name, false, v.commentaire), __("Refuser la dépense"), __("Refuser"));
+      });
+    };
+    rendre();
+    d.show();
+  };
+  const peindre = () => {
+    const n = liste.length;
+    if (!n) { if ($carte) { $carte.remove(); $carte = null; } dernier = 0; return; }
+    const a = liste[0];
+    const txt = n > 1 ? __("{0} dépenses en espèces attendent votre accord", [n])
+      : __("{0} demande {1} : {2}", [a.demandeur_nom, fmt(a.montant), a.objet]);
+    if (!$carte) {
+      $carte = $(`<div id="acd-carte" title="${__("Voir et décider")}" style="position:fixed;left:18px;bottom:64px;z-index:1030;max-width:min(440px,calc(100vw - 110px));
+          background:#1d4ed8;color:#fff;border-radius:12px;padding:10px 14px;box-shadow:0 4px 14px rgba(0,0,0,.25);cursor:pointer;
+          display:flex;gap:10px;align-items:center;font-weight:700;font-size:13.5px">
+          <span style="font-size:20px">💰</span><span class="acd-txt" style="overflow:hidden;text-overflow:ellipsis"></span>
+          <span style="background:#fff;color:#1d4ed8;border-radius:999px;padding:3px 10px;font-size:12.5px;white-space:nowrap">${__("Décider")}</span></div>`).appendTo("body");
+      $carte.on("click", ouvrir);
+    }
+    $carte.find(".acd-txt").text(txt);
+    if (dernier >= 0 && n > dernier) notifier(txt);
+    dernier = n;
+  };
+  let actif = true;
+  const charger = () => {
+    if (!actif) return;
+    frappe.xcall(API + ".a_decider").then((r) => {
+      if (r === null || r === undefined) { actif = false; return; }      // pas responsable : on n'interroge plus
+      liste = r; peindre();
+    }).catch(() => {});
+  };
+  $(document).on("app_ready", () => {
+    if (!frappe.session || frappe.session.user === "Guest") return;
+    charger();
+    setInterval(() => { if (document.visibilityState === "visible") charger(); }, 120000);
+    frappe.realtime.on("caisse_accord", charger);
+  });
+})();

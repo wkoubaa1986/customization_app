@@ -2557,6 +2557,20 @@ function rcj_depense(rapport, initial) {
           caisse_payeur: initial && !etat.payeur_touche ? null : (v.caisse_payeur || null),
         },
         freeze: true, freeze_message: initial ? __("Correction de la dépense…") : __("Enregistrement de la dépense…"),
+        // Accord préalable (24/11/2026) : au-delà du seuil en espèces, le serveur refuse sans accord ; on propose de
+        // le demander, la fenêtre de dépense reste ouverte pour l'enregistrer dès l'accord reçu.
+        // (error_handlers : Frappe n'affiche alors pas son propre message, la fenêtre de demande le reprend.)
+        error_handlers: {
+          AccordDepenseRequis: (r) => {
+            const especes = paiements
+              ? paiements.filter((p) => p.mode === "Espèces").reduce((s, p) => s + flt(p.montant), 0)
+              : (v.mode === "Espèces" ? a_regler : 0);
+            let message = "";
+            try { message = JSON.parse(JSON.parse(r._server_messages)[0]).message || ""; } catch (e) { /* ignoré */ }
+            rcj_demander_accord({ montant: especes, objet: v.description || v.type_depense, message,
+                                  fournisseur: v.fournisseur || etat.supplier || "", caisse: v.caisse_payeur || "" });
+          },
+        },
         callback: (r) => {
           d.hide();
           rcj_afficher_avertissements(r.message);
@@ -3140,6 +3154,77 @@ function rcj_lier_documents(texte_echappe) {
 }
 
 // Les points justifiés par l'employé, tels que le collecteur les lit sur sa carte.
+// Accord préalable d'une dépense en espèces au-delà du seuil (24/11/2026) : la demande part aux responsables de collecte.
+function rcj_demander_accord(info) {
+  const d = new frappe.ui.Dialog({
+    title: __("Accord nécessaire avant de payer"),
+    fields: [
+      { fieldtype: "HTML", fieldname: "explication" },
+      { fieldtype: "Currency", fieldname: "montant", label: __("Montant à payer en espèces"), default: info.montant, reqd: 1 },
+      { fieldtype: "Small Text", fieldname: "objet", label: __("Ce que vous allez payer"), default: info.objet || "", reqd: 1 },
+      { fieldtype: "Data", fieldname: "fournisseur", label: __("Fournisseur"), default: info.fournisseur || "" },
+    ],
+    primary_action_label: __("Demander l'accord"),
+    primary_action: (v) => frappe.call({
+      method: "customization_app.caisse_accord.demander",
+      args: { montant: v.montant, objet: v.objet, fournisseur: v.fournisseur, caisse: info.caisse || null },
+      freeze: true,
+      callback: (r) => {
+        d.hide();
+        const res = r.message || {};
+        frappe.msgprint({
+          title: res.deja ? __("Demande déjà envoyée") : __("Demande envoyée"),
+          indicator: "blue",
+          message: __("{0} ({1}) : {2} sont prévenus. Vous recevrez une notification ; une fois accordée, enregistrez la dépense (la fenêtre reste ouverte).",
+                      [res.name, rcj_dt(v.montant), (res.approbateurs || []).join(", ")]),
+        });
+      },
+    }),
+  });
+  d.fields_dict.explication.$wrapper.html(`<div style="background:#eff6ff;border:1px solid #bfdbfe;color:#1e3a8a;border-radius:8px;padding:9px 11px;font-size:13px">
+    💰 ${info.message ? frappe.utils.escape_html(info.message) + "<br>" : ""}${__("Demandez-le ici, puis enregistrez la dépense quand il est accordé.")}</div>`);
+  d.show();
+}
+
+// Revue des dépenses à la collecte (24/11/2026) : chaque dépense de la caisse, avec sa photo et ses signaux
+// (doublon possible, payée par un collègue, montant élevé, sans facture, sans photo), à marquer « vu » ou à contester.
+function rcj_html_revue_depenses(c, rv) {
+  const deps = c.depenses || [];
+  if (!deps.length) return "";
+  const esc = frappe.utils.escape_html;
+  rv = rv || {};
+  const faites = deps.filter((l) => rv[l.name] && rv[l.name].verdict).length;
+  const lignes = deps.map((l) => {
+    const r = rv[l.name] || {};
+    const photo = (l.photos || [])[0];
+    const lien = `/app/${l.doctype === "Payment Entry" ? "payment-entry" : "journal-entry"}/${encodeURIComponent(l.name)}`;
+    const img = !photo ? `<div class="rcj-rv-sansphoto">∅</div>`
+      : /\.(jpe?g|png|webp|gif)$/i.test(photo.url) ? `<a href="${esc(photo.url)}" target="_blank"><img class="rcj-rv-photo" src="${esc(photo.url)}" alt=""></a>`
+      : `<a class="rcj-rv-sansphoto" href="${esc(photo.url)}" target="_blank">📄</a>`;
+    const etat = r.verdict === "vu" ? " rcj-rv-ok" : r.verdict === "conteste" ? " rcj-rv-ko" : "";
+    return `<div class="rcj-rv-ligne${etat}" data-dep="${esc(l.name)}">
+        <div class="rcj-rv-haut">${img}
+          <div class="rcj-rv-info"><span class="rcj-rv-mt">${rcj_dt(l.montant)}</span> · ${esc(l.description || l.fournisseur || "")}
+            <div class="text-muted">${esc(l.type || "")} · ${esc(l.mode || "")} · ${__("saisie par")} ${esc(l.saisi_par || "?")}${
+              l.numero_facture ? " · " + __("fact.") + " " + esc(l.numero_facture) : ""} · <a href="${lien}" target="_blank">${esc(l.name)}</a></div>
+            ${(l.signaux || []).map((s) => `<span class="rcj-rv-sig rcj-rv-sig-${esc(s.niveau)}">${s.niveau === "rouge" ? "⚠️ " : ""}${esc(s.texte)}</span>`).join("")}
+          </div>
+          <div class="rcj-rv-btns">
+            <button class="btn btn-xs btn-default rcj-rv-vu">👁 ${__("Vu")}</button>
+            <button class="btn btn-xs btn-default rcj-rv-ko-btn">✋ ${__("Contester")}</button>
+          </div>
+        </div>
+        <input type="text" class="form-control rcj-rv-comm" value="${esc(r.commentaire || "")}"
+          placeholder="${__("Pourquoi ? (son auteur et les responsables seront prévenus)")}" style="${r.verdict === "conteste" ? "" : "display:none"}">
+      </div>`;
+  }).join("");
+  return `<div class="rcj-rv">
+      <div class="rcj-rv-titre"><span>🧾 ${__("Dépenses de la caisse")} — <span class="rcj-rv-compte">${faites}/${deps.length}</span> ${__("passée(s) en revue")}</span>
+        <a href="#" class="rcj-rv-tout">${__("Tout marquer vu")}</a></div>
+      ${lignes}
+    </div>`;
+}
+
 function rcj_html_controles_justifies(controles) {
   if (!controles || !controles.length) return "";
   const esc = frappe.utils.escape_html;
@@ -3323,9 +3408,6 @@ function rcj_cloture(rapport, opts) {
             if ((v.note || "").replace(/\s+/g, " ").trim().length < (e.commentaire_min || RCJ_COMMENTAIRE_MIN)) {
               frappe.msgprint(__("Vous comptez la caisse de {0} à sa place : écrivez pourquoi dans la note.", [e.pour_autrui])); return;
             }
-            if (!reprise && !photo.data) {
-              frappe.msgprint(__("Vous comptez la caisse de {0} à sa place : joignez la photo des espèces comptées.", [e.pour_autrui])); return;
-            }
           }
           if (window.flotte_position_capturer) window.flotte_position_capturer("caisse", null, null);
           frappe.call({
@@ -3391,7 +3473,7 @@ function rcj_cloture(rapport, opts) {
       const autrui = e.pour_autrui ? `
         <div class="alert alert-danger" style="font-size:12.5px;padding:8px 10px;margin-bottom:8px">
           <b>${__("Vous comptez la caisse de {0} à sa place.", [frappe.utils.escape_html(e.pour_autrui)])}</b>
-          ${__("Écrivez pourquoi dans la note (absent, parti…) et joignez la photo des espèces comptées : {0} sera prévenu(e) et pourra contester tant que la caisse n'est pas collectée.", [frappe.utils.escape_html(e.pour_autrui)])}
+          ${__("Écrivez pourquoi dans la note (absent, parti…) : {0} sera prévenu(e) et pourra contester tant que la caisse n'est pas collectée.", [frappe.utils.escape_html(e.pour_autrui)])}
         </div>` : "";
       const voile = reprise ? "" : `
         <div class="rcj-etat-voile" style="border:1px dashed #9aa5b1;background:#f7f9fb;border-radius:6px;padding:10px 12px;margin-bottom:8px;font-size:13px">
@@ -3491,6 +3573,30 @@ function rcj_collecte(rapport) {
         size: "large",
         fields: [{ fieldtype: "HTML", fieldname: "corps" }],
       });
+      // Revue des dépenses (24/11/2026) : {clôture: {pièce: {verdict, commentaire}}}, gardée entre deux rafraîchissements.
+      const revues = {};
+      const init_revues = () => (m.clotures || []).forEach((c) => {
+        if (revues[c.name]) return;
+        revues[c.name] = {};
+        Object.keys(c.revue || {}).forEach((k) => {
+          revues[c.name][k] = { verdict: c.revue[k].verdict, commentaire: c.revue[k].commentaire || "" };
+        });
+      });
+      // Avant de recevoir l'argent : chaque dépense vue ou contestée (avec un commentaire). null = pas prête.
+      const revue_prete = (c) => {
+        const rv = revues[c.name] || {};
+        const deps = c.depenses || [];
+        const manquantes = deps.filter((l) => !rv[l.name] || !["vu", "conteste"].includes(rv[l.name].verdict));
+        if (manquantes.length) {
+          frappe.msgprint(__("Passez en revue chaque dépense de la caisse avant de recevoir l'argent : {0} restante(s).", [manquantes.length]));
+          return null;
+        }
+        if (deps.some((l) => rv[l.name].verdict === "conteste" && (rv[l.name].commentaire || "").replace(/\s+/g, " ").trim().length < 10)) {
+          frappe.msgprint(__("Expliquez chaque dépense contestée (10 caractères minimum)."));
+          return null;
+        }
+        return JSON.stringify(rv);
+      };
       // Une CARTE par caisse : ce que l'employé déclare en gros, puis un seul geste quand c'est
       // conforme (« ✅ Reçu conforme ») ; « ✏️ Autre montant » ouvre la saisie du reçu.
       const carte = (c) => {
@@ -3559,9 +3665,10 @@ function rcj_collecte(rapport) {
             </div>`;
         }
         return `<div class="rcj-cc-carte${contestee || justifs_contestees ? " rcj-cc-contestee" : ""}" data-name="${esc(c.name)}">
-            ${entete}${declare}${rcj_html_controles_justifies(c.controles)}${rcj_html_echanges(c.echanges)}${actions}</div>`;
+            ${entete}${declare}${rcj_html_revue_depenses(c, revues[c.name])}${rcj_html_controles_justifies(c.controles)}${rcj_html_echanges(c.echanges)}${actions}</div>`;
       };
       const rendre = () => {
+        init_revues();
         const cartes = (m.clotures || []).map(carte).join("");
         // Depuis la date de départ, toute caisse qui a eu la moindre action (dette comprise) sans
         // comptage ; les jours passés en rouge, aujourd'hui en attente.
@@ -3576,7 +3683,8 @@ function rcj_collecte(rapport) {
           ${manquantes ? `<div class="rcj-cc-titre">${__("Pas encore comptées depuis la date de départ")}${
             m.date_depart ? " " + __("du {0}", [frappe.datetime.str_to_user(m.date_depart)]) : ""}${
             Object.keys(m.departs || {}).length ? " — " + Object.keys(m.departs).map((k) => `${esc(k)} : ${esc(frappe.datetime.str_to_user(m.departs[k]))}`).join(", ") : ""}</div>${manquantes}` : ""}
-          <div style="margin-top:10px"><a href="#" class="rcj-cc-etat">📊 ${__("État de toutes les caisses, jour par jour")}</a></div>`);
+          <div style="margin-top:10px"><a href="#" class="rcj-cc-etat">📊 ${__("État de toutes les caisses, jour par jour")}</a>
+            · <a href="/app/argent-liquide">💵 ${__("Où est l'argent liquide")}</a></div>`);
         const $w = d.fields_dict.corps.$wrapper;
         // Compter à la place d'un employé absent : la page bascule sur sa caisse et ouvre le
         // comptage ; le responsable validera ensuite directement depuis cette collecte.
@@ -3585,6 +3693,46 @@ function rcj_collecte(rapport) {
           rcj_aller_caisse(rapport, $(this).attr("data-caisse"), $(this).attr("data-date") || date, () => rcj_cloture(rapport));
         });
         $w.find(".rcj-cc-etat").on("click", (e) => { e.preventDefault(); d.hide(); rcj_etat_caisses(rapport); });
+        // Revue des dépenses : « Vu », « Contester » (+ commentaire), « Tout marquer vu ».
+        const maj_compte = ($carte, name) => {
+          const c = (m.clotures || []).find((x) => x.name === name) || {};
+          const rv = revues[name] || {};
+          $carte.find(".rcj-rv-compte").text(`${(c.depenses || []).filter((l) => rv[l.name] && rv[l.name].verdict).length}/${(c.depenses || []).length}`);
+        };
+        $w.find(".rcj-rv-vu, .rcj-rv-ko-btn").on("click", function () {
+          const $l = $(this).closest(".rcj-rv-ligne");
+          const $carte = $(this).closest(".rcj-cc-carte");
+          const name = $carte.attr("data-name");
+          const rv = (revues[name] = revues[name] || {});
+          if ($(this).hasClass("rcj-rv-vu")) {
+            rv[$l.attr("data-dep")] = { verdict: "vu", commentaire: "" };
+            $l.removeClass("rcj-rv-ko").addClass("rcj-rv-ok");
+            $l.find(".rcj-rv-comm").hide();
+          } else {
+            rv[$l.attr("data-dep")] = { verdict: "conteste", commentaire: $l.find(".rcj-rv-comm").val() || "" };
+            $l.removeClass("rcj-rv-ok").addClass("rcj-rv-ko");
+            $l.find(".rcj-rv-comm").show().focus();
+          }
+          maj_compte($carte, name);
+        });
+        $w.find(".rcj-rv-comm").on("input", function () {
+          const $l = $(this).closest(".rcj-rv-ligne");
+          const rv = revues[$(this).closest(".rcj-cc-carte").attr("data-name")] || {};
+          if (rv[$l.attr("data-dep")]) rv[$l.attr("data-dep")].commentaire = $(this).val() || "";
+        });
+        $w.find(".rcj-rv-tout").on("click", function (e) {
+          e.preventDefault();
+          const $carte = $(this).closest(".rcj-cc-carte");
+          const name = $carte.attr("data-name");
+          const rv = (revues[name] = revues[name] || {});
+          $carte.find(".rcj-rv-ligne").each(function () {
+            const dep = $(this).attr("data-dep");
+            if (rv[dep] && rv[dep].verdict) return;      // une contestation déjà faite reste
+            rv[dep] = { verdict: "vu", commentaire: "" };
+            $(this).addClass("rcj-rv-ok");
+          });
+          maj_compte($carte, name);
+        });
         $w.find(".rcj-cc-autre").on("click", function () {
           const $c = $(this).closest(".rcj-cc-carte");
           $c.find(".rcj-cc-saisie").slideDown(150);
@@ -3609,8 +3757,10 @@ function rcj_collecte(rapport) {
         $w.find(".rcj-cc-ok").on("click", function () {
           // Conforme : on confirme exactement ce que l'employé déclare — un seul geste.
           const c = (m.clotures || []).find((x) => x.name === $(this).attr("data-name"));
+          const revue = revue_prete(c);
+          if (revue === null) return;
           envoyer(c.name, { especes_recues: c.especes_remises, nb_cheques_recus: c.nb_cheques_remis,
-                            nb_traites_recus: c.nb_traites_remis, forcer: 0 });
+                            nb_traites_recus: c.nb_traites_remis, forcer: 0, revue });
         });
         $w.find(".rcj-cc-contester").on("click", function () {
           const name = $(this).attr("data-name");
@@ -3631,7 +3781,9 @@ function rcj_collecte(rapport) {
         $w.find(".rcj-cc-ecart, .rcj-cc-forcer").on("click", function () {
           const $c = $(this).closest(".rcj-cc-carte");
           const forcer = $(this).hasClass("rcj-cc-forcer") ? 1 : 0;
-          const args = { forcer,
+          const revue = revue_prete((m.clotures || []).find((x) => x.name === $(this).attr("data-name")) || {});
+          if (revue === null) return;
+          const args = { forcer, revue,
             especes_recues: $c.find(".rcj-col-especes").val() || 0,
             nb_cheques_recus: $c.find(".rcj-col-cheques").val() || 0,
             nb_traites_recus: $c.find(".rcj-col-traites").val() || 0,

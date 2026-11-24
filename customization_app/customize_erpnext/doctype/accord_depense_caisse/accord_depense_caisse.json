@@ -1,0 +1,160 @@
+{
+ "actions": [],
+ "autoname": "ACCORD-.YYYY.-.#####",
+ "naming_rule": "Expression (old style)",
+ "creation": "2026-11-24 21:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "statut",
+  "demandeur",
+  "demandeur_nom",
+  "caisse",
+  "demande_le",
+  "colonne_1",
+  "montant",
+  "fournisseur",
+  "objet",
+  "section_decision",
+  "decide_par",
+  "decide_le",
+  "commentaire",
+  "colonne_2",
+  "journal_entry",
+  "utilise_le"
+ ],
+ "fields": [
+  {
+   "fieldname": "statut",
+   "fieldtype": "Select",
+   "label": "Statut",
+   "options": "En attente\nAccordé\nRefusé\nUtilisé\nAnnulé",
+   "default": "En attente",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "demandeur",
+   "fieldtype": "Link",
+   "label": "Demandé par",
+   "options": "User",
+   "read_only": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "demandeur_nom",
+   "fieldtype": "Data",
+   "label": "Nom",
+   "read_only": 1
+  },
+  {
+   "fieldname": "caisse",
+   "fieldtype": "Data",
+   "label": "Caisse qui paiera",
+   "read_only": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "demande_le",
+   "fieldtype": "Datetime",
+   "label": "Demandé le",
+   "read_only": 1
+  },
+  {
+   "fieldname": "colonne_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "montant",
+   "fieldtype": "Currency",
+   "label": "Montant en espèces (DT)",
+   "read_only": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "fournisseur",
+   "fieldtype": "Data",
+   "label": "Fournisseur",
+   "read_only": 1
+  },
+  {
+   "fieldname": "objet",
+   "fieldtype": "Small Text",
+   "label": "Objet",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_decision",
+   "fieldtype": "Section Break",
+   "label": "Décision"
+  },
+  {
+   "fieldname": "decide_par",
+   "fieldtype": "Link",
+   "label": "Décidé par",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "decide_le",
+   "fieldtype": "Datetime",
+   "label": "Décidé le",
+   "read_only": 1
+  },
+  {
+   "fieldname": "commentaire",
+   "fieldtype": "Small Text",
+   "label": "Commentaire du responsable",
+   "read_only": 1
+  },
+  {
+   "fieldname": "colonne_2",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "journal_entry",
+   "fieldtype": "Data",
+   "label": "Dépense saisie (pièce)",
+   "read_only": 1
+  },
+  {
+   "fieldname": "utilise_le",
+   "fieldtype": "Datetime",
+   "label": "Utilisé le",
+   "read_only": 1
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-11-24 21:30:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "Accord Depense Caisse",
+ "owner": "Administrator",
+ "description": "Accord préalable d'un responsable de collecte pour une dépense en espèces au-delà du seuil de Config Caisse.",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1,
+ "title_field": "objet",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "role": "Accounts Manager"
+  }
+ ]
+}

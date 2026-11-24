@@ -696,7 +696,8 @@ def etat(caisse, date):
         "en_attente": en_attente,
         "mode_validation": CC.mode_validation(caisse),
         "photo_obligatoire": CC.config()["photo_obligatoire"],
-        # Comptée à la place du titulaire (24/11/2026) : motif écrit + photo des espèces obligatoires.
+        # Comptée à la place du titulaire (24/11/2026) : motif écrit obligatoire (la photo ne l'est plus, sa
+        # demande du 24/11/2026 au soir) ; le titulaire est prévenu.
         "pour_autrui": compte_pour_autrui(caisse),
         "commentaire_min": COMMENTAIRE_MIN,
         "date_depart": CC.date_depart_pour(caisse, CC.config()),
@@ -786,9 +787,6 @@ def valider(caisse, date, especes_comptees=None, note=None, justifications=None,
         if len(" ".join((note or "").split())) < COMMENTAIRE_MIN:
             frappe.throw(_("Vous comptez la caisse de {0} à sa place : écrivez pourquoi dans la note (absent, parti…, "
                            "{1} caractères minimum).").format(autrui, COMMENTAIRE_MIN))
-        if not photo and not existante:
-            frappe.throw(_("Vous comptez la caisse de {0} à sa place : la photo des espèces comptées est obligatoire.")
-                         .format(autrui))
     else:
         remises = 0.0
 
@@ -1463,11 +1461,18 @@ def _html_instantane(doc, data, rap=None):
 
     # ── Dépenses de la caisse ────────────────────────────────────────────────────────────────────────────────────
     if depenses.get("lignes"):
+        from customization_app.caisse_revue import CONTESTE, VU, lire_revue
+        revue = lire_revue(doc.get("revue_depenses"))      # revue du collecteur (24/11/2026)
         unites = []
         for l in depenses["lignes"]:
             qui = esc(l.get("saisi_par") or "")
             if l.get("payee_par_collegue") and l.get("caisse"):
                 qui += "<div class='flag'>payée de la caisse de %s</div>" % esc(l["caisse"])
+            r = revue.get(l.get("name")) or {}
+            if r.get("verdict") == VU:
+                qui += "<div class='gris petit'>✔ vue par %s à la collecte</div>" % esc(nom(r.get("par")))
+            elif r.get("verdict") == CONTESTE:
+                qui += "<div class='warn'>⚠ contestée par %s : %s</div>" % (esc(nom(r.get("par"))), esc(r.get("commentaire") or ""))
             unites.append(
                 "<tr><td>%s</td><td>%s<div class='gris petit'>%s</div></td><td>%s</td><td>%s</td>"
                 "<td class='n'>%s</td></tr>" % (

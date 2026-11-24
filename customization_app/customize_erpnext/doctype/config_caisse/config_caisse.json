@@ -9,6 +9,10 @@
   "date_depart",
   "departs",
   "photo_remise_obligatoire",
+  "section_controle_depenses",
+  "seuil_accord_depense",
+  "plafond_collecteur",
+  "jours_plafond_collecteur",
   "section_delegues",
   "delegues"
  ],
@@ -48,6 +52,34 @@
    "default": "0"
   },
   {
+   "fieldname": "section_controle_depenses",
+   "fieldtype": "Section Break",
+   "label": "Contrôle des dépenses et de l'argent liquide"
+  },
+  {
+   "fieldname": "seuil_accord_depense",
+   "fieldtype": "Currency",
+   "label": "Accord préalable au-delà de (DT, espèces)",
+   "default": "200",
+   "non_negative": 1,
+   "description": "Une dépense payée en espèces au-delà de ce montant attend l'accord d'un responsable de collecte avant d'être saisie (les responsables en sont dispensés). Sert aussi au signal « montant élevé » de la revue des dépenses à la collecte. 0 = pas d'accord préalable."
+  },
+  {
+   "fieldname": "plafond_collecteur",
+   "fieldtype": "Currency",
+   "label": "Alerte : argent collecté non versé au-delà de (DT)",
+   "default": "5000",
+   "non_negative": 1,
+   "description": "Page « Où est l'argent liquide » : alerte quand l'argent collecté et pas encore versé (coffre ou banque) dépasse ce montant…"
+  },
+  {
+   "fieldname": "jours_plafond_collecteur",
+   "fieldtype": "Int",
+   "label": "… ou est gardé depuis plus de (jours)",
+   "default": "3",
+   "non_negative": 1
+  },
+  {
    "fieldname": "section_delegues",
    "fieldtype": "Section Break",
    "label": "Délégués"
@@ -62,7 +94,7 @@
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-10-04 18:00:00.000000",
+ "modified": "2026-11-24 21:00:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Config Caisse",
