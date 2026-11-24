@@ -417,6 +417,76 @@ def cle_nom(nom):
     return " ".join(mots)
 
 
+# ── Idempotence : une facture fournisseur ne se saisit (et ne se paie) qu'une fois (24/11/2026) ─────────────────────
+# Le 16/11/2026 à 09:17, Jamel (FAS-1619) et Sadok (FAS-1620, devenue ACC-PINV-2026-00129) ont saisi à 24 secondes
+# d'écart la même facture CITERNES PLAST n° 2174 (87,537 DT), payée en espèces DEUX fois — une sortie dans chaque
+# caisse. Rien ne comparait le fournisseur et le numéro. Maintenant : un contrôle avant toute écriture, et une clé
+# unique en base sur la fiche (`cle_facture`) pour deux saisies à la même seconde.
+
+def cle_numero_facture(numero) -> str:
+    """Le numéro d'une facture réduit à ce qui l'identifie. PURE. « N° 2174 », « 2174 » et « 02174 » sont la même
+    facture ; « FA-2174 » et « FA 2174 » aussi."""
+    txt = _sans_accents(str(numero or "")).upper().strip()
+    txt = re.sub(r"^N\s*[°º]\s*", "", txt)
+    txt = re.sub(r"[^A-Z0-9]", "", txt)
+    return txt.lstrip("0") or txt
+
+
+def cle_facture(supplier, numero) -> str | None:
+    """La clé unique d'une fiche « Facture Achat a Saisir » : fournisseur + numéro normalisé. PURE."""
+    n = cle_numero_facture(numero)
+    return ("%s|%s" % (supplier, n))[:140] if supplier and n else None
+
+
+def facture_deja_saisie(numero, supplier=None, fournisseur=None, sauf_fiche=None, sauf_ecriture=None) -> dict | None:
+    """La saisie existante de CETTE facture (même fournisseur, même numéro), où qu'elle soit : fiche de la file des
+    factures d'achat, facture d'achat ERPNext, ou dépense avec facture passée en caisse. None si elle est nouvelle."""
+    n = cle_numero_facture(numero)
+    if not n or not (supplier or fournisseur):
+        return None
+    cible_nom = cle_nom(fournisseur)
+    filtres = {"numero_facture": ["is", "set"], "name": ["!=", sauf_fiche or ""]}
+    if supplier:
+        filtres["supplier"] = supplier
+    for f in frappe.get_all("Facture Achat a Saisir", filters=filtres, order_by="creation",
+                            fields=["name", "numero_facture", "fournisseur", "saisi_par", "owner", "creation",
+                                    "mode_paiement", "journal_entry", "purchase_invoice"]):
+        if cle_numero_facture(f.numero_facture) == n and (supplier or cle_nom(f.fournisseur) == cible_nom):
+            return {"doctype": "Facture Achat a Saisir", "name": f.name, "par": f.saisi_par or f.owner,
+                    "le": f.creation, "mode": f.mode_paiement, "piece": f.purchase_invoice or f.journal_entry}
+    if supplier:
+        for f in frappe.get_all("Purchase Invoice", filters={"supplier": supplier, "docstatus": ["<", 2],
+                                                             "bill_no": ["is", "set"]},
+                                fields=["name", "bill_no", "owner", "creation"], order_by="creation"):
+            if cle_numero_facture(f.bill_no) == n:
+                return {"doctype": "Purchase Invoice", "name": f.name, "par": f.owner, "le": f.creation, "mode": None,
+                        "piece": f.name}
+    # Dépense avec facture : seule l'écriture de caisse en garde la trace, dans sa remarque.
+    if cible_nom:
+        for je in frappe.db.sql("""select name, owner, creation, user_remark from `tabJournal Entry`
+                                   where docstatus = 1 and cheque_no like 'Dépense caisse —%%'
+                                     and user_remark like %s and name != %s
+                                     and posting_date >= date_sub(curdate(), interval 400 day)""",
+                                ("%Facture n°%", sauf_ecriture or ""), as_dict=True):
+            fo = re.search(r"Fournisseur : (.+)", je.user_remark or "")
+            nu = re.search(r"Facture n° (.+)", je.user_remark or "")
+            if fo and nu and cle_nom(fo.group(1)) == cible_nom and cle_numero_facture(nu.group(1)) == n:
+                return {"doctype": "Journal Entry", "name": je.name, "par": je.owner, "le": je.creation,
+                        "mode": None, "piece": je.name}
+    return None
+
+
+def message_doublon(deja, fournisseur, numero) -> str:
+    qui = frappe.utils.get_fullname(deja["par"]) if deja.get("par") else "?"
+    quand = frappe.utils.format_datetime(deja["le"], "dd/MM/yyyy à HH:mm") if deja.get("le") else ""
+    paye = (_(" — payée en {0} sur la caisse de {1}").format(deja["mode"].lower(), qui)
+            if deja.get("mode") and deja["mode"] != "Pas payé" else "")
+    return _("Cette facture est déjà saisie : {0} n° {1}, par {2} le {3} ({4}{5}{6}). Elle ne se saisit et ne se paie "
+             "qu'une fois. Si c'est une autre facture, vérifiez son numéro.").format(
+        frappe.bold(fournisseur or ""), frappe.bold(numero), qui, quand, deja["name"],
+        ", " + deja["piece"] if deja.get("piece") and deja["piece"] != deja["name"] else "", paye)
+
+
 def _rapprocher_fournisseur(nom, matricule=None):
     """Le fournisseur de cette facture, parmi ceux qui existent. -> dict.
 
@@ -860,6 +930,15 @@ def creer(type_depense, montant, mode, compte=None, description=None, fournisseu
     if tva < 0 or tva >= montant:
         frappe.throw(_("La TVA ({0}) doit rester inférieure au montant TTC ({1}).")
                      .format(tva, montant))
+    # IDEMPOTENCE (24/11/2026) : avant toute écriture, la même facture du même fournisseur n'est pas déjà saisie.
+    if type_depense in TYPES_PAIEMENT_NET and (numero_facture or "").strip():
+        _reprise = reprise if isinstance(reprise, dict) else {}
+        connu = (supplier if supplier and frappe.db.exists("Supplier", supplier)
+                 else _rapprocher_fournisseur(fournisseur, matricule).get("certain"))
+        deja = facture_deja_saisie(numero_facture, supplier=connu, fournisseur=fournisseur,
+                                   sauf_fiche=_reprise.get("fiche"), sauf_ecriture=_reprise.get("origine"))
+        if deja:
+            frappe.throw(message_doublon(deja, fournisseur, numero_facture.strip()), title=_("Facture déjà saisie"))
 
     # RETENUE À LA SOURCE ACHAT (décision utilisateur 04/09/2026). Elle n'est pas un moyen de
     # paiement : c'est la part que l'on NE verse PAS au fournisseur et qui reste due au Trésor.
@@ -981,6 +1060,9 @@ def creer(type_depense, montant, mode, compte=None, description=None, fournisseu
                              ("Pas payé" if not paid else "Mixte"),
             "journal_entry": je.name if je else None,
             "description": description,
+            # Clé UNIQUE en base : deux saisies de la même facture à la même seconde — la seconde échoue, et son
+            # écriture de caisse avec elle (même transaction).
+            "cle_facture": cle_facture(supplier, numero_facture),
         }
         if reprise.get("fiche"):
             # Correction : la fiche garde son nom, ses commentaires et son scan ; seule
@@ -993,7 +1075,12 @@ def creer(type_depense, montant, mode, compte=None, description=None, fournisseu
         else:
             fiche = frappe.get_doc(dict(valeurs_fiche, doctype="Facture Achat a Saisir",
                                         saisi_par=frappe.session.user))
-            fiche.insert(ignore_permissions=True)
+            try:
+                fiche.insert(ignore_permissions=True)
+            except (frappe.UniqueValidationError, frappe.DuplicateEntryError):
+                deja = facture_deja_saisie(numero_facture, supplier=supplier, fournisseur=fournisseur)
+                frappe.throw(message_doublon(deja, fournisseur, numero_facture) if deja else
+                             _("Cette facture vient d'être saisie par quelqu'un d'autre."), title=_("Facture déjà saisie"))
             _attacher_scan(photo_facture, "facture-%s" % fiche.name,
                            "Facture Achat a Saisir", fiche.name, coins=coins_facture)
         if je:
