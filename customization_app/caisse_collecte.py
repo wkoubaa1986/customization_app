@@ -1189,7 +1189,11 @@ def resume(user, date=None):
     date = getdate(date or nowdate())
     out = {"role": role, "photo_obligatoire": config()["photo_obligatoire"],
            "responsable": config()["responsable"],
-           "a_collecter": 0, "mes_ecarts": [], "passations_a_remettre": 0, "passations_a_recevoir": 0}
+           "a_collecter": 0, "mes_ecarts": [], "passations_a_remettre": 0, "passations_a_recevoir": 0,
+           # Bouton « Où est l'argent liquide » (24/11/2026) : exactement ceux qui peuvent ouvrir la page —
+           # voir toutes les caisses (argent_liquide.situation) ET un rôle de la page (Accounts / System Manager).
+           "argent_liquide": peut_voir_toutes_les_caisses(user)
+           and bool({"Accounts Manager", "System Manager"} & set(frappe.get_roles(user)))}
     if role:
         filtres = {"docstatus": 0, "statut": ["in", STATUTS_EN_ATTENTE], "valide_par": ["!=", user],
                    "date_cloture": ["<=", date]}

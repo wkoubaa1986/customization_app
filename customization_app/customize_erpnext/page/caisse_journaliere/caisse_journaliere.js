@@ -161,7 +161,7 @@ class RapportCaisseJournaliere {
     $("#rcj-btn-passation").on("click", () => rcj_passation(this));
     // État de toutes les caisses, jour par jour depuis la date de départ (06/10/2026).
     $("#rcj-btn-etat").on("click", () => rcj_etat_caisses(this));
-    // « Où est l'argent liquide » (24/11/2026) : la page de la direction, montrée aux responsables titulaires.
+    // « Où est l'argent liquide » (24/11/2026) : montré à ceux qui peuvent ouvrir la page (contexte.argent_liquide).
     $("#rcj-btn-argent").on("click", () => frappe.set_route("argent-liquide"));
     $("#rcj-collecte-banner").on("click", "[data-ecart]", (e) => {
       const $b = $(e.currentTarget);
@@ -404,9 +404,9 @@ class RapportCaisseJournaliere {
         this._collecte = c;
         const esc = frappe.utils.escape_html;
         const bouts = [];
+        if (c.argent_liquide) $("#rcj-btn-argent").show();
         if (c.role) {
           $("#rcj-btn-collecte").show();
-          if (c.role === "titulaire") $("#rcj-btn-argent").show();
           if (c.passations_a_remettre || c.passations_a_recevoir || c.role !== "titulaire") $("#rcj-btn-passation").show();
           if (c.a_collecter) bouts.push(`📥 <b>${c.a_collecter}</b> ${__("caisse(s) à collecter")} — <a href="#" data-ouvrir="collecte">${__("ouvrir la collecte")}</a>`);
           if (c.passations_a_recevoir) bouts.push(`🤝 <b>${c.passations_a_recevoir}</b> ${__("passation(s) à recevoir")} — <a href="#" data-ouvrir="passation">${__("ouvrir")}</a>`);
