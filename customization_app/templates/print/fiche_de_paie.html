@@ -1,6 +1,8 @@
 {#- Fiche de paie (format « Aqua World Fiche de paie », par défaut du Salary Slip : c'est aussi le PDF de l'application
-    RH). En-tête, marges et pied communs aux devis (AquaWorld Settings › Identité & impression) ; tableau repris des
-    bulletins du comptable (codes SBASE / 001 / 002 / SBRUT / CNSS / SIMPC / IRPP / CSS / SNET / NETAP). -#}
+    RH). En-tête PROPRE à la fiche (sa demande du 24/11/2026 : le logo et « BULLETIN DE PAIE » en grand, sans le RC,
+    les RIB et les e-mails de l'en-tête des devis) ; logo, marges, pied et cachet viennent d'AquaWorld Settings ›
+    Identité & impression. Tableau repris des bulletins du comptable (SBASE / 001 / 002 / SBRUT / CNSS / SIMPC / IRPP /
+    CSS / SNET / NETAP). -#}
 {%- set ident = aqua_identite() -%}
 {%- set emp = frappe.db.get_value("Employee", doc.employee, ["employee_name", "custom_paie_matricule", "custom_paie_cnss",
       "custom_paie_qualification", "custom_paie_enfants", "marital_status", "designation", "bank_name", "bank_ac_no", "iban"], as_dict=True) or {} -%}
@@ -25,8 +27,14 @@
 {%- set imposable = doc.custom_salaire_imposable or (doc.gross_pay - cnss) -%}
 <style>
   .fp { font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #111; }
-  .fp h2 { font-size: 16px; text-align: center; margin: 10px 0 2px; letter-spacing: .5px; }
-  .fp .periode { text-align: center; font-size: 12px; margin-bottom: 8px; }
+  .fp .entete td { vertical-align: middle; border: none; }
+  .fp .entete .titre { text-align: right; }
+  .fp .entete .titre div:first-child { font-size: 26px; font-weight: bold; letter-spacing: 1.5px; color: #0b3d7a; line-height: 1.1; }
+  .fp .entete .titre div + div { font-size: 13px; margin-top: 6px; }
+  .fp .filet { border-top: 2px solid #0b3d7a; margin: 8px 0 10px; }
+  .fp .signatures td { width: 50%; vertical-align: top; text-align: center; font-size: 10px; padding-top: 3px; }
+  .fp .signatures .trait { border-top: 1px solid #777; padding-top: 3px; }
+  .fp .signatures img { height: 95px; width: auto; margin-top: 4px; }
   .fp table { width: 100%; border-collapse: collapse; }
   .fp .blocs td { width: 50%; vertical-align: top; border: 1px solid #777; border-radius: 6px; padding: 6px 8px; }
   .fp .blocs .t { font-weight: bold; text-transform: uppercase; font-size: 10px; color: #444; margin-bottom: 3px; }
@@ -47,9 +55,15 @@
 {{ aqua_marges_css("Aqua World Fiche de paie") }}
 {{ aqua_pied_page() }}
 <div class="fp">
-  {% include "templates/print/aqua_entete.html" %}
-  <h2>BULLETIN DE PAIE</h2>
-  <div class="periode">Mois : <b>{{ "%02d" % debut.month }} / {{ debut.year }}</b> ({{ mois[debut.month - 1] }} {{ debut.year }}) · Régime : mensuel</div>
+  <table class="entete"><tr>
+    {#- Taille donnée par le bloc, pas par max-height (l'aperçu Frappe force « td img { width: 100% } »). -#}
+    <td style="width:48%"><div style="width:92%"><img src="{{ ident.logo_url }}" style="width:100%; height:auto;"></div></td>
+    <td class="titre" style="width:52%">
+      <div>BULLETIN DE PAIE</div>
+      <div>Mois : <b>{{ "%02d" % debut.month }} / {{ debut.year }}</b> ({{ mois[debut.month - 1] }} {{ debut.year }}) · Régime : mensuel</div>
+    </td>
+  </tr></table>
+  <div class="filet"></div>
   <table class="blocs"><tr>
     <td>
       <div class="t">Employeur</div>
@@ -102,5 +116,11 @@
       <div class="note" style="text-align:right">Mode de paiement : <b>virement bancaire</b>{% if emp.bank_name or emp.iban or emp.bank_ac_no %} — {{ emp.bank_name or "" }} {{ emp.iban or emp.bank_ac_no or "" }}{% endif %}</div>
     </td>
   </tr></table>
-  <div style="margin-top:18px; width:45%; border-top:1px solid #777; padding-top:3px; font-size:10px; text-align:center">Émargement</div>
+  {#- Émargement du salarié à gauche ; cachet et signature de l'employeur à droite (sa demande du 24/11/2026), l'image
+      d'AquaWorld Settings › Identité & impression, la même que sur les devis et bons de commande. -#}
+  <table class="signatures" style="margin-top:18px"><tr>
+    <td><div class="trait">Émargement du salarié</div></td>
+    <td><div class="trait">Cachet et signature de l’employeur</div>
+      {% if ident.cachet %}<img src="{{ ident.cachet_url }}" alt="cachet">{% endif %}</td>
+  </tr></table>
 </div>
