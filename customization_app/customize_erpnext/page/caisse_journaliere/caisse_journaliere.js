@@ -110,7 +110,7 @@ class RapportCaisseJournaliere {
    *  peut les réafficher ensuite. */
   _ecran_technicien() {
     $("#rcj-suivi-depenses, #rcj-suivi-achats, #rcj-btn-impayes, #rcj-btn-dettes, #rcj-btn-aramex, "
-      + "#rcj-btn-etat, #rcj-btn-config").remove();
+      + "#rcj-btn-etat, #rcj-btn-argent, #rcj-btn-config").remove();
   }
 
   /** Sous-traitant (décision utilisateur 31/10/2026) : SA caisse, rien d'autre — ni suivi des dépenses
@@ -120,7 +120,7 @@ class RapportCaisseJournaliere {
    *  quand on le voit, chaque semaine. */
   _ecran_sous_traitant() {
     $("#rcj-suivi-depenses, #rcj-suivi-achats, #rcj-btn-impayes, #rcj-btn-dettes, #rcj-btn-aramex, #rcj-btn-depense, "
-      + "#rcj-btn-etat, #rcj-btn-config").remove();
+      + "#rcj-btn-etat, #rcj-btn-argent, #rcj-btn-config").remove();
     $(".rcj-section-title").filter((_, el) => $(el).text().includes("Détail par employé"))
       .text("🧾 " + __("Mes ventes et encaissements"));
     this._periode_sous_traitant = frappe.call({ method: "customization_app.caisse_cloture.periode_sous_traitant" })
@@ -161,6 +161,8 @@ class RapportCaisseJournaliere {
     $("#rcj-btn-passation").on("click", () => rcj_passation(this));
     // État de toutes les caisses, jour par jour depuis la date de départ (06/10/2026).
     $("#rcj-btn-etat").on("click", () => rcj_etat_caisses(this));
+    // « Où est l'argent liquide » (24/11/2026) : la page de la direction, montrée aux responsables titulaires.
+    $("#rcj-btn-argent").on("click", () => frappe.set_route("argent-liquide"));
     $("#rcj-collecte-banner").on("click", "[data-ecart]", (e) => {
       const $b = $(e.currentTarget);
       rcj_repondre_ecart($b.attr("data-ecart"), $b.attr("data-accepter") === "1", () => this._fetch());
@@ -392,7 +394,7 @@ class RapportCaisseJournaliere {
     // chacun, ses remises contestées (même quand la page affiche une autre caisse). Depuis le
     // 06/10/2026 : les caisses qui ont eu une action sans être comptées, depuis la date de départ.
     const $b = $("#rcj-collecte-banner").hide().empty();
-    $("#rcj-btn-collecte, #rcj-btn-passation").hide();
+    $("#rcj-btn-collecte, #rcj-btn-passation, #rcj-btn-argent").hide();
     const date = $("#rcj-d2").val() || frappe.datetime.get_today();
     frappe.call({
       method: "customization_app.caisse_collecte.contexte",
@@ -404,6 +406,7 @@ class RapportCaisseJournaliere {
         const bouts = [];
         if (c.role) {
           $("#rcj-btn-collecte").show();
+          if (c.role === "titulaire") $("#rcj-btn-argent").show();
           if (c.passations_a_remettre || c.passations_a_recevoir || c.role !== "titulaire") $("#rcj-btn-passation").show();
           if (c.a_collecter) bouts.push(`📥 <b>${c.a_collecter}</b> ${__("caisse(s) à collecter")} — <a href="#" data-ouvrir="collecte">${__("ouvrir la collecte")}</a>`);
           if (c.passations_a_recevoir) bouts.push(`🤝 <b>${c.passations_a_recevoir}</b> ${__("passation(s) à recevoir")} — <a href="#" data-ouvrir="passation">${__("ouvrir")}</a>`);
