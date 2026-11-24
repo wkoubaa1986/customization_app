@@ -495,7 +495,8 @@ def activite_par_caisse(data):
     for p in ((data or {}).get("anciens") or {}).get("paiements") or []:
         acc(p.get("saisi_par") or "—")["anciens"] += 1
     for l in ((data or {}).get("depenses") or {}).get("lignes") or []:
-        a = acc(l.get("saisi_par") or "—")
+        # La caisse du payeur quand un collègue a payé (« Payée de la caisse de », 24/11/2026).
+        a = acc(l.get("caisse") or l.get("saisi_par") or "—")
         a["depenses"] = round(a["depenses"] + float(l.get("montant") or 0), 3)
         a["nb_depenses"] += 1
     out.pop("—", None)

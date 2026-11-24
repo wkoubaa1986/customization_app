@@ -33,7 +33,8 @@
   "part_depense_ht",
   "part_depense_tva",
   "part_depense_ttc",
-  "cle_facture"
+  "cle_facture",
+  "caisse_payeur"
  ],
  "fields": [
   {
@@ -226,11 +227,18 @@
    "hidden": 1,
    "no_copy": 1,
    "description": "Une facture d’un fournisseur ne se saisit qu’une fois (contrôle du 24/11/2026)."
+  },
+  {
+   "fieldname": "caisse_payeur",
+   "fieldtype": "Data",
+   "label": "Payée de la caisse de",
+   "read_only": 1,
+   "description": "Vide : la caisse de celui qui a saisi. Sinon la caisse du collègue qui a payé (24/11/2026)."
   }
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-11-24 17:00:00.000000",
+ "modified": "2026-11-24 17:30:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Facture Achat a Saisir",

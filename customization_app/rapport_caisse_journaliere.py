@@ -481,6 +481,11 @@ def _mode_depense(compte_credit, remarque, credit):
     return "Carte de crédit"
 
 
+def _payeur_de_remarque(remarque):
+    from customization_app.caisse_depenses import payeur_de_remarque
+    return payeur_de_remarque(remarque)
+
+
 def _depenses_caisse(d1, d2, noms_par_user):
     """Les dépenses saisies en caisse (écritures « Dépense caisse — … ») sur la
     période, attribuées à leur AUTEUR. Le mode se lit sur l'écriture elle-même
@@ -515,11 +520,16 @@ def _depenses_caisse(d1, d2, noms_par_user):
         description = (r.cheque_no or "").replace("Dépense caisse — ", "")
         if nb_credits.get(r.name, 1) > 1:
             description += " (part %s)" % mode.lower()
+        saisi_par = noms_par_user.get(r.owner, r.owner)
+        # « Payée de la caisse de : … » (24/11/2026) : la dépense compte dans la caisse du PAYEUR.
+        payeur = _payeur_de_remarque(remark)
         lignes.append({
             "name": r.name,
             "doctype": "Journal Entry",
             "date": str(r.posting_date),
-            "saisi_par": noms_par_user.get(r.owner, r.owner),
+            "saisi_par": saisi_par,
+            "caisse": payeur or saisi_par,
+            "payee_par_collegue": bool(payeur and payeur != saisi_par),
             "type": (m.group(1).strip() if m else ""),
             "description": description,
             "mode": mode,
@@ -538,7 +548,7 @@ def _depenses_caisse(d1, d2, noms_par_user):
     paiements = frappe.db.sql(
         """SELECT pe.name, pe.posting_date, pe.owner, pe.paid_amount, pe.paid_from,
                   pe.mode_of_payment, pe.remarks, pe.reference_no, pe.party,
-                  f.description AS fiche_description
+                  f.description AS fiche_description, MAX(f.caisse_payeur) AS caisse_payeur
            FROM `tabPayment Entry` pe
            INNER JOIN `tabFacture Achat a Saisir` f
                    ON f.payment_entry = pe.name
@@ -556,11 +566,14 @@ def _depenses_caisse(d1, d2, noms_par_user):
             mode = r.mode_of_payment
         else:
             mode = r.mode_of_payment or "Virement"
+        saisi_par = noms_par_user.get(r.owner, r.owner)
         lignes.append({
             "name": r.name,
             "doctype": "Payment Entry",
             "date": str(r.posting_date),
-            "saisi_par": noms_par_user.get(r.owner, r.owner),
+            "saisi_par": saisi_par,
+            "caisse": r.caisse_payeur or saisi_par,
+            "payee_par_collegue": bool(r.caisse_payeur and r.caisse_payeur != saisi_par),
             "type": "Facture d'achat",
             "description": (r.fiche_description or r.remarks or r.reference_no
                             or r.party or ""),
@@ -886,7 +899,8 @@ def get_data(d1, d2, employe=None):
         noms_par_user.setdefault(u.name, u.full_name)
     depenses = _depenses_caisse(start_date, end_date, noms_par_user)
     if employe:
-        depenses = [l for l in depenses if l["saisi_par"] == employe]
+        # La caisse d'une dépense : celle du PAYEUR quand un collègue a payé (24/11/2026), sinon celle de la saisie.
+        depenses = [l for l in depenses if (l.get("caisse") or l["saisi_par"]) == employe]
     depenses_par_mode = {}
     for l in depenses:
         depenses_par_mode[l["mode"]] = flt(depenses_par_mode.get(l["mode"], 0)) + l["montant"]

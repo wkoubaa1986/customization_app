@@ -2440,6 +2440,14 @@ function rcj_depense(rapport, initial) {
         options: "Espèces\nChèque\nCarte de crédit\nVirement\nTraite bancaire", default: "Espèces", reqd: 1,
         depends_on: "eval:!doc.fractionne",
       },
+      // L'un paie, l'autre saisit (24/11/2026) : la dépense compte dans la caisse de celui qui a PAYÉ, qui la
+      // confirme à son comptage. Par défaut : sa propre caisse.
+      {
+        fieldtype: "Select", fieldname: "caisse_payeur", label: __("Payée de la caisse de"),
+        depends_on: 'eval:doc.mode=="Espèces" || doc.fractionne',
+        description: __("Un collègue a payé de sa caisse ? Choisissez-le : la dépense sortira de SA caisse."),
+        onchange: () => { etat.payeur_touche = true; },
+      },
       { fieldtype: "Column Break" },
       // Le même champ porte le n° de chèque, le n° de traite ou la référence du virement
       // (facultative) : son libellé suit le mode (cf. maj_libelles_mode).
@@ -2545,6 +2553,8 @@ function rcj_depense(rapport, initial) {
           code_sans_photo: v.code_sans_photo || null,
           articles_stock: v.type_depense === "Dépense avec facture" && etat.choix_stock === "achat"
             ? JSON.stringify(rcj_articles_coches(etat)) : null,
+          // Correction : sans choix explicite, le serveur garde la caisse payeuse d'origine.
+          caisse_payeur: initial && !etat.payeur_touche ? null : (v.caisse_payeur || null),
         },
         freeze: true, freeze_message: initial ? __("Correction de la dépense…") : __("Enregistrement de la dépense…"),
         callback: (r) => {
@@ -2931,6 +2941,17 @@ function rcj_depense(rapport, initial) {
     },
   });
 
+  // Les caisses qu'on peut désigner comme payeuses (24/11/2026) : la sienne en premier, sélectionnée.
+  frappe.call({
+    method: API + ".caisses_payeuses",
+    callback: (r) => {
+      const c = r.message || {};
+      d.set_df_property("caisse_payeur", "options", (c.caisses || []).join("\n"));
+      Promise.resolve(d.set_value("caisse_payeur", (initial && initial.caisse) || c.moi || ""))
+        .then(() => { etat.payeur_touche = false; });
+    },
+  });
+
   d.show();
   rcj_masquer_code(d);
   basculer_facture();
@@ -3084,6 +3105,8 @@ RapportCaisseJournaliere.prototype._render_depenses = function () {
 // son PDF instantané. Chaque employé valide SA caisse ; la direction valide
 // n'importe laquelle et la globale « Tous les employés ».
 const RCJ_COMMENTAIRE_MIN = 10;
+// Motifs qui se suffisent (caisse_cloture.MOTIFS_SANS_COMMENTAIRE) : confirmer une dépense payée pour un collègue.
+const RCJ_MOTIFS_SANS_COMMENTAIRE = ["Je confirme l'avoir payée de ma caisse"];
 
 // Un point de contrôle à justifier : motif (liste propre au type de point) + commentaire.
 // `precedente` = « motif — commentaire » relu d'une réouverture (ou un ancien texte libre).
@@ -3196,7 +3219,7 @@ function rcj_cloture(rapport, opts) {
       // souvent) : on ne pré-remplit jamais un montant négatif — la remise négative était refusée sans
       // explication et le comptage semblait impossible (Hedi, 09/11/2026). On part de 0 et on explique.
       const negatif = (e.solde_theorique || 0) < -0.0005;
-      const defaut = negatif ? 0 : e.solde_theorique;
+      let remises_touche = !!reprise;
       const d = new frappe.ui.Dialog({
         title: reprise
           ? __("Rouvrir le comptage — {0} ({1}) — {2}", [caisse, periode(e), reprise.name])
@@ -3207,8 +3230,18 @@ function rcj_cloture(rapport, opts) {
           {
             fieldtype: "Currency", fieldname: "comptees",
             label: __("Espèces comptées (physique)"),
-            default: reprise ? reprise.especes_comptees : defaut,
+            // COMPTAGE À L'AVEUGLE (24/11/2026) : la case n'est plus pré-remplie avec le montant attendu — Jamel et
+            // Sadok « comptaient » au millime le théorique. Le montant attendu et l'écart s'affichent une fois le
+            // compte saisi, et la case se fige.
+            default: reprise ? reprise.especes_comptees : null,
             onchange: () => {
+              const saisi = d.get_value("comptees");
+              if (saisi !== null && saisi !== undefined && saisi !== "") {
+                d.fields_dict.etat.$wrapper.find(".rcj-etat-voile").hide();
+                d.fields_dict.etat.$wrapper.find(".rcj-etat-cache").show();
+                if (!reprise) d.set_df_property("comptees", "read_only", 1);
+                if (d.fields_dict.remises && !remises_touche) d.set_value("remises", Math.max(0, saisi || 0));
+              }
               const ecart = (d.get_value("comptees") || 0) - e.solde_theorique;
               d.fields_dict.etat.$wrapper.find(".rcj-clo-ecart")
                 .text(fmt(ecart))
@@ -3219,9 +3252,10 @@ function rcj_cloture(rapport, opts) {
             { fieldtype: "Section Break", fieldname: "sb_remise", label: __("Remise au responsable de collecte") },
             {
               fieldtype: "Currency", fieldname: "remises", label: __("Espèces remises au responsable"),
-              default: reprise ? reprise.especes_remises : defaut, reqd: 1,
+              default: reprise ? reprise.especes_remises : null, reqd: 1,
               description: __("Ce que vous donnez ce soir. Le reste est votre fond de caisse pour demain."),
               onchange: () => {
+                if (document.activeElement && $(document.activeElement).closest('[data-fieldname="remises"]').length) remises_touche = true;
                 const fond = (d.get_value("comptees") || 0) - (d.get_value("remises") || 0);
                 d.fields_dict.etat.$wrapper.find(".rcj-clo-fond").text(fmt(fond))
                   .css("color", fond < -0.0005 ? "#c0392b" : "#333");
@@ -3257,7 +3291,8 @@ function rcj_cloture(rapport, opts) {
             const motif = $(this).find("select.rcj-just-motif").val() || "";
             const commentaire = ($(this).find("input.rcj-just").val() || "").replace(/\s+/g, " ").trim();
             const erreur = !motif ? __("Choisissez un motif.")
-              : commentaire.length < RCJ_COMMENTAIRE_MIN ? __("Commentaire trop court ({0} caractères minimum).", [RCJ_COMMENTAIRE_MIN]) : "";
+              : commentaire.length < RCJ_COMMENTAIRE_MIN && !RCJ_MOTIFS_SANS_COMMENTAIRE.includes(motif)
+                ? __("Commentaire trop court ({0} caractères minimum).", [RCJ_COMMENTAIRE_MIN]) : "";
             $(this).find(".rcj-just-err").text(erreur).toggle(!!erreur);
             $(this).css("border-color", erreur ? "#c0392b" : "#e6d9a8");
             if (erreur && !premier) premier = this;
@@ -3282,6 +3317,14 @@ function rcj_cloture(rapport, opts) {
             }
             if (e.photo_obligatoire && !photo.data) {
               frappe.msgprint(__("La photo de la remise est obligatoire.")); return;
+            }
+          }
+          if (e.pour_autrui) {
+            if ((v.note || "").replace(/\s+/g, " ").trim().length < (e.commentaire_min || RCJ_COMMENTAIRE_MIN)) {
+              frappe.msgprint(__("Vous comptez la caisse de {0} à sa place : écrivez pourquoi dans la note.", [e.pour_autrui])); return;
+            }
+            if (!reprise && !photo.data) {
+              frappe.msgprint(__("Vous comptez la caisse de {0} à sa place : joignez la photo des espèces comptées.", [e.pour_autrui])); return;
             }
           }
           if (window.flotte_position_capturer) window.flotte_position_capturer("caisse", null, null);
@@ -3344,7 +3387,17 @@ function rcj_cloture(rapport, opts) {
           });
         });
       }
-      d.fields_dict.etat.$wrapper.html(`${negatif ? `
+      // Comptée à la place du titulaire (24/11/2026) : motif écrit et photo des espèces obligatoires, il est prévenu.
+      const autrui = e.pour_autrui ? `
+        <div class="alert alert-danger" style="font-size:12.5px;padding:8px 10px;margin-bottom:8px">
+          <b>${__("Vous comptez la caisse de {0} à sa place.", [frappe.utils.escape_html(e.pour_autrui)])}</b>
+          ${__("Écrivez pourquoi dans la note (absent, parti…) et joignez la photo des espèces comptées : {0} sera prévenu(e) et pourra contester tant que la caisse n'est pas collectée.", [frappe.utils.escape_html(e.pour_autrui)])}
+        </div>` : "";
+      const voile = reprise ? "" : `
+        <div class="rcj-etat-voile" style="border:1px dashed #9aa5b1;background:#f7f9fb;border-radius:6px;padding:10px 12px;margin-bottom:8px;font-size:13px">
+          🔒 <b>${__("Comptage à l'aveugle")}</b> — ${__("comptez les billets et les pièces, puis saisissez le montant ci-dessous. Le montant attendu et l'écart s'affichent ensuite ; le montant compté ne se modifie plus.")}
+        </div>`;
+      d.fields_dict.etat.$wrapper.html(autrui + voile + `<div class="rcj-etat-cache"${reprise ? "" : ' style="display:none"'}>` + `${negatif ? `
         <div class="alert alert-warning" style="font-size:12.5px;padding:8px 10px;margin-bottom:8px">
           <b>${__("Solde théorique négatif ({0})", [fmt(e.solde_theorique)])}</b> — ${
           __("une dépense dépasse les encaissements de cette caisse : le plus souvent, une dépense payée par un collègue a été saisie ici.")} ${
@@ -3370,7 +3423,7 @@ function rcj_cloture(rapport, opts) {
                 fmt(e.total_autres_modes)}</td></tr>
         </table>${e.date_depart && d1 >= e.date_depart && e.solde_ouverture === 0
           ? `<div class="text-muted" style="font-size:11px;margin:-4px 0 8px">${__("Caisses remises à zéro depuis le {0} (Config Caisse).",
-              [frappe.datetime.str_to_user(e.date_depart)])}</div>` : ""}${rcj_html_rapprochement(e.rapprochement, fmt)}`);
+              [frappe.datetime.str_to_user(e.date_depart)])}</div>` : ""}${rcj_html_rapprochement(e.rapprochement, fmt)}` + "</div>");
       const photo = { data: null, nom: null };
       if (e.mode_validation === "double") {
         d.fields_dict.photo.$wrapper.find("input[type=file]").on("change", function () {

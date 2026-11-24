@@ -198,9 +198,11 @@ class TestComptageNegatif(unittest.TestCase):
         with open(os.path.join(base, "caisse_journaliere.js"), encoding="utf-8") as fh:
             js = fh.read()
         self.assertIn("const negatif = (e.solde_theorique || 0) < -0.0005;", js)
-        self.assertIn("const defaut = negatif ? 0 : e.solde_theorique;", js)
-        self.assertIn("reprise ? reprise.especes_comptees : defaut", js)
-        self.assertIn("reprise ? reprise.especes_remises : defaut", js)
+        # Comptage à l'aveugle (24/11/2026) : rien n'est pré-rempli, ni le théorique ni −76 DT ; la remise proposée
+        # après saisie du compte n'est jamais négative.
+        self.assertIn("default: reprise ? reprise.especes_comptees : null", js)
+        self.assertIn("default: reprise ? reprise.especes_remises : null", js)
+        self.assertIn('d.set_value("remises", Math.max(0, saisi || 0))', js)
         self.assertIn("Solde théorique négatif", js)
 
 

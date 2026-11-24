@@ -66,9 +66,15 @@ MOTIFS = {
     "ancien_exclu": ["Déjà encaissé dans une autre caisse ou un autre jour",
                      "Paiement régénéré (facture refaite ou annulée)", "Autre"],
     "caisse_non_collectee": ["Employé absent, collecte au prochain passage", "Collecte en cours", "Autre"],
+    # Dépense saisie par un collègue mais payée de CETTE caisse (« Payée de la caisse de », 24/11/2026) : le payeur
+    # la confirme à son comptage — ou dit qu'il ne l'a pas payée, et pourquoi.
+    "depense_collegue": ["Je confirme l'avoir payée de ma caisse", "Je ne l'ai pas payée : à corriger", "Autre"],
 }
+# Motifs qui se suffisent : pas de commentaire exigé (confirmer une dépense qu'on a bien payée).
+MOTIFS_SANS_COMMENTAIRE = {"Je confirme l'avoir payée de ma caisse"}
 FAMILLE_DU_POINT = {"tache_ouverte": "tache", "tache_sans_commande": "tache", "dette_hors_aramex": "dette",
-                    "ancien_exclu": "ancien_exclu", "caisse_non_collectee": "caisse_non_collectee"}
+                    "ancien_exclu": "ancien_exclu", "caisse_non_collectee": "caisse_non_collectee",
+                    "depense_collegue": "depense_collegue"}
 
 
 def _est_direction():
@@ -453,10 +459,30 @@ def motifs_du_point(point):
     return MOTIFS[famille] if famille else ["Autre"]
 
 
+def _depenses_collegues(data):
+    """Les dépenses qu'un COLLÈGUE a saisies en les déclarant payées de cette caisse : le titulaire les confirme
+    à son comptage (24/11/2026). Fonction pure sur le rapport filtré sur la caisse."""
+    points = []
+    for l in ((data or {}).get("depenses") or {}).get("lignes") or []:
+        if not l.get("payee_par_collegue"):
+            continue
+        cle = "paiement" if l.get("doctype") == "Payment Entry" else "ecriture"
+        points.append({
+            "cle": "depense_collegue:%s" % l["name"], "type": "depense_collegue", "bloquant": 0, cle: l["name"],
+            "montant": flt(l.get("montant"), 3),
+            "libelle": "Dépense saisie par %s, payée de votre caisse — %s — %s DT (%s, %s)" % (
+                l.get("saisi_par") or "?", l.get("description") or l.get("type") or "", _fmt_montant(l.get("montant")),
+                l.get("mode") or "", l["name"]),
+        })
+    return points
+
+
 def points_controle(caisse, date, data, debut=None):
     """Tous les points de la clôture de cette caisse, chacun avec la liste de ses motifs."""
     from customization_app import caisse_collecte as CC
     points = _machines_a_receptionner(caisse, date) + _controles(data) + _taches_sans_commande(caisse, date, debut)
+    if caisse != CAISSE_GLOBALE:
+        points += _depenses_collegues(data)
     if caisse == CAISSE_GLOBALE:
         points += CC.controles_globale(date, data)
     for p in points:
@@ -483,7 +509,7 @@ def verifier_justifications(points, justifs):
         commentaire = " ".join(str(j.get("commentaire") or "").split())
         if motif not in (p.get("motifs") or motifs_du_point(p)):
             erreurs.append("%s : choisissez un motif" % p["libelle"])
-        elif len(commentaire) < COMMENTAIRE_MIN:
+        elif len(commentaire) < COMMENTAIRE_MIN and motif not in MOTIFS_SANS_COMMENTAIRE:
             erreurs.append("%s : commentaire trop court (%s caractères minimum)" % (p["libelle"], COMMENTAIRE_MIN))
         else:
             lignes.append("%s\n  → %s — %s" % (p["libelle"], motif, commentaire))
@@ -495,9 +521,11 @@ def verifier_justifications(points, justifs):
 # responsable de collecte (et Salma, pastille 💬 de la commande) le lit sur la fiche elle-même.
 # Le nom de la clôture entre parenthèses sert de marque : rouvrir ou annuler le comptage les remplace.
 MARQUE_COMMENTAIRE = "💵 Caisse du "
-DOCTYPES_DU_POINT = (("commande", "Sales Order"), ("tache", "Tache de travail"), ("paiement", "Payment Entry"))
+DOCTYPES_DU_POINT = (("commande", "Sales Order"), ("tache", "Tache de travail"), ("paiement", "Payment Entry"),
+                     ("ecriture", "Journal Entry"))
 NATURE_DU_POINT = {"tache_ouverte": "Tâche ouverte", "tache_sans_commande": "Tâche ouverte sans commande",
-                   "dette_hors_aramex": "Dette hors Aramex", "ancien_exclu": "Paiement exclu de la caisse"}
+                   "dette_hors_aramex": "Dette hors Aramex", "ancien_exclu": "Paiement exclu de la caisse",
+                   "depense_collegue": "Dépense payée pour un collègue"}
 
 
 def documents_du_point(point):
@@ -593,6 +621,35 @@ def periode_sous_traitant(date=None):
     return {"caisse": emp.employee_name, "debut": str(debut_periode(emp.employee_name, fin)), "fin": str(fin)}
 
 
+def compte_pour_autrui(caisse, user=None):
+    """Le nom du titulaire quand on compte la caisse d'un AUTRE (24/11/2026), None sinon. La caisse globale et celles
+    des sous-traitants (comptées par leur responsable, par conception) ne sont pas concernées."""
+    user = user or frappe.session.user
+    if not caisse or caisse == CAISSE_GLOBALE or _est_caisse_sous_traitant(caisse):
+        return None
+    from customization_app import caisse_collecte as CC
+    return None if CC._caisse_de(user) == caisse else caisse
+
+
+def _prevenir_titulaire(doc, titulaire):
+    """Le titulaire apprend qu'on a compté sa caisse à sa place : il peut contester tant qu'elle n'est pas collectée."""
+    user = frappe.db.get_value("Employee", {"employee_name": titulaire, "status": "Active"}, "user_id")
+    if not user or user == frappe.session.user:
+        return
+    texte = _("💵 {0} a compté votre caisse du {1} à votre place : {2} DT comptés, {3} DT remis — « {4} »").format(
+        frappe.utils.get_fullname(frappe.session.user), getdate(doc.date_cloture).strftime("%d/%m/%Y"),
+        _fmt_montant(doc.especes_comptees), _fmt_montant(doc.especes_remises), (doc.note or "").strip())
+    try:
+        frappe.get_doc({"doctype": "Notification Log", "for_user": user, "type": "Alert", "subject": texte,
+                        "document_type": "Cloture Caisse", "document_name": doc.name}).insert(ignore_permissions=True)
+        if frappe.db.exists("DocType", "PWA Notification"):
+            frappe.get_doc({"doctype": "PWA Notification", "from_user": frappe.session.user, "to_user": user,
+                            "message": texte, "reference_document_type": "Cloture Caisse",
+                            "reference_document_name": doc.name}).insert(ignore_permissions=True)
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "Caisse : prévenir le titulaire")
+
+
 @frappe.whitelist()
 def etat(caisse, date):
     """L'état de la caisse pour le dialogue : avant, mouvements, après."""
@@ -630,6 +687,9 @@ def etat(caisse, date):
         "en_attente": en_attente,
         "mode_validation": CC.mode_validation(caisse),
         "photo_obligatoire": CC.config()["photo_obligatoire"],
+        # Comptée à la place du titulaire (24/11/2026) : motif écrit + photo des espèces obligatoires.
+        "pour_autrui": compte_pour_autrui(caisse),
+        "commentaire_min": COMMENTAIRE_MIN,
         "date_depart": CC.date_depart_pour(caisse, CC.config()),
         "solde_ouverture": ouverture,
         "encaissements_especes": m["encaissements_especes"],
@@ -709,6 +769,17 @@ def valider(caisse, date, especes_comptees=None, note=None, justifications=None,
             frappe.throw(str(exc))
         if CC.config()["photo_obligatoire"] and not photo:
             frappe.throw(_("La photo de la remise est obligatoire (Config Caisse)."))
+    # DEUX PERSONNES (24/11/2026) : compter la caisse d'un autre se justifie et se photographie. Le 20/11, la caisse
+    # de Sadok du 16/11 a été comptée ET validée en 24 secondes par le collecteur, au montant attendu, sans rien
+    # qui dise pourquoi ni ce qu'il y avait vraiment.
+    autrui = compte_pour_autrui(caisse)
+    if autrui:
+        if len(" ".join((note or "").split())) < COMMENTAIRE_MIN:
+            frappe.throw(_("Vous comptez la caisse de {0} à sa place : écrivez pourquoi dans la note (absent, parti…, "
+                           "{1} caractères minimum).").format(autrui, COMMENTAIRE_MIN))
+        if not photo and not existante:
+            frappe.throw(_("Vous comptez la caisse de {0} à sa place : la photo des espèces comptées est obligatoire.")
+                         .format(autrui))
     else:
         remises = 0.0
 
@@ -763,6 +834,8 @@ def valider(caisse, date, especes_comptees=None, note=None, justifications=None,
         CC.finaliser(doc, m, rap, validation_seule=True)
     else:
         CC.notifier_collecteurs(doc, rouverte=bool(existante))
+    if autrui:
+        _prevenir_titulaire(doc, autrui)
     frappe.db.commit()
     return {"name": doc.name, "statut": doc.statut, "mode": mode, "rouverte": bool(existante)}
 

@@ -476,6 +476,49 @@ def facture_deja_saisie(numero, supplier=None, fournisseur=None, sauf_fiche=None
     return None
 
 
+# ── « Payée de la caisse de… » (24/11/2026) ─────────────────────────────────────────────────────────────────────
+# Une dépense compte dans la caisse de celui qui la SAISIT ; quand un collègue a payé de SA caisse (l'un paie, l'autre
+# saisit), on le dit à la saisie : la dépense part dans la caisse du payeur, qui la confirme à son comptage
+# (point de contrôle « depense_collegue »). La remarque de l'écriture le garde (« Payée de la caisse de : … ») ;
+# la fiche de la file aussi (`caisse_payeur`), car le comptable remplace l'écriture par un paiement.
+MENTION_PAYEUR = "Payée de la caisse de : "
+
+
+def caisse_de_l_utilisateur(user=None):
+    user = user or frappe.session.user
+    return (frappe.db.get_value("Employee", {"user_id": user, "status": "Active"}, "employee_name")
+            or frappe.db.get_value("User", user, "full_name"))
+
+
+@frappe.whitelist()
+def caisses_payeuses():
+    """Les caisses qu'on peut désigner comme payeuses : les employés actifs avec un compte (la sienne d'abord)."""
+    frappe.only_for(ROLES)
+    from customization_app.rapport_caisse_journaliere import noms_caisses
+    from customization_app.caisse_collecte import caisses_partenaires
+    possibles = set(noms_caisses()) - caisses_partenaires()       # le partenaire n'a pas de caisse d'employé
+    actifs = [n for n in frappe.get_all("Employee", filters={"status": "Active", "user_id": ["is", "set"]},
+                                        pluck="employee_name", order_by="employee_name") if n in possibles]
+    moi = caisse_de_l_utilisateur()
+    return {"moi": moi, "caisses": ([moi] if moi else []) + [n for n in actifs if n != moi]}
+
+
+def caisse_payeuse_valide(caisse_payeur):
+    """None si c'est sa propre caisse (ou rien) ; sinon le nom, vérifié."""
+    nom = (caisse_payeur or "").strip()
+    if not nom or nom == caisse_de_l_utilisateur():
+        return None
+    if nom not in caisses_payeuses()["caisses"]:
+        frappe.throw(_("« {0} » n'est pas une caisse d'employé actif.").format(nom))
+    return nom
+
+
+def payeur_de_remarque(remarque) -> str | None:
+    """La caisse payeuse écrite dans la remarque d'une écriture de caisse. PURE."""
+    m = re.search(re.escape(MENTION_PAYEUR) + r"(.+)", remarque or "")
+    return m.group(1).strip() if m else None
+
+
 def message_doublon(deja, fournisseur, numero) -> str:
     qui = frappe.utils.get_fullname(deja["par"]) if deja.get("par") else "?"
     quand = frappe.utils.format_datetime(deja["le"], "dd/MM/yyyy à HH:mm") if deja.get("le") else ""
@@ -885,7 +928,7 @@ def creer(type_depense, montant, mode, compte=None, description=None, fournisseu
           photo_cheque=None, photo_cheque_nom=None, coins_facture=None,
           supplier=None, matricule=None, paiements=None, est_bl=0, numero_bl=None,
           retenue=None, code_sans_photo=None, montant_paye=None, timbre=0,
-          sans_retenue_confirme=0, reprise=None, articles_stock=None):
+          sans_retenue_confirme=0, reprise=None, articles_stock=None, caisse_payeur=None):
     """Crée la dépense selon son type (voir l'en-tête du module). Retourne les noms
     des pièces créées (écriture et/ou fiche de la file des factures d'achat).
 
@@ -1014,6 +1057,10 @@ def creer(type_depense, montant, mode, compte=None, description=None, fournisseu
         remarques.append(_("Reste à payer : {0}").format(unpaid))
     if reprise.get("origine"):
         remarques.append(_("Corrige l'écriture {0}").format(reprise["origine"]))
+    payeur = caisse_payeuse_valide(caisse_payeur)
+    if payeur:
+        # C'EST CETTE MENTION QUE LE RAPPORT DE CAISSE LIT (rapport_caisse_journaliere._depenses_caisse).
+        remarques.append(MENTION_PAYEUR + payeur)
     remarques.append(_("Saisie caisse par {0}").format(frappe.session.user))
 
     # PART MISE EN STOCK (10/11/2026) : la dépense reste ENTIÈRE (tout le HT, toute la TVA, un seul
@@ -1063,6 +1110,7 @@ def creer(type_depense, montant, mode, compte=None, description=None, fournisseu
             # Clé UNIQUE en base : deux saisies de la même facture à la même seconde — la seconde échoue, et son
             # écriture de caisse avec elle (même transaction).
             "cle_facture": cle_facture(supplier, numero_facture),
+            "caisse_payeur": payeur,
         }
         if reprise.get("fiche"):
             # Correction : la fiche garde son nom, ses commentaires et son scan ; seule
@@ -2999,7 +3047,7 @@ def corriger(journal_entry, type_depense, montant, mode, compte=None, descriptio
              n_cheque=None, banque=None, photo_facture=None, photo_facture_nom=None,
              photo_cheque=None, photo_cheque_nom=None, coins_facture=None, supplier=None,
              matricule=None, est_bl=0, numero_bl=None, retenue=None, code_sans_photo=None,
-             montant_paye=None, timbre=0, sans_retenue_confirme=0):
+             montant_paye=None, timbre=0, sans_retenue_confirme=0, caisse_payeur=None):
     """Remplace une écriture de caisse facturée par une écriture corrigée.
 
     Même chemin que `creer` (mêmes contrôles de retenue, même remarque, même convention
@@ -3053,7 +3101,10 @@ def corriger(journal_entry, type_depense, montant, mode, compte=None, descriptio
                      matricule=matricule, paiements=None, est_bl=est_bl, numero_bl=numero_bl,
                      retenue=retenue, code_sans_photo=code_sans_photo,
                      montant_paye=montant_paye, timbre=timbre,
-                     sans_retenue_confirme=sans_retenue_confirme, reprise=reprise)
+                     sans_retenue_confirme=sans_retenue_confirme, reprise=reprise,
+                     # La correction garde la caisse payeuse d'origine, sauf choix explicite (24/11/2026).
+                     caisse_payeur=(caisse_payeur if caisse_payeur is not None else
+                                    payeur_de_remarque(frappe.db.get_value("Journal Entry", journal_entry, "user_remark"))))
     nouvelle = resultat.get("name")
 
     # L'ancienne disparaît : sa ligne de file des certificats (jamais « Émis », cf. garde-fous),
