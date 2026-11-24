@@ -21,6 +21,9 @@ récapitulatif (état, modes, dépenses, détail par employé pour la globale)
 attaché au moment de la validation. Une seule clôture par caisse et par jour.
 """
 
+import re
+from html import unescape
+
 import frappe
 from frappe import _
 from frappe.utils import add_days, flt, get_datetime, getdate, now_datetime, nowdate
@@ -858,6 +861,135 @@ COULEURS_MODES = {
 }
 JOURS = ("lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche")
 STATUTS_TACHE = {"Open": "ouverte", "Completed": "terminée", "Cancelled": "annulée"}
+STATUTS_COMMANDE = {"Draft": "Brouillon", "To Deliver and Bill": "À livrer et facturer", "To Bill": "À facturer",
+                    "To Deliver": "À livrer", "Completed": "Terminé", "Cancelled": "Annulé", "Closed": "Fermé",
+                    "On Hold": "En attente"}
+RE_COMMANDE = re.compile(r"SAL-ORD-\d{4}-\d+")
+RE_EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+# Emojis des commentaires (❌ 🔁 📞…) : la police du PDF ne les a pas, wkhtmltopdf dessine des carrés.
+RE_EMOJI = re.compile("[\U0001F000-\U0001FAFF\u2700-\u27BF\uFE0F\u200D]")
+TRACE_LONGUEUR_MAX = 240
+
+
+def points_du_texte(controles):
+    """Le texte des justifications (verifier_justifications : « libellé » puis « → motif — commentaire ») relu en
+    [(libellé, [(motif, commentaire)])]. Fonction pure."""
+    points = []
+    for ligne in (controles or "").splitlines():
+        s = ligne.strip()
+        if s.startswith("→") and points:
+            motif, _sep, commentaire = s[1:].strip().partition(" — ")
+            points[-1][1].append((motif, commentaire))
+        elif s:
+            points.append((s, []))
+    return points
+
+
+def _texte_trace(contenu, noms):
+    """Un commentaire du fil d'une pièce, en une ligne lisible : sans HTML, e-mails remplacés par les noms."""
+    texte = RE_EMOJI.sub("", unescape(frappe.utils.strip_html(contenu or ""))).replace("د.ت", "DT")
+    texte = RE_EMAIL.sub(lambda m: noms(m.group(0)), " ".join(texte.split()))
+    return texte if len(texte) <= TRACE_LONGUEUR_MAX else texte[:TRACE_LONGUEUR_MAX - 1].rstrip() + "…"
+
+
+def _traces(orders, debut, fin, date_cloture):
+    """La traçabilité de chaque commande de la caisse (demande du 24/11/2026 : « la traçabilité sur le pdf, chaque
+    intervention ») : {commande: [(moment, qui, texte)]} dans l'ordre, de `debut` (la journée) à `fin` (la
+    collecte). Commande créée (toujours, même avant la journée), statuts, paiements saisis, tâche (créée, départ
+    GPS, terminée), BL, commentaires et infos de la commande et de sa tâche. Une requête par doctype."""
+    sos = [o["sales_order"] for o in orders if o.get("sales_order")]
+    if not sos:
+        return {}
+    taches = {o["tache_reference"]: o["sales_order"] for o in orders if o.get("tache_reference")}
+    paiements, bls = {}, {}
+    for o in orders:
+        for p in o.get("payments") or []:
+            if p.get("name"):
+                paiements.setdefault(p["name"], []).append((o["sales_order"], p))
+        for dn in o.get("delivery_notes") or []:
+            if dn.get("name"):
+                bls[dn["name"]] = o["sales_order"]
+    cache = {}
+
+    def nom(user):
+        if not user:
+            return "?"
+        if user not in cache:
+            cache[user] = (frappe.utils.get_fullname(user) or user) if ("@" in user or user == "Administrator") else user
+        return cache[user]
+
+    def dans(moment):
+        return bool(moment) and debut <= get_datetime(moment) <= fin
+
+    ev = {so: [] for so in sos}
+    for r in frappe.db.sql("select name, owner, creation from `tabSales Order` where name in %(n)s",
+                           {"n": sos}, as_dict=True):
+        ev[r.name].append((get_datetime(r.creation), nom(r.owner), "commande créée"))
+    if paiements:
+        for r in frappe.db.sql("select name, owner, creation from `tabPayment Entry` where name in %(n)s",
+                               {"n": list(paiements)}, as_dict=True):
+            if not dans(r.creation):
+                continue
+            for so, p in paiements[r.name]:
+                ref = (p.get("reference_no") or "").strip()
+                ev[so].append((get_datetime(r.creation), nom(r.owner), "paiement %s %s DT saisi · %s%s" % (
+                    p.get("mode") or "", _fmt_montant(p.get("amount")), r.name,
+                    (" · réf. %s" % ref) if ref and ref != so else "")))
+    if taches:
+        for r in frappe.db.sql("""select name, owner, creation, status, modified, modified_by, custom_gps_depart,
+                                         `custom_employé` as employe
+                                  from `tabTache de travail` where name in %(n)s""", {"n": list(taches)}, as_dict=True):
+            so = taches[r.name]
+            if dans(r.creation):
+                ev[so].append((get_datetime(r.creation), nom(r.owner), "tâche %s créée%s" % (
+                    r.name, (" pour %s" % r.employe) if r.employe else "")))
+            if dans(r.custom_gps_depart):
+                ev[so].append((get_datetime(r.custom_gps_depart), r.employe or "?", "départ vers le client (GPS)"))
+            if r.status in ("Completed", "Cancelled") and dans(r.modified):
+                ev[so].append((get_datetime(r.modified), nom(r.modified_by), "tâche %s %s" % (
+                    r.name, STATUTS_TACHE[r.status])))
+    if bls:
+        for r in frappe.db.sql("""select name, owner, creation, docstatus, modified, modified_by
+                                  from `tabDelivery Note` where name in %(n)s""", {"n": list(bls)}, as_dict=True):
+            so = bls[r.name]
+            if r.docstatus == 1 and dans(r.modified) and dans(r.creation) and r.modified_by == r.owner:
+                ev[so].append((get_datetime(r.modified), nom(r.owner), "BL %s créé et validé" % r.name))
+                continue
+            if dans(r.creation):
+                ev[so].append((get_datetime(r.creation), nom(r.owner), "BL %s créé" % r.name))
+            if r.docstatus == 1 and dans(r.modified):
+                ev[so].append((get_datetime(r.modified), nom(r.modified_by), "BL %s validé" % r.name))
+    # Les justifications de CETTE clôture (« 💵 Caisse du jj/mm/aaaa — … ») sont affichées à part, sous la commande.
+    propre = "💵 Caisse du %s" % getdate(date_cloture).strftime("%d/%m/%Y")
+    vus = set()
+    for c in frappe.db.sql("""select reference_doctype, reference_name, comment_type, owner, creation, content
+                              from `tabComment`
+                              where comment_type in ('Comment', 'Info', 'Label')
+                                and ((reference_doctype = 'Sales Order' and reference_name in %(sos)s)
+                                     or (reference_doctype = 'Tache de travail' and reference_name in %(taches)s))
+                                and creation between %(debut)s and %(fin)s
+                              order by creation""",
+                           {"sos": sos, "taches": list(taches) or [""], "debut": debut, "fin": fin}, as_dict=True):
+        so = c.reference_name if c.reference_doctype == "Sales Order" else taches.get(c.reference_name)
+        if not so:
+            continue
+        if c.comment_type == "Label":
+            statut = STATUTS_COMMANDE.get((c.content or "").strip(), (c.content or "").strip())
+            derniers = [t for _m, _q, t in ev[so] if t.startswith("statut → ")]
+            if derniers and derniers[-1] == "statut → " + statut:
+                continue
+            ev[so].append((get_datetime(c.creation), nom(c.owner), "statut → " + statut))
+            continue
+        texte = _texte_trace(c.content, nom)
+        if not texte or texte.startswith(propre):
+            continue
+        cle = (so, texte)
+        if cle in vus:                      # même commentaire recopié sur la commande ET sur sa tâche
+            continue
+        vus.add(cle)
+        ev[so].append((get_datetime(c.creation), nom(c.owner), ("« %s »" % texte) if c.comment_type == "Comment"
+                       else texte))
+    return {so: sorted(lignes, key=lambda x: x[0]) for so, lignes in ev.items()}
 
 # Le <style> reste HORS formatage % : le CSS est truffé de « % » littéraux.
 CSS_PDF = """
@@ -910,6 +1042,18 @@ CSS_PDF = """
   .modes .mt { font-size: 12px; font-weight: bold; margin-top: 3px; white-space: nowrap; }
   .modes .tot { background: #f2f7fd; }
   .garde { page-break-inside: avoid; }
+  .inter { border: 1px solid #dfe4ea; border-left: 3px solid #0b3d7a; padding: 6px 9px;
+    margin: 0 0 7px; page-break-inside: avoid; }
+  .inter.alerte { border-left-color: #c0392b; }
+  .itete td { padding: 0; vertical-align: top; }
+  .ipmts { margin-top: 4px; }
+  .ipmts .p { display: block; margin-top: 2px; }
+  .garde .inter { page-break-inside: auto; }   /* imbriqué dans un bloc insécable : wkhtmltopdf trace des traits */
+  .ijustif { margin-top: 5px; background: #fff8e1; border: 1px solid #f3dc9a; border-radius: 4px; padding: 4px 7px; }
+  .trace { margin-top: 5px; table-layout: fixed; }
+  .trace td { padding: 2px 4px 2px 0; border-top: 1px dotted #d5dbe3; font-size: 9.5px; vertical-align: top; }
+  .trace td.h { width: 12%; color: #555; white-space: nowrap; }
+  .trace td.qui { width: 19%; color: #0b3d7a; }
   .point { padding: 5px 0 6px; border-bottom: 1px solid #e6e9ee; page-break-inside: avoid; }
   .point .rep { margin-top: 2px; color: #333; }
   .motif { display: inline-block; background: #eef2f7; border: 1px solid #d5dbe3; border-radius: 9px;
@@ -1127,60 +1271,89 @@ def _html_instantane(doc, data, rap=None):
             ["<tr><td>%s</td><td class='n'>%s</td><td class='n'><b>%s</b></td></tr>" % (
                 esc(e["employe"]), mt(e.get("anciens")), mt(e["total"])) for e in recap["par_employe"]]))
 
-    # ── Commandes du jour, une ligne par commande ────────────────────────────────────────────────────────────────
-    def _paiement(p, sales_order):
+    # ── Commandes du jour : une fiche par intervention, avec sa traçabilité en lignes (24/11/2026) ─────────────────
+    tous_orders = [o for e in (data.get("employees") or []) for o in (e.get("orders") or [])]
+    affichees = {o.get("sales_order") for o in tous_orders}
+    points_commande, points_restants = {}, []
+    for lib, reps in points_du_texte(doc.get("controles")):
+        cibles = [s for s in RE_COMMANDE.findall(lib) if s in affichees]
+        if cibles:
+            points_commande.setdefault(cibles[0], []).append((lib, reps))
+        else:
+            points_restants.append((lib, reps))
+    debut = get_datetime(str(d))
+    # Jusqu'à la collecte (ou au comptage d'une validation seule) ; les clôtures d'avant le champ « compte_le »
+    # s'arrêtent à leur création — jamais aux événements des jours suivants.
+    fin = get_datetime(doc.get("collecte_le") or doc.get("compte_le") or doc.get("creation") or now_datetime())
+    try:
+        traces = _traces(tous_orders, debut, fin, d)
+    except Exception:
+        # Le PDF ne doit jamais faire échouer la collecte : sans traçabilité plutôt que sans PDF.
+        frappe.log_error(title="Clôture de caisse : traçabilité du PDF")
+        traces = {}
+
+    def moment(t):
+        return t.strftime("%H:%M") if t.date() == d else t.strftime("%d/%m %H:%M")
+
+    def _paiement(p, trace_so):
+        deja_trace = any(p.get("name") and p["name"] in t for _m, _q, t in trace_so)
         bits = ["%s <b>%s</b>" % (pastille(p.get("mode")), mt(p.get("amount")))]
-        ref = (p.get("reference_no") or "").strip()
-        sous = [esc(p.get("name") or "")]
-        if ref and ref != sales_order:
-            sous.append("réf. %s" % esc(ref))
-        if p.get("date") and getdate(p["date"]) != d:
-            sous.append("du %s" % jour(p["date"]))
-        bits.append("<span class='gris petit'>%s</span>" % " · ".join(sous))
+        if not deja_trace:
+            sous = [esc(p.get("name") or "")]
+            if p.get("date") and getdate(p["date"]) != d:
+                sous.append("du %s" % jour(p["date"]))
+            bits.append("<span class='gris petit'>%s</span>" % " · ".join(sous))
         if p.get("hors_periode"):
             bits.append("<span class='flag'>⏪ avance hors période — non comptée</span>")
         elif p.get("antidate"):
             bits.append("<span class='flag'>⚠ antidaté (saisi le %s)</span>" % jour(p.get("creation_date")))
-        return "<div class='pmt'>%s</div>" % " ".join(bits)
+        return "<span class='p'>%s</span>" % " ".join(bits)
+
+    def _fiche(o):
+        so = o["sales_order"]
+        trace_so = traces.get(so) or []
+        sous = [esc(o.get("status") or "")]
+        if o.get("date") and getdate(o["date"]) != d:
+            sous.append("du %s" % jour(o["date"]))
+        if o.get("intervention"):
+            sous.append("intervention %s" % esc(o["intervention"]))
+        if o.get("tache_reference"):
+            sous.append("tâche %s%s%s" % (
+                esc(o["tache_reference"]), (" (%s)" % esc(o["tache_employee"])) if o.get("tache_employee") else "",
+                (" " + STATUTS_TACHE.get(o.get("tache_status"), o.get("tache_status") or "")) if o.get("tache_status") else ""))
+        droite = "TTC <b>%s</b>" % dt_(o.get("grand_total"))
+        if abs(flt(o.get("total_paid")) - flt(o.get("grand_total"))) >= 0.0005:
+            droite += "<div class='gris petit'>payé %s</div>" % dt_(o.get("total_paid"))
+        morceaux = ["<table class='itete'><tr><td><b>%s</b> · %s<div class='gris petit'>%s</div></td>"
+                    "<td class='n'>%s</td></tr></table>" % (esc(so), esc(o.get("customer") or ""), " · ".join(sous),
+                                                           droite)]
+        pmts = o.get("payments") or []
+        morceaux.append("<div class='ipmts'>%s</div>" % (
+            "".join(_paiement(p, trace_so) for p in pmts) or "<span class='gris'>aucun paiement</span>"))
+        avance = o.get("avance_anterieure") or {}
+        if flt(avance.get("total")):
+            morceaux.append("<div class='flag'>⏪ Avance reçue avant la période : %s (%s) — hors totaux du jour</div>"
+                            % (dt_(avance["total"]), esc(", ".join(avance.get("modes") or []))))
+        for w in o.get("warnings") or []:
+            morceaux.append("<div class='warn'>⚠ %s</div>" % esc(w.get("message") or ""))
+        pts = points_commande.get(so) or []
+        for lib, reps in pts:
+            court = lib.split(" — " + so)[0]
+            morceaux.append("<div class='ijustif'><div>⚑ %s</div>%s</div>" % (esc(court), "".join(
+                "<div>↳ <span class='motif'>%s</span>%s <span class='gris petit'>— justifié au comptage par %s</span></div>"
+                % (esc(m), (" — <i>%s</i>" % esc(c)) if c else "", esc(nom(doc.valide_par))) for m, c in reps)))
+        if trace_so:
+            morceaux.append("<table class='trace'>%s</table>" % "".join(
+                "<tr><td class='h'>%s</td><td class='qui'>%s</td><td>%s</td></tr>" % (moment(t), esc(q), esc(x))
+                for t, q, x in trace_so))
+        alerte = bool(o.get("warnings") or pts)
+        return "<div class='inter%s'>%s</div>" % (" alerte" if alerte else "", "".join(morceaux))
 
     for e in (data.get("employees") or []):
-        unites = []
-        for o in e.get("orders") or []:
-            so = o["sales_order"]
-            sous_cmd = [esc(o.get("status") or "")]
-            if o.get("date") and getdate(o["date"]) != d:
-                sous_cmd.append("du %s" % jour(o["date"]))
-            sous_client = []
-            if o.get("intervention"):
-                sous_client.append("intervention %s" % esc(o["intervention"]))
-            if o.get("tache_status"):
-                sous_client.append("tâche %s" % esc(STATUTS_TACHE.get(o["tache_status"], o["tache_status"])))
-            paye = ""
-            if abs(flt(o.get("total_paid")) - flt(o.get("grand_total"))) >= 0.0005:
-                paye = "<div class='gris petit'>payé %s</div>" % mt(o.get("total_paid"))
-            alertes = []
-            avance = o.get("avance_anterieure") or {}
-            if flt(avance.get("total")):
-                alertes.append("<div class='flag'>⏪ Avance reçue avant la période : %s (%s) — hors totaux du jour</div>"
-                               % (dt_(avance["total"]), esc(", ".join(avance.get("modes") or []))))
-            for w in o.get("warnings") or []:
-                alertes.append("<div class='warn'>⚠ %s</div>" % esc(w.get("message") or ""))
-            pmts = "".join(_paiement(p, so) for p in (o.get("payments") or [])) or \
-                "<span class='gris'>aucun paiement</span>"
-            unite = ("<tr%s><td><b class='nw'>%s</b><div class='gris petit'>%s</div></td><td>%s%s</td>"
-                     "<td class='n'>%s%s</td><td>%s</td></tr>" % (
-                         " class='sans-trait'" if alertes else "", esc(so), " · ".join(sous_cmd),
-                         esc(o.get("customer") or ""),
-                         ("<div class='gris petit'>%s</div>" % " · ".join(sous_client)) if sous_client else "",
-                         mt(o.get("grand_total")), paye, pmts))
-            if alertes:
-                unite += "<tr class='alerte'><td colspan='4'>%s</td></tr>" % "".join(alertes)
-            unites.append(unite)
-        html.append(section(
-            "Commandes du jour — %s <span class='droite'>%s commande(s) · %s</span>"
-            % (esc(e["employe"]), e.get("nb_commandes") or 0, dt_(e.get("total"))),
-            [("Commande", 23), ("Client", 27), ("TTC (DT)", 12, 1), ("Paiements (DT)", 38)],
-            unites, vide="aucune commande"))
+        fiches = [_fiche(o) for o in (e.get("orders") or [])] or ["<div class='gris'>aucune commande</div>"]
+        html.append("<div class='garde'><h2>Commandes du jour — %s <span class='droite'>%s commande(s) · %s</span></h2>"
+                    "%s</div>%s" % (esc(e["employe"]), e.get("nb_commandes") or 0, dt_(e.get("total")), fiches[0],
+                                    "".join(fiches[1:])))
 
     # ── Paiements sur anciennes commandes ────────────────────────────────────────────────────────────────────────
     anciens = data.get("anciens") or {}
@@ -1220,21 +1393,16 @@ def _html_instantane(doc, data, rap=None):
             "Dépenses de la caisse <span class='droite'>%s</span>" % dt_(depenses.get("total")),
             [("Date", 12), ("Description", 44), ("Saisie par", 18), ("Mode", 12), ("Montant (DT)", 14, 1)], unites))
 
-    # ── Points de contrôle justifiés : « libellé » puis « → motif — commentaire » ───────────────────────────────
-    if doc.get("controles"):
-        points = []
-        for ligne in (doc.controles or "").splitlines():
-            if ligne.strip().startswith("→") and points:
-                motif, _sep, commentaire = ligne.strip()[1:].strip().partition(" — ")
-                points[-1][1].append("<div class='rep'>↳ <span class='motif'>%s</span>%s</div>" % (
-                    esc(motif), (" — <i>%s</i>" % esc(commentaire)) if commentaire else ""))
-            elif ligne.strip():
-                points.append([ligne.strip(), []])
-        blocs = ["<div class='point'>%s%s</div>" % (esc(lib), "".join(reps)) for lib, reps in points]
-        titre_pts = "<h2>Points de contrôle justifiés <span class='droite'>%s point%s</span></h2>" % (
-            len(points), "s" if len(points) > 1 else "")
+    # ── Points de contrôle qui ne portent pas sur une commande de la journée (les autres sont sous leur commande) ──
+    if points_restants:
+        blocs = ["<div class='point'>%s%s</div>" % (esc(lib), "".join(
+            "<div class='rep'>↳ <span class='motif'>%s</span>%s</div>" % (esc(m), (" — <i>%s</i>" % esc(c)) if c else "")
+            for m, c in reps)) for lib, reps in points_restants]
+        titre_pts = "<h2>%s <span class='droite'>%s point%s</span></h2>" % (
+            "Autres points de contrôle justifiés" if points_commande else "Points de contrôle justifiés",
+            len(blocs), "s" if len(blocs) > 1 else "")
         # Le titre part avec le premier point : jamais seul en bas de page.
-        html.append("<div class='garde'>%s%s</div>%s" % (titre_pts, blocs[0] if blocs else "", "".join(blocs[1:])))
+        html.append("<div class='garde'>%s%s</div>%s" % (titre_pts, blocs[0], "".join(blocs[1:])))
     if doc.note:
         html.append("<h2>Note</h2><div class='texte'>%s</div>" % esc(doc.note))
 
@@ -1247,9 +1415,10 @@ def _html_instantane(doc, data, rap=None):
     if collectee:
         droite = ("<div class='bloc'><div class='gris petit'>Reçue et recomptée par</div><div class='qui'>%s</div>"
                   "<div class='gris petit'>le %s</div></div>" % (esc(nom(doc.collecte_par)), heure(doc.get("collecte_le"))))
-    html.append("<table class='signatures'><tr><td style='padding-right:6px'>%s</td><td style='padding-left:6px'>%s</td>"
-                "</tr></table><div class='gris petit' style='margin-top:4px'>Validations faites dans ERPNext, "
-                "horodatées ; document figé au moment de la collecte.</div>" % (gauche, droite))
+    html.append("<div class='signatures'><table><tr><td style='padding-right:6px'>%s</td>"
+                "<td style='padding-left:6px'>%s</td></tr></table><div class='gris petit' style='margin-top:4px'>"
+                "Validations faites dans ERPNext, horodatées ; document figé au moment de la collecte.</div></div>"
+                % (gauche, droite))
 
     return "".join(html)
 
