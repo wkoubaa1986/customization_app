@@ -1325,9 +1325,13 @@ def _statut_tache(tache: str, statut: str) -> None:
     frappe.db.set_value("Tache de travail", tache, maj)
 
 
-def libelle_etape(statut: str, employe: str = "", responsable: str = "") -> str:
+def libelle_etape(statut: str, employe: str = "", responsable: str = "", a_recompter: int = 0) -> str:
     """Où en est la vérification, écrit sur la tâche du calendrier tant qu'elle n'est pas terminée. PURE.
-    `employe` / `responsable` : les prénoms, pour dire QUI doit faire le geste suivant."""
+    `employe` / `responsable` : les prénoms, pour dire QUI doit faire le geste suivant.
+    `a_recompter` : articles qui ont bougé depuis le comptage (fiche renvoyée) — « à compter » laissait croire
+    que tout était à refaire, ou que la fiche n'avait jamais été commencée."""
+    if statut == EN_COURS and a_recompter:
+        return "%d article(s) à recompter" % a_recompter + (" par " + employe if employe else "")
     if statut == EN_COURS:
         return "à compter" + (" par " + employe if employe else "")
     if statut == A_VALIDER:
@@ -1351,11 +1355,14 @@ def etapes_des_taches(taches) -> dict:
     prenom = lambda nom: (nom or "").split(" ")[0]
     cfg = config_verification()
     resp = prenom(frappe.db.get_value("Employee", cfg["responsable"], "employee_name")) if cfg.get("responsable") else ""
+    recomptes = dict(frappe.db.sql("""select parent, count(*) from `tabVerification Stock Ligne`
+                                      where parenttype='Verification Stock' and a_recompter=1 and parent in %s group by parent""",
+                                   ([r.name for r in rows],)))
     out = {}
     for r in rows:
         emp = _employe_du_stock(r.entrepot)
         info = {"verification": r.name, "statut": r.statut, "entrepot": se_court(r.entrepot),
-                "etape": libelle_etape(r.statut, prenom(emp.employee_name if emp else ""), resp)}
+                "etape": libelle_etape(r.statut, prenom(emp.employee_name if emp else ""), resp, cint(recomptes.get(r.name)))}
         for t in (r.tache_employe, r.tache_responsable):
             if t in noms:
                 out[t] = info
@@ -1639,6 +1646,18 @@ def verifications_a_traiter():
         else:
             continue
         out.append({"name": v.name, "entrepot": v.entrepot, "libelle": actifs[v.entrepot], "geste": geste, "texte": texte})
+    # Une fiche RENVOYÉE au comptage (des articles ont bougé) attend aussi l'employé du stock : sans cette ligne, rien
+    # ne le lui disait — le 24/11/2026, Radhouan Sifi n'avait plus de bouton « Accepter » et aucun bandeau, et ses
+    # 2 articles à recompter étaient noyés parmi 103 lignes.
+    moi = _mon_employe()
+    if moi and moi.custom_warehouse in actifs:
+        for nom in frappe.get_all(VERIF, filters={"statut": EN_COURS, "entrepot": moi.custom_warehouse, "renvois": [">", 0]},
+                                  pluck="name", order_by="date asc"):
+            lignes = _a_recompter(frappe.get_doc(VERIF, nom))
+            if lignes:
+                out.append({"name": nom, "entrepot": moi.custom_warehouse, "libelle": actifs[moi.custom_warehouse], "geste": "recompter",
+                            "texte": _("{0} article(s) ont bougé depuis le comptage : {1} — à recompter, puis terminer le comptage")
+                            .format(len(lignes), _liste_courte([l.item_name or l.item_code for l in lignes], 4))})
     return out
 
 
@@ -1800,13 +1819,18 @@ def _rafraichir_systeme(v, seulement_si_change: bool = False) -> list[str]:
     `seulement_si_change` : rien n'est écrit si aucune quantité n'a bougé (relecture à chaque ouverture)."""
     qtes = _quantites([l.item_code for l in v.lignes], [v.entrepot])
     bouges, change = [], False
+    mouvements = None
     for l in v.lignes:
         nouveau = qtes.get((l.item_code, v.entrepot), 0.0)
         if abs(flt(nouveau, 6) - flt(l.qte_systeme, 6)) > 1e-6:
             change = True
             if l.compte:
-                l.commentaire = (_("Stock modifié depuis le comptage ({0} → {1}) : à recompter")
-                                 .format(flt(l.qte_systeme, 6), flt(nouveau, 6)))[:140]
+                if mouvements is None:
+                    mouvements = _pieces_depuis(v)
+                pieces = mouvements.get(l.item_code) or []
+                l.commentaire = (_("Stock modifié depuis le comptage ({0} → {1}{2}) : à recompter")
+                                 .format("%g" % flt(l.qte_systeme, 6), "%g" % flt(nouveau, 6),
+                                         (", " + ", ".join(pieces)) if pieces else ""))[:140]
                 l.compte, l.qte_comptee, l.qte_employe, l.ajuste, l.a_recompter = 0, 0, 0, 0, 1
                 bouges.append(l.item_code)
             l.qte_systeme = nouveau
@@ -1831,19 +1855,65 @@ def _rafraichir_systeme(v, seulement_si_change: bool = False) -> list[str]:
     return bouges
 
 
+_PIECES_COURTES = {"Delivery Note": "BL", "Stock Entry": "transfert", "Stock Reconciliation": "rapprochement",
+                   "Sales Invoice": "facture", "Purchase Receipt": "réception", "Purchase Invoice": "facture d'achat"}
+
+
+def _pieces_depuis(v) -> dict:
+    """{article: ["BL MAT-DN-…", …]} : les pièces passées sur le stock de la fiche depuis la dernière relecture des
+    quantités système. Sert à dire POURQUOI un article est à recompter : le 24/11/2026, VERIF-2026-00022 de Radhouan
+    Sifi est repartie au comptage à l'ouverture de la fiche par Wassim, à cause d'un BL que Radhouan avait lui-même
+    passé à 10:42 — rien sur la fiche ne le disait, et son nom à lui n'apparaissait nulle part. Indicatif seulement."""
+    depuis = v.get("rafraichi_le") or v.get("valide_responsable_le") or v.get("valide_employe_le") or v.creation
+    rows = frappe.db.sql("""select item_code, voucher_type, voucher_no, max(creation) quand from `tabStock Ledger Entry`
+                            where warehouse=%s and is_cancelled=0 and creation > %s and item_code in %s
+                            group by item_code, voucher_type, voucher_no order by quand""",
+                         (v.entrepot, depuis, [l.item_code for l in v.lignes] or [""]), as_dict=True)
+    out = {}
+    for r in rows:
+        out.setdefault(r.item_code, []).append("%s %s" % (_PIECES_COURTES.get(r.voucher_type, r.voucher_type), r.voucher_no))
+    return {k: p[-3:] for k, p in out.items()}
+
+
+def _a_recompter(v) -> list:
+    return [l for l in v.lignes if l.a_recompter]
+
+
+def _liste_courte(noms: list, n: int = 6) -> str:
+    """« a, b, c » — au-delà de n : « a, b, c et 4 autre(s) ». PURE."""
+    noms = [x for x in noms if x]
+    return ", ".join(noms[:n]) + (_(" et {0} autre(s)").format(len(noms) - n) if len(noms) > n else "")
+
+
+def _deja_renvoyee(v):
+    """L'écran était resté ouvert sur « À valider » / « À confirmer » pendant qu'une autre ouverture renvoyait
+    la fiche au comptage (le 24/11/2026 : Radhouan sur « Accepter », la fiche repartie à 10:56 par l'ouverture de
+    Wassim) : on répond comme le renvoi lui-même — l'écran dit quoi recompter — au lieu d'un refus « pas à
+    confirmer (En cours) » qui ne dit rien."""
+    lignes = _a_recompter(v) if v.statut == EN_COURS else []
+    return dict(_resume(v), renvoye=True, a_recompter=[l.item_code for l in lignes]) if lignes else None
+
+
 def _renvoi_auto(v, bouges: list[str]) -> dict:
     """Des articles ont bougé : leur comptage est effacé, la fiche repart au comptage chez l'employé."""
     v.statut = EN_COURS
     v.valide_employe_par = v.valide_employe_le = v.valide_responsable_par = v.valide_responsable_le = None
     v.renvois = cint(v.renvois) + 1
-    v.note = ((v.note + "\n") if v.note else "") + _("Renvoi automatique : {0} article(s) ont bougé depuis le comptage, à recompter.").format(len(bouges))
+    noms = {l.item_code: (l.item_name or l.item_code) for l in v.lignes}
+    # La note dit QUI a constaté le renvoi (la fiche est enregistrée à son nom : c'est l'ouverture de la fiche
+    # qui relit le stock, pas un geste de sa part) et quels articles recompter.
+    v.note = ((v.note + "\n") if v.note else "") + _(
+        "Renvoi automatique le {0} (constaté à l’ouverture par {1}) : {2} article(s) ont bougé depuis le comptage — {3}. "
+        "À recompter, puis terminer le comptage."
+    ).format(frappe.utils.format_datetime(now_datetime(), "dd/MM HH:mm"), frappe.utils.get_fullname(frappe.session.user),
+             len(bouges), _liste_courte([noms.get(c, c) for c in bouges]))
     _sauver(v)
     if v.tache_employe and frappe.db.get_value("Tache de travail", v.tache_employe, "status") == "Completed":
         _statut_tache(v.tache_employe, "Open")
     emp = _employe_du_stock(v.entrepot)
     if emp and emp.user_id and emp.user_id != frappe.session.user:
-        _prevenir(emp.user_id, _("🧾 Vérification {0} : {1} article(s) ont bougé depuis votre comptage, à recompter")
-                  .format(v.name, len(bouges)), v.name)
+        _prevenir(emp.user_id, _("🧾 Vérification {0} : {1} article(s) ont bougé depuis votre comptage, à recompter : {2}")
+                  .format(v.name, len(bouges), _liste_courte([noms.get(c, c) for c in bouges], 3)), v.name)
     return dict(_resume(v), renvoye=True, a_recompter=bouges)
 
 
@@ -2110,6 +2180,9 @@ def valider_verification(name, comptes=None, note=None):
     if _est_employe_du_stock(v.entrepot):
         frappe.throw(_("Votre propre stock : un autre responsable magasin doit valider ce comptage."), frappe.PermissionError)
     if v.statut != A_VALIDER:
+        deja = _deja_renvoyee(v)
+        if deja:
+            return deja
         frappe.throw(_("Cette vérification n’est pas à valider ({0}).").format(v.statut))
     comptes = _dict_json(comptes)
     bouges = _rafraichir_systeme(v)
@@ -2157,6 +2230,9 @@ def confirmer_verification(name, comptes=None, pour_employe=0):
     elif not _est_employe_du_stock(v.entrepot):
         frappe.throw(_("Seul l’employé de ce stock confirme les quantités validées."), frappe.PermissionError)
     if v.statut != A_CONFIRMER:
+        deja = _deja_renvoyee(v)
+        if deja:
+            return deja
         frappe.throw(_("Cette vérification n’est pas à confirmer ({0}).").format(v.statut))
     bouges = _rafraichir_systeme(v)
     if bouges:

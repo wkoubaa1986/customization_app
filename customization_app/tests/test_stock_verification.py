@@ -46,6 +46,17 @@ class TestEtapeSurLaTache(unittest.TestCase):
         self.assertEqual(S.libelle_etape("Terminée", "Sadok", "Hedi"), "")          # terminée : plus d'étape, la tâche est verte
         self.assertEqual(S.libelle_etape("Annulée", "Sadok", "Hedi"), "")
 
+    def test_fiche_renvoyee_dit_combien_recompter(self):
+        # 24/11/2026 : la fiche de Radhouan renvoyée pour 2 articles disait « à compter », comme une fiche neuve.
+        self.assertEqual(S.libelle_etape("En cours", "Radhouan", "Hedi", 2), "2 article(s) à recompter par Radhouan")
+        self.assertEqual(S.libelle_etape("En cours", "", "", 1), "1 article(s) à recompter")
+        self.assertEqual(S.libelle_etape("À valider", "Radhouan", "Hedi", 2), "comptée — à valider par Hedi")
+
+    def test_liste_courte(self):
+        self.assertEqual(S._liste_courte(["a", "b"]), "a, b")
+        self.assertEqual(S._liste_courte(["a", "b", "c", "d"], 2), "a, b et 2 autre(s)")
+        self.assertEqual(S._liste_courte(["a", None, ""]), "a")
+
     def test_sans_tache(self):
         self.assertEqual(S.etapes_des_taches([]), {})
         self.assertEqual(S.etapes_des_taches([None, ""]), {})

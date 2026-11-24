@@ -220,9 +220,9 @@ class StockEntrepots {
     this.$r.find("#se-v-badge").toggle(!!verifs.length).text(verifs.length);
     const miens = liste.filter((t) => t.a_moi);
     this.$r.find("#se-s-attente").html(verifs.map((v) => `<div class="se-bandeau">
-        <div class="t">🧾 Vérification ${se_esc(v.libelle)} — ${v.geste === "valider" ? "à valider" : v.geste === "accepter_pour" ? "employé parti : à accepter ou annuler" : "à accepter"}</div>
+        <div class="t">🧾 Vérification ${se_esc(v.libelle)} — ${v.geste === "valider" ? "à valider" : v.geste === "accepter_pour" ? "employé parti : à accepter ou annuler" : v.geste === "recompter" ? "à recompter" : "à accepter"}</div>
         <div class="d">${se_esc(v.texte)}</div>
-        <button type="button" class="btn btn-primary btn-sm" data-verif="${se_esc(v.name)}">${v.geste === "valider" ? "🔍 Vérifier et valider" : v.geste === "accepter_pour" ? "🔍 Voir, accepter à sa place ou annuler" : "🔍 Voir et accepter"}</button>
+        <button type="button" class="btn btn-primary btn-sm" data-verif="${se_esc(v.name)}">${v.geste === "valider" ? "🔍 Vérifier et valider" : v.geste === "accepter_pour" ? "🔍 Voir, accepter à sa place ou annuler" : v.geste === "recompter" ? "🔁 Recompter" : "🔍 Voir et accepter"}</button>
       </div>`).join("") + miens.map((t) => `<div class="se-bandeau">
         <div class="t">🔁 Transfert ${se_esc(t.name)} à valider — ${se_esc(this.libelle(t.de))} → ${se_esc(this.libelle(t.vers))}</div>
         <div class="d">${t.lignes.length} article(s) · ${se_esc(this.dernierTour(t))} · ${se_esc(t.quand)}${t.remarque ? ` · ${se_esc(t.remarque)}` : ""}</div>
@@ -1096,7 +1096,7 @@ class StockEntrepots {
     const v = s.en_cours, a = v.actions || [];
     if (v.statut === "En cours") return v.photo
       ? `<div class="plan">📝 Comptage en cours du ${se_dt(v.date)} : ${v.nb_comptes}/${v.nb_lignes} comptés${v.renvois ? ` · renvoyé ${v.renvois}×` : ""}${v.nb_a_recompter ? ` · <b class="neg">${v.nb_a_recompter} à recompter</b>` : ""}</div>
-         <button type="button" class="btn btn-primary" data-reprendre="${se_esc(v.name)}">Reprendre le comptage</button>`
+         <button type="button" class="btn btn-primary" data-reprendre="${se_esc(v.name)}">${v.nb_a_recompter ? `🔁 Recompter ${v.nb_a_recompter} article(s)` : "Reprendre le comptage"}</button>`
       : `<div class="plan">📅 Vérification ${v.prevue ? "prévue le" : "du"} <b>${se_dt(v.date)}</b>${v.tache_employe ? " · tâches créées" : ""}</div>
          <button type="button" class="btn btn-primary" data-reprendre="${se_esc(v.name)}">Commencer le comptage</button>
          ${a.includes("annuler") ? `<button type="button" class="btn btn-default btn-sm" data-annuler-carte="${se_esc(v.name)}" title="Fiche jamais commencée : l’abandonner sans ouvrir le comptage">✖️ Annuler cette vérification</button>` : ""}`;
@@ -1139,12 +1139,12 @@ class StockEntrepots {
             : mode === "confirmation_pour" ? `<div class="se-note">Quantités validées par <b>${se_esc(d.fiche.valide_responsable_par)}</b>${d.fiche.nb_ajustes ? " (ajustées : surlignées, le comptage de l’employé en dessous)" : ""}. L’employé du stock n’a pas accepté : en tant que responsable magasin vous pouvez <b>accepter à sa place</b> (le rapprochement passe sur son stock, la fiche garde votre nom) ou <b>annuler la fiche</b> (rien n’est rapproché).</div>`
             : mode === "confirmation" ? `<div class="se-note">Quantités validées par <b>${se_esc(d.fiche.valide_responsable_par)}</b>${d.fiche.nb_ajustes ? " (ajustées : surlignées, votre comptage en dessous)" : ""}. D’accord : <b>acceptez</b>. Sinon corrigez la quantité : la fiche repart chez le responsable, qui a le dernier mot.</div>`
             : `<div class="se-note">${d.fiche.valide_employe_par ? `Comptage ${se_esc(d.fiche.valide_employe_par)}` : ""}${d.fiche.valide_responsable_par ? ` · validé par ${se_esc(d.fiche.valide_responsable_par)}` : ""}${d.fiche.rapprochement ? ` · ${se_lien("Stock Reconciliation", d.fiche.rapprochement, "rapprochement " + d.fiche.rapprochement)}` : ""}</div>`}
-          ${d.fiche.nb_a_recompter ? `<div class="se-alerte">⚠️ ${d.fiche.nb_a_recompter} article(s) ont bougé depuis le comptage : leur comptage est effacé, à recompter (lignes marquées).</div>` : ""}
+          ${d.fiche.nb_a_recompter ? `<div class="se-alerte">⚠️ ${d.fiche.nb_a_recompter} article(s) ont bougé depuis le comptage : leur comptage est effacé. Recomptez-les (en tête de liste), puis <b>Terminer le comptage</b> : ${se_esc(d.lignes.filter((l) => l.a_recompter).map((l) => l.item_name || l.item_code).join(", "))}</div>` : ""}
           ${d.fiche.note ? `<div class="se-note">${se_esc(d.fiche.note)}</div>` : ""}
           <div class="plan" id="se-c-bilan"></div></div>
         <input type="search" class="form-control se-saisie" id="se-c-filtre" placeholder="🔎 Filtrer un article…" style="margin-top:8px">
         <div class="se-c-tete"><span class="txt">Article</span><span class="sys">Système</span><span class="q">Compté</span><span class="ec">Écart</span></div>
-        <div id="se-c-lignes">${d.lignes.map(ligne).join("")}</div>
+        <div id="se-c-lignes">${[...d.lignes.filter((l) => l.a_recompter), ...d.lignes.filter((l) => !l.a_recompter)].map(ligne).join("")}</div>
         ${mode === "comptage" ? `<div class="se-c-barre">${annuler}<button type="button" class="btn btn-default" data-enregistrer>💾 Enregistrer</button>
           <button type="button" class="btn btn-primary" data-terminer>✅ Terminer le comptage</button></div>`
           : mode === "validation" ? `<div class="se-c-barre">${annuler}<button type="button" class="btn btn-default" data-renvoyer>↩ Renvoyer au comptage</button>
