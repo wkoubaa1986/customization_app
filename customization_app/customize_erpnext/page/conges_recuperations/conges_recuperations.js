@@ -1,7 +1,13 @@
 frappe.pages["conges-recuperations"].on_page_load = function (wrapper) {
   frappe.ui.make_app_page({ parent: wrapper, title: "Congés & récupérations", single_column: true });
   $(wrapper).find(".layout-main-section").html(frappe.render_template("conges_recuperations", {}));
-  new CongesRecuperations(wrapper);
+  wrapper.cr = new CongesRecuperations(wrapper);
+};
+// Barre « demandes de congé à valider » (conges_a_valider.js) : elle ouvre la page sur la section des demandes.
+frappe.pages["conges-recuperations"].on_page_show = function (wrapper) {
+  const defiler = frappe.route_options && frappe.route_options.demandes;
+  if (defiler) delete frappe.route_options.demandes;
+  if (wrapper.cr) wrapper.cr._demandes(!!defiler);
 };
 
 // Rendu pur : planning, soldes, règles viennent de customization_app.conges_recuperations.get_context.
@@ -18,6 +24,49 @@ class CongesRecuperations {
     this._sel = null; // sélection en cours dans le planning {employee, from, to}
     this._bind();
     this._fetch();
+    // Demandes de congé à valider (24/11/2026) : en tête de page, mises à jour en temps réel.
+    this.$dem = $('<div class="cr-card" id="cr-demandes" style="display:none"></div>').prependTo(this.$root.find("#cr-main"));
+    this.$dem.on("click", "[data-decision]", (e) => this._decider($(e.currentTarget).attr("data-name"), $(e.currentTarget).attr("data-decision")));
+    frappe.realtime.on("conges_a_valider", () => this._demandes());
+  }
+
+  async _demandes(defiler) {
+    let liste = [];
+    try { liste = (await frappe.call({ method: "customization_app.conges_recuperations.demandes_a_valider" })).message || []; }
+    catch (e) { return; }
+    const esc = (t) => frappe.utils.escape_html(String(t == null ? "" : t));
+    const jour = (d) => frappe.datetime.str_to_user(d);
+    if (!liste.length) {
+      this.$dem.html(`<div class="cr-title">🏖️ Demandes à valider <span class="cr-sub">aucune demande en attente</span></div>`).toggle(!!defiler);
+      return;
+    }
+    const lignes = liste.map((d) => `<tr>
+        <td><b>${esc(d.employee_name)}</b><div class="cr-hint" style="margin:0">demandé le ${jour(d.posting_date)}${d.approbateur ? " · approbateur : " + esc(d.approbateur) : ""}</div></td>
+        <td>${esc(d.leave_type)}</td>
+        <td>${jour(d.from_date)}${d.to_date !== d.from_date ? " → " + jour(d.to_date) : ""}${d.half_day ? " (demi-journée)" : ""}</td>
+        <td class="num"><b>${this._fmt(d.total_leave_days)}</b> j.</td>
+        <td class="num">${d.solde == null ? "—" : this._fmt(d.solde) + " j."}</td>
+        <td>${esc(d.description || "")}</td>
+        <td style="white-space:nowrap;text-align:right">
+          <button class="btn btn-xs btn-success" data-name="${esc(d.name)}" data-decision="Approved">✅ Approuver</button>
+          <button class="btn btn-xs btn-danger" data-name="${esc(d.name)}" data-decision="Rejected">❌ Refuser</button></td>
+      </tr>`).join("");
+    this.$dem.html(`<div class="cr-title">🏖️ Demandes à valider <span class="cr-sub">${liste.length} en attente — l’employé est prévenu de la décision</span></div>
+      <div class="cr-wrap"><table class="cr-tbl"><thead><tr><th>Employé</th><th>Type</th><th>Dates</th><th class="num">Jours</th>
+        <th class="num">Solde avant</th><th>Motif</th><th></th></tr></thead><tbody>${lignes}</tbody></table></div>`).show();
+    if (defiler) this.$dem[0].scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  _decider(name, decision) {
+    const envoyer = async (motif) => {
+      await frappe.call({ method: "customization_app.conges_recuperations.traiter_demande", args: { name, decision, motif: motif || null }, freeze: true });
+      frappe.show_alert({ message: decision === "Approved" ? "Congé approuvé — l’employé est prévenu" : "Demande refusée — l’employé est prévenu", indicator: decision === "Approved" ? "green" : "orange" });
+      this._demandes();
+      this._fetch();
+    };
+    if (decision === "Approved") frappe.confirm("Approuver cette demande de congé ?", () => envoyer());
+    else frappe.prompt({ fieldtype: "Small Text", fieldname: "motif", label: "Motif du refus (facultatif, envoyé à l’employé)" },
+      (v) => envoyer(v.motif), "Refuser la demande", "Refuser");
   }
 
   _bind() {

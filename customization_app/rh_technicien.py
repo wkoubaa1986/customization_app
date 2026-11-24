@@ -13,6 +13,8 @@ import frappe
 from frappe import _
 from frappe.utils import cint, flt, getdate, nowdate
 
+from customization_app.conges_recuperations import approbateur_de
+
 PAGE = "rh-technicien"
 # Le format par défaut du Salary Slip (« Aqua World Fiche de paie » depuis le 24/11/2026, paie.py) : le même PDF
 # que l'application RH et la page « Contrôle de la paie ».
@@ -130,7 +132,8 @@ def demander_conge(leave_type, from_date, to_date=None, half_day=0, half_day_dat
         "from_date": from_date, "to_date": to_date, "half_day": cint(half_day),
         "half_day_date": half_day_date if cint(half_day) else None,
         "description": (motif or "").strip() or None, "status": "Open",
-        "leave_approver": emp.leave_approver or None, "posting_date": nowdate(),
+        # Sans approbateur sur la fiche (Salma, Hedi), le gérant (24/11/2026) : HRMS en exige un.
+        "leave_approver": emp.leave_approver or approbateur_de(emp.name), "posting_date": nowdate(),
     })
     doc.insert()         # avec les droits du technicien (rôle Employee), les règles HRMS jouent
     return {"name": doc.name, "jours": flt(doc.total_leave_days, 1), "statut": doc.status}

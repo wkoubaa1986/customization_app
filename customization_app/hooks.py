@@ -217,8 +217,14 @@ doc_events = {
     # journée » dans le calendrier (remplace le Server Script « Generer » sur Attendance), retirée
     # à l'annulation. Voir conges_recuperations.py.
     "Leave Application": {
-        "on_submit": "customization_app.conges_recuperations.leave_application_on_submit",
-        "on_cancel": "customization_app.conges_recuperations.leave_application_on_cancel",
+        "on_submit": ["customization_app.conges_recuperations.leave_application_on_submit",
+                      "customization_app.conges_recuperations.signaler_changement"],
+        "on_cancel": ["customization_app.conges_recuperations.leave_application_on_cancel",
+                      "customization_app.conges_recuperations.signaler_changement"],
+        # Barre « demandes de congé à valider » des valideurs : à jour dès qu'une demande naît ou change (24/11/2026).
+        "after_insert": "customization_app.conges_recuperations.signaler_changement",
+        "on_update": "customization_app.conges_recuperations.signaler_changement",
+        "on_trash": "customization_app.conges_recuperations.signaler_changement",
     },
     "Mes Interventions Employe": {
         "before_submit": "customization_app.api.before_submit_mes_interventions",
@@ -659,6 +665,7 @@ app_include_js = [_js("customer_quick_entry.js"),
                   _js("suivi_activite_onglet.js"),  # l'onglet « Suivi d'activité » ouvre l'outil
                   _js("situation_mensuelle_clic.js"),  # graphes Situation Mensuelle et Pertes et Profits → page de détail
                   _js("bl_magasin_alerte.js"),  # bandeau rouge du magasinier principal : BL à approuver / à vérifier
+                  _js("conges_a_valider.js"),  # barre orange des valideurs de congés (Congés RH) : demandes à valider
                   _js("liste_prix_documents_list.js"),  # liste des listes de prix : bouton vers l'assistant
                   # 📨 SMS / e-mail au client depuis la fiche tâche, avec modèles prédéfinis
                   # (technicien + téléphone injectés automatiquement, commande liée si présente).

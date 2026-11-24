@@ -235,9 +235,9 @@ def _poser_absence(employee, leave_type, from_date, to_date, half_day=0, half_da
     if leave_type == TYPE_RECUP:
         _assurer_type_recup()
         # C'est le responsable qui accorde la récupération : s'il manque du solde, on le crédite.
-        from hrms.hr.doctype.leave_application.leave_application import get_leave_balance_on, get_number_of_leave_days
+        from hrms.hr.doctype.leave_application.leave_application import get_number_of_leave_days
         besoin = flt(get_number_of_leave_days(employee, leave_type, from_date, to_date, cint(half_day), half_day_date))
-        solde = flt(get_leave_balance_on(employee, leave_type, from_date, to_date, consider_all_leaves_in_the_allocation_period=True))
+        solde = flt(_solde_avant(employee, leave_type, from_date, to_date))
         if besoin > solde:
             _allocation_recup(employee, getdate(from_date).year, besoin - solde)
     emp = frappe.db.get_value("Employee", employee, ["company", "employee_name"], as_dict=True)
@@ -249,11 +249,14 @@ def _poser_absence(employee, leave_type, from_date, to_date, half_day=0, half_da
         "description": (motif or "").strip() or _("Posé depuis Congés & récupérations"),
         "posting_date": nowdate(), "status": "Approved", "leave_approver": frappe.session.user,
     })
+    # Accès vérifié par l'appelant (rôle Congés RH) : les User Permission « tâches » du valideur ne s'appliquent pas ici
+    # (Nejib recevait « Pas permis » pour Salma et Hedi, 24/11/2026).
+    doc.flags.ignore_permissions = True
     doc.insert()
     doc.submit()
     if leave_type == TYPE_RECUP:
         frappe.get_doc({"doctype": "Recuperation Acquise", "employee": employee, "date_debut": from_date, "date_fin": to_date,
-                        "jours": flt(doc.total_leave_days), "origine": origine, "leave_application": doc.name}).insert()
+                        "jours": flt(doc.total_leave_days), "origine": origine, "leave_application": doc.name}).insert(ignore_permissions=True)
     return {"name": doc.name, "jours": flt(doc.total_leave_days)}
 
 
@@ -261,10 +264,11 @@ def _poser_absence(employee, leave_type, from_date, to_date, half_day=0, half_da
 def annuler_absence(name):
     _verifier_acces()
     doc = frappe.get_doc("Leave Application", name)
+    doc.flags.ignore_permissions = True
     if doc.docstatus == 1:
         doc.cancel()
     elif doc.docstatus == 0:
-        doc.delete()
+        doc.delete(ignore_permissions=True)
     return True
 
 
@@ -281,6 +285,7 @@ def _augmenter_allocation(name: str, jours: float) -> str:
     doc = frappe.get_doc("Leave Allocation", name)
     doc.new_leaves_allocated = flt(doc.new_leaves_allocated) + flt(jours)
     doc.flags.ignore_validate_update_after_submit = False
+    doc.flags.ignore_permissions = True      # accès vérifié par l'appelant (rôle Congés RH), voir _verifier_acces
     doc.save()
     return doc.name
 
@@ -289,6 +294,7 @@ def _creer_allocation(employee: str, leave_type: str, from_date, to_date, jours:
     doc = frappe.new_doc("Leave Allocation")
     doc.update({"employee": employee, "leave_type": leave_type, "from_date": from_date, "to_date": to_date,
                 "new_leaves_allocated": flt(jours), "carry_forward": cint(carry_forward)})
+    doc.flags.ignore_permissions = True      # accès vérifié par l'appelant (rôle Congés RH)
     doc.insert()
     doc.submit()
     return doc.name
@@ -332,6 +338,7 @@ def supprimer_allocation(name):
     """Annule une allocation (HRMS refuse si des congés ont été pris dessus)."""
     _verifier_acces()
     doc = frappe.get_doc("Leave Allocation", name)
+    doc.flags.ignore_permissions = True
     doc.cancel()
     return True
 
@@ -565,3 +572,103 @@ def tache_quotidienne():
     frappe.set_user("Administrator")
     planifier_recuperations()
     frappe.db.commit()
+
+
+# --------------------------------------------------------------------------- demandes à valider (24/11/2026)
+# Sa demande : tant qu'une demande de congé n'est pas validée, une barre s'affiche dans la session de ceux qui
+# valident (lui et Nejib Koubaa, le gérant : rôle « Congés RH ») et mène ici, où ils approuvent ou refusent.
+
+# Approbateur des demandes quand la fiche Employé n'en a pas (Salma, Hedi le 24/11/2026) : le gérant. HRMS exige un
+# approbateur (HR Settings) : sans lui, la demande était refusée à l'envoi.
+APPROBATEUR_PAR_DEFAUT = "aquaworld.servicing@gmail.com"
+CHAMPS_DEMANDE = ["name", "employee", "employee_name", "leave_type", "from_date", "to_date", "total_leave_days",
+                  "half_day", "half_day_date", "description", "posting_date", "leave_approver", "creation"]
+
+
+def approbateur_de(employee: str) -> str | None:
+    from hrms.hr.doctype.leave_application.leave_application import get_leave_approver
+    return get_leave_approver(employee) or (APPROBATEUR_PAR_DEFAUT if frappe.db.exists("User", APPROBATEUR_PAR_DEFAUT) else None)
+
+
+def _demandes_ouvertes(limit=None) -> list:
+    return frappe.get_all("Leave Application", filters={"docstatus": 0, "status": "Open"}, fields=CHAMPS_DEMANDE,
+                          order_by="from_date asc", limit_page_length=limit or 0)
+
+
+def _solde_avant(employee, leave_type, date, to_date=None):
+    """Solde du type de congé à la date de la demande. HRMS ne le montre qu'à l'employé, à son approbateur ou à qui lit
+    sa fiche Employé : Nejib, dont les droits « tâches » ne couvrent ni Salma ni Hedi, recevait « Pas permis » à
+    l'ouverture de la page (24/11/2026). L'accès est déjà vérifié (rôle Congés RH) : calculé en Administrator."""
+    from hrms.hr.doctype.leave_application.leave_application import get_leave_balance_on
+    user = frappe.session.user
+    try:
+        frappe.set_user("Administrator")
+        return flt(get_leave_balance_on(employee, leave_type, date, to_date, consider_all_leaves_in_the_allocation_period=True), 1)
+    except Exception:
+        return None
+    finally:
+        frappe.set_user(user)
+
+
+@frappe.whitelist()
+def demandes_a_valider() -> list[dict]:
+    _verifier_acces()
+    out = []
+    for d in _demandes_ouvertes():
+        out.append(dict(d, solde=_solde_avant(d.employee, d.leave_type, d.from_date),
+                        approbateur=frappe.utils.get_fullname(d.leave_approver) if d.leave_approver else None))
+    return out
+
+
+@frappe.whitelist(methods=["POST"])
+def traiter_demande(name, decision, motif=None) -> dict:
+    """Approuve ou refuse une demande ouverte : elle est soumise avec ce statut (règles HRMS : solde, chevauchements),
+    l'employé est prévenu dans l'application RH (et par mail, réglage HRMS)."""
+    _verifier_acces()
+    if decision not in ("Approved", "Rejected"):
+        frappe.throw(_("Décision inconnue."))
+    doc = frappe.get_doc("Leave Application", name)
+    if doc.docstatus != 0 or doc.status != "Open":
+        frappe.throw(_("Cette demande est déjà traitée ({0}).").format(_(doc.status)))
+    doc.status = decision
+    doc.leave_approver = doc.leave_approver or frappe.session.user
+    doc.flags.ignore_permissions = True
+    doc.submit()
+    motif = (motif or "").strip()
+    if motif:
+        doc.add_comment("Comment", _("Motif ({0}) : {1}").format(_("refus") if decision == "Rejected" else _("accord"), motif))
+        # HRMS prévient déjà l'employé de la décision (application RH, et mail) — mais sans le motif : on l'envoie.
+        _prevenir_employe(doc, motif)
+    return {"name": doc.name, "statut": doc.status}
+
+
+def _prevenir_employe(doc, motif=None):
+    user = frappe.db.get_value("Employee", doc.employee, "user_id")
+    if not user:
+        return
+    periode = frappe.utils.formatdate(doc.from_date) + ("" if doc.from_date == doc.to_date else " → " + frappe.utils.formatdate(doc.to_date))
+    texte = (_("✅ Votre congé ({0}, {1}) est approuvé").format(doc.leave_type, periode) if doc.status == "Approved"
+             else _("❌ Votre demande de congé ({0}, {1}) est refusée").format(doc.leave_type, periode))
+    if motif:
+        texte += " — " + motif
+    try:
+        frappe.get_doc({"doctype": "PWA Notification", "from_user": frappe.session.user, "to_user": user, "message": texte,
+                        "reference_document_type": "Leave Application", "reference_document_name": doc.name}).insert(ignore_permissions=True)
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "Congés : notification de l'employé")
+
+
+@frappe.whitelist()
+def compteur_demandes():
+    """Pour la barre de toutes les pages du Desk ; None pour qui ne valide pas les congés."""
+    if frappe.session.user == "Guest" or not set(frappe.get_roles()).intersection(ROLES):
+        return None
+    demandes = _demandes_ouvertes()
+    return {"n": len(demandes),
+            "apercu": [{"nom": d.employee_name, "type": d.leave_type, "du": str(d.from_date), "au": str(d.to_date),
+                        "jours": flt(d.total_leave_days, 1)} for d in demandes[:3]]}
+
+
+def signaler_changement(doc, method=None):
+    """Demande créée, traitée, annulée ou supprimée : la barre des valideurs se met à jour tout de suite."""
+    frappe.publish_realtime("conges_a_valider", {}, after_commit=True)
