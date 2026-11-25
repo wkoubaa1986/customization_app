@@ -141,19 +141,26 @@ def rapprocher_bls(cites, ouverts, clos=(), lignes=None) -> dict:
     `ouverts` : [{name, numero_bl, numero_facture, montant, date_facture, recu (R : valeur du reçu à solder),
                   items: [{item_code, qty}], motif ("" si traitable)}] — BL du fournisseur pas encore couverts ;
     `clos` : [{name, numero_bl, numero_facture, couvert_par}] — BL du fournisseur déjà couverts ;
-    `lignes` : [{item_code, qty}] lues sur la facture (« En partie achat »), pour le niveau « probable ».
-    -> {bls: [carte], inconnus: [cité sans fiche], deja_couverts: [cité déjà couvert], coches: [noms]}"""
+    `lignes` : [{item_code, qty, code, designation, bl_cle}] lues sur la facture (« En partie achat »), TOUTES et dans
+               l'ordre de l'écran : le niveau « probable », et les lignes de la rubrique de chaque BL appariées à sa
+               réception (`appariees`, cf. `articles_de_la_rubrique`).
+    -> {bls: [carte], inconnus: [cité sans fiche], deja_couverts: [cité déjà couvert], coches: [noms]} ; chaque carte
+       porte `recus` (les lignes de sa réception : item_code, item_name, qty) et `appariees`."""
     cites = [dict(c, cle=cle_numero_bl(c.get("numero"))) for c in (cites or []) if cle_numero_bl(c.get("numero"))]
     cartes, pris, cites_servis = [], set(), set()
 
     def carte(f, niveau, cite=None):
         bloquant = bool(f.get("motif"))
+        recus = [{"item_code": i["item_code"], "item_name": i.get("item_name") or "", "qty": _m(i.get("qty"))}
+                 for i in f.get("items") or [] if i.get("item_code")]
+        cles = cles_fiche(f.get("numero_bl"), f.get("numero_facture"))
         c = {"name": f["name"], "numero_bl": f.get("numero_bl") or f.get("numero_facture") or "",
              "date": str(f.get("date_facture") or "")[:10], "montant": _m(f.get("montant")), "recu": _m(f.get("recu")),
              "niveau": niveau, "motif": f.get("motif") or "", "bloquant": bloquant,
              "coche": niveau == TROUVE and not bloquant, "cite": None, "controle": None, "ecart_ht": None,
-             "items": [i.get("item_code") for i in f.get("items") or [] if i.get("item_code")],
-             "cles": sorted(cles_fiche(f.get("numero_bl"), f.get("numero_facture")))}
+             "items": [r["item_code"] for r in recus], "recus": recus,
+             "appariees": articles_de_la_rubrique(cles, lignes, recus),
+             "cles": sorted(cles)}
         if cite:
             c["cite"] = {k: cite.get(k) for k in ("numero", "date", "total_ht", "total_ttc")}
             c["controle"] = controle_ttc(cite.get("total_ttc"), f.get("montant"))
@@ -206,6 +213,27 @@ def rapprocher_bls(cites, ouverts, clos=(), lignes=None) -> dict:
                 if c["cle"] not in cites_servis]
     return {"bls": cartes, "inconnus": inconnus, "deja_couverts": deja,
             "coches": [c["name"] for c in cartes if c["coche"]]}
+
+
+def articles_de_la_rubrique(cles, lignes, recus) -> list:
+    """Quel article a été REÇU pour chaque ligne imprimée sous la rubrique de ce BL (« TOTAL BL N° … »). PURE.
+
+    Demande du 25/11/2026 : la ligne « REDUCTION LAITON SPECIAL » grisée « déjà reçue (BL B26001723) » montrait encore
+    la devinette tuy-028, alors que la réception de ce BL dit BRS-SP-15-12. Même règle SÛRE que l'apprentissage
+    (`correspondance_articles.apparier` : une ligne de chaque côté et la même quantité, ou autant de lignes et des
+    quantités uniques) — l'écran montre exactement ce que l'enregistrement retiendra.
+    `cles` : clés du n° de ce BL ; `lignes` : TOUTES les lignes lues, dans l'ordre de l'écran ; `recus` : [{item_code,
+    item_name, qty}] de sa réception. -> [{i (rang de la ligne à l'écran), item_code, item_name}]."""
+    from customization_app.correspondance_articles import apparier
+
+    rang = {id(l): i for i, l in enumerate(lignes or []) if isinstance(l, dict)}   # le rang À L'ÉCRAN
+    rubrique = [l for l in lignes or [] if isinstance(l, dict) and cles
+                and cle_numero_bl(l.get("bl_cle") or l.get("bl")) in cles]
+    if not rubrique or not recus:
+        return []
+    noms = {r["item_code"]: r.get("item_name") or "" for r in recus if r.get("item_code")}
+    return sorted(({"i": rang[id(ligne)], "item_code": item_code, "item_name": noms.get(item_code, "")}
+                   for ligne, item_code in apparier(rubrique, recus)), key=lambda x: x["i"])
 
 
 def ligne_deja_recue(ligne: dict, bls_coches: list) -> str | None:
@@ -299,7 +327,7 @@ def _etat_fiche(f, verrou: bool = False) -> dict:
                                  as_dict=True, for_update=verrou) or {}
         f.update(pr_docstatus=pr.get("docstatus"), pr_status=pr.get("status"), pr_per_billed=pr.get("per_billed"))
         f["items"] = frappe.get_all("Purchase Receipt Item", filters={"parent": f["purchase_receipt"]},
-                                    fields=["item_code", "qty"], order_by="idx")
+                                    fields=["item_code", "item_name", "qty"], order_by="idx")
         f["recu"] = valeur_recu(f["purchase_receipt"]) if int(f.get("pr_docstatus") or 0) == 1 else 0.0
     return f
 
@@ -339,10 +367,34 @@ def _clos(supplier: str, cles: set) -> list:
 def rapprocher_pour(supplier: str, cites=None, lignes=None) -> dict:
     """Le rapprochement complet pour la fenêtre Dépense (fournisseur connu)."""
     cites = _liste(cites)
+    lignes = _liste(lignes)
     cles = {cle_numero_bl(c.get("numero")) for c in cites} - {""}
-    out = rapprocher_bls(cites, _ouverts(supplier), _clos(supplier, cles), _liste(lignes))
+    out = rapprocher_bls(cites, _ouverts(supplier), _clos(supplier, cles), lignes)
     out["supplier"] = supplier
+    issues_apprentissage(supplier, lignes, out["bls"])
     return out
+
+
+def issues_apprentissage(supplier, lignes, cartes) -> None:
+    """Ce que l'ENREGISTREMENT fera de chaque ligne appariée à une réception, pour que l'écran le dise tel quel
+    (relecture du 25/11/2026 : l'écran devinait d'après la proposition, l'apprentissage écrit sur la première clé de la
+    ligne — le code s'il existe). Ajoute à chaque entrée de `appariees` : `cle` (la clé où `apprendre` écrira),
+    `issue` ("creer" | "confirmer" | "corriger" : une autre correspondance existe, elle est GARDÉE | "rien"), et pour une
+    correspondance existante `ancien` / `fois`. Lecture seule."""
+    from customization_app import correspondance_articles as CA
+
+    for carte in cartes or []:
+        for p in carte.get("appariees") or []:
+            l = lignes[p["i"]] if 0 <= p["i"] < len(lignes) and isinstance(lignes[p["i"]], dict) else {}
+            toutes = CA.cles(supplier, l.get("code"), l.get("designation"))
+            p["cle"] = toutes[0] if toutes else ""
+            if not toutes or not CA._article_valide(p["item_code"]):
+                p["issue"] = "rien"
+                continue
+            ex = frappe.db.get_value(CA.DOCTYPE, {"cle": p["cle"]}, ["item_code", "fois"], as_dict=True)
+            p["issue"] = CA.decision(ex, p["item_code"])
+            if ex:
+                p["ancien"], p["fois"] = ex.item_code, int(ex.fois or 0)
 
 
 def fournisseur_par_bl(candidats: list, cites) -> str | None:
@@ -411,7 +463,10 @@ def valider(bls_couverts, supplier, lignes_stock, stock_ht, ht_total, confirme_e
                       "items": [i.get("item_code") for i in f.get("items") or []],
                       "recu": bool(f.get("purchase_receipt"))})
         out.append({"fiche": nom, "numero_bl": f.get("numero_bl") or "", "recu_doc": f.get("purchase_receipt") or None,
-                    "commande": f.get("purchase_order") or None, "recu": _m(f.get("recu"))})
+                    "commande": f.get("purchase_order") or None, "recu": _m(f.get("recu")),
+                    # Les clés de la fiche AVANT le solde, qui remplace son numero_facture par celui de la facture :
+                    # l'apprentissage y retrouve la rubrique du BL (relecture du 25/11/2026).
+                    "cles": sorted(cles_fiche(f.get("numero_bl"), f.get("numero_facture")))})
     for l in lignes_stock or []:
         bl = ligne_deja_recue(l, infos)
         if bl:
@@ -442,7 +497,7 @@ def couvrir_par_depense(bls: list, ctx: dict) -> list:
             "Comment", "🧾 Couvert par la facture %s (dépense %s)%s." % (
                 ctx.get("numero_facture") or "?", ctx.get("depense") or "?",
                 ", réception soldée par %s" % r["journal_entry"] if r.get("journal_entry") else ""))
-        faits.append(dict(r, numero_bl=b.get("numero_bl")))
+        faits.append(dict(r, numero_bl=b.get("numero_bl"), cles=b.get("cles") or []))
     return faits
 
 

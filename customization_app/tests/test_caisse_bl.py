@@ -147,5 +147,53 @@ class TestControles(unittest.TestCase):
         self.assertEqual(C.motif_non_corrigeable(infos, depense={"name": "DAP-1"}), "")
 
 
+class TestArticlesDeLaRubrique(unittest.TestCase):
+    """La ligne grisée « déjà reçue » montre l'article de la RÉCEPTION (demande du 25/11/2026 : elle montrait tuy-028)."""
+    LIGNES = [{"code": "9910019", "designation": "SCIE CLOCHE BIMETAL 32", "qty": 2, "bl_cle": "B26001620",
+               "item_code": None},
+              {"code": "2030042", "designation": 'REDUCTION LAITON SPECIAL 1/2"F*3/8"M', "qty": 5, "bl_cle": "B26001723",
+               "item_code": "tuy-028"}]
+    RECUS = [{"item_code": "BRS-SP-15-12", "item_name": "Reduction Bronze Special 15/12", "qty": 5.0}]
+    ATTENDU = [{"i": 1, "item_code": "BRS-SP-15-12", "item_name": "Reduction Bronze Special 15/12"}]
+
+    def test_la_reduction_de_mh2c(self):
+        self.assertEqual(B.articles_de_la_rubrique({"B26001723"}, self.LIGNES, self.RECUS), self.ATTENDU)
+        # Le BL B26001620 (jamais saisi) n'a pas de réception : rien.
+        self.assertEqual(B.articles_de_la_rubrique({"B26001620"}, self.LIGNES, []), [])
+
+    def test_dans_la_carte_du_bl(self):
+        f = dict(FAS_0319, items=[dict(self.RECUS[0])])
+        c = B.rapprocher_bls(CITES, [f], lignes=self.LIGNES)["bls"][0]
+        self.assertEqual(c["appariees"], self.ATTENDU)
+        self.assertEqual(c["recus"], self.RECUS)
+        self.assertEqual(c["items"], ["BRS-SP-15-12"])
+        # Sans lignes (analyse, avant la lecture des articles) : rien d'apparié, le reste inchangé.
+        sans = B.rapprocher_bls(CITES, [f])["bls"][0]
+        self.assertEqual((sans["appariees"], sans["coche"], sans["items"]), ([], True, ["BRS-SP-15-12"]))
+
+    def test_le_rang_est_celui_de_l_ecran(self):
+        lignes = [{"designation": "", "code": "", "qty": 1}, "illisible"] + self.LIGNES
+        self.assertEqual([x["i"] for x in B.articles_de_la_rubrique({"B26001723"}, lignes, self.RECUS)], [3])
+
+    def test_meme_regle_que_l_apprentissage(self):
+        from customization_app import correspondance_articles as CA
+        rubrique = [self.LIGNES[1]]
+        self.assertEqual([it for _, it in CA.apparier(rubrique, self.RECUS)], ["BRS-SP-15-12"])
+        # Pas de certitude, pas d'article : quantité différente, deux lignes de même quantité, autre BL.
+        self.assertEqual(B.articles_de_la_rubrique({"B26001723"}, [dict(self.LIGNES[1], qty=4)], self.RECUS), [])
+        deux = [dict(self.LIGNES[1]), dict(self.LIGNES[1], code="2030043", designation="REDUCTION 3/4")]
+        recus2 = [dict(self.RECUS[0]), {"item_code": "BRS-SP-20-15", "item_name": "", "qty": 5.0}]
+        self.assertEqual(B.articles_de_la_rubrique({"B26001723"}, deux, recus2), [])
+        self.assertEqual(B.articles_de_la_rubrique({"B99999999"}, self.LIGNES, self.RECUS), [])
+        self.assertEqual(B.articles_de_la_rubrique(set(), self.LIGNES, self.RECUS), [])
+        self.assertEqual(B.articles_de_la_rubrique({"B26001723"}, None, self.RECUS), [])
+
+    def test_plusieurs_lignes_quantites_uniques(self):
+        lignes = [dict(self.LIGNES[1], qty=5), dict(self.LIGNES[1], code="2030043", designation="REDUCTION 3/4", qty=2)]
+        recus = [{"item_code": "BRS-SP-20-15", "item_name": "R 20/15", "qty": 2.0}, dict(self.RECUS[0])]
+        self.assertEqual([(x["i"], x["item_code"]) for x in B.articles_de_la_rubrique({"B26001723"}, lignes, recus)],
+                         [(0, "BRS-SP-15-12"), (1, "BRS-SP-20-15")])
+
+
 if __name__ == "__main__":
     unittest.main()

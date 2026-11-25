@@ -113,5 +113,50 @@ class TestMemoireSite(unittest.TestCase):
         self.assertEqual(appels[0].kwargs["supplier"], MH2C)
 
 
+    def test_le_bl_apprend_avant_une_ligne_de_meme_code(self):
+        # Relecture du 25/11/2026 : le même code sous un BL jamais saisi, mis en stock avec une devinette — la réception
+        # du BL couvert (sûre) est apprise d'abord ; la devinette n'est qu'une note « à vérifier ».
+        stock = [{"code": "2030042", "designation": LIGNE_BL["designation"], "qty": 3, "rate": 1.75,
+                  "item_code": self.autre, "suggestion_item": self.autre, "suggestion_source": CA.DEVINE}]
+        bls = [{"fiche": FICHE, "numero_bl": "B26001723", "recu_doc": RECU, "cles": ["B26001723"]}]
+        CA.apprendre_de_la_saisie(MH2C, stock, [LIGNE_BL, OUTIL], bls, "essai")
+        p = CA.proposer(MH2C, "2030042", None)
+        self.assertEqual((p["item_code"], p["source"]), ("BRS-SP-15-12", CA.PAR_BL))
+        self.assertIn("correspondance gardée, à vérifier", frappe.db.get_value(CA.DOCTYPE, p["name"], "historique"))
+
+    def test_la_rubrique_survit_au_solde_de_la_fiche(self):
+        # N° du BL seulement dans numero_facture, que le solde remplace par celui de la facture : les clés d'AVANT
+        # (caisse_bl.valider → couvrir_par_depense) retrouvent la rubrique.
+        frappe.db.set_value("Facture Achat a Saisir", FICHE, {"numero_bl": "", "numero_facture": "F26000463"},
+                            update_modified=False)
+        bls = [{"fiche": FICHE, "numero_bl": "", "recu_doc": RECU, "cles": ["B26001723"]}]
+        self.assertTrue(CA.apprendre_depuis_bls(MH2C, [LIGNE_BL], bls, "essai"))
+        self.assertEqual(CA.proposer(MH2C, "2030042", None)["item_code"], "BRS-SP-15-12")
+        self.assertEqual(CA.apprendre_depuis_bls(MH2C, [dict(LIGNE_BL, code="2030043")], [dict(bls[0], cles=[])], "essai"), [])
+
+    def test_valider_garde_les_cles_de_la_fiche(self):
+        from customization_app import caisse_bl as B
+        out = B.valider([FICHE], MH2C, [], 0, 279.931, cites=[{"numero": "B26001723", "total_ttc": 10.413}])
+        self.assertEqual(out[0]["cles"], ["B26001723"])
+
+    def test_l_ecran_dit_ce_que_l_enregistrement_fera(self):
+        from customization_app import caisse_bl as B
+        lignes = [dict(OUTIL), dict(LIGNE_BL)]
+        carte = lambda: next(c for c in B.rapprocher_pour(MH2C, [{"numero": "B26001723"}], lignes)["bls"]  # noqa: E731
+                             if c["name"] == FICHE)
+        p = carte()["appariees"][0]
+        self.assertEqual((p["i"], p["item_code"], p["issue"], p["cle"]), (1, "BRS-SP-15-12", "creer", MH2C + "|C|2030042"))
+        CA.apprendre(MH2C, "2030042", None, "BRS-SP-15-12", CA.PAR_BL)
+        p = carte()["appariees"][0]
+        self.assertEqual((p["issue"], p["fois"]), ("confirmer", 1))
+        # Une mémoire par la DÉSIGNATION seulement : l'apprentissage écrit sous le CODE — « creer », pas « gardée ».
+        frappe.db.delete(CA.DOCTYPE, {"cle": MH2C + "|C|2030042"})
+        CA.apprendre(MH2C, None, LIGNE_BL["designation"], self.autre)
+        self.assertEqual(carte()["appariees"][0]["issue"], "creer")
+        CA.apprendre(MH2C, "2030042", None, self.autre)
+        p = carte()["appariees"][0]
+        self.assertEqual((p["issue"], p["ancien"]), ("corriger", self.autre))
+
+
 if __name__ == "__main__":
     unittest.main()

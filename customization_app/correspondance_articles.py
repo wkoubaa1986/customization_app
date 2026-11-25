@@ -275,25 +275,41 @@ def apprendre_lignes_stock(supplier, lignes, piece=None) -> list:
     return faits
 
 
+def paires_sures(supplier, paires) -> list:
+    """Une paire (ligne, article) par clé ; une clé qui reçoit DEUX articles différents (même libellé, même code sous
+    deux BL) n'apprend rien. PURE (relecture du 25/11/2026 : l'écran fait la même chose)."""
+    par_cle = {}
+    for ligne, item_code in paires or []:
+        toutes = cles(supplier, ligne.get("code"), ligne.get("designation"))
+        if toutes and item_code:
+            par_cle.setdefault(toutes[0], []).append((ligne, item_code))
+    return [groupe[0] for groupe in par_cle.values() if len({it for _, it in groupe}) == 1]
+
+
 def apprendre_depuis_bls(supplier, lignes_facture, bls, piece=None) -> list:
     """Les lignes imprimées sous la rubrique d'un BL couvert, appariées à SA réception : apprentissage sûr.
-    `bls` : [{fiche, numero_bl, recu_doc}] (caisse_bl.couvrir_par_depense)."""
+    `bls` : [{fiche, numero_bl, recu_doc, cles}] (caisse_bl.couvrir_par_depense — `cles` : celles de la fiche AVANT
+    le solde, qui remplace son numero_facture par celui de la facture)."""
     from customization_app.caisse_bl import cle_numero_bl, cles_fiche
 
-    faits = []
+    paires = []
     for b in bls or []:
         if not b.get("recu_doc"):
             continue
         fiche = frappe.db.get_value("Facture Achat a Saisir", b["fiche"], ["numero_bl", "numero_facture"], as_dict=True) or {}
-        cles_bl = cles_fiche(b.get("numero_bl") or fiche.get("numero_bl"), fiche.get("numero_facture")) \
+        cles_bl = set(b.get("cles") or ()) \
+            | cles_fiche(b.get("numero_bl") or fiche.get("numero_bl"), fiche.get("numero_facture")) \
             | cles_fiche(b.get("numero_bl"))
         rubrique = [l for l in lignes_facture or [] if cle_numero_bl(l.get("bl_cle") or l.get("bl")) in cles_bl]
         recu = frappe.get_all("Purchase Receipt Item", filters={"parent": b["recu_doc"]}, fields=["item_code", "qty"])
-        for ligne, item_code in apparier(rubrique, recu):
-            nom = apprendre(supplier, ligne.get("code"), ligne.get("designation"), item_code, PAR_BL,
-                            piece or b["recu_doc"])
-            if nom:
-                faits.append(nom)
+        paires += [(ligne, item_code, b["recu_doc"]) for ligne, item_code in apparier(rubrique, recu)]
+    pieces = {id(ligne): recu_doc for ligne, _, recu_doc in paires}
+    faits = []
+    for ligne, item_code in paires_sures(supplier, [(l, it) for l, it, _ in paires]):
+        nom = apprendre(supplier, ligne.get("code"), ligne.get("designation"), item_code, PAR_BL,
+                        piece or pieces[id(ligne)])
+        if nom:
+            faits.append(nom)
     return faits
 
 
@@ -304,9 +320,11 @@ def apprendre_de_la_saisie(supplier, lignes_stock=None, lignes_lues=None, bls=No
         return []
     frappe.db.savepoint("apprentissage_articles")
     try:
-        faits = apprendre_lignes_stock(supplier, lignes_stock, piece)
-        if bls and lignes_lues:
-            faits += apprendre_depuis_bls(supplier, lignes_lues, bls, piece)
+        # Les BL D'ABORD (relecture du 25/11/2026) : ce que la réception dit est la source sûre. Une autre ligne de même
+        # code mise en stock avec une devinette ne la devance plus ; une vraie correction de l'employé (proposition
+        # « appris » vue et changée) l'emporte toujours, elle seule remplace.
+        faits = apprendre_depuis_bls(supplier, lignes_lues, bls, piece) if bls and lignes_lues else []
+        faits += apprendre_lignes_stock(supplier, lignes_stock, piece)
         return faits
     except Exception:
         frappe.db.rollback(save_point="apprentissage_articles")

@@ -59,5 +59,16 @@ class TestApparier(unittest.TestCase):
         self.assertIn("tuy-02 (confirmé 2 fois) remplacé par BRS-SP-15-12", CA.ligne_historique("2026-11-25 20:00:00", "tuy-02", 2, "BRS-SP-15-12", "x"))
 
 
+class TestPairesSures(unittest.TestCase):
+    def test_une_cle_deux_articles_rien(self):
+        a = {"code": "", "designation": "RACCORD LAITON", "qty": 2}
+        b = {"code": "", "designation": "raccord laiton", "qty": 10}
+        c = {"code": "2030042", "designation": "REDUCTION", "qty": 5}
+        self.assertEqual(CA.paires_sures("MH2C", [(a, "RAC-12"), (b, "RAC-34"), (c, "BRS-SP-15-12")]), [(c, "BRS-SP-15-12")])
+        # Même clé, même article (deux BL) : appris une fois.
+        self.assertEqual(CA.paires_sures("MH2C", [(c, "BRS-SP-15-12"), (dict(c, qty=3), "BRS-SP-15-12")]), [(c, "BRS-SP-15-12")])
+        self.assertEqual(CA.paires_sures(None, [(c, "BRS-SP-15-12")]), [])
+
+
 if __name__ == "__main__":
     unittest.main()
