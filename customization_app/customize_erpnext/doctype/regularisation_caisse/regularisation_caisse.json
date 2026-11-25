@@ -1,0 +1,184 @@
+{
+ "actions": [],
+ "autoname": "REG-.#####",
+ "creation": "2026-11-25 21:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "cle",
+  "nature",
+  "caisse",
+  "poche",
+  "date_anomalie",
+  "column_break_1",
+  "document_type",
+  "document",
+  "montant",
+  "effet",
+  "section_inventaire",
+  "compte",
+  "theorique",
+  "section_decision",
+  "decision",
+  "motif",
+  "decide_par",
+  "decide_le"
+ ],
+ "fields": [
+  {
+   "fieldname": "cle",
+   "fieldtype": "Data",
+   "label": "Clé de l'anomalie",
+   "unique": 1,
+   "reqd": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "nature",
+   "fieldtype": "Select",
+   "label": "Nature",
+   "options": "Saut de chaîne\nEntrée manuelle\nPaiement antidaté\nCompte inattendu\nInventaire\nInventaire du coffre",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "caisse",
+   "fieldtype": "Data",
+   "label": "Caisse",
+   "in_list_view": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "poche",
+   "fieldtype": "Select",
+   "label": "Poche",
+   "options": "\nCaisse\nCollecte\nCoffre",
+   "read_only": 1
+  },
+  {
+   "fieldname": "date_anomalie",
+   "fieldtype": "Date",
+   "label": "Date de l'anomalie",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "document_type",
+   "fieldtype": "Link",
+   "label": "Type du document",
+   "options": "DocType",
+   "read_only": 1
+  },
+  {
+   "fieldname": "document",
+   "fieldtype": "Dynamic Link",
+   "label": "Document",
+   "options": "document_type",
+   "read_only": 1
+  },
+  {
+   "fieldname": "montant",
+   "fieldtype": "Currency",
+   "label": "Montant de l'anomalie",
+   "precision": "3",
+   "read_only": 1
+  },
+  {
+   "fieldname": "effet",
+   "fieldtype": "Currency",
+   "label": "Effet sur la carte",
+   "precision": "3",
+   "in_list_view": 1,
+   "read_only": 1,
+   "description": "Ce que la décision ajoute (ou retire) à ce que la personne est censée tenir."
+  },
+  {
+   "fieldname": "section_inventaire",
+   "fieldtype": "Section Break",
+   "label": "Inventaire"
+  },
+  {
+   "fieldname": "compte",
+   "fieldtype": "Currency",
+   "label": "Compté",
+   "precision": "3",
+   "read_only": 1
+  },
+  {
+   "fieldname": "theorique",
+   "fieldtype": "Currency",
+   "label": "Attendu d'après la carte",
+   "precision": "3",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_decision",
+   "fieldtype": "Section Break",
+   "label": "Décision"
+  },
+  {
+   "fieldname": "decision",
+   "fieldtype": "Small Text",
+   "label": "Décision",
+   "read_only": 1
+  },
+  {
+   "fieldname": "motif",
+   "fieldtype": "Small Text",
+   "label": "Motif",
+   "reqd": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "decide_par",
+   "fieldtype": "Link",
+   "label": "Décidé par",
+   "options": "User",
+   "in_list_view": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "decide_le",
+   "fieldtype": "Datetime",
+   "label": "Décidé le",
+   "in_list_view": 1,
+   "read_only": 1
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-11-25 21:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "Regularisation Caisse",
+ "naming_rule": "Expression (old style)",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1,
+   "report": 1,
+   "export": 1,
+   "print": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1
+  },
+  {
+   "role": "Accounts Manager",
+   "read": 1,
+   "report": 1,
+   "export": 1,
+   "print": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "decision",
+ "track_changes": 1
+}

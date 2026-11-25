@@ -59,6 +59,52 @@ def categorie(compte) -> str:
     return "Autres"
 
 
+def apports_depuis():
+    """Le jour à partir duquel un apport d'espèces entre dans la journée de caisse de celui qui le saisit (Config
+    Caisse, posé à la mise en route — patch caisse_apports_regularisations). None : pas encore en service."""
+    ligne = frappe.db.sql("SELECT value FROM `tabSingles` WHERE doctype = 'Config Caisse' AND field = 'apports_depuis'")
+    return getdate(ligne[0][0]) if ligne and ligne[0][0] else None
+
+
+def apports(debut, fin):
+    """Les APPORTS d'espèces à une caisse (26/11/2026) : une écriture qui fait ENTRER de l'argent dans « Espèces »
+    depuis le coffre (« Sabah Espèces ») ou une banque, saisie par le titulaire d'une caisse. Le 19/10/2026, 6 000 DT
+    sortis du coffre pour payer des billets d'avion n'étaient pas une entrée pour la clôture : la journée est tombée à
+    −3 289 DT et la chaîne des clôtures a sauté. Depuis `apports_depuis`, l'apport est une entrée de la journée de CETTE
+    caisse (au plus tard des deux : sa date, ou le jour où il a été saisi) et n'est plus compté chez le collecteur.
+    -> [{name, date, montant, caisse, depuis, saisie_par}]"""
+    depuis = apports_depuis()
+    if not depuis or getdate(fin) < depuis:
+        return []
+    from customization_app import caisse_collecte as CC
+    from customization_app.caisse_cloture import CAISSE_GLOBALE
+    lignes = frappe.db.sql(
+        """SELECT je.name, GREATEST(je.posting_date, DATE(je.creation)) AS jour, je.owner,
+                  SUM(CASE WHEN jea.account = %(esp)s THEN jea.debit_in_account_currency - jea.credit_in_account_currency ELSE 0 END) AS montant,
+                  GROUP_CONCAT(DISTINCT CASE WHEN jea.account != %(esp)s THEN jea.account END) AS contre
+           FROM `tabJournal Entry` je JOIN `tabJournal Entry Account` jea ON jea.parent = je.name
+           WHERE je.docstatus = 1 AND je.posting_date >= %(depuis)s
+             AND GREATEST(je.posting_date, DATE(je.creation)) BETWEEN %(d)s AND %(f)s
+             AND IFNULL(je.cheque_no, '') NOT LIKE 'Dépense caisse%%'
+           GROUP BY je.name HAVING montant > 0 ORDER BY jour, je.creation""",
+        {"esp": COMPTE_ESPECES, "depuis": depuis, "d": max(getdate(debut), depuis), "f": fin}, as_dict=True)
+    if not lignes:
+        return []
+    valides = set(CC.noms_caisses()) - {CAISSE_GLOBALE} - set(CC.caisses_partenaires())
+    caisse_de, out = {}, []
+    for l in lignes:
+        comptes = [c for c in (l.contre or "").split(",") if c]
+        if not comptes or any(categorie(c) not in ("Sabah Espèces", "Banque") for c in comptes):
+            continue
+        if l.owner not in caisse_de:
+            caisse_de[l.owner] = CC._caisse_de(l.owner)
+        if caisse_de[l.owner] not in valides:
+            continue
+        out.append({"name": l.name, "date": str(l.jour), "montant": flt(l.montant, 3), "caisse": caisse_de[l.owner],
+                    "depuis": comptes[0].replace(" - A&S", ""), "saisie_par": frappe.utils.get_fullname(l.owner)})
+    return out
+
+
 def anciennete(entrees, sorties_total, jour):
     """Premier entré, premier sorti : la date du plus ancien argent collecté encore détenu, et son âge en jours.
     `entrees` : [(date, montant)] dans l'ordre. (None, 0) si tout est sorti. Fonction pure."""
@@ -123,7 +169,7 @@ def reference(remarque, cheque_no=None) -> str:
     return m.group(1) if m else (cheque_no or "")
 
 
-def _employes(jour, cfg):
+def _employes(jour, cfg, apports_liste=(), effets=None):
     from customization_app import caisse_collecte as CC
     from customization_app import caisse_cloture as CL
     from customization_app.rapport_caisse_journaliere import get_data
@@ -158,24 +204,31 @@ def _employes(jour, cfg):
             especes = flt(par_emp.get(caisse, {}).get("Espèces"))
             depenses = flt(sum(flt(l["montant"]) for l in lignes_dep
                                if l.get("mode") == "Espèces" and (l.get("caisse") or l.get("saisi_par")) == caisse))
-            non_comptes[caisse] = (flt(especes - depenses, 3), (date_diff(jour, debut) + 1) if (especes or depenses) else 0)
+            # Un apport (coffre ou banque → cette caisse) pas encore pris par une clôture : il est dans le tiroir.
+            recus = flt(sum(a["montant"] for a in apports_liste if a["caisse"] == caisse and getdate(a["date"]) >= debut))
+            non_comptes[caisse] = (flt(especes + recus - depenses, 3),
+                                   (date_diff(jour, debut) + 1) if (especes or depenses or recus) else 0, flt(recus, 3))
     lignes = []
     for caisse, derniere, _d in caisses:
         fond = flt(derniere.fond_conserve, 3) if derniere else 0.0
         a_remettre = flt(derniere.especes_remises, 3) if derniere and derniere.docstatus == 0 \
             and derniere.statut in CC.STATUTS_EN_ATTENTE else 0.0
-        non_compte, jours_non_comptes = non_comptes.get(caisse, (0.0, 0))
+        non_compte, jours_non_comptes, apports_attente = non_comptes.get(caisse, (0.0, 0, 0.0))
+        # Régularisations décidées sur cette caisse (saut de chaîne retiré…) : elles corrigent le fond affiché.
+        regul = flt((effets or {}).get((caisse, "Caisse")), 3)
+        fond = flt(fond + regul, 3)
         total = flt(fond + a_remettre + non_compte, 3)
         if not derniere and not total:
             continue                      # caisse jamais utilisée (assistants…)
         lignes.append({"caisse": caisse, "fond": fond, "a_remettre": a_remettre, "non_compte": non_compte,
-                       "jours_non_comptes": jours_non_comptes, "total": total,
+                       "jours_non_comptes": jours_non_comptes, "total": total, "regularise": regul,
+                       "apports_attente": apports_attente,
                        "derniere": ({"name": derniere.name, "date": str(derniere.date_cloture), "statut": derniere.statut}
                                     if derniere else None)})
     return lignes
 
 
-def _collecteurs(jour, cfg):
+def _collecteurs(jour, cfg, hors=(), effets=None):
     """Ce que détient le collecteur principal : reçu aux collectes + passations validées − sorties du compte Espèces.
     Tout va chez lui (règle du 25/11/2026), sauf l'argent d'une passation pas encore validée, chez son délégué."""
     from customization_app import caisse_collecte as CC
@@ -231,7 +284,7 @@ def _collecteurs(jour, cfg):
             x["_entrees"].append((getdate(r.collecte_le), recu))
     # Sorties (et retours) du compte Espèces qui ne sont pas des dépenses de caisse.
     for r in frappe.db.sql(
-            """SELECT je.name, je.posting_date, je.owner, je.cheque_no, je.user_remark,
+            """SELECT je.name, je.posting_date, je.owner, je.cheque_no, je.user_remark, je.mode_of_payment,
                       SUM(CASE WHEN jea.account = %(esp)s THEN jea.credit_in_account_currency - jea.debit_in_account_currency ELSE 0 END) AS sortie,
                       GROUP_CONCAT(DISTINCT CASE WHEN jea.account != %(esp)s THEN jea.account END) AS contre
                FROM `tabJournal Entry` je JOIN `tabJournal Entry Account` jea ON jea.parent = je.name
@@ -240,6 +293,8 @@ def _collecteurs(jour, cfg):
                GROUP BY je.name HAVING SUM(CASE WHEN jea.account = %(esp)s THEN 1 ELSE 0 END) > 0
                ORDER BY je.posting_date, je.creation""",
             {"esp": COMPTE_ESPECES, "d": depart, "j": jour}, as_dict=True):
+        if r.name in hors:
+            continue                      # un apport à une caisse : il est dans la journée de cette caisse (apports)
         # Toute sortie du compte Espèces est prise sur l'argent du principal, quel que soit celui qui l'a saisie.
         qui = titulaire or (r.owner if r.owner in collecteurs else None)
         if not qui:
@@ -257,7 +312,10 @@ def _collecteurs(jour, cfg):
                 x.setdefault("entrees_manuelles", []).append({
                     "name": r.name, "date": str(r.posting_date), "montant": flt(-flt(r.sortie), 3),
                     "depuis": (r.contre or "").replace(" - A&S", ""), "remarque": reference(r.user_remark, r.cheque_no) or "",
-                    "saisie_par": frappe.utils.get_fullname(r.owner)})
+                    "mode": r.mode_of_payment or "", "saisie_par": frappe.utils.get_fullname(r.owner)})
+            x.setdefault("entrees_detail", []).append({
+                "name": r.name, "date": str(r.posting_date), "montant": flt(-flt(r.sortie), 3), "categorie": cat,
+                "depuis": (r.contre or "").replace(" - A&S", ""), "remarque": (r.cheque_no or r.user_remark or "").strip()})
         x["detail_sorties"].append({"name": r.name, "date": str(r.posting_date), "montant": flt(r.sortie, 3),
                                     "vers": r.contre or "", "categorie": cat, "saisie_par": frappe.utils.get_fullname(r.owner),
                                     "reference": reference(r.user_remark, r.cheque_no)})
@@ -267,7 +325,9 @@ def _collecteurs(jour, cfg):
     for x in collecteurs.values():
         sorties = flt(sum(x["sorties"].values()), 3)
         x["sorties_total"] = sorties
-        x["detient"] = flt(x["recu"] + x["passations"] + x["entrees_autres"] - sorties, 3)
+        # Régularisations et inventaire (caisse_regularisations) : l'écart constaté corrige ce qu'il doit détenir.
+        x["regularise"] = flt((effets or {}).get((x["caisse"], "Collecte")), 3)
+        x["detient"] = flt(x["recu"] + x["passations"] + x["entrees_autres"] - sorties + x["regularise"], 3)
         depuis, age = anciennete(sorted(x.pop("_entrees")), sorties, jour)
         x["depuis"], x["age_jours"] = (str(depuis) if depuis else None), age
         alertes = []
@@ -279,7 +339,7 @@ def _collecteurs(jour, cfg):
         x["alertes"] = alertes
         x["remis_par"] = sorted(x.pop("_remis_par").values(), key=lambda m: -m["montant"])
         x["detail_sorties"] = x["detail_sorties"][-15:][::-1]
-        if x["recu"] or x["passations"] or sorties or x["entrees_autres"]:
+        if x["recu"] or x["passations"] or sorties or x["entrees_autres"] or x["regularise"]:
             out.append(x)
     return sorted(out, key=lambda x: -x["detient"]), plafond, jours_max
 
@@ -342,7 +402,7 @@ def _jour_par_jour(jour):
     return [jours[k] for k in sorted(jours, reverse=True)]
 
 
-def _rapprochement(jour, cfg, employes, collecteurs):
+def _rapprochement(jour, cfg, employes, collecteurs, effets=None):
     """Pourquoi l'argent reconstitué n'est pas le solde du compte Espèces. Décomposition EXACTE de l'écart :
     reconstitué − mouvements du compte depuis le départ
       = (encaissé selon les clôtures − entré au compte par paiements)
@@ -370,7 +430,7 @@ def _rapprochement(jour, cfg, employes, collecteurs):
     clotures = []
     for c in frappe.db.sql(
             """SELECT name, caisse, date_cloture, solde_ouverture, encaissements_especes, depenses_especes, ecart,
-                      especes_comptees, especes_remises, fond_conserve, solde_theorique, especes_recues, validation_seule,
+                      apports_especes, especes_comptees, especes_remises, fond_conserve, solde_theorique, especes_recues, validation_seule,
                       docstatus, IFNULL(collecte_par, '') AS collecte_par
                FROM `tabCloture Caisse` WHERE docstatus < 2 AND caisse != %s AND date_cloture BETWEEN %s AND %s
                ORDER BY caisse, date_cloture, creation""", (CAISSE_GLOBALE, depart, jour), as_dict=True):
@@ -385,31 +445,49 @@ def _rapprochement(jour, cfg, employes, collecteurs):
                             if c.docstatus == 1 and c.collecte_par), 3)
     sauts = sauts_de_chaine(clotures)
     total_sauts = flt(sum(s["saut"] for s in sauts), 3)
-    non_compte = flt(sum(flt(e["non_compte"]) for e in employes), 3)
+    # Un apport pas encore pris par une clôture est déjà au compte (par son écriture) : il n'explique aucun écart.
+    non_compte = flt(sum(flt(e["non_compte"]) - flt(e.get("apports_attente")) for e in employes), 3)
     reconstitue = flt(sum(flt(e["total"]) for e in employes) + sum(flt(x["detient"]) for x in collecteurs), 3)
+    # Apports (coffre / banque → une caisse) pris par les clôtures : au compte par écriture, dans le fond par la clôture.
+    apports_clotures = flt(sum(flt(c.get("apports_especes")) for c in clotures), 3)
+    regularisations = flt(sum((effets or {}).values()), 3)
     termes = {
         "encaisse": flt(encaisse - entre_paiements, 3),
         "depense": flt(-(depense - sorti_paiements - dep_caisse), 3),
         "ecarts_comptage": ecarts_comptage, "ecarts_remise": ecarts_remise, "sauts": total_sauts, "non_compte": non_compte,
+        # Ce que la direction a décidé de corriger sur la carte (saut retiré, inventaire…).
+        "regularisations": regularisations,
     }
     ecart = flt(reconstitue - mouvements, 3)
-    mal_comptabilises = [{"name": r.name, "date": str(r.posting_date), "compte": (r.paid_to or "").replace(" - A&S", ""),
-                          "montant": flt(r.paid_amount, 3), "saisi_par": frappe.utils.get_fullname(r.owner)}
-                         for r in frappe.db.sql(
-                             """SELECT name, posting_date, paid_to, paid_amount, owner FROM `tabPayment Entry`
-                                WHERE docstatus = 1 AND payment_type = 'Receive' AND mode_of_payment = 'Espèces'
-                                  AND paid_to != %s AND paid_to NOT IN %s AND posting_date BETWEEN %s AND %s
-                                ORDER BY posting_date""",
-                             (COMPTE_ESPECES, COMPTES_PARTENAIRE, depart, jour), as_dict=True)]
+    # Paiements « Espèces » posés ailleurs que sur le compte Espèces (hors partenaires). Sur un compte de BANQUE, ce
+    # n'est pas une erreur (sa précision du 25/11/2026 : « c'est moi qui le choisis, ce sont des versements en espèces
+    # sur le compte ») : l'argent est en banque, pas dans un tiroir. Sur un autre compte : à regarder.
+    verses_banque, mal_comptabilises = [], []
+    for r in frappe.db.sql(
+            """SELECT pe.name, pe.posting_date, pe.paid_to, pe.paid_amount, pe.owner, pe.party_name, pe.reference_no, a.account_type
+               FROM `tabPayment Entry` pe LEFT JOIN `tabAccount` a ON a.name = pe.paid_to
+               WHERE pe.docstatus = 1 AND pe.payment_type = 'Receive' AND pe.mode_of_payment = 'Espèces'
+                 AND pe.paid_to != %s AND pe.paid_to NOT IN %s AND pe.posting_date BETWEEN %s AND %s
+                 AND IFNULL(a.account_type, '') != 'Cash'
+               ORDER BY pe.posting_date""", (COMPTE_ESPECES, COMPTES_PARTENAIRE, depart, jour), as_dict=True):
+        ligne = {"name": r.name, "date": str(r.posting_date), "compte": (r.paid_to or "").replace(" - A&S", ""),
+                 "montant": flt(r.paid_amount, 3), "saisi_par": frappe.utils.get_fullname(r.owner),
+                 "client": r.party_name or "", "reference": r.reference_no or ""}
+        (verses_banque if r.account_type == "Bank" else mal_comptabilises).append(ligne)
     # Paiements en espèces saisis depuis le départ mais DATÉS d'avant : la caisse les compte le jour de la saisie, la
     # comptabilité les range avant la période. Les RÉÉMISSIONS (« …-1 », annulation d'une facture) ne sont pas du
     # nouvel argent : sur 17 paiements (3 511,301 DT au 24/11/2026), 12 en étaient — reste 5, 1 218,301 DT.
-    antidates = frappe.db.sql("""SELECT COUNT(*), SUM(paid_amount) FROM `tabPayment Entry` WHERE docstatus = 1
-                                 AND payment_type = 'Receive' AND paid_to = %s AND posting_date < %s AND creation >= %s
-                                 AND amended_from IS NULL""",
-                              (COMPTE_ESPECES, depart, depart))[0]
+    antidates = [{"name": r.name, "date": str(r.posting_date), "saisi_le": str(getdate(r.creation)),
+                  "montant": flt(r.paid_amount, 3), "client": r.party_name or "", "saisi_par": frappe.utils.get_fullname(r.owner)}
+                 for r in frappe.db.sql(
+                     """SELECT name, posting_date, creation, paid_amount, party_name, owner FROM `tabPayment Entry`
+                        WHERE docstatus = 1 AND payment_type = 'Receive' AND paid_to = %s AND posting_date < %s
+                          AND creation >= %s AND amended_from IS NULL ORDER BY creation""",
+                     (COMPTE_ESPECES, depart, depart), as_dict=True)]
     return {
-        "antidates_avant_depart": {"nb": int(antidates[0] or 0), "total": flt(antidates[1], 3)},
+        "antidates_avant_depart": {"nb": len(antidates), "total": flt(sum(a["montant"] for a in antidates), 3),
+                                   "liste": antidates},
+        "apports_clotures": apports_clotures, "verses_banque": verses_banque,
         "depart": str(depart), "solde_avant": avant, "solde_jour": au_jour, "mouvements": mouvements,
         "entre_paiements": entre_paiements, "sorti_paiements": sorti_paiements, "depenses_caisse": dep_caisse,
         "transferts": flt(mouvements - (entre_paiements - sorti_paiements - dep_caisse), 3),
@@ -517,6 +595,99 @@ def _portefeuille(jour, cfg):
     return out
 
 
+#: Les endroits SUIVIS par le graphique de flux (stocks : ce qui était là + entré − sorti = ce qui reste).
+POCHES_FLUX = (("especes", "Espèces (caisses et collecteur)"), ("sabah", "Coffre « Sabah Espèces »"),
+               ("pieces", "Chèques et traites en attente"), ("dettes", "Dettes clients (pas encore payé)"),
+               ("partenaire", "Chez le partenaire"))
+
+
+def repartir_flux(nets, source, puits):
+    """Les flux d'UNE pièce comptable entre les endroits suivis. PURE.
+    `nets` : {endroit: débit − crédit} (banque comprise) ; `source` / `puits` : le nom de l'extérieur si la pièce fait
+    entrer (ou sortir) de l'argent. Ce qui baisse donne, ce qui monte reçoit, au prorata. -> [(de, vers, montant)]"""
+    donnent = {k: -v for k, v in nets.items() if v < -0.0005}
+    recoivent = {k: v for k, v in nets.items() if v > 0.0005}
+    solde = sum(nets.values())
+    if solde > 0.0005:
+        donnent[source] = donnent.get(source, 0) + solde          # l'extérieur apporte la différence
+    elif solde < -0.0005:
+        recoivent[puits] = recoivent.get(puits, 0) - solde          # l'extérieur reçoit la différence
+    total = sum(donnent.values())
+    if total <= 0.0005:
+        return []
+    return [(d, r, round(md * mr / total, 3)) for d, md in donnent.items() for r, mr in recoivent.items()
+            if d != r and md * mr / total > 0.0005]
+
+
+def _flux(jour, cfg):
+    """Le chemin de TOUT l'argent encaissé, du départ des caisses au jour choisi (demande du 25/11/2026 : « les caisses,
+    l'espèce, les chèques, la banque, les dettes s'équilibrent, non ? »). Lu dans le grand livre, donc exact : pour chaque
+    endroit suivi, ce qui était là + ce qui est entré − ce qui est sorti = ce qui reste. La banque est une arrivée (ce
+    qu'elle paie ensuite n'est pas suivi ici)."""
+    from customization_app.caisse_cloture import COMPTE_DETTES
+    depart = getdate(cfg.get("date_depart") or jour)
+    # « Depenses personnelle » est typé « Bank » dans le plan comptable : ce n'est pas une banque, c'est une sortie.
+    banques = {c for c in frappe.get_all("Account", filters={"account_type": "Bank", "is_group": 0}, pluck="name")
+               if "personnel" not in c.lower()}
+    endroit = {COMPTE_ESPECES: "especes", COMPTE_SABAH: "sabah", COMPTE_DETTES: "dettes"}
+    endroit.update({c: "pieces" for c in COMPTES_PORTEFEUILLE})
+    endroit.update({c: "partenaire" for c in COMPTES_PARTENAIRE})
+    endroit.update({c: "banque" for c in banques if c not in endroit})   # un compte suivi le reste, même typé « Bank »
+    suivis = [c for c, e in endroit.items() if e != "banque"]
+    lignes = frappe.db.sql(
+        """SELECT g.voucher_type, g.voucher_no, g.account, SUM(g.debit - g.credit) AS net
+           FROM `tabGL Entry` g
+           WHERE g.is_cancelled = 0 AND g.posting_date BETWEEN %(d)s AND %(j)s
+             AND g.voucher_no IN (SELECT DISTINCT voucher_no FROM `tabGL Entry`
+                                  WHERE is_cancelled = 0 AND posting_date BETWEEN %(d)s AND %(j)s AND account IN %(suivis)s)
+           GROUP BY g.voucher_type, g.voucher_no, g.account""",
+        {"d": depart, "j": jour, "suivis": tuple(suivis)}, as_dict=True)
+    pieces = {}
+    for l in lignes:
+        p = pieces.setdefault((l.voucher_type, l.voucher_no), {"nets": {}, "autres": []})
+        e = endroit.get(l.account)
+        if e:
+            p["nets"][e] = p["nets"].get(e, 0) + flt(l.net)
+        else:
+            p["autres"].append(l.account)
+    depenses_caisse = set(frappe.db.sql_list(
+        """SELECT name FROM `tabJournal Entry` WHERE docstatus = 1 AND posting_date BETWEEN %s AND %s
+           AND cheque_no LIKE 'Dépense caisse%%'""", (depart, jour)))
+    flux = {}
+    for (type_piece, nom), p in pieces.items():
+        if type_piece == "Payment Entry":
+            source, puits = "clients", "fournisseurs"
+        else:
+            source = "autres_entrees"
+            puits = "perso" if any("personnel" in (a or "").lower() for a in p["autres"]) else \
+                "depenses" if nom in depenses_caisse else "autres_sorties"
+        for de, vers, montant in repartir_flux(p["nets"], source, puits):
+            if de == "banque" and vers == "banque":
+                continue
+            flux[(de, vers)] = flt(flux.get((de, vers), 0) + montant, 3)
+    # Les encaissements arrivés DIRECTEMENT en banque (virement, carte, espèces versées sur le compte) : ils ne touchent
+    # aucun endroit suivi, on les ajoute pour que le graphique montre tout ce que les clients ont payé.
+    direct = flt(frappe.db.sql(
+        """SELECT SUM(paid_amount) FROM `tabPayment Entry` WHERE docstatus = 1 AND payment_type = 'Receive'
+           AND paid_to IN %s AND posting_date BETWEEN %s AND %s""", (tuple(b for b in banques if endroit.get(b) == "banque") or ("",), depart, jour))[0][0], 3)
+    if direct:
+        flux[("clients", "banque")] = flt(flux.get(("clients", "banque"), 0) + direct, 3)
+    solde = lambda comptes, cond, *v: flt(frappe.db.sql(  # noqa: E731
+        "SELECT SUM(debit - credit) FROM `tabGL Entry` WHERE is_cancelled = 0 AND account IN %s AND " + cond,
+        (tuple(comptes),) + v)[0][0], 3) if comptes else 0.0
+    stocks = []
+    for cle, libelle in POCHES_FLUX:
+        comptes = [c for c, e in endroit.items() if e == cle]
+        avant, apres = solde(comptes, "posting_date < %s", depart), solde(comptes, "posting_date <= %s", jour)
+        entre = flt(sum(m for (de, vers), m in flux.items() if vers == cle), 3)
+        sorti = flt(sum(m for (de, vers), m in flux.items() if de == cle), 3)
+        stocks.append({"cle": cle, "libelle": libelle, "avant": avant, "entre": entre, "sorti": sorti, "apres": apres,
+                       # 0 par construction ; autre chose = une pièce modifiée pendant le calcul.
+                       "reste": flt(avant + entre - sorti - apres, 3)})
+    return {"depart": str(depart), "jour": str(jour), "stocks": stocks,
+            "liens": [{"de": de, "vers": vers, "montant": m} for (de, vers), m in sorted(flux.items(), key=lambda x: -x[1])]}
+
+
 def _a_avoir_en_main(employes, collecteurs, portefeuille, sauts, cfg):
     """Ce que le collecteur principal doit avoir entre les mains, à recompter d'un coup : l'argent de sa propre
     caisse, l'argent collecté pas encore versé, ses chèques et traites. Le saut de chaîne de sa caisse est rappelé."""
@@ -542,12 +713,17 @@ def _a_avoir_en_main(employes, collecteurs, portefeuille, sauts, cfg):
 @frappe.whitelist()
 def situation(date=None):
     from customization_app import caisse_collecte as CC
+    from customization_app import caisse_regularisations as REG
     if not CC.peut_voir_toutes_les_caisses():
         frappe.throw(_("Réservé aux responsables de collecte et à la direction."), frappe.PermissionError)
     jour = min(getdate(date or nowdate()), getdate(nowdate()))
     cfg = CC.config()
-    employes = _employes(jour, cfg)
-    collecteurs, plafond, jours_max = _collecteurs(jour, cfg)
+    regs = REG.regularisations(jour)
+    effets = REG.effets(regs)
+    depart = getdate(cfg.get("date_depart") or jour)
+    apports_liste = apports(depart, jour)
+    employes = _employes(jour, cfg, apports_liste, effets)
+    collecteurs, plafond, jours_max = _collecteurs(jour, cfg, {a["name"] for a in apports_liste}, effets)
     sabah = _solde(COMPTE_SABAH, jour)
     versements = [{"name": v.name, "date": str(v.posting_date), "montant": flt(v.montant, 3),
                    "depuis": (v.depuis or "").replace(" - A&S", ""), "banque": (v.banque or "").replace(" - A&S", ""),
@@ -555,8 +731,19 @@ def situation(date=None):
                   for v in _versements(jour)]
     chez_employes = flt(sum(e["total"] for e in employes), 3)
     chez_collecteurs = flt(sum(max(x["detient"], 0) for x in collecteurs), 3)
-    rapprochement = _rapprochement(jour, cfg, employes, collecteurs)
+    rapprochement = _rapprochement(jour, cfg, employes, collecteurs, effets)
     portefeuille = _portefeuille(jour, cfg)
+    principal = _a_avoir_en_main(employes, collecteurs, portefeuille, rapprochement["sauts"], cfg)
+    # LES ANOMALIES (25/11/2026 : « les erreurs identifiées, ne pas les montrer, les corriger ») : chacune a sa clé ;
+    # régularisée par la direction ou absorbée par un inventaire du collecteur, elle quitte la carte pour le journal.
+    anomalies = REG.construire_anomalies(
+        rapprochement["sauts"], [m for x in collecteurs for m in x.get("entrees_manuelles") or []],
+        rapprochement["antidates_avant_depart"]["liste"], rapprochement["mal_comptabilises"],
+        [m for x in collecteurs for m in x.get("entrees_detail") or []], principal["caisse"] if principal else None)
+    a_regulariser, traitees = REG.trier(anomalies, regs, principal["caisse"] if principal else None)
+    if principal:
+        principal["sauts"] = [x for x in principal["sauts"] if ("saut:" + x["cloture"]) in {a["cle"] for a in a_regulariser}]
+        principal["inventaire"] = REG.dernier_inventaire(regs, principal["caisse"], "Collecte")
     return {
         "date": str(jour), "date_depart": cfg.get("date_depart"), "plafond": plafond, "jours_max": jours_max,
         "totaux": {"employes": chez_employes, "collecteurs": chez_collecteurs, "sabah": sabah,
@@ -567,5 +754,11 @@ def situation(date=None):
         "rapprochement": rapprochement,
         "partenaires": _partenaires(jour, cfg),
         "portefeuille": portefeuille,
-        "principal": _a_avoir_en_main(employes, collecteurs, portefeuille, rapprochement["sauts"], cfg),
+        "principal": principal,
+        "apports": apports_liste, "apports_depuis": str(apports_depuis() or ""),
+        "a_regulariser": a_regulariser, "anomalies_traitees": traitees,
+        "regularisations": REG.journal(regs),
+        "inventaire_coffre": REG.dernier_inventaire(regs, REG.COFFRE, "Coffre"),
+        "peut_regulariser": REG.peut_regulariser(), "peut_inventorier": REG.peut_inventorier(cfg),
+        "flux": _flux(jour, cfg),
     }

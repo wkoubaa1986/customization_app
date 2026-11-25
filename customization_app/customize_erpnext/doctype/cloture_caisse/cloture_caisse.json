@@ -16,6 +16,7 @@
   "column_break_1",
   "solde_ouverture",
   "encaissements_especes",
+  "apports_especes",
   "depenses_especes",
   "solde_theorique",
   "section_comptage",
@@ -143,6 +144,14 @@
    "label": "Encaissements espèces du jour",
    "precision": "3",
    "read_only": 1
+  },
+  {
+   "fieldname": "apports_especes",
+   "fieldtype": "Currency",
+   "precision": "3",
+   "read_only": 1,
+   "label": "Apports du coffre ou de la banque",
+   "description": "Argent entré dans cette caisse depuis « Sabah Espèces » ou une banque (écriture saisie par son titulaire)."
   },
   {
    "fieldname": "depenses_especes",
@@ -483,7 +492,7 @@
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-11-25 18:00:00.000000",
+ "modified": "2026-11-25 21:00:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Cloture Caisse",

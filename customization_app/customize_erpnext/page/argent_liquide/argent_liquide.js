@@ -39,7 +39,7 @@ class ArgentLiquide {
     });
     this.page.set_primary_action(__("Actualiser"), () => this.charger(), "refresh");
     this.$tip = $(`<div class="al-tip" role="tooltip"></div>`).appendTo("body");
-    $(window).on("resize.al", frappe.utils.debounce(() => { if (this.s) this.dessiner_jours(); }, 200));
+    $(window).on("resize.al", frappe.utils.debounce(() => { if (this.s) { this.dessiner_jours(); this.dessiner_flux(); } }, 200));
   }
 
   poser_css() {
@@ -138,6 +138,20 @@ class ArgentLiquide {
       @media (max-width: 768px) { .al-fleche { display: none; } .al-etape .v { font-size: 18px; }
         /* Téléphone : le tableau défile de côté plutôt que d'écraser la colonne des noms. */
         .al-defile table { min-width: 660px; } .al-defile td:first-child { min-width: 160px; } }
+      /* À régulariser, inventaire (25/11/2026) */
+      .al-reg { border: 1px solid var(--border-color); border-left: 4px solid #d97706; border-radius: 10px; padding: 10px 14px; margin-bottom: 8px; background: var(--card-bg); }
+      .al-reg .t { font-weight: 700; } .al-reg .x { font-size: 12.5px; color: var(--text-muted); margin: 3px 0 8px; line-height: 1.45; }
+      .al-reg .b { display: flex; gap: 6px; flex-wrap: wrap; } .al-reg .b .btn { white-space: normal; text-align: left; }
+      .al-propre { border: 1px solid #86efac; background: #f0fdf4; color: #166534; border-radius: 10px; padding: 9px 12px; font-weight: 600; }
+      [data-theme="dark"] .al-propre { background: #12261a; border-color: #166534; color: #bbf7d0; }
+      .al-inv { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 8px; font-size: 12.5px; }
+      /* Graphique de flux : une couleur par endroit (ordre validé clair et sombre), l'extérieur en gris */
+      .al { --f-especes:#2a78d6; --f-dettes:#eb6834; --f-partenaire:#1baf7a; --f-pieces:#6250d6; --f-sabah:#e87ba4; --f-banque:#008300; --f-neutre:#8b8a83; }
+      [data-theme="dark"] .al { --f-especes:#3987e5; --f-dettes:#d95926; --f-partenaire:#199e70; --f-pieces:#9085e9; --f-sabah:#d55181; --f-banque:#0ca30c; --f-neutre:#8b8a83; }
+      .al-flux { overflow-x: auto; } .al-flux svg { display: block; }
+      .al-flux .lien { opacity: .32; transition: opacity .1s; } .al-flux .lien:hover, .al-flux .lien:focus { opacity: .62; outline: none; }
+      .al-flux .noeud:focus { outline: none; }
+      .al-flux text { font-size: 11.5px; fill: var(--text-color); } .al-flux text.m { fill: var(--text-muted); }
     </style>`);
   }
 
@@ -193,6 +207,7 @@ class ArgentLiquide {
     const jour = (iso) => (iso ? frappe.datetime.str_to_user(iso) : "");
     const t = s.totaux || {};
     const bulle = (lignes) => esc(JSON.stringify(lignes));
+    const signe_txt = (v) => (v > 0.0005 ? "+ " + txt(v) : v < -0.0005 ? "− " + txt(-v) : txt(0));
 
     // Une ligne par personne : sa caisse + ce qu'elle a collecté et pas versé.
     const lignes = (s.employes || []).map((e) => Object.assign({ collecte: 0, nom: e.caisse }, e));
@@ -291,12 +306,52 @@ class ArgentLiquide {
         </div>
         ${saut ? `<div class="al-alerte">⚠️ ${__("Dans ces espèces, {0} viennent probablement d’une erreur de chaîne de sa caisse ({1}). Si c’est bien une erreur, il devrait avoir {2} en espèces.",
           [txt(saut), sauts, txt(pr.especes - saut)])}</div>` : ""}
-        <div class="al-ok">${__("Pour vérifier : compter avec lui les billets, les chèques et les traites, et comparer à ces chiffres.")}</div>
+        <div class="al-inv">${pr.inventaire
+          ? `🧮 ${__("Dernier inventaire : le {0}, {1} comptés pour {2} attendus (écart {3}) par {4}.", [jour(pr.inventaire.date), txt(pr.inventaire.compte), txt(pr.inventaire.theorique), signe_txt(pr.inventaire.ecart), esc(pr.inventaire.par)])}`
+          : `🧮 ${__("Aucun inventaire encore : ces chiffres viennent des comptages et des écritures, pas d’un comptage de ce qu’il a réellement en main.")}`}
+          ${s.peut_inventorier ? `<button class="btn btn-xs btn-primary al-inventaire" data-coffre="0">${__("Faire l’inventaire des espèces")}</button>` : ""}</div>
+        <div class="al-inv">🔒 ${s.inventaire_coffre
+          ? __("Coffre « Sabah Espèces » : compté le {0}, {1} pour {2} au compte (écart {3}).", [jour(s.inventaire_coffre.date), txt(s.inventaire_coffre.compte), txt(s.inventaire_coffre.theorique), signe_txt(s.inventaire_coffre.ecart)])
+          : __("Coffre « Sabah Espèces » : {0} au compte, jamais compté.", [txt(t.sabah)])}
+          ${s.peut_inventorier ? `<button class="btn btn-xs btn-default al-inventaire" data-coffre="1">${__("Compter le coffre")}</button>` : ""}</div>
         <div class="al-liens"><button class="btn btn-xs btn-default al-aller" data-cible="al-pieces">📄 ${__("Voir les chèques et traites")}</button>
           <button class="btn btn-xs btn-default al-aller" data-cible="al-collecteurs">📥 ${__("Voir le calcul des espèces")}</button>
-          ${saut ? `<button class="btn btn-xs btn-default al-aller" data-cible="al-rapprochement">🧾 ${__("Voir l’erreur de chaîne")}</button>` : ""}</div>
+          ${saut ? `<button class="btn btn-xs btn-default al-aller" data-cible="al-regulariser">🧹 ${__("Régulariser l’erreur de chaîne")}</button>` : ""}</div>
       </div>`;
     })() : "";
+
+    // ── À régulariser (25/11/2026 : « les erreurs identifiées, ne pas les montrer, les corriger ») : chaque anomalie de
+    //    la carte attend UNE décision de la direction ; décidée (ou absorbée par un inventaire), elle part au journal. ──
+    const areg = s.a_regulariser || [], journal_reg = s.regularisations || [], traitees = s.anomalies_traitees || [];
+    const cles_ouvertes = new Set(areg.map((a) => a.cle));
+    // Les anomalies sans effet et à décision unique (paiements antidatés) : une seule carte pour toutes.
+    const lots = {};
+    areg.filter((a) => a.options.length === 1 && !a.options[0].effet).forEach((a) => { (lots[a.nature] = lots[a.nature] || []).push(a); });
+    Object.keys(lots).forEach((k) => { if (lots[k].length < 2) delete lots[k]; });
+    const lien_doc = (type, nom) => (type && nom ? `<a href="/app/${frappe.router.slug(type)}/${encodeURIComponent(nom)}">${esc(nom)}</a>` : "");
+    const regulariser = `<h4 id="al-regulariser">🧹 ${__("À régulariser")}${areg.length ? ` (${areg.length})` : ""}</h4>
+      <div class="al-sous">${__("Une anomalie n’est pas une alerte permanente : la direction décide une fois, écrit le motif, et l’anomalie quitte la carte pour le journal. Un inventaire du collecteur absorbe d’un coup toutes ses anomalies passées.")}</div>
+      ${areg.length ? areg.map((a, i) => (lots[a.nature] ? "" : `<div class="al-reg"><div class="t">${esc(a.titre)}</div>
+          <div class="x">${esc(a.explication)} ${lien_doc(a.document_type, a.document)}</div>
+          <div class="b">${s.peut_regulariser
+            ? a.options.map((o) => `<button class="btn btn-xs ${o.effet ? "btn-primary" : "btn-default"} al-regulariser" data-i="${i}" data-code="${esc(o.code)}">${esc(o.libelle)}</button>`).join("")
+            : `<span class="muet">${__("La décision revient à la direction.")}</span>`}</div></div>`)).join("")
+          + Object.keys(lots).map((nature) => `<div class="al-reg"><div class="t">${__("{0} × {1} — {2}", [lots[nature].length, esc(__(nature)), txt(lots[nature].reduce((x, a) => x + (Number(a.montant) || 0), 0))])}</div>
+          <div class="x">${lots[nature].map((a) => `${esc(a.titre)} · ${lien_doc(a.document_type, a.document)}`).join("<br>")}
+            <div style="margin-top:4px">${esc(lots[nature][0].explication.replace(/^[^)]*\) /, ""))}</div></div>
+          <div class="b">${s.peut_regulariser
+            ? `<button class="btn btn-xs btn-default al-regulariser-lot" data-nature="${esc(nature)}">${__("{0} — pour les {1}", [esc(lots[nature][0].options[0].libelle), lots[nature].length])}</button>`
+            : `<span class="muet">${__("La décision revient à la direction.")}</span>`}</div></div>`).join("")
+        : `<div class="al-propre">✔ ${__("Rien à régulariser : la carte est propre.")}</div>`}
+      ${journal_reg.length || traitees.length ? `<details style="margin-top:6px"><summary class="muet" style="cursor:pointer">${__("Journal des régularisations et des inventaires ({0})", [journal_reg.length])}</summary>
+        <div class="al-defile"><table><tr><th>${__("Décidé le")}</th><th>${__("Nature")}</th><th>${__("Décision et motif")}</th><th>${__("Par")}</th><th class="n">${__("Effet sur la carte")}</th><th></th></tr>
+        ${journal_reg.map((r) => `<tr><td>${esc(r.date || "")}</td><td>${esc(__(r.nature || ""))}${r.caisse ? `<div class="muet">${esc(r.caisse)}</div>` : ""}</td>
+          <td>${esc(r.decision || "")} ${lien_doc(r.document_type, r.document)}<div class="muet">${esc(r.motif || "")}</div></td><td>${esc(r.decide_par_nom || "")}</td>
+          <td class="n">${Number(r.effet) ? signe_txt(Number(r.effet)) : `<span class="zero">—</span>`}</td>
+          <td>${s.peut_regulariser ? `<button class="al-bouton-lien al-annuler-reg" data-nom="${esc(r.name)}">${__("Annuler")}</button>` : ""}</td></tr>`).join("")}
+        </table></div>
+        ${traitees.filter((a) => !a.traitee_par).length ? `<div class="muet" style="margin-top:4px">${__("Absorbées par un inventaire : {0}.", [traitees.filter((a) => !a.traitee_par).map((a) => esc(a.titre)).join(" ; ")])}</div>` : ""}
+      </details>` : ""}`;
 
     // ── Les chèques et traites pas encore versés ──
     const pieces = (() => {
@@ -349,6 +404,7 @@ class ArgentLiquide {
       if (l.collecte) morceaux.push(__("{0} collectés chez les employés et pas encore versés (Sabah ou banque){1}", [txt(l.collecte),
         (l.collecteur && l.collecteur.depuis ? " " + __("— le plus ancien depuis le {0}", [jour(l.collecteur.depuis)]) : "")
         + (l.collecteur && remis_par(l.collecteur) ? " " + __("(dont {0}, remis à lui)", [remis_par(l.collecteur)]) : "")]));
+      if (l.regularise) morceaux.push(__("le fond tient compte de {0} de régularisation décidée par la direction", [signe_txt(l.regularise)]));
       return `<b>${esc(l.nom)}</b> ${__("tient")} <b>${txt(l.total)}</b>${morceaux.length ? " : " + morceaux.join(" ; ") : ""}.`;
     };
     const ligne = (l, i) => {
@@ -396,11 +452,12 @@ class ArgentLiquide {
           ${x.passations ? `<span class="op">+</span>${bloc(__("Passations reçues"), x.passations)}` : ""}
           ${x.entrees_autres ? `<span class="op">+</span>${bloc(__("Revenu au compte Espèces"), x.entrees_autres)}` : ""}
           <span class="op">−</span>${bloc(__("Sorti (Sabah, banque, perso…)"), x.sorties_total)}
+          ${x.regularise ? `<span class="op">${x.regularise > 0 ? "+" : "−"}</span>${bloc(__("Inventaire et régularisations"), Math.abs(x.regularise))}` : ""}
           <span class="op">=</span>${bloc(__("Encore entre ses mains"), x.detient, "res")}
         </div>
         ${remis_par(x) ? `<div class="muet">↪ ${__("Dans « reçu aux collectes » : {0}, remis ensuite à {1} (il est le collecteur principal).", [remis_par(x), esc(x.nom)])}</div>` : ""}
-        ${(x.entrees_manuelles || []).length ? `<div class="al-alerte">⚠️ ${__("{0} écriture(s) font ENTRER de l’argent dans Espèces sans venir de Sabah ni de la banque. Un achat devrait en faire SORTIR : vérifiez le sens de chacune.", [x.entrees_manuelles.length])}
-          ${x.entrees_manuelles.map((m) => `<div style="font-weight:400">${jour(m.date)} · <a href="/app/journal-entry/${encodeURIComponent(m.name)}">${esc(m.name)}</a> · ${esc(m.remarque || "")} · ${__("depuis")} ${esc(m.depuis)} · <b>+ ${txt(m.montant)}</b> (${esc(m.saisie_par)})</div>`).join("")}</div>` : ""}
+        ${(x.entrees_manuelles || []).filter((m) => cles_ouvertes.has("jv:" + m.name)).length ? `<div class="al-alerte">⚠️ ${__("{0} écriture(s) font ENTRER de l’argent dans Espèces sans venir du coffre ni de la banque : à décider dans « À régulariser ».", [x.entrees_manuelles.filter((m) => cles_ouvertes.has("jv:" + m.name)).length])}
+          <button class="btn btn-xs btn-default al-aller" data-cible="al-regulariser">${__("Voir")}</button></div>` : ""}
         ${sorties ? `<div class="muet">${__("Détail des sorties depuis la date de départ")} : ${sorties}</div>` : ""}
         ${(x.detail_sorties || []).length ? `<details><summary>${__("Voir les 15 derniers mouvements")}</summary><div class="al-defile"><table>
           <tr><th>${__("Date")}</th><th>${__("Vers / depuis")}</th><th>${__("Référence")}</th><th>${__("Saisie par")}</th><th class="n">${__("Montant")}</th></tr>
@@ -418,7 +475,12 @@ class ArgentLiquide {
       </table></div>` : `<div class="muet">${__("Aucun versement en banque sur les 30 derniers jours.")}</div>`;
 
     this.$c.html(`<div class="al">
-      ${aide}${chemin}${principal}${alertes}${repartition}${personnes}
+      ${aide}${chemin}${principal}${alertes}${regulariser}${repartition}
+      <h4 id="al-flux-titre">🔀 ${__("Le chemin de l’argent du {0} au {1}", [jour((s.flux || {}).depart), jour(s.date)])}</h4>
+      <div class="al-sous">${__("Tout ce que les clients ont payé, par où c’est passé, où c’est maintenant. Lu dans la comptabilité, donc ça s’équilibre : ce qui était là + ce qui est entré − ce qui est sorti = ce qui reste. L’épaisseur d’un trait est son montant ; survolez-le pour le lire.")}</div>
+      <div class="al-flux" id="al-flux"></div>
+      <details style="margin-top:6px"><summary class="muet" style="cursor:pointer">${__("Voir les chiffres en tableau")}</summary><div class="al-defile" id="al-table-flux"></div></details>
+      ${personnes}
       <h4 id="al-collecteurs">📥 ${__("Chez les collecteurs")}</h4>
       <div class="al-sous">${__("Le calcul : ce qu’il a reçu des employés, moins ce qu’il a déjà sorti. Le résultat est l’argent encore entre ses mains.")}</div>
       ${collecteurs || `<div class="muet">${__("Rien de collecté depuis la date de départ.")}</div>`}
@@ -468,8 +530,83 @@ class ArgentLiquide {
                                group_by: "Group by Voucher (Consolidated)" };
       frappe.set_route("query-report", "General Ledger");
     });
+    $al.find(".al-regulariser").on("click", (e) => {
+      const a = areg[+$(e.currentTarget).attr("data-i")];
+      const o = a && a.options.find((x) => x.code === $(e.currentTarget).attr("data-code"));
+      if (a && o) this.decider(a, o);
+    });
+    $al.find(".al-regulariser-lot").on("click", (e) => {
+      const lot = lots[$(e.currentTarget).attr("data-nature")] || [];
+      if (lot.length) this.decider(lot[0], lot[0].options[0], lot);
+    });
+    $al.find(".al-inventaire").on("click", (e) => this.inventaire($(e.currentTarget).attr("data-coffre") === "1"));
+    $al.find(".al-annuler-reg").on("click", (e) => {
+      const nom = $(e.currentTarget).attr("data-nom");
+      frappe.confirm(__("Annuler la décision {0} ? L’anomalie (ou l’écart d’inventaire) reviendra sur la carte.", [esc(nom)]), () =>
+        frappe.call({ method: "customization_app.caisse_regularisations.annuler", args: { name: nom }, freeze: true })
+          .then(() => { frappe.show_alert({ message: __("Décision annulée."), indicator: "orange" }); this.charger(); }));
+    });
     this.brancher_bulles($al);
     this.dessiner_jours();
+    this.dessiner_flux();
+  }
+
+  // ── Décider d'une anomalie : la décision choisie, son effet, le motif (obligatoire) ──
+  decider(a, o, lot) {
+    const esc = frappe.utils.escape_html;
+    const txt = (v) => (Number(v) || 0).toLocaleString("fr-FR", { minimumFractionDigits: 3, maximumFractionDigits: 3 }) + " DT";
+    const effet = Number(o.effet) || 0;
+    const d = new frappe.ui.Dialog({
+      title: __("Régulariser"),
+      fields: [
+        { fieldtype: "HTML", fieldname: "rappel" },
+        { fieldtype: "Small Text", fieldname: "motif", label: __("Motif (reste dans le journal)"), reqd: 1,
+          description: __("Qui a confirmé, ce qui s’est passé — 10 caractères au moins.") },
+      ],
+      primary_action_label: __("Enregistrer la décision"),
+      primary_action: (v) => {
+        frappe.call({ method: "customization_app.caisse_regularisations.regulariser", args: { cle: lot ? JSON.stringify(lot.map((x) => x.cle)) : a.cle, code: o.code, motif: v.motif },
+                      freeze: true, freeze_message: __("Enregistrement…") })
+          .then(() => { d.hide(); frappe.show_alert({ message: __("Régularisé : l’anomalie est passée au journal."), indicator: "green" }); this.charger(); });
+      },
+    });
+    d.fields_dict.rappel.$wrapper.html(`<p><b>${lot ? lot.map((x) => esc(x.titre)).join("<br>") : esc(a.titre)}</b></p>
+      ${lot ? "" : `<p class="text-muted" style="font-size:12.5px">${esc(a.explication)}</p>`}
+      <p>${__("Votre décision")} : <b>${esc(o.libelle)}</b></p>
+      <p>${effet ? __("Effet sur la carte : {0} chez {1}.", [(effet > 0 ? "+ " : "− ") + txt(Math.abs(effet)), esc(a.caisse || "")])
+                 : __("Aucun montant ne change sur la carte : l’anomalie est simplement classée.")}</p>`);
+    d.show();
+  }
+
+  // ── L'inventaire : ce qui est réellement en main (espèces du collecteur), ou dans le coffre ──
+  inventaire(coffre) {
+    const txt = (v) => (Number(v) || 0).toLocaleString("fr-FR", { minimumFractionDigits: 3, maximumFractionDigits: 3 }) + " DT";
+    const d = new frappe.ui.Dialog({
+      title: coffre ? __("Compter le coffre « Sabah Espèces »") : __("Inventaire des espèces du collecteur"),
+      fields: [
+        { fieldtype: "HTML", fieldname: "aide" },
+        { fieldtype: "Float", fieldname: "especes", label: __("Espèces comptées (DT)"), reqd: 1, precision: 3 },
+        { fieldtype: "Small Text", fieldname: "note", label: __("Note"), description: __("Obligatoire s’il y a un écart : ce qui l’explique, qui était présent.") },
+      ],
+      primary_action_label: __("Enregistrer le comptage"),
+      primary_action: (v) => {
+        frappe.call({ method: "customization_app.caisse_regularisations.inventorier",
+                      args: { especes: v.especes, note: v.note || "", coffre: coffre ? 1 : 0 }, freeze: true, freeze_message: __("Enregistrement…") })
+          .then((r) => {
+            const m = r.message || {};
+            d.hide();
+            frappe.msgprint({ title: __("Inventaire enregistré"), indicator: Math.abs(m.ecart || 0) < 0.0005 ? "green" : "orange",
+              message: __("Compté {0} pour {1} attendus : écart {2}.", [txt(m.compte), txt(m.theorique), (m.ecart > 0 ? "+ " : m.ecart < 0 ? "− " : "") + txt(Math.abs(m.ecart || 0))])
+                + (coffre ? " " + __("Le solde du coffre est comptable : un écart se corrige par une écriture.")
+                          : " " + __("La carte repart de ce comptage ; les anomalies passées du collecteur sont absorbées.")) });
+            this.charger();
+          });
+      },
+    });
+    d.fields_dict.aide.$wrapper.html(`<p class="text-muted" style="font-size:12.5px">${coffre
+      ? __("Comptez les billets du coffre. Le montant sera comparé au solde du compte « Sabah Espèces ».")
+      : __("Comptez TOUTES les espèces que le collecteur principal a en main : sa propre caisse et l’argent collecté pas encore versé. Le montant attendu s’affiche après l’enregistrement.")}</p>`);
+    d.show();
   }
 
   // ── Rapprochement avec le compte comptable Espèces (24/11/2026) : son solde, l'argent reconstitué, et l'écart
@@ -490,13 +627,15 @@ class ArgentLiquide {
         indice: [__("encaissé selon les {0} clôtures {1} contre {2} entrés au compte par paiements ; dépensé {3} contre {4} sortis en dépenses ; plus le pas-encore-compté ({5}), déjà au compte mais pas encore dans une clôture.",
                     [r.nb_clotures, txt(r.encaisse_clotures), txt(r.entre_paiements), txt(r.depense_clotures), txt((Number(r.sorti_paiements) || 0) + (Number(r.depenses_caisse) || 0)), txt(t.non_compte)]),
                  ad.nb ? __("piste : {0} paiements en espèces saisis après le {1} mais datés d’avant ({2}) — comptés par les caisses, rangés avant la période par la comptabilité.", [ad.nb, jour(r.depart), txt(ad.total)]) : "",
-                 mal.length ? __("piste : {0} paiements saisis « Espèces » mais enregistrés sur un autre compte ({1}) — voir la liste ci-dessous.", [mal.length, txt(total_mal)]) : ""] },
+                 mal.length ? __("piste : {0} paiements saisis « Espèces » sur un compte qui n’est ni une caisse ni une banque ({1}) — voir « À régulariser ».", [mal.length, txt(total_mal)]) : ""] },
       { lib: __("Écarts de comptage (compté − attendu)"), v: t.ecarts_comptage, indice: [__("ce que les employés ont compté en plus (ou en moins) du montant attendu.")] },
       { lib: __("Écarts de remise (reçu − remis)"), v: t.ecarts_remise, indice: [__("différence entre ce que l’employé a remis et ce que le collecteur a reçu.")] },
       { lib: __("Sauts dans la chaîne des clôtures"), v: t.sauts, fort: Math.abs(Number(t.sauts) || 0) > 0.0005,
         indice: (r.sauts || []).map((x) => __("{0}, le {1} : la clôture {2} s’ouvre à {3} au lieu de {4} (fond de {5} du {6}) — un jour compté avant la veille.",
           [esc(x.caisse), jour(x.date), `<a href="/app/cloture-caisse/${encodeURIComponent(x.cloture)}">${esc(x.cloture)}</a>`, txt(x.ouverture), txt(x.attendu),
            x.precedente ? `<a href="/app/cloture-caisse/${encodeURIComponent(x.precedente)}">${esc(x.precedente)}</a>` : "—", jour(x.date_precedente)])) },
+      ...(Math.abs(Number(t.regularisations) || 0) > 0.0005 ? [{ lib: __("Inventaire et régularisations décidés"), v: t.regularisations,
+        indice: [__("ce que la direction a corrigé sur la carte (voir le journal dans « À régulariser »).")] }] : []),
       { lib: __("Reste : pièces modifiées après le comptage"), v: r.reste, indice: [__("paiements ou dépenses saisis, datés ou corrigés après que la caisse du jour a été comptée.")] },
     ];
     return `<h4 id="al-rapprochement">🧾 ${__("Rapprochement avec la comptabilité")}</h4>
@@ -526,10 +665,141 @@ class ArgentLiquide {
           <td class="n">${signe(Number(c.v) || 0)}</td></tr>`).join("")}
         <tr class="pied"><td>${__("Total = écart à expliquer")}</td><td class="n">${signe(r.ecart)}</td></tr>
       </table></div>
-      ${mal.length ? `<details style="margin-top:6px"><summary class="muet" style="cursor:pointer">${__("Paiements saisis « Espèces » enregistrés sur un autre compte ({0})", [mal.length])}</summary>
-        <div class="al-defile"><table><tr><th>${__("Date")}</th><th>${__("Paiement")}</th><th>${__("Compte utilisé")}</th><th>${__("Saisi par")}</th><th class="n">${__("Montant")}</th></tr>
-        ${mal.map((m) => `<tr><td>${jour(m.date)}</td><td><a href="/app/payment-entry/${encodeURIComponent(m.name)}">${esc(m.name)}</a></td><td>${esc(m.compte)}</td><td>${esc(m.saisi_par)}</td><td class="n">${txt(m.montant)}</td></tr>`).join("")}
+      ${(r.verses_banque || []).length ? `<details style="margin-top:6px"><summary class="muet" style="cursor:pointer">${__("Espèces versées directement sur un compte bancaire ({0}, {1}) — pas une erreur : cet argent est en banque, aucune caisse ne le tient", [r.verses_banque.length, txt(r.verses_banque.reduce((a, m) => a + (Number(m.montant) || 0), 0))])}</summary>
+        <div class="al-defile"><table><tr><th>${__("Date")}</th><th>${__("Paiement")}</th><th>${__("Client")}</th><th>${__("Compte")}</th><th>${__("Référence")}</th><th class="n">${__("Montant")}</th></tr>
+        ${r.verses_banque.map((m) => `<tr><td>${jour(m.date)}</td><td><a href="/app/payment-entry/${encodeURIComponent(m.name)}">${esc(m.name)}</a></td><td>${esc(m.client)}</td><td>${esc(m.compte)}</td><td>${esc(m.reference)}</td><td class="n">${txt(m.montant)}</td></tr>`).join("")}
         </table></div></details>` : ""}`;
+  }
+
+  // ── Le graphique de flux (25/11/2026, « est-ce que tu peux créer un graphique de flux ») : d'où vient l'argent, par
+  //    où il passe, où il est. Quatre colonnes : les sources · les endroits suivis · le coffre · les arrivées. Chaque
+  //    endroit suivi s'équilibre (déjà là + entré = sorti + encore là) ; l'épaisseur d'un trait est son montant.
+  dessiner_flux() {
+    const $g = this.$c.find("#al-flux"), f = this.s.flux;
+    if (!$g.length || !f) return;
+    const txt = (v) => (Number(v) || 0).toLocaleString("fr-FR", { minimumFractionDigits: 3, maximumFractionDigits: 3 }) + " DT";
+    const court = (v) => Math.round(Number(v) || 0).toLocaleString("fr-FR") + " DT";
+    const jour = (iso) => (iso ? frappe.datetime.str_to_user(iso) : "");
+    const veille = jour(frappe.datetime.add_days(f.depart, -1));
+    const SUIVIS = { especes: __("Espèces (caisses, collecteur)"), dettes: __("Dettes clients"), partenaire: __("Chez le partenaire"),
+                     pieces: __("Chèques et traites"), sabah: __("Coffre Sabah Espèces") };
+    // Colonnes et ordre fixes : une couleur suit son endroit, jamais son rang.
+    const NOEUDS = [
+      { id: "deja", col: 0, lib: __("Déjà là le {0}", [veille]), c: "neutre" },
+      { id: "clients", col: 0, lib: __("Payé par les clients"), c: "neutre" },
+      { id: "banque_src", col: 0, lib: __("Retiré de la banque"), c: "banque" },
+      { id: "autres_entrees", col: 0, lib: __("Autres entrées (écritures)"), c: "neutre" },
+      { id: "especes", col: 1, lib: SUIVIS.especes, c: "especes" },
+      { id: "dettes", col: 1, lib: SUIVIS.dettes, c: "dettes" },
+      { id: "partenaire", col: 1, lib: SUIVIS.partenaire, c: "partenaire" },
+      { id: "pieces", col: 1, lib: SUIVIS.pieces, c: "pieces" },
+      { id: "sabah", col: 2, lib: SUIVIS.sabah, c: "sabah" },
+      { id: "banque", col: 3, lib: __("Arrivé en banque"), c: "banque" },
+      { id: "depenses", col: 3, lib: __("Dépenses de caisse"), c: "neutre" },
+      { id: "perso", col: 3, lib: __("Dépenses personnelles"), c: "neutre" },
+      { id: "fournisseurs", col: 3, lib: __("Payé à des fournisseurs"), c: "neutre" },
+      { id: "autres_sorties", col: 3, lib: __("Autres sorties (écritures)"), c: "neutre" },
+      { id: "r_especes", col: 3, lib: __("Encore en espèces"), c: "especes" },
+      { id: "r_sabah", col: 3, lib: __("Encore au coffre"), c: "sabah" },
+      { id: "r_pieces", col: 3, lib: __("Chèques et traites en attente"), c: "pieces" },
+      { id: "r_dettes", col: 3, lib: __("Dettes pas encore payées"), c: "dettes" },
+      { id: "r_partenaire", col: 3, lib: __("Encore chez le partenaire"), c: "partenaire" },
+    ];
+    // Les liens : ceux du grand livre (allers-retours entre deux endroits suivis ramenés à leur net), ce qui était
+    // déjà là au départ, et ce qui reste à la fin.
+    const brut = {};
+    (f.liens || []).forEach((l) => { brut[l.de + ">" + l.vers] = (brut[l.de + ">" + l.vers] || 0) + (Number(l.montant) || 0); });
+    const liens = [];
+    Object.keys(brut).forEach((k) => {
+      let [de, vers] = k.split(">");
+      let m = brut[k], note = "";
+      const retour = brut[vers + ">" + de] || 0;
+      if (SUIVIS[de] && SUIVIS[vers] && retour > 0) {
+        if (m < retour || (m === retour && de > vers)) return;        // le sens net est porté par l'autre lien
+        note = __("{0} dans ce sens, {1} en retour", [txt(m), txt(retour)]);
+        m -= retour;
+      }
+      if (de === "banque") de = "banque_src";
+      if (m > 0.0005) liens.push({ de, vers, m, note });
+    });
+    (f.stocks || []).forEach((st) => {
+      if (st.avant > 0.0005) liens.push({ de: "deja", vers: st.cle, m: st.avant, note: "" });
+      if (st.apres > 0.0005) liens.push({ de: st.cle, vers: "r_" + st.cle, m: st.apres, note: "" });
+    });
+    const noeuds = NOEUDS.map((n) => Object.assign({ entre: 0, sorti: 0 }, n));
+    const par_id = {}; noeuds.forEach((n) => { par_id[n.id] = n; });
+    const utiles = liens.filter((l) => par_id[l.de] && par_id[l.vers]);
+    utiles.forEach((l) => { par_id[l.de].sorti += l.m; par_id[l.vers].entre += l.m; });
+    const actifs = noeuds.filter((n) => Math.max(n.entre, n.sorti) > 0.0005);
+    actifs.forEach((n) => { n.v = Math.max(n.entre, n.sorti); });
+    if (!actifs.length) { $g.html(`<div class="muet">${__("Aucun mouvement sur la période.")}</div>`); return; }
+
+    // Mise en page : l'échelle la plus grande qui fait tenir la colonne la plus chargée ; un nœud garde 26 px au moins
+    // (la place de son étiquette sur deux lignes).
+    const W = Math.max(760, $g.width() || 900), H = 470, haut = 8, bas = 8, larg = 12, entre = 8, MINI = 26;
+    const cols = [0, 1, 2, 3].map((c) => actifs.filter((n) => n.col === c));
+    const hauteur_col = (col, k) => col.reduce((a, n) => a + Math.max(MINI, n.v * k), 0) + Math.max(0, col.length - 1) * entre;
+    let k_bas = 0, k_haut = (H - haut - bas) / Math.max(...actifs.map((n) => n.v));
+    for (let i = 0; i < 40; i++) {
+      const k = (k_bas + k_haut) / 2;
+      if (cols.every((col) => hauteur_col(col, k) <= H - haut - bas)) k_bas = k; else k_haut = k;
+    }
+    const k = k_bas;
+    const xs = [0, 0.33, 0.62, 1].map((r) => 4 + r * (W - larg - 8));
+    cols.forEach((col, c) => {
+      let y = haut + (H - haut - bas - hauteur_col(col, k)) / 2;
+      col.forEach((n) => { n.x = xs[c]; n.h = Math.max(2, n.v * k); n.case = Math.max(MINI, n.v * k); n.y = y + (n.case - n.h) / 2; y += n.case + entre; n.pris_s = 0; n.pris_e = 0; });
+    });
+    const ordre = {}; actifs.forEach((n, i) => { ordre[n.id] = i; });
+    const couleur = (l) => `var(--f-${par_id[l.de].c !== "neutre" ? par_id[l.de].c : par_id[l.vers].c})`;
+    let traits = "";
+    // Les liens d'un nœud sont empilés dans l'ordre de leurs arrivées (côté départ) et de leurs sources (côté arrivée).
+    const cote_depart = utiles.slice().sort((a, b) => ordre[a.de] - ordre[b.de] || ordre[a.vers] - ordre[b.vers]);
+    cote_depart.forEach((l) => { const n = par_id[l.de]; l.y0 = n.y + n.pris_s; n.pris_s += l.m * k; });
+    utiles.slice().sort((a, b) => ordre[a.vers] - ordre[b.vers] || ordre[a.de] - ordre[b.de])
+      .forEach((l) => { const n = par_id[l.vers]; l.y1 = n.y + n.pris_e; n.pris_e += l.m * k; });
+    cote_depart.forEach((l, i) => {
+      const a = par_id[l.de], b = par_id[l.vers], e = Math.max(1, l.m * k);
+      const x0 = a.x + larg + 1, x1 = b.x - 1, xm = (x0 + x1) / 2;
+      traits += `<path class="lien" data-i="${i}" fill="${couleur(l)}" d="M${x0},${l.y0} C${xm},${l.y0} ${xm},${l.y1} ${x1},${l.y1} V${l.y1 + e} C${xm},${l.y1 + e} ${xm},${l.y0 + e} ${x0},${l.y0 + e} Z"/>`;
+    });
+    let corps = "";
+    actifs.forEach((n, i) => {
+      // L'étiquette à droite du nœud, sauf la dernière colonne (à gauche) : nom à l'encre du texte, montant en retrait.
+      const a_gauche = n.col === 3, tx = a_gauche ? n.x - 6 : n.x + larg + 6, ancre = a_gauche ? "end" : "start", ty = n.y + n.h / 2;
+      corps += `<rect class="noeud" data-n="${i}" x="${n.x}" y="${n.y}" width="${larg}" height="${n.h}" rx="2" fill="var(--f-${n.c})"/>
+        <text x="${tx}" y="${ty - 2}" text-anchor="${ancre}" paint-order="stroke" stroke="var(--bg-color, #fff)" stroke-width="3">${frappe.utils.escape_html(n.lib)}</text>
+        <text class="m" x="${tx}" y="${ty + 12}" text-anchor="${ancre}" paint-order="stroke" stroke="var(--bg-color, #fff)" stroke-width="3">${court(n.v)}</text>`;
+    });
+    $g.html(`<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="${__("Graphique de flux de l’argent")}">${traits}${corps}</svg>`);
+    const self = this, vraie = (nom) => getComputedStyle(self.$c.find(".al")[0]).getPropertyValue("--f-" + nom).trim() || "#888";
+    $g.find("path.lien").attr("tabindex", "0").each(function () {
+      const l = cote_depart[+this.getAttribute("data-i")];
+      const c = par_id[l.de].c !== "neutre" ? par_id[l.de].c : par_id[l.vers].c;
+      const lignes = [{ c: vraie(c), v: txt(l.m), t: " " + par_id[l.de].lib + " → " + par_id[l.vers].lib }];
+      if (l.note) lignes.push({ t: l.note });
+      $(this).on("pointermove focus", (e) => self.bulle(e, lignes)).on("pointerleave blur", () => self.cacher_bulle());
+    });
+    $g.find("rect.noeud").attr("tabindex", "0").each(function () {
+      const n = actifs[+this.getAttribute("data-n")];
+      const lignes = [{ c: vraie(n.c), v: txt(n.v), t: " " + n.lib }];
+      if (n.entre > 0.0005 && n.sorti > 0.0005) lignes.push({ t: __("entré {0} · sorti ou resté {1}", [txt(n.entre), txt(n.sorti)]) });
+      $(this).on("pointermove focus", (e) => self.bulle(e, lignes)).on("pointerleave blur", () => self.cacher_bulle());
+    });
+    // La même chose en tableau : chaque endroit suivi, et son équilibre.
+    const esc = frappe.utils.escape_html;
+    this.$c.find("#al-table-flux").html(`<table>
+      <tr><th>${__("Endroit")}</th><th class="n">${__("Déjà là le {0}", [veille])}</th><th class="n">${__("+ Entré")}</th><th class="n">${__("− Sorti")}</th>
+          <th class="n">${__("= Encore là le {0}", [jour(f.jour)])}</th></tr>
+      ${(f.stocks || []).map((st) => `<tr><td><span class="al-pastille" style="background:var(--f-${st.cle})"></span>${esc(SUIVIS[st.cle] || st.libelle)}${
+          Math.abs(st.reste) > 0.0005 ? `<div class="muet">⚠️ ${__("ne s’équilibre pas : {0}", [txt(st.reste)])}</div>` : ""}</td>
+        <td class="n">${txt(st.avant)}</td><td class="n">${txt(st.entre)}</td><td class="n">${txt(st.sorti)}</td><td class="n"><b>${txt(st.apres)}</b></td></tr>`).join("")}
+      </table>
+      <table style="margin-top:8px"><tr><th>${__("De")}</th><th>${__("Vers")}</th><th class="n">${__("Montant")}</th></tr>
+      ${cote_depart.slice().sort((a, b) => b.m - a.m).map((l) => `<tr><td>${esc(par_id[l.de].lib)}</td><td>${esc(par_id[l.vers].lib)}${l.note ? `<div class="muet">${esc(l.note)}</div>` : ""}</td><td class="n">${txt(l.m)}</td></tr>`).join("")}
+      </table>
+      <div class="muet" style="margin-top:6px">${__("« Encore en espèces » est le solde du compte comptable. La carte, elle, reconstitue {0} tenus par les personnes : la différence est expliquée dans « Rapprochement avec la comptabilité ».",
+        [txt((this.s.rapprochement || {}).reconstitue)])}</div>`);
   }
 
   // ── Les 14 derniers jours : barres groupées (SVG), une colonne cliquable par jour ──

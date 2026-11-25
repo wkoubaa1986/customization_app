@@ -277,8 +277,15 @@ def _mesures(caisse, date, reprendre=False):
     especes = flt(par_mode.get("Espèces"), 3)
     cheques = flt(par_mode.get("Chèque"), 3)
     autres = flt(flt(recap.get("grand_total"), 3) - especes - cheques, 3)
+    # APPORTS (26/11/2026) : l'argent entré dans CETTE caisse depuis le coffre (Sabah Espèces) ou une banque, par une
+    # écriture de son titulaire — une entrée de la journée, comme un encaissement (argent_liquide.apports). Avant, la
+    # clôture l'ignorait : 6 000 DT du coffre le 19/10/2026, la journée est tombée à −3 289 DT.
+    from customization_app import argent_liquide as AL
+    apports = [a for a in AL.apports(debut, date) if caisse == CAISSE_GLOBALE or a["caisse"] == caisse]
     return {
         "encaissements_especes": especes,
+        "apports_especes": flt(sum(a["montant"] for a in apports), 3),
+        "apports": apports,
         "total_cheques": cheques,
         "total_autres_modes": autres,
         "depenses_especes": flt(dep_par_mode.get("Espèces"), 3),
@@ -871,7 +878,7 @@ def etat(caisse, date):
                                {"caisse": caisse, "date_cloture": date, "docstatus": 1})
     m = _mesures(caisse, date, reprendre=not deja)
     ouverture = _ouverture(caisse, date)
-    theorique = flt(ouverture + m["encaissements_especes"] - m["depenses_especes"], 3)
+    theorique = flt(ouverture + m["encaissements_especes"] + flt(m.get("apports_especes"), 3) - m["depenses_especes"], 3)
     pdf_url = None
     if deja:
         pdf_url = frappe.db.get_value(
@@ -905,6 +912,8 @@ def etat(caisse, date):
         "date_depart": CC.date_depart_pour(caisse, CC.config()),
         "solde_ouverture": ouverture,
         "encaissements_especes": m["encaissements_especes"],
+        "apports_especes": flt(m.get("apports_especes"), 3),
+        "apports": m.get("apports") or [],
         "depenses_especes": m["depenses_especes"],
         "solde_theorique": theorique,
         "total_cheques": m["total_cheques"],
@@ -984,7 +993,7 @@ def valider(caisse, date, especes_comptees=None, note=None, justifications=None,
                      .format("<br>• ".join(frappe.utils.escape_html(x) for x in erreurs)))
 
     ouverture = _ouverture(caisse, date)
-    theorique = flt(ouverture + m["encaissements_especes"] - m["depenses_especes"], 3)
+    theorique = flt(ouverture + m["encaissements_especes"] + flt(m.get("apports_especes"), 3) - m["depenses_especes"], 3)
     comptees = flt(especes_comptees, 3) if especes_comptees not in (None, "") else None
     remises = flt(especes_remises, 3) if especes_remises not in (None, "") else None
     if comptees is not None and comptees < 0:
@@ -1037,6 +1046,7 @@ def valider(caisse, date, especes_comptees=None, note=None, justifications=None,
         "detail_traites_remis": det_tr if mode == "double" else "",
         "solde_ouverture": ouverture,
         "encaissements_especes": m["encaissements_especes"],
+        "apports_especes": flt(m.get("apports_especes"), 3),
         "depenses_especes": m["depenses_especes"],
         "solde_theorique": theorique,
         "especes_comptees": comptees,
@@ -1443,13 +1453,16 @@ def _html_instantane(doc, data, rap=None):
     bloc_especes = (
         "<div class='bloc bleu'><h3>Espèces de la journée</h3><table>"
         "<tr><td>Solde d'ouverture</td><td class='n'>%s</td></tr>"
-        "<tr><td>+ Encaissements en espèces</td><td class='n'>%s</td></tr>"
+        "<tr><td>+ Encaissements en espèces</td><td class='n'>%s</td></tr>%s"
         "<tr><td>− Dépenses en espèces</td><td class='n'>%s</td></tr>"
         "<tr class='total'><td>= Attendu en caisse</td><td class='n'>%s</td></tr>"
         "<tr><td>Compté</td><td class='n'>%s</td></tr>"
         "<tr class='fort'><td>Écart</td><td class='n'>%s</td></tr>"
         "</table></div>" % (
-            dt_(doc.solde_ouverture), dt_(doc.encaissements_especes), dt_(doc.depenses_especes),
+            dt_(doc.solde_ouverture), dt_(doc.encaissements_especes),
+            ("<tr><td>+ Apports du coffre ou de la banque</td><td class='n'>%s</td></tr>" % dt_(doc.get("apports_especes"))
+             if flt(doc.get("apports_especes")) else ""),
+            dt_(doc.depenses_especes),
             dt_(doc.solde_theorique), (dt_(comptees) if comptees is not None else "—"),
             (ecart_txt(ecart) if comptees is not None else "—")))
     if collectee:

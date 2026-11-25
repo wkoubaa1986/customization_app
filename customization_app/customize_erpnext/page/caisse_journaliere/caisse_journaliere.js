@@ -4018,6 +4018,9 @@ function rcj_cloture(rapport, opts) {
               <td style="text-align:right;font-weight:700">${fmt(e.solde_ouverture)}</td></tr>
           <tr><td>${sous_traitant && e.debut !== d1 ? __("Encaissements espèces de la période") : __("Encaissements espèces du jour")}</td>
               <td style="text-align:right">+ ${fmt(e.encaissements_especes)}</td></tr>${rcj_html_repris(e.repris, fmt)}
+          ${(e.apports_especes || 0) > 0.0005 ? `<tr><td>${__("Apports du coffre ou de la banque")}
+              <div class="text-muted" style="font-size:11px">${(e.apports || []).map((x) => frappe.utils.escape_html(x.name + " · " + (x.depuis || ""))).join(" ; ")}</div></td>
+              <td style="text-align:right">+ ${fmt(e.apports_especes)}</td></tr>` : ""}
           <tr><td>${sous_traitant && e.debut !== d1 ? __("Dépenses espèces de la période") : __("Dépenses espèces du jour")}</td>
               <td style="text-align:right">− ${fmt(e.depenses_especes)}</td></tr>
           <tr><td><b>${__("Solde théorique (après)")}</b></td>

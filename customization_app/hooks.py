@@ -462,6 +462,11 @@ doc_events = {
     },
     # Les motifs « sans tâche » regardent OÙ sont parqués les paiements liés (19/08/2026) :
     # un encaissement de dette doit requalifier la commande tout de suite, pas à 04h00.
+    # Une écriture saisie À LA MAIN qui fait ENTRER de l'argent dans « Espèces » depuis un compte qui n'est ni le coffre ni
+    # une banque est refusée (25/11/2026 : deux « Achat divers » saisis à l'envers gonflaient la caisse de 313 DT).
+    "Journal Entry": {
+        "validate": "customization_app.caisse_regularisations.controler_ecriture_especes",
+    },
     "Payment Entry": {
         # Lignes de référence en double (une par commande, converties vers la même facture par ERPNext) :
         # fusionnées sur un brouillon/amendement, sinon « Duplicate entry in References » (01/10/2026).

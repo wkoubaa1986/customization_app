@@ -14,6 +14,7 @@
   "plafond_collecteur",
   "jours_plafond_collecteur",
   "paiements_suivis_depuis",
+  "apports_depuis",
   "section_delegues",
   "delegues"
  ],
@@ -88,6 +89,13 @@
    "description": "Depuis ce moment, chaque paiement est pris par UNE clôture ; un paiement saisi après le comptage de son jour est repris par le comptage suivant. Posé à la mise en route (25/11/2026)."
   },
   {
+   "fieldname": "apports_depuis",
+   "fieldtype": "Date",
+   "read_only": 1,
+   "label": "Apports comptés dans la caisse depuis",
+   "description": "Depuis ce jour, un transfert du coffre (Sabah Espèces) ou de la banque vers Espèces, saisi par le titulaire d'une caisse, est une entrée de sa journée de caisse. Posé à la mise en route (26/11/2026)."
+  },
+  {
    "fieldname": "section_delegues",
    "fieldtype": "Section Break",
    "label": "Délégués"
@@ -102,7 +110,7 @@
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-11-25 18:00:00.000000",
+ "modified": "2026-11-25 21:00:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Config Caisse",
