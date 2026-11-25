@@ -151,3 +151,4 @@ customization_app.patches.reparation_commande_depuis_tache
 customization_app.patches.caisse_reglages_controle_depenses
 customization_app.patches.caisse_suivi_paiements
 customization_app.patches.caisse_index_paiements
+customization_app.patches.doublon_citernes_plast_2174
