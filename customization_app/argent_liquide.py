@@ -190,16 +190,20 @@ def _employes(jour, cfg, apports_liste=(), effets=None):
     # Partenaires (Economic Aqua Solution) : ils encaissent sur LEUR compte, leur caisse ne se compte pas (demande du
     # 24/11/2026) — ce qui part chez eux est montré à part (_partenaires).
     partenaires = CC.caisses_partenaires()
-    caisses = []
+    caisses, remises_en_attente = [], {}
     for caisse in CC.noms_caisses():
         if caisse == CL.CAISSE_GLOBALE or caisse in partenaires:
             continue
         depart = getdate(CC.date_depart_pour(caisse, cfg) or cfg.get("date_depart") or jour)
-        derniere = frappe.db.sql(
+        clotures = frappe.db.sql(
             """SELECT name, date_cloture, statut, docstatus, especes_remises, fond_conserve
                FROM `tabCloture Caisse` WHERE caisse = %s AND date_cloture BETWEEN %s AND %s AND docstatus < 2
-               ORDER BY date_cloture DESC, creation DESC LIMIT 1""", (caisse, depart, jour), as_dict=True)
-        derniere = derniere[0] if derniere else None
+               ORDER BY date_cloture DESC, creation DESC""", (caisse, depart, jour), as_dict=True)
+        derniere = clotures[0] if clotures else None
+        # Un employé peut compter plusieurs jours avant la collecte : toutes les remises attendent encore
+        # chez lui, même si une clôture plus récente existe. Seul le fond vient du dernier comptage.
+        remises_en_attente[caisse] = flt(sum(flt(c.especes_remises) for c in clotures
+                                           if c.docstatus == 0 and c.statut in CC.STATUTS_EN_ATTENTE), 3)
         # Pas encore compté : depuis le lendemain de la dernière clôture (ou la date de départ) jusqu'au jour.
         debut = getdate(add_days(derniere.date_cloture, 1) if derniere else depart)
         debut = max(debut, getdate(add_days(jour, -NON_COMPTE_JOURS_MAX)))
@@ -223,8 +227,7 @@ def _employes(jour, cfg, apports_liste=(), effets=None):
     lignes = []
     for caisse, derniere, _d in caisses:
         fond = flt(derniere.fond_conserve, 3) if derniere else 0.0
-        a_remettre = flt(derniere.especes_remises, 3) if derniere and derniere.docstatus == 0 \
-            and derniere.statut in CC.STATUTS_EN_ATTENTE else 0.0
+        a_remettre = remises_en_attente[caisse]
         non_compte, jours_non_comptes, apports_attente = non_comptes.get(caisse, (0.0, 0, 0.0))
         # Régularisations décidées sur cette caisse (saut de chaîne retiré…) : elles corrigent le fond affiché.
         regul = flt((effets or {}).get((caisse, "Caisse")), 3)

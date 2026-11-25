@@ -3913,10 +3913,10 @@ function rcj_cloture(rapport, opts) {
             return;
           }
           const double = e.mode_validation === "double";
+          if (v.comptees === undefined || v.comptees === null || v.comptees === "") {
+            frappe.msgprint(__("Saisissez les espèces réellement comptées (0 si la caisse est vide).")); return;
+          }
           if (double) {
-            if (v.comptees === undefined || v.comptees === null || v.comptees === "") {
-              frappe.msgprint(__("Comptez d'abord les espèces.")); return;
-            }
             if ((v.remises || 0) < 0 || (v.remises || 0) - (v.comptees || 0) > 0.0005) {
               frappe.msgprint(__("Les espèces remises ne peuvent pas dépasser les espèces comptées.")); return;
             }

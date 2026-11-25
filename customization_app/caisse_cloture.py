@@ -969,6 +969,9 @@ def valider(caisse, date, especes_comptees=None, note=None, justifications=None,
     if ordre:
         frappe.throw(ordre)
     mode = CC.mode_validation(caisse)
+    # Le responsable compte lui aussi : une case vide ne constitue ni un comptage à zéro ni un accord.
+    if especes_comptees is None or (isinstance(especes_comptees, str) and not especes_comptees.strip()):
+        frappe.throw(_("Saisissez les espèces réellement comptées (0 si la caisse est vide)."))
     # Les chèques et traites remis : un montant par pièce, « 455+955 » (25/11/2026) — le nombre en découle.
     try:
         nb_ch, mt_ch, det_ch = CC.pieces_saisies(cheques_montants, nb_cheques_remis)
