@@ -3145,9 +3145,22 @@ function rcj_html_point_a_justifier(c, precedente) {
   motifs.forEach((m) => {
     if (precedente && precedente.indexOf(m + " — ") === 0) { motif = m; commentaire = precedente.slice(m.length + 3); }
   });
+  // Ce que le point veut dire, ses documents et le détail de la tâche (25/11/2026 : « qu'il comprenne rapidement de
+  // quoi il s'agit »). Les liens s'ouvrent dans un nouvel onglet : la fenêtre de comptage garde ce qui est saisi.
+  const liens = (c.liens || []).map((l) => `<a class="btn btn-xs btn-default" href="${esc(l.url)}" target="_blank"
+      rel="noopener" style="margin:6px 6px 0 0">🔎 ${esc(l.label)}</a>`).join("");
+  const details = (c.details || []).length ? `
+    <details style="margin-top:6px;font-size:12.5px">
+      <summary style="cursor:pointer;color:#7a5d10">${__("Voir le détail")}</summary>
+      <table style="margin-top:4px;width:100%">${c.details.map(([nom, valeur]) => `<tr>
+        <td style="color:#8a7a4a;padding:2px 8px 2px 0;vertical-align:top;white-space:nowrap">${esc(nom)}</td>
+        <td style="padding:2px 0">${esc(valeur)}</td></tr>`).join("")}</table>
+    </details>` : "";
   return `<div class="rcj-just-bloc" data-cle="${esc(c.cle)}" data-libelle="${esc(c.libelle)}"
       style="border:1px solid #e6d9a8;background:#fffbe9;border-radius:6px;padding:8px 10px;margin-bottom:6px">
-    <div style="color:#7a5d10;font-weight:600">⚠️ ${esc(c.libelle)}</div>
+    <div style="color:#7a5d10;font-weight:600">⚠️ ${rcj_lier_documents(esc(c.libelle))}</div>
+    ${c.aide ? `<div style="font-size:12.5px;color:#6b5a1e;margin-top:3px">${esc(c.aide)}</div>` : ""}
+    ${liens}${details}
     <select class="form-control input-sm rcj-just-motif" style="margin-top:4px">
       <option value="">${__("— Motif (obligatoire) —")}</option>
       ${motifs.map((m) => `<option value="${esc(m)}"${m === motif ? " selected" : ""}>${esc(m)}</option>`).join("")}

@@ -611,6 +611,94 @@ def points_controle(caisse, date, data, debut=None):
     return points
 
 
+# ── Le détail d'un point, pour l'employé qui compte (25/11/2026) ─────────────
+# Sa demande, devant « Tâche ouverte sans commande — Tache-09555 (Autre, Jamel Aloui, 00:00) » : « est-ce qu'il peut
+# voir plus de détail du point de contrôle et ajouter le lien dans sa caisse, pour que rapidement il comprenne de quoi
+# il s'agit ». Chaque point dit ce qu'il veut dire et quoi faire, donne le lien de ses documents, et un point sur une
+# tâche montre la tâche elle-même. Seulement pour la fenêtre de comptage (`etat`) : la validation n'en a pas besoin.
+AIDE_DU_POINT = {
+    "tache_sans_commande": "Une tâche de votre journée est encore ouverte et n’a pas de commande. Ouvrez-la pour voir "
+                           "de quoi il s’agit : si elle est faite, clôturez-la (Ma journée) puis rouvrez cette fenêtre ; "
+                           "si elle n’a pas eu lieu, choisissez un motif et expliquez.",
+    "tache_ouverte": "La tâche de cette commande est encore ouverte. Si l’intervention est faite, clôturez la tâche puis "
+                     "rouvrez cette fenêtre ; sinon, choisissez un motif et expliquez.",
+    "dette_hors_aramex": "Une partie de cette commande n’est pas payée (dette), et ce n’est pas un envoi Aramex : dites "
+                         "quand et comment le client paiera.",
+    "ancien_exclu": "Ce paiement d’un autre jour n’est pas compté dans cette caisse : dites pourquoi.",
+    "depense_collegue": "Un collègue a saisi cette dépense en disant que l’argent est sorti de VOTRE caisse : confirmez-le, "
+                        "ou dites que non.",
+    "paiement_disparu": "Ce paiement était compté dans un comptage précédent, puis il a été annulé ou changé : dites ce "
+                        "qu’est devenu l’argent.",
+    "caisse_non_collectee": "La caisse de cet employé n’est pas encore collectée : dites pourquoi.",
+}
+#: Les documents qu'un employé peut ouvrir depuis sa caisse (paiements et écritures : réservés à la comptabilité).
+LIENS_DU_POINT = (("tache", "Tache de travail", "Ouvrir la tâche"), ("commande", "Sales Order", "Ouvrir la commande"),
+                  ("bl", "Delivery Note", "Ouvrir le BL"))
+
+
+def liens_du_point(point):
+    """[{label, url}] des documents du point qu'un employé peut ouvrir. Fonction pure."""
+    return [{"label": label, "url": "/app/%s/%s" % (dt.lower().replace(" ", "-"), point[cle])}
+            for cle, dt, label in LIENS_DU_POINT if point.get(cle)]
+
+
+def _texte_court(valeur, longueur=200):
+    texte = " ".join(unescape(re.sub(r"<[^>]+>", " ", str(valeur or ""))).split())
+    return texte[:longueur] + ("…" if len(texte) > longueur else "")
+
+
+def details_tache(t, createur=None):
+    """[[libellé, valeur]] d'une tâche, pour « Voir le détail ». `t` : la ligne de la tâche. Fonction pure."""
+    debut = str(t.get("starts_on") or "")
+    heure = debut[11:16]
+    if t.get("toute_la_journee"):
+        quand = "toute la journée"
+    elif heure and heure != "00:00":
+        quand = heure
+    else:
+        quand = "sans heure (00:00)"
+    jour = ("%s/%s/%s " % (debut[8:10], debut[5:7], debut[:4])) if len(debut) >= 10 else ""
+    cree = str(t.get("creation") or "")
+    statut = {"Open": "ouverte", "Working": "en cours", "Completed": "terminée", "Cancelled": "annulée",
+              "Closed": "fermée"}.get(t.get("status"), t.get("status") or "?")
+    lignes = [["Tâche", "%s — %s" % (t.get("name"), statut)],
+              ["Type", t.get("type_i") or "non renseigné"],
+              ["Prévue", (jour + quand).strip()],
+              ["Client", t.get("client") or "aucun"],
+              ["Objet", _texte_court(t.get("titre") or t.get("subject")) or "vide"]]
+    if t.get("rapport"):
+        lignes.append(["Rapport", _texte_court(t.get("rapport"))])
+    if createur or cree:
+        lignes.append(["Créée", " ".join(x for x in (
+            ("par " + createur) if createur else "",
+            ("le %s/%s à %s" % (cree[8:10], cree[5:7], cree[11:16])) if len(cree) >= 16 else "") if x)])
+    return lignes
+
+
+def detailler_points(points):
+    """Ajoute à chaque point son aide, ses liens et, pour une tâche, son détail. Ne lève jamais : sans détail, la
+    fenêtre de comptage reste utilisable."""
+    try:
+        noms = sorted({p["tache"] for p in points if p.get("tache")})
+        taches = {}
+        if noms:
+            for t in frappe.db.sql(
+                    """SELECT name, status, custom_type_dintervention AS type_i, starts_on,
+                              `toute_la_journée` AS toute_la_journee, titre, subject, rapport_visite AS rapport,
+                              COALESCE(NULLIF(nom_client, ''), custom_client) AS client, owner, creation
+                       FROM `tabTache de travail` WHERE name IN %s""", (tuple(noms),), as_dict=True):
+                taches[t.name] = t
+        for p in points:
+            p["aide"] = AIDE_DU_POINT.get(p.get("type"))
+            p["liens"] = liens_du_point(p)
+            t = taches.get(p.get("tache"))
+            if t:
+                p["details"] = details_tache(t, frappe.utils.get_fullname(t.owner) if t.owner else None)
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "caisse : détail des points de contrôle")
+    return points
+
+
 def verifier_justifications(points, justifs):
     """-> (texte à stocker, erreurs). Chaque point non bloquant attend {"motif": un motif de SA liste,
     "commentaire": au moins COMMENTAIRE_MIN caractères}. Le texte garde le format historique
@@ -802,7 +890,7 @@ def etat(caisse, date):
         en_attente["mienne"] = CC.peut_agir_sur(en_attente)
         en_attente["rouvrable"] = en_attente["mienne"]
         en_attente["justifications_precedentes"] = CC.justifications_depuis_controles(en_attente.get("controles"))
-    points = points_controle(caisse, date, m["data"], m["debut"])
+    points = detailler_points(points_controle(caisse, date, m["data"], m["debut"]))
     return {
         "caisse": caisse, "date": str(date), "debut": m["debut"],
         "controles": points,

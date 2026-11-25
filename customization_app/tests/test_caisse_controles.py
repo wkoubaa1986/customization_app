@@ -206,3 +206,38 @@ class TestTachesSansCommande(unittest.TestCase):
         essai = [x for x in points if x.get("tache") == "ESSAI-CAISSE-1"]
         self.assertEqual(essai[0]["motifs"], CL.MOTIFS["tache"])
 
+
+
+class TestDetailDuPoint(unittest.TestCase):
+    """Le détail d'un point pour l'employé qui compte (25/11/2026) : ce qu'il veut dire, ses liens, sa tâche."""
+
+    def test_liens_des_documents_ouvrables(self):
+        point = {"tache": "Tache-09555", "commande": "SAL-ORD-2026-1", "bl": "MAT-DN-2026-1", "paiement": "ACC-PAY-1"}
+        self.assertEqual(CL.liens_du_point(point), [
+            {"label": "Ouvrir la tâche", "url": "/app/tache-de-travail/Tache-09555"},
+            {"label": "Ouvrir la commande", "url": "/app/sales-order/SAL-ORD-2026-1"},
+            {"label": "Ouvrir le BL", "url": "/app/delivery-note/MAT-DN-2026-1"}])   # paiement : réservé à la compta
+        self.assertEqual(CL.liens_du_point({}), [])
+
+    def test_detail_d_une_tache(self):
+        # Le cas du 25/11/2026 : « Tâche ouverte sans commande — Tache-09555 (Autre, Jamel Aloui, 00:00) ».
+        t = {"name": "Tache-09555", "status": "Open", "type_i": "Autre", "starts_on": "2026-11-25 00:00:00",
+             "toute_la_journee": 1, "titre": "<p>☕ Autre: Client: Jamel Aloui</p>", "client": None,
+             "creation": "2026-11-23 11:35:49.94"}
+        self.assertEqual(CL.details_tache(t, "Jamel Aloui"), [
+            ["Tâche", "Tache-09555 — ouverte"], ["Type", "Autre"], ["Prévue", "25/11/2026 toute la journée"],
+            ["Client", "aucun"], ["Objet", "☕ Autre: Client: Jamel Aloui"], ["Créée", "par Jamel Aloui le 23/11 à 11:35"]])
+
+    def test_heure_et_textes_longs(self):
+        t = {"name": "T", "status": "Completed", "starts_on": "2026-11-25 14:30:00", "subject": "x" * 250,
+             "rapport": "Client absent &amp; injoignable"}
+        d = dict(CL.details_tache(t))
+        self.assertEqual((d["Tâche"], d["Type"], d["Prévue"]), ("T — terminée", "non renseigné", "25/11/2026 14:30"))
+        self.assertEqual(len(d["Objet"]), 201)                       # 200 caractères et « … »
+        self.assertEqual(d["Rapport"], "Client absent & injoignable")
+        self.assertEqual(dict(CL.details_tache({"name": "T", "starts_on": "2026-11-25 00:00:00"}))["Prévue"],
+                         "25/11/2026 sans heure (00:00)")
+
+    def test_chaque_type_de_point_justifiable_a_son_aide(self):
+        for type_point in CL.FAMILLE_DU_POINT:
+            self.assertTrue(CL.AIDE_DU_POINT.get(type_point), type_point)
