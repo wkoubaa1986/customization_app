@@ -154,3 +154,4 @@ customization_app.patches.caisse_index_paiements
 customization_app.patches.doublon_citernes_plast_2174
 customization_app.patches.caisse_chouchane_31_10
 customization_app.patches.caisse_apports_regularisations
+customization_app.patches.caisse_regularisations_du_25_11
