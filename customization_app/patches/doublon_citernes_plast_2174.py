@@ -59,6 +59,7 @@ def _etape(compte_rendu, nom, fonction):
         compte_rendu.append("%s : %s" % (nom, fonction()))
     except Exception:
         erreur = frappe.get_traceback().strip().splitlines()[-1]
+        frappe.flags.ignore_party_validation = False      # posé par le rapprochement d'ERPNext, à ne pas laisser
         try:
             frappe.db.rollback(save_point=point)
             compte_rendu.append("%s : ÉCHEC, rien n'a été changé pour cette étape — %s" % (nom, erreur))
@@ -108,6 +109,8 @@ def rapprocher_jamel_facture():
     pr.party_type = "Supplier"
     pr.party = FOURNISSEUR
     pr.receivable_payable_account = COMPTE_FOURNISSEURS
+    pr.payment_name = JV_JAMEL            # ciblé : les listes du rapprochement sont limitées à 50 lignes
+    pr.invoice_name = FACTURE
     pr.get_unreconciled_entries()
     factures = [i.as_dict() for i in pr.invoices if i.invoice_number == FACTURE]
     paiements = [p.as_dict() for p in pr.payments if p.reference_name == JV_JAMEL]
@@ -124,7 +127,16 @@ def rapprocher_jamel_facture():
     return "facture payée par la sortie de caisse de Jamel (reste dû 0)"
 
 
+def _rapprochee() -> bool:
+    """La facture est-elle bien réglée par la sortie de caisse de Jamel (et par elle seule) ?"""
+    return bool(frappe.db.exists("Payment Ledger Entry", {"voucher_type": "Journal Entry", "voucher_no": JV_JAMEL,
+                                                          "against_voucher_type": "Purchase Invoice",
+                                                          "against_voucher_no": FACTURE, "delinked": 0}))
+
+
 def fiche_jamel_saisie():
+    if not _rapprochee():
+        return "la facture n'est pas réglée par la caisse de Jamel : fiche laissée telle quelle"
     fiche = frappe.db.get_value("Facture Achat a Saisir", FICHE_JAMEL, ["statut", "purchase_invoice", "cle_facture"],
                                 as_dict=True)
     if not fiche:
@@ -151,6 +163,8 @@ def fiche_jamel_saisie():
 def supprimer_fiche_sadok():
     if not frappe.db.exists("Facture Achat a Saisir", FICHE_SADOK):
         return "déjà supprimée"
+    if not _rapprochee() or frappe.db.get_value("Facture Achat a Saisir", FICHE_JAMEL, "statut") != "Saisie":
+        return "la fiche de Jamel n'est pas encore « Saisie » sur la facture : laissée telle quelle"
     fiche = frappe.db.get_value("Facture Achat a Saisir", FICHE_SADOK, ["purchase_invoice", "payment_entry"], as_dict=True)
     if fiche.purchase_invoice not in (None, "", FACTURE) or fiche.payment_entry not in (None, "", PE_SADOK):
         return "pointe vers d'autres pièces (%s, %s) : laissée telle quelle — à vérifier" % (
@@ -165,6 +179,8 @@ def supprimer_fiche_sadok():
 
 
 def noter_clotures():
+    if not _rapprochee():
+        return "correction non faite : pas de commentaire sur les clôtures"
     _commenter("Cloture Caisse", CLOTURE_SADOK,
                "cette clôture a déduit la dépense CITERNES PLAST de 87,537 DT (%s), un doublon : c'est la caisse de "
                "Jamel qui a payé. Le paiement est annulé ; la clôture validée n'est pas modifiée. Sadok n'ayant pas "
@@ -196,12 +212,55 @@ def execute():
             pass
 
 
+def anomalies() -> list:
+    """Contrôle PRÉALABLE, en lecture seule (relecture adversariale du 25/11/2026) : la prod a-t-elle bougé depuis la
+    copie du dev ? Chaque condition accepte l'état de départ OU l'état déjà corrigé (le patch reste rejouable)."""
+    pb = []
+    autres = autres_factures()
+    if autres.startswith("AUTRES"):
+        pb.append(autres)
+    f = frappe.db.get_value("Purchase Invoice", FACTURE, ["docstatus", "grand_total", "supplier"], as_dict=True)
+    if not f or f.docstatus != 1 or abs(flt(f.grand_total) - MONTANT) > 0.0005 or f.supplier != FOURNISSEUR:
+        pb.append("facture %s absente, non validée ou modifiée" % FACTURE)
+    if frappe.db.get_value("Journal Entry", JV_JAMEL, "docstatus") != 1:
+        pb.append("sortie de caisse de Jamel %s absente ou annulée" % JV_JAMEL)
+    pe = frappe.db.get_value("Payment Entry", PE_SADOK, ["docstatus", "paid_amount", "party"], as_dict=True)
+    if pe and pe.docstatus == 1:
+        refs = frappe.get_all("Payment Entry Reference", filters={"parent": PE_SADOK}, pluck="reference_name")
+        if set(refs) - {FACTURE} or abs(flt(pe.paid_amount) - MONTANT) > 0.0005 or pe.party != FOURNISSEUR:
+            pb.append("paiement de Sadok %s modifié (références %s)" % (PE_SADOK, ", ".join(refs)))
+    autres_paiements = frappe.db.sql(
+        """SELECT DISTINCT per.parent FROM `tabPayment Entry Reference` per JOIN `tabPayment Entry` pe ON pe.name = per.parent
+           WHERE per.reference_name = %s AND pe.docstatus = 1 AND pe.name != %s""", (FACTURE, PE_SADOK))
+    if autres_paiements:
+        pb.append("la facture est réglée par un autre paiement : %s" % ", ".join(r[0] for r in autres_paiements))
+    return pb
+
+
+def paiement_et_rapprochement():
+    """Annulation du paiement de Sadok ET rapprochement de la caisse de Jamel : un seul point de sauvegarde — si le
+    rapprochement échoue, l'annulation est défaite avec lui (jamais une facture laissée impayée)."""
+    r1 = annuler_paiement_sadok()
+    r2 = rapprocher_jamel_facture()
+    if not _rapprochee():
+        raise frappe.ValidationError("rapprochement non constaté après coup (%s ; %s)" % (r1, r2))
+    return "%s ; %s" % (r1, r2)
+
+
 def _executer():
     if not frappe.db.exists("Purchase Invoice", FACTURE) and not frappe.db.exists("Payment Entry", PE_SADOK):
         return            # un site sans ces pièces (site neuf, autre société) : rien à faire
+    pb = anomalies()
+    if pb:
+        texte = "ABANDON — rien n'a été changé, à vérifier à la main :\n- " + "\n- ".join(pb)
+        print(TITRE_JOURNAL + "\n" + texte)
+        frappe.log_error(title=TITRE_JOURNAL, message=texte)
+        _commenter("Purchase Invoice", FACTURE, "correction automatique ABANDONNÉE : " + " ; ".join(pb))
+        frappe.db.commit()
+        return
     compte_rendu = []
-    _etape(compte_rendu, "1. paiement de Sadok %s" % PE_SADOK, annuler_paiement_sadok)
-    _etape(compte_rendu, "2. rapprochement %s → %s" % (JV_JAMEL, FACTURE), rapprocher_jamel_facture)
+    _etape(compte_rendu, "1-2. paiement de Sadok %s annulé et facture réglée par %s" % (PE_SADOK, JV_JAMEL),
+           paiement_et_rapprochement)
     _etape(compte_rendu, "3. fiche de Jamel %s" % FICHE_JAMEL, fiche_jamel_saisie)
     _etape(compte_rendu, "4. fiche de Sadok %s" % FICHE_SADOK, supprimer_fiche_sadok)
     _etape(compte_rendu, "5. clôtures du 16/11", noter_clotures)
