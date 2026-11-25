@@ -2373,6 +2373,8 @@ function rcj_depense(rapport, initial) {
     title: initial ? __("✏️ Corriger la dépense {0}", [initial.name]) : __("Dépense de caisse"),
     size: "large",
     fields: [
+      // Accord préalable (25/11/2026) : le seuil et l'état de MES demandes, avant de saisir.
+      { fieldtype: "HTML", fieldname: "zone_accord" },
       // Correction : l'écriture d'origine, sa fiche, ses pièces et le paiement vu par la banque.
       { fieldtype: "HTML", fieldname: "zone_correction" },
       {
@@ -2572,9 +2574,10 @@ function rcj_depense(rapport, initial) {
         // (error_handlers : Frappe n'affiche alors pas son propre message, la fenêtre de demande le reprend.)
         error_handlers: {
           AccordDepenseRequis: (r) => {
-            const especes = paiements
+            // Le montant que le SERVEUR exige (part espèces nette de retenue) ; à défaut, le calcul de la page.
+            const especes = (r && r.accord_requis && r.accord_requis.montant) || (paiements
               ? paiements.filter((p) => p.mode === "Espèces").reduce((s, p) => s + flt(p.montant), 0)
-              : (v.mode === "Espèces" ? a_regler : 0);
+              : (v.mode === "Espèces" ? a_regler : 0));
             let message = "";
             try { message = JSON.parse(JSON.parse(r._server_messages)[0]).message || ""; } catch (e) { /* ignoré */ }
             rcj_demander_accord({ montant: especes, objet: v.description || v.type_depense, message,
@@ -2977,6 +2980,7 @@ function rcj_depense(rapport, initial) {
   });
 
   d.show();
+  if (!initial) rcj_zone_accord(d);
   rcj_masquer_code(d);
   basculer_facture();
   basculer_cheque();
@@ -3165,6 +3169,62 @@ function rcj_lier_documents(texte_echappe) {
 
 // Les points justifiés par l'employé, tels que le collecteur les lit sur sa carte.
 // Accord préalable d'une dépense en espèces au-delà du seuil (24/11/2026) : la demande part aux responsables de collecte.
+// Accord préalable dans la fenêtre de dépense (25/11/2026, « rendre le circuit lisible ») : le seuil est dit AVANT de
+// saisir, et les demandes de l'employé (7 derniers jours) y sont avec leur état ; la zone se met à jour en direct à la
+// décision d'un responsable (événement caisse_accord), et une demande se retire d'un clic.
+function rcj_zone_accord(d) {
+  const $z = d.fields_dict.zone_accord.$wrapper;
+  const esc = frappe.utils.escape_html;
+  const quand = (v) => (v ? frappe.datetime.str_to_user(String(v).slice(0, 16)) : "");
+  const ETATS = {
+    "En attente": ["#fff7ed", "#9a3412", "⏳", __("en attente de réponse")],
+    "Accordé": ["#ecfdf5", "#065f46", "✅", __("accordée")],
+    "Refusé": ["#fdecea", "#a93226", "❌", __("refusée")],
+    "Utilisé": ["#eef1f4", "#5b6470", "✔", __("utilisée")],
+    "Annulé": ["#eef1f4", "#5b6470", "↩", __("retirée")],
+    "Expiré": ["#eef1f4", "#5b6470", "⌛", __("expirée")],
+  };
+  const maj = () => frappe.call({
+    method: "customization_app.caisse_accord.etat_accords",
+    callback: (r) => {
+      const e = r.message || {};
+      if (e.dispense || !e.seuil) { $z.html(""); return; }
+      const lignes = (e.demandes || []).map((a) => {
+        const [bg, fg, ic, lib] = ETATS[a.statut] || ["#eef1f4", "#333", "•", a.statut];
+        let detail = "";
+        if (a.statut === "Accordé") detail = __("par {0} — enregistrez votre dépense (valable jusqu'au {1})", [esc(a.decide_par_nom), quand(a.valable_jusqu_au)]);
+        else if (a.statut === "Refusé") detail = __("par {0}", [esc(a.decide_par_nom)]) + (a.commentaire ? " : « " + esc(a.commentaire) + " »" : "");
+        else if (a.statut === "En attente") detail = __("demandée le {0}", [quand(a.demande_le)]);
+        else if (a.statut === "Utilisé") detail = a.journal_entry ? __("pour {0}", [esc(a.journal_entry)]) : "";
+        const retirable = ["En attente", "Accordé"].includes(a.statut);
+        return `<div style="display:flex;justify-content:space-between;gap:8px;align-items:center;background:${bg};color:${fg};border-radius:6px;padding:5px 8px;margin-top:4px">
+          <span>${ic} <b>${rcj_dt(a.montant)}</b> — ${esc(a.objet || "")} · ${lib} ${detail}</span>
+          ${retirable ? `<button class="btn btn-xs btn-default rcj-accord-retirer" data-name="${esc(a.name)}">${__("Retirer")}</button>` : ""}</div>`;
+      }).join("");
+      $z.html(`<div style="border:1px solid #bfdbfe;background:#eff6ff;color:#1e3a8a;border-radius:8px;padding:8px 10px;font-size:12.5px;margin-bottom:6px">
+          💰 ${__("Au-delà de {0} payés en espèces, l'accord de {1} est nécessaire avant de payer.", [rcj_dt(e.seuil), esc((e.approbateurs || []).join(" ou "))])}
+          ${lignes ? `<div style="margin-top:4px;font-weight:600">${__("Vos demandes")}</div>${lignes}` : ""}</div>`);
+      $z.find(".rcj-accord-retirer").on("click", function () {
+        const name = $(this).attr("data-name");
+        frappe.confirm(__("Retirer cette demande ? Les responsables ne la verront plus."), () => frappe.call({
+          method: "customization_app.caisse_accord.retirer", args: { name }, freeze: true,
+          callback: () => { frappe.show_alert({ message: __("Demande retirée."), indicator: "orange" }); maj(); },
+        }));
+      });
+    },
+  });
+  const sur_evenement = () => maj();
+  frappe.realtime.on("caisse_accord", sur_evenement);
+  window.rcj_accord_maj = maj;
+  const avant = d.onhide;
+  d.onhide = function () {
+    frappe.realtime.off("caisse_accord", sur_evenement);
+    if (window.rcj_accord_maj === maj) window.rcj_accord_maj = null;
+    if (avant) avant.apply(this, arguments);
+  };
+  maj();
+}
+
 function rcj_demander_accord(info) {
   const d = new frappe.ui.Dialog({
     title: __("Accord nécessaire avant de payer"),
@@ -3182,6 +3242,7 @@ function rcj_demander_accord(info) {
       callback: (r) => {
         d.hide();
         const res = r.message || {};
+        if (window.rcj_accord_maj) window.rcj_accord_maj();
         frappe.msgprint({
           title: res.deja ? __("Demande déjà envoyée") : __("Demande envoyée"),
           indicator: "blue",

@@ -2,8 +2,8 @@
 
 Sur la carte de collecte, chaque dépense de la caisse du jour apparaît avec sa photo, son fournisseur, son montant et
 des signaux : doublon possible (même montant, même fournisseur — ou même objet — dans n'importe quelle caisse, à
-7 jours près), saisie par un autre que le payeur, montant élevé (au-delà du seuil d'accord de Config Caisse), sans
-n° de facture, sans photo. Le collecteur marque chacune « vue » ou la conteste avec un commentaire ; la collecte
+7 jours près), saisie par un autre que le payeur, accord préalable utilisé (« accordée par … ») ou espèces au-delà du
+seuil SANS accord, montant élevé, sans n° de facture, sans photo. Le collecteur marque chacune « vue » ou la conteste avec un commentaire ; la collecte
 est refusée tant qu'une dépense n'est pas passée en revue.
 
 Une contestation NE BLOQUE PAS la collecte (l'argent est compté) : elle s'écrit sur la dépense et prévient son
@@ -49,7 +49,17 @@ def signaux_depense(ligne, voisines, seuil) -> list:
     if ligne.get("payee_par_collegue"):
         s.append({"code": "collegue", "niveau": "orange", "texte": "Saisie par %s, payée de la caisse de %s" % (
             ligne.get("saisi_par") or "?", ligne.get("caisse") or "?")})
-    if seuil and flt(ligne.get("montant")) >= seuil:
+    # L'accord préalable (25/11/2026, « rendre le circuit lisible ») : la dépense qui l'a utilisé le montre ; une part
+    # en ESPÈCES au-delà du seuil SANS accord (correction, « Dépenses à payer », « Factures à payer », paiement ERPNext…)
+    # est signalée — c'est ce que l'accord devait empêcher.
+    accord = ligne.get("accord")
+    if accord:
+        s.append({"code": "accord", "niveau": "vert", "texte": "Accordée par %s (%s, %s DT)" % (
+            accord.get("par") or "?", accord.get("name"), _fmt(accord.get("montant")))})
+    elif seuil and flt(ligne.get("especes")) > seuil + 0.0005 and not ligne.get("par_approbateur"):
+        s.append({"code": "sans_accord", "niveau": "rouge", "texte": "%s DT en espèces, au-delà de %s DT, SANS accord" % (
+            _fmt(ligne.get("especes")), _fmt(seuil))})
+    elif seuil and flt(ligne.get("montant")) >= seuil:
         s.append({"code": "eleve", "niveau": "orange", "texte": "Montant élevé (%s DT ou plus)" % _fmt(seuil)})
     if not ligne.get("numero_facture"):
         facturee = "facture" in (ligne.get("type") or "").lower() and "non" not in (ligne.get("type") or "").lower()
@@ -112,13 +122,23 @@ def depenses_a_revoir(caisse, date) -> list:
         return []
     _completer(toutes)
     seuil = seuil_accord()
+    from customization_app.caisse_accord import DOCTYPE as ACCORD, UTILISE, approbateurs
+    accords = {a.journal_entry: {"name": a.name, "par": frappe.utils.get_fullname(a.decide_par), "montant": a.montant}
+               for a in frappe.get_all(ACCORD, filters={"statut": UTILISE,
+                                                        "journal_entry": ["in", list({l["name"] for l in du_jour})]},
+                                       fields=["name", "journal_entry", "decide_par", "montant"])}
+    responsables = set(approbateurs()) | {"Administrator"}
     vus = set()
     out = []
     for l in du_jour:
         if l["name"] in vus:          # dépense fractionnée : une ligne par part, une seule revue
             continue
         vus.add(l["name"])
-        l["montant"] = flt(sum(flt(x["montant"]) for x in du_jour if x["name"] == l["name"]), 3)
+        parts = [x for x in du_jour if x["name"] == l["name"]]
+        l["montant"] = flt(sum(flt(x["montant"]) for x in parts), 3)
+        l["especes"] = flt(sum(flt(x["montant"]) for x in parts if x.get("mode") == "Espèces"), 3)
+        l["accord"] = accords.get(l["name"])
+        l["par_approbateur"] = l.get("owner") in responsables
         photos = _pieces_jointes(l["doctype"], l["name"])
         l["photos"] = [{"url": f.file_url, "nom": f.file_name} for f in photos]
         l["signaux"] = signaux_depense(l, toutes, seuil)

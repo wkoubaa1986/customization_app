@@ -132,7 +132,7 @@
  */
 (() => {
   const API = "customization_app.caisse_accord";
-  let $carte = null, dernier = -1, liste = [];
+  let $carte = null, dernier = -1, liste = [], rendre_ouvert = null;
   const fmt = (v) => (Number(v) || 0).toLocaleString("fr-FR", { minimumFractionDigits: 3, maximumFractionDigits: 3 }) + " DT";
   const esc = (s) => frappe.utils.escape_html(s || "");
   const notifier = (txt) => {
@@ -170,11 +170,25 @@
       d.fields_dict.corps.$wrapper.find(".acd-oui").on("click", function () { decider($(this).closest("[data-name]").attr("data-name"), true); });
       d.fields_dict.corps.$wrapper.find(".acd-non").on("click", function () {
         const name = $(this).closest("[data-name]").attr("data-name");
-        frappe.prompt([{ fieldtype: "Small Text", fieldname: "commentaire", reqd: 1, label: __("Pourquoi ? (l'employé le lira, 10 caractères minimum)") }],
-          (v) => decider(name, false, v.commentaire), __("Refuser la dépense"), __("Refuser"));
+        // Le serveur exige 10 caractères : on le dit ici, sans faire tout réécrire (25/11/2026).
+        const demander = (texte) => frappe.prompt([{ fieldtype: "Small Text", fieldname: "commentaire", reqd: 1, default: texte || "",
+                                                     label: __("Pourquoi ? (l'employé le lira, 10 caractères minimum)") }],
+          (v) => {
+            const motif = (v.commentaire || "").replace(/\s+/g, " ").trim();
+            if (motif.length < 10) {
+              frappe.show_alert({ message: __("Motif trop court : 10 caractères minimum."), indicator: "orange" });
+              demander(v.commentaire);
+              return;
+            }
+            decider(name, false, motif);
+          }, __("Refuser la dépense"), __("Refuser"));
+        demander("");
       });
     };
     rendre();
+    // La liste ouverte suit les décisions des AUTRES responsables et les nouvelles demandes (25/11/2026).
+    rendre_ouvert = rendre;
+    d.onhide = () => { rendre_ouvert = null; };
     d.show();
   };
   const peindre = () => {
@@ -201,6 +215,7 @@
     frappe.xcall(API + ".a_decider").then((r) => {
       if (r === null || r === undefined) { actif = false; return; }      // pas responsable : on n'interroge plus
       liste = r; peindre();
+      if (rendre_ouvert) rendre_ouvert();
     }).catch(() => {});
   };
   $(document).on("app_ready", () => {
