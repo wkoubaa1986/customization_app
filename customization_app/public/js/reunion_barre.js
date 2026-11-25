@@ -9,7 +9,7 @@
 // et fait descendre le Desk de leur hauteur totale (.main-section, --navbar-height, .sticky-top).
 (() => {
   const API = "customization_app.reunion_activite";
-  const ORDRE = [".rb-bandeau", ".sm-bandeau", ".cg-bandeau"];
+  const ORDRE = [".rb-bandeau", ".sm-bandeau", ".cg-bandeau", ".bm-bandeau"];   // .bm : bordereaux manquants (bank_retenue_sync)
   let reunions = [], ecart = 0, avant_min = 60, rouge_min = 15, $b = null;
 
   const style = `<style id="rb-style">

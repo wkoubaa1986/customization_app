@@ -191,6 +191,8 @@ frappe.provide("frappe.views");
                 if (carte) carte.scrollIntoView({ behavior: "smooth", block: "start" });
             });
             w.on("click", "[data-caisse]", () => this._caisse());
+            // Bordereau de remise photographié au guichet (bank_retenue_sync, bordereaux_relance.js) — 25/11/2026.
+            w.on("click", "[data-bordereau-remise]", () => window.brs_bordereau_depot && window.brs_bordereau_depot());
             // Sous-traitant : son stock (page Stock, limitée à SON entrepôt côté serveur).
             w.on("click", "[data-stock]", () => frappe.set_route("stock-entrepots"));
             // Transfert à valider / vérification à traiter : la page Stock ouverte sur la bonne fiche.
@@ -321,6 +323,10 @@ frappe.provide("frappe.views");
                 <button class="btn btn-sm btn-default" data-decaler="1">▶</button>
                 <button class="btn btn-sm btn-primary" data-recharger>🔄 ${__("Actualiser")}</button>
                 <button class="btn btn-sm btn-default" data-caisse>💰 ${__("Ma caisse")}</button>
+                ${window.brs_bordereau_depot && frappe.model.can_create("BRS Bordereau Remise") ? `
+                <button class="btn btn-sm btn-default" data-bordereau-remise
+                    title="${__("Au guichet, juste après la remise : la photo du bordereau (chèques, traites, espèces)")}"
+                    >🏦 ${__("Bordereau de remise")}</button>` : ""}
                 ${m.sous_traitant ? `<button class="btn btn-sm btn-default" data-stock>📦 ${__("Mon stock")}</button>` : ""}
                 <button class="btn btn-sm btn-default" data-itineraire title="${__("Le trajet de la journée : départ, chaque client, retour — km et temps de route mesurés par Google")}">🗺️ ${__("Itinéraire")}</button>
                 ${m.nb_aramex ? `
