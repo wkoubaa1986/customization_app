@@ -2211,7 +2211,25 @@ function rcj_articles_coches(etat) {
   return (etat.articles || [])
     .filter((a) => a.coche && a.item_code && flt(a.qty) > 0 && !rcj_ligne_deja_recue(a, infos))
     .map((a) => ({ item_code: a.item_code, qty: flt(a.qty), rate: flt(a.rate), designation: a.designation,
-                   bl_cle: a.bl_cle || "" }));
+                   bl_cle: a.bl_cle || "", code: a.code || "",
+                   // La mémoire des articles (25/11/2026) : ce que la lecture avait proposé, pour apprendre le choix.
+                   suggestion_item: a.suggestion_item || null, suggestion_source: a.suggestion_source || "",
+                   suggestion_cle: a.suggestion_cle || null }));
+}
+
+// D'où vient l'article d'une ligne (mémoire des articles du fournisseur, 25/11/2026) : appris, deviné, ou choisi
+// par l'employé — un choix est retenu à l'enregistrement.
+function rcj_source_article(a, recue) {
+  if (!a.item_code) return "";
+  if (recue) return `<span class="text-muted">${__("ligne couverte par le BL : rien n'est retenu")}</span>`;
+  if (a.item_code !== (a.suggestion_item || null)) {
+    return `<span style="color:#1f4e8c">✎ ${__("votre choix — sera retenu")}</span>`;
+  }
+  if (a.suggestion_source === "appris") {
+    return `<span style="color:#1a7f37">🧠 ${__("appris ({0})", [a.suggestion_fois || 1])}</span>`;
+  }
+  if (a.suggestion_source === "devine") return `<span style="color:#b35900">? ${__("deviné — vérifiez")}</span>`;
+  return "";
 }
 
 // ── BL déjà reçus que la facture couvre (25/11/2026) ─────────────────────────
@@ -2361,17 +2379,20 @@ function rcj_zone_articles(d, etat, API, apres) {
   maj();
   $l.html(`<div class="text-muted" style="font-size:12px;padding:6px 0">🔎 ${__("Lecture des articles de la pièce…")}</div>`);
   const photo = etat.facture;
+  const sup_lu = etat.supplier || null;   // la mémoire des articles propose pour CE fournisseur
   // Réponse périmée (choix changé ou photo reprise entre-temps) : on l'ignore.
   const perime = () => etat.choix_stock !== "achat" || etat.facture !== photo || !$l.closest("body").length;
   frappe.call({
     method: API.replace("caisse_depenses", "caisse_stock_partiel") + ".lire_articles",
-    args: { photo },
+    args: { photo, supplier: sup_lu },
     callback: (r) => {
       if (perime()) return;
       // Depuis le 25/11/2026 : {lignes, remise_globale, …} (prix NETS des remises) ; une liste avant.
       const lu = r.message || [];
       etat.lecture = Array.isArray(lu) ? {} : lu;
       etat.articles = (Array.isArray(lu) ? lu : (lu.lignes || [])).map((a) => ({ ...a, coche: false }));
+      // Fournisseur confirmé PENDANT la lecture : propose_pour ≠ supplier, et charger_bls (plus bas) repropose.
+      etat.propose_pour = sup_lu;
       etat.articles_lus = true;
       etat.lecture_articles = false;
       rcj_rendre_articles(d, etat, $l);
@@ -2438,7 +2459,7 @@ function rcj_rendre_articles(d, etat, $z) {
       <td style="max-width:220px">${esc(a.designation || "")}${flt(a.remise_pct) > 0 && flt(a.rate_brut) > flt(a.rate)
         ? `<div class="text-muted" style="font-size:11px">${__("brut {0} − remise {1} %", [rcj_dt(a.rate_brut), String(a.remise_pct).replace(".", ",")])}</div>` : ""}${recues[i]
         ? `<div class="rcj-art-recue" style="color:#1a7f37;font-size:11px">✔ ${__("déjà reçue (BL {0}) : couverte, pas rachetée", [esc(recues[i])])}</div>` : ""}</td>
-      <td class="rcj-art-item"></td>
+      <td class="rcj-art-item"><div class="rcj-art-ctrl"></div><div class="rcj-art-source" style="font-size:10.5px;margin-top:2px">${rcj_source_article(a, recues[i])}</div></td>
       <td><input type="number" step="any" class="form-control input-sm rcj-art-qty" style="width:70px" value="${a.qty || 1}"></td>
       <td><input type="number" step="any" class="form-control input-sm rcj-art-rate" style="width:90px" value="${a.rate || 0}"></td>
       <td class="rcj-art-ht text-right">${rcj_dt((a.qty || 0) * (a.rate || 0))}</td>
@@ -2455,7 +2476,7 @@ function rcj_rendre_articles(d, etat, $z) {
     const ctrl = frappe.ui.form.make_control({
       df: { fieldtype: "Link", options: "Item", fieldname: "item_" + i, placeholder: __("Article"),
             get_query: () => ({ filters: { is_stock_item: 1, disabled: 0 } }) },
-      parent: $tr.find(".rcj-art-item"), render_input: true,
+      parent: $tr.find(".rcj-art-ctrl"), render_input: true,
     });
     ctrl.$wrapper.find(".control-label").hide();
     if (a.item_code) ctrl.set_value(a.item_code);
@@ -2465,6 +2486,7 @@ function rcj_rendre_articles(d, etat, $z) {
       if (a.item_code && !a.coche) { a.coche = true; $tr.find(".rcj-art-coche").prop("checked", true); }
       // BL couverts : l'article décide si la ligne est « déjà reçue » — seule cette ligne est remise à jour.
       if (a.item_code !== avant && infos.length) maj_ligne_recue(i, $tr);
+      $tr.find(".rcj-art-source").html(rcj_source_article(a, rcj_ligne_deja_recue(a, infos)));
       totaux();
       if (d.rcj_maj_bouton) d.rcj_maj_bouton();
     });
@@ -2513,7 +2535,7 @@ function rcj_depense(rapport, initial) {
                choix_stock: null, articles_lus: false, sans_choix_stock: !!initial,
                // BL déjà reçus que la facture couvre (25/11/2026) : ceux qu'elle cite, le rapprochement du serveur
                // (caisse_bl), et les fiches cochées « couvert ».
-               bls_cites: [], bls: null, bls_coches: [], bls_chargement: false };
+               bls_cites: [], bls: null, bls_coches: [], bls_chargement: false, reproposition: false };
 
   const d = new frappe.ui.Dialog({
     title: initial ? __("✏️ Corriger la dépense {0}", [initial.name]) : __("Dépense de caisse"),
@@ -2723,6 +2745,9 @@ function rcj_depense(rapport, initial) {
           // Correction : sans choix explicite, le serveur garde la caisse payeuse d'origine.
           caisse_payeur: initial && !etat.payeur_touche ? null : (v.caisse_payeur || null),
           bls_couverts: bls_coches.length ? JSON.stringify(bls_coches) : null,
+          lignes_lues: bls_coches.length && etat.choix_stock === "achat" && etat.articles_lus
+            ? JSON.stringify((etat.articles || []).map((a) => ({ code: a.code || "", designation: a.designation || "",
+                bl_cle: a.bl_cle || "", qty: flt(a.qty), item_code: a.item_code || null }))) : null,
           bls_cites: bls_coches.length && (etat.bls_cites || []).length ? JSON.stringify(etat.bls_cites) : null,
           confirme_ecarts: ecarts ? 1 : 0,
         },
@@ -2757,6 +2782,10 @@ function rcj_depense(rapport, initial) {
                 [r.message.ordres_traites.join(", ")]),
               indicator: "blue",
             }, 8);
+          }
+          if ((r.message.appris || []).length) {
+            frappe.show_alert({ message: __("🧠 {0} correspondance(s) d'articles retenue(s) pour ce fournisseur.", [r.message.appris.length]),
+                                indicator: "blue" }, 6);
           }
           if ((r.message.bls_soldes || []).length) {
             frappe.show_alert({
@@ -2920,8 +2949,9 @@ function rcj_depense(rapport, initial) {
     const sans_choix = avec_choix && !etat.choix_stock;
     const rien_coche = avec_choix && etat.choix_stock === "achat" && !rcj_articles_coches(etat).length
       && !(etat.bls_coches || []).length;
-    const recherche_bls = type === "Dépense avec facture" && etat.bls_chargement;
-    d.get_primary_btn().prop("disabled", bloque || lecture || sans_choix || rien_coche || recherche_bls)
+    const recherche_bls = type === "Dépense avec facture" && !!(etat.bls_chargement || etat.reproposition);
+    // ⚠️ Toujours un BOOLÉEN : `prop("disabled", undefined)` ne change rien, et le bouton restait verrouillé.
+    d.get_primary_btn().prop("disabled", !!(bloque || lecture || sans_choix || rien_coche || recherche_bls))
       .attr("title", bloque ? __("Analysez d'abord la facture (bouton 🤖).")
         : recherche_bls ? __("Recherche des BL déjà reçus du fournisseur…")
         : sans_choix ? __("Choisissez d'abord « Seulement dépense » ou « En partie achat ».")
@@ -2945,7 +2975,37 @@ function rcj_depense(rapport, initial) {
   };
   // Les BL ouverts du fournisseur, face à la facture (après un choix de fournisseur, ou la lecture des articles).
   // Les cases que l'employé a touchées survivent ; sinon, ce que le serveur coche d'office (n° imprimé).
+  const reproposer_articles = () => {
+    // Une fois par fournisseur : la lecture des lignes a déjà proposé pour celui qu'elle connaissait.
+    if (!etat.supplier || !articles_lus() || etat.propose_pour === etat.supplier) return;
+    const sup = etat.supplier;
+    const lignes = (etat.articles || []).filter((a) => !a.item_code || a.item_code === (a.suggestion_item || null));
+    if (!lignes.length) { etat.propose_pour = sup; return; }
+    etat.reproposition = true;
+    maj_bouton();
+    frappe.call({
+      method: "customization_app.correspondance_articles.proposer_lignes",
+      args: { supplier: sup, lignes: JSON.stringify(lignes.map((a) => ({ code: a.code || "", designation: a.designation || "" }))) },
+      callback: (r) => {
+        etat.reproposition = false;
+        // Fournisseur changé, ou lignes relues entre-temps : la réponse ne vaut plus.
+        if (etat.supplier !== sup || !lignes.every((a) => (etat.articles || []).includes(a))) { maj_bouton(); return; }
+        etat.propose_pour = sup;
+        (r.message || []).forEach((p, i) => {
+          const a = lignes[i];
+          if (!a || (a.item_code && a.item_code !== (a.suggestion_item || null))) return;   // l'employé a choisi entre-temps
+          Object.assign(a, { item_code: p.item_code || null, suggestion_item: p.suggestion_item || null,
+                             suggestion_source: p.suggestion_source || "", suggestion_fois: p.suggestion_fois || 0,
+                             suggestion_cle: p.suggestion_cle || null });
+        });
+        if (articles_lus()) rcj_zone_articles(d, etat, API, maj_bouton);
+        maj_bouton();
+      },
+      error: () => { etat.reproposition = false; maj_bouton(); },   // propose_pour inchangé : on retentera
+    });
+  };
   const charger_bls = () => {
+    reproposer_articles();
     if (!etat.supplier || type_depense_courant() !== "Dépense avec facture" || etat.est_bl || initial) {
       maj_bls(); return;
     }

@@ -55,7 +55,13 @@ def lignes_valides(articles) -> list:
             continue
         out.append({"item_code": code, "qty": qty, "rate": round(rate, PRECISION),
                     "designation": (a.get("designation") or "").strip(),
-                    "bl_cle": (a.get("bl_cle") or a.get("bl") or "").strip()})
+                    "bl_cle": (a.get("bl_cle") or a.get("bl") or "").strip(),
+                    # La mémoire des articles (correspondance_articles, 25/11/2026) : le code du fournisseur et ce que
+                    # la lecture avait proposé — l'enregistrement apprend le choix, et sait s'il corrige la mémoire.
+                    "code": str(a.get("code") or "").strip(),
+                    "suggestion_item": a.get("suggestion_item") or None,
+                    "suggestion_source": a.get("suggestion_source") or "",
+                    "suggestion_cle": a.get("suggestion_cle") or None})
     return out
 
 
@@ -312,7 +318,7 @@ def prix_nets(lignes, remise_globale=0.0, total_ht_net=0.0) -> dict:
             net = par_remise or par_montant
         brut = brut or net
         nettes.append({"designation": (l.get("designation") or "").strip(), "qty": qty, "net": net, "brut": brut,
-                       "bl": str(l.get("bl") or "").strip()})
+                       "bl": str(l.get("bl") or "").strip(), "code": str(l.get("code_article") or l.get("code") or "").strip()})
     somme = sum(x["qty"] * x["net"] for x in nettes)
     remise_globale, total_ht_net = max(flt(remise_globale), 0.0), max(flt(total_ht_net), 0.0)
     facteur = 1.0
@@ -330,30 +336,27 @@ def prix_nets(lignes, remise_globale=0.0, total_ht_net=0.0) -> dict:
                     "montant_ht": round(x["qty"] * rate, PRECISION),
                     # La rubrique « TOTAL BL N° … » de la facture sous laquelle la ligne est imprimée (25/11/2026) :
                     # une ligne d'un BL déjà reçu ne se remet pas en stock (caisse_bl.ligne_deja_recue).
-                    "bl": x["bl"], "bl_cle": cle_numero_bl(x["bl"])})
+                    "bl": x["bl"], "bl_cle": cle_numero_bl(x["bl"]), "code": x["code"]})
     return {"lignes": out, "remise_globale": round(somme * (1 - facteur), PRECISION) if facteur < 1 else 0.0,
             "facteur": round(facteur, 6), "somme_lignes": round(somme, PRECISION),
             "total_ht_net": round(total_ht_net, PRECISION)}
 
 
-@frappe.whitelist()
-def lire_articles(photo):
-    """Les lignes d'articles de la pièce photographiée, lues par OpenAI, avec un article de stock
-    suggéré quand un nom y ressemble. L'employé coche, corrige, confirme : rien n'est créé ici."""
+def lire_lignes(contenu, mimetype) -> dict:
+    """Les lignes d'articles d'une pièce (facture ou BL), lues par OpenAI, aux prix NETS des remises (prix_nets). Sans
+    contrôle de droits : l'API de la fenêtre (`lire_articles`) et la tâche d'apprentissage (correspondance_articles)
+    l'appellent. -> {lignes: [{designation, code, qty, rate, …, bl, bl_cle}], remise_globale, …}"""
     from customization_app import caisse_depenses as C
-
-    frappe.only_for(C.ROLES)
-    if not photo:
-        frappe.throw(_("Aucune photo à lire."))
     from bank_retenue_sync.ai.invoice_extract import _get_client_model_temp
 
-    contenu, mimetype = C._decoder(photo)
     client, model, _t = _get_client_model_temp()
     res = client.responses.create(
         model=model,
         instructions=(
             "Tu lis les LIGNES D'ARTICLES d'une facture ou d'un bon de livraison tunisien. "
             "Réponds STRICTEMENT en JSON : {\"lignes\": [{\"designation\": <libellé de la ligne>, "
+            "\"code_article\": <le code ou la référence de l'article chez le FOURNISSEUR (colonne « Article », "
+            "« Réf. », « Code »), tel qu'écrit ; null s'il n'y en a pas>, "
             "\"quantite\": <nombre>, \"prix_unitaire_ht\": <prix unitaire HT AVANT remise>, "
             "\"remise_pct\": <remise de la ligne en %, 0 si aucune>, "
             "\"montant_ht\": <montant HT de la ligne APRÈS sa remise>, "
@@ -377,7 +380,23 @@ def lire_articles(photo):
     except Exception:
         lu = {}
     lu = lu if isinstance(lu, dict) else {}
-    out = prix_nets(lu.get("lignes") or [], lu.get("remise_globale_ht"), lu.get("total_ht_net"))
-    for ligne in out["lignes"]:
-        ligne["item_code"] = _suggerer_article(ligne["designation"])
+    return prix_nets(lu.get("lignes") or [], lu.get("remise_globale_ht"), lu.get("total_ht_net"))
+
+
+@frappe.whitelist()
+def lire_articles(photo, supplier=None):
+    """Les lignes d'articles de la pièce photographiée, avec l'article proposé pour chacune : appris (la mémoire des
+    articles du fournisseur, correspondance_articles) ou deviné (les mots de la désignation). L'employé coche, corrige,
+    confirme : rien n'est créé ici."""
+    from customization_app import caisse_depenses as C
+    from customization_app import correspondance_articles as CA
+
+    frappe.only_for(C.ROLES)
+    if not photo:
+        frappe.throw(_("Aucune photo à lire."))
+    contenu, mimetype = C._decoder(photo)
+    out = lire_lignes(contenu, mimetype)
+    if supplier and not frappe.db.exists("Supplier", supplier):
+        supplier = None
+    CA.proposer_pour_lignes(supplier, out["lignes"])
     return out

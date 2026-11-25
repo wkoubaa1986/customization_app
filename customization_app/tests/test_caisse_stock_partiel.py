@@ -13,7 +13,8 @@ class TestVentilation(unittest.TestCase):
 
     def test_lignes_valides(self):
         lignes = S.lignes_valides('[{"item_code": " A ", "qty": 2, "rate": "10.5", "designation": "x"}, {"item_code": "", "qty": 1, "rate": 1}, {"item_code": "B", "qty": 0, "rate": 1}]')
-        self.assertEqual(lignes, [{"item_code": "A", "qty": 2.0, "rate": 10.5, "designation": "x", "bl_cle": ""}])
+        self.assertEqual(lignes, [{"item_code": "A", "qty": 2.0, "rate": 10.5, "designation": "x", "bl_cle": "",
+                                   "code": "", "suggestion_item": None, "suggestion_source": "", "suggestion_cle": None}])
         self.assertEqual(S.lignes_valides(None), [])
 
     def test_ventiler_la_depense_reste_entiere_le_stock_est_ht(self):
@@ -96,7 +97,9 @@ class TestCablage(unittest.TestCase):
             self.assertIn(m, js, m)
         from customization_app import caisse_depenses as C
         self.assertIn("bls_cites", inspect.getsource(C._classifier))
-        self.assertIn('\\"bl\\"', inspect.getsource(S.lire_articles))
+        self.assertIn('\\"bl\\"', inspect.getsource(S.lire_lignes))
+        self.assertIn('\\"code_article\\"', inspect.getsource(S.lire_lignes))         # mémoire des articles
+        self.assertIn("CA.proposer_pour_lignes(supplier", inspect.getsource(S.lire_articles))
 
 
 class TestRemises(unittest.TestCase):

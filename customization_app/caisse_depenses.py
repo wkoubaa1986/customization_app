@@ -970,14 +970,16 @@ def creer(type_depense, montant, mode, compte=None, description=None, fournisseu
           supplier=None, matricule=None, paiements=None, est_bl=0, numero_bl=None,
           retenue=None, code_sans_photo=None, montant_paye=None, timbre=0,
           sans_retenue_confirme=0, reprise=None, articles_stock=None, caisse_payeur=None,
-          bls_couverts=None, bls_cites=None, confirme_ecarts=0):
+          bls_couverts=None, bls_cites=None, confirme_ecarts=0, lignes_lues=None):
     """Crée la dépense selon son type (voir l'en-tête du module). Retourne les noms
     des pièces créées (écriture et/ou fiche de la file des factures d'achat).
 
     `bls_couverts` (« Dépense avec facture » seulement, 25/11/2026) : les fiches des BL DÉJÀ REÇUS que la facture
     couvre (cochées à l'écran). Aucun rachat : chaque réception est soldée contre le compte de charge, sa fiche passe
     « Saisie » (caisse_bl). `bls_cites` : les BL lus sur la facture (contrôle des montants) ; `confirme_ecarts` :
-    l'employé a confirmé un écart de montant entre la facture et la fiche d'un BL coché.
+    l'employé a confirmé un écart de montant entre la facture et la fiche d'un BL coché. `lignes_lues` : toutes les
+    lignes lues sur la facture (« En partie achat ») — la mémoire des articles apprend des BL couverts
+    (correspondance_articles) ; sans elles, une tâche de fond les relit sur le scan.
 
     `articles_stock` (« Dépense avec facture » seulement, décision utilisateur 10/11/2026) : les
     articles de la pièce qui partent EN STOCK, [{item_code, qty, rate}]. Leur part devient une
@@ -1310,6 +1312,22 @@ def creer(type_depense, montant, mode, compte=None, description=None, fournisseu
                     "compte": compte, "numero_facture": numero_facture, "depense": fiche.name,
                     "fournisseur": fournisseur, "photo": photo_facture, "coins": coins_facture,
                 })
+            # LA MÉMOIRE DES ARTICLES (25/11/2026) : l'article choisi pour chaque ligne mise en stock, et ce que les BL
+            # couverts apprennent (leurs lignes ↔ leur réception). Jamais bloquant (point de reprise, journal).
+            if stock or bls:
+                from customization_app import correspondance_articles as CA
+                sup = supplier if supplier and frappe.db.exists("Supplier", supplier) else \
+                    frappe.db.get_value("Facture Achat a Saisir", resultat.get("fiche_achat"), "supplier") \
+                    if resultat.get("fiche_achat") else None
+                lues = B._liste(lignes_lues)
+                resultat["appris"] = CA.apprendre_de_la_saisie(sup, stock["lignes"] if stock else [], lues,
+                                                               resultat.get("bls_soldes"), fiche.name)
+                # Tâche de fond seulement si un BL couvert a une RÉCEPTION (sinon rien d'apprenable) et si aucune
+                # lecture n'a été envoyée (une lecture faite mais vide n'est pas refaite).
+                if sup and lignes_lues in (None, "") and any(b.get("recu_doc") for b in resultat.get("bls_soldes") or []):
+                    frappe.enqueue("customization_app.correspondance_articles.apprendre_en_fond", queue="long",
+                                   enqueue_after_commit=True, depense=fiche.name, supplier=sup,
+                                   bls=resultat.get("bls_soldes"))
 
     if je:
         _attacher_cheques(regs, je.name, dispense=dispense)

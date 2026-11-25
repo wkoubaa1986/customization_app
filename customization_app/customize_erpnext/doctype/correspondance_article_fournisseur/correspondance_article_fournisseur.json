@@ -1,0 +1,189 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "hash",
+ "creation": "2026-11-25 20:00:00.000000",
+ "description": "Ce que le système a appris : tel article du fournisseur (code ou désignation) est tel article chez nous. Sert à proposer le bon article à la lecture d'une facture (caisse › Dépense).",
+ "doctype": "DocType",
+ "document_type": "Setup",
+ "editable_grid": 0,
+ "engine": "InnoDB",
+ "field_order": [
+  "supplier",
+  "code_fournisseur",
+  "designation",
+  "column_break_1",
+  "item_code",
+  "fois",
+  "source",
+  "section_break_1",
+  "cle",
+  "dernier_usage",
+  "appris_par",
+  "piece",
+  "historique"
+ ],
+ "fields": [
+  {
+   "fieldname": "supplier",
+   "fieldtype": "Link",
+   "label": "Fournisseur",
+   "options": "Supplier",
+   "reqd": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "code_fournisseur",
+   "fieldtype": "Data",
+   "label": "Code article du fournisseur",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "description": "La colonne « Article / Réf. / Code » de sa facture ou de son BL."
+  },
+  {
+   "fieldname": "designation",
+   "fieldtype": "Data",
+   "label": "Désignation du fournisseur",
+   "in_list_view": 1,
+   "length": 240
+  },
+  {
+   "fieldname": "column_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "item_code",
+   "fieldtype": "Link",
+   "label": "Notre article",
+   "options": "Item",
+   "reqd": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "fois",
+   "fieldtype": "Int",
+   "label": "Confirmée (fois)",
+   "default": "1",
+   "in_list_view": 1,
+   "description": "Nombre de saisies qui ont donné ce même article."
+  },
+  {
+   "fieldname": "source",
+   "fieldtype": "Select",
+   "label": "Apprise par",
+   "in_list_view": 1,
+   "options": "\nBL reconnu\nChoix employé\nCorrection\nSaisie manuelle"
+  },
+  {
+   "fieldname": "section_break_1",
+   "fieldtype": "Section Break",
+   "label": "Suivi",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "cle",
+   "fieldtype": "Data",
+   "label": "Clé",
+   "unique": 1,
+   "read_only": 1,
+   "length": 240,
+   "description": "Fournisseur + code (ou désignation normalisée) : une seule correspondance par clé."
+  },
+  {
+   "fieldname": "dernier_usage",
+   "fieldtype": "Datetime",
+   "label": "Dernière confirmation",
+   "read_only": 1
+  },
+  {
+   "fieldname": "appris_par",
+   "fieldtype": "Link",
+   "label": "Par",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "piece",
+   "fieldtype": "Data",
+   "label": "Pièce d'origine",
+   "read_only": 1,
+   "description": "La dépense, la fiche ou la réception qui l'a apprise en dernier."
+  },
+  {
+   "fieldname": "historique",
+   "fieldtype": "Small Text",
+   "label": "Historique",
+   "read_only": 1,
+   "description": "Les articles qu'elle désignait avant une correction."
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-11-25 21:30:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "Correspondance Article Fournisseur",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "report": 1,
+   "export": 1,
+   "print": 0,
+   "email": 0,
+   "share": 0
+  },
+  {
+   "role": "Accounts Manager",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "report": 1,
+   "export": 1,
+   "print": 0,
+   "email": 0,
+   "share": 0
+  },
+  {
+   "role": "Stock Manager",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "report": 1,
+   "export": 1,
+   "print": 0,
+   "email": 0,
+   "share": 0
+  },
+  {
+   "role": "Accounts User",
+   "read": 1,
+   "report": 1
+  },
+  {
+   "role": "Sales Manager",
+   "read": 1,
+   "report": 1
+  },
+  {
+   "role": "Purchase Manager",
+   "read": 1,
+   "report": 1
+  }
+ ],
+ "search_fields": "code_fournisseur,designation,item_code",
+ "show_title_field_in_link": 0,
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "designation",
+ "track_changes": 1
+}
