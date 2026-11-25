@@ -215,6 +215,52 @@ def _suggerer_article(designation: str):
     return None
 
 
+def prix_nets(lignes, remise_globale=0.0, total_ht_net=0.0) -> dict:
+    """Le prix unitaire HT NET de chaque ligne lue : remise de la ligne, puis remise globale répartie au prorata.
+    Fonction pure.
+
+    POURQUOI (25/11/2026, facture d'outillage « … TOTAL » : « elle n'a pas lu la remise ») : la part stock entrait
+    au prix BRUT — la consigne de lecture disait d'ignorer la remise globale et ne demandait pas celle des lignes.
+    Le stock doit entrer au prix réellement payé.
+    `lignes` : [{designation, quantite, prix_unitaire_ht (brut), remise_pct, montant_ht (net de sa remise)}] ;
+    `remise_globale` : remise HT sur le total ; `total_ht_net` : total HT après toutes les remises.
+    -> {lignes: [{designation, qty, rate (net), rate_brut, remise_pct, montant_ht}], remise_globale, facteur,
+        somme_lignes (nettes de leur remise, avant la remise globale), total_ht_net}"""
+    nettes = []
+    for l in lignes or []:
+        qty = flt(l.get("quantite")) or 1
+        brut, montant = flt(l.get("prix_unitaire_ht")), flt(l.get("montant_ht"))
+        pct = min(max(flt(l.get("remise_pct")), 0.0), 100.0)
+        par_montant = montant / qty if montant > 0 else 0.0
+        par_remise = brut * (1 - pct / 100) if brut > 0 else 0.0
+        # Le montant imprimé de la ligne fait foi (il porte la remise telle que la facture l'a calculée) — sauf s'il
+        # n'est que le brut recopié alors qu'une remise est lue.
+        if par_montant and not (pct > 0 and brut and abs(par_montant - brut) < 0.0005):
+            net = par_montant
+        else:
+            net = par_remise or par_montant
+        brut = brut or net
+        nettes.append({"designation": (l.get("designation") or "").strip(), "qty": qty, "net": net, "brut": brut})
+    somme = sum(x["qty"] * x["net"] for x in nettes)
+    remise_globale, total_ht_net = max(flt(remise_globale), 0.0), max(flt(total_ht_net), 0.0)
+    facteur = 1.0
+    if remise_globale > 0 and somme > remise_globale:
+        facteur = (somme - remise_globale) / somme
+    elif total_ht_net > 0 and somme - total_ht_net > max(0.5, 0.002 * somme):
+        # Les lignes font plus que le total net de la facture : une remise non détaillée, répartie de même.
+        facteur = total_ht_net / somme
+    out = []
+    for x in nettes:
+        rate = round(x["net"] * facteur, PRECISION)
+        remise = round((1 - rate / x["brut"]) * 100, 2) if x["brut"] and rate < x["brut"] - 0.0005 else 0.0
+        out.append({"designation": x["designation"], "qty": x["qty"], "rate": rate,
+                    "rate_brut": round(x["brut"], PRECISION), "remise_pct": remise,
+                    "montant_ht": round(x["qty"] * rate, PRECISION)})
+    return {"lignes": out, "remise_globale": round(somme * (1 - facteur), PRECISION) if facteur < 1 else 0.0,
+            "facteur": round(facteur, 6), "somme_lignes": round(somme, PRECISION),
+            "total_ht_net": round(total_ht_net, PRECISION)}
+
+
 @frappe.whitelist()
 def lire_articles(photo):
     """Les lignes d'articles de la pièce photographiée, lues par OpenAI, avec un article de stock
@@ -233,27 +279,28 @@ def lire_articles(photo):
         instructions=(
             "Tu lis les LIGNES D'ARTICLES d'une facture ou d'un bon de livraison tunisien. "
             "Réponds STRICTEMENT en JSON : {\"lignes\": [{\"designation\": <libellé de la ligne>, "
-            "\"quantite\": <nombre>, \"prix_unitaire_ht\": <nombre, hors TVA>, \"montant_ht\": <nombre>}]}. "
+            "\"quantite\": <nombre>, \"prix_unitaire_ht\": <prix unitaire HT AVANT remise>, "
+            "\"remise_pct\": <remise de la ligne en %, 0 si aucune>, "
+            "\"montant_ht\": <montant HT de la ligne APRÈS sa remise>}], "
+            "\"remise_globale_ht\": <remise appliquée sur le total HT, en dinars, 0 si aucune>, "
+            "\"total_ht_net\": <total HT après toutes les remises, avant TVA et timbre>}. "
+            "Les colonnes « Remise », « Rem. », « R% », « Taux remise » donnent la remise de la ligne ; une ligne "
+            "« Remise » ou « Escompte » dans le pied de facture est la remise globale. "
             "Montants en dinars avec trois décimales, virgule décimale dans le document : « 12,500 » vaut 12.5. "
-            "Ignore les lignes de totaux, TVA, timbre, remise globale."),
+            "Ne mets pas en lignes d'articles les totaux, la TVA, le timbre ni la remise globale."),
         input=[{"role": "user", "content": [
             C._bloc_document(contenu, mimetype),
-            {"type": "input_text", "text": "Liste les lignes d'articles avec quantité et prix unitaire HT."}]}])
+            {"type": "input_text", "text": "Liste les lignes d'articles avec quantité, prix unitaire HT, remise et "
+                                           "montant HT net ; puis la remise globale et le total HT net."}]}])
     texte = (res.output_text or "").strip().strip("`")
     if texte.lower().startswith("json"):
         texte = texte.split("\n", 1)[1]
     try:
-        lu = json.loads(texte).get("lignes") or []
+        lu = json.loads(texte)
     except Exception:
-        lu = []
-    out = []
-    for l in lu:
-        designation = (l.get("designation") or "").strip()
-        qty = flt(l.get("quantite")) or 1
-        rate = flt(l.get("prix_unitaire_ht"))
-        if not rate and flt(l.get("montant_ht")) and qty:
-            rate = round(flt(l.get("montant_ht")) / qty, PRECISION)
-        out.append({"designation": designation, "qty": qty, "rate": round(rate, PRECISION),
-                    "montant_ht": round(qty * rate, PRECISION),
-                    "item_code": _suggerer_article(designation)})
+        lu = {}
+    lu = lu if isinstance(lu, dict) else {}
+    out = prix_nets(lu.get("lignes") or [], lu.get("remise_globale_ht"), lu.get("total_ht_net"))
+    for ligne in out["lignes"]:
+        ligne["item_code"] = _suggerer_article(ligne["designation"])
     return out

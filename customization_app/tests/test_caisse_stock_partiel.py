@@ -80,3 +80,41 @@ class TestCablage(unittest.TestCase):
         js = self._lire("customize_erpnext", "page", "caisse_journaliere", "caisse_journaliere.js")
         for m in ("zone_articles", 'caisse_stock_partiel") + ".lire_articles"', "articles_stock:"):
             self.assertIn(m, js, m)
+
+
+class TestRemises(unittest.TestCase):
+    """La part stock au prix NET payé (25/11/2026 : « elle n'a pas lu la remise »)."""
+
+    def test_remise_de_ligne_par_le_montant_imprime(self):
+        r = S.prix_nets([{"designation": "REDUCTION LAITON", "quantite": 5, "prix_unitaire_ht": 8.75,
+                          "remise_pct": 20, "montant_ht": 35.0}])
+        l = r["lignes"][0]
+        self.assertEqual((l["rate"], l["rate_brut"], l["remise_pct"], l["montant_ht"]), (7.0, 8.75, 20.0, 35.0))
+        self.assertEqual((r["facteur"], r["remise_globale"]), (1.0, 0.0))
+
+    def test_remise_de_ligne_sans_montant_ou_montant_brut_recopie(self):
+        sans = S.prix_nets([{"quantite": 2, "prix_unitaire_ht": 10, "remise_pct": 10}])["lignes"][0]
+        self.assertEqual(sans["rate"], 9.0)
+        recopie = S.prix_nets([{"quantite": 2, "prix_unitaire_ht": 10, "remise_pct": 10, "montant_ht": 20}])["lignes"][0]
+        self.assertEqual(recopie["rate"], 9.0)            # montant = brut × qté alors qu'une remise est lue
+
+    def test_remise_globale_repartie_au_prorata(self):
+        r = S.prix_nets([{"quantite": 1, "prix_unitaire_ht": 100, "montant_ht": 100},
+                         {"quantite": 2, "prix_unitaire_ht": 50, "montant_ht": 100}], remise_globale=20)
+        self.assertEqual([l["rate"] for l in r["lignes"]], [90.0, 45.0])
+        self.assertEqual((r["remise_globale"], r["somme_lignes"]), (20.0, 200.0))
+        self.assertEqual(r["lignes"][0]["remise_pct"], 10.0)
+
+    def test_remise_non_detaillee_deduite_du_total_net(self):
+        r = S.prix_nets([{"quantite": 1, "prix_unitaire_ht": 100}, {"quantite": 1, "prix_unitaire_ht": 300}],
+                        total_ht_net=360)
+        self.assertEqual([l["rate"] for l in r["lignes"]], [90.0, 270.0])
+        # Total net plus GRAND que les lignes (une ligne a pu échapper) : on ne gonfle jamais les prix.
+        self.assertEqual([l["rate"] for l in S.prix_nets([{"quantite": 1, "prix_unitaire_ht": 100}],
+                                                         total_ht_net=150)["lignes"]], [100.0])
+
+    def test_sans_remise_rien_ne_change(self):
+        r = S.prix_nets([{"designation": "MARTEAU", "quantite": 1, "prix_unitaire_ht": 16.315, "montant_ht": 16.315}],
+                        total_ht_net=16.315)
+        self.assertEqual((r["lignes"][0]["rate"], r["lignes"][0]["remise_pct"], r["remise_globale"]), (16.315, 0.0, 0.0))
+        self.assertEqual(S.prix_nets([])["lignes"], [])

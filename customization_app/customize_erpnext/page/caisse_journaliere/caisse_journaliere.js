@@ -2264,7 +2264,10 @@ function rcj_zone_articles(d, etat, API, apres) {
     args: { photo },
     callback: (r) => {
       if (perime()) return;
-      etat.articles = (r.message || []).map((a) => ({ ...a, coche: false }));
+      // Depuis le 25/11/2026 : {lignes, remise_globale, …} (prix NETS des remises) ; une liste avant.
+      const lu = r.message || [];
+      etat.lecture = Array.isArray(lu) ? {} : lu;
+      etat.articles = (Array.isArray(lu) ? lu : (lu.lignes || [])).map((a) => ({ ...a, coche: false }));
       etat.articles_lus = true;
       etat.lecture_articles = false;
       rcj_rendre_articles(d, etat, $l);
@@ -2293,6 +2296,18 @@ function rcj_rendre_articles(d, etat, $z) {
     const ht = rcj_articles_coches(etat).reduce((s, a) => s + a.qty * a.rate, 0);
     const montant = flt(d.get_value("montant"));
     const ht_total = montant - flt(d.get_value("tva"));
+    // Remises (25/11/2026) : la remise globale répartie sur les lignes est dite ; et si toutes les lignes lues ne
+    // font pas le HT de la facture (au timbre près), on le signale — une remise ou une ligne a pu échapper.
+    const lecture = etat.lecture || {};
+    const toutes = (etat.articles || []).reduce((s, a) => s + flt(a.qty) * flt(a.rate), 0);
+    const notes = [];
+    if (flt(lecture.remise_globale) > 0) {
+      notes.push(`🏷️ ${__("Remise globale de {0} HT répartie sur les lignes (prix nets affichés)", [rcj_dt(lecture.remise_globale)])}`);
+    }
+    if (ht_total > 0 && Math.abs(toutes - ht_total) > Math.max(2, 0.01 * ht_total)) {
+      notes.push(`<span class="text-warning">⚠ ${__("Les lignes lues font {0} HT, la facture {1} (montant moins TVA) : vérifiez les prix — remise ou ligne oubliée ?", [rcj_dt(toutes), rcj_dt(ht_total)])}</span>`);
+    }
+    $z.find(".rcj-art-notes").html(notes.map((n) => `<div>${n}</div>`).join(""));
     $z.find(".rcj-art-totaux").html(ht > 0
       ? `📦 ${__("Part stock")} : <b>${rcj_dt(ht)}</b> HT → ${__("commande d'achat sans TVA, financée par le compte de charge")} ·
          💸 ${__("Dépense")} : <b>${rcj_dt(montant)}</b> TTC ${__("en une écriture")} (${__("dont")} ${rcj_dt(ht_total - ht)} HT ${__("hors stock")})${ht >= ht_total - 0.0005
@@ -2301,7 +2316,8 @@ function rcj_rendre_articles(d, etat, $z) {
   };
   const rows = etat.articles.map((a, i) => `<tr data-i="${i}">
       <td><input type="checkbox" class="rcj-art-coche" ${a.coche ? "checked" : ""}></td>
-      <td style="max-width:220px">${esc(a.designation || "")}</td>
+      <td style="max-width:220px">${esc(a.designation || "")}${flt(a.remise_pct) > 0 && flt(a.rate_brut) > flt(a.rate)
+        ? `<div class="text-muted" style="font-size:11px">${__("brut {0} − remise {1} %", [rcj_dt(a.rate_brut), String(a.remise_pct).replace(".", ",")])}</div>` : ""}</td>
       <td class="rcj-art-item"></td>
       <td><input type="number" step="any" class="form-control input-sm rcj-art-qty" style="width:70px" value="${a.qty || 1}"></td>
       <td><input type="number" step="any" class="form-control input-sm rcj-art-rate" style="width:90px" value="${a.rate || 0}"></td>
@@ -2312,6 +2328,7 @@ function rcj_rendre_articles(d, etat, $z) {
     <table class="table table-bordered table-sm" style="font-size:12px;margin-bottom:6px">
       <thead><tr><th></th><th>${__("Sur la pièce")}</th><th>${__("Article ERPNext")}</th><th>${__("Qté")}</th><th>${__("PU HT")}</th><th>${__("HT")}</th></tr></thead>
       <tbody>${rows}</tbody></table>
+    <div class="rcj-art-notes" style="font-size:12px;margin-bottom:4px"></div>
     <div class="rcj-art-totaux" style="font-size:12.5px"></div>`);
   etat.articles.forEach((a, i) => {
     const $tr = $z.find(`tr[data-i="${i}"]`);
