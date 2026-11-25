@@ -78,16 +78,20 @@ def construire_anomalies(sauts, entrees_manuelles, antidates, inattendus, entree
                            "journée est tombée en négatif. Sur la carte, ils sont comptés chez le collecteur." % (
                                _dt(sum(_m(e["montant"]) for e in le_jour)), le_jour[0].get("depuis") or "",
                                ", ".join(e["name"] for e in le_jour))
+        # Le collecteur principal n'a qu'UNE poche (sa caisse et ce qu'il a collecté) : son saut se corrige sur ce qu'il
+        # a collecté — c'est là que l'apport du coffre est compté —, pas sur son fond, qui tomberait en négatif.
+        du_principal = bool(caisse_principal) and x.get("caisse") == caisse_principal
         out.append({
-            "cle": "saut:%s" % x.get("cloture"), "nature": "Saut de chaîne", "caisse": x.get("caisse"), "poche": "Caisse",
+            "cle": "saut:%s" % x.get("cloture"), "nature": "Saut de chaîne", "caisse": x.get("caisse"),
+            "poche": "Collecte" if du_principal else "Caisse",
             "date": x.get("date"), "document_type": "Cloture Caisse", "document": x.get("cloture"), "montant": saut,
             "titre": "%s : %s DT %s dans sa caisse le %s" % (x.get("caisse"), _dt(abs(saut)),
                                                              "apparus" if saut > 0 else "disparus", _jour(x.get("date"))),
             "explication": explication,
             "options": [
                 {"code": "retirer", "effet": _m(-saut),
-                 "libelle": ("Cet argent n'existe pas : retirer %s DT de sa caisse sur la carte" % _dt(saut)) if saut > 0
-                 else ("Cet argent est bien là : remettre %s DT dans sa caisse sur la carte" % _dt(-saut))},
+                 "libelle": ("Cet argent n'existe pas : retirer %s DT de ce qu'il tient sur la carte" % _dt(saut)) if saut > 0
+                 else ("Cet argent est bien là : ajouter %s DT à ce qu'il tient sur la carte" % _dt(-saut))},
                 {"code": "garder", "effet": 0.0, "libelle": "Ne rien changer au montant (vu, expliqué)"}]})
     for m in entrees_manuelles or []:
         montant = _m(m.get("montant"))

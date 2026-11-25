@@ -43,11 +43,12 @@ class TestRegularisationsSite(unittest.TestCase):
         self.assertTrue(all("TAWFIR" in v["compte"] or v["compte"] for v in self.s["rapprochement"]["verses_banque"]))
 
     def test_regulariser_le_saut_le_retire_de_la_carte(self):
-        avant = self._nejib(self.s)["total"]
+        avant, fond = self.s["principal"]["especes"], self._nejib(self.s)["fond"]
         r = R.regulariser(CLE, "retirer", "Transfert du coffre du 19/10 : cet argent a payé les billets d'avion.")
         self.assertEqual(r["faites"][0]["effet"], -5293.0)
         s = A.situation()
-        self.assertEqual(round(self._nejib(s)["total"] - avant, 3), -5293.0)
+        self.assertEqual(round(s["principal"]["especes"] - avant, 3), -5293.0)
+        self.assertEqual(self._nejib(s)["fond"], fond)                        # son fond ne tombe pas en négatif
         self.assertNotIn(CLE, {a["cle"] for a in s["a_regulariser"]})
         self.assertEqual(s["principal"]["sauts"], [])
         self.assertEqual((s["rapprochement"]["termes"]["regularisations"], s["rapprochement"]["reste"]), (-5293.0, 0.0))

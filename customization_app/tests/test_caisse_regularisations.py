@@ -20,7 +20,11 @@ class TestAnomalies(unittest.TestCase):
 
     def test_le_saut_du_20_10_et_son_explication(self):
         s = self.a[0]
-        self.assertEqual((s["cle"], s["caisse"], s["poche"], s["montant"]), ("saut:CLO-1055", "Nejib Koubaa", "Caisse", 5293.0))
+        # Le saut du collecteur principal se corrige sur ce qu'il a collecté (son fond ne tombe pas en négatif) ;
+        # celui d'un autre employé, sur sa caisse.
+        self.assertEqual((s["cle"], s["caisse"], s["poche"], s["montant"]), ("saut:CLO-1055", "Nejib Koubaa", "Collecte", 5293.0))
+        autre = R.construire_anomalies([SAUT], [], [], [], [], "Quelqu'un d'autre")[0]
+        self.assertEqual(autre["poche"], "Caisse")
         self.assertIn("6 000,000 DT sont arrivés de « Sabah Espèces » (ACC-JV-2026-00895)", s["explication"])
         self.assertEqual([(o["code"], o["effet"]) for o in s["options"]], [("retirer", -5293.0), ("garder", 0.0)])
 
@@ -50,14 +54,14 @@ class TestAnomalies(unittest.TestCase):
         self.assertEqual(len(R.trier(apres, [inventaire], "Nejib Koubaa")[0]), 1)
 
     def test_effets_et_inventaire(self):
-        regs = [{"caisse": "Nejib Koubaa", "poche": "Caisse", "effet": -5293.0, "nature": "Saut de chaîne"},
+        regs = [{"caisse": "Sadok Bouziri", "poche": "Caisse", "effet": -5293.0, "nature": "Saut de chaîne"},
                 {"caisse": "Nejib Koubaa", "poche": "Collecte", "effet": -153.2, "nature": "Entrée manuelle"},
                 {"caisse": "Nejib Koubaa", "poche": "Collecte", "effet": 40.0, "nature": R.INVENTAIRE, "compte": 2500.0,
                  "theorique": 2460.0, "decide_le": "2026-11-26 10:00:00", "name": "REG-3"},
                 {"caisse": R.COFFRE, "poche": "Coffre", "effet": 0.0, "nature": R.INVENTAIRE_COFFRE, "compte": 60000.0,
                  "theorique": 61000.0, "decide_le": "2026-11-26 11:00:00", "name": "REG-4"},
                 {"caisse": None, "poche": None, "effet": 0.0, "nature": "Paiement antidaté"}]
-        self.assertEqual(R.effets(regs), {("Nejib Koubaa", "Caisse"): -5293.0, ("Nejib Koubaa", "Collecte"): -113.2})
+        self.assertEqual(R.effets(regs), {("Sadok Bouziri", "Caisse"): -5293.0, ("Nejib Koubaa", "Collecte"): -113.2})
         self.assertEqual(R.dernier_inventaire(regs, "Nejib Koubaa", "Collecte")["ecart"], 40.0)
         self.assertEqual(R.dernier_inventaire(regs, R.COFFRE, "Coffre")["ecart"], -1000.0)   # le coffre n'a pas d'effet sur la carte
         self.assertIsNone(R.dernier_inventaire(regs, "Sadok", "Collecte"))
