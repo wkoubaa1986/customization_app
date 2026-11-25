@@ -216,6 +216,15 @@ class ArgentLiquide {
       if (l) { l.collecte = x.detient; l.total += x.detient; l.collecteur = x; }
       else lignes.push({ caisse: x.nom, nom: x.nom, fond: 0, a_remettre: 0, non_compte: 0, collecte: x.detient, total: x.detient, collecteur: x });
     });
+    // LA RÉFÉRENCE (25/11/2026) : le collecteur principal n'a qu'UNE poche — sa caisse et l'argent collecté. Sa ligne
+    // montre ce qu'il doit avoir d'après le compte « Espèces » ; le détail par comptages et collectes devient le contrôle.
+    const pr0 = s.principal;
+    if (pr0 && pr0.selon_compte !== undefined && pr0.selon_compte !== null) {
+      let l = lignes.find((e) => e.caisse === pr0.caisse);
+      if (!l) { l = { caisse: pr0.caisse, nom: pr0.nom, fond: 0, a_remettre: 0, non_compte: 0, collecte: 0, total: 0 }; lignes.push(l); }
+      l.controle = { fond: l.fond, a_remettre: l.a_remettre, non_compte: l.non_compte, collecte: l.collecte, total: pr0.especes };
+      Object.assign(l, { fond: 0, a_remettre: 0, non_compte: 0, collecte: pr0.selon_compte, total: pr0.selon_compte, unique: true });
+    }
     lignes.sort((a, b) => b.total - a.total);
     const pleines = lignes.filter((l) => Math.abs(l.total) > 0.0005);
     const vides = lignes.filter((l) => Math.abs(l.total) <= 0.0005);
@@ -238,10 +247,10 @@ class ArgentLiquide {
         <li><span class="al-pastille" style="background:var(--p-fond)"></span><b>${__("Fond gardé")}</b> : ${__("ce que l’employé a gardé à son dernier comptage (compté − remis) ; il repart avec le lendemain.")}</li>
         <li><span class="al-pastille" style="background:var(--p-a_remettre)"></span><b>${__("Compté, pas encore remis")}</b> : ${__("l’employé a compté, le collecteur n’a pas encore confirmé avoir reçu l’argent.")}</li>
         <li><span class="al-pastille" style="background:var(--p-non_compte)"></span><b>${__("Encaissé, pas encore compté")}</b> : ${__("espèces encaissées moins espèces dépensées depuis le dernier comptage — la journée en cours, ou des jours oubliés (alors « sur N jours »).")}</li>
-        <li><span class="al-pastille" style="background:var(--p-collecte)"></span><b>${__("Chez le collecteur")}</b> : ${__("ce qu’il a reçu aux collectes, moins ce qu’il a déjà sorti du compte Espèces (vers Sabah, la banque, des dépenses personnelles). Tout est compté chez le collecteur principal : ce qu’un autre responsable collecte, il le lui remet.")}</li>
+        <li><span class="al-pastille" style="background:var(--p-collecte)"></span><b>${__("Chez le collecteur")}</b> : ${__("tout l’argent liquide qui n’est ni au coffre ni chez un autre employé : le solde du compte « Espèces » moins ce que tiennent les autres caisses. Le calcul par les collectes (reçu des employés − déjà sorti) sert de contrôle ; quand il ne tombe pas sur le même montant, la différence est dans « À régulariser ».")}</li>
         <li><b>${__("Chèques et traites")}</b> : ${__("une pièce reçue attend sur le compte « Chèques » ou « Traite Bancaire » jusqu’à ce que la banque la crédite. Tant qu’elle n’est pas déposée, elle est chez le collecteur principal, ou chez l’employé qui l’a reçue tant que sa caisse n’est pas collectée. Elle ne compte pas dans l’argent liquide.")}</li>
         <li><span class="al-pastille" style="background:var(--p-sabah)"></span><b>${__("Sabah Espèces")}</b> : ${__("le solde du compte comptable où l’argent collecté est mis de côté.")}</li>
-        <li><b>${__("Périodes")}</b> : ${__("« chez les employés » est une photo au soir choisi (depuis leur dernier comptage) ; « chez les collecteurs » est un cumul depuis la date de départ des caisses ; Sabah est un solde comptable ; la banque, les 30 derniers jours. Chaque case l’écrit en bas.")}</li>
+        <li><b>${__("Périodes")}</b> : ${__("« chez les employés » est une photo au soir choisi (depuis leur dernier comptage) ; « chez le collecteur » et Sabah sont des soldes comptables au soir choisi ; la banque, les 30 derniers jours. Chaque case l’écrit en bas.")}</li>
         <li><b>${__("Le partenaire (Economic Aqua Solution)")}</b> : ${__("il encaisse sur son propre compte ; sa caisse ne se compte pas. La section « Parti chez le partenaire » dit seulement ce qui est parti de son côté.")}</li>
         <li><b>${__("Et le compte comptable « Espèces » ?")}</b> : ${__("il ne dit pas qui tient l’argent. La section « Rapprochement avec la comptabilité », en bas, montre son solde, le compare à l’argent reconstitué ici et chiffre chaque cause d’écart, avec des liens vers le grand livre.")}</li>
         <li>${__("Cliquez sur une personne pour lire son explication en une phrase, sur une case du chemin pour aller au détail, sur un jour du graphique pour voir qui tenait l’argent ce soir-là. Survolez une couleur pour son montant.")}</li>
@@ -259,8 +268,8 @@ class ArgentLiquide {
               __("au soir du {0}, depuis leur dernier comptage", [jour(s.date)]))}
       <div class="al-fleche">→</div>
       ${etape("al-collecteurs", "var(--p-collecte)", "📥 " + __("Chez les collecteurs"), poches.collecte,
-              s.principal ? __("chez {0} : tout ce qui est collecté lui revient, pas encore versé", [esc(s.principal.nom)]) : __("reçu aux collectes, pas encore versé"),
-              __("cumul du {0} (départ des caisses) au {1}", [jour(s.date_depart), jour(s.date)]))}
+              s.principal ? __("chez {0} : tout l’argent liquide qui n’est ni au coffre ni chez un autre employé", [esc(s.principal.nom)]) : __("reçu aux collectes, pas encore versé"),
+              s.principal ? __("d’après le compte « Espèces » au {0}", [jour(s.date)]) : __("cumul du {0} (départ des caisses) au {1}", [jour(s.date_depart), jour(s.date)]))}
       <div class="al-fleche">→</div>
       ${etape("al-rapprochement", "var(--p-sabah)", "🔒 " + __("Sabah Espèces"), poches.sabah, __("argent collecté mis de côté"),
               __("solde comptable au {0}", [jour(s.date)]))}
@@ -393,6 +402,12 @@ class ArgentLiquide {
     // ── Qui tient l'argent ──
     const max_total = Math.max(...pleines.map((l) => Math.abs(l.total)), 1);
     const phrase = (l) => {
+      if (l.unique) {
+        const c = l.controle;
+        return `<b>${esc(l.nom)}</b> ${__("doit avoir")} <b>${txt(l.total)}</b> : ${__("c’est le collecteur principal, sa caisse et l’argent collecté sont une seule poche. C’est le solde du compte « Espèces » ({0}) moins ce que tiennent les autres employés ({1}).", [txt(pr0.compte_especes), txt(pr0.autres_caisses)])}
+          <div class="muet" style="margin-top:4px">${__("Contrôle par les comptages et les collectes : fond gardé {0} + pas encore compté {1} + collecté et pas versé {2} = {3}.", [txt(c.fond), txt(c.non_compte + c.a_remettre), txt(c.collecte), txt(c.total)])}
+          ${Math.abs(c.total - l.total) < 0.5 ? __("Les deux tombent juste.") : __("L’écart ({0}) est ce qui reste à régulariser.", [signe_txt(c.total - l.total)])}</div>`;
+      }
       const morceaux = [];
       if (l.fond) morceaux.push(__("{0} gardés comme fond à son comptage du {1}", [txt(l.fond), jour(l.derniere && l.derniere.date)]));
       if (l.a_remettre) morceaux.push(__("{0} comptés le {1} et pas encore reçus par le collecteur ({2})", [txt(l.a_remettre), jour(l.derniere && l.derniere.date), esc(l.derniere ? l.derniere.name : "")]));
@@ -416,7 +431,7 @@ class ArgentLiquide {
             ${l.derniere ? `<div class="muet">${__("dernier comptage")} <a href="/app/cloture-caisse/${encodeURIComponent(l.derniere.name)}" onclick="event.stopPropagation()">${jour(l.derniere.date)}</a> · ${esc(l.derniere.statut)}</div>` : ""}
             ${segs ? `<div class="al-mini" style="width:${largeur}%">${segs}</div>` : ""}</td>
           <td class="n">${dt(l.fond)}</td><td class="n">${dt(l.a_remettre)}</td>
-          <td class="n">${dt(l.non_compte)}${l.jours_non_comptes > 1 ? `<div class="muet">${__("sur {0} jours", [l.jours_non_comptes])}</div>` : ""}</td>
+          <td class="n">${dt(l.non_compte)}${l.jours_non_comptes > 1 && !l.unique ? `<div class="muet">${__("sur {0} jours", [l.jours_non_comptes])}</div>` : ""}</td>
           <td class="n">${dt(l.collecte)}</td><td class="n"><b>${dt(l.total)}</b></td></tr>
         <tr class="al-phrase" data-pour="${i}" style="display:none"><td colspan="6">${phrase(l)}</td></tr>`;
     };
@@ -428,7 +443,7 @@ class ArgentLiquide {
           <th class="n" title="${__("Gardé à son dernier comptage (compté − remis)")}">${entete(AL_POCHES[0])}</th>
           <th class="n" title="${__("Compté, le collecteur n’a pas encore confirmé la réception")}">${entete(AL_POCHES[1])}</th>
           <th class="n" title="${__("Encaissé − dépensé en espèces depuis le dernier comptage")}">${entete(AL_POCHES[2])}</th>
-          <th class="n" title="${__("Reçu aux collectes, pas encore sorti vers Sabah ou la banque")}">${entete(AL_POCHES[3])}</th>
+          <th class="n" title="${__("Tout l’argent liquide qui n’est ni au coffre ni chez un autre employé : le compte « Espèces » moins les autres caisses")}">${entete(AL_POCHES[3])}</th>
           <th class="n">${__("Total tenu")}</th></tr>
         ${pleines.map((l) => ligne(l, lignes.indexOf(l))).join("")}
         ${this.voir_vides ? vides.map((l) => ligne(l, lignes.indexOf(l))).join("") : ""}
@@ -451,8 +466,9 @@ class ArgentLiquide {
           ${x.entrees_autres ? `<span class="op">+</span>${bloc(__("Revenu au compte Espèces"), x.entrees_autres)}` : ""}
           <span class="op">−</span>${bloc(__("Sorti (Sabah, banque, perso…)"), x.sorties_total)}
           ${x.regularise ? `<span class="op">${x.regularise > 0 ? "+" : "−"}</span>${bloc(__("Inventaire et régularisations"), Math.abs(x.regularise))}` : ""}
-          <span class="op">=</span>${bloc(__("Encore entre ses mains"), x.detient, "res")}
+          <span class="op">=</span>${bloc(x.principal && pr0 ? __("D’après les collectes (contrôle)") : __("Encore entre ses mains"), x.detient, "res")}
         </div>
+        ${x.principal && pr0 ? `<div class="muet">${__("Avec sa propre caisse d’après ses comptages ({0}), le contrôle donne {1}. La référence est le compte « Espèces » : il doit avoir {2}.", [txt(pr0.caisse_propre), txt(pr0.especes), `<b>${txt(pr0.selon_compte)}</b>`])}</div>` : ""}
         ${remis_par(x) ? `<div class="muet">↪ ${__("Dans « reçu aux collectes » : {0}, remis ensuite à {1} (il est le collecteur principal).", [remis_par(x), esc(x.nom)])}</div>` : ""}
         ${(x.entrees_manuelles || []).filter((m) => cles_ouvertes.has("jv:" + m.name)).length ? `<div class="al-alerte">⚠️ ${__("{0} écriture(s) font ENTRER de l’argent dans Espèces sans venir du coffre ni de la banque : à décider dans « À régulariser ».", [x.entrees_manuelles.filter((m) => cles_ouvertes.has("jv:" + m.name)).length])}
           <button class="btn btn-xs btn-default al-aller" data-cible="al-regulariser">${__("Voir")}</button></div>` : ""}
@@ -480,7 +496,7 @@ class ArgentLiquide {
       <details style="margin-top:6px"><summary class="muet" style="cursor:pointer">${__("Voir les chiffres en tableau")}</summary><div class="al-defile" id="al-table-flux"></div></details>
       ${personnes}
       <h4 id="al-collecteurs">📥 ${__("Chez les collecteurs")}</h4>
-      <div class="al-sous">${__("Le calcul : ce qu’il a reçu des employés, moins ce qu’il a déjà sorti. Le résultat est l’argent encore entre ses mains.")}</div>
+      <div class="al-sous">${__("La référence est le compte « Espèces ». Le calcul ci-dessous sert de contrôle : ce qu’il a reçu des employés, moins ce qu’il a déjà sorti.")}</div>
       ${collecteurs || `<div class="muet">${__("Rien de collecté depuis la date de départ.")}</div>`}
       ${pieces}
       ${partenaires.length ? `<h4 id="al-partenaires">🤝 ${__("Parti chez le partenaire")}</h4>
@@ -502,7 +518,7 @@ class ArgentLiquide {
       <details style="margin-top:6px"><summary class="muet" style="cursor:pointer">${__("Voir les chiffres en tableau")}</summary><div class="al-defile" id="al-table-jours"></div></details>
       <h4 id="al-banque">🏦 ${__("Versements en banque (30 derniers jours)")}</h4>${versements}
       ${this.html_rapprochement(dt, txt, jour, esc)}
-      <div class="al-note">${__("Méthode : toutes les caisses partagent un seul compte comptable « Espèces », qui ne dit pas qui tient les billets (son solde le {0} : {1}). La page reconstruit donc qui détient quoi à partir des comptages, des collectes et des écritures depuis la date de départ des caisses ({2}). Tout ce qui est collecté (par un autre responsable aussi) et toute sortie du compte Espèces sont comptés chez le collecteur principal : il doit avoir tout ce qui n’est pas versé. Alerte au-delà de {3} ou après {4} jours sans versement (Config Caisse).",
+      <div class="al-note">${__("Méthode : toutes les caisses partagent un seul compte comptable « Espèces », qui ne dit pas qui tient les billets (son solde le {0} : {1}). Ce que tient chaque employé vient de ses comptages ; ce que doit avoir le collecteur principal est le reste : le solde du compte moins les autres caisses. Le calcul par les collectes et les écritures depuis la date de départ des caisses ({2}) sert de contrôle. Alerte au-delà de {3} ou après {4} jours sans versement (Config Caisse).",
         [jour(s.date), txt(t.comptable_especes), jour(s.date_depart), txt(s.plafond), s.jours_max])}</div>
     </div>`);
 

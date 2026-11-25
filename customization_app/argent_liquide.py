@@ -117,6 +117,18 @@ def anciennete(entrees, sorties_total, jour):
     return None, 0
 
 
+def alertes_collecteur(detient, plafond, jours_max, depuis, age) -> list:
+    """Les alertes d'un collecteur : au-delà du plafond, ou de l'argent gardé trop longtemps. `detient` : ce qu'il a en
+    main — pour le collecteur principal, le chiffre de RÉFÉRENCE (compte « Espèces » − autres caisses)."""
+    alertes = []
+    if plafond and flt(detient) > flt(plafond) + 0.0005:
+        alertes.append(_("garde {0} DT, au-delà du plafond de {1} DT").format(_fmt(detient), _fmt(plafond)))
+    if jours_max and flt(detient) > 0.5 and depuis and age > jours_max:
+        alertes.append(_("de l'argent collecté le {0} n'est toujours pas versé ({1} jours)").format(
+            getdate(depuis).strftime("%d/%m/%Y"), age))
+    return alertes
+
+
 def montant_recu(cloture) -> float:
     """Ce que le collecteur a reçu d'une clôture collectée. Validée par lui-même (« validation directe » de la caisse
     d'un absent, ou sa propre caisse) : « espèces reçues » n'est pas rempli, l'argent remis est chez lui quand même
@@ -330,13 +342,7 @@ def _collecteurs(jour, cfg, hors=(), effets=None):
         x["detient"] = flt(x["recu"] + x["passations"] + x["entrees_autres"] - sorties + x["regularise"], 3)
         depuis, age = anciennete(sorted(x.pop("_entrees")), sorties, jour)
         x["depuis"], x["age_jours"] = (str(depuis) if depuis else None), age
-        alertes = []
-        if plafond and x["detient"] > plafond + 0.0005:
-            alertes.append(_("garde {0} DT, au-delà du plafond de {1} DT").format(_fmt(x["detient"]), _fmt(plafond)))
-        if jours_max and x["detient"] > 0.5 and age > jours_max:
-            alertes.append(_("de l'argent collecté le {0} n'est toujours pas versé ({1} jours)").format(
-                getdate(depuis).strftime("%d/%m/%Y"), age))
-        x["alertes"] = alertes
+        x["alertes"] = alertes_collecteur(x["detient"], plafond, jours_max, depuis, age)
         x["remis_par"] = sorted(x.pop("_remis_par").values(), key=lambda m: -m["montant"])
         x["detail_sorties"] = x["detail_sorties"][-15:][::-1]
         if x["recu"] or x["passations"] or sorties or x["entrees_autres"] or x["regularise"]:
@@ -751,6 +757,10 @@ def situation(date=None):
         [m for x in collecteurs for m in x.get("entrees_detail") or []], principal["caisse"] if principal else None)
     a_regulariser, traitees = REG.trier(anomalies, regs, principal["caisse"] if principal else None)
     if principal:
+        # Le plafond se juge sur ce qu'il DOIT avoir d'après le compte, pas sur le calcul de contrôle.
+        for x in collecteurs:
+            if x.get("principal"):
+                x["alertes"] = alertes_collecteur(principal["selon_compte"], plafond, jours_max, x.get("depuis"), x.get("age_jours") or 0)
         principal["sauts"] = [x for x in principal["sauts"] if ("saut:" + x["cloture"]) in {a["cle"] for a in a_regulariser}]
         principal["inventaire"] = REG.dernier_inventaire(regs, principal["caisse"], "Collecte")
     return {
