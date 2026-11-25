@@ -6,9 +6,13 @@ où se trouve l'argent à partir des FLUX enregistrés depuis la date de départ
 
   - chez chaque EMPLOYÉ : le fond gardé à sa dernière clôture, ce qu'il a compté mais pas encore remis (clôture en
     attente de collecte) et ce qui n'est pas encore compté (encaissé − dépensé en espèces depuis sa dernière clôture) ;
-  - chez chaque COLLECTEUR : ce qu'il a reçu aux collectes (+ passations reçues, − passations remises), moins ce
-    qu'il a sorti du compte Espèces par écriture (vers Sabah Espèces, la banque, des dépenses personnelles…) —
-    une écriture saisie par quelqu'un qui n'est pas collecteur est imputée au responsable titulaire ;
+  - chez le COLLECTEUR PRINCIPAL (le titulaire, Nejib) : ce qui a été reçu aux collectes (+ passations validées),
+    moins ce qui est sorti du compte Espèces par écriture (vers Sabah Espèces, la banque, des dépenses
+    personnelles…). Règle du 25/11/2026 (« quand je collecte, je donne à Nejib ; il doit avoir tout ce qui n'est
+    pas versé ») : ce que collecte un autre responsable (Wassim) est compté chez lui, avec la mention « remis par » ;
+    seul un délégué garde ses collectes tant que sa passation n'est pas validée ;
+  - les CHÈQUES et TRAITES pas encore versés (comptes d'attente « Chèques » / « Traite Bancaire ») : chez le
+    collecteur principal, ou chez l'employé qui les a reçus tant que sa caisse n'est pas collectée ;
   - sur « Sabah Espèces » : son solde comptable (compte à part) ;
   - en BANQUE : les versements (écritures Espèces / Sabah → Zitouna, BIAT), avec leur référence.
 
@@ -29,6 +33,10 @@ COMPTE_ESPECES = "Espèces - A&S"
 COMPTE_SABAH = "Sabah Espèces - A&S"
 # Les mêmes que le Server Script « get caisse situation api » (BANQUE_ACCOUNTS, patch caisse_especes_biat).
 COMPTES_BANQUE = ("STE430127B - Zitouna - A&S", "BIAT - A&S")
+# Les comptes d'attente des pièces reçues pas encore créditées par la banque (le robot bancaire les en sort à
+# l'encaissement : il déplace le paid_to du paiement vers la banque).
+COMPTES_PORTEFEUILLE = {"Chèques - A&S": "Chèque", "Traite Bancaire - A&S": "Traite"}
+PIECE_ANCIENNE_JOURS = 30
 JOURS_HISTORIQUE = 14
 JOURS_VERSEMENTS = 30
 NON_COMPTE_JOURS_MAX = 31
@@ -98,6 +106,17 @@ def sauts_de_chaine(clotures) -> list:
     return sauts
 
 
+def detenteur_piece(saisie_par, employes_actifs, responsables, collectee) -> str | None:
+    """Chez qui est un chèque / une traite pas encore versé. Fonction pure.
+    `saisie_par` : l'utilisateur qui l'a saisi ; `employes_actifs` : {utilisateur: nom de caisse} ;
+    `responsables` : les collecteurs titulaires (leur argent est celui du principal) ; `collectee` : la caisse de
+    l'employé a été collectée APRÈS l'entrée de la pièce. → le nom de la caisse de l'employé qui l'a encore, ou
+    None = chez le collecteur principal (saisie par un responsable, le robot, un compte sans caisse, ou collectée)."""
+    if saisie_par in responsables or saisie_par not in employes_actifs or collectee:
+        return None
+    return employes_actifs[saisie_par]
+
+
 def reference(remarque, cheque_no=None) -> str:
     """« Ref : TT263168Q77X » ou « réf. TT26306750847374 » dans la remarque d'un versement. Fonction pure."""
     m = re.search(r"r[ée]f\.?\s*:?\s*([A-Z0-9][A-Z0-9-]{5,})", remarque or "", re.I)
@@ -157,7 +176,8 @@ def _employes(jour, cfg):
 
 
 def _collecteurs(jour, cfg):
-    """Ce que chaque collecteur détient : reçu aux collectes ± passations − sorties du compte Espèces."""
+    """Ce que détient le collecteur principal : reçu aux collectes + passations validées − sorties du compte Espèces.
+    Tout va chez lui (règle du 25/11/2026), sauf l'argent d'une passation pas encore validée, chez son délégué."""
     from customization_app import caisse_collecte as CC
     depart = getdate(cfg.get("date_depart") or jour)
     fin = "%s 23:59:59" % jour
@@ -167,27 +187,48 @@ def _collecteurs(jour, cfg):
     def c(user):
         return collecteurs.setdefault(user, {"user": user, "nom": frappe.utils.get_fullname(user) or user,
                                              "caisse": CC._caisse_de(user), "recu": 0.0, "passations": 0.0,
-                                             "sorties": {}, "entrees_autres": 0.0, "detail_sorties": [], "_entrees": []})
+                                             "sorties": {}, "entrees_autres": 0.0, "detail_sorties": [], "_entrees": [],
+                                             "_remis_par": {}, "principal": user == titulaire})
 
-    for u in (cfg.get("responsables") or []) + (cfg.get("delegues") or []):
-        c(u)
+    def chez_principal(user, montant):
+        """Le collecteur principal reçoit ; « remis par » garde la trace de qui avait collecté."""
+        x = c(titulaire or user)
+        if user and user != x["user"]:
+            m = x["_remis_par"].setdefault(user, {"nom": frappe.utils.get_fullname(user) or user, "montant": 0.0, "nb": 0})
+            m["montant"] = flt(m["montant"] + montant, 3)
+            m["nb"] += 1
+        return x
+
+    if titulaire:
+        c(titulaire)
     for r in frappe.db.sql(
             """SELECT collecte_par, collecte_le, especes_recues, especes_remises, validation_seule FROM `tabCloture Caisse`
                WHERE docstatus = 1 AND IFNULL(collecte_par, '') != '' AND date_cloture >= %s AND collecte_le <= %s
                  AND IFNULL(passation, '') = '' ORDER BY collecte_le""", (depart, fin), as_dict=True):
         recu = montant_recu(r)
         if recu:
-            x = c(r.collecte_par)
+            x = chez_principal(r.collecte_par, recu)
             x["recu"] += recu
             x["_entrees"].append((getdate(r.collecte_le), recu))
-    # Passations : le délégué a collecté (ses clôtures portent la passation), le responsable reçoit à la validation.
+    # Passations : le délégué a collecté (ses clôtures portent la passation), le principal reçoit à la validation.
     for r in frappe.db.sql(
             """SELECT delegue, responsable, validee_le, especes_recues FROM `tabPassation Caisse`
                WHERE docstatus = 1 AND validee_le BETWEEN %s AND %s""", ("%s 00:00:00" % depart, fin), as_dict=True):
-        if r.responsable and flt(r.especes_recues):
-            x = c(r.responsable)
+        if flt(r.especes_recues):
+            x = chez_principal(r.delegue, flt(r.especes_recues))
             x["passations"] += flt(r.especes_recues)
             x["_entrees"].append((getdate(r.validee_le), flt(r.especes_recues)))
+    # Passation pas encore validée (au soir choisi) : l'argent de ses collectes est encore chez le délégué.
+    for r in frappe.db.sql(
+            """SELECT p.delegue, c.collecte_le, c.especes_recues, c.especes_remises, c.validation_seule
+               FROM `tabPassation Caisse` p JOIN `tabCloture Caisse` c ON c.passation = p.name AND c.docstatus = 1
+               WHERE p.docstatus < 2 AND (p.docstatus = 0 OR p.validee_le > %s)
+                 AND c.date_cloture >= %s AND c.collecte_le <= %s ORDER BY c.collecte_le""", (fin, depart, fin), as_dict=True):
+        recu = montant_recu(r)
+        if recu and r.delegue:
+            x = c(r.delegue)
+            x["recu"] += recu
+            x["_entrees"].append((getdate(r.collecte_le), recu))
     # Sorties (et retours) du compte Espèces qui ne sont pas des dépenses de caisse.
     for r in frappe.db.sql(
             """SELECT je.name, je.posting_date, je.owner, je.cheque_no, je.user_remark,
@@ -199,7 +240,8 @@ def _collecteurs(jour, cfg):
                GROUP BY je.name HAVING SUM(CASE WHEN jea.account = %(esp)s THEN 1 ELSE 0 END) > 0
                ORDER BY je.posting_date, je.creation""",
             {"esp": COMPTE_ESPECES, "d": depart, "j": jour}, as_dict=True):
-        qui = r.owner if r.owner in collecteurs else titulaire
+        # Toute sortie du compte Espèces est prise sur l'argent du principal, quel que soit celui qui l'a saisie.
+        qui = titulaire or (r.owner if r.owner in collecteurs else None)
         if not qui:
             continue
         x = c(qui)
@@ -228,6 +270,7 @@ def _collecteurs(jour, cfg):
             alertes.append(_("de l'argent collecté le {0} n'est toujours pas versé ({1} jours)").format(
                 getdate(depuis).strftime("%d/%m/%Y"), age))
         x["alertes"] = alertes
+        x["remis_par"] = sorted(x.pop("_remis_par").values(), key=lambda m: -m["montant"])
         x["detail_sorties"] = x["detail_sorties"][-15:][::-1]
         if x["recu"] or x["passations"] or sorties or x["entrees_autres"]:
             out.append(x)
@@ -390,6 +433,103 @@ def _partenaires(jour, cfg):
     return {"depart": str(depart), "comptes": sorted(par_compte.values(), key=lambda x: -x["total"])}
 
 
+def _portefeuille(jour, cfg):
+    """Les chèques et traites reçus et pas encore versés : les paiements encore sur les comptes d'attente, saisis au
+    plus tard le jour choisi. Le passé ne se reconstitue pas (le robot bancaire déplace le paiement vers la banque à
+    l'encaissement) : pour une date passée, ce sont les pièces d'AUJOURD'HUI déjà reçues ce jour-là.
+    Une pièce sur un bordereau de remise (ou marquée « remise en banque ») est à la banque, en attente du crédit."""
+    from customization_app import caisse_collecte as CC
+    titulaire = cfg.get("responsable")
+    fin = "%s 23:59:59" % jour
+    lignes = frappe.db.sql(
+        """SELECT name, creation, owner, paid_to, paid_amount, party_name, party, reference_no, reference_date,
+                  custom_remise_en_banque, amended_from
+           FROM `tabPayment Entry` WHERE docstatus = 1 AND paid_to IN %s
+           ORDER BY creation""", (tuple(COMPTES_PORTEFEUILLE),), as_dict=True)
+    # Un paiement corrigé (« …-1 ») garde la date et l'auteur de sa PREMIÈRE saisie : la pièce est là depuis.
+    for l in lignes:
+        origine, tours = l.amended_from, 0
+        while origine and tours < 10:
+            o = frappe.db.get_value("Payment Entry", origine, ["creation", "owner", "amended_from"], as_dict=True)
+            if not o:
+                break
+            l.creation, l.owner, origine, tours = o.creation, o.owner, o.amended_from, tours + 1
+    lignes = sorted((l for l in lignes if get_datetime(l.creation) <= get_datetime(fin)), key=lambda l: l.creation)
+    bordereaux = {}
+    if lignes and frappe.db.table_exists("BRS Bordereau Remise Piece"):
+        for b in frappe.db.sql(
+                """SELECT p.paiement, b.name, b.date_remise, b.banque FROM `tabBRS Bordereau Remise Piece` p
+                   JOIN `tabBRS Bordereau Remise` b ON b.name = p.parent
+                   WHERE b.docstatus < 2 AND p.paiement IN %s""", (tuple(l.name for l in lignes),), as_dict=True):
+            bordereaux[b.paiement] = b
+    actifs = {e.user_id: e.employee_name for e in frappe.get_all(
+        "Employee", filters={"status": "Active", "user_id": ["is", "set"]}, fields=["user_id", "employee_name"])}
+    responsables = set(cfg.get("responsables") or []) | ({titulaire} if titulaire else set())
+    principal = frappe.utils.get_fullname(titulaire) if titulaire else _("le collecteur principal")
+    pieces = []
+    for l in lignes:
+        entre = getdate(l.creation)
+        collectee = False
+        if l.owner in actifs and l.owner not in responsables:
+            collectee = bool(frappe.db.sql(
+                """SELECT name FROM `tabCloture Caisse` WHERE caisse = %s AND docstatus = 1 AND date_cloture >= %s
+                     AND IFNULL(collecte_le, compte_le) <= %s LIMIT 1""", (actifs[l.owner], entre, fin)))
+        chez = detenteur_piece(l.owner, actifs, responsables, collectee)
+        b = bordereaux.get(l.name)
+        depose = (getdate(b.date_remise) if b and b.date_remise else None) or \
+            (getdate(l.custom_remise_en_banque) if l.custom_remise_en_banque else None)
+        if depose and depose > getdate(jour):
+            depose = None
+        pieces.append({
+            "name": l.name, "type": COMPTES_PORTEFEUILLE[l.paid_to], "compte": l.paid_to,
+            "numero": l.reference_no or "", "client": l.party_name or l.party or "", "montant": flt(l.paid_amount, 3),
+            "date_piece": str(l.reference_date) if l.reference_date else None, "entre_le": str(entre),
+            "saisi_par": frappe.utils.get_fullname(l.owner), "age_jours": date_diff(jour, entre),
+            "chez": chez or principal, "chez_principal": chez is None,
+            "depose_le": str(depose) if depose else None, "bordereau": (b.name if b else None),
+        })
+    en_main = [p for p in pieces if not p["depose_le"]]
+    resume = {}
+    for p in en_main:
+        r = resume.setdefault(p["type"], {"nb": 0, "total": 0.0})
+        r["nb"] += 1
+        r["total"] = flt(r["total"] + p["montant"], 3)
+    out = {"pieces": pieces, "par_type": resume, "nb": len(en_main),
+           "total": flt(sum(p["montant"] for p in en_main), 3), "principal": principal,
+           "chez_employes": [p for p in en_main if not p["chez_principal"]],
+           "deposes": {"nb": len(pieces) - len(en_main), "total": flt(sum(p["montant"] for p in pieces if p["depose_le"]), 3)},
+           "anciennes": [p["name"] for p in en_main if p["age_jours"] > PIECE_ANCIENNE_JOURS],
+           "date_passee": getdate(jour) < getdate(nowdate()), "solde_comptable": None, "ecart_comptable": None}
+    # Le contrôle : la liste doit refaire le solde des deux comptes d'attente (seulement pour aujourd'hui).
+    if not out["date_passee"]:
+        solde = flt(sum(_solde(compte, jour) for compte in COMPTES_PORTEFEUILLE), 3)
+        out["solde_comptable"] = solde
+        out["ecart_comptable"] = flt(solde - sum(p["montant"] for p in pieces), 3)
+    return out
+
+
+def _a_avoir_en_main(employes, collecteurs, portefeuille, sauts, cfg):
+    """Ce que le collecteur principal doit avoir entre les mains, à recompter d'un coup : l'argent de sa propre
+    caisse, l'argent collecté pas encore versé, ses chèques et traites. Le saut de chaîne de sa caisse est rappelé."""
+    titulaire = cfg.get("responsable")
+    x = next((c for c in collecteurs if c.get("principal")), None)
+    if not titulaire or not x:
+        return None
+    propre = next((e for e in employes if e["caisse"] == x["caisse"]), None)
+    caisse = flt(propre["total"], 3) if propre else 0.0
+    pieces = [p for p in portefeuille["pieces"] if p["chez_principal"] and not p["depose_le"]]
+    par_type = {}
+    for p in pieces:
+        r = par_type.setdefault(p["type"], {"nb": 0, "total": 0.0})
+        r["nb"] += 1
+        r["total"] = flt(r["total"] + p["montant"], 3)
+    especes = flt(caisse + flt(x["detient"]), 3)
+    return {"nom": x["nom"], "caisse": x["caisse"], "caisse_propre": caisse, "collecte": flt(x["detient"], 3),
+            "remis_par": x.get("remis_par") or [], "especes": especes, "pieces": par_type,
+            "total": flt(especes + sum(r["total"] for r in par_type.values()), 3),
+            "sauts": [s for s in sauts if s["caisse"] == x["caisse"]]}
+
+
 @frappe.whitelist()
 def situation(date=None):
     from customization_app import caisse_collecte as CC
@@ -406,13 +546,17 @@ def situation(date=None):
                   for v in _versements(jour)]
     chez_employes = flt(sum(e["total"] for e in employes), 3)
     chez_collecteurs = flt(sum(max(x["detient"], 0) for x in collecteurs), 3)
+    rapprochement = _rapprochement(jour, cfg, employes, collecteurs)
+    portefeuille = _portefeuille(jour, cfg)
     return {
         "date": str(jour), "date_depart": cfg.get("date_depart"), "plafond": plafond, "jours_max": jours_max,
         "totaux": {"employes": chez_employes, "collecteurs": chez_collecteurs, "sabah": sabah,
                    "total": flt(chez_employes + chez_collecteurs + sabah, 3),
-                   "comptable_especes": _solde(COMPTE_ESPECES, jour)},
+                   "comptable_especes": _solde(COMPTE_ESPECES, jour), "pieces": portefeuille["total"]},
         "employes": employes, "collecteurs": collecteurs, "versements": versements,
         "jours": _jour_par_jour(jour),
-        "rapprochement": _rapprochement(jour, cfg, employes, collecteurs),
+        "rapprochement": rapprochement,
         "partenaires": _partenaires(jour, cfg),
+        "portefeuille": portefeuille,
+        "principal": _a_avoir_en_main(employes, collecteurs, portefeuille, rapprochement["sauts"], cfg),
     }

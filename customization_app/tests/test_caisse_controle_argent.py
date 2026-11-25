@@ -89,6 +89,16 @@ class TestArgentLiquide(unittest.TestCase):
         self.assertEqual([(s["cloture"], s["saut"]) for s in sauts], [("CLO-0993", 2006.782), ("CLO-1055", 5293.0)])
         self.assertEqual(AL.fond_de({"especes_comptees": 30, "especes_remises": 30, "fond_conserve": None}), 0)
 
+    def test_detenteur_piece(self):
+        """25/11/2026 : tout ce qui n'est pas versé est chez le collecteur principal (None), sauf une pièce reçue par un
+        employé dont la caisse n'est pas encore collectée."""
+        actifs = {"jamel@x": "Jamel Aloui", "nejib@x": "Nejib Koubaa", "wassim@x": "Wassim Koubaa"}
+        resp = {"nejib@x", "wassim@x"}
+        self.assertEqual(AL.detenteur_piece("jamel@x", actifs, resp, False), "Jamel Aloui")
+        self.assertIsNone(AL.detenteur_piece("jamel@x", actifs, resp, True))       # collectée : chez Nejib
+        self.assertIsNone(AL.detenteur_piece("wassim@x", actifs, resp, False))     # un responsable : chez Nejib
+        self.assertIsNone(AL.detenteur_piece("Administrator", actifs, resp, False))  # robot, sans caisse
+
     def test_reference(self):
         self.assertEqual(AL.reference("Ref : TT263168Q77X"), "TT263168Q77X")
         self.assertEqual(AL.reference("Versement espèces BIAT — réf. TT26306750847374\nSaisie via ChatGPT"), "TT26306750847374")
