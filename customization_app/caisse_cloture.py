@@ -72,12 +72,16 @@ MOTIFS = {
     # Dépense saisie par un collègue mais payée de CETTE caisse (« Payée de la caisse de », 24/11/2026) : le payeur
     # la confirme à son comptage — ou dit qu'il ne l'a pas payée, et pourquoi.
     "depense_collegue": ["Je confirme l'avoir payée de ma caisse", "Je ne l'ai pas payée : à corriger", "Autre"],
+    # Un paiement compté dans un comptage précédent puis annulé ou changé (25/11/2026, caisse_paiements.disparus) :
+    # la caisse a « reçu » un argent que la comptabilité n'a plus.
+    "paiement_disparu": ["Argent rendu au client", "L'argent n'a jamais été reçu (erreur de saisie)",
+                         "Paiement ressaisi autrement", "Autre"],
 }
 # Motifs qui se suffisent : pas de commentaire exigé (confirmer une dépense qu'on a bien payée).
 MOTIFS_SANS_COMMENTAIRE = {"Je confirme l'avoir payée de ma caisse"}
 FAMILLE_DU_POINT = {"tache_ouverte": "tache", "tache_sans_commande": "tache", "dette_hors_aramex": "dette",
                     "ancien_exclu": "ancien_exclu", "caisse_non_collectee": "caisse_non_collectee",
-                    "depense_collegue": "depense_collegue"}
+                    "depense_collegue": "depense_collegue", "paiement_disparu": "paiement_disparu"}
 
 
 def _est_direction():
@@ -253,11 +257,19 @@ def debut_periode(caisse, date):
     return min(getdate(debut), date)
 
 
-def _mesures(caisse, date):
+def _mesures(caisse, date, reprendre=False):
     """Les chiffres de la caisse — la journée, ou la période depuis la dernière remise d'un sous-traitant
-    (`debut_periode`) —, depuis la MÊME source que la page."""
+    (`debut_periode`) —, depuis la MÊME source que la page. `reprendre` (au comptage seulement) : les paiements
+    jamais pris parce que saisis après le comptage de leur jour entrent dans ce comptage (caisse_paiements)."""
     debut = debut_periode(caisse, date)
     data = get_data(str(debut), str(date), employe=("" if caisse == CAISSE_GLOBALE else caisse))
+    repris = []
+    if reprendre and caisse != CAISSE_GLOBALE:
+        from customization_app import caisse_collecte as CC
+        from customization_app import caisse_paiements as CP
+        repris = CP.orphelins(caisse, debut, exclues=CC.caisses_partenaires() | CC.CAISSES_TECHNIQUES
+                              | CC.caisses_sous_traitants())
+        CP.ajouter_orphelins(data, caisse, repris)
     recap = data.get("recap") or {}
     par_mode = recap.get("par_mode") or {}
     depenses = data.get("depenses") or {}
@@ -272,21 +284,118 @@ def _mesures(caisse, date):
         "depenses_especes": flt(dep_par_mode.get("Espèces"), 3),
         "debut": str(debut),
         "data": data,
+        "repris": repris,
+        "pieces_attendues": pieces_attendues(data, caisse),
     }
 
 
+def pieces_attendues(data, caisse):
+    """{"Chèque": {nb, total}, "Traite": {nb, total}} : ce que la caisse a encaissé en chèques et en traites sur sa
+    période, d'après le rapport — ce qu'elle doit remettre (affiché APRÈS la saisie, comme les espèces). Pure."""
+    out = {"Chèque": {"nb": 0, "total": 0.0}, "Traite": {"nb": 0, "total": 0.0}}
+    from customization_app import caisse_paiements as CP
+    for l in CP.pris_par(data, caisse) if caisse != CAISSE_GLOBALE else []:
+        cle = "Chèque" if l["mode"] == "Chèque" else "Traite" if l["mode"] == "Traite bancaire LC" else None
+        if cle:
+            out[cle]["nb"] += 1
+            out[cle]["total"] = flt(out[cle]["total"] + l["montant"], 3)
+    return out
+
+
+def lire_montants(texte):
+    """« 455+955 », « 455,500 + 955 », « 455 ; 955 » → ([455.0, 955.0], 1410.0). La virgule est le séparateur
+    décimal tunisien ; « + », « ; » et les retours à la ligne séparent les pièces. Vide → ([], 0). Un morceau qui
+    n'est pas un montant positif → ValueError avec le morceau fautif. Fonction pure."""
+    texte = (texte or "").strip()
+    if not texte:
+        return [], 0.0
+    montants = []
+    for morceau in re.split(r"[+;\n]", texte):
+        m = morceau.strip().replace(" ", "").replace("\u202f", "").replace("\xa0", "")
+        if not m:
+            continue
+        if m.count(",") == 1 and "." not in m:
+            m = m.replace(",", ".")
+        try:
+            v = float(m)
+        except ValueError:
+            raise ValueError(morceau.strip())
+        if v <= 0:
+            raise ValueError(morceau.strip())
+        montants.append(round(v, 3))
+    return montants, round(sum(montants), 3)
+
+
+def texte_montants(montants):
+    """[455.0, 955.0] → « 455,000 + 955,000 ». Fonction pure."""
+    return " + ".join(_fmt_montant(v) for v in montants)
+
+
+def controle_ordre(caisse, date, rouvrir=None):
+    """Compter DANS L'ORDRE (25/11/2026) — sinon la caisse repart d'un fond faux : la clôture du 20/10 de Nejib, faite
+    avant celle du 19/10, repartait du 17/10 et a fait apparaître 5 293 DT. -> le message qui bloque, ou None.
+      - un jour passé, depuis le dernier comptage de la caisse, où elle a eu une activité sans être comptée ;
+      - un jour PLUS RÉCENT déjà compté (on ne compte plus un jour d'avant ; on ne rouvre plus un comptage dont un
+        jour suivant est parti).
+    Pas pour la caisse globale ni les sous-traitants (ils comptent par période), ni avant la date de départ."""
+    if caisse == CAISSE_GLOBALE or _est_caisse_sous_traitant(caisse):
+        return None
+    from customization_app import caisse_collecte as CC
+    date = getdate(date)
+    depart = CC.date_depart_pour(caisse, CC.config())
+    plancher = getdate(depart) if depart and getdate(depart) <= date else None
+    apres = frappe.db.sql(
+        """SELECT name, date_cloture FROM `tabCloture Caisse` WHERE caisse = %s AND date_cloture > %s AND docstatus < 2
+             AND date_cloture >= %s ORDER BY date_cloture DESC LIMIT 1""",
+        (caisse, date, plancher or "1900-01-01"), as_dict=True)
+    if apres:
+        j = getdate(apres[0].date_cloture).strftime("%d/%m/%Y")
+        if rouvrir:
+            return _("Le comptage du {0} ({1}) est déjà fait et il est parti de celui-ci : on ne le rouvre plus. "
+                     "Annulez d'abord le comptage du {0}, puis rouvrez celui-ci.").format(j, apres[0].name)
+        return _("La caisse du {0} ({1}) est déjà comptée : un jour d'avant ne se compte plus, son fond de départ "
+                 "serait faux.").format(j, apres[0].name)
+    if rouvrir:
+        return None
+    derniere = frappe.db.sql(
+        """SELECT MAX(date_cloture) FROM `tabCloture Caisse` WHERE caisse = %s AND date_cloture < %s AND docstatus < 2
+             AND date_cloture >= %s""", (caisse, date, plancher or "1900-01-01"))[0][0]
+    debut = getdate(add_days(derniere, 1)) if derniere else (plancher or date)
+    debut = max(debut, getdate(add_days(date, -31)))
+    jour = debut
+    while jour < date:
+        if CC.caisse_active((CC._activite_du_jour(jour) or {}).get(caisse)):
+            return _("Comptez d'abord la caisse du {0} : ce jour-là, elle a eu des encaissements ou des dépenses et "
+                     "elle n'a pas été comptée. Les jours se comptent dans l'ordre.").format(jour.strftime("%d/%m/%Y"))
+        jour = getdate(add_days(jour, 1))
+    return None
+
+
+def ouverture_a_jour(doc):
+    """Au moment de collecter : le fond de départ du comptage est-il toujours ce que le comptage d'avant a laissé ?
+    -> le message qui bloque, ou None (25/11/2026)."""
+    attendu = _ouverture(doc.caisse, doc.date_cloture)
+    if doc.caisse == CAISSE_GLOBALE or abs(attendu - flt(doc.solde_ouverture)) < 0.0005:
+        return None
+    return _("Le comptage du {0} ({1}) est parti d'un fond de {2} DT, mais le comptage d'avant a laissé {3} DT (il a "
+             "changé depuis) : la caisse doit être rouverte et recomptée avant d'être collectée.").format(
+        getdate(doc.date_cloture).strftime("%d/%m/%Y"), doc.name, _fmt_montant(doc.solde_ouverture), _fmt_montant(attendu))
+
+
 def _ouverture(caisse, date):
-    """Le report de la dernière clôture validée : espèces comptées si saisies,
-    sinon le théorique."""
+    """Le report de la dernière clôture COMPTÉE (validée, ou en attente de collecte depuis le 25/11/2026 : un
+    technicien compte chaque soir et n'est collecté que des jours plus tard — partir de la dernière VALIDÉE
+    oubliait le fond gardé entre-temps) : espèces comptées si saisies, sinon le théorique."""
     # Remise à zéro (Config Caisse, date de départ) : à partir de ce jour, les clôtures
     # antérieures ne font plus report — chaque caisse repart de 0.
     from customization_app import caisse_collecte as CC
     plancher = CC.plancher_report(date, CC.date_depart_pour(caisse, CC.config()))
     ligne = frappe.db.sql(
         """SELECT solde_theorique, especes_comptees, especes_remises, fond_conserve FROM `tabCloture Caisse`
-           WHERE docstatus = 1 AND caisse = %s AND date_cloture < %s AND date_cloture >= %s
-           ORDER BY date_cloture DESC, creation DESC LIMIT 1""",
-        (caisse, date, plancher or "1900-01-01"), as_dict=True)
+           WHERE (docstatus = 1 OR (docstatus = 0 AND statut IN %s)) AND caisse = %s AND date_cloture < %s
+             AND date_cloture >= %s
+           ORDER BY date_cloture DESC, docstatus DESC, creation DESC LIMIT 1""",
+        (tuple(CC.STATUTS_EN_ATTENTE), caisse, date, plancher or "1900-01-01"), as_dict=True)
     if not ligne:
         return 0.0
     r = ligne[0]
@@ -492,6 +601,8 @@ def points_controle(caisse, date, data, debut=None):
     points = _machines_a_receptionner(caisse, date) + _controles(data) + _taches_sans_commande(caisse, date, debut)
     if caisse != CAISSE_GLOBALE:
         points += _depenses_collegues(data)
+        from customization_app import caisse_paiements as CP
+        points += CP.disparus(caisse, date, CC.date_depart_pour(caisse, CC.config()))
     if caisse == CAISSE_GLOBALE:
         points += CC.controles_globale(date, data)
     for p in points:
@@ -534,7 +645,8 @@ DOCTYPES_DU_POINT = (("commande", "Sales Order"), ("tache", "Tache de travail"),
                      ("ecriture", "Journal Entry"))
 NATURE_DU_POINT = {"tache_ouverte": "Tâche ouverte", "tache_sans_commande": "Tâche ouverte sans commande",
                    "dette_hors_aramex": "Dette hors Aramex", "ancien_exclu": "Paiement exclu de la caisse",
-                   "depense_collegue": "Dépense payée pour un collègue"}
+                   "depense_collegue": "Dépense payée pour un collègue",
+                   "paiement_disparu": "Paiement compté puis annulé ou changé"}
 
 
 def documents_du_point(point):
@@ -666,11 +778,11 @@ def etat(caisse, date):
     caisse = (caisse or "").strip() or CAISSE_GLOBALE
     _controler_droits(caisse)
     date = getdate(date)
-    m = _mesures(caisse, date)
-    ouverture = _ouverture(caisse, date)
-    theorique = flt(ouverture + m["encaissements_especes"] - m["depenses_especes"], 3)
     deja = frappe.db.get_value("Cloture Caisse",
                                {"caisse": caisse, "date_cloture": date, "docstatus": 1})
+    m = _mesures(caisse, date, reprendre=not deja)
+    ouverture = _ouverture(caisse, date)
+    theorique = flt(ouverture + m["encaissements_especes"] - m["depenses_especes"], 3)
     pdf_url = None
     if deja:
         pdf_url = frappe.db.get_value(
@@ -681,7 +793,8 @@ def etat(caisse, date):
         "Cloture Caisse", {"caisse": caisse, "date_cloture": date, "docstatus": 0,
                            "statut": ["in", CC.STATUTS_EN_ATTENTE]},
         ["name", "statut", "tours_ecart", "especes_remises", "especes_recues", "collecte_par", "valide_par",
-         "especes_comptees", "nb_cheques_remis", "nb_traites_remis", "note", "controles"], as_dict=True)
+         "especes_comptees", "nb_cheques_remis", "nb_traites_remis", "note", "controles",
+         "detail_cheques_remis", "detail_traites_remis"], as_dict=True)
     if en_attente:
         # Réouverture (04/10/2026) : tant que le responsable n'a pas confirmé la réception, l'employé
         # peut rouvrir et modifier son comptage — le dialogue se pré-remplit avec ses valeurs.
@@ -707,6 +820,14 @@ def etat(caisse, date):
         "solde_theorique": theorique,
         "total_cheques": m["total_cheques"],
         "total_autres_modes": m["total_autres_modes"],
+        # Compter dans l'ordre (25/11/2026) : le message qui empêche de compter ce jour, ou None.
+        "ordre": None if deja else controle_ordre(caisse, date, rouvrir=bool(en_attente)),
+        # Repris dans ce comptage : paiements saisis après le comptage de leur jour (caisse_paiements.orphelins).
+        "repris": [{"name": p["name"], "montant": p["amount"], "mode": p["mode"], "client": p.get("customer_name") or "",
+                    "saisi_le": (p.get("orphelin") or {}).get("saisi_le"), "saisi_par": p.get("saisi_par_reel") or ""}
+                   for p in m.get("repris") or []],
+        # Ce que la caisse doit remettre en chèques / traites (montré APRÈS la saisie, comme les espèces).
+        "pieces_attendues": m.get("pieces_attendues"),
         "deja_validee": deja,
         "pdf_url": pdf_url,
         # Le rapprochement chèques/traites/dettes ne vaut que pour la GLOBALE :
@@ -718,7 +839,7 @@ def etat(caisse, date):
 @frappe.whitelist()
 def valider(caisse, date, especes_comptees=None, note=None, justifications=None,
             especes_remises=None, nb_cheques_remis=0, nb_traites_remis=0, photo=None, photo_nom=None,
-            rouvrir=None):
+            rouvrir=None, cheques_montants=None, traites_montants=None):
     """L'employé COMPTE et REMET (double validation, 04/10/2026) : la clôture
     naît en brouillon « À collecter » et c'est le responsable de collecte qui la
     soumet (caisse_collecte.collecter). Validation SEULE (soumise ici, PDF
@@ -745,9 +866,19 @@ def valider(caisse, date, especes_comptees=None, note=None, justifications=None,
                      .format(caisse, date, attente))
     elif rouvrir:
         frappe.throw(_("Le comptage {0} n'est plus modifiable : il a été collecté ou n'existe plus.").format(rouvrir))
+    # Compter dans l'ordre (25/11/2026) : sinon le fond de départ est faux.
+    ordre = controle_ordre(caisse, date, rouvrir=bool(existante))
+    if ordre:
+        frappe.throw(ordre)
     mode = CC.mode_validation(caisse)
+    # Les chèques et traites remis : un montant par pièce, « 455+955 » (25/11/2026) — le nombre en découle.
+    try:
+        nb_ch, mt_ch, det_ch = CC.pieces_saisies(cheques_montants, nb_cheques_remis)
+        nb_tr, mt_tr, det_tr = CC.pieces_saisies(traites_montants, nb_traites_remis)
+    except ValueError as exc:
+        frappe.throw(_("« {0} » n'est pas un montant : un montant par pièce, séparés par « + » (ex. 455+955).").format(exc))
 
-    m = _mesures(caisse, date)
+    m = _mesures(caisse, date, reprendre=True)
 
     # Les contrôles sont REJOUÉS côté serveur : un BL encore en brouillon bloque,
     # chaque autre point exige un motif et un commentaire.
@@ -779,16 +910,16 @@ def valider(caisse, date, especes_comptees=None, note=None, justifications=None,
             frappe.throw(str(exc))
         if CC.config()["photo_obligatoire"] and not photo:
             frappe.throw(_("La photo de la remise est obligatoire (Config Caisse)."))
-    # DEUX PERSONNES (24/11/2026) : compter la caisse d'un autre se justifie et se photographie. Le 20/11, la caisse
-    # de Sadok du 16/11 a été comptée ET validée en 24 secondes par le collecteur, au montant attendu, sans rien
-    # qui dise pourquoi ni ce qu'il y avait vraiment.
-    autrui = compte_pour_autrui(caisse)
-    if autrui:
-        if len(" ".join((note or "").split())) < COMMENTAIRE_MIN:
-            frappe.throw(_("Vous comptez la caisse de {0} à sa place : écrivez pourquoi dans la note (absent, parti…, "
-                           "{1} caractères minimum).").format(autrui, COMMENTAIRE_MIN))
     else:
         remises = 0.0
+    # DEUX PERSONNES (24/11/2026) : compter la caisse d'un autre se justifie. Le 20/11, la caisse de Sadok du 16/11 a
+    # été comptée ET validée en 24 secondes par le collecteur, au montant attendu, sans rien qui dise pourquoi ni ce
+    # qu'il y avait vraiment. (Le 25/11 : ce bloc s'était glissé entre le « if mode == double » et son « else » —
+    # toute remise d'un employé qui compte SA caisse tombait à 0. Garde-fou : test_caisse_controle_argent.)
+    autrui = compte_pour_autrui(caisse)
+    if autrui and len(" ".join((note or "").split())) < COMMENTAIRE_MIN:
+        frappe.throw(_("Vous comptez la caisse de {0} à sa place : écrivez pourquoi dans la note (absent, parti…, "
+                       "{1} caractères minimum).").format(autrui, COMMENTAIRE_MIN))
 
     rap = _rapprochement(date) if caisse == CAISSE_GLOBALE else None
     champs_rap = {}
@@ -809,8 +940,12 @@ def valider(caisse, date, especes_comptees=None, note=None, justifications=None,
         "statut": CC.STATUT_A_COLLECTER,
         "especes_remises": remises,
         "fond_conserve": (CC.fond_conserve(comptees, remises) if comptees is not None else None),
-        "nb_cheques_remis": frappe.utils.cint(nb_cheques_remis),
-        "nb_traites_remis": frappe.utils.cint(nb_traites_remis),
+        "nb_cheques_remis": nb_ch if mode == "double" else 0,
+        "nb_traites_remis": nb_tr if mode == "double" else 0,
+        "montant_cheques_remis": mt_ch if mode == "double" else 0,
+        "detail_cheques_remis": det_ch if mode == "double" else "",
+        "montant_traites_remis": mt_tr if mode == "double" else 0,
+        "detail_traites_remis": det_tr if mode == "double" else "",
         "solde_ouverture": ouverture,
         "encaissements_especes": m["encaissements_especes"],
         "depenses_especes": m["depenses_especes"],
@@ -830,6 +965,10 @@ def valider(caisse, date, especes_comptees=None, note=None, justifications=None,
         doc = frappe.get_doc({"doctype": "Cloture Caisse", **valeurs})
         doc.insert(ignore_permissions=True)
     CC.enregistrer_photo_remise(doc, photo, photo_nom)
+    # Chaque paiement compté ici est PRIS par ce comptage (25/11/2026) : il ne comptera nulle part ailleurs.
+    if caisse != CAISSE_GLOBALE:
+        from customization_app import caisse_paiements as CP
+        CP.lier(doc, CP.pris_par(m["data"], caisse))
     # Les justifications vont aussi sur les commandes / tâches concernées (06/10/2026) ; à la
     # réouverture, seulement si elles ont changé (sinon la pastille 💬 changerait de date pour rien).
     if not existante or (justifs_avant or "") != (controles_txt or ""):
@@ -894,7 +1033,7 @@ def compte_commande(order):
     période — la règle du rapport (rapport_caisse_journaliere : totaux_par_mode). Fonction pure."""
     compte = {}
     for p in order.get("payments") or []:
-        if p.get("hors_periode"):
+        if p.get("hors_periode") or p.get("deja_compte"):
             continue
         m = p.get("mode") or "—"
         compte[m] = flt(flt(compte.get(m)) + flt(p.get("amount")), 3)
@@ -1336,8 +1475,12 @@ def _html_instantane(doc, data, rap=None):
             drapeau = ""
             if p.get("antidate") and not p.get("hors_periode"):
                 drapeau = " <span class='flag'>⚠ antidaté (saisi le %s)</span>" % jour(p.get("creation_date"))
+            dc = p.get("deja_compte")
             compte_txt = ("<td class='flag' style='text-align:right'>non compté<br>avance d'avant la période</td>"
-                          if p.get("hors_periode") else "<td class='n'><b>%s</b></td>" % mt(p.get("amount")))
+                          if p.get("hors_periode")
+                          else "<td class='flag' style='text-align:right'>non compté<br>déjà dans la caisse de %s du %s</td>"
+                          % (esc(dc["caisse"]), jour(dc["date"])) if dc
+                          else "<td class='n'><b>%s</b></td>" % mt(p.get("amount")))
             lignes.append("<tr><td>%s <span class='gris petit'>%s</span>%s</td><td class='n'>%s</td>%s</tr>" % (
                 pastille(p.get("mode")), " · ".join(sous), drapeau, mt(p.get("amount")), compte_txt))
         if not lignes:
@@ -1395,7 +1538,7 @@ def _html_instantane(doc, data, rap=None):
     # Les paiements sur anciennes commandes comptent dans la caisse de celui qui les a SAISIS (rapport du jour).
     anciens_par_caisse = {}
     for p in (data.get("anciens") or {}).get("paiements") or []:
-        if p.get("exclu"):
+        if p.get("exclu") or p.get("deja_compte"):
             continue
         a = anciens_par_caisse.setdefault(p.get("saisi_par") or "—", {})
         a[p.get("mode") or "—"] = flt(a.get(p.get("mode") or "—")) + flt(p.get("amount"))
@@ -1448,10 +1591,15 @@ def _html_instantane(doc, data, rap=None):
                 flags.append("⚠ antidaté (saisi le %s)" % jour(p.get("creation_date")))
             if p.get("exclu"):
                 flags.append("EXCLU de la caisse")
+            if p.get("deja_compte"):
+                flags.append("déjà compté dans la caisse de %s du %s" % (esc(p["deja_compte"]["caisse"]),
+                                                                         jour(p["deja_compte"]["date"])))
+            if p.get("repris") or p.get("orphelin"):
+                flags.append("REPRIS : saisi le %s, après le comptage de son jour" % jour(p.get("creation_date")))
             unites.append(
                 "<tr%s><td>%s</td><td>%s<div class='gris petit'>saisi par %s</div></td><td>%s</td>"
                 "<td>%s<div class='gris petit'>%s</div></td><td class='n'>%s</td><td class='flag'>%s</td></tr>" % (
-                    " class='exclu'" if p.get("exclu") else "", jour(p.get("date")),
+                    " class='exclu'" if (p.get("exclu") or p.get("deja_compte")) else "", jour(p.get("date")),
                     esc(p.get("customer_name") or ""), esc(p.get("saisi_par") or ""), pastille(p.get("mode")),
                     pieces_txt, esc(p.get("name") or ""), mt(p.get("amount")), " · ".join(flags)))
         html.append(section(

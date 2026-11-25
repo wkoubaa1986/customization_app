@@ -44,6 +44,10 @@
   "fond_conserve",
   "nb_cheques_remis",
   "nb_traites_remis",
+  "montant_cheques_remis",
+  "detail_cheques_remis",
+  "montant_traites_remis",
+  "detail_traites_remis",
   "column_break_5",
   "collecte_par",
   "collecte_le",
@@ -54,11 +58,16 @@
   "especes_recues",
   "nb_cheques_recus",
   "nb_traites_recus",
+  "montant_cheques_recus",
+  "detail_cheques_recus",
+  "montant_traites_recus",
+  "detail_traites_recus",
   "ecart_remise",
   "tours_ecart",
   "column_break_6",
   "echanges",
-  "revue_depenses"
+  "revue_depenses",
+  "paiements_pris"
  ],
  "fields": [
   {
@@ -316,6 +325,34 @@
    "read_only": 1
   },
   {
+   "fieldname": "montant_cheques_remis",
+   "fieldtype": "Currency",
+   "label": "Chèques remis (montant)",
+   "precision": "3",
+   "read_only": 1
+  },
+  {
+   "fieldname": "detail_cheques_remis",
+   "fieldtype": "Data",
+   "label": "Chèques remis (détail)",
+   "read_only": 1,
+   "description": "Un montant par pièce, séparés par « + » (saisie du comptage)."
+  },
+  {
+   "fieldname": "montant_traites_remis",
+   "fieldtype": "Currency",
+   "label": "Traites remises (montant)",
+   "precision": "3",
+   "read_only": 1
+  },
+  {
+   "fieldname": "detail_traites_remis",
+   "fieldtype": "Data",
+   "label": "Traites remises (détail)",
+   "read_only": 1,
+   "description": "Un montant par pièce, séparés par « + » (saisie du comptage)."
+  },
+  {
    "fieldname": "column_break_5",
    "fieldtype": "Column Break"
   },
@@ -375,6 +412,34 @@
    "read_only": 1
   },
   {
+   "fieldname": "montant_cheques_recus",
+   "fieldtype": "Currency",
+   "label": "Chèques reçus (montant)",
+   "precision": "3",
+   "read_only": 1
+  },
+  {
+   "fieldname": "detail_cheques_recus",
+   "fieldtype": "Data",
+   "label": "Chèques reçus (détail)",
+   "read_only": 1,
+   "description": "Un montant par pièce, séparés par « + » (saisie du comptage)."
+  },
+  {
+   "fieldname": "montant_traites_recus",
+   "fieldtype": "Currency",
+   "label": "Traites reçues (montant)",
+   "precision": "3",
+   "read_only": 1
+  },
+  {
+   "fieldname": "detail_traites_recus",
+   "fieldtype": "Data",
+   "label": "Traites reçues (détail)",
+   "read_only": 1,
+   "description": "Un montant par pièce, séparés par « + » (saisie du comptage)."
+  },
+  {
    "fieldname": "ecart_remise",
    "fieldtype": "Currency",
    "label": "Écart de remise (reçu − remis)",
@@ -405,11 +470,20 @@
    "hidden": 1,
    "no_copy": 1,
    "description": "JSON {pièce: {verdict: vu|conteste, commentaire, par, le}} — revue faite par le collecteur."
+  },
+  {
+   "fieldname": "paiements_pris",
+   "fieldtype": "Long Text",
+   "label": "Paiements pris par ce comptage",
+   "read_only": 1,
+   "hidden": 1,
+   "no_copy": 1,
+   "description": "JSON [{name, mode, montant}] — chaque paiement porte aussi le numéro de la clôture (Payment Entry.custom_cloture_caisse)."
   }
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-11-24 21:00:00.000000",
+ "modified": "2026-11-25 18:00:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Cloture Caisse",

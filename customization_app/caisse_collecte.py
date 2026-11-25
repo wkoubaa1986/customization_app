@@ -240,10 +240,39 @@ def ecart_remise(declare, recu):
 
 def remise_identique(declare, recu):
     """Vrai quand le responsable a reçu exactement ce que l'employé déclare :
-    espèces à 0,001 près ET mêmes nombres de chèques et de traites."""
-    return (abs(ecart_remise(declare["especes"], recu["especes"])) < 0.0005
+    espèces à 0,001 près ET mêmes nombres de chèques et de traites — et, quand l'employé a écrit leurs montants
+    (25/11/2026), mêmes montants."""
+    if not (abs(ecart_remise(declare["especes"], recu["especes"])) < 0.0005
             and int(declare.get("nb_cheques") or 0) == int(recu.get("nb_cheques") or 0)
-            and int(declare.get("nb_traites") or 0) == int(recu.get("nb_traites") or 0))
+            and int(declare.get("nb_traites") or 0) == int(recu.get("nb_traites") or 0)):
+        return False
+    for cle in ("montant_cheques", "montant_traites"):
+        if declare.get(cle) and abs(float(declare.get(cle) or 0) - float(recu.get(cle) or 0)) > 0.0005:
+            return False
+    return True
+
+
+def bloque_collecte(cl):
+    """Ce qui empêche de collecter ce comptage maintenant (25/11/2026) : un comptage PLUS ANCIEN de la même caisse
+    attend encore (les comptages se collectent dans l'ordre, sinon le fond de départ du suivant peut devenir faux), ou
+    son fond de départ ne correspond plus à ce que le comptage d'avant a laissé. -> le message, ou None."""
+    avant = frappe.db.sql(
+        """SELECT name, date_cloture FROM `tabCloture Caisse` WHERE caisse = %s AND docstatus = 0 AND statut IN %s
+             AND date_cloture < %s ORDER BY date_cloture LIMIT 1""",
+        (cl.caisse, tuple(STATUTS_EN_ATTENTE), cl.date_cloture), as_dict=True)
+    if avant and cl.caisse != CL.CAISSE_GLOBALE:
+        return _("Collectez d'abord la caisse de {0} du {1} ({2}) : les comptages d'une caisse se collectent dans "
+                 "l'ordre.").format(cl.caisse, getdate(avant[0].date_cloture).strftime("%d/%m/%Y"), avant[0].name)
+    return CL.ouverture_a_jour(cl)
+
+
+def pieces_saisies(texte, nb_defaut=0):
+    """(nombre, montant, détail) depuis « 455+955 » ; sans texte : (nb_defaut, 0, ""). ValueError si un morceau
+    n'est pas un montant."""
+    if texte is None or not str(texte).strip():
+        return cint(nb_defaut), 0.0, ""
+    montants, total = CL.lire_montants(str(texte))
+    return len(montants), total, CL.texte_montants(montants)
 
 
 def fond_conserve(comptees, remises):
@@ -335,6 +364,10 @@ def rouvrir_comptage(doc, valeurs):
     doc.especes_recues = 0
     doc.nb_cheques_recus = 0
     doc.nb_traites_recus = 0
+    for champ in ("montant_cheques_recus", "montant_traites_recus"):
+        doc.set(champ, 0)
+    for champ in ("detail_cheques_recus", "detail_traites_recus"):
+        doc.set(champ, "")
     doc.ecart_remise = 0
     doc.statut = STATUT_A_COLLECTER
     doc.echanges = ((doc.echanges or "") + "\n" + _ligne_echange(
@@ -494,7 +527,8 @@ def activite_par_caisse(data):
                 pm = acc(r["employe"])["par_mode"]
                 pm[mode] = round(pm.get(mode, 0) + v, 3)
     for p in ((data or {}).get("anciens") or {}).get("paiements") or []:
-        acc(p.get("saisi_par") or "—")["anciens"] += 1
+        if not p.get("deja_compte"):          # déjà dans la clôture d'une autre caisse ou d'un autre jour
+            acc(p.get("saisi_par") or "—")["anciens"] += 1
     for l in ((data or {}).get("depenses") or {}).get("lignes") or []:
         # La caisse du payeur quand un collègue a payé (« Payée de la caisse de », 24/11/2026).
         a = acc(l.get("caisse") or l.get("saisi_par") or "—")
@@ -525,17 +559,23 @@ def resume_activite(act):
     return " · ".join(bouts) or "aucune action"
 
 
-def _activite_du_jour(jour):
-    """L'activité de TOUTES les caisses un jour donné, depuis le même rapport que la page. En cache :
-    une minute pour aujourd'hui, dix pour hier, une heure au-delà (un jour passé bouge rarement)."""
+def _activite_du_jour(jour, rafraichir=False):
+    """L'activité de TOUTES les caisses un jour donné, depuis le même rapport que la page. En cache : une minute pour
+    aujourd'hui, dix pour hier, six heures au-delà — et la tâche horaire (calculer_rappels) RECALCULE les jours passés
+    à chaque passage (`rafraichir`), si bien que ce cache ne refroidit jamais.
+    Avant le 25/11/2026, il durait une heure : la tâche le trouvait encore valide et ne recalculait rien, puis il
+    expirait — la grille « État des caisses » et la collecte relisaient alors le rapport des 54 jours (40 s)."""
     from customization_app.rapport_caisse_journaliere import PEUVENT_VOIR_ECONOMIQ
     jour = getdate(jour)
-    # Economiq n'apparaît qu'à la direction : deux vues, deux caches.
-    cle = "caisse_activite|%s|%s" % ("dir" if frappe.session.user in PEUVENT_VOIR_ECONOMIQ else "std", jour)
+    # Economiq n'apparaît qu'à la direction : deux vues, deux caches. La vue complète, tenue chaude par la tâche de
+    # fond, sert aussi à l'employé : sa grille ne montre que SA caisse, et c'est la vue de ses rappels.
+    vue = "dir" if frappe.session.user in PEUVENT_VOIR_ECONOMIQ else "std"
     cache = frappe.cache()
-    act = cache.get_value(cle)
-    if act is not None:
-        return act
+    if not rafraichir:
+        for v in dict.fromkeys(("dir", vue)):
+            act = cache.get_value("caisse_activite|%s|%s" % (v, jour))
+            if act is not None:
+                return act
     avant = frappe.flags.get("caisse_vue_complete")
     # Vue complète même pour un employé : on filtre ensuite sur SA caisse (rien d'autre ne sort).
     frappe.flags.caisse_vue_complete = True
@@ -544,7 +584,11 @@ def _activite_du_jour(jour):
     finally:
         frappe.flags.caisse_vue_complete = avant
     age = date_diff(nowdate(), jour)
-    cache.set_value(cle, act, expires_in_sec=60 if age <= 0 else 600 if age == 1 else 3600)
+    cle = "caisse_activite|%s|%s" % (vue, jour)
+    cache.set_value(cle, act, expires_in_sec=60 if age <= 0 else 600 if age == 1 else 6 * 3600)
+    # set_value avec expiration n'écrit pas le cache de la requête : un « rien » lu plus tôt dans la même requête
+    # masquerait la valeur (constaté : deux grilles de suite, 40 s chacune).
+    frappe.local.cache[cache.make_key(cle)] = act
     return act
 
 
@@ -575,7 +619,8 @@ def bornes_etat(fin, departs, jours_max=JOURS_MAX):
     return getdate(debut), False
 
 
-def _etat(fin=None):
+def _etat(fin=None, rafraichir=False):
+    """`rafraichir` (tâche horaire seulement) : recalcule l'activité des jours passés au lieu de la lire en cache."""
     fin = getdate(fin or nowdate())
     aujourdhui = getdate(nowdate())
     cfg = config()
@@ -599,7 +644,7 @@ def _etat(fin=None):
                             fields=["name", "caisse", "date_cloture", "statut", "docstatus", "valide_par",
                                     "collecte_par", "especes_remises", "validation_seule"]):
         clotures[(c.caisse, getdate(c.date_cloture))] = c     # la soumise l'emporte (triée après)
-    activites = {j: _activite_du_jour(j) for j in jours}
+    activites = {j: _activite_du_jour(j, rafraichir=rafraichir and date_diff(aujourdhui, j) >= 2) for j in jours}
 
     # Les clôtures d'une caisse que l'utilisateur ne voit pas (Economiq hors direction) restent cachées.
     from customization_app.rapport_caisse_journaliere import noms_caisses as _noms_visibles
@@ -668,11 +713,15 @@ CLE_VERROU_RAPPELS = "caisse_non_comptees_calcul"
 RAPPELS_PERIMES_H = 3            # au-delà, la session redemande un calcul (et sert l'ancien en attendant)
 
 
-def non_comptees_par_caisse(a_regler, exclues=()) -> dict:
+def non_comptees_par_caisse(a_regler, exclues=(), derniers=None) -> dict:
     """{caisse: [{date, resume}]} depuis les lignes « à régler » de la grille : seulement les jours PASSÉS jamais
-    comptés, les plus anciens d'abord, sans les caisses écartées. Fonction pure."""
+    comptés, les plus anciens d'abord, sans les caisses écartées. `derniers` {caisse: date du dernier comptage} :
+    un jour AVANT le dernier comptage ne se compte plus (on compte dans l'ordre, 25/11/2026) — il n'est plus rappelé
+    (la grille le montre toujours à la direction). Fonction pure."""
     par = {}
     for x in sorted(a_regler or [], key=lambda x: x["date"]):
+        if (derniers or {}).get(x.get("caisse")) and x["date"] < str(derniers[x["caisse"]]):
+            continue
         if x.get("etat") == ETAT_NON_COMPTEE and x.get("caisse") not in exclues:
             par.setdefault(x["caisse"], []).append({"date": x["date"], "resume": x.get("resume") or ""})
     return par
@@ -688,10 +737,12 @@ def calculer_rappels():
     direction = next((u for u in CL.DIRECTION if frappe.db.get_value("User", u, "enabled")), None)
     frappe.set_user(direction or "Administrator")
     try:
-        etat = _etat()
+        etat = _etat(rafraichir=True)
     finally:
         frappe.set_user(avant)
-    par = non_comptees_par_caisse(etat.get("a_regler"), caisses_sous_traitants())
+    derniers = {c["caisse"]: max((j for j, cell in c["cellules"].items() if cell.get("cloture")), default=None)
+                for c in etat.get("caisses") or []}
+    par = non_comptees_par_caisse(etat.get("a_regler"), caisses_sous_traitants(), derniers)
     frappe.cache().set_value(CLE_RAPPELS, {"le": str(now_datetime()), "jour": nowdate(), "caisses": par},
                              expires_in_sec=26 * 3600)
     frappe.cache().delete_value(CLE_VERROU_RAPPELS)
@@ -773,6 +824,9 @@ def _dict_cloture(c):
         "ecart": flt(c.ecart, 3),
         "especes_remises": flt(c.especes_remises, 3), "fond_conserve": flt(c.fond_conserve, 3),
         "nb_cheques_remis": cint(c.nb_cheques_remis), "nb_traites_remis": cint(c.nb_traites_remis),
+        # Les montants des pièces (25/11/2026) : « 455,000 + 955,000 » écrit par l'employé au comptage.
+        "montant_cheques_remis": flt(c.get("montant_cheques_remis"), 3), "detail_cheques_remis": c.get("detail_cheques_remis") or "",
+        "montant_traites_remis": flt(c.get("montant_traites_remis"), 3), "detail_traites_remis": c.get("detail_traites_remis") or "",
         "total_cheques": flt(c.total_cheques, 3), "photo_remise": c.photo_remise,
         # Les colonnes Currency valent 0 tant que personne n'a saisi : « reçu » n'existe qu'après un passage du collecteur.
         "especes_recues": flt(c.especes_recues, 3) if c.collecte_par else None,
@@ -864,15 +918,25 @@ def _verser_dans_passation(cl, delegue):
 
 
 @frappe.whitelist()
-def collecter(name, especes_recues, nb_cheques_recus=0, nb_traites_recus=0, commentaire=None, forcer=0, revue=None):
+def collecter(name, especes_recues, nb_cheques_recus=0, nb_traites_recus=0, commentaire=None, forcer=0, revue=None,
+              cheques_recus=None, traites_recus=None):
     """Le responsable (ou un délégué) saisit ce qu'il a REÇU. Identique au
     déclaré -> validée ; différent -> « Écart de remise » renvoyé à l'employé ;
-    `forcer` (après au moins un tour d'écart) -> le responsable tranche."""
+    `forcer` (après au moins un tour d'écart) -> le responsable tranche.
+    `cheques_recus` / `traites_recus` (25/11/2026) : les montants reçus, « 455+955 » — le nombre en découle."""
     frappe.only_for(CL.ROLES)
     cl = frappe.get_doc("Cloture Caisse", name)
     role = _exiger_collecteur(cl.caisse)
     if cl.docstatus != 0 or cl.statut not in STATUTS_EN_ATTENTE:
         frappe.throw(_("La clôture {0} n'est pas en attente de collecte ({1}).").format(name, cl.statut))
+    bloque = bloque_collecte(cl)
+    if bloque:
+        frappe.throw(bloque)
+    try:
+        nb_ch, mt_ch, det_ch = pieces_saisies(cheques_recus, nb_cheques_recus)
+        nb_tr, mt_tr, det_tr = pieces_saisies(traites_recus, nb_traites_recus)
+    except ValueError as exc:
+        frappe.throw(_("« {0} » n'est pas un montant : un montant par pièce, séparés par « + » (ex. 455+955).").format(exc))
     moi = frappe.session.user
     auto = cl.valide_par == moi or cl.caisse == _caisse_de(moi)
     # Revue des dépenses (24/11/2026) : chacune vue ou contestée avant de recevoir l'argent — sauf sa propre caisse.
@@ -890,10 +954,13 @@ def collecter(name, especes_recues, nb_cheques_recus=0, nb_traites_recus=0, comm
         frappe.db.commit()
         return {"name": cl.name, "statut": cl.statut, "ecart_remise": 0, "validation_directe": True}
 
-    recu = {"especes": flt(especes_recues, 3), "nb_cheques": cint(nb_cheques_recus),
-            "nb_traites": cint(nb_traites_recus)}
+    recu = {"especes": flt(especes_recues, 3), "nb_cheques": nb_ch, "nb_traites": nb_tr,
+            "montant_cheques": mt_ch, "montant_traites": mt_tr, "detail_cheques": det_ch, "detail_traites": det_tr}
     declare = {"especes": flt(cl.especes_remises, 3), "nb_cheques": cint(cl.nb_cheques_remis),
-               "nb_traites": cint(cl.nb_traites_remis)}
+               "nb_traites": cint(cl.nb_traites_remis),
+               "montant_cheques": flt(cl.get("montant_cheques_remis"), 3),
+               "montant_traites": flt(cl.get("montant_traites_remis"), 3),
+               "detail_cheques": cl.get("detail_cheques_remis") or "", "detail_traites": cl.get("detail_traites_remis") or ""}
     if auto:
         # Sa propre caisse versée dans la passation : rien à confronter, le titulaire tranchera à la remise.
         recu = dict(declare)
@@ -901,6 +968,8 @@ def collecter(name, especes_recues, nb_cheques_recus=0, nb_traites_recus=0, comm
     cl.especes_recues = recu["especes"]
     cl.nb_cheques_recus = recu["nb_cheques"]
     cl.nb_traites_recus = recu["nb_traites"]
+    cl.montant_cheques_recus, cl.detail_cheques_recus = recu["montant_cheques"], recu["detail_cheques"]
+    cl.montant_traites_recus, cl.detail_traites_recus = recu["montant_traites"], recu["detail_traites"]
     cl.ecart_remise = ecart_remise(declare["especes"], recu["especes"])
     cl.collecte_par = moi
     identique = remise_identique(declare, recu)
@@ -912,9 +981,12 @@ def collecter(name, especes_recues, nb_cheques_recus=0, nb_traites_recus=0, comm
         cl.statut = STATUT_ECART
         cl.tours_ecart = cint(cl.tours_ecart) + 1
         cl.echanges = ((cl.echanges or "") + "\n" + _ligne_echange(
-            "⚠️ %s a reçu %s DT, %s chèque(s), %s traite(s) au lieu de %s DT, %s, %s" % (
+            "⚠️ %s a reçu %s DT, %s chèque(s), %s traite(s) au lieu de %s DT, %s, %s%s" % (
                 moi, CL._fmt_montant(recu["especes"]), recu["nb_cheques"], recu["nb_traites"],
-                CL._fmt_montant(declare["especes"]), declare["nb_cheques"], declare["nb_traites"]),
+                CL._fmt_montant(declare["especes"]), declare["nb_cheques"], declare["nb_traites"],
+                "".join(" — %s reçus %s DT au lieu de %s DT" % (nom, CL._fmt_montant(recu[cle]), CL._fmt_montant(declare[cle]))
+                        for cle, nom in (("montant_cheques", "chèques"), ("montant_traites", "traites"))
+                        if declare.get(cle) and abs(flt(recu[cle]) - flt(declare[cle])) > 0.0005)),
             commentaire)).strip()
         cl.flags.ignore_permissions = True
         cl.save(ignore_permissions=True)

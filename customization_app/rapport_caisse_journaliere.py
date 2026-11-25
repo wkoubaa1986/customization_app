@@ -362,7 +362,7 @@ def _paiements_anciennes_commandes(d1, d2, exclude_names):
     avec l'original — c'est la date de création de l'original qui compte
     (SCPS.Tn, 61,301 DT du 03/08 réapparu dans la caisse du 08/10/2026)."""
     like_conds = " OR ".join(["pe.paid_to LIKE %s"] * len(CAISSE_ACCOUNTS_LIKE))
-    vals = [d1, d2, d1, d2, *CAISSE_ACCOUNTS_LIKE]
+    vals = [d1, d2, "%s 00:00:00" % d1, d1, d2, d1, d2, *CAISSE_ACCOUNTS_LIKE]
     exclude_sql = ""
     if exclude_names:
         exclude_sql = "AND pe.name NOT IN ({})".format(",".join(["%s"] * len(exclude_names)))
@@ -389,6 +389,10 @@ def _paiements_anciennes_commandes(d1, d2, exclude_names):
              AND racine.name = SUBSTRING_INDEX(pe.name, '-', 4)
             WHERE pe.docstatus = 1
               AND (pe.payment_type = 'Receive' OR origine.name IS NOT NULL)
+              -- Filtre que les index peuvent servir (25/11/2026 : 0,7 s par appel sans lui, toute la table parcourue
+              -- avec une jointure calculée) — impliqué par le suivant : la création d'un paiement réémis suit celle
+              -- de son original, donc « création de la racine ≥ d1 » donne « création ≥ d1 ».
+              AND (pe.posting_date BETWEEN %s AND %s OR pe.creation >= %s)
               AND (pe.posting_date BETWEEN %s AND %s
                    OR DATE(COALESCE(racine.creation, pe.creation)) BETWEEN %s AND %s)
               AND ({like_conds})
@@ -822,6 +826,10 @@ def get_data(d1, d2, employe=None):
             for p in o["payments"]:
                 seen_pes.add(p["name"])
     anciens = _paiements_anciennes_commandes(start_date, end_date, seen_pes)
+    # Un paiement pris par une clôture ne compte QUE dans la caisse et le jour de celle-ci ; ceux qu'une clôture de
+    # la période a repris (saisis après le comptage de leur jour) y apparaissent (25/11/2026, caisse_paiements).
+    from customization_app.caisse_paiements import appliquer_clotures
+    appliquer_clotures(result_employees, anciens, grand_par_mode, start_date, end_date, employe or None)
 
     # La restitution suit le filtre ; les totaux globaux sont recalculés sur le
     # sous-ensemble (grand_par_mode a accumulé TOUTES les caisses ci-dessus).
@@ -838,7 +846,7 @@ def get_data(d1, d2, employe=None):
                                 if (p.get("saisi_par") or "—") == employe]
         par_mode_filtre = {}
         for p in anciens["paiements"]:
-            if p.get("exclu"):
+            if p.get("exclu") or p.get("deja_compte"):
                 continue
             m = p["mode"] or "—"
             par_mode_filtre[m] = flt(par_mode_filtre.get(m, 0)) + flt(p["amount"])
@@ -850,7 +858,7 @@ def get_data(d1, d2, employe=None):
     # les totaux par mode / total encaissé).
     anciens_par_emp = {}
     for p in anciens["paiements"]:
-        if p.get("exclu"):
+        if p.get("exclu") or p.get("deja_compte"):
             continue
         emp = p["saisi_par"] or "—"
         mode = p["mode"] or "—"

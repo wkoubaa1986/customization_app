@@ -399,6 +399,8 @@ class ArgentLiquide {
           <span class="op">=</span>${bloc(__("Encore entre ses mains"), x.detient, "res")}
         </div>
         ${remis_par(x) ? `<div class="muet">↪ ${__("Dans « reçu aux collectes » : {0}, remis ensuite à {1} (il est le collecteur principal).", [remis_par(x), esc(x.nom)])}</div>` : ""}
+        ${(x.entrees_manuelles || []).length ? `<div class="al-alerte">⚠️ ${__("{0} écriture(s) font ENTRER de l’argent dans Espèces sans venir de Sabah ni de la banque. Un achat devrait en faire SORTIR : vérifiez le sens de chacune.", [x.entrees_manuelles.length])}
+          ${x.entrees_manuelles.map((m) => `<div style="font-weight:400">${jour(m.date)} · <a href="/app/journal-entry/${encodeURIComponent(m.name)}">${esc(m.name)}</a> · ${esc(m.remarque || "")} · ${__("depuis")} ${esc(m.depuis)} · <b>+ ${txt(m.montant)}</b> (${esc(m.saisie_par)})</div>`).join("")}</div>` : ""}
         ${sorties ? `<div class="muet">${__("Détail des sorties depuis la date de départ")} : ${sorties}</div>` : ""}
         ${(x.detail_sorties || []).length ? `<details><summary>${__("Voir les 15 derniers mouvements")}</summary><div class="al-defile"><table>
           <tr><th>${__("Date")}</th><th>${__("Vers / depuis")}</th><th>${__("Référence")}</th><th>${__("Saisie par")}</th><th class="n">${__("Montant")}</th></tr>

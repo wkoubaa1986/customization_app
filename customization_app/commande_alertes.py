@@ -785,6 +785,14 @@ def on_payment_entry_change(doc, method=None):
     Payment Entry — doit requalifier la commande tout de suite, pas à la resynchronisation
     de 04h00.
     """
+    # Un paiement déjà compté dans une caisse puis annulé (25/11/2026) : collecteur, direction et titulaire prévenus
+    # s'il n'est pas ressaisi à l'identique (caisse_paiements.apres_annulation, après la fin de la transaction).
+    if method == "on_cancel":
+        try:
+            from customization_app.caisse_paiements import apres_annulation
+            apres_annulation(doc, method)
+        except Exception:
+            frappe.log_error(frappe.get_traceback(), "caisse : paiement compté puis annulé")
     noms = set()
     factures = []
     for r in doc.get("references") or []:

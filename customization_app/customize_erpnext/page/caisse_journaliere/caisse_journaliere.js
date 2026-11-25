@@ -588,7 +588,7 @@ class RapportCaisseJournaliere {
   }
 
   _order_rows(o) {
-    const du_jour = (o.payments || []).filter(p => !p.hors_periode);
+    const du_jour = (o.payments || []).filter(p => !p.hors_periode && !p.deja_compte);
     const modes = [...new Set(du_jour.map(p => p.mode).filter(Boolean))];
     let modeChips = modes.map(m => this._chip(m, RCJ_MODE[m])).join(" ") || '<span class="rcj-empty">—</span>';
     const av = o.avance_anterieure || {};
@@ -656,10 +656,14 @@ class RapportCaisseJournaliere {
     if (!pays || !pays.length) return '<div class="rcj-empty">Aucun paiement</div>';
     // Une AVANCE reçue hors période reste visible (elle explique le solde de la
     // commande) mais grisée et marquée : elle ne compte pas dans la caisse du jour.
-    const rows = pays.map(p => `<tr${p.hors_periode ? ' style="opacity:.55"' : ""}>
+    // Un paiement déjà PRIS par la clôture d'une autre caisse ou d'un autre jour (25/11/2026) : visible, grisé, hors
+    // des totaux de cette vue — il compte dans sa clôture à lui.
+    const rows = pays.map(p => `<tr${p.hors_periode || p.deja_compte ? ' style="opacity:.55"' : ""}>
       <td>${this._link("Payment Entry", p.name, true)}</td>
       <td class="rcj-muted">${p.date || ""}${p.hors_periode
-        ? ' <span style="color:#b9770e;font-size:10px;font-weight:700">hors période</span>' : ""}${p.antidate
+        ? ' <span style="color:#b9770e;font-size:10px;font-weight:700">hors période</span>' : ""}${p.deja_compte
+        ? ` <span style="color:#6c757d;font-size:10px;font-weight:700">${__("déjà compté : caisse de {0} du {1}", [
+            frappe.utils.escape_html(p.deja_compte.caisse), frappe.datetime.str_to_user(p.deja_compte.date)])}</span>` : ""}${p.antidate
         ? ` <span style="color:#c0392b;font-size:10px;font-weight:700">⚠ saisi le ${
             frappe.datetime.str_to_user(p.creation_date)}</span>` : ""}</td>
       <td>${this._chip(p.mode || "?", RCJ_MODE[p.mode])}</td>
@@ -739,7 +743,7 @@ class RapportCaisseJournaliere {
 
     const body = rows.map(p => {
       const mode_style = RCJ_MODE[p.mode] || { bg: "#eee", fg: "#333" };
-      const exclu = !!p.exclu;
+      const exclu = !!p.exclu || !!p.deja_compte;
       const pieces = (p.pieces || []).length
         ? p.pieces.map(x =>
             `<a href="/app/${frappe.router.slug(x.doctype)}/${encodeURIComponent(x.name)}" target="_blank">${esc(x.name)}</a>` +
@@ -756,7 +760,10 @@ class RapportCaisseJournaliere {
         <td style="text-align:right;font-weight:700">${this._fmt(p.amount)}</td>
         <td>${esc(p.reference_no || "")}</td>
         <td><a href="/app/payment-entry/${encodeURIComponent(p.name)}" target="_blank">${esc(p.name)}</a>${
-          exclu ? '<br><span class="rcj-chip" style="background:#e2e3e5;color:#41464b">exclu de la caisse</span>' : ""}</td>
+          p.exclu ? '<br><span class="rcj-chip" style="background:#e2e3e5;color:#41464b">exclu de la caisse</span>' : ""}${
+          p.deja_compte ? `<br><span class="rcj-chip" style="background:#e2e3e5;color:#41464b">${__("déjà compté : caisse de {0} du {1}", [
+            esc(p.deja_compte.caisse), frappe.datetime.str_to_user(p.deja_compte.date)])}</span>` : ""}${
+          p.repris ? `<br><span class="rcj-chip" style="background:#fff3cd;color:#8a6d1f">${__("repris : saisi après le comptage de son jour")}</span>` : ""}</td>
         <td>${pieces}</td>
         <td><button class="btn btn-xs ${exclu ? "btn-default" : "btn-warning"} rcj-exclure"
               data-pe="${esc(p.name)}" data-exclure="${exclu ? 0 : 1}"
@@ -3302,6 +3309,11 @@ function rcj_cloture(rapport, opts) {
         });
         return;
       }
+      if (e.ordre) {
+        // Compter dans l'ordre (25/11/2026) : sinon le fond de départ est faux.
+        frappe.msgprint({ title: __("Compter dans l'ordre"), indicator: "red", message: frappe.utils.escape_html(e.ordre) });
+        return;
+      }
       const fmt = (v) => rcj_dt(v || 0);
       // Solde théorique négatif (une dépense dépasse les encaissements : saisie pour un collègue, le plus
       // souvent) : on ne pré-remplit jamais un montant négatif — la remise négative était refusée sans
@@ -3318,6 +3330,7 @@ function rcj_cloture(rapport, opts) {
           {
             fieldtype: "Currency", fieldname: "comptees",
             label: __("Espèces comptées (physique)"),
+            description: __("Tout l'argent de votre caisse : billets et pièces, fond de la veille compris."),
             // COMPTAGE À L'AVEUGLE (24/11/2026) : la case n'est plus pré-remplie avec le montant attendu — Jamel et
             // Sadok « comptaient » au millime le théorique. Le montant attendu et l'écart s'affichent une fois le
             // compte saisi, et la case se fige.
@@ -3350,8 +3363,16 @@ function rcj_cloture(rapport, opts) {
               },
             },
             { fieldtype: "Column Break", fieldname: "cb_remise" },
-            { fieldtype: "Int", fieldname: "nb_cheques", label: __("Chèques remis (nombre)"), default: reprise ? reprise.nb_cheques_remis : 0 },
-            { fieldtype: "Int", fieldname: "nb_traites", label: __("Traites remises (nombre)"), default: reprise ? reprise.nb_traites_remis : 0 },
+            // Chèques et traites (25/11/2026) : le MONTANT de chaque pièce, « 455+955 » — le nombre et la somme
+            // s'affichent dessous ; le serveur relit la même saisie (caisse_cloture.lire_montants).
+            { fieldtype: "Data", fieldname: "cheques", label: __("Chèques remis — montant de chacun"),
+              default: reprise ? (reprise.detail_cheques_remis || "") : "",
+              description: __("Un montant par chèque, séparés par + (ex. 455+955). Vide si aucun.") },
+            { fieldtype: "HTML", fieldname: "cheques_apercu" },
+            { fieldtype: "Data", fieldname: "traites", label: __("Traites remises — montant de chacune"),
+              default: reprise ? (reprise.detail_traites_remis || "") : "",
+              description: __("Une traite par montant, séparés par + . Vide si aucune.") },
+            { fieldtype: "HTML", fieldname: "traites_apercu" },
             { fieldtype: "Section Break", fieldname: "sb_photo" },
             { fieldtype: "HTML", fieldname: "photo",
               options: `<label style="font-weight:600">📷 ${__("Photo de la remise")}${e.photo_obligatoire ? " *" : ` <span class="text-muted">(${__("facultative")})</span>`}</label>
@@ -3388,7 +3409,7 @@ function rcj_cloture(rapport, opts) {
           });
           if (premier) {
             // Frappe vide un montant à 0 au clic refusé (« Espèces remises » manquante au clic suivant) : on le remet.
-            setTimeout(() => ["comptees", "remises", "nb_cheques", "nb_traites"].forEach((f) => {
+            setTimeout(() => ["comptees", "remises", "cheques", "traites"].forEach((f) => {
               if (d.fields_dict[f] && v[f] !== undefined && d.get_value(f) !== v[f]) d.set_value(f, v[f]);
             }), 0);
             premier.scrollIntoView({ block: "center" });
@@ -3406,6 +3427,13 @@ function rcj_cloture(rapport, opts) {
             if (e.photo_obligatoire && !photo.data) {
               frappe.msgprint(__("La photo de la remise est obligatoire.")); return;
             }
+            for (const [champ, nom] of [["cheques", __("Chèques")], ["traites", __("Traites")]]) {
+              const lu = rcj_lire_montants(v[champ]);
+              if (lu.erreur !== null) {
+                frappe.msgprint(__("{0} : « {1} » n'est pas un montant. Un montant par pièce, séparés par + (ex. 455+955).", [nom, frappe.utils.escape_html(lu.erreur)]));
+                return;
+              }
+            }
           }
           if (e.pour_autrui) {
             if ((v.note || "").replace(/\s+/g, " ").trim().length < (e.commentaire_min || RCJ_COMMENTAIRE_MIN)) {
@@ -3418,8 +3446,8 @@ function rcj_cloture(rapport, opts) {
             args: { caisse, date: d1, especes_comptees: v.comptees, note: v.note,
                     justifications: JSON.stringify(justifications),
                     especes_remises: double ? v.remises : null,
-                    nb_cheques_remis: double ? (v.nb_cheques || 0) : 0,
-                    nb_traites_remis: double ? (v.nb_traites || 0) : 0,
+                    cheques_montants: double ? (v.cheques || "") : "",
+                    traites_montants: double ? (v.traites || "") : "",
                     photo: photo.data, photo_nom: photo.nom,
                     rouvrir: reprise ? reprise.name : null },
             freeze: true, freeze_message: double ? __("Enregistrement du comptage…") : __("Clôture et génération du PDF…"),
@@ -3492,7 +3520,7 @@ function rcj_cloture(rapport, opts) {
           <tr><td>${__("Solde d'ouverture (avant)")}</td>
               <td style="text-align:right;font-weight:700">${fmt(e.solde_ouverture)}</td></tr>
           <tr><td>${sous_traitant && e.debut !== d1 ? __("Encaissements espèces de la période") : __("Encaissements espèces du jour")}</td>
-              <td style="text-align:right">+ ${fmt(e.encaissements_especes)}</td></tr>
+              <td style="text-align:right">+ ${fmt(e.encaissements_especes)}</td></tr>${rcj_html_repris(e.repris, fmt)}
           <tr><td>${sous_traitant && e.debut !== d1 ? __("Dépenses espèces de la période") : __("Dépenses espèces du jour")}</td>
               <td style="text-align:right">− ${fmt(e.depenses_especes)}</td></tr>
           <tr><td><b>${__("Solde théorique (après)")}</b></td>
@@ -3503,6 +3531,7 @@ function rcj_cloture(rapport, opts) {
           ${e.mode_validation === "double" ? `
           <tr><td>${__("Fond de caisse conservé (compté − remis)")}</td>
               <td style="text-align:right;font-weight:700"><span class="rcj-clo-fond">${fmt(0)}</span></td></tr>` : ""}
+          ${e.mode_validation === "double" ? rcj_html_pieces_attendues(e.pieces_attendues, fmt) : ""}
           <tr><td class="text-muted">${__("Chèques du jour")} · ${__("Autres modes")}</td>
               <td style="text-align:right" class="text-muted">${fmt(e.total_cheques)} · ${
                 fmt(e.total_autres_modes)}</td></tr>
@@ -3526,9 +3555,59 @@ function rcj_cloture(rapport, opts) {
       if (e.mode_validation === "double") {
         // Le fond conservé part de « tout remis » (0) : l'employé ajuste s'il garde de la monnaie.
         d.fields_dict.etat.$wrapper.find(".rcj-clo-fond").text(fmt(0));
+        // « 455+955 » → « 2 chèques · 1 410,000 DT », à chaque touche.
+        [["cheques", "chèque(s)"], ["traites", "traite(s)"]].forEach(([champ, unite]) => {
+          const maj = () => d.fields_dict[champ + "_apercu"].$wrapper.html(rcj_apercu_pieces(d.get_value(champ), __(unite), fmt));
+          d.fields_dict[champ].$input.on("input change", maj);
+          maj();
+        });
       }
     },
   });
+}
+
+
+// ── Chèques et traites : un montant par pièce (25/11/2026) ───────────────────
+// « 455+955 », « 455,500 + 955 » : la virgule est la décimale ; « + », « ; » et les retours à la ligne séparent les
+// pièces. Même lecture que le serveur (caisse_cloture.lire_montants). -> {montants, total, erreur (morceau fautif)}.
+function rcj_lire_montants(texte) {
+  const t = String(texte || "").trim();
+  if (!t) return { montants: [], total: 0, erreur: null };
+  const montants = [];
+  for (const brut of t.split(/[+;\n]/)) {
+    let m = brut.trim().replace(/[\s\u202f\u00a0]/g, "");
+    if (!m) continue;
+    if ((m.match(/,/g) || []).length === 1 && !m.includes(".")) m = m.replace(",", ".");
+    if (!/^\d+(\.\d+)?$/.test(m) || !(Number(m) > 0)) return { montants, total: 0, erreur: brut.trim() };
+    montants.push(Math.round(Number(m) * 1000) / 1000);
+  }
+  return { montants, total: Math.round(montants.reduce((a, b) => a + b, 0) * 1000) / 1000, erreur: null };
+}
+
+function rcj_apercu_pieces(texte, unite, fmt) {
+  const lu = rcj_lire_montants(texte);
+  if (lu.erreur !== null) {
+    return `<div style="color:#c0392b;font-size:12px;margin:-6px 0 8px">⚠ « ${frappe.utils.escape_html(lu.erreur)} » ${__("n'est pas un montant")}</div>`;
+  }
+  if (!lu.montants.length) return "";
+  return `<div style="font-size:12.5px;margin:-6px 0 8px"><b>${lu.montants.length} ${unite}</b> · ${__("total")} <b>${fmt(lu.total)}</b></div>`;
+}
+
+// Ce que la caisse doit remettre en chèques / traites d'après ses encaissements (montré avec le montant attendu des
+// espèces, donc APRÈS le comptage).
+function rcj_html_pieces_attendues(pa, fmt) {
+  if (!pa) return "";
+  const ligne = (lib, x) => (x && x.nb ? `<tr><td>${lib}</td><td style="text-align:right">${x.nb} · ${fmt(x.total)}</td></tr>` : "");
+  return ligne(__("Chèques encaissés, à remettre"), pa["Chèque"]) + ligne(__("Traites encaissées, à remettre"), pa["Traite"]);
+}
+
+// Les paiements REPRIS dans ce comptage : saisis après le comptage de leur jour (caisse_paiements.orphelins).
+function rcj_html_repris(repris, fmt) {
+  if (!(repris || []).length) return "";
+  const esc = frappe.utils.escape_html;
+  return `<tr><td colspan="2" style="font-size:12px;background:#fff8e1">↪ ${__("Dont repris : saisis après le comptage de leur jour, ils comptent ici")} :
+    ${repris.map((p) => `<div>${esc(p.name)} — ${esc(p.client || "")} — <b>${fmt(p.montant)}</b> ${esc(p.mode)}${
+      p.saisi_le ? ` (${__("saisi le {0}", [frappe.datetime.str_to_user(p.saisi_le)])}${p.saisi_par ? " " + __("par {0}", [esc(p.saisi_par)]) : ""})` : ""}</div>`).join("")}</td></tr>`;
 }
 
 
@@ -3621,7 +3700,9 @@ function rcj_collecte(rapport) {
         const declare = `
           <div class="rcj-cc-declare">
             <div class="rcj-cc-montant">${rcj_dt(c.especes_remises)}</div>
-            <div class="rcj-cc-detail">${__("espèces à recevoir")} · ${c.nb_cheques_remis} ${__("chèque(s)")} · ${c.nb_traites_remis} ${__("traite(s)")}</div>
+            <div class="rcj-cc-detail">${__("espèces à recevoir")} · ${c.nb_cheques_remis} ${__("chèque(s)")}${
+              c.montant_cheques_remis ? ` (${esc(c.detail_cheques_remis)} = ${rcj_dt(c.montant_cheques_remis)})` : ""} · ${c.nb_traites_remis} ${__("traite(s)")}${
+              c.montant_traites_remis ? ` (${esc(c.detail_traites_remis)} = ${rcj_dt(c.montant_traites_remis)})` : ""}</div>
             <div class="rcj-cc-detail text-muted">${__("comptées")} ${rcj_dt(c.especes_comptees)} · ${__("fond conservé")} ${rcj_dt(c.fond_conserve)} · ${__("écart caisse")} ${rcj_dt(c.ecart)}${
               c.note ? ` · <i>${esc(c.note)}</i>` : ""}</div>
             ${c.photo_remise ? `<a href="${c.photo_remise}" target="_blank"><img class="rcj-cc-photo" src="${c.photo_remise}" alt="photo"></a>` : ""}
@@ -3656,8 +3737,12 @@ function rcj_collecte(rapport) {
               <label>${__("Espèces reçues")}</label>
               <input type="number" step="0.001" min="0" inputmode="decimal" class="form-control rcj-col-especes" value="${c.especes_recues !== null && c.especes_recues !== undefined ? c.especes_recues : c.especes_remises}">
               <div class="rcj-cc-deux">
-                <div><label>${__("Chèques reçus")}</label><input type="number" step="1" min="0" inputmode="numeric" class="form-control rcj-col-cheques" value="${c.nb_cheques_remis}"></div>
-                <div><label>${__("Traites reçues")}</label><input type="number" step="1" min="0" inputmode="numeric" class="form-control rcj-col-traites" value="${c.nb_traites_remis}"></div>
+                ${c.detail_cheques_remis
+                  ? `<div><label>${__("Chèques reçus — montants")}</label><input type="text" class="form-control rcj-col-cheques-mt" value="${esc(c.detail_cheques_remis)}" placeholder="455+955"></div>`
+                  : `<div><label>${__("Chèques reçus")}</label><input type="number" step="1" min="0" inputmode="numeric" class="form-control rcj-col-cheques" value="${c.nb_cheques_remis}"></div>`}
+                ${c.detail_traites_remis
+                  ? `<div><label>${__("Traites reçues — montants")}</label><input type="text" class="form-control rcj-col-traites-mt" value="${esc(c.detail_traites_remis)}" placeholder="455+955"></div>`
+                  : `<div><label>${__("Traites reçues")}</label><input type="number" step="1" min="0" inputmode="numeric" class="form-control rcj-col-traites" value="${c.nb_traites_remis}"></div>`}
               </div>
               <label>${__("Commentaire pour l'employé")}</label>
               <input type="text" class="form-control rcj-col-comm" placeholder="${__("ex. : il manque 50 DT, enveloppe ouverte…")}">
@@ -3763,7 +3848,8 @@ function rcj_collecte(rapport) {
           const revue = revue_prete(c);
           if (revue === null) return;
           envoyer(c.name, { especes_recues: c.especes_remises, nb_cheques_recus: c.nb_cheques_remis,
-                            nb_traites_recus: c.nb_traites_remis, forcer: 0, revue });
+                            nb_traites_recus: c.nb_traites_remis, forcer: 0, revue,
+                            cheques_recus: c.detail_cheques_remis || null, traites_recus: c.detail_traites_remis || null });
         });
         $w.find(".rcj-cc-contester").on("click", function () {
           const name = $(this).attr("data-name");
@@ -3790,6 +3876,9 @@ function rcj_collecte(rapport) {
             especes_recues: $c.find(".rcj-col-especes").val() || 0,
             nb_cheques_recus: $c.find(".rcj-col-cheques").val() || 0,
             nb_traites_recus: $c.find(".rcj-col-traites").val() || 0,
+            // Les montants reçus quand l'employé a écrit ceux des pièces (25/11/2026) : le nombre en découle.
+            cheques_recus: $c.find(".rcj-col-cheques-mt").length ? ($c.find(".rcj-col-cheques-mt").val() || "") : null,
+            traites_recus: $c.find(".rcj-col-traites-mt").length ? ($c.find(".rcj-col-traites-mt").val() || "") : null,
             commentaire: $c.find(".rcj-col-comm").val() || "" };
           envoyer($(this).attr("data-name"), args,
                   forcer ? __("Trancher : l'écart de remise est retenu tel que vous l'avez saisi. Continuer ?") : null);

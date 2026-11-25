@@ -251,6 +251,13 @@ def _collecteurs(jour, cfg):
         else:
             x["entrees_autres"] += -flt(r.sortie)
             x["_entrees"].append((getdate(r.posting_date), -flt(r.sortie)))
+            # Une ENTRÉE d'argent qui ne vient ni de Sabah ni de la banque (25/11/2026) : « Achat divers Néjib » faisait
+            # entrer 76,6 et 80 DT dans Espèces — un achat fait sortir de l'argent, le sens est peut-être inversé.
+            if cat not in ("Sabah Espèces", "Banque"):
+                x.setdefault("entrees_manuelles", []).append({
+                    "name": r.name, "date": str(r.posting_date), "montant": flt(-flt(r.sortie), 3),
+                    "depuis": (r.contre or "").replace(" - A&S", ""), "remarque": reference(r.user_remark, r.cheque_no) or "",
+                    "saisie_par": frappe.utils.get_fullname(r.owner)})
         x["detail_sorties"].append({"name": r.name, "date": str(r.posting_date), "montant": flt(r.sortie, 3),
                                     "vers": r.contre or "", "categorie": cat, "saisie_par": frappe.utils.get_fullname(r.owner),
                                     "reference": reference(r.user_remark, r.cheque_no)})
@@ -395,9 +402,11 @@ def _rapprochement(jour, cfg, employes, collecteurs):
                                 ORDER BY posting_date""",
                              (COMPTE_ESPECES, COMPTES_PARTENAIRE, depart, jour), as_dict=True)]
     # Paiements en espèces saisis depuis le départ mais DATÉS d'avant : la caisse les compte le jour de la saisie, la
-    # comptabilité les range avant la période (17 paiements, 3 511,301 DT au 24/11/2026).
+    # comptabilité les range avant la période. Les RÉÉMISSIONS (« …-1 », annulation d'une facture) ne sont pas du
+    # nouvel argent : sur 17 paiements (3 511,301 DT au 24/11/2026), 12 en étaient — reste 5, 1 218,301 DT.
     antidates = frappe.db.sql("""SELECT COUNT(*), SUM(paid_amount) FROM `tabPayment Entry` WHERE docstatus = 1
-                                 AND payment_type = 'Receive' AND paid_to = %s AND posting_date < %s AND creation >= %s""",
+                                 AND payment_type = 'Receive' AND paid_to = %s AND posting_date < %s AND creation >= %s
+                                 AND amended_from IS NULL""",
                               (COMPTE_ESPECES, depart, depart))[0]
     return {
         "antidates_avant_depart": {"nb": int(antidates[0] or 0), "total": flt(antidates[1], 3)},

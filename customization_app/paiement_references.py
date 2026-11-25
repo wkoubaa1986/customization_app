@@ -40,6 +40,10 @@ def fusionner_references(references):
 def before_validate(doc, method=None):
     if doc.docstatus != 0:
         return
+    # Un paiement réémis (« …-1 ») reste pris par la clôture de caisse de l'original (25/11/2026) : même argent,
+    # il ne doit ni compter deux fois ni être repris par un comptage suivant (caisse_paiements.heriter).
+    from customization_app.caisse_paiements import heriter
+    heriter(doc)
     avant = doc.get("references") or []
     apres = fusionner_references(avant)
     if len(apres) == len(avant):

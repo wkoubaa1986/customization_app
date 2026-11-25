@@ -13,6 +13,7 @@
   "seuil_accord_depense",
   "plafond_collecteur",
   "jours_plafond_collecteur",
+  "paiements_suivis_depuis",
   "section_delegues",
   "delegues"
  ],
@@ -80,6 +81,13 @@
    "non_negative": 1
   },
   {
+   "fieldname": "paiements_suivis_depuis",
+   "fieldtype": "Datetime",
+   "label": "Paiements suivis par clôture depuis",
+   "read_only": 1,
+   "description": "Depuis ce moment, chaque paiement est pris par UNE clôture ; un paiement saisi après le comptage de son jour est repris par le comptage suivant. Posé à la mise en route (25/11/2026)."
+  },
+  {
    "fieldname": "section_delegues",
    "fieldtype": "Section Break",
    "label": "Délégués"
@@ -94,7 +102,7 @@
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-11-24 21:00:00.000000",
+ "modified": "2026-11-25 18:00:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Config Caisse",

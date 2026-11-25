@@ -149,3 +149,5 @@ customization_app.patches.paie_nettoyer_essais_2023
 customization_app.patches.conges_approbateur_gerant
 customization_app.patches.reparation_commande_depuis_tache
 customization_app.patches.caisse_reglages_controle_depenses
+customization_app.patches.caisse_suivi_paiements
+customization_app.patches.caisse_index_paiements

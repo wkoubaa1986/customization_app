@@ -24,9 +24,10 @@ CAISSES = {EMPLOYE: "TEST-COLLECTE-Employe", TITULAIRE: "TEST-COLLECTE-Titulaire
 DATE = "2026-10-01"
 
 
-def _mesures_simulees(caisse, date):
+def _mesures_simulees(caisse, date, reprendre=False):
     return {"encaissements_especes": 1300.0, "total_cheques": 200.0, "total_autres_modes": 0.0,
-            "depenses_especes": 0.0, "data": {"recap": {"par_employe": []}, "employees": [], "anciens": {}}}
+            "depenses_especes": 0.0, "debut": str(date), "repris": [], "pieces_attendues": None,
+            "data": {"recap": {"par_employe": []}, "employees": [], "anciens": {}}}
 
 
 class _PatchsContacts:
@@ -202,7 +203,8 @@ class TestDoubleValidationCaisse(unittest.TestCase):
         # Le responsable compte la caisse d'un employé absent : la carte de collecte lui offre
         # « Valider directement » — une seule signature, tracée (demande 04/10/2026).
         frappe.set_user(TITULAIRE)
-        r = CL.valider(CAISSES[EMPLOYE], DATE, especes_comptees=700, justifications="{}", especes_remises=700)
+        r = CL.valider(CAISSES[EMPLOYE], DATE, especes_comptees=700, justifications="{}", especes_remises=700,
+                        note="Employé absent ce soir, compté à sa place")
         liste = CC.a_collecter(DATE)
         c = next(x for x in liste["clotures"] if x["name"] == r["name"])
         self.assertTrue(c["validation_directe"]); self.assertTrue(c["collectable"]); self.assertFalse(c["auto_passation"])
@@ -420,7 +422,8 @@ class TestDoubleValidationCaisse(unittest.TestCase):
     def test_le_titulaire_de_la_caisse_rouvre_meme_si_un_autre_a_compte(self):
         # La direction compte la caisse de l'employé (absent) ; l'employé, de retour, peut rouvrir.
         frappe.set_user("Administrator")
-        r = CL.valider(CAISSES[EMPLOYE], DATE, especes_comptees=500, justifications="{}", especes_remises=500)
+        r = CL.valider(CAISSES[EMPLOYE], DATE, especes_comptees=500, justifications="{}", especes_remises=500,
+                        note="Employé absent ce soir, compté à sa place")
         frappe.set_user(EMPLOYE)
         e = CL.etat(CAISSES[EMPLOYE], DATE)
         self.assertTrue(e["en_attente"]["rouvrable"])
@@ -514,7 +517,7 @@ class TestDoubleValidationCaisse(unittest.TestCase):
             {"employe": "TEST-COLLECTE-Jamais", "total": 80, "par_mode": {"Dette non payée": 80}},
             {"employe": CAISSES[EMPLOYE], "total": 1300, "par_mode": {"Espèces": 1300}}]}}
         with mock.patch.object(CC, "_activite_du_jour",
-                               side_effect=lambda j: CC.activite_par_caisse(rapport) if str(j) == DATE else {}):
+                               side_effect=lambda j, rafraichir=False: CC.activite_par_caisse(rapport) if str(j) == DATE else {}):
             liste = CC.a_collecter(DATE)
         noms = [c["name"] for c in liste["clotures"]]
         self.assertIn(cl.name, noms)
@@ -598,7 +601,7 @@ class TestDoubleValidationCaisse(unittest.TestCase):
                         "depenses": {"lignes": [{"saisi_par": "TEST-COLLECTE-Jamais", "montant": 12.5}]}},
                     veille: {"recap": {"par_employe": [
                         {"employe": CAISSES[EMPLOYE], "total": 40, "par_mode": {"Dette non payée": 40}}]}}}
-        activite = lambda j: CC.activite_par_caisse(rapports.get(str(j), {}))  # noqa: E731
+        activite = lambda j, rafraichir=False: CC.activite_par_caisse(rapports.get(str(j), {}))  # noqa: E731
         with mock.patch.object(CC, "_activite_du_jour", side_effect=activite):
             frappe.set_user(TITULAIRE)
             e = CC.etat_caisses(DATE)
