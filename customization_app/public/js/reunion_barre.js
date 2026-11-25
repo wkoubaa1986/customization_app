@@ -85,6 +85,7 @@
   };
 
   $(document).on("app_ready", () => {
+    if (window.frameElement) return;   // fiche ouverte en fenêtre (ouvrir_document.js) : l'alerte est déjà dessous
     if (!frappe.session || frappe.session.user === "Guest") return;
     // Les autres barres (magasin, congés) apparaissent et disparaissent seules : on ré-empile à chaque changement.
     new MutationObserver(empiler).observe(document.body, { childList: true });

@@ -109,6 +109,7 @@
   window.caisse_rappel_actualiser = charger;
 
   $(document).on("app_ready", () => {
+    if (window.frameElement) return;   // fiche ouverte en fenêtre (ouvrir_document.js) : l'alerte est déjà dessous
     if (!frappe.session || frappe.session.user === "Guest") return;
     setTimeout(charger, 2500);
     // Tant qu'il reste un jour : toutes les 2 minutes (la fenêtre disparaît dès que le dernier est compté) ;
@@ -219,6 +220,7 @@
     }).catch(() => {});
   };
   $(document).on("app_ready", () => {
+    if (window.frameElement) return;   // fiche ouverte en fenêtre (ouvrir_document.js) : l'alerte est déjà dessous
     if (!frappe.session || frappe.session.user === "Guest") return;
     charger();
     setInterval(() => { if (document.visibilityState === "visible") charger(); }, 120000);

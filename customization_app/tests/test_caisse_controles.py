@@ -214,9 +214,12 @@ class TestDetailDuPoint(unittest.TestCase):
     def test_liens_des_documents_ouvrables(self):
         point = {"tache": "Tache-09555", "commande": "SAL-ORD-2026-1", "bl": "MAT-DN-2026-1", "paiement": "ACC-PAY-1"}
         self.assertEqual(CL.liens_du_point(point), [
-            {"label": "Ouvrir la tâche", "url": "/app/tache-de-travail/Tache-09555"},
-            {"label": "Ouvrir la commande", "url": "/app/sales-order/SAL-ORD-2026-1"},
-            {"label": "Ouvrir le BL", "url": "/app/delivery-note/MAT-DN-2026-1"}])   # paiement : réservé à la compta
+            {"label": "Ouvrir la tâche", "url": "/app/tache-de-travail/Tache-09555", "doctype": "Tache de travail",
+             "name": "Tache-09555"},
+            {"label": "Ouvrir la commande", "url": "/app/sales-order/SAL-ORD-2026-1", "doctype": "Sales Order",
+             "name": "SAL-ORD-2026-1"},
+            {"label": "Ouvrir le BL", "url": "/app/delivery-note/MAT-DN-2026-1", "doctype": "Delivery Note",
+             "name": "MAT-DN-2026-1"}])   # paiement : réservé à la compta
         self.assertEqual(CL.liens_du_point({}), [])
 
     def test_detail_d_une_tache(self):

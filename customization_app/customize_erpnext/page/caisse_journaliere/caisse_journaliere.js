@@ -3146,9 +3146,10 @@ function rcj_html_point_a_justifier(c, precedente) {
     if (precedente && precedente.indexOf(m + " — ") === 0) { motif = m; commentaire = precedente.slice(m.length + 3); }
   });
   // Ce que le point veut dire, ses documents et le détail de la tâche (25/11/2026 : « qu'il comprenne rapidement de
-  // quoi il s'agit »). Les liens s'ouvrent dans un nouvel onglet : la fenêtre de comptage garde ce qui est saisi.
-  const liens = (c.liens || []).map((l) => `<a class="btn btn-xs btn-default" href="${esc(l.url)}" target="_blank"
-      rel="noopener" style="margin:6px 6px 0 0">🔎 ${esc(l.label)}</a>`).join("");
+  // quoi il s'agit »). Les documents s'ouvrent dans une FENÊTRE par-dessus le comptage (sa demande : « en popup, pas
+  // nouvelle fenêtre ») — `rcj_ouvrir_lien_point`, branché sur la fenêtre de comptage.
+  const liens = (c.liens || []).map((l) => `<a class="btn btn-xs btn-default" href="${esc(l.url)}"
+      style="margin:6px 6px 0 0">🔎 ${esc(l.label)}</a>`).join("");
   const details = (c.details || []).length ? `
     <details style="margin-top:6px;font-size:12.5px">
       <summary style="cursor:pointer;color:#7a5d10">${__("Voir le détail")}</summary>
@@ -3169,6 +3170,26 @@ function rcj_html_point_a_justifier(c, precedente) {
            placeholder="${__("Expliquez : qui, quand, pourquoi ({0} caractères minimum)", [RCJ_COMMENTAIRE_MIN])}">
     <div class="rcj-just-err" style="display:none;color:#c0392b;font-size:12px;margin-top:2px"></div>
   </div>`;
+}
+
+// Un document cité par un point de contrôle, ouvert dans une FENÊTRE par-dessus le comptage (25/11/2026) : la fenêtre
+// de comptage reste ouverte dessous, avec tout ce qui est saisi. Les liens du libellé et les boutons « Ouvrir… »
+// passent par ici ; un lien qu'on ne reconnaît pas garde son comportement normal.
+const RCJ_DOCUMENT_DU_LIEN = {
+  "tache-de-travail": ["Tache de travail", "Tâche"], "sales-order": ["Sales Order", "Commande"],
+  "delivery-note": ["Delivery Note", "Bon de livraison"], "payment-entry": ["Payment Entry", "Paiement"],
+};
+function rcj_ouvrir_lien_point(ev) {
+  const m = String($(this).attr("href") || "").match(/^\/app\/([^/?#]+)\/([^/?#]+)/);
+  const doc = m && RCJ_DOCUMENT_DU_LIEN[m[1]];
+  if (!doc) return;
+  // ⚠️ LES DEUX. Sans stopPropagation, le routeur de Frappe (clic sur un lien « /app/… », écouté sur <body>) change
+  // AUSSI de page : la fenêtre de comptage se ferme et tout ce qui était saisi est perdu (vu à l'essai du 25/11/2026).
+  ev.preventDefault();
+  ev.stopPropagation();
+  const nom = decodeURIComponent(m[2]);
+  frappe.require("/assets/customization_app/js/ouvrir_document.js",
+    () => customization_app.ouvrir_document(doc[0], nom, { titre: `${__(doc[1])} · ${nom}` }));
 }
 
 // Un libellé de point de contrôle avec ses documents cliquables (commande, tâche, paiement) : le
@@ -3561,6 +3582,7 @@ function rcj_cloture(rapport, opts) {
           : rcj_html_point_a_justifier(c, (reprise && reprise.justifications_precedentes || {})[c.libelle])).join("");
         d.fields_dict.controles.$wrapper.html(
           `<div style="margin-bottom:6px;font-weight:700">${__("Points de contrôle")}</div>${lignes}`);
+        d.fields_dict.controles.$wrapper.on("click", ".rcj-just-bloc a[href^='/app/']", rcj_ouvrir_lien_point);
         d.fields_dict.controles.$wrapper.find(".rcj-valider-bl").on("click", function () {
           const bl = $(this).attr("data-bl");
           frappe.call({

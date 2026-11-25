@@ -17,6 +17,10 @@ customization_app.ouvrir_document = function (doctype, nom, options) {
   const opts = options || {};
   const titre = opts.titre || `${doctype} · ${nom}`;
   const d = new frappe.ui.Dialog({ title: titre, size: "extra-large" });
+  // ⚠️ ÉCHAP NE FERME QU'ELLE. Ouverte par-dessus une autre fenêtre (comptage de la caisse, Ma journée), la touche
+  // Échap était traitée deux fois : Bootstrap fermait cette fenêtre, puis Frappe fermait la suivante — celle de
+  // dessous, avec tout ce qui y était saisi (vu le 25/11/2026). Frappe seul la ferme désormais.
+  d.$wrapper.attr("data-keyboard", "false");
 
   // opts.url : ouvrir un NOUVEAU document pré-rempli — /app/<slug>/new?champ=valeur
   // (frappe verse les paramètres de l'URL dans route_options du formulaire neuf).
@@ -65,6 +69,9 @@ customization_app.ouvrir_document = function (doctype, nom, options) {
   // adresse, un montant corrigé dans la fenêtre changent ce que la liste affiche, et parier sur
   // « rien n'a changé » serait faux un jour sur deux.
   d.onhide = () => opts.a_la_fermeture && opts.a_la_fermeture();
+  // Fermée, elle n'est jamais rouverte (chaque appel en crée une) : on la retire, et avec elle son cadre — un Desk
+  // complet chargé, qui sinon reste en mémoire à chaque document ouvert (lourd sur un téléphone).
+  d.$wrapper.on("hidden.bs.modal", () => d.$wrapper.remove());
   d.show();
   return d;
 };

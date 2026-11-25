@@ -87,6 +87,7 @@
   window.ro_rappel_actualiser = charger;
 
   $(document).on("app_ready", () => {
+    if (window.frameElement) return;   // fiche ouverte en fenêtre (ouvrir_document.js) : l'alerte est déjà dessous
     if (!frappe.session || frappe.session.user === "Guest") return;
     setTimeout(charger, 1500);                       // après le premier rendu du Desk
     setInterval(() => { if (document.visibilityState === "visible") charger(); }, 300000);

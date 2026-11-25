@@ -263,6 +263,7 @@
 
   // ── Celui qui clôture la réparation est interrogé tout de suite ─────────────
   $(document).on("app_ready", () => {
+    if (window.frameElement) return;   // fiche ouverte en fenêtre (ouvrir_document.js) : l'alerte est déjà dessous
     if (!frappe.session || frappe.session.user === "Guest" || !frappe.realtime) return;
     frappe.realtime.on("osm_a_rendre", (data) => {
       if (data && data.machine) setTimeout(() => suite(data.machine).catch(() => {}), 800);   // après l'alerte de clôture

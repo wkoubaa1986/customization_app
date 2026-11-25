@@ -637,9 +637,10 @@ LIENS_DU_POINT = (("tache", "Tache de travail", "Ouvrir la tâche"), ("commande"
 
 
 def liens_du_point(point):
-    """[{label, url}] des documents du point qu'un employé peut ouvrir. Fonction pure."""
-    return [{"label": label, "url": "/app/%s/%s" % (dt.lower().replace(" ", "-"), point[cle])}
-            for cle, dt, label in LIENS_DU_POINT if point.get(cle)]
+    """[{label, url, doctype, name}] des documents du point qu'un employé peut ouvrir (en fenêtre, par-dessus le
+    comptage). Fonction pure."""
+    return [{"label": label, "url": "/app/%s/%s" % (dt.lower().replace(" ", "-"), point[cle]), "doctype": dt,
+             "name": point[cle]} for cle, dt, label in LIENS_DU_POINT if point.get(cle)]
 
 
 def _texte_court(valeur, longueur=200):
