@@ -276,14 +276,17 @@ def inventorier(especes, note=None, coffre=0):
         principal = s.get("principal")
         if not principal:
             frappe.throw(_("Aucun collecteur principal n'est réglé dans Config Caisse."))
-        theorique, caisse, poche, nature = _m(principal["especes"]), principal["caisse"], "Collecte", INVENTAIRE
-        effet = _m(compte - theorique)
+        # Attendu = ce que dit le COMPTE « Espèces » (la référence). L'effet, lui, remet le calcul de contrôle (comptages
+        # + collectes) sur le montant compté : après l'inventaire, le contrôle dit le réel.
+        theorique, caisse, poche, nature = _m(principal["selon_compte"]), principal["caisse"], "Collecte", INVENTAIRE
+        effet = _m(compte - _m(principal["especes"]))
     ecart = _m(compte - theorique)
     doc = frappe.get_doc({
         "doctype": DOCTYPE, "cle": "inventaire:%s:%s" % (caisse, maintenant.strftime("%Y%m%d%H%M%S")), "nature": nature,
         "caisse": caisse, "poche": poche, "date_anomalie": maintenant.date(), "montant": ecart, "effet": effet,
         "compte": compte, "theorique": theorique,
-        "decision": "Compté %s DT pour %s DT attendus (écart %s%s DT)" % (_dt(compte), _dt(theorique), "+" if ecart > 0 else "", _dt(ecart)),
+        "decision": "Compté %s DT pour %s DT attendus d'après le compte (écart %s%s DT)" % (
+            _dt(compte), _dt(theorique), "+" if ecart > 0 else "", _dt(ecart)),
         "motif": _motif(note, obligatoire=abs(ecart) > 0.0005) or "Inventaire sans écart",
         "decide_par": frappe.session.user, "decide_le": maintenant})
     doc.insert(ignore_permissions=True)

@@ -289,26 +289,24 @@ class ArgentLiquide {
     const remis_par = (x) => (x.remis_par || []).map((m) => __("{0} collectés par {1}", [txt(m.montant), esc(m.nom)])).join(", ");
     const principal = pr ? (() => {
       const ch = pr.pieces["Chèque"] || { nb: 0, total: 0 }, tr = pr.pieces["Traite"] || { nb: 0, total: 0 };
-      const remis = remis_par(pr);
-      const saut = (pr.sauts || []).reduce((a, x) => a + (Number(x.saut) || 0), 0);
-      const plusieurs = (pr.sauts || []).length > 1;
-      const sauts = (pr.sauts || []).map((x) => (plusieurs ? txt(x.saut) + " : " : "") + __("sa clôture du {0} ({1}) a été faite avant celle du {2} ({3}) et repart d’un fond qui ignore cette journée",
-        [jour(x.date), esc(x.cloture), jour(x.date_precedente), esc(x.precedente || "")])).join(" ; ");
+      const remis = remis_par(pr), areg_nb = (s.a_regulariser || []).length;
       return `<div class="al-principal" id="al-principal">
         <div class="tete"><div><div class="t">🧾 ${__("Ce que {0} doit avoir entre les mains le {1}", [esc(pr.nom), jour(s.date)])}</div>
-          <div class="muet">${__("C’est le collecteur principal : tout ce qui n’est pas encore versé (à Sabah ou à la banque) doit être chez lui.")}</div></div>
+          <div class="muet">${__("C’est le collecteur principal : tout l’argent liquide qui n’est ni au coffre ni chez un autre employé doit être chez lui.")}</div></div>
           <div class="v">${dt(pr.total, false)}</div></div>
         <div class="al-principal-lignes">
-          <div class="l"><span class="e">💵 ${__("Espèces")}</span><b>${dt(pr.especes, false)}</b>
-            <div class="muet">${__("sa propre caisse {0} + collecté chez les employés, pas encore versé {1}", [txt(pr.caisse_propre), txt(pr.collecte)])}${remis ? " — " + __("dont {0}", [remis]) : ""}</div></div>
+          <div class="l"><span class="e">💵 ${__("Espèces")}</span><b>${dt(pr.selon_compte, false)}</b>
+            <div class="muet">${__("le compte « Espèces » ({0}) moins ce que tiennent les autres employés ({1})", [txt(pr.compte_especes), txt(pr.autres_caisses)])}</div></div>
           <div class="l"><span class="e">📄 ${__("Chèques")}</span><b>${dt(ch.total, false)}</b><div class="muet">${__("{0} pièce(s) pas encore déposée(s)", [ch.nb])}</div></div>
           <div class="l"><span class="e">📄 ${__("Traites")}</span><b>${dt(tr.total, false)}</b><div class="muet">${__("{0} pièce(s) pas encore déposée(s)", [tr.nb])}</div></div>
         </div>
-        ${saut ? `<div class="al-alerte">⚠️ ${__("Dans ces espèces, {0} viennent probablement d’une erreur de chaîne de sa caisse ({1}). Si c’est bien une erreur, il devrait avoir {2} en espèces.",
-          [txt(saut), sauts, txt(pr.especes - saut)])}</div>` : ""}
+        ${Math.abs(pr.ecart_controle || 0) < 0.5
+          ? `<div class="al-ok">✔ ${__("Contrôle : les comptages de caisse et les collectes donnent le même montant.")}</div>`
+          : `<div class="al-alerte" style="font-weight:400">⚠️ ${__("Contrôle : d’après les comptages de caisse et les collectes, il aurait {0}, soit {1} que le compte. Cette différence n’est pas de l’argent manquant : c’est ce qui reste dans « À régulariser » et dans le rapprochement, en bas. Seul un inventaire dit ce qu’il a vraiment.",
+              [txt(pr.especes), pr.ecart_controle > 0 ? __("{0} de plus", [txt(pr.ecart_controle)]) : __("{0} de moins", [txt(-pr.ecart_controle)])])}</div>`}
         <div class="al-inv">${pr.inventaire
-          ? `🧮 ${__("Dernier inventaire : le {0}, {1} comptés pour {2} attendus (écart {3}) par {4}.", [jour(pr.inventaire.date), txt(pr.inventaire.compte), txt(pr.inventaire.theorique), signe_txt(pr.inventaire.ecart), esc(pr.inventaire.par)])}`
-          : `🧮 ${__("Aucun inventaire encore : ces chiffres viennent des comptages et des écritures, pas d’un comptage de ce qu’il a réellement en main.")}`}
+          ? `🧮 ${__("Dernier inventaire : le {0}, {1} comptés pour {2} attendus d’après le compte (écart {3}) par {4}.", [jour(pr.inventaire.date), txt(pr.inventaire.compte), txt(pr.inventaire.theorique), signe_txt(pr.inventaire.ecart), esc(pr.inventaire.par)])}`
+          : `🧮 ${__("Aucun inventaire encore : ce chiffre vient de la comptabilité, pas d’un comptage de ce qu’il a réellement en main.")}`}
           ${s.peut_inventorier ? `<button class="btn btn-xs btn-primary al-inventaire" data-coffre="0">${__("Faire l’inventaire des espèces")}</button>` : ""}</div>
         <div class="al-inv">🔒 ${s.inventaire_coffre
           ? __("Coffre « Sabah Espèces » : compté le {0}, {1} pour {2} au compte (écart {3}).", [jour(s.inventaire_coffre.date), txt(s.inventaire_coffre.compte), txt(s.inventaire_coffre.theorique), signe_txt(s.inventaire_coffre.ecart)])
@@ -316,7 +314,7 @@ class ArgentLiquide {
           ${s.peut_inventorier ? `<button class="btn btn-xs btn-default al-inventaire" data-coffre="1">${__("Compter le coffre")}</button>` : ""}</div>
         <div class="al-liens"><button class="btn btn-xs btn-default al-aller" data-cible="al-pieces">📄 ${__("Voir les chèques et traites")}</button>
           <button class="btn btn-xs btn-default al-aller" data-cible="al-collecteurs">📥 ${__("Voir le calcul des espèces")}</button>
-          ${saut ? `<button class="btn btn-xs btn-default al-aller" data-cible="al-regulariser">🧹 ${__("Régulariser l’erreur de chaîne")}</button>` : ""}</div>
+          ${areg_nb ? `<button class="btn btn-xs btn-default al-aller" data-cible="al-regulariser">🧹 ${__("Voir ce qui reste à régulariser ({0})", [areg_nb])}</button>` : ""}</div>
       </div>`;
     })() : "";
 
@@ -598,14 +596,14 @@ class ArgentLiquide {
             frappe.msgprint({ title: __("Inventaire enregistré"), indicator: Math.abs(m.ecart || 0) < 0.0005 ? "green" : "orange",
               message: __("Compté {0} pour {1} attendus : écart {2}.", [txt(m.compte), txt(m.theorique), (m.ecart > 0 ? "+ " : m.ecart < 0 ? "− " : "") + txt(Math.abs(m.ecart || 0))])
                 + (coffre ? " " + __("Le solde du coffre est comptable : un écart se corrige par une écriture.")
-                          : " " + __("La carte repart de ce comptage ; les anomalies passées du collecteur sont absorbées.")) });
+                          : " " + __("Le contrôle repart de ce comptage et les anomalies passées du collecteur sont absorbées. L’écart avec le compte reste à passer en écart de caisse, si vous le décidez.")) });
             this.charger();
           });
       },
     });
     d.fields_dict.aide.$wrapper.html(`<p class="text-muted" style="font-size:12.5px">${coffre
       ? __("Comptez les billets du coffre. Le montant sera comparé au solde du compte « Sabah Espèces ».")
-      : __("Comptez TOUTES les espèces que le collecteur principal a en main : sa propre caisse et l’argent collecté pas encore versé. Le montant attendu s’affiche après l’enregistrement.")}</p>`);
+      : __("Comptez TOUTES les espèces que le collecteur principal a en main : sa propre caisse et l’argent collecté pas encore versé. Le montant attendu d’après le compte « Espèces » s’affiche après l’enregistrement. Aucune écriture comptable n’est passée : un écart se règle ensuite par une écriture d’écart de caisse, à votre décision.")}</p>`);
     d.show();
   }
 

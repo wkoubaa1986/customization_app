@@ -73,13 +73,16 @@ class TestRegularisationsSite(unittest.TestCase):
         self.assertFalse(restantes & set(cles))
 
     def test_l_inventaire_remet_la_carte_au_reel_et_absorbe_le_passe(self):
-        attendu = self.s["principal"]["especes"]
+        attendu = self.s["principal"]["selon_compte"]          # la référence : ce que dit le compte « Espèces »
+        self.assertEqual(attendu, round(self.s["totaux"]["comptable_especes"] - self.s["principal"]["autres_caisses"], 3))
         frappe.set_user(self.titulaire)                       # le collecteur compte lui-même
         r = R.inventorier("2500,500", "Compté avec Wassim le soir, billets et pièces.")
         self.assertEqual((r["compte"], r["theorique"], r["ecart"]), (2500.5, attendu, round(2500.5 - attendu, 3)))
         frappe.set_user("Administrator")
         s = A.situation()
-        self.assertEqual(s["principal"]["especes"], 2500.5)
+        self.assertEqual(s["principal"]["especes"], 2500.5)                   # le contrôle (comptages) dit le réel
+        self.assertEqual(s["principal"]["selon_compte"], attendu)             # le compte ne bouge pas : aucune écriture
+        self.assertEqual(s["principal"]["ecart_controle"], round(2500.5 - attendu, 3))   # l'écart de caisse à passer
         self.assertEqual(s["principal"]["inventaire"]["compte"], 2500.5)
         self.assertEqual(s["rapprochement"]["reste"], 0.0)
         # Ses anomalies passées (saut, écritures « Achat divers ») sont absorbées ; les antidatés restent à voir.

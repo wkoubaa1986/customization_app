@@ -688,7 +688,7 @@ def _flux(jour, cfg):
             "liens": [{"de": de, "vers": vers, "montant": m} for (de, vers), m in sorted(flux.items(), key=lambda x: -x[1])]}
 
 
-def _a_avoir_en_main(employes, collecteurs, portefeuille, sauts, cfg):
+def _a_avoir_en_main(employes, collecteurs, portefeuille, sauts, cfg, solde_compte=None):
     """Ce que le collecteur principal doit avoir entre les mains, à recompter d'un coup : l'argent de sa propre
     caisse, l'argent collecté pas encore versé, ses chèques et traites. Le saut de chaîne de sa caisse est rappelé."""
     titulaire = cfg.get("responsable")
@@ -704,9 +704,17 @@ def _a_avoir_en_main(employes, collecteurs, portefeuille, sauts, cfg):
         r["nb"] += 1
         r["total"] = flt(r["total"] + p["montant"], 3)
     especes = flt(caisse + flt(x["detient"]), 3)
+    # LA RÉFÉRENCE (sa remarque du 25/11/2026 : « normalement chez le collecteur, c'est ce qu'il y a en espèces ») :
+    # tout l'argent liquide hors coffre est chez un employé ou chez lui — il doit donc avoir le solde du compte
+    # « Espèces » moins ce que tiennent les autres. L'ancien calcul (comptages + collectes − versements) devient le
+    # CONTRÔLE : leur différence est ce qui reste à régulariser. Affichage seulement, aucune écriture.
+    autres = flt(sum(flt(e["total"]) for e in employes if e["caisse"] != x["caisse"]), 3)
+    selon_compte = flt(flt(solde_compte) - autres, 3) if solde_compte is not None else especes
     return {"nom": x["nom"], "caisse": x["caisse"], "caisse_propre": caisse, "collecte": flt(x["detient"], 3),
             "remis_par": x.get("remis_par") or [], "especes": especes, "pieces": par_type,
-            "total": flt(especes + sum(r["total"] for r in par_type.values()), 3),
+            "selon_compte": selon_compte, "compte_especes": flt(solde_compte, 3) if solde_compte is not None else None,
+            "autres_caisses": autres, "ecart_controle": flt(especes - selon_compte, 3),
+            "total": flt(selon_compte + sum(r["total"] for r in par_type.values()), 3),
             "sauts": [s for s in sauts if s["caisse"] == x["caisse"]]}
 
 
@@ -733,7 +741,8 @@ def situation(date=None):
     chez_collecteurs = flt(sum(max(x["detient"], 0) for x in collecteurs), 3)
     rapprochement = _rapprochement(jour, cfg, employes, collecteurs, effets)
     portefeuille = _portefeuille(jour, cfg)
-    principal = _a_avoir_en_main(employes, collecteurs, portefeuille, rapprochement["sauts"], cfg)
+    principal = _a_avoir_en_main(employes, collecteurs, portefeuille, rapprochement["sauts"], cfg,
+                                 _solde(COMPTE_ESPECES, jour))
     # LES ANOMALIES (25/11/2026 : « les erreurs identifiées, ne pas les montrer, les corriger ») : chacune a sa clé ;
     # régularisée par la direction ou absorbée par un inventaire du collecteur, elle quitte la carte pour le journal.
     anomalies = REG.construire_anomalies(
