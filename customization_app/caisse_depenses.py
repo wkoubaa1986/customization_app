@@ -208,8 +208,10 @@ def comptes_classifiables():
 
 def _classifier(image_bytes, mimetype, extraction):
     """Demande au modèle LE compte de charge de la dépense ET sa description lue
-    sur la photo (même appel : pas de latence en plus). -> (compte, description)
-    — compte None si la réponse sort de la liste, description '' si muette."""
+    sur la photo (même appel : pas de latence en plus), le type de pièce, et — pour
+    une facture — les BL qu'elle regroupe (25/11/2026, caisse_bl). -> dict :
+    {compte (None si hors liste), description, matricule, type_document, numero_bl,
+    bls_cites: [{numero, date, total_ht, total_ttc}]}."""
     from bank_retenue_sync.ai.invoice_extract import _get_client_model_temp
 
     comptes = comptes_classifiables()
@@ -228,7 +230,12 @@ def _classifier(image_bytes, mimetype, extraction):
             "de livraison porte la mention BL / Bon de livraison / Delivery "
             "note et n'a pas de numéro de facture ni de mention TVA à payer>, "
             "\"numero_bl\": <le numéro du bon de livraison s'il s'agit d'un "
-            "BL, tel qu'écrit ; null sinon>}. "
+            "BL, tel qu'écrit ; null sinon>, "
+            "\"bls_cites\": <si c'est une FACTURE : la liste des bons de livraison qu'elle regroupe ou "
+            "cite (rubriques « TOTAL BL N° … DU … », « Selon BL n° … », « Vos BL … »), chacun "
+            "{\"numero\": <tel qu'écrit>, \"date\": <AAAA-MM-JJ ou null>, \"total_ht\": <sous-total "
+            "HT du BL ou null>, \"total_ttc\": <sous-total TTC du BL ou null>} ; [] si aucun ; "
+            "JAMAIS le numéro de la facture elle-même ; montants en dinars, « 8,750 » vaut 8.75>}. "
             + _consigne_matricule()
             + " Liste des comptes autorisés : " + json.dumps(comptes, ensure_ascii=False)),
         input=[{"role": "user", "content": [
@@ -240,17 +247,26 @@ def _classifier(image_bytes, mimetype, extraction):
     texte = (res.output_text or "").strip().strip("`")
     if texte.lower().startswith("json"):
         texte = texte.split("\n", 1)[1]
+    vide = {"compte": None, "description": "", "matricule": "", "type_document": "", "numero_bl": "",
+            "bls_cites": []}
     try:
         lu = json.loads(texte)
-        compte = (lu.get("compte") or "").strip()
-        description = (lu.get("description") or "").strip()
-        matricule = (lu.get("matricule") or "").strip()
-        type_doc = (lu.get("type_document") or "").strip()
-        numero_bl = (lu.get("numero_bl") or "").strip()
     except Exception:
-        return None, "", "", "", ""
-    return ((compte if compte in comptes else None), description, matricule,
-            type_doc, numero_bl)
+        return vide
+    if not isinstance(lu, dict):
+        return vide
+    compte = (lu.get("compte") or "").strip()
+    cites = []
+    for c in lu.get("bls_cites") or []:
+        if isinstance(c, dict) and str(c.get("numero") or "").strip():
+            cites.append({"numero": str(c["numero"]).strip(), "date": c.get("date") or None,
+                          "total_ht": flt(c.get("total_ht"), 3) or None, "total_ttc": flt(c.get("total_ttc"), 3) or None})
+    return {"compte": compte if compte in comptes else None,
+            "description": (lu.get("description") or "").strip(),
+            "matricule": (lu.get("matricule") or "").strip(),
+            "type_document": (lu.get("type_document") or "").strip(),
+            "numero_bl": (lu.get("numero_bl") or "").strip(),
+            "bls_cites": cites}
 
 
 def _decrire(image_bytes, mimetype):
@@ -342,16 +358,23 @@ def analyser(photo, type_depense=None):
         # marquée BL et la facture qui le couvre sera rattachée plus tard.
         "est_bl": False,
         "numero_bl": "",
+        # BL DÉJÀ REÇUS que la facture couvre (25/11/2026, caisse_bl) : les n° qu'elle cite, et — fournisseur
+        # connu — le rapprochement avec ses BL ouverts.
+        "bls_cites": [],
+        "bls": None,
     }
     if type_depense == "Dépense avec facture":
         try:
-            (out["compte_suggere"], out["description"], out["matricule"],
-             type_doc, numero_bl) = _classifier(contenu, mimetype, d)
+            lu = _classifier(contenu, mimetype, d)
+            out["compte_suggere"], out["description"], out["matricule"] = (
+                lu["compte"], lu["description"], lu["matricule"])
             # BL aussi pour les dépenses facturées (décision utilisateur 24/08) :
             # la trace « BL n°X » suit la dépense dans description et remarques.
-            if type_doc == "bon_de_livraison":
+            if lu["type_document"] == "bon_de_livraison":
                 out["est_bl"] = True
-                out["numero_bl"] = numero_bl
+                out["numero_bl"] = lu["numero_bl"]
+            else:
+                out["bls_cites"] = lu["bls_cites"]
         except Exception:
             out["compte_suggere"] = None   # la classification est une aide, jamais un blocage
     else:
@@ -377,11 +400,29 @@ def analyser(photo, type_depense=None):
 
     # Aussi pour la dépense avec facture (10/11/2026) : une part mise en stock crée une commande
     # d'achat, donc exige la fiche fournisseur ; l'écran ne fait choisir que si un article est coché.
+    # Le matricule lu par l'extraction sert de repli quand la classification n'en rend pas (jamais le nôtre).
+    if not out["matricule"] and d.get("supplier_tax_id"):
+        mf = str(d.get("supplier_tax_id") or "").strip()
+        if cle_matricule(mf) and cle_matricule(mf) != cle_matricule(frappe.db.get_value("Company", COMPANY, "tax_id")):
+            out["matricule"] = mf
     if type_depense in ("Facture d'achat", "Dépense avec facture") and out["fournisseur"]:
         r = _rapprocher_fournisseur(out["fournisseur"], out["matricule"])
         out["fournisseur_certain"] = r["certain"]
         out["fournisseur_motif"] = r["motif"]
         out["fournisseur_candidats"] = r["candidats"]
+    if type_depense == "Dépense avec facture" and not out["est_bl"]:
+        from customization_app import caisse_bl as B
+        try:
+            # Le nom ne donne que des candidats : le BL cité, trouvé chez UN seul d'entre eux, tranche.
+            if not out["fournisseur_certain"] and out["fournisseur_candidats"] and out["bls_cites"]:
+                par_bl = B.fournisseur_par_bl(out["fournisseur_candidats"], out["bls_cites"])
+                if par_bl:
+                    out["fournisseur_certain"], out["fournisseur_motif"] = par_bl, "bl"
+            if out["fournisseur_certain"]:
+                out["bls"] = B.rapprocher_pour(out["fournisseur_certain"], out["bls_cites"])
+        except Exception:
+            frappe.log_error(title="Caisse : BL cités par une facture", message=frappe.get_traceback())
+            out["bls"] = None   # une aide, jamais un blocage de l'analyse
     return out
 
 
@@ -928,9 +969,15 @@ def creer(type_depense, montant, mode, compte=None, description=None, fournisseu
           photo_cheque=None, photo_cheque_nom=None, coins_facture=None,
           supplier=None, matricule=None, paiements=None, est_bl=0, numero_bl=None,
           retenue=None, code_sans_photo=None, montant_paye=None, timbre=0,
-          sans_retenue_confirme=0, reprise=None, articles_stock=None, caisse_payeur=None):
+          sans_retenue_confirme=0, reprise=None, articles_stock=None, caisse_payeur=None,
+          bls_couverts=None, bls_cites=None, confirme_ecarts=0):
     """Crée la dépense selon son type (voir l'en-tête du module). Retourne les noms
     des pièces créées (écriture et/ou fiche de la file des factures d'achat).
+
+    `bls_couverts` (« Dépense avec facture » seulement, 25/11/2026) : les fiches des BL DÉJÀ REÇUS que la facture
+    couvre (cochées à l'écran). Aucun rachat : chaque réception est soldée contre le compte de charge, sa fiche passe
+    « Saisie » (caisse_bl). `bls_cites` : les BL lus sur la facture (contrôle des montants) ; `confirme_ecarts` :
+    l'employé a confirmé un écart de montant entre la facture et la fiche d'un BL coché.
 
     `articles_stock` (« Dépense avec facture » seulement, décision utilisateur 10/11/2026) : les
     articles de la pièce qui partent EN STOCK, [{item_code, qty, rate}]. Leur part devient une
@@ -1082,6 +1129,25 @@ def creer(type_depense, montant, mode, compte=None, description=None, fournisseu
         if stock:
             remarques.append(S.remarque(stock, len(stock["lignes"])))
 
+    # BL DÉJÀ REÇUS que la facture couvre (25/11/2026) : contrôlés SOUS VERROU avant toute écriture ; soldés après la
+    # fiche de dépense (caisse_bl.couvrir_par_depense), dans cette même transaction.
+    from customization_app import caisse_bl as B
+    bls = []
+    if B._liste(bls_couverts):
+        if type_depense != "Dépense avec facture":
+            frappe.throw(_("Seule une « Dépense avec facture » peut couvrir des BL déjà reçus."))
+        if reprise:
+            frappe.throw(_("Une dépense qui couvre des BL ne se corrige pas ici : le comptable rouvre d'abord les BL."))
+        if cint(est_bl):
+            frappe.throw(_("Cette pièce est un BL : un BL ne couvre pas d'autres BL, seule une facture le peut."))
+        connu = (supplier if supplier and frappe.db.exists("Supplier", supplier)
+                 else _rapprocher_fournisseur(fournisseur, matricule).get("certain"))
+        bls = B.valider(bls_couverts, connu, stock["lignes"] if stock else [], stock["stock_ht"] if stock else 0,
+                        round(montant - tva, 3), confirme_ecarts=confirme_ecarts, cites=bls_cites)
+        if bls:
+            supplier = connu
+            remarques.append(B.remarque_bls(bls))
+
     je = None
     if type_depense == "Facture d'achat":
         supplier = _supplier(fournisseur, matricule=matricule, supplier=supplier)
@@ -1192,7 +1258,7 @@ def creer(type_depense, montant, mode, compte=None, description=None, fournisseu
         # rend les dépenses sur BL LISTABLES (la dépense payée cash n'a sinon
         # qu'une écriture, invisible des listes).
         if unpaid > 0 or (cint(est_bl) and type_depense == "Dépense avec facture") \
-                or reprise.get("depense") or stock:
+                or reprise.get("depense") or stock or bls:
             paye = unpaid <= 0
             valeurs_depense = {
                 "statut": "Payée" if paye else "À payer",
@@ -1239,6 +1305,11 @@ def creer(type_depense, montant, mode, compte=None, description=None, fournisseu
                 }, update_modified=False)
                 resultat.update(part)
                 resultat["part_stock"] = stock["stock_ht"]
+            if bls:
+                resultat["bls_soldes"] = B.couvrir_par_depense(bls, {
+                    "compte": compte, "numero_facture": numero_facture, "depense": fiche.name,
+                    "fournisseur": fournisseur, "photo": photo_facture, "coins": coins_facture,
+                })
 
     if je:
         _attacher_cheques(regs, je.name, dispense=dispense)
@@ -2306,6 +2377,11 @@ def _po_recu_auto(doc):
             make_purchase_receipt)
         pr = make_purchase_receipt(doc.name)
         pr.custom_fiche_caisse = nom
+        if frappe.db.get_value("Facture Achat a Saisir", nom, "depense_a_payer"):
+            # Part stock d'une dépense : comme sa commande, la réception est SANS TVA (25/11/2026 : MAT-PRE-2026-00010
+            # avait repris 1,663 de TVA du modèle de l'article).
+            from customization_app import caisse_stock_partiel as S
+            S._sans_taxes(pr)
         pr.flags.ignore_permissions = True
         pr.insert()
         pr.submit()   # les hooks PR lient la fiche + copient le justificatif
@@ -2340,7 +2416,15 @@ def creer_facture_depuis_commandes(fiches):
     fiches = json.loads(fiches) if isinstance(fiches, str) else (fiches or [])
     pos = []
     for nom in fiches:
-        po = frappe.db.get_value("Facture Achat a Saisir", nom, "purchase_order")
+        # Lecture VERROUILLANTE (25/11/2026) : une dépense qui solde ce BL au même moment se sérialise avec nous, et le
+        # BL qu'elle a couvert (« Saisie ») n'est jamais facturé une 2e fois.
+        valeurs = frappe.db.get_value("Facture Achat a Saisir", nom, ["purchase_order", "statut"], for_update=True)
+        if not valeurs:
+            frappe.throw(_("La fiche {0} n'existe pas.").format(nom))
+        po, statut = valeurs
+        if statut != "À saisir":
+            frappe.throw(_("La fiche {0} est « {1} » : sa facture est déjà saisie (dépense de caisse ou facture "
+                           "d'achat).").format(nom, statut))
         if not po:
             frappe.throw(_("La fiche {0} n'a pas encore de commande d'achat.").format(nom))
         if frappe.db.get_value("Purchase Order", po, "docstatus") != 1:
@@ -2424,7 +2508,7 @@ def rattacher_bls(purchase_invoice, fiches):
     for nom in fiches:
         f = frappe.db.get_value(
             "Facture Achat a Saisir", nom,
-            ["supplier", "statut", "purchase_invoice", "est_bl"], as_dict=True)
+            ["supplier", "statut", "purchase_invoice", "est_bl"], as_dict=True, for_update=True)
         if not f or not f.est_bl or f.statut != "À saisir" or f.purchase_invoice:
             continue
         if f.supplier != doc.supplier:
@@ -2930,7 +3014,7 @@ def lire_saisie(cheque_no, remarque, lignes) -> dict:
 
 
 def motif_non_corrigeable(infos, fiche=None, depense=None, ordre_traite=False,
-                          certificat_statut=None, docstatus=1, origine=True) -> str:
+                          certificat_statut=None, docstatus=1, origine=True, bls_soldes=0) -> str:
     """Pourquoi cette écriture ne se corrige pas ici — "" si elle le peut. Fonction pure.
 
     On refuse dès qu'une pièce AVAL dépend de l'écriture : facture d'achat saisie par le
@@ -2953,6 +3037,12 @@ def motif_non_corrigeable(infos, fiche=None, depense=None, ordre_traite=False,
             and depense.get("reglement_journal_entry") != infos.get("name"):
         return _("Cette dépense a été réglée depuis par {0} : corrigez le règlement.") \
             .format(depense["reglement_journal_entry"])
+    if depense and depense.get("purchase_order"):
+        return _("Cette dépense a une part mise en stock (commande {0}) : elle ne se corrige pas ici — annulez la "
+                 "commande et ressaisissez.").format(depense["purchase_order"])
+    if bls_soldes:
+        return _("Cette dépense couvre {0} BL déjà reçu(s), soldé(s) : le comptable les rouvre d'abord "
+                 "(« Rouvrir les BL » sur la dépense), puis vous corrigez.").format(bls_soldes)
     if ordre_traite:
         return _("Cette dépense a été réglée par traite : annulez d'abord son ordre de paiement.")
     if certificat_statut == "Émis":
@@ -2974,8 +3064,10 @@ def _ecriture_de_caisse(journal_entry):
                                  "statut", "date_facture"], as_dict=True)
     depense = frappe.db.get_value("Depense A Payer",
                                   {"journal_entry": je.name},
-                                  ["name", "statut", "reglement_journal_entry", "date_facture"],
+                                  ["name", "statut", "reglement_journal_entry", "date_facture", "purchase_order"],
                                   as_dict=True)
+    bls_soldes = frappe.db.count("Facture Achat a Saisir", {"depense_a_payer": depense["name"], "est_bl": 1,
+                                                            "statut": "Saisie"}) if depense else 0
     ordre = bool(frappe.db.exists("BRS Ordre de Paiement",
                                   {"source_regle": SOURCE_ORDRE_TRAITE,
                                    "periode": ["like", "%s|%%" % je.name]})) \
@@ -2987,7 +3079,7 @@ def _ecriture_de_caisse(journal_entry):
         certificat = frappe.db.get_value(E.DOCTYPE, je.name, "statut")
     except Exception:
         pass
-    motif = motif_non_corrigeable(infos, fiche, depense, ordre, certificat, je.docstatus, origine)
+    motif = motif_non_corrigeable(infos, fiche, depense, ordre, certificat, je.docstatus, origine, bls_soldes)
     return je, infos, fiche, depense, motif
 
 

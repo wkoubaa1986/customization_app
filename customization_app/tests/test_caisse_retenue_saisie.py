@@ -95,7 +95,11 @@ class TestDialogue(unittest.TestCase):
 
     def test_le_garde_fou_demande_confirmation(self):
         self.assertIn("frappe.confirm(", self.js)
-        self.assertIn("envoyer(1)", self.js)
+        # La confirmation « sans retenue » envoie avec confirme = 1 — via `lancer`, qui intercale la confirmation des
+        # écarts de BL couverts (25/11/2026) avant d'appeler `envoyer(confirme, ecarts)`.
+        self.assertIn("() => lancer(1)", self.js)
+        self.assertIn("envoyer(confirme, 1)", self.js)
+        self.assertIn("envoyer(confirme, 0)", self.js)
         self.assertRegex(self.js, re.compile(r"etat\.assujettie\s*&&\s*flt\(v\.retenue \|\| 0\) <= 0"))
 
     def test_le_mode_et_le_fractionne_recalculent(self):

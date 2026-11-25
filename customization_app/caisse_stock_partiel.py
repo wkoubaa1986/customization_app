@@ -34,7 +34,12 @@ import frappe
 from frappe import _
 from frappe.utils import cint, flt, nowdate
 
+from customization_app.caisse_bl import cle_numero_bl
+
 PRECISION = 3
+#: L'écriture « le compte de charge finance la commande » de la part stock d'un BL : aucune ligne de caisse, donc pas
+#: « Dépense caisse — » (que lisent le rapport de caisse, l'argent liquide et l'anti-doublon).
+PREFIXE_FINANCEMENT = "Part stock — "
 
 
 # ----------------------------------------------------------------------------- pur
@@ -49,7 +54,8 @@ def lignes_valides(articles) -> list:
         if not code or qty <= 0 or rate < 0:
             continue
         out.append({"item_code": code, "qty": qty, "rate": round(rate, PRECISION),
-                    "designation": (a.get("designation") or "").strip()})
+                    "designation": (a.get("designation") or "").strip(),
+                    "bl_cle": (a.get("bl_cle") or a.get("bl") or "").strip()})
     return out
 
 
@@ -164,34 +170,99 @@ def creer_part_stock(stock: dict, ctx: dict) -> dict:
                        "vérifiez le modèle de taxe du fournisseur {2}.").format(po.grand_total, po.net_total, supplier))
     po.submit()   # hooks : lien fiche + reçu automatique (l'avance n'est pas convertie : cf. avance_en_journal)
 
-    # Le compte de charge finance la commande.
-    remarques = list(ctx["remarques"]) + [
-        _("Part stock de la dépense {0} : le compte de charge finance la commande {1} ({2} HT)")
-        .format(ctx.get("depense") or "", po.name, stock["stock_ht"])]
     if est_bl:
-        # BL : avance ERPNext sur la commande, imputée à la facture mensuelle.
+        # BL : avance ERPNext sur la commande (le compte de charge la finance), imputée à la facture mensuelle.
+        remarques = list(ctx["remarques"]) + [
+            _("Part stock de la dépense {0} : le compte de charge finance la commande {1} ({2} HT)")
+            .format(ctx.get("depense") or "", po.name, stock["stock_ht"])]
         debit = {"account": C.COMPTE_CREDITEURS, "party_type": "Supplier", "party": supplier,
                  "debit_in_account_currency": stock["stock_ht"], "is_advance": "Yes",
                  "reference_type": "Purchase Order", "reference_name": po.name, "cost_center": C.CC}
+        # Préfixe à part (relecture du 25/11/2026) : « Dépense caisse — » faisait lire au rapport de caisse une
+        # dépense « Carte de crédit » de la part stock, alors que cette écriture ne touche aucune caisse.
+        je = C._ecriture([debit, {"account": ctx["compte"], "credit_in_account_currency": stock["stock_ht"],
+                                  "cost_center": C.CC}], description, remarques, prefixe=PREFIXE_FINANCEMENT)
+        frappe.db.set_value("Facture Achat a Saisir", fiche.name, "journal_entry", je.name, update_modified=False)
+        if ctx.get("photo"):
+            C._attacher_scan(ctx["photo"], "facture-%s" % fiche.name, "Journal Entry", je.name, coins=ctx.get("coins"))
+        je_nom = je.name
     else:
-        # Facture : la dépense est la facture ; on solde le compte crédité par le reçu.
-        debit = {"account": compte_stock_recu_non_facture(), "debit_in_account_currency": stock["stock_ht"],
-                 "cost_center": C.CC}
-        remarques.append(_("Pièce déjà facturée : commande fermée, stock reçu soldé contre la charge"))
-    je = C._ecriture([debit, {"account": ctx["compte"], "credit_in_account_currency": stock["stock_ht"],
-                              "cost_center": C.CC}], description, remarques)
-    frappe.db.set_value("Facture Achat a Saisir", fiche.name, "journal_entry", je.name, update_modified=False)
-    if not est_bl:
-        po.reload()
-        po.flags.ignore_permissions = True
-        po.update_status("Closed")
-        frappe.db.set_value("Facture Achat a Saisir", fiche.name, "statut", "Saisie", update_modified=False)
-    if ctx.get("photo"):
-        C._attacher_scan(ctx["photo"], "facture-%s" % fiche.name, "Journal Entry", je.name, coins=ctx.get("coins"))
+        # Facture : la dépense EST la facture. La réception automatique a crédité « Stock reçus mais non facturés » ;
+        # on la solde contre la charge, et commande ET réception sont fermées (25/11/2026 : la réception restait
+        # « à facturer » pour toujours) — le même geste que pour un BL déjà reçu (caisse_bl).
+        je_nom = solder_reception(fiche.name, dict(ctx, part_stock=stock["stock_ht"]))["journal_entry"]
 
     recu = frappe.db.get_value("Facture Achat a Saisir", fiche.name, "purchase_receipt")
-    return {"fiche_achat": fiche.name, "journal_entry": je.name, "purchase_order": po.name,
+    return {"fiche_achat": fiche.name, "journal_entry": je_nom, "purchase_order": po.name,
             "purchase_receipt": recu}
+
+
+def solder_reception(fiche_nom: str, ctx: dict) -> dict:
+    """Solde la réception d'une fiche d'achat contre le compte de charge d'une dépense payée comme facture : Dr « Stock
+    reçus mais non facturés » / Cr charge, à la VALEUR DU REÇU (ce qu'il a crédité) ; ferme commande et réception ;
+    la fiche passe « Saisie », rattachée à la dépense. Écriture « Réception soldée — » : hors du rapport de caisse
+    (aucune ligne de caisse) et hors du dossier comptable (la dépense est la facture, entière).
+
+    Utilisé par la part stock d'une facture (`creer_part_stock`) et par les BL déjà reçus qu'une facture couvre
+    (`caisse_bl.couvrir_par_depense`). Dans la transaction de `caisse_depenses.creer` : tout ou rien.
+    `ctx` : {compte, numero_facture, depense, fournisseur, numero_bl?, photo?, coins?}.
+    -> {fiche, recu (valeur soldée), journal_entry, recu_doc, commande}"""
+    from customization_app import caisse_bl as B, caisse_depenses as C
+
+    fiche = frappe.get_doc("Facture Achat a Saisir", fiche_nom)
+    # Lectures VERROUILLANTES : sous REPEATABLE READ, une lecture simple verrait l'état d'avant une saisie concurrente.
+    verrou = frappe.db.get_value("Facture Achat a Saisir", fiche_nom, ["statut", "purchase_receipt", "purchase_order"],
+                                 as_dict=True, for_update=True)
+    if verrou.statut != "À saisir":
+        frappe.throw(_("La fiche {0} est déjà « {1} » : sa réception ne se solde pas une 2e fois.")
+                     .format(fiche_nom, verrou.statut))
+    recu = verrou.purchase_receipt
+    etat = frappe.db.get_value("Purchase Receipt", recu, ["docstatus", "status", "per_billed"], as_dict=True,
+                               for_update=True) if recu else None
+    if not etat or cint(etat.docstatus) != 1:
+        frappe.throw(_("La réception d'achat de la fiche {0} n'existe pas ou n'est pas validée : rien n'est "
+                       "enregistré (créez-la depuis la commande {1}, puis recommencez).")
+                     .format(fiche_nom, verrou.purchase_order or "?"))
+    if etat.status == "Closed" or flt(etat.per_billed) > 0:
+        frappe.throw(_("La réception {0} est déjà fermée ou facturée : elle ne se solde pas une 2e fois.").format(recu))
+    valeur = B.valeur_recu(recu)
+    if valeur <= 0:
+        frappe.throw(_("La réception {0} n'a rien à solder.").format(recu))
+    numero_facture = (ctx.get("numero_facture") or "").strip()
+    description = B.libelle_solde(ctx.get("numero_bl") or (fiche.numero_bl if cint(fiche.est_bl) else ""),
+                                  ctx.get("fournisseur") or fiche.fournisseur or fiche.supplier, numero_facture)
+    remarques = [description,
+                 _("Solde de la réception {0} (commande {1}, fiche {2}) : {3} HT").format(
+                     recu, verrou.purchase_order or "—", fiche.name, valeur),
+                 _("Couverte par la dépense {0}{1}").format(
+                     ctx.get("depense") or "?", _(" — facture n° {0}").format(numero_facture) if numero_facture else "")]
+    if ctx.get("part_stock") is not None:
+        remarques.append(_("Part stock de la dépense : commande sans TVA ; la dépense porte tout le HT et toute la TVA"))
+    remarques.append(_("Saisie caisse par {0}").format(frappe.session.user))
+    je = C._ecriture(B.lignes_solde(valeur, ctx["compte"], compte_stock_recu_non_facture(), C.CC),
+                     description, remarques, prefixe=B.PREFIXE_SOLDE)
+    if verrou.purchase_order:
+        etat_po = frappe.db.get_value("Purchase Order", verrou.purchase_order, ["docstatus", "status"], as_dict=True,
+                                      for_update=True)
+        if etat_po and cint(etat_po.docstatus) == 1 and etat_po.status != "Closed":
+            po = frappe.get_doc("Purchase Order", verrou.purchase_order)
+            po.flags.ignore_permissions = True
+            po.update_status("Closed")
+    pr = frappe.get_doc("Purchase Receipt", recu)
+    pr.flags.ignore_permissions = True
+    pr.update_status("Closed")
+    valeurs = {"statut": "Saisie", "journal_entry": je.name, "depense_a_payer": ctx.get("depense") or fiche.depense_a_payer}
+    if numero_facture:
+        valeurs["numero_facture"] = numero_facture
+    frappe.db.set_value("Facture Achat a Saisir", fiche.name, valeurs, update_modified=False)
+    if ctx.get("photo"):
+        C._attacher_scan(ctx["photo"], "facture-%s" % fiche.name, "Journal Entry", je.name, coins=ctx.get("coins"))
+    for doctype, nom in (("Purchase Order", verrou.purchase_order), ("Purchase Receipt", recu)):
+        if nom:
+            frappe.get_doc(doctype, nom).add_comment("Comment", _("🧾 Soldé par la caisse ({0}) : facture {1}, dépense {2}.")
+                                                     .format(je.name, numero_facture or "?", ctx.get("depense") or "?"))
+    return {"fiche": fiche.name, "recu": valeur, "journal_entry": je.name, "recu_doc": recu,
+            "commande": verrou.purchase_order}
 
 
 def _sans_taxes(doc) -> None:
@@ -240,7 +311,8 @@ def prix_nets(lignes, remise_globale=0.0, total_ht_net=0.0) -> dict:
         else:
             net = par_remise or par_montant
         brut = brut or net
-        nettes.append({"designation": (l.get("designation") or "").strip(), "qty": qty, "net": net, "brut": brut})
+        nettes.append({"designation": (l.get("designation") or "").strip(), "qty": qty, "net": net, "brut": brut,
+                       "bl": str(l.get("bl") or "").strip()})
     somme = sum(x["qty"] * x["net"] for x in nettes)
     remise_globale, total_ht_net = max(flt(remise_globale), 0.0), max(flt(total_ht_net), 0.0)
     facteur = 1.0
@@ -255,7 +327,10 @@ def prix_nets(lignes, remise_globale=0.0, total_ht_net=0.0) -> dict:
         remise = round((1 - rate / x["brut"]) * 100, 2) if x["brut"] and rate < x["brut"] - 0.0005 else 0.0
         out.append({"designation": x["designation"], "qty": x["qty"], "rate": rate,
                     "rate_brut": round(x["brut"], PRECISION), "remise_pct": remise,
-                    "montant_ht": round(x["qty"] * rate, PRECISION)})
+                    "montant_ht": round(x["qty"] * rate, PRECISION),
+                    # La rubrique « TOTAL BL N° … » de la facture sous laquelle la ligne est imprimée (25/11/2026) :
+                    # une ligne d'un BL déjà reçu ne se remet pas en stock (caisse_bl.ligne_deja_recue).
+                    "bl": x["bl"], "bl_cle": cle_numero_bl(x["bl"])})
     return {"lignes": out, "remise_globale": round(somme * (1 - facteur), PRECISION) if facteur < 1 else 0.0,
             "facteur": round(facteur, 6), "somme_lignes": round(somme, PRECISION),
             "total_ht_net": round(total_ht_net, PRECISION)}
@@ -281,7 +356,9 @@ def lire_articles(photo):
             "Réponds STRICTEMENT en JSON : {\"lignes\": [{\"designation\": <libellé de la ligne>, "
             "\"quantite\": <nombre>, \"prix_unitaire_ht\": <prix unitaire HT AVANT remise>, "
             "\"remise_pct\": <remise de la ligne en %, 0 si aucune>, "
-            "\"montant_ht\": <montant HT de la ligne APRÈS sa remise>}], "
+            "\"montant_ht\": <montant HT de la ligne APRÈS sa remise>, "
+            "\"bl\": <le n° du bon de livraison sous lequel la ligne est imprimée (rubrique « TOTAL BL N° … »), "
+            "tel qu'écrit ; null si la facture ne regroupe pas de BL>}], "
             "\"remise_globale_ht\": <remise appliquée sur le total HT, en dinars, 0 si aucune>, "
             "\"total_ht_net\": <total HT après toutes les remises, avant TVA et timbre>}. "
             "Les colonnes « Remise », « Rem. », « R% », « Taux remise » donnent la remise de la ligne ; une ligne "

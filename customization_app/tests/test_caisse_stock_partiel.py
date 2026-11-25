@@ -13,7 +13,7 @@ class TestVentilation(unittest.TestCase):
 
     def test_lignes_valides(self):
         lignes = S.lignes_valides('[{"item_code": " A ", "qty": 2, "rate": "10.5", "designation": "x"}, {"item_code": "", "qty": 1, "rate": 1}, {"item_code": "B", "qty": 0, "rate": 1}]')
-        self.assertEqual(lignes, [{"item_code": "A", "qty": 2.0, "rate": 10.5, "designation": "x"}])
+        self.assertEqual(lignes, [{"item_code": "A", "qty": 2.0, "rate": 10.5, "designation": "x", "bl_cle": ""}])
         self.assertEqual(S.lignes_valides(None), [])
 
     def test_ventiler_la_depense_reste_entiere_le_stock_est_ht(self):
@@ -46,7 +46,11 @@ class TestCablage(unittest.TestCase):
         self.assertIn("S.preparer(articles_stock, montant, tva)", src)
         self.assertIn("S.creer_part_stock(stock", src)
         self.assertIn('"purchase_order": part["purchase_order"]', src)
-        self.assertIn("or stock:", src)
+        self.assertIn("or stock or bls:", src)
+        # BL déjà reçus que la facture couvre (25/11/2026) : contrôlés sous verrou, puis soldés
+        self.assertIn("bls_couverts=None", src)
+        self.assertIn("B.valider(", src)
+        self.assertIn("B.couvrir_par_depense(", src)
         # la dépense reste entière : ni montant, ni TVA, ni paiement ne sont réduits par la part stock
         self.assertNotIn("regs_depense", src)
         self.assertNotIn("stock_ttc", src)
@@ -60,11 +64,20 @@ class TestCablage(unittest.TestCase):
         self.assertNotIn("Purchase Invoice", src)
         self.assertIn('"is_advance": "Yes"', src)
         self.assertIn('"reference_type": "Purchase Order"', src)
-        # pièce déjà facturée : commande fermée, fiche « Saisie », stock reçu soldé contre la charge
-        self.assertIn('po.update_status("Closed")', src)
-        self.assertIn('"statut", "Saisie"', src)
-        self.assertIn('{"account": compte_stock_recu_non_facture()', src)
+        # BL : l'avance est financée par le compte de charge, hors du rapport de caisse (aucune ligne de caisse)
         self.assertIn('{"account": ctx["compte"], "credit_in_account_currency": stock["stock_ht"]', src)
+        self.assertIn("prefixe=PREFIXE_FINANCEMENT", src)
+        from customization_app import caisse_depenses as C
+        self.assertFalse(S.PREFIXE_FINANCEMENT.startswith(("Dépense caisse", C.PREFIXE_A_PAYER)))
+        # pièce déjà facturée : le geste commun « solder la réception » (25/11/2026)
+        self.assertIn("solder_reception(fiche.name", src)
+        solde = inspect.getsource(S.solder_reception)
+        self.assertIn('po.update_status("Closed")', solde)
+        self.assertIn('pr.update_status("Closed")', solde)                  # la réception aussi, désormais
+        self.assertIn('"statut": "Saisie"', solde)
+        self.assertIn("B.lignes_solde(valeur, ctx[\"compte\"], compte_stock_recu_non_facture()", solde)
+        self.assertIn("prefixe=B.PREFIXE_SOLDE", solde)                      # hors du rapport de caisse
+        self.assertIn("B.valeur_recu(recu)", solde)                          # soldée à la valeur du reçu
         from customization_app import caisse_depenses as C
         self.assertIn("S.avance_en_journal(nom)", inspect.getsource(C.po_convertir_avances))
         self.assertIn("S.avance_en_journal(nom)", inspect.getsource(C.pi_marquer_fiche_saisie))
@@ -78,8 +91,12 @@ class TestCablage(unittest.TestCase):
 
     def test_dialogue(self):
         js = self._lire("customize_erpnext", "page", "caisse_journaliere", "caisse_journaliere.js")
-        for m in ("zone_articles", 'caisse_stock_partiel") + ".lire_articles"', "articles_stock:"):
+        for m in ("zone_articles", 'caisse_stock_partiel") + ".lire_articles"', "articles_stock:",
+                  "zone_bls", "bls_couverts:", "caisse_bl.bls_ouverts", "rcj_ligne_deja_recue"):
             self.assertIn(m, js, m)
+        from customization_app import caisse_depenses as C
+        self.assertIn("bls_cites", inspect.getsource(C._classifier))
+        self.assertIn('\\"bl\\"', inspect.getsource(S.lire_articles))
 
 
 class TestRemises(unittest.TestCase):
