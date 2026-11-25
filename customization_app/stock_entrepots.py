@@ -391,6 +391,43 @@ def _sens(sens) -> str:
     return ENTREES if sens == ENTREES else SORTIES
 
 
+# ── Recherche dans les entrées / sorties (25/11/2026) ────────────────────────
+# Sa demande : « améliorer la recherche dans les filtres » — après une réception, retrouver l'entrée par son
+# fournisseur ou sa commande, pas seulement par l'article. On cherche donc ce que la page MONTRE d'un mouvement :
+# l'article, la pièce (réception, BL, facture, transfert…), le fournisseur et sa facture, la commande d'achat, le
+# client et sa commande, les entrepôts d'un transfert. Chaque mot doit être trouvé dans l'un d'eux.
+#: (type de pièce, table de la pièce, ses champs, table de ses lignes, leurs champs)
+RECHERCHE_PIECES = (
+    ("Purchase Receipt", "Purchase Receipt", ("supplier", "supplier_name"), "Purchase Receipt Item", ("purchase_order",)),
+    ("Purchase Invoice", "Purchase Invoice", ("supplier", "supplier_name", "bill_no"),
+     "Purchase Invoice Item", ("purchase_order",)),
+    ("Delivery Note", "Delivery Note", ("customer", "customer_name", "custom_commande"),
+     "Delivery Note Item", ("against_sales_order",)),
+    ("Sales Invoice", "Sales Invoice", ("customer", "customer_name"), "Sales Invoice Item", ("sales_order",)),
+    ("Stock Entry", "Stock Entry", ("remarks",), "Stock Entry Detail", ("s_warehouse", "t_warehouse")),
+)
+
+
+def _existe(table: str, cle: str, champs, param: str) -> str:
+    """« la pièce (ou sa ligne) a un de ces champs qui contient le mot » — sous-requête par clé primaire."""
+    ou = " or ".join("x.`%s` like %s" % (c, param) for c in champs)
+    return "exists (select 1 from `tab%s` x where x.name = sle.%s and (%s))" % (table, cle, ou)
+
+
+def _filtre_mouvements(texte: str | None, valeurs: dict) -> str:
+    """La recherche des entrées / sorties : chaque mot dans l'article, la pièce ou ce qui l'explique (cf. plus haut)."""
+    conds = []
+    for n, mot in enumerate((texte or "").split()):
+        valeurs[f"m{n}"] = f"%{mot}%"
+        p = "%%(m%d)s" % n
+        ou = ["i.name like %s" % p, "i.item_name like %s" % p, "sle.voucher_no like %s" % p]
+        for type_piece, table, champs, table_lignes, champs_lignes in RECHERCHE_PIECES:
+            ou.append("(sle.voucher_type = '%s' and (%s or %s))" % (
+                type_piece, _existe(table, "voucher_no", champs, p), _existe(table_lignes, "voucher_detail_no", champs_lignes, p)))
+        conds.append("(" + " or ".join(ou) + ")")
+    return " and ".join(conds)
+
+
 def _conditions_mouvements(sens, entrepot, debut, fin, valeurs: dict) -> list[str]:
     valeurs.update({"debut": debut, "fin": fin, "societe": _societe()})
     conds = ["sle.is_cancelled = 0", "sle.actual_qty > 0" if _sens(sens) == ENTREES else "sle.actual_qty < 0",
@@ -411,7 +448,7 @@ def get_mouvements(sens=SORTIES, entrepot=None, debut=None, fin=None, recherche=
     debut, fin = _periode(debut, fin)
     valeurs = {}
     conds = _conditions_mouvements(sens, entrepot, debut, fin, valeurs)
-    mots = _filtre_mots(recherche, valeurs)
+    mots = _filtre_mouvements(recherche, valeurs)
     if mots:
         conds.append(mots)
     rows = frappe.db.sql(f"""select sle.item_code, i.item_name, i.image, i.stock_uom as uom,
@@ -425,22 +462,26 @@ def get_mouvements(sens=SORTIES, entrepot=None, debut=None, fin=None, recherche=
     for r in rows:
         r.qte = flt(r.qte, 6)
         r.derniere = str(r.derniere)
-    return {"articles": rows, "debut": debut, "fin": fin, "sens": sens,
+    return {"articles": rows, "debut": debut, "fin": fin, "sens": sens, "recherche": (recherche or "").strip() or None,
             "mouvements": sum(cint(r.mouvements) for r in rows)}
 
 
 @frappe.whitelist()
-def get_mouvements_article(item_code, sens=SORTIES, entrepot=None, debut=None, fin=None):
+def get_mouvements_article(item_code, sens=SORTIES, entrepot=None, debut=None, fin=None, recherche=None):
     """Chaque entrée (ou sortie) de l'article sur la période : pièce, origine (ou destination), commande,
-    client, tâches de la commande."""
+    client, tâches de la commande. `recherche` : celle de la liste, pour n'ouvrir que les mouvements trouvés."""
     _lecture()
     entrepot = _entrepot_impose() or entrepot
     debut, fin = _periode(debut, fin)
     valeurs = {"item": item_code, "limite": LIMITE_DETAIL}
     conds = _conditions_mouvements(sens, entrepot, debut, fin, valeurs) + ["sle.item_code = %(item)s"]
+    mots = _filtre_mouvements(recherche, valeurs)
+    if mots:
+        conds.append(mots)
     rows = frappe.db.sql(f"""select sle.posting_date, sle.posting_time, sle.warehouse, sle.voucher_type, sle.voucher_no,
                                     sle.voucher_detail_no, abs(sle.actual_qty) as qte
                              from `tabStock Ledger Entry` sle
+                             join tabItem i on i.name = sle.item_code
                              where {" and ".join(conds)}
                              order by sle.posting_date desc, sle.posting_time desc, sle.creation desc
                              limit %(limite)s""", valeurs, as_dict=True)

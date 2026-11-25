@@ -187,7 +187,8 @@ class StockEntrepots {
       <div class="et"><div class="t">↕️ Entrées / Sorties — ce qui est arrivé, ce qui est parti</div><ul>
         <li>Par période (7 j, 30 j, mois, dates), deux sous-onglets : 📥 Entrées et 📤 Sorties.</li>
         <li>📤 Chaque sortie dit sa pièce (BL, facture, transfert), la commande et les tâches de cette commande.</li>
-        <li>📥 Chaque entrée dit son origine : transfert depuis quel stock (demandé et validé par qui), achat (fournisseur, n° de facture), BL retour d’un client (commande et tâches), rapprochement d’une vérification.</li></ul></div>
+        <li>📥 Chaque entrée dit son origine : transfert depuis quel stock (demandé et validé par qui), achat (fournisseur, n° de facture), BL retour d’un client (commande et tâches), rapprochement d’une vérification.</li>
+        <li>🔎 La recherche trouve l’article, mais aussi le fournisseur, le client, le n° de commande (achat ou client), de réception, de BL, de facture ou de transfert, et le stock d’origine d’un transfert. Plusieurs mots se combinent : « MH2C réduction ».</li></ul></div>
       ${resp ? `<div class="et"><div class="t">🔁 Transfert — d’un stock à un autre</div><ul>
         <li>Choisissez De / Vers (⇄ inverse). Cherchez un article, indiquez la quantité, touchez ＋ : il entre dans le panier. Corrigez les quantités, puis « Valider le transfert ».</li>
         <li>« 🎯 Compléter selon le stock cible » remplit le panier avec ce qui manque au véhicule (sa cible, sinon le modèle générique des réglages).</li>
@@ -722,7 +723,7 @@ class StockEntrepots {
     if (!this.details[item]) {
       const [debut, fin, sens] = [this.sorties.debut, this.sorties.fin, this.sorties.sens];
       const res = (await frappe.call({ method: SE_API + "get_mouvements_article",
-        args: { item_code: item, sens, entrepot: this.entrepot || null, debut, fin } })).message;
+        args: { item_code: item, sens, entrepot: this.entrepot || null, debut, fin, recherche: this.sorties.recherche || null } })).message;
       this.details[item] = res;
     }
     const d = this.details[item];

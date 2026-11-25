@@ -497,3 +497,29 @@ class TestDoubleValidation(unittest.TestCase):
         self.assertIn(name, [t["name"] for t in _transferts_a_valider(self.akram)])
         S.valider_transfert(name, [{"item_code": self.items[1], "qte": 1}])     # renvoyé au Magasin
         self.assertNotIn(name, [t["name"] for t in _transferts_a_valider(self.akram)])
+
+
+class TestRechercheMouvements(unittest.TestCase):
+    """La recherche des entrées / sorties (25/11/2026) : l'article, la pièce et ce qui l'explique."""
+
+    def test_chaque_mot_cherche_partout(self):
+        valeurs = {}
+        sql = S._filtre_mouvements("MH2C  réduction", valeurs)
+        self.assertEqual(valeurs, {"m0": "%MH2C%", "m1": "%réduction%"})
+        self.assertEqual(sql.count(") and ("), 1)                      # deux mots : tous les deux
+        for attendu in ("i.item_name like %(m0)s", "sle.voucher_no like %(m1)s", "`tabPurchase Receipt` x",
+                        "x.`supplier_name` like %(m0)s", "`tabPurchase Receipt Item` x", "x.`purchase_order` like %(m0)s",
+                        "x.`against_sales_order` like %(m1)s", "x.`bill_no` like %(m0)s", "x.`t_warehouse` like %(m1)s"):
+            self.assertIn(attendu, sql)
+        self.assertEqual(S._filtre_mouvements("", {}), "")
+        self.assertEqual(S._filtre_mouvements(None, {}), "")
+
+    def test_requetes_valides_sur_le_site(self):
+        # Lecture seule : la requête complète passe (champs et tables existent), avec et sans entrepôt.
+        import frappe
+        frappe.set_user("Administrator")
+        for entrepot in (None, frappe.db.get_value("Warehouse", {"is_group": 0}, "name")):
+            r = S.get_mouvements("entrees", entrepot, "2026-01-01", "2026-12-31", "zz-introuvable-zz")
+            self.assertEqual((r["articles"], r["recherche"]), ([], "zz-introuvable-zz"))
+        item = frappe.db.get_value("Item", {"is_stock_item": 1}, "name")
+        self.assertEqual(S.get_mouvements_article(item, "sorties", None, "2026-01-01", "2026-12-31", "zz-introuvable-zz")["lignes"], [])
