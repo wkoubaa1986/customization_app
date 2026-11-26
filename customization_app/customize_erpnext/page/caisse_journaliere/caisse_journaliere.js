@@ -2362,6 +2362,24 @@ function rcj_achat_bls_en_double(etat) {
   return out;
 }
 
+// Le contrôle du total en facture d'achat, AVANT d'enregistrer (demande du 26/11/2026 : « le total de la facture par
+// rapport à ce qui est écrit est vérifié ? »). Miroir de caisse_facture_bl.partage_hors_ht / ecart_admis : réceptions
+// (BL déjà reçus + lignes à recevoir) + TVA + timbre face au TTC lu ; quelques millimes = arrondi ; au-delà de
+// max(1 DT, 1 % du TTC) le serveur refuse. -> {recalcule, ttc, timbre, arrondi, ecart, refuse}
+function rcj_achat_controle_total(d, etat) {
+  const ttc = flt(d.get_value("montant")), tva = flt(d.get_value("tva"));
+  const ht = rcj_articles_coches(etat).reduce((t, a) => t + a.qty * a.rate, 0)
+    + rcj_bls_coches_infos(etat).filter((b) => b.recu).reduce((t, b) => t + b.valeur, 0);
+  const reste = Math.round((ttc - tva - ht) * 1000) / 1000;
+  const tol = 0.02 + 0.005 * (etat.articles || []).length;
+  const lu = Math.max(0, flt(etat.timbre));
+  const timbre = lu > 0 && reste >= lu - tol ? lu : 0;
+  const apres = Math.round((reste - timbre) * 1000) / 1000;
+  const juste = Math.abs(apres) <= tol;
+  return { recalcule: Math.round((ht + tva + timbre) * 1000) / 1000, ttc, timbre, arrondi: juste ? apres : 0,
+           ecart: juste ? 0 : apres, refuse: !juste && Math.abs(apres) > Math.max(1, 0.01 * Math.abs(ttc)) };
+}
+
 // « Sans les BL » : la facture d'achat part comme avant le 26/11/2026 (fiche pour le comptable, qui rattachera les BL).
 function rcj_achat_sans_bl(d, etat, sinon) {
   etat.achat_sans_bl = true; etat.achat_avec_lignes = false; etat.bls_coches = [];
@@ -2616,6 +2634,15 @@ function rcj_rendre_articles(d, etat, $z) {
       if (manque) {
         m.push(`<span class="text-danger">⚠ ${__("{0} ligne(s) sans article : choisissez l'article de chaque ligne. Si une ligne n'est pas de la marchandise, saisissez la pièce en « Dépense avec facture ».", [manque])}</span>`);
       }
+      if (!doubles.length && !manque) {
+        const c = rcj_achat_controle_total(d, etat);
+        m.push(c.refuse
+          ? `<span class="text-danger">⛔ ${__("Total NON vérifié : {0} recalculé (réceptions + TVA + timbre) pour {1} écrit sur la facture — écart {2}. Vérifiez les quantités, les prix et les BL cochés.", [rcj_dt(c.recalcule), rcj_dt(c.ttc), rcj_dt(c.ecart)])}</span>`
+          : c.ecart
+            ? `<span style="color:#b35900">⚠ ${__("Total à vérifier : {0} recalculé pour {1} écrit sur la facture — écart {2}, signalé au comptable.", [rcj_dt(c.recalcule), rcj_dt(c.ttc), rcj_dt(c.ecart)])}</span>`
+            : `<span style="color:#1a7f37">✔ ${__("Total vérifié : {0} recalculé (réceptions + TVA + timbre) pour {1} écrit sur la facture", [rcj_dt(c.recalcule), rcj_dt(c.ttc)])}${
+              Math.abs(c.arrondi) >= 0.0005 ? " — " + __("arrondi {0}", [rcj_dt(c.arrondi)]) : ""}</span>`);
+      }
       if (!doubles.length) {
         m.push(`🧾 ${__("Facture d'achat de {0} TTC préparée en brouillon pour le comptable ; votre paiement devient le sien à la validation.", [`<b>${rcj_dt(montant)}</b>`])}`);
       }
@@ -2727,7 +2754,7 @@ function rcj_rendre_articles(d, etat, $z) {
       if (d.rcj_maj_bouton) d.rcj_maj_bouton();
     });
     $tr.find(".rcj-art-qty").on("change input", (e) => { a.qty = flt(e.currentTarget.value); $tr.find(".rcj-art-ht").text(rcj_dt(a.qty * flt(a.rate))); totaux(); if (d.rcj_maj_bouton) d.rcj_maj_bouton(); });
-    $tr.find(".rcj-art-rate").on("change input", (e) => { a.rate = flt(e.currentTarget.value); $tr.find(".rcj-art-ht").text(rcj_dt(flt(a.qty) * a.rate)); totaux(); });
+    $tr.find(".rcj-art-rate").on("change input", (e) => { a.rate = flt(e.currentTarget.value); $tr.find(".rcj-art-ht").text(rcj_dt(flt(a.qty) * a.rate)); totaux(); if (d.rcj_maj_bouton) d.rcj_maj_bouton(); });
   });
   totaux();
 }
@@ -3207,9 +3234,11 @@ function rcj_depense(rapport, initial) {
     const achat_sans_article = achat && !!etat.articles_lus && rcj_achat_lignes_sans_article(etat) > 0;
     const achat_vide = achat && !!etat.articles_lus && !(etat.articles || []).length && !(etat.bls_coches || []).length;
     const achat_double = achat && !!etat.articles_lus && rcj_achat_bls_en_double(etat).length > 0;
+    const achat_ecart = achat && !!etat.articles_lus && !achat_double && !achat_sans_article && !achat_vide
+      && rcj_achat_controle_total(d, etat).refuse;
     // ⚠️ Toujours un BOOLÉEN : `prop("disabled", undefined)` ne change rien, et le bouton restait verrouillé.
     d.get_primary_btn().prop("disabled", !!(bloque || lecture || sans_choix || rien_coche || recherche_bls
-                                             || achat_lecture || achat_non_lu || achat_sans_article || achat_vide || achat_double))
+                                             || achat_lecture || achat_non_lu || achat_sans_article || achat_vide || achat_double || achat_ecart))
       .attr("title", bloque ? __("Analysez d'abord la facture (bouton 🤖).")
         : recherche_bls ? __("Recherche des BL déjà reçus du fournisseur…")
         : sans_choix ? __("Choisissez d'abord « Seulement dépense » ou « En partie achat ».")
@@ -3217,6 +3246,7 @@ function rcj_depense(rapport, initial) {
         : achat_non_lu ? __("Les articles de la facture ne sont pas lus : « Relire », ou « Sans les BL ».")
         : achat_double ? __("Un BL de la facture est déjà saisi : cochez-le (ses articles sont déjà en stock), ou « Sans les BL ».")
         : achat_sans_article ? __("Choisissez l'article de chaque ligne à recevoir.")
+        : achat_ecart ? __("Le total recalculé ne tombe pas sur le TTC de la facture : vérifiez les quantités, les prix et les BL cochés.")
         : achat_vide ? __("Rien à facturer : cochez le BL que la facture couvre, ou « Sans les BL ».")
         : rien_coche ? __("Cochez au moins un article à mettre en stock, ou choisissez « Seulement dépense ».") : "");
   };

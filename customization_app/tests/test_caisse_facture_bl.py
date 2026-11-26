@@ -184,7 +184,8 @@ class TestEcran(unittest.TestCase):
         for morceau in ("const achat_bl = !initial && v.type_depense === \"Facture d'achat\" && rcj_achat_bl_en_jeu(d, etat)",
                         '(v.type_depense === "Dépense avec facture" || achat_bl) ? (etat.bls_coches || []) : []',
                         '(v.type_depense === "Dépense avec facture" || achat_bl) && etat.choix_stock === "achat"',
-                        "r.message.achat", "achat_sans_article", "achat_non_lu", "achat_double", "function rcj_achat_bls_en_double("):
+                        "r.message.achat", "achat_sans_article", "achat_non_lu", "achat_double", "function rcj_achat_bls_en_double(",
+                        "function rcj_achat_controle_total(", "achat_ecart", "Total vérifié"):
             self.assertIn(morceau, self.js, morceau)
 
     def test_l_alerte_tout_est_marchandise_bascule_en_un_clic(self):
