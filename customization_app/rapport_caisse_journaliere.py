@@ -72,20 +72,61 @@ SO_STATUS_FR = {
 }
 
 
+# Les rôles qui donnent une caisse à un compte SANS fiche employé (la direction). Un compte technique — les assistants
+# du MCP « Assistant ChatGPT » / « Assistant Articles », créés le 23/11/2026 — n'en a aucun : il n'a pas de caisse.
+DOMAINE_TECHNIQUE = "@aquaworld.local"
+ROLES_CAISSE = ("Sales User", "Sales Manager", "Accounts User", "Accounts Manager", "System Manager")
+
+
+def noms_du_selecteur(employees, users, avec_role_caisse, debut=None) -> list:
+    """Les caisses proposées par la liste déroulante. PURE.
+
+    Demande du 26/11/2026 (« pourquoi j'ai toute cette liste ? ») : la liste montrait les deux assistants du MCP et les
+    employés partis (Akram, Mohamed Hedi).
+      · un employé de la société a une caisse ; PARTI, il n'est proposé que si la période affichée commence au plus tard
+        le jour de son départ (son historique reste consultable en remontant la date) ;
+      · un compte sans fiche employé n'en a une que s'il porte un rôle de caisse (`avec_role_caisse`).
+    `employees` : [{employee_name, user_email, status, relieving_date}] ; `users` : [{name, full_name}] ;
+    `debut` : le premier jour affiché (None = pas de période : tous les employés, pour les réglages et l'historique)."""
+    noms = set()
+    for e in employees or []:
+        if not e.get("employee_name"):
+            continue
+        depart = e.get("relieving_date")
+        if debut and (e.get("status") or "Active") == "Left" and depart and str(debut)[:10] > str(depart)[:10]:
+            continue
+        noms.add(e["employee_name"])
+    emails_employes = {e.get("user_email") for e in employees or [] if e.get("user_email")}
+    for u in users or []:
+        # Les comptes techniques (@aquaworld.local : assistants du MCP, agent du CRM) n'ont jamais de caisse, quels que
+        # soient leurs rôles.
+        if (u.get("name") or "").lower().endswith(DOMAINE_TECHNIQUE):
+            continue
+        if u.get("full_name") and u.get("name") not in emails_employes and u.get("name") in (avec_role_caisse or ()):
+            noms.add(u["full_name"])
+    return sorted(noms)
+
+
+def _avec_role_caisse(users) -> set:
+    noms = [u.get("name") for u in users or [] if u.get("name")]
+    if not noms:
+        return set()
+    return set(frappe.get_all("Has Role", filters={"parenttype": "User", "parent": ["in", noms], "role": ["in", ROLES_CAISSE]},
+                              pluck="parent"))
+
+
 def noms_caisses():
-    """Les noms de caisse tels que le sélecteur du rapport les propose : employés de la société
-    (nom d'employé) + utilisateurs système sans fiche employé (nom complet), exclusions comprises."""
+    """Les noms de caisse acceptés (réglages, argent liquide, caisse payeuse) : employés de la société (nom d'employé,
+    partis compris : leur historique existe) + comptes sans fiche employé qui ont un rôle de caisse, exclusions comprises."""
     exclus_u, exclus_e = _exclusions()
     employees = [e for e in frappe.db.sql(
-        """SELECT e.name AS employee_id, e.employee_name, e.user_id AS user_email
+        """SELECT e.name AS employee_id, e.employee_name, e.user_id AS user_email, e.status, e.relieving_date
            FROM `tabEmployee` e WHERE e.company = %s""", COMPANY, as_dict=True)
         if e.employee_id not in exclus_e and (e.user_email or "") not in exclus_u]
     users = [u for u in frappe.get_all(
         "User", filters={"enabled": 1, "user_type": "System User", "name": ["not in", ["Administrator", "Guest"]]},
         fields=["name", "full_name"]) if u.name not in exclus_u]
-    emails_employes = {e.user_email for e in employees if e.user_email}
-    return sorted({e.employee_name for e in employees if e.employee_name}
-                  | {u.full_name for u in users if u.full_name and u.name not in emails_employes})
+    return noms_du_selecteur(employees, users, _avec_role_caisse(users))
 
 
 def _unbilled_sos(user, start_date, end_date):
@@ -552,7 +593,8 @@ def _depenses_caisse(d1, d2, noms_par_user):
     paiements = frappe.db.sql(
         """SELECT pe.name, pe.posting_date, pe.owner, pe.paid_amount, pe.paid_from,
                   pe.mode_of_payment, pe.remarks, pe.reference_no, pe.party,
-                  f.description AS fiche_description, MAX(f.caisse_payeur) AS caisse_payeur
+                  f.description AS fiche_description, MAX(f.caisse_payeur) AS caisse_payeur,
+                  MAX(f.saisi_par) AS fiche_saisi_par
            FROM `tabPayment Entry` pe
            INNER JOIN `tabFacture Achat a Saisir` f
                    ON f.payment_entry = pe.name
@@ -570,7 +612,10 @@ def _depenses_caisse(d1, d2, noms_par_user):
             mode = r.mode_of_payment
         else:
             mode = r.mode_of_payment or "Virement"
-        saisi_par = noms_par_user.get(r.owner, r.owner)
+        # La caisse de CELUI QUI A SAISI la fiche, pas de celui qui a validé la facture (26/11/2026 : la facture SCPS
+        # payée par chèque par Sadok passait dans la caisse du comptable à la validation — 4 paiements sur 17 en prod).
+        auteur = r.fiche_saisi_par or r.owner
+        saisi_par = noms_par_user.get(auteur, auteur)
         lignes.append({
             "name": r.name,
             "doctype": "Payment Entry",
@@ -703,7 +748,7 @@ def get_data(d1, d2, employe=None):
     employe = (employe or "").strip()
 
     employees = frappe.db.sql(
-        """SELECT e.name AS employee_id, e.employee_name, e.user_id AS user_email
+        """SELECT e.name AS employee_id, e.employee_name, e.user_id AS user_email, e.status, e.relieving_date
            FROM `tabEmployee` e WHERE e.company = %s""",
         COMPANY, as_dict=True,
     )
@@ -796,11 +841,12 @@ def get_data(d1, d2, employe=None):
     # Déduplication par COMPTE et non par nom : Economiq a deux fiches aux orthographes
     # différentes (« Economic … » côté Employé, « Economiq … » côté User) — un User déjà
     # porté par une fiche Employé n'entre pas une seconde fois.
-    emails_employes = {e.user_email for e in employees if e.user_email}
-    noms_disponibles = sorted(
-        {e.employee_name for e in employees if e.employee_name}
-        | {u.full_name for u in users if u.full_name and u.name not in emails_employes}
-    )
+    # 26/11/2026 : sans les comptes techniques (assistants du MCP), ni les employés partis avant la période affichée ;
+    # la caisse en cours de consultation reste toujours dans la liste.
+    noms_disponibles = noms_du_selecteur(employees, users, _avec_role_caisse(users), start_date)
+    if employe and employe != "—" and employe not in noms_disponibles and employe in noms_du_selecteur(
+            employees, users, {u.name for u in users}):
+        noms_disponibles = sorted(noms_disponibles + [employe])
     if restreint:
         noms_disponibles = sorted(({employe} if employe != "—" else set()) | perimetre)
 
