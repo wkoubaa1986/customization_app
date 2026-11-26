@@ -733,14 +733,35 @@ def _depenses_caisse(d1, d2, noms_par_user):
     return lignes
 
 
+def selection_caisses(employe, employes) -> set:
+    """Les caisses à montrer. PURE. `employes` : la sélection multiple de la page (liste, ou JSON d'une liste) ; vide →
+    `employe` seul ; rien du tout → toutes (ensemble vide)."""
+    import json
+
+    if isinstance(employes, str):
+        employes = json.loads(employes) if employes.strip() else []
+    noms = {str(n).strip() for n in employes or [] if str(n or "").strip()}
+    if noms:
+        return noms
+    employe = (employe or "").strip()
+    return {employe} if employe else set()
+
+
 @frappe.whitelist()
-def get_data(d1, d2, employe=None):
+def get_data(d1, d2, employe=None, employes=None):
     """Renvoie le rapport de caisse journalière groupé par employé, pour [d1, d2].
 
     `employe` (nom affiché) restreint le rapport à UNE caisse : chaque employé peut
     traiter la sienne, la supervision garde « Tous ». La liste complète des noms est
     toujours retournée (`employes`) pour alimenter la liste déroulante du filtre.
+
+    `employes` (26/11/2026, sélection multiple de la page) : plusieurs caisses à la fois — JSON d'une liste de noms.
+    Avec une seule, c'est `employe`. Une vue restreinte (un employé : sa caisse seulement) l'ignore.
     """
+    choix_multiple = selection_caisses(None, employes)
+    if len(choix_multiple) == 1:
+        employe = next(iter(choix_multiple))
+        choix_multiple = set()
     start_date, end_date = d1, d2
     # `employe` absent (premier chargement) -> la caisse de l'utilisateur CONNECTÉ ;
     # chaîne vide -> « Tous les employés » choisi explicitement.
@@ -836,6 +857,13 @@ def get_data(d1, d2, employe=None):
     perimetre = perimetre_sous_traitants() if restreint else set()
     if restreint and employe not in perimetre:
         employe = _ma_caisse(employees, users) or "—"
+    if restreint:
+        choix_multiple = set()
+    # Plusieurs caisses (26/11/2026) : `employe` reste vide (aucune clôture d'UNE caisse ne s'applique), le filtre de
+    # restitution les garde toutes.
+    if choix_multiple:
+        employe = ""
+    garder = (lambda nom: nom in choix_multiple) if choix_multiple else ((lambda nom: nom == employe) if employe else None)
 
     # La liste déroulante du filtre montre TOUT le monde, même quand on filtre.
     # Déduplication par COMPTE et non par nom : Economiq a deux fiches aux orthographes
@@ -844,9 +872,10 @@ def get_data(d1, d2, employe=None):
     # 26/11/2026 : sans les comptes techniques (assistants du MCP), ni les employés partis avant la période affichée ;
     # la caisse en cours de consultation reste toujours dans la liste.
     noms_disponibles = noms_du_selecteur(employees, users, _avec_role_caisse(users), start_date)
-    if employe and employe != "—" and employe not in noms_disponibles and employe in noms_du_selecteur(
-            employees, users, {u.name for u in users}):
-        noms_disponibles = sorted(noms_disponibles + [employe])
+    tous_noms = set(noms_du_selecteur(employees, users, {u.name for u in users}))
+    for nom in ({employe} if employe and employe != "—" else set()) | choix_multiple:
+        if nom not in noms_disponibles and nom in tous_noms:
+            noms_disponibles = sorted(noms_disponibles + [nom])
     if restreint:
         noms_disponibles = sorted(({employe} if employe != "—" else set()) | perimetre)
 
@@ -879,17 +908,17 @@ def get_data(d1, d2, employe=None):
 
     # La restitution suit le filtre ; les totaux globaux sont recalculés sur le
     # sous-ensemble (grand_par_mode a accumulé TOUTES les caisses ci-dessus).
-    if employe:
-        result_employees = [e for e in result_employees if e["employe"] == employe]
+    if garder:
+        result_employees = [e for e in result_employees if garder(e["employe"])]
         grand_par_mode = {}
         for e in result_employees:
             for m_, v_ in e["totaux_par_mode"].items():
                 grand_par_mode[m_] = flt(grand_par_mode.get(m_, 0)) + flt(v_)
     # Le filtre par caisse s'applique aussi aux encaissements d'anciennes commandes :
     # chacun est attribué à l'employé qui l'a SAISI.
-    if employe:
+    if garder:
         anciens["paiements"] = [p for p in anciens["paiements"]
-                                if (p.get("saisi_par") or "—") == employe]
+                                if garder(p.get("saisi_par") or "—")]
         par_mode_filtre = {}
         for p in anciens["paiements"]:
             if p.get("exclu") or p.get("deja_compte"):
@@ -952,9 +981,9 @@ def get_data(d1, d2, employe=None):
     for u in users:
         noms_par_user.setdefault(u.name, u.full_name)
     depenses = _depenses_caisse(start_date, end_date, noms_par_user)
-    if employe:
+    if garder:
         # La caisse d'une dépense : celle du PAYEUR quand un collègue a payé (24/11/2026), sinon celle de la saisie.
-        depenses = [l for l in depenses if (l.get("caisse") or l["saisi_par"]) == employe]
+        depenses = [l for l in depenses if garder(l.get("caisse") or l["saisi_par"])]
     depenses_par_mode = {}
     for l in depenses:
         depenses_par_mode[l["mode"]] = flt(depenses_par_mode.get(l["mode"], 0)) + l["montant"]
@@ -963,6 +992,7 @@ def get_data(d1, d2, employe=None):
         "periode": {"d1": start_date, "d2": end_date},
         "employe": employe or None,
         "employes": noms_disponibles,
+        "employes_choisis": sorted(choix_multiple) if choix_multiple else ([employe] if employe and employe != "—" else []),
         "restreint": restreint,
         "anciens": anciens,
         "depenses": {"lignes": depenses,

@@ -88,6 +88,16 @@
     .rcj-muted { color: #9aa2ad; }
     #rcj-loading { display:none; position: fixed; inset: 0; background: rgba(255,255,255,.6);
                    z-index: 9999; align-items: center; justify-content: center; }
+    .rcj-caisses { position: relative; }
+    .rcj-caisses-btn { width: 240px !important; text-align: left; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; cursor: pointer; }
+    .rcj-caisses-liste { position: absolute; z-index: 1050; top: calc(100% + 4px); left: 0; min-width: 240px; max-height: 60vh;
+                         overflow-y: auto; background: var(--card-bg, #fff); border: 1px solid var(--border-color, #d1d8dd);
+                         border-radius: 8px; box-shadow: 0 6px 18px rgba(0,0,0,.12); padding: 6px; }
+    .rcj-caisses-liste label { display: flex; gap: 8px; align-items: center; padding: 5px 8px; margin: 0; border-radius: 6px;
+                               font-size: 13px; font-weight: normal; color: var(--text-color, #1f272e); cursor: pointer; }
+    .rcj-caisses-liste label:hover { background: var(--bg-light-gray, #f4f5f6); }
+    .rcj-caisses-liste .rcj-caisses-tous { font-weight: 600; border-bottom: 1px solid var(--border-color, #eee); border-radius: 0; margin-bottom: 4px; }
+    .rcj-caisses-liste .rcj-caisses-pied { display: flex; gap: 6px; justify-content: flex-end; padding: 6px 4px 2px; border-top: 1px solid var(--border-color, #eee); margin-top: 4px; }
     .rcj-titre-caisse { font-size: 17px; font-weight: 700; margin: 14px 0 10px 2px;
                         color: var(--text-color, #1f272e); }
     .rcj-titre-caisse span { color: #c0392b; }
@@ -97,6 +107,9 @@
       .rcj-toolbar { padding: 10px; gap: 8px; }
       .rcj-toolbar .form-control { width: calc(50% - 34px); min-width: 110px; }
       #rcj-employe { width: 100%; max-width: none !important; }
+      .rcj-caisses { width: 100%; }
+      .rcj-caisses-btn { width: 100% !important; }
+      .rcj-caisses-liste { left: 0; right: 0; }
       .rcj-toolbar .btn { flex: 1 1 auto; }
       #rcj-btn-dettes, #rcj-btn-aramex, #rcj-btn-bordereaux, #rcj-btn-depense, #rcj-btn-a-payer, #rcj-btn-bl, #rcj-btn-cloture, #rcj-btn-collecte, #rcj-btn-passation, #rcj-btn-etat, #rcj-btn-argent { width: 100%; padding: 10px; font-size: 14px;
         margin: 0 0 6px 0 !important; }
@@ -209,9 +222,15 @@
     <label>À</label>
     <input id="rcj-d2" type="date" class="form-control input-sm" />
     <label>Caisse</label>
-    <select id="rcj-employe" class="form-control input-sm" style="max-width:220px">
+    <!-- Plusieurs caisses à la fois (26/11/2026) : la liste à cases. Le <select> caché reste LA caisse unique (comptage,
+         « Ma journée », bascules) : vide quand « Tous » ou plusieurs caisses sont choisis. -->
+    <select id="rcj-employe" class="form-control input-sm" style="display:none">
       <option value="">Tous les employés</option>
     </select>
+    <div id="rcj-caisses" class="rcj-caisses">
+      <button type="button" class="form-control input-sm rcj-caisses-btn"><span class="rcj-caisses-libelle">Tous les employés</span> ▾</button>
+      <div class="rcj-caisses-liste" style="display:none"></div>
+    </div>
     <button id="rcj-refresh" class="btn btn-primary btn-sm">Actualiser</button>
     <div class="rcj-spacer"></div>
     <button id="rcj-toggle-all" class="btn btn-default btn-sm">Tout replier</button>

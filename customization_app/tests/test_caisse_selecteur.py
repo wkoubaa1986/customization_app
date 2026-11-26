@@ -2,7 +2,7 @@
 période affichée. Règle pure, sans base."""
 import unittest
 
-from customization_app.rapport_caisse_journaliere import noms_du_selecteur
+from customization_app.rapport_caisse_journaliere import noms_du_selecteur, selection_caisses
 
 EMPLOYES = [
     {"employee_name": "Akram", "user_email": "akram@x", "status": "Left", "relieving_date": "2026-11-10"},
@@ -50,6 +50,15 @@ class TestSelecteur(unittest.TestCase):
     def test_rien(self):
         self.assertEqual(noms_du_selecteur([], [], set()), [])
         self.assertEqual(noms_du_selecteur(None, None, None, "2026-11-26"), [])
+
+
+class TestSelectionMultiple(unittest.TestCase):
+    def test_plusieurs_une_ou_toutes(self):
+        self.assertEqual(selection_caisses(None, '["Hedi ibidhii", "Jamel Aloui", " "]'), {"Hedi ibidhii", "Jamel Aloui"})
+        self.assertEqual(selection_caisses("Sadok Bouziri", None), {"Sadok Bouziri"})
+        self.assertEqual(selection_caisses("Sadok Bouziri", "[]"), {"Sadok Bouziri"})
+        self.assertEqual(selection_caisses("", ""), set())
+        self.assertEqual(selection_caisses(None, ["Jamel Aloui"]), {"Jamel Aloui"})
 
 
 if __name__ == "__main__":

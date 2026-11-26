@@ -135,7 +135,9 @@ class RapportCaisseJournaliere {
 
   _bind() {
     $("#rcj-refresh").on("click", () => this._fetch());
-    $("#rcj-employe").on("change", () => this._fetch());
+    // La caisse unique (pilotée aussi par « Ma journée » et les bascules) : elle remplace la sélection multiple.
+    $("#rcj-employe").on("change", () => { this._choix = null; this._fetch(); });
+    this._brancher_caisses();
     // Encaissement des anciennes dettes : le dialogue fabrique un « Encaissement
     // Paiement » et laisse les scripts maison faire (allocation FIFO, échéanciers,
     // reliquat de dette, création du paiement).
@@ -180,6 +182,7 @@ class RapportCaisseJournaliere {
       const $b = $(e.currentTarget);
       const caisse = $b.attr("data-caisse"), date = $b.attr("data-date");
       $("#rcj-d1").val(date); $("#rcj-d2").val(date);
+      this._choix = null;
       const $sel = $("#rcj-employe");
       if (!$sel.find("option").filter(function () { return $(this).val() === caisse; }).length) {
         $sel.append($("<option>").val(caisse).text(caisse));
@@ -305,7 +308,9 @@ class RapportCaisseJournaliere {
     try {
       const args = { d1, d2 };
       if (this._charge_une_fois) {
-        args.employe = $("#rcj-employe").val() || "";
+        // Plusieurs caisses cochées (26/11/2026) : la liste ; sinon la caisse unique (vide = tous les employés).
+        if ((this._choix || []).length > 1) args.employes = JSON.stringify(this._choix);
+        else args.employe = $("#rcj-employe").val() || "";
       }
       const r = await frappe.call({
         method: "customization_app.rapport_caisse_journaliere.get_data",
@@ -330,6 +335,7 @@ class RapportCaisseJournaliere {
     // Sous-traitant : la clôture est datée du dernier jour de la période affichée (31/10/2026).
     const d1 = frappe.boot.sous_traitant ? $("#rcj-d2").val() : $("#rcj-d1").val(), d2 = $("#rcj-d2").val();
     if (!d1 || d1 !== d2) return;   // la clôture porte sur une journée
+    if (this._caisses_choisies().length > 1) return;   // plusieurs caisses affichées : pas de bandeau d'UNE caisse
     const caisse = $("#rcj-employe").val() || "Tous les employés";
     frappe.call({
       method: "customization_app.caisse_cloture.cloture_info",
@@ -471,6 +477,94 @@ class RapportCaisseJournaliere {
     });
   }
 
+  // ── Sélection de plusieurs caisses (demande du 26/11/2026) ───────────────────────────────────────────────────────
+  // Une liste à cases : « Tous les employés », ou une, ou plusieurs caisses. `this._choix` : les noms cochés (null =
+  // la caisse unique du <select> caché). Le comptage, lui, porte toujours sur UNE caisse (rcj_cloture le dit).
+  _caisses_choisies() {
+    if ((this._choix || []).length > 1) return this._choix.slice();
+    const v = $("#rcj-employe").val() || "";
+    return v ? [v] : [];
+  }
+
+  _brancher_caisses() {
+    const $box = $("#rcj-caisses");
+    const $liste = $box.find(".rcj-caisses-liste");
+    const fermer = (appliquer) => {
+      if (!$liste.is(":visible")) return;
+      $liste.hide();
+      if (!appliquer) return;
+      const coches = $liste.find("input.rcj-caisse-cb:checked").toArray().map((x) => $(x).val());
+      const avant = JSON.stringify(this._caisses_choisies());
+      if (JSON.stringify(coches) === avant) return;
+      if (coches.length > 1) {
+        this._choix = coches;
+        $("#rcj-employe").val("");
+      } else {
+        this._choix = null;
+        const $sel = $("#rcj-employe");
+        if (coches[0] && !$sel.find("option").filter(function () { return $(this).val() === coches[0]; }).length) {
+          $sel.append($("<option>").val(coches[0]).text(coches[0]));
+        }
+        $sel.val(coches[0] || "");
+      }
+      this._fetch();
+    };
+    this._fermer_caisses = fermer;
+    $box.on("click", ".rcj-caisses-btn", (e) => {
+      e.preventDefault();
+      if ($liste.is(":visible")) { fermer(true); return; }
+      this._remplir_caisses();
+      $liste.show();
+    });
+    // « Tous les employés » décoche les caisses ; une caisse cochée décoche « Tous ».
+    $liste.on("change", "input.rcj-caisse-tous", (e) => {
+      if (e.currentTarget.checked) $liste.find("input.rcj-caisse-cb").prop("checked", false);
+      else if (!$liste.find("input.rcj-caisse-cb:checked").length) e.currentTarget.checked = true;
+    });
+    $liste.on("change", "input.rcj-caisse-cb", () => {
+      $liste.find("input.rcj-caisse-tous").prop("checked", !$liste.find("input.rcj-caisse-cb:checked").length);
+    });
+    $liste.on("click", ".rcj-caisses-ok", (e) => { e.preventDefault(); fermer(true); });
+    $liste.on("click", ".rcj-caisses-seul", (e) => {
+      // « Seulement » : un clic, une caisse.
+      e.preventDefault(); e.stopPropagation();
+      $liste.find("input.rcj-caisse-cb").prop("checked", false);
+      $(e.currentTarget).closest("label").find("input.rcj-caisse-cb").prop("checked", true);
+      $liste.find("input.rcj-caisse-tous").prop("checked", false);
+      fermer(true);
+    });
+    // Un clic ailleurs applique le choix.
+    $(document).on("mousedown.rcj_caisses", (e) => {
+      if ($liste.is(":visible") && !$(e.target).closest("#rcj-caisses").length) fermer(true);
+    });
+  }
+
+  _remplir_caisses() {
+    const esc = frappe.utils.escape_html;
+    const noms = (this._data && this._data.employes) || [];
+    const choisis = new Set(this._caisses_choisies());
+    const restreint = !!(this._data && this._data.restreint);
+    const lignes = noms.map((n) => `<label><input type="checkbox" class="rcj-caisse-cb" value="${esc(n)}" ${choisis.has(n) ? "checked" : ""}>
+        <span style="flex:1">${esc(n)}</span>
+        <a href="#" class="rcj-caisses-seul text-muted" style="font-size:11px">${__("seulement")}</a></label>`).join("");
+    $("#rcj-caisses .rcj-caisses-liste").html(
+      (restreint ? "" : `<label class="rcj-caisses-tous"><input type="checkbox" class="rcj-caisse-tous" ${choisis.size ? "" : "checked"}>
+         ${__("Tous les employés")}</label>`)
+      + lignes
+      + `<div class="rcj-caisses-pied"><button type="button" class="btn btn-xs btn-primary rcj-caisses-ok">${__("Afficher")}</button></div>`);
+  }
+
+  _maj_libelle_caisses() {
+    const choisis = this._caisses_choisies();
+    const libelle = !choisis.length ? __("Tous les employés")
+      : choisis.length === 1 ? choisis[0]
+        : __("{0} caisses : {1}", [choisis.length, choisis.join(", ")]);
+    $("#rcj-caisses .rcj-caisses-libelle").text(libelle);
+    $("#rcj-caisses .rcj-caisses-btn").attr("title", libelle)
+      .prop("disabled", !!(this._data && this._data.restreint) && ((this._data.employes || []).length <= 1));
+    $("#rcj-caisse-nom").text(libelle);
+  }
+
   _peupler_filtre_employe() {
     // La liste vient du serveur (tous les noms, même quand on filtre) ; la sélection
     // courante est conservée d'un rafraîchissement à l'autre.
@@ -487,8 +581,12 @@ class RapportCaisseJournaliere {
         `<option value="${frappe.utils.escape_html(n)}">${frappe.utils.escape_html(n)}</option>`));
     }
     $sel.val(courant);
-    $("#rcj-caisse-nom").text(courant || __("Tous les employés"));
     $sel.prop("disabled", !!this._data.restreint && noms.length <= 1);
+    // La sélection que le serveur a retenue (une vue restreinte la ramène à sa caisse).
+    const retenus = this._data.employes_choisis || [];
+    this._choix = retenus.length > 1 ? retenus.slice() : null;
+    if (retenus.length > 1) $sel.val("");
+    this._maj_libelle_caisses();
   }
 
   _render() {
@@ -3979,6 +4077,7 @@ function rcj_html_controles_justifies(controles) {
 
 // Bascule la page sur une caisse et un jour, puis `ensuite` (compter, revoir…).
 function rcj_aller_caisse(rapport, caisse, date, ensuite) {
+  if (rapport) rapport._choix = null;
   $("#rcj-d1").val(date); $("#rcj-d2").val(date);
   const $sel = $("#rcj-employe");
   if (!$sel.find("option").filter(function () { return $(this).val() === caisse; }).length) {
@@ -3997,6 +4096,10 @@ function rcj_cloture(rapport, opts) {
   const d1 = sous_traitant ? $("#rcj-d2").val() : $("#rcj-d1").val(), d2 = $("#rcj-d2").val();
   if (d1 !== d2) {
     frappe.msgprint(__("La clôture porte sur UNE journée : mettez « De » = « À »."));
+    return;
+  }
+  if (rapport && rapport._caisses_choisies && rapport._caisses_choisies().length > 1) {
+    frappe.msgprint(__("Plusieurs caisses sont affichées : choisissez-en UNE dans la liste « Caisse » pour la compter."));
     return;
   }
   const caisse = $("#rcj-employe").val() || "Tous les employés";
