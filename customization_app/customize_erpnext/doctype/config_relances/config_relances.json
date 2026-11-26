@@ -19,6 +19,7 @@
   "periodicite_defaut",
   "visites_ajoutees",
   "jours_avance_sans_main_oeuvre",
+  "echeancier_non_avec_entretien",
   "sec_familles",
   "familles",
   "sec_pieces",
@@ -144,6 +145,13 @@
    "default": "60",
    "label": "Avance permise d’un achat sans main-d’œuvre (jours)",
    "description": "(60) Un achat SANS main-d’œuvre d’entretien (M-E-…) ne solde une visite que si elle est échue ou due dans ce nombre de jours après la livraison : une cartouche achetée 9 jours après un entretien ne consomme plus la visite d’avril. 0 = seulement une visite déjà échue. Avec main-d’œuvre : sans limite."
+  },
+  {
+   "fieldname": "echeancier_non_avec_entretien",
+   "fieldtype": "Check",
+   "default": "1",
+   "label": "Échéancier pour un client « Non » qui paie un entretien",
+   "description": "(oui) Un client « Non » à l’entretien qui paie une main-d’œuvre d’entretien (M-E-…) sans avoir d’échéancier en reçoit un, avec une machine type : la mémoire de ses entretiens, sans aucune relance (il reste « Non »). Un simple achat de cartouches ne crée rien pour lui. Décoché : aucun échéancier deviné pour un « Non »."
   },
   {
    "fieldname": "sec_familles",
@@ -388,7 +396,7 @@
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-11-26 12:30:00.000000",
+ "modified": "2026-11-26 16:30:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Config Relances",

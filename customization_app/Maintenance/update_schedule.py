@@ -1089,8 +1089,9 @@ def update_maintenance_schedule(i_sal, cfg=None, fams=None, cache=None, creer=Tr
     on en devine UNE (famille sûre puis ordre de priorité du réglage — plus de tirage dans un set).
     Un client « Non » à l'entretien qui a quand même un échéancier voit sa visite marquée réalisée (il a bien fait
     l'entretien : 104 clients « Non » entretenus en 12 mois au 15/10/2026 restaient « en retard » pour toujours) ; le
-    « Non » ne gouverne que les relances et la DEVINETTE (pas d'échéancier deviné pour lui). Il reste « Non » : rien ici
-    ne touche à cette case. `creer=False` (rattrapage) : jamais de devinette.
+    « Non » ne gouverne que les relances et la DEVINETTE : pas d'échéancier deviné pour lui sur un simple achat de
+    cartouches, mais OUI s'il paie une main-d'œuvre d'entretien (devinette_pour_un_non, 26/11/2026) — sans relance. Il
+    reste « Non » : rien ici ne touche à cette case. `creer=False` (rattrapage) : jamais de devinette.
     26/11/2026 (lot 5) : les familles soldées sont celles de familles_a_solder (main-d'œuvre d'abord, une seule famille
     par cartouche), le porte-filtre suit l'osmoseur, et sans main-d'œuvre d'entretien une visite n'est consommée que si
     elle est échue ou due dans `jours_avance_sans_main_oeuvre` jours."""
@@ -1121,7 +1122,10 @@ def update_maintenance_schedule(i_sal, cfg=None, fams=None, cache=None, creer=Tr
             fait = _solder_porte_filtres_seuls(i_sal["customer"], i_sal["delivery_date"], i_sal["sales_order"], cfg, fams, cache,
                                                jours_avance=jours, stats=stats) or fait
         return "update" if fait else "rien"
-    if not interesse or not creer:
+    if not creer:
+        return "skip"
+    pour_un_non = not interesse
+    if pour_un_non and not devinette_pour_un_non(items, cfg, fams):
         return "skip"
     if not devinette_permise(i_sal["delivery_date"], annule_le):
         # Relecture finale du 26/11/2026 : l'échéancier du client a été ANNULÉ (machine rendue, commande annulée, « pas de
@@ -1133,8 +1137,24 @@ def update_maintenance_schedule(i_sal, cfg=None, fams=None, cache=None, creer=Tr
             f"d'un échéancier du client le {annule_le} — pas de devinette")
         return "skip"
     devinee = RC.famille_prioritaire(sures or cibles, fams)
-    log(f"[GUESS] SO {i_sal['sales_order']} : famille devinée {devinee} (sûres={sorted(sures)}, cibles={sorted(cibles)})")
-    return "guess" if update_single_machine_schedule(i_sal["customer"], devinee, i_sal["delivery_date"], i_sal["sales_order"], cfg, fams, cache) else "no-guess"
+    log(f"[GUESS] SO {i_sal['sales_order']} : famille devinée {devinee} (sûres={sorted(sures)}, cibles={sorted(cibles)})"
+        + (" — client « Non » qui paie un entretien : échéancier sans relance" if pour_un_non else ""))
+    devine = update_single_machine_schedule(i_sal["customer"], devinee, i_sal["delivery_date"], i_sal["sales_order"], cfg, fams, cache)
+    if devine and pour_un_non and stats is not None:
+        stats["devines_non_interesses"] = stats.get("devines_non_interesses", 0) + 1
+    return "guess" if devine else "no-guess"
+
+
+def devinette_pour_un_non(items, cfg=None, fams=None) -> bool:
+    """Un client « Non » à l'entretien qui PAIE une main-d'œuvre d'entretien (M-E-…) et n'a aucun échéancier de la famille
+    reçoit quand même un échéancier deviné — sa mémoire, SANS relance (il reste « Non » : SMS, listes d'appel et réveil
+    l'écartent par son statut). Sa demande du 26/11/2026 : sur 45 jours, 11 entretiens payés par des clients « Non » dont
+    la machine n'a pas été achetée chez nous n'étaient inscrits nulle part (Hbib Ghrairi, client depuis 2024, 7 commandes ;
+    Nizar Chamli, deux entretiens en octobre). Un simple achat de cartouches, sans main-d'œuvre, ne devine toujours rien
+    pour un « Non ». Réglage `echeancier_non_avec_entretien` (oui par défaut). PURE avec `cfg` et `fams`."""
+    cfg = RC.config() if cfg is None else cfg
+    v = cfg.get("echeancier_non_avec_entretien", 1)
+    return bool(cint(1 if v in (None, "") else v)) and commande_avec_main_oeuvre(items, fams)
 
 
 def devinette_permise(delivery_date, annule_le) -> bool:
@@ -1296,7 +1316,7 @@ def run_maintenance_planning():
     # Compteurs des lots 4 et 5 (26/11/2026), alimentés au fil des commandes. Une commande en erreur est annulée en
     # entier (savepoint) : ses compteurs sont recopiés seulement si elle aboutit.
     detail = {"new_ms_non_interesses": 0, "devines_annules": 0, "avances_evitees": 0, "porte_filtres_avec_machine": 0,
-              "achats_anterieurs": 0, "pas_de_systeme": 0, "achats_avant_annulation": 0}
+              "achats_anterieurs": 0, "pas_de_systeme": 0, "achats_avant_annulation": 0, "devines_non_interesses": 0}
     summary = {"total_sales_orders": 0, "new_ms_created": 0, "updated_from_consumables": 0, "guessed": 0,
                "no_link": 0, "already_covered": 0, "errors": 0,
                "cleanup": _etape(lambda: verify_data_base(cfg), "Nettoyage échéancier — passage de nuit",
@@ -1358,7 +1378,7 @@ def run_maintenance_planning():
                     "from_conso=%(updated_from_consumables)s guessed=%(guessed)s no_link=%(no_link)s already_covered=%(already_covered)s "
                     "devines_annules=%(devines_annules)s avances_evitees=%(avances_evitees)s achats_anterieurs=%(achats_anterieurs)s "
                     "pf_avec_machine=%(porte_filtres_avec_machine)s pas_de_systeme=%(pas_de_systeme)s "
-                    "avant_annulation=%(achats_avant_annulation)s "
+                    "avant_annulation=%(achats_avant_annulation)s devines_non=%(devines_non_interesses)s "
                     "prolonges=%(prolonges)s requalifies=%(requalifies)s errors=%(errors)s" % summary)
     summary_line += " cleanup_annules=%s" % summary["cleanup"].get("annules", 0)
     if erreurs:

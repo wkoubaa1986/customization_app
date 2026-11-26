@@ -270,6 +270,37 @@ class TestClientsNon(_SansTrace):
         self.assertEqual(frappe.db.get_value("Customer", client, "custom_statut_relance") or "", "")
         self.assertEqual(self.commentaires("Customer", client, "reste « Non »"), 1)
 
+    def test_un_non_qui_paie_un_entretien_recoit_un_echeancier_sans_relance(self):
+        # Sa demande du 26/11/2026 : 11 entretiens payés en 45 jours par des « Non » sans échéancier n'étaient inscrits nulle
+        # part (Hbib Ghrairi, Nizar Chamli…). Avec la main-d'œuvre d'entretien, la machine type est devinée — sans relance.
+        client = self.client("Non")
+        so_entretien, so_coupe = self.commandes(2)
+        stats = {}
+        r = U.update_maintenance_schedule({"sales_order": so_entretien, "customer": client, "delivery_date": "2026-10-13",
+                                           "items": "M-E-OD,," + CHARBON}, self.cfg, self.fams, {}, stats=stats)
+        self.assertEqual((r, stats.get("devines_non_interesses")), ("guess", 1))
+        ms = self.ms_de(so_entretien)
+        self.assertEqual(frappe.db.get_value("Maintenance Schedule", ms, ["docstatus", "customer"]), (1, client))
+        type_code = RC.famille("RO_DOM", self.fams)["article_type"]
+        premiere = self.premiere(ms, type_code)
+        self.assertEqual((str(premiere.actual_date), premiere.custom_sales_order), ("2026-10-13", so_entretien))   # l'entretien est inscrit
+        self.assertEqual(frappe.db.get_value("Customer", client, "custom_intéressé_par_le_service_entretien"), "Non")  # il reste « Non »
+        if not self.cfg.get("relancer_non_interesses"):
+            self.assertIn(client, RC.clients_exclus_relance(self.cfg))                                              # aucune relance
+        # Réglage décoché : plus de devinette pour un « Non », même avec main-d'œuvre.
+        autre = self.client("Non", sauf=[client])
+        cfg0 = dict(self.cfg, echeancier_non_avec_entretien=0)
+        self.assertEqual(U.update_maintenance_schedule({"sales_order": so_coupe, "customer": autre, "delivery_date": "2026-10-13",
+                                                        "items": "M-E-OD"}, cfg0, self.fams, {}), "skip")
+        self.assertFalse(frappe.db.exists("Maintenance Schedule", {"customer": autre}))
+
+    def test_regle_pure_de_la_devinette_pour_un_non(self):
+        mo, cartouche = [{"item_code": "M-E-OD"}], [{"item_code": CHARBON}]
+        self.assertTrue(U.devinette_pour_un_non(mo, {}, self.fams))                       # réglage absent = oui
+        self.assertFalse(U.devinette_pour_un_non(cartouche, {}, self.fams))               # cartouche seule : rien
+        self.assertFalse(U.devinette_pour_un_non(mo, {"echeancier_non_avec_entretien": 0}, self.fams))
+        self.assertTrue(U.devinette_pour_un_non(mo, {"echeancier_non_avec_entretien": ""}, self.fams))
+
     def test_le_commentaire_de_reactivation_suit_le_reglage(self):
         # « Relancer les non intéressés » coché : le « Non » réactivé est de nouveau relancé, le commentaire le dit.
         client = self.client("Non")

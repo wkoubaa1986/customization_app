@@ -113,6 +113,7 @@ LIBELLES_CLES = {"total_sales_orders": "commandes lues", "new_ms_created": "éch
                  "exclus_rendez_vous": "exclus : rendez-vous", "exclus_autre": "exclus : autre",
                  # Passage de nuit, lots 4 et 5 (26/11/2026).
                  "new_ms_non_interesses": "échéanciers créés pour des clients « Non »",
+                 "devines_non_interesses": "échéanciers devinés pour des clients « Non » qui paient un entretien",
                  "devines_annules": "devinettes annulées (vraie machine)", "avances_evitees": "avances évitées (sans main-d’œuvre)",
                  "porte_filtres_avec_machine": "porte-filtres soldés avec la machine",
                  "achats_anterieurs": "achats antérieurs à la machine",

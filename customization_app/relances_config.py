@@ -39,6 +39,9 @@ DEFAUTS = {
     # Passage de nuit : un achat SANS main-d'œuvre d'entretien ne solde une visite qu'échue ou due sous N jours (0 = échue
     # seulement) ; les clients « génériques » (comptoir) n'ont jamais d'échéancier.
     "jours_avance_sans_main_oeuvre": 60, "clients_generiques": "PASSAGER",
+    # Un client « Non » qui paie une main-d'œuvre d'entretien sans avoir d'échéancier en reçoit un, sans relance (sa demande
+    # du 26/11/2026).
+    "echeancier_non_avec_entretien": 1,
     # SMS : un seul message par client et par jour.
     "un_sms_par_client_par_jour": 1,
     # Entonnoir des relances (photo quotidienne + signaux de la page « Journaux des relances »).
