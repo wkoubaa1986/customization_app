@@ -51,7 +51,11 @@ class TestFactureAchatSurBL(unittest.TestCase):
         for m in self.mocks:
             m.start()
         # Le BL A, tel qu'un BL photographié à la livraison puis reçu : fiche BL, commande sans taxe, réception.
-        self.a = FB.recevoir({"cle": B.cle_numero_bl(BL_A), "numero": BL_A, "date": "2026-08-25", "fiche": None,
+        fiche_a = frappe.get_doc({"doctype": FICHE, "fournisseur": "SCPS", "supplier": SCPS, "montant": 103.876,
+                                  "est_bl": 1, "numero_bl": BL_A, "numero_facture": "", "date_facture": "2026-08-25",
+                                  "mode_paiement": "Pas payé", "description": "Essai BL A", "saisi_par": "Administrator"})
+        fiche_a.insert(ignore_permissions=True)
+        self.a = FB.recevoir({"cle": B.cle_numero_bl(BL_A), "numero": BL_A, "date": "2026-08-25", "fiche": fiche_a.name,
                               "lignes": FB.lignes_a_recevoir([{"item_code": SP, "qty": 27, "rate": 3.233,
                                                                "designation": "Réduction 15/12"}])},
                              SCPS, {"fournisseur": "SCPS", "taux_tva": 19, "description": "Essai BL A"})
@@ -123,16 +127,17 @@ class TestFactureAchatSurBL(unittest.TestCase):
         self.assertEqual([(s.mode_of_payment, flt(s.payment_amount, 3)) for s in pi.payment_schedule], [("Dette non payée", 207.158)])
         # Le stock n'entre qu'UNE fois : rien pour le BL déjà reçu, 30 + 4 pour le BL jamais saisi.
         self.assertEqual((_stock(SP) - sp, _stock(BQ) - bq), (4.0, 30.0))
-        # Le BL jamais saisi a maintenant sa fiche, sa commande et sa réception — comme un BL photographié à la livraison.
-        f_b = frappe.db.get_value(FICHE, nouveau["fiche"], ["est_bl", "numero_bl", "statut", "supplier", "purchase_order",
-                                                             "purchase_receipt", "mode_paiement"], as_dict=True)
-        self.assertEqual((f_b.est_bl, f_b.numero_bl, f_b.statut, f_b.supplier, f_b.mode_paiement), (1, BL_B, "À saisir", SCPS, "Pas payé"))
-        self.assertEqual((f_b.purchase_order, f_b.purchase_receipt), (nouveau["purchase_order"], nouveau["purchase_receipt"]))
+        # Le BL jamais saisi a sa commande et sa réception (son n° dessus), mais PAS de fiche à lui dans la file : seules
+        # la facture et le BL déjà reçu y sont, et désignent la facture préparée.
+        self.assertIsNone(nouveau["fiche"])
+        self.assertFalse(frappe.db.exists(FICHE, {"supplier": SCPS, "numero_bl": BL_B}))
+        recu_b = frappe.db.get_value("Purchase Receipt", nouveau["purchase_receipt"],
+                                     ["docstatus", "supplier_delivery_note", "total_taxes_and_charges"], as_dict=True)
+        self.assertEqual((recu_b.docstatus, recu_b.supplier_delivery_note, flt(recu_b.total_taxes_and_charges)), (1, BL_B, 0.0))
         self.assertEqual(flt(frappe.db.get_value("Purchase Order", nouveau["purchase_order"], "total_taxes_and_charges")), 0.0)
-        # Les trois fiches (la facture, le BL reçu, le BL né ici) désignent la facture préparée.
         self.assertEqual([b["fiche"] for b in achat["bls_factures"]], [self.a["fiche"]])
-        for nom in (r["fiche"], self.a["fiche"], nouveau["fiche"]):
-            self.assertEqual(frappe.db.get_value(FICHE, nom, "purchase_invoice"), pi.name, nom)
+        self.assertEqual(sorted(frappe.get_all(FICHE, filters={"purchase_invoice": pi.name}, pluck="name")),
+                         sorted([r["fiche"], self.a["fiche"]]))
         self.assertIn("Préparée par la caisse", " ".join(frappe.get_all(
             "Comment", filters={"reference_doctype": "Purchase Invoice", "reference_name": pi.name}, pluck="content")))
         # La même facture ne se saisit pas deux fois ; le BL ne se propose plus.
@@ -145,7 +150,7 @@ class TestFactureAchatSurBL(unittest.TestCase):
         self.assertEqual(flt(pi.outstanding_amount, 3), 207.158)   # pas payée : la dette est chez le fournisseur
         for recu in (self.a["purchase_receipt"], nouveau["purchase_receipt"]):
             self.assertEqual(flt(frappe.db.get_value("Purchase Receipt", recu, "per_billed")), 100.0, recu)
-        for nom in (r["fiche"], self.a["fiche"], nouveau["fiche"]):
+        for nom in (r["fiche"], self.a["fiche"]):
             self.assertEqual(frappe.db.get_value(FICHE, nom, "statut"), "Saisie", nom)
         net = frappe.db.sql("""select sum(credit - debit) from `tabGL Entry` where account = %s and is_cancelled = 0
                                and voucher_no in %s""", (S.compte_stock_recu_non_facture(),
@@ -183,7 +188,7 @@ class TestFactureAchatSurBL(unittest.TestCase):
                                  and is_cancelled = 0 and (voucher_no in %s or against_voucher = %s)""",
                               (SCPS, (pi.name, je.name), pi.name))[0][0]
         self.assertAlmostEqual(flt(solde), 0.0, places=3)
-        for nom in (r["fiche"], self.a["fiche"], achat["bls_recus"][0]["fiche"]):
+        for nom in (r["fiche"], self.a["fiche"]):
             self.assertEqual(frappe.db.get_value(FICHE, nom, "statut"), "Saisie", nom)
         # La retenue (1 % du TTC hors timbre) est sur la facture UNE fois, celle que la caisse a déjà retenue.
         self.assertEqual([flt(t.tax_amount, 3) for t in pi.taxes if t.account_head == C._compte_retenue()], [15.319])
@@ -213,6 +218,9 @@ class TestFactureAchatSurBL(unittest.TestCase):
         # Après tous ces refus, rien n'a bougé : le BL A est toujours ouvert, aucune facture préparée.
         self.assertEqual(frappe.db.get_value(FICHE, self.a["fiche"], ["statut", "purchase_invoice"]), ("À saisir", None))
         self.assertFalse(frappe.db.exists("Purchase Invoice", {"bill_no": NUMERO, "supplier": SCPS}))
+        # Le BL reçu SANS fiche par une première facture ne se reçoit pas une 2e fois par une autre.
+        self._creer()
+        self._refuse("déjà reçu en stock", numero_facture="TEST-FA-0002", bls_couverts=None)
 
     def test_sans_les_bl_le_comptable_est_prevenu(self):
         # Lignes illisibles à la caisse, « Sans les BL » : la fiche part comme avant, avec un avertissement.

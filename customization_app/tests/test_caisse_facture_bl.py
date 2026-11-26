@@ -76,6 +76,17 @@ class TestBLEnDouble(unittest.TestCase):
         self.assertIn("pas encore reçu", FB.bls_en_double(self.G, [annulee], [])[0]["motif"])
 
 
+class TestBLRecuSansFiche(unittest.TestCase):
+    """Un BL jamais saisi est reçu SANS fiche : son n° est sur la réception, et il ne se reçoit pas une 2e fois."""
+
+    def test_reconnu_par_la_reception(self):
+        g = [{"cle": B.cle_numero_bl("BL2615063"), "numero": "BL2615063"}, {"cle": "", "numero": ""}]
+        recus = [{"name": "MAT-PRE-1", "supplier_delivery_note": "BL 2615063"}, {"name": "MAT-PRE-2", "supplier_delivery_note": ""}]
+        self.assertEqual(FB.bls_deja_recus_sans_fiche(g, recus), [{"numero": "BL2615063", "reception": "MAT-PRE-1"}])
+        self.assertEqual(FB.bls_deja_recus_sans_fiche(g, [{"name": "MAT-PRE-3", "supplier_delivery_note": "BL999"}]), [])
+        self.assertEqual(FB.bls_deja_recus_sans_fiche([], recus), [])
+
+
 class TestPartage(unittest.TestCase):
     def test_facture_scps_le_timbre_est_dans_le_prix_du_bl_recu(self):
         # FT26080301 : 207,158 TTC, TVA 32,916, timbre 1,000 ; réceptions 87,291 (timbre dans le prix) + 86,962.
@@ -120,14 +131,6 @@ class TestLibelles(unittest.TestCase):
         self.assertEqual(FB.mode_echeancier("Traite bancaire"), "Traite bancaire LC")
         self.assertEqual(FB.mode_echeancier("Mixte"), "Espèces")
         self.assertEqual(FB.mode_echeancier(None), "Espèces")
-
-    def test_description_du_bl_recu_a_la_facture(self):
-        d = FB.description_bl("Réductions SCPS", "BL2615063", "FT26080301")
-        self.assertEqual(d, "Réductions SCPS — BL n°BL2615063 (reçu à la facture FT26080301)")
-        self.assertEqual(FB.description_bl("", "", ""), " (reçu à la facture)")
-        long = FB.description_bl("x" * 300, "BL1", "F1")
-        self.assertEqual(len(long), 140)
-        self.assertTrue(long.endswith("(reçu à la facture F1)"))
 
 
 class TestBLPayeALaLivraison(unittest.TestCase):

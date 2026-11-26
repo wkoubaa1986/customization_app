@@ -12,8 +12,8 @@ CE QUE FAIT LA SAISIE (sa décision : « code en premier »). En « Facture d'ac
   · l'analyse lit les BL que la facture cite ; chacun est cherché parmi les BL ouverts du fournisseur (caisse_bl,
     pour="achat") — un BL trouvé par son n° est coché d'office ;
   · un BL coché DÉJÀ REÇU n'est pas racheté : sa réception sera FACTURÉE (pas soldée contre une charge) ;
-  · les lignes qui ne sont sur aucune réception (BL jamais saisi, ou facture sans BL) sont REÇUES ici : une fiche BL,
-    une commande d'achat sans taxe et sa réception automatique — exactement l'état d'un BL photographié à la livraison ;
+  · les lignes qui ne sont sur aucune réception (BL jamais saisi, ou facture sans BL) sont REÇUES ici : une commande
+    d'achat sans taxe et sa réception (n° du BL sur la réception), SANS fiche à part dans la file des factures ;
   · la FACTURE D'ACHAT est préparée EN BROUILLON depuis toutes ces réceptions (prix des réceptions : ERPNext impose le
     même prix sur tout le circuit), avec son n°, sa date, la TVA lue, le timbre, le scan. Le comptable n'a plus qu'à
     vérifier et valider : les contrôles de bank_retenue_sync (scan PDF, totaux) jouent comme pour toute facture ;
@@ -150,14 +150,6 @@ def mode_echeancier(mode) -> str:
     return MODES_ECHEANCIER.get((mode or "").strip(), "Espèces")
 
 
-def description_bl(description, numero, numero_facture) -> str:
-    """La description d'une fiche de BL reçu à la facture. PURE."""
-    base = (description or "").strip()
-    suffixe = (" — BL n°%s" % numero) if numero else ""
-    suffixe += " (reçu à la facture %s)" % numero_facture if numero_facture else " (reçu à la facture)"
-    return (base[: 140 - len(suffixe)] + suffixe)[:140]
-
-
 # ── Accès base ───────────────────────────────────────────────────────────────
 
 def valider(bls_couverts, supplier) -> list:
@@ -198,10 +190,22 @@ def _fiches_bl(supplier: str) -> list:
     return fiches
 
 
+def bls_deja_recus_sans_fiche(groupes, receptions) -> list:
+    """Les groupes de lignes dont le n° de BL est celui d'une réception VALIDÉE du fournisseur (« BL du fournisseur ») :
+    un BL reçu par une facture précédente, sans fiche. PURE. `receptions` : [{name, supplier_delivery_note}].
+    → [{numero, reception}]."""
+    from customization_app.caisse_bl import cle_numero_bl
+
+    par_cle = {cle_numero_bl(r.get("supplier_delivery_note")): r.get("name") for r in receptions or []
+               if cle_numero_bl(r.get("supplier_delivery_note"))}
+    return [{"numero": g.get("numero") or "?", "reception": par_cle[g["cle"]]} for g in groupes or []
+            if g.get("cle") and g["cle"] in par_cle]
+
+
 def recevoir(groupe: dict, supplier: str, ctx: dict) -> dict:
-    """Reçoit les lignes d'un BL jamais saisi (ou sans réception) : sa fiche BL, une commande d'achat SANS taxe (toute la
-    TVA est sur la facture) et sa réception automatique — le stock entre. → {fiche, numero_bl, purchase_order,
-    purchase_receipt, ht, nouvelle (fiche créée ici)}."""
+    """Reçoit les lignes d'un BL jamais saisi (ou d'un BL coché sans réception) : une commande d'achat SANS taxe (toute
+    la TVA est sur la facture) et sa réception — le stock entre. → {fiche (None pour un BL jamais saisi), numero_bl,
+    purchase_order, purchase_receipt, ht, lignes}."""
     from customization_app import achats_magasin, caisse_depenses as C, caisse_stock_partiel as S
 
     lignes = groupe["lignes"]
@@ -209,28 +213,18 @@ def recevoir(groupe: dict, supplier: str, ctx: dict) -> dict:
         if not frappe.db.get_value("Item", l["item_code"], "is_stock_item"):
             frappe.throw(_("{0} n'est pas un article de stock : il ne peut pas être reçu par une facture d'achat.")
                          .format(l["item_code"]))
-    ht = round(sum(flt(l["qty"]) * flt(l["rate"]) for l in lignes), 3)
-    taux = flt(ctx.get("taux_tva")) or 19.0
+    # Un BL JAMAIS SAISI n'a PAS de fiche à lui (retour du 26/11/2026 : une 3e ligne « À saisir » dans la file, prise pour
+    # une nouvelle facture). Sa commande et sa réception naissent ici, rattachées à la facture ; son n° reste lisible
+    # sur la réception (« BL du fournisseur ») et dans le commentaire de la facture préparée. Seul un BL coché qui avait
+    # déjà sa fiche (photographié à la livraison, pas encore reçu) est reçu SUR cette fiche.
     nom = groupe.get("fiche")
-    nouvelle = not nom
-    if nouvelle:
-        fiche = frappe.get_doc({
-            "doctype": FICHE, "fournisseur": (ctx.get("fournisseur") or "").strip(), "supplier": supplier,
-            "montant": round(ht * (1 + taux / 100.0), 3), "numero_facture": "",
-            "date_facture": groupe.get("date") or ctx.get("date_facture") or None,
-            "est_bl": 1, "numero_bl": groupe.get("numero") or "", "mode_paiement": "Pas payé",
-            "description": description_bl(ctx.get("description"), groupe.get("numero"), ctx.get("numero_facture")),
-            "saisi_par": frappe.session.user})
-        fiche.insert(ignore_permissions=True)
-        nom = fiche.name
-        if ctx.get("photo"):
-            C._attacher_scan(ctx["photo"], "facture-%s" % nom, FICHE, nom, coins=ctx.get("coins"))
     po = frappe.new_doc("Purchase Order")
     po.supplier = supplier
     po.company = C.COMPANY
     po.transaction_date = nowdate()
     po.schedule_date = nowdate()
-    po.custom_fiche_caisse = nom
+    if nom:
+        po.custom_fiche_caisse = nom
     po.set_warehouse = achats_magasin.ENTREPOT_ACHATS
     po.disable_rounded_total = 1
     for l in lignes:
@@ -245,15 +239,25 @@ def recevoir(groupe: dict, supplier: str, ctx: dict) -> dict:
     if flt(po.grand_total) != flt(po.net_total):
         frappe.throw(_("La commande des articles reçus porte encore une taxe ({0} pour {1} HT) : vérifiez le modèle de taxe "
                        "du fournisseur {2}.").format(po.grand_total, po.net_total, supplier))
-    po.submit()   # hooks de caisse_depenses : lien avec la fiche, puis réception automatique (_po_recu_auto)
-    recu = frappe.db.get_value(FICHE, nom, "purchase_receipt")
+    po.submit()   # avec une fiche : hooks de caisse_depenses (lien avec la fiche, réception automatique _po_recu_auto)
+    if nom:
+        recu = frappe.db.get_value(FICHE, nom, "purchase_receipt")
+    else:
+        from erpnext.buying.doctype.purchase_order.purchase_order import make_purchase_receipt
+        pr = make_purchase_receipt(po.name)
+        S._sans_taxes(pr)
+        if groupe.get("numero") and pr.meta.has_field("supplier_delivery_note"):
+            pr.supplier_delivery_note = groupe["numero"]
+        pr.flags.ignore_permissions = True
+        pr.insert()
+        pr.submit()
+        recu = pr.name
     if not recu or frappe.db.get_value("Purchase Receipt", recu, "docstatus") != 1:
         # _po_recu_auto ne bloque jamais une commande saisie à la main ; ici, sans réception, pas de facture : tout s'annule.
         frappe.throw(_("La réception des articles du BL {0} n'a pas pu être créée (commande {1}) : rien n'est enregistré. "
                        "Voir le journal des erreurs « Caisse: échec reçu auto ».").format(groupe.get("numero") or "—", po.name))
     return {"fiche": nom, "numero_bl": groupe.get("numero") or "", "purchase_order": po.name, "purchase_receipt": recu,
-            "ht": flt(frappe.db.get_value("Purchase Receipt", recu, "net_total"), 3), "nouvelle": nouvelle,
-            "lignes": lignes}
+            "ht": flt(frappe.db.get_value("Purchase Receipt", recu, "net_total"), 3), "lignes": lignes}
 
 
 def _ligne_taxe(pi, compte, montant, description):
@@ -348,6 +352,13 @@ def traiter(fiche_facture: str, supplier: str, bls_couverts, articles, ctx: dict
         frappe.throw("<br>".join(_("Le BL {0} est déjà saisi (fiche {1} : {2}) : ses articles ne se reçoivent pas une 2e fois. "
                                    "Cochez ce BL, ou voyez le comptable.").format(x["numero"], x["fiche"], x["motif"])
                                  for x in doubles), title=_("BL déjà saisi"))
+    deja = bls_deja_recus_sans_fiche(groupes, frappe.get_all(
+        "Purchase Receipt", filters={"supplier": supplier, "docstatus": 1, "supplier_delivery_note": ["is", "set"]},
+        fields=["name", "supplier_delivery_note"]))
+    if deja:
+        frappe.throw("<br>".join(_("Le BL {0} est déjà reçu en stock (réception {1}) : ses articles ne se reçoivent pas "
+                                   "une 2e fois. Voyez le comptable.").format(x["numero"], x["reception"]) for x in deja),
+                     title=_("BL déjà reçu"))
     nouveaux = [recevoir(g, supplier, ctx) for g in groupes]
     receptions = [b["purchase_receipt"] for b in recus] + [n["purchase_receipt"] for n in nouveaux]
     facture = brouillon(supplier, receptions, ctx)
@@ -359,7 +370,11 @@ def traiter(fiche_facture: str, supplier: str, bls_couverts, articles, ctx: dict
     pi = facture["purchase_invoice"]
     # Le rattachement (hook on_update de la facture : fiche de la facture par son n°, fiches BL par leurs réceptions) est
     # vérifié ici et complété si besoin : c'est lui qui fera passer chaque fiche « Saisie » et l'avance en paiement.
-    fiches = [fiche_facture] + [b["fiche"] for b in bls] + [n["fiche"] for n in nouveaux]
+    fiches = [fiche_facture] + [b["fiche"] for b in bls] + [n["fiche"] for n in nouveaux if n["fiche"]]
+    for n in nouveaux:
+        # Le scan de la facture suit la commande et la réception nées ici (elles n'ont pas de fiche à elles).
+        if not n["fiche"]:
+            C._copier_justificatifs(fiche_facture, "Purchase Receipt", n["purchase_receipt"])
     for nom in dict.fromkeys(fiches):
         if frappe.db.get_value(FICHE, nom, "purchase_invoice") != pi:
             frappe.db.set_value(FICHE, nom, "purchase_invoice", pi, update_modified=False)
