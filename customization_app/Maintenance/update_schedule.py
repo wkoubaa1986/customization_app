@@ -13,6 +13,17 @@ Revue du 03/10/2026 (bugs corrigés ici, règles dans « Config Relances » = cu
 - la famille « devinée » sortait d'un set (ordre aléatoire) → ordre de priorité du réglage ;
 - un échéancier deviné n'était jamais remplacé quand la vraie machine arrivait → il est retiré s'il n'a servi à rien ;
 - les journaux [SUMMARY] partaient en INFO que la prod n'écrit pas → journal dédié qui écrit.
+
+Revue du 25/11/2026 (analyse « cartographie entretien », copie de prod) :
+- la prolongation attendait que TOUTES les visites aient reçu un SMS : une visite faite sans SMS ou une vieille visite
+  jamais relancée la bloquait pour toujours (1 511 échéanciers sur 3 263, 38 déjà sans visite à venir) → chaque ARTICLE
+  sans visite à venir est prolongé (articles_a_prolonger) ;
+- la « devinette » retirée à l'arrivée de la vraie machine visait toute machine type sans visite réalisée : deux
+  AP-M-AJ-5-SM vendus au même client se supprimaient l'un l'autre chaque nuit → on ne retire que si la commande
+  d'origine ne vend pas cette machine (commande_vend_la_famille), et dans le doute on garde.
+- (26/11/2026, relecture) la prolongation par article ranimait aussi les flux en double (échéanciers aux visites
+  identiques, porte-filtre d'un client dont la machine est suivie) : 14 des 42 échéanciers de la 1re nuit → rafales de SMS ;
+  ils restent gelés (articles_geles).
 """
 from __future__ import unicode_literals
 
@@ -231,9 +242,32 @@ def _famille_de_la_ligne(ms, item_code, fams=None, cache=None):
 # 4) PROLONGATION
 # ----------------------------------------------------------------------
 
-def has_free_sms_slots(ms):
-    """Reste-t-il une visite qui n'a encore reçu aucun SMS ? (champs réels : custom_sms_1 / custom_sms_2)"""
-    return any(not getattr(r, "custom_sms_1", None) and not getattr(r, "custom_sms_2", None) for r in getattr(ms, "schedules", []))
+def visite_a_venir(r, aujourd_hui) -> bool:
+    """Une visite encore à faire, prévue APRÈS aujourd'hui. PURE."""
+    return bool(r.scheduled_date and getdate(r.scheduled_date) > getdate(aujourd_hui)
+                and not getattr(r, "actual_date", None) and getattr(r, "completion_status", None) != "Fully Completed")
+
+
+def articles_a_prolonger(lignes, aujourd_hui) -> list:
+    """Les articles d'un échéancier qui n'ont plus AUCUNE visite à venir (analyse du 25/11/2026). PURE.
+
+    Avant, un échéancier ne se prolongeait que lorsque TOUTES ses visites avaient reçu un SMS. Or une visite réalisée sans
+    SMS (entretien fait en avance, échéancier deviné dont la première visite est soldée à la création) ou une ancienne
+    visite échue jamais relancée (seule la plus récente l'est depuis le 02/11/2026) comptait comme « reste à relancer » :
+    1 511 échéanciers sur 3 263 ne se prolongeaient jamais, 38 n'avaient déjà plus aucune visite à venir. Et un
+    échéancier à deux machines dont l'une avait encore des visites bloquait l'autre. Désormais : chaque article sans
+    visite à venir est prolongé, quoi qu'il en soit des SMS. → [item_code], dans l'ordre des lignes."""
+    par_article = {}
+    for r in lignes or []:
+        if r.item_code and r.scheduled_date:
+            par_article.setdefault(r.item_code, []).append(r)
+    return [code for code, rows in par_article.items() if not any(visite_a_venir(r, aujourd_hui) for r in rows)]
+
+
+def has_free_sms_slots(ms, aujourd_hui=None):
+    """Compatibilité : vrai tant que CHAQUE article de l'échéancier a encore une visite à venir (rien à prolonger).
+    Le nom date de l'ancienne règle (« reste-t-il une visite sans SMS ? »), remplacée le 25/11/2026 : articles_a_prolonger."""
+    return not articles_a_prolonger(getattr(ms, "schedules", []), aujourd_hui or nowdate())
 
 
 def build_item_periodicity_map(ms):
@@ -252,19 +286,122 @@ def prochaines_dates(derniere, mois, n, aujourd_hui):
     return [add_months(d, mois * i) for i in range(n)]
 
 
-def extend_schedule_for_sms(ms, extra_visits_per_item=None, aujourd_hui=None):
-    """Quand toutes les visites ont reçu leurs SMS, on ajoute `visites_ajoutees` visites par article (réglage). Statut
-    « Pending », nom d'article et vendeur repris de la ligne précédente. → nombre de lignes ajoutées."""
-    if has_free_sms_slots(ms):
-        return 0
+def couvert_par(realisees_moi, realisees_autre) -> bool:
+    """Un flux (échéancier × article) en DOUBLE un autre de la même famille chez le même client quand chacune de ses visites
+    réalisées l'a aussi été sur l'autre : même commande (un achat de cartouches marquait les deux), ou visite faite à la
+    main le même jour (« main:<date> »). Sans visite réalisée, rien ne le prouve. PURE.
+    Relecture du 26/11/2026 : Ben Salem Néjib (MAT-MSH-2023-00847 / 01074, mêmes 6 commandes) ; Ambassade de Turky
+    (MAT-MSH-2023-00143 / 01080, 10 visites identiques dont une à la main le 15/01/2025)."""
+    a, b = set(realisees_moi or []), set(realisees_autre or [])
+    return bool(a) and "" not in a and a <= b
+
+
+def _cle_flux(code, famille_de):
+    return famille_de(code) or ("article:" + code)
+
+
+def articles_a_garder_geles(ms_name, a_prolonger, miens, autres, famille_de) -> dict:
+    """{item_code: motif} — les articles épuisés d'un échéancier qu'on NE prolonge PAS (revue du 26/11/2026). PURE.
+
+    La prolongation par article (25/11/2026) ranimait aussi des flux qui en doublent un autre et s'étaient éteints :
+    14 des 42 échéanciers prolongés la 1re nuit avaient un autre échéancier de la même famille chez le même client, d'où
+    des SMS en rafale (KEMVET : 10 jours de SMS en 4 mois au lieu de 4) et des « cycles » comptés deux fois. Ne repartent pas :
+    - un PORTE-FILTRE (famille accessoire) quand le client a une vraie machine suivie : il est changé à son entretien ;
+    - un DOUBLON (`couvert_par`) d'un flux qui a encore une visite à venir, ou d'un flux gelé qui a des visites en plus ;
+    - de deux jumeaux gelés (mêmes visites), le plus ancien : seul le plus récent repart.
+    `miens` / `autres` : [{ms, item_code, creation, a_venir, realisees}] de cet échéancier / des autres échéanciers soumis
+    du client ; `famille_de` : item_code → famille ou None."""
+    tous = list(miens) + list(autres)
+    out = {}
+    for code in a_prolonger:
+        moi = next((f for f in miens if f["item_code"] == code), None)
+        if moi is None:
+            continue
+        fam = _cle_flux(code, famille_de)
+        if fam in FAMILLES_ACCESSOIRES:
+            machine = next((f for f in tous if famille_de(f["item_code"]) and famille_de(f["item_code"]) not in FAMILLES_ACCESSOIRES), None)
+            if machine:
+                out[code] = "porte-filtre changé à l'entretien de la machine (%s)" % machine["ms"]
+                continue
+        for f in tous:
+            if f is moi or _cle_flux(f["item_code"], famille_de) != fam or not couvert_par(moi["realisees"], f["realisees"]):
+                continue
+            if f["a_venir"]:
+                out[code] = "doublon de %s (mêmes visites), qui a encore une visite à venir" % f["ms"]
+                break
+            if not couvert_par(f["realisees"], moi["realisees"]):
+                out[code] = "doublon de %s (qui a des visites en plus) : c'est lui qui repart" % f["ms"]
+                break
+            if (str(f["creation"]), f["ms"], f["item_code"]) > (str(moi["creation"]), moi["ms"], moi["item_code"]):
+                out[code] = "jumeau gelé de %s, plus récent : seul celui-ci repart" % f["ms"]
+                break
+    return out
+
+
+def flux_de_l_echeancier(ms, aujourd_hui) -> list:
+    """Les flux (un par article) d'un échéancier EN MÉMOIRE (il peut porter des visites pas encore enregistrées). PURE."""
+    par = {}
+    for r in getattr(ms, "schedules", []) or []:
+        if not (r.item_code and r.scheduled_date):
+            continue
+        f = par.setdefault(r.item_code, {"ms": ms.name, "item_code": r.item_code, "creation": str(getattr(ms, "creation", "") or ""),
+                                         "a_venir": False, "realisees": []})
+        f["a_venir"] = f["a_venir"] or visite_a_venir(r, aujourd_hui)
+        if getattr(r, "actual_date", None):
+            f["realisees"].append((getattr(r, "custom_sales_order", None) or "").strip() or "main:%s" % getdate(r.actual_date))
+    return list(par.values())
+
+
+def flux_des_autres_echeanciers(customer, sauf_ms, aujourd_hui) -> list:
+    """Les flux (échéancier × article) des AUTRES échéanciers soumis du client — une requête."""
+    rows = frappe.db.sql("""
+        select ms.name, ms.creation, d.item_code,
+               max(d.scheduled_date > %(t)s and d.actual_date is null and ifnull(d.completion_status, '') != 'Fully Completed') as a_venir,
+               group_concat(case when d.actual_date is not null then
+                   if(trim(ifnull(d.custom_sales_order, '')) = '', concat('main:', d.actual_date), trim(d.custom_sales_order)) end
+                   separator '|') as realisees
+        from `tabMaintenance Schedule Detail` d join `tabMaintenance Schedule` ms on ms.name = d.parent
+        where ms.docstatus = 1 and ms.customer = %(c)s and ms.name != %(m)s
+          and ifnull(d.item_code, '') != '' and d.scheduled_date is not null
+        group by ms.name, ms.creation, d.item_code""", {"t": getdate(aujourd_hui), "c": customer, "m": sauf_ms or ""}, as_dict=True)
+    return [{"ms": r.name, "item_code": r.item_code, "creation": str(r.creation), "a_venir": bool(cint(r.a_venir)),
+             "realisees": [] if r.realisees is None else r.realisees.split("|")} for r in rows]
+
+
+def articles_geles(ms, a_prolonger, aujourd_hui, fams=None, cache=None) -> dict:
+    """`articles_a_garder_geles` pour un échéancier réel (ses autres échéanciers lus en base). Sans client (objet de test) : {}."""
+    customer = getattr(ms, "customer", None)
+    if not (a_prolonger and customer):
+        return {}
+    fams, cache = fams or RC.familles(), cache if cache is not None else {}
+    return articles_a_garder_geles(ms.name, a_prolonger, flux_de_l_echeancier(ms, aujourd_hui),
+                                   flux_des_autres_echeanciers(customer, ms.name, aujourd_hui),
+                                   lambda code: famille_machine(_item(code, cache), fams))
+
+
+def extend_schedule_for_sms(ms, extra_visits_per_item=None, aujourd_hui=None, exclus=None):
+    """Chaque article qui n'a plus de visite à venir (articles_a_prolonger) reçoit `visites_ajoutees` visites (réglage),
+    au pas de sa périodicité, après sa dernière visite. Statut « Pending », nom d'article et vendeur repris de la ligne
+    précédente. Les articles qui ont encore une visite à venir ne bougent pas, ni ceux qui doublent un autre flux du client
+    (`articles_geles`, 26/11/2026 ; `exclus` les donne déjà calculés) : ils sont notés dans ms.flags.articles_geles.
+    → nombre de lignes ajoutées."""
+    aujourd_hui = aujourd_hui or nowdate()
     lignes = getattr(ms, "schedules", [])
-    if not lignes:
+    a_prolonger = articles_a_prolonger(lignes, aujourd_hui)
+    if not a_prolonger:
+        return 0
+    geles = articles_geles(ms, a_prolonger, aujourd_hui) if exclus is None else dict(exclus)
+    flags = getattr(ms, "flags", None)
+    if flags is not None:
+        flags.articles_geles = geles
+    a_prolonger = [c for c in a_prolonger if c not in geles]
+    if not a_prolonger:
         return 0
     n = cint(extra_visits_per_item) or RC.config()["visites_ajoutees"]
     periodicites = build_item_periodicity_map(ms)
     par_article = {}
     for r in lignes:
-        if r.item_code:
+        if r.item_code in a_prolonger:
             par_article.setdefault(r.item_code, []).append(r)
     ajoutees = 0
     for code, rows in par_article.items():
@@ -272,7 +409,7 @@ def extend_schedule_for_sms(ms, extra_visits_per_item=None, aujourd_hui=None):
         if not dates:
             continue
         modele = rows[-1]
-        for d in prochaines_dates(max(dates), periodicites.get(code, 6), n, aujourd_hui or nowdate()):
+        for d in prochaines_dates(max(dates), periodicites.get(code, 6), n, aujourd_hui):
             ms.append("schedules", {"item_code": code, "item_name": getattr(modele, "item_name", None), "scheduled_date": d,
                                     "completion_status": "Pending", "sales_person": getattr(modele, "sales_person", None) or SALES_PERSON})
             ajoutees += 1
@@ -445,9 +582,25 @@ def _nouvel_echeancier(customer, delivery_date, lignes_items, cfg):
     return ms
 
 
+def commande_vend_la_famille(sales_order, famille, fams=None, cache=None):
+    """La commande liée à une ligne machine vend-elle une machine de cette famille ? True : oui (vraie vente) ; False :
+    non (achat de consommables — c'est d'elle qu'est née la devinette) ; None : commande absente ou supprimée, on ne
+    sait pas. Les codes sont résolus comme à la création (resoudre_article)."""
+    if not sales_order or not frappe.db.exists("Sales Order", sales_order):
+        return None
+    for code in frappe.db.sql_list("select item_code from `tabSales Order Item` where parent = %s", (sales_order,)):
+        item = resoudre_article(code, cache)
+        if item and famille_machine(item, fams) == famille:
+            return True
+    return False
+
+
 def _retirer_echeancier_devine(customer_name, famille, fams, cache):
-    """La vraie machine arrive : l'échéancier deviné de la même famille (machine type, aucune visite réalisée) est retiré.
-    S'il porte déjà des visites réalisées, on le garde et on le dit."""
+    """La vraie machine arrive : l'échéancier DEVINÉ de la même famille est retiré — seulement s'il est sûr que c'est une
+    devinette : la machine type seule, aucune visite réalisée, et une ligne machine liée à une commande qui ne vend PAS
+    cette famille. Avant le 25/11/2026, la machine type suffisait : un client qui achète deux AP-M-AJ-5-SM le même jour
+    (SAL-ORD-2026-03459 / 03460, deux BL) voyait chaque nuit l'une des commandes supprimer l'échéancier de l'autre,
+    prise pour une devinette — 34 suppressions du 23/10 au 25/11, une machine jamais suivie. Dans le doute, on garde."""
     f = RC.famille(famille, fams)
     type_code = (f or {}).get("article_type")
     if not type_code:
@@ -457,6 +610,12 @@ def _retirer_echeancier_devine(customer_name, famille, fams, cache):
             continue
         if any(r.actual_date for r in ms.schedules):
             log(f"[GUESS] {ms.name} deviné ({type_code}) gardé : des visites y sont réalisées")
+            continue
+        origine = (ms.items[0].sales_order or "") if ms.items else ""
+        vend = commande_vend_la_famille(origine, famille, fams, cache)
+        if vend is not False:
+            log(f"[GUESS] {ms.name} ({type_code}) gardé : "
+                + (f"vraie vente de la machine ({origine})" if vend else "commande d'origine inconnue"))
             continue
         ms.flags.ignore_links = ms.flags.ignore_permissions = True
         ms.cancel()
@@ -792,32 +951,57 @@ def requalifier_clients_silencieux(cfg=None) -> int:
     return marques
 
 
-def echeanciers_epuises() -> list:
-    """Les échéanciers soumis dont TOUTES les visites ont déjà reçu un SMS (plus rien à relancer) — une requête."""
-    return frappe.db.sql_list("""select ms.name from `tabMaintenance Schedule` ms join `tabMaintenance Schedule Detail` d on d.parent = ms.name
-                                 where ms.docstatus = 1 group by ms.name
-                                 having sum(d.custom_sms_1 is null and d.custom_sms_2 is null) = 0""")
+def echeanciers_epuises(aujourd_hui=None) -> list:
+    """Les échéanciers soumis dont au moins un article n'a plus aucune visite à venir — une requête, même règle que
+    articles_a_prolonger (25/11/2026 ; avant : « toutes les visites ont reçu un SMS », qui en bloquait 1 511)."""
+    return frappe.db.sql_list("""
+        select distinct x.parent from (
+            select d.parent, d.item_code,
+                   sum(d.scheduled_date > %(today)s and d.actual_date is null
+                       and ifnull(d.completion_status, '') != 'Fully Completed') as a_venir
+            from `tabMaintenance Schedule Detail` d
+            join `tabMaintenance Schedule` ms on ms.name = d.parent
+            where ms.docstatus = 1 and ifnull(d.item_code, '') != '' and d.scheduled_date is not null
+            group by d.parent, d.item_code) x
+        where x.a_venir = 0
+        order by x.parent""", {"today": getdate(aujourd_hui or nowdate())})
 
 
 def prolonger_echeanciers_epuises(extra_visits_per_item=None):
-    """Chaque nuit : les échéanciers épuisés reçoivent leurs visites suivantes (la prolongation « au fil des SMS » ne les
-    rattrape jamais, puisqu'ils n'ont plus de visite à relancer — 23 échéanciers muets au 03/10/2026). Chaque échéancier
-    est isolé. → nombre prolongés."""
-    n, erreurs = 0, 0
-    for name in echeanciers_epuises():
+    """Chaque nuit : les articles qui n'ont plus de visite à venir reçoivent leurs visites suivantes (la prolongation « au
+    fil des SMS » ne rattrape pas un échéancier qui n'a plus rien à relancer — 23 échéanciers muets au 03/10/2026, 38 au
+    25/11/2026), sauf ceux qui doublent un autre flux du client (`articles_geles`, 26/11/2026). Chaque échéancier est
+    isolé. → nombre prolongés."""
+    n, erreurs, geles = 0, 0, 0
+    jour = nowdate()
+    for name in echeanciers_epuises(jour):
         frappe.db.savepoint("ms_extend")
         try:
             ms = frappe.get_doc("Maintenance Schedule", name)
-            if extend_schedule_for_sms(ms, cint(extra_visits_per_item) or None):
+            if extend_schedule_for_sms(ms, cint(extra_visits_per_item) or None, aujourd_hui=jour):
                 ms.flags.ignore_permissions = True
                 ms.save()
                 n += 1
+            geles += len(ms.flags.get("articles_geles") or {})
         except Exception:
             frappe.db.rollback(save_point="ms_extend")
             erreurs += 1
             frappe.log_error(frappe.get_traceback(), f"Prolongation échéancier {name}")
-    log(f"[EXTEND] échéanciers épuisés prolongés : {n}, erreurs : {erreurs}")
+    log(f"[EXTEND] échéanciers épuisés prolongés : {n}, articles laissés gelés (jumeau / porte-filtre) : {geles}, erreurs : {erreurs}")
     return n
+
+
+def echeanciers_a_prolonger(aujourd_hui=None) -> list:
+    """Les échéanciers épuisés qui ont au moins un article à ranimer (hors jumeaux / porte-filtres gardés gelés) : doit
+    valoir [] après le passage de nuit. Pour l'entonnoir et les contrôles."""
+    jour = aujourd_hui or nowdate()
+    out, fams, cache = [], RC.familles(), {}
+    for name in echeanciers_epuises(jour):
+        ms = frappe.get_doc("Maintenance Schedule", name)
+        a = articles_a_prolonger(ms.schedules, jour)
+        if [c for c in a if c not in articles_geles(ms, a, jour, fams, cache)]:
+            out.append(name)
+    return out
 
 
 @frappe.whitelist()

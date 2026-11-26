@@ -33,14 +33,136 @@ class TestProlongation(unittest.TestCase):
                                                            custom_sms_1=datetime.date(2026, 1, 2), custom_sms_2=datetime.date(2026, 1, 9), sales_person="X")])
         ajout = []
         ms.append = lambda champ, valeurs: ajout.append(valeurs) or ms.schedules.append(frappe._dict(valeurs))
-        self.assertFalse(U.has_free_sms_slots(ms))
+        self.assertFalse(U.has_free_sms_slots(ms, "2026-10-03"))
         n = U.extend_schedule_for_sms(ms, extra_visits_per_item=2, aujourd_hui="2026-10-03")
         self.assertEqual(n, 2)
         self.assertEqual([a["scheduled_date"] for a in ajout], [datetime.date(2026, 7, 1), datetime.date(2027, 1, 1)])
         self.assertEqual({a["completion_status"] for a in ajout}, {"Pending"})                 # plus « En Attente »
         self.assertEqual(ajout[0]["item_name"], "Osmoseur")
-        self.assertTrue(U.has_free_sms_slots(ms))
+        self.assertTrue(U.has_free_sms_slots(ms, "2026-10-03"))   # daté : la règle dépend du jour depuis le 25/11/2026
         self.assertEqual(U.extend_schedule_for_sms(ms, 2, "2026-10-03"), 0)                     # plus rien à ajouter
+
+
+class TestProlongationParArticle(unittest.TestCase):
+    """25/11/2026 : un article se prolonge dès qu'il n'a plus de visite à venir — les SMS n'y sont plus pour rien."""
+
+    def test_une_visite_faite_sans_sms_ne_bloque_plus(self):
+        # Le cas des 1 511 : un entretien fait en avance (aucun SMS) comptait comme « reste à relancer ».
+        lignes = [_ligne("A", "2026-03-01", actual="2026-02-20", statut="Fully Completed"), _ligne("A", "2026-09-01")]
+        self.assertEqual(U.articles_a_prolonger(lignes, "2026-11-26"), ["A"])
+
+    def test_une_vieille_visite_jamais_relancee_ne_bloque_plus(self):
+        # Depuis le 02/11, seule la visite échue la plus récente est relancée : les plus anciennes restent sans SMS.
+        lignes = [_ligne("A", "2025-03-01"), _ligne("A", "2025-09-01"), _ligne("A", "2026-03-01")]
+        lignes[2].update(custom_sms_1=datetime.date(2026, 3, 3), custom_sms_2=datetime.date(2026, 3, 10))
+        self.assertEqual(U.articles_a_prolonger(lignes, "2026-11-26"), ["A"])
+
+    def test_par_article_et_ce_qui_compte_comme_a_venir(self):
+        lignes = [_ligne("A", "2027-03-01"), _ligne("B", "2026-09-01")]
+        self.assertEqual(U.articles_a_prolonger(lignes, "2026-11-26"), ["B"])             # A a encore une visite
+        fait = [_ligne("A", "2027-03-01", actual="2026-11-20", statut="Fully Completed")]
+        self.assertEqual(U.articles_a_prolonger(fait, "2026-11-26"), ["A"])               # à venir mais déjà faite
+        self.assertEqual(U.articles_a_prolonger([_ligne("A", "2026-11-26")], "2026-11-26"), ["A"])   # aujourd'hui : échue demain
+        self.assertEqual(U.articles_a_prolonger([_ligne("A", "2026-11-27")], "2026-11-26"), [])
+        sans_date = frappe._dict(item_code="C", scheduled_date=None, actual_date=None, completion_status="Pending")
+        self.assertEqual(U.articles_a_prolonger([sans_date], "2026-11-26"), [])           # rien à partir de quoi prolonger
+        self.assertEqual(U.articles_a_prolonger([], "2026-11-26"), [])
+
+    def test_seul_l_article_epuise_est_prolonge(self):
+        import types
+        rows = [frappe._dict(item_code="A", item_name="Osmoseur", scheduled_date=datetime.date(2027, 3, 1), completion_status="Pending"),
+                frappe._dict(item_code="B", item_name="Adoucisseur", scheduled_date=datetime.date(2026, 3, 1), completion_status="Fully Completed",
+                             actual_date=datetime.date(2026, 2, 20), sales_person="X")]
+        ms = types.SimpleNamespace(name="MS", items=[frappe._dict(item_code="A", periodicity="Half Yearly"),
+                                                     frappe._dict(item_code="B", periodicity="Yearly")], schedules=rows)
+        ms.append = lambda champ, v: rows.append(frappe._dict(v))
+        self.assertFalse(U.has_free_sms_slots(ms, "2026-11-26"))
+        self.assertEqual(U.extend_schedule_for_sms(ms, 2, "2026-11-26"), 2)
+        ajoutees = [(r.item_code, str(r.scheduled_date)) for r in rows[2:]]
+        self.assertEqual(ajoutees, [("B", "2027-03-01"), ("B", "2028-03-01")])           # A ne bouge pas ; B au pas annuel
+        self.assertTrue(U.has_free_sms_slots(ms, "2026-11-26"))
+        self.assertEqual(U.extend_schedule_for_sms(ms, 2, "2026-11-26"), 0)
+
+
+class TestFluxEnDouble(unittest.TestCase):
+    """26/11/2026 (relecture du lot 1) : un flux qui en double un autre chez le même client ne repart pas."""
+
+    FAM = {"AP-5": "RO_DOM", "AP-6": "RO_DOM", "PF-10": "PF", "ADOU": "ADOU"}.get
+
+    @staticmethod
+    def _f(ms, code, realisees, a_venir=False, creation="2024-01-01"):
+        return {"ms": ms, "item_code": code, "realisees": realisees, "a_venir": a_venir, "creation": creation}
+
+    def test_couvert_par(self):
+        self.assertTrue(U.couvert_par(["SO1", "SO2"], ["SO1", "SO2"]))        # Ben Salem : les mêmes commandes
+        self.assertTrue(U.couvert_par(["SO1"], ["SO1", "SO2"]))
+        self.assertFalse(U.couvert_par(["SO1", "SO2"], ["SO1"]))              # il a une visite de plus : son histoire
+        self.assertFalse(U.couvert_par(["SO_A"], ["SO_B"]))                   # deux machines vendues séparément
+        self.assertFalse(U.couvert_par(["SO_A", "SO_C"], ["SO_B", "SO_C"]))   # puis un achat commun : toujours deux machines
+        self.assertFalse(U.couvert_par([], ["SO1"]))                          # rien ne le prouve
+        self.assertTrue(U.couvert_par(["SO1", "main:2025-01-15"], ["SO1", "main:2025-01-15"]))   # Ambassade de Turky
+        self.assertFalse(U.couvert_par(["SO1", "main:2025-01-15"], ["SO1", "main:2025-02-01"]))  # faite à la main, seul
+
+    def test_flux_en_memoire_date_les_visites_faites_a_la_main(self):
+        import types
+        ms = types.SimpleNamespace(name="MS", creation="2024-01-01", schedules=[
+            frappe._dict(item_code="A", scheduled_date=datetime.date(2025, 1, 1), actual_date=datetime.date(2025, 1, 15), custom_sales_order=None),
+            frappe._dict(item_code="A", scheduled_date=datetime.date(2025, 7, 1), actual_date=datetime.date(2025, 7, 2), custom_sales_order="SO1"),
+            frappe._dict(item_code="A", scheduled_date=datetime.date(2027, 1, 1))])
+        f = U.flux_de_l_echeancier(ms, "2026-11-26")
+        self.assertEqual(f, [{"ms": "MS", "item_code": "A", "creation": "2024-01-01", "a_venir": True,
+                              "realisees": ["main:2025-01-15", "SO1"]}])
+
+    def test_jumeau_d_un_flux_vivant_reste_gele(self):
+        moi = self._f("MS-OLD", "AP-6", ["SO1", "SO2"])
+        autre = self._f("MS-NEW", "AP-6", ["SO1", "SO2"], a_venir=True)
+        g = U.articles_a_garder_geles("MS-OLD", ["AP-6"], [moi], [autre], self.FAM)
+        self.assertIn("MS-NEW", g["AP-6"])
+
+    def test_deux_jumeaux_geles_seul_le_plus_recent_repart(self):
+        vieux = self._f("MS-1", "AP-5", ["SO1"], creation="2023-01-01")
+        recent = self._f("MS-2", "AP-5", ["SO1"], creation="2023-06-01")
+        self.assertIn("AP-5", U.articles_a_garder_geles("MS-1", ["AP-5"], [vieux], [recent], self.FAM))
+        self.assertEqual(U.articles_a_garder_geles("MS-2", ["AP-5"], [recent], [vieux], self.FAM), {})
+
+    def test_un_doublon_gele_laisse_repartir_celui_qui_a_plus_d_histoire(self):
+        petit = self._f("MS-1", "AP-5", ["SO1"], creation="2025-01-01")
+        grand = self._f("MS-2", "AP-5", ["SO1", "SO2"], creation="2023-01-01")
+        self.assertIn("MS-2", U.articles_a_garder_geles("MS-1", ["AP-5"], [petit], [grand], self.FAM)["AP-5"])
+        self.assertEqual(U.articles_a_garder_geles("MS-2", ["AP-5"], [grand], [petit], self.FAM), {})
+
+    def test_deux_vraies_machines_repartent_toutes_les_deux(self):
+        a = self._f("MS-A", "AP-5", ["SO_A", "SO_C"])
+        b = self._f("MS-B", "AP-5", ["SO_B", "SO_C"], a_venir=True)
+        self.assertEqual(U.articles_a_garder_geles("MS-A", ["AP-5"], [a], [b], self.FAM), {})
+
+    def test_autre_famille_ne_compte_pas(self):
+        moi = self._f("MS-1", "ADOU", ["SO1"])
+        autre = self._f("MS-2", "AP-5", ["SO1"], a_venir=True)
+        self.assertEqual(U.articles_a_garder_geles("MS-1", ["ADOU"], [moi], [autre], self.FAM), {})
+
+    def test_porte_filtre_suit_la_machine(self):
+        # Nizar Ayadi : le porte-filtre de l'échéancier de l'osmoseur ; KEMVET : un échéancier porte-filtre seul.
+        pf = self._f("MS-1", "PF-10", ["SO1"])
+        machine = self._f("MS-1", "AP-5", ["SO1"], a_venir=True)
+        self.assertIn("porte-filtre", U.articles_a_garder_geles("MS-1", ["PF-10"], [pf, machine], [], self.FAM)["PF-10"])
+        seul = self._f("MS-PF", "PF-10", ["SO9"])
+        self.assertIn("MS-1", U.articles_a_garder_geles("MS-PF", ["PF-10"], [seul], [machine], self.FAM)["PF-10"])
+        # Un porte-filtre sans machine chez le client repart.
+        self.assertEqual(U.articles_a_garder_geles("MS-PF", ["PF-10"], [seul], [], self.FAM), {})
+
+    def test_extension_saute_les_articles_geles(self):
+        import types
+        ms = types.SimpleNamespace(name="MS-T", flags=frappe._dict(), items=[frappe._dict(item_code="A", periodicity="Half Yearly"),
+                                                                             frappe._dict(item_code="B", periodicity="Half Yearly")],
+                                   schedules=[frappe._dict(item_code="A", scheduled_date=datetime.date(2026, 1, 1)),
+                                              frappe._dict(item_code="B", scheduled_date=datetime.date(2026, 1, 1))])
+        ajout = []
+        ms.append = lambda champ, valeurs: ajout.append(valeurs) or ms.schedules.append(frappe._dict(valeurs))
+        n = U.extend_schedule_for_sms(ms, 2, "2026-10-03", exclus={"B": "jumeau"})
+        self.assertEqual((n, {a["item_code"] for a in ajout}), (2, {"A"}))
+        self.assertEqual(ms.flags.articles_geles, {"B": "jumeau"})
+        self.assertEqual(U.extend_schedule_for_sms(ms, 2, "2026-10-03", exclus={"B": "jumeau"}), 0)
 
 
 class TestDecalage(unittest.TestCase):
