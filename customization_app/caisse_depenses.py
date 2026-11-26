@@ -206,6 +206,26 @@ def comptes_classifiables():
         (PARENT_CLASSIFICATION, tuple(COMPTES_EXCLUS_CLASSIFICATION)))]
 
 
+#: La consigne de lecture des BL qu'une FACTURE regroupe — la même pour « Dépense avec facture » (_classifier) et pour
+#: « Facture d'achat » (_decrire, 26/11/2026).
+CONSIGNE_BLS_CITES = (
+    "\"bls_cites\": <si c'est une FACTURE : la liste des bons de livraison qu'elle regroupe ou "
+    "cite (rubriques « TOTAL BL N° … DU … », « BL… » suivi d'une date au-dessus de ses lignes, « Selon BL n° … », "
+    "« Vos BL … »), chacun {\"numero\": <tel qu'écrit>, \"date\": <AAAA-MM-JJ ou null>, \"total_ht\": <sous-total "
+    "HT du BL ou null>, \"total_ttc\": <sous-total TTC du BL ou null>} ; [] si aucun ; "
+    "JAMAIS le numéro de la facture elle-même ; montants en dinars, « 8,750 » vaut 8.75>")
+
+
+def _bls_cites_lus(lu) -> list:
+    """Les BL cités, normalisés : [{numero, date, total_ht, total_ttc}]. PURE."""
+    cites = []
+    for c in (lu or {}).get("bls_cites") or []:
+        if isinstance(c, dict) and str(c.get("numero") or "").strip():
+            cites.append({"numero": str(c["numero"]).strip(), "date": c.get("date") or None,
+                          "total_ht": flt(c.get("total_ht"), 3) or None, "total_ttc": flt(c.get("total_ttc"), 3) or None})
+    return cites
+
+
 def _classifier(image_bytes, mimetype, extraction):
     """Demande au modèle LE compte de charge de la dépense ET sa description lue
     sur la photo (même appel : pas de latence en plus), le type de pièce, et — pour
@@ -231,11 +251,7 @@ def _classifier(image_bytes, mimetype, extraction):
             "note et n'a pas de numéro de facture ni de mention TVA à payer>, "
             "\"numero_bl\": <le numéro du bon de livraison s'il s'agit d'un "
             "BL, tel qu'écrit ; null sinon>, "
-            "\"bls_cites\": <si c'est une FACTURE : la liste des bons de livraison qu'elle regroupe ou "
-            "cite (rubriques « TOTAL BL N° … DU … », « Selon BL n° … », « Vos BL … »), chacun "
-            "{\"numero\": <tel qu'écrit>, \"date\": <AAAA-MM-JJ ou null>, \"total_ht\": <sous-total "
-            "HT du BL ou null>, \"total_ttc\": <sous-total TTC du BL ou null>} ; [] si aucun ; "
-            "JAMAIS le numéro de la facture elle-même ; montants en dinars, « 8,750 » vaut 8.75>}. "
+            + CONSIGNE_BLS_CITES + "}. "
             + _consigne_matricule()
             + " Liste des comptes autorisés : " + json.dumps(comptes, ensure_ascii=False)),
         input=[{"role": "user", "content": [
@@ -256,11 +272,7 @@ def _classifier(image_bytes, mimetype, extraction):
     if not isinstance(lu, dict):
         return vide
     compte = (lu.get("compte") or "").strip()
-    cites = []
-    for c in lu.get("bls_cites") or []:
-        if isinstance(c, dict) and str(c.get("numero") or "").strip():
-            cites.append({"numero": str(c["numero"]).strip(), "date": c.get("date") or None,
-                          "total_ht": flt(c.get("total_ht"), 3) or None, "total_ttc": flt(c.get("total_ttc"), 3) or None})
+    cites = _bls_cites_lus(lu)
     return {"compte": compte if compte in comptes else None,
             "description": (lu.get("description") or "").strip(),
             "matricule": (lu.get("matricule") or "").strip(),
@@ -271,7 +283,9 @@ def _classifier(image_bytes, mimetype, extraction):
 
 def _decrire(image_bytes, mimetype):
     """La description de la dépense ET le matricule fiscal du FOURNISSEUR, lus sur
-    le document. -> (description, matricule) — chaînes vides si le modèle est muet.
+    le document. -> (description, matricule, type de pièce, n° de BL, BL cités) — vides si le modèle est muet.
+    Les BL qu'une FACTURE regroupe sont lus aussi (26/11/2026) : en « Facture d'achat », ceux déjà reçus sont reconnus
+    et facturés depuis leur réception (caisse_facture_bl) au lieu d'entrer en stock une 2e fois.
 
     ⚠️ LE MATRICULE DU FOURNISSEUR, JAMAIS CELUI DU CLIENT. Une facture porte les
     deux : celui de l'émetteur et le nôtre. Confondre les deux rapprocherait
@@ -293,13 +307,14 @@ def _decrire(image_bytes, mimetype):
             "de livraison porte la mention BL / Bon de livraison / Delivery "
             "note et N'A PAS de numéro de facture ni de mention TVA à payer>, "
             "\"numero_bl\": <le numéro du bon de livraison s'il s'agit d'un "
-            "BL, tel qu'écrit ; null sinon>}. "
+            "BL, tel qu'écrit ; null sinon>, "
+            + CONSIGNE_BLS_CITES + "}. "
             + _consigne_matricule()),
         input=[{"role": "user", "content": [
             _bloc_document(image_bytes, mimetype),
             {"type": "input_text",
-             "text": "Décris la dépense, lis le matricule, et dis si c'est "
-                     "une facture ou un bon de livraison."}]}])
+             "text": "Décris la dépense, lis le matricule, dis si c'est une facture ou un bon de livraison, "
+                     "et liste les BL qu'une facture regroupe."}]}])
     texte = (res.output_text or "").strip().strip("`")
     if texte.lower().startswith("json"):
         texte = texte.split("\n", 1)[1]
@@ -308,9 +323,10 @@ def _decrire(image_bytes, mimetype):
         return ((lu.get("description") or "").strip(),
                 (lu.get("matricule") or "").strip(),
                 (lu.get("type_document") or "").strip(),
-                (lu.get("numero_bl") or "").strip())
+                (lu.get("numero_bl") or "").strip(),
+                _bls_cites_lus(lu))
     except Exception:
-        return "", "", "", ""
+        return "", "", "", "", []
 
 
 @frappe.whitelist()
@@ -381,11 +397,13 @@ def analyser(photo, type_depense=None):
         # Pas de classification pour une facture d'achat, mais la description lue
         # sur la photo sert autant (décision utilisateur 2026-08-20).
         try:
-            desc, matricule, type_doc, numero_bl = _decrire(contenu, mimetype)
+            desc, matricule, type_doc, numero_bl, cites = _decrire(contenu, mimetype)
             out["description"], out["matricule"] = desc, matricule
             if type_depense == "Facture d'achat" and type_doc == "bon_de_livraison":
                 out["est_bl"] = True
                 out["numero_bl"] = numero_bl
+            elif type_depense == "Facture d'achat":
+                out["bls_cites"] = cites
         except Exception:
             pass
     # ⚠️ FOURNISSEUR ET N° DE FACTURE TOUJOURS DANS LA DESCRIPTION (décision
@@ -410,7 +428,7 @@ def analyser(photo, type_depense=None):
         out["fournisseur_certain"] = r["certain"]
         out["fournisseur_motif"] = r["motif"]
         out["fournisseur_candidats"] = r["candidats"]
-    if type_depense == "Dépense avec facture" and not out["est_bl"]:
+    if type_depense in ("Dépense avec facture", "Facture d'achat") and not out["est_bl"]:
         from customization_app import caisse_bl as B
         try:
             # Le nom ne donne que des candidats : le BL cité, trouvé chez UN seul d'entre eux, tranche.
@@ -419,7 +437,9 @@ def analyser(photo, type_depense=None):
                 if par_bl:
                     out["fournisseur_certain"], out["fournisseur_motif"] = par_bl, "bl"
             if out["fournisseur_certain"]:
-                out["bls"] = B.rapprocher_pour(out["fournisseur_certain"], out["bls_cites"])
+                # « Facture d'achat » (26/11/2026) : les BL reconnus seront FACTURÉS depuis leur réception.
+                out["bls"] = B.rapprocher_pour(out["fournisseur_certain"], out["bls_cites"],
+                                               pour="achat" if type_depense == "Facture d'achat" else "depense")
         except Exception:
             frappe.log_error(title="Caisse : BL cités par une facture", message=frappe.get_traceback())
             out["bls"] = None   # une aide, jamais un blocage de l'analyse
@@ -1135,9 +1155,19 @@ def creer(type_depense, montant, mode, compte=None, description=None, fournisseu
     # fiche de dépense (caisse_bl.couvrir_par_depense), dans cette même transaction.
     from customization_app import caisse_bl as B
     bls = []
-    if B._liste(bls_couverts):
+    # « FACTURE D'ACHAT » qui couvre des BL (26/11/2026, caisse_facture_bl) : les BL cochés seront FACTURÉS depuis leur
+    # réception, les lignes jamais reçues (`articles_stock`) reçues ici, et la facture d'achat préparée en brouillon —
+    # après la fiche de la facture, dans cette même transaction.
+    achat_bls = B._liste(bls_couverts) if type_depense == "Facture d'achat" else []
+    achat_lignes = B._liste(articles_stock) if type_depense == "Facture d'achat" else []
+    if achat_bls or achat_lignes:
+        if reprise:
+            frappe.throw(_("Une facture d'achat qui couvre des BL ne se corrige pas ici : voir le comptable (facture préparée)."))
+        if cint(est_bl):
+            frappe.throw(_("Cette pièce est un BL : un BL ne couvre pas d'autres BL, seule une facture le peut."))
+    if B._liste(bls_couverts) and type_depense != "Facture d'achat":
         if type_depense != "Dépense avec facture":
-            frappe.throw(_("Seule une « Dépense avec facture » peut couvrir des BL déjà reçus."))
+            frappe.throw(_("Seule une pièce facturée (« Dépense avec facture », « Facture d'achat ») peut couvrir des BL déjà reçus."))
         if reprise:
             frappe.throw(_("Une dépense qui couvre des BL ne se corrige pas ici : le comptable rouvre d'abord les BL."))
         if cint(est_bl):
@@ -1209,6 +1239,29 @@ def creer(type_depense, montant, mode, compte=None, description=None, fournisseu
             _attacher_scan(photo_facture, "facture-%s" % fiche.name,
                            "Journal Entry", je.name, coins=coins_facture)
         resultat = {"name": je.name if je else None, "fiche": fiche.name}
+        if achat_bls or achat_lignes:
+            from customization_app import caisse_facture_bl as FB
+            achat = FB.traiter(fiche.name, supplier, achat_bls, achat_lignes, {
+                "fournisseur": fournisseur, "numero_facture": numero_facture, "date_facture": date_facture,
+                "montant": montant, "tva": tva, "taux_tva": taux_tva, "timbre": flt(timbre, 3),
+                "description": description, "photo": photo_facture, "coins": coins_facture,
+                "cites": B._liste(bls_cites), "mode": valeurs_fiche["mode_paiement"],
+            })
+            resultat["achat"] = achat
+            # La mémoire des articles : l'article choisi pour chaque ligne reçue ici, et ce que les BL facturés
+            # apprennent (leurs lignes ↔ leur réception). Jamais bloquant.
+            from customization_app import correspondance_articles as CA
+            resultat["appris"] = CA.apprendre_de_la_saisie(supplier, achat_lignes, B._liste(lignes_lues),
+                                                           achat.get("bls_factures"), fiche.name)
+        elif not cint(est_bl) and not reprise and B._liste(bls_cites):
+            # Enregistrée SANS ses BL (lignes illisibles à la caisse, bouton « Sans les BL ») : le comptable est prévenu
+            # sur la fiche — s'il saisit la facture sans « Rattacher des BL », un BL déjà reçu entrerait en stock 2 fois.
+            numeros = ", ".join(str((c or {}).get("numero") or "?") for c in B._liste(bls_cites) if isinstance(c, dict))
+            if numeros:
+                fiche.add_comment("Comment", _("⚠ Cette facture cite des BL ({0}) et a été enregistrée à la caisse sans eux. "
+                                               "Avant de la saisir : « Rattacher des BL » — sinon les articles d'un BL déjà "
+                                               "reçu entreraient en stock une 2e fois.").format(numeros))
+                resultat["bls_a_rattacher"] = numeros
     else:
         compte = (compte or "").strip()
         if not compte:
@@ -2395,9 +2448,10 @@ def _po_recu_auto(doc):
             make_purchase_receipt)
         pr = make_purchase_receipt(doc.name)
         pr.custom_fiche_caisse = nom
-        if frappe.db.get_value("Facture Achat a Saisir", nom, "depense_a_payer"):
+        if frappe.db.get_value("Facture Achat a Saisir", nom, "depense_a_payer") or not flt(doc.get("total_taxes_and_charges")):
             # Part stock d'une dépense : comme sa commande, la réception est SANS TVA (25/11/2026 : MAT-PRE-2026-00010
-            # avait repris 1,663 de TVA du modèle de l'article).
+            # avait repris 1,663 de TVA du modèle de l'article). De même pour toute commande SANS taxe (26/11/2026 : les
+            # articles reçus par une facture d'achat de la caisse — la TVA est sur la facture, caisse_facture_bl).
             from customization_app import caisse_stock_partiel as S
             S._sans_taxes(pr)
         pr.flags.ignore_permissions = True

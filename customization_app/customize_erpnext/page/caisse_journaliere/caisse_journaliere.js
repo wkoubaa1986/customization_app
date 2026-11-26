@@ -2315,14 +2315,68 @@ function rcj_ligne_deja_recue(a, infos) {
   return null;
 }
 
+// ── « Facture d'achat » qui couvre des BL (26/11/2026, customization_app.caisse_facture_bl) ─────────────────────────
+// Le même bloc « BL de cette facture » qu'en dépense, mais le BL reconnu est FACTURÉ depuis sa réception (rien racheté,
+// rien en charge), les lignes jamais reçues sont reçues en stock à l'enregistrement, et la facture d'achat part en
+// brouillon chez le comptable. Demande du 26/11/2026 : la facture SCPS FT26080301, toute en marchandise, avait dû être
+// saisie en dépense — seul ce type reconnaissait le BL déjà reçu.
+function rcj_type_avec_bls(d) {
+  const t = d.get_value("type_depense") || "";
+  return t === "Dépense avec facture" || t === "Facture d'achat";
+}
+function rcj_achat_bl(d, etat) {
+  return (d.get_value("type_depense") || "") === "Facture d'achat" && !etat.est_bl && !etat.sans_choix_stock;
+}
+// Des BL sont en jeu (cités par la facture, ou cochés à la main) : les lignes d'articles sont alors lues. `achat_sans_bl` :
+// l'employé a renoncé (lignes illisibles) — la facture part sans BL, le comptable les rattachera comme avant.
+// `achat_avec_lignes` : la pièce vient de « Dépense avec facture » par le bouton « Saisir en Facture d'achat », ses
+// lignes déjà lues et choisies sont gardées (elles seront reçues), même sans BL.
+function rcj_achat_bl_en_jeu(d, etat) {
+  return rcj_achat_bl(d, etat) && !!etat.analyse_faite && !etat.achat_sans_bl
+    && ((etat.bls_cites || []).length > 0 || (etat.bls_coches || []).length > 0 || !!etat.achat_avec_lignes);
+}
+// Les lignes à recevoir (pas sous un BL coché déjà reçu) qui n'ont pas encore d'article ou de quantité.
+function rcj_achat_lignes_sans_article(etat) {
+  const infos = rcj_bls_coches_infos(etat);
+  return (etat.articles || []).filter((a) => !rcj_ligne_deja_recue(a, infos) && !(a.item_code && flt(a.qty) > 0)).length;
+}
+
+// En facture d'achat : les BL dont des lignes À RECEVOIR portent la rubrique alors qu'ils ont DÉJÀ leur fiche — pas
+// cochée (le BL reconnu décoché), bloquée, ou déjà couverte. Les recevoir ferait entrer leurs articles en stock une
+// 2e fois : l'enregistrement attend (le serveur refuse aussi, caisse_facture_bl.bls_en_double). -> [{numero, motif, a_cocher}]
+function rcj_achat_bls_en_double(etat) {
+  const infos = rcj_bls_coches_infos(etat);
+  const cles = new Set((etat.articles || []).filter((a) => a.bl_cle && !rcj_ligne_deja_recue(a, infos)).map((a) => a.bl_cle));
+  if (!cles.size) return [];
+  const coches = new Set(etat.bls_coches || []);
+  const out = [];
+  ((etat.bls && etat.bls.bls) || []).forEach((b) => {
+    if (coches.has(b.name) || !(b.cles || []).some((c) => cles.has(c))) return;
+    out.push({ numero: b.numero_bl || "?", motif: b.bloquant ? (b.motif || "") : "", a_cocher: !b.bloquant });
+  });
+  ((etat.bls && etat.bls.deja_couverts) || []).forEach((c) => {
+    if (c.cle && cles.has(c.cle)) {
+      out.push({ numero: c.numero || "?", motif: __("déjà couvert par {0}", [c.couvert_par || c.fiche || "?"]), a_cocher: false });
+    }
+  });
+  return out;
+}
+
+// « Sans les BL » : la facture d'achat part comme avant le 26/11/2026 (fiche pour le comptable, qui rattachera les BL).
+function rcj_achat_sans_bl(d, etat, sinon) {
+  etat.achat_sans_bl = true; etat.achat_avec_lignes = false; etat.bls_coches = [];
+  if (d.rcj_maj_bls) d.rcj_maj_bls(); else if (sinon) sinon();
+}
+
 function rcj_zone_bls(d, etat, apres) {
   const $z = d.fields_dict.zone_bls && d.fields_dict.zone_bls.$wrapper;
   if (!$z) return;
   const esc = frappe.utils.escape_html;
   const cites = etat.bls_cites || [];
   const r = etat.bls;
-  if (etat.sans_choix_stock || !etat.analyse_faite || etat.est_bl
-      || (d.get_value("type_depense") || "") !== "Dépense avec facture" || (!r && !cites.length && !etat.bls_chargement)) {
+  const achat = rcj_achat_bl(d, etat);
+  if (etat.sans_choix_stock || !etat.analyse_faite || etat.est_bl || (achat && etat.achat_sans_bl)
+      || !rcj_type_avec_bls(d) || (!r && !cites.length && !etat.bls_chargement)) {
     $z.empty(); return;
   }
   const cadre = (html) => `<div style="border:1px solid #c7d2fe;background:#eef2ff;border-radius:8px;padding:8px 10px;margin:6px 0">
@@ -2359,8 +2413,14 @@ function rcj_zone_bls(d, etat, apres) {
         <span style="flex:1;font-size:13px"><b>BL ${esc(b.numero_bl || "?")}</b>${b.date ? ` ${__("du")} ${esc(jour(b.date))}` : ""} — ${rcj_dt(b.montant)}
           <div class="text-muted" style="font-size:11.5px">${esc(NIVEAU[b.niveau] || "")}${b.controle ? " · " + CONTROLE[b.controle] : ""}</div>
           ${b.bloquant ? `<div style="color:#c0392b;font-size:12px">⛔ ${esc(b.motif)}</div>` : ""}
-          ${b.niveau === "trouve" && !b.bloquant && !pris ? `<div style="color:#b35900;font-size:12px">${__("Décoché : ce BL restera ouvert, et la facture sera payée sans le solder.")}</div>` : ""}
-          ${!b.bloquant && !(flt(b.recu) > 0) ? `<div style="color:#1f4e8c;font-size:12px">${__("Pas encore entré en stock (aucune réception) : la facture le clôt ; mettez ses articles en stock avec « En partie achat ».")}</div>` : ""}
+          ${b.niveau === "trouve" && !b.bloquant && !pris ? `<div style="color:#b35900;font-size:12px">${achat
+            ? __("Décoché : ses articles sont déjà en stock — recochez-le pour enregistrer.")
+            : __("Décoché : ce BL restera ouvert, et la facture sera payée sans le solder.")}</div>` : ""}
+          ${achat && b.paye_livraison && !b.bloquant ? `<div style="color:#b35900;font-size:12px">⚠ ${
+            __("Déjà payé à la livraison : ce paiement sera repris par la facture d'achat — ne payez ici que le reste de la facture.")}</div>` : ""}
+          ${!b.bloquant && !(flt(b.recu) > 0) ? `<div style="color:#1f4e8c;font-size:12px">${achat
+            ? __("Pas encore entré en stock (aucune réception) : ses articles sont reçus avec cette facture.")
+            : __("Pas encore entré en stock (aucune réception) : la facture le clôt ; mettez ses articles en stock avec « En partie achat ».")}</div>` : ""}
         </span>
       </label>
       <details style="font-size:11.5px;margin:4px 0 0 24px"><summary class="text-muted" style="cursor:pointer">${__("Détail")}</summary>
@@ -2371,14 +2431,17 @@ function rcj_zone_bls(d, etat, apres) {
   const autres = cartes.filter((b) => b.niveau === "autre");
   const n = coches.size;
   const verdict = n
-    ? `✅ <b>${n > 1 ? __("{0} BL déjà reçus, couverts par cette facture", [n]) : __("1 BL déjà reçu, couvert par cette facture")}</b> — ${__("rien n'est racheté : sa réception est soldée, le BL est clos.")}`
+    ? `✅ <b>${n > 1 ? __("{0} BL déjà reçus, couverts par cette facture", [n]) : __("1 BL déjà reçu, couvert par cette facture")}</b> — ${achat
+      ? __("rien n'est racheté : sa réception est facturée par cette facture d'achat.")
+      : __("rien n'est racheté : sa réception est soldée, le BL est clos.")}`
     : principaux.length ? `ℹ️ ${__("Un BL de ce fournisseur pourrait être couvert par cette facture : cochez-le s'il l'est.")}`
       : autres.length ? `ℹ️ ${__("Ce fournisseur a des BL ouverts : cochez celui que la facture couvre, s'il y en a un.")}` : "";
   const deja = (r.deja_couverts || []).map((c) => `<div style="color:#c0392b;font-size:12px;margin-top:5px">⚠ ${
     __("BL {0} déjà couvert ({1}) : cette facture est peut-être déjà saisie.", [esc(c.numero), esc(c.couvert_par || c.fiche)])}</div>`).join("");
   const inconnus = (r.inconnus || []).map((c) => `<div class="text-muted" style="font-size:12px;margin-top:5px">○ BL ${esc(c.numero)}${
     c.date ? ` ${__("du")} ${esc(jour(c.date))}` : ""}${c.total_ttc ? ` — ${rcj_dt(c.total_ttc)}` : ""} : ${
-    __("jamais saisi — reste en dépense (ou en stock si vous cochez ses articles).")}</div>`).join("");
+    achat ? __("jamais saisi — ses articles sont reçus en stock avec cette facture.")
+      : __("jamais saisi — reste en dépense (ou en stock si vous cochez ses articles).")}</div>`).join("");
   const plus = autres.length ? `<details style="margin-top:6px" ${autres.some((b) => coches.has(b.name)) ? "open" : ""}>
       <summary style="cursor:pointer;font-size:12px">${__("Autres BL ouverts du fournisseur ({0})", [autres.length])}</summary>
       ${autres.map(carte).join("")}</details>` : "";
@@ -2410,9 +2473,19 @@ function rcj_zone_articles(d, etat, API, apres) {
   const redessiner = () => rcj_zone_articles(d, etat, API, apres);
   // Hors « Dépense avec facture » analysée (et en correction : une part stock ne se corrige pas),
   // il n'y a rien à choisir.
+  const achat = rcj_achat_bl(d, etat);
   if (etat.sans_choix_stock || !etat.analyse_faite
-      || (d.get_value("type_depense") || "") !== "Dépense avec facture") {
+      || ((d.get_value("type_depense") || "") !== "Dépense avec facture" && !achat)) {
     $z.empty(); maj(); return;
+  }
+  if (achat) {
+    // « Facture d'achat » : rien à choisir, tout est marchandise. Les lignes ne sont lues que si des BL sont en jeu ;
+    // sinon la facture part telle quelle chez le comptable, comme avant le 26/11/2026.
+    if (!rcj_achat_bl_en_jeu(d, etat)) {
+      if (etat.choix_stock) { etat.choix_stock = null; etat.articles = []; etat.articles_lus = false; etat.lecture_articles = false; }
+      $z.empty(); maj(); return;
+    }
+    etat.choix_stock = "achat";
   }
   const changer = `<button type="button" class="btn btn-xs btn-default rcj-choix-changer" style="margin-left:8px">${__("Changer")}</button>`;
   const brancher_changer = () => $z.find(".rcj-choix-changer").on("click", () => {
@@ -2434,8 +2507,14 @@ function rcj_zone_articles(d, etat, API, apres) {
       <span class="text-muted">— ${__("rien ne part en stock")}</span>${changer}</div>`);
     brancher_changer(); maj(); return;
   }
+  // Lecture en cours (le bloc des BL se redessine pendant qu'elle tourne) : on ne la relance pas.
+  if (etat.lecture_articles && !etat.articles_lus && $z.find(".rcj-art-liste").length) { maj(); return; }
   // « En partie achat » : lecture des lignes de la pièce, lancée par ce choix.
-  $z.html(`<div style="font-size:12.5px;margin:6px 0">📦 <b>${__("En partie achat")}</b>${changer}</div>
+  $z.html(achat
+    ? `<div style="font-size:12.5px;margin:6px 0">🧾 <b>${__("Facture d'achat sur BL")}</b>
+        <span class="text-muted">— ${__("les lignes déjà reçues sont facturées, les autres sont reçues en stock")}</span></div>
+      <div class="rcj-art-liste"></div>`
+    : `<div style="font-size:12.5px;margin:6px 0">📦 <b>${__("En partie achat")}</b>${changer}</div>
     <div class="rcj-art-liste"></div>`);
   brancher_changer();
   const $l = $z.find(".rcj-art-liste");
@@ -2467,9 +2546,13 @@ function rcj_zone_articles(d, etat, API, apres) {
     error: () => {
       if (perime()) return;
       etat.lecture_articles = false;
-      $l.html(`<div class="text-danger" style="font-size:12px">${__("Lignes d'articles illisibles. Choisissez « Seulement dépense », ou relancez la lecture.")}
-        <button type="button" class="btn btn-xs btn-default rcj-art-relire" style="margin-left:8px">${__("Relire")}</button></div>`);
+      $l.html(`<div class="text-danger" style="font-size:12px">${achat
+          ? __("Lignes d'articles illisibles : relancez la lecture, ou enregistrez la facture sans ses BL (le comptable les rattachera).")
+          : __("Lignes d'articles illisibles. Choisissez « Seulement dépense », ou relancez la lecture.")}
+        <button type="button" class="btn btn-xs btn-default rcj-art-relire" style="margin-left:8px">${__("Relire")}</button>${achat
+          ? `<button type="button" class="btn btn-xs btn-default rcj-art-sans-bl" style="margin-left:8px">${__("Sans les BL")}</button>` : ""}</div>`);
       $l.find(".rcj-art-relire").on("click", redessiner);
+      $l.find(".rcj-art-sans-bl").on("click", () => rcj_achat_sans_bl(d, etat, redessiner));
       maj();
     },
   });
@@ -2477,7 +2560,17 @@ function rcj_zone_articles(d, etat, API, apres) {
 
 function rcj_rendre_articles(d, etat, $z) {
   const esc = frappe.utils.escape_html;
+  const achat = rcj_achat_bl(d, etat);
   if (!(etat.articles || []).length) {
+    if (achat) {
+      const n = (etat.bls_coches || []).length;
+      $z.html(`<div class="text-muted" style="font-size:12px">${n
+        ? __("Aucune ligne à recevoir lue sur la facture : seuls les BL cochés sont facturés, depuis leur réception.")
+        : __("Aucune ligne d'article lue sur la facture : cochez le BL qu'elle couvre, ou enregistrez-la sans BL (le comptable la saisira).")}
+        ${n ? "" : `<button type="button" class="btn btn-xs btn-default rcj-art-sans-bl" style="margin-left:8px">${__("Sans les BL")}</button>`}</div>`);
+      $z.find(".rcj-art-sans-bl").on("click", () => rcj_achat_sans_bl(d, etat, null));
+      return;
+    }
     $z.html(`<div class="text-muted" style="font-size:12px">${__("Aucune ligne d'article lue sur la pièce : choisissez « Seulement dépense ».")}</div>`);
     return;
   }
@@ -2504,14 +2597,39 @@ function rcj_rendre_articles(d, etat, $z) {
     // valeur de la réception), et ce qui reste en charge. La dépense, elle, est toujours une écriture entière.
     const bls = rcj_bls_coches_infos(etat).filter((b) => b.recu);
     const deja = bls.reduce((s, b) => s + b.valeur, 0);
+    if (achat) {
+      // « Facture d'achat sur BL » : ce qui est déjà en stock est facturé, le reste est reçu à l'enregistrement.
+      const manque = rcj_achat_lignes_sans_article(etat);
+      const m = [];
+      if (deja > 0) {
+        m.push(`✅ ${__("Déjà en stock")} (${bls.map((b) => "BL " + esc(b.numero_bl || "?")).join(", ")}) : <b>${rcj_dt(deja)}</b> HT → ${
+          __("facturé depuis sa réception, rien racheté")}`);
+      }
+      if (ht > 0) m.push(`📦 ${__("Reçu en stock à l'enregistrement")} : <b>${rcj_dt(ht)}</b> HT → ${__("commande et réception créées")}`);
+      const doubles = rcj_achat_bls_en_double(etat);
+      doubles.forEach((x) => m.push(`<span class="text-danger">⛔ ${x.a_cocher
+        ? __("Le BL {0} est déjà saisi : cochez-le ci-dessus — sinon ses articles entreraient en stock une 2e fois.", [esc(x.numero)])
+        : __("Le BL {0} ne peut pas être facturé ici ({1}) : enregistrez « Sans les BL », le comptable s'en charge.", [esc(x.numero), esc(x.motif)])}</span>`));
+      if (doubles.some((x) => !x.a_cocher)) {
+        m.push(`<button type="button" class="btn btn-xs btn-default rcj-art-sans-bl">${__("Sans les BL")}</button>`);
+      }
+      if (manque) {
+        m.push(`<span class="text-danger">⚠ ${__("{0} ligne(s) sans article : choisissez l'article de chaque ligne. Si une ligne n'est pas de la marchandise, saisissez la pièce en « Dépense avec facture ».", [manque])}</span>`);
+      }
+      if (!doubles.length) {
+        m.push(`🧾 ${__("Facture d'achat de {0} TTC préparée en brouillon pour le comptable ; votre paiement devient le sien à la validation.", [`<b>${rcj_dt(montant)}</b>`])}`);
+      }
+      $z.find(".rcj-art-totaux").html(m.map((x) => `<div>${x}</div>`).join(""));
+      $z.find(".rcj-art-totaux .rcj-art-sans-bl").on("click", () => rcj_achat_sans_bl(d, etat, null));
+      return;
+    }
     if (!(ht > 0) && !(deja > 0)) {
       $z.find(".rcj-art-totaux").html(`<span class="text-muted">${__("Rien de coché : cochez au moins un article, ou choisissez « Seulement dépense ».")}</span>`);
       return;
     }
     const morceaux = [];
     if (ht > 0) {
-      morceaux.push(`📦 ${__("Part stock")} : <b>${rcj_dt(ht)}</b> HT → ${__("commande d'achat sans TVA, financée par le compte de charge")}${ht >= ht_total - 0.0005
-        ? ` <span class="text-danger">— ${__("tout le HT part en stock : utilisez « Facture d'achat »")}</span>` : ""}`);
+      morceaux.push(`📦 ${__("Part stock")} : <b>${rcj_dt(ht)}</b> HT → ${__("commande d'achat sans TVA, financée par le compte de charge")}`);
     }
     if (deja > 0) {
       morceaux.push(`✅ ${__("Déjà en stock")} (${bls.map((b) => "BL " + esc(b.numero_bl || "?")).join(", ")}) : <b>${rcj_dt(deja)}</b> HT → ${
@@ -2523,12 +2641,25 @@ function rcj_rendre_articles(d, etat, $z) {
     morceaux.push(`💸 ${__("Dépense")} : <b>${rcj_dt(montant)}</b> TTC ${__("en une écriture")} (${__("dont")} <b>${rcj_dt(charge)}</b> HT ${__("hors stock")})${
       trop ? ` <span class="text-danger">— ${__("le stock dépasse le HT de la facture : un BL n'en fait sans doute pas partie")}</span>` : ""}`);
     if (!(ht > 0)) morceaux.push(`<span class="text-muted">${__("Rien d'autre à mettre en stock ? Enregistrez tel quel.")}</span>`);
+    // TOUT EST MARCHANDISE (26/11/2026) : la part stock nouvelle ET les BL déjà reçus couvrent le HT, au timbre près —
+    // c'est une facture d'achat, pas une dépense. Avant, seule la part NOUVELLE comptait : la facture SCPS FT26080301
+    // (un BL déjà reçu + un BL jamais saisi) n'était pas signalée, et « Facture d'achat » ne connaissait pas les BL.
+    // (TTC − TVA porte le timbre : 1 DT de « charge » est normal ; 1 DT de plus par BL dont le prix reçu porte le sien.)
+    const infos_t = rcj_bls_coches_infos(etat);
+    const en_charge = (etat.articles || []).filter((a) => !a.coche && !rcj_ligne_deja_recue(a, infos_t)).length;
+    if (!en_charge && Math.abs(charge) <= Math.max(1.5, 0.01 * ht_total) + bls.length) {
+      morceaux.push(`<div style="border:1px solid #f5c26b;background:#fff8e6;border-radius:8px;padding:7px 9px;margin-top:6px">🧾 <b>${
+        __("Tout le HT est de la marchandise")}</b> : ${__("c'est une facture d'achat, pas une dépense — rien ne doit passer en charge.")}
+        <button type="button" class="btn btn-xs btn-primary rcj-vers-achat" style="margin-left:6px">${__("Saisir en « Facture d'achat »")}</button></div>`);
+    }
     $z.find(".rcj-art-totaux").html(morceaux.map((m) => `<div>${m}</div>`).join(""));
+    $z.find(".rcj-vers-achat").on("click", () => { if (d.rcj_vers_facture_achat) d.rcj_vers_facture_achat(); });
   };
   // Une ligne d'un BL déjà reçu et coché « couvert » ne repart pas en stock (25/11/2026) : grisée, non cochable.
   const infos = rcj_bls_coches_infos(etat);
   const recues = etat.articles.map((a) => rcj_ligne_deja_recue(a, infos));
-  etat.articles.forEach((a, i) => { if (recues[i]) a.coche = false; });
+  // En facture d'achat, toute ligne qui n'est pas déjà reçue EST à recevoir : la case n'est pas un choix.
+  etat.articles.forEach((a, i) => { a.coche = recues[i] ? false : (achat ? true : a.coche); });
   // Ligne de la rubrique d'un BL reçu : elle montre l'article de la réception, en lecture seule (quantité et prix
   // aussi — elle n'est pas rachetée, et l'apprentissage apparie sur ces quantités).
   const arts = etat.articles.map((a, i) => (recues[i] ? rcj_article_recu(i, a, infos) : null));
@@ -2538,12 +2669,13 @@ function rcj_rendre_articles(d, etat, $z) {
     const bl = rcj_ligne_deja_recue(a, infos);
     if (bl) { a.coche = false; }
     $tr.css("opacity", bl ? ".55" : "");
-    $tr.find(".rcj-art-coche").prop("disabled", !!bl).prop("checked", !!a.coche);
+    if (!bl && achat) { a.coche = true; }
+    $tr.find(".rcj-art-coche").prop("disabled", !!bl || achat).prop("checked", !!a.coche);
     $tr.find(".rcj-art-recue").remove();
     if (bl) $tr.find("td").eq(1).append(`<div class="rcj-art-recue" style="color:#1a7f37;font-size:11px">✔ ${__("déjà reçue (BL {0}) : couverte, pas rachetée", [esc(bl)])}</div>`);
   };
   const rows = etat.articles.map((a, i) => `<tr data-i="${i}" style="${recues[i] ? "opacity:.55" : ""}">
-      <td><input type="checkbox" class="rcj-art-coche" ${a.coche ? "checked" : ""} ${recues[i] ? "disabled" : ""}></td>
+      <td><input type="checkbox" class="rcj-art-coche" ${a.coche ? "checked" : ""} ${recues[i] || achat ? "disabled" : ""}></td>
       <td style="max-width:220px">${esc(a.designation || "")}${flt(a.remise_pct) > 0 && flt(a.rate_brut) > flt(a.rate)
         ? `<div class="text-muted" style="font-size:11px">${__("brut {0} − remise {1} %", [rcj_dt(a.rate_brut), String(a.remise_pct).replace(".", ",")])}</div>` : ""}${recues[i]
         ? `<div class="rcj-art-recue" style="color:#1a7f37;font-size:11px">✔ ${__("déjà reçue (BL {0}) : couverte, pas rachetée", [esc(recues[i])])}</div>` : ""}</td>
@@ -2552,8 +2684,9 @@ function rcj_rendre_articles(d, etat, $z) {
       <td><input type="number" step="any" class="form-control input-sm rcj-art-rate" style="width:90px" value="${a.rate || 0}" ${arts[i] ? "disabled" : ""}></td>
       <td class="rcj-art-ht text-right">${rcj_dt((a.qty || 0) * (a.rate || 0))}</td>
     </tr>`).join("");
-  $z.html(`<div style="font-size:12px;margin-bottom:4px"><b>📦 ${__("Articles à mettre en stock")}</b>
-      <span class="text-muted">— ${__("cochez ce qui entre en stock ; le reste est la dépense")}</span></div>
+  $z.html(`<div style="font-size:12px;margin-bottom:4px"><b>📦 ${achat ? __("Articles de la facture") : __("Articles à mettre en stock")}</b>
+      <span class="text-muted">— ${achat ? __("choisissez l'article de chaque ligne à recevoir ; une ligne déjà reçue est facturée telle quelle")
+        : __("cochez ce qui entre en stock ; le reste est la dépense")}</span></div>
     <table class="table table-bordered table-sm" style="font-size:12px;margin-bottom:6px">
       <thead><tr><th></th><th>${__("Sur la pièce")}</th><th>${__("Article ERPNext")}</th><th>${__("Qté")}</th><th>${__("PU HT")}</th><th>${__("HT")}</th></tr></thead>
       <tbody>${rows}</tbody></table>
@@ -2625,7 +2758,8 @@ function rcj_depense(rapport, initial) {
                choix_stock: null, articles_lus: false, sans_choix_stock: !!initial,
                // BL déjà reçus que la facture couvre (25/11/2026) : ceux qu'elle cite, le rapprochement du serveur
                // (caisse_bl), et les fiches cochées « couvert ».
-               bls_cites: [], bls: null, bls_coches: [], bls_chargement: false, reproposition: false };
+               bls_cites: [], bls: null, bls_coches: [], bls_chargement: false, reproposition: false,
+               achat_sans_bl: false, achat_avec_lignes: false };
 
   const d = new frappe.ui.Dialog({
     title: initial ? __("✏️ Corriger la dépense {0}", [initial.name]) : __("Dépense de caisse"),
@@ -2676,13 +2810,14 @@ function rcj_depense(rapport, initial) {
       // Les BL déjà reçus que la facture couvre : cochés, ils ne sont pas rachetés (25/11/2026, caisse_bl).
       {
         fieldtype: "HTML", fieldname: "zone_bls",
-        depends_on: 'eval:doc.type_depense=="Dépense avec facture"',
+        // Aussi en « Facture d'achat » (26/11/2026) : le BL reconnu y est facturé depuis sa réception.
+        depends_on: "eval:doc.type_depense==\"Dépense avec facture\" || doc.type_depense==\"Facture d'achat\"",
       },
       // Les articles de la pièce qui partent EN STOCK : leur part devient une avance sur une
       // commande d'achat, le reste est la dépense (décision utilisateur 10/11/2026).
       {
         fieldtype: "HTML", fieldname: "zone_articles",
-        depends_on: 'eval:doc.type_depense=="Dépense avec facture"',
+        depends_on: "eval:doc.type_depense==\"Dépense avec facture\" || doc.type_depense==\"Facture d'achat\"",
       },
       { fieldtype: "Section Break", label: __("Paiement") },
       {
@@ -2801,7 +2936,14 @@ function rcj_depense(rapport, initial) {
         && TYPES_PAIEMENT_NET.includes(v.type_depense) && MODES_PAIEMENT_NET.includes(v.mode)
         && flt(v.montant_paye) > 0;
       // Un BL coché dont le montant diffère de celui que la facture lui donne : l'employé confirme (25/11/2026).
-      const bls_coches = !initial && v.type_depense === "Dépense avec facture" ? (etat.bls_coches || []) : [];
+      // « Facture d'achat sur BL » (26/11/2026) : les BL cochés sont facturés depuis leur réception, les autres lignes
+      // sont reçues — toute ligne qui n'est pas déjà reçue part, la case n'est pas un choix.
+      const achat_bl = !initial && v.type_depense === "Facture d'achat" && rcj_achat_bl_en_jeu(d, etat) && !!etat.articles_lus;
+      if (achat_bl) {
+        const infos = rcj_bls_coches_infos(etat);
+        (etat.articles || []).forEach((a) => { a.coche = !rcj_ligne_deja_recue(a, infos); });
+      }
+      const bls_coches = !initial && (v.type_depense === "Dépense avec facture" || achat_bl) ? (etat.bls_coches || []) : [];
       const a_verifier = ((etat.bls && etat.bls.bls) || [])
         .filter((b) => bls_coches.includes(b.name) && b.controle === "a_verifier");
       const envoyer = (confirme, ecarts) => frappe.call({
@@ -2830,15 +2972,17 @@ function rcj_depense(rapport, initial) {
           est_bl: v.type_depense !== "Dépense non facturée" && etat.est_bl ? 1 : 0,
           numero_bl: etat.numero_bl || null,
           code_sans_photo: v.code_sans_photo || null,
-          articles_stock: v.type_depense === "Dépense avec facture" && etat.choix_stock === "achat"
+          articles_stock: (v.type_depense === "Dépense avec facture" || achat_bl) && etat.choix_stock === "achat"
             ? JSON.stringify(rcj_articles_coches(etat)) : null,
           // Correction : sans choix explicite, le serveur garde la caisse payeuse d'origine.
           caisse_payeur: initial && !etat.payeur_touche ? null : (v.caisse_payeur || null),
           bls_couverts: bls_coches.length ? JSON.stringify(bls_coches) : null,
-          lignes_lues: bls_coches.length && etat.choix_stock === "achat" && etat.articles_lus
+          lignes_lues: (bls_coches.length || achat_bl) && etat.choix_stock === "achat" && etat.articles_lus
             ? JSON.stringify((etat.articles || []).map((a) => ({ code: a.code || "", designation: a.designation || "",
                 bl_cle: a.bl_cle || "", qty: flt(a.qty), item_code: a.item_code || null }))) : null,
-          bls_cites: bls_coches.length && (etat.bls_cites || []).length ? JSON.stringify(etat.bls_cites) : null,
+          // En facture d'achat, les BL cités voyagent toujours : reçus ici, ou signalés au comptable (« Sans les BL »).
+          bls_cites: (bls_coches.length || v.type_depense === "Facture d'achat") && !etat.est_bl && (etat.bls_cites || []).length
+            ? JSON.stringify(etat.bls_cites) : null,
           confirme_ecarts: ecarts ? 1 : 0,
         },
         freeze: true, freeze_message: initial ? __("Correction de la dépense…") : __("Enregistrement de la dépense…"),
@@ -2877,6 +3021,18 @@ function rcj_depense(rapport, initial) {
             frappe.show_alert({ message: __("🧠 {0} correspondance(s) d'articles retenue(s) pour ce fournisseur.", [r.message.appris.length]),
                                 indicator: "blue" }, 6);
           }
+          if (r.message.achat) {
+            const ac = r.message.achat;
+            const noms = (l) => frappe.utils.escape_html(l.map((b) => b.numero_bl || b.fiche).join(", "));
+            frappe.show_alert({
+              message: __("🧾 Facture d'achat {0} préparée en brouillon pour le comptable ({1} TTC).", [ac.purchase_invoice, rcj_dt(ac.ttc)])
+                + ((ac.bls_factures || []).length ? "<br>" + __("✅ BL déjà reçu(s), facturé(s) sans rien racheter : {0}.", [noms(ac.bls_factures)]) : "")
+                + ((ac.bls_recus || []).length ? "<br>" + __("📦 Reçu en stock maintenant : {0} HT ({1}).",
+                    [rcj_dt(ac.bls_recus.reduce((t, b) => t + flt(b.ht), 0)), ac.bls_recus.map((b) => b.purchase_receipt).join(", ")]) : "")
+                + (flt(ac.ecart) ? "<br>" + __("⚠ Écart de {0} avec le TTC de la facture : le comptable vérifiera.", [rcj_dt(ac.ecart)]) : ""),
+              indicator: flt(ac.ecart) ? "orange" : "green",
+            }, 15);
+          }
           if ((r.message.bls_soldes || []).length) {
             frappe.show_alert({
               message: __("📦 BL déjà reçu(s) couvert(s) : {0} — rien racheté, réception soldée, BL clos.",
@@ -2908,10 +3064,13 @@ function rcj_depense(rapport, initial) {
       const sans_recu = ((etat.bls && etat.bls.bls) || [])
         .filter((b) => bls_coches.includes(b.name) && !(flt(b.recu) > 0));
       const lancer_bls = (confirme) => (a_verifier.length
-        ? frappe.confirm(__("La facture et la fiche du BL {0} ne donnent pas le même montant. Le solder quand même avec cette facture ?",
-            [frappe.utils.escape_html(a_verifier.map((b) => b.numero_bl).join(", "))]), () => envoyer(confirme, 1))
+        ? frappe.confirm((achat_bl
+            ? __("La facture et la fiche du BL {0} ne donnent pas le même montant. Le facturer quand même avec cette facture ?",
+                [frappe.utils.escape_html(a_verifier.map((b) => b.numero_bl).join(", "))])
+            : __("La facture et la fiche du BL {0} ne donnent pas le même montant. Le solder quand même avec cette facture ?",
+                [frappe.utils.escape_html(a_verifier.map((b) => b.numero_bl).join(", "))])), () => envoyer(confirme, 1))
         : envoyer(confirme, 0));
-      const lancer = (confirme) => (sans_recu.length && !rcj_articles_coches(etat).length
+      const lancer = (confirme) => (!achat_bl && sans_recu.length && !rcj_articles_coches(etat).length
         ? frappe.confirm(__("Le BL {0} n'est pas encore entré en stock : clos par cette facture, ses articles n'y entreront pas. Continuer ? (Sinon : « En partie achat » et cochez ses articles.)",
             [frappe.utils.escape_html(sans_recu.map((b) => b.numero_bl).join(", "))]), () => lancer_bls(confirme))
         : lancer_bls(confirme));
@@ -3039,30 +3198,47 @@ function rcj_depense(rapport, initial) {
     const sans_choix = avec_choix && !etat.choix_stock;
     const rien_coche = avec_choix && etat.choix_stock === "achat" && !rcj_articles_coches(etat).length
       && !(etat.bls_coches || []).length;
-    const recherche_bls = type === "Dépense avec facture" && !!(etat.bls_chargement || etat.reproposition);
+    const recherche_bls = rcj_type_avec_bls(d) && !!(etat.bls_chargement || etat.reproposition);
+    // « Facture d'achat sur BL » (26/11/2026) : on attend la lecture des lignes ; chaque ligne à recevoir a son article ;
+    // et il y a quelque chose à facturer (un BL coché, ou une ligne).
+    const achat = rcj_achat_bl_en_jeu(d, etat);
+    const achat_lecture = achat && !etat.articles_lus && !!etat.lecture_articles;
+    const achat_non_lu = achat && !etat.articles_lus && !etat.lecture_articles;
+    const achat_sans_article = achat && !!etat.articles_lus && rcj_achat_lignes_sans_article(etat) > 0;
+    const achat_vide = achat && !!etat.articles_lus && !(etat.articles || []).length && !(etat.bls_coches || []).length;
+    const achat_double = achat && !!etat.articles_lus && rcj_achat_bls_en_double(etat).length > 0;
     // ⚠️ Toujours un BOOLÉEN : `prop("disabled", undefined)` ne change rien, et le bouton restait verrouillé.
-    d.get_primary_btn().prop("disabled", !!(bloque || lecture || sans_choix || rien_coche || recherche_bls))
+    d.get_primary_btn().prop("disabled", !!(bloque || lecture || sans_choix || rien_coche || recherche_bls
+                                             || achat_lecture || achat_non_lu || achat_sans_article || achat_vide || achat_double))
       .attr("title", bloque ? __("Analysez d'abord la facture (bouton 🤖).")
         : recherche_bls ? __("Recherche des BL déjà reçus du fournisseur…")
         : sans_choix ? __("Choisissez d'abord « Seulement dépense » ou « En partie achat ».")
-        : lecture ? __("Lecture des articles de la pièce en cours…")
+        : lecture || achat_lecture ? __("Lecture des articles de la pièce en cours…")
+        : achat_non_lu ? __("Les articles de la facture ne sont pas lus : « Relire », ou « Sans les BL ».")
+        : achat_double ? __("Un BL de la facture est déjà saisi : cochez-le (ses articles sont déjà en stock), ou « Sans les BL ».")
+        : achat_sans_article ? __("Choisissez l'article de chaque ligne à recevoir.")
+        : achat_vide ? __("Rien à facturer : cochez le BL que la facture couvre, ou « Sans les BL ».")
         : rien_coche ? __("Cochez au moins un article à mettre en stock, ou choisissez « Seulement dépense ».") : "");
   };
   d.rcj_maj_bouton = maj_bouton;
   const raz_choix_stock = () => {
     etat.choix_stock = null; etat.articles = []; etat.articles_lus = false; etat.lecture_articles = false;
+    etat.achat_avec_lignes = false;
   };
   // Le bloc des BL, et le tableau des articles qu'il grise — seulement une fois les articles LUS : redessiner
   // pendant leur lecture détacherait la zone et la réponse serait ignorée.
   const articles_lus = () => etat.choix_stock === "achat" && etat.articles_lus;
+  // En « Facture d'achat », la zone des lignes suit TOUJOURS le bloc des BL : c'est un BL coché ou cité qui lance leur
+  // lecture (rcj_zone_articles ne relance pas une lecture en cours).
+  const redessiner_articles = () => {
+    if (articles_lus() || rcj_achat_bl(d, etat)) rcj_zone_articles(d, etat, API, maj_bouton);
+  };
   const maj_bls = () => {
-    rcj_zone_bls(d, etat, () => {
-      if (articles_lus()) rcj_zone_articles(d, etat, API, maj_bouton);
-      maj_bouton();
-    });
-    if (articles_lus()) rcj_zone_articles(d, etat, API, maj_bouton);
+    rcj_zone_bls(d, etat, () => { redessiner_articles(); maj_bouton(); });
+    redessiner_articles();
     maj_bouton();
   };
+  d.rcj_maj_bls = maj_bls;
   // Les BL ouverts du fournisseur, face à la facture (après un choix de fournisseur, ou la lecture des articles).
   // Les cases que l'employé a touchées survivent ; sinon, ce que le serveur coche d'office (n° imprimé).
   const reproposer_articles = () => {
@@ -3088,7 +3264,7 @@ function rcj_depense(rapport, initial) {
                              suggestion_source: p.suggestion_source || "", suggestion_fois: p.suggestion_fois || 0,
                              suggestion_cle: p.suggestion_cle || null });
         });
-        if (articles_lus()) rcj_zone_articles(d, etat, API, maj_bouton);
+        redessiner_articles();
         maj_bouton();
       },
       error: () => { etat.reproposition = false; maj_bouton(); },   // propose_pour inchangé : on retentera
@@ -3096,10 +3272,13 @@ function rcj_depense(rapport, initial) {
   };
   const charger_bls = () => {
     reproposer_articles();
-    if (!etat.supplier || type_depense_courant() !== "Dépense avec facture" || etat.est_bl || initial) {
+    if (!etat.supplier || !rcj_type_avec_bls(d) || etat.est_bl || initial || (rcj_achat_bl(d, etat) && etat.achat_sans_bl)) {
       maj_bls(); return;
     }
-    const meme = !!etat.bls && etat.bls.supplier === etat.supplier;
+    // « achat » : les BL seront FACTURÉS (un BL payé à la livraison l'est aussi) ; « depense » : soldés contre la charge.
+    const pour = rcj_achat_bl(d, etat) ? "achat" : "depense";
+    const meme_four = !!etat.bls && etat.bls.supplier === etat.supplier;
+    const meme = meme_four && (etat.bls.pour || "depense") === pour;
     const avant = new Set(etat.bls_coches || []);
     // TOUTES les lignes, dans l'ordre de l'écran : le serveur apparie celles de la rubrique d'un BL à sa réception
     // (carte.appariees, par rang) ; le niveau « probable » ne lit que celles qui ont un article.
@@ -3109,7 +3288,7 @@ function rcj_depense(rapport, initial) {
     maj_bls();
     frappe.call({
       method: "customization_app.caisse_bl.bls_ouverts",
-      args: { supplier: etat.supplier, bls_cites: JSON.stringify(etat.bls_cites || []),
+      args: { supplier: etat.supplier, bls_cites: JSON.stringify(etat.bls_cites || []), pour,
               lignes: JSON.stringify(lignes.map((a) => ({ item_code: a.item_code || null, qty: flt(a.qty),
                 code: a.code || "", designation: a.designation || "", bl_cle: a.bl_cle || "" }))) },
       callback: (r) => {
@@ -3117,7 +3296,12 @@ function rcj_depense(rapport, initial) {
         etat.bls = r.message || null;
         etat.bls_empreinte = empreinte;   // l'appariement vaut pour CES lignes (rcj_bls_coches_infos)
         const noms = new Set(((etat.bls && etat.bls.bls) || []).map((b) => b.name));
-        etat.bls_coches = meme ? [...avant].filter((n) => noms.has(n)) : ((etat.bls && etat.bls.coches) || []);
+        const libres = new Set(((etat.bls && etat.bls.bls) || []).filter((b) => !b.bloquant).map((b) => b.name));
+        const d_office = (etat.bls && etat.bls.coches) || [];
+        // Même fournisseur, autre usage (la pièce vient de passer en « Facture d'achat », ou l'inverse) : les cases de
+        // l'employé restent, et ce que le serveur coche d'office pour ce nouvel usage s'y ajoute.
+        etat.bls_coches = meme ? [...avant].filter((n) => noms.has(n))
+          : meme_four ? [...new Set([...[...avant].filter((n) => libres.has(n)), ...d_office])] : d_office;
         maj_bls();
       },
       error: () => { etat.bls_chargement = false; maj_bls(); },
@@ -3132,6 +3316,7 @@ function rcj_depense(rapport, initial) {
       etat.analyse_faite = false;   // nouvelle photo -> nouvelle analyse exigée
       etat.facture_coins = null;
       raz_choix_stock();
+      etat.achat_sans_bl = false;
       etat.bls_cites = []; etat.bls = null; etat.bls_coches = []; etat.bls_chargement = false; etat.bls_empreinte = null;
       rcj_zone_bls(d, etat, null);
       rcj_zone_articles(d, etat, API, maj_bouton);
@@ -3213,19 +3398,23 @@ function rcj_depense(rapport, initial) {
         }
         // Dépense avec facture : l'employé choisit « Seulement dépense » ou « En partie achat » ;
         // la lecture des lignes d'articles ne part que sur ce second choix.
+        // Facture d'achat (26/11/2026) : rien à choisir — si elle cite des BL (ou qu'un BL est coché), ses lignes sont lues.
         raz_choix_stock();
-        rcj_zone_bls(d, etat, () => { if (articles_lus()) rcj_zone_articles(d, etat, API, maj_bouton); maj_bouton(); });
+        etat.achat_sans_bl = false;
+        rcj_zone_bls(d, etat, () => { redessiner_articles(); maj_bouton(); });
         rcj_zone_articles(d, etat, API, maj_bouton);
         if (d.get_value("type_depense") === "Facture d'achat") {
           if (m.fournisseur_certain) {
             frappe.show_alert({
               message: __("Fournisseur reconnu par le {0} : {1}",
-                [m.fournisseur_motif === "matricule" ? __("matricule fiscal") : __("nom"),
+                [m.fournisseur_motif === "matricule" ? __("matricule fiscal")
+                  : m.fournisseur_motif === "bl" ? __("BL cité") : __("nom"),
                  m.fournisseur_certain]),
               indicator: "green",
             });
           } else if ((m.fournisseur_candidats || []).length) {
-            rcj_choisir_fournisseur(m, (choix) => { etat.supplier = choix; });
+            // Le fournisseur choisi dit aussi quels BL de la facture sont déjà reçus chez lui.
+            rcj_choisir_fournisseur(m, (choix) => { etat.supplier = choix; charger_bls(); });
           }
         }
       },
@@ -3267,12 +3456,28 @@ function rcj_depense(rapport, initial) {
       $zf.find(".rcj-analyser").prop("disabled", !etat.facture);
       frappe.show_alert({ message: __("Ré-analysez la facture (bouton 🤖) : en « Dépense avec facture », l'analyse lit aussi les BL cités et le compte."),
                           indicator: "orange" }, 8);
+    } else if (type === "Facture d'achat" && etat.analyse_faite && etat.analyse_type === "Dépense avec facture" && !initial) {
+      // Dans l'autre sens (26/11/2026), l'analyse a déjà tout ce qu'il faut (fournisseur, BL cités) : elle est gardée.
+      // Les lignes déjà lues et choisies aussi (elles seront reçues) ; les BL sont relus « pour une facture d'achat ».
+      etat.analyse_type = type;
+      etat.achat_sans_bl = false;
+      if (etat.choix_stock === "achat" && etat.articles_lus && (etat.articles || []).length) etat.achat_avec_lignes = true;
+      else raz_choix_stock();
+      charger_bls();
     }
-    rcj_zone_bls(d, etat, () => { if (articles_lus()) rcj_zone_articles(d, etat, API, maj_bouton); maj_bouton(); });
+    rcj_zone_bls(d, etat, () => { redessiner_articles(); maj_bouton(); });
     rcj_zone_articles(d, etat, API, maj_bouton);
     maj_retenue();
   };
   d.fields_dict.type_depense.$input.on("change", basculer_facture);
+  // Le bouton « Saisir en Facture d'achat » de l'alerte « tout le HT est de la marchandise » : un clic, rien à refaire.
+  // (`set_value` est asynchrone et ne déclenche pas `change` : on attend, puis on bascule.)
+  d.rcj_vers_facture_achat = async () => {
+    await d.set_value("type_depense", "Facture d'achat");
+    basculer_facture();
+    frappe.show_alert({ message: __("Pièce passée en « Facture d'achat » : BL et articles gardés. Vérifiez, puis enregistrez."),
+                        indicator: "blue" }, 7);
+  };
   // Le montant et le fournisseur decident aussi de la retenue : l-analyse de la facture les
   // remplit toute seule, d-ou l-ecoute sur `change` en plus de la frappe.
   d.fields_dict.montant.$input.on("change input", () => maj_retenue());

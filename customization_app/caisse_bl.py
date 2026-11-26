@@ -90,8 +90,18 @@ def cles_fiche(numero_bl, numero_facture=None) -> set:
     return {c for c in (cle_numero_bl(numero_bl), cle_numero_bl(numero_facture)) if c}
 
 
-def motif_non_traitable(f: dict, supplier=None) -> str:
+def paye_a_la_livraison(f: dict) -> bool:
+    """Le BL a déjà été payé (à la livraison, ou par une avance sur sa commande). PURE."""
+    return bool((f.get("mode_paiement") or "Pas payé") != "Pas payé" or f.get("journal_entry")
+                or f.get("payment_entry") or _m(f.get("po_advance")) > 0)
+
+
+def motif_non_traitable(f: dict, supplier=None, pour: str = "depense") -> str:
     """Pourquoi ce BL ne peut pas être soldé par la dépense — "" s'il le peut. PURE.
+
+    `pour` = "achat" (26/11/2026, caisse_facture_bl) : le BL est couvert par une vraie FACTURE D'ACHAT, préparée depuis
+    sa réception. Un BL payé à la livraison y est admis : son avance s'impute sur la facture (c'est le circuit
+    d'origine des BL) ; en dépense il reste bloqué, la facture le paierait une 2e fois.
 
     `f` : la fiche et ce qu'on sait de sa commande / réception — {est_bl, supplier, statut, mode_paiement,
     journal_entry, payment_entry, purchase_invoice, depense_a_payer, purchase_order, po_docstatus, po_status,
@@ -106,8 +116,7 @@ def motif_non_traitable(f: dict, supplier=None) -> str:
         return "déjà couvert par la dépense %s" % f["depense_a_payer"]
     if (f.get("statut") or "À saisir") != "À saisir":
         return "fiche « %s »" % f.get("statut")
-    if (f.get("mode_paiement") or "Pas payé") != "Pas payé" or f.get("journal_entry") or f.get("payment_entry") \
-            or _m(f.get("po_advance")) > 0:
+    if pour != "achat" and paye_a_la_livraison(f):
         return "payé à la livraison : voir le comptable (la facture ne doit pas le payer une 2e fois)"
     if f.get("purchase_order"):
         if int(f.get("po_docstatus") or 0) != 1:
@@ -157,6 +166,9 @@ def rapprocher_bls(cites, ouverts, clos=(), lignes=None) -> dict:
         c = {"name": f["name"], "numero_bl": f.get("numero_bl") or f.get("numero_facture") or "",
              "date": str(f.get("date_facture") or "")[:10], "montant": _m(f.get("montant")), "recu": _m(f.get("recu")),
              "niveau": niveau, "motif": f.get("motif") or "", "bloquant": bloquant,
+             # Déjà payé à la livraison : en « Facture d'achat » il se facture quand même (son paiement est une avance
+             # que la facture reprend) — l'écran prévient de ne payer que le reste.
+             "paye_livraison": paye_a_la_livraison(f),
              "coche": niveau == TROUVE and not bloquant, "cite": None, "controle": None, "ecart_ht": None,
              "items": [r["item_code"] for r in recus], "recus": recus,
              "appariees": articles_de_la_rubrique(cles, lignes, recus),
@@ -337,7 +349,7 @@ CHAMPS_FICHE = ["name", "supplier", "fournisseur", "statut", "est_bl", "numero_b
                 "purchase_order", "purchase_receipt", "description"]
 
 
-def _ouverts(supplier: str) -> list:
+def _ouverts(supplier: str, pour: str = "depense") -> list:
     """Les BL de ce fournisseur pas encore couverts par une facture, avec leur motif s'ils ne sont pas soldables."""
     fiches = frappe.get_all("Facture Achat a Saisir", order_by="creation asc", fields=CHAMPS_FICHE,
                             filters={"supplier": supplier, "est_bl": 1, "statut": "À saisir",
@@ -345,7 +357,7 @@ def _ouverts(supplier: str) -> list:
     out = []
     for f in fiches:
         f = _etat_fiche(f)
-        f["motif"] = motif_non_traitable(f, supplier)
+        f["motif"] = motif_non_traitable(f, supplier, pour)
         out.append(f)
     return out
 
@@ -364,13 +376,15 @@ def _clos(supplier: str, cles: set) -> list:
     return out
 
 
-def rapprocher_pour(supplier: str, cites=None, lignes=None) -> dict:
-    """Le rapprochement complet pour la fenêtre Dépense (fournisseur connu)."""
+def rapprocher_pour(supplier: str, cites=None, lignes=None, pour: str = "depense") -> dict:
+    """Le rapprochement complet pour la fenêtre Dépense (fournisseur connu). `pour` = "achat" : la pièce est saisie en
+    « Facture d'achat » (motif_non_traitable)."""
     cites = _liste(cites)
     lignes = _liste(lignes)
     cles = {cle_numero_bl(c.get("numero")) for c in cites} - {""}
-    out = rapprocher_bls(cites, _ouverts(supplier), _clos(supplier, cles), lignes)
+    out = rapprocher_bls(cites, _ouverts(supplier, pour), _clos(supplier, cles), lignes)
     out["supplier"] = supplier
+    out["pour"] = pour
     issues_apprentissage(supplier, lignes, out["bls"])
     return out
 
@@ -413,15 +427,17 @@ def fournisseur_par_bl(candidats: list, cites) -> str | None:
 
 
 @frappe.whitelist()
-def bls_ouverts(supplier, bls_cites=None, lignes=None):
+def bls_ouverts(supplier, bls_cites=None, lignes=None, pour=None):
     """La fenêtre Dépense : les BL du fournisseur face à la facture (après un choix de fournisseur, ou la lecture
-    des lignes d'articles). Lecture seule."""
+    des lignes d'articles). Lecture seule. `pour` = "achat" : la pièce est saisie en « Facture d'achat »."""
     from customization_app import caisse_depenses as C
 
     frappe.only_for(C.ROLES)
+    pour = "achat" if pour == "achat" else "depense"
     if not supplier or not frappe.db.exists("Supplier", supplier):
-        return {"bls": [], "inconnus": _liste(bls_cites), "deja_couverts": [], "coches": [], "supplier": None}
-    return rapprocher_pour(supplier, bls_cites, lignes)
+        return {"bls": [], "inconnus": _liste(bls_cites), "deja_couverts": [], "coches": [], "supplier": None,
+                "pour": pour}
+    return rapprocher_pour(supplier, bls_cites, lignes, pour)
 
 
 def valider(bls_couverts, supplier, lignes_stock, stock_ht, ht_total, confirme_ecarts=0, cites=None,

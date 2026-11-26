@@ -321,12 +321,19 @@ def prix_nets(lignes, remise_globale=0.0, total_ht_net=0.0) -> dict:
                        "bl": str(l.get("bl") or "").strip(), "code": str(l.get("code_article") or l.get("code") or "").strip()})
     somme = sum(x["qty"] * x["net"] for x in nettes)
     remise_globale, total_ht_net = max(flt(remise_globale), 0.0), max(flt(total_ht_net), 0.0)
+    tolerance = max(0.5, 0.002 * somme)
+    # La « Remise » du pied de facture n'est souvent que le RÉCAPITULATIF des remises de lignes (26/11/2026, SCPS
+    # FT26080301 : 33 % sur chaque ligne, « Remise 85,328 » en bas, total HT 173,242 = la somme des lignes nettes) :
+    # l'appliquer en plus divisait les prix par deux (2,545 lu 1,291). Le total HT net de la facture tranche ; sans lui,
+    # une remise globale égale à la somme des remises de lignes n'est pas appliquée une 2e fois.
+    remises_lignes = sum(x["qty"] * max(x["brut"] - x["net"], 0.0) for x in nettes)
     facteur = 1.0
-    if remise_globale > 0 and somme > remise_globale:
+    if total_ht_net > 0:
+        if somme - total_ht_net > tolerance:
+            # Les lignes font plus que le total net de la facture : une remise globale ou non détaillée, répartie.
+            facteur = total_ht_net / somme
+    elif remise_globale > 0 and somme > remise_globale and abs(remise_globale - remises_lignes) > tolerance:
         facteur = (somme - remise_globale) / somme
-    elif total_ht_net > 0 and somme - total_ht_net > max(0.5, 0.002 * somme):
-        # Les lignes font plus que le total net de la facture : une remise non détaillée, répartie de même.
-        facteur = total_ht_net / somme
     out = []
     for x in nettes:
         rate = round(x["net"] * facteur, PRECISION)

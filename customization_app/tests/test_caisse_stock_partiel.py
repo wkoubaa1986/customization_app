@@ -133,6 +133,21 @@ class TestRemises(unittest.TestCase):
         self.assertEqual([l["rate"] for l in S.prix_nets([{"quantite": 1, "prix_unitaire_ht": 100}],
                                                          total_ht_net=150)["lignes"]], [100.0])
 
+    def test_le_recapitulatif_des_remises_de_lignes_n_est_pas_une_2e_remise(self):
+        # 26/11/2026, SCPS FT26080301 : 33 % sur chaque ligne, « Remise 85,328 » au pied (leur somme), total HT 173,242.
+        # La remise du pied était appliquée EN PLUS : 2,545 lu 1,291, le stock entrait à moitié prix.
+        lignes = [{"designation": "REDUCTION COLORETTE", "quantite": 30, "prix_unitaire_ht": 3.798, "remise_pct": 33, "montant_ht": 76.340},
+                  {"designation": "REDUCTION SPECIAL", "quantite": 4, "prix_unitaire_ht": 3.960, "remise_pct": 33, "montant_ht": 10.613},
+                  {"designation": "REDUCTION SPECIAL", "quantite": 27, "prix_unitaire_ht": 4.770, "remise_pct": 33, "montant_ht": 86.289}]
+        r = S.prix_nets(lignes, remise_globale=85.328, total_ht_net=173.242)
+        self.assertEqual([l["rate"] for l in r["lignes"]], [2.545, 2.653, 3.196])
+        self.assertEqual((r["facteur"], r["remise_globale"]), (1.0, 0.0))
+        # Même sans le total HT net : une remise de pied égale à la somme des remises de lignes n'est pas rejouée.
+        self.assertEqual([l["rate"] for l in S.prix_nets(lignes, remise_globale=85.328)["lignes"]], [2.545, 2.653, 3.196])
+        # Une VRAIE remise globale en plus des remises de lignes reste répartie (le total net le dit).
+        self.assertEqual([l["rate"] for l in S.prix_nets(lignes, remise_globale=17.324, total_ht_net=155.918)["lignes"]],
+                         [2.290, 2.388, 2.876])
+
     def test_sans_remise_rien_ne_change(self):
         r = S.prix_nets([{"designation": "MARTEAU", "quantite": 1, "prix_unitaire_ht": 16.315, "montant_ht": 16.315}],
                         total_ht_net=16.315)
