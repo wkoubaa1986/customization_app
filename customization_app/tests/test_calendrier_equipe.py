@@ -154,3 +154,14 @@ class TestRaccourci(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestColonnesDeLUtilisateur(unittest.TestCase):
+    """26/11/2026, Hedi au téléphone : sa colonne en premier (elle était 3e, hors de l'écran)."""
+
+    def test_sa_colonne_d_abord(self):
+        from customization_app.calendrier_equipe import ordonner_colonnes
+        a = [{"id": "E14", "nom": "Badis"}, {"id": "E07", "nom": "Economic"}, {"id": "E12", "nom": "Hedi"}]
+        self.assertEqual([x["id"] for x in ordonner_colonnes(a, "E12")], ["E12", "E14", "E07"])
+        self.assertEqual([x["id"] for x in ordonner_colonnes(a, None)], ["E14", "E07", "E12"])
+        self.assertEqual([x["id"] for x in ordonner_colonnes(a, "E99")], ["E14", "E07", "E12"])

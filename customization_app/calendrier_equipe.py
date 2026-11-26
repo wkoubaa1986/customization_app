@@ -143,15 +143,35 @@ def decaler_jours(debut, fin, jours: int) -> tuple:
 
 # ── Lecture ──────────────────────────────────────────────────────────────────
 
+def ordonner_colonnes(actifs: list, moi: str | None) -> list:
+    """La colonne de l'utilisateur d'abord, les autres dans leur ordre. PURE."""
+    return sorted(actifs, key=lambda a: 0 if moi and a.get("id") == moi else 1)
+
+
 def _actifs() -> list:
+    """Les colonnes de la vue « Équipe » : les employés actifs QUE L'UTILISATEUR PEUT LIRE (ses autorisations sur
+    « Employé », sa règle du 22/11/2026), la sienne en premier.
+
+    26/11/2026, Hedi : « je ne vois pas mes tâches au téléphone ». Toutes les colonnes étaient posées (8), alors qu'il
+    ne lit que deux employés : sur un écran de téléphone deux colonnes tiennent, la sienne était la 3e, hors de l'écran,
+    derrière une colonne vide. Sans autorisation sur « Employé » (la direction), get_list les rend toutes."""
     from customization_app import api
 
+    try:
+        lus = frappe.get_list("Employee", filters={"status": "Active"}, fields=["name", "employee_name"],
+                              order_by="employee_name")
+    except frappe.PermissionError:
+        lus = []
+    if not lus:
+        # Aucun droit de lecture sur « Employé » : sa propre fiche seulement (ses tâches restent filtrées par la tâche).
+        lus = frappe.get_all("Employee", filters={"status": "Active", "user_id": frappe.session.user},
+                             fields=["name", "employee_name"])
     out = []
-    for e in frappe.get_all("Employee", filters={"status": "Active"}, fields=["name", "employee_name"],
-                            order_by="employee_name"):
+    for e in lus:
         couleur = api.compute_tache_color({"custom_choix_du_staff": e.name, "status": "Open", "owner": ""})
         out.append({"id": e.name, "nom": e.employee_name or e.name, "couleur": couleur})
-    return out
+    moi = frappe.db.get_value("Employee", {"user_id": frappe.session.user, "status": "Active"}, "name")
+    return ordonner_colonnes(out, moi)
 
 
 def _exterieur() -> bool:
@@ -253,8 +273,13 @@ def evenements(start, end) -> dict:
     autres = {emp for ev in out if ev["genre"] == "tache" for emp in ev["employes"]} - connus - {SANS_EMPLOYE}
     noms = {}
     if autres:
-        noms = {e.name: e.employee_name for e in frappe.get_all(
-            "Employee", filters={"name": ["in", list(autres)]}, fields=["name", "employee_name"])}
+        for e in frappe.get_all("Employee", filters={"name": ["in", list(autres)]}, fields=["name", "employee_name", "status"]):
+            if e.status == "Active":
+                # Une tâche lisible d'un employé ACTIF hors de ses autorisations « Employé » : sa colonne, pas « parti ».
+                actifs.append({"id": e.name, "nom": e.employee_name or e.name, "couleur": api.compute_tache_color(
+                    {"custom_choix_du_staff": e.name, "status": "Open", "owner": ""})})
+            else:
+                noms[e.name] = e.employee_name
     return {"evenements": out, "colonnes": colonnes(actifs, out, noms)}
 
 
