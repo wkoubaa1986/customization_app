@@ -3816,6 +3816,10 @@ function rcj_cloture(rapport, opts) {
       // explication et le comptage semblait impossible (Hedi, 09/11/2026). On part de 0 et on explique.
       const negatif = (e.solde_theorique || 0) < -0.0005;
       let remises_touche = !!reprise;
+      // Le compte saisi, gardé ICI (26/11/2026, Hedi : caisse vide, « Saisissez les espèces réellement comptées » en
+      // boucle). Depuis le comptage à l'aveugle la case se fige après la saisie, et Frappe rend `undefined` pour une
+      // case en lecture seule qui vaut 0 (`this.value || undefined`) : un compte de 0 n'arrivait jamais.
+      let compte_fige = null;
       const d = new frappe.ui.Dialog({
         title: reprise
           ? __("Rouvrir le comptage — {0} ({1}) — {2}", [caisse, periode(e), reprise.name])
@@ -3834,6 +3838,7 @@ function rcj_cloture(rapport, opts) {
             onchange: () => {
               const saisi = d.get_value("comptees");
               if (saisi !== null && saisi !== undefined && saisi !== "") {
+                compte_fige = flt(saisi);
                 d.fields_dict.etat.$wrapper.find(".rcj-etat-voile").hide();
                 d.fields_dict.etat.$wrapper.find(".rcj-etat-cache").show();
                 if (!reprise) d.set_df_property("comptees", "read_only", 1);
@@ -3913,6 +3918,9 @@ function rcj_cloture(rapport, opts) {
             return;
           }
           const double = e.mode_validation === "double";
+          // Case figée à 0 : Frappe ne la rend pas (cf. compte_fige) — on reprend le compte saisi.
+          if ((v.comptees === undefined || v.comptees === null || v.comptees === "") && compte_fige !== null) v.comptees = compte_fige;
+          if (double && (v.remises === undefined || v.remises === null || v.remises === "") && compte_fige === 0) v.remises = 0;
           if (v.comptees === undefined || v.comptees === null || v.comptees === "") {
             frappe.msgprint(__("Saisissez les espèces réellement comptées (0 si la caisse est vide).")); return;
           }
