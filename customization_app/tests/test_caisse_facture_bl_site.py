@@ -162,6 +162,25 @@ class TestFactureAchatSurBL(unittest.TestCase):
         self.assertEqual((_stock(SP) - sp, _stock(BQ) - bq), (4.0, 30.0))
         self.assertEqual(self.erreurs, [])
 
+    def test_saisie_par_un_caissier_sans_droits_comptables(self):
+        # La saisie se fait à la caisse : elle doit passer avec les droits d'un caissier (aucun rôle
+        # comptable ; celui qui a le moins de rôles sur le site), commande, réception et facture préparée comprises.
+        caissier = frappe.db.sql("""select u.name from tabUser u join tabEmployee e on e.user_id = u.name and e.status = 'Active'
+            where u.enabled = 1 and exists (select 1 from `tabHas Role` r where r.parent = u.name and r.role = 'Sales User')
+              and not exists (select 1 from `tabHas Role` r where r.parent = u.name and r.role in
+                              ('System Manager', 'Accounts Manager', 'Accounts User'))
+            order by (select count(*) from `tabHas Role` r where r.parent = u.name), u.name limit 1""")
+        if not caissier:
+            self.skipTest("aucun caissier sans rôle comptable sur ce site")
+        frappe.set_user(caissier[0][0])
+        self.roles = frappe.get_roles()
+        r = self._creer()
+        frappe.set_user("Administrator")
+        pi = frappe.get_doc("Purchase Invoice", r["achat"]["purchase_invoice"])
+        self.assertEqual((pi.docstatus, flt(pi.grand_total, 3), len(pi.items)), (0, 207.158, 3))
+        self.assertEqual(frappe.db.get_value(FICHE, r["fiche"], "saisi_par"), caissier[0][0])
+        self.assertEqual(self.erreurs, [])
+
     def test_facture_qui_ne_couvre_que_le_bl_recu(self):
         # Aucune ligne à recevoir : la facture ne reprend que la réception du BL coché (HT 87,291, timbre dans le prix).
         sp = _stock(SP)

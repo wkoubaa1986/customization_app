@@ -30,6 +30,8 @@ Les fonctions de règle sont PURES (testées sans base) ; le reste tourne dans l
 tout ou rien."""
 from __future__ import annotations
 
+import contextlib
+
 import frappe
 from frappe import _
 from frappe.utils import cint, flt, getdate, nowdate
@@ -150,6 +152,20 @@ def mode_echeancier(mode) -> str:
     return MODES_ECHEANCIER.get((mode or "").strip(), "Espèces")
 
 
+@contextlib.contextmanager
+def _droits_de_preparation():
+    """Le temps de DÉRIVER une pièce d'une autre (commande → réception → facture d'achat), la session lit avec tous les
+    droits. La saisie se fait à la caisse : le caissier n'a pas à avoir le droit de créer une facture d'achat ni de lire
+    une réception (essai du 26/11/2026 : PermissionError dans get_mapped_doc, qu'ERPNext appelle sans option). Seule la
+    dérivation est dans ce bloc ; chaque pièce est ensuite insérée HORS du bloc, au nom du caissier."""
+    user = frappe.session.user
+    frappe.local.session.user = "Administrator"
+    try:
+        yield
+    finally:
+        frappe.local.session.user = user
+
+
 # ── Accès base ───────────────────────────────────────────────────────────────
 
 def valider(bls_couverts, supplier) -> list:
@@ -244,7 +260,8 @@ def recevoir(groupe: dict, supplier: str, ctx: dict) -> dict:
         recu = frappe.db.get_value(FICHE, nom, "purchase_receipt")
     else:
         from erpnext.buying.doctype.purchase_order.purchase_order import make_purchase_receipt
-        pr = make_purchase_receipt(po.name)
+        with _droits_de_preparation():
+            pr = make_purchase_receipt(po.name)
         S._sans_taxes(pr)
         if groupe.get("numero") and pr.meta.has_field("supplier_delivery_note"):
             pr.supplier_delivery_note = groupe["numero"]
@@ -274,8 +291,9 @@ def brouillon(supplier: str, receptions: list, ctx: dict) -> dict:
     from customization_app import caisse_depenses as C, caisse_stock_partiel as S
 
     pi = None
-    for recu in receptions:
-        pi = make_purchase_invoice(recu, target_doc=pi)
+    with _droits_de_preparation():
+        for recu in receptions:
+            pi = make_purchase_invoice(recu, target_doc=pi)
     if not pi or not pi.get("items"):
         frappe.throw(_("Aucune ligne à facturer sur les réceptions {0}.").format(", ".join(receptions)))
     pi.supplier = supplier
