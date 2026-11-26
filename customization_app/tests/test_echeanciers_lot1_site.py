@@ -26,7 +26,9 @@ class _SansTrace(unittest.TestCase):
         frappe.db.savepoint("lot1")
         self.journal = []
         self.mocks = [mock.patch.object(frappe.db, "commit", lambda *a, **k: None),
-                      mock.patch.object(frappe, "log_error", lambda *a, **k: self.journal.append(k.get("message") or (a[0] if a else "")))]
+                      mock.patch.object(frappe, "log_error", lambda *a, **k: self.journal.append(k.get("message") or (a[0] if a else ""))),
+                      # File Redis de la recherche globale et __global_search (MyISAM) : le rollback ne les annule pas.
+                      mock.patch.dict(frappe.local.conf, {"disable_global_search": 1})]
         for m in self.mocks:
             m.start()
 
@@ -113,7 +115,9 @@ class TestBoucleSite(_SansTrace):
         self.assertEqual(len(noms), 2)                                                              # deux machines suivies
 
     def test_une_vraie_devinette_part_toujours(self):
-        # Une devinette fabriquée pour l'essai : machine type, aucune visite réalisée, née d'une commande d'entretien.
+        # Une devinette fabriquée pour l'essai : machine type, née d'une commande d'entretien qui a soldé sa 1re visite
+        # (comme toute devinette de la nuit : update_single_machine_schedule). Relecture du 26/11/2026 : cette visite de
+        # naissance la gardait pour toujours ; l'essai d'avant, SANS elle, passait alors que le vrai chemin ne marchait pas.
         entretien = frappe.db.sql("""select so.name, so.customer from `tabSales Order` so where so.docstatus = 1 and not exists (
                                      select 1 from `tabSales Order Item` i where i.parent = so.name and i.item_code like 'AP-%%')
                                      and exists (select 1 from `tabSales Order Item` i where i.parent = so.name and i.item_code = 'M-E-OD')
@@ -126,8 +130,14 @@ class TestBoucleSite(_SansTrace):
         type_code = RC.famille("RO_DOM", fams)["article_type"]
         item = frappe.db.get_value("Item", type_code, ["item_code", "item_name"], as_dict=True)
         ms = U._nouvel_echeancier(client, nowdate(), [{"item_code": item.item_code, "item_name": item.item_name, "sales_order": so}], cfg)
+        with mock.patch.object(U, "_reactiver_client", lambda *a, **k: None):
+            self.assertTrue(U.shift_schedule_for_delivery(ms, nowdate(), so, "RO_DOM", fams, {}))       # visite de naissance
+        self.assertTrue(frappe.db.exists("Maintenance Schedule Detail", {"parent": ms.name, "custom_sales_order": so,
+                                                                          "actual_date": ["is", "set"]}))
         U._retirer_echeancier_devine(client, "RO_DOM", fams, {})
-        self.assertFalse(frappe.db.exists("Maintenance Schedule", ms.name))
+        # Lot 4 (26/11/2026) : annulée, plus supprimée — elle reste lisible et couvre toujours sa commande d'origine.
+        self.assertEqual(frappe.db.get_value("Maintenance Schedule", ms.name, "docstatus"), 2)
+        self.assertIn(so, U.commandes_couvertes())
 
 
 class TestFantomesSite(_SansTrace):

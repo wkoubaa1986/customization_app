@@ -284,7 +284,8 @@
     const e = h.echeancier || {};
     const ms = e.echeanciers || [];
     if (!ms.length) return `<h5>🗓 Échéancier d’entretien</h5><div class="hc-vide">Aucun échéancier.</div>`;
-    const sms = (d, s) => d ? `${jour(d)} <span class="hc-pill ${s === "Success" ? "hc-ok" : "hc-r"}">${s === "Success" ? "✓" : "✗"}</span>` : "";
+    const sms = (d, s) => d ? `${jour(d)} <span class="hc-pill ${s === "Success" ? "hc-ok" : s === "Refus SMS" ? "hc-a" : "hc-r"}">${
+      s === "Success" ? "✓" : s === "Refus SMS" ? "refus" : "✗"}</span>` : "";
     const etat = (v) => `<span class="hc-pill ${v.etat === "réalisée" ? "hc-ok" : v.etat === "à venir" ? "hc-a" : "hc-r"}">${esc(v.etat)}</span>`;
     const blocs = ms.map((m) => {
       const machines = (m.machines || []).map((x) => `${esc(x.item_code)} <span class="m">(${jour(x.depuis)})</span>`).join(", ");
@@ -299,8 +300,15 @@
       const plus = vis.length > recentes.length
         ? `<details><summary>${vis.length - recentes.length} visite(s) plus ancienne(s)</summary><div class="hc-x"><table>${tete_t}<tbody>${
             lignes(vis.slice(0, vis.length - recentes.length))}</tbody></table></div></details>` : "";
+      const corps = `${plus}<div class="hc-x"><table>${tete_t}<tbody>${lignes(recentes)}</tbody></table></div>`;
+      // Échéancier ANNULÉ (26/11/2026 : plus supprimé) : replié, avec la raison de l'annulation.
+      if (m.annule) {
+        return `<details style="margin:6px 0 10px"><summary>${lien("Maintenance Schedule", m.name)}
+          <span class="hc-pill hc-r">annulé</span> <span class="m">· ${machines}</span></summary>
+          ${m.raison ? `<div class="m" style="margin:4px 0">${esc(m.raison)}</div>` : ""}${corps}</details>`;
+      }
       return `<div style="margin:6px 0 10px"><div>${lien("Maintenance Schedule", m.name)} <span class="m">· ${machines}</span></div>
-        ${plus}<div class="hc-x"><table>${tete_t}<tbody>${lignes(recentes)}</tbody></table></div></div>`;
+        ${corps}</div>`;
     }).join("");
     const journal = (e.journal || []).length
       ? `<details><summary>Journal de l’échéancier (${e.journal.length})</summary><table><tbody>${e.journal.map((j) =>

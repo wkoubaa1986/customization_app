@@ -1,5 +1,8 @@
 """Page « Journaux des relances » : pour chaque cron de l'entretien, le dernier passage (journal des tâches planifiées), les
-dernières lignes de résumé de son fichier journal, et les erreurs récentes. Lecture seule."""
+dernières lignes de résumé de son fichier journal, et les erreurs récentes. Lecture seule.
+
+25/11/2026 : section « Entonnoir du jour » en tête (entonnoir_relances.vue_page) — la photo du jour, la tendance des 14
+derniers jours et les signaux rouges ; la baisse des listes d'octobre 2026 ne s'était vue qu'au bout de deux mois."""
 from __future__ import annotations
 
 import os
@@ -46,9 +49,18 @@ def resume(jours=2):
             erreurs += frappe.get_all("Error Log", filters={"method": ["like", motif], "creation": [">=", depuis]},
                                       fields=["name", "method", "creation"], order_by="creation desc", limit=10)
         erreurs = sorted({e.name: e for e in erreurs}.values(), key=lambda e: e.creation, reverse=True)[:10]
-        out.append({"cle": c["cle"], "titre": c["titre"], "quand": c["quand"], "journal": c["journal"],
+        out.append({"cle": c["cle"], "titre": c["titre"], "quand": c["quand"], "journal": c["journal"], "trace": c.get("trace"),
                     "dernier": derniers[0] if derniers else None, "passages": derniers,
                     "lignes": _dernieres_lignes(c["journal"]), "erreurs": erreurs, "nb_erreurs": len(erreurs)})
     return {"crons": out, "email_alertes": ", ".join(RC.emails_alertes()), "depuis": str(depuis)[:16],
             "liens": {"jobs": "/app/scheduled-job-log?scheduled_job_type=%5B%22like%22%2C%22%25customization_app%25%22%5D",
                       "erreurs": "/app/error-log", "reglage": "/app/config-relances", "listes": "/app/liste-appelle-entretien"}}
+
+
+@frappe.whitelist()
+def entonnoir(jour=None):
+    """La section « Entonnoir du jour » : appel séparé de `resume`, pour que les cartes des crons s'affichent même si
+    l'entonnoir échoue. Lecture seule, calculé à l'ouverture (moins d'une seconde sur la copie du 25/11/2026)."""
+    frappe.only_for(ROLES)
+    from customization_app import entonnoir_relances as ER
+    return ER.vue_page(jour)

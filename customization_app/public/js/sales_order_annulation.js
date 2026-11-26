@@ -1,7 +1,8 @@
-// Annulation d'une commande : la cascade est SERVEUR (annulation_commande.py +
-// Server Script « cancel sales order payment ») — BL annulés puis supprimés
-// avec la gymnastique du magasin désactivé, échéanciers supprimés, calendrier
-// remis en attente, paiements/écritures supprimés.
+// Annulation d'une commande : la cascade est SERVEUR (annulation_commande.py,
+// qui reprend depuis le 26/11/2026 le Server Script « cancel sales order
+// payment ») — BL annulés puis supprimés avec la gymnastique du magasin
+// désactivé, échéanciers ANNULÉS (plus supprimés), calendrier remis en attente,
+// paiements/écritures supprimés.
 //
 // Sans ceci, frappe affiche « Annuler tous les documents » (BL, échéancier…)
 // et son « Tout annuler » annule ces pièces AVANT la cascade : pas de

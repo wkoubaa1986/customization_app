@@ -161,6 +161,16 @@ class TestResumeHistorique(unittest.TestCase):
         self.assertEqual(r["prochaine_visite"], {"prevue": "2026-08-21", "etat": "en attente", "machine": "Osmoseur 7 stages"})
         self.assertEqual(r["machines"], [{"nom": "Osmoseur 7 stages", "depuis": "2024-06-14"}])
 
+    def test_un_echeancier_annule_ne_compte_pas(self):
+        # 26/11/2026 : historique_client rend aussi les échéanciers annulés (machine rendue, commande annulée…).
+        ech = [{"annule": True, "machines": [{"item_code": "AP-8", "item_name": "Osmoseur rendu", "depuis": "2026-08-26"}],
+                "visites": [{"item_code": "AP-8", "prevue": "2026-10-01", "etat": "en attente"}]},
+               {"machines": [{"item_code": "AP-7", "item_name": "Osmoseur 7 stages", "depuis": "2024-06-14"}],
+                "visites": [{"item_code": "AP-7", "prevue": "2027-02-20", "etat": "à venir"}]}]
+        r = self.resume(echeanciers=ech)
+        self.assertEqual(r["prochaine_visite"], {"prevue": "2027-02-20", "etat": "à venir", "machine": "Osmoseur 7 stages"})
+        self.assertEqual(r["machines"], [{"nom": "Osmoseur 7 stages", "depuis": "2024-06-14"}])
+
     def test_seules_les_pieces_dues_ou_bientot_dues_sont_proposees(self):
         pieces = {"pieces": [{"libelle": "Membrane", "statut": "retard", "echeance": "2026-06-14", "retard_jours": 158},
                              {"libelle": "Pack filtres", "statut": "ok", "echeance": "2027-04-05"},

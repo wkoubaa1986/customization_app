@@ -282,6 +282,10 @@ def resume_historique(a_venir, passees, appels, echeanciers, achats, pieces) -> 
     derniere = next((i for i in passees if i.get("status") == "Completed"), None)
     machines, visites = [], []
     for e in echeanciers or []:
+        if e.get("annule"):
+            # 26/11/2026 : historique_client rend aussi les échéanciers ANNULÉS (plus supprimés) ; ni leurs machines ni leurs
+            # visites ne sont celles du client aujourd'hui (machine rendue, commande annulée, « pas de système »…).
+            continue
         noms = {m.get("item_code"): m.get("item_name") or m.get("item_code") for m in e.get("machines") or []}
         machines += [{"nom": m.get("item_name") or m.get("item_code"), "depuis": m.get("depuis") or ""}
                      for m in e.get("machines") or []]

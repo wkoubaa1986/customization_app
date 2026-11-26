@@ -151,6 +151,15 @@ class TestFluxEnDouble(unittest.TestCase):
         # Un porte-filtre sans machine chez le client repart.
         self.assertEqual(U.articles_a_garder_geles("MS-PF", ["PF-10"], [seul], [], self.FAM), {})
 
+    def test_porte_filtre_a_cote_d_un_adoucisseur_seul_repart(self):
+        # Relecture finale du 26/11/2026 : seul une machine qui le PROTÈGE (pf_protege) gèle le porte-filtre.
+        pf = self._f("MS-PF", "PF-10", ["SO9"])
+        adou = self._f("MS-A", "ADOU", ["SO1"], a_venir=True)
+        protege = lambda fm: fm == "RO_DOM"
+        self.assertEqual(U.articles_a_garder_geles("MS-PF", ["PF-10"], [pf], [adou], self.FAM, protege=protege), {})
+        osmo = self._f("MS-O", "AP-5", ["SO1"], a_venir=True)
+        self.assertIn("MS-O", U.articles_a_garder_geles("MS-PF", ["PF-10"], [pf], [adou, osmo], self.FAM, protege=protege)["PF-10"])
+
     def test_extension_saute_les_articles_geles(self):
         import types
         ms = types.SimpleNamespace(name="MS-T", flags=frappe._dict(), items=[frappe._dict(item_code="A", periodicity="Half Yearly"),

@@ -1,19 +1,29 @@
-"""SMS de réveil annuel (15/10/2026) — pour les clients « À requalifier » qui n'ont plus rien reçu depuis un an.
+"""SMS de réveil (15/10/2026) — pour les clients « À requalifier » restés sans contact.
 
 Après le dernier appel humain (liste Requalification, puis 2e appel), un client « À requalifier » ne recevait plus
-jamais rien : 239 clients dans cette impasse au 15/10/2026. Une fois par an, un seul SMS avec le lien de prise de
-rendez-vous : presque gratuit, et un client qui change d'avis revient seul. Jamais pour un client « Perdu », « Non »
-aux SMS, géré par le partenaire, avec un rendez-vous, ou dont la relance est reportée. Plafond propre par jour,
-pour ne pas manger le plafond des relances du matin. Dev : simulé comme toutes les relances."""
+jamais rien : 239 clients dans cette impasse au 15/10/2026. Un seul SMS avec le lien de prise de rendez-vous : presque
+gratuit, et un client qui change d'avis revient seul. Jamais pour un client « Perdu », « Non » aux SMS, géré par le
+partenaire, avec un rendez-vous, ou dont la relance est reportée. Plafond propre par jour, pour ne pas manger le plafond
+des relances du matin. Dev : simulé comme toutes les relances.
+
+25/11/2026 : le PREMIER réveil vient `jours_reveil_requalifies` jours après le dernier appel (180 par défaut au lieu de
+365) — les 290 « À requalifier » en retard ont eu leur dernier appel en octobre 2026 : à 365 j, aucun réveil avant
+octobre 2027 ; à 180 j, dès avril 2027. Les réveils SUIVANTS restent annuels (JOURS_SILENCE entre deux réveils,
+relecture du 26/11/2026) : avec le même délai pour les deux, un client sans réponse aurait reçu un SMS tous les 180 j.
+Le texte (« cela fait plus d'un an que … n'a pas été entretenu ») parle de l'entretien, pas du contact : il reste vrai
+en règle générale, un client n'est « À requalifier » qu'après 3 mois d'échéance sans entretien depuis sa dernière visite
+faite (visites semestrielles), et un achat d'entretien le réactive. À 90 j ou moins, relire ce texte (Config Modeles
+SMS)."""
 from __future__ import annotations
 
 import frappe
-from frappe.utils import add_days, getdate, nowdate
+from frappe.utils import add_days, cint, getdate, nowdate
 
 from customization_app import modeles_sms, partenaire_clients, relances_config as RC
 from customization_app.utils.run_safely import run_safely
 
-JOURS_SILENCE = 365
+JOURS_SILENCE = 365            # règle d'origine (15/10/2026) : un réveil par an au plus (écart minimal entre deux réveils)
+JOURS_REVEIL_DEFAUT = 180      # décision du 25/11/2026 : réglage « jours_reveil_requalifies » (1er réveil après l'appel)
 REVEIL_PAR_JOUR = 20
 
 
@@ -21,21 +31,35 @@ def log(msg):
     RC.journal("maintenance_sms").info(msg)
 
 
-def eligible(statut, envoi_sms, dernier_contact, dernier_reveil, today, jours=JOURS_SILENCE) -> bool:
-    """« À requalifier », SMS acceptés, dernier contact (appel ou réveil) il y a au moins `jours`. PURE."""
+def jours_reveil(cfg=None) -> int:
+    """Le délai sans contact avant un réveil (réglage `jours_reveil_requalifies`, 180 j tant que le champ n'existe pas).
+    0 ou moins = aucun réveil : avec 0, le même client recevrait un SMS chaque matin. PURE avec `cfg`."""
+    cfg = RC.config() if cfg is None else cfg
+    return cint(cfg.get("jours_reveil_requalifies", JOURS_REVEIL_DEFAUT))
+
+
+def eligible(statut, envoi_sms, dernier_appel, dernier_reveil, today, jours=JOURS_SILENCE) -> bool:
+    """« À requalifier », SMS acceptés, dernier APPEL il y a au moins `jours`, dernier RÉVEIL il y a au moins
+    max(`jours`, JOURS_SILENCE). Le réglage avance le premier réveil après l'appel ; il ne fait pas répéter le SMS plus
+    d'une fois par an (relecture du 26/11/2026 : avec 180 j pour les deux, un client réveillé le 30/04/2027 l'aurait été
+    de nouveau le 27/10/2027, puis le 24/04/2028… — deux SMS par an au lieu d'un). PURE."""
     if statut != "À requalifier" or (envoi_sms or "").strip() == "Non":
         return False
-    limite = add_days(getdate(today), -jours)
-    for d in (dernier_contact, dernier_reveil):
-        if d and getdate(d) > limite:
-            return False
-    return bool(dernier_contact or dernier_reveil)
+    today, jours = getdate(today), cint(jours)
+    if dernier_appel and getdate(dernier_appel) > add_days(today, -jours):
+        return False
+    if dernier_reveil and getdate(dernier_reveil) > add_days(today, -max(jours, JOURS_SILENCE)):
+        return False
+    return bool(dernier_appel or dernier_reveil)
 
 
 def candidats(today, cfg=None, plafond=REVEIL_PAR_JOUR) -> list:
-    """[{customer, customer_name, telephones, secteurs, familles}] à réveiller aujourd'hui, les plus anciens d'abord."""
+    """[{customer, customer_name, telephones, secteurs, familles}] à réveiller aujourd'hui, les plus anciens d'abord :
+    dernier appel il y a au moins jours_reveil(cfg) jours, dernier réveil il y a au moins un an (eligible) ; aucun si
+    le réglage vaut 0."""
     cfg = cfg or RC.config()
-    if not frappe.db.has_column("Customer", "custom_sms_reveil_le"):
+    jours = jours_reveil(cfg)
+    if jours <= 0 or not frappe.db.has_column("Customer", "custom_sms_reveil_le"):
         return []
     rows = frappe.db.sql("""
         select c.name, c.customer_name, c.custom_liste_telephone telephones, c.custom_statut_relance statut, c.custom_envoi_sms envoi_sms,
@@ -46,11 +70,15 @@ def candidats(today, cfg=None, plafond=REVEIL_PAR_JOUR) -> list:
                  where dl.parenttype = 'Address' and dl.link_doctype = 'Customer' and dl.link_name = c.name) secteurs
         from tabCustomer c where c.custom_statut_relance = 'À requalifier'""", as_dict=True)
     exclus = set(partenaire_clients.clients_geres()) | RC.clients_avec_rdv(cfg)
+    # « Non » à l'entretien (sauf réglage) : pas de réveil non plus — 61 « À requalifier » « Non » acceptant les SMS l'auraient
+    # reçu une fois leur délai écoulé (relecture du 26/11/2026 ; le trou existait avant).
+    if not cint(cfg.get("relancer_non_interesses")):
+        exclus |= set(frappe.get_all("Customer", filters={"custom_intéressé_par_le_service_entretien": "Non"}, pluck="name"))
     out = []
     for r in rows:
         if r.name in exclus or (r.reportee and getdate(r.reportee) > getdate(today)):
             continue
-        if not eligible(r.statut, r.envoi_sms, r.dernier_appel, r.dernier_reveil, today):
+        if not eligible(r.statut, r.envoi_sms, r.dernier_appel, r.dernier_reveil, today, jours):
             continue
         out.append(r)
     out.sort(key=lambda r: str(r.dernier_reveil or r.dernier_appel or ""))
@@ -79,6 +107,7 @@ def envoyer_reveils(dry_run: bool = False) -> dict:
         _format_phones_for_message, envoyer_sms_winsms, get_relance_config, lien_rdv_pour_client, simulation_envois, traiter_numero_tel)
 
     today, cfg, fams = nowdate(), RC.config(), RC.familles()
+    jours = jours_reveil(cfg)
     modeles = modeles_sms.textes()
     _site, phones = get_relance_config()
     telephones = _format_phones_for_message(phones or [])
@@ -109,10 +138,35 @@ def envoyer_reveils(dry_run: bool = False) -> dict:
             continue
         frappe.db.set_value("Customer", c.name, "custom_sms_reveil_le", today)
         frappe.get_doc({"doctype": "Comment", "comment_type": "Info", "reference_doctype": "Customer", "reference_name": c.name,
-                        "content": "📨 SMS de réveil envoyé le %s (un an sans contact) : %s" % (getdate(today).strftime("%d/%m/%Y"), texte)}).insert(ignore_permissions=True)
+                        "content": texte_trace(today, jours, texte)}).insert(ignore_permissions=True)
         resume["envoyes"] += 1
-    log("[REVEIL SUMMARY] %s" % resume)
+    log("[REVEIL SUMMARY] %s (délai %d j)" % (resume, jours))
+    if not dry_run:
+        _noter_entonnoir(resume, jours)
     return resume
+
+
+def texte_trace(today, jours, texte) -> str:
+    """Le commentaire de la fiche client (il disait « un an sans contact » quel que soit le délai). PURE."""
+    return "📨 SMS de réveil envoyé le %s (aucun contact depuis au moins %d j) : %s" % (getdate(today).strftime("%d/%m/%Y"), cint(jours), texte)
+
+
+def compteurs_entonnoir(resume, jours) -> dict:
+    """Ce que l'entonnoir garde d'un passage. Les vrais compteurs sont des nombres (l'entonnoir les additionne d'un
+    passage à l'autre le même jour) ; le délai et le mode sont du TEXTE, qu'il remplace (relecture du 26/11/2026 : en
+    nombres, un passage à 10:05 et un à la main affichaient « jours = 360, simules = 2 »). PURE."""
+    return {"candidats": cint(resume.get("candidats")), "envoyes": cint(resume.get("envoyes")),
+            "sans_numero": cint(resume.get("sans_numero")), "echecs": cint(resume.get("echecs")),
+            "delai": "%d j" % cint(jours), "mode": "simulé" if resume.get("simules") else "réel"}
+
+
+def _noter_entonnoir(resume, jours):
+    """Les compteurs du jour dans l'entonnoir des relances (module du lot « entonnoir », peut ne pas encore exister)."""
+    try:
+        from customization_app.entonnoir_relances import noter
+        noter("reveil", compteurs_entonnoir(resume, jours))
+    except Exception:
+        pass
 
 
 def run_cron():

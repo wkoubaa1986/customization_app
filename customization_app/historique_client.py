@@ -37,7 +37,10 @@ PLACEHOLDER_RAPPORT = "Indiquez vos remarques sur l'intervention et le client:"
 TYPES_HORS_CLIENT = ("Congé", "Jour de récupération", "Tournée commerciale")
 # Débuts de commentaires posés par le code (en plus de commentaires_commande.AUTOMATIQUES).
 AUTOMATIQUES = ("SMS d'annulation", "SMS d’annulation", "BL consolidé", "📨", "📲", "🤝", "↩️", "📱", "✅", "⏸️", "🧹",
-                "🔁", "🗺️", "🗺", "📅", "🔔")
+                "🔁", "🗺️", "🗺", "📅", "🔔", "🗄️", "❌ Commande ")
+# Commentaires de la fiche client repris dans le journal de l'échéancier : lassitude (⏸️ / ✅), et depuis le 26/11/2026 les
+# annulations d'échéancier (🗄️ nuit, 🧹 héritage, ↩️ machine rendue / revenue, ❌ commande annulée).
+JOURNAL_ECHEANCIER = ("⏸️", "✅", "🗄️", "🧹", "↩️", "❌")
 APPELS = ("📵", "📞")
 RELANCES = ("[RELANCE-PAIEMENT]", "[RELANCE-RAS]")
 CHAMPS_LISTE = ("a_été_appelé", "resume_appel", "reponse_client", "intéressé_par_le_service_dentretien",
@@ -247,9 +250,13 @@ def appels_et_commentaires(client: str, commandes: list, taches: list) -> list:
 
 
 def echeancier(client: str) -> dict:
-    """Échéanciers soumis du client : machines, visites (passées et prochaines) avec leurs actions, et journal."""
-    ms = frappe.get_all("Maintenance Schedule", filters={"customer": client, "docstatus": 1},
-                        fields=["name", "transaction_date"], order_by="transaction_date desc", limit_page_length=0)
+    """Échéanciers du client : machines, visites (passées et prochaines) avec leurs actions, et journal. Depuis le 26/11/2026
+    les échéanciers ANNULÉS sont rendus aussi (annule = True, avec la raison) : la nuit, l'annulation d'une commande, un
+    retour ou « pas de système » annulent au lieu de supprimer, et l'opératrice doit voir pendant l'appel ce qu'il est
+    devenu."""
+    ms = frappe.get_all("Maintenance Schedule", filters={"customer": client, "docstatus": ["in", (1, 2)]},
+                        fields=["name", "transaction_date", "docstatus"], order_by="docstatus asc, transaction_date desc",
+                        limit_page_length=0)
     if not ms:
         return {"echeanciers": [], "journal": []}
     noms = [m.name for m in ms]
@@ -259,6 +266,7 @@ def echeancier(client: str) -> dict:
         machines.setdefault(it.parent, []).append({"item_code": it.item_code, "item_name": it.item_name,
                                                    "commande": it.sales_order or "", "depuis": str(it.start_date or "")})
     horizon = str(getdate(frappe.utils.add_days(nowdate(), 200)))
+    annules = {m.name for m in ms if m.docstatus == 2}
     visites = {}
     for d in frappe.get_all("Maintenance Schedule Detail", filters={"parent": ["in", noms]},
                             fields=["parent", "item_code", "scheduled_date", "actual_date", "completion_status",
@@ -268,27 +276,33 @@ def echeancier(client: str) -> dict:
         if str(d.scheduled_date or "") > horizon:
             continue
         faite = bool(d.actual_date) or d.completion_status == "Fully Completed"
-        etat = "réalisée" if faite else ("à venir" if str(d.scheduled_date or "") > nowdate() else "en attente")
+        etat = "réalisée" if faite else "annulée" if d.parent in annules else (
+            "à venir" if str(d.scheduled_date or "") > nowdate() else "en attente")
         visites.setdefault(d.parent, []).append({
             "item_code": d.item_code, "prevue": str(d.scheduled_date or ""), "faite_le": str(d.actual_date or ""),
             "etat": etat, "commande": d.custom_sales_order or "",
             "sms1": str(d.custom_sms_1 or ""), "sms1_statut": d.custom_sms1_status or "",
             "sms2": str(d.custom_sms_2 or ""), "sms2_statut": d.custom_sms2_status or "",
             "premier_appel": str(d.custom_1er_appel or ""), "appele": str(d.custom_appelle or "")})
-    journal = []
+    journal, raisons = [], {}
+    # « Comment » aussi : les retours de machine et l'annulation de commande commentent l'échéancier ainsi (26/11/2026).
     for c in frappe.get_all("Comment", filters={"reference_doctype": "Maintenance Schedule", "reference_name": ["in", noms],
-                                                 "comment_type": "Info"},
-                            fields=["reference_name", "content", "creation"], limit_page_length=0):
-        journal.append({"date": str(c.creation), "source": c.reference_name, "texte": texte(c.content, 500)})
+                                                 "comment_type": ["in", ("Info", "Comment")]},
+                            fields=["reference_name", "content", "creation"], order_by="creation desc", limit_page_length=0):
+        t = texte(c.content, 500)
+        journal.append({"date": str(c.creation), "source": c.reference_name, "texte": t})
+        if c.reference_name in annules and c.reference_name not in raisons and t.startswith(("🗄️", "🧹", "↩️", "❌", "📵")):
+            raisons[c.reference_name] = t
     for c in frappe.get_all("Comment", filters={"reference_doctype": "Customer", "reference_name": client,
                                                  "comment_type": "Info"},
                             fields=["content", "creation"], limit_page_length=0):
         t = texte(c.content, 500)
-        if t.startswith(("⏸️", "✅")):
+        if t.startswith(JOURNAL_ECHEANCIER):
             journal.append({"date": str(c.creation), "source": "", "texte": t})
     journal.sort(key=lambda x: x["date"], reverse=True)
     return {"echeanciers": [{"name": m.name, "depuis": str(m.transaction_date or ""), "machines": machines.get(m.name, []),
-                             "visites": visites.get(m.name, [])} for m in ms],
+                             "visites": visites.get(m.name, []), "annule": m.docstatus == 2,
+                             "raison": raisons.get(m.name, "")} for m in ms],
             "journal": journal[:30]}
 
 

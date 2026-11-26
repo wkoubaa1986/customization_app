@@ -1,17 +1,30 @@
 # -*- coding: utf-8 -*-
+"""Relance SMS / e-mail de l'entretien (cron 10:00, lundi–samedi).
+
+Revue du 25/11/2026 (analyse « cartographie entretien », copie de prod du 25/11 12:26) :
+- UN SEUL SMS PAR CLIENT ET PAR JOUR (réglage « un_sms_par_client_par_jour », 1 par défaut) : avant, un client à deux
+  échéanciers (deux machines, un doublon, un « deviné » de trop) ou dont un échéancier devait à la fois un SMS1 et un
+  SMS2 recevait deux SMS le même jour — 60 fois du 01/09 au 25/11/2026 (36 clients) ; l'analyse compte 73 couples
+  client × famille relancés deux fois le même mois. Désormais un seul message (celui de la famille prioritaire, avec
+  son coût) et TOUTES les visites dues sont marquées ; le plafond quotidien compte un SMS par client ;
+- le résumé « exclus_partenaire » comptait les ÉCHÉANCIERS de TOUS les clients exclus (529 à la nuit simulée du 26/11,
+  aucun lien avec le partenaire) → compteurs séparés par motif, « exclus_partenaire » = les seuls clients du partenaire ;
+- un échec sur un échéancier ou un client (fiche supprimée, article disparu, sauvegarde refusée) arrêtait tout le
+  passage → chacun est isolé et journalisé (Error Log « SMS Maintenance — … ») ;
+- après un vrai passage, les compteurs du jour vont à l'entonnoir des relances (customization_app.entonnoir_relances).
+"""
 from __future__ import unicode_literals
+
+from collections import Counter
 
 import frappe
 
 from customization_app import modeles_sms, relances_config as RC
-from frappe.utils import nowdate, add_days, getdate
+from frappe.utils import nowdate, add_days, getdate, cint
 from urllib.parse import quote_plus
 import requests
-# On réutilise la config machine & extension depuis update_schedule
-from customization_app.Maintenance.update_schedule import (
-    MACHINE_FAMILY_BY_GROUP,
-    extend_schedule_for_sms,
-)
+# On réutilise l'extension depuis update_schedule (les familles viennent du réglage, RC)
+from customization_app.Maintenance.update_schedule import extend_schedule_for_sms
 from customization_app.utils.run_safely import run_safely
 # ---------------------------------------------------------------------------
 #  LOGGING
@@ -199,7 +212,8 @@ def envoyer_relances_maintenance(dry_run: bool = False):
     À appeler via cron / scheduler.
 
     dry_run = True  -> ne pas envoyer les SMS, ne rien modifier en BDD,
-                      renvoyer simplement la liste des messages préparés.
+                      renvoyer simplement la liste des messages préparés : UNE entrée par SMS (par client quand le
+                      réglage « un_sms_par_client_par_jour » est actif), avec les visites qu'il couvre (« visites »).
 
     Retourne un dict :
     {
@@ -208,19 +222,42 @@ def envoyer_relances_maintenance(dry_run: bool = False):
         "preview": [...]  # seulement si dry_run=True
         "log": [ "ligne1", "ligne2", ... ]
     }
+
+    Résumé (25/11/2026) — les clés d'avant gardent leur sens : sms1_candidates / sms2_candidates / total_sms_candidates
+    = les SMS qu'aurait envoyés l'ancien code (un par échéancier × type) ; envois_candidats = les SMS après
+    regroupement par client, sms_evites = la différence, total_sms_prevus = les envois retenus par le plafond.
+    Exclusions : clients_exclus (clients distincts ayant un échéancier actif), exclus_par_motif (chaque client sous
+    son premier motif, la somme = clients_exclus), exclus_partenaire (les seuls clients du partenaire),
+    echeanciers_exclus (l'ancien compte, en échéanciers). marquages_secours = échéanciers qui ont refusé leur
+    sauvegarde après l'envoi et dont les visites ont été marquées sans validation (marquer_en_base).
     """
     today = nowdate()
     log("========== [CRON] Début envoyer_relances_maintenance ==========")
+    cfg = RC.config()
+    fams = cfg.get("familles") or RC.familles()
+    un_par_client = cint(cfg.get("un_sms_par_client_par_jour", 1))
 
     # Structure de summary pour log + retour
     summary = {
         "date": today,
+        "un_sms_par_client": un_par_client,
         "total_maintenance_schedules": 0,
+        "clients_avec_echeancier": 0,
         "clients_avec_rdv": 0,
+        "clients_exclus": 0,
+        "exclus_par_motif": {m: 0 for m in MOTIFS_EXCLUSION},
+        "exclus_partenaire": 0,
+        "echeanciers_exclus": 0,
         "sms1_candidates": 0,
         "sms2_candidates": 0,
         "total_sms_candidates": 0,
+        "visites_candidates": 0,
+        "clients_candidats": 0,
+        "clients_plusieurs_sms": 0,
+        "envois_candidats": 0,
+        "sms_evites": 0,
         "total_sms_prevus": 0,
+        "sms_hors_plafond": 0,
         "repartition_sms_par_secteur": {},
         "secteurs_autorises": [],
         "sms_sent_success": 0,
@@ -228,7 +265,10 @@ def envoyer_relances_maintenance(dry_run: bool = False):
         "sms_failed": 0,
         "emails_sent": 0,
         "emails_failed": 0,
+        "visites_marquees": 0,
+        "marquages_secours": 0,
         "maintenances_extended": 0,
+        "erreurs": 0,
     }
 
     # On ne fait rien certains jours (jours fériés, etc.)
@@ -247,8 +287,6 @@ def envoyer_relances_maintenance(dry_run: bool = False):
         }
 
     # Fenêtres temporelles
-    cfg = RC.config()
-    rend_date = add_days(today, -cfg["jours_rdv_recent"])     # RDV existants (réglage)
     relance_date = add_days(today, -cfg["delai_sms2_jours"])  # fenêtre pour considérer les SMS récents (réglage)
 
     # 1) Récupérer tous les échéanciers de maintenance
@@ -289,88 +327,103 @@ def envoyer_relances_maintenance(dry_run: bool = False):
     clients_avec_rdv = RC.clients_avec_rdv(cfg)
     summary["clients_avec_rdv"] = len(clients_avec_rdv)
 
-    # 3) Calculer les SMS à envoyer pour chaque échéancier
+    # Clients hors relance : gérés par le partenaire, « À requalifier » / « Perdu », « Non » à l'entretien, reportés.
+    # RC.clients_exclus_relance reste la SEULE règle du filtre (commune aux trois crons) ; les motifs ne servent qu'au
+    # journal et à l'entonnoir (compteurs séparés, 25/11/2026).
+    exclus = RC.clients_exclus_relance(cfg)
+    # « Non aux SMS » (26/11/2026) : AUCUN SMS ni e-mail, mais leurs visites sont marquées « Refus SMS » aux mêmes dates
+    # (envoyer_et_marquer_sms) — sinon le client n'entrerait plus dans aucune liste d'appel, qui part des visites
+    # relancées SMS 1 + SMS 2 (relecture finale du 26/11/2026). Ils ne comptent pas dans le plafond quotidien.
+    refus_sms = RC.clients_refus_sms()
+    clients = {m["customer"] for m in all_maintenance if m["customer"]}
+    summary["clients_avec_echeancier"] = len(clients)
+    try:
+        motifs = motifs_exclusion(cfg)
+    except Exception:
+        motifs = {}
+        summary["erreurs"] += 1
+        frappe.log_error(title="SMS Maintenance — motifs d'exclusion", message=frappe.get_traceback())
+    par_motif = compter_exclusions(clients, clients_avec_rdv, exclus, motifs)
+    summary["exclus_par_motif"] = par_motif
+    summary["exclus_partenaire"] = par_motif["partenaire"]
+    summary["clients_exclus"] = sum(par_motif.values())
+
+    # 3) Les SMS dus, échéancier par échéancier : un « paquet » = le SMS qu'envoyait l'ancien code (un échéancier × un
+    #    type, toutes ses visites dues). Un échéancier en erreur est journalisé et n'arrête pas le passage.
     list_sms1 = []
     list_sms2 = []
+    familles_articles = {}
 
-    # Clients hors relance : gérés par le partenaire, « À requalifier » / « Perdu », « Non » à l'entretien (règle commune).
-    from customization_app import partenaire_clients
-    exclus_partenaire = RC.clients_exclus_relance(cfg)
-    summary["exclus_partenaire"] = 0
+    def famille_de(code):
+        return _famille_article(code, familles_articles, fams)
 
     for imant in all_maintenance:
-        if imant["customer"] in clients_avec_rdv:
-            # Le client a déjà un rendez-vous planifié : on ne l'inclut pas
-            continue
-        if imant["customer"] in exclus_partenaire:
-            summary["exclus_partenaire"] += 1
+        if imant["customer"] in clients_avec_rdv or imant["customer"] in exclus:
+            # Rendez-vous planifié ou client hors relance : on ne l'inclut pas
+            summary["echeanciers_exclus"] += 1
             continue
 
         secteur = imant["secteurs"] or "Secteur 1"
+        try:
+            sms1, sms2 = calculer_sms_pour_maintenance(
+                maint_name=imant["schedule_name"],
+                today=today,
+                relance_date=relance_date,
+                secteur=secteur,
+            )
+            if sms1:
+                list_sms1.append(visites_du_paquet(sms1, imant["customer"], famille_de))
+            if sms2:
+                list_sms2.append(visites_du_paquet(sms2, imant["customer"], famille_de))
+        except Exception:
+            summary["erreurs"] += 1
+            frappe.log_error(title="SMS Maintenance — échéancier %s" % imant["schedule_name"], message=frappe.get_traceback())
 
-        sms1, sms2 = calculer_sms_pour_maintenance(
-            maint_name=imant["schedule_name"],
-            today=today,
-            relance_date=relance_date,
-            secteur=secteur,
-        )
-        if sms1:
-            list_sms1.append(sms1)
-        if sms2:
-            list_sms2.append(sms2)
-
-    # Tri par secteur
-    list_sms1 = sorted(list_sms1, key=lambda d: list(d.values())[0][1])
-    list_sms2 = sorted(list_sms2, key=lambda d: list(d.values())[0][1])
-    list_sms = list_sms1 + list_sms2
+    # Tri par secteur (stable), SMS1 d'abord : l'ordre d'envoi d'avant
+    list_sms1 = sorted(list_sms1, key=lambda p: p[0]["secteur"])
+    list_sms2 = sorted(list_sms2, key=lambda p: p[0]["secteur"])
+    paquets = list_sms1 + list_sms2
 
     summary["sms1_candidates"] = len(list_sms1)
     summary["sms2_candidates"] = len(list_sms2)
-    summary["total_sms_candidates"] = len(list_sms)
+    summary["total_sms_candidates"] = len(paquets)
 
-    # 4) Calcul des secteurs autorisés dans la limite MAX_SMS_PAR_JOUR
-    secteurs_autorises, repartition_sms, total_sms_prevus = calculer_secteurs_autorises(list_sms)
+    # 4) Un SMS par client et par jour (réglage) : les paquets d'un même client fusionnent en un envoi.
+    envois = regrouper_envois(paquets, [f["code"] for f in fams], un_par_client)
+    summary.update(bilan_regroupement(paquets, envois))
+
+    # 5) Secteurs autorisés dans la limite du réglage (un SMS par envoi, donc par client si regroupé)
+    secteurs_autorises, repartition_sms, total_sms_prevus = calculer_secteurs_autorises(
+        [e for e in envois if e.get("customer") not in refus_sms])
     summary["secteurs_autorises"] = secteurs_autorises
     summary["repartition_sms_par_secteur"] = repartition_sms
     summary["total_sms_prevus"] = total_sms_prevus
 
-    # 5) Envoi / simulation des SMS + update éventuel
+    # 6) Envoi / simulation des SMS + update éventuel
     preview, stats = envoyer_et_marquer_sms(
-        list_sms,
+        envois,
         secteurs_autorises,
         today,
-        dry_run=dry_run
+        dry_run=dry_run,
+        refus=refus_sms,
     )
 
     # fusion des stats dans le summary
-    summary["sms_sent_success"] = stats.get("sms_sent_success", 0)
-    summary["sms_invalid_number"] = stats.get("sms_invalid_number", 0)
-    summary["sms_failed"] = stats.get("sms_failed", 0)
-    summary["emails_sent"] = stats.get("emails_sent", 0)
-    summary["emails_failed"] = stats.get("emails_failed", 0)
-    summary["maintenances_extended"] = stats.get("maintenances_extended", 0)
+    for cle in ("sms_sent_success", "sms_invalid_number", "sms_failed", "emails_sent", "emails_failed",
+                "maintenances_extended", "visites_marquees", "marquages_secours", "sms_hors_plafond", "refus_sms"):
+        summary[cle] = stats.get(cle, 0)
+    summary["erreurs"] += stats.get("erreurs", 0)
 
     # Logs finaux
-    summary_line = (
-        "[SUMMARY] "
-        f"date={summary['date']}, "
-        f"total_ms={summary['total_maintenance_schedules']}, "
-        f"clients_avec_rdv={summary['clients_avec_rdv']}, "
-        f"sms1_candidats={summary['sms1_candidates']}, "
-        f"sms2_candidats={summary['sms2_candidates']}, "
-        f"total_sms_candidats={summary['total_sms_candidates']}, "
-        f"total_sms_prevus={summary['total_sms_prevus']}, "
-        f"sms_envoyes={summary['sms_sent_success']}, "
-        f"sms_invalid={summary['sms_invalid_number']}, "
-        f"sms_failed={summary['sms_failed']}, "
-        f"emails_envoyes={summary['emails_sent']}, "
-        f"emails_failed={summary['emails_failed']}, "
-        f"ms_extendues={summary['maintenances_extended']}"
-    )
+    summary_line = ligne_resume(summary)
     end_line = "========== [CRON] Fin envoyer_relances_maintenance =========="
 
     log(summary_line)
     log(end_line)
+
+    # 7) Un VRAI passage remet ses compteurs à l'entonnoir des relances (jamais un aperçu).
+    if not dry_run:
+        noter_entonnoir(summary)
 
     return {
         "dry_run": bool(dry_run),
@@ -378,6 +431,109 @@ def envoyer_relances_maintenance(dry_run: bool = False):
         "preview": preview if dry_run else None,
         "log": [summary_line, end_line],
     }
+
+
+# ---------------------------------------------------------------------------
+#  Exclusions par motif, résumé, entonnoir (25/11/2026)
+# ---------------------------------------------------------------------------
+
+# Ordre d'attribution : chaque client écarté est compté UNE fois, sous le premier motif qu'il porte. Les motifs du
+# réglage d'abord (durables), le rendez-vous ensuite (passager), « autre » = exclu par RC sans motif reconnu ici.
+MOTIFS_DU_REGLAGE = ("partenaire", "perdu", "a_requalifier", "non_interesse", "reporte")
+MOTIFS_EXCLUSION = MOTIFS_DU_REGLAGE + ("rendez_vous", "autre")
+
+
+def motifs_exclusion(cfg) -> dict:
+    """{motif: {clients}} lus aux MÊMES sources que RC.clients_exclus_relance — pour le JOURNAL seulement : le filtre,
+    lui, reste RC.clients_exclus_relance (règle commune). Avant le 25/11/2026 tout tombait dans « exclus_partenaire »
+    (529 échéanciers à la nuit simulée du 26/11), sans dire pourquoi un client n'était plus relancé."""
+    from customization_app import partenaire_clients
+
+    out = {m: set() for m in MOTIFS_DU_REGLAGE}
+    out["partenaire"] = set(partenaire_clients.clients_geres())
+    if frappe.db.has_column("Customer", "custom_statut_relance"):
+        for nom, statut in frappe.get_all("Customer", filters={"custom_statut_relance": ["in", RC.STATUTS_RELANCE_EXCLUS]},
+                                          fields=["name", "custom_statut_relance"], as_list=True):
+            out["perdu" if statut == "Perdu" else "a_requalifier"].add(nom)
+    if not cfg.get("relancer_non_interesses"):
+        out["non_interesse"] = set(frappe.get_all("Customer", filters={"custom_intéressé_par_le_service_entretien": "Non"},
+                                                  pluck="name"))
+    out["reporte"] = set(RC.clients_reportes())
+    return out
+
+
+def compter_exclusions(clients, clients_rdv, exclus, motifs) -> dict:
+    """Les clients (ayant un échéancier actif) que le passage écarte, comptés UNE fois chacun sous leur premier motif
+    (ordre MOTIFS_EXCLUSION) : la somme = clients écartés, ce qui rend l'entonnoir lisible. Un client exclu par RC
+    porte d'abord ses motifs du réglage ; un client seulement « rendez-vous » est compté là. PURE.
+    → {motif: nombre} pour chaque motif de MOTIFS_EXCLUSION."""
+    compte = {m: 0 for m in MOTIFS_EXCLUSION}
+    motifs = motifs or {}
+    for c in clients or ():
+        if c in exclus:
+            m = next((m for m in MOTIFS_DU_REGLAGE if c in motifs.get(m, ())), None) \
+                or ("rendez_vous" if c in clients_rdv else "autre")
+        elif c in clients_rdv:
+            m = "rendez_vous"
+        else:
+            continue
+        compte[m] += 1
+    return compte
+
+
+def ligne_resume(s) -> str:
+    """La ligne [SUMMARY] du journal maintenance_sms, affichée telle quelle par la page « Journaux des relances ». Les
+    champs d'avant gardent leur nom et leur place ; les nouveaux (25/11/2026) suivent, à plat (clé=valeur). PURE."""
+    g = s.get
+    champs = [
+        ("date", g("date")), ("total_ms", g("total_maintenance_schedules", 0)), ("clients_avec_rdv", g("clients_avec_rdv", 0)),
+        ("sms1_candidats", g("sms1_candidates", 0)), ("sms2_candidats", g("sms2_candidates", 0)),
+        ("total_sms_candidats", g("total_sms_candidates", 0)), ("total_sms_prevus", g("total_sms_prevus", 0)),
+        ("sms_envoyes", g("sms_sent_success", 0)), ("sms_invalid", g("sms_invalid_number", 0)), ("sms_failed", g("sms_failed", 0)),
+        ("emails_envoyes", g("emails_sent", 0)), ("emails_failed", g("emails_failed", 0)),
+        ("ms_extendues", g("maintenances_extended", 0)),
+        ("un_sms_par_client", g("un_sms_par_client", 0)), ("envois_candidats", g("envois_candidats", 0)),
+        ("clients_plusieurs_sms", g("clients_plusieurs_sms", 0)), ("sms_evites", g("sms_evites", 0)),
+        ("visites_candidates", g("visites_candidates", 0)), ("visites_marquees", g("visites_marquees", 0)),
+        ("hors_plafond", g("sms_hors_plafond", 0)), ("clients_exclus", g("clients_exclus", 0)),
+    ]
+    par_motif = g("exclus_par_motif") or {}
+    champs += [("exclus_" + m, par_motif.get(m, 0)) for m in MOTIFS_EXCLUSION]
+    champs.append(("marquages_secours", g("marquages_secours", 0)))
+    champs.append(("erreurs", g("erreurs", 0)))
+    return "[SUMMARY] " + ", ".join("%s=%s" % kv for kv in champs)
+
+
+def compteurs_entonnoir(summary) -> dict:
+    """Les compteurs du jour remis à l'entonnoir (contrat noter(source, compteurs, jour)) : les nombres entiers du
+    résumé, plus un « exclus_<motif> » par motif. PURE."""
+    out = {k: v for k, v in (summary or {}).items() if isinstance(v, int) and not isinstance(v, bool)}
+    for m, n in ((summary or {}).get("exclus_par_motif") or {}).items():
+        out["exclus_" + m] = n
+    return out
+
+
+def noter_entonnoir(summary) -> bool:
+    """Après un VRAI passage : les compteurs du jour à l'entonnoir des relances (contrat partagé
+    customization_app.entonnoir_relances.noter, 25/11/2026). L'analyse du 25/11 a montré qu'une baisse (la marche du
+    03-04/10) ne se voyait qu'au bout de deux mois : chaque passage laisse désormais sa trace en base. Jamais bloquant :
+    module pas encore livré = une ligne au journal, module cassé ou toute autre erreur = Error Log (appelé APRÈS le
+    commit des marques : une erreur ici ne doit pas faire croire au planificateur que les SMS n'ont pas été marqués).
+    Le planificateur valide après le cron (ScheduledJobType.execute) : l'écriture de noter() est donc conservée.
+    → le résultat de noter() (False tant que la table « Entonnoir Relances » n'est pas migrée)."""
+    try:
+        from customization_app.entonnoir_relances import noter
+    except ImportError:
+        log("entonnoir des relances absent : compteurs SMS non notés")
+        return False
+    except Exception:
+        frappe.log_error(title="SMS Maintenance — entonnoir", message=frappe.get_traceback())
+        return False
+    try:
+        return bool(noter("sms", compteurs_entonnoir(summary), jour=summary.get("date")))
+    except Exception:
+        frappe.log_error(title="SMS Maintenance — entonnoir", message=frappe.get_traceback())
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -443,14 +599,176 @@ def calculer_sms_pour_maintenance(maint_name, today, relance_date, secteur):
 
 
 # ---------------------------------------------------------------------------
+#  Partie 1 bis : un seul SMS par client et par jour (25/11/2026)
+# ---------------------------------------------------------------------------
+
+SEPARATEUR_CLE = "*?/*"
+APPAREIL_PLUSIEURS_FAMILLES = "vos équipements de traitement d'eau"
+
+
+def visites_du_paquet(paquet, customer, famille_de):
+    """Les visites d'un paquet de calculer_sms_pour_maintenance ({"article*?/*échéancier*?/*SMS1": [date, secteur]}).
+    Un paquet = UN SMS de l'ancien envoi (un échéancier × un type, toutes ses visites dues). PURE (famille_de(article)
+    injecté). → [{customer, maintenance, item_code, sms_type, scheduled_date, secteur, famille}]"""
+    out = []
+    for cle, (date_prevue, secteur) in (paquet or {}).items():
+        item_code, maint_name, sms_type = (cle.split(SEPARATEUR_CLE) + ["", "", ""])[:3]
+        out.append({"customer": customer, "maintenance": maint_name, "item_code": item_code, "sms_type": sms_type,
+                    "scheduled_date": date_prevue, "secteur": secteur, "famille": famille_de(item_code)})
+    return out
+
+
+def _famille_article(item_code, cache, fams):
+    """La famille machine d'un article (groupe d'article → réglage), mémorisée. Un article disparu → None (avant :
+    frappe.get_doc levait et arrêtait tout le passage)."""
+    if item_code not in cache:
+        groupe = frappe.db.get_value("Item", item_code, "item_group") if item_code else None
+        cache[item_code] = RC.famille_du_groupe_machine(groupe, fams)
+    return cache[item_code]
+
+
+def _rang_famille(famille, ordre):
+    """Rang de priorité d'une famille (ordre du réglage) ; inconnue après, sans famille en dernier. PURE."""
+    if famille in ordre:
+        return ordre.index(famille)
+    return len(ordre) + (0 if famille else 1)
+
+
+def regrouper_envois(paquets, ordre_familles, un_par_client=True):
+    """Les SMS du jour. PURE.
+
+    `paquets` : [[visite, …], …] dans l'ordre d'envoi d'avant (SMS1 par secteur, puis SMS2 par secteur).
+    `un_par_client` (réglage « un_sms_par_client_par_jour », 25/11/2026) : les paquets d'un même client fusionnent en
+    UN envoi — un client à deux échéanciers (deux machines, un doublon, un deviné de trop) ou dont un échéancier devait
+    à la fois un SMS1 et un SMS2 recevait deux SMS le même jour (60 fois du 01/09 au 25/11/2026, 36 clients). Sinon
+    (réglage à 0) un envoi par paquet, exactement comme avant.
+    → [{"customer", "secteur", "visites", "paquets", "principale", "familles", "familles_message", "nb_paquets",
+    "regroupe"}] dans l'ordre de première apparition. `principale` = la visite de la famille prioritaire (ordre du
+    réglage), puis l'échéance la plus ancienne : elle donne le secteur, le type affiché et la référence de l'e-mail.
+    `familles` = codes distincts de TOUTES les visites couvertes, par priorité. `familles_message` = celles du seul paquet
+    de la principale : le SMS envoyé est, mot pour mot, celui qu'aurait envoyé l'ancien code pour ce paquet (relecture
+    du 25/11/2026 — avant, un client à UN seul SMS dont l'échéancier devait adoucisseur + UV perdait « vos équipements
+    de traitement d'eau » : 27 SMS non regroupés changeaient de texte du 26/11 au 31/12). `regroupe` = il y a eu
+    fusion (plusieurs paquets), pas seulement le réglage."""
+    envois, par_client = [], {}
+    for paquet in paquets or []:
+        visites = [v for v in (paquet or []) if v]
+        if not visites:
+            continue
+        cle = visites[0].get("customer") if un_par_client else None
+        if cle is not None and cle in par_client:
+            env = par_client[cle]
+            env["visites"].extend(visites)
+            env["paquets"].append(visites)
+            env["nb_paquets"] += 1
+            continue
+        env = {"customer": visites[0].get("customer"), "visites": list(visites), "paquets": [visites], "nb_paquets": 1}
+        envois.append(env)
+        if cle is not None:
+            par_client[cle] = env
+
+    def par_priorite(visites):
+        distinctes = {v.get("famille") for v in visites if v.get("famille")}
+        return sorted(distinctes, key=lambda f: (_rang_famille(f, ordre_familles), f))
+
+    for env in envois:
+        env["regroupe"] = env["nb_paquets"] > 1
+        env["principale"] = min(env["visites"], key=lambda v: (_rang_famille(v.get("famille"), ordre_familles),
+                                                               str(v.get("scheduled_date") or ""), v.get("maintenance") or "",
+                                                               v.get("item_code") or "", v.get("sms_type") or ""))
+        env["secteur"] = env["principale"].get("secteur")
+        env["familles"] = par_priorite(env["visites"])
+        paquet_principal = next(p for p in env["paquets"] if any(v is env["principale"] for v in p))
+        env["familles_message"] = par_priorite(paquet_principal)
+    return envois
+
+
+def bilan_regroupement(paquets, envois) -> dict:
+    """Les chiffres du regroupement pour le résumé et l'entonnoir. PURE.
+    clients_plusieurs_sms = clients qui auraient reçu plusieurs SMS ce jour-là avec l'ancien envoi ;
+    sms_evites = SMS d'avant − SMS envoyés (0 quand le réglage est à 0)."""
+    pleins = [p for p in paquets or [] if p]
+    par_client = Counter(p[0].get("customer") for p in pleins)
+    return {
+        "visites_candidates": sum(len(p) for p in pleins),
+        "clients_candidats": len(par_client),
+        "clients_plusieurs_sms": sum(1 for n in par_client.values() if n > 1),
+        "envois_candidats": len(envois or []),
+        "sms_evites": len(pleins) - len(envois or []),
+    }
+
+
+def texte_appareil(familles, fams=None) -> str:
+    """Le nom de l'appareil dans le SMS : la règle d'avant, « vos équipements de traitement d'eau » quand le paquet doit
+    plusieurs familles, sinon le libellé de sa famille. PURE avec `fams`.
+    On lui passe les familles du paquet de la famille prioritaire (`familles_message` de regrouper_envois) : un client
+    regroupé reçoit UN message, celui de la famille prioritaire avec son coût (décision du 25/11/2026), et ce message
+    est exactement l'un de ceux d'avant. Relecture du 25/11/2026 : la version précédente nommait la seule famille
+    prioritaire dès que le réglage était actif, même sans regroupement (Sté LMM, adoucisseur + UV, le 28/11)."""
+    codes = [f for f in (familles or []) if f]
+    if len(set(codes)) > 1:
+        return APPAREIL_PLUSIEURS_FAMILLES
+    return RC.libelle_famille(codes[0], fams) if codes else RC.LIBELLE_FAMILLE_DEFAUT
+
+
+def marquer_visites(lignes, visites, jour, statut) -> int:
+    """Pose la date et le statut du SMS sur CHAQUE visite couverte par l'envoi, chacune dans SON champ (SMS1 →
+    custom_sms_1 / custom_sms1_status, SMS2 → custom_sms_2 / custom_sms2_status). Une visite = la première ligne de
+    même article et même date prévue (règle d'avant). PURE (modifie les lignes reçues). → nombre de lignes marquées."""
+    n = 0
+    for v in visites or []:
+        prevue = getdate(v["scheduled_date"]) if v.get("scheduled_date") else None
+        for row in lignes or []:
+            if row.item_code != v.get("item_code") or not row.scheduled_date or getdate(row.scheduled_date) != prevue:
+                continue
+            if v.get("sms_type") == "SMS1":
+                row.custom_sms_1 = jour
+                row.custom_sms1_status = statut
+                n += 1
+            elif v.get("sms_type") == "SMS2":
+                row.custom_sms_2 = jour
+                row.custom_sms2_status = statut
+                n += 1
+            break
+    return n
+
+
+# ---------------------------------------------------------------------------
 #  Partie 2 : calcul des secteurs autorisés
 # ---------------------------------------------------------------------------
 
-def calculer_secteurs_autorises(list_sms):
+def _secteur_de(envoi):
+    """Le secteur d'un envoi (regrouper_envois) — ou d'un paquet au format d'avant {cle: [date, secteur]}."""
+    if isinstance(envoi, dict) and "visites" in envoi:
+        return envoi.get("secteur")
+    return list(envoi.values())[0][1]
+
+
+def secteurs_dans_le_plafond(compte_par_secteur, plafond):
+    """La règle du plafond, inchangée : « Hors Secteur » toujours autorisé et compté en premier ; les autres secteurs,
+    du plus gros au plus petit, pris EN ENTIER seulement s'ils tiennent sous le plafond. PURE.
+    → (secteurs_autorises, {secteur: nb} dans l'ordre d'examen, total retenu)"""
+    count_sms = dict(compte_par_secteur or {})
+    hors_secteur_value = count_sms.pop(HORS_SECTEUR, 0)
+    sorted_count_sms = dict(sorted(count_sms.items(), key=lambda item: item[1], reverse=True))
+    if hors_secteur_value:
+        sorted_count_sms = {HORS_SECTEUR: hors_secteur_value, **sorted_count_sms}
+
+    secteurs_autorises = []
+    total_sms = 0
+    for secteur, nb in sorted_count_sms.items():
+        if secteur == HORS_SECTEUR or total_sms + nb <= plafond:
+            secteurs_autorises.append(secteur)
+            total_sms += nb
+    return secteurs_autorises, sorted_count_sms, total_sms
+
+
+def calculer_secteurs_autorises(list_sms, plafond=None):
     """
     Calcule :
-    - nombre de SMS par secteur
-    - liste de secteurs autorisés en respectant MAX_SMS_PAR_JOUR
+    - nombre de SMS par secteur — un par ENVOI : par client quand le réglage « un_sms_par_client_par_jour » est actif
+      (25/11/2026), le plafond compte donc des clients et non plus des échéanciers × types
+    - liste de secteurs autorisés en respectant le plafond du réglage (max_sms_par_jour)
 
     Retourne:
     - secteurs_autorises: list
@@ -458,34 +776,12 @@ def calculer_secteurs_autorises(list_sms):
     - total_sms: int
     """
     count_sms = {}
+    for sms in list_sms or []:
+        secteur = _secteur_de(sms)
+        count_sms[secteur] = count_sms.get(secteur, 0) + 1
 
-    for sms in list_sms:
-        secteur = list(sms.values())[0][1]
-        count_sms.setdefault(secteur, 0)
-        count_sms[secteur] += 1
-
-    hors_secteur_value = 0
-    if "Hors Secteur" in count_sms:
-        hors_secteur_value = count_sms.pop("Hors Secteur")
-
-    sorted_count_sms = dict(
-        sorted(count_sms.items(), key=lambda item: item[1], reverse=True)
-    )
-
-    if hors_secteur_value:
-        sorted_count_sms = {"Hors Secteur": hors_secteur_value, **sorted_count_sms}
-
-    secteurs_autorises = []
-    total_sms = 0
-
-    for secteur, nb in sorted_count_sms.items():
-        if secteur == "Hors Secteur":
-            secteurs_autorises.append(secteur)
-            total_sms += nb
-        else:
-            if total_sms + nb <= RC.config()["max_sms_par_jour"]:
-                secteurs_autorises.append(secteur)
-                total_sms += nb
+    plafond = RC.config()["max_sms_par_jour"] if plafond is None else cint(plafond)
+    secteurs_autorises, sorted_count_sms, total_sms = secteurs_dans_le_plafond(count_sms, plafond)
 
     log(f"Répartition SMS par secteur : {sorted_count_sms}")
     log(f"Total SMS prévus : {total_sms}")
@@ -605,29 +901,35 @@ def envoyer_sms_winsms(numero, message):
 #  Partie 4 : envoi + marquage + extension des MS
 # ---------------------------------------------------------------------------
 
-def envoyer_et_marquer_sms(list_sms, secteurs_autorises, today, dry_run: bool = False):
+STATUT_REFUS_SMS = "Refus SMS"
+
+
+def envoyer_et_marquer_sms(list_sms, secteurs_autorises, today, dry_run: bool = False, refus=None):
     """
-    Parcourt les SMS à envoyer, filtre par secteurs autorisés.
+    Parcourt les ENVOIS du jour (regrouper_envois : un par client, ou un par échéancier × type si le réglage
+    « un_sms_par_client_par_jour » est à 0), filtre par secteurs autorisés.
 
     - Si dry_run = False :
-        * envoie les SMS,
-        * met à jour custom_sms_1 / custom_sms_2,
-        * appelle extend_schedule_for_sms,
+        * envoie UN SMS (et un e-mail) par envoi,
+        * marque CHAQUE visite couverte : custom_sms_1 ou custom_sms_2 selon la sienne, avec le statut d'envoi,
+        * appelle extend_schedule_for_sms sur chaque échéancier touché,
         * commit en base.
+      Chaque client et chaque échéancier sont isolés (savepoint) : une erreur part en Error Log
+      « SMS Maintenance — … » et n'arrête pas les autres (avant, une seule fiche en erreur arrêtait tout le passage).
     - Si dry_run = True :
         * ne fait AUCUN appel API,
         * ne modifie PAS la base,
-        * retourne une liste de prévisualisation des messages.
+        * retourne une entrée de prévisualisation par envoi, avec les visites qu'il couvre.
 
     Retourne (preview, stats):
       - preview: liste de dicts (messages) si dry_run=True, sinon []
-      - stats: dict avec compteurs
+      - stats: dict avec compteurs (SMS comptés par envoi, visites marquées à part)
     """
     today_date = getdate(today)
+    fams = RC.config().get("familles") or RC.familles()
 
     maintenance_cache = {}
     customer_cache = {}
-    item_cache = {}
 
     extended_maintenances = set()
     preview = []  # liste des messages pour DRY RUN
@@ -639,7 +941,13 @@ def envoyer_et_marquer_sms(list_sms, secteurs_autorises, today, dry_run: bool = 
         "emails_sent": 0,
         "emails_failed": 0,
         "maintenances_extended": 0,
+        "visites_marquees": 0,
+        "marquages_secours": 0,
+        "sms_hors_plafond": 0,
+        "refus_sms": 0,
+        "erreurs": 0,
     }
+    refus = set(refus or ())
 
     simulation = simulation_envois()
     config_portail = _config_portail()
@@ -657,67 +965,58 @@ def envoyer_et_marquer_sms(list_sms, secteurs_autorises, today, dry_run: bool = 
     modeles = modeles_sms.textes()        # textes du réglage « Config Modeles SMS », défauts = textes historiques
     from customization_app import partenaire_clients
     zones_partenaires = partenaire_clients.zones_partenaires()
-    for sms_dict in list_sms:
-        familles = set()
-        secteur = None
-        maint_name = None
-        scheduled_date_for_sms = None
-        sms_type = None
+    for envoi in list_sms:
+        secteur = envoi.get("secteur")
+        principale = envoi.get("principale") or {}
+        if not envoi.get("visites") or not principale.get("maintenance") or not secteur:
+            continue
 
-        # Normalement un seul élément dans sms_dict
-        for key, (scheduled_date_for_sms, secteur) in sms_dict.items():
-            info = key.split("*?/*")
-            item_code = info[0]
-            maint_name = info[1]
-            sms_type = info[2]
-
-            if item_code not in item_cache:
-                item_cache[item_code] = frappe.get_doc("Item", item_code)
-            item_doc = item_cache[item_code]
-
-            family = RC.famille_du_groupe_machine(item_doc.item_group)
-            if family:
-                familles.add(family)
-
-        if not maint_name or not secteur:
+        customer_name = envoi.get("customer")
+        if customer_name in refus:
+            # « Non aux SMS » : rien ne part (ni SMS ni e-mail), hors plafond ; les visites sont marquées « Refus SMS » aux
+            # dates d'un SMS pour garder le circuit de l'appel (relecture finale du 26/11/2026). Pas d'aperçu.
+            stats["refus_sms"] += 1
+            if not dry_run:
+                log("%s — %s : %s visite(s) marquée(s) sans envoi" % (STATUT_REFUS_SMS, customer_name, len(envoi["visites"])))
+                marquer_envoi(envoi, STATUT_REFUS_SMS, today_date, maintenance_cache, extended_maintenances, stats)
             continue
 
         if secteur not in secteurs_autorises:
+            stats["sms_hors_plafond"] += 1
             continue
 
-        # --- Construction description en fonction de la famille de machine ---
-        # Famille PRIORITAIRE (ordre du réglage, déterministe) : libellé et coût de la main-d'œuvre — règle commune
-        # avec la liste d'appels (elle annonçait le prix maximum, le SMS la famille prioritaire).
-        primary_family, cout = RC.cout_entretien(familles)
-        if len(familles) > 1:
-            desc = "vos équipements de traitement d'eau"
-        else:
-            desc = RC.libelle_famille(primary_family) if primary_family else RC.LIBELLE_FAMILLE_DEFAUT
+        try:
+            # --- Construction description en fonction de la famille de machine ---
+            # Famille PRIORITAIRE (ordre du réglage, déterministe) : libellé et coût de la main-d'œuvre — règle commune
+            # avec la liste d'appels. Le texte et le coût sont ceux du paquet de la famille prioritaire : regroupé ou
+            # non, le SMS est mot pour mot l'un de ceux d'avant (texte_appareil, relecture du 25/11/2026).
+            familles = envoi.get("familles") or []
+            familles_message = envoi.get("familles_message")
+            if familles_message is None:
+                familles_message = familles
+            primary_family, cout = RC.cout_entretien(familles_message, fams)
+            desc = texte_appareil(familles_message, fams)
 
-        # Récup Maintenance + Client
-        if maint_name not in maintenance_cache:
-            maintenance_cache[maint_name] = frappe.get_doc(
-                "Maintenance Schedule", maint_name
-            )
-        maintenance = maintenance_cache[maint_name]
+            if customer_name not in customer_cache:
+                customer_cache[customer_name] = frappe.get_doc("Customer", customer_name)
+            client = customer_cache[customer_name]
 
-        customer_name = maintenance.customer
-        if customer_name not in customer_cache:
-            customer_cache[customer_name] = frappe.get_doc("Customer", customer_name)
-        client = customer_cache[customer_name]
+            promo = promo_ramdhan  # copie locale
 
-        suff = " est arrivée"
+            # Le portail n'est proposé qu'aux clients qui peuvent VRAIMENT y
+            # réserver : nos secteurs, ou un gouvernorat couvert par un partenaire.
+            lien_rdv = lien_rdv_pour_client(customer_name, secteur, config_portail)
 
-        promo = promo_ramdhan  # copie locale
+            zone = partenaire_clients.zone_partenaire_du_client(customer_name, zones_partenaires) if (secteur == HORS_SECTEUR and lien_rdv) else None
+            message = message_relance(modeles, nom_client=client.customer_name, appareil=desc, cout=cout, telephones=phones_txt,
+                                      lien_boutique=website_url, secteur=secteur, lien_rdv=lien_rdv, voeux=corp, promo=promo,
+                                      zone_partenaire=bool(zone))
+        except Exception:
+            stats["erreurs"] += 1
+            frappe.log_error(title="SMS Maintenance — message %s" % customer_name, message=frappe.get_traceback())
+            continue
 
-        # Le portail n'est proposé qu'aux clients qui peuvent VRAIMENT y
-        # réserver : nos secteurs, ou un gouvernorat couvert par un partenaire.
-        lien_rdv = lien_rdv_pour_client(customer_name, secteur, config_portail)
-
-        zone = partenaire_clients.zone_partenaire_du_client(customer_name, zones_partenaires) if (secteur == HORS_SECTEUR and lien_rdv) else None
-        message = message_relance(modeles, nom_client=client.customer_name, appareil=desc, cout=cout, telephones=phones_txt,
-                                  lien_boutique=website_url, secteur=secteur, lien_rdv=lien_rdv, voeux=corp, promo=promo,
-                                  zone_partenaire=bool(zone))
+        maint_name = principale["maintenance"]
 
         # Numéros de téléphone
         try:
@@ -735,7 +1034,7 @@ def envoyer_et_marquer_sms(list_sms, secteurs_autorises, today, dry_run: bool = 
             _logger().error(f"Erreur e-mails client : {client.customer_name}")
             list_email = []
 
-        # Si DRY RUN : on n'envoie rien, on marque juste la preview
+        # Si DRY RUN : on n'envoie rien, on marque juste la preview (une entrée par SMS, ses visites dedans)
         if dry_run:
             preview.append({
                 "maintenance": maint_name,
@@ -743,14 +1042,19 @@ def envoyer_et_marquer_sms(list_sms, secteurs_autorises, today, dry_run: bool = 
                 "customer_name": client.customer_name,
                 "secteur": secteur,
                 "familles": list(familles),
+                "familles_message": list(familles_message),
                 "primary_family": primary_family,
                 "cout": float(cout) if cout is not None else None,
                 "message": message,
                 "phones": list_tel,
                 "emails": list_email,
                 "lien_rdv": lien_rdv,
-                "sms_type": sms_type,
-                "scheduled_date": str(scheduled_date_for_sms) if scheduled_date_for_sms else None,
+                "sms_type": principale.get("sms_type"),
+                "scheduled_date": str(principale["scheduled_date"]) if principale.get("scheduled_date") else None,
+                "nb_sms_avant": envoi.get("nb_paquets", 1),
+                "visites": [{"maintenance": v.get("maintenance"), "item_code": v.get("item_code"), "sms_type": v.get("sms_type"),
+                             "scheduled_date": str(v["scheduled_date"]) if v.get("scheduled_date") else None,
+                             "famille": v.get("famille")} for v in envoi["visites"]],
             })
             # On ne modifie pas la base, on ne fait pas d'extend_schedule_for_sms
             continue
@@ -790,28 +1094,11 @@ def envoyer_et_marquer_sms(list_sms, secteurs_autorises, today, dry_run: bool = 
                     _logger().error(
                         f"Echec e-mail pour client {client.customer_name}")
 
-        log(status_sms)
+        log("%s — %s : %s visite(s), %s SMS d'avant" % (status_sms, customer_name, len(envoi["visites"]),
+                                                      envoi.get("nb_paquets", 1)))
         log(message)
 
-        # Mise à jour des flags custom_sms_1 / custom_sms_2
-        for key, (scheduled_date_for_sms, _) in sms_dict.items():
-            info = key.split("*?/*")
-            item_code = info[0]
-            sms_type = info[2]
-
-            for row in maintenance.schedules:
-                if row.item_code == item_code and row.scheduled_date == scheduled_date_for_sms:
-                    if sms_type == "SMS1":
-                        row.custom_sms_1 = today_date
-                        row.custom_sms1_status = status_sms
-                    elif sms_type == "SMS2":
-                        row.custom_sms_2 = today_date
-                        row.custom_sms2_status = status_sms
-                    break
-
-        maintenance.save()
-
-        # Compteurs stats
+        # Compteurs stats : UN SMS par envoi, quel que soit le nombre de visites couvertes
         if status_sms == "Success":
             stats["sms_sent_success"] += 1
         elif status_sms == "Invalid Number":
@@ -819,12 +1106,9 @@ def envoyer_et_marquer_sms(list_sms, secteurs_autorises, today, dry_run: bool = 
         else:
             stats["sms_failed"] += 1
 
-        # 🔁 EXTENSION DE L'ÉCHÉANCIER UNIQUEMENT SI SMS considéré "envoyé"
-        if status_sms in ("Success", "Invalid Number") and maint_name not in extended_maintenances:
-            extended_maintenances.add(maint_name)
-            if extend_schedule_for_sms(maintenance):            # visites ajoutées (réglage) — 0 si rien à faire
-                maintenance.save()
-                stats["maintenances_extended"] += 1
+        # Mise à jour des flags custom_sms_1 / custom_sms_2 de TOUTES les visites couvertes, puis 🔁 extension de
+        # chaque échéancier touché UNIQUEMENT SI SMS considéré "envoyé"
+        marquer_envoi(envoi, status_sms, today_date, maintenance_cache, extended_maintenances, stats)
 
     if dry_run:
         # Pas de commit, on renvoie juste la preview + stats
@@ -832,6 +1116,86 @@ def envoyer_et_marquer_sms(list_sms, secteurs_autorises, today, dry_run: bool = 
 
     frappe.db.commit()
     return [], stats
+
+
+CHAMPS_SMS = ("custom_sms_1", "custom_sms1_status", "custom_sms_2", "custom_sms2_status")
+
+
+def marquer_en_base(maint_name, visites, jour, statut) -> int:
+    """Repli de marquer_envoi quand l'échéancier refuse sa sauvegarde APRÈS l'envoi (relecture du 25/11/2026) : la date
+    et le statut du SMS sont posés directement sur les lignes « Maintenance Schedule Detail », sans valider la fiche.
+    Sans ce repli, une fiche qui refuse save() (validation, lien cassé) restait sans marque : choisir_relances retrouvait
+    ses visites dues et le client recevait le même SMS chaque jour, avec pour seule trace une ligne d'Error Log par jour.
+    Même choix de ligne que marquer_visites (la première de même article et même date prévue, dans l'ordre idx), lue en
+    base : le Server Script « Update Schedule based on Real Date » décale les dates au save, la fiche en mémoire n'est
+    donc pas fiable ici. → nombre de visites marquées."""
+    lignes = frappe.db.sql(
+        """SELECT name, item_code, scheduled_date, custom_sms_1, custom_sms1_status, custom_sms_2, custom_sms2_status
+           FROM `tabMaintenance Schedule Detail`
+           WHERE parent = %s AND parenttype = 'Maintenance Schedule' ORDER BY idx""",
+        (maint_name,), as_dict=True)
+    avant = [{c: r.get(c) for c in CHAMPS_SMS} for r in lignes]
+    n = marquer_visites(lignes, visites, jour, statut)
+    for row, valeurs_avant in zip(lignes, avant):
+        modifs = {c: row.get(c) for c in CHAMPS_SMS if row.get(c) != valeurs_avant[c]}
+        if modifs:
+            frappe.db.set_value("Maintenance Schedule Detail", row.name, modifs, update_modified=False)
+    return n
+
+
+def marquer_envoi(envoi, status_sms, jour, maintenance_cache, extended_maintenances, stats):
+    """Marque les visites d'un envoi, échéancier par échéancier, chacun dans son savepoint : un échéancier qui refuse la
+    sauvegarde est journalisé et les autres restent marqués (le SMS est parti : mieux vaut marquer ce qui peut l'être
+    que tout défaire). L'échéancier refusé est alors marqué sans validation (marquer_en_base, relecture du 25/11/2026),
+    sinon le même SMS repartait chaque jour ; il n'est pas prolongé. Puis prolonge chaque échéancier bien sauvegardé,
+    une fois par passage, si le SMS est considéré parti (Success / Invalid Number — règle d'avant)."""
+    par_echeancier = {}
+    for v in envoi.get("visites") or []:
+        par_echeancier.setdefault(v.get("maintenance"), []).append(v)
+
+    for maint_name, visites in par_echeancier.items():
+        if not maint_name:
+            continue
+        frappe.db.savepoint("sms_marquage")
+        try:
+            if maint_name not in maintenance_cache:
+                maintenance_cache[maint_name] = frappe.get_doc("Maintenance Schedule", maint_name)
+            maintenance = maintenance_cache[maint_name]
+            n = marquer_visites(maintenance.schedules, visites, jour, status_sms)
+            maintenance.save()
+            stats["visites_marquees"] += n
+        except Exception:
+            trace = frappe.get_traceback()
+            frappe.db.rollback(save_point="sms_marquage")
+            maintenance_cache.pop(maint_name, None)
+            stats["erreurs"] += 1
+            n = 0
+            frappe.db.savepoint("sms_marquage_secours")
+            try:
+                n = marquer_en_base(maint_name, visites, jour, status_sms)
+            except Exception:
+                frappe.db.rollback(save_point="sms_marquage_secours")
+                trace += "\n--- marquage sans validation, en échec aussi ---\n" + frappe.get_traceback()
+            stats["visites_marquees"] += n
+            if n:
+                stats["marquages_secours"] = stats.get("marquages_secours", 0) + 1
+            frappe.log_error(title="SMS Maintenance — marquage %s" % maint_name,
+                             message="Sauvegarde refusée après l'envoi du SMS ; %s visite(s) marquée(s) sans validation "
+                                     "(sinon le même SMS repartirait demain), échéancier non prolongé.\n\n%s" % (n, trace))
+            continue
+
+        if status_sms in ("Success", "Invalid Number") and maint_name not in extended_maintenances:
+            extended_maintenances.add(maint_name)
+            frappe.db.savepoint("sms_prolongation")
+            try:
+                if extend_schedule_for_sms(maintenance):            # visites ajoutées (réglage) — 0 si rien à faire
+                    maintenance.save()
+                    stats["maintenances_extended"] += 1
+            except Exception:
+                frappe.db.rollback(save_point="sms_prolongation")
+                maintenance_cache.pop(maint_name, None)
+                stats["erreurs"] += 1
+                frappe.log_error(title="SMS Maintenance — prolongation %s" % maint_name, message=frappe.get_traceback())
 
 def _format_phones_for_message(phones):
     phones = [p.strip() for p in phones if p and p.strip()]

@@ -1,0 +1,207 @@
+{
+ "actions": [],
+ "autoname": "field:jour",
+ "creation": "2026-11-25 22:00:00.000000",
+ "description": "Une ligne par jour : la photo de l’entonnoir des relances d’entretien (visites échues, candidats aux listes, listes, SMS, échéanciers) et les compteurs notés par les crons. Écrite par customization_app.entonnoir_relances (cron de 07:30 et 10:30, et noter() des crons) ; lue par la page Journaux des relances.",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "jour",
+  "photo_le",
+  "nb_signaux",
+  "col_stocks",
+  "visites_echues",
+  "visites_relancables",
+  "echeanciers_sans_visite",
+  "brouillons_anciens",
+  "col_appels",
+  "candidats",
+  "a_appeler",
+  "en_attente",
+  "lignes_creees",
+  "sms_envoyes",
+  "sms_echecs",
+  "sec_detail",
+  "signaux",
+  "sources",
+  "indicateurs"
+ ],
+ "fields": [
+  {
+   "fieldname": "jour",
+   "fieldtype": "Date",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Jour",
+   "read_only": 1,
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "description": "Heure de la dernière photo enregistrée (cron de 07:30 et 10:30).",
+   "fieldname": "photo_le",
+   "fieldtype": "Datetime",
+   "label": "Photo du",
+   "read_only": 1
+  },
+  {
+   "description": "Signaux rouges de la dernière photo (brouillon ancien, échéancier sans visite à venir, passage en échec, aucun SMS, lignes en baisse).",
+   "fieldname": "nb_signaux",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Signaux rouges",
+   "read_only": 1
+  },
+  {
+   "fieldname": "col_stocks",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "Visites échues non faites, tous clients.",
+   "fieldname": "visites_echues",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Visites échues",
+   "read_only": 1
+  },
+  {
+   "description": "Visites échues non faites des clients relançables (ni partenaire, ni À requalifier, ni Perdu, ni Non, ni reporté).",
+   "fieldname": "visites_relancables",
+   "fieldtype": "Int",
+   "label": "Visites échues relançables",
+   "read_only": 1
+  },
+  {
+   "description": "Échéanciers dont un article n’a plus aucune visite à venir et que la prolongation de nuit doit ranimer (hors articles laissés gelés exprès : jumeau, porte-filtre) : doit valoir 0 après la nuit.",
+   "fieldname": "echeanciers_sans_visite",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Échéanciers sans visite à venir",
+   "read_only": 1
+  },
+  {
+   "description": "Brouillons d’un type bloquant immobiles depuis le seuil de l’alerte de 07:00 (jours ouvrés) : les signaux rouges « brouillon ».",
+   "fieldname": "brouillons_anciens",
+   "fieldtype": "Int",
+   "label": "Brouillons bloqués",
+   "read_only": 1
+  },
+  {
+   "fieldname": "col_appels",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "Clients candidats aux listes (SMS 1 et 2 envoyés, visite échue non appelée, pas d’intervention récente).",
+   "fieldname": "candidats",
+   "fieldtype": "Int",
+   "label": "Candidats aux listes",
+   "read_only": 1
+  },
+  {
+   "description": "Candidats rangés dans une liste à appeler (Normal, Urgence, Zone partenaire, Hors secteur).",
+   "fieldname": "a_appeler",
+   "fieldtype": "Int",
+   "label": "À appeler",
+   "read_only": 1
+  },
+  {
+   "description": "Clients à appeler qui ne sont encore dans aucun brouillon (derrière un brouillon de leur type, ou pour la prochaine liste).",
+   "fieldname": "en_attente",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "En attente",
+   "read_only": 1
+  },
+  {
+   "description": "Lignes des listes créées ce jour, tous types, au moment de la photo.",
+   "fieldname": "lignes_creees",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Lignes créées",
+   "read_only": 1
+  },
+  {
+   "description": "Visites marquées d’un SMS 1 ou 2 au statut « Success » ce jour-là.",
+   "fieldname": "sms_envoyes",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "SMS réussis",
+   "read_only": 1
+  },
+  {
+   "description": "Visites marquées d’un SMS 1 ou 2 au statut « Failed » ce jour-là (WinSMS sans réponse « Successfully Send »).",
+   "fieldname": "sms_echecs",
+   "fieldtype": "Int",
+   "label": "SMS en échec",
+   "read_only": 1
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "sec_detail",
+   "fieldtype": "Section Break",
+   "label": "Détail (JSON)"
+  },
+  {
+   "fieldname": "signaux",
+   "fieldtype": "Code",
+   "label": "Signaux",
+   "options": "JSON",
+   "read_only": 1
+  },
+  {
+   "description": "Compteurs notés par les crons ce jour-là (noter) : nombre de passages, heures, cumul et dernier passage.",
+   "fieldname": "sources",
+   "fieldtype": "Code",
+   "label": "Compteurs des crons",
+   "options": "JSON",
+   "read_only": 1
+  },
+  {
+   "fieldname": "indicateurs",
+   "fieldtype": "Code",
+   "label": "Photo de l’entonnoir",
+   "options": "JSON",
+   "read_only": 1
+  }
+ ],
+ "in_create": 1,
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-11-25 22:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Customize erpnext",
+ "name": "Entonnoir Relances",
+ "naming_rule": "By fieldname",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Sales Manager"
+  },
+  {
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Maintenance Manager"
+  }
+ ],
+ "sort_field": "jour",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 0
+}

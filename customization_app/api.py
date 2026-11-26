@@ -1200,6 +1200,10 @@ def _cancel_or_delete_so(so_name):
         so.flags.ignore_permissions = True
         so.flags.ignore_links = True
         so.cancel()
+    # Les échéanciers que l'annulation vient d'ANNULER (26/11/2026 : plus supprimés) citent encore la commande : la référence
+    # est retirée et la commande nommée dans un commentaire, sinon ils pointeraient vers une commande disparue.
+    from customization_app.annulation_commande import _delier_echeanciers_annules
+    _delier_echeanciers_annules(so)
     frappe.delete_doc("Sales Order", so_name, force=True, ignore_permissions=True, ignore_on_trash=True)
 
 

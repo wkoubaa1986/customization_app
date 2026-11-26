@@ -27,8 +27,24 @@ DEFAUTS = {
     "secteurs_urgence": "Secteur 7\nSecteur 8\nSecteur 9",
     # Lassitude : après N cycles complets (SMS 1 + SMS 2 + appel) sans réponse, le client passe « À requalifier » et sort de
     # la relance automatique (0 = jamais). Les « Non » à l'entretien sortent de la relance d'entretien sauf réglage contraire.
-    "cycles_sans_reponse": 2, "relancer_non_interesses": 0,
+    "cycles_sans_reponse": 3, "relancer_non_interesses": 0,
     "email_alertes": "koubaawassim@gmail.com",
+    # 26/11/2026 (lots 2 à 6 de l'analyse « cartographie entretien » du 25/11) — défauts retenus, réglables.
+    # Listes d'appels : une liste se valide avec des lignes non appelées (elles reviennent), Hors secteur plafonnée,
+    # alerte quand un brouillon bloque son type depuis N jours ouvrés.
+    "valider_avec_lignes_non_appelees": 1, "plafond_hors_secteur": 30, "jours_brouillon_alerte": 3,
+    # Réponses d'appel : « Fait lui-même » = entretien fait le jour de l'appel ; « magasin » = rappel dans N jours ;
+    # premier SMS de réveil des « À requalifier » N jours après le dernier appel.
+    "fait_lui_meme_solde": 1, "jours_rappel_magasin": 15, "jours_reveil_requalifies": 180,
+    # Passage de nuit : un achat SANS main-d'œuvre d'entretien ne solde une visite qu'échue ou due sous N jours (0 = échue
+    # seulement) ; les clients « génériques » (comptoir) n'ont jamais d'échéancier.
+    "jours_avance_sans_main_oeuvre": 60, "clients_generiques": "PASSAGER",
+    # SMS : un seul message par client et par jour.
+    "un_sms_par_client_par_jour": 1,
+    # Entonnoir des relances (photo quotidienne + signaux de la page « Journaux des relances »).
+    "entonnoir_seuil_lignes_pct": 60, "entonnoir_semaines_reference": 4, "entonnoir_min_moyenne_lignes": 3,
+    "entonnoir_ecretage_reference": 2, "entonnoir_seuil_echecs_sms_pct": 50, "entonnoir_types_flux": "Normal\nUrgence",
+    "entonnoir_jours_tendance": 14, "entonnoir_alerte_email": 1,
 }
 
 # Les crons de l'entretien : clé = préfixe du Scheduled Job Log, fichier journal, horaire lisible, méthode d'Error Log.
@@ -41,6 +57,9 @@ CRONS = [
      "journal": "maintenance_sms", "erreurs": ("SMS Maintenance%", "Cron - Relance maintenance%")},
     {"cle": "rappel_rdv.cron_du_soir", "titre": "Rappel des rendez-vous du lendemain", "quand": "tous les soirs 20:00",
      "journal": None, "erreurs": ("Cron - Rappel%", "Rappel SMS%")},
+    {"cle": "entonnoir_relances.cron_photo", "titre": "Photo de l’entonnoir", "quand": "tous les jours 07:30 et 10:30",
+     "journal": None, "trace": "Ce cron enregistre la photo du jour dans « Entonnoir Relances » (section Entonnoir ci-dessous).",
+     "erreurs": ("Cron - Entonnoir des relances%", "Entonnoir relances%")},
 ]
 STATUTS_RELANCE_EXCLUS = ("À requalifier", "Perdu")
 
@@ -241,6 +260,16 @@ def clients_exclus_relance(cfg: dict | None = None) -> set:
     if not cfg.get("relancer_non_interesses"):
         out |= set(frappe.get_all("Customer", filters={"custom_intéressé_par_le_service_entretien": "Non"}, pluck="name"))
     return out | clients_reportes()
+
+
+def clients_refus_sms() -> set:
+    """Les clients qui ont dit « Non » aux SMS (Customer.custom_envoi_sms, case « intéressé par le service de relance » des
+    listes d'appel) : aucun SMS ni e-mail de relance d'entretien ; leurs visites sont seulement marquées « Refus SMS » pour
+    que l'appel reste possible (relance_maintenance_sms). 26/11/2026 : la relance SMS l'ignorait, 3 clients « Oui » à
+    l'entretien mais « Non » aux SMS en ont reçu un depuis le 01/09 (rappel_rdv et sms_reveil le respectaient déjà)."""
+    if not frappe.db.has_column("Customer", "custom_envoi_sms"):
+        return set()
+    return set(frappe.get_all("Customer", filters={"custom_envoi_sms": "Non"}, pluck="name"))
 
 
 def clients_reportes(today=None) -> set:

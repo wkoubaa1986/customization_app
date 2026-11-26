@@ -11,34 +11,53 @@
   "sec_echeanciers",
   "groupes_b2b",
   "clients_proteges",
+  "clients_generiques",
   "col_ech",
   "fenetre_mois_avant",
   "fenetre_mois_apres",
   "nb_visites",
   "periodicite_defaut",
   "visites_ajoutees",
+  "jours_avance_sans_main_oeuvre",
   "sec_familles",
   "familles",
   "sec_pieces",
   "pieces",
   "sec_sms",
   "max_sms_par_jour",
+  "un_sms_par_client_par_jour",
   "delai_sms2_jours",
   "col_sms",
   "jours_rdv_recent",
   "types_rdv_exclusion",
   "sec_lassitude",
   "cycles_sans_reponse",
+  "fait_lui_meme_solde",
+  "jours_rappel_magasin",
   "col_lass",
   "relancer_non_interesses",
+  "jours_reveil_requalifies",
   "sec_appels",
   "plafond_liste",
+  "plafond_hors_secteur",
   "jours_entre_deux_appels",
   "jours_apres_intervention",
   "col_appels",
   "delai_apres_sms2_jours",
   "delai_2e_appel_jours",
-  "secteurs_urgence"
+  "secteurs_urgence",
+  "valider_avec_lignes_non_appelees",
+  "jours_brouillon_alerte",
+  "sec_entonnoir",
+  "entonnoir_alerte_email",
+  "entonnoir_seuil_lignes_pct",
+  "entonnoir_semaines_reference",
+  "entonnoir_min_moyenne_lignes",
+  "col_entonnoir",
+  "entonnoir_ecretage_reference",
+  "entonnoir_seuil_echecs_sms_pct",
+  "entonnoir_types_flux",
+  "entonnoir_jours_tendance"
  ],
  "fields": [
   {
@@ -79,6 +98,12 @@
    "description": "(Ayman Belguith, Koubaâ Néjib, Jamel Aloui, Koubaâ Néjib - 1) Leurs échéanciers ne sont jamais supprimés et leur case « intéressé » n’est pas corrigée."
   },
   {
+   "fieldname": "clients_generiques",
+   "fieldtype": "Small Text",
+   "label": "Clients génériques (comptoir)",
+   "description": "(PASSAGER) Un par ligne. Ces clients n’ont jamais d’échéancier et la nuit ne lit pas leurs commandes : une vente au comptoir n’a pas de propriétaire connu."
+  },
+  {
    "fieldname": "col_ech",
    "fieldtype": "Column Break"
   },
@@ -112,6 +137,13 @@
    "fieldtype": "Int",
    "label": "Visites ajoutées quand l’échéancier est épuisé",
    "description": "(2) Quand toutes les visites ont reçu leurs SMS, on prolonge l’échéancier d’autant de visites."
+  },
+  {
+   "fieldname": "jours_avance_sans_main_oeuvre",
+   "fieldtype": "Int",
+   "default": "60",
+   "label": "Avance permise d’un achat sans main-d’œuvre (jours)",
+   "description": "(60) Un achat SANS main-d’œuvre d’entretien (M-E-…) ne solde une visite que si elle est échue ou due dans ce nombre de jours après la livraison : une cartouche achetée 9 jours après un entretien ne consomme plus la visite d’avril. 0 = seulement une visite déjà échue. Avec main-d’œuvre : sans limite."
   },
   {
    "fieldname": "sec_familles",
@@ -150,6 +182,13 @@
    "description": "(110) Les clients hors secteur passent d’abord sans plafond, puis les secteurs entiers tant que le plafond le permet."
   },
   {
+   "fieldname": "un_sms_par_client_par_jour",
+   "fieldtype": "Check",
+   "default": "1",
+   "label": "Un seul SMS d’entretien par client et par jour",
+   "description": "(oui) Un client qui doit plusieurs relances le même jour (plusieurs échéanciers ou articles, SMS 1 et/ou SMS 2) reçoit un seul message : celui de la famille prioritaire, mot pour mot, avec son coût ; toutes les visites concernées sont marquées et le plafond compte un SMS par client. Décoché : un SMS par échéancier, comme avant le 26/11/2026."
+  },
+  {
    "fieldname": "delai_sms2_jours",
    "fieldtype": "Int",
    "label": "Jours entre SMS 1 et SMS 2",
@@ -181,7 +220,21 @@
    "fieldname": "cycles_sans_reponse",
    "fieldtype": "Int",
    "label": "Cycles complets sans réponse avant requalification",
-   "description": "(2) 0 = jamais. Un cycle = une visite échue relancée par SMS 1, SMS 2 et appel, non réalisée, postérieure à la dernière visite réalisée."
+   "description": "(3) 0 = jamais. Un cycle = un mois d’échéance distinct où une visite échue, non réalisée, a reçu SMS 1, SMS 2 et appel, après la dernière visite réalisée du client (tous appareils confondus) ; hors B2B. Un rendez-vous récent ou à venir, ou une relance reportée, empêche la requalification."
+  },
+  {
+   "fieldname": "fait_lui_meme_solde",
+   "fieldtype": "Check",
+   "default": "1",
+   "label": "« Fait lui-même » vaut un entretien fait à la date de l’appel",
+   "description": "(oui) La réponse « Fait lui-même » solde, à la date de l’appel, la plus ancienne visite échue non faite de chaque échéancier du client qui porte un article appelé ; les visites suivantes sont décalées comme après un achat, une trace est posée sur l’échéancier, et un client « À requalifier » est réactivé si une visite a été soldée. Décoché : la réponse ne change rien."
+  },
+  {
+   "fieldname": "jours_rappel_magasin",
+   "fieldtype": "Int",
+   "default": "15",
+   "label": "Rappel après « Il va passer au magasin » (jours)",
+   "description": "(15) 0 = aucun report. La relance est reportée à la date de l’appel + N jours (jamais avancée). À cette date, s’il n’est pas passé, le client revient dans une liste d’appels (Normal, ou Requalification s’il est « À requalifier »). La réponse ne le réactive pas."
   },
   {
    "fieldname": "col_lass",
@@ -194,6 +247,13 @@
    "description": "(non) Par défaut, un client marqué « pas intéressé par l’entretien » ne reçoit ni SMS ni appel d’entretien ; ses échéanciers sont conservés."
   },
   {
+   "fieldname": "jours_reveil_requalifies",
+   "fieldtype": "Int",
+   "default": "180",
+   "label": "Premier SMS de réveil des « À requalifier » après (jours sans appel)",
+   "description": "(180) 0 = aucun réveil. Un SMS avec le lien de rendez-vous quand le dernier appel date d’au moins N jours ; ensuite un réveil par an au plus. 20 par jour au plus."
+  },
+  {
    "fieldname": "sec_appels",
    "fieldtype": "Section Break",
    "label": "Listes d’appels (lundi–samedi 07:00)"
@@ -203,6 +263,13 @@
    "fieldtype": "Int",
    "label": "Clients par liste au maximum",
    "description": "(100) Au-delà, les clients restants attendent la liste suivante ; le titre de la liste indique combien."
+  },
+  {
+   "fieldname": "plafond_hors_secteur",
+   "fieldtype": "Int",
+   "default": "30",
+   "label": "Clients par liste Hors secteur au maximum",
+   "description": "(30) Vide = 30 ; 0 = le même plafond que les autres listes. Le reste attend la liste suivante, annoncé dans le titre."
   },
   {
    "fieldname": "jours_entre_deux_appels",
@@ -237,11 +304,91 @@
    "fieldtype": "Small Text",
    "label": "Secteurs lointains (liste Urgence)",
    "description": "(Secteur 7, 8, 9) Un rendez-vous planifié dans un de ces secteurs déclenche une liste Urgence pour y grouper les clients à échéance."
+  },
+  {
+   "fieldname": "valider_avec_lignes_non_appelees",
+   "fieldtype": "Check",
+   "default": "1",
+   "label": "Valider une liste avec des lignes non appelées",
+   "description": "(oui) Les lignes non appelées sont listées à la validation, ne sont pas marquées appelées et reviennent dans la prochaine liste de leur type (Urgence : une nouvelle Urgence tant que le rendez-vous est à venir). Décoché : la validation est refusée tant qu’une ligne n’est pas appelée, comme avant."
+  },
+  {
+   "fieldname": "jours_brouillon_alerte",
+   "fieldtype": "Int",
+   "default": "3",
+   "label": "Alerte quand un brouillon de liste ne bouge plus depuis (jours ouvrés)",
+   "description": "(3) 0 = pas d’alerte. Au passage de 07:00, un e-mail (adresse des alertes) par brouillon qui bloque la création de son type et n’a pas été modifié depuis N jours ouvrés (lundi–samedi), une fois par jour. Même seuil pour le signal de la page « Journaux des relances »."
+  },
+  {
+   "fieldname": "sec_entonnoir",
+   "fieldtype": "Section Break",
+   "label": "Entonnoir des relances (photo 07:30 et 10:30)",
+   "collapsible": 1,
+   "description": "Chaque jour, une photo des relances (visites échues, échéanciers sans visite à venir, brouillons, listes, SMS, machines livrées → échéanciers nés, passages en échec) est gardée dans « Entonnoir Relances » et affichée dans la page « Journaux des relances » avec les signaux rouges : une baisse se voit en un jour au lieu de deux mois."
+  },
+  {
+   "fieldname": "entonnoir_alerte_email",
+   "fieldtype": "Check",
+   "default": "1",
+   "label": "E-mail sur un signal rouge nouveau",
+   "description": "(oui) Un rouge qui dure n’est envoyé qu’une fois ; un orange devenu rouge l’est."
+  },
+  {
+   "fieldname": "entonnoir_seuil_lignes_pct",
+   "fieldtype": "Int",
+   "default": "60",
+   "label": "Seuil de baisse des lignes (%)",
+   "description": "(60) Rouge quand les lignes Normal + Urgence du jour sont sous N % de la moyenne du même jour de la semaine. 0 coupe ce signal."
+  },
+  {
+   "fieldname": "entonnoir_semaines_reference",
+   "fieldtype": "Int",
+   "default": "4",
+   "label": "Semaines de référence",
+   "description": "(4) Semaines passées (même jour de la semaine) pour la moyenne des lignes."
+  },
+  {
+   "fieldname": "entonnoir_min_moyenne_lignes",
+   "fieldtype": "Int",
+   "default": "3",
+   "label": "Moyenne minimale pour comparer",
+   "description": "(3) Pas de signal « lignes » si la moyenne de référence est plus basse."
+  },
+  {
+   "fieldname": "col_entonnoir",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "entonnoir_ecretage_reference",
+   "fieldtype": "Int",
+   "default": "2",
+   "label": "Écrêtage de la référence (× médiane)",
+   "description": "(2) Chaque valeur de référence est ramenée à N fois la médiane : une liste de rattrapage ne rend plus le même jour rouge quatre semaines de suite. 0 = pas d’écrêtage."
+  },
+  {
+   "fieldname": "entonnoir_seuil_echecs_sms_pct",
+   "fieldtype": "Int",
+   "default": "50",
+   "label": "SMS en échec : seuil rouge (%)",
+   "description": "(50) Part des envois du jour en « Failed » à partir de laquelle le signal est rouge (orange en dessous). Aucun SMS réussi un jour de passage reste rouge. 0 coupe les échecs partiels."
+  },
+  {
+   "fieldname": "entonnoir_types_flux",
+   "fieldtype": "Small Text",
+   "label": "Types de listes du flux quotidien",
+   "description": "(Normal, Urgence) Un par ligne : les listes comptées dans les lignes du jour."
+  },
+  {
+   "fieldname": "entonnoir_jours_tendance",
+   "fieldtype": "Int",
+   "default": "14",
+   "label": "Jours de tendance",
+   "description": "(14) Lignes du tableau de tendance de la page."
   }
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-10-07 13:00:00.000000",
+ "modified": "2026-11-26 12:30:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Config Relances",

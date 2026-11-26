@@ -359,6 +359,9 @@ doc_events = {
             # Qui a fait sortir les articles du Magasin : magasinier principal = normal,
             # quelqu'un d'autre = sortie exceptionnelle « À vérifier » (sorties_magasin).
             "customization_app.sorties_magasin.delivery_note_on_submit",
+            # Machine rendue (BL de retour) : son échéancier d'entretien est ANNULÉ (toute la quantité rendue) ; une
+            # machine qui revient sur la même commande le retrouve (amendement). EN DERNIER, ne bloque jamais (26/11/2026).
+            "customization_app.retours_machines.on_submit_delivery_note",
         ],
         # Un BL en BROUILLON créé, modifié ou supprimé change la pastille « BL à
         # valider » de sa commande (commande_alertes, filtre de la liste).
@@ -377,6 +380,8 @@ doc_events = {
             # ERPNext vient de recalculer le statut de livraison de la commande :
             # une commande FERMÉE doit rester « Closed » (fermeture_commande).
             "customization_app.fermeture_commande.on_delivery_note_change",
+            # Un retour annulé remet la machine chez le client : l'échéancier qu'il avait annulé est rétabli (26/11/2026).
+            "customization_app.retours_machines.on_cancel_delivery_note",
         ],
         "after_cancel": "customization_app.api.on_delivery_note_cancel",
     },
@@ -408,13 +413,15 @@ doc_events = {
         # met donc aussitôt l'anomalie à jour. on_submit seul l'aurait raté.
         "on_update": "customization_app.commande_alertes.on_sales_order_change",
         "on_update_after_submit": "customization_app.commande_alertes.on_sales_order_change",
-        # Cascade AVANT le Server Script « cancel sales order payment » (les hooks
-        # Python passent d'abord) : BL annulés PUIS SUPPRIMÉS (magasin désactivé
-        # réactivé le temps du reposting, stock repris transféré au magasin par
-        # défaut), échéanciers supprimés, lignes de calendrier remises en attente.
+        # Cascade d'annulation : BL annulés PUIS SUPPRIMÉS, retours d'abord (magasin désactivé réactivé le temps du
+        # reposting, stock repris transféré au magasin par défaut) ; échéanciers ANNULÉS avec un commentaire (plus
+        # jamais supprimés, 26/11/2026), fiche client commentée, listes d'appels brouillon dégagées, lignes de
+        # calendrier remises en attente ; puis paiements et écritures annulés et supprimés (repris du Server Script
+        # « cancel sales order payment », éteint par le patch script_annulation_commande_dans_l_app).
         "before_cancel": "customization_app.annulation_commande.before_cancel_sales_order",
         # Une commande ANNULÉE se supprime même encore liée ailleurs : les
-        # références bloquantes sont retirées avant le contrôle des liens.
+        # références bloquantes sont retirées avant le contrôle des liens, y compris
+        # celle des échéanciers annulés (commentaire 🗑️).
         "on_trash": "customization_app.annulation_commande.on_trash_sales_order",
         "on_cancel": [
             "customization_app.api.on_sales_order_cancel",
@@ -486,10 +493,23 @@ doc_events = {
         # tâche (Tache-09310). Réparation : patches/reposer_partages_taches_partenaire.
         # Lignes « a été appelé » → cases du client + visites marquées appelées (remplace le Server Script « update donnee appelle »).
         "on_update": "customization_app.liste_appels.synchroniser_appels",
+        # Repris des Server Scripts « Valider Liste appelle » (Before Save = validate : enregistrement ET validation
+        # finale) et « validation finale liste appelle » (Before Submit), éteints par le patch listes_appels_dans_l_app
+        # (26/11/2026) : lignes non appelées acceptées (elles reviennent), « pas de système » = échéancier ANNULÉ,
+        # Non / Non = échéancier gardé.
+        "validate": "customization_app.liste_validation.controle_saisie",
+        "before_submit": "customization_app.liste_validation.validation_finale",
+    },
+    # Recalage des visites suivantes sur la date réelle d'un entretien (repris du Server Script « Update Schedule based
+    # on Real Date », Before Save d'un document validé, éteint par le patch script_date_reelle_dans_l_app, 26/11/2026).
+    "Maintenance Schedule": {
+        "before_update_after_submit": "customization_app.Maintenance.echeancier_hooks.before_update_after_submit",
     },
     # Une fiche client créée par le compte partenaire est « gérée par le partenaire » : exclue de nos relances.
     "Customer": {
         "before_insert": "customization_app.partenaire_clients.customer_before_insert",
+        # Ses échéanciers ANNULÉS (plus supprimés depuis le 26/11/2026) partent avec lui, sinon ils bloquent sa suppression.
+        "on_trash": "customization_app.annulation_commande.on_trash_customer",
     },
     # Le dernier commentaire d'une commande est recopié sur la fiche (pastille + filtre de la liste, écran Commandes à traiter).
     "Comment": {
@@ -783,12 +803,14 @@ fixtures = [
                 "name",
                 "in",
                 [
-                    "ajuster rendez vous pris par partenaire",
+                    # 26/11/2026 : « ajuster rendez vous pris par partenaire » et « cancel sales order payment » ne sont
+                    # PLUS des fixtures — repris dans l'app (liste_validation, annulation_commande) et éteints par patch
+                    # SEULEMENT si leur code est inchangé. Réimportés de force, ils écrasaient une retouche faite en prod
+                    # et pouvaient faire échouer le migrate (tâche planifiée liée à un script en cours de rechargement).
                     "Autorisation Sales order partenaire",
                     "Generation payement",
                     "re-generate payment after sales order",
                     "fill payment schedule row uid",
-                    "cancel sales order payment",
                     "Traitement des encaissement",
                     # Régénère `dettes_a_encaisser` en FIFO à l'enregistrement. Absent de cette
                     # liste jusqu'ici : toute correction restait locale et le prochain migrate
@@ -879,7 +901,19 @@ scheduler_events = {
         ],
 
         "5 10 * * 1-6": [
-            "customization_app.Maintenance.sms_reveil.run_cron",          # un SMS par an aux clients sortis de la relance
+            # 1er SMS de réveil des « À requalifier » 180 j après le dernier appel (jours_reveil_requalifies), puis un par an au plus.
+            "customization_app.Maintenance.sms_reveil.run_cron",
+        ],
+
+        # 08:00 et 19:00 : couleurs des tâches du partenaire, brouillons de listes à 0 appel restant validés, compteur
+        # matin / soir d'« Appel journalier » (repris du Server Script « ajuster rendez vous pris par partenaire », 26/11/2026).
+        "0 8,19 * * *": [
+            "customization_app.liste_validation.passage_8h_19h",
+        ],
+
+        # 07:30 (après les listes) et 10:30 (après les SMS) : photo de l'entonnoir des relances, signaux rouges par e-mail.
+        "30 7,10 * * *": [
+            "customization_app.entonnoir_relances.cron_photo",
         ],
 
         # Tous les soirs à 20:00 : rappel des rendez-vous du lendemain et avis
