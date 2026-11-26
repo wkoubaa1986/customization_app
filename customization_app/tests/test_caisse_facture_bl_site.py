@@ -94,6 +94,8 @@ class TestFactureAchatSurBL(unittest.TestCase):
             pi.reload()
             pi.save()
             pi.submit()
+        # Ce que le formulaire reçoit juste après la validation, AVANT tout rechargement.
+        self.rendu = (pi.status, flt(pi.outstanding_amount, 3))
         pi.reload()
         return pi
 
@@ -148,6 +150,7 @@ class TestFactureAchatSurBL(unittest.TestCase):
         pi = self._valider(pi)
         self.assertEqual(pi.docstatus, 1)
         self.assertEqual(flt(pi.outstanding_amount, 3), 207.158)   # pas payée : la dette est chez le fournisseur
+        self.assertEqual(self.rendu, ("Unpaid", 207.158))
         for recu in (self.a["purchase_receipt"], nouveau["purchase_receipt"]):
             self.assertEqual(flt(frappe.db.get_value("Purchase Receipt", recu, "per_billed")), 100.0, recu)
         for nom in (r["fiche"], self.a["fiche"]):
@@ -182,6 +185,8 @@ class TestFactureAchatSurBL(unittest.TestCase):
         self.assertEqual((achat["ht"], achat["timbre"], achat["arrondi"], achat["ecart"]), (1287.291, 1.0, 0.0, 0.0))
         pi = self._valider(frappe.get_doc("Purchase Invoice", achat["purchase_invoice"]))
         self.assertEqual(pi.docstatus, 1)
+        # L'écran du comptable dit « Payé » tout de suite (il disait « Impayé » jusqu'au rechargement).
+        self.assertEqual(self.rendu, ("Paid", 0.0))
         # Tout est réglé : rien ne reste dû au fournisseur, et son compte est à zéro pour cette facture.
         self.assertAlmostEqual(flt(pi.outstanding_amount), 0.0, places=3)
         solde = frappe.db.sql("""select sum(debit - credit) from `tabGL Entry` where party_type = 'Supplier' and party = %s

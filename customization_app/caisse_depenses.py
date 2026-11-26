@@ -2804,6 +2804,13 @@ def pi_marquer_fiche_saisie(doc, method=None):
                     .format(doc.name, doc.bill_no))
             continue
         _remplacer_avance_par_paiement(doc, nom)
+    # L'ÉCRAN (26/11/2026 : « pourquoi, quand j'ai validé, c'est devenu Impayé ? »). Le paiement vient d'être posé en
+    # base, APRÈS que la facture en mémoire a calculé son état : le formulaire recevait « Impayé » et ne montrait
+    # « Payé » qu'après un rechargement. La facture renvoyée porte maintenant l'état d'après le paiement.
+    etat = frappe.db.get_value("Purchase Invoice", doc.name, ["outstanding_amount", "status"], as_dict=True)
+    if etat:
+        doc.outstanding_amount = etat.outstanding_amount
+        doc.status = etat.status
 
 
 def pi_rouvrir_fiche(doc, method=None):
