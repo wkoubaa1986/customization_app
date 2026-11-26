@@ -220,18 +220,31 @@ def creer_technicien(nom, email, mot_de_passe, telephone=None, date_entree=None,
         frappe.throw(_("L'utilisateur {0} existe déjà.").format(email))
     if frappe.db.exists("Employee", {"employee_name": nom, "status": "Active"}):
         frappe.throw(_("Un employé actif s'appelle déjà {0}.").format(nom))
+    # Un numéro de mobile n'appartient qu'à UN utilisateur (contrainte unique de Frappe). Le 26/11/2026, le 51511964 (celui
+    # de Radhouan Sifi) a été saisi pour Badisse Nasri : la base a refusé l'utilisateur, sous un message trompeur
+    # (« n'a aucun rôle activé » puis « Mobile No doit être unique »). On le dit avant de rien créer, avec le nom.
+    telephone = (telephone or "").strip() or None
+    if telephone:
+        deja = frappe.db.get_value("User", {"mobile_no": telephone}, ["name", "full_name"], as_dict=True)
+        if deja:
+            frappe.throw(_("Le téléphone {0} est déjà celui de {1} ({2}) : un numéro ne peut appartenir qu'à un seul "
+                           "utilisateur. Saisissez le numéro du nouveau technicien, ou laissez le champ vide et ajoutez-le "
+                           "plus tard sur sa fiche.").format(telephone, deja.full_name or deja.name, deja.name),
+                         title=_("Téléphone déjà utilisé"))
     date_entree = getdate(date_entree or nowdate())
     params = {"date_entree": str(date_entree), "vehicule": (vehicule or "").strip(), "cbox": (cbox or "").strip()}
     journal: list[str] = []
 
     _assurer_role_technicien()
     prenom, reste = decouper_nom(nom)
+    # Les rôles sont donnés À LA CRÉATION (et plus juste après) : Frappe n'affiche plus « l'utilisateur nouvellement créé
+    # n'a aucun rôle activé », message qui a fait croire le 26/11/2026 que le technicien existait sans droits.
     user = frappe.get_doc({"doctype": "User", "email": email, "first_name": prenom, "last_name": reste,
                            "send_welcome_email": 0, "enabled": 1, "user_type": "System User",
-                           "new_password": mot_de_passe, "mobile_no": telephone or None})
+                           "new_password": mot_de_passe, "mobile_no": telephone,
+                           "roles": [{"role": r} for r in ROLES_TECHNICIEN]})
     user.flags.ignore_permissions = True
     user.insert()
-    user.add_roles(*ROLES_TECHNICIEN)
     journal.append(_("utilisateur {0} créé avec le profil Technicien ({1} rôles)").format(email, len(ROLES_TECHNICIEN)))
 
     entrepot = ST._nouvel_entrepot(nom)
