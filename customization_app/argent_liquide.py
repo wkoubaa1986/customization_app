@@ -812,6 +812,7 @@ def situation(date=None):
         if caisses:
             caisses.update(CT.comparer_caisses(caisses["total"], principal["selon_compte"], caisses["ecarts_employes"],
                                                sum(flt(x["montant"]) for x in caisses["sans_caisse"])))
+            caisses["causes"] = CT.causes_difference(caisses["ecarts_detail"], caisses["sans_caisse"], caisses["reste"])
         principal["caisses"] = caisses
         anciennes = [p for p in portefeuille["pieces"] if p["name"] in set(portefeuille["anciennes"])]
         verdict = CT.verdict(

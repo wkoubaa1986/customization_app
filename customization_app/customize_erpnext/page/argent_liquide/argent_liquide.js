@@ -123,6 +123,15 @@ class ArgentLiquide {
       @media (max-width: 768px) { .al-principal-lignes { grid-template-columns: 1fr; } }
       .al tr.vieille td { background: #fff7ed; } [data-theme="dark"] .al tr.vieille td { background: #2b1d0e; }
       .al-ok { color: var(--text-muted); font-size: 12.5px; margin-top: 6px; }
+      .al-diff { border: 1px solid var(--border-color); border-radius: 14px; padding: 12px 16px; margin: 12px 0 4px; background: var(--card-bg); }
+      .al-diff .tete .t { font-weight: 800; font-size: 15px; }
+      .al-diff-deux { display: flex; gap: 10px; flex-wrap: wrap; align-items: stretch; margin: 10px 0; }
+      .al-diff-deux > div:not(.op) { flex: 1 1 180px; border: 1px solid var(--border-color); border-radius: 10px; padding: 8px 10px; }
+      .al-diff-deux span { display: block; font-size: 12.5px; color: var(--text-muted); font-weight: 600; }
+      .al-diff-deux b { font-size: 17px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+      .al-diff-deux .op { align-self: center; font-size: 18px; font-weight: 800; color: var(--text-muted); }
+      .al-diff-deux .res { border-color: var(--p-collecte) !important; border-width: 2px !important; }
+      .al-diff td { vertical-align: top; }
       .al-deux { margin-top: 8px; border-top: 1px dashed var(--border-color); padding-top: 6px; display: grid; gap: 4px; }
       .al-deux > div { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; font-size: 12.5px; }
       .al-deux span { color: var(--text-muted); } .al-principal-lignes .l .al-deux b { display: inline; font-size: 13.5px; margin: 0; }
@@ -378,11 +387,37 @@ class ArgentLiquide {
                 + " " + [Math.abs(pr.caisses.ecarts_employes) > 0.0005 ? __("{0} d’écarts de comptage des employés", [signe_txt(pr.caisses.ecarts_employes)]) : "",
                          Math.abs(pr.caisses.sans_caisse_total) > 0.0005 ? __("{0} de paiements que personne n’a comptés", [signe_txt(-pr.caisses.sans_caisse_total)]) : "",
                          Math.abs(pr.caisses.reste) > 0.0005 ? __("{0} sans explication", [signe_txt(pr.caisses.reste)]) : ""].filter(Boolean).join(" ; ") + ".",
-            `<button class="btn btn-xs btn-default al-aller" data-cible="al-collecteurs">${__("Voir le calcul")}</button>`) : ""}
+            `<button class="btn btn-xs btn-default al-aller" data-cible="al-difference">${__("Voir d’où elle vient")}</button>`) : ""}
           ${Math.abs(pr.ecart_compte || 0) > 0.5 ? preuve("📒", __("<b>Comparé au compte « Espèces »</b> : d’après le compte seul, il aurait {0}, soit {1}. Cette différence est la somme des écarts de comptage jamais passés en comptabilité.",
               [txt(pr.selon_compte), pr.ecart_compte > 0 ? __("{0} de moins que ses comptages", [txt(pr.ecart_compte)]) : __("{0} de plus que ses comptages", [txt(-pr.ecart_compte)])]),
             `<button class="btn btn-xs btn-default al-aller" data-cible="al-rapprochement">${__("Voir")}</button>`) : ""}
         </div>
+      </div>`;
+    })() : "";
+
+    // ── D'où vient la différence entre le compte et les caisses (27/11/2026 : « une partie qui explique d'où viennent
+    //    les différences entre le plan comptable et les caisses espèces ») : une ligne par cause, avec sa pièce. ──
+    const difference_bloc = pr && pr.caisses ? (() => {
+      const k = pr.caisses, causes = k.causes || [];
+      const lien = (c) => (c.document ? `<a href="/app/${frappe.router.slug(c.document_type)}/${encodeURIComponent(c.document)}">${esc(c.document)}</a>` : "");
+      return `<div class="al-diff" id="al-difference">
+        <div class="tete"><div><div class="t">⚖️ ${__("Le compte « Espèces » et les caisses : d’où vient la différence")}</div>
+          <div class="muet">${__("Depuis le {0}. D’un côté ce que disent les caisses validées chaque jour, de l’autre ce que dit la comptabilité.", [jour(k.depuis)])}</div></div></div>
+        <div class="al-diff-deux">
+          <div><span>${__("En remontant les caisses validées")}</span><b>${txt(k.total)}</b></div>
+          <div class="op">−</div>
+          <div><span>${__("D’après le compte « Espèces »")}</span><b>${txt(pr.selon_compte)}</b></div>
+          <div class="op">=</div>
+          <div class="res"><span>${__("Différence")}</span><b>${signe_txt(k.difference)}</b></div>
+        </div>
+        ${causes.length ? `<div class="al-defile"><table>
+          <tr><th>${__("Cause")}</th><th>${__("Ce qui s’est passé")}</th><th>${__("À faire")}</th><th class="n">${__("Effet")}</th></tr>
+          ${causes.map((c) => `<tr><td><b>${esc(__(c.nature))}</b><div class="muet">${esc(c.titre)}</div><div class="muet">${lien(c)}</div></td>
+            <td>${esc(c.explication)}</td><td>${esc(c.a_faire || "")}</td><td class="n"><b>${signe_txt(c.effet)}</b></td></tr>`).join("")}
+          <tr class="pied"><td colspan="3">${__("Total des causes = la différence")}</td><td class="n">${signe_txt(causes.reduce((a, c) => a + (Number(c.effet) || 0), 0))}</td></tr>
+        </table></div>
+        <div class="muet" style="margin-top:6px">${__("Lecture de l’effet : « + » = les caisses comptent plus que le compte, « − » = le compte a plus que les caisses.")}</div>`
+        : `<div class="al-propre" style="margin-top:8px">✔ ${__("Aucune différence : les caisses validées et le compte disent la même chose.")}</div>`}
       </div>`;
     })() : "";
 
@@ -598,7 +633,7 @@ class ArgentLiquide {
       </table></div>` : `<div class="muet">${__("Aucun versement en banque sur les 30 derniers jours.")}</div>`;
 
     this.$c.html(`<div class="al">
-      ${verdict}${principal}${alertes}
+      ${verdict}${principal}${difference_bloc}${alertes}
       <h4 id="al-flux-titre">🔀 ${__("Le chemin de l’argent du {0} au {1}", [jour((s.flux || {}).depart), jour(s.date)])}</h4>
       <div class="al-sous">${__("Tout ce que les clients ont payé, par où c’est passé, où c’est maintenant. Lu dans la comptabilité, donc ça s’équilibre : ce qui était là + ce qui est entré − ce qui est sorti = ce qui reste. L’épaisseur d’un trait est son montant ; survolez-le pour le lire.")}</div>
       <div class="al-flux" id="al-flux"></div>

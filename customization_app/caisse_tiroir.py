@@ -174,7 +174,7 @@ def verdict(jour, nom, tiroir, comptage, verification, coffre, pieces, employes,
             + ([("%s DT sans explication" % _dt(r))] if abs(r) > 0.0005 else [])
         point("alerte", "Depuis le %s, les caisses validées donnent %s DT de %s que le compte « Espèces »%s." % (
             _jour(caisses["depuis"]), _dt(abs(d)), "plus" if d > 0 else "moins",
-            (" : " + ", ".join(causes)) if causes else ""), "al-collecteurs")
+            (" : " + ", ".join(causes)) if causes else ""), "al-difference")
     solde_coffre = _m((coffre or {}).get("solde"))
     inventaire = (coffre or {}).get("inventaire")
     if not inventaire and abs(solde_coffre) > 0.0005:
@@ -350,6 +350,56 @@ def comparer_caisses(total, selon_compte, ecarts_employes, sans_caisse=0.0) -> d
             "reste": _m(difference - _m(ecarts_employes) + _m(sans_caisse))}
 
 
+def causes_difference(ecarts_detail, sans_caisse, reste) -> list:
+    """D'où vient la différence entre les caisses validées et le compte « Espèces », cause par cause. PURE.
+    (sa demande du 27/11/2026 : « une partie qui explique d'où viennent les différences entre le plan comptable et les
+    caisses espèces »). `effet` : ce que la cause ajoute aux CAISSES par rapport au COMPTE ; la somme des effets est la
+    différence. -> [{nature, titre, explication, a_faire, document_type, document, effet}]"""
+    out = []
+    for e in ecarts_detail or []:
+        ecart = _m(e.get("ecart"))
+        plus = ecart > 0
+        explication = "%s a compté %s DT alors que sa caisse en attendait %s : %s DT de %s. Cet argent %s, " \
+                      "mais le compte « Espèces » ne le sait pas." % (
+                          e.get("caisse"), _dt(e.get("compte")), _dt(e.get("attendu")), _dt(abs(ecart)),
+                          "plus" if plus else "moins",
+                          "est passé dans le tiroir du collecteur" if plus else "n'est jamais arrivé chez le collecteur")
+        # Seulement si la dépense PEUT expliquer l'écart : un écart d'au moins un dinar, pas plus grand que les dépenses.
+        par_depense = plus and ecart >= 1 and ecart <= _m(e.get("depenses")) + 0.005
+        if par_depense:
+            explication += " Ce jour-là, %s DT de dépenses sont saisies sur sa caisse : une dépense qui n'a pas été " \
+                           "payée avec l'argent de cette caisse donne exactement cet effet." % _dt(e.get("depenses"))
+        if e.get("note"):
+            explication += " Sa note : « %s »." % e["note"]
+        if abs(ecart) < 1:
+            a_faire = "Rien : un arrondi."
+        elif par_depense:
+            a_faire = ("Lui demander avec quel argent la dépense a été payée ; si c'est le sien, il faut le lui rembourser, "
+                       "si c'est celui d'une autre caisse, la dépense est à déplacer.")
+        elif plus:
+            a_faire = "Lui demander d'où vient l'argent en trop (un encaissement pas saisi ?) ; sinon c'est un excédent de caisse."
+        else:
+            a_faire = "Lui demander où est passé l'argent ; sinon c'est un manque à passer en écart de caisse."
+        out.append({
+            "nature": "Écart de comptage", "effet": ecart, "document_type": "Cloture Caisse", "document": e.get("name"),
+            "titre": "Caisse de %s du %s" % (e.get("caisse"), _jour(e.get("date"))), "explication": explication,
+            "a_faire": a_faire})
+    for m in sans_caisse or []:
+        out.append({
+            "nature": "Paiement dans aucune caisse", "effet": _m(-_m(m.get("montant"))), "document_type": "Payment Entry",
+            "document": m.get("name"),
+            "titre": "%s DT de %s, le %s" % (_dt(m.get("montant")), m.get("client") or "?", _jour(m.get("date"))),
+            "explication": "Ce paiement en espèces, saisi par %s, est au compte « Espèces » mais aucune caisse validée ne "
+                           "l'a compté : personne ne répond de cet argent." % (m.get("saisi_par") or "?"),
+            "a_faire": "Savoir qui a reçu l'argent : il doit entrer dans sa caisse (ou le paiement est à corriger)."})
+    if abs(_m(reste)) > 0.0005:
+        out.append({"nature": "Sans explication", "effet": _m(reste), "document_type": None, "document": None,
+                    "titre": "Ce que ni un écart de comptage ni un paiement hors caisse n'explique",
+                    "explication": "Une pièce modifiée, annulée ou datée autrement après le comptage de son jour.",
+                    "a_faire": "À chercher dans le grand livre du compte « Espèces » depuis le jour de départ."})
+    return out
+
+
 def reglage_caisses():
     """(jour de départ, montant de départ figé) lus dans Config Caisse ; (None, 0.0) tant que le patch n'est pas passé."""
     from frappe.utils import getdate
@@ -417,11 +467,13 @@ def selon_caisses(cfg=None, jour=None, non_compte=0.0):
     if not depuis or not caisse or jour < depuis:
         return None
     hors = tuple(h for h in _autres_caisses(cfg) if h) or ("",)
-    collecte, ecarts, nb = 0.0, 0.0, 0
+    collecte, ecarts, nb, ecarts_detail = 0.0, 0.0, 0, []
     # Les caisses des employés VALIDÉES (comptées par l'employé, reçues par le collecteur) ; celle collectée par un
     # délégué n'entre dans le tiroir qu'une fois sa passation validée.
     for c in frappe.db.sql(
-            """SELECT c.especes_recues, c.especes_remises, c.validation_seule, c.ecart FROM `tabCloture Caisse` c
+            """SELECT c.name, c.caisse, c.date_cloture, c.especes_recues, c.especes_remises, c.validation_seule, c.ecart,
+                      c.solde_theorique, c.especes_comptees, c.depenses_especes, c.note
+               FROM `tabCloture Caisse` c
                WHERE c.docstatus = 1 AND c.caisse NOT IN %s AND c.date_cloture BETWEEN %s AND %s
                  AND (IFNULL(c.passation, '') = '' OR EXISTS (SELECT 1 FROM `tabPassation Caisse` p
                                                             WHERE p.name = c.passation AND p.docstatus = 1))""",
@@ -429,6 +481,10 @@ def selon_caisses(cfg=None, jour=None, non_compte=0.0):
         collecte += A.montant_recu(c)
         ecarts += flt(c.ecart)
         nb += 1
+        if abs(flt(c.ecart)) > 0.0005:
+            ecarts_detail.append({"name": c.name, "caisse": c.caisse, "date": str(c.date_cloture), "ecart": _m(c.ecart),
+                                  "attendu": _m(c.solde_theorique), "compte": _m(c.especes_comptees),
+                                  "depenses": _m(c.depenses_especes), "note": " ".join((c.note or "").split())})
     siennes = frappe.db.sql(
         """SELECT SUM(encaissements_especes + IFNULL(apports_especes, 0)), SUM(depenses_especes), COUNT(*)
            FROM `tabCloture Caisse` WHERE docstatus = 1 AND caisse = %s AND date_cloture BETWEEN %s AND %s""",
@@ -456,7 +512,8 @@ def selon_caisses(cfg=None, jour=None, non_compte=0.0):
                        (A.COMPTE_ESPECES, depuis, jour), as_dict=True)]
     out = {"depuis": str(depuis), "base": base, "collecte": _m(collecte), "nb_caisses": nb + int(siennes[2] or 0),
            "encaissements": _m(siennes[0]), "depenses": _m(siennes[1]), "ecritures": _m(ecritures),
-           "non_compte": _m(non_compte), "ecarts_employes": _m(ecarts), "sans_caisse": sans_caisse}
+           "non_compte": _m(non_compte), "ecarts_employes": _m(ecarts), "sans_caisse": sans_caisse,
+           "ecarts_detail": sorted(ecarts_detail, key=lambda e: -abs(e["ecart"]))}
     out["total"] = total_caisses(base, out["collecte"], out["encaissements"], out["depenses"], out["ecritures"], out["non_compte"])
     return out
 

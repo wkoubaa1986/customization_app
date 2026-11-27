@@ -199,6 +199,41 @@ class TestCaissesValidees(unittest.TestCase):
         self.assertEqual(CT.verdict(**base, caisses=None)["etat"], "ok")
 
 
+class TestCausesDeLaDifference(unittest.TestCase):
+    ECARTS = [{"name": "CLO-1874", "caisse": "Sadok Bouziri", "date": "2026-11-25", "ecart": 135.82, "attendu": -62.82,
+               "compte": 73.0, "depenses": 135.82, "note": ""},
+              {"name": "CLO-1905", "caisse": "Jamel Aloui", "date": "2026-11-26", "ecart": 0.01, "attendu": 154.39,
+               "compte": 154.4, "depenses": 11.01, "note": "arrondi"}]
+    SANS = [{"name": "ACC-PAY-2026-08643", "date": "2026-11-26", "montant": 50.0, "client": "Ben Aissa Ahmed", "saisi_par": "Administrator"}]
+
+    def test_la_somme_des_causes_est_la_difference(self):
+        causes = CT.causes_difference(self.ECARTS, self.SANS, 0.0)
+        self.assertEqual([c["nature"] for c in causes], ["Écart de comptage", "Écart de comptage", "Paiement dans aucune caisse"])
+        self.assertEqual(round(sum(c["effet"] for c in causes), 3), 85.83)
+        self.assertEqual((causes[0]["document_type"], causes[0]["document"]), ("Cloture Caisse", "CLO-1874"))
+        self.assertEqual((causes[2]["document"], causes[2]["effet"]), ("ACC-PAY-2026-08643", -50.0))
+
+    def test_la_depense_payee_avec_un_autre_argent_est_dite(self):
+        sadok, jamel = CT.causes_difference(self.ECARTS, [], 0.0)
+        self.assertIn("135,820 DT de dépenses sont saisies sur sa caisse", sadok["explication"])
+        self.assertIn("a compté 73,000 DT alors que sa caisse en attendait −62,820", sadok["explication"])
+        self.assertNotIn("dépenses sont saisies", jamel["explication"])     # 0,010 : pas une dépense payée ailleurs
+        self.assertIn("Sa note : « arrondi »", jamel["explication"])
+        self.assertIn("avec quel argent la dépense a été payée", sadok["a_faire"])
+        self.assertEqual(jamel["a_faire"], "Rien : un arrondi.")
+
+    def test_un_manque_et_un_reste(self):
+        causes = CT.causes_difference([{"name": "CLO-9", "caisse": "Salma", "date": "2026-11-27", "ecart": -10.0,
+                                        "attendu": 300.0, "compte": 290.0, "depenses": 0, "note": ""}], [], 3.5)
+        self.assertIn("n'est jamais arrivé chez le collecteur", causes[0]["explication"])
+        self.assertIn("où est passé l'argent", causes[0]["a_faire"])
+        trop = CT.causes_difference([{"name": "CLO-8", "caisse": "Badis", "date": "2026-11-27", "ecart": 40.0,
+                                      "attendu": 100.0, "compte": 140.0, "depenses": 0, "note": ""}], [], 0)[0]
+        self.assertIn("d'où vient l'argent en trop", trop["a_faire"])
+        self.assertEqual((causes[1]["nature"], causes[1]["effet"]), ("Sans explication", 3.5))
+        self.assertEqual(CT.causes_difference([], [], 0.0), [])
+
+
 class TestFormat(unittest.TestCase):
     def test_montants(self):
         self.assertEqual(CT._dt(7188.914), "7 188,914")
