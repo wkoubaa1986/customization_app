@@ -719,6 +719,9 @@ class ArgentLiquide {
     const lien_gl = (compte, libelle) => `<button class="btn btn-xs btn-default" data-grand-livre="${esc(compte)}" data-du="${r.depart}" data-au="${this.s.date}">📒 ${libelle}</button>`;
     const pr = this.s.principal;
     const difference = (Number(r.reconstitue) || 0) - (Number(r.solde_jour) || 0);
+    // Tant que le tiroir n'a pas été compté en entier, son montant est DÉDUIT du compte : la différence est nulle par
+    // construction (27/11/2026 : « explique-moi comment c'est bon » — ça ne l'était pas, le texte le laissait croire).
+    const pas_compte = !!pr && pr.mode === "compte";
     return `<h4 id="al-rapprochement">🧾 ${__("Rapprochement avec la comptabilité")}</h4>
       <div class="al-sous">${__("Le compte comptable « Espèces » regroupe toutes les caisses : il ne dit pas qui tient l’argent. Voici son solde, l’argent reconstitué par cette page sur la même période, et ce qui explique la différence.")}</div>
       <div class="al-rap">
@@ -733,12 +736,16 @@ class ArgentLiquide {
         <div class="al-liens">${lien_gl("Espèces - A&S", __("Grand livre Espèces"))}${lien_gl("Sabah Espèces - A&S", __("Grand livre Sabah Espèces"))}</div></div>
         <div class="bloc"><b>${__("Qui tient cet argent")}</b><table>
           <tr><td>${__("Chez les employés (leurs comptages)")}</td><td class="n">${txt(this.s.totaux.employes)}</td></tr>
-          <tr><td>${pr ? __("Dans le tiroir de {0} (son dernier comptage + les mouvements depuis)", [esc(pr.nom)]) : __("Chez les collecteurs")}</td><td class="n">${txt(r.reconstitue - this.s.totaux.employes)}</td></tr>
+          <tr><td>${!pr ? __("Chez les collecteurs") : pas_compte
+            ? __("Dans le tiroir de {0} (pas encore compté : c’est le compte moins les autres caisses)", [esc(pr.nom)])
+            : __("Dans le tiroir de {0} (son dernier comptage + les mouvements depuis)", [esc(pr.nom)])}</td><td class="n">${txt(r.reconstitue - this.s.totaux.employes)}</td></tr>
           <tr class="res"><td>${__("Total d’après les comptages")}</td><td class="n">${txt(r.reconstitue)}</td></tr>
           <tr><td>${__("Solde du compte « Espèces »")}</td><td class="n">${txt(r.solde_jour)}</td></tr>
-          <tr class="res"><td>${__("Différence")}</td><td class="n">${signe(difference)}</td></tr>
+          <tr class="res"><td>${__("Différence")}</td><td class="n">${pas_compte ? "—" : signe(difference)}</td></tr>
         </table>
-        <div class="muet" style="margin-top:6px">${Math.abs(difference) < 0.5
+        <div class="muet" style="margin-top:6px">${pas_compte
+          ? __("Pas de différence à lire pour l’instant : le tiroir de {0} n’a pas encore été compté en entier, son montant est donc tiré du compte lui-même et les deux totaux tombent forcément pareil. Cela ne prouve rien. La différence voudra dire quelque chose à partir de son prochain comptage (ou d’une vérification par vous).", [esc(pr.nom)])
+          : Math.abs(difference) < 0.5
           ? __("Les comptages et le compte disent la même chose.")
           : __("Cette différence est la somme des écarts de comptage (ceux du collecteur et ceux des employés) qui n’ont jamais été passés en comptabilité. Elle ne se corrige pas toute seule : c’est une écriture d’écart de caisse, à votre décision.")}</div></div>
       </div>
