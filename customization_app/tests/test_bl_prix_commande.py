@@ -147,3 +147,21 @@ class TestScriptsVersionnes(unittest.TestCase):
         fin = self.scripts["Traitement des encaissement"]["script"].rstrip()
         self.assertTrue(fin.endswith("raise"))
         self.assertIn("except Exception as e_enc:", fin)
+
+
+class TestMietteSurCommandeFacturee(unittest.TestCase):
+    """Chèque 9746703 de BEN Sassi BIOAQUA (27/11/2026) : 0,001 du chèque posé sur une commande facturée à 100 %
+    faisait échouer tout l'encaissement. Les deux boucles (chèques, traites) laissent ce millime non affecté."""
+
+    def test_les_deux_boucles_laissent_la_miette(self):
+        import json
+        import os
+
+        chemin = os.path.join(os.path.dirname(os.path.dirname(__file__)), "fixtures", "server_script.json")
+        script = next(s for s in json.load(open(chemin, encoding="utf-8")) if s["name"] == "Traitement des encaissement")["script"]
+        self.assertEqual(script.count("for ipay in unique_ref:"), 2)
+        self.assertEqual(script.count('frappe.utils.flt(unique_ref[ipay][3])<0.01'), 2)
+        self.assertEqual(script.count('"per_billed"))>=99.99'), 2)
+        # La garde précède la création de la référence, dans chaque boucle.
+        for bloc in script.split("for ipay in unique_ref:")[1:]:
+            self.assertLess(bloc.index("continue"), bloc.index('frappe.new_doc("Payment Entry Reference")'))
