@@ -4168,7 +4168,9 @@ function rcj_cloture(rapport, opts) {
           {
             fieldtype: "Currency", fieldname: "comptees",
             label: __("Espèces comptées (physique)"),
-            description: __("Tout l'argent de votre caisse : billets et pièces, fond de la veille compris."),
+            description: e.tiroir
+              ? __("Tout votre tiroir : votre caisse ET l'argent collecté pas encore versé, billets et pièces.")
+              : __("Tout l'argent de votre caisse : billets et pièces, fond de la veille compris."),
             // COMPTAGE À L'AVEUGLE (24/11/2026) : la case n'est plus pré-remplie avec le montant attendu — Jamel et
             // Sadok « comptaient » au millime le théorique. Le montant attendu et l'écart s'affichent une fois le
             // compte saisi, et la case se fige.
@@ -4351,16 +4353,33 @@ function rcj_cloture(rapport, opts) {
         </div>` : "";
       const voile = reprise ? "" : `
         <div class="rcj-etat-voile" style="border:1px dashed #9aa5b1;background:#f7f9fb;border-radius:6px;padding:10px 12px;margin-bottom:8px;font-size:13px">
-          🔒 <b>${__("Comptage à l'aveugle")}</b> — ${__("comptez les billets et les pièces, puis saisissez le montant ci-dessous. Le montant attendu et l'écart s'affichent ensuite ; le montant compté ne se modifie plus.")}
+          🔒 <b>${__("Comptage à l'aveugle")}</b> — ${e.tiroir
+            ? __("comptez TOUT votre tiroir : votre caisse ET l'argent collecté pas encore versé au coffre ou en banque. Saisissez d'abord un versement qui ne serait pas encore enregistré. Le montant attendu et l'écart s'affichent ensuite ; le montant compté ne se modifie plus.")
+            : __("comptez les billets et les pièces, puis saisissez le montant ci-dessous. Le montant attendu et l'écart s'affichent ensuite ; le montant compté ne se modifie plus.")}
         </div>`;
+      // TIROIR UNIQUE (27/11/2026) : le collecteur principal n'a qu'un tiroir. L'attendu part de son dernier comptage
+      // (ou du compte « Espèces » la première fois), plus les collectes, moins les versements au coffre.
+      const tir = e.tiroir;
+      const lignes_tiroir = !tir ? "" : (tir.mode === "chaine" && tir.base && tir.depuis ? `
+          <tr><td>${__("Dernier comptage du tiroir")}
+              <div class="text-muted" style="font-size:11px">${frappe.utils.escape_html((tir.base.par || "") + " · " + frappe.datetime.str_to_user(String(tir.base.quand || "").slice(0, 16)))}</div></td>
+              <td style="text-align:right;font-weight:700">${fmt(tir.base.compte)}</td></tr>
+          <tr><td>${__("Collecté depuis")}</td><td style="text-align:right">+ ${fmt(tir.depuis.collecte)}</td></tr>
+          <tr><td>${__("Versé au coffre ou en banque depuis")}</td><td style="text-align:right">− ${fmt(tir.depuis.sorties)}</td></tr>
+          <tr><td>${__("Mes encaissements, mes dépenses, autres mouvements")}</td>
+              <td style="text-align:right">${tir.depuis.autres < 0 ? "−" : "+"} ${fmt(Math.abs(tir.depuis.autres))}</td></tr>` : `
+          <tr><td>${__("Compte « Espèces » (toutes les caisses)")}</td><td style="text-align:right;font-weight:700">${fmt(tir.compte_especes)}</td></tr>
+          <tr><td>${__("Chez les autres employés")}</td><td style="text-align:right">− ${fmt(tir.autres)}</td></tr>
+          <tr><td colspan="2" class="text-muted" style="font-size:11px">${__("Premier comptage du tiroir en entier : il est comparé au compte. Les suivants partiront de ce que vous aurez compté.")}</td></tr>`);
       d.fields_dict.etat.$wrapper.html(autrui + voile + `<div class="rcj-etat-cache"${reprise ? "" : ' style="display:none"'}>` + `${negatif ? `
         <div class="alert alert-warning" style="font-size:12.5px;padding:8px 10px;margin-bottom:8px">
-          <b>${__("Solde théorique négatif ({0})", [fmt(e.solde_theorique)])}</b> — ${
-          __("une dépense dépasse les encaissements de cette caisse : le plus souvent, une dépense payée par un collègue a été saisie ici.")} ${
+          <b>${__("Solde théorique négatif ({0})", [fmt(e.solde_theorique)])}</b> — ${e.tiroir
+          ? __("d'après les écritures, il est sorti du tiroir plus qu'il ne contenait : un versement dépasse ce qui avait été compté.")
+          : __("une dépense dépasse les encaissements de cette caisse : le plus souvent, une dépense payée par un collègue a été saisie ici.")} ${
           __("Comptez ce qu'il y a réellement dans la caisse (0 si rien) : l'écart sera positif, expliquez-le dans la note.")}
         </div>` : ""}
         <table class="table table-bordered" style="font-size:12.5px">
-          <tr><td>${__("Solde d'ouverture (avant)")}</td>
+          ${tir ? lignes_tiroir : `<tr><td>${__("Solde d'ouverture (avant)")}</td>
               <td style="text-align:right;font-weight:700">${fmt(e.solde_ouverture)}</td></tr>
           <tr><td>${sous_traitant && e.debut !== d1 ? __("Encaissements espèces de la période") : __("Encaissements espèces du jour")}</td>
               <td style="text-align:right">+ ${fmt(e.encaissements_especes)}</td></tr>${rcj_html_repris(e.repris, fmt)}
@@ -4368,8 +4387,8 @@ function rcj_cloture(rapport, opts) {
               <div class="text-muted" style="font-size:11px">${(e.apports || []).map((x) => frappe.utils.escape_html(x.name + " · " + (x.depuis || ""))).join(" ; ")}</div></td>
               <td style="text-align:right">+ ${fmt(e.apports_especes)}</td></tr>` : ""}
           <tr><td>${sous_traitant && e.debut !== d1 ? __("Dépenses espèces de la période") : __("Dépenses espèces du jour")}</td>
-              <td style="text-align:right">− ${fmt(e.depenses_especes)}</td></tr>
-          <tr><td><b>${__("Solde théorique (après)")}</b></td>
+              <td style="text-align:right">− ${fmt(e.depenses_especes)}</td></tr>`}
+          <tr><td><b>${tir ? __("Attendu dans le tiroir") : __("Solde théorique (après)")}</b></td>
               <td style="text-align:right;font-weight:800">${fmt(e.solde_theorique)}</td></tr>
           <tr><td>${__("Écart (compté − théorique)")}</td>
               <td style="text-align:right;font-weight:700" ><span class="rcj-clo-ecart"

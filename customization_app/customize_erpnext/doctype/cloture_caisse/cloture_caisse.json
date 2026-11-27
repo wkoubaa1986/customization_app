@@ -68,7 +68,13 @@
   "column_break_6",
   "echanges",
   "revue_depenses",
-  "paiements_pris"
+  "paiements_pris",
+  "section_tiroir",
+  "tiroir_unique",
+  "tiroir_reference",
+  "tiroir_base",
+  "tiroir_collecte",
+  "tiroir_sorties"
  ],
  "fields": [
   {
@@ -488,11 +494,50 @@
    "hidden": 1,
    "no_copy": 1,
    "description": "JSON [{name, mode, montant}] — chaque paiement porte aussi le numéro de la clôture (Payment Entry.custom_cloture_caisse)."
+  },
+  {
+   "fieldname": "section_tiroir",
+   "fieldtype": "Section Break",
+   "label": "Tiroir unique du collecteur principal",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "tiroir_unique",
+   "fieldtype": "Check",
+   "label": "Comptage du tiroir entier",
+   "read_only": 1,
+   "default": "0",
+   "description": "Le collecteur principal n'a qu'un tiroir : sa caisse et l'argent collecté pas encore versé."
+  },
+  {
+   "fieldname": "tiroir_reference",
+   "fieldtype": "Currency",
+   "label": "Référence du tiroir au comptage",
+   "read_only": 1,
+   "description": "Compte « Espèces » moins les autres caisses, au moment du comptage : le comptage suivant en repart."
+  },
+  {
+   "fieldname": "tiroir_base",
+   "fieldtype": "Data",
+   "label": "Comptage précédent du tiroir",
+   "read_only": 1
+  },
+  {
+   "fieldname": "tiroir_collecte",
+   "fieldtype": "Currency",
+   "label": "Collecté depuis le comptage précédent",
+   "read_only": 1
+  },
+  {
+   "fieldname": "tiroir_sorties",
+   "fieldtype": "Currency",
+   "label": "Versé au coffre ou en banque depuis",
+   "read_only": 1
   }
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-11-25 21:00:00.000000",
+ "modified": "2026-11-27 16:30:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Cloture Caisse",

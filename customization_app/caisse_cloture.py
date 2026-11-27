@@ -867,6 +867,31 @@ def _prevenir_titulaire(doc, titulaire):
         frappe.log_error(frappe.get_traceback(), "Caisse : prévenir le titulaire")
 
 
+def _tiroir(caisse):
+    """L'état du tiroir si `caisse` est celle du collecteur principal (caisse_tiroir), sinon None."""
+    if caisse == CAISSE_GLOBALE:
+        return None
+    from customization_app import caisse_tiroir as CT
+    return CT.etat_tiroir() if CT.est_tiroir(caisse) else None
+
+
+def _champs_tiroir(tiroir):
+    from customization_app import caisse_tiroir as CT
+    return CT.champs_cloture(tiroir)
+
+
+def _tiroir_pour_ecran(tiroir):
+    """Ce que la fenêtre de comptage montre du tiroir, APRÈS la saisie (comptage à l'aveugle)."""
+    if not tiroir:
+        return None
+    from customization_app import caisse_tiroir as CT
+    base = tiroir.get("base") or {}
+    return {"mode": tiroir["mode"], "attendu": tiroir["attendu"], "explication": CT.explication(tiroir),
+            "base": ({"compte": base.get("compte"), "quand": base.get("quand"), "par": base.get("par_nom")} if base else None),
+            "depuis": tiroir.get("depuis"), "compte_especes": tiroir["reference"]["compte"],
+            "autres": flt(tiroir["reference"]["autres"] + tiroir["reference"]["delegues"], 3)}
+
+
 @frappe.whitelist()
 def etat(caisse, date):
     """L'état de la caisse pour le dialogue : avant, mouvements, après."""
@@ -879,6 +904,11 @@ def etat(caisse, date):
     m = _mesures(caisse, date, reprendre=not deja)
     ouverture = _ouverture(caisse, date)
     theorique = flt(ouverture + m["encaissements_especes"] + flt(m.get("apports_especes"), 3) - m["depenses_especes"], 3)
+    # TIROIR UNIQUE (27/11/2026) : le collecteur principal compte tout son tiroir — sa caisse ET l'argent collecté pas
+    # encore versé. L'attendu vient de son dernier comptage et du compte « Espèces » (caisse_tiroir).
+    tiroir = None if deja else _tiroir(caisse)
+    if tiroir:
+        theorique = flt(tiroir["attendu"], 3)
     pdf_url = None
     if deja:
         pdf_url = frappe.db.get_value(
@@ -916,6 +946,7 @@ def etat(caisse, date):
         "apports": m.get("apports") or [],
         "depenses_especes": m["depenses_especes"],
         "solde_theorique": theorique,
+        "tiroir": _tiroir_pour_ecran(tiroir),
         "total_cheques": m["total_cheques"],
         "total_autres_modes": m["total_autres_modes"],
         # Compter dans l'ordre (25/11/2026) : le message qui empêche de compter ce jour, ou None.
@@ -997,6 +1028,11 @@ def valider(caisse, date, especes_comptees=None, note=None, justifications=None,
 
     ouverture = _ouverture(caisse, date)
     theorique = flt(ouverture + m["encaissements_especes"] + flt(m.get("apports_especes"), 3) - m["depenses_especes"], 3)
+    # TIROIR UNIQUE (27/11/2026) : voir `etat`. La référence du moment est notée sur la clôture : le comptage suivant
+    # en repart.
+    tiroir = _tiroir(caisse)
+    if tiroir:
+        theorique = flt(tiroir["attendu"], 3)
     comptees = flt(especes_comptees, 3) if especes_comptees not in (None, "") else None
     remises = flt(especes_remises, 3) if especes_remises not in (None, "") else None
     if comptees is not None and comptees < 0:
@@ -1059,6 +1095,7 @@ def valider(caisse, date, especes_comptees=None, note=None, justifications=None,
         "note": (note or "").strip(),
         "controles": controles_txt,
         **champs_rap,
+        **(_champs_tiroir(tiroir) if tiroir else {}),
     }
     justifs_avant = existante.controles if existante else None
     if existante:
@@ -1335,6 +1372,40 @@ CSS_PDF = """
 </style>"""
 
 
+def _bloc_tiroir(doc, dt_, ecart_txt, esc, nom, heure):
+    """Le bloc « espèces » du PDF pour un comptage du TIROIR du collecteur principal (27/11/2026), ou None."""
+    if not frappe.utils.cint(doc.get("tiroir_unique")):
+        return None
+    comptees = doc.especes_comptees
+    base = None
+    if doc.get("tiroir_base"):
+        from customization_app import caisse_tiroir as CT
+        base = next((c for c in CT.comptages(doc.caisse) if c["name"] == doc.tiroir_base), None)
+    if base:
+        delta = flt(flt(doc.solde_theorique) - flt(base["compte"]), 3)
+        autres = flt(delta - flt(doc.get("tiroir_collecte")) + flt(doc.get("tiroir_sorties")), 3)
+        lignes = (
+            "<tr><td>Dernier comptage du tiroir (%s, par %s)</td><td class='n'>%s</td></tr>"
+            "<tr><td>+ Collecté depuis</td><td class='n'>%s</td></tr>"
+            "<tr><td>− Versé au coffre ou en banque depuis</td><td class='n'>%s</td></tr>"
+            "<tr><td>± Ses encaissements, ses dépenses, autres mouvements</td><td class='n'>%s</td></tr>" % (
+                heure(base["quand"]), esc(base.get("par_nom") or "?"), dt_(base["compte"]),
+                dt_(doc.get("tiroir_collecte")), dt_(doc.get("tiroir_sorties")), ecart_txt(autres)))
+    else:
+        lignes = ("<tr><td>Premier comptage du tiroir en entier : compte « Espèces » moins les autres caisses</td>"
+                  "<td class='n'>%s</td></tr>" % dt_(doc.solde_theorique))
+    return (
+        "<div class='bloc bleu'><h3>Tiroir du collecteur (sa caisse et l'argent collecté)</h3><table>%s"
+        "<tr class='total'><td>= Attendu dans le tiroir</td><td class='n'>%s</td></tr>"
+        "<tr><td>Compté</td><td class='n'>%s</td></tr>"
+        "<tr class='fort'><td>Écart</td><td class='n'>%s</td></tr>"
+        "<tr><td colspan='2' style='color:#666;font-size:8.5pt'>Dans la journée : %s encaissés, %s dépensés en espèces "
+        "par lui-même.</td></tr></table></div>" % (
+            lignes, dt_(doc.solde_theorique), (dt_(comptees) if comptees is not None else "—"),
+            (ecart_txt(flt(doc.ecart, 3)) if comptees is not None else "—"),
+            dt_(doc.encaissements_especes), dt_(doc.depenses_especes)))
+
+
 def _html_instantane(doc, data, rap=None):
     """Le PDF FIGÉ de la clôture = le rapport COMPLET du jour (décision
     utilisateur 19/08) : état espèces, rapprochement (globale), récap par mode
@@ -1453,7 +1524,7 @@ def _html_instantane(doc, data, rap=None):
                 % (classe, titre, detail))
 
     # ── Deux blocs : les espèces de la journée | la remise (ou les modes si validée seule) ──────────────────────
-    bloc_especes = (
+    bloc_especes = _bloc_tiroir(doc, dt_, ecart_txt, esc, nom, heure) or (
         "<div class='bloc bleu'><h3>Espèces de la journée</h3><table>"
         "<tr><td>Solde d'ouverture</td><td class='n'>%s</td></tr>"
         "<tr><td>+ Encaissements en espèces</td><td class='n'>%s</td></tr>%s"

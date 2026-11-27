@@ -56,13 +56,15 @@ def _jour(iso) -> str:
 
 
 # ---------------------------------------------------------------------------------------------------------------- pur
-def construire_anomalies(sauts, entrees_manuelles, antidates, inattendus, entrees, caisse_principal) -> list:
+def construire_anomalies(sauts, entrees_manuelles, antidates, inattendus, entrees, caisse_principal, tiroir=False) -> list:
     """Les anomalies de la carte, chacune avec sa clé, son explication et les décisions possibles. PURE.
     `sauts` : argent_liquide.sauts_de_chaine ; `entrees_manuelles` : écritures qui font ENTRER de l'argent dans Espèces
     sans venir du coffre ni d'une banque ; `antidates` : paiements espèces saisis après le départ mais datés d'avant ;
     `inattendus` : paiements « Espèces » posés sur un compte qui n'est ni une caisse, ni une banque, ni un partenaire ;
     `entrees` : toutes les entrées par écriture (pour expliquer un saut) ; -> [{cle, nature, caisse, poche, date,
-    document_type, document, montant, titre, explication, options: [{code, libelle, effet}]}]"""
+    document_type, document, montant, titre, explication, options: [{code, libelle, effet}]}]
+    `tiroir` (27/11/2026) : le collecteur principal n'a plus qu'un tiroir, lu sur ses comptages et sur le compte
+    « Espèces » — une décision sur SES anomalies n'a plus d'effet chiffré sur la carte (elle reste au journal)."""
     out = []
     for x in sauts or []:
         saut = _m(x.get("saut"))
@@ -88,11 +90,14 @@ def construire_anomalies(sauts, entrees_manuelles, antidates, inattendus, entree
             "titre": "%s : %s DT %s dans sa caisse le %s" % (x.get("caisse"), _dt(abs(saut)),
                                                              "apparus" if saut > 0 else "disparus", _jour(x.get("date"))),
             "explication": explication,
-            "options": [
+            "options": ([
+                {"code": "retirer", "effet": 0.0,
+                 "libelle": "Vu : une journée comptée dans le désordre (son tiroir se lit maintenant sur ses comptages, "
+                            "sans effet sur le montant)"}] if tiroir and du_principal else [
                 {"code": "retirer", "effet": _m(-saut),
                  "libelle": ("Cet argent n'existe pas : retirer %s DT de ce qu'il tient sur la carte" % _dt(saut)) if saut > 0
                  else ("Cet argent est bien là : ajouter %s DT à ce qu'il tient sur la carte" % _dt(-saut))},
-                {"code": "garder", "effet": 0.0, "libelle": "Ne rien changer au montant (vu, expliqué)"}]})
+                {"code": "garder", "effet": 0.0, "libelle": "Ne rien changer au montant (vu, expliqué)"}])})
     for m in entrees_manuelles or []:
         montant = _m(m.get("montant"))
         out.append({
@@ -105,6 +110,9 @@ def construire_anomalies(sauts, entrees_manuelles, antidates, inattendus, entree
                                                     (" (mode de l'écriture : %s)" % m["mode"]) if m.get("mode") else "",
                                                     m.get("saisie_par") or "?"),
             "options": [
+                {"code": "inversee", "effet": 0.0,
+                 "libelle": "C'était une dépense saisie à l'envers : l'écriture est à corriger en comptabilité (le tiroir "
+                            "suit le compte : %s DT de trop tant qu'elle ne l'est pas)" % _dt(2 * montant)} if tiroir else
                 {"code": "inversee", "effet": _m(-2 * montant),
                  "libelle": "C'était une dépense saisie à l'envers : retirer %s DT (deux fois le montant) sur la carte" % _dt(2 * montant)},
                 {"code": "entree", "effet": 0.0, "libelle": "C'est bien de l'argent entré en caisse (remboursement reçu…)"}]})
@@ -252,9 +260,10 @@ def regulariser(cle, code, motif=None):
 
 @frappe.whitelist(methods=["POST"])
 def inventorier(especes, note=None, coffre=0):
-    """L'INVENTAIRE : le collecteur principal compte les espèces qu'il a en main (sa caisse + ce qu'il a collecté et pas
-    versé) ; l'écart avec la carte devient une régularisation et ses anomalies antérieures sont absorbées. `coffre` : le
-    comptage de « Sabah Espèces » contre son solde comptable (pour mémoire, sans effet sur la carte)."""
+    """LA VÉRIFICATION DU TIROIR : la direction (ou le collecteur principal) compte les espèces de son tiroir — sa
+    caisse et l'argent collecté pas encore versé. Comptée par une autre personne que lui, c'est la preuve que l'argent
+    y est ; ses anomalies antérieures sont absorbées et son prochain comptage repart de ce montant. `coffre` : le
+    comptage de « Sabah Espèces » contre son solde comptable (pour mémoire)."""
     from customization_app import argent_liquide as A
     from customization_app import caisse_collecte as CC
 
@@ -269,6 +278,7 @@ def inventorier(especes, note=None, coffre=0):
         frappe.throw(_("Le montant compté ne peut pas être négatif."))
     maintenant = frappe.utils.now_datetime()
     s = A.situation()
+    tiroir = {}
     if frappe.utils.cint(coffre):
         theorique, caisse, poche, nature = _m(s["totaux"]["sabah"]), COFFRE, "Coffre", INVENTAIRE_COFFRE
         effet = 0.0                       # le solde du coffre est comptable : l'écart se corrige par une écriture
@@ -276,16 +286,19 @@ def inventorier(especes, note=None, coffre=0):
         principal = s.get("principal")
         if not principal:
             frappe.throw(_("Aucun collecteur principal n'est réglé dans Config Caisse."))
-        # Attendu = ce que dit le COMPTE « Espèces » (la référence). L'effet, lui, remet le calcul de contrôle (comptages
-        # + collectes) sur le montant compté : après l'inventaire, le contrôle dit le réel.
-        theorique, caisse, poche, nature = _m(principal["selon_compte"]), principal["caisse"], "Collecte", INVENTAIRE
-        effet = _m(compte - _m(principal["especes"]))
+        # TIROIR UNIQUE (27/11/2026) : l'attendu est celui du tiroir (dernier comptage + mouvements depuis, ou le compte
+        # « Espèces » moins les autres caisses au premier comptage). La référence du moment est notée : le prochain
+        # comptage du collecteur repart de CE comptage. Plus d'effet à poser : il n'y a plus de calcul de contrôle.
+        theorique, caisse, poche, nature = _m(principal["especes"]), principal["caisse"], "Collecte", INVENTAIRE
+        effet = 0.0
+        if principal.get("reference"):
+            tiroir = {"tiroir_unique": 1, "tiroir_reference": _m(principal["reference"]["reference"])}
     ecart = _m(compte - theorique)
     doc = frappe.get_doc({
         "doctype": DOCTYPE, "cle": "inventaire:%s:%s" % (caisse, maintenant.strftime("%Y%m%d%H%M%S")), "nature": nature,
         "caisse": caisse, "poche": poche, "date_anomalie": maintenant.date(), "montant": ecart, "effet": effet,
-        "compte": compte, "theorique": theorique,
-        "decision": "Compté %s DT pour %s DT attendus d'après le compte (écart %s%s DT)" % (
+        "compte": compte, "theorique": theorique, **tiroir,
+        "decision": "Compté %s DT pour %s DT attendus (écart %s%s DT)" % (
             _dt(compte), _dt(theorique), "+" if ecart > 0 else "", _dt(ecart)),
         "motif": _motif(note, obligatoire=abs(ecart) > 0.0005) or "Inventaire sans écart",
         "decide_par": frappe.session.user, "decide_le": maintenant})

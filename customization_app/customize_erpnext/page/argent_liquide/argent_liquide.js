@@ -123,6 +123,22 @@ class ArgentLiquide {
       @media (max-width: 768px) { .al-principal-lignes { grid-template-columns: 1fr; } }
       .al tr.vieille td { background: #fff7ed; } [data-theme="dark"] .al tr.vieille td { background: #2b1d0e; }
       .al-ok { color: var(--text-muted); font-size: 12.5px; margin-top: 6px; }
+      .al-verdict { border-radius: 14px; padding: 12px 16px; margin: 6px 0 4px; border: 2px solid #86efac; background: #f0fdf4; color: #14532d; }
+      .al-verdict.alerte { border-color: #fca5a5; background: #fef2f2; color: #7f1d1d; }
+      .al-verdict.a_faire { border-color: #fcd34d; background: #fffbeb; color: #78350f; }
+      [data-theme="dark"] .al-verdict { background: #12261a; border-color: #166534; color: #bbf7d0; }
+      [data-theme="dark"] .al-verdict.alerte { background: #3a1616; border-color: #7f1d1d; color: #fecaca; }
+      [data-theme="dark"] .al-verdict.a_faire { background: #33270d; border-color: #92400e; color: #fde68a; }
+      .al-verdict .t { font-weight: 800; font-size: 17px; }
+      .al-verdict ul { margin: 8px 0 0; padding-left: 0; list-style: none; }
+      .al-verdict li { margin: 5px 0; padding-left: 22px; position: relative; font-size: 13.5px; line-height: 1.45; }
+      .al-verdict li::before { position: absolute; left: 0; content: "📝"; font-size: 12px; top: 1px; }
+      .al-verdict li.alerte::before { content: "⚠️"; }
+      .al-preuves { margin-top: 12px; border-top: 1px dashed var(--border-color); padding-top: 10px; }
+      .al-preuves .t { font-weight: 700; font-size: 13.5px; margin-bottom: 4px; }
+      .al-preuves .p { display: flex; gap: 8px; align-items: flex-start; flex-wrap: wrap; font-size: 13px; line-height: 1.45; padding: 5px 0; }
+      .al-preuves .p .i { flex: 0 0 20px; } .al-preuves .p > div { flex: 1 1 260px; }
+      .al-detail { margin-top: 18px; } .al-detail > summary { cursor: pointer; font-weight: 700; font-size: 14px; padding: 8px 0; color: var(--text-muted); }
       /* Graphique jour par jour */
       .al-graph { position: relative; }
       .al-graph svg { display: block; width: 100%; }
@@ -216,14 +232,13 @@ class ArgentLiquide {
       if (l) { l.collecte = x.detient; l.total += x.detient; l.collecteur = x; }
       else lignes.push({ caisse: x.nom, nom: x.nom, fond: 0, a_remettre: 0, non_compte: 0, collecte: x.detient, total: x.detient, collecteur: x });
     });
-    // LA RÉFÉRENCE (25/11/2026) : le collecteur principal n'a qu'UNE poche — sa caisse et l'argent collecté. Sa ligne
-    // montre ce qu'il doit avoir d'après le compte « Espèces » ; le détail par comptages et collectes devient le contrôle.
+    // TIROIR UNIQUE (27/11/2026) : le collecteur principal n'a qu'UNE poche — sa caisse et l'argent collecté. Sa ligne
+    // montre ce que son tiroir doit contenir (son dernier comptage + ce qui a bougé depuis).
     const pr0 = s.principal;
-    if (pr0 && pr0.selon_compte !== undefined && pr0.selon_compte !== null) {
+    if (pr0) {
       let l = lignes.find((e) => e.caisse === pr0.caisse);
       if (!l) { l = { caisse: pr0.caisse, nom: pr0.nom, fond: 0, a_remettre: 0, non_compte: 0, collecte: 0, total: 0 }; lignes.push(l); }
-      l.controle = { fond: l.fond, a_remettre: l.a_remettre, non_compte: l.non_compte, collecte: l.collecte, total: pr0.especes };
-      Object.assign(l, { fond: 0, a_remettre: 0, non_compte: 0, collecte: pr0.selon_compte, total: pr0.selon_compte, unique: true });
+      Object.assign(l, { fond: 0, a_remettre: 0, non_compte: 0, collecte: pr0.especes, total: pr0.especes, unique: true });
     }
     lignes.sort((a, b) => b.total - a.total);
     const pleines = lignes.filter((l) => Math.abs(l.total) > 0.0005);
@@ -290,40 +305,57 @@ class ArgentLiquide {
       <div class="al-legende">${AL_POCHES.map((p) => `<span><span class="al-pastille" style="background:var(--p-${p.cle})"></span>${__(p.court)} <b>${dt(poches[p.cle], false)}</b> <span class="muet">${pct(poches[p.cle])}</span></span>`).join("")}</div>
       <div class="al-total">${__("Total de l’argent liquide")} : <b>${dt(total, false)}</b></div>`;
 
-    const alertes = (s.collecteurs || []).flatMap((x) => (x.alertes || []).map((a) => `<div class="al-alerte">⚠️ ${esc(x.nom)} : ${esc(a)}</div>`)).join("");
+    const alertes = (s.collecteurs || []).filter((x) => !(x.principal && s.verdict)).flatMap((x) => (x.alertes || []).map((a) => `<div class="al-alerte">⚠️ ${esc(x.nom)} : ${esc(a)}</div>`)).join("");
 
     // ── Ce que le collecteur principal doit avoir entre les mains (25/11/2026 : « Nejib est le collecteur principal,
     //    il doit avoir tout l'argent espèces, chèques et traites qui n'est pas versé ») ──
     const pr = s.principal, pf = s.portefeuille || { pieces: [], par_type: {} };
     const remis_par = (x) => (x.remis_par || []).map((m) => __("{0} collectés par {1}", [txt(m.montant), esc(m.nom)])).join(", ");
+    const heure = (quand) => (quand ? __("{0} à {1}", [jour(String(quand).slice(0, 10)), String(quand).slice(11, 16)]) : "");
+    const v = s.verdict;
+    const verdict = v ? `<div class="al-verdict ${v.etat}">
+        <div class="t">${v.etat === "ok" ? "✔" : v.etat === "alerte" ? "⚠️" : "📝"} ${esc(__(v.titre))}</div>
+        ${(v.points || []).length ? `<ul>${v.points.map((p) => `<li class="${p.niveau}"><span>${esc(p.texte)}</span>${p.cible
+          ? ` <button class="al-bouton-lien al-aller" data-cible="${p.cible}">${__("Voir")}</button>` : ""}</li>`).join("")}</ul>` : ""}
+      </div>` : "";
     const principal = pr ? (() => {
       const ch = pr.pieces["Chèque"] || { nb: 0, total: 0 }, tr = pr.pieces["Traite"] || { nb: 0, total: 0 };
-      const remis = remis_par(pr), areg_nb = (s.a_regulariser || []).length;
+      const dc = pr.dernier_comptage, vf = pr.verification, anc = pr.ancien_comptage;
+      const lui = dc && dc.par === pr.user;
+      const anciennes = (pf.anciennes || []).length;
+      const preuve = (icone, corps, bouton) => `<div class="p"><span class="i">${icone}</span><div>${corps}</div>${bouton || ""}</div>`;
       return `<div class="al-principal" id="al-principal">
-        <div class="tete"><div><div class="t">🧾 ${__("Ce que {0} doit avoir entre les mains le {1}", [esc(pr.nom), jour(s.date)])}</div>
-          <div class="muet">${__("C’est le collecteur principal : tout l’argent liquide qui n’est ni au coffre ni chez un autre employé doit être chez lui.")}</div></div>
+        <div class="tete"><div><div class="t">🧾 ${__("Ce que {0} doit avoir en main le {1}", [esc(pr.nom), jour(s.date)])}</div>
+          <div class="muet">${__("C’est le collecteur principal. Il n’a qu’un tiroir : sa caisse et l’argent collecté pas encore versé au coffre ou en banque.")}</div></div>
           <div class="v">${dt(pr.total, false)}</div></div>
         <div class="al-principal-lignes">
-          <div class="l"><span class="e">💵 ${__("Espèces")}</span><b>${dt(pr.selon_compte, false)}</b>
-            <div class="muet">${__("le compte « Espèces » ({0}) moins ce que tiennent les autres employés ({1})", [txt(pr.compte_especes), txt(pr.autres_caisses)])}</div></div>
+          <div class="l"><span class="e">💵 ${__("Espèces dans son tiroir")}</span><b>${dt(pr.especes, false)}</b>
+            <div class="muet">${esc(pr.explication || __("le compte « Espèces » ({0}) moins ce que tiennent les autres employés ({1})", [txt(pr.compte_especes), txt(pr.autres_caisses)]))}</div></div>
           <div class="l"><span class="e">📄 ${__("Chèques")}</span><b>${dt(ch.total, false)}</b><div class="muet">${__("{0} pièce(s) pas encore déposée(s)", [ch.nb])}</div></div>
           <div class="l"><span class="e">📄 ${__("Traites")}</span><b>${dt(tr.total, false)}</b><div class="muet">${__("{0} pièce(s) pas encore déposée(s)", [tr.nb])}</div></div>
         </div>
-        ${Math.abs(pr.ecart_controle || 0) < 0.5
-          ? `<div class="al-ok">✔ ${__("Contrôle : les comptages de caisse et les collectes donnent le même montant.")}</div>`
-          : `<div class="al-alerte" style="font-weight:400">⚠️ ${__("Contrôle : d’après les comptages de caisse et les collectes, il aurait {0}, soit {1} que le compte. Cette différence n’est pas de l’argent manquant : c’est ce qui reste dans « À régulariser » et dans le rapprochement, en bas. Seul un inventaire dit ce qu’il a vraiment.",
-              [txt(pr.especes), pr.ecart_controle > 0 ? __("{0} de plus", [txt(pr.ecart_controle)]) : __("{0} de moins", [txt(-pr.ecart_controle)])])}</div>`}
-        <div class="al-inv">${pr.inventaire
-          ? `🧮 ${__("Dernier inventaire : le {0}, {1} comptés pour {2} attendus d’après le compte (écart {3}) par {4}.", [jour(pr.inventaire.date), txt(pr.inventaire.compte), txt(pr.inventaire.theorique), signe_txt(pr.inventaire.ecart), esc(pr.inventaire.par)])}`
-          : `🧮 ${__("Aucun inventaire encore : ce chiffre vient de la comptabilité, pas d’un comptage de ce qu’il a réellement en main.")}`}
-          ${s.peut_inventorier ? `<button class="btn btn-xs btn-primary al-inventaire" data-coffre="0">${__("Faire l’inventaire des espèces")}</button>` : ""}</div>
-        <div class="al-inv">🔒 ${s.inventaire_coffre
-          ? __("Coffre « Sabah Espèces » : compté le {0}, {1} pour {2} au compte (écart {3}).", [jour(s.inventaire_coffre.date), txt(s.inventaire_coffre.compte), txt(s.inventaire_coffre.theorique), signe_txt(s.inventaire_coffre.ecart)])
-          : __("Coffre « Sabah Espèces » : {0} au compte, jamais compté.", [txt(t.sabah)])}
-          ${s.peut_inventorier ? `<button class="btn btn-xs btn-default al-inventaire" data-coffre="1">${__("Compter le coffre")}</button>` : ""}</div>
-        <div class="al-liens"><button class="btn btn-xs btn-default al-aller" data-cible="al-pieces">📄 ${__("Voir les chèques et traites")}</button>
-          <button class="btn btn-xs btn-default al-aller" data-cible="al-collecteurs">📥 ${__("Voir le calcul des espèces")}</button>
-          ${areg_nb ? `<button class="btn btn-xs btn-default al-aller" data-cible="al-regulariser">🧹 ${__("Voir ce qui reste à régulariser ({0})", [areg_nb])}</button>` : ""}</div>
+        <div class="al-preuves">
+          <div class="t">${__("Qu’est-ce qui prouve que cet argent est bien là ?")}</div>
+          ${preuve("🧮", dc
+            ? __("<b>Dernier comptage de son tiroir</b> : le {0}, {1} comptés pour {2} attendus (écart {3}), par {4}.", [heure(dc.quand), txt(dc.compte), txt(dc.attendu), signe_txt(dc.ecart), esc(dc.par_nom || "?")])
+              + (lui ? " " + __("Compté par lui-même : c’est sa déclaration, pas une preuve.") : "")
+            : __("<b>Son tiroir n’a pas encore été compté en entier.</b> Son prochain comptage sera comparé au compte « Espèces » et servira de point de départ.")
+              + (anc ? " " + __("Dernier comptage avec l’ancienne méthode : {0} le {1} ({2}).", [txt(anc.compte), heure(anc.quand), esc(anc.name)]) : ""))}
+          ${preuve("👁", vf
+            ? __("<b>Vérifié par une autre personne</b> : le {0} par {1}, {2} comptés pour {3} attendus (écart {4}).", [heure(vf.quand), esc(vf.par_nom || "?"), txt(vf.compte), txt(vf.attendu), signe_txt(vf.ecart)])
+            : __("<b>Vérifié par une autre personne : jamais.</b> Seul un comptage fait par quelqu’un d’autre que lui prouve que les espèces sont là."),
+            s.peut_inventorier ? `<button class="btn btn-xs btn-primary al-inventaire" data-coffre="0">${__("Vérifier son tiroir maintenant")}</button>` : "")}
+          ${preuve("🔒", s.inventaire_coffre
+            ? __("<b>Coffre « Sabah Espèces »</b> : compté le {0}, {1} pour {2} au compte (écart {3}).", [jour(s.inventaire_coffre.date), txt(s.inventaire_coffre.compte), txt(s.inventaire_coffre.theorique), signe_txt(s.inventaire_coffre.ecart)])
+            : __("<b>Coffre « Sabah Espèces »</b> : {0} au compte, jamais compté. Un versement au coffre est une écriture saisie par lui seul : personne ne confirme la réception.", [txt(t.sabah)]),
+            s.peut_inventorier ? `<button class="btn btn-xs btn-default al-inventaire" data-coffre="1">${__("Compter le coffre")}</button>` : "")}
+          ${preuve("📄", __("<b>Chèques et traites</b> : chaque pièce reste dans la liste tant que la banque ne l’a pas créditée (le robot bancaire la sort à ce moment-là). Aucun pointage physique des pièces n’est enregistré.")
+              + (anciennes ? " " + __("{0} pièce(s) attendent depuis plus de 30 jours.", [anciennes]) : ""),
+            `<button class="btn btn-xs btn-default al-aller" data-cible="al-pieces">${__("Voir les pièces")}</button>`)}
+          ${Math.abs(pr.ecart_compte || 0) > 0.5 ? preuve("📒", __("<b>Comparé au compte « Espèces »</b> : d’après le compte seul, il aurait {0}, soit {1}. Cette différence est la somme des écarts de comptage jamais passés en comptabilité.",
+              [txt(pr.selon_compte), pr.ecart_compte > 0 ? __("{0} de moins que ses comptages", [txt(pr.ecart_compte)]) : __("{0} de plus que ses comptages", [txt(-pr.ecart_compte)])]),
+            `<button class="btn btn-xs btn-default al-aller" data-cible="al-rapprochement">${__("Voir")}</button>`) : ""}
+        </div>
       </div>`;
     })() : "";
 
@@ -403,10 +435,7 @@ class ArgentLiquide {
     const max_total = Math.max(...pleines.map((l) => Math.abs(l.total)), 1);
     const phrase = (l) => {
       if (l.unique) {
-        const c = l.controle;
-        return `<b>${esc(l.nom)}</b> ${__("doit avoir")} <b>${txt(l.total)}</b> : ${__("c’est le collecteur principal, sa caisse et l’argent collecté sont une seule poche. C’est le solde du compte « Espèces » ({0}) moins ce que tiennent les autres employés ({1}).", [txt(pr0.compte_especes), txt(pr0.autres_caisses)])}
-          <div class="muet" style="margin-top:4px">${__("Contrôle par les comptages et les collectes : fond gardé {0} + pas encore compté {1} + collecté et pas versé {2} = {3}.", [txt(c.fond), txt(c.non_compte + c.a_remettre), txt(c.collecte), txt(c.total)])}
-          ${Math.abs(c.total - l.total) < 0.5 ? __("Les deux tombent juste.") : __("L’écart ({0}) est ce qui reste à régulariser.", [signe_txt(c.total - l.total)])}</div>`;
+        return `<b>${esc(l.nom)}</b> ${__("doit avoir")} <b>${txt(l.total)}</b> : ${__("c’est le collecteur principal, sa caisse et l’argent collecté sont un seul tiroir.")} ${esc(pr0.explication || "")}`;
       }
       const morceaux = [];
       if (l.fond) morceaux.push(__("{0} gardés comme fond à son comptage du {1}", [txt(l.fond), jour(l.derniere && l.derniere.date)]));
@@ -459,16 +488,26 @@ class ArgentLiquide {
       return `<div class="al-coll">
         <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap">
           <b style="font-size:15px">${esc(x.nom)}</b>
-          <span class="muet">${x.depuis ? __("le plus ancien argent collecté et pas versé date du {0} ({1} jour(s))", [jour(x.depuis), x.age_jours]) : __("tout est versé")}</span></div>
-        <div class="al-calcul">
+          <span class="muet">${x.depuis ? __("le plus ancien argent encore chez lui date du {0} ({1} jour(s))", [jour(x.depuis), x.age_jours]) : __("tout est versé")}</span></div>
+        ${x.tiroir && pr0 ? (pr0.mode === "chaine" && pr0.base && pr0.depuis ? `<div class="al-calcul">
+          ${bloc(__("Compté le {0}", [heure(pr0.base.quand)]), pr0.base.compte)}
+          <span class="op">+</span>${bloc(__("Collecté depuis"), pr0.depuis.collecte)}
+          <span class="op">−</span>${bloc(__("Versé au coffre ou en banque"), pr0.depuis.sorties)}
+          <span class="op">${pr0.depuis.autres < 0 ? "−" : "+"}</span>${bloc(__("Ses encaissements, dépenses, autres"), Math.abs(pr0.depuis.autres))}
+          <span class="op">=</span>${bloc(__("Doit être dans son tiroir"), x.detient, "res")}
+        </div>` : `<div class="al-calcul">
+          ${bloc(__("Compte « Espèces »"), pr0.compte_especes)}
+          <span class="op">−</span>${bloc(__("Chez les autres employés"), pr0.autres_caisses)}
+          <span class="op">=</span>${bloc(__("Doit être dans son tiroir"), x.detient, "res")}
+        </div>
+        <div class="muet">${__("Son tiroir n’a pas encore été compté en entier : le chiffre vient du compte. Dès son prochain comptage, il partira de ce qu’il a compté.")}</div>`) : `<div class="al-calcul">
           ${bloc(__("Reçu aux collectes"), x.recu)}
           ${x.passations ? `<span class="op">+</span>${bloc(__("Passations reçues"), x.passations)}` : ""}
           ${x.entrees_autres ? `<span class="op">+</span>${bloc(__("Revenu au compte Espèces"), x.entrees_autres)}` : ""}
           <span class="op">−</span>${bloc(__("Sorti (Sabah, banque, perso…)"), x.sorties_total)}
           ${x.regularise ? `<span class="op">${x.regularise > 0 ? "+" : "−"}</span>${bloc(__("Inventaire et régularisations"), Math.abs(x.regularise))}` : ""}
-          <span class="op">=</span>${bloc(x.principal && pr0 ? __("D’après les collectes (contrôle)") : __("Encore entre ses mains"), x.detient, "res")}
-        </div>
-        ${x.principal && pr0 ? `<div class="muet">${__("Avec sa propre caisse d’après ses comptages ({0}), le contrôle donne {1}. La référence est le compte « Espèces » : il doit avoir {2}.", [txt(pr0.caisse_propre), txt(pr0.especes), `<b>${txt(pr0.selon_compte)}</b>`])}</div>` : ""}
+          <span class="op">=</span>${bloc(__("Encore entre ses mains"), x.detient, "res")}
+        </div>`}
         ${remis_par(x) ? `<div class="muet">↪ ${__("Dans « reçu aux collectes » : {0}, remis ensuite à {1} (il est le collecteur principal).", [remis_par(x), esc(x.nom)])}</div>` : ""}
         ${(x.entrees_manuelles || []).filter((m) => cles_ouvertes.has("jv:" + m.name)).length ? `<div class="al-alerte">⚠️ ${__("{0} écriture(s) font ENTRER de l’argent dans Espèces sans venir du coffre ni de la banque : à décider dans « À régulariser ».", [x.entrees_manuelles.filter((m) => cles_ouvertes.has("jv:" + m.name)).length])}
           <button class="btn btn-xs btn-default al-aller" data-cible="al-regulariser">${__("Voir")}</button></div>` : ""}
@@ -489,16 +528,17 @@ class ArgentLiquide {
       </table></div>` : `<div class="muet">${__("Aucun versement en banque sur les 30 derniers jours.")}</div>`;
 
     this.$c.html(`<div class="al">
-      ${aide}${chemin}${principal}${alertes}${regulariser}${repartition}
+      ${verdict}${principal}${alertes}${regulariser}${pieces}
+      <details class="al-detail"${this.detail_ouvert ? " open" : ""}><summary>${__("Voir tout le détail : qui tient quoi, le chemin de l’argent, les 14 derniers jours, la comptabilité")}</summary>
+      ${aide}${chemin}${repartition}
       <h4 id="al-flux-titre">🔀 ${__("Le chemin de l’argent du {0} au {1}", [jour((s.flux || {}).depart), jour(s.date)])}</h4>
       <div class="al-sous">${__("Tout ce que les clients ont payé, par où c’est passé, où c’est maintenant. Lu dans la comptabilité, donc ça s’équilibre : ce qui était là + ce qui est entré − ce qui est sorti = ce qui reste. L’épaisseur d’un trait est son montant ; survolez-le pour le lire.")}</div>
       <div class="al-flux" id="al-flux"></div>
       <details style="margin-top:6px"><summary class="muet" style="cursor:pointer">${__("Voir les chiffres en tableau")}</summary><div class="al-defile" id="al-table-flux"></div></details>
       ${personnes}
       <h4 id="al-collecteurs">📥 ${__("Chez les collecteurs")}</h4>
-      <div class="al-sous">${__("La référence est le compte « Espèces ». Le calcul ci-dessous sert de contrôle : ce qu’il a reçu des employés, moins ce qu’il a déjà sorti.")}</div>
+      <div class="al-sous">${__("Le tiroir du collecteur principal : ce qu’il a compté la dernière fois, plus ce qui est entré, moins ce qui est sorti depuis.")}</div>
       ${collecteurs || `<div class="muet">${__("Rien de collecté depuis la date de départ.")}</div>`}
-      ${pieces}
       ${partenaires.length ? `<h4 id="al-partenaires">🤝 ${__("Parti chez le partenaire")}</h4>
         <div class="al-sous">${__("Le partenaire encaisse certains de nos clients sur son propre compte : sa caisse ne se compte pas et cet argent n’est pas dans nos tiroirs. Voici ce qui est parti de son côté depuis le {0}.", [jour(s.partenaires.depart)])}</div>
         ${partenaires.map((x) => `<div class="al-coll">
@@ -518,23 +558,34 @@ class ArgentLiquide {
       <details style="margin-top:6px"><summary class="muet" style="cursor:pointer">${__("Voir les chiffres en tableau")}</summary><div class="al-defile" id="al-table-jours"></div></details>
       <h4 id="al-banque">🏦 ${__("Versements en banque (30 derniers jours)")}</h4>${versements}
       ${this.html_rapprochement(dt, txt, jour, esc)}
-      <div class="al-note">${__("Méthode : toutes les caisses partagent un seul compte comptable « Espèces », qui ne dit pas qui tient les billets (son solde le {0} : {1}). Ce que tient chaque employé vient de ses comptages ; ce que doit avoir le collecteur principal est le reste : le solde du compte moins les autres caisses. Le calcul par les collectes et les écritures depuis la date de départ des caisses ({2}) sert de contrôle. Alerte au-delà de {3} ou après {4} jours sans versement (Config Caisse).",
+      <div class="al-note">${__("Méthode : toutes les caisses partagent un seul compte comptable « Espèces », qui ne dit pas qui tient les billets (son solde le {0} : {1}). Ce que tient chaque employé vient de ses comptages. Le collecteur principal n’a qu’un tiroir : ce qu’il doit avoir part de son dernier comptage, puis suit le compte « Espèces » moins les autres caisses (collectes, ses encaissements et dépenses, versements au coffre ou en banque). Départ des caisses : {2}. Alerte au-delà de {3} ou après {4} jours sans versement (Config Caisse).",
         [jour(s.date), txt(t.comptable_especes), jour(s.date_depart), txt(s.plafond), s.jours_max])}</div>
+      </details>
     </div>`);
 
     const $al = this.$c.find(".al");
     $al.find(".al-aide").on("toggle", function () {
       try { localStorage.setItem("al-aide-replie", this.open ? "0" : "1"); } catch (e) { /* stockage indisponible */ }
     });
+    const moi = this;
+    $al.find(".al-detail").on("toggle", function () {
+      moi.detail_ouvert = this.open;
+      if (this.open) { moi.dessiner_jours(); moi.dessiner_flux(); }
+    });
+    const montrer = (id) => {
+      const cible = document.getElementById(id);
+      if (!cible) return;
+      const replie = cible.closest("details.al-detail");
+      if (replie && !replie.open) { replie.open = true; moi.detail_ouvert = true; moi.dessiner_jours(); moi.dessiner_flux(); }
+      cible.scrollIntoView({ behavior: "smooth", block: "start" });
+    };
     $al.find(".al-aller").on("click", function (e) {
       e.preventDefault();
-      const cible = document.getElementById($(this).attr("data-cible"));
-      if (cible) cible.scrollIntoView({ behavior: "smooth", block: "start" });
+      montrer($(this).attr("data-cible"));
     });
     $al.find(".al-etape").on("click keydown", function (e) {
       if (e.type === "keydown" && e.key !== "Enter") return;
-      const cible = document.getElementById($(this).attr("data-cible"));
-      if (cible) cible.scrollIntoView({ behavior: "smooth", block: "start" });
+      montrer($(this).attr("data-cible"));
     });
     $al.find("tr.al-ligne").on("click", function () { $al.find(`tr.al-phrase[data-pour="${$(this).attr("data-i")}"]`).toggle(); });
     $al.find(".al-vides").on("click", () => { this.voir_vides = !this.voir_vides; this.rendre(); });
@@ -561,8 +612,7 @@ class ArgentLiquide {
           .then(() => { frappe.show_alert({ message: __("Décision annulée."), indicator: "orange" }); this.charger(); }));
     });
     this.brancher_bulles($al);
-    this.dessiner_jours();
-    this.dessiner_flux();
+    if (this.detail_ouvert) { this.dessiner_jours(); this.dessiner_flux(); }
   }
 
   // ── Décider d'une anomalie : la décision choisie, son effet, le motif (obligatoire) ──
@@ -596,7 +646,7 @@ class ArgentLiquide {
   inventaire(coffre) {
     const txt = (v) => (Number(v) || 0).toLocaleString("fr-FR", { minimumFractionDigits: 3, maximumFractionDigits: 3 }) + " DT";
     const d = new frappe.ui.Dialog({
-      title: coffre ? __("Compter le coffre « Sabah Espèces »") : __("Inventaire des espèces du collecteur"),
+      title: coffre ? __("Compter le coffre « Sabah Espèces »") : __("Vérifier le tiroir du collecteur"),
       fields: [
         { fieldtype: "HTML", fieldname: "aide" },
         { fieldtype: "Float", fieldname: "especes", label: __("Espèces comptées (DT)"), reqd: 1, precision: 3 },
@@ -609,17 +659,17 @@ class ArgentLiquide {
           .then((r) => {
             const m = r.message || {};
             d.hide();
-            frappe.msgprint({ title: __("Inventaire enregistré"), indicator: Math.abs(m.ecart || 0) < 0.0005 ? "green" : "orange",
+            frappe.msgprint({ title: coffre ? __("Comptage du coffre enregistré") : __("Vérification enregistrée"), indicator: Math.abs(m.ecart || 0) < 0.0005 ? "green" : "orange",
               message: __("Compté {0} pour {1} attendus : écart {2}.", [txt(m.compte), txt(m.theorique), (m.ecart > 0 ? "+ " : m.ecart < 0 ? "− " : "") + txt(Math.abs(m.ecart || 0))])
                 + (coffre ? " " + __("Le solde du coffre est comptable : un écart se corrige par une écriture.")
-                          : " " + __("Le contrôle repart de ce comptage et les anomalies passées du collecteur sont absorbées. L’écart avec le compte reste à passer en écart de caisse, si vous le décidez.")) });
+                          : " " + __("Son prochain comptage repartira de ce montant. Aucune écriture comptable n’est passée : un écart se règle par une écriture d’écart de caisse, si vous le décidez.")) });
             this.charger();
           });
       },
     });
     d.fields_dict.aide.$wrapper.html(`<p class="text-muted" style="font-size:12.5px">${coffre
       ? __("Comptez les billets du coffre. Le montant sera comparé au solde du compte « Sabah Espèces ».")
-      : __("Comptez TOUTES les espèces que le collecteur principal a en main : sa propre caisse et l’argent collecté pas encore versé. Le montant attendu d’après le compte « Espèces » s’affiche après l’enregistrement. Aucune écriture comptable n’est passée : un écart se règle ensuite par une écriture d’écart de caisse, à votre décision.")}</p>`);
+      : __("Comptez vous-même TOUTES les espèces de son tiroir : sa caisse et l’argent collecté pas encore versé. Faites-lui d’abord saisir un versement au coffre qui ne serait pas encore enregistré. Le montant attendu s’affiche après l’enregistrement, pas avant. Aucune écriture comptable n’est passée.")}</p>`);
     d.show();
   }
 
@@ -629,29 +679,10 @@ class ArgentLiquide {
     const r = this.s.rapprochement;
     if (!r) return "";
     const veille = frappe.datetime.add_days(r.depart, -1);
-    const t = r.termes || {};
-    const flux = (Number(t.encaisse) || 0) + (Number(t.depense) || 0) + (Number(t.non_compte) || 0);
     const signe = (v) => (v > 0.0005 ? "+ " + txt(v) : v < -0.0005 ? "− " + txt(-v) : txt(0));
-    const mal = r.mal_comptabilises || [];
-    const total_mal = mal.reduce((a, m) => a + (Number(m.montant) || 0), 0);
-    const ad = r.antidates_avant_depart || {};
     const lien_gl = (compte, libelle) => `<button class="btn btn-xs btn-default" data-grand-livre="${esc(compte)}" data-du="${r.depart}" data-au="${this.s.date}">📒 ${libelle}</button>`;
-    const causes = [
-      { lib: __("Encaissé et dépensé : les caisses ne comptent pas comme le compte"), v: flux, fort: Math.abs(flux) > 100,
-        indice: [__("encaissé selon les {0} clôtures {1} contre {2} entrés au compte par paiements ; dépensé {3} contre {4} sortis en dépenses ; plus le pas-encore-compté ({5}), déjà au compte mais pas encore dans une clôture.",
-                    [r.nb_clotures, txt(r.encaisse_clotures), txt(r.entre_paiements), txt(r.depense_clotures), txt((Number(r.sorti_paiements) || 0) + (Number(r.depenses_caisse) || 0)), txt(t.non_compte)]),
-                 ad.nb ? __("piste : {0} paiements en espèces saisis après le {1} mais datés d’avant ({2}) — comptés par les caisses, rangés avant la période par la comptabilité.", [ad.nb, jour(r.depart), txt(ad.total)]) : "",
-                 mal.length ? __("piste : {0} paiements saisis « Espèces » sur un compte qui n’est ni une caisse ni une banque ({1}) — voir « À régulariser ».", [mal.length, txt(total_mal)]) : ""] },
-      { lib: __("Écarts de comptage (compté − attendu)"), v: t.ecarts_comptage, indice: [__("ce que les employés ont compté en plus (ou en moins) du montant attendu.")] },
-      { lib: __("Écarts de remise (reçu − remis)"), v: t.ecarts_remise, indice: [__("différence entre ce que l’employé a remis et ce que le collecteur a reçu.")] },
-      { lib: __("Sauts dans la chaîne des clôtures"), v: t.sauts, fort: Math.abs(Number(t.sauts) || 0) > 0.0005,
-        indice: (r.sauts || []).map((x) => __("{0}, le {1} : la clôture {2} s’ouvre à {3} au lieu de {4} (fond de {5} du {6}) — un jour compté avant la veille.",
-          [esc(x.caisse), jour(x.date), `<a href="/app/cloture-caisse/${encodeURIComponent(x.cloture)}">${esc(x.cloture)}</a>`, txt(x.ouverture), txt(x.attendu),
-           x.precedente ? `<a href="/app/cloture-caisse/${encodeURIComponent(x.precedente)}">${esc(x.precedente)}</a>` : "—", jour(x.date_precedente)])) },
-      ...(Math.abs(Number(t.regularisations) || 0) > 0.0005 ? [{ lib: __("Inventaire et régularisations décidés"), v: t.regularisations,
-        indice: [__("ce que la direction a corrigé sur la carte (voir le journal dans « À régulariser »).")] }] : []),
-      { lib: __("Reste : pièces modifiées après le comptage"), v: r.reste, indice: [__("paiements ou dépenses saisis, datés ou corrigés après que la caisse du jour a été comptée.")] },
-    ];
+    const pr = this.s.principal;
+    const difference = (Number(r.reconstitue) || 0) - (Number(r.solde_jour) || 0);
     return `<h4 id="al-rapprochement">🧾 ${__("Rapprochement avec la comptabilité")}</h4>
       <div class="al-sous">${__("Le compte comptable « Espèces » regroupe toutes les caisses : il ne dit pas qui tient l’argent. Voici son solde, l’argent reconstitué par cette page sur la même période, et ce qui explique la différence.")}</div>
       <div class="al-rap">
@@ -664,21 +695,17 @@ class ArgentLiquide {
           <tr class="res"><td>= ${__("Solde au {0}", [jour(this.s.date)])}</td><td class="n">${txt(r.solde_jour)}</td></tr>
         </table>
         <div class="al-liens">${lien_gl("Espèces - A&S", __("Grand livre Espèces"))}${lien_gl("Sabah Espèces - A&S", __("Grand livre Sabah Espèces"))}</div></div>
-        <div class="bloc"><b>${__("Argent reconstitué par cette page")}</b><table>
-          <tr><td>${__("Chez les employés")}</td><td class="n">${txt(this.s.totaux.employes)}</td></tr>
-          <tr><td>${__("Chez les collecteurs (y compris un éventuel négatif)")}</td><td class="n">${txt(r.reconstitue - this.s.totaux.employes)}</td></tr>
-          <tr class="res"><td>${__("Total reconstitué depuis le {0}", [jour(r.depart)])}</td><td class="n">${txt(r.reconstitue)}</td></tr>
-          <tr><td>${__("Mouvements du compte sur la même période")}</td><td class="n">${signe(r.mouvements)}</td></tr>
-          <tr class="res"><td>${__("Écart à expliquer")}</td><td class="n">${signe(r.ecart)}</td></tr>
+        <div class="bloc"><b>${__("Qui tient cet argent")}</b><table>
+          <tr><td>${__("Chez les employés (leurs comptages)")}</td><td class="n">${txt(this.s.totaux.employes)}</td></tr>
+          <tr><td>${pr ? __("Dans le tiroir de {0} (son dernier comptage + les mouvements depuis)", [esc(pr.nom)]) : __("Chez les collecteurs")}</td><td class="n">${txt(r.reconstitue - this.s.totaux.employes)}</td></tr>
+          <tr class="res"><td>${__("Total d’après les comptages")}</td><td class="n">${txt(r.reconstitue)}</td></tr>
+          <tr><td>${__("Solde du compte « Espèces »")}</td><td class="n">${txt(r.solde_jour)}</td></tr>
+          <tr class="res"><td>${__("Différence")}</td><td class="n">${signe(difference)}</td></tr>
         </table>
-        <div class="muet" style="margin-top:6px">${__("Les caisses sont reparties de zéro le {0} : les {1} déjà sur le compte à cette date n’y entrent pas.", [jour(r.depart), txt(r.solde_avant)])}</div></div>
+        <div class="muet" style="margin-top:6px">${Math.abs(difference) < 0.5
+          ? __("Les comptages et le compte disent la même chose.")
+          : __("Cette différence est la somme des écarts de comptage (ceux du collecteur et ceux des employés) qui n’ont jamais été passés en comptabilité. Elle ne se corrige pas toute seule : c’est une écriture d’écart de caisse, à votre décision.")}</div></div>
       </div>
-      <div class="al-defile" style="margin-top:10px"><table class="al-causes">
-        <tr><th>${__("D’où vient l’écart")}</th><th class="n">${__("Montant")}</th></tr>
-        ${causes.map((c) => `<tr class="${c.fort ? "fort" : ""}"><td>${c.fort ? "⚠️ " : ""}<b>${c.lib}</b>${(c.indice || []).filter(Boolean).map((i) => `<div class="indice">${i}</div>`).join("")}</td>
-          <td class="n">${signe(Number(c.v) || 0)}</td></tr>`).join("")}
-        <tr class="pied"><td>${__("Total = écart à expliquer")}</td><td class="n">${signe(r.ecart)}</td></tr>
-      </table></div>
       ${(r.verses_banque || []).length ? `<details style="margin-top:6px"><summary class="muet" style="cursor:pointer">${__("Espèces versées directement sur un compte bancaire ({0}, {1}) — pas une erreur : cet argent est en banque, aucune caisse ne le tient", [r.verses_banque.length, txt(r.verses_banque.reduce((a, m) => a + (Number(m.montant) || 0), 0))])}</summary>
         <div class="al-defile"><table><tr><th>${__("Date")}</th><th>${__("Paiement")}</th><th>${__("Client")}</th><th>${__("Compte")}</th><th>${__("Référence")}</th><th class="n">${__("Montant")}</th></tr>
         ${r.verses_banque.map((m) => `<tr><td>${jour(m.date)}</td><td><a href="/app/payment-entry/${encodeURIComponent(m.name)}">${esc(m.name)}</a></td><td>${esc(m.client)}</td><td>${esc(m.compte)}</td><td>${esc(m.reference)}</td><td class="n">${txt(m.montant)}</td></tr>`).join("")}

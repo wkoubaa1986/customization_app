@@ -18,6 +18,8 @@
   "section_inventaire",
   "compte",
   "theorique",
+  "tiroir_unique",
+  "tiroir_reference",
   "section_decision",
   "decision",
   "motif",
@@ -116,6 +118,19 @@
    "read_only": 1
   },
   {
+   "fieldname": "tiroir_unique",
+   "fieldtype": "Check",
+   "label": "Comptage du tiroir entier",
+   "read_only": 1,
+   "default": "0"
+  },
+  {
+   "fieldname": "tiroir_reference",
+   "fieldtype": "Currency",
+   "label": "Référence du tiroir au comptage",
+   "read_only": 1
+  },
+  {
    "fieldname": "section_decision",
    "fieldtype": "Section Break",
    "label": "Décision"
@@ -151,7 +166,7 @@
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-11-25 21:00:00.000000",
+ "modified": "2026-11-27 16:30:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Regularisation Caisse",

@@ -37,21 +37,25 @@ class TestRegularisationsSite(unittest.TestCase):
         return next(e for e in s["employes"] if e["caisse"] == s["principal"]["caisse"])
 
     def test_la_carte_s_equilibre_et_les_versements_en_banque_ne_sont_pas_des_erreurs(self):
-        self.assertEqual(self.s["rapprochement"]["reste"], 0.0)
+        r, p = self.s["rapprochement"], self.s["principal"]
+        # Total des caisses − solde du compte = ce qui sépare les comptages du collecteur de ce que dit le compte.
+        self.assertEqual(r["difference"], p["ecart_compte"])
+        self.assertEqual(round(self.s["totaux"]["employes"] + p["especes"], 3), r["reconstitue"])
         self.assertTrue(all(st["reste"] == 0.0 for st in self.s["flux"]["stocks"]))
         self.assertFalse([a for a in self.s["a_regulariser"] if a["nature"] == "Compte inattendu"])
         self.assertTrue(all("TAWFIR" in v["compte"] or v["compte"] for v in self.s["rapprochement"]["verses_banque"]))
 
     def test_regulariser_le_saut_le_retire_de_la_carte(self):
-        avant, fond = self.s["principal"]["especes"], self._nejib(self.s)["fond"]
+        """Tiroir unique (27/11/2026) : le saut du collecteur principal se décide toujours, mais il ne change plus ce
+        que son tiroir doit contenir — ce montant vient de ses comptages et du compte « Espèces »."""
+        avant = self.s["principal"]["especes"]
         r = R.regulariser(CLE, "retirer", "Transfert du coffre du 19/10 : cet argent a payé les billets d'avion.")
-        self.assertEqual(r["faites"][0]["effet"], -5293.0)
+        self.assertEqual(r["faites"][0]["effet"], 0.0)
         s = A.situation()
-        self.assertEqual(round(s["principal"]["especes"] - avant, 3), -5293.0)
-        self.assertEqual(self._nejib(s)["fond"], fond)                        # son fond ne tombe pas en négatif
+        self.assertEqual(s["principal"]["especes"], avant)
+        self.assertEqual(self._nejib(s)["total"], 0.0)                        # une seule poche : pas de fond à part
         self.assertNotIn(CLE, {a["cle"] for a in s["a_regulariser"]})
         self.assertEqual(s["principal"]["sauts"], [])
-        self.assertEqual((s["rapprochement"]["termes"]["regularisations"], s["rapprochement"]["reste"]), (-5293.0, 0.0))
         self.assertEqual(s["regularisations"][0]["cle"], CLE)
         self.assertRaises(frappe.ValidationError, R.regulariser, CLE, "retirer", "une deuxième fois, refusée")
         # Annuler : l'anomalie revient.
@@ -73,27 +77,37 @@ class TestRegularisationsSite(unittest.TestCase):
         self.assertFalse(restantes & set(cles))
 
     def test_l_inventaire_remet_la_carte_au_reel_et_absorbe_le_passe(self):
-        attendu = self.s["principal"]["selon_compte"]          # la référence : ce que dit le compte « Espèces »
-        self.assertEqual(attendu, round(self.s["totaux"]["comptable_especes"] - self.s["principal"]["autres_caisses"], 3))
+        attendu = self.s["principal"]["especes"]              # ce que son tiroir doit contenir
+        if self.s["principal"]["mode"] == "compte":           # jamais compté en entier : c'est le compte qui parle
+            self.assertEqual(attendu, round(self.s["totaux"]["comptable_especes"] - self.s["principal"]["autres_caisses"], 3))
+        compte_seul = self.s["principal"]["selon_compte"]
         frappe.set_user(self.titulaire)                       # le collecteur compte lui-même
         r = R.inventorier("2500,500", "Compté avec Wassim le soir, billets et pièces.")
         self.assertEqual((r["compte"], r["theorique"], r["ecart"]), (2500.5, attendu, round(2500.5 - attendu, 3)))
         frappe.set_user("Administrator")
         s = A.situation()
-        self.assertEqual(s["principal"]["especes"], 2500.5)                   # le contrôle (comptages) dit le réel
-        self.assertEqual(s["principal"]["selon_compte"], attendu)             # le compte ne bouge pas : aucune écriture
-        self.assertEqual(s["principal"]["ecart_controle"], round(2500.5 - attendu, 3))   # l'écart de caisse à passer
-        self.assertEqual(s["principal"]["inventaire"]["compte"], 2500.5)
-        self.assertEqual(s["rapprochement"]["reste"], 0.0)
+        p = s["principal"]
+        self.assertEqual((p["especes"], p["mode"]), (2500.5, "chaine"))       # son tiroir repart de ce qu'il a compté
+        self.assertEqual(p["selon_compte"], compte_seul)                      # le compte ne bouge pas : aucune écriture
+        self.assertEqual(p["ecart_compte"], round(2500.5 - compte_seul, 3))   # l'écart de caisse à passer
+        self.assertEqual(p["inventaire"]["compte"], 2500.5)
+        self.assertEqual(p["dernier_comptage"]["compte"], 2500.5)
+        self.assertIsNone(p["verification"])                                  # compté par lui-même : pas une preuve
+        self.assertIn("Personne d'autre", " ".join(x["texte"] for x in s["verdict"]["points"]))
         # Ses anomalies passées (saut, écritures « Achat divers ») sont absorbées ; les antidatés restent à voir.
-        self.assertFalse([a for a in s["a_regulariser"] if a.get("caisse") == s["principal"]["caisse"]])
+        self.assertFalse([a for a in s["a_regulariser"] if a.get("caisse") == p["caisse"]])
         self.assertRaises(frappe.ValidationError, R.inventorier, "-5", "négatif")
+        # La direction vérifie : c'est la preuve, et le tiroir repart de SON comptage.
+        v = R.inventorier("2480", "Recompté par la direction : vingt dinars et demi de moins.")
+        self.assertEqual((v["theorique"], v["ecart"]), (2500.5, -20.5))
+        p = A.situation()["principal"]
+        self.assertEqual((p["especes"], p["verification"]["compte"], p["verification"]["par"]), (2480.0, 2480.0, "Administrator"))
         # Le coffre : pour mémoire, sans effet sur la carte.
         c = R.inventorier(str(self.s["totaux"]["sabah"] - 1000), "Coffre compté : il manque mille dinars.", coffre=1)
         self.assertEqual(c["ecart"], -1000.0)
         s2 = A.situation()
         self.assertEqual((s2["inventaire_coffre"]["ecart"], s2["totaux"]["sabah"], s2["principal"]["especes"]),
-                         (-1000.0, self.s["totaux"]["sabah"], 2500.5))
+                         (-1000.0, self.s["totaux"]["sabah"], 2480.0))
 
     def _transfert_du_coffre(self, montant):
         je = frappe.get_doc({"doctype": "Journal Entry", "posting_date": frappe.utils.nowdate(), "company": frappe.defaults.get_global_default("company"),
@@ -109,7 +123,7 @@ class TestRegularisationsSite(unittest.TestCase):
         frappe.db.sql("UPDATE `tabSingles` SET value = %s WHERE doctype = 'Config Caisse' AND field = 'apports_depuis'",
                       (frappe.utils.nowdate(),))
         caisse = self.s["principal"]["caisse"]
-        collecte, nejib = self.s["principal"]["collecte"], self._nejib(self.s)["total"]
+        tiroir = self.s["principal"]["especes"]
         avant = CL._mesures(caisse, frappe.utils.nowdate())
         frappe.set_user(self.titulaire)
         nom = self._transfert_du_coffre(500)
@@ -117,9 +131,8 @@ class TestRegularisationsSite(unittest.TestCase):
         m = CL._mesures(caisse, frappe.utils.nowdate())
         self.assertEqual((avant["apports_especes"], m["apports_especes"], [a["name"] for a in m["apports"]]), (0.0, 500.0, [nom]))
         s = A.situation()
-        self.assertEqual(s["principal"]["collecte"], collecte)                   # plus compté chez le collecteur
-        self.assertEqual(round(self._nejib(s)["total"] - nejib, 3), 500.0)       # dans sa caisse, pas encore compté
-        self.assertEqual(s["rapprochement"]["reste"], 0.0)
+        self.assertEqual(round(s["principal"]["especes"] - tiroir, 3), 500.0)    # dans son tiroir : une seule poche
+        self.assertEqual(self._nejib(s)["total"], 0.0)
         # Avant la mise en route (historique) : rien ne change, l'apport du 19/10 reste chez le collecteur.
         self.assertFalse([a for a in s["apports"] if a["date"] < frappe.utils.nowdate()])
 

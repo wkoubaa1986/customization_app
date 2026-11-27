@@ -343,7 +343,9 @@ def _collecteurs(jour, cfg, hors=(), effets=None):
         # Régularisations et inventaire (caisse_regularisations) : l'écart constaté corrige ce qu'il doit détenir.
         x["regularise"] = flt((effets or {}).get((x["caisse"], "Collecte")), 3)
         x["detient"] = flt(x["recu"] + x["passations"] + x["entrees_autres"] - sorties + x["regularise"], 3)
-        depuis, age = anciennete(sorted(x.pop("_entrees")), sorties, jour)
+        entrees = sorted(x.pop("_entrees"))
+        x["_entrees_tiroir"] = entrees if x.get("principal") else None      # retiré avant l'envoi (_poser_tiroir)
+        depuis, age = anciennete(entrees, sorties, jour)
         x["depuis"], x["age_jours"] = (str(depuis) if depuis else None), age
         x["alertes"] = alertes_collecteur(x["detient"], plafond, jours_max, depuis, age)
         x["remis_par"] = sorted(x.pop("_remis_par").values(), key=lambda m: -m["montant"])
@@ -412,12 +414,10 @@ def _jour_par_jour(jour):
 
 
 def _rapprochement(jour, cfg, employes, collecteurs, effets=None):
-    """Pourquoi l'argent reconstitué n'est pas le solde du compte Espèces. Décomposition EXACTE de l'écart :
-    reconstitué − mouvements du compte depuis le départ
-      = (encaissé selon les clôtures − entré au compte par paiements)
-      − (dépensé selon les clôtures − sorti du compte en dépenses)
-      + écarts de comptage + écarts de remise + sauts de chaîne + pas encore compté (+ reste, ≈ 0).
-    Les transferts (Sabah, banque, perso) sont les mêmes des deux côtés et s'annulent."""
+    """Le compte « Espèces » en face de ce que tiennent les caisses. Depuis le tiroir unique (27/11/2026), ce que doit
+    avoir le collecteur principal ne se reconstitue plus par les clôtures : la différence entre le total des caisses et
+    le solde du compte est la somme des écarts de comptage jamais passés en comptabilité (les siens et ceux des
+    employés) — plus de décomposition cause par cause."""
     from customization_app import caisse_collecte as CC
     from customization_app.caisse_cloture import CAISSE_GLOBALE
     depart = getdate(cfg.get("date_depart") or jour)
@@ -449,24 +449,10 @@ def _rapprochement(jour, cfg, employes, collecteurs, effets=None):
             clotures.append(c)
     encaisse = flt(sum(flt(c.encaissements_especes) for c in clotures), 3)
     depense = flt(sum(flt(c.depenses_especes) for c in clotures), 3)
-    ecarts_comptage = flt(sum(flt(c.ecart) for c in clotures), 3)
-    ecarts_remise = flt(sum(montant_recu(c) - flt(c.especes_remises) for c in clotures
-                            if c.docstatus == 1 and c.collecte_par), 3)
     sauts = sauts_de_chaine(clotures)
-    total_sauts = flt(sum(s["saut"] for s in sauts), 3)
-    # Un apport pas encore pris par une clôture est déjà au compte (par son écriture) : il n'explique aucun écart.
-    non_compte = flt(sum(flt(e["non_compte"]) - flt(e.get("apports_attente")) for e in employes), 3)
     reconstitue = flt(sum(flt(e["total"]) for e in employes) + sum(flt(x["detient"]) for x in collecteurs), 3)
     # Apports (coffre / banque → une caisse) pris par les clôtures : au compte par écriture, dans le fond par la clôture.
     apports_clotures = flt(sum(flt(c.get("apports_especes")) for c in clotures), 3)
-    regularisations = flt(sum((effets or {}).values()), 3)
-    termes = {
-        "encaisse": flt(encaisse - entre_paiements, 3),
-        "depense": flt(-(depense - sorti_paiements - dep_caisse), 3),
-        "ecarts_comptage": ecarts_comptage, "ecarts_remise": ecarts_remise, "sauts": total_sauts, "non_compte": non_compte,
-        # Ce que la direction a décidé de corriger sur la carte (saut retiré, inventaire…).
-        "regularisations": regularisations,
-    }
     ecart = flt(reconstitue - mouvements, 3)
     # Paiements « Espèces » posés ailleurs que sur le compte Espèces (hors partenaires). Sur un compte de BANQUE, ce
     # n'est pas une erreur (sa précision du 25/11/2026 : « c'est moi qui le choisis, ce sont des versements en espèces
@@ -501,8 +487,9 @@ def _rapprochement(jour, cfg, employes, collecteurs, effets=None):
         "entre_paiements": entre_paiements, "sorti_paiements": sorti_paiements, "depenses_caisse": dep_caisse,
         "transferts": flt(mouvements - (entre_paiements - sorti_paiements - dep_caisse), 3),
         "encaisse_clotures": encaisse, "depense_clotures": depense, "nb_clotures": len(clotures),
-        "reconstitue": reconstitue, "ecart": ecart, "termes": termes,
-        "reste": flt(ecart - sum(termes.values()), 3),
+        "reconstitue": reconstitue, "ecart": ecart,
+        # Total des caisses − solde du compte : les écarts de comptage jamais passés en comptabilité.
+        "difference": flt(reconstitue - au_jour, 3),
         "sauts": sauts, "mal_comptabilises": mal_comptabilises,
     }
 
@@ -697,34 +684,74 @@ def _flux(jour, cfg):
             "liens": [{"de": de, "vers": vers, "montant": m} for (de, vers), m in sorted(flux.items(), key=lambda x: -x[1])]}
 
 
-def _a_avoir_en_main(employes, collecteurs, portefeuille, sauts, cfg, solde_compte=None):
-    """Ce que le collecteur principal doit avoir entre les mains, à recompter d'un coup : l'argent de sa propre
-    caisse, l'argent collecté pas encore versé, ses chèques et traites. Le saut de chaîne de sa caisse est rappelé."""
+def _a_avoir_en_main(employes, collecteurs, portefeuille, sauts, cfg, solde_compte=None, tiroir=None):
+    """Ce que le collecteur principal doit avoir entre les mains : les espèces de son TIROIR (sa caisse et l'argent
+    collecté pas encore versé, une seule poche — caisse_tiroir, 27/11/2026), ses chèques et ses traites.
+    `tiroir` : caisse_tiroir.etat_tiroir(...) ; None avant la migration : le compte « Espèces » moins les autres
+    caisses (la référence du 25/11/2026)."""
     titulaire = cfg.get("responsable")
     x = next((c for c in collecteurs if c.get("principal")), None)
     if not titulaire or not x:
         return None
-    propre = next((e for e in employes if e["caisse"] == x["caisse"]), None)
-    caisse = flt(propre["total"], 3) if propre else 0.0
     pieces = [p for p in portefeuille["pieces"] if p["chez_principal"] and not p["depose_le"]]
     par_type = {}
     for p in pieces:
         r = par_type.setdefault(p["type"], {"nb": 0, "total": 0.0})
         r["nb"] += 1
         r["total"] = flt(r["total"] + p["montant"], 3)
-    especes = flt(caisse + flt(x["detient"]), 3)
-    # LA RÉFÉRENCE (sa remarque du 25/11/2026 : « normalement chez le collecteur, c'est ce qu'il y a en espèces ») :
-    # tout l'argent liquide hors coffre est chez un employé ou chez lui — il doit donc avoir le solde du compte
-    # « Espèces » moins ce que tiennent les autres. L'ancien calcul (comptages + collectes − versements) devient le
-    # CONTRÔLE : leur différence est ce qui reste à régulariser. Affichage seulement, aucune écriture.
     autres = flt(sum(flt(e["total"]) for e in employes if e["caisse"] != x["caisse"]), 3)
-    selon_compte = flt(flt(solde_compte) - autres, 3) if solde_compte is not None else especes
-    return {"nom": x["nom"], "caisse": x["caisse"], "caisse_propre": caisse, "collecte": flt(x["detient"], 3),
-            "remis_par": x.get("remis_par") or [], "especes": especes, "pieces": par_type,
-            "selon_compte": selon_compte, "compte_especes": flt(solde_compte, 3) if solde_compte is not None else None,
-            "autres_caisses": autres, "ecart_controle": flt(especes - selon_compte, 3),
-            "total": flt(selon_compte + sum(r["total"] for r in par_type.values()), 3),
-            "sauts": [s for s in sauts if s["caisse"] == x["caisse"]]}
+    selon_compte = flt(flt(solde_compte) - autres, 3) if solde_compte is not None else flt(x["detient"], 3)
+    if tiroir:
+        from customization_app import caisse_tiroir as CT
+        especes, selon_compte = flt(tiroir["attendu"], 3), flt(tiroir["selon_compte"], 3)
+        autres = flt(tiroir["reference"]["autres"] + tiroir["reference"]["delegues"], 3)
+        suite = {"mode": tiroir["mode"], "explication": CT.explication(tiroir), "base": tiroir.get("base"),
+                 "depuis": tiroir.get("depuis"), "reference": tiroir["reference"],
+                 "dernier_comptage": tiroir.get("dernier_comptage"), "verification": tiroir.get("verification")}
+    else:
+        especes = selon_compte
+        suite = {"mode": "compte", "explication": "", "base": None, "depuis": None, "reference": None,
+                 "dernier_comptage": None, "verification": None}
+    return {"nom": x["nom"], "caisse": x["caisse"], "user": titulaire, "remis_par": x.get("remis_par") or [],
+            "especes": especes, "pieces": par_type, "selon_compte": selon_compte,
+            "compte_especes": flt(solde_compte, 3) if solde_compte is not None else None, "autres_caisses": autres,
+            # Entre ce que disent ses comptages et ce que dit le compte : les écarts jamais passés en comptabilité.
+            "ecart_compte": flt(especes - selon_compte, 3),
+            "total": flt(especes + sum(r["total"] for r in par_type.values()), 3),
+            "ancien_comptage": _ancien_comptage(x["caisse"]) if not suite["dernier_comptage"] else None,
+            "sauts": [s for s in sauts if s["caisse"] == x["caisse"]], **suite}
+
+
+def _ancien_comptage(caisse):
+    """Le dernier comptage de la caisse du collecteur fait AVANT le tiroir unique : montré pour mémoire tant qu'aucun
+    comptage du tiroir n'existe (il ne sert pas de point de départ)."""
+    c = frappe.db.sql(
+        """SELECT name, date_cloture, IFNULL(compte_le, creation) AS quand, especes_comptees, valide_par
+           FROM `tabCloture Caisse` WHERE caisse = %s AND docstatus = 1 ORDER BY date_cloture DESC, creation DESC LIMIT 1""",
+        caisse, as_dict=True)
+    if not c:
+        return None
+    c = c[0]
+    return {"name": c.name, "quand": str(c.quand)[:19], "compte": flt(c.especes_comptees, 3),
+            "par_nom": frappe.utils.get_fullname(c.valide_par) if c.valide_par else ""}
+
+
+def _poser_tiroir(employes, collecteurs, tiroir, jour):
+    """Le collecteur principal n'a qu'UNE poche : sa ligne d'employé est vidée (fond, non compté) et tout ce qu'il
+    doit avoir est porté par sa ligne de collecteur. Sur place."""
+    for e in employes:
+        if e["caisse"] == tiroir["caisse"]:
+            e.update({"fond": 0.0, "a_remettre": 0.0, "non_compte": 0.0, "jours_non_comptes": 0, "total": 0.0,
+                      "apports_attente": 0.0, "tiroir": True})
+    from customization_app import caisse_tiroir as CT
+    for x in collecteurs:
+        if x.get("principal"):
+            x["detient"] = flt(tiroir["attendu"], 3)
+            x["tiroir"] = True
+            # L'argent du tiroir est celui des entrées les plus récentes : l'ancien calcul (reçu − sorti depuis le
+            # départ) donnait « collecté le 23/11, pas versé » le lendemain d'un versement de tout le tiroir au coffre.
+            depuis, age = CT.depuis_quand(x.get("_entrees_tiroir") or [], x["detient"], str(jour))
+            x["depuis"], x["age_jours"] = depuis, age
 
 
 @frappe.whitelist()
@@ -741,6 +768,14 @@ def situation(date=None):
     apports_liste = apports(depart, jour)
     employes = _employes(jour, cfg, apports_liste, effets)
     collecteurs, plafond, jours_max = _collecteurs(jour, cfg, {a["name"] for a in apports_liste}, effets)
+    # TIROIR UNIQUE (27/11/2026) : ce que le collecteur principal doit avoir vient de son dernier comptage et du
+    # compte « Espèces », plus de « sa caisse » d'un côté et de « l'argent collecté » de l'autre.
+    from customization_app import caisse_tiroir as CT
+    tiroir = CT.etat_tiroir(cfg, jour, employes, collecteurs)
+    if tiroir:
+        _poser_tiroir(employes, collecteurs, tiroir, jour)
+    for x in collecteurs:
+        x.pop("_entrees_tiroir", None)
     sabah = _solde(COMPTE_SABAH, jour)
     versements = [{"name": v.name, "date": str(v.posting_date), "montant": flt(v.montant, 3),
                    "depuis": (v.depuis or "").replace(" - A&S", ""), "banque": (v.banque or "").replace(" - A&S", ""),
@@ -751,21 +786,34 @@ def situation(date=None):
     rapprochement = _rapprochement(jour, cfg, employes, collecteurs, effets)
     portefeuille = _portefeuille(jour, cfg)
     principal = _a_avoir_en_main(employes, collecteurs, portefeuille, rapprochement["sauts"], cfg,
-                                 _solde(COMPTE_ESPECES, jour))
+                                 _solde(COMPTE_ESPECES, jour), tiroir)
     # LES ANOMALIES (25/11/2026 : « les erreurs identifiées, ne pas les montrer, les corriger ») : chacune a sa clé ;
     # régularisée par la direction ou absorbée par un inventaire du collecteur, elle quitte la carte pour le journal.
     anomalies = REG.construire_anomalies(
         rapprochement["sauts"], [m for x in collecteurs for m in x.get("entrees_manuelles") or []],
         rapprochement["antidates_avant_depart"]["liste"], rapprochement["mal_comptabilises"],
-        [m for x in collecteurs for m in x.get("entrees_detail") or []], principal["caisse"] if principal else None)
+        [m for x in collecteurs for m in x.get("entrees_detail") or []], principal["caisse"] if principal else None,
+        tiroir=bool(tiroir))
     a_regulariser, traitees = REG.trier(anomalies, regs, principal["caisse"] if principal else None)
+    inventaire_coffre = REG.dernier_inventaire(regs, REG.COFFRE, "Coffre")
+    verdict = None
     if principal:
-        # Le plafond se juge sur ce qu'il DOIT avoir d'après le compte, pas sur le calcul de contrôle.
+        # Le plafond se juge sur ce qu'il DOIT avoir dans son tiroir.
         for x in collecteurs:
             if x.get("principal"):
-                x["alertes"] = alertes_collecteur(principal["selon_compte"], plafond, jours_max, x.get("depuis"), x.get("age_jours") or 0)
+                x["alertes"] = alertes_collecteur(principal["especes"], plafond, jours_max, x.get("depuis"), x.get("age_jours") or 0)
+                principal["alertes"] = x["alertes"]
         principal["sauts"] = [x for x in principal["sauts"] if ("saut:" + x["cloture"]) in {a["cle"] for a in a_regulariser}]
         principal["inventaire"] = REG.dernier_inventaire(regs, principal["caisse"], "Collecte")
+        anciennes = [p for p in portefeuille["pieces"] if p["name"] in set(portefeuille["anciennes"])]
+        verdict = CT.verdict(
+            str(jour), principal["nom"], {"attendu": principal["especes"], "ecart_compte": principal["ecart_compte"]},
+            principal.get("dernier_comptage"), principal.get("verification"),
+            {"solde": sabah, "inventaire": inventaire_coffre},
+            {"anciennes": len(anciennes), "anciennes_total": flt(sum(p["montant"] for p in anciennes), 3),
+             "ecart_comptable": portefeuille.get("ecart_comptable")},
+            [e for e in employes if e["caisse"] != principal["caisse"]], len(a_regulariser),
+            principal.get("alertes") or ()) if tiroir else None
     return {
         "date": str(jour), "date_depart": cfg.get("date_depart"), "plafond": plafond, "jours_max": jours_max,
         "totaux": {"employes": chez_employes, "collecteurs": chez_collecteurs, "sabah": sabah,
@@ -780,7 +828,7 @@ def situation(date=None):
         "apports": apports_liste, "apports_depuis": str(apports_depuis() or ""),
         "a_regulariser": a_regulariser, "anomalies_traitees": traitees,
         "regularisations": REG.journal(regs),
-        "inventaire_coffre": REG.dernier_inventaire(regs, REG.COFFRE, "Coffre"),
+        "inventaire_coffre": inventaire_coffre, "verdict": verdict,
         "peut_regulariser": REG.peut_regulariser(), "peut_inventorier": REG.peut_inventorier(cfg),
         "flux": _flux(jour, cfg),
     }
