@@ -488,6 +488,83 @@ def get_mouvements_article(item_code, sens=SORTIES, entrepot=None, debut=None, f
     return {"lignes": enrichir_mouvements(rows), "limite": LIMITE_DETAIL, "sens": _sens(sens)}
 
 
+#: Lignes du grand livre lues pour la vue « par document » : au-delà, la période est à resserrer.
+LIMITE_PIECES = 3000
+#: Ce qui décrit la PIÈCE (et non la ligne) dans un mouvement enrichi.
+CHAMPS_PIECE = ("type", "libelle", "piece", "commande", "client", "par", "demande_par", "valide_par", "retour_de",
+                "fournisseur", "facture_fournisseur", "commande_achat", "verification", "taches", "remarque")
+
+
+def grouper_par_piece(mouvements: list[dict]) -> list[dict]:
+    """Les mouvements (une ligne du grand livre chacun, enrichis, du plus récent au plus ancien) regroupés par
+    PIÈCE : un BL, une facture d'achat, un transfert… avec ses articles en dessous. Pure.
+
+    Demande du 27/11/2026 : « dans Entrées / Sorties, voir par article comme maintenant ET par BL, achat ou
+    n'importe quel document, avec les articles en dessous ». Une pièce garde la date de son mouvement le plus
+    récent ; un article qui y figure deux fois (même entrepôt) est additionné ; les pièces restent dans l'ordre
+    d'arrivée (les plus récentes d'abord)."""
+    pieces, ordre = {}, []
+    for m in mouvements or ():
+        cle = (m.get("type"), m.get("piece"))
+        p = pieces.get(cle)
+        if p is None:
+            p = {c: m.get(c) for c in CHAMPS_PIECE}
+            p.update(date=m.get("date"), heure=m.get("heure"), de=m.get("de"), vers=m.get("vers"), qte=0.0,
+                     articles=[], _index={})
+            pieces[cle] = p
+            ordre.append(cle)
+        cle_ligne = (m.get("item_code"), m.get("entrepot"))
+        ligne = p["_index"].get(cle_ligne)
+        if ligne is None:
+            ligne = {"item_code": m.get("item_code"), "item_name": m.get("item_name"), "image": m.get("image"),
+                     "uom": m.get("uom"), "entrepot": m.get("entrepot"), "qte": 0.0}
+            p["_index"][cle_ligne] = ligne
+            p["articles"].append(ligne)
+        ligne["qte"] = round(ligne["qte"] + float(m.get("qte") or 0), 6)
+        p["qte"] = round(p["qte"] + float(m.get("qte") or 0), 6)
+        # Un transfert vu « tous entrepôts » peut mêler plusieurs origines : on ne garde la sienne que si elle est unique.
+        for cote in ("de", "vers"):
+            if p[cote] != m.get(cote):
+                p[cote] = None
+    out = []
+    for cle in ordre:
+        p = pieces[cle]
+        p.pop("_index")
+        p["nb_articles"] = len({a["item_code"] for a in p["articles"]})
+        out.append(p)
+    return out
+
+
+@frappe.whitelist()
+def get_mouvements_pieces(sens=SORTIES, entrepot=None, debut=None, fin=None, recherche=None):
+    """Entrées ou sorties de la période, PAR DOCUMENT (BL, facture, réception, transfert, rapprochement…), chacun
+    avec ses articles. Mêmes filtres et même recherche que `get_mouvements` (la vue par article)."""
+    _lecture()
+    entrepot = _entrepot_impose() or entrepot
+    sens = _sens(sens)
+    debut, fin = _periode(debut, fin)
+    valeurs = {"limite": LIMITE_PIECES}
+    conds = _conditions_mouvements(sens, entrepot, debut, fin, valeurs)
+    mots = _filtre_mouvements(recherche, valeurs)
+    if mots:
+        conds.append(mots)
+    rows = frappe.db.sql(f"""select sle.posting_date, sle.posting_time, sle.warehouse, sle.voucher_type, sle.voucher_no,
+                                    sle.voucher_detail_no, abs(sle.actual_qty) as qte,
+                                    sle.item_code, i.item_name, i.image, i.stock_uom as uom
+                             from `tabStock Ledger Entry` sle
+                             join tabItem i on i.name = sle.item_code
+                             where {" and ".join(conds)}
+                             order by sle.posting_date desc, sle.posting_time desc, sle.creation desc
+                             limit %(limite)s""", valeurs, as_dict=True)
+    mouvements = enrichir_mouvements(rows)
+    for m, r in zip(mouvements, rows):
+        m.update(item_code=r.item_code, item_name=r.item_name, image=r.image, uom=r.uom)
+    pieces = grouper_par_piece(mouvements)
+    return {"pieces": pieces, "debut": debut, "fin": fin, "sens": sens, "recherche": (recherche or "").strip() or None,
+            "mouvements": len(rows), "articles": len({r.item_code for r in rows}),
+            "qte": flt(sum(flt(r.qte) for r in rows), 6), "tronque": len(rows) >= LIMITE_PIECES, "limite": LIMITE_PIECES}
+
+
 @frappe.whitelist()
 def get_sorties(entrepot=None, debut=None, fin=None, recherche=None):
     """Compatibilité (écran d'avant le 08/10/2026 resté ouvert) : les sorties seules."""
@@ -782,12 +859,26 @@ def _nom_session() -> str:
     return (emp.employee_name if emp else None) or frappe.utils.get_fullname(frappe.session.user)
 
 
-def _proposition(cote: str, lignes: dict, accord: bool = False) -> dict:
+def _proposition(cote: str, lignes: dict, accord: bool = False, pour_employe: bool = False) -> dict:
     p = {"cote": cote, "par": frappe.session.user, "nom": _nom_session(), "le": str(now_datetime())[:16],
          "lignes": {code: flt(q, 6) for code, q in lignes.items()}}
     if accord:
         p["accord"] = 1
+    if pour_employe:
+        p["pour_employe"] = 1                 # un responsable magasin a répondu À LA PLACE de l'employé
     return p
+
+
+def peut_valider_pour_employe(tour: str | None, resp: bool, mien: bool, dernier_par: str | None, user: str) -> bool:
+    """Un responsable magasin peut-il répondre À LA PLACE de l'employé du véhicule ? Pure.
+
+    Demande du 27/11/2026 (« donne à moi et à Hedi, en tant que responsables magasin, la capacité de valider des
+    transferts et des comptages à la place des employés : Radhouan a quitté, on valide et on corrige son stock »).
+    Oui quand c'est au tour de l'employé, que je suis responsable magasin, que ce n'est pas mon propre véhicule —
+    et que la proposition en cours N'EST PAS LA MIENNE : la règle des deux personnes tient toujours, comme pour un
+    comptage accepté à la place de l'employé (décision du 29/10/2026). Hedi demande, Wassim valide à la place de
+    l'employé, ou l'inverse ; personne ne valide seul sa propre demande."""
+    return bool(tour == COTE_EMPLOYE and resp and not mien and dernier_par != user)
 
 
 def _histo(doc) -> list[dict]:
@@ -914,6 +1005,7 @@ def _changes(avant: dict, apres: dict) -> list[str]:
 
 def _resume_tours(histo: list[dict]) -> list[dict]:
     return [{"cote": h.get("cote"), "nom": h.get("nom"), "le": h.get("le"), "accord": bool(h.get("accord")),
+             "pour_employe": bool(h.get("pour_employe")),
              "changes": len(_changes(histo[i - 1]["lignes"], h["lignes"])) if i else None}
             for i, h in enumerate(histo)]
 
@@ -953,6 +1045,8 @@ def _detail_transfert(e, resp: bool, emp) -> dict:
             "remarque": (e.remarks or "").replace(f"{MARQUE} — transfert", "").strip(" —"),
             "par": frappe.utils.get_fullname(e.owner), "employe": e.get(CHAMP_VALIDEUR), "employe_nom": valideur,
             "tour": tour, "attente_de": _attente_de(valideur, tour), "a_moi": _a_moi(tour, e.get(CHAMP_VALIDEUR), resp, emp),
+            "pour_employe": peut_valider_pour_employe(tour, resp, bool(emp and emp.name == e.get(CHAMP_VALIDEUR)),
+                                                      histo[-1].get("par"), frappe.session.user),
             "tours": _resume_tours(histo),
             "age_h": round((now_datetime() - get_datetime(e.creation)).total_seconds() / 3600, 1),
             "lignes": [{"item_code": l.item_code, "item_name": l.item_name, "uom": l.uom, "image": images.get(l.item_code),
@@ -963,8 +1057,10 @@ def _detail_transfert(e, resp: bool, emp) -> dict:
 
 
 @frappe.whitelist(methods=["POST"])
-def valider_transfert(name, lignes=None):
+def valider_transfert(name, lignes=None, pour_employe=0):
     """Double validation, à mon tour, de mon côté (l'employé du véhicule, ou un responsable magasin autre que lui).
+    `pour_employe` : un responsable magasin répond À LA PLACE de l'employé du véhicule (parti, absent), sur une
+    proposition qui n'est pas la sienne (`peut_valider_pour_employe`) ; la trace le dit partout.
     `lignes` : [{item_code, qte}] = MES quantités (un article absent garde la quantité proposée).
     - Les mêmes que la proposition en cours = accord : le transfert est soumis avec ces quantités (0 = article
       retiré ; tout à 0 = demande abandonnée d'un commun accord, supprimée).
@@ -979,10 +1075,24 @@ def valider_transfert(name, lignes=None):
     if not cote:
         frappe.throw(_("Seuls {0} et un responsable magasin valident ce transfert.").format(employe.employee_name),
                      frappe.PermissionError)
+    histo = _histo(doc)
+    pour_employe = bool(cint(pour_employe)) and cote == COTE_MAGASIN          # son propre véhicule : il est l'employé
+    if pour_employe:
+        if tour != COTE_EMPLOYE:
+            frappe.throw(_("Ce n’est pas au tour de {0} : rien à valider à sa place.").format(employe.employee_name),
+                         title=_("Pas son tour"))
+        if not peut_valider_pour_employe(tour, True, False, histo[-1].get("par"), frappe.session.user):
+            frappe.throw(_("Ces quantités sont les vôtres : un AUTRE responsable magasin doit les valider à la place "
+                           "de {0}.").format(employe.employee_name), frappe.PermissionError)
+        cote = COTE_EMPLOYE
+    elif cote == COTE_MAGASIN and tour == COTE_MAGASIN and histo[-1].get("pour_employe") \
+            and histo[-1].get("par") == frappe.session.user:
+        # J'ai répondu à la place de l'employé en changeant une quantité : ce n'est pas à moi d'accepter ma réponse.
+        frappe.throw(_("Vous avez répondu à la place de {0} : un AUTRE responsable magasin doit accepter ces quantités.")
+                     .format(employe.employee_name), frappe.PermissionError)
     if cote != tour:
         frappe.throw(_("Vous avez donné vos quantités : c’est maintenant à {0} de valider {1}.")
                      .format(_attente_de(employe.employee_name, tour), name), title=_("Pas votre tour"))
-    histo = _histo(doc)
     courant = {c: flt(q, 6) for c, q in histo[-1]["lignes"].items()}
     miennes = dict(courant)
     for l in (frappe.parse_json(lignes) if isinstance(lignes, str) else (lignes or [])):
@@ -992,10 +1102,13 @@ def valider_transfert(name, lignes=None):
         miennes[code] = max(flt(l.get("qte"), 6), 0)
     noms = {it.item_code: it.item_name or it.item_code for it in doc.items}
     nom = _nom_session()
+    emp_user = frappe.db.get_value("Employee", employe.name, "user_id")
+    if pour_employe:
+        nom = _("{0}, à la place de {1}").format(nom, employe.employee_name)
 
     changes = _changes(courant, miennes)
     if changes:
-        histo.append(_proposition(cote, miennes))
+        histo.append(_proposition(cote, miennes, pour_employe=pour_employe))
         autre = _autre(cote)
         doc.db_set({CHAMP_TOUR: autre, CHAMP_HISTO: json.dumps(histo, ensure_ascii=False)})
         textes = [f"{noms.get(c, c)} : {courant[c]:g} → {miennes[c]:g}" for c in changes]
@@ -1011,8 +1124,10 @@ def valider_transfert(name, lignes=None):
     initial = histo[0]["lignes"]
     ecarts = [f"{noms.get(c, c)} : demandé {flt(initial[c], 6):g}, validé {miennes.get(c, 0):g}"
               for c in initial if flt(miennes.get(c, 0), 6) != flt(initial[c], 6)]
-    histo.append(_proposition(cote, miennes, accord=True))
+    histo.append(_proposition(cote, miennes, accord=True, pour_employe=pour_employe))
     autres = [u for u in _destinataires(employe.name, _autre(cote), histo) if u != frappe.session.user]
+    if pour_employe and emp_user and emp_user not in autres and emp_user != frappe.session.user:
+        autres.append(emp_user)                # l'employé sait qu'on a validé à sa place
     gardees = [it for it in doc.items if miennes.get(it.item_code, 0) > 0]
     if not gardees:
         for user in autres:
@@ -1082,6 +1197,9 @@ def transferts_recents(limite=15, entrepot=None):
                 tour = _tour(e)
                 attente = {"employe": e.get(CHAMP_VALIDEUR), "employe_nom": nom_emp, "tour": tour,
                            "attente_de": _attente_de(nom_emp, tour), "a_moi": _a_moi(tour, e.get(CHAMP_VALIDEUR), resp, emp),
+                           "pour_employe": peut_valider_pour_employe(
+                               tour, resp, bool(emp and emp.name == e.get(CHAMP_VALIDEUR)), histo[-1].get("par"),
+                               frappe.session.user),
                            "propositions": len(histo),
                            "age_h": round((now_datetime() - get_datetime(e.creation)).total_seconds() / 3600, 1)}
             elif e.get(CHAMP_VALIDE_LE):

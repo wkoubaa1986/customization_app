@@ -57,6 +57,9 @@
                font-weight: 600; font-size: 13.5px; color: #475569; cursor: pointer; user-select: none; }
     .se-sous.on[data-sens="entrees"] { background: #15803d; border-color: #15803d; color: #fff; }
     .se-sous.on[data-sens="sorties"] { background: #dc2626; border-color: #dc2626; color: #fff; }
+    .se-sous.on[data-mode] { background: #1e293b; border-color: #1e293b; color: #fff; }
+    .se-piece > .se-art { cursor: default; }
+    .se-piece .se-z-ligne:last-child { border-bottom: 0; }
     .se-badge { display: inline-block; font-size: 11px; border-radius: 6px; padding: 0 6px; background: #f1f5f9; color: #475569; margin-left: 4px; }
 
     .se-sens { display: grid; grid-template-columns: 1fr auto 1fr; gap: 6px; align-items: end; }
@@ -294,6 +297,10 @@
     <div class="se-sous-onglets" id="se-sens">
       <div class="se-sous" data-sens="entrees">📥 Entrées</div>
       <div class="se-sous on" data-sens="sorties">📤 Sorties</div>
+    </div>
+    <div class="se-sous-onglets" id="se-mode">
+      <div class="se-sous on" data-mode="article">📦 Par article</div>
+      <div class="se-sous" data-mode="piece">📄 Par document</div>
     </div>
     <div class="se-chips" id="se-periodes">
       <span class="se-chip" data-periode="jour">Aujourd’hui</span>

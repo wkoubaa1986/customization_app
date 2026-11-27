@@ -82,6 +82,7 @@ class StockEntrepots {
     this.selSolde = new Set();
     this.periode = "30j";
     this.sensMvt = "sorties";   // sous-onglet Entrées / Sorties (≠ sens(), le De → Vers du transfert)
+    this.modeMvt = "article";   // Entrées / Sorties : « article » (totaux par article) ou « piece » (par document)
     this.panier = [];
     this.jetons = {};
     this.init();
@@ -143,6 +144,11 @@ class StockEntrepots {
       r.find("#se-sens .se-sous").each((_, el) => $(el).toggleClass("on", $(el).attr("data-sens") === this.sensMvt));
       this.chargerSorties();
     });
+    r.find("#se-mode .se-sous").on("click", (e) => {
+      this.modeMvt = $(e.currentTarget).attr("data-mode");
+      r.find("#se-mode .se-sous").each((_, el) => $(el).toggleClass("on", $(el).attr("data-mode") === this.modeMvt));
+      this.chargerSorties();
+    });
     if (ctx.responsable) this.initTransfert();
     r.find("#se-s-attente").on("click", "[data-valider]", (e) => this.ouvrirValidation($(e.currentTarget).attr("data-valider")));
     r.find("#se-s-attente").on("click", "[data-verif]", (e) => { this.comptage = $(e.currentTarget).attr("data-verif"); this.montrer("verif"); });
@@ -186,6 +192,7 @@ class StockEntrepots {
         <li>Un bandeau en haut vous signale ce qui attend votre geste : un transfert à valider, une vérification à valider ou à accepter.</li></ul></div>
       <div class="et"><div class="t">↕️ Entrées / Sorties — ce qui est arrivé, ce qui est parti</div><ul>
         <li>Par période (7 j, 30 j, mois, dates), deux sous-onglets : 📥 Entrées et 📤 Sorties.</li>
+        <li>Deux façons de lire : <b>📦 Par article</b> (le total de chaque article, toucher pour voir ses mouvements) ou <b>📄 Par document</b> (chaque BL, facture, réception, transfert… avec ses articles en dessous).</li>
         <li>📤 Chaque sortie dit sa pièce (BL, facture, transfert), la commande et les tâches de cette commande.</li>
         <li>📥 Chaque entrée dit son origine : transfert depuis quel stock (demandé et validé par qui), achat (fournisseur, n° de facture), BL retour d’un client (commande et tâches), rapprochement d’une vérification.</li>
         <li>🔎 La recherche trouve l’article, mais aussi le fournisseur, le client, le n° de commande (achat ou client), de réception, de BL, de facture ou de transfert, et le stock d’origine d’un transfert. Plusieurs mots se combinent : « MH2C réduction ».</li></ul></div>
@@ -194,7 +201,8 @@ class StockEntrepots {
         <li>« 🎯 Compléter selon le stock cible » remplit le panier avec ce qui manque au véhicule (sa cible, sinon le modèle générique des réglages).</li>
         <li><b>Trajets</b> : seuls ceux du réglage sont permis (Hall ↔ Magasin seulement, jamais un véhicule vers le Hall…). Sous De / Vers, la page dit si le trajet est immédiat, en double validation ou interdit.</li>
         <li><b>Double validation</b> (Magasin ↔ véhicule, véhicule ↔ Articles défectueux) : le stock ne bouge pas tant que l’employé du véhicule et un responsable magasin ne sont pas d’accord. Chacun, à son tour, accepte les quantités de l’autre (→ transfert validé) ou les corrige (→ la demande repart chez l’autre), jusqu’à l’accord. Pour votre propre véhicule, c’est un autre responsable qui valide.</li>
-        <li>« Derniers transferts » : ⏳ au tour de qui (rouge après 24 h), « 🔍 Vérifier et valider » quand c’est à vous, « 🔍 Détail », « Annuler ».</li></ul></div>
+        <li>« Derniers transferts » : ⏳ au tour de qui (rouge après 24 h), « 🔍 Vérifier et valider » quand c’est à vous, « 🔍 Détail », « Annuler ».</li>
+        <li><b>Employé parti ou absent</b> : « 👤 Valider à la place de … » — un responsable magasin répond pour lui, sur une demande qui n’est pas la sienne (deux personnes, toujours). C’est écrit sur le transfert. Même règle pour un comptage : onglet Vérif., « Voir et accepter à sa place ».</li></ul></div>
       <div class="et"><div class="t">0️⃣ À zéro — remettre un véhicule à zéro</div><ul>
         <li>Les quantités négatives sont apportées depuis le Magasin, les positives y retournent : l’écart ne reste que sur le Magasin. Aperçu avant validation, articles cochés seulement.</li></ul></div>` : `<div class="et"><div class="t">🔁 Transfert — à valider</div><ul>
         <li>Quand un transfert touche votre véhicule (chargement depuis le Magasin, retour au Magasin, articles défectueux), un bandeau « Transfert à valider » apparaît (aussi dans Ma journée).</li>
@@ -271,23 +279,27 @@ class StockEntrepots {
 
   /** Double validation, à mon tour : mêmes quantités = accord (le stock bouge) ; une quantité changée = la
    *  demande repart chez l'autre côté, jusqu'à ce que l'un accepte les quantités de l'autre. */
-  async ouvrirValidation(name) {
+  async ouvrirValidation(name, pourEmploye) {
     const liste = (await frappe.call({ method: SE_API + "transferts_a_valider" })).message || [];
     this.attente = liste;
     const t = liste.find((x) => x.name === name);
     if (!t) { frappe.show_alert({ message: `Le transfert ${se_esc(name)} n’est plus en attente.`, indicator: "orange" }, 5); this.chargerAttente(); return; }
-    if (!t.a_moi) { frappe.msgprint({ title: `🔁 ${se_esc(t.name)}`, indicator: "orange", message: `⏳ Au tour de <b>${se_esc(t.attente_de)}</b> : vous avez déjà donné vos quantités, ou ce transfert ne vous concerne pas.` }); return; }
+    // À la place de l’employé (parti, absent) : un responsable magasin, sur une proposition qui n’est pas la sienne.
+    const pour = !!pourEmploye && !t.a_moi;
+    if (pour && !t.pour_employe) { frappe.msgprint({ title: `🔁 ${se_esc(t.name)}`, indicator: "orange", message: `Ces quantités sont les vôtres : un <b>autre</b> responsable magasin doit les valider à la place de <b>${se_esc(t.employe_nom)}</b>.` }); return; }
+    if (!t.a_moi && !pour) { frappe.msgprint({ title: `🔁 ${se_esc(t.name)}`, indicator: "orange", message: `⏳ Au tour de <b>${se_esc(t.attente_de)}</b> : vous avez déjà donné vos quantités, ou ce transfert ne vous concerne pas.` }); return; }
     const autre = t.tour === "Employé" ? "un responsable magasin" : t.employe_nom;
     const dernier = t.tours[t.tours.length - 1];
+    const aSaPlace = pour ? `<div class="se-attente" style="margin-bottom:8px">👤 Vous répondez <b>à la place de ${se_esc(t.employe_nom)}</b> : ce sera écrit sur le transfert, et il en sera prévenu.</div>` : "";
     const lire = () => t.lignes.map((l) => ({ item_code: l.item_code,
       qte: Math.max(0, +String(d.$wrapper.find(`input[data-recu="${CSS.escape(l.item_code)}"]`).val()).replace(",", ".") || 0) }));
     const nChanges = () => lire().filter((l, i) => l.qte !== t.lignes[i].qte).length;
-    const d = new frappe.ui.Dialog({ title: `🔁 ${t.name} — à valider`, size: "large", fields: [{ fieldtype: "HTML", fieldname: "corps" }],
+    const d = new frappe.ui.Dialog({ title: pour ? `🔁 ${t.name} — à valider à la place de ${t.employe_nom}` : `🔁 ${t.name} — à valider`, size: "large", fields: [{ fieldtype: "HTML", fieldname: "corps" }],
       primary_action_label: "✅ D’accord : valider", primary_action: () => {
         const lignes = lire(), n = nChanges();
         const go = async () => {
           d.hide();
-          const res = (await frappe.call({ method: SE_API + "valider_transfert", args: { name: t.name, lignes }, freeze: true, freeze_message: "Validation…" })).message;
+          const res = (await frappe.call({ method: SE_API + "valider_transfert", args: { name: t.name, lignes, pour_employe: pour ? 1 : 0 }, freeze: true, freeze_message: "Validation…" })).message;
           if (res.statut === "renvoye") frappe.show_alert({ message: `↩️ ${se_esc(t.name)} renvoyé à ${se_esc(res.attente_de)} avec vos quantités (${res.changes.length} changement(s)) — le stock ne bouge pas encore`, indicator: "orange" }, 8);
           else if (res.statut === "supprime") frappe.show_alert({ message: `Transfert ${se_esc(t.name)} abandonné : toutes les quantités à 0`, indicator: "orange" }, 6);
           else frappe.show_alert({ message: `✅ Accord : ${se_esc(t.name)} validé, ${res.lignes} article(s) transféré(s)${res.ecarts.length ? ` · ${res.ecarts.length} écart(s) avec la demande` : ""}`,
@@ -299,7 +311,7 @@ class StockEntrepots {
       } });
     const tours = t.tours.length > 1 ? `<ul class="se-tours">${t.tours.map((h) => `<li>${se_esc(h.nom)} (${h.cote === "Employé" ? "employé" : "magasin"}) · ${se_dt((h.le || "").slice(0, 10))} ${se_esc((h.le || "").slice(11, 16))} : ${h.changes == null ? "demande" : `${h.changes} quantité(s) changée(s)`}</li>`).join("")}</ul>` : "";
     d.fields_dict.corps.$wrapper.html(`<div class="se-note">${se_esc(this.libelle(t.de))} → <b>${se_esc(this.libelle(t.vers))}</b> · demandé par ${se_esc(t.par)} · ${se_esc(t.quand)}${t.remarque ? ` · ${se_esc(t.remarque)}` : ""}</div>
-      ${tours}
+      ${aSaPlace}${tours}
       <div class="se-note">Vérifiez chaque quantité. <b>D’accord</b> → validez : le stock bouge. <b>Pas d’accord</b> → corrigez (0 = article retiré) : la demande repart chez ${se_esc(autre)}, jusqu’à ce que vous soyez d’accord tous les deux.</div>
       <div style="margin-top:8px">${t.lignes.map((l) => {
         const change = l.qte_precedente != null && l.qte !== l.qte_precedente;
@@ -660,6 +672,8 @@ class StockEntrepots {
   /** Depuis le solde : les mouvements de cet article (sous-onglet en cours), détail déjà ouvert. */
   voirSorties(item) {
     this.$r.find("#se-o-recherche").val(item);
+    this.modeMvt = "article";
+    this.$r.find("#se-mode .se-sous").each((_, el) => $(el).toggleClass("on", $(el).attr("data-mode") === "article"));
     this.ouvrirApres = item;
     this.montrer("sorties");
   }
@@ -680,6 +694,16 @@ class StockEntrepots {
 
   async chargerSorties() {
     const r = this.$r, [debut, fin] = this.periodeDates();
+    if (this.modeMvt === "piece") {
+      const pieces = await this.appel("sorties", "get_mouvements_pieces", { sens: this.sensMvt, entrepot: this.entrepot || null, debut, fin,
+        recherche: r.find("#se-o-recherche").val() || null });
+      if (!pieces) return;
+      this.pieces = pieces;
+      this.sorties = { sens: pieces.sens, debut: pieces.debut, fin: pieces.fin, recherche: pieces.recherche, articles: [] };
+      this.nSorties = SE_PAGE;
+      this.peindrePieces();
+      return;
+    }
     const res = await this.appel("sorties", "get_mouvements", { sens: this.sensMvt, entrepot: this.entrepot || null, debut, fin,
       recherche: r.find("#se-o-recherche").val() || null });
     if (!res) return;
@@ -713,6 +737,33 @@ class StockEntrepots {
     r.find("#se-o-liste .se-sortie > .se-art").on("click", (e) => this.basculerSortie($(e.currentTarget).closest(".se-sortie").attr("data-item")));
   }
 
+  /** Entrées / Sorties PAR DOCUMENT : un BL, une facture d’achat, un transfert… et ses articles en dessous. */
+  peindrePieces() {
+    const r = this.$r, res = this.pieces, entree = res.sens === "entrees";
+    const mot = entree ? "entrée(s)" : "sortie(s)", signe = entree ? "+" : "−", classe = entree ? "pos" : "neg";
+    r.find("#se-o-info").html(`${res.pieces.length} document(s) · ${res.articles} article(s) · ${res.mouvements} ${mot} · ${se_q(res.qte)} unité(s)`
+      + ` · du ${se_dt(res.debut)} au ${se_dt(res.fin)} · ${this.entrepot ? se_esc(this.libelle(this.entrepot)) : "tous les entrepôts"}`
+      + (res.tronque ? ` · <b>les ${res.limite} mouvements les plus récents seulement : resserrez la période</b>` : ""));
+    const cartes = res.pieces.slice(0, this.nSorties).map((p) => {
+      const autre = entree ? (p.de ? ` ← depuis <b>${se_esc(this.libelle(p.de))}</b>` : "") : (p.vers ? ` → <b>${se_esc(this.libelle(p.vers))}</b>` : "");
+      const articles = p.articles.map((a) => `<div class="se-z-ligne">${se_img(a.image)}
+          <div style="flex:1;min-width:0"><div class="se-nom">${se_esc(a.item_name || a.item_code)}</div>
+            <div class="se-code">${se_esc(a.item_code)}${this.entrepot ? "" : ` <span class="se-badge">${se_esc(this.libelle(a.entrepot))}</span>`}</div></div>
+          <div class="mvt ${classe}">${signe}${se_q(a.qte)}<small> ${se_esc(a.uom || "")}</small></div></div>`).join("");
+      return `<div class="se-sortie se-piece">
+        <div class="se-art">
+          <div class="txt"><div class="se-nom">${se_lien(p.type, p.piece, `${p.libelle} ${p.piece}`)}${autre}</div>
+            <div class="se-code"><b>${se_dt(p.date)}</b> ${se_esc(p.heure || "")} · ${p.nb_articles} article(s)</div></div>
+          <div class="se-qte ${classe}">${signe}${se_q(p.qte)}<small>unité(s)</small></div>
+        </div>
+        <div class="se-lignes">${this.infosPiece(p).length ? `<div class="se-mvt">${this.infosPiece(p).join("")}</div>` : ""}${articles}</div>
+      </div>`;
+    }).join("");
+    r.find("#se-o-liste").html((cartes || `<div class="se-vide">Aucune ${entree ? "entrée" : "sortie"} sur cette période.</div>`)
+      + (res.pieces.length > this.nSorties ? `<button type="button" class="btn btn-default se-plus">Afficher plus (${res.pieces.length - this.nSorties})</button>` : ""));
+    r.find("#se-o-liste .se-plus").on("click", () => { this.nSorties += SE_PAGE; this.peindrePieces(); });
+  }
+
   async basculerSortie(item) {
     const $c = this.$r.find(`#se-o-liste .se-sortie[data-item="${CSS.escape(item)}"]`);
     if (!$c.length) return;
@@ -739,6 +790,13 @@ class StockEntrepots {
     // Une entrée dit d’où elle vient, une sortie où elle va.
     const autre = entree ? (l.de ? ` ← depuis <b>${se_esc(this.libelle(l.de))}</b>` : "") : (l.vers ? ` → <b>${se_esc(this.libelle(l.vers))}</b>` : "");
     p.push(`<div>${se_lien(l.type, l.piece, `${l.libelle} ${l.piece}`)}${autre}</div>`);
+    return `<div class="se-mvt">${p.concat(this.infosPiece(l)).join("")}</div>`;
+  }
+
+  /** Ce qui explique une pièce (fournisseur, commande, client, tâches, auteurs…) : sous un mouvement de la vue par
+   *  article comme en tête d’une pièce de la vue par document. */
+  infosPiece(l) {
+    const p = [];
     if (l.retour_de) p.push(`<div class="l3">↩️ retour de ${se_lien(l.type, l.retour_de)}</div>`);
     if (l.fournisseur) p.push(`<div>🏭 ${se_esc(l.fournisseur)}${l.facture_fournisseur ? ` <span class="l3">· facture n° ${se_esc(l.facture_fournisseur)}</span>` : ""}</div>`);
     if (l.commande_achat) p.push(`<div class="l3">📋 commande d’achat ${se_lien("Purchase Order", l.commande_achat)}</div>`);
@@ -753,7 +811,7 @@ class StockEntrepots {
       + ` <span class="l3">${se_esc(t.name)}</span></div>`));
     if (l.commande && !(l.taches || []).length) p.push(`<div class="l3">Aucune tâche liée à cette commande</div>`);
     if (l.remarque && !l.commande) p.push(`<div class="l3">${se_esc(l.remarque)}</div>`);
-    return `<div class="se-mvt">${p.join("")}</div>`;
+    return p;
   }
 
   // ── Transfert (responsable magasin) ──────────────────────────────────────
@@ -807,6 +865,7 @@ class StockEntrepots {
       if (t) this.ouvrirDetail(t);
     });
     r.find("#se-t-historique").on("click", "[data-valider]", (e) => this.ouvrirValidation($(e.currentTarget).attr("data-valider")));
+    r.find("#se-t-historique").on("click", "[data-valider-pour]", (e) => this.ouvrirValidation($(e.currentTarget).attr("data-valider-pour"), true));
     this.trouves = [];
     this.peindrePanier();
     this.majBoutonReassort();
@@ -936,6 +995,7 @@ class StockEntrepots {
         ${t.remarque ? `<div class="se-note">${se_esc(t.remarque)}</div>` : ""}
         <div class="actions"><button type="button" class="btn btn-xs btn-default" data-detail="${se_esc(t.name)}">🔍 Détail</button>
           ${t.attente && t.attente.a_moi ? `<button type="button" class="btn btn-xs btn-primary" data-valider="${se_esc(t.name)}">🔍 Vérifier et valider</button>` : ""}
+          ${t.attente && !t.attente.a_moi && t.attente.pour_employe ? `<button type="button" class="btn btn-xs btn-primary" data-valider-pour="${se_esc(t.name)}">👤 Valider à la place de ${se_esc(t.attente.employe_nom)}</button>` : ""}
           ${t.docstatus === 1 ? `<button type="button" class="btn btn-xs btn-default" data-annuler="${se_esc(t.name)}">Annuler ce transfert</button>` : ""}
           ${t.attente ? `<button type="button" class="btn btn-xs btn-default" data-annuler="${se_esc(t.name)}">Annuler la demande</button>` : ""}</div>
       </div>`).join("") || `<div class="se-vide">Aucun transfert.</div>`);
