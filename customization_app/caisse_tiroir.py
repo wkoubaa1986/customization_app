@@ -358,6 +358,16 @@ def causes_difference(ecarts_detail, sans_caisse, reste) -> list:
     out = []
     for e in ecarts_detail or []:
         ecart = _m(e.get("ecart"))
+        if abs(ecart) <= 0.0005:
+            # Figé à l'époque, corrigé depuis : la ligne reste pour mémoire, sans effet.
+            out.append({
+                "nature": "Écart corrigé depuis", "effet": 0.0, "document_type": "Cloture Caisse", "document": e.get("name"),
+                "titre": "Caisse de %s du %s" % (e.get("caisse"), _jour(e.get("date"))),
+                "explication": "Au comptage, cette caisse avait %s DT d'écart. Depuis, %s DT de dépenses ont été retirés de "
+                               "cette caisse (dépense corrigée : autre caisse payeuse, autre mode ou autre montant) : "
+                               "l'écart n'existe plus." % (_dt(e.get("ecart_fige")), _dt(e.get("retire"))),
+                "a_faire": "Rien."})
+            continue
         plus = ecart > 0
         explication = "%s a compté %s DT alors que sa caisse en attendait %s : %s DT de %s. Cet argent %s, " \
                       "mais le compte « Espèces » ne le sait pas." % (
@@ -398,6 +408,23 @@ def causes_difference(ecarts_detail, sans_caisse, reste) -> list:
                     "explication": "Une pièce modifiée, annulée ou datée autrement après le comptage de son jour.",
                     "a_faire": "À chercher dans le grand livre du compte « Espèces » depuis le jour de départ."})
     return out
+
+
+def ecart_actuel(ecart_fige, depenses_retirees) -> float:
+    """L'écart d'une caisse validée, relu aujourd'hui. PURE. La caisse attendait « encaissé − dépensé » ; si une
+    dépense de `depenses_retirees` DT a été retirée de cette caisse après son comptage, elle aurait attendu autant de
+    plus, et l'écart baisse d'autant (négatif : une dépense y a été ajoutée après coup)."""
+    return _m(_m(ecart_fige) - _m(depenses_retirees))
+
+
+def _depenses_actuelles(caisse, date, defaut) -> float:
+    """Les dépenses en espèces que cette caisse porte AUJOURD'HUI pour sa journée `date` (même source que le comptage).
+    En cas d'échec, `defaut` : l'écart reste celui qui est figé."""
+    try:
+        from customization_app import caisse_cloture as CL
+        return _m(CL._mesures(caisse, date)["depenses_especes"])
+    except Exception:
+        return _m(defaut)
 
 
 def reglage_caisses():
@@ -479,12 +506,19 @@ def selon_caisses(cfg=None, jour=None, non_compte=0.0):
                                                             WHERE p.name = c.passation AND p.docstatus = 1))""",
             (hors, depuis, jour), as_dict=True):
         collecte += A.montant_recu(c)
-        ecarts += flt(c.ecart)
         nb += 1
-        if abs(flt(c.ecart)) > 0.0005:
-            ecarts_detail.append({"name": c.name, "caisse": c.caisse, "date": str(c.date_cloture), "ecart": _m(c.ecart),
-                                  "attendu": _m(c.solde_theorique), "compte": _m(c.especes_comptees),
-                                  "depenses": _m(c.depenses_especes), "note": " ".join((c.note or "").split())})
+        if abs(flt(c.ecart)) <= 0.0005:
+            continue
+        # CORRIGÉ DEPUIS ? Une caisse validée est figée, mais une dépense peut être corrigée après coup (« Corriger » :
+        # autre caisse payeuse, autre mode, autre montant). L'écart se relit donc avec les dépenses que cette caisse
+        # porte AUJOURD'HUI pour ce jour-là : si la dépense est partie, l'écart n'existe plus.
+        retire = _m(flt(c.depenses_especes) - _depenses_actuelles(c.caisse, c.date_cloture, flt(c.depenses_especes)))
+        actuel = ecart_actuel(c.ecart, retire)
+        ecarts += actuel
+        ecarts_detail.append({"name": c.name, "caisse": c.caisse, "date": str(c.date_cloture), "ecart": actuel,
+                              "ecart_fige": _m(c.ecart), "retire": retire, "attendu": _m(flt(c.solde_theorique) + retire),
+                              "compte": _m(c.especes_comptees), "depenses": _m(flt(c.depenses_especes) - retire),
+                              "note": " ".join((c.note or "").split())})
     siennes = frappe.db.sql(
         """SELECT SUM(encaissements_especes + IFNULL(apports_especes, 0)), SUM(depenses_especes), COUNT(*)
            FROM `tabCloture Caisse` WHERE docstatus = 1 AND caisse = %s AND date_cloture BETWEEN %s AND %s""",

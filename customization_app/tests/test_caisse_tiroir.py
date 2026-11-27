@@ -222,6 +222,18 @@ class TestCausesDeLaDifference(unittest.TestCase):
         self.assertIn("avec quel argent la dépense a été payée", sadok["a_faire"])
         self.assertEqual(jamel["a_faire"], "Rien : un arrondi.")
 
+    def test_un_ecart_corrige_depuis(self):
+        """La dépense TRANSAF de 135,820 DT, saisie sur la caisse de Sadok, est corrigée vers la caisse qui a payé :
+        sa caisse validée reste figée, mais son écart relu aujourd'hui est nul."""
+        self.assertEqual(CT.ecart_actuel(135.82, 135.82), 0.0)
+        self.assertEqual(CT.ecart_actuel(135.82, 0), 135.82)
+        self.assertEqual(CT.ecart_actuel(0.0, -20.0), 20.0)            # une dépense ajoutée après coup
+        corrige = dict(self.ECARTS[0], ecart=0.0, ecart_fige=135.82, retire=135.82)
+        causes = CT.causes_difference([corrige, self.ECARTS[1]], self.SANS, 0.0)
+        self.assertEqual((causes[0]["nature"], causes[0]["effet"], causes[0]["a_faire"]), ("Écart corrigé depuis", 0.0, "Rien."))
+        self.assertIn("135,820 DT de dépenses ont été retirés", causes[0]["explication"])
+        self.assertEqual(round(sum(c["effet"] for c in causes), 3), -49.99)
+
     def test_un_manque_et_un_reste(self):
         causes = CT.causes_difference([{"name": "CLO-9", "caisse": "Salma", "date": "2026-11-27", "ecart": -10.0,
                                         "attendu": 300.0, "compte": 290.0, "depenses": 0, "note": ""}], [], 3.5)
