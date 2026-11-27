@@ -441,6 +441,18 @@ def _depenses_actuelles(caisse, date, defaut):
         return _m(defaut), []
 
 
+def _caisse_attendue(paiement, jour):
+    """La caisse d'employé où le rapport de caisse range ce paiement ce jour-là (elle ne l'a pas encore compté), ou
+    None : aucune caisse d'employé ne le porte (saisi par un compte sans caisse)."""
+    try:
+        from customization_app import caisse_collecte as CC
+        from customization_app import caisse_paiements as CP
+        places = [c for c, _j in CP._ou_compte(paiement, str(jour), {}) if c not in CC.CAISSES_TECHNIQUES]
+        return places[0] if places else None
+    except Exception:
+        return None
+
+
 PAIEMENT_RATTACHE = "Paiement rattaché"
 
 
@@ -579,9 +591,18 @@ def selon_caisses(cfg=None, jour=None, non_compte=0.0):
                             AND posting_date < %s AND IFNULL(custom_cloture_caisse, '') = '' AND amended_from IS NULL
                           ORDER BY posting_date LIMIT 20""",
                        (A.COMPTE_ESPECES, depuis, jour), as_dict=True) if r.name not in rattaches]
+    # Un paiement que le rapport range dans la caisse d'un employé qui n'a pas encore compté ce jour-là n'est PAS une
+    # différence : il est déjà dans « ce que tiennent les autres caisses » (pas encore compté). Ne restent ici que
+    # ceux qu'aucune caisse d'employé ne porte.
+    for m in sans_caisse:
+        m["attendu_chez"] = _caisse_attendue(m["name"], m["date"])
+    en_attente = [m for m in sans_caisse if m["attendu_chez"]]
+    sans_caisse = [m for m in sans_caisse if not m["attendu_chez"]]
     out = {"depuis": str(depuis), "base": base, "collecte": _m(collecte), "nb_caisses": nb + int(siennes[2] or 0),
            "encaissements": _m(siennes[0]), "depenses": _m(siennes[1]), "ecritures": _m(ecritures),
            "non_compte": _m(non_compte), "ecarts_employes": _m(ecarts), "sans_caisse": sans_caisse,
+           # Pour mémoire : attendus dans une caisse d'employé pas encore comptée (rien à expliquer).
+           "en_attente_de_comptage": en_attente,
            "rattaches": _m(sum(rattaches.values())), "nb_rattaches": len(rattaches),
            "ecarts_detail": sorted(ecarts_detail, key=lambda e: -abs(e["ecart"]))}
     out["total"] = total_caisses(base, out["collecte"], out["encaissements"], out["depenses"], out["ecritures"],

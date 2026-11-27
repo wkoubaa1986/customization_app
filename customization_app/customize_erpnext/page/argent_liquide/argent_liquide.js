@@ -423,6 +423,9 @@ class ArgentLiquide {
         </table></div>
         <div class="muet" style="margin-top:6px">${__("Lecture de l’effet : « + » = les caisses comptent plus que le compte, « − » = le compte a plus que les caisses.")}</div>`
         : `<div class="al-propre" style="margin-top:8px">✔ ${__("Aucune différence : les caisses validées et le compte disent la même chose.")}</div>`}
+        ${(k.en_attente_de_comptage || []).length ? `<div class="muet" style="margin-top:6px">⏳ ${__("En attente d’un comptage (pas une différence) :")} ${k.en_attente_de_comptage.map((m) =>
+          __("{0} de {1} du {2}, attendus dans la caisse de {3}", [txt(m.montant), esc(m.client), jour(m.date), `<b>${esc(m.attendu_chez)}</b>`])
+          + ` (<a href="/app/payment-entry/${encodeURIComponent(m.name)}">${esc(m.name)}</a>)`).join(" ; ")}.</div>` : ""}
       </div>`;
     })() : "";
 

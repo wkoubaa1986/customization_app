@@ -851,7 +851,7 @@ class RapportCaisseJournaliere {
       return `<tr${exclu ? ' style="opacity:.5"' : ""}>
         <td style="white-space:nowrap">${p.date ? frappe.datetime.str_to_user(p.date) : "—"}
           ${p.antidate ? `<br><span style="color:#c0392b;font-size:11px">⚠ saisi le ${frappe.datetime.str_to_user(p.creation_date)}</span>` : ""}</td>
-        <td>${esc(p.saisi_par || "")}</td>
+        <td>${esc(p.saisi_par || "")}${p.tache_technicien ? `<div style="font-size:10.5px;color:#8a4b1f">${__("validé par le système : rangé chez le technicien de la tâche {0}", [esc(p.tache_technicien)])}</div>` : ""}</td>
         <td>${esc(p.customer_name || "")}</td>
         <td><span class="rcj-badge" style="background:${mode_style.bg};color:${mode_style.fg}">${esc(p.mode)}</span></td>
         <td>${esc(p.compte || "")}</td>

@@ -393,6 +393,62 @@ def _build_order(so_name, task, so_meta, d1=None, d2=None):
 CAISSE_ACCOUNTS_LIKE = ("Espèces%", "Chèques - %", "Traite Bancaire%")
 
 
+#: Un paiement est « né de la validation » s'il a été créé à moins de ce délai de la validation de sa commande.
+DELAI_VALIDATION_S = 120
+
+
+def caisse_du_paiement(auteur, technicien) -> str:
+    """Dans quelle caisse compte un paiement encaissé hors des commandes du jour. Fonction pure.
+    `auteur` : le nom de celui qui a saisi le paiement ; `technicien` : {caisse, tache} quand le paiement est né de la
+    validation, par un compte SANS caisse, d'une commande liée à une tâche — None sinon.
+    Règle générale : l'argent est chez celui qui a saisi le paiement (une dette réglée au magasin, une avance prise à
+    la commande pour une intervention à venir). Exception (27/11/2026) : la commande validée par le système — le
+    bouton « ✅ Valider » de la fenêtre de clôture d'une tâche valide sous « Administrator », qui n'est la caisse de
+    personne. L'argent a été encaissé chez le client par le technicien de la tâche : il va dans SA caisse."""
+    return (technicien or {}).get("caisse") or auteur
+
+
+def ne_de_la_validation(cree_le, valide_le, delai=DELAI_VALIDATION_S) -> bool:
+    """Le paiement a-t-il été créé au moment où sa commande a été validée ? Fonction pure (deux datetimes)."""
+    if not cree_le or not valide_le:
+        return False
+    return abs((cree_le - valide_le).total_seconds()) < delai
+
+
+def _techniciens_des_paiements_systeme(pes, owner_names, refs_by_pe) -> dict:
+    """{paiement: {caisse, tache}} pour les paiements créés par un compte sans caisse, au moment de la validation d'une
+    commande liée à une tâche. Ne regarde que ceux-là : presque toujours aucun (un seul cas du 05/10 au 27/11/2026)."""
+    from customization_app import caisse_collecte as CC
+
+    out = {}
+    for p in pes:
+        auteur = owner_names.get(p.owner) or p.owner
+        if auteur not in CC.CAISSES_TECHNIQUES and p.owner not in CC.CAISSES_TECHNIQUES:
+            continue
+        commande = next((r["name"] for r in refs_by_pe.get(p.name, []) if r["doctype"] == "Sales Order"), None)
+        if not commande:
+            continue
+        valide_le = frappe.db.sql(
+            """SELECT MIN(creation) FROM `tabVersion` WHERE ref_doctype = 'Sales Order' AND docname = %s
+               AND data LIKE %s""", (commande, '%"docstatus",0,1%'))[0][0]
+        cree_le = frappe.db.get_value("Payment Entry", p.name, "creation")
+        if not ne_de_la_validation(cree_le, valide_le):
+            continue
+        # La tâche de la commande : la dernière commencée au plus tard le jour du paiement, sinon la première.
+        taches = frappe.db.sql(
+            """SELECT t.name, e.employee_name, DATE(t.starts_on) AS jour FROM `tabTache de travail` t
+               JOIN `tabEmployee` e ON e.name = t.custom_choix_du_staff
+               WHERE t.commande_client = %s AND t.docstatus < 2 AND IFNULL(t.status, '') != 'Cancelled'
+               ORDER BY t.starts_on""", commande, as_dict=True)
+        if not taches:
+            continue
+        passees = [t for t in taches if t.jour and str(t.jour) <= str(p.posting_date)]
+        t = (passees or taches)[-1 if passees else 0]
+        if t.employee_name and t.employee_name not in CC.CAISSES_TECHNIQUES:
+            out[p.name] = {"caisse": t.employee_name, "tache": t.name}
+    return out
+
+
 def _paiements_anciennes_commandes(d1, d2, exclude_names):
     """Payment Entries validés encaissés sur un compte de caisse pendant la
     période (date comptable OU date de création — attrape les saisies
@@ -470,6 +526,9 @@ def _paiements_anciennes_commandes(d1, d2, exclude_names):
     owners = {p.owner for p in pes}
     owner_names = {u.name: u.full_name for u in frappe.get_all(
         "User", filters={"name": ("in", list(owners))}, fields=["name", "full_name"])}
+    # VALIDÉ PAR LE SYSTÈME (27/11/2026) : le paiement né de la validation d'une commande sous un compte sans caisse
+    # (« ✅ Valider » de la fenêtre de clôture d'une tâche) va dans la caisse du technicien de la tâche.
+    techniciens = _techniciens_des_paiements_systeme(pes, owner_names, refs_by_pe)
 
     paiements, par_mode = [], {}
     for p in pes:
@@ -485,7 +544,10 @@ def _paiements_anciennes_commandes(d1, d2, exclude_names):
             "creation_date": str(p.creation_date or ""),
             "antidate": bool(p.posting_date and p.creation_date
                              and str(p.posting_date) != str(p.creation_date)),
-            "saisi_par": owner_names.get(p.owner) or p.owner,
+            "saisi_par": caisse_du_paiement(owner_names.get(p.owner) or p.owner, techniciens.get(p.name)),
+            # Qui l'a réellement créé, et la tâche qui le range chez son technicien (None : rangé chez l'auteur).
+            "saisi_par_reel": owner_names.get(p.owner) or p.owner,
+            "tache_technicien": (techniciens.get(p.name) or {}).get("tache"),
             "customer": p.party,
             "customer_name": p.party_name or p.party,
             "mode": p.mode_of_payment or "",
