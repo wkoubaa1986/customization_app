@@ -869,16 +869,30 @@ def _proposition(cote: str, lignes: dict, accord: bool = False, pour_employe: bo
     return p
 
 
-def peut_valider_pour_employe(tour: str | None, resp: bool, mien: bool, dernier_par: str | None, user: str) -> bool:
+def valide_seul(user: str | None = None) -> bool:
+    """Peut répondre à la place d'un employé MÊME sur sa propre demande ou son propre comptage : le RESPONSABLE
+    PRINCIPAL du magasin (réglage « Config Stock Entrepot », responsable des vérifications) et les administrateurs.
+
+    Sa précision du 27/11/2026 : « pourquoi Hedi ne peut pas valider à la place de Radhouan aussi ? c'est le
+    responsable principal magasin ». La règle des deux personnes reste pour les AUTRES responsables magasin."""
+    user = user or frappe.session.user
+    if "System Manager" in frappe.get_roles(user):
+        return True
+    principal = frappe.db.get_single_value(CONFIG, "responsable_verification")
+    return bool(principal and frappe.db.get_value("Employee", principal, "user_id") == user)
+
+
+def peut_valider_pour_employe(tour: str | None, resp: bool, mien: bool, dernier_par: str | None, user: str,
+                              seul: bool = False) -> bool:
     """Un responsable magasin peut-il répondre À LA PLACE de l'employé du véhicule ? Pure.
 
     Demande du 27/11/2026 (« donne à moi et à Hedi, en tant que responsables magasin, la capacité de valider des
     transferts et des comptages à la place des employés : Radhouan a quitté, on valide et on corrige son stock »).
     Oui quand c'est au tour de l'employé, que je suis responsable magasin, que ce n'est pas mon propre véhicule —
     et que la proposition en cours N'EST PAS LA MIENNE : la règle des deux personnes tient toujours, comme pour un
-    comptage accepté à la place de l'employé (décision du 29/10/2026). Hedi demande, Wassim valide à la place de
-    l'employé, ou l'inverse ; personne ne valide seul sa propre demande."""
-    return bool(tour == COTE_EMPLOYE and resp and not mien and dernier_par != user)
+    comptage accepté à la place de l'employé (décision du 29/10/2026) — SAUF `seul` : le responsable principal du
+    magasin et les administrateurs valident aussi leur propre demande (`valide_seul`)."""
+    return bool(tour == COTE_EMPLOYE and resp and not mien and (seul or dernier_par != user))
 
 
 def _histo(doc) -> list[dict]:
@@ -1046,7 +1060,7 @@ def _detail_transfert(e, resp: bool, emp) -> dict:
             "par": frappe.utils.get_fullname(e.owner), "employe": e.get(CHAMP_VALIDEUR), "employe_nom": valideur,
             "tour": tour, "attente_de": _attente_de(valideur, tour), "a_moi": _a_moi(tour, e.get(CHAMP_VALIDEUR), resp, emp),
             "pour_employe": peut_valider_pour_employe(tour, resp, bool(emp and emp.name == e.get(CHAMP_VALIDEUR)),
-                                                      histo[-1].get("par"), frappe.session.user),
+                                                      histo[-1].get("par"), frappe.session.user, valide_seul()),
             "tours": _resume_tours(histo),
             "age_h": round((now_datetime() - get_datetime(e.creation)).total_seconds() / 3600, 1),
             "lignes": [{"item_code": l.item_code, "item_name": l.item_name, "uom": l.uom, "image": images.get(l.item_code),
@@ -1081,12 +1095,12 @@ def valider_transfert(name, lignes=None, pour_employe=0):
         if tour != COTE_EMPLOYE:
             frappe.throw(_("Ce n’est pas au tour de {0} : rien à valider à sa place.").format(employe.employee_name),
                          title=_("Pas son tour"))
-        if not peut_valider_pour_employe(tour, True, False, histo[-1].get("par"), frappe.session.user):
+        if not peut_valider_pour_employe(tour, True, False, histo[-1].get("par"), frappe.session.user, valide_seul()):
             frappe.throw(_("Ces quantités sont les vôtres : un AUTRE responsable magasin doit les valider à la place "
                            "de {0}.").format(employe.employee_name), frappe.PermissionError)
         cote = COTE_EMPLOYE
     elif cote == COTE_MAGASIN and tour == COTE_MAGASIN and histo[-1].get("pour_employe") \
-            and histo[-1].get("par") == frappe.session.user:
+            and histo[-1].get("par") == frappe.session.user and not valide_seul():
         # J'ai répondu à la place de l'employé en changeant une quantité : ce n'est pas à moi d'accepter ma réponse.
         frappe.throw(_("Vous avez répondu à la place de {0} : un AUTRE responsable magasin doit accepter ces quantités.")
                      .format(employe.employee_name), frappe.PermissionError)
@@ -1184,6 +1198,7 @@ def transferts_recents(limite=15, entrepot=None):
             l["image"] = images.get(l["item_code"])
     employes = _par_nom("Employee", [e.get(CHAMP_VALIDEUR) for e in entetes if e.get(CHAMP_VALIDEUR)], ["employee_name"]) if avec else {}
     resp, emp = est_responsable(), _mon_employe()
+    seul = valide_seul() if resp else False
     out = []
     for e in entetes:
         nom_emp = (employes.get(e.get(CHAMP_VALIDEUR)) or {}).get("employee_name") or e.get(CHAMP_VALIDEUR)
@@ -1199,7 +1214,7 @@ def transferts_recents(limite=15, entrepot=None):
                            "attente_de": _attente_de(nom_emp, tour), "a_moi": _a_moi(tour, e.get(CHAMP_VALIDEUR), resp, emp),
                            "pour_employe": peut_valider_pour_employe(
                                tour, resp, bool(emp and emp.name == e.get(CHAMP_VALIDEUR)), histo[-1].get("par"),
-                               frappe.session.user),
+                               frappe.session.user, seul),
                            "propositions": len(histo),
                            "age_h": round((now_datetime() - get_datetime(e.creation)).total_seconds() / 3600, 1)}
             elif e.get(CHAMP_VALIDE_LE):
@@ -2097,7 +2112,9 @@ def _actions_possibles(v) -> list[str]:
         # Un responsable magasin AUTRE que celui qui a validé peut accepter à la place de l'employé (absent,
         # parti — cas réel : Akram sorti, fiche du 14/10 bloquée deux semaines) : la règle des deux personnes
         # tient toujours, et la fiche garde la trace (`pour_employe`). Demande du 29/10/2026.
-        if est_responsable() and frappe.session.user != v.valide_responsable_par:
+        # Le responsable principal du magasin et les administrateurs acceptent aussi le comptage qu'ils ont eux-mêmes
+        # validé (`valide_seul`, 27/11/2026).
+        if est_responsable() and (frappe.session.user != v.valide_responsable_par or valide_seul()):
             return ["confirmer_pour_employe", "annuler"]
         return ["annuler"] if est_responsable() else []
     return []
@@ -2382,7 +2399,7 @@ def confirmer_verification(name, comptes=None, pour_employe=0):
     pour_employe = cint(pour_employe)
     if pour_employe:
         _responsable()
-        if frappe.session.user == v.valide_responsable_par:
+        if frappe.session.user == v.valide_responsable_par and not valide_seul():
             frappe.throw(_("Vous avez validé ce comptage : un AUTRE responsable magasin doit l’accepter à la place de l’employé."),
                          frappe.PermissionError)
         comptes = None

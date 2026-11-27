@@ -202,7 +202,7 @@ class StockEntrepots {
         <li><b>Trajets</b> : seuls ceux du réglage sont permis (Hall ↔ Magasin seulement, jamais un véhicule vers le Hall…). Sous De / Vers, la page dit si le trajet est immédiat, en double validation ou interdit.</li>
         <li><b>Double validation</b> (Magasin ↔ véhicule, véhicule ↔ Articles défectueux) : le stock ne bouge pas tant que l’employé du véhicule et un responsable magasin ne sont pas d’accord. Chacun, à son tour, accepte les quantités de l’autre (→ transfert validé) ou les corrige (→ la demande repart chez l’autre), jusqu’à l’accord. Pour votre propre véhicule, c’est un autre responsable qui valide.</li>
         <li>« Derniers transferts » : ⏳ au tour de qui (rouge après 24 h), « 🔍 Vérifier et valider » quand c’est à vous, « 🔍 Détail », « Annuler ».</li>
-        <li><b>Employé parti ou absent</b> : « 👤 Valider à la place de … » — un responsable magasin répond pour lui, sur une demande qui n’est pas la sienne (deux personnes, toujours). C’est écrit sur le transfert. Même règle pour un comptage : onglet Vérif., « Voir et accepter à sa place ».</li></ul></div>
+        <li><b>Employé parti ou absent</b> : « 👤 Valider à la place de … » — un responsable magasin répond pour lui. Le responsable principal du magasin et les administrateurs le font aussi sur leur propre demande ; les autres responsables seulement sur la demande d’un autre. C’est écrit sur le transfert. Même règle pour un comptage : onglet Vérif., « Voir et accepter à sa place ».</li></ul></div>
       <div class="et"><div class="t">0️⃣ À zéro — remettre un véhicule à zéro</div><ul>
         <li>Les quantités négatives sont apportées depuis le Magasin, les positives y retournent : l’écart ne reste que sur le Magasin. Aperçu avant validation, articles cochés seulement.</li></ul></div>` : `<div class="et"><div class="t">🔁 Transfert — à valider</div><ul>
         <li>Quand un transfert touche votre véhicule (chargement depuis le Magasin, retour au Magasin, articles défectueux), un bandeau « Transfert à valider » apparaît (aussi dans Ma journée).</li>
@@ -286,7 +286,7 @@ class StockEntrepots {
     if (!t) { frappe.show_alert({ message: `Le transfert ${se_esc(name)} n’est plus en attente.`, indicator: "orange" }, 5); this.chargerAttente(); return; }
     // À la place de l’employé (parti, absent) : un responsable magasin, sur une proposition qui n’est pas la sienne.
     const pour = !!pourEmploye && !t.a_moi;
-    if (pour && !t.pour_employe) { frappe.msgprint({ title: `🔁 ${se_esc(t.name)}`, indicator: "orange", message: `Ces quantités sont les vôtres : un <b>autre</b> responsable magasin doit les valider à la place de <b>${se_esc(t.employe_nom)}</b>.` }); return; }
+    if (pour && !t.pour_employe) { frappe.msgprint({ title: `🔁 ${se_esc(t.name)}`, indicator: "orange", message: `Ces quantités sont les vôtres : le responsable principal du magasin, ou un <b>autre</b> responsable magasin, doit les valider à la place de <b>${se_esc(t.employe_nom)}</b>.` }); return; }
     if (!t.a_moi && !pour) { frappe.msgprint({ title: `🔁 ${se_esc(t.name)}`, indicator: "orange", message: `⏳ Au tour de <b>${se_esc(t.attente_de)}</b> : vous avez déjà donné vos quantités, ou ce transfert ne vous concerne pas.` }); return; }
     const autre = t.tour === "Employé" ? "un responsable magasin" : t.employe_nom;
     const dernier = t.tours[t.tours.length - 1];

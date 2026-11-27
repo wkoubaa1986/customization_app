@@ -13,6 +13,15 @@ class TestValiderALaPlaceDeLEmploye(unittest.TestCase):
         self.assertTrue(S.peut_valider_pour_employe(S.COTE_EMPLOYE, True, False, HEDI, WASSIM))
         self.assertFalse(S.peut_valider_pour_employe(S.COTE_EMPLOYE, True, False, HEDI, HEDI))      # sa propre demande
 
+    def test_le_responsable_principal_et_les_administrateurs_valident_aussi_leur_propre_demande(self):
+        # « Pourquoi Hedi ne peut pas valider à la place de Radhouan aussi ? c'est le responsable principal magasin. »
+        self.assertTrue(S.peut_valider_pour_employe(S.COTE_EMPLOYE, True, False, HEDI, HEDI, seul=True))
+        self.assertTrue(S.peut_valider_pour_employe(S.COTE_EMPLOYE, True, False, HEDI, WASSIM, seul=True))
+        # Les autres conditions tiennent toujours.
+        self.assertFalse(S.peut_valider_pour_employe(S.COTE_MAGASIN, True, False, HEDI, HEDI, seul=True))
+        self.assertFalse(S.peut_valider_pour_employe(S.COTE_EMPLOYE, True, True, HEDI, HEDI, seul=True))
+        self.assertFalse(S.peut_valider_pour_employe(S.COTE_EMPLOYE, False, False, HEDI, HEDI, seul=True))
+
     def test_jamais_hors_de_ces_conditions(self):
         self.assertFalse(S.peut_valider_pour_employe(S.COTE_MAGASIN, True, False, RADHOUAN, WASSIM))   # pas le tour de l'employé
         self.assertFalse(S.peut_valider_pour_employe(S.COTE_EMPLOYE, False, False, HEDI, "autre@x"))   # pas responsable magasin
