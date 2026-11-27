@@ -113,3 +113,37 @@ class TestBranchements(unittest.TestCase):
             self.assertIn(chemin, texte)
         for classe in (retour_echange.SalesInvoiceEchange, retour_echange.DeliveryNoteEchange):
             self.assertIn("set_missing_values", classe.__dict__, classe.__name__)
+
+
+class TestScriptsVersionnes(unittest.TestCase):
+    """Deux défauts des Server Scripts corrigés le 27/11/2026 : ils ne doivent pas revenir."""
+
+    @classmethod
+    def setUpClass(cls):
+        import json
+        import os
+
+        chemin = os.path.join(os.path.dirname(os.path.dirname(__file__)), "fixtures", "server_script.json")
+        cls.scripts = {s["name"]: s for s in json.load(open(chemin, encoding="utf-8"))}
+
+    def test_un_script_d_evenement_n_annule_ni_ne_valide_la_transaction(self):
+        # `frappe.db.rollback`, `commit` et `set_single_value` n'existent pas dans un script d'événement : le
+        # gestionnaire d'erreur de l'encaissement échouait lui-même et masquait la vraie cause.
+        for nom, s in self.scripts.items():
+            if s.get("script_type") != "DocType Event" or s.get("disabled"):
+                continue
+            code = "\n".join(l for l in s["script"].split("\n") if not l.strip().startswith("#"))
+            for interdit in ("frappe.db.rollback(", "frappe.db.commit(", "frappe.db.set_single_value("):
+                self.assertNotIn(interdit, code, "%s : %s" % (nom, interdit))
+
+    def test_la_marque_outil_de_paiement_est_lue_comme_un_nombre_et_remise_a_zero(self):
+        # Champ texte : relue de la base elle vaut « 1 », pas l'entier 1 (« Régulariser » échouait).
+        script = self.scripts["re-generate payment after sales order"]["script"]
+        self.assertIn("frappe.utils.cint(doc.custom_outil_de_paiement)==1", script)
+        self.assertNotIn("elif doc.custom_outil_de_paiement==1", script)
+        self.assertIn('frappe.db.set_value("Sales Order", doc.name, "custom_outil_de_paiement", 0', script)
+
+    def test_l_erreur_de_l_encaissement_remonte(self):
+        fin = self.scripts["Traitement des encaissement"]["script"].rstrip()
+        self.assertTrue(fin.endswith("raise"))
+        self.assertIn("except Exception as e_enc:", fin)

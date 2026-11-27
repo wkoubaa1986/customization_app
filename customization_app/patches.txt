@@ -166,3 +166,5 @@ customization_app.patches.echeanciers_machines_rendues
 customization_app.patches.script_date_reelle_dans_l_app
 # BL sortis moins chers que leur commande par réapplication de la règle de prix : lignes remises au prix de la commande (27/11/2026).
 customization_app.patches.bl_prix_de_la_commande
+# La marque « Outil de paiement » restée sur les commandes encaissées est remise à zéro, avant le script corrigé (27/11/2026).
+customization_app.patches.marque_outil_de_paiement_a_zero
