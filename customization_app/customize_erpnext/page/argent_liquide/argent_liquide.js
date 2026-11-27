@@ -379,7 +379,13 @@ class ArgentLiquide {
             ? __("<b>Coffre « Sabah Espèces »</b> : compté le {0}, {1} pour {2} au compte (écart {3}).", [jour(s.inventaire_coffre.date), txt(s.inventaire_coffre.compte), txt(s.inventaire_coffre.theorique), signe_txt(s.inventaire_coffre.ecart)])
             : __("<b>Coffre « Sabah Espèces »</b> : {0} au compte, jamais compté. Un versement au coffre est une écriture saisie par lui seul : personne ne confirme la réception.", [txt(t.sabah)]),
             s.peut_inventorier ? `<button class="btn btn-xs btn-default al-inventaire" data-coffre="1">${__("Compter le coffre")}</button>` : "")}
-          ${preuve("📄", __("<b>Chèques et traites</b> : chaque pièce reste dans la liste tant que la banque ne l’a pas créditée (le robot bancaire la sort à ce moment-là). Aucun pointage physique des pièces n’est enregistré.")
+          ${preuve("📄", (pr.pointage
+              ? (pr.pointage.ecarts
+                  ? __("<b>Chèques et traites</b> : pointés le {0} par {1} — {2}.", [heure(pr.pointage.quand), esc(pr.pointage.par_nom || "?"), esc(pr.pointage.resume || "")])
+                  : __("<b>Chèques et traites</b> : pointés le {0} par {1}, tout y est ({2} chèque(s), {3} traite(s)).", [heure(pr.pointage.quand), esc(pr.pointage.par_nom || "?"), pr.pointage.nb_cheques, pr.pointage.nb_traites]))
+                + " " + __("Pointés par lui-même : c’est sa déclaration.")
+              : __("<b>Chèques et traites</b> : jamais pointés. À son prochain comptage, il écrit le montant de chaque pièce qu’il a en main ; la liste ci-dessous dit ce qui est attendu."))
+              + " " + __("Une pièce ne quitte la liste que lorsque la banque l’a créditée.")
               + (anciennes ? " " + __("{0} pièce(s) attendent depuis plus de 30 jours.", [anciennes]) : ""),
             `<button class="btn btn-xs btn-default al-aller" data-cible="al-pieces">${__("Voir les pièces")}</button>`)}
           ${pr.caisses ? preuve("⚖️", Math.abs(pr.caisses.difference) < 0.5

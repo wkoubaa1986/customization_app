@@ -707,11 +707,13 @@ def _a_avoir_en_main(employes, collecteurs, portefeuille, sauts, cfg, solde_comp
         autres = flt(tiroir["reference"]["autres"] + tiroir["reference"]["delegues"], 3)
         suite = {"mode": tiroir["mode"], "explication": CT.explication(tiroir), "base": tiroir.get("base"),
                  "depuis": tiroir.get("depuis"), "reference": tiroir["reference"],
-                 "dernier_comptage": tiroir.get("dernier_comptage"), "verification": tiroir.get("verification")}
+                 "dernier_comptage": tiroir.get("dernier_comptage"), "verification": tiroir.get("verification"),
+                 "pointage": tiroir.get("pointage"),
+                 "pointage_suivi": frappe.db.has_column("Cloture Caisse", "pointage_pieces")}
     else:
         especes = selon_compte
         suite = {"mode": "compte", "explication": "", "base": None, "depuis": None, "reference": None,
-                 "dernier_comptage": None, "verification": None}
+                 "dernier_comptage": None, "verification": None, "pointage": None, "pointage_suivi": False}
     return {"nom": x["nom"], "caisse": x["caisse"], "user": titulaire, "remis_par": x.get("remis_par") or [],
             "especes": especes, "pieces": par_type, "selon_compte": selon_compte,
             "compte_especes": flt(solde_compte, 3) if solde_compte is not None else None, "autres_caisses": autres,
@@ -822,7 +824,8 @@ def situation(date=None):
             {"anciennes": len(anciennes), "anciennes_total": flt(sum(p["montant"] for p in anciennes), 3),
              "ecart_comptable": portefeuille.get("ecart_comptable")},
             [e for e in employes if e["caisse"] != principal["caisse"]], len(a_regulariser),
-            principal.get("alertes") or (), caisses) if tiroir else None
+            principal.get("alertes") or (), caisses,
+            principal.get("pointage") if principal.get("pointage_suivi") else "non suivi") if tiroir else None
     return {
         "date": str(jour), "date_depart": cfg.get("date_depart"), "plafond": plafond, "jours_max": jours_max,
         "totaux": {"employes": chez_employes, "collecteurs": chez_collecteurs, "sabah": sabah,

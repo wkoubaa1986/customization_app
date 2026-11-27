@@ -130,7 +130,8 @@ def jours_entre(ancien, recent) -> int:
     return (b - a).days
 
 
-def verdict(jour, nom, tiroir, comptage, verification, coffre, pieces, employes, a_regulariser, alertes=(), caisses=None) -> dict:
+def verdict(jour, nom, tiroir, comptage, verification, coffre, pieces, employes, a_regulariser, alertes=(), caisses=None,
+            pointage="non suivi") -> dict:
     """Le verdict de la page, en une phrase et une liste de points. PURE.
     `tiroir` : {attendu, ecart_compte} ; `comptage` : dernier comptage du tiroir {quand, compte, attendu, ecart, par_nom}
     ou None ; `verification` : dernier comptage par une autre personne, ou None ; `coffre` : {solde, inventaire: {date,
@@ -185,6 +186,14 @@ def verdict(jour, nom, tiroir, comptage, verification, coffre, pieces, employes,
     elif inventaire and abs(_m(inventaire.get("ecart"))) > SEUIL_ECART:
         point("alerte", "Au dernier comptage du coffre (%s), écart de %s DT." % (
             _jour(inventaire["date"]), _dt(inventaire.get("ecart"))), "al-principal")
+    # `pointage` : le dernier pointage des chèques et traites du collecteur (dernier_pointage), None s'il n'a jamais
+    # pointé, « non suivi » quand le pointage n'existe pas encore sur ce site.
+    if pointage is None:
+        point("a_faire", "Les chèques et traites de %s n'ont encore jamais été pointés : il les déclare à son prochain "
+                         "comptage." % nom, "al-pieces")
+    elif isinstance(pointage, dict) and pointage.get("ecarts"):
+        point("alerte", "Chèques et traites de %s, pointage du %s : %s." % (nom, _jour(pointage["quand"]), pointage.get("resume") or
+                                                                         ("%d pièce(s) en écart" % pointage["ecarts"])), "al-pieces")
     if (pieces or {}).get("anciennes"):
         point("alerte", "%d chèque(s) ou traite(s) attendent depuis plus de 30 jours (%s DT) : à pointer un par un." % (
             pieces["anciennes"], _dt(pieces.get("anciennes_total"))), "al-pieces")
@@ -327,7 +336,8 @@ def etat_tiroir(cfg=None, jour=None, employes=None, collecteurs=None):
             "attendu": calcul["attendu"], "mode": calcul["mode"], "reference": ref, "base": base, "depuis": depuis,
             # Ce que dit le compte seul, et la différence : les écarts de comptage jamais passés en comptabilité.
             "selon_compte": ref["absolu"], "ecart_compte": _m(calcul["attendu"] - ref["absolu"]),
-            "dernier_comptage": base, "verification": derniere_verification(tous, titulaire, fin)}
+            "dernier_comptage": base, "verification": derniere_verification(tous, titulaire, fin),
+            "pointage": dernier_pointage(caisse, fin)}
 
 
 # ------------------------------------------------------------------------------- d'après les caisses validées (27/11/2026)
@@ -608,6 +618,27 @@ def selon_caisses(cfg=None, jour=None, non_compte=0.0):
     out["total"] = total_caisses(base, out["collecte"], out["encaissements"], out["depenses"], out["ecritures"],
                                  out["non_compte"], out["rattaches"])
     return out
+
+
+def dernier_pointage(caisse, fin=None):
+    """Le dernier pointage des chèques et traites du collecteur principal (noté à son comptage) :
+    {name, quand, par_nom, ecarts, resume, nb_cheques, nb_traites}, ou None s'il n'a jamais pointé."""
+    if not frappe.db.has_column("Cloture Caisse", "pointage_pieces"):
+        return None
+    from customization_app import caisse_pointage as PP
+    c = frappe.db.sql(
+        """SELECT name, IFNULL(compte_le, creation) AS quand, valide_par, pointage_pieces, pointage_ecarts
+           FROM `tabCloture Caisse` WHERE caisse = %s AND docstatus < 2 AND IFNULL(pointage_pieces, '') != ''
+             AND IFNULL(compte_le, creation) <= %s ORDER BY IFNULL(compte_le, creation) DESC LIMIT 1""",
+        (caisse, fin or "2999-12-31"), as_dict=True)
+    if not c:
+        return None
+    c = c[0]
+    p = PP.lire(c.pointage_pieces) or {}
+    return {"name": c.name, "quand": str(c.quand), "par_nom": frappe.utils.get_fullname(c.valide_par) if c.valide_par else "",
+            "ecarts": int(c.pointage_ecarts or 0), "resume": PP.resume(p),
+            "nb_cheques": (p.get("Chèque") or {}).get("nb_declare") or 0,
+            "nb_traites": (p.get("Traite") or {}).get("nb_declare") or 0}
 
 
 def champs_cloture(tiroir) -> dict:

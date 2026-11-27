@@ -815,6 +815,12 @@ def etat_caisses(date=None):
 
 # ── Côté collecteur ──────────────────────────────────────────────────────────
 
+def _resume_pointage(c):
+    """« il manque 1 chèque (654,000) » ou "" — lu sur la clôture."""
+    from customization_app import caisse_pointage as PP
+    return PP.resume(PP.lire(c.get("pointage_pieces"))) if cint(c.get("pointage_ecarts")) else ""
+
+
 def _dict_cloture(c):
     d = {
         "name": c.name, "caisse": c.caisse, "date": str(c.date_cloture), "statut": c.statut,
@@ -828,6 +834,8 @@ def _dict_cloture(c):
         "montant_cheques_remis": flt(c.get("montant_cheques_remis"), 3), "detail_cheques_remis": c.get("detail_cheques_remis") or "",
         "montant_traites_remis": flt(c.get("montant_traites_remis"), 3), "detail_traites_remis": c.get("detail_traites_remis") or "",
         "total_cheques": flt(c.total_cheques, 3), "photo_remise": c.photo_remise,
+        # Pointage des pièces (27/11/2026) : ce que l'employé déclare remettre en face de ce qu'il a encaissé.
+        "pointage_pieces": _resume_pointage(c),
         # Les colonnes Currency valent 0 tant que personne n'a saisi : « reçu » n'existe qu'après un passage du collecteur.
         "especes_recues": flt(c.especes_recues, 3) if c.collecte_par else None,
         "nb_cheques_recus": cint(c.nb_cheques_recus), "nb_traites_recus": cint(c.nb_traites_recus),

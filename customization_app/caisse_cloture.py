@@ -26,7 +26,7 @@ from html import unescape
 
 import frappe
 from frappe import _
-from frappe.utils import add_days, flt, get_datetime, getdate, now_datetime, nowdate
+from frappe.utils import add_days, cint, flt, get_datetime, getdate, now_datetime, nowdate
 
 from customization_app.rapport_caisse_journaliere import (
     CAISSE_ACCOUNTS_LIKE,
@@ -276,7 +276,9 @@ def _mesures(caisse, date, reprendre=False):
     dep_par_mode = depenses.get("par_mode") or {}
     especes = flt(par_mode.get("Espèces"), 3)
     cheques = flt(par_mode.get("Chèque"), 3)
-    autres = flt(flt(recap.get("grand_total"), 3) - especes - cheques, 3)
+    # Les traites à part (27/11/2026) : elles étaient noyées dans « autres modes » avec les virements et les cartes.
+    traites = flt(par_mode.get("Traite bancaire LC"), 3)
+    autres = flt(flt(recap.get("grand_total"), 3) - especes - cheques - traites, 3)
     # APPORTS (26/11/2026) : l'argent entré dans CETTE caisse depuis le coffre (Sabah Espèces) ou une banque, par une
     # écriture de son titulaire — une entrée de la journée, comme un encaissement (argent_liquide.apports). Avant, la
     # clôture l'ignorait : 6 000 DT du coffre le 19/10/2026, la journée est tombée à −3 289 DT.
@@ -287,6 +289,7 @@ def _mesures(caisse, date, reprendre=False):
         "apports_especes": flt(sum(a["montant"] for a in apports), 3),
         "apports": apports,
         "total_cheques": cheques,
+        "total_traites": traites,
         "total_autres_modes": autres,
         "depenses_especes": flt(dep_par_mode.get("Espèces"), 3),
         "debut": str(debut),
@@ -880,6 +883,25 @@ def _champs_tiroir(tiroir):
     return CT.champs_cloture(tiroir)
 
 
+def _pointage_texte(pointage):
+    from customization_app import caisse_pointage as PP
+    return PP.en_texte(pointage)
+
+
+def _pointage_resume(pointage):
+    from customization_app import caisse_pointage as PP
+    return PP.resume(pointage)
+
+
+def _pieces_a_pointer(caisse, mesures, tiroir):
+    """{source} pour la fenêtre de comptage, ou None (caisse globale). À L'AVEUGLE : ni le nombre ni le total des
+    pièces attendues ne partent vers l'écran — celui qui compte les écrit d'abord, le serveur compare ensuite.
+    `source` : « main » (collecteur principal : tout ce qu'il a en main) ou « jour » (encaissées dans la période)."""
+    if caisse == CAISSE_GLOBALE:
+        return None
+    return {"source": "main" if tiroir else "jour"}
+
+
 def _tiroir_pour_ecran(tiroir):
     """Ce que la fenêtre de comptage montre du tiroir, APRÈS la saisie (comptage à l'aveugle)."""
     if not tiroir:
@@ -948,7 +970,11 @@ def etat(caisse, date):
         "solde_theorique": theorique,
         "tiroir": _tiroir_pour_ecran(tiroir),
         "total_cheques": m["total_cheques"],
+        "total_traites": m.get("total_traites"),
         "total_autres_modes": m["total_autres_modes"],
+        # POINTAGE DES PIÈCES (27/11/2026) : ce que ce comptage doit pointer en chèques et en traites — les totaux ne
+        # s'affichent qu'APRÈS la saisie ; « main » = tout ce que le collecteur principal a en main.
+        "pieces_a_pointer": _pieces_a_pointer(caisse, m, tiroir),
         # Compter dans l'ordre (25/11/2026) : le message qui empêche de compter ce jour, ou None.
         "ordre": None if deja else controle_ordre(caisse, date, rouvrir=bool(en_attente)),
         # Repris dans ce comptage : paiements saisis après le comptage de leur jour (caisse_paiements.orphelins).
@@ -1058,6 +1084,17 @@ def valider(caisse, date, especes_comptees=None, note=None, justifications=None,
         frappe.throw(_("Vous comptez la caisse de {0} à sa place : écrivez pourquoi dans la note (absent, parti…, "
                        "{1} caractères minimum).").format(autrui, COMMENTAIRE_MIN))
 
+    # POINTAGE DES PIÈCES (27/11/2026) : ce que la caisse déclare en chèques et en traites, en face de ce qu'elle doit
+    # avoir. Noté sur la clôture, jamais bloquant. En validation seule, les pièces déclarées sont celles qu'on a EN
+    # MAIN (collecteur principal) ou encaissées dans la journée (direction) : rien n'est « remis ».
+    pointage = None
+    if caisse != CAISSE_GLOBALE:
+        from customization_app import caisse_pointage as PP
+        saisi = {"Chèque": cheques_montants, "Traite": traites_montants}
+        declare = {cle: (lire_montants(str(t))[0] if t is not None and str(t).strip() else
+                         ([] if not cint({"Chèque": nb_ch, "Traite": nb_tr}[cle]) else None)) for cle, t in saisi.items()}
+        pointage = PP.pointer(PP.attendu_pour(caisse, m, tiroir), declare, {"Chèque": nb_ch, "Traite": nb_tr})
+
     rap = _rapprochement(date) if caisse == CAISSE_GLOBALE else None
     champs_rap = {}
     if rap:
@@ -1083,6 +1120,9 @@ def valider(caisse, date, especes_comptees=None, note=None, justifications=None,
         "detail_cheques_remis": det_ch if mode == "double" else "",
         "montant_traites_remis": mt_tr if mode == "double" else 0,
         "detail_traites_remis": det_tr if mode == "double" else "",
+        **({"pointage_pieces": _pointage_texte(pointage), "pointage_ecarts": pointage["ecarts"]}
+           if pointage and frappe.db.has_column("Cloture Caisse", "pointage_pieces") else {}),
+        **({"total_traites": m.get("total_traites")} if frappe.db.has_column("Cloture Caisse", "total_traites") else {}),
         "solde_ouverture": ouverture,
         "encaissements_especes": m["encaissements_especes"],
         "apports_especes": flt(m.get("apports_especes"), 3),
@@ -1122,7 +1162,9 @@ def valider(caisse, date, especes_comptees=None, note=None, justifications=None,
     if autrui:
         _prevenir_titulaire(doc, autrui)
     frappe.db.commit()
-    return {"name": doc.name, "statut": doc.statut, "mode": mode, "rouverte": bool(existante)}
+    return {"name": doc.name, "statut": doc.statut, "mode": mode, "rouverte": bool(existante),
+            # Dit tout de suite à celui qui compte ce qui ne colle pas dans ses chèques et traites.
+            "pointage": _pointage_resume(pointage)}
 
 
 # Le PDF de clôture (refondu le 24/11/2026 : « améliore le rendu pdf des caisses ») — en-tête de l'entreprise, verdict
