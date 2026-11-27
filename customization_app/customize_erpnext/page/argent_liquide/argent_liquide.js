@@ -138,6 +138,17 @@ class ArgentLiquide {
       .al-preuves .t { font-weight: 700; font-size: 13.5px; margin-bottom: 4px; }
       .al-preuves .p { display: flex; gap: 8px; align-items: flex-start; flex-wrap: wrap; font-size: 13px; line-height: 1.45; padding: 5px 0; }
       .al-preuves .p .i { flex: 0 0 20px; } .al-preuves .p > div { flex: 1 1 260px; }
+      .al-partie { border: 1px solid var(--border-color); border-radius: 12px; padding: 10px 12px; margin: 12px 0 0; background: var(--card-bg); }
+      .al-partie .tete { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; align-items: baseline; margin-bottom: 6px; }
+      .al-partie .tete .t { font-weight: 800; font-size: 15px; } .al-partie .tete .r { font-size: 13px; color: var(--text-muted); }
+      .al-partie .tete .r b { color: var(--text-color); }
+      .al tr.al-groupe td { background: var(--subtle-fg, #f3f4f6); font-weight: 700; font-size: 12.5px; padding-top: 5px; padding-bottom: 5px; }
+      .al tr.al-groupe.vieille td { background: #fef3c7; color: #78350f; }
+      .al tr.al-groupe.banque td { background: #e0f2fe; color: #075985; }
+      [data-theme="dark"] .al tr.al-groupe.vieille td { background: #3a2a0b; color: #fde68a; }
+      [data-theme="dark"] .al tr.al-groupe.banque td { background: #0c2a3a; color: #bae6fd; }
+      .al-total-pieces { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-top: 10px; padding: 8px 12px; border-top: 2px solid var(--border-color); font-size: 14px; }
+      .al-total-pieces b { font-variant-numeric: tabular-nums; }
       .al-detail { margin-top: 18px; } .al-detail > summary { cursor: pointer; font-weight: 700; font-size: 14px; padding: 8px 0; color: var(--text-muted); }
       /* Graphique jour par jour */
       .al-graph { position: relative; }
@@ -397,19 +408,47 @@ class ArgentLiquide {
       const ps = pf.pieces || [];
       const titre = `<h4 id="al-pieces">📄 ${__("Chèques et traites pas encore versés")}</h4>`;
       if (!ps.length) return titre + `<div class="muet">${__("Aucune pièce en attente.")}</div>`;
+      // DEUX PARTIES (27/11/2026 : « organise bien la partie traite et la partie chèque ») : les traites, puis les
+      // chèques ; dans chacune, d'abord ce qui attend depuis plus de 30 jours, puis ce qui est en main, puis ce qui est
+      // déjà à la banque — avec le sous-total de la partie.
       const ligne_p = (p) => {
         const vieille = !p.depose_le && p.age_jours > 30;
+        const traite = p.type === "Traite";
+        const echue = traite && !p.depose_le && p.date_piece && p.date_piece <= s.date;
         const chez = p.depose_le
-          ? `🏦 ${__("à la banque depuis le {0}, en attente du crédit", [jour(p.depose_le)])}${p.bordereau ? `<div class="muet">${esc(p.bordereau)}</div>` : ""}`
+          ? `🏦 ${__("à la banque depuis le {0}", [jour(p.depose_le)])}${p.bordereau ? `<div class="muet">${esc(p.bordereau)}</div>` : ""}`
           : (p.chez_principal ? esc(p.chez) : `👤 ${esc(p.chez)}<div class="muet">${__("sa caisse n’est pas encore collectée")}</div>`);
-        return `<tr${vieille ? ' class="vieille"' : ""}><td><b>${esc(__(p.type))}</b><div class="muet">${esc(p.numero)}</div></td>
-          <td>${esc(p.client)}</td><td>${jour(p.date_piece)}</td>
-          <td>${jour(p.entre_le)}<div class="muet">${esc(p.saisi_par)}</div></td>
+        return `<tr${vieille ? ' class="vieille"' : ""}><td><b>${esc(p.numero || "—")}</b></td>
+          <td>${esc(p.client)}</td>
+          <td style="white-space:nowrap">${jour(p.date_piece)}${echue ? `<div class="muet">${__("échue")}</div>` : (traite && !p.depose_le && p.date_piece ? `<div class="muet">${__("pas encore échue")}</div>` : "")}</td>
+          <td><span style="white-space:nowrap">${jour(p.entre_le)}</span><div class="muet">${esc(p.saisi_par)}</div></td>
           <td>${chez}</td>
           <td class="n">${__("{0} j", [p.age_jours])}${vieille ? `<div class="muet">⚠️ ${__("à vérifier")}</div>` : ""}</td>
           <td class="n"><a href="/app/payment-entry/${encodeURIComponent(p.name)}">${txt(p.montant)}</a></td></tr>`;
       };
-      const types = Object.keys(pf.par_type || {}).map((k) => __("{0} {1} ({2})", [pf.par_type[k].nb, esc(__(k === "Chèque" ? "chèque(s)" : "traite(s)")), txt(pf.par_type[k].total)])).join(" · ");
+      const somme_p = (liste) => liste.reduce((a, p) => a + (Number(p.montant) || 0), 0);
+      const partie = (type, icone, titre_partie, col_numero, col_date, aide_date) => {
+        const du_type = ps.filter((p) => p.type === type);
+        if (!du_type.length) return "";
+        const vieilles = du_type.filter((p) => !p.depose_le && p.age_jours > 30).sort((a, b) => b.age_jours - a.age_jours);
+        const en_main = du_type.filter((p) => !p.depose_le && p.age_jours <= 30).sort((a, b) => b.age_jours - a.age_jours);
+        const banque = du_type.filter((p) => p.depose_le).sort((a, b) => (a.depose_le < b.depose_le ? -1 : 1));
+        const groupe = (libelle, liste, cls) => (liste.length ? `<tr class="al-groupe ${cls || ""}"><td colspan="6">${libelle} · ${liste.length}</td><td class="n">${txt(somme_p(liste))}</td></tr>${liste.map(ligne_p).join("")}` : "");
+        const pas_deposees = vieilles.concat(en_main);
+        return `<div class="al-partie">
+          <div class="tete"><span class="t">${icone} ${titre_partie}</span>
+            <span class="r">${__("{0} pas encore déposée(s) : {1}", [pas_deposees.length, `<b>${txt(somme_p(pas_deposees))}</b>`])}${banque.length ? " · " + __("{0} à la banque : {1}", [banque.length, txt(somme_p(banque))]) : ""}</span></div>
+          <div class="al-defile"><table>
+            <tr><th>${col_numero}</th><th>${__("Client")}</th><th title="${aide_date}">${col_date}</th>
+              <th>${__("Reçue le")}</th><th>${__("Chez")}</th><th class="n" title="${__("Jours depuis la saisie de la pièce")}">${__("Depuis")}</th><th class="n">${__("Montant")}</th></tr>
+            ${groupe("⚠️ " + __("Plus de 30 jours, à vérifier une par une"), vieilles, "vieille")}
+            ${groupe(__("En main, à déposer"), en_main)}
+            ${groupe("🏦 " + __("Déjà à la banque, en attente du crédit"), banque, "banque")}
+            <tr class="pied"><td colspan="6">${__("Total {0}", [titre_partie.toLowerCase()])} · ${du_type.length}</td><td class="n">${txt(somme_p(du_type))}</td></tr>
+          </table></div></div>`;
+      };
+      const parties = partie("Traite", "📜", __("Traites"), __("N° de la traite"), __("Échéance"), __("L’échéance écrite sur la traite"))
+        + partie("Chèque", "🧾", __("Chèques"), __("N° du chèque et banque"), __("Date du chèque"), __("La date écrite sur le chèque"));
       const anciennes = (pf.anciennes || []).length;
       const controle = pf.solde_comptable === null || pf.solde_comptable === undefined ? ""
         : (Math.abs(pf.ecart_comptable) < 0.0005
@@ -419,13 +458,8 @@ class ArgentLiquide {
         <div class="al-sous">${__("Une pièce reçue attend sur le compte « Chèques » ou « Traite Bancaire » jusqu’à ce que la banque la crédite : le robot bancaire l’en sort alors. Tant qu’elle n’est pas déposée, elle est chez {0} — ou chez l’employé qui l’a reçue, tant que sa caisse n’est pas collectée.", [esc(pf.principal || "")])}</div>
         ${pf.date_passee ? `<div class="al-sous">🕒 ${__("Date passée : ce sont les pièces encore en attente aujourd’hui qui étaient déjà reçues ce jour-là ; celles versées depuis n’apparaissent plus.")}</div>` : ""}
         ${anciennes ? `<div class="al-alerte">⚠️ ${__("{0} pièce(s) attendent depuis plus de 30 jours : déjà versées sans que la banque les ait reconnues, égarées, ou gardées exprès (chèque daté plus tard) ? À vérifier une par une.", [anciennes])}</div>` : ""}
-        <div class="al-defile" style="margin-top:8px"><table>
-          <tr><th>${__("Pièce")}</th><th>${__("Client")}</th><th title="${__("La date écrite sur le chèque, l’échéance de la traite")}">${__("Date sur la pièce")}</th>
-            <th>${__("Reçue le")}</th><th>${__("Chez")}</th><th class="n" title="${__("Jours depuis la saisie de la pièce")}">${__("Depuis")}</th><th class="n">${__("Montant")}</th></tr>
-          ${ps.map(ligne_p).join("")}
-          <tr class="pied"><td colspan="6">${__("Pas encore déposé")} : ${types || "—"}</td><td class="n">${dt(pf.total, false)}</td></tr>
-        </table></div>
-        ${pf.deposes && pf.deposes.nb ? `<div class="al-ok">🏦 ${__("Déjà à la banque, en attente du crédit : {0} pièce(s), {1}.", [pf.deposes.nb, txt(pf.deposes.total)])}</div>` : ""}
+        ${parties}
+        <div class="al-total-pieces"><span>${__("En tout, pas encore déposé")} : ${(pf.par_type["Traite"] || { nb: 0 }).nb} ${__("traite(s)")} + ${(pf.par_type["Chèque"] || { nb: 0 }).nb} ${__("chèque(s)")}</span><b>${dt(pf.total, false)}</b></div>
         ${controle}
         <div class="al-liens">${Object.keys(pf.par_type || {}).length ? ["Chèques - A&S", "Traite Bancaire - A&S"].map((c) =>
           `<button class="btn btn-xs btn-default" data-grand-livre="${esc(c)}" data-du="${ps.reduce((m, p) => (p.entre_le < m ? p.entre_le : m), s.date)}" data-au="${s.date}">📒 ${__("Grand livre « {0} »", [esc(c.replace(" - A&S", ""))])}</button>`).join("") : ""}</div>`;
