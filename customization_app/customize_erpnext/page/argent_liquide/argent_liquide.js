@@ -176,6 +176,9 @@ class ArgentLiquide {
       .al { --f-especes:#2a78d6; --f-dettes:#eb6834; --f-partenaire:#1baf7a; --f-pieces:#6250d6; --f-sabah:#e87ba4; --f-banque:#008300; --f-neutre:#8b8a83; }
       [data-theme="dark"] .al { --f-especes:#3987e5; --f-dettes:#d95926; --f-partenaire:#199e70; --f-pieces:#9085e9; --f-sabah:#d55181; --f-banque:#0ca30c; --f-neutre:#8b8a83; }
       .al-flux { overflow-x: auto; } .al-flux svg { display: block; }
+      .al-flux-total { display: flex; gap: 6px 18px; flex-wrap: wrap; font-size: 13px; margin: 6px 0 2px; padding: 8px 12px; border: 1px solid var(--border-color); border-radius: 10px; }
+      .al-flux-total .ok { color: #166534; font-weight: 700; } .al-flux-total .ko { color: #991b1b; font-weight: 700; }
+      [data-theme="dark"] .al-flux-total .ok { color: #86efac; } [data-theme="dark"] .al-flux-total .ko { color: #fca5a5; }
       .al-flux .lien { opacity: .32; transition: opacity .1s; } .al-flux .lien:hover, .al-flux .lien:focus { opacity: .62; outline: none; }
       .al-flux .noeud:focus { outline: none; }
       .al-flux text { font-size: 11.5px; fill: var(--text-color); } .al-flux text.m { fill: var(--text-muted); }
@@ -566,6 +569,22 @@ class ArgentLiquide {
       <h4 id="al-flux-titre">🔀 ${__("Le chemin de l’argent du {0} au {1}", [jour((s.flux || {}).depart), jour(s.date)])}</h4>
       <div class="al-sous">${__("Tout ce que les clients ont payé, par où c’est passé, où c’est maintenant. Lu dans la comptabilité, donc ça s’équilibre : ce qui était là + ce qui est entré − ce qui est sorti = ce qui reste. L’épaisseur d’un trait est son montant ; survolez-le pour le lire.")}</div>
       <div class="al-flux" id="al-flux"></div>
+      ${(() => {
+        // « La somme est-elle égale à chaque étape ? » (27/11/2026) : le départ et l'arrivée, posés en chiffres.
+        const f = s.flux || {}, st = f.stocks || [], cles = new Set(st.map((x) => x.cle));
+        if (!st.length) return "";
+        const som = (liste, k) => liste.reduce((a, x) => a + (Number(x[k]) || 0), 0);
+        const deja = som(st, "avant"), encore = som(st, "apres");
+        const entre = som((f.liens || []).filter((l) => !cles.has(l.de)), "montant");
+        const sorti = som((f.liens || []).filter((l) => !cles.has(l.vers)), "montant");
+        const juste = Math.abs(deja + entre - sorti - encore) < 0.01;
+        return `<div class="al-flux-total">
+          <span>⬅️ ${__("Départ : déjà là {0} + entré {1} = {2}", [txt(deja), txt(entre), `<b>${txt(deja + entre)}</b>`])}</span>
+          <span>➡️ ${__("Arrivée : sorti {0} + encore là {1} = {2}", [txt(sorti), txt(encore), `<b>${txt(sorti + encore)}</b>`])}</span>
+          <span class="${juste ? "ok" : "ko"}">${juste ? "✔ " + __("les deux bouts sont égaux") : "⚠️ " + __("les deux bouts diffèrent de {0}", [txt(deja + entre - sorti - encore)])}</span>
+        </div>
+        <div class="al-sous">${__("Les colonnes du milieu ne font pas ce total : une partie de l’argent ne passe pas par elles (virements et cartes arrivés directement en banque, argent déjà au coffre au départ). En revanche chaque case s’équilibre : ce qui y entre = ce qui en sort + ce qui y reste.")}</div>`;
+      })()}
       <details style="margin-top:6px"><summary class="muet" style="cursor:pointer">${__("Voir les chiffres en tableau")}</summary><div class="al-defile" id="al-table-flux"></div></details>
       ${regulariser}${pieces}
       <details class="al-detail"${this.detail_ouvert ? " open" : ""}><summary>${__("Voir tout le détail : qui tient quoi, les 14 derniers jours, la comptabilité")}</summary>
