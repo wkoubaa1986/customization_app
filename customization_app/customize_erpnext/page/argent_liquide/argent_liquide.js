@@ -528,13 +528,14 @@ class ArgentLiquide {
       </table></div>` : `<div class="muet">${__("Aucun versement en banque sur les 30 derniers jours.")}</div>`;
 
     this.$c.html(`<div class="al">
-      ${verdict}${principal}${alertes}${regulariser}${pieces}
-      <details class="al-detail"${this.detail_ouvert ? " open" : ""}><summary>${__("Voir tout le détail : qui tient quoi, le chemin de l’argent, les 14 derniers jours, la comptabilité")}</summary>
-      ${aide}${chemin}${repartition}
+      ${verdict}${principal}${alertes}
       <h4 id="al-flux-titre">🔀 ${__("Le chemin de l’argent du {0} au {1}", [jour((s.flux || {}).depart), jour(s.date)])}</h4>
       <div class="al-sous">${__("Tout ce que les clients ont payé, par où c’est passé, où c’est maintenant. Lu dans la comptabilité, donc ça s’équilibre : ce qui était là + ce qui est entré − ce qui est sorti = ce qui reste. L’épaisseur d’un trait est son montant ; survolez-le pour le lire.")}</div>
       <div class="al-flux" id="al-flux"></div>
       <details style="margin-top:6px"><summary class="muet" style="cursor:pointer">${__("Voir les chiffres en tableau")}</summary><div class="al-defile" id="al-table-flux"></div></details>
+      ${regulariser}${pieces}
+      <details class="al-detail"${this.detail_ouvert ? " open" : ""}><summary>${__("Voir tout le détail : qui tient quoi, les 14 derniers jours, la comptabilité")}</summary>
+      ${aide}${chemin}${repartition}
       ${personnes}
       <h4 id="al-collecteurs">📥 ${__("Chez les collecteurs")}</h4>
       <div class="al-sous">${__("Le tiroir du collecteur principal : ce qu’il a compté la dernière fois, plus ce qui est entré, moins ce qui est sorti depuis.")}</div>
@@ -570,13 +571,13 @@ class ArgentLiquide {
     const moi = this;
     $al.find(".al-detail").on("toggle", function () {
       moi.detail_ouvert = this.open;
-      if (this.open) { moi.dessiner_jours(); moi.dessiner_flux(); }
+      if (this.open) moi.dessiner_jours();
     });
     const montrer = (id) => {
       const cible = document.getElementById(id);
       if (!cible) return;
       const replie = cible.closest("details.al-detail");
-      if (replie && !replie.open) { replie.open = true; moi.detail_ouvert = true; moi.dessiner_jours(); moi.dessiner_flux(); }
+      if (replie && !replie.open) { replie.open = true; moi.detail_ouvert = true; moi.dessiner_jours(); }
       cible.scrollIntoView({ behavior: "smooth", block: "start" });
     };
     $al.find(".al-aller").on("click", function (e) {
@@ -612,7 +613,8 @@ class ArgentLiquide {
           .then(() => { frappe.show_alert({ message: __("Décision annulée."), indicator: "orange" }); this.charger(); }));
     });
     this.brancher_bulles($al);
-    if (this.detail_ouvert) { this.dessiner_jours(); this.dessiner_flux(); }
+    this.dessiner_flux();                                 // toujours visible (« je l'aimais », 27/11/2026)
+    if (this.detail_ouvert) this.dessiner_jours();
   }
 
   // ── Décider d'une anomalie : la décision choisie, son effet, le motif (obligatoire) ──
