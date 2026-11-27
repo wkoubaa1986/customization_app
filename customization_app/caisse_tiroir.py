@@ -331,12 +331,13 @@ def etat_tiroir(cfg=None, jour=None, employes=None, collecteurs=None):
 
 
 # ------------------------------------------------------------------------------- d'après les caisses validées (27/11/2026)
-def total_caisses(base, collecte, encaissements, depenses, ecritures, non_compte) -> float:
+def total_caisses(base, collecte, encaissements, depenses, ecritures, non_compte, rattaches=0.0) -> float:
     """Ce que le collecteur principal doit avoir en additionnant les caisses validées. PURE.
     `base` : le montant de départ figé ; `collecte` : reçu des caisses validées des employés ; `encaissements` /
     `depenses` : ceux de ses propres caisses validées ; `ecritures` : coffre, banque, personnel, autres (net, négatif =
-    sorti) ; `non_compte` : ce qu'il a encaissé moins dépensé depuis sa dernière caisse validée."""
-    return _m(_m(base) + _m(collecte) + _m(encaissements) - _m(depenses) + _m(ecritures) + _m(non_compte))
+    sorti) ; `non_compte` : ce qu'il a encaissé moins dépensé depuis sa dernière caisse validée ; `rattaches` : les
+    paiements que la direction a déclarés chez lui (aucune caisse ne les avait comptés)."""
+    return _m(_m(base) + _m(collecte) + _m(encaissements) - _m(depenses) + _m(ecritures) + _m(non_compte) + _m(rattaches))
 
 
 def comparer_caisses(total, selon_compte, ecarts_employes, sans_caisse=0.0) -> dict:
@@ -390,10 +391,15 @@ def causes_difference(ecarts_detail, sans_caisse, reste) -> list:
             a_faire = "Lui demander d'où vient l'argent en trop (un encaissement pas saisi ?) ; sinon c'est un excédent de caisse."
         else:
             a_faire = "Lui demander où est passé l'argent ; sinon c'est un manque à passer en écart de caisse."
+        # RECTIFIER D'ICI (27/11/2026 : « c'est Nejib qui a donné l'argent à Sadok, comment on peut rectifier d'ici ? ») :
+        # une action par dépense en espèces de cette caisse ce jour-là — « payée par une autre caisse ».
+        actions = [{"type": "depense", "journal_entry": d["name"], "montant": _m(d.get("montant")),
+                    "libelle": d.get("description") or d["name"], "caisse": e.get("caisse"), "cloture": e.get("name")}
+                   for d in e.get("depenses_liste") or [] if par_depense and d.get("name")]
         out.append({
             "nature": "Écart de comptage", "effet": ecart, "document_type": "Cloture Caisse", "document": e.get("name"),
             "titre": "Caisse de %s du %s" % (e.get("caisse"), _jour(e.get("date"))), "explication": explication,
-            "a_faire": a_faire})
+            "a_faire": a_faire, "actions": actions})
     for m in sans_caisse or []:
         out.append({
             "nature": "Paiement dans aucune caisse", "effet": _m(-_m(m.get("montant"))), "document_type": "Payment Entry",
@@ -401,7 +407,9 @@ def causes_difference(ecarts_detail, sans_caisse, reste) -> list:
             "titre": "%s DT de %s, le %s" % (_dt(m.get("montant")), m.get("client") or "?", _jour(m.get("date"))),
             "explication": "Ce paiement en espèces, saisi par %s, est au compte « Espèces » mais aucune caisse validée ne "
                            "l'a compté : personne ne répond de cet argent." % (m.get("saisi_par") or "?"),
-            "a_faire": "Savoir qui a reçu l'argent : il doit entrer dans sa caisse (ou le paiement est à corriger)."})
+            "a_faire": "Savoir qui a reçu l'argent : il doit entrer dans sa caisse (ou le paiement est à corriger).",
+            "actions": [{"type": "paiement", "payment_entry": m.get("name"), "montant": _m(m.get("montant")),
+                         "libelle": m.get("client") or m.get("name")}]})
     if abs(_m(reste)) > 0.0005:
         out.append({"nature": "Sans explication", "effet": _m(reste), "document_type": None, "document": None,
                     "titre": "Ce que ni un écart de comptage ni un paiement hors caisse n'explique",
@@ -417,14 +425,39 @@ def ecart_actuel(ecart_fige, depenses_retirees) -> float:
     return _m(_m(ecart_fige) - _m(depenses_retirees))
 
 
-def _depenses_actuelles(caisse, date, defaut) -> float:
-    """Les dépenses en espèces que cette caisse porte AUJOURD'HUI pour sa journée `date` (même source que le comptage).
-    En cas d'échec, `defaut` : l'écart reste celui qui est figé."""
+def _depenses_actuelles(caisse, date, defaut):
+    """(total, lignes) : les dépenses en espèces que cette caisse porte AUJOURD'HUI pour sa journée `date` (même source
+    que le comptage), et les écritures de caisse qui les composent [{name, montant, description}]. En cas d'échec,
+    (`defaut`, []) : l'écart reste celui qui est figé."""
     try:
         from customization_app import caisse_cloture as CL
-        return _m(CL._mesures(caisse, date)["depenses_especes"])
+        m = CL._mesures(caisse, date)
+        lignes = [{"name": l.get("name"), "montant": _m(l.get("montant")), "description": (l.get("description") or "")[:90]}
+                  for l in (m["data"].get("depenses") or {}).get("lignes") or []
+                  if l.get("mode") == "Espèces" and l.get("doctype") == "Journal Entry"
+                  and (l.get("caisse") or l.get("saisi_par")) == caisse]
+        return _m(m["depenses_especes"]), lignes
     except Exception:
-        return _m(defaut)
+        return _m(defaut), []
+
+
+PAIEMENT_RATTACHE = "Paiement rattaché"
+
+
+def cle_paiement(payment_entry) -> str:
+    return "paiement:%s" % payment_entry
+
+
+def paiements_rattaches(caisse, fin=None) -> dict:
+    """{paiement: montant} : les paiements que la direction a déclarés « chez le collecteur » (aucune caisse ne les
+    avait comptés)."""
+    from customization_app import caisse_regularisations as REG
+    if not frappe.db.table_exists(REG.DOCTYPE):
+        return {}
+    filtres = {"nature": PAIEMENT_RATTACHE, "caisse": caisse}
+    if fin:
+        filtres["decide_le"] = ["<=", fin]
+    return {r.document: _m(r.montant) for r in frappe.get_all(REG.DOCTYPE, filters=filtres, fields=["document", "montant"])}
 
 
 def reglage_caisses():
@@ -512,13 +545,14 @@ def selon_caisses(cfg=None, jour=None, non_compte=0.0):
         # CORRIGÉ DEPUIS ? Une caisse validée est figée, mais une dépense peut être corrigée après coup (« Corriger » :
         # autre caisse payeuse, autre mode, autre montant). L'écart se relit donc avec les dépenses que cette caisse
         # porte AUJOURD'HUI pour ce jour-là : si la dépense est partie, l'écart n'existe plus.
-        retire = _m(flt(c.depenses_especes) - _depenses_actuelles(c.caisse, c.date_cloture, flt(c.depenses_especes)))
+        actuelles, pieces = _depenses_actuelles(c.caisse, c.date_cloture, flt(c.depenses_especes))
+        retire = _m(flt(c.depenses_especes) - actuelles)
         actuel = ecart_actuel(c.ecart, retire)
         ecarts += actuel
         ecarts_detail.append({"name": c.name, "caisse": c.caisse, "date": str(c.date_cloture), "ecart": actuel,
                               "ecart_fige": _m(c.ecart), "retire": retire, "attendu": _m(flt(c.solde_theorique) + retire),
                               "compte": _m(c.especes_comptees), "depenses": _m(flt(c.depenses_especes) - retire),
-                              "note": " ".join((c.note or "").split())})
+                              "depenses_liste": pieces, "note": " ".join((c.note or "").split())})
     siennes = frappe.db.sql(
         """SELECT SUM(encaissements_especes + IFNULL(apports_especes, 0)), SUM(depenses_especes), COUNT(*)
            FROM `tabCloture Caisse` WHERE docstatus = 1 AND caisse = %s AND date_cloture BETWEEN %s AND %s""",
@@ -536,6 +570,7 @@ def selon_caisses(cfg=None, jour=None, non_compte=0.0):
         (A.COMPTE_ESPECES, jour, depuis, depuis, apports))[0][0])
     # Les paiements en espèces d'un jour PASSÉ qu'aucune caisse validée n'a pris : au compte, dans aucune caisse
     # (saisis par un compte sans caisse, ou jour pas encore compté).
+    rattaches = paiements_rattaches(caisse, "%s 23:59:59" % jour)
     sans_caisse = [{"name": r.name, "date": str(r.posting_date), "montant": _m(r.paid_amount), "client": r.party_name or "",
                     "saisi_par": frappe.utils.get_fullname(r.owner)}
                    for r in frappe.db.sql(
@@ -543,12 +578,14 @@ def selon_caisses(cfg=None, jour=None, non_compte=0.0):
                           WHERE docstatus = 1 AND payment_type = 'Receive' AND paid_to = %s AND creation >= %s
                             AND posting_date < %s AND IFNULL(custom_cloture_caisse, '') = '' AND amended_from IS NULL
                           ORDER BY posting_date LIMIT 20""",
-                       (A.COMPTE_ESPECES, depuis, jour), as_dict=True)]
+                       (A.COMPTE_ESPECES, depuis, jour), as_dict=True) if r.name not in rattaches]
     out = {"depuis": str(depuis), "base": base, "collecte": _m(collecte), "nb_caisses": nb + int(siennes[2] or 0),
            "encaissements": _m(siennes[0]), "depenses": _m(siennes[1]), "ecritures": _m(ecritures),
            "non_compte": _m(non_compte), "ecarts_employes": _m(ecarts), "sans_caisse": sans_caisse,
+           "rattaches": _m(sum(rattaches.values())), "nb_rattaches": len(rattaches),
            "ecarts_detail": sorted(ecarts_detail, key=lambda e: -abs(e["ecart"]))}
-    out["total"] = total_caisses(base, out["collecte"], out["encaissements"], out["depenses"], out["ecritures"], out["non_compte"])
+    out["total"] = total_caisses(base, out["collecte"], out["encaissements"], out["depenses"], out["ecritures"],
+                                 out["non_compte"], out["rattaches"])
     return out
 
 
@@ -572,3 +609,83 @@ def explication(tiroir) -> str:
              "encaissements, dépenses et autres mouvements {5} DT.").format(
         _dt(base["compte"]), _jour(base["quand"]), base.get("par_nom") or "?", _dt(d["collecte"]), _dt(d["sorties"]),
         _dt(d["autres"]))
+
+
+
+# ------------------------------------------------------------------------------------------- rectifier depuis la page
+def _direction():
+    from customization_app import caisse_regularisations as REG
+    if not REG.peut_regulariser():
+        frappe.throw(_("Seule la direction rectifie une caisse depuis cette page."), frappe.PermissionError)
+
+
+@frappe.whitelist(methods=["POST"])
+def depense_payee_par(journal_entry, caisse_payeur=None, cloture=None):
+    """« Cette dépense a été payée par une autre caisse » : la dépense saisie sur la caisse d'un employé est corrigée
+    vers la caisse qui a réellement sorti l'argent (par défaut le collecteur principal). C'est le bouton « Corriger » de
+    la caisse, avec les mêmes garde-fous : l'écriture est remplacée, datée d'AUJOURD'HUI, et le payeur la confirmera à
+    son prochain comptage (point de contrôle « dépense payée pour un collègue »). Direction seulement."""
+    import inspect
+
+    from customization_app import caisse_depenses as CD
+
+    _direction()
+    payeur = CD.caisse_payeuse_valide(caisse_payeur or principal()[1])
+    if not payeur:
+        frappe.throw(_("Choisissez la caisse qui a payé."))
+    je, infos, _fiche, _depense, motif = CD._ecriture_de_caisse(journal_entry)
+    if motif:
+        frappe.throw(motif)
+    if infos.get("mode") != "Espèces":
+        frappe.throw(_("Cette dépense n'est pas payée en espèces : elle ne concerne aucun tiroir."))
+    ancien = CD.payeur_de_remarque(je.user_remark) or frappe.utils.get_fullname(je.owner)
+    if ancien == payeur:
+        frappe.throw(_("Cette dépense est déjà sur la caisse de {0}.").format(payeur))
+    # Tout ce que la saisie d'origine portait est reconduit tel quel ; seule la caisse payeuse change.
+    reconduits = {k: infos[k] for k in inspect.signature(CD.corriger).parameters
+                  if k in infos and k not in ("journal_entry", "caisse_payeur") and infos[k] not in (None, "")}
+    resultat = CD.corriger(journal_entry, caisse_payeur=payeur, **reconduits)
+    trace = "🧹 Dépense %s (%s DT) : payée par la caisse de %s, et non de %s — rectifié par %s depuis « Où est l'argent " \
+            "liquide ». Nouvelle écriture : %s." % (journal_entry, _dt(infos.get("montant")), payeur, ancien,
+                                                    frappe.utils.get_fullname(frappe.session.user), resultat.get("name"))
+    if cloture and frappe.db.exists("Cloture Caisse", cloture):
+        frappe.get_doc("Cloture Caisse", cloture).add_comment("Comment", trace)
+    if resultat.get("name") and frappe.db.exists("Journal Entry", resultat["name"]):
+        frappe.get_doc("Journal Entry", resultat["name"]).add_comment("Comment", trace)
+    return {"name": resultat.get("name"), "caisse": payeur, "ancienne": journal_entry}
+
+
+@frappe.whitelist(methods=["POST"])
+def paiement_chez_le_collecteur(payment_entry, motif=None):
+    """« Cet argent est chez le collecteur » : un paiement en espèces qu'aucune caisse validée n'a compté est déclaré
+    dans le tiroir du collecteur principal. Aucune écriture : la décision reste au journal des régularisations (elle
+    s'annule de là) et le calcul « en remontant les caisses validées » compte ce paiement chez lui. Direction seulement."""
+    from customization_app import argent_liquide as A
+    from customization_app import caisse_regularisations as REG
+
+    _direction()
+    caisse = principal()[1]
+    if not caisse:
+        frappe.throw(_("Aucun collecteur principal n'est réglé dans Config Caisse."))
+    pe = frappe.db.get_value("Payment Entry", payment_entry,
+                             ["name", "docstatus", "payment_type", "paid_to", "paid_amount", "posting_date", "party_name",
+                              "custom_cloture_caisse"], as_dict=True)
+    if not pe or pe.docstatus != 1 or pe.payment_type != "Receive" or pe.paid_to != A.COMPTE_ESPECES:
+        frappe.throw(_("Ce paiement n'est pas un encaissement en espèces validé."))
+    if pe.custom_cloture_caisse:
+        frappe.throw(_("Ce paiement a déjà été compté par la caisse {0}.").format(pe.custom_cloture_caisse))
+    if frappe.db.exists(REG.DOCTYPE, {"cle": cle_paiement(pe.name)}):
+        frappe.throw(_("Ce paiement est déjà rattaché au collecteur."))
+    motif = REG._motif(motif)
+    doc = frappe.get_doc({
+        "doctype": REG.DOCTYPE, "cle": cle_paiement(pe.name), "nature": PAIEMENT_RATTACHE, "caisse": caisse,
+        "poche": "Collecte", "date_anomalie": pe.posting_date, "document_type": "Payment Entry", "document": pe.name,
+        "montant": _m(pe.paid_amount), "effet": 0.0,
+        "decision": "Cet argent (%s DT, %s) est dans le tiroir de %s" % (_dt(pe.paid_amount), pe.party_name or pe.name, caisse),
+        "motif": motif, "decide_par": frappe.session.user, "decide_le": frappe.utils.now_datetime()})
+    doc.insert(ignore_permissions=True)
+    frappe.get_doc("Payment Entry", pe.name).add_comment(
+        "Comment", "🧹 Paiement compté dans le tiroir de %s (aucune caisse ne l'avait pris) — %s : %s" % (
+            caisse, frappe.utils.get_fullname(frappe.session.user), motif))
+    return {"name": doc.name, "caisse": caisse, "montant": _m(pe.paid_amount)}
+

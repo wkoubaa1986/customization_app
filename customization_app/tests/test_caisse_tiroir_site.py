@@ -102,6 +102,33 @@ class TestTiroirSite(unittest.TestCase):
         self.assertEqual(apres["caisses"]["difference"], k["difference"])
         self.assertIsNone(CT.selon_caisses(jour=frappe.utils.add_days(P.DEPUIS, -1)))   # avant le départ
 
+    def test_rectifier_depuis_la_page(self):
+        """Un paiement en espèces qu'aucune caisse n'a compté, déclaré chez le collecteur : il entre dans le total des
+        caisses validées et quitte la liste ; la décision s'annule ; le collecteur ne peut pas la prendre lui-même."""
+        from customization_app.patches import caisse_tiroir_caisses_validees as P
+        with mock.patch.object(frappe, "log_error"):
+            P.execute()
+        k = A.situation()["principal"]["caisses"]
+        if not k["sans_caisse"]:
+            self.skipTest("aucun paiement sans caisse sur ce site")
+        cible = k["sans_caisse"][0]
+        frappe.set_user(self.titulaire)
+        self.assertRaises(frappe.PermissionError, CT.paiement_chez_le_collecteur, cible["name"], "le collecteur ne décide pas pour lui")
+        self.assertRaises(frappe.PermissionError, CT.depense_payee_par, "ACC-JV-INCONNUE", self.caisse)
+        frappe.set_user("Administrator")
+        self.assertRaises(frappe.ValidationError, CT.paiement_chez_le_collecteur, cible["name"], "court")
+        r = CT.paiement_chez_le_collecteur(cible["name"], "Encaissé par la direction, remis au collecteur le soir même.")
+        self.assertEqual((r["caisse"], r["montant"]), (self.caisse, cible["montant"]))
+        apres = A.situation()["principal"]["caisses"]
+        self.assertEqual(round(apres["total"] - k["total"], 3), cible["montant"])
+        self.assertNotIn(cible["name"], [x["name"] for x in apres["sans_caisse"]])
+        self.assertEqual(round(apres["difference"] - k["difference"], 3), cible["montant"])
+        self.assertEqual(apres["reste"], k["reste"])
+        self.assertRaises(frappe.ValidationError, CT.paiement_chez_le_collecteur, cible["name"], "une deuxième fois, refusée")
+        from customization_app import caisse_regularisations as REG
+        REG.annuler(r["name"])
+        self.assertEqual(A.situation()["principal"]["caisses"]["total"], k["total"])
+
     def test_la_caisse_d_un_employe_ne_change_pas(self):
         autre = next((e["caisse"] for e in A.situation()["employes"] if e["caisse"] != self.caisse), None)
         if not autre:

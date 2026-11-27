@@ -222,6 +222,24 @@ class TestCausesDeLaDifference(unittest.TestCase):
         self.assertIn("avec quel argent la dépense a été payée", sadok["a_faire"])
         self.assertEqual(jamel["a_faire"], "Rien : un arrondi.")
 
+    def test_les_actions_pour_rectifier_depuis_la_page(self):
+        """L'écart qu'une dépense peut expliquer propose « payée par une autre caisse » pour chaque dépense en espèces
+        de la caisse ce jour-là ; le paiement sans caisse propose « chez le collecteur » ; un arrondi, rien."""
+        ecarts = [dict(self.ECARTS[0], depenses_liste=[{"name": "ACC-JV-2026-01099", "montant": 135.82, "description": "TRANSAF"}]),
+                  dict(self.ECARTS[1], depenses_liste=[{"name": "ACC-JV-X", "montant": 11.01, "description": "divers"}])]
+        sadok, jamel, paiement = CT.causes_difference(ecarts, self.SANS, 0.0)
+        self.assertEqual(sadok["actions"], [{"type": "depense", "journal_entry": "ACC-JV-2026-01099", "montant": 135.82,
+                                             "libelle": "TRANSAF", "caisse": "Sadok Bouziri", "cloture": "CLO-1874"}])
+        self.assertEqual(jamel["actions"], [])
+        self.assertEqual(paiement["actions"], [{"type": "paiement", "payment_entry": "ACC-PAY-2026-08643", "montant": 50.0,
+                                                "libelle": "Ben Aissa Ahmed"}])
+
+    def test_un_paiement_declare_chez_le_collecteur_entre_dans_le_total(self):
+        sans = CT.total_caisses(1009.724, 1076.7, 847.38, 0, -2800, -235.82)
+        avec = CT.total_caisses(1009.724, 1076.7, 847.38, 0, -2800, -235.82, 50.0)
+        self.assertEqual((sans, avec), (-102.016, -52.016))
+        self.assertEqual(CT.cle_paiement("ACC-PAY-2026-08643"), "paiement:ACC-PAY-2026-08643")
+
     def test_un_ecart_corrige_depuis(self):
         """La dépense TRANSAF de 135,820 DT, saisie sur la caisse de Sadok, est corrigée vers la caisse qui a payé :
         sa caisse validée reste figée, mais son écart relu aujourd'hui est nul."""

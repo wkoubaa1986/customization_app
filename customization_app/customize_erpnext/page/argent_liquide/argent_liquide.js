@@ -132,6 +132,7 @@ class ArgentLiquide {
       .al-diff-deux .op { align-self: center; font-size: 18px; font-weight: 800; color: var(--text-muted); }
       .al-diff-deux .res { border-color: var(--p-collecte) !important; border-width: 2px !important; }
       .al-diff td { vertical-align: top; }
+      .al-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; } .al-actions .btn { white-space: normal; text-align: left; }
       .al-deux { margin-top: 8px; border-top: 1px dashed var(--border-color); padding-top: 6px; display: grid; gap: 4px; }
       .al-deux > div { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; font-size: 12.5px; }
       .al-deux span { color: var(--text-muted); } .al-principal-lignes .l .al-deux b { display: inline; font-size: 13.5px; margin: 0; }
@@ -400,6 +401,10 @@ class ArgentLiquide {
     const difference_bloc = pr && pr.caisses ? (() => {
       const k = pr.caisses, causes = k.causes || [];
       const lien = (c) => (c.document ? `<a href="/app/${frappe.router.slug(c.document_type)}/${encodeURIComponent(c.document)}">${esc(c.document)}</a>` : "");
+      // RECTIFIER D'ICI (27/11/2026) : la direction corrige la cause sans quitter la page.
+      const boutons = (c) => (!s.peut_regulariser || !(c.actions || []).length ? "" : `<div class="al-actions">${c.actions.map((a) => (a.type === "depense"
+        ? `<button class="btn btn-xs btn-primary al-action-depense" data-je="${esc(a.journal_entry)}" data-caisse="${esc(a.caisse)}" data-cloture="${esc(a.cloture || "")}" data-montant="${a.montant}" data-libelle="${esc(a.libelle)}">💸 ${__("Dépense de {0} payée par une autre caisse", [txt(a.montant)])}</button>`
+        : `<button class="btn btn-xs btn-primary al-action-paiement" data-pe="${esc(a.payment_entry)}" data-montant="${a.montant}" data-libelle="${esc(a.libelle)}">📥 ${__("Cet argent est chez {0}", [esc(pr.nom)])}</button>`)).join("")}</div>`);
       return `<div class="al-diff" id="al-difference">
         <div class="tete"><div><div class="t">⚖️ ${__("Le compte « Espèces » et les caisses : d’où vient la différence")}</div>
           <div class="muet">${__("Depuis le {0}. D’un côté ce que disent les caisses validées chaque jour, de l’autre ce que dit la comptabilité.", [jour(k.depuis)])}</div></div></div>
@@ -413,7 +418,7 @@ class ArgentLiquide {
         ${causes.length ? `<div class="al-defile"><table>
           <tr><th>${__("Cause")}</th><th>${__("Ce qui s’est passé")}</th><th>${__("À faire")}</th><th class="n">${__("Effet")}</th></tr>
           ${causes.map((c) => `<tr><td><b>${esc(__(c.nature))}</b><div class="muet">${esc(c.titre)}</div><div class="muet">${lien(c)}</div></td>
-            <td>${esc(c.explication)}</td><td>${esc(c.a_faire || "")}</td><td class="n"><b>${signe_txt(c.effet)}</b></td></tr>`).join("")}
+            <td>${esc(c.explication)}</td><td>${esc(c.a_faire || "")}${boutons(c)}</td><td class="n"><b>${signe_txt(c.effet)}</b></td></tr>`).join("")}
           <tr class="pied"><td colspan="3">${__("Total des causes = la différence")}</td><td class="n">${signe_txt(causes.reduce((a, c) => a + (Number(c.effet) || 0), 0))}</td></tr>
         </table></div>
         <div class="muet" style="margin-top:6px">${__("Lecture de l’effet : « + » = les caisses comptent plus que le compte, « − » = le compte a plus que les caisses.")}</div>`
@@ -603,6 +608,7 @@ class ArgentLiquide {
             <span class="op">−</span>${bloc(__("Ses dépenses"), k.depenses)}
             <span class="op">${k.ecritures > 0 ? "+" : "−"}</span>${bloc(__("Coffre, banque, personnel, autres"), Math.abs(k.ecritures))}
             ${Math.abs(k.non_compte) > 0.0005 ? `<span class="op">${k.non_compte > 0 ? "+" : "−"}</span>${bloc(__("Depuis sa dernière caisse validée"), Math.abs(k.non_compte))}` : ""}
+            ${Math.abs(k.rattaches || 0) > 0.0005 ? `<span class="op">+</span>${bloc(__("Paiements déclarés chez lui ({0})", [k.nb_rattaches]), k.rattaches)}` : ""}
             <span class="op">=</span>${bloc(__("D’après les caisses validées"), k.total, "res")}
           </div>
           <div class="muet">${Math.abs(k.difference) < 0.5
@@ -727,6 +733,8 @@ class ArgentLiquide {
       if (lot.length) this.decider(lot[0], lot[0].options[0], lot);
     });
     $al.find(".al-inventaire").on("click", (e) => this.inventaire($(e.currentTarget).attr("data-coffre") === "1"));
+    $al.find(".al-action-depense").on("click", (e) => this.depense_autre_caisse($(e.currentTarget).data()));
+    $al.find(".al-action-paiement").on("click", (e) => this.paiement_chez_collecteur($(e.currentTarget).data()));
     $al.find(".al-annuler-reg").on("click", (e) => {
       const nom = $(e.currentTarget).attr("data-nom");
       frappe.confirm(__("Annuler la décision {0} ? L’anomalie (ou l’écart d’inventaire) reviendra sur la carte.", [esc(nom)]), () =>
@@ -736,6 +744,68 @@ class ArgentLiquide {
     this.brancher_bulles($al);
     this.dessiner_flux();                                 // toujours visible (« je l'aimais », 27/11/2026)
     if (this.detail_ouvert) this.dessiner_jours();
+  }
+
+  // ── « Cette dépense a été payée par une autre caisse » (27/11/2026 : Nejib a donné l'argent, Sadok a saisi la
+  //    dépense sur sa propre caisse). Même chemin que « Corriger » dans la caisse : l'écriture est remplacée. ──
+  depense_autre_caisse(a) {
+    const txt = (v) => (Number(v) || 0).toLocaleString("fr-FR", { minimumFractionDigits: 3, maximumFractionDigits: 3 }) + " DT";
+    const esc = frappe.utils.escape_html, pr = this.s.principal || {};
+    frappe.call({ method: "customization_app.caisse_collecte.noms_caisses" }).then((r) => {
+      const caisses = (r.message || []).filter((c) => c !== a.caisse && c !== "Tous les employés");
+      const d = new frappe.ui.Dialog({
+        title: __("Dépense payée par une autre caisse"),
+        fields: [
+          { fieldtype: "HTML", fieldname: "aide" },
+          { fieldtype: "Select", fieldname: "caisse", label: __("L’argent est sorti de la caisse de"), reqd: 1,
+            options: caisses.join("\n"), default: caisses.includes(pr.caisse) ? pr.caisse : caisses[0] },
+        ],
+        primary_action_label: __("Rectifier"),
+        primary_action: (v) => {
+          frappe.call({ method: "customization_app.caisse_tiroir.depense_payee_par",
+                        args: { journal_entry: a.je, caisse_payeur: v.caisse, cloture: a.cloture || "" }, freeze: true, freeze_message: __("Correction de la dépense…") })
+            .then((rr) => {
+              const m = rr.message || {};
+              d.hide();
+              frappe.show_alert({ message: __("Dépense rectifiée : elle est maintenant sur la caisse de {0} ({1}).", [esc(m.caisse || ""), esc(m.name || "")]), indicator: "green" }, 8);
+              this.charger();
+            });
+        },
+      });
+      d.fields_dict.aide.$wrapper.html(`<div style="font-size:13px;line-height:1.5">
+        <p><b>${esc(a.libelle || a.je)}</b> — ${txt(a.montant)}<br><span class="text-muted">${__("saisie sur la caisse de {0} ({1})", [esc(a.caisse), esc(a.je)])}</span></p>
+        <p class="text-muted">${__("L’écriture est remplacée par une nouvelle, datée d’aujourd’hui, avec la même facture. La dépense quitte la caisse de {0} et entre dans la caisse choisie, qui la confirmera à son prochain comptage. Le montant ne change pas en comptabilité.", [esc(a.caisse)])}</p></div>`);
+      d.show();
+    });
+  }
+
+  // ── « Cet argent est chez le collecteur » : un paiement en espèces qu'aucune caisse validée n'a compté. Aucune
+  //    écriture : la décision va au journal des régularisations (et s'annule de là). ──
+  paiement_chez_collecteur(a) {
+    const txt = (v) => (Number(v) || 0).toLocaleString("fr-FR", { minimumFractionDigits: 3, maximumFractionDigits: 3 }) + " DT";
+    const esc = frappe.utils.escape_html, pr = this.s.principal || {};
+    const d = new frappe.ui.Dialog({
+      title: __("Cet argent est chez {0}", [pr.nom || ""]),
+      fields: [
+        { fieldtype: "HTML", fieldname: "aide" },
+        { fieldtype: "Small Text", fieldname: "motif", label: __("Comment le savez-vous ?"), reqd: 1,
+          description: __("Quelques mots (10 caractères au moins) : qui a reçu l’argent, quand il l’a remis. Ils restent dans le journal.") },
+      ],
+      primary_action_label: __("Compter ce paiement chez lui"),
+      primary_action: (v) => {
+        frappe.call({ method: "customization_app.caisse_tiroir.paiement_chez_le_collecteur",
+                      args: { payment_entry: a.pe, motif: v.motif || "" }, freeze: true })
+          .then(() => {
+            d.hide();
+            frappe.show_alert({ message: __("Paiement compté dans le tiroir de {0}.", [esc(pr.nom || "")]), indicator: "green" }, 6);
+            this.charger();
+          });
+      },
+    });
+    d.fields_dict.aide.$wrapper.html(`<div style="font-size:13px;line-height:1.5">
+      <p><b>${txt(a.montant)}</b> — ${esc(a.libelle || "")} <span class="text-muted">(${esc(a.pe)})</span></p>
+      <p class="text-muted">${__("Aucune caisse n’a compté ce paiement. En le déclarant chez {0}, il entre dans ce qu’il doit avoir d’après les caisses validées. Aucune écriture comptable n’est passée ; la décision s’annule depuis le journal, plus bas.", [esc(pr.nom || "")])}</p></div>`);
+    d.show();
   }
 
   // ── Décider d'une anomalie : la décision choisie, son effet, le motif (obligatoire) ──
