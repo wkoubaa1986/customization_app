@@ -587,6 +587,14 @@ class SalesInvoiceEchange(SalesInvoice):
     échange sur la facture non plus (même contrôle qu'ERPNext, ces lignes en
     moins)."""
 
+    def set_missing_values(self, for_validate=False):
+        # ERPNext vient de rejouer la règle de prix sur les lignes : celles qu'elle a fait passer sous le prix de
+        # leur BL le reprennent, avant le calcul des totaux, de l'échéancier et des avances (bl_prix_commande).
+        super().set_missing_values(for_validate)
+        from customization_app.bl_prix_commande import apres_valeurs_manquantes
+
+        apres_valeurs_manquantes(self)
+
     def so_dn_required(self):
         if self.is_return or not _lignes_composants(self):
             return super().so_dn_required()
@@ -610,6 +618,13 @@ class DeliveryNoteEchange(DeliveryNote):
     pièce reprise n'est pas une ligne de commande, elle était dans le kit) ni
     aux lignes composants d'un échange (la pièce remise non plus : elles
     reprennent la commande de la ligne « E-… » quand il y en a une)."""
+
+    def set_missing_values(self, for_validate=False):
+        # Même reprise que sur la facture, au prix de la COMMANDE : dès la création du BL depuis la commande.
+        super().set_missing_values(for_validate)
+        from customization_app.bl_prix_commande import apres_valeurs_manquantes
+
+        apres_valeurs_manquantes(self)
 
     def so_required(self):
         if self.is_return and (self.get(CHAMP_ECHANGE) or self.flags.retour_echange):

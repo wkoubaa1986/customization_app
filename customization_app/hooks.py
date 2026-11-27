@@ -440,6 +440,12 @@ doc_events = {
             "customization_app.sms_annulation.on_sales_order_cancel",
         ],
     },
+    # Le temps de sa validation, un encaissement réécrit l'échéancier des commandes qu'il encaisse (Server Script
+    # « Traitement des encaissement ») : le verrou « échéancier = total » se tait pour CE traitement seulement,
+    # plus à vie sur les commandes qu'il a touchées (27/11/2026, echeancier.verrou_exempte).
+    "Encaissement Paiement": {
+        "before_submit": "customization_app.echeancier.marquer_outil_encaissement",
+    },
     # Numérotation auto de la facture (remplace le Server Script « Generation N Facture »).
     # Devis : mêmes règles de prix que la commande (prix HT sur document exonéré, marge minimale).
     "Quotation": {

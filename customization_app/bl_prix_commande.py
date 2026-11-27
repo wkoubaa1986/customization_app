@@ -23,6 +23,25 @@ une ligne gratuite, un BL de retour.
 
 Deux usages : le hook `validate` du Delivery Note (après le validate d'ERPNext, donc après la réapplication), et
 `corriger_bl_valides` — la reprise des BL DÉJÀ validés qui ont eu ce souci (patch `bl_prix_de_la_commande`).
+
+LA FACTURE AUSSI (27/11/2026, sa question : « la création des factures peut-elle diverger de la commande ou de
+plusieurs commandes, en assurant la marge ? »). Mesuré : 89 factures depuis le 27/10, aucune ne diffère de ses
+commandes ni de ses BL — les facturations automatiques (mensuelle, Compte Pro, encaissement) recopient le prix du BL
+et coupent les règles de prix (`ignore_pricing_rule`). Mais une facture créée À LA MAIN depuis un BL ou une commande
+repasse par la règle de prix : essai sur le BL d'Amri Sadok corrigé (236,615) → facture à 233,790.
+`apres_valeurs_manquantes` : une ligne de facture née d'une ligne de BL (sinon de commande), au prix exact de la règle
+et sous celui de son BL, reprend le prix du BL. Chaque ligne suivant son propre BL, une facture de plusieurs
+commandes est couverte ligne à ligne.
+
+⚠️ OÙ CELA SE BRANCHE, ET POURQUOI PAS AILLEURS. Sur une facture, ERPNext contrôle l'échéancier et alloue les avances
+DANS son validate, sur le total qu'il vient de calculer : corriger le prix après (hook `validate`) laisse un
+échéancier et des avances calculés sur l'ancien total, et de toute façon ERPNext a déjà refusé la facture (« Total
+Payment Amount in Payment Schedule must be equal to Grand / Rounded Total » : l'échéancier recopié de la commande ne
+tombe plus sur le total baissé). La reprise se fait donc juste après `set_missing_values` — là où ERPNext rejoue la
+règle de prix — par les classes surchargées de retour_echange (`SalesInvoiceEchange`, `DeliveryNoteEchange`) : à la
+création depuis le BL comme à chaque enregistrement, totaux, avances et échéancier se calculent sur le bon prix.
+⚠️ Ne PAS couper les règles de prix (`ignore_pricing_rule`) sur une facture qui en porte déjà : à l'enregistrement
+suivant ERPNext retire TOUTES les remises de règle, y compris celles voulues (essai : 236,615 → 238,750).
 """
 from __future__ import annotations
 
@@ -67,25 +86,52 @@ def _prix_des_lignes_de_commande(noms) -> dict:
                                                    fields=["name", "rate"], limit_page_length=0)}
 
 
-def aligner(doc) -> list[dict]:
-    """Remet au prix de la commande les lignes que la règle de prix vient de baisser. -> les lignes reprises."""
+def _prix_des_lignes_de_bl(noms) -> dict:
+    noms = [n for n in set(noms or ()) if n]
+    if not noms:
+        return {}
+    return {r.name: r.rate for r in frappe.get_all("Delivery Note Item", filters={"name": ["in", noms]},
+                                                   fields=["name", "rate"], limit_page_length=0)}
+
+
+def aligner(doc, recalculer: bool = True) -> list[dict]:
+    """Remet à son prix de référence chaque ligne que la règle de prix a baissée. -> les lignes reprises.
+    La référence : la ligne de COMMANDE pour un BL ; la ligne de BL, sinon de commande, pour une facture."""
     from customization_app.marge_minimale import _relever
 
     prix_cmd = _prix_des_lignes_de_commande([l.get("so_detail") for l in doc.items])
+    prix_bl = _prix_des_lignes_de_bl([l.get("dn_detail") for l in doc.items]) if doc.doctype == "Sales Invoice" else {}
     faits = []
     for l in doc.items:
-        cible = prix_a_reprendre(l.as_dict(), prix_cmd.get(l.get("so_detail"))) if l.get("so_detail") else None
+        reference = prix_bl.get(l.get("dn_detail")) if l.get("dn_detail") in prix_bl else prix_cmd.get(l.get("so_detail"))
+        cible = prix_a_reprendre(l.as_dict(), reference) if reference else None
         if cible is None:
             continue
         faits.append({"item_code": l.item_code, "avant": flt(l.rate), "apres": cible, "qty": flt(l.qty)})
         _relever(l, cible)
-    if faits:
+    if faits and recalculer:
         doc.calculate_taxes_and_totals()
     return faits
 
 
+def apres_valeurs_manquantes(doc):
+    """Appelée par les classes de BL et de facture juste après `set_missing_values` d'ERPNext (qui vient de rejouer
+    la règle de prix) : les lignes baissées reprennent leur prix de référence, AVANT le calcul des totaux. Ne lève
+    jamais : une reprise qui échoue laisse le document tel qu'ERPNext l'a calculé."""
+    # ⚠️ Pas de filtre « brouillon seulement » : à la VALIDATION le document porte déjà docstatus = 1 quand ERPNext
+    # rejoue la règle de prix — c'est précisément là que le prix retombait (essai : facture validée à 233,790).
+    if doc.get("is_return") or doc.docstatus == 2:
+        return
+    try:
+        aligner(doc, recalculer=False)
+    except Exception:
+        frappe.log_error(title="Prix du BL / de la facture : reprise du prix de référence", message=frappe.get_traceback())
+
+
 def delivery_note_validate(doc, method=None):
-    """Hook `validate` du Delivery Note, APRÈS celui d'ERPNext (qui a réappliqué la règle de prix)."""
+    """Hook `validate` du Delivery Note, APRÈS celui d'ERPNext : le filet de sécurité de `apres_valeurs_manquantes`
+    (un BL construit sans passer par la classe surchargée, ou dont le prix aurait été recalculé plus tard dans le
+    validate). Un BL n'a ni échéancier ni avances : refaire ses totaux ici est sans conséquence."""
     if doc.get("is_return"):
         return
     aligner(doc)

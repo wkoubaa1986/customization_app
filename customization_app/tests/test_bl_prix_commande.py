@@ -64,3 +64,52 @@ class TestVerrouEcheancier(unittest.TestCase):
         self.assertEqual(E.ecart_echeancier([{"payment_amount": 3895.4}], 3895.0, 3895.4), 0.4)     # compare à l'arrondi
         self.assertEqual(E.ecart_echeancier([], 100.0, 100.0), -100.0)                              # échéancier vidé
         self.assertEqual(E.ecart_echeancier(self.AMRI + [{"payment_amount": 10.0}], 236.615, 236.615, True), 10.0)
+
+
+class TestVerrouExemptions(unittest.TestCase):
+    """Le verrou se tait pour un TRAITEMENT en cours, plus pour une commande marquée à vie par l'outil."""
+
+    def test_exemptions(self):
+        self.assertFalse(E.verrou_exempte(False, False, False))            # commande ordinaire… ou marquée par l'outil
+        self.assertTrue(E.verrou_exempte(False, True, False))              # un encaissement se valide en ce moment
+        self.assertTrue(E.verrou_exempte(False, False, True))              # régularisation d'une livraison partielle
+        self.assertTrue(E.verrou_exempte(True, False, False))              # commande née d'un entretien
+
+    def test_un_enregistrement_qui_ne_touche_a_rien(self):
+        class D(dict):
+            def get(self, k, d=None): return dict.get(self, k, d)
+
+        class L:
+            def __init__(self, m): self.payment_amount = m
+        avant = D(grand_total=236.615, rounded_total=237.0, payment_schedule=[L(183.415), L(20.0)])
+        meme = D(grand_total=236.615, rounded_total=237.0, payment_schedule=[L(203.415)])            # même somme
+        echeancier_change = D(grand_total=236.615, rounded_total=237.0, payment_schedule=[L(183.415), L(30.0)])
+        total_change = D(grand_total=300.0, rounded_total=300.0, payment_schedule=[L(183.415), L(20.0)])
+        self.assertTrue(E.rien_n_a_bouge(avant, meme))
+        self.assertFalse(E.rien_n_a_bouge(avant, echeancier_change))
+        self.assertFalse(E.rien_n_a_bouge(avant, total_change))
+        self.assertFalse(E.rien_n_a_bouge(None, meme))                     # pas d'état d'avant : on contrôle
+
+
+class TestBranchements(unittest.TestCase):
+    """Ce que hooks.py et les classes surchargées appellent existe (une fonction retirée par mégarde faisait échouer
+    tout enregistrement de BL — 27/11/2026)."""
+
+    def test_les_fonctions_appelees_existent(self):
+        for module, noms in ((B, ("delivery_note_validate", "apres_valeurs_manquantes", "corriger_bl_valides", "aligner")),
+                             (E, ("verifier_total_echeancier", "marquer_outil_encaissement", "exiger_mode_de_paiement"))):
+            for nom in noms:
+                self.assertTrue(callable(getattr(module, nom, None)), nom)
+
+    def test_hooks_et_classes(self):
+        import inspect
+
+        from customization_app import hooks, retour_echange
+
+        texte = inspect.getsource(hooks)
+        for chemin in ("customization_app.bl_prix_commande.delivery_note_validate",
+                       "customization_app.echeancier.verifier_total_echeancier",
+                       "customization_app.echeancier.marquer_outil_encaissement"):
+            self.assertIn(chemin, texte)
+        for classe in (retour_echange.SalesInvoiceEchange, retour_echange.DeliveryNoteEchange):
+            self.assertIn("set_missing_values", classe.__dict__, classe.__name__)

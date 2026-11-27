@@ -559,7 +559,15 @@ def regulariser(sales_order, perte=0):
     # a. Les articles, sous le drapeau qui fait taire le contrôle « échéancier = TTC »
     #    et la régénération des paiements : le TTC change, l'échéancier pas encore.
     so.db_set("custom_outil_de_paiement", 1, update_modified=False)
-    update_child_qty_rate("Sales Order", json.dumps(articles["articles"]), so.name)
+    # Le verrou « échéancier = total » (echeancier.verifier_total_echeancier) ne lit plus la marque de la commande :
+    # ce traitement en deux temps se déclare lui-même, le temps de la réduction des articles.
+    from customization_app.echeancier import DRAPEAU_DEUX_TEMPS
+
+    frappe.flags[DRAPEAU_DEUX_TEMPS] = True
+    try:
+        update_child_qty_rate("Sales Order", json.dumps(articles["articles"]), so.name)
+    finally:
+        frappe.flags[DRAPEAU_DEUX_TEMPS] = False
 
     # b. L'échéancier, sur le TTC recalculé, drapeau retiré : cette sauvegarde-ci
     #    passe le contrôle et déclenche la régénération des PE de dette / perte.

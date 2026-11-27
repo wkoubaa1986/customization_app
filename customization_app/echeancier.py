@@ -34,6 +34,41 @@ def ecart_echeancier(echeancier, total_arrondi, total, sans_arrondi: bool = Fals
     return ecart if abs(ecart) >= TOLERANCE_TOTAL else None
 
 
+#: Posés le temps d'un traitement qui réécrit l'échéancier en plusieurs enregistrements (frappe.flags : la requête
+#: ou la tâche en cours seulement, jamais en base).
+DRAPEAU_OUTIL = "outil_encaissement"            # un « Encaissement Paiement » est en cours de validation
+DRAPEAU_DEUX_TEMPS = "echeancier_en_deux_temps"  # régularisation d'une livraison partielle (livraison_partielle)
+
+
+def marquer_outil_encaissement(doc, method=None):
+    """Un « Encaissement Paiement » se valide : son Server Script « Traitement des encaissement » va réécrire
+    l'échéancier des commandes qu'il encaisse (une ligne « Virement » à la place de la dette Aramex, les chèques
+    versés…), en plusieurs enregistrements. Le verrou se tait le temps de CE traitement."""
+    frappe.flags[DRAPEAU_OUTIL] = doc.name
+
+
+def verrou_exempte(entretien: bool, outil_en_cours: bool, deux_temps: bool) -> bool:
+    """Le verrou se tait-il pour cet enregistrement ? Pure.
+
+    ⚠️ PLUS SUR LA MARQUE « Outil de paiement » DE LA COMMANDE (27/11/2026). L'ancien script s'en servait, mais
+    cette marque, posée par « Traitement des encaissement », n'est JAMAIS remise à zéro en base (le script qui
+    devait le faire l'écrit après l'enregistrement) : 103 commandes sur 790 la portaient à vie et échappaient au
+    verrou pour toujours (SAL-ORD-2026-04558 : total porté de 9 654,500 à 15 154,500 sans toucher l'échéancier).
+    L'exemption tient maintenant au traitement EN COURS, pas à la commande."""
+    return bool(entretien or outil_en_cours or deux_temps)
+
+
+def rien_n_a_bouge(avant, doc) -> bool:
+    """Cet enregistrement ne touche ni au total de la commande ni à la somme de son échéancier : un écart qui
+    existait déjà n'est pas de son fait. Bloquer ici arrêterait un traitement sans rapport (une retenue à la
+    source, un avoir) sur une commande qu'un autre a laissée en écart — sans rien réparer."""
+    if not avant:
+        return False
+    somme = lambda d: round(sum(frappe.utils.flt(r.payment_amount) for r in (d.get("payment_schedule") or [])), 3)  # noqa: E731
+    total = lambda d: (round(frappe.utils.flt(d.get("grand_total")), 3), round(frappe.utils.flt(d.get("rounded_total")), 3))  # noqa: E731
+    return somme(avant) == somme(doc) and total(avant) == total(doc)
+
+
 def verifier_total_echeancier(doc, method=None):
     """LE VERROU « total des paiements = total de la commande » sur une commande DÉJÀ VALIDÉE (27/11/2026).
 
@@ -41,14 +76,16 @@ def verifier_total_echeancier(doc, method=None):
     l'échéancier, le contrôle vivait dans le Server Script « generer un echeancier de maintenace », éteint le
     07/10/2026 pour une autre raison (il cherchait d'anciens groupes d'articles) : depuis, seul le formulaire le
     vérifiait, et tout ce qui n'y passe pas (outil, script, traitement) pouvait enregistrer un échéancier de
-    203,200 pour une commande de 236,615. Mêmes conditions que le script : commande active, et pas pendant
-    l'outil de paiement ni une commande née d'un entretien (ils réécrivent l'échéancier en deux temps)."""
+    203,200 pour une commande de 236,615. Même tolérance que le script ; exemptions : `verrou_exempte`."""
     if doc.doctype != "Sales Order" or doc.get("status") in STATUTS_INACTIFS:
         return
-    if frappe.utils.cint(doc.get("custom_maintenace_origine")) or frappe.utils.cint(doc.get("custom_outil_de_paiement")):
+    if verrou_exempte(bool(frappe.utils.cint(doc.get("custom_maintenace_origine"))),
+                      bool(frappe.flags.get(DRAPEAU_OUTIL)), bool(frappe.flags.get(DRAPEAU_DEUX_TEMPS))):
         return
     ecart = ecart_echeancier(doc.get("payment_schedule"), doc.get("rounded_total"), doc.get("grand_total"),
                              bool(frappe.utils.cint(doc.get("disable_rounded_total"))))
+    if ecart is not None and rien_n_a_bouge(doc.get_doc_before_save(), doc):
+        return
     if ecart is not None:
         somme = sum(frappe.utils.flt(r.payment_amount) for r in doc.payment_schedule)
         frappe.throw(_("Le total des paiements ({0}) est différent du total de la commande ({1}).")
