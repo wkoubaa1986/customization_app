@@ -817,8 +817,11 @@ def etat_caisses(date=None):
 
 def _resume_pointage(c):
     """« il manque 1 chèque (654,000) » ou "" — lu sur la clôture."""
-    from customization_app import caisse_pointage as PP
-    return PP.resume(PP.lire(c.get("pointage_pieces"))) if cint(c.get("pointage_ecarts")) else ""
+    try:
+        from customization_app import caisse_pointage as PP
+        return PP.resume(PP.lire(c.get("pointage_pieces"))) if cint(c.get("pointage_ecarts")) else ""
+    except Exception:
+        return ""
 
 
 def _dict_cloture(c):

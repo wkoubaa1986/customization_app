@@ -528,7 +528,12 @@ def _paiements_anciennes_commandes(d1, d2, exclude_names):
         "User", filters={"name": ("in", list(owners))}, fields=["name", "full_name"])}
     # VALIDÉ PAR LE SYSTÈME (27/11/2026) : le paiement né de la validation d'une commande sous un compte sans caisse
     # (« ✅ Valider » de la fenêtre de clôture d'une tâche) va dans la caisse du technicien de la tâche.
-    techniciens = _techniciens_des_paiements_systeme(pes, owner_names, refs_by_pe)
+    # FILET : la caisse journalière ne doit pas dépendre de cette règle ; en cas d'échec, chacun garde ses paiements.
+    try:
+        techniciens = _techniciens_des_paiements_systeme(pes, owner_names, refs_by_pe)
+    except Exception:
+        frappe.log_error(title="Caisse : paiements validés par le système, calcul en échec", message=frappe.get_traceback())
+        techniciens = {}
 
     paiements, par_mode = [], {}
     for p in pes:

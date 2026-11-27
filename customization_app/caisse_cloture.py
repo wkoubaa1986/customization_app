@@ -874,8 +874,14 @@ def _tiroir(caisse):
     """L'état du tiroir si `caisse` est celle du collecteur principal (caisse_tiroir), sinon None."""
     if caisse == CAISSE_GLOBALE:
         return None
-    from customization_app import caisse_tiroir as CT
-    return CT.etat_tiroir() if CT.est_tiroir(caisse) else None
+    # FILET : compter sa caisse ne doit jamais dépendre de ce calcul. S'il échoue, le comptage retombe sur l'ancienne
+    # formule (ouverture + encaissé − dépensé) et l'erreur est journalisée.
+    try:
+        from customization_app import caisse_tiroir as CT
+        return CT.etat_tiroir() if CT.est_tiroir(caisse) else None
+    except Exception:
+        frappe.log_error(title="Tiroir du collecteur : calcul en échec", message=frappe.get_traceback())
+        return None
 
 
 def _champs_tiroir(tiroir):
@@ -1089,11 +1095,16 @@ def valider(caisse, date, especes_comptees=None, note=None, justifications=None,
     # MAIN (collecteur principal) ou encaissées dans la journée (direction) : rien n'est « remis ».
     pointage = None
     if caisse != CAISSE_GLOBALE:
-        from customization_app import caisse_pointage as PP
-        saisi = {"Chèque": cheques_montants, "Traite": traites_montants}
-        declare = {cle: (lire_montants(str(t))[0] if t is not None and str(t).strip() else
-                         ([] if not cint({"Chèque": nb_ch, "Traite": nb_tr}[cle]) else None)) for cle, t in saisi.items()}
-        pointage = PP.pointer(PP.attendu_pour(caisse, m, tiroir), declare, {"Chèque": nb_ch, "Traite": nb_tr})
+        # FILET : le pointage n'est qu'une information — une erreur ici ne doit pas empêcher de compter la caisse.
+        try:
+            from customization_app import caisse_pointage as PP
+            saisi = {"Chèque": cheques_montants, "Traite": traites_montants}
+            declare = {cle: (lire_montants(str(t))[0] if t is not None and str(t).strip() else
+                             ([] if not cint({"Chèque": nb_ch, "Traite": nb_tr}[cle]) else None)) for cle, t in saisi.items()}
+            pointage = PP.pointer(PP.attendu_pour(caisse, m, tiroir), declare, {"Chèque": nb_ch, "Traite": nb_tr})
+        except Exception:
+            frappe.log_error(title="Pointage des chèques et traites : calcul en échec", message=frappe.get_traceback())
+            pointage = None
 
     rap = _rapprochement(date) if caisse == CAISSE_GLOBALE else None
     champs_rap = {}
