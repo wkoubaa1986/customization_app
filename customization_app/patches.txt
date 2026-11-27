@@ -164,3 +164,5 @@ customization_app.patches.echeanciers_sel_porte_membrane
 customization_app.patches.script_annulation_commande_dans_l_app
 customization_app.patches.echeanciers_machines_rendues
 customization_app.patches.script_date_reelle_dans_l_app
+# BL sortis moins chers que leur commande par réapplication de la règle de prix : lignes remises au prix de la commande (27/11/2026).
+customization_app.patches.bl_prix_de_la_commande

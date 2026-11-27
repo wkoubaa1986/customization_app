@@ -346,7 +346,12 @@ doc_events = {
         # … et remise à 0 DT après ; les packed items du bundle d'échange
         # (pièce reprise à −1, pièce remise) sont retirés : le stock ne doit
         # bouger qu'une fois, par la ligne.
-        "validate": "customization_app.retour_echange.retirer_pieces_reprises",
+        "validate": [
+            # Le BL ne sort pas moins cher que sa commande parce que la règle de prix s'est réappliquée (marge
+            # minimale ou majoration relevées sur la commande, perdues sur le BL — 27/11/2026, bl_prix_commande).
+            "customization_app.bl_prix_commande.delivery_note_validate",
+            "customization_app.retour_echange.retirer_pieces_reprises",
+        ],
         # Après update_prevdoc_status d'ERPNext : la commande passe à 100 %
         # livré si ses BL validés couvrent son TTC, ce que le calcul standard
         # sur les quantités rate en cas d'échange d'article.
@@ -406,6 +411,9 @@ doc_events = {
                      "customization_app.avoir_client.verifier_avoir_echeancier"],
         # Même contrôle quand l'échéancier d'une commande DÉJÀ validée est modifié (validate n'y passe pas).
         "before_update_after_submit": ["customization_app.avoir_client.verifier_avoir_echeancier",
+                                       # Le verrou « total des paiements = total de la commande », côté serveur
+                                       # (il vivait dans un Server Script éteint le 07/10/2026 — echeancier).
+                                       "customization_app.echeancier.verifier_total_echeancier",
                                        # Carte choisie APRÈS validation : les prix ne bougent plus, on le dit.
                                        "customization_app.majoration_carte.avertir_apres_validation"],
         # on_update se déclenche à l'enregistrement d'un brouillon ET à la
