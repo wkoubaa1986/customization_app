@@ -163,6 +163,42 @@ class TestVerdict(unittest.TestCase):
         self.assertEqual(self._v(a_regulariser=1)["titre"], "Rien d'anormal, 1 chose(s) à faire")
 
 
+class TestCaissesValidees(unittest.TestCase):
+    """« Une valeur de ce que Nejib doit avoir en remontant les caisses validées », à partir d'un montant figé."""
+
+    def test_le_cas_du_27_11(self):
+        """Départ figé au soir du 24/11 : 1 009,724 ; caisses des 25 et 26/11 ; 2 800 versés au coffre ; 100 donnés
+        ce matin, pas encore comptés."""
+        total = CT.total_caisses(base=1009.724, collecte=1076.7, encaissements=847.38, depenses=0, ecritures=-2800, non_compte=-100)
+        self.assertEqual(total, 33.804)
+        c = CT.comparer_caisses(total, selon_compte=-52.026, ecarts_employes=135.83, sans_caisse=50.0)
+        self.assertEqual((c["difference"], c["reste"]), (85.83, 0.0))
+
+    def test_tout_tombe_juste(self):
+        c = CT.comparer_caisses(500.0, 500.0, 0.0)
+        self.assertEqual((c["difference"], c["reste"], c["sans_caisse_total"]), (0.0, 0.0, 0.0))
+
+    def test_ce_qui_n_est_pas_explique_reste_visible(self):
+        self.assertEqual(CT.comparer_caisses(100.0, 80.0, 5.0, 0.0)["reste"], 15.0)
+
+    def test_le_verdict_le_dit(self):
+        base = dict(jour="2026-11-27", nom="Nejib", tiroir={"attendu": 500.0},
+                    comptage={"quand": "2026-11-27 08:04:46", "compte": 500, "attendu": 500, "ecart": 0, "par_nom": "Nejib"},
+                    verification={"quand": "2026-11-20 10:00:00"}, coffre={"solde": 0.0, "inventaire": None},
+                    pieces={"anciennes": 0}, employes=[], a_regulariser=0)
+        v = CT.verdict(**base, caisses={"depuis": "2026-11-25", "difference": 85.83, "ecarts_employes": 135.83,
+                                        "sans_caisse_total": 50.0, "reste": 0.0})
+        self.assertEqual(v["etat"], "alerte")
+        texte = v["points"][0]["texte"]
+        self.assertIn("85,830 DT de plus", texte)
+        self.assertIn("135,830 DT d'écarts de comptage des employés", texte)
+        self.assertIn("50,000 DT de paiements que personne n'a comptés", texte)
+        self.assertNotIn("sans explication", texte)
+        calme = CT.verdict(**base, caisses={"depuis": "2026-11-25", "difference": 4.0, "ecarts_employes": 4.0, "sans_caisse_total": 0, "reste": 0})
+        self.assertEqual(calme["etat"], "ok")
+        self.assertEqual(CT.verdict(**base, caisses=None)["etat"], "ok")
+
+
 class TestFormat(unittest.TestCase):
     def test_montants(self):
         self.assertEqual(CT._dt(7188.914), "7 188,914")

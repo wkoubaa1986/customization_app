@@ -73,6 +73,35 @@ class TestTiroirSite(unittest.TestCase):
         self.assertEqual((e["tiroir"]["mode"], e["tiroir"]["base"]["compte"], e["tiroir"]["depuis"]["sorties"]),
                          ("chaine", 1500.0, 400.0))
 
+    def test_en_remontant_les_caisses_validees(self):
+        """Le montant de départ se fige une fois ; un versement au coffre baisse les deux calculs du même montant."""
+        from customization_app.patches import caisse_tiroir_caisses_validees as P
+        frappe.db.sql("DELETE FROM `tabSingles` WHERE doctype = 'Config Caisse' AND field LIKE 'caisses_validees%%'")
+        self.assertIsNone(CT.selon_caisses())                      # pas de départ : rien à calculer
+        self.assertIsNone(A.situation()["principal"]["caisses"])
+        with mock.patch.object(frappe, "log_error"):
+            P.execute()
+        depuis, base = CT.reglage_caisses()
+        self.assertEqual(str(depuis), P.DEPUIS)
+        self.assertEqual(base, CT.base_a_figer(frappe.utils.add_days(P.DEPUIS, -1)))
+        frappe.db.sql("UPDATE `tabSingles` SET value = '123.456' WHERE doctype = 'Config Caisse' AND field = 'caisses_validees_base'")
+        with mock.patch.object(frappe, "log_error"):
+            P.execute()                                            # déjà posé : le montant figé n'est pas recalculé
+        self.assertEqual(CT.reglage_caisses()[1], 123.456)
+        avant = A.situation()["principal"]
+        k = avant["caisses"]
+        self.assertEqual(k["total"], CT.total_caisses(123.456, k["collecte"], k["encaissements"], k["depenses"], k["ecritures"], k["non_compte"]))
+        self.assertEqual(k["difference"], round(k["total"] - avant["selon_compte"], 3))
+        self.assertEqual(k["reste"], round(k["difference"] - k["ecarts_employes"] + k["sans_caisse_total"], 3))
+        frappe.set_user(self.titulaire)
+        self._vers_le_coffre(400)
+        frappe.set_user("Administrator")
+        apres = A.situation()["principal"]
+        self.assertEqual(round(apres["caisses"]["total"] - k["total"], 3), -400.0)
+        self.assertEqual(round(apres["selon_compte"] - avant["selon_compte"], 3), -400.0)
+        self.assertEqual(apres["caisses"]["difference"], k["difference"])
+        self.assertIsNone(CT.selon_caisses(jour=frappe.utils.add_days(P.DEPUIS, -1)))   # avant le départ
+
     def test_la_caisse_d_un_employe_ne_change_pas(self):
         autre = next((e["caisse"] for e in A.situation()["employes"] if e["caisse"] != self.caisse), None)
         if not autre:

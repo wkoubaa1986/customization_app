@@ -130,7 +130,7 @@ def jours_entre(ancien, recent) -> int:
     return (b - a).days
 
 
-def verdict(jour, nom, tiroir, comptage, verification, coffre, pieces, employes, a_regulariser, alertes=()) -> dict:
+def verdict(jour, nom, tiroir, comptage, verification, coffre, pieces, employes, a_regulariser, alertes=(), caisses=None) -> dict:
     """Le verdict de la page, en une phrase et une liste de points. PURE.
     `tiroir` : {attendu, ecart_compte} ; `comptage` : dernier comptage du tiroir {quand, compte, attendu, ecart, par_nom}
     ou None ; `verification` : dernier comptage par une autre personne, ou None ; `coffre` : {solde, inventaire: {date,
@@ -166,6 +166,15 @@ def verdict(jour, nom, tiroir, comptage, verification, coffre, pieces, employes,
             nom, _jour(verification["quand"])), "al-principal")
     for a in alertes or ():
         point("alerte", "%s : %s." % (nom, a), "al-principal")
+    # `caisses` : {depuis, difference, ecarts_employes} — les caisses validées en face du compte « Espèces ».
+    if caisses and abs(_m(caisses.get("difference"))) > SEUIL_ECART:
+        d, e, sc, r = (_m(caisses.get(k)) for k in ("difference", "ecarts_employes", "sans_caisse_total", "reste"))
+        causes = ([("%s DT d'écarts de comptage des employés" % _dt(e))] if abs(e) > 0.0005 else []) \
+            + ([("%s DT de paiements que personne n'a comptés" % _dt(sc))] if abs(sc) > 0.0005 else []) \
+            + ([("%s DT sans explication" % _dt(r))] if abs(r) > 0.0005 else [])
+        point("alerte", "Depuis le %s, les caisses validées donnent %s DT de %s que le compte « Espèces »%s." % (
+            _jour(caisses["depuis"]), _dt(abs(d)), "plus" if d > 0 else "moins",
+            (" : " + ", ".join(causes)) if causes else ""), "al-collecteurs")
     solde_coffre = _m((coffre or {}).get("solde"))
     inventaire = (coffre or {}).get("inventaire")
     if not inventaire and abs(solde_coffre) > 0.0005:
@@ -319,6 +328,137 @@ def etat_tiroir(cfg=None, jour=None, employes=None, collecteurs=None):
             # Ce que dit le compte seul, et la différence : les écarts de comptage jamais passés en comptabilité.
             "selon_compte": ref["absolu"], "ecart_compte": _m(calcul["attendu"] - ref["absolu"]),
             "dernier_comptage": base, "verification": derniere_verification(tous, titulaire, fin)}
+
+
+# ------------------------------------------------------------------------------- d'après les caisses validées (27/11/2026)
+def total_caisses(base, collecte, encaissements, depenses, ecritures, non_compte) -> float:
+    """Ce que le collecteur principal doit avoir en additionnant les caisses validées. PURE.
+    `base` : le montant de départ figé ; `collecte` : reçu des caisses validées des employés ; `encaissements` /
+    `depenses` : ceux de ses propres caisses validées ; `ecritures` : coffre, banque, personnel, autres (net, négatif =
+    sorti) ; `non_compte` : ce qu'il a encaissé moins dépensé depuis sa dernière caisse validée."""
+    return _m(_m(base) + _m(collecte) + _m(encaissements) - _m(depenses) + _m(ecritures) + _m(non_compte))
+
+
+def comparer_caisses(total, selon_compte, ecarts_employes, sans_caisse=0.0) -> dict:
+    """La différence entre les caisses validées et le compte, et ce qui l'explique. PURE.
+    · un employé qui remet plus (ou moins) que son montant attendu met cet écart dans le tiroir sans que le compte ne
+      bouge : `ecarts_employes` ;
+    · un paiement en espèces qu'aucune caisse validée n'a pris est au compte mais dans aucune caisse : `sans_caisse` ;
+    · `reste` : ce que ni l'un ni l'autre n'explique (0 quand tout est expliqué)."""
+    difference = _m(_m(total) - _m(selon_compte))
+    return {"difference": difference, "ecarts_employes": _m(ecarts_employes), "sans_caisse_total": _m(sans_caisse),
+            "reste": _m(difference - _m(ecarts_employes) + _m(sans_caisse))}
+
+
+def reglage_caisses():
+    """(jour de départ, montant de départ figé) lus dans Config Caisse ; (None, 0.0) tant que le patch n'est pas passé."""
+    from frappe.utils import getdate
+    lignes = dict(frappe.db.sql("""SELECT field, value FROM `tabSingles` WHERE doctype = 'Config Caisse'
+                                   AND field IN ('caisses_validees_depuis', 'caisses_validees_base')"""))
+    depuis = lignes.get("caisses_validees_depuis")
+    return (getdate(depuis) if depuis else None), _m(lignes.get("caisses_validees_base"))
+
+
+def _autres_caisses(cfg):
+    """Les caisses qui ne sont ni le tiroir du collecteur, ni la globale, ni un sous-traitant, ni un partenaire."""
+    from customization_app import caisse_collecte as CC
+    from customization_app.caisse_cloture import CAISSE_GLOBALE
+    return {principal(cfg)[1], CAISSE_GLOBALE} | set(CC.caisses_sous_traitants()) | set(CC.caisses_partenaires())
+
+
+def base_a_figer(veille, cfg=None) -> float:
+    """Le montant de départ : ce que le collecteur principal avait au soir de `veille` d'après le compte « Espèces »,
+    moins le fond que chaque autre caisse avait gardé à son dernier comptage. (L'argent des caisses de ce jour-là ou
+    d'avant, collecté après, est compté avec lui : la suite additionne les caisses par leur DATE, pas par le jour de la
+    collecte.)"""
+    from customization_app import argent_liquide as A
+    from customization_app import caisse_collecte as CC
+    from frappe.utils import add_days, flt, getdate
+
+    cfg = cfg or CC.config()
+    veille = getdate(veille)
+    depart = getdate(cfg.get("date_depart") or veille)
+    hors = tuple(h for h in _autres_caisses(cfg) if h) or ("",)
+    fonds = 0.0
+    for caisse in frappe.db.sql_list(
+            """SELECT DISTINCT caisse FROM `tabCloture Caisse` WHERE docstatus < 2 AND caisse NOT IN %s
+               AND date_cloture BETWEEN %s AND %s""", (hors, depart, veille)):
+        derniere = frappe.db.sql(
+            """SELECT fond_conserve FROM `tabCloture Caisse` WHERE docstatus < 2 AND caisse = %s AND date_cloture BETWEEN %s AND %s
+               ORDER BY date_cloture DESC, creation DESC LIMIT 1""", (caisse, depart, veille))
+        fonds += flt(derniere[0][0]) if derniere else 0.0
+    # Seulement ce qui était DÉJÀ saisi ce soir-là : un paiement daté d'avant mais saisi après (35 DT datés du 18/11,
+    # saisis le 26/11 et comptés par la caisse du 26) est une caisse d'après, pas du montant de départ. Une pièce
+    # RÉÉMISE après coup (« …-2 », annulation puis nouvelle saisie) n'est pas de l'argent nouveau : elle reste au départ.
+    apres_coup = flt(frappe.db.sql(
+        """SELECT SUM(g.debit - g.credit) FROM `tabGL Entry` g
+           LEFT JOIN `tabPayment Entry` pe ON g.voucher_type = 'Payment Entry' AND pe.name = g.voucher_no
+           LEFT JOIN `tabJournal Entry` je ON g.voucher_type = 'Journal Entry' AND je.name = g.voucher_no
+           WHERE g.account = %s AND g.is_cancelled = 0 AND g.posting_date <= %s AND g.creation >= %s
+             AND COALESCE(pe.amended_from, je.amended_from) IS NULL""",
+        (A.COMPTE_ESPECES, veille, add_days(veille, 1)))[0][0])
+    solde = flt(A._solde(A.COMPTE_ESPECES, veille)) - apres_coup
+    return _m(solde - fonds)
+
+
+def selon_caisses(cfg=None, jour=None, non_compte=0.0):
+    """Ce que le collecteur principal doit avoir « en remontant les caisses validées » depuis le jour de départ
+    (Config Caisse), à partir du montant figé. Les caisses comptent par leur DATE : celle du 25/11 collectée le 26 au
+    matin est une caisse du 25. None avant le départ (ou avant le patch).
+    -> {depuis, base, collecte, nb_caisses, encaissements, depenses, ecritures, non_compte, total, ecarts_employes}"""
+    from customization_app import argent_liquide as A
+    from customization_app import caisse_collecte as CC
+    from frappe.utils import flt, getdate, nowdate
+
+    cfg = cfg or CC.config()
+    depuis, base = reglage_caisses()
+    jour = getdate(jour or nowdate())
+    caisse = principal(cfg)[1]
+    if not depuis or not caisse or jour < depuis:
+        return None
+    hors = tuple(h for h in _autres_caisses(cfg) if h) or ("",)
+    collecte, ecarts, nb = 0.0, 0.0, 0
+    # Les caisses des employés VALIDÉES (comptées par l'employé, reçues par le collecteur) ; celle collectée par un
+    # délégué n'entre dans le tiroir qu'une fois sa passation validée.
+    for c in frappe.db.sql(
+            """SELECT c.especes_recues, c.especes_remises, c.validation_seule, c.ecart FROM `tabCloture Caisse` c
+               WHERE c.docstatus = 1 AND c.caisse NOT IN %s AND c.date_cloture BETWEEN %s AND %s
+                 AND (IFNULL(c.passation, '') = '' OR EXISTS (SELECT 1 FROM `tabPassation Caisse` p
+                                                            WHERE p.name = c.passation AND p.docstatus = 1))""",
+            (hors, depuis, jour), as_dict=True):
+        collecte += A.montant_recu(c)
+        ecarts += flt(c.ecart)
+        nb += 1
+    siennes = frappe.db.sql(
+        """SELECT SUM(encaissements_especes + IFNULL(apports_especes, 0)), SUM(depenses_especes), COUNT(*)
+           FROM `tabCloture Caisse` WHERE docstatus = 1 AND caisse = %s AND date_cloture BETWEEN %s AND %s""",
+        (caisse, depuis, jour))[0]
+    # Coffre, banque, dépenses personnelles, autres écritures sur « Espèces » (pas les dépenses de caisse, déjà dans
+    # les caisses ; pas les apports à une caisse, entrés par la caisse qui les a reçus).
+    depart = getdate(cfg.get("date_depart") or depuis)
+    apports = tuple(a["name"] for a in A.apports(depart, jour)) or ("",)
+    ecritures = flt(frappe.db.sql(
+        """SELECT SUM(jea.debit_in_account_currency - jea.credit_in_account_currency)
+           FROM `tabJournal Entry` je JOIN `tabJournal Entry Account` jea ON jea.parent = je.name
+           WHERE je.docstatus = 1 AND jea.account = %s AND je.posting_date <= %s
+             AND (je.posting_date >= %s OR (je.creation >= %s AND je.amended_from IS NULL))
+             AND IFNULL(je.cheque_no, '') NOT LIKE 'Dépense caisse%%' AND je.name NOT IN %s""",
+        (A.COMPTE_ESPECES, jour, depuis, depuis, apports))[0][0])
+    # Les paiements en espèces d'un jour PASSÉ qu'aucune caisse validée n'a pris : au compte, dans aucune caisse
+    # (saisis par un compte sans caisse, ou jour pas encore compté).
+    sans_caisse = [{"name": r.name, "date": str(r.posting_date), "montant": _m(r.paid_amount), "client": r.party_name or "",
+                    "saisi_par": frappe.utils.get_fullname(r.owner)}
+                   for r in frappe.db.sql(
+                       """SELECT name, posting_date, paid_amount, party_name, owner FROM `tabPayment Entry`
+                          WHERE docstatus = 1 AND payment_type = 'Receive' AND paid_to = %s AND creation >= %s
+                            AND posting_date < %s AND IFNULL(custom_cloture_caisse, '') = '' AND amended_from IS NULL
+                          ORDER BY posting_date LIMIT 20""",
+                       (A.COMPTE_ESPECES, depuis, jour), as_dict=True)]
+    out = {"depuis": str(depuis), "base": base, "collecte": _m(collecte), "nb_caisses": nb + int(siennes[2] or 0),
+           "encaissements": _m(siennes[0]), "depenses": _m(siennes[1]), "ecritures": _m(ecritures),
+           "non_compte": _m(non_compte), "ecarts_employes": _m(ecarts), "sans_caisse": sans_caisse}
+    out["total"] = total_caisses(base, out["collecte"], out["encaissements"], out["depenses"], out["ecritures"], out["non_compte"])
+    return out
 
 
 def champs_cloture(tiroir) -> dict:

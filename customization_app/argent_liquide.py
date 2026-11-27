@@ -772,6 +772,8 @@ def situation(date=None):
     # compte « Espèces », plus de « sa caisse » d'un côté et de « l'argent collecté » de l'autre.
     from customization_app import caisse_tiroir as CT
     tiroir = CT.etat_tiroir(cfg, jour, employes, collecteurs)
+    # Ce que le collecteur a encaissé moins dépensé depuis sa dernière caisse validée (lu AVANT de vider sa ligne).
+    nc_principal = next((flt(e["non_compte"]) for e in employes if tiroir and e["caisse"] == tiroir["caisse"]), 0.0)
     if tiroir:
         _poser_tiroir(employes, collecteurs, tiroir, jour)
     for x in collecteurs:
@@ -805,6 +807,12 @@ def situation(date=None):
                 principal["alertes"] = x["alertes"]
         principal["sauts"] = [x for x in principal["sauts"] if ("saut:" + x["cloture"]) in {a["cle"] for a in a_regulariser}]
         principal["inventaire"] = REG.dernier_inventaire(regs, principal["caisse"], "Collecte")
+        # EN PLUS (27/11/2026) : ce qu'il doit avoir « en remontant les caisses validées » depuis le jour de départ.
+        caisses = CT.selon_caisses(cfg, jour, nc_principal) if tiroir else None
+        if caisses:
+            caisses.update(CT.comparer_caisses(caisses["total"], principal["selon_compte"], caisses["ecarts_employes"],
+                                               sum(flt(x["montant"]) for x in caisses["sans_caisse"])))
+        principal["caisses"] = caisses
         anciennes = [p for p in portefeuille["pieces"] if p["name"] in set(portefeuille["anciennes"])]
         verdict = CT.verdict(
             str(jour), principal["nom"], {"attendu": principal["especes"], "ecart_compte": principal["ecart_compte"]},
@@ -813,7 +821,7 @@ def situation(date=None):
             {"anciennes": len(anciennes), "anciennes_total": flt(sum(p["montant"] for p in anciennes), 3),
              "ecart_comptable": portefeuille.get("ecart_comptable")},
             [e for e in employes if e["caisse"] != principal["caisse"]], len(a_regulariser),
-            principal.get("alertes") or ()) if tiroir else None
+            principal.get("alertes") or (), caisses) if tiroir else None
     return {
         "date": str(jour), "date_depart": cfg.get("date_depart"), "plafond": plafond, "jours_max": jours_max,
         "totaux": {"employes": chez_employes, "collecteurs": chez_collecteurs, "sabah": sabah,

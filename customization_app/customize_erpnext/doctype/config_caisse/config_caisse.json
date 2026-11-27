@@ -15,6 +15,8 @@
   "jours_plafond_collecteur",
   "paiements_suivis_depuis",
   "apports_depuis",
+  "caisses_validees_depuis",
+  "caisses_validees_base",
   "section_delegues",
   "delegues"
  ],
@@ -96,6 +98,18 @@
    "description": "Depuis ce jour, un transfert du coffre (Sabah Espèces) ou de la banque vers Espèces, saisi par le titulaire d'une caisse, est une entrée de sa journée de caisse. Posé à la mise en route (26/11/2026)."
   },
   {
+   "fieldname": "caisses_validees_depuis",
+   "fieldtype": "Date",
+   "label": "Tiroir du collecteur d'après les caisses validées, depuis",
+   "description": "Depuis ce jour, « Où est l'argent liquide » calcule aussi ce que le collecteur principal doit avoir en additionnant les caisses validées jour par jour, à partir du montant de départ ci-dessous. Posé à la mise en route (25/11/2026)."
+  },
+  {
+   "fieldname": "caisses_validees_base",
+   "fieldtype": "Currency",
+   "label": "Montant de départ figé (la veille au soir)",
+   "description": "Ce que le collecteur principal avait la veille au soir d'après le compte « Espèces ». Figé : il ne se recalcule plus."
+  },
+  {
    "fieldname": "section_delegues",
    "fieldtype": "Section Break",
    "label": "Délégués"
@@ -110,7 +124,7 @@
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-11-25 21:00:00.000000",
+ "modified": "2026-11-27 19:30:00.000000",
  "modified_by": "Administrator",
  "module": "Customize erpnext",
  "name": "Config Caisse",

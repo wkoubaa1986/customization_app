@@ -168,3 +168,5 @@ customization_app.patches.script_date_reelle_dans_l_app
 customization_app.patches.bl_prix_de_la_commande
 # La marque « Outil de paiement » restée sur les commandes encaissées est remise à zéro, avant le script corrigé (27/11/2026).
 customization_app.patches.marque_outil_de_paiement_a_zero
+# Tiroir du collecteur d'après les caisses validées : départ le 25/11/2026, montant de la veille figé (27/11/2026).
+customization_app.patches.caisse_tiroir_caisses_validees

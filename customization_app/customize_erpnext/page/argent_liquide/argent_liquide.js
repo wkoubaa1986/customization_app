@@ -123,6 +123,9 @@ class ArgentLiquide {
       @media (max-width: 768px) { .al-principal-lignes { grid-template-columns: 1fr; } }
       .al tr.vieille td { background: #fff7ed; } [data-theme="dark"] .al tr.vieille td { background: #2b1d0e; }
       .al-ok { color: var(--text-muted); font-size: 12.5px; margin-top: 6px; }
+      .al-deux { margin-top: 8px; border-top: 1px dashed var(--border-color); padding-top: 6px; display: grid; gap: 4px; }
+      .al-deux > div { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; font-size: 12.5px; }
+      .al-deux span { color: var(--text-muted); } .al-principal-lignes .l .al-deux b { display: inline; font-size: 13.5px; margin: 0; }
       .al-verdict { border-radius: 14px; padding: 12px 16px; margin: 6px 0 4px; border: 2px solid #86efac; background: #f0fdf4; color: #14532d; }
       .al-verdict.alerte { border-color: #fca5a5; background: #fef2f2; color: #7f1d1d; }
       .al-verdict.a_faire { border-color: #fcd34d; background: #fffbeb; color: #78350f; }
@@ -344,7 +347,10 @@ class ArgentLiquide {
           <div class="v">${dt(pr.total, false)}</div></div>
         <div class="al-principal-lignes">
           <div class="l"><span class="e">💵 ${__("Espèces dans son tiroir")}</span><b>${dt(pr.especes, false)}</b>
-            <div class="muet">${esc(pr.explication || __("le compte « Espèces » ({0}) moins ce que tiennent les autres employés ({1})", [txt(pr.compte_especes), txt(pr.autres_caisses)]))}</div></div>
+            <div class="muet">${esc(pr.explication || __("le compte « Espèces » ({0}) moins ce que tiennent les autres employés ({1})", [txt(pr.compte_especes), txt(pr.autres_caisses)]))}</div>
+            ${pr.caisses ? `<div class="al-deux">
+              <div><span>${__("En remontant les caisses validées depuis le {0}", [jour(pr.caisses.depuis)])}</span><b>${txt(pr.caisses.total)}</b></div>
+              <div><span>${__("D’après le compte « Espèces »")}</span><b>${txt(pr.selon_compte)}</b></div></div>` : ""}</div>
           <div class="l"><span class="e">📄 ${__("Chèques")}</span><b>${dt(ch.total, false)}</b><div class="muet">${__("{0} pièce(s) pas encore déposée(s)", [ch.nb])}</div></div>
           <div class="l"><span class="e">📄 ${__("Traites")}</span><b>${dt(tr.total, false)}</b><div class="muet">${__("{0} pièce(s) pas encore déposée(s)", [tr.nb])}</div></div>
         </div>
@@ -366,6 +372,13 @@ class ArgentLiquide {
           ${preuve("📄", __("<b>Chèques et traites</b> : chaque pièce reste dans la liste tant que la banque ne l’a pas créditée (le robot bancaire la sort à ce moment-là). Aucun pointage physique des pièces n’est enregistré.")
               + (anciennes ? " " + __("{0} pièce(s) attendent depuis plus de 30 jours.", [anciennes]) : ""),
             `<button class="btn btn-xs btn-default al-aller" data-cible="al-pieces">${__("Voir les pièces")}</button>`)}
+          ${pr.caisses ? preuve("⚖️", Math.abs(pr.caisses.difference) < 0.5
+              ? __("<b>Caisses validées et compte « Espèces »</b> : depuis le {0}, les deux calculs donnent le même montant ({1}).", [jour(pr.caisses.depuis), txt(pr.caisses.total)])
+              : __("<b>Caisses validées et compte « Espèces »</b> : depuis le {0}, les caisses validées donnent {1} et le compte {2}, soit {3}.", [jour(pr.caisses.depuis), txt(pr.caisses.total), txt(pr.selon_compte), signe_txt(pr.caisses.difference)])
+                + " " + [Math.abs(pr.caisses.ecarts_employes) > 0.0005 ? __("{0} d’écarts de comptage des employés", [signe_txt(pr.caisses.ecarts_employes)]) : "",
+                         Math.abs(pr.caisses.sans_caisse_total) > 0.0005 ? __("{0} de paiements que personne n’a comptés", [signe_txt(-pr.caisses.sans_caisse_total)]) : "",
+                         Math.abs(pr.caisses.reste) > 0.0005 ? __("{0} sans explication", [signe_txt(pr.caisses.reste)]) : ""].filter(Boolean).join(" ; ") + ".",
+            `<button class="btn btn-xs btn-default al-aller" data-cible="al-collecteurs">${__("Voir le calcul")}</button>`) : ""}
           ${Math.abs(pr.ecart_compte || 0) > 0.5 ? preuve("📒", __("<b>Comparé au compte « Espèces »</b> : d’après le compte seul, il aurait {0}, soit {1}. Cette différence est la somme des écarts de comptage jamais passés en comptabilité.",
               [txt(pr.selon_compte), pr.ecart_compte > 0 ? __("{0} de moins que ses comptages", [txt(pr.ecart_compte)]) : __("{0} de plus que ses comptages", [txt(-pr.ecart_compte)])]),
             `<button class="btn btn-xs btn-default al-aller" data-cible="al-rapprochement">${__("Voir")}</button>`) : ""}
@@ -545,6 +558,26 @@ class ArgentLiquide {
           ${x.regularise ? `<span class="op">${x.regularise > 0 ? "+" : "−"}</span>${bloc(__("Inventaire et régularisations"), Math.abs(x.regularise))}` : ""}
           <span class="op">=</span>${bloc(__("Encore entre ses mains"), x.detient, "res")}
         </div>`}
+        ${x.tiroir && pr0 && pr0.caisses ? (() => {
+          const k = pr0.caisses;
+          return `<div class="muet" style="margin-top:10px"><b>${__("En remontant les caisses validées depuis le {0}", [jour(k.depuis)])}</b> — ${__("{0} caisse(s) validée(s), à partir du montant figé la veille au soir", [k.nb_caisses])}</div>
+          <div class="al-calcul">
+            ${bloc(__("Montant de départ figé"), k.base)}
+            <span class="op">+</span>${bloc(__("Reçu des caisses validées des employés"), k.collecte)}
+            <span class="op">+</span>${bloc(__("Ses encaissements"), k.encaissements)}
+            <span class="op">−</span>${bloc(__("Ses dépenses"), k.depenses)}
+            <span class="op">${k.ecritures > 0 ? "+" : "−"}</span>${bloc(__("Coffre, banque, personnel, autres"), Math.abs(k.ecritures))}
+            ${Math.abs(k.non_compte) > 0.0005 ? `<span class="op">${k.non_compte > 0 ? "+" : "−"}</span>${bloc(__("Depuis sa dernière caisse validée"), Math.abs(k.non_compte))}` : ""}
+            <span class="op">=</span>${bloc(__("D’après les caisses validées"), k.total, "res")}
+          </div>
+          <div class="muet">${Math.abs(k.difference) < 0.5
+            ? __("Le compte « Espèces » donne le même montant.")
+            : __("Le compte « Espèces » donne {0} : différence {1}.", [txt(pr0.selon_compte), signe_txt(k.difference)])}
+            ${Math.abs(k.ecarts_employes) > 0.0005 ? " " + __("Écarts de comptage des employés (ils ont remis plus, ou moins, que leur montant attendu) : {0}.", [signe_txt(k.ecarts_employes)]) : ""}
+            ${Math.abs(k.reste) > 0.0005 ? " " + __("Sans explication : {0}.", [signe_txt(k.reste)]) : ""}</div>
+          ${(k.sans_caisse || []).length ? `<div class="muet">${__("Paiements en espèces d’un jour passé qu’aucune caisse validée n’a pris (au compte, dans aucune caisse) :")}
+            ${k.sans_caisse.map((m) => `<a href="/app/payment-entry/${encodeURIComponent(m.name)}">${esc(m.name)}</a> ${txt(m.montant)} — ${esc(m.client)}, ${jour(m.date)}, ${__("saisi par {0}", [esc(m.saisi_par)])}`).join(" ; ")}.</div>` : ""}`;
+        })() : ""}
         ${remis_par(x) ? `<div class="muet">↪ ${__("Dans « reçu aux collectes » : {0}, remis ensuite à {1} (il est le collecteur principal).", [remis_par(x), esc(x.nom)])}</div>` : ""}
         ${(x.entrees_manuelles || []).filter((m) => cles_ouvertes.has("jv:" + m.name)).length ? `<div class="al-alerte">⚠️ ${__("{0} écriture(s) font ENTRER de l’argent dans Espèces sans venir du coffre ni de la banque : à décider dans « À régulariser ».", [x.entrees_manuelles.filter((m) => cles_ouvertes.has("jv:" + m.name)).length])}
           <button class="btn btn-xs btn-default al-aller" data-cible="al-regulariser">${__("Voir")}</button></div>` : ""}
